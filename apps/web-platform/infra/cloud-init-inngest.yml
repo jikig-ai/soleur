@@ -719,6 +719,11 @@ runcmd:
       grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the pre-cutover arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     fi
     luks_emit luks_key_stage 0 n/a staged
+    # THE TWO VOLUME IDS, for inngest-luks-cutover.service (#6894). That script ships in the image
+    # and cannot see template variables, and it compares every mount against these ids — never a
+    # kernel name. Not secret (0644), but asserted: without them the cutover refuses every run.
+    printf 'INNGEST_LUKS_PLAIN_VOLUME_ID=%s\nINNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$PLAIN_ID" "$LUKS_ID" > /etc/default/inngest-luks-volumes
+    grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land — the cutover unit would refuse every run" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     if [ "$MODE" = pointer ]; then
       # ── POINTER ARM — the post-cutover world ─────────────────────────────────────────────
@@ -1482,6 +1487,9 @@ runcmd:
     docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.service /tmp/inngest-cutover-flip.service 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.timer /tmp/inngest-cutover-flip.timer 2>/dev/null || true
     docker cp soleur-inngest-bootstrap-extract:/cat-inngest-cutover-state.sh /tmp/cat-inngest-cutover-state.sh 2>/dev/null || true
+    # #6894: the LUKS cutover trio. Same missing-docker-cp trap as the flip trio above; the
+    # bootstrap's install is fail-closed (install_missing) if these do not land.
+    for _f in inngest-luks-cutover.sh inngest-luks-cutover.service inngest-luks-cutover.timer; do docker cp "soleur-inngest-bootstrap-extract:/$_f" "/tmp/$_f" 2>/dev/null || true; done
     # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
     # the silent absence of these files is exactly what hid the missing-timer bug for a full
     # cutover attempt. Report staged vs MISSING so the next occurrence self-diagnoses.

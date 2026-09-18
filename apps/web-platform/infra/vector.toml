@@ -207,6 +207,11 @@ include_matches.SYSLOG_IDENTIFIER = [
   # two entry points to one question ("is /mnt/data on the mapper?") and splitting the tag would
   # split the query an operator has to run.
   "inngest-luks-stage",
+  # #6894: the on-host LUKS cutover FSM (inngest-luks-cutover.service). Its own tag, not
+  # inngest-luks-stage: the stage answers "is /mnt/data on the mapper at boot?", this one answers
+  # "where is the cutover?" — and it is the ONLY off-box read of a copy-and-swap on a host with no
+  # inbound channel. journald-config.test.sh asserts this entry equals the unit's SyslogIdentifier.
+  "inngest-luks-cutover",
   # #7228: the boot-trace emitter reporting its OWN death. inngest-boot-phone-home.sh
   # (cloud-init-inngest.yml) is the single delivery path for all eight
   # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host

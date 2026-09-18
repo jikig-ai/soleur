@@ -1,0 +1,54 @@
+[Unit]
+Description=Inngest Redis AOF LUKS blue-green cutover oneshot (FSM: armed->copying->copied->swapped->done / rollback; #6894)
+After=network-online.target mnt-data.mount inngest-luks-open.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Bounds the oneshot (systemd applies no start timeout to Type=oneshot by default). 600 clears the
+# copy of a store this size plus the 120s T3 window. A kill is not silent: the script traps TERM,
+# resumes every writer it stopped, and drives the flag to `aborted` with reason `terminated`.
+TimeoutStartSec=600
+# Runs as ROOT (no User=): it stops and starts units, opens and closes dm-crypt mappers, mounts,
+# and rewrites /etc/fstab. HOME=/root for the Doppler CLI's os.UserHomeDir() init.
+Environment=HOME=/root
+# MOUNT NAMESPACE — THE PROPERTY THIS UNIT EXISTS FOR, AND THE ONE THE SIBLING'S SHAPE BREAKS.
+# The cutover's product is a MOUNT that inngest-redis.service must see. `ReadWritePaths=`,
+# `ProtectSystem=`, `PrivateTmp=` and friends each allocate a private mount namespace for the unit
+# (man systemd.exec: "implies that a mount namespace is allocated for the unit", with propagation
+# to the host turned off), so a mount made inside it vanishes when this oneshot exits and Redis
+# keeps looking at the old device. inngest-cutover-flip.service's sandboxing is therefore NOT
+# copied, and the decision is made here explicitly rather than inherited: no namespace-allocating
+# directive at all, and /etc (the pointer staging file and fstab — the two writes that constitute
+# the cutover) is writable because nothing makes it read-only.
+PrivateMounts=no
+NoNewPrivileges=yes
+# Matches vector.toml's exact-value SYSLOG_IDENTIFIER allowlist; asserted equal on both sides. On a
+# host with no inbound channel, this tag is the only way anything the unit writes is observable.
+SyslogIdentifier=inngest-luks-cutover
+StateDirectory=inngest-luks-cutover
+# DOPPLER_TOKEN + DOPPLER_PROJECT (the isolated soleur-inngest project; no --project flag), and the
+# two volume ids the first-boot stage writes (this script ships in the image and cannot see
+# template variables). Both files are fixed-name printfs of Terraform-supplied values, never
+# Doppler content — so `doppler run` below is this process's only Doppler channel.
+EnvironmentFile=/etc/default/inngest-server
+EnvironmentFile=/etc/default/inngest-luks-volumes
+# --only-secrets is the #7761 bound: exactly the four names the script reads from Doppler.
+#   INNGEST_LUKS_CUTOVER           the FSM flag
+#   INNGEST_LUKS_ACTIVE_VOLUME_ID  the durable pointer (absent before the cutover — a designed state)
+#   INNGEST_REDIS_LUKS_KEY         the passphrase, to open the canonical and staging mappers
+#   INNGEST_REDIS_PASSWORD         redis-cli's INFO keyspace read (T1 and T3)
+# --no-exit-on-missing-only-secrets because the flag and the pointer are legitimately ABSENT on an
+# un-armed, pre-cutover host; without it the 30s poll would fail on exactly those hosts. The script
+# compensates for the quiet degradation this buys: it refuses (luks-key-absent, t1-unreadable)
+# before stopping anything when a name it needs did not arrive.
+ExecStart=/usr/bin/doppler run --config prd \
+  --only-secrets INNGEST_LUKS_CUTOVER \
+  --only-secrets INNGEST_LUKS_ACTIVE_VOLUME_ID \
+  --only-secrets INNGEST_REDIS_LUKS_KEY \
+  --only-secrets INNGEST_REDIS_PASSWORD \
+  --no-exit-on-missing-only-secrets \
+  -- /usr/local/bin/inngest-luks-cutover.sh
+
+[Install]
+WantedBy=multi-user.target

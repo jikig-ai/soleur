@@ -149,6 +149,7 @@ render_stage() {
           -e "s|^    BYID=/dev/disk/by-id/scsi-0HC_Volume_\$|    BYID=${byid}/scsi-0HC_Volume_|" \
           -e "s|/mnt/data|${mnt}|g" \
           -e "s|/etc/fstab|${fstab}|g" \
+          -e "s|/etc/default/inngest-luks-volumes|${TMPROOT}/inngest-luks-volumes.env|g" \
           -e "s|/etc/default/inngest-luks|${TMPROOT}/inngest-luks.env|g" \
           -e "s|/run/inngest-luks-stage.log|${detail}|g" \
           -e "s|/usr/local/bin/inngest-boot-phone-home.sh|${phone}|g" \
@@ -164,6 +165,8 @@ render_stage() {
   grep -qF "BYID=${byid}/scsi-0HC_Volume_" "$out" || bad="${bad} byid-rebind"
   grep -qF '/dev/disk/by-id/' "$out" && bad="${bad} byid-still-real"
   grep -qF "${mnt}" "$out" || bad="${bad} mount-rebind"
+  # This runs as ROOT on the CI runner: a surviving /etc/default path would write the runner's own.
+  grep -qF '/etc/default/' "$out" && bad="${bad} etc-default-still-real"
   grep -qF -- "-lt ${waitbound} ]" "$out" || bad="${bad} waitbound-rebind"
   [ -z "$bad" ] || unavailable "stage render left unsubstituted tokens or missed a rebind:${bad}"
 }

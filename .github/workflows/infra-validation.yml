@@ -879,6 +879,11 @@ jobs:
       - name: Run inngest cutover monotonic re-flush latch tests
         run: bash apps/web-platform/infra/inngest-cutover-latch.test.sh
 
+      # (#6894) The LUKS blue-green cutover FSM: drives the REAL script under --fixture-seams over a
+      # modelled block layer, so the copy and T2's byte-equality run on real files. Needs jq + flock.
+      - name: Run inngest LUKS cutover FSM guard (#6894)
+        run: bash apps/web-platform/infra/inngest-luks-cutover.test.sh
+
       # #7228: inngest-boot-phone-home.sh is the SINGLE delivery path for all eight
       # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
       # with no SSH — and all three of its failure modes used to be `exit 0` with no output.
