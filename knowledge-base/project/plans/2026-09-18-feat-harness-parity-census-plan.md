@@ -844,3 +844,46 @@ Verified firsthand before acceptance.
 v1's **carrier** tested the wrong thing (inbound arrival vs outbound dispatch). v2's **classifier** tests the wrong *linguistic role* (any token occurrence vs a dispatch instruction). Both were measured correctly and both measured the wrong predicate. A token scan cannot distinguish "this doc tells an agent to dispatch" from "this doc mentions another skill" — and the property only lives on the former.
 
 **Implication for v3:** the population is not 45 docs / 175 occurrences. It is the dispatch sites only — a far smaller set — and the gate cannot be a pure token scan. Two panel agents are still out; v3 waits for them rather than being written reflexively, because writing a third design before the review of the second has landed is how the first two got here.
+
+## v2 review complete (3 of 3). v2 is BLOCKED. The predicate SHAPE was wrong.
+
+All three reviewers refuted the load-bearing claim independently. Verified firsthand.
+
+| # | Finding | Status |
+| --- | --- | --- |
+| H1 | **`formatSkillInvocation` has FOUR branches and I dropped one.** `harness.ts:128-130` returns `` `/${name}` `` for grok — a bare slash, no `soleur:` prefix. v2's token table assigns grok only `spawn_subagent`, an *agent-spawn* token, so grok has **no skill-invocation token at all**. I read the function that defines the forms and omitted a quarter of it — the entire basis of "provable complete" | **CONFIRMED** |
+| H2 | **The blind spot is large.** Measured 225 bare-slash occurrences across 26 docs (a reviewer's stricter boundary regex found 264 in 39 — ~1.4× v2's *entire* violation set). **5 docs violate ONLY via this form and v2 certifies them clean:** `compound-capture`, `file-todos`, `heal-skill`, `kb-search`, `test-fix-loop`. `kb-search:16-21` publishes its whole "Accepted forms" list as `/kb-search …` — #8299's defect, inverted | **CONFIRMED** |
+| H3 | **My own `/soleur:` row does not sum to its own total.** I published 205 = 57 commands + 135 skills. `57 + 135 = 192`. The real occurrence count is **208**, and "0 unrecognised" is false — 13 hits are metavariable forms (`/soleur:<skill>`, `/soleur:<SKILL_NAME>`) in `go.md`, `help.md`, `go/SKILL.md`, `schedule/SKILL.md`, five of them dispatch prose a `[a-z-]+` classifier skips silently | **CONFIRMED** |
+| H4 | **V-AC5 passes vacuously.** `npx --yes tsc --version` installs the deprecated registry squatter `tsc@2.0.4`, prints *"This is not the tsc command you are looking for"*, and **exits 0**. Worse, a real tsc over `lib/harness.ts` already emits **7–13 errors** (`Cannot find module 'bun'`, `ImportMeta.dir`, no `@types/node`), so exit code cannot distinguish N9's induced error from the standing baseline — the exact oracle defect ADR-193 forbids, in the AC written to honour it | **CONFIRMED** |
+| H5 | **The "fenced = illustration" premise is false, and the counter-example is mine.** `brainstorm/SKILL.md:604` and `:617` are fenced blocks whose body IS the mandatory resume prompt — `/soleur:plan #<issue-number> …` — which `wg-end-of-work-emit-resume-prompt` fires at every session end. 16 fenced blocks are dispatch **payloads**, not examples. A fence is a syntax, not a semantics | **CONFIRMED** |
+| H6 | **The marker strip has no allowlist.** 93 blocks, 15 distinct names, and v2's pattern wildcards the name — so any author can hide prose in `<!-- anything:start -->…<!-- anything:end -->`, and `soleur-cloud-mode` already appears in 64 of 101 docs so one more looks routine. 21 tokens + 71 bare-slash occurrences sit inside stripped blocks today, and the snapshot has no `inBlock` field | **CONFIRMED** |
+| H7 | **The `inFence` pin is defeated by compensation.** Doc A gains a fenced token (+1), doc B loses one (−1) → `{101, 0, n, 38}` → GREEN, and doc A ships Claude-only dispatch. Same net-count identity as v1's auto-exempt ceiling, one level down — in the design that replaced it | **CONFIRMED** |
+| H8 | **V4 and N7 directly contradict.** V4 names the per-harness `INSTRUCTIONS.md` files as ledger rows; they are **outside the population** (`skills/*/SKILL.md` + `commands/*.md`), so N7 ("a row for a path not in the population → RED") would reject them. V4 therefore reduces to **one** row — a whole-file exemption for the router — restoring the exact hole v2 was built to close | **CONFIRMED** |
+| H9 | **V10's authoring line would itself violate the gate.** `skill-creator/SKILL.md` already carries `subagent_type` and is in the 45. A line teaching "never write `Task tool`/`subagent_type`" contains those tokens. v2 neither cites `cq-assert-anchor-not-bare-token` nor declares that for an *absence* assertion the rule's failure mode inverts | **CONFIRMED** |
+| H10 | **ADR-226 is consumed, not contended.** Two branches claim 225; the loser renumbers to 226. First free ordinal is **227** | **CONFIRMED** |
+| H11 | V7 needs an explicit `case "unknown":` arm or Phase 1 will not compile (`TS2322: Type '"unknown"' is not assignable to type 'never'`). And V7 covers only the two *doc-emitting* switches — seven *dispatch* functions are if-chains with a trailing Claude fallback, so a fifth harness silently inherits Claude's forms from all seven | **CONFIRMED** |
+| H12 | Forms are defined in **six** places, not two: `workflow-fidelity.ts:132-141` (`formatSkillList`), `:144-160`, `pipelineInvocationSuffix` (harness-agnostic — emits grok's form on *every* harness), `harness.ts` `pollInstructions`/`routingInstructions`, plus the two `INSTRUCTIONS.md`. "Single-sourced" is a two-function crop | **CONFIRMED** |
+
+### The actual root cause, and it is in the repo's own principle register
+
+**AP-025 / ADR-202**, verified firsthand — §"Why the state predicate wins":
+
+> `case "$-" in *x*)` asks *is tracing on*. It is **complete by construction**. [Enumerating the forms that enable it] cannot be proven complete. Measured on bash 5.3.9, eight forms enable tracing.
+
+My token set is a **blocklist of forms** — a list of ways to reach the state. AP-025 says that shape cannot be proven complete, and H1 is the proof: I missed a form defined 8 lines from one I captured.
+
+**The complete-by-construction predicate is the inverse.** Instead of "does this doc contain any of N harness-specific forms?", ask **"does every skill reference in this doc match the canonical shape `soleur:<known-name>`?"** — an allowlist of *one* form, checked against the 98-name index the population already enumerates. That is complete by construction over the index, and it would have caught grok's bare slash without anyone knowing the form existed.
+
+I never consulted `knowledge-base/engineering/architecture/principles-register.md`. The refutation of my headline claim was sitting in it.
+
+### Three iterations, one repeating shape
+
+| | what it tested | what the property is |
+| --- | --- | --- |
+| v1 | marker **presence** (inbound arrival) | outbound dispatch |
+| v2 | token **occurrence** (any mention) | dispatch *role* |
+| v2's predicate | a **blocklist** of forms | a state question, answerable by allowlist |
+
+Each was measured carefully — Kieran reproduced 13/13 of v1's counts and 6 of 9 of v2's per-doc cells exactly — and each measured the wrong predicate. The failure was never arithmetic; it was validating the instrument instead of interrogating the predicate.
+
+**v3 is not written here.** Writing a third design in the same session that produced two refuted ones, immediately after the review landed, is the pattern rather than the fix. What v3 must be is now known and narrow: an allowlist predicate over the name index; population `skills/*/SKILL.md` + `commands/*.md`; a per-doc census vector rather than scalar pins; an anchor-scoped exemption for adapter-teaching regions (or generate `go.md`'s table from `routingInstructions()` so the ledger is genuinely empty); ADR-**227**.
