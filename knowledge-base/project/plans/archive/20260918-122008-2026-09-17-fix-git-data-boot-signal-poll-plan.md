@@ -814,7 +814,16 @@ logs:
 
 discoverability_test:
   command:         "bash tests/scripts/test-git-data-boot-signal-poll.sh"
-  expected_output: "a green summary whose assertion count is at or above the suite's declared floor"
+  expected_output: "141 passed, 0 failed"
+  # Corrected at /ship (2026-09-18): the earlier value was the PROSE
+  # "a green summary whose assertion count is at or above the suite's declared
+  # floor". Preflight Check 10 substring-matches the command's stdout against
+  # tokens of this field, so a prose expectation can never match and the check
+  # FAILs row 11 ("expectation drifted from production reality") on a run that
+  # is in fact green. Measured in the Check 10 bwrap sandbox: rc=0, final line
+  # `git-data-boot-signal-poll: 141 passed, 0 failed (141 assertions)`.
+  # 141 IS the suite's declared floor (`_EXACT=141`), so this states the same
+  # fact in a form the gate can evaluate.
 ```
 
 ### Soak / follow-through enrolment (plan Phase 2.9.1)
