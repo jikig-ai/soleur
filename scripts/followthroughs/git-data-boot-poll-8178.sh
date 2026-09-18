@@ -132,7 +132,6 @@ fi
 
 # --- Walk newest-first; the first job whose poll step ran decides --------------------
 ts_re='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z'
-tab=$'\t'
 pending=0
 unevaluable=0
 for run_id in "${run_ids[@]}"; do
@@ -150,7 +149,7 @@ for run_id in "${run_ids[@]}"; do
     | ([.steps[]? | select((.name // "") | startswith("Poll for the git-data boot-completion signal"))] | first) as $p
     | "\(.id) \(.name) \(.status) \($p.conclusion // "none") \($p.started_at // "-") \($p.completed_at // "-")"' <<<"$jobs_json" 2>/dev/null)
   for j in "${jobs[@]}"; do
-    read -r job_id job_name job_status poll_concl poll_start poll_end <<<"$j"
+    read -r job_id job_name job_status poll_concl poll_start _ <<<"$j"
     [[ "$job_id" =~ ^[0-9]+$ ]] || _cannot "job id is not numeric in run ${run_id}: ${job_id}"
     if [[ "$job_status" != "completed" ]]; then
       pending=$((pending + 1))
