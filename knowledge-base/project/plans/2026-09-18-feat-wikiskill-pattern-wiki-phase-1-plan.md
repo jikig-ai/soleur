@@ -147,8 +147,12 @@ ten weeks and the marker will say so on the first run).
 
 ### Step 3 — Verify in-session, not in a week
 
-3.1 After merge, fire the cron on demand: `/soleur:trigger-cron` with
-`cron/compound-promote.manual-trigger` (already allowlisted — no code change).
+3.1 After merge, fire the cron on demand with `cron/compound-promote.manual-trigger` (already
+allowlisted — no code change). **Invoke via the harness adapter** (`plugins/soleur/lib/harness.ts`
+`invokeSkill()` / `formatSkillInvocation()`), never a hard-coded slash form:
+**Claude:** Skill tool (`soleur:trigger-cron`) · **Grok:** `/trigger-cron` (Read
+`plugins/soleur/skills/trigger-cron/SKILL.md` in-process and run it) · **Devin:**
+`/soleur:trigger-cron` · **Codex:** `$soleur:trigger-cron`.
 3.2 Read the emitted marker from Better Stack and record the `status` + `refusals` on #8281. **This
 is the deliverable** — the measured reason ten weeks produced nothing.
 3.3 Open the deferred follow-up with that evidence attached.
@@ -164,6 +168,20 @@ is the deliverable** — the measured reason ten weeks produced nothing.
 - `scripts/followthroughs/compound-promote-outcome-8281.sh` — **new** (scheduled-path confirmation)
 
 No `.tf`, no ADR, no new knowledge-base directory, no SKILL.md `description:` change.
+
+### Cross-harness scope (Claude / Grok Build / Codex / Devin)
+
+The implementation surface is **harness-independent**: `cron-compound-promote.ts` runs server-side
+under Inngest, the guards are vitest suites, and the follow-through probe is a shell script the
+sweeper runs — none of them execute inside a CLI harness. The only harness-sensitive surface in this
+PR is **how Step 3.1 fires the cron**, which is why that step names all four invocation forms and
+cites `invokeSkill()` rather than a slash literal.
+
+Deliberately **not** changed here: the `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` fallback used by 32
+skills. Only `commands/go.md`, `lib/agent-registry.ts` and one test honour `GROK_PLUGIN_ROOT`, so a
+Grok session whose plugin root sits outside the repo resolves skill-script paths by the relative
+fallback. That works in-repo for every harness today and is a pre-existing, repo-wide question — not
+this PR's to change, and not something to fix silently inside a security PR.
 
 ## Acceptance Criteria
 

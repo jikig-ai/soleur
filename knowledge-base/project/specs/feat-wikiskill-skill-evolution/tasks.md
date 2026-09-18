@@ -58,8 +58,10 @@ Scope is the plan's Steps 0–3 only. The pattern layer is deferred to **#8293**
 
 ## Phase 5 — Post-merge (probe-verified, no operator step)
 
-- [ ] 5.1 Fire `cron/compound-promote.manual-trigger` via `/soleur:trigger-cron` (already
-      allowlisted — no code change).
+- [ ] 5.1 Fire `cron/compound-promote.manual-trigger` (already allowlisted — no code change),
+      invoked through the harness adapter (`lib/harness.ts` `invokeSkill()`), not a slash literal:
+      **Claude** Skill tool `soleur:trigger-cron` · **Grok** `/trigger-cron` · **Devin**
+      `/soleur:trigger-cron` · **Codex** `$soleur:trigger-cron`.
 - [ ] 5.2 Read the marker from Better Stack and record `status` + `refusals` on #8281.
       **This is the deliverable.**
 - [ ] 5.3 Post the measured cause to #8293 so its gate can be evaluated against evidence.
