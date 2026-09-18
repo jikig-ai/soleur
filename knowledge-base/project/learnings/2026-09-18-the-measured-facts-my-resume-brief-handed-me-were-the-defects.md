@@ -100,6 +100,22 @@ turns errexit off and hides a missing explicit `return`.
 17. **Remediation cited a web-host `git ls-remote` check that does not exist** (it is `TODO(#5274 PR C)`); propagated from a pre-existing readiness note. Recovery: removed and replaced with the truth. **Prevention:** hr-verify-repo-capability-claim-before-assert applies to remediation text too.
 18. **(earlier phase) A sourced library toggled `set +e`/`set -e`**, leaving errexit armed in the caller. Recovery: `rc=0; … || rc=$?`. **Prevention:** a sourced function never changes the caller's shell options; S16 asserts it.
 19. **(earlier phase) A client-side anchor re-check** parsed `dt` assuming UTC and truncated fractions, disagreeing with the server at the anchor second. Recovery: deleted; the server predicate plus `LIMIT 1` does the job. **Prevention:** do not re-implement a server-side predicate client-side with weaker parsing.
+20. **(ship phase) `grep` reported 0 matches on a string that was present, and I published the
+    wrong conclusion from it.** Diagnosing a CI red in
+    `apps/web-platform/test/infra/vector-pii-scrub.test.sh`, I proposed an EPIPE-under-`pipefail`
+    mechanism, then "refuted" it because `grep -n 'set -' <file>` and `grep -c 'pipefail' <file>`
+    both returned nothing. They were false negatives: the suite carries a deliberate NUL byte in a
+    control-character fixture (byte 10748), so GNU grep 3.12 classifies the file as **binary** and
+    `-c` returns 0 with no warning and exit 1. `sed -n '17p'` and Python both showed
+    `set -euo pipefail` on line 17, so the original mechanism was right all along. Recovery:
+    re-read with Python, re-confirmed the race with a matched control, filed #8291 with both
+    findings. **Prevention:** a grep that returns "no match" over a **test-fixture** file is not
+    evidence of absence — fixtures for control characters routinely embed NUL, DEL and U+2028.
+    Confirm a negative with a NUL-blind reader (`grep -a`, `sed`, Python) before writing the word
+    "refuted", and audit grep-based guards that walk fixture trees for a missing `-a`. This is the
+    same shape as the rest of this file one level up: the instrument could not distinguish
+    "not there" from "could not look", and the direction of the error was toward a confident
+    wrong answer.
 
 ## Tags
 
