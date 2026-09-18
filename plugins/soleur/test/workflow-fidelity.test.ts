@@ -25,6 +25,9 @@ import {
   IMPLEMENTATION_TAIL,
   ONE_SHOT_CHILD_SKILLS,
   mandatorySuccessors,
+  declaredTransitions,
+  isDeclaredTransition,
+  DECLARED_TRANSITIONS,
   workflowFidelityInstructions,
 } from "../lib/workflow-fidelity";
 import { invokeSkill, routingInstructions, pollInstructions } from "../lib/harness";
@@ -588,5 +591,80 @@ describe("Guard 2 — Skill/Monitor stay; aliased Grok twins are forbidden (meas
     );
     expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=no-tool");
     expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=untrusted-session");
+  });
+});
+// ---------------------------------------------------------------------------
+// Declared transitions (#8302) — the permitted-edge set, kept SEPARATE from
+// mandatorySuccessors().
+//
+// WHY TWO FUNCTIONS. mandatorySuccessors() is not a transition set: its result
+// is rendered into the prompt as "When standalone, invoke next: /X, /Y"
+// (workflow-fidelity.ts, workflowFidelityInstructions). Putting a back-edge
+// there would instruct the model to re-enter planning after every work run.
+// A permitted transition and a mandatory successor are different concepts and
+// must not share a function — the assertions at :113-119 pin the latter with
+// toEqual, so this is enforced rather than merely documented.
+// ---------------------------------------------------------------------------
+describe("declaredTransitions — permitted edges, including back-edges", () => {
+  test("every lifecycle node declares its edge set", () => {
+    expect(declaredTransitions("brainstorm")).toEqual(["plan", "one-shot"]);
+    expect(declaredTransitions("plan")).toEqual(["work"]);
+    expect(declaredTransitions("work")).toEqual(["review", "compound", "ship", "plan"]);
+    expect(declaredTransitions("review")).toEqual(["compound", "work"]);
+    expect(declaredTransitions("compound")).toEqual(["ship"]);
+    expect(declaredTransitions("ship")).toEqual(["postmerge", "work"]);
+    expect(declaredTransitions("postmerge")).toEqual([]);
+  });
+
+  test("the three operator-approved back-edges are declared", () => {
+    expect(isDeclaredTransition("review", "work")).toBe(true);
+    expect(isDeclaredTransition("ship", "work")).toBe(true);
+    expect(isDeclaredTransition("work", "plan")).toBe(true);
+  });
+
+  // The product requirement, asserted as an ABSENCE. plan -> ship is the path
+  // that lets an agent skip review entirely, which surfaces only post-merge —
+  // the operator-facing loss this work exists to make visible. Nothing else in
+  // the suite would notice if it were added.
+  test("plan -> ship is NOT declared (skipping review is the defect)", () => {
+    expect(isDeclaredTransition("plan", "ship")).toBe(false);
+    expect(declaredTransitions("plan")).not.toContain("ship");
+  });
+
+  test("postmerge -> work is NOT declared (rejected as redundant with ship -> work)", () => {
+    expect(isDeclaredTransition("postmerge", "work")).toBe(false);
+  });
+
+  // The semantic separation, pinned from the other side: a back-edge must never
+  // leak into the collection that renders as prompt text.
+  test("mandatorySuccessors stays forward-only and excludes every back-edge", () => {
+    expect(mandatorySuccessors("work")).not.toContain("plan");
+    expect(mandatorySuccessors("review")).not.toContain("work");
+    expect(mandatorySuccessors("ship")).not.toContain("work");
+  });
+
+  test("the rendered directive never names a back-edge", () => {
+    const rendered = workflowFidelityInstructions("claude");
+    expect(rendered).not.toContain("invoke next: /plan, /work");
+  });
+
+  // Typo guard: every destination must itself be a declared node, so a mistyped
+  // edge fails here rather than silently never matching at classification time.
+  test("every edge destination is a known node", () => {
+    const nodes = Object.keys(DECLARED_TRANSITIONS);
+    const extraTerminals = ["one-shot"]; // a route out of the lifecycle, not a node
+    for (const [from, tos] of Object.entries(DECLARED_TRANSITIONS)) {
+      for (const to of tos) {
+        expect(
+          nodes.includes(to) || extraTerminals.includes(to),
+          `edge ${from} -> ${to}: destination is not a declared node`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("an unknown node declares no transitions", () => {
+    expect(declaredTransitions("not-a-skill")).toEqual([]);
+    expect(isDeclaredTransition("not-a-skill", "work")).toBe(false);
   });
 });
