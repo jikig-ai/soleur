@@ -15,9 +15,11 @@ requires_cpo_signoff: true
 
 ## Overview
 
-Soleur's "run `/clear` and resume" advice is unconditional prose in `plan` and `work`; it cannot see whether context compaction happened, how often, or in which phase. Claude Code records every compaction in the session transcript as a `compact_boundary` record carrying `compactMetadata.{trigger, preTokens, postTokens, cumulativeDroppedTokens}`, and the `SessionStart` hook with matcher `compact` receives that transcript's path and injects model-visible context verbatim after the summary.
+Soleur's "run `/clear` and resume" advice is unconditional prose in `plan` and `work`; it cannot see whether context compaction happened, how often, or in which phase. Claude Code records every compaction in the session transcript as a `compact_boundary` record carrying `compactMetadata.{trigger, preTokens, postTokens}`, and the `SessionStart` hook with matcher `compact` receives that transcript's path and injects model-visible context verbatim after the summary.
 
-This plan ships one plugin-owned hook script, bound three ways in `plugins/soleur/hooks/hooks.json` so every marketplace install gets it, that turns those records into: a post-compaction re-read directive naming the current workflow phase; a fresh-session recommendation gated on an evidence rule; a `PreCompact` instruction that keeps resume identifiers verbatim in the summary; and an allowlisted checkpoint block in `session-state.md`. The unconditional `/clear` prose is then retired in favour of the injected signal.
+This plan ships **one plugin-owned bash hook, bound twice** (`SessionStart:compact` and `PreCompact`) in `plugins/soleur/hooks/hooks.json`: after a compaction it injects a short re-read directive and, on the second auto-compaction of the session, recommends continuing in a fresh session; before a compaction it tells the summarizer which resume identifiers to keep verbatim. The unconditional `/clear` prose is then retired in favour of that signal.
+
+**This plan was cut roughly in half by a six-agent review panel.** The `PostCompact` checkpoint writer, its gitleaks guard, the token-ratio clause and the phase-derivation mechanism are all **deleted** — see `## Review Cuts` for the evidence, and `## Deferred` for what became its own issue.
 
 ## Research Insights
 
@@ -27,349 +29,353 @@ This plan ships one plugin-owned hook script, bound three ways in `plugins/soleu
 |---|---|---|
 | `#8323` (work target) | `gh issue view 8323 --json state` | **OPEN** — valid target |
 | PR `#8320` | `gh pr view 8320 --json state,isDraft` | **OPEN, draft** — this branch's draft PR |
-| `#8172` (Devin `PostCompaction` probe) | `gh issue view 8172 --json state` | **CLOSED** without a positive `PostCompaction` measurement — `devin/INSTRUCTIONS.md`'s "unmeasured" caveat is stale-but-accurate, not resolved |
-| Upstream `anthropics/claude-code#14258` | `gh issue view` | CLOSED 2026-08-17; `PostCompact` shipped v2.1.76 (confirmed in the upstream CHANGELOG entry for 2.1.76: "Added `PostCompact` hook that fires after compaction completes") |
+| `#8172` (Devin `PostCompaction` probe) | `gh issue view 8172 --json state` | **CLOSED** without a positive `PostCompaction` measurement — the "unmeasured" caveat is stale-but-accurate, not resolved |
+| Upstream `anthropics/claude-code#14258` | `gh issue view` | CLOSED 2026-08-17; `PostCompact` shipped v2.1.76 ("Added `PostCompact` hook that fires after compaction completes") |
 | Local CLI supports it | `claude --version` | **2.1.273** |
-| ADR corpus for the mechanism | `git grep -il "compaction\|compact_boundary\|PostCompact\|transcript_path" -- 'knowledge-base/engineering/architecture/decisions/*.md'` | 6 hits, **none** decide a compaction-state mechanism (ADR-176 is plan-artifact checkpointing; ADR-221 is cloud-mode sentinel detection; the rest are incidental). No rejected-alternative collision. |
-| `hooks.json` can carry a `compact` SessionStart matcher | read `plugins/soleur/hooks/hooks.json` | Already binds `startup\|resume\|clear\|compact` → `codex-session-start.sh`. No `PreCompact`/`PostCompact` key exists in **either** registry. |
+| ADR corpus for the mechanism | `git grep -il "compaction\|compact_boundary\|PostCompact\|transcript_path" -- 'knowledge-base/engineering/architecture/decisions/*.md'` | 6 hits, **none** decide a compaction-state mechanism. No rejected-alternative collision. |
+| `hooks.json` can carry a `compact` SessionStart matcher | read `plugins/soleur/hooks/hooks.json` | Already binds `startup\|resume\|clear\|compact` to the Codex shim. No `PreCompact`/`PostCompact` key exists in **either** registry. |
 | Anything already branches on `source == "compact"` | `grep -rn '"source"' .claude/hooks/*.sh plugins/soleur/hooks/*.sh` | **No.** All three SessionStart scripts fire identically regardless of source. |
 
 **Capability claims verified against live artifacts (not memory):**
 
-- `compact_boundary` record shape — read from a real transcript under `~/.claude/projects/-data-git-repositories-jikig-ai-soleur/`: `{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":1006181,"postTokens":105006,"cumulativeDroppedTokens":901175,"durationMs":125559,…}}`.
-- **`SessionStart` fires after auto-compaction** — measured across 4 transcripts: the `[rules-loader] loaded` / `[session-context] branch` lines (emitted only by a SessionStart hook) appear 14 lines after each `"trigger":"auto"` boundary and nowhere else mid-session. This is strong evidence the `compact` matcher fires on auto-compaction, and it is what makes the stateless design viable. **TR4 must still confirm the literal `source` value**, because "a SessionStart hook fired" is not the same claim as "`source == "compact"`".
-- Compaction frequency in this repo: 8 of 22 recent sessions compacted, 11 boundaries total.
-- Skill invocations are visible in the transcript as `"name":"Skill","input":{"skill":"soleur:<name>"` — the portable phase source (`.claude/.skill-invocations.jsonl` is repo-only).
-- Transcripts run 13–30 MB. Bounded reads only (`grep -c`, `grep | tail -1`); never `cat`.
-- Advisor tier resolves to `fable` (`plugins/soleur/lib/harness-model-map.ts`).
-- `plugins/soleur/test/c4-count-parity.test.sh` is **green at HEAD** (`ALL TESTS PASSED`) — the pre-edit baseline for the C4 gate.
+- `compact_boundary` shape, read from a real transcript: `{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":1006181,"postTokens":105006,…}}`.
+- **`SessionStart` fires after auto-compaction** — measured across 4 transcripts: the `[rules-loader] loaded` lines (emitted only by a SessionStart hook) appear 14 lines after each `"trigger":"auto"` boundary and nowhere else mid-session. Inferential — Phase 0 confirms the literal `source`.
+- Compaction frequency here: 8 of 22 recent sessions compacted, 11 boundaries total.
+- **Measured performance** (review panel, 31 MB transcript): `grep -c` ≈ **25 ms**. "Bounded reads" was a misnomer — `grep -c` and `grep | tail -1` both scan to EOF; `tac | grep -m1` measured *slower* (20 ms vs 11 ms on 11 MB) because `tac` buffers. The scan is simply cheap; the plan no longer claims boundedness.
+- **Sibling worktrees do NOT share a project dir** (one `sessionId` per file). A cross-session-contamination concern was raised and **falsified** by measurement.
+- **Boundaries accumulate within one file across `--resume`** (one local file holds 3). An all-time count would pin `recommend=true` forever on a long resumed session — the count must be scoped to this session's window (TR2).
+- `session-rules-loader.sh` already fires on `compact` and already injects branch + the rules corpus, so the directive's *marginal* content is small by design.
+- `.gitleaks.toml` exists at this repo root and **nowhere under `plugins/soleur/`** — a customer install has no config (and usually no binary).
+- `.claude/phase-surface-map.json` `skill_to_phase` holds **16** keys to **5** phases. In the largest local transcript the last `Skill` record is `soleur:preflight`, which is *not* the current phase.
 
 ### Property List (Phase 0.6b)
 
-1. After a compaction, the agent re-reads the plan and `session-state.md` before editing, instead of trusting a paraphrased summary.
-2. The operator is asked to continue in a fresh session only when the evidence supports it, and never mid-pipeline.
-3. The compaction summary retains the identifiers a resume depends on (branch, worktree, PR #, issue #, plan path, phase, unchecked ACs, operator holds, file paths).
-4. The on-disk resume artifact (`session-state.md`) is never older than the last compaction.
-5. A non-Claude harness degrades honestly rather than silently claiming the behaviour.
+1. After a compaction, the agent re-reads the plan before editing, instead of trusting a paraphrased summary.
+2. The operator is asked to continue in a fresh session only when the evidence supports it.
+3. The compaction summary retains the identifiers a resume depends on.
+4. A non-Claude harness degrades honestly rather than silently claiming the behaviour.
 
-### Cut List (Phase 0.6b)
+*(The former property "the on-disk resume artifact is never older than the last compaction" was deleted with the checkpoint writer; see `## Review Cuts`.)*
 
-| Mechanism proposed | Property it would buy | Why cut |
+### Cut List (Phase 0.6b, pre-review)
+
+| Mechanism | Property | Why cut |
 |---|---|---|
-| `PostCompact`-written counter store (`.claude/.compaction/<sid>.json`) | #2 (count compactions) | The transcript already carries every boundary and `SessionStart:compact` receives `transcript_path`. A store adds a write path, a `.gitignore` entry the plugin cannot add to a user's repo, and a dependency on the undocumented `PostCompact`↔`SessionStart` ordering. `.claude/.session-manifests/<sid>.json` — the obvious host — is repo-side and **overwritten** by `session-rules-loader.sh` on every SessionStart *including* `compact`. |
-| Plugin-side copy of `.claude/phase-surface-map.json` | #1 (name the phase) | An in-script `case` over the ~6 pipeline skills buys the same property with no second artifact to drift. |
-| `SOLEUR_COMPACTION` telemetry marker | measurement, not a listed property | Deferred to **#8324**. The brainstorm's premise that `SOLEUR_*` markers reach Better Stack was false — they terminate in the gitignored `.claude/.rule-incidents.jsonl` rolled up by `scripts/rule-metrics-aggregate.sh`; `scripts/betterstack-query.sh` reads prod Vector logs only. |
-| Blocking `PreCompact` (exit 2) during ship | none | Trades a recoverable context loss for a "Prompt is too long" dead session. |
+| `PostCompact`-written counter store in the repo | #2 | Needs a `.gitignore` entry the plugin cannot add to a user's repo; `.claude/.session-manifests/<sid>.json` — the obvious host — is repo-side and **overwritten** by `session-rules-loader.sh` on every SessionStart *including* `compact`. |
+| Plugin-side copy of `.claude/phase-surface-map.json` | phase naming | Superseded — phase derivation is deleted entirely (see `## Review Cuts`). |
+| `SOLEUR_COMPACTION` telemetry marker | measurement | Deferred to **#8324**. The premise that `SOLEUR_*` markers reach Better Stack was false — they terminate in the gitignored `.claude/.rule-incidents.jsonl`. |
+| Blocking `PreCompact` (exit 2) | none | Trades a recoverable context loss for a dead session. |
 
 ### Value proposition (Phase 0.6c)
 
-Not a cost saving — a correctness saving, and it is **not** quantified at plan time. What would quantify it: the count of compaction/resume-tagged learnings and `unkept-promise-hook.sh` firings in the 30 days after merge (the #8324 metric measures exactly this). The justification standing on its own is the measured 8-of-22 compaction rate against prose that fires at fixed points regardless.
+A correctness saving, **not quantified at plan time**. What would quantify it: compaction/resume-tagged learnings and `unkept-promise-hook.sh` firings in the 30 days after merge (#8324 measures exactly this). Standing on its own: an 8-of-22 measured compaction rate against prose that fires at fixed points regardless.
 
 ### Institutional learnings that constrain this work
 
 | Learning | Constraint |
 |---|---|
 | `2026-03-04-sessionstart-hook-api-contract.md` | `additionalContext` (not `systemMessage`) is what the model sees; envelope is `hookSpecificOutput.{hookEventName, additionalContext}`. |
-| `2026-06-30-posttooluse-skill-additionalcontext-is-the-autonomous-safe-phase-injection-vehicle.md` | `additionalContext` caps at **10,000 chars**; **any non-zero exit other than 2 silently drops the whole JSON output**. Build the envelope with `jq -n --arg`; never echo model-controlled strings raw. |
-| `best-practices/2026-06-15-sessionstart-snapshot-ordering-and-committed-config-sanitization.md` | Compute snapshot values *before* the hook writes its own state; clamp control chars per key, not per stream. |
-| `2026-05-10-claude-code-posttooluse-task-hook-input-shape.md`, `2026-03-09-stop-hook-path-resolution-and-api-simplification.md` | Hook payload field names diverge from docs — capture real envelopes, date them in the header, prefer a structured hook field over re-parsing the transcript. |
-| `developer-experience/2026-04-02-plugin-hook-scope-guard-welcome-hook.md` | A plugin SessionStart hook must scope-guard on project presence or it pollutes every repo. |
-| `2026-07-05-declarative-context-injection-pointer-vs-inline…` | Prefer pointers (paths) over inlined bodies; hook-delivered content carries elevated authority framing. |
-| `2026-02-22-context-compaction-command-optimization.md` | `session-state.md` is the established compaction-boundary forwarding artifact — this extends it, reverses nothing. |
-| `workflow-patterns/2026-09-18-compaction-state-lives-in-the-transcript-not-a-counter-file.md` | This feature's own brainstorm learning: read the harness's own event log before designing a store. |
+| `2026-06-30-posttooluse-skill-additionalcontext-is-the-autonomous-safe-phase-injection-vehicle.md` | Caps at **10,000 chars**; **any non-zero exit other than 2 silently drops the whole JSON output**. Build with `jq -n --arg`; never echo model-controlled strings raw. |
+| `developer-experience/2026-04-02-plugin-hook-scope-guard-welcome-hook.md` | **Load-bearing here.** A plugin hook is global; `welcome-hook.sh` gates on a `plugins/soleur` directory check because "without this guard, every project gets a sentinel file." |
+| `2026-05-10-claude-code-posttooluse-task-hook-input-shape.md` | Hook payload fields diverge from docs — capture real envelopes, date them in the header. |
+| `2026-07-05-declarative-context-injection-pointer-vs-inline-and-frontmatter-hook-traps.md` | Pointers (paths) over inlined bodies; hook-delivered content carries elevated authority framing. |
+| `workflow-patterns/2026-09-18-compaction-state-lives-in-the-transcript-not-a-counter-file.md` | This feature's own brainstorm learning. |
 
 ### Repo conventions this must follow
 
-- Fail-open shape from `phase-surface-hint.sh`: `set -uo pipefail` (no `-e`), `trap 'exit 0' ERR`, exit 0 on every path, `SOLEUR_DISABLE_*` kill-switch.
-- `hooks.json` entries call `${CLAUDE_PLUGIN_ROOT}/hooks/<script>.sh`; scripts resolve siblings via `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` (`stop-hook.sh`) — ADR-178 pattern for reaching `scripts/lib/`.
-- Test precedent for a **plugin-shipped** hook with stdin-JSON fixtures: `plugins/soleur/test/unkept-promise-hook.test.sh` (globbed by `scripts/test-all.sh` via `plugins/soleur/test/*.test.sh`; no incident-sandbox dependency) and the envelope helper in `.claude/hooks/browser-snapshot-credential-guard.test.sh` (`jq -nc` → `bash "$HOOK"` → read decision with `jq -r`).
-- Machine-owned fenced region inside a hand-edited markdown file: `<!-- taste-profile:data:start -->…:end` rewritten idempotently by `plugins/soleur/scripts/taste-profile-update.sh`.
-- gitleaks: `.claude/hooks/git-commit-secret-scan.sh` runs `gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1` against the repo-root `.gitleaks.toml` and **fails open** with a `WARN:` line when the binary is absent.
-- Test fixtures must be synthesized only (`cq-test-fixtures-synthesized-only`).
+- Fail-open from `phase-surface-hint.sh`: `set -uo pipefail` (no `-e`), exit 0 on every path, `SOLEUR_DISABLE_*` kill-switch.
+- `hooks.json` calls `${CLAUDE_PLUGIN_ROOT}/hooks/<script>.sh`; scripts resolve siblings via a `SCRIPT_DIR` `dirname "${BASH_SOURCE[0]}"` idiom.
+- **Every sibling plugin hook carries a harness/sentinel early-exit** — `codex-session-start.sh` (`CODEX_THREAD_ID`/`PLUGIN_ROOT`), `devin-session-start.sh` (`DEVIN*`), `welcome-hook.sh` (the `plugins/soleur` sentinel). This hook must too.
+- Test precedent: `plugins/soleur/test/unkept-promise-hook.test.sh` — **verified** to exist, and `plugins/soleur/test/*.test.sh` is the first `SUITE_GLOBS` entry in `scripts/test-all.sh`.
+- `components.test.ts` has **0** `hooks.json` hits (verified) — binding assertions go in the new suite.
+- Fixtures synthesized only (`cq-test-fixtures-synthesized-only`).
+
+## Review Cuts
+
+A six-agent panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, CTO-devex) reviewed this plan at `590a33ea5`. Where the simplification and correctness panels fired on the same scope, the rule is **prefer delete over fix**. Four mechanisms are deleted; the evidence is recorded here so the ADR and any future re-proposal inherit it rather than re-deriving it.
+
+### CUT 1 — the `PostCompact` checkpoint writer + its gitleaks guard. Six-for-six.
+
+- **spec-flow (P0):** nothing reads it. `work/SKILL.md` Phase 0 loads `constitution.md`, `tasks.md` and `spec.md` — **never** `session-state.md`. The block would be write-only: the exact anti-pattern the brainstorm skill's own "write-mostly artifact diagnosis" warns about.
+- **architecture (P0):** `one-shot/SKILL.md` step 3 is a **whole-file template write** ("Write the parsed content to … (create if needed)" followed by a complete `# Session State` document containing no marker). Every plan-phase run destroys the hook's block. The hook can respect the skill; the skill cannot respect the hook. The claim that the file is "written only by `one-shot`" was also **false** — `ship`, `work`, `plan`, `review` and `compound` all reference it, and `compound/SKILL.md` *parses* `### Errors`, so it would ingest an elevated-authority machine block.
+- **architecture (P1):** `.gitleaks.toml` exists at this repo root and nowhere under `plugins/soleur/`, so on a customer install the guard fail-opens (skips the write) on essentially **every** install — the property would never ship to the population it ships to.
+- **Kieran (P0):** the prescribed command could not do the job. `gitleaks git --pre-commit --staged` reads the git index, not a string; the correct form is `gitleaks stdin -c "<config>"`, and omitting `-c` silently falls back to gitleaks' **default** config — which would have falsified the Guard Contract's own Anchor clause.
+- **DHH / code-simplicity:** every allowlisted field is re-derived by the hook itself from `git` and `gh`. The mechanism cached state that cannot go stale.
+- **CTO:** `PostCompact` is a one-month-old API whose stdin shape the plan itself had to probe because docs and an internal pass disagreed — that disagreement *is* the signal to wait.
+
+Deleted with it: the whole Guard Contract section, the `hooks` write edge into the knowledge base, the gdpr-gate finding's AC, the `PostCompact` binding, and 4 test scenarios. **Re-proposal is tracked at #8328** and must start from the two P0s above.
+
+### CUT 2 — the token-ratio clause. Three independent reviewers.
+
+The rule was `trigger=auto AND (count_auto >= 2 OR postTokens/preTokens > 0.15)`. The ratio clause is deleted; the rule is now `trigger == auto AND count_auto >= 2`.
+
+- **code-simplicity + Kieran, independently:** the threshold was picked from **n=1** and sits just *above* the plan's only real measurement (1006181 to 105006 = **0.104**), so it would never have fired on observed data. The only fixture that fires it (0.30) was synthesized to satisfy the clause it tests.
+- **code-simplicity:** it is not independent of the count clause — a high retained ratio on compaction #1 means the session is about to compact again, so it fires one event earlier on the same sessions.
+- **Kieran (P1):** the prescribed `awk 'print (a/b) > 0.15'` is **file redirection** in awk — it creates a file named `0.15` and always succeeds (reproduced).
+
+Deleted with it: one env var, the `awk` dependency, the `preTokens == 0` guard, the high-ratio fixture, and 2 scenarios.
+
+### CUT 3 — phase derivation. Four reviewers.
+
+- **Kieran (P0):** the drift AC was unsatisfiable. The map holds **16** keys to 5 phases; the plan's `case` had 8 arms, two of which (`soleur:compound`, `soleur:one-shot`) are **absent** from the map, and it mapped `qa` to `qa` where the map says `qa` to `review`.
+- **architecture (P1):** "last `Skill` record" is not the current phase — in the largest local transcript it is `soleur:preflight`.
+- **spec-flow (P1):** inside `/soleur:one-shot` the last skill record is the *child* (`soleur:work`), so the hook could never detect that it is mid-pipeline — the one-shot exception rested on a signal the read path does not produce.
+- **code-simplicity:** the Cut List rejected a plugin copy of the map to avoid drift, then the AC re-coupled to that repo-only file — a test that cannot run where the hook ships.
+
+The directive names the branch and the plan path instead; the phase is legible in the artifacts it orders re-read.
+
+### CUT 4 — the `one-shot` Step 8 edit (spec-flow P0)
+
+`one-shot/SKILL.md` Step 8 is one sentence (emit the DONE promise); there is **no resume-prompt block** anywhere in that file. The FR edited a site that does not exist, and Step 8 fires *after* merge, so the recommendation would arrive when the arc is over. Dropped rather than inventing a block; the recommendation surfaces through the `work`/`plan` phase-boundary prose that already exists.
+
+### KEPT, with a correction each
+
+| Finding | Correction |
+|---|---|
+| **architecture P0 — the scope guard is the wrong one** (worst finding in the panel). `git rev-parse --is-inside-work-tree` is true in *every* customer repo, so a customer compacting work on their own app would have the summarizer told to preserve "PR #, plan path, unchecked ACs, operator holds" — degrading a summary of work that has none. | TR1: gate on the `welcome-hook.sh` sentinel (a `plugins/soleur` directory check) **plus** the presence of a Soleur spec/plan artifact, never on "is a git repo". |
+| **CTO — the rot answer was false.** "The suite's fixtures pin the parsed shape" is untrue when the fixtures are *synthesized*: they pin the shape Soleur wrote, not the shape Claude Code emits. On an upstream rename every fixture stays green and the feature dies silently on users' machines. | FR7 drift canary (new) + `claude --version` stamped into every marker. |
+| **architecture — boundaries accumulate across `--resume`.** | TR2: count boundaries **since this session's last SessionStart**, not all-time. |
+| **Kieran / architecture — the JSON ACs contradicted each other.** `jq -e . <<<""` returns rc 4, so "every fixture parses as JSON" rejected the silent paths; and the Observability block put markers on stdout while Phase 1 said stdout carries only the envelope. | Emit a **valid envelope on every SessionStart path**, marker inside `additionalContext`; when `jq` is unavailable emit a static `printf`'d JSON literal. |
+| **CTO — no user-facing doc surface; Grok missing.** | `plugins/soleur/README.md` gains the kill-switch + a Grok row (Grok has no `INSTRUCTIONS.md`; the README table is its surface). |
+| **architecture — the C4 claim was wrong three ways.** | See `### C4 views`. |
+| **Kieran — AC mechanics.** `grep -c` exits 1 on zero matches (aborts under `set -e`); an AC asserting a command *fails* kills the suite; the grep pattern is whitespace-sensitive. | Folded into the AC set and the scenarios. |
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec claim | Reality | Plan response |
 |---|---|---|
-| TR6 names `plugins/soleur/hooks/compaction-state.test.sh` "with stdin fixtures" | **Zero** `*.test.sh` exist under `plugins/soleur/hooks/`, and `scripts/test-all.sh`'s `SUITE_GLOBS` does not include that path — a suite there would never run. | Test lands at `plugins/soleur/test/compaction-state-hook.test.sh` (globbed, plugin-shipped). |
-| TR6 adds "a `components.test.ts` case asserting hooks.json binds the three events" | `components.test.ts` does **not** reference `hooks.json` at all; `plugins/soleur/test/devin-plugin.test.ts` and `.claude/hooks/devin-matcher-parity.test.sh` are the files that parse it. | The binding assertion lands in the new hook suite (it already reads `hooks.json` to locate the script), not in `components.test.ts`. |
-| FR1 derives the phase "via the same mapping as `.claude/phase-surface-map.json`" | That file is repo-only; a marketplace install has no copy. | The mapping is an in-script `case` over `soleur:{brainstorm,plan,work,review,qa,compound,ship,one-shot}`; a drift assertion in the new suite compares the case arms against the repo-side JSON so the two cannot silently diverge. |
-| Spec assumes `PostCompact` stdin carries `compact_summary` | The published docs' `PostCompact` example input shows only `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`, `trigger`. The CTO pass reported `compact_summary` present; the two disagree. | **TR4 decides it empirically before FR4 is implemented.** FR4's fallback (already the design) reads allowlisted fields from git/`gh`/the transcript, never from summary prose — so FR4 does not depend on the answer. |
-| Spec FR4 writes into `knowledge-base/project/specs/<branch>/session-state.md` | Today that file is written **only** by `one-shot/SKILL.md`, with headings `## Plan Phase` / `### Errors` / `### Decisions` / `### Components Invoked`. | The hook owns **only** a `<!-- compaction-checkpoint:start -->…:end` block appended after existing content; it never parses or rewrites the skill-owned headings. |
-| Spec TR3 budget "<200 ms on a 30 MB transcript" | Unmeasured at spec time. | Measured in the new suite against a synthesized large fixture; the number lands in the hook header. |
+| Spec names a test path under `plugins/soleur/hooks/` | **Zero** `*.test.sh` exist there, and that path is not in `SUITE_GLOBS` — a suite there would never run. | Test lands at `plugins/soleur/test/compaction-state-hook.test.sh`. |
+| Spec adds a `components.test.ts` hooks.json case | `components.test.ts` does not reference `hooks.json` at all. | Binding assertion goes in the new suite. |
+| Spec derives the phase from `.claude/phase-surface-map.json` | Repo-only; and the mechanism is now deleted (CUT 3). | Directive names branch + plan path. |
+| Spec assumes `PostCompact` stdin carries `compact_summary` | Docs and the CTO pass disagree. | Moot — the `PostCompact` binding is cut (CUT 1). |
+| Spec writes into `session-state.md` | `one-shot` writes that file from a whole-file template; five skills reference it; `compound` parses it. | Cut (CUT 1); re-proposal at **#8328**. |
+| Spec budget "<200 ms on a 30 MB transcript" | Measured: **~25 ms** on 31 MB. | Recorded; the suite ceiling has ~40x headroom. |
 
 ## Open Code-Review Overlap
 
-One open `code-review` issue names a file this plan edits (65 open issues scanned):
+One open `code-review` issue names a file this plan edits (65 scanned):
 
-- **#4133** — *follow-through(#4116): Schema parity test for `## Observability` block* — names `plugins/soleur/skills/plan/SKILL.md` §2.9. **Disposition: Acknowledge.** This plan edits `plan/SKILL.md`'s `/clear` prose (exit gate / post-generation options), a different region; the §2.9 observability-schema drift surface is untouched and needs its own cycle. The issue remains open.
+- **#4133** — *Schema parity test for `## Observability` block* — names `plugins/soleur/skills/plan/SKILL.md` §2.9. **Disposition: Acknowledge.** This plan edits that file's `/clear` prose, a different region; the §2.9 drift surface is untouched. The issue remains open.
 
 ## Files to Create
 
-- `plugins/soleur/hooks/compaction-state.sh` — the one hook script, dispatching on `hook_event_name`.
-- `plugins/soleur/test/compaction-state-hook.test.sh` — stdin-fixture suite + guard mutation matrix.
-- `plugins/soleur/test/fixtures/compaction/` — synthesized transcript fixtures (`no-boundary.jsonl`, `one-auto.jsonl`, `two-auto.jsonl`, `manual.jsonl`, `high-ratio.jsonl`, `large.jsonl`, `malformed.jsonl`).
-- `knowledge-base/engineering/architecture/decisions/ADR-228-compaction-signal-read-from-the-transcript.md` — ordinal **provisional** (224/225/227 are claimed across the 92 pushed refs; re-verify against freshly fetched `origin/main` immediately before merge).
+- `plugins/soleur/hooks/compaction-state.sh` — one script, dispatching on `hook_event_name` (two events).
+- `plugins/soleur/test/compaction-state-hook.test.sh` — stdin-fixture suite.
+- `plugins/soleur/test/fixtures/compaction/` — **3** synthesized fixtures: `no-boundary.jsonl`, `one-auto.jsonl`, `two-auto.jsonl` (manual is a one-field flip asserted against `two-auto`; malformed input is a heredoc, not a file).
+- `scripts/followthroughs/compaction-format-drift-8323.sh` — FR7 drift canary (real transcripts, scheduled).
+- `knowledge-base/engineering/architecture/decisions/ADR-228-compaction-signal-read-from-the-transcript.md` — ordinal **provisional**; re-verify across every `origin/*` ref immediately before merge.
 
 ## Files to Edit
 
-- `plugins/soleur/hooks/hooks.json` — add `PreCompact` (matcher `manual|auto`), `PostCompact` (matcher `manual|auto`), and a `SessionStart` entry with matcher `compact`.
-- `plugins/soleur/skills/plan/SKILL.md` — make the two unconditional `/clear` sentences conditional (Exit Gate step 3 and the Post-Generation question).
-- `plugins/soleur/skills/work/SKILL.md` — make the `Tip: After shipping, run /clear…` display conditional.
-- `plugins/soleur/skills/one-shot/SKILL.md` — Step 8: carry any fresh-session recommendation into the final resume prompt; never pause for it.
-- `plugins/soleur/devin/INSTRUCTIONS.md` — under `## Hooks and completion`: compaction hooks are Claude-only; `PostCompaction` remains unmeasured (#8172 closed without a positive measurement).
-- `plugins/soleur/codex/INSTRUCTIONS.md` — same section, one line.
-- `knowledge-base/engineering/architecture/diagrams/model.c4` — `hooks` container description + a `hooks -> kb` write edge (see `### C4 views`).
-- `knowledge-base/project/specs/feat-compaction-aware-session-hooks/{spec.md,tasks.md}` — fold the six Research Reconciliation corrections into the spec; `tasks.md` is generated.
+- `plugins/soleur/hooks/hooks.json` — add `PreCompact` (matcher `manual|auto`) and a `SessionStart` entry (matcher `compact`). **No `PostCompact` binding.**
+- `plugins/soleur/skills/plan/SKILL.md` — make the two `/clear` recommendations conditional. The **mandatory** resume-prompt block is untouched (TR5).
+- `plugins/soleur/skills/work/SKILL.md` — same for the `Tip: After shipping…` display.
+- `plugins/soleur/README.md` — kill-switch documentation + the Grok row (honest degradation, 3-of-3 harnesses).
+- `plugins/soleur/devin/INSTRUCTIONS.md`, `plugins/soleur/codex/INSTRUCTIONS.md` — one line each under `## Hooks and completion`.
+- `knowledge-base/engineering/architecture/diagrams/model.c4` — see `### C4 views`.
+- `knowledge-base/engineering/architecture/principles-register.md` — AP-020 amendment (see `### C4 views`).
+- `knowledge-base/project/specs/feat-compaction-aware-session-hooks/{spec.md,tasks.md}` — fold in the reconciliation + the four cuts.
 
 ## Implementation Phases
 
-Phases are ordered by **dependency**, not by file: the payload probe (Phase 0) decides the contract every later phase codes against, and FR4 is sequenced after the ordering probe.
+### Phase 0 — Payload probe (TR4) — blocking, and now much smaller
 
-### Phase 0 — Payload + ordering probe (TR4, TR5) — blocking
+CUT 1 removed the flush-state dependency's hardest half, but the probe still decides one thing FR1 rests on: **whether the current compaction's `compact_boundary` is on disk when `SessionStart:compact` runs.** If not, `count_auto` is off by one and the rule fires on the wrong event while every fixture test stays green.
 
-**The load-bearing unknown is transcript FLUSH STATE, not event metadata.** `source` matcher values and the `trigger` field are documented; what is not documented — and what FR1/FR2 entirely rest on — is whether the *current* compaction's `compact_boundary` record is already written to `transcript_path` at the moment `SessionStart:compact` runs. The "14 lines after" evidence above shows the hook's output landed *after* the boundary in the finished file; it does **not** show the boundary was on disk when the hook ran. If it is not, `count_auto` is off by one and `trigger`/ratio are read from the *previous* compaction — the rule fires on the wrong event, and every fixture-based test would still pass.
+1. Bind a throwaway marker hook (scratchpad path) to `PreCompact` and `SessionStart` via `.claude/settings.local.json` (gitignored). On each event append: timestamp, `hook_event_name`, `source`/`trigger`, sorted top-level stdin keys, `transcript_path`, `grep -c '"subtype":"compact_boundary"' "$transcript_path"`, and the last boundary's `trigger` — i.e. exactly what FR1 will read, read where FR1 will read it.
+2. Force one `/compact`; then let one auto-compaction occur.
+3. Record in the hook header, dated: the literal `source` value; **whether the observed count includes the compaction that just fired**; whether `transcript_path` is stable across it; and `--fork-session` inheritance (untested, flagged by the panel).
+4. Delete the probe and its settings entry.
 
-1. Write a throwaway marker hook (scratchpad path, `SOLEUR_COMPACT_PROBE`) bound in `.claude/settings.local.json` to `PreCompact`, `PostCompact` and `SessionStart`. On **every** event it appends: `date -u +%s.%N`, `hook_event_name`, `source`/`trigger`, the sorted top-level stdin keys, **the `transcript_path` value itself**, **`grep -c '"subtype":"compact_boundary"' "$transcript_path"`**, and **the last boundary's `trigger` + `preTokens`** — i.e. exactly what FR1 will read, read at the moment FR1 will read it.
-2. Force one `/compact` in a scratch session; then let one auto-compaction occur (or replay the measured evidence if none occurs within the session).
-3. Record in the hook's header comment, dated: the literal `source` value on the post-compaction SessionStart; **whether the boundary count observed at SessionStart:compact includes the compaction that just happened**; **whether `transcript_path` is unchanged across the compaction** (a rotation would zero the count); whether `compact_summary` is present on `PostCompact` stdin; and the `PostCompact` vs `SessionStart:compact` firing order.
-4. Delete the probe and its `settings.local.json` entry (that file is gitignored; nothing ships).
+**Pre-authorized fallback:** if the boundary is not yet flushed, `PreCompact` (which fires *before* the boundary and already has its own binding) appends one line to a per-session file under `TMPDIR`, and `SessionStart:compact` counts lines there instead. **This is not the rejected counter store** — that one lived in the user's repo and needed an un-addable `.gitignore` entry; a per-session temp file has neither problem and is disposable. The panel noted this was arguably the simpler primary all along; it stays the fallback only because the transcript needs no second writer if the flush ordering is favourable.
 
-**Pre-authorized fallback — decided now, not escalated.** If the boundary is *not* flushed at SessionStart time, or `source` is not `compact`, FR1/FR2 read their inputs from a scratch file instead: `PostCompact` (which carries `trigger` on its own stdin) writes `{count, trigger, preTokens, postTokens}` to `${TMPDIR:-/tmp}/soleur-compaction-<session_id>.json`, and `SessionStart:compact` prefers that file when it is newer than the last boundary it can see. **This is not the counter store the Cut List rejected:** that one was rejected for living *in the user's repo* (an un-addable `.gitignore` entry) and for piggybacking a manifest another hook overwrites. A per-session file under `TMPDIR` has neither problem, is never committed, and is disposable. Deciding it here means the probe's outcome changes at most ~15 lines of the hook, not the spec.
+### Phase 1 — `compaction-state.sh` (FR1, FR2)
 
-### Phase 1 — `compaction-state.sh`, read path (FR1, FR2)
+RED first (`cq-write-failing-tests-before`).
 
-RED first (`cq-write-failing-tests-before`): the suite's `SessionStart:compact` cases fail against an absent script.
-
-- Dispatch on `hook_event_name`; `SOLEUR_DISABLE_COMPACTION_HOOKS=1` short-circuits at the top; `set -uo pipefail` + **`trap 'exit 0' ERR EXIT`** — the `EXIT` arm is load-bearing, because a `set -u` unbound-variable expansion terminates the shell directly with status 1 **without** firing an `ERR` trap, which is exactly the silent-drop the fail-open contract exists to prevent.
-- **stdout carries the JSON envelope and nothing else.** On the `SessionStart` path a single stray non-JSON byte on stdout invalidates the whole output, so the `SOLEUR_COMPACTION_*` markers are emitted **inside `additionalContext`** (where they are model-visible, which is their purpose) and every diagnostic goes to stderr. The `PreCompact` path is the one exception — there stdout is plain text by contract.
-- Scope-guard: `git rev-parse --is-inside-work-tree` must be `true`, else exit 0 silently.
-- Read `transcript_path` from stdin via `jq -r '.transcript_path // empty'`; if empty or unreadable, exit 0.
-- Derive, with bounded reads: `count_total` (`grep -c '"subtype":"compact_boundary"'`), `count_auto`, and the last boundary's `trigger` / `preTokens` / `postTokens` (`grep '"compact_boundary"' | tail -1 | jq`).
-- Derive the phase: last `"name":"Skill","input":{"skill":"soleur:<name>"` in the transcript → in-script `case` → phase; unknown/absent → `unknown`, and the directive omits the phase clause rather than guessing.
-- Build `additionalContext` with `jq -n --arg` only; clamp per-field to printable + newline; truncate the whole string at 8,000 chars (headroom under the 10,000 cap).
-- **Recommendation rule (FR2):** `trigger == "auto"` AND (`count_auto >= ${SOLEUR_COMPACTION_COUNT_THRESHOLD:-2}` OR `postTokens/preTokens > ${SOLEUR_COMPACTION_RATIO_THRESHOLD:-0.15}`). Ratio computed with `awk`, guarded against `preTokens == 0`.
+- Dispatch on `hook_event_name`. `SOLEUR_DISABLE_COMPACTION_HOOKS=1` short-circuits first. `set -uo pipefail` + **`trap 'exit 0' ERR EXIT`** — the `EXIT` arm is load-bearing because a `set -u` unbound-variable expansion terminates the shell with status 1 **without** firing `ERR`, which is exactly the silent-drop the fail-open contract exists to prevent.
+- **Scope guard (TR1):** the `welcome-hook.sh` sentinel — a `plugins/soleur` directory check under the project root — **plus** a Soleur artifact (`knowledge-base/project/plans/` or `specs/`). Not "is a git repo".
+- Read `transcript_path` via `jq -r '.transcript_path // empty'`; empty or unreadable → emit the no-directive envelope, exit 0.
+- Derive `count_auto` **scoped to this session's window** (TR2) and the last boundary's `trigger`.
+- **Recommendation rule (FR2):** `trigger == "auto" AND count_auto >= ${SOLEUR_COMPACTION_COUNT_THRESHOLD:-2}`. One integer, one env override.
+- Directive content: compaction number, trigger, branch, plan path, "re-read the plan before editing" (`hr-always-read-a-file-before-editing-it`), the `claude --version` string, and the `SOLEUR_COMPACTION_*` marker — all **inside `additionalContext`**. stdout carries the JSON envelope and nothing else; diagnostics to stderr. Truncate at 8,000 chars.
 
 ### Phase 2 — `PreCompact` summary shaping (FR3)
 
-Plain-text stdout, **not** JSON — the wire contract externally verified in the upstream thread (PreCompact stdout is merged with any `/compact "…"` argument and delivered to the summarizer as custom instructions). Pointer-style: name the identifiers and the paths to preserve, never inline file bodies. Exit 0 always; never exit 2.
+~5 lines of **static** plain-text stdout (not JSON) — the wire contract externally verified in the upstream thread. Names the identifiers to preserve; no derivation, no fixtures beyond one scenario. Exit 0 always; never exit 2. Gated by the same TR1 scope guard, because this is the path that would otherwise degrade a stranger's summary.
 
-### Phase 3 — Ordering probe result applied, then checkpoint (FR4) + Guard 1
+### Phase 3 — Prose retirement (FR5) + docs (FR6)
 
-- Compose the block from **allowlisted fields only**: branch (`git branch --show-current`), worktree path **repo-relative** — the basename of `git rev-parse --show-toplevel`, never the absolute path, which routinely carries the OS username (`/home/<name>/…`) and is the one allowlisted field gitleaks cannot flag (gdpr-gate `GDPR-Art-6`, Art. 4(1)/5(1)(c)) —, PR # and issue # (`gh pr view --json number` / the plan frontmatter), plan path, phase, `count_total`/`count_auto`, last `trigger`/`preTokens`/`postTokens`, ISO timestamp, and the provenance comment. **Never** transcript prose, `compact_summary` prose, user prompts, or `tool_result` bodies.
-- Run gitleaks over the rendered block before writing (Guard 1). On a finding: refuse the write, emit `SOLEUR_COMPACTION_CHECKPOINT_REFUSED reason=gitleaks-hit` to stdout, exit 0. On a missing binary: `WARN:` to stderr, skip the write, exit 0 (mirrors `git-commit-secret-scan.sh`'s fail-open).
-- Idempotent block replace between `<!-- compaction-checkpoint:start -->` and `<!-- compaction-checkpoint:end -->`; create the file with just the block if absent; never touch other headings.
-- **Skip guard:** if `knowledge-base/project/specs/<branch>/` does not exist, do nothing and exit 0. On `main`, a hotfix branch, a detached HEAD, or a branch whose name contains `/`, there is no spec directory and the hook must not create one.
-- **Git contract (decided, not deferred):** the block **is** meant to be committed. `session-state.md` is already a tracked artifact that `one-shot` writes and `ship` stages along with the rest of `specs/<branch>/`, so the checkpoint inherits an existing commit path rather than inventing one — and a resume in a *fresh session on the same worktree* reads the working tree, so it is useful before it is ever committed. The accepted cost is that the working tree is dirty mid-session; that is already true of `session-state.md` today, and the block is small, deterministic and confined between its two markers, so it produces a stable one-hunk diff rather than churn. A `/tmp` location was considered and rejected for this slice: it would not survive the worktree move that a genuine fresh-session resume implies.
+Each `/clear` *recommendation* becomes conditional. The resume prompt stays **mandatory and unconditional** (TR5). README gains the kill-switch and the Grok row; the two INSTRUCTIONS files gain one line each.
 
-### Phase 4 — hooks.json bindings + harness docs (FR6)
+### Phase 4 — Drift canary (FR7)
 
-Three entries added; the existing `startup|resume|clear|compact` → `codex-session-start.sh` entry is untouched. One line each in `devin/INSTRUCTIONS.md` and `codex/INSTRUCTIONS.md` under `## Hooks and completion`.
+A `scripts/followthroughs/`-shaped script that reads the operator's **real** `~/.claude/projects/**/*.jsonl` and asserts at least one `"subtype":"compact_boundary"` across N recent transcripts. Scheduled via `soleur:schedule`, **not** a suite case — a suite case would break CI on a clean box. This is the only mechanism that can detect an upstream format rename; synthesized fixtures structurally cannot.
 
-### Phase 5 — Prose retirement (FR5)
+### Phase 5 — ADR + C4 + register + spec/tasks reconciliation
 
-Each `/clear` sentence becomes conditional on the injected signal. The resume prompt itself stays **mandatory and unconditional** (`wg-end-of-work-emit-resume-prompt`, `cm-when-proposing-to-clear-context-or`) — only the *recommendation to start fresh* becomes conditional.
-
-### Phase 6 — ADR + C4 + spec/tasks reconciliation
-
-### Phase 7 — Full battery, `/soleur:gdpr-gate` on the FR4 writer, review
+### Phase 6 — Full battery, review
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-**ADR-228 — "The compaction signal is read from the transcript, not from a counter file"** (create; ordinal provisional). Decision: compaction count, trigger and token ratio are derived from the session transcript's own `compact_boundary` records at `SessionStart:compact`; no plugin- or repo-side counter store is introduced; `PostCompact` is used only where it is the sole source (the checkpoint write). Alternatives Considered must record: (a) the `.claude/.session-manifests` piggyback and why it fails (repo-only, overwritten on every SessionStart including `compact`), (b) a plugin-owned counter store and why it loses (extra write path, un-addable `.gitignore` entry in a user's repo, dependency on an undocumented hook ordering), (c) skill-prose-only and why it loses (the model cannot observe its own compaction count).
+**ADR-228 — "The compaction signal is read from the transcript, not from a counter file"** (create; ordinal provisional). Decision: compaction count and trigger are derived from the transcript's own `compact_boundary` records at `SessionStart:compact`; no counter store is introduced; no `PostCompact` binding ships in this slice.
+
+`## Alternatives Considered` must record, each with its evidence: (a) the `.claude/.session-manifests` piggyback (repo-only, overwritten on every SessionStart including `compact`); (b) a repo-side counter store (un-addable `.gitignore` entry); (c) **the per-session `TMPDIR` file — accepted-conditional**, as Phase 0's fallback, so the ADR does not contradict the plan; (d) skill-prose-only (the model cannot observe its own compaction count); (e) `PostCompact` + `UserPromptSubmit` rebinding; (f) statusline `context_window` (measured unreachable from hooks — record the probe); (g) **the checkpoint writer, deleted by review**, with the two P0s that killed it, so #8328 inherits them.
+
+Per the CTO pass, the ADR must also record that this is the **first customer-shipped consumer** of the transcript format. `.claude/hooks/monitor-supersede-guard.sh` already parses transcript internals, but it is repo-side — the operator sees it break. The rot economics differ, and FR7 exists because of that difference.
 
 ### C4 views
 
-**Container + relationships** (`model.c4`; `views.c4` needs no new `include` — both elements already render):
+The panel found the previous C4 claim wrong in three ways; corrected:
 
-1. `platform.engine.hooks` description currently reads `"PreToolUse Guards + Rewriter + PostToolUse hints"` — the change adds compaction-lifecycle events, so the technology/description line is falsified by this PR and must be amended.
-2. **New edge:** `hooks -> kb` currently exists as *read-only* (`"Reads context_queries artifacts (skill-scoped injection)"`). The checkpoint writer makes the Hook Engine a **writer** into the knowledge base — a genuinely new access relationship, added as its own edge naming the allowlisted-fields + gitleaks-gated contract.
+1. The falsified string is the `hooks` container's **`technology "PreToolUse Guards + Rewriter + PostToolUse hints"`** line, not its description — the previous AC targeted the wrong line.
+2. The `hooks` description's surface split ("in the repo-local `.claude/` hook surface only — never the shipped plugin surface") is falsified in a second way: this makes the *shipped* surface a compaction-lifecycle consumer.
+3. **`claude -> hooks "Tool-call envelope on stdin"` is falsified** — the hook now dereferences `transcript_path` and reads full conversation history. That is a new access relationship, and it widens **AP-020** (scoped to "the MODEL-CONTROLLED hook-stdin envelope") to content merely *pointed at* by that envelope. `knowledge-base/engineering/architecture/principles-register.md` AP-020 needs the amendment.
 
-**Completeness enumeration** (mandate: all three `.c4` files read, not grepped): **external human actors** — none added (the operator already exists; no new correspondent or recipient). **External systems/vendors** — none added; the transcript is a local file written by the already-modelled `claude` Agent Runtime, and gitleaks is a local binary, not a service. **Containers/data stores touched** — `platform.engine.hooks` (amended) and `platform.plugin.kb` (new write edge). **Access relationships that change** — exactly the one above (kb read → read+write from the Hook Engine).
+So: **three** changed relationships, not one. The `hooks` write edge into the knowledge base is **not** among them — it died with CUT 1.
 
-**Cardinality gate:** `model.c4` embeds derived counts ("98 workflow skills", "65 domain agents"). This PR adds no skill and no agent, so no count moves; `plugins/soleur/test/c4-count-parity.test.sh` is green at HEAD and must be re-run green after the edit (it is the authority, not the actor enumeration above).
+**Completeness enumeration** (all three `.c4` files read): no external human actors added; no external systems added (the transcript is a local file written by the already-modelled Agent Runtime); containers touched are `platform.engine.hooks` only. **Cardinality gate:** no skill and no agent added, so no derived count moves; `plugins/soleur/test/c4-count-parity.test.sh` is green at HEAD and must be green after.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a `/soleur:work` or `/soleur:one-shot` session that is told to abandon a healthy pipeline mid-flight (a spurious fresh-session recommendation), or — with a malformed `additionalContext` envelope — a post-compaction turn with *no* re-read directive at all, which is today's behaviour and therefore the fail-open floor.
+**If this lands broken, the user experiences:** a spurious recommendation to abandon a healthy session, or — with a malformed envelope — no directive at all, which is today's behaviour and therefore the fail-open floor. **With the pre-review scope guard**, a customer working on an unrelated repo would have had their compaction summary degraded by instructions about PRs and operator holds they do not have; TR1 is the fix and is the single highest-value change in this revision.
 
-**If this leaks, the user's workflow and source data are exposed via:** the FR4 checkpoint writer copying transcript- or summary-derived text into `knowledge-base/project/specs/<branch>/session-state.md`, which later workflow steps **commit and push to the user's own git remote** — a silent exfil of secrets, prompts or third-party content through the user's own history.
+**If this leaks, the user's workflow is exposed via:** nothing in the shipped scope. The writer that carried this risk (transcript-derived text into a tracked, pushed file) was deleted by review; #8328 inherits the exposure analysis.
 
 **Brand-survival threshold:** `single-user incident`.
 
-CPO sign-off is required at plan time and is satisfied by carry-forward from the brainstorm (`## Domain Assessments` → Product). `user-impact-reviewer` runs at PR review per `review/SKILL.md`.
-
 ## Domain Review
 
-**Domains relevant:** Engineering, Product, Legal (carried forward from the brainstorm's `## Domain Assessments`; no scope pivot since).
+**Domains relevant:** Engineering, Product, Legal (carried forward from the brainstorm; re-checked against the post-cut scope).
 
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** `PostCompact` stdout is never model-visible; `SessionStart` is. Statusline `context_window` data is unreachable from hooks. `.session-manifests` is repo-side and overwritten per SessionStart, so no piggyback. `hooks.json` already binds a `compact` SessionStart matcher for the Codex shim, so adding `PreCompact`/`PostCompact` is trivial. The checkpoint slice is the large one (redaction + commit semantics). Recommended decision rule adopted verbatim as FR2; ADR recommended and scheduled as Phase 6.
+**Assessment:** `PostCompact` stdout is never model-visible; `SessionStart` is. `.session-manifests` is repo-side and overwritten per SessionStart. The six-agent panel deleted the checkpoint writer, the ratio clause, phase derivation and the one-shot edit; the surviving design is one script, two bindings, one integer threshold.
 
 ### Product
 
 **Status:** reviewed
-**Assessment:** Phase 4 milestone, internal-tooling row — protects alpha-tester validation on the CLI plugin rather than adding a customer-facing surface. Nudge at the next phase boundary, never mid-`one-shot`; threshold as env override, not a user-facing setting; define precedence between the hook and the skills that already write `session-state.md`. Success signal: compaction/resume-tagged learnings per month, `unkept-promise-hook.sh` firings after compaction, alpha-tester "the agent lost track" mentions.
+**Assessment:** Phase 4 milestone, internal-tooling row. Nudge at the phase boundary, never mid-pipeline; threshold as env override, not a setting. The precedence question this domain raised ("define precedence between the hook and the skills that already write `session-state.md`") was answered by deleting the hook's write.
 
 ### Legal
 
 **Status:** reviewed
-**Assessment (plan-time gdpr-gate run, 2026-09-18):** one `Important` finding — the absolute worktree path carries the OS username into a tracked, pushed file; folded in as a repo-relative path + AC22a. No Art. 9 surface, no Chapter V transfer, no disclosure update. FR1–FR3 are purely local and already covered by privacy policy §4.2 ("workflow state stored locally") — no disclosure change. FR4 must be allowlist-only structured fields with a gitleaks pass before write, never transcript prose or `tool_result` bodies. The `/soleur:gdpr-gate` path regex does not match `plugins/soleur/hooks/**`, so run it manually against the FR4 writer (Phase 7). A Jikigai-operated telemetry sink would require privacy-policy / DPD §2.3 / Art. 30 updates in the same PR — out of scope here and the reason #8324 is specified local-only.
-
-**Brainstorm-recommended specialists:** none named beyond the triad.
+**Assessment (plan-time gdpr-gate, 2026-09-18):** the single `Important` finding — an absolute worktree path carrying the OS username into a tracked, pushed file — **is moot in the shipped scope**, because the writer that would have carried it is cut. It is recorded on **#8328** so the re-proposal starts with it. The surviving slices are read-only and local: no Art. 9 surface, no Chapter V transfer, no disclosure change. Privacy policy §4.1/§4.2 already describe this accurately.
 
 ### Product/UX Gate
 
-**Tier:** none — no path in `## Files to Create`/`## Files to Edit` matches the UI-surface glob superset (`components/**/*.tsx`, `app/**/page.tsx`, `app/**/layout.tsx`, email templates). Hooks, skill markdown, `.c4` and ADR only.
+**Tier:** none — no path in the file lists matches the UI-surface glob superset.
 **Pencil available:** N/A (no UI surface).
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "SOLEUR_COMPACTION_DIRECTIVE emitted to stdout by compaction-state.sh on every SessionStart:compact fire, carrying count_total, count_auto, trigger, ratio, phase, recommend=true|false"
-  cadence: "once per compaction event (measured: 11 boundaries across 22 recent local sessions)"
-  alert_target: "none — layer 7 (customer-installed CLI); the marker is the operator-inspectable signal, and the aggregated metric is deferred to #8324"
+  what: "SOLEUR_COMPACTION_DIRECTIVE, emitted inside additionalContext on every SessionStart:compact fire, carrying count_auto, trigger, recommend=true|false, and the claude --version string"
+  cadence: "once per compaction (measured: 11 boundaries across 22 recent local sessions)"
+  alert_target: "none — layer 7 (customer-installed CLI); the aggregated metric is deferred to #8324"
   configured_in: "plugins/soleur/hooks/compaction-state.sh"
 error_reporting:
-  destination: "stdout SOLEUR_COMPACTION_* markers (SessionStart stdout is model-visible and lands in the transcript); stderr WARN: lines for operator-visible degradations (gitleaks absent, transcript unreadable)"
-  fail_loud: "no — fail-open by contract (a non-2 non-zero exit silently drops additionalContext), so every failure path emits a named marker instead of a non-zero exit"
+  destination: "markers inside additionalContext (model-visible, recorded in the transcript); stderr for diagnostics. stdout carries the JSON envelope ONLY — a stray byte there invalidates the whole output."
+  fail_loud: "no — fail-open by contract; every failure path emits a valid envelope plus a named marker instead of a non-zero exit"
 failure_modes:
   - mode: "transcript_path missing, unreadable, or malformed JSON"
-    detection: "SOLEUR_COMPACTION_SKIPPED reason=transcript-unreadable on stdout"
-    alert_route: "operator/agent reads it in-session; asserted by the test suite"
-  - mode: "jq or awk unavailable on the user's machine"
-    detection: "SOLEUR_COMPACTION_SKIPPED reason=jq-unavailable"
+    detection: "SOLEUR_COMPACTION_SKIPPED reason=transcript-unreadable, inside additionalContext"
+    alert_route: "read in-session; asserted by the suite"
+  - mode: "jq unavailable"
+    detection: "a static printf'd JSON envelope carrying reason=jq-unavailable — the envelope cannot be built with jq in this state, so it is emitted literally"
     alert_route: "same"
-  - mode: "gitleaks finds a secret in the rendered checkpoint block"
-    detection: "SOLEUR_COMPACTION_CHECKPOINT_REFUSED reason=gitleaks-hit"
-    alert_route: "same; the write is refused, never partial"
-  - mode: "gitleaks binary absent"
-    detection: "WARN: gitleaks not installed — checkpoint write skipped (stderr)"
-    alert_route: "same"
-  - mode: "hook runs outside a git worktree (global plugin install in an unrelated dir)"
-    detection: "silent exit 0 — by design, per the plugin-hook scope-guard learning"
-    alert_route: "n/a"
+  - mode: "hook runs in a non-Soleur repo (global plugin install)"
+    detection: "silent exit 0 by design (TR1 scope guard)"
+    alert_route: "n/a — this is the correct behaviour, not a degradation"
+  - mode: "upstream renames compactMetadata or compact_boundary"
+    detection: "FR7 drift canary against REAL transcripts — the only mechanism that can see this; synthesized fixtures structurally cannot"
+    alert_route: "scheduled run files an issue on zero boundaries across N recent transcripts"
 logs:
-  where: "the session transcript itself (stdout of a SessionStart hook is recorded there); stderr to the Claude Code debug log"
+  where: "the session transcript (additionalContext is recorded there); stderr to the Claude Code debug log"
   retention: "as long as the user's ~/.claude/projects transcripts are retained — local only, nothing shipped"
 discoverability_test:
   command: "bash plugins/soleur/test/compaction-state-hook.test.sh"
   expected_output: "ALL TESTS PASSED"
 ```
 
-No `credentials_required` — the probe is fully local and unauthenticated.
-
-## Guard Contract
-
-### Guard 1 — checkpoint redaction gate (gitleaks pre-write)
-
-**Property.** No content that gitleaks classifies as a secret is ever written into the tracked `session-state.md` by this hook.
-
-**Assembly.** The single chokepoint is `render_checkpoint_block()` → `scan_then_write()` in `compaction-state.sh`: every path that writes the block flows through `scan_then_write`, and the block is composed only by `render_checkpoint_block`. There is exactly one write site (FR4); the mutation matrix asserts a second write site cannot be added silently.
-
-**Mutation matrix** (each edit MUST drive the suite RED):
-
-| # | Mutation | Why it must red |
-|---|---|---|
-| 1 | Make `scan_then_write` return success without invoking gitleaks (the guard's own dispatch) | A guard that reports "0 scanned" and exits 0 is vacuous |
-| 2 | Add a **second** write site that calls `write_block` directly, bypassing `scan_then_write`, after a compliant first | A check that stops at the chokepoint it knows about is the defect class |
-| 3 | Add a field to the allowlist that interpolates raw transcript text | Allowlist drift is the leak vector the property is about |
-| 4 | Move the gitleaks call to *after* the write (a reorder, not a delete) | The property is about *order/lifetime*: a delete-only battery would stay green on a scan that runs once the bytes are already on disk |
-| 5 | Truncate the rendered block **before** scanning rather than after | A cap upstream of a redactor splits the token the regex was written against |
-
-**Harness rows.** (a) Delete the seeded-secret fixture assertion from the suite — the suite must red, proving it is not self-satisfying. (b) A must-PASS input that is **not** the canonical: a checkpoint block with an unusual-but-permitted field order and a branch name containing a hyphenated token that merely *resembles* a key prefix — it must pass, proving the guard does not reject everything.
-
-**Anchor.** The guard compares rendered content against `.gitleaks.toml` at the **repo root** — a file outside this hook's directory, reviewed independently, and the same config `lefthook`'s `gitleaks-staged` and CI's secret-scan use. One diff cannot both weaken the config and widen the allowlist without touching a file three other gates read.
+No `credentials_required` — fully local and unauthenticated.
 
 ## Infrastructure (IaC)
 
-None. No server, service, cron, vendor account, DNS record, secret or firewall rule is introduced; the change is plugin markdown + one bash hook + tests. The Phase 2.8 detection scan over the plan draft and feature description found no SSH form, no systemd unit management, no secret-store write, no vendor-dashboard step, and no new cron.
+None. No server, service, cron, vendor account, DNS record, secret or firewall rule is introduced; the change is plugin markdown + one bash hook + tests. The Phase 2.8 detection scan found no SSH form, no systemd unit management, no secret-store write, no vendor-dashboard step. FR7's canary is scheduled through the existing `soleur:schedule` mechanism, which introduces no new infrastructure.
 
 ## Encryption Posture
 
-Not applicable — Phase 2.11 detection does not fire: no `*.tf`, no `supabase/migrations/*.sql`, no `cloud-init*.yml`, no `docker-compose*.yml` in the file lists, no new persistent store (the checkpoint targets an artifact that already exists and is already committed), and no new cross-component or network connection (every read and write is local filesystem).
+Not applicable — Phase 2.11 detection does not fire: no `*.tf`, no migrations, no cloud-init, no compose file, no new persistent store (the writer that touched one is cut), and no new cross-component or network connection.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** — Phase 0 probe results are recorded, dated, in `compaction-state.sh`'s header: the literal `source` value on the post-compaction SessionStart, whether `compact_summary` is on `PostCompact` stdin, and the `PostCompact` vs `SessionStart:compact` order. Verify: `grep -c 'measured 2026-09-' plugins/soleur/hooks/compaction-state.sh` ≥ 1.
-- [ ] **AC2** — On a fixture with **zero** boundaries the hook emits no directive and exits 0. Verify: the suite's `no-boundary` case.
-- [ ] **AC3** — On `one-auto.jsonl` (1 auto boundary, ratio 0.10) the directive is emitted **without** a fresh-session recommendation. Verify: the emitted `additionalContext` contains `Compaction #1` and `recommend=false`, and does not contain `fresh session`.
-- [ ] **AC4** — On `two-auto.jsonl` (2 auto boundaries) and on `high-ratio.jsonl` (1 auto boundary, `postTokens/preTokens` = 0.30) the recommendation **is** emitted. Both cases assert `recommend=true`.
-- [ ] **AC5** — On `manual.jsonl` (2 manual boundaries, ratio 0.40) the recommendation is **not** emitted — manual compaction never triggers.
-- [ ] **AC6** — Thresholds are overridable: the same `one-auto.jsonl` fixture with `SOLEUR_COMPACTION_COUNT_THRESHOLD=1` emits `recommend=true`.
-- [ ] **AC7** — Exit code is 0 on every path: malformed stdin, absent `transcript_path`, unreadable transcript, non-git CWD, and `SOLEUR_DISABLE_COMPACTION_HOOKS=1`. Verify: 5 suite cases each asserting `rc=0`.
-- [ ] **AC8** — `additionalContext` never exceeds 8,000 chars, asserted against the `large.jsonl` fixture.
-- [ ] **AC9** — The envelope shape is `hookSpecificOutput.{hookEventName:"SessionStart", additionalContext}` — parsed with `jq -e`, not substring-matched.
-- [ ] **AC10** — The phase `case` arms in the hook and the `skill_to_phase` keys in `.claude/phase-surface-map.json` agree; a suite case fails on divergence.
-- [ ] **AC11** — Guard 1: a fixture seeding a synthesized fake secret into a checkpoint field is **refused** (`SOLEUR_COMPACTION_CHECKPOINT_REFUSED`, file unchanged), and all five mutation-matrix rows plus both harness rows are exercised by the suite.
-- [ ] **AC12** — The checkpoint write is idempotent: running the hook twice against the same `session-state.md` leaves exactly one `<!-- compaction-checkpoint:start -->` block and does not modify any other heading. Verify: `grep -c 'compaction-checkpoint:start' = 1` plus a diff of the non-block region.
-- [ ] **AC13** — `PreCompact` emits **plain text** on stdout (not JSON), exits 0, and never exits 2. Verify: the suite pipes the `PreCompact` envelope and asserts `jq -e . <<<"$out"` **fails** while the output is non-empty.
-- [ ] **AC14** — `hooks.json` binds all three events to `${CLAUDE_PLUGIN_ROOT}/hooks/compaction-state.sh` with matchers `manual|auto`, `manual|auto`, `compact`; the file remains valid JSON and the referenced script is mode 100755. Verified in the new suite (not `components.test.ts`, which does not read `hooks.json`).
-- [ ] **AC15** — Every `/clear` recommendation in `plan/SKILL.md` and `work/SKILL.md` is conditional; the **mandatory** resume-prompt instructions are unchanged. Verify: `grep -c 'Resume prompt (MANDATORY' plugins/soleur/skills/plan/SKILL.md` is unchanged from `origin/main`, and each remaining `/clear` recommendation sentence is preceded by a conditional clause.
-- [ ] **AC16** — `devin/INSTRUCTIONS.md` and `codex/INSTRUCTIONS.md` each carry the Claude-only compaction-hook line under `## Hooks and completion`.
-- [ ] **AC17** — ADR created, its ordinal re-verified free across every `origin/*` ref immediately before merge, and its `## Alternatives Considered` records all three rejected options.
-- [ ] **AC18** — `model.c4` amends the `hooks` container description and adds the `hooks -> kb` write edge; `bash plugins/soleur/test/c4-count-parity.test.sh` and the `apps/web-platform/test/c4-*.test.ts` suites are green.
-- [ ] **AC19** — `/soleur:gdpr-gate` has been run manually against the FR4 writer (path regex does not cover `plugins/soleur/hooks/**`) and its verdict is recorded in the PR body.
-- [ ] **AC20** — Measured wall-clock of the `SessionStart` path against the `large.jsonl` fixture (≥ 30 MB) is recorded in the hook header; the suite fails if it exceeds 1 s.
-- [ ] **AC21** — Full battery green: `TEST_GROUP=all bash scripts/test-all.sh` (read the rc file, never the notification).
-- [ ] **AC1a** — The Phase 0 probe's flush-state finding is recorded in the hook header: whether the boundary count observed at `SessionStart:compact` includes the compaction that just fired, and whether `transcript_path` is stable across it. If it does not include it, the `TMPDIR` fallback path is the one implemented, and a suite case asserts the hook prefers the scratch file when it is newer.
-- [ ] **AC7a** — A `set -u` unbound-variable fault inside the script still exits 0 and emits no partial stdout. Verify: a suite case invokes the hook with an internal variable deliberately unset and asserts `rc=0` and empty-or-valid-JSON stdout.
-- [ ] **AC9a** — On the `SessionStart` path stdout parses as JSON **in full** (`jq -e . <<<"$out"` succeeds) for every fixture, including the failure fixtures — proving no marker or diagnostic leaked onto stdout.
-- [ ] **AC12a** — The checkpoint write is skipped with rc 0 when `knowledge-base/project/specs/<branch>/` is absent (fixtures: detached HEAD, `main`, a branch name containing `/`), and no directory is created.
-- [ ] **AC22a** — The rendered checkpoint block contains no absolute home-directory prefix: `grep -cE '(/home/|/Users/|C:\\\\Users\\\\)' <rendered block>` is 0, asserted with a fixture whose worktree sits under a synthesized `/home/<name>/` path. Closes the gdpr-gate `GDPR-Art-6` finding.
-- [ ] **AC22** — Every fixture under `plugins/soleur/test/fixtures/compaction/` is synthesized (`cq-test-fixtures-synthesized-only`): no real session ids, no real paths outside this repo, no live tokens.
-- [ ] **AC23** — The diff is a subset of the files named in `## Files to Create` / `## Files to Edit` **plus** the pipeline-written artifacts: `knowledge-base/INDEX.md`, `knowledge-base/project/specs/feat-compaction-aware-session-hooks/session-state.md`, and this plan file.
+- [ ] **AC1** — Phase 0's findings are in the hook header, dated: the literal `source` value, whether the observed boundary count includes the compaction that just fired, `transcript_path` stability, and `--fork-session` behaviour. If the count excludes it, the `TMPDIR` fallback is what shipped and a suite case asserts it.
+- [ ] **AC2** — Zero boundaries → the envelope is emitted and valid, and its `additionalContext` contains **no** directive. (Stated as a property of `additionalContext`, not of stdout emptiness — `jq -e . <<<""` returns rc 4.)
+- [ ] **AC3** — One auto boundary → directive present, `recommend=false`, no "fresh session" string.
+- [ ] **AC4** — Two auto boundaries → `recommend=true`.
+- [ ] **AC5** — Manual boundaries only → `recommend=false` at any count.
+- [ ] **AC6** — `SOLEUR_COMPACTION_COUNT_THRESHOLD=1` on the one-auto fixture → `recommend=true`.
+- [ ] **AC7** — rc is 0 on every path: malformed stdin, absent `transcript_path`, unreadable transcript, non-Soleur repo, kill-switch, and a deliberately-unset internal variable (the `set -u` case the `EXIT` trap exists for).
+- [ ] **AC8** — On **every** SessionStart fixture, stdout parses as JSON in full (`jq -e .` succeeds) — proving no marker or diagnostic leaked onto stdout — and `additionalContext` never exceeds 8,000 chars.
+- [ ] **AC9** — With `jq` removed from `PATH`, stdout is still valid JSON (the static `printf` path).
+- [ ] **AC10 (TR1 scope guard)** — In a git repo with **no** `plugins/soleur` directory, both events emit nothing and exit 0. Asserted for `PreCompact` specifically, since that is the path that would otherwise reach a stranger's summarizer.
+- [ ] **AC11 (TR2)** — A fixture holding 3 boundaries across a simulated `--resume` yields `count_auto` scoped to the current session window, not 3.
+- [ ] **AC12** — `PreCompact` emits non-empty, **non-JSON** stdout and rc 0. Written so the assertion cannot abort the suite: `if jq -e . <<<"$out" >/dev/null 2>&1; then fail "PreCompact emitted JSON"; fi`.
+- [ ] **AC13** — `hooks.json` binds exactly two events (`PreCompact` matcher `manual|auto`, `SessionStart` matcher `compact`) to the hook, contains **no** `PostCompact` key, remains valid JSON, and the script is mode 100755.
+- [ ] **AC14** — The `compact_boundary` grep pattern is pinned by a fixture whose spacing differs (`"subtype": "compact_boundary"`), so a CLI formatting change reds the suite rather than silently returning 0.
+- [ ] **AC15 (TR5)** — Every `/clear` **recommendation** in `plan/SKILL.md` and `work/SKILL.md` is conditional, AND the mandatory resume-prompt blocks are byte-identical to `origin/main`. Verify with `git diff origin/main -- <file>` scoped to the resume-prompt regions, not a heading count. `work/SKILL.md` must still emit an end-of-work resume prompt when the hook never fires (no compaction, non-Claude harness, kill-switch) — the spec-flow dead-end.
+- [ ] **AC16** — `README.md` documents `SOLEUR_COMPACTION_COUNT_THRESHOLD` and `SOLEUR_DISABLE_COMPACTION_HOOKS`, and carries a Grok row; `devin/` and `codex/INSTRUCTIONS.md` each carry the Claude-only line.
+- [ ] **AC17 (FR7)** — The drift canary exists, runs against real `~/.claude/projects/**/*.jsonl`, exits non-zero when zero boundaries are found across N recent transcripts, and is registered as a schedule — not as a suite case.
+- [ ] **AC18** — `model.c4` amends the `hooks` **`technology`** line and its surface-split description; `principles-register.md` AP-020 is amended for the transcript-dereference relationship; `c4-count-parity.test.sh` and the `c4-*.test.ts` suites are green.
+- [ ] **AC19** — Fixtures are synthesized (`cq-test-fixtures-synthesized-only`): no real session ids, no paths outside this repo, no live tokens.
+- [ ] **AC20** — Full battery green: `TEST_GROUP=all bash scripts/test-all.sh`, verdict read from the rc file.
+- [ ] **AC21** — The diff is a subset of `## Files to Create` / `## Files to Edit` plus the pipeline-written artifacts (`knowledge-base/INDEX.md`, `specs/<branch>/session-state.md`, this plan).
+
+**Every AC above is a post-condition on file state, command output or merged behaviour.** The four process attestations the panel flagged as ceremony (probe-results-recorded-as-such, ordinal re-verification, gdpr-gate-verdict-in-PR-body, and the timing budget) are gone: AC1 now asserts the header's *content* decides the implementation, ordinal re-verification is a `/ship` gate not an AC, and the timing claim is recorded as a measurement (~25 ms on 31 MB) rather than asserted as a budget.
 
 ### Post-merge (operator)
 
-None. Every step above is automatable in-session; there is no vendor credential to mint, no infrastructure apply, and no dashboard action.
+None.
 
 ## Test Scenarios
 
-All in `plugins/soleur/test/compaction-state-hook.test.sh`, envelopes built with `jq -nc` and piped to `bash "$HOOK"` (the `browser-snapshot-credential-guard.test.sh` shape):
+In `plugins/soleur/test/compaction-state-hook.test.sh`, envelopes built with `jq -nc` and piped to the hook (the `browser-snapshot-credential-guard.test.sh` shape). `grep -c` is always wrapped (`n=$(grep -c … || true)`) because it exits 1 on zero matches and would abort the suite under `set -e`.
 
-1. Zero boundaries → no directive, rc 0.
-2. One auto boundary, low ratio → directive, `recommend=false`.
-3. Two auto boundaries → `recommend=true`.
-4. One auto boundary, ratio 0.30 → `recommend=true`.
-5. Manual boundaries only, ratio 0.40 → `recommend=false`.
-6. Threshold override via env → `recommend=true` on fixture 2.
-7. `preTokens: 0` → no division error, rc 0, `recommend` decided by count alone.
-8. Phase derivation: last skill `soleur:work` → phase `work`; no skill record → phase clause omitted.
-9. Phase-map drift assertion against `.claude/phase-surface-map.json`.
-10. Malformed stdin / absent `transcript_path` / unreadable transcript / non-git CWD / kill-switch → rc 0, named marker (5 cases).
-11. 8k-char cap against `large.jsonl`.
-12. Envelope parsed with `jq -e`; `hookEventName == "SessionStart"`.
-13. `PreCompact` → non-empty, non-JSON stdout, rc 0.
-14. `PostCompact` checkpoint: creates the block; re-run is idempotent; sibling headings untouched.
-15. Guard 1: seeded synthesized secret → refused, file unchanged.
-16. Guard 1 mutation matrix rows 1–5, each asserted to red the suite.
-17. Guard 1 harness rows: assertion-deleted suite must red; non-canonical permitted input must pass.
-18. `hooks.json` binding + exec-bit assertion.
-19. Timing assertion on the ≥30 MB fixture.
+1. Zero boundaries → valid envelope, no directive.
+2. One auto → `recommend=false`.
+3. Two auto → `recommend=true`.
+4. Manual only → `recommend=false`.
+5. Threshold override → `recommend=true` on the one-auto fixture.
+6. Resume-window scoping (3 boundaries, one session window).
+7. Five rc-0 paths + the `set -u` case.
+8. stdout parses as JSON on every SessionStart fixture; 8k cap.
+9. `jq` absent → static envelope still valid.
+10. Scope guard: no `plugins/soleur` → silence on both events.
+11. `PreCompact` → non-empty, non-JSON, rc 0.
+12. `hooks.json` bindings + no `PostCompact` key + exec bit.
+13. Whitespace-variant `compact_boundary` pattern pin.
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| `SessionStart:compact` does not actually fire on auto-compaction (the measurement is inferential — a hook fired, but the `source` value was not read) | Phase 0 is blocking and reads the literal `source`; the documented fallback re-binds FR1/FR2 to `PostCompact` + `UserPromptSubmit` and is a spec change, escalated |
-| The current compaction's boundary is not yet flushed when `SessionStart:compact` runs — every derived value off by one, with fixture tests still green | Phase 0 measures exactly this at the moment FR1 would read it (AC1a); the `TMPDIR` scratch-file fallback is pre-authorized so the outcome costs ~15 lines, not a spec change |
-| Directive is elevated-authority text the model over-trusts | Pointer-style only (paths + counts), never inlined file bodies; the recommendation is advisory and explicitly deferred to the next phase boundary |
-| Spurious recommendation interrupts a healthy `/soleur:one-shot` | FR2's directive names the one-shot exception explicitly; `one-shot/SKILL.md` Step 8 carries it into the final resume prompt instead of pausing |
-| An allowlisted field silently carries personal data (the absolute worktree path carries the OS username) | Path stored repo-relative; AC22a asserts no `/home/`, `/Users/` or `C:\Users\` prefix survives into the block; gitleaks cannot catch this class because a username is not a secret |
-| Checkpoint write races a skill writing `session-state.md` | The hook owns only its fenced block and never parses the skill-owned headings; the block is appended, and the replace is anchored on both markers |
-| `grep` over a 30 MB transcript on every compaction | Bounded reads only; AC20 measures and the suite fails above 1 s |
-| Transcript format changes in a future CLI version | The suite's fixtures pin the parsed shape; a format change reds the suite rather than silently emitting nothing. The fail-open contract means the worst case is today's behaviour |
-| ADR ordinal collision during the pipeline | Ordinal is provisional; AC17 re-verifies across every `origin/*` ref immediately before merge, and any renumber sweeps plan + tasks + ACs in the same edit |
+| The current compaction's boundary is not flushed when `SessionStart:compact` runs — values off by one with fixture tests green | Phase 0 measures exactly this at the point FR1 reads it (AC1); the `TMPDIR` fallback via the already-bound `PreCompact` is pre-authorized |
+| **Upstream renames the transcript format; synthesized fixtures stay green and the feature dies silently on users' machines** | FR7 canary against real transcripts (AC17) + `claude --version` in every marker. The previous "fixtures pin the shape" answer was false and is retracted |
+| A plugin hook degrades a non-Soleur user's compaction summary | TR1 sentinel scope guard (AC10), mirroring `welcome-hook.sh` |
+| Long `--resume` session pins `recommend=true` forever | TR2 session-window scoping (AC11) |
+| Directive is elevated-authority text the model over-trusts | Pointer-style only (branch + plan path + counts); advisory, deferred to the next phase boundary |
+| Prose retirement leaves a dead end when the hook never speaks | AC15 asserts the end-of-work resume prompt survives all three silent states |
+| ADR ordinal collision | Provisional; re-verified across every `origin/*` ref at `/ship`, and any renumber sweeps plan + tasks + ACs together |
 
 ## Deferred
 
-- **#8324** — local `SOLEUR_COMPACTION` metric via the `incidents.sh` → `rule-metrics-aggregate.sh` ledger. Re-evaluate after ~30 days of dogfooding this feature.
-- Devin `PostCompaction` measurement — #8172 closed without a positive measurement; the residual arm needs a cloud session where a compaction actually occurs on a branch with the marker hook bound.
+- **#8328** — the `PostCompact` checkpoint writer (CUT 1). Must start from: `one-shot` writes `session-state.md` as a whole-file template that would destroy any hook-owned block, and nothing in `work` Phase 0 reads that file. Re-evaluate once a reader exists and the upstream `PostCompact` stdin shape is settled. Inherits the gdpr-gate worktree-path finding.
+- **#8324** — local `SOLEUR_COMPACTION` metric via the `incidents.sh` to `rule-metrics-aggregate.sh` ledger. Re-evaluate after ~30 days of dogfooding.
+- Devin `PostCompaction` measurement — #8172 closed without a positive measurement; needs a cloud session where a compaction actually occurs with the marker hook bound.
