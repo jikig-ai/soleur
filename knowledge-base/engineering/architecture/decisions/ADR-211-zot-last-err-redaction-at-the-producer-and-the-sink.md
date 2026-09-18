@@ -4,7 +4,7 @@ status: adopting
 date: 2026-09-08
 tags: [registry, zot, redaction, observability, gdpr, public-egress, cloud-init, adr-166]
 related_adrs: [ADR-096, ADR-166, ADR-172, ADR-184, ADR-185]
-related_issues: [7500, 7444, 7440, 7272, 7530, 7055]
+related_issues: [7500, 7444, 7440, 7272, 7530, 7055, 7960]
 ---
 
 # ADR-211: `zot_last_err` is redacted at the producer AND scrubbed at the sink
@@ -18,6 +18,9 @@ related_issues: [7500, 7444, 7440, 7272, 7530, 7055]
   the plan and `tasks.md` both explicitly forbade for exactly this reason. `status:` is the
   most machine-readable in-force signal in the corpus, so asserting it early is the same
   overclaim this ADR exists to remove, in the one field a reader is most likely to trust.]**
+  **[Amended 2026-09-18 (#7960): the trigger is now precise — it flips to Accepted when the #7960
+  probe PASSes on a boot PROVEN by `err_redact_rev` (or `zot_last_err_src=suppressed`) to run the
+  Phase B producer. See "Delivery proof" under Decision.]**
 - **Date:** 2026-09-08
 - **Issue:** [#7500](https://github.com/jikig-ai/soleur/issues/7500)
 - **Referred from:** the CLO counsel-review gate on PR #7444
@@ -118,6 +121,37 @@ for a log **shipper** whose entire payload is the log line, and wrong for a **di
 reporter** whose payload is mostly numeric telemetry. Adopting the function without adopting its
 drop semantics is the whole of option 4: it answers the "Against" argument in the issue rather
 than trading against it.
+
+### Delivery proof: `err_redact_rev` (2026-09-18, #7960)
+
+The follow-through that watches Layer 1's delivery (`scripts/followthroughs/zot-last-err-redact-7500.sh`)
+could not auto-close by construction. Its only Phase-B-exclusive token, `zot_last_err_src=suppressed`,
+is **sufficient but not necessary**: the gate re-tags only when it withheld a sample zot produced,
+so a healthy host on the dominant JSON path emits `fallback` forever. And `boot_id` drift proves a
+new **boot**, not a new **host** — cloud-init's runcmd is per-instance and this host reboots as a
+convergence primitive (the private-NIC guard). Measured 2026-09-18 on the host replaced 2026-09-17:
+272 tier-4 rows on its boot, 0 carrying header structure, 0 `suppressed` — working, and unprovable.
+
+**Decision.** The heartbeat emits `err_redact_rev=<n>` on **every** `SOLEUR_ZOT_DISK` row, in the
+trusted region (right after `zot_last_err_src=`, ahead of the free-text `zot_last_err=` tail).
+
+- **Contract.** An integer revision of the `zot_last_err` redaction gate (the tier gate plus per-line
+  `redact()`). Any value ≥ 1 means that gate is present. Bump it when the gate changes; never
+  decrement or reuse a value; never keep the token while removing the gate. It is a literal, not a
+  `$VAR`, because the heartbeat runs `set -u`.
+- **Authoritative verdicts need proof, never drift.** The probe exits 0 (closes the tracker) or 1
+  (public FAIL) only when a row on the newest real boot carries `err_redact_rev` ≥ 1 — or a tier-4
+  `suppressed` row, kept as secondary corroboration — read from the trusted region of an
+  envelope-anchored row. Boot drift feeds no verdict; the merge-time baseline and every drift branch
+  were deleted. No proof is one state, exit 3, whose message names the replace that delivers the
+  field.
+- **The leak grade is structure.** Field-keyed proof makes exit 1 reachable on an ordinary delivered
+  host, so the grade no longer fires on the bare words `headers`/`clientIP`: a header map with at
+  least one key, an address-valued `clientIP`, or an unmasked credential header (the producer's
+  `CRED_HDRS`), plus any `suppressed` row whose tail is not `none`. Checked against 2,598 real
+  pre-Phase-B `fallback` rows: the old and new discriminators flag the identical 1,792.
+- **Not** `SOLEUR_ZOT_LOG_BOOT`: `git log -S` puts it in 07cf8ebcb (#7444, the log shipper), not in
+  96f5b6eb5 (#7954, Phase B), so it proves a weaker claim.
 
 ## Alternatives considered
 
@@ -229,6 +263,10 @@ Art. 30 register cites it:
   rules; ingress is intra-`10.0.1.0/24` plus a Cloudflare tunnel. Any change admitting public
   ingress raises the severity of this decision **and** converts `clientIP` into Art. 4(1)
   personal data on a path this ADR explicitly does not redact.
+- **After the #7960 PASS, nothing re-grades the warehouse stream for regression (2026-09-18).**
+  The sweeper skips an issue it closed itself with a PASS, so a later producer edit that broke the
+  gate would not reopen #7960. What remains is the producer suite (pre-merge, on every edit to the
+  heartbeat) and the Layer 2 sink scrub on the public egress. Recorded as a known residual.
 - A third-party/system-output publication surface remains ungoverned in general — no gate covers
   runtime publication of third-party output to a public artifact by agent-authored automation.
   Tracked separately; markdown/`@mention` injection from an attacker-chosen `User-Agent` is a
