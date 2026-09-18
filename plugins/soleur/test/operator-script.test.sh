@@ -1611,6 +1611,29 @@ if [[ -r "$gen_home/bootstrap.sh" ]]; then
   else
     fail "template trap: ledger lacks the failed settle or the run_halt: $(cat "$tpl_env_dir/bootstrap-runs.jsonl" 2>/dev/null)"
   fi
+  # The partial-write arm. `SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED` means the
+  # write MAY be live, so the trap must not say nothing changed — that sentence
+  # is what stops a founder revoking. Driven through the flag the library
+  # raises on that path.
+  rm -f "$tpl_env_dir/.env" "$tpl_env_dir/bootstrap-runs.jsonl"
+  tpl_warn_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
+    SOLEUR_OP_WRITE_MAY_HAVE_LANDED=1 \
+    SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 SOLEUR_BOOTSTRAP_ACCOUNT_ID=acct-1 \
+    timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh </dev/null 2>&1)"
+  if grep -qF 'A credential may already have been written' <<<"$tpl_warn_out" \
+     && ! grep -qF 'Nothing else was changed' <<<"$tpl_warn_out"; then
+    pass "template trap: a run where a write may have landed does NOT claim nothing changed"
+  else
+    fail "template trap: the may-have-landed run still claimed nothing changed: ${tpl_warn_out}"
+  fi
+  # The library must be what raises the flag, not only the harness.
+  if grep -qF 'SOLEUR_OP_WRITE_MAY_HAVE_LANDED=1' "$LIB" \
+     && [[ "$(grep -c 'SOLEUR_OP_WRITE_MAY_HAVE_LANDED' "$LIB")" -ge 2 ]]; then
+    pass "library raises SOLEUR_OP_WRITE_MAY_HAVE_LANDED on the verify-failed path"
+  else
+    fail "library never sets SOLEUR_OP_WRITE_MAY_HAVE_LANDED — the trap branch is unreachable in production"
+  fi
+
   if grep -qF 'Stopped during stage 1' <<<"$tpl_out"; then
     fail "template trap: stage 1 completed but was reported as stopped"
   else
@@ -1683,6 +1706,25 @@ gign_check() {
   if [[ -n "$(git -C "$repo" status --porcelain --untracked-files=all -- knowledge-base/project/specs/feat-y/.env 2>/dev/null)" ]]; then
     echo "gign: the .env is visible to git status in the ignored fixture"; v=1
   fi
+
+  # (d) THE PROBE MUST FOLLOW THE SYMLINK, because the WRITER does.
+  # `soleur_op_env_upsert` resolves with `readlink -f` before writing, so a
+  # probe of the link NAME asks git about a file the write never touches. A
+  # founder keeping credentials in one place symlinks .env at a shared file;
+  # `.env*` ignores the NAME, the probe passes, and the value lands on a target
+  # git reports as untracked-and-not-ignored — the next `git add .` commits it.
+  # Fixture: `.env*` is ignored, `config/` is NOT, and .env points into it.
+  rm -f "$repo/knowledge-base/project/specs/feat-y/.env"
+  mkdir -p "$repo/knowledge-base/project/specs/feat-y/config"
+  ln -s config/local.env "$repo/knowledge-base/project/specs/feat-y/.env"
+  out="$(gign_run "$repo" "$rel")"; rc=$?
+  if [[ "$rc" -ne 64 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED' <<<"$out"; then
+    echo "gign: a .env symlinked at an UN-ignored target was not refused (rc=${rc}): ${out}"; v=1
+  fi
+  if [[ -s "$repo/knowledge-base/project/specs/feat-y/config/local.env" ]]; then
+    echo "gign: the refused symlink run still wrote the credential to the un-ignored target"; v=1
+  fi
+  rm -f "$repo/knowledge-base/project/specs/feat-y/.env"
   return "$v"
 }
 
@@ -1690,12 +1732,22 @@ if [[ -r "$gen_home/bootstrap.sh" ]]; then
   assert_green gign_check "baked template" "$gen_home/bootstrap.sh"
   # Mutation (P1-1): the check block deleted from the generated script.
   cp "$gen_home/bootstrap.sh" "$SB/mut/gign-nocheck.sh"
-  perl -0777 -pi -e 's{for probe in "\$ENV_FILE" "\$\{ENV_FILE\}\.tmp\.XXXXXX"; do\n.*?\ndone\n}{}s' "$SB/mut/gign-nocheck.sh"
+  perl -0777 -pi -e 's{for probe in "\$ENV_FILE_RESOLVED" "\$\{ENV_FILE_RESOLVED\}\.tmp\.XXXXXX"; do\n.*?\ndone\n}{}s' "$SB/mut/gign-nocheck.sh"
   if [[ "$(md5_of "$SB/mut/gign-nocheck.sh")" == "$(md5_of "$gen_home/bootstrap.sh")" ]]; then
     fail "mutation 'gign check block deleted' did NOT land"
   else
     pass "mutation 'gign check block deleted' landed (md5 differs from the baked template)"
     assert_red gign_check "gign: template without the check writes an un-ignored .env" "$SB/mut/gign-nocheck.sh"
+  fi
+  # Mutation: the probe stops following the symlink (the pre-fix shape) while
+  # the writer still resolves. Case (d) is the only row that can see it.
+  cp "$gen_home/bootstrap.sh" "$SB/mut/gign-unresolved.sh"
+  perl -0777 -pi -e 's{^ENV_FILE_RESOLVED="\$\(readlink -f -- "\$ENV_FILE".*?\)"$}{ENV_FILE_RESOLVED="$ENV_FILE"}m' "$SB/mut/gign-unresolved.sh"
+  if [[ "$(md5_of "$SB/mut/gign-unresolved.sh")" == "$(md5_of "$gen_home/bootstrap.sh")" ]]; then
+    fail "mutation 'gign probe stops resolving the symlink' did NOT land"
+  else
+    pass "mutation 'gign probe stops resolving the symlink' landed (md5 differs from the baked template)"
+    assert_red gign_check "gign: unresolved probe passes a symlinked .env onto an un-ignored target" "$SB/mut/gign-unresolved.sh"
   fi
 else
   fail "Guard 7: the baked template copy from F1 is missing"
@@ -1751,10 +1803,111 @@ else
   fail "library fails bash -n"
 fi
 
+# =============================================================================
+# Guard 10 — an unattended run of a live consumer cannot reach a billable create
+# =============================================================================
+#
+# Guard 9 is a TEXT census: it asks whether a `soleur_op_ack_or_die` LINE sits
+# above each destructive site. Its anchor tolerates leading whitespace (a stage
+# may legitimately live inside a function), and that is exactly what admits the
+# bypass it exists to forbid — wrap the ack in `if [[ -z "${SOME_VAR:-}" ]]`,
+# set SOME_VAR, and the call is still there, still matches, and never runs.
+# Measured: both Guard 9 and the Guard 4 consumer sweep stay GREEN over that
+# mutation while `hcloud server create` bills a real server unattended.
+#
+# No spelling rule closes it, because the dodge is control flow rather than
+# text. This guard asserts the PROPERTY instead: drive the real consumer with
+# stdin closed and EVERY escape variable the script itself mentions set, and
+# require that the billable command was never invoked. A future bypass keyed on
+# a NEW variable is covered too — the variable set is derived from the script
+# under test, so the mutant hands the guard its own escape hatch.
+HETZ_FIXTURE_KB="${PLUGIN_ROOT}/skills/provision-hetzner/test/fixture/knowledge-base"
+
+gunatt_check() {
+  local script="$1" v=0 run stub_log vars var
+  # The run directory must NOT be the script's own directory — an earlier
+  # revision derived it from `dirname "$script"` and `rm -rf`'d the script it
+  # was about to drive, so every arm (including the positive control) reported
+  # GREEN over a run that never happened. The own-dispatch row below is what
+  # caught it; keep the two trees disjoint.
+  run="$SB/unattrun/$(basename "$(dirname "$script")")"
+  rm -rf "$run"; mkdir -p "$run/bin"
+  cp -r "$HETZ_FIXTURE_KB" "$run/" || { echo "gunatt: fixture register copy failed"; return 1; }
+  stub_log="$run/hcloud.argv"
+  : > "$stub_log"
+  # Logging stub, NOT a refusal: a stub that exits non-zero would mask the
+  # create behind an error path. It records and succeeds, so reaching it is
+  # observable and the run continues exactly as a real create would.
+  { printf '#!/usr/bin/env bash\n'
+    printf 'printf "%%s\\n" "$*" >> "%s"\n' "$stub_log"
+    printf 'exit 0\n'
+  } > "$run/bin/hcloud"
+  chmod +x "$run/bin/hcloud"
+
+  # DISCOVERED population: every escape variable the script names. `_LEDGER` is
+  # a path, not an escape, and is pointed at the sandbox instead.
+  vars="$(grep -oE 'SOLEUR_BOOTSTRAP_[A-Z0-9_]+' "$script" | sort -u | grep -v '_LEDGER$' || true)"
+  (
+    cd "$run" || exit 2
+    export PATH="$run/bin:$PATH"
+    export SOLEUR_BOOTSTRAP_LEDGER="$run/ledger.jsonl"
+    # The script is driven from a COPY, so its relative library path does not
+    # resolve; without this it exits 64 at SOLEUR_BOOTSTRAP_LIB_MISSING and
+    # every arm reports "no create" over a run that reached nothing. The
+    # reached-the-stage assertion below is the standing guard against that.
+    export SOLEUR_OP_LIB="$LIB"
+    for var in $vars; do export "$var=1"; done
+    timeout 60 bash "$script" fixture-tenant </dev/null >"$run/out" 2>&1
+  )
+  if grep -qE '(^| )server create( |$)' "$stub_log"; then
+    echo "gunatt: $(basename "$script") reached a BILLABLE create with no human in the loop: $(cat "$stub_log")"
+    v=1
+  fi
+  # ANTI-VACUITY: "no create happened" is satisfied perfectly by a run that
+  # died at the library load, at the DPA gate, or on a usage error. Require
+  # positive evidence that the run actually got as far as the billable stage,
+  # so a green here means the ack stopped it rather than something upstream.
+  # The bare-create probe has no stages and is exempt by construction — it is
+  # judged solely on the create it performs.
+  if grep -qE 'soleur_op_stage_begin|soleur_op_ack_or_die' "$script" \
+     && ! grep -qF 'write-class smoke test (billable)' "$run/out" 2>/dev/null; then
+    echo "gunatt: $(basename "$script") never reached the billable stage — the run proves nothing: $(tail -3 "$run/out" 2>/dev/null)"
+    v=1
+  fi
+  return "$v"
+}
+
+echo "== Guard 10 — no unattended billable create (behavioural) =="
+
+if [[ -r "$HETZNER_SRC" && -d "$HETZ_FIXTURE_KB" ]]; then
+  mkdir -p "$SB/unatt/live"; cp "$HETZNER_SRC" "$SB/unatt/live/provision-hetzner.sh"
+  assert_green gunatt_check "live consumer, fully unattended" "$SB/unatt/live/provision-hetzner.sh"
+
+  # OWN-DISPATCH: the stub and the log must be able to SEE a create, or the
+  # green above is a measurement of nothing.
+  mkdir -p "$SB/unatt/probe"
+  printf '#!/usr/bin/env bash\nhcloud server create --name probe\n' > "$SB/unatt/probe/provision-hetzner.sh"
+  assert_red gunatt_check "gunatt own-dispatch: a bare create is observed" "$SB/unatt/probe/provision-hetzner.sh"
+
+  # MUTATION: the ack survives as a LINE but under a condition the run clears.
+  # This is the mutation Guard 9 and the Guard 4 consumer sweep both miss.
+  mkdir -p "$SB/unatt/condack"
+  cp "$HETZNER_SRC" "$SB/unatt/condack/provision-hetzner.sh"
+  perl -0777 -pi -e 's{^(soleur_op_ack_or_die "Create the billable probe server[^\n]*)\n}{if [[ -z "\$\{SOLEUR_BOOTSTRAP_ASSUME_YES:-\}" ]]; then\n  $1\nfi\n}m' "$SB/unatt/condack/provision-hetzner.sh"
+  if [[ "$(md5_of "$SB/unatt/condack/provision-hetzner.sh")" == "$(md5_of "$HETZNER_SRC")" ]]; then
+    fail "mutation 'consumer ack wrapped in a condition' did NOT land"
+  else
+    pass "mutation 'consumer ack wrapped in a condition' landed (md5 differs from the live script)"
+    assert_red gunatt_check "gunatt: a conditionally-skipped ack reaches the billable create" "$SB/unatt/condack/provision-hetzner.sh"
+  fi
+else
+  fail "Guard 10: the live consumer or its fixture register is missing"
+fi
+
 # --- Anti-vacuity floor ------------------------------------------------------
 # Reads and appends to the SAME two counters the verdict below reads.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=128
+FLOOR=136
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   FAIL_COUNT=$((FAIL_COUNT + 1))

@@ -156,12 +156,22 @@ done
 # `--reset` writes too — on the .env AND on the `.tmp.XXXXXX` sibling the upsert
 # creates beside it, which a bare `.env` pattern does not cover. Outside a git
 # work tree (or without git) there is nothing to commit, so the check passes.
+#
+# PROBE THE RESOLVED PATH — the writer does. `soleur_op_env_upsert` and
+# `soleur_op_env_reset` both `readlink -f` before writing, so probing the link
+# NAME asks git about a file the write never touches: a founder who symlinks
+# .env at a shared credentials file gets an ignored name, a passing probe, and
+# the value written to a target git reports as untracked-and-not-ignored. The
+# `.tmp.XXXXXX` sibling is created beside the RESOLVED file too, so it is
+# derived from the resolved path rather than from $ENV_FILE. Confirmed against
+# a fixture; Guard 7's symlink rows pin it.
 env_not_ignored() {
   local dir; dir="$(dirname "$1")"
   git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
   ! git -C "$dir" check-ignore -q "$1"
 }
-for probe in "$ENV_FILE" "${ENV_FILE}.tmp.XXXXXX"; do
+ENV_FILE_RESOLVED="$(readlink -f -- "$ENV_FILE" 2>/dev/null || printf '%s' "$ENV_FILE")"
+for probe in "$ENV_FILE_RESOLVED" "${ENV_FILE_RESOLVED}.tmp.XXXXXX"; do
   if env_not_ignored "$probe"; then
     printf 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=%s\n' "$probe"
     printf 'The credentials file would be committed. Add it to .gitignore first (a pattern such as .env* covers both the file and its temp sibling).\n'
@@ -189,8 +199,18 @@ CURRENT_STAGE_NAME=""
 on_exit() {
   local rc=$?
   [[ "$rc" -ne 0 && "$CURRENT_STAGE_INDEX" -gt 0 ]] || return 0
-  printf 'Stopped during stage %s (%s). Nothing else was changed. Run: bash %s — already-done steps are skipped.\n' \
-    "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" "$SCRIPT_PATH"
+  # "Nothing else was changed" is FALSE on one path the library documents: a
+  # secret whose write returned 0 and whose read-back did not confirm it may be
+  # live (SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED). Telling the founder nothing
+  # changed is precisely what stops them revoking it, so the library raises a
+  # flag and this sentence defers to it.
+  if [[ -n "${SOLEUR_OP_WRITE_MAY_HAVE_LANDED:-}" ]]; then
+    printf 'Stopped during stage %s (%s). A credential may already have been written — check it and revoke it if you did not mean to. Run: bash %s — already-done steps are skipped.\n' \
+      "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" "$SCRIPT_PATH"
+  else
+    printf 'Stopped during stage %s (%s). Nothing else was changed. Run: bash %s — already-done steps are skipped.\n' \
+      "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" "$SCRIPT_PATH"
+  fi
   soleur_op_stage_end "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" failed "$rc"
 }
 trap on_exit EXIT

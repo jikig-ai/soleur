@@ -39,6 +39,16 @@ unset SSLKEYLOGFILE
 # string is the operator-facing product, and the prologue rule above is why the
 # surround cannot be moved either.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# An override must be ABSOLUTE, for the reason template.sh states at its own
+# resolution ladder: `-r` tests a relative name against cwd while `source`
+# searches PATH for it, so a relative value can pass the readability check and
+# then source a DIFFERENT file into a shell that is about to hold a live token.
+# The generated scripts have carried this guard since R26; the proving consumer
+# is the one place it was missing.
+if [[ -n "${SOLEUR_OP_LIB:-}" && "${SOLEUR_OP_LIB}" != /* ]]; then
+  printf 'SOLEUR_BOOTSTRAP_BAD_ARG var=SOLEUR_OP_LIB reason=must-be-absolute value=%s\n' "$SOLEUR_OP_LIB"
+  exit 64
+fi
 SOLEUR_OP_LIB="${SOLEUR_OP_LIB:-${SCRIPT_DIR}/../../../scripts/lib/operator-script.sh}"
 if [[ ! -r "$SOLEUR_OP_LIB" ]]; then
   printf 'SOLEUR_BOOTSTRAP_LIB_MISSING path=%s\n' "$SOLEUR_OP_LIB"

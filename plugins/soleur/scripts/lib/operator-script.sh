@@ -108,7 +108,8 @@
 #   SOLEUR_BOOTSTRAP_UNSAFE_VARIABLE      name=<NAME> reason=secret-shaped-name-on-argv
 #                                                                   → refused argv write, return 1
 #   SOLEUR_BOOTSTRAP_SECRET_WRITE_FAILED  name=<NAME> repo=<repo>   → return 1
-#   SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED name=<NAME> repo=<repo>   → return 1 (write may have landed)
+#   SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED name=<NAME> repo=<repo>   → return 1 (write may have
+#                                     landed; also sets SOLEUR_OP_WRITE_MAY_HAVE_LANDED=1 for the trap)
 #   SOLEUR_BOOTSTRAP_VARIABLE_WRITE_FAILED name=<NAME> repo=<repo>  → return 1
 #   SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED  path=<path>               → non-fatal; the run
 #                                                                     continues, the record is lost
@@ -558,6 +559,12 @@ soleur_op_gh_secret_set() {
   }
   listed="$(gh secret list -R "$repo" 2>/dev/null || true)"
   if ! grep -qE "^${sec_name}[[:space:]]" <<<"$listed"; then
+    # The write returned 0 and the read-back did not confirm it, so the secret
+    # MAY be live. The terminal-outcome trap must not tell the founder nothing
+    # changed — that is the one sentence that stops them revoking. Exported so
+    # a trap in the calling script can see it.
+    SOLEUR_OP_WRITE_MAY_HAVE_LANDED=1
+    export SOLEUR_OP_WRITE_MAY_HAVE_LANDED
     printf 'SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED name=%s repo=%s\n' "$sec_name" "$repo"
     return 1
   fi
