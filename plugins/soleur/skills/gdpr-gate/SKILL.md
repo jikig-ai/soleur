@@ -270,6 +270,8 @@ and internal endpoints that only exist there.
    is open, or dispatch the cron manually via `soleur:trigger-cron` with
    `cron/content-vendor-drift.manual-trigger`. `gh workflow run` cannot reach
    it — the job is an Inngest cron, not a GitHub Actions workflow.
+   Print the dispatch as the active harness's operator-typed form per `formatSkillInvocation`
+   (`plugins/soleur/lib/harness.ts`); the operator types it, no agent reads it.
 
 The regulated-data PR that surfaced the banner can ship; the staleness
 follow-up gets its own review and merge.

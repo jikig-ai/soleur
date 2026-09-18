@@ -610,7 +610,7 @@ Context: branch <branch>, PR #<N>, issue #<N>.
 Brainstorm complete with <N> key decisions. Ready for planning.
 ```
 
-Replace placeholders with actual values from the session.
+Replace placeholders with actual values from the session. Render the `soleur:<skill>` entry as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`) before printing — the operator types it into a fresh session where no routing contract is in context; no agent reads it.
 
 **Resume prompt (MANDATORY):** After the display message above, always output a copy-pasteable resume prompt block. This is required by AGENTS.md whenever `/clear` is mentioned. Format:
 
@@ -618,6 +618,8 @@ Replace placeholders with actual values from the session.
 Resume prompt (copy-paste after /clear):
 soleur:plan #<issue-number> — <feature title>. Brainstorm: <brainstorm-path>. Spec: <spec-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. PR: #<pr-number>. Brainstorm complete, plan next.
 ```
+
+Render the `soleur:<skill>` entry as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`) before printing — the operator types it into a fresh session where no routing contract is in context; no agent reads it.
 
 Use **AskUserQuestion tool** to present next steps:
 

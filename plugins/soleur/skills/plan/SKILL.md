@@ -999,6 +999,8 @@ and lifecycle progression.
    <one-line summary of what was already done>
    ```
 
+   Render the `soleur:<skill>` entry as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`) before printing — the operator types it into a fresh session where no routing contract is in context; no agent reads it.
+
    Replace placeholders with actual values from the session. The user must be
    able to paste the command and go without re-explaining context.
 
@@ -1008,6 +1010,8 @@ and lifecycle progression.
 Resume prompt (copy-paste after /clear):
 soleur:work <plan-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. Issue: #<number>. PR: #<pr-number>. Plan reviewed, implementation next.
 ```
+
+Render the `soleur:<skill>` entry as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`) before printing — the operator types it into a fresh session where no routing contract is in context; no agent reads it.
 
 ## Post-Generation Options
 

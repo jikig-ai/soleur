@@ -43,7 +43,7 @@ Report the single next action for the first incomplete roadmap phase. **Read-onl
 bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next
 ```
 
-It finds the first phase with open issues, picks the lowest-numbered open issue (deterministic tie-break), and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `soleur:go #N`; an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly; an empty milestone yields an explicit "no actionable next item". Relay the output. **Never** invoke `soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
+It finds the first phase with open issues, picks the lowest-numbered open issue (deterministic tie-break), and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `soleur:go #N` (rendered as the active harness's operator-typed form per `formatSkillInvocation` before printing); an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly; an empty milestone yields an explicit "no actionable next item". Relay the output. **Never** invoke `soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
 
 ## Roadmap Context
 
