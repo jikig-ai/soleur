@@ -149,6 +149,17 @@ readonly AOF_MANIFEST_REL=redis/appendonlydir/appendonly.aof.manifest
 # missed aborts the run instead of racing the copy. Timers stop first so nothing re-fires a service.
 readonly FREEZE_TIMERS="inngest-cutover-flip.timer inngest-server-probe.timer"
 readonly FREEZE_SERVICES="inngest-server.service inngest-redis.service"
+# THE OWNING TRAP (ADR-129) for the two rewrite helpers below. Both allocate a tempfile NEXT TO the
+# file they replace — /etc/fstab and /etc/default/inngest-luks — because a rename is only atomic
+# within a filesystem. A death between the mktemp and the mv would otherwise leave
+# `fstab.cutover.XXXXXX` sitting in /etc on a host with no inbound channel to clean it up.
+LUKS_TMPFILES=()
+cleanup_tmpfiles() {
+  local _f
+  for _f in ${LUKS_TMPFILES[@]+"${LUKS_TMPFILES[@]}"}; do [[ -n "$_f" ]] && rm -f "$_f"; done
+}
+trap cleanup_tmpfiles EXIT
+
 START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 PHASE=init            # init | frozen | swapped — read by the ERR trap to decide what to resume
 K_FREEZE=""; E_FREEZE=""
@@ -386,7 +397,7 @@ record_copy_latch() {  # completion-with-verification, in this FSM's own state d
 # ── fstab + staged env ─────────────────────────────────────────────────────────────────────────
 fstab_set() {  # fstab_set <mountpoint> [<line>] — replace in place; no line = remove; assert ≤1
   local tmp
-  tmp="$(mktemp "$FSTAB.cutover.XXXXXX")"
+  tmp="$(mktemp "$FSTAB.cutover.XXXXXX")"; LUKS_TMPFILES+=("$tmp")
   awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' "$FSTAB" > "$tmp"
   [[ -z "${2:-}" ]] || printf '%s\n' "$2" >> "$tmp"
   cat "$tmp" > "$FSTAB"; rm -f "$tmp"
@@ -395,7 +406,7 @@ fstab_set() {  # fstab_set <mountpoint> [<line>] — replace in place; no line =
   else [[ "$n" -eq 0 ]] || refuse fstab-not-removed "$1 still has $n lines"; fi
 }
 envfile_pointer() {  # envfile_pointer <id|""> — the boot-reopen unit's staged copy of the pointer
-  local tmp; tmp="$(mktemp "$ENVFILE.cutover.XXXXXX")"
+  local tmp; tmp="$(mktemp "$ENVFILE.cutover.XXXXXX")"; LUKS_TMPFILES+=("$tmp")
   grep -v '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' "$ENVFILE" > "$tmp" || true
   # The same file carries the boot-reopen unit's passphrase. A rewrite that dropped it would leave
   # the unit unable to open anything on the next boot, so its survival is asserted before the move.
