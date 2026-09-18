@@ -547,6 +547,7 @@ build-context
 build-errors
 build-time-inlining
 build-time-interpolation
+bulk-redirects
 bump
 bun
 bun-glob
@@ -964,6 +965,7 @@ cost-of-filing-gate
 cost-slo
 could-not-measure
 count-mismatch
+count-ripple
 counting
 counts
 coupling-test
@@ -1412,6 +1414,7 @@ evidence-integration
 evidentiary-records
 exacerbation-rule
 exact-equality
+exact-match
 exec
 exfil
 exhaustive-switch
@@ -3986,6 +3989,7 @@ tr9
 trace-tests
 trace/breakpoint trap
 trailers
+trailing-slash
 transaction-safety
 transcript-judging
 transition
