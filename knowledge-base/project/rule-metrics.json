@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-18T19:53:45Z",
+  "generated_at": "2026-09-18T21:04:06Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1086,11 +1086,11 @@
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 15,
+      "applied_count": 16,
       "warn_count": 0,
-      "fire_count": 15,
+      "fire_count": 16,
       "prevented_errors": 0,
-      "last_hit": "2026-09-18T14:57:18Z",
+      "last_hit": "2026-09-18T20:47:30Z",
       "first_seen": "2026-08-19T17:31:09Z",
       "rule_text_prefix": ""
     },
@@ -1138,11 +1138,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 34,
+      "applied_count": 35,
       "warn_count": 0,
-      "fire_count": 34,
+      "fire_count": 35,
       "prevented_errors": 0,
-      "last_hit": "2026-09-18T13:01:39Z",
+      "last_hit": "2026-09-18T21:03:57Z",
       "first_seen": "2026-07-17T14:26:30Z",
       "rule_text_prefix": ""
     },
@@ -1283,10 +1283,10 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 40,
-      "net-issue-flow": 543,
-      "monitor-supersede": 311,
-      "post-dispatch-watch-gate": 5095,
+      "skill-security-scan": 41,
+      "net-issue-flow": 545,
+      "monitor-supersede": 333,
+      "post-dispatch-watch-gate": 5098,
       "guardrails-block-recursive-delete": 358,
       "kb-domain-allowlist-guard": 176,
       "guardrails-require-milestone": 520,

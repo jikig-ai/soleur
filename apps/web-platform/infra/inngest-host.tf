@@ -323,6 +323,14 @@ locals {
     # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
     # the attachment is a separate resource.
     inngest_volume_id = hcloud_volume.inngest_redis.id
+    # #6894 / ADR-142. The ADDITIVE target volume's id. The two-device resolver in
+    # cloud-init needs BOTH ids: the allowlist of devices it may touch is built from
+    # this pair, so a device that is neither is refused rather than probed. Threaded
+    # here in the same commit as the volume itself — the resolver is a Phase 3 edit,
+    # and supplying a key the template does not yet read is a no-op, whereas reading
+    # a key the map does not supply is a render-time FATAL. The cheap ordering is
+    # therefore supply-first, and it is what this line is.
+    inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id
     # #7695. Arms the post-recut refusal in the cloud-init LUKS discriminator. FALSE today and
     # for as long as the volume is ext4; the recut branch flips it in the same change that drops
     # `format` from hcloud_volume.inngest_redis. It is threaded as a STRING because templatefile

@@ -9,6 +9,8 @@
 #   op=inventory           → GET  /hooks/inngest-inventory            (full-state baseline for before/after diff) (#5509)
 #   op=registry-probe      → GET  /hooks/inngest-registry-probe       (read-only: has an SDK registered functions against 10.0.1.40?) (#6617)
 #   op=doublefire-probe    → GET  /hooks/inngest-doublefire-probe     (read-only: has 10.0.1.40 actually EXECUTED cron runs?) (#6617)
+#   op=luks-cutover        → Doppler write INNGEST_LUKS_CUTOVER=armed    (#6894; the on-host FSM copies, proves and swaps)
+#   op=luks-rollback       → Doppler write INNGEST_LUKS_CUTOVER=rollback (#6894; reverse-copy back to the plaintext volume)
 # See knowledge-base/engineering/operations/runbooks/inngest-server.md
 # § "Cutover procedure". The live cutover is operator-triggered; this workflow is
 # the no-SSH mechanism, NOT an auto-run.
@@ -40,6 +42,12 @@ on:
           # names INNGEST_CUTOVER_FLIP=flushed as the recovery — which no verb wrote, making the
           # only documented recovery a bare out-of-band Doppler write against a deny-all host.
           - resume
+          # #6894 / ADR-142: the additive blue-green cutover of the Redis AOF store onto the LUKS
+          # volume, and its reverse. Both write INNGEST_LUKS_CUTOVER on soleur-inngest/prd, so both
+          # are in the reviewer-gated environment ternary AND the token ternary below — an op added
+          # to this list with either ternary unextended runs ungated, or with no token at all.
+          - luks-cutover
+          - luks-rollback
       cron_period_seconds:
         description: "Bucket width for the exactly-once check (op=doublefire-probe / op=verify). MUST be <= the SHORTEST registered cron period, hour-aligned. Default 3600."
         required: false
@@ -75,7 +83,7 @@ jobs:
     # same required-reviewer gate. That approval IS the prod-write ack
     # (hr-menu-option-ack-not-prod-write-auth); omitting it here would have let a flag that starts
     # a production scheduler be dispatched with no second pair of eyes.
-    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume') && 'inngest-cutover' || '' }}
+    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'luks-cutover' || inputs.op == 'luks-rollback') && 'inngest-cutover' || '' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
     concurrency:
@@ -120,7 +128,7 @@ jobs:
           # It is a repo secret; the op=arm/op=rollback JOB declares `environment: inngest-cutover`,
           # which holds the run for the required-reviewer approval before any step (incl. this write)
           # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
-          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'luks-cutover' || inputs.op == 'luks-rollback') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
           # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
           # (same secret + endpoint scheduled-inngest-health.yml uses; TF
           # github_actions_secret.supabase_access_token). Read-only Management-API scope.
