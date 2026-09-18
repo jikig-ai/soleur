@@ -1166,10 +1166,15 @@ jobs:
     # has likec4 on PATH.
     #
     # Two CLIs ARE installed for tests in this shard:
-    #  - gitleaks: plugins/soleur/skills/code-to-prd/test/ (#2726) preflights
-    #    `command -v gitleaks` and aborts exit 2 if absent. Version + SHA
-    #    pinned identically to .github/workflows/secret-scan.yml — to upgrade,
-    #    bump both files together.
+    #  - gitleaks: code-to-prd.test.sh (#2726), gitleaks-rules.test.sh,
+    #    gitleaks-merge-commit.test.sh and git-commit-secret-scan.test.sh probe
+    #    RUNNABILITY (`gitleaks version` exits 0 — not `command -v`, which an
+    #    unpinned version-manager shim satisfies, #8266) and SKIP only the arms
+    #    that need the binary. Any skipped arm FAILS the suite under CI=true
+    #    (Actions sets it), so this install is load-bearing: without it those
+    #    suites go red here rather than skipping green. Version + SHA pinned
+    #    identically to .github/workflows/secret-scan.yml — to upgrade, bump
+    #    both files together.
     #  - likec4@1.50.0: plugins/soleur/test/c4-model-freshness.test.sh renders
     #    the .c4 sources and byte-diffs the committed model.likec4.json. The
     #    version MUST match apps/web-platform/Dockerfile + package.json
