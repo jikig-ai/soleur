@@ -128,6 +128,7 @@ OUT=""
 WINDOW="30 DAY"
 SENTRY_SINCE=""
 VERIFY_ONLY=0
+REBOOT_SINCE=""
 DIVERGENCE=""
 
 while [[ $# -gt 0 ]]; do
@@ -139,6 +140,12 @@ while [[ $# -gt 0 ]]; do
     --host-name)    HOST_NAME="${2:-}"; shift 2 || shift ;;
     --evidence-url) EVIDENCE_URL="${2:-}"; shift 2 || shift ;;
     --since)        SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
+    # (#8210) REBOOT MODE. The rung-2 reset arm hard-resets the rehearsal host after
+    # boot_complete settles; this mode then answers ONE question over the post-reset window:
+    # did git-data-luks-reopen.service reopen the mapper unattended? It reuses this script's
+    # source-liveness anchor, its query transport and its Sentry cross-check rather than
+    # standing up a second probe. The timestamp bounds BOTH channels SERVER-side.
+    --reboot-since) REBOOT_SINCE="${2:-}"; SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
     --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 || shift ;;
     --out)          OUT="${2:-}"; shift 2 || shift ;;
     --window)       WINDOW="${2:-}"; shift 2 || shift ;;
@@ -152,7 +159,7 @@ done
 [[ -z "$OUT" ]] && OUT="$(dirname "$CLOUD_INIT")/git-data-rung2-boot-evidence.env"
 
 if [[ -z "$HOST_NAME" ]]; then
-  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>]" >&2
+  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>] [--reboot-since <ISO8601>]" >&2
   exit 64
 fi
 
@@ -189,6 +196,16 @@ fi
 if [[ ! "$EVIDENCE_URL" =~ ^https://github\.com/jikig-ai/soleur/actions/runs/[0-9]+ ]]; then
   echo "refusing: --evidence-url must be an Actions run URL for this repository (https://github.com/jikig-ai/soleur/actions/runs/<id>), because git_data_rung2_rehearsal_gate refuses anything else. Got: ${EVIDENCE_URL}" >&2
   exit 64
+fi
+
+# (#8210) --reboot-since reaches the same WHERE clause through SENTRY_SINCE, and it is ALSO
+# passed to sentry-issue.sh as --start, so it is shape-validated here for the same reason
+# --host-name and --window are: an unvalidated value is SQL the caller wrote.
+if [[ -n "$REBOOT_SINCE" ]]; then
+  if [[ ! "$REBOOT_SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+    echo "refusing: --reboot-since must be ISO8601 'YYYY-MM-DDTHH:MM:SS' (it is interpolated into the Better Stack SQL and passed to Sentry as --start). Got: ${REBOOT_SINCE}" >&2
+    exit 64
+  fi
 fi
 
 # `--window` REACHES THE SAME `WHERE` CLAUSE, so it gets the same treatment as --host-name.
@@ -864,6 +881,98 @@ if [[ "$fatal_rc" -ne 0 ]]; then
             "$(printf '%s\n' "$fatal_out" | tail -5)"
 fi
 _require_answer "$fatal_out" "unbounded fatal"
+
+# ── (#8210) REBOOT MODE: did the mapper reopen unattended after the reset? ─────────
+#
+# Reached only after the anchor, the host read and the unbounded fatal read have all ANSWERED
+# (an unread query is not an empty one — the three _require_answer calls above are what make a
+# zero-row set mean something here).
+#
+# The verdict is over the POST-`since` set ONLY, and that is not a simplification: the
+# production shape ALWAYS has pre-`since` rows — the entire birth boot, including its own
+# boot_complete and any fatal from a retried early stage. Both channels are therefore bounded
+# server-side (Better Stack through _BS_WHEN, Sentry through --start/--end), and rows outside
+# the window are ignored rather than counted.
+#
+#   0 PASS       a stage:luks_reopen_ok row with action=reopened in EITHER channel, and no
+#                level:fatal in EITHER.
+#   1 FAIL       any post-reset fatal, OR a luks_reopen_ok row whose action is not `reopened`.
+#                `noop` or `mounted` after a hard reset means the mapper survived a power cycle,
+#                which it cannot — so the probe or the host is lying, and that is not a pass.
+#   2 TRANSIENT  an EMPTY post-`since` set while the source-liveness anchor answers: an ingest
+#                miss must not burn a paid host (the emitter's Better Stack POST has no --retry).
+#
+# BOTH channels are read because either alone is a single point of failure: Better Stack can
+# drop an ingest (#7855), and the Sentry row is level:info on an unrouted stage, which the
+# default fatal-pinned host-events query cannot see — hence sentry-issue.sh's --stage.
+if [[ -n "$REBOOT_SINCE" ]]; then
+  _bs_reopen="$(grep 'luks_reopen_ok' <<<"$host_out" || true)"
+  _bs_fatal="$(grep '"level":"fatal"' <<<"$fatal_out" || true)"
+
+  _sentry_reopen=""; _sentry_reopen_rc=1
+  if [[ -n "${SENTRY_ISSUE_RO_TOKEN:-}" && -r "$SENTRY_READER" ]] && command -v jq >/dev/null 2>&1; then
+    _sentry_reopen="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" --stage luks_reopen_ok \
+      --start "$REBOOT_SINCE" --end "$(date -u +%Y-%m-%dT%H:%M:%S)" 2>/dev/null)"; _sentry_reopen_rc=$?
+  fi
+  _sentry_reopened=0; _sentry_rows=0
+  if [[ "$_sentry_reopen_rc" -eq 0 && -n "$_sentry_reopen" ]]; then
+    _sentry_rows="$(printf '%s' "$_sentry_reopen" | jq -r '(.data // []) | length' 2>/dev/null || echo 0)"
+    if printf '%s' "$_sentry_reopen" | jq -e '(.data // []) | map(select(.action == "reopened")) | length > 0' >/dev/null 2>&1; then
+      _sentry_reopened=1
+    fi
+  fi
+
+  # The fatal arm runs FIRST and wins: a reopen row alongside a fatal is still a failed reboot.
+  _sentry_consult
+  if [[ -n "$_bs_fatal" || "$_SENTRY_VERDICT" == "FATAL" ]]; then
+    echo "FAIL (reboot arm): ${HOST_NAME} reported a level:fatal AFTER the reset at ${REBOOT_SINCE}."
+    printf '%s\n' "$_bs_fatal" | head -5
+    echo
+    echo "NO EVIDENCE APPENDED. The reopen path is the thing this arm exists to prove; a fatal in"
+    echo "the post-reset window means it did not hold. Read stage/action/result in the row above."
+    exit 1
+  fi
+
+  _bs_reopened=0
+  if grep -q '"action":"reopened"' <<<"$_bs_reopen"; then _bs_reopened=1; fi
+  # A luks_reopen_ok row whose action is neither reopened (nor absent) is a hard FAIL.
+  if [[ -n "$_bs_reopen" && "$_bs_reopened" -eq 0 ]] \
+     || { [[ "$_sentry_rows" -gt 0 && "$_sentry_reopened" -eq 0 ]]; }; then
+    echo "FAIL (reboot arm): a stage:luks_reopen_ok row arrived after the reset, but its action is"
+    echo "not 'reopened'. A mapper cannot survive a hard reset, so 'noop' or 'mounted' here means"
+    echo "the probe window or the host is lying — this is not a pass."
+    printf '%s\n' "$_bs_reopen" | head -3
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 1
+  fi
+
+  if [[ "$_bs_reopened" -eq 0 && "$_sentry_reopened" -eq 0 ]]; then
+    echo "TRANSIENT (reboot arm): no stage:luks_reopen_ok row in EITHER channel after"
+    echo "${REBOOT_SINCE}, while the source-liveness anchor answered. An ingest miss is not a"
+    echo "failed reopen — the emitter's Better Stack POST carries no retry — so this run declines"
+    echo "to read silence as a defect."
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 2
+  fi
+
+  _channel=both
+  [[ "$_bs_reopened" -eq 1 && "$_sentry_reopened" -eq 0 ]] && _channel=betterstack
+  [[ "$_bs_reopened" -eq 0 && "$_sentry_reopened" -eq 1 ]] && _channel=sentry
+  _restarts="$(grep -o '"restarts":"[0-9]*"' <<<"$_bs_reopen" | head -1 | grep -o '[0-9]*' || true)"
+  {
+    printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
+    printf '# QUERY: sentry-issue.sh --host-events %s --stage luks_reopen_ok --start %s --end <now>\n' "$HOST_NAME" "$REBOOT_SINCE"
+    printf 'RUNG2_REBOOT_REOPEN=PASS\n'
+    printf 'RUNG2_REBOOT_REOPEN_CHANNEL=%s\n' "$_channel"
+    printf 'RUNG2_REBOOT_REOPEN_RESTARTS=%s\n' "${_restarts:-unknown}"
+  } >> "$OUT"
+  echo "PASS (reboot arm): ${HOST_NAME} reopened /dev/mapper/git-data unattended after the reset at"
+  echo "${REBOOT_SINCE} (channel ${_channel}, restarts ${_restarts:-unknown}); no fatal in either channel."
+  echo "Appended RUNG2_REBOOT_REOPEN to ${OUT}."
+  exit 0
+fi
 
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
 #

@@ -27,7 +27,7 @@
 # would be false by about twenty. What this avoids is a second implementation of the
 # issue/event READ that this file already owns, with its own token ladder and its own
 # 401/403 wording to drift.
-#   scripts/sentry-issue.sh --host-events <host_name> [--start ISO --end ISO | --stats-period 90d]
+#   scripts/sentry-issue.sh --host-events <host_name> [--stage <stage>] [--start ISO --end ISO | --stats-period 90d]
 #   scripts/sentry-issue.sh --liveness <host_name_to_EXCLUDE> [--stats-period 90d]
 #
 # WHY DISCOVER AND NOT /projects/<org>/<proj>/events/. The plan specified the project
@@ -65,6 +65,19 @@
 # Output: JSON on stdout. Read the real error at exception.values[].value (message)
 # + exception.values[].stacktrace.frames[] (stack). PII caveat below.
 set -uo pipefail   # never `set -x` — would trace the Bearer header to stderr.
+# (#7797) That comment was the only thing standing between a traced run and the token: a
+# comment cannot refuse. Tracing echoes commands AFTER expansion, so the Bearer value leaks
+# the moment it is bound — before any curl. Test the STATE rather than enumerating the eight
+# ways to enable it. Paid down here because #8210 edits this file and CI lints changed files
+# against neither baseline.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_API_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}${SENTRY_ISSUE_RO_TOKEN:+x}${SENTRY_ISSUE_RW_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
 ORG="${SENTRY_ORG:-jikigai-eu}"
@@ -89,6 +102,7 @@ REDACT=0
 MODE="issue"
 ISSUE_ID=""
 EVENT_HOST=""
+STAGE_FILTER=""
 WIN_START=""
 WIN_END=""
 STATS_PERIOD=""
@@ -101,6 +115,11 @@ while [[ $# -gt 0 ]]; do
     # which is the worst shape for a flag whose whole job is to be validated and refused.
     --host-events) MODE="host-events"; EVENT_HOST="${2:-}"; shift 2 || shift ;;
     --liveness) MODE="liveness"; EVENT_HOST="${2:-}"; shift 2 || shift ;;
+    # (#8210) --stage <name>: swap host-events' hardcoded `level:fatal` term for
+    # `stage:<name>` and project `action`. The reopen's SUCCESS row is level:info on an
+    # unrouted stage, so the fatal-pinned default cannot read it and the rung-2 reboot probe
+    # needs exactly that row. Validated below, because it is interpolated into the query.
+    --stage) STAGE_FILTER="${2:-}"; shift 2 || shift ;;
     --start) WIN_START="${2:-}"; shift 2 || shift ;;
     --end) WIN_END="${2:-}"; shift 2 || shift ;;
     --stats-period) STATS_PERIOD="${2:-}"; shift 2 || shift ;;
@@ -110,6 +129,19 @@ while [[ $# -gt 0 ]]; do
     *) ISSUE_ID="$1"; shift ;;
   esac
 done
+
+# (#8210) --stage is interpolated into the query, so it is shape-validated like every other
+# interpolated value in this repo's query builders, and it is host-events-only.
+if [[ -n "$STAGE_FILTER" ]]; then
+  if [[ "$MODE" != "host-events" ]]; then
+    echo "--stage is only meaningful with --host-events" >&2
+    exit 64
+  fi
+  if [[ ! "$STAGE_FILTER" =~ ^[a-z0-9_]+$ ]]; then
+    echo "--stage must match ^[a-z0-9_]+$ (it is interpolated into the Sentry query). Got: ${STAGE_FILTER}" >&2
+    exit 64
+  fi
+fi
 
 if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
   if [[ -z "$EVENT_HOST" ]]; then
@@ -205,6 +237,13 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
     QARGS+=(--data-urlencode "statsPeriod=${STATS_PERIOD}")
   fi
   if [[ "$MODE" == "host-events" ]]; then
+    # (#8210) The discriminating term. Default `level:fatal` (below); with --stage it becomes
+    # `stage:<name>`, which is how the rung-2 reboot probe reads the reopen's level:info
+    # success row — a row the fatal-pinned default cannot see by construction. `field=action`
+    # is projected in both shapes: it is empty for the stages that do not tag it, and it is
+    # the value the reboot verdict discriminates on (reopened vs noop/mounted).
+    _SENTRY_EVENT_TERM="level:fatal"
+    [[ -n "$STAGE_FILTER" ]] && _SENTRY_EVENT_TERM="stage:${STAGE_FILTER}"
     # `level:fatal` at the EVENT level closes #7481 defect 1. cloud-init emits an
     # UNCONDITIONAL level:info bootcmd beacon tagged with host_name on every boot, so a
     # query of host_name alone matches a PERFECTLY HEALTHY host and every rehearsal would
@@ -220,8 +259,8 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
     QARGS+=(--data-urlencode "field=timestamp" --data-urlencode "field=level"
             --data-urlencode "field=host_name" --data-urlencode "field=stage"
             --data-urlencode "field=rc" --data-urlencode "field=detail"
-            --data-urlencode "sort=-timestamp"
-            --data-urlencode "query=host_name:${EVENT_HOST} level:fatal")
+            --data-urlencode "field=action"
+            --data-urlencode "query=host_name:${EVENT_HOST} ${_SENTRY_EVENT_TERM}")
   else
     # LIVENESS: "is this source answering at all", and it must be independent of the host
     # it anchors for. Excluding that host is not a detail — its own unconditional info
@@ -248,7 +287,10 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
   _body_f="$(mktemp -t sentry-disc.XXXXXXXX.json)"
   _err_f="$(mktemp -t sentry-disc.XXXXXXXX.err)"
   trap 'rm -f "${_body_f:-}" "${_err_f:-}" 2>/dev/null || true' EXIT INT TERM HUP
-  CODE="$(curl -sS --max-time 30 -G -o "$_body_f" -w '%{http_code}' \
+  # `--disable` FIRST (it aborts ~/.curlrc parsing; later is too late) and `--noproxy '*'`
+  # (ALL_PROXY/HTTPS_PROXY would redirect this Bearer-carrying request with the destination
+  # pin intact). Model: scripts/supabase-logs-query.sh.
+  CODE="$(curl --disable --noproxy '*' -sS --max-time 30 -G -o "$_body_f" -w '%{http_code}' \
     -H "Authorization: Bearer ${TOKEN}" \
     -H 'Accept: application/json' \
     "${QARGS[@]}" "$URL" 2>"$_err_f")" || CODE="000"
@@ -299,7 +341,7 @@ echo "NOTE: Sentry event bodies may contain residual user PII (message/breadcrum
 
 # GET-only. -w appends the HTTP status on its own trailing line so we can map
 # 401/403 without --fail-with-body (which would swallow the parse).
-RESP="$(curl -sS --max-time 30 -X GET \
+RESP="$(curl --disable --noproxy '*' -sS --max-time 30 -X GET \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Accept: application/json' \
   -w $'\n%{http_code}' "$URL")"
