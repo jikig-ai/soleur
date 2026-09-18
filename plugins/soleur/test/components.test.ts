@@ -329,6 +329,39 @@ describe("Decision-principles taxonomy wiring", () => {
   });
 });
 
+describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
+  // The skill is only ever reached from ship's operator-step gate; an orphaned
+  // skill is the failure R14 folded this assertion in to catch. Anchored on the
+  // INVOCATION form so a prose mention or a comment cannot satisfy it.
+  test("ship invokes soleur:operator-bootstrap via the Skill tool form", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    expect(
+      /skill:\s*soleur:operator-bootstrap/.test(raw),
+      "ship/SKILL.md no longer carries `skill: soleur:operator-bootstrap` — the " +
+        "hr-multi-step-post-merge-bootstrap-script artifact has no producer in the pipeline.",
+    ).toBe(true);
+  });
+
+  // help.md renders skills by prefix family (R23), so the two skills reach the
+  // menu through the `operator-*` family rule in every harness block — never a
+  // hand-written per-skill list, which is the triplicated shape R23 rejected.
+  test("help.md carries the operator-* family in all three harness blocks", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "commands", "help.md"), "utf-8");
+    const familyMentions = raw.match(/operator-\*/g) ?? [];
+    expect(
+      familyMentions.length,
+      "help.md must name the `operator-*` family in each of the Claude, Devin and Grok " +
+        "blocks (rendering rule + non-routing line) — fewer means a block dropped it.",
+    ).toBeGreaterThanOrEqual(3);
+    for (const skillName of ["operator-bootstrap", "operator-rephrase"]) {
+      expect(
+        existsSync(resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md")),
+        `${skillName} is missing — the operator-* family rule in help.md would render nothing for it.`,
+      ).toBe(true);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // invoice skill credential-boundary defense-in-depth (ADR-107 / #6260)
 // ---------------------------------------------------------------------------

@@ -23,6 +23,16 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 > the surviving suite exits 3 without it; and `Status` is the **7th visible column**, `awk` field $8.
 > (3) Files to edit is 13. (4) Phase 6 dissolves into Phase 5, and **the description-budget bump moves
 > to Phase 0** (task 0.2) — otherwise CI is red from Phase 3 to the end.
+>
+> **Design-validity review (post-implementation) cut a further set**, applied in this branch: the
+> resume machinery (`verify-bootstrap-run.sh`, `soleur_op_stage_should_run`,
+> `SOLEUR_BOOTSTRAP_START_STAGE`) — redundant with the mandated per-stage precondition, so re-run IS
+> resume; the artifact location moved to the tracked `knowledge-base/project/specs/feat-<name>/`
+> (both earlier candidates were gitignored); the library path is now BAKED into the generated script
+> at generation time (F1); `Undo:` is author-written by ship from the blast radius, not quoted from an
+> agent that runs on a minority of PRs (F8); the library gained an API contract (F6) and a
+> non-silent ledger-write failure marker (F7). Struck items below are cut; annotated items changed
+> shape.
 
 
 ## Phase 0 — Preconditions (no code)
@@ -37,10 +47,10 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 ## Phase 1 — Characterization first (green against today's scripts)
 
 - [ ] 1.1 Write the synthesized DPA fixture register (column 8 `Status` = `dpa-signed`). Required: the DPA gate precedes the `--dry-run` branch in all four and the live register is empty, so every script exits 3 without it.
-- [ ] 1.2 `provision-cloudflare/test/provision-cloudflare-characterization.test.sh` — golden `--dry-run` stdout, byte-for-byte.
-- [ ] 1.3 `provision-doppler/test/provision-doppler-characterization.test.sh` — golden `--dry-run` stdout.
-- [ ] 1.4 Hoist the `if $DRY_RUN` branch in `provision-github.sh` above the four network calls at `:73`, `:85`, `:93-94`, `:100-101`, or emit unresolved placeholders on that path.
-- [ ] 1.5 `provision-github/test/provision-github-characterization.test.sh` — golden `--dry-run` stdout, now offline.
+- [ ] ~~1.2 `provision-cloudflare/test/provision-cloudflare-characterization.test.sh` — golden `--dry-run` stdout, byte-for-byte.~~ (cut, R11)
+- [ ] ~~1.3 `provision-doppler/test/provision-doppler-characterization.test.sh` — golden `--dry-run` stdout.~~ (cut, R11)
+- [ ] ~~1.4 Hoist the `if $DRY_RUN` branch in `provision-github.sh` above the four network calls at `:73`, `:85`, `:93-94`, `:100-101`, or emit unresolved placeholders on that path.~~ (cut, R12)
+- [ ] ~~1.5 `provision-github/test/provision-github-characterization.test.sh` — golden `--dry-run` stdout, now offline.~~ (cut, R11)
 - [ ] 1.6 `provision-hetzner/test/provision-hetzner-characterization.test.sh` — golden `--dry-run` stdout with an `hcloud` stub on `PATH`.
 - [ ] 1.7 Pin in every suite: the duplicate teardown a successful `--dry-run` emits; that `--help` and bad-argument exits print **no** teardown; that DPA-gate exits (rc 3) **do**.
 - [ ] 1.8 Every suite runs with `cwd` outside the repository. Confirm `bash scripts/test-all.sh` reports no live-repo write.
@@ -51,14 +61,14 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 - [ ] 2.1 Write `plugins/soleur/test/operator-script.test.sh` **before** the library, driving Guards 3 and 4 red first.
 - [ ] 2.2 Encode Guard 3's six mutation rows and both harness rows.
 - [ ] 2.3 Encode Guard 4's five mutation rows and both harness rows, including the reorder row (TTY check moved after the read) and the no-TTY case under `timeout`.
-- [ ] 2.4 Create `plugins/soleur/scripts/lib/operator-script.sh`. Line 1 is `# shellcheck shell=bash`; header states sourcing preconditions and names every call site (D3).
+- [ ] 2.4 Create `plugins/soleur/scripts/lib/operator-script.sh`. ~~Line 1 is `# shellcheck shell=bash`~~ Line 1 is `#!/usr/bin/env bash`, the convention of the three sibling libraries (review P3); header states sourcing preconditions and names every call site (D3).
 - [ ] 2.5 Extract stage progress, preflight and closing summary from `apps/cla-evidence/infra/bootstrap.sh:57-61,76-88,98-103,110,307-315`.
 - [ ] 2.6 Extract the `.env` upsert from `linkedin-setup.sh:443-452`, **corrected to exact-key matching** (the source's `grep -v '^PREFIX_'` is a prefix match and is correct only for a fixed key block).
 - [ ] 2.7 `chmod 600` lands **after** the `mv`, never before — `mv` replaces the inode and its mode.
 - [ ] 2.8 Extract the stdin-only GitHub secret write and the **separate** argv variable write from `provision-operator-digest-repo.sh:69-96`. The variable helper refuses secret-shaped names.
-- [ ] 2.9 Implement the secret registry and the output-scrub trap; stages never print a registered value.
+- [ ] ~~2.9 Implement the secret registry and the output-scrub trap; stages never print a registered value.~~ (cut, R5 — re-keyed onto the run ledger as Guard 3 row 4)
 - [ ] 2.10 Implement `open_url` as additive-only (print first, open best-effort, never branch on exit code) per `linkedin-setup.sh:322-333`, adding the **new** WSL arm (`wslview` / `explorer.exe`).
-- [ ] 2.11 Implement the total non-interactive path: every prompt has a named skip variable; no TTY plus unset variable emits `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` and exits **64** before reading (D2).
+- [ ] 2.11 Implement the total non-interactive path: every ~~prompt~~ class-1 and class-3 prompt has a named skip variable (the class-2 destructive-write ack has NONE, R8); no TTY plus unset variable emits `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` and exits **64** before reading (D2).
 - [ ] 2.12 Implement the run ledger (one JSON line per stage, before and after; names never values) and `SOLEUR_BOOTSTRAP_LIB_MISSING` hard-exit.
 - [ ] 2.13 `umask 077` set inside the library.
 - [ ] 2.14 Attribution comment on the library.
@@ -66,10 +76,10 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 ## Phase 3 — `operator-bootstrap`
 
 - [ ] 3.1 `plugins/soleur/skills/operator-bootstrap/SKILL.md` — the four-step process (scope, map each journey, author stages, verify and hand off), the two carve-outs, the "never hand-edit above the marker" invariant, and the attribution comment.
-- [ ] 3.2 `plugins/soleur/skills/operator-bootstrap/template.sh` — library region, `STAGES` marker, one example stage, generated-file header marker.
-- [ ] 3.3 `plugins/soleur/skills/operator-bootstrap/scripts/verify-bootstrap-run.sh` with `--self-test` and `--ledger <path> --last`.
-- [ ] 3.4 `plugins/soleur/skills/operator-bootstrap/test/regeneration-parity.test.sh` — Guard 2, five mutation rows and both harness rows.
-- [ ] 3.5 `plugins/soleur/skills/operator-bootstrap/test/predecessor-wiring.test.sh` — the anti-orphan guard.
+- [ ] 3.2 `plugins/soleur/skills/operator-bootstrap/template.sh` — ~~library region, `STAGES` marker~~ `source` of the library via a generation-time BAKED absolute path (review F1), example stages, generated-file header marker.
+- [ ] ~~3.3 `plugins/soleur/skills/operator-bootstrap/scripts/verify-bootstrap-run.sh` with `--self-test` and `--ledger <path> --last`.~~ (`--self-test` cut by R13; the whole script deleted by the design-validity review — resume is the per-stage precondition, and the script had one consumer and zero tests)
+- [ ] ~~3.4 `plugins/soleur/skills/operator-bootstrap/test/regeneration-parity.test.sh` — Guard 2, five mutation rows and both harness rows.~~ (cut, R6)
+- [ ] 3.5 ~~`plugins/soleur/skills/operator-bootstrap/test/predecessor-wiring.test.sh`~~ — the anti-orphan guard, folded into `plugins/soleur/test/components.test.ts` (R14/R32; written in the design-validity pass).
 - [ ] 3.6 Confirm both new suites land on already-registered `SUITE_GLOBS` and that `bash scripts/lint-orphan-test-suites.sh` reports `0 orphaned` with no `scripts/test-all.sh` diff.
 
 ## Phase 4 — The proving consumer
@@ -91,26 +101,26 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 ## Phase 6 — Rules, routing parity, naming correction
 
 - [ ] 6.1 `plugins/soleur/skills/brainstorm-techniques/references/phase-boundaries.md` — the ordered five-option tree body, with attribution comment.
-- [ ] 6.2 One new Communication rule in `AGENTS.rules.md` (ordering, Continue ruled out first, `/compact` last, cross-referencing the three existing ids, pointing at the reference file) plus its `AGENTS.md` index pointer.
-- [ ] 6.3 Amend `hr-multi-step-post-merge-bootstrap-script` (292 bytes) and `hr-ship-message-no-operator-checklist` (361 bytes) to name `soleur:operator-bootstrap`. Ids untouched; trim from `**Why:**` narrative if needed.
+- [x] 6.2 ~~One new Communication rule in `AGENTS.rules.md`~~ (R15 cut the new rule) — instead the BODY of `cm-when-proposing-to-clear-context-or` now points at the reference file and names the ordered five-option tree. Done.
+- [x] 6.3 Amend `hr-multi-step-post-merge-bootstrap-script` (292 → 359 bytes) and `hr-ship-message-no-operator-checklist` (361 → 414 bytes) to name `soleur:operator-bootstrap`. Ids untouched; no `**Why:**` trim needed. Done; B_ALWAYS=42960.
 - [ ] 6.4 Run `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` after every rules edit. Baseline `B_ALWAYS=42640` against 46000.
 - [ ] 6.5 Run `python3 scripts/lint-rule-ids.py`.
-- [ ] 6.6 Add `"drain-prs"` to `enums/go-routes.json`; update the `8` literals at `parse-label.test.sh:111` and `:113` to `9`; add one `drain-prs` golden row to `tasks/go-routing.jsonl` (D4).
-- [ ] 6.7 Implement Guard 1 in `plugins/soleur/test/go-routing-golden-path.test.ts` — census parsed from the gated block, five mutation rows, both harness rows, plus the gated-block byte-identity assertion against `origin/main`.
+- [ ] ~~6.6 Add `"drain-prs"` to `enums/go-routes.json`; update the `8` literals at `parse-label.test.sh:111` and `:113` to `9`; add one `drain-prs` golden row to `tasks/go-routing.jsonl` (D4).~~ (cut, R9)
+- [ ] ~~6.7 Implement Guard 1 in `plugins/soleur/test/go-routing-golden-path.test.ts` — census parsed from the gated block, five mutation rows, both harness rows, plus the gated-block byte-identity assertion against `origin/main`.~~ (cut, R9)
 - [ ] 6.8 Correct the `<naming_conventions>` opening statement in `skill-creator/references/skill-structure.md` — minimal, to avoid colliding with #8290 (D7).
 
 ## Phase 7 — Ship-side changes
 
-- [ ] 7.1 Add the `## Merge Danger` section to the Phase 6 body template at `ship/SKILL.md:1773` and `:1876`, with the three undo-first fields (D8).
-- [ ] 7.2 Quote `deployment-verification-agent`'s rollback line for `**Undo:**`; write `none produced` when review ran degraded.
+- [ ] 7.1 Add the `## Merge Danger` section to the Phase 6 body template at `ship/SKILL.md:1773` and `:1876`, with ~~the three~~ TWO undo-first fields (D8; `Door:` cut by R7).
+- [ ] ~~7.2 Quote `deployment-verification-agent`'s rollback line for `**Undo:**`; write `none produced` when review ran degraded.~~ (superseded by the design-validity review F8: `Undo:` is author-written by ship from the blast radius; the agent's line is quoted only for `user-data`/`money` when a review artifact carries one; `none known — <lost>` otherwise. There is no `none produced` value.)
 - [ ] 7.3 Add the evidence-tier text, cross-referencing `ship/SKILL.md:138-175`, `review/SKILL.md:438-450` and `qa/SKILL.md:191,208` rather than competing with them.
-- [ ] 7.4 Add the Phase 5.5 hold for `one-way` or blast radius ∈ {`prod-data`, `money`}, reusing the existing gate machinery (D9).
+- [ ] ~~7.4 Add the Phase 5.5 hold for `one-way` or blast radius ∈ {`prod-data`, `money`}, reusing the existing gate machinery (D9).~~ (cut, R7)
 - [ ] 7.5 Name `soleur:operator-bootstrap` at the point `ship` generates an operator step — the predecessor wiring.
 - [ ] 7.6 Verify no bullet in the new section leads with a Group-A/B/C/D deny token and that the `Filed:` parse is unperturbed.
 
 ## Phase 8 — Manifest, docs, ADR, evidence
 
-- [ ] 8.1 Author `ADR-226-generated-operator-scripts-non-interactive-by-default.md` with the seven Decision points and Alternatives A-E (D14). Re-derive the ordinal first.
+- [ ] 8.1 Author ~~`ADR-226`~~ `ADR-227-generated-operator-scripts-are-non-interactive-by-default.md` with the seven Decision points and Alternatives A-E (D14). Ordinal re-derived (ADR-225 claimed twice); point 2 reworded by the design-validity review F3 so it no longer contradicts point 3.
 - [ ] 8.2 Add the `mattpocock/skills` entry to `plugins/soleur/NOTICE` with upstream URL, "Used in:", "Portions adopted:" and full MIT text.
 - [ ] 8.3 Run the `hr-third-party-content-grep-on-undertaking` diff grep before PR-ready.
 - [ ] 8.4 Add two `SKILL_CATEGORIES` entries to `plugins/soleur/docs/_data/skills.js`.
@@ -118,7 +128,7 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 - [ ] 8.6 Bump `SKILL_DESCRIPTION_WORD_BUDGET` at `components.test.ts:21` by the measured delta, annotated in the established form.
 - [ ] 8.7 Capture the three eval-gate evidence outputs (`--check`, the empty `git diff origin/main -- plugins/soleur/commands/go.md`, and the real-run ungateable-no-op verdict) for the PR body.
 - [ ] 8.8 Run `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- [ ] 8.9 Execute every mutation row in all five guard matrices, observe RED, and record the results table for the PR body.
+- [ ] 8.9 Execute every mutation row in ~~all five~~ the three surviving guard matrices (3, 4, 5'), observe RED, and record the results table for the PR body.
 - [ ] 8.10 File the deferred issue for the three remaining provision refactors, with re-evaluation criteria and the sequencing note.
 - [ ] 8.11 Comment on #8289 adding the `kb-glossary` scope line for `operator-rephrase`.
 - [ ] 8.12 Run `bash scripts/test-all.sh` and confirm it exits 0.
