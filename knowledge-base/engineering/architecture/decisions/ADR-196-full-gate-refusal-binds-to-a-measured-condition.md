@@ -59,7 +59,13 @@ portable, manual, and Grok-path override. `rc=4` now has two producers; the mess
 tripped.
 
 **6. The two GIT-HOOK invocations carry the hatch; the skill-prescribed gate runs deliberately do
-not.** `lefthook.yml`'s `bun-test` pre-commit hook and `plugins/soleur/scripts/grok-pre-push-gate.sh`
+not.** *(Superseded in part, 2026-09-18, ADR-229/#8322: both hook invokers now call
+`test-all.sh --affected`, which is exempt from BOTH refusal arms by construction — the exemption is
+structural, not a grant, so neither hook carries `SOLEUR_ALLOW_FULL_GATE` anymore. What survives
+this decision is the discriminator it minted — "is a refusal actionable at this call site?" — and
+the unhatched pipeline runs: `--affected` simply never reaches the refusal unless it degrades to
+full, at which point the arms re-check and the analysis below applies verbatim.)*
+`lefthook.yml`'s `bun-test` pre-commit hook and `plugins/soleur/scripts/grok-pre-push-gate.sh`
 both invoke the full gate deliberately and both set `SOLEUR_ALLOW_FULL_GATE=1`, because a refusal
 there blocks committing or pushing outright and leaves the operator no action but to re-run the same
 command with the hatch. The pipeline's own gate runs are the opposite case and are left unhatched on
