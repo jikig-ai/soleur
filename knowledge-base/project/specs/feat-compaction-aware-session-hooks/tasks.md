@@ -10,13 +10,17 @@ plan: knowledge-base/project/plans/2026-09-18-feat-compaction-aware-session-hook
 
 Derived from the plan **after** its six-agent review. Four mechanisms were deleted at review (checkpoint writer → #8328, token-ratio clause, phase derivation, the `one-shot` Step 8 edit); they are absent here by design, not by omission.
 
-## Phase 0 — Payload probe (blocking)
+## Phase 0 — Payload probe (blocking) — **DONE 2026-09-18**
 
-- [ ] 0.1 Bind a throwaway marker hook to `PreCompact` and `SessionStart` via `.claude/settings.local.json` (gitignored), logging: timestamp, `hook_event_name`, `source`/`trigger`, sorted top-level stdin keys, `transcript_path`, the `compact_boundary` count read from that path, and the last boundary's `trigger`.
-- [ ] 0.2 Force one `/compact`; then let one auto-compaction occur.
-- [ ] 0.3 Record dated findings in the hook header: the literal `source` value; **whether the observed count includes the compaction that just fired**; `transcript_path` stability; `--fork-session` inheritance.
-- [ ] 0.4 If the count excludes the current compaction, switch to the pre-authorized fallback (`PreCompact` appends one line to a per-session `TMPDIR` file; `SessionStart:compact` counts lines there).
-- [ ] 0.5 Delete the probe and its `settings.local.json` entry.
+Run without an operator step: a scratch project under `/var/tmp` with its own `.claude/settings.json`,
+driven by headless `claude -p --continue "/compact"`. Nothing was bound into this repo, so 0.5 is vacuous.
+Full results: the plan's `## Addendum — 2026-09-18 (Phase 0 payload probe: measured results)`.
+
+- [x] 0.1 Bind a throwaway marker hook to `PreCompact` and `SessionStart` (also `PostCompact`), logging: timestamp, `hook_event_name`, `source`/`trigger`, sorted top-level stdin keys, `transcript_path`, the `compact_boundary` count read from that path, and the last boundary's `trigger`. — 12 events captured.
+- [x] 0.2 Force one `/compact`; then a second after re-growing context. — 3 `PreCompact` fires, 2 real boundaries.
+- [x] 0.3 Record dated findings: `source` is literally `compact`; `transcript_path` is **stable** across the compaction; `--fork-session` starts a new session id + new transcript (no `SessionStart` hook fired at all); **the observed count EXCLUDES the compaction that just fired — off by exactly one, measured twice.**
+- [x] 0.4 Count excludes the current compaction ⇒ the pre-authorized `TMPDIR` fallback ships, **corrected to pending-then-commit**: a plain append-per-`PreCompact` over-counts, because `PreCompact` fires on no-op compactions (measured 3:2). `PreCompact` overwrites one `pending` slot; `SessionStart:compact` commits it as one line and counts; `SessionStart:startup|resume|clear` truncates the ledger (this is TR2's window scoping, exactly rather than approximately).
+- [x] 0.5 Probe and its scratch project deleted; no `.claude/settings.local.json` entry was ever created.
 
 ## Phase 1 — `compaction-state.sh` read path (FR1, FR2)
 

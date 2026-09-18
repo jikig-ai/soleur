@@ -379,3 +379,69 @@ In `plugins/soleur/test/compaction-state-hook.test.sh`, envelopes built with `jq
 - **#8328** — the `PostCompact` checkpoint writer (CUT 1). Must start from: `one-shot` writes `session-state.md` as a whole-file template that would destroy any hook-owned block, and nothing in `work` Phase 0 reads that file. Re-evaluate once a reader exists and the upstream `PostCompact` stdin shape is settled. Inherits the gdpr-gate worktree-path finding.
 - **#8324** — local `SOLEUR_COMPACTION` metric via the `incidents.sh` to `rule-metrics-aggregate.sh` ledger. Re-evaluate after ~30 days of dogfooding.
 - Devin `PostCompaction` measurement — #8172 closed without a positive measurement; needs a cloud session where a compaction actually occurs with the marker hook bound.
+
+## Addendum — 2026-09-18 (Phase 0 payload probe: measured results)
+
+Run automatically, without an operator step: a scratch project at `/var/tmp/soleur-compaction-probe/proj`
+with a marker hook bound to `PreCompact`, `SessionStart` and `PostCompact` via that project's own
+`.claude/settings.json`, driven by headless `claude -p --continue "/compact" --model haiku`. No
+`.claude/settings.local.json` entry was ever added to this repo, so Phase 0 step 4's delete step is
+vacuous here. Claude Code **2.1.273**, Linux, 2026-09-18. The raw marker log (12 events) is retained at
+`/var/tmp/soleur-compaction-probe-findings.log`; its content is transcribed below because that path is
+swept.
+
+| Question (plan Phase 0 / AC1) | Measured answer |
+|---|---|
+| Literal `source` value after a compaction | `compact` |
+| `SessionStart:compact` stdin keys | `cwd, hook_event_name, model, prompt_id, session_id, source, transcript_path` — **no `trigger`** |
+| `PreCompact` stdin keys | `custom_instructions, cwd, hook_event_name, prompt_id, session_id, transcript_path, trigger` — **no `source`** |
+| `PostCompact` stdin keys | `compact_summary, cwd, hook_event_name, prompt_id, session_id, transcript_path, trigger` |
+| `SessionStart:startup` stdin keys | `cwd, hook_event_name, session_id, source, transcript_path`; `transcript_path` names a file that **does not yet exist** |
+| **Does the boundary count at `SessionStart:compact` include the compaction that just fired?** | **NO — off by exactly one.** Compaction #1: hook read `count=0`, file held 1 afterwards. Compaction #2: hook read `count=1`, file held 2 afterwards. `PostCompact`, 100 ms later, read the same lagging count. The boundary's own `timestamp` (`16:10:14.926Z`) *precedes* the hook fire (`16:10:14.957Z`), so the record exists in memory and is flushed after the hook returns. |
+| `transcript_path` stability across a compaction | **Stable** — byte-identical at `PreCompact`, `SessionStart:compact` and `PostCompact`. |
+| `--fork-session` inheritance | New `session_id` and a **new transcript file** carrying the post-compaction history (1 of the parent's 2 boundaries). **No `SessionStart` hook fired at all** for the forked run. |
+| **Does `PreCompact` firing imply a compaction occurred?** (not asked by the plan) | **NO.** 3 `PreCompact` fires produced 2 boundaries: a `/compact` with nothing left to compact fires `PreCompact` and then no `SessionStart:compact`. |
+
+### Consequence: the pre-authorized fallback ships, with one correction
+
+The first bold row settles Phase 0's load-bearing unknown against the plan's primary design. The
+transcript **cannot** answer "how many compactions has this session had" at the moment
+`SessionStart:compact` runs, and it cannot supply the current compaction's `trigger` either (the last
+on-disk boundary is the *previous* one, and the `SessionStart` envelope carries no `trigger`). Plan
+Phase 0 step 4 and task 0.4 pre-authorize the `TMPDIR` ledger for exactly this outcome; it ships.
+
+The last row corrects that fallback as written. "`PreCompact` appends one line; `SessionStart:compact`
+counts lines" **over-counts**, because `PreCompact` fires on no-op compactions — measured 3 fires for 2
+boundaries, which would have moved `recommend=true` one compaction early while every fixture stayed
+green. The shipped mechanism is therefore **pending-then-commit**:
+
+- `PreCompact` **overwrites** a single `pending` slot with the stdin `trigger` (never appends).
+- `SessionStart:compact` **commits** the pending trigger as one ledger line, clears pending, then counts.
+  It fires exactly once per real compaction, so the ledger holds exactly one line per compaction and
+  each line carries that compaction's own trigger.
+- `SessionStart` with `source` in `startup|resume|clear` truncates the ledger and clears pending — this
+  is what makes TR2's session-window scoping exact, rather than approximated.
+
+That last bullet requires the `SessionStart` matcher to be `startup|resume|clear|compact`, not `compact`
+alone as `## Files to Edit` says. The non-`compact` arm emits no directive; it only resets the window.
+
+### What the transcript is still read for
+
+`count_auto` and `trigger` no longer come from the transcript. The hook still greps
+`"subtype":"compact_boundary"` once, to report `prior_boundaries=N` inside the marker. This keeps AC14's
+pattern pin and FR7's canary attached to a string the shipped hook actually greps, and — stated
+honestly — a format rename now degrades that marker rather than the recommendation. FR7's value is
+correspondingly narrower than `## Risks & Mitigations` claims: it signals that this addendum's
+measurements have gone stale, not that the feature has stopped working.
+
+### AC deltas this forces
+
+- **AC2–AC6, AC11** are now properties of the **ledger**, driven by `PreCompact`/`SessionStart` event
+  sequences rather than by transcript fixtures alone. The 3 transcript fixtures survive for AC14 and for
+  `prior_boundaries`.
+- **AC11 (TR2)** is asserted by the reset arm: a ledger holding 3 lines, then a `SessionStart:resume`,
+  then one compaction, must yield `count_auto=1`.
+- **AC13** now expects the `SessionStart` matcher `startup|resume|clear|compact`. Still **no**
+  `PostCompact` binding.
+- One new AC — **AC22**: a `PreCompact` that is never followed by `SessionStart:compact` (the measured
+  no-op) contributes **zero** to `count_auto`.
