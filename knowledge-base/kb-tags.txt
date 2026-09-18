@@ -1781,6 +1781,7 @@ guard-test
 guard-testing
 guard-vacuity
 guard-window
+guarda
 guardrail
 guardrails
 guards
@@ -1892,6 +1893,7 @@ image-bake
 image-context
 image-export
 image-generation
+image-pin
 immutability
 immutable-infra
 implementation-patterns
