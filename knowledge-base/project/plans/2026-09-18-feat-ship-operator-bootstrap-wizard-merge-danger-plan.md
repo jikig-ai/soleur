@@ -1099,3 +1099,67 @@ and cto-devex (relevance-gated named panel). `ux-design-lead` and `cmo` were not
 mechanical UI-surface scan over `## Files to Create` and `## Files to Edit` returns no match, and the
 plan carries no market, GTM or brand-copy surface. An earlier note in the R1–R24 block recorded
 Kieran as not-delivered; that was true when written and is superseded here.
+
+## Precedent Diff (deepen-plan Phase 4.4)
+
+Six pattern-bound behaviours, each diffed against the established in-repo precedent. Verified by
+reading the precedent directly — where the research agent's summary and the source disagreed, the
+source won, and that is noted.
+
+| # | Pattern | Verdict |
+|---|---|---|
+| 1 | `.env` upsert | **Diverges — and the plan had the precedent backwards.** See R41 |
+| 2 | Sourced-library resolution | **Matches.** `plugins/soleur/scripts/domain-model-drift.sh:25-27` is the idiom, used consistently. Two gaps, both pre-existing: no precedent handles `CLAUDE_PLUGIN_ROOT` for a non-default install root, and none has a fallback when `BASH_SOURCE` is unavailable (piped or `sh`-invoked). Neither blocks this plan; both are worth a line in the library header |
+| 3 | Exit-code convention | **Mostly matches, with one real conflict.** See R42 |
+| 4 | `gh secret` / `gh variable` shapes | **Matches, plus one novel guard.** `provision-operator-digest-repo.sh:72-73` is stdin-only for secrets and `:93` is `--body` for variables, exactly as the plan prescribes. The plan's addition — the variable helper must **refuse secret-shaped names** — has **no precedent**; it is new, and should be labelled novel rather than presented as inherited |
+| 5 | Trap placement below validation | **Matches exactly, all four scripts.** Verified: validation blocks end and traps install after, in `provision-hetzner.sh`, `provision-cloudflare.sh`, `provision-doppler.sh` and `provision-github.sh`. The Phase 1 golden that pins "usage errors print no teardown" is therefore pinning real current behaviour |
+| 6 | Cross-platform URL open | **Diverges — justified.** `community/scripts/linkedin-setup.sh:322-333` prints the URL first, then tries `xdg-open`, then `open`, each `|| true`, never branching on the exit code — exactly the additive shape the plan prescribes. The WSL arm is genuinely novel: no `wslview`, `explorer.exe` or `$WSL_DISTRO_NAME` detection exists anywhere in the repo |
+
+### R41 — the exact-key `.env` upsert is the MAJORITY precedent, not a correction to it
+
+The plan (Cut List, Phase 2.6, Guard 3 row 3) frames the exact-key match as a **fix** to a prefix-match
+precedent, citing `linkedin-setup.sh`. Measured across all four siblings, that is backwards:
+
+| Script | Filter form | Shape |
+|---|---|---|
+| `community/scripts/linkedin-setup.sh:447` | `grep -v '^LINKEDIN_'` | **prefix** — the outlier |
+| `community/scripts/x-setup.sh:380-383` | `grep -v '^X_API_KEY='` … four chained | **exact**, trailing `=` |
+| `community/scripts/bsky-setup.sh:210-211` | `grep -v '^BSKY_HANDLE='` … two chained | **exact**, trailing `=` |
+| `community/scripts/discord-setup.sh:222-225` | `grep -v '^DISCORD_BOT_TOKEN='` … four chained | **exact**, trailing `=` |
+
+So **three of four already do the right thing**, and the mechanism that makes them exact is the
+**trailing `=`**, which the plan never named. Two consequences:
+
+1. The library adopts the majority precedent rather than inventing a correction — a strictly easier
+   argument, and the implementation detail is now concrete: anchor `^KEY=`, not `^KEY`.
+2. Guard 3 row 3's mutation ("generalise the filter to `grep -v "^${KEY}"`") is still exactly right as
+   a **mutation**, because dropping the `=` is the one-character edit that reintroduces the bug. The
+   row stands; only the plan's claim about which form is precedent changes.
+
+**The chmod ordering claim holds.** Read directly: `mv "$tmp" "$env_file"` completes the filter, then
+`touch` and `chmod 600` follow. The research agent's prose asserted the chmod comes before the `mv`;
+the source says otherwise and the source is authoritative. Guard 3 row 2 (move the chmod before the
+`mv` ⇒ must redden) is unchanged. Worth noting the precedent's own comment reads "Set restrictive
+permissions BEFORE writing secrets" — both orderings it satisfies are load-bearing: after the `mv`
+(which replaced the inode) and before the append (which writes the secret).
+
+**No precedent `fsync`s or `fdatasync`s**, and none handles a concurrent writer. The library inherits
+that limitation; it is acceptable for a single-operator script on the founder's own machine, and it is
+now stated rather than assumed.
+
+### R42 — exit code 3 is already overloaded; the plan must not add a third meaning
+
+The plan assigns **3** to a DPA-gate rejection. Measured, exit 3 already carries a second, unrelated
+meaning: `apps/cla-evidence/scripts/sentinel-pr.sh:85-87,91` returns 3 for *missing tool on PATH* and
+*not inside a git repository* — a class `apps/cla-evidence/infra/bootstrap.sh` returns **64** for.
+
+So the repo has two scripts returning different codes for the same failure class, and no documented
+table anywhere. The plan's own codes (64 missing input, 78 xtrace refusal, 3 DPA rejection, 1 usage)
+are individually precedented but collectively undocumented.
+
+Disposition: the plan does **not** invent a fourth meaning, and it does not renumber anything — a
+renumber is out of scope and would break callers. It adds the one artifact that is missing and cheap:
+a short exit-code table in the library header and in `operator-bootstrap/SKILL.md`, naming each code,
+its meaning in a generated script, and the conflict at `sentinel-pr.sh` so the next author does not
+re-derive 3 as "missing tool". This also closes a founder-facing gap the review raised separately —
+four exit codes were in play with no mapping to a remedy a non-technical operator can act on.
