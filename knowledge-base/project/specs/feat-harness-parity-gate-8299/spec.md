@@ -22,7 +22,7 @@ guard-contract lint, the infra lint, a seven-agent review panel, and
 
 Harness-specific prose is invisible to every gate in the repository.
 
-Measured 2026-09-18 against `origin/main`: of 98 skills, **38 contain an invocation
+Measured 2026-09-18 against `origin/main`: of 98 skills, **46 contain an invocation
 instruction** and only **12** name the Grok form. **Codex is named by zero markers and
 zero skills.** The existing partial guard
 (`plugins/soleur/test/devin-cloud-mode.test.ts:450`) asserts marker-block
@@ -31,10 +31,11 @@ forbids.
 
 ## Goals
 
-- G1 A born-blocking census over the derived population of invocation-bearing skills.
-- G2 Every member is QUALIFIED or EXEMPT; UNCLASSIFIED is RED. Floor = zero unclassified.
-- G3 Replace the hand-listed `UNION` array with a content-derived population.
-- G4 A coverage floor that REDs when the derived population *shrinks* (extractor blindness).
+- G1 A born-blocking census over **all 98** tracked skills, population directory-derived.
+- G2 Every skill resolves to QUALIFIED / AUTO-EXEMPT / UNCLASSIFIED. UNCLASSIFIED must be 0.
+- G3 Replace the hand-listed `UNION` array with a derived population (ADR-193 §5).
+- G4 Floors that catch extractor blindness: a qualified-count floor (grows only) and an
+  **auto-exempt ceiling** (shrinks only), so a newly added skill is RED-by-default.
 - G5 An auditable exemption ledger: dated, issue-linked, falsifiable reasons.
 
 ## Non-Goals
@@ -55,26 +56,58 @@ forbids.
 
 ## Functional Requirements
 
-- **FR1** The gate derives its population by content from `plugins/soleur/skills/*/SKILL.md`,
-  matching invocation-instruction forms (`Skill tool`, `skill: soleur:`, `/soleur:<name>`,
-  `spawn_subagent`, `run_subagent`, `subagent_type`). Measured: 38 members on 2026-09-18.
-- **FR2** Each member resolves to exactly one verdict: **QUALIFIED** (carries a harness
-  marker block, OR names the required harness set's forms adjacently, OR cites
-  `plugins/soleur/lib/harness.ts`), **EXEMPT** (a ledger row), or **UNCLASSIFIED**.
+- **FR1** The gate's **population is every tracked `plugins/soleur/skills/*/SKILL.md`**
+  (`git ls-files`-derived; **98** on 2026-09-18). The population involves no regex, so an
+  incomplete trigger pattern can never shrink it. A separate **trigger pattern** decides only
+  whether a block is *required*: `Skill tool`, `skill: soleur:`, `/soleur:<name>`, `$soleur:`,
+  `Task tool`, `Agent tool`, `invokeSkill`, `spawnAgent`, `formatSkillInvocation`,
+  `spawn_subagent`, `run_subagent`, `subagent_type`. Measured 2026-09-18: **46** trigger-bearing
+  (a narrower 6-alternative pattern found only 38 — the 8-skill gap is why the pattern is
+  widened here), **12** qualified, **34** unclassified, **52** auto-exempt. 46 + 52 = 98.
+- **FR2** Each skill resolves to exactly one of three verdicts: **QUALIFIED** (carries the
+  `harness-invoke` block, instantiated for its own skill name), **AUTO-EXEMPT** (no block AND
+  no trigger — derived, needs no ledger row, so the ledger stays load-bearing), or
+  **UNCLASSIFIED** (no block BUT has a trigger) → RED unless a ledger row covers it.
 - **FR3** Any UNCLASSIFIED member fails the suite, naming each offending path.
-- **FR4** The gate declares its **required harness set** explicitly as a constant. It does
-  not infer the set from what the marker blocks happen to name today.
+- **FR4** The **required harness set** is imported from a new runtime
+  `SUPPORTED_HARNESSES` in `plugins/soleur/lib/harness.ts` (today a type-only union at `:22`),
+  with `Harness` derived from it. The set is single-sourced, so adding a harness widens the
+  requirement and REDs until skills are updated — ADR-193 §5 applied to the harness axis.
+  It is NOT inferred from what the blocks happen to name today (no block names Codex).
 - **FR5** An exemption ledger, TSV, in the `.claude/hooks/devin-dispositions.tsv` shape
   (ADR-223 §5): one row per exemption, a closed disposition enum, and a **mandatory**
   reason plus evidence column. A row without a date, an issue link and a falsifiable
   reason is itself RED.
-- **FR6** A coverage floor pins the derived population size in an inverted `.highwater`
-  (the `scripts/lint-supabase-deprecated-endpoints.highwater` shape), with a header
-  stating the direction is inverted. A **drop** fails.
-- **FR7** The `UNION` array in `plugins/soleur/test/devin-cloud-mode.test.ts` is deleted
-  and its coverage subsumed. Its `expect(marked.length).toBe(67)` pin is updated in the
-  same change as the backfill.
-- **FR8** Backfill the 26 unqualified members of the derived population.
+- **FR6** Three floors, all in the separate file of TR4b, each with its ratchet direction in a
+  header (the `scripts/lint-supabase-deprecated-endpoints.highwater` inverted-header shape):
+  (a) `POPULATION` — exact tracked-SKILL.md count; any change fails until deliberately moved;
+  (b) `QUALIFIED_FLOOR` — ratchets **up** only;
+  (c) `AUTO_EXEMPT_CEILING` — ratchets **down** only, so a newly added skill with no block and
+  no trigger raises auto-exempt past the ceiling and lands RED, forcing classification.
+  Plus `UNCLASSIFIED == 0` unconditionally, and a **trigger-count floor** pinning the
+  measured 46 so a regression in the trigger pattern itself (which would silently move skills
+  into auto-exempt) fails rather than passes.
+- **FR7** The hand-listed 20-name `UNION` array in
+  `plugins/soleur/test/devin-cloud-mode.test.ts:~466` is deleted (it is the ADR-193 §5
+  anti-pattern) and its "every union member is marked" assertion re-expressed against a
+  derived population. **Measured correction:** its sibling `expect(marked.length).toBe(67)`
+  does **not** move — `MARKER_START`/`MARKER_END` are the literal `soleur-cloud-mode` comments,
+  so a `grok-harness-invoke` block is invisible to that census (64 skills + 3 devin shims = 67,
+  re-derived). An earlier draft of this spec claimed the pin moves; it does not.
+- **FR8** Backfill the **34** unclassified skills with the `grok-harness-invoke` block,
+  instantiated for each skill's own name, and normalise `one-shot`'s drifted copy
+  ("a subset **of these steps**" → "a subset") so the template holds across all 46.
+- **FR9** Insertion anchor, measured per skill — **not** uniformly after frontmatter:
+  **24 of 34** already carry a `soleur-cloud-mode` block first, so the new block goes strictly
+  **after** its `<!-- soleur-cloud-mode:end -->`. Inserting *inside* it would break the
+  non-greedy `[\s\S]*?` byte-identity assertion in `devin-cloud-mode.test.ts` for all 24.
+  The **10** with no cloud-mode block anchor on frontmatter: `architecture`,
+  `brainstorm-techniques`, `feature-tweet`, `frontend-anti-slop`, `harvest-debt`, `help`,
+  `linear-fetch`, `resolve-debt`, `skill-creator`, `social-distribute`.
+- **FR10** The block's text must not introduce a backticked path beginning `scripts/`,
+  `references/` or `assets/`: `components.test.ts:238` asserts
+  `body.match(/`(?:references|assets|scripts)\/[^`]+`/g)` is null per-skill. The canonical
+  block's existing `plugins/soleur/lib/harness.ts` citation is safe.
 
 ## Technical Requirements
 
@@ -86,9 +119,25 @@ forbids.
   vacuous exit 0.
 - **TR3** Born blocking. No advisory phase — advisory→blocking promotion has never once
   occurred in this repo. The ledger is the recorded escape hatch.
-- **TR4** Floor mechanics per **ADR-193**: report via `printf >&2` + `exit 1` **directly**,
-  never through a suite helper; increment the case counter **at the call site**, never
-  inside `$( … )`. Fail on `0 checked`.
+- **TR4** **ADR-193 applies in part only, and the part matters.** Its Decision 5 ("the
+  population is DERIVED, never listed") binds and is load-bearing. Its Decision 1 mechanism
+  (`printf >&2` + `exit 1` rather than the suite's own `fail`; counter incremented at the call
+  site, not inside `$( … )`) does **not** bind: it is written for bash suites, its enforcing
+  guard `scripts/guard-vacuity-floor.test.sh` enumerates tracked `*.test.sh`, and a bun test is
+  outside that population entirely — there is no "suite's own verdict helper" to bypass when
+  `expect()` *is* the reporting mechanism. Because the corpus guard therefore cannot police
+  this suite's floor, TR6's mutation test is the substitute and is mandatory, not optional.
+  Fail on `0 checked` still binds.
+- **TR4b** Floors live in a committed data file **separate from the assertion**, per
+  constitution L142 ("a declared number cannot catch its own reduction, so the assertion must
+  be external to the declaration"), with an inverted-direction header naming which way each
+  ratchets. Recorded caveat: the population denominator is `git ls-files`-derived, not
+  credential-scoped, so the silent-narrowing failure L142 guards against is absent here — a
+  narrowing is a visible file deletion. The separate file buys a visibly separate diff hunk on
+  any weakening, not cryptographic integrity.
+- **TR4c** Ledger parsing is strict and fail-closed per constitution L139/L140: a missing,
+  unreadable or malformed ledger, or a row with an unrecognised disposition, is RED — never
+  silently "zero exemptions" and never a swallowed `2>/dev/null || echo ""` empty set.
 - **TR5** Anchoring per `cq-assert-anchor-not-bare-token`: anchor on `^\s*` or a call form
   a comment cannot produce. Line-based greps over markdown die on wrap — read the file,
   do not line-grep. Fenced-block instances resolve to ledger rows, not regex carve-outs.
@@ -101,13 +150,17 @@ forbids.
 
 ## Acceptance Criteria
 
-- [ ] `bun test plugins/soleur/test/harness-parity.test.ts` RED on today's tree (26 unclassified).
+- [ ] `bun test plugins/soleur/test/harness-parity.test.ts` RED on today's tree (34 unclassified).
 - [ ] After backfill + ledger: GREEN, with zero unclassified and every ledger row dated + issue-linked.
 - [ ] Mutation test: assertion body deleted → suite RED (TR6).
 - [ ] Planted decoy detected; corpus-wide zero holds (TR7).
 - [ ] `0 checked` → RED (TR4).
-- [ ] Population *shrink* → RED (FR6).
-- [ ] `UNION` array gone from `devin-cloud-mode.test.ts`; its count pin updated in the same commit (FR7).
+- [ ] Auto-exempt *growth* past ceiling → RED; qualified *drop* below floor → RED; trigger-count
+      *drop* → RED (FR6).
+- [ ] `SKILL_DESCRIPTION_WORD_BUDGET` (2442, description-words only) unmoved — body lines are
+      not measured, verified via `components.test.ts:156-160`.
+- [ ] `devin-cloud-mode.test.ts` still green with `marked.length == 67` unchanged (FR7).
+- [ ] `UNION` array gone from `devin-cloud-mode.test.ts`, its assertion re-expressed derived (FR7).
 - [ ] No `${CLAUDE_PLUGIN_ROOT:-…}` or `${GROK_PLUGIN_ROOT:-…}` form introduced (NG2).
 - [ ] `scripts/test-all.sh` full run green.
 
@@ -117,5 +170,6 @@ forbids.
 | --- | --- |
 | Requiring Codex REDs all 12 currently-qualified skills | Sequence the canonical marker-block edit *with* the gate; it is one edit propagated across 64 byte-identical copies |
 | Trigger regex misses a real invocation shape | TR6 mutation test + TR7 decoy; Open Question 2 |
-| `UNION` deletion desyncs `expect(marked.length).toBe(67)` | FR7 — same commit as the backfill |
+| Block inserted inside the cloud-mode block breaks byte-identity for 24 skills | FR9 — anchor strictly after `soleur-cloud-mode:end` |
+| Deriving `Harness` from the new array drops `"unknown"` and breaks `detectHarness` | Keep `\| "unknown"`; the 5-member union stays type-identical for all 3 importers |
 | Ledger degrades into a rubber stamp | FR5 — mandatory dated, issue-linked, falsifiable reason; no bare "temporary" |
