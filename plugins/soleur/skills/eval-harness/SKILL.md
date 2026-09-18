@@ -120,8 +120,10 @@ npx promptfoo eval -c promptfooconfig-tool-selection.yaml --repeat 5  # ~450 API
 measures whether the L3 phase-scoped surface (the hint
 `.claude/hooks/phase-surface-hint.sh` injects) lets the model pick the correct
 next skill more often than the full-surface baseline. The mean of the MEASUREMENT
-score across the two arms IS the before/after uplift. Unlike `go-routing` /
-`soleur:support:ticket-triage` it is **not** in [gated-skills.json](./gated-skills.json) — there
+score across the two arms IS the before/after uplift. Unlike the **target keys** behind
+[promptfooconfig-go-routing.yaml](./promptfooconfig-go-routing.yaml) and
+[promptfooconfig-ticket-triage.yaml](./promptfooconfig-ticket-triage.yaml) it is **not** in
+[gated-skills.json](./gated-skills.json) — there
 is no prose block to project (the surface lives in `phase-surface-map.json`, not a
 SKILL.md `eval-gate` block), so it never runs as a per-PR projection round-trip;
 run it by hand when you want the AC(c) number.

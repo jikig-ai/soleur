@@ -115,6 +115,13 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
   });
 
   test("help.md is excluded by path with a stated reason", () => {
+    // The three Devin entry-point shims are excluded by the same §4 clause: a doc whose SUBJECT
+    // is the typed form cannot be canonicalised without making its own text false.
+    for (const n of ["go", "help", "sync"]) {
+      expect(EXCLUDED_BY_PATH.get(`plugins/soleur/skills/${n}/SKILL.md`)).toMatch(
+        /Devin CLI entry-point shim: its subject IS the typed slash form/,
+      );
+    }
     const reason = EXCLUDED_BY_PATH.get("plugins/soleur/commands/help.md");
     expect(reason).toMatch(/whole-file exemption/);
     // The reason carries a measurement, so it is pinned as one: 11 marker pairs / 19 lines / 34

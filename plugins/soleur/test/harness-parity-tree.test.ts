@@ -117,7 +117,7 @@ describe("harness-parity tree census (Guard 3)", () => {
     expect(goMd).toBeDefined();
     const starts = (goMd as { text: string }).text.match(/^<!-- harness-forms:start -->$/gm) ?? [];
     expect(starts.length).toBe(3);
-    expect(EXCLUDED_BY_PATH.size).toBe(1);
+    expect(EXCLUDED_BY_PATH.size).toBe(4);
   });
 
   test("the population is non-empty and carries no nested SKILL.md (N4, N12)", () => {

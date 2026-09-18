@@ -105,6 +105,20 @@ export const POPULATION_GLOBS: readonly PopulationGlob[] = [
 
 /** Docs excluded by path, each with the reason it is not wrapped in a region instead. */
 export const EXCLUDED_BY_PATH: ReadonlyMap<string, string> = new Map([
+  // The Devin CLI entry-point shims. Same category as commands/help.md and by the same clause of
+  // ADR-226 §4: a doc whose SUBJECT is the per-harness typed form is a human-typed entry point,
+  // enumerated per harness by design. Each opens "You are the `/soleur:<name>` slash command for
+  // the Soleur plugin on Devin CLI" — canonicalising that makes the sentence FALSE, because
+  // `/soleur:<name>` is exactly what the Devin adapter emits (harness.ts) and what the operator
+  // types. The earlier revision rewrote all three; measured, it turned each shim's own
+  // self-description into a form its harness does not have (#8299).
+  ...(["go", "help", "sync"] as const).map(
+    (n) =>
+      [
+        `plugins/soleur/skills/${n}/SKILL.md`,
+        "Devin CLI entry-point shim: its subject IS the typed slash form, so the canonical shape would make its own self-description false (ADR-226 §4, human-typed entry point)",
+      ] as [string, string],
+  ),
   [
     "plugins/soleur/commands/help.md",
     "its subject is the per-harness typed forms an operator types; measured, exempting it by region instead needs 11 marker pairs (22 lines) around 19 content lines carrying 34 sites, which is a whole-file exemption wearing markers (DHH #5)",

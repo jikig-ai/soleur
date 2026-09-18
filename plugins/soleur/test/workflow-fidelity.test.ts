@@ -430,7 +430,11 @@ const IN_PROCESS_READ = /in this process/i;
 const ADAPTER_CITE = /harness\.ts|invokeSkill/;
 // ADR-226: the preamble carries the general rule, because a skill entered directly on Grok has
 // only its preamble in context (spec-flow #1). Pinned here, where the carriers already are.
-const CANONICAL_NAME_RULE = /any `soleur:<name>` in this document names a skill/i;
+const CANONICAL_NAME_RULE = /a one-segment `soleur:<name>` in this document names a SKILL/i;
+// The carve-out is the load-bearing half: these 12 docs carry 325+ AGENT ids between them
+// (review alone has 188), and read literally the earlier skill-only wording told a Grok agent
+// to Read `plugins/soleur/skills/engineering:review:security-sentinel/SKILL.md`.
+const AGENT_CLAUSE = /names an AGENT: spawn it, never Read it/;
 const LOCKED_PIPELINE_SKILLS = [
   "one-shot",
   "brainstorm",
@@ -462,6 +466,7 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
       expect(body).toMatch(IN_PROCESS_READ);
       expect(body).toContain("SKILL.md");
       expect(body).toMatch(CANONICAL_NAME_RULE);
+      expect(body).toMatch(AGENT_CLAUSE);
     },
   );
 
