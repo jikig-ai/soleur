@@ -71,7 +71,14 @@ AGENTS: [N] agents across [M] categories
   workflow  ([count])  PR comments, spec analysis
 
 SKILLS: [N] skills
-  [List all skills found with brief descriptions]
+  Start here: /soleur:go <what you want> picks the right skill for you.
+  Not routed from /soleur:go -- invoke these two directly via the Skill tool:
+    soleur:operator-bootstrap  Turn post-merge steps into a runnable bootstrap.sh
+    soleur:operator-rephrase   Say the last message again, in plain sentences
+  [List all skills found with brief descriptions, grouped by the token before the
+   first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
+   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   no prefix last, under the heading "Core workflow".]
 
 MCP SERVERS:
   context7                    Framework documentation lookup
@@ -105,7 +112,14 @@ AGENTS: [N] agents across [M] categories
   workflow  ([count])  PR comments, spec analysis
 
 SKILLS: [N] skills
-  [List all skills found with brief descriptions]
+  Start here: /soleur:go <what you want> picks the right skill for you.
+  Not routed from /soleur:go -- invoke these two directly as /soleur:<skill>:
+    /soleur:operator-bootstrap  Turn post-merge steps into a runnable bootstrap.sh
+    /soleur:operator-rephrase   Say the last message again, in plain sentences
+  [List all skills found with brief descriptions, grouped by the token before the
+   first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
+   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   no prefix last, under the heading "Core workflow".]
 
 MCP SERVERS:
   context7                    Framework documentation lookup
@@ -136,7 +150,14 @@ AGENTS: [N] agents across [M] categories
   (same category breakdown as Claude block)
 
 SKILLS: [N] skills
-  (list all skills — invoke as /<skill-name>)
+  Start here: /go <what you want> picks the right skill for you.
+  Not routed from /go — invoke these two directly:
+    /operator-bootstrap   Turn post-merge steps into a runnable bootstrap.sh
+    /operator-rephrase    Say the last message again, in plain sentences
+  (list all skills — invoke as /<skill-name> — grouped by the token before the
+   first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
+   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   no prefix last, under the heading "Core workflow".)
 
 MCP SERVERS:
   context7              Framework documentation lookup

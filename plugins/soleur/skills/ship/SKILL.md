@@ -1435,7 +1435,7 @@ done
 
 **If not triggered (`${#UNDEFERRED[@]}` is 0):** Skip silently.
 
-**If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (3-option choice). The operator chooses one:
+**If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (4-option choice). The operator chooses one — and option 4 is offered FIRST whenever its precondition holds, because filing or attesting a step that a script could have run is the accretion this gate exists to stop:
 
 1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then files with **`--body-file`, never `--body "…\n…"`**:
 
@@ -1469,8 +1469,9 @@ done
    with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
 3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
+4. **Generate a runnable script instead — invoke `skill: soleur:operator-bootstrap`.** Precondition: **≥2 of the undeferred matches are scriptable and blocked on the same credential the agent cannot mint.** That is the literal trigger of `hr-multi-step-post-merge-bootstrap-script`, and this gate is the only point in the pipeline where those steps are enumerated — so it is the only place the artifact that rule mandates can actually be produced. **Invoke the skill; do not paraphrase it inline** (`skill: soleur:operator-bootstrap`), pass the undeferred matches as its stage list, and let it emit the `<feature>/bootstrap.sh` the rule names. This is also what discharges `hr-ship-message-no-operator-checklist`: with a script to point at, the tracked follow-through issue's `auto_command:` block is `bash <feature>/bootstrap.sh` rather than a prose checklist. Then fold any remaining non-scriptable matches — the true human gates (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token) — back through option 1, replace the scripted bullets with the single `Tracks #NNNN` companion for the ONE post-merge issue the rule requires (one issue, not N), and re-run detection. **If the precondition does not hold** (a single step, or steps blocked on different credentials), say so and fall through to options 1-3 — do not generate a one-stage script to satisfy the gate.
 
-**Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice.
+**Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice. The abort message MUST state whether option 4's precondition holds, naming `soleur:operator-bootstrap` when it does: a headless abort that lists only "file, cite or attest" hands the operator three ways to record the step and none to remove it.
 
 **Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late); this gate moved enforcement from honor-system to mechanical. The `playwright-attempt:` precondition (2026-06-10) closes a second bypass: PR #5082's CF-token-widen was classified "operator-only, MFA-gated" and filed as `deferred-automation` WITHOUT any browser attempt — a real attempt later reached the editable token form (the gate was the one-time login, not MFA), proving the assertion-without-attempt was the actual defect. See `knowledge-base/project/learnings/workflow-patterns/2026-06-10-playwright-attempt-evidence-before-operator-only.md`.
 
@@ -1776,6 +1777,10 @@ Replace `BRANCH_NAME` with the actual branch name.
    Closes #ISSUE_NUMBER
    Filed: #A #B #C
 
+   ## Merge Danger
+   **Undo:** <the exact command or action that reverses this merge> | none known
+   **Blast Radius:** docs | plugin | web-platform | user-data | money
+
    ## Changelog
    - changelog entries describing what changed
 
@@ -1810,6 +1815,88 @@ Replace `BRANCH_NAME` with the actual branch name.
    containing "filed:" cannot declare anything.
 
    Do not quote flag names -- write `--title` not `"--title"`.
+
+   **The `## Merge Danger` block — TWO fields, both mandatory, placed ABOVE `## Changelog`.**
+   `.github/workflows/reusable-release.yml` truncates the release note at the next `##` heading
+   after `## Changelog`, so the block is silently dropped from every release note if it drifts
+   below. It also sits AFTER the `Filed:` line, which must stay line-initial for
+   `net-issue-flow.sh`'s declared-filing arm (the whole-line
+   `^[ \t\r]*([-*+][ \t]+)?[*_]*[Ff][Ii][Ll][Ee][Dd][*_]*:` assertion it calls the gate's ONLY
+   counted attribution source) — nothing in this section precedes, wraps or indents that line.
+
+   **`Undo:` is quoted, not judged.** Quote `deployment-verification-agent`'s rollback line
+   verbatim when `/review` produced one. That agent runs only on PRs touching production data,
+   migrations, or record-discarding behaviour (`plugins/soleur/skills/review/workflows/review.workflow.js`,
+   the "Go/No-Go deploy checklist with SQL verification queries and rollback procedure" lens), so on
+   a plugin-only or docs-only PR it never runs and there is nothing to quote. Write `none known`
+   then — that is the **single** sentinel; there is no second "none produced" value. `/ship` never
+   judges reversibility independently of that agent, because two uncorrelated reversibility claims
+   in one pipeline is the defect below, reproduced structurally.
+
+   **`Blast Radius:` is one value** from `docs | plugin | web-platform | user-data | money`.
+
+   **The rule is directionless: name the undo; if you cannot name one, say so and name what is
+   permanently lost.** Adopt no default in either direction.
+   ADR-119 (`knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`,
+   the section headed *"Rollback is the retained plaintext volume — and the one-way-door framing
+   is wrong"*) records a one-way-door ruling that was **wrong** — an undo path existed the whole
+   time — and the ADR's own words are that stating it that way *"will make an operator refuse a
+   rollback they should take."* So a blanket "assume irreversible" default is precisely the direction that caused
+   the defect. A blanket reversible default is not the fix either: it under-claims on a live charge,
+   a deleted volume, a published tag. The defect was never the direction — it was a **label with no
+   mechanism attached**. A named command is checkable by founder and reviewer alike; a one-word
+   verdict is unfalsifiable. When no undo exists, `none known` is followed on the same line by what
+   is permanently lost.
+
+   **Do NOT add a `Door:` (one-way / two-way) field.** It is derived — it cannot be written without
+   `Undo:` — so on the majority path, where `deployment-verification-agent` never runs, it is either
+   left unconstrained (which reopens the ADR-119 defect the undo line exists to close) or forced to
+   `one-way` on every docs-only PR. Two fields, no third. There is also no merge hold on this block
+   today: it renders, and nothing blocks on it.
+
+   **Gate safety for this section — check the text you are about to write, not the text you wrote.**
+   `.claude/hooks/ship-operator-step-gate.sh`'s `DETECT_RE` anchors on a **list-bullet marker**
+   (`-`, `*`, `1.`, optional `[ ]` box, optional `**`) followed by a Group-A/B/C/D token — an
+   operator-action verb, `T+<N><unit>`, `Within <N><unit>:`, or `AC-PM<N>`. The heading is never
+   matched, which is why `## Model Dissents (informational)` is safe and why `## Merge Danger` is
+   too. `**Undo:**` and `**Blast Radius:**` are safe because the leading `*` is not followed by
+   whitespace. Do not put a bullet in front of either label, and do not continue either value onto a
+   bulleted line — that is the one edit that moves this section into the detector's reach. Three
+   more gates read the same body and each has a phrasing to avoid:
+
+   - Blast radius: write `user-data`, never the literal `prod-data`. The `PROD_RE` pattern in
+     [scripts/ship-incident-pir-gate.sh](../../../../scripts/ship-incident-pir-gate.sh) matches
+     `prod` followed by any non-letter, so that token alone supplies half of the incident-PIR
+     conjunction, and a reversibility narrative supplies the other half (past-tense outage
+     vocabulary).
+   - Undo phrasing: never "post-deploy verify / observe / soak the rollback".
+     `.claude/hooks/ship-soak-followthrough-gate.sh`'s `SOAK_RE` matches
+     `post-deploy (soak|verif|observ)` and then demands sweeper enrollment for every `Ref #N` in the
+     body. Write "run `<command>` to reverse it" instead.
+   - Undo phrasing: never "revert the PR that closes #N".
+     `.claude/hooks/pre-merge-auto-close-scan.sh` denies prose-embedded close keywords, so any
+     `closes`/`fixes`/`resolves` + `#N` pair inside this section blocks the merge. Name the commit
+     or the command, not the issue it closed.
+
+   **Evidence tiers — what the body should SHOW.** This ranks evidence *quality*. It does not decide
+   *sufficiency*, and it deliberately does not restate the three gates that do:
+
+   - **S-tier — screenshots, when the change is visual.** `plugins/soleur/skills/qa/SKILL.md` already
+     makes the screenshot the evidence unit — its Step 3 says *"Record the result for each scenario:
+     PASS or FAIL with evidence (screenshots, API response output, error messages)"* and its Step 4
+     report template carries `**Evidence:** <screenshot filenames>`. Paste the artifacts, not a prose
+     summary of them.
+   - **A-tier — execution-based evidence: the exact test that fails before the change and passes
+     after.** Name it by file and test name and show both runs. A test named but not run is C-tier.
+   - **C-tier — assertion.** "Verified locally", "all tests pass", "no regressions". Acceptable only
+     as a supplement to S or A, never as the whole test plan.
+
+   Sufficiency is decided by three existing gates this list points at rather than competes with:
+   **Phase 1.5 "Review Evidence Gate"** above answers *"did `/review` run, and at what coverage?"*;
+   `plugins/soleur/skills/review/SKILL.md`'s degraded-review path already grades evidence adequacy
+   against the surface's reversibility — *"degraded review is adequate evidence for a docs PR and is
+   not adequate for an irreversible-blast-radius surface"*; and `qa/SKILL.md` fixes the unit. Those
+   three decide whether the evidence is enough; this list only tells you what to paste.
 
    **Carry forward every gate marker the OLD body carried (load-bearing).** This
    step **full-replaces** the body, and two blocking gates read markers that live
@@ -1878,6 +1965,10 @@ gh pr create --title "the pr title" --body "## Summary
 
 Closes #ISSUE_NUMBER
 
+## Merge Danger
+**Undo:** <the exact command or action that reverses this merge> | none known
+**Blast Radius:** docs | plugin | web-platform | user-data | money
+
 ## Changelog
 - changelog entries describing what changed
 
@@ -1888,6 +1979,11 @@ Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
 If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If no issue was detected, omit it.
+
+The `## Merge Danger` block is the same two fields, under the same rules, as the `gh pr edit`
+template above — including its placement ABOVE `## Changelog` and the four gate-phrasings to avoid.
+Both templates carry it; editing one and not the other is a silent partial, because which template
+runs depends only on whether a draft PR already exists.
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
