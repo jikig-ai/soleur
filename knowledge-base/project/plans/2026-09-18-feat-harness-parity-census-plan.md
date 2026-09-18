@@ -554,3 +554,25 @@ shell-prescribing ACs.
 **The anchor argument is self-serving, and now demonstrably so.** It defends the *population* denominator (`git ls-files`, index-derived, narrowing visible) — but the denominator that actually carries the property is the **trigger** count, which is regex-derived from prose. A skill narrows out of it by rewording, which is invisible and looks editorial. F19's GREEN sequence needs no floor edit at all.
 
 What L142 actually prescribes is *"pin it with a repo-internal test against a **committed inventory**."* The plan implements a **number**, not an inventory. A committed list of the 52 auto-exempt names turns every F19 sequence RED, and costs 52 lines — not the "~60 ledger rows asserting nothing real" the ADR alternatives list rejects, which was a strawman for this.
+
+### Spec-flow findings (6 of 6 returned — panel complete, verdict unanimous)
+
+| # | Finding | Status |
+| --- | --- | --- |
+| F23 | **After the backfill the trigger floor is inert — and the gate can be made fully vacuous while reporting perfect compliance.** The canonical block contains `Skill tool` *and* `invokeSkill`, so every skill obliged to carry it becomes trigger-bearing **by the block**. Leave-one-out on the pattern: **6 of 12** alternatives unreachable today, **12 of 12** after Phase 5. Reduce the pattern to the single alternative `invokeSkill` and the post-backfill census reports trigger 46, qualified 46, unclassified 0, auto-exempt 52 — **all four floors green.** The exact failure ADR-193 exists to prevent, inside the guard written to honour it | **CONFIRMED** |
+| F24 | **My Cut List measured stripping on the pre-state of the transformation it was cutting.** "Stripping is a no-op (46→46)" is true *today*, because only 12 skills carry the block and all 12 trigger independently for other reasons. It is false the moment Phase 5 runs. The cut also aimed at the wrong risk — it argued stripping "can never produce a false RED," when the reason to strip is to prevent a false **GREEN** | **CONCEDED** |
+| F25 | **24 of the 52 auto-exempt skills carry a missed invocation form** — `@agent-<name>` (3), `Spawn agent:` (3), `Task <name>(arg)` (3), bare `soleur:<name>` (21). Among them: `trigger-cron/SKILL.md:26-27` itself, the skill named in the spec's own Problem Statement. AC2's pinned 46/52 would **freeze all 24 in as a committed baseline** | **CONFIRMED** |
+| F26 | **spec FR2 and plan H3 are mutually unimplementable.** FR2: QUALIFIED means "carries the block." H3: "qualified via an adapter citation rather than a marker block — PASS," and AC4 makes H3 a merge gate. An author citing the adapter is QUALIFIED under the plan and UNCLASSIFIED under the spec | **CONFIRMED** |
+| F27 | **Adding a fifth harness compiles clean and silently degrades the adapter.** `routingInstructions` (`harness.ts:411-467`) and `pollInstructions` (`:393`) both have `default:` arms and there is no `never` exhaustiveness check anywhere in the file. So the census would compel 46 markdown edits documenting a harness the adapter *those very blocks cite* does not implement | **CONFIRMED** |
+| F28 | **No phase implements TR6 or TR7.** Phase 1 writes the matrix as a *header comment*. There is no decoy fixture in `## Files to Create`, and M2/M6/M9/H2/H3 need a population the `git ls-files` derivation cannot produce. Given TR4's finding that no corpus guard polices a `.test.ts`, an unimplemented TR6 means the gate ships with **no proof it is non-vacuous** | **CONFIRMED** |
+| F29 | **FR7's "re-express `UNION` derived" is not implementable.** Its population is property-defined ("spawn sites ∪ secrets/prod ∪ pipeline ∪ devin shims") and needs a classifier that does not exist. Population = all 98 → the assertion is false (only 64 are marked). Population = marked skills → tautology. Test 2 is the *only* anti-omission guard in that describe; AC6 would certify its loss as a pass | **CONFIRMED** |
+| F30 | Phase 3 commits a `.ts` file that is RED by design, but `lefthook.yml:311-332` runs the full battery on any `.ts`. Phase 3 and the 34 Phase-5 commits are uncommittable without repeated `--no-verify`, which the plan never states | **CONFIRMED** |
+
+**The whole class, stated once:** every mechanism in the plan was validated against *today's* tree and is wrong against the tree Phase 5 produces. The trigger floor, the auto-exempt ceiling, M4, M6, M7 and the stripping cut are each correct now and dead after.
+
+---
+
+# PLAN v1 SUPERSEDED — see v2 below
+
+Direction chosen by the operator after the panel: **invert to negative space.** v1's design
+sections above are retained as the review record; they are not the plan of record.
