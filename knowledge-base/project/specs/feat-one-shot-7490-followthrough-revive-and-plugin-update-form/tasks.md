@@ -67,7 +67,7 @@ Closes: #7490 · semver:patch · lane: cross-domain (no spec.md — fail-closed 
 - [x] 5.4 Verify AC14 and AC14b on the live bodies
 - [x] 5.5 Post the AC16 comment on #7985: measured FAIL (not NOT YET) semantics, plus the reopen behaviour and the un-enrol remedy
 - [x] 5.6 Record the `### Unfenced trackers` table for the PR body (AC15)
-- [ ] 5.7 Dry run: `gh workflow run scheduled-followthrough-sweeper.yml --ref <branch> -f dry_run=true`; read the log (AC17) — DISPATCHED (run 35371156340), still `queued` at time of writing; a Monitor is armed on its terminal state. The box stays OPEN until the LOG is read: a checkbox is a claim, and "I dispatched it" is not "I read it".
+- [x] 5.7 Dry run: `gh workflow run scheduled-followthrough-sweeper.yml --ref <branch> -f dry_run=true` — run **35371156340**, `conclusion=success`. Log read (AC17): final line `sweep done (no_directive=27 fenced_directive=0)`. Against the pre-change baseline of 33 no-directive trackers that is a delta of exactly the six bodies Phase 5 unfenced, and `fenced_directive=0` is the Guard 2 false-positive blast radius held at zero on the live corpus.
 
 ## Phase 6: Stream C — upstream
 
