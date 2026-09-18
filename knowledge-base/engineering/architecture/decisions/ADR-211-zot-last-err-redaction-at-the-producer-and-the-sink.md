@@ -254,8 +254,7 @@ Art. 30 register cites it:
   > inert after delivery is as wrong as asserting delivered without proof.
   >
   > **Superseded 2026-09-18 (#8309 trigger — Phase B follow-through PASS):** a SECOND replace
-  > (2026-09-18, PR #8272, run 35353167115, boot `3b70b6ae…`) delivered the proof key and the
-  > probe PASSed — see *Amendment 2026-09-18* at the end of this ADR. The 09-17 boot's 272 rows
+  > (2026-09-18, boot `3b70b6ae…`) delivered the proof key and the probe PASSed — see *Amendment 2026-09-18* at the end of this ADR. The 09-17 boot's 272 rows
   > remain corroboration, not proof.
 
 ## Consequences
@@ -325,8 +324,8 @@ Art. 30 register cites it:
 
 ## Amendment 2026-09-18 — first PASS observed (status ACCEPTED)
 
-**Status flip:** `adopting → accepted`. The amended trigger recorded under *Status* — the
-#7960 probe PASSing on a boot PROVEN by `err_redact_rev` — was met at
+**Status flip:** `adopting → accepted`. The amended trigger recorded under *Status* — quoting it,
+"the #7960 probe PASSes on a boot PROVEN by `err_redact_rev`" — was met at
 **2026-09-18T14:10:58Z** (sweeper run 35354131746, closing #7960 at 14:10:59Z):
 
 ```text
@@ -337,12 +336,10 @@ PASS: producer delivered (proof: err_redact_rev) — 3 tier-4 row(s) on boot 3b7
       Per-line redact() at tiers 1-3 is covered pre-merge by the producer suite, not here.
 ```
 
-Layer 1 is delivered on boot `3b70b6ae…` per this ADR's own proof key (`err_redact_rev` in
-the trusted region, bound to the gate by the producer suite in CI — "evidence for, not proof
-of" is the contract under *Delivery proof*, and the CI pairing is what makes it a guarantee)
-and the tier-4 gate graded clean — 3 rows in 24h, 0 leaking. Per-line `redact()` at tiers
-1-3 is asserted by the producer suite pre-merge, not by this readback; nothing re-grades
-after the PASS. Vehicle: PR #8272 (`f5ad46390`, merged 13:46:53Z with #7960 still open);
+Layer 1 is delivered on boot `3b70b6ae…` per this ADR's own proof key (`err_redact_rev`;
+*Delivery proof* records why the CI pairing, not the token, is the guarantee) and the tier-4
+gate graded clean — 3 rows in 24h, 0 leaking. The PASS grades the tier-4 gate only (see SCOPE
+above); nothing re-grades after it. Vehicle: PR #8272 (`f5ad46390`, merged 13:46:53Z with #7960 still open);
 replace run 35353167115 job `registry_host_replace` complete 14:03:52Z; first row on the
 new boot 14:04:35Z. This is the second replace since adoption — the first (2026-09-17, boot
 `78111e0e…`) is recorded under *Delivery state* and stays corroboration.

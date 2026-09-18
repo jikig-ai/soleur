@@ -6,14 +6,14 @@ issue: 7500
 adr: ADR-211
 attestation-authority: clo
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
-disposition: "DISCHARGED — no Art. 4(12) personal-data breach on the audited egress; no Art. 33 duty; no Art. 34 duty; NO breach-register row. One Art. 30(1)(d) recipients-limb omission found and closed in the same change. One evidentiary limb NOT RUN and recorded as open. [2026-09-18 (#8309) — that limb is NARROWED; closed in part by the follow-through PASS, the pre-delivery corpus and the tiers 1-3 readback stay open.]"
+disposition: "DISCHARGED — no Art. 4(12) personal-data breach on the audited egress; no Art. 33 duty; no Art. 34 duty; NO breach-register row. One Art. 30(1)(d) recipients-limb omission found and closed in the same change. One evidentiary limb NOT RUN and recorded as open. [2026-09-18 (#8309) — that limb is NARROWED; closed in part by the follow-through PASS, the pre-delivery corpus stays open and tiers 1-3 remain suite-asserted only, never warehouse-read.]"
 signed_off_at: 2026-09-08
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
 awareness_anchor: "2026-09-08 — the date the CLO measured the published corpus. No earlier anchor is asserted, because no Art. 4(12) event is found; see §Why there is no awareness anchor to run a clock from."
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — no Art. 33 duty arose on the audited facts, so nothing fell due. A BREACH finding on the still-open half of the limb below (narrowed 2026-09-18, #8309) would start a FRESH 72h from awareness of that finding."
-open_limbs: "ONE, NARROWED 2026-09-18 (#8309). Closed IN PART by scripts/followthroughs/zot-last-err-redact-7500.sh PASS 2026-09-18T14:10:58Z on boot 3b70b6ae-e7d5-4218-993f-6d39c563a422 (proof err_redact_rev; tier4=3, leaking=0): the 3 post-delivery tier-4 rows on that boot in the 24h window carry no header map, no address-valued clientIP. STILL OPEN: the pre-delivery corpus (every SOLEUR_ZOT_DISK row before boot 3b70b6ae still within retention — rows before the 2026-09-17 replace carried no redact(); rows on the 09-17 boot 78111e0e are corroboration, unproven either way; ADR-211 records 1,792 of 2,598 pre-Phase-B fallback rows carrying header STRUCTURE) is unread at value level, and tiers 1-3 are never warehouse-read. Ages out under the 90-day logs_retention of source 2457081 (measured 2026-09-04, #7772) by 2026-09-18 + 90d (≈2026-12-17) whether or not read. See §The open evidentiary limb, 2026-09-18 note."
+open_limbs: "ONE, NARROWED 2026-09-18 (#8309). Closed IN PART by scripts/followthroughs/zot-last-err-redact-7500.sh PASS 2026-09-18T14:10:58Z on boot 3b70b6ae-e7d5-4218-993f-6d39c563a422 (proof err_redact_rev; tier4=3, leaking=0): the 3 post-delivery tier-4 rows on that boot in the 24h window carry no header map, no address-valued clientIP. STILL OPEN: the pre-delivery corpus (every SOLEUR_ZOT_DISK row before boot 3b70b6ae still within retention — rows before the 2026-09-17 replace carried no redact(); rows on the 09-17 boot 78111e0e are corroboration, unproven either way; ADR-211 records 1,792 of 2,598 pre-Phase-B fallback rows carrying leak-grade structure — a header map, an address-valued clientIP or a bracketed credential value) is unread at value level, and tiers 1-3 are never warehouse-read. Ages out under the 90-day logs_retention of source 2457081 (measured 2026-09-04, #7772) by 2026-09-18 + 90d (≈2026-12-17) whether or not read. See §The open evidentiary limb, 2026-09-18 note."
 tier_classification: "Tier 1 — an internal determination and register amendment. No `docs/legal/**` document is edited, no published page changes, no right is narrowed. The five `docs/legal/**` CI gates (scope-block placement, mirror-drift ratchet, raw-file SHA pin, heading-sequence parity, EXPECTED_COUNT sentinel) are NOT engaged."
 semver: "No TC_VERSION bump."
 related:
@@ -243,8 +243,8 @@ the ruling is scoped to the egress I audited and says so in the register.
 > stronger test than the one stated, on a 3-row sample. It does NOT read the pre-delivery corpus this paragraph
 > describes (every `SOLEUR_ZOT_DISK` row before boot `3b70b6ae…` still within retention: rows before the
 > 2026-09-17 replace carried no `redact()`, and rows on the 09-17 boot `78111e0e…` are corroboration, unproven
-> either way; ADR-211 records 1,792 of 2,598 pre-Phase-B `fallback` rows carrying header STRUCTURE — structure,
-> not a value-level finding either way), and it never reads tiers 1-3 (pre-merge suite only). No regression
+> either way; ADR-211 records 1,792 of 2,598 pre-Phase-B `fallback` rows carrying leak-grade structure — a header map,
+> an address-valued `clientIP` or a bracketed credential value; structure, not a value-level finding either way), and it never reads tiers 1-3 (pre-merge suite only). No regression
 > re-grade runs after the PASS. The unread half ages out under the 90-day `logs_retention` of source `2457081`
 > (measured 2026-09-04, #7772) by 2026-09-18 + 90d (≈2026-12-17); if it lapses unread, this note is the record
 > that it was never read, not that it was clean. What would reopen this determination is unchanged.
@@ -299,9 +299,9 @@ ADR-211 exists to prevent.
 
    > **Superseded 2026-09-18 (#8309 trigger — Phase B follow-through PASS):** "It is inert" was true on
    > 2026-09-08 and is false now. Layer 1 is delivered on boot `3b70b6ae…` (probe PASS, proof
-   > `err_redact_rev`, tier4=3 leaking=0, tier-4 gate only). The register records delivery in every place
-   > it recorded inertness (five cells) in the same change as this note; I still do not attest to Layer 1's
-   > correctness beyond that readback — tiers 1-3 rest on the producer suite. (CLO agent, plan-time review
+   > `err_redact_rev`, tier4=3 leaking=0, tier-4 gate only). The register records delivery at every cell
+   > that recorded inertness (see Re-evaluation trigger 2); I still do not attest to Layer 1's correctness
+   > beyond that readback — tiers 1-3 rest on the producer suite. (CLO agent, plan-time review
    > 2026-09-18; the 2026-09-08 sign-off date above is unchanged.)
 
 5. **Not attesting to injection safety.** Republishing an attacker-chosen `User-Agent`
@@ -328,8 +328,9 @@ ADR-211 exists to prevent.
   entry at §(d), recording the boot id and the first readback — the same discipline
   that entry applied.
 
-  > **Superseded 2026-09-18 (#8309 trigger — Phase B follow-through PASS):** fired 2026-09-18 (run
-  > 35353167115). The dated delivery entry is appended at PA-8 §(g) and at the four sibling cells that
+  > **Superseded 2026-09-18 (#8309 trigger — Phase B follow-through PASS):** fired 2026-09-17 (boot
+  > `78111e0e…`, corroboration, no proof key) and 2026-09-18 (run 35353167115, proof key; the delivery
+  > entry is dated to this one). The dated delivery entry is appended at PA-8 §(g) and at the four sibling cells that
   > carried the inert posture, in the same change as this note.
 
 - **Any credential-bearing header name outside the five denylisted names appearing in

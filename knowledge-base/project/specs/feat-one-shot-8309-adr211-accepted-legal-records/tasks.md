@@ -34,7 +34,7 @@ are changed in-cell; body sentences are never edited — a dated marker goes und
 
 ## Phase 4: C4 model
 
-- [x] 4.1 `model.c4` `github -> publicReader` edge: replace `(ADR-211 Layer 1 — INERT until the next registry-host-replace, so this edge is currently guarded by the denylist alone)` with `(ADR-211 Layer 1 — DELIVERED 2026-09-18, see ADR-211 Amendment 2026-09-18; the denylist here is the backstop, not the only guard)`.
+- [x] 4.1 `model.c4` `github -> publicReader` edge: replace `(ADR-211 Layer 1 — INERT until the next registry-host-replace, so this edge is currently guarded by the denylist alone)` with `(ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard)`.
 - [x] 4.2 `bash scripts/regenerate-c4-model.sh` and commit `model.likec4.json`.
 
 ## Phase 5: Verification

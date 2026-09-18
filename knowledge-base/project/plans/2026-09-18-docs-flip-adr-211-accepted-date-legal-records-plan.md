@@ -317,8 +317,8 @@ shape; if the rebase conflicts on §(d), keep both brackets in date order.
 
 File: `knowledge-base/legal/audits/2026-09-08-clo-attestation-7500-zot-last-err-redaction.md`.
 CLO ruling: the limb closes **IN PART** — the post-delivery tier-4 half closes on the PASS (a
-stronger test than the limb stated, on a 3-row sample); the pre-delivery corpus (2026-08-12 →
-2026-09-18, unredacted; ADR-211 records 1,792 of 2,598 pre-Phase-B `fallback` rows carrying
+stronger test than the limb stated, on a 3-row sample); the pre-delivery corpus (every row before boot
+`3b70b6ae…` still within retention, unredacted; ADR-211 records 1,792 of 2,598 pre-Phase-B `fallback` rows carrying
 header STRUCTURE — structure, not a value-level finding either way) stays unread at value level,
 tiers 1-3 are never warehouse-read, and the unread half ages out under the 90-day retention by
 2026-09-18 + 90d (≈2026-12-17) whether or not read. The record must say that rather than let it lapse silently.
@@ -367,7 +367,7 @@ The `Superseded 2026-09-18 (#8309 trigger` literal therefore appears four times 
 
 File: `knowledge-base/engineering/architecture/diagrams/model.c4`, `github -> publicReader` edge.
 Replace the parenthetical `(ADR-211 Layer 1 — INERT until the next registry-host-replace, so this edge is currently guarded by the denylist alone)`
-with `(ADR-211 Layer 1 — DELIVERED 2026-09-18, see ADR-211 Amendment 2026-09-18; the denylist here is the backstop, not the only guard)`. The model is a diagram label, not the evidentiary record — run ids, boots and verdicts live in ADR-211 and the register, so the edge points there. The parenthetical lives in the relation *title* (edge-detail panel and `model.likec4.json`), not on the drawn label, which is truncated at ~197 chars — expect no visible diagram diff.
+with `(ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard)`. The model is a diagram label, not the evidentiary record — run ids, boots and verdicts live in ADR-211 and the register, so the edge points there. The parenthetical lives in the relation *title* (edge-detail panel and `model.likec4.json`), not on the drawn label, which is truncated at ~197 chars — expect no visible diagram diff.
 Then `bash scripts/regenerate-c4-model.sh` and commit `model.likec4.json`. The pre-commit hook
 does this too; the test is the authority.
 
@@ -425,7 +425,7 @@ Let `ADR=knowledge-base/engineering/architecture/decisions/ADR-211-zot-last-err-
    `sed -n '/^## The open evidentiary limb/,/^## Two pre-existing/p' "$AUD" | grep -c '1,792'` returns `1`,
    and the same pipe with `2026-12-17` returns `1`.
 9. `grep -c 'INERT until the next registry-host-replace' "$C4"` returns `0` and
-   `grep -c 'see ADR-211 Amendment 2026-09-18' "$C4"` returns `1`.
+   `grep -c 'see its Amendment 2026-09-18' "$C4"` returns `1`.
 10. Script-name-only citation: in the diff, every occurrence of `zot-last-err-redact-7500.sh` is
     not followed by `:<digits>` or the word `line`:
     `git diff origin/main...HEAD | grep -E '^\+' | grep -cE 'zot-last-err-redact-7500\.sh(:[0-9]+|.{0,12}\bline\b)'` returns `0`.
