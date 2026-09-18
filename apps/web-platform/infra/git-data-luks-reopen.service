@@ -1,0 +1,68 @@
+[Unit]
+# (#8210) Reopen the git-data LUKS mapper from a Doppler-delivered key on EVERY boot. The
+# birth heredoc opens it once per instance (cloud-init runcmd) and the fstab line is `nofail`,
+# so without this unit a reboot left /mnt/git-data-luks without its backing device, silently.
+# ADR-115 amendment: this oneshot is the accepted equivalent of the crypttab/keyscript the
+# blocker named; ADR-198 amendment: the passphrase is fetched at boot, never baked.
+Description=Reopen the git-data LUKS mapper from Doppler on every boot (#8210)
+Documentation=https://github.com/jikig-ai/soleur/issues/8210
+Wants=network-online.target
+After=network-online.target
+# A [Unit] directive (git-data-gc.service records the verify-caught misplacement). Fires ONCE,
+# when the unit reaches its FINAL failed state after the bounded restarts below — systemd's
+# service_enter_dead() suppresses OnFailure while an auto-restart is pending.
+OnFailure=git-data-luks-reopen-failure.service
+# Five attempts in an hour absorb a transient Doppler/DNS blip at boot without an in-script
+# retry loop (a retrying guard hides its instrument fault); the sixth is the terminal failure
+# the reporter ships.
+StartLimitIntervalSec=1h
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Allowed for Type=oneshot: systemd's service.c rejects only always|on-success. Measured on
+# 255 and 261: Result/ExecMainStatus/ExecMainCode/NRestarts all survive start-limit-hit.
+Restart=on-failure
+RestartSec=60
+# HOME is REQUIRED for `doppler run` under a root unit (the CLI dies "$HOME is not defined").
+Environment=HOME=/root
+# TMPDIR on tmpfs, load-bearing: git-data-emit's _devalue writes the sed-escaped passphrase to
+# mktemp before rm -f. On a disk-backed /tmp that is a root-disk write of the key, and
+# PrivateTmp only bind-mounts a subdirectory of the same device. The RuntimeDirectory below
+# is tmpfs by construction.
+Environment=TMPDIR=/run/git-data-luks-reopen
+# EnvironmentFile=- not `. <file>`: an absent token file fails inside `doppler run`, which the
+# reporter reports; a failed dot-source in dash kills the shell first. The file carries
+# DOPPLER_TOKEN (read-only prd_git_data token), GIT_DATA_LUKS_DEV (the by-id pin) and
+# GIT_DATA_DOPPLER_CONFIG (templated: the rung-2 rehearsal scopes its token to a scratch
+# config, so a hardcoded prd_git_data would exit 1 with the key absent on every rehearsal).
+EnvironmentFile=-/etc/default/git-data-doppler
+# The script's phase file + stderr log live here. RuntimeDirectoryPreserve=yes is MANDATORY:
+# measured on 255, systemd removes the directory when the unit reaches its final failed
+# state — BEFORE OnFailure= runs — so without it the reporter reads nothing and every failure
+# class collapses to action=unit.
+RuntimeDirectory=git-data-luks-reopen
+RuntimeDirectoryPreserve=yes
+UMask=0077
+NoNewPrivileges=yes
+# Per-attempt reset so a mixed-cause restart sequence (attempt 1 dies at open, attempts 2-5
+# die inside doppler run) reports the FINAL cause, not a stale first one.
+ExecStartPre=/bin/rm -f /run/git-data-luks-reopen/action /run/git-data-luks-reopen/log
+# The git-data-gc.service shape: /bin/sh keeps `systemd-analyze verify` green on runners
+# without doppler; the inner path is absolute. --only-secrets (repeated form) narrows the
+# injected env to the two names the script and the emitter read; --no-fallback declines
+# Doppler's on-disk encrypted fallback cache, which would otherwise write the resolved
+# passphrase under $DOPPLER_CONFIG_DIR on the root disk. --config is the templated name.
+ExecStart=/bin/sh -c 'exec /usr/local/bin/doppler run --project soleur --config "$GIT_DATA_DOPPLER_CONFIG" --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback -- /usr/local/bin/git-data-luks-reopen.sh'
+# Doppler at boot + a 30 s device wait + the mount job; the birth capture window (10 min)
+# exceeds this, so a slow Doppler at birth blocks cloud-final for at most this long.
+TimeoutStartSec=300
+TimeoutStopSec=30
+# Confines /tmp/.doppler. NOT ProtectSystem=strict: cryptsetup needs /run/cryptsetup and the
+# reporter reads /run/git-data-luks-reopen; both would need ReadWritePaths= on a unit whose
+# script writes nothing else.
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
