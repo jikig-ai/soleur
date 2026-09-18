@@ -182,6 +182,14 @@ const NON_INNGEST_MONITORS = new Set([
   // cron-*.ts counterpart and no SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings
   // the check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
   "workspaces-luks-verify",
+  // #8160: GHA-fired (scheduled-devin-docs-drift.yml, on.schedule '23 7 * * *') — the
+  // disposable docs.devin.ai capability-drift watcher. Its subject is OUTSIDE the
+  // product (Cognition's public documentation, fetched anonymously), so it has no
+  // cron-*.ts counterpart and declares no SENTRY_MONITOR_SLUG; its final
+  // sentry-heartbeat step pings the check-in. Disposable — teardown keyed to #8160
+  // close; productization of the watch substrate is #8253's design problem. Same
+  // class as scheduled-marketplace-drift.
+  "scheduled-devin-docs-drift",
 ]);
 
 describe("Inngest function registry — drift guards", () => {

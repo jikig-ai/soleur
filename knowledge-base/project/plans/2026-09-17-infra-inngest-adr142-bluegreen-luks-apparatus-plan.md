@@ -1192,7 +1192,6 @@ logs:
 discoverability_test:
   command: bash apps/web-platform/infra/inngest-redis-luks.test.sh
   expected_output: a final line reporting zero failures and a non-zero pass count
-  credentials_required: none
 ```
 
 This satisfies the affected-surface extension: the dedicated Inngest host is a surface nothing can
@@ -1935,7 +1934,15 @@ therefore a real finding — the bootstrap's fail-closed install emits `reason=i
 exactly that path — and every refusal names its remediation in the same line rather than leaving the
 operator to infer one.
 
-### 5. Defects the build found in itself, recorded because they are the plan's own failure classes
+### 5. The `credentials_required: none` line is DELETED, not baselined
+
+The discoverability probe here is `inngest-redis-luks.test.sh`, a local suite that reaches no
+network — so the key was a leftover of the plan template, whose own comment reads *"OPTIONAL. Only
+when the property has no unauthenticated substitute."* `#7393 G`'s baseline exists to stop exactly
+that accretion: a `none` waiver counts toward the corpus total while waiving nothing, so raising the
+baseline for it would spend the drift control's only signal on a line that means nothing. Removed.
+
+### 6. Defects the build found in itself, recorded because they are the plan's own failure classes
 
 - `resume_writers` started `inngest-server.service` unconditionally, which would re-arm a scheduler
   an operator had quiesced (caught by `ci-deploy.test.sh`'s start-writer inventory, not by me). The

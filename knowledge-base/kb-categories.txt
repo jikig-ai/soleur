@@ -35,6 +35,7 @@ legal
 legal-compliance
 logic-errors
 logic_error
+machinery
 marketing
 observability
 performance

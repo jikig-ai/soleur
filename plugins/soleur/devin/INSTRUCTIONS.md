@@ -96,7 +96,7 @@ Soleur runs in two Devin environments with different enforcement surfaces:
 | Plugin subagents (`agents/**/*.md`) | yes | **no — plugin-defined agents absent** (documented limitation, corroborated both arms). Built-in fan-out substrate exists in the web-app arm (`run_subagent`, `run_workflow`) but not the Soleur roster |
 | `ask_user_question` | yes | **no — tool absent**; `message_user` (`user_question`) is blocking with no auto-approve — an unanswered ask stalls the session indefinitely (fail-closed) |
 | Plugin hooks: `SessionStart` / `SessionEnd` | yes | **no — never fire in cloud** |
-| Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | **no — measured absent (both arms)**: `matcher: ""` catch-all produced nothing; corrects the "documented yes" claim |
+| Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | **no — measured absent (both arms)**: `matcher: ""` catch-all produced nothing; docs.devin.ai initially claimed cloud dispatch, then was corrected to scope hooks local-only + "best effort, fail open" (matches measurement) |
 | Repo-level hooks (`.devin/config.json`, `.claude/settings.json`) | yes | **no — measured absent (both arms)**: SessionStart `additionalContext` never reached the session; catch-all marker test produced nothing |
 | `.devin/config.json` `requiredPlugins` | yes | **measured honored** — repo key registered `scope: "repo"` from each repo cloned at session start; `git-subdir` object form resolves, full-URL `#subdir` string form 404s through the cloud git-manager proxy (see install section) |
 
@@ -180,7 +180,11 @@ it reads hook-stdin transcript data a standalone script cannot see.
   `matcher: ""` catch-all. Cloud is a no-hook environment. Plugin-defined
   agents absent (documented limitation); built-in `run_subagent` exists in
   the web-app arm but cannot load the Soleur roster. The request should
-  cover ALL hook surfaces, not just SessionStart/SessionEnd.
+  cover ALL hook surfaces, not just SessionStart/SessionEnd. Filing package:
+  `knowledge-base/project/specs/feat-devin-upstream-asks-posture/upstream-asks.md`;
+  submission state is tracked on #8160. Detection:
+  `scheduled-devin-docs-drift.yml` watches the docs.devin.ai surfaces where a
+  capability would become visible (disposable — teardown on #8160 close).
 - **`requiredPlugins` `url`+`#subdir` resolver bug** — measured 2026-09-17
   (#8172): a full-URL string requirement carries its `#plugins/soleur`
   fragment verbatim into the `git-manager.devin.ai` fetch path and 404s
@@ -190,6 +194,10 @@ it reads hook-stdin transcript data a standalone script cannot see.
   confirmed honored in cloud — registered `scope: "repo"` per repo cloned
   at session start. Fix: strip the fragment / map the string form onto the
   `git-subdir` source in the cloud resolver.
+- **`requiredPlugins` marginal effect** — repo-level key is documented
+  (plugins overview §Inheritance level 3), but the account's managed manifest
+  already installs Soleur, masking the marginal effect; a clean-account arm
+  remains open (#8172).
 - **`/handoff` does not deliver the declared working state** — measured
   2026-09-17 (#8172): the session checkout came from the warm blueprint
   image on `main`, not the handed branch, and no uncommitted state
@@ -283,3 +291,4 @@ and retain incomplete status instead of silently skipping it.
 - **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially
 - **MCP servers**: Devin supports the same MCP server format as Claude, so existing servers should work without modification
+- **Worktree commits**: the tool envelope omits `.cwd`, so a bare `git commit` inside `.worktrees/` is false-denied by `guardrails.sh` block-commit-on-main (it resolves `$PWD` = main checkout). Attach `git -C <worktree-abs-path>` to worktree commits until #8254 lands.
