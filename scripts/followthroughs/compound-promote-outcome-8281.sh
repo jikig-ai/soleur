@@ -102,7 +102,9 @@ decode_rows() {
             | select(type == "object" and ('"$1"')) | '"$2"
 }
 
-# `run_query <label> <grep> <limit> <outfile>` — stderr is CAPTURED, never
+# `run_query <label> <grep> <limit>` — writes to $QOUT (bound below from
+# `mktemp -t`, so the P1b fixture-relative scanner can prove the redirect target
+# absolute; passing it as a parameter loses that proof). stderr is CAPTURED, never
 # discarded. betterstack-query.sh exits 3 for "nothing was queried" and prints
 # an actionable heredoc saying so; swallowing it reports a bare number to an
 # operator who then cannot act. rc 3 is forwarded as 3, not folded into a
@@ -113,25 +115,25 @@ decode_rows() {
 # `exit 3` exited the SUBSHELL, the caller received an empty string, and a
 # "nothing was queried" condition was graded as a dark channel (FAIL) instead
 # of CANNOT ESTABLISH. Caught by the companion test's case 7.
+QOUT="$(mktemp -t ft8281-rows.XXXXXXXX)"
+trap 'rm -f -- "$QOUT"' EXIT
+
 run_query() {
-  local label="$1" pattern="$2" lim="$3" outfile="$4" rc
-  bash "$QUERY_SH" --since "$WINDOW" --grep "$pattern" --limit "$lim" > "$outfile" 2>&1
+  local label="$1" pattern="$2" lim="$3" rc
+  bash "$QUERY_SH" --since "$WINDOW" --grep "$pattern" --limit "$lim" > "$QOUT" 2>&1
   rc=$?
   if [ "$rc" -eq 3 ]; then
-    printf 'CANNOT ESTABLISH: betterstack-query.sh could not query (%s): %s\n' "$label" "$(head -c 400 "$outfile")" >&2
+    printf 'CANNOT ESTABLISH: betterstack-query.sh could not query (%s): %s\n' "$label" "$(head -c 400 "$QOUT")" >&2
     exit 3
   fi
   if [ "$rc" -ne 0 ]; then
-    printf 'NOT YET: betterstack-query.sh exited %s (%s): %s\n' "$rc" "$label" "$(head -c 400 "$outfile")" >&2
+    printf 'NOT YET: betterstack-query.sh exited %s (%s): %s\n' "$rc" "$label" "$(head -c 400 "$QOUT")" >&2
     exit 2
   fi
 }
 
-QOUT="$(mktemp -t ft8281-rows.XXXXXXXX)"
-trap 'rm -f -- "$QOUT"' EXIT
-
 # --- positive control: prove the channel carries WARN markers at all ---------
-run_query control SOLEUR_CLAUDE_COST 5 "$QOUT"
+run_query control SOLEUR_CLAUDE_COST 5
 ctl="$(cat "$QOUT")"
 ctl_n="$(printf '%s\n' "$ctl" | decode_rows '.SOLEUR_CLAUDE_COST == true' '"row"' | grep -c . || true)"
 if ! numeric "$ctl_n" || [ "$ctl_n" -eq 0 ]; then
@@ -140,7 +142,7 @@ if ! numeric "$ctl_n" || [ "$ctl_n" -eq 0 ]; then
 fi
 
 # --- the assertion: a SCHEDULED outcome marker exists -----------------------
-run_query outcome SOLEUR_COMPOUND_PROMOTE_OUTCOME "$LIMIT" "$QOUT"
+run_query outcome SOLEUR_COMPOUND_PROMOTE_OUTCOME "$LIMIT"
 rows="$(cat "$QOUT")"
 sel='.SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote"'
 all_statuses="$(printf '%s\n' "$rows" | decode_rows "$sel" '"\(.trigger // "unset")\t\(.status // "unset")"' || true)"
