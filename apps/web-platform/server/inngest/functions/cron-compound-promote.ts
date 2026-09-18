@@ -28,7 +28,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
@@ -250,6 +250,17 @@ export interface CompoundPromoteOutcome {
   refusal_detail?: { cluster_hash: string; reason: string }[];
   /** Bytes of the corpus payload serialized into the Anthropic message. */
   corpus_input_bytes?: number;
+  /**
+   * Which trigger produced this run. BOTH triggers dispatch this same handler
+   * (`{ cron: "0 0 * * 0" }` and `{ event: "...manual-trigger" }` are registered
+   * on one function), so nothing downstream can tell them apart without this
+   * field — and the #8281 soak probe's whole claim is about the SCHEDULED path.
+   * Without it a manual fire during the soak window closes the tracker while
+   * the weekly path stays dark.
+   */
+  trigger?: "cron" | "manual";
+  /** Inngest run id — the join key to a Sentry event for the same run. */
+  run_id?: string;
 }
 
 /** Cap on `refusal_detail` entries so one pathological run cannot flood the sink. */
@@ -298,51 +309,135 @@ export type DiffPathVerdict =
  *     numstat-only derivation would have shipped a second bypass of the guard
  *     it was fixing.
  *
- * The structural check is the general answer to (2): `git apply --summary` is
- * EMPTY for a pure content edit and non-empty for create, delete, rename, copy
- * AND mode-change. Refusing any non-empty summary therefore covers shapes
- * nobody enumerated (a proposal making a markdown file executable is not an
- * edit), instead of enumerating rename and hoping that was the last one.
- * Creation is deliberately included: new skills are Phase 2 (#8293).
+ * An earlier revision of this guard answered (2) with `git apply --summary`,
+ * on the stated invariant that a non-empty summary means create/delete/rename/
+ * copy/mode-change and an EMPTY one means a pure content edit. **That invariant
+ * is false, and review measured it false.** `--summary` reports a rename only
+ * when the patch carries explicit `rename from` / `rename to` headers. For an
+ * IMPLICIT rename — a `diff --git a/X b/Y` whose `---` and `+++` name different
+ * files with no rename headers — `--summary` is EMPTY, `--numstat` reports only
+ * Y, and `git apply` still DELETES X. Measured (git 2.55.0):
+ *
+ *     --- a/plugins/soleur/skills/alpha/SKILL.md
+ *     +++ b/AGENTS.rules.md
+ *   → summary "", numstat "1\t0\tAGENTS.rules.md", apply rc 0,
+ *     status "AD plugins/soleur/skills/alpha/SKILL.md" — the source is GONE.
+ *
+ * That is the corpus-deleting shape the guard exists to refuse, and it passed.
+ * The previous test row only caught the rename because `git mv` emits the
+ * explicit headers; a model authoring a diff by hand is under no such
+ * obligation. So the derivation no longer asks git what a patch SAYS it will
+ * do — it applies the patch to a throwaway index and asks what it DID, which
+ * names both sides of every operation by construction.
+ *
+ * Creation is deliberately refused too: new skills are Phase 2 (#8293).
  */
 export async function checkDiffPaths(
   diff: string,
   repoRoot: string,
 ): Promise<DiffPathVerdict> {
-  const summary = await spawnGitCapture(["apply", "--summary"], repoRoot, diff);
-  if (summary.exitCode !== 0) {
-    return { ok: false, reason: "underivable", detail: "git apply --summary rejected the diff" };
-  }
-  const structural = summary.stdout.trim();
-  if (structural.length > 0) {
-    return { ok: false, reason: "structural-op", detail: structural.split("\n")[0] ?? "" };
-  }
-
-  const numstat = await spawnGitCapture(["apply", "--numstat", "-z"], repoRoot, diff);
-  if (numstat.exitCode !== 0) {
-    return { ok: false, reason: "underivable", detail: "git apply --numstat rejected the diff" };
-  }
-  // `--numstat -z` emits `added\tdeleted\0path\0` per file.
-  const paths = numstat.stdout
-    .split("\0")
-    .map((field) => {
-      const tab = field.lastIndexOf("\t");
-      return tab === -1 ? field : field.slice(tab + 1);
-    })
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0 && !/^\d+$/.test(p));
-
-  if (paths.length === 0) {
-    // An empty derived set must REFUSE. Reading it as "no forbidden paths" is
-    // the vacuous pass a header-less diff exploited.
-    return { ok: false, reason: "underivable", detail: "no paths derivable from diff" };
+  // A binary hunk is invisible to BOTH this guard's path derivation (it shows
+  // as an ordinary modify) and to `diffRemovesHardRule` (base85 payload lines
+  // never start with `-`), and the post-apply byte budget only catches GROWTH.
+  // Measured: a `GIT binary patch` replaced AGENTS.rules.md wholesale at rc 0
+  // with every gate green. These targets are Markdown; a binary patch to one
+  // is never an edit.
+  if (/^(GIT binary patch|literal \d+|delta \d+)$/m.test(diff)) {
+    return { ok: false, reason: "structural-op", detail: "binary patch" };
   }
 
-  const bad = paths.find((p) => !TARGET_ALLOW_RE.test(p));
-  if (bad !== undefined) {
-    return { ok: false, reason: "path-refused", detail: bad };
+  const indexFile = join(await mkdtemp(join(tmpdir(), "compound-idx-")), "index");
+  try {
+    const env = { GIT_INDEX_FILE: indexFile };
+    const read = await spawnGitCapture(["read-tree", "HEAD"], repoRoot, "", env);
+    if (read.exitCode !== 0) {
+      return { ok: false, reason: "underivable", detail: safeDetail(read.stderr) };
+    }
+    // `--cached` applies to the throwaway index only: a dry run that leaves the
+    // worktree untouched while producing git's own account of every path.
+    const applied = await spawnGitCapture(["apply", "--cached"], repoRoot, diff, env);
+    if (applied.exitCode !== 0) {
+      return { ok: false, reason: "underivable", detail: safeDetail(applied.stderr) };
+    }
+    const named = await spawnGitCapture(
+      ["diff-index", "--cached", "-z", "HEAD"],
+      repoRoot,
+      "",
+      env,
+    );
+    if (named.exitCode !== 0) {
+      return { ok: false, reason: "underivable", detail: safeDetail(named.stderr) };
+    }
+
+    // RAW format, not `--name-status`: records alternate
+    //   `:<srcmode> <dstmode> <srcsha> <dstsha> <status>` \0 `<path>` \0
+    // `--name-status` was the first attempt and it reports a mode-only change
+    // as plain `M`, so an all-`M` rule ACCEPTED chmod 644→755 — caught by the
+    // existing mode-change row. The raw form carries both modes, so the mode
+    // is checked rather than inferred from a status letter that cannot express
+    // it. A rename/copy emits `R100`/`C100` with TWO paths; a non-`M` status is
+    // refused before its arity matters, and any record we cannot parse is
+    // refused too, never dropped.
+    const fields = named.stdout.split("\0").filter((f) => f.length > 0);
+    if (fields.length === 0) {
+      // An empty derived set must REFUSE. Reading it as "no forbidden paths"
+      // is the vacuous pass a header-less diff exploited.
+      return { ok: false, reason: "underivable", detail: "diff changed nothing" };
+    }
+    const paths: string[] = [];
+    for (let i = 0; i < fields.length; i += 2) {
+      const meta = fields[i];
+      const path = fields[i + 1];
+      if (meta === undefined || path === undefined || !meta.startsWith(":")) {
+        return { ok: false, reason: "underivable", detail: "unparsable diff-index record" };
+      }
+      const parts = meta.slice(1).split(" ");
+      const [srcMode, dstMode, , , status] = parts;
+      if (parts.length !== 5 || srcMode === undefined || dstMode === undefined || !status) {
+        return { ok: false, reason: "underivable", detail: "unparsable diff-index record" };
+      }
+      if (status !== "M") {
+        // Create (A), delete (D), rename (R), copy (C) and type-change (T) all
+        // land here, named by the status git itself assigned. The implicit
+        // rename that defeated the `--summary` derivation surfaces here as a
+        // `D` record for the source alongside the `M` for the destination.
+        //
+        // EQUIVALENT-MUTANT NOTE, with the enumeration that makes it a claim
+        // rather than an excuse: disabling this branch does NOT redden the
+        // suite, because the mode comparison below already refuses every
+        // status this branch can currently see. Enumerated over what
+        // `diff-index` emits WITHOUT `-M`/`-C` (which we deliberately do not
+        // pass): A is `000000 => <mode>`, D is `<mode> => 000000`, T is
+        // e.g. `100644 => 120000` — all three have differing modes; R and C
+        // are unreachable without the rename/copy detection flags. So this is
+        // defence in depth against a future caller adding `-M`, not dead code,
+        // and it is deliberately kept unreachable-alone rather than removed.
+        // If `-M` is ever added here, this branch becomes load-bearing and
+        // needs its own must-REFUSE row.
+        return { ok: false, reason: "structural-op", detail: safeDetail(`${status} ${path}`) };
+      }
+      if (srcMode !== dstMode) {
+        return {
+          ok: false,
+          reason: "structural-op",
+          detail: safeDetail(`mode ${srcMode} => ${dstMode} ${path}`),
+        };
+      }
+      paths.push(path);
+    }
+
+    // No `.trim()`: a trailing-space filename is a DIFFERENT file, and trimming
+    // made the string we checked differ from the path git wrote. No digit
+    // filter either: it silently DROPPED an all-digit path so it was never
+    // allowlist-checked at all. Both were measured live.
+    const bad = paths.find((p) => !TARGET_ALLOW_RE.test(p));
+    if (bad !== undefined) {
+      return { ok: false, reason: "path-refused", detail: safeDetail(bad) };
+    }
+    return { ok: true, paths };
+  } finally {
+    await rm(dirname(indexFile), { recursive: true, force: true }).catch(() => {});
   }
-  return { ok: true, paths };
 }
 
 const BRANCH_SHAPE_RE =
@@ -456,22 +551,58 @@ function spawnGitCapture(
   args: string[],
   cwd: string,
   stdin: string,
-): Promise<{ exitCode: number | null; stdout: string }> {
+  extraEnv?: Record<string, string>,
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, { cwd, stdio: ["pipe", "pipe", "ignore"] });
+    // Strip every GIT_* key by PREFIX rather than by a hand-listed set. A
+    // `git` child honours an inherited GIT_DIR / GIT_INDEX_FILE over both its
+    // cwd and `-C`, so an unconstructed environment makes the derivation
+    // answer about a DIFFERENT repository than the one we are guarding
+    // (#7833). A name list is a claim about which variables git honours, and
+    // it is wrong the moment git adds one.
+    const env: Record<string, string> = { ...extraEnv };
+    for (const [k, v] of Object.entries(process.env)) {
+      if (!k.startsWith("GIT_") && v !== undefined) env[k] = v;
+    }
+    Object.assign(env, extraEnv ?? {});
+    env.GIT_CONFIG_NOSYSTEM = "1";
+    env.GIT_CONFIG_GLOBAL = "/dev/null";
+    const child = spawn("git", args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"] as const,
+      env: env as NodeJS.ProcessEnv,
+    });
     let stdout = "";
+    let stderr = "";
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       stdout += chunk;
     });
-    child.on("exit", (exitCode) => resolve({ exitCode, stdout }));
-    child.on("error", () => resolve({ exitCode: -1, stdout: "" }));
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      // Bounded: git's diagnostic is the diagnosis a refusal carries, but it
+      // is rendered from MODEL-SUPPLIED paths, so it is untrusted and capped.
+      if (stderr.length < 4096) stderr += chunk;
+    });
+    child.on("exit", (exitCode) => resolve({ exitCode, stdout, stderr }));
+    child.on("error", (err) => resolve({ exitCode: -1, stdout: "", stderr: String(err) }));
     child.stdin?.on("error", () => {
       // A diff large enough to trip EPIPE must not crash the handler; the
       // non-zero exit below is the refusal.
     });
     child.stdin?.end(stdin);
   });
+}
+
+/**
+ * Strip control characters and the Unicode line separators that survive
+ * `JSON.stringify`, then bound the length. Every `detail` we emit is rendered
+ * by git from a MODEL-SUPPLIED path, so it is attacker-influenced text on its
+ * way to a third-party log store.
+ */
+function safeDetail(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ").slice(0, 200);
 }
 
 async function setupEphemeralWorkspace(
@@ -580,7 +711,12 @@ async function applyDiffToWorkspace(
 export async function cronCompoundPromoteHandler({
   step,
   logger,
+  event,
+  runId,
 }: HandlerArgs): Promise<HandlerResult> {
+  // The manual-trigger route stamps `trigger` into the event data
+  // (server/routines/run-routine.ts); a scheduled cron fire carries none.
+  const trigger: "cron" | "manual" = event?.data?.trigger === undefined ? "cron" : "manual";
   let ephemeralRoot: string | null = null;
   let installationToken = "";
 
@@ -622,7 +758,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-disabled", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { status: "disabled" });
+      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "disabled" });
       return { ok: true, status: "disabled" };
     }
 
@@ -650,7 +786,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-dedup", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { status: "deduped" });
+      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "deduped" });
       return { ok: true, status: "deduped" };
     }
 
@@ -669,7 +805,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-week-cap", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { status: "week-cap-reached" });
+      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "week-cap-reached" });
       return { ok: true, status: "week-cap-reached" };
     }
 
@@ -729,7 +865,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-empty", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { status: "empty-corpus", corpus_count: 0 });
+      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "empty-corpus", corpus_count: 0 });
       return { ok: true, status: "empty-corpus" };
     }
 
@@ -803,7 +939,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, {
+      emitOutcomeMarker(logger, { trigger, run_id: runId,
         status: clusterResult.truncated ? "anthropic-truncated" : "no-qualifying-clusters",
         corpus_count: corpus.entries.length,
         clusters_proposed: clusterResult.clusters.length,
@@ -1016,7 +1152,7 @@ export async function cronCompoundPromoteHandler({
     }
 
     await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }));
-    emitOutcomeMarker(logger, {
+    emitOutcomeMarker(logger, { trigger, run_id: runId,
       status: "completed",
       corpus_count: corpus.entries.length,
       clusters_proposed: clusterResult.clusters.length,
@@ -1041,7 +1177,7 @@ export async function cronCompoundPromoteHandler({
     } catch {
       // best-effort
     }
-    emitOutcomeMarker(logger, { status: "error" });
+    emitOutcomeMarker(logger, { trigger, run_id: runId, status: "error" });
     return { ok: false, status: "error" };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot);

@@ -96,9 +96,13 @@ describe("Guard 1 — outcome-marker census", () => {
 
   it("mutation row 2: deleting a marker emit leaves its return UNCLASSIFIED", () => {
     const src = readFileSync(SRC_PATH, "utf-8");
+    // Anchored on the CALL VERB plus its distinguishing status, not on the
+    // full argument list: threading `trigger`/`run_id` through the emit sites
+    // made a full-argument-list anchor stale, and the `not.toBe(src)` landing
+    // assertion below is what caught that rather than reporting a false pass.
     const mutated = src.replace(
-      'emitOutcomeMarker(logger, { status: "disabled" });',
-      'noopMarker(logger, { status: "disabled" });',
+      /emitOutcomeMarker\(logger, \{([^}]*status: "disabled")/,
+      "noopMarker(logger, {$1",
     );
     expect(mutated).not.toBe(src);
     const c2 = censusTerminalReturns(mutated);

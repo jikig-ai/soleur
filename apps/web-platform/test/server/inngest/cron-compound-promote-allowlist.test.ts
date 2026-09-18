@@ -5,9 +5,17 @@
 // component, whatever it is — so `+++ x/...` and `+++ w/...` write files the
 // filter never saw, `badPath` is undefined, and the allowlist passes vacuously.
 //
-// Every fixture below is a real patch fed to the real `git apply`, so the
+// Most fixtures below are real patches fed to the real `git apply`, so the
 // assertions are about what git DOES, not about what a hand-written parser
-// believes. Rows 3, 6, 7, 8 and 10 are measured bypasses of the shipped filter.
+// believes. Rows 10 and 11 are hand-written on purpose: a git-GENERATED patch
+// cannot express them, and that is exactly why they went unnoticed.
+//
+// Which rows are measured bypasses of the SHIPPED filter: every refusal row
+// EXCEPT 3b. An earlier revision of this header said "rows 3, 6, 7, 8 and 10",
+// which was wrong three ways — row 3's canonical two-file diff emits
+// `+++ b/.github/...` and the old filter CAUGHT it (a control, not a bypass);
+// there was no row 10 at the time; and rows 1, 2, 4, 5 and 9 are bypasses that
+// went unlisted. Re-derived by replaying the old filter over each fixture.
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +26,10 @@ vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
 });
 
-import { checkDiffPaths } from "@/server/inngest/functions/cron-compound-promote";
+import {
+  checkDiffPaths,
+  TARGET_ALLOW_RE,
+} from "@/server/inngest/functions/cron-compound-promote";
 import { gitFixture } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 let repoRoot: string;
@@ -26,14 +37,28 @@ let git: (args: string[]) => string;
 
 const SKILL_A = "plugins/soleur/skills/alpha/SKILL.md";
 const SKILL_B = "plugins/soleur/skills/beta/SKILL.md";
+// A HYPHENATED skill dir. 77 of the repo's 99 real skill directories contain a
+// character outside [a-z]; every earlier fixture used `alpha`, so narrowing
+// TARGET_ALLOW_RE to `[a-z]+` silently refused 78% of the guard's real targets
+// with the whole suite green.
+const SKILL_HYPHEN = "plugins/soleur/skills/agent-browser/SKILL.md";
+// A pre-existing NON-allowlisted file. Row 3 used to create `.github/workflows/
+// evil.yml`, which git reports as a CREATION — so it was refused at the
+// structural gate and never reached the allowlist loop at all. That left the
+// loop only ever driven with a one-element array, and `paths.find(...)` →
+// `[paths[0]].find(...)` survived the whole suite.
+const OUTSIDE = "README.md";
 
 beforeAll(() => {
   repoRoot = mkdtempSync(join(tmpdir(), "compound-allowlist-"));
   git = gitFixture(repoRoot);
   git(["init", "-q", "."]);
   writeFileSync(join(repoRoot, "AGENTS.rules.md"), "rules\nsecond line\n");
+  writeFileSync(join(repoRoot, OUTSIDE), "readme\nbody\n");
   mkdirSync(join(repoRoot, "plugins/soleur/skills/alpha"), { recursive: true });
   writeFileSync(join(repoRoot, SKILL_A), "skill alpha\nbody\n");
+  mkdirSync(join(repoRoot, "plugins/soleur/skills/agent-browser"), { recursive: true });
+  writeFileSync(join(repoRoot, SKILL_HYPHEN), "skill hyphen\nbody\n");
   git(["add", "-A"]);
   git(["commit", "-qm", "init"]);
 });
@@ -97,14 +122,36 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
     if (!verdict.ok) expect(verdict.reason).toBe("underivable");
   });
 
-  it("row 3: two-file diff, first allowed and second forbidden, is REFUSED", async () => {
+  it("row 3: two EDITS, first allowed and second forbidden, is REFUSED at the ALLOWLIST", async () => {
+    // Both files pre-exist, so both records are `M` and the verdict must come
+    // from TARGET_ALLOW_RE rather than from the structural gate. This is the
+    // only row that drives the allowlist loop with more than one element —
+    // without it, checking just `paths[0]` passes the whole suite.
     const diff = patchFor(() => {
       writeFileSync(join(repoRoot, "AGENTS.rules.md"), "rules\nsecond line\nok\n");
+      writeFileSync(join(repoRoot, OUTSIDE), "readme\nbody\nedited\n");
+    });
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(false);
+    // Assert the REASON and the offending path, not just `ok === false`: a
+    // failure that does not say which gate moved is a failure you cannot act on.
+    if (!verdict.ok) {
+      expect(verdict.reason).toBe("path-refused");
+      expect(verdict.detail).toBe(OUTSIDE);
+    }
+  });
+
+  it("row 3b: a CREATED forbidden file alongside an allowed edit is REFUSED", async () => {
+    // The shape row 3 used to have. Kept, because it is a real bypass of the
+    // SHIPPED filter — it just refuses structurally, not at the allowlist.
+    const diff = patchFor(() => {
+      writeFileSync(join(repoRoot, "AGENTS.rules.md"), "rules\nsecond line\nok2\n");
       mkdirSync(join(repoRoot, ".github/workflows"), { recursive: true });
       writeFileSync(join(repoRoot, ".github/workflows/evil.yml"), "on: push\n");
     });
     const verdict = await checkDiffPaths(diff, repoRoot);
     expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("structural-op");
   });
 
   it("row 4: renaming AGENTS.rules.md into an allowlisted SKILL.md path is REFUSED", async () => {
@@ -173,5 +220,126 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
     const verdict = await checkDiffPaths("", repoRoot);
     expect(verdict.ok).toBe(false);
     if (!verdict.ok) expect(verdict.reason).toBe("underivable");
+  });
+
+  it("row 10: an IMPLICIT rename (no rename headers) is REFUSED and the source survives", async () => {
+    // The bypass that falsified the previous design. `git apply --summary` is
+    // EMPTY for this shape and `--numstat` reports ONLY the destination, so a
+    // summary+numstat derivation returned {ok:true, paths:["AGENTS.rules.md"]}
+    // while the apply DELETED the source. Hand-written on purpose: row 4 uses
+    // `git mv`, which emits `rename from`/`rename to`, and those headers are
+    // the only reason row 4 ever caught anything. A model authoring a diff is
+    // under no obligation to emit them.
+    const diff = [
+      `diff --git a/${SKILL_A} b/AGENTS.rules.md`,
+      `--- a/${SKILL_A}`,
+      "+++ b/AGENTS.rules.md",
+      "@@ -1,2 +1,3 @@",
+      " skill alpha",
+      " body",
+      "+- [id: hr-attacker-controlled-rule]",
+      "",
+    ].join("\n");
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("structural-op");
+    // The property, not the proxy: the source file is still on disk.
+    expect(existsSync(join(repoRoot, SKILL_A))).toBe(true);
+  });
+
+  it("row 11: a GIT binary patch on an allowlisted path is REFUSED", async () => {
+    // Measured: a binary hunk yields an EMPTY --summary, derives as a plain
+    // `M` on an allowlisted path, and carries no `-` lines at all — so it also
+    // makes diffRemovesHardRule vacuous. The post-apply byte budget only
+    // catches GROWTH, so a wholesale shrink of the corpus passed every gate.
+    const diff = [
+      "diff --git a/AGENTS.rules.md b/AGENTS.rules.md",
+      "index 8baef1b..b3f1c2d 100644",
+      "GIT binary patch",
+      "literal 5",
+      "McmWFt_ha}E00i0r^#A|>",
+      "",
+      "literal 0",
+      "HcmV?d00001",
+      "",
+    ].join("\n");
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("structural-op");
+  });
+
+  // -- allowlist SHAPE: pins TARGET_ALLOW_RE itself ---------------------------
+  // Nothing pinned the regex before. Six independent mutations of it — dropping
+  // `0-9_-`, dropping either anchor, widening to `.+`, adding /i, dropping the
+  // dot escapes — each survived all eleven rows, because every fixture used the
+  // single skill dir `alpha` and no row ever exercised a near-miss path.
+
+  it("row 12 (must-PASS): a hyphenated skill directory is allowed", async () => {
+    const diff = patchFor(() =>
+      writeFileSync(join(repoRoot, SKILL_HYPHEN), "skill hyphen\nbody\nmore\n"),
+    );
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(true);
+    if (verdict.ok) expect(verdict.paths).toEqual([SKILL_HYPHEN]);
+  });
+
+  it("row 13: near-miss paths are all REFUSED by the allowlist regex", () => {
+    // Driven against the regex directly: these are paths the fixture repo does
+    // not contain, and the point is the predicate, not git's behaviour.
+    for (const good of [
+      "AGENTS.rules.md",
+      "plugins/soleur/skills/alpha/SKILL.md",
+      "plugins/soleur/skills/agent-browser/SKILL.md",
+      "plugins/soleur/skills/cf_token_scope/SKILL.md",
+      "plugins/soleur/skills/seo-aeo-2/SKILL.md",
+    ]) {
+      expect(TARGET_ALLOW_RE.test(good)).toBe(true);
+    }
+    for (const bad of [
+      "AGENTS.rules.md.bak",
+      "AGENTS.rules.mdx",
+      "x/AGENTS.rules.md",
+      "AGENTSxrulesxmd",
+      "agents.rules.md",
+      "plugins/soleur/skills/a/b/SKILL.md",
+      "plugins/soleur/skills/alpha/SKILL.md.bak",
+      "plugins/soleur/skills/alpha/NOTICE",
+      "plugins/soleur/skills//SKILL.md",
+      ".github/workflows/deploy.yml",
+    ]) {
+      expect(TARGET_ALLOW_RE.test(bad)).toBe(false);
+    }
+  });
+
+  // -- over-aggression controls: the guard must not refuse LEGITIMATE edits ---
+  // Row 0b was the only detector of an over-aggressive guard, and it only fires
+  // on mutations that correlate with size. Every over-aggression orthogonal to
+  // size — refusing a no-newline-at-EOF marker, refusing CRLF, refusing a
+  // second hunk within one file — stayed green.
+
+  it("row 14 (must-PASS): an edit with no trailing newline is allowed", async () => {
+    const diff = patchFor(() =>
+      writeFileSync(join(repoRoot, "AGENTS.rules.md"), "rules\nsecond line\nno-eol"),
+    );
+    expect(diff).toContain("\\ No newline at end of file");
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(true);
+  });
+
+  it("row 15 (must-PASS): a two-hunk edit of a SINGLE file is allowed", async () => {
+    const many = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+    git(["rm", "-q", "--cached", "AGENTS.rules.md"]);
+    writeFileSync(join(repoRoot, "AGENTS.rules.md"), `${many}\n`);
+    git(["add", "-A"]);
+    git(["commit", "-qm", "widen"]);
+    const lines = many.split("\n");
+    lines[1] = "line 1 EDITED";
+    lines[38] = "line 38 EDITED";
+    const diff = patchFor(() =>
+      writeFileSync(join(repoRoot, "AGENTS.rules.md"), `${lines.join("\n")}\n`),
+    );
+    expect((diff.match(/^@@ /gm) ?? []).length).toBe(2);
+    const verdict = await checkDiffPaths(diff, repoRoot);
+    expect(verdict.ok).toBe(true);
   });
 });
