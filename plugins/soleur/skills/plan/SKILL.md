@@ -910,7 +910,7 @@ universal-negative claims, verification commands that cannot fail) apply to
 ANY plan, so the load is not conditional on the plan's shape. It sits here, at
 the end of the run, deliberately: the Read tool pages it in three ~25k-token
 pages, and a block loaded at turn k is re-sent on every turn after k — loading
-it last is what keeps it off every earlier turn (ADR-225 records the ledger).
+it last is what keeps it off every earlier turn (ADR-229 records the ledger).
 Read all three pages; the paging notice on page 1 is not the catalogue. **If
 the file is not present, STOP and report that the plugin install is
 incomplete**: a silently-absent catalogue is the ADR-151 failure mode this repo

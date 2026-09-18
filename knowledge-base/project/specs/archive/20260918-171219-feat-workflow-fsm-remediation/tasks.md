@@ -10,7 +10,7 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
 
 - [x] 1.1 Re-read the plan's `## Plan Review Revisions` before starting — R1–R11
       are the difference between v1 and v2
-- [x] 1.2 Confirm ADR-225 is still free across all remote refs
+- [x] 1.2 Confirm ADR-229 is still free across all remote refs
       (`git for-each-ref refs/remotes/origin` + `git ls-tree`, not `origin/main`)
 - [x] 1.3 Capture pre-change byte sizes of the four lifecycle `SKILL.md` files
       (needed to seed ceilings with headroom, and as the AC12 diff base)
@@ -103,7 +103,7 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
 ## Phase 7: Records
 
 - [x] 7.1 Wrote
-      `ADR-225-workflow-fsm-single-source-and-offline-classification.md` (final
+      `ADR-229-workflow-fsm-single-source-and-offline-classification.md` (final
       filename differs from the plan's provisional one) covering four decisions:
       bundled const, separated transition functions, offline classification, and
       the merge-base ratchet placement.
@@ -114,7 +114,7 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
 - [~] 7.3 **STRUCK at review.** The sweeper runs on a hosted runner against a
       fresh checkout where the gitignored invocation log cannot exist; a
       synthetic fresh checkout measured FAIL on every sweep. The probe is
-      operator-run; ADR-225 and the probe header record why. No directive.
+      operator-run; ADR-229 and the probe header record why. No directive.
 - [ ] 7.4 Verify AC18–AC20
 
 ## Phase 8: Exit
@@ -124,3 +124,5 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
 - [ ] 8.3 Re-verify the ADR-225 ordinal against freshly-fetched refs; sweep
       plan, tasks and every AC if it moved
 - [ ] 8.4 `/soleur:review` → `/soleur:compound` → `/soleur:ship`
+
+> **Superseded 2026-09-18 (#8301, at ship):** the ordinal claims above were made about ADR-225. PR #8248 landed its own ADR-225 on main while this PR was in the merge queue, so this plan's ADR shipped as **ADR-229**; pointers in this document were updated to the new filename, the ordinal claims were left as written.

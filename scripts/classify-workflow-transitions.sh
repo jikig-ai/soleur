@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Report workflow transitions that the declared edge set does not permit.
 #
-# WHY THIS IS OFFLINE AND NOT A HOOK (#8302, ADR-225).
+# WHY THIS IS OFFLINE AND NOT A HOOK (#8302, ADR-229).
 # The plan originally specified a record-mode PreToolUse hook on the Skill
 # matcher. Plan review cut it on two independent grounds:
 #
@@ -64,7 +64,7 @@ command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required (install jq, or r
 # worse than a missing one.
 if [[ ! -r "$VIEW" ]]; then
   echo "FATAL: declared transition view not readable at $VIEW" >&2
-  echo "       The view is repo tooling, not part of the shipped plugin (ADR-225): this probe" >&2
+  echo "       The view is repo tooling, not part of the shipped plugin (ADR-229): this probe" >&2
   echo "       runs only in a soleur source checkout. On such a checkout, restore it from git." >&2
   exit 2
 fi

@@ -156,7 +156,7 @@ export function mandatorySuccessors(skill: string): readonly string[] {
  * read returns nothing on a customer install — and `mandatorySuccessors()` would
  * then silently emit no next-step directive at all. The JSON is a derived view
  * kept honest by a parity test; the same reasoning already produced the bundled
- * web copy at `apps/web-platform/server/phase-surface-map.ts`. See ADR-225.
+ * web copy at `apps/web-platform/server/phase-surface-map.ts`. See ADR-229.
  */
 export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
   brainstorm: ["plan", "one-shot"],

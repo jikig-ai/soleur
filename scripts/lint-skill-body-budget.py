@@ -222,7 +222,7 @@ def main() -> int:
             errors.append(
                 f"{node}: {skill} is {size} bytes, ceiling is {ceiling} "
                 f"({size - ceiling} over). Trim the body, or extract a block into references/ "
-                f"behind a load directive gated on a named step (ADR-225 records that an "
+                f"behind a load directive gated on a named step (ADR-229 records that an "
                 f"unconditional extraction saves bytes only per-turn, not per-invocation)."
             )
 

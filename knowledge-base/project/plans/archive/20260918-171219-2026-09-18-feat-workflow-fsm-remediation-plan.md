@@ -202,7 +202,7 @@ Run on demand; no new hook, no `settings.json` entry, no PreToolUse surface.
 It must apply the same canonicalisation as A1 — the invocation log has the same
 per-root fragmentation as the incident log.
 
-**Phase A4 — ADR-225.** The substantive decision is the packaging boundary:
+**Phase A4 — ADR-229.** The substantive decision is the packaging boundary:
 the canonical edge set is a bundled TS const because the plugin does not ship
 `.claude/`; the JSON is a derived view kept honest by a parity test; and
 classification is offline because `PreToolUse` cannot deny here (ADR-070) and a
@@ -216,7 +216,7 @@ character count, 58%) into
 directive. Text moves verbatim. *Revised at review:* the directive is
 unconditional and placed as the last step before Plan Review, not conditional
 on a phase — the catalogue is plan-hygiene that applies to every plan, and the
-saving is per-turn (late load), not per-invocation; see ADR-225 Consequences
+saving is per-turn (late load), not per-invocation; see ADR-229 Consequences
 and decision-challenges §3.
 
 **Phase B2 — Byte ratchet.** One ceiling per lifecycle `SKILL.md`, asserted
@@ -254,8 +254,8 @@ reddening on 94 unrelated files.
 - `scripts/classify-workflow-transitions.sh` — offline classifier (A3)
 - `plugins/soleur/test/skill-body-budget.json` — seeded ceilings
 - `plugins/soleur/skills/plan/references/plan-sharp-edges.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-225-workflow-fsm-single-source-of-truth.md`
-- ~~`scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`~~ (created, then deleted at review — see ADR-225 Consequences)
+- `knowledge-base/engineering/architecture/decisions/ADR-229-workflow-fsm-single-source-of-truth.md`
+- ~~`scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`~~ (created, then deleted at review — see ADR-229 Consequences)
 
 ## User-Brand Impact
 
@@ -369,7 +369,7 @@ failure_modes:
     alert_route: CI red (bun shard)
   - mode: the transition probe runs where the log cannot exist (hosted sweeper, fresh checkout)
     detection: measured at review — FAIL on every sweep; the probe is operator-run and NOT enrolled
-    alert_route: none by design; ADR-225 Alternatives table records why
+    alert_route: none by design; ADR-229 Alternatives table records why
 logs:
   where: .claude/.rule-incidents.jsonl and .claude/.skill-invocations.jsonl (gitignored, 0600, machine-local)
   retention: rotated to *.gz; both live and rotated files are read
@@ -385,7 +385,7 @@ token `bash` is on the Check 10 `PROBE_VERB_ALLOWLIST`.
 
 ### ADR
 
-**Create ADR-225 — "Workflow FSM: the edge set is a bundled const, and
+**Create ADR-229 — "Workflow FSM: the edge set is a bundled const, and
 classification is offline."** Three decisions:
 
 1. **The canonical edge set is a TypeScript const inside `plugins/soleur/lib/`.**
@@ -512,7 +512,7 @@ Skipped — no persistent store, no new cross-component connection.
       captured CI output from Guard 2 row 1, naming one file and one number.
 - [ ] **AC17** — Deleting the ceiling file reddens (Guard 2 row 4).
 - [ ] **AC18** — `bash plugins/soleur/test/c4-count-parity.test.sh` passes.
-- [ ] **AC19** — `ADR-225-*.md` exists; ordinal re-verified across all `origin/*`
+- [ ] **AC19** — `ADR-229-*.md` exists; ordinal re-verified across all `origin/*`
       refs immediately before merge.
 - ~~[ ] **AC20** — the follow-through probe~~ Struck at review: the probe could
       not PASS where the sweeper runs and, operator-run, was a wrapper around
@@ -551,7 +551,7 @@ Written as `mutation → guard reddens`.
 | Extraction drops or substitutes text | AC12 exact diff against the git base, not a byte sum |
 | Ratchet silently fail-open in CI | Guard 2 row 7 + AC15: base-unavailable is a hard RED; job pinned to `fetch-depth: 0` |
 | Ratchet becomes the 15th budget bump | Merge-base anchor + 10% headroom seeding |
-| Plugin-tree runtime read of `.claude/` | AC8 asserts no such read; ADR-225 decision 1 records why |
+| Plugin-tree runtime read of `.claude/` | AC8 asserts no such read; ADR-229 decision 1 records why |
 | Back-edge leaks into prompt text | AC7 keeps `mandatorySuccessors()` forward-only |
 | Multi-root read inflates the denominator | AC2 distinct-inode assertion; AC4 pins element 0 |
 | ADR-225 ordinal collides mid-pipeline | Verified across 90 refs; re-verified at ship with a full artifact sweep |
@@ -610,4 +610,6 @@ post-extraction reachability of the 120,000-byte target.
 | SKILL.md body-weight growth report | #8305 | After the ratchet lands |
 | Emission coverage beyond 19 of 98 | — | Needs a mechanism that sticks; prose sourcing demonstrably does not (C5) |
 | Extraction of `work` / `review` bodies | — | After a measured base rate for whether agents follow reference directives |
-| A blocking transition gate | ADR-225 | Only if ADR-070's two-tier rule changes |
+| A blocking transition gate | ADR-229 | Only if ADR-070's two-tier rule changes |
+
+> **Superseded 2026-09-18 (#8301, at ship):** the ordinal claims above were made about ADR-225. PR #8248 landed its own ADR-225 on main while this PR was in the merge queue, so this plan's ADR shipped as **ADR-229**; pointers in this document were updated to the new filename, the ordinal claims were left as written.

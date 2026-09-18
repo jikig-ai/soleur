@@ -498,7 +498,7 @@ jobs:
           BASE="$(git merge-base origin/main HEAD)"
           python3 scripts/lint-rule-bodies.py --check --base "$BASE"
       # Per-file byte ceiling for lifecycle SKILL.md bodies, anchored to the same
-      # MERGE BASE (#8302, ADR-225). A STEP in this job rather than its own job,
+      # MERGE BASE (#8302, ADR-229). A STEP in this job rather than its own job,
       # for two reasons that compose: (a) this job already provides the depth-0
       # base the ratchet needs -- the `bun` job beside SKILL_DESCRIPTION_WORD_BUDGET
       # declares no fetch-depth, so at depth 1 origin/main is not a ref and any
@@ -509,7 +509,7 @@ jobs:
       # until someone pinned it, which is the state ADR-116 records as permanent
       # (advisory→blocking promotion has never once happened in this repo). Base-unavailable
       # is a hard failure inside the lint, never a skip.
-      - name: Lifecycle SKILL.md byte ratchet (#8302, ADR-225)
+      - name: Lifecycle SKILL.md byte ratchet (#8302, ADR-229)
         run: |
           BASE="$(git merge-base origin/main HEAD)"
           python3 scripts/lint-skill-body-budget.py --base "$BASE"

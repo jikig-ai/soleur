@@ -119,7 +119,7 @@ nothing that can refuse an action.
   directive for `plan` must be **conditional**, matching the 7 gated directives
   in the repo rather than the 5 unconditional ones. *Superseded at review:* the
   catalogue is plan-hygiene that applies to every plan; the directive is
-  unconditional, placed last, and the saving is per-turn — ADR-225 Consequences
+  unconditional, placed last, and the saving is per-turn — ADR-229 Consequences
   and decision-challenges §3.
 - **FR10** — Per-file SKILL.md byte ceiling, **monotonically non-increasing**,
   enforced in CI.
@@ -150,7 +150,7 @@ nothing that can refuse an action.
 
 - [ ] An aggregator run from any worktree reports the same row count as a run
       from the shared checkout.
-- ~~[ ] `rule-metrics.json` regenerates on a cadence without manual dispatch.~~ Struck with FR2: #6042 removed the schedule deliberately (fresh checkouts clobber the local aggregate); ADR-225 Alternatives.
+- ~~[ ] `rule-metrics.json` regenerates on a cadence without manual dispatch.~~ Struck with FR2: #6042 removed the schedule deliberately (fresh checkouts clobber the local aggregate); ADR-229 Alternatives.
 - [ ] One declarative artifact holds both nodes and edges; a test fails if the
       TS view drifts from it.
 - [ ] `review→work`, `ship→work`, `work→plan` are declared and covered by tests.
@@ -159,7 +159,7 @@ nothing that can refuse an action.
       gate was cut; classification is offline — FR7′).
 - [ ] CI fails on a SKILL.md exceeding its pinned ceiling, demonstrated red.
 - ~~[ ] A pinned calendar date for the block/no-block decision is recorded.~~
-      Struck: ADR-225 defers the block/no-block question to measurement, not to a
+      Struck: ADR-229 defers the block/no-block question to measurement, not to a
       date; the Deferred table on this page says the same.
 - [ ] No rule was pruned.
 
@@ -168,7 +168,7 @@ nothing that can refuse an action.
 | Item | Why | Re-evaluation trigger |
 |---|---|---|
 | Sub-phase grammar normalization + loader | 4+ grammars; `plan` has zero `Phase` headings. Week+ migration, orthogonal to the FSM | After Track A/B land |
-| Block-mode gate | ADR-070 two-tier rule; 16/98 coverage would false-deny `/go` | The gate was cut (FR7′); reconsider only from the classifier's measurement, per ADR-225 Consequences — there is no pinned date |
+| Block-mode gate | ADR-070 two-tier rule; 16/98 coverage would false-deny `/go` | The gate was cut (FR7′); reconsider only from the classifier's measurement, per ADR-229 Consequences — there is no pinned date |
 | `postmerge→work` back-edge | Redundant with `ship→work` | If a real case appears |
 | Phase-surface coverage beyond the lifecycle chain | YAGNI | — |
 | Linear preflight regex false-positives on `ADR-NNN` | `[A-Z]{2,}-[0-9]+` matches every ADR citation | Own issue |

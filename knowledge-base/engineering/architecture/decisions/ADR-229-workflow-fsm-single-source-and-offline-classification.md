@@ -1,4 +1,4 @@
-# ADR-225: The workflow edge set is a bundled const, and classification is offline
+# ADR-229: The workflow edge set is a bundled const, and classification is offline
 
 - **Date:** 2026-09-18
 

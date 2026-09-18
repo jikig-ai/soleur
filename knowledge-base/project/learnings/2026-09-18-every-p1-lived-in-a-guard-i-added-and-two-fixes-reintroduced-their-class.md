@@ -88,7 +88,7 @@ enumeration was how a worktree *reached* it. Restored, with the measured reason.
 `decision-challenges.md`.** The plan sold the extraction as "~150 KB / ~37k
 tokens off every plan invocation"; the operator chose it on that basis. Neither
 reversing it silently nor `AskUserQuestion` was right — the extraction stands as
-chosen, ADR-225 carries the honest ledger, and §3 of decision-challenges hands
+chosen, ADR-229 carries the honest ledger, and §3 of decision-challenges hands
 the operator the numbers and three options for ship to render.
 
 **The CONCUR gate caught my own too-broad tracker search.** An OR-joined query
@@ -137,15 +137,15 @@ input reaches more than the one site you were looking at.
 13. **`git rm` removed a now-empty directory**; the next heredoc had nowhere to write. Recovery: `mkdir -p`. **Prevention:** one-off.
 14. **`cd /tmp` reset the shell cwd** out of the worktree twice. Recovery: absolute paths. **Prevention:** never `cd` to a scratch dir in a compound command; use `(cd … && …)` subshells.
 15. **Prose-patch anchor mismatch** with an atomic per-file write meant nothing landed on the first run. Recovery: fixed the anchor, re-ran from the failing section. **Prevention:** one-off; per-file atomic writes are the right shape (a partial file would be worse).
-16. **The extraction's economics were false** (my plan's premise). Recovery: ADR-225 ledger + decision-challenges §3. **Prevention:** a cost claim in a plan needs its unit stated (per invocation vs per turn) and one measurement with the harness's own token counter, not bytes/4.
+16. **The extraction's economics were false** (my plan's premise). Recovery: ADR-229 ledger + decision-challenges §3. **Prevention:** a cost claim in a plan needs its unit stated (per invocation vs per turn) and one measurement with the harness's own token counter, not bytes/4.
 17. **Leftover "Skip it for…" paragraph** from the first directive draft. Recovery: deleted. **Prevention:** when rewriting a block, span to the next heading, not to the last line you remember writing.
-18. **The follow-through probe could not PASS on the hosted sweeper** (gitignored local log; measured FAIL in a synthetic fresh checkout) — the #6042 locality error ADR-225 itself cites. Recovery: not enrolled; then deleted at simplification as a wrapper around `classify --summary`. **Prevention:** before scaffolding a probe, run it in `git archive HEAD | tar -x` to a fresh dir; if the input cannot exist there, the sweeper cannot run it.
+18. **The follow-through probe could not PASS on the hosted sweeper** (gitignored local log; measured FAIL in a synthetic fresh checkout) — the #6042 locality error ADR-229 itself cites. Recovery: not enrolled; then deleted at simplification as a wrapper around `classify --summary`. **Prevention:** before scaffolding a probe, run it in `git archive HEAD | tar -x` to a fresh dir; if the input cannot exist there, the sweeper cannot run it.
 19. **OR-joined tracker search** reported "no tracker". Recovery: the CONCUR gate found #7928 §1. **Prevention:** search two distinguishing nouns AND-joined, then widen; routed to review SKILL.md.
 20. **A simplification recommendation applied without running it** ("one root") returned NULL READING from the worktree. Recovery: restored the enumeration with the measured reason. **Prevention:** run the SUT from the context it will run in (a worktree) after every deletion a reviewer prescribes; routed to review SKILL.md.
 21. **Pre-commit full battery reaped twice** by the memory reaper (35 min the second time) — the `bun-test` lefthook glob runs `scripts/test-all.sh` on any `.ts` change. Recovery: `LEFTHOOK=0` with every hook lint replayed by hand and listed in the commit body. **Prevention:** recurring and infra-scoped; the glob is a scope decision (a full gate per `.ts` commit) that a reviewer should weigh, not a compound side-edit — noted, not filed (net-issue-flow).
 22. **Real-looking identity in a fixture row and a comment** (`jean@…`). Recovery: scrubbed to `user@example.com`; caught only by the replayed `lint-fixture-content` (`cq-test-fixtures-synthesized-only`). **Prevention:** the hook exists; the slip was writing an "example" that named the operator.
 23. **Two pre-existing infra-lint hits in `plan/SKILL.md`** surfaced because the file was staged for the first time since the lint landed (8 more left with the extracted block). Recovery: wrapped in the linter's ignore region. **Prevention:** a hook scoped to staged files does not see a pre-existing violation until someone touches the file; expect it on any large SKILL.md edit.
-24. **ADR-225 ordinal collides three ways** with open PRs #8248 and #8082. Recovery: none yet — ship's task 8.3 re-verifies against fetched refs. **Prevention:** a branch-picked ordinal is provisional (existing rule); expect a rename at ship.
+24. **ADR-225 ordinal collided three ways** with open PRs #8248 and #8082 while this PR was in review. Recovery: PR #8248 landed its ADR-225 on main during this PR's merge queue (three syncs in), so the ADR was renumbered to ADR-229 at ship — sweep scoped to `git diff --name-only origin/main...HEAD`, lines citing main's ADR-225 excluded, and the four sentences that were CLAIMS about the ordinal (not pointers) reverted with a superseded note rather than rewritten. Prevention: a branch-picked ordinal is provisional until merge; re-run `scripts/check-adr-ordinals.sh` after every BEHIND/DIRTY sync, not once at ship start.
 25. **`git stash list` tripped the no-stash hook** in a baseline check. Recovery: dropped the call. **Prevention:** one-off; the hook is right.
 26. **Wrong path guessed for `proc.sh`.** Recovery: `ps` with a bounded filter. **Prevention:** one-off.
 
@@ -154,4 +154,4 @@ input reaches more than the one site you were looking at.
 - `knowledge-base/project/learnings/2026-09-04-every-fix-reintroduced-the-class-it-was-fixing.md` — the class this round hit twice more.
 - `knowledge-base/project/learnings/2026-09-03-the-deviation-ledger-was-an-hour-of-my-own-test-fixtures.md` — lints before the panel; disjoint instrument yields.
 - `knowledge-base/project/learnings/2026-09-18-re-verifying-a-stale-audit-and-six-measurement-errors-of-my-own.md` — the audit whose mechanism claim this round refuted (its own seventh error, appended there).
-- ADR-225 — the honest ledger for the extraction and the classifier's reading.
+- ADR-229 — the honest ledger for the extraction and the classifier's reading.

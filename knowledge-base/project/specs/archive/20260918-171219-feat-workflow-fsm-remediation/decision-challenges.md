@@ -64,7 +64,7 @@ plausibly large and unmeasured.
 
 **What was done.** The extraction stands as you chose it; the directive is now
 unconditional and placed as the final step before Plan Review (which is also
-where a verification pass belongs), and ADR-225 records the honest ledger.
+where a verification pass belongs), and ADR-229 records the honest ledger.
 
 **Your call.** Keep it (the per-turn argument is the reason), revert it (the
 per-invocation claim was false), or ask for the per-turn saving to be measured
