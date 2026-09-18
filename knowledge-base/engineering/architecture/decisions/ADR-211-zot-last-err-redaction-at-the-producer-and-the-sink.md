@@ -12,8 +12,11 @@ related_issues: [7500, 7444, 7440, 7272, 7530, 7055, 7960]
 ## Status
 
 - **Status:** Adopting — the SINK half (Layer 2) is in force at merge; the PRODUCER half
-  (Layer 1) is inert until the next `registry-host-replace` (ADR-096: the host is
-  cloud-init-only). It flips to Accepted when the follow-through at #7960 reads a redacted
+  (Layer 1) was inert until a `registry-host-replace` fired (ADR-096: the host is
+  cloud-init-only). **[Corrected 2026-09-18 (#7960): a replace DID fire on 2026-09-17, so Layer 1
+  is believed delivered — 272 tier-4 rows on the new boot, 0 carrying header structure — and is
+  NOT PROVABLE until `err_redact_rev` lands. "Inert" was true at adoption and is false now; the
+  honest reading is believed-delivered-unprovable, not delivered.]** It flips to Accepted when the follow-through at #7960 reads a redacted
   sample back out of the warehouse. **[CORRECTED at review — this shipped as `Accepted`, which
   the plan and `tasks.md` both explicitly forbade for exactly this reason. `status:` is the
   most machine-readable in-force signal in the corpus, so asserting it early is the same
@@ -136,9 +139,19 @@ convergence primitive (the private-NIC guard). Measured 2026-09-18 on the host r
 trusted region (right after `zot_last_err_src=`, ahead of the free-text `zot_last_err=` tail).
 
 - **Contract.** An integer revision of the `zot_last_err` redaction gate (the tier gate plus per-line
-  `redact()`). Any value ≥ 1 means that gate is present. Bump it when the gate changes; never
-  decrement or reuse a value; never keep the token while removing the gate. It is a literal, not a
-  `$VAR`, because the heartbeat runs `set -u`.
+  `redact()`). **What is actually consumed today is PRESENCE, not order:** every reader tests
+  `err_redact_rev=[1-9][0-9]*` and nothing compares the value to anything, so `≥ 1` means "the
+  Phase-B gate is present" and that is the whole of the enforced contract. The value is reserved
+  for ordering: bump it when the gate changes, never decrement or reuse, never keep the token
+  while removing the gate — but that reservation has **no consumer and no tripwire**, so a future
+  probe that keys on `rev >= 2` MUST land its own gate-hash → revision tripwire in the same change,
+  or it will read `rev=1` from a host already running the newer gate and sit at CANNOT ESTABLISH
+  forever. (A hash tripwire was considered and cut here: with no value comparison there is nothing
+  for it to protect.) It is a literal, not a `$VAR`, because the heartbeat runs `set -u` — a missing
+  assignment would kill the row before `LINE` is built, taking all 26 other telemetry fields dark.
+- **Accretion trigger.** This is the SECOND feature-scoped delivery token on this row after
+  `SOLEUR_ZOT_LOG_BOOT` (#7444). A THIRD is the signal to stop adding per-feature tokens and
+  generalize to one monotonic `cloudinit_rev` that every future probe can read.
 - **Authoritative verdicts need proof, never drift.** The probe exits 0 (closes the tracker) or 1
   (public FAIL) only when a row on the newest real boot carries `err_redact_rev` ≥ 1 — or a tier-4
   `suppressed` row, kept as secondary corroboration — read from the trusted region of an
@@ -148,8 +161,13 @@ trusted region (right after `zot_last_err_src=`, ahead of the free-text `zot_las
 - **The leak grade is structure.** Field-keyed proof makes exit 1 reachable on an ordinary delivered
   host, so the grade no longer fires on the bare words `headers`/`clientIP`: a header map with at
   least one key, an address-valued `clientIP`, or an unmasked credential header (the producer's
-  `CRED_HDRS`), plus any `suppressed` row whose tail is not `none`. Checked against 2,598 real
-  pre-Phase-B `fallback` rows: the old and new discriminators flag the identical 1,792.
+  `CRED_HDRS`) **whose value is bracketed** — zot renders header values as Go slices, so
+  `Cookie:[abc]` is a value while `authorization: denied` is prose; the `\[` is required and an
+  unbracketed `cookie: sid=…` deliberately grades clean, exactly as the pre-#7960 discriminator
+  did — plus any `suppressed` row whose tail is not `none`. Checked against 2,598 real
+  pre-Phase-B `fallback` rows: the old and new discriminators flag the identical 1,792. The two are
+  NOT nested — the new one is wider on a wrapper-less `Cookie:[…]` and on `suppressed` rows, and
+  narrower on a list of header NAMES — so that is a measurement on that corpus, not an equivalence.
 - **Not** `SOLEUR_ZOT_LOG_BOOT`: `git log -S` puts it in 07cf8ebcb (#7444, the log shipper), not in
   96f5b6eb5 (#7954, Phase B), so it proves a weaker claim.
 
@@ -215,10 +233,16 @@ Art. 30 register cites it:
   quotes, which would let the sink recover the allowlist.]** An unanticipated header name **survives** the sink scrub. This is asserted
   as a measured fact by `scripts/zot-restart-loop-alarm-scrub.test.sh` (case `G2-3b`) rather than
   left for a regulator to discover. **Do not describe the sink layer with allowlist language.**
-- **Delivery state:** the producer half is **inert until the next `registry-host-replace`**. The
-  host is cloud-init-only (ADR-096), nothing in this change schedules a replace, and until one
-  fires the sink scrub is the only control in force — on the public surface, which is the worse
+- **Delivery state:** the producer half was **inert until the next `registry-host-replace`**. The
+  host is cloud-init-only (ADR-096), nothing in THIS change scheduled a replace, and until one
+  fired the sink scrub was the only control in force — on the public surface, which is the worse
   of the two egresses.
+  > **Superseded 2026-09-18 (#7960):** a replace fired 2026-09-17T11:21Z, so Layer 1 is believed
+  > in force on the current host (272 tier-4 rows on boot `78111e0e…`, 0 carrying header
+  > structure). It is **not provable** until `err_redact_rev` reaches the host; that is what the
+  > #7960 probe now requires before it will grade either way. Recorded rather than rewritten,
+  > because "an overclaim is the failure this ADR exists to prevent" cuts both ways: asserting
+  > inert after delivery is as wrong as asserting delivered without proof.
 
 ## Consequences
 

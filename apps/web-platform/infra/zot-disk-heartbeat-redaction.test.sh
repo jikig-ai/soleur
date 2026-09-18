@@ -347,8 +347,14 @@ assert "G1-s the degrade path does NOT re-tag the tier" \
 # row and in the TRUSTED region (before the first ` zot_last_err=`, the attacker-influenceable
 # free-text tail). The probe's fixtures read the token from this same LINE= assignment.
 _LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW")"
-assert "G2-s exactly ONE SOLEUR_ZOT_DISK LINE= assignment carries err_redact_rev (>=1) before zot_last_err=" \
-  "[[ \$(grep -cF 'LINE=\"SOLEUR_ZOT_DISK' '$RAW') -eq 1 ]] && grep -qE ' err_redact_rev=[1-9][0-9]* ' <<<\"\${_LINE_ASSIGN%% zot_last_err=*}\""
+# Bounded on the HEAD with ( |$), not on a trailing space: a trailing space would silently pin
+# "some field must follow err_redact_rev", so moving the token to the end of the trusted region
+# would red this with a message about the VALUE CLASS rather than about placement.
+assert "G2-s exactly ONE SOLEUR_ZOT_DISK LINE= assignment, and it carries err_redact_rev (>=1)" \
+  "[[ \$(grep -cF 'LINE=\"SOLEUR_ZOT_DISK' '$RAW') -eq 1 ]] && grep -qE '(^| )err_redact_rev=[1-9][0-9]*( |\$)' <<<\"\$_LINE_ASSIGN\""
+# PLACEMENT, asserted separately from the value class: the token is in the trusted head.
+assert "G2-s err_redact_rev is in the TRUSTED region (before the first zot_last_err=)" \
+  "grep -qE '(^| )err_redact_rev=' <<<\"\${_LINE_ASSIGN%% zot_last_err=*}\""
 # Emit-level, on the suppressed (no-jq) path. Asserted on the row's HEAD, not via assert_emit,
 # which matches the whole body and so could be satisfied by a token in the free-text tail.
 _G2_OUT="$(run_hb "$TIER4_HEADERS" PATH="$NOJQ:/usr/bin:/bin")"
@@ -374,7 +380,7 @@ if [[ "${#_v_pass}" -ne "$PASS" || "${#_v_fail}" -ne "$FAIL" ]]; then
 fi
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193).
-EXPECTED_MIN=36
+EXPECTED_MIN=37
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s).\n' "$CASES" "$EXPECTED_MIN" >&2
   exit 1

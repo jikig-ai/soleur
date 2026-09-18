@@ -538,13 +538,22 @@ and the zot store volume (preserved, asserted in the apply log).
 
 **Residual downtime accepted — bounded.**
 
-- **Measured:** the last replace applied in 1 min 51 s (job `registry_host_replace` 11:19:18Z →
-  11:21:09Z, run 35215052952).
+- **The OUTAGE ITSELF IS UNMEASURED.** No measured registry pull-path outage duration exists in the
+  KB; the figures below bound it, they do not report it. (The sibling case IS measured and is the
+  reason to be careful with this distinction: `inngest-server.md` records "two replaces and 76
+  minutes with no live scheduler".)
+- **Apply-job duration (measured):** the last replace's `registry_host_replace` job ran 1 min 51 s
+  (11:19:18Z → 11:21:09Z, run 35215052952). That is the JOB, not the outage.
 - **Boot-to-serving:** cloud-init's bounded waits (LUKS device ≤60 s, docker ≤60 s, zot `/v2/`
   readiness ≤60 s) add at most ~3 min after OS boot.
 - **Hard ceiling:** the apply job's `timeout-minutes: 20`.
 
-**Window:** fired only when P3 finds no zot writer in flight (so no deploy is mid-pull).
+**Window:** the replace fires only when P3 finds no zot writer in flight (so no deploy is mid-pull).
+**On THIS PR's own merge that is the non-modal path:** the merge touches `apps/web-platform/**`, so
+it starts `web-platform-release.yml` — itself a zot writer — and P3 waits then refuses. Measured
+history: the #7954 merge refused on P3 (2026-09-09) and delivery needed a manual re-fire 8 days
+later (2026-09-17). `registry-replace-preflight.sh` records 18.3% of co-firing releases exceeding
+the 2100 s wait. Merge does NOT imply replace; the re-fire in Phase 5.5 is the expected path.
 
 **Sign-off:** the one operator stop (Phase 5.3), which states the outage consequence plainly.
 

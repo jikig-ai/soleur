@@ -250,7 +250,12 @@ fi
 #      list of header NAMES does not match;
 #   2. a clientIP carrying an ADDRESS -- dotted IPv4, or two colons for IPv6 (`default` does not);
 #   3. a bare CREDENTIAL header (the producer's CRED_HDRS list) whose value is not `[REDACTED` or
-#      zot's `[******` mask -- survives a truncated or renamed `headers` wrapper.
+#      zot's `[******` mask -- survives a truncated or renamed `headers` wrapper. The trailing
+#      `\[` is REQUIRED and deliberate: zot renders header values as Go slices, so a real leak is
+#      `Cookie:[abc]`, while an unbracketed `authorization: denied` is prose. Measured: an
+#      unbracketed `cookie: sid=deadbeef` grades CLEAN here, as it did under the pre-#7960
+#      discriminator -- do not delete the `\[` to "widen" this, or ordinary prose posts a public
+#      FAIL on a delivered host.
 # A `suppressed` row whose tail is anything but `none` also counts: the gate is supposed to have
 # withheld that sample, so anything shipped under `suppressed` is a gate regression.
 # Written for POSIX awk (no interval expressions, no [[:classes:]]) so mawk and gawk agree.
@@ -286,6 +291,10 @@ read -r PROOF_F PROOF_S TIER4_N LEAKY < <(printf '%s\n' "$DECODED" \
 TOTAL_ROWS="$(printf '%s\n' "$DECODED" | grep -cF 'SOLEUR_ZOT_DISK' || true)"
 [[ -n "$TOTAL_ROWS" ]] || TOTAL_ROWS=0
 # A missing summary line is "could not measure", never zero: every count below must be an integer.
+# LOAD-BEARING, not defensive padding: bash treats an EMPTY operand as false in `[[ "" -gt 0 ]]`,
+# so if the awk pass produced nothing, LEAKY would read as "no leak" and R3 would CLOSE the tracker
+# on a measurement that never happened. This guard is the only thing between a failed awk and a
+# false close -- do not simplify it away.
 for _n in "$PROOF_F" "$PROOF_S" "$TIER4_N" "$LEAKY"; do
   case "$_n" in
     ''|*[!0-9]*)
@@ -317,10 +326,12 @@ if [[ "$DELIVERY_PROVEN" -eq 0 ]]; then
   echo "           producer. ($TOTAL_ROWS row(s) in $WINDOW; $TIER4_N tier-4 row(s) on this boot," >&2
   echo "           $LEAKY graded as carrying header structure.) Refusing both to close the tracker" >&2
   echo "           and to assert the redaction is broken on a host this probe cannot identify." >&2
-  echo "           EXPECTED until the registry-host-replace triggered by merging PR #8272" >&2
-  echo "           completes. AFTER that replace has completed, this reading means the field is" >&2
-  echo "           not reaching the host: investigate (is err_redact_rev in the newest rows? did" >&2
-  echo "           the replace render from the merge SHA?), do not wait." >&2
+  echo "           EXPECTED until the registry-host-replace that delivers this field completes." >&2
+  echo "           Check the last successful run of registry-host-replace-dispatch.yml (and the" >&2
+  echo "           apply-web-platform-infra.yml run it dispatched): if one has completed since the" >&2
+  echo "           field was merged, this reading means the field is NOT reaching the host --" >&2
+  echo "           investigate now (is err_redact_rev in the newest rows' trusted region? did the" >&2
+  echo "           replace render from the merge SHA?), do not wait." >&2
   exit 3
 fi
 

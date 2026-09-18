@@ -27,8 +27,8 @@
 #
 # KNOWN GAP, stated rather than left implicit: the probe scopes on boot_id and never reads
 # `host=`. Two hosts POSTing this marker to the shared source would both satisfy the envelope
-# anchor, so a second host's row could supply the "newest boot". The registry is single-host
-# today.
+# anchor, so a second host's row could supply the "newest boot". Single-host by ADR-096; re-open
+# this if a second host ever POSTs this marker to source 2457081.
 
 set -uo pipefail
 
