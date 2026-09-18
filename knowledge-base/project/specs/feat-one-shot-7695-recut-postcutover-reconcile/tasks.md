@@ -16,7 +16,7 @@ Tick a box only after running its check in this session.
 
 ## Phase 0: Preconditions (measure, do not assume)
 
-- [ ] 0.1 Re-run the four live reads (Better Stack `SOLEUR_INNGEST_SERVER_PROBE` newest dedicated row;
+- [x] 0.1 Re-run the four live reads (Better Stack `SOLEUR_INNGEST_SERVER_PROBE` newest dedicated row;
       Doppler `soleur-inngest/prd` `INNGEST_CUTOVER_FLIP` + `INNGEST_DIAGNOSTIC_BOOT`; Hetzner
       `GET /volumes/106261946` + `GET /servers?name=soleur-inngest`;
       `scripts/followthroughs/inngest-host-not-serving-7674.sh`) and paste them verbatim into
@@ -24,12 +24,12 @@ Tick a box only after running its check in this session.
       **STOP** if `cutover_flag != done`, `redis_keys == 0`, volume id ≠ `106261946`,
       `probe_schema != 8`, `data_mount_devid != scsi-0HC_Volume_106261946`, `registry_fns` absent/0,
       or the #7674 probe rc ≠ 0.
-- [ ] 0.2 `gh pr diff 8248 --name-only` captured for AC12.
-- [ ] 0.3 `archive-kb.sh --dry-run` for the four slugs (`infra-inngest-volume-recut-luks`,
+- [x] 0.2 `gh pr diff 8248 --name-only` captured for AC12.
+- [x] 0.3 `archive-kb.sh --dry-run` for the four slugs (`infra-inngest-volume-recut-luks`,
       `one-shot-7695-inngest-volume-recut-luks`, `fix-inngest-bootstrap-pin-and-guard-hardening`,
       `one-shot-7695-inngest-image-pin-probe-schema`) — exactly one artifact each.
-- [ ] 0.4 `bash plugins/soleur/test/c4-count-parity.test.sh` → exit 0.
-- [ ] 0.5 Re-measure the `- [ ]` counts of the two spec `tasks.md` files (plan-time: 26 / 40).
+- [x] 0.4 `bash plugins/soleur/test/c4-count-parity.test.sh` → exit 0.
+- [x] 0.5 Re-measure the `- [ ]` counts of the two spec `tasks.md` files (plan-time: 26 / 40).
 
 ## Phase 1: Runbook (`knowledge-base/engineering/operations/runbooks/inngest-server.md`)
 
