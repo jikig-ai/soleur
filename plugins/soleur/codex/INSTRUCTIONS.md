@@ -62,6 +62,13 @@ Installation does not grant hook trust. Codex supports the bundled Bash
 credential guard and Stop hooks, but hook execution does not prove that every
 Claude-only workflow primitive has an equivalent.
 
+Compaction hooks do not fire. `compaction-state.sh` (`PreCompact` /
+`SessionStart:compact`, #8323) is a Claude Code API with no Codex equivalent,
+so no post-compaction re-read directive and no evidence-based fresh-session
+recommendation are delivered here. The skill-prose fallback applies: the
+end-of-work resume prompt still fires, carrying no `/clear` nudge. Do not
+report the behaviour as present.
+
 Keep long-running workflows bounded by their iteration and cost gates.
 Soleur's subscription and OpenAI model usage are separate charges; substitute
 OpenAI for Anthropic in harness-specific billing disclosures. Soleur disclaims
