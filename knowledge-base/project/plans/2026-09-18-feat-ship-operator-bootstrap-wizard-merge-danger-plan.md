@@ -30,6 +30,40 @@ not land. Peer skill names are replaced with names that follow the shipped
 routing, discoverability, a named predecessor, the lifecycle registry, and the
 docs-count manifest.
 
+## READ THIS FIRST — the revisions block supersedes the body
+
+A seven-agent plan review (DHH, Kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer, cpo, cto-devex) produced **`## Plan Review Revisions (R1–R40)` at the END of this
+file**. Those revisions **cut or reverse a substantial part of what the sections below describe**, and
+the body was deliberately left intact so the reasoning that produced each reversal stays auditable.
+
+**`/work` must read the revisions block before implementing anything below it.** Where the two
+conflict, the revisions win. The body is the record of how the plan got here; the revisions are the
+plan.
+
+The mechanisms the body still describes at length but which the revisions **cut**:
+
+| Body describes | Superseded by | Status |
+|---|---|---|
+| The inlined library and its `STAGES` marker invariant (~11 mentions) | **R6** | **Cut** — the generated script now `source`s the library |
+| Guard 2 / regeneration parity / `regeneration-parity.test.sh` (~10 / ~6 mentions) | **R6** | **Cut** with the inlined mode |
+| Guard 1, `enums/go-routes.json`, `parse-label.test.sh`, `tasks/go-routing.jsonl` (~8 / ~5 mentions) | **R9** | **Cut** — the `drain-prs` drift is filed as its own issue |
+| Guard 5 (~12 mentions) | **R10** | **Cut** — the property is bought twice already |
+| `provision-{cloudflare,doppler,github}` characterization suites + fixtures | **R11** | **Cut** — they ship with their refactors |
+| The `provision-github.sh` dry-run hoist (~2 mentions) | **R12** | **Cut** — it changes the output it would golden |
+| `verify-bootstrap-run.sh --self-test` (~3 mentions) | **R13** | **Cut** — `--ledger --last` survives |
+| `predecessor-wiring.test.sh` as a file (~4 mentions) | **R14** | **Cut** — folded into `components.test.ts` |
+| A new AGENTS Communication rule + index pointer | **R15** | **Cut** — `cm-when-proposing-to-clear-context-or` is amended instead |
+| The `**Door:**` field (~10 mentions) and the Phase 5.5 merge hold | **R7** | **Cut** / **deferred** |
+| The `none produced` sentinel | **R7** | **Collapsed** into `none known` |
+| The secret registry and output-scrub trap | **R5** | **Cut** |
+| D12's Test-24 rationale | **R25** | **Falsified** — the conclusion survives on Guard 5's prologue reason |
+| D2's two-carve-out set | **R8** | **Replaced** by a three-class set; the ack class takes **no** skip variable |
+| ADR-226 "extends" ADR-178 | **R24** | **Relabelled** "constrained by" |
+
+Guards drop 5 → 3 (Guards 3 and 4 survive, plus one byte-equality assertion). Files to create
+18 → 12; files to edit 19 → 14. No property in P1–P5 is lost.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -397,17 +431,23 @@ failure_modes:
     alert_route: CI - without the guard this mode has no detector at all
 logs:
   where: >
-    provisioning/<slug>/bootstrap-runs.jsonl on the founder's machine (gitignored by
-    .gitignore:83). The generator skill's own hosted runs surface in the existing plugin
-    CI logs; no new sink is created.
+    bootstrap-runs.jsonl in the FOUNDER's repository, which is where layer 7's
+    "committed to the customer's own repository" condition is satisfied. R24 - both candidate
+    paths are gitignored in THIS repo, so the artifact is never committed here; saying so
+    plainly is the difference between citing the layer and meeting it. The generator skill's
+    own hosted runs surface in the existing plugin CI logs; no new sink is created.
   retention: append-only, operator-controlled; nothing self-expires and nothing is transmitted
 discoverability_test:
-  command: bash plugins/soleur/skills/operator-bootstrap/scripts/verify-bootstrap-run.sh --self-test
+  command: bash plugins/soleur/test/operator-script.test.sh
   expected_output: >
-    "operator-script.sh: 12/12 invariants OK" and exit 0. --self-test exercises the library's
-    contract against synthesized fixtures in a temp dir and needs no prior run, no network and
-    no credentials. With --ledger <path> --last it instead prints the last run's stage ledger
-    and exits non-zero when that run is incomplete.
+    The suite's own trailing summary line and exit 0. R13/R24 - an earlier draft declared
+    verify-bootstrap-run.sh --self-test here. That mode is cut: it duplicated this suite, and
+    its "12/12 invariants OK" pinned a hard-coded count in an expected-output string, which is
+    the frozen-list defect this plan's own guards forbid elsewhere. This suite already satisfies
+    the probe-verb gate (first token `bash`, second a repo-relative path), needs no prior run,
+    no network and no credentials. verify-bootstrap-run.sh survives with --ledger <path> --last
+    only, which prints the last run's stage ledger and exits non-zero when that run is
+    incomplete.
 ```
 
 The first token is `bash` and the second a repo-relative path, satisfying preflight Check 10's `PROBE_VERB_ALLOWLIST`. No `credentials_required` declaration is needed: every property the probe asserts has an unauthenticated substitute.

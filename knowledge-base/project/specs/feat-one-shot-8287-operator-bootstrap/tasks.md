@@ -4,6 +4,19 @@ Derived from `knowledge-base/project/plans/2026-09-18-feat-ship-operator-bootstr
 Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-D14) and guard ids
 (Guard 1-5) refer to that plan.
 
+> **Superseded in part.** A seven-agent plan review produced `## Plan Review Revisions (R1–R40)` at
+> the end of the plan. Tasks below that implement a cut mechanism are struck through in effect —
+> read the plan's revisions block before starting. The cut set: the inlined-library/`STAGES`
+> architecture and Guard 2 (R6), Guard 1 and the `drain-prs` enum bundle (R9), Guard 5 (R10), three
+> of the four characterization suites (R11), the `provision-github.sh` hoist (R12),
+> `verify-bootstrap-run.sh --self-test` (R13), `predecessor-wiring.test.sh` as a file (R14), the new
+> AGENTS rule (R15), the `Door:` field and the merge hold (R7), and the secret-scrub trap (R5).
+> Two ordering corrections also apply: the description-budget bump moves to **Phase 0** (R31,
+> otherwise CI is red from Phase 3 on), and the folded-in wiring assertions move to **Phase 7** (R32).
+> D2's carve-out set is replaced by a three-class set in which the destructive-write ack takes **no**
+> skip variable (R8).
+
+
 ## Phase 0 — Preconditions (no code)
 
 - [ ] 0.1 Confirm `plugins/soleur/skills/flag-bootstrap/` holds only `SETUP.md` and is not a live skill (D5).
