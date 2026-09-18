@@ -73,7 +73,7 @@ command -v md5sum  >/dev/null 2>&1 || { printf 'HARNESS: `md5sum` is required fo
 command -v perl    >/dev/null 2>&1 || { printf 'HARNESS: `perl` is required to apply the mutations\n' >&2; exit 2; }
 
 SB="$(mktemp -d -t operator-script.XXXXXXXX)" || { printf 'HARNESS: mktemp failed\n' >&2; exit 2; }
-trap 'rm -rf "$SB"' EXIT
+trap 'chmod -R u+rwx "$SB" 2>/dev/null; rm -rf "$SB"' EXIT
 mkdir -p "$SB/bin" "$SB/mut" "$SB/run" "$SB/empty" || { printf 'HARNESS: mkdir failed\n' >&2; exit 2; }
 
 PRISTINE="$SB/pristine-operator-script.sh"
@@ -202,6 +202,25 @@ g3_sourcing_scripts() {
     | sort
 }
 
+# g3_fn_body <lib> <fn> — the source text of one top-level function.
+g3_fn_body() {
+  awk -v f="^${2}\\\\(\\\\) \\\\{" '$0 ~ f {p=1} p {print} p&&/^\}/{exit}' "$1"
+}
+
+# g3_writer_body <lib> <fn> — the function plus every `soleur_op_env_*` helper
+# it calls, in call order, so a property about "the upsert" holds over the code
+# the upsert actually runs rather than over the lines it happens to contain.
+g3_writer_body() {
+  local lib="$1" fn="$2" body helper
+  body="$(g3_fn_body "$lib" "$fn")"
+  [[ -n "$body" ]] || return 0
+  printf '%s\n' "$body"
+  while IFS= read -r helper; do
+    [[ -n "$helper" && "$helper" != "$fn" ]] || continue
+    g3_fn_body "$lib" "$helper"
+  done < <(grep -oE '^[[:space:]]*soleur_op_env_[a-z_]+' <<<"$body" | sed 's/^[[:space:]]*//' | awk '!seen[$0]++')
+}
+
 g3_check() {
   local lib="$1" root="$2"
   local v=0 listing body idx_mv idx_chmod filter_line argv_hits f
@@ -226,7 +245,10 @@ g3_check() {
   # --- row 2: chmod 600 must land AFTER the mv that completes the upsert ------
   # `mv` replaces the inode AND its mode, so a chmod before it leaves a
   # world-readable window on the file the secret is then appended to.
-  body="$(awk '/^soleur_op_env_upsert\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$lib")"
+  # The upsert delegates its filter and its commit to `soleur_op_env_*` helpers;
+  # the body inspected here is the upsert PLUS every helper it calls, so a
+  # reorder inside a helper is as visible as one inline.
+  body="$(g3_writer_body "$lib" soleur_op_env_upsert)"
   if [[ -z "$body" ]]; then
     echo "g3: soleur_op_env_upsert not found in ${lib}"
     return 1
@@ -234,7 +256,7 @@ g3_check() {
   idx_mv="$(grep -n '^[[:space:]]*mv "' <<<"$body" | head -1 | cut -d: -f1)"
   idx_chmod="$(grep -n '^[[:space:]]*chmod 600' <<<"$body" | head -1 | cut -d: -f1)"
   if [[ -z "$idx_mv" || -z "$idx_chmod" ]]; then
-    echo "g3: could not locate both the mv and the chmod 600 inside soleur_op_env_upsert"
+    echo "g3: could not locate both the mv and the chmod 600 inside soleur_op_env_upsert (or its helpers)"
     v=1
   elif [[ "$idx_chmod" -lt "$idx_mv" ]]; then
     echo "g3: chmod 600 (line ${idx_chmod}) precedes the mv (line ${idx_mv}) inside soleur_op_env_upsert"
@@ -243,7 +265,7 @@ g3_check() {
 
   # --- row 3 (static half): the upsert filter must be EXACT-key ---------------
   # The mechanism is the trailing `=` (R41); without it `^KEY` is a PREFIX match.
-  filter_line="$(grep -n 'grep -v' <<<"$body" | head -1 | cut -d: -f2-)"
+  filter_line="$(grep -nE 'grep( -[a-zA-Z]+)* -v' <<<"$body" | head -1 | cut -d: -f2-)"
   if [[ -z "$filter_line" ]]; then
     echo "g3: soleur_op_env_upsert has no grep -v filter line"
     v=1
@@ -329,7 +351,7 @@ then assert_red g3_check "g3-r2 chmod before mv" "$SB/mut/g3r2.sh" "$PLUGIN_ROOT
 
 # row 3 — the upsert filter generalised to the PREFIX form (one character: the `=`)
 if mutate "g3-r3 upsert filter generalised to prefix" "$SB/mut/g3r3.sh" <<'PROG'
-s{grep -v "\^\$\{key\}=" "\$env_file" > "\$tmp"}{grep -v "^\$\{key\}" "\$env_file" > "\$tmp"}
+s{grep -a -v "\^\$\{key\}=" "\$env_file" > "\$tmp"}{grep -a -v "^\$\{key\}" "\$env_file" > "\$tmp"}
 PROG
 then assert_red g3_check "g3-r3 prefix-matching upsert filter" "$SB/mut/g3r3.sh" "$PLUGIN_ROOT"; fi
 
@@ -363,6 +385,241 @@ if g3_check "$PRISTINE" "$SB/run/nonsecret" >/dev/null 2>&1; then
   pass "g3 harness (b): a consumer writing a NON-secret on argv passes"
 else
   fail "g3 harness (b): the guard rejected a legitimate non-secret argv write"
+fi
+
+# =============================================================================
+# Guard 6 — the .env writers validate input SHAPE and never shrink the file
+# =============================================================================
+#
+# Property. `soleur_op_env_upsert` / `soleur_op_env_reset` refuse a key outside
+# `^[A-Za-z_][A-Za-z0-9_]*$` and a value carrying a line break (BAD_ARG, rc 1,
+# file untouched); a grep that exits 2 is ENV_READ_FAILED, never an empty file
+# installed over the .env; a symlinked .env is rewritten through the link; the
+# new line is in the temp file BEFORE the mv; and — measured by the review lead —
+# a cp1252 byte under a UTF-8 locale or a NUL byte anywhere must not make grep's
+# binary heuristic drop lines. Every row observes the ARTEFACT, not the intent.
+
+genv_drive() {
+  # genv_drive <lib> <ledger> <fn> <args...>  — stdout+stderr, rc in $?
+  local lib="$1" ledger="$2"; shift 2
+  SOLEUR_BOOTSTRAP_LEDGER="$ledger" bash "$SB/drive.sh" "$lib" "$@" </dev/null 2>&1
+}
+
+genv_check() {
+  local lib="$1" v=0 run="$SB/genvrun" out rc envf ledger
+  rm -rf "$run"; mkdir -p "$run"
+  ledger="$run/ledger.jsonl"
+
+  # --- row 1: a regex-metacharacter key is refused, and the file is untouched --
+  envf="$run/meta.env"; printf 'AXB=1\nA_B=2\n' > "$envf"
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" 'A.B' v)"; rc=$?
+  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_BAD_ARG key=A.B' <<<"$out"; then
+    echo "genv: upsert accepted the key 'A.B' (rc=${rc}): ${out}"; v=1
+  fi
+  if [[ "$(cat "$envf")" != $'AXB=1\nA_B=2' ]]; then
+    echo "genv: a refused upsert of 'A.B' changed the file: $(tr '\n' ' ' <"$envf")"; v=1
+  fi
+  # --- row 2: a key that is a BROKEN regex (grep exit 2) is refused up front ---
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" '[BAD' v)"; rc=$?
+  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_BAD_ARG' <<<"$out"; then
+    echo "genv: upsert accepted the key '[BAD' (rc=${rc})"; v=1
+  fi
+  if [[ ! -s "$envf" ]]; then
+    echo "genv: the '[BAD' key emptied the .env (the grep-exit-2 wipe)"; v=1
+  fi
+  # --- row 3: the same validator guards reset -------------------------------
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_reset "$envf" 'A.B')"; rc=$?
+  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_BAD_ARG key=A.B' <<<"$out"; then
+    echo "genv: reset accepted the key 'A.B' (rc=${rc})"; v=1
+  fi
+  if ! grep -q '^AXB=1$' "$envf" || ! grep -q '^A_B=2$' "$envf"; then
+    echo "genv: a refused reset of 'A.B' removed a key (metachar matched AXB/A_B)"; v=1
+  fi
+  # --- row 4: a value with a line break would inject a second KEY= line --------
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD $'one\nEVIL=two')"; rc=$?
+  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_BAD_ARG key=GOOD' <<<"$out"; then
+    echo "genv: upsert accepted a value containing a newline (rc=${rc})"; v=1
+  fi
+  if grep -q '^EVIL=' "$envf"; then
+    echo "genv: the newline value injected an EVIL= line"; v=1
+  fi
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" GOOD $'one\rtwo')"; rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    echo "genv: upsert accepted a value containing a carriage return"; v=1
+  fi
+
+  # --- row 5: an unreadable .env is ENV_READ_FAILED, not an empty file ---------
+  # A directory where the file should be makes grep exit 2 on every platform,
+  # root or not.
+  mkdir -p "$run/dir.env"
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$run/dir.env" KEY1 v)"; rc=$?
+  if [[ "$rc" -eq 0 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_ENV_READ_FAILED' <<<"$out"; then
+    echo "genv: an unreadable .env did not produce ENV_READ_FAILED (rc=${rc}): ${out}"; v=1
+  fi
+  if ls "$run"/dir.env.tmp.* >/dev/null 2>&1; then
+    echo "genv: a refused upsert left its temp file behind"; v=1
+  fi
+
+  # --- row 6: a symlinked .env stays a symlink; the target gets the key --------
+  printf 'OLD=1\n' > "$run/target.env"; ln -s "$run/target.env" "$run/link.env"
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$run/link.env" NEWK "$SENTINEL")"; rc=$?
+  if [[ "$rc" -ne 0 ]]; then echo "genv: upsert through a symlink exited ${rc}: ${out}"; v=1; fi
+  if [[ ! -L "$run/link.env" ]]; then
+    echo "genv: the upsert replaced the symlink with a regular file"; v=1
+  fi
+  if ! grep -q "^NEWK=${SENTINEL}$" "$run/target.env" || ! grep -q '^OLD=1$' "$run/target.env"; then
+    echo "genv: the symlink target does not hold both keys after the upsert"; v=1
+  fi
+
+  # --- row 7 (static): the new line is appended BEFORE the mv (atomic upsert) -
+  local body idx_append idx_commit
+  body="$(g3_writer_body "$lib" soleur_op_env_upsert)"
+  idx_append="$(grep -nE "printf '%s=%s\\\\n' \"\\\$key\" \"\\\$value\" >> \"\\\$tmp\"" <<<"$body" | head -1 | cut -d: -f1)"
+  idx_commit="$(grep -nE '^[[:space:]]*(mv "\$tmp"|soleur_op_env_commit )' <<<"$body" | head -1 | cut -d: -f1)"
+  if [[ -z "$idx_append" || -z "$idx_commit" ]]; then
+    echo "genv: could not locate the KEY=value append into \$tmp and the mv/commit in soleur_op_env_upsert"; v=1
+  elif [[ "$idx_append" -gt "$idx_commit" ]]; then
+    echo "genv: the KEY=value line is appended AFTER the mv (line ${idx_append} > ${idx_commit}) — a Ctrl-C between them loses the key"; v=1
+  fi
+  if ls "$run"/*.env.tmp.* >/dev/null 2>&1; then
+    echo "genv: a successful upsert left a temp file behind"; v=1
+  fi
+
+  # --- row 8: a cp1252 byte in a comment, under a UTF-8 locale -----------------
+  # Without `grep -a`, grep's binary heuristic drops the line with rc 0.
+  envf="$run/cp1252.env"
+  printf '# founder\x92s note\nKEEP_A=1\nKEEP_B=2\n' > "$envf"
+  out="$(LC_ALL=C.UTF-8 genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" KEEP_C 3)"; rc=$?
+  if [[ "$rc" -ne 0 ]]; then echo "genv: cp1252 fixture upsert exited ${rc}: ${out}"; v=1; fi
+  if ! cmp -s "$envf" <(printf '# founder\x92s note\nKEEP_A=1\nKEEP_B=2\nKEEP_C=3\n'); then
+    echo "genv: the cp1252 .env lost content under LC_ALL=C.UTF-8: $(od -c "$envf" | head -3 | tr '\n' ' ')"; v=1
+  fi
+  # --- row 9: a NUL byte anywhere in the .env -------------------------------------
+  envf="$run/nul.env"
+  printf 'KEEP_A=1\n# stray\x00byte\nKEEP_B=2\n' > "$envf"
+  out="$(genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" KEEP_C 3)"; rc=$?
+  if [[ "$rc" -ne 0 ]]; then echo "genv: NUL fixture upsert exited ${rc}: ${out}"; v=1; fi
+  if ! cmp -s "$envf" <(printf 'KEEP_A=1\n# stray\x00byte\nKEEP_B=2\nKEEP_C=3\n'); then
+    echo "genv: the NUL .env lost content: $(tr '\0' '@' <"$envf" | tr '\n' ' ')"; v=1
+  fi
+  out="$(LC_ALL=C.UTF-8 genv_drive "$lib" "$ledger" soleur_op_env_upsert "$envf" KEEP_A 9)"; rc=$?
+  if [[ "$rc" -ne 0 ]] || ! cmp -s "$envf" <(printf '# stray\x00byte\nKEEP_B=2\nKEEP_C=3\nKEEP_A=9\n'); then
+    echo "genv: replacing a key in the NUL .env under UTF-8 lost content (rc=${rc})"; v=1
+  fi
+
+  # A mutation that mv's into the directory row and chmod-600s it leaves an
+  # unlistable dir; restore modes so the sandbox reaps cleanly.
+  chmod -R u+rwx "$run" 2>/dev/null || true
+  rm -rf "$run"
+  return "$v"
+}
+
+echo "== Guard 6 — .env writers validate shape, never shrink =="
+
+assert_green genv_check "pristine library" "$PRISTINE"
+
+# row A — the validator loses its anchor: any key is accepted
+if mutate "genv-rA key validator anchors removed" "$SB/mut/genvA.sh" <<'PROG'
+s{=~ \^\[A-Za-z_\]\[A-Za-z0-9_\]\*\$ \]\]}{=~ . ]]}
+PROG
+then assert_red genv_check "genv-rA any key accepted" "$SB/mut/genvA.sh"; fi
+
+# row B — grep exit 2 swallowed again (the `|| true` the review found)
+if mutate "genv-rB grep exit 2 swallowed" "$SB/mut/genvB.sh" <<'PROG'
+s{  if \(\( rc > 1 \)\); then\n    printf 'SOLEUR_BOOTSTRAP_ENV_READ_FAILED}{  if (( rc > 2 )); then\n    printf 'SOLEUR_BOOTSTRAP_ENV_READ_FAILED}
+PROG
+then assert_red genv_check "genv-rB ENV_READ_FAILED never fires" "$SB/mut/genvB.sh"; fi
+
+# row C — the `-a` is dropped from the filter: binary heuristic returns
+if mutate "genv-rC grep -a dropped from the filter" "$SB/mut/genvC.sh" <<'PROG'
+s{grep -a -v "\^\$\{key\}="}{grep -v "^\$\{key\}="}
+PROG
+then assert_red genv_check "genv-rC binary heuristic drops lines (cp1252 / NUL fixtures)" "$SB/mut/genvC.sh"; fi
+
+# row D — the symlink is no longer resolved: mv replaces the link
+if mutate "genv-rD symlink resolution removed from upsert" "$SB/mut/genvD.sh" <<'PROG'
+s{(soleur_op_env_upsert\(\) \{.*?)  env_file="\$\(readlink -f -- "\$env_file" 2>/dev/null \|\| printf '%s' "\$env_file"\)"\n}{$1}s
+PROG
+then assert_red genv_check "genv-rD symlinked .env replaced by a regular file" "$SB/mut/genvD.sh"; fi
+
+# row E — the append moves back AFTER the commit (non-atomic upsert)
+if mutate "genv-rE KEY=value appended after the mv" "$SB/mut/genvE.sh" <<'PROG'
+s{(  printf '%s=%s\\n' "\$key" "\$value" >> "\$tmp"\n)(  soleur_op_env_commit "\$env_file" "\$tmp" "\$before_count" "\$before_count" \|\| return 1\n)}{$2  printf '%s=%s\\n' "\$key" "\$value" >> "\$env_file"\n}
+PROG
+then assert_red genv_check "genv-rE non-atomic upsert" "$SB/mut/genvE.sh"; fi
+
+# row F — the value line-break check is removed
+if mutate "genv-rF newline value accepted" "$SB/mut/genvF.sh" <<'PROG'
+s{  if \[\[ "\$value" == \*\$'\\n'\* \|\| "\$value" == \*\$'\\r'\* \]\]; then}{  if false; then}
+PROG
+then assert_red genv_check "genv-rF newline in value injects a second line" "$SB/mut/genvF.sh"; fi
+
+# =============================================================================
+# Ledger — every line is JSON a reader can parse, and one run lands in one file
+# =============================================================================
+
+echo "== ledger shape =="
+
+ledger_json_ok() {
+  # ledger_json_ok <file> — every line parses as a JSON object.
+  if command -v jq >/dev/null 2>&1; then
+    jq -e 'type == "object"' "$1" >/dev/null 2>&1
+  else
+    python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    assert isinstance(json.loads(l), dict)' "$1" >/dev/null 2>&1
+  fi
+}
+
+lj="$SB/ledger-json.jsonl"
+SOLEUR_BOOTSTRAP_LEDGER="$lj" bash -c '
+  set -uo pipefail
+  source "$1"
+  soleur_op_ledger_init abc "$(printf "probe\nwith \"quotes\" and\rCR")"
+  soleur_op_stage_begin 1 "$(printf "line\xe2\x80\xa8sep")"
+  soleur_op_stage_end 1 "name" ok "not-a-number"
+' _ "$LIB" >/dev/null 2>&1
+if ledger_json_ok "$lj"; then
+  pass "ledger: every line parses as JSON with a newline, a CR, quotes, U+2028 and non-numeric integers in the inputs"
+else
+  fail "ledger: at least one line is not valid JSON: $(cat "$lj" 2>/dev/null | tr '\n' ' ')"
+fi
+if grep -qF '"total_stages":0' "$lj" && grep -qF '"exit_code":0' "$lj"; then
+  pass "ledger: a non-integer total_stages / exit_code is substituted with 0, never emitted raw"
+else
+  fail "ledger: non-integer fields were emitted raw: $(cat "$lj" 2>/dev/null | tr '\n' ' ')"
+fi
+if grep -q $'\xe2\x80\xa8' "$lj"; then
+  fail "ledger: U+2028 survived into the ledger line"
+else
+  pass "ledger: U+2028 is stripped from string fields"
+fi
+
+# --reset before any init: the ledger line must still carry a run_id.
+lr="$SB/ledger-reset.jsonl"; printf 'K=1\n' > "$SB/ledger-reset.env"
+SOLEUR_BOOTSTRAP_LEDGER="$lr" bash "$SB/drive.sh" "$LIB" soleur_op_env_reset "$SB/ledger-reset.env" K >/dev/null 2>&1
+if grep -qE '"run_id":"[^"]+"' "$lr" 2>/dev/null; then
+  pass "ledger: a write before soleur_op_ledger_init carries a non-empty run_id (the --reset path)"
+else
+  fail "ledger: the --reset path wrote an empty run_id: $(cat "$lr" 2>/dev/null)"
+fi
+
+# One run, one file: the default path is resolved ONCE and survives a `cd`.
+mkdir -p "$SB/relrun/sub"
+cat > "$SB/relrun/main.sh" <<'MAIN'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$1"
+soleur_op_ledger_init 1 main.sh
+cd sub
+soleur_op_stage_begin 1 "after cd"
+MAIN
+( cd "$SB/relrun" && env -u SOLEUR_BOOTSTRAP_LEDGER bash ./main.sh "$LIB" ) >/dev/null 2>&1
+rel_lines="$(grep -c . "$SB/relrun/bootstrap-runs.jsonl" 2>/dev/null || true)"
+if [[ "$rel_lines" -eq 2 && ! -e "$SB/relrun/sub/bootstrap-runs.jsonl" ]]; then
+  pass "ledger: the default path is resolved once — a cd inside the run does not split the file"
+else
+  fail "ledger: expected 2 lines in relrun/bootstrap-runs.jsonl and none in sub/ (got ${rel_lines}; sub exists: $([[ -e "$SB/relrun/sub/bootstrap-runs.jsonl" ]] && echo yes || echo no))"
 fi
 
 # =============================================================================
@@ -830,7 +1087,7 @@ fi
 # --- Anti-vacuity floor ------------------------------------------------------
 # Appends to `fails`, the SAME variable the verdict below reads. A floor that
 # bumped a separate counter would not change the exit status it claims to guard.
-FLOOR=55
+FLOOR=73
 if [[ "$asserts" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$asserts" "$FLOOR" >&2
   fails=$((fails + 1))

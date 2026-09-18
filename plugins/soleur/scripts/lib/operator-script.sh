@@ -165,34 +165,62 @@ soleur_op_require_bins() {
 # appended — but it is never silent: `SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED
 # path=<path>` goes to stdout so the founder knows the artifact is incomplete.
 
-SOLEUR_OP_RUN_ID=""
+# `$$` until soleur_op_ledger_init assigns the timestamped id: a helper that
+# writes a ledger line before init (the `--reset` path does) must still carry a
+# non-empty run_id, or the artifact has lines no run can be attributed to.
+SOLEUR_OP_RUN_ID="$$"
 SOLEUR_OP_TOTAL_STAGES=0
+# Resolved ONCE (first use or soleur_op_ledger_init) and cached: the default is
+# derived from BASH_SOURCE[-1], which may be relative, and a `cd` inside a stage
+# would otherwise split one run's lines across two files.
+SOLEUR_OP_LEDGER_FILE=""
 
 # Default: beside the MAIN script (the bottom of the source stack), never a
 # cwd-relative dotdir. `SOLEUR_BOOTSTRAP_LEDGER` overrides.
 soleur_op_ledger_path() {
-  local main_script
-  if [[ -n "${SOLEUR_BOOTSTRAP_LEDGER:-}" ]]; then
-    printf '%s' "$SOLEUR_BOOTSTRAP_LEDGER"
+  local main_script main_dir
+  if [[ -n "$SOLEUR_OP_LEDGER_FILE" ]]; then
+    printf '%s' "$SOLEUR_OP_LEDGER_FILE"
     return 0
   fi
-  main_script="${BASH_SOURCE[-1]:-}"
-  # Sourced with no main script (an interactive shell, `bash -c`): the bottom of
-  # the stack is this file, and "beside the library" is not a ledger home.
-  if [[ -z "$main_script" || "$main_script" == "${BASH_SOURCE[0]}" ]]; then
-    printf './bootstrap-runs.jsonl'
+  if [[ -n "${SOLEUR_BOOTSTRAP_LEDGER:-}" ]]; then
+    SOLEUR_OP_LEDGER_FILE="$SOLEUR_BOOTSTRAP_LEDGER"
   else
-    printf '%s/bootstrap-runs.jsonl' "$(dirname "$main_script")"
+    main_script="${BASH_SOURCE[-1]:-}"
+    # Sourced with no main script (an interactive shell, `bash -c`): the bottom of
+    # the stack is this file, and "beside the library" is not a ledger home.
+    if [[ -z "$main_script" || "$main_script" == "${BASH_SOURCE[0]}" ]]; then
+      SOLEUR_OP_LEDGER_FILE="$(pwd)/bootstrap-runs.jsonl"
+    else
+      main_dir="$(cd "$(dirname "$main_script")" 2>/dev/null && pwd)" || main_dir="$(dirname "$main_script")"
+      SOLEUR_OP_LEDGER_FILE="${main_dir}/bootstrap-runs.jsonl"
+    fi
   fi
+  printf '%s' "$SOLEUR_OP_LEDGER_FILE"
 }
 
 soleur_op_now() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
-# Minimal JSON string escaping: backslash and double quote, then control chars
-# collapsed to a space. Enough for the field set below, which is names and small
-# integers by construction.
+# JSON string escaping for the field set below (names and small integers by
+# construction): newline and carriage return become a space FIRST, because the
+# sed that follows is line-oriented and would otherwise pass a second line
+# through unescaped; U+2028/U+2029 are stripped (JSON allows them raw, but a
+# JS-hosted reader treats them as line terminators); backslash and double quote
+# are escaped; remaining control characters collapse to a space.
 soleur_op_json_escape() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[[:cntrl:]]/ /g'
+  local s="$1"
+  s="${s//$'\n'/ }"
+  s="${s//$'\r'/ }"
+  s="${s//$'\xe2\x80\xa8'/}"
+  s="${s//$'\xe2\x80\xa9'/}"
+  printf '%s' "$s" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[[:cntrl:]]/ /g'
+}
+
+# soleur_op_json_int <value>
+#   A bare JSON number, or 0 when the argument is not an integer — an unquoted
+#   non-number would make the whole line unparseable.
+soleur_op_json_int() {
+  if [[ "${1:-}" =~ ^-?[0-9]+$ ]]; then printf '%s' "$1"; else printf '0'; fi
 }
 
 soleur_op_ledger_write() {
@@ -207,10 +235,11 @@ soleur_op_ledger_write() {
 
 # soleur_op_ledger_init <total-stages> <script-name>
 soleur_op_ledger_init() {
-  SOLEUR_OP_TOTAL_STAGES="$1"
+  SOLEUR_OP_TOTAL_STAGES="$(soleur_op_json_int "${1:-}")"
   SOLEUR_OP_RUN_ID="$(date -u '+%Y%m%dT%H%M%SZ')-$$"
+  soleur_op_ledger_path >/dev/null
   soleur_op_ledger_write "$(printf '{"ts":"%s","run_id":"%s","event":"run_begin","total_stages":%s,"script":"%s"}' \
-    "$(soleur_op_now)" "$SOLEUR_OP_RUN_ID" "$1" "$(soleur_op_json_escape "${2:-unknown}")")"
+    "$(soleur_op_now)" "$SOLEUR_OP_RUN_ID" "$SOLEUR_OP_TOTAL_STAGES" "$(soleur_op_json_escape "${2:-unknown}")")"
 }
 
 # soleur_op_ledger_note <kind> <name> <detail>
@@ -227,14 +256,14 @@ soleur_op_ledger_note() {
 soleur_op_stage_begin() {
   printf '\n→ [%s/%s] %s\n' "$1" "$SOLEUR_OP_TOTAL_STAGES" "$2"
   soleur_op_ledger_write "$(printf '{"ts":"%s","run_id":"%s","event":"stage","phase":"begin","stage_index":%s,"total_stages":%s,"stage_name":"%s","outcome":"pending","exit_code":null}' \
-    "$(soleur_op_now)" "$SOLEUR_OP_RUN_ID" "$1" "$SOLEUR_OP_TOTAL_STAGES" "$(soleur_op_json_escape "$2")")"
+    "$(soleur_op_now)" "$SOLEUR_OP_RUN_ID" "$(soleur_op_json_int "$1")" "$(soleur_op_json_int "$SOLEUR_OP_TOTAL_STAGES")" "$(soleur_op_json_escape "$2")")"
 }
 
 # soleur_op_stage_end <index> <name> <outcome> <exit-code>
 soleur_op_stage_end() {
   soleur_op_ledger_write "$(printf '{"ts":"%s","run_id":"%s","event":"stage","phase":"settle","stage_index":%s,"total_stages":%s,"stage_name":"%s","outcome":"%s","exit_code":%s}' \
-    "$(soleur_op_now)" "$SOLEUR_OP_RUN_ID" "$1" "$SOLEUR_OP_TOTAL_STAGES" \
-    "$(soleur_op_json_escape "$2")" "$(soleur_op_json_escape "$3")" "${4:-0}")"
+    "$(soleur_op_now)" "$SOLEUR_OP_RUN_ID" "$(soleur_op_json_int "$1")" "$(soleur_op_json_int "$SOLEUR_OP_TOTAL_STAGES")" \
+    "$(soleur_op_json_escape "$2")" "$(soleur_op_json_escape "$3")" "$(soleur_op_json_int "${4:-0}")")"
 }
 
 # There is deliberately NO resume index. Every stage opens with an "already
@@ -344,23 +373,87 @@ soleur_op_ack_or_die() {
 # inherits that limitation: acceptable for a single-operator script on the
 # founder's own machine, and stated rather than assumed.
 
-# soleur_op_env_upsert <env-file> <KEY> <value>
-soleur_op_env_upsert() {
-  local env_file="$1" key="$2" value="$3" tmp before_count
-  if [[ -z "$key" ]]; then
-    printf 'SOLEUR_BOOTSTRAP_BAD_ARG helper=env_upsert reason=empty-key\n'
+# soleur_op_validate_key <KEY>
+#   ONE validator for BOTH .env writers. The key is interpolated into a BRE
+#   (`grep -v "^${key}="`), so anything outside the identifier alphabet is either
+#   a regex metacharacter (`.` matches every key; `[` is a grep exit 2) or a
+#   newline that splits the file. Refused, never escaped.
+soleur_op_validate_key() {
+  local key="$1"
+  if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    printf 'SOLEUR_BOOTSTRAP_BAD_ARG key=%s\n' "${key//[$'\n\r']/ }"
     return 1
   fi
+}
+
+# soleur_op_env_key_count <file>
+#   `-a` on EVERY grep over the .env: without it grep's binary-file heuristic
+#   applies, and (measured) one cp1252 byte in a comment under a UTF-8 locale
+#   silently drops that line with rc 0, while a NUL byte anywhere makes `grep -v`
+#   print nothing at all — the mv then installs an .env holding only the new key.
+soleur_op_env_key_count() {
+  grep -a -c '^[A-Za-z_][A-Za-z0-9_]*=' "$1" 2>/dev/null || true
+}
+
+# soleur_op_env_filter_out <env-file> <KEY> <tmp>
+#   Every line but `KEY=...` into <tmp>. grep exit 1 (nothing left) is a normal
+#   outcome; exit 2 (unreadable file, a bad pattern) is NOT — the old `|| true`
+#   turned it into an empty <tmp> that the mv then installed as the .env,
+#   wiping every key and printing green. Shared by upsert and reset so the two
+#   cannot drift.
+soleur_op_env_filter_out() {
+  local env_file="$1" key="$2" tmp="$3" rc
+  grep -a -v "^${key}=" "$env_file" > "$tmp" && rc=0 || rc=$?
+  if (( rc > 1 )); then
+    printf 'SOLEUR_BOOTSTRAP_ENV_READ_FAILED path=%s\n' "$env_file"
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# soleur_op_env_commit <env-file> <tmp> <keys-before> <min-keys-after>
+#   The mv is REFUSED when the file about to be installed holds fewer keys than
+#   the writer can legitimately produce: an upsert only adds or replaces (never
+#   shrinks), a reset shrinks by at most one. Anything else is the filter having
+#   lost lines — the failure both greps above were made loud for — caught on the
+#   artefact rather than on the mechanism.
+soleur_op_env_commit() {
+  local env_file="$1" tmp="$2" before="$3" min_after="$4" after
+  after="$(soleur_op_env_key_count "$tmp")"
+  if (( after < min_after )); then
+    printf 'SOLEUR_BOOTSTRAP_ENV_KEYCOUNT_DROP before=%s after=%s path=%s\n' "$before" "$after" "$env_file"
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$env_file"
+  chmod 600 "$env_file"
+}
+
+# soleur_op_env_upsert <env-file> <KEY> <value>
+#   ATOMIC: the new `KEY=value` line is appended to the temp file BEFORE the
+#   `mv`, so there is no instant at which the key is absent from the .env (the
+#   old shape had mv → chmod → separate append; a Ctrl-C in between lost the
+#   key). The .env is resolved through any symlink first, so a linked .env is
+#   rewritten in place rather than replaced by a regular file.
+soleur_op_env_upsert() {
+  local env_file="$1" key="$2" value="$3" tmp before_count
+  soleur_op_validate_key "$key" || return 1
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    printf 'SOLEUR_BOOTSTRAP_BAD_ARG key=%s reason=value-contains-line-break\n' "$key"
+    return 1
+  fi
+  env_file="$(readlink -f -- "$env_file" 2>/dev/null || printf '%s' "$env_file")"
   [[ -f "$env_file" ]] || : > "$env_file"
-  before_count="$(grep -c '^[A-Za-z_][A-Za-z0-9_]*=' "$env_file" 2>/dev/null || true)"
-  tmp="$(mktemp "${env_file}.XXXXXX")" || {
+  before_count="$(soleur_op_env_key_count "$env_file")"
+  # `.tmp.` in the name so a `.env*` ignore pattern covers the sibling too; the
+  # template's not-ignored check probes this exact shape.
+  tmp="$(mktemp "${env_file}.tmp.XXXXXX")" || {
     printf 'SOLEUR_BOOTSTRAP_BAD_ARG helper=env_upsert reason=mktemp-failed\n'
     return 1
   }
-  grep -v "^${key}=" "$env_file" > "$tmp" || true
-  mv "$tmp" "$env_file"
-  chmod 600 "$env_file"
-  printf '%s=%s\n' "$key" "$value" >> "$env_file"
+  soleur_op_env_filter_out "$env_file" "$key" "$tmp" || return 1
+  printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  soleur_op_env_commit "$env_file" "$tmp" "$before_count" "$before_count" || return 1
   soleur_op_ledger_note env_upsert "$key" "keys_before=${before_count}"
 }
 
@@ -370,12 +463,14 @@ soleur_op_env_upsert() {
 #   a re-run never re-prompts — it fails identically forever. This is the
 #   `--reset <KEY>` path every generated script exposes.
 soleur_op_env_reset() {
-  local env_file="$1" key="$2" tmp
+  local env_file="$1" key="$2" tmp before_count
+  soleur_op_validate_key "$key" || return 1
+  env_file="$(readlink -f -- "$env_file" 2>/dev/null || printf '%s' "$env_file")"
   [[ -f "$env_file" ]] || return 0
-  tmp="$(mktemp "${env_file}.XXXXXX")" || return 1
-  grep -v "^${key}=" "$env_file" > "$tmp" || true
-  mv "$tmp" "$env_file"
-  chmod 600 "$env_file"
+  before_count="$(soleur_op_env_key_count "$env_file")"
+  tmp="$(mktemp "${env_file}.tmp.XXXXXX")" || return 1
+  soleur_op_env_filter_out "$env_file" "$key" "$tmp" || return 1
+  soleur_op_env_commit "$env_file" "$tmp" "$before_count" "$(( before_count > 0 ? before_count - 1 : 0 ))" || return 1
   soleur_op_ledger_note env_reset "$key" ""
 }
 
