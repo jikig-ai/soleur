@@ -64,9 +64,13 @@ commit_all() { : "${1:?fixture dir is empty; git -C <empty> would retarget this 
 # HEAD, and the added-line diff is empty -- every case would pass having examined nothing.
 commit_base() { : "${1:?fixture dir is empty; git -C <empty> would retarget this write}"; commit_all "$1" base && git -C "$1" checkout -q -b feat; }
 
+# Extra environment for the GATE invocation only (the config rows below set it to
+# GIT_CONFIG_* entries). Fixture setup never sees it, so a row changes exactly one
+# thing: what git config the lint's own `git diff` runs under.
+GATE_ENV=()
 run_gate() {
   local d="$1" out rc=0
-  out=$(cd "$d" && bash ./scripts/gate.sh --base main 2>&1) || rc=$?
+  out=$(cd "$d" && env "${GATE_ENV[@]}" bash ./scripts/gate.sh --base main 2>&1) || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
 
@@ -107,6 +111,31 @@ case_line() {
 
 case_line "arm (a): fires on a section referent in a marker-bearing section" \
   "$CLOUD_SECTION" 'This section applies to the Plugin only. See Section 9.' 1 'arm \(a\)'
+
+# USER GIT CONFIG must not change the verdict (#8238). The lint strips a `b/`
+# header prefix; diff.mnemonicprefix (`+++ w/…` against the worktree) and
+# diff.noprefix leave the path unresolvable, the marker lookup finds no file, and
+# the lint reported "0 violations" with rc=0 on developer hosts while CI (default
+# config) stayed green. One config per row.
+#
+# HARNESS CHECK first: prove the injected config reaches git in a fixture, or the
+# rows below would silently test default config.
+hc=$(new_repo) || { echo "GUARD FAIL: harness-check fixture setup failed" >&2; exit 2; }
+printf '%s' "$CLOUD_SECTION" > "$hc/docs/legal/privacy-policy.md"
+commit_base "$hc" >/dev/null
+printf 'x\n' >> "$hc/docs/legal/privacy-policy.md"
+if ! env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.mnemonicprefix GIT_CONFIG_VALUE_0=true \
+     git -C "$hc" diff -U0 --no-color main | grep -q '^+++ w/'; then
+  echo "GUARD FAIL: injected GIT_CONFIG_* did not change the fixture's diff header — the config rows below would test nothing." >&2
+  exit 2
+fi
+for cfg in "diff.mnemonicprefix true" "diff.noprefix true" "diff.algorithm histogram"; do
+  read -r cfg_key cfg_val <<<"$cfg"
+  GATE_ENV=(GIT_CONFIG_COUNT=1 "GIT_CONFIG_KEY_0=$cfg_key" "GIT_CONFIG_VALUE_0=$cfg_val")
+  case_line "arm (a): fires under $cfg_key=$cfg_val" \
+    "$CLOUD_SECTION" 'This section applies to the Plugin only. See Section 9.' 1 'arm \(a\)'
+done
+GATE_ENV=()
 
 case_line "arm (a): fires when the marker is BELOW the block" \
   $'## 4. Data\n\n### 4.1 Processing\n\nIntro.\n' \
