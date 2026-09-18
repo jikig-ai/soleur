@@ -319,10 +319,32 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)' <<
       CONFLICT_MARKERS_DIR="$HOOK_CWD"
     fi
   fi
+  # Pins mirror .claude/hooks/guardrails.sh — this copy is wired in
+  # .openhands/hooks.json and is the SAME guard, so it needs the same flags.
+  # `--no-color` (color.ui/color.diff=always wraps every line in ANSI so `^\+`
+  # never matches), `--no-ext-diff` (a diff.external replaces the patch body
+  # wholesale), and `-c core.quotePath=false` (quotePath defaults to TRUE, so a
+  # non-ASCII filename is emitted escaped). Measured: without --no-color, a real
+  # staged conflict marker under color.ui=always is NOT detected and the commit
+  # is silently allowed.
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
-    STAGED_DIFF=$(git -C "$CONFLICT_MARKERS_DIR" diff --cached 2>/dev/null || true)
+    CONFLICT_GIT=(git -c core.quotePath=false -C "$CONFLICT_MARKERS_DIR")
   else
-    STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
+    CONFLICT_GIT=(git -c core.quotePath=false)
+  fi
+  # FAIL LOUD, not open: `|| true` made an errored diff (index.lock race, corrupt
+  # index) indistinguishable from clean content. Not-a-repo is not an error —
+  # there is no staged content to guard — so only an in-repo failure denies.
+  if "${CONFLICT_GIT[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    STAGED_DIFF=""
+    DIFF_RC=0
+    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff \
+      --src-prefix=a/ --dst-prefix=b/ --no-relative 2>/dev/null) || DIFF_RC=$?
+    if [ "$DIFF_RC" -ne 0 ]; then
+      deny "COULD NOT VERIFY: \`git diff --cached\` failed, so staged content could not be checked for conflict markers. This is not a clean result — confirm the index is healthy before committing."
+    fi
+  else
+    STAGED_DIFF=""
   fi
   if grep -qE '^\+(<{7}|={7}|>{7})' <<<"$STAGED_DIFF"; then
     deny "BLOCKED: Staged content contains conflict markers (<<<<<<<, =======, or >>>>>>>). Resolve all conflicts before committing."

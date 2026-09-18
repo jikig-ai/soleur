@@ -21,12 +21,22 @@ CONFIG="$REPO_ROOT/.gitleaks.toml"
 # gitleaks. A blanket `exit 0` here used to skip the arity/anchor guards too,
 # which meant an allowlist widening could land un-guarded on any runner lacking
 # the binary.
-HAVE_GITLEAKS=1
-if ! command -v gitleaks >/dev/null 2>&1; then
-  HAVE_GITLEAKS=0
-  echo "NOTE: gitleaks not installed — fixture rows (T1-T7, T11) skipped;"
-  echo "      config-text guards (T8/T9/T10/T11b) still run."
-fi
+#
+# RUNNABILITY, not resolvability (#8266). `command -v gitleaks` succeeds on an
+# unpinned version-manager shim (mise: "No version is set for shim: gitleaks")
+# that exits non-zero on every call — every fixture row then scanned nothing and
+# reported a config regression that did not exist. The probe runs the binary.
+# `timeout` is optional (stock macOS has neither timeout nor gtimeout): absent,
+# the probe runs unbounded rather than misreporting a runnable gitleaks.
+SUITE="gitleaks-rules"
+# shellcheck source=lib/gitleaks-probe.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/gitleaks-probe.sh"
+gl_probe
+
+# Per-ARM skip, never per-suite. A skipped arm is not a pass: under CI=true the
+# suite exits 1 at the end naming every skipped arm (CI installs the pinned
+# binary, so a skip there is a broken environment); locally it exits 0 after
+# listing them, so an unrunnable host tool is not reported as a config verdict.
 
 PASS=0
 FAIL=0
@@ -405,6 +415,12 @@ for row in \
   fi
 done
 
+else
+  # One SKIP line per fixture arm, so the operator sees exactly which
+  # behavioural rows did not run (the config-text guards below still do).
+  for arm in T1 T2 T3 T4 T5 T6 T7 T7b T7d T7e T7c T11; do
+    _skip_arm "$SUITE: $arm" "$GITLEAKS_REASON"
+  done
 fi  # HAVE_GITLEAKS
 
 echo "T8: the placeholder allowlist stays a SINGLE entry"
@@ -552,6 +568,42 @@ else
   fail "carve-out regex entry must be a fully-anchored '^<64 hex>\$' literal — unanchored or widened, it silences any credential carrying the fixture value as a captured-token prefix (#6723 class)"
 fi
 
+# CI fail-on-skip contract, asserted against the epilogue's REAL BYTES. That
+# contract is the only thing stopping the skipped arms from reading as green on a
+# runner without gitleaks, and nothing asserted it — a refactor of the tail would
+# drop it silently and the shard would stay green. Extracted between the markers
+# and driven through a three-row truth table, so a mutation to the SHIPPED code
+# (not a copy) reds.
+_t_ci_contract() {
+  local body rc
+  body=$(awk '/^# >>> ci-contract-epilogue$/{f=1;next} /^# <<< ci-contract-epilogue$/{f=0} f' "${BASH_SOURCE[0]}")
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    fail "CI fail-on-skip contract — epilogue markers matched nothing — the extraction is broken, not the contract"
+    return
+  fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" != 1 ]]; then fail "CI fail-on-skip contract — CI=true with skips did not exit 1"; return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then fail "CI fail-on-skip contract — a local skip (no CI) exited 1"; return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then fail "CI fail-on-skip contract — CI=true with no skips exited 1"; return; fi
+  pass "CI fail-on-skip contract (3-row truth table on the real epilogue)"
+}
+_t_ci_contract
+
 echo ""
-echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, ${#SKIPPED_ARMS[@]} arm(s) skipped ==="
+# >>> ci-contract-epilogue
+if [[ "${#SKIPPED_ARMS[@]}" -gt 0 ]]; then
+  echo "Skipped arms (gitleaks not runnable):"
+  printf '  - %s\n' "${SKIPPED_ARMS[@]}"
+  if [[ "${CI:-}" == "true" ]]; then
+    echo "FAIL: ${#SKIPPED_ARMS[@]} arm(s) skipped under CI=true — CI installs the pinned gitleaks 8.24.2, so every arm above must run there."
+    exit 1
+  fi
+fi
+# <<< ci-contract-epilogue
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
