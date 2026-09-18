@@ -1365,6 +1365,19 @@ For most features: tests + linting + following patterns is sufficient.
 
 ## Common Pitfalls to Avoid
 
+- **A claim about a platform's runtime semantics is a measurement you have not taken yet — take it
+  BEFORE writing the directive, the comment, or the ADR sentence, and when copying a mechanism from a
+  sibling, copy its whole block (the `with:` keys, the directives around it, the comment) and diff
+  them, not the one line you wanted.** For systemd the measurement is a thirty-second transient unit
+  with a counting `OnFailure=` reporter (`systemd-run --user … -p OnFailure=rep.service`), and it
+  must be re-run for every sentence the diff adds about ordering, retry or terminal state.
+  **Why:** #8210 — five claims written from `systemd.service(5)` and the v255 source were each
+  inverted on the box: `OnFailure=` fired per attempt (not once), a refused timer tick fired nothing
+  (not "~96/day"), `Result=success` reset when a retry STARTED (the terminal boolean read `yes`
+  mid-ladder), `Persistent=` was inert without `OnCalendar=`, and the `RestartMode=direct` fix made
+  `enable --now` block through the whole ladder; separately the rung-2 interlock was copied onto the
+  replace job without the sibling's `fetch-depth: 0`, so the route was held permanently. See
+  `knowledge-base/project/learnings/2026-09-19-every-systemd-claim-i-reasoned-was-inverted-by-a-thirty-second-measurement.md`.
 - **Scope every mechanical edit to lines the BRANCH added** (`git diff origin/main...HEAD`), and
   assert the pre-existing count is unchanged afterwards. **Why:** #7810 — a remediation keyed on
   `assert_fixture_dir "$work"` deleted 13 PRE-EXISTING guards from #7709's burn-down, surfacing only
