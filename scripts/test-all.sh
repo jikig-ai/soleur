@@ -177,6 +177,10 @@ _EMIT_COMMANDS=0
 #
 # --affected   THE LOCAL DEFAULT. Run the suites this diff can move plus every
 #              declared always-on ratchet; decline the rest as not-affected.
+#              Honest scope note: affected+ratchets does NOT exercise
+#              suite×suite interaction — the backstop for that class is CI's
+#              sharded full battery (the required `test` context), not any
+#              local run. A green affected run is not a full-coverage claim.
 # --full       The whole battery — what CI runs. Refused under SOLEUR_SUBAGENT=1
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and

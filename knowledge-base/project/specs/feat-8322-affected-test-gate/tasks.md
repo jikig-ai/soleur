@@ -41,8 +41,8 @@ Spec: `knowledge-base/project/specs/feat-8322-affected-test-gate/spec.md`
 
 ## Phase 4 — ADR + disclosure
 
-- [ ] 4.1 `knowledge-base/engineering/architecture/decisions/ADR-229-*.md` — default flip; amends ADR-181, ADR-133, ADR-183, ADR-196 (Decision 6's hook-hatch claim is false post-#8322); records the enumerate interpretation + token-edge deferral + dual-axis subsumption note. (ADR-227 was claimed by a sibling branch between plan and Phase 0 — re-verified free at Phase 0.3.)
-- [ ] 4.2 Disclosure sweep: `test-all.sh` header/`--help`, `ship` Phase 4, `work` §9 — affected+ratchets does not test suite×suite interaction; CI sharded full is the backstop; retired middle mode documented.
+- [x] 4.1 `knowledge-base/engineering/architecture/decisions/ADR-229-*.md` — default flip; amends ADR-181, ADR-133, ADR-183, ADR-196 (Decision 6's hook-hatch claim is false post-#8322); records the enumerate interpretation + token-edge deferral + dual-axis subsumption note. (ADR-227 was claimed by a sibling branch between plan and Phase 0 — re-verified free at Phase 0.3.)
+- [x] 4.2 Disclosure sweep: `test-all.sh` header/`--help`, `ship` Phase 4, `work` §9 — affected+ratchets does not test suite×suite interaction; CI sharded full is the backstop; retired middle mode documented.
 
 ## Phase 5 — Verification
 
