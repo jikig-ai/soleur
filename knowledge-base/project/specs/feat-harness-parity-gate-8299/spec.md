@@ -33,28 +33,40 @@ forbids.
 
 ## Goals
 
-- G1 A born-blocking census over **all 98** tracked skills, population directory-derived.
-- G2 Every skill resolves to QUALIFIED / AUTO-EXEMPT / UNCLASSIFIED. UNCLASSIFIED must be 0.
-- G3 Replace the hand-listed `UNION` array with a derived population (ADR-193 §5).
-- G4 Floors that catch extractor blindness: a qualified-count floor (grows only) and an
-  **auto-exempt ceiling** (shrinks only), so a newly added skill is RED-by-default.
-- G5 An auditable exemption ledger: dated, issue-linked, falsifiable reasons.
+Re-based on plan v3. The v1/v2 goals this replaces described a marker census and a token
+blocklist, both refuted (ADR-226 §Considered Options); they are recorded there, not here.
+
+- G1 A born-blocking gate over a DERIVED population — every tracked `skills/*/SKILL.md`,
+  `commands/*.md` and codex/devin wrapper, minus a stated per-path exclusion list.
+- G2 Every token naming a known component resolves to one of six verdicts
+  (`CANONICAL | BARE | PATH | NONCANONICAL | UNKNOWN-NS | EXEMPT`). NONCANONICAL must be 0.
+- G3 No hand-listed member set decides anything: the index is `git ls-files` plus
+  `discoverAgentPaths()`, and the population is `:(glob)` pathspecs (ADR-193 §5 applied to
+  both). **Not carried from v2:** replacing `devin-cloud-mode.test.ts`'s `UNION` array was a
+  v2 goal and is out of scope here — that file is untouched by this PR.
+- G4 **No floors and no baseline.** The property is absolute, so a qualified-count floor and
+  an auto-exempt ceiling (the v2 design) would be a compensation surface; ADR-226 rejects
+  them as Option D. Anti-vacuity comes from permanent fixtures, an index invariant, a
+  population invariant and a cross-file sentinel instead.
+- G5 **No exemption ledger.** Exemptions reduce to one region kind (commands only, strict
+  grammar) and four path exclusions, each carrying its reason in the constant itself.
 
 ## Non-Goals
 
-- NG1 **Mirror completeness** for the hand-ported trees (`.openhands/skills/` at 63/68
-  agents, `.gemini/` at 1/68 agents + 3 skills). Deferred to **#8306**.
-- NG2 **Migrating the ~105 `${CLAUDE_PLUGIN_ROOT:-…}` sites.** Owned by ADR-179 and
-  open **#7453**. This work must not bless a `:-` form nor add `${GROK_PLUGIN_ROOT:-…}`
-  as a second vector.
+- NG-M Bare mechanism nouns (`Skill tool`, `Task tool`, `subagent_type`) carrying no name
+  through a sigil — **#8318**.
+- NG-P Other agent-read docs: agent bodies (289 sites / 68 docs) and
+  `skills/*/references/**` (84 / 19), measured 2026-09-18 — **#8317** (P1). Not "one glob
+  line each"; see ADR-226 §Consequences for the four edits it needs.
+- NG-U Gating `soleur:<unknown>` (R3). Reported and diffed, never failed — a typo is a
+  different defect.
+- NG1 **Mirror completeness** for the hand-ported trees (`.openhands/`, `.gemini/`) — **#8306**.
+- NG2 **Migrating the `${CLAUDE_PLUGIN_ROOT:-…}` sites.** Owned by ADR-179 and open **#7453**.
+  This work must not bless a `:-` form nor add `${GROK_PLUGIN_ROOT:-…}` as a second vector.
 - NG3 **A new `AGENTS.rules.md` rule.** `cq-agents-md-tier-gate` classifies this as
-  domain-scoped (single-file trigger: a SKILL.md edit) → the obligation belongs in the
-  owning skills.
-- NG4 **A single convergent rule bullet** across the skill-authoring skills. ADR-224 §1
-  forbids an unqualified cross-harness rule; any bullet must be harness-qualified per skill.
+  domain-scoped, so the obligation belongs in the owning skills. W11 edits EXAMPLES inside
+  existing rule bodies; it adds no rule.
 - NG5 A runtime abstraction layer. `plugins/soleur/lib/harness.ts` already is the adapter.
-- NG6 Rewriting the 34 unmarked skills' logic — only their invocation surface, and only
-  where they are in the derived population.
 
 ## Functional Requirements
 
@@ -164,15 +176,31 @@ Plan v3 AC1–AC17 are the contract; the load-bearing ones restated:
 - [ ] AC10–AC12 authoring bullets, emit-time sentences and preambles present as specified.
 - [ ] AC13 ADR-226 exists; ordinal unique across `origin/*` at merge.
 - [ ] AC14 `lint-agents-rule-budget.py` `[OK]` after the AGENTS.rules.md substitutions.
-- [ ] AC15 `SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh` GREEN.
+- [x] AC15 **AMENDED — CI's required `test` context is the gate, not a local battery.** The
+      original AC asked for a local `SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh`. Per
+      ADR-183 no local run is the merge gate: CI's required `test` context runs the same three
+      shards on the PR head, and 25 further required contexts (`rule-body-lint`, `adr-ordinals`,
+      `markdown-lint`, `grok-fidelity`, `skill-security-scan`, …) gate this diff. The one shard
+      CI does not cover is `apps/web-platform/infra/`, and this diff touches it in **0** files
+      (`git diff --name-only origin/main...HEAD | grep -c apps/web-platform/infra/`). Discharged
+      locally instead: `bun test plugins/soleur/test/` 3046/0, the eval-harness round-trip suite,
+      lefthook's full lint set, and the Guard 3 matrix. The queued local battery was killed
+      (rc 143 = SIGTERM, a reap and not a verdict — it is recorded as neither green nor red).
+      Amended explicitly rather than satisfied by a looser variant.
 - [ ] AC16/AC17 PR body refs; spec and tasks re-based on v3.
 
 ## Risks
 
+Re-based on plan v3; the v1/v2 rows referenced a trigger regex, a `Harness` re-derivation and
+an exemption ledger, none of which this design contains.
+
 | Risk | Mitigation |
 | --- | --- |
-| Requiring Codex REDs all 12 currently-qualified skills | Sequence the canonical marker-block edit *with* the gate; it is one edit propagated across 64 byte-identical copies |
-| Trigger regex misses a real invocation shape | TR6 mutation test + TR7 decoy; Open Question 2 |
-| Block inserted inside the cloud-mode block breaks byte-identity for 24 skills | FR9 — anchor strictly after `soleur-cloud-mode:end` |
-| Deriving `Harness` from the new array drops `"unknown"` and breaks `detectHarness` | Keep `\| "unknown"`; the 5-member union stays type-identical for all 3 importers |
-| Ledger degrades into a rubber stamp | FR5 — mandatory dated, issue-linked, falsifiable reason; no bare "temporary" |
+| A BOUNDARY member is a harness sigil somewhere | None of the four adapters uses one (every `formatSkillInvocation` branch read). 18 of 23 members are measured load-bearing on the tree; 5 are stated as anticipated. ADR-226 makes re-reading the set an obligation when a fifth harness lands |
+| `--fix` destroys a real byte | Measured, and it did: four sites, including a live `cp` glob. A slash after a span-CLOSING delimiter is now classified PATH (`closesSpan`), so no site is reported and nothing is rewritten; the residual post-condition refuses any rewrite that would not re-classify CANONICAL; `--fix` refuses a dirty tree so every rewrite is reviewable and revertible; and it skips docs with malformed markers. Two fixtures pin both directions, four mutations killed |
+| A doc whose SUBJECT is the typed form gets canonicalised into falsehood | Happened to `skills/{go,help,sync}` and was caught at review. Those three plus `commands/help.md` are excluded by path, each with its reason in the constant, and the exclusion count is pinned |
+| The gate's own population is silently narrowed | A population invariant counted from the tree test's own literal pathspecs, plus pins on the exempt surface and the exclusion map. Four narrowings mutation-proven RED |
+| 483 leaf → id rewrites change sentence shape | Leaf→id is a function (uniqueness asserted); reviewed per doc group. Four sites where the bare word was not a component reference were found and hand-corrected |
+| Emit-time rendering is forgotten at a new operator-facing site | AC11 greps the template shape; the `operator-typed-render` block states the obligation in all 10 affected docs; `formatSkillInvocation` now returns a typeable form on every harness |
+| ADR ordinal moves | Re-derived across every `origin/*` ref; AC13 re-runs it immediately before merge |
+| Region markers moved in go.md launder a dispatch | Review-only, one file, markers in the diff — stated as the honest limit in ADR-226 |

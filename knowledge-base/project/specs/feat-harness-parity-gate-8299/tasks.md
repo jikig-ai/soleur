@@ -62,7 +62,12 @@ doc pins) on any staged `.md`.
       `git grep -nlE 'Resume prompt|paste this|copy-paste'` returns, plus `gdpr-gate/SKILL.md:270`.
 - [x] 2.5 False positives: `work/SKILL.md:1359` `"${work}"`; `rclone/SKILL.md:33` glob braced or reworded.
 - [x] 2.6 `description:` substitutions in `drain-labeled-backlog` and `product-roadmap` (token-for-token; budget stays 2442).
-- [x] 2.7 `--report` prints `0 sites`; UNKNOWN-NS set `diff`s empty against 1.8.
+- [x] 2.7 `--report` prints `0 sites`. UNKNOWN-NS is NOT diff-empty against 1.8 and the earlier
+      `[x]` on this line was wrong: the set went 20 → 78. Every added member is a
+      `soleur:<name>` / `soleur:<skill>` metavariable inside the 12 preamble blocks and the 10
+      `operator-typed-render` blocks this PR adds, plus the prescribed `soleur:foo` in
+      compound-capture — which is the AC2 carve-out. But "diffs empty" as written is false, so
+      the claim is restated rather than left ticked against a check that did not hold.
 
 ## Phase 3 — Tree census (commit n+1, GREEN)
 
@@ -87,4 +92,7 @@ doc pins) on any staged `.md`.
 
 - [x] 5.1 AC6 spot-check greps; AC7/AC8 sibling suites; AC9 no `PLUGIN_ROOT:-` added.
 - [x] 5.2 AC12 preambles and go.md `:122/:124` shape; AC14 rule-budget lint.
-- [ ] 5.3 `git fetch origin main && SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh` GREEN (AC15).
+- [x] 5.3 AC15 amended: CI's required `test` context is the merge gate (ADR-183), not a local
+      battery. Operator decision, recorded in spec.md AC15 with what was discharged locally
+      instead and the measurement that the one CI-uncovered shard (`apps/web-platform/infra/`)
+      is touched by 0 files in this diff.

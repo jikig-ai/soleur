@@ -8,8 +8,12 @@ Accepted.
 
 ## Context
 
-Soleur ships one component tree — 98 skills, 3 commands, 67 registry agents — to
-four harnesses that each invoke a component with their own syntax:
+Soleur ships one component tree — 98 skills, 3 commands, 67 registry agents — to four harnesses
+WITH ADAPTERS IN `harness.ts`, each invoking a component with its own syntax. (The repo carries
+six harness trees — `.agents`, `.codex`, `.devin`, `.gemini`, `.grok`, `.openhands`; this PR's own
+learning file records that "ships to four harnesses" is false as an unqualified claim. Four is the
+number `detectHarness` discriminates and `formatSkillInvocation` renders for, which is the set this
+decision is about. The other two have no adapter branch, so this gate says nothing about them.)
 
 | Harness | Skill form | Agent form |
 | --- | --- | --- |
@@ -129,7 +133,7 @@ author's loop.
    quietly blind is the instrument, and each blindness has a permanent,
    independent check: an index invariant computed from the tree test's own
    literal pathspecs (`|AGENTS| === EXPECTED_SOLEUR_AGENT_COUNT`, leaves unique
-   and disjoint from skill names); the `0 docs examined` throw; 28 synthesized
+   and disjoint from skill names); the `0 docs examined` throw; 32 synthesized
    fixtures pinning every rule, both allowlists, the token class, the trailing
    glue strip and the marker grammar; and a cross-file sentinel — the fixture
    suite asserts the tree file contains the literal
@@ -147,7 +151,11 @@ adapter resolves; a new harness is an adapter branch, not a doc sweep; a novel
 sigil is caught without being named; the gate's failure message names the site,
 the harness form it found, the canonical id to write, and `--fix`.
 
-Harder: 81 lines with a slash form entered this population in the 30 days before
+Harder: slash forms keep entering this population — 124 commits touched it in the 30 days to
+2026-09-18 (`git log --since=30.days --format=%H -- <population globs> | wc -l`), against the
+plan's 113 a few days earlier. Roughly 81 of those lines carried a slash form when the plan
+measured it; the point is the rate, not the digit, and the command is recorded here so the next
+reader re-derives rather than inherits. So authors will feel the gate before
 this decision, so authors will feel the gate — `--fix` repairs the mechanical
 shapes (`/soleur:x`, `$soleur:x`, `@agent-soleur:x`, grok `/x`) and the
 authoring surfaces (`skill-creator`, `compound-capture` Step 8, `heal-skill`)
@@ -157,7 +165,9 @@ longer and the sentence around it changes.
 Declared gaps, each with an issue:
 
 - **NG-M** (#8318): bare mechanism nouns (`Skill tool`, `Task tool`,
-  `subagent_type`) that carry no name through a sigil — 82 lines in 29 docs. No
+  `subagent_type`) that carry no name through a sigil. The three exemplars measure 62 lines in
+  25 docs (`git grep -lE 'Skill tool|Task tool|subagent_type'` over the population); the class as
+  worded is broader than those three nouns, so treat that as a floor, not a census. No
   canonical word exists to allowlist against; the adapters translate the noun
   themselves.
 - **NG-P** (#8317, P1): other agent-read docs — agent bodies (**289 sites / 68
@@ -179,7 +189,8 @@ Declared gaps, each with an issue:
   NG-P needs a frontmatter-value carve-out whose absence is, today, an asserted
   property.
 - The dual-voice `**Grok:** Read plugins/soleur/skills/<x>/SKILL.md in this
-  process` lines (20 in 7 docs) are PATH by design — a file path resolves on
+  process` lines (19 in 7 docs, `git grep -c '**Grok:** Read'` over the population) are PATH by
+  design — a file path resolves on
   every harness, and `workflow-fidelity.test.ts` requires them.
 - `soleur:<unknown>` is reported, not gated; a typo is a different defect. The
   set is diffed pre/post remediation so a hand rewrite cannot go quietly green.
