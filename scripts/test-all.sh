@@ -2180,6 +2180,10 @@ if want_scripts; then
   run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
   # (#8159 retired 2026-09-17 — issue closed; probe script + suite deleted per
   # the script's own RETIREMENT note.)
+  # #8178's close criterion (git-data-boot-poll-8178.sh): PASS only on a post-merge git-data
+  # dispatch whose boot poll ANSWERED — never on a boot_complete row, which was already true
+  # before the fix. Pins the run anchor, the log-marker anchoring and the 2-vs-3 split.
+  run_suite "scripts/git-data-boot-poll-8178" bash scripts/followthroughs/git-data-boot-poll-8178.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -2262,6 +2266,8 @@ if want_scripts; then
   # the exact shape that let a fail-open rung ship in #3366.
   run_suite "tests/scripts/plan-gate-preamble" bash tests/scripts/test-plan-gate-preamble.sh
   run_suite "tests/scripts/git-data-host-birth-gate" bash tests/scripts/test-git-data-host-birth-gate.sh
+  run_suite "tests/scripts/betterstack-read-classify" bash tests/scripts/test-betterstack-read-classify.sh
+  run_suite "tests/scripts/git-data-boot-signal-poll" bash tests/scripts/test-git-data-boot-signal-poll.sh
   run_suite "tests/scripts/git-data-birth-readiness-gate" bash tests/scripts/test-git-data-birth-readiness-gate.sh
   # (#7025) The rung-2 evidence-capture decision function. Registered HERE for the same
   # reason as every line around it: nothing auto-discovers tests/scripts/. This script is

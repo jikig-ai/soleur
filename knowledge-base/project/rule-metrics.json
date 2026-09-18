@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-18T14:05:20Z",
+  "generated_at": "2026-09-18T14:11:56Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1283,10 +1283,10 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 31,
+      "skill-security-scan": 32,
       "monitor-supersede": 249,
-      "net-issue-flow": 509,
-      "post-dispatch-watch-gate": 4954,
+      "net-issue-flow": 511,
+      "post-dispatch-watch-gate": 4968,
       "guardrails-block-recursive-delete": 347,
       "kb-domain-allowlist-guard": 175,
       "guardrails-require-milestone": 517,
@@ -1327,7 +1327,7 @@
     ],
     "gate_override_count": 107,
     "gate_timeout_warn_count": 45,
-    "gate_failopen_warn_count": 83,
+    "gate_failopen_warn_count": 85,
     "gate_body_attributed_count": 40,
     "gate_undelivered_declaration_count": 0,
     "gate_contradictory_declaration_count": 0,

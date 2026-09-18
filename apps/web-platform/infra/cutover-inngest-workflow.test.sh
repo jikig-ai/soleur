@@ -2008,7 +2008,19 @@ H5_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:
 # real query would print it (rows on stdout; an HTTP-error body on stdout with rc 22).
 BS_READER_FN="$(awk '/^_bs_query_rows\(\) \{$/,/^\}$/' "$BODY_SH")"
 BS_REMEDY_FN="$(awk '/^_bs_read_remedy\(\) \{$/,/^\}$/' "$BODY_SH")"
+# (#8178) `_bs_read_remedy` now CALLS `bs_read_classify` instead of carrying the rc=22
+# partition inline. The driver runs the extracted function text in a fresh `bash` under
+# `set -euo pipefail`, so without the classifier the rc=22 arm dies on an unbound command
+# and the render assertions go RED. Extract it from the library and inline it too.
+# Extracted by the same awk-by-name shape as the two above, so a rename breaks loudly
+# here rather than silently degrading the arm.
+BS_CLASSIFY_LIB="$REPO_ROOT/scripts/lib/betterstack-read-classify.sh"
+BS_CLASSIFY_FN="$(awk '/^bs_read_classify\(\) \{$/,/^\}$/' "$BS_CLASSIFY_LIB")"
 assert "#8054 render driver: the REAL reader and remedy functions extract non-vacuously" "[[ \$(printf '%s\n' \"\$BS_READER_FN\" | wc -l) -gt 3 && \$(printf '%s\n' \"\$BS_REMEDY_FN\" | wc -l) -gt 10 ]]"
+# Non-vacuity for the classifier too: an awk range that matches nothing yields an empty
+# string, which would inline cleanly and leave the arm dying exactly as it would have
+# without this change — a silent regression wearing a green suite.
+assert "#8178 render driver: bs_read_classify extracts non-vacuously" "[[ \$(printf '%s\n' \"\$BS_CLASSIFY_FN\" | wc -l) -gt 5 ]]"
 RENDER_TMPDS="$(mktemp)"
 render_2_0() {
   local region="$1" code="$2" body="$3" pmode="$4" hmode="$5" tmpd driver rc=0
@@ -2022,6 +2034,7 @@ render_2_0() {
     printf 'INNGEST_HOST="soleur-inngest"; INNGEST_HOST_NAME="soleur-inngest-prd"; FLIP_LIVENESS_SINCE="15m"\n'
     printf 'STUB_CODE=%q; STUB_BODY=%q; PMODE=%q; HMODE=%q; TMPD=%q\n' "$code" "$body" "$pmode" "$hmode" "$tmpd"
     printf 'H5_PROBE_ROW=%q; H5_HB_ROW=%q\n' "$H5_PROBE_ROW" "$H5_HB_ROW"
+    printf '%s\n' "$BS_CLASSIFY_FN"
     printf '%s\n' "$BS_READER_FN"
     printf '%s\n' "$BS_REMEDY_FN"
     cat <<'DRIVER'
@@ -2774,7 +2787,11 @@ _DISPATCHED=$((PASS + FAIL))
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
 # 630 -> 648 (+18) at the page-overlap dedupe fix: both-arms presence, 7 executed rows per site x2
 #   (id key incl. same-millisecond keep + no-id fallback), loop-ran, incomplete-scan gate, fallback qualifier.
-_EXACT_FLOOR=648
+# RAISED 648 -> 649 (#8178), ITEMISED — one assertion: the bs_read_classify
+# extraction non-vacuity check, added because _bs_read_remedy now calls the shared
+# partition and an empty awk range would inline cleanly while leaving the rc=22 arm
+# dead. Derived from main's value at ship time, not carried as a literal.
+_EXACT_FLOOR=649
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
