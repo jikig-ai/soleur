@@ -43,9 +43,9 @@ lane: cross-domain
 ## Phase 5 — Filing + tracking (post-merge)
 
 - [ ] 5.1 Operator: send email verbatim to `support@cognition.ai` (agent prepares `mailto:` link or paste text; body cites `blob/<merge-sha>/` permalink)
-- [ ] 5.2 Agent: compose + attempt Devin `/bug` for §3 items 2–4 (the defect-class items); paste handoff if interactive-only
-- [ ] 5.3 Run `file-upstream-ask-8160.sh`: posting log on #8160 (destinations/dates/state + verbatim-send attestation + delivery-unverifiable note); `/bug` body re-scrub where retrievable
-- [ ] 5.4 Confirm `apply-sentry-infra.yml` applied the new monitor; `gh run list --workflow=scheduled-devin-docs-drift.yml` shows ≥1 run
+- [x] 5.2 Agent: compose + attempt Devin `/bug` for §3 items 2–4 (the defect-class items); paste handoff if interactive-only — operator filed 2026-09-18, logged on #8160
+- [x] 5.3 Run `file-upstream-ask-8160.sh`: posting log on #8160 (destinations/dates/state + verbatim-send attestation + delivery-unverifiable note); `/bug` body re-scrub where retrievable — `pending-send` + `filed` entries posted 2026-09-18
+- [~] 5.4 Confirm `apply-sentry-infra.yml` applied the new monitor; `gh run list --workflow=scheduled-devin-docs-drift.yml` shows ≥1 run — watcher verified (35333427096 + 35340407015 green incl. check-in after the #8280 checkout fix); monitor apply blocked by #7985 (two surviving `sentry_issue_alert` rules 410; upstream provider fix #950 merged but unreleased, >v0.15.7) — tracked at #8282
 - [x] 5.5 Annotate spec FR5 with the plan-review deviation (directive cut → `Ref #8160` linkage)
 
 ## Sunset (on #8160 close)
