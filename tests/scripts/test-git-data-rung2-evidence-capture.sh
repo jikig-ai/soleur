@@ -360,7 +360,7 @@ if [[ "$rc" -eq 1 ]]; then pass "boot_complete with a FALSE assertion => FAIL"; 
 # (#8210) THE SAME ARM FOR THE FIFTH TERMINAL BOOLEAN, and it is not a copy for symmetry: the
 # FAIL alternation gained `luks_reopen_unit` in this change, and a name added to a regex with no
 # fixture driving it is a guard nobody has seen fire. Unlike its four siblings this one is
-# MEASURED on the host (systemctl is-enabled + Result=success), so `no` is a value real telemetry
+# MEASURED on the host (systemctl is-enabled + ActiveState=active), so `no` is a value real telemetry
 # can actually carry — which is precisely why it must FAIL rather than warn: a replace is the
 # only route by which the boot-time reopen reaches the live host.
 HOSTROWS_REOPEN_NO="$TMP/rows-reopen-no.jsonl"

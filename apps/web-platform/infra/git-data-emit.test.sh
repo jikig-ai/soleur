@@ -414,7 +414,7 @@ _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
 # path having been reached. That is deliberate: it covers the case the arm-time warning cannot,
 # namely the ruleset being flushed AFTER a successful load.
 # (#8210) luks_reopen_unit joins the set, MEASURED like nft_metadata_drop (systemctl
-# is-enabled + Result=success on git-data-luks-reopen.service) and — unlike it — TERMINAL for
+# is-enabled + ActiveState=active on git-data-luks-reopen.service) and — unlike it — TERMINAL for
 # both consumers; the roster arm below is what pins that distinction across files.
 _asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then

@@ -1043,7 +1043,7 @@ fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
 # (#8210) luks_reopen_unit joins the terminal set. Unlike its four siblings it is MEASURED
-# (systemctl is-enabled + Result=success on git-data-luks-reopen.service), so this arm CAN fire
+# (systemctl is-enabled + ActiveState=active on git-data-luks-reopen.service), so this arm CAN fire
 # against real telemetry — see the PASS wording below, which says so.
 #
 # THE TERMINAL ROSTER IS DECLARED ONCE, HERE. The FALSE-assertion alternation and the presence
@@ -1233,7 +1233,7 @@ assert_fixture_dir "$OUT"
 # literals, so the `"…":"no"` arm can never fire against real telemetry. The real
 # predicate is the one below. The overstatement mattered because it landed in the file a
 # human reads at the second of the two intentional gates — the compensating control.
-echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: four of boot_complete's five terminal booleans (luks_mounted, repo_root, hooks_path, provision) are hardcoded literals in git-data-bootstrap.sh, so for those this attests that the final stage was REACHED and that nothing reported a fatal. luks_reopen_unit is MEASURED (#8210: systemctl is-enabled + Result=success on git-data-luks-reopen.service), so its 'no' would have failed this run."
+echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: four of boot_complete's five terminal booleans (luks_mounted, repo_root, hooks_path, provision) are hardcoded literals in git-data-bootstrap.sh, so for those this attests that the final stage was REACHED and that nothing reported a fatal. luks_reopen_unit is MEASURED (#8210: systemctl is-enabled + ActiveState=active on git-data-luks-reopen.service), so its 'no' would have failed this run."
 echo "Evidence written to ${OUT} (user_data sha256 ${TEMPLATE_SHA})."
 echo
 echo "This file is NOT committed by this script and must NOT be committed by a workflow."

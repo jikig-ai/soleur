@@ -126,7 +126,7 @@ Exactly **two** booleans in that row are measured. The first is `nft_metadata_dr
 emit by grepping the live nftables chain (`nft list chain inet soleur_git_data output` for
 `169.254.169.254`), anchored on the metadata address rather than the table name so a table
 whose rule was flushed reads `no`. The second is `luks_reopen_unit` (#8210): `systemctl
-is-enabled` AND `Result=success` on `git-data-luks-reopen.service`, the boot-time LUKS reopen
+is-enabled` AND `ActiveState=active` on `git-data-luks-reopen.service`, the boot-time LUKS reopen
 armed by the runcmd item one stage earlier. Unlike `nft_metadata_drop` it is TERMINAL for both
 readers — a birth or replace that delivers an unarmed reopen unit FAILS rather than warning,
 because a replace is the only route by which that unit reaches the live host. **On
