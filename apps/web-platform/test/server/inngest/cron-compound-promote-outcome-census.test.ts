@@ -149,8 +149,8 @@ describe("Guard 1 — outcome-marker census", () => {
     // made a full-argument-list anchor stale, and the `not.toBe(src)` landing
     // assertion below is what caught that rather than reporting a false pass.
     const mutated = src.replace(
-      /emitOutcomeMarker\(logger, \{([^}]*status: "disabled")/,
-      "noopMarker(logger, {$1",
+      /emitOutcomeMarker\(\{([^}]*status: "disabled")/,
+      "noopMarker({$1",
     );
     expect(mutated).not.toBe(src);
     const c2 = censusTerminalReturns(mutated);
@@ -171,10 +171,10 @@ describe("Guard 1 — outcome-marker census", () => {
     const synthetic = [
       "async function h() {",
       "  if (a) {",
-      '    emitOutcomeMarker(logger, { status: "one" });',
+      '    emitOutcomeMarker({ status: "one" });',
       '    return { ok: true, status: "one" };',
       "  }",
-      '  emitOutcomeMarker(logger, { status: "two" });',
+      '  emitOutcomeMarker({ status: "two" });',
       '  return { ok: true, status: "two" };',
       "}",
     ].join("\n");
