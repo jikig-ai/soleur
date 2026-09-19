@@ -432,6 +432,7 @@ bash-parsing
 bash-pipefail
 bash-set-e
 bash-strict-mode
+bash-subshell
 bash-test-pattern
 bash-tests
 bash-to-ts-port
@@ -1426,6 +1427,7 @@ evidentiary-records
 exacerbation-rule
 exact-equality
 exact-match
+exactly-once
 exec
 exfil
 exhaustive-switch
