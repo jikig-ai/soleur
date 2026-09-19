@@ -916,7 +916,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   it("AC4c — emits a cron:<name> SOLEUR_CLAUDE_COST marker from the response usage/model when markerSource is set", async () => {
     fetchSpy.mockResolvedValue(
       okResponse({
-        content: [{ text: "ok" }],
+        content: [{ type: "text", text: "ok" }],
         stop_reason: "end_turn",
         model: "claude-sonnet-5",
         usage: {
@@ -952,7 +952,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
 
   it("emits NO marker when markerSource is omitted (the two legacy callers)", async () => {
     fetchSpy.mockResolvedValue(
-      okResponse({ content: [{ text: "ok" }], stop_reason: "end_turn" }),
+      okResponse({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }),
     );
     await postAnthropicMessage({
       apiKey: "sk-ant-" + "synthetic-key",
@@ -965,7 +965,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
 
   it("POSTs to the messages endpoint with auth + version headers and returns {text, stopReason}", async () => {
     fetchSpy.mockResolvedValue(
-      okResponse({ content: [{ text: '{"highlights":[]}' }], stop_reason: "end_turn" }),
+      okResponse({ content: [{ type: "text", text: '{"highlights":[]}' }], stop_reason: "end_turn" }),
     );
 
     const result = await postAnthropicMessage({
@@ -1026,7 +1026,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   });
 
   it("wires AbortSignal.timeout when timeoutMs is provided", async () => {
-    fetchSpy.mockResolvedValue(okResponse({ content: [{ text: "{}" }], stop_reason: "end_turn" }));
+    fetchSpy.mockResolvedValue(okResponse({ content: [{ type: "text", text: "{}" }], stop_reason: "end_turn" }));
 
     await postAnthropicMessage({
       apiKey: "sk-ant-" + "synthetic-key",
@@ -1042,7 +1042,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   });
 
   it("passes output_config through to the request body when provided", async () => {
-    fetchSpy.mockResolvedValue(okResponse({ content: [{ text: "{}" }], stop_reason: "end_turn" }));
+    fetchSpy.mockResolvedValue(okResponse({ content: [{ type: "text", text: "{}" }], stop_reason: "end_turn" }));
     const schema = { type: "object", additionalProperties: false, properties: {} };
 
     await postAnthropicMessage({
