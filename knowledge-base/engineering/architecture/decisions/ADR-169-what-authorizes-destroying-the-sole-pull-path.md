@@ -597,3 +597,5 @@ means comparing the *render* at both SHAs (`registry-userdata-budget.sh` already
 those bytes offline, with no credentials and no state) instead of comparing the template file.
 That is the right shape and is not implemented here; it is tracked with the #7556 follow-through
 rather than left implicit in a passing gate.
+
+> **Note 2026-09-19 (#8279):** the standing "#7556 verifies the host" pointer above described the #7555 soak only. The dispatcher now records each delivery's verdict on the delivering change's own tracker (the PR that changed the config, or the `tracker` input), and its step summary asserts no enrolment it did not measure — post-replace verification is whatever follow-through the delivering change enrolled. No decision text changes.
