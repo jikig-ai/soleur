@@ -261,11 +261,17 @@ jobs:
                 (.[] | [.relname, .relnamespace, (.reltuples|tostring), (.n_live_tup|tostring),
                         (.relrowsecurity|tostring), (.policies|tostring), (.anon_select|tostring)] | @tsv)
               else "listing unavailable" end' 2>/dev/null)"
+            # `column` only ALIGNS. If it is missing or errors, the rows must still
+            # reach the log as raw TSV — printing nothing is the failure this whole
+            # block was just fixed for, and it would land on the irreversible run's
+            # own record. Same shape as the repo's other user of column
+            # (resend-inbound-bootstrap.sh, which guards it the same way).
+            align() { column -t -s $'\t' 2>/dev/null || cat; }
             echo "--- per-table listing (the 14, by name) ---"
-            sanitize_rows "$listing" | column -t -s $'\t'
+            sanitize_rows "$listing" | align
             echo "--- end listing ---"
             { echo '### Per-table listing'; echo '```'
-              sanitize_rows "$listing" | column -t -s $'\t'
+              sanitize_rows "$listing" | align
               echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
 
