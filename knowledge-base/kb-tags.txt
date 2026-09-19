@@ -3787,6 +3787,7 @@ structural-test
 structured-data
 stub
 stub-detection
+stub-fidelity
 stuck-active
 stuck-detection
 stuck-watchdog
@@ -4345,6 +4346,7 @@ workflow-security
 workflow-self-hosting
 workflow-tool
 workflow-triggers
+workflow-yaml
 workflow_dispatch
 workflow_enforcement
 workflow_run
