@@ -1,6 +1,6 @@
 # Tasks: revive the #7490 follow-through, qualify the `claude plugin update` docs, route the comparator residual upstream
 
-Plan: `knowledge-base/project/plans/2026-09-18-fix-7490-followthrough-revive-and-plugin-update-form-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260919-052129-2026-09-18-fix-7490-followthrough-revive-and-plugin-update-form-plan.md`
 Closes: #7490 · semver:patch · lane: cross-domain (no spec.md — fail-closed default)
 
 ## Phase 0: Preconditions (measure, do not assume)
