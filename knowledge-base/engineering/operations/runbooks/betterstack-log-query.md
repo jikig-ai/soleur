@@ -339,15 +339,20 @@ Fields: `status` (closed union: `disabled` | `deduped` | `week-cap-reached` |
 dispatch the same handler, so this field is the only thing that distinguishes
 them), `run_id` (join key to Sentry `inngest.run_id`), `corpus_count`,
 `corpus_input_bytes`, `clusters_proposed`, `clusters_opened`, `refusals[]`
-(one enum per refused cluster), `refusal_detail[]` (`{cluster_hash, reason}`,
-capped at 20, enum-only — never a path or learning text), and on `error`
-only, `error_class` + a scrubbed `error_message`.
+(one enum per refused cluster, capped at 20), `refusals_total` (the uncapped
+count — compare it with `refusals | length` before reading a capped list as
+complete), `refusal_detail[]` (`{cluster_hash, reason}`, capped at 20,
+enum-only — never a path or learning text), and on `error` only,
+`error_class` + an `error_message` scrubbed by `redactGithubSourcedText`
+(token / JWT / email / credential-URL shapes) and capped at 200 bytes. The
+row carries `component: "compound-promote"` (emitter:
+`server/compound-promote-marker.ts`, PR #8344).
 
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
   | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?).message
-              | select(.SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote")
+              | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote")
               | [$r.dt, .trigger, .status, (.corpus_count//"-"), (.clusters_proposed//"-"),
                  (.clusters_opened//"-"), ((.refusals//[])|join(","))] | @tsv'
 ```
@@ -370,9 +375,18 @@ Reading it:
 - **`refusals` is derived from the step's RETURN VALUE**, so it is correct on
   a replayed run. An earlier revision pushed into a handler-scope array from
   inside the memoized step and emitted `[]` on every real run.
-- **The per-refusal WARN line one row over carries `detail`** (git's own
-  diagnosis, scrubbed and capped at 200 bytes): `--grep '"fn":"cron-compound-promote"'`
-  and read `.message.detail` for the offending path or git's error text.
+- **The `select(type == "object")` guard is load-bearing**: rows before
+  2026-09-19 (PR #8344 — the marker went through the console-backed Inngest
+  ctx logger and rendered as multi-line text) and any diagnostic `ctx.logger`
+  line matched by the grep decode to a STRING `.message`, and `.SOLEUR_… ==
+  true` on a string is a jq error, not a miss.
+- **Per-refusal git detail is NOT in Better Stack.** The per-cluster
+  `diff-path-refused` / `target-path-refused` WARN lines still go through the
+  console-backed Inngest ctx logger. The marker's
+  `refusal_detail[].reason` names the gate; git's own diagnosis (`detail`,
+  scrubbed, 200 bytes) reaches Sentry through `reportSilentFallback`
+  (`feature: cron-compound-promote`, `op: diff-path-refused`, `extra.detail`)
+  — read it with `scripts/sentry-issue.sh`, not from this source.
 - **A dark channel reads as zero.** Before grading an absence, confirm
   `SOLEUR_CLAUDE_COST` rows exist in the same window — same emitter class,
   same path. The #8281 soak probe (`scripts/followthroughs/compound-promote-outcome-8281.sh`)
@@ -385,8 +399,10 @@ in `cron-manifest.ts`, not a second list.
 
 ### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state
 
-Emitted by `cron-stale-deferred-scope-outs.ts` `sweepRunReports` at pino
-**WARN** on any fire that CLOSED at least one run-report or DEFERRED one past
+Emitted by `cron-stale-deferred-scope-outs.ts` `sweepRunReports` through
+`emitRunReportSweep` (`server/cron-liveness-marker.ts`, `component:
+"cron-liveness"`) at pino **WARN** on any fire that CLOSED at least one
+run-report or DEFERRED one past
 the 25-per-run cap; a quiet fire (nothing closed, nothing deferred) is silent.
 Fields: `total`, `closed`, `skipped`, `deferred`, `closedByLabel` (per
 `scheduled-*` label), `skippedByReason` (`failed-report`, `human-triaged`,
@@ -399,8 +415,12 @@ exists to stop and the follow-through for #8076 grades it from GitHub.
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_RUN_REPORT_SWEEP \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(.SOLEUR_RUN_REPORT_SWEEP == true) | [.closed, .deferred, (.closedByLabel | tojson)] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(type == "object" and .SOLEUR_RUN_REPORT_SWEEP == true) | [.closed, .deferred, (.closedByLabel | tojson)] | @tsv'
 ```
+
+Rows before 2026-09-19 (PR #8344) decode to a STRING `.message`; the
+`type == "object"` guard skips them — same cause as the compound-promote
+decode above (measured dark on the 2026-09-14/15 fires).
 
 Ranked SQL (run against `remote(t520508_..._logs)`):
 

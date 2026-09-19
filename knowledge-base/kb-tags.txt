@@ -1115,6 +1115,7 @@ deepen-plan
 deepen-plan-skill
 default
 default-deny
+default-parameter
 defeat
 defense
 defense-in-depth
@@ -1150,6 +1151,7 @@ dependency-cascade
 dependency-chains
 dependency-cruiser
 dependency-detection
+dependency-injection
 dependency-management
 dependency-rebase
 dependency-resolution
