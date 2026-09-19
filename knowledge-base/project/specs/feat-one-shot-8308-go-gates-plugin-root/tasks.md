@@ -47,10 +47,10 @@ Brand-survival threshold: `single-user incident` — CPO sign-off recorded in th
 
 ## Phase 3 — Verification, issues, PR
 
-- [ ] 3.1 AC12 real-harness capture: `claude -p --plugin-dir "$(git rev-parse --show-toplevel)/plugins/soleur" --allowedTools "Bash" "Run each of the /soleur:go Step 0.0, Step 0.5 and Step 0 bash blocks exactly as delivered, then stop."` — commit verbatim as `ac12-capture.txt`.
-- [ ] 3.2 File three issues: (a) `worktree-manager.sh:82`'s fail-closed banner overstates the guarantee for merged branches with no worktree (lease check at `:2868` is gated on a non-empty path while `:2954` still deletes the remote branch); (b) extend session-start to Devin cloud, gated on (a); (c) the 74-file `soleur-cloud-mode` fleet block resolves the Devin cloud cache by basename with no `name=soleur` check, now inconsistent with go.md.
+- [x] 3.1 AC12 real-harness capture: `claude -p --plugin-dir "$(git rev-parse --show-toplevel)/plugins/soleur" --allowedTools "Bash" "Run each of the /soleur:go Step 0.0, Step 0.5 and Step 0 bash blocks exactly as delivered, then stop."` — commit verbatim as `ac12-capture.txt`.
+- [x] 3.2 File three issues: (a) `worktree-manager.sh:82`'s fail-closed banner overstates the guarantee for merged branches with no worktree (lease check at `:2868` is gated on a non-empty path while `:2954` still deletes the remote branch); (b) extend session-start to Devin cloud, gated on (a); (c) the 74-file `soleur-cloud-mode` fleet block resolves the Devin cloud cache by basename with no `name=soleur` check, now inconsistent with go.md.
 - [x] 3.3 `python3 scripts/lint-guard-contract.py`; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`; `bash scripts/lint-orphan-test-suites.sh`; `npx markdownlint-cli2` over the changed markdown.
-- [ ] 3.4 PR body per AC14: `Closes #8308`; the `Refs #8283 — resolves §2` line; `Not folded: #7453`; a `## Changelog` section; links to the three 3.2 issues; the AC12 capture quoted.
+- [x] 3.4 PR body per AC14: `Closes #8308`; the `Refs #8283 — resolves §2` line; `Not folded: #7453`; a `## Changelog` section; links to the three 3.2 issues; the AC12 capture quoted.
 - [ ] 3.5 `soleur:review` — the `single-user incident` threshold pulls in `user-impact-reviewer`; add `observability-coverage-reviewer` for the layer-7 citation (the plan claims only layer 7's synchronous half and routes the durable half to #7452).
 - [ ] 3.6 Walk AC1–AC15, ticking only what a command output supports.
 
