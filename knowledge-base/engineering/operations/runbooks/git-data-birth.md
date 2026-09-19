@@ -19,8 +19,12 @@
 >   attests that the final stage was REACHED and nothing reported a fatal — not four
 >   independently measured invariants. Each artifact is recorded in the evidence file with
 >   the query that retrieved it. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (a run-pinned
->   liveness window on a quiet project — recorded on #8010, which is where that key becomes
->   load-bearing; the gate ignores it today).
+>   liveness window on a quiet project). **That key is load-bearing since #8010** — the gate now
+>   refuses `UNAVAILABLE` outright unless the evidence carries a matching
+>   `RUNG2_SENTRY_CROSSCHECK_ACK=<run-id>:<reason>` naming the run in `RUNG2_EVIDENCE_URL`, and
+>   refuses a `FATAL` verdict with no way to acknowledge it at all. So this record's own evidence
+>   is valid only with that ack line present; read the gate, not this paragraph
+>   (`git-data-rung2-rehearsal.md` › *The gate's refusals — token → remedy*).
 > - **Evidence:** `apps/web-platform/infra/git-data-rung2-boot-evidence.env`, committed ALONE
 >   in PR #8126 — merged to `main` BEFORE this record landed, because ADR-149's #8043
 >   disposition orders "evidence PR, then the banner PR, then the birth" (Guard 4 of `git_data_rung2_rehearsal_gate` reads the evidence's own commit and
@@ -330,6 +334,42 @@ terraform import doppler_config.git_data_prd soleur.prd_git_data
 
 then re-dispatch. This is the one failure mode the otherwise-additive re-dispatch story
 does not cover, which is why it is called out separately.
+
+### The rung-2 interlock HOLDs with a `RUN_*` or `SENTRY_*` token
+
+Step 3 above refuses before anything applies. Since #8010 that refusal carries exactly one
+bracketed token, and the first question is not "what is wrong with the evidence" but **did the
+gate manage to look at all**. Work in this order, and do not skip to the last one:
+
+1. **Read the token.** The two sets and their remedies are tabulated in
+   `git-data-rung2-rehearsal.md` › *The gate's refusals — token → remedy*. `TOOLING_MISSING`,
+   `RUN_OFFLINE`, `RUN_RATE_LIMITED`, `RUN_UNRESOLVABLE`, `RUN_SHA_UNREACHABLE`,
+   `RUN_HASH_UNCOMPUTABLE`, `RUN_ARTIFACT_RECORD_UNREADABLE` and `SENTRY_VERDICT_UNREADABLE`
+   mean the gate could not measure. Nothing has been said about the evidence or the host.
+2. **Re-run the gate locally with a token.** Every CI call site resolves the run **anonymously**
+   — no workflow in this repository grants `actions: read` yet, which is tracked as this cycle's
+   blocker issue and cited from the `RUN_RATE_LIMITED` message itself. The anonymous limit is 60
+   requests/hour per IP, shared behind NAT on hosted runners, so a rate limit on CI is expected
+   weather rather than a finding. On a clean checkout of the ref the job used:
+
+   ```bash
+   export GH_TOKEN="$(gh auth token)"
+   source tests/scripts/lib/git-data-birth-readiness-gate.sh
+   git_data_rung2_rehearsal_gate \
+     apps/web-platform/infra/cloud-init-git-data.yml \
+     apps/web-platform/infra/git-data-rung2-boot-evidence.env
+   ```
+
+3. **If the authenticated local run RELEASES**, the CI HOLD was an instrument failure. Re-dispatch
+   the apply; nothing needs fixing.
+4. **If it still HOLDs**, the refusal is real. Take the token's remedy from the table. A measured
+   refusal on fresh evidence usually means the payload moved after the rehearsal, which costs a
+   new rehearsal (`git-data-rung2-rehearsal.md` › *Changing the payload: the two-PR sequence*).
+
+**Never reach for `git-data-host-replace` to clear a gate HOLD.** The gate is refusing a *file*
+and the *run* it names; a replace destroys and recreates the host holding every connected user's
+repositories and cannot change either. The replace route runs this same interlock and will refuse
+identically.
 
 ## Verifying the result
 

@@ -731,9 +731,19 @@ GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_
 # measured) — presents an evidence commit touching no bound file, and passes ARM 1; only
 # ARM 2 sees it, pre-merge, and ARM 2 is advisory. Nor can ARM 1 tell a hand-authored
 # evidence file landed alone (after a permitted deletion) from a rehearsal PR's.
-# Closing that requires resolving the run RUNG2_EVIDENCE_URL names and binding its head SHA
-# — #8010's scope, not this guard's. This is the structural mitigation for the single-commit
-# shape (squash, the one-shot pipeline's default), and it says so.
+# Closing that required resolving the run RUNG2_EVIDENCE_URL names and binding its head SHA.
+#
+# THAT SHIPPED IN #8010, AND THIS PARAGRAPH IS NARROWED RATHER THAN RETIRED. The rehearsal
+# gate now resolves the run, requires it to be a successful main-branch workflow_dispatch of
+# the rehearsal workflow, and re-hashes the tree AT ITS head_sha — so the two shapes above no
+# longer release: a non-squash landing and a hand-authored evidence file both have to name a
+# run that rehearsed THESE bytes, and if they can do that, the rehearsal happened.
+#
+# WHAT REMAINS TRUE OF THIS GUARD SPECIFICALLY: ARM 1 still inspects ONE commit, and it still
+# cannot distinguish those shapes BY ITSELF. It is a local, offline, zero-request check that
+# speaks before any network call, and that ordering is deliberate — a payload author's
+# ordinary mistake should be reported by the cheap arm. Read it as the first of two
+# independent bindings, not as the whole one.
 #
 # Usage:  git_data_rung2_evidence_provenance_gate <cloud-init> <evidence> [birth]
 #         git_data_rung2_evidence_provenance_gate <cloud-init> <evidence> range <rev>...
@@ -1009,6 +1019,11 @@ _git_data_rung2_fetch() {
       _resp="$("$_seam" "$_suffix" 2>/dev/null)"; _rc=$?
       [[ "$_rc" -ne 0 ]] && _rc=7
     else
+      # lint-trap-ownership: ok — every path out of this block removes it explicitly (the
+      # `rm -f` below runs on both the success and the failure arm, and the two early returns
+      # above it precede the allocation), and a sourced library must not install an EXIT trap
+      # over its caller's (ADR-129 rule (c), stated in this file's own header). The residual
+      # is a hard kill, which no trap would survive either.
       _err="$(umask 077; mktemp -t rung2-fetch.XXXXXXXX)" || { eval "$_restore"; return 8; }
       # --disable: the gate also runs on a workstation, where a ~/.curlrc could otherwise add
       # flags this function did not choose. --noproxy '*': the same reasoning for the
@@ -1078,7 +1093,7 @@ _git_data_rung2_check_run() {
   _body="$(printf '%s' "$_out" | sed '$d')"
 
   if [[ "$_code" == "403" || "$_code" == "429" ]] && grep -qiE 'rate limit' <<<"$_body"; then
-    printf 'RUN_RATE_LIMITED|the Actions API rate-limited this read, so the run was not resolved. Export GH_TOKEN (any token with public read) and re-run, or grant the call site `actions: read` — tracked as the blocker issue in knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.\n'
+    printf 'RUN_RATE_LIMITED|the Actions API rate-limited this read, so the run was not resolved. Export GH_TOKEN (any token with public read) and re-run, or grant the call site `actions: read` — tracked as #8397 (the four call sites read this API anonymously), and the token->remedy table is in knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.\n'
     return 1
   fi
   if [[ "$_code" == "404" ]]; then
@@ -1451,7 +1466,7 @@ HOLD
   live_sha="$_sha_out"
 
   if [[ "$claimed_sha" != "$live_sha" ]]; then
-    echo "git_data_rung2_rehearsal_gate: HOLD — STALE EVIDENCE. ${evidence} attests a rehearsal of user_data sha256 ${claimed_sha}, but the files composing user_data now hash to ${live_sha}. Something that ships to the host changed after it was rehearsed, so the boot that was proven is not the boot that would happen. Re-run the rung-2 rehearsal against the current template and update the evidence."
+    echo "git_data_rung2_rehearsal_gate: HOLD — STALE EVIDENCE. ${evidence} attests a rehearsal of user_data sha256 ${claimed_sha}, but the files composing user_data now hash to ${live_sha}. Something that ships to the host changed after it was rehearsed, so the boot that was proven is not the boot that would happen. Re-run the rung-2 rehearsal against the current template and update the evidence. Since #8010 that means four things it did not before — dispatch it with --ref main, wait for the WHOLE run to conclude success (the artifact uploads before teardown), append the Sentry acknowledgement BEFORE \`git add\` if the run reports one is required, and land the evidence in its own commit. The sequence is in knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md."
     return 1
   fi
 

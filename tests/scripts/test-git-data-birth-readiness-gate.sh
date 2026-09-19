@@ -34,7 +34,11 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "${DIR}/../.." && pwd)"
+# SOLEUR_SUITE_ROOT_OVERRIDE exists for ONE caller: mutate_suite, which runs a mutated copy of
+# this file from $TMP. Without it the copy derives ROOT from its own location, fails the
+# source guard, and exits 2 — which the parent cannot tell apart from "the injected defect did
+# not red the suite". The harness rows would then pass for exactly the wrong reason.
+ROOT="${SOLEUR_SUITE_ROOT_OVERRIDE:-$(cd "${DIR}/../.." && pwd)}"
 GATE="${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
 
 TMP="$(mktemp -d)"
@@ -902,7 +906,7 @@ mutate_suite() {
     return
   fi
   # SOLEUR_RUNG2_SUITE_MUTANT breaks the recursion: the mutant must not re-enter this battery.
-  out="$(SOLEUR_RUNG2_SUITE_MUTANT=1 bash "$mutated" 2>&1)"; rc=$?
+  out="$(SOLEUR_RUNG2_SUITE_MUTANT=1 SOLEUR_SUITE_ROOT_OVERRIDE="$ROOT" bash "$mutated" 2>&1)"; rc=$?
   got="$(printf '%s\n' "$out" | sed -n 's/^=== [0-9]* passed, \([0-9]*\) failed ===$/\1/p' | tail -1)"
   if [[ -n "$got" && "$got" -ge "$expect_fails" ]]; then
     pass "$label (harness row: the mutant reports ${got} failure(s), floor ${expect_fails})"
@@ -2428,6 +2432,82 @@ else
 fi
 
 
+
+printf '\n(#8010) M — the Guard Contract mutation matrix\n'
+
+# WHY THESE ROWS AND NOT MORE OF THE SAME. A battery's value is the number of DISTINCT things
+# it perturbs, and the axes an author omits are the ones they were not thinking about. Row (a)
+# of each guard mutates the HARNESS, because every other row scores the SUT through that
+# harness and is blind to it. The rest mutate the gate, each on its own axis: the arm itself,
+# the arm's ORDER, the arm's own operand (does it fail OPEN when degenerate?), and the
+# stub-answers-everything axis.
+
+# ── Guard 1: the resolved run ─────────────────────────────────────────────────────
+mutate_r2 "M1a: neutering the run resolution releases evidence naming a nonexistent run" \
+  's#_git_data_rung2_check_run "\$_run_id"#printf "OK|%s\\n" "$(git -C "$(dirname "$cloud_init")" rev-parse HEAD)"#' \
+  0 "$R2/ci.yml" "$R2/r4.env" "RELEASED"
+
+mutate_r2 "M1b: neutering the conclusion check releases a FAILED run" \
+  's|^  if \[\[ "\$_concl" != "success" \]\]; then|  if false; then|' \
+  0 "$R2/ci.yml" "$R2/r12.env" "RELEASED"
+
+mutate_r2 "M1c: neutering the workflow-path check releases a run of a DIFFERENT workflow" \
+  's|^  if \[\[ "\$_path" != "\$GIT_DATA_RUNG2_WORKFLOW_PATH" \]\]; then|  if false; then|' \
+  0 "$R2/ci.yml" "$R2/r8.env" "RELEASED"
+
+# THE GUARD'S OWN OPERAND, not the SUT. Degenerate the id the parser produces and ask whether
+# the gate now accepts everything — the axis every SUT-mutating row misses, because they all
+# confirm the guard REDS and none of them asks how it fails OPEN.
+mutate_r2 "M1d: an EMPTY workflow-path operand must fail CLOSED, not accept every workflow" \
+  's#^GIT_DATA_RUNG2_WORKFLOW_PATH=.*#GIT_DATA_RUNG2_WORKFLOW_PATH=""#' \
+  1 "$R2/ci.yml" "$R2/r8.env" "[RUN_WRONG_WORKFLOW]"
+
+# ── Guard 2: the head-SHA hash binding ───────────────────────────────────────────
+MUTATE_G_NEEDLE="RELEASED" mutate_g "M2a: neutering the head-SHA re-hash releases a real run of DIFFERENT bytes" \
+  's|^  if \[\[ "\$_run_sha" != "\$live_sha" \]\]; then|  if false; then|' \
+  0 git_data_rung2_rehearsal_gate "$_HX/ci.yml" "$_HX/h2.env"
+
+# The TREE-ISH form is load-bearing and was measured both ways: the pathspec form emits
+# repo-root-relative entries, so <tmp>/<basename> does not exist and nothing can be hashed.
+MUTATE_G_NEEDLE="[RUN_HASH_UNCOMPUTABLE]" mutate_g "M2b: the <sha>:<dir> tree-ish form is load-bearing — the pathspec form cannot hash at all" \
+  's|_treeish="\${_sha}:\${_rel_dir}"|_treeish="${_sha}"|' \
+  1 git_data_rung2_rehearsal_gate "$_HS/infra/ci.yml" "$_HS/infra/evidence.env"
+
+# The symlink sweep: without it an attacker-influenceable commit can put a mode-120000 entry
+# in the archived tree, which is both an arbitrary read and a same-hash laundering shape.
+if grep -q 'find "\$_tmp" ' "$GATE"; then
+  pass "M2c: the extraction refuses symlink and hardlink entries before hashing"
+else
+  fail "M2c: the lstat sweep over the archived tree is gone" "n/a" ""
+fi
+
+# ── Guard 3: the Sentry verdict ──────────────────────────────────────────────────
+mutate_r2 "M3a: neutering the no-ack arm — the ack parser is the backstop, not a release" \
+  's|^      if \[\[ -z "\$_ack" \]\]; then|      if false; then|' \
+  1 "$R2/ci.yml" "$R2/s6.env" "[SENTRY_ACK_MISMATCH]"
+
+mutate_r2 "M3b: neutering the ack run-id binding lets an ack copied from another run release" \
+  's|^      if \[\[ "\$_ack" != \*:\* \|\| "\$_ack_id" != "\$_run_id" \]\]; then|      if false; then|' \
+  0 "$R2/ci.yml" "$R2/s7.env" "RELEASED"
+
+mutate_r2 "M3c: neutering the raw-'#' check releases on a reason the strip invented" \
+  's|^      if \[\[ "\$_ack_raw" == \*"#"\* \]\]; then|      if false; then|' \
+  0 "$R2/ci.yml" "$R2/s11.env" "RELEASED"
+
+# ── Harness rows (a) — mutate THIS SUITE, because nothing else can ───────────────
+#
+# A stub that answers every question identically, or an assertion helper that always takes
+# the pass branch, is indistinguishable from a healthy run. These are the only rows that
+# can see that.
+mutate_suite "M0a: a stub that answers 200-with-evidence for EVERY id reds this suite" \
+  's|^\[\[ -f "\$body" \]\] \|\| exit 7$|[[ -f "$body" ]] \|\| { printf "{\\\\"id\\\\":1}\\\\n200\\\\n"; exit 0; }|' 1
+
+mutate_suite "M0b: a _stub_run that ignores its conclusion= key reds this suite" \
+  's|^      conclusion=\*)  conclusion="\${kv#\*=}" ;;$|      conclusion=*)  : ;;|' 1
+
+mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument reds this suite" \
+  's|"\$2" "\$3" "\$4" "\${5:-none}" "\${6-CLEAN}" > "\$1"|"$2" "$3" "$4" "${5:-none}" "CLEAN" > "$1"|' 1
+
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
@@ -2518,7 +2598,39 @@ fi
 #            the "untouched" PASS branch.
 # RAISED 149 -> 150 (#8010 sweep): +1 regression pin — the rung-2 no-evidence HOLD still
 #            names git-data-birth.md after the DO-NOT-DISPATCH wording was retired.
-_FLOOR=150
+# RAISED 150 -> 217 (#8010), ITEMISED — the gate now resolves the run its evidence names,
+# and every row below buys a property that a four-line hand-written file defeated before:
+#    14  S1-S14    the Sentry verdict's closed value set and the run-bound ack grammar
+#     1  row-count pin for family S
+#    15  R1-R15    resolving the run: transport, rate limit, 404, unparseable, id mismatch,
+#                  trailing-garbage id, workflow, event, branch, status, conclusion,
+#                  head_sha shape, the anonymous retry AND its negative control
+#     1  row-count pin for family R
+#     5  A1-A5     the capture discriminator: dry_run, the capture-LOG artifact, the
+#                  retention window, an unreadable endpoint, and an EXPIRED record
+#     1  row-count pin for family A
+#     6  H1-H6     the head-SHA binding: unreachable, the forgery (a real run of DIFFERENT
+#                  bytes), both tree-ish forms, a sub-floor tree, and the order pin
+#     1  row-count pin for family H
+#     2  T1        the tooling ABORT, AND its positive control (without it T1 passes for any
+#                  reason the PATH farm breaks the gate and proves nothing)
+#     3  T-SEAM    the seam announces itself on RELEASED and on HOLD, and the double gate
+#                  falls through when only half of it is set
+#     2  E1/E2     exactly one ::error:: for a could-not-measure token, none for a refusal
+#     3  N1/N2/W1  the curl flag set, the bearer under a `set -x` caller, and the sweep
+#                  proving no workflow carries the seam
+#    10  M0a-M3c   the Guard Contract matrix. M0a-M0c mutate THIS SUITE, which is the only
+#                  axis the other rows are structurally blind to: they all score the gate
+#                  THROUGH the stub and the assertion helpers. M1d mutates the guard's own
+#                  OPERAND and asserts it fails CLOSED — the axis every SUT-mutating row
+#                  misses, because they confirm the guard REDS and never ask how it opens.
+#   ----
+#    67
+# Two pre-existing mutation rows changed their EXPECTED VERDICT rather than their meaning:
+# neutering the URL-shape check and neutering the no-ack arm no longer release, because the
+# run-id parser and the ack parser refuse the same inputs one step later. Both now carry a
+# needle naming the backstop, which is what the new 6th argument to mutate_r2 exists for.
+_FLOOR=217
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

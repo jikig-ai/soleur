@@ -224,6 +224,98 @@ repository. An earlier draft said "impossible"; that overstated it.
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
 
+### Disposition — #8010 (2026-09-19): the rung-2 gate resolves the run it names
+
+The #8043 disposition below records this as open, in the row headed *"A voided attestation is
+DELETED, never rewritten"*: `git_data_rung2_rehearsal_gate`'s only provenance check was a regex
+that `RUNG2_EVIDENCE_URL` **looks like** an Actions run URL — it never fetched the run. A hand-typed
+URL, a URL naming somebody's unrelated run, and a URL naming a `dry_run=true` dispatch that
+uploaded nothing all passed identically. This closes that finding. It extends the interlock
+decision rather than reversing it, so there is **no new ADR**.
+
+**The five new steps, in the pinned order** — local before network, and the cheap network call
+before the expensive-to-be-wrong one, so an offline operator sees file defects first and the
+common refusal costs one request:
+
+| # | Step | Reach |
+|---|---|---|
+| A | `jq` / `curl` / `tar` present | local |
+| B | Sentry verdict is `CLEAN`, or `UNAVAILABLE` plus a run-bound ack | local |
+| C | `GET /actions/runs/<id>`: `path`, `event`, `head_branch`, `status`, `conclusion`, `head_sha` | network |
+| D | `head_sha` reachable in this checkout, and the archived tree at it re-hashes to the claim | local git |
+| E | `GET /actions/runs/<id>/artifacts`: a `git-data-rung2-boot-evidence` entry | network |
+
+**Identity is asserted by four facts together, and the fourth is the one that matters.** The
+workflow `path`, the `workflow_dispatch` `event` and the `head_branch` of `main` say the run was
+*this* route; the **capture artifact** (step E) is what says the run actually spent a host,
+because a `dry_run=true` dispatch also concludes `success` and satisfies the other three. Without
+step E the gate would release on a plan-only rehearsal.
+
+**`conclusion == success` is required**, and the earlier caveat that a conclusion says nothing
+about the capture no longer applies: with step E present, a `success` conclusion plus an evidence
+artifact is a statement about a run that captured. **Accepted consequence, recorded rather than
+mitigated:** the artifact uploads before teardown, so a *failed teardown after a good capture*
+yields a red run and therefore no usable evidence. The operator pays a second host. That is the
+correct direction for this gate — the alternative is releasing a production birth on a run whose
+own conclusion is `failure` — and the rehearsal runbook's *After a PASS* now leads with
+`gh run watch` so the operator learns it before downloading rather than after committing.
+
+**The run-bound acknowledgement is the only way `UNAVAILABLE` releases.** Grammar:
+`RUNG2_SENTRY_CROSSCHECK_ACK=<run-id>:<reason>`, where the run-id must equal the one parsed from
+`RUNG2_EVIDENCE_URL`, the reason must be non-empty after trimming, and the reason may not contain
+`#` (the gate's trailing-comment strip would truncate it). Binding the ack to the run is what stops
+it from becoming a permanent blanket waiver copied forward into the next evidence file. A `FATAL`
+verdict has no acknowledgement path at all, and the capture's never-consulted branches now write
+`NOT_RUN`, which nothing rescues — a cross-check that never ran must not commit bytes identical to
+one that ran and degraded. **Tripwire, recorded here because nothing enforces it:** the ack is
+meant to be rare. Two consecutive evidence files carrying one means the second channel is
+structurally broken rather than momentarily quiet, and the remedy is `SENTRY_ISSUE_RO_TOKEN`'s
+scope, not a third ack. If that pattern appears, the ack path is doing the opposite of its job.
+
+**Every CI call site resolves the run ANONYMOUSLY.** No workflow in this repository grants
+`actions: read` today, so an authenticated attempt would 403 and the anonymous path is the
+operative one everywhere — at 60 requests/hour per IP, shared behind NAT on hosted runners. The
+gate is fail-closed on that, which is the correct direction, and every could-not-measure token
+names its own remedy rather than a generic one. Two of the gate's three CI callers cannot be
+edited this cycle (`apply-web-platform-infra.yml` is over GitHub's 500 KB workflow-file limit,
+#8361), which is **why the gate emits its own `::error::` annotation**: the callers' fixed text is
+otherwise the only signal an operator would see. Granting `actions: read`, threading `GH_TOKEN`,
+and converting the three call sites' binary `if !` into a tri-state that separates an instrument
+failure from a HOLD is filed as this cycle's blocker issue, milestone `Phase 4: Validate + Scale`,
+and is cited from the `RUN_RATE_LIMITED` message itself.
+
+**Residuals, accepted and recorded.**
+
+1. **The Sentry verdict is still a human-committed string.** Steps C–E bind the *run*; nothing
+   binds `RUNG2_SENTRY_CROSSCHECK` to anything outside the file. The capture writes it, an
+   operator commits it, and the gate reads what was committed.
+2. **Artifact-record retention past ~110 days was measured once and is undocumented by the
+   vendor.** That is why the *absence* of an artifact record on an old run is a could-not-measure
+   token (`RUN_ARTIFACT_RECORD_UNREADABLE`) rather than a refusal: the gate cannot tell "this run
+   uploaded nothing" from "GitHub no longer keeps the answer".
+3. **The producer is unbound.** The hash roster binds neither the rehearsal workflow nor the
+   capture script, so what the gate proves is *"a workflow at that path ran on `main` and produced
+   a boot-evidence artifact"* — not that the producer itself was unmodified. A
+   `RUNG2_PRODUCER_SHA256` recomputed at the run's `head_sha` is the recorded next step.
+4. **The downgrade shape passes every check honestly.** Revert the infra tree to an older state
+   and cite the older genuine run that matches it: steps A–E all pass, because every fact asserted
+   is true. Only Guard 4 ARM 2 sees it, and that arm is advisory until `deploy-script-tests`
+   becomes a required check.
+
+**Future considerations** — recorded here beside the deferred check-run idea (binding the Sentry
+verdict to something outside the file, i.e. a check-run output written by the rehearsal workflow):
+an **attestation-based** alternative, `actions/attest-build-provenance` in the rehearsal workflow
+plus a committed Sigstore bundle verified by the gate. It would replace steps C–E's live API reads
+with an offline cryptographic verification, which removes the anonymous-rate-limit failure mode
+and the retention residual at once, and would bind the producer (residual 3) as a side effect. Not
+taken now: it adds a signing dependency and a bundle format to a gate whose present job is to stop
+being fooled by a regex, and the live read is the smaller change that closes the finding.
+
+**Operator-facing effect.** `git-data-rung2-rehearsal.md` gains the token-to-remedy table, the
+`--ref main` dispatch and the two-PR payload-change sequence; `git-data-birth.md` gains the
+fallback order for a `RUN_*` HOLD on the birth and replace routes and retires its claim that the
+gate ignores `RUNG2_SENTRY_CROSSCHECK`.
+
 ### Addendum — #8189 (2026-09-15): a root authority beside item 10's three keys
 
 Item 10 and the #8009 disposition account for **three** SSH authorities on git-data, each a distinct

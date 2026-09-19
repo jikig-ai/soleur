@@ -2192,6 +2192,11 @@ if want_scripts; then
   # dispatch whose boot poll ANSWERED — never on a boot_complete row, which was already true
   # before the fix. Pins the run anchor, the log-marker anchoring and the 2-vs-3 split.
   run_suite "scripts/git-data-boot-poll-8178" bash scripts/followthroughs/git-data-boot-poll-8178.test.sh
+  # #8210's close criterion (git-data-reboot-evidence-landed-8210.sh). Since #8010 the probe is
+  # four-state: it splits "the gate could not LOOK" (exit 3, rendered CANNOT ESTABLISH) out of
+  # "the gate looked and the answer is no" (exit 2, NOT YET), keyed on the bracketed token of the
+  # gate's verdict line. One arm per member of BOTH token sets, plus the never-0 invariant.
+  run_suite "scripts/git-data-reboot-evidence-landed-8210" bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
