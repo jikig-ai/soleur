@@ -662,6 +662,55 @@ UI-surface files in Files to Create/Edit (mechanical override checked: no
 matching the ui-surface-terms superset), so the Product/UX gate is NONE.
 No brainstorm ran (pipeline entry); no specialist carry-forward applies.
 
+## Deepen-Pass Verification Record (sequential-fallback)
+
+Halt gates: 4.6 User-Brand Impact (present, `none` + scope-out), 4.7
+Observability (5 fields populated, `discoverability_test.command` verb `bash`
+allowlisted), 4.8 PAT sweep (`CLEAN` — no `var.*_token`, `TF_VAR_GH_*`, or
+literal token shapes), 4.9 UI-wireframe (skip — no UI surface), 4.10
+Encryption Posture (present, non-boilerplate), 4.11 Guard Contract (2 guards,
+7+6 mutation rows), 4.5/4.55 (not triggered — no connectivity-failure
+premise, no host reboot/replace, no DDL, no deploy drop).
+
+Live-verified during deepen:
+
+- `cloud-init-inngest.yml:1386-1387` — "AP-016 LAPSED 2026-07-30 (#7071) —
+  the interim read PAT is REVOKED, so the GHCR leg cannot authenticate and
+  returns a guaranteed 401." The dedicated host's boot depends entirely on
+  zot; the `mirror_status`-gated auto-merge is load-bearing, not cautious.
+- `guard-script-fixture-tests` lives in `pr-quality-guards.yml` — required
+  context on ruleset 14145388 (file header), `pull_request` + `merge_group`
+  triggers, no `paths:` filter, runs `bash .github/scripts/test/run-all.sh`.
+- `run-all.sh:167` — `MIN_SUITES=11` floor + `test-*.sh` glob confirmed; the
+  new suite is a 12th, no registration edit.
+- `gh api repos/jikig-ai/soleur` → `allow_auto_merge: true`,
+  `allow_squash_merge: true`, `delete_branch_on_merge: true`.
+- Sign step (`Cosign-sign the GHCR digest`) has no `if:` — it runs under
+  `mirror_only`, re-signing the DISPATCHED tag. This is why the digest
+  cross-check is tag-conditioned (plan §Digest provenance, Guard 1 row 5b).
+- `build` job currently has NO `outputs:` block and the sign step no `id:` —
+  both are prescribed adds (AC4), not reuse.
+- PAT-grep precision: `dispatch` in the existing workflow contains `pat` —
+  the absent-token assert must match `GH_TOKEN_PAT`/`secrets\.[A-Z_]*PAT`,
+  never a bare substring (Guard 2 row 3).
+- ZIREF sites carry variable registry prefixes (`"$ZURL/…"`,
+  `"$ZOT_EP/…"`) — rewrite anchors on the
+  `soleur-inngest-bootstrap:<tag>@sha256:<digest>` suffix only.
+- `b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }` at
+  `board-status-sync.yml:92` — the exact form to mirror; `gh api` cannot
+  take a JWT `GH_TOKEN` (curl exchange), and `if: failure()` never fires
+  after a `continue-on-error` step (script step must not carry one).
+- No competing `scripts/bump-inngest-bootstrap-pin.sh` — `git ls-files` +
+  `git grep` return zero; `.github/scripts/` location is canonical.
+- `git tag --list 'vinngest-v*'` corpus non-empty (`vinngest-v1.1.37` max);
+  all four pin literals verified at `cloud-init.yml:736,742` +
+  `cloud-init-inngest.yml:1358,1402`.
+
+Corrections applied during deepen (propagated to tasks.md): tag-conditioned
+digest cross-check (§Digest provenance, Guard 1 rows 5/5b, task 1.2.3);
+variable-prefix rewrite anchor (§Technical Considerations, task 1.2.4);
+PAT-literal precision (Guard 2 row 3).
+
 ## Acceptance Criteria
 
 - [ ] AC1: `.github/scripts/bump-inngest-bootstrap-pin.sh` exists, is executable, and rewrites all four `soleur-inngest-bootstrap:v…@sha256:…` sites across `cloud-init.yml` + `cloud-init-inngest.yml` to `<target>@<resolved>` in a single commit — verified by the fixture suite.
