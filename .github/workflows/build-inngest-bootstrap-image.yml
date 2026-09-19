@@ -55,6 +55,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      # The digest the sign step RESOLVED at GHCR — not a captured docker-push
+      # stdout token, so a stray notice line can never masquerade as a digest.
+      digest: ${{ steps.sign.outputs.digest }}
+      mirror_status: ${{ steps.zot_mirror.outputs.mirror_status }}
     permissions:
       contents: read
       packages: write
@@ -410,6 +416,7 @@ jobs:
           # reason ("no sign/verify version skew"); keep the two in step.
           cosign-release: v3.1.1
       - name: Cosign-sign the GHCR digest (keyless)
+        id: sign
         env:
           IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
           TAG: ${{ steps.tag.outputs.tag }}
@@ -452,6 +459,10 @@ jobs:
           fi
           echo "Signed ${IMAGE}@${DIGEST}"
           printf 'signed %s@%s\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          # Exported for the bump-cloud-init-pin job's signed-vs-resolved
+          # cross-check: this attests "what was signed"; the script's own
+          # `crane digest` attests "what the tag resolves to now".
+          printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
@@ -872,6 +883,227 @@ jobs:
             -d "$PAYLOAD" \
             "$WEBHOOK" || echo "000")
 
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
+          fi
+
+  # --- #8359 (ADR-230): after a successful publish, rewrite the
+  # soleur-inngest-bootstrap cloud-init pin (4 sites across
+  # apps/web-platform/infra/cloud-init.yml + cloud-init-inngest.yml) to the
+  # semver-max published tag + registry-resolved digest and open the pin-bump
+  # PR — closing the AC6/Guard-B drift window to one CI cycle instead of
+  # "until someone notices a red advisory check".
+  #
+  # WHY A JOB IN THIS WORKFLOW, not a tag-triggered sibling or a scheduled
+  # reconciler: the build job already holds the authoritative tag, signed
+  # digest and mirror outcome; `needs:` ordering cannot race the image push
+  # (a sibling workflow can — it fires on the tag, before the digest exists);
+  # and a cron reconciler reintroduces exactly the lag this removes. The
+  # target is the semver-max published tag, not blindly the triggered tag —
+  # a workflow_dispatch re-publish of an older tag correctly no-ops.
+  #
+  # All logic lives in .github/scripts/bump-inngest-bootstrap-pin.sh,
+  # fixture-tested by .github/scripts/test/test-bump-inngest-bootstrap-pin.sh
+  # — a workflow cannot be workflow_dispatch-tested from a feature branch, so
+  # the logic is tested out-of-band and this YAML stays a thin driver
+  # (board-status-sync.yml records the convention).
+  #
+  # Auth: the soleur-ai App installation token minted inline below (the
+  # board-status-sync.yml JWT recipe — hr-github-app-auth-not-pat). The App
+  # token is load-bearing, not just policy: GITHUB_TOKEN pushes do not fire
+  # pull_request events, so required checks would never run on the bump PR
+  # and auto-merge could never release it. Never a PAT.
+  bump-cloud-init-pin:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Serialize bump runs across overlapping publishes: two rapid vinngest-v*
+    # tags both resolve the SAME semver-max target, and the loser finds the
+    # branch/PR already open and exits `existing` rather than stacking a
+    # duplicate PR. cancel-in-progress stays false — a cancelled run that had
+    # already pushed the branch would strand an un-PRed bump.
+    concurrency:
+      group: inngest-pin-bump
+      cancel-in-progress: false
+    permissions:
+      # The job's own GITHUB_TOKEN needs nothing but the checkout read —
+      # every write goes through the minted installation token.
+      contents: read
+    steps:
+      # `ref: main`, NOT the tag tree: the bump script and the files it edits
+      # live on the default branch (contrast with the build job, which must
+      # check out the tag's tree to build its image). fetch-depth: 0 +
+      # fetch-tags: true so the script's semver-max tag computation sees the
+      # tag that triggered this run. persist-credentials: false so the
+      # GITHUB_TOKEN cannot linger as origin's credential next to an
+      # x-access-token push remote.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      # crane, SHA-pinned — identical recipe to the build job's
+      # "Install crane (pinned) for signing" above (keep them in step). The
+      # bump script resolves the published digest itself rather than trusting
+      # the passed value: the crane read is the only context that can bind
+      # tag↔digest authoritatively at publish time.
+      - name: Install crane (pinned)
+        env:
+          CRANE_VERSION: v0.20.2
+          CRANE_SHA256: c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b
+        run: |
+          set -uo pipefail
+          : "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
+          command -v crane >/dev/null && { echo "crane already present"; exit 0; }
+          rc=0
+          for attempt in 1 2 3; do
+            rc=0
+            curl -fsSL -o "$RUNNER_TEMP/crane.tgz" \
+              "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" || rc=10
+            if [[ "$rc" -eq 0 ]]; then
+              echo "${CRANE_SHA256}  $RUNNER_TEMP/crane.tgz" | sha256sum -c - || rc=11
+            fi
+            # A CHECKSUM mismatch is a supply-chain signal, not a network fault: re-fetching the
+            # same pinned URL cannot clear it, so do not spend the remaining attempts on it.
+            if [[ "$rc" -eq 11 ]]; then break; fi
+            if [[ "$rc" -eq 0 ]]; then
+              sudo tar -xzf "$RUNNER_TEMP/crane.tgz" -C /usr/local/bin crane || rc=12
+            fi
+            [[ "$rc" -eq 0 ]] && break
+            sleep $(( attempt * 5 ))
+          done
+          case "$rc" in
+            0)  crane version ;;
+            11) echo "::error::crane tarball SHA256 mismatch — SUPPLY-CHAIN signal, not a network fault. A re-dispatch re-fetches the same pinned URL and cannot clear it." >&2; exit 1 ;;
+            *)  echo "::error::could not install crane (rc=${rc}) after 3 attempts." >&2; exit 1 ;;
+          esac
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify DOPPLER_TOKEN present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      # Mint the soleur-ai installation token and run the bump in ONE step —
+      # the token never leaves this step's env (board-status-sync.yml shape).
+      # The inline JWT recipe is verbatim from that workflow: `gh api` cannot
+      # take a JWT as GH_TOKEN, so the JWT is exchanged for an installation
+      # token via curl, then handed to the script as GH_TOKEN.
+      - name: Mint soleur-ai App token and bump the cloud-init pin
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
+          # Permissions verified 2026-09-19 via `gh api
+          # /orgs/jikig-ai/installations`: contents:write + pull_requests:write.
+          INSTALLATION_ID: "122213433"
+          TAG: ${{ needs.build.outputs.tag }}
+          SIGNED_DIGEST: ${{ needs.build.outputs.digest }}
+          MIRROR_STATUS: ${{ needs.build.outputs.mirror_status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
+          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
+            echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$APP_ID"
+          # $GITHUB_ENV/log does NOT auto-mask a multi-line secret — mask each PEM line.
+          while IFS= read -r pem_line; do
+            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
+          done <<< "$PEM"
+
+          umask 077
+          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
+          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
+          chmod 600 "$APP_PEM_FILE"
+          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
+          # Catch a corrupted PEM (literal \n, BOM, partial paste) HERE with a
+          # routable error rather than a generic openssl "unable to load Private Key".
+          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
+            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
+
+          b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
+
+          now=$(date +%s)
+          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+          payload=$(jq -nc \
+            --argjson iss "$APP_ID" \
+            --argjson iat "$((now - 60))" \
+            --argjson exp "$((now + 540))" \
+            '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+          unsigned="${header}.${payload}"
+          signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
+          JWT="${unsigned}.${signature}"
+          [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
+          echo "::add-mask::$JWT"
+
+          INSTALL_TOKEN=$(curl -sS -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+            | jq -r '.token // empty')
+          [[ -n "$INSTALL_TOKEN" ]] || {
+            echo "::error::Installation-token exchange returned empty token (App permission or installation_id mismatch)."; exit 1; }
+          echo "::add-mask::$INSTALL_TOKEN"
+
+          # The script re-resolves the digest via `crane digest` and
+          # cross-checks it against SIGNED_DIGEST ONLY when TAG is the
+          # semver-max target — a mirror_only backfill of an older tag signed
+          # a different tag's digest and must not RED on that comparison.
+          # NO continue-on-error on this step: the Slack step below is
+          # `if: failure()`, which never fires after a soft-failed step.
+          GH_TOKEN="$INSTALL_TOKEN" \
+            bash .github/scripts/bump-inngest-bootstrap-pin.sh \
+              --signed-tag "$TAG" \
+              --signed-digest "$SIGNED_DIGEST" \
+              --mirror-status "$MIRROR_STATUS" \
+              --run-url "$RUN_URL"
+
+      - name: Post to Slack (pin-bump failure)
+        # A bump failure must not be silent — the drift guard stays red until
+        # reconciled, and a failed job is otherwise only visible in the run
+        # log. `if: failure()` fires only because the step above carries no
+        # continue-on-error; do not add one there.
+        if: failure()
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          TAG: ${{ needs.build.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::SLACK_RELEASES_WEBHOOK_URL unset; skipping pin-bump failure notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+          MESSAGE="❌ inngest-bootstrap cloud-init pin bump FAILED for ${TAG:-unknown tag} — the deploy-script-tests drift guard will stay red until reconciled. Run: ${RUN_URL}"
+          # jq --arg keeps the payload injection-inert (TAG/URL are JSON-escaped).
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK" || echo "000")
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
             echo "Slack notification sent (HTTP $HTTP_CODE)"
           else

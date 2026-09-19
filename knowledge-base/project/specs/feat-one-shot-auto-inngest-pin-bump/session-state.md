@@ -19,3 +19,13 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
 ### Components Invoked
 - `plan` skill (inline — research, sharp-edges catalogue, plan-review panel, Save Tasks); `plan-review` + `deepen-plan` (inline, sequential-fallback — `Reviewed-Coverage: sequential-fallback`)
 - Commits: e50cdeaed (plan + tasks.md), 86dd751ef (deepen-pass verification record + review corrections)
+
+## Work Phase
+- Status: implementation complete; verification green (2026-09-19)
+- Delivered: `.github/scripts/bump-inngest-bootstrap-pin.sh` + fixture suite `test-bump-inngest-bootstrap-pin.sh` (126 assertions, MIN_ASSERTIONS=45 floor); `build-inngest-bootstrap-image.yml` gains `build.outputs.{tag,digest,mirror_status}` + `bump-cloud-init-pin` job (App-JWT mint, installation 122213433); ADR-230 (provisional); `model.c4`/`views.c4` write-back documented on the `github -> soleurMarketplace` App-write edge — LikeC4 rejects self-relations ("Invalid parent-child relationship"), so `github -> github` is unrepresentable.
+- Verified: new suite 126/0; `run-all.sh` ALL PASS (12 suites ≥ MIN_SUITES=11); `cloud-init-inngest-bootstrap.test.sh` 160/160 (pins untouched); c4-code-syntax + c4-render vitest 23/23; `c4-model-freshness.test.sh` 3/3 (model.likec4.json regenerated, byte-fresh); lint-shell-trace-credential-refusal clean (xtrace refusal precedes every traced command incl. `export LC_ALL=C`); `bash -n` both scripts; workflow YAML parses.
+- Deferred by design: AC14 end-to-end proof — first post-merge `vinngest-v*` publish (workflow can't be dispatch-tested from a feature branch); recorded for PR body.
+
+### Errors
+- Harness bugs fixed during RED→GREEN: `--author` misplacement in `push_branch_to_origin`; `env MOCK_GH_MERGE_FAIL=1 run_bump` (env can't call a bash function); stub-state accumulation across fixtures; sed `\|` alternation-vs-literal in the gh stub; `export LC_ALL=C` traced before the xtrace refusal (lint Rule A) — moved below it.
+- `github -> github` self-edge rejected by LikeC4 — fell back to extending the App-write edge description (plan-sanctioned).
