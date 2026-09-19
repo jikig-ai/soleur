@@ -14,10 +14,15 @@ gh workflow run git-data-rung2-rehearsal.yml --ref main \
   -f confirm=REHEARSE-GIT-DATA -f dry_run=true
 ```
 
-**`--ref main` is load-bearing, not tidiness.** `gh workflow run` defaults to the ref your
-checkout is on, and since #8010 the gate reads the run's `head_branch` and refuses anything but
-`main` (`RUN_NOT_MAIN`). Without the flag a dispatch from a feature branch produces evidence
-that can never release the interlock — discovered after the paid host is already spent.
+**Pass `--ref main` explicitly.** Since #8010 the gate reads the run's `head_branch` and refuses
+anything but `main` (`RUN_NOT_MAIN`), so a dispatch off a feature branch spends a paid host on
+evidence that can never release the interlock.
+
+Being explicit is worth it even though `gh` already defaults correctly. An earlier revision of
+this runbook justified the flag by claiming `gh workflow run` "defaults to the ref your checkout
+is on" — that is FALSE, and it was measured false at review: `gh workflow run --help` (gh
+2.101.0) documents the default as the repository's default branch, and `gh` does not read local
+HEAD. The flag guards against a caller who sets `--ref` deliberately, not against `gh`'s default.
 
 The workflow's own input descriptions are the source of truth for the flags — they are not
 restated here, because a second copy drifts. Two human gates and nothing else: the
@@ -183,8 +188,16 @@ re-rehearsal — another paid host and another approval.
 
 ## The gate's refusals — token → remedy
 
-Every `git_data_rung2_rehearsal_gate` refusal carries exactly one bracketed token on its verdict
-line. The token is the lookup key; the prose beside it is not. The **why** of each check lives in
+Every refusal this table covers carries exactly one bracketed token on its verdict line, and the
+token is the lookup key; the prose beside it is not.
+
+**Not every refusal is tokenised, and the untokenised ones are the common ones.** The checks that
+predate #8010 — `STALE EVIDENCE`, the key-cardinality refusals, the render-var divergence arm and
+the Guard 4 provenance arm — emit a prose verdict line with no bracket, and they are what an
+ordinary payload PR trips. An earlier revision of this section claimed every refusal carries a
+token; it does not, and reading a tokenless line as "no row exists for my failure" would send you
+looking for a table entry that was never meant to exist. If the line has no bracket, the message
+itself is the instruction. The **why** of each check lives in
 the gate library's own header and in ADR-149's `Disposition — #8010` — this table is only what to
 do next.
 
@@ -200,7 +213,7 @@ tracker rather than as `NOT YET`.
 |---|---|---|
 | `SENTRY_VERDICT_FATAL` | The committed `RUNG2_SENTRY_CROSSCHECK` records a fatal on the second channel. | Nothing acknowledges this one. Fix what the fatal names and re-rehearse. |
 | `SENTRY_UNAVAILABLE_UNACKED` | The verdict is `UNAVAILABLE` and the file carries no acknowledgement. | Either append `RUNG2_SENTRY_CROSSCHECK_ACK=<run-id>:<reason>` (grammar in *After a PASS*, step 2) in the evidence's own commit, or re-rehearse with a `SENTRY_ISSUE_RO_TOKEN` whose scope works. |
-| `SENTRY_ACK_MISMATCH` | An acknowledgement is present but malformed: its run-id is not the one in `RUNG2_EVIDENCE_URL`, or its reason is empty after trimming, or the reason contains `#`. | Rewrite the ack line. All three parts are checked; `#` is refused because the gate's trailing-comment strip would truncate the reason. |
+| `SENTRY_ACK_MISMATCH` | An acknowledgement is present and its run-id is **not** the one in `RUNG2_EVIDENCE_URL` — an ack copied forward from a previous evidence file. | Re-key the ack to this file's own run id. An empty reason or a reason containing `#` emits `SENTRY_UNAVAILABLE_UNACKED` instead, not this token. |
 | `RUN_NOT_FOUND` | The API answered, and this repository has no such run. | The URL names a run that does not exist — fix it, or re-rehearse. |
 | `RUN_WRONG_WORKFLOW` | The run is not `git-data-rung2-rehearsal.yml`. | The URL points at some other workflow's run. Re-rehearse. |
 | `RUN_WRONG_EVENT` | The run is not a `workflow_dispatch`. | Re-dispatch from the *Dispatch* section; a scheduled or push-triggered run cannot produce this evidence. |
@@ -222,7 +235,7 @@ statement about the host:
 | `RUN_SHA_UNREACHABLE` | Find the run's `head_sha` in this checkout. | `git fetch origin main` — and on a shallow clone, `git fetch --unshallow`. |
 | `RUN_HASH_UNCOMPUTABLE` | Extract and hash the tree at that sha. | Re-run in a clean checkout; if it repeats, the archive at that sha is the thing to look at, not the evidence. |
 | `RUN_ARTIFACT_RECORD_UNREADABLE` | Read the run's artifact record — including the case where the run is old enough that GitHub no longer keeps one. | For a recent run, re-run (usually transport or rate limit). For an old run, re-rehearse: the record cannot be recovered. |
-| `SENTRY_VERDICT_UNREADABLE` | Parse `RUNG2_SENTRY_CROSSCHECK` out of the evidence. | The key is absent or malformed. A file written by the current capture always carries it; a hand-edited one may not. |
+| `SENTRY_VERDICT_UNREADABLE` | Parse `RUNG2_SENTRY_CROSSCHECK` out of the evidence. | Its value is `NOT_RUN` (the cross-check never ran — no `jq`, no `SENTRY_ISSUE_RO_TOKEN`, or no reader on the rehearsal runner), or a value outside the set the capture can write. An **absent** key does not reach this token: the required-key loop refuses it first, with an untokenised cardinality message. |
 
 ## Changing the payload: the two-PR sequence
 

@@ -269,4 +269,13 @@ if (( total != EXACT )); then
   exit 1
 fi
 printf '\n%d assertions, %d failed\n' "$total" "$fails"
-[[ "$fails" -eq 0 ]]
+# THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION — the defect this suite's three
+# siblings in this same PR reject BY NAME, shipped here anyway.
+#
+# A bare `[[ "$fails" -eq 0 ]]` makes the exit status a property of whichever line happens to
+# be LAST: appending any command after it permanently greens the suite while it goes on
+# printing accurate FAIL text, and deleting the line does the same. This file also installs
+# `trap 'rm -rf "$WORK"' EXIT`, so an EXIT trap firing after it is one more way the status
+# moves. `run_suite()` classifies on the exit code alone, and an explicit exit cannot be
+# defeated by an append.
+exit $(( fails > 0 ))

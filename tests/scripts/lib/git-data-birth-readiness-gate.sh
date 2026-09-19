@@ -931,7 +931,23 @@ git_data_rung2_evidence_provenance_gate() {
 # `RUN_NO_EVIDENCE_ARTIFACT`, `SENTRY_VERDICT_FATAL`, `SENTRY_UNAVAILABLE_UNACKED` and
 # `SENTRY_ACK_MISMATCH` mean the evidence was measured and refused. They never share wording.
 
-GIT_DATA_RUNG2_API_BASE="${GIT_DATA_RUNG2_API_BASE:-https://api.github.com/repos/jikig-ai/soleur/actions}"
+# THE BASE IS A CONSTANT, NOT AN OVERRIDE — measured, this was the PR's own defect class.
+#
+# It shipped as `${GIT_DATA_RUNG2_API_BASE:-…}` one line above a comment promising that "one
+# leaked env var in a pull_request-triggered workflow cannot redirect the gate's only network
+# call". Three review seats independently pointed a local server at it: the bearer arrived in
+# CLEARTEXT over http://, `_git_data_rung2_check_run` returned OK from a fabricated body, and
+# `_seam_note` stayed EMPTY — so the RELEASED line was byte-identical to a live measurement.
+# Two `env:` lines on the pull_request-triggered freshness step both exfiltrated the job token
+# and forged the verdict.
+#
+# Every other defence here protects the TRANSPORT (`--disable`, `--noproxy '*'`, no `-L`, the
+# xtrace clear). None protected the DESTINATION. The double gate and the SEAM ACTIVE
+# announcement covered one of the two env routes into the fetch and missed this one.
+#
+# A test needing a different endpoint uses SOLEUR_RUNG2_RUN_FETCH, which is double-gated and
+# announced. There is no second route.
+readonly GIT_DATA_RUNG2_API_BASE="https://api.github.com/repos/jikig-ai/soleur/actions"
 GIT_DATA_RUNG2_WORKFLOW_PATH=".github/workflows/git-data-rung2-rehearsal.yml"
 # Artifact RECORDS outlive the bytes, but retention past this window is undocumented and was
 # measured once — so beyond it an empty list is could-not-measure, never a refusal.
@@ -946,11 +962,25 @@ GIT_DATA_RUNG2_ARTIFACT_WINDOW_DAYS=90
 # separators, escape the three bytes that can reconstruct a command, then truncate.
 _git_data_rung2_safe() {
   local _v="${1-}" _max="${2:-200}"
-  _v="$(printf '%s' "$_v" | tr -d '\000-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-  _v="${_v//%/%25}"
-  _v="${_v//$'\r'/%0D}"
-  _v="${_v//$'\n'/%0A}"
-  printf '%s' "${_v:0:$_max}"
+  # `tr` does the whole control-character job, INCLUDING CR and LF — the `${_v//$'\r'/%0D}`
+  # and `${_v//$'\n'/%0A}` lines this used to carry were unreachable, and their comment
+  # credited them with the defence `tr` actually provides.
+  #
+  # U+2028/U+2029 are stripped with `tr -d` over their literal UTF-8 bytes rather than a
+  # `sed 's/\xe2\x80\xa8//g'`: `\xNN` is a GNU extension, so on BSD/macOS sed that expression
+  # matches the literal characters `xe2…` and both separators survive — on precisely the
+  # workstation path `--disable` exists for (learning 2026-04-17-log-injection-unicode-line-separators).
+  _v="$(printf '%s' "$_v" | LC_ALL=C tr -d '\000-\037\177')"
+  # STRING replacement, not `tr -d`: tr deletes a byte SET, so feeding it the six UTF-8 bytes
+  # of U+2028/U+2029 would strip \342 and \200 out of every other multi-byte character too
+  # (an em-dash is \342\200\224). Build each separator as a literal and replace it whole.
+  local _sep
+  _sep="$(printf '\342\200\250')"; _v="${_v//"$_sep"/}"
+  _sep="$(printf '\342\200\251')"; _v="${_v//"$_sep"/}"
+  # TRUNCATE FIRST, then escape: escaping first can cut a `%25` mid-sequence and emit a
+  # half-escape that means something else to whatever decodes it.
+  _v="${_v:0:$_max}"
+  printf '%s' "${_v//%/%25}"
 }
 
 # THE GATE ANNOTATES ITSELF when it could not measure.
@@ -961,10 +991,47 @@ _git_data_rung2_safe() {
 # edited this cycle. Without this line an instrument failure tells an operator to commit
 # evidence that already exists. Emitting from a sourced library follows the dominant
 # precedent here (tests/scripts/lib/preapply-entrypoint-gate.sh's _err()).
+# THE COULD-NOT-MEASURE SET, as data rather than as prose. The probe and two runbooks restate
+# it; `git_data_rung2_token_sets` below is what they are checked against, so a member added
+# here cannot silently fall through a consumer's stale copy.
+GIT_DATA_RUNG2_CANNOT_MEASURE_TOKENS="TOOLING_MISSING RUN_OFFLINE RUN_RATE_LIMITED RUN_UNRESOLVABLE RUN_SHA_UNREACHABLE RUN_HASH_UNCOMPUTABLE RUN_ARTIFACT_RECORD_UNREADABLE RUN_FLOOR_UNREADABLE SENTRY_VERDICT_UNREADABLE"
+GIT_DATA_RUNG2_MEASURED_TOKENS="RUN_NOT_FOUND RUN_WRONG_WORKFLOW RUN_WRONG_EVENT RUN_NOT_MAIN RUN_NOT_COMPLETED RUN_NOT_SUCCESS RUN_HASH_MISMATCH RUN_NO_EVIDENCE_ARTIFACT RUN_ID_REGRESSED SENTRY_VERDICT_FATAL SENTRY_UNAVAILABLE_UNACKED SENTRY_ACK_MISMATCH"
+
 _git_data_rung2_annotate() {
   [[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
+  # THE FILTER IS THE POINT, AND IT SHIPPED MISSING.
+  #
+  # Measured by three seats: the three generic call sites pass whatever token the helper
+  # returned, so `RUN_NOT_MAIN`, `RUN_NOT_SUCCESS`, `RUN_NOT_FOUND`, `RUN_WRONG_WORKFLOW`,
+  # `RUN_WRONG_EVENT`, `RUN_NOT_COMPLETED` and `RUN_NO_EVIDENCE_ARTIFACT` — every member of
+  # the MEASURED set — printed "could not MEASURE". That inverts this library's own
+  # load-bearing claim ("They never share wording") on the one surface an operator reads, and
+  # it inverts their response: a forged or stale evidence file read as an instrument failure.
+  #
+  # An unknown token is annotated as could-not-measure deliberately: a token this function has
+  # never heard of is, by construction, one whose classification nobody recorded.
+  local _t
+  for _t in $GIT_DATA_RUNG2_MEASURED_TOKENS; do
+    if [[ "$1" == "$_t" ]]; then
+      printf '::error::git_data_rung2_rehearsal_gate REFUSED the rung-2 evidence [%s]: %s\n' \
+        "$1" "$(_git_data_rung2_safe "$2" 300)" >&2
+      return 0
+    fi
+  done
   printf '::error::git_data_rung2_rehearsal_gate could not MEASURE the rung-2 evidence [%s]: %s\n' \
-    "$1" "$(_git_data_rung2_safe "$2" 300)"
+    "$1" "$(_git_data_rung2_safe "$2" 300)" >&2
+}
+
+# git_data_rung2_token_sets <cannot|measured> — the exported sets, for consumers that must
+# classify a token they did not emit (the #8210 probe, its suite, the runbook parity arm).
+# Deriving beats restating: three hand-maintained copies agreed 8/8 at review time and nothing
+# asserted they would keep agreeing.
+git_data_rung2_token_sets() {
+  case "${1:-}" in
+    cannot)   printf '%s\n' $GIT_DATA_RUNG2_CANNOT_MEASURE_TOKENS ;;
+    measured) printf '%s\n' $GIT_DATA_RUNG2_MEASURED_TOKENS ;;
+    *) return 2 ;;
+  esac
 }
 
 # _git_data_rung2_fetch <path-suffix>
@@ -986,7 +1053,7 @@ _git_data_rung2_fetch() {
   # IT IS CHECKED HERE AND APPLIED AT THE TRANSPORT, INSIDE THE LOOP BELOW. A seam in front
   # of the loop would have replaced the whole function, leaving the auth choice, the 5xx
   # retry and the anonymous retry with no behavioural coverage — and the anonymous retry is
-  # the path that actually runs in CI today, because no call site grants `actions: read`.
+  # the path that actually runs in CI today, because none of the four call sites grants `actions: read`.
   local _seam=""
   if [[ -n "${SOLEUR_RUNG2_RUN_FETCH:-}" ]]; then
     if [[ -n "${SOLEUR_TEST_MODE:-}" ]]; then
@@ -1048,7 +1115,7 @@ _git_data_rung2_fetch() {
     case "$_code" in
       5*) if [[ "$_attempt" -lt 2 ]]; then sleep "${SOLEUR_RUNG2_RETRY_SLEEP:-5}"; continue; fi ;;
       401|403)
-        # THE OPERATIVE CI PATH TODAY: no call site grants `actions: read`, and this data is
+        # THE OPERATIVE CI PATH TODAY: none of the four call sites grants `actions: read`, and this data is
         # public. A rejected bearer retries ONCE anonymously rather than reporting a refusal
         # that is really an authorization gap. A rate-limit body is excluded — dropping the
         # bearer makes a rate limit strictly worse.
@@ -1077,6 +1144,78 @@ _git_data_rung2_run_id() {
   _id="$(printf '%s' "$_u" | sed -nE 's#^https://github\.com/jikig-ai/soleur/actions/runs/([0-9]+)([/?#].*)?$#\1#p')"
   [[ "$_id" =~ ^[0-9]{1,20}$ ]] || return 1
   printf '%s' "$_id"
+}
+
+# ── (#8010) GUARD 5: THE MONOTONIC RUN FLOOR — the downgrade shape ──────────────────
+#
+# Steps D and E are hash-EQUALITY checks, not RECENCY checks. So an author can revert the
+# payload tree to an older revision, cite the genuine older run that rehearsed exactly those
+# bytes, and this gate RELEASES honestly: the live hash matches, the head_sha re-hash matches,
+# the artifact exists, the Sentry verdict is CLEAN. Every asserted fact is true and the host
+# ends up running older code.
+#
+# THE PAYLOAD IS ALREADY IN THIS REPOSITORY'S HISTORY, which is why this ships now rather than
+# as a residual: `git show f64b0ebc2^:apps/web-platform/infra/git-data-rung2-boot-evidence.env`
+# is the pre-#8312 evidence naming run 34768256297. Restoring it beside a revert of #8312's
+# /dev/mapper/git-data reopen-at-boot hunks is a two-command attack.
+#
+# WHY A FLOOR AND NOT ANCESTRY. `merge-base --is-ancestor` was considered at plan time and cut,
+# correctly: the revert commit is a DESCENDANT of head_sha, so ancestry passes. A wall-clock
+# age bound was also cut, correctly: it taxes an unchanged file forever. This floor is
+# CHANGE-TRIGGERED — it compares against the version of the evidence file this one REPLACES, so
+# it costs nothing while nothing moves, and neither cut's reasoning reaches it.
+#
+# _git_data_rung2_run_floor <evidence-abs-path>
+#   Prints the prior committed version's run id, or nothing when there is no prior version.
+#   Prints "UNREADABLE|<detail>" and returns 1 when the history exists but cannot be read.
+_git_data_rung2_run_floor() {
+  local _ev="$1" _top _rel _last _prev
+  _top="$(git -C "$(dirname "$_ev")" rev-parse --show-toplevel 2>/dev/null)" || {
+    printf 'UNREADABLE|%s is not inside a git work tree, so the previous attested run id could not be read.\n' "$_ev"; return 1; }
+  _rel="${_ev#"$_top"/}"
+  # WALK THE PATH'S HISTORY, SKIPPING THE COMMIT THAT HOLDS THE CURRENT CONTENT.
+  #
+  # Guard 4 runs BEFORE this step and refuses an untracked or uncommitted evidence file, so by
+  # the time we get here `git log -- <path>` newest-first has the CURRENT version at entry 0.
+  # The floor is the next entry in which the file EXISTS.
+  #
+  # The existence test is what makes a deletion still set the floor, and that is load-bearing
+  # rather than an edge case: Guard 4 states a voided attestation is DELETED, never rewritten,
+  # so the entry between the current version and the prior one is routinely the commit that
+  # REMOVED the file. Skipping only the first entry would land on that deletion, find nothing,
+  # and reset the floor — making "void the attestation, then re-add an older one" the bypass.
+  local _shas _sha_i _seen=0
+  _shas="$(git -C "$_top" log --format=%H -- "$_rel" 2>/dev/null)"
+  # NEVER COMMITTED: there is no floor, and that is not a failure. The very first evidence file
+  # has nothing to regress against.
+  [[ -z "$_shas" ]] && return 0
+  while IFS= read -r _sha_i; do
+    [[ -n "$_sha_i" ]] || continue
+    if [[ "$_seen" -eq 0 ]]; then _seen=1; continue; fi   # entry 0 holds the CURRENT content
+    _prev="$(git -C "$_top" show "${_sha_i}:${_rel}" 2>/dev/null)" || continue
+    sed -n 's#^[[:space:]]*\(export[[:space:]]\+\)\?RUNG2_EVIDENCE_URL[[:space:]]*=.*/runs/\([0-9]\{1,\}\).*#\2#p' <<<"$_prev" | head -1
+    return 0
+  done <<<"$_shas"
+  # Exactly one commit touches this path: a first-ever evidence file. No floor, not a failure.
+  return 0
+}
+
+# _git_data_rung2_downgrade_acked <body> <run-id> — the deliberate-replay escape hatch.
+# Same grammar as the Sentry ack (run-bound, non-empty reason, no '#'), and at-most-once, so
+# an ack cannot be copied forward into the next evidence file.
+_git_data_rung2_downgrade_acked() {
+  local _body="$1" _run_id="$2" _n _ack _id _reason
+  _n="$(grep -cE "^[[:space:]]*(export[[:space:]]+)?RUNG2_EVIDENCE_DOWNGRADE_ACK[[:space:]]*=" <<<"$_body" || true)"
+  [[ "$_n" -eq 1 ]] || return 1
+  _ack="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_EVIDENCE_DOWNGRADE_ACK[[:space:]]*=' <<<"$_body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//' || true)"
+  [[ "$_ack" == *:* ]] || return 1
+  _id="${_ack%%:*}"
+  [[ "$_id" == "$_run_id" ]] || return 1
+  _reason="${_ack#*:}"
+  _reason="${_reason#"${_reason%%[![:space:]]*}"}"
+  _reason="${_reason%"${_reason##*[![:space:]]}"}"
+  [[ -n "$_reason" ]] || return 1
+  return 0
 }
 
 # _git_data_rung2_check_run <run-id>
@@ -1108,22 +1247,41 @@ _git_data_rung2_check_run() {
     return 1
   fi
   if [[ "$_code" != "200" ]]; then
-    printf 'RUN_UNRESOLVABLE|the Actions API answered HTTP %s, which this gate cannot interpret. Nothing was measured.\n' "$_code"
+    printf 'RUN_UNRESOLVABLE|the Actions API answered HTTP %s, which this gate cannot interpret. Nothing was measured — this says nothing about the evidence or the host. Wait and re-run the gate; if it persists, export GH_TOKEN and re-run to rule out an authorization gap.\n' "$_code"
     return 1
   fi
 
   local _f
-  if ! _f="$(jq -r '[(.id|tostring), (.path // "null"), (.event // "null"), (.head_branch // "null"), (.status // "null"), (.conclusion // "null"), (.head_sha // "null")] | @tsv' <<<"$_body" 2>/dev/null)"; then
-    printf 'RUN_UNRESOLVABLE|the Actions API answered 200 with a body this gate could not parse as a run object. Nothing was measured.\n'
+  # `// empty`, NOT `// "null"`. The literal-default form let a RENAMED OR DROPPED field flow
+  # into the equality tests below, so GitHub changing its schema would have emitted
+  # RUN_WRONG_WORKFLOW / RUN_WRONG_EVENT / RUN_NOT_MAIN / RUN_NOT_COMPLETED / RUN_NOT_SUCCESS —
+  # MEASURED refusals for an instrument failure, which the #8210 probe then renders daily as
+  # "the answer is no". Only `head_sha` had the shape check that routed it correctly.
+  # `created_at` is field 8 so step E does not re-fetch this body (see its own comment).
+  if ! _f="$(jq -r '[(.id|tostring), (.path // empty), (.event // empty), (.head_branch // empty), (.status // empty), (.conclusion // empty), (.head_sha // empty), (.created_at // empty)] | @tsv' <<<"$_body" 2>/dev/null)"; then
+    printf 'RUN_UNRESOLVABLE|the Actions API answered 200 with a body this gate could not parse as a run object. Nothing was measured — this says nothing about the evidence or the host. Wait and re-run; a persistent parse failure means the API shape changed and this gate needs updating.\n'
     return 1
   fi
-  local _rid _path _event _branch _status _concl _sha
+  local _rid _path _event _branch _status _concl _sha _created
   # Read with `cut`, not `IFS=$'\t' read`: tab is IFS-WHITESPACE, so `read` COLLAPSES runs of
   # tabs and drops empty middle fields — every field after an absent one would shift left.
   _rid="$(cut -f1 <<<"$_f")";    _path="$(cut -f2 <<<"$_f")"
   _event="$(cut -f3 <<<"$_f")";  _branch="$(cut -f4 <<<"$_f")"
   _status="$(cut -f5 <<<"$_f")"; _concl="$(cut -f6 <<<"$_f")"
-  _sha="$(cut -f7 <<<"$_f")"
+  _sha="$(cut -f7 <<<"$_f")";    _created="$(cut -f8 <<<"$_f")"
+
+  # AN ABSENT FIELD IS AN UNUSABLE ANSWER, NOT A WRONG ONE. With `// empty` above, a field
+  # GitHub renamed or dropped arrives as the empty string, and this is where that becomes a
+  # could-not-measure token instead of a confident refusal naming the wrong cause.
+  local _fname _fval
+  for _fname in path:"$_path" event:"$_event" head_branch:"$_branch" \
+                status:"$_status" conclusion:"$_concl"; do
+    _fval="${_fname#*:}"
+    if [[ -z "$_fval" ]]; then
+      printf 'RUN_UNRESOLVABLE|the Actions API answered 200 but its run object carries no %s field. The schema this gate parses has changed; nothing was measured.\n' "${_fname%%:*}"
+      return 1
+    fi
+  done
 
   # STRING comparison: run ids exceed both bash's and jq's double precision.
   if [[ "$_rid" != "$_id" ]]; then
@@ -1156,7 +1314,7 @@ _git_data_rung2_check_run() {
     printf 'RUN_UNRESOLVABLE|run %s reports head_sha %s, which is not a 40-hex commit id. Nothing usable was measured.\n' "$_id" "$(_git_data_rung2_safe "$_sha" 60)"
     return 1
   fi
-  printf 'OK|%s\n' "$_sha"
+  printf 'OK|%s|%s\n' "$_sha" "$_created"
   return 0
 }
 
@@ -1185,7 +1343,7 @@ _git_data_rung2_check_artifacts() {
   _code="$(printf '%s' "$_out" | tail -n1)"
   _body="$(printf '%s' "$_out" | sed '$d')"
   if [[ "$_code" != "200" ]]; then
-    printf 'RUN_ARTIFACT_RECORD_UNREADABLE|the artifacts endpoint for run %s answered HTTP %s. Nothing was measured.\n' "$_id" "$_code"
+    printf 'RUN_ARTIFACT_RECORD_UNREADABLE|the artifacts endpoint for run %s answered HTTP %s. Nothing was measured — this says nothing about the evidence. Wait and re-run; export GH_TOKEN if it persists.\n' "$_id" "$_code"
     return 1
   fi
   # EXACT name match: git-data-rung2-capture-log is what a NON-PASS run uploads, and a
@@ -1228,9 +1386,19 @@ _git_data_rung2_hash_at_sha() {
   # operand the P1b relative-operand guard cannot prove safe, so it trades a bounded leak for
   # an unprovable destructive operation. The residual is one directory per gate call.
   _tmp="$(mktemp -d -t rung2-archive.XXXXXXXX)" || {
-    printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree.\n'; return 1; }
-  # Attributes are disabled so a future export-ignore/export-subst/text=auto entry cannot make
-  # archived bytes differ from the worktree bytes the live hash reads.
+    printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree. Nothing was measured — check free space and TMPDIR, then re-run.\n'; return 1; }
+  # `core.attributesfile=/dev/null` DISABLES THE GLOBAL/SYSTEM ATTRIBUTES FILE, AND NOTHING
+  # MORE — the earlier comment here claimed it stopped a future `export-ignore`/`export-subst`
+  # entry from making archived bytes differ from the worktree bytes, and that is false.
+  # Measured: with `d/.gitattributes` carrying `b.yml export-ignore`,
+  # `git -c core.attributesfile=/dev/null archive "$SHA:d"` still honours it and omits b.yml,
+  # because `git archive` reads attributes from the tree it is archiving.
+  #
+  # The flag is kept because it removes ONE input the operator's machine controls. The in-tree
+  # case is left fail-closed rather than defended: a dropped file changes the digest, so the
+  # verdict is RUN_HASH_MISMATCH — correct direction, wrong named cause. No `.gitattributes`
+  # exists under the infra directory today (checked), and the honest fix if one ever lands is
+  # to hash blobs directly (see the note below).
   if ! git -C "$_top" -c core.attributesfile=/dev/null archive "$_treeish" 2>/dev/null \
        | tar -x --no-same-owner --no-same-permissions -C "$_tmp" 2>/dev/null; then
     printf 'RUN_HASH_UNCOMPUTABLE|the tree at %s could not be extracted (the path %s may not exist at that commit).\n' "$_sha" "${_rel_dir:-<repo root>}"
@@ -1238,7 +1406,19 @@ _git_data_rung2_hash_at_sha() {
   fi
   # THE ARCHIVED TREE COMES FROM AN ATTACKER-INFLUENCEABLE COMMIT. A mode-120000 entry
   # pointing at /etc/shadow or back into the live worktree is both an arbitrary read and a
-  # same-hash laundering shape, so symlinks and hardlinks are refused before anything is read.
+  # same-hash laundering shape, so symlinks and hardlinks are refused before anything is READ —
+  # `tar -x` has already MATERIALISED the entry by this point, but materialising a symlink does
+  # not follow it, and the only thing that would follow it is the `sha256sum` below. Measured
+  # end to end at review: the extraction really does produce a mode-120000 `leak.yml ->
+  # /etc/passwd`, and this sweep refuses it before any digest is taken.
+  #
+  # THE NON-ALLOCATING ALTERNATIVE, recorded rather than taken: `git cat-file blob <sha>:<path>`
+  # per bound file needs no tmpdir, no tar, and no sweep (a blob is never a symlink — the MODE
+  # lives in the tree entry), and it would also retire the `.gitattributes` caveat above. It is
+  # not taken here because the roster derivation lives inside
+  # `git_data_rung2_user_data_sha256`, which this gate and the capture script deliberately
+  # SHARE — re-deriving it against a tree-ish would fork that single source, which is the
+  # property the delegation exists to protect. Tracked as the follow-up in #8397.
   local _bad
   _bad="$(find "$_tmp" \( -type l -o \( -type f -links +1 \) \) -print -quit 2>/dev/null)"
   if [[ -n "$_bad" ]]; then
@@ -1318,10 +1498,14 @@ HOLD
   # twenty-second network timeout and read as an API problem. ABORT, not HOLD: a gate that
   # cannot run its own instruments has measured nothing.
   local _bin
-  for _bin in jq curl tar; do
+  # `find` and `sha256sum` are here because they are USED, not because they are plausible:
+  # a seat shadowed `find` and the symlink/hardlink refusal in the archive path stopped firing
+  # while the gate went on to hash the tree. A tooling list is a claim about what this library
+  # calls, and it is checked by the suite against the binaries it actually invokes.
+  for _bin in jq curl tar find sha256sum; do
     if ! command -v "$_bin" >/dev/null 2>&1; then
       _git_data_rung2_annotate TOOLING_MISSING "${_bin} is not on PATH"
-      echo "git_data_rung2_rehearsal_gate: ABORT [TOOLING_MISSING] — ${_bin} is not on PATH, and this gate resolves the evidence's Actions run and re-hashes the tree that run booted. Install it (apt-get install -y ${_bin}) and re-run. Fail-closed: a gate that cannot run its own instruments has measured nothing."
+      echo "git_data_rung2_rehearsal_gate: ABORT [TOOLING_MISSING] — ${_bin} is not on PATH, and this gate resolves the evidence's Actions run and re-hashes the tree that run booted. On a runner, the job needs a setup step that installs it; on a workstation, install it with your package manager. Fail-closed: a gate that cannot run its own instruments has measured nothing.${_seam_note}"
       return 1
     fi
   done
@@ -1508,7 +1692,9 @@ HOLD
     return 1
   fi
   _sentry="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_SENTRY_CROSSCHECK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
-  _ack="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_SENTRY_CROSSCHECK_ACK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
+  # `|| true`: the ack is OPTIONAL, so this pipeline returns 1 under `pipefail` on the common
+  # path (no ack present). Same errexit reasoning as the `_rel_dir` guard below.
+  _ack="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_SENTRY_CROSSCHECK_ACK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//' || true)"
 
   # The run id is parsed here because the ack is keyed to it: an ack is a statement about ONE
   # run, and an ack that survives being copied into the next evidence file is not an ack.
@@ -1516,6 +1702,19 @@ HOLD
   if ! _run_id="$(_git_data_rung2_run_id "$url")"; then
     _git_data_rung2_annotate RUN_UNRESOLVABLE "the run id in ${url} is not parseable"
     echo "git_data_rung2_rehearsal_gate: HOLD [RUN_UNRESOLVABLE] — no run id could be parsed from RUNG2_EVIDENCE_URL '$(_git_data_rung2_safe "$url" 160)'. The shape check above is deliberately UNANCHORED (GitHub's own links carry /job/<id> and /attempts/<n> suffixes), so a trailing-garbage id passes it; this gate refuses such an id rather than silently truncating it to a different, real run. Fail-closed: nothing was measured.${_seam_note}"
+    return 1
+  fi
+
+  # ── (#8010) STEP B2: THE MONOTONIC RUN FLOOR (local, zero requests) ──────────────
+  local _floor _floor_out
+  if ! _floor_out="$(_git_data_rung2_run_floor "$evidence")"; then
+    _git_data_rung2_annotate RUN_FLOOR_UNREADABLE "${_floor_out#*|}"
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_FLOOR_UNREADABLE] — ${_floor_out#*|} Nothing was measured about this evidence: the gate could not read which run the previous version of this file attested, so it cannot tell a fresh rehearsal from a replay of an older one. Run \`git fetch origin main\` (or check out with fetch-depth: 0) and re-run.${_seam_note}"
+    return 1
+  fi
+  _floor="$_floor_out"
+  if [[ -n "$_floor" && "$_run_id" -lt "$_floor" ]] && ! _git_data_rung2_downgrade_acked "$body" "$_run_id"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_ID_REGRESSED] — ${evidence} names run ${_run_id}, but the version of this file it replaces named run ${_floor}. Every fact this file asserts may be true and the bytes still be OLDER than the last attested ones: that is the downgrade shape — revert the payload, then cite the genuine older run that really did boot it. Re-run the rehearsal from main against the current payload. If this replay is DELIBERATE, append RUNG2_EVIDENCE_DOWNGRADE_ACK=${_run_id}:<why older bytes are being reinstated> in this file's own commit (the reason may not contain '#').${_seam_note}"
     return 1
   fi
 
@@ -1554,21 +1753,31 @@ HOLD
         return 1
       fi
       ;;
+    NOT_RUN)
+      # A DISTINCT ARM, because the old catch-all printed "which is outside the closed set
+      # {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}" *for NOT_RUN* — a sentence listing the value
+      # inside the set it declared the value outside of. NOT_RUN is a value the capture writes
+      # DELIBERATELY (its jq-missing, token-unset and reader-missing branches), so it is a
+      # measured statement that the second channel never ran, and no ack can rescue it.
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_SENTRY_CROSSCHECK=NOT_RUN: the cross-check never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, or no reader on the rehearsal runner). There is nothing to acknowledge, so no RUNG2_SENTRY_CROSSCHECK_ACK can release this — re-run the rehearsal on a runner where the second channel is reachable.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_SENTRY_CROSSCHECK=NOT_RUN (the cross-check never ran)"
+      return 1 ;;
     *)
-      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_sentry" 60)', which is outside the closed set the capture can write {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}. NOT_RUN means the cross-check never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, or no reader) — a could-not-measure condition, which no acknowledgement can rescue, because there is nothing to acknowledge. Re-run the rehearsal on a runner where the second channel is reachable.${_seam_note}"
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_sentry" 60)', which is outside the closed set the capture can write {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}. An unknown verdict is not a pass and no acknowledgement can rescue it — re-run the rehearsal, and if this value keeps appearing the capture script and this gate have drifted apart.${_seam_note}"
       _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_sentry" 60)'"
       return 1 ;;
   esac
 
   # ── (#8010) STEP C: RESOLVE THE RUN (network, one GET) ───────────────────────────
-  local _chk _tok _detail _head_sha
+  local _chk _tok _detail _head_sha _created
   _chk="$(_git_data_rung2_check_run "$_run_id")" || {
     _tok="${_chk%%|*}"; _detail="${_chk#*|}"
     _git_data_rung2_annotate "$_tok" "$_detail"
     echo "git_data_rung2_rehearsal_gate: HOLD [${_tok}] — ${_detail}${_seam_note}"
     return 1
   }
-  _head_sha="${_chk#*|}"
+  _head_sha="$(printf '%s' "${_chk#*|}" | cut -d'|' -f1)"
+  _created="$(printf '%s' "${_chk#*|}" | cut -d'|' -f2)"
 
   # ── (#8010) STEP D: BIND THE RUN TO THE BYTES (local git) ────────────────────────
   #
@@ -1579,12 +1788,16 @@ HOLD
   local _top _rel_dir _hash_out
   if ! _top="$(git -C "$(dirname "$cloud_init")" rev-parse --show-toplevel 2>/dev/null)"; then
     _git_data_rung2_annotate RUN_SHA_UNREACHABLE "the cloud-init path is not inside a git work tree"
-    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_SHA_UNREACHABLE] — ${cloud_init} is not inside a git work tree, so the bytes run ${_run_id} rehearsed cannot be read. Nothing was measured."
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_SHA_UNREACHABLE] — ${cloud_init} is not inside a git work tree, so the bytes run ${_run_id} rehearsed cannot be read. Nothing was measured. Re-run the gate from inside the repository checkout.${_seam_note}"
     return 1
   fi
   _rel_dir="$(_git_data_repo_rel "$cloud_init" "$_top")" || _rel_dir=""
   _rel_dir="$(dirname "${_rel_dir:-.}")"
-  [[ "$_rel_dir" == "." ]] && _rel_dir=""
+  # `if`, not `&&`: `[[ … ]] && x=""` returns 1 whenever the test is FALSE, which is the
+  # production path (a cloud-init in a subdirectory). Harmless under every current call site —
+  # all four suspend errexit — but both runbooks document the BARE invocation, and a reader who
+  # pastes that under `set -euo pipefail` would get a silent abort with no verdict line.
+  if [[ "$_rel_dir" == "." ]]; then _rel_dir=""; fi
   _hash_out="$(_git_data_rung2_hash_at_sha "$_top" "$_rel_dir" "$(basename "$cloud_init")" "$_head_sha")" || {
     _tok="${_hash_out%%|*}"; _detail="${_hash_out#*|}"
     _git_data_rung2_annotate "$_tok" "$_detail"
@@ -1601,8 +1814,12 @@ HOLD
   #
   # Placed after the local git checks, not beside the first GET: the common refusals (stale
   # evidence, a laundered hash) then cost one request instead of two.
-  local _created _art_out
-  _created="$(_git_data_rung2_fetch "runs/${_run_id}" 2>/dev/null | sed '$d' | jq -r '.created_at // empty' 2>/dev/null || true)"
+  # THE THIRD GET IS GONE, and it was worse than an extra request. It re-fetched a body step C
+  # already had, `|| true`-swallowed every failure, and an empty `_created` left `_age_ok=1` —
+  # so if THAT read was the rate-limited one, an aged run with no artifact record yielded
+  # RUN_NO_EVIDENCE_ARTIFACT, a MEASURED refusal, for the exact could-not-measure condition the
+  # 90-day window exists to express. `created_at` now rides field 8 out of step C.
+  local _art_out
   _art_out="$(_git_data_rung2_check_artifacts "$_run_id" "$_created")" || {
     _tok="${_art_out%%|*}"; _detail="${_art_out#*|}"
     _git_data_rung2_annotate "$_tok" "$_detail"
@@ -1610,7 +1827,7 @@ HOLD
     return 1
   }
 
-  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} (${url}); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. RUN: ${_run_id} concluded success at head_sha ${_head_sha}, whose tree re-hashes to the same digest; it uploaded ${_art_out#*|}; Sentry cross-check ${_sentry}${_ack:+ (acknowledged)}.${_seam_note} NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} ($(_git_data_rung2_safe "$url" 160)); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. RUN: ${_run_id} concluded success at head_sha ${_head_sha}, whose tree re-hashes to the same digest; it uploaded ${_art_out#*|}; Sentry cross-check ${_sentry}${_ack:+ (acknowledged)}.${_seam_note} NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
 }
 

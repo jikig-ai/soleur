@@ -439,6 +439,17 @@ jobs:
 
   deploy-script-tests:
     runs-on: ubuntu-24.04
+    # (#8010) `actions: read` + GH_TOKEN on the freshness step below. Since #8010 that step
+    # resolves the evidence's Actions run over the API, and without this grant it reads
+    # ANONYMOUSLY — 60 requests/hour per IP, shared behind hosted-runner NAT with every other
+    # job on the box. A rate limit there is `HOLD [RUN_RATE_LIMITED]`, which fails closed and
+    # correctly, but it turns an infra PR that changed nothing about the evidence into a red
+    # check for reasons that have nothing to do with it. This is the one call site of the four
+    # that is editable this cycle (the two apply-workflow sites are blocked behind #8361/#8362,
+    # and the sweeper runs under `env -i`); #8397 carries the rest.
+    permissions:
+      contents: read
+      actions: read
     # 8 (was 12, was 8, was 5): the #5875 sandbox-canary regression below builds a
     # small alpine+bubblewrap image and runs two docker bwrap probes on top of the
     # existing bash suite. Self-validating (SKIPs if the runner cannot do bwrap userns).
@@ -1657,6 +1668,8 @@ jobs:
       # countdown timer, not a regression guard, and the first person to hit it would delete
       # the step. It arms itself the moment the evidence lands.
       - name: Rung-2 evidence freshness (active only once evidence exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           EV=apps/web-platform/infra/git-data-rung2-boot-evidence.env
@@ -1667,8 +1680,17 @@ jobs:
           fi
           # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
           source tests/scripts/lib/git-data-birth-readiness-gate.sh
-          if ! git_data_rung2_rehearsal_gate apps/web-platform/infra/cloud-init-git-data.yml; then
-            echo "::error::rung-2 evidence is committed but NO LONGER VALID for the current template. This PR changed something that ships to the git-data host, so the boot that was rehearsed is not the boot that would happen. Either revert the payload change or re-run the rung-2 rehearsal and update the evidence — do NOT dispatch a birth against this tree."
+          GATE_OUT="$(git_data_rung2_rehearsal_gate apps/web-platform/infra/cloud-init-git-data.yml 2>&1)" && GATE_RC=0 || GATE_RC=$?
+          printf '%s\n' "$GATE_OUT"
+          if [[ "$GATE_RC" -ne 0 ]]; then
+            TOKEN="$(printf '%s\n' "$GATE_OUT" | sed -n 's/.*rehearsal_gate: \(HOLD\|ABORT\) \[\([A-Z0-9_]*\)\].*/\2/p' | head -1)"
+            IS_INSTRUMENT=0
+            for T in $(git_data_rung2_token_sets cannot); do [[ "$TOKEN" == "$T" ]] && IS_INSTRUMENT=1; done
+            if [[ "$IS_INSTRUMENT" -eq 1 ]]; then
+              echo "::error::the rung-2 gate could NOT MEASURE this evidence [${TOKEN}]. This says nothing about your change: the gate's own instrument failed (network, rate limit, unreachable history, or a missing tool). Do NOT revert the payload and do NOT re-run the rehearsal on account of this. Re-run the job; if it persists, see the token table in knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md and #8397."
+            else
+              echo "::error::rung-2 evidence is committed but NO LONGER VALID for the current template${TOKEN:+ [${TOKEN}]}. This PR changed something that ships to the git-data host, so the boot that was rehearsed is not the boot that would happen. Either revert the payload change or re-run the rung-2 rehearsal and update the evidence — do NOT dispatch a birth against this tree."
+            fi
             exit 1
           fi
           echo "rung-2 evidence is valid for the current template."

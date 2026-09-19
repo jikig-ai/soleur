@@ -160,6 +160,14 @@ _stub_run() {
   if [[ "$http" == "raw" ]]; then
     printf 'not json at all\n' > "$TMP/api/runs/${id}.body"
     printf '200\n' > "$TMP/api/runs/${id}.status"
+  elif [[ "$http" == "500once" ]]; then
+    jq -n --arg id "$id" --arg sha "$head_sha" --arg c "$conclusion" --arg s "$status" \
+          --arg p "$path" --arg e "$event" --arg b "$head_branch" --arg t "$created_at" \
+      '{id: ($id|tonumber), head_sha: $sha, conclusion: $c, status: $s, path: $p,
+        event: $e, head_branch: $b, created_at: $t}' \
+      > "$TMP/api/runs/${id}.body" || _a_setup_fail "_stub_run: jq failed for ${id}"
+    printf '200\n' > "$TMP/api/runs/${id}.status"
+    printf '500\n' > "$TMP/api/runs/${id}.status.once"
   elif [[ "$http" == "401once" ]]; then
     jq -n --arg id "$id" --arg sha "$head_sha" --arg c "$conclusion" --arg s "$status" \
           --arg p "$path" --arg e "$event" --arg b "$head_branch" --arg t "$created_at" \
@@ -179,6 +187,11 @@ _stub_run() {
   case "$artifacts" in
     none)    jq -n '{total_count: 0, artifacts: []}' > "$TMP/api/runs/${id}/artifacts.body" ;;
     log)     jq -n --arg t "$created_at" '{total_count: 1, artifacts: [{name: "git-data-rung2-capture-log", expired: false, created_at: $t}]}' > "$TMP/api/runs/${id}/artifacts.body" ;;
+    # THE REAL MULTI-ATTEMPT SHAPE. /runs/<id>/artifacts returns artifacts from ALL attempts,
+    # so a run whose attempt 1 failed (capture-log) and attempt 2 passed (boot-evidence) is a
+    # TWO-element list with the log FIRST. Every other fixture here has population <= 1, which
+    # is why reading `.artifacts[0]` instead of the set survived the whole battery.
+    both)    jq -n --arg t "$created_at" '{total_count: 2, artifacts: [{name: "git-data-rung2-capture-log", expired: false, created_at: $t}, {name: "git-data-rung2-boot-evidence", expired: false, created_at: $t}]}' > "$TMP/api/runs/${id}/artifacts.body" ;;
     missing) rm -f "$TMP/api/runs/${id}/artifacts.body" ;;
     *)       jq -n --arg t "$created_at" '{total_count: 1, artifacts: [{name: "git-data-rung2-boot-evidence", expired: false, created_at: $t}]}' > "$TMP/api/runs/${id}/artifacts.body" ;;
   esac
@@ -911,7 +924,10 @@ mutate_suite() {
   if [[ -n "$got" && "$got" -ge "$expect_fails" ]]; then
     pass "$label (harness row: the mutant reports ${got} failure(s), floor ${expect_fails})"
   else
-    fail "$label — the mutated SUITE did not red; the assertion it guards is vacuous" "$rc" "reported failures='${got:-none}'"
+    # REPORT THE MUTANT'S OWN TAIL. Without it a mutant that ABORTED (rc 2, no summary line)
+    # is indistinguishable from one that ran green, and the row's message asserts the second —
+    # which is a confident wrong diagnosis, the class this suite exists to remove.
+    fail "$label — the mutated SUITE did not red; the assertion it guards is vacuous" "$rc" "reported failures='${got:-none}'; mutant tail: $(printf '%s\n' "$out" | tail -4 | tr '\n' ' ')"
   fi
 }
 
@@ -2049,6 +2065,49 @@ _expect_rows() {  # <family> <n>
   fi
 }
 
+# _expect_rows SELF-TEST — the probe this helper shipped without, and the measured reason it
+# needs one: neutering its condition to `if true` left the suite reporting 217 passed, 0 failed.
+#
+# A pass()/fail() positive control cannot see this. _expect_rows OWNS a verdict: it compares,
+# then calls pass or fail, so a helper that takes the wrong BRANCH still moves both counters,
+# still appends to the ledger, and still satisfies the anti-vacuity floor. The four row-count
+# pins are themselves the guard that exists BECAUSE the floor cannot see a truncated family —
+# so an unbacked _expect_rows silently removes the backstop's backstop.
+#
+# Reports with printf + exit rather than through pass/fail, because those are the helpers it
+# is verifying; and it unwinds every counter AND the ledger so the floor stays exact.
+_er_self_test() {
+  local _p0=$passes _f0=$fails _l0=${#FAILURES[@]}
+  declare -A _FAM_SAVE=()
+  local _k
+  for _k in "${!_FAM[@]}"; do _FAM_SAVE[$_k]="${_FAM[$_k]}"; done
+
+  _FAM[__selftest]=1
+  # Output is suppressed: this drives fail() deliberately, and a FAIL line in the transcript
+  # that the unwind then erases from the counters is a transcript that disagrees with itself.
+  _expect_rows __selftest 1 >/dev/null 2>&1       # must PASS
+  local _p1=$passes _f1=$fails
+  _expect_rows __selftest 99 >/dev/null 2>&1      # must FAIL
+  local _p2=$passes _f2=$fails _l2=${#FAILURES[@]}
+
+  # Unwind.
+  passes=$_p0; fails=$_f0
+  while [[ "${#FAILURES[@]}" -gt "$_l0" ]]; do unset "FAILURES[$(( ${#FAILURES[@]} - 1 ))]"; done
+  FAILURES=("${FAILURES[@]+"${FAILURES[@]}"}")
+  unset '_FAM[__selftest]'
+  for _k in "${!_FAM_SAVE[@]}"; do _FAM[$_k]="${_FAM_SAVE[$_k]}"; done
+
+  if [[ "$_p1" -ne $((_p0 + 1)) || "$_f1" -ne "$_f0" ]]; then
+    printf '\n  FATAL: _expect_rows did not PASS on a matching count (passes %s -> %s, fails %s -> %s).\n' "$_p0" "$_p1" "$_f0" "$_f1" >&2
+    exit 2
+  fi
+  if [[ "$_f2" -ne $((_f1 + 1)) || "$_l2" -ne $((_l0 + 1)) ]]; then
+    printf '\n  FATAL: _expect_rows did not FAIL on a mismatched count (fails %s -> %s, ledger %s -> %s). Every row-count pin in this suite is vacuous.\n' "$_f1" "$_f2" "$_l0" "$_l2" >&2
+    exit 2
+  fi
+}
+_er_self_test
+
 # The canonical releasing fixture for this battery: hash-matched, provenance-clean, and now
 # also run-resolvable. Every refusal row below is this file with exactly one thing changed.
 _S_URL="https://github.com/jikig-ai/soleur/actions/runs/17250000001"
@@ -2203,7 +2262,14 @@ _stub_run 80000015 "head_sha=$_R2_C1" http=401once
 _r_ev r15.env 80000015
 _row R "R14-control: a 401 with no bearer to drop is could-not-measure, not a free pass" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r15.env"
 
-_expect_rows R 15
+# R16 — THE 5xx RETRY'S FAR SIDE. R2 is always-500, so it yields the same refusal whether the
+# retry exists or not — measured, deleting the retry arm survived the whole battery. The
+# `.once` machinery already existed for the anonymous retry and was never applied here.
+_stub_run 80000016 "head_sha=$_R2_C1" http=500once
+_r_ev r16.env 80000016
+_row R "R16: a transient 5xx is retried, and the second attempt releases" 0 "RELEASED" "$R2/ci.yml" "$R2/r16.env"
+
+_expect_rows R 16
 
 printf '\n(#8010) A — the capture discriminator (an evidence artifact exists)\n'
 
@@ -2234,7 +2300,28 @@ jq '.artifacts[0].expired = true' "$TMP/api/runs/80000105/artifacts.body" > "$TM
 _s_ev a5.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000105"
 _row A "A5: an EXPIRED record still proves the capture happened => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/a5.env"
 
-_expect_rows A 5
+# A6 — THE FAR SIDE. Every other A fixture has an artifact population of 0 or 1, so
+# `1-of-1` cannot be told apart from `all-of-1` OR from `index-0-of-1` — measured, reading
+# `.artifacts[0]` instead of the set survived the entire battery. This is the real
+# multi-attempt shape (attempt 1 failed and uploaded the capture-LOG, attempt 2 passed), and
+# an ordering-dependent read would HOLD a genuinely passing rehearsal: the too-aggressive
+# direction no fixture covered.
+_stub_run 80000106 "head_sha=$_R2_C1" artifacts=both
+_s_ev a6.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000106"
+_row A "A6: the evidence artifact is found even when a failed attempt's log is listed FIRST" 0 "RELEASED" "$R2/ci.yml" "$R2/a6.env"
+
+# A7/A8 — THE WINDOW'S NEAR BOUNDARY. The only fixtures were 1 day and 200 days, so any
+# literal in roughly 2..199 satisfied them. `12 hours` rather than `1 day` for the in-window
+# side: `date -d '1 day ago'` sits exactly on the 86400s boundary and flips on elapsed seconds.
+_stub_run 80000107 "head_sha=$_R2_C1" artifacts=none "created_at=$(date -u -d '89 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+_s_ev a7.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000107"
+_row A "A7: INSIDE the retention window, an empty list is a measured refusal" 1 "[RUN_NO_EVIDENCE_ARTIFACT]" "$R2/ci.yml" "$R2/a7.env"
+
+_stub_run 80000108 "head_sha=$_R2_C1" artifacts=none "created_at=$(date -u -d '91 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+_s_ev a8.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000108"
+_row A "A8: one day PAST the window, the same empty list is could-not-measure" 1 "[RUN_ARTIFACT_RECORD_UNREADABLE]" "$R2/ci.yml" "$R2/a8.env"
+
+_expect_rows A 8
 
 printf '\n(#8010) H — binding the run to the bytes, via its head_sha\n'
 
@@ -2326,6 +2413,103 @@ _row H "H6: the live-hash check still reports BEFORE any run resolution" 1 "STAL
 
 _expect_rows H 6
 
+printf '\n(#8010) F — Guard 5: the monotonic run floor (the downgrade shape)\n'
+
+# WHY THIS FAMILY EXISTS. Steps D and E are hash-EQUALITY checks. Revert the payload tree to an
+# older revision, cite the genuine older run that rehearsed exactly those bytes, and every
+# asserted fact is TRUE while the host ends up running older code. The exploit payload is
+# already in this repository's history (the pre-#8312 evidence at f64b0ebc2^), so this is a
+# two-command attack, not a hypothetical.
+#
+# FX is a repo with a COMMITTED evidence history, which the R2/HX fixtures deliberately lack:
+# every other fixture writes a fresh filename, so the floor is empty and this arm never fires.
+_FX="$TMP/fx"
+assert_fixture_dir "$_FX"
+mkdir -p "$_FX"
+cp "$TMP/mixed.yml" "$_FX/ci.yml"
+_r2_write_module "$_FX" "${_r2_payloads[@]}"
+_a_sibling_var "$_FX/modules/git-data-userdata/variables.tf"
+_a_sibling_out "$_FX/modules/git-data-userdata/outputs.tf"
+for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$_FX/$_p"; done
+git -C "$_FX" init -q -b main || _a_setup_fail "git init failed in $_FX"
+_g_commit "$_FX" "c1: template, module, payloads"
+_FX_C1="$(git -C "$_FX" rev-parse HEAD)"
+_FX_SHA="$(_r2_hash "$_FX")"
+
+# c2: the HIGH-water evidence (run 80000900). This is the version a downgrade replaces.
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000900" "$_FX_SHA" none CLEAN
+_r2_commit_alone "$_FX/evidence.env"
+for _id in 80000900 80000800; do _stub_run "$_id" "head_sha=$_FX_C1"; done
+
+_row F "F1: evidence at the current high-water mark releases (the floor costs nothing when nothing moves)" 0 "RELEASED" "$_FX/ci.yml" "$_FX/evidence.env"
+
+# c3: the DOWNGRADE — an OLDER run id replacing the committed one, every other fact true.
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000800" "$_FX_SHA" none CLEAN
+_r2_commit_alone "$_FX/evidence.env"
+_row F "F2: an OLDER run id than the version it replaces => HOLD, with every other fact true" 1 "[RUN_ID_REGRESSED]" "$_FX/ci.yml" "$_FX/evidence.env"
+
+# The deliberate-replay escape hatch, with the same grammar as the Sentry ack.
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000800" "$_FX_SHA" none CLEAN
+printf 'RUNG2_EVIDENCE_DOWNGRADE_ACK=80000800:reinstating the pre-regression payload while the fix is prepared\n' >> "$_FX/evidence.env"
+_r2_commit_alone "$_FX/evidence.env"
+_row F "F3: a well-formed, run-bound downgrade ack releases the deliberate replay" 0 "RELEASED" "$_FX/ci.yml" "$_FX/evidence.env"
+
+# RE-ESTABLISH THE HIGH-WATER MARK BEFORE F4/F5, and the reason is a property worth stating:
+# F3's ack was ACCEPTED, so its downgrade legitimately became the new floor. That is the
+# ratchet working — an acknowledged replay is the attested state from then on — and it means
+# F4/F5 would otherwise compare 80000800 against 80000800 and detect nothing. Measured: both
+# rows RELEASED before this commit was added, testing the ack grammar against a fixture that
+# could never have regressed in the first place.
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000900" "$_FX_SHA" none CLEAN
+_r2_commit_alone "$_FX/evidence.env"
+
+# An ack keyed to a DIFFERENT run is an ack copied forward — the property the run binding buys.
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000800" "$_FX_SHA" none CLEAN
+printf 'RUNG2_EVIDENCE_DOWNGRADE_ACK=80000900:copied forward from the previous file\n' >> "$_FX/evidence.env"
+_r2_commit_alone "$_FX/evidence.env"
+_row F "F4: a downgrade ack naming a different run does not release" 1 "[RUN_ID_REGRESSED]" "$_FX/ci.yml" "$_FX/evidence.env"
+
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000900" "$_FX_SHA" none CLEAN
+_r2_commit_alone "$_FX/evidence.env"
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000800" "$_FX_SHA" none CLEAN
+printf 'RUNG2_EVIDENCE_DOWNGRADE_ACK=80000800:   \n' >> "$_FX/evidence.env"
+_r2_commit_alone "$_FX/evidence.env"
+_row F "F5: a downgrade ack with an empty reason acknowledges nothing" 1 "[RUN_ID_REGRESSED]" "$_FX/ci.yml" "$_FX/evidence.env"
+
+# THE DELETION CASE, and it is the one that makes the floor real rather than decorative.
+# Guard 4 states that a voided attestation is DELETED, never rewritten — so the last commit
+# touching this path is routinely the one that REMOVED it. Without the `^:` fallback the floor
+# would reset on exactly that commit, and voiding an attestation would itself be the bypass.
+_FY="$TMP/fy"
+assert_fixture_dir "$_FY"
+mkdir -p "$_FY"
+cp "$TMP/mixed.yml" "$_FY/ci.yml"
+_r2_write_module "$_FY" "${_r2_payloads[@]}"
+_a_sibling_var "$_FY/modules/git-data-userdata/variables.tf"
+_a_sibling_out "$_FY/modules/git-data-userdata/outputs.tf"
+for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$_FY/$_p"; done
+git -C "$_FY" init -q -b main || _a_setup_fail "git init failed in $_FY"
+_g_commit "$_FY" "c1: template, module, payloads"
+_FY_C1="$(git -C "$_FY" rev-parse HEAD)"
+_FY_SHA="$(_r2_hash "$_FY")"
+_r2_evidence_write "$_FY/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000900" "$_FY_SHA" none CLEAN
+_r2_commit_alone "$_FY/evidence.env"
+# Void it the permitted way: delete, in its own commit.
+git -C "$_FY" rm -q -- evidence.env
+git -C "$_FY" -c user.name=t -c user.email=t@t commit -q -m "void the attestation by deleting it" >/dev/null 2>&1
+# Now re-add an OLDER run. The floor must still come from the pre-deletion version.
+_r2_evidence_write "$_FY/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000800" "$_FY_SHA" none CLEAN
+_r2_commit_alone "$_FY/evidence.env"
+for _id in 80000900 80000800; do _stub_run "$_id" "head_sha=$(git -C "$_FY" rev-parse HEAD)"; done
+_row F "F6: DELETING the evidence does not reset the floor (the ^: fallback; otherwise voiding is the bypass)" 1 "[RUN_ID_REGRESSED]" "$_FY/ci.yml" "$_FY/evidence.env"
+
+# A first-ever evidence file has no prior version, so there is no floor and that is not a failure.
+_stub_run 80000700 "head_sha=$_HX_C2"
+_hx_ev f7.env 80000700
+_row F "F7: a first-ever evidence file has no floor to regress against" 1 "[RUN_HASH_MISMATCH]" "$_HX/ci.yml" "$_HX/f7.env"
+
+_expect_rows F 7
+
 printf '\n(#8010) T/E — tooling, the seam, and the gate'"'"'s own CI annotation\n'
 
 # T1 — TOOLING BEFORE ANYTHING THAT CAN STALL. A missing jq must be reported as a toolchain
@@ -2389,27 +2573,110 @@ if [[ "$_e1n" -eq 1 ]]; then
 else
   fail "E1: expected exactly one ::error:: line for a could-not-measure token, got ${_e1n}" "n/a" "$_e1"
 fi
-_e2="$(GITHUB_ACTIONS=true git_data_rung2_rehearsal_gate "$R2/ci.yml" "$R2/s2.env" 2>&1)"
-_e2n="$(grep -c '^::error::' <<<"$_e2" || true)"
-if [[ "$_e2n" -eq 0 ]]; then
-  pass "E2: a MEASURED refusal does not annotate — the two vocabularies stay distinct"
+# E2 USED TO BE VACUOUS, and the way it failed is the lesson: its fixture refused at step B,
+# which has no annotate call site at all, so it could not observe the three generic sites where
+# the defect lived. It reported green while every MEASURED token printed "could not MEASURE".
+# It now drives a fixture that reaches step C (r4.env → RUN_NOT_FOUND) and asserts the WORDING,
+# not merely the count — the two vocabularies must never share a sentence.
+_e2="$(GITHUB_ACTIONS=true git_data_rung2_rehearsal_gate "$R2/ci.yml" "$R2/r4.env" 2>&1)"
+if [[ "$_e2" == *"REFUSED the rung-2 evidence [RUN_NOT_FOUND]"* && "$_e2" != *"could not MEASURE"* ]]; then
+  pass "E2: a MEASURED refusal annotates as REFUSED, never as could-not-measure"
 else
-  fail "E2: a measured refusal must not emit ::error::, got ${_e2n}" "n/a" "$_e2"
+  fail "E2: a measured refusal must annotate as REFUSED and must not say 'could not MEASURE'" "n/a" "$_e2"
+fi
+# E2b — every member of the MEASURED set, not one sample. A single-token row cannot see a
+# filter that classifies six of seven correctly, and the set is exported precisely so this
+# loop cannot drift from the gate's own definition.
+_e2b_bad=""
+for _mt in $(bash -c "source '$GATE' && git_data_rung2_token_sets measured"); do
+  _e2b_out="$(GITHUB_ACTIONS=true bash -c "source '$GATE'; _git_data_rung2_annotate '$_mt' 'probe'" 2>&1)"
+  [[ "$_e2b_out" == *"could not MEASURE"* ]] && _e2b_bad+="${_mt} "
+done
+if [[ -z "$_e2b_bad" ]]; then
+  pass "E2b: NO member of the measured set annotates as could-not-measure"
+else
+  fail "E2b: measured tokens annotated as could-not-measure — ${_e2b_bad}" "n/a" ""
+fi
+# E2c — and the converse, so the filter cannot be satisfied by classifying everything as
+# REFUSED. A one-directional assertion is the shape that let the original defect through.
+_e2c_bad=""
+for _ct in $(bash -c "source '$GATE' && git_data_rung2_token_sets cannot"); do
+  _e2c_out="$(GITHUB_ACTIONS=true bash -c "source '$GATE'; _git_data_rung2_annotate '$_ct' 'probe'" 2>&1)"
+  [[ "$_e2c_out" == *"could not MEASURE"* ]] || _e2c_bad+="${_ct} "
+done
+if [[ -z "$_e2c_bad" ]]; then
+  pass "E2c: EVERY member of the could-not-measure set annotates as could-not-measure"
+else
+  fail "E2c: could-not-measure tokens not annotated as such — ${_e2c_bad}" "n/a" ""
+fi
+# E2d — the sets are DISJOINT and every bracketed token the gate can emit is in exactly one of
+# them. This is the parity mechanism the probe and the runbooks were missing: three
+# hand-maintained copies agreed at review time with nothing asserting they would keep agreeing.
+_e2d_bad=""
+while IFS= read -r _tok_lit; do
+  [[ -n "$_tok_lit" ]] || continue
+  _n_cannot=0; _n_meas=0
+  for _x in $(bash -c "source '$GATE' && git_data_rung2_token_sets cannot"); do [[ "$_x" == "$_tok_lit" ]] && _n_cannot=1; done
+  for _x in $(bash -c "source '$GATE' && git_data_rung2_token_sets measured"); do [[ "$_x" == "$_tok_lit" ]] && _n_meas=1; done
+  [[ $((_n_cannot + _n_meas)) -eq 1 ]] || _e2d_bad+="${_tok_lit}(${_n_cannot}${_n_meas}) "
+done < <(grep -oE 'rehearsal_gate: (HOLD|ABORT) \[[A-Z0-9_]+\]' "$GATE" | grep -oE '\[[A-Z0-9_]+\]' | tr -d '[]' | sort -u)
+if [[ -z "$_e2d_bad" ]]; then
+  pass "E2d: every bracketed token the gate emits is classified in exactly one set"
+else
+  fail "E2d: tokens classified in neither or both sets — ${_e2d_bad}" "n/a" ""
 fi
 
 # N1 — THE FLAG SET, asserted by source-grep. Under the seam the real fetch never runs, so
 # this is the ONLY mechanism that can assert what curl is invoked with.
+# N1 ANCHORS ON THE INVOCATION, NOT ON THE FILE. The previous form grepped the whole gate for
+# '--disable' and '--noproxy'; both strings also appear in the COMMENT directly above the call
+# explaining why they are there, so the arm was satisfied by its own documentation. Measured by
+# three reviewers: rewriting the call to `curl -k -sS …` — dropping both flags and turning TLS
+# verification OFF — left this arm passing. That is cq-assert-anchor-not-bare-token, in the one
+# arm whose own comment calls it "the ONLY mechanism that can assert what curl is invoked with".
+#
+# The haystack is now the invocation's own lines, comment-stripped: everything from the `curl`
+# token to the line carrying the URL.
+_n1_call="$(awk '/_resp="\$\(curl /,/GIT_DATA_RUNG2_API_BASE/' "$GATE" | sed 's/^[[:space:]]*#.*$//')"
 _n1_fail=""
-for _need in '--disable' '--noproxy' 'https://api.github.com'; do
-  grep -qF -- "$_need" "$GATE" || _n1_fail+="missing:${_need} "
+[[ -n "$_n1_call" ]] || _n1_fail+="EXTRACTION-EMPTY "
+for _need in '--disable' "--noproxy '*'" '--max-time' "${GIT_DATA_RUNG2_API_BASE_EXPECT:-GIT_DATA_RUNG2_API_BASE}"; do
+  grep -qF -- "$_need" <<<"$_n1_call" || _n1_fail+="missing:${_need} "
 done
-for _forbid in '--insecure' '-D -'; do
-  grep -qF -- "$_forbid" "$GATE" && _n1_fail+="present:${_forbid} "
+# The forbid set covers SYNONYMS, not just the spelling that was on my mind: `-k` is
+# `--insecure`, and `--proxy`/`--proxy-insecure` re-open what `--noproxy '*'` closed.
+for _forbid in '--insecure' ' -k ' '--proxy' '-D -' '-v '; do
+  grep -qF -- "$_forbid" <<<"$_n1_call" && _n1_fail+="present:${_forbid} "
 done
 if [[ -z "$_n1_fail" ]]; then
-  pass "N1: the fetch uses --disable + --noproxy over https, and carries no TLS-weakening or header-dump flag"
+  pass "N1: the curl INVOCATION carries --disable, --noproxy '*' and a timeout, and no TLS-weakening, proxy or header-dump flag"
 else
-  fail "N1: the curl flag set drifted — ${_n1_fail}" "n/a" ""
+  fail "N1: the curl invocation drifted — ${_n1_fail}" "n/a" "$_n1_call"
+fi
+# N1b — the API base is a pinned https constant, not an override. Measured by three seats: as
+# `${GIT_DATA_RUNG2_API_BASE:-…}` a single env var redirected the gate's only network call to
+# an attacker host, which received the BEARER in cleartext and supplied step C's entire verdict
+# while SEAM ACTIVE stayed silent.
+# COMMENT-STRIPPED HAYSTACK. The first version of this arm grepped the whole file for
+# `GIT_DATA_RUNG2_API_BASE:-` to prove the override is gone — and the comment above the
+# constant QUOTES that spelling to explain what was removed, so the arm failed on its own
+# documentation. Same collision as N1's, in the opposite direction (a false FAIL rather than a
+# false PASS), which is why both haystacks are stripped rather than narrowed.
+_n1b_code="$(sed 's/^[[:space:]]*#.*$//' "$GATE")"
+if grep -qE '^readonly GIT_DATA_RUNG2_API_BASE="https://api\.github\.com/' <<<"$_n1b_code" \
+   && ! grep -qE 'GIT_DATA_RUNG2_API_BASE:-' <<<"$_n1b_code"; then
+  pass "N1b: the API base is a readonly https constant with no env override"
+else
+  fail "N1b: the API base is overridable — one env var redirects the bearer and forges the verdict" "n/a" ""
+fi
+# N1c — the sanitizer is load-bearing, and nothing pinned it: replacing its body with the
+# identity function left the suite fully green (measured). Drive it directly.
+_n1c="$(bash -c "source '$GATE'; _git_data_rung2_safe 'a%b' 200")"
+_n1c2="$(bash -c "source '$GATE'; _git_data_rung2_safe \"\$(printf 'x\ny')\" 200")"
+if [[ "$_n1c" == 'a%25b' && "$_n1c2" == 'xy' ]]; then
+  pass "N1c: the sanitizer escapes % and strips control characters (identity body would red this)"
+else
+  fail "N1c: the sanitizer is not escaping/stripping — got '${_n1c}' and '${_n1c2}'" "n/a" ""
 fi
 
 # N2 — A CALLER RUNNING set -x MUST NOT PRINT THE BEARER. The library inherits the caller's
@@ -2630,7 +2897,26 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 # neutering the URL-shape check and neutering the no-ack arm no longer release, because the
 # run-id parser and the ack parser refuse the same inputs one step later. Both now carry a
 # needle naming the backstop, which is what the new 6th argument to mutate_r2 exists for.
-_FLOOR=217
+# RAISED 217 -> 234 (#8010 review round), ITEMISED — every row closes a vacuity a nine-seat
+# panel MEASURED, not reasoned:
+#     1  _er_self_test  the probe _expect_rows shipped without. Neutering its condition left
+#                       the suite at 217/0: it owns a verdict, so a wrong BRANCH still moves
+#                       both counters and satisfies the floor. Contributes 0 to this count on
+#                       purpose (it snapshots and unwinds), like _am_self_test beside it.
+#     3  E2b/E2c/E2d    the annotation's two sets, asserted in BOTH directions plus disjoint
+#                       coverage of every bracketed token the gate emits. E2 itself was
+#                       vacuous — its fixture refused at step B, which has no annotate call.
+#     2  N1b/N1c        the API base is a readonly https constant (an env override handed an
+#                       attacker the bearer AND step C's verdict); the sanitizer is driven
+#                       directly, because replacing its body with the identity left 217/0.
+#     3  A6/A7/A8       the multi-attempt artifact list (population > 1, which is why reading
+#                       .artifacts[0] survived), and the retention window's 89d/91d boundary.
+#     1  R16            the 5xx retry's far side — always-500 could not see the retry at all.
+#     7  F1-F7          Guard 5: the monotonic run floor, its ack grammar, and the DELETION
+#                       case that makes voiding an attestation not a bypass.
+#   ----
+#    17
+_FLOOR=234
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

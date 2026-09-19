@@ -272,9 +272,13 @@ meant to be rare. Two consecutive evidence files carrying one means the second c
 structurally broken rather than momentarily quiet, and the remedy is `SENTRY_ISSUE_RO_TOKEN`'s
 scope, not a third ack. If that pattern appears, the ack path is doing the opposite of its job.
 
-**Every CI call site resolves the run ANONYMOUSLY.** No workflow in this repository grants
-`actions: read` today, so an authenticated attempt would 403 and the anonymous path is the
-operative one everywhere — at 60 requests/hour per IP, shared behind NAT on hosted runners. The
+**Every CI call site resolves the run ANONYMOUSLY.** None of the three jobs that source this
+gate grants `actions: read`, nor does the follow-through sweeper, so the anonymous path is the
+operative one at all four sites. (The narrower claim is the true one: an earlier revision said
+"no workflow in this repository grants `actions: read`", which review falsified — nine
+occurrences exist, one of them in a DIFFERENT job of `apply-web-platform-infra.yml`, the file
+hosting two of these call sites.) At 60 requests/hour per IP, shared behind NAT on hosted
+runners — at 60 requests/hour per IP, shared behind NAT on hosted runners. The
 gate is fail-closed on that, which is the correct direction, and every could-not-measure token
 names its own remedy rather than a generic one. Two of the gate's three CI callers cannot be
 edited this cycle (`apply-web-platform-infra.yml` is over GitHub's 500 KB workflow-file limit,
@@ -289,18 +293,34 @@ and is cited from the `RUN_RATE_LIMITED` message itself.
 1. **The Sentry verdict is still a human-committed string.** Steps C–E bind the *run*; nothing
    binds `RUNG2_SENTRY_CROSSCHECK` to anything outside the file. The capture writes it, an
    operator commits it, and the gate reads what was committed.
-2. **Artifact-record retention past ~110 days was measured once and is undocumented by the
-   vendor.** That is why the *absence* of an artifact record on an old run is a could-not-measure
-   token (`RUN_ARTIFACT_RECORD_UNREADABLE`) rather than a refusal: the gate cannot tell "this run
-   uploaded nothing" from "GitHub no longer keeps the answer".
-3. **The producer is unbound.** The hash roster binds neither the rehearsal workflow nor the
-   capture script, so what the gate proves is *"a workflow at that path ran on `main` and produced
-   a boot-evidence artifact"* — not that the producer itself was unmodified. A
-   `RUNG2_PRODUCER_SHA256` recomputed at the run's `head_sha` is the recorded next step.
-4. **The downgrade shape passes every check honestly.** Revert the infra tree to an older state
-   and cite the older genuine run that matches it: steps A–E all pass, because every fact asserted
-   is true. Only Guard 4 ARM 2 sees it, and that arm is advisory until `deploy-script-tests`
-   becomes a required check.
+2. **Artifact-record retention is undocumented by the vendor, so the gate picks a threshold.**
+   `GIT_DATA_RUNG2_ARTIFACT_WINDOW_DAYS = 90` in the gate library is the flip point, chosen to
+   match the workflow's own `retention-days: 90`: at or under it, no evidence artifact is a
+   refusal (`RUN_NO_EVIDENCE_ARTIFACT`); past it, the same emptiness is a could-not-measure token
+   (`RUN_ARTIFACT_RECORD_UNREADABLE`), because the gate cannot tell "this run uploaded nothing"
+   from "GitHub no longer keeps the answer". The one datum behind the choice: a record was
+   measured surviving ~110 days on run 27579149955, so records outlive the 90-day BYTES — the
+   threshold is deliberately conservative rather than derived.
+3. **The producer is unbound, and the deferral is CONDITIONAL.** The hash roster binds neither
+   the rehearsal workflow nor the capture script, so an edit making the capture write `PASS`
+   unconditionally moves no hash and invalidates no committed evidence. Binding them here is
+   self-voiding — this change edits both — and the roster means "what renders into `user_data`",
+   which the producer is not. A `RUNG2_PRODUCER_SHA256` recomputed at the run's `head_sha` is the
+   recorded next step.
+
+   **It is deferred, not dismissed, and its safety is conditional rather than established.** This
+   residual is bounded only while every commit to the two producer files reaches `main` through a
+   reviewed PR. `main` carries no required-review ruleset today — the same fact the URL-shape HOLD
+   already names — so the bound is presently SOCIAL, not mechanical, and the ruleset item filed
+   with #8397 is what converts it. Two falsifying observations, either of which reopens this as
+   live: (a) a commit to either producer file on `main` whose PR carries no approving review from
+   a second identity (`gh api repos/jikig-ai/soleur/commits/<sha>/pulls --jq '.[].number'` then
+   `gh pr view <n> --json reviews`); (b) an evidence file whose resolved `head_sha` producer bytes
+   differ from the producer bytes at the gated `HEAD`. Enforcement is scheduled to land with the
+   next rehearsal dispatch, so the one-time re-HOLD is paid out of a host that is already being
+   spent. Staged: first as a drift OBSERVATION in the #8210 daily probe (costs no host, catches
+   the accidental-regression class immediately), then flipped to a refusal in the PR carrying the
+   next rehearsal's evidence.
 
 **Future considerations** — recorded here beside the deferred check-run idea (binding the Sentry
 verdict to something outside the file, i.e. a check-run output written by the rehearsal workflow):
