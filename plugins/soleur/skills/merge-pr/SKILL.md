@@ -369,14 +369,14 @@ This queues the merge. GitHub waits for all branch protection requirements (CI c
 
 ### 5.2 Poll for Merge
 
-Use the **Monitor tool** with the same state-machine loop as `soleur:ship` Phase 7. The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). Max 15 iterations × 60s sleep = 15-minute wall-clock cap. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
+Use the **Monitor tool** with the same state-machine loop as `soleur:ship` Phase 7. The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it on stdout — the Monitor tool streams stdout only), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). Max `MAX_POLL_MIN` iterations × 60s sleep = `MAX_POLL_MIN`-minute wall-clock cap. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-**Mirror invariant:** the block below is a derived mirror of `plugins/soleur/skills/ship/SKILL.md` Phase 7 (the canonical site). If you edit one, edit both — the canonical site carries the full prose rationale for fail-open required-check fetch, BEHIND budget, and DIRTY semantics. The `ship-phase-7-poll-fixtures.test.sh` fixture extracts and executes BOTH blocks — the BEHIND sync-arm scenarios (conflict, refused, in-progress, push failure, fetch failure, success) run against this mirror too, and a parity token list pins the arm's spelling — so a fix applied to one block reddens the suite until it lands in the other.
+**Mirror invariant:** the block below is a derived mirror of `plugins/soleur/skills/ship/SKILL.md` Phase 7 (the canonical site). If you edit one, edit both — the canonical site carries the full prose rationale for fail-open required-check fetch, BEHIND budget, and DIRTY semantics. The `ship-phase-7-poll-fixtures.test.sh` fixture extracts and executes BOTH blocks: every scenario (clean merge, required-check failure, DIRTY, BEHIND saturation, and the BEHIND sync-arm rows — conflict, refused, in-progress, push failure, fetch failure, success) runs against this mirror too, and a parity token list pins the arm's spelling — so a behavioural fix applied to one block reddens the suite until it lands in the other. Cross-grep both blocks before pushing anyway; the real-git scenario runs on ship's block only.
 
 ```bash
 # <!-- phase-7-poll-block:start --> mirror of ship/SKILL.md Phase 7
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
-fetch_fails=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
+fetch_failures=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
 # Minutes to poll before giving up (one iteration = one `sleep 60`).
 # DERIVED, not chosen: measured over the last 12 CI runs on main, a full
 # run takes min 22 / median 32 / p90 43 / max 54 minutes, and `test-scripts`
@@ -388,8 +388,10 @@ fetch_fails=0  # fetch outages counted separately so behind_exhausted is truthfu
 # the healthy paths. Re-derive it if CI wall-clock changes materially.
 MAX_POLL_MIN=60
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled" >&2
+sync_ok=1
+if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != true ]]; then
+  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled; the poll heartbeats, sync by hand from a worktree"
+  sync_ok=0
 fi
 # REQUIRED_CHECKS is fetched once, fail-open: empty array → no-op scan
 # (see ship/SKILL.md Phase 7 for the full rationale; do NOT harden).
@@ -418,60 +420,77 @@ while true; do
         done
       done
       if [[ -n "$required_failed" ]]; then
-        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_failed] check='${required_failed}' — exiting poll"
         break
       fi
     fi
   fi
 
   if [[ "$s" == *DIRTY* ]]; then
-    mt_out=""
-    if git fetch origin main >/dev/null 2>&1 \
-       && mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
+    mt_out=""; fetch_rc=0
+    git fetch origin main >/dev/null 2>&1 || fetch_rc=$?
+    if (( fetch_rc != 0 )); then
+      # A fetch outage is not a conflict: report it and let the next tick retry.
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$fetch_rc — fetch origin main failed while classifying DIRTY — retrying next tick"
+    elif mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
       s="OPEN BEHIND"
     else
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
-      printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll"
+      printf '%s\n' "$mt_out" | grep '^CONFLICT ' || true
       break
     fi
   fi
 
-  if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+  if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
-    # Capture each command's rc BEFORE displaying through `tail`: `cmd | tail`
-    # returns tail's status (0), so `if ! cmd | tail` can never take its
-    # failure branch (#8339). Explicit capture, not `set -o pipefail` — that
-    # would change every other pipe in a block two skills copy. No `local`
-    # prefix on the assignment: `local x=$(cmd)` would clobber $? with local's 0.
-    if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-      echo "[ship.phase7.sync_failed] kind=merge_in_progress — MERGE_HEAD exists on $BRANCH; not touching an in-progress merge. Stopping the poll."
+    # Capture rc BEFORE displaying through `tail` (`cmd | tail` returns tail's
+    # 0 — #8339); `|| sync_rc=$?` not a bare `x="$(cmd)"; rc=$?`, which dies
+    # under an errexit host shell. Not `set -o pipefail`: two skills copy this
+    # block. printf is a builtin (no ARG_MAX); GIT_TRACE* off so a traced
+    # remote URL cannot reach the display. Never touch an operation this arm
+    # did not start — an --abort there discards the operator's staged work.
+    git_dir="$(git rev-parse --git-dir 2>/dev/null)"
+    if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+       || [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" \
+             || -f "$git_dir/CHERRY_PICK_HEAD" || -f "$git_dir/REVERT_HEAD" ]]; then
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_in_progress — a merge/rebase/cherry-pick/revert is in progress on $BRANCH; not touching it. If you did not start it (a previous poll may have died mid-sync), run git status, abort it, then re-arm the poll. Stopping the poll."
       break
     fi
-    sync_out="$(git fetch origin main 2>&1)"; sync_rc=$?
-    printf '%s\n' "$sync_out" | tail -2   # display only — never test this pipe
+    if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=detached_head — HEAD is detached; git push would have no branch to update. Check out the PR branch first. Stopping the poll."
+      break
+    fi
+    sync_rc=0; sync_out="$(GIT_TRACE=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0 git fetch origin main 2>&1)" || sync_rc=$?
+    [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -2   # display only — never test this pipe
     if (( sync_rc != 0 )); then
-      fetch_fails=$((fetch_fails+1))
-      echo "[ship.phase7.sync_failed] kind=fetch rc=$sync_rc — fetch origin main failed — skipping this sync attempt"
+      fetch_failures=$((fetch_failures+1))
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$sync_rc — fetch origin main failed — skipping this sync attempt"
     else
-      sync_out="$(git merge origin/main --no-edit 2>&1)"; sync_rc=$?
-      printf '%s\n' "$sync_out" | tail -5
+      sync_rc=0; sync_out="$(GIT_TRACE=0 git merge origin/main --no-edit 2>&1)" || sync_rc=$?
+      [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -5
       if (( sync_rc != 0 )); then
-        if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-          echo "[ship.phase7.sync_failed] kind=merge rc=$sync_rc — git merge origin/main failed — merge conflict, aborting sync. Conflicted paths:"
+        # rc 1 = conflict. Any other rc with MERGE_HEAD present appeared during
+        # the fetch window (operator-started) — not ours to abort.
+        if (( sync_rc == 1 )) && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge rc=$sync_rc — git merge origin/main failed — merge conflict, aborting sync. Conflicted paths:"
           git diff --name-only --diff-filter=U
+          # rerere.autoupdate can empty --diff-filter=U; the merge output cannot.
+          printf '%s\n' "$sync_out" | grep '^CONFLICT ' || true
           git merge --abort 2>&1 || echo "git merge --abort failed (rc=$?)"
           echo "Manual conflict resolution required on $BRANCH. Stopping the poll."
+        elif git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_in_progress rc=$sync_rc — MERGE_HEAD appeared during the sync (not started by this arm); not touching it. Stopping the poll."
         else
-          echo "[ship.phase7.sync_failed] kind=merge_refused rc=$sync_rc — git merge origin/main failed — refused to start (not a conflict, nothing to abort). Worktree state:"
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_refused rc=$sync_rc — git merge origin/main failed — refused to start (nothing to abort; run git status to see which operation is in progress). Worktree state:"
           git status --short | head -20
           echo "Clear the worktree state on $BRANCH shown above, then re-run. Stopping the poll."
         fi
         break
       fi
-      sync_out="$(git push 2>&1)"; sync_rc=$?
-      printf '%s\n' "$sync_out" | tail -2
+      sync_rc=0; sync_out="$(GIT_TRACE=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0 git push 2>&1)" || sync_rc=$?
+      [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -2
       if (( sync_rc != 0 )); then
-        echo "[ship.phase7.sync_failed] kind=push rc=$sync_rc — git push failed after merge — auto-sync incomplete; the local merge commit is retained, nothing was aborted. Stopping the poll."
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=push rc=$sync_rc — git push failed after merge — auto-sync incomplete; any local merge commit from this sync is retained, nothing was aborted. Stopping the poll."
         break
       fi
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs}/${MAX_BEHIND_SYNCS} pushed"
@@ -480,9 +499,13 @@ while true; do
         || s="fetch-error: $s"
       echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
     fi
-  elif [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
+  elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
     elapsed=$((i * 60))
-    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_fails}/${MAX_BEHIND_SYNCS}). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
+    if (( fetch_failures == MAX_BEHIND_SYNCS )); then
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}). Every attempt failed at git fetch — a network/credential outage, not main moving. Check connectivity and credentials, then re-arm the poll."
+    else
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window."
+    fi
     behind_warned=1
   fi
 
