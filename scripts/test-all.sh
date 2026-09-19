@@ -2115,6 +2115,14 @@ if want_scripts; then
   # requirement (a manual fire cannot close it), and the rc-3 forwarding — whose first revision
   # `exit 3`'d inside a `$(...)` and so exited a subshell; the suite's case 7 caught it.
   run_suite "scripts/compound-promote-outcome-8281" bash scripts/followthroughs/compound-promote-outcome-8281.test.sh
+  # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
+  # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
+  # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`
+  # webhook receipt quoting an issue/PR body, so the probe decodes `.raw | .message` and drops
+  # receipt-shaped rows before counting — an echo must never close the AC-PM1 tracker or fire
+  # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
+  # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
+  run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
