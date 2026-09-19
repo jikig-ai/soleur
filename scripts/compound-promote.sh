@@ -228,7 +228,7 @@ RESPONSE=$("$CURL_BIN" -sS https://api.anthropic.com/v1/messages \
   -d "$REQUEST")
 
 # Extract the assistant's text reply.
-CLUSTERS_TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty' 2>/dev/null || echo "")
+CLUSTERS_TEXT=$(echo "$RESPONSE" | jq -r 'first(.content[] | select(.type == "text") | .text) // empty' 2>/dev/null || echo "")
 if [[ -z "$CLUSTERS_TEXT" ]]; then
   echo "::error::Anthropic API returned empty content" >&2
   echo "$RESPONSE" | head -c 500 >&2

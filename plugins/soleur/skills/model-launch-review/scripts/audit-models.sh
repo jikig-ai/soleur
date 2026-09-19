@@ -163,6 +163,41 @@ collect_config_hits() {
 
 rel() { echo "${1#"$ROOT"/}"; }
 
+# #8392 census: readers that index a FIXED content position of an Anthropic
+# response. A model swap that turns thinking on by default moves the text block
+# off position 0, and such a reader then returns empty forever with no error.
+#
+# Anchored on "$ROOT" and rc-discriminating for the same reason as
+# collect_config_hits: a cwd-relative grep under `--root DIR` would scan nothing,
+# exit 1, and print a clean verdict meaning "the scan ran nowhere" — the exact
+# vacuity class this census exists to catch.
+#
+# The pattern is carried ESCAPED (content\[0\]) so this script is not itself a
+# hit of the plan's AC2 census, which matches the plain text. Keep the escapes.
+collect_content_position_readers() {
+  local out rc
+  if out="$(grep -rIEn 'content\[0\]|content\?\.\[0\]' "$ROOT" \
+    --include='*.ts' --include='*.sh' --include='*.mjs' --include='*.js' \
+    --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next \
+    --exclude-dir=test --exclude-dir=__tests__ --exclude-dir=spike --exclude-dir=archive \
+    --exclude-dir=community \
+    --exclude='*.test.*' --exclude='*.spec.*' 2>/dev/null)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if (( rc >= 2 )); then
+    echo "    UNKNOWN — census scan FAILED (grep rc=$rc) under '$ROOT'; NOT a pass."
+    return 0
+  fi
+  out="$(printf '%s\n' "$out" | grep -vE "$EXCLUDE_RE" || true)"
+  if [[ -z "${out//[[:space:]]/}" ]]; then
+    echo "    none — no fixed-position readers."
+  else
+    printf '%s\n' "$out" | sed "s|^$ROOT/|    HIT: |"
+  fi
+}
+
 # Shared hits capture. `mapfile -t hits < <(collect_config_hits)` DISCARDS the
 # function's exit code, so a failed scan would fall straight through to the
 # "clean" branch in every mode — the exact absent-vs-could-not-look conflation
@@ -392,6 +427,11 @@ echo "    MODEL_PRICING rows against the claude-api source-of-truth; never auto-
 echo "  - tier-map: re-check cron model literals + ADR-053 / plugins/soleur/AGENTS.md policy vs new pricing."
 echo "    (workflow-model-pins.test.ts PIN_ALLOWLIST is a don't-mutate invariant, not a pricing surface.)"
 echo "  - dormant: gh issue list --state open -L 200 --search 'deferred model OR pricing'"
-echo "  - thinking-API shape: carried by the claude-code-action pin's SDK; no config params today (no-op)."
+echo "  - thinking-API shape: the REQUEST side sets no thinking params and needs no action."
+echo "    The RESPONSE side is NOT inert: a thinking-by-default model puts a thinking block"
+echo "    FIRST, so any reader indexing a fixed content position silently returns empty"
+echo "    and the model's answer is billed and discarded (#8392). Census of fixed-position"
+echo "    readers under '$ROOT' (must be empty):"
+collect_content_position_readers
 echo
 echo "== end audit =="
