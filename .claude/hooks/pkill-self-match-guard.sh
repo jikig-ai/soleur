@@ -447,7 +447,7 @@ readonly_arm() {
   local LC_ALL=C
   scan="$(strip_heredocs "$CMD")"
   model="bash -c ${CMD}"
-  local -a to=(); command -v timeout >/dev/null 2>&1 && to=(timeout -k 1 2)
+  local -a to=(); [[ -n "$(type -P timeout 2>/dev/null)" ]] && to=(timeout -k 1 2)   # a binary: the subshell execs it
   # The binary by PATH, not the name: `timeout` execs its argument, so a shell
   # builtin (`command`) or the session's grep FUNCTION cannot sit there (rc 127).
   local grep_bin; grep_bin="$(type -P grep 2>/dev/null || true)"; [[ -n "$grep_bin" ]] || return 0

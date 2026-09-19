@@ -359,7 +359,7 @@ emit_incident "<rule_id>" "<event_type>" "<rule_text_prefix>" ["<command_snippet
 
 | Field | Meaning |
 |---|---|
-| `rule_id` | Stable slug from `AGENTS.md` (`hr-*`, `wg-*`, `cq-*`, `rf-*`, `pdr-*`, `cm-*`) or a `guardrails-*` sentinel for constitution-only rules. |
+| `rule_id` | Stable slug from `AGENTS.md` (`hr-*`, `wg-*`, `cq-*`, `rf-*`, `pdr-*`, `cm-*`), a `guardrails-*` sentinel for constitution-only rules, or a hook-local id with no section prefix (`pkill-self-match-guard-readonly`, `context-reviewed-gate`) — counted by the aggregator under `non_corpus_counts`, never an orphan (#7853). |
 | `event_type` | `deny` (hook blocked the action) or `bypass` (user used a skip flag). |
 | `rule_text_prefix` | First ~50 chars of the rule's prose, for forensic context. |
 | `command_snippet` | Optional: the full command (or file path) that triggered the event. |
