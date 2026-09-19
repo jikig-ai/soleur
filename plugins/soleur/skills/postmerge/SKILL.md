@@ -8,7 +8,7 @@ description: "This skill should be used when verifying a merged PR deployed corr
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/postmerge` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:postmerge`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 # postmerge Skill
@@ -16,7 +16,7 @@ description: "This skill should be used when verifying a merged PR deployed corr
 <!-- postmerge-harness-protocol:start -->
 ## Harness adapter (Claude vs Grok Build)
 
-Invoke via **Claude:** `soleur:postmerge <PR>` | **Grok:** `/postmerge <PR>`.
+Invoke via **Claude:** `soleur:postmerge <PR>` | **Grok:** `soleur:postmerge <PR>`.
 
 **Polling CI / health checks without asking the operator:**
 
@@ -45,7 +45,7 @@ gh pr view <number> --json state,mergeCommit,headRefName --jq '{state, mergeComm
 If state is not `MERGED`, stop:
 
 ```text
-STOPPED: PR #<number> is not merged (state: <state>). Run /soleur:merge-pr first.
+STOPPED: PR #<number> is not merged (state: <state>). Run soleur:merge-pr first.
 ```
 
 Record the merge commit SHA for later verification.
@@ -352,12 +352,12 @@ fi
 
 ## Phase 3.8: Feature-Tweet Draft (verify + display)
 
-The draft is now generated **pre-merge by `/ship`** (Phase 6 "Feature-Tweet
+The draft is now generated **pre-merge by `soleur:ship`** (Phase 6 "Feature-Tweet
 Draft (pre-merge bundle)") and committed to the feature branch, so for the
-normal `/one-shot` / `/ship` flow it ALREADY landed on `main` with this PR —
+normal `soleur:one-shot` / `soleur:ship` flow it ALREADY landed on `main` with this PR —
 where `content-publisher.sh` reads from. This phase **verifies** that on-`main`
 draft, **displays** it for approval, and warns when deploy health is unverified.
-It only *generates* a draft as a catch-up when `/ship` was hand-rolled and the
+It only *generates* a draft as a catch-up when `soleur:ship` was hand-rolled and the
 draft never landed.
 
 ```bash
@@ -369,7 +369,7 @@ Branch on eligibility, then on whether the draft is already on `main`:
 - **Ineligible** (exit non-zero, `excluded: <reason>`) → **silent no-op.** Most
   PRs land here (fixes, infra, non-product); exclusion is the designed outcome,
   not a fault. Do not surface it in the report.
-- **Eligible AND a draft for this PR is on `main`** (the `/ship` pre-merge
+- **Eligible AND a draft for this PR is on `main`** (the `soleur:ship` pre-merge
   bundle worked — detect via
   `git grep -l 'pr_reference: "#<merged-pr-number>"' origin/main -- knowledge-base/marketing/distribution-content/`):
   **display the draft's full content** (title + every X tweet + the Bluesky
@@ -384,15 +384,15 @@ Branch on eligibility, then on whether the draft is already on `main`:
   The display-for-approval contract is owned by `feature-tweet` SKILL.md
   §Output; the path alone is insufficient (the operator cannot approve copy they
   cannot see).
-- **Eligible BUT no draft on `main`** (a hand-rolled `/ship` skipped the
+- **Eligible BUT no draft on `main`** (a hand-rolled `soleur:ship` skipped the
   pre-merge bundle) → catch-up: invoke the draft generator, display it, and note
   it needs a follow-up commit to reach `main`:
 
   ```
-  /soleur:feature-tweet #<merged-pr-number>
+  soleur:feature-tweet #<merged-pr-number>
   ```
 
-  > Eligible PR #N had no feature-tweet draft on `main` (the `/ship` pre-merge
+  > Eligible PR #N had no feature-tweet draft on `main` (the `soleur:ship` pre-merge
   > bundle was skipped). Generated a catch-up draft — commit it to `main` via a
   > follow-up PR so `content-publisher.sh` can drain it, then set both
   > `publish_date` and `status: scheduled` once the deploy is confirmed.
@@ -400,8 +400,8 @@ Branch on eligibility, then on whether the draft is already on `main`:
 **Multi-PR contract (explicit v1):** one tweet per eligible PR, using postmerge's
 single bound PR number. If a deploy bundled multiple PRs, only the bound PR is
 drafted — note in the Phase 7 report that other eligible PRs need the standalone
-catch-up path. `/soleur:merge-pr`-only flows bypass this hook by design; the
-recovery is standalone `/soleur:feature-tweet #N`.
+catch-up path. `soleur:merge-pr`-only flows bypass this hook by design; the
+recovery is standalone `soleur:feature-tweet #N`.
 
 ## Phase 4: Verify File Freshness
 
@@ -593,7 +593,7 @@ Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
-Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run /soleur:feature-tweet #N / NONE — ineligible>
+Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>
 ```
 
 ## Graceful Degradation
@@ -615,7 +615,7 @@ Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" 
 
 - Always read merged files out of git rather than off the bare repo filesystem — but address them by the **merge commit SHA** (`git show <merge-sha>:<path>`), never by the local `main` ref. `main` is not fast-forwarded as a side effect of a merge, so in a worktree/bare layout it lags and a file the PR ADDED reads as absent. `git fetch origin main` FIRST: the merge SHA is correct but useless if the worktree does not have that object yet, and git reports the shortfall in wording (`exists on disk, but not in <sha>`) that looks like a verdict about the file. See Phase 4.
 - MCP tools resolve paths from the repo root. Use absolute paths when in a worktree.
-- This skill is designed to run after `/soleur:merge-pr` completes. It can also be invoked standalone with a PR number.
+- This skill is designed to run after `soleur:merge-pr` completes. It can also be invoked standalone with a PR number.
 
 ## Production Debugging
 

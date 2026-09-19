@@ -28,6 +28,6 @@ defaultTest:
       value: file://scripts/gate-classification.cjs
 
 # Opt-in/manual only (API spend; NOT CI-wired — see SKILL.md API-budget gate).
-# Run: promptfoo eval -c promptfooconfig.tool-selection.yaml --repeat 5
+# Run: promptfoo eval -c promptfooconfig-tool-selection.yaml --repeat 5
 # Golden tasks: { vars: { phase, input, golden_label } } per line.
 tests: file://tasks/tool-selection.jsonl

@@ -8,14 +8,14 @@ description: "This skill should be used when documenting a recently solved probl
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/compound` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:compound`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 <!-- lifecycle-handoff-protocol:start -->
-**Lifecycle handoff (standalone `/compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `/ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
+**Lifecycle handoff (standalone `soleur:compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `soleur:ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
 <!-- lifecycle-handoff-protocol:end -->
 
-# /compound
+# soleur:compound
 
 Coordinate multiple subagents working in parallel to document a recently solved problem.
 
@@ -27,14 +27,14 @@ Captures problem solutions while context is fresh, creating structured documenta
 
 ## Usage
 
-**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`/compound`); slash names the skill.
+**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`soleur:compound`); slash names the skill.
 
 ```bash
 skill: soleur:compound               # Claude — document the most recent fix
 skill: soleur:compound [brief context]
 skill: soleur:compound --headless
-/compound                            # Grok slash (then Read this SKILL.md)
-/compound --headless
+soleur:compound                            # Grok slash (then Read this SKILL.md)
+soleur:compound --headless
 ```
 
 ## Headless Mode Detection
@@ -165,10 +165,10 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
 
 Based on problem type detected, automatically invoke applicable agents:
 
-- **performance_issue** --> `performance-oracle`
-- **security_issue** --> `security-sentinel`
-- **database_issue** --> `data-integrity-guardian`
-- Any code-heavy issue --> `kieran-rails-reviewer` + `code-simplicity-reviewer`
+- **performance_issue** --> `soleur:engineering:review:performance-oracle`
+- **security_issue** --> `soleur:engineering:review:security-sentinel`
+- **database_issue** --> `soleur:engineering:review:data-integrity-guardian`
+- Any code-heavy issue --> `soleur:engineering:review:kieran-rails-reviewer` + `soleur:engineering:review:code-simplicity-reviewer`
 
 ## Phase 1.5: Deviation Analyst (Sequential)
 
@@ -511,7 +511,7 @@ If no artifacts are found for the feature slug, consolidation is skipped silentl
 
 **Archival renames need no `secret-scan-allow-rename` label.** `archive-kb.sh` `git mv`s plans/specs into their own `archive/` subdirectory, so BOTH sides of the rename match the gitleaks path allowlist. `rename-guard` exempts allowlist -> allowlist renames by construction (laundering requires the source to be OUTSIDE the allowlist), and the exemption is per rename pair, so a genuine laundering rename in the same PR is still caught. Do not pre-apply the label to silence it — that would disarm the guard for the whole PR. Rationale: [secret-scanning.md](../../../../knowledge-base/engineering/operations/secret-scanning.md).
 
-**Do not skip this consolidation when driving compound's phases by hand.** The mechanism that durably archives is `archive-kb.sh` (`git mv` + a commit); this consolidation is its *automatic, unprompted* invoker, and `soleur:archive-kb` is a first-class manual one. `cleanup-merged` is NOT one — ship/SKILL.md Phase 7 Step 4 explains why — so an artifact left at a live path here stays there and costs a follow-up PR. The failure mode is specific: an agent invoking `soleur:compound` and then executing the phases itself gets everything except Auto-Consolidation **Step E**. In headless mode that step has no prompt to surface it (interactively it does ask). If you ran the phases manually, run archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `/ship`.
+**Do not skip this consolidation when driving compound's phases by hand.** The mechanism that durably archives is `archive-kb.sh` (`git mv` + a commit); this consolidation is its *automatic, unprompted* invoker, and `soleur:archive-kb` is a first-class manual one. `cleanup-merged` is NOT one — ship/SKILL.md Phase 7 Step 4 explains why — so an artifact left at a live path here stays there and costs a follow-up PR. The failure mode is specific: an agent invoking `soleur:compound` and then executing the phases itself gets everything except Auto-Consolidation **Step E**. In headless mode that step has no prompt to surface it (interactively it does ask). If you ran the phases manually, run archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `soleur:ship`.
 
 **`archive-kb.sh` MOVES artefacts and takes no signal from merge state — so it will archive the spec of a branch that is still in flight, and every reference to the live path goes stale in the same stroke.** Two checks before Step E, both cheap: (1) grep the branch's plan and spec for archival-deferral language — a plan that says "archival of this spec dir must be deferred until after `/ship` Phase 6" means Step E runs AFTER ship, not before it, because `/ship` Phase 6 step 2.5 reads `decision-challenges.md` out of that very directory; (2) after the move, grep the tree for the live spec path and repoint every hit. A script whose whole job is to relocate a file is the one place a reference sweep is mandatory. The rename is staged, so the recovery is `git mv` back plus a `generate-kb-index.sh` re-run — but only if you notice. **Why:** #7490 — Step E archived the in-flight spec of the PR *whose own subject was a probe broken by an archive move*, orphaning four references in that PR's plan, against the plan's explicit line forbidding exactly this ordering. See `knowledge-base/project/learnings/2026-09-18-every-instrument-i-built-to-check-the-guards-needed-checking.md`.
 
@@ -588,9 +588,9 @@ Primary Subagent Results:
   ✓ Documentation Writer: Classified to performance-issues/, created complete markdown
 
 Specialized Agent Reviews (Auto-Triggered):
-  ✓ performance-oracle: Validated query optimization approach
-  ✓ kieran-rails-reviewer: Code examples meet Rails standards
-  ✓ code-simplicity-reviewer: Solution is appropriately minimal
+  ✓ soleur:engineering:review:performance-oracle: Validated query optimization approach
+  ✓ soleur:engineering:review:kieran-rails-reviewer: Code examples meet Rails standards
+  ✓ soleur:engineering:review:code-simplicity-reviewer: Solution is appropriately minimal
   ✓ every-style-editor: Documentation style verified
 
 File created:
@@ -643,21 +643,21 @@ Based on problem type, these agents can enhance documentation:
 
 ### Code Quality & Review
 
-- **kieran-rails-reviewer**: Reviews code examples for Rails best practices
-- **code-simplicity-reviewer**: Ensures solution code is minimal and clear
-- **pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
+- **soleur:engineering:review:kieran-rails-reviewer**: Reviews code examples for Rails best practices
+- **soleur:engineering:review:code-simplicity-reviewer**: Ensures solution code is minimal and clear
+- **soleur:engineering:review:pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
 
 ### Specific Domain Experts
 
-- **performance-oracle**: Analyzes performance_issue category solutions
-- **security-sentinel**: Reviews security_issue solutions for vulnerabilities
-- **data-integrity-guardian**: Reviews database_issue migrations and queries
+- **soleur:engineering:review:performance-oracle**: Analyzes performance_issue category solutions
+- **soleur:engineering:review:security-sentinel**: Reviews security_issue solutions for vulnerabilities
+- **soleur:engineering:review:data-integrity-guardian**: Reviews database_issue migrations and queries
 
 ### Enhancement & Documentation
 
-- **best-practices-researcher**: Enriches solution with industry best practices
+- **soleur:engineering:research:best-practices-researcher**: Enriches solution with industry best practices
 - **every-style-editor**: Reviews documentation style and clarity
-- **framework-docs-researcher**: Links to Rails/gem documentation references
+- **soleur:engineering:research:framework-docs-researcher**: Links to Rails/gem documentation references
 
 ### When to Invoke
 

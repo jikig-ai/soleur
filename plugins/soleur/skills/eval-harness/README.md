@@ -20,12 +20,12 @@ cd plugins/soleur/skills/eval-harness
 bash scripts/gen-models.sh
 
 # 2. (No-spend) sanity-check the configs — zero API calls.
-npx promptfoo validate config -c promptfooconfig.go-routing.yaml
-npx promptfoo validate config -c promptfooconfig.ticket-triage.yaml
+npx promptfoo validate config -c promptfooconfig-go-routing.yaml
+npx promptfoo validate config -c promptfooconfig-ticket-triage.yaml
 
 # 3. Run a target (SPENDS — see cost below). `--repeat 3` runs each cell 3×.
-npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3
-npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3
+npx promptfoo eval -c promptfooconfig-go-routing.yaml --repeat 3
+npx promptfoo eval -c promptfooconfig-ticket-triage.yaml --repeat 3
 
 # 4. Inspect results in the browser.
 npx promptfoo view
@@ -135,7 +135,7 @@ The two-target v1 exists to prove this is cheap. To add target N:
    `prompts/<target>-baseline.txt` (label set only, no rules). Each uses the `{{input}}` placeholder.
 3. Add golden tasks `tasks/<target>.jsonl` — `{"vars": {"input": "...", "golden_label": "..."}}` per
    line, synthesized fixtures only.
-4. Add `promptfooconfig.<target>.yaml` mirroring the existing configs: `providers: file://models.generated.json`,
+4. Add `promptfooconfig-<target>.yaml` mirroring the existing configs: `providers: file://models.generated.json`,
    the two prompts, `defaultTest.vars.enum: file://enums/<target>.json`, and the two shared asserts
    ([measure-classification.cjs](./scripts/measure-classification.cjs),
    [gate-classification.cjs](./scripts/gate-classification.cjs)).
@@ -158,8 +158,8 @@ harness ships false confidence — defer it whole instead. See
 
 | Path | Role |
 |------|------|
-| [promptfooconfig.go-routing.yaml](./promptfooconfig.go-routing.yaml) | `/go` routing target config |
-| [promptfooconfig.ticket-triage.yaml](./promptfooconfig.ticket-triage.yaml) | ticket-triage target config |
+| [promptfooconfig-go-routing.yaml](./promptfooconfig-go-routing.yaml) | `/go` routing target config |
+| [promptfooconfig-ticket-triage.yaml](./promptfooconfig-ticket-triage.yaml) | ticket-triage target config |
 | [scripts/gen-models.sh](./scripts/gen-models.sh) | single-sources the 3 model IDs → `models.generated.json` |
 | [scripts/extract-block.cjs](./scripts/extract-block.cjs) | extracts a gated source block between sentinels (the projection seam) |
 | [scripts/gen-skill-prompt.cjs](./scripts/gen-skill-prompt.cjs) | projects a block into a skill-arm prompt (regenerate on source edit) |

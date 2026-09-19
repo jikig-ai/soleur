@@ -246,7 +246,7 @@ walker_excluded: <int>
 
 ## Gap Analysis
 
-[Populated by `@agent-soleur:product:spec-flow-analyzer` Task spawn. Degraded-success leaves `SKIPPED (spec-flow-analyzer unavailable at <ISO-8601>)`.]
+[Populated by `soleur:product:spec-flow-analyzer` Task spawn. Degraded-success leaves `SKIPPED (soleur:product:spec-flow-analyzer unavailable at <ISO-8601>)`.]
 
 ---
 

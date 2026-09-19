@@ -13,6 +13,10 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 - Adopting Soleur on an existing project (initial bootstrap)
 - Periodically updating knowledge-base as codebase evolves (maintenance)
 
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 ## Input
 
 <sync_area> #$ARGUMENTS </sync_area>
@@ -162,7 +166,7 @@ missing, so the `<area>` step didn't run. That's a Soleur-side defect and needs
 nothing from you — everything else completed normally."*
 
 **STOP if the plugin-root block exits non-zero.** Report to the user verbatim: *"I can't run
-`/soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
+`soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
 Please reinstall the plugin and try again."* Do **not** try to locate the
 producers yourself, do **not** substitute a relative path, and do **not**
 continue to the phases below. Resolving the plugin root by hand is the defect
@@ -322,7 +326,7 @@ skips `status: deprecated` docs, and writes the diagram artifacts into
 `knowledge-base/engineering/architecture/diagrams/`.
 
 **It is non-destructive by construction, via three different mechanisms.**
-`/soleur:architecture` writes `spec.c4` / `model.c4` / `views.c4` cwd-relative and
+`soleur:architecture` writes `spec.c4` / `model.c4` / `views.c4` cwd-relative and
 the agent sandbox pins `cwd = workspacePath` — two writers, one directory. The
 producer never writes those three names. What protects each artifact differs, and
 the difference matters when reading the marker:
@@ -404,7 +408,7 @@ design took `--c4-elements`/`--c4-relationships`/`--domain-model-rows` flags, an
 absent flag silently became `0`, which is byte-identical to the very failure state
 this artifact exists to detect. There is now no flag to forget.
 
-Standalone area invocations (`/soleur:sync c4`, `/soleur:sync domain-model`) do NOT
+Standalone area invocations (`soleur:sync c4`, `soleur:sync domain-model`) do NOT
 write this file — its counts describe the whole knowledge base, and a partial run
 would record zeros for the areas that did not execute.
 
@@ -549,7 +553,7 @@ are disclosed as blind spots, never counted.
    appended is a false statement about the operator's own data, and it is the one thing here worse
    than the bare error this guard replaced.
 
-##### Standalone contract (`/soleur:sync domain-model`)
+##### Standalone contract (`soleur:sync domain-model`)
 
 Skip Phase 2 through Phase 4 when the area is **explicitly** `domain-model` — the drift report +
 approval-gated write ARE the output. This contract is unchanged.
@@ -610,7 +614,7 @@ For each finding, assign confidence:
 
 **1.4 Limit Findings**
 
-Present only the top 20 findings by confidence. If more exist, inform user: "Found N findings. Showing top 20 by confidence. Run `/sync` again to discover more."
+Present only the top 20 findings by confidence. If more exist, inform user: "Found N findings. Showing top 20 by confidence. Run `soleur:sync` again to discover more."
 
 ### Phase 2: Review
 
@@ -773,7 +777,7 @@ After writing, display summary:
 - learnings/architecture/service-layer-pattern.md
 - learnings/technical-debt/legacy-api-endpoints.md
 
-Run `/sync` again to discover additional patterns.
+Run `soleur:sync` again to discover additional patterns.
 ```
 
 ### Phase 4: Definition Sync
@@ -826,7 +830,7 @@ Present proposals one at a time using **AskUserQuestion** with options:
 1. **Accept** - Write the bullet to the definition file and add the definition name to the learning's `synced_to` frontmatter. If the learning has no YAML frontmatter block, prepend a minimal `---` block with only `synced_to: [definition-name]`.
 2. **Skip** - Move to next proposal. No tracking written (proposal may reappear on next run).
 3. **Edit** - Modify the bullet text, then re-display for final Accept/Skip.
-4. **Done reviewing** - Stop Phase 4. Unreviewed proposals reappear on next `/sync` run.
+4. **Done reviewing** - Stop Phase 4. Unreviewed proposals reappear on next `soleur:sync` run.
 
 **4.5 Summary**
 
@@ -848,7 +852,7 @@ If zero proposals were generated: "Phase 4: All learnings already synced to rele
 ## Headless Execution Contract (`--headless`)
 
 When invoked with the `--headless` flag (e.g. the post-clone auto-sync at
-`/api/repo/setup` runs `/soleur:sync --headless`), there is no operator at a
+`/api/repo/setup` runs `soleur:sync --headless`), there is no operator at a
 terminal and the checked-out branch is the freshly-cloned **protected default**
 (`git clone --depth 1` leaves you on the repo's default branch). The sync agent
 MUST obey the following in headless mode:
@@ -918,27 +922,27 @@ Uses the `compound-capture` YAML schema with `problem_type: best_practice` for n
 **Bootstrap entire knowledge-base:**
 
 ```bash
-/sync all
+soleur:sync all
 # or just
-/sync
+soleur:sync
 ```
 
 **Sync only coding conventions:**
 
 ```bash
-/sync conventions
+soleur:sync conventions
 ```
 
 **Sync only technical debt:**
 
 ```bash
-/sync debt
+soleur:sync debt
 ```
 
 **Sync project docs:**
 
 ```bash
-/sync project
+soleur:sync project
 ```
 
 ## Limitations
@@ -950,4 +954,4 @@ Uses the `compound-capture` YAML schema with `problem_type: best_practice` for n
 - No constitution cross-check (deferred - separate concern)
 - Definition sync skips when area is scoped (only runs on `all` or default)
 
-Run `/sync` multiple times to discover more patterns as the codebase evolves.
+Run `soleur:sync` multiple times to discover more patterns as the codebase evolves.
