@@ -4,10 +4,10 @@ Plan: `knowledge-base/project/plans/2026-09-19-feat-workflow-fsm-decision-challe
 
 ## Phase 1: §1 and §2 — TS const first, mirror second, parity third
 
-- [ ] 1.1 `plugins/soleur/test/workflow-fidelity.test.ts`: write the RED assertions — `declaredTransitions("postmerge")` → `["work"]`; four back-edges incl. `postmerge -> work`; one `mandatorySuccessors("postmerge")` line in the forward-only test and `pipelineInvocationSuffix("postmerge","grok")` ∌ `/work` beside a `Phase 7` anchor in the rendered-directive test; parity canonical `{ transitions, sub_steps }`; `sub_steps` view→const loop; `expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0)`; three invariant tests over the const named by their rule
-- [ ] 1.2 `plugins/soleur/lib/workflow-fidelity.ts`: `postmerge: ["work"]`; doc comment rewritten (four back-edges, no "REJECTED" sentence); `DECLARED_SUB_STEPS = { brainstorm: ["compound"] }` with the "To add an entry" comment
-- [ ] 1.3 `.claude/workflow-transitions.json`: `transitions.postmerge: ["work"]`; `sub_steps: { "brainstorm": ["compound"] }`; `_comment`: `mirror of that const` → `mirror of DECLARED_TRANSITIONS and DECLARED_SUB_STEPS` + the `sub_steps` sentence
-- [ ] 1.4 `bun test plugins/soleur/test/workflow-fidelity.test.ts` GREEN, ≥ 87 tests
+- [x] 1.1 `plugins/soleur/test/workflow-fidelity.test.ts`: write the RED assertions — `declaredTransitions("postmerge")` → `["work"]`; four back-edges incl. `postmerge -> work`; one `mandatorySuccessors("postmerge")` line in the forward-only test and `pipelineInvocationSuffix("postmerge","grok")` ∌ `/work` beside a `Phase 7` anchor in the rendered-directive test; parity canonical `{ transitions, sub_steps }`; `sub_steps` view→const loop; `expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0)`; three invariant tests over the const named by their rule
+- [x] 1.2 `plugins/soleur/lib/workflow-fidelity.ts`: `postmerge: ["work"]`; doc comment rewritten (four back-edges, no "REJECTED" sentence); `DECLARED_SUB_STEPS = { brainstorm: ["compound"] }` with the "To add an entry" comment
+- [x] 1.3 `.claude/workflow-transitions.json`: `transitions.postmerge: ["work"]`; `sub_steps: { "brainstorm": ["compound"] }`; `_comment`: `mirror of that const` → `mirror of DECLARED_TRANSITIONS and DECLARED_SUB_STEPS` + the `sub_steps` sentence
+- [x] 1.4 `bun test plugins/soleur/test/workflow-fidelity.test.ts` GREEN, ≥ 87 tests
 
 ## Phase 2: classifier sub-step collapse
 
