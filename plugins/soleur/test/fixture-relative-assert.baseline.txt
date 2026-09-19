@@ -220,7 +220,7 @@
 1	.claude/hooks/cla-signed-author-gate.sh
 1	.claude/hooks/devin-matcher-parity.test.sh
 2	.claude/hooks/docs-cli-verification.test.sh
-2	.claude/hooks/follow-through-directive-gate.test.sh
+3	.claude/hooks/follow-through-directive-gate.test.sh
 1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/hook-input-contract.test.sh
 1	.claude/hooks/incidents.test.sh
@@ -238,7 +238,7 @@
 5	.claude/hooks/pre-merge-rebase.sh
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
-2	.claude/hooks/ship-soak-followthrough-gate.test.sh
+4	.claude/hooks/ship-soak-followthrough-gate.test.sh
 2	.claude/hooks/ship-unpushed-commits-gate.sh
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
@@ -346,7 +346,7 @@
 4	scripts/lint-diagnosis-claims.test.sh
 10	scripts/lint-dual-lockfile.test.sh
 1	scripts/lint-encryption-posture.test.sh
-19	scripts/lint-followthrough-varq-ban.test.sh
+23	scripts/lint-followthrough-varq-ban.test.sh
 1	scripts/lint-guard-contract.test.sh
 1	scripts/lint-legal-mirror-drift-baseline.sh
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
@@ -381,8 +381,8 @@
 1	scripts/skill-freshness-aggregate.sh
 1	scripts/skill-freshness-aggregate.test.sh
 10	scripts/skill-security-scan-step-body.test.sh
-1	scripts/sweep-followthroughs.sh
-19	scripts/sweep-followthroughs.test.sh
+2	scripts/sweep-followthroughs.sh
+90	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh

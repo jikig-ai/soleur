@@ -2050,6 +2050,10 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # The differential oracle over every executable reader of the directive (#7490). Four copies
+  # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
+  # must not `source` a repo file), so they are held in agreement by a walker instead.
+  run_suite "scripts/followthrough-predicate-parity" bash scripts/followthrough-predicate-parity.test.sh
   # #7506: the callback-URL closure guard EXECUTES its shipped workflow step body under
   # `bash -e` (the shell Actions uses for a `run:` block with no `shell:` key). Registered
   # explicitly for the same reason as the two lines above — scripts/*.test.sh is not globbed,

@@ -32,6 +32,15 @@ set -uo pipefail
 # so any token in an argv would be printed the moment it is used. This probe
 # passes no secret on a command line, but the guard is cheap and the convention
 # is repo-wide.
+#
+# THIRD-PARTY CONTENT NOTE (hr-third-party-content-grep-on-undertaking). This is the second
+# probe whose stdout republishes bytes controlled by a THIRD PARTY -- upstream tag names from
+# jianyuan/terraform-provider-sentry -- into a PUBLIC issue comment. The containment is the
+# sweeper's `sanitize_probe_output`, which neutralises `<!--`, collapses five-or-more backtick
+# runs, and defuses the `### Sweeper run:` / `### Sweeper reopen:` heading prefixes. That is
+# load-bearing here and not incidental: a crafted upstream tag reaching the comment verbatim
+# could otherwise forge a PASS heading the closed-set readback accepts. Do not print upstream
+# bytes through any path that bypasses it.
 case "$-" in
   *x*) echo "REFUSING: shell xtrace is enabled; re-run without -x" >&2; exit 2 ;;
 esac
