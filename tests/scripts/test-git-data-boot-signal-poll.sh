@@ -134,7 +134,7 @@ for _canary in "have x __absent_needle__" "havent x canary-present" "rc_is x 0 1
 done
 
 ANCHOR=1789398600
-ROW='{"dt":"2026-09-14 15:27:24.816663","stage":"boot_complete","host":"soleur-git-data","luks_mounted":"yes","repo_root":"yes","hooks_path":"yes","provision":"yes","nft_metadata_drop":"yes"}'
+ROW='{"dt":"2026-09-14 15:27:24.816663","stage":"boot_complete","host":"soleur-git-data","luks_mounted":"yes","repo_root":"yes","hooks_path":"yes","provision":"yes","nft_metadata_drop":"yes","luks_reopen_unit":"yes"}'
 
 # ── S1  rc=22 with no marker: unreadable, and the failure SAYS why ───────────
 d=$(mkshim s1 "$(spec '22||curl: (22) The requested URL returned error: 403')")
@@ -305,6 +305,17 @@ have  "S17i warns that the egress drop did not arm" "::warning::git-data booted 
 rc_is "S17j nft_metadata_drop absent -> 0" 0 "$(verify j replace success "0|${ROW/,\"nft_metadata_drop\":\"yes\"/}|")"
 have  "S17k warns that its state is UNKNOWN" "state is UNKNOWN"
 
+# (#8210) luks_reopen_unit is TERMINAL, unlike nft_metadata_drop two arms up: a replace that
+# delivers an unarmed boot-time LUKS reopen loses the store at the next reboot, and a replace is
+# the only route by which that unit reaches the live host — so the poll must FAIL rather than
+# warn. The `no` and the `absent` cases are both tested: the second is the reader-drift case,
+# where a producer that stopped emitting the tag would otherwise read as healthy.
+rc_is "S17h2 luks_reopen_unit=no -> 1 (TERMINAL, unlike nft_metadata_drop)" 1 "$(verify h2 replace success "0|${ROW/luks_reopen_unit\":\"yes/luks_reopen_unit\":\"no}|")"
+have  "S17h3 names the unmet invariant" "luks_reopen_unit=no"
+havent "S17h4 and does not go on to report success" "boot signal received"
+rc_is "S17h5 luks_reopen_unit absent -> 1 (drift, not health)" 1 "$(verify h5 birth success "0|${ROW/,\"luks_reopen_unit\":\"yes\"/}|")"
+have  "S17h6 names the missing assertion" "WITHOUT a luks_reopen_unit assertion"
+
 rc_is "S17l silent -> 1" 1 "$(verify l birth success '0||')"
 have  "S17m silent routes to Sentry events after the anchor" "timestamped AFTER this run's boot-trail anchor"
 have  "S17n silent uses a real emitted stage name" "stage:gitdata_runcmd_ok"
@@ -439,7 +450,7 @@ done
 
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))
-_EXACT=141
+_EXACT=146
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1

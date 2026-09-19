@@ -8,7 +8,7 @@ description: "This skill should be used when draining open remote GitHub PRs: tr
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/drain-prs` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:drain-prs`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 # Drain PRs
@@ -25,7 +25,7 @@ Use `merge-pr` for a single named PR. Use `drain-labeled-backlog` for labeled *i
 <decision_gate>
 **Merging is outward-facing — confirm before any merge.** This skill confirms tier scope with the operator via `AskUserQuestion` **before merging anything**, and supports per-PR opt-out within a tier (not just per-tier accept/reject). Confirming a tier means **the selected PRs are squash-merged to `main`** — this is not a preview; it lands code (higher irreversibility than the issue-drain, which ends at PR-opened). Respects `wg-zero-agents-until-user-confirms`.
 
-**API budget.** Fixing or reviewing PRs may delegate to `/soleur:review` (feature PRs) and spawn review agents, which run autonomously and spend non-trivial Anthropic credit against the key in your session, scaling with PR count and review-cycle depth. The `--dry-run` flag prints the full tier table with zero merges and zero delegation. Soleur does not bill or proxy these calls — Anthropic does. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+**API budget.** Fixing or reviewing PRs may delegate to `soleur:review` (feature PRs) and spawn review agents, which run autonomously and spend non-trivial Anthropic credit against the key in your session, scaling with PR count and review-cycle depth. The `--dry-run` flag prints the full tier table with zero merges and zero delegation. Soleur does not bill or proxy these calls — Anthropic does. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
 </decision_gate>
 
 ## Prerequisites
@@ -87,7 +87,7 @@ gh pr merge <N> --squash
 
 ### 5. Review delegation
 
-- **Feature PRs** (`needs-review`, non-trivial diff): delegate to `/soleur:review`. Merge only if it passes.
+- **Feature PRs** (`needs-review`, non-trivial diff): delegate to `soleur:review`. Merge only if it passes.
 - **Single-file bot-fixes** (`bot-fix/review-required`): inline diff review (`gh pr diff <N>`) is sufficient; the diff is small and the change is mechanical.
 
 ### 6. Fix-recipes

@@ -128,6 +128,8 @@ build_sandbox() {
 }
 
 build_sandbox "$SANDBOX"
+gc_auto="$(git -C "${SANDBOX:?}" config --get gc.auto || true)"
+[[ "$gc_auto" == "0" ]] || die "sandbox gc.auto is '${gc_auto:-unset}' (want 0); auto-gc can race the pristine snapshot"
 cp -a "$SANDBOX/." "$PRISTINE/" || die "pristine snapshot failed"
 
 restore() {

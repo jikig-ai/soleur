@@ -21,7 +21,7 @@ Claude Code automatically detects and understands git context:
 - Can work with any PR by specifying the PR number, or ask it.
 
 <decision_gate>
-**API budget.** This skill spawns one `pr-comment-resolver` agent in parallel per unresolved PR comment (N comments = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+**API budget.** This skill spawns one `soleur:engineering:workflow:pr-comment-resolver` agent in parallel per unresolved PR comment (N comments = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
 
 Confirm the unresolved-comment count before allowing the fan-out. A PR with 40 unresolved threads spawns 40 parallel agents.
 </decision_gate>
@@ -43,13 +43,13 @@ Create a TodoWrite list of all unresolved items grouped by type.
 
 ### 3. Implement (PARALLEL)
 
-Spawn a pr-comment-resolver agent for each unresolved item in parallel.
+Spawn a soleur:engineering:workflow:pr-comment-resolver agent for each unresolved item in parallel.
 
-So if there are 3 comments, spawn 3 pr-comment-resolver agents in parallel:
+So if there are 3 comments, spawn 3 soleur:engineering:workflow:pr-comment-resolver agents in parallel:
 
-1. Task pr-comment-resolver(comment1)
-2. Task pr-comment-resolver(comment2)
-3. Task pr-comment-resolver(comment3)
+1. Task soleur:engineering:workflow:pr-comment-resolver(comment1)
+2. Task soleur:engineering:workflow:pr-comment-resolver(comment2)
+3. Task soleur:engineering:workflow:pr-comment-resolver(comment3)
 
 Always run all in parallel subagents/Tasks for each Todo item.
 

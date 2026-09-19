@@ -413,7 +413,10 @@ _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
 # is the one key here whose value carries information about the host rather than about the code
 # path having been reached. That is deliberate: it covers the case the arm-time warning cannot,
 # namely the ruleset being flushed AFTER a successful load.
-_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop disk_pct inode_pct | sort -u | tr '\n' ' ')"
+# (#8210) luks_reopen_unit joins the set, MEASURED like nft_metadata_drop (systemctl
+# is-enabled + Result=success on git-data-luks-reopen.service) and — unlike it — TERMINAL for
+# both consumers; the roster arm below is what pins that distinction across files.
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
 elif [ "$_producer_keys" = "$_asserted_keys" ]; then
@@ -655,11 +658,98 @@ if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
 fi
 passes=$_can_p0; fails=$_can_f0
 
+# --- (#8210) CONSUMER-ROSTER PARITY: the TERMINAL vocabulary is DERIVED, not enumerated ----
+#
+# AC30-parity above pins the producer against THIS suite. It cannot see the two readers, and a
+# fixture cannot see a dropped SQL projection — a boolean absent from the projection is simply
+# absent from every row, so a "…":"no" fixture proves nothing about it. This arm closes both:
+#
+#   TERMINAL := producer_keys − NON_TERMINAL      (declared ONCE, here)
+#
+# and asserts the poll's `for f in` loop, the capture's FAIL alternation, and BOTH readers' SQL
+# projections each equal (or, for projections, contain) exactly that set. Enumerating five names
+# instead would make this guard restate the thing it is checking.
+NON_TERMINAL="nft_metadata_drop disk_pct inode_pct"
+# DERIVED FROM THE VARIABLE, not from a second hand-typed copy of the same three names. The
+# first revision spelled them again in the grep, so `declared ONCE, here` was false: NON_TERMINAL
+# was dead (shellcheck SC2034 named it), and adding a fourth non-terminal to it would have
+# changed nothing while the comment said otherwise. Word-splitting is the point, so the
+# expansion is deliberately unquoted; the non-vacuity floor below catches a derivation that
+# collapses.
+# shellcheck disable=SC2086,SC2046
+_terminal="$(printf '%s\n' $_producer_keys \
+  | grep -vxF $(for _nt in $NON_TERMINAL; do printf -- '-e\n%s\n' "$_nt"; done) \
+  | sort -u | tr '\n' ' ')"
+_root="$(cd "$DIR/../../.." && pwd)"
+_poll="$_root/scripts/lib/git-data-boot-signal-poll.sh"
+_cap="$_root/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
+
+if [ -z "$_terminal" ] || [ "$(printf '%s\n' $_terminal | grep -c .)" -lt 4 ]; then
+  fail "consumer-roster: derived TERMINAL set is empty or implausibly small ('$_terminal') — the derivation drifted, so every arm below would pass vacuously"
+else
+  pass
+fi
+
+# (a) the poll's per-field loop
+# EXACTLY ONE roster site per consumer, never `head -1` of however many there are: the first
+# revision took `head -1`, which is blind to a second loop by construction — the identical
+# first-match defect 414748b74 fixed in the Sentry op-contract test, reintroduced here in the
+# same PR (review, git-history seat).
+_poll_n="$(grep -cE '^GIT_DATA_BOOT_TERMINAL="[a-z0-9_ ]+"$' "$_poll" || true)"
+if [ "${_poll_n:-0}" -eq 1 ]; then pass; else
+  fail "consumer-roster: expected exactly ONE GIT_DATA_BOOT_TERMINAL= declaration in the poll, found ${_poll_n:-0}"
+fi
+_poll_loop="$(grep -oE '^GIT_DATA_BOOT_TERMINAL="[a-z0-9_ ]+"$' "$_poll" \
+  | sed -E 's/^GIT_DATA_BOOT_TERMINAL="//; s/"$//' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+# …and the loop consumes THAT variable, not a second literal list (the single-source-that-isn't
+# shape, again).
+if grep -qE '^[[:space:]]*for f in \$GIT_DATA_BOOT_TERMINAL; do' "$_poll"; then pass; else
+  fail "consumer-roster: the poll's invariant loop does not iterate \$GIT_DATA_BOOT_TERMINAL"
+fi
+if [ "$_poll_loop" = "$_terminal" ]; then pass; else
+  fail "consumer-roster: the boot-signal poll's terminal loop drifted from the producer" \
+    "poll: ${_poll_loop}| terminal: ${_terminal}"
+fi
+
+# (b) the capture's terminal roster — the ONE `_TERMINAL=` declaration both of its checks
+# derive from (the FALSE-assertion alternation and the presence loop). Exactly one, as for (a).
+_cap_n="$(grep -cE '^_TERMINAL="[a-z0-9_ ]+"$' "$_cap" || true)"
+if [ "${_cap_n:-0}" -eq 1 ]; then pass; else
+  fail "consumer-roster: expected exactly ONE _TERMINAL= declaration in the capture, found ${_cap_n:-0}"
+fi
+_cap_fail="$(grep -oE '^_TERMINAL="[a-z0-9_ ]+"$' "$_cap" \
+  | sed -E 's/^_TERMINAL="//; s/"$//' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+if [ "$_cap_fail" = "$_terminal" ]; then pass; else
+  fail "consumer-roster: the rung-2 capture's terminal roster drifted from the producer" \
+    "capture: ${_cap_fail}| terminal: ${_terminal}"
+fi
+
+# (c) Every boolean a consumer's VERDICT reads must be in its own SQL projection — a name the
+# verdict greps but the query never selects is the gap a fixture structurally cannot show (the
+# row simply lacks the field, so a "…":"no" case proves nothing). Derived per consumer from what
+# it actually greps, not from the producer: the capture legitimately never reads
+# nft_metadata_drop, while the poll reads it on its warning path.
+for _consumer in "$_poll" "$_cap"; do
+  _read="$(grep -oE '"\{?[a-z0-9_|()]+\}?":"(yes|no)"' "$_consumer" \
+    | sed -E 's/^"\(?//; s/\)?":"(yes|no)"$//' | tr '|' '\n' | sed 's/[{}]//g' \
+    | grep -E '^[a-z0-9_]+$' | sort -u)"
+  # The loop-variable form (`"\${f}":"no"`) contributes no literal name; the loop's own roster
+  # is arm (a). Add it so a consumer whose only reads are loop-driven is still covered.
+  _read="$(printf '%s\n%s\n' "$_read" "$(printf '%s\n' $_terminal)" | grep -E '^[a-z0-9_]+$' | sort -u)"
+  _missing=""
+  for _k in $_read; do
+    grep -qF "JSONExtractString(raw,'${_k}')" "$_consumer" || _missing="$_missing $_k"
+  done
+  if [ -z "$_missing" ]; then pass; else
+    fail "consumer-roster: $(basename "$_consumer") reads booleans its SQL never projects:${_missing}"
+  fi
+done
+
 # --- Minimum-cardinality guard: a silently-empty harness must fail loud ---
 # The floor literal and the message drifted apart: the message said `<47` while the test read
 # 59, so an operator diagnosing a short run was told the wrong threshold. Both now read from
 # one variable, which is also what stops them drifting again.
-MIN_ASSERTIONS=59
+MIN_ASSERTIONS=64
 total=$((passes + fails))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   echo "FAIL: ran only ${total} assertions (floor ${MIN_ASSERTIONS}) — suite did not execute fully" >&2

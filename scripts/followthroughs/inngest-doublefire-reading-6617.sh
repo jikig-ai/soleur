@@ -69,7 +69,12 @@ fi
 # open to the world, and this probe's exit code makes the sweeper act on the tracker. An unfiltered
 # `.comments[].body` therefore accepts a verdict from ANY authenticated GitHub user: one HTTP POST
 # of `RESULT: PASS` was enough. See #7448.
-comments=$(gh issue view "$ISSUE" --comments --json comments --jq '.comments[] | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR") | .body' 2>/dev/null)
+# `--comments` and `--json` are MUTUALLY EXCLUSIVE on current gh ("specify only one of
+# --comments or --json", measured rc=1), so this read failed on every sweep and the probe
+# reported a permanent TRANSIENT. `--comments` is the flag that goes: it renders comments as
+# TEXT, which has no author field at all — dropping `--json` instead would silently remove the
+# OWNER/MEMBER/COLLABORATOR filter and let any GitHub user's comment satisfy the probe.
+comments=$(gh issue view "$ISSUE" --json comments --jq '.comments[] | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR") | .body' 2>/dev/null)
 rc=$?
 if [[ $rc -ne 0 ]]; then
   echo "TRANSIENT: could not read #$ISSUE comments (gh rc=$rc)" >&2

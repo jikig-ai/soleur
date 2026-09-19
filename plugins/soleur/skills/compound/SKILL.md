@@ -8,14 +8,14 @@ description: "This skill should be used when documenting a recently solved probl
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/compound` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:compound`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 <!-- lifecycle-handoff-protocol:start -->
-**Lifecycle handoff (standalone `/compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `/ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
+**Lifecycle handoff (standalone `soleur:compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `soleur:ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
 <!-- lifecycle-handoff-protocol:end -->
 
-# /compound
+# soleur:compound
 
 Coordinate multiple subagents working in parallel to document a recently solved problem.
 
@@ -27,14 +27,14 @@ Captures problem solutions while context is fresh, creating structured documenta
 
 ## Usage
 
-**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`/compound`); slash names the skill.
+**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`soleur:compound`); slash names the skill.
 
 ```bash
 skill: soleur:compound               # Claude — document the most recent fix
 skill: soleur:compound [brief context]
 skill: soleur:compound --headless
-/compound                            # Grok slash (then Read this SKILL.md)
-/compound --headless
+soleur:compound                            # Grok slash (then Read this SKILL.md)
+soleur:compound --headless
 ```
 
 ## Headless Mode Detection
@@ -78,6 +78,8 @@ Include:
 - Blanket search-replace sweeps (ADR renumbers, identifier renames) that rewrote files outside your own diff — scope every sweep to `git diff --name-only origin/main...HEAD` and assert the SENTENCE, because a residual-zero count (`grep -c '<old>' == 0`) is structurally blind to a new string written where it does not belong, including inside the very note explaining the rename. **Why:** #7162 — a `sed` guarded by a negative lookahead on the sibling ADR's *filename* rewrote 10 files of other work's *bare* `ADR-159` citations, and an earlier sweep turned "ADR-155 was claimed by a sibling plan" into a false sentence that the count read as green. Ordinals collided three times on one branch, each surfaced by a fetch or rebase and never by a gate — treat a branch-picked ordinal as provisional and re-check against freshly-fetched `origin/main` immediately before merge. See `knowledge-base/project/learnings/workflow-issues/2026-08-03-blanket-renumber-rewrote-other-work-and-a-count-certified-it.md`.
 - A CORRECTION sweep keyed on the claim's PHRASING rather than its SUBJECT. The sibling bullets above cover sweeps that rewrite too MUCH; this is the inverse — a remediation that rewrites too LITTLE, and whose residual-zero count certifies the miss. Grep the noun the claim is ABOUT (the resource, the anchor comment, the count's referent), read every hit, and decide each one; then replace with derived-set language so the site cannot go stale again. A residual-zero count is evidence about a string, never about a claim. **Why:** #7539 — having measured a fabricated "six lines beneath" as an actual gap of 138 lines, the sweep for `beneath` came back clean while `tasks.md:51` said "six lines BELOW". Indexing by remembered wording is the same defect one level up from the fabrication it was correcting. See `knowledge-base/project/learnings/2026-08-17-i-corrected-a-fabricated-claim-by-grepping-its-phrasing-and-missed-a-site.md`.
 - A sweep bounded by the DIFF'S OWN FILE LIST when the PR retires a mechanism or moves a count. The two bullets above cover sweeps keyed on the wrong string; this one is keyed on the wrong *corpus*. `git diff --name-only` structurally cannot show a twin in a file you never opened — and opening a file to fix one occurrence buys nothing for a second one in a different section of it. Grep the claim's SUBJECT repo-wide (the resource name, the count's referent), read every hit, decide each. **Why:** #7826 — a pass correcting the count "27 sentry_alert + 2 sentry_issue_alert" to "+ 3" fixed three carriers and left seven, TWO of them in files that same pass had just rewritten (a tripwire header eight lines above the string it fixed; a workflow header three paragraphs from ones it replaced). See `knowledge-base/project/learnings/2026-09-07-my-instruments-reported-green-while-measuring-nothing.md`.
+
+- A deletion round that swept the CODE and left the records. When a PR removes a mechanism, grep the deleted names across **§Verification sections and ticked `- [x]` checkboxes first** — those two surfaces assert **delivery** rather than intent, so a stale line there is read as a fact, and they are the least likely to be swept because the deletion did not touch the file they live in. **Why:** #8323 — NINE of seventeen code-quality findings were one of those two, including an ADR §Verification citing a deleted canary's "four driven arms" as evidence eleven lines above the amendment recording its deletion, and a `tasks.md` box ticking an `AP-020` widening that `git diff origin/main` shows was reverted. See `knowledge-base/project/learnings/2026-09-18-every-defect-was-in-my-verification-not-the-feature.md`.
 
 If genuinely no errors occurred (including no forwarded errors), output: "Session error inventory: none detected."
 
@@ -163,10 +165,10 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
 
 Based on problem type detected, automatically invoke applicable agents:
 
-- **performance_issue** --> `performance-oracle`
-- **security_issue** --> `security-sentinel`
-- **database_issue** --> `data-integrity-guardian`
-- Any code-heavy issue --> `kieran-rails-reviewer` + `code-simplicity-reviewer`
+- **performance_issue** --> `soleur:engineering:review:performance-oracle`
+- **security_issue** --> `soleur:engineering:review:security-sentinel`
+- **database_issue** --> `soleur:engineering:review:data-integrity-guardian`
+- Any code-heavy issue --> `soleur:engineering:review:kieran-rails-reviewer` + `soleur:engineering:review:code-simplicity-reviewer`
 
 ## Phase 1.5: Deviation Analyst (Sequential)
 
@@ -429,7 +431,7 @@ Routing mechanics:
 1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
 2. Route **two categories** of insights:
    - **Solution insight:** The main learning (what was solved and how). Classify with the placement gate above, then propose a one-line bullet edit to the target file.
-   - **Error prevention:** For each session error that could have been prevented by a skill instruction, classify with the placement gate, then propose a one-line bullet to the target. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
+   - **Error prevention:** For each session error that could have been prevented by a skill instruction, classify with the placement gate, then propose a one-line bullet to the target. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges (`plugins/soleur/skills/plan/references/plan-sharp-edges.md` — the catalogue lives in references/ since #8302, not in SKILL.md) saying "Verify relative paths by tracing each `../` step before prescribing them."
 3. **Default action (interactive and headless):** Apply the edit directly to the
    target skill/agent/AGENTS.md file. **Always use worktree-absolute paths**
    (`<worktree-root>/plugins/soleur/skills/<skill>/SKILL.md`) for Edit/Write
@@ -509,7 +511,9 @@ If no artifacts are found for the feature slug, consolidation is skipped silentl
 
 **Archival renames need no `secret-scan-allow-rename` label.** `archive-kb.sh` `git mv`s plans/specs into their own `archive/` subdirectory, so BOTH sides of the rename match the gitleaks path allowlist. `rename-guard` exempts allowlist -> allowlist renames by construction (laundering requires the source to be OUTSIDE the allowlist), and the exemption is per rename pair, so a genuine laundering rename in the same PR is still caught. Do not pre-apply the label to silence it — that would disarm the guard for the whole PR. Rationale: [secret-scanning.md](../../../../knowledge-base/engineering/operations/secret-scanning.md).
 
-**Do not skip this consolidation when driving compound's phases by hand.** The mechanism that durably archives is `archive-kb.sh` (`git mv` + a commit); this consolidation is its *automatic, unprompted* invoker, and `soleur:archive-kb` is a first-class manual one. `cleanup-merged` is NOT one — ship/SKILL.md Phase 7 Step 4 explains why — so an artifact left at a live path here stays there and costs a follow-up PR. The failure mode is specific: an agent invoking `soleur:compound` and then executing the phases itself gets everything except Auto-Consolidation **Step E**. In headless mode that step has no prompt to surface it (interactively it does ask). If you ran the phases manually, run archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `/ship`.
+**Do not skip this consolidation when driving compound's phases by hand.** The mechanism that durably archives is `archive-kb.sh` (`git mv` + a commit); this consolidation is its *automatic, unprompted* invoker, and `soleur:archive-kb` is a first-class manual one. `cleanup-merged` is NOT one — ship/SKILL.md Phase 7 Step 4 explains why — so an artifact left at a live path here stays there and costs a follow-up PR. The failure mode is specific: an agent invoking `soleur:compound` and then executing the phases itself gets everything except Auto-Consolidation **Step E**. In headless mode that step has no prompt to surface it (interactively it does ask). If you ran the phases manually, run archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `soleur:ship`.
+
+**`archive-kb.sh` MOVES artefacts and takes no signal from merge state — so it will archive the spec of a branch that is still in flight, and every reference to the live path goes stale in the same stroke.** Two checks before Step E, both cheap: (1) grep the branch's plan and spec for archival-deferral language — a plan that says "archival of this spec dir must be deferred until after `soleur:ship` Phase 6" means Step E runs AFTER ship, not before it, because `soleur:ship` Phase 6 step 2.5 reads `decision-challenges.md` out of that very directory; (2) after the move, grep the tree for the live spec path and repoint every hit. A script whose whole job is to relocate a file is the one place a reference sweep is mandatory. The rename is staged, so the recovery is `git mv` back plus a `generate-kb-index.sh` re-run — but only if you notice. **Why:** #7490 — Step E archived the in-flight spec of the PR *whose own subject was a probe broken by an archive move*, orphaning four references in that PR's plan, against the plan's explicit line forbidding exactly this ordering. See `knowledge-base/project/learnings/2026-09-18-every-instrument-i-built-to-check-the-guards-needed-checking.md`.
 
 **Two known gaps in that script, so verify rather than assume:** it discovers plans by a `*<slug>*` glob (a topic-named plan whose name does not carry the branch slug is missed — #7373's plan was), and it probes specs only at `specs/feat-<slug>` (a `fix-*` branch's spec dir is missed; there are 27 live ones). When it reports "No artifacts found" but artifacts are visibly live, archive by hand with `git mv`.
 
@@ -584,9 +588,9 @@ Primary Subagent Results:
   ✓ Documentation Writer: Classified to performance-issues/, created complete markdown
 
 Specialized Agent Reviews (Auto-Triggered):
-  ✓ performance-oracle: Validated query optimization approach
-  ✓ kieran-rails-reviewer: Code examples meet Rails standards
-  ✓ code-simplicity-reviewer: Solution is appropriately minimal
+  ✓ soleur:engineering:review:performance-oracle: Validated query optimization approach
+  ✓ soleur:engineering:review:kieran-rails-reviewer: Code examples meet Rails standards
+  ✓ soleur:engineering:review:code-simplicity-reviewer: Solution is appropriately minimal
   ✓ every-style-editor: Documentation style verified
 
 File created:
@@ -639,21 +643,21 @@ Based on problem type, these agents can enhance documentation:
 
 ### Code Quality & Review
 
-- **kieran-rails-reviewer**: Reviews code examples for Rails best practices
-- **code-simplicity-reviewer**: Ensures solution code is minimal and clear
-- **pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
+- **soleur:engineering:review:kieran-rails-reviewer**: Reviews code examples for Rails best practices
+- **soleur:engineering:review:code-simplicity-reviewer**: Ensures solution code is minimal and clear
+- **soleur:engineering:review:pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
 
 ### Specific Domain Experts
 
-- **performance-oracle**: Analyzes performance_issue category solutions
-- **security-sentinel**: Reviews security_issue solutions for vulnerabilities
-- **data-integrity-guardian**: Reviews database_issue migrations and queries
+- **soleur:engineering:review:performance-oracle**: Analyzes performance_issue category solutions
+- **soleur:engineering:review:security-sentinel**: Reviews security_issue solutions for vulnerabilities
+- **soleur:engineering:review:data-integrity-guardian**: Reviews database_issue migrations and queries
 
 ### Enhancement & Documentation
 
-- **best-practices-researcher**: Enriches solution with industry best practices
+- **soleur:engineering:research:best-practices-researcher**: Enriches solution with industry best practices
 - **every-style-editor**: Reviews documentation style and clarity
-- **framework-docs-researcher**: Links to Rails/gem documentation references
+- **soleur:engineering:research:framework-docs-researcher**: Links to Rails/gem documentation references
 
 ### When to Invoke
 

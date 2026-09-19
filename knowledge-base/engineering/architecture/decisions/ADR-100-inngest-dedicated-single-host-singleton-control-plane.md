@@ -1396,3 +1396,80 @@ decision, tracked on #8316 together with #8285 (the scheduled retirement of this
 plaintext backstop once the ADR-142 cutover lands, expiring 2026-10-22), and gated on that path
 landing. This addendum retires nothing; "dormant on this volume" is its only verb. ADR-199 is cited,
 not edited here.
+
+## Addendum — 2026-09-19 (#6178) — the soak reading at day 3.5 and what the day-7 probe measures
+
+**The day-3.5 reading.** `op=verify` run 35415585389 (2026-09-19T02:40Z, `CUTOVER_ANCHOR_FROM=
+2026-09-15T13:23:00Z`, 1200 s buckets, the 52-cron population) scanned 820 distinct runs from
+2026-09-15T12:40:00Z and reported `DOUBLE-FIRE detected: 2 (functionID, tick-bucket) group(s)` —
+`26e6836b-…` count=4 and `2e625d3c-…` count=2, both in bucket 1491374 = 2026-09-17T12:40–13:00Z.
+A read-only `GET /rest/v1/routine_runs` on prd attributes every extra run to the 12:52:19–12:53:32Z
+burst: the moment the replaced host resumed after the 76-minute no-scheduler window that PR #8252
+documents (`op=resume` run 35223389582, created 2026-09-17T12:50:04Z). `cron-ghcr-token-minter`
+(`*/20`) ran 4 times = the ticks 11:40, 12:00, 12:20, 12:40 it missed; `cron-anthropic-credit-probe`
+(`47 * * * *`) ran 2 = 11:47 and 12:47; `cron-membership-health` (`17`) and `cron-oauth-probe` (`0`)
+ran once each = their one missed tick. Each missed tick fired exactly once on resume, on the
+dedicated host's own history (the probe reads only 10.0.1.40; web-1 is quiesced) — one scheduler
+draining its backlog, not two schedulers on one tick. Full record: #6178 comment 5738682595. A
+03:30Z re-read this day (the plan phase) gave 826 runs and the same two groups; a 03:57Z read that
+ordered the population file gave 831; the committed probe's own first run at 04:18Z gave 838 runs, the
+same two groups, and nothing else.
+
+**Why the proxy flags it.** Decision 7 defines exactly-once as "every occupied
+`(functionID, floor(startedAt / cron_period))` bucket has exactly one run". That buckets by the
+instant a run STARTED, so a backlog drained in one burst places several ticks' runs in one bucket
+and the criterion is violated without exactly-once being violated — the proxy over-approximates,
+and only attribution against `routine_runs` (each run's intended tick) can tell catch-up from a
+second scheduler. The host's projection carries no `queuedAt`, so the probe cannot do that
+attribution itself. The two groups are therefore recorded here as an operator-attributed,
+immutable, historical EXCEPTION to Decision 7's bucket criterion, and the flip condition is
+"the criterion holds outside that one bucket". The accepted residual runs the other way (P2-c):
+two runs of one tick started more than 20 minutes apart land in different buckets and read clean.
+
+**What the day-7 probe measures.** `scripts/followthroughs/inngest-soak-6178.sh` is enrolled on
+#6178 with `earliest=` at its enrollment instant (2026-09-19 — so the day-7 reading is not the
+first-ever execution of the runner-path credentials; the daily NOT YET comments until 09-22 are
+the liveness signal) and replaces the 07-07 extraction plan's Phase 4.1
+prescription (`inngest-double-fire-6178.sh`, exit 0 = close) with a NOTIFY-ONLY probe (exit 2 NOT
+YET / 3 CANNOT ESTABLISH / 5 ACTION REQUIRED; never 0, never 1) — the close authorises this
+status flip and the release of four rollback snapshots, which are operator verbs. It reads the
+same on-host doublefire probe in five population slices (the deploy webhook forwards only `from`
+and `function_ids`, so there is no time slicing), buckets exactly as `op=verify` 2.6 does, and pins
+the two groups above as exact RUN-ID SETS: the host's `.id` is the ULID the run-log middleware
+writes to `routine_runs.run_id`, and the join on 2026-09-19 matched the minter's four ids
+(`01M2QPSG3066…`, `01M2QPSGN9WF…`, `01M2QPSH0C5M…`, `01M2QPSHH0TR…`) and the credit probe's two
+(`01M2QPSG3C1H…`, `01M2QPSGKXBT…`) exactly — so the functionID→name mapping above is proven by
+join, not inferred from counts, and the minter at 5 or at 3, a third function in bucket 1491374,
+or the same counts with other members are all UNEXPLAINED. Before any slice it GETs the registry:
+a pinned cron that vanished refuses (`registry_drift`); a registry that grew (70 on 09-15, 09-19
+and at the probe's first run) is reported as UNMEASURED functions and qualifies the verdict rather
+than blocking it. A manual trigger of a cron within 1200 s of its scheduled tick reads as a group
+(three manual runs of `cron-compound-promote` already sit in the window without colliding); the
+probe cannot see `trigger_source`, so that attribution against `routine_runs` is the operator's
+step. On a clean day-7 reading its ACTION REQUIRED text names the verbs in order: flip this ADR
+`adopting → accepted` (reversible); wait for the NEXT sweep's comment to read SOAK CLEAN again — a
+fresh reading between the reversible and the irreversible verb is what protects the snapshots;
+release the four `inngest-cutover-pre-*` hcloud images (398857857, 406654994, 407991378, 411798619 —
+none from 09-15; no `op=backup` ran for the completed cutover); and close #6178 LAST, because a
+notify-only probe never exits 1 and a group found after the close is dropped by the sweeper's
+closed-set path. Past 2026-10-06 the probe refuses before any GET (`horizon_passed`): the heaviest
+slice has outgrown the host's page budget by then and the verbs are overdue.
+
+**Anchor provenance (ADR-146).** The probe's `from` is `bucket_floor(2026-09-15T13:23:00Z) − 2 ×
+1200 s = 2026-09-15T12:40:00Z`, where 13:23:00Z is the 09-15 `op=verify` pass (run 34974655656).
+That pass was itself QUALIFIED — its log reads `anchor_source=floor(override)` and
+`2.6 exactly-once VERIFIED (QUALIFIED) — … population scoped to function_ids=[…]` — so the day-7
+reading inherits both qualifications (an operator-typed anchor and a 52-cron population) and is
+a soak reading over the post-verify window, not a re-proof of the coexistence region. Its scope
+is the dedicated host's run index only (op=verify P2-a); web-1's quiesced shape, read with
+`scripts/inngest-host-state.sh`, is the second evidence held before the flip.
+
+**Hazards this addendum records.** A `Closes #6178` in any PR body before 2026-09-22 would close
+the tracker three days early; the sweeper's closed-set path returns silently on exit 2/3/5, so the
+day-7 reading would never be posted (the enrolling PR says `Ref #6178`, and its ship step sweeps
+open PRs for a premature close keyword). The sweeper itself has no `sentry-heartbeat`, so a sweep
+that never fires on 09-22 is indistinguishable from one that found nothing — pre-existing, tracked
+on #8349. The reading stays takeable for roughly one to two weeks after day 7; after that the
+heaviest slice outgrows the host's page budget and the probe reports CANNOT ESTABLISH until the
+tracker is closed, which is expected. The status stays `adopting` until the day-7 reading is clean
+outside the explained set; this addendum flips nothing.

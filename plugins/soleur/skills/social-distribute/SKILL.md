@@ -28,17 +28,17 @@ Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
 > No brand guide found. Run the brand architect agent first to establish brand identity:
-> `Use the brand-architect agent to define our brand.`
+> `Use the soleur:marketing:brand-architect agent to define our brand.`
 
 Stop execution.
 
 ### 2. Blog Post Path (hard)
 
-The skill expects a blog post path as an argument (e.g., `/soleur:social-distribute plugins/soleur/docs/blog/my-article.md`).
+The skill expects a blog post path as an argument (e.g., `soleur:social-distribute plugins/soleur/docs/blog/my-article.md`).
 
 **If no path provided or file does not exist:**
 > Provide a path to a blog post markdown file:
-> `/soleur:social-distribute <path-to-blog-post.md>`
+> `soleur:social-distribute <path-to-blog-post.md>`
 
 Stop execution.
 

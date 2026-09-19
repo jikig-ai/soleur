@@ -2050,6 +2050,10 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # The differential oracle over every executable reader of the directive (#7490). Four copies
+  # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
+  # must not `source` a repo file), so they are held in agreement by a walker instead.
+  run_suite "scripts/followthrough-predicate-parity" bash scripts/followthrough-predicate-parity.test.sh
   # #7506: the callback-URL closure guard EXECUTES its shipped workflow step body under
   # `bash -e` (the shell Actions uses for a `run:` block with no `shell:` key). Registered
   # explicitly for the same reason as the two lines above — scripts/*.test.sh is not globbed,
@@ -2103,6 +2107,14 @@ if want_scripts; then
   # #6297 while the key is still unminted. The suite mutation-proves that guard, so a regression
   # to structural matching must redden CI rather than silently false-close a tracker.
   run_suite "scripts/anthropic-admin-key-6297" bash scripts/followthroughs/anthropic-admin-key-6297.test.sh
+  # #8281: exit-code harness for the compound-promote outcome soak. Registered explicitly
+  # (orphan-suite class above). Same CONTAMINATION arm as 6297 one entry up: the probe's first
+  # revision `grep -c`'d the marker name over undecoded rows, so an echo of the PR's own body
+  # would have auto-closed #8281 with the weekly path dark. The suite also pins the DARKNESS
+  # arm (no SOLEUR_CLAUDE_COST control ⇒ FAIL, never a clean zero), the trigger==cron
+  # requirement (a manual fire cannot close it), and the rc-3 forwarding — whose first revision
+  # `exit 3`'d inside a `$(...)` and so exited a subshell; the suite's case 7 caught it.
+  run_suite "scripts/compound-promote-outcome-8281" bash scripts/followthroughs/compound-promote-outcome-8281.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -2147,6 +2159,10 @@ if want_scripts; then
   # double-encoded like the warehouse `raw` column: a harness whose seam sits above the decode
   # reproduces #7674's own 0/40-vs-40/40 measurement and passes while testing nothing.
   run_suite "scripts/inngest-host-not-serving-7674" bash scripts/followthroughs/inngest-host-not-serving-7674.test.sh
+  # #6178 ADR-100 soak probe. The suite pins the never-0/never-1 invariant after every invocation
+  # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
+  # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
+  run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
@@ -2230,6 +2246,21 @@ if want_scripts; then
   # Every peer workflow lint is registered as this same pair (see lint-workflow-step-env-refs and
   # lint-workflow-errexit-capture above) — this one was registered once, which made it decoration.
   run_suite "scripts/lint-workflow-issue-write-scope-live" python3 scripts/lint-workflow-issue-write-scope.py
+  # A `uses: ./…` step resolves from the runner's WORKSPACE, so its job must have run
+  # actions/checkout first. scheduled-marketplace-drift.yml's checkout-free drift-check job ended
+  # in one under `continue-on-error: true`: the runner could not resolve the composite, the step
+  # went green, and the Sentry monitor recorded zero check-ins for 37 days. Same class as the two
+  # lints above, one layer earlier: that the alarm step can even be FOUND. Both halves are
+  # required — the unit suite proves the RULE is right, the -live arm proves the TREE is clean.
+  run_suite "scripts/lint-workflow-local-action-checkout" bash scripts/lint-workflow-local-action-checkout.test.sh
+  run_suite "scripts/lint-workflow-local-action-checkout-live" python3 scripts/lint-workflow-local-action-checkout.py
+  # A DANGLING committed symlink breaks the GitHub Actions runner's repository-archive
+  # extraction, so it fails `Set up job` for EVERY `$/…` and `owner/repo/path@ref` reference to
+  # this repo — measured on run 35360150848. The check lives in its own file rather than inline:
+  # `--enumerate-commands` encodes argv with TAB/NEWLINE delimiters and rejects a multi-line
+  # `bash -c` body, which is how the first revision of this registration broke
+  # `battery-tag-authorship` (an empty root set, refusing to classify).
+  run_suite "scripts/no-dangling-committed-symlinks" bash scripts/no-dangling-committed-symlinks.test.sh
   # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
   # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
   # advisory (absent from required-checks.txt and the ruleset), and this defect has already
@@ -2292,6 +2323,14 @@ if want_scripts; then
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
+  # #8302 / ADR-229: the offline transition classifier and the SKILL.md byte ratchet.
+  # scripts/lib/incidents-roots.test.sh rides the scripts/lib/*.test.sh glob; these two do
+  # not sit under a globbed directory, so they are registered here explicitly. This is the
+  # ratchet SUITE's only registration: lint-orphan-test-suites.sh refuses double coverage,
+  # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
+  # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
+  run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
+  run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
@@ -2330,6 +2369,9 @@ if want_scripts; then
   # an unregistered suite here never gates and the failure is silent-and-green.
   run_suite "tests/scripts/inngest-volume-recut-gate" bash tests/scripts/test-inngest-volume-recut-gate.sh
   run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
+  # #6894 — ADR-142 Guard 3: the per-address plan-shape gate on the inngest-host dispatch (which
+  # also creates the additive LUKS volume). Same orphan trap as above: nothing globs tests/scripts/test-*.sh.
+  run_suite "tests/scripts/inngest-host-shape-gate" bash tests/scripts/test-inngest-host-shape-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
   # #7542: vector-redeliver scoped-delivery gate. Unlike the -replace arms above it permits a bare
@@ -2356,7 +2398,14 @@ if want_scripts; then
   # #7555. tests/scripts/ is NOT auto-globbed by this runner (the *.test.sh glob cannot match a
   # test-* prefix), so an unregistered suite here would run in ZERO runners, green and invisible.
   run_suite "tests/scripts/registry-replace-preflight" bash tests/scripts/test-registry-replace-preflight.sh
-  # The mutation battery for BOTH suites above. Registered, not ad-hoc: its previous incarnations
+  # #8279. The dispatcher's derivation helper (which merged change does this run deliver, and
+  # where is its verdict tracked). Same registration reason as the line above: tests/scripts/
+  # is not globbed, so this explicit line is the suite's ONLY runner.
+  run_suite "tests/scripts/registry-delivery-change" bash tests/scripts/test-registry-delivery-change.sh
+  # Its mutation battery (~70 s, sandboxed copies, every row asserts it landed). Committed and
+  # registered rather than left in a transcript, so its kills protect something tomorrow.
+  run_suite "tests/scripts/registry-delivery-change-mutation-battery" bash tests/scripts/test-registry-delivery-change-mutation-battery.sh
+  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites. Registered, not ad-hoc: its previous incarnations
   # lived in a session transcript, so their "15/15 caught" protected nothing the next day — and
   # when it was finally committed it found 15 of its mutations surviving, including a seam that
   # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
@@ -2631,11 +2680,13 @@ if want_webplat; then
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
-# Co-located because validate-blog-links.sh reads _site/, which
-# plugins/soleur/test/seo-aeo-drift-guard.test.ts builds. Under matrix
-# sharding (separate runners) there is no race; co-location is a perf
-# optimization (build once, reuse) AND defense against any future xargs-P
-# attempt that would re-introduce the race within one runner.
+# Co-located because validate-blog-links.sh's link-check half reads _site/
+# at the repo root, which plugins/soleur/test/marketing-content-drift.test.ts
+# builds inside `bun test plugins/soleur/` (the drift-guard builds to
+# mkdtemp, not _site). Suites run sequentially and the script self-builds
+# when no site-dir is passed, so there is no live race today; co-location
+# is defense against any future xargs-P attempt that would introduce one
+# within a runner.
 if want_bun; then
   run_suite "plugins/soleur" bun test plugins/soleur/
   run_suite "blog-link-validation" bash scripts/validate-blog-links.sh

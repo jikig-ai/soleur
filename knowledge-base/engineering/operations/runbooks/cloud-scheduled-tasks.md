@@ -654,8 +654,15 @@ first is the one most likely lying — see learning
 2. **Better Stack stdout tail** (`scripts/betterstack-query.sh` under `doppler run
    -p soleur -c prd_terraform` — query creds are in `prd_terraform`, NOT `prd`; see
    `betterstack-log-query.md`). SIGKILL/container-swap markers, the swallowed-POST
-   warning, last `sentry-heartbeat` log line per run. CAVEAT: hot-window retention
-   is short (~1h) — the incident window is often already aged out.
+   warning, last `sentry-heartbeat` log line per run. Since 2026-09-18 the composite
+   prints `sentry-heartbeat: http_code=<n>` on every delivery attempt (202 on success,
+   4xx/5xx on an ingest refusal, 000 on a transport failure) and prints NOTHING when the
+   three ingest secrets are unset — in that last case the step still exits 0 green and its
+   `::warning::Sentry Crons secrets not configured` annotation is the signal. A workflow
+   using the `$/…` reference form has one more shape: a `Set up job` failure with no job
+   log at all, which is the repository archive failing to extract (e.g. a committed
+   dangling symlink — see `test/fixtures/orphan-proc-dangling/README.md`). CAVEAT:
+   hot-window retention is short (~1h) — the incident window is often already aged out.
 3. **Sentry check-in timeline** — `GET https://de.sentry.io/api/0/organizations/<org>/monitors/<slug>/checkins/`
    (read-only; EU **regional** host `de.sentry.io` with the org in the path — the
    live-verified shape, mirrored by `scripts/followthroughs/community-monitor-checkin-soak-5728.sh`; ADR-031). Confirms last-ok +

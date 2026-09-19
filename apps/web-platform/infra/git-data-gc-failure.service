@@ -26,8 +26,18 @@ Environment=HOME=/root
 # after abortable stages). Verified: dash -c '. /nx || echo A; echo B' prints nothing, rc=2.
 #
 # set -- once, run twice: the two arms are the same command, one wrapped in `doppler run`.
+# `timeout 90` on the Doppler arm (#8210, applied to the CLASS): without it a Doppler that
+# HANGS rather than exits is killed by TimeoutStartSec with the whole cgroup, so NEITHER arm
+# emits and the OOM-killed repack this unit exists to page on is silent. 90 < 120 leaves the
+# direct arm its own window. git-data-luks-reopen-failure.service carries the same bound.
 EnvironmentFile=-/etc/default/git-data-doppler
 ExecStart=/bin/sh -c 'set -- /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC unit failed" \
   gc fatal "" "unit=git-data-gc.service"; \
-  /usr/local/bin/doppler run --project soleur --config prd_git_data -- "$@" || "$@"'
+  timeout 90 /usr/local/bin/doppler run --project soleur --config prd_git_data --no-fallback -- "$@" || "$@"'
 TimeoutStartSec=120
+# --no-fallback, PrivateTmp, TMPDIR on tmpfs: the same three the reopen reporter carries, for
+# the same reasons (root-disk fallback cache; attacker-claimable /tmp/.doppler; _devalue
+# mktemp). Applied to the class at review, not the instance.
+Environment=TMPDIR=/dev/shm
+PrivateTmp=yes
+LimitCORE=0

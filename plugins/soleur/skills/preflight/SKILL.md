@@ -13,6 +13,10 @@ description: "This skill should be used when running pre-ship checks on migratio
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call.
 
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 ## Headless Mode Detection
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args.
@@ -159,7 +163,7 @@ unapplied-migration FAIL path is the correct response).
 **Why:** PR #4225 (feat-team-workspace-multi-user) — preflight FAIL
 on Check 1 because prd migrations were deferred per
 migration-checklist.md (legal-PR lockstep gate); the headless
-`/ship` halted the pipeline on a known-deferred state. This SKIP
+`soleur:ship` halted the pipeline on a known-deferred state. This SKIP
 path honors documented deferrals while keeping the gate active for
 undocumented cases.
 
@@ -348,6 +352,7 @@ The single chokepoint is the canonical-hostname regex `^[a-z0-9]{20}\.supabase\.
    - `rc == 0` and output non-empty: candidate hostname is the CNAME target (strip trailing dot).
    - `rc == 0` and output empty: no CNAME exists. Fall back to `dig +short A <host>`. If the A-record resolves to a Supabase IP range, **FAIL** with: "Custom domain `<host>` uses A-record-only Supabase routing. Check 4 cannot prove project ref. Configure CNAME-based custom domain or temporarily set Doppler `<config>.NEXT_PUBLIC_SUPABASE_URL` to the bare `<ref>.supabase.co` form for the isolation check." A-records are rare for Supabase custom domains; failing is correct because SKIPping fails-open the security gate.
    - `rc != 0`: SERVFAIL, NXDOMAIN, network error, etc. Return **SKIP** with diagnostic: "dig exit `<rc>` for `<host>` — DNS resolution unavailable; isolation check inconclusive." (SKIP only when the diagnostic is genuinely undetermined; A-record-only is determined and FAILs.)
+   - `dig` not installed (the resolver script exits 1 with "'dig' is not installed"): do NOT SKIP — resolve the CNAME with `resolvectl query --type=CNAME <host>` (systemd hosts) and feed the target through the same canonical-regex check; a SKIP here fails the security gate open on a tooling gap, not a DNS answer. Measured on PR #8354 (`api.soleur.ai` → `<ref>.supabase.co` via resolvectl).
 4. Verify the resulting hostname matches `^[a-z0-9]{20}\.supabase\.co$`. If it does not, **FAIL** with: "Resolved hostname `<host>` is not a canonical Supabase project endpoint. Refusing to compare on a non-canonical name (subdomain-bypass guard)." This catches inputs like `<ref>.supabase.co.evil.com` that pass step 1 but fail the anchored regex.
 
 The 20-char first label of a canonical hostname IS the project ref — extract via the literal first label or by stripping `.supabase.co`.
@@ -499,7 +504,7 @@ If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive pa
 
 Call **Shared Plan-File Resolution** (above Check 1). It sets `$PR_BODY_FILE`, `$SCRUBBED_BODY`, `$PLAN_PATH`, and `$COMBINED` for this check to consume. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
 
-The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
+The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
 
 **Step 6.4: Check for the section heading.**
 
@@ -975,13 +980,13 @@ cheapest path to a non-FAIL for any probe whose verb Check 10 cannot run — tho
 not the cheapest overall: a tautological probe (`printf 200` against
 `expected_output: "200"`) reaches PASS and is counted by none of the three
 counterweights below. That gap is pre-existing, not introduced here, but the
-superlative was wrong as written. For the declared path specifically, this is and in `/soleur:one-shot` the
+superlative was wrong as written. For the declared path specifically, this is and in `soleur:one-shot` the
 same agent authors the declaration and runs the gate. Left invisible it would convert
 Check 10 from a verification gate into self-certification. The three mechanical
 counterweights are the distinct terminal, the committed corpus baseline count in
 `plugins/soleur/test/preflight-discoverability-test.test.ts` (so each new adoption is a
 reviewable diff line rather than silent drift), and the checklist entry in
-`observability-coverage-reviewer` §Step 6.
+`soleur:engineering:review:observability-coverage-reviewer` §Step 6.
 
 Note what the waiver is and is not: it is a **verification waiver**, not an execution
 bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does
@@ -1094,7 +1099,7 @@ under `HOME=$(mktemp -d)`. The sandbox removes the credential stores as files:
 | `grep -c . AGENTS.md` | matches the host value |
 
 The read-only repo bind is what closes the **write-back escalation**: without it a probe
-can install `.git/hooks/pre-commit`, which `/soleur:ship` then executes seconds later with
+can install `.git/hooks/pre-commit`, which `soleur:ship` then executes seconds later with
 the operator's real `$HOME` — turning a few-second credential window into a full
 compromise.
 
@@ -1391,7 +1396,7 @@ breaks the numeric test).
 - **PASS** — `rc == 0` (register clean). The "Undocumented source facts (M)" count is surfaced by the
   advisory review note, never here.
 - **FAIL** — `stale > 0`: "domain-model register has $stale stale citation(s) — the register cites a
-  file/symbol that no longer resolves. Fix the cited row(s), or run `/soleur:sync domain-model`. If a
+  file/symbol that no longer resolves. Fix the cited row(s), or run `soleur:sync domain-model`. If a
   citation backticks a *filename*, unbacktick it (known citation-parser false-positive — see
   `knowledge-base/project/learnings/best-practices/2026-07-01-domain-model-register-curation-citation-parser-and-grep-validation.md`)."
 - **FAIL** — `rc == 2` (analyzer error / unanalyzable source): "register-drift check could not run
@@ -1468,7 +1473,7 @@ After all checks complete, aggregate results into a structured report:
 
 ### If any FAIL
 
-**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `/ship`."
+**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `soleur:ship`."
 
 **Interactive mode:** Present findings table, then use **AskUserQuestion tool**:
 

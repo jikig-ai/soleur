@@ -2359,7 +2359,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // SUBSTITUTE: the property is the CONTENT of warehouse rows the registry host POSTs, and that
   // source has no unauthenticated read path; grepping the producer would verify the diff, not the
   // delivery.
-  const BASELINE_DECLARED_PROBES = 14;
+  // 15th declaration — #8281 (PR #8276) raised this 14 -> 15. PLACEMENT: two-space child of
+  // `discoverability_test:` in the archived WikiSkill Phase 1 plan, single-line quoted scalar
+  // (preflight Check 10's flat reader treats a folded `>` scalar as absent). TRUTH: the probe is
+  // `bash scripts/followthroughs/compound-promote-outcome-8281.sh`, which reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL) to decode the
+  // SOLEUR_COMPOUND_PROMOTE_OUTCOME marker the cron emits. NO SUBSTITUTE: the property is that a
+  // SCHEDULED fire's marker reached Better Stack, and that sink has no unauthenticated read path.
+  const BASELINE_DECLARED_PROBES = 15;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

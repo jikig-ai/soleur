@@ -233,6 +233,7 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | Hetzner Primary IPv4 (registry) | 0.54 [expenses.md@2026-07-17] | `expenses.md` (#6589 gap added — #6602) |
 | Hetzner CPX22 (inngest control plane, hel1) | 21.05 [expenses.md@2026-07-16] | `expenses.md` |
 | Hetzner Volume (inngest, 10 GB) | 0.62 [expenses.md@2026-07-17] | `expenses.md` (FX-basis corrected — #6602) |
+| Hetzner Volume (inngest LUKS, 10 GB) | 0.62 [expenses.md@2026-09-18] | `expenses.md` (#6894 — the additive cutover target; bills concurrently with the row above until the backstop is retired, #8285) |
 | Hetzner Primary IPv4 (inngest) | 0.54 [expenses.md@2026-07-16] | `expenses.md` |
 | Supabase Pro + Custom Domain | 35.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Supabase Inngest project (`soleur-inngest-prd`, Micro compute) | 10.00 [expenses.md@2026-07-16] | `expenses.md` |

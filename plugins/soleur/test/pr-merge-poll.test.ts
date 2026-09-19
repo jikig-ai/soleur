@@ -8,6 +8,7 @@ import {
   behindSyncInstructions,
   PR_BEHIND_SYNC_SENTINEL,
   MERGE_STATE_BEHIND,
+  MERGE_STATE_DIRTY,
   formatPrPollState,
 } from "../lib/pr-merge-poll";
 import { pollInstructions } from "../lib/harness";
@@ -21,8 +22,9 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(isBehindPollState("OPEN CLEAN")).toBe(false);
   });
 
-  test("shouldResyncBeforePoll fires only on BEHIND", () => {
+  test("shouldResyncBeforePoll fires on BEHIND or DIRTY", () => {
     expect(shouldResyncBeforePoll(MERGE_STATE_BEHIND)).toBe(true);
+    expect(shouldResyncBeforePoll(MERGE_STATE_DIRTY)).toBe(true);
     expect(shouldResyncBeforePoll("CLEAN")).toBe(false);
     expect(shouldResyncBeforePoll("BLOCKED")).toBe(false);
   });

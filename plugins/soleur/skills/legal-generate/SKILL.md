@@ -1,6 +1,6 @@
 ---
 name: legal-generate
-description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the legal-document-generator agent, and writes markdown output."
+description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the soleur:legal:legal-document-generator agent, and writes markdown output."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -43,7 +43,7 @@ Use the **AskUserQuestion tool** to gather company context. Ask for:
 4. **Jurisdiction** -- which legal frameworks apply (US, EU/GDPR, UK, or multiple)
 5. **Contact information** -- email and/or physical address for legal notices
 
-If the user provides arguments after the skill name (e.g., `/legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
+If the user provides arguments after the skill name (e.g., `soleur:legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
 
 ## Phase 1: Document Selection
 
@@ -64,10 +64,10 @@ NOTICE_FILE="${CLAUDE_PLUGIN_ROOT}/skills/legal-generate/NOTICE" \
 
 ## Phase 2: Generation
 
-Invoke the `legal-document-generator` agent via the **Task tool** with the company context and selected document type. The agent resolves the substrate arm (template-fill vs from-scratch) from its own routing table — do not pre-decide it here.
+Invoke the `soleur:legal:legal-document-generator` agent via the **Task tool** with the company context and selected document type. The agent resolves the substrate arm (template-fill vs from-scratch) from its own routing table — do not pre-decide it here.
 
 ```
-Task legal-document-generator: "Generate a [document type] for [company name].
+Task soleur:legal:legal-document-generator: "Generate a [document type] for [company name].
 Company: [name]
 Product: [description]
 Data practices: [practices]
@@ -151,14 +151,14 @@ below.
           echo "legal-generate: cannot verify the Soleur plugin installation — stopping before any draft is written." >&2
           echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
           echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-          echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+          echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
           echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
           exit 2; }
    SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
    [[ -r "$SENTINEL" ]] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
           echo "legal-generate: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
           echo "  Expected at: [$SENTINEL]" >&2
-          echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+          echo "  The install is partial or out of date. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
           echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
           exit 2; }
    # EMPTINESS IS A FAILURE, NOT A CLEAN SCAN — the sentinel exits 0 on zero bytes, so an

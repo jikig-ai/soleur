@@ -314,6 +314,19 @@ assert "emitter side: the cloud-init LUKS stage logs under the same tag" \
 assert "vector side: Source 4 allowlists \"inngest-luks-stage\"" \
   "grep -qE '^[[:space:]]*\"inngest-luks-stage\",\$' <<<\"\$HSJ\""
 
+# --- #6894: the LUKS cutover unit's tag — DERIVED from the unit, then required on both sides -----
+# Equality against the unit's OWN value rather than a literal repeated here: renaming the tag in one
+# file and not the other is the silent-drop this block exists to catch, and a literal in the test
+# would have to be renamed too — i.e. it would be a third copy, not a check.
+CUTOVER_UNIT="$SCRIPT_DIR/inngest-luks-cutover.service"
+CUTOVER_TAG="$(sed -n 's/^SyslogIdentifier=\([A-Za-z0-9._-]*\)$/\1/p' "$CUTOVER_UNIT" 2>/dev/null | head -1)"
+assert "unit side: inngest-luks-cutover.service declares exactly one SyslogIdentifier (read: '$CUTOVER_TAG')" \
+  "[[ -n \"\$CUTOVER_TAG\" && \$(grep -c '^SyslogIdentifier=' '$CUTOVER_UNIT') -eq 1 ]]"
+assert "vector side: Source 4 allowlists the cutover unit's own SyslogIdentifier" \
+  "[[ -n \"\$CUTOVER_TAG\" ]] && grep -qxF \"  \\\"\$CUTOVER_TAG\\\",\" <<<\"\$HSJ\""
+assert "emitter side: inngest-luks-cutover.sh logs under the unit's tag (LOG_TAG)" \
+  "[[ -n \"\$CUTOVER_TAG\" ]] && grep -qxF \"readonly LOG_TAG=\\\"\$CUTOVER_TAG\\\"\" '$SCRIPT_DIR/inngest-luks-cutover.sh'"
+
 # CF-4 (#7228): INVERTED from a negative pair to a POSITIVE one, in the direction the EMITTER
 # dictates. It used to assert that "inngest-boot-phone-home" was ABSENT from the allowlist, on
 # the explicitly stated condition that the script "never calls logger, so an allowlist entry

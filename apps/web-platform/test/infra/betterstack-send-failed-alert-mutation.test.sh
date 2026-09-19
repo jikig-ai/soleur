@@ -143,7 +143,9 @@ expect_green_added() {
 
 # ── Baseline: the UNMUTATED control must be GREEN with the EXACT pass count ─────────────────
 # (no slack: a whole check deleted from the guard is a count change, and nothing else sees it)
-BASELINE_PASSES=58
+# 58 -> 59 at #6894: the guard's NON_PAGING_MARKERS gained the LUKS cutover seam refusal (a bare
+# `logger -t`, user.notice), which adds one census row.
+BASELINE_PASSES=59
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
 else no "baseline: guard is RED against the UNMUTATED sandbox; every RED below is meaningless. Output: $(<"$OUT")"
@@ -233,10 +235,13 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
+# TWO explorations carry this line since #6894, and the guard reads the monitor_send_failed block
+# only — so the mutation must land in THAT block, which is the first occurrence in the file. The
+# count is asserted exactly (not `>= 1`): a third exploration would make "the first" ambiguous.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 1, "anchor"
-s = s.replace(old, "    values        = [\"2734275\"]")'
+assert s.count(old) == 2, "anchor"
+s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"
 
 MUT='

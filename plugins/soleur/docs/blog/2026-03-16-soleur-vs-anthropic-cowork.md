@@ -5,6 +5,7 @@ date: 2026-03-16
 updated: 2026-05-21
 description: "Soleur and Anthropic Cowork both deploy multi-domain AI agents. A comparison of knowledge architecture, workflow depth, cross-domain coherence, and pricing."
 ogImage: "blog/og-soleur-vs-anthropic-cowork.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - anthropic-cowork
@@ -135,7 +136,7 @@ Cowork's session-scoped model is a valid design choice for executing expert task
 Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments with a compounding knowledge base that gets more powerful every day you use it. Source-available, terminal-first, built by a solo founder using the platform itself.
 
 ```
-claude plugin install soleur
+claude plugin install soleur@soleur-marketplace
 ```
 
 Explore the [{{ stats.agents }} agents]({{ site.url }}/agents/), read [what company-as-a-service means]({{ site.url }}/company-as-a-service/) for solo founders, or [get started in five minutes]({{ site.url }}/getting-started/).

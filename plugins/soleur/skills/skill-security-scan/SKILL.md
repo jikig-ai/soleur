@@ -63,7 +63,7 @@ Scan a file:
 bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < path/to/SKILL.md
 ```
 
-Scan stdin content (used by `agent-finder` post-fetch / `skill-creator` post-scaffold
+Scan stdin content (used by `soleur:engineering:discovery:agent-finder` post-fetch / `skill-creator` post-scaffold
 integrations):
 
 ```bash
@@ -114,7 +114,7 @@ extra: { ...redacted } })`.
 ## Integrations
 
 - `skill-creator` Step 5: post-validation scan before packaging.
-- `agent-finder` §4b.5: cooperative-fast-path scan post-fetch / pre-write.
+- `soleur:engineering:discovery:agent-finder` §4b.5: cooperative-fast-path scan post-fetch / pre-write.
 - PreToolUse hook on `Write` to `.claude/skills/**` and `.claude/agents/**`:
   load-bearing block-on-HIGH-RISK gate at the tool layer.
 - Lefthook commit-time advisory: belt-and-suspenders for IDE / CLI commit paths.

@@ -267,3 +267,34 @@ export function emitCronDigestLiveness(m: CronDigestLivenessMarker): void {
     // fail-open.
   }
 }
+
+// ---------------------------------------------------------------------------
+// Marker 7 — SOLEUR_RUN_REPORT_SWEEP
+// ---------------------------------------------------------------------------
+// The 12:00Z run-report arm of cron-stale-deferred-scope-outs changed state:
+// closed at least one run-report or deferred one past the per-run cap. Until
+// 2026-09-18 this went through the Inngest ctx logger and rendered multi-line
+// — same class as server/compound-promote-marker.ts (#8281); measured dark on
+// the 2026-09-14/15 fires. Fields are counts, `scheduled-*` label names and a
+// closed reason set.
+
+export interface RunReportSweepMarker {
+  fn: "cron-stale-deferred-scope-outs";
+  arm: "run-reports";
+  total: number;
+  closed: number;
+  skipped: number;
+  deferred: number;
+  closedByLabel: Record<string, number>;
+  skippedByReason: Record<string, number>;
+  dryRun: boolean;
+}
+
+/** Emit one `SOLEUR_RUN_REPORT_SWEEP` WARN marker. NEVER throws. */
+export function emitRunReportSweep(m: RunReportSweepMarker): void {
+  try {
+    log.warn({ SOLEUR_RUN_REPORT_SWEEP: true, ...m }, "run-report sweep changed state");
+  } catch {
+    // fail-open.
+  }
+}

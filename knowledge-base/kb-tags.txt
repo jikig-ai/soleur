@@ -124,6 +124,7 @@ adjacent-prs
 admin-ip
 admin-ip-drift
 admin-ip-refresh
+admin-merge
 adnanh-webhook
 adr
 adr-031
@@ -153,6 +154,7 @@ adr-166
 adr-181
 adr-193
 adr-194
+adr-217
 adr-corpus
 adr-drift
 adr-hygiene
@@ -237,6 +239,7 @@ anchor-on-syntax
 anchor-preservation
 anchor-resolution-over-architecture
 anchoring
+anchors
 animation
 anomaly-detection
 anon
@@ -244,6 +247,7 @@ anon-key
 ansi
 anthropic
 anthropic-api
+anthropic-credits
 anti-priming
 anti-slop
 anti-sycophancy
@@ -367,6 +371,7 @@ audit-logging
 audit-pattern
 audit-surface-coverage
 audit-trail
+audit-verification
 audit-writer
 auth
 auth-chain
@@ -425,9 +430,11 @@ bash-cwd
 bash-hooks
 bash-mocks
 bash-parsing
+bash-performance
 bash-pipefail
 bash-set-e
 bash-strict-mode
+bash-subshell
 bash-test-pattern
 bash-tests
 bash-to-ts-port
@@ -545,8 +552,10 @@ build
 build-assertions
 build-context
 build-errors
+build-sha
 build-time-inlining
 build-time-interpolation
+bulk-redirects
 bump
 bun
 bun-glob
@@ -595,6 +604,7 @@ call-site-grep
 campaign-calendar
 canary
 canary-deploy
+canary-sandbox
 candidate
 cannibalization
 cannot
@@ -631,6 +641,7 @@ cc-router
 cc-soleur-go
 ccpa
 censored-data
+census
 centralization
 cert-provisioning
 cf-tunnel
@@ -760,6 +771,7 @@ cloud-routines
 cloud-task-silence
 cloudflare
 cloudflare-access
+cloudflare-bulk-redirects
 cloudflare-rulesets
 cloudflare-tunnel
 cmo
@@ -823,6 +835,7 @@ community/github-community.sh
 community/github-stats
 community/scripts
 community/x-setup
+compaction
 compaction-boundary
 companion-pr
 comparedocumentposition
@@ -964,10 +977,12 @@ cost-of-filing-gate
 cost-slo
 could-not-measure
 count-mismatch
+count-ripple
 counting
 counts
 coupling-test
 coverage
+coverage-consult
 coverage-denominator
 coverage-gap
 cpo
@@ -1045,6 +1060,7 @@ cto
 cto-fork
 cto-routing
 cto-ruling
+ctx-logger
 curated-register
 curl
 curl-based cloudflare api calls in agent
@@ -1089,6 +1105,7 @@ debounce
 debugging
 decision-archaeology
 decision-challenge
+decision-challenges
 decision-ladder
 decision-recording
 decision-routing
@@ -1103,6 +1120,7 @@ deepen-plan
 deepen-plan-skill
 default
 default-deny
+default-parameter
 defeat
 defense
 defense-in-depth
@@ -1138,12 +1156,14 @@ dependency-cascade
 dependency-chains
 dependency-cruiser
 dependency-detection
+dependency-injection
 dependency-management
 dependency-rebase
 dependency-resolution
 dependency-review
 dependency-sequencing
 deploy
+deploy-arm
 deploy-churn
 deploy-docs
 deploy-docs workflow fails on redirect pages lacking seo metadata
@@ -1171,6 +1191,7 @@ design-system
 design-tooling
 design-tooling/mcp-tools
 design-tools
+design-validity
 desktop-support
 destroy-gate
 destroy-guard
@@ -1185,6 +1206,7 @@ detector-design
 determination
 determinism
 deterministic
+deterministic-lints
 dev-db
 dev-environment
 dev-prod-divergence
@@ -1203,12 +1225,14 @@ diagnostics
 diff-predicate
 diff-range
 diff-scoping
+diff-shapes
 differential-gate
 digest-pin
 directive-without-delivery
 directory-structure
 directory-traversal
 dirty
+dirty-vs-behind
 disambiguation
 disclosure
 disconnect
@@ -1362,6 +1386,7 @@ engineering
 enoent
 entrypoint-coverage
 enum-gate
+enumerating-probe
 enumeration
 enumerations
 env
@@ -1410,6 +1435,8 @@ evidence-integration
 evidentiary-records
 exacerbation-rule
 exact-equality
+exact-match
+exactly-once
 exec
 exfil
 exhaustive-switch
@@ -1548,6 +1575,7 @@ fixture-cardinality
 fixture-design
 fixture-direction
 fixture-fidelity
+fixture-identity
 fixture-population
 fixture-provenance
 fixture-redaction
@@ -1663,6 +1691,7 @@ gh-search
 gh-secret-set
 ghcr
 git
+git-apply
 git-archaeology
 git-argv
 git-author
@@ -1776,11 +1805,14 @@ guard-design
 guard-equals-claim
 guard-erosion
 guard-itself-dark
+guard-placement
 guard-residue
+guard-review
 guard-test
 guard-testing
 guard-vacuity
 guard-window
+guarda
 guardrail
 guardrails
 guards
@@ -1842,6 +1874,7 @@ hmac
 honest-reporting
 honesty-surface
 hook
+hook-bypass
 hook-design
 hook-test-isolation
 hook-timeout
@@ -1893,6 +1926,7 @@ image-bake
 image-context
 image-export
 image-generation
+image-pin
 immutability
 immutable-infra
 implementation-patterns
@@ -1945,6 +1979,7 @@ inline-validation
 inngest
 inngest-cron
 inngest-cutover
+inngest-replay
 inode-identity
 input-validation
 insights
@@ -1953,6 +1988,7 @@ installation-detection
 installation-id
 installation-takeover
 installation-token
+instance-vs-class
 instrument-error
 instrument-failure
 instrument-vacuity
@@ -2100,6 +2136,7 @@ legal-docs
 legal-document-generator
 legal-documents
 legal-record
+legal-records
 legal-register
 leginfo
 lib-helpers
@@ -2124,6 +2161,7 @@ lint-rule-ids
 lint-symmetry
 linter
 linting
+lints
 liquid
 list
 live
@@ -2132,6 +2170,7 @@ live-evidence
 live-probe
 live-repro
 live-verify
+livelock
 liveness
 llm
 llm integration tests
@@ -2177,6 +2216,7 @@ markdown-table
 markdown-tables
 markdownlint
 marker
+marker-shape
 marker-telemetry
 marker-tests
 marker-vocabulary
@@ -2237,6 +2277,7 @@ merge-time-verification
 message
 message-bubble
 meta-harness
+meta-refresh
 metadata-extraction
 metadata-routes
 metakey
@@ -2293,6 +2334,7 @@ module-level-state
 module-resolution
 modulesupabase
 monitor
+monitor-hygiene
 monitor-lifetime
 monitoring
 monorepo
@@ -2411,10 +2453,12 @@ not-rest-mutable
 notification not sent
 notification-channel
 notification-migration
+notification-vs-verdict
 notifications
 npm
 npm-packaged-binary
 npx
+nul-framing
 null
 null-delimited
 null-test
@@ -2523,6 +2567,7 @@ ownership-transfer
 p1s
 pa8-disclosure
 package-install
+packaging-boundary
 page
 paginate
 pagination
@@ -2630,6 +2675,7 @@ pipe-buf
 pipefail
 pipeline
 pipeline-gotchas
+pipeline-parsing
 pir
 pir-gate
 pivot
@@ -2722,6 +2768,7 @@ plugin-loader
 plugin-marketplace
 plugin-path
 plugin-root
+plugin-scope
 plugin-structure
 plugin-surfaces
 plugin-system
@@ -2770,6 +2817,7 @@ post-apply-verification
 post-deploy
 post-implementation-review
 post-merge
+postcompact
 postcss
 postgres
 postgres-partial-index
@@ -2906,6 +2954,7 @@ prompt-injection-mitigation
 prompt-injection-of-context
 prompt-injection-substitution
 prompt-structure
+prompt-text-vs-state
 promptfoo
 prop-vs-state
 prop-wiring
@@ -2949,6 +2998,7 @@ pure-ts
 purity
 purity-test
 push
+push-arm
 push-notifications
 push-protection
 pwa
@@ -3077,8 +3127,10 @@ release-pipeline
 releases
 reliability
 remediation
+remediation-tooling
 remote-exec
 rename
+rename-guard
 render-scrub
 render-sink-sweep
 render-tree
@@ -3091,6 +3143,8 @@ replace-triggered-by
 replan
 replay
 replay-safety
+repo-global-guards
+repo-lints
 repo-readiness
 repo-readiness-gate
 repo-research
@@ -3134,6 +3188,7 @@ restatement
 restructure
 resume
 resume-from-memory
+resume-not-respawn
 resume-session
 retention
 retired-rules
@@ -3342,6 +3397,7 @@ search-path-injection
 search-path-pinning
 seccomp
 second-order-defects
+second-order-effects
 second-reviewer-concur
 second-reviewer-gate
 secret
@@ -3391,6 +3447,7 @@ self-healing
 self-healing-tests
 self-hosted-users
 self-hosting
+self-improvement-loop
 self-leak
 self-match
 self-matching-probe
@@ -3456,7 +3513,9 @@ session-error
 session-errors
 session-key
 session-management
+session-manifest
 session-persistence
+session-rate-limit
 session-resume
 session-rules-loader
 session-start
@@ -3490,6 +3549,7 @@ shared-module
 shared-state
 sharp
 sharp-edges
+sharp-edges-extraction
 shell
 shell-expansion
 shell-init-scope
@@ -3510,6 +3570,7 @@ ship-phase-7
 ship-skill
 shipped
 shipping
+short-sha
 show-full-output
 showdownload
 sibling-call-discovery
@@ -3527,6 +3588,7 @@ sign-out
 signal-choice
 signal-drift
 signal-to-noise
+signals
 signed
 signed-url
 signup-outage
@@ -3543,6 +3605,7 @@ silent-failure-adjacency
 silent-fallback
 silent-output-drop
 silent-staleness
+silent-success
 simplicity
 simplification
 single-client-id-many-flows
@@ -3662,6 +3725,7 @@ stale
 stale mcp binary path after extension update
 stale worktree
 stale worktrees persist after cleanup-merged reports success
+stale-artifacts
 stale-bits
 stale-claim
 stale-claim-sweep
@@ -3722,10 +3786,12 @@ stripe
 stripe-projects
 structural-boundary
 structural-enforcement
+structural-enumeration
 structural-test
 structured-data
 stub
 stub-detection
+stub-fidelity
 stuck-active
 stuck-detection
 stuck-watchdog
@@ -3854,6 +3920,7 @@ terraform_data
 test-all
 test-authoring
 test-baseline
+test-battery
 test-blast-radius
 test-coverage
 test-coverage-gaps
@@ -3906,6 +3973,7 @@ thinking-api
 thinking-indicator
 third-party-actions
 third-party-content
+third-proxy
 threat-model
 three-coupling
 three-dot-diff
@@ -3979,7 +4047,9 @@ tr9
 trace-tests
 trace/breakpoint trap
 trailers
+trailing-slash
 transaction-safety
+transcript
 transcript-judging
 transition
 transparency
@@ -4064,6 +4134,7 @@ user friction for experimental features
 user-agent
 user-brand-critical
 user-confirmation
+user-data
 user-data-budget
 user-event
 user-impact
@@ -4280,6 +4351,7 @@ workflow-security
 workflow-self-hosting
 workflow-tool
 workflow-triggers
+workflow-yaml
 workflow_dispatch
 workflow_enforcement
 workflow_run
