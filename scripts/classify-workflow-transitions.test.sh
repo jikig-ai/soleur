@@ -441,13 +441,18 @@ fi
 # `// {}` or a bare has() would silently reproduce the pre-collapse numbers on a
 # stale mirror; `null` and `[]` both pass a presence check.
 V26_OK=1
-for shape in missing null list; do
+for shape in missing null list stringval intval; do
   R26=$(new_root "sub26-$shape")
   assert_fixture_dir "$R26"
   case "$shape" in
     missing) jq 'del(.sub_steps)' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
     null)    jq '.sub_steps = null' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
     list)    jq '.sub_steps = []' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
+    # A STRING value passes a container-only type check and then collapses by
+    # jq `index`'s SUBSTRING semantics -- silently, which is the whole failure
+    # mode the fail-closed check exists to refuse.
+    stringval) jq '.sub_steps = {"brainstorm":"compound"}' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
+    intval)    jq '.sub_steps = {"brainstorm":[7]}' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
   esac
   emit_to "$R26" 2026-09-18T19:30:00Z brainstorm s26
   emit_to "$R26" 2026-09-18T19:31:00Z plan       s26
@@ -457,7 +462,7 @@ for shape in missing null list; do
   fi
 done
 if [[ "$V26_OK" -eq 1 ]]; then
-  pass "a view with sub_steps missing, null or [] exits 2 with a FATAL naming sub_steps"
+  pass "a view whose sub_steps is missing, null, [], a STRING value or a non-string member exits 2 with a FATAL naming sub_steps"
 else
   fail "stale mirror not fail-closed"
 fi
@@ -487,13 +492,90 @@ else
   fail "postmerge -> work reported — rc=$C28 out='$O28'"
 fi
 
+# --- 29-32. review round (#8382): three fail-opens the sub_steps check exposed --
+
+# --- 29. a view without an OBJECT `transitions` fails closed ------------------
+# Readability was the only check, so a stale/truncated mirror reported
+# `undeclared=0 ... rc 0` -- a clean-looking zero over an EMPTY edge set.
+V29_OK=1
+for shape in missing null; do
+  R29=$(new_root "t29-$shape")
+  assert_fixture_dir "$R29"
+  case "$shape" in
+    missing) jq 'del(.transitions)' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    null)    jq '.transitions = null' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+  esac
+  emit_to "$R29" 2026-09-18T20:00:00Z plan s29
+  emit_to "$R29" 2026-09-18T20:01:00Z ship s29
+  O29=$(CLASSIFY_REPO_ROOT="$R29" bash "$SUT" --summary 2>&1); C29=$?
+  if [[ "$C29" -ne 2 || "$O29" != *FATAL* || "$O29" != *transitions* ]]; then
+    V29_OK=0; echo "    transitions=$shape: rc=$C29 out='$O29'"
+  fi
+done
+if [[ "$V29_OK" -eq 1 ]]; then
+  pass "a view with transitions missing or null exits 2 with a FATAL naming transitions (never a clean undeclared=0)"
+else
+  fail "empty edge set reported a clean zero"
+fi
+
+# --- 30. an EMPTY or corrupt rotated archive is still a null reading ----------
+# `found=1` was set before zcat produced anything, so a 0-byte .gz silenced the
+# marker AND the null_reading=1 flag while reporting an empty report at rc 0.
+R30=$(new_root t30)
+assert_fixture_dir "$R30"
+: > "$R30/.claude/.skill-invocations-20260918T140000Z.jsonl.gz"
+O30=$(CLASSIFY_REPO_ROOT="$R30" bash "$SUT" --summary 2>&1); C30=$?
+R30B=$(new_root t30b)
+assert_fixture_dir "$R30B"
+printf 'this is not gzip at all\n' > "$R30B/.claude/.skill-invocations-20260918T150000Z.jsonl.gz"
+O30B=$(CLASSIFY_REPO_ROOT="$R30B" bash "$SUT" --summary 2>&1); C30B=$?
+if [[ "$C30" -eq 0 && "$O30" == *NO_INVOCATIONS* && "$O30" == *null_reading=1* \
+      && "$C30B" -eq 0 && "$O30B" == *NO_INVOCATIONS* && "$O30B" == *null_reading=1* ]]; then
+  pass "a 0-byte or non-gzip rotated archive still emits the loud null reading, never an empty report at rc 0"
+else
+  fail "archive limb silenced the null reading — rc=$C30 out='$O30' / rc=$C30B out='$O30B'"
+fi
+
+# --- 31. a type-wrong record is DROPPED, not a blanked reading ----------------
+# `fromjson?` only catches SYNTACTICALLY bad lines. A JSON-valid record with a
+# non-string skill died at ltrimstr (rc 2, whole reading dark); a non-string
+# session_id died at @tsv and ECHOED ITS VALUE on stderr.
+R31=$(new_root t31)
+assert_fixture_dir "$R31"
+emit_to "$R31" 2026-09-18T21:00:00Z brainstorm s31
+emit_to "$R31" 2026-09-18T21:01:00Z plan       s31
+printf '{"schema":1,"ts":"2026-09-18T21:02:00Z","skill":123,"session_id":"s31"}\n' >> "$R31/.claude/.skill-invocations.jsonl"
+printf '{"schema":1,"ts":"2026-09-18T21:03:00Z","skill":"soleur:ship","session_id":{"leak":"OBJECT-VALUE-ECHOED"}}\n' >> "$R31/.claude/.skill-invocations.jsonl"
+O31=$(CLASSIFY_REPO_ROOT="$R31" bash "$SUT" --summary 2>&1); C31=$?
+if [[ "$C31" -eq 0 && "$O31" == *"dropped=2"* && "$O31" == *"pairs=1"* && "$O31" != *OBJECT-VALUE-ECHOED* ]]; then
+  pass "a non-string skill or session_id is dropped (dropped=2), the rest still classifies, and no record VALUE is echoed"
+else
+  fail "type-wrong record blanked the reading or leaked its value — rc=$C31 out='$O31'"
+fi
+
+# --- 32. a sub_steps value that is not a declared node is inert, not a crash ---
+# The node filter removes it first, so the entry is dead rather than dangerous;
+# Guard 1's invariants are what forbid writing one.
+R32=$(new_root t32)
+assert_fixture_dir "$R32"
+jq '.sub_steps = {"brainstorm":["deepen-plan"]}' "$ROOT/.claude/workflow-transitions.json" > "$R32/.claude/workflow-transitions.json"
+emit_to "$R32" 2026-09-18T22:00:00Z brainstorm s32
+emit_to "$R32" 2026-09-18T22:01:00Z deepen-plan s32
+emit_to "$R32" 2026-09-18T22:02:00Z plan       s32
+O32=$(CLASSIFY_REPO_ROOT="$R32" bash "$SUT" --summary 2>&1); C32=$?
+if [[ "$C32" -eq 0 && "$O32" == *"nonnode=1 "* && "$O32" == *"substep=0 "* && "$O32" == *"undeclared=0 "* ]]; then
+  pass "a non-node sub_steps value is removed by the node filter first (nonnode=1 substep=0), never a crash"
+else
+  fail "non-node sub_steps value misbehaved — rc=$C32 out='$O32'"
+fi
+
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
 # guard-vacuity-floor.test.sh slices the floor plus its CONTIGUOUS assignments into
 # a mutant, and a binding 130 lines up is unbound there (measured: CONSTRUCTION, not
 # FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=28
+MIN_CASES=32
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

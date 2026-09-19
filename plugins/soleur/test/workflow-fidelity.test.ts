@@ -740,8 +740,10 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(pipelineInvocationSuffix("work", "grok")).not.toContain("/plan");
     expect(pipelineInvocationSuffix("ship", "grok")).toContain("/postmerge");
     expect(pipelineInvocationSuffix("ship", "grok")).not.toContain("/work");
-    // postmerge's successors collection is empty today and tomorrow, so the
-    // suffix is the load-bearing pin for the postmerge -> work back-edge.
+    // postmerge DECLARES `work` as of #8325, and mandatorySuccessors("postmerge")
+    // is still empty — which is the whole point of the permitted-vs-mandatory
+    // split. These two assert the ABSENCE of the back-edge from rendered prompt
+    // text: a legal transition must never render as a directive.
     expect(pipelineInvocationSuffix("postmerge", "grok")).toContain("Phase 7");
     expect(pipelineInvocationSuffix("postmerge", "grok")).not.toContain("/work");
   });
@@ -880,6 +882,26 @@ describe("declared-transitions derived view parity", () => {
 describe("DECLARED_SUB_STEPS invariants", () => {
   const nodes = Object.keys(DECLARED_TRANSITIONS);
 
+  // THE SET, not just its members. Every invariant below constrains the SHAPE
+  // of an entry; none of them says which entries exist, so a rule-legal
+  // addition (`plan: ["compound"]` — key is a node, value is a node, value is
+  // not a declared successor of its key) passed all of them while silently
+  // deleting every real `plan -> compound` pair from the classifier. Adding a
+  // sub-step is a semantic claim about a SKILL.md, so it must be made here.
+  test("DECLARED_SUB_STEPS is exactly the reviewed set", () => {
+    expect(DECLARED_SUB_STEPS).toEqual({ brainstorm: ["compound"] });
+  });
+
+  // Same gap one level up: the edge set's members are each pinned by toEqual,
+  // but nothing pinned which KEYS exist, so a mirrored `qa: ["ship"]` entered
+  // fully green (the budget-ceiling test only catches a name that is not
+  // already a ceiling row).
+  test("DECLARED_TRANSITIONS is exactly the seven lifecycle nodes", () => {
+    expect(Object.keys(DECLARED_TRANSITIONS).sort()).toEqual([
+      "brainstorm", "compound", "plan", "postmerge", "review", "ship", "work",
+    ]);
+  });
+
   test("every sub_steps key is a lifecycle node", () => {
     expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0);
     for (const node of Object.keys(DECLARED_SUB_STEPS)) {
@@ -888,7 +910,9 @@ describe("DECLARED_SUB_STEPS invariants", () => {
   });
 
   test("every sub_steps value is a lifecycle node — a non-node is removed by the classifier before the collapse, so the entry would be dead", () => {
-    expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0);
+    // Guard the collection this test actually LOOPS over: a key-count check
+    // leaves `{brainstorm: []}` as a zero-iteration quantifier.
+    expect(Object.values(DECLARED_SUB_STEPS).flat().length).toBeGreaterThan(0);
     for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
       for (const sub of subs) {
         expect(nodes.includes(sub), `sub_steps ${node} : ${sub} is not a lifecycle node`).toBe(true);
@@ -897,7 +921,7 @@ describe("DECLARED_SUB_STEPS invariants", () => {
   });
 
   test("a sub_steps value is not a declared successor of its key — the collapse would delete a declared pair", () => {
-    expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0);
+    expect(Object.values(DECLARED_SUB_STEPS).flat().length).toBeGreaterThan(0);
     for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
       for (const sub of subs) {
         expect(

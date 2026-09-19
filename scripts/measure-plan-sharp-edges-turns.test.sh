@@ -207,7 +207,17 @@ R=$(new_root c4); assert_fixture_dir "$R"; f="$R/sess-c4/sess.jsonl"; {
   rec_user_text          2026-09-18T11:00:02Z u-2 "operator quoting ADR-229: references/plan-sharp-edges.md is 58k tokens"
   i=2; while [[ $i -le 41 ]]; do
     case $i in
-      5)  rec_assistant_tool_use "2026-09-18T11:01:$(printf %02d $((i % 60)))Z" "req-$i" Bash "$(bash_of "cat > ${PLANS}2026-09-18-x-plan.md <<'EOF'")" ;;
+      # NOTE: this Bash fixture deliberately does NOT contain a literal heredoc
+      # opener. scripts/guard-vacuity-floor.test.sh detects heredoc bodies with
+      # an awk scanner that keys on a here-doc opener anywhere in a line (this
+      # comment must not spell one, or it trips the very detector it describes)
+      # -- an unterminated
+      # one inside a STRING made it treat every following line as heredoc body,
+      # which excluded this suite's own anti-vacuity floor and silently dropped
+      # the whole file from the meta-guard's population (NOT_IN_POPULATION, so
+      # the closure assertions were satisfied vacuously for it). Keep it
+      # heredoc-free; `k_first` only needs a Bash command naming a plans/ path.
+      5)  rec_assistant_tool_use "2026-09-18T11:01:$(printf %02d $((i % 60)))Z" "req-$i" Bash "$(bash_of "printf %s x > ${PLANS}2026-09-18-x-plan.md")" ;;
       31) rec_assistant_tool_use "2026-09-18T11:02:$(printf %02d $((i % 60)))Z" "req-$i" Edit "$(edit_of "/w/${PLANS}2026-09-18-x-plan.md" '## Acceptance Criteria')" ;;
       41) rec_assistant_tool_use "2026-09-18T11:03:$(printf %02d $((i % 60)))Z" "req-$i" Read "$(read_of "/base/$CAT")" ;;
       *)  rec_assistant_text     "2026-09-18T11:04:$(printf %02d $((i % 60)))Z" "req-$i" "turn $i" ;;
@@ -257,10 +267,20 @@ R=$(new_root "c6-$SENT"); assert_fixture_dir "$R"; mkdir -p "$R/sess-$SENT/subag
   rec_assistant_tool_use 2026-09-18T13:00:08Z "req-$SENT-6" Read "$(read_of "/$SENT/plugins/soleur/$CAT")"
 } | jq -c '.isSidechain = true' > "$R/sess-$SENT/subagents/agent-$SENT.jsonl"   # subagent records carry isSidechain: true
 ef="$TMP_ROOT/c6.err"
-OUT=$(MEASURE_TRANSCRIPT_ROOT="$R" SHELLOPTS=xtrace bash "$SUT" --rows 2>"$ef"); RC=$?; ERR=$(cat "$ef")
-if [[ "$RC" -eq 0 && "$(summary_of)" == *"runs=1 post=1 "* && "$(rows_of)" == "$(printf 'post\t5\t2\t3\t5')" ]] \
+# SHELLOPTS is READONLY: `SHELLOPTS=xtrace bash …` prints "readonly variable" to
+# the caller's stderr and the child runs WITHOUT xtrace, so that spelling tested
+# nothing. BASH_ENV is sourced by a non-interactive bash before the script runs,
+# which is the only vector that actually arms `set -x` in the SUT's own shell.
+xtrc="$TMP_ROOT/c6-xtrace.sh"; printf 'set -x\n' > "$xtrc"
+OUT=$(MEASURE_TRANSCRIPT_ROOT="$R" BASH_ENV="$xtrc" bash "$SUT" --rows 2>"$ef"); RC=$?; ERR=$(cat "$ef")
+# Positive control: the vector must actually be armed, or the arm is vacuous
+# again in a new spelling. A traced run of a `set +x`-less script emits `+ `.
+ctl="$TMP_ROOT/c6-ctl.sh"; printf 'echo hi\n' > "$ctl"
+CTL_ERR=$(BASH_ENV="$xtrc" bash "$ctl" 2>&1 >/dev/null)
+if [[ "$RC" -eq 0 && "$(summary_of)" == *"runs=1 post=1 "* && "$(rows_of)" == "$(printf 'post\t5\t2\t3\t5')" \
+      && "$CTL_ERR" == *"+ echo hi"* ]] \
    && assert_no_sentinel "$OUT" && assert_no_sentinel "$ERR"; then
-  pass "the sentinel planted in every parsed string field, the ids and the directory names never reaches stdout or stderr (xtrace inherited), while the run is parsed (runs=1)"
+  pass "the sentinel planted in every parsed string field, the ids and the directory names never reaches stdout or stderr under an ARMED inherited xtrace (BASH_ENV control fired), while the run is parsed (runs=1)"
 else
   fail "sentinel leaked or fixture unparsed — rc=$RC out='$OUT' err='$ERR'"
 fi
@@ -285,7 +305,7 @@ fi
 # --- 6c. the slug on stderr masks HOME ----------------------------------------
 H="$TMP_ROOT/fixture/$SENT-home"; mkdir -p "$H"
 ef="$TMP_ROOT/c6c.err"
-OUT=$(HOME="$H" MEASURE_PROJECT_PATH="$H/proj" bash "$SUT" 2>"$ef"); RC=$?; ERR=$(cat "$ef")
+OUT=$(env -u MEASURE_TRANSCRIPT_ROOT HOME="$H" MEASURE_PROJECT_PATH="$H/proj" bash "$SUT" 2>"$ef"); RC=$?; ERR=$(cat "$ef")
 if [[ "$RC" -eq 0 && "$ERR" == *"slug=HOME-proj "* && "$OUT" == *"null_reading=1"* ]] && assert_no_sentinel "$ERR" && assert_no_sentinel "$OUT"; then
   pass "stderr prints slug=HOME-proj, never the raw HOME slug"
 else
@@ -293,7 +313,7 @@ else
 fi
 
 # --- 7. null reading: no files, and files with no run -------------------------
-NULL_LINE='runs=0 post=0 post_skipped=0 pre=0 unknown=0 median_k=na p10_k=na p90_k=na saving_tokens_per_run=na median_k_first=na n_k_first=0 median_k_ac=na n_k_ac=0 window_from=na window_to=na files=0 parsed=0 dropped=0 null_reading=1'
+NULL_LINE='runs=0 post=0 post_skipped=0 pre=0 unknown=0 median_k=na p10_k=na p90_k=na saving_tokens_per_run=na median_k_first=na n_k_first=0 median_k_ac=na n_k_ac=0 window_from=na window_to=na files=0 parsed=0 dropped=0 unread=0 null_reading=1'
 E=$(new_root c7empty); rmdir "$E/sess-c7empty"
 run "$E"; A=$OUT; AE=$ERR; ARC=$RC
 R=$(new_root c7b); assert_fixture_dir "$R"; rec_user_text 2026-09-18T14:00:00Z u-1 'please run soleur:plan later' > "$R/sess-c7b/sess.jsonl"
@@ -460,7 +480,7 @@ fi
 R=$(new_root c16); assert_fixture_dir "$R"; f="$R/sess-c16/sess.jsonl"; fx_post_basic "$f"
 printf '{"type":"assistant","requestId":"req-9","time' >> "$f"
 run "$R" --rows
-if [[ "$RC" -eq 0 && "$(rows_of)" == "$(printf 'post\t2\t-1\t-1\t2')" && "$(summary_of)" == *"parsed=8 dropped=1"* ]]; then
+if [[ "$RC" -eq 0 && "$(rows_of)" == "$(printf 'post\t2\t-1\t-1\t2')" && "$(summary_of)" == *"parsed=8 dropped=1 unread=0"* ]]; then
   pass "one truncated line → dropped=1 and the run is still counted (parsed=8)"
 else
   fail "truncated line aborted the file — rc=$RC out='$OUT' err='$ERR'"
@@ -498,13 +518,76 @@ else
   fail "preamble/extracted decided across blocks or by contains — a='$A' b='$B'"
 fi
 
+# --- 19-20. review round (#8382) -----------------------------------------------
+
+# --- 19. a corpus that PARSES TO NOTHING is not an empty corpus ----------------
+# Every survivor failing to parse rendered as `null_reading=1 parsed=0`, which is
+# byte-identical to "this corpus genuinely holds no plan runs". The sibling
+# classifier refuses exactly this shape; the guard was not carried over.
+R=$(new_root c19); assert_fixture_dir "$R"
+# Carries the pre-filter literal (so it survives to the jq stage) but is not JSON
+# at any line, so the per-file program yields no rows at all.
+printf 'soleur:plan but not json at all\nstill not json\n' > "$R/sess-c19/sess.jsonl"
+run "$R"
+if [[ "$RC" -eq 2 && "$ERR" == *"parsed 0 record(s)"* && "$ERR" == *"not an absence of plan runs"* ]]; then
+  pass "a corpus where every survivor fails to parse exits 2, never a clean null_reading=1 parsed=0"
+else
+  fail "unreadable corpus read as empty — rc=$RC out='$OUT' err='$ERR'"
+fi
+
+# --- 20. a blank line is not a dropped record, and an unread file is counted ---
+# `grep -c .` counted NON-EMPTY lines; the first fix counted every line, so each
+# blank line became a fabricated drop — and `dropped=0` is the integrity signal
+# ADR-229 quotes this reading with.
+R=$(new_root c20); assert_fixture_dir "$R"
+fx_post_basic "$R/sess-c20/sess.jsonl"
+printf '\n\n\n' >> "$R/sess-c20/sess.jsonl"
+run "$R"
+if [[ "$RC" -eq 0 && "$(summary_of)" == *"parsed=8 dropped=0 unread=0"* ]]; then
+  pass "three trailing blank lines are not drops (parsed=8 dropped=0 unread=0)"
+else
+  fail "blank lines counted as drops — rc=$RC out='$OUT' err='$ERR'"
+fi
+
+# --- 21. an UNREADABLE survivor is counted, never silently better -------------
+# A survivor jq cannot open contributes to NEITHER parsed nor dropped, so before
+# `unread=` the integrity number IMPROVED when a file became unreadable. Skipped
+# as root, where chmod 000 is not a barrier and the case would be vacuous.
+if [[ $(id -u) -ne 0 ]]; then
+  R=$(new_root c21); assert_fixture_dir "$R"
+  fx_post_basic "$R/sess-c21/sess.jsonl"
+  cp "$R/sess-c21/sess.jsonl" "$R/sess-c21/locked.jsonl"
+  chmod 000 "$R/sess-c21/locked.jsonl"
+  run "$R"
+  chmod 644 "$R/sess-c21/locked.jsonl" 2>/dev/null || true
+  if [[ "$RC" -eq 0 && "$(summary_of)" == *"files=2 "* && "$(summary_of)" == *"unread=1"* && "$(summary_of)" == *"runs=1 "* ]]; then
+    pass "an unreadable survivor is reported as unread=1 (files=2), not silently absent from every counter"
+  else
+    fail "unreadable survivor invisible — rc=$RC out='$OUT' err='$ERR'"
+  fi
+
+  # And when EVERY survivor is unreadable, that is an unreadable corpus, not an
+  # absence of plan runs: parsed+dropped are both 0, so the read-but-parsed-zero
+  # guard above cannot see it.
+  R=$(new_root c21b); assert_fixture_dir "$R"
+  fx_post_basic "$R/sess-c21b/sess.jsonl"
+  chmod 000 "$R/sess-c21b/sess.jsonl"
+  run "$R"
+  chmod 644 "$R/sess-c21b/sess.jsonl" 2>/dev/null || true
+  if [[ "$RC" -eq 2 && "$ERR" == *"unreadable by the parser"* ]]; then
+    pass "every survivor unreadable exits 2, never a clean null reading"
+  else
+    fail "all-unread corpus read as empty — rc=$RC out='$OUT' err='$ERR'"
+  fi
+fi
+
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
 # guard-vacuity-floor.test.sh slices the floor plus its CONTIGUOUS assignments into
 # a mutant, and a binding far above is unbound there. The self-test above asserts
 # passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=17
+MIN_CASES=25
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

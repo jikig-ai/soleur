@@ -163,14 +163,18 @@ the base, which closes the rename escape.
   `postmerge → work`):** on the same machine, immediately before the change,
   `undeclared=622 sessions=1277 pairs=5026 nonnode=4019 read=10472 dropped=0`;
   immediately after, `undeclared=379 sessions=1264 pairs=4897 nonnode=4019
-  substep=129 read=10472 dropped=0`. Undeclared −243 (127 `brainstorm →
-  compound` and 111 `compound → plan` rows collapse, 7 `postmerge → work` rows
-  become declared, and the collapse exposes a handful of `brainstorm →
-  review`/`brainstorm → brainstorm`-class pairs that sat behind `compound`);
-  pairs −129 (= `substep`); `sessions` counts sessions that form at least one
-  pair, so the 13 sessions that were only `brainstorm compound` leave it.
-  `ship → plan` (50), `postmerge → plan` (31), `review → ship` (51) and
-  `plan → ship` (7) are unchanged.
+  substep=129 read=10472 dropped=0`. **Quote the DELTAS, not the absolutes:**
+  the log is append-only and rotates under other sessions, so every absolute
+  here is a snapshot that has already moved (a re-run hours later read 624→380,
+  pairs 5041→4911, substep 130). The deltas reproduce. Undeclared −243: 127
+  `brainstorm → compound` and 111 `compound → plan` rows collapse and 7
+  `postmerge → work` rows become declared, while the collapse EXPOSES a few
+  pairs that sat behind `compound` — measured `brainstorm → review` (3),
+  `brainstorm → work` (2), `brainstorm → ship` (1). Pairs −243 + 114 = −129,
+  i.e. exactly `substep`. `sessions` counts sessions forming at least one pair,
+  so the 13 that were only `brainstorm compound` leave it. `ship → plan` (50),
+  `postmerge → plan` (31), `review → ship` (51) and `plan → ship` (7) are
+  unchanged.
 - There is no follow-through probe. One was written, could not PASS where the
   sweeper runs (Alternatives table), and as an operator-run script was a
   wrapper around `classify --summary` restating this section's numbers — the
@@ -302,8 +306,10 @@ the base, which closes the rename escape.
   skill`, the slash-typed form starts a run while a tool_result or a mid-text
   quote does not, API-error records are not turns, windows end at the next
   run, `k = 0` is legal, percentiles, the exact null line, and a sentinel
-  planted in every parsed string field never reaching stdout or stderr under
-  inherited xtrace.
+  planted in every parsed string field never reaching stdout or stderr under an
+  ARMED inherited xtrace (via `BASH_ENV`, with a positive control that the
+  vector fired — the obvious `SHELLOPTS=xtrace` spelling is silently inert,
+  because `SHELLOPTS` is readonly and the child runs untraced).
 - `scripts/lint-skill-body-budget.test.sh` — 15 assertions including the
   same-diff ceiling raise, the unavailable base, the empty row set, a row for a
   sub-skill the FSM does not model, same-diff row removal, the rename escape

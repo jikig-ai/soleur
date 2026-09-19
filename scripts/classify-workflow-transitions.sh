@@ -72,12 +72,27 @@ if [[ ! -r "$VIEW" ]]; then
   echo "       runs only in a soleur source checkout. On such a checkout, restore it from git." >&2
   exit 2
 fi
+# FAIL CLOSED on a view without an OBJECT `transitions`. Readability was the
+# only thing checked, so `del(.transitions)` or `.transitions = null` reported
+# `undeclared=0 ... rc 0` -- a clean-looking zero over an empty edge set, which
+# is the silent-zero this script exists to refuse. (`[]` already errored, which
+# is how asymmetric the guard was.) Added #8325, alongside the `sub_steps` one
+# below, because adding the second check is what made the first one's absence
+# visible.
+if ! jq -e '.transitions | type == "object"' "$VIEW" >/dev/null 2>&1; then
+  echo "FATAL: declared view $VIEW carries no \`transitions\` object — stale or truncated mirror;" >&2
+  echo "       classifying against an empty edge set would report every transition as undeclared." >&2
+  exit 2
+fi
 # FAIL CLOSED on a view without an OBJECT `sub_steps` (#8325). A tolerant `// {}`
 # would silently reproduce the pre-collapse numbers on a stale mirror, and
 # `"sub_steps": null` or `[]` passes a bare has() check with the same silent
 # result -- so the type is asserted, not the presence.
-if ! jq -e '.sub_steps | type == "object"' "$VIEW" >/dev/null 2>&1; then
-  echo "FATAL: declared view $VIEW carries no \`sub_steps\` object — stale mirror; edit DECLARED_SUB_STEPS" >&2
+if ! jq -e '.sub_steps | type == "object"
+            and all(.[]; type == "array" and all(.[]; type == "string"))' "$VIEW" >/dev/null 2>&1; then
+  echo "FATAL: declared view $VIEW carries no \`sub_steps\` map of string arrays — stale mirror;" >&2
+  echo "       (a STRING value would pass a container-only check and then collapse by SUBSTRING match)" >&2
+  echo "       edit DECLARED_SUB_STEPS" >&2
   echo "       in plugins/soleur/lib/workflow-fidelity.ts first, then mirror it (ADR-229, amended #8325)." >&2
   exit 2
 fi
@@ -125,10 +140,17 @@ for d in "${ROOTS[@]}"; do
   # (plan in the archive, ship in the live file) report pairs=1 undeclared=0 --
   # and the corpus, and the followthrough's baseline with it, would have shrunk
   # silently at every rotation. Found at review by two independent seats.
+  # `-s` not `-f`, and `found=1` only once bytes actually landed: a 0-byte or
+  # non-gzip archive used to set found=1 with nothing appended, so `read=0` fell
+  # through every downstream guard and the run reported an empty report at rc 0
+  # with NO null-reading marker -- the exact failure case 8 pins for the live
+  # log, reachable through the archive limb the corpus was later widened to.
   for _gz in "$d"/.skill-invocations-*.jsonl.gz; do
-    [[ -f "$_gz" ]] || continue
+    [[ -s "$_gz" ]] || continue
+    _before=$(wc -c < "$MERGED" 2>/dev/null || echo 0)
     zcat -- "$_gz" >> "$MERGED" 2>/dev/null || true
-    found=1
+    _after=$(wc -c < "$MERGED" 2>/dev/null || echo 0)
+    [[ "$_after" -gt "$_before" ]] && found=1
   done
 done
 
@@ -180,7 +202,8 @@ read -r -d '' JQ <<'JQEOF' || true
   # `session_id != ""` as well as `!= null`: an empty string passes a null test
   # and would POOL every such record into one phantom session, fabricating pairs.
   | . as $raw
-  | map(select(.skill != null and .session_id != null and .session_id != "" and .ts != null))
+  | map(select((.skill | type) == "string" and (.session_id | type) == "string"
+               and .session_id != "" and (.ts | type) == "string"))
   | map(.t = .ts)
   # ltrimstr, not sub(): identical for a prefix strip and ~35% cheaper at 10x
   # volume (regex compiled per record).

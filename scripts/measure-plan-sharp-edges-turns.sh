@@ -11,7 +11,11 @@
 # measures it, offline, from the transcripts the harness already writes.
 #
 # WHAT IT NEVER DOES (ADR-179 d4; the transcripts are operator-private):
-#   - it lives under scripts/, never under plugins/ (nothing ships);
+#   - it lives under scripts/, never under plugins/ (nothing ships). ADR-179 d4
+#     rules rule-prune monorepo-only and names reason 1 as "independently
+#     dispositive": the area is monorepo-only because its INPUT CANNOT EXIST on
+#     a customer machine. That reason, not the rule-prune headline, is what
+#     transfers here -- a customer has no ~/.claude/projects/<this repo>;
 #   - it makes no network call and writes nothing to disk;
 #   - the parser READS more text than anything else here -- `k_ac` inspects
 #     tool_use `content`/`new_string` bodies -- so every field it touches is
@@ -20,13 +24,16 @@
 #     tokens only; stderr carries the slug (HOME-masked) and counts only. No
 #     message text, command, file content or transcript path is ever printed --
 #     every external command's stderr is redirected, a jq program error counts
-#     the whole file as dropped, and xtrace is switched off first thing so an
+#     the file in `unread=` (never in `dropped=`, which counts only lines a
+#     readable file failed to parse), and xtrace is switched off first thing so an
 #     inherited SHELLOPTS cannot trace a path.
 #
 # HOW A RUN IS READ.
 #   turn     = one API turn: assistant records grouped by `.requestId // .uuid`
 #              in FIRST-SEEN order (one turn is split across several records,
 #              one per content block); `isApiErrorMessage` records are not turns.
+#              The skill match is EXACT, not a prefix: `soleur:plan-review` is a
+#              different skill and must not start a run.
 #   run      = (a) a turn carrying a Skill tool_use with input.skill ==
 #              "soleur:plan" (several such blocks in one turn = one run), or
 #              (b) a user record whose text STARTS with <command-message> and
@@ -81,7 +88,7 @@ usage: measure-plan-sharp-edges-turns.sh [--rows]
            runs= post= post_skipped= pre= unknown=                       (runs by kind)
            median_k= p10_k= p90_k= saving_tokens_per_run=               (post runs only; na when post=0)
            median_k_first= n_k_first= median_k_ac= n_k_ac=              (pre runs; -1 in rows means absent)
-           window_from= window_to= files= parsed= dropped= [null_reading=1]
+           window_from= window_to= files= parsed= dropped= unread= [null_reading=1]
   --rows   before the summary, a header line '# kind<TAB>k<TAB>k_first<TAB>k_ac<TAB>turns_in_window' then one TSV row per run
 env: MEASURE_TRANSCRIPT_ROOT=<dir>  EXCLUSIVE override: read ONLY that tree, skip slug derivation; tests depend on that narrowing, never widen past it
      MEASURE_PROJECT_PATH=<path>    derive the slug from this path instead of the checkout's common dir (only ever slugified, never opened)
@@ -122,7 +129,9 @@ else
   fi
   slug=$(slugify "$main_path")
   home_slug=$(slugify "$HOME")
-  SLUG_LABEL="${slug/#$home_slug/HOME}"
+    # Quote the pattern (bash 4.3+): `${v/#pat/…}` treats pat as a GLOB, so this
+  # must not depend on slugify's charset staying metacharacter-free.
+  SLUG_LABEL="${slug/#"$home_slug"/HOME}"
   projects="$HOME/.claude/projects"
   add_root() { local d; for d in "${ROOTS[@]+"${ROOTS[@]}"}"; do [[ "$d" == "$1" ]] && return 0; done; [[ -d "$1" && -r "$1" ]] && ROOTS+=("$1"); return 0; }
   add_root "$projects/$slug"
@@ -137,7 +146,7 @@ else
   # unmatched glob would hand the literal pattern on under set -e).
   if [[ -d "$projects" ]]; then
     while IFS= read -r -d '' d; do add_root "$d"; done \
-      < <(find -- "$projects" -maxdepth 1 -type d -name "$slug--worktrees-*" -print0 2>/dev/null || true)
+      < <(find -P -- "$projects" -maxdepth 1 -type d -name "$slug--worktrees-*" -print0 2>/dev/null || true)
   fi
 fi
 
@@ -152,26 +161,36 @@ done
 files=${#FILES[@]}
 
 null_line() {
-  echo "runs=0 post=0 post_skipped=0 pre=0 unknown=0 median_k=na p10_k=na p90_k=na saving_tokens_per_run=na median_k_first=na n_k_first=0 median_k_ac=na n_k_ac=0 window_from=na window_to=na files=$files parsed=${1:-0} dropped=${2:-0} null_reading=1"
+  echo "runs=0 post=0 post_skipped=0 pre=0 unknown=0 median_k=na p10_k=na p90_k=na saving_tokens_per_run=na median_k_first=na n_k_first=0 median_k_ac=na n_k_ac=0 window_from=na window_to=na files=$files parsed=${1:-0} dropped=${2:-0} unread=${3:-0} null_reading=1"
 }
-null_reading() { # reason parsed dropped
+null_reading() { # reason parsed dropped unread
   echo "SOLEUR_PLAN_SHARP_EDGES_NO_PLAN_RUNS slug=$SLUG_LABEL files=$files reason=$1 — set MEASURE_TRANSCRIPT_ROOT=<dir> to point at a transcript tree, or MEASURE_PROJECT_PATH=<path> if the slug is wrong" >&2
   [[ "$ROWS" -eq 1 ]] && printf '# kind\tk\tk_first\tk_ac\tturns_in_window\n'
-  null_line "${2:-0}" "${3:-0}"
+  null_line "${2:-0}" "${3:-0}" "${4:-0}"
   exit 0
 }
 [[ "$files" -gt 0 ]] || null_reading no_files
 
 # Pre-filter in ONE process: a file with no `soleur:plan` bytes cannot hold a
-# run. This is a CORRECTNESS filter, not an optimisation -- measured on the live
-# corpus it removes 6 of 919 files (0.65%), because the available-skills listing
-# in every system prompt carries the literal. Survivors are a superset
-# (`soleur:plan-review`, quoted prose) costing one parse each.
+# run, since BOTH run-start forms require that literal. It is therefore a pure
+# OPTIMISATION -- removing it changes no output -- and a small one: measured on
+# the live corpus it removes 6 of 919 files (0.65%), because the available-skills
+# listing in every system prompt carries the literal. Kept because it is four
+# lines and bounds the jq fan-out; do not read it as a correctness gate.
+# Survivors are a superset (`soleur:plan-review`, quoted prose) costing one parse.
 # `-a` so an embedded NUL cannot flip grep into binary mode; `-Z` keeps the
 # path list NUL-framed and in the pipe, never on stdout.
+# A file the PRE-FILTER cannot read is dropped here, one stage before the parse,
+# and would otherwise vanish between `files=` and every other counter with no
+# signal at all -- the same "the integrity number gets BETTER" failure as an
+# unreadable survivor, one stage earlier. Count it in the same place.
+unread=0
+for _f in "${FILES[@]+"${FILES[@]}"}"; do
+  [[ -r "$_f" ]] || unread=$((unread + 1))
+done
 SURVIVORS=()
 while IFS= read -r -d '' f; do SURVIVORS+=("$f"); done \
-  < <(printf '%s\0' "${FILES[@]}" | xargs -0 -r grep -laFZ -- 'soleur:plan' 2>/dev/null || true)
+  < <({ printf '%s\0' "${FILES[@]}" | xargs -0 -r grep -laFZ -- 'soleur:plan'; } 2>/dev/null || true)
 
 # --- per-file parse -----------------------------------------------------------
 # One jq invocation per survivor so a window ends at EOF of its OWN file. The
@@ -235,7 +254,10 @@ read -r -d '' JQ <<'JQEOF' || true
         and (((.input.content | str) + (.input.new_string | str)) | contains("## Acceptance Criteria")));
     def first_ord($ts; f): ([ $ts[] | select(f) | .ord ] | if length > 0 then .[0] else null end);
     { parsed: $parsed,
-      lines: ($lines | length),
+      # NON-EMPTY lines, restoring the `grep -c .` semantics this replaced: a
+      # blank line is not an unparseable record, and `dropped=0` is the
+      # integrity signal this reading is quoted with.
+      lines: ([$lines[] | select(length > 0)] | length),
       runs: [ range(0; ($runs | length)) as $i
         | $runs[$i] as $run
         | (if $i + 1 < ($runs | length)
@@ -274,18 +296,49 @@ for f in "${SURVIVORS[@]+"${SURVIVORS[@]}"}"; do
   if out=$(jq -c -n -R --arg cat "$CATALOGUE_SUFFIX" --arg plans 'knowledge-base/project/plans/' "$JQ" < "$f" 2>/dev/null) \
      && [[ -n "$out" ]]; then
     ALL_ROWS+=("$out")
+  else
+    # jq could not read this survivor at all. It contributes to NEITHER counter,
+    # so without `unread=` the integrity number gets BETTER when a file becomes
+    # unreadable. A program error names the offending value, so it stays in
+    # /dev/null and only the count leaves.
+    unread=$((unread + 1))
   fi
 done
-# One join, never `ALL+=` per file: that is quadratic (~450 MB of hidden memcpy
-# at today's ~900 survivors, and the corpus grows with `cleanupPeriodDays`).
+# One join, never `ALL+=` per file: appending in the loop is quadratic. Measured
+# today: ~920 survivors emit ~36 KB of rows in total, so the worst case is ~17 MB
+# of hidden memcpy -- immaterial now, and it grows with the square of whatever
+# `cleanupPeriodDays` is set to, which is why the shape rather than the size.
 ALL=''
 if [[ ${#ALL_ROWS[@]} -gt 0 ]]; then
   ALL=$(printf '%s\n' "${ALL_ROWS[@]}")
-  read -r parsed dropped < <(printf '%s' "$ALL" | jq -s -r \
+  if ! read -r parsed dropped < <(printf '%s' "$ALL" | jq -s -r \
     '([.[] | .parsed] | add // 0) as $p | ([.[] | .lines] | add // 0) as $l
-     | "\($p) \($l - $p)"' 2>/dev/null || echo "0 0")
+     | "\($p) \($l - $p)"' 2>/dev/null); then
+    # `|| echo "0 0"` here fabricated the BEST-case integrity numbers and exited
+    # 0, which contradicts this script's own `2 = could not measure` contract.
+    echo "FATAL: could not total the per-file parse counts" >&2
+    exit 2
+  fi
 fi
-parsed=${parsed:-0}; dropped=${dropped:-0}
+# A CORPUS THAT PARSES TO NOTHING IS NOT AN EMPTY CORPUS. The sibling classifier
+# refuses exactly this ("read N line(s) and kept 0"); without it, every survivor
+# failing to parse renders as `null_reading=1 parsed=0`, indistinguishable from a
+# corpus that genuinely holds no plan runs.
+# Mirrors the sibling classifier's "read N line(s) and kept 0" refusal: lines
+# were READ and none became a record. `fromjson?` skips a bad line silently, so
+# a corpus of non-JSON parses "successfully" into zero records and would
+# otherwise render as `null_reading=1 parsed=0` -- byte-identical to a corpus
+# that genuinely holds no plan runs.
+if [[ $((parsed + dropped)) -gt 0 && "$parsed" -eq 0 ]]; then
+  echo "FATAL: read $((parsed + dropped)) line(s) across ${#SURVIVORS[@]} candidate transcript(s) and parsed 0 record(s)." >&2
+  echo "       This is an unreadable corpus, not an absence of plan runs." >&2
+  exit 2
+fi
+if [[ "$files" -gt 0 && "$unread" -eq "$files" ]]; then
+  echo "FATAL: all $files candidate transcript(s) were unreadable by the parser." >&2
+  echo "       This is an unreadable corpus, not an absence of plan runs." >&2
+  exit 2
+fi
 
 # --- summary ------------------------------------------------------------------
 read -r -d '' SUMJQ <<'SUMEOF' || true
@@ -314,21 +367,28 @@ read -r -d '' SUMJQ <<'SUMEOF' || true
       rows: [ $runs[] | [.kind, .k, .k_first, .k_ac, .tiw] | map(tostring) | join("\t") ] }
   | (if $rows == 1 then "# kind\tk\tk_first\tk_ac\tturns_in_window\n" + (.rows | map(. + "\n") | join("")) else "" end)
     + "runs=\(.runs) post=\(.post) post_skipped=\(.post_skipped) pre=\(.pre) unknown=\(.unknown) median_k=\(.median_k) p10_k=\(.p10_k) p90_k=\(.p90_k) saving_tokens_per_run=\(.saving) median_k_first=\(.median_k_first) n_k_first=\(.n_k_first) median_k_ac=\(.median_k_ac) n_k_ac=\(.n_k_ac) window_from=\(.window_from) window_to=\(.window_to)"
-    + " files=\($files) parsed=\($parsed) dropped=\($dropped)"
+    + " files=\($files) parsed=\($parsed) dropped=\($dropped) unread=\($unread)"
     + " unknown_count=\(.unknown)"
 SUMEOF
 
-runs_total=$(printf '%s' "$ALL" | jq -s '[ .[] | .runs | length ] | add // 0' 2>/dev/null || echo 0)
-[[ "${runs_total:-0}" -gt 0 ]] || null_reading no_runs "$parsed" "$dropped"
+if ! runs_total=$(printf '%s' "$ALL" | jq -s '[ .[] | .runs | length ] | add // 0' 2>/dev/null); then
+  echo "FATAL: could not total the per-file run counts" >&2
+  exit 2
+fi
+[[ "${runs_total:-0}" -gt 0 ]] || null_reading no_runs "$parsed" "$dropped" "$unread"
 
 result=$(printf '%s' "$ALL" | jq -s -r --argjson rows "$ROWS" --argjson tok "$CATALOGUE_TOKENS" \
-           --argjson files "$files" --argjson parsed "$parsed" --argjson dropped "$dropped" "$SUMJQ" 2>/dev/null) \
+           --argjson files "$files" --argjson parsed "$parsed" --argjson dropped "$dropped" \
+           --argjson unread "$unread" "$SUMJQ" 2>/dev/null) \
   || { echo "FATAL: could not summarise the parsed runs" >&2; exit 2; }
 # The trailing unknown_count token is a carrier for the stderr warning only;
 # the printed line is the contract's key set.
 unknown=${result##* unknown_count=}
 printf '%s\n' "${result% unknown_count=*}"
-if [[ "${unknown:-0}" -gt 0 ]]; then
+# `[[ x -gt 0 ]]` is an ARITHMETIC context, which expands array subscripts -- so
+# a non-numeric carrier would be evaluated, not compared. Gate on the shape.
+[[ "$unknown" =~ ^[0-9]+$ ]] || unknown=0
+if (( unknown > 0 )); then
   echo "WARNING: unknown=$unknown run(s) had no skill-body record between the invocation and the next assistant turn" >&2
 fi
 exit 0
