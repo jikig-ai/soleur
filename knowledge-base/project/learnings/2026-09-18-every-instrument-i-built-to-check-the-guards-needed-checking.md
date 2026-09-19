@@ -283,14 +283,19 @@ Three guards, plus two the review round added:
 
 ### Post-merge addendum (the ship of PR #8321, 2026-09-18 21:00 → 2026-09-19 05:04)
 
-27. **Eleven consecutive CI cycles were invalidated by a `main` commit landing mid-run.** Every
-    branch necessarily carries a regenerated `INDEX.md` (lefthook re-stages it on every commit)
-    that GitHub cannot merge textually, so any `main` commit makes the PR DIRTY; with sibling
-    sessions shipping on the same ~65-minute cadence, the window never closed. — Recovery: the
-    one vector I could remove, I removed — reset `rule-metrics.json` to `main`'s blob so the
-    branch carried no diff on it (the aggregator rebuilds from the jsonl + archives, so nothing
-    is lost); queued auto-merge early so the merge fires the instant checks go green; let the
-    Phase 7 BEHIND auto-sync do the rest. It merged on the thirteenth cycle. — **Prevention:**
+27. **`main` moved under the PR eleven times between the first ship push and the merge** —
+    measured as eleven first-parent sync merges on the branch, interleaved with seven own-fix
+    pushes for reds this branch genuinely owned. Every branch necessarily carries a regenerated
+    `INDEX.md` (lefthook re-stages it on every commit) that GitHub cannot merge textually, so
+    any `main` commit makes the PR DIRTY; with sibling sessions shipping on the same ~65-minute
+    cadence, the window kept closing. — Recovery: the one vector I could remove, I removed —
+    reset `rule-metrics.json` to `main`'s blob so the branch carried no diff on it (the
+    aggregator rebuilds from the jsonl + archives, so nothing is lost); queued auto-merge early
+    so the merge fires the instant checks go green; let the Phase 7 BEHIND auto-sync do the
+    rest. The first head that reached a full green set without `main` moving merged. An earlier
+    draft of this entry said "eleven consecutive cycles" and "the thirteenth cycle" from memory;
+    both were wrong in shape and were replaced by the count above before it was committed to
+    `main`. — **Prevention:**
     queue `--auto` as soon as the pre-ready gates pass, not after CI is green; carry no diff on
     regenerable aggregates the branch does not need to own; and accept that the admin hatch is
     correctly unavailable to a diff with real code and real overlap.
