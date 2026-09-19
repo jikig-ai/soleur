@@ -420,7 +420,7 @@ model {
   // ---- C4 L1 (System Context) — 18 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
   founder -> grokBuild "Runs /go (local plugin CLI)" { technology "Grok Build" }
-  grokBuild -> plugin "Loads via .grok/config.toml (GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT)" { technology "File I/O" }
+  grokBuild -> plugin "Loads via .grok/config.toml; the plugin root resolves from the loader-substituted ${CLAUDE_PLUGIN_ROOT} token first, then GROK_PLUGIN_ROOT (ADR-179 decision 11)" { technology "File I/O" }
 
   // Host resource control (ADR-161). The Hook Engine never writes a cgroup
   // directory itself; it asks the user's systemd manager to create the scope.

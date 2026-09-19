@@ -284,6 +284,7 @@
 2	plugins/soleur/test/fixture-env-adoption.test.sh
 1	plugins/soleur/test/fixture-relative-assert.test.sh
 2	plugins/soleur/test/git-fixture-env.mutation.sh
+2	plugins/soleur/test/go-session-gates.test.sh
 4	plugins/soleur/test/harvest-debt.test.sh
 3	plugins/soleur/test/hook-git-env-coverage.mutation.sh
 10	plugins/soleur/test/kb-index-check-guard-mutation.test.sh

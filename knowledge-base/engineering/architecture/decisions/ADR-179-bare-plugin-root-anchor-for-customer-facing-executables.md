@@ -4,14 +4,16 @@ status: accepted
 date: 2026-08-11
 amends: [ADR-093]
 related_adrs: [ADR-074, ADR-091, ADR-093, ADR-151, ADR-155, ADR-171]
-related: [7442, 7450, 6222, 7474, 7452, 7453, 7502]
+related: [7442, 7450, 6222, 7474, 7452, 7453, 7502, 8061, 8283, 8308]
 amended_by:
   - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
   - "#7450 (2026-08-12) — the skills secret-gate subset; decisions 8/9/10 and the §R1 settlement from the CTO ruling; then amendment items A10 (§R3 measured on the skill surface) and A11 (root-outside-worktree REJECTED); see ## Amendment — 2026-08-12"
+  - "#8308 (2026-09-19) — decision 11 (the dual-harness resolution ORDER for /soleur:go's three session gates) and amendment item A15 (${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT} rejected); see ## Amendment — 2026-09-19"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
   - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
   - knowledge-base/project/plans/2026-08-12-fix-git-root-fallback-untrusted-anchor-plan.md
+  - knowledge-base/project/plans/2026-09-19-fix-go-session-gates-plugin-root-resolution-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7442-sync-plugin-root-anchoring/tasks.md
   - knowledge-base/project/specs/archive/20260812-145032-feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
@@ -869,3 +871,132 @@ which this PR migrated to the bare quoted anchor at five sites: the `community-r
 plus four `*-setup.sh` operator instructions that were **bare repo-relative** — strictly worse than
 a `:-` arm, since a bare path is CWD-relative unconditionally. Those four were found by Test 24's
 invariant-keyed rewrite, not by review.
+
+## Amendment — 2026-09-19 (#8308): the dual-harness resolution ORDER, and the `:-` class's second member
+
+### Decision 11 — `/soleur:go`'s session gates resolve the plugin root in a fixed arm order
+
+**Context.** PR #8061 (commit `949872534`, 2026-09-12) rewrote `plugins/soleur/commands/go.md`'s
+three session-gate fences from the canonical braced token to
+`ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"`, to give Grok Build a runtime override. The
+inner `$CLAUDE_PLUGIN_ROOT` is unbraced and therefore **is not the loader's token**: the whole
+line reached bash verbatim and expanded empty in any session with neither variable exported —
+which is every local Claude Code session (§R3, A10). All three gates then took their degraded
+branch for a week, emitting only `reason=plugin-root-unverified`, while two CI guards pinned the
+broken literal and stayed green over it (#8308; #8283 §2 records the same symptom from a
+different session).
+
+**Measured before deciding** (#7450 `phase-1-measurement.md` §Arm 5, 2026-09-19, on the
+**command** surface, with a live decoy `CLAUDE_PLUGIN_ROOT` as the control on both runs):
+
+| Form as written | Claude Code | Grok Build 1.0.34 |
+| --- | --- | --- |
+| `${CLAUDE_PLUGIN_ROOT}` | SUBSTITUTED | SUBSTITUTED |
+| `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` | literal | literal |
+| `$CLAUDE_PLUGIN_ROOT` | literal | literal |
+| `'${CLAUDE_PLUGIN_ROOT}'` | SUBSTITUTED | SUBSTITUTED |
+
+**Decision.** Each of the three fences carries one byte-identical resolver with this arm order:
+
+1. `ROOT="${CLAUDE_PLUGIN_ROOT}"` → `SRC=plugin-root-token`. On a substituting harness this is a
+   literal the loader fixes **before bash runs**, so no environment value can direct it — the
+   property §R3/A10 established and the one ground 1 of A11 relies on. On a read-from-disk
+   surface (Codex, Devin CLI) it is an ordinary variable those harnesses' `INSTRUCTIONS.md`
+   §"Paths and entry points" tell the agent to set.
+2. `GROK_PLUGIN_ROOT`, when arm 1 produced nothing → `SRC=grok-env`.
+3. Both documented Devin caches (`$HOME/.local/share/devin/cli/plugins/cache`,
+   `/opt/.devin/plugins`), `[ -d ]`-gated and identity-selected → `SRC=devin-cache`.
+   **Step 0.5 only** (see confinement below).
+
+Never a CWD default, in any arm (#7442, and option (d) above).
+
+**Restated, because this decision qualifies it — the option-(a) failure-mode table, with the
+#8061 form added as a row rather than appended to a different table:**
+
+| Form | Expands to (both variables unset) | Failure mode |
+| --- | --- | --- |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/…` | the substituted installed root, or `/scripts/…` | correct root, or root-anchored and nonexistent → the preflight refuses |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/…` | `./plugins/soleur/…` | resolves into the customer's tree → **fail-open, executes their file** |
+| `${CLAUDE_PLUGIN_ROOT:?msg}/…` | — | exit 127 |
+| `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/…` | **`/…`** | **not the loader's token; reaches bash verbatim, expands EMPTY, and the guard `[ -n "$ROOT" ]` then takes the degraded branch on every session — fail-CLOSED on the safety axis and fail-OPEN on the "did the gate run" axis** |
+
+The last row is why #8308 is not #7453 in reverse. #7453 migrates skill sites whose `:-` default
+executes the customer's file; this form never executes anything. It makes a session-start gate a
+silent no-op, which is the failure ADR-177 names UNRESOLVED and which nothing alarmed on.
+
+**Arms 2 and 3 promote the identity preflight to the SOLE control, which A11 declined to do.**
+On arm 1 the security claim is carried by the loader. On arms 2 and 3 the root comes from a
+runtime value, so the only thing standing between the gate and an attacker-chosen directory is
+`plugin.json` naming `soleur` — a **shape check, not authentication**: a planted directory
+containing `{"name":"soleur"}` passes byte-for-byte, exactly as A11 recorded when it rejected the
+stronger root-outside-worktree assertion and kept the preflight as defence-in-depth. This is
+stated rather than implied, and `go-session-gates.test.sh` row **R6b is a MUST-PASS row that
+asserts the limitation**: a decoy manifest claiming `soleur` is accepted and its payload runs. If
+R6b ever goes red, someone has added the trust assertion A11 rejected, and A11 must be superseded
+before that row is changed.
+
+**Why arm 3 is confined to Step 0.5.** Step 0 dispatches `worktree-manager.sh cleanup-merged`.
+For a merged branch with **no** worktree, every one of that script's safety guards is gated on a
+non-empty worktree path and is therefore skipped, while the loop still reaches
+`git push origin --delete`, `git branch -D` and `git -C "$GIT_ROOT" reset --hard HEAD`; ADR-178
+§Context calls the operation unrecoverable. Putting the cache arms in the shared resolver would
+make that gate newly reachable on a harness where it has always skipped. Step 0.5 only
+classifies the session and Step 0.0 only probes readiness (and already answers correctly through
+its inline `git rev-parse` fallback), so the cache arms buy cloud-mode classification — what
+Devin sessions actually need — at no blast radius. Extending Step 0 to Devin cloud is filed,
+explicitly gated on the script-side fix.
+
+**Step 0 additionally gates on the SESSION CLASS, in its own fence.** Bash carries no state
+between fences (see §"Why the axes stay separate" item 3), so Step 0.5's verdict is unavailable
+to Step 0. Step 0 therefore runs `cloud-detect.sh` from its own verified root and dispatches only
+on `local` or `not-local:no-devin-env`; any other verdict emits
+`SOLEUR_SESSION_START_SKIPPED reason=cloud-session` — a new *reason value* on an existing marker
+name. This is keyed on the session classifier and **not** on `SRC`: a Devin agent following its
+own `INSTRUCTIONS.md` resolves as `plugin-root-token`, so an `SRC != devin-cache` test would
+never fire.
+
+**Grok precedence changes, deliberately.** Today `GROK_PLUGIN_ROOT` wins unconditionally. Under
+arm order 1→2 it is never consulted on a Grok session where the token substitutes — and Arm 5
+measured that it does. Arm 2 remains reachable for a read-from-disk Grok path. The A11 Grok
+residual is restated as open, not closed.
+
+**Codex divergence, recorded rather than papered over.** `codex/INSTRUCTIONS.md` says never to
+search another harness's cache. The `[ -d ]` gate means a Codex-only box searches nothing; on a
+box carrying both installs, arm 3 is reached only when arms 1–2 produced nothing (i.e. the Codex
+agent did not follow its own INSTRUCTIONS) and returns an identity-verified **Soleur** plugin —
+the same plugin, not another harness's.
+
+**A recorded inconsistency.** The 74-file `soleur-cloud-mode` fleet block resolves the same Devin
+cloud cache **by basename, with no `name=soleur` check**. go.md's arm 3 is now stricter than the
+fleet block it resembles. Filed rather than fixed here: widening 74 files is a different change
+with a different guard (`devin-cloud-mode.test.ts`).
+
+**Marker vocabulary.** Each fence emits exactly one
+`SOLEUR_PLUGIN_ROOT_RESOLVE gate=<readiness|cloud-detect|session-start> source=<plugin-root-token|grok-env|devin-cache|none> verified=<true|false>`
+line before it branches. It deliberately carries **no path**: interpolating `$ROOT` would put
+filesystem paths into telemetry, and `go-session-gates.test.sh` R9 asserts their absence. The
+existing `SOLEUR_GIT_REPO_DIAG` / `SOLEUR_CLOUD_DETECT_SKIPPED` / `SOLEUR_SESSION_START_SKIPPED`
+strings are unchanged byte-for-byte, because `plugin-root-anchoring.test.ts` P8 and the hosted
+`WEDGE_RE` lookahead discriminate on them.
+
+**Consequence for the fences themselves:** `set -e`, `set -u` and `set -o pipefail` are FORBIDDEN
+in all three. Line 1 is deliberately an unguarded expansion so it stays the exact token, and `-u`
+would abort before any marker printed — reintroducing the silent-skip class by a second route.
+
+### Amendment item A15 — `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` is a rejected form of the `:-` class
+
+A10 recorded that the loader's transform is exact-literal on the skill surface; Arm 5 extends that
+to the command surface and to two further forms. A15 names the specific shape #8061 introduced so
+the enumeration is not syntax-blind in the way ruling item 2 and A13 both exist to prevent:
+
+- **Rejected:** `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}`, and any `${<OTHER>:-$CLAUDE_PLUGIN_ROOT}`.
+  The inner reference is unbraced, so it is not the token; the construct is a `:-` default whose
+  *fallback* is the thing that was supposed to be the anchor.
+- **Rejected:** bare `$CLAUDE_PLUGIN_ROOT` anywhere in `plugins/soleur/commands/`, for the same
+  reason. Guarded by `plugin-root-anchoring.test.ts` P1b, whole-file over `commandFiles()`.
+- **Viable but NOT adopted:** `'${CLAUDE_PLUGIN_ROOT}'` — Arm 5 measured that the loader
+  substitutes inside single quotes on both harnesses. Recorded so a future reader does not
+  re-measure it; not switched to, because the unquoted braced token is already canonical
+  everywhere else and a second sanctioned spelling is a guard-surface cost for no gain.
+- **A11's Grok residual stays OPEN.** Arm 2 is a runtime variable with no loader carrier, and the
+  identity preflight is a shape check. Decision 11 states this rather than resolving it.
