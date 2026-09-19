@@ -93,12 +93,6 @@ const ALLOWLIST: readonly Waiver[] = [
     reason:
       "Test-fixture template: an illustrative WORKING DIRECTORY inside a synthesized prompt that mirrors the one-shot subagent shape. Input data under test, not a prescribed scratch path.",
   },
-  {
-    file: "skills/plan/SKILL.md",
-    text: "/tmp/.doppler",
-    reason:
-      "Incident prose (#6536): names doppler's own real cache dir as the diagnosed root cause (the heartbeat unit lacked PrivateTmp=true). Documents a system path, does not prescribe writing scratch there.",
-  },
   // The agent-browser CLI uses a fixed /tmp/agent-browser/ cache dir of its own; these two
   // sites are the documented command to CLEAR that stale cache, not a scratch path this
   // guidance invents. The path is the tool's, unfixable from a SKILL.md.
