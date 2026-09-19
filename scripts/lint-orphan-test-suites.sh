@@ -654,8 +654,14 @@ else
   # under-counted: `[A-Z_]+` missed the array whose name carries a digit, and an explicit two-shape
   # alternation still missed `"${NAME[@]:-}"`. Every miss is the same failure -- `want` drops, so a
   # SHORTER registry satisfies the floor and the unseen gate is the one that rots.
+  # `_AC_EDGES` is excluded by NAME, not by shape (#8322): the affected-mode
+  # classifier resolves each registration's edges into that scratch array and
+  # calls `_diff_touches` on it — a SELECTION test, not a relevance gate, and
+  # not a declaration site. Counting it would inflate `want` past
+  # RELEVANCE_ARRAYS and red the floor on a gate that does not exist.
   want=$(sed 's/[[:space:]]*#.*$//' "$RUNNER" \
-         | grep -cE '_diff_touches +[^#]*\$\{[A-Z0-9_]+\[@\]') || {
+         | grep -E '_diff_touches +[^#]*\$\{[A-Z0-9_]+\[@\]' \
+         | grep -cvF '${_AC_EDGES[@') || {
     grep_rc=$?
     if (( grep_rc > 1 )); then
       echo "ERROR: could not read ${RUNNER} to count _diff_touches gates (grep exit ${grep_rc}) -- the dispatch floor could not be derived, so it is not evidence about anything." >&2
@@ -814,6 +820,242 @@ done
 if (( cmd_seen < 1 )); then
   echo "ERROR: tests/commands/ matched zero suites -- the glob is broken, so this check certified nothing" >&2
   fails=$((fails + 1))
+fi
+
+# --- Affected-set census (#8322) ------------------------------------------------
+# test-all.sh's affected gate (the local default) classifies every registration
+# as ALWAYS_ON (verdict is a property of the whole tree), EDGE (verdict is a
+# property of declared/derived paths), or UNCLASSIFIED -- which runs anyway,
+# fail-safe, but means the edge index failed to see a suite. This block makes
+# unclassified a RED, because the silent version of it is the false-green this
+# file exists to prevent: a suite that never selects on the diffs that matter
+# is a suite that gates nothing.
+#
+# Same discipline as the rest of this file: ask the producer, never re-parse it.
+# The classification is read from `test-all.sh --print-affected-set` receipts,
+# NOT recomputed here -- a second classifier would certify its own drift.
+AFF_LIB="$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+if [[ ! -f "$AFF_LIB" ]]; then
+  echo "ERROR: $AFF_LIB is missing -- test-all.sh degrades to full without it, so no classification is trustworthy." >&2
+  fails=$((fails + 1))
+else
+  # shellcheck source=scripts/lib/test-affected-paths.sh
+  source "$AFF_LIB"
+
+  # The live registration stream. Same env-scrubbing as the --print-suite-globs
+  # call above and for the same reasons: this runs INSIDE test-all.sh as a
+  # registered suite, so an inherited TEST_GROUP/SCRIPTS_SHARD would change what
+  # the child enumerates, and the session-state handler must never serialize on
+  # the advisory lock this process's own parent holds.
+  aff_enum_rc=0
+  env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --enumerate-commands > "$WORK/aff_enum" 2>/dev/null || aff_enum_rc=$?
+  awk -F'\t' '$1=="SUITE_COMMAND"{print $2}' "$WORK/aff_enum" \
+    | LC_ALL=C sort -u > "$WORK/aff_runnable"
+  # ALL registrations — runnable AND declined. Relevance-declined suites emit
+  # SUITE_COMMAND_DECLINED on this diff; a staleness check that only read the
+  # runnable stream would report every relevance-gated suite as de-registered
+  # on exactly the diffs that decline it.
+  awk -F'\t' '$1=="SUITE_COMMAND" || $1=="SUITE_COMMAND_DECLINED"{print $2}' "$WORK/aff_enum" \
+    | LC_ALL=C sort -u > "$WORK/aff_labels"
+  aff_label_n=$(wc -l < "$WORK/aff_labels" | tr -d ' ')
+  if (( aff_enum_rc != 0 )) || (( aff_label_n < 1 )); then
+    echo "ERROR: 'bash scripts/test-all.sh --enumerate-commands' exited ${aff_enum_rc} and emitted ${aff_label_n} registrations -- the census cannot derive the live floor, so every check below would certify a subset." >&2
+    fails=$((fails + 1))
+  fi
+
+  # ALWAYS_ON VACUITY. An emptied list makes every membership check below pass
+  # vacuously while every suite falls through to edge-derivation — including the
+  # corpus scanners that derivation can never reach.
+  if [[ "${#ALWAYS_ON_SUITES[@]}" -eq 0 ]]; then
+    echo "ERROR: ALWAYS_ON_SUITES is EMPTY -- every always-on check passes vacuously while the repo-global scanners silently become edge-derived." >&2
+    fails=$((fails + 1))
+  fi
+
+  # THE *-live FLOOR, DERIVED LIVE. The live-scanner class is the irreducible
+  # core of always-on; its size is read from the registration stream, not
+  # hand-ratcheted, because the estimate in the plan (~24) already drifted to 30
+  # before this file existed. A label carrying a hyphenated `live` or `liveness`
+  # is a live-corpus scanner by the repo's naming convention and MUST
+  # be always-on: its verdict is a property of the live corpus, and any
+  # file-based edge will eventually decline it on a diff that changed the code
+  # it scans. `live` is matched as a hyphenated/standalone word — a bare
+  # substring match flags `deLIVEry`, `redeLIVEr`, and `fideLITy`-adjacent
+  # names that have nothing to do with live infrastructure. `liveness` stands
+  # alone because it carries no `live` word boundary (`-liveness-`).
+  live_floor=$(LC_ALL=C grep -cE '(^|[^a-zA-Z])live([^a-zA-Z]|$)|liveness' "$WORK/aff_labels") || live_floor=0
+  if (( ${#ALWAYS_ON_SUITES[@]} < live_floor )); then
+    echo "ERROR: ALWAYS_ON_SUITES has ${#ALWAYS_ON_SUITES[@]} entries but the live registration stream carries ${live_floor} live-scanner labels -- the always-on set is smaller than the class it must contain." >&2
+    fails=$((fails + 1))
+  fi
+  while IFS= read -r live_label; do
+    [[ -n "$live_label" ]] || continue
+    found=""
+    for a in ${ALWAYS_ON_SUITES[@]+"${ALWAYS_ON_SUITES[@]}"}; do
+      [[ "$a" == "$live_label" ]] && { found=1; break; }
+    done
+    if [[ -z "$found" ]]; then
+      # A live-named suite may also carry a DECLARED edge — the liveness
+      # mutation batteries name the gate they mutate but their verdict is
+      # scoped to the battery paths. What this check refuses is a live-named
+      # suite with ONLY a derived edge: derivation attaches a self-edge to a
+      # corpus scanner, which then declines on the diffs that drift the corpus.
+      for entry in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do
+        [[ "${entry%%|*}" == "$live_label" ]] && { found=1; break; }
+      done
+    fi
+    if [[ -z "$found" ]]; then
+      live_arr="AFFECTED_$(printf '%s' "$live_label" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9' '_' | sed 's/^_//')_PATHS"
+      declare -p "$live_arr" >/dev/null 2>&1 && found=1
+    fi
+    if [[ -z "$found" ]]; then
+      echo "ERROR: live-scanner registration '${live_label}' has no declared classification -- add it to ALWAYS_ON_SUITES (corpus scanner) or declare an AFFECTED_*_PATHS edge (a battery named for the live gate it mutates). A derived self-edge is not enough: it declines on the corpus-drift diffs the name says it guards." >&2
+      fails=$((fails + 1))
+    fi
+  done < <(LC_ALL=C grep -E '(^|[^a-zA-Z])live([^a-zA-Z]|$)|liveness' "$WORK/aff_labels")
+
+  # ALWAYS_ON STALENESS. Every entry must still be a live registration — the
+  # same check EXCLUSIONS runs on its keys, for the same reason: a stale entry
+  # masks nothing while reading as a deliberate classification, and survives
+  # the rename it was written for.
+  for a in ${ALWAYS_ON_SUITES[@]+"${ALWAYS_ON_SUITES[@]}"}; do
+    if ! LC_ALL=C grep -qxF -- "$a" "$WORK/aff_labels"; then
+      echo "ERROR: ALWAYS_ON_SUITES entry '${a}' is not a live registration -- either the label was renamed (update the entry) or the suite is gone (delete it). A stale entry is a false statement in the classification index." >&2
+      fails=$((fails + 1))
+    fi
+  done
+
+  # CONSUMED EDGE SETS. Each entry maps a label to an edge array owned by
+  # test-relevance-paths.sh — the diff that makes the suite relevant IS the diff
+  # that selects it. The label must be a live registration and the array must
+  # exist and be non-empty (the relevance block above already checks element
+  # floors and path resolution; this checks the wiring).
+  for entry in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do
+    c_label="${entry%%|*}"
+    c_arr="${entry#*|}"
+    if ! LC_ALL=C grep -qxF -- "$c_label" "$WORK/aff_labels"; then
+      echo "ERROR: AFFECTED_CONSUMED_EDGES names label '${c_label}', which is not a live registration -- the mapping is stale or the suite was de-registered without updating the edge index." >&2
+      fails=$((fails + 1))
+    fi
+    if ! declare -p "$c_arr" >/dev/null 2>&1; then
+      echo "ERROR: AFFECTED_CONSUMED_EDGES maps '${c_label}' to array ${c_arr}, which is not declared -- the suite's edge set silently vanished." >&2
+      fails=$((fails + 1))
+      continue
+    fi
+    eval "c_elems=( \${${c_arr}[@]+\"\${${c_arr}[@]}\"} )"
+    # shellcheck disable=SC2154  # c_elems assigned by the eval above
+    if [[ "${#c_elems[@]}" -eq 0 ]]; then
+      echo "ERROR: consumed edge array ${c_arr} (label '${c_label}') is EMPTY -- the suite has no declared diff and can never be selected." >&2
+      fails=$((fails + 1))
+    fi
+  done
+
+  # DECLARED EDGE ARRAYS. Every AFFECTED_*_PATHS array in the lib must be
+  # non-empty and resolve: a trailing-"/" entry is a directory prefix and must
+  # exist as a directory; anything else must be a tracked file — same doctrine
+  # as the relevance arrays' "each declared path must still exist in the tree".
+  while IFS= read -r aff_arr; do
+    [[ "$aff_arr" == "AFFECTED_CONSUMED_EDGES" ]] && continue
+    eval "aff_elems=( \${${aff_arr}[@]+\"\${${aff_arr}[@]}\"} )"
+    # shellcheck disable=SC2154  # aff_elems assigned by the eval above
+    if [[ "${#aff_elems[@]}" -eq 0 ]]; then
+      echo "ERROR: declared edge array ${aff_arr} is EMPTY -- an empty edge set can never select its suite." >&2
+      fails=$((fails + 1))
+      continue
+    fi
+    for p in "${aff_elems[@]}"; do
+      if [[ "$p" == */ ]]; then
+        [[ -d "$REPO_ROOT/$p" ]] || {
+          echo "ERROR: ${aff_arr} declares directory prefix '${p}', which does not exist -- a dead edge can never match a diff." >&2
+          fails=$((fails + 1))
+        }
+      elif ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+        echo "ERROR: ${aff_arr} declares '${p}', which is not a tracked file -- a dead edge can never match a diff." >&2
+        fails=$((fails + 1))
+      fi
+    done
+    # Self-inclusion: an array that cannot see edits to the edge index itself
+    # ships a narrowed selection unexercised — same argument as the relevance
+    # arrays' scripts/lib/test-relevance-paths.sh check.
+    lib_ok=""
+    for p in "${aff_elems[@]}"; do
+      [[ "$p" == "scripts/lib/test-affected-paths.sh" ]] && lib_ok=1
+    done
+    if [[ -z "$lib_ok" ]]; then
+      echo "ERROR: ${aff_arr} does not contain 'scripts/lib/test-affected-paths.sh' -- a commit editing only the edge data would not select the suite it could blind." >&2
+      fails=$((fails + 1))
+    fi
+  done < <(declare -p | LC_ALL=C grep -oE 'declare -[a-zA-Z]* AFFECTED_[A-Z0-9_]+' | awk '{print $3}')
+
+  # REPO-WIDE-IDIOM ARM. A suite whose own source walks a corpus — unscoped
+  # `git ls-files`, `find .`, a repo-root find, or a recursive grep — has a
+  # verdict that is not localizable to a hand of files. Such a suite must be
+  # ALWAYS_ON, carry a DECLARED edge set (an explicit statement that its scan
+  # is scoped to those paths), or be consumed-edge mapped. Derivation alone is
+  # not enough: it can attach a narrow self-edge to a whole-tree scanner and
+  # the suite declines on exactly the diffs it guards.
+  while IFS= read -r line; do
+    i_label="${line%%$'\t'*}"
+    i_rest="${line#*$'\t'}"
+    i_file=""
+    IFS=$'\t' read -ra i_argv <<< "$i_rest"
+    for tok in "${i_argv[@]}"; do
+      tok="${tok%\"}"; tok="${tok#\"}"; tok="${tok%\'}"; tok="${tok#\'}"
+      case "$tok" in
+        *.test.sh|*.test.ts|test-*.sh|test_*.sh)
+          [[ -f "$REPO_ROOT/$tok" ]] && { i_file="$tok"; break; } ;;
+      esac
+    done
+    [[ -z "$i_file" ]] && continue
+    if grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]"]+[[:space:]]+)?ls-files|find[[:space:]]+["'"'"']?\.([[:space:]]|$)|find[[:space:]]+"?\$\{?REPO_ROOT|grep[[:space:]]+(-[[:alnum:]]*[rR][[:alnum:]]*[[:space:]]|--recursive)' "$REPO_ROOT/$i_file" 2>/dev/null; then
+      i_class=""
+      for a in ${ALWAYS_ON_SUITES[@]+"${ALWAYS_ON_SUITES[@]}"}; do
+        [[ "$a" == "$i_label" ]] && { i_class="always-on"; break; }
+      done
+      if [[ -z "$i_class" ]]; then
+        for entry in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do
+          [[ "${entry%%|*}" == "$i_label" ]] && { i_class="consumed"; break; }
+        done
+      fi
+      if [[ -z "$i_class" ]]; then
+        i_arr="AFFECTED_$(printf '%s' "$i_label" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9' '_' | sed 's/^_//')_PATHS"
+        declare -p "$i_arr" >/dev/null 2>&1 && i_class="declared"
+      fi
+      if [[ -z "$i_class" ]]; then
+        echo "ERROR: '${i_label}' (${i_file}) walks a corpus (unscoped git ls-files / find . / recursive grep) but has NO declared classification -- if its scan is the whole tree it belongs in ALWAYS_ON_SUITES; if scoped, declare AFFECTED_*_PATHS naming that scope." >&2
+        fails=$((fails + 1))
+      fi
+    fi
+  done < <(awk -F'\t' '$1=="SUITE_COMMAND"{print $2"\t"$0}' "$WORK/aff_enum")
+
+  # CLASSIFICATION RECEIPTS. `--print-affected-set` is enumerate-shaped: it
+  # walks every registration and prints AFFECTED_CLASS<TAB>label<TAB>class.
+  # Fail-closed if the flag is gone (same contract as --print-suite-globs); RED
+  # on any runnable registration the runner could not classify.
+  aff_set_rc=0
+  env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+    bash "$RUNNER" --affected --print-affected-set > "$WORK/aff_set" 2>/dev/null || aff_set_rc=$?
+  if (( aff_set_rc != 0 )); then
+    echo "ERROR: 'bash scripts/test-all.sh --affected --print-affected-set' exited ${aff_set_rc} -- the census derives classification from that flag's receipts; without them every check below is vacuous. Restore the flag rather than re-deriving here." >&2
+    fails=$((fails + 1))
+  else
+    awk -F'\t' '$1=="AFFECTED_CLASS"{print $2"\t"$3}' "$WORK/aff_set" \
+      | LC_ALL=C sort -u > "$WORK/aff_receipts"
+    while IFS= read -r r_label; do
+      [[ -n "$r_label" ]] || continue
+      r_class=$(awk -F'\t' -v l="$r_label" '$1==l{print $2}' "$WORK/aff_receipts" | head -1)
+      if [[ -z "$r_class" ]]; then
+        echo "ERROR: registration '${r_label}' has no AFFECTED_CLASS receipt -- the print-affected-set walk stopped reaching it, so its classification is unknown." >&2
+        fails=$((fails + 1))
+      elif [[ "$r_class" == "unclassified" ]]; then
+        echo "ERROR: registration '${r_label}' is UNCLASSIFIED -- it runs fail-safe today, but no edge, always-on, or group rule names it. Add it to ALWAYS_ON_SUITES, declare an AFFECTED_*_PATHS edge, or accept the derivation channel that should have reached it." >&2
+        fails=$((fails + 1))
+      fi
+    # Runnable only: a relevance-declined suite never reaches the chokepoint, so
+    # it emits no receipt by design — its classification lives in
+    # AFFECTED_CONSUMED_EDGES and is checked there.
+    done < "$WORK/aff_runnable"
+  fi
 fi
 
 if (( fails > 0 )); then
