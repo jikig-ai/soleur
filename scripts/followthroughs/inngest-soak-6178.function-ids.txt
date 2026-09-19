@@ -25,7 +25,7 @@
 # rc=2 NOT YET, registry 70/70, per-slice total_count s1=374 s2=125 s3=114 s4=113 s5=112,
 # 838 distinct runs, active_fns=30, explained=2 (the 09-17 triples), UNEXPLAINED=0. That is the
 # day-7 feasibility evidence: the heaviest slice forecasts ≈ 374 × 7 / 3.7 ≈ 710 runs ≈ 8 pages
-# against the host's ~14-page cap.
+# against the host's 18-page / 1800-run feasibility gate.
 26e6836b-97ad-503f-8b08-490d8a2f4ce8
 2e625d3c-0207-569f-b10b-567bc685ad5e
 11bb44a3-ae8d-57b0-8d41-e76e57f0277a

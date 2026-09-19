@@ -44,7 +44,7 @@
 # (apps/web-platform/infra/hooks.json.tmpl), so the window is open-topped and the ONLY cost
 # lever is the POPULATION: the 52 ids are dealt round-robin into 5 slices of ≤ 11 from a
 # density-sorted file (inngest-soak-6178.function-ids.txt — the sort IS the balancing lever) so
-# no slice approaches the host's ~14-page / 90 s cap. A registry GET first pins the registry at
+# no slice approaches the host's 18-page / 1800-run feasibility gate (90 s ÷ 5 s/page × 100). A registry GET first pins the registry at
 # REGISTRY_COUNT and requires population ⊆ registry, so a cron registered after 09-15 refuses
 # (registry_drift) rather than reading clean.
 #
@@ -128,6 +128,7 @@ SLICE_MAX=11
 POPULATION_SIZE=52
 REGISTRY_COUNT=70
 RUN_FLOOR=800                       # half the day-3.6 count (826); a hole that lost > half the window
+PROBE_BUDGET_S=420                  # wall-clock cap for the slice loop: the sweeper's job is 15 min for ALL probes
 EXPLAINED='[{"functionID":"26e6836b-97ad-503f-8b08-490d8a2f4ce8","bucket":1491374,"count":4},{"functionID":"2e625d3c-0207-569f-b10b-567bc685ad5e","bucket":1491374,"count":2}]'
 EXPLAINED_WHY='2026-09-17T12:40–13:00Z catch-up after the 76-minute no-scheduler window (PR #8252, op=resume run 35223389582): cron-ghcr-token-minter (`*/20`) ×4 and cron-anthropic-credit-probe (`47 * * * *`) ×2 = exactly the ticks each missed, each fired once on resume — one scheduler draining its backlog, not two schedulers; recorded on #6178 comment 5738682595'
 SNAPSHOTS='398857857, 406654994, 407991378, 411798619'
@@ -201,7 +202,10 @@ SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/
 # prints 000 via -w on a transport failure, so an append would yield 000000.
 HTTP_CODE=""; CURL_RC=0
 hook_get() {
-  HTTP_CODE="$(curl --disable --noproxy '*' --proto '=https' -sS --max-time 120 -o "$2" -w '%{http_code}' -X GET \
+  # --max-time 105 > the host's own bound (DEADLINE 90 s + PAGE_MIN); --connect-timeout bounds a
+  # stalled edge. The sweeper runs every probe sequentially under one 15-minute job with no per-probe
+  # ceiling, so this probe also enforces PROBE_BUDGET_S below.
+  HTTP_CODE="$(curl --disable --noproxy '*' --proto '=https' -sS --connect-timeout 10 --max-time 105 -o "$2" -w '%{http_code}' -X GET \
     -H "X-Signature-256: sha256=$SIG" \
     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
@@ -252,6 +256,9 @@ for (( k = 0; k < N_SLICES; k++ )); do
   kk=$((k + 1))
   csv="$(awk -v n="$N_SLICES" -v k="$k" '(NR-1)%n==k' "$WORK/population.txt" | paste -sd, -)"
   body="$WORK/slice-$kk.body"
+  if (( SECONDS > PROBE_BUDGET_S )); then
+    cannot_establish "slice_budget_exhausted slice=${kk}/${N_SLICES} elapsed_s=${SECONDS} budget_s=${PROBE_BUDGET_S}" "the earlier slices consumed the probe's wall-clock budget (a stalled edge or a slow host); retry next sweep — the sweeper job caps ALL probes at 15 minutes"
+  fi
   hook_get "$HOOK_BASE/inngest-doublefire-probe?from=${SOAK_FROM}&function_ids=${csv}" "$body"; code="$HTTP_CODE"
   bc="$(classify_body "$body")"
   blen="$(wc -c < "$body" 2>/dev/null | tr -d ' ' || echo 0)"
@@ -337,18 +344,17 @@ days_elapsed="$(awk -v n="$NOW_EPOCH" -v f="$SOAK_FROM_EPOCH" 'BEGIN { printf "%
 # ── the reading block precedes every verdict ─────────────────────────────────────────────────
 printf 'reading: window=%s..%s slices=%s/%s runs=%s active_fns=%s null_started=%s explained=%s UNEXPLAINED=%s days_elapsed=%s (%s)\n' \
   "$SOAK_FROM" "$now_iso" "$N_SLICES" "$N_SLICES" "$runs_n" "$active_fns" "$null_started" "$explained_n" "$unexplained_n" "$days_elapsed" "$slice_line"
-jqv expl_rows expl_rows -c '.[] | select(.explained)' <<<"$split"
-jqv unexpl_rows unexpl_rows -c '.[] | select(.explained | not)' <<<"$split"
-while IFS= read -r g; do
-  [[ -n "$g" ]] || continue
-  jqv fn g_fn -r '.functionID' <<<"$g"; jqv b g_bucket -r '.bucket' <<<"$g"; jqv c g_count -r '.count' <<<"$g"
+# One jq per class renders the rows as TSV; the shape check runs per row before anything is printed.
+jqv expl_rows expl_rows -r '.[] | select(.explained) | [.functionID, .bucket, .count] | @tsv' <<<"$split"
+jqv unexpl_rows unexpl_rows -r '.[] | select(.explained | not) | [.functionID, .bucket, .count] | @tsv' <<<"$split"
+while IFS=$'\t' read -r fn b c; do
+  [[ -n "$fn" ]] || continue
   [[ "$fn" =~ $UUID_RE && "$c" =~ ^[0-9]+$ ]] || cannot_establish "jq_failed rc=0 site=group_shape" "a group carried a non-UUID functionID or a non-integer count"
   bucket_window "$b"
   printf 'explained: functionID=%s bucket=%s (%s) count=%s — %s\n' "$fn" "$b" "$BW" "$c" "$EXPLAINED_WHY"
 done <<<"$expl_rows"
-while IFS= read -r g; do
-  [[ -n "$g" ]] || continue
-  jqv fn g_fn -r '.functionID' <<<"$g"; jqv b g_bucket -r '.bucket' <<<"$g"; jqv c g_count -r '.count' <<<"$g"
+while IFS=$'\t' read -r fn b c; do
+  [[ -n "$fn" ]] || continue
   [[ "$fn" =~ $UUID_RE && "$c" =~ ^[0-9]+$ ]] || cannot_establish "jq_failed rc=0 site=group_shape" "a group carried a non-UUID functionID or a non-integer count"
   bucket_window "$b"
   printf 'UNEXPLAINED: functionID=%s bucket=%s (%s) count=%s\n' "$fn" "$b" "$BW" "$c"
