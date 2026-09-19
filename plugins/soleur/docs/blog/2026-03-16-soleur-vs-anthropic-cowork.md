@@ -5,6 +5,7 @@ date: 2026-03-16
 updated: 2026-05-21
 description: "Soleur and Anthropic Cowork both deploy multi-domain AI agents. A comparison of knowledge architecture, workflow depth, cross-domain coherence, and pricing."
 ogImage: "blog/og-soleur-vs-anthropic-cowork.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - anthropic-cowork

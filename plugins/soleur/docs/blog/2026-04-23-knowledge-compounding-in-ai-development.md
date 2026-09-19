@@ -4,6 +4,7 @@ seoTitle: "Knowledge Compounding AI: Why Compound Engineering Outperforms Point 
 date: 2026-04-23
 description: "Knowledge compounding separates compound engineering organizations from stateless AI tools. Here's how it works and why it outperforms point solutions."
 ogImage: "blog/og-knowledge-compounding-ai-development.png"
+pillar: agentic-solo-founder
 tags:
   - agentic-engineering
   - compound-engineering

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-19T19:52:40Z",
+  "generated_at": "2026-09-19T19:58:07Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1283,13 +1283,13 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 275,
+      "skill-security-scan": 281,
       "monitor-supersede": 462,
       "net-issue-flow": 579,
       "post-dispatch-watch-gate": 5177,
       "guardrails-block-recursive-delete": 372,
       "kb-domain-allowlist-guard": 221,
-      "guardrails-require-milestone": 527,
+      "guardrails-require-milestone": 528,
       "context-reviewed-gate": 13,
       "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 8,
       "git-commit-secret-scan": 430,

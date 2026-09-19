@@ -21,6 +21,10 @@ import {
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
+import {
+  bulkRedirectPairs,
+  missingEdge301Flags,
+} from "./lib/bulk-redirect-pairs";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -452,11 +456,12 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
       `legacy/excluded entries in sitemap: ${legacy.join(", ")}`,
     ).toEqual([]);
 
-    // Positive guard for the load-bearing exclusion mechanism: the
-    // terms-of-service redirect stub IS built on disk (asserted in a sibling
-    // test) but MUST be absent from the sitemap. This is the real failure mode
-    // the `/pages/` token above defends — it fires if page-redirects.njk loses
-    // its `eleventyExcludeFromCollections: true` and stubs leak into the sitemap.
+    // Positive guard for the load-bearing exclusion mechanism: a terms-of-service
+    // redirect stub MUST be absent from the sitemap. This is the real failure mode
+    // the `/pages/` token above defends — if a stub template is ever reintroduced
+    // without `eleventyExcludeFromCollections: true`, it leaks into the sitemap.
+    // (Disk presence is fenced separately by the Guard-2 zero-stub walk below;
+    // the meta-refresh machinery was deleted in #3328.)
     const stubLocs = locs.filter((u) => u.includes("terms-of-service"));
     expect(
       stubLocs,
@@ -484,78 +489,249 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
     expect(githubJs).not.toMatch(/APEX_RE|www\.soleur\.ai/);
   });
 
-  test("legacy terms-of-service redirect stub resolves to terms-and-conditions", () => {
-    const stub = readSite("pages/legal/terms-of-service.html");
-    expect(stub).toContain("/legal/terms-and-conditions/");
+  test("legacy terms-of-service URL is covered by the bulk-redirect list", () => {
+    // #3328 PR-B: the meta-refresh stub no longer exists — the canonical source
+    // of truth for this redirect is the Cloudflare Bulk Redirect list in
+    // seo-bulk-redirects.tf (live edge 301, verified 2026-09-18/19). Assert the
+    // pair on its own item {} block — a file-wide match could hide a dropped
+    // target behind the sibling terms-and-conditions item's identical target.
+    const tf = readFileSync(
+      resolve(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
+      "utf8",
+    );
+    const item = bulkRedirectPairs(tf).get(
+      "soleur.ai/pages/legal/terms-of-service.html",
+    );
+    expect(
+      item?.target,
+      "terms-of-service.html must 301 to the renamed legal page",
+    ).toBe("https://soleur.ai/legal/terms-and-conditions/");
   });
 });
 
-// -- GSC "Crawled - not indexed" defensive interim: meta-refresh stubs noindex --
+// -- Guard 2 (#3328 PR-B): meta-refresh reintroduction fence ------------------
 //
-// The legacy /pages/legal/<slug>.html URLs (and the blog reslug) get edge 301s
-// via the Bulk Redirects list in apps/web-platform/infra/seo-bulk-redirects.tf
-// (same change; live once the #5092 token-widen + apply completes). Until the
-// 301 fires, they are served the meta-refresh fallback (page-redirects.njk,
-// HTTP 200), which Google classifies as "Crawled - currently not indexed".
-// Adding `<meta name="robots" content="noindex">` to every meta-refresh stub is
-// the belt-and-braces interim: even when Googlebot fetches the HTTP-200 stub,
-// it is told not to index the legacy URL. The stub still carries
-// http-equiv="refresh" + <link rel="canonical"> to the clean URL, so a user is
-// still forwarded and a crawler still sees the canonical target. SEO-only; no
-// behavior change for humans. See plan 2026-06-09-fix-gsc-legal-page-redirects-plan.md,
-// #3367, #3297.
-describe("GSC interim — every meta-refresh redirect stub is noindex", () => {
-  // Detect stubs via the shared isMetaRefreshStub predicate (size-gated, used
-  // by the author-card/knowsAbout/description guards in this file). Walking
-  // the built tree (rather than hardcoding the file list) keeps this in
-  // lockstep with _data/pageRedirects.js as redirect entries are added/removed.
-  function metaRefreshStubs(): { rel: string; body: string }[] {
-    return walkHtmlFiles(SITE)
+// The meta-refresh redirect machinery (docs/page-redirects.njk,
+// _data/pageRedirects.js, docs/blog/redirects.njk, _data/blogRedirects.js —
+// plus docs/pages/articles.njk, the last hand-maintained stub, found by this
+// fence's first _site walk and migrated to the bulk list in the same PR) was
+// deleted in #3328 PR-B after every legacy URL was verified live behind an
+// edge 301 (Cloudflare Bulk Redirects, apps/web-platform/infra/
+// seo-bulk-redirects.tf — 19/19 from-paths + 69/69 blog date-slug URLs,
+// 2026-09-18/19). The built site must now contain ZERO meta-refresh stubs: a
+// reintroduced stub is the exact regression that put these URLs in GSC's
+// "Crawled - currently not indexed" bucket (HTTP 200 + refresh, a
+// non-deterministic signal). The second chokepoint is validate-seo.sh, whose
+// instant-refresh skip block was removed in the same PR, so a reintroduced
+// stub also fails full SEO validation on its missing canonical. The tf-source
+// assertions pin the legal source_url set the stubs used to render — the
+// parity property the deleted _data/pageRedirects.js provided, now anchored
+// on the canonical source.
+describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#3328)", () => {
+  const TF_PATH = resolve(
+    REPO_ROOT,
+    "apps/web-platform/infra/seo-bulk-redirects.tf",
+  );
+  const readTf = () => readFileSync(TF_PATH, "utf8");
+
+  test("no built HTML page contains a meta refresh of any size or delay", () => {
+    // isMetaRefreshStub is size-gated (<2KB) by design — a stub emitted inside
+    // a full layout escapes it AND escapes validate-seo.sh (the layout
+    // supplies canonical/JSON-LD/og/h1/description). After #3328 no page may
+    // carry http-equiv=refresh at all: the fence is unconditional, not
+    // stub-shaped. Any delay (content=5) counts too — a delayed refresh is
+    // still the GSC crawled-not-indexed mechanism.
+    const files = walkHtmlFiles(SITE);
+    expect(files.length).toBeGreaterThan(0);
+    const offenders = files
       .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
-      .filter(({ body }) => isMetaRefreshStub(body));
-  }
-
-  test("at least one meta-refresh stub is built (guard is non-vacuous)", () => {
-    expect(metaRefreshStubs().length).toBeGreaterThan(0);
-  });
-
-  test("the 9 legal stubs the bulk-redirect list maps are all present in the walk", () => {
-    // Mirrors the legal source_url set in seo-bulk-redirects.tf 1:1 — if
-    // _data/pageRedirects.js ever loses a legal entry, the suite goes RED here
-    // instead of the noindex guard silently shrinking its coverage.
-    const rels = new Set(metaRefreshStubs().map(({ rel }) => rel));
-    const missing = [
-      "privacy-policy",
-      "cookie-policy",
-      "gdpr-policy",
-      "acceptable-use-policy",
-      "data-protection-disclosure",
-      "individual-cla",
-      "corporate-cla",
-      "disclaimer",
-      "terms-and-conditions",
-    ].filter((slug) => !rels.has(`pages/legal/${slug}.html`));
-    expect(
-      missing,
-      `legal stubs missing from the built walk: ${missing.join(", ")}`,
-    ).toEqual([]);
-  });
-
-  test("every meta-refresh stub carries a robots noindex meta", () => {
-    // Two-step semantic check: find the robots meta (attribute-order- and
-    // quote-agnostic), then require a noindex token in its content — so a
-    // valid future `noindex,follow` or attribute reorder cannot false-RED.
-    const isNoindexed = (body: string): boolean => {
-      const robots = body.match(/<meta[^>]*name=["']robots["'][^>]*>/i);
-      return robots !== null && /content=["'][^"']*noindex/i.test(robots[0]);
-    };
-    const missing = metaRefreshStubs()
-      .filter(({ body }) => !isNoindexed(body))
+      .filter(({ body }) => /http-equiv\s*=\s*["']?refresh/i.test(body))
       .map(({ rel }) => rel);
     expect(
-      missing,
-      `meta-refresh stubs missing noindex: ${missing.join(", ")}`,
+      offenders,
+      `meta refresh found in built page(s) — no page may use http-equiv=refresh after #3328 (edge 301s only): ${offenders.join(", ")}`,
     ).toEqual([]);
+  });
+
+  test("the built site emits no _redirects/_headers channel outside the guards' window", () => {
+    // A Cloudflare Pages _redirects or _headers file (via an
+    // addPassthroughCopy in eleventy.config.js) would be a second redirect
+    // channel that neither the _site HTML walk nor the tf assertions see.
+    // Assert none exists in the build output.
+    for (const name of ["_redirects", "_headers"]) {
+      expect(
+        existsSync(join(SITE, name)),
+        `${name} emitted into _site — a redirect channel outside the tf-guard window; route redirects through seo-bulk-redirects.tf instead`,
+      ).toBe(false);
+    }
+  });
+
+  test("seo-bulk-redirects.tf still declares the legal + alias + /articles/ pairs with edge-301 flags", () => {
+    // Mirrors the source_url -> target_url set in seo-bulk-redirects.tf — the
+    // parity property the deleted _data/pageRedirects.js (and the
+    // articles.njk stub) provided, anchored on the canonical source. If an
+    // entry is ever dropped from the list, the corresponding legacy URL loses
+    // its edge 301. Flags are pinned on the SAME item block as the pair: a
+    // status_code flip to 302 or a dropped include_subdomains changes the
+    // redirect's semantics without touching the pair.
+    const tf = readTf();
+    const pairs = bulkRedirectPairs(tf);
+    // Anti-vacuity floor on the map side: a renamed locals/item structure that
+    // yields zero parsed pairs must not read as "all expected pairs absent".
+    expect(
+      pairs.size,
+      "no redirect items parsed from seo-bulk-redirects.tf — the parser or the file drifted",
+    ).toBeGreaterThan(0);
+    const expected = new Map<string, string>([
+      // 9 legal slugs (clean-slug == source-slug)
+      ...[
+        "privacy-policy",
+        "cookie-policy",
+        "gdpr-policy",
+        "acceptable-use-policy",
+        "data-protection-disclosure",
+        "individual-cla",
+        "corporate-cla",
+        "disclaimer",
+        "terms-and-conditions",
+      ].map(
+        (slug): [string, string] => [
+          `soleur.ai/pages/legal/${slug}.html`,
+          `https://soleur.ai/legal/${slug}/`,
+        ],
+      ),
+      // The ToS alias pair (terms-of-service → terms-and-conditions) — the
+      // renamed URL the original GSC fix depended on.
+      [
+        "soleur.ai/pages/legal/terms-of-service.html",
+        "https://soleur.ai/legal/terms-and-conditions/",
+      ],
+      // The /articles/ stub reslug added in #3328 PR-B — deleting the stub
+      // with no edge 301 would have stranded the URL as a 404.
+      ["soleur.ai/articles/", "https://soleur.ai/blog/"],
+      ["soleur.ai/articles/index.html", "https://soleur.ai/blog/"],
+      ["soleur.ai/articles", "https://soleur.ai/blog/"],
+    ]);
+    const missing: string[] = [];
+    const mismatched: string[] = [];
+    const flagless: string[] = [];
+    for (const [src, tgt] of expected) {
+      const item = pairs.get(src);
+      if (!item) {
+        missing.push(src);
+        continue;
+      }
+      if (item.target !== tgt)
+        mismatched.push(`${src} -> ${item.target} (expected ${tgt})`);
+      for (const flag of missingEdge301Flags(item.block)) {
+        flagless.push(`${src}: ${flag}`);
+      }
+    }
+    expect(
+      missing,
+      `redirect source_urls missing from seo-bulk-redirects.tf: ${missing.join(", ")}`,
+    ).toEqual([]);
+    expect(
+      mismatched,
+      `redirect items with wrong target_url in seo-bulk-redirects.tf: ${mismatched.join(", ")}`,
+    ).toEqual([]);
+    expect(
+      flagless,
+      `redirect items missing edge-301 flags in seo-bulk-redirects.tf: ${flagless.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("the generated-item expansion (3 arms + dynamic block) is intact", () => {
+    // The pairs map only reaches Cloudflare through the 3-arm flatten in
+    // local.blog_redirect_items and the `dynamic "item"` block on the list
+    // resource. Dropping one arm un-serves a whole URL shape per pair;
+    // dropping the dynamic block un-serves every generated item — and every
+    // pair assertion above stays green because it never reads the expansion.
+    // Pin the structure.
+    const tf = readTf();
+    for (const arm of [
+      'source = "soleur.ai/blog/${date_slug}/"',
+      'source = "soleur.ai/blog/${date_slug}/index.html"',
+      'source = "soleur.ai/blog/${date_slug}"',
+    ]) {
+      expect(
+        tf.includes(arm),
+        `blog_redirect_items is missing the expansion arm: ${arm} — a whole URL shape loses its edge 301`,
+      ).toBe(true);
+    }
+    expect(
+      /dynamic "item"[\s\S]*?for_each = local\.blog_redirect_items/.test(tf),
+      'cloudflare_list.legal_redirects has no dynamic "item" over blog_redirect_items — all 69 generated redirects would vanish',
+    ).toBe(true);
+  });
+});
+
+// -- Guard 3 (#3328 PR-B): pillar-series frontmatter <-> _data/pillars.js ----
+//
+// The two new series added for #3328 internal-link equity are wired by
+// `pillar: <key>` frontmatter consumed by _includes/pillar-series.njk, which
+// degrades silently: an unknown key emits only an HTML comment, and a member
+// URL resolving to no post renders an empty <a> title (or a 404 href). This
+// guard makes the relation bidirectional and loud — same parity property the
+// redirect guards above enforce, applied to the link-equity data.
+describe("pillar-series frontmatter <-> _data/pillars.js parity", () => {
+  test("every pillar: key resolves to a series and every member URL resolves to a post", async () => {
+    const { default: loadPillars } = await import(
+      resolve(REPO_ROOT, "plugins/soleur/docs/_data/pillars.js")
+    );
+    const pillars = loadPillars() as Record<
+      string,
+      { members: { url: string; relation: string }[] }
+    >;
+    const seriesKeys = new Set(Object.keys(pillars));
+
+    const posts = readdirSync(BLOG_POSTS_DIR).filter((f) =>
+      f.endsWith(".md"),
+    );
+    // frontmatter body only — a body line starting `pillar:` must not count.
+    const declared = new Map<string, string>();
+    for (const f of posts) {
+      const fm =
+        readFileSync(join(BLOG_POSTS_DIR, f), "utf8").split(/^---$/m)[1] ?? "";
+      const m = fm.match(/^pillar:\s*(\S+)/m);
+      if (m) declared.set(f.replace(/\.md$/, ""), m[1]);
+    }
+    for (const [file, key] of declared) {
+      expect(
+        seriesKeys.has(key),
+        `${file}.md declares unknown pillar: '${key}' — pillar-series.njk renders only an HTML comment for unknown keys`,
+      ).toBe(true);
+    }
+
+    // fileSlug strips an optional YYYY-MM-DD- prefix, so a member URL
+    // /blog/<slug>/ maps to either <slug>.md or YYYY-MM-DD-<slug>.md — the
+    // "-"-anchored endsWith covers both without a regex.
+    const fileForSlug = (slug: string) =>
+      posts.find((f) => f === `${slug}.md` || f.endsWith(`-${slug}.md`));
+    const failures: string[] = [];
+    let memberCount = 0;
+    for (const [key, series] of Object.entries(pillars)) {
+      for (const member of series.members) {
+        memberCount++;
+        const slug = member.url.replace(/^\/blog\//, "").replace(/\/$/, "");
+        const file = fileForSlug(slug);
+        if (!file) {
+          failures.push(`${key}: member ${member.url} resolves to no post file`);
+          continue;
+        }
+        const base = file.replace(/\.md$/, "");
+        if (declared.get(base) !== key) {
+          failures.push(
+            `${key}: member ${member.url} -> ${file} declares pillar '${declared.get(base)}' (expected '${key}')`,
+          );
+        }
+      }
+    }
+    expect(
+      memberCount,
+      "no pillar members enumerated — the parity guard cannot pass vacuously",
+    ).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
   });
 });
 
