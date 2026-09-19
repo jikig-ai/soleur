@@ -1541,6 +1541,12 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
+      # (#8210) Guard 1 for the boot-time LUKS reopen: static rows over the script, the unit
+      # pair, cloud-init, bootstrap, gc.service, issue-alerts.tf and the module variables, plus
+      # a runtime arm that drives the script and the OnFailure reporter against stubs.
+      - name: Run git-data LUKS boot-reopen guards (Guard 1, #8210)
+        run: bash apps/web-platform/infra/git-data-luks-reopen.test.sh
+
       # (#6680, ADR-220) git-data-cutover's read-only proof: the access gate precedes every store
       # probe, the store probes fail closed (a failed read is probe_failed, never a store state),
       # probe bytes never reach the workflow-command parser, the bridge's server-ip export set is
@@ -1683,12 +1689,21 @@ jobs:
             echo "::error::systemd-analyze is not installed on this runner, so the git-data unit lint did NOT run. This gate fails closed rather than reporting a clean lint it never performed."
             exit 1
           fi
+          # (#8210) The reopen unit TRIO joins the set: Restart=on-failure on a oneshot with
+          # RemainAfterExit=yes is allowed (service.c rejects only always|on-success) and the
+          # verify run is what pins that on the runner's systemd. The .timer is passed too --
+          # review found the widened grep below already matched `luks-reopen*.timer:` while the
+          # timer was never handed to verify, so that half of the alternation could not fire and
+          # the gate read as covering a unit it did not touch.
           out=$(systemd-analyze verify \
             apps/web-platform/infra/git-data-gc.service \
             apps/web-platform/infra/git-data-gc-failure.service \
-            apps/web-platform/infra/git-data-gc.timer 2>&1 || true)
+            apps/web-platform/infra/git-data-gc.timer \
+            apps/web-platform/infra/git-data-luks-reopen.service \
+            apps/web-platform/infra/git-data-luks-reopen-failure.service \
+            apps/web-platform/infra/git-data-luks-reopen.timer 2>&1 || true)
           echo "$out"
-          if printf '%s' "$out" | grep -E 'git-data-gc[^:]*\.(service|timer):' ; then
+          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen)[^:]*\.(service|timer):' ; then
             echo "::error::systemd-analyze verify reported problems in the git-data unit set"
             exit 1
           fi

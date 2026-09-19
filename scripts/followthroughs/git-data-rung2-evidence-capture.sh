@@ -128,6 +128,7 @@ OUT=""
 WINDOW="30 DAY"
 SENTRY_SINCE=""
 VERIFY_ONLY=0
+REBOOT_SINCE=""
 DIVERGENCE=""
 
 while [[ $# -gt 0 ]]; do
@@ -139,6 +140,12 @@ while [[ $# -gt 0 ]]; do
     --host-name)    HOST_NAME="${2:-}"; shift 2 || shift ;;
     --evidence-url) EVIDENCE_URL="${2:-}"; shift 2 || shift ;;
     --since)        SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
+    # (#8210) REBOOT MODE. The rung-2 reset arm hard-resets the rehearsal host after
+    # boot_complete settles; this mode then answers ONE question over the post-reset window:
+    # did git-data-luks-reopen.service reopen the mapper unattended? It reuses this script's
+    # source-liveness anchor, its query transport and its Sentry cross-check rather than
+    # standing up a second probe. The timestamp bounds BOTH channels SERVER-side.
+    --reboot-since) REBOOT_SINCE="${2:-}"; SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
     --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 || shift ;;
     --out)          OUT="${2:-}"; shift 2 || shift ;;
     --window)       WINDOW="${2:-}"; shift 2 || shift ;;
@@ -149,10 +156,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# `assert_fixture_dir` guards the evidence path before either writer roots a write at the
+# caller's CWD — the P1b guard (fixture-relative-assert.test.sh) recognises only this helper,
+# executed as a statement. Byte-identical to the canonical definition in
+# plugins/soleur/test/test-helpers.sh, whose equality fixture-dir-operand-assert asserts across
+# every tracked copy; do not reword it here alone. Copied rather than sourced because this is a
+# production probe, not a suite. Its exit 2 is TRANSIENT under the followthrough contract.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 [[ -z "$OUT" ]] && OUT="$(dirname "$CLOUD_INIT")/git-data-rung2-boot-evidence.env"
 
 if [[ -z "$HOST_NAME" ]]; then
-  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>]" >&2
+  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>] [--reboot-since <ISO8601>]" >&2
   exit 64
 fi
 
@@ -190,6 +214,11 @@ if [[ ! "$EVIDENCE_URL" =~ ^https://github\.com/jikig-ai/soleur/actions/runs/[0-
   echo "refusing: --evidence-url must be an Actions run URL for this repository (https://github.com/jikig-ai/soleur/actions/runs/<id>), because git_data_rung2_rehearsal_gate refuses anything else. Got: ${EVIDENCE_URL}" >&2
   exit 64
 fi
+
+# (#8210) --reboot-since needs no shape check of its own: it assigns SENTRY_SINCE above, and
+# the existing SENTRY_SINCE validation below applies the identical ISO8601 regex to it. A
+# second copy was cut at review -- it only shadowed that one with a different message, which
+# is a second place for the regex to drift.
 
 # `--window` REACHES THE SAME `WHERE` CLAUSE, so it gets the same treatment as --host-name.
 #
@@ -523,7 +552,10 @@ HOST_SQL="
          JSONExtractString(raw,'luks_mounted')  AS luks_mounted,
          JSONExtractString(raw,'repo_root')     AS repo_root,
          JSONExtractString(raw,'hooks_path')    AS hooks_path,
-         JSONExtractString(raw,'provision')     AS provision
+         JSONExtractString(raw,'provision')     AS provision,
+         JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+         JSONExtractString(raw,'action')        AS action,
+         JSONExtractString(raw,'restarts')      AS restarts
   FROM ${_bs_source}
   WHERE ${_BS_SCOPE}
   ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow"
@@ -862,6 +894,112 @@ if [[ "$fatal_rc" -ne 0 ]]; then
 fi
 _require_answer "$fatal_out" "unbounded fatal"
 
+# ── (#8210) REBOOT MODE: did the mapper reopen unattended after the reset? ─────────
+#
+# Reached only after the anchor, the host read and the unbounded fatal read have all ANSWERED
+# (an unread query is not an empty one — the three _require_answer calls above are what make a
+# zero-row set mean something here).
+#
+# The verdict is over the POST-`since` set ONLY, and that is not a simplification: the
+# production shape ALWAYS has pre-`since` rows — the entire birth boot, including its own
+# boot_complete and any fatal from a retried early stage. Both channels are therefore bounded
+# server-side (Better Stack through _BS_WHEN, Sentry through --start/--end), and rows outside
+# the window are ignored rather than counted.
+#
+#   0 PASS       a stage:luks_reopen_ok row with action=reopened in EITHER channel, and no
+#                level:fatal in EITHER.
+#   1 FAIL       any post-reset fatal, OR a luks_reopen_ok row whose action is not `reopened`.
+#                `noop` or `mounted` after a hard reset means the mapper survived a power cycle,
+#                which it cannot — so the probe or the host is lying, and that is not a pass.
+#   2 TRANSIENT  an EMPTY post-`since` set while the source-liveness anchor answers: an ingest
+#                miss must not burn a paid host (the emitter's Better Stack POST has no --retry).
+#
+# BOTH channels are read because either alone is a single point of failure: Better Stack can
+# drop an ingest (#7855), and the Sentry row is level:info on an unrouted stage, which the
+# default fatal-pinned host-events query cannot see — hence sentry-issue.sh's --stage.
+if [[ -n "$REBOOT_SINCE" ]]; then
+  _bs_reopen="$(grep 'luks_reopen_ok' <<<"$host_out" || true)"
+  _bs_fatal="$(grep '"level":"fatal"' <<<"$fatal_out" || true)"
+
+  _sentry_reopen=""; _sentry_reopen_rc=1
+  if [[ -n "${SENTRY_ISSUE_RO_TOKEN:-}" && -r "$SENTRY_READER" ]] && command -v jq >/dev/null 2>&1; then
+    # The window comes from the ONE helper every other Sentry read here uses (`--reboot-since`
+    # assigns SENTRY_SINCE, so it emits the same --start/--end this line used to re-type).
+    mapfile -t _rw < <(_sentry_window_args)
+    _sentry_reopen="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" --stage luks_reopen_ok \
+      "${_rw[@]}" 2>/dev/null)"; _sentry_reopen_rc=$?
+  fi
+  _sentry_reopened=0; _sentry_rows=0
+  if [[ "$_sentry_reopen_rc" -eq 0 && -n "$_sentry_reopen" ]]; then
+    _sentry_rows="$(printf '%s' "$_sentry_reopen" | jq -r '(.data // []) | length' 2>/dev/null || echo 0)"
+    if printf '%s' "$_sentry_reopen" | jq -e '(.data // []) | map(select(.action == "reopened")) | length > 0' >/dev/null 2>&1; then
+      _sentry_reopened=1
+    fi
+  fi
+
+  # The fatal arm runs FIRST and wins: a reopen row alongside a fatal is still a failed reboot.
+  _sentry_consult
+  if [[ -n "$_bs_fatal" || "$_SENTRY_VERDICT" == "FATAL" ]]; then
+    echo "FAIL (reboot arm): ${HOST_NAME} reported a level:fatal AFTER the reset at ${REBOOT_SINCE}."
+    printf '%s\n' "$_bs_fatal" | head -5
+    echo
+    echo "NO EVIDENCE APPENDED. The reopen path is the thing this arm exists to prove; a fatal in"
+    echo "the post-reset window means it did not hold. Read stage/action/result in the row above."
+    exit 1
+  fi
+
+  _bs_reopened=0
+  if grep -q '"action":"reopened"' <<<"$_bs_reopen"; then _bs_reopened=1; fi
+  # A luks_reopen_ok row whose action is neither reopened (nor absent) is a hard FAIL.
+  if [[ -n "$_bs_reopen" && "$_bs_reopened" -eq 0 ]] \
+     || { [[ "$_sentry_rows" -gt 0 && "$_sentry_reopened" -eq 0 ]]; }; then
+    echo "FAIL (reboot arm): a stage:luks_reopen_ok row arrived after the reset, but its action is"
+    echo "not 'reopened'. A mapper cannot survive a hard reset, so 'noop' or 'mounted' here means"
+    echo "the probe window or the host is lying — this is not a pass."
+    printf '%s\n' "$_bs_reopen" | head -3
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 1
+  fi
+
+  if [[ "$_bs_reopened" -eq 0 && "$_sentry_reopened" -eq 0 ]]; then
+    echo "TRANSIENT (reboot arm): no stage:luks_reopen_ok row in EITHER channel after"
+    echo "${REBOOT_SINCE}, while the source-liveness anchor answered. An ingest miss is not a"
+    echo "failed reopen — the emitter's Better Stack POST carries no retry — so this run declines"
+    echo "to read silence as a defect."
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 2
+  fi
+
+  _channel=both
+  [[ "$_bs_reopened" -eq 1 && "$_sentry_reopened" -eq 0 ]] && _channel=betterstack
+  [[ "$_bs_reopened" -eq 0 && "$_sentry_reopened" -eq 1 ]] && _channel=sentry
+  _restarts="$(grep -o '"restarts":"[0-9]*"' <<<"$_bs_reopen" | head -1 | grep -o '[0-9]*' || true)"
+  # OUT is bound by command substitution, so an empty one appends to the CWD rather than to the
+  # evidence file — and this branch is the only writer of the reboot key. Guarded with an
+  # explicit test, NOT `${OUT:?}`: under this contract a `:?` abort exits 1, which is FAIL ("the
+  # mapper did not reopen"), when the truth is a wiring fault, which is TRANSIENT (2). The
+  # followthrough-convention lint (rule 1) bans the `:?` form on executable lines for exactly
+  # that reason, and the full gate caught the first revision of this block using it.
+  # `assert_fixture_dir` (defined once below the arg parse) is the ONE guard the P1b scanner
+  # recognises, executed as a statement; its exit 2 is TRANSIENT under this contract, which is
+  # the right verdict for a wiring fault. An empty-only test would not do: `>> relative/path`
+  # succeeds, so the abort would prove the opposite of what it was credited with.
+  assert_fixture_dir "$OUT"
+  {
+    printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
+    printf '# QUERY: sentry-issue.sh --host-events %s --stage luks_reopen_ok --start %s --end <now>\n' "$HOST_NAME" "$REBOOT_SINCE"
+    printf 'RUNG2_REBOOT_REOPEN=PASS\n'
+    printf 'RUNG2_REBOOT_REOPEN_CHANNEL=%s\n' "$_channel"
+    printf 'RUNG2_REBOOT_REOPEN_RESTARTS=%s\n' "${_restarts:-unknown}"
+  } >> "$OUT"
+  echo "PASS (reboot arm): ${HOST_NAME} reopened /dev/mapper/git-data unattended after the reset at"
+  echo "${REBOOT_SINCE} (channel ${_channel}, restarts ${_restarts:-unknown}); no fatal in either channel."
+  echo "Appended RUNG2_REBOOT_REOPEN to ${OUT}."
+  exit 0
+fi
+
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
 #
 # (#7025, R5) `level=fatal` IS THE REAL FAIL ARM, and the inherited `\bno\b` match is the
@@ -904,13 +1042,36 @@ if ! grep -q 'boot_complete' <<<"$host_out"; then
 fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
-if grep -qE '"(luks_mounted|repo_root|hooks_path|provision)":"no"' <<<"$_bc_rows"; then
+# (#8210) luks_reopen_unit joins the terminal set. Unlike its four siblings it is MEASURED
+# (systemctl is-enabled + Result=success on git-data-luks-reopen.service), so this arm CAN fire
+# against real telemetry — see the PASS wording below, which says so.
+#
+# THE TERMINAL ROSTER IS DECLARED ONCE, HERE. The FALSE-assertion alternation and the presence
+# loop both derive from it, and git-data-emit.test.sh's consumer-roster guard reads THIS line
+# (anchored on `_TERMINAL=`), so a name added here without a producer change REDs that suite.
+_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit"
+_alt="${_TERMINAL// /|}"
+if grep -qE "\"(${_alt})\":\"no\"" <<<"$_bc_rows"; then
   echo "FAIL: ${HOST_NAME} reported boot_complete with a FALSE assertion — it reached its final stage with an invariant unmet, which is the dark boot the interlock exists to catch."
   printf '%s\n' "$_bc_rows" | head -5
   echo
   echo "NO EVIDENCE FILE WRITTEN."
   exit 1
 fi
+# ABSENCE IS NOT A PASS. Review found the two readers of this contract disagreed: the poll
+# (git-data-boot-signal-poll.sh) requires each field PRESENT and "yes", while this arm rejected
+# only an explicit "no" — so a bootstrap edit that dropped the `luks_reopen_unit=` kwarg from the
+# emit would fail the poll and, here, print "all five assertions positive" and write
+# gate-releasing evidence over a boolean nobody measured. Same rule as the poll now.
+for _f in $_TERMINAL; do
+  if ! grep -q "\"${_f}\":\"yes\"" <<<"$_bc_rows"; then
+    echo "FAIL: ${HOST_NAME} reported boot_complete WITHOUT a ${_f}=yes assertion — the emit contract and this reader have drifted, or a measured invariant went unasserted. Not verified."
+    printf '%s\n' "$_bc_rows" | head -5
+    echo
+    echo "NO EVIDENCE FILE WRITTEN."
+    exit 1
+  fi
+done
 
 # ── THE PASS PATH CONSULTS SENTRY TOO (#7481 §4.5b) ────────────────────────────────
 #
@@ -991,7 +1152,7 @@ if [[ -z "$DIVERGENCE" ]]; then
 fi
 
 if [[ "$VERIFY_ONLY" -eq 1 ]]; then
-  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with all four assertions positive, and no fatal. NO evidence file written."
+  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with all five assertions positive, and no fatal. NO evidence file written."
   exit 0
 fi
 
@@ -1012,6 +1173,7 @@ _bs_s3="${BS_TABLE_S3:-<derived by betterstack-query.sh>}"
 case "${BS_TABLE}${BS_TABLE_S3:-}" in *[!A-Za-z0-9_]*)
   printf 'FATAL: refusing to record a non-identifier table name in the evidence file\n' >&2; exit 64 ;;
 esac
+assert_fixture_dir "$OUT"
 {
   printf '# rung-2 boot rehearsal evidence — generated by scripts/followthroughs/git-data-rung2-evidence-capture.sh (#7025)\n'
   printf '#\n'
@@ -1071,7 +1233,7 @@ esac
 # literals, so the `"…":"no"` arm can never fire against real telemetry. The real
 # predicate is the one below. The overstatement mattered because it landed in the file a
 # human reads at the second of the two intentional gates — the compensating control.
-echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: boot_complete's four booleans are hardcoded literals in git-data-bootstrap.sh, so this attests that the final stage was REACHED and that nothing reported a fatal — not that four invariants were independently measured."
+echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: four of boot_complete's five terminal booleans (luks_mounted, repo_root, hooks_path, provision) are hardcoded literals in git-data-bootstrap.sh, so for those this attests that the final stage was REACHED and that nothing reported a fatal. luks_reopen_unit is MEASURED (#8210: systemctl is-enabled + Result=success on git-data-luks-reopen.service), so its 'no' would have failed this run."
 echo "Evidence written to ${OUT} (user_data sha256 ${TEMPLATE_SHA})."
 echo
 echo "This file is NOT committed by this script and must NOT be committed by a workflow."

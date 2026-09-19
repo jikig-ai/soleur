@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-19T09:33:06Z",
+  "generated_at": "2026-09-19T09:37:23Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1086,11 +1086,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 31,
+      "applied_count": 32,
       "warn_count": 0,
-      "fire_count": 31,
+      "fire_count": 32,
       "prevented_errors": 0,
-      "last_hit": "2026-09-19T06:34:13Z",
+      "last_hit": "2026-09-19T09:35:59Z",
       "first_seen": "2026-05-22T07:01:41Z",
       "rule_text_prefix": ""
     },
@@ -1214,13 +1214,13 @@
     {
       "id": "wg-defer-only-after-inline-triage",
       "section": "Workflow Gates",
-      "hit_count": 151,
+      "hit_count": 152,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 151,
-      "prevented_errors": 151,
-      "last_hit": "2026-09-19T09:27:15Z",
+      "fire_count": 152,
+      "prevented_errors": 152,
+      "last_hit": "2026-09-19T09:35:00Z",
       "first_seen": "2026-09-11T09:35:31Z",
       "rule_text_prefix": ""
     },
@@ -1283,9 +1283,9 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 364,
+      "skill-security-scan": 366,
       "monitor-supersede": 453,
-      "net-issue-flow": 574,
+      "net-issue-flow": 575,
       "post-dispatch-watch-gate": 5136,
       "guardrails-block-recursive-delete": 370,
       "kb-domain-allowlist-guard": 219,
@@ -1329,7 +1329,7 @@
         "bypass_count": 8
       }
     ],
-    "gate_override_count": 129,
+    "gate_override_count": 130,
     "gate_timeout_warn_count": 45,
     "gate_failopen_warn_count": 88,
     "gate_body_attributed_count": 51,
