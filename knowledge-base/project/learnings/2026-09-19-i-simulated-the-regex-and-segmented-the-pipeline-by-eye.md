@@ -76,7 +76,7 @@ and ten P2s, and every one reduced to three structural roots plus one performanc
   sourced only after a cheap pre-trigger; a 4 s per-hook budget; `ulimit -v 256M` around the
   simulation grep.
 - 62 new suite rows, one per branch the first battery sampled once or never; the floor is
-  exact (126), so deleting any single row breaches it; telemetry rows assert a DELTA on the
+  exact (128 after the ship-advisor D58 row), so deleting any single row breaches it; telemetry rows assert a DELTA on the
   sandbox ledger rather than overriding `INCIDENTS_REPO_ROOT` per call (an empty override
   from a failed `mktemp` resolves to the operator's REAL ledger — the 2026-09-03 class).
 

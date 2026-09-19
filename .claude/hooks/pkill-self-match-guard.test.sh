@@ -19,7 +19,7 @@ set -uo pipefail
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pkill-self-match-guard.sh"
 VERDICTS=()
-MIN_ASSERTIONS=126
+MIN_ASSERTIONS=128
 
 pass() { VERDICTS+=("PASS"); printf '  ok   %s\n' "$1"; }
 fail() { VERDICTS+=("FAIL"); printf '  FAIL %s\n' "$1"; }
@@ -104,6 +104,17 @@ run_case "D18 fgrep alias is fixed-string" "ps -eo args | fgrep -c '[t]est-all'"
 # D19 — a `;` boundary inside a quoted string is an ACCEPTED false deny (header names it).
 run_case "D19 ; boundary inside quotes (accepted false deny)" \
   'echo "x; ps aux | grep -c '"'"'foo'"'"'"' deny
+# D58 — the D19 class in the shape an agent documenting THIS hook types: a
+# newline boundary inside `gh pr edit --body "…"` that only CITES the spelling.
+# Accepted false deny (header names it); the reason must point at the heredoc /
+# --body-file form, which A17 pins as allowed.
+D58=$'gh pr edit 1 --body "## Test plan\n```bash\nps -eo args | grep -c test-all.sh\n```"'
+run_case "D58 newline boundary inside a --body citation (accepted false deny)" "$D58" deny
+r="$(jq -nc --arg c "$D58" '{tool_name:"Bash", tool_input:{command:$c}}' | bash "$HOOK" 2>/dev/null \
+  | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+grep -qF 'Only WRITING about this shape' <<<"$r" && grep -qF -- '--body-file' <<<"$r" \
+  && pass "D58 reason points a citation at the heredoc/--body-file form" \
+  || fail "D58 reason lacks the citation hint"
 
 # D11 — both spellings in one command: the -f arm fires first and is the ONLY
 # envelope. Discriminate on the -f reason's opening line — both reasons carry

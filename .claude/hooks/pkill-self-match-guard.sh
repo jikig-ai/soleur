@@ -144,8 +144,14 @@
 #     ends there, fail-open).
 #   * a `;`/`&`/`(` boundary inside a quoted string denies (the boundary regex
 #     does not track quotes) — an accepted FALSE DENY, suite row D19; the reason
-#     is self-explaining.
-#   * awk: `!~` is read as a match (false deny); `IGNORECASE` is ignored; a
+#     is self-explaining. The same class, in the shape an agent WRITING ABOUT
+#     this hook types: a newline or backtick boundary inside `git commit -m "…"`,
+#     `gh pr edit --body "…"`, `gh issue comment --body '…'` that merely cites
+#     the spelling (suite row D58). A quoted heredoc (`--body "$(cat <<'EOF'`)
+#     or `--body-file` carries the same text and is allowed (A17); the reason
+#     says so.
+#   * awk: `!~` and `!/re/` are read as a match, and a field-restricted
+#     `$3 ~ /re/` as a whole-line one (false denies); `IGNORECASE` is ignored; a
 #     `/re/` after `=` (`{c+=/re/}`) or a string regex (`$0 ~ "re"`) is not seen
 #     (false allow); `-F' '` / `-W posix` attached forms mis-tokenize.
 #   * `rg -E <enc>` (encoding, not extended) is read as the grep flag.
@@ -536,7 +542,9 @@ For a wait-for-quiet count:
                             # (\`/usr/bin/bash …\`, \`bash ./scripts/…\` are different slots)
   until [ -s \"\$RCF\" ]; do sleep 30; done   # rc FILE written as the runner's last act (ship/SKILL.md)
   cmd & pid=\$!; kill -0 \"\$pid\"    # a captured PID names the process exactly — NOT under
-                                     # setsid/nohup wrappers, where \$! is the forked parent"
+                                     # setsid/nohup wrappers, where \$! is the forked parent
+
+Only WRITING about this shape (a commit message, a PR body, an issue comment)? Put the text in a quoted heredoc or a file: \`--body \"\$(cat <<'EOF' … EOF)\"\`, \`--body-file\`, \`-F msg.txt\` — a heredoc body is not scanned."
 
   emit "pkill-self-match-guard-readonly" deny "pkill-self-match-guard: read-only ps pipeline matches its own wrapper" "$CMD"
   jq -nc --arg r "$reason" \
