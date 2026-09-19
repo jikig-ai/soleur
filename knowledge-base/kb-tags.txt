@@ -977,6 +977,7 @@ counting
 counts
 coupling-test
 coverage
+coverage-consult
 coverage-denominator
 coverage-gap
 cpo
@@ -1183,6 +1184,7 @@ design-system
 design-tooling
 design-tooling/mcp-tools
 design-tools
+design-validity
 desktop-support
 destroy-gate
 destroy-guard
@@ -3378,6 +3380,7 @@ search-path-injection
 search-path-pinning
 seccomp
 second-order-defects
+second-order-effects
 second-reviewer-concur
 second-reviewer-gate
 secret
