@@ -53,10 +53,34 @@ Derived from [the plan](../../plans/2026-09-19-fix-git-data-rung2-gate-load-bear
 
 ## Phase 4 — Live verification and sequencing
 
-- [ ] 4.1 Real gate vs run 34768256297's recorded evidence at `15fd63aff…`, with and without an ack; paste both lines.
-- [ ] 4.2 Real gate vs PR #8393's exact bytes in a scratch checkout of `d64430c26`, with and without the ack; paste both lines.
-- [ ] 4.3 Real gate vs a hand-written file naming dry run 33886787297 → `HOLD [RUN_NO_EVIDENCE_ARTIFACT]`; paste it.
+- [x] 4.1 Real gate vs run 34768256297's recorded evidence at `15fd63aff…`, with and without an ack; paste both lines.
+- [x] 4.2 Real gate vs PR #8393's exact bytes in a scratch checkout of `d64430c26`, with and without the ack; paste both lines.
+- [x] 4.3 Real gate vs a hand-written file naming dry run 33886787297 → `HOLD [RUN_NO_EVIDENCE_ARTIFACT]`; paste it.
 - [ ] 4.4 Sync `main`; if #8393 has merged, append the ack line in its own evidence-only commit (this PR touches no hash-bound file, so both Guard 4 arms pass). If not, note in #8393 that it must carry the ack.
 - [x] 4.5 File the blocker issue (`actions: read` + `GH_TOKEN` at four call sites, the tri-state call-site conversion with its parity-test regex, the freshness-step reorder), milestone `Phase 4: Validate + Scale`, linked from roadmap L27 and #8361, marked blocking the L27 dispatch; cite it from every `RUN_RATE_LIMITED` message.
 - [x] 4.6 `gh issue edit 8010 --milestone "Phase 4: Validate + Scale"`.
 - [ ] 4.7 Full battery (`scripts/test-all.sh` shards touched by the diff) and the AC sweep.
+
+## Phase 4 — live verification record (2026-09-19, real Actions API, no seam)
+
+Every line below was produced by `env -u SOLEUR_TEST_MODE -u SOLEUR_RUNG2_RUN_FETCH`, in a
+throwaway `git worktree` detached at the named SHA, with this branch's gate library sourced
+explicitly. The stub store answered nothing.
+
+- **4.1** the 09-13 evidence as committed (run `34768256297`, tree `273f29a80`):
+  `HOLD [SENTRY_UNAVAILABLE_UNACKED]` (rc 1) without an ack; with
+  `RUNG2_SENTRY_CROSSCHECK_ACK=34768256297:<reason>` appended in its own commit,
+  `RELEASED` (rc 0) naming `head_sha 15fd63aff…`, the matching digest `5c50797b…`, the
+  uploaded artifact, and `Sentry cross-check UNAVAILABLE (acknowledged)`.
+- **4.2** the exact bytes PR #8393 commits (run `35465756680`, scratch checkout of
+  `d64430c26`): `HOLD [SENTRY_UNAVAILABLE_UNACKED]` (rc 1); with the ack, `RELEASED` (rc 0)
+  naming `head_sha d64430c26…` and `a0b5f37b…`. **This is the sequencing fact 4.4 acts on:
+  merge order does not protect that file — the gate is evaluated per workflow run, so main
+  HOLDs until the ack lands.**
+- **4.3** a hand-written file naming the dry-run dispatch `33886787297`. First attempt, with
+  the CURRENT digest: `HOLD [RUN_HASH_MISMATCH]` — step D speaks before step E, which is the
+  pinned order. Re-run at that run's own `head_sha 0f39b7aa2…` with a digest valid for THAT
+  tree — i.e. a dispatch that is real, successful, `workflow_dispatch`, on `main`, and
+  hash-valid — `HOLD [RUN_NO_EVIDENCE_ARTIFACT]` (rc 1). That is the capture discriminator
+  refusing a dry run on the only axis that separates it from a real capture.
+
