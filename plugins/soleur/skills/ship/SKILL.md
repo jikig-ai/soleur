@@ -491,6 +491,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Learnings captured (soleur:compound)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
 - [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
+- [ ] No removable probe in the tree: `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- . ':!knowledge-base/**/*.md'` prints nothing (ADR-230)
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
