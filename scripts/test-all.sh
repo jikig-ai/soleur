@@ -2398,7 +2398,14 @@ if want_scripts; then
   # #7555. tests/scripts/ is NOT auto-globbed by this runner (the *.test.sh glob cannot match a
   # test-* prefix), so an unregistered suite here would run in ZERO runners, green and invisible.
   run_suite "tests/scripts/registry-replace-preflight" bash tests/scripts/test-registry-replace-preflight.sh
-  # The mutation battery for BOTH suites above. Registered, not ad-hoc: its previous incarnations
+  # #8279. The dispatcher's derivation helper (which merged change does this run deliver, and
+  # where is its verdict tracked). Same registration reason as the line above: tests/scripts/
+  # is not globbed, so this explicit line is the suite's ONLY runner.
+  run_suite "tests/scripts/registry-delivery-change" bash tests/scripts/test-registry-delivery-change.sh
+  # Its mutation battery (~70 s, sandboxed copies, every row asserts it landed). Committed and
+  # registered rather than left in a transcript, so its kills protect something tomorrow.
+  run_suite "tests/scripts/registry-delivery-change-mutation-battery" bash tests/scripts/test-registry-delivery-change-mutation-battery.sh
+  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites. Registered, not ad-hoc: its previous incarnations
   # lived in a session transcript, so their "15/15 caught" protected nothing the next day — and
   # when it was finally committed it found 15 of its mutations surviving, including a seam that
   # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
