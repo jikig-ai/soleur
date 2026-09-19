@@ -4,8 +4,8 @@ date: 2026-09-19
 category: workflow-issues
 module: ship
 tags: [ship, postmerge, triage, ratchets, codeql, livelock, rename-guard, workflow_run, net-issue-flow]
-source_pr: 8297
-source_issue: 8287
+pr: 8297
+issue: 8287
 related:
   - knowledge-base/project/learnings/2026-09-18-the-design-pass-deleted-the-mechanism-the-panel-would-have-reviewed.md
   - knowledge-base/project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md
@@ -14,7 +14,7 @@ related:
 
 # Learning: I classified nineteen failing files from the first one I read
 
-The ship phase of PR #8297 (operator-bootstrap, merged as `129fcd4d5`, v0.280.0)
+The ship phase of PR #8297 (operator-bootstrap, merged as `129fcd4d5`, `web-v0.280.0`)
 took roughly twelve hours from `/ship` to postmerge. The pre-merge compound
 already holds the design/review/QA learnings; this file holds what the ship
 phase alone surfaced. Everything below was measured, not inferred.
@@ -31,7 +31,7 @@ the first piece of evidence rather than the whole set**.
 
 Enumerated below as session errors with the fix each one got. The durable
 routes: a note in `postmerge/SKILL.md` Phase 3.7 (this PR), three notes in
-`ship/SKILL.md` (this PR), and one tracked issue for the test-runner gap.
+`ship/SKILL.md` (this PR), and one tracked issue for the test-runner gap (#8350).
 
 ## Key Insight
 
@@ -77,7 +77,7 @@ naming alongside:
    #8335 calling `apps/web-platform` pre-existing; one of the 19 was mine and was
    in the log I read. — Recovery: CI reddened on it; fixed; corrected #8335 by
    comment, not by editing the row. — **Prevention:** when a suite is red,
-   `grep '^\s*❯.*failed' | sort -u` the failing FILES and classify each one
+   `grep -E '❯.*failed' | sort -u` the failing FILES (unanchored — `gh run view --log` prefixes every line; check the count against the `Test Files N failed` summary, since a collection-error file prints `(0 test)`) and classify each one
    against `origin/main` (or against CI's result for the same head) before
    filing anything. Routed to ship/SKILL.md Phase 4.
 
@@ -92,8 +92,8 @@ naming alongside:
    `Exempt: 0` confirmed. — **Prevention:** after any blocked command, re-read
    the artifact on disk before reusing it — a block rejects the whole command
    text, including the parts that were not the problem. A `Mandated-By:` line
-   is checked against the rule it NAMES, never against what was meant. Routed
-   to ship/SKILL.md Phase 6 step 2.5.
+   is checked against the rule it NAMES, never against what was meant. Not
+   routed — the fix is behavioural (re-read after a block), captured here only.
 
 3. **Four repo-global ratchets reddened on the first full battery, all mine:**
    `guard-vacuity-floor` (both new floors routed through `FAIL_COUNT`, the
@@ -101,8 +101,8 @@ naming alongside:
    (library `mktemp` with no owning trap), `lint-rule-bodies-live` (manifest
    stale after two rule-body amendments), `fixture-relative-assert` (baseline
    +2). None is visible to a file-selected suite run. — Recovery: direct floors
-   + per-file promotion (ledger shrinks to 47), explicit temp cleanup + annotated
-   census raise, `--write`, `--write-baseline`. — **Prevention:** already the
+   plus per-file promotion (ledger shrinks to 47), explicit temp cleanup plus
+   annotated census raise, `--write`, `--write-baseline`. — **Prevention:** already the
    named class in work/SKILL.md; the Phase 4 battery is where it is caught, and
    that is the argument for running it even when it costs an hour.
 
@@ -170,9 +170,8 @@ naming alongside:
     narrower plugin-only PR that adds a `SOLEUR_*` emitter under
     `skills/*/scripts/` would not run the only local guard that checks it. (Here
     the guard did run — see error 1 — so this is about the decline path and
-    about where the guard lives.) — **Prevention:** tracked as a follow-up in
-    `scripts/test-all.sh` / the guard's home; different subsystem, filed rather
-    than fixed here.
+    about where the guard lives.) — **Prevention:** tracked as #8350 (`scripts/test-all.sh` / the guard's
+    home); different subsystem, filed rather than fixed here.
 
 11. **lefthook's `bun-test` hook is structurally unpassable while `main`
     carries red suites.** Three full batteries through the hook (429, 432,
