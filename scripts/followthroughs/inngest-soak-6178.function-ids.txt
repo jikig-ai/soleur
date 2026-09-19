@@ -15,17 +15,13 @@
 # time-slices (the deploy webhook forwards only `from` and `function_ids`), so the sort decides
 # which ids share a GET. Sort key: -runs, then id. Reorder ONLY by re-measuring; never by hand.
 #
-# measured at 2026-09-19T03:57:28Z, from=2026-09-15T12:40:00Z, five read-only GETs in the order
-# below (11/11/10/10/10 ids): per-slice total_count 127/447/114/25/118 (that was the pre-sort
-# file order; the dealt layout carries 372/124/112/112/111 runs), 831 distinct runs, 22 ids at
-# zero, global min startedAt 2026-09-15T12:40:00.082079Z. Top counts: 26e6836b 262 (the */20
-# minter), 2e625d3c 88, 11bb44a3/4b7b1e68/6b2bdeb4/fe1a4bd6 87, d5cb880f 21, then 14 and below.
-#
-# probe run (the committed dealer, sweeper env -i shape) measured at 2026-09-19T04:18:06Z:
-# rc=2 NOT YET, registry 70/70, per-slice total_count s1=374 s2=125 s3=114 s4=113 s5=112,
-# 838 distinct runs, active_fns=30, explained=2 (the 09-17 triples), UNEXPLAINED=0. That is the
-# day-7 feasibility evidence: the heaviest slice forecasts ≈ 374 × 7 / 3.7 ≈ 710 runs ≈ 8 pages
-# against the host's 18-page / 1800-run feasibility gate.
+# Sort measured at 2026-09-19T03:57:28Z (from=2026-09-15T12:40:00Z, read-only): 831 distinct runs,
+# 22 ids at zero, global min startedAt 2026-09-15T12:40:00.082079Z. Top counts: 26e6836b 262 (the
+# */20 minter), 2e625d3c 88, 11bb44a3/4b7b1e68/6b2bdeb4/fe1a4bd6 87, d5cb880f 21, then 14 and below.
+# The committed dealer's first run (sweeper env -i shape, 2026-09-19T04:18:06Z): rc=2 NOT YET,
+# registry 70/70, per-slice total_count s1=374 s2=125 s3=114 s4=113 s5=112, 838 distinct runs,
+# explained=2 (the 09-17 run-id sets), UNEXPLAINED=0 — the day-7 feasibility evidence: the heaviest
+# slice forecasts ≈ 374 × 7 / 3.7 ≈ 710 runs ≈ 8 pages against the host's 18-page / 1800-run gate.
 26e6836b-97ad-503f-8b08-490d8a2f4ce8
 2e625d3c-0207-569f-b10b-567bc685ad5e
 11bb44a3-ae8d-57b0-8d41-e76e57f0277a

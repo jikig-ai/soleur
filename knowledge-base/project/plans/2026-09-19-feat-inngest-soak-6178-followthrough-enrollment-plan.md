@@ -258,6 +258,30 @@ tick started more than 20 minutes apart land in different buckets and read clean
 projection carries no `queuedAt`); the reading is a soak reading over the startedAt proxy, not a
 complete exactly-once proof (architecture F4).
 
+### Review addendum — 2026-09-19 (10-seat panel; all findings fixed inline)
+
+Rows the shipped probe adds to the table above, all exit 3 unless stated: `probe_unparseable`
+(a `bash -n` self-check before anything else — a bash parse error would otherwise exit 2 = NOT
+YET without the trap); `scratch_unavailable`; `clock_unreadable` (four `date` sites);
+`horizon_passed stale_since=2026-10-06T00:00:00Z` (checked BEFORE any GET: past `SOAK_STALE` the
+reading is no longer takeable, so the probe makes no host traffic and tells the operator to close);
+`registry_unreadable cause=comm_failed`; `slice_budget_exhausted` (`PROBE_BUDGET_S=420`, the
+sweeper job caps all probes at 15 min); `slice_unreadable cause=foreign_function_id` (a run whose
+`functionID` this slice did not request — also what makes the dealer observable);
+`union_mismatch` (union ≠ Σ per-slice deduped: an id shared by two different runs);
+`index_eroded cause=null_started` (> 5 % null `startedAt`); `window_underrun` (a run before the
+requested `from=`); `date_failed` / `shape_failed` (the non-jq sites formerly mis-named
+`jq_failed rc=0`). Two rows CHANGED: `registry_drift` now refuses ONLY when a pinned id vanished
+(`missing_from_registry > 0`); a registry that GREW prints `registry: N function(s) registered
+after 09-15 … UNMEASURED` and QUALIFIES the exit-5 verdict instead of blocking it, so a cron added
+before day 7 does not turn every sweep into CANNOT ESTABLISH with a remedy that needed a probe PR.
+And the explained set is pinned as exact RUN-ID SETS (`ids` on each triple), joined to
+`routine_runs.run_id` — the functionID→name mapping is proven, not inferred from counts, and the
+same counts with different members are UNEXPLAINED. The SOAK CLEAN verbs are re-ordered "flip →
+wait for the next sweep's SOAK CLEAN → release the images → close LAST": a fresh reading between
+the reversible and the irreversible verb is what protects the snapshots. DC1 is resolved the other
+way (enrol at the enrollment instant), for the reason recorded in `decision-challenges.md`.
+
 `set -uo pipefail` only — no `set -e` (an errexit abort exits 1 = the sweeper's FAIL verb, the
 7674 sibling's header explains). No `${VAR:?}` anywhere (rule 1 of the varq-ban lint). Credential
 absence is 3, not 2: for a notify-only probe "could not measure" is CANNOT ESTABLISH by definition,

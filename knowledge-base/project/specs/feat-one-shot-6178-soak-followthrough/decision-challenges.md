@@ -24,8 +24,16 @@ operator's stated direction is the default and is what the plan implements.
   09-22; if the operator's direction was right and we changed it, nothing about the verdict
   itself changes (the probe's date branch is pinned to SOAK_END either way).
 
-Resolution needed by: the ship phase (the directive is appended at ship time, Phase 7). If
-unresolved, the plan's value (`2026-09-22T13:23:00Z`) is used.
+**Resolved 2026-09-19 at review (architecture seat, P1):** `earliest=` is set to the ENROLLMENT
+instant. The runner-path copies of the three credentials (GitHub repo secrets, forwarded by the
+sweeper's Guard 3) have not been exercised by any sweeper run since #5875 closed on 2026-07-02 —
+`WEBHOOK_DEPLOY_SECRET` was last written 2026-03-21 — so a day-7 `earliest=` would have made the
+soak verdict the first-ever use of them, and a stale copy would have surfaced as CANNOT
+ESTABLISH on the one day that mattered. Enrolling now makes the Phase-7 dry-run dispatch EXECUTE
+the probe under the real sweeper env (the plan's step 7 already anticipated that arm), and the
+daily NOT YET comments until 09-22 double as the liveness signal #8349 says the sweeper lacks.
+The "operator's stated direction" here was the one-shot brief's own literal, not an operator
+instruction; the operator asked for the follow-through to be finished with everything measured.
 
 ## Taste findings from the plan-review named panel (2026-09-19; surfaced, not applied)
 

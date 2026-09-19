@@ -2159,8 +2159,9 @@ if want_scripts; then
   # double-encoded like the warehouse `raw` column: a harness whose seam sits above the decode
   # reproduces #7674's own 0/40-vs-40/40 measurement and passes while testing nothing.
   run_suite "scripts/inngest-host-not-serving-7674" bash scripts/followthroughs/inngest-host-not-serving-7674.test.sh
-  # #6178 ADR-100 soak probe. Notify-only: its exit code is rendered as NOT YET / CANNOT ESTABLISH /
-  # ACTION REQUIRED and 0/1 would close or reopen a tracker whose close releases four snapshots.
+  # #6178 ADR-100 soak probe. The suite pins the never-0/never-1 invariant after every invocation
+  # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
+  # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
   run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide

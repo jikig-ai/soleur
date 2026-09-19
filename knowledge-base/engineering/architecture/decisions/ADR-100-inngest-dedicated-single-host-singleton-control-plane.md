@@ -1427,20 +1427,33 @@ immutable, historical EXCEPTION to Decision 7's bucket criterion, and the flip c
 two runs of one tick started more than 20 minutes apart land in different buckets and read clean.
 
 **What the day-7 probe measures.** `scripts/followthroughs/inngest-soak-6178.sh` is enrolled on
-#6178 with `earliest=2026-09-22T13:23:00Z` and replaces the 07-07 extraction plan's Phase 4.1
+#6178 with `earliest=` at its enrollment instant (2026-09-19 — so the day-7 reading is not the
+first-ever execution of the runner-path credentials; the daily NOT YET comments until 09-22 are
+the liveness signal) and replaces the 07-07 extraction plan's Phase 4.1
 prescription (`inngest-double-fire-6178.sh`, exit 0 = close) with a NOTIFY-ONLY probe (exit 2 NOT
 YET / 3 CANNOT ESTABLISH / 5 ACTION REQUIRED; never 0, never 1) — the close authorises this
 status flip and the release of four rollback snapshots, which are operator verbs. It reads the
 same on-host doublefire probe in five population slices (the deploy webhook forwards only `from`
-and `function_ids`, so there is no time slicing), buckets exactly as `op=verify` 2.6 does, pins the
-two groups above as exact `(functionID, bucket, count)` triples — the minter at 5 or at 3 is
-UNEXPLAINED, and so is any third function in bucket 1491374 — and, before any slice, GETs the
-registry and refuses (`registry_drift`) unless it still holds 70 functions with every population
-id present (70 on 09-15, on 09-19, and at the probe's first run). On a clean day-7 reading its
-ACTION REQUIRED text names the verbs in order: flip this ADR `adopting → accepted`, release the
-four `inngest-cutover-pre-*` hcloud images (398857857, 406654994, 407991378, 411798619 — none from
-09-15; no `op=backup` ran for the completed cutover), and close #6178 LAST, because a notify-only
-probe never exits 1 and a group found after the close is dropped by the sweeper's closed-set path.
+and `function_ids`, so there is no time slicing), buckets exactly as `op=verify` 2.6 does, and pins
+the two groups above as exact RUN-ID SETS: the host's `.id` is the ULID the run-log middleware
+writes to `routine_runs.run_id`, and the join on 2026-09-19 matched the minter's four ids
+(`01M2QPSG3066…`, `01M2QPSGN9WF…`, `01M2QPSH0C5M…`, `01M2QPSHH0TR…`) and the credit probe's two
+(`01M2QPSG3C1H…`, `01M2QPSGKXBT…`) exactly — so the functionID→name mapping above is proven by
+join, not inferred from counts, and the minter at 5 or at 3, a third function in bucket 1491374,
+or the same counts with other members are all UNEXPLAINED. Before any slice it GETs the registry:
+a pinned cron that vanished refuses (`registry_drift`); a registry that grew (70 on 09-15, 09-19
+and at the probe's first run) is reported as UNMEASURED functions and qualifies the verdict rather
+than blocking it. A manual trigger of a cron within 1200 s of its scheduled tick reads as a group
+(three manual runs of `cron-compound-promote` already sit in the window without colliding); the
+probe cannot see `trigger_source`, so that attribution against `routine_runs` is the operator's
+step. On a clean day-7 reading its ACTION REQUIRED text names the verbs in order: flip this ADR
+`adopting → accepted` (reversible); wait for the NEXT sweep's comment to read SOAK CLEAN again — a
+fresh reading between the reversible and the irreversible verb is what protects the snapshots;
+release the four `inngest-cutover-pre-*` hcloud images (398857857, 406654994, 407991378, 411798619 —
+none from 09-15; no `op=backup` ran for the completed cutover); and close #6178 LAST, because a
+notify-only probe never exits 1 and a group found after the close is dropped by the sweeper's
+closed-set path. Past 2026-10-06 the probe refuses before any GET (`horizon_passed`): the heaviest
+slice has outgrown the host's page budget by then and the verbs are overdue.
 
 **Anchor provenance (ADR-146).** The probe's `from` is `bucket_floor(2026-09-15T13:23:00Z) − 2 ×
 1200 s = 2026-09-15T12:40:00Z`, where 13:23:00Z is the 09-15 `op=verify` pass (run 34974655656).
