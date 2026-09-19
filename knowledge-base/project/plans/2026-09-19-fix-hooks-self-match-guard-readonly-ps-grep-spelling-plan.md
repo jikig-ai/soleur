@@ -359,6 +359,7 @@ Edit `.claude/hooks/pkill-self-match-guard.sh`:
 - `.claude/hooks/pkill-self-match-guard.sh` — header (summary rewrite, measured facts, accepted-gap list), step-0 pre-trigger, `strip_heredocs` fail-open guard (WARN + skip), control-flow restructure, read-only arm, `emit()` telemetry, remedy text.
 - `.claude/hooks/pkill-self-match-guard.test.sh` — rows D1–D19 and A1–A23, A6's two controls, the Devin `exec` read-only row, the telemetry row, `MIN_ASSERTIONS`.
 - `plugins/soleur/skills/review/SKILL.md` — one clause in the "A process count that greps its own pattern" bullet.
+- `plugins/soleur/skills/work/SKILL.md` — (review round 1) the ownership example in "A `ps | grep` hit is not YOUR process" gains `| grep -v grep`.
 - `.claude/hooks/README.md` — one `## Hook roster` row for this hook (Denies 2, rule id `pkill-self-match-guard-readonly`).
 - Written by the pipeline, not this plan (listed so the diff-scope AC is honest): `knowledge-base/INDEX.md` (regenerated), `knowledge-base/project/specs/feat-one-shot-8330-self-match-readonly-spelling/{tasks.md,session-state.md,decision-challenges.md}`, this plan file, and a compound learning under `knowledge-base/project/learnings/`.
 
@@ -378,9 +379,9 @@ None.
 - [x] AC8 — Mutation evidence: the PR body carries one line per Guard Contract row M1–M13 and H1–H4 naming the row and quoting the FAIL/FATAL line it produced on the scratch copy.
 - [x] AC9 — Telemetry: with `R=$(mktemp -d); mkdir -p "$R/.claude"`, running AC5's input with `INCIDENTS_REPO_ROOT="$R"` leaves exactly one line in `"$R/.claude/.rule-incidents.jsonl"` whose `.rule_id` is `pkill-self-match-guard-readonly`; a fresh `$R` with D11's both-spellings command leaves NO line in that file (the `-f` arm does not emit) and exactly one JSON object on stdout.
 - [x] AC10 — `bash .claude/hooks/incident-sandbox-coverage.test.sh` and `bash .claude/hooks/hookeventname-coverage.test.sh` exit 0; `grep -c 'hookEventName' .claude/hooks/pkill-self-match-guard.sh` ≥ 2 (both envelopes carry the event name).
-- [x] AC11 — `grep -c 'guarded since #8330' plugins/soleur/skills/review/SKILL.md` = 1 and `grep -c 'is unguarded (#8330)' plugins/soleur/skills/review/SKILL.md` = 0.
+- [x] AC11 — `grep -c 'since #8330 the \`ps … | grep\` spelling' plugins/soleur/skills/review/SKILL.md` = 1 and `grep -c 'is unguarded (#8330)' plugins/soleur/skills/review/SKILL.md` = 0. (Amended at review round 1: the clause was reworded to drop the self-contradictory "signal-sending spellings only" — the anchor moved with it.)
 - [x] AC12 — `TEST_GROUP=scripts bash scripts/test-all.sh` is green (or, if the host refuses a full-gate run, every suite returned by `git grep -l 'pkill-self-match-guard\|incidents.sh' -- '.claude/hooks/*.test.sh'` is green individually).
-- [x] AC13 — Diff scope: `git diff --name-only origin/main...HEAD` is a subset of the paths in §Files to Edit (including the pipeline-written set).
+- [x] AC13 — Diff scope: `git diff --name-only origin/main...HEAD` is a subset of the paths in §Files to Edit (including the pipeline-written set) plus `plugins/soleur/skills/work/SKILL.md` (amended at review round 1: its ownership example `ps -ef | grep test-all.sh | wc -l` is a spelling the new arm denies, so the example gained `| grep -v grep`).
 - [x] AC14 — README roster: `grep -cF -e 'pkill-self-match-guard.sh` | 2 |' .claude/hooks/README.md` = 1 (the row starts with the backticked basename, a `2` deny count, and the read-only rule id).
 
 ## Test Scenarios
