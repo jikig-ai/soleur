@@ -62,11 +62,47 @@ Derived from `knowledge-base/project/plans/2026-09-19-chore-retire-doublefire-pr
 
 - [ ] 4.1 Delete the drop workflow, `0002`, `anon-probe.sh`, `inngest-rls-mutation.test.sh`, both probes, both lint-baseline entries
 - [ ] 4.2 `git mv` the shape guard; strip the `dev_*` block **with** `argv[2]`, the `dev =` load, `DEV_WF=` and the two dev asserts (else 13 of 15 prd probes red)
-- [ ] 4.3 `inngest-rls.test.sh`: hoist the `ALLOW_14` cardinality guard out of `profile_0002` first, then delete `profile_0002`, `SQL_0002`, the two cross-file checks and the newly dead helpers
+- [ ] 4.3 `inngest-rls.test.sh`: hoist the `ALLOW_14` cardinality guard out of `profile_0002` first,
+  then delete `profile_0002`, `SQL_0002`, the cross-file check and the newly dead helpers.
+  **Hoist verified at work time, so it is not taken on faith:** the guard is
+  `if [[ "${#ALLOW_14[@]}" -eq 14 ]]` inside `profile_0002`, and `profile_0001`'s negative-noun loop
+  (`for nt in "${ALLOW_14[@]}" users conversations`) consumes the same array. Deleting the profile
+  therefore removes the only cardinality check while leaving a live consumer — the array could then
+  silently shrink and `profile_0001` would report `ok` over fewer names. Hoist it to top level,
+  immediately after the `ALLOW_14=(` declaration.
+  Note: commit A left ONE cross-file check, repointed at the drop workflow's `NAMES` array; it goes
+  here with the workflow it reads.
 - [ ] 4.4 `infra-validation.yml`: drop the paths entry, rename the shape-guard step, delete the mutation step
 - [ ] 4.5 Both registration guards; `fixture-relative-assert.baseline.txt`; `lint-supabase-deprecated-endpoints.sh` allowlist (rename entry is mandatory — `UNPINNED-HOST`)
 - [ ] 4.6 Re-measure `lint-supabase-deprecated-endpoints.highwater` at this commit and write the provenance line naming the departed call sites
-- [ ] 4.7 Sweep the dangling prose references in surviving files (prd workflow header, `0001` RAISE message, advisor scan, CODEOWNERS, scrub-pat "FOUR places", rehearsal comment, 7431 comment)
+- [ ] 4.7 Sweep the dangling references in surviving files. **The work-list below is
+  GREP-ENUMERATED against the live tree at `d5887b050`, not intuited** — the plan's prose
+  enumeration (prd workflow header, `0001` RAISE, advisor scan, CODEOWNERS, scrub-pat "FOUR
+  places", rehearsal comment, 7431 comment) is a starting hypothesis; these are the actual hits.
+  Re-run each grep after the deletions rather than trusting this snapshot.
+  - `git grep -nE 'anon-probe' -- . ':!knowledge-base' ':!*.md'`
+    - [ ] `.github/workflows/apply-inngest-rls.yml:50` — comment naming `anon-probe.sh` as a dev-only artifact
+    - [ ] `scripts/lint-shell-trace-credential-refusal.baseline.txt:17` and `-d.baseline.txt:15`
+    - [ ] `scripts/lint-supabase-deprecated-endpoints.sh:18,177` — comments citing `anon-probe.sh:30,55,66`
+    - [ ] `apply-inngest-rls-workflow.test.sh` — `prd_ignores_probe` KEEPS its assertion (the property
+      is that the `paths:` filter stays narrow, and a re-widening to `**` would match the path again
+      whether or not the file exists); the header note added in commit A already says so. Verify, do not delete.
+  - `git grep -nE 'inngest-rls-drop-6488' -- . ':!knowledge-base' ':!*.md'`
+    - [ ] both trace-credential baselines (`:58` / `:37`)
+  - `git grep -nE 'inngest-doublefire-reading-6617' -- . ':!knowledge-base' ':!*.md'`
+    - [ ] `scripts/followthroughs/cpx22-invoice-reconcile-7431.sh:65` — comment citing it as precedent
+  - `git grep -nE 'inngest-rls-mutation' -- . ':!knowledge-base' ':!*.md'`
+    - [ ] `.github/scripts/test/test-infra-suite-registration.sh:114`
+    - [ ] `apps/web-platform/infra/run-registered-suites.test.sh:115`
+    - [ ] `.github/workflows/infra-validation.yml:1525` (the step) — and its `paths:` entry
+    - [ ] `apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:16` — comment citing it
+    - [ ] `plugins/soleur/test/fixture-relative-assert.baseline.txt:175` — regenerate, do not hand-edit
+  - `git grep -nE 'apply-inngest-rls-dev' -- . ':!knowledge-base' ':!*.md'`
+    - [ ] `.github/workflows/apply-inngest-rls.yml:54` — "The dev counterpart is …"
+    - [ ] `.github/workflows/infra-validation.yml:66,69` — the transitional comment and the `paths:` entry
+    - [ ] `apply-inngest-rls-workflow.test.sh:154` — `prd_ignores_devwf`: same disposition as `prd_ignores_probe`
+  - [ ] `scripts/lib/scrub-supabase-pat.sh:6` — "inlined in FOUR places"; re-count after the deletions
+    (the dev workflow and `anon-probe.sh` were two of them) and write the measured number.
 - [ ] 4.8 ADR-100 addendum (the URL-bearing record); ADR-030 amendment-log pointer; `expenses.md` pointer
 - [ ] 4.9 `followthrough-convention.md` rule citing the measured value; learning item 19 correction
 - [ ] 4.10 De-enrol both trackers (label + directive block)
