@@ -32,7 +32,7 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # Throwaway git repo with a valid Next.js-shaped app dir, committed clean (no origin/main).
 make_repo() {
   local fx="$TMPROOT/$1"
-  mkdir -p "$fx/apps/web-platform/app"
+  mkdir -p "$fx/apps/web-platform/app" "$fx/apps/web-platform/components" "$fx/apps/web-platform/server"
   git -C "$fx" init -q
   git -C "$fx" config user.email "test@example.com"
   git -C "$fx" config user.name "test"
