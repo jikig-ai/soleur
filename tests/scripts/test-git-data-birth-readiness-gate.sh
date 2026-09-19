@@ -71,6 +71,121 @@ assert_fixture_dir() {
   esac
 }
 
+# ── (#8010) THE RUN-RESOLUTION TEST SEAM, and why it is armed for the WHOLE suite ──
+#
+# `git_data_rung2_rehearsal_gate` now resolves its evidence URL against the GitHub Actions
+# API. Every arm that RELEASES therefore reaches a network step, so the seam is exported at
+# suite top rather than prefixed per command: `mutate_r2` and `mutate_g` run their mutants in
+# CHILD SHELLS (`bash -c`), and a per-command prefix on the parent would not reach them.
+#
+# The double gate is the point (mirrors SOLEUR_SENTRY_READER in the capture script):
+# SOLEUR_RUNG2_RUN_FETCH is honoured ONLY when SOLEUR_TEST_MODE is also set, so a single
+# leaked env var in a workflow cannot redirect the gate's only network call. Arm T-SEAM2
+# below asserts the fall-through when the second half is absent.
+#
+# The SIBLING capture suite deliberately does NOT export it suite-wide: there the double gate
+# is itself the property under test.
+export SOLEUR_TEST_MODE=1
+export SOLEUR_RUNG2_RUN_FETCH="$TMP/api-fetch.sh"
+export SOLEUR_RUNG2_RETRY_SLEEP=0
+
+# The stub store is keyed by the URL PATH SUFFIX the gate passes (`runs/<id>` or
+# `runs/<id>/artifacts`), so ONE stub serves both endpoints. Its contract is body-then-status,
+# matching the real fetch now that no header parsing exists: the last line is the HTTP status,
+# everything above it is the body.
+#
+# A MISSING ENTRY IS A TRANSPORT FAILURE, not an empty 200 — "the endpoint answered with
+# nothing" and "nothing answered" are the two states this gate's could-not-measure vocabulary
+# exists to keep apart, and a stub that conflated them would make every RUN_OFFLINE arm
+# vacuous. rc 7 is curl's connect failure.
+mkdir -p "$TMP/api"
+assert_fixture_dir "$TMP/api"
+cat > "$TMP/api-fetch.sh" <<'STUB'
+#!/usr/bin/env bash
+# Path-suffix-keyed stub for SOLEUR_RUNG2_RUN_FETCH. Prints body then status; rc 7 = no entry.
+set -uo pipefail
+store="${SOLEUR_RUNG2_STUB_STORE:?stub store unset}"
+suffix="${1:-}"
+body="${store}/${suffix}.body"
+status="${store}/${suffix}.status"
+[[ -f "$body" ]] || exit 7
+cat "$body"
+# A ONE-SHOT status: the first call gets it, every later call gets 200. This is how the
+# anonymous-retry arm is fixtured — the stub cannot see the Authorization header, so the
+# retry is expressed as "the second attempt succeeds".
+if [[ -f "${status}.once" ]]; then
+  cat "${status}.once"; rm -f "${status}.once"
+else
+  cat "$status" 2>/dev/null || printf '200\n'
+fi
+STUB
+chmod +x "$TMP/api-fetch.sh"
+export SOLEUR_RUNG2_STUB_STORE="$TMP/api"
+
+# _stub_run <id> [key=value ...]
+#   Seeds BOTH endpoints for one run id. Keys: head_sha conclusion status path event
+#   head_branch created_at http artifacts.
+#   `artifacts` defaults to one entry named git-data-rung2-boot-evidence — the shape a real
+#   capture run produces; a dry_run dispatch is expressed as `artifacts=none`.
+#   Re-callable: a later call overwrites, which is how one shared URL serves fixtures in
+#   different throwaway repositories (their HEADs differ, and head_sha must resolve in the
+#   repository the gate is judging).
+_stub_run() {
+  local id="$1"; shift
+  local head_sha="" conclusion="success" status="completed" http="200"
+  local path=".github/workflows/git-data-rung2-rehearsal.yml"
+  local event="workflow_dispatch" head_branch="main" created_at artifacts="evidence"
+  created_at="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
+  local kv
+  for kv in "$@"; do
+    case "$kv" in
+      head_sha=*)    head_sha="${kv#*=}" ;;
+      conclusion=*)  conclusion="${kv#*=}" ;;
+      status=*)      status="${kv#*=}" ;;
+      path=*)        path="${kv#*=}" ;;
+      event=*)       event="${kv#*=}" ;;
+      head_branch=*) head_branch="${kv#*=}" ;;
+      created_at=*)  created_at="${kv#*=}" ;;
+      http=*)        http="${kv#*=}" ;;
+      artifacts=*)   artifacts="${kv#*=}" ;;
+      *) _a_setup_fail "_stub_run: unknown key '${kv}'" ;;
+    esac
+  done
+  mkdir -p "$TMP/api/runs/${id}"
+  rm -f "$TMP/api/runs/${id}.status.once"
+  if [[ "$http" == "raw" ]]; then
+    printf 'not json at all\n' > "$TMP/api/runs/${id}.body"
+    printf '200\n' > "$TMP/api/runs/${id}.status"
+  elif [[ "$http" == "401once" ]]; then
+    jq -n --arg id "$id" --arg sha "$head_sha" --arg c "$conclusion" --arg s "$status" \
+          --arg p "$path" --arg e "$event" --arg b "$head_branch" --arg t "$created_at" \
+      '{id: ($id|tonumber), head_sha: $sha, conclusion: $c, status: $s, path: $p,
+        event: $e, head_branch: $b, created_at: $t}' \
+      > "$TMP/api/runs/${id}.body" || _a_setup_fail "_stub_run: jq failed for ${id}"
+    printf '200\n' > "$TMP/api/runs/${id}.status"
+    printf '401\n' > "$TMP/api/runs/${id}.status.once"
+  else
+    jq -n --arg id "$id" --arg sha "$head_sha" --arg c "$conclusion" --arg s "$status" \
+          --arg p "$path" --arg e "$event" --arg b "$head_branch" \
+      '{id: ($id|tonumber), head_sha: $sha, conclusion: (if $c == "null" then null else $c end),
+        status: $s, path: $p, event: $e, head_branch: $b}' \
+      > "$TMP/api/runs/${id}.body" || _a_setup_fail "_stub_run: jq failed for ${id}"
+    printf '%s\n' "$http" > "$TMP/api/runs/${id}.status"
+  fi
+  case "$artifacts" in
+    none)    jq -n '{total_count: 0, artifacts: []}' > "$TMP/api/runs/${id}/artifacts.body" ;;
+    log)     jq -n --arg t "$created_at" '{total_count: 1, artifacts: [{name: "git-data-rung2-capture-log", expired: false, created_at: $t}]}' > "$TMP/api/runs/${id}/artifacts.body" ;;
+    missing) rm -f "$TMP/api/runs/${id}/artifacts.body" ;;
+    *)       jq -n --arg t "$created_at" '{total_count: 1, artifacts: [{name: "git-data-rung2-boot-evidence", expired: false, created_at: $t}]}' > "$TMP/api/runs/${id}/artifacts.body" ;;
+  esac
+  printf '200\n' > "$TMP/api/runs/${id}/artifacts.status"
+  # `created_at` on the RUN is what the 90-day branch reads; keep it beside the run body.
+  printf '%s\n' "$created_at" > "$TMP/api/runs/${id}.created_at"
+  jq --arg t "$created_at" '. + {created_at: $t}' "$TMP/api/runs/${id}.body" \
+    > "$TMP/api/runs/${id}.body.tmp" 2>/dev/null \
+    && mv "$TMP/api/runs/${id}.body.tmp" "$TMP/api/runs/${id}.body"
+}
+
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
@@ -412,6 +527,21 @@ _r2_hash() {  # $1 = dir holding ci.yml + modules/git-data-userdata/main.tf + pa
 }
 R2_SHA="$(_r2_hash "$R2")"
 
+# (#8010) SEED THE RUN STUBS FOR EVERY ID THE FIXTURES CITE.
+#
+# The id list is DERIVED, not remembered: `grep -oE 'actions/runs/[0-9]+'` over this file
+# yields 1, 2, 3, 4, 5, 17250000001, 17253046871 (the R2 battery) and 17260000001 /
+# 17260000002 (the Guard 4 battery, seeded beside their own repositories below). A missed id
+# turns a green arm red on merge, because an unseeded id is a TRANSPORT failure by design.
+#
+# `head_sha` is the R2 repository's c1 — the commit that carries the bound files. Any later
+# commit would hash identically (only evidence files are added after c1), but c1 is the one
+# that exists before every arm runs, and `git cat-file -e` is evaluated at gate time.
+_R2_C1="$(git -C "$R2" rev-parse HEAD)"
+for _id in 1 2 3 4 5 17250000001 17253046871; do
+  _stub_run "$_id" "head_sha=$_R2_C1"
+done
+
 r2check() {
   local name="$1" want_rc="$2" needle="$3" ci="$4" ev="$5"
   local out rc
@@ -428,12 +558,18 @@ r2check() {
 # precondition of nine fixtures, not a property of any of them.
 R2_URL="https://github.com/jikig-ai/soleur/actions/runs/17250000001"
 
-_r2_evidence_write() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence, default "none"] -- the pure writer
+_r2_evidence_write() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence "none"] [$6=sentry "CLEAN"] [$7=ack]
   # Defaults to the EXPLICIT `none` rather than omitting the key: an absent key is now
   # refused, because omitting it left the allowlist loop iterating zero times and the CLOSED
   # allowlist refusing nothing (#7066 review). "Nothing diverged" must be declared.
-  printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=%s\n' \
-    "$2" "$3" "$4" "${5:-none}" > "$1"
+  #
+  # (#8010) RUNG2_SENTRY_CROSSCHECK joins the required-key set, so it defaults to the one
+  # value that continues — every pre-existing arm keeps testing the refusal it names instead
+  # of tripping on a new cardinality HOLD first. The optional ack key is written only when
+  # asked: it is at-most-once, so an unconditional empty line would refuse every fixture.
+  printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=%s\nRUNG2_SENTRY_CROSSCHECK=%s\n' \
+    "$2" "$3" "$4" "${5:-none}" "${6:-CLEAN}" > "$1"
+  [[ -n "${7:-}" ]] && printf 'RUNG2_SENTRY_CROSSCHECK_ACK=%s\n' "$7" >> "$1"
   return 0
 }
 # The legacy writer: write, then commit the file ALONE (#8043 NFR2). The Guard 4 fixtures use
@@ -717,7 +853,7 @@ mutate_and_check "missing-file guard" \
 printf '\nmutation checks — rung-2 gate\n'
 
 mutate_r2() {
-  local label="$1" sed_expr="$2" want_rc="$3" ci="$4" ev="$5"
+  local label="$1" sed_expr="$2" want_rc="$3" ci="$4" ev="$5" needle="${6:-}"
   local mutated out rc
   mutated="$TMP/mutated-r2.sh"
   sed "$sed_expr" "$GATE" > "$mutated"
@@ -726,10 +862,52 @@ mutate_r2() {
     return
   fi
   out="$(bash -c "source '$mutated'; git_data_rung2_rehearsal_gate '$ci' '$ev'" 2>&1)"; rc=$?
-  if [[ "$rc" -eq "$want_rc" ]]; then
+  # (#8010) THE OPTIONAL 6th ARGUMENT IS WHAT MAKES A HOLD->HOLD ROW MEAN ANYTHING.
+  #
+  # Every row here asserted rc ALONE. That is sufficient while the mutation is expected to
+  # flip HOLD to RELEASE (rc 1 -> 0), and VACUOUS the moment a row expects HOLD both before
+  # and after: the gate is a chain of refusals, so neutering arm N lets the fixture fall
+  # through to arm N+1, which HOLDs for a DIFFERENT reason with rc=1 — and the row passes
+  # having proven nothing about arm N. The needle pins WHICH refusal spoke.
+  if [[ "$rc" -eq "$want_rc" ]] && { [[ -z "$needle" ]] || [[ "$out" == *"$needle"* ]]; }; then
     pass "$label (arm is load-bearing — neutering it flips the verdict)"
   else
-    fail "$label — the arm did NOT change behavior when neutered; it may be dead code" "$rc" "$out"
+    fail "$label — the arm did NOT change behavior when neutered; it may be dead code${needle:+ (wanted '$needle')}" "$rc" "$out"
+  fi
+}
+
+# mutate_suite <label> <sed_expr> <expect_fails>
+#   HARNESS ROW: mutates THIS SUITE, not the gate, and asserts the mutant reports at least
+#   <expect_fails> failures. Every guard below owes one — row (a) of the Guard Contract's
+#   mutation matrix is "neuter the harness", and no helper did that: `mutate_r2`/`mutate_g`
+#   can only edit $GATE. Without it a stub that answers every question identically, or an
+#   assertion helper that always takes the pass branch, is indistinguishable from a healthy
+#   run (the #7275 shape).
+mutate_suite() {
+  local label="$1" sed_expr="$2" expect_fails="${3:-1}"
+  local mutated out rc got
+  # RECURSION BREAKER, and it PASSES rather than returning silently. A mutant that simply
+  # skipped these rows would run fewer assertions than the floor, red for THAT reason, and
+  # every row here would then pass having proven nothing — the floor would be doing the
+  # work the mutation is supposed to do. Passing keeps the mutant's assertion count equal
+  # to the parent's, so the only thing that can red it is the injected defect.
+  if [[ -n "${SOLEUR_RUNG2_SUITE_MUTANT:-}" ]]; then
+    pass "$label (suppressed inside a suite mutant)"
+    return
+  fi
+  mutated="$TMP/mutated-suite.sh"
+  sed "$sed_expr" "${BASH_SOURCE[0]}" > "$mutated"
+  if cmp -s "$mutated" "${BASH_SOURCE[0]}"; then
+    fail "$label — the mutation matched NOTHING in the suite (byte-identical copy)" "n/a" "no textual change"
+    return
+  fi
+  # SOLEUR_RUNG2_SUITE_MUTANT breaks the recursion: the mutant must not re-enter this battery.
+  out="$(SOLEUR_RUNG2_SUITE_MUTANT=1 bash "$mutated" 2>&1)"; rc=$?
+  got="$(printf '%s\n' "$out" | sed -n 's/^=== [0-9]* passed, \([0-9]*\) failed ===$/\1/p' | tail -1)"
+  if [[ -n "$got" && "$got" -ge "$expect_fails" ]]; then
+    pass "$label (harness row: the mutant reports ${got} failure(s), floor ${expect_fails})"
+  else
+    fail "$label — the mutated SUITE did not red; the assertion it guards is vacuous" "$rc" "reported failures='${got:-none}'"
   fi
 }
 
@@ -1606,7 +1784,11 @@ _g() {
 
 # mutate_g <label> <sed_expr> <want_rc> <fn> <args...> -- the mutate_r2 idiom, for any function.
 mutate_g() {
-  local label="$1" sed_expr="$2" want_rc="$3" mutated out rc; shift 3
+  local label="$1" sed_expr="$2" want_rc="$3" mutated out rc
+  # The needle rides an ENV var rather than a 4th positional, because every remaining
+  # argument is the function-and-args vector this helper forwards.
+  local _mg_needle="${MUTATE_G_NEEDLE:-}"
+  shift 3
   mutated="$TMP/mutated-g.sh"
   sed "$sed_expr" "$GATE" > "$mutated"
   if cmp -s "$mutated" "$GATE"; then
@@ -1614,10 +1796,12 @@ mutate_g() {
     return
   fi
   out="$(bash -c 'source "$1"; shift; "$@"' _ "$mutated" "$@" 2>&1)"; rc=$?
-  if [[ "$rc" -eq "$want_rc" ]]; then
+  # (#8010) Same needle contract as mutate_r2 above — see its comment for why an rc-only
+  # assertion is vacuous on any row whose mutation leaves the verdict at HOLD.
+  if [[ "$rc" -eq "$want_rc" ]] && { [[ -z "$_mg_needle" ]] || [[ "$out" == *"$_mg_needle"* ]]; }; then
     pass "$label (arm is load-bearing — neutering it flips the verdict)"
   else
-    fail "$label — the arm did NOT change behavior when neutered; it may be dead code" "$rc" "$out"
+    fail "$label — the arm did NOT change behavior when neutered; it may be dead code${_mg_needle:+ (wanted '"'"'$_mg_needle'"'"')}" "$rc" "$out"
   fi
 }
 
@@ -1827,6 +2011,402 @@ _gZ_np="$(git -C "$_gZ" rev-list --parents -n1 "$_gZ_last" | wc -w)"
 if [[ "$_gZ_np" -ne 3 ]]; then _a_setup_fail "G29 fixture: the last evidence-touching commit ${_gZ_last} has $((_gZ_np - 1)) parent(s), expected 2 (a merge)"; fi
 _g "G29: a MERGE commit touching the evidence, one parent side carrying a payload edit => ARM 1 HOLD (-m is load-bearing)" \
   1 "git-data-gc.sh" git_data_rung2_evidence_provenance_gate "$_gZ/ci.yml" "$_gZ/evidence.env" birth
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# (#8010) THE LOAD-BEARING ARMS: the resolved run, the head-SHA binding, the Sentry verdict
+# ═══════════════════════════════════════════════════════════════════════════════════════
+#
+# Before this battery the gate checked the SHAPE of an assertion, never that a rehearsal
+# passed: a four-line hand-written file naming a nonexistent run released it. Every row below
+# names the property it buys, and the mutation rows at the end prove each arm is load-bearing.
+#
+# PER-FAMILY ROW COUNTS ARE PINNED. The suite-wide floor cannot see a family that silently
+# stops running — 13 missing S rows are 13 assertions the floor happily absorbs if any other
+# family grew. `_expect_rows` reds at the family's own name instead.
+declare -A _FAM=()
+_row() {  # <family> <name> <want_rc> <needle> <ci> <ev>
+  local fam="$1"; shift
+  _FAM[$fam]=$(( ${_FAM[$fam]:-0} + 1 ))
+  r2check "$@"
+}
+_expect_rows() {  # <family> <n>
+  local fam="$1" want="$2" got="${_FAM[$1]:-0}"
+  if [[ "$got" -eq "$want" ]]; then
+    pass "row-count pin: family ${fam} ran ${got} rows"
+  else
+    fail "row-count pin: family ${fam} ran ${got} rows, expected ${want} — a table was truncated or mis-parsed" "n/a" ""
+  fi
+}
+
+# The canonical releasing fixture for this battery: hash-matched, provenance-clean, and now
+# also run-resolvable. Every refusal row below is this file with exactly one thing changed.
+_S_URL="https://github.com/jikig-ai/soleur/actions/runs/17250000001"
+
+_s_ev() {  # <name> <sentry> [ack] [url] -- write + commit an evidence file alone
+  local n="$1" sentry="$2" ack="${3:-}" url="${4:-$_S_URL}"
+  _r2_evidence_write "$R2/$n" PASS "$url" "$R2_SHA" none "$sentry" "$ack"
+  _r2_commit_alone "$R2/$n"
+}
+
+printf '\n(#8010) S — the Sentry cross-check verdict\n'
+
+_s_ev s1.env CLEAN
+_row S "S1: CLEAN => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/s1.env"
+
+_s_ev s2.env FATAL
+_row S "S2: FATAL is a measured second-channel failure => HOLD, never ack-able" 1 "[SENTRY_VERDICT_FATAL]" "$R2/ci.yml" "$R2/s2.env"
+
+_s_ev s3.env NOT_RUN
+_row S "S3: NOT_RUN (the cross-check never ran) => could-not-measure HOLD" 1 "[SENTRY_VERDICT_UNREADABLE]" "$R2/ci.yml" "$R2/s3.env"
+
+_s_ev s4.env BANANA
+_row S "S4: an unknown verdict is not a pass => could-not-measure HOLD" 1 "[SENTRY_VERDICT_UNREADABLE]" "$R2/ci.yml" "$R2/s4.env"
+
+_s_ev s5.env ""
+_row S "S5: an EMPTY verdict is silence, and silence cannot release" 1 "[SENTRY_VERDICT_UNREADABLE]" "$R2/ci.yml" "$R2/s5.env"
+
+_s_ev s6.env UNAVAILABLE
+_row S "S6: UNAVAILABLE with no ack => HOLD (the key that released everything before #8010)" 1 "[SENTRY_UNAVAILABLE_UNACKED]" "$R2/ci.yml" "$R2/s6.env"
+
+_s_ev s7.env UNAVAILABLE "99999999:copied forward from another run"
+_row S "S7: an ack naming a DIFFERENT run is an ack copied forward" 1 "[SENTRY_ACK_MISMATCH]" "$R2/ci.yml" "$R2/s7.env"
+
+_s_ev s8.env UNAVAILABLE "17250000001:   "
+_row S "S8: an ack with an empty reason acknowledges nothing" 1 "[SENTRY_UNAVAILABLE_UNACKED]" "$R2/ci.yml" "$R2/s8.env"
+
+_s_ev s9.env UNAVAILABLE "17250000001:quiet 90s window; the reopen read on this host answered"
+_row S "S9: UNAVAILABLE + a well-formed ack => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/s9.env"
+
+_s_ev s10.env UNAVAILABLE "17250000001:  whitespace after the colon is permitted"
+_row S "S10: optional whitespace may follow the colon" 0 "RELEASED" "$R2/ci.yml" "$R2/s10.env"
+
+# The gate's trailing-comment strip (`s/[[:space:]]#.*$//`) truncates anything from ' #'
+# onward, so a reason carrying '#' would be silently shortened. Refused by name instead.
+_s_ev s11.env UNAVAILABLE "17250000001:see issue #8010 for why"
+_row S "S11: a reason containing '#' is refused by name, not silently truncated" 1 "[SENTRY_UNAVAILABLE_UNACKED]" "$R2/ci.yml" "$R2/s11.env"
+
+# An ack beside CLEAN satisfies no property; refusing it would be ceremony.
+_s_ev s12.env CLEAN "17250000001:harmless"
+_row S "S12: an ack beside CLEAN is IGNORED, not refused" 0 "RELEASED" "$R2/ci.yml" "$R2/s12.env"
+
+# At-most-once on the optional key — it cannot ride the required loop, whose absence-is-a-HOLD
+# semantics are wrong here, and whose pattern does not match the _ACK suffix anyway.
+_r2_evidence_write "$R2/s13.env" PASS "$_S_URL" "$R2_SHA" none UNAVAILABLE "17250000001:first"
+printf 'RUNG2_SENTRY_CROSSCHECK_ACK=17250000001:second\n' >> "$R2/s13.env"
+_r2_commit_alone "$R2/s13.env"
+_row S "S13: two ack lines => HOLD (at-most-once on the optional key)" 1 "RUNG2_SENTRY_CROSSCHECK_ACK" "$R2/ci.yml" "$R2/s13.env"
+
+# The required key is absent entirely: the existing exactly-once loop owns this, and the
+# row exists to pin that RUNG2_SENTRY_CROSSCHECK actually JOINED that loop.
+printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=none\n' \
+  "$_S_URL" "$R2_SHA" > "$R2/s14.env"
+_r2_commit_alone "$R2/s14.env"
+_row S "S14: the verdict key is REQUIRED — absence is a cardinality HOLD" 1 "RUNG2_SENTRY_CROSSCHECK" "$R2/ci.yml" "$R2/s14.env"
+
+_expect_rows S 14
+
+printf '\n(#8010) R — resolving the run behind RUNG2_EVIDENCE_URL\n'
+
+# Each row re-seeds ONE stub key and points a fresh evidence file at its own run id, so a row
+# can never be satisfied by a neighbour's leftover state. The ids are local to this battery.
+_r_ev() {  # <name> <id>
+  _s_ev "$1" CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/$2"
+}
+
+# R1 — nothing answered. The stub has no entry, which is its transport-failure shape; the
+# gate must say the instrument failed, not that the run is absent.
+_r_ev r1.env 80000001   # deliberately NOT seeded
+_row R "R1: no network path to api.github.com => could-not-measure, and no token advice" 1 "[RUN_OFFLINE]" "$R2/ci.yml" "$R2/r1.env"
+
+_stub_run 80000002 "head_sha=$_R2_C1" http=500
+_r_ev r2.env 80000002
+_row R "R2: a 5xx that survives the retry is an instrument failure, not a verdict" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r2.env"
+
+_stub_run 80000003 "head_sha=$_R2_C1" http=403
+printf '{"message":"API rate limit exceeded for 1.2.3.4."}\n' > "$TMP/api/runs/80000003.body"
+_r_ev r3.env 80000003
+_row R "R3: a rate limit is read from status+body, with no header parsing" 1 "[RUN_RATE_LIMITED]" "$R2/ci.yml" "$R2/r3.env"
+
+_stub_run 80000004 "head_sha=$_R2_C1" http=404
+_r_ev r4.env 80000004
+_row R "R4: a 404 with no bearer in play is a MEASURED absence" 1 "[RUN_NOT_FOUND]" "$R2/ci.yml" "$R2/r4.env"
+
+_stub_run 80000005 "head_sha=$_R2_C1" http=raw
+_r_ev r5.env 80000005
+_row R "R5: a non-JSON body is unusable, not empty" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r5.env"
+
+# jq/bash both lose precision on ids this size, so the comparison is a STRING comparison.
+_stub_run 80000006 "head_sha=$_R2_C1"
+jq '.id = 99999999' "$TMP/api/runs/80000006.body" > "$TMP/api/runs/80000006.body.t" && mv "$TMP/api/runs/80000006.body.t" "$TMP/api/runs/80000006.body"
+_r_ev r6.env 80000006
+_row R "R6: an id that does not match the URL is an unusable answer" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r6.env"
+
+# The SHAPE regex is unanchored, so `runs/123abc` passes it; a naive ${url##*/} would then
+# read the id as `123`. The parser terminates on /?# or end-of-string and validates.
+_s_ev r7.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000007abc"
+_row R "R7: a trailing-garbage id is refused, never silently truncated to a valid one" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r7.env"
+
+_stub_run 80000008 "head_sha=$_R2_C1" "path=.github/workflows/apply-web-platform-infra.yml"
+_r_ev r8.env 80000008
+_row R "R8: a run of a DIFFERENT workflow proves nothing about a boot" 1 "[RUN_WRONG_WORKFLOW]" "$R2/ci.yml" "$R2/r8.env"
+
+# A future schedule/push trigger on the rehearsal workflow would produce identity-passing
+# runs that boot nothing.
+_stub_run 80000009 "head_sha=$_R2_C1" event=push
+_r_ev r9.env 80000009
+_row R "R9: only a workflow_dispatch is a rehearsal" 1 "[RUN_WRONG_EVENT]" "$R2/ci.yml" "$R2/r9.env"
+
+_stub_run 80000010 "head_sha=$_R2_C1" head_branch=feat-something
+_r_ev r10.env 80000010
+_row R "R10: a run dispatched off a branch is not the main-branch rehearsal the route requires" 1 "[RUN_NOT_MAIN]" "$R2/ci.yml" "$R2/r10.env"
+
+_stub_run 80000011 "head_sha=$_R2_C1" status=in_progress conclusion=null
+_r_ev r11.env 80000011
+_row R "R11: an in-flight run is WAIT-and-re-run, not re-dispatch" 1 "[RUN_NOT_COMPLETED]" "$R2/ci.yml" "$R2/r11.env"
+
+_stub_run 80000012 "head_sha=$_R2_C1" conclusion=failure
+_r_ev r12.env 80000012
+_row R "R12: a failed run releases nothing (the teardown-after-capture case is named)" 1 "[RUN_NOT_SUCCESS]" "$R2/ci.yml" "$R2/r12.env"
+
+_stub_run 80000013 head_sha=not-a-sha
+_r_ev r13.env 80000013
+_row R "R13: a malformed head_sha is an unusable answer" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r13.env"
+
+# The operative CI path today: no call site grants `actions: read`, so a rejected bearer must
+# fall through to the anonymous read the data is public for.
+_stub_run 80000014 "head_sha=$_R2_C1" http=401once
+_r_ev r14.env 80000014
+_row R "R14: a rejected bearer retries ONCE anonymously — the operative CI path" 0 "RELEASED" "$R2/ci.yml" "$R2/r14.env"
+
+_expect_rows R 14
+
+printf '\n(#8010) A — the capture discriminator (an evidence artifact exists)\n'
+
+_stub_run 80000101 "head_sha=$_R2_C1" artifacts=none
+_s_ev a1.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000101"
+_row A "A1: a dry_run/teardown_only dispatch uploads nothing => HOLD" 1 "[RUN_NO_EVIDENCE_ARTIFACT]" "$R2/ci.yml" "$R2/a1.env"
+
+# Name matching is EXACT: the capture-log artifact is what a NON-PASS run uploads.
+_stub_run 80000102 "head_sha=$_R2_C1" artifacts=log
+_s_ev a2.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000102"
+_row A "A2: git-data-rung2-capture-log is the FAILURE artifact and must not satisfy the check" 1 "[RUN_NO_EVIDENCE_ARTIFACT]" "$R2/ci.yml" "$R2/a2.env"
+
+# Artifact-record retention past 90 days is undocumented and measured once, so an old run
+# with no record must not masquerade as a measured refusal.
+_stub_run 80000103 "head_sha=$_R2_C1" artifacts=none "created_at=$(date -u -d '200 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+_s_ev a3.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000103"
+_row A "A3: past the retention window an empty list is could-not-measure, not a refusal" 1 "[RUN_ARTIFACT_RECORD_UNREADABLE]" "$R2/ci.yml" "$R2/a3.env"
+
+_stub_run 80000104 "head_sha=$_R2_C1" artifacts=missing
+_s_ev a4.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000104"
+_row A "A4: an unreadable artifacts endpoint is could-not-measure" 1 "[RUN_ARTIFACT_RECORD_UNREADABLE]" "$R2/ci.yml" "$R2/a4.env"
+
+# Measured on run 27579149955 (~110 days): the RECORD survives expiry even though the bytes
+# do not, which is precisely why the record — not the download — is the discriminator.
+_stub_run 80000105 "head_sha=$_R2_C1"
+jq '.artifacts[0].expired = true' "$TMP/api/runs/80000105/artifacts.body" > "$TMP/api/runs/80000105/artifacts.t" \
+  && mv "$TMP/api/runs/80000105/artifacts.t" "$TMP/api/runs/80000105/artifacts.body"
+_s_ev a5.env CLEAN "" "https://github.com/jikig-ai/soleur/actions/runs/80000105"
+_row A "A5: an EXPIRED record still proves the capture happened => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/a5.env"
+
+_expect_rows A 5
+
+printf '\n(#8010) H — binding the run to the bytes, via its head_sha\n'
+
+# WHY THIS ARM EXISTS AT ALL. Every R row above proves the run is REAL. None of them proves
+# the run booted THESE bytes: RUNG2_TEMPLATE_SHA256 is a pure function of tracked files, so a
+# payload author who re-derives it locally produces evidence that passes the live-hash check
+# while naming a run that rehearsed something else. The head_sha binding is what closes that:
+# the gate re-hashes the tree AT THE COMMIT THE RUN RAN and requires it to equal the live hash.
+#
+# HX is a repository with three shapes in its history: c1 carries THREE payloads (below the
+# roster floor), c2 carries a DIFFERENT template, c3 is the canonical current tree.
+_HX="$TMP/hx"
+assert_fixture_dir "$_HX"
+mkdir -p "$_HX"
+_r2_write_module "$_HX" git-data-bootstrap.sh git-data-provision.sh git-data-gc.sh
+for _p in git-data-bootstrap.sh git-data-provision.sh git-data-gc.sh; do
+  printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$_HX/$_p"
+done
+cp "$TMP/mixed.yml" "$_HX/ci.yml"
+git -C "$_HX" init -q -b main || _a_setup_fail "git init failed in $_HX"
+_g_commit "$_HX" "c1: a three-payload module — below the roster floor"
+_HX_C1="$(git -C "$_HX" rev-parse HEAD)"
+_r2_write_module "$_HX" "${_r2_payloads[@]}"
+_a_sibling_var "$_HX/modules/git-data-userdata/variables.tf"
+_a_sibling_out "$_HX/modules/git-data-userdata/outputs.tf"
+for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$_HX/$_p"; done
+printf '\n# a divergent template line\n' >> "$_HX/ci.yml"
+_g_commit "$_HX" "c2: the canonical roster, but a DIFFERENT template"
+_HX_C2="$(git -C "$_HX" rev-parse HEAD)"
+# c3 restores the canonical template, so the WORKING TREE hash (what the gate computes live)
+# differs from c2's.
+cp "$TMP/mixed.yml" "$_HX/ci.yml"
+_g_commit "$_HX" "c3: the canonical tree"
+_HX_SHA="$(_r2_hash "$_HX")"
+
+_hx_ev() {  # <name> <id>
+  _r2_evidence_write "$_HX/$1" PASS "https://github.com/jikig-ai/soleur/actions/runs/$2" "$_HX_SHA" none CLEAN
+  _r2_commit_alone "$_HX/$1"
+}
+
+# H1 — the named commit is not in this clone. The gate must NOT fetch: a gate that mutates
+# the repository it judges is a different thing, and an unbounded fetch is an offline stall.
+_stub_run 80000201 head_sha=0000000000000000000000000000000000000000
+_hx_ev h1.env 80000201
+_row H "H1: an unreachable head_sha names the fetch, and the gate does not fetch for you" 1 "[RUN_SHA_UNREACHABLE]" "$_HX/ci.yml" "$_HX/h1.env"
+
+# H2 — THE FORGERY THIS WHOLE ARM EXISTS FOR: hash-valid, provenance-clean evidence naming a
+# real, successful, main-branch rehearsal of DIFFERENT bytes.
+_stub_run 80000202 "head_sha=$_HX_C2"
+_hx_ev h2.env 80000202
+_row H "H2: a real run that rehearsed different bytes => HOLD, naming both hashes" 1 "[RUN_HASH_MISMATCH]" "$_HX/ci.yml" "$_HX/h2.env"
+
+# H3 — the repo-ROOT shape (`git archive <sha>:`). The repo-relative directory is the empty
+# string here, and `git archive <sha> -- ""` is fatal, so the tree-ish form is load-bearing.
+_stub_run 80000203 "head_sha=$(git -C "$_HX" rev-parse HEAD)"
+_hx_ev h3.env 80000203
+_row H "H3: a cloud-init at the repository ROOT re-hashes via the <sha>: tree-ish form" 0 "RELEASED" "$_HX/ci.yml" "$_HX/h3.env"
+
+# H4 — the SUBDIRECTORY shape (`git archive <sha>:<dir>`). Production is this shape
+# (apps/web-platform/infra/), and it is the one a root-only fixture cannot exercise.
+_HS="$TMP/hsub"
+assert_fixture_dir "$_HS"
+mkdir -p "$_HS/infra"
+cp "$TMP/mixed.yml" "$_HS/infra/ci.yml"
+_r2_write_module "$_HS/infra" "${_r2_payloads[@]}"
+_a_sibling_var "$_HS/infra/modules/git-data-userdata/variables.tf"
+_a_sibling_out "$_HS/infra/modules/git-data-userdata/outputs.tf"
+for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$_HS/infra/$_p"; done
+printf 'placeholder\n' > "$_HS/README.md"
+git -C "$_HS" init -q -b main || _a_setup_fail "git init failed in $_HS"
+_g_commit "$_HS" "c1: a cloud-init in a SUBDIRECTORY"
+_HS_C1="$(git -C "$_HS" rev-parse HEAD)"
+_r2_evidence_write "$_HS/infra/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000204" "$(_r2_hash "$_HS/infra")" none CLEAN
+_r2_commit_alone "$_HS/infra/evidence.env"
+_stub_run 80000204 "head_sha=$_HS_C1"
+_row H "H4: a cloud-init in a SUBDIRECTORY re-hashes via the <sha>:<dir> tree-ish form" 0 "RELEASED" "$_HS/infra/ci.yml" "$_HS/infra/evidence.env"
+
+# H5 — the archived tree cannot be hashed at all (a historical module below the roster floor).
+# That is could-not-measure, and it must carry the ABORT's own first line rather than
+# masquerading as a mismatch.
+_stub_run 80000205 "head_sha=$_HX_C1"
+_hx_ev h5.env 80000205
+_row H "H5: a sub-floor historical tree is UNCOMPUTABLE, not a mismatch" 1 "[RUN_HASH_UNCOMPUTABLE]" "$_HX/ci.yml" "$_HX/h5.env"
+
+# H6 — ORDER PIN. A stale local hash and a run-binding failure are different defects with
+# different remedies; the payload author's ordinary case is STALE EVIDENCE, and it must still
+# be the thing that speaks first.
+_row H "H6: the live-hash check still reports BEFORE any run resolution" 1 "STALE EVIDENCE" "$R2/ci.yml" "$R2/stale.env"
+
+_expect_rows H 6
+
+printf '\n(#8010) T/E — tooling, the seam, and the gate'"'"'s own CI annotation\n'
+
+# T1 — TOOLING BEFORE ANYTHING THAT CAN STALL. A missing jq must be reported as a toolchain
+# gap, not discovered after a network timeout. The farm drops ONLY jq; everything else the
+# gate needs stays reachable, so a pass here cannot come from a broken PATH in general.
+_T1="$TMP/t1bin"
+mkdir -p "$_T1"
+for _b in bash sed grep awk sort tr cut git curl tar sha256sum date printf dirname basename cmp mktemp rm cat head wc; do
+  _p="$(command -v "$_b" 2>/dev/null)" && ln -sf "$_p" "$_T1/$_b"
+done
+_t1_out="$(PATH="$_T1" bash -c "source '$GATE'; git_data_rung2_rehearsal_gate '$R2/ci.yml' '$R2/s1.env'" 2>&1)"; _t1_rc=$?
+if [[ "$_t1_rc" -ne 0 && "$_t1_out" == *"[TOOLING_MISSING]"* && "$_t1_out" == *"jq"* ]]; then
+  pass "T1: a missing jq is an ABORT naming the binary, raised before any network call"
+else
+  fail "T1: a missing jq must ABORT [TOOLING_MISSING] naming jq" "$_t1_rc" "$_t1_out"
+fi
+# T1's POSITIVE CONTROL. Without it T1 passes for any reason the farm breaks the gate — an
+# unset PATH entry, a missing sed — and proves nothing about the tooling check.
+_t1c_out="$(PATH="$_T1:$PATH" bash -c "source '$GATE'; git_data_rung2_rehearsal_gate '$R2/ci.yml' '$R2/s1.env'" 2>&1)"; _t1c_rc=$?
+if [[ "$_t1c_rc" -eq 0 ]]; then
+  pass "T1-control: the same farm WITH jq reachable releases — T1 measured the tooling check"
+else
+  fail "T1-control: the farm itself breaks the gate, so T1 proves nothing" "$_t1c_rc" "$_t1c_out"
+fi
+
+# T-SEAM1 — the seam ANNOUNCES ITSELF on every verdict line. infra-validation.yml triggers on
+# pull_request, so a PR author controls that step's env: block; without the announcement two
+# innocuous env lines would produce a RELEASED line indistinguishable from a real one.
+_seam_out="$(git_data_rung2_rehearsal_gate "$R2/ci.yml" "$R2/s1.env" 2>&1)"
+if [[ "$_seam_out" == *"SEAM ACTIVE"* ]]; then
+  pass "T-SEAM1: an honoured seam is named on the verdict line"
+else
+  fail "T-SEAM1: a RELEASED line produced through the seam must say so" "0" "$_seam_out"
+fi
+# And on a HOLD, where a silent seam would be just as misleading.
+_seam_hold="$(git_data_rung2_rehearsal_gate "$R2/ci.yml" "$R2/s6.env" 2>&1)"
+if [[ "$_seam_hold" == *"SEAM ACTIVE"* ]]; then
+  pass "T-SEAM1b: an honoured seam is named on HOLD lines too"
+else
+  fail "T-SEAM1b: a HOLD produced through the seam must say so" "1" "$_seam_hold"
+fi
+
+# T-SEAM2 — THE DOUBLE GATE. The fetch override is honoured only when SOLEUR_TEST_MODE is
+# also set; with it unset the gate falls through to the real path, and it must SAY that, so
+# the intended fall-through does not read as a flaky test.
+_seam2="$(env -u SOLEUR_TEST_MODE bash -c "source '$GATE'; git_data_rung2_rehearsal_gate '$R2/ci.yml' '$R2/s1.env'" 2>&1)"; _seam2_rc=$?
+if [[ "$_seam2_rc" -ne 0 && "$_seam2" == *"SOLEUR_TEST_MODE"* ]]; then
+  pass "T-SEAM2: the fetch override alone does not arm the seam, and the message says which half is missing"
+else
+  fail "T-SEAM2: SOLEUR_RUNG2_RUN_FETCH without SOLEUR_TEST_MODE must not be honoured" "$_seam2_rc" "$_seam2"
+fi
+
+# E1/E2 — THE GATE'S OWN ANNOTATION. Three CI call sites print "no rung-2 boot evidence for
+# the CURRENT cloud-init-git-data.yml" on ANY non-zero rc, that text is pinned by
+# terraform-target-parity.test.ts, and two of the three files cannot be edited this cycle —
+# so an instrument failure would tell an operator to commit evidence that already exists.
+_e1="$(GITHUB_ACTIONS=true git_data_rung2_rehearsal_gate "$R2/ci.yml" "$R2/r1.env" 2>&1)"
+_e1n="$(grep -c '^::error::' <<<"$_e1" || true)"
+if [[ "$_e1n" -eq 1 ]]; then
+  pass "E1: a could-not-measure token emits exactly one ::error:: annotation under GITHUB_ACTIONS"
+else
+  fail "E1: expected exactly one ::error:: line for a could-not-measure token, got ${_e1n}" "n/a" "$_e1"
+fi
+_e2="$(GITHUB_ACTIONS=true git_data_rung2_rehearsal_gate "$R2/ci.yml" "$R2/s2.env" 2>&1)"
+_e2n="$(grep -c '^::error::' <<<"$_e2" || true)"
+if [[ "$_e2n" -eq 0 ]]; then
+  pass "E2: a MEASURED refusal does not annotate — the two vocabularies stay distinct"
+else
+  fail "E2: a measured refusal must not emit ::error::, got ${_e2n}" "n/a" "$_e2"
+fi
+
+# N1 — THE FLAG SET, asserted by source-grep. Under the seam the real fetch never runs, so
+# this is the ONLY mechanism that can assert what curl is invoked with.
+_n1_fail=""
+for _need in '--disable' '--noproxy' 'https://api.github.com'; do
+  grep -qF -- "$_need" "$GATE" || _n1_fail+="missing:${_need} "
+done
+for _forbid in '--insecure' '-D -'; do
+  grep -qF -- "$_forbid" "$GATE" && _n1_fail+="present:${_forbid} "
+done
+if [[ -z "$_n1_fail" ]]; then
+  pass "N1: the fetch uses --disable + --noproxy over https, and carries no TLS-weakening or header-dump flag"
+else
+  fail "N1: the curl flag set drifted — ${_n1_fail}" "n/a" ""
+fi
+
+# N2 — A CALLER RUNNING set -x MUST NOT PRINT THE BEARER. The library inherits the caller's
+# shell options, so the fetch saves and clears xtrace on entry and restores it before every
+# return.
+_n2="$(GH_TOKEN=ghp_FAKE_TOKEN_FOR_XTRACE_ARM bash -c "source '$GATE'; set -x; git_data_rung2_rehearsal_gate '$R2/ci.yml' '$R2/s1.env'" 2>&1)"
+if [[ "$_n2" != *"ghp_FAKE_TOKEN_FOR_XTRACE_ARM"* ]]; then
+  pass "N2: a caller running set -x does not leak the bearer through the gate's trace"
+else
+  fail "N2: the bearer appeared in the xtrace of a set -x caller" "n/a" "<redacted: the arm's own needle was found>"
+fi
+
+# W1 — NO WORKFLOW AND NO DOPPLER CONFIG MAY CARRY THE SEAM. The announcement above is the
+# detection; this is the prevention.
+_w1="$(grep -rlE 'SOLEUR_TEST_MODE|SOLEUR_RUNG2_' "${ROOT}/.github/workflows" 2>/dev/null || true)"
+if [[ -z "$_w1" ]]; then
+  pass "W1: no workflow carries SOLEUR_TEST_MODE or a SOLEUR_RUNG2_ override"
+else
+  fail "W1: a workflow references the test seam — ${_w1}" "n/a" ""
+fi
+
 
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
