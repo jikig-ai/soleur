@@ -2058,6 +2058,7 @@ kb-chat
 kb-concierge
 kb-domain-allowlist-guard
 kb-drift
+kb-index
 kb-index-driver
 kb-layout
 kb-pdf
@@ -3054,6 +3055,7 @@ read-path
 read-source-migration
 read-tracker
 reader-sweep
+readers-before-writers
 readiness
 readiness-gate
 readme
