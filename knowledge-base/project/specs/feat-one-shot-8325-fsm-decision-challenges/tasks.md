@@ -11,10 +11,10 @@ Plan: `knowledge-base/project/plans/2026-09-19-feat-workflow-fsm-decision-challe
 
 ## Phase 2: classifier sub-step collapse
 
-- [ ] 2.1 `scripts/classify-workflow-transitions.test.sh`: cases 17–28 = the twelve classifier scenarios in the plan (incl. the three-view fail-closed case — missing/`null`/`[]` — the `--summary` null-reading exact-line case, and the cross-session case with A earlier than B asserting `substep=0 pairs=1 undeclared=1`); per-root `emit_to <root> <ts> <skill> <sid>` helper; `MIN_CASES=28`; run — RED
-- [ ] 2.2 `scripts/classify-workflow-transitions.sh`: `jq -e '.sub_steps | type == "object"'` fail-closed check (FATAL rc 2 naming the key); per-session reduce with the explicit empty-`kept` branch after `sort_by(.t)` and before pairing; `substep=` on both summary lines; `--help` and PROPERTY header updated
-- [ ] 2.3 `bash scripts/classify-workflow-transitions.test.sh` → `28 passed, 0 failed`
-- [ ] 2.4 Record pre- and post-change `--summary` lines from the worktree (no `null_reading`); confirm no `brainstorm -> compound` / `postmerge -> work` rows and `ship -> plan` rows remain
+- [x] 2.1 `scripts/classify-workflow-transitions.test.sh`: cases 17–28 = the twelve classifier scenarios in the plan (incl. the three-view fail-closed case — missing/`null`/`[]` — the `--summary` null-reading exact-line case, and the cross-session case with A earlier than B asserting `substep=0 pairs=1 undeclared=1`); per-root `emit_to <root> <ts> <skill> <sid>` helper; `MIN_CASES=28`; run — RED
+- [x] 2.2 `scripts/classify-workflow-transitions.sh`: `jq -e '.sub_steps | type == "object"'` fail-closed check (FATAL rc 2 naming the key); per-session reduce with the explicit empty-`kept` branch after `sort_by(.t)` and before pairing; `substep=` on both summary lines; `--help` and PROPERTY header updated
+- [x] 2.3 `bash scripts/classify-workflow-transitions.test.sh` → `28 passed, 0 failed`
+- [x] 2.4 Record pre- and post-change `--summary` lines from the worktree (no `null_reading`); confirm no `brainstorm -> compound` / `postmerge -> work` rows and `ship -> plan` rows remain
 
 ## Phase 3: §3 measurement script
 

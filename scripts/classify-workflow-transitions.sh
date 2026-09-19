@@ -20,8 +20,11 @@
 #
 # PROPERTY: for every session in the invocation log, each consecutive pair of
 # LIFECYCLE-NODE records (non-node records removed first, so a sub-skill hop
-# collapses to the transition it encloses) whose edge is absent from the
-# declared set is reported exactly once, attributed to its session.
+# collapses to the transition it encloses; then a node record whose skill the
+# view's `sub_steps` names as a designed sub-step of the PREVIOUS KEPT node is
+# dropped and counted as `substep`, so `brainstorm compound plan` pairs as
+# `brainstorm -> plan` -- #8325) whose edge is absent from the declared set is
+# reported exactly once, attributed to its session.
 #
 # Usage:
 #   scripts/classify-workflow-transitions.sh              # one row per violation
@@ -40,7 +43,8 @@ for arg in "$@"; do
       cat <<'USAGE'
 usage: classify-workflow-transitions.sh [--summary]
   default    one TSV row per undeclared lifecycle transition: <session_id>\t<from> -> <to>
-  --summary  one key=value line: undeclared= sessions= pairs= nonnode= read= dropped= [null_reading=1]
+  --summary  one key=value line: undeclared= sessions= pairs= nonnode= substep= read= dropped= [null_reading=1]
+             (substep = node records dropped as a designed sub-step of the previous kept node, per the view's sub_steps)
 env: CLASSIFY_REPO_ROOT=<dir>  read ONLY that root (skips the main-checkout/sibling enumeration)
 exit: 0 classified (a null reading still exits 0 and says so); 2 could not classify
 USAGE
@@ -66,6 +70,15 @@ if [[ ! -r "$VIEW" ]]; then
   echo "FATAL: declared transition view not readable at $VIEW" >&2
   echo "       The view is repo tooling, not part of the shipped plugin (ADR-229): this probe" >&2
   echo "       runs only in a soleur source checkout. On such a checkout, restore it from git." >&2
+  exit 2
+fi
+# FAIL CLOSED on a view without an OBJECT `sub_steps` (#8325). A tolerant `// {}`
+# would silently reproduce the pre-collapse numbers on a stale mirror, and
+# `"sub_steps": null` or `[]` passes a bare has() check with the same silent
+# result -- so the type is asserted, not the presence.
+if ! jq -e '.sub_steps | type == "object"' "$VIEW" >/dev/null 2>&1; then
+  echo "FATAL: declared view $VIEW carries no \`sub_steps\` object — stale mirror; edit DECLARED_SUB_STEPS" >&2
+  echo "       in plugins/soleur/lib/workflow-fidelity.ts first, then mirror it (ADR-229, amended #8325)." >&2
   exit 2
 fi
 
@@ -129,7 +142,7 @@ if [[ "$found" -eq 0 ]]; then
   echo "       where sessions have run. A fresh checkout or CI runner has none, by construction." >&2
   # Same key set as the real summary line, plus an explicit flag -- one schema
   # per flag, so a key=value consumer never sees two shapes.
-  [[ "$SUMMARY" -eq 1 ]] && echo "undeclared=0 sessions=0 pairs=0 nonnode=0 read=0 dropped=0 null_reading=1"
+  [[ "$SUMMARY" -eq 1 ]] && echo "undeclared=0 sessions=0 pairs=0 nonnode=0 substep=0 read=0 dropped=0 null_reading=1"
   exit 0
 fi
 
@@ -144,6 +157,13 @@ fi
 #     two lifecycle nodes collapses to the lifecycle transition it encloses.
 #     Their count is surfaced as `nonnode` in --summary so the exclusion is
 #     visible rather than silent.
+#   - THEN (#8325) a node record whose skill is in sub_steps[<previous KEPT
+#     node>] is dropped before pairing: brainstorm runs compound as its own
+#     designed sub-step and hands off to plan, so `brainstorm compound plan` is
+#     the designed handoff, not two undeclared edges. Keyed on the previous KEPT
+#     record, so `brainstorm compound compound plan` drops both. The count is
+#     surfaced as `substep`. Order is load-bearing: non-node removal first, so
+#     `brainstorm one-shot compound plan` still collapses.
 read -r -d '' JQ <<'JQEOF' || true
   # `-R` + `fromjson?`: one malformed line (a truncated tail in the live log or
   # any rotated archive) must count as DROPPED, not blank the whole reading.
@@ -172,6 +192,7 @@ read -r -d '' JQ <<'JQEOF' || true
   # as `list | index(.key)`. It fails loudly ("Cannot check whether object has a
   # null key"), but the `index` variant would silently never match.
   | ($decl[0].transitions) as $T
+  | ($decl[0].sub_steps) as $SUB
   # LIFECYCLE NODES ONLY, then pair. The first version paired RAW adjacent
   # records and required both endpoints to be nodes, which was correct about one
   # thing (ship -> preflight is not a lifecycle transition) and wrong about the
@@ -186,6 +207,17 @@ read -r -d '' JQ <<'JQEOF' || true
   | $nodes
   | group_by(.session_id)
   | map(sort_by(.t))
+  # SUB-STEP COLLAPSE, per session, after sorting and before pairing. The
+  # first-record branch is not optional: `.kept[-1]` on an empty array is null
+  # and `$SUB[null]` throws "Cannot index object with null", which `// []` does
+  # not rescue (verified). Equal-second ties keep merged-file order (sort_by is
+  # stable).
+  | map(reduce .[] as $r ({kept: [], sub: 0};
+          if (.kept | length) == 0 then .kept += [$r]
+          elif (($SUB[.kept[-1].skill] // []) | index($r.skill)) != null then .sub += 1
+          else .kept += [$r] end))
+  | (map(.sub) | add // 0) as $substep
+  | map(.kept)
   | map(. as $s | [range(1; ($s | length))]
         | map({ session: $s[0].session_id, from: $s[. - 1].skill, to: $s[.].skill }))
   | flatten
@@ -193,6 +225,7 @@ read -r -d '' JQ <<'JQEOF' || true
       kept: $kept,
       dropped: ($read - $kept),
       nonnode: $nonnode,
+      substep: $substep,
       pairs: length,
       sessions: (map(.session) | unique | length),
       violations: map(select(. as $p | ($T[$p.from] // []) | index($p.to) == null)) }
@@ -217,6 +250,7 @@ n=$(printf '%s' "$RESULT" | jq -r '.violations | length')
 pairs=$(printf '%s' "$RESULT" | jq -r '.pairs')
 sessions=$(printf '%s' "$RESULT" | jq -r '.sessions')
 nonnode=$(printf '%s' "$RESULT" | jq -r '.nonnode')
+substep=$(printf '%s' "$RESULT" | jq -r '.substep')
 read_n=$(printf '%s' "$RESULT" | jq -r '.read')
 kept=$(printf '%s' "$RESULT" | jq -r '.kept')
 dropped=$(printf '%s' "$RESULT" | jq -r '.dropped')
@@ -243,7 +277,7 @@ if [[ "$kept" -gt 0 && "$pairs" -eq 0 ]]; then
 fi
 
 if [[ "$SUMMARY" -eq 1 ]]; then
-  echo "undeclared=$n sessions=$sessions pairs=$pairs nonnode=$nonnode read=$read_n dropped=$dropped"
+  echo "undeclared=$n sessions=$sessions pairs=$pairs nonnode=$nonnode substep=$substep read=$read_n dropped=$dropped"
   exit 0
 fi
 
