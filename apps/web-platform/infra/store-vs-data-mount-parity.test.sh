@@ -73,22 +73,28 @@ WINDOW=90
 mapfile -t CANDIDATES < <(git grep -lE --untracked "$WALK_RE" -- . \
   ':!knowledge-base' ':!tests' ':!*.test.sh' ':!*.test.ts' ':!scripts/fixtures' ':!plugins' | sort)
 
+# EVERY walk in every candidate, not the first per file. An earlier revision took `head -1`,
+# which made membership per-FILE: a SECOND resolution appended to a file that already had one
+# was never graded, so a deliberately-wrong copy sat beside a correct one at 21/21 green. The
+# member id is now `<file>:<line>` so the printed population names resolutions, and MIN_FILES
+# becomes a floor on resolutions (#8386 review, test-design seat Q1).
 MEMBERS=()
 declare -A WINDOW_OF=()
 for f in "${CANDIDATES[@]}"; do
-  start="$(grep -nE "$WALK_RE" "$f" | head -1 | cut -d: -f1)"
-  [ -n "$start" ] || continue
-  end=$((start + WINDOW))
-  blk="$(sed -n "${start},${end}p" "$f")"
-  grep -qE "$MAP_RE" <<<"$blk" || continue
-  MEMBERS+=("$f")
-  WINDOW_OF["$f"]="$blk"
+  while IFS= read -r start; do
+    [ -n "$start" ] || continue
+    end=$((start + WINDOW))
+    blk="$(sed -n "${start},${end}p" "$f")"
+    grep -qE "$MAP_RE" <<<"$blk" || continue
+    MEMBERS+=("$f:$start")
+    WINDOW_OF["$f:$start"]="$blk"
+  done < <(grep -nE "$WALK_RE" "$f" | cut -d: -f1)
 done
 
 # PRINT WHAT WAS DERIVED. A future third member must be visible rather than silently averaged in.
 printf -- '--- derived mount-source resolutions (lsblk inverse walk + Hetzner by-id reverse map in the same block) ---\n'
-for f in "${MEMBERS[@]}"; do
-  printf '    %s  (block starts at line %s)\n' "$f" "$(grep -nE "$WALK_RE" "$f" | head -1 | cut -d: -f1)"
+for m in "${MEMBERS[@]}"; do
+  printf '    %s  (walk at line %s)\n' "${m%:*}" "${m##*:}"
 done
 printf -- '--- candidates carrying the walk but no in-block reverse map: %s ---\n' \
   "$(( ${#CANDIDATES[@]} - ${#MEMBERS[@]} ))"
@@ -128,7 +134,7 @@ for f in "${MEMBERS[@]}"; do
   else
     fail "$f: no leaf predicate -- a last-row read picks one ancestor of a FORKED tree arbitrarily"
   fi
-  if grep -qE 'cnt[[:space:]]*>[[:space:]]*1' <<<"$blk" && grep -qF '__AMBIGUOUS__' <<<"$blk"; then
+  if grep -qE 'cnt[[:space:]]*>[[:space:]]*1[[:space:]]*\)' <<<"$blk" && grep -qF '__AMBIGUOUS__' <<<"$blk"; then
     pass "$f: more than one leaf yields __AMBIGUOUS__, never a confident base"
   else
     fail "$f: a multi-leaf tree does not resolve to __AMBIGUOUS__"
@@ -156,7 +162,12 @@ for f in "${MEMBERS[@]}"; do
   else
     fail "$f: no hit counter -- the map cannot tell one alias from several"
   fi
-  if grep -qE '\-eq[[:space:]]+0' <<<"$blk" && grep -qE '\-gt[[:space:]]+1' <<<"$blk"; then
+  # Anchored on the COUNTER variable and the closing bracket. A bare `-eq 0` is satisfied by any
+  # unrelated comparison in the window (the registry copy has one at its lsblk rc check), and a
+  # bare `-gt 1` is satisfied as a PREFIX of `-gt 10` -- under which 2..10 aliases resolve
+  # confidently to an arbitrary one (#8386 review, test-design seat Q4/Q5).
+  if grep -qE '\[ "\$[A-Za-z_][A-Za-z0-9_]*hits[A-Za-z0-9_]*" -eq 0 \]' <<<"$blk" \
+     && grep -qE '\[ "\$[A-Za-z_][A-Za-z0-9_]*hits[A-Za-z0-9_]*" -gt 1 \]' <<<"$blk"; then
     pass "$f: the counter discriminates 0 hits (__NOMATCH__) from >1 (__AMBIGUOUS__)"
   else
     fail "$f: the hit counter is not compared against both 0 and >1"
