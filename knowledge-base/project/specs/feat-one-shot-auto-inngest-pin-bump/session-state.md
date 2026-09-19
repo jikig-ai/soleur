@@ -48,3 +48,20 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
   - `fixture-relative-assert` (5 sites): redirects now write directly to `$GITHUB_OUTPUT`/`$GITHUB_STEP_SUMMARY` (CI_SINK_VARS name exemption — aliases read as possibly-relative); `write_fixture_cloud_inits` carries `assert_fixture_dir "$dir"` (canonical byte-identical copy inlined).
   - `fixture-dir-operand-assert` (7 sites): `: "${REPO_DIR:?...}"` empty-operand guard after the `cd && pwd` resolution.
   - Re-verified: suite 153/0 (clean + contaminated env + run-all.sh ALL PASS); adoption 25/0; relative 62/0 (baseline unchanged at 1526/294 — sites cleared, not re-baselined); operand 71/0; drift guard 160/160; watchdog vitest 63/63; shellcheck clean.
+
+## Review Phase — 9-seat panel on settled diff (115671db8)
+- Seats: 7 core (code class, architecture-strategist deduped — ran in design pass) + test-design-reviewer + structural-enumeration. Result: 2 CONCUR (performance-oracle, git-history), 7 CHANGES REQUESTED.
+- P2 remediations applied (all verified independently before fixing):
+  - Arg-parse infinite loop on a valueless trailing flag (`shift 2` under no `set -e` re-spun forever; repro rc=124 under `timeout 3`) → `[[ $# -ge 2 ]] || die args`.
+  - ANCHOR unanchored both ends — malformed refs (`v1.2.3rc1`, 65-hex digests, glued names) rewrote into self-masking corrupt pins → LEFT_B/RIGHT_B bounded ERE + token-level extraction (`TOKRE`) + exact-equality post-checks; residuetag/residuedig fixture rows.
+  - `GIT_TRACE*`/`GIT_CURL_VERBOSE`/`GIT_HTTP_TRACE_AUTH_HEADER` leak the token-bearing push URL (xtrace refusal covered `set -x` only; verified empirically) → unconditional unset before any credential-bearing git op; gittrace fixture row asserts no token in output.
+  - Fork-PR collision: `gh pr list --head` included cross-repo same-name heads → `isCrossRepository`+author filter on reuse; new PR number taken from `gh pr create` URL; forkpr fixture row.
+  - `MIN_SUITES=11 → 12` (floor == live count, #7068 anti-deletion contract).
+  - Dead `merge` fatal-stage vocabulary removed from script header/ADR/plan (merge-arm is warning-only by design).
+  - Human-tip skip now spells out remediation (reset tip to bot commit or delete branch; every future run skips while it stands; AC6 stays red; monitor escalates).
+  - `stale-bot-pr` runbook row + `cleanup-unmerged-bot-branches.yml` prefix list gained `soleur/inngest-pin-`.
+  - Defer path warns it does NOT self-heal on a dead publish (republish `vinngest-${TARGET}` or delete the tag; AC6/monitor are the escalation).
+  - Vacuous tip-advance asserts → seeded SHA captured and compared; commit subject asserted.
+  - Guard 2 pins bindings, not literals (env→flag wiring for tag/digest/mirror_status/GH_TOKEN).
+- P3 batch applied: supersede `gh pr list` failure warns; dead final-attempt sleeps removed in script AND all four workflow retry loops; `sleep` PATH-shim for fast retries; hold comments not reposted on existing-PR reuse; ADR link in PR body; `result=` emitted on exit-78; action.yml + model.c4 + plan stale wording (inline-mint provenance, suite counts, AC3) synced; `model.likec4.json` regenerated (75 elements / 153 relations / 77 views).
+- Re-verified: suite 191/0 (MIN_ASSERTIONS=150); run-all.sh ALL PASS (12 suites); drift guard 160/160; watchdog vitest 63/63; shellcheck clean; adoption 25/0, relative 62/0, operand 71/0; c4-model-freshness 3/3, c4-count-parity 10/10, c4-from-components 14/14; workflow+action YAML parse.

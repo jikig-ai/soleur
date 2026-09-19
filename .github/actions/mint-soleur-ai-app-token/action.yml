@@ -2,12 +2,12 @@ name: 'Mint soleur-ai GitHub App installation token'
 description: >
   Fetch the soleur-ai App credentials from Doppler, mint an RS256 App JWT,
   exchange it for an installation token, and emit the token as the `token`
-  output (masked). Single canonical copy of the inline recipe previously
-  duplicated across board-status-sync.yml, apply-github-infra.yml,
-  apply-web-platform-infra.yml and build-inngest-bootstrap-image.yml — see
-  learning 2026-05-25-app-jwt-inline-mint (extraction was due at the third
-  consumer). `gh api` cannot take a JWT as GH_TOKEN, so the JWT is exchanged
-  for an installation token via curl.
+  output (masked). Canonical recipe for new consumers — the learning
+  2026-05-25-app-jwt-inline-mint called for extraction at three consumers;
+  three inline copies still exist (board-status-sync.yml,
+  apply-github-infra.yml, apply-web-platform-infra.yml — migrating them is a
+  separate change). `gh api` cannot take a JWT as GH_TOKEN, so the JWT is
+  exchanged for an installation token via curl.
 
 inputs:
   doppler-token:

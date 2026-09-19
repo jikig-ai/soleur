@@ -23,8 +23,8 @@ Every `vinngest-v*` tag publish currently opens a drift window: the
 `apps/web-platform/infra/cloud-init.yml` and
 `apps/web-platform/infra/cloud-init-inngest.yml` against the semver-max
 published tag, and goes red until a human lands a pin-bump PR. The drift has
-been measured twice in one cycle (v1.1.31→v1.1.35, then v1.1.35→v1.1.37 within
-24h). This plan makes the publishing workflow itself the bump author: after
+been measured twice in one cycle (v1.1.31→v1.1.35, then the v1.1.36 pin was
+outdated ~51 minutes later when vinngest-v1.1.37 published). This plan makes the publishing workflow itself the bump author: after
 `build-inngest-bootstrap-image.yml` pushes and signs a new tag+digest, a new
 job in the same workflow rewrites the pin at all four sites, commits via the
 soleur-ai GitHub App installation token (never a PAT, never the
@@ -51,7 +51,7 @@ site carries tag+digest, all identical. The instant a tag is pushed, AC6's
 authoritative signal (git tags, not the registry) moves — and every
 subsequent infra PR and main push goes red until a human writes the bump PR.
 The drift class is measured: #8071 (v1.1.31 pin vs published v1.1.35) and the
-v1.1.35→v1.1.37 drift within 24h of the previous bump; ten consecutive misses
+v1.1.36→v1.1.37 drift ~51 minutes after the previous bump; ten consecutive misses
 (v1.0.1…v1.1.10) are what created the guard in the first place (#4675).
 
 The toil is also the only step in the publish pipeline with no automation: tag
@@ -76,8 +76,9 @@ Make the publishing run the bump author. Add a `bump-cloud-init-pin` job to
    `soleur/inngest-pin-vX.Y.Z` branch, opens the PR, supersedes any stale
    bot-authored pin PR, and arms `--auto` squash merge.
 4. Authenticates all GitHub writes via the soleur-ai GitHub App installation
-   token minted inline (the `board-status-sync.yml` JWT→installation-token
-   recipe; `hr-github-app-auth-not-pat`). The App token is load-bearing, not
+   token minted by the `./.github/actions/mint-soleur-ai-app-token` composite
+   action (the `board-status-sync.yml` JWT→installation-token recipe;
+   `hr-github-app-auth-not-pat`). The App token is load-bearing, not
    just policy: `GITHUB_TOKEN`-authored pushes do not fire `pull_request`
    events, so required checks would never run on the bump PR and auto-merge
    could never release it.
@@ -101,8 +102,10 @@ downgrade PR.
   glob is auto-picked-up by `run-all.sh` → `guard-script-fixture-tests`
   (REQUIRED check, `merge_group`, no path filter), so the suite must be
   bash-only: `crane`, `gh`, and git are PATH-shimmed stubs per
-  `scripts/board/set-board-status.test.sh` precedent. `MIN_SUITES=11` is a
-  floor; adding a 12th suite needs no edit. No competing bump script exists —
+  `scripts/board/set-board-status.test.sh` precedent. `MIN_SUITES` tracks the
+  live suite count so a silent `test-*.sh` deletion fails closed (#7068):
+  adding a 12th suite raises the floor to 12 in the same commit. No competing
+  bump script exists —
   `git ls-files` + `git grep bump-inngest` across `scripts/` and
   `.github/scripts/` return zero hits; this location is canonical, not a
   duplicate.
@@ -251,8 +254,9 @@ plan time beyond the drift evidence above.
 - `.github/workflows/cla.yml` — `soleur-ai[bot]` allowlist +
   `273333864+soleur-ai[bot]@users.noreply.github.com` author-email contract.
 - `.github/scripts/test/run-all.sh` — `test-*.sh` glob contract: bash-only,
-  `MIN_SUITES=11` floor; `test-inngest-bootstrap-tag-guard.sh` is the
-  shape-mirror precedent for asserting this workflow's YAML.
+  `MIN_SUITES=12` floor (raised from 11 with this suite);
+  `test-inngest-bootstrap-tag-guard.sh` is the shape-mirror precedent for
+  asserting this workflow's YAML.
 - `scripts/post-bot-statuses.sh` — existing synthetic-status escape hatch for
   bot commits; NOT used here: the bump PR should run real CI (its own
   deploy-script-tests run is the end-to-end verification of the bump).
@@ -260,10 +264,12 @@ plan time beyond the drift evidence above.
 **Institutional learnings applied.**
 
 - `2026-05-25-app-jwt-inline-mint-…` — inline mint's five defensive
-  properties; extract a composite action only at the third consumer (this is
-  the third — board-status-sync, apply-github-infra, now this; flag the
-  extraction option in the ADR, do not build it — two inline copies are the
-  measured-cheap state and a third still leaves the threshold marginal).
+  properties; extract a composite action at the third consumer. The recipe had
+  already reached three inline copies (board-status-sync, apply-github-infra,
+  apply-web-platform-infra) and this job would have been the fourth — the
+  composite action WAS extracted during review:
+  `.github/actions/mint-soleur-ai-app-token` (the three existing inline copies
+  stay in place; migrating them is a separate change).
 - Learning in `fix-constraints-stage-b.yml` — never clobber human commits on
   a bot branch; check tip author before force-push.
 - `#7630`/`#7695` — bumping tag without re-resolving digest pins new tag to
@@ -358,7 +364,7 @@ liveness_signal:
   configured_in: ".github/workflows/build-inngest-bootstrap-image.yml (bump-cloud-init-pin job + failure-notification step)"
 error_reporting:
   destination: "workflow run log (stage-named ::error) + Slack releases webhook on job failure"
-  fail_loud: "script exits non-zero naming the stage (mint|resolve|rewrite|push|pr|merge); a failed publish that leaves the guard red also posts to Slack"
+  fail_loud: "script exits non-zero naming the stage (args|resolve|rewrite|push|pr; merge-arm failures are ::warning-only, and mint lives in the workflow step, not the script); a failed publish that leaves the guard red also posts to Slack"
 failure_modes:
   - mode: "App credentials absent/invalid in Doppler soleur/prd_terraform"
     detection: "mint step exits 1 with ::error naming GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY (mirrors board-status-sync)"
@@ -586,12 +592,17 @@ new suite, which reads it.)*
    mirror_status).
 4. New `bump-cloud-init-pin` job: `needs: build`; `runs-on: ubuntu-latest`;
    `timeout-minutes: 10`; `concurrency: { group: inngest-pin-bump,
-   cancel-in-progress: false }`; `permissions: { contents: read }`; steps —
+   cancel-in-progress: false }`; `permissions: { contents: read, packages: read
+   }` (the package is private in GHCR and the build job's login does not cross
+   job boundaries); steps —
    checkout (`ref: main`, `fetch-depth: 0`, `fetch-tags: true`,
-   `persist-credentials: false`), install crane (same pinned recipe as the
+   `persist-credentials: false`), GHCR login via `docker/login-action`,
+   install crane (same pinned recipe as the
    build job's), install Doppler CLI, verify `secrets.DOPPLER_TOKEN`, mint
-   soleur-ai installation token (inline JWT recipe, `DOPPLER_CONFIG:
-   prd_terraform`, `INSTALLATION_ID: "122213433"`), run the script with the
+   soleur-ai installation token via the
+   `./.github/actions/mint-soleur-ai-app-token` composite action
+   (`doppler-token` + `installation-id: "122213433"` inputs; the action owns
+   `DOPPLER_CONFIG: prd_terraform`), run the script with the
    three job outputs as args, then a `if: failure()` Slack-notification step
    reusing `SLACK_RELEASES_WEBHOOK_URL`.
 
@@ -682,8 +693,9 @@ Live-verified during deepen:
 - `guard-script-fixture-tests` lives in `pr-quality-guards.yml` — required
   context on ruleset 14145388 (file header), `pull_request` + `merge_group`
   triggers, no `paths:` filter, runs `bash .github/scripts/test/run-all.sh`.
-- `run-all.sh:167` — `MIN_SUITES=11` floor + `test-*.sh` glob confirmed; the
-  new suite is a 12th, no registration edit.
+- `run-all.sh:167` — `MIN_SUITES` floor + `test-*.sh` glob confirmed; the new
+  suite is a 12th and the floor is raised 11 → 12 in the same commit (the
+  floor equals the live count so a later silent deletion trips it).
 - `gh api repos/jikig-ai/soleur` → `allow_auto_merge: true`,
   `allow_squash_merge: true`, `delete_branch_on_merge: true`.
 - Sign step (`Cosign-sign the GHCR digest`) has no `if:` — it runs under
@@ -716,7 +728,7 @@ PAT-literal precision (Guard 2 row 3).
 
 - [ ] AC1: `.github/scripts/bump-inngest-bootstrap-pin.sh` exists, is executable, and rewrites all four `soleur-inngest-bootstrap:v…@sha256:…` sites across `cloud-init.yml` + `cloud-init-inngest.yml` to `<target>@<resolved>` in a single commit — verified by the fixture suite.
 - [ ] AC2: `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh` exists under the `test-*.sh` glob, is bash-only (no terraform/cloud-init/apt/network), and covers every mutation-matrix row in the Guard Contract including an anti-vacuity assertion floor.
-- [ ] AC3: `build-inngest-bootstrap-image.yml` carries the `bump-cloud-init-pin` job with `needs: build`, `ref: main` + `fetch-tags: true` + `persist-credentials: false` checkout, job-level `concurrency: inngest-pin-bump`, `permissions: { contents: read }`, and the inline App-JWT mint (`DOPPLER_CONFIG: prd_terraform`, `INSTALLATION_ID: "122213433"`).
+- [ ] AC3: `build-inngest-bootstrap-image.yml` carries the `bump-cloud-init-pin` job with `needs: build`, `ref: main` + `fetch-tags: true` + `persist-credentials: false` checkout, job-level `concurrency: inngest-pin-bump`, `permissions: { contents: read, packages: read }` + a `docker/login-action` GHCR login, and the App-JWT mint via the `./.github/actions/mint-soleur-ai-app-token` composite action (`installation-id: "122213433"`; the action owns `DOPPLER_CONFIG: prd_terraform`).
 - [ ] AC4: The `build` job exports `tag`, `digest` (from `id: sign`), and `mirror_status` outputs consumed by the bump job.
 - [ ] AC5: No PAT anywhere: the workflow contains no `GH_TOKEN_PAT`/`secrets.*PAT` reference and the script pushes only via `x-access-token` with the minted installation token (asserted by the suite).
 - [ ] AC6: The script targets the semver-max published tag, not blindly the triggered tag (re-publish of an older tag ⇒ `noop`), and halts when the passed signed digest ≠ the crane-resolved digest for that tag.
@@ -726,7 +738,7 @@ PAT-literal precision (Guard 2 row 3).
 - [ ] AC10: Bump commits carry `soleur-ai[bot]` + `273333864+soleur-ai[bot]@users.noreply.github.com` (the CLA-allowlisted identity).
 - [ ] AC11: The bump PR body names the tag, the resolved digest, the publishing run URL, and carries `Ref #8359` on its own line — no close-keywords inside prose (pr-auto-close-scanner-clean).
 - [ ] AC12: `## Observability`, `## Encryption Posture`, `## Guard Contract`, `## User-Brand Impact`, and `## Architecture Decision (ADR/C4)` sections are present here and the ADR-230 (provisional) file + C4 edit land in the same PR.
-- [ ] AC13: `guard-script-fixture-tests` is green on this PR with the new suite included (suite count ≥ 12, above the `MIN_SUITES=11` floor), and `deploy-script-tests` remains green (the plan edits neither cloud-init file's pin).
+- [ ] AC13: `guard-script-fixture-tests` is green on this PR with the new suite included (suite count 12, matching the raised `MIN_SUITES=12` floor), and `deploy-script-tests` remains green (the plan edits neither cloud-init file's pin).
 - [ ] AC14: End-to-end proof is deferred-by-design to the first post-merge `vinngest-v*` publish (workflows cannot be dispatch-tested from a feature branch — the repo's stated reason for script+fixture coverage); the PR body records this explicitly.
 
 ## Test Scenarios

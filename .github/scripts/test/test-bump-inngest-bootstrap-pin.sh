@@ -11,12 +11,15 @@
 # wiring that feeds the script its inputs, so the two halves cannot silently
 # drift apart.
 #
-# STUBS. `crane` and `gh` are PATH-shimmed; git is REAL against fixture repos
-# (the push remote is a local bare repo via BUMP_PUSH_URL). The gh stub derives
-# a commit's "author.login" AND "commit.author.email" from its author EMAIL in
-# the bare origin — the same mechanism GitHub uses — so the bot-vs-human tip
-# check is exercised for real. MOCK_GH_UNLINKED=1 drops .author to null to
-# exercise the email-fallback path; MOCK_GH_MERGE_FAIL=1 fails `gh pr merge`.
+# STUBS. `crane`, `gh`, and `sleep` are PATH-shimmed (sleep zeros the retry
+# backoff — ~24s of real time the suite would otherwise burn inside a required
+# merge-queue gate); git is REAL against fixture repos (the push remote is a
+# local bare repo via BUMP_PUSH_URL). The gh stub derives a commit's
+# "author.login" AND "commit.author.email" from its author EMAIL in the bare
+# origin — the same mechanism GitHub uses — so the bot-vs-human tip check is
+# exercised for real. MOCK_GH_UNLINKED=1 drops .author to null to exercise the
+# email-fallback path; MOCK_GH_MERGE_FAIL=1 fails `gh pr merge`. A `|fork`
+# suffix on a seeded PR row emits isCrossRepository:true + a non-bot author.
 #
 # GUARD CONTRACT (plan §Guard Contract). Guard 1 = behavior rows over the
 # script's mutation matrix; Guard 2 = workflow-shape + regex-parity asserts over
@@ -60,7 +63,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=60   # anti-vacuity floor — raise when adding rows, never lower it silently
+MIN_ASSERTIONS=150   # anti-vacuity floor — raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -169,9 +172,19 @@ echo "crane-stub: unhandled: $*" >&2; exit 1
 STUB
 chmod +x "$BIN/crane"
 
+# sleep — the script's retry backoff is real wall-clock time (~24s across the
+# crane-failure rows, inside a required merge-queue gate). Nothing in the
+# script or suite needs a real sleep.
+cat > "$BIN/sleep" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$BIN/sleep"
+
 # gh — records every call to $MOCK_GH_LOG (one line, whitespace flattened) and
 # serves the PR surface the script uses. PR state lives in $MOCK_GH_PRS:
-#   number|headRefName|url|headRefOid|state   (state: open|closed)
+#   number|headRefName|url|headRefOid|state[|flags]   (state: open|closed;
+#   flags: `fork` => isCrossRepository:true + author.login=fork-user)
 # `gh api repos/<r>/commits/<sha>` resolves author.login from the commit's
 # author email in $MOCK_ORIGIN (mirrors GitHub's email→login resolution):
 # bot noreply => soleur-ai[bot]; anything else => fixture-human.
@@ -192,21 +205,23 @@ flag() { # flag <name> — value of a --flag arg
 }
 
 pr_json() { # emit one PR object from a state line
-  local n="$1" h="$2" u="$3" o="$4" s="$5"
-  printf '{"number":%s,"headRefName":"%s","url":"%s","headRefOid":"%s","state":"%s"}' \
-    "$n" "$h" "$u" "$o" "$s"
+  local n="$1" h="$2" u="$3" o="$4" s="$5" fl="${6:-}"
+  local xr=false al='soleur-ai[bot]'
+  if [[ "$fl" == *fork* ]]; then xr=true; al='fork-user'; fi
+  printf '{"number":%s,"headRefName":"%s","url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"}}' \
+    "$n" "$h" "$u" "$o" "$s" "$xr" "$al"
 }
 
 case "$sub" in
   "pr list")
     head="$(flag --head)"; want_state="$(flag --state)"; want_state="${want_state:-open}"
     out="["; first=1
-    while IFS='|' read -r n h u o s; do
+    while IFS='|' read -r n h u o s fl; do
       [[ -z "$n" ]] && continue
       [[ "$s" == "$want_state" ]] || continue
       [[ -n "$head" && "$h" != "$head" ]] && continue
       [[ "$first" == 0 ]] && out+=","
-      out+="$(pr_json "$n" "$h" "$u" "$o" "$s")"; first=0
+      out+="$(pr_json "$n" "$h" "$u" "$o" "$s" "$fl")"; first=0
     done < "${MOCK_GH_PRS:?unset}"
     printf '%s]\n' "$out"
     ;;
@@ -219,15 +234,15 @@ case "$sub" in
     printf '%s\n' "$url"
     ;;
   "pr comment"|"pr merge")
-    n="${args[2]:-}"
     [[ "$sub" == "pr merge" && "${MOCK_GH_MERGE_FAIL:-0}" == "1" ]] && { echo "merge arm failed" >&2; exit 1; }
     exit 0
     ;;
   "pr close")
     n="${args[2]:-}"
     # [|] not \|: GNU sed treats \| in ERE as ALTERNATION, so a literal pipe
-    # must come from a bracket expression.
-    sed -i -E "s|^(${n}[|][^|]*[|][^|]*[|][^|]*[|])open$|\1closed|" "$MOCK_GH_PRS"
+    # must come from a bracket expression. `open` is replaced in place so an
+    # optional trailing |flags field survives.
+    sed -i -E "s|^(${n}[|][^|]*[|][^|]*[|][^|]*[|])open|\1closed|" "$MOCK_GH_PRS"
     exit 0
     ;;
   "api "*)
@@ -265,8 +280,8 @@ export PATH="$BIN:$PATH"
 # ---------------------------------------------------------------------------
 
 # run_bump <name> <extra-args...> — invoke the script against the current
-# fixture with stub env. Captures stdout+stderr to $TMP/last.out, rc to LAST_RC,
-# and GITHUB_OUTPUT to $TMP/last.gout.
+# fixture with stub env. Captures stdout+stderr to $TMP/<name>.out, rc to
+# LAST_RC, GITHUB_OUTPUT to $TMP/<name>.gout, summary to $TMP/<name>.summary.
 run_bump() {
   local name="$1"; shift
   LAST_OUT="$TMP/$name.out"
@@ -306,21 +321,26 @@ assert_gh_not_called() { # name regex
   else pass "$1"; fi
 }
 
-# all_four_refs <file...> — emit every soleur-inngest-bootstrap tag ref (with
-# optional digest) from the given files, one per line.
+# all_four_refs <file...> — emit every soleur-inngest-bootstrap ref TOKEN (the
+# full whitespace/quote-delimited token from the org path on) from the given
+# files, one per line. Token-level extraction keeps residue like
+# `v1.2.3rc1`-tails visible to the counts below.
 all_four_refs() {
-  grep -hoE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+(@sha256:[0-9a-f]{64})?' "$@" | sort
+  grep -hoE "jikig-ai/soleur-inngest-bootstrap:[^[:space:]\"']*" "$@" | sort
 }
 
 assert_all_pins() { # name repo_dir tag digest — 4 refs, all == tag@digest, 2/file, distinct==1
   local name="$1" dir="$2" tag="$3" dig="$4"
   local f1="$dir/apps/web-platform/infra/cloud-init.yml"
   local f2="$dir/apps/web-platform/infra/cloud-init-inngest.yml"
+  local want="jikig-ai/soleur-inngest-bootstrap:${tag}@${dig}"
   local n1 n2 tagonly distinct
-  n1=$(grep -coE "soleur-inngest-bootstrap:${tag}@${dig}" "$f1" || true)
-  n2=$(grep -coE "soleur-inngest-bootstrap:${tag}@${dig}" "$f2" || true)
+  # -cxF counts WHOLE-LINE matches — a `…@sha256:…rc1` residue token does not
+  # equal the target and cannot inflate the count.
+  n1=$(grep -oE "jikig-ai/soleur-inngest-bootstrap:[^[:space:]\"']*" "$f1" | grep -cxF "$want" || true)
+  n2=$(grep -oE "jikig-ai/soleur-inngest-bootstrap:[^[:space:]\"']*" "$f2" | grep -cxF "$want" || true)
   [[ "$n1" == "2" && "$n2" == "2" ]] && pass "$name:per-file-2" \
-    || fail "$name:per-file-2" "counts $n1/$n2 (expected 2/2 at ${tag}@${dig})"
+    || fail "$name:per-file-2" "counts $n1/$n2 (expected 2/2 at ${want})"
   tagonly=$(all_four_refs "$f1" "$f2" | grep -vcE '@sha256:' || true)
   [[ "$tagonly" == "0" ]] && pass "$name:no-tag-only" \
     || fail "$name:no-tag-only" "$tagonly tag-only ref(s) remain"
@@ -329,14 +349,21 @@ assert_all_pins() { # name repo_dir tag digest — 4 refs, all == tag@digest, 2/
     || fail "$name:distinct-1" "$distinct distinct refs: $(all_four_refs "$f1" "$f2" | sort -u | tr '\n' ',')"
 }
 
-assert_origin_branch() { # name branch expected-sha-or-absent
+assert_origin_branch() { # name branch ABSENT|present|not:<sha>|<sha>
   local name="$1" branch="$2" want="$3" got
   got=$(git --git-dir="$F_ORIGIN" rev-parse -q --verify "refs/heads/$branch" 2>/dev/null || true)
-  if [[ "$want" == "ABSENT" ]]; then
-    [[ -z "$got" ]] && pass "$name" || fail "$name" "branch $branch exists on origin ($got)"
-  else
-    [[ -n "$got" ]] && pass "$name" || fail "$name" "branch $branch missing on origin"
-  fi
+  case "$want" in
+    ABSENT)
+      [[ -z "$got" ]] && pass "$name" || fail "$name" "branch $branch exists on origin ($got)" ;;
+    present)
+      [[ -n "$got" ]] && pass "$name" || fail "$name" "branch $branch missing on origin" ;;
+    not:*)
+      [[ -n "$got" && "$got" != "${want#not:}" ]] && pass "$name" \
+        || fail "$name" "branch $branch tip still ${want#not:} — push never landed" ;;
+    *)
+      [[ "$got" == "$want" ]] && pass "$name" \
+        || fail "$name" "branch $branch tip $got != expected $want" ;;
+  esac
 }
 
 assert_commit_meta() { # name branch msg-regex
@@ -374,8 +401,11 @@ assert_gh_called 'g1.happy:pr-create-base' 'gh pr create .* --base main'
 assert_gh_called 'g1.happy:body-ref'     'Ref #8359'
 assert_gh_called 'g1.happy:body-digest'  "$DIG_NEW"
 assert_gh_called 'g1.happy:body-run'     'github.test/runs/1'
+assert_gh_called 'g1.happy:body-adr'     'ADR-230'
 assert_gh_called 'g1.happy:auto-merge'   'gh pr merge .* --auto --squash'
 assert_gh_not_called 'g1.happy:no-close' 'gh pr close '
+[[ -s "$TMP/happy.summary" ]] && pass 'g1.happy:summary' \
+  || fail 'g1.happy:summary' "GITHUB_STEP_SUMMARY file empty — summary() never wrote"
 
 # ---------------------------------------------------------------------------
 # Row — noop: pins already at target@resolved → result=noop, zero writes.
@@ -416,7 +446,7 @@ assert_rc     'g1.maxwins:exit' 0
 assert_result 'g1.maxwins:result' opened
 assert_all_pins 'g1.maxwins:pins' "$F_REPO" v1.1.39 "$DIG_NEWER"
 assert_origin_branch 'g1.maxwins:branch' 'soleur/inngest-pin-v1.1.39' present
-assert_out_has 'g1.maxwins:note' 'v1.1.38'
+assert_out_has 'g1.maxwins:note' '::notice::signed tag v1.1.38'
 # AC9/P2: signed tag ≠ target → mirror_status ok attests the WRONG tag; merge
 # must NOT arm and a hold comment must explain why.
 assert_gh_not_called 'g1.maxwins:no-merge'      'gh pr merge '
@@ -435,7 +465,9 @@ run_bump mismatch --signed-tag v1.1.38 --signed-digest "$DIG_OLD" \
   --mirror-status ok
 [[ "$LAST_RC" != "0" ]] && pass 'g1.mismatch:nonzero' \
   || fail 'g1.mismatch:nonzero' "rc=0 — signed-vs-resolved mismatch not halted"
-assert_out_has 'g1.mismatch:names-both' "$DIG_OLD"
+assert_result 'g1.mismatch:result' error
+assert_out_has 'g1.mismatch:names-signed'   "$DIG_OLD"
+assert_out_has 'g1.mismatch:names-resolved' "$DIG_NEW"
 assert_gh_not_called 'g1.mismatch:no-pr' 'gh pr '
 assert_origin_branch 'g1.mismatch:no-branch' 'soleur/inngest-pin-v1.1.38' ABSENT
 [[ -z $(git -C "$F_REPO" status --porcelain) ]] && pass 'g1.mismatch:clean-tree' \
@@ -527,13 +559,16 @@ fixture_commit "pins at v1.1.37"
 seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
-push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL" >/dev/null
+# Seed sha captured: %ae alone is vacuous here (the seed ALREADY carries the
+# bot email) — the sha must MOVE and the new tip must be the bump commit.
+seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
 
 run_bump bottip --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc     'g1.bottip:exit' 0
 assert_result 'g1.bottip:result' opened
-[[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == "$BOT_EMAIL" ]] \
-  && pass 'g1.bottip:bot-tip-advanced' || fail 'g1.bottip:bot-tip-advanced' "bot tip not updated"
+assert_origin_branch 'g1.bottip:tip-advanced' 'soleur/inngest-pin-v1.1.38' "not:$seed_sha"
+assert_commit_meta 'g1.bottip:commit' 'soleur/inngest-pin-v1.1.38' \
+  'chore\(infra\): bump inngest-bootstrap pin v1\.1\.37 -> v1\.1\.38'
 assert_gh_called 'g1.bottip:pr-create' 'gh pr create '
 
 # Same shape again but GitHub links NO account to the tip commit (.author
@@ -545,13 +580,12 @@ fixture_commit "pins at v1.1.37"
 seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
-push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL" >/dev/null
+seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
 
 MOCK_GH_UNLINKED=1 run_bump unlinkedbot --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc     'g1.unlinkedbot:exit' 0
 assert_result 'g1.unlinkedbot:result' opened
-[[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == "$BOT_EMAIL" ]] \
-  && pass 'g1.unlinkedbot:tip-advanced' || fail 'g1.unlinkedbot:tip-advanced' "email-fallback bot tip not updated"
+assert_origin_branch 'g1.unlinkedbot:tip-advanced' 'soleur/inngest-pin-v1.1.38' "not:$seed_sha"
 
 new_fixture_repo unlinkedhuman
 write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
@@ -587,6 +621,7 @@ git -C "$F_REPO" checkout -q main
 run_bump existing2 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_result 'g1.existing:second' existing
 assert_gh_called 'g1.existing:comment' 'gh pr comment '
+assert_gh_called 'g1.existing:merge-arm' 'gh pr merge '
 [[ $(grep -c 'gh pr create ' "$MOCK_GH_LOG") == "1" ]] && pass 'g1.existing:one-create' \
   || fail 'g1.existing:one-create' "$(grep -c 'gh pr create ' "$MOCK_GH_LOG") pr create calls"
 
@@ -706,11 +741,129 @@ git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 run_bump defer --signed-tag v1.1.37 --signed-digest "$DIG_OLD" --mirror-status ok
 assert_rc     'g1.defer:exit' 0
 assert_result 'g1.defer:result' skipped
-assert_out_has 'g1.defer:notice' '::notice::'
+assert_out_has 'g1.defer:warning' '::warning::'
+assert_out_has 'g1.defer:self-heal' 'does not self-heal'
 assert_origin_branch 'g1.defer:no-branch' 'soleur/inngest-pin-v1.1.38' ABSENT
 assert_gh_not_called 'g1.defer:no-pr' 'gh pr '
 [[ -z $(git -C "$F_REPO" status --porcelain) ]] && pass 'g1.defer:clean-tree' \
   || fail 'g1.defer:clean-tree' "dirty: $(git -C "$F_REPO" status --porcelain | head -3)"
+
+# ---------------------------------------------------------------------------
+# Review P2 (security): a FORK PR whose headRefName collides with the bump
+# branch must never be selected — the script filters isCrossRepository +
+# author.login, so it creates its own PR and arms --auto on THAT number.
+# ---------------------------------------------------------------------------
+new_fixture_repo forkpr
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
+# A fork PR wearing the same headRefName — real `gh pr list --head` returns it.
+printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|fork\n' "$old_sha" >> "$MOCK_GH_PRS"
+
+run_bump forkpr --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc     'g1.forkpr:exit' 0
+assert_result 'g1.forkpr:result' opened
+assert_gh_called     'g1.forkpr:created-own'    'gh pr create '
+# The stub numbers the create response 2 (one seeded row); PR_NUM comes from
+# the create URL — the merge arm must target it, never the fork's #9.
+assert_gh_called     'g1.forkpr:merge-own'      'gh pr merge 2 '
+assert_gh_not_called 'g1.forkpr:no-fork-merge'  'gh pr merge 9'
+assert_gh_not_called 'g1.forkpr:no-fork-reuse'  'gh pr comment 9 .*Re-run of the automated pin bump'
+
+# ---------------------------------------------------------------------------
+# Review P2 (data-integrity): malformed refs — `v1.1.37rc1` and a 65-hex
+# digest — must die at the bounded count check, never be rewritten into
+# residue-carrying refs that pass every post-check.
+# ---------------------------------------------------------------------------
+new_fixture_repo residuetag
+write_fixture_cloud_inits "$F_REPO" 'v1.1.37rc1' "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "malformed rc1 pin"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+
+run_bump residuetag --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+[[ "$LAST_RC" != "0" ]] && pass 'g1.residuetag:nonzero' \
+  || fail 'g1.residuetag:nonzero' "rc=0 — a v1.1.37rc1 ref was not refused"
+assert_result 'g1.residuetag:result' error
+assert_out_has 'g1.residuetag:marker' 'expected exactly 2'
+assert_origin_branch 'g1.residuetag:no-branch' 'soleur/inngest-pin-v1.1.38' ABSENT
+[[ -z $(git -C "$F_REPO" status --porcelain) ]] && pass 'g1.residuetag:clean-tree' \
+  || fail 'g1.residuetag:clean-tree' "malformed ref was still rewritten"
+
+new_fixture_repo residuedig
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "${DIG_OLD}f" v1.1.37 "$DIG_OLD"
+fixture_commit "malformed 65-hex pin"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+
+run_bump residuedig --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+[[ "$LAST_RC" != "0" ]] && pass 'g1.residuedig:nonzero' \
+  || fail 'g1.residuedig:nonzero' "rc=0 — a 65-hex digest was not refused"
+assert_out_has 'g1.residuedig:marker' 'expected exactly 2'
+
+# ---------------------------------------------------------------------------
+# Review P2 (code-quality): a valueless trailing flag must die at args, not
+# spin the while loop until the job timeout (pre-fix behavior: rc=124 hang).
+# ---------------------------------------------------------------------------
+run_bump missingval --signed-tag
+[[ "$LAST_RC" != "0" ]] && pass 'g1.missingval:nonzero' \
+  || fail 'g1.missingval:nonzero' "rc=0 — valueless --signed-tag accepted"
+assert_out_has 'g1.missingval:marker' 'missing value for --signed-tag'
+assert_result 'g1.missingval:result' error
+
+run_bump unknownarg --bogus x
+[[ "$LAST_RC" != "0" ]] && pass 'g1.unknownarg:nonzero' \
+  || fail 'g1.unknownarg:nonzero' "rc=0 — unknown arg accepted"
+assert_out_has 'g1.unknownarg:marker' 'unknown argument: --bogus'
+
+# GH_TOKEN absent + no BUMP_PUSH_URL → the x-access-token URL can't be built.
+LAST_OUT="$TMP/missingtoken.out"; LAST_GOUT="$TMP/missingtoken.gout"; : > "$LAST_GOUT"
+env -u GH_TOKEN BUMP_REPO_DIR="$F_REPO" GITHUB_OUTPUT="$LAST_GOUT" \
+  bash "$SCRIPT" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" \
+  > "$LAST_OUT" 2>&1; LAST_RC=$?
+[[ "$LAST_RC" != "0" ]] && pass 'g1.missingtoken:nonzero' \
+  || fail 'g1.missingtoken:nonzero' "rc=0 — missing GH_TOKEN accepted"
+assert_out_has 'g1.missingtoken:marker' 'GH_TOKEN'
+
+LAST_OUT="$TMP/baddir.out"; LAST_GOUT="$TMP/baddir.gout"; : > "$LAST_GOUT"
+env BUMP_REPO_DIR=/nonexistent-xyz GH_TOKEN=x GITHUB_OUTPUT="$LAST_GOUT" \
+  bash "$SCRIPT" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" \
+  > "$LAST_OUT" 2>&1; LAST_RC=$?
+[[ "$LAST_RC" != "0" ]] && pass 'g1.baddir:nonzero' \
+  || fail 'g1.baddir:nonzero' "rc=0 — nonexistent BUMP_REPO_DIR accepted"
+assert_out_has 'g1.baddir:marker' 'not a directory'
+
+# ---------------------------------------------------------------------------
+# Review P2 (security): GIT_TRACE*/GIT_CURL_VERBOSE must be scrubbed — they
+# echo the credential-bearing push URL to stderr (same leak class the xtrace
+# refusal exists for). Run in a subshell so the trace env cannot leak into the
+# suite's own git calls.
+# ---------------------------------------------------------------------------
+new_fixture_repo gittrace
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+
+( export GIT_TRACE=1 GIT_CURL_VERBOSE=1
+  run_bump gittrace --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok )
+gt_rc=$?
+[[ "$gt_rc" == "0" ]] && pass 'g1.gittrace:exit' \
+  || fail 'g1.gittrace:exit' "rc=$gt_rc — $(tail -3 "$TMP/gittrace.out" | tr '\n' '|')"
+if grep -q 'fixture-installation-token' "$TMP/gittrace.out"; then
+  fail 'g1.gittrace:no-token' "GIT_TRACE leaked the push-URL token into output"
+else
+  pass 'g1.gittrace:no-token'
+fi
+if grep -qE '^(trace:|Run command|run_command)' "$TMP/gittrace.out"; then
+  fail 'g1.gittrace:no-trace' "git trace lines present — GIT_TRACE not scrubbed"
+else
+  pass 'g1.gittrace:no-trace'
+fi
 
 echo ""
 echo "=== Guard 2: workflow shape + regex parity ==="
@@ -725,8 +878,10 @@ check_wf_absent() { # name regex — must NOT match anywhere in the workflow
 }
 
 # Slice the bump job block: `  bump-cloud-init-pin:` → next job key at the same
-# indent or EOF. Job-level asserts quantify over THIS block, not the file.
-BUMP_BLOCK=$(awk '/^  bump-cloud-init-pin:/{f=1} f&&/^  [a-zA-Z_][a-zA-Z0-9_-]*:/&&!/bump-cloud-init-pin/{f=0} f' "$WORKFLOW")
+# indent or EOF. Job-level asserts quantify over THIS block, not the file. The
+# terminator excludes the opener by its EXACT key (`^  bump-cloud-init-pin:`),
+# not a substring — a `rebuild:`/`sub-bump:` key must not be absorbed.
+BUMP_BLOCK=$(awk '/^  bump-cloud-init-pin:/{f=1} f&&/^  [a-zA-Z_][a-zA-Z0-9_-]*:/&&!/^  bump-cloud-init-pin:/{f=0} f' "$WORKFLOW")
 [[ -n "$BUMP_BLOCK" ]] && pass 'g2.bump-job:exists' || fail 'g2.bump-job:exists' "no bump-cloud-init-pin job in workflow"
 
 check_block() { # name needle
@@ -743,8 +898,15 @@ check_block 'g2.bump:ref-main'               'ref: main'
 check_block 'g2.bump:fetch-depth'            'fetch-depth: 0'
 check_block 'g2.bump:fetch-tags'             'fetch-tags: true'
 check_block 'g2.bump:persist-creds-false'    'persist-credentials: false'
-check_block 'g2.bump:concurrency-group'      'inngest-pin-bump'
-check_block 'g2.bump:cancel-in-progress'     'cancel-in-progress: false'
+# The concurrency literals must live inside the job's `concurrency:` mapping —
+# a comment or unrelated step carrying the same text must not green them.
+CONC_BLOCK=$(awk '/^    concurrency:/{f=1} f&&/^    [a-zA-Z_][a-zA-Z0-9_-]*:/&&!/^    concurrency:/{f=0} f' <<<"$BUMP_BLOCK")
+if grep -qF 'group: inngest-pin-bump' <<<"$CONC_BLOCK" \
+   && grep -qF 'cancel-in-progress: false' <<<"$CONC_BLOCK"; then
+  pass 'g2.bump:concurrency-block'
+else
+  fail 'g2.bump:concurrency-block' "concurrency mapping wrong or absent: $(tr '\n' '|' <<<"$CONC_BLOCK")"
+fi
 check_block 'g2.bump:contents-read'          'contents: read'
 # P1 (review): the package is private in GHCR and the build job's login does
 # not cross job boundaries — the bump job must carry packages:read + its own
@@ -760,12 +922,33 @@ check_block 'g2.bump:mint-id'                'id: mint'
 check_block 'g2.bump:mint-token-env'         'steps.mint.outputs.token'
 check_block 'g2.bump:installation-id'        '122213433'
 check_block 'g2.bump:script-invoked'         'bump-inngest-bootstrap-pin.sh'
-check_block 'g2.bump:arg-signed-tag'         'needs.build.outputs.tag'
-check_block 'g2.bump:arg-signed-digest'      'needs.build.outputs.digest'
-check_block 'g2.bump:arg-mirror-status'      'needs.build.outputs.mirror_status'
+# Binding-level asserts (not literal presence): a swapped or miswired value —
+# digest into --signed-tag, a different token output — must fail here.
+check_block 'g2.bump:env-tag-binding'        'TAG: ${{ needs.build.outputs.tag }}'
+check_block 'g2.bump:env-digest-binding'     'SIGNED_DIGEST: ${{ needs.build.outputs.digest }}'
+check_block 'g2.bump:env-mirror-binding'     'MIRROR_STATUS: ${{ needs.build.outputs.mirror_status }}'
+check_block 'g2.bump:env-gh-token-binding'   'GH_TOKEN: ${{ steps.mint.outputs.token }}'
+check_block 'g2.bump:invoke-signed-tag'      '--signed-tag "$TAG"'
+check_block 'g2.bump:invoke-signed-digest'   '--signed-digest "$SIGNED_DIGEST"'
+check_block 'g2.bump:invoke-mirror-status'   '--mirror-status "$MIRROR_STATUS"'
+check_block 'g2.bump:invoke-run-url'         '--run-url "$RUN_URL"'
 check_block 'g2.bump:failure-slack'          'SLACK_RELEASES_WEBHOOK_URL'
-check_block 'g2.bump:if-failure'             'if: failure()'
 check_block 'g2.bump:timeout'                'timeout-minutes: 10'
+
+# `if: failure()` + `continue-on-error: true` must live on the SLACK step
+# specifically — a stray literal anywhere else in the job must not satisfy it.
+slack_line=$(grep -n 'SLACK_RELEASES_WEBHOOK_URL' <<<"$BUMP_BLOCK" | head -1 | cut -d: -f1)
+if [[ -z "$slack_line" ]]; then
+  fail 'g2.bump:slack-step' "no SLACK_RELEASES_WEBHOOK_URL in the bump job"
+else
+  s_start=$(awk -v n="$slack_line" 'NR<=n && /^      - /{s=NR} END{print s+0}' <<<"$BUMP_BLOCK")
+  s_end=$(awk -v n="$slack_line" 'NR>n && /^      - /{print NR-1; f=1; exit} END{if(!f) print NR}' <<<"$BUMP_BLOCK")
+  SLACK_STEP=$(sed -n "${s_start},${s_end}p" <<<"$BUMP_BLOCK")
+  grep -qF 'if: failure()' <<<"$SLACK_STEP" && pass 'g2.bump:slack-if-failure' \
+    || fail 'g2.bump:slack-if-failure' "Slack step lacks if: failure()"
+  grep -qF 'continue-on-error: true' <<<"$SLACK_STEP" && pass 'g2.bump:slack-continue-on-error' \
+    || fail 'g2.bump:slack-continue-on-error' "Slack step lacks continue-on-error: true"
+fi
 
 # The extracted composite action must carry the JWT recipe verbatim — the same
 # anchors the bump block used to pin when the recipe was inline.
@@ -812,8 +995,10 @@ fi
 check_wf_absent 'g2.wf:no-gh-token-pat' 'GH_TOKEN_PAT'
 check_wf_absent 'g2.wf:no-secrets-pat'  'secrets\.[A-Za-z_]*PAT'
 
-# AC4: build-job outputs + the sign step's id/digest plumbing.
-BUILD_BLOCK=$(awk '/^  build:/{f=1} f&&/^  [a-zA-Z_][a-zA-Z0-9_-]*:/&&!/build:/{f=0} f' "$WORKFLOW")
+# AC4: build-job outputs + the sign step's id/digest plumbing. The terminator
+# excludes the opener by its exact key — a `rebuild:` job key must not be
+# absorbed into the slice.
+BUILD_BLOCK=$(awk '/^  build:/{f=1} f&&/^  [a-zA-Z_][a-zA-Z0-9_-]*:/&&!/^  build:/{f=0} f' "$WORKFLOW")
 for lit in 'outputs:' 'tag:' 'digest:' 'mirror_status:' 'id: sign' 'digest=%s'; do
   if grep -qF -- "$lit" <<<"$BUILD_BLOCK"; then pass "g2.build:has-$lit"
   else fail "g2.build:has-$lit" "build job lacks literal: $lit"; fi

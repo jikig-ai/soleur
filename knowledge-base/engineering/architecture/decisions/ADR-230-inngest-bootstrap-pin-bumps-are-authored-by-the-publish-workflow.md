@@ -79,8 +79,11 @@ expected-by-construction, and cannot downgrade the pin.
 `.github/actions/mint-soleur-ai-app-token` (RS256 over `GITHUB_APP_ID` +
 `GITHUB_APP_PRIVATE_KEY` from Doppler `soleur/prd_terraform`, POST to
 `/app/installations/<id>/access_tokens`, emitted as a masked step output) —
-extracted when this job became the fourth copy of the inline recipe, the
-threshold the 2026-05-25-app-jwt-inline-mint learning named. The job passes
+extracted when this job would have become the fourth copy of the inline
+recipe — past the three-consumer threshold the
+2026-05-25-app-jwt-inline-mint learning named (the third copy had landed
+earlier without extraction; the three remaining inline sites stay as-is).
+The job passes
 the token as `GH_TOKEN` to the script. Separately, the job carries
 `packages: read` and its own `docker/login-action` GHCR login: the
 `soleur-inngest-bootstrap` package is private, `crane digest` reads it, and
@@ -88,7 +91,9 @@ the build job's login does not cross job boundaries — without this the bump
 fails at digest resolution on every live run. GitHub *writes* still go
 through the App token only; `packages: read` is a read scope. The script
 refuses to run under `set -x` with `GH_TOKEN` set (the #7797
-credential-trace class) before any traced command executes.
+credential-trace class) before any traced command executes, and unsets
+`GIT_TRACE*`/`GIT_CURL_VERBOSE` — git's own trace channels echo the
+credential-bearing push URL the same way xtrace would.
 
 **4. The bump is a PR authored by `soleur-ai[bot]`, never a direct push to
 main.** Branch `soleur/inngest-pin-vX.Y.Z`, commit identity
@@ -113,12 +118,15 @@ a failed run that hid the PR is not.
 **6. Idempotent and fail-closed.** All four pins already at target+digest →
 `result=noop`, no branch, no commit, no PR. Malformed arguments or a
 non-converging rewrite → a stage-named fatal
-(`args|resolve|rewrite|push|pr|merge`), and the workflow's `if: failure()`
+(`args|resolve|rewrite|push|pr`; merge-arm failures are `::warning` by
+design, per §5), and the workflow's `if: failure()`
 Slack step notifies. An unresolvable digest splits on the same boundary as
 the merge gate: when the signed tag is NOT the semver-max target, the
-target's own publish is still in flight and the run defers
-(`result=skipped`, a `::notice::`) rather than paging on a self-healing
-race; when it IS the target, resolution failure is a `resolve` fatal —
+target's own publish is probably still in flight and the run defers
+(`result=skipped`, a `::warning::` that names the dead-publish remediation —
+a tag outlives a failed build, so if that publish died before pushing its
+image the deferral does not self-heal and the AC6 drift guard stays red);
+when it IS the target, resolution failure is a `resolve` fatal —
 nobody else is coming to fix it. `result=opened|existing|noop|skipped|error`
 and `$GITHUB_STEP_SUMMARY` make each run's disposition readable without log
 archaeology.

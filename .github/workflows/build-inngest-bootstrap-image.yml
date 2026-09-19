@@ -366,7 +366,7 @@ jobs:
               sudo tar -xzf "$RUNNER_TEMP/crane.tgz" -C /usr/local/bin crane || rc=12
             fi
             [[ "$rc" -eq 0 ]] && break
-            sleep $(( attempt * 5 ))
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 5 ))
           done
           case "$rc" in
             0)  crane version ;;
@@ -433,7 +433,7 @@ jobs:
             rc=0
             crane digest "$IMAGE:$TAG" > "$RUNNER_TEMP/sign.digest" 2> "$RUNNER_TEMP/sign.err" || rc=$?
             [[ "$rc" -eq 0 ]] && break
-            sleep $(( attempt * 5 ))
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 5 ))
           done
           if [[ "$rc" -ne 0 ]]; then
             echo "::error::could not resolve ${IMAGE}:${TAG} at GHCR to sign it (rc=${rc}): $(tr '\n' ' ' < "$RUNNER_TEMP/sign.err")" >&2
@@ -451,7 +451,7 @@ jobs:
             rc=0
             cosign sign --yes "${IMAGE}@${DIGEST}" || rc=$?
             [[ "$rc" -eq 0 ]] && break
-            sleep $(( attempt * 10 ))
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 10 ))
           done
           if [[ "$rc" -ne 0 ]]; then
             echo "::error::cosign sign failed after 3 attempts for ${IMAGE}@${DIGEST} (rc=${rc}). The image IS pushed and unsigned; D10 A2 will refuse until this is re-run." >&2
@@ -910,8 +910,8 @@ jobs:
   # the logic is tested out-of-band and this YAML stays a thin driver
   # (board-status-sync.yml records the convention).
   #
-  # Auth: the soleur-ai App installation token minted inline below (the
-  # board-status-sync.yml JWT recipe — hr-github-app-auth-not-pat). The App
+  # Auth: the soleur-ai App installation token minted by the composite action
+  # below (the canonical App-JWT recipe — hr-github-app-auth-not-pat). The App
   # token is load-bearing, not just policy: GITHUB_TOKEN pushes do not fire
   # pull_request events, so required checks would never run on the bump PR
   # and auto-merge could never release it. Never a PAT.
@@ -987,7 +987,7 @@ jobs:
               sudo tar -xzf "$RUNNER_TEMP/crane.tgz" -C /usr/local/bin crane || rc=12
             fi
             [[ "$rc" -eq 0 ]] && break
-            sleep $(( attempt * 5 ))
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 5 ))
           done
           case "$rc" in
             0)  crane version ;;
@@ -1008,10 +1008,11 @@ jobs:
             exit 1
           fi
 
-      # Composite action — the fourth copy of the inline JWT recipe triggered
-      # the repo's extraction threshold (learning 2026-05-25-app-jwt-inline-mint:
-      # extract at three consumers). `gh api` cannot take a JWT as GH_TOKEN, so
-      # the action exchanges it for an installation token and emits it masked.
+      # Composite action — the App-JWT recipe lived inline in three workflows;
+      # this job would have been the fourth copy, so the mint is extracted per
+      # learning 2026-05-25-app-jwt-inline-mint (extract at three consumers).
+      # `gh api` cannot take a JWT as GH_TOKEN, so the action exchanges it for
+      # an installation token and emits it masked.
       - name: Mint soleur-ai App token
         id: mint
         uses: ./.github/actions/mint-soleur-ai-app-token
