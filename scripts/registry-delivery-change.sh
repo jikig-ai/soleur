@@ -50,7 +50,8 @@
 #   commits=<sha> <sha>      candidates oldest -> newest (empty on a proven empty intersection)
 #   prs=<n> <n>              unique PR numbers, first-seen order (oldest -> newest)
 #   unattributed=<sha> ...   candidates with no PR (direct push, no `(#N)` suffix)
-#   summary=PR #N (<subject>); commit <sha7> (<subject>)   one line, control characters stripped
+#   summary=PR #N (<subject>); commit <sha7> (<subject>)   one line, control characters stripped,
+#                                                            each subject capped at 200 characters
 # Exit 0 on every arm the API can produce; 2 on a usage error; 1 on the seam refusal.
 #
 # Usage: scripts/registry-delivery-change.sh --repo <owner/name> --after <sha> [--before <sha>] [--path <file>]
@@ -91,12 +92,17 @@ NOTES=()
 note() { NOTES+=("$1"); }
 
 # One line: the first message line, with CR/LF, C0 controls, DEL and the U+2028/U+2029
-# separators removed (cq-regex-unicode-separators-escape-only). No length cap — every consumer
-# tolerates MAX_LOOKUPS uncapped subjects (gh workflow run -f, the step summary, gh api -f body).
+# separators removed (cq-regex-unicode-separators-escape-only), then CAPPED at 200 characters.
+# The cap is load-bearing: git does not bound a subject line, and workflow_dispatch inputs are
+# capped at 65,535 characters in total (docs.github.com, workflow-syntax) — ten uncapped subjects
+# in the dispatch `reason` could make `gh workflow run` fail, a red run that STICKS (the
+# watermark does not advance, so every later push re-derives the same range).
 clean_subject() {
   # LC_ALL=C so the byte-range bracket matches the UTF-8 bytes of U+2028/U+2029; under a UTF-8
   # locale sed reads them as one character and the bracket expression never matches.
-  printf '%s' "$1" | head -n 1 | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed 's/\xe2\x80[\xa8\xa9]//g'
+  local s
+  s="$(printf '%s' "$1" | head -n 1 | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed 's/\xe2\x80[\xa8\xa9]//g')"
+  printf '%s' "${s:0:200}"
 }
 
 # Every SHA the helper places in a URL path is validated first; the API is trusted for shape,
@@ -144,7 +150,6 @@ else
       [[ -n "$s" ]] || continue
       if is_sha "$s"; then printf '%s\n' "$s" >> "$range_file"; else malformed=$((malformed+1)); fi
     done < <(printf '%s' "$cmp_json" | jq -r '.commits[]?.sha // empty' 2>/dev/null || true)
-    [[ "$malformed" -gt 0 ]] && note "malformed sha from API dropped (${malformed})"
     prc=0
     path_json="$(api -X GET "repos/${REPO}/commits" -f sha="$AFTER" -f path="$CFG" -F per_page=100)" || prc=$?
     if [[ "$prc" -ne 0 ]]; then
@@ -171,6 +176,9 @@ else
         note "no commit in range touched ${CFG}"
       fi
     fi
+    # After BOTH loops: the path listing is validated too, and a note emitted between them
+    # would miss its count.
+    [[ "$malformed" -gt 0 ]] && note "malformed sha from API dropped (${malformed})"
   fi
 fi
 
@@ -233,7 +241,8 @@ elif [[ "$RANGE" == "proven" ]]; then
 else
   SUMMARY="the ${CFG##*/} user_data at ${AFTER:0:7}"
 fi
-SUMMARY="$(clean_subject "$SUMMARY")"
+# Every part was cleaned and capped individually; the join and the fixed text carry nothing
+# to strip, and a whole-summary cap would truncate a coalesced multi-PR summary.
 
 printf 'range=%s\n' "$RANGE"
 printf 'range_note=%s\n' "$(IFS='; '; printf '%s' "${NOTES[*]+"${NOTES[*]}"}")"

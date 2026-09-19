@@ -412,6 +412,18 @@ else
   fail "T19: rc=$RC range=$(val range) prs=$(val prs) — the fixtures were reached without the seam"
 fi
 
+# ============================================================================================
+echo "T20 a 500-character subject is capped at 200 characters (workflow_dispatch input payload bound)"
+reset_fixtures
+STUB_COMPARE_JSON="$(compare_json ahead 1 "$T")"
+LONG="$(printf 'x%.0s' $(seq 1 500))"
+STUB_PATH_JSON="$(listing "$(entry "$T" "$LONG")")"
+fx_pulls "$T" "$(pulls 8306)"
+run_sut --before "$B" --after "$T"
+assert_shape T20
+s="$(val summary)"
+[[ "$s" == "PR #8306 ($(printf 'x%.0s' $(seq 1 200)))" ]] && pass "T20: subject capped at exactly 200 characters" || fail "T20: summary length $(printf '%s' "$s" | wc -c)"
+
 # --- anti-vacuity floor -------------------------------------------------------------------
 # HARNESS CANARY + a floor that does NOT dispatch through the helper it guards (the preflight
 # suite's shape): neutering fail() must be caught by something fail() does not carry.
@@ -425,8 +437,8 @@ fi
 FAIL=$((FAIL - 1))
 TOTAL=$((PASS+FAIL))
 # The floor equals the count a green run measured (AC2). Fix the dispatch, do not lower it.
-if [[ "$TOTAL" -lt 96 ]]; then
-  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 96. Fix the dispatch, do not lower the floor." >&2
+if [[ "$TOTAL" -lt 98 ]]; then
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 98. Fix the dispatch, do not lower the floor." >&2
   exit 2
 fi
 

@@ -117,15 +117,16 @@ jobs:
       # approve or edit PRs; the PR comment in the verdict step is its only intended use.
       pull-requests: write
     # 15 -> 70, and the arithmetic is the point. P3 waits up to 2100s (35 min) for the release it
-    # co-fires with; the apply poll below allows a further 1500s (25 min). Those steps are
-    # SEQUENTIAL in one job, so the ceiling must exceed their SUM (3600s = 60 min) plus the
-    # checkout, the delta gate and the four other predicates — measured at ~74s on run
-    # 31976455167. 45 would have left the sum 15 minutes over budget.
+    # co-fires with; the apply poll below allows a further 1500s (25 min); the `change` step's
+    # own `timeout-minutes: 5` adds 300s (#8279). Those steps are SEQUENTIAL in one job, so the
+    # ceiling must exceed their SUM (3900s = 65 min) plus the checkout, the delta gate and the
+    # four other predicates — measured at ~74s on run 31976455167. 45 would have left the sum
+    # 20 minutes over budget.
     #
-    # Getting this wrong is not a slow job, it is a silent one: a CANCELLED job does not satisfy
-    # `failure()`, so the refusal-artifact step below would not run at all. Setting this to 45
-    # would not have closed that defect, only moved it from 15 minutes to 45. Whenever a step
-    # gains an internal deadline, re-derive this number from the SUM of every deadline on the path.
+    # Getting this wrong is not a slow job, it is a silent one: a ceiling cancellation runs only
+    # `always()` steps, inside the runner's grace window — the verdict step below is one, which
+    # is what lets it file the CANCELLED arm at all. Whenever a step gains an internal deadline,
+    # re-derive this number from the SUM of every deadline on the path.
     timeout-minutes: 70
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -174,7 +175,10 @@ jobs:
           # made it fail if the apply did not conclude success) or determined the host-visible bytes
           # were unchanged. Either way its head SHA is a watermark: at that SHA the host was current.
           # Evicted and failed runs never conclude success, so they never become the watermark, and
-          # the next run that executes therefore spans THEIR range too.
+          # the next run that executes therefore spans THEIR range too. One watermark is NOT a
+          # proof: a run whose poll ended UNVERIFIED (apply run not identified / no conclusion in
+          # the window) exits 0 and becomes the watermark with the host's state unmeasured — the
+          # verdict step posts that as KIND=unverified so it is at least recorded (#8279).
           #
           # That makes eviction lossless by construction: a pending run is cancelled only by the
           # arrival of a successor, and by induction the last run in an eviction chain executes and
@@ -333,6 +337,7 @@ jobs:
           BEFORE: ${{ steps.gate.outputs.watermark }}
           AFTER: ${{ github.sha }}
           TRACKER: ${{ inputs.tracker || '' }}
+          EVENT_NAME: ${{ github.event_name }}
           CFG: apps/web-platform/infra/cloud-init-registry.yml
         run: |
           set -euo pipefail
@@ -356,9 +361,18 @@ jobs:
             T=""
           fi
           # targets = derived PRs ∪ tracker, deduplicated (a tracker equal to a derived PR must
-          # not double-post).
+          # not double-post). EXCEPT on a manual re-fire with an UNPROVEN range: there the
+          # degraded derivation is [github.sha] only, which on a re-fire is whatever main is at —
+          # almost never the refused change — so posting on that PR would reproduce the very
+          # mis-attribution this step removes. The operator's tracker (or the verdict step's
+          # owned-issue fallback) is the only truthful target on that arm; the summary still
+          # names the SHA.
           TARGETS="$PRS"
-          if [[ -n "$T" ]] && ! grep -qw -- "$T" <<<"$PRS"; then TARGETS="${PRS:+$PRS }$T"; fi
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$RANGE" != "proven" ]]; then
+            TARGETS=""
+            echo "::warning::manual re-fire with an unproven range — the derived PR(s) [${PRS:-none}] are NOT used as verdict targets (github.sha is not the refused change on a re-fire)."
+          fi
+          if [[ -n "$T" ]] && ! grep -qw -- "$T" <<<"$TARGETS"; then TARGETS="${TARGETS:+$TARGETS }$T"; fi
           printf 'targets=%s\n' "$TARGETS" >> "$GITHUB_OUTPUT"
           # tee to stdout AND the step summary: every run, including deliver=false registration
           # runs, is a free live probe of the derivation (the step summary has no REST endpoint;
@@ -405,6 +419,10 @@ jobs:
           # Consumer default (#8279): the `change` step cannot fail the job, but it can be killed
           # by its timeout, and then its outputs are empty. Say so rather than naming nothing.
           SUMMARY="${SUMMARY:-change attribution unavailable for the user_data at ${MERGE_SHA:0:7}}"
+          # workflow_dispatch inputs are capped at 65,535 characters in total; the helper caps
+          # each subject, and this belt-and-braces cap keeps the reason inside the payload even
+          # if that changes.
+          SUMMARY="${SUMMARY:0:4000}"
           md_esc() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/@/\&#64;/g'; }
           # The reason names the change(s) whose user_data this delivers, so the apply's own audit
           # trail answers "which change is this host carrying" without a human correlating runs.
@@ -574,41 +592,59 @@ jobs:
         run: |
           set -uo pipefail
           gha_esc() { local s=${1//%/%25}; s=${s//$'\r'/%0D}; printf '%s' "${s//$'\n'/%0A}"; }
+          # Markdown surfaces get ESCAPED text: a `<!--` in a merged subject would otherwise
+          # comment out the verdict and the re-fire instruction from the human view while the
+          # marker grep still passed, and `@login` would ping arbitrary users from a bot comment.
+          md_esc() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/@/\&#64;/g'; }
           # Consumer defaults (#8279): the `change` step's outputs are empty when it was killed by
-          # its timeout. TARGETS then falls back to the RAW tracker input, which is why the posting
-          # loop below validates at the sink rather than trusting the producer.
+          # its timeout. TARGETS then falls back to the RAW tracker input, which is why every
+          # target is validated below before it becomes a URL path segment — independent of the
+          # producer's own validation.
           TRACKER="${TRACKER#\#}"
           SUMMARY="${SUMMARY:-the user_data merged at ${MERGE_SHA:0:7} (change attribution unavailable)}"
           TARGETS="${TARGETS:-$TRACKER}"
-          # Markdown surfaces get the ESCAPED summary: a `<!--` in a merged subject would otherwise
-          # comment out the verdict and the re-fire instruction from the human view while the
-          # marker grep still passed, and `@login` would ping arbitrary users from a bot comment.
-          # Raw SUMMARY is used only for log lines.
-          SUMMARY_MD="$(printf '%s' "$SUMMARY" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/@/\&#64;/g')"
-          NOT_LIVE=""
+          SUMMARY_MD="$(md_esc "$SUMMARY")"
+          # FILTER FIRST, THEN BRANCH. A non-numeric target must not be able to take the run into
+          # "posted nothing AND created nothing": the invalid value is dropped loudly and the
+          # remaining set decides between the comment loop and the owned-issue fallback.
+          VALID=""; DROPPED=""
+          for n in $TARGETS; do
+            if [[ "$n" =~ ^[0-9]{1,9}$ ]]; then VALID="${VALID:+$VALID }$n"
+            else
+              echo "::warning::dropping non-numeric verdict target '$(gha_esc "$n")' — it would be a URL path segment"
+              DROPPED="${DROPPED:+$DROPPED }$(md_esc "$n")"
+            fi
+          done
+          # The two sentences about the host's bytes. The helper's contract (pinned by T11/T15 in
+          # tests/scripts/test-registry-delivery-change.sh) is that `prs=` is EMPTY on a proven
+          # range with no config touch and never falls back to github.sha.
           if [[ -z "${PRS// /}" && "${RANGE:-}" == "proven" ]]; then
             # Nothing in range touched the config (includes a re-fire at the watermark SHA): the
             # bytes ARE live, and "NOT live" here would be the false-text defect in a new arm.
             NOT_LIVE="The registry host's user_data is unchanged since the delivery watermark ${WATERMARK:0:7}; this run was not applied."
           else
             NOT_LIVE="The registry host still runs its previous user_data, so the cloud-init-registry.yml change(s) in ${SUMMARY_MD} are NOT live"
-            [[ -n "${RANGE_NOTE:-}" ]] && NOT_LIVE="${NOT_LIVE} (attribution unproven: $(printf '%s' "$RANGE_NOTE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/@/\&#64;/g'))"
+            [[ -n "${RANGE_NOTE:-}" ]] && NOT_LIVE="${NOT_LIVE} (attribution unproven: $(md_esc "$RANGE_NOTE"))"
             NOT_LIVE="${NOT_LIVE}."
           fi
           # ONE arm per measured outcome, in the order the steps run. The steps are serially
-          # gated, so at most one of gate/preflight/dispatch/poll can be `failure`.
+          # gated, so at most one of gate/preflight/dispatch/poll can be `failure`. STATE defaults
+          # to the not-live sentence; the arms where the replace RAN (or may have) override it.
+          STATE="$NOT_LIVE"
+          REFUSAL_NOTES=0
           if [[ "${JOB_STATUS:-}" == "cancelled" ]]; then
             # A ceiling cancellation is the one arm where a replace may ALREADY BE IN FLIGHT, so
-            # the remediation is "read the run before re-firing", not "re-fire".
+            # the remediation is "read the run before re-firing", not "re-fire" — and the host's
+            # bytes are UNKNOWN, so no not-live sentence.
             KIND="cancelled"
             WHAT="Delivery CANCELLED mid-run"
-            WHY="The job was cancelled while running — most likely its \`timeout-minutes\` ceiling. Whether the replace was dispatched before the cut is visible in the run itself, so READ IT BEFORE RE-FIRING: a replace may already be in flight, and the apply's own outcome was never polled."
-            STATE="$NOT_LIVE"
+            WHY="The job was cancelled while running — most likely its \`timeout-minutes\` ceiling. Whether the replace was dispatched before the cut is visible in the run itself, so READ IT BEFORE RE-FIRING: a replace may already be in flight, and the apply's own outcome was never polled to a conclusion."
+            [[ -n "${APPLY_RUN:-}" ]] && WHY="${WHY} The poll had identified apply run ${APPLY_RUN}; read it first."
+            STATE="Whether the host now boots the delivered user_data is UNKNOWN."
           elif [[ "${POLL_OUTCOME:-}" == "failure" ]]; then
             KIND="apply-failed"
             WHAT="Apply FAILED: registry-host-replace run ${APPLY_RUN:-<not identified>} concluded ${APPLY_CONCLUSION:-<unknown>}"
             WHY="The replace RAN and did not conclude success."
-            # No "NOT live" sentence: the replace ran, and what the host boots now is unknown.
             STATE="The registry host may be DARK and has no SSH; the store volume is preserved. Recovery is a re-dispatch of \`registry-host-replace\`, which restores from the PRESERVED volume."
           elif [[ "${DISPATCH_OUTCOME:-}" == "failure" ]]; then
             KIND="dispatch-failed"
@@ -621,61 +657,69 @@ jobs:
             KIND="refused"
             WHAT="Delivery REFUSED by the preflight"
             WHY="scripts/registry-replace-preflight.sh declined; its own \`::error::\` in the run names the predicate."
-            STATE="$NOT_LIVE"
+            REFUSAL_NOTES=1
           elif [[ "${APPLY_CONCLUSION:-}" == "unverified" ]]; then
             KIND="unverified"
             WHAT="Delivery UNVERIFIED: apply run ${APPLY_RUN:-<not identified>} had no conclusion in the poll window"
             WHY="The dispatch was accepted and a replace may have run; this run could not read its conclusion."
             STATE="The delivering change's own follow-through is the authority on whether the host serves; read the apply run before re-firing."
+          elif [[ "${GATE_OUTCOME:-}" == "failure" ]]; then
+            # The gate's own exit 1 (compare API unreadable). Not the `else`: that arm would
+            # print "no step reports a failure" beside gate=failure in the same sentence.
+            KIND="gate-failed"
+            WHAT="Delivery UNCLASSIFIED: the delta gate could not classify the diff"
+            WHY="The gate's own \`::error::\` in the run names the cause (compare API unreadable). Nothing was dispatched."
           else
+            # REACHABLE with no step in `failure`: an actions/checkout failure leaves the gate
+            # `skipped` and the job failed. Print the four bound outcomes rather than guess.
             KIND="undetermined"
             WHAT="Delivery UNDETERMINED"
             WHY="No step reports a failure of its own, yet the job did not succeed (gate=${GATE_OUTCOME:-?} preflight=${PREFLIGHT_OUTCOME:-?} dispatch=${DISPATCH_OUTCOME:-?} poll=${POLL_OUTCOME:-?}). A checkout failure leaves exactly this shape. Nothing was dispatched."
-            STATE="$NOT_LIVE"
           fi
           if [[ "${CHANGE_OUTCOME:-}" != "success" ]]; then
-            # continue-on-error pins the API-visible step conclusion to success (measured on run
-            # 35352234356's jobs endpoint), so nothing else distinguishes a degraded run afterwards.
+            # continue-on-error pins the API-visible step `conclusion` to success while
+            # `steps.<id>.outcome` records the failure (GitHub docs: "steps context" —
+            # outcome vs conclusion under continue-on-error), so nothing else distinguishes a
+            # degraded run after the fact.
             echo "::warning::derivation step outcome=${CHANGE_OUTCOME:-unknown} — attribution unavailable"
             WHAT="${WHAT} (attribution unavailable: derivation step ${CHANGE_OUTCOME:-unknown})"
           fi
-          # The first VALIDATED target — a raw non-numeric tracker must not reach a markdown surface.
-          FIRST_TARGET=""
-          for n in $TARGETS; do [[ "$n" =~ ^[0-9]{1,9}$ ]] && { FIRST_TARGET="$n"; break; }; done
-          REFIRE="Re-fire with \`gh workflow run registry-host-replace-dispatch.yml -f reason='<why>' -f tracker=${FIRST_TARGET:-<the issue you are tracking this under>}\` once the refusing predicate is resolved."
+          FIRST_TARGET="${VALID%% *}"
+          # The re-fire instruction names the tracker, because this comment is the only place the
+          # operator learns the input exists. The predicate notes belong to the REFUSED arm only:
+          # on the other arms nothing refused, and saying so would be the false-text class.
+          REFIRE="Re-fire with \`gh workflow run registry-host-replace-dispatch.yml -f reason='<why>' -f tracker=${FIRST_TARGET:-<the issue you are tracking this under>}\`"
+          if [[ "$REFUSAL_NOTES" -eq 1 ]]; then
+            REFIRE="${REFIRE} once the refusing predicate is resolved. Two predicates are expected to need it:"$'\n\n'"- **P1** (local-cache pulls) — the manual arm passes \`--manual\`, which skips P1 only; it is the predicate a replace outage itself trips."$'\n'"- **P5** (the replace would be unobservable) — \`--manual\` does NOT skip this one, deliberately. If the container-log channel is dark (#7569) the replace outcome cannot be read back, and forcing it would put the sole pull path behind a channel that cannot report whether it returned."
+          else
+            REFIRE="${REFIRE} to deliver again, after reading the run."
+          fi
+          [[ -n "$DROPPED" ]] && REFIRE="${REFIRE}"$'\n\n'"(A non-numeric \`tracker\` input was dropped: ${DROPPED}.)"
           # Defined ONCE, appended LAST — a `<!--` in an unescaped subject would otherwise swallow
-          # it. It is what the Success Metrics grep keys on. No pre-post listing and no dedupe:
-          # the only duplicating path is `gh run rerun` of a failed job, which no runbook
+          # it. It is what the plan's Success Metrics grep keys on. No pre-post listing and no
+          # dedupe: the only duplicating path is `gh run rerun` of a failed job, which no runbook
           # prescribes (the documented recovery is workflow_dispatch, a new run id), and a
           # duplicate comment is recoverable where a missing artifact is not.
           MARKER="<!-- registry-delivery run=${GITHUB_RUN_ID} kind=${KIND} -->"
           BODY="$(printf '%s\n' \
             "${WHAT} for \`${MERGE_SHA}\`. ${WHY} ${STATE} Verdict and cause: ${RUN_URL}" \
             "" \
-            "${REFIRE} Two predicates are expected to need it:" \
-            "" \
-            "- **P1** (local-cache pulls) — the manual arm passes \`--manual\`, which skips P1 only; it is the predicate a replace outage itself trips." \
-            "- **P5** (the replace would be unobservable) — \`--manual\` does NOT skip this one, deliberately. If the container-log channel is dark (#7569) the replace outcome cannot be read back, and forcing it would put the sole pull path behind a channel that cannot report whether it returned." \
+            "${REFIRE}" \
             "" \
             "${MARKER}")"
           # The red run on the Actions tab is the other place the operator lands.
           { echo "### ${WHAT}"; echo ""; echo "${REFIRE}"; echo ""; echo "${MARKER}"; } >> "$GITHUB_STEP_SUMMARY"
-          echo "verdict kind=${KIND} targets='${TARGETS}' ${MARKER}"
+          echo "verdict kind=${KIND} targets='${VALID}' ${MARKER}"
           # NOT `|| true`. That is what masked the missing scope in 2026-08-16's first refusal:
           # the artifact step cannot both be the thing that guarantees a verdict is visible AND
           # silently tolerate failing to post. If this cannot write, the run must say so — the
           # ::error:: is then the artifact of last resort, and the step's own failure is the signal.
           post_failed=0
-          if [[ -n "${TARGETS// /}" ]]; then
-            for n in $TARGETS; do
-              # Validated AT THE SINK, independent of the producer: the `${TARGETS:-$TRACKER}`
-              # default reaches this loop with the RAW input when the change step was killed, and
-              # `${n}` is a URL path segment. `-f` (raw field), never `-F` (expands @path / @-).
-              # The issues/{n}/comments endpoint addresses issues AND PRs (cla-evidence.yml).
-              if ! [[ "$n" =~ ^[0-9]{1,9}$ ]]; then
-                echo "::error::refusing non-numeric verdict target '$(gha_esc "$n")'"
-                post_failed=1; continue
-              fi
+          if [[ -n "${VALID// /}" ]]; then
+            for n in $VALID; do
+              # `-f` (raw field), never `-F` (expands @path / @-). The issues/{n}/comments
+              # endpoint addresses issues AND PRs (cla-evidence.yml). `n` was validated above:
+              # `[[ "$n" =~ ^[0-9]{1,9}$ ]]` is the only way into VALID.
               if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${n}/comments" -f body="$BODY" >/dev/null; then
                 echo "::error::could not post the delivery verdict to #${n}. The verdict itself stands, but it has NO durable record there beyond this run. Verdict and cause: ${RUN_URL}"
                 post_failed=1
