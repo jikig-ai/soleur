@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Every decision variable below is assigned by jqv() via printf -v, which shellcheck cannot see
+# through (SC2154 fires on each read); the helper is the point, so the warning is disabled file-wide.
+# shellcheck disable=SC2154
 # #6178 — the ADR-100 Phase-4 exactly-once soak, read by a machine on the day it becomes readable.
 #
 # TRACKER: **#6178**. NOTIFY-ONLY. This probe never closes the tracker and never reopens it: the

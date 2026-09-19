@@ -134,8 +134,8 @@ default_fixtures() {
   registry_fixture
   local k
   for k in 1 2 3 4 5; do
-    # shellcheck disable=SC2046
-    slice_fixture "$k" $(dealt "$k")
+    mapfile -t _ids < <(dealt "$k")
+    slice_fixture "$k" "${_ids[@]}"
   done
 }
 # run <id> [args passed after the probe path: -x] — the ONLY launcher.
@@ -284,7 +284,7 @@ default_fixtures; add_explained; append_runs "$(slice_of $MINTER)" '[{"id":"01M2
 expect "C5b the minter at count 5 (pin is 4) → UNEXPLAINED" 5 "UNEXPLAINED: functionID=$MINTER bucket=1491374 (2026-09-17T12:40:00Z–2026-09-17T13:00:00Z) count=5"
 default_fixtures; append_runs "$(slice_of $CREDIT)" "$EXPLAINED_CREDIT"; append_runs "$(slice_of $MINTER)" "$(jq -c '.[0:3]' <<<"$EXPLAINED_MINTER")"; NOW=$SOAK_END_EPOCH run C5c
 expect "C5c the minter at count 3 (below the pin) → UNEXPLAINED, not clean" 5 "UNEXPLAINED: functionID=$MINTER bucket=1491374 (2026-09-17T12:40:00Z–2026-09-17T13:00:00Z) count=3"
-default_fixtures; NO_WINDOW_HEAD=1 slice_fixture 1 $(dealt 1); run C5e
+default_fixtures; mapfile -t _ids < <(dealt 1); NO_WINDOW_HEAD=1 slice_fixture 1 "${_ids[@]}"; run C5e
 expect "C5e earliest run on 2026-09-18 (window head uncovered) → index_eroded" 3 "reason=index_eroded"
 
 # ── C6 / C7 unreadable slices ────────────────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ default_fixtures; append_runs 2 '[{"id":"01M2QNULLFN","functionID":null,"started
 expect "C18b functionID null → bad_run_shape" 3 "cause=bad_run_shape"
 
 # ── C20 population thin ──────────────────────────────────────────────────────────────────────
-default_fixtures; for k in 1 2 3 4 5; do TICKS=6 slice_fixture "$k" $(dealt "$k"); done; run C20
+default_fixtures; for k in 1 2 3 4 5; do mapfile -t _ids < <(dealt "$k"); TICKS=6 slice_fixture "$k" "${_ids[@]}"; done; run C20
 expect "C20 only ~312 distinct runs → population_thin (below RUN_FLOOR=800)" 3 "reason=population_thin"
 
 # ── C23 a throwing jq must not fall through to a clean verdict ───────────────────────────────
