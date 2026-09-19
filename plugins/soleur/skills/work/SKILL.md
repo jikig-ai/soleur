@@ -194,7 +194,11 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    see; run it plus `fixture-dir-operand-assert.test.sh` and `python3 scripts/lint-shell-capture-exit.py --baseline
    scripts/lint-shell-capture-exit.baseline.txt <file>` on the new file, and guard each writing window with the canonical
    `assert_fixture_dir` rather than regenerating the baseline. **Why:** #8056 and #8135 — the same miss on consecutive
-   days, each caught only by the full battery or the review panel.
+   days, each caught only by the full battery or the review panel. **The guard must be the canonical helper, copied
+   byte-for-byte — an inline `case "$out" in /*) … esac` is NOT recognised** (`fixture-scan.py`'s `_rel_guarded`
+   docstring records the four ways an inline case was defeated and why it was dropped); and read the ratchet's rc from
+   `rc=$?` on its own line — `echo "$(basename $t) RC=$?"` prints `basename`'s status and reported this ratchet green
+   while its log carried `FAIL` (#7968).
 
 **Design artifact checks:**
 
