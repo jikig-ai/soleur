@@ -2050,6 +2050,10 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # The differential oracle over every executable reader of the directive (#7490). Four copies
+  # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
+  # must not `source` a repo file), so they are held in agreement by a walker instead.
+  run_suite "scripts/followthrough-predicate-parity" bash scripts/followthrough-predicate-parity.test.sh
   # #7506: the callback-URL closure guard EXECUTES its shipped workflow step body under
   # `bash -e` (the shell Actions uses for a `run:` block with no `shell:` key). Registered
   # explicitly for the same reason as the two lines above — scripts/*.test.sh is not globbed,
@@ -2155,6 +2159,10 @@ if want_scripts; then
   # double-encoded like the warehouse `raw` column: a harness whose seam sits above the decode
   # reproduces #7674's own 0/40-vs-40/40 measurement and passes while testing nothing.
   run_suite "scripts/inngest-host-not-serving-7674" bash scripts/followthroughs/inngest-host-not-serving-7674.test.sh
+  # #6178 ADR-100 soak probe. The suite pins the never-0/never-1 invariant after every invocation
+  # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
+  # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
+  run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
@@ -2238,6 +2246,21 @@ if want_scripts; then
   # Every peer workflow lint is registered as this same pair (see lint-workflow-step-env-refs and
   # lint-workflow-errexit-capture above) — this one was registered once, which made it decoration.
   run_suite "scripts/lint-workflow-issue-write-scope-live" python3 scripts/lint-workflow-issue-write-scope.py
+  # A `uses: ./…` step resolves from the runner's WORKSPACE, so its job must have run
+  # actions/checkout first. scheduled-marketplace-drift.yml's checkout-free drift-check job ended
+  # in one under `continue-on-error: true`: the runner could not resolve the composite, the step
+  # went green, and the Sentry monitor recorded zero check-ins for 37 days. Same class as the two
+  # lints above, one layer earlier: that the alarm step can even be FOUND. Both halves are
+  # required — the unit suite proves the RULE is right, the -live arm proves the TREE is clean.
+  run_suite "scripts/lint-workflow-local-action-checkout" bash scripts/lint-workflow-local-action-checkout.test.sh
+  run_suite "scripts/lint-workflow-local-action-checkout-live" python3 scripts/lint-workflow-local-action-checkout.py
+  # A DANGLING committed symlink breaks the GitHub Actions runner's repository-archive
+  # extraction, so it fails `Set up job` for EVERY `$/…` and `owner/repo/path@ref` reference to
+  # this repo — measured on run 35360150848. The check lives in its own file rather than inline:
+  # `--enumerate-commands` encodes argv with TAB/NEWLINE delimiters and rejects a multi-line
+  # `bash -c` body, which is how the first revision of this registration broke
+  # `battery-tag-authorship` (an empty root set, refusing to classify).
+  run_suite "scripts/no-dangling-committed-symlinks" bash scripts/no-dangling-committed-symlinks.test.sh
   # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
   # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
   # advisory (absent from required-checks.txt and the ruleset), and this defect has already

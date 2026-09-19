@@ -26,7 +26,12 @@ set -uo pipefail
 
 WORKFLOW="scheduled-marketplace-drift.yml"
 REPO="${GH_REPO:-jikig-ai/soleur}"
-REPORTS="knowledge-base/project/specs/feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md"
+# The record moved to specs/archive/ in PR #7505 -- the SAME PR that shipped this probe -- so
+# this literal pointed at nothing from the day it was written, and step 4 below returned FAIL
+# on every run while the canary itself was green. Rule 3 of scripts/lint-followthrough-varq-ban.sh
+# now checks every repo-relative literal in this directory against `git ls-files`, so a future
+# move that forgets this line reddens the PR that moved it.
+REPORTS="knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md"
 
 command -v gh >/dev/null 2>&1 || { echo "TRANSIENT: gh unavailable" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "TRANSIENT: jq unavailable" >&2; exit 2; }

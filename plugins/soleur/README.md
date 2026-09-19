@@ -75,7 +75,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 68 |
 | Commands | 3 |
-| Skills | 98 |
+| Skills | 100 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -522,9 +522,15 @@ every run still executes the old payload.
 **Workaround:** run both steps, then confirm the two agree:
 
 ```bash
-claude plugin marketplace update soleur
-claude plugin update soleur
+claude plugin marketplace update soleur-marketplace
+claude plugin update soleur@soleur-marketplace
 ```
+
+Both halves name the marketplace deliberately. On current releases the bare plugin name can
+fail with `Plugin not found`; an Anthropic collaborator confirmed `<plugin>@<marketplace>` as
+the reliable form on anthropics/claude-code#76882 (2026-08-17). `soleur-marketplace` is the id
+for the published marketplace; if you added this repository directly it is `soleur`, so run
+`claude plugin list` and use whatever it prints beside `soleur`.
 
 **If that does not converge them, reinstall.** This is now a fallback rather than the only
 mechanism, and the reason it used to be the only one is worth knowing: `plugin.json` carried a
@@ -536,7 +542,7 @@ delivered commit, so the string changes with every commit and `update` has somet
 See ADR-182 for the mechanism and its measurements:
 
 ```bash
-claude plugin uninstall soleur && claude plugin install soleur
+claude plugin uninstall soleur@soleur-marketplace && claude plugin install soleur@soleur-marketplace
 ```
 
 **Symptom to watch for:** `/soleur:sync` emitting

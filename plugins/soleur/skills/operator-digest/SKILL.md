@@ -28,6 +28,11 @@ numbers, no file paths, no jargon, no hype. Prefer "We made checkout faster" ove
 refactoring the Stripe webhook handler." Money in plain figures. Incidents in plain "what broke / is
 it fixed" terms.
 
+**In-the-moment sibling.** `soleur:operator-rephrase` applies this same register to a **single
+message, synchronously**, when something just said did not land. It is not bound by the
+business-consequence rule above — that rule is a digest rule. Use the digest weekly; use
+`soleur:operator-rephrase` in the turn.
+
 ## Date window
 
 The digest covers the **last 7 days**. Anchor to the checkout root and compute the window once at the start:

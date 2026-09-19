@@ -120,3 +120,59 @@ Nutlope/hallmark
   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+mattpocock/skills
+  License: MIT
+  URL: https://github.com/mattpocock/skills
+  Audited at: HEAD c55ee46073ed923f86ce59a5eb3b6d895095d1b7 (2026-09-18)
+  Description: "Skills for Real Engineers" -- 38 skills for Claude Code
+    covering engineering workflow (diagnosis, TDD, triage, wayfinding),
+    productivity (grilling, handoff, teaching) and agent-document
+    authoring.
+  Used in: skills/operator-bootstrap/, skills/operator-rephrase/,
+    scripts/lib/operator-script.sh,
+    skills/brainstorm-techniques/references/phase-boundaries.md,
+    skills/ship/SKILL.md (Merge Danger section) (#8287)
+  Portions adopted: Patterns and prose, not source code. Specifically:
+    the wizard architecture (a human-in-the-loop procedure rendered as a
+    runnable staged script with confirmation gates and idempotent
+    writes); the "print the URL before asking for its value" and
+    additive-only URL-opening discipline; the context-boundary decision
+    tree (Continue / clear / handoff / subagent / compact, first-yes-wins);
+    the re-pitch-in-plain-language corrective; and the merge-danger
+    framing that a PR body should state what reverses a change.
+
+    The Soleur implementation is an EXTRACTION, not a port: five of the
+    six library primitives already existed in this repository and were
+    consolidated from apps/cla-evidence/infra/bootstrap.sh,
+    linkedin-setup.sh and provision-operator-digest-repo.sh rather than
+    copied from upstream. Two upstream mechanisms were deliberately NOT
+    adopted -- the inlined-library STAGES-marker invariant (Soleur's
+    generated scripts source a shared library instead) and the one-way/
+    two-way "Door" verdict (unanswerable by default on the PRs where
+    Soleur's reversibility evidence is not produced).
+
+  MIT License (upstream)
+
+  Copyright (c) 2026 Matt Pocock
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

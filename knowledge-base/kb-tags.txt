@@ -154,6 +154,7 @@ adr-166
 adr-181
 adr-193
 adr-194
+adr-217
 adr-corpus
 adr-drift
 adr-hygiene
@@ -246,6 +247,7 @@ anon-key
 ansi
 anthropic
 anthropic-api
+anthropic-credits
 anti-priming
 anti-slop
 anti-sycophancy
@@ -431,6 +433,7 @@ bash-parsing
 bash-pipefail
 bash-set-e
 bash-strict-mode
+bash-subshell
 bash-test-pattern
 bash-tests
 bash-to-ts-port
@@ -548,6 +551,7 @@ build
 build-assertions
 build-context
 build-errors
+build-sha
 build-time-inlining
 build-time-interpolation
 bulk-redirects
@@ -976,6 +980,7 @@ counting
 counts
 coupling-test
 coverage
+coverage-consult
 coverage-denominator
 coverage-gap
 cpo
@@ -1053,6 +1058,7 @@ cto
 cto-fork
 cto-routing
 cto-ruling
+ctx-logger
 curated-register
 curl
 curl-based cloudflare api calls in agent
@@ -1112,6 +1118,7 @@ deepen-plan
 deepen-plan-skill
 default
 default-deny
+default-parameter
 defeat
 defense
 defense-in-depth
@@ -1147,12 +1154,14 @@ dependency-cascade
 dependency-chains
 dependency-cruiser
 dependency-detection
+dependency-injection
 dependency-management
 dependency-rebase
 dependency-resolution
 dependency-review
 dependency-sequencing
 deploy
+deploy-arm
 deploy-churn
 deploy-docs
 deploy-docs workflow fails on redirect pages lacking seo metadata
@@ -1180,6 +1189,7 @@ design-system
 design-tooling
 design-tooling/mcp-tools
 design-tools
+design-validity
 desktop-support
 destroy-gate
 destroy-guard
@@ -1424,6 +1434,7 @@ evidentiary-records
 exacerbation-rule
 exact-equality
 exact-match
+exactly-once
 exec
 exfil
 exhaustive-switch
@@ -2156,6 +2167,7 @@ live-evidence
 live-probe
 live-repro
 live-verify
+livelock
 liveness
 llm
 llm integration tests
@@ -2201,6 +2213,7 @@ markdown-table
 markdown-tables
 markdownlint
 marker
+marker-shape
 marker-telemetry
 marker-tests
 marker-vocabulary
@@ -2436,6 +2449,7 @@ not-rest-mutable
 notification not sent
 notification-channel
 notification-migration
+notification-vs-verdict
 notifications
 npm
 npm-packaged-binary
@@ -2979,6 +2993,7 @@ pure-ts
 purity
 purity-test
 push
+push-arm
 push-notifications
 push-protection
 pwa
@@ -3376,6 +3391,7 @@ search-path-injection
 search-path-pinning
 seccomp
 second-order-defects
+second-order-effects
 second-reviewer-concur
 second-reviewer-gate
 secret
@@ -3548,6 +3564,7 @@ ship-phase-7
 ship-skill
 shipped
 shipping
+short-sha
 show-full-output
 showdownload
 sibling-call-discovery

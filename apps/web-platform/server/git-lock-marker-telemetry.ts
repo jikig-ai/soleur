@@ -117,7 +117,35 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+
+// MIRRORED-NOT-PAGED (#8287): the SOLEUR_BOOTSTRAP_* family.
+//
+// Emitted by plugins/soleur/scripts/lib/operator-script.sh (the shared library behind
+// `soleur:operator-bootstrap`'s generated scripts and the provision-* consumers, starting with
+// provision-hetzner.sh) — the header of that file is the contract listing every marker:
+// LIB_MISSING / LIB_INCOMPATIBLE (the consumer could not source a compatible library),
+// INPUT_REQUIRED (an unattended run reached a prompt with no non-interactive path — exit 64
+// naming the variable, or naming NONE for a destructive-write acknowledgement, which has no
+// skip variable by design), ENV_NOT_IGNORED (the credentials file would be committed),
+// BAD_ARG, UNSAFE_VARIABLE (a secret-shaped name refused on argv), SECRET_WRITE_FAILED /
+// SECRET_VERIFY_FAILED (the second means the write MAY have landed), LEDGER_WRITE_FAILED.
+// Registered by PREFIX rather than by enumeration because the namespace is owned entirely by
+// that one library and its header is the single source of truth; a per-marker list here is
+// a second copy that drifts. The drift guard in test/git-lock-marker-telemetry.test.ts walks
+// skills/*/scripts/*.sh and found the family unmirrored on provision-hetzner.sh.
+//
+// Same reasoning as SOLEUR_TRANSPORT_DIAG below: these scripts run on a customer's installed
+// CLI (observability layer 7, ADR-171), where the marker is an in-session stdout string and
+// the durable run ledger; this entry closes the HOSTED half, so a hosted agent that runs a
+// provision script into LIB_MISSING or ENV_NOT_IGNORED is visible rather than silent. They
+// carry no credential by construction: every field is a key NAME, a path, a variable name or
+// a reason token (the library's ledger records names, never values).
+//
+// NOT in WEDGE_RE. The dominant causes are a customer's plugin layout (LIB_MISSING), a
+// deliberate refusal working as designed (INPUT_REQUIRED on the class-2 acknowledgement is
+// the property the library exists to guarantee), or a founder's .gitignore. Paging an
+// operator for any of those is how a page becomes noise.
 
 // MIRRORED-NOT-PAGED (#7898): SOLEUR_TRANSPORT_DIAG and SOLEUR_FLAG_LIST_HALT.
 //
