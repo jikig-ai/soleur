@@ -568,7 +568,7 @@ _r2_evidence_write() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence "none"
   # of tripping on a new cardinality HOLD first. The optional ack key is written only when
   # asked: it is at-most-once, so an unconditional empty line would refuse every fixture.
   printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=%s\nRUNG2_SENTRY_CROSSCHECK=%s\n' \
-    "$2" "$3" "$4" "${5:-none}" "${6:-CLEAN}" > "$1"
+    "$2" "$3" "$4" "${5:-none}" "${6-CLEAN}" > "$1"
   [[ -n "${7:-}" ]] && printf 'RUNG2_SENTRY_CROSSCHECK_ACK=%s\n' "$7" >> "$1"
   return 0
 }
@@ -730,12 +730,12 @@ r2check "explicit RUNG2_VAR_DIVERGENCE=none => RELEASED" 0 "RELEASED" "$R2/ci.ym
 # asserting a declaration of "none" that nobody made. Whitespace-only is the same silence
 # with extra bytes, and `--divergence` upstream validates with `-z` only, so $'\n' reaches here.
 { printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
-  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\n' "$R2_SHA"; } > "$R2/emptydiv.env"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"; } > "$R2/emptydiv.env"
 r2check "an EMPTY RUNG2_VAR_DIVERGENCE is refused (silence cannot release)" 1 "EMPTY value" \
   "$R2/ci.yml" "$R2/emptydiv.env"
 
 { printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
-  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=   \n' "$R2_SHA"; } > "$R2/wsdiv.env"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=   \nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"; } > "$R2/wsdiv.env"
 r2check "a WHITESPACE-ONLY RUNG2_VAR_DIVERGENCE is refused" 1 "EMPTY value" \
   "$R2/ci.yml" "$R2/wsdiv.env"
 
@@ -926,9 +926,13 @@ mutate_r2 "rung-2 PASS-assertion arm" \
 # URL regex itself: the gate's text contains a LITERAL `?` (`^https?://`), and in sed's BRE
 # `\?` means "optional previous character", so the obvious-looking expression matches nothing
 # and the mutation reports a missing guard rather than a real result.
-mutate_r2 "rung-2 evidence-URL arm" \
+# (#8010) The expected verdict MOVED, and the move is the point. Neutering the URL-shape
+# check used to RELEASE an unauditable pointer; it now falls through to the run-id parser,
+# which refuses the same input by name. The needle is what makes this row mean anything — an
+# rc-only assertion would pass on any HOLD from any later arm.
+mutate_r2 "rung-2 evidence-URL arm — neutered, the run-id parser is the backstop" \
   's|^  if \[\[ ! "\$url" =~ .*|  if false; then|' \
-  0 "$R2/ci.yml" "$R2/nourl.env"
+  1 "$R2/ci.yml" "$R2/nourl.env" "[RUN_UNRESOLVABLE]"
 
 # (#7025, R6) Neutered, evidence declaring a doppler_arch divergence releases the route —
 # and doppler_arch is the var that selects WHICH BINARY is downloaded and WHICH CHECKSUM
@@ -1864,6 +1868,7 @@ mutate_g "G7: row 4 — intersecting only the template lets a payload edit + evi
 
 # G19 — the WIRING is load-bearing: neuter ARM 1's call inside the rehearsal gate and the
 # hash-valid, provenance-void evidence RELEASES the birth route.
+_stub_run 17260000001 "head_sha=$(git -C "$_gC" rev-parse HEAD)"   # (#8010) _G_URL, for gC's tree
 mutate_g "G19: neutering ARM 1's call inside git_data_rung2_rehearsal_gate releases the voided attestation" \
   's|^  if ! _prov_out="$(git_data_rung2_evidence_provenance_gate .*|  if false; then|' \
   0 git_data_rung2_rehearsal_gate "$_gC/ci.yml" "$_gC/evidence.env"
@@ -1885,6 +1890,7 @@ _r2_evidence_write "$_gE/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gE")"
 _g_commit "$_gE" "c2: evidence created alone"; _gE_c2="$(_g_head "$_gE")"
 _g "G10: row 6 MUST-PASS — a rehearsal commit creating the evidence and nothing else => ARM 2 passes" \
   0 "rehearsal-PR shape" git_data_rung2_evidence_provenance_gate "$_gE/ci.yml" "$_gE/evidence.env" range "$_gE_c1" "$_gE_c2"
+_stub_run 17260000001 "head_sha=$_gE_c2"   # (#8010) _G_URL, re-seeded for gE's tree
 _g "G11: row 6 MUST-PASS — the same tree RELEASES the rehearsal gate (ARM 1 sees an evidence-only commit)" \
   0 "RELEASED" git_data_rung2_rehearsal_gate "$_gE/ci.yml" "$_gE/evidence.env"
 
@@ -2177,9 +2183,23 @@ _row R "R13: a malformed head_sha is an unusable answer" 1 "[RUN_UNRESOLVABLE]" 
 # fall through to the anonymous read the data is public for.
 _stub_run 80000014 "head_sha=$_R2_C1" http=401once
 _r_ev r14.env 80000014
-_row R "R14: a rejected bearer retries ONCE anonymously — the operative CI path" 0 "RELEASED" "$R2/ci.yml" "$R2/r14.env"
+# SOLEUR_RUNG2_STUB_BEARER declares "a bearer was in play" — the stub cannot observe a
+# header, and without a bearer there is no rejected credential to fall back FROM, so the
+# arm would pass for the wrong reason (a bare 401 with no token is RUN_UNRESOLVABLE).
+_r14_out="$(SOLEUR_RUNG2_STUB_BEARER=1 git_data_rung2_rehearsal_gate "$R2/ci.yml" "$R2/r14.env" 2>&1)"; _r14_rc=$?
+_FAM[R]=$(( ${_FAM[R]:-0} + 1 ))
+if [[ "$_r14_rc" -eq 0 && "$_r14_out" == *"RELEASED"* ]]; then
+  pass "R14: a rejected bearer retries ONCE anonymously — the operative CI path"
+else
+  fail "R14: a rejected bearer must retry once anonymously and release" "$_r14_rc" "$_r14_out"
+fi
+# R14-control: the SAME one-shot 401 with NO bearer in play must NOT release — otherwise R14
+# would pass against an implementation that simply ignores a 401.
+_stub_run 80000015 "head_sha=$_R2_C1" http=401once
+_r_ev r15.env 80000015
+_row R "R14-control: a 401 with no bearer to drop is could-not-measure, not a free pass" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r15.env"
 
-_expect_rows R 14
+_expect_rows R 15
 
 printf '\n(#8010) A — the capture discriminator (an evidence artifact exists)\n'
 
