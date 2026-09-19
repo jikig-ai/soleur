@@ -35,5 +35,5 @@ Plan: `knowledge-base/project/plans/2026-09-19-feat-workflow-fsm-decision-challe
 
 ## Phase 5: gates
 
-- [ ] 5.1 Acceptance Criteria 1–10 from the worktree (incl. `bash scripts/lib/incidents-roots.test.sh`, `bash scripts/rule-metrics-aggregate.test.sh`, `bash tests/scripts/test-rule-metrics-aggregate.sh`, `bash scripts/lint-skill-body-budget.test.sh`, `python3 scripts/lint-skill-body-budget.py --base origin/main`)
-- [ ] 5.2 `git diff origin/main --stat`: no `knowledge-base/project/rule-metrics.json` change, nothing new under `plugins/`, no `*.jsonl`, no `--rows` table under `knowledge-base/`; take main's `rule-metrics.json` before the first sync
+- [x] 5.1 Acceptance Criteria 1–10 from the worktree (incl. `bash scripts/lib/incidents-roots.test.sh`, `bash scripts/rule-metrics-aggregate.test.sh`, `bash tests/scripts/test-rule-metrics-aggregate.sh`, `bash scripts/lint-skill-body-budget.test.sh`, `python3 scripts/lint-skill-body-budget.py --base origin/main`)
+- [x] 5.2 `git diff origin/main --stat`: no `knowledge-base/project/rule-metrics.json` change, nothing new under `plugins/`, no `*.jsonl`, no `--rows` table under `knowledge-base/`; take main's `rule-metrics.json` before the first sync
