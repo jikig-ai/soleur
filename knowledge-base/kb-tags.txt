@@ -4108,6 +4108,7 @@ user friction for experimental features
 user-agent
 user-brand-critical
 user-confirmation
+user-data
 user-data-budget
 user-event
 user-impact

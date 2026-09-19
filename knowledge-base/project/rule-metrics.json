@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-19T01:52:09Z",
+  "generated_at": "2026-09-19T01:31:14Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1283,8 +1283,9 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "monitor-supersede": 414,
+      "skill-security-scan": 498,
       "net-issue-flow": 583,
+      "monitor-supersede": 409,
       "post-dispatch-watch-gate": 5107,
       "guardrails-block-recursive-delete": 360,
       "kb-domain-allowlist-guard": 216,
@@ -1309,7 +1310,6 @@
       "guardrails-worktree-write-guard": 259,
       "context-reviewed-hook-self-fault": 1,
       "adr-033-inngest-cron-canonical": 30,
-      "skill-security-scan": 610,
       "prod-write-defer-doppler-prd-secrets": 6,
       "durable-reminder-prefer-inngest": 20,
       "brand-hex-commit-gate": 6,
