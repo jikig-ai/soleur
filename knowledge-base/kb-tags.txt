@@ -124,6 +124,7 @@ adjacent-prs
 admin-ip
 admin-ip-drift
 admin-ip-refresh
+admin-merge
 adnanh-webhook
 adr
 adr-031
@@ -598,6 +599,7 @@ call-site-grep
 campaign-calendar
 canary
 canary-deploy
+canary-sandbox
 candidate
 cannibalization
 cannot
@@ -1218,6 +1220,7 @@ directive-without-delivery
 directory-structure
 directory-traversal
 dirty
+dirty-vs-behind
 disambiguation
 disclosure
 disconnect
@@ -2314,6 +2317,7 @@ module-level-state
 module-resolution
 modulesupabase
 monitor
+monitor-hygiene
 monitor-lifetime
 monitoring
 monorepo
@@ -3106,6 +3110,7 @@ remediation
 remediation-tooling
 remote-exec
 rename
+rename-guard
 render-scrub
 render-sink-sweep
 render-tree
@@ -3118,6 +3123,7 @@ replace-triggered-by
 replan
 replay
 replay-safety
+repo-global-guards
 repo-readiness
 repo-readiness-gate
 repo-research
@@ -3521,6 +3527,7 @@ shared-module
 shared-state
 sharp
 sharp-edges
+sharp-edges-extraction
 shell
 shell-expansion
 shell-init-scope
