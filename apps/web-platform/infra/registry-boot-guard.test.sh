@@ -106,9 +106,13 @@ assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 # neither can be silently dropped — without zot_uptime_s, `exit_code=0 state_status=running` is
 # unfalsifiable mid-loop; without zot_last_err_src, a routine-traffic FALLBACK is indistinguishable
 # from a real match and a downstream alarm will print it as the crash cause (ADR-166).
+# store_* (#8386): the at-rest posture of the zot store. hcloud_volume.registry's LUKS claim is
+# asserted by a ledger row and verified by nothing that runs until these five leave the host, and
+# they are only readable off-box while they stay inside the TRUSTED region (the pin below).
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          zot_uptime_s= zot_last_err_src= err_redact_rev= \
+         store_mount_src= store_backing_dev= store_mount_devid= store_expected_devid= store_luks= \
          oom_kills_5m= zot_last_err= boot_id= zot_image_digest= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
@@ -120,6 +124,27 @@ done
 # it had not.
 assert "zot_last_err is the LAST field in the LINE (trusted-region boundary)" \
   "[[ \"\$LINE_ASSIGN\" == *'zot_last_err=\$ZOT_LAST_ERR\"' ]]"
+
+# --- #8386: the posture block's PATH append is a LITERAL, and that is a SECURITY constraint ---
+# The heartbeat's cron line is `*/5 * * * * root ... doppler run --project soleur-registry
+# --config prd -- /usr/local/bin/zot-disk-heartbeat.sh`, and `doppler run` injects EVERY secret in
+# that config as an environment variable. An env-overridable sbin list would therefore let anyone
+# who can write a secret into soleur-registry/prd append a directory to ROOT's PATH -- and because
+# cron's own PATH (/usr/bin:/bin) carries neither cryptsetup nor blkid, that directory would win
+# the FIRST resolution of both, every five minutes. The suite's seams live at RENDER time instead
+# (zot-disk-heartbeat-redaction.test.sh substitutes this literal), so BOTH halves are pinned here:
+# the literal is present, and no env read replaces it.
+assert "#8386 the heartbeat appends the sbin dirs as a LITERAL PATH (no env indirection)" \
+  "grep -qF 'PATH=\"\$PATH:/usr/sbin:/sbin\"' '$CI'"
+assert "#8386 exactly ONE such append (a second one is a second, unpinned model)" \
+  "[ \"\$(grep -cF 'PATH=\"\$PATH:/usr/sbin:/sbin\"' '$CI')\" -eq 1 ]"
+assert "#8386 NO ZOT_SBIN_DIRS env seam reaches the script (root-RCE under doppler run)" \
+  "! grep -q 'ZOT_SBIN_DIRS' '$CI'"
+assert "#8386 NO ZOT_BYID_DIR env seam reaches the script (a config write could forge the devid match)" \
+  "! grep -q 'ZOT_BYID_DIR' '$CI'"
+# The by-id reverse map walks a LITERAL Hetzner-namespaced glob for the same reason.
+assert "#8386 the by-id reverse map is scoped to the Hetzner namespace, as a literal" \
+  "grep -qF '/dev/disk/by-id/scsi-0HC_Volume_*' '$CI'"
 
 # --- #6497: the htpasswd-divergence probe -------------------------------------------------
 # zot-disk-heartbeat.sh runs `set -u`. A BARE "$ZOT_PULL_TOKEN" on an unset token raises
@@ -457,7 +482,7 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # assertions); #7960 adds 1 (the `err_redact_rev=` field-presence row). Measured, not tallied by
 # hand: the suite runs 105, and leaving the floor at 104 left #7960's own assertion deletable at
 # green -- exactly the slack this comment warns about.
-MIN_ASSERTIONS=105
+MIN_ASSERTIONS=115
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2

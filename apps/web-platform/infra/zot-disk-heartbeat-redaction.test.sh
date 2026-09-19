@@ -38,12 +38,27 @@ PASS=0; FAIL=0; CASES=0
 VERDICTS=""
 USED_assert=0
 USED_assert_emit=0
+USED_assert_field=0
+
+# (#8386) THE ANTI-VACUITY FLOOR IS SPLIT PER PROPERTY. This file now covers TWO properties --
+# zot_last_err redaction (#7500) and the at-rest posture emitter (#8386) -- and one integer over
+# their sum is not a floor for either: deleting every posture case still clears a raised total
+# because the redaction cases alone exceed it. Each property carries its own counter and its own
+# literal floor, reported with printf + exit, never through the helpers they backstop (ADR-193).
+PHASE=redact
+CASES_REDACT=0
+CASES_POSTURE=0
+_bump_cases() {
+  CASES=$((CASES + 1))
+  if [ "$PHASE" = posture ]; then CASES_POSTURE=$((CASES_POSTURE + 1))
+  else CASES_REDACT=$((CASES_REDACT + 1)); fi
+}
 
 pass() { PASS=$((PASS + 1)); VERDICTS="${VERDICTS}P"; printf 'ok   - %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); VERDICTS="${VERDICTS}F"; printf 'FAIL - %s\n' "$1" >&2; }
 
 assert() {
-  USED_assert=$((USED_assert + 1)); CASES=$((CASES + 1))
+  USED_assert=$((USED_assert + 1)); _bump_cases
   local name="$1" expr="$2"
   if eval "$expr" >/dev/null 2>&1; then pass "$name"; else fail "$name  [expr: $expr]"; fi
 }
@@ -87,6 +102,10 @@ sed -i "s|\${betterstack_ingest_url}|http://127.0.0.1:9/ingest|g" "$HB"
 sed -i 's|\${disk_heartbeat_url}|http://127.0.0.1:9/hb|g' "$HB"
 sed -i 's|\${zot_pull_user}|pulluser|g' "$HB"
 sed -i 's|\${zot_push_user}|pushuser|g' "$HB"
+# (#8386) The FIFTH template variable: store_expected_devid carries the Terraform-rendered
+# volume alias. Without this line the T1 assertion below fails by construction, and every
+# posture case would run against a script whose LINE= still holds an unrendered ${...}.
+sed -i 's|\${registry_volume_id}|100000003|g' "$HB"
 assert "T1 render left no unrendered TF interpolation" "! grep -qE '\\\$\{[A-Za-z0-9_.]+\}' '$HB'"
 assert "T1 the COMMENT-STRIPPED heartbeat is still valid bash (the strip reaches inside heredocs)" \
   "bash -n '$HB'"
@@ -146,7 +165,82 @@ printf '#!/usr/bin/env bash\nprintf "soleur-registry\\n"\n' > "$BIN/hostname"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/free"
 printf '#!/usr/bin/env bash\nprintf "0\\n"\n' > "$BIN/stat"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/journalctl"
+
+# --- (#8386) at-rest posture: the four measurement stubs ------------------------------------
+# All four VALIDATE argv and exit 64 on any other shape. A stub that answers regardless of its
+# arguments cannot detect the SUT asking the wrong question -- and "which device did blkid read?"
+# is precisely the question mutation 3 turns on.
+cat > "$BIN/findmnt" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == "-no SOURCE /var/lib/zot" ]] || { echo "findmnt stub: unexpected argv: $*" >&2; exit 64; }
+[[ -n "${HB_FINDMNT_OUT:-}" ]] && printf '%s\n' "$HB_FINDMNT_OUT"
+exit "${HB_FINDMNT_RC:-0}"
+EOF
+
+# `-inso NAME` ONLY: -i (ASCII glyphs) and -s (inverse tree) with NO -d are the invariant the
+# leaf count rests on, so a mutant that drops either must not get an answer out of this stub.
+cat > "$BIN/lsblk" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" == "-inso" && "$2" == "NAME" && -n "${3:-}" ]] || { echo "lsblk stub: unexpected argv: $*" >&2; exit 64; }
+[[ -n "${HB_LSBLK_OUT:-}" ]] && printf '%s\n' "$HB_LSBLK_OUT"
+exit "${HB_LSBLK_RC:-0}"
+EOF
+
+cat > "$BIN/cryptsetup" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" == "status" && $# -eq 2 && -n "$2" ]] || { echo "cryptsetup stub: unexpected argv: $*" >&2; exit 64; }
+[[ -n "${HB_CRYPT_OUT:-}" ]] && printf '%s\n' "$HB_CRYPT_OUT"
+exit "${HB_CRYPT_RC:-0}"
+EOF
+
+# PER-DEVICE, deliberately. HB_BLKID_MAP is a space-separated <dev>=<type> map, so the
+# partitioned fixture can answer crypto_LUKS for /dev/sdb1 and NOTHING for /dev/sdb -- which is
+# what makes "blkid reads the cryptsetup `device:` line, not /dev/$STORE_MOUNT_BASE" falsifiable.
+# An unmapped device exits 2, blkid's own "nothing found" status.
+cat > "$BIN/blkid" <<'EOF'
+#!/usr/bin/env bash
+dev=""; want_value=0; want_type=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) [[ "${2:-}" == value ]] && want_value=1; shift 2 ;;
+    -s) [[ "${2:-}" == TYPE ]] && want_type=1; shift 2 ;;
+    *)  dev="$1"; shift ;;
+  esac
+done
+[[ "$want_value" == 1 && "$want_type" == 1 && -n "$dev" ]] || { echo "blkid stub: unexpected argv" >&2; exit 64; }
+for kv in ${HB_BLKID_MAP:-}; do
+  [[ "${kv%%=*}" == "$dev" ]] || continue
+  [[ -n "${kv#*=}" ]] && printf '%s\n' "${kv#*=}"
+  exit 0
+done
+exit 2
+EOF
+
 chmod +x "$BIN"/*
+
+# The sbin-only fixture (E5): the SAME four stubs reachable ONLY through the literal PATH append
+# the emitter ships. $BIN itself is off the PATH for that case, so if the append is deleted the
+# tools are unreachable and store_luks collapses to unknown.
+mkdir -p "$BIN/sbin"
+for _m in findmnt lsblk cryptsetup blkid; do cp "$BIN/$_m" "$BIN/sbin/$_m"; done
+
+# --- (#8386) RENDER-TIME SEAMS, never runtime ones ------------------------------------------
+# The heartbeat runs as root under `doppler run --project soleur-registry --config prd`, which
+# injects EVERY secret in that config as an environment variable. An env-overridable sbin dir or
+# by-id root would therefore let a config-store write own root's first resolution of cryptsetup
+# and blkid, every five minutes. So the script ships two LITERALS and the seams live HERE, in the
+# same render step that already substitutes the template variables above. Applied after the
+# bash -n / no-unrendered-interpolation assertions, because neither literal is TF interpolation.
+sed -i "s|/usr/sbin:/sbin|$BIN/sbin|g" "$HB"
+sed -i "s|/dev/disk/by-id/|$TMP/by-id/|g" "$HB"
+# Non-vacuity for BOTH seams: if either literal is renamed in the template these substitutions
+# silently no-op and the sbin-only / devid cases would pass against an unseamed script.
+PHASE=posture   # both seams belong to the #8386 property, not to the #7500 floor
+assert "T1 sbin seam landed (the shipped PATH append now points at the stub sbin dir)" \
+  "grep -qF 'PATH=\"\$PATH:$BIN/sbin\"' '$HB'"
+assert "T1 by-id seam landed (the shipped reverse map now walks the fixture dir)" \
+  "grep -qF '$TMP/by-id/scsi-0HC_Volume_' '$HB'"
+PHASE=redact
 
 # run_hb <fixture-content> [extra-env...] -> prints the emitted SOLEUR_ZOT_DISK row.
 # Captures at the POST, which is the single emit chokepoint the whole property funnels through.
@@ -166,7 +260,7 @@ last_err_of() { sed -n 's/.* zot_last_err=//p' <<<"$1" | sed 's/\\"}"*$//' | hea
 
 # assert_emit <name> <fixture> <mode:absent|present> <needle> [extra-env...]
 assert_emit() {
-  USED_assert_emit=$((USED_assert_emit + 1)); CASES=$((CASES + 1))
+  USED_assert_emit=$((USED_assert_emit + 1)); _bump_cases
   local name="$1" fixture="$2" mode="$3" needle="$4"; shift 4
   local out
   out="$(run_hb "$fixture" "$@")"
@@ -182,6 +276,97 @@ assert_emit() {
       if [[ "$out" == *"$needle"* ]]; then pass "$name: emitted row carries '$needle'"
       else fail "$name: emitted row lost '$needle' -- $out"; fi ;;
   esac
+}
+
+# --- (#8386) at-rest posture helpers --------------------------------------------------------
+# The by-id fixture. `readlink -f` resolves each alias to a real path whose BASENAME is what the
+# emitter's reverse map compares against, so the targets are real files under $TMP/dev.
+BYID="$TMP/by-id"; DEVROOT="$TMP/dev"
+mkdir -p "$BYID" "$DEVROOT"
+for _d in sdb sdb1 sdc; do : > "$DEVROOT/$_d"; done
+# set_byid <alias>:<target-basename> ... -- repopulates the fixture dir for the case about to run.
+set_byid() {
+  rm -f "$BYID"/* 2>/dev/null || true
+  local spec
+  for spec in "$@"; do ln -s "$DEVROOT/${spec#*:}" "$BYID/${spec%%:*}"; done
+}
+
+# ROW / HEAD are set by posture_case and read by assert_field. HEAD is the TRUSTED region: the
+# row up to the first ` zot_last_err=`, which is where all five posture fields must live.
+ROW=""; HEAD=""; HB_EXIT=0; HB_POSTS=0
+POSTURE_FIXTURE=""
+
+_head_tokens_ok() {
+  # Quantified over EVERY token in the trusted head, not over a fixed five (M1): a sixth field
+  # added later inherits this contract instead of escaping it.
+  #   - no quote and no backslash anywhere in the head (the row is POSTed unescaped inside
+  #     {"message":"..."}, so either byte corrupts the JSON envelope);
+  #   - every token is `key=value`, which is how a SPACE inside a value is caught: the space
+  #     splits it into a bare word carrying no `=`.
+  # Emptiness is NOT asserted here -- several pre-existing fields legitimately render empty
+  # against these stubs (zot_restarts=, state_status=), and the five posture fields are pinned
+  # to exact values by assert_field anyway.
+  case "$HEAD" in *'"'*|*'\'*) return 1 ;; esac
+  local t
+  for t in $HEAD; do
+    [ "$t" = "SOLEUR_ZOT_DISK" ] && continue
+    case "$t" in *=*) : ;; *) return 1 ;; esac
+  done
+  return 0
+}
+
+_posture_fields_in_head() {
+  local f
+  for f in store_mount_src store_backing_dev store_mount_devid store_expected_devid store_luks; do
+    case " $HEAD " in *" $f="*) : ;; *) return 1 ;; esac
+  done
+  return 0
+}
+
+# posture_case <label> [env assignments...] -- runs the rendered heartbeat once against the
+# current stub environment, captures the POSTed row, and asserts the per-case invariant bundle
+# (exactly one POST, exit 0, charset, and all five fields inside the trusted region).
+posture_case() {
+  local name="$1"; shift
+  local fx="$TMP/fixture.log" posted="$TMP/posted.log"
+  printf '%s\n' "${POSTURE_FIXTURE:-$TIER2_BENIGN}" > "$fx"
+  : > "$posted"
+  env PATH="$BIN:$PATH" HB_FIXTURE="$fx" HB_POSTED="$posted" \
+      BETTERSTACK_LOGS_TOKEN="test-token-not-a-secret" "$@" \
+      bash "$HB" >/dev/null 2>&1
+  HB_EXIT=$?
+  HB_POSTS="$(grep -c . "$posted" || true)"
+  # Strip the JSON envelope the producer wraps the row in: the property is about the ROW, and
+  # the envelope's own quotes would otherwise satisfy the charset check vacuously.
+  ROW="$(head -1 "$posted" | sed -e 's|^{"message":"||' -e 's|"}$||')"
+  HEAD="${ROW%% zot_last_err=*}"
+  assert "$name | exactly ONE row POSTed (the emit is unconditional, never doubled)" \
+    "[ '$HB_POSTS' -eq 1 ]"
+  assert "$name | the heartbeat exits 0 (the 5-min cron must never wedge)" "[ $HB_EXIT -eq 0 ]"
+  assert "$name | every trusted-head token is key=<non-empty>, no space/quote/backslash" \
+    "_head_tokens_ok"
+  assert "$name | all five posture fields precede ' zot_last_err='" "_posture_fields_in_head"
+}
+
+# assert_field <name> <key> <expected> -- EXACT TOKEN equality on the trusted head.
+# assert_emit is substring-only, so `store_luks=yes` also matches `store_luks=yesX` and every
+# posture expectation written through it would be satisfiable by a longer wrong value.
+_field_value() {
+  local k="$1" t
+  for t in $HEAD; do
+    case "$t" in "$k="*) printf '%s' "${t#*=}"; return 0 ;; esac
+  done
+  return 1
+}
+assert_field() {
+  USED_assert_field=$((USED_assert_field + 1)); _bump_cases
+  local name="$1" key="$2" want="$3" got
+  if ! got="$(_field_value "$key")"; then
+    fail "$name: field '$key' is absent from the trusted head -- $HEAD"
+    return
+  fi
+  if [ "$got" = "$want" ]; then pass "$name: $key=$want"
+  else fail "$name: $key expected '$want', got '$got'"; fi
 }
 
 # --- Fixtures ------------------------------------------------------------------------------
@@ -375,6 +560,265 @@ assert "G2-f a fallback-tagged row carries err_redact_rev in its trusted region"
 assert "G2-n a suppressed row's zot_last_err is exactly none (the probe grades any other tail as a leak)" \
   "grep -qE ' zot_last_err=none[\"}]*\$' <<<\"\$_G2_OUT\""
 
+# ============================================================================================
+# (#8386) Guard 2 — the at-rest posture emitter.
+#
+# PROPERTY. For every fixture shape, the shipped heartbeat POSTs exactly one row whose TRUSTED
+# head carries all five posture fields with the value the fixture dictates, exits 0, and keeps
+# every value a single space-free token.
+#
+# THE CEILING (AC-E7) IS DEGRADED, DELIBERATELY AND ON THE RECORD. Phase 0.8 asks for one live
+# Better Stack row and the vendor's documented per-message ingest limit; this suite is hermetic
+# and holds no Better Stack credential, so the limit could not be established here. Per the
+# plan's own instruction, AC-E7 therefore degrades to PRESENCE AND ORDER -- asserted by
+# posture_case's `_posture_fields_in_head` on every case -- rather than to an invented number.
+# A ceiling picked from nothing is a guard whose number means nothing.
+# ============================================================================================
+PHASE=posture
+echo "=== Guard 2 — at-rest posture of the zot store (#8386) ==="
+
+# The rendered volume alias: ${registry_volume_id} -> 100000003 (the fifth render line above).
+EXP_DEVID="scsi-0HC_Volume_100000003"
+LSBLK_MAPPER="registry
+\`-sdb"
+LSBLK_PART="registry
+\`-sdb1
+  \`-sdb"
+LSBLK_FORK="md0
+|-sdb
+\`-sdc"
+LSBLK_RAW="sdb"
+CRYPT_LUKS="/dev/mapper/registry is active and is in use.
+  type:    LUKS2
+  cipher:  aes-xts-plain64
+  device:  /dev/sdb
+  sector size:  512"
+CRYPT_LUKS_PART="/dev/mapper/registry is active and is in use.
+  type:    LUKS2
+  device:  /dev/sdb1"
+CRYPT_LUKS_NODEV="/dev/mapper/registry is active and is in use.
+  type:    LUKS2"
+CRYPT_PLAIN="/dev/mapper/vgroot-lv is active.
+  type:    n/a
+  device:  /dev/sdb"
+
+set_byid "$EXP_DEVID:sdb"
+
+# --- E1 healthy: mapper over a LUKS volume on the declared alias ---------------------------
+posture_case "P-healthy" \
+  HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-healthy src"      store_mount_src      "/dev/mapper/registry"
+assert_field "P-healthy backing"  store_backing_dev    "/dev/sdb"
+assert_field "P-healthy devid"    store_mount_devid    "$EXP_DEVID"
+assert_field "P-healthy expected" store_expected_devid "$EXP_DEVID"
+assert_field "P-healthy luks"     store_luks           "yes"
+# store_mount_base feeds the devid reverse map and is deliberately NOT emitted; asserting its
+# absence is what keeps the row from growing a sixth carrier nobody reads.
+assert "P-healthy | store_mount_base= is NOT emitted (it is an unemitted shell variable)" \
+  "! grep -qF 'store_mount_base=' <<<\"\$ROW\""
+
+# --- E2 no mount: findmnt rc 1 AND empty output. The __NOMOUNT__ arm is a CONJUNCTION -------
+posture_case "P-nomount" HB_FINDMNT_OUT="" HB_FINDMNT_RC=1
+assert_field "P-nomount src"     store_mount_src   "__NOMOUNT__"
+assert_field "P-nomount luks"    store_luks        "absent"
+assert_field "P-nomount devid"   store_mount_devid "n/a"
+assert_field "P-nomount backing" store_backing_dev "n/a"
+
+# ... and its COMPLEMENT, both halves, because a conjunction that is never falsified on either
+# side is indistinguishable from `[ -z "$out" ]` alone.
+posture_case "P-findmnt-timeout" HB_FINDMNT_OUT="" HB_FINDMNT_RC=124
+assert_field "P-findmnt-timeout src"  store_mount_src "__UNREADABLE__"
+assert_field "P-findmnt-timeout luks" store_luks      "unknown"
+
+posture_case "P-findmnt-rc0-empty" HB_FINDMNT_OUT="" HB_FINDMNT_RC=0
+assert_field "P-findmnt-rc0-empty src"  store_mount_src "__UNREADABLE__"
+assert_field "P-findmnt-rc0-empty luks" store_luks      "unknown"
+
+posture_case "P-findmnt-rc1-nonempty" HB_FINDMNT_OUT="/dev/sdb" HB_FINDMNT_RC=1
+assert_field "P-findmnt-rc1-nonempty src"  store_mount_src "__UNREADABLE__"
+assert_field "P-findmnt-rc1-nonempty luks" store_luks      "unknown"
+
+# --- E3 raw ext4 on a plain block device: no mapper, so no LUKS container -------------------
+posture_case "P-raw-ext4" HB_FINDMNT_OUT="/dev/sdb" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_RAW" HB_BLKID_MAP="/dev/sdb=ext4"
+assert_field "P-raw-ext4 src"     store_mount_src   "/dev/sdb"
+assert_field "P-raw-ext4 luks"    store_luks        "no"
+assert_field "P-raw-ext4 devid"   store_mount_devid "$EXP_DEVID"
+assert_field "P-raw-ext4 backing" store_backing_dev "/dev/sdb"
+
+# --- non-LUKS mapper: cryptsetup answers, and the answer is not a LUKS mapping --------------
+posture_case "P-mapper-not-luks" HB_FINDMNT_OUT="/dev/mapper/vgroot-lv" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_PLAIN" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=ext4"
+assert_field "P-mapper-not-luks luks" store_luks "no"
+
+# --- THE CASE THAT MAKES THE blkid CONJUNCT LOAD-BEARING ------------------------------------
+# cryptsetup exits 0, prints a LUKS `type:` AND a `device:` line -- and blkid on that device
+# says ext4. Without this case, deleting `&& blkid ... = crypto_LUKS` leaves every other case
+# green, because a cryptsetup exit code says the tool refused, never what the bytes are.
+posture_case "P-blkid-disagrees" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=ext4"
+assert_field "P-blkid-disagrees luks"    store_luks        "no"
+assert_field "P-blkid-disagrees backing" store_backing_dev "/dev/sdb"
+
+# --- cryptsetup rc 4 ("wrong device specified"): blkid discriminates ------------------------
+posture_case "P-crypt-rc4-ext4" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="" HB_CRYPT_RC=4 \
+  HB_BLKID_MAP="/dev/mapper/registry=ext4"
+assert_field "P-crypt-rc4-ext4 luks" store_luks "no"
+
+posture_case "P-crypt-rc4-silent" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="" HB_CRYPT_RC=4 HB_BLKID_MAP=""
+assert_field "P-crypt-rc4-silent luks" store_luks "unknown"
+
+# --- every other cryptsetup rc is a REFUSAL, never a plaintext verdict ----------------------
+posture_case "P-crypt-rc1" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="" HB_CRYPT_RC=1 \
+  HB_BLKID_MAP="/dev/mapper/registry=ext4"
+assert_field "P-crypt-rc1 luks" store_luks "unknown"
+
+posture_case "P-crypt-rc127" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="" HB_CRYPT_RC=127 HB_BLKID_MAP=""
+assert_field "P-crypt-rc127 luks" store_luks "unknown"
+assert_field "P-crypt-rc127 src (the row still ships with the tool absent)" \
+  store_mount_src "/dev/mapper/registry"
+
+# --- LUKS `type:` with no `device:` line: a positive verdict has nothing to rest on ----------
+posture_case "P-luks-no-device-line" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS_NODEV" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-luks-no-device-line luks"    store_luks        "unknown"
+assert_field "P-luks-no-device-line backing" store_backing_dev "__UNREADABLE__"
+
+# --- lsblk unreadable: the base is what the devid pin rests on, so no confident answer -------
+posture_case "P-lsblk-rc127" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="" HB_LSBLK_RC=127 HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-lsblk-rc127 devid" store_mount_devid "__UNREADABLE__"
+assert_field "P-lsblk-rc127 luks"  store_luks        "unknown"
+
+posture_case "P-lsblk-rc32" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="" HB_LSBLK_RC=32 HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-lsblk-rc32 devid" store_mount_devid "__UNREADABLE__"
+assert_field "P-lsblk-rc32 luks"  store_luks        "unknown"
+
+# --- a FORKED inverse tree is a measured multiplicity, never a confident pin -----------------
+set_byid "$EXP_DEVID:sdb" "scsi-0HC_Volume_100000004:sdc"
+posture_case "P-forked-tree" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_FORK" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-forked-tree devid" store_mount_devid "__AMBIGUOUS__"
+assert_field "P-forked-tree luks"  store_luks        "unknown"
+
+# --- TWO aliases for ONE base: the reverse map COUNTS, it does not take the first match ------
+set_byid "$EXP_DEVID:sdb" "scsi-0HC_Volume_100000009:sdb"
+posture_case "P-two-aliases" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-two-aliases devid" store_mount_devid "__AMBIGUOUS__"
+
+# --- ZERO aliases: attached to something that is not a Hetzner volume -----------------------
+set_byid
+posture_case "P-zero-aliases" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-zero-aliases devid" store_mount_devid "__NOMATCH__"
+# The __NOMATCH__ path is exactly where store_backing_dev earns its place: it is the only field
+# naming the device the verdict was taken against.
+assert_field "P-zero-aliases backing" store_backing_dev "/dev/sdb"
+
+set_byid "$EXP_DEVID:sdb"
+
+# --- E6 PARTITIONED CHAIN: the signature is on sdb1 while the base disk is sdb ---------------
+# blkid answers for /dev/sdb1 and NOTHING for /dev/sdb, so a blkid read pointed at
+# /dev/$STORE_MOUNT_BASE reads `unknown` on a correctly encrypted store.
+posture_case "P-partitioned" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_PART" HB_CRYPT_OUT="$CRYPT_LUKS_PART" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb1=crypto_LUKS"
+assert_field "P-partitioned luks"    store_luks        "yes"
+assert_field "P-partitioned backing" store_backing_dev "/dev/sdb1"
+assert_field "P-partitioned devid"   store_mount_devid "$EXP_DEVID"
+
+# --- a MAPPER NAMED SOMETHING ELSE still measures yes: the emitter reads the DEVICE ----------
+# Pinned so the emitter/probe seam is explicit -- the probe is what requires the name to be
+# `registry` (V4's store_mount_src disjunct); the emitter never encodes that expectation.
+CRYPT_LUKS_OTHER="/dev/mapper/zotstore is active and is in use.
+  type:    LUKS2
+  device:  /dev/sdb"
+posture_case "P-other-mapper-name" HB_FINDMNT_OUT="/dev/mapper/zotstore" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS_OTHER" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-other-mapper-name luks" store_luks      "yes"
+assert_field "P-other-mapper-name src"  store_mount_src "/dev/mapper/zotstore"
+
+# --- a BRACKETED bind-mount source is a shape this emitter does not decode -------------------
+posture_case "P-bracketed-src" HB_FINDMNT_OUT="/dev/sdb[/zot]" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_RAW" HB_BLKID_MAP="/dev/sdb=ext4"
+assert_field "P-bracketed-src src"  store_mount_src "__UNREADABLE__"
+assert_field "P-bracketed-src luks" store_luks      "unknown"
+
+# --- E4 every measurement tool absent (rc 127): sentinels, ONE row, exit 0 -------------------
+posture_case "P-all-tools-absent" HB_FINDMNT_OUT="" HB_FINDMNT_RC=127 \
+  HB_LSBLK_OUT="" HB_LSBLK_RC=127 HB_CRYPT_OUT="" HB_CRYPT_RC=127 HB_BLKID_MAP=""
+assert_field "P-all-tools-absent src"     store_mount_src   "__UNREADABLE__"
+assert_field "P-all-tools-absent luks"    store_luks        "unknown"
+assert_field "P-all-tools-absent devid"   store_mount_devid "n/a"
+assert_field "P-all-tools-absent backing" store_backing_dev "n/a"
+
+# --- E5 SBIN-ONLY: the four tools are reachable ONLY through the shipped PATH append ---------
+# cron's own PATH is /usr/bin:/bin and carries neither cryptsetup nor blkid, so without the
+# append every row on the live host would read store_luks=unknown forever -- an R2 FAIL that
+# costs a second host replace behind a dispatcher that is currently dead.
+CORE="$TMP/core"; mkdir -p "$CORE"
+for _c in docker curl htpasswd df hostname free stat journalctl; do cp "$BIN/$_c" "$CORE/$_c"; done
+for _c in awk bash basename cat cut date dirname env grep head id jq mktemp printf readlink \
+          rm sed sh sleep sort tail timeout tr uniq wc; do
+  _cp="$(command -v "$_c" 2>/dev/null || true)"
+  [ -n "$_cp" ] && ln -sf "$_cp" "$CORE/$_c"
+done
+assert "P-sbin-only | the CORE dir carries none of the four measurement tools (non-vacuity)" \
+  "[ ! -e '$CORE/findmnt' ] && [ ! -e '$CORE/lsblk' ] && [ ! -e '$CORE/cryptsetup' ] && [ ! -e '$CORE/blkid' ]"
+assert "P-sbin-only | the four tools ARE in the seamed sbin dir the append points at" \
+  "[ -x '$BIN/sbin/findmnt' ] && [ -x '$BIN/sbin/lsblk' ] && [ -x '$BIN/sbin/cryptsetup' ] && [ -x '$BIN/sbin/blkid' ]"
+posture_case "P-sbin-only" PATH="$CORE" \
+  HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-sbin-only luks"  store_luks        "yes"
+assert_field "P-sbin-only devid" store_mount_devid "$EXP_DEVID"
+
+# --- M2 must-PASS: the tail is free text by contract, and a 10-digit alias is still an alias --
+# (a) a 3 KB zot panic sample: only the HEAD's shape is asserted, never the tail's.
+POSTURE_FIXTURE="panic: $(head -c 3000 /dev/zero | tr '\0' 'x')"
+posture_case "P-M2-big-tail" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-M2-big-tail luks" store_luks "yes"
+POSTURE_FIXTURE=""
+# (b) a TEN-digit volume id: the reverse map reads the alias it finds, it does not validate the
+# id's length, and the mismatch against store_expected_devid is the PROBE's verdict to take.
+set_byid "scsi-0HC_Volume_1000000034:sdb"
+posture_case "P-M2-ten-digit-alias" HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+  HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+assert_field "P-M2-ten-digit-alias devid"    store_mount_devid    "scsi-0HC_Volume_1000000034"
+assert_field "P-M2-ten-digit-alias expected" store_expected_devid "$EXP_DEVID"
+assert_field "P-M2-ten-digit-alias luks"     store_luks           "yes"
+set_byid "$EXP_DEVID:sdb"
+
+# --- Structural: the order pin, on the source text rather than one rendered row --------------
+_P_LINE="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1)"
+assert "P-s all five posture fields precede ' zot_last_err=' in the LINE= assembly" \
+  "grep -qE 'store_mount_src=.*store_backing_dev=.*store_mount_devid=.*store_expected_devid=.*store_luks=' <<<\"\${_P_LINE%% zot_last_err=*}\""
+assert "P-s store_expected_devid is the SINGLE-dollar templatefile variable, not a shell one" \
+  "grep -qF 'store_expected_devid=scsi-0HC_Volume_\${registry_volume_id}' <<<\"\$_P_LINE\""
+
+PHASE=redact
+
 # --- Reject controls for the VERDICT-OWNING wrappers ---------------------------------------
 # USED_* proves the wrappers RAN and EXPECTED_MIN proves they ran N times; neither can see a
 # wrapper that always takes the pass branch. Measured: an `assert()` rewritten to `CASES++; pass`
@@ -383,16 +827,22 @@ assert "G2-n a suppressed row's zot_last_err is exactly none (the probe grades a
 # counters, the transcript and the case tally so the floor stays exact. printf/exit, never through
 # the wrapper under test.
 _c_p0=$PASS; _c_f0=$FAIL; _c_c0=$CASES; _c_v0="$VERDICTS"
+_c_cr0=$CASES_REDACT; _c_cp0=$CASES_POSTURE
 assert "reject control for assert() (this FAIL line is EXPECTED)" "false"
 assert_emit "reject control for assert_emit() (this FAIL line is EXPECTED)" "$TIER2_BENIGN" absent "pcent="
-if [[ "$FAIL" -ne $((_c_f0 + 2)) ]]; then
+# assert_field is EXACT-TOKEN where assert_emit is substring-only, so it needs its own control:
+# `store_luks=yes` is a substring of `store_luks=yesX`, and every posture expectation written
+# through assert_emit would have been satisfiable by a longer wrong value.
+assert_field "reject control for assert_field() (this FAIL line is EXPECTED)" store_luks "yesX"
+if [[ "$FAIL" -ne $((_c_f0 + 3)) ]]; then
   printf '\n[FATAL] harness: a verdict wrapper did not register a failure for an input that MUST fail (FAIL %s -> %s) -- every assertion above is unbacked.\n' "$_c_f0" "$FAIL" >&2
   exit 1
 fi
 PASS=$_c_p0; FAIL=$_c_f0; CASES=$_c_c0; VERDICTS="$_c_v0"
+CASES_REDACT=$_c_cr0; CASES_POSTURE=$_c_cp0
 
 # --- Row 8 / harness (a): the guard's own dispatch ------------------------------------------
-for _w in assert assert_emit; do
+for _w in assert assert_emit assert_field; do
   _u="USED_${_w}"
   if [[ "${!_u}" -lt 1 ]]; then
     printf '\n[FATAL] harness: %s was never dispatched — a wrapper that does not run asserts nothing.\n' "$_w" >&2
@@ -408,9 +858,23 @@ if [[ "${#_v_pass}" -ne "$PASS" || "${#_v_fail}" -ne "$FAIL" ]]; then
 fi
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193).
-EXPECTED_MIN=39
-if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
-  printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s).\n' "$CASES" "$EXPECTED_MIN" >&2
+# ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
+# redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
+CASES_REDACT_MIN=39
+CASES_POSTURE_MIN=162
+if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
+  printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
+    "$CASES_REDACT" "$CASES_REDACT_MIN" >&2
+  exit 1
+fi
+if [[ "$CASES_POSTURE" -lt "$CASES_POSTURE_MIN" ]]; then
+  printf '\n[FATAL] cardinality (#8386 at-rest posture): only %s cases ran (expected >= %s).\n' \
+    "$CASES_POSTURE" "$CASES_POSTURE_MIN" >&2
+  exit 1
+fi
+if [[ $((CASES_REDACT + CASES_POSTURE)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] conservation: the per-property counters (%s + %s) do not sum to cases (%s).\n' \
+    "$CASES_REDACT" "$CASES_POSTURE" "$CASES" >&2
   exit 1
 fi
 if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
@@ -418,7 +882,8 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   exit 1
 fi
 
-printf '\ncases=%s pass=%s fail=%s\n' "$CASES" "$PASS" "$FAIL"
+printf '\ncases=%s (redaction=%s posture=%s) pass=%s fail=%s\n' \
+  "$CASES" "$CASES_REDACT" "$CASES_POSTURE" "$PASS" "$FAIL"
 if [[ "$FAIL" -gt 0 ]]; then
   echo "RESULT: FAIL ($FAIL/$CASES assertions failed)" >&2
   exit 1
