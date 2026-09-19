@@ -5,6 +5,10 @@
 # operator to open a shell, `doppler run --name-transformer tf-var`, `terraform plan`,
 # `terraform apply` manually per a PR-body runbook.
 #
+# BYTE BUDGET (#8361): GitHub refuses to start runs for a workflow file above 512,000 bytes.
+# plugins/soleur/test/workflow-file-size.test.ts gates this file at 490,000. Put new rationale
+# prose in knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md.
+#
 # This workflow IS the canonical boundary for `hr-all-infrastructure-provisioning-servers`
 # for the `apps/web-platform/infra/` root (matches the precedent set by
 # `apply-sentry-infra.yml` for `apps/web-platform/infra/sentry/` and
@@ -1035,7 +1039,7 @@ jobs:
             terraform apply -auto-approve -input=false tfplan
 
       # Tunnel ingress origin verification (#6594 / ADR-114 I2).
-      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply/Measure the apex origin (ADR-194 Hypothesis Z)
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply/Measure the apex origin (ADR-194 Hypothesis Z) (test-anchored lines kept below)
       # colo-STICKY (scheduled-inngest-health.yml — on 2026-07-15, 10/10 identical EU
       - name: Measure the apex origin (ADR-194 Hypothesis Z)
         if: always()
@@ -1443,7 +1447,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #7586: a non-green apply run reaches a channel ----------------------------------------
-  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §notify-apply-failure
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §notify-apply-failure (test-anchored lines kept below)
   # Asserted by `describe("apply-web-platform-infra has a failure channel")` in
   # `plugins/soleur/test/terraform-target-parity.test.ts`, which EVALUATES the predicate below
   notify-apply-failure:
@@ -3341,7 +3345,7 @@ jobs:
           retention-days: 7
 
   # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
-  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry_luks_recut
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry_luks_recut (test-anchored lines kept below)
   # preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
   registry_luks_recut:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
@@ -3942,7 +3946,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
-  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §git_data_host_replace
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §git_data_host_replace (test-anchored lines kept below)
   #   hcloud_server.git_data                   (-replace: force a fresh cloud-init boot)
   #   hcloud_server_network.git_data           (network.tf:48 — server_id ForceNew → replace;
   #                                              else the new host has no private NIC 10.0.1.20)
@@ -4667,7 +4671,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Selected by `-f apply_target=web-host-create -f web_host_key=<key>` (#6730, ADR-145).
-  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §web_host_create
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §web_host_create (test-anchored lines kept below)
   #   • the 4 web-probe resources                      — web-probe-envwrite.sh resolves
   web_host_create:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-host-create'
@@ -5685,7 +5689,7 @@ jobs:
 
   git_data_host_create:
     # ── #6977 — the git-data BIRTH path ───────────────────────────────────────────────
-    # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §git_data_host_create
+    # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §git_data_host_create (test-anchored lines kept below)
     #
     #   grep -vE '^[[:space:]]*#' apps/web-platform/infra/cloud-init-git-data.yml \
     #     | grep -c 'sentry_dsn'          # => 2 (was 0; the gate's sentinel, non-comment)
@@ -6147,7 +6151,6 @@ jobs:
 
   # ── #7095: re-mint the CF Access ci_ssh service token ──────────────────────
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §ci_ssh_token_replace
-  # removed that gate for the same reason). The authorization is the dispatch itself
   ci_ssh_token_replace:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'ci-ssh-token-replace'
     runs-on: ubuntu-24.04
@@ -6475,11 +6478,10 @@ jobs:
           exit 1
 
   # #7542 — deliver a `vector.toml` change to web-1 WITHOUT riding unrelated pending drift.
-  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §vector_redeliver
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §vector_redeliver (test-anchored lines kept below)
   #      hcloud_ssh_key.default, hcloud_placement_group.web_spread, the CF tunnel +
   # The CF Tunnel SSH bridge MUST precede the plan. It writes TF_VAR_ci_ssh_private_key into
   # $GITHUB_ENV (cf-tunnel-ssh-bridge/action.yml:199-203); variables.tf:468-472 defaults that to
-  # the time the verdict exists the bridge is already up. The `if: always()` teardown covers it.)
   vector_redeliver:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'vector-redeliver'
     runs-on: ubuntu-24.04

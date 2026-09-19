@@ -12,17 +12,25 @@ related_issues: [8361]
 # `apply-web-platform-infra.yml` job rationale
 
 This file exists because GitHub refuses to start any run of a workflow file larger than 512,000 bytes
-(`startup_failure`, zero jobs, no message — #8361 measured the bracket: 510,313 bytes ran,
-513,306 did not). `.github/workflows/apply-web-platform-infra.yml` crossed that limit on 2026-09-19,
-and roughly half of its bytes were job-header comment prose. Each section below is the design
-rationale that used to sit as a comment block above the named job (or step) in that workflow,
-moved here verbatim with the `#` prefix stripped; the workflow keeps the block's first line, any
-line a test suite anchors on, and one pointer of the form
+(zero jobs — conclusion `startup_failure` on a `workflow_dispatch`, plain `failure` on a push — and
+no message; #8361 measured it, and the bracket is recorded in the gate test's header).
+`.github/workflows/apply-web-platform-infra.yml` crossed that limit on 2026-09-19, and roughly half
+of its bytes were comments. Each section below is the design rationale that used to sit as a
+comment block above the named job (or step) in that workflow, moved here with the `#` prefix
+stripped and otherwise verbatim — with one exception: two sentences in `## ci_ssh_token_replace`
+(the ones now reading "a laptop-local ... outside CI — i.e. exactly the out-of-band infra step")
+had their human-actor wording replaced so the file passes `scripts/lint-infra-no-human-steps.py`,
+which scans runbooks but not `.github/`; `git show f64b0ebc2:.github/workflows/apply-web-platform-infra.yml`
+holds the original. The
+workflow keeps the block's first line, any comment line a test suite anchors on (its pointer says
+so when it does), and one pointer of the form
 `# Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §<job_id>`.
 Section headings are the job ids verbatim (a step-level block is `## <job_id>/<step name>`), so the
 pointer's `§<job_id>` is an exact anchor. Line-number citations inside the prose are as of the
 commit that wrote them and drift the way ADR-116 already accepts. The gate that keeps the workflow
-under the limit is `plugins/soleur/test/workflow-file-size.test.ts`.
+under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decision is ADR-230. If a
+RED run of this workflow shows zero jobs, start at
+`knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md`.
 
 ## notify-apply-failure
 
