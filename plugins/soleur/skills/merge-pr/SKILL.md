@@ -424,12 +424,13 @@ while true; do
   fi
 
   if [[ "$s" == *DIRTY* ]]; then
+    mt_out=""
     if git fetch origin main >/dev/null 2>&1 \
-       && git merge-tree --write-tree origin/main HEAD >/dev/null 2>&1; then
+       && mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
       s="OPEN BEHIND"
     else
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
-      git diff --name-only --diff-filter=U >&2 || true
+      printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
       break
     fi
   fi

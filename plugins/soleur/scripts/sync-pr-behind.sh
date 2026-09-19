@@ -39,8 +39,8 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
 
   echo "[pr-behind-sync] PR #$PR state: $state_line (branch: $BRANCH)"
 
-  if [[ "$state_line" == MERGED* ]]; then
-    echo "[pr-behind-sync] BEHIND resolved: PR already MERGED"
+  if [[ "$state_line" == MERGED* || "$state_line" == CLOSED* ]]; then
+    echo "[pr-behind-sync] PR is ${state_line%% *} — no sync needed"
     exit 0
   fi
 
@@ -57,11 +57,12 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   fi
 
   # GitHub DIRTY with a clean local merge-tree is the kb-index class: the
-  # server-side merge lacks the local driver. Key on merge-tree exit code
-  # only (stdout is a tree SHA this script does not use).
-  if ! git merge-tree --write-tree origin/main HEAD >/dev/null 2>&1; then
+  # server-side merge lacks the local driver. Key on merge-tree exit code;
+  # on failure its stdout carries the real conflicted paths (no merge is in
+  # progress, so `git diff --diff-filter=U` could only ever print nothing).
+  if ! mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
     echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
-    git diff --name-only --diff-filter=U >&2 || true
+    printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
     git merge --abort 2>/dev/null || true
     exit 6
   fi

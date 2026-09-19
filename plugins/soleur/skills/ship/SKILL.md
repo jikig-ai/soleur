@@ -2299,14 +2299,15 @@ while true; do
   # auto-sync. Real conflicts still dirty-exit. Glob `*DIRTY*` (not
   # `*" DIRTY"`) tolerates whitespace variants.
   if [[ "$s" == *DIRTY* ]]; then
+    mt_out=""
     if git fetch origin main >/dev/null 2>&1 \
-       && git merge-tree --write-tree origin/main HEAD >/dev/null 2>&1; then
+       && mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
       s="OPEN BEHIND"
     else
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
-      echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
-      git diff --name-only --diff-filter=U >&2 || true
-      echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
+      echo "Conflicted paths (merge-tree; no merge is in progress, so --diff-filter=U is empty):" >&2
+      printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
+      echo "Resolve locally: git merge origin/main" >&2
       break
     fi
   fi
@@ -2464,7 +2465,7 @@ Do NOT invert this into "ignore failures that look transient". The discriminator
 
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
-**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally. The loop first runs `git fetch origin main` and `git merge-tree --write-tree origin/main HEAD` (exit code only). A clean merge-tree is the kb-index class — GitHub lacks the local merge driver — and the loop rewrites state to `OPEN BEHIND` and falls through to the existing auto-sync (counts against `MAX_BEHIND_SYNCS`). A non-zero merge-tree is a real conflict: the loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The admin-merge hatch stays BEHIND-only.
+**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally. The loop first runs `git fetch origin main` and `git merge-tree --write-tree origin/main HEAD` (exit code only). A clean merge-tree is the kb-index class — GitHub lacks the local merge driver — and the loop rewrites state to `OPEN BEHIND` and falls through to the existing auto-sync (counts against `MAX_BEHIND_SYNCS`). A non-zero merge-tree is a real conflict: the loop exits, prints merge-tree's `CONFLICT` lines (no merge is in progress, so `--diff-filter=U` would be empty), and prints a `git merge origin/main` recovery pointer. The admin-merge hatch stays BEHIND-only.
 
 - **A DIRTY that recurs on every landing is usually a file in YOUR diff that `main` rewrites every merge — name the file before resolving it a second time.** Intersect `git diff --name-only origin/main...HEAD` with the paths of `main`'s last 20 merges; a generated artifact with one producer per PR (`knowledge-base/project/rule-metrics.json`, compound's ADR-091 output — 20 of 20 recent merges touched it) conflicts on EVERY landing, and DIRTY is the one state the `--admin` hatch cannot cross. Take `main`'s copy so the PR stops diffing it; afterwards `main`'s churn makes the PR merely BEHIND, where the hatch applies once every required context is green on the current head (hold, do not re-sync — a sync restarts CI and re-opens the window). Two more measured facts: GitHub reports `CONFLICTING` while `git merge-tree --write-tree origin/main HEAD` is clean whenever both sides touched `knowledge-base/INDEX.md` — `.gitattributes` gives it the custom `kb-index` merge driver, which GitHub's server-side merge cannot run and local git can (reproduced: `git -c merge.kb-index.driver=false merge-tree …` conflicts on exactly that file), so such a DIRTY is cured by a local sync + push, which is what `pre-merge-rebase.sh` does when you run `gh pr merge`; and re-run `check-adr-ordinals.sh` after EVERY sync, not once at ship start. **Why:** #8301 — three DIRTY cycles (~4 h) on a regenerated aggregate before the cause was named, then an ADR-225 → ADR-229 renumber three syncs in. See `knowledge-base/project/learnings/2026-09-19-a-generated-artifact-in-my-diff-made-every-landing-on-main-a-conflict.md`.
 

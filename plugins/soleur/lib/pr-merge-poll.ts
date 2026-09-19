@@ -54,30 +54,35 @@ export function shouldResyncBeforePoll(mergeStateStatus: string): boolean {
   );
 }
 
-/** Harness-specific BEHIND resync instructions. */
+/**
+ * Harness-specific BEHIND/DIRTY resync instructions. The script discriminates:
+ * DIRTY auto-syncs only when `git merge-tree` proves the local merge clean
+ * (kb-index class); a real conflict exits 6 for manual resolution.
+ */
 export function behindSyncInstructions(harness: Harness): string {
   const script = "bash plugins/soleur/scripts/sync-pr-behind.sh";
   switch (harness) {
     case "grok":
       return [
-        "**BEHIND resync (Grok Build)**",
-        `- When \`gh pr view --jq '.mergeStateStatus'\` returns \`BEHIND\`, **STOP** CI-only polling.`,
+        "**BEHIND/DIRTY resync (Grok Build)**",
+        `- When \`gh pr view --jq '.mergeStateStatus'\` returns \`BEHIND\` or \`DIRTY\`, **STOP** CI-only polling.`,
         `- From the PR worktree: \`${script} <PR-number>\` (fetch → merge origin/main → push).`,
-        `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged\`.`,
+        `- \`DIRTY\` auto-syncs only when the local merge is clean; a real conflict exits for manual resolution.`,
+        `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged|merge conflict\`.`,
         `- Re-poll after push; do NOT ask the operator to update the branch.`,
       ].join("\n");
 
     case "claude":
       return [
-        "**BEHIND resync (Claude Code)**",
-        `- When mergeStateStatus is \`BEHIND\`, run ship Phase 7 auto-sync inside the Monitor loop, or \`${script} <PR-number>\` from the worktree.`,
-        `- FORBIDDEN: heartbeating on pending checks while BEHIND — auto-merge is blocked.`,
+        "**BEHIND/DIRTY resync (Claude Code)**",
+        `- When mergeStateStatus is \`BEHIND\` or \`DIRTY\`, run ship Phase 7 auto-sync inside the Monitor loop, or \`${script} <PR-number>\` from the worktree (DIRTY auto-syncs only when locally clean).`,
+        `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked.`,
       ].join("\n");
 
     default:
       return [
-        "**BEHIND resync**",
-        `- mergeStateStatus \`BEHIND\` → merge origin/main into the branch and push before continuing.`,
+        "**BEHIND/DIRTY resync**",
+        `- mergeStateStatus \`BEHIND\` or \`DIRTY\` → merge origin/main into the branch and push before continuing (DIRTY only when the local merge is clean — run \`${script}\`).`,
       ].join("\n");
   }
 }
