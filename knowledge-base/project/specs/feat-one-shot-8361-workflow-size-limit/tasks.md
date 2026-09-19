@@ -21,6 +21,6 @@ Plan: `knowledge-base/project/plans/2026-09-19-fix-ci-workflow-file-size-limit-p
 
 - [x] 3.1 `bun test plugins/soleur/test/workflow-file-size.test.ts` GREEN
 - [x] 3.2 `bash scripts/lint-workflows.sh` exits 0 (install pinned actionlint the way `ci.yml` does if missing); `python3 scripts/lint-workflow-run-body-syntax.py`, `scripts/lint-workflow-errexit-capture.py`, `scripts/lint-shell-trace-credential-refusal.py` exit 0
-- [ ] 3.3 AC5: run all 49 referencing suites by their own invocation (list command in the plan; `bash` for `.test.sh`/`tests/scripts/test-*.sh`, `bun test <file>` for `plugins/soleur/test/*.test.ts`, vitest for the two `apps/web-platform/test/` files) — `plugins/soleur/test/terraform-target-parity.test.ts` explicitly green; if a suite reds on a moved line, restore the line (never edit the test) and record it in the PR body
+- [x] 3.3 AC5: run all 49 referencing suites by their own invocation (list command in the plan; `bash` for `.test.sh`/`tests/scripts/test-*.sh`, `bun test <file>` for `plugins/soleur/test/*.test.ts`, vitest for the two `apps/web-platform/test/` files) — `plugins/soleur/test/terraform-target-parity.test.ts` explicitly green; if a suite reds on a moved line, restore the line (never edit the test) and record it in the PR body
 - [x] 3.4 AC6 pointer/heading count parity: `grep -c '^ *# Rationale: …§'` in the workflow equals `grep -c '^## '` in the runbook
 - [ ] 3.5 PR body: `Closes #8361`, the measured AC1 byte count, any step-4 rewordings and any restored lines; no workflow dispatch of any kind
