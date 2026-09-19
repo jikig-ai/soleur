@@ -4,6 +4,7 @@ seoTitle: "Soleur vs. Devin: Autonomous Coding vs. Full-Stack AI Organization"
 date: 2026-04-21
 description: "Devin automates software engineering at $20/month. Soleur deploys a 9-department AI organization. When you need an engineer vs. when you need an org."
 ogImage: "blog/og-soleur-vs-devin.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - devin

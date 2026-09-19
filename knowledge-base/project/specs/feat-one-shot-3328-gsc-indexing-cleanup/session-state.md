@@ -32,3 +32,11 @@
 - Review Phase (PR-A): 4-agent panel (pattern, security, git-history, code-quality) — 8 findings, all P3, all fixed inline before merge.
 - **This branch is now PR-B scope** (Phase 2, tasks.md 2.1–2.7): delete the 4 meta-refresh files, repurpose CI guards (Guard 1 parity + Guard 2 zero-stub fence), remove the validate-seo skip block, land internal-link equity edits (pillars.js ×2 series, site.json footerLegal ×2, `pillar:` frontmatter on 14 posts). Plan remains the authority — all PR-B anchors re-verified present 2026-09-19.
 - PR-B merge precondition satisfied: Phase-1 apply verified live (69/69). Per-item `pageRedirects` re-curl (2.1) green at planning-resume; must be re-run and pasted into PR evidence at implementation time.
+- **PR-B implementation complete 2026-09-19** (tasks.md 2.1–2.6 all checked):
+  - 2.1 re-curl: 19/19 `from` paths → 301 green immediately pre-deletion (FAILURES=0).
+  - 5 files deleted (4 prescribed + `pages/articles.njk` — scope expansion, see tasks 2.2.5): a 5th hand-maintained stub the plan missed, found by the Guard-2 `_site` walk. Migrated to `cloudflare_list.legal_redirects` (+3 items `/articles/` shapes → `/blog/`) + deleted same-PR.
+  - Guard 1 (parity) rewritten in `validate-blog-links.sh` — bidirectional + anti-vacuity floor; both mutation directions killed live.
+  - Guard 2 (zero-stub fence) + tf-source assertions landed in `seo-aeo-drift-guard.test.ts`; `validate-seo.sh` skip block removed; flipped test in `validate-seo.test.ts`.
+  - Internal-link equity: 2 new `pillars.js` series + `pillar:` on 14 posts (16 keys total incl. 2 pre-existing) + 2 `footerLegal` entries. In-prose links declined.
+  - Verify: clean `_site` build (needed `rm -rf _site` — eleventy doesn't prune), zero `http-equiv="refresh"`, asides + footer rendered, host-mangle clean, bun 69/0, parity green, `terraform validate` green.
+  - Phase-2 exit: GDPR gate skipped (diff matches no canonical-regex path); touched-shard gate REFUSED (2 sibling full-gate runs) → per-suite substitutes all green (validate-seo + drift-guard 69/0, canonicalizer 41/41, ssl-mitigation 10/10, canonicalizer-mutation 28/28, workflow-model-pins 12/0, lint-shell-capture-exit 25/0); infra shard deferred to ship Phase 4.

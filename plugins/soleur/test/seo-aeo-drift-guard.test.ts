@@ -452,11 +452,12 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
       `legacy/excluded entries in sitemap: ${legacy.join(", ")}`,
     ).toEqual([]);
 
-    // Positive guard for the load-bearing exclusion mechanism: the
-    // terms-of-service redirect stub IS built on disk (asserted in a sibling
-    // test) but MUST be absent from the sitemap. This is the real failure mode
-    // the `/pages/` token above defends — it fires if page-redirects.njk loses
-    // its `eleventyExcludeFromCollections: true` and stubs leak into the sitemap.
+    // Positive guard for the load-bearing exclusion mechanism: a terms-of-service
+    // redirect stub MUST be absent from the sitemap. This is the real failure mode
+    // the `/pages/` token above defends — if a stub template is ever reintroduced
+    // without `eleventyExcludeFromCollections: true`, it leaks into the sitemap.
+    // (Disk presence is fenced separately by the Guard-2 zero-stub walk below;
+    // the meta-refresh machinery was deleted in #3328.)
     const stubLocs = locs.filter((u) => u.includes("terms-of-service"));
     expect(
       stubLocs,
@@ -484,46 +485,70 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
     expect(githubJs).not.toMatch(/APEX_RE|www\.soleur\.ai/);
   });
 
-  test("legacy terms-of-service redirect stub resolves to terms-and-conditions", () => {
-    const stub = readSite("pages/legal/terms-of-service.html");
-    expect(stub).toContain("/legal/terms-and-conditions/");
+  test("legacy terms-of-service URL is covered by the bulk-redirect list", () => {
+    // #3328 PR-B: the meta-refresh stub no longer exists — the canonical source
+    // of truth for this redirect is the Cloudflare Bulk Redirect list in
+    // seo-bulk-redirects.tf (live edge 301, verified 2026-09-18/19). Anchor on
+    // the source_url/target_url attribute shape, tolerant of fmt alignment.
+    const tf = readFileSync(
+      resolve(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
+      "utf8",
+    );
+    expect(tf).toMatch(
+      /source_url\s*=\s*"soleur\.ai\/pages\/legal\/terms-of-service\.html"/,
+    );
+    expect(tf).toMatch(
+      /target_url\s*=\s*"https:\/\/soleur\.ai\/legal\/terms-and-conditions\/"/,
+    );
   });
 });
 
-// -- GSC "Crawled - not indexed" defensive interim: meta-refresh stubs noindex --
+// -- Guard 2 (#3328 PR-B): meta-refresh reintroduction fence ------------------
 //
-// The legacy /pages/legal/<slug>.html URLs (and the blog reslug) get edge 301s
-// via the Bulk Redirects list in apps/web-platform/infra/seo-bulk-redirects.tf
-// (same change; live once the #5092 token-widen + apply completes). Until the
-// 301 fires, they are served the meta-refresh fallback (page-redirects.njk,
-// HTTP 200), which Google classifies as "Crawled - currently not indexed".
-// Adding `<meta name="robots" content="noindex">` to every meta-refresh stub is
-// the belt-and-braces interim: even when Googlebot fetches the HTTP-200 stub,
-// it is told not to index the legacy URL. The stub still carries
-// http-equiv="refresh" + <link rel="canonical"> to the clean URL, so a user is
-// still forwarded and a crawler still sees the canonical target. SEO-only; no
-// behavior change for humans. See plan 2026-06-09-fix-gsc-legal-page-redirects-plan.md,
-// #3367, #3297.
-describe("GSC interim — every meta-refresh redirect stub is noindex", () => {
-  // Detect stubs via the shared isMetaRefreshStub predicate (size-gated, used
-  // by the author-card/knowsAbout/description guards in this file). Walking
-  // the built tree (rather than hardcoding the file list) keeps this in
-  // lockstep with _data/pageRedirects.js as redirect entries are added/removed.
+// The meta-refresh redirect machinery (docs/page-redirects.njk,
+// _data/pageRedirects.js, docs/blog/redirects.njk, _data/blogRedirects.js —
+// plus docs/pages/articles.njk, the last hand-maintained stub, found by this
+// fence's first _site walk and migrated to the bulk list in the same PR) was
+// deleted in #3328 PR-B after every legacy URL was verified live behind an
+// edge 301 (Cloudflare Bulk Redirects, apps/web-platform/infra/
+// seo-bulk-redirects.tf — 19/19 from-paths + 69/69 blog date-slug URLs,
+// 2026-09-18/19). The built site must now contain ZERO meta-refresh stubs: a
+// reintroduced stub is the exact regression that put these URLs in GSC's
+// "Crawled - currently not indexed" bucket (HTTP 200 + refresh, a
+// non-deterministic signal). The second chokepoint is validate-seo.sh, whose
+// instant-refresh skip block was removed in the same PR, so a reintroduced
+// stub also fails full SEO validation on its missing canonical. The tf-source
+// assertions pin the legal source_url set the stubs used to render — the
+// parity property the deleted _data/pageRedirects.js provided, now anchored
+// on the canonical source.
+describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#3328)", () => {
+  // Detect stubs via the shared isMetaRefreshStub predicate (size-gated, also
+  // used by the author-card/knowsAbout/description guards to exclude stub-like
+  // pages). Walking the built tree means a reintroduced stub is caught wherever
+  // it is emitted — the walk chokepoint, not a hardcoded file list.
   function metaRefreshStubs(): { rel: string; body: string }[] {
     return walkHtmlFiles(SITE)
       .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
       .filter(({ body }) => isMetaRefreshStub(body));
   }
 
-  test("at least one meta-refresh stub is built (guard is non-vacuous)", () => {
-    expect(metaRefreshStubs().length).toBeGreaterThan(0);
+  test("the built site contains zero meta-refresh redirect stubs", () => {
+    const stubs = metaRefreshStubs().map(({ rel }) => rel);
+    expect(
+      stubs,
+      `meta-refresh stub(s) emitted into _site — the machinery was deleted in #3328 and every legacy URL is served by an edge 301: ${stubs.join(", ")}`,
+    ).toEqual([]);
   });
 
-  test("the 9 legal stubs the bulk-redirect list maps are all present in the walk", () => {
-    // Mirrors the legal source_url set in seo-bulk-redirects.tf 1:1 — if
-    // _data/pageRedirects.js ever loses a legal entry, the suite goes RED here
-    // instead of the noindex guard silently shrinking its coverage.
-    const rels = new Set(metaRefreshStubs().map(({ rel }) => rel));
+  test("seo-bulk-redirects.tf still declares the 9 legal source_urls + terms-of-service pair", () => {
+    // Mirrors the legal source_url set in seo-bulk-redirects.tf — the parity
+    // property the deleted _data/pageRedirects.js provided, anchored on the
+    // canonical source. If a legal entry is ever dropped from the list, the
+    // corresponding legacy URL loses its edge 301.
+    const tf = readFileSync(
+      resolve(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
+      "utf8",
+    );
     const missing = [
       "privacy-policy",
       "cookie-policy",
@@ -534,28 +559,24 @@ describe("GSC interim — every meta-refresh redirect stub is noindex", () => {
       "corporate-cla",
       "disclaimer",
       "terms-and-conditions",
-    ].filter((slug) => !rels.has(`pages/legal/${slug}.html`));
+    ].filter(
+      (slug) =>
+        !new RegExp(
+          `source_url\\s*=\\s*"soleur\\.ai/pages/legal/${slug}\\.html"`,
+        ).test(tf),
+    );
     expect(
       missing,
-      `legal stubs missing from the built walk: ${missing.join(", ")}`,
+      `legal source_urls missing from seo-bulk-redirects.tf: ${missing.join(", ")}`,
     ).toEqual([]);
-  });
-
-  test("every meta-refresh stub carries a robots noindex meta", () => {
-    // Two-step semantic check: find the robots meta (attribute-order- and
-    // quote-agnostic), then require a noindex token in its content — so a
-    // valid future `noindex,follow` or attribute reorder cannot false-RED.
-    const isNoindexed = (body: string): boolean => {
-      const robots = body.match(/<meta[^>]*name=["']robots["'][^>]*>/i);
-      return robots !== null && /content=["'][^"']*noindex/i.test(robots[0]);
-    };
-    const missing = metaRefreshStubs()
-      .filter(({ body }) => !isNoindexed(body))
-      .map(({ rel }) => rel);
-    expect(
-      missing,
-      `meta-refresh stubs missing noindex: ${missing.join(", ")}`,
-    ).toEqual([]);
+    // The ToS alias pair (terms-of-service → terms-and-conditions) is the
+    // renamed URL the original GSC fix depended on.
+    expect(tf).toMatch(
+      /source_url\s*=\s*"soleur\.ai\/pages\/legal\/terms-of-service\.html"/,
+    );
+    expect(tf).toMatch(
+      /target_url\s*=\s*"https:\/\/soleur\.ai\/legal\/terms-and-conditions\/"/,
+    );
   });
 });
 

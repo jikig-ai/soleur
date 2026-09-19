@@ -296,19 +296,24 @@ describe("marketing-content-drift", () => {
     const pillarHtml = readFileSync(pillarPath, "utf8");
     expect(/<h1[^>]*>[\s\S]*Company-as-a-Service[\s\S]*<\/h1>/i.test(pillarHtml)).toBe(true);
 
-    const redirectPath = join(SITE_ROOT, "blog", "what-is-company-as-a-service", "index.html");
-    expect(existsSync(redirectPath)).toBe(true);
-    const redirectHtml = readFileSync(redirectPath, "utf8");
-    expect(/<meta\s+http-equiv=["']refresh["']\s+content=["']0;\s*url=\/company-as-a-service\/["']/i.test(redirectHtml)).toBe(true);
-
-    // Canonical must point FORWARD to the new pillar, never back to the deleted blog URL
-    // (Search Engine Journal 2026: Google ignores declared canonicals when they conflict
-    // with the redirect target). Positive assertion catches template regressions that
-    // either drop the tag or flip it backward; a bare negative-space check would be
-    // tautological here (the template emits `{{ redirect.to }}`, so a back-canonical
-    // cannot occur without an unrelated template edit).
-    const forwardCanonical = /<link\s+rel=["']canonical["']\s+href=["']\/company-as-a-service\/?["']/i;
-    expect(forwardCanonical.test(redirectHtml)).toBe(true);
+    // The meta-refresh stub at _site/blog/what-is-company-as-a-service/ was
+    // deleted in #3328 PR-B — the redirect is now a Cloudflare edge 301 in the
+    // bulk list (all 3 URL shapes, verified live 2026-09-18). Pin the tf source
+    // so the coverage property the stub provided survives as a CI assertion.
+    const tf = readFileSync(
+      join(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
+      "utf8",
+    );
+    for (const shape of [
+      "soleur\\.ai/blog/what-is-company-as-a-service/",
+      "soleur\\.ai/blog/what-is-company-as-a-service/index\\.html",
+      "soleur\\.ai/blog/what-is-company-as-a-service",
+    ]) {
+      expect(tf).toMatch(new RegExp(`source_url\\s*=\\s*"${shape}"`));
+    }
+    expect(tf).toMatch(
+      /target_url\s*=\s*"https:\/\/soleur\.ai\/company-as-a-service\/"/,
+    );
   });
 
   test("Test 5: /pricing/ footnote has >=2 external citations + a YYYY-MM-DD date", () => {

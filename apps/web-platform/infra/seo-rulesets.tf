@@ -6,8 +6,8 @@
 # (bot-allowlist.tf). Token scope expanded to include Single Redirect
 # Rules:Edit + Transform Rules:Edit (see variables.tf). Both run BEFORE origin fetch, so they apply regardless of
 # what GitHub Pages emits — the legacy meta-refresh templates at
-# plugins/soleur/docs/page-redirects.njk + _data/pageRedirects.js can be
-# deleted in a follow-up PR once these 301s are verified live.
+# plugins/soleur/docs/page-redirects.njk + _data/pageRedirects.js were
+# deleted in the PR-B half of #3328 once these 301s were verified live.
 #
 # Background: Google Search Console (snapshot 2026-05-05) flagged 29 pages on
 # soleur.ai across five Critical-Indexing categories. Two systemic root causes:
@@ -39,11 +39,11 @@
 
 # ── Vector 2: Single Redirects (HTTP 301 at edge) ────────────────────────────
 #
-# Replaces meta-refresh template _data/pageRedirects.js.
+# Replaced meta-refresh template _data/pageRedirects.js (deleted in #3328 PR-B).
 #
 # This phase (`http_request_dynamic_redirect`) runs before origin fetch, so
 # the 301 is served whether GitHub Pages still emits the legacy HTML files or
-# not. Source-template deletion is tracked in follow-up issue #3328.
+# not. Source-template deletion landed in follow-up issue #3328.
 #
 # Cloudflare Free-tier zones cap dynamic-redirect rules at 10 per phase,
 # and `regex_replace()` in `target_url.expression` requires Business or WAF
@@ -66,8 +66,8 @@
 # Redirects list in seo-bulk-redirects.tf (account-scoped `cloudflare_list`
 # kind "redirect" + `cloudflare_ruleset` phase `http_request_redirect` —
 # separate Free-tier quota, no contention with this ruleset's 10 slots).
-# Until that apply, those paths serve the HTTP-200 meta-refresh fallback
-# (plugins/soleur/docs/page-redirects.njk, noindex'd as a defensive interim).
+# Those paths used to serve the HTTP-200 meta-refresh fallback
+# (plugins/soleur/docs/page-redirects.njk — deleted in #3328 PR-B).
 resource "cloudflare_ruleset" "seo_page_redirects" {
   provider = cloudflare.rulesets
   zone_id  = var.cf_zone_id
@@ -211,8 +211,9 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     }
   }
 
-  # NEW: missing entry in legacy _data/pageRedirects.js — caused the 1× 404
-  # in the GSC report (legal slug renamed but redirect not added).
+  # NEW: missing entry in legacy _data/pageRedirects.js (since deleted in
+  # #3328 PR-B) — caused the 1× 404 in the GSC report (legal slug renamed
+  # but redirect not added).
   rules {
     action      = "redirect"
     description = "Redirect /pages/legal/terms-of-service.html → /legal/terms-and-conditions/ (renamed slug)"

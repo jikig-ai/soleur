@@ -26,28 +26,29 @@ verified live (69/69 curls).
 
 Precondition: 1.4 complete (69/69 verified).
 
-- [ ] 2.1 Per-item live re-verification before deletion (`hr-bulk-delete-per-item-live-infra-role-check`): curl all 19 `pageRedirects.js` `from` paths → 301 (record in PR). Planning-resume pass 2026-09-19: 19/19 → `301` with correct `location:` targets; implementation must still re-curl at deletion time and paste output into the PR evidence
-- [ ] 2.2 Delete meta-refresh machinery
-  - [ ] 2.2.1 `plugins/soleur/docs/page-redirects.njk`
-  - [ ] 2.2.2 `plugins/soleur/docs/_data/pageRedirects.js`
-  - [ ] 2.2.3 `plugins/soleur/docs/blog/redirects.njk`
-  - [ ] 2.2.4 `plugins/soleur/docs/_data/blogRedirects.js`
-- [ ] 2.3 Repurpose guards
-  - [ ] 2.3.1 `scripts/validate-blog-links.sh`: replace redirect-validation block with Guard-1 bidirectional parity check + anti-vacuity floor
-  - [ ] 2.3.2 `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh`: delete "Skip instant meta-refresh redirects" block
-  - [ ] 2.3.3 `plugins/soleur/test/validate-seo.test.ts`: flip instant-redirect test → stub page FAILS (exit 1, missing canonical)
-  - [ ] 2.3.4 `plugins/soleur/test/seo-aeo-drift-guard.test.ts`: replace stub-existence tests with Guard-2 zero-stub fence + tf-source assertions (9 legal source_urls + ToS pair present in `seo-bulk-redirects.tf`)
-- [ ] 2.4 Comment/doc cleanup: `plugins/soleur/docs/sitemap.njk` stale comment; `plugins/soleur/skills/seo-aeo/SKILL.md` sweep-list reference to `page-redirects.njk`; `apps/web-platform/infra/seo-bulk-redirects.tf` header comment referencing the deleted `page-redirects.njk` (comment-only edit → empty apply)
-- [ ] 2.5 Internal-link equity
-  - [ ] 2.5.1 `_data/pillars.js`: add `soleur-comparisons` series (`soleur-vs-devin` `relation: "pillar"` + 7 cluster) + `agentic-solo-founder` series (`ai-agents-for-solo-founders` `relation: "pillar"` + 5 cluster) using `{ url, relation }` member shape
-  - [ ] 2.5.2 `pillar:` frontmatter on the 14 member posts (do not reassign the 2 posts already in `billion-dollar-solo-founder`)
-  - [ ] 2.5.3 `_data/site.json`: append `gdpr-policy` + `data-protection-disclosure` to `footerLegal`
-  - [ ] 2.5.4 Optional bounded: ≤2 in-prose contextual links per target post where a natural anchor exists
-- [ ] 2.6 Build + verify
-  - [ ] 2.6.1 `npx @11ty/eleventy`; `grep -rl 'http-equiv="refresh"' _site` → empty
-  - [ ] 2.6.2 Rendered pillar-series asides + footer links verified in `_site`
-  - [ ] 2.6.3 Host-mangle grep `grep -rEoh 'https://soleur\.ai[a-zA-Z]' _site/blog/` clean (fix surfaced broken links in scope)
-  - [ ] 2.6.4 `bun test plugins/soleur/test/validate-seo.test.ts plugins/soleur/test/seo-aeo-drift-guard.test.ts` green; `bash scripts/validate-blog-links.sh _site` green
+- [x] 2.1 Per-item live re-verification before deletion (`hr-bulk-delete-per-item-live-infra-role-check`): curl all 19 `pageRedirects.js` `from` paths → 301 — **19/19 green 2026-09-19** immediately pre-deletion (FAILURES=0; evidence for PR body)
+- [x] 2.2 Delete meta-refresh machinery
+  - [x] 2.2.1 `plugins/soleur/docs/page-redirects.njk`
+  - [x] 2.2.2 `plugins/soleur/docs/_data/pageRedirects.js`
+  - [x] 2.2.3 `plugins/soleur/docs/blog/redirects.njk`
+  - [x] 2.2.4 `plugins/soleur/docs/_data/blogRedirects.js`
+  - [x] 2.2.5 **Scope expansion:** `plugins/soleur/docs/pages/articles.njk` — a 5th stub found by the Guard-2 `_site` walk on first GREEN build (hand-maintained `/articles/` → `/blog/` meta-refresh, zero inbound links, noindex, not in sitemap, NO edge 301). Migrated to `cloudflare_list.legal_redirects` (3 items: `/articles/`, `/articles`, `/articles/index.html` → `https://soleur.ai/blog/`) + template deleted in the same PR — the only stub not edge-verified pre-merge; worst case a minutes-long 404 on a noindex zero-traffic URL if deploy beats apply.
+- [x] 2.3 Repurpose guards
+  - [x] 2.3.1 `scripts/validate-blog-links.sh`: replace redirect-validation block with Guard-1 bidirectional parity check + anti-vacuity floor — both mutation directions killed (file-without-key FAIL, key-without-file FAIL)
+  - [x] 2.3.2 `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh`: delete "Skip instant meta-refresh redirects" block
+  - [x] 2.3.3 `plugins/soleur/test/validate-seo.test.ts`: flip instant-redirect test → stub page FAILS (exit 1, missing canonical)
+  - [x] 2.3.4 `plugins/soleur/test/seo-aeo-drift-guard.test.ts`: replace stub-existence tests with Guard-2 zero-stub fence + tf-source assertions (9 legal source_urls + ToS pair present in `seo-bulk-redirects.tf`); ToS sibling test repointed at tf source
+- [x] 2.4 Comment/doc cleanup: `sitemap.njk`, `seo-aeo/SKILL.md`, `seo-bulk-redirects.tf`, `seo-rulesets.tf`, `validate-seo.sh` header — all live-surface residuals now describe the deletion (KB history untouched)
+- [x] 2.5 Internal-link equity
+  - [x] 2.5.1 `_data/pillars.js`: `soleur-comparisons` (`soleur-vs-devin` pillar + 7 cluster) + `agentic-solo-founder` (`ai-agents-for-solo-founders` pillar + 5 cluster)
+  - [x] 2.5.2 `pillar:` frontmatter on the 14 member posts (16 total `pillar:` keys incl. the 2 pre-existing `billion-dollar-solo-founder` — untouched)
+  - [x] 2.5.3 `_data/site.json`: `gdpr-policy` + `data-protection-disclosure` appended to `footerLegal`
+  - [x] 2.5.4 Optional bounded in-prose links — declined (series asides + footer carry the equity; no keyword-stuffing risk taken)
+- [x] 2.6 Build + verify
+  - [x] 2.6.1 `npx @11ty/eleventy` clean build; `grep -rl 'http-equiv="refresh"' _site` → empty (required `rm -rf _site` first — eleventy does not prune removed templates)
+  - [x] 2.6.2 Rendered pillar-series asides (both series, all member URLs) + footer GDPR/Data-Protection links verified in `_site`
+  - [x] 2.6.3 Host-mangle grep clean
+  - [x] 2.6.4 `bun test` both files — 69/0; `bash scripts/validate-blog-links.sh _site` green; `terraform validate` green (post `init -backend=false`)
 - [ ] 2.7 PR body contains `Closes #3328` on its own line
 
 ## Phase 3 — Post-merge
