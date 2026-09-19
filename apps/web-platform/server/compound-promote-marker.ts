@@ -22,9 +22,11 @@
 // Same construction and the same four load-bearing properties (WARN, top-level
 // boolean discriminator, fail-open, dedicated instance with no hook / formatter
 // / redact) as server/cron-liveness-marker.ts — see its header for why each is
-// required. The ONE free-text field is `error_message`, scrubbed and capped by
-// the caller.
+// required. The ONE free-text field is `error_message`; the caller caps it and
+// the emitter shape-scrubs it HERE, so the boundary this module declares is
+// enforced by this module and pinned by its own suite.
 import pino from "pino";
+import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 
 const log = pino({ base: { component: "compound-promote" } });
 
@@ -71,10 +73,10 @@ export interface CompoundPromoteOutcome {
   /** Inngest run id — the join key to a Sentry event for the same run. */
   run_id?: string;
   /**
-   * `error` only: the thrown error's class and its message after
-   * `redactGithubSourcedText` (token / JWT / email / credential-URL shapes)
-   * and `safeDetail` (control chars, 200-byte cap) — the ONE free-text field
-   * this no-`redact` logger carries.
+   * `error` only: the thrown error's class and its message after `safeDetail`
+   * (control chars, 200-byte cap). The emitter additionally passes it through
+   * `redactGithubSourcedText` (token / JWT / email / credential-URL shapes) —
+   * the ONE free-text field this no-`redact` logger carries.
    */
   error_class?: string;
   error_message?: string;
@@ -98,6 +100,12 @@ export function emitOutcomeMarker(outcome: CompoundPromoteOutcome): void {
         refusals: outcome.refusals?.slice(0, REFUSAL_DETAIL_CAP),
         refusal_detail: outcome.refusal_detail?.slice(0, REFUSAL_DETAIL_CAP),
         refusals_total: outcome.refusals?.length,
+        // The one free-text field. `redactGithubSourcedText` is idempotent on
+        // its own `[redacted-*]` output, so a caller that already scrubbed
+        // (the handler does, for the Sentry copy) costs nothing here.
+        ...(outcome.error_message === undefined
+          ? {}
+          : { error_message: redactGithubSourcedText(outcome.error_message) }),
       },
       "compound promote outcome",
     );

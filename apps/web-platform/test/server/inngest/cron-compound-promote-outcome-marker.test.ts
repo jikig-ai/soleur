@@ -91,6 +91,25 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(row).not.toHaveProperty("hostname");
   });
 
+  it("shape-scrubs error_message — the one free-text field — on the DEFAULT path", () => {
+    // The instance carries no `redact` paths (sibling-marker boundary), so the
+    // emitter must scrub the field itself; a mutant deleting that call must
+    // red here, not in a handler harness that cannot reach the catch block.
+    emitOutcomeMarker({
+      status: "error",
+      error_class: "Error",
+      error_message:
+        "git push failed: https://x-access-token:ghs_abcdefghijklmnopqrstuvwxyz0123456789@github.test/o/r for me@example.test",
+    });
+    expect(captured.lines).toHaveLength(1);
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    const msg = String(row.error_message);
+    expect(msg).not.toContain("ghs_abcdefghij");
+    expect(msg).not.toContain("me@example.test");
+    expect(msg).toMatch(/\[redacted-/);
+    expect(msg).toContain("git push failed");
+  });
+
   it("builds ONE dedicated pino instance like the sibling *-marker.ts modules: bare `pino({ base })`, no destination, no level override, no logMethod hook", () => {
     expect(captured.factoryCalls).toHaveLength(1);
     const [opts, ...rest] = captured.factoryCalls[0] as [Record<string, unknown>, ...unknown[]];
