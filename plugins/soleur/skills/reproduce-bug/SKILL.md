@@ -35,7 +35,7 @@ Think about the places it could go wrong looking at the codebase. Look for loggi
 
 3. **Supabase platform logs** (postgres / auth / postgrest / supavisor — the database side of the failure, not the app's own pino stream) via `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref <project-ref> --source <src> --since <window>`. Runbook: `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`. The helper never reports a zero row count without a coverage verdict, so an empty answer tells you whether the source is quiet or simply uninstrumented.
 
-4. Check recent commits related to the affected area, then inspect the relevant code paths — now anchored on the real error, not a guess.
+4. Check recent commits related to the affected area, then inspect the relevant code paths — now anchored on the real error, not a guess. Without an anchor (a local-only surface), read code only for what Phase 2's loop needs: the entry point, its input shape, and what it writes as a side effect (a hook's incident ledger, a script's cache) — never to explain the bug.
 
 **Why (#5088):** a cron silently failed to publish; several turns went to code hypotheses before pulling the Sentry `egress-blocked` event, which pinpointed the firewall dropping a GitHub clone IP in one read. The observability layer already had the answer. See `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md` for the egress-specific diagnosis path.
 
@@ -43,7 +43,7 @@ Think about the places it could go wrong looking at the codebase. Look for loggi
 
 **Even when observability EXISTS, self-pull it — do not ask the operator to paste error output.** The operator's role in a diagnostic loop is DECISIONS, not data retrieval. Query Better Stack `SOLEUR_*` markers yourself (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>`) and Sentry rather than asking the operator to paste logs or run probes — and if the needed signal is missing from telemetry, ADD a monitored stdout `SOLEUR_*` marker in the emitting code (per the blind-surface bullet above), never escalate to the operator for it. **Why (#5934 worktree-wedge):** the diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held (or, once instrumented, would hold — `SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See `knowledge-base/project/learnings/workflow-patterns/2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch.md`.
 
-Phase 1 ends when telemetry has named the operative error, or you have measured that it does not carry one (the helper's coverage verdict, not an empty result). Either way, Phase 2's gate is the completion criterion — telemetry tells you where to point the loop; it is not the loop.
+Phase 1 ends when telemetry has named the operative error, or you have measured that it does not carry one (the helper's coverage verdict, not an empty result), or the failing surface is local-only — a CLI hook, a script, a test harness — and no telemetry layer covers it: say so in one line and move on, do not query a layer that cannot hold the error. Either way, Phase 2's gate is the completion criterion — telemetry tells you where to point the loop; it is not the loop.
 
 ## Phase 2: Build a feedback loop
 
@@ -51,7 +51,7 @@ Phase 1 ends when telemetry has named the operative error, or you have measured 
 
 Spend disproportionate effort here. **Be aggressive. Be creative. Refuse to give up.**
 
-**Redact.** This phase has you show commands, outputs and captured artifacts. **Redact every secret first**: write `<REDACTED>` in its place. Build loops against env vars, so the credential stays in the environment rather than in what you show. Captured artifacts carry auth headers: quote only the lines that carry the signal. Two places where redaction is otherwise left to memory are mechanical here: a fixture derived from a captured trace (rung 5's Sentry payload or Better Stack rows — an exception value can carry an email or a token; `apps/web-platform/server/sentry-scrub.ts` strips keyed fields, not message text) is synthesized or redacted before it is committed in Phase 9 (`cq-test-fixtures-synthesized-only`); and the whole Phase 8 comment body, the `--cmd` string included, goes through `bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh" <file>` — the repo's redactor (exit 1 = redaction needed, 2 = cannot evaluate) — and is posted only on exit 0. **Its ceiling is the mechanical part, not the whole job**: it matches vendor-prefixed and fixed-format tokens, emails and keys; an opaque `Authorization: Bearer …` value, a non-vendor `DATABASE_URL=…`, an internal hostname, a customer name or phone pass it. Phase 8 names the structural check that closes the first two; the rest you redact by hand before the file exists.
+**Redact.** This phase has you show commands, outputs and captured artifacts. **Redact every secret first**: write `<REDACTED>` in its place. Build loops against env vars, so the credential stays in the environment rather than in what you show. Captured artifacts carry auth headers: quote only the lines that carry the signal. Two places where redaction is otherwise left to memory are mechanical here: a fixture derived from a captured trace (rung 5's Sentry payload or Better Stack rows — an exception value can carry an email or a token; `apps/web-platform/server/sentry-scrub.ts` strips keyed fields, not message text) is synthesized or redacted before it is committed in Phase 9 (`cq-test-fixtures-synthesized-only`); and the whole Phase 8 comment body, the `--cmd` string included, goes through `bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh" <file>` — the repo's redactor (exit 1 = redaction needed, 2 = cannot evaluate) — and is posted only on exit 0. `CLAUDE_PLUGIN_ROOT` unset means no Soleur install is loaded in this session: the call fails closed (exit 127, nothing posted) — install the plugin and start a new session; never substitute a repo checkout path (ADR-179). **Its ceiling is the mechanical part, not the whole job**: it matches vendor-prefixed and fixed-format tokens, emails and keys; an opaque `Authorization: Bearer …` value, a non-vendor `DATABASE_URL=…`, an internal hostname, a customer name or phone pass it. Phase 8 names the structural check that closes the first two; the rest you redact by hand before the file exists.
 
 **Completion criterion: a tight loop that goes red.** Phase 2 is done when you can name **one command** (a script path, a test invocation, a curl) that you have **already run at least once** (show the invocation and its output, redacted), and that is:
 
@@ -60,7 +60,7 @@ Spend disproportionate effort here. **Be aggressive. Be creative. Refuse to give
 - [ ] **Fast**: seconds, not minutes.
 - [ ] **Agent-runnable**: you start everything the loop needs yourself — a dev server (backgrounded, then wait on the port with an until-loop), fixtures, containers — and never ask the founder to start a server or paste output (`hr-exhaust-all-automated-options-before`).
 
-If you catch yourself reading code to build a theory before this command exists, **stop: jumping straight to a hypothesis is the exact failure this skill prevents.** **No red-capable command, no Phase 5.**
+If you catch yourself reading code to build a theory before this command exists, **stop: jumping straight to a hypothesis is the exact failure this skill prevents.** Reading code to find the loop's entry point and side effects is building the loop; reading it to explain the bug is not. **No red-capable command, no Phase 5.**
 
 **When you genuinely cannot build a loop.** Stop and say so explicitly. List what you tried, rung by rung. Then take the first option that applies; each is a decision with a default, and the default is option 1:
 
@@ -74,7 +74,7 @@ Headless (one-shot, cloud, no TTY): take option 1; if the temporary-probe arm ap
 
 1. **Write a failing test** at whatever seam reaches the bug: unit, integration, e2e.
 2. **Script a curl / HTTP call** against a running dev server.
-3. **Script a CLI invocation** with a fixture input, diffing stdout against a known-good snapshot.
+3. **Script a CLI invocation** with a fixture input, diffing stdout against a known-good snapshot. For a hook or script defect this is the Phase 7 mechanism bullet's form — `jq -nc '{tool_name, tool_input}' | bash .claude/hooks/<hook>.sh` — pointed at scratch (`CLAUDE_PROJECT_DIR`, cwd) so the real hook's ledgers and caches are not written in the tree.
 4. **Headless browser script** (Playwright / Puppeteer) that drives the UI and asserts on DOM/console/network. Phase 3 builds this rung.
 5. **Replay a captured trace.** Save a real network request / payload / event log to disk; replay it through the code path in isolation. The Sentry event payload or Better Stack rows you pulled in Phase 1 are a captured trace.
 6. **Throwaway harness.** Spin up a minimal subset of the system (one service, mocked deps) that exercises the bug code path with a single function call.
@@ -234,7 +234,7 @@ Why bother: a minimal repro shrinks the hypothesis space in Phase 5 (fewer movin
 
 Done when **every remaining element is load-bearing**: removing any one of them makes the loop go green.
 
-Do not proceed until you have reproduced **and** minimised.
+Do not proceed until you have reproduced **and** minimised. If the loop is green on HEAD (the fix already landed; the trigger is state you cannot recreate), get the red from rung 8 or 9 — bisect, or run the same loop against the pre-fix commit (`git show <sha>^:<path>` into scratch) — and minimise against that.
 
 ## Phase 5: Hypothesise
 
@@ -244,7 +244,7 @@ Generate **3–5 ranked hypotheses** before testing any of them. Single-hypothes
 
 If you cannot state the prediction, the hypothesis is a vibe: discard or sharpen it.
 
-Record the set as a table; every row fills every column, and `Verdict` starts `UNKNOWN` (Phase 6 upgrades it; `CONFIRMED` only with the discriminating observation quoted):
+Record the set as a table (the technical record; the founder notice below is a second rendering of the same rows in symptom language); every row fills every column, and `Verdict` starts `UNKNOWN` (Phase 6 upgrades it; `CONFIRMED` only with the discriminating observation quoted):
 
 | # | Hypothesis (If X is the cause, then …) | Discriminator (what observation decides it, and where it is read) | Verdict |
 |---|---|---|---|
