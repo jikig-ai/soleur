@@ -47,7 +47,7 @@ committed file, so there is no render step to strip at.
 3. **Relocation is the interim; the structural fix is a split.** The
    per-target dispatch jobs (host replaces, recuts, migrations) belong in
    dedicated workflows, as `workspaces-luks-cutover.yml` already is. That is
-   tracked separately (see the deferral issue filed from PR #8362) and is the
+   tracked separately (#8385) and is the
    remedy the next time the gate trips, not another relocation round.
 
 ## Consequences
