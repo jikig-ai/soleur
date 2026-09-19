@@ -31,6 +31,9 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
+      - "apps/web-platform/test/infra/**"
       # The gate itself. What this actually buys, stated precisely: `detect-changes` maps only
       # the two content globs to directories, so a workflow-ONLY push yields DIRS=[] and both
       # `validate` and `registry-userdata-budget` skip. What still runs is `deploy-script-tests`
@@ -42,6 +45,9 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
+      - "apps/web-platform/test/infra/**"
       - ".github/workflows/infra-validation.yml"
       # (#6454) The render-then-validate gate and its fixture suite. Without these,
       # editing the validator would not run the validator's own tests — the job that
@@ -72,6 +78,10 @@ on:
       # three paths, and PR #7094 ran this job only incidentally, because it also touched
       # apps/web-platform/infra/ (already covered by the first glob above).
       - ".github/workflows/git-data-rung2-rehearsal.yml"
+      # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
+      # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
+      - ".github/workflows/apply-git-data-root-key.yml"
+      - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
       # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
@@ -567,7 +577,21 @@ jobs:
     # for survives the addition (799 + 22 = 821; 1200/821 = 1.46x). NOT re-bumped: an addition
     # this size does not move the derivation, and the block's own rule is that a ceiling meant to
     # catch a bypassed sleep mock is not raised casually.
-    timeout-minutes: 20
+    #
+    # RE-DERIVED 2026-09-15 (#8189), as the block above instructs, because that PR adds steps to
+    # this job (the git-data flag precheck suite, the git-data root-key drift-guards + its terraform
+    # validate) and grows the cutover access suite. The ~799 s basis above is stale: measured from
+    # the API over the last 10 successful `Infra Validation` runs on main, deploy-script-tests
+    # job seconds:
+    #   899 902 925 937 969 981 998 1012 1023 1030
+    # So at 20 minutes the job was already at 1200/1030 = 1.17x before this PR.
+    #   observed deploy-script-tests max (10 runs, successful only) : 1030 s
+    #   + the #8189 additions (measured locally, budgeted high)     : +90 s
+    #   new basis                                                    : ~1120 s
+    #   1120 x 1.4 = 1568 s = 26.1 min -> 27
+    # 20 -> 27 minutes. At 20 the margin would be 1200/1120 = 1.07x, i.e. one slow runner away
+    # from a cancel that lands on whatever step the clock runs out in.
+    timeout-minutes: 27
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -761,13 +785,13 @@ jobs:
 
       # LOAD-BEARING registration (explicit list, no glob — an unregistered suite is silent ZERO
       # coverage). BREADTH half of the dual-delivery invariant, complementing fresh-boot-parity
-      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 15 web-1-pinned SSH
+      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 17 web-1-pinned SSH
       # provisioners in server.tf and every artifact each delivers, asserting each has a fresh-boot
       # counterpart (bake + cloud-init) so a fresh cattle host cannot silently come up without it.
       # Before #7000, 10 of the 15 had no suite pinning that correspondence and 5 were named by no
       # suite at all. Also pins the web-1 host-scoping itself: a for_each fan-out fails here,
       # because CI has one SSH route (web-1) and a bare -target hits every instance.
-      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 15 SSH provisioners)
+      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 17 SSH provisioners)
         run: bash apps/web-platform/infra/web-host-provisioner-parity.test.sh
 
       # The guard above is GREEN the day it lands, as every drift guard is; green says nothing
@@ -776,6 +800,25 @@ jobs:
       # guard cannot score a clean run. Same shape as the LUKS G4 mutation battery below.
       - name: Run web-host provisioner parity MUTATION battery (#7000 the guard can actually fail)
         run: bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
+
+      # (#8097 / ADR-218) The Better Stack Logs alert that pages on SOLEUR_*_SEND_FAILED /
+      # _REFUSED rows. Pins the predicate's three anchors + needle SET, discovers every
+      # emit_refusal() definer and holds it to `logger -p user.crit` (or a named non-crit
+      # allowlist entry), asserts every SKIPPED/_HALT literal matches no needle, pins the
+      # exploration's source id to vector.toml's sink and the probe line in server.tf.
+      - name: Run Better Stack SEND_FAILED alert drift guard (#8097)
+        run: bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh
+
+      # Its battery: every invariant-breaking row attributed by FAIL string (the count is pinned
+      # inside the battery as EXPECTED_ROWS), the floor's H1a-RED / H1b-GREEN pair, and the
+      # legitimate-edit controls. An unrun battery is a claim.
+      - name: Run Better Stack SEND_FAILED alert MUTATION battery (#8097 the guard can actually fail)
+        run: bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
+
+      # (#6894) The wrong-volume Logs alert: its predicate, its arming variable, its -target lines,
+      # and six mutation rows that each require this guard to red.
+      - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
+        run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
@@ -840,6 +883,11 @@ jobs:
       # FSM suite covers state transitions, this covers the catastrophe guard across them.
       - name: Run inngest cutover monotonic re-flush latch tests
         run: bash apps/web-platform/infra/inngest-cutover-latch.test.sh
+
+      # (#6894) The LUKS blue-green cutover FSM: drives the REAL script under --fixture-seams over a
+      # modelled block layer, so the copy and T2's byte-equality run on real files. Needs jq + flock.
+      - name: Run inngest LUKS cutover FSM guard (#6894)
+        run: bash apps/web-platform/infra/inngest-luks-cutover.test.sh
 
       # #7228: inngest-boot-phone-home.sh is the SINGLE delivery path for all eight
       # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
@@ -1403,6 +1451,10 @@ jobs:
       - name: Run inngest-wiped-volume-verify.sh tests
         run: bash apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
 
+      # #7095 re-read in the two webhook scripts above (found live 2026-09-13 at op=execute 2.1).
+      - name: Run webhook-doppler-token-reread tests
+        run: bash apps/web-platform/infra/webhook-doppler-token-reread.test.sh
+
       - name: Run cat-inngest-verify-state.sh tests
         run: bash apps/web-platform/infra/cat-inngest-verify-state.test.sh
 
@@ -1489,6 +1541,27 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
+      # (#8210) Guard 1 for the boot-time LUKS reopen: static rows over the script, the unit
+      # pair, cloud-init, bootstrap, gc.service, issue-alerts.tf and the module variables, plus
+      # a runtime arm that drives the script and the OnFailure reporter against stubs.
+      - name: Run git-data LUKS boot-reopen guards (Guard 1, #8210)
+        run: bash apps/web-platform/infra/git-data-luks-reopen.test.sh
+
+      # (#6680, ADR-220) git-data-cutover's read-only proof: the access gate precedes every store
+      # probe, the store probes fail closed (a failed read is probe_failed, never a store state),
+      # probe bytes never reach the workflow-command parser, the bridge's server-ip export set is
+      # exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}, and the workflow wiring and step gating. Runtime arm
+      # drives the real script against real OpenSSH in the pinned image; under CI=true a missing
+      # docker FAILS. The root token's reference census runs on every PR from scripts/test-all.sh
+      # (tests/scripts/test-git-data-root-token-census.sh), not here.
+      - name: Run git-data cutover access-path tests (ADR-220)
+        run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
+
+      # (#8189) The flag read fails closed, refuses a `true` flag, and is the only step
+      # that holds the prd read token (Guard 1).
+      - name: Run git-data flag precheck tests (fail-closed flag read, Guard 1)
+        run: bash apps/web-platform/infra/git-data-flag-precheck.test.sh
+
       # (#6982) Behavioural tests for the boot emitter — the redactor's two arms, the
       # no-UUID/no-repo-path guarantee, and the delivery assertion. Extracts the emitter
       # from a REAL terraform render rather than a hand-copied fixture, so it needs the
@@ -1554,6 +1627,23 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
+      # (#8189, ADR-220) The git-data root-key root's drift-guards: the additive-only allowlist
+      # (executed against synthesized plan fixtures), the root census, every prevent_destroy,
+      # the distinct state key, git-data-state parity and the parent apply's path exclusion.
+      - name: Run git-data root-key root drift-guards
+        run: bash apps/web-platform/infra/git-data-root-key.test.sh
+
+      # (#8189) Same gap as the rung-2 root above: detect-changes collapses the nested root to
+      # apps/web-platform/infra, so the `validate` matrix never parses it. -backend=false, the
+      # readonly lock, and TF_DATA_DIR out of the repo tree for the same reasons.
+      - name: Terraform validate the git-data root-key root
+        working-directory: apps/web-platform/infra/git-data-root-key
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/git-data-root-key-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
 
       # (#7025, R11) THE RUNG-2 GATE AS A PR CHECK, active only once evidence exists.
       #
@@ -1599,12 +1689,21 @@ jobs:
             echo "::error::systemd-analyze is not installed on this runner, so the git-data unit lint did NOT run. This gate fails closed rather than reporting a clean lint it never performed."
             exit 1
           fi
+          # (#8210) The reopen unit TRIO joins the set: Restart=on-failure on a oneshot with
+          # RemainAfterExit=yes is allowed (service.c rejects only always|on-success) and the
+          # verify run is what pins that on the runner's systemd. The .timer is passed too --
+          # review found the widened grep below already matched `luks-reopen*.timer:` while the
+          # timer was never handed to verify, so that half of the alternation could not fire and
+          # the gate read as covering a unit it did not touch.
           out=$(systemd-analyze verify \
             apps/web-platform/infra/git-data-gc.service \
             apps/web-platform/infra/git-data-gc-failure.service \
-            apps/web-platform/infra/git-data-gc.timer 2>&1 || true)
+            apps/web-platform/infra/git-data-gc.timer \
+            apps/web-platform/infra/git-data-luks-reopen.service \
+            apps/web-platform/infra/git-data-luks-reopen-failure.service \
+            apps/web-platform/infra/git-data-luks-reopen.timer 2>&1 || true)
           echo "$out"
-          if printf '%s' "$out" | grep -E 'git-data-gc[^:]*\.(service|timer):' ; then
+          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen)[^:]*\.(service|timer):' ; then
             echo "::error::systemd-analyze verify reported problems in the git-data unit set"
             exit 1
           fi

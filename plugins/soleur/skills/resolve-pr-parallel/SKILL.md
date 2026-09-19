@@ -3,6 +3,10 @@ name: resolve-pr-parallel
 description: "This skill should be used when resolving all PR comments using parallel processing. It fetches unresolved comments, spawns parallel resolver agents, and verifies all threads are resolved."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/resolve-pr-parallel.workflow.js`](./workflows/resolve-pr-parallel.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/resolve-pr-parallel/workflows/resolve-pr-parallel.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
 
 # Resolve PR Comments in Parallel
@@ -17,7 +21,7 @@ Claude Code automatically detects and understands git context:
 - Can work with any PR by specifying the PR number, or ask it.
 
 <decision_gate>
-**API budget.** This skill spawns one `pr-comment-resolver` agent in parallel per unresolved PR comment (N comments = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+**API budget.** This skill spawns one `soleur:engineering:workflow:pr-comment-resolver` agent in parallel per unresolved PR comment (N comments = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
 
 Confirm the unresolved-comment count before allowing the fan-out. A PR with 40 unresolved threads spawns 40 parallel agents.
 </decision_gate>
@@ -39,13 +43,13 @@ Create a TodoWrite list of all unresolved items grouped by type.
 
 ### 3. Implement (PARALLEL)
 
-Spawn a pr-comment-resolver agent for each unresolved item in parallel.
+Spawn a soleur:engineering:workflow:pr-comment-resolver agent for each unresolved item in parallel.
 
-So if there are 3 comments, spawn 3 pr-comment-resolver agents in parallel:
+So if there are 3 comments, spawn 3 soleur:engineering:workflow:pr-comment-resolver agents in parallel:
 
-1. Task pr-comment-resolver(comment1)
-2. Task pr-comment-resolver(comment2)
-3. Task pr-comment-resolver(comment3)
+1. Task soleur:engineering:workflow:pr-comment-resolver(comment1)
+2. Task soleur:engineering:workflow:pr-comment-resolver(comment2)
+3. Task soleur:engineering:workflow:pr-comment-resolver(comment3)
 
 Always run all in parallel subagents/Tasks for each Todo item.
 

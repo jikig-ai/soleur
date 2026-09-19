@@ -86,6 +86,10 @@ on:
       # untouched, and modules/git-data-userdata/ is deliberately NOT excluded, because the
       # production host really does render from it.
       - "!apps/web-platform/infra/rung2-rehearsal/**"
+      # (#8189, ADR-220) Same reason: git-data-root-key/ is its own root with its own state key,
+      # applied only by apply-git-data-root-key.yml. The committed anchor
+      # git-data-root-key.fingerprint sits OUTSIDE that directory and still fires this workflow.
+      - "!apps/web-platform/infra/git-data-root-key/**"
       - ".github/workflows/apply-web-platform-infra.yml"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
@@ -235,7 +239,9 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           inngest-volume-recut DESTROYS the inngest Redis AOF volume and recreates it raw, so the
-          next boot cuts it to LUKS. Needs `confirm=RECUT-INNGEST-VOLUME` +
+          next boot cuts it to LUKS. It is the EMPTY-STORE route only (ADR-199): with a populated
+          store the route is the additive cutover, `op=luks-cutover` on cutover-inngest.yml, which
+          copies onto a second volume and swaps the mount (ADR-142). Needs `confirm=RECUT-INNGEST-VOLUME` +
           `expected_inngest_volume_id`, and it REFUSES unless the host is measured dark and the
           store measured empty — the expected verdict until the host is replaced is
           `stale_schema`, which means "replace the host first WITH A PIN THAT CARRIES THE
@@ -248,8 +254,8 @@ on:
           rung-2 rehearsal interlock (released once the boot evidence for the current
           template landed), and the authorization-map interlock (#8009). An earlier version
           of this text said a dispatch exits 1 before planning; that stopped being true when
-          the evidence merged. What holds the route now is the runbook banner and the
-          environment approval -- and that approval reports prevent_self_review:false with a
+          the evidence merged. What holds the route now is the environment approval alone
+          (the runbook banner was cleared by PR #8128, merged 2026-09-14) -- and that approval reports prevent_self_review:false with a
           single reviewer, so the dispatcher can approve their own deployment. (That attribute
           is declared nowhere in this repo's Terraform, so false is the provider default, not
           a choice; every gated environment here reads the same way.) Read
@@ -294,8 +300,9 @@ on:
           # cloud-init-git-data.yml has no off-host emitter, because for this host a green
           # apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
           # gate now RELEASES — it remains armed as a regression check, not as a hold.
-          # Dispatch is still held by the runbook's DO-NOT-DISPATCH banner (rung-2 rehearsal
-          # evidence, #7025). See the git_data_host_create job and
+          # The runbook's DO-NOT-DISPATCH banner held the route until the rung-2 evidence
+          # merged (PR #8126); it was cleared by PR #8128 (merged 2026-09-14) and the host was born
+          # 2026-09-14. See the git_data_host_create job and
           # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
@@ -696,6 +703,7 @@ jobs:
               -target=betteruptime_policy.uptime \
               -target=betteruptime_monitor.app \
               -target=betteruptime_monitor.soleur_www_redirect \
+              -target=betteruptime_monitor.app_health \
               -target=random_id.inngest_signing_key_prd \
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \
@@ -728,6 +736,10 @@ jobs:
               -target=doppler_service_token.web_arm_write \
               -target=github_actions_secret.doppler_token_web_arm \
               -target=betteruptime_team_member.ops \
+              -target=logtail_exploration.monitor_send_failed \
+              -target=logtail_exploration_alert.monitor_send_failed \
+              -target=logtail_exploration.inngest_luks_wrong_volume \
+              -target=logtail_exploration_alert.inngest_luks_wrong_volume \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key
           rc=$?
@@ -1250,7 +1262,8 @@ jobs:
               -target=terraform_data.private_nic_guard_install \
               -target=terraform_data.zot_consumer_probe_install \
               -target=terraform_data.git_data_probe_install \
-              -target=terraform_data.inngest_consumer_probe_install
+              -target=terraform_data.inngest_consumer_probe_install \
+              -target=terraform_data.send_failed_alert_probe
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
       # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the
@@ -1856,6 +1869,9 @@ jobs:
         # EXACTLY the inngest-host set enumerated in OPERATOR_APPLIED_EXCLUSIONS
         # (terraform-target-parity.test.ts). Pure create — the destroy-guard below fails
         # the dispatch on ANY resource delete (a net-new host apply must add, never remove).
+        # Since #6894 the plan must ALSO pass inngest_host_shape_gate (ADR-142 Guard 3): every
+        # action must be in the gate's per-address permitted table (creates PERMITTED, never
+        # REQUIRED), and the gate's allow-set is exactly the -target= list below.
         run: |
           set -uo pipefail
           # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
@@ -1871,6 +1887,8 @@ jobs:
               -target='hcloud_server.inngest' \
               -target='hcloud_volume.inngest_redis' \
               -target='hcloud_volume_attachment.inngest_redis' \
+              -target='hcloud_volume.inngest_redis_luks' \
+              -target='hcloud_volume_attachment.inngest_redis_luks' \
               -target='hcloud_server_network.inngest' \
               -target='hcloud_firewall.inngest' \
               -target='hcloud_firewall_attachment.inngest' \
@@ -1903,6 +1921,26 @@ jobs:
           if [[ "$resource_deletes" -gt 0 || "$nested_deletes" -gt 0 ]]; then
             echo "::error::inngest-host plan shows destructive change(s) (${resource_deletes} resource delete(s) + ${nested_deletes} nested-block removal(s)) — provisioning a brand-new host is additive-only. Aborting."
             terraform show -no-color tfplan | grep -E 'will be destroyed|Plan:' | head -20 >&2
+            exit 1
+          fi
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # #6894 (ADR-142 Guard 3) — the plan-SHAPE gate. The destroy-guard above only refuses
+          # deletes; this grades every entry against a per-address permitted table (creates
+          # permitted, never required) and refuses the LUKS passphrase pair's presence outright.
+          # Sourced — the SAME bytes tests/scripts/test-inngest-host-shape-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/inngest-host-shape-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-host-shape-gate.sh"
+          if ! inngest_host_shape_gate tfplan.json; then
+            echo "::error::inngest-host plan-shape gate ABORTED (inngest_host_shape_gate, ADR-142 Guard 3). The reason= token above names the first failing property. NO [ack-destroy] bypass on this path."
+            echo "::error::Remediation depends on the reason:"
+            echo "::error::  • old_volume_touched / old_attachment_touched → the plan acts on the LIVE plaintext AOF volume or its attachment (a create is legal only alongside a from-scratch server). Do NOT apply: that volume holds the only copy of the armed reminders. Find what forced the change (a size/location/label edit, or the volume leaving state) and revert it."
+            echo "::error::  • server_touched → hcloud_server.inngest would be updated or replaced. A user_data edit force-replaces the host (no ignore_changes=[user_data]) — that is the separately-gated 'inngest-host-replace' dispatch; an in-place update (e.g. server_type) reboots the sole scheduler."
+            echo "::error::  • luks_passphrase_in_graph → random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key appear in this plan. They are per-merge -targeted and nothing in this job's target set depends on them; their presence means the target set or dependency graph changed. Stop — a mint here strands any LUKS header cut from the existing key."
+            echo "::error::  • luks_volume_touched / luks_attachment_touched / network_touched / firewall_touched / generated_secret_touched → an update, delete or forget on an address this dispatch may only create. doppler_touched → a Doppler delete/forget."
+            echo "::error::  • forget_present / resource_deletes / nested_deletes / out_of_scope → a state removal, a destroy, a nested-block removal, or an action outside the 18-address -target set. Inspect the plan output below."
+            echo "::error::  • allow_unpartitioned → the gate itself is inconsistent (an allow-set address with no permitted-actions rule). Fix tests/scripts/lib/inngest-host-shape-gate.sh."
+            grep -E 'will be created|will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
           terraform show -no-color tfplan | grep -E '^Plan:' || true
@@ -1982,6 +2020,94 @@ jobs:
             exit 1
           fi
 
+      # INHERITED-`done` PREFLIGHT (2026-09-17 incident). A replace of this host leaves its
+      # scheduler REFUSING TO START, every time, and nothing said so before this step existed.
+      #
+      # `INNGEST_CUTOVER_FLIP` lives in Doppler and OUTLIVES the host. The matching
+      # `done-owner` marker lives on the host ROOT DISK, which a replace destroys. So the new
+      # machine inherits a `done` it never earned, and inngest-server-flip-guard.sh correctly
+      # refuses a prod start on it (#7228 -- the guard is preventing a SECOND prod scheduler,
+      # not malfunctioning). Measured: two replaces, 76 minutes with no live scheduler, and the
+      # cause stayed invisible until the host journal was read.
+      #
+      # This step does NOT block. The replace is often exactly what the operator wants and the
+      # recovery is one dispatch; it exists so the recovery is known BEFORE the outage rather
+      # than after. It degrades open -- an unreadable flag warns and proceeds, because failing
+      # a replace over an advisory read would be worse than the condition it advises about.
+      - name: 'Preflight - warn if this replace will strand the scheduler (#7228)'
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}
+        run: |
+          set -uo pipefail
+          RECOVER="gh workflow run cutover-inngest.yml -f op=resume  (then APPROVE the inngest-cutover environment gate in the Actions UI -- the run holds in Waiting and executes no step until someone does; verify with: gh run list -w cutover-inngest.yml -L 1)"
+          if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+            echo "::warning::inherited-done preflight SKIPPED (no DOPPLER_TOKEN_INNGEST_ARM). If INNGEST_CUTOVER_FLIP is 'done', this replace leaves inngest-server refusing to start (#7228); recover with: ${RECOVER}"
+            exit 0
+          fi
+          # rc CAPTURED, not discarded. `2>/dev/null || true` collapsed seven conditions into
+          # one "unreadable" message: secret absent (the NORMAL pre-cutover state), token
+          # revoked, wrong project/config, doppler missing, network fault, typo — and the
+          # secret genuinely holding "". That last one is a SAFE read, and it was being
+          # reported with the same alarm as a dead instrument. A revoked token additionally
+          # makes this step permanently blind, and because it degrades open on every run
+          # nobody would ever notice.
+          FLAG_RC=0
+          FLAG="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null)" || FLAG_RC=$?
+          # Whitespace-trim to match the on-host readers EXACTLY. inngest-server-flip-guard.sh
+          # and inngest-cutover-flip.sh both `tr -d '[:space:]'` before comparing, so a single
+          # stray space made this step print "no hazard" at the one value where the guard is
+          # guaranteed to refuse the start.
+          FLAG="$(printf '%s' "$FLAG" | tr -d '[:space:]')"
+          if [[ "$FLAG_RC" -ne 0 ]]; then
+            echo "::warning::inherited-done preflight: the READ FAILED (doppler exit ${FLAG_RC}) — nothing was measured. This is not evidence the flag is safe. If it is 'done', recover after the replace with: ${RECOVER}"
+            exit 0
+          fi
+          if [[ -z "$FLAG" ]]; then
+            echo "INNGEST_CUTOVER_FLIP is unset/empty (the read succeeded)."
+            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET. No inherited-done hazard — but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until a cutover sets it."
+            exit 0
+          fi
+          echo "INNGEST_CUTOVER_FLIP=${FLAG}"
+          # `done` IS NOT THE ONLY STRANDING VALUE, and the else-branch used to print a
+          # reassuring "no inherited-done hazard" for every other one. inngest-server-flip-guard.sh
+          # allowlists {armed, flipping, flushed, done}; everything outside it refuses a prod
+          # start outright, and of the four inside it only `flushed` self-heals after a replace
+          # (the /mnt/data flush latch survives the replace, so `armed` and `flipping` drive the
+          # FSM to `aborted`, which is itself outside the allowlist — and op=resume's G1 accepts
+          # `done` only, so those two have no one-dispatch recovery at all).
+          if [[ "$FLAG" == "armed" || "$FLAG" == "flipping" ]]; then
+            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- this replace WILL strand the scheduler, and NOT via the inherited-done path. The /mnt/data flush latch survives the replace, so the FSM takes flush_already_performed -> refuse_rearm_after_done and writes flag=aborted, which is outside inngest-server-flip-guard.sh's allowlist. op=resume accepts 'done' only, so there is NO one-dispatch recovery from this state -- resolve the flag with the operator BEFORE replacing."
+          elif [[ "$FLAG" != "done" && "$FLAG" != "flushed" ]]; then
+            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it."
+          fi
+          if [[ "$FLAG" == "done" ]]; then
+            {
+              echo "## This replace will strand the inngest scheduler"
+              echo ""
+              echo "\`INNGEST_CUTOVER_FLIP=done\`, and the \`done-owner\` marker lives on the root disk this replace destroys."
+              echo "The new host inherits a \`done\` it never earned, so \`inngest-server\` will **refuse to start** (#7228)."
+              echo ""
+              echo "**Recovery, after the replace completes:**"
+              echo ""
+              echo '```'
+              echo "${RECOVER}"
+              echo '```'
+              echo ""
+              echo "\`op=resume\` writes \`INNGEST_CUTOVER_FLIP=flushed\`; the on-host 30s timer starts, verifies, re-records the marker and completes to \`done\` **with no re-FLUSHALL**, so the queue survives."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::INNGEST_CUTOVER_FLIP=done -- this replace WILL leave inngest-server refusing to start (#7228). Recover with: ${RECOVER} (no re-FLUSHALL; the queue survives)"
+          else
+            # Scoped to the one value this is actually true of. `flushed` is the state
+            # op=resume writes and the only allowlisted value whose FSM self-heals after a
+            # replace (record_flush_latch -> start_server -> verify -> done).
+            if [[ "$FLAG" == "flushed" ]]; then
+              echo "flag is 'flushed' -- no inherited-done hazard, and the FSM self-heals after the replace."
+            else
+              echo "flag is '${FLAG}', not 'done' -- no INHERITED-DONE hazard specifically; see the warning above for what this value does mean."
+            fi
+          fi
+
       - name: Extract backend credentials
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -2015,10 +2141,17 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Scoped -replace of the inngest server + its 2 id-referencing dependents
-        # (hcloud_server_network.inngest, hcloud_volume_attachment.inngest_redis — both
-        # interpolate the NEW server id → ForceNew replace). hcloud_volume.inngest_redis is
-        # DELIBERATELY NOT -targeted so the durable Redis AOF volume is preserved. The sourced
+        # Scoped -replace of the inngest server + its 3 id-referencing dependents
+        # (hcloud_server_network.inngest, hcloud_volume_attachment.inngest_redis and — since
+        # #6894 — hcloud_volume_attachment.inngest_redis_luks; all three interpolate the NEW
+        # server id → ForceNew replace). NEITHER hcloud_volume.inngest_redis NOR
+        # hcloud_volume.inngest_redis_luks is -targeted, so BOTH durable volumes are preserved
+        # by OMISSION — the plaintext AOF and the ADR-142 additive target alike. The two sets
+        # are not the same set: the additive VOLUME joins `inngest-host` (it must be creatable)
+        # and never this one (it must never be destroyed). Its ATTACHMENT must be here, though,
+        # because inngest_host_replace_gate interpolates the server id and a replace therefore
+        # forces the attachment into the plan; without admitting it the gate aborts
+        # `out_of_scope` and a routine dispatch becomes a dead end. The sourced
         # inngest_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan JSON and
         # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
@@ -2036,6 +2169,7 @@ jobs:
               -target='hcloud_server.inngest' \
               -target='hcloud_server_network.inngest' \
               -target='hcloud_volume_attachment.inngest_redis' \
+              -target='hcloud_volume_attachment.inngest_redis_luks' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -2322,7 +2456,7 @@ jobs:
               --cutover-flag "$FLAG" \
               --diagnostic-boot "$DBOOT" > "$VERDICT_FILE"; then
             VERDICT="$(tail -1 "$VERDICT_FILE" 2>/dev/null)"
-            echo "::error::inngest-volume-recut REFUSED by Guard 2 — verdict=${VERDICT:-unreadable}. The recut is not authorized and NOTHING has been planned or changed. Read the verdict token against tests/scripts/lib/inngest-host-dark-gate.sh's predicate table: stale_schema = the host still runs a renderer older than the schema the gate expects. REPLACE THE HOST FIRST (apply_target=inngest-host-replace) — BUT ONLY IF THE PINNED DIGEST ALREADY CARRIES THE EMITTER: the emitter is baked into the OCI image and reaches the host through the digest literal in user_data, NOT through cloud-init, so a replace on an unbumped pin re-delivers the same bytes and this verdict does not clear (#7695; ADR-199 amendment 2026-09-07). Confirm with: EXPECTED=\$(grep -oE '^_IHDG_EXPECTED_SCHEMA="[0-9]+"' tests/scripts/lib/inngest-host-dark-gate.sh | head -1 | grep -oE '[0-9]+'); git show \$(grep -oE 'soleur-inngest-bootstrap:v[0-9.]+' apps/web-platform/infra/cloud-init-inngest.yml | head -1 | sed 's/.*:/vinngest-/'):apps/web-platform/infra/inngest-bootstrap.sh | grep -c "probe_schema=\$EXPECTED" — a 0 means the PINNED image predates the schema the gate wants, so replacing will not help; a 1 means the pin carries it and a replace WILL clear this verdict. The schema is DERIVED from the gate, never hardcoded here: this line previously read 'grep -c probe_schema=3', which returns 0 against every correct post-#7695 image and so told the operator not to replace in precisely the case where replacing is the fix (#8017). store_populated = the store holds keys; the destructive path is refused outright and ADR-142's preserve-and-copy is the only lawful route. mount_mismatch = the volume backing /mnt/data is not the one the dispatch named (compared on data_mount_devid since #8017), so the emptiness measured is about the wrong object; data_mount_base and data_mount_src on the same row say whether that is a wrong device, a broken resolution, or no mount at all. silent / unreadable = nothing was measured; a gate that cannot see the host must never conclude the host is dark. followthrough_7674 = the host does not serve yet, and a recut before that is strictly counterproductive."
+            echo "::error::inngest-volume-recut REFUSED by Guard 2 — verdict=${VERDICT:-unreadable}. The recut is not authorized and NOTHING has been planned or changed. Read the verdict token against tests/scripts/lib/inngest-host-dark-gate.sh's predicate table: stale_schema = the host still runs a renderer older than the schema the gate expects. REPLACE THE HOST FIRST (apply_target=inngest-host-replace) — BUT ONLY IF THE PINNED DIGEST ALREADY CARRIES THE EMITTER: the emitter is baked into the OCI image and reaches the host through the digest literal in user_data, NOT through cloud-init, so a replace on an unbumped pin re-delivers the same bytes and this verdict does not clear (#7695; ADR-199 amendment 2026-09-07). Confirm with: EXPECTED=\$(grep -oE '^_IHDG_EXPECTED_SCHEMA="[0-9]+"' tests/scripts/lib/inngest-host-dark-gate.sh | head -1 | grep -oE '[0-9]+'); TAG=\$(grep -oE '^[[:space:]]*IREF=[^[:space:]]*soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' apps/web-platform/infra/cloud-init-inngest.yml | head -1 | sed 's/.*:/vinngest-/'); echo "schema=\$EXPECTED tag=\$TAG"; git show "\${TAG:?tag extraction failed}:apps/web-platform/infra/inngest-bootstrap.sh" > /tmp/ib-probe.sh && grep -c "^probe_schema=\${EXPECTED:?schema derivation failed}\$" /tmp/ib-probe.sh — a 0 means the PINNED image predates the schema the gate wants, so replacing will not help; a 1 means the pin carries it and a replace WILL clear this verdict. An ERROR instead of a count means the tag fetch or the schema derivation failed — that is NOT a 0 (an unfetched tag or empty EXPECTED would otherwise collapse to a printed 0 and repeat #8017's inverted advice). The schema is DERIVED from the gate, never hardcoded here: this line previously read 'grep -c probe_schema=3', which returns 0 against every correct post-#7695 image and so told the operator not to replace in precisely the case where replacing is the fix (#8017). store_populated = the store holds keys; the destructive path is refused outright and ADR-142's preserve-and-copy is the only lawful route. mount_mismatch = the volume backing /mnt/data is not the one the dispatch named (compared on data_mount_devid since #8017), so the emptiness measured is about the wrong object; data_mount_base and data_mount_src on the same row say whether that is a wrong device, a broken resolution, or no mount at all. silent / unreadable = nothing was measured; a gate that cannot see the host must never conclude the host is dark. followthrough_7674 = the host does not serve yet, and a recut before that is strictly counterproductive."
             exit 1
           fi
           echo "Guard 2: dark — host measured not-serving and store measured empty on one row from the current boot, with all four dispatch-time re-reads agreeing."
@@ -4110,9 +4244,23 @@ jobs:
     concurrency:
       group: git-data-state
       cancel-in-progress: false
-    timeout-minutes: 20
+    # 20 -> 40 (#8178): the boot poll (20 reads x 30 s, each read capped at 45 s by
+    # git_data_boot_verify) must end in a VERDICT line rather than a cancelled job.
+    # 40 -> 50 (#8178, pre-ship advisor consult): 40 left only ~3 min for every step that
+    # runs before `Terraform plan`, and overrunning it cancels the job MID-POLL with no
+    # VERDICT line — the "could not tell" state this PR removes. Pinned by the `need` floor
+    # in tests/scripts/test-git-data-boot-signal-poll.sh (S19); raise both or neither.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # (#8210, review) The rung-2 interlock below reads the evidence file's commit provenance
+          # (Guard 4) and HOLDs on a shallow clone. The create job has carried this since #8043;
+          # the interlock was copied onto this job WITHOUT it, so every replace dispatched from a
+          # ref carrying the interlock HOLD-ed on "SHALLOW CHECKOUT" regardless of evidence — the
+          # route the runbook calls the only remediation lever, held permanently. Pinned by
+          # plugins/soleur/test/terraform-target-parity.test.ts.
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -4121,6 +4269,29 @@ jobs:
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      # (#8210) THE RUNG-2 INTERLOCK ON THE REPLACE ROUTE. Until now only `git_data_host_create`
+      # called this gate, so an un-rehearsed cloud-init payload could reach the LIVE git-data
+      # host by replace from any ref — the create route was held while the route that touches
+      # the host holding every user's source was not. The asymmetry mattered the moment a
+      # payload change became the delivery mechanism for a boot-time control (the LUKS reopen):
+      # a replace is how that control ships, and shipping it un-rehearsed is precisely what the
+      # rung-2 evidence exists to refuse.
+      #
+      # Consequence, stated plainly rather than discovered: the replace route — the only
+      # remediation lever for the live host — is HELD from this PR's merge until fresh evidence
+      # lands from a `main` rehearsal. That is the intended safe state (GIT_DATA_STORE_ENABLED
+      # gates every write path, so the store serves no user traffic), and the rehearsal is
+      # dispatched in the merging session to keep the window short.
+      - name: Rung-2 rehearsal interlock (refuses an un-rehearsed payload on the live host)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_rung2_rehearsal_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
+            echo "::error::git-data-host-replace is HELD: no rung-2 boot evidence for the CURRENT cloud-init-git-data.yml. A replace re-runs first boot from this template on the live host, so an un-rehearsed payload would have its first real boot there. The gate's message above says exactly what to commit to release it. Nothing has been planned or replaced."
+            exit 1
+          fi
 
       - name: Authorization-map interlock (refuses a collapsed or permuted SSH key map)
         run: |
@@ -4231,8 +4402,10 @@ jobs:
           # Sourced gate — the SAME bytes tests/scripts/test-git-data-host-replace-gate.sh exercises.
           # shellcheck source=tests/scripts/lib/git-data-host-replace-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-replace-gate.sh"
+          # (#8189) The gate's root-key arm compares the resolved root key to this committed anchor.
+          export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"
           if ! git_data_host_replace_gate tfplan.json; then
-            echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate. Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
+            echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate, or the root-key arm refused it (a git-data-root-key-arm annotation then names the reason and the step log its remedy). Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
@@ -4272,7 +4445,20 @@ jobs:
           echo "git-data-host-replace plan is the exact scoped recreate. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
+      - name: Stamp boot-trail run anchor (git-data replace)
+        id: boot_anchor
+        # (#8178, AP-027) See the twin in git_data_host_create. The anchor matters MORE here:
+        # a replace destroys and recreates the host, and `host_name` pins the host rather than
+        # the host GENERATION, so without it the DESTROYED host's boot_complete would verify
+        # the new one. No back-skew: a replace queued behind another replace starts seconds
+        # after the previous host reported, and any slack reopens exactly that window.
+        run: |
+          set -euo pipefail
+          epoch=$(date -u +%s)
+          printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
+          printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
       - name: Terraform apply (git-data-host -replace) — both-volumes-preserved assert
+        id: apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -4320,24 +4506,45 @@ jobs:
           done
           echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
 
-      - name: Post-replace readiness note (authoritative liveness is web-host-driven, non-SSH)
-        # git-data is a deny-all blind host: this CI runner canNOT SSH it, canNOT reach it over the
-        # private net, and Better Stack canNOT pull it (git_data_prd is a PUSH heartbeat, paused
-        # until #5274 PR C arms the web-host probe cron). So the AUTHORITATIVE post-replace liveness
-        # gate is NOT in this job — it is the EXISTING web-host-driven readiness/cutover check that
-        # runs `git ls-remote` over the private net to 10.0.1.20 (git-data.tf:12-14,
-        # hr-fresh-host-provisioning-reachable-from-terraform-apply). This step ONLY records the
-        # in-job deterministic guards (plan/apply asserts above) as the gate for THIS run and points
-        # the operator at the out-of-job liveness check. It NEVER SSHes the deny-all host and NEVER
-        # implies a Better Stack pull. (No best-effort heartbeat step — unlike registry — because
-        # git_data_prd is paused + its probe cron is unbuilt, so a status lookup would be useless.)
+      - name: Poll for the git-data boot-completion signal (replace)
+        id: poll
+        # (#8178) The replace job had no boot poll at all, and it is the path that actually
+        # runs: birth is once-ever. The step logic (poll, verdict, invariants, remediation) is
+        # git_data_boot_verify in scripts/lib/git-data-boot-signal-poll.sh, shared with the
+        # birth job and driven by tests/scripts/test-git-data-boot-signal-poll.sh. The
+        # `Dispatch summary` below turns an apply/poll outcome pair that never produced a
+        # verdict (including an empty outcome from a renamed step id) red.
+        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
+        env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=scripts/lib/git-data-boot-signal-poll.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/git-data-boot-signal-poll.sh" || {
+            echo "::error::could not load scripts/lib/git-data-boot-signal-poll.sh — the boot signal was not read, so this replace is UNVERIFIED (apply outcome ${APPLY_OUTCOME})."
+            exit 1
+          }
+          rc=0
+          git_data_boot_verify replace 20 30 "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" || rc=$?
+          exit "$rc"
+
+      - name: Post-replace readiness note (non-SSH)
+        # git-data is a deny-all blind host: this CI runner canNOT SSH it and canNOT reach it
+        # over the private net. Two gates ran in THIS job: the destroy-guard + post-apply jq
+        # asserts, and (#8178) the boot-signal poll above, which reads the host's
+        # stage:boot_complete from Better Stack. No SERVING check exists yet: the web-host
+        # `git ls-remote` probe cron is #5274 PR C (git-data.tf), and the existing web-host probe
+        # is a TCP connect to :22, which answers even when the LUKS volume never mounted. This
+        # step never SSHes the host.
         run: |
           {
             echo "## git-data-host-replace readiness (non-SSH)"
             echo ""
-            echo "In-job gate: the destroy-guard + post-apply jq asserts (both volumes preserved, NIC + both store attachments + firewall re-attached) gated this run."
+            echo "In-job gates: the destroy-guard + post-apply jq asserts (both volumes preserved, NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
             echo ""
-            echo "Authoritative liveness: the web-host-driven \`git ls-remote\` readiness/cutover check over the private net (10.0.1.20) — NOT SSH, NOT a Better Stack pull. git-data is a deny-all blind host."
+            echo "Not yet checked: that git transport SERVES. The web-host \`git ls-remote\` probe is #5274 PR C; the existing web-host probe only proves :22 is open. git-data is a deny-all blind host (no SSH)."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dispatch summary
@@ -4346,14 +4553,32 @@ jobs:
           REASON: ${{ inputs.reason }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          POLL_OUTCOME: ${{ steps.poll.outcome }}
         run: |
           {
             echo "## git-data-host-replace (ADR-103, #6242)"
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
-            echo "**Status:** ${JOB_STATUS}"
+            echo "**Status:** ${JOB_STATUS} (apply outcome: ${APPLY_OUTCOME}; boot-poll outcome: ${POLL_OUTCOME})"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
+          # (#8178) Same backstop as git_data_host_create: a green apply whose boot poll did
+          # not reach a verdict is an UNVERIFIED replace and must not leave the job green. An
+          # EMPTY outcome means a step id was renamed or mis-keyed, which actionlint cannot see.
+          if [[ -z "$APPLY_OUTCOME" || -z "$POLL_OUTCOME" ]]; then
+            echo "::error::apply/poll outcome is EMPTY (apply='${APPLY_OUTCOME}' poll='${POLL_OUTCOME}') — a step id was renamed or mis-keyed; this replace is UNVERIFIED"
+            exit 1
+          fi
+          case "${APPLY_OUTCOME}/${POLL_OUTCOME}" in
+            success/success) ;;
+            success/failure) ;;
+            success/*) echo "::error::apply succeeded but the boot-signal poll did not run to a verdict (poll outcome '${POLL_OUTCOME}') — the replace is UNVERIFIED; run the runbook's 'After the birth' query (read-only). Do not re-dispatch the replace to get a reading."; exit 1 ;;
+            skipped/skipped) echo "::notice::boot-signal poll SKIPPED — no apply ran (an earlier step failed or the run was cancelled); this is not a verdict on the host" ;;
+            cancelled/*) echo "::warning::apply was cancelled mid-flight — inspect Terraform state and the Hetzner project before any re-dispatch; the previous host may or may not have been destroyed" ;;
+            failure/*) ;;
+            *) echo "::warning::unrecognised outcome pair '${APPLY_OUTCOME}/${POLL_OUTCOME}' — read the step log; do not treat this run as verified" ;;
+          esac
 
   # Selected by `-f apply_target=workspaces-luks-cutover` (#6604, ADR-119). The FIVE workspaces_luks
   # resources (workspaces-luks.tf) are OPERATOR_APPLIED_EXCLUSIONS — deliberately NOT in the per-PR
@@ -5750,7 +5975,7 @@ jobs:
           reviewers reads the same way, with the same single reviewer: **no approval gate in
           this repo is two-party.**
 
-          ### 3. The rehearsal evidence attests a STAGE WAS REACHED, not four measurements
+          ### 3. The rehearsal evidence attests a STAGE WAS REACHED (for four of the five terminal booleans), not four measurements
 
           `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded literals**
           at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction. What
@@ -5759,9 +5984,14 @@ jobs:
           before the emit rather than emitting `no`. Read them as "no gate fired", never as
           "four invariants were measured".
 
-          Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just
-          above the emit by grepping the live nftables chain
+          Exactly **two** booleans in that row are measured. The first is `nft_metadata_drop`,
+          computed just above the emit by grepping the live nftables chain
           (`nft list chain inet soleur_git_data output` for `169.254.169.254`). It read `yes`.
+          The second is `luks_reopen_unit` (#8210): `systemctl is-enabled` AND `Result=success`
+          on `git-data-luks-reopen.service`, the boot-time LUKS reopen armed one stage earlier.
+          It is TERMINAL for the capture and for the boot-signal poll — a birth or replace that
+          delivers an unarmed reopen unit FAILS rather than warning, because a replace is the
+          only route by which that unit reaches the live host.
           It is **not** recorded in `git-data-rung2-boot-evidence.env` — that file records the
           queries, and the capture projects only the four hardcoded booleans — so it was read
           directly from Better Stack and pasted into the evidence PR's body.
@@ -5790,8 +6020,9 @@ jobs:
     # not enumerate per-target tokens — it accreted one clause per target until no operator
     # read it. The token lives here and in the runbook.)
     #
-    # WHY THIS JOB EXISTS. `soleur-git-data` is declared in IaC and has never existed. An
-    # authenticated `terraform state list` returns 201 addresses and ZERO git-data members.
+    # WHY THIS JOB EXISTS. Until 2026-09-14 `soleur-git-data` was declared in IaC and had
+    # never existed: an authenticated `terraform state list` returned 201 addresses and ZERO
+    # git-data members (it was born by this job on run 34836141887 / replaced by 34861860722).
     # No automated route could create it: git-data-host-replace requires
     # actions ⊇ {delete,create} so a first CREATE fails its server_replaced arm, its
     # luks_passphrase_touched arm fires on a create too, and its 5-member allow-set cannot
@@ -5809,8 +6040,9 @@ jobs:
     # An earlier version of this header read "STILL HELD, BY TWO GATES". That inverted the
     # moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting
     # a live verdict invites -- so it now states what the gates ARE rather than what they
-    # currently answer. What holds the route today is the runbook's DO-NOT-DISPATCH banner
-    # and the environment approval; the banner may be the only prose hold, and the approval
+    # currently answer. What held the route before the birth was the runbook's
+    # DO-NOT-DISPATCH banner (cleared by PR #8128, merged 2026-09-14) and the environment approval;
+    # the approval is the remaining hold, and it
     # reports prevent_self_review:false with a single reviewer (declared nowhere in this
     # repo's Terraform, so that is the provider default rather than a chosen setting).
     #
@@ -5822,9 +6054,9 @@ jobs:
     #   grep -vE '^[[:space:]]*#' apps/web-platform/infra/cloud-init-git-data.yml \
     #     | grep -c 'sentry_dsn'          # => 2 (was 0; the gate's sentinel, non-comment)
     #
-    # (2) The RUNG-2 REHEARSAL interlock HOLDS. Releasing (1) retired the only mechanical
-    # hold on this route, which left the birth held by the runbook's DO-NOT-DISPATCH banner
-    # alone — prose, in a different file from this button, and an earlier revision of THIS
+    # (2) The RUNG-2 REHEARSAL interlock HELD until the evidence landed. Releasing (1)
+    # retired the only mechanical hold on this route, which left the birth held by the
+    # runbook's DO-NOT-DISPATCH banner alone — prose, in a different file from this button, and an earlier revision of THIS
     # COMMENT said "the interlock is released", inviting the dispatch the banner forbids.
     # ADR-149's own Alternatives table rejects a capability held only by prose. So the rung-2
     # precondition is now enforced here: git_data_rung2_rehearsal_gate requires committed boot
@@ -5835,7 +6067,8 @@ jobs:
     # hcloud_server.git_data address — is carried as #7025's own precondition and was
     # deliberately NOT inherited as a pass from #6982's rung-1 container rehearsal. See
     # ADR-149's release checklist and its #6982 disposition table for what each item
-    # delivered. The banner stays up until #7025 lands the evidence.
+    # delivered. The evidence landed (PR #8126, run 34768256297) and the banner was
+    # cleared (PR #8128).
     #
     # DELTAS FROM web_host_create, each evidenced rather than inherited:
     #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
@@ -5880,8 +6113,21 @@ jobs:
     permissions:
       contents: read
     # Budget: plan (~2m) + apply, whose dominant term is Hetzner provisioning the server
-    # plus two volumes (~6m). No image pull on this path.
-    timeout-minutes: 20
+    # plus two volumes (~6m), + the boot poll (20 reads x 30 s, each read capped at 45 s,
+    # worst case ~27m). No image pull on this path. Raised 20 -> 40 (#8178) so the poll
+    # always reaches a VERDICT line instead of being cancelled mid-read.
+    #
+    # 40 -> 50 (#8178, pre-ship advisor consult). 2 + 6 + 27 = 35 priced only plan, apply
+    # and the poll, and left 5 minutes for ELEVEN steps that run before `Terraform plan`:
+    # checkout, setup-terraform, the Doppler install, `Validate dispatch inputs`, three
+    # interlocks that each reach Doppler / the GitHub API / Better Stack, keygen, `Verify
+    # required secrets present`, the R2 credential extraction and `terraform init`. If those
+    # overrun, the job is cancelled MID-POLL and prints no VERDICT line at all — the exact
+    # "could not tell" state this PR exists to remove, and one the follow-through probe then
+    # reads as "the poll did not run", i.e. NOT YET forever. The margin is pinned by the
+    # `need` floor in tests/scripts/test-git-data-boot-signal-poll.sh (S19); raise both or
+    # neither.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -6108,6 +6354,8 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/plan-gate-preamble.sh"
           # shellcheck source=tests/scripts/lib/git-data-host-birth-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-birth-gate.sh"
+          # (#8189) The gate's root-key arm compares the resolved root key to this committed anchor.
+          export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"
           if ! git_data_host_birth_gate tfplan.json; then
             echo "::error::git-data-host-create birth gate ABORTED: the plan is not the exact scoped birth of hcloud_server.git_data. The gate's message above names WHICH arm refused. Nothing has been created. NO [ack-destroy] bypass on this path — this gate does NOT borrow git-data-host-replace-gate.sh, whose contract is the opposite of this one."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
@@ -6141,7 +6389,24 @@ jobs:
           echo "birth gate + stock preflight PASSED. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
+      - name: Stamp boot-trail run anchor (git-data create)
+        id: boot_anchor
+        # (#8178) STAMPED BEFORE APPLY, DELIBERATELY. The poll's predicate becomes
+        # `dt > fromUnixTimestamp(<this>)` instead of a wall-clock `now() - INTERVAL 2 HOUR`
+        # window. `host_name` pins the HOST, not the host GENERATION, so a replace
+        # re-dispatched inside a wall-clock window matches the DESTROYED host's boot_complete
+        # and reports the new one verified on the old one's evidence. Taken before apply so it
+        # bounds the boot from below; a stamp taken after would race the emit.
+        # No back-skew (AP-027): `dt` is assigned by Better Stack at ingest (the host's POST
+        # carries none), so the comparison is Better Stack's clock against the runner's, both
+        # NTP-synced. The new host cannot emit before Terraform creates it, well after this.
+        run: |
+          set -euo pipefail
+          epoch=$(date -u +%s)
+          printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
+          printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
       - name: Terraform apply (git-data birth)
+        id: apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -6171,154 +6436,43 @@ jobs:
       # pattern is a poll INSIDE the birth job — "the job now waits for a bad outcome,
       # which is what makes it a signal rather than a step".
       #
-      # `if: always()` so a FAILED apply still reports what the host did or did not say —
-      # a partial birth is exactly when the boot evidence matters most.
+      # Runs after a green OR a failed apply, never after a skipped one: a partial birth is
+      # exactly when the boot evidence matters most, but a plan the gate REFUSED has no host
+      # to hear from (measured on run 34822248580: a refused plan left this step polling for
+      # its full 10-minute budget and then telling the operator to "re-dispatch once the query
+      # path works" over a run where no apply happened). `!cancelled()` rather than `always()` so a cancelled run does not
+      # spend the budget either. Enumerated (`== 'success' || == 'failure'`) rather than
+      # `!= 'skipped'`: a renamed `apply` id resolves to '', and only the enumerated form
+      # fails closed on that (the idiom's rationale in apply-deploy-pipeline-fix.yml).
       #
       # It reads BETTER STACK, not Sentry, and that is forced rather than chosen: the
       # boot-completion emit goes to both, but scripts/sentry-issue.sh needs
       # SENTRY_ISSUE_RO_TOKEN (its own header records that SENTRY_IAC_AUTH_TOKEN 403s on
-      # event:read), while the BETTERSTACK_QUERY_* credentials are already available.
+      # event:read), while the Better Stack query credentials resolve through the
+      # DOPPLER_TOKEN this job already holds.
       - name: Poll for the git-data boot-completion signal
-        if: always()
+        id: poll
+        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
-          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
-          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
-          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          # (#8178) The read resolves BETTERSTACK_QUERY_* through `doppler run -p soleur -c
+          # prd_terraform`, the only store holding a SQL API connection that covers the
+          # git-data source (#7867). ADR-149 `## Amendment — 2026-09-17 (#8178)` has the history.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}
         run: |
           set -uo pipefail
-          # FAIL, do not warn. A `::warning::` inside a 4000-line workflow log is not a
-          # gate, and exiting 0 here reproduces exactly the state this whole interlock
-          # exists to prevent: a GREEN birth job over a host nobody has heard from. The
-          # credentials live in prd_terraform already, so their absence is a repo-config
-          # bug, not an expected operating condition.
-          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
-            echo "::error::BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not all present — the boot signal cannot be read, so this birth CANNOT be verified. Refusing to report success. Fix the workflow secrets and re-dispatch (the birth is additive; a re-dispatch is the normal remedy)."
+          # (#8178) The step logic (precondition, 20 x 30 s poll, verdict, invariants,
+          # remediation) is git_data_boot_verify, shared with git_data_host_replace and driven
+          # by tests/scripts/test-git-data-boot-signal-poll.sh.
+          # shellcheck source=scripts/lib/git-data-boot-signal-poll.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/git-data-boot-signal-poll.sh" || {
+            echo "::error::could not load scripts/lib/git-data-boot-signal-poll.sh — the boot signal was not read, so this birth is UNVERIFIED (apply outcome ${APPLY_OUTCOME})."
             exit 1
-          fi
-
-          # cloud-init on a fresh host: package install, the Doppler download, luksFormat
-          # on a 10 GB volume, then the bootstrap. ~6 minutes is the observed envelope on
-          # sibling hosts; 20 polls x 30 s bounds it at 10 minutes.
-          #
-          # MODE 1 (raw SQL) TAKES THE QUERY AS THE FIRST POSITIONAL AND NO CONVENIENCE
-          # FLAGS. betterstack-query.sh detects Mode 1 by matching $1 against ^(SELECT|WITH|
-          # SHOW); passing `--since 1h` first makes $1 a flag, so it falls into Mode 2, hits
-          # the SQL as an unrecognised argument and exits 64 having sent ZERO HTTP requests.
-          # The window therefore lives INSIDE the SQL.
-          #
-          # AND DO NOT CAPTURE STDERR INTO THE MATCH BUFFER. betterstack-query.sh echoes the
-          # failing query back on the error path, and that query CONTAINS the literal
-          # 'boot_complete' — so `out=$(… 2>&1)` + `grep -q boot_complete` matches the
-          # script's own error message and reports the boot signal as received on poll 1/20.
-          # A usage error would print "boot signal received" over a host that never booted,
-          # which is precisely the green-light-over-a-dark-host this interlock exists to
-          # prevent. stdout only; rc checked separately; the match is on a PARSED FIELD.
-          found=""
-          # Consecutive transport failures, so the terminal message can tell "the host never
-          # reported" apart from "we could never ask". Without it a revoked credential or a
-          # sustained 5xx burns all 20 polls and then prints the boot-dark ::error::, sending
-          # the operator to diagnose a boot when the fault is the query path.
-          query_fails=0
-          for i in $(seq 1 20); do
-            # Field-isolated raw SQL: a bare-substring --grep would match the shared source's
-            # inngest rows quoting issue bodies. The s3Cluster arm is REQUIRED, not
-            # belt-and-braces: remote() alone is the ~40-minute hot window and a once-per-boot
-            # marker falls out of it immediately. NOTE remote() takes NO `primary` argument —
-            # only s3Cluster does; the `remote(primary, …)` form needs a NAMED COLLECTION
-            # grant this credential does not have (measured: HTTP 500 ACCESS_DENIED).
-            # set +e so the `rc=$?` capture below actually runs. GitHub invokes `run:` as
-            # `bash -e {0}` and `set -uo pipefail` above does NOT clear that inherited -e, so
-            # ANY non-zero from betterstack-query.sh (its own `exit 64` on a usage error, a
-            # rate limit, a 5xx, a credential blip) killed the whole BIRTH JOB mid-poll with
-            # no annotation, instead of retrying. The empty-result path is rc=0, so the common
-            # path polled fine and hid this. `rc=$?` must be the first command after the
-            # assignment; `set -e` is re-armed immediately after the read.
-            # (#7772) PIN THE TABLE. git-data ships to its OWN Better Stack source (2734275) since #7772, NOT the shared
-            # 2457081 that betterstack-query.sh defaults BS_TABLE to. Leaving the default does not
-            # error -- the shared table exists and answers, it just holds no rows from a host that
-            # stopped writing there -- so this reader would see zero rows on a PERFECT boot and
-            # report a dark host. On the one birth this host gets, that is a false failure.
-            export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
-            set +e
-            out=$(bash scripts/betterstack-query.sh "
-              SELECT dt,
-                     JSONExtractString(raw,'stage')        AS stage,
-                     JSONExtractString(raw,'host_name')    AS host,
-                     JSONExtractString(raw,'luks_mounted') AS luks_mounted,
-                     JSONExtractString(raw,'repo_root')    AS repo_root,
-                     JSONExtractString(raw,'hooks_path')   AS hooks_path,
-                     JSONExtractString(raw,'provision')    AS provision,
-                     JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
-              FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
-                    UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-              WHERE dt > now() - INTERVAL 2 HOUR
-                AND JSONExtractString(raw,'stage') = 'boot_complete'
-                AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null)
-            rc=$?
-            set -e
-            # Match the PARSED field, not free text. A row is a JSON object carrying
-            # "stage":"boot_complete"; the query text never appears on stdout.
-            if [[ $rc -eq 0 ]]; then
-              query_fails=0
-              if printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then
-                found="$out"; break
-              fi
-            else
-              query_fails=$(( query_fails + 1 ))
-            fi
-            echo "poll ${i}/20: rc=${rc}, no boot_complete row yet"
-            sleep 30
-          done
-
-          if [[ -z "$found" && "$query_fails" -ge 20 ]]; then
-            # EVERY poll failed to reach Better Stack, so this run learned NOTHING about the
-            # host. Saying "the host booted dark" here would be a confident mis-blame of the
-            # same shape the rung-2 capture step's wrapper-failure class exists to prevent.
-            echo "::error::Could not read the boot signal at all: all 20 polls failed to query Better Stack (last rc=${rc}). This says NOTHING about whether soleur-git-data booted — check BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform and the source's availability, NOT the host. The birth is UNVERIFIED; re-dispatch once the query path works."
-            exit 1
-          fi
-          if [[ -z "$found" ]]; then
-            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes (the query path answered, so this IS a statement about the host). The apply may be green while the host booted DARK — that is precisely the state this interlock exists to catch. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
-            exit 1
-          fi
-
-          echo "$found"
-          # A boot_complete carrying a FALSE assertion is worse than none: the bootstrap
-          # reached its final stage with an invariant unmet. Checked per NAMED FIELD — a bare
-          # `grep -qE '\bno\b'` over the whole payload would match the word anywhere.
-          # (#7772) nft_metadata_drop is REPORTED here, NOT enforced -- and that split is the
-          # correction of a defect this PR briefly shipped. The first fix added it to this abort
-          # loop, which made an unarmed egress drop a FAILED BIRTH, and a failed birth routes the
-          # operator to "that host must be replaced, not completed". Two other artifacts in this
-          # same change say the opposite: cloud-init-git-data.yml ("an unarmed egress drop is a
-          # hardening regression, not a dark host, so it must not join the fatal stages that
-          # refuse a boot") and issue-alerts.tf, which exists as a SECOND rule precisely so this
-          # does not page. A transient `nftables` package-install failure -- which the template
-          # documents as non-fatal -- would otherwise destroy a healthy host holding every
-          # connected user's repositories.
-          #
-          # It is still the only MEASURED member (the other four are `yes` by construction), so it
-          # is the one that can report a real host fact, and it is armed BEFORE the bootstrap
-          # runcmd item so it reads a loaded chain rather than `no` for the host's life.
-          for f in luks_mounted repo_root hooks_path provision; do
-            if printf '%s' "$found" | grep -q "\"${f}\":\"no\""; then
-              echo "::error::boot_complete arrived with ${f}=no — the host is up but an invariant is unmet. Treat as a failed birth."
-              exit 1
-            fi
-            if ! printf '%s' "$found" | grep -q "\"${f}\":\"yes\""; then
-              echo "::error::boot_complete arrived WITHOUT a ${f} assertion. The emit contract and this reader have drifted; do not treat this birth as verified."
-              exit 1
-            fi
-          done
-          # nft_metadata_drop: reported, never terminal. `::warning::` surfaces in the run summary
-          # and in the annotations API, so an agent can read it without a dashboard.
-          if printf '%s' "$found" | grep -q '"nft_metadata_drop":"no"'; then
-            echo "::warning::git-data booted with nft_metadata_drop=no — the metadata-endpoint egress drop did NOT arm. The host is healthy and the birth stands; the hardening control is absent. Check stage:gitdata_nftables_metadata_warn in Sentry for the arm-time cause, then re-arm via a host replace (user_data is ForceNew)."
-          elif ! printf '%s' "$found" | grep -q '"nft_metadata_drop":"yes"'; then
-            echo "::warning::boot_complete carried no nft_metadata_drop assertion — the emit contract and this reader have drifted. The birth stands; the hardening control's state is UNKNOWN, which is not the same as absent."
-          fi
-          echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive."
+          }
+          rc=0
+          git_data_boot_verify birth 20 30 "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" || rc=$?
+          exit "$rc"
 
       - name: Dispatch summary
         if: always()
@@ -6332,18 +6486,20 @@ jobs:
         env:
           REASON: ${{ inputs.reason }}
           JOB_STATUS: ${{ job.status }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          POLL_OUTCOME: ${{ steps.poll.outcome }}
         run: |
           {
             echo "## git-data-host-create"
             echo ""
-            echo "- outcome: ${JOB_STATUS}"
+            echo "- outcome: ${JOB_STATUS} (apply outcome: ${APPLY_OUTCOME}; poll outcome: ${POLL_OUTCOME})"
             echo "- reason: ${REASON:-n/a}"
             echo ""
             echo "### What a green run gives you — and what it does not"
             echo ""
             echo "It gives you: the twenty-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
             echo ""
-            echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step warned that BETTERSTACK_QUERY_* was absent, you are back to the old state and must verify manually before trusting this birth."
+            echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step FAILED with the credentials-absent or unreadable-signal error, you are back to the old state and must verify manually before trusting this birth."
             echo ""
             echo "It does NOT give you:"
             echo "- a serving store — \`GIT_DATA_STORE_ENABLED\` is still absent from Doppler prd, so the feature stays dark;"
@@ -6353,6 +6509,31 @@ jobs:
             echo ""
             echo "Next: knowledge-base/engineering/operations/runbooks/git-data-birth.md"
           } >> "$GITHUB_STEP_SUMMARY"
+          # After the summary is written (so it survives a RED verdict): the apply/poll outcome pair decides whether this run VERIFIED
+          # anything. A green apply whose poll never ran is an UNVERIFIED birth and must not
+          # leave the job green — annotations reach `gh run view`; a grey step does not.
+          # An EMPTY outcome means a step id was renamed or mis-keyed (actionlint cannot see it;
+          # the same backstop exists in apply-deploy-pipeline-fix.yml). Nothing downstream can
+          # read it, so fail closed rather than let the case fall through green.
+          if [[ -z "$APPLY_OUTCOME" || -z "$POLL_OUTCOME" ]]; then
+            echo "::error::apply/poll outcome is EMPTY (apply='${APPLY_OUTCOME}' poll='${POLL_OUTCOME}') — a step id was renamed or mis-keyed; this birth is UNVERIFIED"
+            exit 1
+          fi
+          # A green apply whose poll did not SUCCEED is unverified whatever the poll's outcome —
+          # the catch-all `success/*` covers skipped, cancelled and anything GitHub adds later.
+          # Today that arm is reachable only under cancellation (the poll predicate runs the
+          # poll after every non-cancelled green apply), so it is defence-in-depth against the
+          # predicate being edited back, plus a useful annotation on a cancelled run.
+          # `success/failure` is the poll's own RED and needs no second verdict here.
+          case "${APPLY_OUTCOME}/${POLL_OUTCOME}" in
+            success/success) ;;
+            success/failure) ;;
+            success/*) echo "::error::apply succeeded but the boot-signal poll did not run to a verdict (poll outcome '${POLL_OUTCOME}') — the birth is UNVERIFIED; run the runbook's 'After the birth' query"; exit 1 ;;
+            skipped/skipped) echo "::notice::boot-signal poll SKIPPED — no apply ran (an earlier step failed or the run was cancelled); this is not a verdict on the host" ;;
+            cancelled/*) echo "::warning::apply was cancelled mid-flight — inspect Terraform state and the Hetzner project for a half-created fan-out before any re-dispatch; a re-dispatch after a landed server is refused" ;;
+            failure/*) ;;
+            *) echo "::warning::unrecognised outcome pair '${APPLY_OUTCOME}/${POLL_OUTCOME}' — read the step log; do not treat this run as verified" ;;
+          esac
 
   # ── #7095: re-mint the CF Access ci_ssh service token ──────────────────────
   #

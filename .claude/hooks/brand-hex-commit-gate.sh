@@ -105,10 +105,10 @@ if ! hook_parse_input "$__HI_RAW"; then
   exit 0
 fi
 
-tool_name="$HOOK_TOOL_NAME"
+tool_kind="$HOOK_TOOL_KIND"
 
-# Only fire on Bash.
-[ "$tool_name" = "Bash" ] || allow
+# Only fire on Bash (or its Devin kind twin, exec — #8205).
+[ "$tool_kind" = "Bash" ] || allow
 
 command="$HOOK_CMD"
 [ -n "$command" ] || allow
@@ -294,7 +294,7 @@ for f in "${changed_files[@]}"; do
         fi
       done < <(printf '%s' "$seg" | grep -oE '#[0-9a-fA-F]{3,8}')
     done <<< "$segs"
-  done < <(git diff "$NAME_REF" -U0 --no-color -- "$f" 2>/dev/null | awk '
+  done < <(git diff "$NAME_REF" -U0 --no-color --no-ext-diff -- "$f" 2>/dev/null | awk '
     /^@@/      { if (match($0, /\+[0-9]+/)) { ln = substr($0, RSTART+1, RLENGTH-1) + 0 } ; next }
     /^\+\+\+/  { next }
     /^\+/      { print ln "\t" substr($0, 2); ln++ }

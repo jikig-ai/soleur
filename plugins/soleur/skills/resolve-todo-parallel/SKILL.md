@@ -3,17 +3,21 @@ name: resolve-todo-parallel
 description: "This skill should be used when resolving all pending CLI todos from the todos/ directory using parallel processing. It reads pending todos, plans resolution order with dependency analysis, and spawns parallel agents."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/resolve-todo-parallel.workflow.js`](./workflows/resolve-todo-parallel.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/resolve-todo-parallel/workflows/resolve-todo-parallel.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
 
 # Resolve CLI Todos in Parallel
 
-> **Note:** The `/soleur:review` skill now creates GitHub issues directly for all new findings.
+> **Note:** The `soleur:review` skill now creates GitHub issues directly for all new findings.
 > This skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration.
 
 Resolve all TODO items from the /todos/*.md directory using parallel processing.
 
 <decision_gate>
-**API budget.** This skill spawns one `pr-comment-resolver` agent in parallel per unresolved TODO (N TODOs = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+**API budget.** This skill spawns one `soleur:engineering:workflow:pr-comment-resolver` agent in parallel per unresolved TODO (N TODOs = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
 
 Confirm the TODO count before allowing the fan-out. A pending backlog of 30 TODOs spawns 30 parallel agents.
 </decision_gate>
@@ -30,13 +34,13 @@ Create a TodoWrite list of all unresolved items grouped by type. Look at depende
 
 ### 3. Implement (PARALLEL)
 
-Spawn a pr-comment-resolver agent for each unresolved item in parallel.
+Spawn a soleur:engineering:workflow:pr-comment-resolver agent for each unresolved item in parallel.
 
-So if there are 3 items, spawn 3 pr-comment-resolver agents in parallel:
+So if there are 3 items, spawn 3 soleur:engineering:workflow:pr-comment-resolver agents in parallel:
 
-1. Task pr-comment-resolver(item1)
-2. Task pr-comment-resolver(item2)
-3. Task pr-comment-resolver(item3)
+1. Task soleur:engineering:workflow:pr-comment-resolver(item1)
+2. Task soleur:engineering:workflow:pr-comment-resolver(item2)
+3. Task soleur:engineering:workflow:pr-comment-resolver(item3)
 
 Always run all in parallel subagents/Tasks for each Todo item.
 

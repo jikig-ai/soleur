@@ -1,6 +1,6 @@
 # Runbook — birthing the git-data host
 
-> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13
+> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13 (PR #8128, merged 2026-09-14)
 >
 > This runbook opened with a `⛔ DO NOT DISPATCH THIS YET` banner from its first commit until
 > the PR that made this edit. It was cleared on the release condition it stated, and nothing
@@ -10,7 +10,8 @@
 > - **Rehearsal:** `git-data-rung2-rehearsal.yml` run
 >   [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), dispatched
 >   from `main` `15fd63aff` with `dry_run=false`. Verdict `PASS` — `stage:boot_complete`
->   reached carrying `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes`, no
+>   reached carrying `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes
+>   luks_reopen_unit=yes`, no
 >   `level:fatal` on Better Stack, the Better Stack source-liveness anchor answered (the Sentry
 >   one did not — next bullet); teardown verified against
 >   the Hetzner API. Read the booleans as the capture script does: they are literals
@@ -73,7 +74,7 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
 | **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
 | **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the release record at the top of this runbook. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
-| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
+| `DOPPLER_TOKEN` is present | **Changed by #8178.** The poll resolves `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` through `doppler run -p soleur -c prd_terraform`, so `DOPPLER_TOKEN` is the only repo-config precondition. (The GitHub-secret copies hold a SQL API connection that does not cover git-data's source; ADR-149's #8178 amendment has the history.) If the poll fails because the token is absent, the boot signal is **unread** and you are back to "a green apply proves nothing" — do not re-dispatch after a green apply; run the query in "After the birth". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
 
@@ -114,17 +115,29 @@ gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
 
 One human clicking twice is the real control. Treat it as **one** control, not two.
 
-**3 — The rehearsal evidence attests that a STAGE WAS REACHED, not that four invariants were
-measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
+**3 — The rehearsal evidence attests that a STAGE WAS REACHED for four of the five terminal
+booleans, not that four invariants were measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
 literals** at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction.
 That is not nothing: each has a named upstream `FATAL:` gate followed by `exit 1` (19 in that script — a 20th `FATAL:` match is the emitter arm inside `log()`, not a gate),
 so a failure aborts *before* the emit rather than emitting `no`. Read them as "no gate
 fired", never as "four invariants were measured".
 
-Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just above the
+Exactly **two** booleans in that row are measured. The first is `nft_metadata_drop`, computed just above the
 emit by grepping the live nftables chain (`nft list chain inet soleur_git_data output` for
 `169.254.169.254`), anchored on the metadata address rather than the table name so a table
-whose rule was flushed reads `no`. It is **not** in `git-data-rung2-boot-evidence.env` —
+whose rule was flushed reads `no`. The second is `luks_reopen_unit` (#8210): `systemctl
+is-enabled` AND `Result=success` on `git-data-luks-reopen.service`, the boot-time LUKS reopen
+armed by the runcmd item one stage earlier. Unlike `nft_metadata_drop` it is TERMINAL for both
+readers — a birth or replace that delivers an unarmed reopen unit FAILS rather than warning,
+because a replace is the only route by which that unit reaches the live host. **On
+`luks_reopen_unit=no`, read Sentry BEFORE you replace.** The measurement is fail-closed with a
+bounded false-negative window: the bootstrap waits at most 420 s for the unit to leave
+`activating`, while the unit's own restart ladder can legitimately run ~1740 s against a slow
+Doppler. So a `no` means either a real reopen failure (a `stage:luks_reopen level:fatal` row
+with an `action=`; follow its runbook row) or a ladder that finished AFTER the measurement (a
+`stage:luks_reopen_ok` info row later in the same boot: the host is healthy, the boolean was
+early). `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events <host> --stage luks_reopen_ok …` and
+`--stage luks_reopen` distinguish them; a replace on the second reading destroys a healthy host. It is **not** in `git-data-rung2-boot-evidence.env` —
 that file records the queries, and the capture projects only the four hardcoded booleans —
 so it has to be read from Better Stack separately. For the rehearsal that cleared the banner
 (run 34768256297, host `soleur-git-data-rehearsal-34768256297`) it read `yes` on the
@@ -134,7 +147,8 @@ so it has to be read from Better Stack separately. For the rehearsal that cleare
 export BS_TABLE=t520508_soleur_git_data_prd_logs
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
   "SELECT dt, JSONExtractString(raw,'stage') AS stage,
-          JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+          JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
+          JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
    FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
          UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
    WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data-rehearsal-34768256297'
@@ -235,7 +249,12 @@ approval: the interlock, the birth gate, and the stock preflight.
    ```
 
 8. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
-   which arm refused.
+   which arm refused. Its last arm (#8189, shared with the replace gate) refuses unless the
+   created server carries exactly the default key and the git-data root key, and the root
+   key's `SHA256:` fingerprint equals `apps/web-platform/infra/git-data-root-key.fingerprint`:
+   `verdict=git_data_root_key_not_in_create reason=<word>`. Remedy: dispatch
+   `apply-git-data-root-key.yml`, commit its printed fingerprint, re-dispatch
+   (`git-data-luks-cutover-5274.md` › verdict map).
 9. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
    *after* the birth gate: the gate proves the plan is the right plan, the preflight proves
    it is a feasible one.
@@ -275,6 +294,9 @@ needed.
 > `docker run` from `cloud-init.yml`. If you find a document telling you to restart a unit
 > to pick up these keys, that document is wrong — `git-data-cutover.sh` currently contains
 > exactly that mistake at two sites (tracked under #5274/#6982).
+>
+> **Superseded 2026-09-15 (#8189):** both sites were deleted with the rest of the cutover body. The
+> dispatch is now a read-only proof, and the real cutover is being rebuilt under #8211.
 
 ## If it fails
 
@@ -359,17 +381,55 @@ channels. It still has no heartbeat of its own (deliberate — see ADR-149's D-H
 - `git-data-luks-cutover-5274.md` — the cutover that makes the LUKS volume live
 - #6977 (this route) · #6982 (the interlock's release) · #5274 (Phase-3 GA)
 
+## Reading the poll's verdict (#8178)
+
+Since #8178 the poll (both `git_data_host_create` and `git_data_host_replace`) reports
+**three** outcomes. The verdict rests on the FINAL read, and the summary line
+`answered=N/M` says how many reads answered.
+
+| Verdict | What it means | Where to go |
+|---|---|---|
+| `received` | The host reported `boot_complete` after this run's anchor. | Nowhere. The per-field invariants run next. |
+| `silent` | The final read ANSWERED and no `boot_complete` from this host generation was present. A statement about the host, or about its upload path. | Sentry events for `host_name:soleur-git-data` timestamped AFTER the run's boot-trail anchor, in this order: (1) a `stage:betterstack_ingest` warning means the host ran and its Better Stack upload failed; (2) a `stage:boot_complete` event means it finished booting, after the final read or with its upload lost — do not replace it; (3) a `level:fatal` event names the stage that failed; (4) `stage:bootcmd_start` with no `stage:gitdata_runcmd_ok` means it stopped in package or file setup, or its runcmd_ok emit was not delivered; (5) nothing at all means it died before its network came up. For a birth, then see "If it fails" above. For a replace there is no in-job remedy: do not re-dispatch it as a reading. |
+| `unreadable` | The final read failed. If `answered=0`, nothing about the host was measured; if some reads answered, they saw no `boot_complete`, but the final window is unmeasured. | The READ path, never the host. The class names which fault it was. |
+
+The class on an `unreadable` run:
+
+| Class | Meaning |
+|---|---|
+| `credentials-rejected` | The read path refused the credentials. Rotate/verify them in `prd_terraform`. |
+| `source-not-in-connection` | `CLUSTER_DOESNT_EXIST`: the SQL API connection in use does not cover this source (#7867). A connection covers only sources created before it; use the connection in `prd_terraform`, or create one that covers the source. |
+| `source-under-maintenance` | The vendor's read path is under maintenance. |
+| `transport` | DNS / connect / timeout / TLS from the runner, or the per-read 45 s cap expired. |
+| `reader-refusal` | `betterstack-query.sh` refused (destination pin / usage / trace). A reader misconfiguration. |
+| `credentials-absent` / `reader-exit-1` | The wiring itself: the three variables were not injected, or `doppler run` failed before the reader (check `DOPPLER_TOKEN`). |
+| `other` | None of the above; read the per-poll line's rc and stderr. |
+
+**Re-dispatch is never how to get a reading.** After a green birth apply the birth gate
+refuses a re-dispatch. A replace can be re-dispatched, but every replace destroys and
+recreates the host holding every connected user's repositories. Once the read works, run
+the read-only query in "After the birth" with the run's boot-trail anchor. (There is no
+web-host `git ls-remote` serving check yet; it is #5274 PR C. The existing web-host probe is
+a TCP connect to :22, which answers on a host whose LUKS volume never mounted.)
+
+The log never prints the response body, only its byte length: this repository is public,
+and a ClickHouse auth failure body names the query username.
+
 ## After the birth — verify the host actually booted (#6982)
 
 **A green apply is not a green boot.** The dispatch's own post-apply step polls for the
-boot signal and FAILS the job if it does not arrive, so a green run is now meaningful — but
-verify independently if that step warned that its credentials were missing.
+boot signal and FAILS the job if it does not arrive, so a green run is now meaningful; the
+poll runs only after the apply step actually ran (green or failed) — a run refused at the
+gate skips it, so a skipped poll is not a verdict on the host. A RED job whose summary shows
+`apply outcome: success` is a failed VERIFICATION, not a failed birth: run the query below;
+do not re-dispatch (the gate refuses a zero-create plan).
 
 No SSH appears below, and none is possible: git-data has no human SSH path by design
 (three `command=`/`no-pty` forced commands on a `/bin/sh` login shell — the forced-command map is the whole confinement, ADR-149 #8043 disposition — deny-all public ingress).
 
 ```bash
-# 1. The boot-completion signal, with its FIVE assertions (#7772 added nft_metadata_drop).
+# 1. The boot-completion signal, with its SIX assertions (#7772 added nft_metadata_drop;
+#    #8210 added the MEASURED, TERMINAL luks_reopen_unit).
 #    BS_TABLE IS PINNED: git-data ships to its own source 2734275, not the shared 2457081
 #    that betterstack-query.sh defaults to. Unpinned, this returns zero rows on a healthy
 #    host and the reading instruction below sends you down the partial-birth tree for a
@@ -377,17 +437,24 @@ No SSH appears below, and none is possible: git-data has no human SSH path by de
 #    bare-substring grep matches the shared source's inngest rows quoting issue bodies.
 #    NOTE `remote($BS_TABLE)` takes NO `primary` argument; only s3Cluster does. The
 #    archive arm is REQUIRED: remote() alone is the ~40-minute hot window.
-BS_TABLE=t520508_soleur_git_data_prd_logs \
+#    ANCHOR IS REQUIRED (#8178, AP-027): set ANCHOR to the epoch the run's
+#    "Stamp boot-trail run anchor" step printed. host_name does not tell host generations
+#    apart, so without it a replace whose new host never reported returns the DESTROYED
+#    host's all-yes row and this query certifies a dark host.
+ANCHOR=<epoch printed by the run's anchor step>
+BS_TABLE=t520508_soleur_git_data_prd_logs BS_TABLE_S3=t520508_soleur_git_data_prd_s3 \
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
   SELECT dt, JSONExtractString(raw,'stage') AS stage,
              JSONExtractString(raw,'luks_mounted') AS luks_mounted,
              JSONExtractString(raw,'repo_root')    AS repo_root,
              JSONExtractString(raw,'hooks_path')   AS hooks_path,
              JSONExtractString(raw,'provision')    AS provision,
-             JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+             JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
+             JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-  WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data'
+  WHERE dt > fromUnixTimestamp(${ANCHOR})
+    AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
     AND JSONExtractString(raw,'stage') = 'boot_complete'
   ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow"
 
@@ -399,7 +466,8 @@ doppler run -p soleur -c prd -- sh -c '
   q=$(printf "%s" "host_name:soleur-git-data" | jq -sRr @uri)
   curl -sS -H "Authorization: Bearer $SENTRY_ISSUE_RO_TOKEN" -H "Accept: application/json" \
     "https://sentry.io/api/0/organizations/jikigai-eu/issues/?query=$q&statsPeriod=24h" \
-  | jq -r ".[] | \"\(.shortId)  \(.count)x  \(.title)\""'
+  | jq -r ".[] | \"\(.shortId)  \(.count)x  last=\(.lastSeen)  \(.title)\""'
+#    Only issues whose `last=` is AFTER the run's anchor can describe this host generation.
 
 #    Then, for any id above:
 #    doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --latest-event <issue-id>

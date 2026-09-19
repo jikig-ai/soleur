@@ -8,7 +8,8 @@
 # THIS WORKFLOW SHIPS UNFIRED, AND THAT IS THE DESIGN RATHER THAN AN OVERSIGHT. A PR merges
 # ATOMICALLY, so evidence committed in the same PR that builds the harness would be evidence
 # from a rehearsal that never ran. The harness must exist, merge, and then RUN before its
-# output can release anything. The DO-NOT-DISPATCH banner in git-data-birth.md stays up.
+# output can release anything. The banner in git-data-birth.md was cleared by PR #8128 (merged 2026-09-14) once
+# evidence for the current template merged; a later template edit re-HOLDs the gate, not the banner.
 #
 # IT NEVER COMMITS ITS OWN EVIDENCE. The evidence file lands as a workflow ARTIFACT and, if
 # the operator wants it, as a PR they review. A route that writes its own gate-releasing
@@ -84,9 +85,15 @@ jobs:
     # the dry_run default — and recorded in ADR-149 with the alternative (a dedicated
     # environment) and its DP-11 F8 cost, rather than left as an unstated trade.
     environment: web-platform-infra-apply
-    # Budget: Hetzner provisioning the server plus two volumes (~6m) + boot + emit + the
-    # bounded capture poll + teardown.
-    timeout-minutes: 30
+    # Budget, summed from the bounds this job actually contains rather than estimated: apply 25
+    # (a STEP-LEVEL timeout-minutes on the apply step, so it is a bound and not a guess) +
+    # capture poll 16 + settle 2 + reset 2 (24 x 5 s) + reboot probe 10 = 55 min of worst case,
+    # plus teardown grace. The reset arm (#8210) is what pushed this past 30. Review caught the
+    # first revision setting 45 under a comment whose own arithmetic reached 55: a job ceiling
+    # reached INSIDE a step means the teardown gets only the runner's cancellation grace to
+    # destroy a server, two volumes and a config. git-data-rung2-rehearsal.test.sh derives the
+    # sum from these bounds and REDs a ceiling below it.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -254,6 +261,10 @@ jobs:
       - name: Terraform apply (creates the throwaway rehearsal host)
         id: apply
         if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        # The one wait in this job with no deadline of its own (Hetzner provisioning a server and
+        # two volumes, first boot, the emit). Bounded here so the job budget above is a sum of
+        # bounds rather than a sum containing an estimate; the always() teardown still runs.
+        timeout-minutes: 25
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -329,7 +340,7 @@ jobs:
           # Consecutive wrapper (doppler) failures — see the fast-fail below the sentinel.
           wrapper_fails=0
           # DEADLINE, NOT AN ATTEMPT COUNT. Each attempt is up to 2 x `curl --max-time 60`
-          # plus a 30 s sleep = 150 s, so 20 attempts is up to ~50 min against a 30-minute job
+          # plus a 30 s sleep = 150 s, so 20 attempts is up to ~50 min against a 60-minute job
           # ceiling -- and the worst case is the DARK BOOT, i.e. exactly the failure this route
           # exists to detect. Blowing the job ceiling inside this step means the TRANSIENT
           # summary below is never written and the `if: always()` teardown gets only the
@@ -445,7 +456,7 @@ jobs:
             echo "### Rung-2 rehearsal: FAIL" >> "$GITHUB_STEP_SUMMARY"
             echo "The rehearsal host reported a fatal or a false assertion. This is the failure class the route exists to find: it would have looked green from the apply. No evidence written." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact from this run and read which assertion went false. Fix the template, then re-dispatch. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact from this run and read which assertion went false. Fix the template, then re-dispatch. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           elif [[ "$rc" -eq 3 ]]; then
             echo "### Rung-2 rehearsal: WRAPPER FAILURE (doppler auth/config)" >> "$GITHUB_STEP_SUMMARY"
             echo "\`doppler run\` exited 1 twice without the capture script ever producing a verdict, so the poll stopped early rather than burning ~16 minutes on a paid host. **This says nothing about the rehearsal host** — it never got to speak." >> "$GITHUB_STEP_SUMMARY"
@@ -470,22 +481,131 @@ jobs:
             echo "### Rung-2 rehearsal: TRANSIENT — the warehouse is dark for EVERY producer" >> "$GITHUB_STEP_SUMMARY"
             echo "The capture's control read answered and returned no rows from **any** source, so Better Stack is storing nothing account-wide. **This says nothing about \`${REHEARSAL_HOST}\`** — a perfect boot and a dead boot are indistinguishable while the warehouse stores nothing." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** this is the account-wide condition tracked in #7811 — do NOT re-dispatch, because another paid cpx22 cannot produce evidence while storage is down. Re-run this rehearsal once #7811 reports storage restored. A 2xx from the ingest endpoint does not contradict this: an acknowledgement is not storage. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** this is the account-wide condition tracked in #7811 — do NOT re-dispatch, because another paid cpx22 cannot produce evidence while storage is down. Re-run this rehearsal once #7811 reports storage restored. A 2xx from the ingest endpoint does not contradict this: an acknowledgement is not storage. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           elif grep -q 'NEVER STORED A ROW' /tmp/rung2/capture.log 2>/dev/null; then
             echo "### Rung-2 rehearsal: TRANSIENT — this source has never stored a row" >> "$GITHUB_STEP_SUMMARY"
             echo "The control source is answering and carrying rows, so the warehouse is up; this source's table still does not exist. Better Stack creates the table lazily on the first **stored** row, so either nothing has ever been stored to it, or the table name is wrong. **This is not yet a statement about \`${REHEARSAL_HOST}\`** — a misaddressed source and a host that never shipped look identical from here." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** compare the table named in the capture output above against \`BS_GIT_DATA_TABLE\` in \`scripts/lib/betterstack-sources.sh\` — every artifact is emitted with the query that retrieved it, so both values are already in this run and neither needs looking up elsewhere. If they disagree, fix the constant; no number of paid hosts will produce evidence against the wrong table. If they agree, the source genuinely holds nothing and a re-dispatch is warranted. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** compare the table named in the capture output above against \`BS_GIT_DATA_TABLE\` in \`scripts/lib/betterstack-sources.sh\` — every artifact is emitted with the query that retrieved it, so both values are already in this run and neither needs looking up elsewhere. If they disagree, fix the constant; no number of paid hosts will produce evidence against the wrong table. If they agree, the source genuinely holds nothing and a re-dispatch is warranted. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           elif grep -q 'CONTROL READ ALSO FAILED' /tmp/rung2/capture.log 2>/dev/null; then
             echo "### Rung-2 rehearsal: TRANSIENT — the instrument itself is unusable" >> "$GITHUB_STEP_SUMMARY"
             echo "The control leg did not answer — either it ran and failed, or the query script was not executable so it could not run at all. Either way this run cannot tell a missing table from a dark warehouse from a broken query path. **Nothing is known, least of all anything about \`${REHEARSAL_HOST}\`.**" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** the suspect is the query path, not the host, so another paid cpx22 cannot help — do NOT re-dispatch. The capture recorded the target read's exit code and the control classifier's token in the step output above; read those, then re-run this workflow once. If it repeats with the same classifier token, the ClickHouse read credential in Doppler \`prd_terraform\` is the suspect, not the rehearsal. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** the suspect is the query path, not the host, so another paid cpx22 cannot help — do NOT re-dispatch. The capture recorded the target read's exit code and the control classifier's token in the step output above; read those, then re-run this workflow once. If it repeats with the same classifier token, the ClickHouse read credential in Doppler \`prd_terraform\` is the suspect, not the rehearsal. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Rung-2 rehearsal: TRANSIENT (no verdict)" >> "$GITHUB_STEP_SUMMARY"
             echo "The poll expired without a terminal answer (last rc=\`${rc}\`). This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. **DO NOT simply re-dispatch.** #7116 mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry directly — attempt 1 of run 30649892865 was that mis-report, one attempt before the real FAIL. The capture step already consulted Sentry (see capture.log) (\`host_name:soleur-git-data-rehearsal-<run-id>\`, org \`jikigai-eu\`, project \`web-platform\`); a \`level:fatal\` row means treat this as FAIL and STOP. Each dispatch spends a paid cpx22 — cap two per fix attempt. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. **DO NOT simply re-dispatch.** #7116 mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry directly — attempt 1 of run 30649892865 was that mis-report, one attempt before the real FAIL. The capture step already consulted Sentry (see capture.log) (\`host_name:soleur-git-data-rehearsal-<run-id>\`, org \`jikigai-eu\`, project \`web-platform\`); a \`level:fatal\` row means treat this as FAIL and STOP. Each dispatch spends a paid cpx22 — cap two per fix attempt. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
+
+      # ══ (#8210) THE REBOOT ARM ═══════════════════════════════════════════════════════
+      #
+      # Everything above proves the BIRTH boot. The defect #8210 closes is invisible to it: the
+      # mapper is opened once per instance by cloud-init runcmd, so a first boot passes whether
+      # or not anything would reopen it on the SECOND. This arm is the only thing that proves
+      # the reopen path rather than asserting it — the host is hard-reset through the Hetzner
+      # API and must report the reopen unattended before its evidence can be uploaded.
+      - name: Settle before the reset
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' }}
+        run: |
+          set -euo pipefail
+          # boot_complete fires BEFORE the gc_timer runcmd item and before cloud-final takes
+          # its scripts-user semaphore. A reset inside that window leaves the semaphore
+          # unclaimed, so the next boot RE-RUNS the whole runcmd — replaying boot_complete and
+          # re-opening the mapper from the birth heredoc rather than from the unit under test.
+          # The arm would then pass without the unit existing.
+          echo "settling 120s so cloud-final claims its semaphore before the reset"
+          sleep 120
+
+      - name: Hard-reset the rehearsal host (Hetzner API)
+        id: reset
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
+        run: |
+          set -euo pipefail
+          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          printf '::add-mask::%s\n' "$TOKEN"
+          # EXACT NAME, never a prefix match. `?name=` is an exact filter on the Hetzner side,
+          # so this cannot reach `soleur-git-data` (the production host) or a leftover survivor
+          # from an earlier rehearsal — both of which a `startswith(prefix)` resolution would
+          # happily return. The teardown's own `per_page=50` list is a different question
+          # (is ANY survivor left) and stays as it is.
+          body="$(curl --disable --noproxy '*' -sS -f -H "Authorization: Bearer ${TOKEN}" \
+                    "https://api.hetzner.cloud/v1/servers?name=${REHEARSAL_HOST}")" || {
+            echo "::error::could not resolve ${REHEARSAL_HOST} through the Hetzner API. Failing closed: an unresolved host is not a host to reset."
+            exit 1
+          }
+          ids="$(printf '%s' "$body" | jq -r --arg n "$REHEARSAL_HOST" '[.servers[]? | select(.name == $n) | .id] | .[]')"
+          n="$(printf '%s\n' "$ids" | grep -c . || true)"
+          if [[ "$n" -ne 1 ]]; then
+            echo "::error::expected exactly one server named ${REHEARSAL_HOST}, got ${n}. Refusing to reset."
+            exit 1
+          fi
+          # RECORDED BEFORE THE POST, and the order is the guard: a timestamp taken afterwards
+          # can sit after the host has already booted and emitted, so the probe's window would
+          # exclude the very row it exists to find and every healthy reset would read TRANSIENT.
+          echo "RUNG2_REBOOT_SINCE=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_ENV"
+          # HARD reset (power cycle), not a graceful shutdown: an ACPI reboot leaves the
+          # question of whether systemd unmounted cleanly, and the ext4 journal replay on the
+          # mapper is part of what this arm is for.
+          action="$(curl --disable --noproxy '*' -sS -f -X POST \
+            -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+            "https://api.hetzner.cloud/v1/servers/${ids}/actions/reset")"
+          aid="$(printf '%s' "$action" | jq -r '.action.id')"
+          echo "reset action ${aid} issued for ${REHEARSAL_HOST} (server ${ids})"
+          for i in $(seq 1 24); do
+            st="$(curl --disable --noproxy '*' -sS -f -H "Authorization: Bearer ${TOKEN}" \
+              "https://api.hetzner.cloud/v1/servers/${ids}/actions/${aid}" | jq -r '.action.status')"
+            case "$st" in
+              success) echo "reset completed after $((i * 5))s"; exit 0 ;;
+              error)   echo "::error::the Hetzner reset action reported error"; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::the reset action did not reach 'success' within 120s"
+          exit 1
+
+      - name: Probe the unattended reopen (bounded poll)
+        id: reboot_probe
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reset.outcome == 'success' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
+        run: |
+          set -euo pipefail
+          rc=2
+          # Same bounded shape as the capture poll above, and the same terminal semantics: 0
+          # PASS and 1 FAIL both stop; only 2 (nothing known yet) is retried, because the host
+          # is still booting. A deadline rather than an attempt count, so the teardown keeps its
+          # budget even when the reopen never reports.
+          deadline=$(( SECONDS + 10 * 60 ))
+          for attempt in $(seq 1 20); do
+            if (( SECONDS >= deadline )); then
+              echo "--- reboot-probe deadline reached after $((attempt - 1)) attempt(s) ---"
+              break
+            fi
+            echo "--- reboot probe attempt ${attempt}/20 ---"
+            rc=0
+            doppler run -p soleur -c prd_terraform -- \
+              bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
+                --host-name "$REHEARSAL_HOST" \
+                --evidence-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                --reboot-since "${RUNG2_REBOOT_SINCE}" \
+                --out /tmp/rung2/git-data-rung2-boot-evidence.env || rc=$?
+            [[ "$rc" -ne 2 ]] && break
+            sleep 30
+          done
+          echo "reboot_rc=${rc}" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -eq 0 ]]; then
+            echo "### Rung-2 reboot arm: PASS" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`${REHEARSAL_HOST}\` reopened /dev/mapper/git-data unattended after a hard reset (#8210)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Rung-2 reboot arm: rc=${rc}" >> "$GITHUB_STEP_SUMMARY"
+            echo "A FAIL or TRANSIENT here RELEASES NOTHING: the evidence upload below is gated on this step, so the birth and replace gates stay held." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$rc"
 
@@ -493,7 +613,10 @@ jobs:
       # operator opens a PR with it themselves after reading it. `permissions: contents: read`
       # above means this workflow could not commit it even if a later edit tried to.
       - name: Upload the evidence file as an artifact
-        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' }}
+        # (#8210) BOTH rcs. Evidence that the birth booted but the mapper never reopened
+        # unattended must not be publishable — that is the shape the reboot arm exists to catch,
+        # and gating only on capture_rc would upload it.
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: git-data-rung2-boot-evidence

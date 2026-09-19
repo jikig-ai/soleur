@@ -4,6 +4,7 @@ status: accepted
 date: 2026-09-07
 tags: [observability, uptime-monitoring, sentry, better-stack, terraform, redirects, single-vendor]
 related_adrs: [ADR-194, ADR-175]
+amended_by: [ADR-222]
 related_runbooks:
   - knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 ---
@@ -184,6 +185,15 @@ Separately, the Better Stack workspace holds an **unmanaged** fourth monitor
 because the free-tier quota was measured live rather than counted from `.tf`
 blocks. Tracked on [#7884](https://github.com/jikig-ai/soleur/issues/7884).
 
+> **Resolved 2026-09-15 (#7884, PR #8216):** the paragraph above is kept as
+> written on 2026-09-07. Monitor 4226366 is now declared as
+> `betteruptime_monitor.app_health` in `uptime-alerts.tf`. The first per-merge apply
+> after PR #8216 adopts it through a gated `import {}` block and converts it from a
+> `status` to a `keyword` monitor that pages when `/health` stops reporting
+> `"supabase":"connected"`. The twice-daily reconcile now reports any live monitor
+> or heartbeat that no declaration accounts for. See
+> [ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md).
+
 ## Consequences
 
 - The www 301 has a working alarm for the first time since the assertion landed.
@@ -203,3 +213,9 @@ blocks. Tracked on [#7884](https://github.com/jikig-ai/soleur/issues/7884).
   every `SENTRY_*` secret were used only by the removed steps.
 - Better Stack usage goes to 4 monitors of 10 on the free tier. No recurring cost:
   the monitor is ungated and policy-less, riding the existing email path.
+
+  > **Superseded 2026-09-15 (#7884):** "4 monitors of 10" above is an asserted
+  > cap. Measured live on 2026-09-15 the workspace held 4 monitors + 9 heartbeats
+  > = 13 objects, which contradicts a single shared pool of ten. No cap is asserted any more: the reconcile prints
+  > `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n>`
+  > every run ([ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md)).

@@ -69,6 +69,7 @@ import {
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -611,6 +612,72 @@ describe("the ssh_token_gate green-skip has a channel (#7539)", () => {
     expect(summary!).toMatch(/if\s+\[\s*"\$\{SSH_SKIP\}"\s*=\s*"true"\s*\]/);
     expect(summary!).toContain("SSH_STAGE=");
     expect(summary!).toContain("**SSH stage:**");
+  });
+});
+
+describe("git_data_host_create: the boot-signal poll is gated on the apply outcome (#8010)", () => {
+  // The poll used to be `if: always()`: on run 34822248580 a plan the birth gate REFUSED
+  // (apply skipped) still spent the full 10-minute budget and told the operator to re-dispatch.
+  // These arms pin the predicate and drive the Dispatch summary's verdict `case` under real
+  // bash across the outcome cross-product, so the fail-closed branches are exercised rather
+  // than string-matched.
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const job = extractJobBlock(wf, "git_data_host_create");
+  const apply = extractStep(job, /Terraform apply \(git-data birth\)/);
+  const poll = extractStep(job, /Poll for the git-data boot-completion signal/);
+  const summary = extractStep(job, /Dispatch summary/);
+
+  test("the apply and poll steps carry the ids the predicate and the summary read", () => {
+    expect(apply).not.toBeNull();
+    expect(poll).not.toBeNull();
+    expect(apply!).toMatch(/^\s*id:\s*apply\s*$/m);
+    expect(poll!).toMatch(/^\s*id:\s*poll\s*$/m);
+  });
+
+  test("the poll's if: line is the enumerated, cancellation-aware predicate — never always()", () => {
+    const ifLine = poll!
+      .split("\n")
+      .find((l) => /^\s*if:/.test(stripLineComment(l)));
+    expect(ifLine).toBeDefined();
+    expect(ifLine!).toContain("!cancelled()");
+    expect(ifLine!).toMatch(
+      /steps\.apply\.outcome == 'success' \|\| steps\.apply\.outcome == 'failure'/,
+    );
+    expect(ifLine!).not.toContain("always()");
+    expect(ifLine!).not.toContain("!= 'skipped'");
+  });
+
+  test("the summary verdict case fails closed on every unverified pair (executed under bash)", () => {
+    expect(summary).not.toBeNull();
+    const m = /if \[\[ -z "\$APPLY_OUTCOME"[\s\S]*?esac/.exec(summary!);
+    expect(m).not.toBeNull();
+    // Dedent the YAML block scalar so bash sees the script as the runner would.
+    const block = m![0].split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n");
+    // [apply, poll, rc, annotation stdout must contain ("" = must print nothing)]. The
+    // annotation column is what tells the cancelled arm from the `*` default, which share rc 0.
+    const table: Array<[string, string, number, string]> = [
+      ["success", "success", 0, ""],
+      ["success", "failure", 0, ""],
+      ["success", "skipped", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["success", "cancelled", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["skipped", "skipped", 0, "::notice::boot-signal poll SKIPPED"],
+      ["failure", "failure", 0, ""],
+      ["failure", "skipped", 0, ""],
+      ["cancelled", "skipped", 0, "::warning::apply was cancelled mid-flight"],
+      ["neutral", "skipped", 0, "::warning::unrecognised outcome pair"],
+      ["", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["success", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["", "skipped", 1, "::error::apply/poll outcome is EMPTY"],
+    ];
+    for (const [a, p, rc, note] of table) {
+      const r = spawnSync("bash", ["-eo", "pipefail", "-c", block], {
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", APPLY_OUTCOME: a, POLL_OUTCOME: p },
+        encoding: "utf8",
+      });
+      expect(`${a}/${p} -> rc=${r.status}`).toBe(`${a}/${p} -> rc=${rc}`);
+      if (note === "") expect(`${a}/${p} -> [${r.stdout}]`).toBe(`${a}/${p} -> []`);
+      else expect(`${a}/${p} -> ${r.stdout}`).toContain(note);
+    }
   });
 });
 
@@ -1366,6 +1433,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server.inngest",
   "hcloud_volume.inngest_redis",
   "hcloud_volume_attachment.inngest_redis",
+  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. Both are
+  // operator-applied via `apply_target=inngest-host`; neither is in the per-merge
+  // allowlist, because creating a volume is a billable resource change that wants
+  // the dispatch gate rather than a merge side effect. They are listed here the
+  // moment the resources exist — check_resource_partition reds on any managed
+  // address that is neither reachable nor excluded, so the coverage test would go
+  // red on the commit that declares the volume if these two lines lagged it.
+  "hcloud_volume.inngest_redis_luks",
+  "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
   "hcloud_firewall_attachment.inngest",
@@ -2845,6 +2921,24 @@ describe("inngest-volume-recut dispatch: registration, binding, and the shared m
     expect(alsoNoReplace.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
+  test("B6: inngest_host_replace carries the ADDITIVE attachment, and neither durable volume (#6894)", () => {
+    // A replace re-creates the server, so every attachment that interpolates the server id is
+    // ForceNew. An attachment NOT -targeted here is simply left behind: the new host boots with that
+    // volume DETACHED. For the additive LUKS volume that is harmless before the cutover and fatal
+    // after it — the pointer then names a volume that is not attached, the resolver refuses, and
+    // Redis stays down. The job's own comment claimed the target for a whole phase while the -target
+    // list carried only three lines; this is the pin that comment never had.
+    const replaceJob = extractJobBlock(wf, "inngest_host_replace");
+    const targets = extractAllTargets(replaceJob);
+    expect(targets.has("hcloud_server.inngest")).toBe(true); // non-vacuity: the extraction reached the job
+    expect(targets.has("hcloud_volume_attachment.inngest_redis")).toBe(true);
+    expect(targets.has("hcloud_volume_attachment.inngest_redis_luks")).toBe(true);
+    // Both VOLUMES are preserved by OMISSION — targeting either would put a sole-copy store one
+    // replace away from a destroy.
+    expect(targets.has("hcloud_volume.inngest_redis")).toBe(false);
+    expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
+  });
+
   test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not this job's", () => {
     // The passphrase must exist before any host boots that reads it, so it is minted at MERGE.
     // It must NOT be in the recut job's -target set: Guard 1 refuses any update/delete/forget on
@@ -2889,6 +2983,60 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
       expect(targets).toEqual(allow);
     });
   }
+});
+
+/**
+ * inngest_host SHAPE GATE (#6894, ADR-142 Guard 3): wired into the job, and its allow-set IS the
+ * job's -target set.
+ *
+ * The gate's allow-set is a literal in the same repo as the workflow it grades, so one diff could
+ * widen both — this is the outside anchor the plan's Guard Contract names, and it mirrors the
+ * registry parity block above. The call assertion follows the inngest-volume-recut "sources BOTH
+ * gates" test: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
+ * `# shellcheck source=` directive or prose cannot satisfy it.
+ */
+describe("inngest_host dispatch: shape gate wired and allow-set === -target set (#6894)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = stripComments(extractJobBlock(wf, "inngest_host"));
+  const CALL = /^\s*if ! inngest_host_shape_gate tfplan\.json; then$/m;
+
+  test("sources and CALLS inngest_host_shape_gate, with no ack-destroy bypass", () => {
+    expect(jobBlock).toContain("inputs.apply_target == 'inngest-host'"); // non-vacuity: the right job
+    expect(jobBlock).toMatch(
+      /^\s*source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/inngest-host-shape-gate\.sh"$/m,
+    );
+    expect(jobBlock).toMatch(CALL);
+    expect([...jobBlock.matchAll(new RegExp(CALL.source, "gm"))].length).toBe(1);
+    expect(jobBlock).toContain("NO [ack-destroy] bypass on this path.");
+  });
+
+  test("non-vacuity: the call check can tell a wired job from an unwired one", () => {
+    const unwired = jobBlock.replace(CALL, "          if false; then");
+    expect(CALL.test(unwired)).toBe(false);
+  });
+
+  test("the gate runs on the saved plan BEFORE the apply consumes it", () => {
+    const callAt = jobBlock.search(CALL);
+    const applyAt = jobBlock.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(callAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(callAt);
+  });
+
+  test("the gate's def allow === the job's -target set", () => {
+    const lib = readFileSync(
+      join(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh"),
+      "utf8",
+    );
+    const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+    expect(defAllow).not.toBeNull();
+    const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
+    expect(targets.length).toBe(18); // non-vacuity floor
+    expect(allow).toEqual(targets);
+    // The passphrase pair is per-merge -targeted and must never join this allow-set.
+    expect(allow).not.toContain("random_password.inngest_redis_luks");
+    expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
 });
 
 /**
@@ -3569,6 +3717,53 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(step![0]).toMatch(
       /if \[\[ "\$rc" -ne 0 \]\]; then\n\s*echo "::error::[\s\S]*?\n\s*exit 1\n/,
     );
+  });
+
+  test("git_data_host_replace ALSO carries the rung-2 rehearsal interlock (#8210)", () => {
+    // Until #8210 only git_data_host_create called this gate, so an un-rehearsed cloud-init
+    // payload could reach the LIVE host by replace from any ref — the route that creates the
+    // store was held while the route that REPLACES it was not. That asymmetry is load-bearing
+    // now for the same reason D9 above is: user_data is ForceNew and ADR-115 bars git-data from
+    // the reboot primitive, so a replace is the ONLY route by which a payload change (including
+    // a boot-time control like the LUKS reopen) reaches the host, and it re-runs first boot
+    // there. An un-rehearsed template's first real boot would be on the production host.
+    const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
+    expect(replaceBlock).toMatch(
+      /^\s*if ! git_data_rung2_rehearsal_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
+
+    // The same three disarm shapes the sibling interlocks are pinned against: an `if:` on the
+    // step, a continue-on-error, or a refusal branch that echoes without exiting.
+    const step = /- name: Rung-2 rehearsal interlock[\s\S]*?(?=\n      - name: )/.exec(
+      replaceBlock,
+    );
+    expect(step, "Rung-2 rehearsal interlock step not found in git_data_host_replace").not.toBeNull();
+    expect(step![0]).not.toMatch(/^\s*if:/m);
+    expect(step![0]).not.toMatch(/continue-on-error/);
+    expect(step![0]).toMatch(
+      /if ! git_data_rung2_rehearsal_gate[\s\S]*?\n\s*echo "::error::[\s\S]*?\n\s*exit 1\n/,
+    );
+
+    // THE CHECKOUT DEPTH IS PART OF THE INTERLOCK. Guard 4 reads the evidence file's commit
+    // provenance and HOLDs on a shallow clone; actions/checkout is depth-1 unless the step
+    // sets fetch-depth: 0. The create job has carried it since #8043; the review of #8210 found
+    // the interlock copied onto this job WITHOUT it, which held the replace route permanently
+    // — "until PM2" in every document, forever in fact. Pinned as the FIRST checkout step of
+    // the job carrying `fetch-depth: 0` under `with:`.
+    const replaceCheckout = /- uses: actions\/checkout@[0-9a-f]+[^\n]*\n((?:\s{8,}[^\n]*\n)*)/.exec(
+      replaceBlock,
+    );
+    expect(replaceCheckout, "checkout step not found in git_data_host_replace").not.toBeNull();
+    expect(replaceCheckout![1]).toMatch(/^\s*fetch-depth:\s*0\s*$/m);
+
+    // ORDERING. A gate that runs after the plan lets a held route pay for a plan and read a
+    // secret before refusing; after the apply it is not a gate at all.
+    const rRung2 = replaceBlock.search(/^\s*if ! git_data_rung2_rehearsal_gate\b/m);
+    const rPlan = replaceBlock.search(/^\s*terraform plan -no-color/m);
+    const rApply = replaceBlock.search(/^\s*terraform apply -no-color/m);
+    expect(rRung2).toBeGreaterThan(-1);
+    expect(rRung2).toBeLessThan(rPlan);
+    expect(rRung2).toBeLessThan(rApply);
   });
 
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {

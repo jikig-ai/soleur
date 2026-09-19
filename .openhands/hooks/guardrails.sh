@@ -164,23 +164,41 @@ if [[ -n "$FILE_PATH" && -z "$COMMAND" ]] && declare -f freeze_active_prefix >/d
 fi
 
 # guardrails:block-commit-on-main — Block git commit on main branch
-if grep -qE '(^|&&|\|\||;)\s*git\s+commit' <<<"$COMMAND"; then
-  GIT_DIR=""
-  if grep -qE '^\s*cd\s+' <<<"$COMMAND"; then
-    GIT_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-  elif grep -qoE 'git\s+-C\s+\S+' <<<"$COMMAND"; then
-    GIT_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
-  fi
-  if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
-    BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  elif [ -n "$HOOK_CWD" ] && [ -d "$HOOK_CWD" ]; then
-    BRANCH=$(git -C "$HOOK_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  else
-    BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  fi
-  if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
-    deny "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
-  fi
+# Same detection width as plugins/soleur/scripts/precommit-guard.sh (COMMIT_RE):
+# chain operators incl. bare |, env-assignment prefixes (LEFTHOOK=0), launchers
+# (sudo/env/…), and git options between `git` and `commit` (-C dir, --git-dir).
+if grep -qE '(^|[|;&])[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit' <<<"$COMMAND"; then
+  # Segment-scoped resolution, mirroring precommit-guard.sh: the -C / --git-dir
+  # / GIT_DIR that selects the repo is the one on the COMMIT's own segment; a
+  # `cd` earlier in the chain applies to segments after it. Resolving the first
+  # -C anywhere in the command refuses (or allows) the wrong repository on
+  # mixed chains like `git -C feat commit && git -C main commit`.
+  BRANCH=""
+  _seg_last_cd=""
+  while IFS= read -r _seg; do
+    _cd_hit="$(grep -oE '(^|[[:space:]])cd[[:space:]]+[^[:space:]]+' <<<"$_seg" | tail -n 1 | sed -E 's/.*cd[[:space:]]+//' || true)"
+    [[ -n "$_cd_hit" ]] && _seg_last_cd="$_cd_hit"
+    grep -qE '^[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit([[:space:]]|$)' <<<"$_seg" || continue
+    if _gd="$(grep -oE -- '--git-dir[=[:space:]][^[:space:]]+' <<<"$_seg" | tail -n 1 | sed -E 's/^--git-dir[=[:space:]]+//')" && [[ -n "$_gd" ]]; then
+      BRANCH=$(git --git-dir="$_gd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    elif _gd="$(grep -oE -- '(^|[[:space:]])GIT_DIR=[^[:space:]]+' <<<"$_seg" | tail -n 1 | sed -E 's/.*GIT_DIR=//')" && [[ -n "$_gd" ]]; then
+      BRANCH=$(git --git-dir="$_gd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    else
+      _c="$(grep -oE -- '-C[[:space:]]+[^[:space:]]+' <<<"$_seg" | tail -n 1 | sed -E 's/^-C[[:space:]]+//' || true)"
+      if [ -n "$_c" ] && [ -d "$_c" ]; then
+        BRANCH=$(git -C "$_c" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      elif [ -n "$_seg_last_cd" ] && [ -d "$_seg_last_cd" ]; then
+        BRANCH=$(git -C "$_seg_last_cd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      elif [ -n "$HOOK_CWD" ] && [ -d "$HOOK_CWD" ]; then
+        BRANCH=$(git -C "$HOOK_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      else
+        BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      fi
+    fi
+    if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+      deny "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
+    fi
+  done < <(printf '%s\n' "$COMMAND" | sed -E 's/&&|\|\||[;|]/\n/g')
 fi
 
 # guardrails:block-rm-rf-worktrees — Block rm -rf on worktree paths
@@ -301,10 +319,32 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)' <<
       CONFLICT_MARKERS_DIR="$HOOK_CWD"
     fi
   fi
+  # Pins mirror .claude/hooks/guardrails.sh — this copy is wired in
+  # .openhands/hooks.json and is the SAME guard, so it needs the same flags.
+  # `--no-color` (color.ui/color.diff=always wraps every line in ANSI so `^\+`
+  # never matches), `--no-ext-diff` (a diff.external replaces the patch body
+  # wholesale), and `-c core.quotePath=false` (quotePath defaults to TRUE, so a
+  # non-ASCII filename is emitted escaped). Measured: without --no-color, a real
+  # staged conflict marker under color.ui=always is NOT detected and the commit
+  # is silently allowed.
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
-    STAGED_DIFF=$(git -C "$CONFLICT_MARKERS_DIR" diff --cached 2>/dev/null || true)
+    CONFLICT_GIT=(git -c core.quotePath=false -C "$CONFLICT_MARKERS_DIR")
   else
-    STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
+    CONFLICT_GIT=(git -c core.quotePath=false)
+  fi
+  # FAIL LOUD, not open: `|| true` made an errored diff (index.lock race, corrupt
+  # index) indistinguishable from clean content. Not-a-repo is not an error —
+  # there is no staged content to guard — so only an in-repo failure denies.
+  if "${CONFLICT_GIT[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    STAGED_DIFF=""
+    DIFF_RC=0
+    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff \
+      --src-prefix=a/ --dst-prefix=b/ --no-relative 2>/dev/null) || DIFF_RC=$?
+    if [ "$DIFF_RC" -ne 0 ]; then
+      deny "COULD NOT VERIFY: \`git diff --cached\` failed, so staged content could not be checked for conflict markers. This is not a clean result — confirm the index is healthy before committing."
+    fi
+  else
+    STAGED_DIFF=""
   fi
   if grep -qE '^\+(<{7}|={7}|>{7})' <<<"$STAGED_DIFF"; then
     deny "BLOCKED: Staged content contains conflict markers (<<<<<<<, =======, or >>>>>>>). Resolve all conflicts before committing."

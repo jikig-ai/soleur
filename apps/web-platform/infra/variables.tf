@@ -322,7 +322,7 @@ variable "registry_volume_size" {
 
 # --- Epic #5274 Phase 3, Sub-PR 3.D (ADR-068) — LUKS-at-rest cutover volume ---
 variable "git_data_luks_volume_size" {
-  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf / git-data-cutover.sh FRESH_ROOT). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
+  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf; the LUKS cutover target, #8211). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
   type        = number
   default     = 10
 }
@@ -772,6 +772,17 @@ variable "grok_dogfood_private_ip" {
 # It is not an operator-supplied value and has no secret content.
 variable "inngest_expect_luks" {
   description = "Whether the dedicated inngest host should REFUSE to mount an ext4 /mnt/data (i.e. the LUKS recut has run)."
+  type        = bool
+  default     = false
+}
+
+# #6894 / ADR-142 — arms the "store is not on the encrypted volume" Better Stack alert
+# (betterstack-logs-alerts.tf). FALSE until the cutover has completed and been confirmed: before
+# the swap, /mnt/data is legitimately backed by the plaintext volume, so an armed rule would page
+# continuously — and a rule that pages when nothing is wrong is a rule that gets muted.
+# Flipped to true in the apply that follows a confirmed op=luks-cutover.
+variable "inngest_luks_cutover_complete" {
+  description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
   type        = bool
   default     = false
 }

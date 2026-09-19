@@ -12,7 +12,7 @@ preconditions:
 
 # Linear Issue Image Context
 
-This skill detects Linear issue references in caller input, fetches the issue body and recent comments, and streams the embedded screenshots directly into the active model conversation. The caller (typically `/soleur:one-shot` Step 0a or `/soleur:brainstorm` Phase 0.4) receives two return artifacts and is responsible for choosing the right one for each downstream consumer.
+This skill detects Linear issue references in caller input, fetches the issue body and recent comments, and streams the embedded screenshots directly into the active model conversation. The caller (typically `soleur:one-shot` Step 0a or `soleur:brainstorm` Phase 0.4) receives two return artifacts and is responsible for choosing the right one for each downstream consumer.
 
 ## Caller Contract
 
@@ -74,14 +74,14 @@ against it. Nothing here depends on the blob, so nothing forced that ordering.
        echo "linear-fetch: cannot verify the Soleur plugin installation — stopping before anything is fetched." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Nothing has been fetched yet, so nothing has leaked." >&2
        exit 2; }
 SCRUBBER="${CLAUDE_PLUGIN_ROOT}/skills/linear-fetch/scripts/redact-linear-urls.sh"
 [[ -r "$SCRUBBER" ]] || { echo "SOLEUR_LINEAR_FETCH_HALT reason=scrubber-unreadable scrubber=[$SCRUBBER]"
        echo "linear-fetch: the redaction primitive is missing from an otherwise valid Soleur install — stopping." >&2
        echo "  Expected at: [$SCRUBBER]" >&2
-       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Nothing has been fetched yet, so nothing has leaked." >&2
        exit 2; }
 echo "SOLEUR_LINEAR_FETCH_PREFLIGHT_OK scrubber=present"
@@ -212,23 +212,23 @@ The most common reasons (and what they mean):
 
 This skill is invoked via the `Skill` tool from inside another skill (not directly by the operator). Two known callers as of v1:
 
-- `/soleur:one-shot` Step 0a — parent fetches once, retains images for Steps 3+, substitutes `persist_safe_summary` into the Steps 1-2 Task subagent's prompt template.
-- `/soleur:brainstorm` Phase 0.4 — parent fetches once, retains images for Phase 2 Synthesis and Phase 3 Capture, embeds `persist_safe_summary` in Phase 0.5 domain-leader prompts.
+- `soleur:one-shot` Step 0a — parent fetches once, retains images for Steps 3+, substitutes `persist_safe_summary` into the Steps 1-2 Task subagent's prompt template.
+- `soleur:brainstorm` Phase 0.4 — parent fetches once, retains images for Phase 2 Synthesis and Phase 3 Capture, embeds `persist_safe_summary` in Phase 0.5 domain-leader prompts.
 
-The skill does NOT modify `/soleur:plan`, `/soleur:fix-issue`, or `/soleur:work` in v1. Those are tracked as a v2 follow-up issue at plan-finalization time.
+The skill does NOT modify `soleur:plan`, `soleur:fix-issue`, or `soleur:work` in v1. Those are tracked as a v2 follow-up issue at plan-finalization time.
 
 ## Manual Test Runbook
 
 The 10 spec acceptance-test scenarios. Operators run these against a real Linear workspace before marking the post-merge acceptance criteria done. Each step lists: input to type into Claude Code, expected disclosure, and post-condition to verify.
 
-1. **Happy path — single-issue, description-only image.** Pick a real `SOL-*` issue whose description contains one Linear-CDN-hosted image (markdown shape `![](URL)`). Type `fix <ID>` into a `/soleur:one-shot`-routed prompt. Expected: disclosure `Detected <ID> — fetched issue + 1 images from description and 0 comments.` Visual check: the image is rendered inline in the current conversation. Persist check: the plan subagent's plan document at `knowledge-base/project/plans/...` contains zero `uploads.linear.app` matches (`grep -c` returns 0).
+1. **Happy path — single-issue, description-only image.** Pick a real `SOL-*` issue whose description contains one Linear-CDN-hosted image (markdown shape `![](URL)`). Type `fix <ID>` into a `soleur:one-shot`-routed prompt. Expected: disclosure `Detected <ID> — fetched issue + 1 images from description and 0 comments.` Visual check: the image is rendered inline in the current conversation. Persist check: the plan subagent's plan document at `knowledge-base/project/plans/...` contains zero `uploads.linear.app` matches (`grep -c` returns 0).
 2. **Happy path — comments-only image.** Pick an issue with a text-only description and one image attached in a comment. Same invocation. Expected: `fetched issue + 1 images from description and 1 comments.`
 3. **Text-only issue.** Pick an issue with no images anywhere. Expected: `text-only issue, no images.`
 4. **Multi-issue input.** Type `compare <ID-1> and <ID-2>`. Expected: two disclosure lines, one per issue.
 5. **404 issue.** Type `fix SOL-999999` (or any non-existent identifier). Expected: silent no-op, no warning printed (false-positive path).
 6. **False-positive identifier.** Type `the PR-123 we shipped`. Expected: silent no-op for `PR-123` (404 → silently dropped). No warning, no MCP error surfacing to the operator.
 7. **Comments cap.** Pick an issue with 15+ comments, several of which contain images. Expected: only 10 most-recent processed; the disclosure's `M_comments_with_images` count is at most 10.
-8. **Persist-safe round-trip.** After a `/soleur:brainstorm` invocation that triggered the skill, run `grep -c 'uploads.linear.app' knowledge-base/project/brainstorms/<latest>.md`. Expected: `0`.
+8. **Persist-safe round-trip.** After a `soleur:brainstorm` invocation that triggered the skill, run `grep -c 'uploads.linear.app' knowledge-base/project/brainstorms/<latest>.md`. Expected: `0`.
 9. **CI grep gate fires.** Create a fixture branch outside Claude Code, manually `git add` and `git commit` a file containing `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png`, push, and open a PR. Expected: the `pii-grep` CI job fails the PR with a clear `::error::` annotation pointing at `knowledge-base/project/specs/feat-linear-issue-image-context/spec.md`.
 10. **Telemetry redaction.** Run any skill that emits incident telemetry while the conversation has linear-fetch context. Inspect `.claude/incidents/*.jsonl` after the test run. Expected: zero lines contain a Linear identifier (`SOL-\d+` or similar) or `uploads.linear.app`.
 

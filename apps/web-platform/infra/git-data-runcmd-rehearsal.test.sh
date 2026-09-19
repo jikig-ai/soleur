@@ -562,6 +562,10 @@ EXPECTED_PATHS = {
     "git_data_gc_service":              "/etc/systemd/system/git-data-gc.service",
     "git_data_gc_failure_service":      "/etc/systemd/system/git-data-gc-failure.service",
     "git_data_gc_timer":                "/etc/systemd/system/git-data-gc.timer",
+    "git_data_luks_reopen":             "/usr/local/bin/git-data-luks-reopen.sh",
+    "git_data_luks_reopen_service":     "/etc/systemd/system/git-data-luks-reopen.service",
+    "git_data_luks_reopen_failure_service": "/etc/systemd/system/git-data-luks-reopen-failure.service",
+    "git_data_luks_reopen_timer":       "/etc/systemd/system/git-data-luks-reopen.timer",
     "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive-placeholder.sh",
 }
 
@@ -1073,7 +1077,8 @@ run_case() {
 # not a counterweight and not `arm_skip` (nobody-owns-it is false for an essential package).
 # Hoisting it up there also keeps this arm out of the skip ceiling: it never becomes
 # skip-eligible. (An earlier revision of this line asserted "keeps the skip ceiling at 2".
-# The ceiling is _SKIP_CEILING=7, itemised in its own stanza below; the 2 was stale. #7570.)
+# The ceiling is _SKIP_CEILING=8, itemised in its own stanza below; the 2 was stale. #7570,
+# raised 7 -> 8 by #7535 Phase 2 for the T17-mutation arm.)
 if dash -n "$TMP/git-data-emit" 2>/dev/null; then pass; else fail "D1: emitter is not valid dash"; fi
 # A 3-arg call is what the usage line invites. Under a bare `shift 4` dash exits 2 having
 # emitted nothing — silently, on a host whose only diagnostic is this emitter.
@@ -1494,6 +1499,50 @@ cp "$TMP/doppler-dl.sh.orig" "$TMP/doppler-dl.sh"
 rm -rf "$TMP/out"; mkdir -p "$TMP/out"; : > "$TMP/out/capture.log"
 sed 's#^\s*\[ "\$rc" -eq 0 \] && exit 0$#  true#' "$TMP/drive.sh" > "$TMP/drive.noguard.sh"
 cp "$TMP/doppler-dl.sh.healthy" "$TMP/dl.case.sh"
+# The T17-mutation arm's rc-class allowlist, enumerated ONCE so the routing and the offered
+# classification cannot drift apart -- same construction as _T5M_ENV_RCS and _S1_ENV_RCS. A bare
+# string, not an array, so it stays safe under this file's `set -u` when word-split by
+# `printf '%s\n' $_T17M_ENV_RCS`.
+# 125: docker CLI / image pull. 100: apt under the container's outer `set -e`.
+_T17M_ENV_RCS='100 125'
+# The IN-CONTAINER execution marker, echoed only after BOTH apt cycles have succeeded. Its whole
+# job is to separate "the mutant ran and emitted nothing" (the real vacuity finding) from "apt
+# starved, so the mutant never ran" (an environment decline). Absence is POSITIVE evidence of a
+# pre-mutation failure rather than an inference from an empty capture -- same construction as
+# _S1_MARKER, and for the same reason: this arm's only assertion is `[ -s capture.log ]`, and an
+# empty capture is exactly what BOTH causes produce.
+_T17M_MARKER='T17M_APT_OK'
+# The FIXTURE marker. `drive.noguard.sh` is `drive.sh` with ONLY the rc-guard line removed, so it
+# still carries the :8099 bind guard, which exits 2 with this text. Without a rung keyed on it a
+# bind failure presents as marker-PRESENT + empty capture and lands on the vacuity `else` --
+# asserting "apt succeeded, so this is a genuine vacuity finding" about a deterministic fixture
+# defect. That is this issue's own misattribution class relocated from apt onto the capture
+# server, and stated more confidently than before the fix. Same rung, same reason, as T5.
+_T17M_FIXTURE_MARKER='FIXTURE: capture server never bound :8099'
+# PIN BOTH MARKERS TO THEIR PRODUCERS (review). The execution marker's producer is a bare literal
+# inside a single-quoted `bash -c` body, which takes no expansion, so nothing tied the two
+# together: renaming `_T17M_MARKER` and missing the echo would leave the grep permanently
+# unmatched, turning a genuine vacuity finding into "harness defect" and -- on any run whose rc
+# lands in _T17M_ENV_RCS -- into a silent green skip. `$0` is this file, which is where that
+# literal lives. Anchored so prose naming the marker cannot satisfy it.
+grep -qE "^ +echo ${_T17M_MARKER}\$" "$0" || {
+  echo "FAIL: the T17 mutation execution marker is absent from the in-container body — the arm would read every run as a non-execution" >&2
+  exit 1; }
+grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/drive.noguard.sh" || {
+  echo "FAIL: the fixture marker is absent from the mounted T17 driver — the fixture-defect rung is unreachable, so a deterministic bind failure would be reported as a vacuity finding" >&2
+  grep -n 'FIXTURE' "$TMP/drive.noguard.sh" >&2 || true
+  exit 1; }
+# MOUNT SOURCES EXIST (review). Same reason T5 does this at its own spin: docker exits 125 for
+# BOTH a failed image pull (environment) and a bad `-v` source (a defect in THIS file), and rc
+# alone cannot tell them apart. Since 125 is allowlisted in _T17M_ENV_RCS, a mistyped mount would
+# produce no marker, land on the env-decline rung and report a green skip forever. The paths are
+# static and this file owns all of them, so asserting them here removes the harness half of 125
+# rather than trying to classify docker's error text.
+for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noguard.sh" "$TMP/out"; do
+  [ -e "$_m" ] || {
+    echo "FAIL: T17 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
+    exit 1; }
+done
 docker run --rm \
   -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
   -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
@@ -1503,11 +1552,67 @@ docker run --rm \
   "$UBUNTU_BASE" bash -c '
     set -e
     cp /work/git-data-emit-src /work/git-data-emit
-    apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl python3 >/dev/null 2>&1
+    # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
+    # AND-OR list (measured), so with `&&` a failed apt-get UPDATE fell through into drive.sh
+    # with no python3/curl, the capture server never bound, and THIS arm read the resulting
+    # EMPTY capture as its own vacuity finding -- an environment failure announced as a
+    # mutation-battery defect. Split, either failure aborts the container with its own rc,
+    # which the host now captures instead of discarding it through a trailing || true.
+    # The >/dev/null 2>&1 is load-bearing for CONFIDENTIALITY, not only noise: behind an
+    # authenticated apt proxy apt error text embeds user:pass@host.
+    apt-get update -qq >/dev/null 2>&1
+    apt-get install -y -qq curl python3 >/dev/null 2>&1
+    echo T17M_APT_OK
     bash /work/drive.sh
-  ' >/dev/null 2>&1 || true
-if [ -s "$TMP/out/capture.log" ]; then pass; else
-  fail "T17 MUTATION: removing the rc guard did NOT make a healthy run emit — the check is vacuous"; fi
+  ' >"$TMP/out/t17m.stdout" 2>&1; _t17m_rc=$?
+# rc IS CAPTURED AND USED. The trailing `|| true` this replaces discarded the container's rc
+# entirely, and this arm asserts only `[ -s capture.log ]` -- so a starved apt produced an EMPTY
+# capture and the arm announced "the check is vacuous", reporting an ENVIRONMENT failure as a
+# mutation-battery vacuity finding. That is the misattribution class #7535 exists to close, and
+# splitting the `&&` alone does NOT fix it: the split makes the container exit 100 instead of
+# falling through, but `|| true` throws that 100 away just as thoroughly as it threw away the
+# fall-through. Both halves are required.
+#
+# WHY THE ONE-LINER LOOKED SAFE AND WAS NOT, stated here because the `&&` form reads as guarded:
+#   bash -c 'set -e; sh -c "exit 100" && true; echo reached'   ->  prints "reached"
+# `set -e` exempts every NON-FINAL member of an AND-OR list, so `apt-get update && apt-get
+# install ...` silently continues past a failed update.
+#
+# The assignment is on the SAME LINE as the command deliberately: a comment block between them
+# makes inserting a command there look safe, and any inserted command silently clobbers `$?`.
+# NOT `local` -- this arm is top-level, where `local` errors, leaves the variable unset, and
+# `set -u` kills the suite.
+_t17m_rc_note="docker rc=${_t17m_rc} (measured classes: 125 docker CLI/image pull, 100 apt under the container's outer set -e — offered as classification, not asserted as cause)"
+# Tail captured into a variable BEFORE the branch, not substituted inline in a `fail` argument:
+# same construction as _t5m_tail, and it keeps the arm clear of the shell-capture-exit lint.
+_t17m_tail="$(tail -3 "$TMP/out/t17m.stdout" 2>/dev/null)"
+if [ -s "$TMP/out/capture.log" ]; then pass
+elif grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
+  # FIXTURE RUNG, ABOVE BOTH MARKER RUNGS AND ABOVE THE VACUITY ELSE (review). The capture
+  # server failing to bind is DETERMINISTIC and actionable, so it must neither be absorbed into
+  # the environment bucket nor asserted as a vacuity finding. It presents as marker-PRESENT
+  # (apt succeeded, the bind guard is downstream of it) with an EMPTY capture, which is
+  # byte-identical to the shape the vacuity `else` claims to have identified -- so ordering this
+  # rung below it would make the arm assert the opposite of the truth. Same construction, and
+  # the same load-bearing ordering, as T5's fixture rung.
+  fail "T17 MUTATION: the capture server never bound :8099 — deterministic fixture defect, not a vacuity finding; whether removing the rc guard makes a healthy run emit is undemonstrated" \
+       "${_t17m_rc_note}; tail: ${_t17m_tail}"
+elif ! grep -qx "$_T17M_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null \
+     && printf '%s\n' $_T17M_ENV_RCS | grep -qx "$_t17m_rc"; then
+  # 1: the vacuity check itself, which the taken branch never got to make.
+  arm_skip "T17 MUTATION did not run: apt starved before the mutant executed, so this arm demonstrated nothing about whether removing the rc guard makes a healthy run emit. This is a FIXTURE decline, NOT the vacuity finding. ${_t17m_rc_note}" 1
+elif ! grep -qx "$_T17M_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
+  # rc OUTSIDE the allowlist with no marker is a defect in THIS file (a mistyped -v source makes
+  # docker exit 125 with no marker, but 125 is allowlisted; anything else is ours). Reading every
+  # non-zero rc as an environment decline would hand the skip bucket every harness defect too.
+  fail "T17 MUTATION: the container never printed ${_T17M_MARKER} and its rc is outside the environment allowlist — harness defect, not an environment skip; the vacuity check is undemonstrated" \
+       "${_t17m_rc_note}; tail: ${_t17m_tail}"
+else
+  # Reached only when apt PROVABLY succeeded, so "vacuous" here names the emitter and not the
+  # environment — the misattribution this arm previously made unconditionally.
+  fail "T17 MUTATION: removing the rc guard did NOT make a healthy run emit — the check is vacuous" \
+       "${_t17m_rc_note}; ${_T17M_MARKER} present and no ${_T17M_FIXTURE_MARKER%%:*}: line, so apt succeeded and the capture server bound; tail: ${_t17m_tail}"
+fi
 
 # ── S1 — the sshd_config stage must SURVIVE a fresh 24.04 boot ─────────────────────
 #
@@ -1567,8 +1672,24 @@ if [ -s "$TMP/sshd-stage.sh" ] && [ -s "$TMP/01-hardening.conf" ]; then
   cat > "$TMP/sshd-drive.sh" <<'S1DRV'
 set -e
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq openssh-server >/dev/null 2>&1
+# NAMED, NOT RESTRUCTURED -- and this site is the one that has to say why, because the other apt
+# sites in this file all got the opposite treatment. These two calls are ALREADY separate
+# statements rather than an `a && b` pair, so `set -e` DOES fire here: a failure aborts the
+# container with apt-s own rc, which _S1_ENV_RCS classifies and _s1_classify routes to
+# did-not-run. Nothing falls through, so there is no control flow to fix. What was missing was
+# only a NAME: a bare rc does not say WHICH of the two cycles starved, leaving a CI log to guess.
+#
+# THE HANDLER RE-RAISES THE MEASURED rc, NOT A HARDCODED 100 (review). An earlier draft exited
+# 100 unconditionally and claimed in this comment to "change no behaviour". That was false and in
+# the dangerous direction: `|| {...}` catches ANY non-zero status, so an OOM-killed apt (137) was
+# rewritten to 100, which _S1_ENV_RCS allowlists -- silently converting a harness-defect FAIL
+# into a green environment skip. Capturing `$?` first and re-raising it preserves exactly what
+# `set -e` would have produced, for every rc rather than only for apt-s own.
+# Both handlers emit BEFORE S1_FIXTURE_OK, so the classification stays did-not-run.
+apt-get update -qq >/dev/null 2>&1 \
+  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get update starved (openssh-server spin) — mirror unreachable or index corrupt (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
+apt-get install -y -qq openssh-server >/dev/null 2>&1 \
+  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get install openssh-server starved — mirror unreachable or package unavailable (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
 mkdir -p /etc/ssh/sshd_config.d
 cp /work/01-hardening.conf /etc/ssh/sshd_config.d/01-hardening.conf
 # Stub the emitter: D1/T5/T17 already cover the real one end-to-end. What S1 needs is a
@@ -2352,7 +2473,10 @@ _R3_R2D_PAT='^[[:space:]]*GIT_DATA_RUNCMD_DETAIL='
 # reporting site being swapped away inside any window. Measured with the arm's own analyzer, not
 # assumed: it now parses 7 reporting rows across 5 windows (it reported exactly that in the FAIL
 # that caught this change, which is the guard working).
+# (#8210) FIVE WINDOWS -> SIX: the LUKS-reopen arm item adds one reporting emit (its warning on
+# failure to arm), under its own window and its own detail variable (_reopen_arm_detail).
 _R3B_EXPECTED_SITES='gc_timer
+gitdata_luks_reopen_arm
 gitdata_nftables_metadata
 luks_err
 on_err
@@ -3283,8 +3407,19 @@ fi
 #   T5 mutation   2   (pre-existing)
 #   S1 healthy    2   (#7572: both container-dependent assertions in the healthy run)
 #   S1 mutation   3   (#7572: the mutant's rc, its fatal, and the privsep reproduction)
+#   T17 mutation  1   (#7535 Phase 2: the arm's single vacuity assertion. It became
+#                      skip-eligible when the `|| true` that discarded the container rc was
+#                      replaced by rc capture -- before that the arm could not decline, it
+#                      could only mis-report a starved apt as its own vacuity finding.)
 #   ------------------
-#   total         7   -- MEASURED, and it is 7 rather than 5. An earlier revision of this
+#   total         8   -- RAISED 7 -> 8 (#7535 Phase 2), ITEMISED. The T17 row is genuinely
+#                        reachable in the SAME environmental condition as the other three:
+#                        _T17M_ENV_RCS is the same '100 125' allowlist as _T5M_ENV_RCS and
+#                        _S1_ENV_RCS, and all four arms pull the same image, so one unpullable
+#                        image declines all of them at once. Keeping the ceiling at 7 would
+#                        therefore have produced exactly the spurious second failure the
+#                        stanza below describes, one arm later.
+#                     -- The 7 it replaces was MEASURED, and it was 7 rather than 5. An earlier revision of this
 #                        stanza asserted "NOT 7: T5 and S1 cannot both be maximally skipped in
 #                        a run that produced any verdict at all". That is false, and the
 #                        refutation is one line up: _T5M_ENV_RCS and _S1_ENV_RCS are the SAME
@@ -3295,11 +3430,12 @@ fi
 #                        SECOND, spurious failure blaming the arms for declaring cost they
 #                        genuinely have -- a false FAIL inside the mechanism ADR-188 built to
 #                        remove false FAILs.
-_SKIP_CEILING=7
+_SKIP_CEILING=8
 
 # THE STANZA'S DECLARED LIST MUST MATCH THE CODE. A ceiling itemised in a comment is a claim
 # about arm_skip call sites, and comments do not fail. Count the real call sites and assert
-# the number the stanza above declares -- three: T5 mutation, S1 healthy, S1 mutation. This
+# the number the stanza above declares -- four: T5 mutation, S1 healthy, S1 mutation, T17
+# mutation (#7535 Phase 2). This
 # is the only thing standing between the stanza and silent drift, and it is deliberately a
 # COUNT of call sites rather than a sum of their costs, because summing the costs from the
 # code would re-create the identity the paragraph above rejects.
@@ -3332,17 +3468,21 @@ _T5_MUT_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 MUTATION' "$0" || true)
 # assertion. Caught by running the suite, not by reading the edit.
 _SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0" || true)
 _S1_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "S1 ' "$0" || true)
-_PROBE_NAMED=$(( _T5_SKIPS + _S1_SKIPS ))
+# T17 JOINS THE ROSTER (#7535 Phase 2). Counted separately rather than folded into one of the
+# populations above, because the equality below is what makes an UNNAMED call site fail: summing
+# only the arms that exist today would let a future `arm_skip "T99 …"` pass by arithmetic.
+_T17_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T17 ' "$0" || true)
+_PROBE_NAMED=$(( _T5_SKIPS + _S1_SKIPS + _T17_SKIPS ))
 if [ "$_T5_SKIPS" -ge 1 ] \
    && [ "$_T5_SKIPS" -eq "$_T5_MUT_SKIPS" ] \
    && [ "$_PROBE_NAMED" -eq "$_SKIP_CALL_SITES" ]; then
   pass
 else
-  fail "arm_skip roster drift: T5=${_T5_SKIPS} (of which MUTATION=${_T5_MUT_SKIPS}), S1=${_S1_SKIPS}, probe-named total=${_PROBE_NAMED}, call sites=${_SKIP_CALL_SITES}. Either T5's primary became skip-eligible, or a call site's message no longer opens with a name the follow-through probe greps for — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
+  fail "arm_skip roster drift: T5=${_T5_SKIPS} (of which MUTATION=${_T5_MUT_SKIPS}), S1=${_S1_SKIPS}, T17=${_T17_SKIPS}, probe-named total=${_PROBE_NAMED}, call sites=${_SKIP_CALL_SITES}. Either T5's primary became skip-eligible, or a call site's message no longer opens with a name the follow-through probe greps for — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
        "The composite vacuity bound rests on T5's primary. Re-establish a bound before making it declinable."; fi
 
-if [ "$_SKIP_CALL_SITES" -eq 3 ]; then pass; else
-  fail "skip stanza drift: ${_SKIP_CALL_SITES} arm_skip call site(s) in this file, the itemised stanza declares 3 (T5 mutation; S1 healthy; S1 mutation)" \
+if [ "$_SKIP_CALL_SITES" -eq 4 ]; then pass; else
+  fail "skip stanza drift: ${_SKIP_CALL_SITES} arm_skip call site(s) in this file, the itemised stanza declares 4 (T5 mutation; S1 healthy; S1 mutation; T17 mutation)" \
        "The ceiling's itemisation is a claim about call sites; an unlisted one silently consumes another arm's budget."; fi
 if [ "$SKIPPED_ASSERTIONS" -le "$_SKIP_CEILING" ]; then pass; else
   fail "skip ceiling exceeded: ${SKIPPED_ASSERTIONS} assertion(s) declared-skipped, ceiling is ${_SKIP_CEILING}"; fi

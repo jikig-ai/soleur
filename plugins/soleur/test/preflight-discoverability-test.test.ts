@@ -207,6 +207,22 @@ describe("parseCommand", () => {
     expect(parseCommand(block)).toBe('curl -fsS https://x/health');
   });
 
+  test("Form A — a YAML-quoted inline scalar is the string INSIDE the quotes (#8149)", () => {
+    // 389 plans in the corpus write `command: "…"`. The runtime executed the
+    // quotes as part of the first word and returned rc=127 on every one of
+    // them; the mirror had stripped the pair all along. Symmetric pair only —
+    // a mismatched pair is not YAML and must reach the gate untouched.
+    const dq = `discoverability_test:\n  command: "bash scripts/prod-version-drift-b9-probe.sh"\n`;
+    expect(parseCommand(dq)).toBe("bash scripts/prod-version-drift-b9-probe.sh");
+    const sq = `discoverability_test:\n  command: 'printf 200'\n`;
+    expect(parseCommand(sq)).toBe("printf 200");
+    const mixed = `discoverability_test:\n  command: "printf 200'\n`;
+    expect(parseCommand(mixed)).toBe(`"printf 200'`);
+    // An interior quoted argument is untouched.
+    const inner = `discoverability_test:\n  command: curl -H "x: y" https://x/\n`;
+    expect(parseCommand(inner)).toBe('curl -H "x: y" https://x/');
+  });
+
   test("Form A — block scalar via `|`", () => {
     const block = [
       "discoverability_test:",
@@ -1791,6 +1807,24 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(norm, "normalize before the sandboxed exec").toBeLessThan(exec);
   });
 
+  test("F1d the runtime dequotes a YAML-quoted inline scalar inside the normalize window (#8149)", () => {
+    // parse-form-a.awk prints the `command:` line verbatim, so `command: "bash x"`
+    // reached `bash -c` with its quotes and every quoted command died rc=127 while
+    // the verb gate (which dequotes a COPY) passed. The strip must sit AFTER the
+    // trim and BEFORE the gate so every consumer sees the same string.
+    const norm = lines.findIndex((l) => /^CMD="\$\(printf '%s' "\$CMD" \| sed/.test(l));
+    const gate = lines.findIndex((l) => /^PROBE_GATE=/.test(l));
+    const dq = lines.findIndex((l) => /^\s*\\"\*\\"\) CMD="\$\{CMD#\\"\}"; CMD="\$\{CMD%\\"\}" ;;/.test(l));
+    const sq = lines.findIndex((l) => /^\s*\\'\*\\'\) CMD="\$\{CMD#\\'\}"; CMD="\$\{CMD%\\'\}" ;;/.test(l));
+    expect(dq, "double-quote strip arm must exist").toBeGreaterThan(norm);
+    expect(sq, "single-quote strip arm must exist").toBeGreaterThan(norm);
+    expect(dq, "strip before the verb gate").toBeLessThan(gate);
+    expect(sq, "strip before the verb gate").toBeLessThan(gate);
+    // Single-line scalars only: a multi-line block scalar is never dequoted.
+    const guard = lines.findIndex((l, i) => i > norm && i < dq && /^if \[\[ \$CMD != \*\$'\\n'\* \]\]; then$/.test(l));
+    expect(guard, "newline guard must precede the case").toBeGreaterThan(norm);
+  });
+
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
     const w = sandboxWindow();
     expect(w).toMatch(/--ro-bind "\$REPO_ROOT" "\$REPO_ROOT"/);
@@ -2311,7 +2345,28 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // missing file rather than on the property. It was replaced (old command kept in a dated
   // superseded note beneath the block), which is why the declaration is new although the plan
   // predates it.
-  const BASELINE_DECLARED_PROBES = 12;
+  // 13th declaration (2026-09-17): knowledge-base/project/plans/
+  // 2026-09-17-feat-upstream-devin-cloud-parity-asks-plan.md — the #8160
+  // drift-watcher liveness probe runs `gh run list` on this repo's Actions,
+  // which needs GH_TOKEN read access; unauthenticated reads cannot see run
+  // state. Declaration is genuine (the probe executes post-merge), so the
+  // baseline moves rather than the plan's line being deleted.
+  // 14th declaration — #7960 (PR #8272) raised this 13 -> 14. PLACEMENT: two-space child of
+  // `discoverability_test:` in the #7960 plan. TRUTH: the probe is
+  // `bash scripts/followthroughs/zot-last-err-redact-7500.sh`, which reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL) and was EXECUTED during that
+  // PR — the live run that returned `exit 3 … lacks err_redact_rev` on boot 78111e0e. NO
+  // SUBSTITUTE: the property is the CONTENT of warehouse rows the registry host POSTs, and that
+  // source has no unauthenticated read path; grepping the producer would verify the diff, not the
+  // delivery.
+  // 15th declaration — #8281 (PR #8276) raised this 14 -> 15. PLACEMENT: two-space child of
+  // `discoverability_test:` in the archived WikiSkill Phase 1 plan, single-line quoted scalar
+  // (preflight Check 10's flat reader treats a folded `>` scalar as absent). TRUTH: the probe is
+  // `bash scripts/followthroughs/compound-promote-outcome-8281.sh`, which reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL) to decode the
+  // SOLEUR_COMPOUND_PROMOTE_OUTCOME marker the cron emits. NO SUBSTITUTE: the property is that a
+  // SCHEDULED fire's marker reached Better Stack, and that sink has no unauthenticated read path.
+  const BASELINE_DECLARED_PROBES = 15;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

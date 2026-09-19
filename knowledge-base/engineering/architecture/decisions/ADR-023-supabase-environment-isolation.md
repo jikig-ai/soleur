@@ -118,6 +118,40 @@ rotate 6 Doppler keys, audit `ci` config, update
 `mu1-cleanup-guard.mjs` `DEV_PROJECT_REF` in a follow-up PR, close
 #2887).
 
+## Addendum — 2026-09-14 (#8028): credential reach is part of the isolation model
+
+Project-ref distinctness (above) says which DATABASE each environment talks to.
+It said nothing about which CREDENTIALS each environment may hold, and that gap
+is where an account-scoped token crosses the boundary: the Supabase
+Management-API token (`SUPABASE_ACCESS_TOKEN`, `sbp_…`) reaches every project
+the account owns, including prd, regardless of which config it is read from.
+
+**Decision.** No Doppler config that a `pull_request`-triggered job reads
+(`dev`, `dev_scheduled`, `dev_personal`) carries `SUPABASE_ACCESS_TOKEN`, and
+no `pull_request` job injects it from GitHub secrets. Consequence accepted:
+dev CI's post-migration PostgREST reload (`postgrest-reload-schema.sh`) takes
+the absence-soak (`::notice::`, exit 0) and dev relies on PostgREST's ~10-min
+schema poll; an operator forces the reload by hand with the token read from
+`prd_terraform` (the script's `--help` carries the one-liner). The token is
+currently in the `prd` root, inherited by every `prd_*` branch, plus the one
+Terraform-published GitHub Actions secret consumed only by `push`/`schedule`/
+`workflow_dispatch` workflows. The root placement is NOT by design: the deploy
+script materialises the whole root into the app container env and no app code
+reads this token — #7716 item 6 moves the migrate job onto the GH secret and
+removes the root copy (the reopen trigger below is unaffected).
+
+**Enforcement.** `tenant-integration.yml`'s "Assert Doppler config resolves to
+environment=dev" step also asserts the name is absent from `dev_scheduled`
+(`doppler secrets --only-names` + `jq has(...)`); the reload script's soak rule
+is keyed on the token's presence, so the assertion is the only thing keeping
+the dev path a notice rather than a live prd-reaching call.
+
+**Reopen trigger.** A per-project (not account-scoped) Management-API token
+class from Supabase, or a dev-only Supabase account, would let dev CI reload
+without the exposure — reopen then. Decision record: DC-1 in
+`knowledge-base/project/specs/feat-one-shot-8028-supabase-pat-retire/decision-challenges.md`
+(archived with the spec after ship).
+
 ## Cross-references
 
 - Issue: #2887 (P0 single-DB blast radius)

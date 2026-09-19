@@ -3,6 +3,10 @@ name: operator-digest
 description: "This skill should be used when generating the operator's weekly private comprehension digest: reading merged PRs, expenses, resolved incidents, and open action-required issues, then writing a plain-language digest.md without posting."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Operator Weekly Comprehension Digest
 
 Write a calm, plain-language weekly digest that tells the non-technical operator **what their
@@ -23,6 +27,11 @@ a business consequence or an action the owner can take, or it is cut.** No vanit
 numbers, no file paths, no jargon, no hype. Prefer "We made checkout faster" over "Merged #1234
 refactoring the Stripe webhook handler." Money in plain figures. Incidents in plain "what broke / is
 it fixed" terms.
+
+**In-the-moment sibling.** `soleur:operator-rephrase` applies this same register to a **single
+message, synchronously**, when something just said did not land. It is not bound by the
+business-consequence rule above — that rule is a digest rule. Use the digest weekly; use
+`soleur:operator-rephrase` in the turn.
 
 ## Date window
 

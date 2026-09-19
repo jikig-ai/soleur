@@ -3,6 +3,10 @@ name: pencil-setup
 description: "This skill should be used when Pencil MCP tools are unavailable. Detects Pencil Desktop or a Pencil-extension IDE and registers the MCP server with Claude Code CLI."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Pencil Setup
 
 Auto-detect, install, and register the Pencil MCP server with Claude Code CLI.
@@ -173,7 +177,7 @@ For freshly-created `.pen` files, commit an empty or scaffold placeholder before
 
 ## Tracked .pen collapse recovery
 
-Rule `cq-pencil-collapse-auto-recover` is canonical in the `.claude/hooks/pencil-collapse-guard.sh` header `[hook-enforced: pencil-collapse-guard.sh]`. It is the deterministic backstop for the `open_document` truncation bug (#3274 / upstream #4859): the PreToolUse `pencil-open-guard.sh` only denies *untracked* `.pen`, and the ux-design-lead / brand-workshop prose HARD-GATEs (PR #4855) rely on agent discipline.
+Rule `cq-pencil-collapse-auto-recover` is canonical in the `.claude/hooks/pencil-collapse-guard.sh` header `[hook-enforced: pencil-collapse-guard.sh]`. It is the deterministic backstop for the `open_document` truncation bug (#3274 / upstream #4859): the PreToolUse `pencil-open-guard.sh` only denies *untracked* `.pen`, and the soleur:product:design:ux-design-lead / brand-workshop prose HARD-GATEs (PR #4855) rely on agent discipline.
 
 The hook fires **PostToolUse** on `mcp__pencil__open_document`. When the on-disk `.pen` has collapsed to the unambiguous empty-document shape (`{"version":"...","children":[]}` or a 0-byte/whitespace truncation) while its committed `HEAD` blob is non-empty, it restores the file byte-identical from `git show HEAD:<path>` (written via a temp file + atomic `mv`) and emits a loud `additionalContext` system message. It is fail-open and non-destructive on every error path (`set -uo pipefail`, no `-e`; conservative collapse detection limited to the exact empty shape; symlinks are refused) — a guard that clobbers good work is strictly worse than the bug. It cannot *prevent* the truncation (PostToolUse runs after the write); the root-cause fix is upstream (#4859 Part B).
 

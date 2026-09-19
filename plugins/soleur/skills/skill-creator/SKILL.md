@@ -87,6 +87,8 @@ Skills use a three-level loading system to manage context efficiently:
 
 ## Skill Creation Process
 
+Before creating a new skill, agent, or user-facing capability, run its domain assessment (brainstorm Phase 0.5, or plan Phase 2.5 on a pipeline run) with CPO and CMO in the room (CTO when architectural); CMO may be omitted with a one-line rationale for operator-facing-only capabilities, CPO never. The rule's canonical text is `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` under `## New-capability leader mandate`.
+
 To create a skill, follow the "Skill Creation Process" in order, skipping steps only if there is a clear reason why they are not applicable.
 
 ### Step 1: Understanding the Skill with Concrete Examples
@@ -239,6 +241,8 @@ After testing the skill, users may request improvements. Often this happens righ
 4. Implement changes and test again
 
 ### Sharp Edges
+
+- **Name a skill or command as `soleur:<name>` and an agent by its registry id, nothing else** — no slash, dollar or at-sign prefix, no bare agent leaf — the adapter renders the harness form (`formatSkillInvocation` / `spawnAgent`, `plugins/soleur/lib/harness.ts`); a doc that writes one harness's form names a component the other three cannot resolve (ADR-226). If a shell variable or glob collides with a skill name, brace or rename it (`"${work}"`) — never widen the gate's boundary set. `plugins/soleur/test/harness-parity-tree.test.ts` is the gate; `bun plugins/soleur/scripts/harness-parity-census.ts --fix` repairs the mechanical shapes.
 
 - When a SKILL.md prose fence documents shell-active patterns by design (e.g., `bash -c "$VAR"`, process substitution, an eval-style invocation), label the fence ` ```text ` instead of ` ```bash ` and document the load-bearing mitigations (timeout, reject-regex, env scrub, trust source) in a per-skill Sharp Edges section. Otherwise the `skill-security-scan` calibration suite fails the first-party SKILL.md with HIGH-RISK on `code-execution` — there is no per-finding override mechanism for first-party legitimate uses. The fence is documentation; the orchestrator still dispatches via the Bash tool when it reads the prose, so runtime behavior is unchanged. See `knowledge-base/project/learnings/2026-05-20-skill-md-shell-active-prose-calibration-carve-out.md`.
 

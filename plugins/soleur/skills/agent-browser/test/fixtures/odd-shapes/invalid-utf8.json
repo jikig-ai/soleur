@@ -1,0 +1,4 @@
+{
+  "raw_b64": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOntpZH0sInJlc3VsdCI6eyJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiItIHRleHRib3ggXCJUb2tlblwiIFtyZWY9ZTFdOiBaWlFQLVNFTlRJTkVMLTc5ODAg/1xuLSB0ZXh0Ym94IFwiTm90ZXNcIiBbcmVmPWUyXTogWlpRUC1CRU5JR04tNzk4MCJ9XX19",
+  "note": "one 0xff byte inside the text block; {id} substituted by the stub"
+}

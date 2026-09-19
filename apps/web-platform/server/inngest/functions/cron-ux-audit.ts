@@ -213,6 +213,24 @@ async function uploadFindings(args: {
     { fn: "cron-ux-audit", findingsUploaded: true, screenshotCount: screenshots.length },
     "findings uploaded to ux-audit-artifacts bucket",
   );
+  // #7980 — the Sentry cron monitor is LIVENESS, not success. If the pinned
+  // @playwright/mcp rejected `--snapshot-mode none` (or any other arg), the MCP
+  // server would fail to connect, `claude -p` would still exit 0, and the audit
+  // would run with zero screenshots at a green monitor. The logger.info line
+  // above is INFO and Vector's WARN+ filter drops it, so the zero case must be
+  // mirrored as a queryable WARNING (layer 2 pino→Sentry + layer 3 Vector WARN+;
+  // cq-silent-fallback-must-mirror-to-sentry, hr-observability-layer-citation).
+  // Post-merge observation: `scripts/betterstack-query.sh --since 24h --grep
+  // zero-screenshots` after the first fire.
+  if (screenshots.length === 0) {
+    warnSilentFallback(new Error("cron-ux-audit captured zero screenshots"), {
+      feature: "cron-ux-audit",
+      op: "zero-screenshots",
+      message:
+        "findings uploaded but zero screenshots captured — Playwright MCP may have failed to connect; cron monitor stays green (liveness, not success)",
+      extra: { fn: "cron-ux-audit", findingsUploaded: true },
+    });
+  }
 }
 
 // =============================================================================
@@ -323,7 +341,23 @@ export async function cronUxAuditHandler({
               // 0.0.75 (not the newer 0.0.76) clears the .npmrc min-release-age
               // supply-chain policy (3-day floor) so both lockfiles resolve it.
               "@playwright/mcp@0.0.75",
+              // #7980 — the trailing `--snapshot-mode none` below: PA-31 §(g) of
+              // knowledge-base/legal/article-30-register.md. Measured 2026-09-14
+              // on the pinned 0.0.75 (Phase 0 step 4, the fleet-copy row):
+              // `browser_navigate` — which this cron holds, alongside
+              // Read/Glob/Grep — writes the raw accessibility tree of the
+              // authenticated bot-session page (input values included) to
+              // <cwd>/.playwright-mcp/page-*.yml and returns a link, i.e. one
+              // `Read` away from Anthropic-bound content. `--snapshot-mode none`
+              // is accepted by 0.0.75 and stops that write. This overlay is NOT
+              // routed through playwright-mcp-redact-proxy.py (python3 is not on
+              // the cron image path and the fleet holds no browser_snapshot), so
+              // the flag is the remedy here. Keep the three literals contiguous
+              // and the flag LAST — the cron-ux-audit.test.ts row anchors on
+              // `--user-data-dir=…` immediately followed by the flag pair.
               `--user-data-dir=${playwrightProfileDir}`,
+              "--snapshot-mode",
+              "none",
             ],
           },
         },

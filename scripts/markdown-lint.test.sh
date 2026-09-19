@@ -72,7 +72,9 @@ build_sandbox() {
   printf 'ignored-corpus/\n' > "$d/.markdownlintignore"
 
   # A clean synthesized corpus, spread over every asserted root, sized above the SUT's
-  # floor. 150 per root x 11 derived roots = 1650. Sized so M4 can drop a WHOLE root
+  # floor. 150 per root x 13 derived roots = 1950 (re-derived 2026-09-17: EXPECTED_ROOTS in the
+  # SUT carries 13 entries, not the 11 this line claimed; the `>= 8` guard below cannot see that
+  # drift). Sized so M4 can drop a WHOLE root
   # (-150) and still sit above MIN_SWEPT_FILES=1200 -- an earlier 170x8 sizing put the
   # drop at 1190, so M4 tripped the FLOOR and never reached the roots assertion it
   # exists to test. Re-derive this product whenever the root set or the floor moves.
@@ -90,7 +92,36 @@ build_sandbox() {
   # invisible to the whole suite.
   printf '# Root\n\nRepository-root document.\n' > "$d/ROOT-DOC.md"
 
-  ( cd "$d" && git init -q && git config gc.auto 0 \
+  # CONFIG-ISOLATED, AND gc.auto=0 / maintenance.auto=false BEFORE any object-creating command.
+  # This is not hygiene: `cp -a "$SANDBOX/."` is the next statement, and it races git's own
+  # background maintenance over the same `.git`. The snapshot then dies mid-walk:
+  #     cp: cannot stat '<sut>/./.git/objects/25': No such file or directory
+  #     FATAL: pristine snapshot failed
+  # That is a FATAL (exit 2) in a gate whose whole job is proving the linter can still fail, so
+  # the failure mode is "the guard could not run" wearing the costume of a red build. It fails
+  # the gate CLOSED, never as a false green.
+  #
+  # ON THE MECHANISM, because two sessions fixed this from opposite readings and the wrong one
+  # is the load-bearing mistake. It is NOT a repack. `git commit` spawns a detached
+  # `git maintenance run --auto --quiet --detach` child, and THAT is what mutates `.git` under
+  # the walk. `gc --auto` itself DECLINES at this size — measured 2026-09-17: 1950 fixtures
+  # produce 1950 loose objects and `git gc --auto` creates 0 packs, because gc.auto's 6700
+  # default is never reached. So do not "correct" this comment to say gc repacks and then
+  # delete a config line as redundant: `maintenance.auto false` is what stops the child being
+  # spawned at all, and `gc.auto 0` is belt-and-braces for hosts that reach the threshold.
+  #
+  # Evidence it is a race, not a corpus regression: on the IDENTICAL sha 74692f5b3 the
+  # markdown-lint job was `failure` in run 35220530556 and `success` in run 35221934128.
+  # Also reproduced locally and in CI job 105198403951. Being a race is what kept it alive.
+  #
+  # GIT_CONFIG_GLOBAL/SYSTEM=/dev/null keeps the "HERMETIC SANDBOX" claim in this file's header
+  # true: a host with `maintenance.strategy = incremental` set globally would otherwise run
+  # incremental-repack here and reopen the same window, so the two config lines alone would not
+  # hold. Measured: without the isolation that global setting is visible inside the sandbox;
+  # with it, it reads unset.
+  ( cd "$d" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+      && export GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM \
+      && git init -q && git config gc.auto 0 && git config maintenance.auto false \
       && git config user.email t@t && git config user.name t \
       && git add -A >/dev/null 2>&1 && git commit -q -m fixture >/dev/null 2>&1 ) \
     || die "sandbox git init/commit failed"

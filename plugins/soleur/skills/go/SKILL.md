@@ -2,7 +2,16 @@
 name: go
 description: This skill is the unified entry point that classifies intent and routes to the right workflow skill
 argument-hint: "[what you want to do]"
+# `/soleur:go` also ships as plugins/soleur/commands/go.md. Claude Code loads
+# plugin commands AND plugin skills into one slash menu, so without this the name
+# renders twice. `user-invocable: false` leaves the menu row to the command while
+# keeping this skill model-invocable — Skill(soleur:go) must keep working.
+user-invocable: false
 ---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
 
 # /soleur:go (Devin CLI entry point)
 

@@ -126,7 +126,7 @@ check "a template with NO emitter => HOLD" 1 "HOLD" "$TMP/no-emitter.yml"
 check "the HOLD names the blocking issue" 1 "#6982" "$TMP/no-emitter.yml"
 check "the HOLD names the sentinel it wants" 1 'sentry_dsn' "$TMP/no-emitter.yml"
 check "the HOLD names the ADR carrying the full checklist" 1 "ADR-149" "$TMP/no-emitter.yml"
-check "the HOLD names the runbook banner to clear" 1 "git-data-birth.md" "$TMP/no-emitter.yml"
+check "the HOLD names the runbook (release record)" 1 "git-data-birth.md" "$TMP/no-emitter.yml"
 check "the HOLD warns off the laptop-apply workaround" 1 "laptop" "$TMP/no-emitter.yml"
 
 # ── RELEASE: the emitter wired ────────────────────────────────────────────────────
@@ -448,6 +448,9 @@ r2_evidence "$R2/ok.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/1
 r2check "valid, hash-matched evidence => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/ok.env"
 
 r2check "absent evidence => HOLD" 1 "no rung-2 boot evidence" "$R2/ci.yml" "$R2/absent.env"
+# Regression pin (green on the pre-#8010 wording too): the no-evidence HOLD must keep naming
+# the runbook that carries the release record and the dispatch procedure.
+r2check "the no-evidence HOLD names the runbook" 1 "git-data-birth.md" "$R2/ci.yml" "$R2/absent.env"
 
 # Prose must not disengage a mechanical hold — the lesson the sentinel gate learned when a
 # trailing comment flipped it from HOLD to RELEASED.
@@ -1913,18 +1916,21 @@ _g "G29: a MERGE commit touching the evidence, one parent side carrying a payloa
 #     1  G29       a merge commit as the last evidence toucher (kills dropping `-m` from diff-tree)
 #            G10's needle moved from "PASS" to "rehearsal-PR shape" so it cannot be satisfied by
 #            the "untouched" PASS branch.
+# RAISED 149 -> 150 (#8010 sweep): +1 regression pin — the rung-2 no-evidence HOLD still
+#            names git-data-birth.md after the DO-NOT-DISPATCH wording was retired.
+_FLOOR=150
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 149 ]]; then
+if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
   # APPEND TO THE LEDGER TOO. The verdict is `exit $(( ${#FAILURES[@]} > 0 ))`, so a floor
   # that only bumps the counter exits non-zero by ACCIDENT — via the reconciliation below
   # tripping — and prints "fail() was tampered with", which is false and misdirects whoever
   # hits it. It also means the natural fix for that false message (relaxing the
   # reconciliation) silently disarms the floor: measured 102 assertions, "1 failed", exit 0.
-  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 149")
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 149. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is ${_FLOOR}")
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_FLOOR"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 149)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

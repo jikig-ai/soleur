@@ -3,6 +3,10 @@ name: schedule
 description: "This skill should be used when creating, listing, or deleting scheduled agent tasks via GitHub Actions cron workflows. It generates workflow YAML files that invoke Soleur skills on a recurring schedule using claude-code-action."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Schedule Manager
 
 Generate GitHub Actions workflow files that run Soleur skills on a schedule. Two modes:
@@ -20,7 +24,7 @@ Two skills exist with the name `schedule`. They serve different jobs:
 |---|---|
 | Push commits, open PRs, modify the user's repo | Analyze, summarize, report — no repo writes |
 | Use repo secrets (Doppler, Vercel, Cloudflare) | No secrets needed |
-| Invoke a Soleur skill (`/soleur:<skill>`) | Generic Claude API task |
+| Invoke a Soleur skill (`soleur:<skill>`) | Generic Claude API task |
 | Run Terraform / migrations / deploys | Read-only research, posting somewhere |
 
 Examples for `soleur:schedule`:
@@ -291,7 +295,7 @@ jobs:
             --max-turns <MAX_TURNS>
             --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch
           prompt: |
-            Run /soleur:<SKILL_NAME> on this repository.
+            Run soleur:<SKILL_NAME> on this repository.
             After your analysis is complete, create a GitHub issue titled
             "[Scheduled] <DISPLAY_NAME> - <today's date in YYYY-MM-DD format>"
             with the label "scheduled-<NAME>" summarizing your findings.
@@ -669,7 +673,7 @@ Display a summary:
 Schedule created: .github/workflows/scheduled-<NAME>.yml
 
   Name:      <DISPLAY_NAME>
-  Skill:     /soleur:<SKILL_NAME>
+  Skill:     soleur:<SKILL_NAME>
   Cron:      <CRON_EXPRESSION>
   Model:     <MODEL>
   Timeout:   <TIMEOUT> minutes
@@ -768,7 +772,7 @@ V1 reports mode + cron only. Richer state (`pending` / `disabled_inactivity` / `
 
 Remove a scheduled workflow.
 
-1. Verify `.github/workflows/scheduled-<name>.yml` exists. If not, display: "Schedule '<name>' not found. Run `/soleur:schedule list` to see available schedules."
+1. Verify `.github/workflows/scheduled-<name>.yml` exists. If not, display: "Schedule '<name>' not found. Run `soleur:schedule list` to see available schedules."
 
 2. If `$ARGUMENTS` contains `--yes` or `--confirm`, skip to step 3. Otherwise, use **AskUserQuestion tool** to confirm: "Delete schedule '<name>'? This will deactivate the cron trigger once merged to the default branch."
 
@@ -778,7 +782,7 @@ Remove a scheduled workflow.
 
 ## Known Limitations
 
-- **Skills only** — Agents cannot be reliably invoked in unattended CI. Only skills (`/soleur:<skill-name>`) are supported.
+- **Skills only** — Agents cannot be reliably invoked in unattended CI. Only skills (`soleur:<skill-name>`) are supported.
 - **Issue output only** — All scheduled runs report findings via GitHub Issues. PR and Discord output modes planned for v2.
 - **No state across runs** — Each scheduled run starts fresh. No mechanism to carry state between executions.
 - **No skill-specific arguments** — The template prompt does not pass arguments (e.g., `--tiers 0,3`) to the invoked skill. Manual prompt edit required after generation.

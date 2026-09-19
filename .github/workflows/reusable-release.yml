@@ -94,13 +94,16 @@ jobs:
     # WORKFLOWS: this `release` job runs on web-platform-release.yml's push arm while CI runs in
     # ci.yml, both started by the same push, and the deploy chain fires on CI's completion. So
     # the path is:
-    #     max(release, CI-to-`test`, resolve-target) + (migrate + verify-migrations + deploy)
-    # Naming the jobs rather than their total is deliberate: a literal would silently stale
-    # the moment any one of them changes. The second term WAS `await-ci` at 60; that job was
-    # deleted by #5806 and replaced by CI's own declared to-`test` path, currently 70, which is
-    # now the DOMINANT term. So `release` at 60 is dominated either way: every value <= 70
-    # yields an identical bound. 60 is kept because it is 2.5x the worst run observed here and
-    # raising it buys nothing; the first minute above 70 would force the threshold up.
+    #     max(ci_declared_path, release) + resolve-target + migrate + verify-migrations + deploy
+    # (one formula at every site since #8149; `resolve-target` is additive, run serially after
+    # whichever of CI and release finishes last). Naming the jobs rather than their total is
+    # deliberate: a literal would silently stale the moment any one of them changes. The CI
+    # term WAS `await-ci` (deleted by #5806) and is now CI's own declared longest needs:
+    # path, the dominant max() member on today's tree. So `release` is dominated: every value
+    # at or below the CI term yields an identical bound. 60 is kept because it is 2.5x the
+    # worst run observed here and raising it buys nothing; past the CI term it becomes the
+    # max() member and B9 reds unless the threshold moves with it (the 5 m slack in the
+    # constant covers rounding, not a release ceiling raise).
     #
     # WHAT THIS ACTUALLY BUYS. Its main value is not tidier arithmetic. This workflow declares
     # a workflow-level `concurrency: release-${{ inputs.component }}` with
@@ -115,7 +118,7 @@ jobs:
     #
     # COUPLED (#7160): scripts/prod-version-drift-check.test.sh assertion B9 reads this value
     # via jobs.release.uses and fails if the declared critical path exceeds the threshold.
-    # Deleting this line raises the computed path to 495 and reds B9 by name.
+    # Deleting this line reads as the GitHub 360 default and reds B9 by name.
     timeout-minutes: 60
     permissions:
       contents: write
@@ -745,6 +748,15 @@ jobs:
           # plugins/soleur (e.g. -> /etc/passwd) would land its target's
           # CONTENT in the build context and be baked into the image.
           cp -a --no-dereference plugins/soleur "$DEST"
+          # The plugin-root .mcp.json (#8156) is the Claude-Code-plugin
+          # registration surface only: the hosted agent-runner loads this
+          # vendored tree via plugins:[{type:"local"}] on a prod image with
+          # no python3 and no @playwright/mcp@0.0.78 — vendoring the file
+          # registers a guaranteed-failed playwright server on every hosted
+          # session. The plugin's manifest mcpServers (plugin.json) are
+          # unaffected. Pinned by the Guard-3 row in
+          # plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh.
+          rm -f "$DEST/.mcp.json"
           # Reject any symlink whose resolved target escapes the vendor tree.
           # readlink -f resolves transitively; the resolved absolute path is
           # compared against the absolute DEST. Symlinks that stay inside

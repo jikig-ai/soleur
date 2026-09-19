@@ -71,10 +71,16 @@ AGENTS: [N] agents across [M] categories
   workflow  ([count])  PR comments, spec analysis
 
 SKILLS: [N] skills
-  [List all skills found with brief descriptions]
+  Start here: /soleur:go <what you want> picks the right skill for you.
+  The operator-* family is not routed from /soleur:go; invoke it via the Skill tool.
+  [List all skills found with brief descriptions, grouped by the token before the
+   first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
+   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   no prefix last, under the heading "Core workflow".]
 
 MCP SERVERS:
   context7                    Framework documentation lookup
+  playwright                  Wrapped browser automation (mcp__plugin_soleur_playwright__*)
 
 Quick start: /soleur:go <what you want to do>
 Full docs:   See plugins/soleur/README.md
@@ -105,10 +111,16 @@ AGENTS: [N] agents across [M] categories
   workflow  ([count])  PR comments, spec analysis
 
 SKILLS: [N] skills
-  [List all skills found with brief descriptions]
+  Start here: /soleur:go <what you want> picks the right skill for you.
+  The operator-* family is not routed from /soleur:go; invoke it as /soleur:<skill>.
+  [List all skills found with brief descriptions, grouped by the token before the
+   first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
+   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   no prefix last, under the heading "Core workflow".]
 
 MCP SERVERS:
   context7                    Framework documentation lookup
+  playwright                  Wrapped browser automation (plugin-root .mcp.json)
 
 Quick start: /soleur:go <what you want to do>
 Full docs:   See plugins/soleur/README.md
@@ -136,7 +148,12 @@ AGENTS: [N] agents across [M] categories
   (same category breakdown as Claude block)
 
 SKILLS: [N] skills
-  (list all skills — invoke as /<skill-name>)
+  Start here: /go <what you want> picks the right skill for you.
+  The operator-* family is not routed from /go; invoke it as /<skill-name>.
+  (list all skills — invoke as /<skill-name> — grouped by the token before the
+   first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
+   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   no prefix last, under the heading "Core workflow".)
 
 MCP SERVERS:
   context7              Framework documentation lookup

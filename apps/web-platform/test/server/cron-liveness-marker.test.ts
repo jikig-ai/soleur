@@ -25,6 +25,7 @@ import {
   emitCronPersistResult,
   emitCronPersistSkipped,
   emitCronTier2Deferred,
+  emitRunReportSweep,
 } from "@/server/cron-liveness-marker";
 
 afterEach(() => {
@@ -92,6 +93,22 @@ const MARKERS = [
       digest_committed: 1 as const,
     },
     msg: "cron dedup skip",
+  },
+  {
+    name: "SOLEUR_RUN_REPORT_SWEEP",
+    emit: emitRunReportSweep,
+    payload: {
+      fn: "cron-stale-deferred-scope-outs" as const,
+      arm: "run-reports" as const,
+      total: 3,
+      closed: 2,
+      skipped: 1,
+      deferred: 0,
+      closedByLabel: { "scheduled-community-monitor": 2 },
+      skippedByReason: { "human-triaged": 1 },
+      dryRun: false,
+    },
+    msg: "run-report sweep changed state",
   },
 ] as const;
 

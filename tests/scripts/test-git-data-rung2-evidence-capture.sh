@@ -123,13 +123,40 @@ elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
   if printf '%s' "\$sql" | grep -q "level') = 'fatal'" \
      && printf '%s' "\$sql" | grep -q "host_name') = '" \
      && printf '%s' "\$sql" | grep -qE 'LIMIT (1000|[0-9]{4,})'; then
-    cat "$_fatal"
+    # (#8210) FATAL_SQL shares HOST_SQL's _BS_SCOPE, so under --reboot-since it too is bounded
+    # server-side. Model that here or the birth boot's own fatal reaches the reboot verdict and
+    # every healthy reset reads as a failure — which is a fixture defect, not a SUT one.
+    if [[ -n "\${REBOOT_SINCE_EXPECT:-}" ]]; then
+      if ! printf '%s' "\$sql" | grep -qF "dt > parseDateTimeBestEffort('\${REBOOT_SINCE_EXPECT}')"; then
+        echo "STUB: --reboot-since was passed but FATAL_SQL carries no matching dt> bound" >&2
+        exit 4
+      fi
+      _fb="\$(printf '%s' "\${REBOOT_SINCE_EXPECT}" | tr 'T' ' ')"
+      awk -v b="\$_fb" -F'"' '{ for (i=1;i<=NF;i++) if (\$i=="dt") { if (\$(i+2) > b) print; break } }' "$_fatal"
+    else
+      cat "$_fatal"
+    fi
   else
     echo "STUB: the FATAL query lost a load-bearing clause (level filter / host filter / LIMIT >= 1000)" >&2
     exit 4
   fi
 elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
-  cat "$3"
+  # (#8210) SEMANTIC DISPATCH on the server-side time bound, the same reason the FATAL branch
+  # above dispatches on its clauses rather than on a marker. Without it, --reboot-since could
+  # drop its \`dt >\` clause entirely and every reboot arm would still pass — the fixture rows
+  # would arrive regardless, so a STALE pre-reset reopen row would read as a fresh one. When
+  # REBOOT_SINCE_EXPECT is set, the clause must be present AND carry that exact timestamp, and
+  # rows are filtered to those the real server would have returned.
+  if [[ -n "\${REBOOT_SINCE_EXPECT:-}" ]]; then
+    if ! printf '%s' "\$sql" | grep -qF "dt > parseDateTimeBestEffort('\${REBOOT_SINCE_EXPECT}')"; then
+      echo "STUB: --reboot-since was passed but HOST_SQL carries no matching dt> bound (the window is not server-side)" >&2
+      exit 4
+    fi
+    _bound="\$(printf '%s' "\${REBOOT_SINCE_EXPECT}" | tr 'T' ' ')"
+    awk -v b="\$_bound" -F'"' '{ for (i=1;i<=NF;i++) if (\$i=="dt") { if (\$(i+2) > b) print; break } }' "$3"
+  else
+    cat "$3"
+  fi
 else
   echo "STUB: unrecognised query shape" >&2
   exit 3
@@ -186,7 +213,7 @@ printf '{"dt":"2026-07-29 11:59:00","host":"soleur-web-1"}\n' > "$ANCHOR_LIVE"
 
 # ── ARM 1: the PASS path ──────────────────────────────────────────────────────────
 HOSTROWS="$TMP/rows-pass.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes > "$HOSTROWS"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes > "$HOSTROWS"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
 OUT="$TMP/evidence-pass.env"
 out="$(run_sut --out "$OUT")"; rc=$?
@@ -232,6 +259,64 @@ else
   fail "evidence records the queries that produced it" "n/a" "$(cat "$OUT" 2>/dev/null)"
 fi
 
+# (#8010 item 1) …and WITH THE TABLE PAIR THE QUERY RAN AGAINST, BY VALUE. Pasting a recorded
+# query into betterstack-query.sh with no BS_TABLE exported returns rc=0 and zero rows from
+# the inngest DEFAULT table — which reads as "dark boot" on a perfectly good birth. The pin
+# asserts the value, not presence: a presence pin would pass a wrong derivation
+# (`${BS_TABLE}_s3` -> `…prd_logs_s3`, a collection that does not exist). This arm runs the
+# SUT under `env -u BS_TABLE -u BS_TABLE_S3` so an inherited shell export cannot flake it.
+# shellcheck source=/dev/null
+source "${ROOT}/scripts/lib/betterstack-sources.sh"
+OUT_TABLE="$TMP/evidence-pass-table.env"
+env -u BS_TABLE -u BS_TABLE_S3 \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_TABLE" >/dev/null 2>&1 || true
+if grep -q "^# TABLE: BS_TABLE=${BS_GIT_DATA_TABLE} BS_TABLE_S3=${BS_GIT_DATA_TABLE_S3}$" "$OUT_TABLE" 2>/dev/null; then
+  pass "evidence records the table pair it queried by value"
+else
+  fail "evidence records the table pair it queried by value" "n/a" "$(grep -n 'TABLE' "$OUT_TABLE" 2>/dev/null || echo '<no TABLE line>')"
+fi
+# The default arm's expected value is the lib CONSTANT, so a SUT printing the constant instead
+# of the live table would pass it (measured: mutant M3). Two override arms make the pin follow
+# the INPUT: BS_TABLE pinned alone records the placeholder (this file cannot see what
+# betterstack-query.sh derived); BS_TABLE + BS_TABLE_S3 pinned records the pair verbatim.
+# And the default arm is only meaningful if the constant has the git-data shape.
+if [[ "$BS_GIT_DATA_TABLE" =~ ^t[0-9]+_.*_logs$ ]]; then
+  pass "sources lib names a git-data-shaped table (default arm non-vacuous)"
+else
+  fail "sources lib names a git-data-shaped table (default arm non-vacuous)" "n/a" "$BS_GIT_DATA_TABLE"
+fi
+for _case in "t520508_override_prd_logs::<derived by betterstack-query.sh>" \
+             "t520508_x_metrics:t520508_x_archive:t520508_x_archive"; do
+  IFS=: read -r _t _s3in _s3want <<<"$_case"
+  OUT_OVR="$TMP/evidence-pass-table-$_t.env"
+  env -u BS_TABLE -u BS_TABLE_S3 ${_s3in:+BS_TABLE_S3="$_s3in"} BS_TABLE="$_t" \
+    BETTERSTACK_QUERY_SH="$STUB" \
+    BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+    bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+      --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_OVR" >/dev/null 2>&1 || true
+  if grep -q "^# TABLE: BS_TABLE=${_t} BS_TABLE_S3=${_s3want}$" "$OUT_OVR" 2>/dev/null; then
+    pass "evidence follows an overridden table pair (${_t})"
+  else
+    fail "evidence follows an overridden table pair (${_t})" "n/a" "$(grep -n 'TABLE' "$OUT_OVR" 2>/dev/null || echo '<no TABLE line>')"
+  fi
+done
+# A non-identifier table name is refused as an INPUT error (64), never TRANSIENT (2, which the
+# rehearsal workflow retries), and nothing is written. The stub ignores the table, so only the
+# SUT's own guard can refuse it.
+OUT_BAD="$TMP/evidence-pass-table-bad.env"
+out="$(env -u BS_TABLE -u BS_TABLE_S3 BS_TABLE='t520508_bad;x_logs' \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_BAD" 2>&1)"; rc=$?
+if [[ "$rc" -eq 64 ]]; then pass "a non-identifier table name => exit 64 (input error, not TRANSIENT)"; else
+  fail "a non-identifier table name => exit 64 (input error, not TRANSIENT)" "$rc" "$out"; fi
+if [[ ! -f "$OUT_BAD" ]]; then pass "a refused table name writes NO evidence file"; else
+  fail "a refused table name writes NO evidence file" "$rc" "an evidence file was written"; fi
+
 # ── ARM 2: the FAIL path — a fatal from this host ─────────────────────────────────
 #
 # (#7025, R5) THE FAIL ARM IS `level=fatal`, NOT a `\bno\b` MATCH ON THE BOOLEANS.
@@ -256,7 +341,7 @@ if [[ "$out" == *"luks_open"* ]]; then pass "the FAIL names the stage that died"
 # find exactly that, so "ended fine" must not overwrite "went wrong".
 HOSTROWS_BOTH="$TMP/rows-both.jsonl"
 { row bootstrap fatal detail="transient"
-  row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes; } > "$HOSTROWS_BOTH"
+  row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes; } > "$HOSTROWS_BOTH"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_BOTH"
 OUT_BOTH="$TMP/evidence-both.env"
 out="$(run_sut --out "$OUT_BOTH")"; rc=$?
@@ -266,11 +351,46 @@ if [[ "$rc" -eq 1 ]]; then pass "a fatal ALONGSIDE a boot_complete => still FAIL
 # The inherited `\bno\b` check is retained as a SECOND FAIL trigger, because it costs nothing
 # and it is the arm that fires if the consumer's assertions are ever weakened to real values.
 HOSTROWS_NO="$TMP/rows-no.jsonl"
-row boot_complete info luks_mounted=no repo_root=yes hooks_path=yes provision=yes > "$HOSTROWS_NO"
+row boot_complete info luks_mounted=no repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes > "$HOSTROWS_NO"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_NO"
 out="$(run_sut --out "$TMP/evidence-no.env")"; rc=$?
 if [[ "$rc" -eq 1 ]]; then pass "boot_complete with a FALSE assertion => FAIL"; else
   fail "boot_complete with a FALSE assertion => FAIL" "$rc" "$out"; fi
+
+# (#8210) THE SAME ARM FOR THE FIFTH TERMINAL BOOLEAN, and it is not a copy for symmetry: the
+# FAIL alternation gained `luks_reopen_unit` in this change, and a name added to a regex with no
+# fixture driving it is a guard nobody has seen fire. Unlike its four siblings this one is
+# MEASURED on the host (systemctl is-enabled + Result=success), so `no` is a value real telemetry
+# can actually carry — which is precisely why it must FAIL rather than warn: a replace is the
+# only route by which the boot-time reopen reaches the live host.
+HOSTROWS_REOPEN_NO="$TMP/rows-reopen-no.jsonl"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=no \
+  > "$HOSTROWS_REOPEN_NO"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_REOPEN_NO"
+out="$(run_sut --out "$TMP/evidence-reopen-no.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "boot_complete with luks_reopen_unit=no => FAIL (#8210)"; else
+  fail "boot_complete with luks_reopen_unit=no => FAIL (#8210)" "$rc" "$out"; fi
+if [[ ! -f "$TMP/evidence-reopen-no.env" ]]; then
+  pass "an unarmed reopen unit writes NO evidence file"; else
+  fail "an unarmed reopen unit writes NO evidence file" "$rc" "evidence was written on a FAIL"; fi
+
+# (#8210, review) ABSENCE IS NOT A PASS. A boot_complete row that simply LACKS the measured
+# boolean — the shape a bootstrap edit that drops the kwarg produces — used to pass this arm
+# (only an explicit "no" was rejected) and write gate-releasing evidence. The poll already
+# refused it; now both readers agree.
+HOSTROWS_REOPEN_ABSENT="$TMP/rows-reopen-absent.jsonl"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes \
+  > "$HOSTROWS_REOPEN_ABSENT"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_REOPEN_ABSENT"
+out="$(run_sut --out "$TMP/evidence-reopen-absent.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "boot_complete LACKING luks_reopen_unit => FAIL, not PASS (#8210)"; else
+  fail "boot_complete LACKING luks_reopen_unit => FAIL, not PASS (#8210)" "$rc" "$out"; fi
+if [[ "$out" == *"WITHOUT a luks_reopen_unit=yes"* ]]; then
+  pass "…and the FAIL names the ABSENT field, not a false assertion"; else
+  fail "…and the FAIL names the ABSENT field, not a false assertion" "$rc" "$out"; fi
+if [[ ! -f "$TMP/evidence-reopen-absent.env" ]]; then
+  pass "an unasserted reopen unit writes NO evidence file"; else
+  fail "an unasserted reopen unit writes NO evidence file" "$rc" "evidence was written on absence"; fi
 
 # ── ARM 3: TRANSIENT — the host said nothing, but the channel is demonstrably live ──
 HOSTROWS_EMPTY="$TMP/rows-empty.jsonl"
@@ -556,7 +676,7 @@ chmod +x "$_shim_dir/curl"
 # first on PATH). NOT a seam in the script under test — the script has no host-override seam.
 _ADM_HOST="stub.betterstackdata.com"
 _adm_rows="$TMP/rows-adm.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes > "$_adm_rows"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes > "$_adm_rows"
 cat > "$TMP/bs-record.sh" <<RECSTUB
 #!/usr/bin/env bash
 printf '%s' "\$1" > "${_seen}/\$(date +%s%N)-\$\$.sql"
@@ -633,7 +753,7 @@ cp -r "$FIX" "$FIX_BROKEN" || { echo "HARNESS ABORT: could not copy the fixture 
 rm -f "$FIX_BROKEN/git-data-gc.timer" \
   || { echo "HARNESS ABORT: could not remove the A12 payload" >&2; exit 2; }
 HOSTROWS_DERIV="$TMP/rows-deriv.jsonl"
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes > "$HOSTROWS_DERIV"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes > "$HOSTROWS_DERIV"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_DERIV"
 out="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
        BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
@@ -843,6 +963,16 @@ cat > "$SENTRY_STUB" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SENTRY_ARGV_FILE"
 [[ -n "${STUB_RC:-}" && "${STUB_RC}" != "0" ]] && { echo "stubbed refusal"; exit "$STUB_RC"; }
+# (#8210) ARGV DISPATCH, for the same reason the Better Stack stub dispatches semantically: the
+# real reader sends TWO different queries. The default host-events read is pinned to
+# `level:fatal`; only the --stage read can return a level:info luks_reopen_ok row. A stub that
+# answered identically would hand the reopen row to the FATAL consult, making a healthy reset
+# read as a fatal — and, in the other direction, would let the SUT drop --stage entirely and
+# still pass. STUB_STAGE_BODY answers the --stage call; STUB_BODY answers the fatal call.
+if printf '%s' "$*" | grep -q -- '--stage '; then
+  printf '%s\n' "${STUB_STAGE_BODY:-{\"data\":[]\}}"
+  exit 0
+fi
 printf '%s\n' "${STUB_BODY:-{\"data\":[]\}}"
 exit 0
 STUBEOF
@@ -1050,7 +1180,7 @@ HOSTROWS_CHATTY="$TMP/rows-chatty.jsonl"
 for _i in $(seq 1 50); do
   row mount info "detail=routine emit ${_i}" >> "$HOSTROWS_CHATTY"
 done
-row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes >> "$HOSTROWS_CHATTY"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes >> "$HOSTROWS_CHATTY"
 FATALROWS_CHATTY="$TMP/rows-chatty-fatal.jsonl"
 row luks_open fatal "rc=32" "detail=mount(2) ESRCH" > "$FATALROWS_CHATTY"
 
@@ -1309,6 +1439,154 @@ if [[ "$passes" -ne $((_canary_p + 1)) || "$fails" -ne $((_canary_f + 1)) || "${
 fi
 fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'
 printf '  ok   instrument self-test: pass(), fail() and the ledger all moved (control retracted)\n'
+# ══ (#8210) ARMS 28-38: the --reboot-since verdict table ═══════════════════════════
+#
+# The reboot arm's whole job is to distinguish a mapper that REOPENED after a hard reset from
+# one that merely looks fine. Three things make that non-trivial and each gets an arm: the
+# production shape ALWAYS carries pre-reset rows (so the window must be server-side, not a
+# post-filter); either channel alone can miss the row (so both are read); and a `noop` after a
+# power cycle is impossible, so it is a FAIL rather than a pass.
+_RS='2026-07-29T12:30:00'
+rrow() {  # $1=dt-suffix (HH:MM:SS) $2=stage $3=level [k=v ...]
+  local dt="$1" stage="$2" level="$3"; shift 3
+  local extra="" kv
+  for kv in "$@"; do extra="${extra},\"${kv%%=*}\":\"${kv#*=}\""; done
+  printf '{"dt":"2026-07-29 %s","stage":"%s","level":"%s","host_name":"%s"%s}\n' \
+    "$dt" "$stage" "$level" "$HOST" "$extra"
+}
+_REOPENED_BODY='{"data":[{"timestamp":"2026-07-29T12:30:30+00:00","level":"info","host_name":"H","stage":"luks_reopen_ok","action":"reopened"}]}'
+_NOOP_BODY='{"data":[{"timestamp":"2026-07-29T12:30:30+00:00","level":"info","host_name":"H","stage":"luks_reopen_ok","action":"noop"}]}'
+_EMPTY_BODY='{"data":[]}'
+
+# $1 is the body the --stage read returns; the fatal read always gets an empty set here, since
+# every fatal arm in this block models the fatal through the Better Stack channel.
+run_reboot() {  # $1=sentry --stage body, rest appended
+  local body="$1"; shift
+  STUB_STAGE_BODY="$body" REBOOT_SINCE_EXPECT="$_RS" run_sut_sentry 0 '{"data":[]}' --reboot-since "$_RS" "$@"
+}
+
+# ARM 28 (MUST-PASS, the production shape) — pre-reset rows AND a post-reset reopen.
+# F-B: a fatal and a boot_complete from the BIRTH boot, an hour before the reset, plus the
+# reopen 30 s after it. Anything that reads the pre-reset fatal as current FAILs this arm.
+HOSTROWS_RB_PROD="$TMP/rows-rb-prod.jsonl"
+{
+  rrow 11:30:00 luks_open fatal rc=32
+  rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes
+  rrow 12:30:30 luks_reopen_ok info action=reopened target=/mnt/git-data-luks restarts=0
+} > "$HOSTROWS_RB_PROD"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_PROD"
+OUT_RB="$TMP/ev-rb-prod.env"; : > "$OUT_RB"
+out="$(run_reboot "$_EMPTY_BODY" --out "$OUT_RB")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then pass "ARM 28: the production shape (pre-reset fatal + post-reset reopen) => PASS"; else
+  fail "ARM 28: the production shape (pre-reset fatal + post-reset reopen) => PASS" "$rc" "$out"; fi
+if grep -q '^RUNG2_REBOOT_REOPEN=PASS$' "$OUT_RB"; then pass "ARM 28: appends RUNG2_REBOOT_REOPEN=PASS"; else
+  fail "ARM 28: appends RUNG2_REBOOT_REOPEN=PASS" "$rc" "$(cat "$OUT_RB")"; fi
+if [[ "$(grep -c '^RUNG2_REBOOT_REOPEN=PASS$' "$OUT_RB")" -eq 1 ]]; then pass "ARM 28: appended exactly once"; else
+  fail "ARM 28: appended exactly once" "$rc" "$(cat "$OUT_RB")"; fi
+if grep -q '^RUNG2_REBOOT_REOPEN_CHANNEL=betterstack$' "$OUT_RB"; then pass "ARM 28: records the channel that carried it"; else
+  fail "ARM 28: records the channel that carried it" "$rc" "$(cat "$OUT_RB")"; fi
+if grep -q '^RUNG2_REBOOT_REOPEN_RESTARTS=0$' "$OUT_RB"; then pass "ARM 28: records the restart count"; else
+  fail "ARM 28: records the restart count" "$rc" "$(cat "$OUT_RB")"; fi
+
+# ARM 29 — the Sentry call shape. A stub that answered regardless of argv could not detect the
+# caller dropping the window or the stage filter, which is the whole point of reading Sentry
+# here: the success row is level:info on an UNROUTED stage, invisible to the default query.
+if grep -q -- "--stage luks_reopen_ok" "$SENTRY_ARGV" && grep -q -- "--start $_RS" "$SENTRY_ARGV" \
+   && grep -q -- "--end" "$SENTRY_ARGV"; then
+  pass "ARM 29: the Sentry read is --stage luks_reopen_ok with an explicit --start/--end window"
+else
+  fail "ARM 29: the Sentry read is --stage luks_reopen_ok with an explicit --start/--end window" 0 "$(cat "$SENTRY_ARGV")"
+fi
+
+# ARM 30 — Better Stack silent, Sentry carries it. Either channel alone is a single point of
+# failure; the emitter's Better Stack POST has no retry.
+HOSTROWS_RB_EMPTY="$TMP/rows-rb-empty.jsonl"
+rrow 11:31:00 boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes > "$HOSTROWS_RB_EMPTY"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_EMPTY"
+OUT_RB2="$TMP/ev-rb-sentry.env"; : > "$OUT_RB2"
+out="$(run_reboot "$_REOPENED_BODY" --out "$OUT_RB2")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then pass "ARM 30: Sentry-only reopen => PASS"; else
+  fail "ARM 30: Sentry-only reopen => PASS" "$rc" "$out"; fi
+if grep -q '^RUNG2_REBOOT_REOPEN_CHANNEL=sentry$' "$OUT_RB2"; then pass "ARM 30: channel recorded as sentry"; else
+  fail "ARM 30: channel recorded as sentry" "$rc" "$(cat "$OUT_RB2")"; fi
+
+# ARM 31 — F-A: the ONLY reopen row is PRE-reset. This is the arm the semantic stub dispatch
+# exists for: with the bound dropped, the stale row arrives and the run reports PASS over a
+# host that never reopened.
+HOSTROWS_RB_STALE="$TMP/rows-rb-stale.jsonl"
+rrow 11:30:30 luks_reopen_ok info action=reopened target=/mnt/git-data-luks restarts=0 > "$HOSTROWS_RB_STALE"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_STALE"
+OUT_RB3="$TMP/ev-rb-stale.env"; : > "$OUT_RB3"
+out="$(run_reboot "$_EMPTY_BODY" --out "$OUT_RB3")"; rc=$?
+if [[ "$rc" -eq 2 ]]; then pass "ARM 31: a reopen row from BEFORE the reset => TRANSIENT (2), never PASS"; else
+  fail "ARM 31: a reopen row from BEFORE the reset => TRANSIENT (2), never PASS" "$rc" "$out"; fi
+if ! grep -q 'RUNG2_REBOOT_REOPEN' "$OUT_RB3"; then pass "ARM 31: TRANSIENT appends nothing"; else
+  fail "ARM 31: TRANSIENT appends nothing" "$rc" "$(cat "$OUT_RB3")"; fi
+
+# ARM 32 — nothing at all, anchor live: an ingest miss must not burn a paid host.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_EMPTY"
+out="$(run_reboot "$_EMPTY_BODY" --out "$TMP/ev-rb-none.env")"; rc=$?
+if [[ "$rc" -eq 2 ]]; then pass "ARM 32: no reopen row in either channel, anchor live => TRANSIENT (2)"; else
+  fail "ARM 32: no reopen row in either channel, anchor live => TRANSIENT (2)" "$rc" "$out"; fi
+
+# ARM 33 — a POST-reset fatal. The fatal arm runs first and wins over any reopen row.
+HOSTROWS_RB_FATAL="$TMP/rows-rb-fatal.jsonl"
+{
+  rrow 12:30:30 luks_reopen_ok info action=reopened restarts=0
+  rrow 12:31:00 luks_reopen fatal action=mount rc=1
+} > "$HOSTROWS_RB_FATAL"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_FATAL"
+OUT_RB4="$TMP/ev-rb-fatal.env"; : > "$OUT_RB4"
+out="$(run_reboot "$_EMPTY_BODY" --out "$OUT_RB4")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "ARM 33: a post-reset fatal FAILs (1) even with a reopen row present"; else
+  fail "ARM 33: a post-reset fatal FAILs (1) even with a reopen row present" "$rc" "$out"; fi
+if ! grep -q 'RUNG2_REBOOT_REOPEN' "$OUT_RB4"; then pass "ARM 33: FAIL appends nothing"; else
+  fail "ARM 33: FAIL appends nothing" "$rc" "$(cat "$OUT_RB4")"; fi
+
+# ARM 34 — action=noop after a hard reset. The mapper cannot survive a power cycle, so this is
+# the host or the probe lying, not a pass.
+HOSTROWS_RB_NOOP="$TMP/rows-rb-noop.jsonl"
+rrow 12:30:30 luks_reopen_ok info action=noop restarts=0 > "$HOSTROWS_RB_NOOP"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_NOOP"
+out="$(run_reboot "$_EMPTY_BODY" --out "$TMP/ev-rb-noop.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "ARM 34: action=noop after a reset => FAIL (1)"; else
+  fail "ARM 34: action=noop after a reset => FAIL (1)" "$rc" "$out"; fi
+
+# ARM 35 — action=mounted, same reasoning.
+HOSTROWS_RB_MOUNTED="$TMP/rows-rb-mounted.jsonl"
+rrow 12:30:30 luks_reopen_ok info action=mounted restarts=0 > "$HOSTROWS_RB_MOUNTED"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_MOUNTED"
+out="$(run_reboot "$_EMPTY_BODY" --out "$TMP/ev-rb-mounted.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "ARM 35: action=mounted after a reset => FAIL (1)"; else
+  fail "ARM 35: action=mounted after a reset => FAIL (1)" "$rc" "$out"; fi
+
+# ARM 36 — a Sentry luks_reopen_ok row whose action is not reopened is equally a FAIL, so the
+# non-reopened check cannot be satisfied by reading only one channel.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_EMPTY"
+out="$(run_reboot "$_NOOP_BODY" --out "$TMP/ev-rb-snoop.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "ARM 36: a Sentry-only action=noop row => FAIL (1)"; else
+  fail "ARM 36: a Sentry-only action=noop row => FAIL (1)" "$rc" "$out"; fi
+
+# ARM 37 (HARNESS) — the stub's own dispatch must be load-bearing: with REBOOT_SINCE_EXPECT set
+# to a timestamp the SUT does not use, the stub refuses (rc 4) and the run cannot report PASS.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_PROD"
+out="$(REBOOT_SINCE_EXPECT='2099-01-01T00:00:00' STUB_STAGE_BODY="$_EMPTY_BODY" run_sut_sentry 0 "$_EMPTY_BODY" --reboot-since "$_RS" --out "$TMP/ev-rb-h.env")"; rc=$?
+if [[ "$rc" -ne 0 ]]; then pass "ARM 37 (harness): a HOST_SQL whose dt> bound does not match --reboot-since cannot PASS"; else
+  fail "ARM 37 (harness): a HOST_SQL whose dt> bound does not match --reboot-since cannot PASS" "$rc" "$out"; fi
+
+# ARM 39 — the Sentry channel can also carry the FAIL: a post-reset level:fatal that Better
+# Stack never saw (the pre-`doppler run` class #7481 names) must FAIL the reboot arm too.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_RB_EMPTY"
+out="$(STUB_STAGE_BODY="$_REOPENED_BODY" REBOOT_SINCE_EXPECT="$_RS" \
+  run_sut_sentry 0 "$_FATAL_WITH_CAUSE" --reboot-since "$_RS" --out "$TMP/ev-rb-sfatal.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "ARM 39: a Sentry-only post-reset fatal FAILs even with a reopen row"; else
+  fail "ARM 39: a Sentry-only post-reset fatal FAILs even with a reopen row" "$rc" "$out"; fi
+
+# ARM 38 — --reboot-since is shape-validated: it reaches the SQL and Sentry's --start.
+out="$(run_sut --reboot-since 'not-a-timestamp' --out "$TMP/ev-rb-bad.env")"; rc=$?
+if [[ "$rc" -eq 64 ]]; then pass "ARM 38: a malformed --reboot-since is refused (64)"; else
+  fail "ARM 38: a malformed --reboot-since is refused (64)" "$rc" "$out"; fi
+
 
 _ran=$((passes + fails))
 # FLOOR = main's 62 + the 11 assertions #7855 adds (GUARD1 arms 25-27, two harness rows, the
@@ -1319,7 +1597,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=76  # 73 + the instrument self-test + the #7898 §6 egress-reachability row + the #8043 Guard 4 tracked-copy cmp row
+_FLOOR=107  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file)
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).

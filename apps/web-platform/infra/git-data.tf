@@ -343,6 +343,15 @@ module "git_data_userdata" {
   git_remove_pubkey      = local.git_remove_pubkey
 }
 
+# (#8189, ADR-220) The git-data root key, minted in its OWN root (git-data-root-key/) so the
+# private half never enters this root's state or logs. Only the public key's Hetzner id is
+# read here, by label. An empty match resolves to [] (inert); the create gates refuse a host
+# create unless it resolved to exactly the key whose SHA256 fingerprint is committed in
+# git-data-root-key.fingerprint (tests/scripts/lib/git-data-root-key-arm-gate.sh).
+data "hcloud_ssh_keys" "git_data_root" {
+  with_selector = "soleur-role=git-data-root"
+}
+
 resource "hcloud_server" "git_data" {
   name = "soleur-git-data"
   # Arch is DERIVED from this value inside modules/git-data-userdata (module output `arch`),
@@ -353,7 +362,9 @@ resource "hcloud_server" "git_data" {
   location    = var.location
   image       = "ubuntu-24.04"
   keep_disk   = true
-  ssh_keys    = [hcloud_ssh_key.default.id]
+  # Default key plus the root key (#8189). hcloud_ssh_keys ids are numbers; ssh_keys is
+  # list(string). Create-time only — ignore_changes below keeps the live host inert.
+  ssh_keys = concat([hcloud_ssh_key.default.id], [for k in data.hcloud_ssh_keys.git_data_root.ssh_keys : tostring(k.id)])
 
   # P0 — public IPv4/IPv6 for EGRESS only (apt + GitHub during cloud-init). A
   # no-public-IP host has NO internet (no NAT gateway exists in this account), so

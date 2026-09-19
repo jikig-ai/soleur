@@ -733,13 +733,13 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.35@sha256:c8e27c71bb3f4b79379bb0929e89acef1b4bf18b80b41e14496dd96c726ed0cd
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.37@sha256:e773fe5c74e9d49149217554f3d2730c597bf1e3d856933cccfa81199ae490bc
     # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
     # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
     ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
     # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
-      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.35@sha256:c8e27c71bb3f4b79379bb0929e89acef1b4bf18b80b41e14496dd96c726ed0cd"
+      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.37@sha256:e773fe5c74e9d49149217554f3d2730c597bf1e3d856933cccfa81199ae490bc"
       if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_ghcr_fallback warning; fi
     fi
     docker pull "$IREF"
@@ -819,7 +819,7 @@ runcmd:
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
       --add-host host.docker.internal:host-gateway \
-      -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
+      -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \

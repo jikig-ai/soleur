@@ -32,6 +32,7 @@ import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
 import {
   buildHealthResponse,
   buildInternalMetricsResponse,
+  writeHealthResponse,
 } from "./health";
 import {
   handleReadyzRequest,
@@ -79,12 +80,9 @@ app.prepare().then(() => {
 
     // Health check for deployment
     if (parsedUrl.pathname === "/health") {
-      // Always return 200 for load balancer probes.
-      // CI deploy verification (web-platform-release.yml) reads the response body
-      // to gate on version match and supabase connectivity.
-      const health = await buildHealthResponse();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(health));
+      // Status, headers and serialization live in writeHealthResponse (always
+      // 200; the body is the paging and deploy-gate contract, see health.ts).
+      writeHealthResponse(res, await buildHealthResponse());
       return;
     }
 

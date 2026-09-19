@@ -11,8 +11,8 @@ become permanent. It complements — never duplicates — the reactive
 [technical-debt ledger](../../../../knowledge-base/project/learnings/technical-debt/README.md):
 
 - **harvest-debt (this skill)** — SURFACE inline markers where they live, in code.
-- [/soleur:compound](../compound-capture/SKILL.md) — PROMOTE a worth-tracking marker into a ledger entry.
-- [/soleur:resolve-debt](../resolve-debt/SKILL.md) — CLOSE a ledger entry with a linked GitHub issue.
+- [soleur:compound](../compound-capture/SKILL.md) — PROMOTE a worth-tracking marker into a ledger entry.
+- [soleur:resolve-debt](../resolve-debt/SKILL.md) — CLOSE a ledger entry with a linked GitHub issue.
 
 It writes nothing and closes nothing; promotion and closure stay deliberate acts.
 
@@ -58,8 +58,8 @@ Run from the repo root. The harvester ([harvest-debt.sh](./scripts/harvest-debt.
 
 For each surfaced marker, decide:
 
-- **Worth tracking** → run [/soleur:compound](../compound-capture/SKILL.md) to promote it
-  into a `technical-debt/` ledger entry, then [/soleur:resolve-debt](../resolve-debt/SKILL.md)
+- **Worth tracking** → run [soleur:compound](../compound-capture/SKILL.md) to promote it
+  into a `technical-debt/` ledger entry, then [soleur:resolve-debt](../resolve-debt/SKILL.md)
   to close it with a linked issue once the upgrade trigger fires.
 - **`no-trigger`** → add the missing upgrade trigger to the comment, or delete the
   marker if the shortcut is now permanent and accepted.

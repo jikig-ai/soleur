@@ -51,6 +51,9 @@ HR_RETIREMENT_ALLOWLIST = frozenset({
     "hr-lifecycle-skills-never-inline-after-handoff",
     "hr-merge-deploy-monitor-without-asking",
     "hr-pr-behind-stop-and-resync",
+    # Tranche 2 migration (2026-09-14, #8175): body moved to skill-local home; see scripts/migrated-rule-ids.txt.
+    "hr-before-shipping-ship-phase-5-5-runs",
+    "hr-new-skills-agents-or-user-facing",
 })
 
 

@@ -312,14 +312,67 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 
 # --- Version Check ---
 # Gated on bun being installed so the script runs cleanly in a bun-free
-# environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
-# scripts shard needs no bun and no node *version pin*: it uses stock
-# ubuntu-latest node, unpinned, for the one `node --test` suite below).
-if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
-  expected=$(tr -d '[:space:]' < .bun-version)
-  actual=$(bun --version)
-  if [[ "$actual" != "$expected" ]]; then
-    echo "WARNING: Bun $actual installed, expected $expected (from .bun-version)" >&2
+# environment. The parenthetical here used to read "TEST_GROUP=scripts in CI
+# omits setup-bun by design"; that is FALSE and has been since #7566 (verified
+# 2026-09-17: ci.yml's test-scripts job runs `oven-sh/setup-bun` and names its
+# step "bash + python3 + bun"). ci.yml corrected its own copy of the claim
+# in-place — "`setup-bun` IS required (#7332)" — and this twin was never swept,
+# so the stale sentence survived precisely where a reader of THIS file would
+# look. CI is bun-BEARING; the gate below still matters because a developer host
+# need not be, and because `command -v` answers a different question either way.
+# The node point is unchanged and still true: the scripts shard needs no node
+# *version pin* — it uses stock ubuntu-latest node, unpinned, for the one
+# `node --test` suite below.
+#
+# `command -v bun` is NOT a sufficient test for "bun works", and the difference is not cosmetic.
+# A version-manager SHIM resolves on PATH while being unable to run: a `mise` shim with no
+# version pinned prints `mise ERROR No version is set for shim: bun` to stderr and exits
+# non-zero. This file is `set -euo pipefail` (line 2), so the bare `actual=$(bun --version)` was
+# an ABORT rather than a skipped check — and it sits ABOVE every registration emit, so the
+# observable failure was not a missing warning. It was EVERY invocation of this runner exiting
+# rc 1 having emitted nothing, on a host where nothing about the battery was wrong.
+#
+# WHAT THAT BREAKS. Two consumers fail closed on the `--enumerate` record stream and go red for
+# a cause neither can name: `scripts/battery-tag-authorship.test.sh` › the `--enumerate-commands`
+# root-set guard (rc AND count) and `plugins/soleur/test/scripts-shard-totality.test.sh` ›
+# `enumerate_leg()` (count only — it invokes the function as a bare statement and never reads
+# `$?`; `pipefail` IS set there, so the rc survives the pipe and is discarded at the call site).
+# `scripts/lint-orphan-test-suites.sh` › the `--print-suite-globs` derivation is the same
+# fail-closed shape on the SIBLING stream and the same prologue window.
+#
+# SCOPE, stated narrowly on purpose. This guards ONE tool. The prologue above the first
+# registration emit still aborts rc-1-with-zero-records if `tr`, `dirname`, `mktemp` or `mkdir`
+# fails, and the `dirname` sites do it with no runner-authored stderr at all. `command v as a
+# liveness claim` is a repo-wide class (tracked separately); do not read this block as closing
+# it. `scripts/orphan-process-reaper.sh` › the `logger` guard is the in-repo reference shape.
+#
+# The DEGRADED case is reported rather than silently swallowed, and the report carries the exit
+# status instead of asserting a cause this code never measured: 126 is a bad interpreter, 127 a
+# binary that vanished between `command -v` and the call, 1 a shim refusing. `timeout` and the
+# `||` arm are BOTH load-bearing and cover different failures — see the same argument made for
+# `crane` further down this file; `|| actual=""` covers a non-zero exit and cannot rescue a shim
+# that never returns (a version manager may go to the network to install a missing runtime).
+#
+# Pinned by scripts/test-all-enumerate-toolchain.test.sh, whose R5 row is what stops this from
+# being "fixed" by deleting the check. (#8231)
+if [[ -f .bun-version ]]; then
+  # `tr` gets the same treatment as `bun` below, for the same reason and one line earlier: a
+  # bare command substitution here is an ABORT under `set -e`, above every registration emit.
+  expected=$(tr -d '[:space:]' < .bun-version) || expected=""
+fi
+if [[ -n "${expected:-}" ]] && command -v bun >/dev/null 2>&1; then
+  _bun_rc=0
+  actual=$(timeout 10 bun --version 2>/dev/null) || _bun_rc=$?
+  # Normalise the COMMAND's output, not just the file's: a shim emitting CRLF or a banner line
+  # otherwise compares unequal to a byte-identical pinned version and this block emits
+  # `Bun 1.3.14 installed, expected 1.3.14` — a warning that contradicts itself.
+  actual=$(printf '%s' "${actual:-}" | tr -d '[:space:]') || actual=""
+  if [[ -z "$actual" ]]; then
+    echo "WARNING: 'bun --version' produced no version (exit ${_bun_rc}); skipping the version check" >&2
+  elif [[ "$actual" != "$expected" ]]; then
+    # %q, not raw: $actual is PATH-controlled, and a shim can otherwise emit control characters
+    # or U+2028 and forge a line shaped like this runner's own status output into a CI log.
+    printf 'WARNING: Bun %q installed, expected %q (from .bun-version)\n' "$actual" "$expected" >&2
     echo "Run: bun upgrade" >&2
   fi
 fi
@@ -1626,6 +1679,11 @@ if want_scripts; then
   # actually scanned; -unit asserts the linter can still fail.
   run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
   run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
+  # #8030 / PR #8175: rules migrated out of AGENTS.rules.md are invisible to every check that
+  # reads that file. The live run checks each registry row's placement and body hash; the unit
+  # suite is the mutation matrix. Registered explicitly — scripts/*.test.sh is not auto-globbed.
+  run_suite "scripts/lint-migrated-rule-ids-live" bash scripts/lint-migrated-rule-ids.sh
+  run_suite "scripts/lint-migrated-rule-ids-unit" bash scripts/lint-migrated-rule-ids.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   # markdownlint's guard (#7927). Registered EXPLICITLY for the reason spelled out
   # just below: `scripts/*.test.sh` is not in SUITE_GLOBS, so nothing discovers it.
@@ -1734,6 +1792,11 @@ if want_scripts; then
   # this suite is that guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
+  # #8160: the devin-docs-drift watcher's anchors fire on third-party doc text, so
+  # a polarity inversion or a dead regex is invisible until the day the watch was
+  # built for. This suite extracts the check step verbatim and drives both
+  # directions — affirmative cloud claims MUST fire, negations MUST NOT.
+  run_suite "scripts/devin-docs-drift-check" bash scripts/devin-docs-drift-check.test.sh
   # #7489: the legacy `soleur@soleur` marketplace entry carries client-side
   # `autoUpdate: true`, which cannot be revoked remotely — so the tracker's
   # closing condition is a claim about MACHINES, and the probe is how that claim
@@ -1766,6 +1829,14 @@ if want_scripts; then
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
   run_suite "scripts/lint-encryption-posture" bash scripts/lint-encryption-posture.test.sh
+  # The DPA Schedule 4 TOM-4 RLS-posture gate (CLO ruling 2026-09-15, #8197).
+  # Schedule 4 becomes Annex II to the Module 2/3 SCCs on execution, so every
+  # table name and predicate in it is a contractual representation. The -live
+  # line runs the 22 assertions over the real migration corpus so a schema
+  # change that falsifies the instrument reds CI; the .test.sh line is the
+  # MB-0..MB-12 mutation battery proving each assertion can actually fail.
+  run_suite "scripts/check-tom4-rls-posture" bash scripts/check-tom4-rls-posture.test.sh
+  run_suite "scripts/check-tom4-rls-posture-live" bash scripts/check-tom4-rls-posture.sh
   # Guard Contract completeness gate (plan/SKILL.md §2.12, deepen-plan §4.11).
   # TS-1..TS-10 fixtures + the MB-1..MB-4 mutation battery. The -live line runs
   # the sweep over the real plans/ tree so a non-compliant Guard Contract landing
@@ -1979,6 +2050,10 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # The differential oracle over every executable reader of the directive (#7490). Four copies
+  # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
+  # must not `source` a repo file), so they are held in agreement by a walker instead.
+  run_suite "scripts/followthrough-predicate-parity" bash scripts/followthrough-predicate-parity.test.sh
   # #7506: the callback-URL closure guard EXECUTES its shipped workflow step body under
   # `bash -e` (the shell Actions uses for a `run:` block with no `shell:` key). Registered
   # explicitly for the same reason as the two lines above — scripts/*.test.sh is not globbed,
@@ -2011,6 +2086,14 @@ if want_scripts; then
   # isolation against webhook contamination, and withholding the free-text bwrap_err from the
   # public issue comment. Mutation-proved at authoring (5/5 killed).
   run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
+  # #8097: exit-code harness for the SEND_FAILED-alert readback follow-through. Registered
+  # explicitly (orphan-suite class above). Its exit code is the closure of #8097 (0 closes; 3 =
+  # instrument did not answer / web-1 dark; 5 = a named cause for a human; 1 is NEVER emitted
+  # because to the sweeper 1 reopens a human-closed issue). Load-bearing arms: the alert check
+  # runs FIRST and a paused alert never touches the warehouse; the positive control is web-1
+  # SCOPED (an inngest-only source is channel_dark, never row_absent); incident matching is
+  # anchored on the row's own dt; raw incident objects are projected before they reach stdout.
+  run_suite "scripts/send-failed-alert-probe-8097" bash scripts/followthroughs/send-failed-alert-probe-8097.test.sh
   # #8076: fixture harness for the run-report-exit first-contact follow-through. Registered
   # explicitly (orphan-suite class above). Its load-bearing arm is ROW SHAPE: the live Better
   # Stack row nests the pino payload under `.message` of the decoded `raw`, and the probe's
@@ -2024,6 +2107,14 @@ if want_scripts; then
   # #6297 while the key is still unminted. The suite mutation-proves that guard, so a regression
   # to structural matching must redden CI rather than silently false-close a tracker.
   run_suite "scripts/anthropic-admin-key-6297" bash scripts/followthroughs/anthropic-admin-key-6297.test.sh
+  # #8281: exit-code harness for the compound-promote outcome soak. Registered explicitly
+  # (orphan-suite class above). Same CONTAMINATION arm as 6297 one entry up: the probe's first
+  # revision `grep -c`'d the marker name over undecoded rows, so an echo of the PR's own body
+  # would have auto-closed #8281 with the weekly path dark. The suite also pins the DARKNESS
+  # arm (no SOLEUR_CLAUDE_COST control ⇒ FAIL, never a clean zero), the trigger==cron
+  # requirement (a manual fire cannot close it), and the rc-3 forwarding — whose first revision
+  # `exit 3`'d inside a `$(...)` and so exited a subshell; the suite's case 7 caught it.
+  run_suite "scripts/compound-promote-outcome-8281" bash scripts/followthroughs/compound-promote-outcome-8281.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -2041,6 +2132,18 @@ if want_scripts; then
   # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
   # is decoration.
   run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # #7500 zot_last_err redaction delivery watch (tracker #7960). Registered at birth rather than
+  # after lint-orphan-test-suites.sh catches it: this probe is the only followthrough whose SUBJECT
+  # is replaced mid-window by design (ADR-096 — the registry host is cloud-init-only, so delivery
+  # IS a host replace), and nothing exercised a mixed-boot window before this harness.
+  #
+  # The suite asserts a BRANCH MARKER per case, not just an exit code, and that is load-bearing:
+  # the probe has six distinct `exit 2` sites, so an exit-code-only suite collapses most of its
+  # cases onto one integer. Measured — removing both `boot_id=unknown` guards leaves the exit code
+  # at 2 and is caught ONLY by the marker. Measured on the first revision, which was exit-code
+  # only: deleting the no-boot_id guard, deleting the trusted-region cut (while the forge
+  # succeeded), and replacing the probe invocation with the expected value all left it 6/0 green.
+  run_suite "scripts/zot-last-err-redact-7500" bash scripts/followthroughs/zot-last-err-redact-7500.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
@@ -2056,6 +2159,10 @@ if want_scripts; then
   # double-encoded like the warehouse `raw` column: a harness whose seam sits above the decode
   # reproduces #7674's own 0/40-vs-40/40 measurement and passes while testing nothing.
   run_suite "scripts/inngest-host-not-serving-7674" bash scripts/followthroughs/inngest-host-not-serving-7674.test.sh
+  # #6178 ADR-100 soak probe. The suite pins the never-0/never-1 invariant after every invocation
+  # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
+  # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
+  run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
@@ -2079,6 +2186,12 @@ if want_scripts; then
   # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
   # than telemetry — a green boot marker must not authorize a supply-chain retirement.
   run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
+  # (#8159 retired 2026-09-17 — issue closed; probe script + suite deleted per
+  # the script's own RETIREMENT note.)
+  # #8178's close criterion (git-data-boot-poll-8178.sh): PASS only on a post-merge git-data
+  # dispatch whose boot poll ANSWERED — never on a boot_complete row, which was already true
+  # before the fix. Pins the run anchor, the log-marker anchoring and the 2-vs-3 split.
+  run_suite "scripts/git-data-boot-poll-8178" bash scripts/followthroughs/git-data-boot-poll-8178.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -2104,6 +2217,20 @@ if want_scripts; then
   # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
   # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/derive-app-domain-base" bash scripts/derive-app-domain-base.test.sh
+  # 2026-09-17: every no-SSH host read is gated on the doppler CLI, so a machine without the
+  # binary makes an agent read "command not found" as "this session has no observability
+  # access" and fall back to an hourly probe or to SSH. The suite's load-bearing case is the
+  # unauthenticated/unknown split — a network fault must never route to a login flow. Explicit
+  # run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/ensure-doppler" bash scripts/ensure-doppler.test.sh
+  # 2026-09-17: web-1 also emits SOLEUR_INNGEST_SERVER_PROBE with host_name=soleur-inngest-prd,
+  # so a reader filtered on the marker (or on host_name) summarises the WRONG MACHINE while
+  # looking correct. The load-bearing case is T2 — given only web-1 rows, stdout must be EMPTY.
+  # Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/inngest-host-state" bash scripts/inngest-host-state.test.sh
+  # #7966: the rotation script had never completed a run (TARGETS exported after the check that
+  # reads it). End-to-end against stub doppler/curl/docker; explicit, scripts/*.test.sh is not globbed.
+  run_suite "scripts/rotate-supabase-db-credential" bash scripts/rotate-supabase-db-credential.test.sh
   # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
@@ -2119,6 +2246,21 @@ if want_scripts; then
   # Every peer workflow lint is registered as this same pair (see lint-workflow-step-env-refs and
   # lint-workflow-errexit-capture above) — this one was registered once, which made it decoration.
   run_suite "scripts/lint-workflow-issue-write-scope-live" python3 scripts/lint-workflow-issue-write-scope.py
+  # A `uses: ./…` step resolves from the runner's WORKSPACE, so its job must have run
+  # actions/checkout first. scheduled-marketplace-drift.yml's checkout-free drift-check job ended
+  # in one under `continue-on-error: true`: the runner could not resolve the composite, the step
+  # went green, and the Sentry monitor recorded zero check-ins for 37 days. Same class as the two
+  # lints above, one layer earlier: that the alarm step can even be FOUND. Both halves are
+  # required — the unit suite proves the RULE is right, the -live arm proves the TREE is clean.
+  run_suite "scripts/lint-workflow-local-action-checkout" bash scripts/lint-workflow-local-action-checkout.test.sh
+  run_suite "scripts/lint-workflow-local-action-checkout-live" python3 scripts/lint-workflow-local-action-checkout.py
+  # A DANGLING committed symlink breaks the GitHub Actions runner's repository-archive
+  # extraction, so it fails `Set up job` for EVERY `$/…` and `owner/repo/path@ref` reference to
+  # this repo — measured on run 35360150848. The check lives in its own file rather than inline:
+  # `--enumerate-commands` encodes argv with TAB/NEWLINE delimiters and rejects a multi-line
+  # `bash -c` body, which is how the first revision of this registration broke
+  # `battery-tag-authorship` (an empty root set, refusing to classify).
+  run_suite "scripts/no-dangling-committed-symlinks" bash scripts/no-dangling-committed-symlinks.test.sh
   # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
   # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
   # advisory (absent from required-checks.txt and the ruleset), and this defect has already
@@ -2147,6 +2289,8 @@ if want_scripts; then
   # the exact shape that let a fail-open rung ship in #3366.
   run_suite "tests/scripts/plan-gate-preamble" bash tests/scripts/test-plan-gate-preamble.sh
   run_suite "tests/scripts/git-data-host-birth-gate" bash tests/scripts/test-git-data-host-birth-gate.sh
+  run_suite "tests/scripts/betterstack-read-classify" bash tests/scripts/test-betterstack-read-classify.sh
+  run_suite "tests/scripts/git-data-boot-signal-poll" bash tests/scripts/test-git-data-boot-signal-poll.sh
   run_suite "tests/scripts/git-data-birth-readiness-gate" bash tests/scripts/test-git-data-birth-readiness-gate.sh
   # (#7025) The rung-2 evidence-capture decision function. Registered HERE for the same
   # reason as every line around it: nothing auto-discovers tests/scripts/. This script is
@@ -2179,6 +2323,14 @@ if want_scripts; then
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
+  # #8302 / ADR-229: the offline transition classifier and the SKILL.md byte ratchet.
+  # scripts/lib/incidents-roots.test.sh rides the scripts/lib/*.test.sh glob; these two do
+  # not sit under a globbed directory, so they are registered here explicitly. This is the
+  # ratchet SUITE's only registration: lint-orphan-test-suites.sh refuses double coverage,
+  # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
+  # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
+  run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
+  run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
@@ -2217,6 +2369,9 @@ if want_scripts; then
   # an unregistered suite here never gates and the failure is silent-and-green.
   run_suite "tests/scripts/inngest-volume-recut-gate" bash tests/scripts/test-inngest-volume-recut-gate.sh
   run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
+  # #6894 — ADR-142 Guard 3: the per-address plan-shape gate on the inngest-host dispatch (which
+  # also creates the additive LUKS volume). Same orphan trap as above: nothing globs tests/scripts/test-*.sh.
+  run_suite "tests/scripts/inngest-host-shape-gate" bash tests/scripts/test-inngest-host-shape-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
   # #7542: vector-redeliver scoped-delivery gate. Unlike the -replace arms above it permits a bare
@@ -2322,6 +2477,9 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
+  run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
+  run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
   # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
@@ -2345,6 +2503,12 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
+  # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
+  # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
+  # is silent AND green while the allow-list it pins decides whether the #8181
+  # NOTICE binding actually gates merges.
+  run_suite "tests/scripts/vendor-pin-gate-verdict" bash tests/scripts/test-vendor-pin-gate-verdict.sh
   # #6589 — the Sentry full-root delete path. These three gate the contract that
   # makes `terraform destroy` reachable at all for infra/sentry/**: the absence of
   # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed
@@ -2592,6 +2756,13 @@ if want_scripts; then
   # Measured 0.1 s, 32 assertions, bash-only.
   run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
   run_suite "scripts/battery-tag-authorship" bash scripts/battery-tag-authorship.test.sh
+  # #8231: `--enumerate` must not depend on a WORKING bun, only on the absence of a broken one.
+  # Registered explicitly for the reason its neighbours state — repo-root `scripts/*.test.sh` is
+  # NOT in SUITE_GLOBS, so an unregistered suite here runs in zero runners and stays green
+  # forever. This one guards the producer for three consumers that fail closed on the enumerate
+  # stream's record count, including `scripts/battery-tag-authorship` two lines above, which was
+  # measured at exit 1 on a host whose only defect was an unpinned `mise` bun shim. bash-only.
+  run_suite "scripts/test-all-enumerate-toolchain" bash scripts/test-all-enumerate-toolchain.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
   run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
   # The patterns are declared ONCE, at the top of this file, and published by

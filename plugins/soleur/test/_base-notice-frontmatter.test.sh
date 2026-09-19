@@ -58,9 +58,35 @@ assert_eq "7b58d68461cb1fc033a063e34cc9de63d0b4144b" "$OUT" "field pinned-commit
 echo ""
 
 # --- TS3: field last-verified ---
+# The field is advanced by the weekly vendor-drift cron's attestation PRs, so
+# pinning a literal here red-lights every attestation it exists to verify —
+# the first attestation PR ever opened (#8166, advancing to 2026-09-14) failed
+# CI on exactly this line while carrying no defect of its own. Assert the
+# invariants the field is contracted to hold instead: ISO calendar-date shape,
+# never below the first recorded verification epoch (the field only advances),
+# and never future-dated (a future value asserts a comparison no artifact ran).
+#
+# Second site of the same pin: #8251 converted the sibling
+# `notice-frontmatter.test.sh` to this contract form; this base suite was
+# missed (same miss class as the TS4 hardcoded row count documented below),
+# and #8166 red-lit on `test-scripts (3/3)` a second time because of it.
 echo "TS3: field last-verified returns ISO date"
 OUT=$(bash "$PARSER" field last-verified)
-assert_eq "2026-05-10" "$OUT" "field last-verified is correct"
+if [[ "$OUT" =~ ^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]]; then
+  echo "  PASS: field last-verified is ISO-dated ($OUT)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: field last-verified is not an ISO calendar date (got: '$OUT')"
+  FAIL=$((FAIL + 1))
+fi
+TODAY="$(date +%F)"
+if [[ ! "$OUT" < "2026-05-10" && ! "$TODAY" < "$OUT" ]]; then
+  echo "  PASS: field last-verified is within [2026-05-10, $TODAY]"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: field last-verified out of range [2026-05-10, $TODAY] (got: '$OUT')"
+  FAIL=$((FAIL + 1))
+fi
 echo ""
 
 # --- TS4: the emitted registry agrees with the NOTICE body table ---
@@ -113,6 +139,38 @@ assert_contains "$OUT" "pii-detector/rules/leakage-vectors.md:15a46e529e78993014
 assert_contains "$OUT" "pii-detector/layers/api-layer.md:9d3202175c1d0225f60a912c489dbdacf4df491c" "api-layer.md upstream line present"
 assert_contains "$OUT" "pii-detector/layers/data-in-transit.md:6c9eeabf17d1f0ed5660f5eb54d91587c81214ef" "data-in-transit.md upstream line present"
 assert_contains "$OUT" "pii-detector/layers/data-lifecycle.md:a073ef24a0527c2c3a6d738b65ea3ef9d6194abe" "data-lifecycle.md upstream line present"
+echo ""
+
+# --- TS4c: legal-generate bundle gets the same frontmatter↔table parity ---
+# The second vendored bundle (#8122) must not be a parity orphan: the #7710
+# defect class (table/frontmatter divergence undetected for 117 days) is
+# exactly what a second NOTICE reintroduces if only gdpr-gate is covered.
+LEGAL_NOTICE="$REPO_ROOT/plugins/soleur/skills/legal-generate/NOTICE"
+if [[ -f "$LEGAL_NOTICE" ]]; then
+  LG_TABLE_COUNT=$(awk '
+    /^## General-Legal\/legal-templates \(CC0-1\.0\)/ { in_tbl=1; next }
+    /^## / { in_tbl=0 }
+    in_tbl && /^\| `references\// { n++ }
+    END { print n+0 }
+  ' "$LEGAL_NOTICE")
+  if (( LG_TABLE_COUNT < 12 )); then
+    echo "  FAIL: legal-generate NOTICE body table yielded $LG_TABLE_COUNT lifted rows (expected >= 12) — table scrape is broken, not a clean registry"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: legal-generate NOTICE body table yielded $LG_TABLE_COUNT lifted rows"
+    PASS=$((PASS + 1))
+  fi
+  echo "TS4c: legal-generate lifted-files/upstream-files counts equal the NOTICE table's row count"
+  LG_OUT=$(NOTICE_FILE="$LEGAL_NOTICE" bash "$PARSER" lifted-files)
+  LG_LINE_COUNT=$(printf '%s\n' "$LG_OUT" | wc -l | tr -d ' ')
+  assert_eq "$LG_TABLE_COUNT" "$LG_LINE_COUNT" "legal-generate lifted-files entries == NOTICE table rows"
+  LG_OUT=$(NOTICE_FILE="$LEGAL_NOTICE" bash "$PARSER" upstream-files)
+  LG_LINE_COUNT=$(printf '%s\n' "$LG_OUT" | wc -l | tr -d ' ')
+  assert_eq "$LG_TABLE_COUNT" "$LG_LINE_COUNT" "legal-generate upstream-files entries == NOTICE table rows"
+else
+  echo "  FAIL: legal-generate NOTICE missing — the vendored bundle's parity guard cannot run"
+  FAIL=$((FAIL + 1))
+fi
 echo ""
 
 # --- TS5: days-stale against live NOTICE prints non-negative integer ---
@@ -273,20 +331,37 @@ assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits empty stdout (work
 rm -rf "$STUB_DIR_EMPTY"
 echo ""
 
+# --- Wall-clock helpers for TS-cron-5 (#8250) ---
+# TS-cron-5 used GNU time by its absolute path (the `time -f "%e"` form), absent on
+# macOS and on minimal Linux hosts, where the call exited 127 and `set -e`
+# aborted the whole suite mid-run. Two $EPOCHREALTIME reads (bash 5+, no
+# coreutils) replace it, split into integer microseconds with ${t%.*}/${t#*.}
+# — the scripts/test-all.sh idiom — so no float parsing is involved.
+#
+# A read that is not `digits.digits` makes the CASE FAIL, never pass: under a
+# comma-radix locale or an old bash (unset EPOCHREALTIME) a lenient parse would
+# compute a zero or garbage elapsed time and `< 6 s` would pass vacuously.
+# Wall-clock parser + its own contract rows, shared with the sibling suite.
+# Both files carried a byte-identical ~45-line copy; they have a documented
+# two-PR drift history, so there is now one copy.
+# shellcheck source=lib/wall-clock.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/wall-clock.sh"
+_wall_clock_self_test
+
+
 # --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---
 # Asserts the `timeout 5s` wrapper fires. Wall-clock < 6s (5s + grace).
 echo "TS-cron-5: cron-run-stale with slow stub gh returns 999 within 6s"
 STUB_DIR_5="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_5")
 make_gh_stub_sleep "$STUB_DIR_5" 10
-SECS=$( { /usr/bin/time -f "%e" \
-  bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
-  >/tmp/cron-stale-out.$$ ; } 2>&1 )
+T_START="${EPOCHREALTIME:-}"
+GH_TOKEN=stub-token PATH="$STUB_DIR_5:$PATH" bash "$PARSER" cron-run-stale >/tmp/cron-stale-out.$$
+T_END="${EPOCHREALTIME:-}"
 OUT=$(cat /tmp/cron-stale-out.$$ 2>/dev/null)
 rm -f /tmp/cron-stale-out.$$
 assert_eq "999" "$OUT" "cron-run-stale=999 when gh times out"
-# Compare floats via awk; emit "PASS"/"FAIL" string and assert it.
-WALL_OK=$(awk -v t="$SECS" 'BEGIN { print (t < 6 ? "PASS" : "FAIL") }')
-assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (got: ${SECS}s)"
+WALL_OK=$(_wall_verdict "$T_START" "$T_END" 6000000)
+assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (start=${T_START:-<unset>} end=${T_END:-<unset>})"
 rm -rf "$STUB_DIR_5"
 echo ""
 

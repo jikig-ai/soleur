@@ -108,6 +108,7 @@ function stageAssignments(corpus: string): RegExpMatchArray[] {
 // The closed set of git-data stages that emit at level WARNING and route to the NON-paging rule.
 const WARNING_STAGES = [
   "betterstack_ingest",
+  "gitdata_luks_reopen_arm_warn", // (#8210) the boot-time LUKS reopen unit failed to `enable --now` at birth
   "gitdata_nftables_metadata_warn",
   "sshd_config_warn",
   "gc_report", // emitted by the git-data-gc.sh payload, not the template (see the corpus note in (b))
@@ -127,6 +128,12 @@ const WARNING_EMITS_ROUTED_BY_FATAL_RULE = ["gc_timer", "gc"] as const;
 // The fatal-side name for the same runcmd item. STAGE is whatever was last assigned when the
 // top-armed trap fires, so a death anywhere in that item reports THIS value, not the _warn one.
 const NFT_FATAL_STAGE = "gitdata_nftables_metadata";
+// (#8210) A SET, because the template now carries TWO `$${STAGE}_warn` emits. The arm below took
+// `indexOf` of the FIRST one and checked only that — blind to a second by construction, which is
+// the "emitted twice" hazard this file's own sshd_config_warn note describes. It now resolves
+// EVERY such emit against its own nearest preceding assignment and set-compares, so adding a
+// runcmd item cannot silently displace the check onto a different item.
+const WARN_EMIT_FATAL_STAGES = ["gitdata_luks_reopen_arm", NFT_FATAL_STAGE] as const;
 
 function scopeResource(src: string, name: string): string {
   // BOTH types. This file holds 29 `sentry_alert` rules and 2
@@ -168,8 +175,16 @@ describe("git-data warning-stage routing op contract", () => {
     // that construct: the name also appears in prose in this template and in git-data-luks.tf.
     expect(cloudInit).toContain('"level":"warning"');
     expect(cloudInit).toContain('"stage":"betterstack_ingest"');
-    const emitAt = cloudInitCode.indexOf('"$${STAGE}_warn" warning');
-    expect(emitAt, "the _warn emit is absent from the template").toBeGreaterThan(-1);
+    const emitAts: number[] = [];
+    for (let i = cloudInitCode.indexOf('"$${STAGE}_warn" warning'); i !== -1;
+         i = cloudInitCode.indexOf('"$${STAGE}_warn" warning', i + 1)) {
+      emitAts.push(i);
+    }
+    expect(emitAts.length, "the _warn emit is absent from the template").toBeGreaterThan(0);
+    expect(
+      emitAts.length,
+      "each stage in WARN_EMIT_FATAL_STAGES must carry exactly one $${STAGE}_warn emit",
+    ).toBe(WARN_EMIT_FATAL_STAGES.length);
 
     // ...and that the _warn suffix is built from THIS stage. CO-PRESENCE IS NOT LOCALITY, and
     // the previous form here was `toContain(\`STAGE=${NFT_FATAL_STAGE}\`)` — an unanchored
@@ -192,15 +207,17 @@ describe("git-data warning-stage routing op contract", () => {
     // ordering"), one directory over.
     const assignments = stageAssignments(cloudInitCode);
     expect(assignments.length, "no whole-line STAGE= assignments found").toBeGreaterThan(0);
-    const preceding = assignments.filter((m) => m.index! < emitAt);
-    expect(preceding.length, "the _warn emit has no STAGE assignment before it").toBeGreaterThan(0);
-    const nearest = preceding[preceding.length - 1];
+    const resolved = emitAts.map((emitAt) => {
+      const preceding = assignments.filter((m) => m.index! < emitAt);
+      expect(preceding.length, "a _warn emit has no STAGE assignment before it").toBeGreaterThan(0);
+      return preceding[preceding.length - 1][1];
+    });
     expect(
-      nearest[1],
-      `the _warn emit resolves to "${nearest[1]}_warn", not "${NFT_FATAL_STAGE}_warn" — ` +
-        "STAGE is whatever was last assigned when the emit runs, so an assignment interposed " +
-        "between them re-points the stage and the warning rule stops routing it",
-    ).toBe(NFT_FATAL_STAGE);
+      [...resolved].sort(),
+      `the _warn emits resolve to [${resolved.join(", ")}] — STAGE is whatever was last assigned ` +
+        "when the emit runs, so an assignment interposed between one of them and its own item's " +
+        "STAGE= re-points the stage and the warning rule stops routing it",
+    ).toEqual([...WARN_EMIT_FATAL_STAGES].sort());
   });
 
   it("every warning stage is routed by the low-severity rule — and only those (set equality)", () => {

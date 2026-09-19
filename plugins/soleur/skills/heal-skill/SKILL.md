@@ -10,6 +10,8 @@ Analyze the conversation to detect which skill is running, reflect on what went 
 </objective>
 
 <context>
+If a fix adds a new user-facing capability, run its domain assessment (brainstorm Phase 0.5, or plan Phase 2.5 on a pipeline run) with CPO and CMO in the room (CTO when architectural) before applying it; CMO may be omitted with a one-line rationale for operator-facing-only capabilities, CPO never. The rule's canonical text is `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` under `## New-capability leader mandate`.
+
 Skill detection: !`ls -1 ./skills/*/SKILL.md | head -5`
 </context>
 
@@ -62,6 +64,9 @@ ls -la <skill-dir>/scripts/ 2>/dev/null
 </step_3>
 
 <step_4 name="present_proposed_changes">
+
+- **Name a skill or command as `soleur:<name>` and an agent by its registry id, nothing else** — no slash, dollar or at-sign prefix, no bare agent leaf — the adapter renders the harness form (`formatSkillInvocation` / `spawnAgent`, `plugins/soleur/lib/harness.ts`); a doc that writes one harness's form names a component the other three cannot resolve (ADR-226). If a shell variable or glob collides with a skill name, brace or rename it (`"${work}"`) — never widen the gate's boundary set. `plugins/soleur/test/harness-parity-tree.test.ts` is the gate; `bun plugins/soleur/scripts/harness-parity-census.ts --fix` repairs the mechanical shapes.
+
 Present changes in this format:
 
 ```
@@ -126,7 +131,7 @@ Choose (1-4):
 Only after approval (option 1 or 2):
 
 **6.0 — Validation gate for gated classifier-skill edits (primary in-session hook).**
-Before applying ANY correction, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>` for each file being edited. If `gated` is `false`, apply normally (step 1 below). If `gated` is `true`, the edit may change a verifiable classifier block (the `/go` routing table, the ticket-triage rubric) — gate it:
+Before applying ANY correction, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>` for each file being edited. If `gated` is `false`, apply normally (step 1 below). If `gated` is `true`, the edit may change a verifiable classifier block (the `soleur:go` routing table, the soleur:support:ticket-triage rubric) — gate it:
 
   a. **Buffer pre-check (the rejected-edit reader).** Read `.claude/.skill-edit-rejections.jsonl` (if present); if a prior entry matches this `source_file` + the same targeted miss (`target_task` id), surface it and do NOT re-propose the same dead-end edit — a previously-rejected edit is recognized, not re-run (avoids re-spending ~230 API calls on a known failure).
   b. **Run the gate.** Write the proposed-edited file to a temp path, then run `eval-gate.cjs --candidate-file <tmp> --target <target> --target-task <synthesized row encoding the miss being fixed>` (synthesized fixtures only, per `cq-test-fixtures-synthesized-only`). The verdict is computed deterministically in `verdict.cjs` (the LLM is out of the assertion path).

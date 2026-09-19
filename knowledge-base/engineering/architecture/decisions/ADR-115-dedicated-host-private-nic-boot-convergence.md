@@ -18,6 +18,11 @@ brand_survival_threshold: single-user incident
 **Accepted — for the REGISTRY host only.** Explicitly **not** class-wide: see the normative
 blockers below. Extending it to git-data or inngest requires clearing them first.
 
+**Amended 2026-09-18 (#8210):** the first normative blocker's git-data exclusion is cleared —
+git-data has a reboot-safe storage unlock (`git-data-luks-reopen.service`, a Doppler-run
+oneshot, proven by the rung-2 reset arm). The reboot primitive is STILL not adopted for
+git-data; see the amendment under the blocker.
+
 **Amended 2026-07-15 (#6497)** to cover boot-baked *credentials* alongside the private NIC —
 also registry-host-scoped, and carrying a **second** normative blocker of its own, because the
 amendment's `replace_triggered_by` edge is a different primitive from this ADR's guarded
@@ -221,6 +226,88 @@ this amendment named the dispatch, and the dispatch cannot fire the edge.
 
 This blocker lives here rather than in the plan or the tracking issue on purpose: a constraint
 discovered during planning belongs in the durable artifact, because the ADR outlives both.
+
+#### Amendment (2026-09-18, #8210): the blocker is CLEARED for git-data's storage unlock — by a Doppler-run oneshot, not by `crypttab`
+
+> **Superseded 2026-09-18 (#8210):** the "git-data is excluded until that is fixed" clause above.
+> The `luksOpen` in `runcmd` and the `nofail` fstab line are unchanged and still per-instance;
+> what changed is that git-data now HAS the reboot-safe equivalent the blocker demanded.
+
+The equivalent is `git-data-luks-reopen.service` (`apps/web-platform/infra/`): a `Type=oneshot`
+unit after `network-online.target` that runs `git-data-luks-reopen.sh` under
+`doppler run --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback`,
+opens the mapper if it is closed, asserts its backing device is the pinned volume, and hands
+the mount to PID 1 through the fstab-generated `.mount` unit. Every failure is reported once,
+off-host, at `fatal` by an `OnFailure=` reporter carrying `action=<phase>`. The standing retry is
+`git-data-luks-reopen.timer` at `OnUnitActiveSec=15min`, once the unit's own five-attempt
+`Restart=on-failure` budget is spent.
+
+> **Corrected 2026-09-18 (#8210), before merge.** An earlier revision of this paragraph read
+> "the weekly `git-data-gc.timer` is ordered after it **and pulls it in**, so a failed reopen is
+> retried weekly". That was the first draft's mechanism and it is **not what ships**:
+> `git-data-gc.service` carries `After=git-data-luks-reopen.service` and NO `Wants=` — the
+> `Wants=` was cut at review, because it turned a weekly maintenance timer into an implicit
+> retry driver for a boot-critical unit and bounded recovery at seven days. So the sentence
+> cleared a normative blocker by citing a mechanism this same change had deleted. The
+> replacement is the dedicated timer named above; ADR-198's copy of the claim was corrected in
+> the same sweep and this one was missed.
+The blocker named "`crypttab` or a keyscript" as the shape; neither was adopted, for measured
+reasons recorded in the plan's Cut List: `systemd-cryptsetup` implements no `keyscript=`
+(Debian `crypttab(5)`), and a `crypttab` keyfile on the root disk is the passphrase baked, which
+ADR-198 forbids for THIS credential. A boot unit that fetches the key over TLS from a
+config-scoped, centrally revocable token is the accepted equivalent.
+
+Proof, not assertion: the rung-2 rehearsal (`.github/workflows/git-data-rung2-rehearsal.yml`)
+gained a **reset arm** — after `boot_complete` settles, the throwaway host is hard-reset through
+the Hetzner API and the capture script's `--reboot-since` mode must observe
+`stage:luks_reopen_ok action:reopened` on either channel with no fatal after the reset
+timestamp before the evidence can be uploaded. The first PASS is the live verification of this
+amendment; its run URL is recorded on #8210 once captured.
+
+**Equivalent in OUTCOME, not in ORDERING — and the difference is what #8211 has to buy back.** A
+`crypttab` entry or a keyscript runs inside PID 1's `cryptsetup` → `local-fs.target` ordering; this
+oneshot runs `After=network-online.target`, i.e. *after* the fstab mount job has already skipped on
+`nofail`, which is exactly why `git-data-luks-reopen.sh` has to hand-start the `.mount` unit itself.
+The consequence is that no consumer can be ordered on the store **by construction** — the property
+[ADR-119](ADR-119-luks-at-rest-for-the-live-workspaces-volume.md) §(e) ruled must be structural for
+the identical hazard on web-1. The reopen is therefore correct in what it achieves and weaker in how
+a consumer can depend on it; the residual is carried by #8211 contract clauses (h) and (i)
+(`nofail,noauto,x-systemd.requires=` on the rewritten fstab line, plus `chattr +i` on the unmounted
+mountpoint), not by this ADR.
+
+**The fleet stays bifurcated, deliberately.** inngest's sibling unit (#7695) uses a BAKED keyfile
+with `DefaultDependencies=no` / `Before=local-fs.target`, and its own comment records that a
+`doppler run` wrapper is impossible at that ordering. The two shapes cannot converge: the credential
+posture ADR-198 mandates for THIS passphrase forces the network-online ordering that inngest's
+pre-network position forbids. git-data's shape is the intended target for the web hosts (#6931) —
+their volumes carry no comparable pre-network constraint — and inngest's ordering is the reason the
+fleet keeps two answers rather than a defect to close.
+
+**The split is 2–1, not 1–1, and the majority shape already solves the ordering limb git-data
+does not.** `registry-luks-open.service` (`cloud-init-registry.yml`, #6895/D2) has run the
+network-online oneshot shape since before this change — `After=`/`Wants=network-online.target`,
+`Type=oneshot`, `RemainAfterExit=yes` — and it additionally carries
+`Before=docker.service cron.service`, which orders its consumers on the store BY CONSTRUCTION,
+the property the paragraph above says git-data cannot express. git-data's consumers are the
+fstab `.mount` and `git-data-gc.service` rather than a daemon, so the same limb is bought there
+by contract clauses (h) and (i) instead; but a future consumer that IS a unit should take
+registry's `Before=` rather than re-deriving the problem.
+
+**What the rung-2 gate does and does not check, recorded so the next reader does not over-read it.**
+`git_data_rung2_rehearsal_gate` binds landed evidence to a hash of the payload, and #8210 added the
+`RUNG2_REBOOT_REOPEN` key that a rehearsal's reset arm writes. The gate checks the evidence's SHAPE
+and its binding to the template; it does not assert that the reboot verdict is `PASS`. Today that
+is covered outside the gate — the #8210 follow-through probe reads the key from `origin/main` and
+FAILs on any non-`PASS` — so the property is instrumented but not interlocked. Closing that gap is
+[#8010](https://github.com/jikig-ai/soleur/issues/8010)'s subject (the gate checking assertion shape
+rather than that a rehearsal passed), and it is named here rather than fixed here because widening
+the gate in this change would have shipped an un-rehearsed interlock into the replace route.
+
+What this amendment does NOT do: it does **not** adopt the self-reboot primitive for git-data
+(this ADR still authorizes it for the registry host only), and it does not touch the SECOND
+normative blocker above (replace-on-rotation) — a passphrase rotation is still a full volume
+cutover, and the reopen's device-identity phase refuses a stale pin rather than papering over
+one.
 
 ### Authority note
 

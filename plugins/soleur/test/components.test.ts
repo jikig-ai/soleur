@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Glob } from "bun";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   discoverAgents,
@@ -8,12 +8,17 @@ import {
   discoverSkills,
   parseComponent,
   getComponentName,
+  discoverSkillsIn,
+  isUserInvocable,
+  collidingNames,
+  unackedDuplicates,
+  normalizeSkillRoot,
   PLUGIN_ROOT,
 } from "./helpers";
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 2442; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline)
+const SKILL_DESCRIPTION_WORD_BUDGET = 2499; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline)
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
@@ -237,6 +242,62 @@ describe("No backtick file references in skills", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Every references/*.md is REACHABLE from its skill (#8302 review F4)
+// ---------------------------------------------------------------------------
+//
+// The byte ratchet (scripts/lint-skill-body-budget.py) is one-sided: shrinking a
+// SKILL.md never reds. Its own failure text prescribes "extract a block into
+// references/ behind a load directive" -- and review measured that deleting the
+// directive plan/SKILL.md carries for references/plan-sharp-edges.md (151 KB)
+// reddened NOTHING: the extracted file became an orphan silently, which is
+// ADR-151's "appears enforced, is absent" produced by the mechanism meant to
+// contain prompt weight. Every future extraction inherits the gap unless
+// something pins reachability. This does: each references/*.md must be named
+// (by basename) from at least one other file in its skill directory.
+describe("references/ files are reachable from their skill", () => {
+  // Pre-existing orphan at the introduction of this guard, NOT created by it.
+  // Only a legal-normalise fixture names it. Exact-count ledger: it may shrink
+  // (delete or link the file) and never grow.
+  const KNOWN_ORPHANS = new Set(["skill-security-scan/references/disclaimer.md"]);
+  const skillsDir = resolve(PLUGIN_ROOT, "skills");
+  const rows: Array<{ rel: string; linked: boolean }> = [];
+  for (const skill of readdirSync(skillsDir)) {
+    const refDir = resolve(skillsDir, skill, "references");
+    if (!existsSync(refDir)) continue;
+    for (const f of readdirSync(refDir)) {
+      if (!f.endsWith(".md")) continue;
+      const rel = `${skill}/references/${f}`;
+      // Every other file in the skill dir, any extension, one level of
+      // nesting (SKILL.md, sibling references, scripts, workflows).
+      const haystack: string[] = [];
+      const walk = (d: string, depth: number) => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const full = resolve(d, e.name);
+          if (e.isDirectory()) { if (depth < 2) walk(full, depth + 1); continue; }
+          if (full === resolve(refDir, f)) continue;
+          haystack.push(readFileSync(full, "utf-8"));
+        }
+      };
+      walk(resolve(skillsDir, skill), 0);
+      rows.push({ rel, linked: haystack.some((t) => t.includes(f)) });
+    }
+  }
+
+  test("the census reached a non-trivial population", () => {
+    // Non-vacuity: this guard is only evidence if it actually walked the
+    // references it claims to. plan-sharp-edges.md is the file the guard was
+    // written for and MUST be in the population.
+    expect(rows.length).toBeGreaterThanOrEqual(20);
+    expect(rows.map((r) => r.rel)).toContain("plan/references/plan-sharp-edges.md");
+  });
+
+  test("every references/*.md is named from its skill, except the pinned pre-existing orphans", () => {
+    const orphans = rows.filter((r) => !r.linked).map((r) => r.rel).sort();
+    expect(orphans).toEqual([...KNOWN_ORPHANS].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Autonomous-loop skills must disclose API budget (#3819)
 // ---------------------------------------------------------------------------
 
@@ -320,6 +381,122 @@ describe("Decision-principles taxonomy wiring", () => {
         `ship/SKILL.md lost the "${token}" wiring — headless decision challenges would ` +
           `no longer reach the operator (regresses ADR-084's legible surface).`,
       ).toBe(true);
+    }
+  });
+});
+
+describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
+  // Loop until stable, not a single pass. A one-shot replace is incomplete
+  // multi-character sanitization (CodeQL js/incomplete-multi-character-sanitization,
+  // high): removing an inner `<!-- … -->` can splice its neighbours into a FRESH
+  // `<!--`, so a crafted overlap survives the strip. That matters here and not
+  // only in the abstract — this strip exists so a comment cannot satisfy the
+  // assertions below, and the surviving-comment case is exactly the one that
+  // would let a commented-out invocation certify the wiring as present.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
+
+  // The skill is only ever reached from ship's operator-step gate; an orphaned
+  // skill is the failure R14 folded this assertion in to catch. HTML comments
+  // are stripped BEFORE matching (a comment can carry the literal and would
+  // otherwise satisfy a bare regex), and the match is anchored to the option-4
+  // list item of the gate, not to any mention anywhere in the file.
+  // The strip is the guard's own precondition, so it gets its own row. The
+  // fixture is the overlap CodeQL named: a single-pass replace consumes the
+  // INNER comment and splices the remainder into a fresh, live
+  // `<!-- skill: soleur:operator-bootstrap -->` — the literal the assertion
+  // below matches. Measured: one pass leaves it, the loop removes it.
+  test("stripHtmlComments survives an overlapping comment that would re-form the invocation", () => {
+    const evil = "<!<!-- x -->-- skill: soleur:operator-bootstrap -->";
+    // The single-pass control is written with indexOf/slice, not a regex replace,
+    // on purpose: CodeQL's js/incomplete-multi-character-sanitization matches the
+    // replace shape and would flag the REPRODUCTION of the defect as the defect
+    // (alert #221 did exactly that). Semantics are identical on this fixture —
+    // remove the first `<!-- … -->` exactly once, which is what one pass of the
+    // old strip did.
+    const removeFirstComment = (input: string): string => {
+      const open = input.indexOf("<!--");
+      const close = open < 0 ? -1 : input.indexOf("-->", open + 4);
+      return open < 0 || close < 0 ? input : input.slice(0, open) + input.slice(close + 3);
+    };
+    const singlePass = removeFirstComment(evil);
+    expect(
+      singlePass.includes("skill: soleur:operator-bootstrap"),
+      "fixture no longer reproduces the single-pass defect — pick a new overlap or this row proves nothing",
+    ).toBe(true);
+    expect(
+      stripHtmlComments(evil).includes("skill: soleur:operator-bootstrap"),
+      "stripHtmlComments left a commented-out invocation intact — a comment can certify the wiring",
+    ).toBe(false);
+  });
+
+  test("ship's operator-step gate offers option 4 as the Skill-tool invocation of soleur:operator-bootstrap", () => {
+    const raw = stripHtmlComments(
+      readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8"),
+    );
+    const option4 = raw
+      .split("\n")
+      .find((line) => /^4\.\s+\*\*Generate a runnable script instead/.test(line));
+    expect(
+      option4,
+      "ship/SKILL.md lost the gate's option-4 line (`4. **Generate a runnable script instead …`).",
+    ).toBeDefined();
+    expect(
+      /skill:\s*soleur:operator-bootstrap(?![\w-])/.test(option4 ?? ""),
+      "the option-4 line no longer carries `skill: soleur:operator-bootstrap` — the " +
+        "hr-multi-step-post-merge-bootstrap-script artifact has no producer in the pipeline.",
+    ).toBe(true);
+  });
+
+  // help.md renders skills by prefix family (R23), so the two skills reach the
+  // menu through the `operator-*` family rule in EVERY harness block — checked
+  // per block (split on the `### ` headings), because a total count of 3 is
+  // satisfied by one block mentioning the family three times while another
+  // dropped it.
+  test("help.md carries the operator-* family in each harness block", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "commands", "help.md"), "utf-8");
+    const blocks = raw.split(/^### /m).slice(1);
+    const wanted = ["Claude Code", "Devin CLI", "Grok Build"];
+    for (const name of wanted) {
+      const block = blocks.find((b) => b.startsWith(name));
+      expect(block, `help.md has no \`### ${name}\` harness block`).toBeDefined();
+      expect(
+        /operator-\*/.test(block ?? ""),
+        `the \`### ${name}\` block of help.md does not name the operator-* family`,
+      ).toBe(true);
+    }
+    for (const skillName of ["operator-bootstrap", "operator-rephrase"]) {
+      expect(
+        existsSync(resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md")),
+        `${skillName} is missing — the operator-* family rule in help.md would render nothing for it.`,
+      ).toBe(true);
+    }
+  });
+
+  // Two Phase-6 body templates carry the Merge Danger block (gh pr edit and gh
+  // pr create); which one runs depends only on whether a draft PR exists, so
+  // an edit to one and not the other is a silent partial. Byte-identical after
+  // the indentation the fenced block adds is removed.
+  test("ship's two Merge Danger template blocks are byte-identical", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    const blocks: string[] = [];
+    const re = /^[ \t]*## Merge Danger\n([\s\S]*?)\n[ \t]*## Changelog/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) {
+      blocks.push(m[1].split("\n").map((l) => l.replace(/^[ \t]+/, "")).join("\n"));
+    }
+    expect(blocks.length, "expected exactly two `## Merge Danger` template blocks").toBe(2);
+    expect(blocks[0]).toBe(blocks[1]);
+    for (const b of blocks) {
+      expect(/^\*\*Undo:\*\*/m.test(b)).toBe(true);
+      expect(/^\*\*Blast Radius:\*\*/m.test(b)).toBe(true);
     }
   });
 });
@@ -964,5 +1141,299 @@ describe("collision-gate probes carry an explicit --state", () => {
         "is a pure existence drill with no post-search narrowing OR the bounded `linked:issue " +
         "#N` shape. See #6793.",
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin slash-name uniqueness
+//
+// No name is PRESENTED twice to a user for any harness this plugin ships to.
+// "Presented" rather than "registered": a skill that is registered but not
+// user-invocable is reachable by the model and absent from the `/` menu.
+//
+// Deliberately its own block, not folded into "Kebab-case filenames" — that one
+// is about naming FORM, this is about namespace UNIQUENESS, and a failure filed
+// under the wrong heading reads as contradicting itself.
+// ---------------------------------------------------------------------------
+describe("plugin slash-name uniqueness", () => {
+  // Discovered by dirent scan, NOT by enumerating the three manifests that
+  // exist today, so a future `.grok-plugin/plugin.json` is covered by
+  // construction. Bun's Glob does not match dot-directories — a `.*-plugin`
+  // glob returns [] and would report a clean sweep having looked at nothing.
+  const manifestDirs = readdirSync(PLUGIN_ROOT, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && /^\..+-plugin$/.test(d.name))
+    .map((d) => d.name)
+    .sort();
+
+  const commandNames = discoverCommands().map((c) => getComponentName(c, "command"));
+
+  const rootsFor = (manifestDir: string) => {
+    const manifestPath = resolve(PLUGIN_ROOT, manifestDir, "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      skills?: string[];
+    };
+    // The `skills` key is ADDITIVE in Claude Code, never a replacement, so the
+    // default scan is always a member. Duplicate spellings collapse inside
+    // collidingNames().
+    //
+    // CAVEAT, harness-qualified per ADR-224 decision 1: this models EVERY
+    // manifest as additive, and ADR-215 §Verification measured Codex as
+    // replace-default (a single custom root HID the canonical skills). That is
+    // harmless only because `.codex-plugin` declares `./skills` explicitly today.
+    // If that declaration were ever dropped, this would inject a root Codex does
+    // not scan, report the acked dupes, and go green over ADR-215's measured
+    // failure mode. Codex's coverage is scripts/codex-plugin-smoke.mjs, not this
+    // guard — but note what that script actually establishes: its "101 skills" is
+    // `expectedSkills`, computed locally as the 98 SKILL.md directories plus an
+    // unconditional push of three names already among the 98, BEFORE it contacts
+    // Codex. Only `discoveredSkills` would prove two-root resolution, and nothing
+    // in the repo captures it. Inferred from the manifest, not measured.
+    const declared = Array.isArray(manifest.skills) ? manifest.skills : [];
+    return ["skills", ...declared].map((root) => ({
+      root,
+      skills: discoverSkillsIn(root).map((p) => ({
+        name: getComponentName(p, "skill"),
+        userInvocable: isUserInvocable(p),
+      })),
+    }));
+  };
+
+  // Known, deliberate cross-root duplication, MEASURED rather than inferred:
+  // `devin skills list` reports /soleur:go from BOTH `skills/go` and
+  // `devin/skills/go`, each [user,model]. The Codex and Devin manifests declare
+  // two roots and the three entry-point shims live in both.
+  //
+  // Collapsing it means DELETING the shared shims, and that is blocked on the
+  // OTHER THREE HARNESSES, not on Claude Code dispatch.
+  //
+  // CORRECTED 2026-09-17 by measurement. This comment previously said
+  // `plugins/soleur/skills/go/` is the only model-invocable `Skill(soleur:go)`
+  // handle and that `commands/go.md` is user-typed only. Both are FALSE on Claude
+  // Code: probed with all three shims deleted, `Skill(soleur:help)` still
+  // succeeds and returns `commands/help.md`, because commands are
+  // model-invocable and SHADOW the same-named skill. The correction is recorded
+  // here rather than applied silently because the false version was the stated
+  // reason #8236 was deferred — and because it survived in THIS carrier after
+  // being retracted elsewhere in the same file, leaving the file asserting both.
+  //
+  // What actually blocks the deletion: `devin skills list` resolves these three
+  // names from both roots, `.codex-plugin` declares `./skills`, and
+  // `.grok/config.toml` loads this same tree. Claude Code happens to absorb the
+  // deletion; the other three do not.
+  //
+  // Ack'd BY NAME so a NEW cross-root duplicate — the class this clause exists
+  // to catch — still reds; mutation row M6 proves that. Adding a name here is a
+  // deliberate act, not a baseline regeneration.
+  //
+  // Retired by #8236, which deletes the shared shims once the dispatch
+  // replacement lands. The issue number is inline so the ack is traceable to the
+  // thing that ends it rather than outliving its reason silently.
+  const ACKED_CROSS_ROOT_DUPES = new Set(["go", "help", "sync"]);
+
+  // The roots Claude Code itself resolves: the default scan plus whatever the
+  // Claude manifest declares (the key is ADDITIVE there). Clause (c) forbids
+  // that key, so this is `["skills"]` today — derived, not assumed, so clause
+  // (b) stays correct if clause (c) is ever relaxed.
+  const claudeRoots = (() => {
+    const m = JSON.parse(
+      readFileSync(resolve(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf-8"),
+    ) as { skills?: string[] };
+    return [...new Set(["skills", ...(Array.isArray(m.skills) ? m.skills : [])])];
+  })();
+
+  test("discovers the manifests and components it is asserting over", () => {
+    // A guard whose inputs came back empty reports a clean sweep having looked
+    // at nothing, so each floor below is the emptiness this guard cannot
+    // tolerate — not a count that ordinary growth has to keep up with.
+    //
+    // `commandNames` is the load-bearing one: if command discovery returned [],
+    // clause (b) compares against an empty set and passes VACUOUSLY on every
+    // skill in the tree.
+    // Pinned, not floored: a cardinality floor cannot tell "one manifest" from
+    // "all manifests", and narrowing the dirent regex to `.claude-plugin` (the
+    // one manifest that structurally cannot fail clause (a)) would drop both
+    // real rows while a >= 1 floor stayed green.
+    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".devin-plugin"]);
+
+    // Identity, not just count: three WRONG stems satisfy a length floor, and
+    // clause (b) would then compare against names no command has.
+    expect(commandNames).toEqual(expect.arrayContaining(["go", "help", "sync"]));
+    expect(commandNames.length).toBeGreaterThanOrEqual(3);
+
+    // Swept over the OPERAND clause (b) consumes, not over the literal "skills".
+    // Pointing claudeRoots at a nonexistent directory otherwise leaves clause (b)
+    // scanning zero skills and comparing [] to [] while this floor still reports
+    // a healthy corpus from a root clause (b) no longer reads.
+    expect(claudeRoots.length).toBeGreaterThanOrEqual(1);
+    for (const root of claudeRoots) {
+      expect(discoverSkillsIn(root).length, `claude root '${root}' resolved no skills`).toBeGreaterThan(0);
+    }
+
+    // At least two manifests must reach clause (a)'s real assertion rather than
+    // its single-root early return — otherwise emptying `manifest.skills` sends
+    // every manifest down the escape hatch, which emits a PASSING expect().
+    //
+    // COUNT DISTINCT NORMALIZED ROOTS, NOT RAW DECLARATIONS. `rootsFor` returns
+    // `["skills", ...declared]` verbatim, while `collidingNames()` collapses
+    // spellings before it compares anything. A floor over the raw list therefore
+    // measures a DIFFERENT operand than the assertion it backstops: a manifest
+    // declaring `["./skills"]` yields `["skills", "./skills"]` — ONE directory —
+    // and satisfies a `.length >= 2` floor as "multi-root" while clause (a) sees
+    // a single root and takes the early return.
+    //
+    // Measured, not reasoned: with `declared` forced to `["./skills"]` and a real
+    // `devin/skills/review/SKILL.md` added (mutation row M6, the row the matrix
+    // calls its most important), the raw-length floor reported 1348 pass / 0 fail
+    // while `.devin-plugin` still resolved `review` from two roots. That is the
+    // "floor that does not read the operand the assertion consumes" shape — the
+    // one this guard set exists to refuse — reproduced inside the guard itself.
+    const distinctRoots = (d: string) =>
+      new Set(rootsFor(d).map((r) => normalizeSkillRoot(r.root))).size;
+    expect(
+      manifestDirs.filter((d) => distinctRoots(d) >= 2).length,
+      "no manifest reached the multi-root path; clause (a) asserted nothing",
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  // The ack is pinned to its exact membership, not floored. Shrinking it is as
+  // deliberate an act as growing it: a name removed here before #8236 actually
+  // deletes the shim would red clause (a) with no reader able to tell whether
+  // that was the intended retirement or an accident.
+  test("the cross-root ack is exactly the three names #8236 retires", () => {
+    expect([...ACKED_CROSS_ROOT_DUPES].sort()).toEqual(["go", "help", "sync"]);
+  });
+
+  // Clause (b) goes GREEN if these skills are DELETED — greener, in fact, since a
+  // deleted skill cannot collide with a command stem. So without this, the guard
+  // set's gradient points at removing the very files the PR exists to keep.
+  //
+  // CORRECTED 2026-09-17 by measurement. An earlier version of this comment said
+  // `skills/go/` is the SOLE model-invocable `Skill(soleur:go)` handle and that
+  // `commands/go.md` is user-typed only. Both are FALSE on Claude Code: probed
+  // with all three shims deleted, `Skill(soleur:help)` still succeeds and returns
+  // `commands/help.md`. Commands are model-invocable and SHADOW the same-named
+  // skill, so the command supplies the handle and the skill is a fallback behind
+  // it.
+  //
+  // What this still guards, and why it is not merely belt-and-braces: the other
+  // three harnesses DO resolve these paths. `devin skills list` reports
+  // /soleur:go from both `skills/go` and `devin/skills/go`; `.codex-plugin`
+  // declares `./skills`; `.grok/config.toml` loads this tree. Deleting them is a
+  // real change on three harnesses even though Claude Code absorbs it. Retired
+  // with #8236, which owns that deletion.
+  //
+  // Derived from ACKED_CROSS_ROOT_DUPES rather than restated: two parallel
+  // hardcoded lists drift under a partial #8236 retirement, and an empty literal
+  // array here would silently delete every assertion below it.
+  for (const name of [...ACKED_CROSS_ROOT_DUPES]) {
+    test(`skills/${name}/ survives as a model-invocable dispatch handle`, () => {
+      const rel = `skills/${name}/SKILL.md`;
+      expect(
+        existsSync(resolve(PLUGIN_ROOT, rel)),
+        `${rel} is resolved by Codex, Devin and Grok (measured: devin skills ` +
+          `list reports /soleur:${name} from this root). Claude Code absorbs its ` +
+          `deletion because commands/${name}.md shadows it, but the other three ` +
+          `harnesses do not. Deletion is owned by #8236, not by an edit here.`,
+      ).toBe(true);
+      const fm = parseComponent(rel).frontmatter;
+      expect(
+        fm["disable-model-invocation"],
+        `${rel} must stay MODEL-invocable. \`user-invocable: false\` hides it ` +
+          `from the / menu and is correct; \`disable-model-invocation: true\` ` +
+          `would hide it from the model, which is the dispatch regression.`,
+      ).toBeUndefined();
+      expect(fm["user-invocable"], `${rel} should stay hidden from the / menu`).toBe(false);
+    });
+  }
+
+  for (const manifestDir of manifestDirs) {
+    // Clause (a) — buys the skills-vs-skills class (two roots resolving one name).
+    test(`${manifestDir}: no skill name is contributed by more than one root`, () => {
+      // A manifest resolving a single root cannot contribute a name twice, so
+      // asserting over it is structurally unable to fail. Declare that rather
+      // than letting it read as coverage.
+      if (rootsFor(manifestDir).length < 2) {
+        expect(rootsFor(manifestDir).length).toBe(1);
+        return;
+      }
+      const { duplicateSkillNames } = collidingNames({
+        commandNames: [],
+        skillRoots: rootsFor(manifestDir),
+      });
+      const unacked = unackedDuplicates(duplicateSkillNames, ACKED_CROSS_ROOT_DUPES);
+      expect(
+        unacked,
+        `${manifestDir} resolves these skill names from more than one root: ` +
+          `${unacked.join(", ")}. Two roots resolving one name is a loader ambiguity ` +
+          `for every harness. Either remove the duplicate directory or, if the ` +
+          `duplication is deliberate, add it to ACKED_CROSS_ROOT_DUPES with a reason.`,
+      ).toEqual([]);
+    });
+
+  }
+
+  // Clause (b) — buys the commands-vs-skills class this PR fixes.
+  //
+  // Scoped to the roots the CLAUDE manifest resolves, DERIVED rather than
+  // restated: `commands/` shares a menu namespace only on Claude Code, and the
+  // per-harness roots (`codex/skills/`, `devin/skills/`) are simply not in this
+  // manifest, so their exemption falls out of the derivation instead of needing
+  // a hand-picked string and a paragraph defending it. Those roots exist to
+  // expose a canonical `commands/<name>.md` as a SKILL on a harness with no
+  // command surface, so mirroring a command stem there is the intended design.
+  test("user-invocable skills in Claude's roots are disjoint from command stems", () => {
+    const { commandCollisions } = collidingNames({
+      commandNames,
+      skillRoots: claudeRoots.map((root) => ({
+        root,
+        skills: discoverSkillsIn(root).map((p) => ({
+          name: getComponentName(p, "skill"),
+          userInvocable: isUserInvocable(p),
+        })),
+      })),
+    });
+    expect(
+      commandCollisions,
+      `These names render TWICE in the Claude Code slash menu — once from ` +
+        `plugins/soleur/commands/<name>.md and once from a user-invocable skill ` +
+        `of the same name: ${commandCollisions.join(", ")}. Add ` +
+        `\`user-invocable: false\` to the skill's frontmatter (it stays ` +
+        `model-invocable and leaves the menu), or rename one side.`,
+    ).toEqual([]);
+  });
+
+  // Clause (c) — stronger than (b) on purpose: it fails even on a NON-colliding
+  // addition. Claude Code is the one harness whose default `skills/` scan shares
+  // a namespace with `commands/`, and it has no denylist, so the only safe number
+  // of additive roots there is zero.
+  test(".claude-plugin/plugin.json declares no component-registering key", () => {
+    const manifestPath = resolve(PLUGIN_ROOT, ".claude-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+
+    expect(
+      "skills" in manifest,
+      "Claude Code's `skills` key is ADDITIVE, so declaring a per-harness root " +
+        "here re-creates the duplicate menu rows this guard exists to prevent. " +
+        "Per-harness roots belong in .codex-plugin / .devin-plugin only.",
+    ).toBe(false);
+
+    // `commands`, `agents` and `workflows` REPLACE their default directory
+    // (documented: "when the manifest specifies `commands`, the default
+    // `commands/` directory is not scanned"). That is a sharper hazard than the
+    // additive `skills` key and clause (b) cannot see it: declaring `commands`
+    // stops the three canonical command rows rendering, while discoverCommands()
+    // still reads them off disk — so clause (b) would assert against commands
+    // that no longer exist, and because the three skills carry
+    // `user-invocable: false`, /soleur:go|help|sync would vanish from the menu
+    // ENTIRELY with this guard green.
+    for (const key of ["commands", "agents", "workflows"]) {
+      expect(
+        key in manifest,
+        `\`${key}\` REPLACES its default directory rather than adding to it, so ` +
+          `declaring it here silently un-registers everything under ${key}/. If ` +
+          `this is ever needed, the default must be listed explicitly ` +
+          `(e.g. "${key}": ["./${key}/", "./extras/"]) and this guard updated.`,
+      ).toBe(false);
+    }
   });
 });

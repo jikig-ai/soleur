@@ -3,35 +3,39 @@ name: gdpr-gate
 description: "This skill should be used when auditing diffs or plans for GDPR/CCPA/HIPAA compliance gaps."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # GDPR / CCPA / HIPAA pre-generation gate
 
-`gdpr-gate` is an **advisory** code-level gate that fires inline during `/soleur:plan` Phase 2.7 and at `/soleur:work` Phase 2 exit. It scans plan prose, schema migrations, and diffs for regulated-data gaps under GDPR (Articles 5/6/9/17/20/25/30/32/33/35), with secondary coverage for CCPA / CPRA and HIPAA. It never blocks. Critical findings (Article 9 special-category data) prompt operator acknowledgment + GitHub issue creation; the gate never auto-writes to `compliance-posture.md`.
+`gdpr-gate` is an **advisory** code-level gate that fires inline during `soleur:plan` Phase 2.7 and at `soleur:work` Phase 2 exit. It scans plan prose, schema migrations, and diffs for regulated-data gaps under GDPR (Articles 5/6/9/17/20/25/30/32/33/35), with secondary coverage for CCPA / CPRA and HIPAA. It never blocks. Critical findings (Article 9 special-category data) prompt operator acknowledgment + GitHub issue creation; the gate never auto-writes to `compliance-posture.md`.
 
-This is **not legal review**. Output is a heuristic, machine-generated checklist meant to compress regulator-shaped surprises out of the normal feature-design loop. Consult the `clo` agent and `legal-compliance-auditor` before merging anything load-bearing.
+This is **not legal review**. Output is a heuristic, machine-generated checklist meant to compress regulator-shaped surprises out of the normal feature-design loop. Consult the `soleur:legal:clo` agent and `soleur:legal:legal-compliance-auditor` before merging anything load-bearing.
 
 ## When to invoke
 
-- **Plan time** — automatic at `/soleur:plan` Phase 2.7 when the plan touches regulated-data surfaces (per `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex).
-- **Work time** — automatic at end of `/soleur:work` Phase 2, single pass after all per-task RED/GREEN/REFACTOR loops complete (token budget ≤4k per invocation).
-- **Manual** — `/soleur:gdpr-gate "<scope>"` where `<scope>` is a file path, glob, or one-line description.
-- **Manual repo-scan** — `/soleur:gdpr-gate --repo-scan` runs the gate against the whole working tree (operator-initiated only). Defenses, batching, and output contract documented in `## --repo-scan mode` below.
-- **Hook (advisory only)** — `lefthook.yml` `gdpr-gate-advisory` prints a stderr breadcrumb when staged paths match the canonical regex. The hook always exits 0 — it never blocks the commit. Blocking enforcement lives in `/soleur:ship` Phase 5.5 (post-PR).
+- **Plan time** — automatic at `soleur:plan` Phase 2.7 when the plan touches regulated-data surfaces (per `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex).
+- **Work time** — automatic at end of `soleur:work` Phase 2, single pass after all per-task RED/GREEN/REFACTOR loops complete (token budget ≤4k per invocation).
+- **Manual** — `soleur:gdpr-gate "<scope>"` where `<scope>` is a file path, glob, or one-line description.
+- **Manual repo-scan** — `soleur:gdpr-gate --repo-scan` runs the gate against the whole working tree (operator-initiated only). Defenses, batching, and output contract documented in `## --repo-scan mode` below.
+- **Hook (advisory only)** — `lefthook.yml` `gdpr-gate-advisory` prints a stderr breadcrumb when staged paths match the canonical regex. The hook always exits 0 — it never blocks the commit. Blocking enforcement lives in `soleur:ship` Phase 5.5 (post-PR).
 
-The gate is **read-only with respect to the canonical `/soleur:plan` template**. It audits the plan; it never injects its own checklist into the plan body. Architectural invariant per ADR-026.
+The gate is **read-only with respect to the canonical `soleur:plan` template**. It audits the plan; it never injects its own checklist into the plan body. Architectural invariant per ADR-026.
 
 ## Disclaimer (always first)
 
 Every gate output begins, as the first non-blank line, with the literal:
 
 ```
-**This is not legal review. Findings are heuristic. Consult `clo` + `legal-compliance-auditor` before merging.**
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
 ```
 
 The disclaimer is hardcoded. A test in `plugins/soleur/test/gdpr-gate.test.ts` asserts the literal appears as the first non-blank line of every fixture output.
 
 ## --repo-scan mode
 
-`/soleur:gdpr-gate --repo-scan` runs the gate against the whole working tree. Operator-initiated only — never auto-fires from `/soleur:plan`, `/soleur:work`, or lefthook. Token budget remains ≤4k per Haiku call (ADR-026 TR3) via 25-files-per-batch fan-out.
+`soleur:gdpr-gate --repo-scan` runs the gate against the whole working tree. Operator-initiated only — never auto-fires from `soleur:plan`, `soleur:work`, or lefthook. Token budget remains ≤4k per Haiku call (ADR-026 TR3) via 25-files-per-batch fan-out.
 
 **Sole-arg sentinel.** When invoked with `$ARGUMENTS`, trim leading/trailing whitespace (including `\t` and `\n`). If the trimmed value equals **exactly** `--repo-scan` (no spaces, no quotes, no additional tokens), enter repo-scan mode. Any other value — including `--repo-scan apps/web-platform`, `repo scan`, or `"--repo-scan section of the repo"` — falls through to the v1 scope-string mode and is forwarded verbatim to the prompt.
 
@@ -101,7 +105,7 @@ The 5 mandatory v1 checks (FR4 above) fire on every gate invocation. `--repo-sca
 Each finding follows this schema:
 
 ```markdown
-**This is not legal review. Findings are heuristic. Consult `clo` + `legal-compliance-auditor` before merging.**
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
 
 ### `<check_id>` — <one-line title>
 
@@ -184,7 +188,7 @@ The `DO NOT INCLUDE COLUMN VALUES` directive is a verbatim string assertion in `
 
 ## First-run on existing codebase
 
-Existing migrations 001–040 in this repo do NOT use `-- LAWFUL_BASIS: <basis>` annotations. A backfill audit will fire `Important` (`GDPR-Art-6`) findings on every column that lacks one. **This is intentional** — backfill audits surface existing gaps, and the demotion of Art. 6 to `Important` keeps the noise from training operators to dismiss `Critical`. Operators may suppress backfill noise by scoping the gate to a specific diff (`/soleur:gdpr-gate "git diff main...HEAD"`) rather than a full repo scan.
+Existing migrations 001–040 in this repo do NOT use `-- LAWFUL_BASIS: <basis>` annotations. A backfill audit will fire `Important` (`GDPR-Art-6`) findings on every column that lacks one. **This is intentional** — backfill audits surface existing gaps, and the demotion of Art. 6 to `Important` keeps the noise from training operators to dismiss `Critical`. Operators may suppress backfill noise by scoping the gate to a specific diff (`soleur:gdpr-gate "git diff main...HEAD"`) rather than a full repo scan.
 
 ## Future severity changes
 
@@ -198,9 +202,9 @@ Add new severities in this file's table FIRST, then run the three greps before w
 
 ## Boundary with sibling agents
 
-- **`data-integrity-guardian`** — migration safety + judgment-based PII review. The gate is deterministic pattern-matching; the guardian is judgment-based.
-- **`security-sentinel`** — OWASP / CWE security-of-processing flaws. Art. 32 overlaps; sentinel handles the "how", gate handles the "what".
-- **`clo`** — reads `compliance-posture.md`; the gate produces the row contract the CLO consumes. The gate never writes; the operator does.
+- **`soleur:engineering:review:data-integrity-guardian`** — migration safety + judgment-based PII review. The gate is deterministic pattern-matching; the guardian is judgment-based.
+- **`soleur:engineering:review:security-sentinel`** — OWASP / CWE security-of-processing flaws. Art. 32 overlaps; sentinel handles the "how", gate handles the "what".
+- **`soleur:legal:clo`** — reads `compliance-posture.md`; the gate produces the row contract the CLO consumes. The gate never writes; the operator does.
 - **`legal-audit`** / **`legal-generate`** — document-layer skills (privacy policy, DPA, terms). The gate is code-layer.
 
 Canonical disambiguation prose lives in `plugins/soleur/skills/review/SKILL.md` §boundaries.
@@ -263,9 +267,11 @@ and internal endpoints that only exist there.
    an operator-acknowledged write only.
 4. Commit the row with `compliance: register vendor-pin-staleness for #<issue>`.
 5. Drive a re-vendor: ping the in-flight `ci/content-vendor-drift-*` PR if one
-   is open, or dispatch the cron manually via `/soleur:trigger-cron` with
+   is open, or dispatch the cron manually via `soleur:trigger-cron` with
    `cron/content-vendor-drift.manual-trigger`. `gh workflow run` cannot reach
    it — the job is an Inngest cron, not a GitHub Actions workflow.
+   Print the dispatch as the active harness's operator-typed form per `formatSkillInvocation`
+   (`plugins/soleur/lib/harness.ts`); the operator types it, no agent reads it.
 
 The regulated-data PR that surfaced the banner can ship; the staleness
 follow-up gets its own review and merge.
@@ -310,20 +316,20 @@ follow-up gets its own review and merge.
   `upstream-files`. A file must appear in exactly one, and the attribution
   header on line 1 is the oracle for which. Moving a file between them is a
   provenance falsification, not a bookkeeping change.
-- Hook layer is **advisory only** (`exit 0`). Operators expecting `lefthook` to block will be surprised — the blocking enforcement is at `/soleur:ship` Phase 5.5, post-PR.
-- The lefthook breadcrumb does NOT fire when lefthook itself is bypassed: `git commit --no-verify`, GitHub web-UI edits, fork PRs whose authors don't have lefthook installed, or agent commits on machines without `lefthook install`. In those paths the only enforcement is `/soleur:ship` Phase 5.5's critical-finding-acknowledgment gate (post-PR). Plan Phase 2.7 + work Phase 2 exit gates run regardless of lefthook because they live inside the skill, not the hook layer.
+- Hook layer is **advisory only** (`exit 0`). Operators expecting `lefthook` to block will be surprised — the blocking enforcement is at `soleur:ship` Phase 5.5, post-PR.
+- The lefthook breadcrumb does NOT fire when lefthook itself is bypassed: `git commit --no-verify`, GitHub web-UI edits, fork PRs whose authors don't have lefthook installed, or agent commits on machines without `lefthook install`. In those paths the only enforcement is `soleur:ship` Phase 5.5's critical-finding-acknowledgment gate (post-PR). Plan Phase 2.7 + work Phase 2 exit gates run regardless of lefthook because they live inside the skill, not the hook layer.
 - The `*auth*` regex match is intentionally broad — false-positives on `auth-error.ts` etc. are accepted because output is advisory and cheap.
 - Lifted upstream files are pinned to commit `7b58d68461cb1fc033a063e34cc9de63d0b4144b`. Upstream drift is governed by the content-vendoring policy at `knowledge-base/engineering/policies/content-vendoring.md`, the weekly content-vendor-drift cron (an Inngest function, `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` — it was `.github/workflows/scheduled-content-vendor-drift.yml` until the TR9 Phase-2 migration; the Sentry monitor slug keeps the old name), and the lefthook `vendor-pin-integrity` gate (silent-edit detection). NOTICE frontmatter (`upstream`, `pinned-commit`, `last-verified`, `lifted-files[]` with both `upstream-blob-sha` and `local-blob-sha`) is the canonical machine-readable form.
 - **Runtime staleness banner** (FR6 / AC6a-d): the hook subshell-execs [notice-frontmatter.sh](./scripts/notice-frontmatter.sh) `days-stale` on every invocation. Days since `last-verified` >30d → STDOUT banner. Days >90d → additional `POSTURE_FAIL:` STDOUT line; the operator follows the chain in the policy doc to append a row to `compliance-posture.md`. NOTICE deletion / parser failure / future-dated `last-verified` all resolve to `days_stale=999` → banner fires. STDOUT (not stderr) is load-bearing — agent runtimes (Claude Code skill harness, MCP servers) frequently swallow stderr. Gate exits 0 in all paths; the staleness signal is advisory.
 - **Trust-binding via cron-run timestamp** (issue #3535) — **CURRENTLY INERT, see #7255.** NOTICE `last-verified` is operator-controlled — a PR can rewrite it to today's date and suppress the 30d/90d banners. To defend against backdating, the gate also invokes `notice-frontmatter.sh cron-run-stale`, which calls `gh run list --workflow=scheduled-content-vendor-drift.yml --status=success --limit=1 --json updatedAt` and computes days since the last successful run; the staleness banner uses `MIN(notice-last-verified, cron-run-stale)`. **That workflow no longer exists** — the content-vendor-drift job moved to an Inngest cron (`apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`), which produces no GitHub Actions run for `gh run list` to find. The query therefore matches nothing, falls through to 999, and the gate shows the operator-attested-mode banner on every invocation. The failure is in the fail-safe direction (999 forces attestation rather than falsely asserting freshness), which is why it went unnoticed — but **the anti-backdating defense this bullet describes is not currently operating**. Tracked in **#7255**; repointing at another workflow filename cannot fix it, because the job is not a workflow.
-- **GH_TOKEN auth contract**: in GitHub Actions the token is auto-injected via `secrets.GITHUB_TOKEN`; in local lefthook runs it is sourced from `gh auth token` if the operator has `gh` configured; in subagent contexts (`/soleur:plan`, `/soleur:work` shells) the token is typically absent and the gate degrades to operator-attested mode (see next bullet).
+- **GH_TOKEN auth contract**: in GitHub Actions the token is auto-injected via `secrets.GITHUB_TOKEN`; in local lefthook runs it is sourced from `gh auth token` if the operator has `gh` configured; in subagent contexts (`soleur:plan`, `soleur:work` shells) the token is typically absent and the gate degrades to operator-attested mode (see next bullet).
 - **MIN precedence and operator-attested-mode banner**: precedence is (cron+notice non-999 → MIN wins; if cron > notice the binding still defends future regressions) > (cron == 999, notice != 999 → operator-attested-mode banner + fallback to notice) > (both == 999 → existing 30d/90d banners fire). When no token is available the gate emits `ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)` to STDOUT — the documented degraded state.
 - **CODEOWNERS pin on NOTICE** (#3535 defense-in-depth): `/plugins/soleur/skills/gdpr-gate/NOTICE` requires `@deruelle` review. Load-bearing only when branch protection is enforced on `main` (an operator follow-up); the cron-run-timestamp binding is the load-bearing defense.
 - **Workflow-rename silent break — THIS ALREADY HAPPENED, and worse than a rename (#7255)**: `cron-run-stale` hard-codes `scheduled-content-vendor-drift.yml`, and the documented hazard was that renaming the workflow silently breaks the binding — `gh run list` returns empty, parser falls through to 999, gate degrades to operator-attested mode without surfacing the rename. The workflow was not renamed; it was **migrated out of GitHub Actions entirely**, so there is no filename to update the call sites to. The predicted silent degradation is the state the gate has been in ever since. Two lessons for the next binding of this shape: a liveness probe keyed on a *filename* cannot survive the job changing *substrate*, and a probe whose only failure signal is its own safe default will never announce that it stopped working — it needs to distinguish "ran, and it is stale" from "could not run at all".
-- **Per-judgment advisory banners must gate on regulated-path match** (issue #3541 user-impact-reviewer P1). The operator-attested-mode banner fires only when `${#matched[@]} > 0` (a regulated-data path is being judged this commit). Otherwise it would spam every commit in subagent shells (no `GH_TOKEN`) and train operators to ignore the signal. Pre-existing 30d/90d staleness banners DO fire unconditionally — they signal gate-internal state ("rules are stale at any rate") rather than per-judgment state ("THIS regulated PR has a degraded gate"). When adding a new advisory banner, ask: does its meaning depend on what the gate is doing on THIS invocation, or on the gate's persistent state? Per-judgment banners must scope to relevance; persistent-state banners may fire unconditionally. See `knowledge-base/project/learnings/2026-05-11-runtime-advisory-banners-must-gate-on-judgment-relevance.md`.
+- **Per-judgment advisory banners must gate on regulated-path match** (issue #3541 soleur:engineering:review:user-impact-reviewer P1). The operator-attested-mode banner fires only when `${#matched[@]} > 0` (a regulated-data path is being judged this commit). Otherwise it would spam every commit in subagent shells (no `GH_TOKEN`) and train operators to ignore the signal. Pre-existing 30d/90d staleness banners DO fire unconditionally — they signal gate-internal state ("rules are stale at any rate") rather than per-judgment state ("THIS regulated PR has a degraded gate"). When adding a new advisory banner, ask: does its meaning depend on what the gate is doing on THIS invocation, or on the gate's persistent state? Per-judgment banners must scope to relevance; persistent-state banners may fire unconditionally. See `knowledge-base/project/learnings/2026-05-11-runtime-advisory-banners-must-gate-on-judgment-relevance.md`.
 - The gate transmits column NAMES to the model (Anthropic). This is itself a Chapter V transfer; it falls under Anthropic's existing DPA recorded in `compliance-posture.md` Vendor DPAs. Row values are never sent — see "Prompt template" above.
 - AGENTS.md rule ID `hr-gdpr-gate-on-regulated-data-surfaces` is **immutable** per `cq-rule-ids-are-immutable`. v2 splits retire the ID via the retired-rule-ids ledger rather than reusing.
-- `--repo-scan` against full repo history will surface Art. 9 (`Critical`) findings on pre-v1 migrations 001–040 (legacy columns matching the special-category list). The default disposition is **tracked-not-amended** — `compliance-posture.md` Active Items records the row, no amendment migration is issued, because schema rewrites against historical PII tables carry their own data-integrity risk that typically exceeds the disclosure-cure benefit. The row reads `OPEN | tracked, not amended`. Default disposition only applies when the column is **dormant or read-only with disclosure cure available**. Amendment is required and the operator MUST consult `clo` before selecting a disposition when ANY of the following hold:
+- `--repo-scan` against full repo history will surface Art. 9 (`Critical`) findings on pre-v1 migrations 001–040 (legacy columns matching the special-category list). The default disposition is **tracked-not-amended** — `compliance-posture.md` Active Items records the row, no amendment migration is issued, because schema rewrites against historical PII tables carry their own data-integrity risk that typically exceeds the disclosure-cure benefit. The row reads `OPEN | tracked, not amended`. Default disposition only applies when the column is **dormant or read-only with disclosure cure available**. Amendment is required and the operator MUST consult `soleur:legal:clo` before selecting a disposition when ANY of the following hold:
     1. **Active processing for an undisclosed special-category purpose** — production code currently writes or reads the column for a purpose not disclosed in the privacy notice. Fix is disclosure-side (privacy notice + DPIA + Art. 6/9 lawful-basis annotation) plus, if no Art. 9(2) lawful basis applies, halting processing.
     2. **Backfill with new special-category data** — schema is old but the *data* is new (placeholder/test rows replaced with real PII). This is operationally a new processing activity; Art. 35 DPIA may itself trigger.
     3. **Cross-border transfer post-Schrems II** — the column is replicated to a non-EEA processor (analytics, support, vendor) without Chapter V safeguards (DPA + SCCs + transfer impact assessment). Disclosure cure is insufficient — fix the Chapter V gap.

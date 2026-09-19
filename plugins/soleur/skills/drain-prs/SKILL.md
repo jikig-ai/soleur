@@ -3,8 +3,12 @@ name: drain-prs
 description: "This skill should be used when draining open remote GitHub PRs: triage every open pull request into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/drain-prs` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:drain-prs`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 # Drain PRs
@@ -21,7 +25,7 @@ Use `merge-pr` for a single named PR. Use `drain-labeled-backlog` for labeled *i
 <decision_gate>
 **Merging is outward-facing — confirm before any merge.** This skill confirms tier scope with the operator via `AskUserQuestion` **before merging anything**, and supports per-PR opt-out within a tier (not just per-tier accept/reject). Confirming a tier means **the selected PRs are squash-merged to `main`** — this is not a preview; it lands code (higher irreversibility than the issue-drain, which ends at PR-opened). Respects `wg-zero-agents-until-user-confirms`.
 
-**API budget.** Fixing or reviewing PRs may delegate to `/soleur:review` (feature PRs) and spawn review agents, which run autonomously and spend non-trivial Anthropic credit against the key in your session, scaling with PR count and review-cycle depth. The `--dry-run` flag prints the full tier table with zero merges and zero delegation. Soleur does not bill or proxy these calls — Anthropic does. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+**API budget.** Fixing or reviewing PRs may delegate to `soleur:review` (feature PRs) and spawn review agents, which run autonomously and spend non-trivial Anthropic credit against the key in your session, scaling with PR count and review-cycle depth. The `--dry-run` flag prints the full tier table with zero merges and zero delegation. Soleur does not bill or proxy these calls — Anthropic does. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
 </decision_gate>
 
 ## Prerequisites
@@ -79,11 +83,11 @@ gh pr merge <N> --squash
 ```
 
 - **Merge queue active on `main`** (the current default — adopted via the `merge_queue` Terraform ruleset): `gh pr merge --squash` **enqueues** the PR; the queue handles `update-branch` + serialization + the final merge automatically. Do not hand-roll update/wait loops.
-- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>`, then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
+- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>` — **but never when both sides moved the `knowledge-base/` file count**, which a server-side merge resolves without the `kb-index` driver; merge `origin/main` locally and push instead (see [merge-pr/SKILL.md](../merge-pr/SKILL.md) §"A SERVER-SIDE update cannot run the driver"), then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
 
 ### 5. Review delegation
 
-- **Feature PRs** (`needs-review`, non-trivial diff): delegate to `/soleur:review`. Merge only if it passes.
+- **Feature PRs** (`needs-review`, non-trivial diff): delegate to `soleur:review`. Merge only if it passes.
 - **Single-file bot-fixes** (`bot-fix/review-required`): inline diff review (`gh pr diff <N>`) is sufficient; the diff is small and the change is mechanical.
 
 ### 6. Fix-recipes

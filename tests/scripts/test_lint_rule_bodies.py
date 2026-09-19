@@ -480,6 +480,170 @@ class TestBodyWeakeningGate(unittest.TestCase):
             self.assertIn("hr-never-dangerous", r.stderr)
 
 
+MIGRATED_ID = "hr-never-dangerous"
+MIGRATED_LINE = next(ln for ln in RULES.splitlines() if f"[id: {MIGRATED_ID}]" in ln)
+
+
+def _row(rid: str, body_text: str, loc: str = "plugins/soleur/skills/x/SKILL.md :: ## Home") -> str:
+    """A registry row whose hash is computed independently of the gate."""
+    import hashlib
+
+    h = hashlib.sha256(" ".join(body_text.split()).encode("utf-8")).hexdigest()
+    return f"{rid} | 2026-09-14 | #1 | {loc} | {h}"
+
+
+def _write_registry(repo: Path, rows: list[str]) -> None:
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "migrated-rule-ids.txt").write_text(
+        "# <rule-id> | <date> | <PR> | <path> :: <heading> | <body-sha256>\n"
+        + "".join(r + "\n" for r in rows)
+    )
+
+
+def _migrate_out(repo: Path, registry_rows: list[str]) -> None:
+    """Delete MIGRATED_ID's body from the corpus the way a migration does."""
+    lines = [ln for ln in RULES.splitlines() if f"[id: {MIGRATED_ID}]" not in ln]
+    (repo / "AGENTS.rules.md").write_text("\n".join(lines) + "\n")
+    _regen_manifest(repo)
+    _append_ack(repo, f"{MIGRATED_ID}|DELETED|{date.today().isoformat()}|#1|migrated")
+    _write_registry(repo, registry_rows)
+
+
+class TestMigratedRows(unittest.TestCase):
+    """Migrated bodies (#8030): the registry hash is anchored to the merge-base."""
+
+    def _check(self, repo: Path, base: str) -> subprocess.CompletedProcess:
+        return _run(repo, "--check", "--base", base)
+
+    def test_verbatim_migration_passes(self):
+        with _RepoFixture() as repo:
+            base = _merge_base(repo)
+            _migrate_out(repo, [_row(MIGRATED_ID, MIGRATED_LINE[2:])])
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "migrate")
+            r = self._check(repo, base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_migration_that_rewrites_the_body_blocks(self):
+        with _RepoFixture() as repo:
+            base = _merge_base(repo)
+            weakened = MIGRATED_LINE[2:].replace("Never do", "Try not to do")
+            self.assertNotEqual(weakened, MIGRATED_LINE[2:])
+            _migrate_out(repo, [_row(MIGRATED_ID, weakened)])
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "migrate-weakened")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"migrated row {MIGRATED_ID} records hash", r.stderr)
+
+    def test_row_for_an_id_never_in_the_corpus_blocks(self):
+        with _RepoFixture() as repo:
+            base = _merge_base(repo)
+            _write_registry(repo, [_row("hr-fabricated-never-existed", "Anything at all.")])
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "fabricate")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("hr-fabricated-never-existed names no body", r.stderr)
+
+    def _migrated_base(self, repo: Path) -> str:
+        _migrate_out(repo, [_row(MIGRATED_ID, MIGRATED_LINE[2:])])
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "migrate")
+        return _merge_base(repo)
+
+    def test_home_body_edit_with_rehash_blocks_without_ack(self):
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            weakened = MIGRATED_LINE[2:].replace("Never do", "Try not to do")
+            _write_registry(repo, [_row(MIGRATED_ID, weakened)])
+            _git(repo, "commit", "-qam", "weaken-at-home")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"migrated rule {MIGRATED_ID} body hash changed", r.stderr)
+            self.assertIn("mandatory-human-review", r.stderr)
+
+    def test_home_body_edit_with_matching_ack_passes(self):
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            weakened = MIGRATED_LINE[2:].replace("Never do", "Try not to do")
+            row = _row(MIGRATED_ID, weakened)
+            _write_registry(repo, [row])
+            new_hash = row.rsplit("|", 1)[1].strip()
+            _append_ack(repo, f"{MIGRATED_ID}|{new_hash}|{date.today().isoformat()}|#2|reworded")
+            _git(repo, "commit", "-qam", "reword-acked")
+            r = self._check(repo, base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_row_removal_blocks_without_ack_and_passes_with_one(self):
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            _write_registry(repo, [])
+            _git(repo, "commit", "-qam", "drop-row")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"migrated row {MIGRATED_ID} was removed", r.stderr)
+            _append_ack(
+                repo,
+                f"{MIGRATED_ID}|MIGRATED-ROW-DELETED|{date.today().isoformat()}|#2|retired for real",
+            )
+            _git(repo, "commit", "-qam", "drop-row-acked")
+            r = self._check(repo, base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_historical_deleted_ack_does_not_license_row_removal(self):
+        """The migration's own DELETED ack is in the base set; it must not count."""
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            _write_registry(repo, [])
+            _append_ack(repo, f"{MIGRATED_ID}|DELETED|{date.today().isoformat()}|#2|again")
+            _git(repo, "commit", "-qam", "drop-row-wrong-token")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+
+    def test_home_relocation_blocks_without_ack_and_passes_with_one(self):
+        import hashlib
+
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            new_loc = "plugins/soleur/skills/obscure/reference.md :: ## Elsewhere"
+            _write_registry(repo, [_row(MIGRATED_ID, MIGRATED_LINE[2:], new_loc)])
+            _git(repo, "commit", "-qam", "relocate")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"migrated rule {MIGRATED_ID} moved home", r.stderr)
+            token = "RELOCATED-" + hashlib.sha256(new_loc.encode("utf-8")).hexdigest()[:16]
+            _append_ack(repo, f"{MIGRATED_ID}|{token}|{date.today().isoformat()}|#2|moved on purpose")
+            _git(repo, "commit", "-qam", "relocate-acked")
+            r = self._check(repo, base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_head_row_without_hash_column_blocks(self):
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            (repo / "scripts" / "migrated-rule-ids.txt").write_text(
+                f"{MIGRATED_ID} | 2026-09-14 | #1 | plugins/soleur/skills/x/SKILL.md :: ## Home\n"
+            )
+            _git(repo, "commit", "-qam", "demote-row")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"migrated row {MIGRATED_ID} in scripts/migrated-rule-ids.txt has no body-sha256", r.stderr)
+
+    def test_legacy_unhashed_base_row_accepts_a_backfill(self):
+        with _RepoFixture() as repo:
+            (repo / "scripts").mkdir()
+            (repo / "scripts" / "migrated-rule-ids.txt").write_text(
+                "wg-legacy-row | 2026-09-10 | #8034 | plugins/soleur/skills/x/SKILL.md :: ## Home\n"
+            )
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "legacy")
+            base = _merge_base(repo)
+            _write_registry(repo, [_row("wg-legacy-row", "Some body [id: wg-legacy-row].")])
+            _git(repo, "commit", "-qam", "backfill")
+            r = self._check(repo, base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+
 class TestExtractSections(unittest.TestCase):
     def test_extracts_names(self):
         import importlib.util

@@ -28,6 +28,13 @@ set -uo pipefail
 
 _LIB_DIR="$(dirname "${BASH_SOURCE[0]}")/lib"
 [[ -f "$_LIB_DIR/incidents.sh" ]] && { source "$_LIB_DIR/incidents.sh"; } || true
+# Canonical kind map (#8205): Devin wire names → Claude kinds. Absent lib
+# degrades to passthrough — this observer must never cost a turn.
+[[ -f "$_LIB_DIR/hook-tool-kind.sh" ]] && { source "$_LIB_DIR/hook-tool-kind.sh"; } || true
+if ! type hook_tool_kind >/dev/null 2>&1; then
+  hook_tool_kind() { printf '%s\n' "${1-}"; }
+  echo "WARN: hook-tool-kind.sh missing — kind gates degrade to raw-name passthrough (silent-off under Devin)" >&2
+fi
 export SOLEUR_HOOK_NAME="post-dispatch-watch-gate"
 
 command -v jq >/dev/null 2>&1 || exit 0
@@ -45,9 +52,13 @@ command -v jq >/dev/null 2>&1 || exit 0
 INPUT=$(cat)
 _field() { jq -r --arg k "$1" 'getpath($k | split(".")) | if type == "string" then . else "" end' <<<"$INPUT" 2>/dev/null || printf ''; }
 HOOK_TOOL_NAME="$(_field 'tool_name')"
+HOOK_TOOL_KIND="$(hook_tool_kind "$HOOK_TOOL_NAME")"
 HOOK_CWD="$(_field 'cwd')"
 HOOK_CMD="$(_field 'tool_input.command')"
 [[ -n "$HOOK_TOOL_NAME" ]] || exit 0
+# Kind check before the git resolution — only the Monitor and Bash arms below
+# need STATE; other tools (edit, skill, …) exit without paying the git spawn.
+[[ "$HOOK_TOOL_KIND" == "Monitor" || "$HOOK_TOOL_KIND" == "Bash" ]] || exit 0
 
 ROOT="${HOOK_CWD:-$PWD}"
 GITDIR="$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null)" || exit 0
@@ -56,12 +67,10 @@ case "$GITDIR" in /*) ;; *) GITDIR="$ROOT/$GITDIR" ;; esac
 STATE="$GITDIR/soleur-pending-dispatch"
 
 # --- Monitor armed: everything pending is now considered watched -----------------------------
-if [[ "$HOOK_TOOL_NAME" == "Monitor" ]]; then
+if [[ "$HOOK_TOOL_KIND" == "Monitor" ]]; then
   rm -f "$STATE" 2>/dev/null || true
   exit 0
 fi
-
-[[ "$HOOK_TOOL_NAME" == "Bash" ]] || exit 0
 CMD="$HOOK_CMD"
 [[ -n "$CMD" ]] || exit 0
 

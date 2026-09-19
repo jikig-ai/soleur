@@ -3,11 +3,15 @@ name: test-browser
 description: "This skill should be used when running end-to-end browser tests on pages affected by a PR. Uses agent-browser CLI to map changed files to routes and capture screenshots."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Browser Test
 
 <command_purpose>Run end-to-end browser tests on pages affected by a PR or branch changes using agent-browser CLI.</command_purpose>
 
-> **Positioning (ADR-049, #4834):** for **structural-UI** diffs (nav/rail/dashboard shell), the *pre-merge* visual check is now the committed, CI-blocking `nav-states-*.e2e.ts` gate run by `/soleur:qa` Step 2.6 — not this skill. Running `test-browser` only *after* ship is the deferral trap that let the #4810 layout bugs reach prod. Treat this skill as a **post-ship smoke** (broad page reachability + console-error sweep) that complements, never replaces, the pre-merge `/soleur:qa` gate.
+> **Positioning (ADR-049, #4834):** for **structural-UI** diffs (nav/rail/dashboard shell), the *pre-merge* visual check is now the committed, CI-blocking `nav-states-*.e2e.ts` gate run by `soleur:qa` Step 2.6 — not this skill. Running `test-browser` only *after* ship is the deferral trap that let the #4810 layout bugs reach prod. Treat this skill as a **post-ship smoke** (broad page reachability + console-error sweep) that complements, never replaces, the pre-merge `soleur:qa` gate.
 
 ## CRITICAL: Use agent-browser CLI Only
 
@@ -159,7 +163,7 @@ a `test -f` on the script alone is a shape check and was measured bypassable.
   || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
        echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
-       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code." >&2
        echo "  Nothing has been captured yet, so nothing has leaked." >&2
        exit 2; }
 ```
@@ -178,7 +182,7 @@ Please start the development server:
 - Rails: `bin/dev` or `rails server`
 - Node/Next.js: `npm run dev`
 
-Then run `/test-browser` again.
+Then run `soleur:test-browser` again.
 ```
 
 </check_server>
@@ -373,13 +377,13 @@ fi
 
 ```bash
 # Test current branch changes
-/test-browser
+soleur:test-browser
 
 # Test specific PR
-/test-browser 847
+soleur:test-browser 847
 
 # Test specific branch
-/test-browser feature/new-dashboard
+soleur:test-browser feature/new-dashboard
 ```
 
 ## agent-browser CLI Reference

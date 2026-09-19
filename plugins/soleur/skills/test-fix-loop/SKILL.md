@@ -3,6 +3,10 @@ name: test-fix-loop
 description: "This skill should be used when autonomously iterating on test failures: runs the suite, diagnoses, applies minimal fixes, re-runs with checkpoint commit isolation until all tests pass."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Test-Fix Loop
 
 Autonomous test-fix iteration loop. Run the test suite, diagnose failures, apply fixes to implementation code, and re-run until all tests pass or a termination condition is met. This is a recovery mechanism for unexpected failures -- not a replacement for RED/GREEN/REFACTOR (use `atdd-developer` for TDD discipline).
@@ -124,7 +128,7 @@ On termination (success or failure), write a report to stdout:
 - **Fixes applied**: files modified and what changed (last iteration)
 - **Recommendation**: what the user should investigate next (if not success)
 
-On success, fixes are staged but NOT committed. The user reviews and commits via `/ship` or manually.
+On success, fixes are staged but NOT committed. The user reviews and commits via `soleur:ship` or manually.
 
 ## Key Principles
 

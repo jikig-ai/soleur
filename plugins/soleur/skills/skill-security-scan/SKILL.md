@@ -3,6 +3,10 @@ name: skill-security-scan
 description: "This skill should be used when scanning Claude Code skills or agent files for advisory security risks: code-execution, prompt-injection, supply-chain, filesystem-boundary, telemetry. Emits LOW-RISK | REVIEW | HIGH-RISK."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # skill-security-scan
 
 <!--
@@ -59,7 +63,7 @@ Scan a file:
 bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < path/to/SKILL.md
 ```
 
-Scan stdin content (used by `agent-finder` post-fetch / `skill-creator` post-scaffold
+Scan stdin content (used by `soleur:engineering:discovery:agent-finder` post-fetch / `skill-creator` post-scaffold
 integrations):
 
 ```bash
@@ -110,7 +114,7 @@ extra: { ...redacted } })`.
 ## Integrations
 
 - `skill-creator` Step 5: post-validation scan before packaging.
-- `agent-finder` §4b.5: cooperative-fast-path scan post-fetch / pre-write.
+- `soleur:engineering:discovery:agent-finder` §4b.5: cooperative-fast-path scan post-fetch / pre-write.
 - PreToolUse hook on `Write` to `.claude/skills/**` and `.claude/agents/**`:
   load-bearing block-on-HIGH-RISK gate at the tool layer.
 - Lefthook commit-time advisory: belt-and-suspenders for IDE / CLI commit paths.

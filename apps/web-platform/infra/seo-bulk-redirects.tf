@@ -1,5 +1,7 @@
 # Cloudflare Bulk Redirects — legacy /pages/legal/<slug>.html → clean /legal/<slug>/ 301s
-# (plus the orphaned blog reslug; 12 exact pairs total, see the list below).
+# (plus the orphaned blog reslug and the blog date-slug renames; 82 items
+# total = 13 explicit + 69 generated from local.blog_redirect_pairs,
+# see the list below).
 #
 # Why a separate file / separate product (not more rules in seo-rulesets.tf):
 #   The 9 legacy legal-page redirects were DEFERRED in seo-rulesets.tf (see the
@@ -22,7 +24,8 @@
 #   apex or any subdomain — are a single hop.
 #
 # Root cause being fixed: without an edge 301 these URLs are served the HTTP-200
-# meta-refresh fallback (plugins/soleur/docs/page-redirects.njk), which Google
+# meta-refresh fallback (plugins/soleur/docs/page-redirects.njk for the /pages/
+# URLs, plugins/soleur/docs/blog/redirects.njk for the blog date-slugs), which Google
 # Search Console classifies as "Crawled - currently not indexed" (GSC drilldown
 # 2026-06-09). A deterministic 301 moves them out of that bucket. The same stubs
 # also carry `<meta name="robots" content="noindex">` now as a defensive interim.
@@ -52,12 +55,61 @@
 #   - apps/web-platform/infra/seo-rulesets.tf (the 2026-06-09 note — the deferral this resolves)
 #   - apps/web-platform/infra/tunnel.tf (account_id-scoped resource precedent)
 
+# Blog date-slug -> canonical-slug pairs (#3328). Migrated from the generated
+# meta-refresh stubs in plugins/soleur/docs/_data/blogRedirects.js (deleted in
+# the PR-B half of #3328, gated on this list applying live). Static map, not
+# fileset() derivation — see the 2026-09-18 plan Alternatives: a JSON export
+# adds a generator + committed artifact + freshness guard to ferry data
+# Terraform can hold directly; the bidirectional parity guard that keeps the
+# "every date-prefixed post has a redirect" property the build-time code gave
+# for free lands in PR-B (the scripts/validate-blog-links.sh repurpose).
+locals {
+  blog_redirect_pairs = {
+    "2026-03-16-soleur-vs-anthropic-cowork"                         = "soleur-vs-anthropic-cowork"
+    "2026-03-17-soleur-vs-notion-custom-agents"                     = "soleur-vs-notion-custom-agents"
+    "2026-03-19-soleur-vs-cursor"                                   = "soleur-vs-cursor"
+    "2026-03-24-ai-agents-for-solo-founders"                        = "ai-agents-for-solo-founders"
+    "2026-03-24-vibe-coding-vs-agentic-engineering"                 = "vibe-coding-vs-agentic-engineering"
+    "2026-03-26-soleur-vs-polsia"                                   = "soleur-vs-polsia"
+    "2026-03-29-credential-helper-isolation-sandboxed-environments" = "credential-helper-isolation-sandboxed-environments"
+    "2026-03-29-your-ai-team-works-from-your-actual-codebase"       = "your-ai-team-works-from-your-actual-codebase"
+    "2026-03-31-soleur-vs-paperclip"                                = "soleur-vs-paperclip"
+    "2026-04-21-one-person-billion-dollar-company"                  = "one-person-billion-dollar-company"
+    "2026-04-21-soleur-vs-devin"                                    = "soleur-vs-devin"
+    "2026-04-22-billion-dollar-solo-founder-stack"                  = "billion-dollar-solo-founder-stack"
+    "2026-04-23-agents-that-use-apis-not-browsers"                  = "agents-that-use-apis-not-browsers"
+    "2026-04-23-knowledge-compounding-in-ai-development"            = "knowledge-compounding-in-ai-development"
+    "2026-04-30-best-claude-code-plugins-2026"                      = "best-claude-code-plugins-2026"
+    "2026-05-05-soleur-vs-tanka"                                    = "soleur-vs-tanka"
+    "2026-05-07-soleur-vs-crewai"                                   = "soleur-vs-crewai"
+    "2026-05-12-company-as-a-service-platform"                      = "company-as-a-service-platform"
+    "2026-05-14-how-to-run-every-department-with-ai-agents"         = "how-to-run-every-department-with-ai-agents"
+    "2026-05-15-skill-libraries-vs-workflow-plugins"                = "skill-libraries-vs-workflow-plugins"
+    "2026-06-01-claude-code-plugin-vs-skill-vs-mcp"                 = "claude-code-plugin-vs-skill-vs-mcp"
+    "2026-06-12-loop-engineering-for-your-whole-company"            = "loop-engineering-for-your-whole-company"
+    "2026-06-15-best-ai-tools-for-solo-founders-2026"               = "best-ai-tools-for-solo-founders-2026"
+  }
+
+  # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs
+  # three source shapes: the directory URL, the explicit index.html, and the
+  # bare no-slash form — covered today only by the origin's dir-slash 301 into
+  # the stub, which would 404 post-PR-B without an edge entry (same tripling
+  # as the blog reslug items below).
+  blog_redirect_items = flatten([
+    for date_slug, canonical in local.blog_redirect_pairs : [
+      { source = "soleur.ai/blog/${date_slug}/", target = "https://soleur.ai/blog/${canonical}/" },
+      { source = "soleur.ai/blog/${date_slug}/index.html", target = "https://soleur.ai/blog/${canonical}/" },
+      { source = "soleur.ai/blog/${date_slug}", target = "https://soleur.ai/blog/${canonical}/" },
+    ]
+  ])
+}
+
 resource "cloudflare_list" "legal_redirects" {
   provider    = cloudflare.rulesets
   account_id  = var.cf_account_id
   name        = "legal_redirects" # referenced by name from the ruleset's from_list
   kind        = "redirect"
-  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + blog reslug. See plan 2026-06-09, #3367, #3297, #3328."
+  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + blog reslug + blog date-slug -> canonical 301s. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
 
   # Apex, host-less source_url (scheme-less sources match both http and https).
   # include_subdomains = "enabled" (v4 string enum, NOT a bool — provider
@@ -70,8 +122,9 @@ resource "cloudflare_list" "legal_redirects" {
   # diverges from the zone redirects' `false`: these are SEO 301s where
   # dropping campaign params (?utm_*) on the hop loses attribution; targets
   # are static pages with no query-reflection surface.
-  # 12 pairs: 9 legal slugs (clean-slug == source-slug) + the terms-of-service
-  # -> terms-and-conditions rename alias + 2 shapes of the blog reslug.
+  # 13 explicit items: 9 legal slugs (clean-slug == source-slug) + the
+  # terms-of-service -> terms-and-conditions rename alias + 3 shapes of the
+  # blog reslug (/, /index.html, bare).
 
   item {
     value {
@@ -192,9 +245,9 @@ resource "cloudflare_list" "legal_redirects" {
   }
   # Blog reslug: its zone rule was evicted 2026-05-18 to make room for the
   # HTTPS catch-all (seo-rulesets.tf "2026-05-18" note) and it has had NO edge
-  # 301 since — the same GSC crawled-not-indexed class this file fixes. Two
-  # shapes because Bulk Redirects match full_uri EXACTLY: the directory URL
-  # and the explicit index.html are distinct keys.
+  # 301 since — the same GSC crawled-not-indexed class this file fixes. Three
+  # shapes because Bulk Redirects match full_uri EXACTLY: the directory URL,
+  # the explicit index.html, and the bare no-slash form are distinct keys.
   item {
     value {
       redirect {
@@ -214,6 +267,38 @@ resource "cloudflare_list" "legal_redirects" {
         status_code           = 301
         include_subdomains    = "enabled"
         preserve_query_string = "enabled"
+      }
+    }
+  }
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/blog/what-is-company-as-a-service"
+        target_url            = "https://soleur.ai/company-as-a-service/"
+        status_code           = 301
+        include_subdomains    = "enabled"
+        preserve_query_string = "enabled"
+      }
+    }
+  }
+
+  # Blog date-slugs (#3328): /blog/YYYY-MM-DD-<slug>/ → /blog/<slug>/.
+  # Replaces the generated meta-refresh stubs (plugins/soleur/docs/_data/
+  # blogRedirects.js) with deterministic edge 301s — same GSC
+  # crawled-not-indexed class the legal items above fix. Same flags as the
+  # explicit items: include_subdomains collapses the legacy www copies in one
+  # hop, preserve_query_string keeps ?utm_* attribution on the hop.
+  dynamic "item" {
+    for_each = local.blog_redirect_items
+    content {
+      value {
+        redirect {
+          source_url            = item.value.source
+          target_url            = item.value.target
+          status_code           = 301
+          include_subdomains    = "enabled"
+          preserve_query_string = "enabled"
+        }
       }
     }
   }
@@ -285,20 +370,21 @@ resource "cloudflare_list" "www_canonical" {
 # seo_response_headers) because this is THE single account-level
 # http_request_redirect phase owner — future non-SEO bulk lists would attach
 # additional rules here rather than new rulesets. The list keeps its original
-# `legal_redirects` name even though it now also carries the blog reslug:
-# renaming a list ripples through the rule expression, the workflow -target
-# allow-list, and the live CF object for zero behavioral gain.
+# `legal_redirects` name even though it now also carries the blog reslug and
+# the blog date-slug redirects: renaming a list ripples through the rule
+# expression, the workflow -target allow-list, and the live CF object for
+# zero behavioral gain.
 resource "cloudflare_ruleset" "bulk_redirects" {
   provider    = cloudflare.rulesets
   account_id  = var.cf_account_id # ACCOUNT-level (not zone_id) — the novel axis vs every other ruleset in the repo
   name        = "Legacy URL bulk redirects"
-  description = "Account http_request_redirect ruleset bound to the legal_redirects list. See plan 2026-06-09, #3367, #3297."
+  description = "Account http_request_redirect ruleset bound to the legal_redirects list. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
   kind        = "root"
   phase       = "http_request_redirect"
 
   rules {
     action      = "redirect"
-    description = "301 legacy URLs (/pages/legal/*.html + blog reslug) via the legal_redirects bulk list"
+    description = "301 legacy URLs (/pages/legal/*.html + blog reslug + blog date-slugs) via the legal_redirects bulk list"
     enabled     = true
     expression  = "http.request.full_uri in $legal_redirects"
 

@@ -3,6 +3,10 @@ name: agent-native-audit
 description: "This skill should be used when conducting a scored agent-native architecture review. It launches 8 parallel sub-agents to audit action parity, context injection, CRUD completeness, capability discovery, and prompt-native features."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/agent-native-audit.workflow.js`](./workflows/agent-native-audit.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/agent-native-audit/workflows/agent-native-audit.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
 
 # Agent-Native Architecture Audit
@@ -27,7 +31,7 @@ Conduct a comprehensive review of the codebase against agent-native architecture
 First, invoke the agent-native-architecture skill to understand all principles:
 
 ```
-/soleur:agent-native-architecture
+soleur:agent-native-architecture
 ```
 
 Select option 7 (action parity) to load the full reference material.
@@ -191,7 +195,9 @@ Tasks:
    - Agent self-describes in responses
    - Suggested prompts/actions
    - Empty state guidance
-   - Slash commands (/help, /tools)
+   - Slash commands the AUDITED product exposes — a `help` command, a `tools` command, and
+     the like. These are the target app's affordances, not Soleur's: name them without a
+     leading slash so they are not read as Soleur component references
 2. Score against 7 mechanisms
 
 Format:

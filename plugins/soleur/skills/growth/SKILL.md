@@ -3,9 +3,13 @@ name: growth
 description: "This skill should be used when performing content strategy analysis, keyword research, content auditing, content gap analysis, or AI agent consumability auditing. Sub-commands: auditing, planning, applying fixes."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Growth Strategy
 
-Analyze content for keyword alignment, plan content to capture search traffic, audit AI agent consumability, and apply content fixes. This skill delegates to the growth-strategist agent for content-level analysis and execution.
+Analyze content for keyword alignment, plan content to capture search traffic, audit AI agent consumability, and apply content fixes. This skill delegates to the soleur:marketing:growth-strategist agent for content-level analysis and execution.
 
 ## Sub-commands
 
@@ -36,10 +40,10 @@ Analyze existing site content for keyword alignment, search intent match, and re
    fi
    ```
 
-3. Launch the growth-strategist agent via the Task tool:
+3. Launch the soleur:marketing:growth-strategist agent via the Task tool:
 
    ```
-   Task growth-strategist: "Audit the content at <url-or-path> for keyword alignment,
+   Task soleur:marketing:growth-strategist: "Audit the content at <url-or-path> for keyword alignment,
    search intent match, and readability. <if brand guide exists: Also read
    knowledge-base/marketing/brand-guide.md and align rewrite suggestions with the brand voice.>
    Produce a structured report with per-page analysis, issues found, and rewrite suggestions.
@@ -66,10 +70,10 @@ Audit existing content and apply fixes to local source files. Combines analysis 
    fi
    ```
 
-3. Launch the growth-strategist agent via the Task tool:
+3. Launch the soleur:marketing:growth-strategist agent via the Task tool:
 
    ```
-   Task growth-strategist: "Audit the content at <path> for keyword alignment,
+   Task soleur:marketing:growth-strategist: "Audit the content at <path> for keyword alignment,
    search intent match, readability, and GEO/AEO gaps. For each issue found, apply
    a fix to the source files. Read each file before editing.
    <if brand guide exists: Read knowledge-base/marketing/brand-guide.md and
@@ -96,10 +100,10 @@ Research keywords, analyze content gaps, and produce a prioritized content plan.
 
 2. Check for brand guide (same as audit step 2).
 
-3. Launch the growth-strategist agent via the Task tool:
+3. Launch the soleur:marketing:growth-strategist agent via the Task tool:
 
    ```
-   Task growth-strategist: "Create a content plan for the topic '<topic>'.
+   Task soleur:marketing:growth-strategist: "Create a content plan for the topic '<topic>'.
 
    1. Research keywords related to this topic using WebSearch. Classify each by search
       intent (informational, navigational, commercial, transactional) and relevance.
@@ -130,15 +134,15 @@ Audit content for AI agent consumability at the content level. Checks whether AI
 
 1. Parse the argument as a URL or local path (same heuristic as audit).
 
-2. Launch the growth-strategist agent via the Task tool:
+2. Launch the soleur:marketing:growth-strategist agent via the Task tool:
 
    ```
-   Task growth-strategist: "Audit the content at <url-or-path> for GEO/AEO optimization.
+   Task soleur:marketing:growth-strategist: "Audit the content at <url-or-path> for GEO/AEO optimization.
    Check source citation presence, statistics/specificity, conversational readiness,
    FAQ structure quality, definition extractability, summary quality, and
    citation-friendly paragraph structure.
    Do NOT check JSON-LD, meta tags, sitemaps, or llms.txt format -- those belong to
-   the seo-aeo-analyst agent. Focus only on content-level checks.
+   the soleur:marketing:seo-aeo-analyst agent. Focus only on content-level checks.
    Use WebFetch for URLs or Read/Glob for local paths."
    ```
 
@@ -152,5 +156,5 @@ Audit content for AI agent consumability at the content level. Checks whether AI
 - Each sub-command is independent. No sub-command requires a prior run of another.
 - The `plan` sub-command performs its own keyword research internally -- no need to run a separate research step first.
 - The `audit`, `plan`, and `aeo` sub-commands produce inline output only. The `fix` sub-command modifies source files directly.
-- The growth-strategist agent handles content-level analysis. For technical SEO (meta tags, JSON-LD, sitemaps, llms.txt), direct users to the `seo-aeo` skill instead.
+- The soleur:marketing:growth-strategist agent handles content-level analysis. For technical SEO (meta tags, JSON-LD, sitemaps, llms.txt), direct users to the `seo-aeo` skill instead.
 - For generating new articles from content plans, direct users to the `content-writer` skill.

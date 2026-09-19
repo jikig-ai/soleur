@@ -85,6 +85,37 @@
 #                  count rose -- a rise in an existing row would be a regression, a new
 #                  file is churn.
 #
+#   1439 -> 1440   #6894, ship-time advisor round: one more `$STATE_DIR` write in
+#                  inngest-luks-cutover.sh (the rollback-verified latch) — same root class as the
+#                  ten rows already itemised below; the row goes 10 -> 11 and nothing else moves.
+#   1427 -> 1439   #6894 added three NEW files (the additive blue-green LUKS cutover). Verified
+#                  against the rule the two rows above set: none of the three existed on
+#                  origin/main, and NO pre-existing row moved -- the diff is three added lines.
+#                  Five further sites were guarded rather than baselined, so the rise is 12 and
+#                  not 17: `assert_fixture_dir "$d"` on the caller parameter of
+#                  inngest-luks-cutover.test.sh's `_helper_self_test`, and -- in
+#                  inngest-luks-wrong-volume-alert.test.sh, which writes to a TRACKED .tf on every
+#                  mutation row -- a canonicalised `REPO="$(cd … && pwd)"` plus
+#                  `assert_fixture_dir "$TF"` inside `mutate_red()`, which is where the write is
+#                  (a top-level guard clears nothing, by `_rel_guarded`'s own rule).
+#
+#                  WHAT THE 12 ARE, so a later reader need not re-derive it:
+#                    10  inngest-luks-cutover.sh -- an on-host script whose write roots are
+#                        `${LUKS_FSTAB:-/etc/fstab}`, `${LUKS_ENVFILE:-/etc/default/inngest-luks}`,
+#                        `${LUKS_STATE_DIR:-/var/lib/inngest-luks-cutover}` and four `$tmp`s from
+#                        `mktemp`. Every default is absolute and the LUKS_* names are UNSET unless
+#                        argv[1] is `--fixture-seams` (the seam gate at the top of the file, tested),
+#                        so the relative case is reachable only from the suite, which passes
+#                        absolute paths. `assert_fixture_dir` is a test helper and does not belong
+#                        in a script that runs as root on a production host.
+#                     1  inngest-luks-cutover.test.sh:743 -- a FALSE POSITIVE. The operand is the
+#                        literal `cp -a ` inside a `grep -cE` pattern that COUNTS copy sites in the
+#                        SUT; nothing is written. Left as a row rather than reworded, because
+#                        respelling a regex to dodge a detector is not a fix.
+#                     1  scripts/followthroughs/inngest-luks-cutover-6894.sh:120 -- also a FALSE
+#                        POSITIVE: `[[ "$NEWEST_BAD" > "$NEWEST_DONE" ]]` is a LEXICOGRAPHIC
+#                        comparison inside `[[ ]]`, not a redirect. Same reasoning as above.
+#
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
 # alone, a better resolver and a detector that stopped looking are indistinguishable, and across
 # three review rounds every defect found in this rule has been in the shrinking direction.
@@ -137,9 +168,10 @@
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
+11	apps/web-platform/infra/inngest-luks-cutover.sh
+1	apps/web-platform/infra/inngest-luks-cutover.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
-1	apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
 1	apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
 1	apps/web-platform/infra/inngest.test.sh
 1	apps/web-platform/infra/inngest-userdata-budget.sh
@@ -176,7 +208,7 @@
 5	apps/web-platform/scripts/dsar-export-oversize.sh
 2	apps/web-platform/scripts/lib/in-image-copy-src.test.sh
 1	apps/web-platform/scripts/postgrest-reload-schema.test.sh
-3	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
+4	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 1	apps/web-platform/scripts/run-migrations.sh
 1	apps/web-platform/scripts/sentry-monitors-audit.sh
 10	apps/web-platform/scripts/sentry-monitors-audit.test.sh
@@ -186,8 +218,9 @@
 21	.claude/hooks/agent-token-tee.test.sh
 1	.claude/hooks/brand-hex-commit-gate.test.sh
 1	.claude/hooks/cla-signed-author-gate.sh
+1	.claude/hooks/devin-matcher-parity.test.sh
 2	.claude/hooks/docs-cli-verification.test.sh
-2	.claude/hooks/follow-through-directive-gate.test.sh
+3	.claude/hooks/follow-through-directive-gate.test.sh
 1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/hook-input-contract.test.sh
 1	.claude/hooks/incidents.test.sh
@@ -205,7 +238,7 @@
 5	.claude/hooks/pre-merge-rebase.sh
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
-2	.claude/hooks/ship-soak-followthrough-gate.test.sh
+4	.claude/hooks/ship-soak-followthrough-gate.test.sh
 2	.claude/hooks/ship-unpushed-commits-gate.sh
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
@@ -214,6 +247,7 @@
 2	.openhands/hooks/stop-hook.sh
 2	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
+5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
@@ -259,12 +293,14 @@
 13	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
 1	plugins/soleur/test/merge-kb-index-driver-mutation.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
+1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
 7	plugins/soleur/test/resolve-target-decision.test.sh
 10	plugins/soleur/test/scripts-shard-totality-mutations.sh
 2	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
+10	plugins/soleur/test/ship-battery-owed.test.sh
 3	plugins/soleur/test/test-helpers.sh
 1	plugins/soleur/test/vendor-pin-integrity.test.sh
 3	plugins/soleur/test/worktree-manager-atomic-config.test.sh
@@ -288,9 +324,9 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
-1	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
+1	scripts/followthroughs/inngest-luks-cutover-6894.sh
 1	scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
@@ -302,6 +338,7 @@
 12	scripts/infra-config-red-alert.test.sh
 1	scripts/kb-staleness-metric.sh
 8	scripts/learning-retrieval-bench.sh
+1	scripts/lib/git-data-boot-signal-poll.sh
 1	scripts/lib/legal-base-ref.test.sh
 3	scripts/lib/repo-write-boundary.test.sh
 23	scripts/lint-agents-compound-sync.test.sh
@@ -310,12 +347,12 @@
 4	scripts/lint-diagnosis-claims.test.sh
 10	scripts/lint-dual-lockfile.test.sh
 1	scripts/lint-encryption-posture.test.sh
-19	scripts/lint-followthrough-varq-ban.test.sh
+23	scripts/lint-followthrough-varq-ban.test.sh
 1	scripts/lint-guard-contract.test.sh
 1	scripts/lint-legal-mirror-drift-baseline.sh
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
 9	scripts/lint-legal-registers.test.sh
-77	scripts/lint-legal-scope-block-placement.test.sh
+78	scripts/lint-legal-scope-block-placement.test.sh
 1	scripts/lint-orphan-test-suites.test.sh
 1	scripts/lint-shell-trace-credential-refusal.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
@@ -345,8 +382,8 @@
 1	scripts/skill-freshness-aggregate.sh
 1	scripts/skill-freshness-aggregate.test.sh
 10	scripts/skill-security-scan-step-body.test.sh
-1	scripts/sweep-followthroughs.sh
-19	scripts/sweep-followthroughs.test.sh
+2	scripts/sweep-followthroughs.sh
+90	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh

@@ -124,6 +124,14 @@ state" — but no equivalent gate fires today.
    Requires `SUPABASE_PAT` (mint at <https://supabase.com/dashboard/account/tokens>,
    then `doppler secrets set SUPABASE_PAT=… -p soleur -c dev` and `-c prd`).
    Falls back to the natural ~10-minute schema poll if the API is unreachable.
+   [Updated 2026-09-13 — #8028] The token is now `SUPABASE_ACCESS_TOKEN`
+   (Doppler `prd` root today — #7716 item 6 sources the migrate job from the GH secret; a dev target reads it from `prd_terraform` — see the
+   script's `--help`); `SUPABASE_PAT` was dead in every config and has been
+   deleted. `--best-effort` soaks only a missing token or a transient error
+   (5xx, network, 408/429, a 401/403 without an API JSON body); with a token
+   present a JSON-bodied 401/403, a 404, or an unset URL exits 2, and `run-migrations.sh` runs the hook
+   on every run and fails the job on that exit — the two sentences above are
+   the historical record, not the current instruction.
 
 ## Session Errors
 

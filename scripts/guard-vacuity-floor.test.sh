@@ -200,8 +200,14 @@ while IFS= read -r f; do
   is_floor_bearing "$f" && printf '%s\n' "$f" >> "$FLOOR_ALL"
 done < "$ALL_SUITES"
 
-# COVERED scope: the two directories this guard mutation-tests.
-COVERED_DIRS='^(scripts/|plugins/soleur/test/)'
+# COVERED scope: the directories this guard mutation-tests. `plugins/soleur/scripts/`
+# joined for #8159 (precommit-guard.test.sh): its floor is a literal bound adjacent
+# to the test (`PRECOMMIT_MIN_ASSERTIONS=30` then `(( CASES < … ))`), reported by a
+# direct printf + exit 1 rather than through fail(), so it is mutant-CONSTRUCTIBLE
+# and scores FIRES — the covered-bar shape. The directory's only other suite
+# (taste-profile-update.test.sh) is not floor-bearing, so widening adds exactly
+# one file to the battery. This is the "cover it" arm of ARM 4's prescribed fix.
+COVERED_DIRS='^(scripts/|plugins/soleur/test/|plugins/soleur/scripts/)'
 
 # DEFERRED scope: an EXPLICITLY DECLARED directory ledger. These carry floors this PR does
 # not mutation-test — `apps/web-platform/infra/` is a different subsystem with its own
@@ -254,6 +260,13 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # halves reported through a direct printf, which is the shape this meta-guard can actually
 # mutation-test, and the property it protects is a live-apex outage class.
 #
+# `provision-hetzner-characterization.test.sh` added by #8287 — the characterization safety net
+# for the provision-hetzner refactor onto the shared operator-script library, under a deferred
+# directory. Promoted rather than deferred, and the ratchet deliberately NOT raised: its floor
+# (`FLOOR`, a literal bound) reports through a direct `printf` + `exit 1` rather than through the
+# suite's own pass()/fail(), so the one-line edit that disarms every assertion cannot disarm the
+# floor that backstops them, and it carries a pass+fail conservation check beside it. This
+# promotion SHRINKS the ledger 48 -> 47, which is the outcome the failure message asks for.
 # Its mutation battery is promoted alongside it and for the same reason -- it carries the
 # identical floor shape. Promoting BOTH is what keeps the deferral ledger flat: adding a
 # floor-bearing suite under a deferred directory grows that ratchet, and the ratchet is not
@@ -381,7 +394,81 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # `exit 1` and never through the helpers it backstops, with a literal bound adjacent to the test.
 # Measured at promotion: control GREEN (113/113); floor raised to 99999 on a copy -> rc=1 with the
 # `[FATAL] only 113 assertions ran; floor is 99999` sentinel.
-PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh)$'
+# postgrest-reload-schema.test.sh (#8028 review): promoted rather than deferred. Its floor is
+# a direct printf + exit over the as-written case count (24), sits beside a pass()/fail()
+# self-test that reports the same way, and lives in a deferred directory only because the
+# sibling schema-probe suite it mirrors was promoted the same way. Ledger returns to
+# MAX_DEFERRED rather than growing.
+# `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` added by #7980 — the
+# guard-contract suite for the stdio redacting proxy in front of @playwright/mcp (53 one-edit
+# mutants, an executable .mcp.json row, P6 parity). PROMOTED, not deferred, beside its sibling
+# `redact-a11y-snapshot.test.sh` and for the reason every entry above gives: this gate's FAIL message
+# says "cover it … do NOT raise this number" and the ledger is shrink-only. It qualifies: the floor is
+# `-lt` over `$cases` (an independent per-row counter, with a `pass + fail == cases` conservation
+# identity checked first and an exact mutant / mutation-row count beside it), emitted by `printf
+# '[FATAL] …'` + `exit 1` and never routed through the `ok()`/`bad()` it backstops (ADR-193); an
+# instrument self-test drives both helpers once and exits 1 before any real row if either counter
+# fails to move; a helper-control block drives the verdict-owning helpers it names (the assert_*
+# family, `red`, `leaks`, `started`, `delivered_ok`, `mutant`) with an input each must REJECT.
+# Measured at the #7980 review round: `red`, `leaks`, `started` and `delivered_ok` each neutered
+# on a copy -> `HELPER CONTROL BROKEN`, rc=1 (runs/suite-helper-neuter-review-round.txt); after
+# the relay rebuild and stub reaper control GREEN (281/281, 55 mutants, rc=0; runs/suite-relay-rebuild.txt);
+# after the one-row escaped-tree fix GREEN (284/284, 56 mutants; runs/suite-advisor-onerow.txt).
+# Bound (284) is a literal adjacent to the test,
+# so it is mutant-CONSTRUCTIBLE.
+# `apps/web-platform/infra/git-data-flag-precheck.test.sh` and `apps/web-platform/infra/git-data-root-key.test.sh`
+# added by #8189 — the fail-closed GIT_DATA_STORE_ENABLED read (Guard 1) and the git-data root-key
+# root's drift-guards. Both are NEW floor-bearing suites in a deferred directory, which grew the
+# ledger 47 -> 49 and reddened ARM 5c. PROMOTED, not deferred, and not by raising MAX_DEFERRED, for
+# the reason every sibling entry gives (the FAIL message: "cover it … do NOT raise this number"; the
+# ledger is shrink-only), so the ledger returns to 47. Each qualifies: the floor is `-lt` over an
+# independent count (`passes + fails + SKIPPED` / `$cases`), emitted by `printf` + `exit 1` and never
+# routed through the pass()/fail() it backstops (ADR-193); each carries an instrument self-test and
+# a mutant_red self-test that exit 1 before the floor; the bound is a literal adjacent to the test,
+# `.claude/hooks/follow-through-directive-gate.test.sh` added by #7490 — the gate learned to name a
+# CODE FENCE as the cause when a directive parses to an empty `script=`, and the suite gained the
+# ADR-193 accounting identity and a MIN_ASSERTIONS floor it had NEITHER of (before that, deleting
+# cases from it summarised green). That NEW floor in a deferred directory grew the ledger 47 -> 48
+# and reddened ARM 5c. PROMOTED, not deferred, and not by raising MAX_DEFERRED, for the reason every
+# sibling entry gives and the FAIL message states outright ("cover it … do NOT raise this number";
+# the ledger is shrink-only), so the ledger returns to 47. It qualifies on the covered-bar shape:
+# the floor is `-lt` over an independent count (`$TOTAL`, incremented at the assert call sites),
+# emitted by `printf` + `exit 1` and never routed through the pass()/fail() counters it backstops
+# (ADR-193), preceded by the conservation identity `PASS + FAIL == TOTAL` reported the same way; and
+# the bound is a literal adjacent to the test (`MIN_ASSERTIONS=20`), so the mutant is CONSTRUCTIBLE.
+# Verified by this guard's own per-file membership pin rather than by assertion.
+#
+# so the mutant is CONSTRUCTIBLE. Measured at promotion with this guard's own build_mutant +
+# classify_mutant: git-data-flag-precheck FIRES (`only 0 mutants executed, floor is 8`, rc 1).
+# git-data-root-key scored CONSTRUCTION while its floor read `_floor=$ASSERT_FLOOR_BASE` + a
+# `[[ … ]] &&` rebinding (the backward slice stops at the non-assignment, so the thresholds were
+# unbound); with the two literals and one arithmetic `_floor=` assignment contiguous above the `if`
+# it FIRES (`[FATAL] assertion floor: only 0 assertion(s) ran`). The per-file PROMOTED_FILES membership
+# pin (after ARM 1) keeps both honest: each must stay floor-bearing, covered, and FIRES.
+# `apps/web-platform/infra/inngest-luks-cutover.test.sh` added by #6894 — the on-host blue-green
+# LUKS cutover FSM's suite, a NEW floor-bearing file in a deferred directory, which grew the ledger
+# 47 -> 48 and reddened ARM 5c. PROMOTED, not deferred, and not by raising MAX_DEFERRED, for the
+# reason every sibling entry gives (this gate's own FAIL message: "cover it … do NOT raise this
+# number"; the ledger is shrink-only), so the ledger returns to 47. It qualifies on all three
+# counts: the floor is `-lt` over `$executed`, a counter INDEPENDENT of the pass/fail split that
+# both `ok()` and `no()` increment, so a neutered verdict machinery drives it to 0; it is emitted
+# by `printf '[FATAL] assertion floor: …'` + `exit 1` and never routed through the `ok()`/`no()` it
+# backstops (ADR-193), and a `${#FAILED[@]} != $fail` ledger reconciliation sits beside it on the
+# same terms; and the bound (`_floor=96`) is a literal on the line above the `if`, so the mutant is
+# CONSTRUCTIBLE. The suite additionally runs an instrument self-test that drives both helpers once
+# and exits 2 before any real row if either counter fails to move.
+# `apps/web-platform/infra/git-data-luks-reopen.test.sh` added by #8210 — Guard 1 for the
+# boot-time LUKS reopen (the script, both units, the cloud-init wiring and a runtime arm that
+# drives the script and its OnFailure reporter against stubs). A NEW floor-bearing suite in a
+# deferred directory, which grew the ledger 47 -> 48 and reddened ARM 5c. PROMOTED, not deferred,
+# and not by raising MAX_DEFERRED, for the reason this gate's own FAIL message gives ("cover it …
+# do NOT raise this number"; the ledger is shrink-only), so the ledger returns to 47 (merged with #6894's promotion below, which does the same for its own suite; both hold). It
+# qualifies on every clause the two #8189 entries above were measured against: the floor is `-lt`
+# over an independent count (`passes + fails`), emitted by `printf` + `exit 1` and never routed
+# through the pass()/fail() it backstops (ADR-193); it carries an instrument self-test (the
+# canary drives both helpers and exits 1 before the floor is reached); and its bound
+# (`MIN_ASSERTIONS=470`) is a literal adjacent to the test, so the mutant is CONSTRUCTIBLE.
+PROMOTED_FILES='^(\.claude/hooks/follow-through-directive-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|apps/web-platform/infra/inngest-luks-cutover\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
@@ -696,7 +783,7 @@ else
   fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
 fi
 
-MIN_FIRING_SUITES=38  # +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
+MIN_FIRING_SUITES=42  # +1 (#8159): cloud-mode-postmerge-evidence-8159. +1 (#8159): precommit-guard via COVERED_DIRS widening. +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
   pass "firing-floor population at or above the ratchet ($n_fires >= $MIN_FIRING_SUITES)"

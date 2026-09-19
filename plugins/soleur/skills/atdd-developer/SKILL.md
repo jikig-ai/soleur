@@ -3,6 +3,10 @@ name: atdd-developer
 description: "This skill should be used when implementing features using Acceptance Test Driven Development. It guides through the RED/GREEN/REFACTOR cycle with explicit permission gates between phases."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # ATDD Developer
 
 Guide feature implementation through the Acceptance Test Driven Development cycle. Each phase requires explicit user approval before proceeding.
@@ -36,7 +40,7 @@ The goal is passing tests, not beautiful code. Resist the urge to clean up.
 ### REFACTOR Phase: Improve the Code
 
 1. Apply refactoring techniques while keeping all tests green
-2. Use code-simplicity-reviewer or code-quality-analyst via Task tool for guidance if needed
+2. Use soleur:engineering:review:code-simplicity-reviewer or soleur:engineering:review:code-quality-analyst via Task tool for guidance if needed
 3. Run the full test suite after each refactoring step
 4. **STOP and ask permission to proceed to COMMIT**
 

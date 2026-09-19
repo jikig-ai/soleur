@@ -3,11 +3,19 @@ name: preflight
 description: "This skill should be used when running pre-ship checks on migrations, security headers, and lockfiles."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # preflight Skill
 
 **Purpose:** Validate technical readiness of code changes before a PR is created, catching the class of bugs that only appear in production context -- unapplied database migrations, CSP violations from injected scripts, and bare-repo stale file reads.
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call.
+
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
 
 ## Headless Mode Detection
 
@@ -155,7 +163,7 @@ unapplied-migration FAIL path is the correct response).
 **Why:** PR #4225 (feat-team-workspace-multi-user) — preflight FAIL
 on Check 1 because prd migrations were deferred per
 migration-checklist.md (legal-PR lockstep gate); the headless
-`/ship` halted the pipeline on a known-deferred state. This SKIP
+`soleur:ship` halted the pipeline on a known-deferred state. This SKIP
 path honors documented deferrals while keeping the gate active for
 undocumented cases.
 
@@ -495,7 +503,7 @@ If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive pa
 
 Call **Shared Plan-File Resolution** (above Check 1). It sets `$PR_BODY_FILE`, `$SCRUBBED_BODY`, `$PLAN_PATH`, and `$COMBINED` for this check to consume. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
 
-The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
+The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
 
 **Step 6.4: Check for the section heading.**
 
@@ -845,6 +853,22 @@ harness only compares the GATE, so this divergence was invisible to it.
 CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
 CMD="${CMD#"${CMD%%[![:space:]]*}"}"
 CMD="${CMD%"${CMD##*[![:space:]]}"}"
+# A YAML-quoted inline scalar (`command: "bash scripts/x.sh"`) IS the string inside
+# the quotes, but parse-form-a.awk prints the line verbatim, so the quotes reached
+# `bash -c` as part of the first word and every quoted command died rc=127 — a
+# program named `bash scripts/x.sh` does not exist. Measured on #8149's plan:
+# the verb gate PASSED (it matches a dequoted COPY) and the exec returned 127,
+# reported by row 10b as "not on the sandbox PATH". The TypeScript mirror's
+# stripQuotes() had modelled this all along; the runtime had not. Symmetric pair,
+# single-line scalars only — the same idiom credentials_required uses below.
+# (`$CMD` unquoted on purpose: the wiring test's shell-active anchor is
+# `^if [[ "$CMD` + a `$'\n'` token, and this guard must not collide with it.)
+if [[ $CMD != *$'\n'* ]]; then
+  case "$CMD" in
+    \"*\") CMD="${CMD#\"}"; CMD="${CMD%\"}" ;;
+    \'*\') CMD="${CMD#\'}"; CMD="${CMD%\'}" ;;
+  esac
+fi
 ```
 
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
@@ -955,13 +979,13 @@ cheapest path to a non-FAIL for any probe whose verb Check 10 cannot run — tho
 not the cheapest overall: a tautological probe (`printf 200` against
 `expected_output: "200"`) reaches PASS and is counted by none of the three
 counterweights below. That gap is pre-existing, not introduced here, but the
-superlative was wrong as written. For the declared path specifically, this is and in `/soleur:one-shot` the
+superlative was wrong as written. For the declared path specifically, this is and in `soleur:one-shot` the
 same agent authors the declaration and runs the gate. Left invisible it would convert
 Check 10 from a verification gate into self-certification. The three mechanical
 counterweights are the distinct terminal, the committed corpus baseline count in
 `plugins/soleur/test/preflight-discoverability-test.test.ts` (so each new adoption is a
 reviewable diff line rather than silent drift), and the checklist entry in
-`observability-coverage-reviewer` §Step 6.
+`soleur:engineering:review:observability-coverage-reviewer` §Step 6.
 
 Note what the waiver is and is not: it is a **verification waiver**, not an execution
 bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does
@@ -1074,7 +1098,7 @@ under `HOME=$(mktemp -d)`. The sandbox removes the credential stores as files:
 | `grep -c . AGENTS.md` | matches the host value |
 
 The read-only repo bind is what closes the **write-back escalation**: without it a probe
-can install `.git/hooks/pre-commit`, which `/soleur:ship` then executes seconds later with
+can install `.git/hooks/pre-commit`, which `soleur:ship` then executes seconds later with
 the operator's real `$HOME` — turning a few-second credential window into a full
 compromise.
 
@@ -1371,7 +1395,7 @@ breaks the numeric test).
 - **PASS** — `rc == 0` (register clean). The "Undocumented source facts (M)" count is surfaced by the
   advisory review note, never here.
 - **FAIL** — `stale > 0`: "domain-model register has $stale stale citation(s) — the register cites a
-  file/symbol that no longer resolves. Fix the cited row(s), or run `/soleur:sync domain-model`. If a
+  file/symbol that no longer resolves. Fix the cited row(s), or run `soleur:sync domain-model`. If a
   citation backticks a *filename*, unbacktick it (known citation-parser false-positive — see
   `knowledge-base/project/learnings/best-practices/2026-07-01-domain-model-register-curation-citation-parser-and-grep-validation.md`)."
 - **FAIL** — `rc == 2` (analyzer error / unanalyzable source): "register-drift check could not run
@@ -1448,7 +1472,7 @@ After all checks complete, aggregate results into a structured report:
 
 ### If any FAIL
 
-**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `/ship`."
+**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `soleur:ship`."
 
 **Interactive mode:** Present findings table, then use **AskUserQuestion tool**:
 

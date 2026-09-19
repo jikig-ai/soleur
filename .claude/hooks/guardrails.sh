@@ -127,30 +127,52 @@ if [[ -n "$_bypass_rid" ]]; then
 fi
 
 # guardrails:block-commit-on-main — Block git commit on main branch
-# Match git commit at start of string OR after chain operators (&&, ||, ;)
-# so chained commands like "git add && git commit" are caught.
+# Match git commit at start of string OR after chain operators (&&, ||, ;, |)
+# so chained commands like "git add && git commit" are caught. Tolerates
+# env-assignment prefixes (LEFTHOOK=0 git commit), a launcher (sudo/env/…),
+# and git options between `git` and `commit` (-C dir, -c k=v, --git-dir=d) —
+# the same width precommit-guard.sh detects; a narrower gate here would make
+# those arms unreachable on the hook path.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
-if grep -qE '(^|&&|\|\||;)\s*git\s+commit' <<<"$COMMAND"; then
-  # Resolve the branch from the command's working directory, not the hook's CWD.
-  # resolve_command_cwd (lib/incidents.sh) covers: "cd /worktree && ...",
-  # "git -C /worktree commit", and hook-input .cwd. Falls through to the
-  # hook's own CWD if none resolve.
-  GIT_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
-  if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
-    BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+# The canonical check lives in plugins/soleur/scripts/precommit-guard.sh —
+# plugin is the source of truth so work/ship/one-shot can invoke the identical
+# check in sessions where hooks do not fire (Soleur Cloud Mode, FR5). This
+# wrapper translates the script's refusal into the hook deny envelope.
+if grep -qE '(^|[|;&])[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit' <<<"$COMMAND"; then
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  GUARD="$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh"
+  if [ -n "$REPO_ROOT" ] && [ -x "$GUARD" ]; then
+    HOOK_CWD=$(jq -r '.cwd // empty' <<<"$INPUT" 2>/dev/null || echo "")
+    if ! bash "$GUARD" --cwd "$HOOK_CWD" "$COMMAND" >/dev/null 2>&1; then
+      emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",        permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
+        }
+      }'
+      exit 0
+    fi
   else
-    BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  fi
-  if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
-    emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
-    jq -n '{
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",        permissionDecision: "deny",
-        permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
-      }
-    }'
-    exit 0
+    # Plugin script unreachable — fall back to the inline check so the hook
+    # never silently loses the guard when the plugin tree moves.
+    GIT_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
+    if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
+      BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    else
+      BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    fi
+    if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+      emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",        permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
+        }
+      }'
+      exit 0
+    fi
   fi
 fi
 
@@ -344,9 +366,20 @@ fi
 # never blocked). Unanchored
 # `={7}` also matched Markdown setext heading underlines and `=======` ASCII rules.
 # `<`/`>` require space-or-EOL after the seventh character, which is git's own
-# shape. `--no-color --no-ext-diff` is load-bearing: with `color.diff=always` or a
-# `diff.external` configured, the diff arrives ANSI-wrapped, `^\+` never matches,
-# and the guard silently allows a full triple.
+# shape. `--no-color` and `--no-ext-diff` are both load-bearing, for DIFFERENT
+# mechanisms: `color.diff=always` wraps every line in ANSI so `^\+` never matches,
+# while a `diff.external` replaces the patch body wholesale (no `+` lines at all).
+# Either way the guard silently allows a full triple. `--src-prefix=a/ --dst-prefix=b/`
+# and `--no-relative` are load-bearing the same way (#8263): the awk keys on the
+# `+++ b/` header, and a user's `diff.mnemonicprefix`/`diff.noprefix` rewrites it
+# (`+++ i/…`, `+++ …`) while `diff.relative` from a subdirectory drops INDEX.md
+# from the diff. Each disarmed the kb-index sentinel arm, and the missed header
+# also skipped the per-file reset, so counting went global and over-fired.
+# `-c core.quotePath=false` closes the same over-fire on DEFAULT config, with no
+# user setting involved: quotePath defaults to TRUE, so a non-ASCII filename is
+# emitted as `+++ "b/caf\303\251.md"`, which `^\+\+\+ b/` does not match. Measured:
+# a `<<<<<<< HEAD` line in one file plus a `=======` line in an unrelated
+# accented-filename file made the counting go global and DENIED a clean commit.
 if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pick|revert)\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
   # FAIL LOUD, not open. `2>/dev/null || true` made an errored `git diff` (an
@@ -360,9 +393,9 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   # own pre-existing AC4 fixture, whose command chains `gh issue create` after a
   # `git commit` heredoc and expects the require-milestone gate to still run.
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
-    CONFLICT_GIT=(git -C "$CONFLICT_MARKERS_DIR")
+    CONFLICT_GIT=(git -c core.quotePath=false -C "$CONFLICT_MARKERS_DIR")
   else
-    CONFLICT_GIT=(git)
+    CONFLICT_GIT=(git -c core.quotePath=false)
   fi
   if ! "${CONFLICT_GIT[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     IN_REPO=0
@@ -372,7 +405,8 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   STAGED_DIFF=""
   DIFF_RC=0
   if [ "$IN_REPO" -eq 1 ]; then
-    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff 2>/dev/null); DIFF_RC=$?
+    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff \
+      --src-prefix=a/ --dst-prefix=b/ --no-relative 2>/dev/null); DIFF_RC=$?
   fi
   if [ "$IN_REPO" -eq 1 ] && [ "$DIFF_RC" -ne 0 ]; then
     emit_incident "guardrails-block-conflict-markers" "warn" "git diff --cached failed; cannot verify" "$COMMAND"

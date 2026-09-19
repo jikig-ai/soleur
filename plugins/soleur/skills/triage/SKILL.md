@@ -1,14 +1,18 @@
 ---
 name: triage
-description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use ticket-triage agent."
+description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use soleur:support:ticket-triage agent."
 ---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
 
 - First set the /model to Haiku
 - Then read all pending todos in the todos/ directory
 
 Present all findings, decisions, or issues here one by one for triage. The goal is to go through each item and decide whether to add it to the CLI todo system.
 
-> **Note:** The `/soleur:review` skill now creates GitHub issues directly for all new findings. This triage skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration.
+> **Note:** The `soleur:review` skill now creates GitHub issues directly for all new findings. This triage skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration.
 
 **IMPORTANT: DO NOT CODE ANYTHING DURING TRIAGE!**
 
@@ -220,7 +224,7 @@ During triage, the following status updates occurred:
 2. Start work on approved items:
 
    ```bash
-   /resolve-todo-parallel  # Work on multiple approved items efficiently
+   soleur:resolve-todo-parallel  # Work on multiple approved items efficiently
    ```
 
 3. Or pick individual items to work on
@@ -313,7 +317,7 @@ Progress: 3/10 completed | Estimated time: ~2 minutes remaining
 - Update todo files (rename, frontmatter, work log)
 - Do NOT implement fixes or write code
 - Do NOT add detailed implementation details
-- That's for /resolve-todo-parallel phase
+- That's for soleur:resolve-todo-parallel phase
 ```
 
 When done give these options
@@ -321,7 +325,7 @@ When done give these options
 ```markdown
 What would you like to do next?
 
-1. run /resolve-todo-parallel to resolve the todos
+1. run soleur:resolve-todo-parallel to resolve the todos
 2. commit the todos
 3. nothing, go chill
 ```

@@ -7,23 +7,142 @@ name: vendor-pin-verify
 # lefthook self-consistency check. With this gate, an attacker would also
 # need a matching real upstream blob, which the upstream's commit history
 # constrains.
+#
+# Triggers (#8203): the workflow ALWAYS triggers on push-to-main + every PR
+# (no workflow-level `paths:` filter). Path detection moved into the
+# `detect-changes` job so the always-run `vendor-pin-required` gate job
+# reports a required-check context on EVERY PR — a path-filtered workflow
+# never reports a context for filtered-out PRs, which would leave a required
+# check "Expected — Waiting" forever (this is the gap #8203 closes: the
+# verify-upstream-blobs context went red without blocking merge). The
+# `verify-upstream-blobs` job is gated on detect-changes.outputs.vendor, so
+# the upstream-network verification still runs only on the ~small set of PRs
+# that touch the vendored surface. Mirrors tenant-integration.yml's
+# detect-changes + `tenant-integration-required` aggregator (#5585, ADR-032).
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    paths:
-      - "plugins/soleur/skills/gdpr-gate/NOTICE"
-      - "plugins/soleur/skills/gdpr-gate/references/**"
-      - "plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh"
-      - "plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
-      - ".github/workflows/vendor-pin-verify.yml"
+    branches: [main]
+  # Merge queue (#5780 precedent). `vendor-pin-required` is a required context
+  # → must report on the gh-readonly-queue/main/* temp ref or the queue
+  # stalls. The upstream-blob verification is NOT re-run on merge_group: it
+  # already ran authoritatively on the PR pre-queue. detect-changes emits
+  # vendor=false on merge_group and the always-run aggregator posts a PASS via
+  # the verify=skipped path.
+  merge_group:
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 jobs:
-  verify-upstream-blobs:
+  # detect-changes: decides whether the upstream-blob verification runs
+  # (#8203). Cheap — one checkout + one git diff. BASE_REF is only set on
+  # pull_request; non-PR events (push to main / workflow_dispatch)
+  # short-circuit to vendor=true (main is the source of truth). BASE_REF is
+  # passed via env: + quoted "$BASE_REF" per workflow-injection guidance.
+  detect-changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      vendor: ${{ steps.filter.outputs.vendor }}
+    steps:
+      # Checkout only pays for itself on the pull_request arm — the
+      # merge_group and push/dispatch short-circuits below write
+      # $GITHUB_OUTPUT and exit before the diff, so a full-history clone on
+      # those events is pure waste.
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          if [[ "$EVENT_NAME" == "merge_group" ]]; then
+            # Merge-queue candidate (#5780): skip the upstream-blob
+            # verification (authoritative pre-queue PR run already passed).
+            # The always-run aggregator posts vendor-pin-required via the
+            # detect=success + verify=skipped PASS branch, so the required
+            # context reports (never pending) without re-running.
+            printf 'vendor=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            # push to main / workflow_dispatch: always run (main is source of
+            # truth — a co-edit bypass that slipped a PR must still fail here).
+            printf 'vendor=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A git/checkout error (missing origin/$BASE_REF, etc.) must FAIL the
+          # job — never silently emit vendor=false. The gate job treats a
+          # detect-changes failure as fail-closed (see vendor-pin-required).
+          if ! CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD"); then
+            echo "::error::git diff against origin/${BASE_REF} failed; failing detect-changes closed." >&2
+            exit 1
+          fi
+          # Anchors are LITERAL per-bundle paths, not a `skills/*/NOTICE`
+          # wildcard (#3492 — translating `paths:` globs into an under-matching
+          # regex silently un-anchors the surface). Each conforming vendored
+          # bundle anchors its NOTICE + references/ prefix; the verify job's
+          # parser (notice-frontmatter.sh) and the integrity script itself are
+          # anchored because a broken parser makes every NOTICE parse empty →
+          # all skipped → the anti-vacuity floor below is what catches that —
+          # but only if a parser edit triggers the gate at all. The workflow
+          # file AND the verdict script + its test are anchored, mirroring
+          # tenant-integration.yml's self-trigger — and so is
+          # vendor-bundle-coverage.test.sh, the TS4 enrollment tripwire
+          # itself, so neutering the census that forces a new bundle into
+          # this list also fires the gate. TS4 greps these literal
+          # `plugins/soleur/skills/<slug>/` prefixes, so a NEW bundle must be
+          # added here when enrolled.
+          # SCOPE BOUNDARY (deliberately unanchored): scripts/test-all.sh and
+          # lefthook.yml gate this surface through OTHER required checks (test,
+          # lefthook hooks) — anchoring them here would run the upstream-
+          # network verification on their unrelated churn. The registration
+          # surfaces (.tf / canonical JSON / required-checks.txt) are pinned by
+          # T-rsc-7/9 + the parity test inside `test`, not by this gate.
+          # The match is a HERESTRING, not `printf | grep` — under pipefail,
+          # grep -q's early exit SIGPIPEs the printf and the pipeline's
+          # non-zero lands in `else`, emitting vendor=false on a diff that DID
+          # touch the vendored surface (#8203 review). The runner's `-e` is
+          # inherited, so the capture is protected with `|| grep_rc=$?`
+          # (ADR-170 / lint-workflow-errexit-capture): without it, a no-match
+          # (rc=1) would die the step instead of emitting vendor=false, and
+          # the rc>1 arm below would be unreachable. grep's own error (rc>1)
+          # still fails the job closed rather than reading as no-match.
+          grep_rc=0
+          grep -qE '^(plugins/soleur/skills/gdpr-gate/NOTICE$|plugins/soleur/skills/gdpr-gate/references/|plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity\.sh$|plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter\.sh$|plugins/soleur/skills/legal-generate/NOTICE$|plugins/soleur/skills/legal-generate/references/|plugins/soleur/test/vendor-bundle-coverage\.test\.sh$|\.github/workflows/vendor-pin-verify\.yml$|scripts/vendor-pin-gate-verdict\.sh$|tests/scripts/test-vendor-pin-gate-verdict\.sh$)' <<<"$CHANGED" \
+            || grep_rc=$?
+          if (( grep_rc > 1 )); then
+            echo "::error::anchor grep failed (rc=$grep_rc); failing detect-changes closed." >&2
+            exit 1
+          elif (( grep_rc == 0 )); then
+            printf 'vendor=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'vendor=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  verify-upstream-blobs:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.vendor == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Per-ref concurrency group at JOB level — deliberately NOT workflow level.
+    # The always-run aggregator must stay OUTSIDE the group so every PR still
+    # reports the required context; a workflow-level group would let a third
+    # arrival evict a pending RUN (which contains the aggregator job) and leave
+    # the required check without a result. See tenant-integration.yml's concurrency block for the full
+    # eviction arithmetic (#7055 / #7986 / #8048). cancel-in-progress: false
+    # so a superseded run is not cancelled mid-flight into a `cancelled`
+    # result that fails the gate closed on the head SHA.
+    concurrency:
+      group: vendor-pin-verify-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
@@ -32,4 +151,62 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh --verify-upstream
+          set -euo pipefail
+          fails=0
+          conforming=0
+          # Schema-keyed enrollment: a vendoring bundle is a skill NOTICE
+          # whose frontmatter parses AND declares `upstream` +
+          # `pinned-commit`. Prose attribution NOTICEs without frontmatter
+          # (e.g. incident/NOTICE) are skipped — the same predicate the
+          # drift cron and vendor-bundle-coverage guard use (#8122).
+          for notice in plugins/soleur/skills/*/NOTICE; do
+            upstream=$(NOTICE_FILE="$notice" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh field upstream 2>/dev/null || true)
+            pinned=$(NOTICE_FILE="$notice" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh field pinned-commit 2>/dev/null || true)
+            if [[ -z "$upstream" || -z "$pinned" ]]; then
+              echo "::notice file=$notice::no vendoring frontmatter (upstream/pinned-commit) — skipping; not a vendored bundle"
+              continue
+            fi
+            conforming=$((conforming + 1))
+            echo "Verifying $notice (upstream $upstream @ $pinned)"
+            if ! NOTICE_FILE="$notice" SKILL_PREFIX="$(dirname "$notice")" \
+                 bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh --verify-upstream; then
+              fails=$((fails + 1))
+            fi
+          done
+          # Anti-vacuity floor: a broken notice-frontmatter.sh (this file's
+          # detect-changes anchors cover it) makes EVERY NOTICE parse empty →
+          # all skipped → fails=0 → green gate that verified nothing. Zero
+          # conforming bundles is a gate failure, not a clean pass.
+          if (( conforming == 0 )); then
+            echo "::error::no schema-conforming NOTICE found — parser broken or the vendored bundles are gone; this gate verified nothing"
+            exit 1
+          fi
+          if (( fails > 0 )); then
+            echo "::error::$fails NOTICE bundle(s) failed upstream blob verification"
+            exit 1
+          fi
+
+  # Always-run aggregator gate (#8203). This job — NOT the
+  # `verify-upstream-blobs` job — is the required status check registered in
+  # the "CI Required" ruleset (infra/github/ruleset-ci-required.tf). It runs
+  # on every PR (if: always()) so a context is always reported, and asserts
+  # the verdict INSIDE a run: step (never a job-level if:, which would report
+  # no context and reopen the path-filter gap). Fail-closed allow-list:
+  # passes only when detect-changes succeeded AND verify-upstream-blobs is
+  # success|skipped. The verdict lives in
+  # scripts/vendor-pin-gate-verdict.sh so its branches are unit-tested
+  # (tests/scripts/test-vendor-pin-gate-verdict.sh). Results are read via
+  # env: + quoted "$VAR" per workflow-injection guidance.
+  vendor-pin-required:
+    needs: [detect-changes, verify-upstream-blobs]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Aggregate gate verdict (fail-closed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          VERIFY_RESULT: ${{ needs.verify-upstream-blobs.result }}
+          VENDOR_FLAG: ${{ needs.detect-changes.outputs.vendor }}
+        run: bash scripts/vendor-pin-gate-verdict.sh "$DETECT_RESULT" "$VERIFY_RESULT" "$VENDOR_FLAG"

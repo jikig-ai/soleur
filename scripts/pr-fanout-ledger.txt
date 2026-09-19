@@ -1,0 +1,71 @@
+# scripts/pr-fanout-ledger.txt — every workflow that fires on a PULL REQUEST PUSH.
+#
+# "Fires on a PR push" = declares on.pull_request or on.pull_request_target with no
+# `types:` or with `synchronize` in `types:` — OR declares on.workflow_run naming a
+# firing workflow with no `branches`/`branches-ignore` filter (it runs once per run
+# of that workflow, i.e. once per PR push: fix-constraints-stage-b.yml). Workflows
+# gated to opened/closed only, or chained with `branches: [main]`, are not in the
+# generator and have no row.
+#
+# jobs = the workflow's DECLARED job count, a CEILING the enumerator compares `<=`.
+# A `uses: ./.github/workflows/<callee>` job counts the callee's declared jobs (it
+# dispatches them). A matrix job is ONE declared job; its legs are NOT counted, so
+# this column is a bound on declared jobs, not on runner slots (ci.yml's two shard
+# matrices and secret-scan's smoke-tests matrix each occupy more slots than rows).
+# if:-skipped jobs are declared but consume nothing. paths = yes when the trigger
+# carries a paths/paths-ignore filter (a pull_request.branches filter is NOT a paths
+# filter; such a workflow is still ledgered as firing). cancel = yes ONLY when the
+# enumerator can PROVE a superseded push cancels the run, which needs ALL of: the
+# cancel FORM — cancel-in-progress is `true` or ci.yml's
+# `${{ github.event_name == 'pull_request' }}` ternary (`true`, `false` and that
+# ternary are the three accepted spellings; any other expression fails A4c) — AND the
+# GROUP SHAPE — the group references `github.ref`, `github.head_ref`,
+# `github.ref_name`, `github.event.number`, `github.event.pull_request.number` or
+# `github.event.pull_request.head.ref` — AND no per-run token in the group
+# (`github.sha`, `run_id`, `head.sha`, ...: a key that is unique per push never
+# collides, so it never cancels, whatever else it mentions). A static-string group
+# or any other shape scores `no` (fail-closed: unprovable, not disproved). Workflow-
+# level or job-level blocks both count; ANY qualifying block scores the workflow yes.
+# Every block using the ternary form must also carry ci.yml's group expression
+# byte-for-byte (A6), so a copy regressed to a per-ref-only group cannot hide behind
+# cancel=yes on a `push: main` arm (the #7931 class).
+# consequence = what breaks if this does not run on every PR push; a cancel=no row
+# MUST also say why, as `no cancel: <reason>` (A5). A row with no consequence is a
+# row that should not exist. Columns are TAB-separated (unlike required-checks.txt,
+# which is one name per line); a row with any other field count fails A-parse by
+# line number.
+#
+# The test (plugins/soleur/test/pr-fanout-ledger.test.sh) reddens on: a firing workflow
+# with no row; a row whose workflow no longer fires; a workflow declaring MORE jobs than
+# its row; a paths or cancel flag that disagrees with the file; a ternary-form block
+# whose group is not ci.yml's. Growth requires editing this file, and editing this
+# file requires naming the consequence (ADR-216 shape; ADR-216 addendum 2026-09-14).
+# The jobs column is a CEILING, not a floor: lower it when a workflow shrinks; raise it
+# only with a named consequence. A reader who raises a row to match a file that GREW
+# has reversed the ratchet. Next reduction candidate, measure first: the remaining
+# advisory ci.yml jobs.
+#
+# Format: <workflow><TAB><jobs><TAB><paths><TAB><cancel><TAB><consequence>   (comment lines: leading-# only)
+# workflow	jobs	paths	cancel	consequence
+ci.yml	22	no	yes	required contexts per scripts/required-checks.txt (ADR-032 ABI) plus their needs; advisory lints ride in lint-bot-statuses
+pr-quality-guards.yml	10	no	yes	required contexts markdown-lint + Bash fixture tests for guard scripts (ADR-032 ABI)
+secret-scan.yml	6	no	yes	required contexts gitleaks scan / lint fixture content / allowlist-diff / rename-guard / waiver discipline (ADR-032 ABI); the weekly schedule arm keys on main HEAD's SHA and so shares the push-arm group — a same-SHA rerun of the push run can drop a pending weekly scan (no heartbeat on this workflow)
+apply-sentry-infra.yml	5	no	no	required context sentry-destroy-required, always-run aggregator over a path-gated plan (#6589, ADR-032 ABI); no cancel: terraform plan holds a backend state lock
+tenant-integration.yml	3	no	no	required context tenant-integration-required, always-run aggregator over a path-gated suite (#5585, ADR-032 ABI); no cancel: holds the dev-Supabase mutex, a mid-run cancel leaves fixture residue
+dependency-review.yml	1	no	yes	required context dependency-review (ADR-032 ABI)
+legal-doc-cross-document-gate.yml	1	no	yes	required context enforce (#4384, ADR-032 ABI)
+skill-security-scan-pr-trailer.yml	1	no	yes	required context skill-security-scan PR gate (#3542 R15, ADR-032 ABI)
+cla.yml	1	no	no	CLA Required ruleset context cla-check (pull_request_target); no cancel: privileged trigger, keep its run shape untouched
+cla-evidence.yml	1	no	no	CLA Required ruleset context cla-evidence (pull_request_target); no cancel: privileged trigger, same as cla.yml
+constraint-gates.yml	1	no	no	ADR-071 L1 import-boundary dogfood; always-run by template design (promotable to required without a paths deadlock); body parity-locked to the constraint-scaffold template; no cancel: the template carries no concurrency block and the parity test pins it
+pr-auto-close-scanner.yml	1	no	yes	auto-close (#3407) keyword scan must see every commit message because the squash commit is built from them
+claude-code-review.yml	2	no	no	disabled on GitHub's side since 2026-02-12 (state not in the tree); kept because it is Art. 30 register PA-33 member (6); re-enable or delete only with a dated register correction; no cancel: disabled, nothing runs
+fix-constraints-stage-a.yml	1	yes	no	ADR-074 stage-A recovery, path-filtered to the target app; no cancel: cancel-in-progress is true but the group is per head SHA (one paid agent dispatch per SHA), so a superseded push never cancels it
+fix-constraints-stage-b.yml	1	no	no	ADR-074 stage-B, chained off stage-a via workflow_run with no branch filter so it fires once per PR push of the target app (#8149 review); no cancel: group is per workflow_run head SHA with cancel-in-progress false, one dispatch per stage-a run
+gdpr-gate-self-test.yml	3	yes	no	gdpr-gate fixture self-test, path-filtered to the skill; no cancel: no concurrency block yet, next rollout candidate
+infra-validation.yml	9	yes	no	terraform validate/fmt/plan over infra roots, path-filtered; no cancel: plan holds a backend state lock
+rls-authz-fuzz.yml	1	yes	yes	RLS fuzz, path-filtered to migrations/policies; cancels per ref already
+sentry-audit-gate.yml	1	yes	no	Sentry IaC audit, path-filtered to apps/web-platform/infra/sentry; no cancel: no concurrency block yet, next rollout candidate
+skill-security-scan-corpus.yml	1	yes	no	corpus scan, path-filtered to the scanner's rules/scripts; no cancel: no concurrency block yet, next rollout candidate
+validate-vector-config.yml	1	yes	no	vector.toml validation, path-filtered to the vector config; no cancel: no concurrency block yet, next rollout candidate
+vendor-pin-verify.yml	3	no	no	required context vendor-pin-required, always-run aggregator over the path-gated upstream-blob verification (#8203, ADR-032 ABI); no cancel: job-level per-ref group on verify-upstream-blobs with cancel-in-progress:false; detect-changes + aggregator deliberately outside the group

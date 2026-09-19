@@ -1095,7 +1095,9 @@ resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
 }
 
 # #6549 item 2 — liveness for the source-vs-live Better Stack heartbeat reconcile job
-# (scheduled-terraform-drift.yml → heartbeat-live-reconcile). A GHA-workflow-fired
+# (scheduled-terraform-drift.yml → heartbeat-live-reconcile). Since #7884 (ADR-222) the
+# same job also reconciles live monitors and reports unmanaged objects; the slug keeps
+# its original name. A GHA-workflow-fired
 # heartbeat (no Inngest counterpart); slug mirrors the workflow's `sentry-heartbeat`
 # check-in, so sentry-monitor-iac-parity.test.ts's code→IaC GHA-slug guard is satisfied.
 # checkin_margin_minutes=60 tracks the Inngest-dispatch cadence (≤2-3 min jitter), NOT
@@ -1373,6 +1375,33 @@ resource "sentry_cron_monitor" "scheduled_machinery_drain" {
   name                    = "scheduled-machinery-drain"
   schedule                = { crontab = "0 9 * * 1" }
   checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Liveness for the daily docs.devin.ai capability-drift watcher
+# (.github/workflows/scheduled-devin-docs-drift.yml, on.schedule "23 7 * * *").
+# DISPOSABLE with the watcher — delete this resource when #8160 closes (the
+# teardown list lives in the workflow header).
+#
+# WHY IT EXISTS. The watcher is the detection half of the #8160 upstream filing:
+# it is the only mechanism that notices when Cognition ships or documents cloud
+# hook dispatch / plugin subagents. A workflow that stops being scheduled
+# (GitHub disables schedules on repo inactivity and drops ticks under load) is
+# indistinguishable from docs that never changed — there is no red run to
+# notice, because there is no run.
+#
+# GHA-scheduled (not Inngest-dispatched) like its sibling
+# scheduled_marketplace_drift, so it inherits that cohort's 360-min margin for
+# GHA `schedule:` jitter rather than the Inngest cohort's 30.
+resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-devin-docs-drift"
+  schedule                = { crontab = "23 7 * * *" }
+  checkin_margin_minutes  = 360
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1

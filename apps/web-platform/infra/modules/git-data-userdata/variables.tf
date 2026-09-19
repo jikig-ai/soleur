@@ -64,6 +64,13 @@ variable "git_data_volume_id" {
 variable "git_data_luks_volume_id" {
   description = "hcloud_volume id for the LUKS-at-rest volume the guest cryptsetup luksOpens. A stub id here makes luksOpen fail, which is the rung-2 FAIL arm rather than a shortcut."
   type        = string
+  # (#8210) Rendered into /etc/default/git-data-doppler as the by-id device pin, which the
+  # bootstrap dot-sources as root at birth: the shape is pinned here so a malformed value is
+  # refused at plan time, not executed at boot.
+  validation {
+    condition     = can(regex("^[0-9]+$", var.git_data_luks_volume_id))
+    error_message = "git_data_luks_volume_id must be a bare numeric hcloud volume id: it is rendered into a by-id device path that is dot-sourced as root at birth (#8210)."
+  }
 }
 
 variable "doppler_token" {
@@ -73,9 +80,14 @@ variable "doppler_token" {
 }
 
 variable "doppler_config_name" {
-  description = "The Doppler config the two boot-time `doppler run` invocations name. MUST be the config doppler_token is scoped to. Prod: prd_git_data."
+  description = "The Doppler config the boot-time `doppler run` invocations name — the two runcmd stages and, since #8210, the reopen unit pair through /etc/default/git-data-doppler. MUST be the config doppler_token is scoped to. Prod: prd_git_data."
   type        = string
   default     = "prd_git_data"
+  # (#8210) Same reason as git_data_luks_volume_id: rendered into a root-sourced env file.
+  validation {
+    condition     = can(regex("^[a-z0-9_]+$", var.doppler_config_name))
+    error_message = "doppler_config_name must match ^[a-z0-9_]+$: it is rendered into /etc/default/git-data-doppler, which is dot-sourced as root at birth (#8210)."
+  }
 }
 
 variable "git_data_server_type" {

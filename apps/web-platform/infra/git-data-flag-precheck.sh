@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# git-data flag precheck — fail-closed read of GIT_DATA_STORE_ENABLED (#8189 D-3, blocker 1).
+#
+# Runs as its OWN step of .github/workflows/git-data-cutover.yml, before the SSH bridge and
+# before the git-data root key is fetched. It is the only step bound to DOPPLER_TOKEN_PRD (as
+# DOPPLER_TOKEN), so the `prd` read token never reaches a process that handles host bytes.
+#
+# WHY IT EXISTS. The deleted `read_flag` ran `doppler secrets get ... || echo ""` under a token
+# scoped to prd_terraform: the scope error became "", and "" read as "flag unset". A read that
+# cannot tell "absent" from "could not read" has to stop the run instead.
+#
+# MEASURED DOPPLER CLI SEMANTICS (v3.75.3, 2026-09-15):
+#   doppler secrets get <absent> --plain --no-exit-on-missing-secret -p soleur -c <cfg>
+#     -> exit 0, empty stdout
+#   the same call WITHOUT --no-exit-on-missing-secret
+#     -> exit 1 ("Could not find requested secret")
+#   a nonexistent (or unauthorized) config, even WITH the flag
+#     -> exit 1
+# So with the flag, exit 0 + empty stdout means "absent", and every non-zero exit is a read
+# failure (wrong scope, revoked token, network) — never "unset".
+#
+# SCOPE. A service token reads the config it is bound to. So after a successful flag read the
+# SAME token must also read the reserved secrets Doppler injects into every config
+# (DOPPLER_PROJECT, DOPPLER_CONFIG — docs.doppler.com/docs/secrets › reserved secrets) as exactly
+# `soleur` / `prd`. Without that, a token bound to another config reads the flag as absent and the
+# run proceeds as "unset" — the exact defect the deleted read_flag had.
+#
+# VERDICTS (the only output; the flag value, the reserved values and doppler's stderr are never
+# printed — stderr goes to a temp file and is reduced to one fixed reason word):
+#   DOPPLER_TOKEN empty      -> verdict=flag_token_absent                       exit 5 (no doppler call)
+#   a read exits non-zero    -> verdict=flag_read_failed reason=<word> rc=<n>   exit 5
+#        <word>: auth_invalid | forbidden | config_not_found | network | unknown
+#   reserved values differ   -> verdict=flag_read_failed reason=scope_mismatch  exit 5
+#   exactly `true`           -> verdict=flag_already_true                       exit 5
+#   empty                    -> flag=unset                                       exit 0
+#   any other value          -> flag=off                                         exit 0
+# `true` is compared exactly (no case folding, no trimming): the app enables the store only on
+# process.env.GIT_DATA_STORE_ENABLED === "true" (apps/web-platform/server/workspace-resolver.ts).
+set -euo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
+refuse() { # <verdict-detail>
+  echo "[git-data-flag-precheck] verdict=$1"
+  echo "::error title=git-data-flag-precheck::verdict=$1"
+  exit 5
+}
+
+if [ -z "${DOPPLER_TOKEN:-}" ]; then
+  refuse flag_token_absent
+fi
+
+ERRF="$(mktemp)" || refuse "flag_read_failed reason=unknown rc=95"
+trap 'rm -f "$ERRF"' EXIT
+
+# <stderr-file> -> one fixed word. Matched on doppler's own error text; the text is never printed.
+reason_of() {
+  if grep -qiF 'Invalid Auth token' "$1"; then echo auth_invalid
+  elif grep -qiE 'does not have access|forbidden|\b403\b' "$1"; then echo forbidden
+  elif grep -qiF 'Could not find requested config' "$1"; then echo config_not_found
+  elif grep -qiE 'dial tcp|no such host|connection refused|i/o timeout|timeout|unable to connect|tls handshake|network is unreachable' "$1"; then echo network
+  else echo unknown
+  fi
+}
+
+# read_secret <NAME> [extra-flag] -> sets VAL; refuses on a non-zero exit.
+VAL=""
+read_secret() {
+  local rc=0
+  : > "$ERRF"
+  VAL="$(doppler secrets get "$1" --plain ${2:+"$2"} -p soleur -c prd 2>"$ERRF")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    refuse "flag_read_failed reason=$(reason_of "$ERRF") rc=${rc}"
+  fi
+}
+
+read_secret GIT_DATA_STORE_ENABLED --no-exit-on-missing-secret
+flag="$VAL"
+read_secret DOPPLER_PROJECT
+project="$VAL"
+read_secret DOPPLER_CONFIG
+config="$VAL"
+if [ "$project" != soleur ] || [ "$config" != prd ]; then
+  refuse "flag_read_failed reason=scope_mismatch"
+fi
+
+if [ "$flag" = true ]; then
+  refuse flag_already_true
+fi
+if [ -z "$flag" ]; then
+  echo "flag=unset"
+else
+  echo "flag=off"
+fi
+exit 0

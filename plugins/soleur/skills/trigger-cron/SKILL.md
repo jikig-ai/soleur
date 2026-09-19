@@ -3,6 +3,10 @@ name: trigger-cron
 description: "This skill should be used to fire an allowlisted cron manual-trigger on demand via POST /api/internal/trigger-cron, without SSH. Reads the secret read-only from Doppler, lists allowlisted events, supports optional event data and a dry-run."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # trigger-cron
 
 Fires a `cron/<name>.manual-trigger` event on demand by POSTing to the internal
@@ -52,7 +56,7 @@ quoting it would make this paragraph a residual site in the sweep that hunts it.
        echo "trigger-cron: cannot verify the Soleur plugin installation — stopping before any event fires." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  No event has been fired and no secret has been read." >&2
        exit 2; }
 TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
@@ -60,7 +64,7 @@ TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
        echo "SOLEUR_TRIGGER_CRON_PRODUCER_MISSING producer=scripts/trigger.sh reason=absent-from-verified-root"
        echo "trigger-cron: the plugin root verifies but does not carry trigger.sh — halt (fail closed)" >&2
        echo "  Your project is not at fault: the installed Soleur payload is incomplete or stale." >&2
-       echo "  What to do: run 'claude plugin update soleur', then RESTART Claude Code (updates apply only on restart);" >&2
+       echo "  What to do: run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code (updates apply only on restart);" >&2
        echo "  if you installed with --scope project or --scope local, pass the same scope. If it still persists," >&2
        echo "  reinstall the plugin. Updating the MARKETPLACE alone does not update an INSTALLED plugin." >&2
        echo "  Do NOT let the agent run the reinstall — it mutates the plugin root under a live run." >&2

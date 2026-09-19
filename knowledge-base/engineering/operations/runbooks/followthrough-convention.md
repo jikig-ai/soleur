@@ -59,6 +59,14 @@ verification passes — no human revisit required.
    -->
    ```
 
+   **Paste it UNFENCED, at column 0.** The example above is fenced only so it renders in this
+   document; the sweeper SKIPS fenced blocks by design (#4200 Gap 3 — a fenced directive is an
+   example, not an enrolment) and anchors the opener at column 0. A fenced or indented
+   directive is visibly present in the issue body and enrols nothing, which is the hardest
+   version of this failure to notice: six of 56 open trackers were dead that way, the oldest
+   silent since 2026-06 (#7490). Both the `gh issue create` hook and the sweeper now name the
+   fence as the cause instead of reporting a missing directive.
+
    Place it inline anywhere in the body. Multiple directives in one body: only the first is honored.
 
 5. **Open a PR** that lands the script + (optionally) any new secrets in the workflow env. CI on the PR includes the workflow file's syntax check.
@@ -70,6 +78,7 @@ verification passes — no human revisit required.
 | `script` | yes | Path MUST start with `scripts/followthroughs/`. Other paths are refused (defense against tampered issue bodies pointing at arbitrary files). |
 | `earliest` | yes | ISO-8601 UTC timestamp. The sweeper skips the issue until `now >= earliest`. |
 | `secrets` | optional | Comma-separated GitHub secret names. Only these are exported into the script's environment. Omit if the script needs no secrets. |
+| **Placement** | yes | The `<!--` opener MUST be at **column 0 and outside any code fence**. Fenced blocks are skipped wholesale and the anchor is column-0, so an indented or fenced directive parses as no directive at all. This is a field of the directive in every sense that matters — get it wrong and the other three are never read. |
 
 ## Trigger → verification mapping
 
@@ -116,6 +125,18 @@ The script must exist + be executable on disk BEFORE `gh issue create --label
 follow-through` runs — `.claude/hooks/follow-through-directive-gate.sh` (and the
 sweeper) reject a missing/non-executable `script=` path. For review-time filings
 the script lands in the review PR's branch.
+
+**Enrolling on a PRE-EXISTING issue** (the auto-wire only fires on issue
+create): manually add the `follow-through` label — the sweeper enumerates by
+label and never parses bodies, so an unlabeled directive is invisible; verify
+no prior directive; directive at column 0; canonical
+`script=scripts/followthroughs/<name>.sh` (a bare name fails path
+canonicalization **silently** — stderr-only, zero comments, every run);
+post-merge, verify the sweeper run log shows the script actually ran — "it
+didn't comment" is indistinguishable from "it worked". And note: the sweeper
+comments on EVERY non-0/1 verdict with no dedup, so an indefinite-horizon
+"watch for upstream" directive spams the tracker (~30 comments/month) — use a
+dedicated `scheduled-*-drift.yml` workflow + `Ref #N` for that shape instead.
 
 **First deferred-scope-out instance**: #3950 (review: cla-evidence scripts
 hardening bundle) — `scripts/followthroughs/cla-evidence-hardening-3950.sh` is the

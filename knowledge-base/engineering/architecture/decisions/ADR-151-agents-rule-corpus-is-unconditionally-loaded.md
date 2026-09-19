@@ -374,3 +374,25 @@ No C4 impact — enumeration cited, not assumed. All three model files were read
 A grep for `rules-loader|AGENTS|SessionStart` across all three `.c4` files returns
 zero hits. (Pre-existing and out of scope: the `Hook Engine` description is
 *incomplete* — it omits the rules loader entirely.)
+
+## Addendum — 2026-09-14 (#8030): the retirement rung is not blocked by the metric's accuracy
+
+The Consequences passage above says the retirement rung "is not currently actionable, because the
+`rules_unused_over_8w` metric is a per-worktree fragmentation under-count". That under-count was
+fixed by PR #8029 (the aggregator now reads the incidents log from the git common dir), and the rung
+is still not actionable — for a structural reason the passage did not name. The incidents log records
+only ENFORCEMENT events (warn/deny/bypass/applied); a rule that is simply obeyed emits nothing, so a
+zero count selects the best-obeyed rules first. Measured 2026-09-14: 81 of 100 rules at zero, every
+one with `first_seen: null`.
+
+The shrink levers are therefore trimming prose and **migrating** a domain-scoped rule into the skill
+that already enforces it (`cq-agents-md-tier-gate`; the checklist is the header of
+`scripts/migrated-rule-ids.txt`, placement and body integrity are checked by
+`scripts/lint-migrated-rule-ids.sh`). Retirement stays available as an editorial decision, never as a
+telemetry-driven one. A migrated rule is a third corpus state — active, enforced, but not in
+`AGENTS.rules.md` — so ADR-092's body-weakening gate, which hashes bodies only in that file, is
+extended for migrated rules by the body hash each registry row carries.
+
+The quarterly `cron-rule-prune` (`rule-prune.sh --propose-retirement`) is unaffected in practice: it
+skips rules whose `first_seen` is null (#3156), so it never nominates a never-fired rule; its dry-run
+against the 2026-09-14 metrics returns no candidates.

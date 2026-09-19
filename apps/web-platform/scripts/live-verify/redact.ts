@@ -42,6 +42,15 @@ const RULES: Array<[RegExp, string]> = [
   // DOM) — this is the structural shape the scrubber's threat model targets
   // (security review P1; default cookieEncoding="base64url").
   [/base64-[A-Za-z0-9_-]{40,}/g, "[REDACTED_SB_SESSION]"],
+  // Supabase API keys, CURRENT format (#7969). The prd
+  // SUPABASE_SERVICE_ROLE_KEY is `sb_secret_…` — opaque, not a JWT — so the
+  // generic `eyJ…` rule below cannot see it. That is the highest-value
+  // credential in the live-verify pipeline and it was the one format this
+  // scrubber did not cover, on a PUBLIC repo whose Actions logs are
+  // world-readable. `sb_publishable_…` is included because a mix-up that put
+  // one in the service-role slot should still not be published.
+  [/sb_secret_[A-Za-z0-9_-]{10,}/g, "[REDACTED_SB_SECRET]"],
+  [/sb_publishable_[A-Za-z0-9_-]{10,}/g, "[REDACTED_SB_PUBLISHABLE]"],
   // Doppler tokens (#5487): the live-verify GHA job runs the harness under
   // `doppler run -c prd`, so a doppler CLI error could surface its token in
   // stderr — which the job tees to the run log and embeds in a Sentry crash-tail

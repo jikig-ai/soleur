@@ -39,11 +39,12 @@
 #       whole event fails even though the total stays high;
 #   (c) the derived command count equals the number of `type == "command"`
 #       entries in the file — self-consistent, no magic number to maintain.
-# (c) counts commands BEFORE de-duplication: three hooks are deliberately
-# registered under two matchers each (guardrails.sh, kb-domain-allowlist-guard.sh,
-# no-memory-write.sh), so the file holds 36 command entries over 33 distinct
-# paths. Comparing the DEDUPED count against the entry count would be a
-# permanently-red gate that the next person "fixes" by deleting the check.
+# (c) counts commands BEFORE de-duplication: several hooks are deliberately
+# registered under multiple matchers each (guardrails.sh spans Bash/write/
+# ask_user_question classes; the #8205 twin registrations added more), so the
+# command-entry count exceeds the distinct-path count. Comparing the DEDUPED
+# count against the entry count would be a permanently-red gate that the next
+# person "fixes" by deleting the check.
 
 set -uo pipefail
 

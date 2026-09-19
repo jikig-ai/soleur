@@ -1,16 +1,27 @@
 {
+  "requiredPlugins": [
+    {
+      "source": "git-subdir",
+      "url": "https://github.com/jikig-ai/soleur.git",
+      "path": "plugins/soleur"
+    }
+  ],
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/session-rules-loader.sh\""
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/session-rules-loader.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/plugins/soleur/hooks/devin-session-start.sh\""
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/supabase-loopback-warn.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/scripts/install-kb-merge-driver.sh\""
           }
         ]
       }
@@ -21,21 +32,194 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/guardrails.sh\"",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/guardrails.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/git-commit-secret-scan.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/brand-hex-commit-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/doppler-secrets-delete-redirect.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/cla-signed-author-gate.sh\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/context-reviewed-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/follow-through-directive-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/grep-rewrite.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/kb-domain-allowlist-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/no-memory-write.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/pkill-self-match-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/pre-merge-auto-close-scan.sh\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/pre-merge-rebase.sh\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/prod-write-defer-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/ship-net-issue-flow-gate.sh\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/ship-operator-step-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/ship-runbook-ssh-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/ship-soak-followthrough-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/ship-unpushed-commits-gate.sh\"",
+            "timeout": 30
           }
         ]
       },
       {
-        "matcher": "^(write|edit|multi_edit|notebook_edit)$",
+        "matcher": "^(edit|multi_edit|notebook_edit)$",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/guardrails.sh\"",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/guardrails.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/iac-plan-write-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/kb-domain-allowlist-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/no-memory-write.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "^edit$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/new-scheduled-cron-prefer-inngest.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/worktree-write-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/security_reminder_hook.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "^skill$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/skill-invocation-logger.sh\""
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^exec$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/post-dispatch-watch-gate.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/rule-incident-marker-capture.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "^edit$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/docs-cli-verification.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "^skill$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/phase-surface-hint.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/skill-context-queries.sh\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Exec(git add -A && git commit)",
+      "Exec(git add && git commit)",
+      "Exec(git commit -m)",
+      "Exec(git commit -F)",
+      "Exec(gh pr merge)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/lib/stripe.ts)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.doppler/**)",
+      "Read(~/.git-credentials)",
+      "Read(~/.netrc)",
+      "Read(~/.ssh/**)"
     ]
   }
 }

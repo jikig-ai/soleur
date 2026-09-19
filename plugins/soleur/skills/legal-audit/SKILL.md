@@ -3,6 +3,10 @@ name: legal-audit
 description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents and displays findings inline."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Legal Compliance Auditor
 
 Scan a project's existing legal documents and audit them for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. Findings are displayed inline in the conversation.
@@ -24,7 +28,7 @@ Present the discovered documents and use the **AskUserQuestion tool** to confirm
 
 "Found N legal documents. Audit all of them, or select specific files?"
 
-If no legal documents are found, report: "No legal documents found in this project. Use `/legal-generate` to create them.
+If no legal documents are found, report: "No legal documents found in this project. Use `soleur:legal-generate` to create them.
 
 > **Or:** If you're handling an inbound MSA, DSAR, AI-vendor terms review, OSS-license question, or breach notice, see `knowledge-base/legal/recommended-tools.md` for downstream specialist tools."
 
@@ -41,14 +45,14 @@ Read each document in the confirmed scope.
 
 ## Phase 2: Audit
 
-Invoke the `legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
+Invoke the `soleur:legal:legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
 
 If the user's input includes the word `benchmark` (either via `args` parameter or natural language), append the benchmark trigger to the Task prompt. Otherwise, send the standard audit prompt unchanged.
 
 **Standard audit prompt:**
 
 ```
-Task legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
+Task soleur:legal:legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
 
 Documents:
 [Include full content of each document]

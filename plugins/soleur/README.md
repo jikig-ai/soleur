@@ -31,7 +31,10 @@ definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
 **Devin CLI:** install with `devin plugins install jikig-ai/soleur#plugins/soleur -y` and update with `devin plugins update soleur`. To work
 on the plugin from this checkout, run `bash scripts/setup-devin.sh`, start a Devin session,
 and use `/soleur:go <intent>`. Devin shares the same skills and agent definitions; see
-[compatibility instructions](devin/INSTRUCTIONS.md).
+[compatibility instructions](devin/INSTRUCTIONS.md). Devin **Cloud** sessions run under
+Soleur Cloud Mode — skills, rules, and MCP carry, but plugin subagents and
+SessionStart/SessionEnd hooks are absent, and degradation is disclosed rather than
+silent; see the [cloud-vs-local capability matrix](devin/INSTRUCTIONS.md#cloud-mode-devin-cloud-sessions).
 
 The recommended way to use Soleur is through the unified entry point:
 
@@ -72,8 +75,8 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 68 |
 | Commands | 3 |
-| Skills | 98 |
-| MCP Servers | 3 |
+| Skills | 100 |
+| MCP Servers | 5 |
 
 ## Agents
 
@@ -249,7 +252,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `content-writer` | Generate full article drafts with brand voice, Eleventy frontmatter, and JSON-LD |
 | `growth` | Content strategy: keyword research, content auditing, gap analysis, fix, AI agent consumability |
 | `legal-audit` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
-| `legal-generate` | Generate draft legal documents from company context (8 document types, 3 jurisdictions) |
+| `legal-generate` | Generate draft legal documents from company context (14 document types, 3 jurisdictions) |
 | `release-announce` | Announce releases via GitHub Releases (CI posts to Slack) |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |
@@ -319,7 +322,10 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | Server | Description |
 |--------|-------------|
 | `context7` | Framework documentation lookup via Context7 |
+| `cloudflare` | Cloudflare platform access (DNS, Workers, Zero Trust) via OAuth |
 | `vercel` | Vercel platform access (deployments, projects, logs, domains) via OAuth |
+| `stripe` | Stripe platform access (payments, customers, subscriptions) via OAuth |
+| `playwright` | Browser automation via `@playwright/mcp`, routed through `playwright-mcp-redact-proxy.py` (accessibility snapshots redacted in flight; dedicated persistent `soleur-playwright-mcp-profile` browser profile under the XDG cache root). Registered via plugin-root `.mcp.json` on Claude Code ≥2.1.139; requires `python3` and `npx` |
 
 ### Context7
 
@@ -449,6 +455,59 @@ check regardless of how you installed.
 
 </details>
 
+## Compaction-Aware Session Hooks
+
+When a session's context is compacted, Soleur injects a short directive telling
+the model to re-read the plan and spec rather than trust the paraphrased
+summary, and — on the **second automatic compaction of the same session
+window** — recommends continuing in a fresh session at the next phase boundary.
+Before a compaction it tells the summarizer which resume identifiers to keep
+verbatim.
+
+This replaces the old unconditional "run `/clear` and resume" advice, which
+fired at fixed points regardless of whether any context had been lost.
+
+`plugins/soleur/hooks/compaction-state.sh` is bound twice in `hooks.json`:
+`PreCompact` (matcher `manual|auto`) and `SessionStart` (matcher
+`startup|resume|clear|compact`). It is fully local — nothing leaves the machine, and nothing is written to your
+repository. It is not read-only: it keeps a small per-session counter under
+`TMPDIR` (mode 0700, two files of one word each, reaped after 7 days). Its per-session
+counter lives under `TMPDIR` and is disposable.
+
+**It does nothing in a repository Soleur does not manage.** A plugin hook is
+global, so the hook stays silent unless the enclosing repository carries a
+`knowledge-base/project/plans` or `specs` directory — the artifacts
+`/soleur:plan` writes. Without that check, compacting work on an unrelated
+application would get a summary shaped around PR numbers and operator holds it
+does not have.
+
+This is a *relevance* check, not a security boundary, and the distinction is
+worth stating: any repository can contain a directory of that name, so a
+repository you clone can satisfy it. That is bounded by what the hook emits —
+pointers and integers it derives itself, with every free-text value reduced to a
+conservative character set — and by the fact that a cloned repository already
+reaches the model more directly through `CLAUDE.md`, which Claude Code loads
+unconditionally.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `SOLEUR_DISABLE_COMPACTION_HOOKS` | unset | `1` disables both events entirely — no directive, no summary shaping, nothing written |
+| `jq` (not a setting) | required | Without `jq` on `PATH` the hook emits a static `reason=jq-unavailable` envelope and can produce no recommendation. The Claude Code row below assumes it is present. |
+| `SOLEUR_COMPACTION_COUNT_THRESHOLD` | `2` | Automatic compactions in one session window before a fresh session is recommended. `1` recommends on the first; a high value effectively never recommends. `0` and any non-numeric value fall back to the default — `0` reads as "off" to most people, and honouring it literally would mean "recommend always", so use the kill switch above instead |
+| `SOLEUR_COMPACTION_CLI_VERSION` | derived from `claude --version` | Pins the CLI version stamped into the directive, for drift attribution |
+
+### Harness support
+
+The compaction lifecycle is a Claude Code API. The other three harnesses
+degrade to **silence**, never to a false claim that the behaviour is present.
+
+| Harness | Compaction hooks | What you get instead |
+|---|---|---|
+| Claude Code | Yes (2.1.76+; measured on 2.1.273) | Evidence-based directive and fresh-session recommendation |
+| Codex | No | The skill-prose fallback: the end-of-work resume prompt still fires, with no `/clear` recommendation |
+| Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
+| Grok Build | No | Same as Codex |
+
 ## Known Issues
 
 ### Updating the Marketplace Does Not Update the Installed Plugin
@@ -463,9 +522,15 @@ every run still executes the old payload.
 **Workaround:** run both steps, then confirm the two agree:
 
 ```bash
-claude plugin marketplace update soleur
-claude plugin update soleur
+claude plugin marketplace update soleur-marketplace
+claude plugin update soleur@soleur-marketplace
 ```
+
+Both halves name the marketplace deliberately. On current releases the bare plugin name can
+fail with `Plugin not found`; an Anthropic collaborator confirmed `<plugin>@<marketplace>` as
+the reliable form on anthropics/claude-code#76882 (2026-08-17). `soleur-marketplace` is the id
+for the published marketplace; if you added this repository directly it is `soleur`, so run
+`claude plugin list` and use whatever it prints beside `soleur`.
 
 **If that does not converge them, reinstall.** This is now a fallback rather than the only
 mechanism, and the reason it used to be the only one is worth knowing: `plugin.json` carried a
@@ -477,7 +542,7 @@ delivered commit, so the string changes with every commit and `update` has somet
 See ADR-182 for the mechanism and its measurements:
 
 ```bash
-claude plugin uninstall soleur && claude plugin install soleur
+claude plugin uninstall soleur@soleur-marketplace && claude plugin install soleur@soleur-marketplace
 ```
 
 **Symptom to watch for:** `/soleur:sync` emitting
