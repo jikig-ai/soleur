@@ -169,3 +169,62 @@ exist, so the `[[ -r ]]` guard fails and the gate halts at its documented exit 2
 whose exit code authorises secret emission, **refusing is the correct unresolved-root outcome**.
 The negative branch would have changed the operator-experience calculus and the amendment's
 claims — not the direction of the fix.
+
+## Arm 5 — command-surface, four forms, BOTH harnesses (2026-09-19, #8308 Phase 0)
+
+Arms 1–4 measured the bare token and the `:-` negative. #8308 needed two cells they do not
+carry: the **#8061 form** (`${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}`) and the **unbraced**
+form, on the **command** surface, because `plugins/soleur/commands/go.md` is a command and
+the whole question is which of its expansions the loader fixes before bash runs.
+
+Re-runnable probe: [`arm4-probe/commands/zzzprobe.md`](./arm4-probe/commands/zzzprobe.md).
+Machine-readable capture (the artifact `go-session-gates.test.sh` row H1 `cmp`s against):
+[`arm4-probe/arm5-delivered.txt`](./arm4-probe/arm5-delivered.txt).
+
+### Recipe
+
+```bash
+cd knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe
+# Claude Code
+echo "/zzzprobe:zzzprobe" | CLAUDE_PLUGIN_ROOT=/tmp/DECOY-EVIL-ROOT \
+  claude -p --plugin-dir "$(pwd)" --allowedTools "Bash"
+# Grok Build — no --plugin-dir; install, run, uninstall. A command-ONLY copy is
+# required because `/zzzprobe` resolves to the SKILL when both components share the stem.
+grok plugin install --trust <command-only copy> && grok --always-approve -p "/zzzcmdprobe"
+cat "${TMPDIR:-/tmp}/arm5-probe-out.txt" "${TMPDIR:-/tmp}/arm5-probe-out.txt.delivered"
+```
+
+### Result — identical on both harnesses
+
+| Form as written | Claude Code 2026-09-19 | Grok Build 1.0.34 |
+| --- | --- | --- |
+| `${CLAUDE_PLUGIN_ROOT}` | **SUBSTITUTED** → the real `--plugin-dir` path | **SUBSTITUTED** → `/home/…/.grok/installed-plugins/<slug>` |
+| `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` (the #8061 form) | **literal**, verbatim | **literal**, verbatim |
+| `$CLAUDE_PLUGIN_ROOT` (unbraced) | **literal**, verbatim | **literal**, verbatim |
+| `'${CLAUDE_PLUGIN_ROOT}'` (single-quoted) | **SUBSTITUTED** inside the quotes | **SUBSTITUTED** inside the quotes |
+
+**Control (what makes "ambient ignored" distinguishable from "ambient never propagated").**
+Both runs carried a live decoy: `RUNTIME_ENV_RAW=[/tmp/DECOY-EVIL-ROOT]`, `ENV_GREP=[1]`.
+The decoy was present in the executing bash subprocess and was **not** what the substituted
+token resolved to — so the two unsubstituted forms do not fail closed, they expand at bash
+time against ambient environment.
+
+### What each cell settles for #8308
+
+- The transform is **exact-literal string replacement of `${CLAUDE_PLUGIN_ROOT}`**, not
+  shell-aware parsing: quoting does not defeat it (single-quoted substitutes), and any
+  wrapper does (`:-` and unbraced both survive). This is why the #8061 form reaches bash
+  verbatim and expands empty in an environment with neither variable set.
+- The unbraced form is **not** substituted, so ADR-179's exact-literal contract holds and
+  the plan's R9 / P1b predicates and §R3 reasoning stand. (Had it substituted, the Phase 0
+  stop table required a hard stop and a re-plan.)
+- The single-quoted form **is** substituted. Recorded as viable-but-not-adopted
+  (Alternatives row 4 of the #8308 plan); not switched to in that PR.
+- **Grok cell: the token IS substituted on Grok too.** Under a token-first arm order,
+  `GROK_PLUGIN_ROOT` is therefore never consulted on a Grok session that resolves — a
+  deliberate precedence change from today's `${GROK_PLUGIN_ROOT:-…}`, recorded in ADR-179
+  `### Decision 11`. Arm 2 remains reachable for a read-from-disk Grok path.
+
+Scope note: this is a synthetic plugin, as Arm 4 was. It measures the loader's delivery
+transform, not `go.md` itself; `go-session-gates.test.sh` row H3 and AC12 carry the
+real-`go.md` contact.
