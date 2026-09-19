@@ -50,7 +50,7 @@ first and cut: it has none of those, and it has an **empty-derived-set** state t
 
 ### The two ceilings
 
-1. **`/ship` Phase 4 stays `TEST_GROUP=all`.** *(Amended 2026-09-18, ADR-229/#8322: Phase 4's
+1. **`/ship` Phase 4 stays `TEST_GROUP=all`.** *(Amended 2026-09-18, ADR-230/#8322: Phase 4's
    default dispatch is now `test-all.sh --affected` behind `battery-owed.sh`; `--full` is the
    explicit operator opt-in and outranks even a SKIPPABLE verdict. The infra-coverage rationale
    below survives the mode change — under `--affected` the infra runner is selected by its declared
