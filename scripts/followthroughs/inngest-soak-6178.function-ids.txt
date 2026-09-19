@@ -1,0 +1,74 @@
+# inngest-soak-6178.function-ids.txt -- the 52 cron function UUIDs the ADR-100 Phase-4 soak
+# probe (scripts/followthroughs/inngest-soak-6178.sh) queries, ONE per line, heaviest first.
+#
+# PROVENANCE. These are the ids `op=verify` 2.6 scoped its exactly-once scan to on 2026-09-15
+# (run 34974655656) and 2026-09-19 (run 35415585389) via the CUTOVER_DOUBLEFIRE_FUNCTION_IDS
+# repo variable, which was deleted again after each run (#6178 comment 5738682595) -- so the run
+# log is the only durable source. Extraction, byte-identical from both runs:
+#   gh run view <run-id> --log | grep -oE 'function_ids=\[[0-9a-f,-]+\]' | head -1 \
+#     | sed 's/function_ids=\[//; s/\]//' | tr ',' '\n' | sort
+# They are NOT derivable from /hooks/inngest-registry-probe (ids only, no triggers) and are NOT
+# UUIDv5 of the function slug (tried). The registry held 70 functions on 09-15 and 09-19; the
+# probe pins that count and refuses (registry_drift) if it moves.
+#
+# ORDER IS THE BALANCING LEVER. The probe deals line i (0-based) into slice i mod 5 and never
+# time-slices (the deploy webhook forwards only `from` and `function_ids`), so the sort decides
+# which ids share a GET. Sort key: -runs, then id. Reorder ONLY by re-measuring; never by hand.
+#
+# measured at 2026-09-19T03:57:28Z, from=2026-09-15T12:40:00Z, five read-only GETs in the order
+# below (11/11/10/10/10 ids): per-slice total_count 127/447/114/25/118 (that was the pre-sort
+# file order; the dealt layout carries 372/124/112/112/111 runs), 831 distinct runs, 22 ids at
+# zero, global min startedAt 2026-09-15T12:40:00.082079Z. Top counts: 26e6836b 262 (the */20
+# minter), 2e625d3c 88, 11bb44a3/4b7b1e68/6b2bdeb4/fe1a4bd6 87, d5cb880f 21, then 14 and below.
+26e6836b-97ad-503f-8b08-490d8a2f4ce8
+2e625d3c-0207-569f-b10b-567bc685ad5e
+11bb44a3-ae8d-57b0-8d41-e76e57f0277a
+4b7b1e68-aaab-52f8-843e-8f0741dd93cc
+6b2bdeb4-142e-5375-bfaa-74b2ea2d6bfc
+fe1a4bd6-8d09-5882-955f-77fd72ed5c50
+d5cb880f-edd2-5338-abd8-6d088825a9d9
+08e8a43f-dda0-50ad-adc8-ebefe1ecc850
+0a7dd3fa-8416-5f14-a873-3efb1507a515
+8e71b0c6-8505-5320-8d17-c4c2533898f0
+a16fe7ce-33a7-5c17-b30b-20f7dead3e72
+209d5706-72bd-561c-88dc-92d7e23c1849
+821230d0-eba5-5d92-b6d9-07ea95f7c26b
+e6cf7aa2-9e11-52ac-b375-8f0983ccea20
+080d1cfc-a464-5ae1-91ef-13041ca3b56d
+2d7430ac-585f-52cd-bc4f-eb7b948e96f5
+336185fc-bf8f-54c2-892b-ddba803b7f16
+4241e23a-09f4-59a5-9203-1afc7103bcdc
+5af2e6bd-1fde-5134-966f-f8cc354a0e46
+5c666c87-163a-5e48-9afa-5f121b367ac1
+7478e515-9274-557d-99c7-940c2df1911f
+8fb2368b-b8fc-5f0c-aa19-efd6aba5a1d6
+96fed0d0-3382-5618-ae4e-be4c182c098b
+9d6047b9-646c-5c8c-a9a5-9fedbe8d700d
+f266f0c9-152a-56be-afc5-05365f959929
+f3fd1789-b5d3-5bf6-bfab-fb190d38f8ce
+9a26ac57-a722-5c59-9f36-115675eecbad
+10223fd3-4b79-5ee6-b68c-e2cb4d48ba37
+24c8ec31-6ee1-571b-ae67-8d3930f69c02
+2db4c67d-846a-559a-8c21-ef2f0d6d8987
+0076e623-9f81-5f3b-8e5b-2ed4e4cbca04
+01f1f655-35d0-5421-a777-5b92ff96a684
+0a3a8201-e367-59e6-a061-5b35b6af0435
+240c8884-bf1d-5f00-8438-026a6dc1aa8c
+2d1ac5f9-ed42-54c6-a1b0-84dd7b2d5a90
+462cf440-ec17-5ec1-9641-4beb75584d6b
+4ad9b87f-a413-5a42-b9c8-cf3459722bbf
+571032a1-e0b5-5de3-b352-0f55e0062ff8
+5725b627-b078-58c7-a598-9524ee2cd22d
+60927f02-000c-5776-9b84-ad35c254ee58
+69bd2947-c541-5fba-bbf9-462fb31d99de
+73564994-0506-53e0-8bb8-6d0c251050dc
+8a9ffa00-24eb-5f9e-afe3-d87ac1f5bfb9
+a07386e4-530c-527f-a865-bc05b81fbecb
+a8132614-05e8-5938-ad32-3bd013311215
+b136a939-2146-54c5-ab9e-ed10988be929
+b72f0106-ab6f-51c6-8081-60a553446994
+b8b63c79-a51a-52f4-994c-726b1107812f
+c3e8744d-3ac8-5b3f-b8be-d372011d4870
+ee075b61-f686-543e-bd7e-2887c86be6c5
+fd637a61-9eba-5525-833c-d93c18dd91d6
+ff90aa3a-c8b5-55dc-947b-16176e27d2b7
