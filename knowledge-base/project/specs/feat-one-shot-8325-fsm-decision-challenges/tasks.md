@@ -26,12 +26,12 @@ Plan: `knowledge-base/project/plans/2026-09-19-feat-workflow-fsm-decision-challe
 
 ## Phase 4: ADR-229, issue comment, follow-up
 
-- [ ] 4.1 ADR-229 `## Decision`: four declared back-edges + "**[Amended 2026-09-19 (#8325): declared; see Consequences.]**"; Decision 1 + "**[Amended 2026-09-19 (#8325): the view also carries `sub_steps` … still has one consumer.]**"
-- [ ] 4.2 ADR-229 `## Consequences`: re-baseline bullet ("Re-baselined 2026-09-19 (#8325, …)" with the live line and `substep=`); `postmerge → work` bullet rewritten as declared with the 7-session evidence; interpretation bullet corrected (`brainstorm → compound → plan`, `plan → compound → work`) and its trailing pointer replaced by the resolution; "plausibly large and unmeasured" replaced by the one measured sentence with n and the decision-rule outcome
-- [ ] 4.3 ADR-229 `## Verification`: classifier 28 assertions; new measurement-suite bullet; workflow-fidelity bullet mentions `sub_steps`
-- [ ] 4.4 `bash scripts/check-adr-ordinals.sh` OK
-- [ ] 4.5 `gh issue comment 8325 --body-file <file>`: body via `mktemp -t` outside the repo, built from the two classifier `--summary` stdout lines + measurement stdout only, gated by `! grep -Eq '/|[0-9a-f]{8}-[0-9a-f]{4}|HOME' "$body"` before posting; the classifier row mode is never pasted
-- [ ] 4.6 If `median_k` < 16 or `na`: `gh issue create --label action-required --title "Decide keep/revert of the plan Sharp Edges extraction: measured median k=<value> (post=<n>)"`
+- [x] 4.1 ADR-229 `## Decision`: four declared back-edges + "**[Amended 2026-09-19 (#8325): declared; see Consequences.]**"; Decision 1 + "**[Amended 2026-09-19 (#8325): the view also carries `sub_steps` … still has one consumer.]**"
+- [x] 4.2 ADR-229 `## Consequences`: re-baseline bullet ("Re-baselined 2026-09-19 (#8325, …)" with the live line and `substep=`); `postmerge → work` bullet rewritten as declared with the 7-session evidence; interpretation bullet corrected (`brainstorm → compound → plan`, `plan → compound → work`) and its trailing pointer replaced by the resolution; "plausibly large and unmeasured" replaced by the one measured sentence with n and the decision-rule outcome
+- [x] 4.3 ADR-229 `## Verification`: classifier 28 assertions; new measurement-suite bullet; workflow-fidelity bullet mentions `sub_steps`
+- [x] 4.4 `bash scripts/check-adr-ordinals.sh` OK
+- [x] 4.5 `gh issue comment 8325 --body-file <file>`: body via `mktemp -t` outside the repo, built from the two classifier `--summary` stdout lines + measurement stdout only, gated by `! grep -Eq '/|[0-9a-f]{8}-[0-9a-f]{4}|HOME' "$body"` before posting; the classifier row mode is never pasted
+- [x] 4.6 (not triggered: median_k=61 ≥ 16) If `median_k` < 16 or `na`: `gh issue create --label action-required --title "Decide keep/revert of the plan Sharp Edges extraction: measured median k=<value> (post=<n>)"`
 
 ## Phase 5: gates
 
