@@ -614,10 +614,12 @@ assert_field "P-healthy backing"  store_backing_dev    "/dev/sdb"
 assert_field "P-healthy devid"    store_mount_devid    "$EXP_DEVID"
 assert_field "P-healthy expected" store_expected_devid "$EXP_DEVID"
 assert_field "P-healthy luks"     store_luks           "yes"
-# store_mount_base feeds the devid reverse map and is deliberately NOT emitted; asserting its
-# absence is what keeps the row from growing a sixth carrier nobody reads.
-assert "P-healthy | store_mount_base= is NOT emitted (it is an unemitted shell variable)" \
-  "! grep -qF 'store_mount_base=' <<<\"\$ROW\""
+# store_mount_base IS emitted (CTO ruling, #8386 review). It is the only field that makes a
+# __NOMATCH__ row auditable: on a partitioned plain mount src and backing_dev are both the
+# PARTITION, and nothing else in the row names the DISK the by-id map failed to match -- the
+# difference between "failed open onto the root disk" and "attached to some other volume",
+# which are opposite remedies. The sibling books the same field as a required audit column.
+assert_field "P-healthy base"     store_mount_base     "sdb"
 
 # --- E2 no mount: findmnt rc 1 AND empty output. The __NOMOUNT__ arm is a CONJUNCTION -------
 posture_case "P-nomount" HB_FINDMNT_OUT="" HB_FINDMNT_RC=1
@@ -766,8 +768,12 @@ posture_case "P-all-tools-absent" HB_FINDMNT_OUT="" HB_FINDMNT_RC=127 \
   HB_LSBLK_OUT="" HB_LSBLK_RC=127 HB_CRYPT_OUT="" HB_CRYPT_RC=127 HB_BLKID_MAP=""
 assert_field "P-all-tools-absent src"     store_mount_src   "__UNREADABLE__"
 assert_field "P-all-tools-absent luks"    store_luks        "unknown"
-assert_field "P-all-tools-absent devid"   store_mount_devid "n/a"
-assert_field "P-all-tools-absent backing" store_backing_dev "n/a"
+# The source read itself failed, so NOTHING downstream was measured. All three carry the
+# sentinel, never the `n/a` initialiser: `n/a` passes the charset guard unchanged, so shipping
+# it here would be indistinguishable on the wire from a measurement (#8386 review).
+assert_field "P-all-tools-absent base"    store_mount_base  "__UNREADABLE__"
+assert_field "P-all-tools-absent devid"   store_mount_devid "__UNREADABLE__"
+assert_field "P-all-tools-absent backing" store_backing_dev "__UNREADABLE__"
 
 # --- E5 SBIN-ONLY: the four tools are reachable ONLY through the shipped PATH append ---------
 # cron's own PATH is /usr/bin:/bin and carries neither cryptsetup nor blkid, so without the

@@ -413,6 +413,30 @@ CASE_LEDGER=available \
 expect "the newest row carries no store_luks= -> CANNOT ESTABLISH, never a public FAIL" 3 "$WORK/f_v3" \
   "verdict=v3_newest_field_absent boot=$ALT9"
 
+# ══ V4b — a tool-refused or race reading is not a public FAIL ════════════════════════════════
+# The emitter distinguishes four store_luks states and `unknown` means "the TOOL refused"
+# (cryptsetup rc 127/124, empty blkid, a sentinel base), not "the bytes are plaintext". Before
+# V3b, V4 published exactly that to a PUBLIC tracker while V1's counting layer — which counts
+# `no` only — refused to call it plaintext fifty lines earlier. These two cases pin that the
+# probe cannot contradict itself, in BOTH indeterminate spellings.
+{
+  rowgood "$DT_B" "$ALT13"
+  rowgood "$DT_C" "$ALT13"
+  rowluks "$DT_D" "$ALT13" unknown
+} > "$WORK/f_v3b_unknown"
+CASE_LEDGER=available \
+expect "a tool-refused 'unknown' on the newest row -> CANNOT ESTABLISH, never a public FAIL" 3 "$WORK/f_v3b_unknown" \
+  "verdict=v4b_newest_indeterminate value=unknown boot=$ALT13"
+
+{
+  rowgood "$DT_B" "$ALT14"
+  rowgood "$DT_C" "$ALT14"
+  rowluks "$DT_D" "$ALT14" absent
+} > "$WORK/f_v3b_absent"
+CASE_LEDGER=available \
+expect "the post-replace mount race ('absent') is not plaintext either" 3 "$WORK/f_v3b_absent" \
+  "verdict=v4b_newest_indeterminate value=absent boot=$ALT14"
+
 # ══ V5 — the evidence-depth floor, and boot scoping ═══════════════════════════════════════════
 # The OLDER boot's three confirming rows are emitted LAST in the file and carry OLDER dt values.
 # Two invariants ride on this one fixture: the dt sort (file order must not select the boot) and
@@ -483,8 +507,8 @@ expect "V4: an empty-id rendered alias is a FAIL, not its own arm" 1 "$WORK/f_v4
 # V4 disjunct 2 — measured, and not LUKS-confident.
 mk_v4 "$ALT15" unknown "$EXPECTED_SRC" "$VOL" "$VOL" > "$WORK/f_v4c"
 CASE_LEDGER=available \
-expect "V4: store_luks=unknown on the newest row is not a PASS" 1 "$WORK/f_v4c" \
-  "verdict=v4_not_encrypted reason=store_luks_not_yes boot=$ALT15"
+expect "store_luks=unknown with every other field as declared -> CANNOT ESTABLISH, not a FAIL" 3 "$WORK/f_v4c" \
+  "verdict=v4b_newest_indeterminate value=unknown boot=$ALT15"
 
 # V4 disjunct 3 — LUKS, but not through the declared mapper.
 mk_v4 "$ALT16" yes /dev/sdb1 "$VOL" "$VOL" > "$WORK/f_v4d"
@@ -506,8 +530,17 @@ expect "V4: encrypted, but not on the declared volume" 1 "$WORK/f_v4e" \
   row "$DT_D" "$ALT18" "$(posture absent __NOMOUNT__ n/a "$VOL" n/a)"
 } > "$WORK/f_v4f"
 CASE_LEDGER=available \
-expect "V4: an 'absent' NEWEST row is a FAIL naming all three disjuncts" 1 "$WORK/f_v4f" \
-  "verdict=v4_not_encrypted reason=store_luks_not_yes,mount_src_unexpected,devid_mismatch boot=$ALT18"
+expect "an 'absent' row with nothing mounted still FAILs on its INDEPENDENT disjuncts" 1 "$WORK/f_v4f" \
+  "verdict=v4_not_encrypted reason=mount_src_unexpected,devid_mismatch boot=$ALT18"
+
+# The narrowing is bounded: an indeterminate store_luks must NOT suppress a disjunct measured
+# independently of it. Without this row, moving the V4b arm ahead of the V4 disjuncts would stay
+# green while hiding a definitively-wrong volume behind "cannot establish".
+mk_v4 "$ALT16" unknown "$EXPECTED_SRC" scsi-0HC_Volume_90000001 "$VOL" > "$WORK/f_v4b_masks"
+CASE_LEDGER=available \
+expect "an indeterminate store_luks does NOT mask an independently-measured devid mismatch" 1 "$WORK/f_v4b_masks" \
+  "verdict=v4_not_encrypted reason=devid_mismatch boot=$ALT16"
+
 
 # ══ V6 / V7 ═══════════════════════════════════════════════════════════════════════════════════
 { rowgood "$DT_B" "$NEWBOOT"; rowgood "$DT_C" "$NEWBOOT"; rowgood "$DT_D" "$NEWBOOT"; } > "$WORK/f_v6"
@@ -549,6 +582,10 @@ expect "stale: the newest row lacks the field -> ACTION REQUIRED" 5 "$WORK/f_v3"
 CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
 expect "stale: a boot stuck below the evidence floor -> ACTION REQUIRED" 5 "$WORK/f_v5" \
   "escalation=stale branch=v5_boot_too_young"
+
+CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
+expect "stale: a host parked on 'unknown' past the horizon -> ACTION REQUIRED" 5 "$WORK/f_v3b_unknown" \
+  "escalation=stale branch=v4b_newest_indeterminate"
 
 CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=absent \
 expect "stale: an unreadable ledger -> ACTION REQUIRED" 5 "$WORK/f_good10" \

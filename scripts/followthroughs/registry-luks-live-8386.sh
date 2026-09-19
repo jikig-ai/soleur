@@ -505,9 +505,27 @@ _v4_add() { V4_REASONS="${V4_REASONS:+$V4_REASONS,}$1"; }
 # true reading. It also stops `__UNREADABLE__ == __UNREADABLE__` from satisfying the equality
 # disjunct below — equality alone would pass on two matching sentinels.
 [[ "$N_EXPECTED" =~ $ALIAS_SHAPE ]] || _v4_add "expected_devid_malformed"
-[[ "$N_LUKS" == "yes" ]] || _v4_add "store_luks_not_yes"
+# DEFINITE plaintext only. `unknown` is the emitter's TOOL-REFUSED state (cryptsetup rc 127/124,
+# empty blkid, a sentinel base) and `absent` is the post-replace boot mount race — neither is a
+# statement about the bytes, and the counting layer already agrees (P counts `no` alone, so V1
+# refuses to call them plaintext). Reading either as "not encrypted" here would contradict V1
+# fifty lines later and publish that contradiction to a PUBLIC tracker. They fall through to V4b
+# below, which fires only when NO other disjunct did — so an indeterminate reading never masks an
+# independently-measured devid mismatch or an unexpected mount source.
+[[ "$N_LUKS" == "no" ]] && _v4_add "store_luks_no"
 [[ "$N_SRC" == "$EXPECTED_SRC" ]] || _v4_add "mount_src_unexpected"
 [[ "$N_DEVID" == "$N_EXPECTED" ]] || _v4_add "devid_mismatch"
+if [[ -z "$V4_REASONS" && ( "$N_LUKS" == "unknown" || "$N_LUKS" == "absent" ) ]]; then
+  marker "v4b_newest_indeterminate" "value=$N_LUKS boot=$NEWEST_BOOT measured=$D confirming=$Y"
+  echo "CANNOT ESTABLISH: the newest row on boot $NEWEST_BOOT reads \`$F_LUKS=$N_LUKS\` while every" >&2
+  echo "           other measurement on that row is as declared. That is the emitter's" >&2
+  echo "           tool-refused state, or the post-replace mount race — not a reading of the" >&2
+  echo "           bytes. Refusing to publish it as 'not encrypted': real plaintext is caught by" >&2
+  echo "           V1, which counts \`no\` alone." >&2
+  if stale_now "v4b_newest_indeterminate"; then exit 5; fi
+  exit 3
+fi
+
 if [[ -n "$V4_REASONS" ]]; then
   marker "v4_not_encrypted" "reason=$V4_REASONS boot=$NEWEST_BOOT confirming=$Y measured=$D"
   echo "FAIL: the newest row on boot $NEWEST_BOOT does not measure the registry store as LUKS on" >&2

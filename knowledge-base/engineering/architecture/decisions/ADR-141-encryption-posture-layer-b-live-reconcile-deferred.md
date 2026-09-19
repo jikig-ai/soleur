@@ -4,7 +4,7 @@ status: adopting
 date: 2026-07-24
 related: [6902, 6588]
 related_adrs: [ADR-140-encryption-posture-as-a-design-time-default, ADR-117, ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn, ADR-123, ADR-126]
-blockers: [6894, 6895, 6897]
+blockers: [6894, 8386, 6897]  # 6895 superseded 2026-09-19 (#8386): closed on PR #6926's design merge, never shipped an emitter
 brand_survival_threshold: aggregate pattern
 ---
 
@@ -142,8 +142,15 @@ the host does not run the emitter, because delivery costs a registry-host replac
 and the floor moves with it — in the commit recording an observed boot, graded by
 `scripts/followthroughs/registry-luks-live-8386.sh`.
 
-Restated blocker set: **#6894 / #8386 / #6897**. The frontmatter's `[6894, 6895, 6897]` is
-superseded: #6895 closed on the 2026-08-10 recut without ever shipping an emitter. And the
-deferred vendor-side `store_luks != yes` alert does NOT discharge Decision 1 — an alert pages on a
-host's self-report, while Decision 1 reconciles the ledger's CLAIM against that signal and rides
-`scheduled-terraform-drift.yml` (ADR-033 single-substrate).
+Restated blocker set: **#6894 / #8386 / #6897**, and the frontmatter is updated to match.
+#6895 is superseded rather than satisfied: it closed 2026-07-24T18:49:47Z on the merge of PR #6926,
+which shipped the LUKS *design* (cloud-init, the ledger row, the ADR-096 amendment) with the recut
+deliberately un-targeted; the recut itself fired 2026-08-10T22:08Z. Neither event shipped an
+emitter, and #6923's blocker list mislabels #6895 as one. #6923's re-eval criterion is restated
+with the set: the arm trigger is an OBSERVED BOOT graded by
+`scripts/followthroughs/registry-luks-live-8386.sh`, and the `available` count is its bookkeeping
+consequence, not the trigger.
+
+The deferred vendor-side `store_luks != yes` alert does NOT discharge Decision 1 — an alert pages
+on a host's self-report, while Decision 1 reconciles the ledger's CLAIM against that signal and
+rides `scheduled-terraform-drift.yml` (ADR-033 single-substrate).

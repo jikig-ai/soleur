@@ -107,12 +107,12 @@ assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 # unfalsifiable mid-loop; without zot_last_err_src, a routine-traffic FALLBACK is indistinguishable
 # from a real match and a downstream alarm will print it as the crash cause (ADR-166).
 # store_* (#8386): the at-rest posture of the zot store. hcloud_volume.registry's LUKS claim is
-# asserted by a ledger row and verified by nothing that runs until these five leave the host, and
+# asserted by a ledger row and verified by nothing that runs until these six leave the host, and
 # they are only readable off-box while they stay inside the TRUSTED region (the pin below).
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          zot_uptime_s= zot_last_err_src= err_redact_rev= \
-         store_mount_src= store_backing_dev= store_mount_devid= store_expected_devid= store_luks= \
+         store_mount_src= store_mount_base= store_backing_dev= store_mount_devid= store_expected_devid= store_luks= \
          oom_kills_5m= zot_last_err= boot_id= zot_image_digest= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
@@ -482,7 +482,7 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # assertions); #7960 adds 1 (the `err_redact_rev=` field-presence row). Measured, not tallied by
 # hand: the suite runs 105, and leaving the floor at 104 left #7960's own assertion deletable at
 # green -- exactly the slack this comment warns about.
-MIN_ASSERTIONS=115
+MIN_ASSERTIONS=116
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2
