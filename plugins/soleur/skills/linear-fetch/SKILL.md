@@ -74,14 +74,14 @@ against it. Nothing here depends on the blob, so nothing forced that ordering.
        echo "linear-fetch: cannot verify the Soleur plugin installation — stopping before anything is fetched." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Nothing has been fetched yet, so nothing has leaked." >&2
        exit 2; }
 SCRUBBER="${CLAUDE_PLUGIN_ROOT}/skills/linear-fetch/scripts/redact-linear-urls.sh"
 [[ -r "$SCRUBBER" ]] || { echo "SOLEUR_LINEAR_FETCH_HALT reason=scrubber-unreadable scrubber=[$SCRUBBER]"
        echo "linear-fetch: the redaction primitive is missing from an otherwise valid Soleur install — stopping." >&2
        echo "  Expected at: [$SCRUBBER]" >&2
-       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Nothing has been fetched yet, so nothing has leaked." >&2
        exit 2; }
 echo "SOLEUR_LINEAR_FETCH_PREFLIGHT_OK scrubber=present"

@@ -1560,10 +1560,31 @@ for n in $REFS; do
   labels=$(gh issue view "$n" --json labels --jq '[.labels[].name]|join(",")' 2>/dev/null || echo "")
   body=$(gh issue view "$n" --json body --jq .body 2>/dev/null || echo "")
   enrolled=0
+  # Strip fenced blocks FIRST, with the same predicate and column-0 anchor the sweeper uses:
+  # a fenced directive enrols nothing, so reading the raw body certifies a tracker the sweeper
+  # will never evaluate (#7490 — it certified six of them).
+  unfenced_body=$(printf '%s' "$body" | awk '
+    BEGIN { fence = 0; fence_ch = ""; fence_len = 0 }
+    { sub(/\r$/, "") }
+    /^[ ]?[ ]?[ ]?(```|~~~)/ {
+      fl = $0; sub(/^[ ]+/, "", fl); fc = substr(fl, 1, 1); fn = 0
+      while (substr(fl, fn + 1, 1) == fc) fn++
+      if (!fence) { fence = 1; fence_ch = fc; fence_len = fn; next }
+      if (fc == fence_ch && fn >= fence_len) { fence = 0; fence_ch = ""; fence_len = 0; next }
+      next
+    }
+    fence { next }
+    { print }
+  ' || printf '%s' "$body")
+  # `|| printf` and herestrings, NOT pipes -- the same two hazards the hook copy carries fixes
+  # for. Under `set -eo pipefail` an awk failure in this command substitution aborts the gate
+  # before it emits a decision (fail-OPEN on a merge gate), and `grep -q` on a PIPE can take
+  # SIGPIPE on an early match and report false under `pipefail`. Falling back to the unstripped
+  # body is the deny-prone direction.
   if [[ ",$labels," == *",follow-through,"* ]] \
-     && printf '%s' "$body" | grep -q '<!-- soleur:followthrough' \
-     && printf '%s' "$body" | grep -qE 'earliest='; then
-    spath=$(printf '%s' "$body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
+     && grep -qE '^<!-- *soleur:followthrough' <<<"$unfenced_body" \
+     && grep -qE 'earliest=' <<<"$unfenced_body"; then
+    spath=$(grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' <<<"$unfenced_body" | head -1 | sed 's/^script=//' || true)
     [[ -n "$spath" && -f "$spath" ]] && enrolled=1
   fi
   [ "$enrolled" = 1 ] || UNENROLLED+=("$n")
@@ -2605,13 +2626,22 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    ## Verification
 
-   ```html
    <!-- soleur:followthrough
      script=scripts/followthroughs/<feature-name>-<ISSUE_NUM>.sh
      earliest=<ISO-8601-UTC>
      secrets=<comma-separated-secret-names-or-omit>
    -->
-   ```
+
+   **UNFENCED, COLUMN 0 — this is load-bearing, not formatting.** The sweeper deliberately
+   SKIPS fenced blocks (#4200 Gap 3: a fenced directive is an example, not an enrolment) and
+   anchors the opener at column 0. This template previously wrapped the directive in a
+   ```` ```html ```` fence, and every tracker created from it was enrolled in name only —
+   six of 56 open trackers were dead that way, the oldest silent since 2026-06, each with its
+   directive plainly visible in the issue body. The indentation above is this document's list
+   nesting; the `<!--` must start at column 0 in the ISSUE BODY. Two mechanical backstops now
+   agree with the sweeper: `.claude/hooks/follow-through-directive-gate.sh` denies a fenced
+   `gh issue create` and names the fence as the cause, and the sweeper comments on any open
+   tracker it finds in this state and reds the run.
 
    Canonical convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
    The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
@@ -2667,6 +2697,19 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    ```bash
    awk '
+     BEGIN { fence = 0; fence_ch = ""; fence_len = 0 }
+     { sub(/\r$/, "") }
+     # The FENCE RULE is the point of this self-test, not decoration. Without it the parser
+     # extracts script= from a FENCED directive and reports the body as valid, while the
+     # sweeper skips it — which is how six trackers passed this gate and never ran (#7490).
+     /^[ ]?[ ]?[ ]?(```|~~~)/ {
+       fl = $0; sub(/^[ ]+/, "", fl); fc = substr(fl, 1, 1); fn = 0
+       while (substr(fl, fn + 1, 1) == fc) fn++
+       if (!fence) { fence = 1; fence_ch = fc; fence_len = fn; next }
+       if (fc == fence_ch && fn >= fence_len) { fence = 0; fence_ch = ""; fence_len = 0; next }
+       next
+     }
+     fence { next }
      /^<!-- *soleur:followthrough/, /-->/ {
        gsub(/^<!-- *soleur:followthrough/, "")
        gsub(/-->/, "")

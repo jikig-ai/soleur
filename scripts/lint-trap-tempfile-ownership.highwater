@@ -1,4 +1,4 @@
-80  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+78  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
 # 79th entrant (2026-09-17, #8160): scripts/file-upstream-ask-8160.sh — its
 # mktemp -d output directory IS the deliverable (email/bug bodies the operator
 # sends after the run), so it must outlive the process by design; annotated
@@ -16,6 +16,13 @@
 # leak for an unprovable destructive operand.
 # NOTE (#8178 merge): #8160 and #8178 each raised 78 -> 79 independently, for DIFFERENT
 # files. The merged population carries both, so the floor is 80. Neither raise is undone.
+# 80 -> 78 (2026-09-18, #7490): two files LEFT the population by gaining a real owning
+# trap -- .claude/hooks/follow-through-directive-gate.test.sh (22 `mktemp -d` sites, all
+# now under one SUITE_TMP root) and scripts/sweep-followthroughs.test.sh (setup_tmpdir
+# root + a per-row fixture, same shape). Both were flagged by rule (c) on lines this PR
+# ADDED; the fix was to make the whole file owned rather than annotate the new lines.
+# A third new entrant, plugins/soleur/test/ship-followthrough-directive.test.sh, got its
+# trap in the same commit and never joined the count.
 # Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
 # CI asserts the live count never EXCEEDS this. Lower it freely when the population
 # shrinks; raising it is a deliberate act that needs a reason in the PR body.

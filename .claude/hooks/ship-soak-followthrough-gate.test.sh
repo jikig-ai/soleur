@@ -82,8 +82,29 @@ if [[ "$1" == "issue" ]]; then
   # tracker is skipped as closed — turning the deny-path control green-by-accident.
   case "$ARGS" in
     *--json\ state*)  printf '%s\n' 'OPEN' ;;
-    *--json\ labels*) printf '%s\n' '' ;;
-    *--json\ body*)   printf '%s\n' '' ;;
+    *--json\ labels*)
+      case "${TRACKER_MODE:-}" in
+        fenced|unfenced|nospace) printf '%s\n' 'follow-through' ;;
+        *)               printf '%s\n' '' ;;
+      esac ;;
+    *--json\ body*)
+      # An ENROLLED-LOOKING tracker, selectable fenced or unfenced. The two differ by the two
+      # fence delimiter lines and NOTHING else, so a row that passes for both is measuring
+      # something other than the fence.
+      case "${TRACKER_MODE:-}" in
+        fenced)
+          printf '%s\n' 'Verification'
+          printf '%s\n' '```html'
+          printf '%s\n' '<!-- soleur:followthrough script=scripts/followthroughs/fixture-probe.sh earliest=2020-01-01T00:00:00Z -->'
+          printf '%s\n' '```' ;;
+        unfenced)
+          printf '%s\n' 'Verification'
+          printf '%s\n' '<!-- soleur:followthrough script=scripts/followthroughs/fixture-probe.sh earliest=2020-01-01T00:00:00Z -->' ;;
+        nospace)
+          printf '%s\n' 'Verification'
+          printf '%s\n' '<!--soleur:followthrough script=scripts/followthroughs/fixture-probe.sh earliest=2020-01-01T00:00:00Z -->' ;;
+        *) printf '%s\n' '' ;;
+      esac ;;
     *) echo "gh-stub: unexpected issue read: $ARGS" >&2; exit 64 ;;
   esac
   exit 0
@@ -181,7 +202,7 @@ decision_of() { # <command-string> <repo> <gh-mode>
   stub="$(mk_gh_stub "$repo" "$mode")"
   out="$(cd "$repo" && jq -nc --arg c "$cmd" --arg d "$repo" \
           '{tool_name:"Bash", tool_input:{command:$c}, cwd:$d}' \
-        | PATH="$stub:$PATH" MODE="$mode" INCIDENTS_REPO_ROOT="$repo" bash "$HOOK" 2>/dev/null)"
+        | PATH="$stub:$PATH" MODE="$mode" TRACKER_MODE="${TRACKER_MODE:-}" INCIDENTS_REPO_ROOT="$repo" bash "$HOOK" 2>/dev/null)"
   [[ -z "${out//[[:space:]]/}" ]] && { echo "<none>"; return; }
   echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo "<jq-fail>"
 }
@@ -304,6 +325,54 @@ check "same ref UNFENCED in the plan still DENIES (strip narrows, not disables)"
   "$(decision_of 'gh pr ready' "$REPO" soakplan)"
 rm -f "$REPO/knowledge-base/project/plans/fixture-soak-plan.md"
 
+# --- #7490: the gate must agree with the CONSUMER about what "enrolled" means ------------
+# The sweeper SKIPS fenced blocks, so a directive inside a code fence enrols nothing. This gate
+# read the raw body, so it certified six live trackers the sweeper would never evaluate --
+# `gh pr ready` sailed through and the tracker rotted open with its directive visibly present.
+#
+# These are a MATCHED PAIR and must stay one. The fenced row alone also passes if the strip ate
+# the whole body (which would make every tracker look unenrolled and turn the gate into a
+# blanket deny); the unfenced row is what proves the strip NARROWS rather than disables. The two
+# bodies differ by exactly two fence delimiter lines.
+mkdir -p "$REPO/scripts/followthroughs"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$REPO/scripts/followthroughs/fixture-probe.sh"
+chmod +x "$REPO/scripts/followthroughs/fixture-probe.sh"
+TRACKER_MODE=fenced check "G5-1 a tracker whose directive is FENCED is NOT enrolled → still DENIES" "deny" \
+  "$(TRACKER_MODE=fenced decision_of 'gh pr ready' "$REPO" soakother)"
+TRACKER_MODE=unfenced check "G5-2 the SAME body UNFENCED is enrolled → allows (the strip narrows, not disables)" "<none>" \
+  "$(TRACKER_MODE=unfenced decision_of 'gh pr ready' "$REPO" soakother)"
+
+# --- G5-4 (#7490 review, F3): the SPACE RUN must match the consumer, which accepts `<!--` then
+# ZERO OR MORE spaces. An exact single space is STRICTER than the authority, and on a merge gate
+# strictness is a FALSE DENIAL: the tracker IS enrolled and WILL be swept while the gate tells the
+# author it is not. Measured before the fix: the consumer honoured all three spacings, this gate
+# saw one of three. A matched pair, because the zero-space row alone also passes a gate that
+# denies everything. ---
+TRACKER_MODE=nospace check "G5-4 a directive with NO space after <!-- is enrolled → allows (matches the consumer)" "<none>" \
+  "$(TRACKER_MODE=nospace decision_of 'gh pr ready' "$REPO" soakother)"
+TRACKER_MODE=fenced check "G5-4 control: the FENCED body still DENIES (the widening did not disable the gate)" "deny" \
+  "$(TRACKER_MODE=fenced decision_of 'gh pr ready' "$REPO" soakother)"
+
+# G5-3 (DISPATCH): with the fence-strip reverted in a copy of the hook, the FENCED tracker reads
+# as enrolled and the gate allows -- i.e. it certifies a tracker the sweeper will never run.
+# That is the defect this change closes, pinned as a mutation rather than asserted in prose.
+G5_MUT="$REPO/hook-no-fence-strip.sh"
+# Anchored on the CURRENT grep. When #7490's review widened the space run to `^<!-- *`, this
+# sed stopped matching and the row reported "mutation did not land" — which is the landing
+# assertion doing its job, and the reason every mutation row needs one.
+sed "s@grep -qE '\^<!-- \*soleur:followthrough' <<<\"\$unfenced_body\"@grep -q '<!-- soleur:followthrough' <<<\"\$body\"@" "$HOOK" > "$G5_MUT"
+if diff -q "$HOOK" "$G5_MUT" >/dev/null 2>&1; then
+  FAIL=$((FAIL+1)); echo "FAIL: G5-3 mutation did not land -- the fence-strip is not where this row mutates"
+else
+  _g5_stub="$(mk_gh_stub "$REPO" soakother)"
+  _g5_out="$(cd "$REPO" && jq -nc --arg c 'gh pr ready' --arg d "$REPO" \
+      '{tool_name:"Bash", tool_input:{command:$c}, cwd:$d}' \
+    | PATH="$_g5_stub:$PATH" MODE=soakother TRACKER_MODE=fenced INCIDENTS_REPO_ROOT="$REPO" bash "$G5_MUT" 2>/dev/null)"
+  _g5_dec="$(echo "$_g5_out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo '<none>')"
+  [[ -z "${_g5_out//[[:space:]]/}" ]] && _g5_dec="<none>"
+  check "G5-3 with the fence-strip reverted, the FENCED tracker reads as enrolled → allows (the strip is the mechanism)" "<none>" "$_g5_dec"
+fi
+
 # --- #7164 envelope contract ------------------------------------------------
 # An ARRAY tool_input.command rendered across lines, matched the trigger regex
 # nowhere, and slipped the gate. This hook is not the designated ask responder,
@@ -339,7 +408,7 @@ if [[ "$PASS" -ne $((_c_pass + 1)) || "$FAIL" -ne $((_c_fail + 1)) ]]; then
 fi
 PASS=$_c_pass FAIL=$_c_fail   # unwind the self-test
 
-MIN_ASSERTIONS=19
+MIN_ASSERTIONS=24
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions passed, floor is %s — the suite is vacuous\n' \
     "$PASS" "$MIN_ASSERTIONS" >&2
