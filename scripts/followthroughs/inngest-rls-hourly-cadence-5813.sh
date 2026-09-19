@@ -21,7 +21,7 @@
 #   1 = FAIL       (no successful scheduled run in the window; sweeper comments, leaves open)
 #   * = TRANSIENT  (gh/API unreachable or unparseable; retry next sweep)
 #
-# Required env: GH_TOKEN + GH_REPO (baseline, provided by the sweeper) — no extra secrets.
+# Required env: GH_TOKEN + GH_REPO (provided ONLY if named in the directive's `secrets=` clause -- run_one forwards nothing else; there is no baseline) — no extra secrets.
 #
 # Close criteria (from #5813 / PR #5807):
 #   - apply-inngest-rls.yml has a conclusion=success, event=schedule run < 2h old.

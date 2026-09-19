@@ -8,7 +8,7 @@ description: "This skill should be used when verifying a merged PR deployed corr
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/postmerge` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:postmerge`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 # postmerge Skill
@@ -16,7 +16,7 @@ description: "This skill should be used when verifying a merged PR deployed corr
 <!-- postmerge-harness-protocol:start -->
 ## Harness adapter (Claude vs Grok Build)
 
-Invoke via **Claude:** `soleur:postmerge <PR>` | **Grok:** `/postmerge <PR>`.
+Invoke via **Claude:** `soleur:postmerge <PR>` | **Grok:** `soleur:postmerge <PR>`.
 
 **Polling CI / health checks without asking the operator:**
 
@@ -45,7 +45,7 @@ gh pr view <number> --json state,mergeCommit,headRefName --jq '{state, mergeComm
 If state is not `MERGED`, stop:
 
 ```text
-STOPPED: PR #<number> is not merged (state: <state>). Run /soleur:merge-pr first.
+STOPPED: PR #<number> is not merged (state: <state>). Run soleur:merge-pr first.
 ```
 
 Record the merge commit SHA for later verification.
@@ -294,14 +294,16 @@ If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
 | push arm | `on: push` to `main` | `release` only (build + publish) |
 | deploy arm | `on: workflow_run` (CI completed) | `resolve-target`, `migrate`, `verify-migrations`, `verify-doppler-secrets`, `deploy`, `live-verify`, `notify-gated`, `release-outcome` |
 
-`--limit 1` with no event filter lands on the push arm roughly half the time. There, `deploy` does not exist, the `reason=canary_*` grep below matches nothing, and the phase would classify `GATE-VALIDATED` against an **empty log** — a false green on exactly the question this phase exists to answer. **Chosen predicate in this file: `event=workflow_run` AND `head_sha=<this merge's full SHA>`** — the event picks the arm, the SHA picks the merge — plus a job-presence assertion so a wrong selection fails loudly instead of silently.
+`--limit 1` with no event filter lands on the push arm roughly half the time. There, `deploy` exists only as a `skipped` job (GitHub materialises `if:`-false jobs), the `reason=canary_*` grep below matches nothing, and the phase would classify `GATE-VALIDATED` against an **empty log** — a false green on exactly the question this phase exists to answer. **Chosen predicate in this file: `event=workflow_run` AND `head_sha=<this merge's full SHA>`** — the event picks the arm, the SHA picks the merge **while your merge is still `main`'s tip when your CI completes** (a `workflow_run` run's `head_sha` is the default-branch tip at trigger time; an empty result is the `absent` row below, not a missing arm) — plus a job-presence assertion so a wrong selection fails loudly instead of silently.
 
-**Select by the merge SHA, never by recency.** An event filter alone still returns *whichever* merge's deploy arm fired last, and on a busy `main` that is routinely another PR's: the deploy arm lags its merge by the whole CI run, so for most of this phase's window the newest deploy-arm run belongs to the PREVIOUS merge. `--limit 1` read that way validates someone else's deploy. A `--limit N` window is not the fix either — measured nondeterministic for this lookup (`--limit 10` missed a run sitting at list index 6). Ask the API for the exact SHA. **Why:** #8265 — this query returned `267ff5807`'s run while #8242's merge (`e7e1c6748`) had not yet fired its own; only a by-hand SHA check stopped a false `GATE-VALIDATED`.
+**Select by the merge SHA, never by recency.** An event filter alone still returns *whichever* merge's deploy arm fired last, and on a busy `main` that is routinely another PR's: the deploy arm lags its merge by the whole CI run, so for most of this phase's window the newest deploy-arm run belongs to the PREVIOUS merge. `--limit 1` read that way validates someone else's deploy. A `--limit N` window is not the fix either — measured nondeterministic for this lookup (`--limit 10` missed a run sitting at list index 6). Ask the API for the exact SHA first; fall back to time-adjacency plus the run's own `resolve-target` log and `/health` `build_sha` only when it returns nothing (the `absent` row). **Why:** #8265 — this query returned `267ff5807`'s run while #8242's merge (`e7e1c6748`) had not yet fired its own; only a by-hand SHA check stopped a false `GATE-VALIDATED`.
 
 ```bash
 # The DEPLOY-arm release run for THIS merge (#5806, ADR-217). event=workflow_run
-# picks the arm; head_sha picks the merge. Server-side exact match — no recency
-# window to fall out of. MERGE_SHA is the FULL 40-char merge SHA from Phase 1 (a
+# picks the arm; head_sha picks the merge ONLY while this merge is main's tip at
+# CI completion — a workflow_run run's head_sha is the default-branch tip, not the
+# triggering commit (#8297). Empty -> the "absent" row below, never INDETERMINATE
+# on its own. No recency window to fall out of. MERGE_SHA is the FULL 40-char merge SHA from Phase 1 (a
 # short SHA matches zero runs, #8135). `gh --jq` does not forward --arg, so the
 # SHA is shape-validated before it is interpolated.
 MERGE_SHA="<full 40-char merge-commit sha from Phase 1>"
@@ -343,7 +345,7 @@ fi
 **Interpretation:**
 
 - `DEPLOY_JOB_STATE` is **`skipped`**: the deploy arm fired and clean-skipped — normal for a docs-only merge, because the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-217). Report `GATE-NOT-EXERCISED`, **not** a failure and **not** `GATE-VALIDATED`. If this PR changed gating logic, the gate is still unvalidated and the watch stays open until a merge that actually deploys.
-- `DEPLOY_JOB_STATE` is **`absent`**: **do NOT report `GATE-VALIDATED`.** Either the deploy arm has not fired yet (CI on the merge SHA is still running — the `workflow_run` trigger fires on CI *completion*, so the deploy arm always lags the push arm), or you selected the wrong arm. Report `GATE-INDETERMINATE — deploy arm not observed`, name the run id you looked at, and re-check once the merge-commit CI run concludes. An empty grep is the absence of evidence, not evidence of a passing gate.
+- `DEPLOY_JOB_STATE` is **`absent`**: **do NOT report `GATE-VALIDATED`.** Either the deploy arm has not fired yet (CI on the merge SHA is still running — the `workflow_run` trigger fires on CI *completion*, so the deploy arm always lags the push arm), or you selected the wrong arm. Report `GATE-INDETERMINATE — deploy arm not observed`, name the run id you looked at, and re-check once the merge-commit CI run concludes. An empty grep is the absence of evidence, not evidence of a passing gate. **Or a sibling merged after you.** A `workflow_run` run's `head_sha` is the DEFAULT-BRANCH TIP at trigger time, not the triggering CI's commit, so the SHA-keyed query above returns nothing whenever `main` moved between your merge and your CI's completion — while the arm still deployed YOUR commit (`resolve-target` checks out `workflow_run.head_sha`, which is the CI's commit). Before settling on INDETERMINATE, identify the arm: `git fetch origin main -q` first (its `head_sha` is a tip you have usually not fetched, and an unfetched SHA makes `--is-ancestor` exit 128, which reads as "no"), then the deploy run whose `created_at` is within seconds of your merge-CI run's `updated_at`, whose `head_sha` is a descendant of your merge (`git merge-base --is-ancestor <merge> <head_sha>`), and — the identity check, not the proximity one — whose log names your SHA (`gh run view <run-id> --log | grep -c <merge-sha>` non-zero). If that arm exists, set `RELEASE_RUN_ID` to it, apply the rows above to its `deploy` job, and confirm with `/health` `build_sha`; report INDETERMINATE only when neither resolves it. **Why:** PR #8297 — `5997f3743` merged 9 min after `129fcd4d5`; the deploy arm fired 2 s after `129fcd4d5`'s CI concluded, reported `head_sha=5997f3743`, its `resolve-target` log named `129fcd4d5` 33 times, and production's `build_sha` was `129fcd4d5`.
 - Release **succeeded** (deploy job present and `success`): the changed gate passed on a real deploy — the dark-launch observation is satisfied. Report `GATE-VALIDATED`.
 - Release **failed with a canary/sandbox rollback reason** AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
 - Release failed with a non-gate reason (build, migration, unrelated infra): ordinary deploy failure — investigate normally; do not assume the gate.
@@ -352,12 +354,12 @@ fi
 
 ## Phase 3.8: Feature-Tweet Draft (verify + display)
 
-The draft is now generated **pre-merge by `/ship`** (Phase 6 "Feature-Tweet
+The draft is now generated **pre-merge by `soleur:ship`** (Phase 6 "Feature-Tweet
 Draft (pre-merge bundle)") and committed to the feature branch, so for the
-normal `/one-shot` / `/ship` flow it ALREADY landed on `main` with this PR —
+normal `soleur:one-shot` / `soleur:ship` flow it ALREADY landed on `main` with this PR —
 where `content-publisher.sh` reads from. This phase **verifies** that on-`main`
 draft, **displays** it for approval, and warns when deploy health is unverified.
-It only *generates* a draft as a catch-up when `/ship` was hand-rolled and the
+It only *generates* a draft as a catch-up when `soleur:ship` was hand-rolled and the
 draft never landed.
 
 ```bash
@@ -369,7 +371,7 @@ Branch on eligibility, then on whether the draft is already on `main`:
 - **Ineligible** (exit non-zero, `excluded: <reason>`) → **silent no-op.** Most
   PRs land here (fixes, infra, non-product); exclusion is the designed outcome,
   not a fault. Do not surface it in the report.
-- **Eligible AND a draft for this PR is on `main`** (the `/ship` pre-merge
+- **Eligible AND a draft for this PR is on `main`** (the `soleur:ship` pre-merge
   bundle worked — detect via
   `git grep -l 'pr_reference: "#<merged-pr-number>"' origin/main -- knowledge-base/marketing/distribution-content/`):
   **display the draft's full content** (title + every X tweet + the Bluesky
@@ -384,15 +386,15 @@ Branch on eligibility, then on whether the draft is already on `main`:
   The display-for-approval contract is owned by `feature-tweet` SKILL.md
   §Output; the path alone is insufficient (the operator cannot approve copy they
   cannot see).
-- **Eligible BUT no draft on `main`** (a hand-rolled `/ship` skipped the
+- **Eligible BUT no draft on `main`** (a hand-rolled `soleur:ship` skipped the
   pre-merge bundle) → catch-up: invoke the draft generator, display it, and note
   it needs a follow-up commit to reach `main`:
 
   ```
-  /soleur:feature-tweet #<merged-pr-number>
+  soleur:feature-tweet #<merged-pr-number>
   ```
 
-  > Eligible PR #N had no feature-tweet draft on `main` (the `/ship` pre-merge
+  > Eligible PR #N had no feature-tweet draft on `main` (the `soleur:ship` pre-merge
   > bundle was skipped). Generated a catch-up draft — commit it to `main` via a
   > follow-up PR so `content-publisher.sh` can drain it, then set both
   > `publish_date` and `status: scheduled` once the deploy is confirmed.
@@ -400,8 +402,8 @@ Branch on eligibility, then on whether the draft is already on `main`:
 **Multi-PR contract (explicit v1):** one tweet per eligible PR, using postmerge's
 single bound PR number. If a deploy bundled multiple PRs, only the bound PR is
 drafted — note in the Phase 7 report that other eligible PRs need the standalone
-catch-up path. `/soleur:merge-pr`-only flows bypass this hook by design; the
-recovery is standalone `/soleur:feature-tweet #N`.
+catch-up path. `soleur:merge-pr`-only flows bypass this hook by design; the
+recovery is standalone `soleur:feature-tweet #N`.
 
 ## Phase 4: Verify File Freshness
 
@@ -593,7 +595,7 @@ Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
-Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run /soleur:feature-tweet #N / NONE — ineligible>
+Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>
 ```
 
 ## Graceful Degradation
@@ -615,7 +617,7 @@ Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" 
 
 - Always read merged files out of git rather than off the bare repo filesystem — but address them by the **merge commit SHA** (`git show <merge-sha>:<path>`), never by the local `main` ref. `main` is not fast-forwarded as a side effect of a merge, so in a worktree/bare layout it lags and a file the PR ADDED reads as absent. `git fetch origin main` FIRST: the merge SHA is correct but useless if the worktree does not have that object yet, and git reports the shortfall in wording (`exists on disk, but not in <sha>`) that looks like a verdict about the file. See Phase 4.
 - MCP tools resolve paths from the repo root. Use absolute paths when in a worktree.
-- This skill is designed to run after `/soleur:merge-pr` completes. It can also be invoked standalone with a PR number.
+- This skill is designed to run after `soleur:merge-pr` completes. It can also be invoked standalone with a PR number.
 
 ## Production Debugging
 

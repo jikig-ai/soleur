@@ -31,7 +31,7 @@ Conduct a comprehensive review of the codebase against agent-native architecture
 First, invoke the agent-native-architecture skill to understand all principles:
 
 ```
-/soleur:agent-native-architecture
+soleur:agent-native-architecture
 ```
 
 Select option 7 (action parity) to load the full reference material.
@@ -195,7 +195,9 @@ Tasks:
    - Agent self-describes in responses
    - Suggested prompts/actions
    - Empty state guidance
-   - Slash commands (/help, /tools)
+   - Slash commands the AUDITED product exposes — a `help` command, a `tools` command, and
+     the like. These are the target app's affordances, not Soleur's: name them without a
+     leading slash so they are not read as Soleur component references
 2. Score against 7 mechanisms
 
 Format:

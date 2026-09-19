@@ -31,6 +31,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
+import { emitOutcomeMarker, type CompoundPromoteStatus } from "@/server/compound-promote-marker";
+import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
@@ -225,7 +227,7 @@ async function readAlwaysLoaded(
   for (const p of [indexPath, corpusPath]) {
     if (!existsSync(p)) {
       throw new Error(
-        `compound-promote: ${p} missing — refusing to compute the always-loaded ` +
+        `compound-promote: ${relative(repoRoot, p)} missing — refusing to compute the always-loaded ` +
           `byte budget from a partial corpus (would invent phantom headroom).`,
       );
     }
@@ -244,67 +246,6 @@ export const TARGET_ALLOW_RE =
 // =============================================================================
 
 /**
- * Every terminal path of this handler returns a `status`. Until #8281 that
- * string was returned into the void: the only signal a run emitted was
- * `postSentryHeartbeat({ ok: true })`, which proves LIVENESS and says nothing
- * about WORK. Ten weeks of zero output were therefore undiagnosable — the
- * handler was not failing, it was succeeding at nothing and saying ok.
- *
- * WARN is load-bearing, not stylistic: only pino WARN+ transits Vector to the
- * Better Stack source, so an `info` marker would be unqueryable and would
- * recreate the exact blind spot this exists to remove. Precedent:
- * `claude-cost-marker.ts` ("Emit one SOLEUR_CLAUDE_COST WARN marker").
- *
- * Never throws — observability must not break a run.
- */
-/**
- * The closed set of terminal statuses. A union rather than `string` so a
- * status outside the set is a TYPE error — the plan's Guard 1 mutation row 3
- * ("emit a status outside the known set → RED") is satisfied by the compiler
- * rather than by a regex, and the 8 literals cannot silently become 9.
- */
-export type CompoundPromoteStatus =
-  | "disabled"
-  | "deduped"
-  | "week-cap-reached"
-  | "empty-corpus"
-  | "anthropic-truncated"
-  | "no-qualifying-clusters"
-  | "completed"
-  | "error";
-
-export interface CompoundPromoteOutcome {
-  status: CompoundPromoteStatus;
-  corpus_count?: number;
-  clusters_proposed?: number;
-  clusters_opened?: number;
-  /** One entry per refusal site that fired, in order. */
-  refusals?: string[];
-  /**
-   * Bounded per-cluster refusal detail. Carries a cluster hash and a fixed
-   * reason enum ONLY — never learning text or paths — so a recurring refusal of
-   * the SAME cluster is distinguishable from a genuinely quiet corpus.
-   */
-  refusal_detail?: { cluster_hash: string; reason: string }[];
-  /** Bytes of the corpus payload serialized into the Anthropic message. */
-  corpus_input_bytes?: number;
-  /**
-   * Which trigger produced this run. BOTH triggers dispatch this same handler
-   * (`{ cron: "0 0 * * 0" }` and `{ event: "...manual-trigger" }` are registered
-   * on one function), so nothing downstream can tell them apart without this
-   * field — and the #8281 soak probe's whole claim is about the SCHEDULED path.
-   * Without it a manual fire during the soak window closes the tracker while
-   * the weekly path stays dark.
-   */
-  trigger?: "cron" | "manual";
-  /** Inngest run id — the join key to a Sentry event for the same run. */
-  run_id?: string;
-  /** `error` only: the thrown error's class and a scrubbed, capped message. */
-  error_class?: string;
-  error_message?: string;
-}
-
-/**
  * What one cluster's `apply-and-pr` step DID, carried in the step's RETURN
  * VALUE rather than pushed into a handler-scope array.
  *
@@ -321,34 +262,6 @@ export interface CompoundPromoteOutcome {
 type ClusterOutcome =
   | { kind: "opened" }
   | { kind: "refused"; reason: string };
-
-/** Cap on `refusal_detail` entries so one pathological run cannot flood the sink. */
-export const REFUSAL_DETAIL_CAP = 20;
-
-export function emitOutcomeMarker(
-  logger: { warn: (obj: object, msg: string) => void },
-  outcome: CompoundPromoteOutcome,
-): void {
-  try {
-    logger.warn(
-      {
-        SOLEUR_COMPOUND_PROMOTE_OUTCOME: true,
-        fn: "cron-compound-promote",
-        ...outcome,
-        // Both arrays capped — `refusals` used to be spread uncapped, so the
-        // "one pathological run cannot flood the sink" property held for only
-        // one of the two. The total is recorded so a capped list is
-        // distinguishable from a complete one.
-        refusals: outcome.refusals?.slice(0, REFUSAL_DETAIL_CAP),
-        refusal_detail: outcome.refusal_detail?.slice(0, REFUSAL_DETAIL_CAP),
-        refusals_total: outcome.refusals?.length,
-      },
-      "compound promote outcome",
-    );
-  } catch {
-    // fail-open: a marker-emit failure must never propagate into the caller.
-  }
-}
 
 // =============================================================================
 // Diff path derivation (#8274)
@@ -857,7 +770,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-disabled", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "disabled" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "disabled" });
       return { ok: true, status: "disabled" };
     }
 
@@ -884,7 +797,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-dedup", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "deduped" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "deduped" });
       return { ok: true, status: "deduped" };
     }
 
@@ -903,7 +816,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-week-cap", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "week-cap-reached" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "week-cap-reached" });
       return { ok: true, status: "week-cap-reached" };
     }
 
@@ -964,7 +877,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-empty", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "empty-corpus", corpus_count: 0 });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "empty-corpus", corpus_count: 0 });
       return { ok: true, status: "empty-corpus" };
     }
 
@@ -1038,7 +951,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId,
+      emitOutcomeMarker({ trigger, run_id: runId,
         status: clusterResult.truncated ? "anthropic-truncated" : "no-qualifying-clusters",
         corpus_count: corpus.entries.length,
         clusters_proposed: clusterResult.clusters.length,
@@ -1348,7 +1261,7 @@ export async function cronCompoundPromoteHandler({
     }
 
     await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }));
-    emitOutcomeMarker(logger, { trigger, run_id: runId,
+    emitOutcomeMarker({ trigger, run_id: runId,
       status: "completed",
       corpus_count: corpus.entries.length,
       clusters_proposed: clusterResult.clusters.length,
@@ -1359,21 +1272,27 @@ export async function cronCompoundPromoteHandler({
     });
     return { ok: true, status: "completed", clustersOpened };
   } catch (err) {
-    const e = err as Error;
+    // A thrown non-Error (a string, null, a rejected promise value) has no
+    // `.message`; normalise once so every consumer below reads a real Error.
+    const e = err instanceof Error ? err : new Error(String(err));
     if (installationToken) {
       e.message = redactToken(e.message, installationToken);
     }
+    // `redactToken` above knows only the CURRENT installation token, and
+    // Sentry's exception value is not content-scrubbed (server/sentry-scrub.ts
+    // is key-based) — so the shape scrub runs once here for both sinks.
+    const scrubbed = redactGithubSourcedText(e.message);
     reportSilentFallback(e, {
       feature: "cron-compound-promote",
       op: "handler-top-level",
-      message: e.message,
+      message: scrubbed,
     });
     try {
       await postSentryHeartbeat({ ok: false, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger });
     } catch {
       // best-effort
     }
-    emitOutcomeMarker(logger, {
+    emitOutcomeMarker({
       trigger,
       run_id: runId,
       status: "error",
@@ -1386,12 +1305,8 @@ export async function cronCompoundPromoteHandler({
       // Which stage died, so four `error` weeks are a named cause rather than
       // an undecidable one for the #8293 gate. Bounded and scrubbed: the
       // message can carry a model-rendered path.
-      // A thrown non-Error (a string, null, a rejected promise value) has no
-      // `.message`/`.constructor`; `safeDetail(undefined)` would TypeError
-      // OUT of this catch, and the one path that most needs a marker would
-      // emit none and throw instead of returning `{ status: "error" }`.
-      error_class: (e as { constructor?: { name?: string } } | null)?.constructor?.name ?? typeof err,
-      error_message: safeDetail(String((e as { message?: unknown } | null)?.message ?? err)),
+      error_class: err instanceof Error ? e.constructor.name : typeof err,
+      error_message: safeDetail(scrubbed),
     });
     return { ok: false, status: "error" };
   } finally {

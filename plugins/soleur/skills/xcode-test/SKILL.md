@@ -59,7 +59,7 @@ Please install the XcodeBuildMCP server first:
 claude mcp add XcodeBuildMCP -- npx xcodebuildmcp@latest
 \`\`\`
 
-Then restart Claude Code and run `/xcode-test` again.
+Then restart Claude Code and run `soleur:xcode-test` again.
 ```
 
 **Do NOT proceed** until XcodeBuildMCP is confirmed working.
@@ -338,13 +338,13 @@ mcp__xcodebuildmcp__shutdown_simulator({ simulator_id: "[uuid]" })
 
 ```bash
 # Test with default scheme
-/xcode-test
+soleur:xcode-test
 
 # Test specific scheme
-/xcode-test MyApp-Debug
+soleur:xcode-test MyApp-Debug
 
 # Test after making changes
-/xcode-test current
+soleur:xcode-test current
 ```
 
 ## Integration with `soleur:review`
@@ -352,5 +352,5 @@ mcp__xcodebuildmcp__shutdown_simulator({ simulator_id: "[uuid]" })
 When reviewing PRs that touch iOS code, the `soleur:review` skill can spawn this as a subagent:
 
 ```
-Task general-purpose("Run /xcode-test for scheme [name]. Build, install on simulator, test key screens, check for crashes.")
+Task general-purpose("Run soleur:xcode-test for scheme [name]. Build, install on simulator, test key screens, check for crashes.")
 ```
