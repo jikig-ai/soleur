@@ -109,7 +109,12 @@ if [[ "$PASS" -ne $((_cp+1)) || "$FAIL" -ne $((_cf+1)) || "${#FAILURES[@]}" -ne 
   printf '  FATAL: the assertion helpers are not counting — every verdict above is void.\n' >&2; exit 2
 fi
 FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
-if [[ "$PASS" -lt 21 ]]; then printf '  FATAL: anti-vacuity: only %s passes; the floor is 21 (one control + 20 rows).\n' "$PASS" >&2; exit 2; fi
+# A literal bound adjacent to the test, reported by a direct printf + exit 1 (never through the
+# helpers it backstops), so scripts/guard-vacuity-floor.test.sh can construct its mutant.
+if [[ "$PASS" -lt 21 ]]; then
+  printf '  FATAL: anti-vacuity: only %s passes; the floor is 21 (fix the dispatch, do not lower it).\n' "$PASS" >&2
+  exit 1
+fi
 cmp -s "$SB/pristine.sh" "$SUT" || { printf '  FATAL: the sandbox SUT was left mutated.\n' >&2; exit 2; }
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="
 [[ "${#FAILURES[@]}" -eq 0 ]]
