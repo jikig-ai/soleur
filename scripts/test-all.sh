@@ -2304,6 +2304,14 @@ if want_scripts; then
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
+  # #8302 / ADR-229: the offline transition classifier and the SKILL.md byte ratchet.
+  # scripts/lib/incidents-roots.test.sh rides the scripts/lib/*.test.sh glob; these two do
+  # not sit under a globbed directory, so they are registered here explicitly. This is the
+  # ratchet SUITE's only registration: lint-orphan-test-suites.sh refuses double coverage,
+  # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
+  # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
+  run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
+  run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh

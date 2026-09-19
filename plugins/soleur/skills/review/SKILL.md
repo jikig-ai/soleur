@@ -909,7 +909,10 @@ you re-deriving an analysis that already exists, usually a better one. Use the e
 not a bare search — `gh issue list --state all -L 200 --search "<noun>" --json number,title`:
 without `--state all` an already-closed duplicate is invisible, and without an explicit `-L` the
 result set silently caps at 30, so the probe fails open exactly when the backlog is large enough
-for a duplicate to be likely. **Why:** #7376 — a
+for a duplicate to be likely. **Search two distinguishing nouns AND-joined first, then widen** — an
+OR-joined query (`A OR B OR C`) returns the union of every partial match and buries the one exact
+one; measured 2026-09-18 (#8301): `KNOWN_WORKFLOWS OR active_workflow OR drain-prs sticky` gave eight
+unrelated hits and "no tracker", while `drain-prs KNOWN_WORKFLOWS` returned #7928 §1, the exact defect. **Why:** #7376 — a
 scope-out for 7 underived infra suites went to CONCUR without a search; `#7076` was already open,
 tracked the same remediation, and counted **8** (it knew about a `sudo bash` registration shape
 the proposed filing had missed entirely). The DISSENT was correct on all three of its grounds.
