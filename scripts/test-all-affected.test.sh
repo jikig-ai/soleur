@@ -103,6 +103,13 @@ if (( PASS != _self_pass + 1 )) || (( FAIL != _self_fail + 1 )) || (( _self_logg
 fi
 PASS=$_self_pass; FAIL=$_self_fail; cases=0
 
+# Every sandboxed SUT invocation scrubs the runner-significant environment.
+# The suite asserts verdicts; an inherited CI=1 would early-return _diff_touches
+# (every edge suite selects -> rows f/q red), SOLEUR_SUBAGENT/SOLEUR_ALLOW_FULL_GATE
+# move the refusal arms, FORCE_ALL preempts the asserted fallback reason, and
+# TEST_TIMING_LOG would write synthetic skip rows into the operator's real log.
+ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S"
+
 # ---------------------------------------------------------------------------
 # Sandbox builder. $1 = sandbox runner path; $2 = "with-lib" | "no-lib".
 # Copies the runner and the libs it sources fail-closed (relevance, boundary)
@@ -133,6 +140,7 @@ old = '_diff_touches() {'
 assert s.count(old) == 1, f"expected exactly one '{old}', found {s.count(old)}"
 s = s.replace(old, (
     '[[ -n "${SANDBOX_DIFF_NAMES+x}" ]] && _diff_names="$SANDBOX_DIFF_NAMES"\n'
+    '[[ -n "${SANDBOX_LIVE_UNTRACKED:-}" ]] && _diff_names="${_diff_names}\n$(git ls-files --others --exclude-standard 2>/dev/null)"\n'
     '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_detect_ok="$SANDBOX_DETECT_OK"\n'
     '[[ -n "${SANDBOX_HEAD_OK:-}" ]] && _diff_head_ok="$SANDBOX_HEAD_OK"\n'
     '[[ -n "${SANDBOX_PREFIXES+x}" ]] && TEST_RELEVANCE_PREFIXES=($SANDBOX_PREFIXES)\n'
@@ -179,9 +187,10 @@ run_arm() {
     ARM_RC=97; ARM_OUT=""; ARM_RECORD=""; return 1
   }
   local rc=0
-  ( cd "$REPO_ROOT" && env -u TEST_GROUP -u SCRIPTS_SHARD \
+  ( cd "$REPO_ROOT" && env $ENV_SCRUB \
       SOLEUR_DISABLE_SESSION_STATE=1 SANDBOX_RECORD="$rec_f" \
-      "${env_pairs[@]}" bash "$sb" "${argv[@]+"${argv[@]}"}" ) \
+      TEST_TIMING_LOG="$TESTROOT/timing-$cases.tsv" \
+      ${env_pairs[@]+"${env_pairs[@]}"} bash "$sb" "${argv[@]+"${argv[@]}"}" ) \
       > "$out_f" 2>&1 || rc=$?
   ARM_RC=$rc
   ARM_OUT="$(cat "$out_f")"
@@ -198,7 +207,7 @@ ran_count() { awk -F'\t' '$1=="RAN"' <<<"$ARM_RECORD" | wc -l | tr -d ' '; }
 RUNNABLE_N=""
 runnable_n() {
   if [[ -z "$RUNNABLE_N" ]]; then
-    RUNNABLE_N=$(cd "$REPO_ROOT" && env -u TEST_GROUP -u SCRIPTS_SHARD \
+    RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
       SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate-commands 2>/dev/null \
       | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
   fi
@@ -210,7 +219,7 @@ echo "== test-all-affected: mutation matrix =="
 # --- Row a: --help ------------------------------------------------------------
 cases=$((cases + 1))
 rc=0
-_help_out=$(env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+_help_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$RUNNER" --help 2>&1) || rc=$?
 if [[ "$rc" == "0" ]] && grep -qF -- '--affected' <<<"$_help_out" \
      && grep -qF -- '--full' <<<"$_help_out" \
@@ -223,7 +232,7 @@ fi
 # --- Row b: --affected --full conflict -> exit 2 --------------------------------
 cases=$((cases + 1))
 rc=0
-env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$RUNNER" --affected --full >/dev/null 2>&1 || rc=$?
 if [[ "$rc" == "2" ]]; then
   pass "b: --affected --full exits 2"
@@ -234,7 +243,7 @@ fi
 # --- Row c: trailing positional junk -> exit 2 ---------------------------------
 cases=$((cases + 1))
 rc=0
-env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$RUNNER" all extra-positional >/dev/null 2>&1 || rc=$?
 if [[ "$rc" == "2" ]]; then
   pass "c: >1 positional exits 2"
@@ -245,11 +254,11 @@ fi
 # --- Row d: --print-affected-set emits receipts for the runnable stream ---------
 cases=$((cases + 1))
 rc=0
-_print_out=$(cd "$REPO_ROOT" && env -u TEST_GROUP -u SCRIPTS_SHARD \
+_print_out=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
   SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --affected --print-affected-set 2>/dev/null) || rc=$?
 _receipts=$(awk -F'\t' '$1=="AFFECTED_CLASS"' <<<"$_print_out" | wc -l | tr -d ' ')
-if [[ "$rc" == "0" ]] && (( _receipts >= $(runnable_n) )); then
-  pass "d: print-affected-set emits ${_receipts} receipts (>= $(runnable_n) runnable)"
+if [[ "$rc" == "0" ]] && (( _receipts == $(runnable_n) )); then
+  pass "d: print-affected-set emits ${_receipts} receipts (== $(runnable_n) runnable)"
 else
   fail "d: print rc=$rc receipts=${_receipts} runnable=$(runnable_n)"
 fi
@@ -280,6 +289,7 @@ if [[ "$_rc" == "0" ]] \
   && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
   && ! grep -qF $'RAN\ttests/scripts/registry-gate-mutation-battery' <<<"$ARM_RECORD" \
   && grep -qF 'not-affected' <<<"$ARM_OUT" \
+  && ! grep -qF 'IS covered above' <<<"$ARM_OUT" \
   && grep -qF 'MODE=affected' <<<"$ARM_OUT"; then
   pass "f: affected selects edge+always-on, declines the rest (ran=${_ran})"
 else
@@ -305,7 +315,8 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DETECT_OK=0' 'SANDBOX_DIFF_NAMES=' \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran > 200 )) \
+_decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
   && grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
   && grep -qF 'undecidable-diff' <<<"$ARM_OUT"; then
   pass "h: undecidable-diff degrades to full with the fallback banner"
@@ -319,7 +330,8 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_HEAD_OK=0' 'SANDBOX_DIFF_NAMES=' \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran > 200 )) \
+_decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
   && grep -qF 'undecidable-diff' <<<"$ARM_OUT"; then
   pass "i: head-diff failure degrades to full"
 else
@@ -332,7 +344,8 @@ SANDBOX_LIB=no-lib run_arm \
   'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran > 200 )) \
+_decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
   && grep -qF 'index-missing' <<<"$ARM_OUT"; then
   pass "j: missing lib degrades to full (index-missing), never narrows"
 else
@@ -345,7 +358,8 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran > 200 )) \
+_decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
   && grep -qF 'runner-changed' <<<"$ARM_OUT"; then
   pass "k: a diff touching the runner degrades to full (runner-changed)"
 else
@@ -443,7 +457,7 @@ s = re.sub(r'ALWAYS_ON_SUITES=\(.*?\n\)',
 open(p, 'w').write(s)
 PY
 rc=0
-( cd "$REPO_ROOT" && env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
     SANDBOX_RECORD=/dev/null 'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
     bash "$_sbn" --affected ) >/dev/null 2>&1 || rc=$?
 if [[ "$rc" == "4" ]]; then
@@ -459,10 +473,11 @@ SANDBOX_LIB=with-lib run_arm \
   'SOLEUR_TEST_FORCE_ALL=1' \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran > 200 )); then
-  pass "p: FORCE_ALL under affected degrades to full"
+if [[ "$_rc" == "0" ]] && (( _ran >= $(runnable_n) )) \
+  && grep -qF 'reason=force-all' <<<"$ARM_OUT"; then
+  pass "p: FORCE_ALL under affected degrades to full, announced"
 else
-  fail "p: FORCE_ALL+affected rc=$_rc ran=${_ran}"
+  fail "p: FORCE_ALL+affected rc=$_rc ran=${_ran} runnable=$(runnable_n)"
 fi
 
 # --- Row q: epilogue carries not-affected accounting + the --full lever ------------
@@ -480,16 +495,250 @@ fi
 # --- Row r: enumerate contract unchanged -------------------------------------------
 cases=$((cases + 1))
 rc=0
-_enum_n=$(cd "$REPO_ROOT" && env -u TEST_GROUP -u SCRIPTS_SHARD \
-  SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate-commands 2>/dev/null \
-  | awk -F'\t' '$1=="SUITE_COMMAND" || $1=="SUITE_COMMAND_DECLINED"' | wc -l | tr -d ' ') || rc=$?
-if [[ "$rc" == "0" ]] && (( _enum_n >= 400 )); then
-  pass "r: --enumerate-commands still emits the full stream (${_enum_n} records)"
+# Capture once, then assert on the variable: `producer | grep -q` under
+# pipefail reads as failure when grep exits early on its match and the still-
+# writing producer takes SIGPIPE (the trap test-all.sh itself documents).
+_enum_out=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
+  SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate-commands 2>/dev/null) || rc=$?
+_enum_n=$(awk -F'\t' '$1=="SUITE_COMMAND" || $1=="SUITE_COMMAND_DECLINED"' <<<"$_enum_out" | wc -l | tr -d ' ')
+if [[ "$rc" == "0" ]] && (( _enum_n >= 400 )) \
+  && grep -qF $'SUITE_COMMAND\ttests/scripts/lint-rule-ids' <<<"$_enum_out"; then
+  pass "r: --enumerate-commands emits the full stream (${_enum_n} records, named anchor present)"
 else
   fail "r: enumerate rc=$rc records=${_enum_n}"
 fi
 
+# --- Row s: SCRIPTS_SHARD + affected — env -u on the enumerate child is load-bearing
+# The real runner refuses SCRIPTS_SHARD under TEST_GROUP=all (:782) — the only
+# group under which the affected pre-pass runs. The `env -u SCRIPTS_SHARD` on
+# the nested enumerate is therefore unreachable upstream… unless the refusal is
+# bypassed. Two sandbox arms do exactly that, proving the env -u is what keeps
+# the child's stream ordinal-aligned with the parent's 1..N dispatch walk.
+# NOTE: the carrier is unset at :813 (after parsing into _SHARD_K/_SHARD_N), so
+# under a real run the nested enumerate never sees SCRIPTS_SHARD at all. To make
+# `env -u SCRIPTS_SHARD` observable, s2 also removes the parent's `unset` — then
+# the env -u alone is what keeps the child's stream unsharded and the map
+# aligned. (Stripping env -u as well would diverge; row t already proves the
+# guard catches that and fails toward coverage.)
+_shardsplice() { # $1 = sandbox runner path, $2 = "nounset" to also remove the parent's unset
+  python3 - "$1" "$2" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" ]]; then'
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old, 'if false; then # sandbox: shard+all allowed to exercise the affected pre-pass')
+if sys.argv[2] == "nounset":
+    old2 = 'unset SCRIPTS_SHARD'
+    assert s.count(old2) == 1, s.count(old2)
+    s = s.replace(old2, ': sandbox keeps SCRIPTS_SHARD so env -u on the enumerate child is load-bearing')
+open(p, 'w').write(s)
+PY
+}
+
+cases=$((cases + 1))
+_sbn="$TESTROOT/sb-shard/test-all.sh"
+build_sandbox "$_sbn" with-lib >/dev/null || { fail "s1: sandbox build"; }
+_shardsplice "$_sbn" keep || { fail "s1: splice"; }
+rc=0
+( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+    SANDBOX_RECORD="$TESTROOT/rec-$cases" \
+    'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+    'SCRIPTS_SHARD=1/2' \
+    bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || rc=$?
+ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
+_ran=$(ran_count)
+if [[ "$rc" == "0" ]] && ! grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
+  && (( _ran > 0 && _ran < $(runnable_n) )); then
+  pass "s1: sharded affected keeps the map aligned — only the leg runs (ran=${_ran})"
+else
+  fail "s1: sharded affected rc=$rc ran=${_ran} divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
+fi
+
+cases=$((cases + 1))
+_sbn="$TESTROOT/sb-shardstrip/test-all.sh"
+build_sandbox "$_sbn" with-lib >/dev/null || { fail "s2: sandbox build"; }
+_shardsplice "$_sbn" nounset || { fail "s2: splice"; }
+rc=0
+( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+    SANDBOX_RECORD="$TESTROOT/rec-$cases" \
+    'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+    'SCRIPTS_SHARD=1/2' \
+    bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || rc=$?
+ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
+_ran=$(ran_count)
+# Parent keeps the carrier; env -u on the child is now the ONLY thing keeping
+# its stream unsharded. Aligned map => leg only, no divergence.
+if [[ "$rc" == "0" ]] && ! grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
+  && (( _ran > 0 && _ran < $(runnable_n) )); then
+  pass "s2: env -u alone keeps the sharded enumerate aligned (ran=${_ran})"
+else
+  fail "s2: nounset arm rc=$rc ran=${_ran} divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
+fi
+
+# --- Row t: enumerate/dispatch ordinal divergence drops the map, runs all -------
+# Splice a one-position ordinal shift into the sandbox's label map: the runtime
+# label guard must notice the mismatch, drop _aff_sel, and run EVERYTHING —
+# never apply another suite's selection bit.
+cases=$((cases + 1))
+_sbn="$TESTROOT/sb-divergent/test-all.sh"
+build_sandbox "$_sbn" with-lib >/dev/null || { fail "t: sandbox build"; }
+python3 - "$(dirname "$_sbn")" <<'PY' || { fail "t: splice"; }
+import sys
+p = sys.argv[1] + "/test-all.sh"
+s = open(p).read()
+old = '_aff_label[$_aff_ordinal]="${_aff_fields[1]}"'
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old,
+  '_aff_ordinal=$(( _aff_ordinal + 1 )); _aff_label[$_aff_ordinal]="${_aff_fields[1]}"')
+open(p, 'w').write(s)
+PY
+rc=0
+( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+    SANDBOX_RECORD="$TESTROOT/rec-$cases" \
+    'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+    bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || rc=$?
+ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
+_ran=$(ran_count)
+if grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
+  && (( _ran == $(runnable_n) )); then
+  pass "t: ordinal divergence drops the selection map; every suite runs (ran=${_ran})"
+else
+  fail "t: divergent map ran=${_ran} runnable=$(runnable_n) divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
+fi
+
+# --- Row u: self-only derivation demotes to unclassified and RUNS -----------------
+# Remove a declared array in the sandbox lib so its suite derives self-only:
+# the classifier must report `unclassified` (not edge:derived), and the run
+# must SELECT it — fail toward coverage, and let the census flag the gap.
+cases=$((cases + 1))
+_sbn="$TESTROOT/sb-unclass/test-all.sh"
+build_sandbox "$_sbn" with-lib >/dev/null || { fail "u: sandbox build"; }
+python3 - "$(dirname "$_sbn")" <<'PY' || { fail "u: splice"; }
+import sys, re
+p = sys.argv[1] + "/lib/test-affected-paths.sh"
+s = open(p).read()
+s2 = re.sub(r'AFFECTED_TESTS_COMMANDS_SYNC_DOMAIN_MODEL_PATHS=\(.*?\n\)\n', '', s, count=1, flags=re.S)
+assert s2 != s, "array not found"
+open(p, 'w').write(s2)
+PY
+( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+    SANDBOX_RECORD="$TESTROOT/rec-$cases" \
+    'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+    bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || true
+ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
+if grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+  pass "u: self-only-derived suite runs (unclassified selects, never declines)"
+else
+  fail "u: sync-domain-model did not run — $(grep -F 'sync-domain-model' <<<"$ARM_OUT" | head -2)"
+fi
+# and the receipt must say unclassified, not edge:derived
+cases=$((cases + 1))
+_ucls=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$_sbn" --print-affected-set 2>/dev/null \
+  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/commands/sync-domain-model"{print $3}')
+if [[ "$_ucls" == "unclassified" ]]; then
+  pass "u2: self-only derivation reports unclassified (census-visible), not edge:derived"
+else
+  fail "u2: class='${_ucls:-<none>}' expected unclassified"
+fi
+
+# --- Rows w: the unscoped untracked append --------------------------------------
+# w1 is the source pin: under _AFFECTED the runner appends `git ls-files
+# --others --exclude-standard` UNSCOPED — a brand-new suite file's self-edge and
+# a new file under a declared prefix are otherwise invisible to the diff blob.
+cases=$((cases + 1))
+_untr_block="$(awk '/^if \(\( _AFFECTED == 1 \)\); then/{f=1} f&&/^fi$/{exit} f' "$RUNNER")"
+if grep -qF 'git ls-files --others --exclude-standard 2>/dev/null' <<<"$_untr_block" \
+  && ! grep -qE 'ls-files --others --exclude-standard --' <<<"$_untr_block"; then
+  pass "w1: affected mode appends the UNSCOPED untracked list to _diff_names"
+else
+  fail "w1: unscoped untracked append missing or re-scoped under _AFFECTED"
+fi
+
+# w2 is the behaviour: a real untracked file under a declared directory prefix
+# must select the suite that owns the prefix — while a declared suite the diff
+# does not reach still declines. The probe lives in the REAL worktree for the
+# duration of the arm (ls-files --others is a live git query); it is removed
+# immediately after, before the next arm's diff is read.
+cases=$((cases + 1))
+_probe="knowledge-base/engineering/architecture/diagrams/zz-8322-untracked-probe.c4"
+printf 'probe\n' > "$REPO_ROOT/$_probe"
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+  'SANDBOX_LIVE_UNTRACKED=1' \
+  -- --affected
+rm -f "$REPO_ROOT/$_probe"
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF $'RAN\tplugins/soleur/test/c4-model-freshness.test.sh' <<<"$ARM_RECORD" \
+  && ! grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+  pass "w2: untracked file under a declared prefix selects its suite; unreached declared suites still decline"
+else
+  fail "w2: rc=$ARM_RC c4=$(grep -c 'c4-model-freshness' <<<"$ARM_RECORD") sync=$(grep -c 'sync-domain-model' <<<"$ARM_RECORD")"
+fi
+
+# --- Rows v: lint-orphan-test-suites census mutations ----------------------------
+# The census consumes the classification index fail-closed. Each arm builds a
+# hardlinked repo sandbox (mutating the REAL lib would corrupt the worktree:
+# cp -al links share inodes, so the row rm's the target before replacing it)
+# and splices one staleness class into the lib copy. The linter must exit 1
+# naming the lie — green behind a stale index is the failure mode these buy.
+build_census_sandbox() { # $1 = dir
+  local d="$1" item
+  mkdir -p "$d/scripts"
+  cp -al "$REPO_ROOT/scripts/." "$d/scripts/" 2>/dev/null \
+    || cp -r "$REPO_ROOT/scripts/." "$d/scripts/"
+  rm -f "$d/scripts/lib/test-affected-paths.sh"
+  cp "$REPO_ROOT/scripts/lib/test-affected-paths.sh" "$d/scripts/lib/"
+  for item in "$REPO_ROOT"/.[!.]* "$REPO_ROOT"/*; do
+    [[ -e "$item" ]] || continue
+    [[ "$(basename "$item")" == "scripts" ]] && continue
+    ln -sfn "$item" "$d/$(basename "$item")"
+  done
+  printf '%s\n' "$d/scripts/lint-orphan-test-suites.sh"
+}
+
+cases=$((cases + 1))
+_csv="$(build_census_sandbox "$TESTROOT/census-stale-alwayson")"
+printf '\nALWAYS_ON_SUITES+=("zz-census-mutation-ghost")\n' \
+  >> "$(dirname "$_csv")/lib/test-affected-paths.sh"
+rc=0
+( cd "$TESTROOT/census-stale-alwayson" && env $ENV_SCRUB \
+    SOLEUR_DISABLE_SESSION_STATE=1 bash "$_csv" ) \
+    > "$TESTROOT/out-$cases" 2>&1 || rc=$?
+if [[ "$rc" != "0" ]] \
+  && grep -qF "ALWAYS_ON_SUITES entry 'zz-census-mutation-ghost' is not a live registration" "$TESTROOT/out-$cases"; then
+  pass "v1: stale ALWAYS_ON_SUITES entry fails the census, naming the entry"
+else
+  fail "v1: census rc=$rc — $(grep -c ERROR "$TESTROOT/out-$cases") ERROR line(s)"
+fi
+
+cases=$((cases + 1))
+_csv="$(build_census_sandbox "$TESTROOT/census-stale-consumed")"
+printf '\nAFFECTED_CONSUMED_EDGES+=("zz-ghost-label|AFFECTED_TESTS_COMMANDS_SYNC_DOMAIN_MODEL_PATHS")\n' \
+  >> "$(dirname "$_csv")/lib/test-affected-paths.sh"
+rc=0
+( cd "$TESTROOT/census-stale-consumed" && env $ENV_SCRUB \
+    SOLEUR_DISABLE_SESSION_STATE=1 bash "$_csv" ) \
+    > "$TESTROOT/out-$cases" 2>&1 || rc=$?
+if [[ "$rc" != "0" ]] \
+  && grep -qF "AFFECTED_CONSUMED_EDGES names label 'zz-ghost-label', which is not a live registration" "$TESTROOT/out-$cases"; then
+  pass "v2: stale consumed-edge mapping fails the census, naming the label"
+else
+  fail "v2: census rc=$rc — $(grep -c ERROR "$TESTROOT/out-$cases") ERROR line(s)"
+fi
+
 echo ""
+# Conservation + floor: a truncated row block must not read as green.
+if (( PASS + FAIL != cases )); then
+  echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
+  exit 2
+fi
+MIN_CASES=30
+if (( cases < MIN_CASES )); then
+  echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
+  exit 2
+fi
 echo "test-all-affected: $PASS passed, $FAIL failed of $((PASS + FAIL)) (cases=$cases)"
 if (( FAIL > 0 )); then
   cat "$FAILLOG" >&2

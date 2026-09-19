@@ -38,11 +38,17 @@ set -euo pipefail
 #      reduced meaning). Both are "this runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
-#   4  REFUSED before anything ran. TWO producers, both overridden by SOLEUR_ALLOW_FULL_GATE=1:
+#   4  REFUSED before anything ran. FOUR producers. The first two are
+#      overridden by SOLEUR_ALLOW_FULL_GATE=1:
 #        (a) SOLEUR_SUBAGENT=1 is set — a DECLARED spawned agent;
 #        (b) a sibling full-gate run is already in flight — a MEASURED condition (#7553).
 #        (b) is the reachable one: nothing in this repo sets SOLEUR_SUBAGENT, so (a)'s
 #        antecedent only holds when someone exports it deliberately.
+#      The other two are affected-mode SELECTION refusals (#8322) — no hatch:
+#        (c) AFFECTED_UNRESOLVED reason=zero-selected — the diff selects zero
+#            runnable registrations, which is no gate;
+#        (d) AFFECTED_UNRESOLVED reason=below-floor — the always-on set fell
+#            below _MIN_ALWAYS_ON_DECLARED, meaning the index was gutted.
 #      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
 #      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
 #      would make a refused run read as a killed suite.
@@ -93,7 +99,20 @@ SUITE_GLOBS=(
 # no bare-repo guard, no TEST_GROUP validation (which would reject this argv as a group name and
 # exit 2), no tc_acquire — the linter runs INSIDE the advisory lock this runner holds, so a code
 # path that blocks on it would deadlock the gate on itself.
-if [[ "${1:-}" == "--print-suite-globs" ]]; then
+# Query flags are position-INDEPENDENT: `--affected --capacity` must still be
+# the capacity probe, not an affected run. Scan the whole argv rather than
+# pinning $1 — a mode flag before the query flag would otherwise turn a
+# lock-free probe into a battery dispatch.
+_query_globs=0
+_query_capacity=0
+for _qarg in "$@"; do
+  case "$_qarg" in
+    --print-suite-globs) _query_globs=1 ;;
+    --capacity)          _query_capacity=1 ;;
+  esac
+done
+unset _qarg
+if (( _query_globs == 1 )); then
   printf '%s\n' "${SUITE_GLOBS[@]}"
   exit 0
 fi
@@ -118,7 +137,7 @@ fi
 # bare-repo guard this branch deliberately precedes. Same defensive shape: a
 # missing lib degrades to a named CAPACITY_UNKNOWN rather than to silence, so
 # the answer can never simply vanish.
-if [[ "${1:-}" == "--capacity" ]]; then
+if (( _query_capacity == 1 )); then
   # Mirrors the pin below: the contention lib observes the /tmp TMPFS, not
   # whatever TMPDIR the caller happens to carry.
   export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
@@ -917,15 +936,18 @@ skipped=0
 # ADR-181 already fixed; `_affected_declined` is the selection axis this file
 # added, and the epilogue reports it separately so the two decline classes can
 # never be summed into one misleading number. `_aff_sel`/`_aff_class` are the
-# per-ORDINAL selection and classification maps the derivation pre-pass fills;
+# per-ORDINAL selection and label maps the derivation pre-pass fills;
 # `_aff_ready` is the only flag the chokepoint consults, so every unset/empty
 # state (full mode, degraded fallback, enumerate) defaults to SELECT — the
 # fail-safe direction. Ordinal-indexed, never associative: bash 3.2.
+# `_aff_label` is the divergence guard's source of truth: ordinal N must carry
+# the same label in the enumerate child and the dispatch walk, else the map is
+# shifted and every later selection bit belongs to a different suite.
 _affected_declined=0
 _aff_ready=0
 _aff_fallback=""
 _aff_sel=()
-_aff_class=()
+_aff_label=()
 
 # --- Shard selection at the registration chokepoint (#7902) --------------------------------
 #
@@ -1032,6 +1054,16 @@ _shard_enumerate_declined_dispatch() {
 # skip_suite's third positional is a human RERUN string, not argv — a distinct record type so
 # a consumer can never parse it as a command.
 _shard_enumerate_declined_emit() {
+  # Same contract refusal as _shard_enumerate_command_emit: a field-3 rerun
+  # string carrying a TAB or NEWLINE corrupts the record for consumers that
+  # split on TAB (the affected pre-pass reads field 2 as the label).
+  local _e
+  for _e in "$1" "$2"; do
+    if [[ "$_e" == *$'\t'* || "$_e" == *$'\n'* ]]; then
+      printf 'ERROR: --enumerate-commands cannot encode a declined-record field containing a TAB or NEWLINE (label=%s)\n' "$1" >&2
+      exit 2
+    fi
+  done
   printf 'SUITE_COMMAND_DECLINED\t%s\t%s\n' "$1" "$2"
 }
 
@@ -1043,6 +1075,19 @@ run_suite() {
     _shard_enumerate_dispatch "$label" "$@"; return 0
   fi
   suites=$((suites + 1))
+  # DIVERGENCE GUARD (#8322): `_aff_sel` is keyed on the enumerate CHILD's
+  # ordinal stream but indexed by THIS walk's `_shard_ordinal`. The glob loop
+  # re-expands SUITE_GLOBS per pass, so a suite file created or deleted between
+  # the two walks shifts every later ordinal and would decline suites carrying
+  # another suite's bit — silent under-coverage. A label mismatch means the
+  # whole map is suspect: drop it (the `:-1` default below then selects
+  # everything remaining) and say so loudly — fail toward coverage.
+  if (( _aff_ready == 1 )) && [[ "${_aff_label[$_shard_ordinal]:-}" != "$label" ]]; then
+    _aff_ready=0
+    printf 'AFFECTED_DIVERGENT\tordinal=%d map=%s dispatch=%s\n' \
+      "$_shard_ordinal" "${_aff_label[$_shard_ordinal]:-<none>}" "$label"
+    echo "[affected] WARN: enumerate/dispatch divergence at ordinal $_shard_ordinal — selection map dropped; every remaining suite runs" >&2
+  fi
   # Affected decline (#8322). AFTER `suites++`, so a declined registration stays
   # in the denominator — the ADR-181 argument verbatim, one axis up. AFTER the
   # enumerate dispatch, so the record stream never contains a selection claim
@@ -1362,7 +1407,11 @@ _diff_touches() {
   if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
   local p
   for p in "$@"; do
-    if grep -qF -- "$p" <<<"$_diff_names"; then return 0; fi
+    # `[[ == ]]` with the operand quoted is a literal substring match — the
+    # same semantics as the fixed-string grep it replaces, minus one fork +
+    # herestring per edge per registration (the affected pre-pass calls this
+    # ~440 times against multi-element edge sets).
+    if [[ "$_diff_names" == *"$p"* ]]; then return 0; fi
   done
   return 1
 }
@@ -1445,13 +1494,125 @@ _affected_normpath() {
   done
 }
 
+# The tail shared by both extraction passes: variable substitution, absolute/
+# escape rejection, normalisation, dedup-add. A dotted name that resolves to
+# nothing literal is read as a Python module (`from pkg.mod import x`,
+# `import pkg.mod`) and re-tried as pkg/mod.py — Python imports are unquoted,
+# which the quoted-import arms of the sed chain never see.
+_affected_edge_token() {
+  local _p="$1"
+  # `$(dirname …)` substitutions run BEFORE the quote-strip: the token may
+  # legitimately carry quotes inside `$(dirname "$0")`, and stripping first
+  # would cut it to `$(dirname` — which is how these tokens arrive.
+  _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
+  _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
+  # `$(cd "$(dirname …)" && pwd -P)/rest` — the physical-path idiom — resolves
+  # to the file's own directory too. The glob is greedy; on the single-`$(cd)`
+  # tokens the extractor emits that is exactly the span to replace.
+  _p="${_p//\$\(cd*pwd*-P\)/$_fdir}"
+  _p="${_p//\$\(cd*pwd\)/$_fdir}"
+  _p="${_p#\"}"; _p="${_p#\'}"
+  _p="${_p%%[\"\']*}"
+  _p="${_p//\$HERE/$_fdir}"
+  _p="${_p//\$\{HERE\}/$_fdir}"
+  _p="${_p//\$SCRIPT_DIR/$_fdir}"
+  _p="${_p//\$\{SCRIPT_DIR\}/$_fdir}"
+  _p="${_p//\$REPO_ROOT/.}"
+  _p="${_p//\$\{REPO_ROOT\}/.}"
+  _p="${_p//\$ROOT_DIR/.}"
+  _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
+  _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
+  _p="${_p#"$PWD"/}"
+  case "$_p" in /*|../*|..|.) return 0 ;; esac
+  _affected_normpath "$_p"; _p="$_NP"
+  case "$_p" in ../*|..|.) return 0 ;; esac
+  if [[ ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+    _p="$(printf '%s' "$_p" | tr '.' '/').py"
+  fi
+  _affected_buf_add "$_p"
+}
+
 # The source/import closure of one file: `source X`, `. X`, `from 'X'`,
-# `import 'X'`, `require('X')`. `$HERE`, `$SCRIPT_DIR`, `$REPO_ROOT` and
-# `$(dirname …)` resolve against the file's own directory; repo-root variables
-# resolve to the runner's cwd (registrations run from the repo root).
+# `import 'X'`, `import pkg.mod`, `require('X')`, plus variable-indirect
+# invocations (`source "$GATE"`, `bash "$POLL"`, `python3 "$MOD"`) resolved
+# against VAR=literal assignments in the same file — the tests/scripts
+# harness convention carries its SUT behind exactly those names. `$HERE`,
+# `$SCRIPT_DIR`, `$REPO_ROOT` and `$(dirname …)` resolve against the file's
+# own directory; repo-root variables resolve to the runner's cwd
+# (registrations run from the repo root).
+# File-level memo: a file's edge set depends only on the file, but the closure
+# walk revisits the same shared helpers (gate-suite-harness, test-helpers) once
+# per suite — ~440 suites × ~10 shared files each re-scanned is the difference
+# between seconds and minutes. Parallel arrays, not assoc: bash 3.2.
+_FE_FILES=()
+_FE_EDGES=()
+
+# `_FE_BUF` is the per-file accumulator: _affected_file_edges_uncached and
+# _affected_edge_token append through _affected_buf_add so the CACHE records
+# the file's complete edge set — recording only what survived _AC_EDGES dedup
+# would silently drop edges another suite already contributed, and replaying
+# that for a later suite would under-edge it.
+_FE_BUF=()
+_affected_buf_add() {
+  local _p="$1"
+  [[ -n "$_p" && -e "$_p" ]] || return 0
+  _affected_in_list "$_p" ${_FE_BUF[@]+"${_FE_BUF[@]}"} && return 0
+  _FE_BUF+=("$_p")
+}
+
+# Substitute only the vars actually PRESENT in the string against the file's
+# _vn/_vv map — a blind every-var sweep is ~60 expansions per token and was
+# the dominant pre-pass cost. Re-loops so a value carrying another $VAR also
+# resolves; the 12-iteration cap makes a self-referential value harmless.
+_RV=""
+_affected_resolve_vars() {
+  _RV="$1"
+  local _want _found _vi _iter=0
+  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 )); do
+    _iter=$(( _iter + 1 ))
+    _want="${BASH_REMATCH[1]}"
+    _found=0
+    for (( _vi=0; _vi<${#_vn[@]}; _vi++ )); do
+      if [[ "${_vn[$_vi]}" == "$_want" ]]; then
+        _RV="${_RV//\$${_want}/${_vv[$_vi]}}"
+        _RV="${_RV//\$\{${_want}\}/${_vv[$_vi]}}"
+        _found=1
+        break
+      fi
+    done
+    (( _found == 0 )) && break
+  done
+  # The while exits on a FALSE `=~` — status 1 — which under `set -e` aborts
+  # any caller using this as a plain statement. Always return 0.
+  return 0
+}
+
 _affected_file_edges() {
   local _f="$1"
   [[ -f "$_f" ]] || return 0
+  local _ci
+  for (( _ci=0; _ci<${#_FE_FILES[@]}; _ci++ )); do
+    if [[ "${_FE_FILES[$_ci]}" == "$_f" ]]; then
+      local _ce
+      while IFS= read -r _ce; do
+        _affected_add_edge "$_ce"
+      done <<< "${_FE_EDGES[$_ci]}"
+      return 0
+    fi
+  done
+  _FE_BUF=()
+  _affected_file_edges_uncached "$_f"
+  local _j _joined=""
+  for _j in ${_FE_BUF[@]+"${_FE_BUF[@]}"}; do
+    _affected_add_edge "$_j"
+    _joined+="$_j"$'\n'
+  done
+  _FE_FILES+=("$_f")
+  _FE_EDGES+=("$_joined")
+}
+
+_affected_file_edges_uncached() {
+  local _f="$1"
   local _fdir
   case "$_f" in */*) _fdir="${_f%/*}" ;; *) _fdir="." ;; esac
   local _p
@@ -1459,27 +1620,61 @@ _affected_file_edges() {
   # stream. At ~440 registrations each fanning out through helpers, per-line
   # subshell+sed pairs were the pre-pass's dominant fork cost.
   while IFS= read -r _p; do
-    _p="${_p%%[\"\']*}"
-    _p="${_p//\$HERE/$_fdir}"
-    _p="${_p//\$\{HERE\}/$_fdir}"
-    _p="${_p//\$SCRIPT_DIR/$_fdir}"
-    _p="${_p//\$\{SCRIPT_DIR\}/$_fdir}"
-    _p="${_p//\$REPO_ROOT/.}"
-    _p="${_p//\$\{REPO_ROOT\}/.}"
-    _p="${_p//\$ROOT_DIR/.}"
-    _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
-    _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
-    _p="${_p#$PWD/}"
-    case "$_p" in /*|../*|..) continue ;; esac
-    _affected_normpath "$_p"; _p="$_NP"
-    case "$_p" in ../*|..) continue ;; esac
-    _affected_add_edge "$_p"
-  done < <(grep -hE '(^|[[:space:]])(source|\.)[[:space:]]+|from[[:space:]]+["'"'"']|require\(|import[[:space:]]+["'"'"']|load[[:space:]]+' "$_f" 2>/dev/null | sed -E \
+    _affected_edge_token "$_p"
+  done < <(grep -hE '(^|[[:space:]])(source|\.)[[:space:]]+|from[[:space:]]+["'"'"']|require\(|import[[:space:]]+["'"'"']|import\(|load[[:space:]]+|^[[:space:]]*(import|from)[[:space:]]+[a-zA-Z0-9_.]' "$_f" 2>/dev/null | sed -E \
+      -e "s/^.*(source|\.)[[:space:]]+['\"]?(\\\$\\(dirname[^)]*\\)[^'\"[:space:]]*).*/\2/" \
       -e "s/^.*(source|\.)[[:space:]]+['\"]?([^'\"[:space:]]+).*/\2/" \
       -e "s/^.*from[[:space:]]+['\"]([^'\"]+).*/\1/" \
       -e "s/^.*import[[:space:]]+['\"]([^'\"]+).*/\1/" \
-      -e "s/^.*require\\(['\"]([^'\"]+).*/\1/" \
-      -e "s/^.*load[[:space:]]+['\"]([^'\"]+).*/\1/")
+      -e "s/^.*(require|import)\\(['\"]([^'\"]+).*/\2/" \
+      -e "s/^.*load[[:space:]]+['\"]([^'\"]+).*/\1/" \
+      -e "s|^[[:space:]]*from[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]+import[[:space:]].*|\1|" \
+      -e "s|^[[:space:]]*import[[:space:]]+([a-zA-Z0-9_.]+).*|\1|")
+  # Variable-indirect invocations. VAR=literal assignments are collected from
+  # the same file (values keep their own $REPO_ROOT-style vars for
+  # _affected_edge_token to resolve); invocation sites carrying a $VAR then
+  # substitute against that map. Unresolvable vars die at the -e filter.
+  local -a _vn=() _vv=()
+  local _vl
+  while IFS= read -r _vl; do
+    # Greedy `"(.*)"` so a nested quote inside `$(dirname "$0")` survives —
+    # `[^"]*` would cut the value at the inner quote. The unquoted fallback
+    # stops at whitespace; `$(dirname "$0")`-style values are always quoted.
+    if [[ "$_vl" =~ ^[[:space:]]*(export[[:space:]]+|declare[[:space:]]+-[a-zA-Z]+[[:space:]]+)*([A-Za-z_][A-Za-z0-9_]*)=\"(.*)\" ]]; then
+      _vn+=("${BASH_REMATCH[2]}")
+      _vv+=("${BASH_REMATCH[3]}")
+    elif [[ "$_vl" =~ ^[[:space:]]*(export[[:space:]]+|declare[[:space:]]+-[a-zA-Z]+[[:space:]]+)*([A-Za-z_][A-Za-z0-9_]*)=([^[:space:]\"\'\']+) ]]; then
+      _vn+=("${BASH_REMATCH[2]}")
+      _vv+=("${BASH_REMATCH[3]}")
+    fi
+  done < <(grep -hE '^[[:space:]]*(export[[:space:]]+)?(declare[[:space:]]+-[a-zA-Z]+[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$_f" 2>/dev/null)
+  # Pass 2: every WHITESPACE-SEPARATED token on an invocation line, not just
+  # the first argv — `python3 - "$REPO_ROOT/lefthook.yml"` carries its edge in
+  # position 2. `(`, `&`, `|` and `;` in the prefix class catch invocations
+  # nested in command substitutions and pipelines. Vars resolve first so
+  # `bash "$POLL"` lands its value.
+  local _l _tok
+  while IFS= read -r _l; do
+    _affected_resolve_vars "$_l"; _l="$_RV"
+    # `read -ra`, never `for tok in $_l`: a bare expansion would glob `*`-shaped
+    # tokens (`find . -name "*.sh"`) against cwd into spurious edges. The
+    # `/`-or-`$` early-out keeps the per-token substitution chain off the ~95%
+    # of argv that are flags, numbers and keywords.
+    local -a _toks=()
+    IFS=' ' read -ra _toks <<< "$_l"
+    for _tok in ${_toks[@]+"${_toks[@]}"}; do
+      [[ "$_tok" == */* || "$_tok" == *\$* ]] || continue
+      _affected_edge_token "$_tok"
+    done
+  done < <(grep -hE '(^|[[:space:](&|;])(source|\.|bash|sh|python3?|node|bun)[[:space:]]+["'"'"']?[^[:space:]]' "$_f" 2>/dev/null)
+  # Pass 3: `$VAR/path` tokens ANYWHERE — the SUT path is often an argument two
+  # positions deep, a heredoc payload, or a redirected operand no invocation
+  # grep can see. Substitution resolves the vars pass 2 already collected;
+  # tokens still carrying an unresolvable `$` die at the -e filter.
+  while IFS= read -r _p; do
+    _affected_resolve_vars "$_p"; _p="$_RV"
+    _affected_edge_token "$_p"
+  done < <(grep -ohE '\$[A-Za-z_{][A-Za-z0-9_}]*(/[A-Za-z0-9_.$}{-]+)+' "$_f" 2>/dev/null | sort -u)
 }
 
 # Derivation: argv literals + `-c` payload paths + name-stem + closure.
@@ -1536,16 +1731,31 @@ _affected_derive() {
     case "$_suite_file" in */*) _dir="${_suite_file%/*}" ;; *) _dir="." ;; esac
     _base="${_suite_file##*/}"
     case "$_base" in
-      *.test.sh)         _stem="${_base%.test.sh}.sh" ;;
+      *.test.sh)            _stem="${_base%.test.sh}.sh" ;;
       *.test.ts|*.test.tsx) _stem="${_base%.test.*}" ;;
+      *.test.py)            _stem="${_base%.test.py}.py" ;;
       test-*.sh|test_*.sh)  _stem="${_base#test?}" ;;
-      *)                 _stem="" ;;
+      test-*.py|test_*.py)  _stem="${_base#test?}" ;;
+      *)                    _stem="" ;;
     esac
     if [[ -n "$_stem" ]]; then
+      # The SUT's extension does not have to match the test's — a .test.sh can
+      # guard an .mjs/.ts/.py helper — so fan the bare stem across every SUT
+      # extension this repo's suites actually target, at each conventional
+      # location: same dir, the dir's lib/, repo scripts/, and the test/
+      # sibling scripts/ dir (plugins/soleur/test/X ↔ plugins/soleur/scripts/X).
+      # `-e` inside add_edge drops every candidate that does not exist.
+      local _bare="${_stem%.*}"
+      local _cand_dir
+      for _cand_dir in "$_dir" "$_dir/lib" "scripts" "${_dir%/test}/scripts"; do
+        local _ext
+        for _ext in sh ts tsx mjs js py rb; do
+          _affected_add_edge "$_cand_dir/$_bare.$_ext"
+        done
+      done
       _affected_add_edge "$_dir/$_stem"
-      case "$_stem" in
-        *.ts) _affected_add_edge "$_dir/${_stem%.ts}.tsx" ;;
-      esac
+      _affected_add_edge "$_dir/lib/$_stem"
+      _affected_add_edge "scripts/$_stem"
     fi
     # Closure, bounded: follow source/import edges one level at a time.
     local -a _queue=("$_suite_file") _seen=("$_suite_file")
@@ -1568,12 +1778,17 @@ _affected_derive() {
       _queue=(${_next[@]+"${_next[@]}"})
     done
   fi
+  # Exported for the classifier's self-only check: a derived edge set that
+  # contains nothing but the suite's own file proves nothing about which
+  # diffs reach it.
+  _AC_SUITE_FILE="$_suite_file"
 }
 
 _affected_classify() {
   local _label="$1"; shift
   _AC_CLASS=""
   _AC_EDGES=()
+  _AC_SUITE_FILE=""
 
   if [[ "$TEST_GROUP" != "all" ]]; then _AC_CLASS="group"; return 0; fi
   if _affected_in_list "$_label" ${ALWAYS_ON_SUITES[@]+"${ALWAYS_ON_SUITES[@]}"}; then
@@ -1600,7 +1815,20 @@ _affected_classify() {
     _AC_CLASS="edge:declared"; return 0
   fi
   _affected_derive "$_label" "$@"
-  if (( ${#_AC_EDGES[@]} > 0 )); then _AC_CLASS="edge:derived"; else _AC_CLASS="unclassified"; fi
+  if (( ${#_AC_EDGES[@]} == 0 )); then _AC_CLASS="unclassified"; return 0; fi
+  _AC_CLASS="edge:derived"
+  # A derived edge set containing ONLY the suite's own file is derivation in
+  # name only — it proves nothing about which diffs reach the suite (the SUT
+  # was invoked through a subprocess or an unresolvable $VAR). Declining it
+  # would be silent under-coverage: report it as unclassified so it selects
+  # fail-safe AND the census flags it for a real declared edge.
+  if [[ -n "${_AC_SUITE_FILE:-}" ]]; then
+    local _e _nonself=0
+    for _e in "${_AC_EDGES[@]}"; do
+      [[ "$_e" == "$_AC_SUITE_FILE" ]] || { _nonself=1; break; }
+    done
+    (( _nonself == 0 )) && _AC_CLASS="unclassified"
+  fi
   return 0
 }
 
@@ -1661,7 +1889,11 @@ _infra_skip_reason=""
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 _MIN_ALWAYS_ON_DECLARED=100
-if (( _AFFECTED == 1 && _ENUMERATE == 0 )); then
+# An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
+# registration that reaches the chokepoint is in the named group and the
+# classifier's `group` rung selects it unconditionally. The nested enumerate
+# would buy nothing but a second ~440-registration walk.
+if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
   if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then
     _aff_fallback="force-all"
   elif (( _AFF_LIB_OK == 0 )); then
@@ -1683,21 +1915,34 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )); then
     exit 4
   else
     _aff_enum_rc=0
-    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 bash "${BASH_SOURCE[0]}" --enumerate-commands "$TEST_GROUP" 2>/dev/null)" || _aff_enum_rc=$?
+    # `env -u SCRIPTS_SHARD` is load-bearing, not hygiene: under a shard the
+    # child's stream would pack only shard-selected records as ordinals 1..k
+    # while this walk's `_shard_ordinal` still runs 1..N — a silently shifted
+    # map. The child enumerates the UNSHARDED stream so positions align; the
+    # label guard at the chokepoint is the second line. stderr goes to a file
+    # rather than /dev/null so `enumerate-unavailable` can name its cause.
+    _aff_enum_err="$(mktemp "${TMPDIR:-/tmp}/test-all-enum-err.XXXXXX")"
+    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
     if (( _aff_enum_rc != 0 )); then
       _aff_fallback="enumerate-unavailable"
+      if [[ -s "$_aff_enum_err" ]]; then
+        echo "[affected] enumerate child stderr (first 10 lines):" >&2
+        sed -n '1,10p' "$_aff_enum_err" >&2
+      fi
     else
       _aff_ordinal=0
       _aff_selected=0
+      _aff_cmd_records=0
       while IFS= read -r _aff_line; do
         case "$_aff_line" in
-          SUITE_COMMAND_DECLINED$'\t'*) _aff_ordinal=$(( _aff_ordinal + 1 )) ;;
-          SUITE_COMMAND$'\t'*)
+          SUITE_COMMAND_DECLINED$'\t'*|SUITE_COMMAND$'\t'*)
             _aff_ordinal=$(( _aff_ordinal + 1 ))
             IFS=$'\t' read -ra _aff_fields <<< "$_aff_line"
-            _affected_classify "${_aff_fields[1]}" "${_aff_fields[@]:2}"
-            _aff_class[$_aff_ordinal]="$_AC_CLASS"
-            if [[ "$_AC_CLASS" == edge:* ]] \
+            _aff_label[$_aff_ordinal]="${_aff_fields[1]}"
+            [[ "$_aff_line" == SUITE_COMMAND$'\t'* ]] || continue
+            _aff_cmd_records=$(( _aff_cmd_records + 1 ))
+            _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            if [[ "$_AC_CLASS" == edge:* && ${#_AC_EDGES[@]} -gt 0 ]] \
               && ! _diff_touches ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; then
               _aff_sel[$_aff_ordinal]=0
             else
@@ -1716,18 +1961,29 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )); then
         echo "       ${_aff_ordinal} reachable registrations. That is not a green gate; it is" >&2
         echo "       no gate. Run the whole battery:" >&2
         echo "         bash scripts/test-all.sh --full" >&2
+        rm -f "$_aff_enum_err"
         exit 4
       fi
       _aff_ready=1
-      echo "[affected] MODE=affected selected=${_aff_selected} not-affected=$(( _aff_ordinal - _aff_selected )) of ${_aff_ordinal} registrations" >&2
+      # `not-affected` counts only SUITE_COMMAND records — DECLINED records are
+      # relevance/incident declines decided inside the child and reported as
+      # `skipped` in the epilogue, not as selection declines.
+      echo "[affected] MODE=affected selected=${_aff_selected} not-affected=$(( _aff_cmd_records - _aff_selected )) of ${_aff_cmd_records} runnable registrations" >&2
     fi
+    rm -f "$_aff_enum_err"
   fi
   if [[ -n "$_aff_fallback" ]]; then
     printf 'AFFECTED_FALLBACK\treason=%s\n' "$_aff_fallback"
-    echo "[affected] MODE=full (degraded: ${_aff_fallback}) — the whole battery runs." >&2
+    # Degraded is NOT `--full`: `_FULL_GATE` stays 0, so `not_in_diff`
+    # relevance declines still apply — the banner must not claim otherwise.
+    echo "[affected] MODE=full (degraded: ${_aff_fallback}) — selection declines disabled; relevance declines still apply." >&2
   fi
 elif (( _ENUMERATE == 0 )); then
-  echo "[affected] MODE=full" >&2
+  if (( _AFFECTED == 1 )); then
+    echo "[affected] MODE=affected (group-scoped: TEST_GROUP=$TEST_GROUP — every in-group registration selects)" >&2
+  else
+    echo "[affected] MODE=full" >&2
+  fi
 fi
 
 # WHY THE want_infra CONJUNCT IS LOAD-BEARING. These notices used to key on `_infra_in_diff`
@@ -1815,7 +2071,10 @@ _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 # child in its own process group, so the probe computing its own pgid would get
 # timeout's pid rather than this runner's, and this runner's command-
 # substitution forks would not be excluded from its own reap set.
-if [[ -z "${CI:-}" ]] && [[ -x scripts/orphan-process-reaper.sh || -f scripts/orphan-process-reaper.sh ]]; then
+# Enumerate mode runs no suite and answers to a READER parsing records, so the
+# probe's /proc walk and timeout are dead work there — the nested affected
+# pre-pass pays it ~440 registrations upstream of any suite.
+if [[ -z "${CI:-}" && $_ENUMERATE == 0 ]] && [[ -x scripts/orphan-process-reaper.sh || -f scripts/orphan-process-reaper.sh ]]; then
   _orphan_rc=0
   ORPHAN_REAPER_EXCLUDE_PGID="$(command ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)" \
     timeout 10 bash scripts/orphan-process-reaper.sh report || _orphan_rc=$?
@@ -2177,7 +2436,10 @@ _emit_bytes_probe "__run_boundary_start__"
 #
 # Degrades OPEN. A missing or failing git must not wedge the gate — an unmeasurable boundary is
 # reported at the end, never turned into a false RED.
-if _repo_state_before="$(_repo_state)"; then
+# Skipped under _ENUMERATE: enumerate exits before the boundary epilogue, so
+# the sampling subprocess would be dead work the nested affected pre-pass
+# pays once per dispatch.
+if (( _ENUMERATE == 0 )) && _repo_state_before="$(_repo_state)"; then
   _repo_guard_ok=1
 fi
 

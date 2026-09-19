@@ -547,6 +547,12 @@ for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-p
   # runner rather than hardcoded, so a mode added later cannot silently start false-flagging.
   _modes="$({ grep -oE '^if \[\[ "\$\{1:-\}" == "--[a-z-]+"' "$REPO_ROOT/scripts/test-all.sh" \
               | grep -oE -- '--[a-z-]+'
+            # Position-independent query flags live in the `_qarg` scan loop —
+            # each case arm sets a `_query_*` bit whose block exits before
+            # dispatch. Derived, not hardcoded, for the same reason as below.
+            awk '/^for _qarg in "\$@"; do/{f=1} f&&/^done$/{exit} \
+                 f&&/^[[:space:]]+--[a-z-]+\)/{flag=$1; sub(/\)/,"",flag); print flag}' \
+              "$REPO_ROOT/scripts/test-all.sh"
             # The #8322 while/case parser holds the rest of the non-running flags. A case arm
             # is non-running iff its body raises _ENUMERATE or exits before dispatch — derived
             # from the body, not the name, so a new query flag cannot silently join the set
@@ -575,6 +581,22 @@ for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-p
     pass "$hookrel: every non-exempt gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-196 section 6, re-spec'd #8322)"
   else
     fail "$hookrel has a full-shaped invocation WITHOUT the hatch — it exits 4 whenever any sibling runs the battery: $HOOK_BARE"
+  fi
+done
+
+# POSITIVE PIN (#8322): the exemption checks above are vacuous if nothing
+# carries `--affected` — a `--full`+hatch invocation reads identically green.
+# Assert each local gate surface literally selects the affected mode, not
+# merely that whatever it carries is legal.
+for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-pre-push-gate.sh"; do
+  hookrel="${hookf#"$REPO_ROOT"/}"
+  _aff_modes="$(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$hookf" \
+    | grep -oE 'test-all\.sh[[:space:]]+--[a-z-]+' | sort -u || true)"
+  CASES=$((CASES + 1))
+  if grep -qxF 'test-all.sh --affected' <<<"$_aff_modes"; then
+    pass "$hookrel's gate run pins --affected"
+  else
+    fail "$hookrel does not pin --affected (found: ${_aff_modes:-<none>}) — the local gate lost its mode flag"
   fi
 done
 

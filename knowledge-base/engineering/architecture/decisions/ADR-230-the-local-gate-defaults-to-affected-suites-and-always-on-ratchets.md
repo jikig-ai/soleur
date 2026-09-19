@@ -19,10 +19,13 @@ high:
   from affected suites, the always-on ratchets, review agents, or direct
   probes. The full battery produced zero findings.
 - **The full battery is the contended resource.** Over roughly three hours the
-  #8270 gate was refused three times (`rc=4`, `CAPACITY_CONTENDED
-  reason=sibling_runs`) because five sibling worktrees were each attempting
-  their own full gate on the same host. The affected set completes in under
-  five minutes — it is the narrow gate, not an opportunistic second battery.
+  #8270 gate was refused twice (`rc=4`, `CAPACITY_CONTENDED
+  reason=sibling_runs`) and expired once at its watcher cap, because five
+  sibling worktrees were each attempting their own full gate on the same
+  host. The affected set still carries the ~130 always-on ratchets (~22.5
+  minutes on the measured `feat-one-shot-8231` serial baseline), so the win
+  is roughly half the wall time plus exemption from the contention refusals —
+  it is the narrow gate, not an opportunistic second battery.
 - **Selection machinery already existed.** `scripts/lib/test-affected-paths.sh`
   did not; but the runner already computed the diff (`_diff_names`,
   `_diff_detect_ok`), already relevance-gated five suites via
@@ -57,8 +60,9 @@ commit hook.
    (declarations lib absent), `reason=runner-changed` (the diff touches
    `test-all.sh` or the index itself), and `reason=force-all` each degrade the
    run to the full battery with a printed banner — never silently narrow. A
-   gutted declarations file (`|ALWAYS_ON|` below the live-derived `*-live`
-   floor) or an empty effective selection refuses `rc=4`
+   gutted declarations file (`|ALWAYS_ON|` below the runner's
+   `_MIN_ALWAYS_ON_DECLARED` floor — the *live-derived* `*-live` floor lives in
+   the orphan linter's census) or an empty effective selection refuses `rc=4`
    (`AFFECTED_UNRESOLVED`) before anything runs.
 
 4. **Affected mode is exempt from BOTH full-gate refusal arms.** ADR-196's
@@ -89,8 +93,8 @@ commit hook.
 7. **Declines stay counted; the numerator subtracts them.** The ADR-181 decline
    machinery is preserved — `not-affected` is a fourth decline class with a
    distinct counter, included in the denominator and excluded from `passed`.
-   `skip_suite` output appends the `--full` lever so a declined suite names its
-   re-run.
+   The epilogue prints the `--full` recovery lever once, so a run with
+   declines names its re-run.
 
 8. **Token-level diff edges are deferred.** Spec FR2 listed diff-content token
    edges; both review panels converged on cutting them — they are a

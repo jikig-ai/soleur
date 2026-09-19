@@ -128,6 +128,11 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-statuses.test.sh"
   "plugins/soleur/test/lint-distribution-content.test.sh"
+  # operator-script's property is discovered, not enumerated: it greps the whole
+  # tree for `lib/operator-script.sh` sourcers and asserts the no-secret-leak
+  # property over each. A diff adding a consumer anywhere must re-run it —
+  # scoping to the lib's own path would decline exactly that diff.
+  "plugins/soleur/test/operator-script.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
   "apps/web-platform/test/parse-gitleaks-allowlists"
@@ -329,4 +334,626 @@ AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
   "scripts/regenerate-c4-model.sh"
   "plugins/soleur/test/c4-model-freshness.test.sh"   # self-inclusion
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# ---------------------------------------------------------------------------
+# UNDRIVABLE-SUBJECT DECLARATIONS (#8322 review). These suites' real subjects
+# are reached through channels derivation cannot see — data reads, workflow
+# assertions, subprocess probes — and derivation produced a self-only edge set,
+# which classifies as `unclassified` (select + census flag). The edges below
+# are mined from the repo paths each suite file names, so a diff to a subject
+# selects its guard.
+# ---------------------------------------------------------------------------
+# tests/hooks/incidents — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_HOOKS_INCIDENTS_PATHS=(
+  ".claude/hooks/lib"
+  ".claude/hooks/lib/incidents.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+  "tests/hooks/test_incidents.sh"
+)
+
+# scripts/sentry-issue-discover — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_SCRIPTS_SENTRY_ISSUE_DISCOVER_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/sentry-issue-discover.test.sh"
+  "scripts/sentry-issue.sh"
+)
+
+# scripts/orphan-process-reaper-mutations — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
+  "scripts/lib"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lib/test-contention.sh"
+  "scripts/orphan-process-reaper-mutation.test.sh"
+  "scripts/orphan-process-reaper.sh"
+  "scripts/orphan-process-reaper.test.sh"
+  "scripts/test-all.sh"
+)
+
+# scripts/lint-workflow-local-action-checkout-live — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_SCRIPTS_LINT_WORKFLOW_LOCAL_ACTION_CHECKOUT_LIVE_PATHS=(
+  ".github/actions/"
+  ".github/workflows"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-workflow-local-action-checkout.py"
+  "scripts/test-all.sh"
+)
+
+# scripts/no-dangling-committed-symlinks — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_SCRIPTS_NO_DANGLING_COMMITTED_SYMLINKS_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/no-dangling-committed-symlinks.test.sh"
+  "scripts/orphan-process-reaper.test.sh"
+)
+
+# tests/scripts/betterstack-read-classify — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_BETTERSTACK_READ_CLASSIFY_PATHS=(
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-betterstack-read-classify.sh"
+)
+
+# tests/scripts/git-data-boot-signal-poll — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
+  ".github/workflows/apply-web-platform-infra.yml"
+  "scripts/lib/git-data-boot-signal-poll.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-git-data-boot-signal-poll.sh"
+)
+
+# tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
+  "scripts/betterstack-ingest-probe.sh"
+  "scripts/compound-promote.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-git-data-rung2-evidence-capture.sh"
+)
+
+# tests/scripts/eu-location-allowset-parity — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_EU_LOCATION_ALLOWSET_PARITY_PATHS=(
+  "apps/web-platform/infra/variables.tf"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/stock-preflight-gate.sh"
+  "tests/scripts/test-destroy-guard-regex-parity.sh"
+  "tests/scripts/test-eu-location-allowset-parity.sh"
+)
+
+# tests/scripts/betterstack-query-archive — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_BETTERSTACK_QUERY_ARCHIVE_PATHS=(
+  "scripts/betterstack-query.sh"
+  "scripts/followthroughs/zot-restart-plateau-6288.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-betterstack-ingest-probe.sh"
+  "tests/scripts/test-betterstack-query-archive.sh"
+)
+
+# tests/scripts/betterstack-absence-classifier — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ABSENCE_CLASSIFIER_PATHS=(
+  "scripts/lib/betterstack-absence.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/zot-restart-loop-alarm.sh"
+  "tests/scripts/test-betterstack-absence-classifier.sh"
+)
+
+# tests/scripts/betterstack-roundtrip-latency — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
+  "scripts/lib/betterstack-sources.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-betterstack-roundtrip-latency.sh"
+)
+
+# tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_RULE_ID_REGEX_PARITY_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-rule-ids.py"
+  "scripts/rule-prune.sh"
+  "tests/scripts/test_rule_id_regex_parity.py"
+)
+
+# tests/commands/sync-rule-prune — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_COMMANDS_SYNC_RULE_PRUNE_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/retired-rule-ids.txt"
+  "scripts/rule-prune.sh"
+  "tests/commands/test-sync-rule-prune.sh"
+)
+
+# tests/commands/sync-domain-model — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_COMMANDS_SYNC_DOMAIN_MODEL_PATHS=(
+  "plugins/soleur/commands/sync.md"
+  "plugins/soleur/scripts/domain-model-drift.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/commands/test-sync-domain-model.sh"
+)
+
+# tests/scripts/destroy-guard-counter-github — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_GITHUB_PATHS=(
+  ".github/workflows/apply-github-infra.yml"
+  "infra/github"
+  "infra/github/"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/fixtures"
+  "tests/scripts/fixtures/tfplan-real-ruleset-baseline.json"
+  "tests/scripts/lib/destroy-guard-filter.jq"
+  "tests/scripts/test-destroy-guard-counter.sh"
+)
+
+# tests/scripts/destroy-guard-counter-sentry — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_SENTRY_PATHS=(
+  ".github/workflows/apply-sentry-infra.yml"
+  "apps/web-platform/infra/sentry"
+  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/sentry-destroy-counts.sh"
+  "tests/scripts/fixtures"
+  "tests/scripts/fixtures/tfplan-sentry-real-baseline.json"
+  "tests/scripts/lib/destroy-guard-filter-sentry.jq"
+  "tests/scripts/test-destroy-guard-counter-sentry.sh"
+)
+
+# tests/scripts/host-image-coherence-preflight — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_HOST_IMAGE_COHERENCE_PREFLIGHT_PATHS=(
+  "apps/web-platform/infra/scripts/host-image-coherence-preflight.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-host-image-coherence-preflight.sh"
+)
+
+# tests/scripts/vector-redeliver-wiring — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_VECTOR_REDELIVER_WIRING_PATHS=(
+  ".github/actions/cf-tunnel-ssh-bridge"
+  ".github/workflows/apply-web-platform-infra.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/vector-redeliver-gate.sh"
+  "tests/scripts/test-registry-d10-workflow-wiring.sh"
+  "tests/scripts/test-vector-redeliver-wiring.sh"
+)
+
+# tests/scripts/registry-delivery-change-mutation-battery — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_REGISTRY_DELIVERY_CHANGE_MUTATION_BATTERY_PATHS=(
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+  "tests/scripts/"
+  "tests/scripts/test-registry-delivery-change-mutation-battery.sh"
+  "tests/scripts/test-registry-delivery-change.sh"
+)
+
+# tests/scripts/registry-d10-workflow-wiring — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_REGISTRY_D10_WORKFLOW_WIRING_PATHS=(
+  "scripts/derive-app-domain-base.sh"
+  "scripts/derive-app-domain-base.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-registry-d10-workflow-wiring.sh"
+)
+
+# tests/scripts/zot-log-channel-probe — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_ZOT_LOG_CHANNEL_PROBE_PATHS=(
+  "scripts/followthroughs/zot-log-channel-7440.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-followthrough-varq-ban.sh"
+  "tests/scripts/test-zot-log-channel-probe.sh"
+)
+
+# tests/scripts/git-data-root-key-arm — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_ROOT_KEY_ARM_PATHS=(
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/gate-suite-harness.sh"
+  "tests/scripts/lib/git-data-root-key-arm-gate.sh"
+  "tests/scripts/test-git-data-root-key-arm.sh"
+)
+
+# tests/scripts/destroy-guard-sentry-scope-guard — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_SENTRY_SCOPE_GUARD_PATHS=(
+  "apps/web-platform/infra/sentry"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/destroy-guard-filter-sentry.jq"
+  "tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
+)
+
+# tests/scripts/sentry-full-root-apply — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SENTRY_FULL_ROOT_APPLY_PATHS=(
+  ".github/workflows/apply-sentry-infra.yml"
+  "knowledge-base/project/learnings/2026-07-15-narrowing-is-not-anchoring-and-a-documented-class-recurred-four-times-in-one-pr.md"
+  "knowledge-base/project/learnings/test-failures/2026-06-17-grep-assertion-over-script-body-false-matches-own-comments.md"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/fixtures"
+  "tests/scripts/lib/destroy-guard-filter-sentry.jq"
+  "tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
+  "tests/scripts/test-sentry-full-root-apply.sh"
+)
+
+# tests/scripts/sentry-alert-adoption-guards — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_ADOPTION_GUARDS_PATHS=(
+  ".github/workflows/apply-sentry-infra.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/sentry-adoption-plan-assert.sh"
+  "scripts/sentry-create-gate.sh"
+  "scripts/sentry-forget-import-bijection.sh"
+  "scripts/sentry-issue-alert-create-tripwire.sh"
+  "scripts/sentry-monitor-binding-gate.sh"
+  "tests/scripts/test-destroy-guard-counter-sentry.sh"
+  "tests/scripts/test-sentry-alert-adoption-guards.sh"
+  "tests/scripts/test-sentry-destroy-counts.sh"
+)
+
+# tests/scripts/sentry-ac17-derived-counts — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SENTRY_AC17_DERIVED_COUNTS_PATHS=(
+  ".github/workflows/apply-sentry-infra.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-sentry-ac17-derived-counts.sh"
+)
+
+# tests/scripts/sentry-alert-drift-workflow — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
+  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  "scripts/alarm-issue-filing-guard.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/sentry-alert-live-fidelity.sh"
+  "tests/scripts/test-sentry-alert-drift-workflow.sh"
+)
+
+# tests/scripts/sentry-monitors-audit-class-d — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SENTRY_MONITORS_AUDIT_CLASS_D_PATHS=(
+  "apps/web-platform/scripts/sentry-monitors-audit.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-sentry-monitors-audit-class-d.sh"
+)
+
+# scripts/md-to-mrkdwn — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_SCRIPTS_MD_TO_MRKDWN_PATHS=(
+  "plugins/soleur/test/reusable-release-idempotency.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/md-to-mrkdwn.test.mjs"
+)
+
+# scripts/skill-security-scan-step-body — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
+  ".github/workflows/skill-security-scan-postmerge.yml"
+  ".github/workflows/skill-security-scan-pr-trailer.yml"
+  "plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh"
+  "plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/skill-security-scan-step-body.test.sh"
+)
+
+# plugins/soleur/test/ci-concurrency-key.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_CONCURRENCY_KEY_TEST_SH_PATHS=(
+  ".github/workflows"
+  ".github/workflows/ci.yml"
+  "plugins/soleur/test/ci-concurrency-key.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
+  ".github/workflows"
+  ".github/workflows/ci.yml"
+  "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/concurrent-ship.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/skills/git-worktree/SKILL.md"
+  "plugins/soleur/skills/merge-pr/SKILL.md"
+  "plugins/soleur/skills/one-shot/SKILL.md"
+  "plugins/soleur/skills/product-roadmap/SKILL.md"
+  "plugins/soleur/skills/schedule/SKILL.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/work/SKILL.md"
+  "plugins/soleur/test/concurrent-ship.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/flag-detach-shared.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_DETACH_SHARED_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/test/flag-detach-shared.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/flag-org-scoping-pr2.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_ORG_SCOPING_PR2_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-create/scripts/create.sh"
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/test/flag-org-scoping-pr2.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/git-fixture-env-shell.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_GIT_FIXTURE_ENV_SHELL_TEST_SH_PATHS=(
+  "plugins/soleur/test/git-fixture-env-shell.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_HEARTBEAT_RECONCILE_ISSUE_STEP_TEST_SH_PATHS=(
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "plugins/soleur/lib/heartbeat-live-reconcile.ts"
+  "plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_HOSTED_SHIP_SHALLOW_MERGE_BASE_TEST_SH_PATHS=(
+  "plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/kb-search-lockstep.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_KB_SEARCH_LOCKSTEP_TEST_SH_PATHS=(
+  "plugins/soleur/skills/kb-search/SKILL.md"
+  "plugins/soleur/test/kb-search-lockstep.test.sh"
+  "scripts/learning-retrieval-bench.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/machinery-drain-floor.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_MACHINERY_DRAIN_FLOOR_TEST_SH_PATHS=(
+  ".github/workflows/scheduled-machinery-drain.yml"
+  "plugins/soleur/skills/drain-labeled-backlog/SKILL.md"
+  "plugins/soleur/test/machinery-drain-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/main-health-monitor-workflow.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_MAIN_HEALTH_MONITOR_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/main-health-monitor.yml"
+  "apps/web-platform/infra/"
+  "apps/web-platform/infra/inngest.test.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"
+  "knowledge-base/project/learnings/best-practices/"
+  "plugins/soleur/test/main-health-monitor-workflow.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-workflow-errexit-capture.py"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_REGISTRY_HOST_REPLACE_DISPATCH_VERDICT_TEST_SH_PATHS=(
+  ".github/workflows/registry-host-replace-dispatch.yml"
+  "apps/web-platform/infra/cloud-init-registry.yml"
+  "plugins/soleur/test/"
+  "plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/test/resolve-target-decision.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_RESOLVE_TARGET_DECISION_TEST_SH_PATHS=(
+  ".github/workflows/web-platform-release.yml"
+  "plugins/soleur/test/resolve-target-decision.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-workflow-errexit-capture.py"
+)
+
+# plugins/soleur/test/reusable-release-degraded-pointer.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_DEGRADED_POINTER_TEST_SH_PATHS=(
+  ".github/workflows/reusable-release.yml"
+  "plugins/soleur/test/reusable-release-degraded-pointer.test.sh"
+  "scripts/betterstack-query.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/reusable-release-idempotency.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_IDEMPOTENCY_TEST_SH_PATHS=(
+  ".github/workflows/reusable-release.yml"
+  "plugins/soleur/test/reusable-release-idempotency.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/md-to-mrkdwn.mjs"
+  "scripts/md-to-mrkdwn.test.mjs"
+)
+
+# plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(
+  ".github/actions/cf-tunnel-registry-bridge/action.yml"
+  ".github/workflows/reusable-release.yml"
+  "plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh"
+  "scripts/betterstack-query.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/zot-mirror-diagnosis.test.sh"
+)
+
+# plugins/soleur/test/unkept-promise-hook.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_UNKEPT_PROMISE_HOOK_TEST_SH_PATHS=(
+  "plugins/soleur/hooks/unkept-promise-hook.sh"
+  "plugins/soleur/test/unkept-promise-hook.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_BOUNDARY_TEST_SH_PATHS=(
+  "apps/web-platform"
+  "apps/web-platform/scripts/constraint-gates.sh"
+  "plugins/soleur/skills/"
+  "plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_EMIT_FIX_CONSTRAINTS_TEST_SH_PATHS=(
+  "apps/web-platform"
+  "apps/web-platform/scripts/constraint-gates.sh"
+  "plugins/soleur/skills/"
+  "plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
+  "plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/constraint-scaffold/test/generator.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_GENERATOR_TEST_SH_PATHS=(
+  "apps/web-platform"
+  "plugins/soleur/skills/"
+  "plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
+  "plugins/soleur/skills/constraint-scaffold/test/generator.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/constraint-scaffold/test/parity.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
+  ".github/workflows/constraint-gates.yml"
+  ".github/workflows/fix-constraints-stage-a.yml"
+  ".github/workflows/fix-constraints-stage-b.yml"
+  "apps/web-platform"
+  "plugins/soleur/skills/"
+  "plugins/soleur/skills/constraint-scaffold/references"
+  "plugins/soleur/skills/constraint-scaffold/test/parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_CREATE_FROM_ORIGIN_MAIN_TEST_SH_PATHS=(
+  "knowledge-base/project/plans/2026-05-14-fix-worktree-create-from-origin-main-plan.md"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_LEASE_PROTECTS_ACTIVE_TEST_SH_PATHS=(
+  ".claude/hooks/lib/"
+  "knowledge-base/project/learnings/2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md"
+  "knowledge-base/project/plans/2026-05-12-feat-bg-readiness-concurrency-hardening-plan.md"
+  "plugins/soleur/."
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/skills/."
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-diagnosis-claims.test.sh"
+  "scripts/lint-workflow-step-env-refs.test.sh"
+)
+
+# plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_NO_REPO_FAIL_LOUD_TEST_SH_PATHS=(
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST_SH_PATHS=(
+  "knowledge-base/project/plans/2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_STALE_LOCK_SWEEP_TEST_SH_PATHS=(
+  "knowledge-base/project/plans/2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_SH_PATHS=(
+  "plugins/soleur/skills/linear-fetch/scripts/assert-no-linear-telemetry.sh"
+  "plugins/soleur/skills/linear-fetch/scripts/redact-linear-urls.sh"
+  "plugins/soleur/skills/linear-fetch/scripts/render-caller-template.sh"
+  "plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# .claude/hooks/grep-q-pipe-guard.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  ".claude/hooks/grep-q-pipe-guard.test.sh"
+  ".claude/hooks/lib/"
+  "plugins/."
+  "plugins/soleur/skills/compound/test/phase-16.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-sentry-full-root-apply.sh"
+)
+
+# .claude/hooks/stub-argv-fidelity.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_CLAUDE_HOOKS_STUB_ARGV_FIDELITY_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  ".claude/hooks/lib/test-incident-sandbox.sh"
+  ".claude/hooks/stub-argv-fidelity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lib/rule-line-regex-parity.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_SCRIPTS_LIB_RULE_LINE_REGEX_PARITY_TEST_SH_PATHS=(
+  "scripts/lib/"
+  "scripts/lib/rule-line-regex-parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
 )

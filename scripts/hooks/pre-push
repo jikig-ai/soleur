@@ -8,8 +8,9 @@
 #   1. Diffs the current branch against origin/HEAD to find changed files
 #   2. Delegates to `test-all.sh --affected` (#8322), which runs the suites
 #      the diff can move — classified through the maintained edge index —
-#      plus every always-on repo-global ratchet. Minutes-scale, not the
-#      ~45-minute serial battery.
+#      plus every always-on repo-global ratchet. Roughly half the ~45-minute
+#      serial battery on the measured baseline (the always-on ratchets alone
+#      account for ~22.5 minutes of it).
 #   3. Blocks the push if the gate exits non-zero
 #
 # Why the delegation: this hook previously mapped changed files to test files

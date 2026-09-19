@@ -15,8 +15,8 @@ created: 2026-09-18
 The local test gate (`bash scripts/test-all.sh`) runs every registered suite — ~46 min serial —
 on every `work`/`review`/`ship` session. Measured on the PR #8270 review session (2026-09-18):
 24 findings (8 P1) all came from affected suites + repo-global ratchets + the review panel; the
-full battery contributed **zero** and refused three times over ~3 h on sibling contention
-(`rc=4 CAPACITY_CONTENDED`). CI already shards the full battery as the required `test` context
+full battery contributed **zero** and was refused twice (`rc=4 CAPACITY_CONTENDED`) plus one
+watcher-cap expiry over ~3 h on sibling contention. CI already shards the full battery as the required `test` context
 on every merge — the local full run mostly buys contention, not coverage.
 
 ## Goals

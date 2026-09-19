@@ -21,7 +21,7 @@
 # So do NOT "run it alongside this gate", which is what this comment used to say. That advice
 # predates the registration and is now actively harmful: both entry points default
 # TMPDIR=/var/tmp, so a concurrent second run reproduces the sibling-contention shape and can
-# self-inflict a false RED — while paying the ~4-5 minute cost twice. Read test-all.sh's
+# self-inflict a false RED — while paying the ~25-minute affected-gate cost twice. Read test-all.sh's
 # epilogue, which states whether the runner actually ran, and invoke it separately only when
 # that line says it did not (#7014 is why the coverage status is stated here at all).
 #
@@ -104,8 +104,8 @@ echo "grok-pre-push-gate: starting local CI parity (repo: $REPO_ROOT)"
 # Answers "can this box absorb the gate I am about to start?" in ~3 s
 # (measured p50 on a 16-core box with ~640 pids; it walks /proc once). Phase 2
 # below runs `test-all.sh --affected` — the diff-selected set plus the
-# always-on ratchets, minutes-scale rather than the ~45-min serial battery
-# (#8322). The probe still earns its place: an affected run can DEGRADE to the
+# always-on ratchets, roughly half the ~45-min serial battery on the measured
+# baseline (#8322). The probe still earns its place: an affected run can DEGRADE to the
 # full battery (undecidable diff, runner/index touched, FORCE_ALL), and on a
 # contended box that run's REDs may be interleaving rather than regressions.
 #
@@ -166,8 +166,9 @@ fi
 
 # --- Phase 2: affected test gate (#8322) ---
 # `--affected`: the suites this diff can move, plus every always-on repo-global
-# ratchet — minutes-scale, and exempt from the full-gate refusals by
-# construction, so the SOLEUR_ALLOW_FULL_GATE=1 hatch this step previously
+# ratchet — roughly half the ~45-min battery, and exempt from the full-gate
+# refusals unless the selection DEGRADES to full — so the
+# SOLEUR_ALLOW_FULL_GATE=1 hatch this step previously
 # carried is gone rather than merely unneeded. The full battery remains the
 # CI `test` required check's job (and `test-all.sh --full` locally). An
 # undecidable diff degrades this step to the full battery on its own — the
