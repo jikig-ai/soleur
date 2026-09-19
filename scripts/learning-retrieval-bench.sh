@@ -357,7 +357,7 @@ anthropic_paraphrase() {
     rc=$(printf '%s' "$resp" | awk -F: '/^__HTTP_STATUS__:/{print $2}' | tr -d ' ')
     body=$(printf '%s' "$resp" | sed '/^__HTTP_STATUS__:/d')
     if [[ "$rc" =~ ^2[0-9][0-9]$ ]]; then
-      text=$(printf '%s' "$body" | jq -r 'first(.content[] | select(.type == "text") | .text) // empty' 2>/dev/null || echo "")
+      text=$(printf '%s' "$body" | jq -r 'first(.content[]? | select(.type == "text") | .text | strings) // empty' 2>/dev/null || echo "")
       stop_reason=$(printf '%s' "$body" | jq -r '.stop_reason // empty' 2>/dev/null || echo "")
       if [[ -n "$text" ]]; then
         if [[ "$stop_reason" == "max_tokens" ]]; then

@@ -1040,6 +1040,57 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     expect(result).toEqual({ text: "", stopReason: "end_turn" });
   });
 
+  // Set cardinality: with one text block per fixture, `first` / `last` / join-all are
+  // indistinguishable. Measured — a reversed find and a filter().join() both survived
+  // the suite until this case existed.
+  it("#8392 — returns the FIRST text block when several follow the thinking block", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [
+          { type: "thinking", thinking: "" },
+          { type: "text", text: "FIRST" },
+          { type: "text", text: "SECOND" },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result.text).toBe("FIRST");
+  });
+
+  // Selection must be an ALLOWLIST of `text`, not a denylist of `thinking`. The API
+  // also emits tool_use / server_tool_use / redacted_thinking / web_search_tool_result,
+  // and a `!== "thinking"` reader returns undefined on all of them — reopening the
+  // very silent-empty class #8392 exists for. Measured: that inversion survived until
+  // this case existed.
+  it("#8392 — skips a non-thinking, non-text block and still finds the text", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: '{"clusters":[]}' },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result.text).toBe('{"clusters":[]}');
+  });
+
   it("throws `Anthropic API <status>` on a non-ok response (caller owns the fallback)", async () => {
     fetchSpy.mockResolvedValue(new Response("upstream error", { status: 503 }));
 

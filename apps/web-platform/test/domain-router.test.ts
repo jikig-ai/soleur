@@ -148,8 +148,28 @@ describe("routeMessage classify (auto) path", () => {
     fetchSpy.mockResolvedValue(
       anthropicResponse({
         content: [
-          { type: "thinking", thinking: "" },
+          // The decoy `text` is the discriminator: without it, a reader that joins
+          // every block's text survives here while the same mutation is killed in
+          // the helper copy. Measured.
+          { type: "thinking", thinking: "", text: "must-not-be-read" },
           { type: "text", text: '{"leaders":["cmo"]}' },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await routeMessage("What is our marketing strategy?", "fake-api-key");
+
+    expect(result).toEqual({ leaders: ["cmo"], source: "auto" });
+  });
+
+  test("#8392 — takes the FIRST text block and skips a non-thinking, non-text block", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: '{"leaders":["cmo"]}' },
+          { type: "text", text: '{"leaders":["cto"]}' },
         ],
         stop_reason: "end_turn",
       }),

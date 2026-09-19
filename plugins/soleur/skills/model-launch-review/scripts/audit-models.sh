@@ -194,7 +194,14 @@ collect_content_position_readers() {
   if [[ -z "${out//[[:space:]]/}" ]]; then
     echo "    none — no fixed-position readers."
   else
-    printf '%s\n' "$out" | sed "s|^$ROOT/|    HIT: |"
+    # NOT `sed "s|^$ROOT/|…|"`: $ROOT is a filesystem path that may legally contain
+    # `|` or `[`. Measured — a `|` makes sed exit "unknown option to 's'", the
+    # pipeline dies under pipefail and the census prints NEITHER a hit nor `none`
+    # (reads as empty); a `[` silently fails to strip and emits a bare absolute path
+    # with no HIT marker. Quoted-expansion strip, the technique rel() already uses.
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && printf '    HIT: %s\n' "${line#"$ROOT"/}"
+    done <<< "$out"
   fi
 }
 
@@ -430,8 +437,11 @@ echo "  - dormant: gh issue list --state open -L 200 --search 'deferred model OR
 echo "  - thinking-API shape: the REQUEST side sets no thinking params and needs no action."
 echo "    The RESPONSE side is NOT inert: a thinking-by-default model puts a thinking block"
 echo "    FIRST, so any reader indexing a fixed content position silently returns empty"
-echo "    and the model's answer is billed and discarded (#8392). Census of fixed-position"
-echo "    readers under '$ROOT' (must be empty):"
+echo "    and the model's answer is billed and discarded (#8392)."
+echo "    The BLOCKING guard is scripts/lint-anthropic-content-position.py, twin-"
+echo "    registered in scripts/test-all.sh so it gates every PR — this census does"
+echo "    NOT gate anything and is reachable only from this hand-run audit mode"
+echo "    (--detect and --fix both return before it). Advisory echo of the same scan:"
 collect_content_position_readers
 echo
 echo "== end audit =="

@@ -34,7 +34,10 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+# jq is REQUIRED, not optional: T7 and T8 are the only pins on the shell readers
+# (#8392), so a jq-less runner skipping at exit 0 takes the whole parity guard
+# with it and reports green. Refuse instead.
+command -v jq >/dev/null 2>&1 || { echo "FATAL: jq missing — T7/T8 cannot run" >&2; exit 2; }
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -77,6 +80,30 @@ assert_not_contains() {
   fi
   TOTAL=$((TOTAL + 1))
 }
+
+# Instrument self-test (ADR-193): drive EVERY verdict-owning helper through both
+# branches once and require both counters to move, before any real case. Review
+# measured all three conditions -> `if true` at 28/28 green, exit 0, and separately
+# measured every case commented out reporting PASS=0 FAIL=0 TOTAL=0, exit 0.
+# Reports with printf + exit, never through the helpers it guards.
+assert_eq           "self-test eq pass"  "1" "1"        >/dev/null
+assert_eq           "self-test eq fail"  "1" "2"        >/dev/null
+assert_contains     "self-test in pass"  "a" "xax"      >/dev/null
+assert_contains     "self-test in fail"  "a" "xxx"      >/dev/null
+assert_not_contains "self-test out pass" "a" "xxx"      >/dev/null
+assert_not_contains "self-test out fail" "a" "xax"      >/dev/null
+if [[ "$PASS" -ne 3 || "$FAIL" -ne 3 || "$TOTAL" -ne 6 ]]; then
+  printf 'FATAL: verdict helpers are not dispatching (PASS=%s FAIL=%s TOTAL=%s)\n' \
+    "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 2
+fi
+PASS=0; FAIL=0; TOTAL=0
+
+# Dispatch floor. The verdict below is `[[ "$FAIL" -eq 0 ]] || exit 1`, which cannot
+# distinguish "every case passed" from "no case ran" — measured: commenting out the
+# call list reported PASS=0 FAIL=0 TOTAL=0 and exit 0. Derived from a green run, and
+# a FLOOR (never -eq) so adding a case is not a spurious failure.
+MIN_ASSERTIONS=28
 
 make_temp_root() {
   # Throwaway repo skeleton: matches the layout the SUT expects relative to
@@ -131,7 +158,10 @@ make_mock_curl() {
   # (T7 uses a thinking-first body) without a near-copy of this helper.
   local path="$1" capture="$2" body="${3:-}"
   # The default must NOT be inlined into ${3:-…}: this JSON contains `}`, which
-  # would terminate the parameter expansion early and emit a truncated body.
+  # terminates the parameter expansion at the FIRST one. Measured — the body comes
+  # back MANGLED, not truncated: `{"content":[{"type":"text","text":"[]"]}}` (a brace
+  # consumed, the remainder appended literally), and the escaped form additionally
+  # loses its quotes to quote removal. A separate statement avoids the whole class.
   if [[ -z "$body" ]]; then
     body='{"content":[{"type":"text","text":"[]"}]}'
   fi
@@ -361,9 +391,12 @@ EOF
 }
 
 # --- T7: a thinking-first Anthropic response still parses (#8392) -------------
-# EXECUTION_MODEL is claude-sonnet-5 (pinned at compound-promote.sh:218) and
-# Sonnet 5 runs adaptive thinking when `thinking` is omitted, so content[0] is a
-# thinking block and the cluster JSON follows it. A fixed-position reader returns
+# EXECUTION_MODEL is claude-sonnet-5 (pinned in compound-promote.sh next to the
+# jq reader). MEASURED, not assumed: a live prd fire on 2026-09-19 returned a
+# thinking block at content[0] with the cluster JSON behind it, so the old reader
+# saw "" while the answer was billed. (The bundled claude-api reference documents
+# the thinking DISPLAY default for Sonnet 5, not the on-by-default claim — so the
+# run is the evidence here, not the model card.) A fixed-position reader returns
 # empty and the SUT hard-exits 1. The payload is deliberately NON-EMPTY: the
 # default "[]" body makes a successful parse indistinguishable from the
 # legitimate no-clusters outcome.
@@ -408,8 +441,24 @@ EOF
 t8_shell_jq_readers_are_identical_and_type_selecting() {
   local bench="$REPO_ROOT/scripts/learning-retrieval-bench.sh"
   local prog_promote prog_bench
-  prog_promote=$(grep -o "jq -r '[^']*'" "$SUT" | grep -F '.content' | head -1)
-  prog_bench=$(grep -o "jq -r '[^']*'" "$bench" | grep -F '.content' | head -1)
+
+  # Extract the jq program from the ASSIGNMENT that feeds the reader, with comment
+  # lines stripped first. Two measured defeats of the previous `head -1` form:
+  #   * a comment carrying the canonical spelling above a REVERTED live line made
+  #     both assertions pass over the #8392 bug restored in production;
+  #   * a second `.content` jq program earlier in the file was compared instead.
+  # `|| true` is load-bearing: `grep`'s no-match exit 1 propagates through pipefail,
+  # so the bare assignment aborted the suite BEFORE the guard below could report —
+  # measured as exit 1 with no T8 line and no summary at all.
+  extract_reader_jq() { # $1 = file, $2 = assignment anchor
+    grep -v '^[[:space:]]*#' "$1" \
+      | grep -E "^[[:space:]]*$2=" \
+      | grep -o "jq -r '[^']*'" \
+      | grep -F '.content' \
+      | head -1 || true
+  }
+  prog_promote=$(extract_reader_jq "$SUT" 'CLUSTERS_TEXT')
+  prog_bench=$(extract_reader_jq "$bench" 'text')
 
   # Non-empty guard: an extraction that found NOTHING must abort loudly, not
   # report a clean match of two empty strings.
@@ -441,4 +490,9 @@ t8_shell_jq_readers_are_identical_and_type_selecting
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FATAL: assertion floor breached (TOTAL=%s < %s) — cases did not dispatch\n' \
+    "$TOTAL" "$MIN_ASSERTIONS" >&2
+  exit 2
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -37,7 +37,9 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 ## Overview
 
-`postAnthropicMessage` in `apps/web-platform/server/inngest/functions/_cron-shared.ts` returns `data.content?.[0]?.text ?? ""`. Since `EXECUTION_MODEL` became `claude-sonnet-5` (2026-07-01, #5849), the first content block is an adaptive-thinking block and the structured-output text sits at index 1, so every `cron-compound-promote` run reads an empty string, mirrors `Empty Anthropic response` to Sentry, and reports `no-qualifying-clusters` after billing the full output. The fix takes the first block whose `type === "text"`.
+`postAnthropicMessage` in `apps/web-platform/server/inngest/functions/_cron-shared.ts` returns `data.content?.[0]?.text ?? ""`. Since `EXECUTION_MODEL` became `claude-sonnet-5` (2026-07-01, #5849), the first content block is an adaptive-thinking block and the structured-output text sits at index 1, so every `cron-compound-promote` run has read an empty string since the cron was
+enabled on 2026-07-06 (#6100 — the model swap on 07-01 is when the defect was born,
+07-06 is when it started running), mirrors `Empty Anthropic response` to Sentry, and reports `no-qualifying-clusters` after billing the full output. The fix takes the first block whose `type === "text"`.
 
 Evidence (verified by the parent session, cited not re-derived): manual fire 2026-09-19T20:06:47Z emitted `SOLEUR_CLAUDE_COST output_tokens=12306` followed by `SOLEUR_COMPOUND_PROMOTE_OUTCOME status=no-qualifying-clusters clusters_proposed=0`; Better Stack 30d shows the same `Empty Anthropic response` silent-fallback on the 2026-09-13 00:01Z cron run.
 
@@ -54,7 +56,13 @@ grep -rn 'content\[0\]\|content?\.\[0\]' --include=*.ts --include=*.sh --include
   apps plugins scripts .github | grep -viE 'test|\.md:'
 ```
 
-returns exactly **four** sites — no more, no fewer:
+returns exactly **four** sites. Scoped honestly at review: that is a claim about
+this GREP (two spellings, four extensions), not about the class. A fifth reader,
+`apps/web-platform/server/email-triage/summarize.ts`, already selected by type before
+this PR; `apps/web-platform/server/agent-runner.ts` reads `content[content.length - 1]`
+through an aliased binding, which is invisible to any such grep and is deliberate
+last-block streaming behaviour, not this defect. The durable guard is
+`scripts/lint-anthropic-content-position.py`, twin-registered in `scripts/test-all.sh`:
 
 | Site | Model | State |
 |---|---|---|
@@ -285,7 +293,11 @@ No cross-domain implications — infrastructure/tooling change. No UI-surface fi
     apps plugins scripts .github | grep -viE 'test|\.md:'
   ```
 
-  Must return **0** on the branch. This quantifies over the tree rather than the file list, so a reader the plan never inventoried is still caught — which is exactly how `scripts/compound-promote.sh` was found. It needs no comment-stripping because it matches the expression, and the prescribed comments describe the shape in prose (`the first block is a thinking block`) rather than reproducing the token.
+  Must return **0** on the branch. **Superseded at review** by
+  `scripts/lint-anthropic-content-position.py`, which strips comment lines before
+  matching — this raw grep does not, so the moment a fix must both ASSERT a literal
+  and DOCUMENT it, the prose satisfies the assertion (`cq-assert-anchor-not-bare-token`).
+  Measured: it fired once on this branch, on the comment explaining the fix. This quantifies over the tree rather than the file list, so a reader the plan never inventoried is still caught — which is exactly how `scripts/compound-promote.sh` was found. It needs no comment-stripping because it matches the expression, and the prescribed comments describe the shape in prose (`the first block is a thinking block`) rather than reproducing the token.
 
   **Self-reference is avoided by escaping, and that is load-bearing.** Phase 4 adds this same census *into* `audit-models.sh`, inside `plugins/` — which AC2 searches. It does not self-match because the script carries the pattern as the regex literal `content\[0\]` (with backslashes), while AC2's pattern matches the plain text `content[0]`. Verified at plan time against a scratch tree containing only the new script: the census returns no rows. A future edit that "simplifies" the audit script's grep to an unescaped pattern would silently red AC2 — keep the escapes.
 - [ ] AC3 (anchor, not whole-expression). Each of the four readers selects by type: `grep -c 'b.type === "text"' apps/web-platform/server/inngest/functions/_cron-shared.ts apps/web-platform/server/domain-router.ts` → `1` each, and `grep -c 'select(.type == "text")' scripts/compound-promote.sh scripts/learning-retrieval-bench.sh` → `1` each. Anchored on the discriminating sub-expression rather than the full call spelling so a legal reformat does not red it (`cq-assert-anchor-not-bare-token`). This is a cheap spelling pin, **not** the gate — the behavioral gates are AC1, AC6 and AC2.
@@ -304,11 +316,28 @@ No cross-domain implications — infrastructure/tooling change. No UI-surface fi
 
 ### Post-merge (pipeline-executed, `soleur:postmerge`)
 
-- [ ] AC10. Gated on the DEPLOY arm and `/health` `build_sha == merge sha`, one fire of `cron/compound-promote.manual-trigger` on `prd` produces a run that emits **no** `reportSilentFallback` event with message `Anthropic returned empty content` while its `SOLEUR_CLAUDE_COST` row shows `output_tokens > 0`. That co-occurrence is the pre-fix signature and its absence is the property under test.
+- [ ] AC10 (REWRITTEN at review — the original was unfalsifiable three ways, all
+  measured). One fire of `cron/compound-promote.manual-trigger` on `prd`, gated on the
+  DEPLOY arm and `/health` `build_sha == merge sha`, produces a run whose
+  `SOLEUR_CLAUDE_COST` row carries `output_tokens > 0` AND whose
+  `SOLEUR_COMPOUND_PROMOTE_OUTCOME` row for the SAME `run_id` is not accompanied by a
+  `Anthropic returned empty content` pino row. Both halves are read from Better Stack
+  with `scripts/betterstack-query.sh`; the join key is `run_id`, which the cost marker
+  now carries (it previously carried only the cron NAME, so the join was wall-clock only).
 
-  **Falsifiable by construction.** `clusters_proposed > 0` is *recorded* but is deliberately **not** the gate: the model may legitimately find nothing, so a pass condition of "clusters > 0 OR a named status" would admit every outcome and could never fail. Likewise `anthropic-truncated` with `stop_reason: max_tokens` is a named, observable cause and does not falsify this AC — it is a different failure than the one being fixed.
+  **Why it was rewritten.** (a) The cost marker emitted `id: args.markerSource` — a
+  constant — so the prescribed join had no key; `markerRunId` was added. (b) The
+  original asserted the ABSENCE of `Anthropic returned empty content` *in Sentry*;
+  `reportSilentFallback` passes that string as `safeMessage` to pino only, while Sentry
+  receives `captureException(err)` whose message is `Empty Anthropic response` — so the
+  assertion matched nothing, ever, and could not go red. (c) It prescribed
+  `scripts/sentry-issue.sh --search`, which does not exist (the parser ends
+  `-*) unknown flag; exit 64`). Re-basing on Better Stack removes all three.
 
-  **Scoped by run, not by clock** (`cq-ac-must-not-depend-on-concurrent-sessions`): take `run_id` from the outcome marker — it must appear in the `@tsv` projection below, which an earlier draft omitted, leaving the join described but unreachable — and read the Sentry side filtered on the `inngest.run_id` tag that `server/inngest/middleware/sentry-correlation.ts:73` sets for every Inngest-function event (`scope.setTag("inngest.run_id", runId)`). Concretely: `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --search 'inngest.run_id:<id>'`, asserting no event with message `Anthropic returned empty content`. A bare time-window assertion would be flippable by an unrelated run landing in the same minutes.
+  Still deliberately NOT the gate: `clusters_proposed > 0`. The model may legitimately
+  find nothing, so a pass condition admitting "clusters OR a named status" would admit
+  every outcome. `anthropic-truncated` with `stop_reason: max_tokens` is a named,
+  observable, different failure and does not falsify this AC.
 
 **Not an acceptance criterion:** posting the captured row to #8281. It is a courtesy to another issue's gate — recorded in Pipeline notes as a Phase 7 step, per the operator's request — and this PR's done-ness does not depend on it. #8281 continues to be graded by `scripts/followthroughs/compound-promote-outcome-8281.sh`, which requires `trigger == "cron"` and is echo-safe (it field-isolates on `.fn`, so a marker name quoted in an issue body cannot satisfy it).
 
