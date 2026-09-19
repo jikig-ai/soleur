@@ -74,7 +74,7 @@ Headless (one-shot, cloud, no TTY): take option 1; if the temporary-probe arm ap
 
 1. **Write a failing test** at whatever seam reaches the bug: unit, integration, e2e.
 2. **Script a curl / HTTP call** against a running dev server.
-3. **Script a CLI invocation** with a fixture input, diffing stdout against a known-good snapshot. For a hook or script defect this is the Phase 7 mechanism bullet's form — `jq -nc '{tool_name, tool_input}' | bash .claude/hooks/<hook>.sh` — pointed at scratch (`CLAUDE_PROJECT_DIR`, cwd) so the real hook's ledgers and caches are not written in the tree.
+3. **Script a CLI invocation** with a fixture input, diffing stdout against a known-good snapshot. For a hook or script defect this is the Phase 7 mechanism bullet's form — `jq -nc '{tool_name, tool_input}' | bash .claude/hooks/<hook>.sh` — with `INCIDENTS_REPO_ROOT=<scratch dir>` (the hooks' incident ledger resolves from the hook's OWN location, not from `CLAUDE_PROJECT_DIR` or cwd) so a synthetic deny/bypass never lands in the live `.claude/.rule-incidents.jsonl` and the rule-metrics aggregate.
 4. **Headless browser script** (Playwright / Puppeteer) that drives the UI and asserts on DOM/console/network. Phase 3 builds this rung.
 5. **Replay a captured trace.** Save a real network request / payload / event log to disk; replay it through the code path in isolation. The Sentry event payload or Better Stack rows you pulled in Phase 1 are a captured trace.
 6. **Throwaway harness.** Spin up a minimal subset of the system (one service, mocked deps) that exercises the bug code path with a single function call.

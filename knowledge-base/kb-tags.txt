@@ -245,6 +245,7 @@ anomaly-detection
 anon
 anon-key
 ansi
+ansi-anchors
 anthropic
 anthropic-api
 anthropic-credits
@@ -464,6 +465,7 @@ binary-serving
 binary-verification
 bind-mount
 binding-resolution
+bite-proof
 blanket-replace
 blast-radius
 blind-surface
@@ -743,6 +745,7 @@ clean-urls
 cleanup
 cleanup-design
 cleanup-merged
+cleanup-window
 cli
 cli-integration
 cli-model-table
@@ -895,6 +898,7 @@ consolidation
 constitution-md
 constitution.md
 constraint-precision
+constraint-scaffold
 consumer-enumeration
 consumer-sweep
 contagious-interview
@@ -1398,6 +1402,7 @@ env-var
 env-var-inert-without-code
 env-vars
 environment
+environment-shape
 environment-variables
 eprivacy
 equivalent-mutants
@@ -2957,6 +2962,7 @@ propagation
 prose-claims
 prose-conventions
 prose-counts
+prose-dry-run
 prose-guard
 prose-guards
 prose-sweep
@@ -3754,6 +3760,7 @@ state-file
 state-machine
 state-management
 state-mv
+stateless-stub
 static-analysis
 static-content-extraction
 static-grep-test
@@ -4047,6 +4054,7 @@ transparency
 transport-confinement
 trap
 trap-cleanup
+trap-ordering
 traversal
 triage
 trigger
