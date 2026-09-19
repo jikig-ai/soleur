@@ -47,6 +47,20 @@ PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
+# ONE owning trap for every tempfile and tempdir this suite allocates (ADR-129,
+# enforced by `scripts/lint-trap-tempfile-ownership.py`). Registered at each
+# call site in the parent shell — never through a `$(_own …)` helper, which
+# runs in a subshell and appends to a copy. COMPOSED with the sandbox cleanup
+# test-helpers.sh installed at source time: a bare `trap … EXIT` here would
+# replace it and leak the incident-telemetry sandbox on every run.
+_TMP_OWNED=()
+_p7_cleanup() {
+  rm -rf "${_TMP_OWNED[@]:-}"
+  declare -F _soleur_sb_cleanup >/dev/null && _soleur_sb_cleanup
+  return 0
+}
+trap '_p7_cleanup' EXIT INT TERM
+
 # ---------------------------------------------------------------------------
 # Extract the Phase 7 bash block. Two anchors:
 #  - structural: the `<!-- phase-7-poll-block:start -->` / `:end` fence
@@ -68,6 +82,7 @@ extract_block() {
 }
 
 BLOCK_FILE="$(mktemp)"
+_TMP_OWNED+=("$BLOCK_FILE" "$BLOCK_FILE.err")
 extract_block "$SKILL" | sed 's/<number>/4387/g' > "$BLOCK_FILE"
 
 if [[ ! -s "$BLOCK_FILE" ]]; then
@@ -98,6 +113,7 @@ pass "Phase 7 block passes bash -n"
 # mirror under the same scenarios as the canonical block (#8339).
 # ---------------------------------------------------------------------------
 MIRROR_FILE="$(mktemp)"
+_TMP_OWNED+=("$MIRROR_FILE" "$MIRROR_FILE.err")
 # The `<number>` substitution is what makes the mirror EXECUTABLE: sourced
 # verbatim, `gh pr view <number>` parses `<number>` as an input redirect and
 # `$s` degrades to `fetch-error:` on tick 1, breaking before the BEHIND arm.
@@ -158,7 +174,9 @@ run_scenario() {
   local block="${5:-$BLOCK_FILE}"
   local logfile
   logfile="$(mktemp)"
+  _TMP_OWNED+=("$logfile")
   MOCK_STATE="$(mktemp -d)"
+  _TMP_OWNED+=("$MOCK_STATE")
   export MOCK_STATE
 
   (
@@ -225,6 +243,7 @@ _gh_unexpected() {
 # options (the vacuity trap this row exists to close).
 # ---------------------------------------------------------------------------
 SCEN0="$(mktemp)"
+_TMP_OWNED+=("$SCEN0")
 cat > "$SCEN0" <<'EOF'
 false | true; echo "harness-pipefail-status=$?"
 gh() {
@@ -245,6 +264,7 @@ rm -f "$SCEN0"
 # Scenario 1 — clean MERGED on tick 3
 # ---------------------------------------------------------------------------
 SCEN1="$(mktemp)"
+_TMP_OWNED+=("$SCEN1")
 cat > "$SCEN1" <<EOF
 ${PRELUDE}
 gh() {
@@ -271,6 +291,7 @@ rm -f "$SCEN1"
 # Scenario 2 — required-check failure on tick 5
 # ---------------------------------------------------------------------------
 SCEN2="$(mktemp)"
+_TMP_OWNED+=("$SCEN2")
 cat > "$SCEN2" <<EOF
 ${PRELUDE}
 gh() {
@@ -302,6 +323,7 @@ rm -f "$SCEN2"
 # the canonical block — was executed (harness row H3).
 # ---------------------------------------------------------------------------
 SCEN3="$(mktemp)"
+_TMP_OWNED+=("$SCEN3")
 cat > "$SCEN3" <<EOF
 ${PRELUDE}
 gh() {
@@ -327,6 +349,7 @@ rm -f "$SCEN3"
 # Scenario 4 — DIRTY (real conflict): merge-tree rc=1 → dirty-exit
 # ---------------------------------------------------------------------------
 SCEN4="$(mktemp)"
+_TMP_OWNED+=("$SCEN4")
 cat > "$SCEN4" <<EOF
 ${PRELUDE}
 git() {
@@ -363,6 +386,7 @@ rm -f "$SCEN4"
 # flip actually happened.
 # ---------------------------------------------------------------------------
 SCEN4B="$(mktemp)"
+_TMP_OWNED+=("$SCEN4B")
 cat > "$SCEN4B" <<EOF
 ${PRELUDE}
 gh() {
@@ -393,6 +417,7 @@ rm -f "$SCEN4B"
 # rather than treating an unregistered required check as a failure.
 # ---------------------------------------------------------------------------
 SCEN5="$(mktemp)"
+_TMP_OWNED+=("$SCEN5")
 cat > "$SCEN5" <<EOF
 ${PRELUDE}
 gh() {
@@ -491,6 +516,7 @@ STOP_FORBID='auto-sync [0-9/]+ pushed|ship\.phase7\.behind_exhausted|Merge poll 
 # DIRTY arm already prints "PR is DIRTY (merge conflict)".
 # ---------------------------------------------------------------------------
 SCEN6="$(mktemp)"
+_TMP_OWNED+=("$SCEN6")
 cat > "$SCEN6" <<EOF
 MOCK_MERGE=conflict
 ${SYNC_MOCKS}
@@ -510,6 +536,7 @@ rm -f "$SCEN6"
 # unconditional `--abort` here is the wrong (and previously swallowed) call.
 # ---------------------------------------------------------------------------
 SCEN6B="$(mktemp)"
+_TMP_OWNED+=("$SCEN6B")
 cat > "$SCEN6B" <<EOF
 MOCK_MERGE=refused
 ${SYNC_MOCKS}
@@ -528,6 +555,7 @@ rm -f "$SCEN6B"
 # operator's staged resolution (measured on real git; scenario 10 sub-row B).
 # ---------------------------------------------------------------------------
 SCEN6C="$(mktemp)"
+_TMP_OWNED+=("$SCEN6C")
 cat > "$SCEN6C" <<EOF
 : > "\$MOCK_STATE/MERGE_HEAD"
 ${SYNC_MOCKS}
@@ -542,6 +570,7 @@ rm -f "$SCEN6C"
 # the same reason as 6 (`git push | tail -2`).
 # ---------------------------------------------------------------------------
 SCEN7="$(mktemp)"
+_TMP_OWNED+=("$SCEN7")
 cat > "$SCEN7" <<EOF
 MOCK_PUSH_RC=1
 ${SYNC_MOCKS}
@@ -560,6 +589,7 @@ rm -f "$SCEN7"
 # merge+push run, and the loop prints "pushed".
 # ---------------------------------------------------------------------------
 SCEN8="$(mktemp)"
+_TMP_OWNED+=("$SCEN8")
 cat > "$SCEN8" <<EOF
 MOCK_FETCH_RC=1
 ${SYNC_MOCKS}
@@ -579,6 +609,7 @@ rm -f "$SCEN8"
 # re-fetch, or renaming the success echo, reddens it.
 # ---------------------------------------------------------------------------
 SCEN9="$(mktemp)"
+_TMP_OWNED+=("$SCEN9")
 cat > "$SCEN9" <<EOF
 ${SYNC_MOCKS}
 EOF
@@ -610,8 +641,10 @@ rm -f "$SCEN9"
 # ---------------------------------------------------------------------------
 # `mktemp -d -t` lands beside $BLOCK_FILE (same TMPDIR), never in the worktree.
 SCEN10_TMP="$(mktemp -d -t ship-phase7-realgit.XXXXXX)"
+_TMP_OWNED+=("$SCEN10_TMP")
 assert_fixture_dir "$SCEN10_TMP"
 SCEN10_LOG="$(mktemp)"
+_TMP_OWNED+=("$SCEN10_LOG")
 (
   set +o pipefail
   git_fixture_env "$SCEN10_TMP" || exit 2
