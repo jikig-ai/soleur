@@ -29,6 +29,7 @@ import {
   declaredTransitions,
   isDeclaredTransition,
   DECLARED_TRANSITIONS,
+  DECLARED_SUB_STEPS,
   workflowFidelityInstructions,
 } from "../lib/workflow-fidelity";
 import { invokeSkill, routingInstructions, pollInstructions } from "../lib/harness";
@@ -667,12 +668,13 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(declaredTransitions("review")).toEqual(["compound", "work"]);
     expect(declaredTransitions("compound")).toEqual(["ship"]);
     expect(declaredTransitions("ship")).toEqual(["postmerge", "work"]);
-    expect(declaredTransitions("postmerge")).toEqual([]);
+    expect(declaredTransitions("postmerge")).toEqual(["work"]);
   });
 
-  test("the three operator-approved back-edges are declared", () => {
+  test("the four operator-approved back-edges are declared", () => {
     expect(isDeclaredTransition("review", "work")).toBe(true);
     expect(isDeclaredTransition("ship", "work")).toBe(true);
+    expect(isDeclaredTransition("postmerge", "work")).toBe(true);
     expect(isDeclaredTransition("work", "plan")).toBe(true);
   });
 
@@ -685,8 +687,12 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(declaredTransitions("plan")).not.toContain("ship");
   });
 
-  test("postmerge -> work is NOT declared (rejected as redundant with ship -> work)", () => {
-    expect(isDeclaredTransition("postmerge", "work")).toBe(false);
+  // Declared 2026-09-19 (#8325): seven sessions took this edge, five of them
+  // re-entering work -> review -> compound -> ship -> postmerge in full; the
+  // recovery path was recorded on the ship node until then.
+  test("postmerge -> work is the post-merge verification recovery edge", () => {
+    expect(isDeclaredTransition("postmerge", "work")).toBe(true);
+    expect(declaredTransitions("postmerge")).toEqual(["work"]);
   });
 
   // The semantic separation, pinned from the other side: a back-edge must never
@@ -695,6 +701,7 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(mandatorySuccessors("work")).not.toContain("plan");
     expect(mandatorySuccessors("review")).not.toContain("work");
     expect(mandatorySuccessors("ship")).not.toContain("work");
+    expect(mandatorySuccessors("postmerge")).not.toContain("work");
   });
 
   // THE WIRE BETWEEN THE TWO FUNCTIONS. The toEqual pins on mandatorySuccessors
@@ -733,6 +740,10 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(pipelineInvocationSuffix("work", "grok")).not.toContain("/plan");
     expect(pipelineInvocationSuffix("ship", "grok")).toContain("/postmerge");
     expect(pipelineInvocationSuffix("ship", "grok")).not.toContain("/work");
+    // postmerge's successors collection is empty today and tomorrow, so the
+    // suffix is the load-bearing pin for the postmerge -> work back-edge.
+    expect(pipelineInvocationSuffix("postmerge", "grok")).toContain("Phase 7");
+    expect(pipelineInvocationSuffix("postmerge", "grok")).not.toContain("/work");
   });
 
   // Typo guard: every destination must itself be a declared node, so a mistyped
@@ -797,7 +808,9 @@ describe("declared-transitions derived view parity", () => {
     delete view._comment;
     // Round-trip the const through JSON so readonly/tuple types normalise to
     // plain arrays for a structural compare.
-    const canonical = JSON.parse(JSON.stringify({ transitions: DECLARED_TRANSITIONS }));
+    const canonical = JSON.parse(
+      JSON.stringify({ transitions: DECLARED_TRANSITIONS, sub_steps: DECLARED_SUB_STEPS }),
+    );
     expect(view).toEqual(canonical);
   });
 
@@ -813,6 +826,23 @@ describe("declared-transitions derived view parity", () => {
         expect(
           isDeclaredTransition(from, to),
           `view declares ${from} -> ${to}, which the canonical const does not`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // Same direction check for the sub-step map (#8325): a view collapsing a
+  // record the const does not name would silently delete pairs from the
+  // classifier's reading.
+  test("the view names no sub-step absent from the const", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as {
+      sub_steps: Record<string, string[]>;
+    };
+    for (const [node, subs] of Object.entries(view.sub_steps)) {
+      for (const sub of subs) {
+        expect(
+          (DECLARED_SUB_STEPS[node] ?? []).includes(sub),
+          `view names sub-step ${node} : ${sub}, which the canonical const does not`,
         ).toBe(true);
       }
     }
@@ -837,4 +867,44 @@ describe("declared-transitions derived view parity", () => {
     expect(Object.keys(budget.ceilings).sort()).toEqual([...nodes].sort());
   });
 
+});
+
+// ---------------------------------------------------------------------------
+// Sub-step map invariants (#8325). DECLARED_SUB_STEPS is consumed by the
+// classifier AFTER its node filter and BEFORE pairing, so an entry is only
+// meaningful when both sides are lifecycle nodes and the value is not already a
+// declared successor of the key (the collapse would delete a declared pair).
+// Each test opens with a non-empty check so an emptied const cannot pass as a
+// zero-iteration loop.
+// ---------------------------------------------------------------------------
+describe("DECLARED_SUB_STEPS invariants", () => {
+  const nodes = Object.keys(DECLARED_TRANSITIONS);
+
+  test("every sub_steps key is a lifecycle node", () => {
+    expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0);
+    for (const node of Object.keys(DECLARED_SUB_STEPS)) {
+      expect(nodes.includes(node), `sub_steps key ${node} is not a lifecycle node`).toBe(true);
+    }
+  });
+
+  test("every sub_steps value is a lifecycle node — a non-node is removed by the classifier before the collapse, so the entry would be dead", () => {
+    expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0);
+    for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
+      for (const sub of subs) {
+        expect(nodes.includes(sub), `sub_steps ${node} : ${sub} is not a lifecycle node`).toBe(true);
+      }
+    }
+  });
+
+  test("a sub_steps value is not a declared successor of its key — the collapse would delete a declared pair", () => {
+    expect(Object.keys(DECLARED_SUB_STEPS).length).toBeGreaterThan(0);
+    for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
+      for (const sub of subs) {
+        expect(
+          isDeclaredTransition(node, sub),
+          `sub_steps ${node} : ${sub} is also a declared edge ${node} -> ${sub}`,
+        ).toBe(false);
+      }
+    }
+  });
 });
