@@ -127,11 +127,27 @@ describe("normalizeAgentName", () => {
 });
 
 describe("formatSkillInvocation", () => {
-  test("claude formats soleur: skill with args", () => {
+  test("claude formats the operator-typed slash command with args", () => {
     process.env.CLAUDECODE = "1";
-    expect(formatSkillInvocation("one-shot", "fix auth")).toBe(
-      "soleur:one-shot (args: fix auth)",
-    );
+    expect(formatSkillInvocation("one-shot", "fix auth")).toBe("/soleur:one-shot fix auth");
+    expect(formatSkillInvocation("plan")).toBe("/soleur:plan");
+  });
+
+  // Every arm must return something an operator can TYPE — that is the whole contract the
+  // `operator-typed-render` blocks cite. A parenthetical display form satisfies no harness.
+  test("no arm returns a non-typeable display form", () => {
+    for (const [env, prefix] of [
+      ["CLAUDECODE", "/soleur:"],
+      ["GROK_HOME", "/"],
+      ["CODEX_THREAD_ID", "$soleur:"],
+      ["DEVIN", "/soleur:"],
+    ] as const) {
+      for (const k of ["CLAUDECODE", "GROK_HOME", "CODEX_THREAD_ID", "DEVIN"]) delete process.env[k];
+      process.env[env] = "1";
+      const out = formatSkillInvocation("plan", "#123");
+      expect(out.startsWith(prefix)).toBe(true);
+      expect(out).not.toContain("(args:");
+    }
   });
 
   test("grok formats slash command", () => {

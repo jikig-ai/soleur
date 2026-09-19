@@ -17,7 +17,7 @@ Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
 > No brand guide found. Run the brand architect agent first to establish brand identity:
-> `Use the brand-architect agent to define our brand.`
+> `Use the soleur:marketing:brand-architect agent to define our brand.`
 
 Stop execution.
 

@@ -135,8 +135,13 @@ export function formatSkillInvocation(skill: string, args?: string): string {
     return command;
   }
 
-  const skillId = `soleur:${name}`;
-  return trimmedArgs ? `${skillId} (args: ${trimmedArgs})` : skillId;
+  // Claude's operator-typed form is the slash command, exactly as the codex/grok/devin arms
+  // above give theirs. This used to return `soleur:<name> (args: <x>)` — a DISPLAY string no
+  // operator can type — while ADR-226 §4 and the `operator-typed-render` blocks in ten skills
+  // cite this function as the thing that produces a typeable form. The blocks were right about
+  // the contract and the claude arm was the outlier (#8299).
+  const command = `/soleur:${name}`;
+  return trimmedArgs ? `${command} ${trimmedArgs}` : command;
 }
 
 /**
@@ -147,7 +152,7 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
   const name = normalizeSkillName(skill);
   const trimmedArgs = args?.trim();
 
-  const pipelineSuffix = pipelineInvocationSuffix(name);
+  const pipelineSuffix = pipelineInvocationSuffix(name, harness);
 
   if (harness === "codex") {
     return {
@@ -436,7 +441,7 @@ export function routingInstructions(harness: Harness): string {
     case "grok":
       return [
         "**Harness: Grok Build**",
-        "- Skills: Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion. Slash `/<skill>` names the skill; it is not a nested tool_use.",
+        "- Skills: any `soleur:<name>` in any Soleur doc names a skill — Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion. Slash `/<skill>` names the skill; it is not a nested tool_use.",
         "- Agents: **spawn_subagent** (not Task). Use `spawnAgent()` so registry colon ids map to hyphen filename stems (`soleur:product:cpo` → `soleur-product-cpo`).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
         "- **Never improvise** — Read the registered SKILL.md or spawn the subagent; do not invent a nested Skill tool.",

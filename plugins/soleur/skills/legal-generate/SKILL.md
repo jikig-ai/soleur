@@ -1,6 +1,6 @@
 ---
 name: legal-generate
-description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the legal-document-generator agent, and writes markdown output."
+description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the soleur:legal:legal-document-generator agent, and writes markdown output."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -43,7 +43,7 @@ Use the **AskUserQuestion tool** to gather company context. Ask for:
 4. **Jurisdiction** -- which legal frameworks apply (US, EU/GDPR, UK, or multiple)
 5. **Contact information** -- email and/or physical address for legal notices
 
-If the user provides arguments after the skill name (e.g., `/legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
+If the user provides arguments after the skill name (e.g., `soleur:legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
 
 ## Phase 1: Document Selection
 
@@ -64,10 +64,10 @@ NOTICE_FILE="${CLAUDE_PLUGIN_ROOT}/skills/legal-generate/NOTICE" \
 
 ## Phase 2: Generation
 
-Invoke the `legal-document-generator` agent via the **Task tool** with the company context and selected document type. The agent resolves the substrate arm (template-fill vs from-scratch) from its own routing table — do not pre-decide it here.
+Invoke the `soleur:legal:legal-document-generator` agent via the **Task tool** with the company context and selected document type. The agent resolves the substrate arm (template-fill vs from-scratch) from its own routing table — do not pre-decide it here.
 
 ```
-Task legal-document-generator: "Generate a [document type] for [company name].
+Task soleur:legal:legal-document-generator: "Generate a [document type] for [company name].
 Company: [name]
 Product: [description]
 Data practices: [practices]
