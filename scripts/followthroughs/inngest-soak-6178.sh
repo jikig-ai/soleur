@@ -53,8 +53,9 @@
 # clause under `env -i`: WEBHOOK_DEPLOY_SECRET (HMAC over the empty GET body), CF_ACCESS_CLIENT_ID
 # and CF_ACCESS_CLIENT_SECRET (the Cloudflare Access pair). None is ever printed; the probe emits
 # ids, buckets, counts and slice numbers only (AC-NOBODY). Every host-supplied field is
-# shape-validated BEFORE it is printed and no raw body byte reaches stdout, because the sweeper
-# republishes stdout+stderr verbatim on a public issue.
+# shape-validated BEFORE it is printed; the only host-authored text that reaches stdout is the
+# bounded, charset-filtered excerpt of a FATAL/error body (`excerpt`, ≤120 bytes, no quotes or
+# control bytes), because the sweeper republishes stdout+stderr verbatim on a public issue.
 #
 # Two mechanisms have no precedent in the probe corpus, declared here so a reader does not look for
 # one: the rc-FILTERING EXIT trap (11 probes trap EXIT for cleanup only; this one rewrites every rc
@@ -122,7 +123,7 @@ set -uo pipefail
 # signal kill to 3. WORK is assigned ONCE, from a bare `mktemp -d`, so the `rm -rf` operand is
 # provably absolute (the P1b ratchet, plugins/soleur/test/fixture-relative-assert.test.sh); a
 # failed mktemp leaves it empty and the `-n` guard makes the cleanup a no-op.
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d 2>/dev/null)"
 on_exit() {
   local rc=$?
   [[ -n "$WORK" ]] && rm -rf "$WORK"

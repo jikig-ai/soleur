@@ -477,12 +477,15 @@ unset PROBE_OVERRIDE
 # ── summary first, then the anti-vacuity floor and conservation ───────────────────────────────
 # The summary precedes the floor so a genuine failure is never reported as "cases were deleted".
 printf '\ninngest-soak-6178: %s passed, %s failed\n' "$passes" "$fails"
-FLOOR=117
 if [[ "$((passes + fails))" -ne "$checks" ]]; then
   printf '  FAIL INSTRUMENT: passes(%s) + fails(%s) != checks(%s) — a verdict helper is not counting.\n' "$passes" "$fails" "$checks" >&2
   exit 1
 fi
 [[ "$fails" -eq 0 ]] || exit 1
+# FLOOR is bound IMMEDIATELY above the floor it feeds: guard-vacuity-floor.test.sh slices the
+# floor block backward over contiguous simple assignments only, so a non-assignment line between
+# the binding and the `if` leaves the mutant unbound and the floor scored "not constructible".
+FLOOR=117
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1
