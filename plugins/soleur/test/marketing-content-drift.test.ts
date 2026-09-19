@@ -300,20 +300,28 @@ describe("marketing-content-drift", () => {
     // deleted in #3328 PR-B — the redirect is now a Cloudflare edge 301 in the
     // bulk list (all 3 URL shapes, verified live 2026-09-18). Pin the tf source
     // so the coverage property the stub provided survives as a CI assertion.
+    // Assert per item {} block: the three shapes share the target, so a
+    // file-wide target_url match could mask a dropped target on one item.
     const tf = readFileSync(
       join(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
       "utf8",
     );
-    for (const shape of [
-      "soleur\\.ai/blog/what-is-company-as-a-service/",
-      "soleur\\.ai/blog/what-is-company-as-a-service/index\\.html",
-      "soleur\\.ai/blog/what-is-company-as-a-service",
-    ]) {
-      expect(tf).toMatch(new RegExp(`source_url\\s*=\\s*"${shape}"`));
+    const pairs = new Map<string, string>();
+    for (const block of tf.split(/\bitem\s*\{/).slice(1)) {
+      const src = block.match(/source_url\s*=\s*"([^"]+)"/)?.[1];
+      const tgt = block.match(/target_url\s*=\s*"([^"]+)"/)?.[1];
+      if (src) pairs.set(src, tgt ?? "<missing target_url>");
     }
-    expect(tf).toMatch(
-      /target_url\s*=\s*"https:\/\/soleur\.ai\/company-as-a-service\/"/,
-    );
+    expect(pairs.size, "no redirect items parsed from seo-bulk-redirects.tf").toBeGreaterThan(0);
+    for (const src of [
+      "soleur.ai/blog/what-is-company-as-a-service/",
+      "soleur.ai/blog/what-is-company-as-a-service/index.html",
+      "soleur.ai/blog/what-is-company-as-a-service",
+    ]) {
+      expect(pairs.get(src), `${src} must 301 to the CaaS pillar`).toBe(
+        "https://soleur.ai/company-as-a-service/",
+      );
+    }
   });
 
   test("Test 5: /pricing/ footnote has >=2 external citations + a YYYY-MM-DD date", () => {

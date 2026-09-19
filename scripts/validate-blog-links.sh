@@ -31,6 +31,77 @@ pass() {
   echo "PASS: $1"
 }
 
+# --- Blog date-slug <-> bulk-redirect parity (Guard 1, #3328) ---
+# Every date-prefixed post under docs/blog/ must have a matching key in
+# local.blog_redirect_pairs in seo-bulk-redirects.tf, and every key must map to
+# a live date-prefixed file. This is the coverage property the deleted
+# _data/blogRedirects.js provided at build time (a stub per date-prefixed
+# file), enforced here at CI time against the canonical edge-redirect source.
+# This block depends only on BLOG_DIR + TF_FILE — it runs BEFORE the
+# CONTENT_DIR/SITE_DIR gates below so those early-exits can never silently
+# skip it (an exit-0 that bypassed parity would be a vacuous green).
+# Anti-vacuity floor: the file side must contain >=1 member or the guard fails —
+# a glob that silently matches nothing must not read as "all covered".
+BLOG_DIR="$REPO_ROOT/plugins/soleur/docs/blog"
+TF_FILE="$REPO_ROOT/apps/web-platform/infra/seo-bulk-redirects.tf"
+
+# File side: date-prefixed basenames (same glob class as the deleted
+# DATE_PREFIX_RE — YYYY-MM-DD-slug.md).
+file_slugs=()
+for md_file in "$BLOG_DIR"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md; do
+  [[ -f "$md_file" ]] || continue
+  file_slugs+=("$(basename "$md_file" .md)")
+done
+
+if [[ ${#file_slugs[@]} -eq 0 ]]; then
+  fail "parity: no date-prefixed blog files found under $BLOG_DIR (guard cannot be vacuous)"
+else
+  pass "parity: ${#file_slugs[@]} date-prefixed blog file(s) enumerated"
+fi
+
+# The value-side invariant assumes canonical URL = filename minus date prefix.
+# A permalink: frontmatter override on a dated post would make the tf target
+# point at a non-existent URL while the value check stays green — refuse it.
+for slug in "${file_slugs[@]}"; do
+  if grep -qE '^permalink:' "$BLOG_DIR/$slug.md"; then
+    fail "parity: $slug.md sets permalink: — canonical slug is no longer filename-derived; update its redirect target manually"
+  fi
+done
+
+# Map side: keys + values inside the blog_redirect_pairs block (region-scoped
+# extraction — a quoted-key grep elsewhere could see unrelated attributes).
+declare -A map_vals=()
+while IFS=' ' read -r k v; do
+  map_vals["$k"]="$v"
+done < <(awk '/blog_redirect_pairs[[:space:]]*=[[:space:]]*\{/{inmap=1; next}
+             inmap && /^[[:space:]]*\}/{inmap=0}
+             inmap' "$TF_FILE" \
+         | sed -nE 's/^[[:space:]]*"([^"]+)"[[:space:]]*=[[:space:]]*"([^"]+)".*/\1 \2/p')
+
+# file -> map: every date-prefixed file has a redirect entry pointing at the
+# canonical slug (filename minus the YYYY-MM-DD- prefix).
+for slug in "${file_slugs[@]}"; do
+  if [[ -z "${map_vals[$slug]:-}" ]]; then
+    fail "parity: $slug.md has no blog_redirect_pairs entry — edge 301 would be missing"
+  else
+    expected="${slug#????-??-??-}"
+    if [[ "${map_vals[$slug]}" == "$expected" ]]; then
+      pass "parity: /blog/$slug/ -> ${map_vals[$slug]}"
+    else
+      fail "parity: $slug maps to '${map_vals[$slug]}', expected '$expected' (filename minus date prefix)"
+    fi
+  fi
+done
+
+# map -> file: every key maps to a live date-prefixed file (a stale key means
+# the edge redirects a URL with no backing post).
+for key in "${!map_vals[@]}"; do
+  if [[ ! -f "$BLOG_DIR/$key.md" ]]; then
+    fail "parity: blog_redirect_pairs key '$key' is stale — no $key.md under docs/blog/"
+  fi
+done
+
+# --- Distribution-content link check ---
 # Build site if no site-dir provided
 if [[ -z "$SITE_DIR" ]]; then
   echo "Building site..."
@@ -80,72 +151,11 @@ for url_path in "${urls[@]}"; do
   fi
 done
 
-# --- Blog date-slug <-> bulk-redirect parity (Guard 1, #3328) ---
-# Every date-prefixed post under docs/blog/ must have a matching key in
-# local.blog_redirect_pairs in seo-bulk-redirects.tf, and every key must map to
-# a live date-prefixed file. This is the coverage property the deleted
-# _data/blogRedirects.js provided at build time (a stub per date-prefixed
-# file), enforced here at CI time against the canonical edge-redirect source.
-# Anti-vacuity floor: the file side must contain >=1 member or the guard fails —
-# a glob that silently matches nothing must not read as "all covered".
-BLOG_DIR="$REPO_ROOT/plugins/soleur/docs/blog"
-TF_FILE="$REPO_ROOT/apps/web-platform/infra/seo-bulk-redirects.tf"
-
-# File side: date-prefixed basenames (same glob class as the deleted
-# DATE_PREFIX_RE — YYYY-MM-DD-slug.md).
-file_slugs=()
-for md_file in "$BLOG_DIR"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md; do
-  [[ -f "$md_file" ]] || continue
-  file_slugs+=("$(basename "$md_file" .md)")
-done
-
-if [[ ${#file_slugs[@]} -eq 0 ]]; then
-  fail "parity: no date-prefixed blog files found under $BLOG_DIR (guard cannot be vacuous)"
-else
-  pass "parity: ${#file_slugs[@]} date-prefixed blog file(s) enumerated"
-fi
-
-# Map side: keys + values inside the blog_redirect_pairs block (region-scoped
-# extraction — a quoted-key grep elsewhere could see unrelated attributes).
-declare -A map_vals=()
-while IFS=' ' read -r k v; do
-  [[ -n "$k" ]] && map_vals["$k"]="$v"
-done < <(awk '/blog_redirect_pairs[[:space:]]*=[[:space:]]*\{/{inmap=1; next}
-             inmap && /^[[:space:]]*\}/{inmap=0}
-             inmap' "$TF_FILE" \
-         | sed -nE 's/^[[:space:]]*"([^"]+)"[[:space:]]*=[[:space:]]*"([^"]+)".*/\1 \2/p')
-
-declare -A file_set=()
-for slug in "${file_slugs[@]}"; do file_set["$slug"]=1; done
-
-# file -> map: every date-prefixed file has a redirect entry pointing at the
-# canonical slug (filename minus the YYYY-MM-DD- prefix).
-for slug in "${file_slugs[@]}"; do
-  if [[ -z "${map_vals[$slug]:-}" ]]; then
-    fail "parity: $slug.md has no blog_redirect_pairs entry — edge 301 would be missing"
-  else
-    expected="${slug#????-??-??-}"
-    if [[ "${map_vals[$slug]}" == "$expected" ]]; then
-      pass "parity: /blog/$slug/ -> ${map_vals[$slug]}"
-    else
-      fail "parity: $slug maps to '${map_vals[$slug]}', expected '$expected' (filename minus date prefix)"
-    fi
-  fi
-done
-
-# map -> file: every key maps to a live date-prefixed file (a stale key means
-# the edge redirects a URL with no backing post).
-for key in "${!map_vals[@]}"; do
-  if [[ -z "${file_set[$key]:-}" ]]; then
-    fail "parity: blog_redirect_pairs key '$key' is stale — no $key.md under docs/blog/"
-  fi
-done
-
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
-  echo "All blog links valid."
+  echo "All checks passed."
   exit 0
 else
-  echo "$FAILURES link(s) broken."
+  echo "$FAILURES check(s) failed."
   exit 1
 fi

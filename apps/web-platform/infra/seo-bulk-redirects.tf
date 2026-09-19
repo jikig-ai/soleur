@@ -1,7 +1,8 @@
 # Cloudflare Bulk Redirects — legacy /pages/legal/<slug>.html → clean /legal/<slug>/ 301s
-# (plus the orphaned blog reslug and the blog date-slug renames; 82 items
-# total = 13 explicit + 69 generated from local.blog_redirect_pairs,
-# see the list below).
+# (plus the orphaned blog reslug, the /articles/ stub reslug, and the blog
+# date-slug renames; item count = explicit items in the list below +
+# 3 shapes per pair generated from local.blog_redirect_pairs — don't pin a
+# hand-maintained numeral here, it is a guaranteed re-drift surface).
 #
 # Why a separate file / separate product (not more rules in seo-rulesets.tf):
 #   The 9 legacy legal-page redirects were DEFERRED in seo-rulesets.tf (see the
@@ -109,7 +110,7 @@ resource "cloudflare_list" "legal_redirects" {
   account_id  = var.cf_account_id
   name        = "legal_redirects" # referenced by name from the ruleset's from_list
   kind        = "redirect"
-  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + blog reslug + blog date-slug -> canonical 301s. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
+  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + /articles/ + blog reslug + blog date-slug -> canonical 301s. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
 
   # Apex, host-less source_url (scheme-less sources match both http and https).
   # include_subdomains = "enabled" (v4 string enum, NOT a bool — provider
@@ -122,9 +123,11 @@ resource "cloudflare_list" "legal_redirects" {
   # diverges from the zone redirects' `false`: these are SEO 301s where
   # dropping campaign params (?utm_*) on the hop loses attribution; targets
   # are static pages with no query-reflection surface.
-  # 13 explicit items: 9 legal slugs (clean-slug == source-slug) + the
+  # Explicit items: 9 legal slugs (clean-slug == source-slug) + the
   # terms-of-service -> terms-and-conditions rename alias + 3 shapes of the
-  # blog reslug (/, /index.html, bare).
+  # blog reslug + 3 shapes of the /articles/ stub reslug (each reslug as
+  # /, /index.html, bare). Plus 3 generated shapes per blog_redirect_pairs
+  # entry — the generated items are flattened below, not listed here.
 
   item {
     value {

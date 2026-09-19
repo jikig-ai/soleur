@@ -526,57 +526,103 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
   // used by the author-card/knowsAbout/description guards to exclude stub-like
   // pages). Walking the built tree means a reintroduced stub is caught wherever
   // it is emitted — the walk chokepoint, not a hardcoded file list.
-  function metaRefreshStubs(): { rel: string; body: string }[] {
-    return walkHtmlFiles(SITE)
+  function metaRefreshStubs(files: string[]): { rel: string; body: string }[] {
+    return files
       .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
       .filter(({ body }) => isMetaRefreshStub(body));
   }
 
+  // Parse each `item { ... }` block into a source_url -> target_url pair.
+  // Asserting per block (not file-wide) is what keeps a dropped or mutated
+  // target_url from hiding behind an identical target on a sibling item —
+  // several items deliberately share targets (the 3-shape reslug expansions).
+  function bulkRedirectPairs(tf: string): Map<string, string> {
+    const pairs = new Map<string, string>();
+    for (const block of tf.split(/\bitem\s*\{/).slice(1)) {
+      const src = block.match(/source_url\s*=\s*"([^"]+)"/)?.[1];
+      const tgt = block.match(/target_url\s*=\s*"([^"]+)"/)?.[1];
+      if (src) pairs.set(src, tgt ?? "<missing target_url>");
+    }
+    return pairs;
+  }
+
   test("the built site contains zero meta-refresh redirect stubs", () => {
-    const stubs = metaRefreshStubs().map(({ rel }) => rel);
+    const files = walkHtmlFiles(SITE);
+    // Anti-vacuity floor: an exit-0-but-empty build must not read as "zero
+    // stubs" — mirrors the files.length floor used by the sibling guards.
+    expect(
+      files.length,
+      "_site walk returned zero HTML files — the stub fence cannot pass vacuously on an empty build",
+    ).toBeGreaterThan(0);
+    const stubs = metaRefreshStubs(files).map(({ rel }) => rel);
     expect(
       stubs,
       `meta-refresh stub(s) emitted into _site — the machinery was deleted in #3328 and every legacy URL is served by an edge 301: ${stubs.join(", ")}`,
     ).toEqual([]);
   });
 
-  test("seo-bulk-redirects.tf still declares the 9 legal source_urls + terms-of-service pair", () => {
-    // Mirrors the legal source_url set in seo-bulk-redirects.tf — the parity
-    // property the deleted _data/pageRedirects.js provided, anchored on the
-    // canonical source. If a legal entry is ever dropped from the list, the
-    // corresponding legacy URL loses its edge 301.
+  test("seo-bulk-redirects.tf still declares the legal + alias + /articles/ pairs", () => {
+    // Mirrors the source_url -> target_url set in seo-bulk-redirects.tf — the
+    // parity property the deleted _data/pageRedirects.js (and the
+    // articles.njk stub) provided, anchored on the canonical source. If an
+    // entry is ever dropped from the list, the corresponding legacy URL loses
+    // its edge 301.
     const tf = readFileSync(
       resolve(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
       "utf8",
     );
-    const missing = [
-      "privacy-policy",
-      "cookie-policy",
-      "gdpr-policy",
-      "acceptable-use-policy",
-      "data-protection-disclosure",
-      "individual-cla",
-      "corporate-cla",
-      "disclaimer",
-      "terms-and-conditions",
-    ].filter(
-      (slug) =>
-        !new RegExp(
-          `source_url\\s*=\\s*"soleur\\.ai/pages/legal/${slug}\\.html"`,
-        ).test(tf),
-    );
+    const pairs = bulkRedirectPairs(tf);
+    // Anti-vacuity floor on the map side: a renamed locals/item structure that
+    // yields zero parsed pairs must not read as "all expected pairs absent".
+    expect(
+      pairs.size,
+      "no redirect items parsed from seo-bulk-redirects.tf — the parser or the file drifted",
+    ).toBeGreaterThan(0);
+    const expected = new Map<string, string>([
+      // 9 legal slugs (clean-slug == source-slug)
+      ...[
+        "privacy-policy",
+        "cookie-policy",
+        "gdpr-policy",
+        "acceptable-use-policy",
+        "data-protection-disclosure",
+        "individual-cla",
+        "corporate-cla",
+        "disclaimer",
+        "terms-and-conditions",
+      ].map(
+        (slug): [string, string] => [
+          `soleur.ai/pages/legal/${slug}.html`,
+          `https://soleur.ai/legal/${slug}/`,
+        ],
+      ),
+      // The ToS alias pair (terms-of-service → terms-and-conditions) — the
+      // renamed URL the original GSC fix depended on.
+      [
+        "soleur.ai/pages/legal/terms-of-service.html",
+        "https://soleur.ai/legal/terms-and-conditions/",
+      ],
+      // The /articles/ stub reslug added in #3328 PR-B — deleting the stub
+      // with no edge 301 would have stranded the URL as a 404.
+      ["soleur.ai/articles/", "https://soleur.ai/blog/"],
+      ["soleur.ai/articles/index.html", "https://soleur.ai/blog/"],
+      ["soleur.ai/articles", "https://soleur.ai/blog/"],
+    ]);
+    const missing: string[] = [];
+    const mismatched: string[] = [];
+    for (const [src, tgt] of expected) {
+      if (!pairs.has(src)) missing.push(src);
+      else if (pairs.get(src) !== tgt)
+        mismatched.push(`${src} -> ${pairs.get(src)} (expected ${tgt})`);
+    }
     expect(
       missing,
-      `legal source_urls missing from seo-bulk-redirects.tf: ${missing.join(", ")}`,
+      `redirect source_urls missing from seo-bulk-redirects.tf: ${missing.join(", ")}`,
     ).toEqual([]);
-    // The ToS alias pair (terms-of-service → terms-and-conditions) is the
-    // renamed URL the original GSC fix depended on.
-    expect(tf).toMatch(
-      /source_url\s*=\s*"soleur\.ai\/pages\/legal\/terms-of-service\.html"/,
-    );
-    expect(tf).toMatch(
-      /target_url\s*=\s*"https:\/\/soleur\.ai\/legal\/terms-and-conditions\/"/,
-    );
+    expect(
+      mismatched,
+      `redirect items with wrong target_url in seo-bulk-redirects.tf: ${mismatched.join(", ")}`,
+    ).toEqual([]);
   });
 });
 
