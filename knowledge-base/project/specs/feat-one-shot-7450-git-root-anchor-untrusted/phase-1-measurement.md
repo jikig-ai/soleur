@@ -201,6 +201,7 @@ cat "${TMPDIR:-/tmp}/arm5-probe-out.txt" "${TMPDIR:-/tmp}/arm5-probe-out.txt.del
 | `${CLAUDE_PLUGIN_ROOT}` | **SUBSTITUTED** → the real `--plugin-dir` path | **SUBSTITUTED** → `/home/…/.grok/installed-plugins/<slug>` |
 | `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` (the #8061 form) | **literal**, verbatim | **literal**, verbatim |
 | `$CLAUDE_PLUGIN_ROOT` (unbraced) | **literal**, verbatim | **literal**, verbatim |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` | **literal**, verbatim | not re-run (Arm 3 measured it on the skill surface) |
 | `'${CLAUDE_PLUGIN_ROOT}'` (single-quoted) | **SUBSTITUTED** inside the quotes | **SUBSTITUTED** inside the quotes |
 
 **Control (what makes "ambient ignored" distinguishable from "ambient never propagated").**

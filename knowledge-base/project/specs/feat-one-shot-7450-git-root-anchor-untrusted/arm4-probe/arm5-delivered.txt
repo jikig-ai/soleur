@@ -1,4 +1,5 @@
 BARE=/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8308-go-gates-plugin-root/knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe
 FORM_8061=${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}
 UNBRACED=$CLAUDE_PLUGIN_ROOT
+COLONDASH=${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 SINGLEQ='/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8308-go-gates-plugin-root/knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe'

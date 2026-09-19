@@ -84,9 +84,13 @@ GATE_UNVERIFIED_MARKERS=(
 # plugins/soleur/skills/incident/test/redact-sentinel.test.sh with only the inner match changed;
 # it handles the info string and leading whitespace but NOT `~~~` or CRLF, which R10 asserts
 # go.md carries neither of rather than assuming it.
+#
+# The heading match is WHOLE-LINE equality, not `index($0, anchor) == 1`. A prefix match still
+# matched `## Step 0.5: Cloud Mode detection (renamed)`, so mutation row 14 -- renaming a gate
+# heading -- SURVIVED: the extractor still found three fences and R10's count check never fired.
 extract_fence() {
   awk -v anchor="$1" '
-    index($0, anchor) == 1 && !seen { seen = 1; next }
+    $0 == anchor && !seen { seen = 1; next }
     !seen { next }
     !infence && /^[[:space:]]*```bash[[:space:]]*$/ { infence = 1; next }
     infence && /^[[:space:]]*```/ { exit }
@@ -511,6 +515,11 @@ if [ -f "$ARM5_DELIVERED" ] && [ -f "$PROBE_MD" ]; then
   sim="$(printf '%s\n' "$probe_src" | deliver "$arm5_root")"
   want_in "$sim" 'FORM_8061=${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}' "H1: the :- form survives delivery unchanged"
   want_in "$sim" 'UNBRACED=$CLAUDE_PLUGIN_ROOT' "H1: the unbraced form survives delivery unchanged"
+  # Added after mutation row 15 SURVIVED: the probe carried no ${CLAUDE_PLUGIN_ROOT:-...} row,
+  # so widening deliver() to also replace that form perturbed nothing the fixture instantiated.
+  # A FIXTURE-space gap, not a guard gap -- and a mutation battery cannot see one, because it
+  # scores the SUT through the fixtures it already has.
+  want_in "$sim" 'COLONDASH=${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}' "H1: the colon-dash form survives delivery unchanged"
 fi
 
 echo "H2. must-PASS: a non-canonical but compliant go.md variant"
@@ -534,17 +543,50 @@ echo "H3. real-harness contact (the one row the simulator does not mediate)"
 # skip a broken environment. This row INVERTS that default DELIBERATELY: CI does not and should
 # not install the Claude CLI, so a CI skip is the EXPECTED state. The arm cannot silently disarm
 # because AC12 makes a real run mandatory pre-merge and commits its capture.
-if command -v claude >/dev/null 2>&1 && [ "${SOLEUR_GO_GATES_H3:-}" = "1" ]; then
-  h3_out="$(cd "$REPO_ROOT" && timeout 300 claude -p --plugin-dir "${REPO_ROOT}/plugins/soleur" \
-    --allowedTools "Bash" \
-    "Run each of the /soleur:go Step 0.0, Step 0.5 and Step 0 bash blocks exactly as delivered, then stop." 2>&1 || true)"
+#
+# The skip is an OPT-OUT, never an opt-in. An opt-in default IS mutation row 17 -- "make H3
+# print SKIP-DECLARED unconditionally" -- shipped as the shape; it measured green because the
+# mutation changed nothing that was not already true.
+#
+# COST, disclosed: on a box carrying the Claude CLI this row spawns a headless session on
+# every run of this suite, and the full battery invokes it. `SOLEUR_GO_GATES_SKIP_H3=1` opts
+# out and SAYS SO in its reason string -- it never claims the binary is absent.
+H3_SKIP_REASON=""
+if ! command -v claude >/dev/null 2>&1; then
+  H3_SKIP_REASON=claude-binary-absent
+elif [ "${SOLEUR_GO_GATES_SKIP_H3:-}" = "1" ]; then
+  H3_SKIP_REASON=explicit-opt-out
+fi
+if [ -z "$H3_SKIP_REASON" ]; then
+  # Two corrections the plan's drafted command needed, both measured rather than reasoned:
+  #
+  #  1. The prompt goes on STDIN. `claude -p --plugin-dir ... --allowedTools ... "<prompt>"`
+  #     is rejected outright ("Input must be provided either through stdin or as a prompt
+  #     argument when using --print"), so the drafted shape never ran at all.
+  #  2. The prompt must INVOKE `/soleur:go`, not describe its blocks. Asked to "run the Step
+  #     0.0 / 0.5 / 0 bash blocks", the agent Reads go.md from disk -- the UNDELIVERED path --
+  #     and the capture then reads `source=none verified=false`, i.e. the pre-fix behaviour
+  #     reported as though it were the post-fix one. Measured both ways in one session.
+  #
+  # Run from a SCRATCH workspace: Step 0 dispatches cleanup-merged for real, and a row that
+  # deletes the developer's merged branches as a side effect of measuring is not a test.
+  # Measured the hard way -- running this from the worktree root reverted every uncommitted
+  # file in it to HEAD.
+  h3_ws="$(fresh_ws h3)"
+  h3_out="$(cd "$h3_ws" && printf '%s\n' "/soleur:go run ONLY the Step 0.0, Step 0.5 and Step 0 bash blocks exactly as delivered, then print their combined raw stdout verbatim inside one fenced code block with no summary, then STOP - do not classify, do not route, do not invoke any skill" \
+    | timeout 420 claude -p --plugin-dir "${REPO_ROOT}/plugins/soleur" --allowedTools "Bash" 2>&1 || true)"
   for g in readiness cloud-detect session-start; do
     want_in "$h3_out" "gate=${g} source=plugin-root-token verified=true" "H3: real harness resolved ${g}"
   done
-elif command -v claude >/dev/null 2>&1; then
-  ck; pass "H3: SKIP-DECLARED reason=opt-in-not-set (set SOLEUR_GO_GATES_H3=1; AC12 carries the mandatory pre-merge run)"
 else
-  ck; pass "H3: SKIP-DECLARED reason=claude-binary-absent (derived from command -v claude; AC12 carries the mandatory pre-merge run)"
+  # The reason must be TRUE, not merely printed. A skip claiming the binary is absent while
+  # `command -v` finds it is precisely the disarm this arm exists to refuse.
+  ck
+  if [ "$H3_SKIP_REASON" = claude-binary-absent ] && command -v claude >/dev/null 2>&1; then
+    fail "H3: SKIP-DECLARED reason=claude-binary-absent but command -v claude FOUND it - the skip is not derived"
+  else
+    pass "H3: SKIP-DECLARED reason=${H3_SKIP_REASON} (AC12 carries the mandatory pre-merge run)"
+  fi
 fi
 
 # --- L. instrument self-test: drive the helpers, do not read them -----------------------------
@@ -575,9 +617,9 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 136 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
+# 137 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
 # Raising it is part of adding a row.
-MIN_ASSERTIONS=136
+MIN_ASSERTIONS=137
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
