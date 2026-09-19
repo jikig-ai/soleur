@@ -80,8 +80,9 @@ JSON is not shipped.
 documenting it.
 
 Declared back-edges: `review → work`, `ship → work`, `postmerge → work`,
-`work → plan`. `postmerge → work` was considered and rejected as redundant with
-`ship → work`. **[Amended 2026-09-19 (#8325): declared; see Consequences.]**
+`work → plan`. **[Amended 2026-09-19 (#8325): `postmerge → work` was originally
+considered and rejected as redundant with `ship → work`; it is declared as of
+this amendment on the seven-session reading in Consequences.]**
 `plan → ship` is deliberately absent and asserted *as an absence* — it is the
 path that skips `review`, which surfaces only after merge.
 
@@ -221,18 +222,27 @@ the base, which closes the rename escape.
   none of the earlier ones, so placing the load last avoids ~58k × k cache-read
   tokens per run, where k is the number of turns before the pass.
   Measured on 2026-09-19 with `scripts/measure-plan-sharp-edges-turns.sh` over
-  local transcripts 2026-09-17 → 2026-09-19 (Skill-tool and slash-typed invocations,
-  n stated per number; local retention is three days): post-extraction median
-  k = 61 (p10 36, p90 86 — min/max at this n; n = 2 post, post_skipped = 4);
-  pre-extraction proxies k'_first median 7 (n = 25; turns to the ADR-176
-  skeleton write, so an early bound) and k'_ac median 45.5 (n = 16; turns to
-  the `## Acceptance Criteria` write, the faithful stand-in); implied saving
-  3,538,000 cache-read tokens per run against a break-even of 8 turns; full
-  line and per-run rows in the #8325 comment. Kept on measured evidence
-  (#8325 §3 closed) — with the caveats that n = 2 is the whole post-extraction
-  corpus retention allows today, and that 4 of the 6 extracted runs skipped
-  the pass, which is itself a finding against "loads on ~95% of plan runs"
-  above (re-run the script once retention has accumulated more runs). The
+  local transcripts 2026-09-17 → 2026-09-19 (Skill-tool and slash-typed
+  invocations). Local retention is three days, so the corpus is a ROLLING
+  WINDOW and a re-run does not reproduce a prior reading: two readings the same
+  day gave n = 2 and n = 7. Post-extraction k over 7 runs:
+  {31, 36, 38, 73, 81, 86, 125}, median 73 — every individual run clears the
+  ~8-turn break-even by at least 3.9×, which is what carries the decision at
+  this n, not the median alone. Pre-extraction proxies: k'_first median 7
+  (n = 25; turns to the ADR-176 skeleton write, so an early bound) and k'_ac
+  median 46 (n = 17; turns to the `## Acceptance Criteria` write, the faithful
+  stand-in). Median per-run saving ≈ 58k × 73 ≈ **4.2M cache-READ tokens** —
+  billed an order of magnitude below input rate, so price it before comparing
+  against a run's billed total; the n = 17 k'_ac proxy independently implies
+  ≈ 2.7M. Kept on measured evidence (#8325 §3 closed). Three caveats, each of
+  which a later reader must re-take rather than quote: the ~8-turn break-even
+  is asserted rather than measured and is the cost side of this comparison;
+  `k` is right-CENSORED, because a run still in flight when the script runs has
+  no catalogue Read yet and scores `post_skipped` — an earlier reading the same
+  day scored 4 of 6 extracted runs `post_skipped` for exactly that reason and
+  all four later scored `post` with k ∈ {38, 73, 81, 125}, so a genuine-skip
+  count may only be taken over completed runs and says nothing against the
+  ~95% figure above; and the whole reading is a rolling-window snapshot. The
   break-even is ~8 turns before the pass and a `plan` run's research and
   drafting exceed that by an order of magnitude, so it is structural rather
   than speculative. The directive

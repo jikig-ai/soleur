@@ -13,6 +13,9 @@
 # WHAT IT NEVER DOES (ADR-179 d4; the transcripts are operator-private):
 #   - it lives under scripts/, never under plugins/ (nothing ships);
 #   - it makes no network call and writes nothing to disk;
+#   - the parser READS more text than anything else here -- `k_ac` inspects
+#     tool_use `content`/`new_string` bodies -- so every field it touches is
+#     reduced to a boolean or an ordinal before it leaves jq;
 #   - stdout carries numbers, `na`, fixed key names, the `#` header and the kind
 #     tokens only; stderr carries the slug (HOME-masked) and counts only. No
 #     message text, command, file content or transcript path is ever printed --
@@ -61,6 +64,9 @@
 set +x
 set -euo pipefail
 
+# Re-measure when plan-sharp-edges.md changes size: `saving_tokens_per_run` is
+# CATALOGUE_TOKENS x median_k, so a stale constant drifts silently and still
+# reads as measured.
 CATALOGUE_TOKENS=58000 # ADR-229, measured 2026-09-18 (the harness's own count)
 CATALOGUE_SUFFIX='skills/plan/references/plan-sharp-edges.md'
 
@@ -156,10 +162,13 @@ null_reading() { # reason parsed dropped
 }
 [[ "$files" -gt 0 ]] || null_reading no_files
 
-# Pre-filter in ONE process: only files that carry the literal can hold a run.
+# Pre-filter in ONE process: a file with no `soleur:plan` bytes cannot hold a
+# run. This is a CORRECTNESS filter, not an optimisation -- measured on the live
+# corpus it removes 6 of 919 files (0.65%), because the available-skills listing
+# in every system prompt carries the literal. Survivors are a superset
+# (`soleur:plan-review`, quoted prose) costing one parse each.
 # `-a` so an embedded NUL cannot flip grep into binary mode; `-Z` keeps the
-# path list NUL-framed and in the pipe, never on stdout. Survivors are a
-# superset (`soleur:plan-review`, quoted prose) costing one parse each.
+# path list NUL-framed and in the pipe, never on stdout.
 SURVIVORS=()
 while IFS= read -r -d '' f; do SURVIVORS+=("$f"); done \
   < <(printf '%s\0' "${FILES[@]}" | xargs -0 -r grep -laFZ -- 'soleur:plan' 2>/dev/null || true)
@@ -184,7 +193,8 @@ read -r -d '' JQ <<'JQEOF' || true
     | if ($c | type) == "string" then [$c]
       elif ($c | type) == "array" then [ $c[] | obj | select(.type == "text") | (.text | str) ]
       else [] end;
-  [ inputs | fromjson? | select(type == "object")
+  [ inputs ] as $lines
+  | [ $lines[] | fromjson? | select(type == "object")
     | if (.type == "assistant" or .type == "user") then
       { type,
         id: ((.requestId // .uuid) | tostring),
@@ -225,6 +235,7 @@ read -r -d '' JQ <<'JQEOF' || true
         and (((.input.content | str) + (.input.new_string | str)) | contains("## Acceptance Criteria")));
     def first_ord($ts; f): ([ $ts[] | select(f) | .ord ] | if length > 0 then .[0] else null end);
     { parsed: $parsed,
+      lines: ($lines | length),
       runs: [ range(0; ($runs | length)) as $i
         | $runs[$i] as $run
         | (if $i + 1 < ($runs | length)
@@ -248,24 +259,33 @@ read -r -d '' JQ <<'JQEOF' || true
             date: (if ($run.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}")) then $run.ts[0:10] else "na" end) } ] }
 JQEOF
 
-ALL=''
+# `lines` and `parsed` come from the SAME read inside jq. Counting lines with a
+# separate `grep -c` was a RACE: a transcript appended to between the two reads
+# made `parsed > read_lines`, so `dropped` went NEGATIVE (measured -9) and that
+# negative contribution silently cancelled a genuinely unparseable file
+# elsewhere in the corpus -- which matters because `dropped=0` is the
+# parse-integrity signal this reading is quoted with. A file jq cannot read at
+# all yields no rows, so it is visible as a survivor that contributed nothing
+# rather than as a fabricated drop count.
+ALL_ROWS=()
 parsed=0
 dropped=0
 for f in "${SURVIVORS[@]+"${SURVIVORS[@]}"}"; do
-  read_lines=$(grep -c . -- "$f" 2>/dev/null || true)
-  read_lines=${read_lines:-0}
   if out=$(jq -c -n -R --arg cat "$CATALOGUE_SUFFIX" --arg plans 'knowledge-base/project/plans/' "$JQ" < "$f" 2>/dev/null) \
      && [[ -n "$out" ]]; then
-    p=$(printf '%s' "$out" | jq -r '.parsed' 2>/dev/null || echo 0)
-    parsed=$((parsed + p))
-    dropped=$((dropped + read_lines - p))
-    ALL+="$out"$'\n'
-  else
-    # A program error names the offending value; it stays in /dev/null and the
-    # whole file counts as dropped rather than surfacing the path or the message.
-    dropped=$((dropped + read_lines))
+    ALL_ROWS+=("$out")
   fi
 done
+# One join, never `ALL+=` per file: that is quadratic (~450 MB of hidden memcpy
+# at today's ~900 survivors, and the corpus grows with `cleanupPeriodDays`).
+ALL=''
+if [[ ${#ALL_ROWS[@]} -gt 0 ]]; then
+  ALL=$(printf '%s\n' "${ALL_ROWS[@]}")
+  read -r parsed dropped < <(printf '%s' "$ALL" | jq -s -r \
+    '([.[] | .parsed] | add // 0) as $p | ([.[] | .lines] | add // 0) as $l
+     | "\($p) \($l - $p)"' 2>/dev/null || echo "0 0")
+fi
+parsed=${parsed:-0}; dropped=${dropped:-0}
 
 # --- summary ------------------------------------------------------------------
 read -r -d '' SUMJQ <<'SUMEOF' || true

@@ -37,6 +37,20 @@ not acted on. `ship` Phase 6 renders it into the PR body and files it as an
   close after reading a number you had already accepted; the ADR sentence is
   edited once more when n reaches the floor.
 
+> **Confirmed at review, 2026-09-19 (#8382 design pass).** The precision half of
+> this challenge was borne out within hours. A re-run of the same script on the
+> same machine, the same day, gave n = 7 (not 2) and median k = 73 (not 61) —
+> because `k` is right-CENSORED: a plan run still in flight has no catalogue
+> Read yet and scores `post_skipped`. All four runs the first reading recorded
+> as `post_skipped` later scored `post`, with k ∈ {38, 73, 81, 125}. Two
+> consequences were applied to ADR-229 rather than deferred: the sentence
+> asserting "4 of the 6 extracted runs skipped the pass … a finding against
+> 'loads on ~95% of plan runs'" was FALSE and has been removed (it read a
+> measurement artifact as a finding), and the ADR now rests the keep decision
+> on every individual k clearing break-even by ≥ 3.9×, not on a two-sample
+> median. The n-floor itself remains the operator's call; what the data settled
+> is that a single reading of this rolling window must not be quoted as final.
+
 **What was implemented.** Your rule, as stated: the ADR states n and the
 retention window beside the median, and the follow-up issue is filed only when
 the median is below 16. The plan's Phase 4 names the number of post-extraction
