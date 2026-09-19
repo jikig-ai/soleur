@@ -2673,11 +2673,13 @@ if want_webplat; then
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
-# Co-located because validate-blog-links.sh reads _site/, which
-# plugins/soleur/test/seo-aeo-drift-guard.test.ts builds. Under matrix
-# sharding (separate runners) there is no race; co-location is a perf
-# optimization (build once, reuse) AND defense against any future xargs-P
-# attempt that would re-introduce the race within one runner.
+# Co-located because validate-blog-links.sh's link-check half reads _site/
+# at the repo root, which plugins/soleur/test/marketing-content-drift.test.ts
+# builds inside `bun test plugins/soleur/` (the drift-guard builds to
+# mkdtemp, not _site). Suites run sequentially and the script self-builds
+# when no site-dir is passed, so there is no live race today; co-location
+# is defense against any future xargs-P attempt that would introduce one
+# within a runner.
 if want_bun; then
   run_suite "plugins/soleur" bun test plugins/soleur/
   run_suite "blog-link-validation" bash scripts/validate-blog-links.sh

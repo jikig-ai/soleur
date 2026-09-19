@@ -13,7 +13,10 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { bulkRedirectPairs } from "./lib/bulk-redirect-pairs";
+import {
+  bulkRedirectPairs,
+  missingEdge301Flags,
+} from "./lib/bulk-redirect-pairs";
 
 const TEST_DIR = import.meta.dir;
 const REPO_ROOT = join(TEST_DIR, "..", "..", "..");
@@ -321,9 +324,9 @@ describe("marketing-content-drift", () => {
         "https://soleur.ai/company-as-a-service/",
       );
       expect(
-        item?.block,
+        item ? missingEdge301Flags(item.block) : ["<item missing>"],
         `${src} must carry the edge-301 flags`,
-      ).toMatch(/status_code\s*=\s*301\b[\s\S]*include_subdomains\s*=\s*"enabled"[\s\S]*preserve_query_string\s*=\s*"enabled"/);
+      ).toEqual([]);
     }
   });
 

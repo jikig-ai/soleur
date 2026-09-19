@@ -21,7 +21,10 @@ import {
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
-import { bulkRedirectPairs } from "./lib/bulk-redirect-pairs";
+import {
+  bulkRedirectPairs,
+  missingEdge301Flags,
+} from "./lib/bulk-redirect-pairs";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -531,31 +534,6 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
   );
   const readTf = () => readFileSync(TF_PATH, "utf8");
 
-  // Detect stubs via the shared isMetaRefreshStub predicate (size-gated, also
-  // used by the author-card/knowsAbout/description guards to exclude stub-like
-  // pages). Walking the built tree means a reintroduced stub is caught wherever
-  // it is emitted — the walk chokepoint, not a hardcoded file list.
-  function metaRefreshStubs(files: string[]): { rel: string; body: string }[] {
-    return files
-      .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
-      .filter(({ body }) => isMetaRefreshStub(body));
-  }
-
-  test("the built site contains zero meta-refresh redirect stubs", () => {
-    const files = walkHtmlFiles(SITE);
-    // Anti-vacuity floor: an exit-0-but-empty build must not read as "zero
-    // stubs" — mirrors the files.length floor used by the sibling guards.
-    expect(
-      files.length,
-      "_site walk returned zero HTML files — the stub fence cannot pass vacuously on an empty build",
-    ).toBeGreaterThan(0);
-    const stubs = metaRefreshStubs(files).map(({ rel }) => rel);
-    expect(
-      stubs,
-      `meta-refresh stub(s) emitted into _site — the machinery was deleted in #3328 and every legacy URL is served by an edge 301: ${stubs.join(", ")}`,
-    ).toEqual([]);
-  });
-
   test("no built HTML page contains a meta refresh of any size or delay", () => {
     // isMetaRefreshStub is size-gated (<2KB) by design — a stub emitted inside
     // a full layout escapes it AND escapes validate-seo.sh (the layout
@@ -645,14 +623,8 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
       }
       if (item.target !== tgt)
         mismatched.push(`${src} -> ${item.target} (expected ${tgt})`);
-      for (const flag of [
-        /status_code\s*=\s*301\b/,
-        /include_subdomains\s*=\s*"enabled"/,
-        /preserve_query_string\s*=\s*"enabled"/,
-      ]) {
-        if (!flag.test(item.block)) {
-          flagless.push(`${src}: ${flag.source}`);
-        }
+      for (const flag of missingEdge301Flags(item.block)) {
+        flagless.push(`${src}: ${flag}`);
       }
     }
     expect(
@@ -672,9 +644,10 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
   test("the generated-item expansion (3 arms + dynamic block) is intact", () => {
     // The pairs map only reaches Cloudflare through the 3-arm flatten in
     // local.blog_redirect_items and the `dynamic "item"` block on the list
-    // resource. Dropping one arm un-serves 23 URLs; dropping the dynamic
-    // block un-serves all 69 — and every pair assertion above stays green
-    // because it never reads the expansion. Pin the structure.
+    // resource. Dropping one arm un-serves a whole URL shape per pair;
+    // dropping the dynamic block un-serves every generated item — and every
+    // pair assertion above stays green because it never reads the expansion.
+    // Pin the structure.
     const tf = readTf();
     for (const arm of [
       'source = "soleur.ai/blog/${date_slug}/"',
@@ -730,13 +703,11 @@ describe("pillar-series frontmatter <-> _data/pillars.js parity", () => {
       ).toBe(true);
     }
 
-    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // fileSlug strips an optional YYYY-MM-DD- prefix, so a member URL
+    // /blog/<slug>/ maps to either <slug>.md or YYYY-MM-DD-<slug>.md — the
+    // "-"-anchored endsWith covers both without a regex.
     const fileForSlug = (slug: string) =>
-      posts.find(
-        (f) =>
-          f === `${slug}.md` ||
-          new RegExp(`^\\d{4}-\\d{2}-\\d{2}-${esc(slug)}\\.md$`).test(f),
-      );
+      posts.find((f) => f === `${slug}.md` || f.endsWith(`-${slug}.md`));
     const failures: string[] = [];
     let memberCount = 0;
     for (const [key, series] of Object.entries(pillars)) {

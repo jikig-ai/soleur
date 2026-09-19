@@ -9,15 +9,16 @@
 # If site-dir not provided, builds the site first.
 # Exit 0 = all checks pass, Exit 1 = one or more failures.
 #
-# CO-LOCATION INVARIANT: this script reads _site/ which is also built by
-# plugins/soleur/test/seo-aeo-drift-guard.test.ts (running inside `bun test
-# plugins/soleur/`). Both run in the "bun" TEST_GROUP in scripts/test-all.sh
-# and in the test-bun job in .github/workflows/ci.yml. Under matrix sharding
-# (separate runners), there is no _site/ race because each runner builds its
-# own _site/; co-location is a perf optimization (build once, reuse) plus
-# defense in depth against any future xargs-P / --max-pool-size attempt that
-# would re-introduce the race inside one runner. DO NOT move this script
-# to a different TEST_GROUP than the bun-side builders.
+# CO-LOCATION NOTE: this script's link-check half reads _site/ at the repo
+# root, which plugins/soleur/test/marketing-content-drift.test.ts also builds
+# (via `npm run docs:build`, inside `bun test plugins/soleur/`). Both run in
+# the "bun" TEST_GROUP in scripts/test-all.sh and in the test-bun job in
+# .github/workflows/ci.yml. Under matrix sharding (separate runners) each
+# runner builds its own _site/; inside a runner, suites execute sequentially
+# and this script self-builds when no site-dir arg is passed, so there is no
+# live race today — co-location is defense in depth against any future
+# xargs-P / --max-pool-size attempt that would introduce one. DO NOT move
+# this script to a different TEST_GROUP than the bun-side _site builders.
 
 set -euo pipefail
 
@@ -87,8 +88,9 @@ done
 
 # Shape-expansion coverage: the pairs map only reaches Cloudflare through the
 # 3-arm flatten in local.blog_redirect_items plus the dynamic "item" block on
-# the list resource. A dropped arm un-serves 23 URLs and a deleted dynamic
-# block un-serves all 69 — both invisible to the key/value checks below.
+# the list resource. A dropped arm un-serves a whole URL shape per pair and a
+# deleted dynamic block un-serves every generated item — both invisible to
+# the key/value checks below.
 # shellcheck disable=SC2016  # ${date_slug} is literal tf text, not a bash var
 for arm in \
   'source = "soleur.ai/blog/${date_slug}/"' \

@@ -18,6 +18,11 @@
  * - The generated blog items live in `dynamic "item" { ... }`, which the
  *   `item {` splitter does not match — they are pinned separately by the
  *   shape-arm assertions (and by validate-blog-links.sh's parity check).
+ * - No escaped `\"` inside a tf string precedes a `#`/`//` on the same line
+ *   (none exist today; one would mis-toggle the quote state).
+ * - Duplicate `source_url` keys resolve last-wins via `Map.set` — a wrong
+ *   duplicate ordered before the correct item would mask it (acceptable
+ *   residual; the pairs floor still applies).
  */
 
 /** Strip `#` and `//` comments, respecting double-quoted strings per line. */
@@ -61,4 +66,21 @@ export function bulkRedirectPairs(tf: string): Map<string, RedirectItem> {
     if (src) pairs.set(src, { block, target: tgt ?? "<missing target_url>" });
   }
   return pairs;
+}
+
+const EDGE_301_FLAGS = [
+  /status_code\s*=\s*301\b/,
+  /include_subdomains\s*=\s*"enabled"/,
+  /preserve_query_string\s*=\s*"enabled"/,
+];
+
+/**
+ * The edge-301 flags a redirect item must carry (order-agnostic — a benign
+ * attribute reorder is not a defect). Returns the missing flag patterns so a
+ * caller can name exactly what drifted.
+ */
+export function missingEdge301Flags(block: string): string[] {
+  return EDGE_301_FLAGS.filter((flag) => !flag.test(block)).map(
+    (flag) => flag.source,
+  );
 }
