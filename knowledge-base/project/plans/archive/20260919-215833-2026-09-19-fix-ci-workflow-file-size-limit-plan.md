@@ -136,6 +136,39 @@ None — no open `code-review` issue body (65 checked) names `.github/workflows/
 - **Brand-survival threshold:** `none`
 - Scope-out override: `threshold: none, reason: the touched workflow path is a CI-orchestration file and only comment lines change; the gate test reads file sizes and no user data.`
 
+## Observability
+
+Added at ship (preflight Check 10 fires on the workflow filename). The change is comment-only plus a
+test, so the observability surface is the gate itself and GitHub's own run state.
+
+```yaml
+liveness_signal:
+  what: "the required `test` CI context (test-bun shard runs plugins/soleur/test/workflow-file-size.test.ts) on every PR and every push to main"
+  cadence: "per-run"
+  alert_target: "red required check on the PR; on main, the CI failure email"
+  configured_in: ".github/workflows/ci.yml (test-bun job) + scripts/test-all.sh (run_suite plugins/soleur)"
+
+error_reporting:
+  destination: "GitHub Actions job log (bun test failure text names the file, its size, the overage and the runbook precedent)"
+  fail_loud: "apply-web-platform-infra.yml is N bytes, M bytes over the 490000-byte gate ..."
+
+failure_modes:
+  - mode: "a workflow file crosses 490,000 bytes"
+    detection: "workflow-file-size.test.ts reds in the required test context before merge"
+    alert_route: "PR author via the red check; nothing reaches main"
+  - mode: "a workflow file is refused by GitHub (over 512,000 bytes or unparseable) — zero-job run"
+    detection: "run has 0 jobs; gh run view prints only the generic workflow-file message; runbook apply-web-platform-infra-red-run.md section 'Zero jobs and no email'"
+    alert_route: "operator, via the red run on main (no notify-apply-failure email fires — no job runs)"
+
+logs:
+  where: "GitHub Actions run logs for ci.yml"
+  retention: "90 days (GitHub default)"
+
+discoverability_test:
+  command: bun test plugins/soleur/test/workflow-file-size.test.ts
+  expected_output: "0 fail"
+```
+
 ## Guard Contract
 
 ### Guard 1 — workflow-file byte-size gate
