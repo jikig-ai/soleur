@@ -83,8 +83,14 @@ head, then admin-merge. A second thing was measured twice on the way: GitHub
 reported `CONFLICTING`/`DIRTY` while `git merge-tree --write-tree origin/main
 HEAD` was CLEAN locally, with and without rename detection. The final
 `gh pr merge --squash --admin` then SUCCEEDED (the repo's pre-merge hook synced
-and pushed first). GitHub's mergeability flag is not the same computation as
-git's — try the merge before paying for another sync cycle.
+and pushed first). The mechanism, found while shipping this learning's own PR:
+both sides had touched `knowledge-base/INDEX.md`, which `.gitattributes` gives
+the custom `kb-index` merge driver — local git runs it and merges cleanly,
+GitHub's server-side merge cannot and reports a real conflict. Reproduced by
+disabling the driver locally (`git -c merge.kb-index.driver=false merge-tree`
+conflicts on exactly that file). So a DIRTY that is clean locally is cured by a
+local sync and push — `gh pr merge` triggers `pre-merge-rebase.sh`, which does
+that — never by a resolver.
 
 **The ADR ordinal collided at ship exactly as the brief predicted.** #8248 landed
 its ADR-225 on `main` during the merge queue, three syncs in; 226/227/228 were
@@ -150,7 +156,7 @@ not a better resolver — it is not diffing the file.
 5. **Three Sharp Edges conflicts; the first automated port kept a bare `+` line.** Recovery: filter on `l[1:].strip()`; the assertion had refused the bad list. **Prevention:** when extracting a section that sibling PRs append to, expect a conflict per sibling until they rebase; port pure additions, refuse edits.
 6. **A regenerated `rule-metrics.json` in the diff made every landing DIRTY** — three cycles, ~4 h, before the cause was named. Recovery: took `main`'s copy; the PR no longer diffs it. **Prevention:** the intersection check in Solution step 1, before the first sync.
 7. **ADR-225 taken by #8248 during the queue.** Recovery: renumbered to ADR-229 with a diff-scoped sweep and superseded notes on the four ordinal claims. **Prevention:** `check-adr-ordinals.sh` after every sync in the poll (now in the resolver).
-8. **GitHub reported CONFLICTING while local `merge-tree` was clean, twice.** Recovery: `gh pr merge --admin` succeeded — with the repo's pre-merge hook syncing `main` in and pushing first, so the measurement is hook-sync-plus-admin-merge, not an admin merge across a real conflict. **Prevention:** on a DIRTY that does not reproduce locally, attempt the merge (the hook runs the sync) before hand-rolling another sync cycle.
+8. **GitHub reported CONFLICTING while local `merge-tree` was clean, twice.** Recovery: `gh pr merge --admin` succeeded — with the repo's pre-merge hook syncing `main` in and pushing first. Cause, measured on this learning's own PR: the `kb-index` custom merge driver on `knowledge-base/INDEX.md` runs locally and not on GitHub. **Prevention:** on a DIRTY that does not reproduce locally, check whether `INDEX.md` is in both diffs; if so, sync locally (the driver resolves it) and push — `gh pr merge` runs that sync through the hook.
 9. **Two duplicate poll Monitors (rounds 6 and 11)** were armed while the prior one was still alive; the supersede hook also lists expired monitors as live, and `TaskStop` on those returns "No task found". Recovery: stopped the live duplicates by hand. **Prevention:** `TaskStop` the previous round before re-arming unless its expiry notice has arrived; treat the hook's list as "possibly live", not "live".
 10. **The first deploy-arm run rolled back on the bwrap probe (H3, rc=137).** Recovery: `gh run rerun --failed`; deploy, live-verify and `/health` green. **Prevention:** none needed for the probe — the rerun is the documented path; read the `ci-deploy` journald line via `betterstack-query.sh` before rerunning so the class is named, not assumed.
 11. **The hosted-runner backlog (26–28 pending runs repo-wide) made each CI cycle 45–60 min**, so six head changes cost about six hours of wall clock. Recovery: none available. **Prevention:** minimise head changes — items 6 and 8 above are the two that were avoidable.
