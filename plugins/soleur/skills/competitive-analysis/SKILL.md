@@ -49,9 +49,9 @@ Use AskUserQuestion to select tiers:
 
 ### 3. Run Competitive Intelligence Agent
 
-Spawn the competitive-intelligence agent via Task tool:
+Spawn the soleur:product:competitive-intelligence agent via Task tool:
 
-Task competitive-intelligence: "Run a competitive intelligence scan for tiers <TIERS>. Research each competitor in the specified tiers, read brand-guide.md and business-validation.md for positioning context, and write the report to knowledge-base/product/competitive-intelligence.md."
+Task soleur:product:competitive-intelligence: "Run a competitive intelligence scan for tiers <TIERS>. Research each competitor in the specified tiers, read brand-guide.md and business-validation.md for positioning context, and write the report to knowledge-base/product/competitive-intelligence.md."
 
 ### 4. Report Results
 

@@ -40,7 +40,7 @@ The goal is passing tests, not beautiful code. Resist the urge to clean up.
 ### REFACTOR Phase: Improve the Code
 
 1. Apply refactoring techniques while keeping all tests green
-2. Use code-simplicity-reviewer or code-quality-analyst via Task tool for guidance if needed
+2. Use soleur:engineering:review:code-simplicity-reviewer or soleur:engineering:review:code-quality-analyst via Task tool for guidance if needed
 3. Run the full test suite after each refactoring step
 4. **STOP and ask permission to proceed to COMMIT**
 

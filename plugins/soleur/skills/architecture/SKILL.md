@@ -7,6 +7,10 @@ description: "This skill should be used when managing Architecture Decision Reco
 
 Create, manage, and query Architecture Decision Records (ADRs) and maintain an interactive [LikeC4](https://likec4.dev/) architecture model. ADRs are version-controlled markdown; the C4 model is version-controlled LikeC4 DSL (`.c4`). All artifacts live in `knowledge-base/engineering/architecture/`.
 
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 ## Sub-commands
 
 | Command | Description |
@@ -40,7 +44,7 @@ Verify the knowledge-base directory exists:
 
 ```bash
 if [[ ! -d "knowledge-base" ]]; then
-  echo "No knowledge-base/ directory found. Create one first or run /soleur:sync."
+  echo "No knowledge-base/ directory found. Create one first or run soleur:sync."
   # Stop execution
 fi
 ```
@@ -84,7 +88,7 @@ Create a new ADR with the next sequential number.
 
    If the contributor picks "Unsure," ask each of the 5 triggers as its own yes/no AskUserQuestion. Compute: any yes → rich, all no → terse.
 
-   **Pipeline mode default.** If running inside `/soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
+   **Pipeline mode default.** If running inside `soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
 
 6. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the chosen shape's body block from the template. Fill in frontmatter:
    - `adr: ADR-<NNN>`
@@ -131,7 +135,7 @@ Display all ADRs with their status, number, title, and date.
    ls knowledge-base/engineering/architecture/decisions/ADR-*.md 2>/dev/null
    ```
 
-2. **If no ADRs exist:** Display "No ADRs found. Run `/soleur:architecture create` to create one."
+2. **If no ADRs exist:** Display "No ADRs found. Run `soleur:architecture create` to create one."
 
 3. **For each ADR file:** Read the YAML frontmatter and extract `adr`, `title`, `status`, `date`.
 

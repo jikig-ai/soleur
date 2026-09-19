@@ -122,7 +122,7 @@ dependencies: ["001"]     # Issue IDs this is blocked by
    - Adjust priority if different from initial assessment
 4. Deferred todos stay in `pending` status
 
-**Use slash command:** `/triage` for interactive approval workflow
+**Use slash command:** `soleur:triage` for interactive approval workflow
 
 ### Managing Dependencies
 
@@ -190,7 +190,7 @@ Work logs serve as:
 
 | Trigger | Flow | Tool |
 |---------|------|------|
-| Code review | `soleur:review` → Findings → `/triage` → Todos | Review agent + skill |
+| Code review | `soleur:review` → Findings → `soleur:triage` → Todos | Review agent + skill |
 | PR comments | `/resolve_pr_parallel` → Individual fixes → Todos | gh CLI + skill |
 | Code TODOs | `/resolve_todo_parallel` → Fixes + Complex todos | Agent + skill |
 | Planning | Brainstorm → Create todo → Work → Complete | Skill |

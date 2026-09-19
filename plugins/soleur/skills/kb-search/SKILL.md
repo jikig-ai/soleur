@@ -13,12 +13,12 @@ Search the knowledge base across all domains. Returns learnings-scoped title mat
 
 Accepted forms:
 
-- `/kb-search <keyword>` — existing behavior, unchanged.
-- `/kb-search --tag <value>` — filter learnings by frontmatter `tags:`.
-- `/kb-search --category <value>` — filter learnings by frontmatter `category:`.
-- `/kb-search --tag <value> --category <value> <keyword>` — combine (AND).
-- `/kb-search --no-paraphrase <keyword>` — sensitive-query manual override; skips Phase 2.5 entirely. Use when the query carries a secret, customer name, or in-flight incident reference (anything you would not want forwarded to a paraphrase generator).
-- `/kb-search --clear-cache` — remove `.soleur/cache/kb-search/query-paraphrases.ndjson`. The cache regenerates lazily on the next non-`--no-paraphrase` invocation.
+- `soleur:kb-search <keyword>` — existing behavior, unchanged.
+- `soleur:kb-search --tag <value>` — filter learnings by frontmatter `tags:`.
+- `soleur:kb-search --category <value>` — filter learnings by frontmatter `category:`.
+- `soleur:kb-search --tag <value> --category <value> <keyword>` — combine (AND).
+- `soleur:kb-search --no-paraphrase <keyword>` — sensitive-query manual override; skips Phase 2.5 entirely. Use when the query carries a secret, customer name, or in-flight incident reference (anything you would not want forwarded to a paraphrase generator).
+- `soleur:kb-search --clear-cache` — remove `.soleur/cache/kb-search/query-paraphrases.ndjson`. The cache regenerates lazily on the next non-`--no-paraphrase` invocation.
 
 If `$ARGUMENTS` is empty, ask: "What would you like to search for in the knowledge base?"
 
@@ -44,7 +44,7 @@ If `$ARGUMENTS` is empty, ask: "What would you like to search for in the knowled
 Parse `$ARGUMENTS` into `$TAG`, `$CATEGORY`, and `$KEYWORD`. Track whether each flag was already seen to detect duplicates. On duplicate or unknown flag, emit:
 
 ```text
-Usage: /kb-search [--tag VALUE] [--category VALUE] [KEYWORD]
+Usage: soleur:kb-search [--tag VALUE] [--category VALUE] [KEYWORD]
 ```
 
 Then exit without searching.
@@ -170,7 +170,7 @@ Zero results → suggest:
 ### Tag filter with keyword
 
 ```text
-/kb-search --tag eager-loading rails
+soleur:kb-search --tag eager-loading rails
 ```
 
 Returns learnings tagged `eager-loading` whose content matches `rails`.
@@ -178,7 +178,7 @@ Returns learnings tagged `eager-loading` whose content matches `rails`.
 ### Category filter alone
 
 ```text
-/kb-search --category performance-issues
+soleur:kb-search --category performance-issues
 ```
 
 Returns all learnings with `category: performance-issues` as title+path.
@@ -186,7 +186,7 @@ Returns all learnings with `category: performance-issues` as title+path.
 ### Combined facets
 
 ```text
-/kb-search --tag n+1 --category performance-issues
+soleur:kb-search --tag n+1 --category performance-issues
 ```
 
 Returns learnings tagged `n+1` AND categorized as `performance-issues`.
@@ -194,7 +194,7 @@ Returns learnings tagged `n+1` AND categorized as `performance-issues`.
 ### Miss with hint
 
 ```text
-/kb-search --tag nonexistent-tag
+soleur:kb-search --tag nonexistent-tag
 # Output:
 # No matches. Valid values: knowledge-base/kb-tags.txt
 ```

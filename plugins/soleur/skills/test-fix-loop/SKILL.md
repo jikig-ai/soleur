@@ -128,7 +128,7 @@ On termination (success or failure), write a report to stdout:
 - **Fixes applied**: files modified and what changed (last iteration)
 - **Recommendation**: what the user should investigate next (if not success)
 
-On success, fixes are staged but NOT committed. The user reviews and commits via `/ship` or manually.
+On success, fixes are staged but NOT committed. The user reviews and commits via `soleur:ship` or manually.
 
 ## Key Principles
 
