@@ -556,6 +556,26 @@ A `CANT-RUN:CANT-TEARDOWN-has-action-sends` reason is an invariant breach (the
 synthetic principal acquired a WORM `action_sends` row) — escalate it, do NOT
 reap-next-run.
 
+## Phase 5.6: Registry-host delivery verdict (path-triggered, REPORT-ONLY)
+
+When the merged diff touched `apps/web-platform/infra/cloud-init-registry.yml` or
+`.github/workflows/registry-host-replace-dispatch.yml`, the merge fired the
+registry-host-replace dispatcher (#7555, #8279), and its verdict is the delivery's
+own record — read it rather than inferring delivery from a green merge:
+
+```bash
+run=$(gh run list --workflow=registry-host-replace-dispatch.yml --branch main --limit 1 \
+  --json databaseId,conclusion --jq '.[0] | "\(.databaseId) \(.conclusion)"')
+gh run view "${run%% *}" --log | grep -E 'Z (range|prs|summary|targets)=|Z Nothing since the watermark'
+gh api --paginate --slurp "repos/jikig-ai/soleur/issues/<number>/comments?per_page=100" \
+  | jq -r '[.[][] | select(.body | test("<!-- registry-delivery run=[0-9]+ kind="))] | last | .body // "no verdict"'
+```
+
+`deliver=false` (a registration-only or comment-only push) and a green run with no verdict is
+the expected case. Any `kind=` other than none is reported verbatim with the runbook's next
+action (`knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`);
+this phase reports, it does not block "done".
+
 ## Phase 6: Update Issue and Compound
 
 If the PR body contained `Closes #N`, update the linked issue with verification results:
