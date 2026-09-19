@@ -16,6 +16,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
+  readFileSync,
   mkdtempSync,
   readdirSync,
   rmSync,
@@ -155,6 +156,20 @@ describe("live .github/workflows", () => {
       .sort();
     expect(tracked.length).toBeGreaterThanOrEqual(LIVE_MIN_FILES);
     expect(workflowFiles(WORKFLOWS_DIR, LIVE_MIN_FILES)).toEqual(tracked);
+  });
+
+  test("every `# Rationale: <runbook> §<id>` pointer resolves to a `## <id>` heading in that runbook, and vice versa", () => {
+    // The relocation convention (ADR-230 §2): a pointer's §<id> is an exact heading anchor.
+    // A job rename or a runbook heading edit would otherwise dangle one side silently.
+    const RUNBOOK = "knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md";
+    const workflow = readFileSync(join(WORKFLOWS_DIR, LIVE_SENTINEL), "utf8");
+    const pointerRe = new RegExp(`^\\s*# Rationale: ${RUNBOOK.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} §(.+?)(?: \\(test-anchored lines kept below\\))?$`, "gm");
+    const pointers = [...workflow.matchAll(pointerRe)].map((m) => m[1]).sort();
+    const headings = [...readFileSync(join(REPO_ROOT, RUNBOOK), "utf8").matchAll(/^## (.+)$/gm)]
+      .map((m) => m[1])
+      .sort();
+    expect(pointers.length).toBeGreaterThanOrEqual(10);
+    expect(pointers).toEqual(headings);
   });
 
   test("no workflow file exceeds the gate", () => {
