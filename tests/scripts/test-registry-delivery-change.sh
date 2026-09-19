@@ -55,15 +55,23 @@ for a in "$@"; do
       cat "$f"; exit 0 ;;
   esac
 done
+# The compare and the listing are the two calls the SUT string-builds, so the stub checks the
+# REQUEST: a compare for the wrong range, or a listing from the wrong sha / for the wrong path,
+# is a miss (exit 64), not an answer — otherwise a SUT that asks for the wrong thing reads the
+# right fixture and every row passes for the wrong reason.
 for a in "$@"; do
   case "$a" in
     */compare/*)
+      [[ "$a" == "repos/jikig-ai/soleur/compare/${STUB_EXPECT_BEFORE}...${STUB_EXPECT_AFTER}" ]] \
+        || { echo "stub: compare for an unexpected range: $a" >&2; exit 64; }
       if [[ -n "${STUB_COMPARE_RC:-}" && "${STUB_COMPARE_RC}" != "0" ]]; then exit "${STUB_COMPARE_RC}"; fi
       printf '%s' "${STUB_COMPARE_JSON:-}"; exit 0 ;;
   esac
 done
 case "$argv" in
   *" -f path="*)
+    [[ "$argv" == *" repos/jikig-ai/soleur/commits "* && "$argv" == *" -f sha=${STUB_EXPECT_AFTER} "* && "$argv" == *" -f path=${STUB_EXPECT_PATH} "* ]] \
+      || { echo "stub: listing with unexpected sha/path/url: $*" >&2; exit 64; }
     if [[ -n "${STUB_PATH_RC:-}" && "${STUB_PATH_RC}" != "0" ]]; then exit "${STUB_PATH_RC}"; fi
     printf '%s' "${STUB_PATH_JSON:-}"; exit 0 ;;
 esac
@@ -117,8 +125,13 @@ fx_commit() { printf '%s' "$2" > "$TMP/fx/commit/$1"; }
 # run_sut [--before SHA] ... : runs the SUT through the seam, outside Actions, with the PATH shim
 # in front. RC and $TMP/out are the row's evidence.
 run_sut() {
+  local _b="" _a="" _prev=""
+  for _x in "$@"; do
+    [[ "$_prev" == "--before" ]] && _b="$_x"; [[ "$_prev" == "--after" ]] && _a="$_x"; _prev="$_x"
+  done
   env -u GITHUB_ACTIONS PATH="$TMP/bin:$PATH" \
       REGISTRY_DELIVERY_GH_CMD="$TMP/gh.sh" \
+      STUB_EXPECT_BEFORE="$_b" STUB_EXPECT_AFTER="$_a" STUB_EXPECT_PATH="$CFG" \
       STUB_DIR="$TMP/fx" STUB_LOG="$TMP/calls" \
       STUB_COMPARE_RC="$STUB_COMPARE_RC" STUB_COMPARE_JSON="$STUB_COMPARE_JSON" \
       STUB_PATH_RC="$STUB_PATH_RC" STUB_PATH_JSON="$STUB_PATH_JSON" \
@@ -133,6 +146,8 @@ assert_shape() {
   done
   [[ "$(grep -cvE '^(range|range_note|commits|prs|unattributed|summary)=' "$TMP/out")" -eq 0 ]] || ok=0
   if [[ "$ok" -eq 1 ]]; then pass "$1: output shape — six keys, each once, nothing else"; else fail "$1: output shape broken: $(tr '\n' '|' < "$TMP/out")"; fi
+  # The SUT swallows the stub's stderr, so a forgotten fixture would read as the no-PR arm.
+  if grep -q '^stub: ' "$TMP/err"; then fail "$1: a stub MISS impersonated an arm: $(grep '^stub: ' "$TMP/err" | head -1)"; else pass "$1: no stub miss"; fi
 }
 
 # ============================================================================================
@@ -144,7 +159,7 @@ if grep -q -- '--repo' "$TMP/err" && grep -q -- '--after' "$TMP/err"; then pass 
 # ============================================================================================
 echo "T1 control: proven range, one path touch, PR via /pulls, subject with hostile characters"
 reset_fixtures
-SUBJ1='fix: a=b 100% `x` "q" <!-- @octocat'
+SUBJ1='fix: a=b 100% `x` "q" <!-- @octocat — café'
 STUB_COMPARE_JSON="$(compare_json ahead 3 "$X" "$T" "$A")"
 STUB_PATH_JSON="$(listing "$(entry "$T" "$SUBJ1"$'\n\nbody')" "$(entry "$P1" "old (#7001)")" "$(entry "$P2" "older (#7000)")")"
 fx_pulls "$T" "$(pulls 8272)"
@@ -161,6 +176,8 @@ grep -q 'compare/' "$TMP/calls" && grep -q -- ' -f path=' "$TMP/calls" && grep -
   && pass "T1: call log shows compare, path listing and /pulls" || fail "T1: call log: $(tr '\n' '|' < "$TMP/calls")"
 if grep 'compare/' "$TMP/calls" | grep -qE 'per_page|page='; then fail "T1: the compare call carried a paging param (250-cap contract broken)"; else pass "T1: the compare call carried no paging param"; fi
 if grep -q ' -f path=' "$TMP/calls" && grep ' -f path=' "$TMP/calls" | grep -q 'per_page=100'; then pass "T1: the path listing asks for per_page=100"; else fail "T1: path listing lacks per_page=100"; fi
+grep -Fq "repos/jikig-ai/soleur/compare/${B}...${A}" "$TMP/calls" && pass "T1: the compare is before...after" || fail "T1: compare range wrong: $(grep compare "$TMP/calls")"
+grep -Fq -- "-X GET repos/jikig-ai/soleur/commits -f sha=${A} -f path=${CFG} -F per_page=100" "$TMP/calls" && pass "T1: the listing is from AFTER, for CFG, via -f/-F fields" || fail "T1: listing argv: $(grep ' -f path=' "$TMP/calls")"
 
 # ============================================================================================
 echo "T2 order: two path touches — prs follow COMPARE order (oldest->newest), not listing order"
@@ -173,6 +190,18 @@ run_sut --before "$B" --after "$B1"
 assert_shape T2
 [[ "$(val prs)" == "7954 8272" ]] && pass "T2: prs=7954 8272 (compare order)" || fail "T2: prs=$(val prs)"
 [[ "$(val commits)" == "$A1 $B1" ]] && pass "T2: commits oldest->newest" || fail "T2: commits=$(val commits)"
+[[ "$(val summary)" == "PR #7954 (older); PR #8272 (newer)" ]] && pass "T2: summary parts joined with '; '" || fail "T2: summary=$(val summary)"
+
+# T2c: two PRs and one unattributed commit in one range — the exact multi-part summary.
+reset_fixtures
+U=$(mksha 0e)
+STUB_COMPARE_JSON="$(compare_json ahead 3 "$A1" "$U" "$B1")"
+STUB_PATH_JSON="$(listing "$(entry "$B1" "newer")" "$(entry "$U" "direct")" "$(entry "$A1" "older")")"
+fx_pulls "$A1" "$(pulls 7954)"; fx_pulls "$B1" "$(pulls 8272)"; fx_pulls "$U" "[]"
+run_sut --before "$B" --after "$B1"
+assert_shape T2c
+[[ "$(val summary)" == "PR #7954 (older); PR #8272 (newer); commit ${U:0:7} (direct)" ]] && pass "T2c: PRs first, then the unattributed commit, all parts present" || fail "T2c: summary=$(val summary)"
+[[ "$(val unattributed)" == "$U" ]] && pass "T2c: unattributed=<the direct push>" || fail "T2c: unattributed=$(val unattributed)"
 
 # ============================================================================================
 echo "T3 coalesced: after is a registration-only push; the touch is an EARLIER in-range commit"
@@ -197,12 +226,18 @@ assert_shape T4
 [[ "$(val range_note)" == "no watermark" ]] && pass "T4: range_note=no watermark" || fail "T4: range_note=$(val range_note)"
 [[ "$(val prs)" == "8272" ]] && pass "T4: prs from pulls/<after>" || fail "T4: prs=$(val prs)"
 [[ "$(val commits)" == "$A" ]] && pass "T4: commits=<after>" || fail "T4: commits=$(val commits)"
+[[ "$(val summary)" == "PR #8272 (chore: bump)" ]] && pass "T4: summary comes from commits/<after> on the unproven arm" || fail "T4: summary=$(val summary)"
 if grep -q 'compare/' "$TMP/calls"; then fail "T4: a compare call was made with no watermark"; else pass "T4: no compare call without a watermark"; fi
 # T4b: an EMPTY --before is the same arm (the workflow passes the gate's output verbatim).
 reset_fixtures
 fx_commit "$A" "$(entry "$A" "chore: bump")"; fx_pulls "$A" "$(pulls 8272)"
 run_sut --before "" --after "$A"
 [[ "$RC" -eq 0 && "$(val range_note)" == "no watermark" ]] && pass "T4b: empty --before is the no-watermark arm" || fail "T4b: rc=$RC note=$(val range_note)"
+# T4c: two notes on one run are joined with `; ` (no watermark + subject attribution).
+reset_fixtures
+fx_commit "$A" "$(entry "$A" "chore: bump (#8299)")"; fx_pulls "$A" "[]"
+run_sut --after "$A"
+[[ "$(val range_note)" == "no watermark; PR #8299 attributed by commit subject, not by the API" ]] && pass "T4c: two notes joined with '; '" || fail "T4c: note=$(val range_note)"
 
 # ============================================================================================
 echo "T5 compare diverged: unproven, [after] only"
@@ -256,6 +291,15 @@ fx_pulls "$T" "[]"
 run_sut --before "$B" --after "$T"
 [[ "$(val prs)" == "" && "$(val unattributed)" == "$T" ]] && pass "T7b: '(#1) not a suffix' -> unattributed" || fail "T7b: prs=$(val prs) unattributed=$(val unattributed)"
 
+# T7c: only the FIRST line is consulted — a body line ending in (#N) must not attribute.
+reset_fixtures
+STUB_COMPARE_JSON="$(compare_json ahead 1 "$T")"
+STUB_PATH_JSON="$(listing "$(entry "$T" $'feat: x\n\nReverts (#42)')")"
+fx_pulls "$T" "[]"
+run_sut --before "$B" --after "$T"
+[[ "$(val prs)" == "" && "$(val unattributed)" == "$T" ]] && pass "T7c: a body-line (#42) does not attribute" || fail "T7c: prs=$(val prs)"
+if grep -q '42' "$TMP/out"; then fail "T7c: 42 leaked into the output"; else pass "T7c: 42 absent"; fi
+
 # ============================================================================================
 echo "T8 no PR anywhere: unattributed, summary names the commit"
 reset_fixtures
@@ -273,10 +317,17 @@ echo "T9 /pulls returns a non-numeric number: rejected, subject fallback attribu
 reset_fixtures
 STUB_COMPARE_JSON="$(compare_json ahead 1 "$T")"
 STUB_PATH_JSON="$(listing "$(entry "$T" "feat: thing (#7954)")")"
-fx_pulls "$T" '[{"number":"abc"}]'
+fx_pulls "$T" '[{"number":"12abc","merged_at":"2026-09-19T00:00:00Z"}]'
 run_sut --before "$B" --after "$T"
-[[ "$(val prs)" == "7954" ]] && pass "T9: 'abc' rejected, 7954 from the subject" || fail "T9: prs=$(val prs)"
-if grep -q abc "$TMP/out"; then fail "T9: the non-numeric value leaked into the output"; else pass "T9: 'abc' never reaches the output"; fi
+[[ "$(val prs)" == "7954" ]] && pass "T9: '12abc' rejected, 7954 from the subject" || fail "T9: prs=$(val prs)"
+if grep -q abc "$TMP/out"; then fail "T9: the non-numeric value leaked into the output"; else pass "T9: '12abc' never reaches the output"; fi
+# T9b: /pulls lists an UNMERGED entry first — the merged one is the write target.
+reset_fixtures
+STUB_COMPARE_JSON="$(compare_json ahead 1 "$T")"
+STUB_PATH_JSON="$(listing "$(entry "$T" "feat: thing")")"
+fx_pulls "$T" '[{"number":1111,"merged_at":null},{"number":2222,"merged_at":"2026-09-19T00:00:00Z"}]'
+run_sut --before "$B" --after "$T"
+[[ "$(val prs)" == "2222" ]] && pass "T9b: the merged entry wins over an unmerged first entry" || fail "T9b: prs=$(val prs)"
 
 # ============================================================================================
 echo "T10 total_commits > 250: unproven, note names the cap, compare had no paging param"
@@ -350,25 +401,30 @@ p="$(val prs)"
 echo "T15 identical compare: proven range, empty intersection, summary names after7 + watermark"
 reset_fixtures
 STUB_COMPARE_JSON='{"status":"identical","total_commits":0,"commits":[]}'
-STUB_PATH_JSON="$(listing "$(entry "$P1" "pre (#7001)")")"
+# On a re-fire at the watermark, the watermark SHA is itself the newest config touch in the
+# listing (it was the last delivered change) — and it must NOT be re-attributed.
+STUB_PATH_JSON="$(listing "$(entry "$A" "delivered (#8272)")" "$(entry "$P1" "pre (#7001)")")"
+fx_pulls "$A" "$(pulls 8272)"
 run_sut --before "$A" --after "$A"
 assert_shape T15
 [[ "$(val range)" == "proven" ]] && pass "T15: range=proven" || fail "T15: range=$(val range)"
 [[ "$(val prs)" == "" ]] && pass "T15: prs EMPTY" || fail "T15: prs=$(val prs)"
+[[ "$(val commits)" == "" ]] && pass "T15: commits EMPTY (the verdict keys its 'unchanged' sentence on this)" || fail "T15: commits=$(val commits)"
 [[ "$(val summary)" == *"${A:0:7}"* && "$(val summary)" == *"unchanged since the delivery watermark"* ]] && pass "T15: summary names <after7> and the watermark" || fail "T15: summary=$(val summary)"
+if grep -q '/pulls' "$TMP/calls"; then fail "T15: the already-delivered watermark SHA was re-attributed"; else pass "T15: no /pulls lookup — the watermark's own PR is not re-blamed"; fi
 
 # ============================================================================================
 echo "T16 control characters in the subject are stripped; summary is one line"
 reset_fixtures
 STUB_COMPARE_JSON="$(compare_json ahead 1 "$T")"
-MSG16="$(printf 'sub\r\001ject\177\xe2\x80\xa8 tail\nsecond line')"
+MSG16="$(printf 'sub\r\001ject\177\xe2\x80\xa8\xc2\x85\xe2\x80\xae tail \xe2\x80\x94 ok\nsecond line')"
 STUB_PATH_JSON="$(listing "$(entry "$T" "$MSG16")")"
 fx_pulls "$T" "$(pulls 8303)"
 run_sut --before "$B" --after "$T"
 assert_shape T16
 s="$(val summary)"
 [[ "$(grep -c '' "$TMP/out")" -eq 6 ]] && pass "T16: output is exactly six lines" || fail "T16: $(grep -c '' "$TMP/out") lines"
-[[ "$s" == "PR #8303 (subject tail)" ]] && pass "T16: CR, \\x01, DEL and U+2028 removed; second line dropped" || fail "T16: summary=$(printf '%s' "$s" | od -c | head -3)"
+[[ "$s" == "PR #8303 (subject tail — ok)" ]] && pass "T16: CR, \\x01, DEL, U+2028, NEL and U+202E removed, the em dash kept; second line dropped" || fail "T16: summary=$(printf '%s' "$s" | od -c | head -3)"
 if grep -q 'second line' "$TMP/out"; then fail "T16: the second message line leaked"; else pass "T16: only the first line is used"; fi
 
 # ============================================================================================
@@ -397,6 +453,14 @@ assert_shape T18
 if grep -q 'evil' "$TMP/calls"; then fail "T18: a gh call carried the malformed sha"; else pass "T18: no gh call carried the malformed sha"; fi
 if grep -q 'evil' "$TMP/out"; then fail "T18: the malformed sha leaked into the output"; else pass "T18: the malformed sha is absent from the output"; fi
 
+# T18b: the malformed count and a subject attribution compose into one exact note.
+reset_fixtures
+STUB_COMPARE_JSON='{"status":"ahead","total_commits":2,"commits":[{"sha":"../../evil"},{"sha":"'"$T"'"}]}'
+STUB_PATH_JSON="$(listing "$(entry "$T" "ok (#8305)")" "$(entry "not-a-sha" "evil")")"
+fx_pulls "$T" "[]"
+run_sut --before "$B" --after "$T"
+[[ "$(val range_note)" == "malformed sha from API dropped (2); PR #8305 attributed by commit subject, not by the API" ]] && pass "T18b: exact two-part note — count covers BOTH loops" || fail "T18b: note=$(val range_note)"
+
 # ============================================================================================
 echo "T19 the PATH shim: a gh call not routed through the seam is fatal to the row"
 reset_fixtures
@@ -424,6 +488,31 @@ assert_shape T20
 s="$(val summary)"
 [[ "$s" == "PR #8306 ($(printf 'x%.0s' $(seq 1 200)))" ]] && pass "T20: subject capped at exactly 200 characters" || fail "T20: summary length $(printf '%s' "$s" | wc -c)"
 
+# ============================================================================================
+echo "T21 a FAILED /pulls lookup leaves the commit unattributed — the (#N) suffix is not consulted"
+reset_fixtures
+STUB_COMPARE_JSON="$(compare_json ahead 1 "$T")"
+STUB_PATH_JSON="$(listing "$(entry "$T" "fix: registry tweak <!-- https://evil.example (#1)")")"
+# The per-sha stub answers with exit 0; an rc!=0 is modelled by a wrapper seam that fails on
+# /pulls only and delegates everything else to the stub.
+cat > "$TMP/gh-pullsfail.sh" <<STUB
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in */pulls) printf '%s\\n' "\$*" >> "\$STUB_LOG"; exit 22;; esac; done
+exec "$TMP/gh.sh" "\$@"
+STUB
+chmod +x "$TMP/gh-pullsfail.sh"
+env -u GITHUB_ACTIONS PATH="$TMP/bin:$PATH" REGISTRY_DELIVERY_GH_CMD="$TMP/gh-pullsfail.sh" \
+    STUB_EXPECT_BEFORE="$B" STUB_EXPECT_AFTER="$T" STUB_EXPECT_PATH="$CFG" \
+    STUB_DIR="$TMP/fx" STUB_LOG="$TMP/calls" STUB_COMPARE_RC=0 STUB_COMPARE_JSON="$STUB_COMPARE_JSON" \
+    STUB_PATH_RC=0 STUB_PATH_JSON="$STUB_PATH_JSON" \
+    bash "$SUT" --repo jikig-ai/soleur --path "$CFG" --before "$B" --after "$T" > "$TMP/out" 2>"$TMP/err"; RC=$?
+if [[ "$RC" -eq 0 ]]; then pass "T21: rc 0"; else fail "T21: rc $RC"; fi
+assert_shape T21
+[[ "$(val prs)" == "" && "$(val unattributed)" == "$T" ]] && pass "T21: unattributed, prs EMPTY (the suffix did not pick a target)" || fail "T21: prs=$(val prs) unattributed=$(val unattributed)"
+[[ "$(val range_note)" == *"pulls lookup rc=22"* ]] && pass "T21: note names the failed lookup" || fail "T21: note=$(val range_note)"
+[[ "$(val range)" == "proven" ]] && pass "T21: range stays proven (the range was, the attribution was not)" || fail "T21: range=$(val range)"
+if grep -q 'prs=1$' "$TMP/out"; then fail "T21: the contributor's (#1) became the target"; else pass "T21: #1 never appears as a PR"; fi
+
 # --- anti-vacuity floor -------------------------------------------------------------------
 # HARNESS CANARY + a floor that does NOT dispatch through the helper it guards (the preflight
 # suite's shape): neutering fail() must be caught by something fail() does not carry.
@@ -437,8 +526,8 @@ fi
 FAIL=$((FAIL - 1))
 TOTAL=$((PASS+FAIL))
 # The floor equals the count a green run measured (AC2). Fix the dispatch, do not lower it.
-if [[ "$TOTAL" -lt 98 ]]; then
-  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 98. Fix the dispatch, do not lower the floor." >&2
+if [[ "$TOTAL" -lt 137 ]]; then
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 137. Fix the dispatch, do not lower the floor." >&2
   exit 2
 fi
 

@@ -38,7 +38,10 @@
 # THE SUBJECT FALLBACK IS ANCHORED TO THE SQUASH SUFFIX — `(#N)` at end of line only. The
 # precedent in .github/workflows/reusable-release.yml uses `(?=\))` unanchored, which returns the
 # FIRST parenthesised number: `fix: see (#7556) (#8301)` would post on #7556, and a direct push
-# could name any issue in the repo as its tracker. Contributor-controlled text picks nothing here.
+# could name any issue in the repo as its tracker. The fallback fires ONLY when `/pulls`
+# ANSWERED with no merged PR — a failed lookup (rc≠0: 5xx, secondary rate limit) leaves the
+# commit UNATTRIBUTED and says so, because on an error the trailing `(#N)` of a single-commit
+# external PR would otherwise be the contributor choosing the verdict's write target.
 #
 # THE TEST SEAM IS REFUSED ON THE PRODUCTION PATH. REGISTRY_DELIVERY_GH_CMD replaces `gh` for the
 # unit suite; set inside GitHub Actions it could manufacture any attribution, so it exits 1 with a
@@ -46,7 +49,7 @@
 #
 # Output: six `key=value` lines, one each, in this order, on every non-refused arm:
 #   range=proven|unproven
-#   range_note=<why unproven / attribution caveats, `; `-joined; empty when nothing to say>
+#   range_note=<why unproven / attribution caveats, joined with `; `; empty when nothing to say>
 #   commits=<sha> <sha>      candidates oldest -> newest (empty on a proven empty intersection)
 #   prs=<n> <n>              unique PR numbers, first-seen order (oldest -> newest)
 #   unattributed=<sha> ...   candidates with no PR (direct push, no `(#N)` suffix)
@@ -70,7 +73,7 @@ while [[ $# -gt 0 ]]; do
     --after)  AFTER="${2:-}"; shift 2 ;;
     --before) BEFORE="${2:-}"; shift 2 ;;
     --path)   CFG="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '1,50p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '1,/^# Usage:/p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "registry-delivery-change: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
 done
@@ -97,11 +100,17 @@ note() { NOTES+=("$1"); }
 # capped at 65,535 characters in total (docs.github.com, workflow-syntax) — ten uncapped subjects
 # in the dispatch `reason` could make `gh workflow run` fail, a red run that STICKS (the
 # watermark does not advance, so every later push re-derives the same range).
+# shellcheck source=scripts/lib/strip-log-injection.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/strip-log-injection.sh"
 clean_subject() {
-  # LC_ALL=C so the byte-range bracket matches the UTF-8 bytes of U+2028/U+2029; under a UTF-8
-  # locale sed reads them as one character and the bracket expression never matches.
+  # strip_log_injection is the repo's single source for CR/LF/FF/VT/ESC/DEL + NEL/LS/PS (its
+  # sed runs byte-wise: `\xNN` escapes are matched by GNU sed regardless of locale). The rest
+  # of C0 and the bidi controls (U+202A–U+202E, U+2066–U+2069 — a subject could otherwise
+  # visually reverse the rest of the verdict line) are stripped here, byte-wise under LC_ALL=C.
   local s
-  s="$(printf '%s' "$1" | head -n 1 | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed 's/\xe2\x80[\xa8\xa9]//g')"
+  s="$(printf '%s' "$1" | head -n 1 | strip_log_injection \
+        | LC_ALL=C tr -d '\000-\037' \
+        | LC_ALL=C sed -e 's/\xe2\x80[\xaa-\xae]//g' -e 's/\xe2\x81[\xa6-\xa9]//g')"
   printf '%s' "${s:0:200}"
 }
 
@@ -130,8 +139,8 @@ else
   cmp_json="$(api "repos/${REPO}/compare/${BEFORE}...${AFTER}")" || crc=$?
   status=""; total=""
   if [[ "$crc" -eq 0 ]]; then
-    status="$(printf '%s' "$cmp_json" | jq -r '.status // ""' 2>/dev/null || echo "")"
-    total="$(printf '%s' "$cmp_json" | jq -r '.total_commits // 0' 2>/dev/null || echo 0)"
+    status="$(printf '%s' "$cmp_json" | jq -r '.status // ""' 2>/dev/null | tr -d '\r\n' || echo "")"
+    total="$(printf '%s' "$cmp_json" | jq -r '.total_commits // 0' 2>/dev/null | tr -d '\r\n' || echo 0)"
   fi
   if [[ "$crc" -ne 0 ]]; then
     note "compare rc=${crc}"
@@ -195,12 +204,22 @@ fi
 # from the repo's three single-SHA resolvers (reusable-release.yml et al.) —
 # `.[0].number // empty`, then digit-validated.
 resolve_pr_for_sha() {
-  local sha="$1" n=""
+  local sha="$1" n="" raw="" rc=0
   PR_OUT=""; BY_SUBJECT=0
-  n="$(api "repos/${REPO}/commits/${sha}/pulls" | jq -r '.[0].number // empty' 2>/dev/null || true)"
-  if [[ -n "$n" && "$n" =~ ^[0-9]+$ ]]; then PR_OUT="$n"; return 0; fi
+  # rc and emptiness are DIFFERENT facts: an answered `[]` licenses the subject fallback; a
+  # failed lookup does not (see the header — the suffix is contributor text).
+  raw="$(api "repos/${REPO}/commits/${sha}/pulls")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    note "pulls lookup rc=${rc} for ${sha:0:7}; left unattributed"
+    return 0
+  fi
+  # Prefer a MERGED entry: for a default-branch commit the endpoint lists the merged PR that
+  # introduced it, and the number becomes a WRITE target, which the three read-only precedents
+  # never had to defend.
+  n="$(printf '%s' "$raw" | jq -r '[.[] | select(.merged_at != null)][0].number // empty' 2>/dev/null || true)"
+  if [[ -n "$n" && "$n" =~ ^[0-9]{1,9}$ ]]; then PR_OUT="$n"; return 0; fi
   n="$(printf '%s' "${SUBJECT[$sha]:-}" | head -n 1 | tr -d '\r' | grep -oP '\(#\K\d+(?=\)$)' || true)"
-  if [[ -n "$n" ]]; then BY_SUBJECT=1; PR_OUT="$n"; fi
+  if [[ -n "$n" && "$n" =~ ^[0-9]{1,9}$ ]]; then BY_SUBJECT=1; PR_OUT="$n"; fi
   return 0
 }
 
@@ -229,13 +248,14 @@ for sha in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
 done
 
 # Summary: one `PR #N (<subject>)` per PR, then one `commit <sha7> (<subject>)` per unattributed
-# commit, `; `-joined. A proven empty intersection names the SHA and the watermark instead, so no
+# commit, joined with `; ` (an explicit loop — `${arr[*]}` joins on the FIRST IFS character only). A proven empty intersection names the SHA and the watermark instead, so no
 # arm produces an empty description and none names a PR that did not change the config.
 parts=()
 for p in "${PRS[@]+"${PRS[@]}"}"; do parts+=("PR #${p} (${PR_SUBJECT[$p]})"); done
 for s in "${UNATTR[@]+"${UNATTR[@]}"}"; do parts+=("commit ${s:0:7} (${UNATTR_SUBJECT[$s]})"); done
+join_semi() { local out="" x; for x in "$@"; do out="${out:+$out; }$x"; done; printf '%s' "$out"; }
 if [[ "${#parts[@]}" -gt 0 ]]; then
-  SUMMARY="$(IFS='; '; printf '%s' "${parts[*]}")"
+  SUMMARY="$(join_semi "${parts[@]}")"
 elif [[ "$RANGE" == "proven" ]]; then
   SUMMARY="the ${CFG##*/} user_data at ${AFTER:0:7} (unchanged since the delivery watermark ${BEFORE:0:7})"
 else
@@ -245,7 +265,7 @@ fi
 # to strip, and a whole-summary cap would truncate a coalesced multi-PR summary.
 
 printf 'range=%s\n' "$RANGE"
-printf 'range_note=%s\n' "$(IFS='; '; printf '%s' "${NOTES[*]+"${NOTES[*]}"}")"
+printf 'range_note=%s\n' "$(join_semi "${NOTES[@]+"${NOTES[@]}"}")"
 printf 'commits=%s\n' "${CANDIDATES[*]+"${CANDIDATES[*]}"}"
 printf 'prs=%s\n' "${PRS[*]+"${PRS[*]}"}"
 printf 'unattributed=%s\n' "${UNATTR[*]+"${UNATTR[*]}"}"

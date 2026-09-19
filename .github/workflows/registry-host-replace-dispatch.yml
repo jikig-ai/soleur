@@ -85,13 +85,18 @@ concurrency:
 
 # STEP MAP (#8279) — where each string lives, so the next editor does not read the whole file:
 #   gate      decides deliver=true|false; emits `watermark=` (head of the last successful run)
-#   change    names the change(s) this run delivers — `summary=`, `prs=`, `targets=`, `range=`,
-#             `range_note=` — via scripts/registry-delivery-change.sh; never fails the job
+#   change    names the change(s) this run delivers — the helper's six keys `range=`,
+#             `range_note=`, `commits=`, `prs=`, `unattributed=`, `summary=` plus `targets=` —
+#             via scripts/registry-delivery-change.sh; never fails the job
 #   preflight read-only pull-path gate; refuses rather than firing blind
 #   dispatch  fires apply-web-platform-infra.yml with a `reason` naming the delivered change
 #   poll      watches the apply to a conclusion; emits `apply_run=` / `apply_conclusion=` only
 #   verdict   the SOLE posting site: records the verdict on the delivering PR(s) / `tracker`,
 #             or creates an owned issue when nothing is derivable
+# Operator/agent runbook (re-fire, `kind` vocabulary, local reproduction):
+#   knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md
+# Behavioural pins for the change + verdict bodies:
+#   plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh
 jobs:
   dispatch-replace:
     runs-on: ubuntu-24.04
@@ -198,7 +203,9 @@ jobs:
           BEFORE_SHA="$(gh run list --workflow="$SELF" --branch main --status success \
             --limit 50 --json headSha,createdAt \
             --jq 'sort_by(.createdAt) | last | .headSha' 2>/dev/null)" || wrc=$?
-          if [[ "$wrc" -eq 0 && -n "${BEFORE_SHA:-}" && "$BEFORE_SHA" != "null" ]]; then
+          # API-trusted for shape, validated anyway before it becomes a URL path segment below.
+          [[ "${BEFORE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || BEFORE_SHA=""
+          if [[ "$wrc" -eq 0 && -n "${BEFORE_SHA:-}" ]]; then
             echo "watermark=${BEFORE_SHA}" >> "$GITHUB_OUTPUT"
           fi
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
@@ -354,12 +361,15 @@ jobs:
           PRS="$(sed -n 's/^prs=//p' "$out")"
           RANGE="$(sed -n 's/^range=//p' "$out")"
           RANGE_NOTE="$(sed -n 's/^range_note=//p' "$out")"
-          # The operator copies `#8272` from every other surface: strip the `#`, then require digits.
-          T="${TRACKER#\#}"
+          # The operator copies `#8272` from every other surface, sometimes with pasted whitespace
+          # or a leading zero: strip the `#` and whitespace, require digits, normalise leading
+          # zeros (08272 and 8272 must dedupe against the same derived PR).
+          T="${TRACKER//[[:space:]]/}"; T="${T#\#}"
           if [[ -n "$T" && ! "$T" =~ ^[0-9]{1,9}$ ]]; then
             echo "::warning::tracker input '$(gha_esc "$T")' is not a number — dropped; the verdict posts to the derived target(s) only."
             T=""
           fi
+          [[ -n "$T" ]] && T="$((10#$T))"
           # targets = derived PRs ∪ tracker, deduplicated (a tracker equal to a derived PR must
           # not double-post). EXCEPT on a manual re-fire with an UNPROVEN range: there the
           # degraded derivation is [github.sha] only, which on a re-fire is whatever main is at —
@@ -377,7 +387,11 @@ jobs:
           # tee to stdout AND the step summary: every run, including deliver=false registration
           # runs, is a free live probe of the derivation (the step summary has no REST endpoint;
           # the run log is what AC14 reads).
-          { cat "$out"; printf 'targets=%s\n' "$TARGETS"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          # The summary copy is FENCED: `summary=` carries contributor text, and a `<!--` would
+          # otherwise hide the rest of the block from the human view (stdout stays raw for the
+          # run log, which is what AC14 reads).
+          { cat "$out"; printf 'targets=%s\n' "$TARGETS"; }
+          { echo '```'; cat "$out"; printf 'targets=%s\n' "$TARGETS"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           if [[ "$RANGE" != "proven" ]]; then
             echo "::warning::attribution unproven: $(gha_esc "$RANGE_NOTE")"
           fi
@@ -418,7 +432,7 @@ jobs:
           set -euo pipefail
           # Consumer default (#8279): the `change` step cannot fail the job, but it can be killed
           # by its timeout, and then its outputs are empty. Say so rather than naming nothing.
-          SUMMARY="${SUMMARY:-change attribution unavailable for the user_data at ${MERGE_SHA:0:7}}"
+          SUMMARY="${SUMMARY:-the user_data merged at ${MERGE_SHA:0:7} (change attribution unavailable)}"
           # workflow_dispatch inputs are capped at 65,535 characters in total; the helper caps
           # each subject, and this belt-and-braces cap keeps the reason inside the payload even
           # if that changes.
@@ -428,10 +442,13 @@ jobs:
           # trail answers "which change is this host carrying" without a human correlating runs.
           # `apply-web-platform-infra.yml` consumes `reason` only through an env binding (its
           # "Untrusted-input handling" header), so contributor text in SUMMARY is safe there.
+          # The reason is DISPLAYED (the apply's step summary, the run list), never parsed, so
+          # the markdown-escaped form is the right one for it too.
+          SUMMARY_MD="$(md_esc "$SUMMARY")"
           if [[ -n "${MANUAL_REASON:-}" ]]; then
-            REASON="registry-host-replace re-fired manually: ${MANUAL_REASON} (delivering user_data at ${MERGE_SHA}) — ${SUMMARY}"
+            REASON="registry-host-replace re-fired manually: ${MANUAL_REASON} (delivering user_data at ${MERGE_SHA}) — ${SUMMARY_MD}"
           else
-            REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} — ${SUMMARY}. Inert until this replace runs; the store volume is preserved."
+            REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} — ${SUMMARY_MD}. Inert until this replace runs; the store volume is preserved."
           fi
           # Stamped BEFORE the dispatch, so the poll below can select the run this step caused
           # rather than whatever apply happens to be in flight. One second of slack absorbs
@@ -448,7 +465,7 @@ jobs:
             echo "Delivering the user_data merged at \`${MERGE_SHA}\`. The store volume is preserved"
             echo "(the target's own gate aborts unless \`store_destroyed==0\`)."
             echo ""
-            echo "Delivering: $(md_esc "$SUMMARY")."
+            echo "Delivering: ${SUMMARY_MD}."
             echo ""
             # Worded as UNMEASURED: not every delivering PR enrols a follow-through, and asserting
             # an enrolment this run never measured is the AP-021 shape.
@@ -512,14 +529,13 @@ jobs:
             [[ -n "$concl" && "$concl" != "null" ]] && break
             sleep 20
           done
+          [[ -z "$concl" || "$concl" == "null" ]] && concl="unverified"
+          printf 'apply_conclusion=%s\n' "$concl" >> "$GITHUB_OUTPUT"
           if [[ "$concl" == "success" ]]; then
-            printf 'apply_conclusion=success\n' >> "$GITHUB_OUTPUT"
             echo "Apply run ${run_id} concluded: success."
-          elif [[ -z "$concl" || "$concl" == "null" ]]; then
-            printf 'apply_conclusion=unverified\n' >> "$GITHUB_OUTPUT"
+          elif [[ "$concl" == "unverified" ]]; then
             echo "::warning::apply run ${run_id} had not concluded within the poll window — UNVERIFIED, not failed."
           else
-            printf 'apply_conclusion=%s\n' "$concl" >> "$GITHUB_OUTPUT"
             echo "::error::apply run ${run_id} concluded '${concl}'. The registry host may be DOWN and it has no SSH; recover by re-dispatching registry-host-replace, which restores from the PRESERVED volume. The verdict step records this on the delivering tracker(s)."
             exit 1
           fi
@@ -568,12 +584,16 @@ jobs:
         # already be in flight.
         #
         # The second clause is what turns the poll's UNVERIFIED arms (job green, apply outcome
-        # unknown) from a recorded dead end into a posted verdict.
+        # unknown) from a recorded dead end into a posted verdict. One consequence, by design: a
+        # failed post on that arm exits 1, so a green-but-unverified run does NOT become the
+        # watermark and the next push re-delivers the same range — one extra volume-preserving
+        # replace of a host whose state was never measured, which is the recoverable direction.
         if: always() && (job.status != 'success' || steps.poll.outputs.apply_conclusion == 'unverified')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           JOB_STATUS: ${{ job.status }}
           GATE_OUTCOME: ${{ steps.gate.outcome }}
           PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
@@ -586,11 +606,14 @@ jobs:
           SUMMARY: ${{ steps.change.outputs.summary }}
           TARGETS: ${{ steps.change.outputs.targets }}
           PRS: ${{ steps.change.outputs.prs }}
+          COMMITS: ${{ steps.change.outputs.commits }}
           RANGE: ${{ steps.change.outputs.range }}
           RANGE_NOTE: ${{ steps.change.outputs.range_note }}
           TRACKER: ${{ inputs.tracker || '' }}
         run: |
           set -uo pipefail
+          # `set -f`: the raw tracker is word-split below; nothing here may glob against the checkout.
+          set -f
           gha_esc() { local s=${1//%/%25}; s=${s//$'\r'/%0D}; printf '%s' "${s//$'\n'/%0A}"; }
           # Markdown surfaces get ESCAPED text: a `<!--` in a merged subject would otherwise
           # comment out the verdict and the re-fire instruction from the human view while the
@@ -600,9 +623,12 @@ jobs:
           # its timeout. TARGETS then falls back to the RAW tracker input, which is why every
           # target is validated below before it becomes a URL path segment — independent of the
           # producer's own validation.
-          TRACKER="${TRACKER#\#}"
+          TRACKER="${TRACKER//[[:space:]]/}"; TRACKER="${TRACKER#\#}"
+          [[ "$TRACKER" =~ ^[0-9]{1,9}$ ]] && TRACKER="$((10#$TRACKER))"
           SUMMARY="${SUMMARY:-the user_data merged at ${MERGE_SHA:0:7} (change attribution unavailable)}"
-          TARGETS="${TARGETS:-$TRACKER}"
+          # The raw-tracker fallback applies ONLY when the change step did not conclude — an empty
+          # `targets=` from a step that ran is a decision (a dropped input, the manual-arm rule).
+          if [[ "${CHANGE_OUTCOME:-}" != "success" ]]; then TARGETS="${TARGETS:-$TRACKER}"; fi
           SUMMARY_MD="$(md_esc "$SUMMARY")"
           # FILTER FIRST, THEN BRANCH. A non-numeric target must not be able to take the run into
           # "posted nothing AND created nothing": the invalid value is dropped loudly and the
@@ -616,15 +642,21 @@ jobs:
             fi
           done
           # The two sentences about the host's bytes. The helper's contract (pinned by T11/T15 in
-          # tests/scripts/test-registry-delivery-change.sh) is that `prs=` is EMPTY on a proven
-          # range with no config touch and never falls back to github.sha.
-          if [[ -z "${PRS// /}" && "${RANGE:-}" == "proven" ]]; then
+          # tests/scripts/test-registry-delivery-change.sh) is that `commits=` is EMPTY on a proven
+          # range with no config touch and never falls back to github.sha. `commits=`, not `prs=`:
+          # an unattributed direct push (T8) has an empty `prs=` and DID change the config.
+          if [[ -z "${COMMITS// /}" && "${RANGE:-}" == "proven" ]]; then
             # Nothing in range touched the config (includes a re-fire at the watermark SHA): the
             # bytes ARE live, and "NOT live" here would be the false-text defect in a new arm.
             NOT_LIVE="The registry host's user_data is unchanged since the delivery watermark ${WATERMARK:0:7}; this run was not applied."
           else
             NOT_LIVE="The registry host still runs its previous user_data, so the cloud-init-registry.yml change(s) in ${SUMMARY_MD} are NOT live"
-            [[ -n "${RANGE_NOTE:-}" ]] && NOT_LIVE="${NOT_LIVE} (attribution unproven: $(md_esc "$RANGE_NOTE"))"
+            if [[ -n "${RANGE_NOTE:-}" ]]; then
+              # A note on a PROVEN range (subject-attributed PR, a capped lookup) is a caveat,
+              # not an unproven range.
+              if [[ "${RANGE:-}" == "proven" ]]; then NOT_LIVE="${NOT_LIVE} (attribution note: $(md_esc "$RANGE_NOTE"))"
+              else NOT_LIVE="${NOT_LIVE} (attribution unproven: $(md_esc "$RANGE_NOTE"))"; fi
+            fi
             NOT_LIVE="${NOT_LIVE}."
           fi
           # ONE arm per measured outcome, in the order the steps run. The steps are serially
@@ -643,7 +675,7 @@ jobs:
             STATE="Whether the host now boots the delivered user_data is UNKNOWN."
           elif [[ "${POLL_OUTCOME:-}" == "failure" ]]; then
             KIND="apply-failed"
-            WHAT="Apply FAILED: registry-host-replace run ${APPLY_RUN:-<not identified>} concluded ${APPLY_CONCLUSION:-<unknown>}"
+            WHAT="Apply FAILED: registry-host-replace run ${APPLY_RUN:-(not identified)} concluded ${APPLY_CONCLUSION:-(unknown)}"
             WHY="The replace RAN and did not conclude success."
             STATE="The registry host may be DARK and has no SSH; the store volume is preserved. Recovery is a re-dispatch of \`registry-host-replace\`, which restores from the PRESERVED volume."
           elif [[ "${DISPATCH_OUTCOME:-}" == "failure" ]]; then
@@ -660,7 +692,7 @@ jobs:
             REFUSAL_NOTES=1
           elif [[ "${APPLY_CONCLUSION:-}" == "unverified" ]]; then
             KIND="unverified"
-            WHAT="Delivery UNVERIFIED: apply run ${APPLY_RUN:-<not identified>} had no conclusion in the poll window"
+            WHAT="Delivery UNVERIFIED: apply run ${APPLY_RUN:-(not identified)} had no conclusion in the poll window"
             WHY="The dispatch was accepted and a replace may have run; this run could not read its conclusion."
             STATE="The delivering change's own follow-through is the authority on whether the host serves; read the apply run before re-firing."
           elif [[ "${GATE_OUTCOME:-}" == "failure" ]]; then
@@ -700,9 +732,12 @@ jobs:
           # dedupe: the only duplicating path is `gh run rerun` of a failed job, which no runbook
           # prescribes (the documented recovery is workflow_dispatch, a new run id), and a
           # duplicate comment is recoverable where a missing artifact is not.
-          MARKER="<!-- registry-delivery run=${GITHUB_RUN_ID} kind=${KIND} -->"
+          # `attempt=` keeps a `gh run rerun` duplicate distinguishable (same run id, new attempt).
+          MARKER="<!-- registry-delivery run=${GITHUB_RUN_ID} kind=${KIND} attempt=${RUN_ATTEMPT:-1} -->"
           BODY="$(printf '%s\n' \
             "${WHAT} for \`${MERGE_SHA}\`. ${WHY} ${STATE} Verdict and cause: ${RUN_URL}" \
+            "" \
+            "Delivering: ${SUMMARY_MD}." \
             "" \
             "${REFIRE}" \
             "" \
@@ -728,15 +763,38 @@ jobs:
               fi
             done
           else
-            # SUMMARY stays OUT of the title: a 256-char title limit would make the create fail.
-            # All four labels verified to exist 2026-09-19. No pre-create search, same reasoning
-            # as the comments above.
-            if ! gh issue create --repo "${GITHUB_REPOSITORY}" \
-                --title "registry-host-replace delivery at ${MERGE_SHA:0:7} needs an owner: ${WHAT}" \
-                --body "$BODY" \
-                --label domain/engineering --label type/chore --label priority/p1-high --label action-required; then
-              echo "::error::no PR or tracker could be derived for this delivery AND the fallback issue could not be created — this run is the only record. Verdict and cause: ${RUN_URL}"
-              exit 1
+            # ONE open owner issue at a time. A refused delivery never advances the watermark, so
+            # every later push re-derives the same range and reaches this arm again; without this
+            # read, each would create another p1 action-required issue for as long as the
+            # predicate stays tripped. If an open one exists the verdict lands there; a new one is
+            # created only after the operator closes it. (The comment loop above deliberately has
+            # no such dedupe — one comment per run on a PR is the truthful shape.)
+            rc=0
+            OWNER="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label action-required \
+              --search '"registry-host-replace delivery" in:title' --json number --jq '.[0].number // empty' 2>/dev/null)" || rc=$?
+            [[ "$rc" -eq 0 && "$OWNER" =~ ^[0-9]{1,9}$ ]] || OWNER=""
+            if [[ -n "$OWNER" ]]; then
+              if gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${OWNER}/comments" -f body="$BODY" >/dev/null; then
+                echo "Posted the delivery verdict to the open owner issue #${OWNER}."
+              else
+                echo "::error::no PR or tracker could be derived AND the verdict could not be posted to the open owner issue #${OWNER} — this run is the only record. Verdict and cause: ${RUN_URL}"
+                exit 1
+              fi
+            else
+              # SUMMARY stays OUT of the title: a 256-char title limit would make the create fail.
+              # `action-required` is the load-bearing label (operator-digest harvests on it) and
+              # the only one the create depends on; the classification labels are added
+              # afterwards, best-effort, so a renamed cosmetic label cannot suppress the artifact.
+              url=""
+              if ! url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+                  --title "registry-host-replace delivery at ${MERGE_SHA:0:7} needs an owner: ${WHAT}" \
+                  --body "$BODY" --label action-required)"; then
+                echo "::error::no PR or tracker could be derived for this delivery AND the fallback issue could not be created — this run is the only record. Verdict and cause: ${RUN_URL}"
+                exit 1
+              fi
+              echo "Created the owner issue ${url}."
+              gh issue edit "$url" --repo "${GITHUB_REPOSITORY}" --add-label domain/engineering --add-label type/chore --add-label priority/p1-high \
+                || echo "::warning::owner issue created but the classification labels could not be added (a label may have been renamed) — ${url}"
             fi
           fi
           if [[ "$post_failed" -ne 0 ]]; then

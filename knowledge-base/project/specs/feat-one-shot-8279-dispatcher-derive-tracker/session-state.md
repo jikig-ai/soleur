@@ -20,7 +20,7 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; research agents (learnings-
 
 ## Work Phase
 - Status: complete (commits 48caae76f helper+suite, 3284cb942 workflow+ADR note, bbafda23a bookkeeping)
-- Exit gate: `TEST_GROUP=scripts` — 441/445: 0 suite FAILs, 3 declined, 1 = the runner's write-boundary guard tripped by my own mid-run docs commit (3284cb942 → bbafda23a). Full run covered 3284cb942; the delta re-verified by `tests/scripts/test-registry-delivery-change.sh` 96/96 in isolation. Contention banner: one sibling suite in feat-one-shot-8330.
+- Exit gate: `TEST_GROUP=scripts` — 441/445: 0 suite FAILs, 3 declined, 1 = the runner's write-boundary guard tripped by my own mid-run docs commit (3284cb942 → bbafda23a). Full run covered 3284cb942; the delta re-verified by `tests/scripts/test-registry-delivery-change.sh` in isolation (96/96 then; 107/107 after the review pass). Contention banner: one sibling suite in feat-one-shot-8330.
 - Mutation battery: 16/16 rows killed (13 plan rows + seam-guard re-run + harness floor + stub-ignores-argv).
 - All five AC12 suites [ok]; AC1–AC13 verified by their literal commands.
 
