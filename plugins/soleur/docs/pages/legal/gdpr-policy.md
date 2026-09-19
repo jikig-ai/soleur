@@ -39,6 +39,8 @@ permalink: legal/gdpr-policy/
 
 **Corrected September 14, 2026 (#8159).** The plugin-local scope notes throughout this policy now name a third configuration — the **provider-operated session** (a third-party machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes), in which no limb is Jikigai's — and Section 2.1's local-machine statement is scoped to the plugin-local configuration. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)* Output marked draft-requiring-professional-review.
 
+**Amended:** September 16, 2026 — The migration 138 agent-engine event ledger is limited to content-free lifecycle metadata and sequence-derived identifiers; provider event IDs, generated text, prompts, descriptions, artifact details, usage payloads, credentials, and repository content are not persisted in event payloads. The Article 30 register now records the engine settings and run lifecycle data under the existing Web Platform processing activity. Codex customer-content execution remains disabled pending auth-mode-specific vendor, transfer, retention, deletion, and CLO qualification. Classified Tier 1 for the data-protection notice; the Terms of Service were not changed, so `TC_VERSION` remains unchanged.
+
 ---
 
 ## 1. Introduction
@@ -339,6 +341,22 @@ believe your personal data is present in a repository a User has given Jikigai a
 <legal@jikigai.com> — see Privacy Policy Section 8.1 for the route and its limits.
 
 <!-- End: operator-assisted and granted-access processing -->
+
+### 3.15 Workspace agent-engine configuration and run records
+
+The Web Platform stores a workspace's default agent engine and authentication mode, immutable
+conversation and routine run bindings, and bounded lifecycle-event metadata needed for continuity,
+reconciliation, and audit. These records contain identifiers, status, sequence, and timestamps;
+they do not store prompts, credentials, native provider handles, or repository content. The lawful
+basis is contract performance (Article 6(1)(b)) for providing the selected execution service, with
+legitimate interest (Article 6(1)(f)) for bounded operational audit. Records follow the workspace
+retention period and are included in the self-serve access export when they identify the requesting
+user; account erasure applies the migration 138 anonymisation/cascade path. Codex remains disabled
+for customer content until auth-mode-specific vendor, transfer, retention, erasure, and CLO evidence
+is reviewed, so this release creates no Codex data transfer. This amends the existing Web Platform
+processing activity and adds no sub-processor.
+
+For migration 138 event rows, the payload contains only the source event category and, for status events, an allowlisted lifecycle status; the database rejects additional payload fields and provider-supplied event identifiers. The run and event records remain in the existing Article 30 Processing Activity 2 and follow its export and erasure mechanisms.
 
 ## 4. Categories of Personal Data
 

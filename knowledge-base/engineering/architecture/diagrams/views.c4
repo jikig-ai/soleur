@@ -82,6 +82,8 @@ views {
       // playwrightMcp) must be listed or the edges do not render (#7332).
       platform.plugin.snapshotGuard, playwrightMcp,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb,
+      platform.engine.claude.registry, platform.engine.claude.binding, platform.engine.claude.adapter,
+      platform.engine.claude.factory, platform.engine.claude.composition,
       // #7332: BOTH endpoints of an edge must be in a view's include list or the
       // edge does not render. `sync -> connectedRepoKb` and
       // `architecture -> connectedRepoKb` live here because this is the only
