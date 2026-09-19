@@ -26,7 +26,7 @@ Reviewed-Coverage: sequential-fallback.
 - [x] 2.1 `.github/workflows/build-inngest-bootstrap-image.yml` — `build` job: add `id: sign` to `Cosign-sign the GHCR digest` + `printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"`; add job-level `outputs:` (`tag`, `digest`, `mirror_status`)
 - [x] 2.2 Append `bump-cloud-init-pin` job: `needs: build`; `ubuntu-latest`; `timeout-minutes: 10`; `concurrency: { group: inngest-pin-bump, cancel-in-progress: false }`; `permissions: { contents: read, packages: read }` (review P1: the private GHCR package needs `packages:read` + a job-local login)
   - [x] 2.2.1 Checkout `ref: main` + `fetch-depth: 0` + `fetch-tags: true` + `persist-credentials: false`
-  - [x] 2.2.2 GHCR login (`docker/login-action`, `secrets.GITHUB_TOKEN` — crane inherits `~/.docker/config.json`; the build job's login does not cross job boundaries) + install crane (same pinned recipe as build job) + Doppler CLI; verify `secrets.DOPPLER_TOKEN`
+  - [x] 2.2.2 GHCR login (`docker/login-action`, `secrets.GITHUB_TOKEN` — crane inherits the Docker config written under `~/.docker/`; the build job's login does not cross job boundaries) + install crane (same pinned recipe as build job) + Doppler CLI; verify `secrets.DOPPLER_TOKEN`
   - [x] 2.2.3 Mint soleur-ai installation token via `.github/actions/mint-soleur-ai-app-token` (composite action — the fourth inline JWT copy crossed the extraction threshold; `installation-id: "122213433"`, masked `token` output)
   - [x] 2.2.4 Run the script with `GH_TOKEN: steps.mint.outputs.token` + the three job outputs as args; `if: failure()` Slack-notification step on `SLACK_RELEASES_WEBHOOK_URL` (script step must NOT carry `continue-on-error` or `failure()` never fires)
 
