@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "fs";
 import { spawnSync } from "child_process";
 import { resolve, join } from "path";
 import { tmpdir } from "os";
 import {
+  pipelineInvocationSuffix,
   isPipelineSkill,
   isHandoffSkill,
   isOneShotRoute,
@@ -25,6 +26,9 @@ import {
   IMPLEMENTATION_TAIL,
   ONE_SHOT_CHILD_SKILLS,
   mandatorySuccessors,
+  declaredTransitions,
+  isDeclaredTransition,
+  DECLARED_TRANSITIONS,
   workflowFidelityInstructions,
 } from "../lib/workflow-fidelity";
 import { invokeSkill, routingInstructions, pollInstructions } from "../lib/harness";
@@ -589,4 +593,194 @@ describe("Guard 2 — Skill/Monitor stay; aliased Grok twins are forbidden (meas
     expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=no-tool");
     expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=untrusted-session");
   });
+});
+// ---------------------------------------------------------------------------
+// Declared transitions (#8302) — the permitted-edge set, kept SEPARATE from
+// mandatorySuccessors().
+//
+// WHY TWO FUNCTIONS. mandatorySuccessors() is not a transition set: its result
+// is rendered into the prompt as "When standalone, invoke next: /X, /Y"
+// (workflow-fidelity.ts, workflowFidelityInstructions). Putting a back-edge
+// there would instruct the model to re-enter planning after every work run.
+// A permitted transition and a mandatory successor are different concepts and
+// must not share a function — the `mandatorySuccessors maps lifecycle handoffs`
+// test pins the latter with toEqual, so this is enforced rather than merely
+// documented. (A content anchor, not a line number: cq-cite-content-anchor.)
+// ---------------------------------------------------------------------------
+describe("declaredTransitions — permitted edges, including back-edges", () => {
+  test("every lifecycle node declares its edge set", () => {
+    expect(declaredTransitions("brainstorm")).toEqual(["plan", "one-shot"]);
+    expect(declaredTransitions("plan")).toEqual(["work"]);
+    expect(declaredTransitions("work")).toEqual(["review", "compound", "ship", "plan"]);
+    expect(declaredTransitions("review")).toEqual(["compound", "work"]);
+    expect(declaredTransitions("compound")).toEqual(["ship"]);
+    expect(declaredTransitions("ship")).toEqual(["postmerge", "work"]);
+    expect(declaredTransitions("postmerge")).toEqual([]);
+  });
+
+  test("the three operator-approved back-edges are declared", () => {
+    expect(isDeclaredTransition("review", "work")).toBe(true);
+    expect(isDeclaredTransition("ship", "work")).toBe(true);
+    expect(isDeclaredTransition("work", "plan")).toBe(true);
+  });
+
+  // The product requirement, asserted as an ABSENCE. plan -> ship is the path
+  // that lets an agent skip review entirely, which surfaces only post-merge —
+  // the operator-facing loss this work exists to make visible. Nothing else in
+  // the suite would notice if it were added.
+  test("plan -> ship is NOT declared (skipping review is the defect)", () => {
+    expect(isDeclaredTransition("plan", "ship")).toBe(false);
+    expect(declaredTransitions("plan")).not.toContain("ship");
+  });
+
+  test("postmerge -> work is NOT declared (rejected as redundant with ship -> work)", () => {
+    expect(isDeclaredTransition("postmerge", "work")).toBe(false);
+  });
+
+  // The semantic separation, pinned from the other side: a back-edge must never
+  // leak into the collection that renders as prompt text.
+  test("mandatorySuccessors stays forward-only and excludes every back-edge", () => {
+    expect(mandatorySuccessors("work")).not.toContain("plan");
+    expect(mandatorySuccessors("review")).not.toContain("work");
+    expect(mandatorySuccessors("ship")).not.toContain("work");
+  });
+
+  // THE WIRE BETWEEN THE TWO FUNCTIONS. The toEqual pins on mandatorySuccessors
+  // and the edge-set pins above are two covered endpoints; nothing above says
+  // the successors collection is CONSISTENT with the edge set. Review's escape:
+  // `case "plan": return ["work", "ship"]` in mandatorySuccessors renders an
+  // instruction to skip review while isDeclaredTransition("plan","ship") stays
+  // false and every test above stays green. Successors must be a subset of the
+  // declared edges, node by node.
+  test("every mandatory successor is a declared transition (successors ⊆ edges)", () => {
+    for (const from of Object.keys(DECLARED_TRANSITIONS)) {
+      for (const to of mandatorySuccessors(from)) {
+        expect(
+          isDeclaredTransition(from, to),
+          `mandatorySuccessors(${from}) names ${to}, which is not a declared edge`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("the rendered directive never names a back-edge", () => {
+    // pipelineInvocationSuffix is the emitter of "invoke next:"; the first
+    // version of this test negated that string against
+    // workflowFidelityInstructions, which never emits it, so the negative was
+    // vacuously green (review F8). Positive anchor first, then the negative on
+    // the same emitter for the node that carries a back-edge.
+    // review and compound take the generic "invoke next:" branch; plan, work
+    // and ship carry bespoke prose. Each is anchored on the string it emits.
+    expect(pipelineInvocationSuffix("review")).toContain("invoke next: /compound");
+    expect(pipelineInvocationSuffix("review")).not.toContain("/work");
+    expect(pipelineInvocationSuffix("compound")).toContain("invoke next: /ship");
+    expect(pipelineInvocationSuffix("compound")).not.toContain("/work");
+    expect(pipelineInvocationSuffix("work")).toContain("/review");
+    expect(pipelineInvocationSuffix("work")).not.toContain("/plan");
+    expect(pipelineInvocationSuffix("ship")).toContain("/postmerge");
+    expect(pipelineInvocationSuffix("ship")).not.toContain("/work");
+  });
+
+  // Typo guard: every destination must itself be a declared node, so a mistyped
+  // edge fails here rather than silently never matching at classification time.
+  test("every edge destination is a known node", () => {
+    const nodes = Object.keys(DECLARED_TRANSITIONS);
+    const extraTerminals = ["one-shot"]; // a route out of the lifecycle, not a node
+    for (const [from, tos] of Object.entries(DECLARED_TRANSITIONS)) {
+      for (const to of tos) {
+        expect(
+          nodes.includes(to) || extraTerminals.includes(to),
+          `edge ${from} -> ${to}: destination is not a declared node`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("an unknown node declares no transitions", () => {
+    expect(declaredTransitions("not-a-skill")).toEqual([]);
+    expect(isDeclaredTransition("not-a-skill", "work")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Derived-view parity (#8302).
+//
+// DECLARED_TRANSITIONS is canonical and bundled, because the plugin ships as
+// ./plugins/soleur and does not carry .claude/ — a runtime read there returns
+// nothing on a customer install. But the offline transition classifier is a bash
+// script and cannot read a TypeScript const, so it reads a DERIVED JSON view.
+// Two copies means drift, so the drift is what gets pinned.
+//
+// The view lives in its own file rather than as a `transitions` key inside
+// .claude/phase-surface-map.json: that file is deep-equal'd against the bundled
+// web copy by apps/web-platform/test/phase-surface-map-parity.test.ts, so adding
+// a key there would force FSM edges through the web bundle, which has no
+// consumer for them.
+// ---------------------------------------------------------------------------
+describe("declared-transitions derived view parity", () => {
+  // Walk up to the marker the precedent (phase-surface-map-parity.test.ts)
+  // walks to, rather than a hard-coded `../..` — the precedent's own header
+  // calls that shape brittle.
+  function findRepoRoot(start: string): string {
+    let dir = start;
+    for (let i = 0; i < 8; i++) {
+      if (existsSync(join(dir, ".claude", "workflow-transitions.json"))) return dir;
+      dir = resolve(dir, "..");
+    }
+    throw new Error("repo root with .claude/workflow-transitions.json not found above " + start);
+  }
+  const REPO_ROOT = findRepoRoot(PLUGIN_ROOT);
+  const VIEW_PATH = join(REPO_ROOT, ".claude", "workflow-transitions.json");
+
+  test("the derived view exists and is valid JSON", () => {
+    expect(existsSync(VIEW_PATH)).toBe(true);
+    const raw = readFileSync(VIEW_PATH, "utf-8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+  });
+
+  test("the derived view deep-equals the canonical const", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as Record<string, unknown>;
+    delete view._comment;
+    // Round-trip the const through JSON so readonly/tuple types normalise to
+    // plain arrays for a structural compare.
+    const canonical = JSON.parse(JSON.stringify({ transitions: DECLARED_TRANSITIONS }));
+    expect(view).toEqual(canonical);
+  });
+
+  // Direction matters: a view carrying an edge the const does not is just as
+  // wrong as one missing an edge, and only an exact compare catches both. A
+  // subset assertion would pass on a view that silently permits plan -> ship.
+  test("the view declares no edge absent from the const", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as {
+      transitions: Record<string, string[]>;
+    };
+    for (const [from, tos] of Object.entries(view.transitions)) {
+      for (const to of tos) {
+        expect(
+          isDeclaredTransition(from, to),
+          `view declares ${from} -> ${to}, which the canonical const does not`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // THE RATCHET'S NODE SET IS THIS SET. scripts/lint-skill-body-budget.py derives
+  // "lifecycle skill" from the view's keys and destinations, and refuses a node
+  // with no ceiling row and a row with no node. That is enforced in Python at
+  // CI time; this pins the same identity from the TS side so the budget file
+  // cannot drift from the const between CI runs, and so the ratchet's scope
+  // guard does not depend on a job named for a different concern.
+  test("skill-body-budget.json ceilings are exactly the lifecycle set (FSM keys ∪ destinations ∪ ONE_SHOT_CHILD_SKILLS)", () => {
+    const BUDGET = join(PLUGIN_ROOT, "test", "skill-body-budget.json");
+    const budget = JSON.parse(readFileSync(BUDGET, "utf-8")) as { ceilings: Record<string, number> };
+    // "Lifecycle skill" is NOT only "FSM node": IMPLEMENTATION_TAIL and
+    // ONE_SHOT_CHILD_SKILLS run qa and deepen-plan on every pipeline, and the
+    // FSM does not model them. Review measured deepen-plan at 72 KB with no
+    // ceiling while the ratchet's node set said the lifecycle was covered.
+    const nodes = new Set<string>(Object.keys(DECLARED_TRANSITIONS));
+    for (const tos of Object.values(DECLARED_TRANSITIONS)) for (const to of tos) nodes.add(to);
+    for (const s of ONE_SHOT_CHILD_SKILLS) nodes.add(s);
+    expect(Object.keys(budget.ceilings).sort()).toEqual([...nodes].sort());
+  });
+
 });

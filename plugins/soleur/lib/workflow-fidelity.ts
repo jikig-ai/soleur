@@ -128,6 +128,56 @@ export function mandatorySuccessors(skill: string): readonly string[] {
   }
 }
 
+/**
+ * The declared TRANSITION set — every edge a session may legally take, including
+ * back-edges.
+ *
+ * DELIBERATELY SEPARATE FROM `mandatorySuccessors()`, which is not a transition
+ * set: its result is rendered into the prompt as
+ * "When standalone, invoke next: /X, /Y" (see `workflowFidelityInstructions`).
+ * A permitted transition is legal-if-taken; a mandatory successor is a directive.
+ * Putting `plan` into `work`'s successors to express the `work -> plan` back-edge
+ * would instruct the model to re-enter planning after EVERY work run.
+ *
+ * The three back-edges are operator-approved (#8302): `review -> work` (review
+ * produced findings that need implementing), `ship -> work` (postmerge failed),
+ * and `work -> plan` (implementation invalidated the plan). `postmerge -> work`
+ * was considered and REJECTED as redundant with `ship -> work`.
+ *
+ * `plan -> ship` is deliberately ABSENT. It is the path that lets a session skip
+ * `review` entirely, which surfaces only after merge — the operator-facing loss
+ * this edge set exists to make visible. Its absence is asserted directly in
+ * `workflow-fidelity.test.ts`, because nothing else in the suite would notice if
+ * it were added.
+ *
+ * This is a bundled TypeScript const, NOT a runtime read of
+ * `.claude/phase-surface-map.json`. The plugin ships as `./plugins/soleur`
+ * (`.claude-plugin/marketplace.json`) and does not carry `.claude/`, so a runtime
+ * read returns nothing on a customer install — and `mandatorySuccessors()` would
+ * then silently emit no next-step directive at all. The JSON is a derived view
+ * kept honest by a parity test; the same reasoning already produced the bundled
+ * web copy at `apps/web-platform/server/phase-surface-map.ts`. See ADR-229.
+ */
+export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  brainstorm: ["plan", "one-shot"],
+  plan: ["work"],
+  work: ["review", "compound", "ship", "plan"],
+  review: ["compound", "work"],
+  compound: ["ship"],
+  ship: ["postmerge", "work"],
+  postmerge: [],
+};
+
+/** Edges declared FROM `skill`. Unknown nodes declare nothing. */
+export function declaredTransitions(skill: string): readonly string[] {
+  return DECLARED_TRANSITIONS[skill] ?? [];
+}
+
+/** Whether `from -> to` is a declared edge. */
+export function isDeclaredTransition(from: string, to: string): boolean {
+  return declaredTransitions(from).includes(to);
+}
+
 function formatSkillList(skills: readonly string[], harness: Harness): string {
   if (harness === "codex") {
     return skills.map((skill) => `\`$soleur:${skill}\``).join(", ");
