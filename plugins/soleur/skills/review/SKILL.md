@@ -324,6 +324,8 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 Both survived the author's own first mutation battery and were closed only after a second one enumerated the AXES (`the resolver`, `the population`) rather than mutating one shape N times.
 
+3. **A guard that SEGMENTS text before it judges it fails in the segmenter, not the judge — fixture the grammar first and feed the guard its own remedy.** Where a guard extracts a unit (a stage, a token, a field) from command text and then evaluates it, review attention lands on the evaluation and the tokenizer ships reviewed against the one spelling it was written for. Require one fixture per terminator, quoting form, prefix word and output-mode flag the segmenter must honour, and run every recipe the deny text prescribes back through the guard in the failure DIRECTION of its context. **Why:** PR #8354 — the regex simulation was right on all 13 battery rows while a quote-blind terminator cut, a `grep -c` read as a line filter (making the hook's own `| grep -v grep` remedy a bypass) and a projection `awk` read as a filter each fell open; the structural seat's map found them, ten adversarial seats each found one instance. See `knowledge-base/project/learnings/2026-09-19-i-simulated-the-regex-and-segmented-the-pipeline-by-eye.md`.
+
 **If PR modifies source code files, soleur:engineering:review:semgrep-sast is a mandatory gate:**
 
 14. Task soleur:engineering:review:semgrep-sast(PR content) - Deterministic SAST scanning for known vulnerability patterns

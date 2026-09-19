@@ -429,6 +429,7 @@ bash-cwd
 bash-hooks
 bash-mocks
 bash-parsing
+bash-performance
 bash-pipefail
 bash-set-e
 bash-strict-mode
@@ -1802,6 +1803,7 @@ guard-erosion
 guard-itself-dark
 guard-placement
 guard-residue
+guard-review
 guard-test
 guard-testing
 guard-vacuity
@@ -2667,6 +2669,7 @@ pipe-buf
 pipefail
 pipeline
 pipeline-gotchas
+pipeline-parsing
 pir
 pir-gate
 pivot
