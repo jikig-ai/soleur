@@ -239,7 +239,7 @@ RE_AWK='(^|[[:space:]~!(&|;{,])/([^/]+)/'
 
 # Stage-simulation state, reset by every sim_* entry. S_ = "stage". S_OPTS is
 # the grep argv the simulation runs (flavour first, then -i/-w/-x).
-S_PAT=""; S_OPTS=(-G); S_INV=0; S_TERM=0
+S_RE=""; S_OPTS=(-G); S_INV=0; S_TERM=0
 # $1 = the ps stage's flag text. 0 = the listing shows full command lines AND
 # is not restricted to named pids (the one ps that cannot list the wrapper).
 # One pass; options that take a value consume it so `-C bash` / `-u jean` are
@@ -352,19 +352,19 @@ stage_word() {
 # $1 = matcher word, $2 = the stage text after it. 0 = S_* set; 1 = fail-open.
 sim_grep() {
   local word="$1" pending=0 skip=0 dd=0 have=0 letters last rc
-  TOK_SRC="$2"; S_PAT=""; S_OPTS=(-G); S_INV=0; S_TERM=0
+  TOK_SRC="$2"; S_RE=""; S_OPTS=(-G); S_INV=0; S_TERM=0
   case "$word" in egrep|rg) S_OPTS=(-E) ;; fgrep) S_OPTS=(-F) ;; esac
   while :; do
     next_tok; rc=$?
     (( rc == 2 )) && break
     (( rc == 1 )) && return 1
-    if (( pending )); then S_PAT="$TOK"; have=1; break; fi
+    if (( pending )); then S_RE="$TOK"; have=1; break; fi
     if (( skip )); then skip=0; continue; fi
     if (( dd == 0 )) && [[ "$TOK" == -* ]]; then
       case "$TOK" in
         --)                       dd=1 ;;
         -e|--regexp|--reg|--rege|--regex) pending=1 ;;
-        --regexp=*|--reg=*|--rege=*|--regex=*) S_PAT="${TOK#*=}"; have=1; break ;;
+        --regexp=*|--reg=*|--rege=*|--regex=*) S_RE="${TOK#*=}"; have=1; break ;;
         -f|-P|--fil*|--per*)      return 1 ;;
         --ext*)                   S_OPTS[0]=-E ;;
         --fix*)                   S_OPTS[0]=-F ;;
@@ -378,7 +378,7 @@ sim_grep() {
         --*)                      : ;;
         -*)
           letters="${TOK#-}"
-          if [[ "$letters" == e?* ]]; then S_PAT="${letters#e}"; have=1; break; fi   # -epat (attached)
+          if [[ "$letters" == e?* ]]; then S_RE="${letters#e}"; have=1; break; fi   # -epat (attached)
           [[ "$letters" == *[fP]* ]] && return 1
           [[ "$letters" == *E* ]] && S_OPTS[0]=-E
           [[ "$letters" == *F* ]] && S_OPTS[0]=-F
@@ -394,17 +394,17 @@ sim_grep() {
       esac
       continue
     fi
-    S_PAT="$TOK"; have=1; break
+    S_RE="$TOK"; have=1; break
   done
-  literal_ok "$S_PAT"
+  literal_ok "$S_RE"
 }
 
-# $1 = the stage text after `awk`. 0 = S_PAT set (always -E); 1 = fail-open;
+# $1 = the stage text after `awk`. 0 = S_RE set (always -E); 1 = fail-open;
 # 2 = no regex literal (argv-slot recipe or a projection) — the walk ends with
 # the verdict so far.
 sim_awk() {
   local skip=0 prog="" have=0 rc
-  TOK_SRC="$1"; S_PAT=""; S_OPTS=(-E); S_INV=0; S_TERM=0
+  TOK_SRC="$1"; S_RE=""; S_OPTS=(-E); S_INV=0; S_TERM=0
   while :; do
     next_tok; rc=$?
     (( rc == 2 )) && break
@@ -422,8 +422,8 @@ sim_awk() {
   done
   (( have )) || return 1
   [[ "$prog" =~ $RE_AWK ]] || return 2
-  S_PAT="${BASH_REMATCH[2]}"
-  literal_ok "$S_PAT" || return 1
+  S_RE="${BASH_REMATCH[2]}"
+  literal_ok "$S_RE" || return 1
   return 0
 }
 
@@ -488,9 +488,9 @@ readonly_arm() {
       # Address-space cap: GNU grep expands bounded repetition eagerly and a
       # group-free `.{1,32767}.{1,32767}b` reached 4.2 GB inside the 2 s window
       # (measured); ENOMEM → rc 2 → the fail-open arm below.
-      ( ulimit -v 262144 2>/dev/null; exec ${to[@]+"${to[@]}"} "$grep_bin" -q "${S_OPTS[@]}" -e "$S_PAT" <<<"$model" 2>/dev/null ); rc=$?
+      ( ulimit -v 262144 2>/dev/null; exec ${to[@]+"${to[@]}"} "$grep_bin" -q "${S_OPTS[@]}" -e "$S_RE" <<<"$model" 2>/dev/null ); rc=$?
       case "$rc" in
-        0) if (( S_INV )); then filtered=1; break; else alive=1; DENY_STAGE="$WORD '$S_PAT' (${S_OPTS[0]})"; fi ;;
+        0) if (( S_INV )); then filtered=1; break; else alive=1; DENY_STAGE="$WORD '$S_RE' (${S_OPTS[0]})"; fi ;;
         1) if (( S_INV )); then :; else filtered=1; break; fi ;;
         *) bad=1; break ;;                       # 2 invalid regex, 124 timeout, 127 no binary
       esac

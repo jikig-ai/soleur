@@ -291,7 +291,7 @@ run_case "A42 sed matcher ends the walk (accepted gap)" "ps -eo args | sed -n '/
 
 # A39 — lib absent: the arm skips itself with a stderr WARN (fail-open), the -f
 # arm still denies. Run a copy of the hook from a dir with no lib/incidents.sh.
-LIBLESS="$(mktemp -d)"; mkdir -p "$LIBLESS/lib"
+LIBLESS="$(mktemp -d)"; trap 'rm -rf "$LIBLESS"' EXIT; mkdir -p "$LIBLESS/lib"
 cp "$HOOK" "$LIBLESS/hook.sh"; cp "$(dirname "$HOOK")/lib/hook-tool-kind.sh" "$LIBLESS/lib/"
 err="$(jq -nc --arg c "$D2" '{tool_name:"Bash", tool_input:{command:$c}}' | bash "$LIBLESS/hook.sh" 2>&1 >/dev/null || true)"
 out="$(jq -nc --arg c "$D2" '{tool_name:"Bash", tool_input:{command:$c}}' | bash "$LIBLESS/hook.sh" 2>/dev/null || true)"
