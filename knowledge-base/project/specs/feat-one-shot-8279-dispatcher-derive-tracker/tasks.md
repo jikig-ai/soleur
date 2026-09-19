@@ -33,7 +33,7 @@ Plan: `knowledge-base/project/plans/2026-09-19-fix-registry-dispatcher-derive-de
 
 - [x] 4.1 Run AC1–AC13 (including AC5a–AC5d, AC11a–AC11e) from the plan verbatim; fix anything that does not match.
 - [x] 4.2 `bash scripts/alarm-issue-filing-guard.test.sh` (expect 83 scanned, ≤ 11 violations) and `python3 scripts/lint-workflow-issue-write-scope.py` (exit 0).
-- [ ] 4.3 `bash scripts/test-all.sh` touched shards: `tests/scripts/registry-delivery-change`, `scripts/alarm-issue-filing-guard`, `scripts/lint-workflow-issue-write-scope`, `scripts/lint-workflow-issue-write-scope-live`, `plugins/soleur/test/c4-count-parity`.
+- [x] 4.3 `bash scripts/test-all.sh` touched shards: `tests/scripts/registry-delivery-change`, `scripts/alarm-issue-filing-guard`, `scripts/lint-workflow-issue-write-scope`, `scripts/lint-workflow-issue-write-scope-live`, `plugins/soleur/test/c4-count-parity`.
 - [x] 4.4 Confirm the diff is a subset of the AC13 file list (now including the ADR-169 note).
 - [x] 4.5 Run the plan's `discoverability_test.command` (`curl` against the public runs endpoint) and confirm it names the workflow path and a conclusion.
 
