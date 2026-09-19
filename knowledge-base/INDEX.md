@@ -239,7 +239,7 @@
 - [ADR-228: Generated operator scripts are non-interactive by default](engineering/architecture/decisions/ADR-228-generated-operator-scripts-are-non-interactive-by-default.md)
 - [ADR-229: The workflow edge set is a bundled const, and classification is offline](engineering/architecture/decisions/ADR-229-workflow-fsm-single-source-and-offline-classification.md)
 - [ADR-230: Temporary debug probes are `\[DEBUG-<hex4>\]`, never `SOLEUR_*` sentinels](engineering/architecture/decisions/ADR-230-temporary-debug-probes-are-debug-hex4-never-soleur-sentinels.md)
-- [ADR-230: Workflow files are byte-budgeted at 490,000 bytes, and job rationale relocates to a runbook](engineering/architecture/decisions/ADR-230-workflow-files-are-byte-budgeted-and-rationale-relocates-to-a-runbook.md)
+- [ADR-231: Workflow files are byte-budgeted at 490,000 bytes, and job rationale relocates to a runbook](engineering/architecture/decisions/ADR-231-workflow-files-are-byte-budgeted-and-rationale-relocates-to-a-runbook.md)
 - [Architecture Diagrams — LikeC4 C4 Model](engineering/architecture/diagrams/README.md)
 - [Soleur Platform — C4 Model](engineering/architecture/diagrams/c4-model.md)
 - [Domain Model & Business Rules Register](engineering/architecture/domain-model.md)

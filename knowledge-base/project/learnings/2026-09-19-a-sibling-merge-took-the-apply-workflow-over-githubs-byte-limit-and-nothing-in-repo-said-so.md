@@ -49,7 +49,7 @@ PR #8362 (closes #8361):
   `git ls-files` (a truncated or narrowed enumeration reds); the sentinel pinned by a size band,
   not by name (a decoy directory reds); fixture rows for the boundary, a directory named `*.yml`,
   a `*.yaml.bak` and a symlink. Runs in the always-on `test-bun` shard → required `test` context.
-- **ADR-230** records the cap, the relocation convention, and the per-target split as the
+- **ADR-231** records the cap, the relocation convention, and the per-target split as the
   structural fix (deferred to #8385 on a byte-counter trigger). The workflow carries a 3-line
   `BYTE BUDGET` header; `apply-web-platform-infra-red-run.md` gains a "zero jobs and no email"
   section so the diagnosis is on the runbook path, not only in the test header.
@@ -133,6 +133,6 @@ Three review findings generalize past this PR:
 ## Related
 
 - #8361, #8362, #8312, #8294, #6894, #8385 (deferred split), #8342 (discriminated: restart race)
-- ADR-230; ADR-152 (strip-at-render; the rejected comment-freeze option); ADR-116
+- ADR-231; ADR-152 (strip-at-render; the rejected comment-freeze option); ADR-116
 - `knowledge-base/project/learnings/2026-07-15-comment-fix-pr-wrote-a-new-false-comment-and-vacuous-ac-classes.md`
 - `knowledge-base/project/learnings/2026-08-06-an-empty-worktree-is-not-an-abandoned-one.md`

@@ -28,7 +28,7 @@ so when it does), and one pointer of the form
 Section headings are the job ids verbatim (a step-level block is `## <job_id>/<step name>`), so the
 pointer's `§<job_id>` is an exact anchor. Line-number citations inside the prose are as of the
 commit that wrote them and drift the way ADR-116 already accepts. The gate that keeps the workflow
-under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decision is ADR-230. If a
+under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decision is ADR-231. If a
 RED run of this workflow shows zero jobs, start at
 `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md`.
 

@@ -1,4 +1,4 @@
-# ADR-230: Workflow files are byte-budgeted at 490,000 bytes, and job rationale relocates to a runbook
+# ADR-231: Workflow files are byte-budgeted at 490,000 bytes, and job rationale relocates to a runbook
 
 - **Date:** 2026-09-19
 

@@ -46,7 +46,7 @@ const LIVE_SENTINEL = "apply-web-platform-infra.yml";
 // The sentinel is by far the largest workflow (477 KB; the next is 162 KB). Pinning a size
 // band turns the sentinel test from a name check into a proof that the walk saw the real
 // directory — a decoy dir holding a 10-byte file of that name would pass a bare `toContain`.
-// 200,000 stays decoy-proof and survives the planned per-target split (ADR-230 §3) taking the
+// 200,000 stays decoy-proof and survives the planned per-target split (ADR-231 §3) taking the
 // file well below its current size; retune if the split ever halves it again.
 const LIVE_SENTINEL_MIN_BYTES = 200_000;
 
@@ -159,7 +159,7 @@ describe("live .github/workflows", () => {
   });
 
   test("every `# Rationale: <runbook> §<id>` pointer resolves to a `## <id>` heading in that runbook, and vice versa", () => {
-    // The relocation convention (ADR-230 §2): a pointer's §<id> is an exact heading anchor.
+    // The relocation convention (ADR-231 §2): a pointer's §<id> is an exact heading anchor.
     // A job rename or a runbook heading edit would otherwise dangle one side silently.
     const RUNBOOK = "knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md";
     const workflow = readFileSync(join(WORKFLOWS_DIR, LIVE_SENTINEL), "utf8");
