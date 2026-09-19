@@ -736,12 +736,11 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     // Counts DECIDED assertions (see `check`), not `it` blocks: a per-block counter is
     // satisfied by a block whose body was gutted.
     //
-    // 14 -> 16 for P1b-control's three checks less the one P1b itself no longer... no: P1b
-    // still decides one, and P1b-control decides three, so the command-surface block now
-    // decides 16. Raising this is PART of adding the control, not an afterthought: it is an
-    // exact-equality floor, so a green run here is only meaningful if the number moved with
-    // the diff that moved the assertions.
-    expect(assertions).toBe(16);
+    // 14 -> 17: P1b-control adds three decided checks. (16 was measured against a RED tree
+    // where P1 short-circuited before its own check; the number a failing run reports is not
+    // the number a green run reports, which is the trap in reading an exact-equality floor
+    // off a red baseline.) Raising this is PART of adding the control, not an afterthought.
+    expect(assertions).toBe(17);
   });
 });
 

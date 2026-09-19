@@ -37,12 +37,12 @@ Brand-survival threshold: `single-user incident` — CPO sign-off recorded in th
 
 ## Phase 2 — go.md
 
-- [ ] 2.1 Replace the three `ROOT=` lines with `GATE=<name>` above the opening anchor plus the byte-identical resolver snippet. POSIX only (no `xargs -r`); **never** `set -e`/`set -u`/`set -o pipefail` in these fences.
-- [ ] 2.2 Rewrite each gate's branch condition to `if [ "$VERIFIED" = true ]`; keep every existing marker string byte-for-byte.
-- [ ] 2.3 Step 0.5: replace the private `find` with the `[ -d ]`-gated loop over both documented Devin caches (`$HOME/.local/share/devin/cli/plugins/cache`, `/opt/.devin/plugins`), identity-selected, emitting `source=devin-cache`. This arm goes in **Step 0.5 only**.
-- [ ] 2.4 Step 0: add the session-class gate **inside its own fence** — run `cloud-detect.sh` from the verified root and dispatch only on `local` / `not-local:no-devin-env`; otherwise emit `SOLEUR_SESSION_START_SKIPPED reason=cloud-session`. Keyed on the session classifier, not on `SRC`, because a Devin agent following its INSTRUCTIONS resolves as `plugin-root-token`.
-- [ ] 2.5 Add the **four** state-keyed sentences after the Step 0.0 fence (only `source=none` on a substituting harness instructs filing a Soleur issue); replace the Step 0 "Preferring GROK_PLUGIN_ROOT…" comment with one naming the arm order and decision 11.
-- [ ] 2.6 Run every suite with the runner its package actually uses: `bash` for `.test.sh`; `bun test` for `plugins/soleur/**`; `cd apps/web-platform && ./node_modules/.bin/vitest run` for `apps/web-platform/**` (bun test is blocked there by `bunfig.toml`; `npm run -w` fails for lack of a root `workspaces` field).
+- [x] 2.1 Replace the three `ROOT=` lines with `GATE=<name>` above the opening anchor plus the byte-identical resolver snippet. POSIX only (no `xargs -r`); **never** `set -e`/`set -u`/`set -o pipefail` in these fences.
+- [x] 2.2 Rewrite each gate's branch condition to `if [ "$VERIFIED" = true ]`; keep every existing marker string byte-for-byte.
+- [x] 2.3 Step 0.5: replace the private `find` with the `[ -d ]`-gated loop over both documented Devin caches (`$HOME/.local/share/devin/cli/plugins/cache`, `/opt/.devin/plugins`), identity-selected, emitting `source=devin-cache`. This arm goes in **Step 0.5 only**.
+- [x] 2.4 Step 0: add the session-class gate **inside its own fence** — run `cloud-detect.sh` from the verified root and dispatch only on `local` / `not-local:no-devin-env`; otherwise emit `SOLEUR_SESSION_START_SKIPPED reason=cloud-session`. Keyed on the session classifier, not on `SRC`, because a Devin agent following its INSTRUCTIONS resolves as `plugin-root-token`.
+- [x] 2.5 Add the **four** state-keyed sentences after the Step 0.0 fence (only `source=none` on a substituting harness instructs filing a Soleur issue); replace the Step 0 "Preferring GROK_PLUGIN_ROOT…" comment with one naming the arm order and decision 11.
+- [x] 2.6 Run every suite with the runner its package actually uses: `bash` for `.test.sh`; `bun test` for `plugins/soleur/**`; `cd apps/web-platform && ./node_modules/.bin/vitest run` for `apps/web-platform/**` (bun test is blocked there by `bunfig.toml`; `npm run -w` fails for lack of a root `workspaces` field).
 - [ ] 2.7 Apply Guard 1 mutation rows 1–17 and Guard 2 rows 1–7 in a scratch copy; confirm each reddens the named rows and that Guard 1 rows 18–19 and Guard 2 row 8 stay PASS. Write `mutation-log.md` with the Phase 1 red run, per-row results, and the pre/post `lint-guard-contract.py` counts.
 
 ## Phase 3 — Verification, issues, PR

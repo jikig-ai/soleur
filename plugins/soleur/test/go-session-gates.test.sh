@@ -168,9 +168,15 @@ MANIFEST_EOF
   for s in "$dir/scripts/cloud-detect.sh" \
            "$dir/skills/git-worktree/scripts/git-repo-readiness-diag.sh" \
            "$dir/skills/git-worktree/scripts/worktree-manager.sh"; do
+    # Writes a LEDGER as well as stdout. Step 0's session-class gate consumes cloud-detect.sh's
+    # stdout into a `case`, so a stdout-only marker is invisible there — and "the decoy ran but
+    # we could not see it" would have read as "the decoy did not run", which is the opposite
+    # verdict on the one row that documents the preflight's limitation.
     cat > "$s" <<'DECOY_EOF'
 #!/usr/bin/env bash
 echo "DECOY_EXECUTED $0 $*"
+[ -n "${SOLEUR_DECOY_LOG:-}" ] && echo "DECOY_EXECUTED $0" >> "$SOLEUR_DECOY_LOG"
+exit 0
 DECOY_EOF
     chmod +x "$s"
   done
@@ -211,13 +217,24 @@ mapfile -t DEVIN_UNSET < <(devin_unsets)
 # Composes the repo's two env forms: `env -u` to UNSET (redact-sentinel.test.sh's
 # `VAR=value "$BASH_BIN"` prefix only overrides) and an explicit HOME on scratch in EVERY row,
 # so the Devin CLI-cache arm can never reach a developer's real cache.
+# A FIXED path, assigned once at top level. Every caller runs `out="$(run_gate ...)"`, and a
+# command substitution is a SUBSHELL — an assignment inside run_gate never reaches the parent,
+# so `decoy_ran` read an empty variable and answered "none" for every row, including the ones
+# whose whole job is to detect execution. Measured: R6 and R7 passed VACUOUSLY that way while
+# R6b, the must-PASS row, was the only one loud enough to notice. Truncation inside the
+# subshell is fine — it acts on the file, not on a variable.
+DECOY_LOG=""
 run_gate() {
   local fence="$1" ws="$2" home="$3"; shift 3
+  : > "$DECOY_LOG"
   ( cd "$ws" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT -u CLAUDE_PROJECT_DIR \
-      "${DEVIN_UNSET[@]}" HOME="$home" "$@" "$BASH_BIN" "$fence" 2>&1 ) || true
+      "${DEVIN_UNSET[@]}" HOME="$home" "SOLEUR_DECOY_LOG=$DECOY_LOG" "$@" \
+      "$BASH_BIN" "$fence" 2>&1 ) || true
 }
+decoy_ran() { [ -s "$DECOY_LOG" ] && printf 'DECOY_EXECUTED' || printf 'none'; }
 
 SCRATCH_HOME="$TMP_ROOT/home"; mkdir -p "$SCRATCH_HOME"
+DECOY_LOG="$TMP_ROOT/decoy-ran.log"; : > "$DECOY_LOG"
 
 # --- R10 (part 1): the extractor answered, or nothing below means anything --------------------
 echo "R10. extractor integrity (asserted BEFORE any row that depends on it)"
@@ -278,7 +295,9 @@ check_r9() {
     # The two Devin cache paths belong to Step 0.5 ALONE. Copying them into Step 0 would make
     # the MUTATING gate newly reachable on a harness where it has always skipped.
     local n_cache
-    n_cache="$(printf '%s\n' "$code" | grep -cE 'devin/cli/plugins/cache|/opt/\.devin/plugins' || true)"
+    # OCCURRENCES, not matching lines: both cache paths sit on one `for d in ...` line, so a
+    # line count reports 1 for a correct fence and the row would false-fail forever.
+    n_cache="$(printf '%s\n' "$code" | grep -oE 'devin/cli/plugins/cache|/opt/\.devin/plugins' | grep -c . || true)"
     ck; if [ "${GATE_NAMES[$i]}" = cloud-detect ]; then
       if [ "$n_cache" -ge 2 ]; then pass "$label: Step 0.5 carries both Devin cache paths"; else fail "$label: Step 0.5 is missing a Devin cache path (found $n_cache)"; fi
     else
@@ -360,6 +379,13 @@ delivered_fence() {
 }
 fresh_ws() { local d="$TMP_ROOT/ws-$1"; rm -rf "$d"; mk_workspace "$d"; printf '%s' "$d"; }
 
+echo "D. decoy-ledger instrument self-test"
+: > "$DECOY_LOG"
+want_eq "$(decoy_ran)" "none" "D: an empty ledger reads as 'none'"
+ws="$(fresh_ws dself)"
+out="$(run_gate "$(delivered_fence 0 "$DECOY_CLAIM" claim)" "$ws" "$SCRATCH_HOME")"
+want_eq "$(decoy_ran)" "DECOY_EXECUTED" "D: a decoy that ran is visible to the PARENT shell"
+
 echo "R1/R2/R3. delivered -> verified fixture root, environment unset"
 R1_EXPECT=(
   "SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=plugin-root-token verified=true"
@@ -435,7 +461,7 @@ for i in 0 1 2; do
   out="$(run_gate "$(delivered_fence "$i" "$DECOY_EVIL" evil)" "$ws" "$SCRATCH_HOME")"
   want_in "$out" "gate=${GATE_NAMES[$i]} source=plugin-root-token verified=false" "R6: ${GATE_NAMES[$i]} refuses a non-Soleur manifest"
   want_in "$out" "${GATE_UNVERIFIED_MARKERS[$i]}" "R6: ${GATE_NAMES[$i]} emits its skip marker on the decoy"
-  want_not_in "$out" "DECOY_EXECUTED" "R6: ${GATE_NAMES[$i]} executed nothing under the decoy root"
+  want_eq "$(decoy_ran)" "none" "R6: ${GATE_NAMES[$i]} executed nothing under the decoy root"
 
   # MUST-PASS, and it documents a LIMITATION: the preflight is a shape check, not
   # authentication (ADR-179 A11, which rejected the stronger root-outside-worktree assertion).
@@ -444,7 +470,7 @@ for i in 0 1 2; do
   ws="$(fresh_ws "r6b$i")"
   out="$(run_gate "$(delivered_fence "$i" "$DECOY_CLAIM" claim)" "$ws" "$SCRATCH_HOME")"
   want_in "$out" "gate=${GATE_NAMES[$i]} source=plugin-root-token verified=true" "R6b: a manifest CLAIMING soleur is accepted (known limitation)"
-  want_in "$out" "DECOY_EXECUTED" "R6b: and its payload executes (the preflight is not authentication)"
+  want_eq "$(decoy_ran)" "DECOY_EXECUTED" "R6b: and its payload executes (the preflight is not authentication)"
 
   # R6c: ours, but this gate's own dispatch target is gone.
   absent_root="$TMP_ROOT/root-absent-${GATE_NAMES[$i]}"
@@ -462,7 +488,7 @@ for i in 0 1 2; do
   out="$(run_gate "$(delivered_fence "$i" "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME" \
         "CLAUDE_PLUGIN_ROOT=$DECOY_EVIL" "GROK_PLUGIN_ROOT=$DECOY_CLAIM")"
   want_in "$out" "gate=${GATE_NAMES[$i]} source=plugin-root-token verified=true" "R7: ${GATE_NAMES[$i]} ignores ambient roots"
-  want_not_in "$out" "DECOY_EXECUTED" "R7: ${GATE_NAMES[$i]} executed nothing under an ambient decoy"
+  want_eq "$(decoy_ran)" "none" "R7: ${GATE_NAMES[$i]} executed nothing under an ambient decoy"
 done
 
 echo "H1. deliver() self-test, pinned to an artifact this diff did not produce"
@@ -547,9 +573,11 @@ if [ $((passes + fails)) -ne "$asserted" ]; then
   exit 2
 fi
 
-# Derived from the row table's length, not from a green run's total: 19 rows, each contributing
-# the assertions enumerated above. Raising it is part of adding a row.
-MIN_ASSERTIONS=110
+# Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
+# and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
+# 136 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
+# Raising it is part of adding a row.
+MIN_ASSERTIONS=136
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2

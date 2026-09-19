@@ -21,10 +21,31 @@ Do not proceed until there is input from the user.
 Before the session-start preamble and before any routing, confirm a usable git repository exists. Run the readiness probe (it decides readiness AND, on failure, emits a `SOLEUR_GIT_REPO_DIAG` forensic line that the server-side telemetry hook mirrors to Better Stack — so a not-ready workspace is self-diagnosable without a manual probe):
 
 ```bash
-ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+GATE=readiness
+# --- soleur plugin-root resolver (ADR-179 decision 1 + decision 11; #8308). The three
+# copies in this file are byte-identical between these anchors; go-session-gates.test.sh
+# pins that. Arm 1 is the loader-substituted token — on a substituting harness a literal
+# fixed before bash runs, so no environment value can direct it (A10); on a read-from-disk
+# harness (the Codex/Devin go mirrors) an ordinary variable those harnesses' INSTRUCTIONS
+# tell the agent to set. Never a CWD default (#7442). POSIX only: no `xargs -r`, no
+# `readlink -f`, no `sed -i`. Never enable `set -e`, `set -u` or `set -o pipefail` in these
+# fences — line 1 is deliberately unguarded so it stays the exact token, and `-u` would
+# abort before any marker is printed, which is the silent-skip class being fixed. ---
+ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token
+if [ -z "$ROOT" ] && [ -n "${GROK_PLUGIN_ROOT:-}" ]; then
+  ROOT="$GROK_PLUGIN_ROOT"; SRC=grok-env
+fi
+[ -n "$ROOT" ] || SRC=none
 if [ -n "$ROOT" ] \
    && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
    && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
+  VERIFIED=true
+else
+  VERIFIED=false
+fi
+echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"
+# --- end resolver ---
+if [ "$VERIFIED" = true ]; then
   # Identity is not freshness (#7474): a root that IS ours can still not carry
   # this probe, and the bare invocation would then die with an unattributed
   # interpreter error. The fallback below is already the right behaviour for
@@ -39,14 +60,21 @@ if [ -n "$ROOT" ] \
 else
   # Distinct from a not-ready workspace: the PROBE could not run. Emitting the
   # same marker family keeps this visible to the telemetry hook instead of
-  # silently degrading into two git calls that print `true` (#7442).
-  # Empty ROOT (neither GROK_PLUGIN_ROOT nor CLAUDE_PLUGIN_ROOT) stays
-  # plugin-root-unverified — never default to ./plugins/soleur (ADR-179 / #7442).
+  # silently degrading into two git calls that print `true` (#7442). The
+  # RESOLVE line above says WHICH arm produced nothing, so this branch is now
+  # attributable rather than merely honest.
   echo "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=plugin-root-unverified"
   git rev-parse --is-bare-repository 2>/dev/null || true
   git rev-parse --is-inside-work-tree 2>/dev/null || true
 fi
 ```
+
+**Read the `SOLEUR_PLUGIN_ROOT_RESOLVE` line before anything else — it says which arm produced the root, and four different states need four different actions. One blanket "file a defect" would misattribute a customer's own configuration to Soleur.**
+
+- `source=none` **on Claude Code or Concierge** — no arm produced a root on a harness where the loader was expected to substitute one. That is a **Soleur plugin defect**. Per `wg-every-session-error-must-produce-either`, file an issue on `jikig-ai/soleur` quoting the three `RESOLVE` lines, then continue on the fallback.
+- `source=none` **on a read-from-disk harness (Codex, Devin CLI)** — nothing substituted and nothing set the variable. **Set `CLAUDE_PLUGIN_ROOT` per your harness's `INSTRUCTIONS.md` §"Paths and entry points"** and re-run. Not a Soleur defect.
+- `source=grok-env verified=false` — `GROK_PLUGIN_ROOT` is set but does not point at the Soleur plugin. A **local configuration fact**: check what it targets (`grok plugin list`). Not a Soleur defect.
+- `verified=false` with any other `source` — a root arrived but carries no Soleur manifest: a **torn or stale install**. Reinstall or update the plugin; file an issue only if a fresh install reproduces it.
 
 The `else` branch runs the bare inline probes when the plugin payload cannot be verified (e.g. a repo-less workspace whose plugin symlink was not scaffolded). Readiness = the output contains `SOLEUR_GIT_REPO_READY=true` (script path) OR a bare `true` (fallback path).
 
@@ -67,15 +95,59 @@ This gate is deterministic and fires on the first action, so a not-ready workspa
 Before the mutating preamble below (worktree cleanup, `.mcp.json` restore), classify the session — a routed skill's marker block cannot protect work that runs before it loads:
 
 ```bash
-ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
-# Cloud exec shells export neither *_PLUGIN_ROOT var; fall back to the
-# installed-plugin cache before declaring the script unreachable.
-if [ ! -f "${ROOT}/scripts/cloud-detect.sh" ]; then
-  FOUND="$(find /opt/.devin/plugins -name cloud-detect.sh 2>/dev/null | head -1)"
-  [ -n "$FOUND" ] && ROOT="${FOUND%/scripts/cloud-detect.sh}"
+GATE=cloud-detect
+# --- soleur plugin-root resolver (ADR-179 decision 1 + decision 11; #8308). The three
+# copies in this file are byte-identical between these anchors; go-session-gates.test.sh
+# pins that. Arm 1 is the loader-substituted token — on a substituting harness a literal
+# fixed before bash runs, so no environment value can direct it (A10); on a read-from-disk
+# harness (the Codex/Devin go mirrors) an ordinary variable those harnesses' INSTRUCTIONS
+# tell the agent to set. Never a CWD default (#7442). POSIX only: no `xargs -r`, no
+# `readlink -f`, no `sed -i`. Never enable `set -e`, `set -u` or `set -o pipefail` in these
+# fences — line 1 is deliberately unguarded so it stays the exact token, and `-u` would
+# abort before any marker is printed, which is the silent-skip class being fixed. ---
+ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token
+if [ -z "$ROOT" ] && [ -n "${GROK_PLUGIN_ROOT:-}" ]; then
+  ROOT="$GROK_PLUGIN_ROOT"; SRC=grok-env
 fi
-if [ -f "${ROOT}/scripts/cloud-detect.sh" ]; then
-  bash "${ROOT}/scripts/cloud-detect.sh" --banner
+[ -n "$ROOT" ] || SRC=none
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
+  VERIFIED=true
+else
+  VERIFIED=false
+fi
+echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"
+# --- end resolver ---
+# Devin cache arms — THIS GATE ONLY, and that confinement is a decision (ADR-179
+# decision 11), not an omission. Step 0 below dispatches cleanup-merged, which for a
+# merged branch with no worktree skips every guard gated on a worktree path and still
+# reaches `git push origin --delete`, `git branch -D` and `reset --hard HEAD`. Putting
+# these arms in the shared resolver would make that gate newly reachable on a harness
+# where it has always skipped. This gate only CLASSIFIES, so the arms buy cloud-mode
+# detection at no blast radius. Identity-selected, never by basename; `[ -d ]`-gated so
+# a non-Devin box searches nothing. `-exec … +`, not `xargs -r`: BSD/macOS xargs has no -r.
+if [ "$VERIFIED" != true ]; then
+  for d in "$HOME/.local/share/devin/cli/plugins/cache" /opt/.devin/plugins; do
+    [ -d "$d" ] || continue
+    MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
+      -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
+    if [ -n "$MANIFEST" ]; then
+      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache; VERIFIED=true
+      echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"
+      break
+    fi
+  done
+fi
+if [ "$VERIFIED" = true ]; then
+  # NESTED, not `[ "$VERIFIED" = true ] && [ -f … ]`: #7474 requires the presence check and
+  # the invocation to share a subprocess, and plugin-root-anchoring.test.ts P6 anchors on a
+  # `[ -f` at statement start. The conjunction form reads as guarded and is not recognised.
+  if [ -f "${ROOT}/scripts/cloud-detect.sh" ]; then
+    bash "${ROOT}/scripts/cloud-detect.sh" --banner
+  else
+    echo "SOLEUR_CLOUD_DETECT_SKIPPED reason=script-unreachable"
+  fi
 else
   echo "SOLEUR_CLOUD_DETECT_SKIPPED reason=script-unreachable"
 fi
@@ -88,12 +160,62 @@ fi
 Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
 
 ```bash
-ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+GATE=session-start
+# --- soleur plugin-root resolver (ADR-179 decision 1 + decision 11; #8308). The three
+# copies in this file are byte-identical between these anchors; go-session-gates.test.sh
+# pins that. Arm 1 is the loader-substituted token — on a substituting harness a literal
+# fixed before bash runs, so no environment value can direct it (A10); on a read-from-disk
+# harness (the Codex/Devin go mirrors) an ordinary variable those harnesses' INSTRUCTIONS
+# tell the agent to set. Never a CWD default (#7442). POSIX only: no `xargs -r`, no
+# `readlink -f`, no `sed -i`. Never enable `set -e`, `set -u` or `set -o pipefail` in these
+# fences — line 1 is deliberately unguarded so it stays the exact token, and `-u` would
+# abort before any marker is printed, which is the silent-skip class being fixed. ---
+ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token
+if [ -z "$ROOT" ] && [ -n "${GROK_PLUGIN_ROOT:-}" ]; then
+  ROOT="$GROK_PLUGIN_ROOT"; SRC=grok-env
+fi
+[ -n "$ROOT" ] || SRC=none
 if [ -n "$ROOT" ] \
    && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
    && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
-  # Identity is not freshness (#7474) — see the Step 0.0 probe above. Preferring
-  # GROK_PLUGIN_ROOT does not weaken the name=soleur check Step 0.0 already runs.
+  VERIFIED=true
+else
+  VERIFIED=false
+fi
+echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"
+# --- end resolver ---
+# Session-class gate, in THIS fence rather than inherited from Step 0.5: bash carries no
+# state between fences (ADR-179 §"Why the axes stay separate" item 3), so 0.5's verdict is
+# unavailable here. Keyed on the CLASSIFIER, not on SRC — a Devin agent following its own
+# INSTRUCTIONS resolves as plugin-root-token, so an `SRC != devin-cache` test would never
+# fire. This is the only gate below that mutates anything.
+SESSION_OK=false
+SESSION_PROBE=absent
+if [ "$VERIFIED" = true ]; then
+  # The classifier itself is presence-guarded (#7474). Without this, a verified-but-TORN
+  # install runs a missing script, the `case` sees empty output, and the gate reports
+  # `reason=cloud-session` — telling the operator their local session is a cloud one. A
+  # guard that misattributes is worse than one that skips.
+  if [ -f "${ROOT}/scripts/cloud-detect.sh" ]; then
+    SESSION_PROBE=present
+    case "$(bash "${ROOT}/scripts/cloud-detect.sh" 2>/dev/null | head -1)" in
+      local|not-local:no-devin-env) SESSION_OK=true ;;
+    esac
+  fi
+fi
+if [ "$VERIFIED" != true ]; then
+  # Do not let the session-start gate no-op invisibly: the form before #7442 ended in
+  # `|| true`, so an unresolved root skipped cleanup-merged AND the .mcp.json restore with
+  # no output at all. The RESOLVE line above now also says WHICH arm produced nothing.
+  echo "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified"
+elif [ "$SESSION_PROBE" != present ]; then
+  echo "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root"
+elif [ "$SESSION_OK" != true ]; then
+  echo "SOLEUR_SESSION_START_SKIPPED reason=cloud-session"
+else
+  # Identity is not freshness (#7474) — see the Step 0.0 probe above. Arm order is the
+  # loader-substituted token, then GROK_PLUGIN_ROOT (ADR-179 decision 11); the name=soleur
+  # preflight in the resolver runs on whichever arm produced the root.
   if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
     bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
       git worktree list && \
@@ -101,11 +223,6 @@ if [ -n "$ROOT" ] \
   else
     echo "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root"
   fi
-else
-  # Do not let the session-start gate no-op invisibly: the previous form ended in
-  # `|| true`, so an unresolved root skipped cleanup-merged AND the .mcp.json
-  # restore with no output at all (#7442). Empty ROOT stays plugin-root-unverified.
-  echo "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified"
 fi
 ```
 
