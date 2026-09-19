@@ -664,38 +664,47 @@ SCEN10_LOG="$(mktemp)"
 ) > "$SCEN10_LOG" 2>&1
 scen10_rc=$?
 
+# Each sub-row is asserted against ITS OWN section of the log: sub-row A
+# legitimately prints "Manual conflict resolution required", which sub-row B
+# forbids, so an unscoped grep would red B on A's output.
+scen10_section() {
+  case "$1" in
+    A) sed -n '/^=== sub-row A/,/^=== sub-row B/p' "$SCEN10_LOG" ;;
+    B) sed -n '/^=== sub-row B/,$p' "$SCEN10_LOG" ;;
+  esac
+}
 scen10_check() {
-  local label="$1" pat="$2"
-  if grep -qE "$pat" "$SCEN10_LOG"; then
-    pass "[10-real-git-conflict] $label"
+  local row="$1" label="$2" pat="$3"
+  if scen10_section "$row" | grep -qE "$pat"; then
+    pass "[10-real-git-conflict] $row: $label"
   else
-    fail "[10-real-git-conflict] $label — pattern absent: $pat (rc=$scen10_rc)"
+    fail "[10-real-git-conflict] $row: $label — pattern absent: $pat (rc=$scen10_rc)"
   fi
 }
 scen10_forbid() {
-  local label="$1" pat="$2"
-  if grep -qE "$pat" "$SCEN10_LOG"; then
-    fail "[10-real-git-conflict] $label — forbidden pattern present: $pat"
+  local row="$1" label="$2" pat="$3"
+  if scen10_section "$row" | grep -qE "$pat"; then
+    fail "[10-real-git-conflict] $row: $label — forbidden pattern present: $pat"
   else
-    pass "[10-real-git-conflict] $label"
+    pass "[10-real-git-conflict] $row: $label"
   fi
 }
 if [[ "$scen10_rc" -eq 2 ]]; then
   fail "[10-real-git-conflict] fixture setup failed (rc=2)"
   sed 's/^/      /' "$SCEN10_LOG"
 else
-  scen10_check "A: conflict reported with rc"           'kind=merge rc=1'
-  scen10_check "A: conflicted path named"               '^f$'
-  scen10_check "A: poll stopped on feat"                'Manual conflict resolution required on feat'
-  scen10_forbid "A: never reported as pushed"           'auto-sync [0-9/]+ pushed'
-  scen10_check "A: MERGE_HEAD absent after abort"       'POST-A: merge_head_rc=1'
-  scen10_check "A: worktree clean after abort"          'POST-A: porcelain=clean'
-  scen10_check "A: origin/main unchanged"               'POST-A: origin_main=unchanged'
-  scen10_check "A: origin/feat unchanged"               'POST-A: origin_feat=unchanged'
-  scen10_check "B: in-progress merge reported"          'kind=merge_in_progress'
-  scen10_forbid "B: in-progress merge not aborted"      'Manual conflict resolution required|auto-sync [0-9/]+ pushed'
-  scen10_check "B: staged resolution survived"          'POST-B: staged=present'
-  scen10_check "B: resolved content survived"           'POST-B: f=resolved'
+  scen10_check  A "conflict reported with rc"        'kind=merge rc=1'
+  scen10_check  A "conflicted path named"            '^f$'
+  scen10_check  A "poll stopped on feat"             'Manual conflict resolution required on feat'
+  scen10_forbid A "never reported as pushed"         'auto-sync [0-9/]+ pushed'
+  scen10_check  A "MERGE_HEAD absent after abort"    'POST-A: merge_head_rc=1'
+  scen10_check  A "worktree clean after abort"       'POST-A: porcelain=clean'
+  scen10_check  A "origin/main unchanged"            'POST-A: origin_main=unchanged'
+  scen10_check  A "origin/feat unchanged"            'POST-A: origin_feat=unchanged'
+  scen10_check  B "in-progress merge reported"       'kind=merge_in_progress'
+  scen10_forbid B "in-progress merge not aborted"    'Manual conflict resolution required|auto-sync [0-9/]+ pushed|Merge made by'
+  scen10_check  B "staged resolution survived"       'POST-B: staged=present'
+  scen10_check  B "resolved content survived"        'POST-B: f=resolved'
 fi
 if [[ "$FAIL" -gt 0 ]] && grep -q 'POST-A: porcelain=dirty\|DISCARDED\|UNEXPECTED' "$SCEN10_LOG"; then
   echo "    --- scenario 10 output ---"
