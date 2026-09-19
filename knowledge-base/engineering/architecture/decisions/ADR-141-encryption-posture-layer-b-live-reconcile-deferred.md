@@ -127,3 +127,23 @@ No `.c4` edit. No cron or monitor is added, so the `github -> sentry` relationsh
 edge counts in `model.c4` are unchanged; the ledger is a committed repo file, not a C4
 container; the observed volumes are already modeled. When the deferred reconcile lands its
 cron + monitor, THAT change updates the model.
+
+## Amendment — 2026-09-19 (#8386)
+
+The registry-host emitter this ADR blocks on now EXISTS in code: the `SOLEUR_ZOT_DISK`
+heartbeat carries `store_mount_src`, `store_backing_dev`, `store_mount_devid`,
+`store_expected_devid` and `store_luks` ahead of its free-text tail, readable off-box through
+Better Stack with no SSH and no `actions: read`.
+
+`hcloud_volume.registry` stays `unavailable:` anyway. `available` is the exact string the Layer A
+`live_coverage_floor` counts and this ADR defines it as *a host probe exists and emits*; at merge
+the host does not run the emitter, because delivery costs a registry-host replace and
+`apply-web-platform-infra.yml` is over GitHub's workflow-file size limit (#8361). The row flips —
+and the floor moves with it — in the commit recording an observed boot, graded by
+`scripts/followthroughs/registry-luks-live-8386.sh`.
+
+Restated blocker set: **#6894 / #8386 / #6897**. The frontmatter's `[6894, 6895, 6897]` is
+superseded: #6895 closed on the 2026-08-10 recut without ever shipping an emitter. And the
+deferred vendor-side `store_luks != yes` alert does NOT discharge Decision 1 — an alert pages on a
+host's self-report, while Decision 1 reconciles the ledger's CLAIM against that signal and rides
+`scheduled-terraform-drift.yml` (ADR-033 single-substrate).
