@@ -25,6 +25,17 @@
 # root) — see sandbox-canary.mjs.
 set -euo pipefail
 
+# An xtrace of this script would print the credential bound below into whatever
+# captures stderr (see #7797). Refuse rather than trace.
+case "$-" in
+  *x*)
+    if [ -n "${ANTHROPIC_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 APP_DIR="${SANDBOX_CANARY_APP_DIR:-apps/web-platform}"
 # Pin to the same base as apps/web-platform/Dockerfile (keep in sync on a base bump).
 IMG="${SANDBOX_CANARY_BASE_IMAGE:-node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d}"
