@@ -124,6 +124,7 @@ adjacent-prs
 admin-ip
 admin-ip-drift
 admin-ip-refresh
+admin-merge
 adnanh-webhook
 adr
 adr-031
@@ -432,6 +433,7 @@ bash-parsing
 bash-pipefail
 bash-set-e
 bash-strict-mode
+bash-subshell
 bash-test-pattern
 bash-tests
 bash-to-ts-port
@@ -601,6 +603,7 @@ call-site-grep
 campaign-calendar
 canary
 canary-deploy
+canary-sandbox
 candidate
 cannibalization
 cannot
@@ -1227,6 +1230,7 @@ directive-without-delivery
 directory-structure
 directory-traversal
 dirty
+dirty-vs-behind
 disambiguation
 disclosure
 disconnect
@@ -1430,6 +1434,7 @@ evidentiary-records
 exacerbation-rule
 exact-equality
 exact-match
+exactly-once
 exec
 exfil
 exhaustive-switch
@@ -2325,6 +2330,7 @@ module-level-state
 module-resolution
 modulesupabase
 monitor
+monitor-hygiene
 monitor-lifetime
 monitoring
 monorepo
@@ -3132,6 +3138,7 @@ replace-triggered-by
 replan
 replay
 replay-safety
+repo-global-guards
 repo-readiness
 repo-readiness-gate
 repo-research
@@ -3536,6 +3543,7 @@ shared-module
 shared-state
 sharp
 sharp-edges
+sharp-edges-extraction
 shell
 shell-expansion
 shell-init-scope

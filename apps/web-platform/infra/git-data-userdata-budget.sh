@@ -72,6 +72,10 @@ locals {
     git_data_gc_service              = replace(file("${DIR}/git-data-gc.service"), local.git_data_rationale_strip, "")
     git_data_gc_failure_service      = replace(file("${DIR}/git-data-gc-failure.service"), local.git_data_rationale_strip, "")
     git_data_gc_timer                = replace(file("${DIR}/git-data-gc.timer"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen             = replace(file("${DIR}/git-data-luks-reopen.sh"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_service     = replace(file("${DIR}/git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_failure_service = replace(file("${DIR}/git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_timer           = replace(file("${DIR}/git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
     git_transport_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBTRANSPORTKEYAAAAAAAAAAAAAAAAAAAAA"
     git_provision_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBPROVISIONKEYAAAAAAAAAAAAAAAAAAAAA"
     git_remove_pubkey                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBREMOVEKEYAAAAAAAAAAAAAAAAAAAAAAAA"

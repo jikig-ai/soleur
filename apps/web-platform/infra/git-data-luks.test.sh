@@ -428,13 +428,28 @@ p_doppler_config_scope() {
   # Guard the SIBLINGS too. Scoping this to cloud-init alone let the identical W0 defect
   # survive in git-data-cutover.sh — a file that runs ON this host under the same
   # single-config token — because the guard structurally could not see it.
+  # (#8210) The reopen unit pair joins the census with a THIRD accepted shape: the exact
+  # literal `--config "$GIT_DATA_DOPPLER_CONFIG"`, read at runtime from
+  # /etc/default/git-data-doppler where the template writes `${doppler_config_name}` (A20c
+  # pins that line). Any other `$X` is NOT accepted — the variable NAME is the contract.
   for _sib in "${DIR}/git-data-cutover.sh" "${DIR}/git-data-gc-failure.service" \
-           "${DIR}/git-data-gc.service"; do
+           "${DIR}/git-data-gc.service" "${DIR}/git-data-luks-reopen.service" \
+           "${DIR}/git-data-luks-reopen-failure.service"; do
     [ -f "$_sib" ] || continue
     n_run=$(( n_run + $(grep -Ec 'doppler run --project soleur ' "$_sib" || true) ))
     n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))
+    n_scoped=$(( n_scoped + $(grep -Fc 'doppler run --project soleur --config "$GIT_DATA_DOPPLER_CONFIG" ' "$_sib" || true) ))
   done
   if [ "$n_run" -ge 2 ] && [ "$n_run" -eq "$n_scoped" ]; then echo 1; else echo 0; fi
+}
+
+# A20c (#8210): the env file the reopen unit pair EnvironmentFile='s carries the config name
+# as the SAME templatefile interpolation the runcmd stages use, so the third shape above is
+# bound to ${doppler_config_name} and not to whatever a hand-edit put there.
+p_reopen_config_env() {
+  local block
+  block=$(awk '/^  - path: \/etc\/default\/git-data-doppler$/{f=1;next} f&&/^    content: \|/{c=1;next} f&&c&&/^    [a-z]/{exit} f&&c{print}' "$1")
+  if printf '%s\n' "$block" | grep -qxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}'; then echo 1; else echo 0; fi
 }
 
 # A20b (#7025, R1): the PRODUCTION render binds ${doppler_config_name} to the config the
@@ -815,6 +830,12 @@ assert_holds    "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT"
 # report the predicate as un-flippable rather than the guard as absent.
 assert_mutation "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT" \
   's/--config \$\{doppler_config_name\}/--config prd/g'
+# A20c (#8210): the reopen unit pair reads its config name from the env file, which must carry
+# the same interpolation. Mutation: hardcode it — the rung-2 rehearsal's scratch-config token
+# would then exit 1 with the key absent on every rehearsal reboot.
+assert_holds    "A20c reopen-config-env" p_reopen_config_env "$CLOUD_INIT"
+assert_mutation "A20c reopen-config-env" p_reopen_config_env "$CLOUD_INIT" \
+  's/^      GIT_DATA_DOPPLER_CONFIG=\$\{doppler_config_name\}$/      GIT_DATA_DOPPLER_CONFIG=prd_git_data/'
 
 # A20b (#7025, R1): the production caller binds that interpolation to the token's own config.
 assert_holds    "A20b doppler-config-binding" p_doppler_config_binding "$GIT_DATA_TF"
@@ -1347,6 +1368,51 @@ assert_mutation "B18 isLuks-rc-branch (0)/1) labels swapped)" p_isluks_rc_branch
 assert_holds    "B18p bootstrap-stderr-routed" p_bootstrap_stderr_routed "$CLOUD_INIT"
 assert_mutation "B18p bootstrap-stderr-routed (redirect deleted)" p_bootstrap_stderr_routed "$CLOUD_INIT" \
   's#(git-data-bootstrap\.sh) 2>>"\$GIT_DATA_RUNCMD_DETAIL"#\1#'
+
+# --- B18m (#8210 review): mkfs is KEYED ON THIS RUN HAVING CREATED THE CONTAINER --------------
+# The birth heredoc's mkfs guard was `if ! blkid /dev/mapper/git-data`, which folded blkid's
+# "could not identify" (rc 2 on a damaged ext4 superblock) into "no signature" and formatted a
+# correctly-unlocked store — reachable by every replace the runbook orders. blkid cannot tell a
+# blank plaintext from a damaged one, so the discriminator is provenance: mkfs only in the run
+# that luksFormat'd the device (`_luks_created_now=1`), FATAL when an EXISTING container shows
+# no filesystem. Predicate over the stripped luks_open slice, every arm mutation-driven.
+p_mkfs_keyed_on_creation() {
+  local slice n
+  slice="$(_luks_slice "$1")"
+  # (a) the flag is initialised to 0 and set to 1 ONLY on the luksFormat arm
+  if ! grep -Eq '^[[:space:]]*_luks_created_now=0[[:space:]]*$' <<<"$slice"; then echo 0; return; fi
+  n=$(grep -cE '^[[:space:]]*_luks_created_now=1' <<<"$slice" || true)
+  if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
+  if ! awk '/cryptsetup[[:space:]]+luksFormat/{f=1;next} f&&/_luks_created_now=1/{print "ok";exit} f&&/;;/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  # (b) blkid's rc is CAPTURED (a substitution, not a bare `if ! blkid`) and rc other than 0/2 refuses
+  if grep -Eq 'if[[:space:]]+![[:space:]]*blkid[[:space:]]+/dev/mapper/git-data' <<<"$slice"; then echo 0; return; fi
+  if ! grep -Eq '_fs_type="\$\(/usr/sbin/blkid -o value -s TYPE /dev/mapper/git-data[^)]*\)"[[:space:]]*\|\|[[:space:]]*_fs_rc=\$\?' <<<"$slice"; then echo 0; return; fi
+  if ! grep -Eq '\[ "\$_fs_rc" -eq 0 \] \|\| \[ "\$_fs_rc" -eq 2 \]' <<<"$slice"; then echo 0; return; fi
+  # (c) an EXISTING container with no filesystem is a FATAL exit, checked BEFORE the mkfs branch
+  if ! grep -Eq '^[[:space:]]*if \[ -z "\$_fs_type" \] && \[ "\$_luks_created_now" -ne 1 \]; then' <<<"$slice"; then echo 0; return; fi
+  if ! awk '/_luks_created_now" -ne 1/{f=1;next} f&&/exit 1/{print "ok";exit} f&&/^[[:space:]]*fi/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  # (d) exactly one mkfs, and it is inside the `-z "$_fs_type"` branch AFTER the refusal
+  n=$(grep -cE 'mkfs\.ext4' <<<"$slice" || true)
+  if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
+  local l_refuse l_mkfs
+  l_refuse=$(grep -nE '_luks_created_now" -ne 1' <<<"$slice" | head -1 | cut -d: -f1)
+  l_mkfs=$(grep -nE 'mkfs\.ext4' <<<"$slice" | head -1 | cut -d: -f1)
+  if [ -z "$l_refuse" ] || [ -z "$l_mkfs" ] || [ "$l_refuse" -ge "$l_mkfs" ]; then echo 0; return; fi
+  echo 1
+}
+assert_holds    "B18m mkfs keyed on container creation" p_mkfs_keyed_on_creation "$CLOUD_INIT"
+# the guard reverts to the bare truthiness form
+assert_mutation "B18m mkfs keyed on container creation (revert to \`if ! blkid\`)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#^([[:space:]]*)if \[ -z "\$_fs_type" \] && \[ "\$_luks_created_now" -ne 1 \]; then#\1if ! blkid /dev/mapper/git-data >/dev/null 2>\&1; then#'
+# the existing-container refusal stops exiting
+assert_mutation "B18m mkfs keyed on container creation (refusal no longer exits)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#Refusing to mkfs over the only copy; this is the ADR-068 backup/rebuild path, not a replace." \| tee -a "\$GIT_DATA_LUKS_DETAIL"; exit 1#Refusing to mkfs over the only copy" | tee -a "$GIT_DATA_LUKS_DETAIL"#'
+# the flag is set unconditionally (every run "created" the container)
+assert_mutation "B18m mkfs keyed on container creation (flag set unconditionally)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#^([[:space:]]*)_luks_created_now=0[[:space:]]*$#\1_luks_created_now=1#'
+# blkid's rc no longer captured (the `|| _fs_rc=$?` dropped), so an unreadable mapper reads as blank
+assert_mutation "B18m mkfs keyed on container creation (blkid rc not captured)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#\|\| _fs_rc=\$\?##'
 
 # --- B19 (#7227): Decision clause B, mechanized -------------------------------------------
 #

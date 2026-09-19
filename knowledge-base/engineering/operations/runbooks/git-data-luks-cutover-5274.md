@@ -190,6 +190,77 @@ repositories may now be written there unencrypted (Article 30 PA-2 (g)(17)).
 3. Re-dispatch the dry run only after the release run's deploy has finished; it must clear the flag
    precheck.
 
+## The boot reopen failed: `stage:luks_reopen` (#8210)
+
+A `stage:luks_reopen level:fatal` event means the git-data host booted and
+`git-data-luks-reopen.service` could not reopen `/dev/mapper/git-data`. The store is absent
+until this is resolved: the fstab line is `nofail`, so the host itself is up and answering on
+:22 with nothing mounted. The event carries the phase that failed as `action=`, plus
+`result=` / `rc=` / `code=` / `restarts=` read from the unit itself, and the script's stderr as
+`detail` (capped at 180 chars by the emitter, after its redaction passes).
+
+**Key on `action=` first.** The table below has one row per value the script and its reporter can
+emit. Every check is off-host — a Doppler CLI read, a Hetzner API read or a Sentry query — because
+this host ships no journal and has no SSH fallback.
+
+| `action=` | Probable cause | Off-host check | Lever |
+|---|---|---|---|
+| `config` | `GIT_DATA_LUKS_DEV` or `GIT_DATA_DOPPLER_CONFIG` absent or malformed in `/etc/default/git-data-doppler` | The rendered payload: `bash apps/web-platform/infra/git-data-userdata-budget.sh /tmp/r.yml >/dev/null && grep -A8 'path: /etc/default/git-data-doppler' /tmp/r.yml` | A payload/tfvars defect — both values are template-rendered. Fix the payload, then `git-data-host-replace`. |
+| `key` | `GIT_DATA_LUKS_KEY` was not injected: renamed, deleted, or the token lost the config | `doppler secrets --project soleur --config prd_git_data --only-names` | Re-create the secret under its NAME with the SAME value: `doppler configs logs rollback <log_id> --project soleur --config prd_git_data`, with the id from the `configs logs` read (Doppler logs every rename and delete, so the entry is there). No workflow re-converges it: `doppler_secret.git_data_luks_key` is in the CREATE job's `-target` set only, and `manual-rerun` does not carry it. Never a replace — a replace re-runs first boot, which needs the same key. |
+| `device` | The LUKS volume is not attached, or did not appear within 30 s | `doppler run -p soleur -c prd_terraform -- sh -c 'curl --disable --noproxy "*" -sS -H "Authorization: Bearer $HCLOUD_TOKEN" https://api.hetzner.cloud/v1/servers?name=soleur-git-data' \| jq '.servers[0].volumes'` against `git_data_luks_volume_id` in the git-data tfvars | `POST /v1/volumes/{volume_id}/actions/attach` with `{"server": <server_id>}` under the same token (Hetzner re-attaches in place; no Terraform address re-creates `hcloud_volume_attachment.git_data_luks` short of a replace), then the timer's next ladder re-runs the reopen — or replace. |
+| `header` | The pinned device is not a LUKS header — wrong volume, or a damaged one | The same volume-id read as `device` | **DO NOT REPLACE.** The birth heredoc formats a blank device, so a replace against a damaged or wrong volume destroys the only copy. This is the ADR-115 second-blocker class; the lever is what ADR-068 names as the durable rehydration source — GitHub (every bare repo is a mirror of a user remote, `ensure-workspace-repo.ts`) — re-provisioned onto a recreated volume. **No automated route for that exists yet**; it is a #8211 deliverable, and until it lands the honest state is "store unavailable, data intact upstream, do not replace". |
+| `open` | `luksOpen` refused the passphrase — a mis-rotation | `doppler configs logs --project soleur --config prd_git_data` (the config audit log: when a secret last changed; `doppler activity` takes no `--project`) for when the secret last changed | **DO NOT REPLACE.** `doppler configs logs rollback <log_id> --project soleur --config prd_git_data` with the id from the logs read — and only if the change was out-of-band: `doppler_secret.git_data_luks_key` is Terraform-managed (`git-data-luks.tf`), so a `-replace=random_password.git_data_luks` rotation re-converges to the NEW value on the next create-path apply. A replace with the wrong passphrase dies at the birth heredoc's `luks_open` and leaves the host dark. |
+| `identity` | The mapper is open but backed by a device other than the pin — a stale pin after a volume swap | `GET /v1/servers/{id}` attached volume ids vs the pin | Correct the pin in the payload, then replace. A host-config change is delivered by replace, never in place. |
+| `target` | `/etc/fstab` names the mapper zero times or more than once — a bad #8211 cutover | The rendered payload's fstab line, as for `config` | A payload defect. Fix, then replace. |
+| `mount` | The mount unit failed. `detail` carries the mount unit's journal tail | Read `detail` | `wrong fs type … bad superblock` is **filesystem damage**: the lever is the GitHub rehydration route named in the `header` row, NOT a replace. If `detail` reads `result=timeout` with the mount journal EMPTY, read the `luks_reopen_ok` rows first: a forced full e2fsck (`pass=2`) on a large error-flagged volume can exceed `TimeoutStartSec=300` while PID 1's mount completes, and the next attempt then reads `noop` — silently, so the fatal is never contradicted. A unit/payload defect is a payload fix plus a replace. |
+| `identity-mount` | The target is mounted from something that is not the mapper | Read `detail` — it names the actual source | Same split as `mount`: damage → the GitHub rehydration route (not yet automated); payload defect → fix and replace. |
+| `emit` | The store is OPEN AND MOUNTED — this row is not a store fault. The success emitter returned a STRUCTURAL rc (2, or 126/127 = absent/not executable) after a real reopen; a transient rc=1 is tolerated and never reaches here. **This row is DARK by construction**: the reporter ships through the same emitter, so no `action=emit` event can arrive. The unit exits 3 and `RestartPreventExitStatus=3` keeps it `failed` (a retry would take the silent noop branch and erase the fault). | What an agent sees: at birth, `luks_reopen_unit=no` in `boot_complete` (the boolean requires `ActiveState=active`); after a reboot, the ABSENCE of a `luks_reopen_ok` row where one is due, with no `luks_reopen` fatal either | A payload defect in the emitter, and an urgent one: every LATER failure on this host would be silent too. Fix the payload, then replace. Do NOT touch the volume — the data path is healthy. |
+| `unit` | The script never ran: `doppler run` failed, exec failed, or the unit hit its start timeout. Key on `result=` (`exit-code` / `timeout` / `signal` / `start-limit-hit`) and `rc=`; `detail` carries the doppler CLI's own error line | `doppler configs --project soleur` (the config exists) and `doppler configs logs --project soleur --config prd_git_data` (the config audit log: when a secret last changed; `doppler activity` takes no `--project`) (when the token was last used) — both read-only CLI reads needing no host access | A token/config fault is corrected in Doppler; no replace. A `timeout` against a healthy Doppler is a slow boot, which the bounded restarts cover — `restarts=` on the next success row records that it recovered. **An ABSENT `/etc/default/git-data-doppler` lands here, not on `config`:** the unit's `EnvironmentFile=-` makes a missing file a no-op rather than an error, so `DOPPLER_TOKEN` is unset and `doppler run` dies before the script reaches a phase. The off-host check is the same rendered-payload read as the `config` row — a `write_files` entry that failed to render leaves no file at all. |
+| `reopened` | Not a failure. The mapper was closed and is now open and mounted — the ordinary post-reboot success | — | None. Emitted at `info` on `luks_reopen_ok`; `restarts=` says whether a transient blip was absorbed |
+| `mounted` | Not a failure. The mapper was already open and the target was not mounted — a retry after a failed mount job | — | None, unless it repeats: a mapper open with the target unmounted at every boot means the mount unit is failing for another reason |
+| `noop` | Not a failure. Open and mounted already — the birth case, where the runcmd heredoc has just done both | — | None; this path emits nothing at all. In a REHEARSAL after a reset it is a FAIL (see below) |
+
+**Success and no-op rows.** `action=reopened` (the mapper was closed and is now open and mounted)
+and `action=mounted` (it was open, the target was not mounted) are emitted at `info` on stage
+`luks_reopen_ok`, which is deliberately routed by NO Sentry rule — the fatal router has no
+`level` condition, so routing it would page on every healthy reboot. `action=noop` (open and
+mounted already, the birth case) emits nothing at all. Read the success rows with:
+
+```bash
+doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events soleur-git-data --stage luks_reopen_ok \
+  --start 2026-09-18T00:00:00 --end 2026-09-19T00:00:00
+```
+
+**In the rehearsal, `noop` and `mounted` after a reset are a FAIL, not a pass.** A mapper cannot
+survive a hard power cycle, so the rung-2 reboot arm treats either as the probe or the host
+lying. Only `reopened` releases the evidence.
+
+**Event counts, so a repeat does not read as a new fault.** One exhausted restart ladder produces
+exactly ONE `luks_reopen` fatal — and that is because `git-data-luks-reopen.service` carries
+`RestartMode=direct`, not a default. Measured on systemd 261 at review: under the default
+`RestartMode=normal` the unit transits `failed` before EVERY auto-restart and `OnFailure=` fires
+on each attempt plus the terminal `start-limit-hit` — six events per ladder, and a transient
+Doppler blip that recovered on attempt 2 still paged a fatal on a healthy host. With `direct` the
+reporter runs once, at convergence, with `Result=start-limit-hit` and `NRestarts=<n>`.
+
+**A host that stays broken repeats ONCE AN HOUR, not four times, and that is deliberate.** A
+`git-data-luks-reopen.timer` tick inside the still-open `StartLimitIntervalSec=1h` window is
+refused on an already-`failed` unit and fires NOTHING (`failed → failed` is not a transition;
+measured). The first tick at or after the window closes re-runs a full ladder: one fatal, ~6
+Doppler calls, then quiet until the next window. So expect roughly 20–24 events a day while the
+store stays closed, collapsed by Sentry into one issue (the reporter's message is constant and
+the emitter sets no fingerprint, so tags do not split it — which also means different `action=`
+values share the issue: read the FIRST event's `action=`). Recovery from a vendor outage is
+therefore bounded by that hour, not by the 15-minute tick: a 20-minute outage self-heals at the
+first tick after 60 minutes from the ladder's first attempt. An earlier revision of this
+paragraph claimed ~96 evenly spaced fatals a day; the timer file records the correction too.
+
+The inherited gc-failure shape can double-emit only when `doppler run` succeeds and the emitter
+itself then exits non-zero (its rc 1, a failed POST): the reporter's `|| "$@"` arm re-runs the
+emitter once without the Doppler-injected Better Stack token. That is a bounded retry on the
+failure path, not a second fault. A reopen that stays broken produces THREE events per weekly gc
+tick, one root cause: the reopen's own fatal, gc's unit failure, and gc's mountpoint fatal.
+
 ## Sharp edges
 
 - **A pending approval holds `git-data-state`.** A cutover or root-key apply run waiting for its
@@ -200,6 +271,12 @@ repositories may now be written there unencrypted (Article 30 PA-2 (g)(17)).
   concurrency group. A run that ends `cancelled` without executing a step was displaced, not refused.
   Re-dispatch it once the group's current holder has finished.
 - **A re-run asks for approval again.** The environment sits on the job that reads the key.
+- **The reporter's own failure is dark, and that is inherent to a host with no journal off-box.**
+  If both of `git-data-luks-reopen-failure.service`'s arms fail (Sentry and Better Stack both
+  unreachable from the host), that ladder's fatal is lost; the next hourly ladder re-emits, and a
+  later success lands `luks_reopen_ok restarts=<n>`. A host with the store closed AND both sinks
+  unreachable is dark until one recovers — as is every other git-data signal (gc's mountpoint fatal
+  uses the same emitter; the web-side probe checks TCP :22 only).
 
 ## Rotation
 
@@ -237,6 +314,30 @@ host fails inside that window, it stays down until post-merge steps 1 and 2 are 
   Art. 17 erasure-failure event (`op:git-data-bare-repo-erasure`). **Those events are expected in this
   window** while the host is down. No repository exists, so nothing is left behind.
 - Keep the window short: run post-merge steps 1 and 2 back to back.
+
+**Break-glass for the rung-2 interlock (#8210).** `git_data_host_replace` calls
+`git_data_rung2_rehearsal_gate`, which binds the landed evidence to a hash of the cloud-init
+template, the render module and every payload it binds — **at the dispatched ref** — and reads
+the evidence's commit provenance (so the job checks out with `fetch-depth: 0`; a shallow clone
+HOLDs). An emergency replace is therefore refused whenever `main` has drifted since the last
+rehearsal, including when the host is already down. The route:
+
+1. Find the candidate: **the last commit that touched the evidence file**,
+   `git log -1 --format=%H -- apps/web-platform/infra/git-data-rung2-boot-evidence.env`, or any
+   descendant of it up to the next change of a bound file. (Not the template's own log: those
+   commits are where the template CHANGED, and by Guard 4 the evidence for a template always lands
+   in a LATER, evidence-only commit — at every SHA that log prints the in-tree evidence is the
+   previous one and the gate refuses with STALE EVIDENCE.)
+2. `gh workflow run --ref` takes a **branch or tag name**, not a SHA: push a tag at that commit
+   (`git tag rung2-known-good-<date> <sha> && git push origin rung2-known-good-<date>`), then
+   dispatch `git-data-host-replace` with `--ref rung2-known-good-<date>`.
+3. The ref must itself CARRY the interlock and the full-history checkout (i.e. be at or after the
+   #8210 merge); a pre-#8210 ref has no interlock in its workflow, so dispatching one would be a
+   bypass, which this paragraph does not license.
+
+That ref is not a weaker payload — it is precisely the payload a rehearsal booted and reset. No
+PR, no SSH, no gate edit; one tag push. Re-rehearse and land evidence for the newer payload
+afterwards; do not carry the tag forward as a standing dispatch source.
 
 **Escape hatch.** If the root-key apply cannot succeed (for example a provider or Doppler failure the
 dispatch cannot get past) and a recovery replace is needed, the route is **a reviewed PR** that reverts
