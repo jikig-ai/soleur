@@ -431,6 +431,7 @@ bash-cwd
 bash-hooks
 bash-mocks
 bash-parsing
+bash-performance
 bash-pipefail
 bash-set-e
 bash-strict-mode
@@ -771,6 +772,7 @@ cloud-routines
 cloud-task-silence
 cloudflare
 cloudflare-access
+cloudflare-bulk-redirects
 cloudflare-rulesets
 cloudflare-tunnel
 cmo
@@ -1807,6 +1809,7 @@ guard-erosion
 guard-itself-dark
 guard-placement
 guard-residue
+guard-review
 guard-test
 guard-testing
 guard-vacuity
@@ -2276,6 +2279,7 @@ merge-time-verification
 message
 message-bubble
 meta-harness
+meta-refresh
 metadata-extraction
 metadata-routes
 metakey
@@ -2673,6 +2677,7 @@ pipe-buf
 pipefail
 pipeline
 pipeline-gotchas
+pipeline-parsing
 pir
 pir-gate
 pivot
@@ -3141,6 +3146,7 @@ replan
 replay
 replay-safety
 repo-global-guards
+repo-lints
 repo-readiness
 repo-readiness-gate
 repo-research
@@ -3783,10 +3789,12 @@ stripe
 stripe-projects
 structural-boundary
 structural-enforcement
+structural-enumeration
 structural-test
 structured-data
 stub
 stub-detection
+stub-fidelity
 stuck-active
 stuck-detection
 stuck-watchdog
@@ -3915,6 +3923,7 @@ terraform_data
 test-all
 test-authoring
 test-baseline
+test-battery
 test-blast-radius
 test-coverage
 test-coverage-gaps
@@ -4346,6 +4355,7 @@ workflow-security
 workflow-self-hosting
 workflow-tool
 workflow-triggers
+workflow-yaml
 workflow_dispatch
 workflow_enforcement
 workflow_run

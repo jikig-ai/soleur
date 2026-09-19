@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-19T19:58:29Z",
+  "generated_at": "2026-09-19T20:00:50Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1164,11 +1164,11 @@
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 91,
+      "applied_count": 92,
       "warn_count": 0,
-      "fire_count": 91,
+      "fire_count": 92,
       "prevented_errors": 0,
-      "last_hit": "2026-09-19T19:58:07Z",
+      "last_hit": "2026-09-19T19:58:28Z",
       "first_seen": "2026-07-20T12:16:48Z",
       "rule_text_prefix": ""
     },
@@ -1288,7 +1288,7 @@
       "post-dispatch-watch-gate": 5177,
       "guardrails-block-recursive-delete": 372,
       "kb-domain-allowlist-guard": 221,
-      "guardrails-require-milestone": 528,
+      "guardrails-require-milestone": 529,
       "context-reviewed-gate": 13,
       "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 8,
       "git-commit-secret-scan": 430,
@@ -1309,7 +1309,7 @@
       "guardrails-worktree-write-guard": 260,
       "context-reviewed-hook-self-fault": 1,
       "adr-033-inngest-cron-canonical": 30,
-      "skill-security-scan": 281,
+      "skill-security-scan": 291,
       "net-issue-flow-undelivered-declaration": 1,
       "pkill-self-match-guard-readonly": 2,
       "prod-write-defer-doppler-prd-secrets": 6,

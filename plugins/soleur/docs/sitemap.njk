@@ -6,9 +6,10 @@ eleventyExcludeFromCollections: true
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 {%- for entry in collections.all %}
 {# Emit ONLY canonical trailing-slash directory URLs. Do NOT add `.html` here:
-   redirect stubs live at /pages/*.html (page-redirects.njk) and would be indexed
-   by Google as "Page with redirect". Every canonical page outputs at a trailing-
-   slash URL (`permalink: agents/` -> /agents/; `index.njk` -> /). Guarded by the
+   redirect stubs used to live at /pages/*.html (page-redirects.njk — deleted in
+   #3328; legacy URLs are now edge 301s) and would be indexed by Google as "Page
+   with redirect". Every canonical page outputs at a trailing-slash URL
+   (`permalink: agents/` -> /agents/; `index.njk` -> /). Guarded by the
    redirect-stub gate in validate-seo.sh. See the 2026-06-01 GSC plan. #}
 {%- if entry.url.endsWith("/") %}
   <url>
