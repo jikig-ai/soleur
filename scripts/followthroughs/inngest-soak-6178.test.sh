@@ -292,6 +292,7 @@ default_fixtures; echo 500 > "$WORK/slice-3.code"; printf '{"error":"boom"}' > "
 expect "C6 slice 3 HTTP 500 with a JSON body → slice_unreadable slice=3/5" 3 "reason=slice_unreadable slice=3/5"
 expect "C6 ...cause=other" 3 "cause=other"
 expect "C6 ...http=500 is named" 3 "http=500"
+expect_absent "C6 ...a MAPPED exit (3) does not also trip the unmapped-exit trap (an exit-1 here would be rewritten to 3 and read identical by rc alone)" "unmapped_exit"
 default_fixtures; echo 500 > "$WORK/slice-3.code"; printf 'Error occurred while evaluating hook rules.' > "$WORK/slice-3.json"; run C6b
 expect "C6b the hook-rule-mismatch body (a wrong HMAC) → cause=hmac_mismatch" 3 "cause=hmac_mismatch"
 default_fixtures; echo 403 > "$WORK/slice-3.code"; printf '<!DOCTYPE html><html><body>Cloudflare Access denied</body></html>' > "$WORK/slice-3.json"; run C6c
@@ -372,7 +373,7 @@ default_fixtures; append_runs 2 '[{"id":"01M2QJQTHROW","functionID":"11bb44a3-ae
 expect "C23 a jq runtime error → CANNOT ESTABLISH jq_failed (never 5, never clean)" 3 "reason=jq_failed"
 
 # ── anti-vacuity floor + conservation ────────────────────────────────────────────────────────
-FLOOR=84
+FLOOR=85
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1
