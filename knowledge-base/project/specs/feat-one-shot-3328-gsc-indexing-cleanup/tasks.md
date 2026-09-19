@@ -16,17 +16,17 @@ verified live (69/69 curls).
   - [x] 1.2.1 `cd apps/web-platform/infra && terraform validate` — PASS; console expansion = 69 items
   - [x] 1.2.2 `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` green (still 2 rules, bind order unchanged) — 41/41
   - [x] 1.2.3 `bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh` green — 28/28 mutations killed; ssl-full-mitigation.test.sh 10/10 also green
-- [ ] 1.3 Merge PR-A → confirm `apply-web-platform-infra.yml` ran and applied `cloudflare_list.legal_redirects`
-- [ ] 1.4 Post-merge verification (record output in PR/issue evidence)
-  - [ ] 1.4.1 Loop all 69 source URLs: `curl -sI -A Googlebot` → `HTTP/2 301` + correct `location:` per the pairs table
-  - [ ] 1.4.2 Single-hop check: `https://www.soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/` → 301 → `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/` in one hop
-  - [ ] 1.4.3 Canonical check: `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/` → `200`
+- [x] 1.3 Merge PR-A → confirm `apply-web-platform-infra.yml` ran and applied `cloudflare_list.legal_redirects` — merged via **PR #8331** at 2026-09-18T19:52:20Z; apply ran on merge (recorded on issue #3328 2026-09-18 comment)
+- [x] 1.4 Post-merge verification (record output in PR/issue evidence) — **69/69 verified live 2026-09-18** per the #3328 comment; 4-URL re-spot-check + www single-hop + canonical-200 re-verified green 2026-09-19 during PR-B planning resume
+  - [x] 1.4.1 Loop all 69 source URLs: `curl -sI -A Googlebot` → `HTTP/2 301` + correct `location:` per the pairs table — 69/69 green 2026-09-18 (#3328 comment); spot re-check green 2026-09-19
+  - [x] 1.4.2 Single-hop check: `https://www.soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/` → 301 → `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/` in one hop — re-verified 2026-09-19
+  - [x] 1.4.3 Canonical check: `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/` → `200` — re-verified 2026-09-19
 
 ## Phase 2 — PR-B: deletion + guard repurposing + internal links
 
 Precondition: 1.4 complete (69/69 verified).
 
-- [ ] 2.1 Per-item live re-verification before deletion (`hr-bulk-delete-per-item-live-infra-role-check`): curl all 19 `pageRedirects.js` `from` paths → 301 (record in PR)
+- [ ] 2.1 Per-item live re-verification before deletion (`hr-bulk-delete-per-item-live-infra-role-check`): curl all 19 `pageRedirects.js` `from` paths → 301 (record in PR). Planning-resume pass 2026-09-19: 19/19 → `301` with correct `location:` targets; implementation must still re-curl at deletion time and paste output into the PR evidence
 - [ ] 2.2 Delete meta-refresh machinery
   - [ ] 2.2.1 `plugins/soleur/docs/page-redirects.njk`
   - [ ] 2.2.2 `plugins/soleur/docs/_data/pageRedirects.js`
