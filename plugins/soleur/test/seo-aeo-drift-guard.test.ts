@@ -21,6 +21,7 @@ import {
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
+import { bulkRedirectPairs } from "./lib/bulk-redirect-pairs";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -488,18 +489,20 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
   test("legacy terms-of-service URL is covered by the bulk-redirect list", () => {
     // #3328 PR-B: the meta-refresh stub no longer exists — the canonical source
     // of truth for this redirect is the Cloudflare Bulk Redirect list in
-    // seo-bulk-redirects.tf (live edge 301, verified 2026-09-18/19). Anchor on
-    // the source_url/target_url attribute shape, tolerant of fmt alignment.
+    // seo-bulk-redirects.tf (live edge 301, verified 2026-09-18/19). Assert the
+    // pair on its own item {} block — a file-wide match could hide a dropped
+    // target behind the sibling terms-and-conditions item's identical target.
     const tf = readFileSync(
       resolve(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
       "utf8",
     );
-    expect(tf).toMatch(
-      /source_url\s*=\s*"soleur\.ai\/pages\/legal\/terms-of-service\.html"/,
+    const item = bulkRedirectPairs(tf).get(
+      "soleur.ai/pages/legal/terms-of-service.html",
     );
-    expect(tf).toMatch(
-      /target_url\s*=\s*"https:\/\/soleur\.ai\/legal\/terms-and-conditions\/"/,
-    );
+    expect(
+      item?.target,
+      "terms-of-service.html must 301 to the renamed legal page",
+    ).toBe("https://soleur.ai/legal/terms-and-conditions/");
   });
 });
 
@@ -522,6 +525,12 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
 // parity property the deleted _data/pageRedirects.js provided, now anchored
 // on the canonical source.
 describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#3328)", () => {
+  const TF_PATH = resolve(
+    REPO_ROOT,
+    "apps/web-platform/infra/seo-bulk-redirects.tf",
+  );
+  const readTf = () => readFileSync(TF_PATH, "utf8");
+
   // Detect stubs via the shared isMetaRefreshStub predicate (size-gated, also
   // used by the author-card/knowsAbout/description guards to exclude stub-like
   // pages). Walking the built tree means a reintroduced stub is caught wherever
@@ -530,20 +539,6 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
     return files
       .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
       .filter(({ body }) => isMetaRefreshStub(body));
-  }
-
-  // Parse each `item { ... }` block into a source_url -> target_url pair.
-  // Asserting per block (not file-wide) is what keeps a dropped or mutated
-  // target_url from hiding behind an identical target on a sibling item —
-  // several items deliberately share targets (the 3-shape reslug expansions).
-  function bulkRedirectPairs(tf: string): Map<string, string> {
-    const pairs = new Map<string, string>();
-    for (const block of tf.split(/\bitem\s*\{/).slice(1)) {
-      const src = block.match(/source_url\s*=\s*"([^"]+)"/)?.[1];
-      const tgt = block.match(/target_url\s*=\s*"([^"]+)"/)?.[1];
-      if (src) pairs.set(src, tgt ?? "<missing target_url>");
-    }
-    return pairs;
   }
 
   test("the built site contains zero meta-refresh redirect stubs", () => {
@@ -561,16 +556,47 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
     ).toEqual([]);
   });
 
-  test("seo-bulk-redirects.tf still declares the legal + alias + /articles/ pairs", () => {
+  test("no built HTML page contains a meta refresh of any size or delay", () => {
+    // isMetaRefreshStub is size-gated (<2KB) by design — a stub emitted inside
+    // a full layout escapes it AND escapes validate-seo.sh (the layout
+    // supplies canonical/JSON-LD/og/h1/description). After #3328 no page may
+    // carry http-equiv=refresh at all: the fence is unconditional, not
+    // stub-shaped. Any delay (content=5) counts too — a delayed refresh is
+    // still the GSC crawled-not-indexed mechanism.
+    const files = walkHtmlFiles(SITE);
+    expect(files.length).toBeGreaterThan(0);
+    const offenders = files
+      .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
+      .filter(({ body }) => /http-equiv\s*=\s*["']?refresh/i.test(body))
+      .map(({ rel }) => rel);
+    expect(
+      offenders,
+      `meta refresh found in built page(s) — no page may use http-equiv=refresh after #3328 (edge 301s only): ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("the built site emits no _redirects/_headers channel outside the guards' window", () => {
+    // A Cloudflare Pages _redirects or _headers file (via an
+    // addPassthroughCopy in eleventy.config.js) would be a second redirect
+    // channel that neither the _site HTML walk nor the tf assertions see.
+    // Assert none exists in the build output.
+    for (const name of ["_redirects", "_headers"]) {
+      expect(
+        existsSync(join(SITE, name)),
+        `${name} emitted into _site — a redirect channel outside the tf-guard window; route redirects through seo-bulk-redirects.tf instead`,
+      ).toBe(false);
+    }
+  });
+
+  test("seo-bulk-redirects.tf still declares the legal + alias + /articles/ pairs with edge-301 flags", () => {
     // Mirrors the source_url -> target_url set in seo-bulk-redirects.tf — the
     // parity property the deleted _data/pageRedirects.js (and the
     // articles.njk stub) provided, anchored on the canonical source. If an
     // entry is ever dropped from the list, the corresponding legacy URL loses
-    // its edge 301.
-    const tf = readFileSync(
-      resolve(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
-      "utf8",
-    );
+    // its edge 301. Flags are pinned on the SAME item block as the pair: a
+    // status_code flip to 302 or a dropped include_subdomains changes the
+    // redirect's semantics without touching the pair.
+    const tf = readTf();
     const pairs = bulkRedirectPairs(tf);
     // Anti-vacuity floor on the map side: a renamed locals/item structure that
     // yields zero parsed pairs must not read as "all expected pairs absent".
@@ -610,10 +636,24 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
     ]);
     const missing: string[] = [];
     const mismatched: string[] = [];
+    const flagless: string[] = [];
     for (const [src, tgt] of expected) {
-      if (!pairs.has(src)) missing.push(src);
-      else if (pairs.get(src) !== tgt)
-        mismatched.push(`${src} -> ${pairs.get(src)} (expected ${tgt})`);
+      const item = pairs.get(src);
+      if (!item) {
+        missing.push(src);
+        continue;
+      }
+      if (item.target !== tgt)
+        mismatched.push(`${src} -> ${item.target} (expected ${tgt})`);
+      for (const flag of [
+        /status_code\s*=\s*301\b/,
+        /include_subdomains\s*=\s*"enabled"/,
+        /preserve_query_string\s*=\s*"enabled"/,
+      ]) {
+        if (!flag.test(item.block)) {
+          flagless.push(`${src}: ${flag.source}`);
+        }
+      }
     }
     expect(
       missing,
@@ -623,6 +663,104 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
       mismatched,
       `redirect items with wrong target_url in seo-bulk-redirects.tf: ${mismatched.join(", ")}`,
     ).toEqual([]);
+    expect(
+      flagless,
+      `redirect items missing edge-301 flags in seo-bulk-redirects.tf: ${flagless.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("the generated-item expansion (3 arms + dynamic block) is intact", () => {
+    // The pairs map only reaches Cloudflare through the 3-arm flatten in
+    // local.blog_redirect_items and the `dynamic "item"` block on the list
+    // resource. Dropping one arm un-serves 23 URLs; dropping the dynamic
+    // block un-serves all 69 — and every pair assertion above stays green
+    // because it never reads the expansion. Pin the structure.
+    const tf = readTf();
+    for (const arm of [
+      'source = "soleur.ai/blog/${date_slug}/"',
+      'source = "soleur.ai/blog/${date_slug}/index.html"',
+      'source = "soleur.ai/blog/${date_slug}"',
+    ]) {
+      expect(
+        tf.includes(arm),
+        `blog_redirect_items is missing the expansion arm: ${arm} — a whole URL shape loses its edge 301`,
+      ).toBe(true);
+    }
+    expect(
+      /dynamic "item"[\s\S]*?for_each = local\.blog_redirect_items/.test(tf),
+      'cloudflare_list.legal_redirects has no dynamic "item" over blog_redirect_items — all 69 generated redirects would vanish',
+    ).toBe(true);
+  });
+});
+
+// -- Guard 3 (#3328 PR-B): pillar-series frontmatter <-> _data/pillars.js ----
+//
+// The two new series added for #3328 internal-link equity are wired by
+// `pillar: <key>` frontmatter consumed by _includes/pillar-series.njk, which
+// degrades silently: an unknown key emits only an HTML comment, and a member
+// URL resolving to no post renders an empty <a> title (or a 404 href). This
+// guard makes the relation bidirectional and loud — same parity property the
+// redirect guards above enforce, applied to the link-equity data.
+describe("pillar-series frontmatter <-> _data/pillars.js parity", () => {
+  test("every pillar: key resolves to a series and every member URL resolves to a post", async () => {
+    const { default: loadPillars } = await import(
+      resolve(REPO_ROOT, "plugins/soleur/docs/_data/pillars.js")
+    );
+    const pillars = loadPillars() as Record<
+      string,
+      { members: { url: string; relation: string }[] }
+    >;
+    const seriesKeys = new Set(Object.keys(pillars));
+
+    const posts = readdirSync(BLOG_POSTS_DIR).filter((f) =>
+      f.endsWith(".md"),
+    );
+    // frontmatter body only — a body line starting `pillar:` must not count.
+    const declared = new Map<string, string>();
+    for (const f of posts) {
+      const fm =
+        readFileSync(join(BLOG_POSTS_DIR, f), "utf8").split(/^---$/m)[1] ?? "";
+      const m = fm.match(/^pillar:\s*(\S+)/m);
+      if (m) declared.set(f.replace(/\.md$/, ""), m[1]);
+    }
+    for (const [file, key] of declared) {
+      expect(
+        seriesKeys.has(key),
+        `${file}.md declares unknown pillar: '${key}' — pillar-series.njk renders only an HTML comment for unknown keys`,
+      ).toBe(true);
+    }
+
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const fileForSlug = (slug: string) =>
+      posts.find(
+        (f) =>
+          f === `${slug}.md` ||
+          new RegExp(`^\\d{4}-\\d{2}-\\d{2}-${esc(slug)}\\.md$`).test(f),
+      );
+    const failures: string[] = [];
+    let memberCount = 0;
+    for (const [key, series] of Object.entries(pillars)) {
+      for (const member of series.members) {
+        memberCount++;
+        const slug = member.url.replace(/^\/blog\//, "").replace(/\/$/, "");
+        const file = fileForSlug(slug);
+        if (!file) {
+          failures.push(`${key}: member ${member.url} resolves to no post file`);
+          continue;
+        }
+        const base = file.replace(/\.md$/, "");
+        if (declared.get(base) !== key) {
+          failures.push(
+            `${key}: member ${member.url} -> ${file} declares pillar '${declared.get(base)}' (expected '${key}')`,
+          );
+        }
+      }
+    }
+    expect(
+      memberCount,
+      "no pillar members enumerated — the parity guard cannot pass vacuously",
+    ).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
   });
 });
 

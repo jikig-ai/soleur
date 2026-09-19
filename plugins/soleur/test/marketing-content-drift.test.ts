@@ -13,6 +13,7 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { bulkRedirectPairs } from "./lib/bulk-redirect-pairs";
 
 const TEST_DIR = import.meta.dir;
 const REPO_ROOT = join(TEST_DIR, "..", "..", "..");
@@ -302,25 +303,27 @@ describe("marketing-content-drift", () => {
     // so the coverage property the stub provided survives as a CI assertion.
     // Assert per item {} block: the three shapes share the target, so a
     // file-wide target_url match could mask a dropped target on one item.
+    // Flags are pinned on the same block — a 301->302 flip or dropped
+    // include_subdomains changes redirect semantics without touching the pair.
     const tf = readFileSync(
       join(REPO_ROOT, "apps/web-platform/infra/seo-bulk-redirects.tf"),
       "utf8",
     );
-    const pairs = new Map<string, string>();
-    for (const block of tf.split(/\bitem\s*\{/).slice(1)) {
-      const src = block.match(/source_url\s*=\s*"([^"]+)"/)?.[1];
-      const tgt = block.match(/target_url\s*=\s*"([^"]+)"/)?.[1];
-      if (src) pairs.set(src, tgt ?? "<missing target_url>");
-    }
+    const pairs = bulkRedirectPairs(tf);
     expect(pairs.size, "no redirect items parsed from seo-bulk-redirects.tf").toBeGreaterThan(0);
     for (const src of [
       "soleur.ai/blog/what-is-company-as-a-service/",
       "soleur.ai/blog/what-is-company-as-a-service/index.html",
       "soleur.ai/blog/what-is-company-as-a-service",
     ]) {
-      expect(pairs.get(src), `${src} must 301 to the CaaS pillar`).toBe(
+      const item = pairs.get(src);
+      expect(item?.target, `${src} must 301 to the CaaS pillar`).toBe(
         "https://soleur.ai/company-as-a-service/",
       );
+      expect(
+        item?.block,
+        `${src} must carry the edge-301 flags`,
+      ).toMatch(/status_code\s*=\s*301\b[\s\S]*include_subdomains\s*=\s*"enabled"[\s\S]*preserve_query_string\s*=\s*"enabled"/);
     }
   });
 

@@ -233,8 +233,8 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
   # 2026-05-18: /blog/what-is-company-as-a-service/index.html redirect dropped
   # to make room for the HTTPS catch-all rule (Rule 10 below). Canonical
   # /company-as-a-service/ is already in the sitemap. 2026-06-09: the edge 301
-  # is restored via the account-level bulk list (seo-bulk-redirects.tf, both
-  # URL shapes) — no zone slot needed.
+  # is restored via the account-level bulk list (seo-bulk-redirects.tf, all 3
+  # URL shapes — dir-slash, /index.html, and bare) — no zone slot needed.
 
   # Rule 10 (NEW 2026-05-18): HTTPS catch-all with ACME exclusion baked into
   # the expression. Restores the zone-wide HTTPS-upgrade behavior that the

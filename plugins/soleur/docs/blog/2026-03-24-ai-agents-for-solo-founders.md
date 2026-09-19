@@ -10,6 +10,7 @@ tags:
   - solopreneur
   - agentic-engineering
   - company-as-a-service
+  - pillar
 ---
 
 Solo-founded startups rose from 23.7% to 36.3% of all new ventures between 2019 and the first half of 2025, according to the [Carta Solo Founders Report](https://carta.com/data/solo-founders-report/). The reason is not courage. It is infrastructure. AI tools now handle work that used to require a team — and most solo founders discover them the same way: a demo of something that writes code, generates copy, or drafts a legal template. It saves an hour. Then two. Then the plateau arrives.

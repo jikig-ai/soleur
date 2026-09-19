@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# validate-blog-links.sh -- Check distribution content URLs against Eleventy build output.
+# validate-blog-links.sh -- Two independent checks:
+#   1. Blog date-slug <-> bulk-redirect parity (Guard 1, #3328): every
+#      date-prefixed post must have an edge-301 entry in
+#      seo-bulk-redirects.tf. Runs FIRST — it needs neither _site nor
+#      distribution content, so neither early-exit may skip it.
+#   2. Distribution content URLs against Eleventy build output.
 # Usage: bash scripts/validate-blog-links.sh [site-dir]
 # If site-dir not provided, builds the site first.
-# Exit 0 = all links valid, Exit 1 = one or more broken links.
+# Exit 0 = all checks pass, Exit 1 = one or more failures.
 #
 # CO-LOCATION INVARIANT: this script reads _site/ which is also built by
 # plugins/soleur/test/seo-aeo-drift-guard.test.ts (running inside `bun test
@@ -59,14 +64,39 @@ else
   pass "parity: ${#file_slugs[@]} date-prefixed blog file(s) enumerated"
 fi
 
-# The value-side invariant assumes canonical URL = filename minus date prefix.
-# A permalink: frontmatter override on a dated post would make the tf target
-# point at a non-existent URL while the value check stays green — refuse it.
+# The canonical URL derivation has two layers, and both must hold for the
+# value-side check (expected = filename minus date prefix) to be correct:
+#   1. Directory default: blog.json's permalink template computes
+#      blog/{{ page.fileSlug }}/index.html. A template change moves every
+#      canonical blog URL — all 69 generated edge 301s would 301 to 404s
+#      while this guard stayed green.
+#   2. Per-file override: a `permalink:` key in a dated post's frontmatter
+#      overrides the directory default for that post.
+# Pin the template literal and refuse per-file overrides (frontmatter-scoped
+# — a `permalink:` line inside the markdown body is not an override).
+BLOG_JSON="$BLOG_DIR/blog.json"
+if ! grep -qF '"permalink": "blog/{{ page.fileSlug }}/index.html"' "$BLOG_JSON"; then
+  fail "parity: blog.json permalink template changed — canonical blog URLs no longer derive from fileSlug; update blog_redirect_pairs values"
+fi
 for slug in "${file_slugs[@]}"; do
-  if grep -qE '^permalink:' "$BLOG_DIR/$slug.md"; then
+  fm_body="$(awk '/^---$/{c++; if(c==2) exit; next} c==1' "$BLOG_DIR/$slug.md")"
+  if printf '%s\n' "$fm_body" | grep -qiE '^permalink\s*:'; then
     fail "parity: $slug.md sets permalink: — canonical slug is no longer filename-derived; update its redirect target manually"
   fi
 done
+
+# Shape-expansion coverage: the pairs map only reaches Cloudflare through the
+# 3-arm flatten in local.blog_redirect_items plus the dynamic "item" block on
+# the list resource. A dropped arm un-serves 23 URLs and a deleted dynamic
+# block un-serves all 69 — both invisible to the key/value checks below.
+# shellcheck disable=SC2016  # ${date_slug} is literal tf text, not a bash var
+for arm in \
+  'source = "soleur.ai/blog/${date_slug}/"' \
+  'source = "soleur.ai/blog/${date_slug}/index.html"' \
+  'source = "soleur.ai/blog/${date_slug}"'; do
+  grep -qF "$arm" "$TF_FILE" || fail "parity: blog_redirect_items missing expansion arm: $arm"
+done
+grep -qE 'dynamic "item"' "$TF_FILE" || fail 'parity: cloudflare_list dynamic "item" block missing — generated redirects would vanish'
 
 # Map side: keys + values inside the blog_redirect_pairs block (region-scoped
 # extraction — a quoted-key grep elsewhere could see unrelated attributes).
