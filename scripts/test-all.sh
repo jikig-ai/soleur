@@ -2242,6 +2242,21 @@ if want_scripts; then
   # Every peer workflow lint is registered as this same pair (see lint-workflow-step-env-refs and
   # lint-workflow-errexit-capture above) — this one was registered once, which made it decoration.
   run_suite "scripts/lint-workflow-issue-write-scope-live" python3 scripts/lint-workflow-issue-write-scope.py
+  # A `uses: ./…` step resolves from the runner's WORKSPACE, so its job must have run
+  # actions/checkout first. scheduled-marketplace-drift.yml's checkout-free drift-check job ended
+  # in one under `continue-on-error: true`: the runner could not resolve the composite, the step
+  # went green, and the Sentry monitor recorded zero check-ins for 37 days. Same class as the two
+  # lints above, one layer earlier: that the alarm step can even be FOUND. Both halves are
+  # required — the unit suite proves the RULE is right, the -live arm proves the TREE is clean.
+  run_suite "scripts/lint-workflow-local-action-checkout" bash scripts/lint-workflow-local-action-checkout.test.sh
+  run_suite "scripts/lint-workflow-local-action-checkout-live" python3 scripts/lint-workflow-local-action-checkout.py
+  # A DANGLING committed symlink breaks the GitHub Actions runner's repository-archive
+  # extraction, so it fails `Set up job` for EVERY `$/…` and `owner/repo/path@ref` reference to
+  # this repo — measured on run 35360150848. The check lives in its own file rather than inline:
+  # `--enumerate-commands` encodes argv with TAB/NEWLINE delimiters and rejects a multi-line
+  # `bash -c` body, which is how the first revision of this registration broke
+  # `battery-tag-authorship` (an empty root set, refusing to classify).
+  run_suite "scripts/no-dangling-committed-symlinks" bash scripts/no-dangling-committed-symlinks.test.sh
   # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
   # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
   # advisory (absent from required-checks.txt and the ruleset), and this defect has already
