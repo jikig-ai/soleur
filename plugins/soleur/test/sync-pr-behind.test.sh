@@ -18,6 +18,12 @@ SUT="$REPO_ROOT/plugins/soleur/scripts/sync-pr-behind.sh"
 # git_fixture_env, the hermetic env for this suite's git fixture writes. It
 # sets -euo pipefail, so the +e below restores this suite's
 # accumulate-then-exit contract.
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every run (#8339 review).
+FIXTURES=()
+cleanup_fixtures() { rm -rf ${FIXTURES[@]+"${FIXTURES[@]}"}; }
+trap cleanup_fixtures EXIT
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$REPO_ROOT/plugins/soleur/test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
@@ -26,9 +32,6 @@ PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-FIXTURES=()
-cleanup_fixtures() { rm -rf ${FIXTURES[@]+"${FIXTURES[@]}"}; }
-trap cleanup_fixtures EXIT
 
 make_pair() {
   local d="$1"
