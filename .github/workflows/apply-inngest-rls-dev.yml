@@ -99,6 +99,24 @@ jobs:
           }
           sanitize() { scrub_pat "$(strip_log_injection "$1")"; }
 
+          # MULTI-ROW variant. `strip_log_injection` deletes 0x00-0x1F, which
+          # includes TAB and LF — correct for a one-line message, and destructive
+          # for a table: measured on run 35470553967, the 14-row per-table listing
+          # collapsed into ONE unreadable 300-character log line. That listing is
+          # the evidence a human reads before authorising the DROP and the record
+          # the ADR addendum cites, so it has to survive legibly. This keeps 0x09
+          # and 0x0A and strips every other control character, CR (0x0D) included
+          # — CR is what enables log-line overwriting, so dropping it is the part
+          # that was load-bearing. The content is a closed set by construction
+          # (relname is selected BY NAME from this file's own NAMES array, the
+          # schema is a literal, the rest are numbers and booleans), so there is
+          # no attacker-controlled text here in the first place; the scrub stays
+          # anyway because "no untrusted input reaches this" is a claim that rots.
+          sanitize_rows() {
+            scrub_pat "$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g')"
+          }
+
           API="https://api.supabase.com"   # pinned — NO env override (PAT-exfil-via-redirect seam)
           fail_mode=""; fail_detail=""
           record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
@@ -244,8 +262,11 @@ jobs:
                         (.relrowsecurity|tostring), (.policies|tostring), (.anon_select|tostring)] | @tsv)
               else "listing unavailable" end' 2>/dev/null)"
             echo "--- per-table listing (the 14, by name) ---"
-            sanitize "$listing"; echo
-            { echo '### Per-table listing'; echo '```'; sanitize "$listing"; echo; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            sanitize_rows "$listing" | column -t -s $'\t'
+            echo "--- end listing ---"
+            { echo '### Per-table listing'; echo '```'
+              sanitize_rows "$listing" | column -t -s $'\t'
+              echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # REPORTED-ONLY counters. None of these gates the POST, deliberately:

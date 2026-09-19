@@ -4,32 +4,47 @@ Derived from `knowledge-base/project/plans/2026-09-19-chore-retire-doublefire-pr
 
 ## Phase 1: Readiness (read-only, recorded in the PR body)
 
-- [ ] 1.1 Doppler: `INNGEST_CUTOVER_FLIP` == `done`; `INNGEST_POSTGRES_URI` username == `postgres.pigsfuxruiopinouvjwy` (username only, never the URI)
-- [ ] 1.2 Run the #6488 probe from the terminal → exit 1, `14/14` (the pre-state)
-- [ ] 1.3 Run the #6617 probe locally → exit 0, contrasting with sweeper run 35465233346
-- [ ] 1.4 `gh api repos/jikig-ai/soleur/collaborators/deruelle/permission` → `admin` under the operator token
+- [x] 1.1 Doppler: `INNGEST_CUTOVER_FLIP` == `done`; `INNGEST_POSTGRES_URI` username == `postgres.pigsfuxruiopinouvjwy` (username only, never the URI)
+- [x] 1.2 Run the #6488 probe from the terminal → exit 1, `14/14` (the pre-state)
+- [x] 1.3 Run the #6617 probe locally → exit 0, contrasting with sweeper run 35465233346
+- [x] 1.4 `gh api repos/jikig-ai/soleur/collaborators/deruelle/permission` → `admin` under the operator token
 
 ## Phase 2: Commit A — the transient drop workflow and the verdict-filter fix
 
-- [ ] 2.1 Rewrite `.github/workflows/apply-inngest-rls-dev.yml` into the dispatch-only drop
-  - [ ] 2.1.1 `workflow_dispatch` only; inputs `mode` (choice, default `dry-run`) and `reason`
-  - [ ] 2.1.2 Job-level pinned `PROJECT_REF`/`PROJECT_NAME`; identity preflight and anti-exfil helpers copied verbatim; `--max-time 30` retained
-  - [ ] 2.1.3 `NAMES=( … )` as the single source for both the catalog predicate and the DROP list
-  - [ ] 2.1.4 Blocking chain: identity 200 + `.name == soleur-dev`; then `tables_present == 14` and `posture_ok == 14`
-  - [ ] 2.1.5 Reported-only counters (`dependents_outside`, `foreign_sessions`, `runs`, `events`) plus the per-table `relname, relnamespace, reltuples, n_live_tup` listing
-  - [ ] 2.1.6 Drop arm echoes the exact statement before the POST; no `CASCADE`, no `IF EXISTS`; `SET lock_timeout TO '10s'`; post-verify requires 0
-  - [ ] 2.1.7 `LIFETIME: TRANSIENT` header naming its own retirement set
-- [ ] 2.2 `scripts/lib/trusted-verdict.sh` (its `gh api` carrying `--disable` first and `--noproxy '*'` — Rule D reaches `scripts/lib/`)
-- [ ] 2.3 `scripts/lib/trusted-verdict.test.sh` (the lib's own matrix, outliving any consumer)
-- [ ] 2.4 `scripts/followthroughs/concierge-strand-754ee124-5733.test.sh`, committed `100755`
-- [ ] 2.5 Source the lib from both live consumers (`concierge-strand-754ee124-5733.sh`, `cpx22-invoice-reconcile-7431.sh`) and transiently from the 6617 probe
-- [ ] 2.6 6617 probe prints `observed authorAssociation=…` as its **last** stderr line (600-byte tail)
-- [ ] 2.7 Authoring surfaces: `ship/SKILL.md` Step 3.5.B, `followthrough-stub-template.sh`, new `lint-followthrough-varq-ban.sh` rule
-- [ ] 2.8 Delete `scripts/followthroughs/betterstack-quota-verdict-5105.sh`
-- [ ] 2.9 `EXPECTED_TOTAL` floor in the shape guard, with an inline comment naming the measurement date and counts
-- [ ] 2.10 Register both new test files in `scripts/test-all.sh` (no glob covers `scripts/followthroughs/`)
-- [ ] 2.11 Local green: shape guard, lib test, both probe harnesses, varq-ban, trace-credential lint, exec-bit test, actionlint, Guard 1 and Guard 2 matrices
-- [ ] 2.12 Commit, push, record `SHA_A`
+> **Two plan deviations, both forced, both recorded in the commit-A message.**
+> (a) The shape guard's rename + dev-block strip and their registration sites moved from Phase 4
+> into Phase 2: rewriting the workflow reds 15 of the guard's 40 assertions immediately (measured),
+> so commit A cannot be green without them.
+> (b) `check_workflow_allowlist_matches` was planned for deletion in Phase 4; it is REPOINTED at the
+> new workflow's `NAMES` array instead, because the property it asserts got stronger — `NAMES` is the
+> single source for both the catalog predicate and the `DROP TABLE` list.
+
+- [x] 2.1 Rewrite `.github/workflows/apply-inngest-rls-dev.yml` into the dispatch-only drop
+  - [x] 2.1.1 `workflow_dispatch` only; inputs `mode` (choice, default `dry-run`) and `reason`
+  - [x] 2.1.2 Job-level pinned `PROJECT_REF`/`PROJECT_NAME`; identity preflight and anti-exfil helpers copied verbatim; `--max-time 30` retained
+  - [x] 2.1.3 `NAMES=( … )` as the single source for both the catalog predicate and the DROP list
+  - [x] 2.1.4 Blocking chain: identity 200 + `.name == soleur-dev`; then `tables_present == 14` and `posture_ok == 14`
+  - [x] 2.1.5 Reported-only counters (`dependents_outside`, `foreign_sessions`, `runs`, `events`) plus the per-table `relname, relnamespace, reltuples, n_live_tup` listing
+  - [x] 2.1.6 Drop arm echoes the exact statement before the POST; no `CASCADE`, no `IF EXISTS`; `SET lock_timeout TO '10s'`; post-verify requires 0
+  - [x] 2.1.7 `LIFETIME: TRANSIENT` header naming its own retirement set
+- [x] 2.2 `scripts/lib/trusted-verdict.sh`
+  - Plan note corrected by measurement: the plan required the lib's credentialed call to carry
+    `--disable` first and `--noproxy '*'` because Rule D of `lint-shell-trace-credential-refusal.py`
+    drops the `^scripts/lib/` exclusion. Rule D's subject is **`curl`**, and the lib calls `gh api`
+    — it never invokes curl — so the flags do not apply and adding them would be a syntax error.
+    Verified rather than assumed: `python3 scripts/lint-shell-trace-credential-refusal.py --changed
+    --base origin/main` over the committed diff reports `17 scanned file(s), 0 baselined (A/B/C),
+    0 baselined (D)`, exit 0.
+- [x] 2.3 `scripts/lib/trusted-verdict.test.sh` (the lib's own matrix, outliving any consumer)
+- [x] 2.4 `scripts/followthroughs/concierge-strand-754ee124-5733.test.sh`, committed `100755`
+- [x] 2.5 Source the lib from both live consumers (`concierge-strand-754ee124-5733.sh`, `cpx22-invoice-reconcile-7431.sh`) and transiently from the 6617 probe
+- [x] 2.6 6617 probe prints `observed authorAssociation=…` as its **last** stderr line (600-byte tail)
+- [x] 2.7 Authoring surfaces: `ship/SKILL.md` Step 3.5.B, `followthrough-stub-template.sh`, new `lint-followthrough-varq-ban.sh` rule
+- [x] 2.8 Delete `scripts/followthroughs/betterstack-quota-verdict-5105.sh`
+- [x] 2.9 `EXPECTED_TOTAL` floor in the shape guard, with an inline comment naming the measurement date and counts
+- [x] 2.10 Register both new test files in `scripts/test-all.sh` (no glob covers `scripts/followthroughs/`)
+- [x] 2.11 Local green: shape guard, lib test, both probe harnesses, varq-ban, trace-credential lint, exec-bit test, actionlint, Guard 1 and Guard 2 matrices
+- [x] 2.12 Commit, push, record `SHA_A`
 
 ## Phase 3: Dispatch (each dispatch arms a Monitor in the same turn)
 
@@ -55,6 +70,15 @@ Derived from `knowledge-base/project/plans/2026-09-19-chore-retire-doublefire-pr
 - [ ] 4.8 ADR-100 addendum (the URL-bearing record); ADR-030 amendment-log pointer; `expenses.md` pointer
 - [ ] 4.9 `followthrough-convention.md` rule citing the measured value; learning item 19 correction
 - [ ] 4.10 De-enrol both trackers (label + directive block)
+- [ ] 4.10b De-enrol **#5110** too. Found at work time, not in the plan: #5110 is CLOSED but still
+  carries a `<!-- soleur:followthrough script=scripts/followthroughs/betterstack-quota-verdict-5105.sh`
+  directive, and commit A deletes that script. `sweep-followthroughs.sh` fails a tracker whose script
+  is "missing in repo HEAD", and it runs a closed-set reopen pass — so after merge the directive would
+  drive a nightly reopen attempt on #5110. Measured: the closed-set query is
+  `closed:>=<today-CLOSED_LOOKBACK_DAYS>` with the default 14 days and #5110 closed 2026-07-24, so it
+  is OUT of the window today and this is latent rather than live. De-enrol it anyway — a dangling
+  directive whose script does not exist is exactly the cruft this PR exists to remove, and the window
+  is a default someone can raise.
 - [ ] 4.11 Re-run every suite whose population changed, including `--check-highwater`
 - [ ] 4.12 PR body: Changelog, `Closes #6617`, `Closes #6488`, the dispatch arm taken, three run URLs, echoed DROP in `<details>`
 
