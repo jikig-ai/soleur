@@ -242,6 +242,62 @@ describe("No backtick file references in skills", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Every references/*.md is REACHABLE from its skill (#8302 review F4)
+// ---------------------------------------------------------------------------
+//
+// The byte ratchet (scripts/lint-skill-body-budget.py) is one-sided: shrinking a
+// SKILL.md never reds. Its own failure text prescribes "extract a block into
+// references/ behind a load directive" -- and review measured that deleting the
+// directive plan/SKILL.md carries for references/plan-sharp-edges.md (151 KB)
+// reddened NOTHING: the extracted file became an orphan silently, which is
+// ADR-151's "appears enforced, is absent" produced by the mechanism meant to
+// contain prompt weight. Every future extraction inherits the gap unless
+// something pins reachability. This does: each references/*.md must be named
+// (by basename) from at least one other file in its skill directory.
+describe("references/ files are reachable from their skill", () => {
+  // Pre-existing orphan at the introduction of this guard, NOT created by it.
+  // Only a legal-normalise fixture names it. Exact-count ledger: it may shrink
+  // (delete or link the file) and never grow.
+  const KNOWN_ORPHANS = new Set(["skill-security-scan/references/disclaimer.md"]);
+  const skillsDir = resolve(PLUGIN_ROOT, "skills");
+  const rows: Array<{ rel: string; linked: boolean }> = [];
+  for (const skill of readdirSync(skillsDir)) {
+    const refDir = resolve(skillsDir, skill, "references");
+    if (!existsSync(refDir)) continue;
+    for (const f of readdirSync(refDir)) {
+      if (!f.endsWith(".md")) continue;
+      const rel = `${skill}/references/${f}`;
+      // Every other file in the skill dir, any extension, one level of
+      // nesting (SKILL.md, sibling references, scripts, workflows).
+      const haystack: string[] = [];
+      const walk = (d: string, depth: number) => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const full = resolve(d, e.name);
+          if (e.isDirectory()) { if (depth < 2) walk(full, depth + 1); continue; }
+          if (full === resolve(refDir, f)) continue;
+          haystack.push(readFileSync(full, "utf-8"));
+        }
+      };
+      walk(resolve(skillsDir, skill), 0);
+      rows.push({ rel, linked: haystack.some((t) => t.includes(f)) });
+    }
+  }
+
+  test("the census reached a non-trivial population", () => {
+    // Non-vacuity: this guard is only evidence if it actually walked the
+    // references it claims to. plan-sharp-edges.md is the file the guard was
+    // written for and MUST be in the population.
+    expect(rows.length).toBeGreaterThanOrEqual(20);
+    expect(rows.map((r) => r.rel)).toContain("plan/references/plan-sharp-edges.md");
+  });
+
+  test("every references/*.md is named from its skill, except the pinned pre-existing orphans", () => {
+    const orphans = rows.filter((r) => !r.linked).map((r) => r.rel).sort();
+    expect(orphans).toEqual([...KNOWN_ORPHANS].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Autonomous-loop skills must disclose API budget (#3819)
 // ---------------------------------------------------------------------------
 
