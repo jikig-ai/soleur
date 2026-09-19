@@ -134,7 +134,9 @@ mattpocock/skills
   Used in: skills/operator-bootstrap/, skills/operator-rephrase/,
     scripts/lib/operator-script.sh,
     skills/brainstorm-techniques/references/phase-boundaries.md,
-    skills/ship/SKILL.md (Merge Danger section) (#8287)
+    skills/ship/SKILL.md (Merge Danger section) (#8287),
+    skills/reproduce-bug/SKILL.md, skills/test-fix-loop/SKILL.md,
+    skills/constraint-scaffold/ (#8288)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent
@@ -153,6 +155,33 @@ mattpocock/skills
     generated scripts source a shared library instead) and the one-way/
     two-way "Door" verdict (unanswerable by default on the PRs where
     Soleur's reversibility evidence is not produced).
+
+    Bundle 2 (#8288, from skills/engineering/diagnosing-bugs/SKILL.md
+    and skills/in-progress/setup-ts-deep-modules/SKILL.md at the same
+    HEAD) imports four mechanics, again as prose composed into existing
+    skills: the red-capable feedback-loop completion gate with its
+    ranked falsifiable-hypothesis ladder and the tighten /
+    non-deterministic branch (reproduce-bug); the [DEBUG-<hex4>]
+    tagged-probe convention with its cleanup grep and the perf-branch
+    measure-first rule (reproduce-bug, test-fix-loop; taxonomy in
+    ADR-230); "if no correct seam exists, that itself is the finding"
+    plus repro minimisation (reproduce-bug, routed to the
+    legacy-code-expert agent); and the install-time bite-proof with the
+    README-next-to-the-governed-path plus agent-instructions-pointer
+    shape (constraint-scaffold). Two upstream elements were deliberately
+    NOT imported: the peer's four-rule deep-module scope (Soleur's gate
+    stays single-boundary, client->server-secret only) and
+    scripts/hitl-loop.template.sh (reproduce-bug's rung 10 points at
+    soleur:agent-browser; the template is a script, not peer prose).
+    The server/README.md that constraint-scaffold emits into a founder's
+    repository is Soleur-authored, shares no sentence with either peer
+    file (checked by an 8-word shingle comparison at ship), and carries
+    no credit: the constitution's vendored-content rule keeps a third
+    party's credit in the corpus for provenance and strips it from
+    emitted user output, and the MIT notice is satisfied by this file in
+    Soleur's distribution. The template the README is rendered from
+    (references/boundary-readme.template) carries the attribution
+    comment; the emitter strips that first line.
 
   MIT License (upstream)
 
