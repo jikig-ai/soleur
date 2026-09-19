@@ -82,7 +82,7 @@ STUB
 chmod +x "$TMP/gh.sh"
 
 # --- synthesized SHAs (40 hex chars each) ----------------------------------------------------
-mksha() { local out=""; while [[ ${#out} -lt 40 ]]; do out+="$1"; done; printf '%s' "${out:0:40}"; }
+mksha() { local out=""; while (( ${#out} < 40 )); do out+="$1"; done; printf '%s' "${out:0:40}"; }
 B=$(mksha b)     # watermark (before)
 A=$(mksha a)     # github.sha (after)
 T=$(mksha 1c)    # the in-range path touch
