@@ -186,7 +186,7 @@ echo feat-side > "$INPROG/work/f"
 git -C "$INPROG/work" commit -q -am feat-side
 git -C "$INPROG/work" push -q origin feat
 # The operator started the merge, hit the conflict, and staged a resolution.
-git -C "$INPROG/work" fetch -q origin main
+git -C "$INPROG/work" fetch -q --no-tags origin main
 git -C "$INPROG/work" merge origin/main --no-edit >/dev/null 2>&1
 echo resolved > "$INPROG/work/f"
 git -C "$INPROG/work" add f

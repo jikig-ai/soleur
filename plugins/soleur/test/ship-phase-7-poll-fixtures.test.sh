@@ -877,13 +877,13 @@ _TMP_OWNED+=("$SCEN10_ERR")
   echo base > f && echo base > g && git add f g && git commit -qm base && git push -q origin main || exit 2
   git checkout -q -b feat && echo feat > f && git commit -qam feat && git push -q -u origin feat || exit 2
   git clone -q -b main "$tmp/origin" "$tmp/b" || exit 2
-  main_commit() { ( cd "$tmp/b" && git pull -q origin main && echo "$2" > "$1" && git commit -qam "main-$1-$2" && git push -q origin main ) || exit 2; }
+  main_commit() { ( cd "$tmp/b" && git pull -q --no-tags origin main && echo "$2" > "$1" && git commit -qam "main-$1-$2" && git push -q origin main ) || exit 2; }
   main_commit f other
   cd "$tmp/a" || exit 2
-  git fetch -q origin
+  git fetch -q --no-tags origin
   before_main="$(git rev-parse origin/main)"; before_feat="$(git rev-parse origin/feat)"; before_head="$(git rev-parse HEAD)"
   refs_unchanged() {
-    git fetch -q origin
+    git fetch -q --no-tags origin
     [[ "$(git rev-parse origin/main)" == "$before_main" ]] && echo "POST-$1: origin_main=unchanged" || echo "POST-$1: origin_main=CHANGED"
     [[ "$(git rev-parse origin/feat)" == "$before_feat" ]] && echo "POST-$1: origin_feat=unchanged" || echo "POST-$1: origin_feat=CHANGED"
     [[ "$(git rev-parse HEAD)" == "$before_head" ]] && echo "POST-$1: head=unchanged" || echo "POST-$1: head=CHANGED"
@@ -935,7 +935,7 @@ _TMP_OWNED+=("$SCEN10_ERR")
   # D: a rebase stopped on a conflict (no MERGE_HEAD, .git/rebase-merge present).
   main_commit f other2
   cd "$tmp/a" || exit 2
-  git fetch -q origin
+  git fetch -q --no-tags origin
   git rebase origin/main >/dev/null 2>&1
   pre_d="$([[ -d "$(git rev-parse --git-dir)/rebase-merge" ]] && echo "PRE-D: rebase=in-progress" || echo "PRE-D: rebase=NOT-STARTED")"
   arm D "$pre_d"
