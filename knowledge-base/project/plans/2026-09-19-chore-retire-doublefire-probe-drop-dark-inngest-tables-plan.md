@@ -15,6 +15,25 @@ requires_cpo_signoff: false
 
 # chore(inngest): close #6617 against the recorded pre-cutover verdict and drop the 14 dark-Inngest tables on soleur-dev with atomic retirement of 0002/apply-inngest-rls-dev.yml
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-19 · **Lenses:** CTO (structural), ADR-083 advisor, DHH, code-simplicity, CTO (devex), Kieran (correctness) · **Halt gates resolved:** 4.6, 4.7, 4.8, 4.9, 4.10, 4.11
+
+### Key improvements
+
+1. **Roughly 40% of the machinery was cut** — a capability probe, a commit split, a typed confirmation literal, a write-counter handshake, two deliberate red dispatches, a 10-row shape-guard block, four blocking preconditions and six acceptance criteria. Dispatch runs went 5 → 3, commits 4 → 2, acceptance criteria 15 → 9. No risk coverage was lost: what replaced them is an identity assertion, no-`CASCADE`, and reading the dry-run's 14 rows before authorising anything.
+2. **A dishonest principle was fixed rather than defended.** P6 claimed the PAT never leaves repo secrets while the plan itself put it in the terminal three times. It now claims only what the workflow buys — preflight and DROP in one process, an immutable run log — and says reads are terminal.
+3. **Five P0s were caught in the verification instruments**, two by execution rather than argument: deleting the dev workflow would have reddened 13 of 15 surviving prd probes (`probe()` opens `argv[2]` at module top level), and the "no live references" gate was blind because `[^\n]` in POSIX ERE is a negated set of the literals `n` and `\`.
+4. **Three CI-red-only failure modes were added to scope** that a local check could not see: the Supabase census ratchet (CI runs `--check-highwater`), a row-equality baseline for a deleted test, and an unregistered harness in a directory no glob covers.
+5. **One shared premise was reversed by measurement.** Two reviewers argued the lib would have a single consumer; `cpx22-invoice-reconcile-7431.sh` is live on open #7437 and is named by `ship/SKILL.md` as the reference implementation — which also put three authoring surfaces in scope, without which this PR would ship a convention contradicting the skill that teaches it.
+
+### New considerations discovered
+
+- The sweeper's dry-run emits a different log line than its live path, so the draft's assertion could never have passed.
+- The `ALLOW_14` cardinality guard lives inside the profile the cleanup deletes — removing it silently opens a new vacuity hole in the guard that survives.
+- The sweeper may close #6488 on its own between the drop and the merge; that is correct behaviour, recorded rather than fought.
+- No app code or migration references any of the 14 table names (deepen-pass sweep), which is the static half of the identity argument.
+
 ## Overview
 
 Two follow-through trackers turn the nightly sweeper red and neither red is telling the operator anything new.
@@ -108,6 +127,23 @@ Mechanisms cut **after** the review panel, from this plan's own scope — record
 ### Community discovery
 
 Functional-overlap scan (3/3 registries): no overlap for the core deliverables; the closest match (`jawwadfirdousi/supabase`, Management-API query helper) covers only the `POST /database/query` call shape the repo already has. Nothing installed. No uncovered stack (bash / GitHub Actions / Supabase).
+
+## Deepen Pass (2026-09-19)
+
+Run after the review panel, so it verifies the *revised* plan rather than the draft. No new mechanisms were added; three claims were upgraded from argued to measured and all six halt gates were resolved mechanically.
+
+**Verify-the-negative sweep (Phase 4.45).** The plan's load-bearing negative claim is "the 14 tables were never read by the application" — load-bearing because soleur-dev is co-tenanted and a name collision would make the DROP destructive. Two sweeps, both empty:
+
+- `git grep -cE '\.from\("<t>"\)|FROM <t>\b|INTO <t>\b' -- apps/web-platform` over all 14 names → **0 references**.
+- `git grep -lE 'CREATE TABLE …(the 14)…' -- apps/web-platform/supabase/migrations` → **no file**.
+
+This is the catalog-independent half of the identity argument, and it is stronger than the migration grep the Technical Considerations section cites: no app code queries any of the names, and no app migration creates one. `posture_ok` remains the runtime discriminator; this is the static one.
+
+**Rule-ID citations (Quality Check).** Three cited: `cq-cite-content-anchor-not-line-number` and `wg-when-tests-fail-and-are-confirmed-pre` are ACTIVE in `AGENTS.rules.md`; `cq-ac-must-not-depend-on-concurrent-sessions` is MIGRATED-but-active (its canonical home is now `plan-review/SKILL.md`, per PR #8034). None fabricated, none retired.
+
+**Precedent-diff gate (Phase 4.4).** Both pattern-bound deliverables have a sibling precedent in-repo and adopt it rather than inventing a form: the drop workflow's identity preflight, anti-exfil helpers and Management-API POST are copied verbatim from the file it replaces (the same shape `apply-inngest-rls.yml` uses for prd); `scripts/lib/trusted-verdict.sh` follows `scripts/lib/scrub-supabase-pat.sh` — with one deliberate divergence recorded, that the precedent lib exists as a landing zone for future callers and explicitly declines to migrate its pre-existing copies, whereas this lib migrates both of its live consumers in the same PR because a lint makes the alternative red.
+
+**Halt gates.** 4.6 User-Brand Impact — present, threshold `none`, and the diff touches 8 sensitive paths so the required `threshold: none, reason:` scope-out is present. 4.7 Observability — all five fields non-placeholder, no `ssh`, probe verb `git` is on the Check-10 allowlist. 4.8 PAT-shaped variables — none. 4.9 UI wireframe — no UI-surface path in the Files sections (the glob strings elsewhere in the plan are self-references to the detection regex, not matches). 4.10 Encryption posture — no path matches the detection set, no new store or cross-component connection. 4.11 Guard Contract — `lint-guard-contract.py` green over both entries, and both Assemblies name a structural chokepoint (a counter pair; a lib plus the lint that forbids bypassing it) rather than a member list.
 
 ## Problem Statement / Motivation
 
