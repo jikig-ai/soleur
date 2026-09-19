@@ -265,6 +265,7 @@ rm -f "$SCEN4"
 # Scenario 4b — DIRTY but locally clean: merge-tree rc=0 → BEHIND auto-sync
 # ---------------------------------------------------------------------------
 SCEN4B="$(mktemp)"
+trap 'rm -f "$SCEN4B"' EXIT
 cat > "$SCEN4B" <<EOF
 ${PRELUDE}
 _dirty_seen=0

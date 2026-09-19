@@ -12,12 +12,27 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SUT="$REPO_ROOT/plugins/soleur/scripts/sync-pr-behind.sh"
 
+# test-helpers.sh owns assert_fixture_dir -- the guard the fixture scanners
+# (fixture-relative-assert, fixture-dir-operand-assert) recognize -- and
+# git_fixture_env, the hermetic env for this suite's git fixture writes. It
+# sets -euo pipefail, so the +e below restores this suite's
+# accumulate-then-exit contract.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$REPO_ROOT/plugins/soleur/test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
+set +e -uo pipefail
+
 PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
+FIXTURES=()
+cleanup_fixtures() { rm -rf ${FIXTURES[@]+"${FIXTURES[@]}"}; }
+trap cleanup_fixtures EXIT
+
 make_pair() {
   local d="$1"
+  assert_fixture_dir "$d"
+  git_fixture_env "$d" || return 1
   git init -q --bare "$d/origin.git"
   git clone -q "file://$d/origin.git" "$d/work"
   git -C "$d/work" config user.email t@t
@@ -40,6 +55,7 @@ make_pair() {
 # successful sync is not scored as "still BEHIND" (exit 8).
 install_gh() {
   local bin="$1" first_state="$2"
+  assert_fixture_dir "$bin"
   mkdir -p "$bin"
   printf '%s\n' "0" > "$bin/gh-n"
   cat > "$bin/gh" <<EOF
@@ -60,6 +76,7 @@ EOF
 
 # --- CLEAN: no sync -----------------------------------------------------------
 CLEAN="$(mktemp -d "$TMPDIR/sync-behind-clean.XXXXXXXX")"
+FIXTURES+=("$CLEAN")
 make_pair "$CLEAN"
 install_gh "$CLEAN/bin" "OPEN CLEAN"
 sha_before="$(git -C "$CLEAN/work" rev-parse HEAD)"
@@ -76,6 +93,7 @@ rm -rf "$CLEAN"
 
 # --- BEHIND + clean merge-tree -----------------------------------------------
 BEHIND="$(mktemp -d "$TMPDIR/sync-behind-behind.XXXXXXXX")"
+FIXTURES+=("$BEHIND")
 make_pair "$BEHIND"
 # Advance origin/main with a non-conflicting commit.
 git clone -q "file://$BEHIND/origin.git" "$BEHIND/mainwt"
@@ -101,6 +119,7 @@ rm -rf "$BEHIND"
 
 # --- DIRTY + merge-tree rc=0 (GitHub DIRTY, locally clean) -------------------
 DIRTY_CLEAN="$(mktemp -d "$TMPDIR/sync-behind-dirty-clean.XXXXXXXX")"
+FIXTURES+=("$DIRTY_CLEAN")
 make_pair "$DIRTY_CLEAN"
 git clone -q "file://$DIRTY_CLEAN/origin.git" "$DIRTY_CLEAN/mainwt"
 git -C "$DIRTY_CLEAN/mainwt" config user.email t@t
@@ -125,6 +144,7 @@ rm -rf "$DIRTY_CLEAN"
 
 # --- DIRTY + merge-tree conflict ---------------------------------------------
 DIRTY_CONFLICT="$(mktemp -d "$TMPDIR/sync-behind-dirty-conflict.XXXXXXXX")"
+FIXTURES+=("$DIRTY_CONFLICT")
 make_pair "$DIRTY_CONFLICT"
 git clone -q "file://$DIRTY_CONFLICT/origin.git" "$DIRTY_CONFLICT/mainwt"
 git -C "$DIRTY_CONFLICT/mainwt" config user.email t@t

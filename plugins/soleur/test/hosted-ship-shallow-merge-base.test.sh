@@ -8,11 +8,24 @@
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+# test-helpers.sh owns assert_fixture_dir -- the guard the fixture scanners
+# (fixture-relative-assert, fixture-dir-operand-assert) recognize -- and
+# git_fixture_env, the hermetic env for this suite's git fixture writes. It
+# sets -euo pipefail, so the +e below restores this suite's
+# accumulate-then-exit contract.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$REPO_ROOT/plugins/soleur/test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
+set +e -uo pipefail
+
 PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 ROOT="$(mktemp -d "$TMPDIR/hosted-ship-shallow.XXXXXXXX")"
+assert_fixture_dir "$ROOT"
+git_fixture_env "$ROOT" || exit 2
 cleanup() { rm -rf "$ROOT"; }
 trap cleanup EXIT
 
@@ -33,7 +46,7 @@ git -C "$ROOT/src" commit -q -am feat
 git -C "$ROOT/src" checkout -q main
 
 git clone -q --depth=1 "file://$ROOT/src" "$ROOT/clone"
-git -C "$ROOT/clone" fetch -q origin feat:feat
+git -C "$ROOT/clone" fetch -q --no-tags origin feat:feat
 git -C "$ROOT/clone" checkout -q feat
 
 if git -C "$ROOT/clone" merge-base origin/main HEAD >/dev/null 2>&1; then
@@ -42,7 +55,7 @@ else
   pass "depth-1 clone has no merge-base for origin/main HEAD"
 fi
 
-git -C "$ROOT/clone" fetch --unshallow origin >/dev/null 2>&1
+git -C "$ROOT/clone" fetch --unshallow --no-tags origin >/dev/null 2>&1
 unshallow_rc=$?
 if [[ "$unshallow_rc" -eq 0 ]]; then
   pass "git fetch --unshallow origin exits 0 on a shallow clone"
@@ -72,7 +85,7 @@ else
 fi
 
 # Second unshallow on a now-complete repo: measured fatal, continue-arm.
-git -C "$ROOT/clone" fetch --unshallow origin >/dev/null 2>"$ROOT/second.err"
+git -C "$ROOT/clone" fetch --unshallow --no-tags origin >/dev/null 2>"$ROOT/second.err"
 second_rc=$?
 if [[ "$second_rc" -eq 128 ]] \
    && grep -qF 'fatal: --unshallow on a complete repository does not make sense' "$ROOT/second.err"; then

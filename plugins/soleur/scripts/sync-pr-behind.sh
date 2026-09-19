@@ -51,7 +51,7 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
 
   echo "[pr-behind-sync] BEHIND detected — auto-sync attempt ${attempt}/${MAX_ATTEMPTS}"
 
-  if ! git fetch origin main 2>&1 | tail -3; then
+  if ! git fetch --no-tags origin main 2>&1 | tail -3; then
     echo "[pr-behind-sync] fetch origin main failed" >&2
     exit 5
   fi

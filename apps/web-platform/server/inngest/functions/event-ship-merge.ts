@@ -196,7 +196,7 @@ export async function eventShipMergeHandler({
       };
       const unshallow = await spawnSimple(
         "git",
-        ["fetch", "--unshallow", "origin"],
+        ["fetch", "--unshallow", "--no-tags", "origin"],
         { cwd: workspace.spawnCwd, env: gitEnv },
       );
       if (unshallow.exitCode !== 0) {
