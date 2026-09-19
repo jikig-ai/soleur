@@ -1,7 +1,8 @@
 # Cloudflare Bulk Redirects — legacy /pages/legal/<slug>.html → clean /legal/<slug>/ 301s
-# (plus the orphaned blog reslug and the blog date-slug renames; 82 items
-# total = 13 explicit + 69 generated from local.blog_redirect_pairs,
-# see the list below).
+# (plus the orphaned blog reslug, the /articles/ stub reslug, and the blog
+# date-slug renames; item count = explicit items in the list below +
+# 3 shapes per pair generated from local.blog_redirect_pairs — don't pin a
+# hand-maintained numeral here, it is a guaranteed re-drift surface).
 #
 # Why a separate file / separate product (not more rules in seo-rulesets.tf):
 #   The 9 legacy legal-page redirects were DEFERRED in seo-rulesets.tf (see the
@@ -23,12 +24,12 @@
 #   catch-all first, then this list on the https re-request); HTTPS entries —
 #   apex or any subdomain — are a single hop.
 #
-# Root cause being fixed: without an edge 301 these URLs are served the HTTP-200
+# Root cause being fixed: without an edge 301 these URLs were served the HTTP-200
 # meta-refresh fallback (plugins/soleur/docs/page-redirects.njk for the /pages/
-# URLs, plugins/soleur/docs/blog/redirects.njk for the blog date-slugs), which Google
-# Search Console classifies as "Crawled - currently not indexed" (GSC drilldown
-# 2026-06-09). A deterministic 301 moves them out of that bucket. The same stubs
-# also carry `<meta name="robots" content="noindex">` now as a defensive interim.
+# URLs, plugins/soleur/docs/blog/redirects.njk for the blog date-slugs — both
+# templates deleted in the PR-B half of #3328 once these 301s were verified live),
+# which Google Search Console classifies as "Crawled - currently not indexed"
+# (GSC drilldown 2026-06-09). A deterministic 301 moves them out of that bucket.
 #
 # Provider/token scope: this resource is ACCOUNT-level (account_id, not zone_id) —
 # the only account-scoped Cloudflare ruleset in the repo. Bulk Redirects require
@@ -57,12 +58,12 @@
 
 # Blog date-slug -> canonical-slug pairs (#3328). Migrated from the generated
 # meta-refresh stubs in plugins/soleur/docs/_data/blogRedirects.js (deleted in
-# the PR-B half of #3328, gated on this list applying live). Static map, not
+# the PR-B half of #3328 once this list was verified live). Static map, not
 # fileset() derivation — see the 2026-09-18 plan Alternatives: a JSON export
 # adds a generator + committed artifact + freshness guard to ferry data
 # Terraform can hold directly; the bidirectional parity guard that keeps the
 # "every date-prefixed post has a redirect" property the build-time code gave
-# for free lands in PR-B (the scripts/validate-blog-links.sh repurpose).
+# for free landed in PR-B (the scripts/validate-blog-links.sh repurpose).
 locals {
   blog_redirect_pairs = {
     "2026-03-16-soleur-vs-anthropic-cowork"                         = "soleur-vs-anthropic-cowork"
@@ -109,7 +110,7 @@ resource "cloudflare_list" "legal_redirects" {
   account_id  = var.cf_account_id
   name        = "legal_redirects" # referenced by name from the ruleset's from_list
   kind        = "redirect"
-  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + blog reslug + blog date-slug -> canonical 301s. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
+  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + /articles/ + blog reslug + blog date-slug -> canonical 301s. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
 
   # Apex, host-less source_url (scheme-less sources match both http and https).
   # include_subdomains = "enabled" (v4 string enum, NOT a bool — provider
@@ -122,9 +123,11 @@ resource "cloudflare_list" "legal_redirects" {
   # diverges from the zone redirects' `false`: these are SEO 301s where
   # dropping campaign params (?utm_*) on the hop loses attribution; targets
   # are static pages with no query-reflection surface.
-  # 13 explicit items: 9 legal slugs (clean-slug == source-slug) + the
+  # Explicit items: 9 legal slugs (clean-slug == source-slug) + the
   # terms-of-service -> terms-and-conditions rename alias + 3 shapes of the
-  # blog reslug (/, /index.html, bare).
+  # blog reslug + 3 shapes of the /articles/ stub reslug (each reslug as
+  # /, /index.html, bare). Plus 3 generated shapes per blog_redirect_pairs
+  # entry — the generated items are flattened below, not listed here.
 
   item {
     value {
@@ -282,9 +285,51 @@ resource "cloudflare_list" "legal_redirects" {
     }
   }
 
+  # /articles/ -> /blog/ (#3328 PR-B): the LAST meta-refresh stub — a hand-maintained
+  # redirect page (plugins/soleur/docs/pages/articles.njk, predating the deleted
+  # machinery; zero inbound links, noindex, never in the sitemap). Discovered during
+  # PR-B when the zero-stub fence walked _site. Same 3-shape coverage as the reslug
+  # above; deleting the stub with no edge 301 would strand the URL as a 404. The
+  # template is deleted in the same PR — the only stub not edge-verified pre-merge,
+  # so worst case is a minutes-long 404 on a noindex zero-traffic URL if deploy
+  # beats this apply.
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/articles/"
+        target_url            = "https://soleur.ai/blog/"
+        status_code           = 301
+        include_subdomains    = "enabled"
+        preserve_query_string = "enabled"
+      }
+    }
+  }
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/articles/index.html"
+        target_url            = "https://soleur.ai/blog/"
+        status_code           = 301
+        include_subdomains    = "enabled"
+        preserve_query_string = "enabled"
+      }
+    }
+  }
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/articles"
+        target_url            = "https://soleur.ai/blog/"
+        status_code           = 301
+        include_subdomains    = "enabled"
+        preserve_query_string = "enabled"
+      }
+    }
+  }
+
   # Blog date-slugs (#3328): /blog/YYYY-MM-DD-<slug>/ → /blog/<slug>/.
-  # Replaces the generated meta-refresh stubs (plugins/soleur/docs/_data/
-  # blogRedirects.js) with deterministic edge 301s — same GSC
+  # Replaced the generated meta-refresh stubs (plugins/soleur/docs/_data/
+  # blogRedirects.js — deleted in #3328 PR-B) with deterministic edge 301s — same GSC
   # crawled-not-indexed class the legal items above fix. Same flags as the
   # explicit items: include_subdomains collapses the legacy www copies in one
   # hop, preserve_query_string keeps ?utm_* attribution on the hop.

@@ -4,6 +4,7 @@ date: 2026-03-14
 updated: 2026-04-01
 description: "Most AI coding tools plateau after week two. Compound knowledge fixes this: a system that learns from every task and routes those learnings back into its rules."
 ogImage: "blog/og-why-most-agentic-tools-plateau.png"
+pillar: agentic-solo-founder
 tags:
   - agentic-engineering
   - compound-engineering
