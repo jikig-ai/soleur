@@ -16,6 +16,27 @@ lane: cross-domain
 
 # feat(6178): enroll the ADR-100 Phase-4 soak in the follow-through sweeper
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-19
+**Sections enhanced:** Research Reconciliation, Technical Considerations (request shape, exit contract, seams, output shape), Phase 2/3/7, Guard Contract, Observability, Dependencies & Risks
+**Research agents used:** verify-the-negative (14 claims, all confirmed by grep/execution), git-history attribution (10 claims), security-sentinel, test-design-reviewer, observability-coverage-reviewer, architecture-strategist, pattern-recognition-specialist, learnings-researcher
+
+### Key Improvements
+
+1. **The 09-15 anchor class was misstated.** Run 34974655656 logged `anchor_source=floor(override)` and a `2.6 exactly-once VERIFIED (QUALIFIED)` verdict (population scoped to the 52 crons) — not an fsm-anchored proof. The probe output and the ADR addendum now inherit both qualifications verbatim, and the P2-a scope caveat (dedicated-host index only; not a web-host double-fire detector) is carried in the ACTION REQUIRED text with the second evidence the operator holds before flipping (web-1's quiesced shape).
+2. **A registry-drift gate closes the last false-clean path.** A cron registered after 09-15 has a UUID outside the pinned population and would never be queried. One extra HMAC GET to `/hooks/inngest-registry-probe` (measured live: 200, `function_count=70`, all 52 population ids present) pins `REGISTRY_COUNT=70` and asserts population ⊆ registry; drift → exit 3 `registry_drift`.
+3. **Two ★ mutation rows did not red the case they named** (row 19 used `false`, which does not exit without `-e`; row 4 depends on operand order). Rewritten with a `set -u` abort and a paired C5b/C5c assertion; C7 asserts the FATAL body verbatim so it cannot pass via `jq_failed`; the invariant helper and the negative-assertion helper get instrument self-tests; every harness run pins `INNGEST_SOAK_NOW_EPOCH` so no case measures the wall clock.
+4. **A wrong HMAC returns HTTP 500 `Error occurred while evaluating hook rules.`**, measured live — not a 4xx. The `slice_unreadable` remedy and a new `cause=hmac_mismatch` classification reflect that; the body excerpt is classified (`body_class=`) and printable-filtered rather than dumped raw.
+5. **Security ordering:** the xtrace refusal fires on `$-` with `${VAR:+x}` tests only (never `-n "$VAR"`), every host-supplied `functionID`/`startedAt` is shape-validated before it is printed on a public issue, and the population regex is `LC_ALL=C`-pinned inside the probe.
+
+### New Considerations Discovered
+
+- `workflow_dispatch --ref <branch>` runs the BRANCH's workflow YAML and sweeper, not main's; the dry run is acceptable (write-collaborator gated, `dry_run=true`, `contents: read`) but is preceded by a `git diff --quiet origin/main -- <sweeper files>` precondition so it exercises the production sweeper.
+- The sweeper has no `sentry-heartbeat`; a sweep that never fires on 09-22 is invisible. Pre-existing, out of this PR's allowed edits — deferred as #8349.
+- Three mechanisms are novel in the probe corpus and are declared as such in the header: the rc-filtering EXIT trap (14 probes trap EXIT for cleanup only; none rewrites `$?`), the `run_jq` helper with a `site=` token (per-site capture is precedented in 7922/8097; the helper is not), and the `remedy=` output key (0 precedents; siblings use prose tails).
+- Modifications to existing cron files since SOAK_FROM (`cron-compound-promote.ts`, `cron-content-vendor-drift.ts`) did not add functions (registry 70 → 70); the registry gate, not a git-log heuristic, is the staleness canary.
+
 ## Overview
 
 The ADR-100 dedicated-host cutover completed on 2026-09-15 and its seven-day exactly-once soak ends
@@ -47,6 +68,9 @@ command, not paraphrased.
 | "the 7-day window for 52 crons is ≈1350 runs ≈ 14 pages, i.e. at the cap" | Read-only 5-slice GET this session (`doppler run -c prd_terraform`, from=2026-09-15T12:40:00Z, 11/11/11/11/8 ids in file order): HTTP 200 on every slice, 0–3 s each, 826 distinct runs at 2026-09-19T03:30Z (server `total_count` per slice = 15/547/12/47/205). Per-function density: one id at 260 runs (the `*/20` minter), five at 86–87 (hourlies), five at 14–21, the rest ≤ 7, and 22 of 52 with zero runs so far. | Slicing is by population, as the brief requires, but the layout is chosen from the measured density (§Technical Considerations → Slicing), not from the even-split estimate. The measured page rate (~0.5 s/page from the workstation) leaves the on-host 90 s deadline far away; the FATAL arm is still built because the deadline is the host's, not the client's. |
 | "Reading taken 2026-09-19T02:40Z … 820 runs, 2 groups >1, BOTH in bucket 1491374" | Reproduced from the 03:30Z read with the op=verify jq: exactly two groups, `26e6836b-…` count=4 and `2e625d3c-…` count=2, both bucket 1491374 (= 2026-09-17T12:40:00Z–13:00:00Z, `date -u -d @$((1491374*1200))`). | The explained set is pinned as (functionID, bucket, max-count) triples, not as a bare bucket (§Technical Considerations → Explained set). |
 | "SOAK_FROM=2026-09-15T12:40:00Z (anchor − 2 periods)" | Anchor 13:23:00Z − 2×1200 s = 12:43:00Z; the runs used `bucket_floor(anchor) − 2×period` = 13:20 − 40 min = 12:40:00Z (`doublefire_from()` in `scripts/cutover-inngest.sh`, and the run log's `from=2026-09-15T12:40:00Z`). | SOAK_FROM is pinned at 12:40:00Z with the bucket-floor derivation written next to it, so the day-7 window is a superset of the 09-15 and 09-19 windows. |
+| "The soak started at the 2026-09-15 `op=verify` pass" (implicitly a full exactly-once proof) | `gh run view 34974655656 --log \| grep -oE 'anchor_source=[a-z()]+'` → `anchor_source=floor(override)`; the verdict line is `2.6 exactly-once VERIFIED (QUALIFIED) — no double-fire found, but this is NOT a full exactly-once proof: population scoped to function_ids=[…52 ids…]`. Per the runbook's trust ladder, `override` is the weakest anchor class. | The probe's output and the ADR addendum say the 09-15 pass was QUALIFIED (override anchor + scoped population) and that the day-7 reading inherits both qualifications; neither is presented as an fsm-anchored proof. ADR-146 (trust anchor) is cited. |
+| "`op=resume` run 35223389582" | `gh run view 35223389582 --log \| grep -oE 'op=[a-z-]+'` → `op=resume` (×3), created 2026-09-17T12:50:04Z, success. PR #8252's body documents the 76-minute window but does not name the run id — the attribution comes from the run log and #6178 comment 5738682595. | Cite the run log, not the PR body, for the run id. |
+| Registry membership of the population | Read-only GET `/hooks/inngest-registry-probe` (same HMAC/CF headers): HTTP 200, `{registry_empty:false, function_count:70, function_ids:[70]}`; all 52 population ids ⊆ registry (`comm -23` → 0). Registry was 70 on 09-15 and 09-19 too. | `REGISTRY_COUNT=70` is pinned; the probe GETs the registry once and refuses (`registry_drift`) on any other count or on a population id missing from it. |
 | Four `inngest-cutover-pre-*` hcloud images 398857857, 406654994, 407991378, 411798619 | Read-only `GET /v1/images?type=snapshot` via `HCLOUD_TOKEN` from `prd_terraform`: all four present (06-18, 07-09, 07-13, 07-23; 23.0 + 26.9 + 8.9 + 23.8 GB). | The ACTION REQUIRED text names them verbatim; nothing in this plan deletes them. |
 | `follow-through` label | `gh label list` → exists. | Applied at ship time with `gh issue edit 6178 --add-label follow-through`. |
 | Doppler `prd_terraform` carries the three secrets | `doppler secrets --only-names -p soleur -c prd_terraform` lists `WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`; the sweeper workflow already forwards the same three names (its `env:` block, "#5875 canary-promotion-5875.sh"). | Local runs use `doppler run -p soleur -c prd_terraform --`; no workflow edit. |
@@ -119,12 +143,22 @@ on any of them. Closing #6178, flipping the ADR, and releasing the snapshots sta
   or edited file never yields a quietly-smaller population.
 - Re-ordering the file is allowed only by re-measuring (the header says so); the sort IS the
   balancing lever and there is no hand-arranged grouping to drift.
+- **Registry-drift gate (architecture F2).** The population is pinned to the 09-15 registry
+  (70 functions, 52 crons). A cron registered after 09-15 would carry a UUID outside the file and
+  its runs would never be queried — a false-clean path no per-slice gate can see. Before the
+  slice loop the probe GETs `https://deploy.soleur.ai/hooks/inngest-registry-probe` (same HMAC +
+  CF headers; `{registry_empty, function_count, function_ids}`; measured 2026-09-19: 200,
+  `function_count=70`, all 52 ids present) and refuses with `reason=registry_drift
+  function_count=<n> missing_from_registry=<k>` (exit 3) unless `function_count == REGISTRY_COUNT
+  (70)` AND every population id ∈ `.function_ids`. A `git log` heuristic over
+  `apps/web-platform/server/inngest/` was considered and rejected: two cron files were modified
+  after SOAK_FROM without adding a function, so it would force CANNOT ESTABLISH forever.
 
 ### Request shape (copied from `canary-promotion-5875.sh` and the op=verify 2.6 arm)
 
 ```bash
 SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
-code=$(curl --disable --noproxy '*' -sS --max-time 120 -o "$body_file" -w '%{http_code}' -X GET \
+code=$(curl --disable --noproxy '*' --proto '=https' -sS --max-time 120 -o "$body_file" -w '%{http_code}' -X GET \
   -H "X-Signature-256: sha256=$SIG" \
   -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
   -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
@@ -134,7 +168,17 @@ curl_rc=$?
 
 Branch on `curl_rc != 0` FIRST (`reason=slice_unreadable … curl_rc=<n>`), then on `code != 200`.
 No `|| echo 000` after the substitution: curl already prints `000` via `-w` on a transport
-failure, so the append would produce `code=000000` (measured by the review).
+failure, so the append would produce `code=000000` (measured by the review). `--proto '=https'`
+follows `send-failed-alert-probe-8097.sh`, the corpus precedent for the `-o`/`-w` shape
+(`canary-promotion-5875.sh` is the HMAC-over-empty-body precedent only).
+
+**Host-supplied bytes are untrusted before they reach a public comment (security P1-2).** The
+sweeper republishes stdout+stderr verbatim under the `github-actions` identity; its
+`sanitize_probe_output` neutralises `<!--` and long backtick runs only. So after the `.runs` type
+check and before ANY print, every run must satisfy `.id` string, `.functionID` matching the
+strict UUID regex, and `.startedAt` matching `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$` (or null) —
+otherwise `reason=slice_unreadable cause=bad_run_shape` (exit 3). Only validated tokens are ever
+printed; the raw body excerpt is classified rather than dumped (see the `slice_unreadable` row).
 
 Verified live this session (5 slices, all 200). Body to a file, code on stdout — the response can
 exceed an argv-safe size (the on-host probe's own #6736 note), so the run set never passes through
@@ -182,23 +226,37 @@ resume — one scheduler draining its backlog, not two schedulers; recorded on #
 
 | Condition | Exit | Sweeper heading | Output |
 |---|---|---|---|
-| `set -x` active AND any of the three credentials bound | 78 | TRANSIENT | `[FATAL] refusing to trace with a live credential set (see #7797)` |
+| `set -x` active AND any of the three credentials bound — tested as `case "$-" in *x*)` FIRST and then ONLY with `[ -n "${VAR:+x}" ]` (expands to a literal `x`); a `-n "$VAR"` test would itself print the value under `-x` before the refusal fires (security P1-1; the 7674 sibling's exact spelling) | 78 | TRANSIENT | `[FATAL] refusing to trace with a live credential set (see #7797)` |
 | any credential unset/empty | 3 | CANNOT ESTABLISH | `reason=credentials_unprovisioned missing:<names>` |
 | population file missing / not 52 UUID lines | 3 | CANNOT ESTABLISH | `reason=population_malformed` |
 | `INNGEST_SOAK_NOW_EPOCH` set but not digits | 3 | CANNOT ESTABLISH | `reason=bad_now_override` |
-| slice: curl rc≠0 / HTTP≠200 / `FATAL` in body / `.runs` not array | 3 | CANNOT ESTABLISH | `reason=slice_unreadable slice=<k>/<n> curl_rc=<n> http=<code> body=<first 200 chars, CR/LF stripped> remedy=retry next sweep; a 401/403 is shared with #5875 (same three credentials); a FATAL body names the host's own reason and the slice to re-sort; a FATAL more than a week after day 7 is the expected page-budget horizon, not a broken probe` — ONE remedy string, no conditional prose inside it |
+| registry GET: curl rc≠0 / HTTP≠200 / shape not `{function_count:<int>, function_ids:[…]}` | 3 | CANNOT ESTABLISH | `reason=registry_unreadable curl_rc=<n> http=<code> body_class=<…> remedy=same as slice_unreadable` |
+| registry: `function_count != 70` or any population id ∉ `function_ids` | 3 | CANNOT ESTABLISH | `reason=registry_drift function_count=<n> missing_from_registry=<k> remedy=a function was registered or removed since 09-15; the pinned population no longer covers the registry — do not flip; re-derive the cron population (gh workflow run cutover-inngest.yml -f op=registry-probe is read-only) and re-measure` |
+| slice: curl rc≠0 / HTTP≠200 / `FATAL` in body / `.runs` not array / a run with a malformed `id`/`functionID`/`startedAt` | 3 | CANNOT ESTABLISH | `reason=slice_unreadable slice=<k>/<n> curl_rc=<n> http=<code> cause=<hmac_mismatch\|cf_access\|probe_fatal\|bad_run_shape\|transport\|other> body_class=<hook-rule-mismatch\|cf-access-html\|probe-fatal\|json\|other> body_len=<n> body=<probe-fatal only: the extracted reason=… pages_scanned=… tokens; otherwise the first 200 chars passed through LC_ALL=C tr -cd '[:print:]'> remedy=retry next sweep; hmac_mismatch = WEBHOOK_DEPLOY_SECRET rotated (shared with #5875); cf_access = the CF-Access pair; probe_fatal names the host's own reason and the slice to re-sort, and more than a week after day 7 it is the expected page-budget horizon, not a broken probe`. Measured live 2026-09-19: a wrong HMAC returns **HTTP 500** with body `Error occurred while evaluating hook rules.` (that is `hmac_mismatch`); only a bad CF pair returns a 4xx HTML page (`cf_access`) |
 | slice: `total_count` is not a non-negative integer (the on-host probe emits the enum string `"unknown"` when page-1 `totalCount` did not parse — the scan never learned its own scale; bash `[[ unknown -gt 0 ]]` is silently 0, so the check is a regex, never an arithmetic test) | 3 | CANNOT ESTABLISH | `reason=total_count_unknown slice=<k>/<n> remedy=re-run next sweep; if it repeats: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_INNGEST_PREFLIGHT_GATE --limit 20` |
 | slice: `total_count == 0` or `runs == 0` | 3 | CANNOT ESTABLISH | `reason=slice_vacuous slice=<k>/<n> remedy=gh workflow run cutover-inngest.yml -f op=registry-probe (read-only) and compare its ids against scripts/followthroughs/inngest-soak-6178.function-ids.txt` |
 | slice: deduped < total_count | 3 | CANNOT ESTABLISH | `reason=slice_incomplete slice=<k>/<n> deduped=<a> total_count=<b> remedy=re-run next sweep; if it repeats the host's pagination is truncating (same preflight-marker query)` |
-| slice: any run without a string `.id` or a string `.functionID` (a null `functionID` would merge different functions into one spurious group under `group_by`) | 3 | CANNOT ESTABLISH | `reason=slice_unreadable slice=<k>/<n> cause=run_without_id\|run_without_function_id remedy=the host probe's projection changed; re-run, then compare its emitted shape against op=verify 2.6` |
+| (folded into the row above as `cause=bad_run_shape`: a null `functionID` would merge different functions into one spurious group under `group_by`; a null `.id` defeats the dedupe) | 3 | CANNOT ESTABLISH | `… cause=bad_run_shape remedy=the host probe's projection changed; re-run, then compare its emitted shape against op=verify 2.6` |
 | union: distinct runs < `RUN_FLOOR=800` | 3 | CANNOT ESTABLISH | `reason=population_thin runs=<n> remedy=re-run next sweep; if it repeats, the host's run index has a mid-window hole — read the SOLEUR_INNGEST_PREFLIGHT markers: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_INNGEST_PREFLIGHT --limit 20`. Derivation: 826 distinct runs were measured at day 3.6, so the day-7 expectation is ≈1600; a floor at half the day-3.6 count catches a hole that lost more than half the window while tolerating any single cron's retirement. No active-function floor: 22 of 52 ids are legitimately at zero and any such floor is a guess about which weekly crons wake |
 | union: `min(startedAt)` over all runs > SOAK_FROM + 2×1200 s (window-head coverage; measured 2026-09-19T03:30Z: global min = 2026-09-15T12:40:00.08Z = SOAK_FROM exactly, the minter's first tick) | 3 | CANNOT ESTABLISH | `reason=index_eroded min_started=<iso> remedy=the host's run index no longer reaches the window's head; any 09-15/16 double-fire would be gone too — do not flip; read the preflight markers (same betterstack-query line as population_thin)` |
-| any jq/curl/date call site returns non-zero (a `startedAt` with a `+00:00` offset, a malformed body that slipped the shape guard) | 3 | CANNOT ESTABLISH | `reason=jq_failed rc=<n> site=<label>` — captured at EVERY call site; a failing pipeline never continues into a decision |
+| any jq/curl/date call site returns non-zero (a `startedAt` with a `+00:00` offset, a malformed body that slipped the shape guard), or a computed `bucket` is not `^[0-9]+$` before `date -u -d @$((bucket*1200))` (an arithmetic error would otherwise continue into the verdict — security P2-7) | 3 | CANNOT ESTABLISH | `reason=jq_failed rc=<n> site=<label>` — captured at EVERY call site; a failing pipeline never continues into a decision |
 | any other exit reaches the EXIT trap (unbound variable under `set -u`, a stray `false`) | 3 | CANNOT ESTABLISH | `reason=unmapped_exit rc=<original>` — the trap allows only {2,3,5,78} through; everything else, INCLUDING 0 and 1, is rewritten to 3 (CTO finding D) |
 | now < SOAK_END | 2 | NOT YET | interim reading: runs, slices, explained groups, UNEXPLAINED groups (if any: "investigate now, do not wait for day 7"), days elapsed |
 | now ≥ SOAK_END, no unexplained group | 5 | ACTION REQUIRED | (every verdict row below and the NOT YET row above are PRECEDED by the same reading block: `window=<SOAK_FROM>..now slices=<n>/<n> runs=<distinct> active_fns=<m> null_started=<z> explained=<e> UNEXPLAINED=<u> days_elapsed=<d.d>`) |
-| now ≥ SOAK_END, no unexplained group (continued) | 5 | ACTION REQUIRED | "SOAK CLEAN outside the explained bucket … dispatch the ADR-100 `adopting → accepted` flip PR, release the four `inngest-cutover-pre-*` hcloud images (398857857, 406654994, 407991378, 411798619), close #6178" |
+| now ≥ SOAK_END, no unexplained group (continued; the verdict line and the scope caveat are the LAST two lines of output so they survive the sweeper's `tail -c 4000` — architecture F7) | 5 | ACTION REQUIRED | "SOAK CLEAN outside the explained bucket … dispatch the ADR-100 `adopting → accepted` flip PR, release the four `inngest-cutover-pre-*` hcloud images (398857857, 406654994, 407991378, 411798619), close #6178" |
 | now ≥ SOAK_END, ≥1 unexplained group | 5 | ACTION REQUIRED | "SOAK NOT CLEAN … investigate the listed groups before flipping" + the groups |
+
+Every exit-5 output (both arms) ends with these two lines, in this order, after the reading block
+and the verbs: (1) `SCOPE: this reading is the dedicated host's (10.0.1.40) run index only — it is
+NOT a web-host double-fire detector (op=verify P2-a); before flipping, hold web-1's quiesced shape
+too: doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh` and (2) the
+verdict line. The SOAK CLEAN verbs are ordered "flip ADR-100 → release the four snapshots → close
+#6178 LAST" and say why: a notify-only probe never exits 1, so a group found after the close is
+dropped by the closed-set path — closing last keeps the probe reporting until the destructive
+verbs are done (architecture F3). The accepted P2-c residual is printed once: two runs of one
+tick started more than 20 minutes apart land in different buckets and read clean (the host's
+projection carries no `queuedAt`); the reading is a soak reading over the startedAt proxy, not a
+complete exactly-once proof (architecture F4).
 
 `set -uo pipefail` only — no `set -e` (an errexit abort exits 1 = the sweeper's FAIL verb, the
 7674 sibling's header explains). No `${VAR:?}` anywhere (rule 1 of the varq-ban lint). Credential
@@ -222,13 +280,16 @@ run) expects `reason=jq_failed`, and matrix row 19's `false` companion is what p
 5 (which the sweeper would render as ACTION REQUIRED), and `grep -q`/`jq -e` return 1 on
 no-match — none of those may ever reach the sweeper as a verdict.
 
-Anchor provenance (CTO finding F, runbook §"Scan window + trust anchor"): `SOAK_FROM` is an
-`override`-class anchor — `bucket_floor(2026-09-15T13:23:00Z) − 2×1200 s`, where 13:23:00Z is the
-09-15 `op=verify` pass (run 34974655656) that proved exactly-once over the fsm-anchored
-coexistence region. The day-7 reading is therefore a SOAK reading over the post-verify window,
-not a re-proof of the coexistence region; the probe's output and the ADR addendum both say so
-in one sentence, and the ACTION REQUIRED text reads "SOAK CLEAN (window anchored on the 09-15
-verify pass, run 34974655656; the pre-verify coexistence region was proven by that run)".
+Anchor provenance (CTO finding F, corrected by the attribution pass; runbook §"Scan window +
+trust anchor", ADR-146): `SOAK_FROM` is an `override`-class anchor — `bucket_floor(2026-09-15T13:23:00Z)
+− 2×1200 s`, where 13:23:00Z is the 09-15 `op=verify` pass (run 34974655656). That pass was
+ITSELF QUALIFIED: its log reads `anchor_source=floor(override)` and `2.6 exactly-once VERIFIED
+(QUALIFIED) — … population scoped to function_ids=[…]`. The day-7 reading therefore inherits two
+qualifications — an operator-typed anchor and a 52-cron population — and is a SOAK reading over
+the post-verify window, not a re-proof of the coexistence region. The probe's output and the ADR
+addendum both say so in one sentence, and the ACTION REQUIRED text reads "SOAK CLEAN (window
+anchored on the 09-15 verify pass, run 34974655656, itself a QUALIFIED verdict: override anchor,
+population scoped to these 52 crons)".
 
 Horizon of the probe after day 7 (advisor finding 3, numbers corrected by review): the
 open-topped window keeps growing at ≈102 runs/day in the heaviest slice. The host's page-1
@@ -252,7 +313,10 @@ the op=verify 2.6 COMPLETENESS FLOOR relies on.
 `INNGEST_SOAK_NOW_EPOCH` (validated as digits by one `[[ =~ ^[0-9]+$ ]]` line, else exit 3
 `reason=bad_now_override` — needed because `[[ abc -lt N ]]` silently reads a non-numeric word as
 0 and would render NOT YET; no dedicated harness case), `INNGEST_SOAK_POPULATION_FILE` (default
-`$REPO_ROOT/scripts/followthroughs/inngest-soak-6178.function-ids.txt`), and a PATH-stubbed `curl`
+`$REPO_ROOT/scripts/followthroughs/inngest-soak-6178.function-ids.txt`; parsed with
+`LC_ALL=C grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'` — the loose
+`[0-9a-f-]{36}` would admit a line of dashes and a non-C collation drifts bracket ranges; the
+count after `sort -u` must equal 52 — security P1-3), and a PATH-stubbed `curl`
 (the URL is a pinned constant, never an env seam, so a local misconfiguration cannot redirect the
 CF-Access headers to another host). The sweeper runs probes under `env -i` forwarding only the
 directive's `secrets=` names, and its Guard 3 refuses a name absent from the workflow `env:` block,
@@ -341,8 +405,17 @@ instrument self-test, floor keyed on `passes`, conservation check) and the curl 
 `https://deploy.soleur.ai/hooks/inngest-doublefire-probe?from=2026-09-15T12:40:00Z&function_ids=`;
 exits 64 if the `function_ids` CSV holds more than 11 ids; serves `$FIX/slice-<k>.json` with
 `$FIX/slice-<k>.code` (default 200) by call ordinal; honours `$FIX/curl.rc` for a transport failure.
-A fixture builder `slice_fixture <k> <ids...>` emits `{runs:[…], total_count:N}` with one run per
-(id, hourly tick) over the PINNED default window 2026-09-18T00:00Z–16:00Z (away from bucket
+`run()` ALWAYS exports `INNGEST_SOAK_NOW_EPOCH` (default `1790000000`, before SOAK_END) so no case
+reads the wall clock (cq-ac-must-not-depend-on-concurrent-sessions — after 09-22 an unpinned run
+would silently flip 2→5 and still pass); it resets `calls.log` and the stub's ordinal counter
+before every invocation, and it is the ONLY launcher — C13's `bash -x` goes through `run()` too,
+so `assert_never_close_verb` is reached for rc 78 and for the trap arm. Two fixture helpers:
+`slice_fixture <k> <ids...>` and `append_runs <k> <json-array>` (extra runs may carry any
+functionID; the probe has no foreign-id check) plus a `--no-window-head` flag for C5e.
+`slice_fixture` emits `{runs:[…], total_count:N}` with one run per (id, hourly tick) over the
+PINNED default window 2026-09-18T00:00Z–16:00Z, with `startedAt` precision MIXED on every run
+(none / `.08Z` / `.101119Z` — the measured global minimum is `12:40:00.08Z` and vendor rows carry
+microseconds), so the `sub()` regex is exercised permanently rather than by a hand-run variant (away from bucket
 1491374, so the explained triples are the ONLY runs in that bucket), run ids ULID-shaped and
 unique, and `total_count` = the DISTINCT-id count of the runs it emits (so a deliberately
 duplicated row — C11 — stays complete: `deduped == total_count`); C10 passes an explicit
@@ -351,24 +424,42 @@ is non-vacuous and complete, the union exceeds `RUN_FLOOR` (16 ticks × 52 ids =
 it carries one run at 2026-09-15T12:40:00Z for window-head coverage. Cases (each drives a distinct RED when the probe is mutated — see Guard
 Contract):
 
-- H1 instrument self-test; H2 stub refuses argv without the signature header.
+- H1 instrument self-test drives BOTH verdict helpers (`expect` and `expect_absent`) to a
+  guaranteed mismatch and requires `fails` to move by exactly 1 each; H2 stub refuses argv without
+  the signature header; H3 `assert_never_close_verb 0 SELFTEST 2>/dev/null` must move `fails` by
+  exactly 1 (rolled back; then `pass "INSTRUMENT: invariant fires on rc 0"`) — without H3 a harness
+  edit deleting the invariant call from `run()` leaves everything green.
 - C1 clean, now < SOAK_END → 2, output has `NOT YET` and `interim`.
-- C2 clean, now = SOAK_END → 5, output has `SOAK CLEAN`, `adopting`, `398857857`, `411798619`, `close #6178`, the reading block (`runs=`, `slices=5/5`), and NOT `investigate`.
+- C2 clean, now = SOAK_END → 5, output has `SOAK CLEAN`, `adopting`, `398857857`, `411798619`, `close #6178`, `QUALIFIED`, `NOT a web-host double-fire detector`, the reading block (`runs=`, `slices=5/5`), and NOT `investigate`; the LAST line of output is the verdict line and the second-to-last is the `SCOPE:` line (asserted on `tail -n 2`), and both survive `tail -c 4000`.
 - C3 exactly the two explained groups, now ≥ SOAK_END → 5 clean; output names the bucket as `explained` and NOT `UNEXPLAINED`.
 - C4 explained + one group in bucket 1491375 → 5 with `investigate` and the unexplained id + bucket; explained still listed separately.
 - C4b same as C4 but now < SOAK_END → 2, output still has `UNEXPLAINED` and `investigate now`.
 - C5 a third function in bucket 1491374 → unexplained. C5b the minter at count 5 → unexplained.
-- C6 slice 3 HTTP 500 → 3, output has `slice=3/5`. C7 slice 2 HTTP 200 with body `inngest-doublefire-probe: FATAL preflight scan aborted reason=deadline …` → 3 naming slice 2.
+- C6 slice 3 HTTP 500 with a JSON body → 3, output has `slice=3/5` and `cause=other`. C6b slice 3
+  HTTP 500 with body `Error occurred while evaluating hook rules.` → 3 with `cause=hmac_mismatch`.
+  C6c slice 3 HTTP 403 with an HTML body → 3 with `cause=cf_access` and NO `<` character in the
+  output. C7 slice 2 HTTP 200 with body `inngest-doublefire-probe: FATAL preflight scan aborted
+  reason=deadline pages_scanned=14 …` → 3 with `reason=slice_unreadable`, `cause=probe_fatal`,
+  `slice=2/5`, and the extracted `reason=deadline pages_scanned=14` tokens — asserting
+  `slice_unreadable` (not merely rc 3) is what stops a deleted FATAL check from passing via
+  `jq_failed`; the FATAL check precedes any jq parse.
+- C0 registry: the stub serves `registry.json` (`function_count:70`, the 52 ids + 18 others) for
+  the first call; C0b `function_count:71` → 3 `registry_drift`; C0c one population id missing
+  from `function_ids` → 3 `registry_drift missing_from_registry=1`; C0d registry HTTP 500 → 3
+  `registry_unreadable` and `calls.log` shows no slice request.
 - C8 slice 4 `{"runs":null,"total_count":7}` → 3. C9 slice 1 `{"runs":[],"total_count":0}` → 3 `slice_vacuous`. C10 slice 5 deduped 5 < total_count 9 → 3 `slice_incomplete`.
-- C11 one run repeated on two "pages" (same id twice) → no group, exit per date. C12 a null-startedAt run → excluded and counted in output, exit per date.
+- C11 one run repeated on two "pages" (same id twice) → rc 2 with `explained=0 UNEXPLAINED=0`
+  (no group). C12 a null-startedAt run → rc 2, `null_started=1`, `UNEXPLAINED=0`. C12b a run with
+  `functionID: "not-a-uuid"` → 3 `bad_run_shape`; C12c a run with `startedAt: "2026-09-18 03:00"`
+  (no `T`/`Z`) → 3 `bad_run_shape`.
 - C13 `bash -x` with `WEBHOOK_DEPLOY_SECRET` set → 78. C14 `CF_ACCESS_CLIENT_SECRET` empty → 3 `credentials_unprovisioned`, and the stub's `calls.log` is empty (no request was made).
 - C15 chunking: `calls.log` has exactly 5 requests, every request carries ≤ 11 ids, the union of
   the requested ids equals the 52-line population, and every request is pinned to
   `from=2026-09-15T12:40:00Z` (slice sizes are NOT pinned — the dealer is an implementation
   detail; the property is complete coverage under the cap).
 - C16 population file with 51 lines → 3 `population_malformed`, no request made. C17 `curl.rc`=7 → 3.
-- C18 slice 2 with one run lacking `.id` → 3 `run_without_id`; C18b one run with `functionID: null`
-  → 3 `run_without_function_id`. C9b slice 1 with `total_count: "unknown"` and 40 runs → 3
+- C18 slice 2 with one run lacking `.id` → 3 `bad_run_shape`; C18b one run with `functionID: null`
+  → 3 `bad_run_shape`. C9b slice 1 with `total_count: "unknown"` and 40 runs → 3
   `total_count_unknown` (not `slice_vacuous`).
 - C23 a run with `startedAt: "2026-09-18T03:00:00+00:00"` (offset form; `fromdateiso8601` throws,
   jq exits 5) → rc 3 with `reason=jq_failed` — proves a failing jq cannot fall through to a clean
@@ -377,21 +468,31 @@ Contract):
 - C22 the population file contains a `#`-prefixed `total_count` measurement line and blank lines
   between header and ids → still parsed as 52 ids (the header grammar is a must-PASS variant).
 - C5c the minter at count 3 in bucket 1491374 → 5 with `UNEXPLAINED` (below the pin is not clean
-  and not a bespoke reason); C5e a fixture whose earliest `startedAt` is 2026-09-16 → 3
+  and not a bespoke reason) — C5b and C5c are asserted as a PAIR because a `==`→`<=` mutation reds
+  only one of them depending on operand order; C5e a fixture whose earliest `startedAt` is 2026-09-16 → 3
   `index_eroded` (window-head coverage).
 - Default fixtures include one run at 2026-09-15T12:40:00Z (the measured global minimum) for
   window-head coverage; the explained triples appear only in the cases that name them.
 - Fixture density: each default slice fixture carries 16 hourly ticks per id, so the union is
   832 distinct runs — above `RUN_FLOOR` with no group.
-- INVARIANT: `assert_never_close_verb` after every run; FLOOR = the measured pass count; `passes + fails == checks`.
+- INVARIANT: `assert_never_close_verb` after every run (inside `run()`); FLOOR = the measured pass count; `passes + fails == checks`.
+- The "real endpoint via doppler run" scenario is Phase 6 / AC10, not a harness case.
 
 Run it against an absent probe: it must FATAL at "probe not found" (exit 1) — that is the RED.
 
 ### Phase 3 — GREEN: the probe
 
-Write `inngest-soak-6178.sh` to the §Technical Considerations contract. Structure: header →
+Write `inngest-soak-6178.sh` to the §Technical Considerations contract. The header declares the
+three corpus-novel mechanisms as such (pattern review): the rc-filtering EXIT trap ("no
+precedent; 14 probes trap EXIT for cleanup only and `git-data-rung2-evidence-capture.sh` reads
+`$?` without rewriting"), the `run_jq` helper with `site=` (per-site capture is precedented by
+7922's `|| cannot_establish` and 8097's `if ! x=$(…)`; the helper is not), and the `remedy=`
+output key (0 precedents; 7922/7674 use prose tails). Keep 7922's `WHY -uo AND NOT -euo`
+sub-heading verbatim. The trap is EXIT-only (an INT/TERM arm would rewrite a signal kill to 3).
+Structure: header →
 xtrace refusal → `set -uo pipefail` → `WORK=""` + `trap on_exit EXIT` (the ONLY trap in the
-file: cleanup + rc filter) → constants → seams → credential check → population parse → slice loop (spool file)
+file: cleanup + rc filter) → constants → seams → credential check → population parse → registry GET + drift gate →
+slice loop (spool file)
 → dedupe/bucket jq → explained split → date branch → exit. `mktemp -d` assigned to `WORK`
 (rule (c) of the trap lint is satisfied by the single trap). `chmod +x`. Run the suite to green; then apply the INVARIANT rows
 of the mutation matrix (those marked ★) by hand, one at a time, confirming each reds and
@@ -416,10 +517,20 @@ instant, so a backlog drained in one burst places several ticks' runs in one buc
 cannot distinguish catch-up from double-fire, only attribution against routine_runs can); this
 session's 03:30Z re-read (826 runs, same two groups); what the day-7 probe measures (population
 slices, same bucketing, explained triples pinned, notify-only exit 5 that names the flip, the four
-snapshot ids, and the close as OPERATOR verbs); the anchor provenance (`from` = bucket_floor(09-15 verify pass) − 2 periods, `override`
-class per the runbook; the coexistence region was proven fsm-anchored by run 34974655656, so the
-day-7 reading is a soak reading, not a re-proof); and the sentence that the status stays
-`adopting` until the day-7 reading is clean outside the explained set. The 07-07 plan's `inngest-double-fire-6178.sh`
+snapshot ids, and the close as OPERATOR verbs); the anchor provenance (`from` = bucket_floor(09-15 verify pass) − 2 periods; run 34974655656
+was itself `anchor_source=floor(override)` and `VERIFIED (QUALIFIED)` with the population scoped
+to these 52 crons — cite ADR-146; the day-7 reading inherits both qualifications and is a soak
+reading, not a re-proof); the framing that the explained set is an operator-attributed,
+immutable, historical EXCEPTION to Decision 7's bucket criterion — the proxy over-approximates
+(a backlog drain violates the criterion without violating exactly-once) and the flip condition
+is "the criterion holds outside that one bucket" (architecture F6); the P2-a scope sentence
+(dedicated-host index only; web-1's quiesced shape is the second evidence) and the P2-c
+residual (two runs of one tick started >20 min apart read clean); the registry pin (70
+functions on 09-15, 09-19, and at probe time, else `registry_drift`); the premature-close
+hazard and the close-LAST ordering (a notify-only probe drops a group found after the close);
+and the sentence that the status stays `adopting` until the day-7 reading is clean outside the
+explained set. Say "replaces the 07-07 plan's prescription", not "supersedes" (that word is
+reserved for addenda superseding addenda in this ADR). The 07-07 plan's `inngest-double-fire-6178.sh`
 PASS/FAIL prescription is recorded as superseded by the notify-only form and why. Do not touch
 the frontmatter. `python3 scripts/lint-infra-no-human-steps.py <ADR path>` must stay OK.
 
@@ -457,8 +568,13 @@ population file's header as "measured at <UTC>" — that is the day-7 feasibilit
    own parser: `gh issue view 6178 --json body --jq .body | (source scripts/sweep-followthroughs.sh >/dev/null 2>&1; parse_directive)`
    prints `script scripts/followthroughs/inngest-soak-6178.sh`, `earliest 2026-09-22T13:23:00Z`,
    and the `secrets` line (the same source-then-call shape `followthrough-predicate-parity.test.sh` uses).
-6. Dry-run dispatch on the branch ref (the workflow file exists on `main`; the ref supplies the
-   script): `gh workflow run scheduled-followthrough-sweeper.yml --ref feat-one-shot-6178-soak-followthrough -f dry_run=true`,
+6. Dry-run dispatch on the branch ref. `workflow_dispatch --ref <branch>` runs the BRANCH's
+   workflow YAML and the branch's `scripts/sweep-followthroughs.sh` with every secret in the
+   workflow `env:` (security P2-5) — acceptable here (write-collaborator gated, `contents: read`,
+   `dry_run=true` suppresses comments) and it also executes every OTHER enrolled probe past its
+   `earliest`. Precondition so the run exercises the production sweeper:
+   `git diff --quiet origin/main -- .github/workflows/scheduled-followthrough-sweeper.yml scripts/sweep-followthroughs.sh`
+   (exit 0). Then: `gh workflow run scheduled-followthrough-sweeper.yml --ref feat-one-shot-6178-soak-followthrough -f dry_run=true`,
    then `gh run watch` and `gh run view <id> --log | grep 'issue #6178'` must show
    `directive found (script=scripts/followthroughs/inngest-soak-6178.sh earliest=2026-09-22T13:23:00Z secrets=WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET)`
    followed by `earliest=2026-09-22T13:23:00Z not yet reached … — skipping`, and NO `not executable`,
@@ -587,6 +703,15 @@ different slices either way). Regenerate from the responses rather than transcri
   rc 1 only, which this probe never returns.
 - `2026-03-10-jq-generator-silent-data-loss.md` — dedupe/bucketing uses `unique_by`/`group_by`
   over arrays, never generator joins.
+- `2026-09-17-followthrough-directive-on-existing-issue-three-silent-traps.md` — the three
+  silent traps of enrolling an EXISTING issue (missing label, bare `script=` name, indefinite
+  daily comments); Phase 7's checklist is that learning's checklist, and the horizon here is
+  bounded by the operator's close.
+- `2026-03-24-gh-api-paginate-concatenated-arrays.md` — `jq -s 'add // []'` is correct for
+  concatenated ARRAYS (which is why the spool holds `.runs` arrays, never the response objects).
+- `2026-03-09-shell-api-wrapper-hardening-patterns.md` / `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
+  — a `jq` failure inside `$(…)` under `pipefail` without `-e` does not stop the script; every
+  site captures rc.
 
 ## Open Code-Review Overlap
 
@@ -618,7 +743,7 @@ different slices either way). Regenerate from the responses rather than transcri
 liveness_signal:
   what: "the sweeper's daily comment on #6178 headed NOT YET / CANNOT ESTABLISH / ACTION REQUIRED (verdict word from scripts/sweep-followthroughs.sh run_one), plus the run's own log line `issue #6178: scripts/followthroughs/inngest-soak-6178.sh exit=<rc>`"
   cadence: "daily at 18:00 UTC from 2026-09-22 (earliest gate), until the operator closes #6178; then the closed-set path re-evaluates for 14 days without ever reopening (rc 1 is never returned)"
-  alert_target: "the operator via the #6178 issue comment (notification) and the scheduled-followthrough-sweeper.yml run status"
+  alert_target: "the operator via the #6178 issue comment — the operator (deruelle) is the issue author, so GitHub routes the comment as a notification — and the scheduled-followthrough-sweeper.yml run status (layer 6: workflow run log + issue comment)"
   configured_in: ".github/workflows/scheduled-followthrough-sweeper.yml (cron + env) and the directive appended to the #6178 body"
 
 error_reporting:
@@ -626,14 +751,26 @@ error_reporting:
   fail_loud: "any non-200, FATAL body, non-array .runs, vacuous or incomplete slice exits 3 (never 2, never 0); a missing credential exits 3 with reason=credentials_unprovisioned; xtrace with a live credential exits 78"
 
 failure_modes:
-  - mode: "probe never runs (directive fenced, path not canonical, exec bit lost, script absent on main)"
-    detection: "the ship-time readback (Phase 7 step 5-6) and the sweeper's stderr `not executable`/`refused` lines; the parity oracle scripts/followthrough-predicate-parity.test.sh pins the directive grammar"
-    alert_route: "sweeper run log; a fenced directive additionally comments on #6178 and reds the run"
+  - mode: "probe never runs, LOUD sub-case: directive inside a fence, or a `secrets=` name absent from the workflow env"
+    detection: "the sweeper comments DIRECTIVE INSIDE CODE FENCE / REQUIRED SECRET MISSING on #6178 and reds the run (layer 6)"
+    alert_route: "red sweeper run + #6178 comment"
+  - mode: "probe never runs, SILENT-GREEN sub-case: script missing on main, exec bit lost, path not canonical (`fail()` is stderr-only + return; the run stays green)"
+    detection: "pre-merge only — scripts/followthrough-exec-bit.test.sh, lint-followthrough-varq-ban.sh rule 3, the Phase 7 step 5 parser readback and step 6 dry-run dispatch; post-merge the RETIREMENT line is the only guard against deletion (layer 6, run log stderr)"
+    alert_route: "CI red before merge; none after merge — accepted, the window is minutes"
+  - mode: "the sweep itself does not fire on 2026-09-22 (Actions outage, workflow disabled)"
+    detection: "none today — the sweeper has no sentry-heartbeat (pre-existing gap, out of this PR's allowed edits); deferred as #8349"
+    alert_route: "none until #8349 lands; the operator's Phase 7 T2 pre-announcement (if adopted) is the only expectation-setting signal"
   - mode: "one slice exceeds the on-host page budget at day 7 (density shifted)"
-    detection: "HTTP non-200 with a `FATAL … reason=deadline|window_too_wide` body → exit 3 naming the slice; the SOLEUR_INNGEST_PREFLIGHT_TIMEOUT marker on the host's journald → Better Stack (readable with scripts/betterstack-query.sh --grep SOLEUR_INNGEST_PREFLIGHT)"
+    detection: "HTTP non-200 with a `FATAL … reason=deadline|window_too_wide` body → exit 3 naming the slice (layer 6); the SOLEUR_INNGEST_PREFLIGHT_TIMEOUT marker on the host's journald → Better Stack source 2457081 via the `inngest-doublefire-probe` tag allowlisted in apps/web-platform/infra/vector.toml (layer 3; readable with `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_INNGEST_PREFLIGHT --limit 20`)"
     alert_route: "CANNOT ESTABLISH heading on #6178; remedy is a re-measured re-sort of the population file"
+  - mode: "a credential rotated (HMAC or CF Access pair)"
+    detection: "measured live: HMAC mismatch → HTTP 500 body `Error occurred while evaluating hook rules.` (`cause=hmac_mismatch`); CF pair → 4xx HTML (`cause=cf_access`) → exit 3 (layer 6)"
+    alert_route: "CANNOT ESTABLISH heading on #6178; the same three credentials serve #5875's canary-promotion-5875.sh, which reports the same day"
+  - mode: "a cron registered after 09-15 (outside the pinned population)"
+    detection: "the registry GET's `function_count != 70` or a population id missing → exit 3 `registry_drift` (layer 6)"
+    alert_route: "CANNOT ESTABLISH heading on #6178"
   - mode: "a real double-fire outside the explained set"
-    detection: "exit 5 with `SOAK NOT CLEAN` and the (functionID, bucket, count) list"
+    detection: "exit 5 with `SOAK NOT CLEAN` and the (functionID, bucket, count) list (layer 6)"
     alert_route: "ACTION REQUIRED heading on #6178 — the operator investigates before any flip"
   - mode: "vacuous read (mis-scoped ids after a registry change)"
     detection: "per-slice total_count>0 and runs>0 gate → exit 3 reason=slice_vacuous"
@@ -677,8 +814,8 @@ harness case alone)
 |---|---|---|
 | 1 ★ | `exit 5` in the clean branch → `exit 0` | C2 (rc), plus `assert_never_close_verb` |
 | 2 ★ | `exit 3` in the slice-unreadable arm → `exit 1` | C6/C7 (rc) + the invariant |
-| 3 ★ | delete the `FATAL` substring check (rely on the status code alone) | C7 (200 + FATAL body reads clean → expects 3) |
-| 4 ★ | `count == .count` in the explained predicate → `count <= .count` | C5b (minter at 5 reads explained) |
+| 3 ★ | delete the `FATAL` substring check (rely on the status code alone) | C7 — asserts `reason=slice_unreadable cause=probe_fatal`, so the mutated probe's `jq_failed` exit (the FATAL body is not JSON) reds rather than passes |
+| 4 ★ | `count == .count` in the explained predicate → `count <= .count`, AND separately → `count >= .count` | C5b + C5c as a PAIR (each direction reds exactly one of them) |
 | 5 | pin the explained set as a bare bucket (`bucket == 1491374`) | C5 (third function in the bucket reads explained) |
 | 6 ★ | swap `<` for `<=` in `now < SOAK_END` | C2 (now == SOAK_END must be 5, reads 2) |
 | 7 ★ | remove the per-slice `total_count > 0 && runs > 0` gate | C9 (empty slice reads clean) |
@@ -692,13 +829,18 @@ harness case alone)
 | 15 | HARNESS: `expect()` never calls `fail()` | H1 instrument self-test exits 1 |
 | 16 | HARNESS: stub no longer asserts the signature header | H2 (stub must exit 64 on argv without it) |
 | 17 | HARNESS: delete any case | FLOOR (pinned to the measured pass count) |
-| 18 | HARNESS: must-PASS variant — a fixture whose `startedAt` carries microseconds (`…:34.101119Z`) and a run id in a different ULID casing | C1/C2 still pass (the contract permits both); a `sub()` regex tightened to milliseconds would red here |
-| 19 ★ | install `trap 'rm -rf "$WORK"' EXIT` after `on_exit` (the second-trap defect), then replace the slice-unreadable `exit 3` with `false` and fall through | C6 companion: rc becomes 1 without the filter; with it, 3 |
+| 18 | HARNESS: `run()` stops exporting `INNGEST_SOAK_NOW_EPOCH` | C1/C11/C12 keep passing before 09-22 and silently flip after — so this row is proven by a `grep -c 'INNGEST_SOAK_NOW_EPOCH=' inngest-soak-6178.test.sh` ≥ 1 assertion inside the suite (H4), not by a date |
+| 19 ★ | install `trap 'rm -rf "$WORK"' EXIT` after `on_exit` (the second-trap defect), then replace the slice-unreadable `exit 3` with `: "$SOAK_UNBOUND_PROBE_VAR"` (a `set -u` abort, raw rc 1 — `false` does NOT exit without `-e`, so the earlier form of this row isolated nothing) | C6: with `on_exit` intact it reads 3 `reason=unmapped_exit rc=1`; with the replaced trap it reads 1 and `assert_never_close_verb` fires |
 | 20 | `RUN_FLOOR=800` → `0` | C20 (300 runs read clean) |
 | 21 | `total_count` check written as `[[ "$tc" -gt 0 ]]` instead of the regex | C9b (`unknown` reads as 0 → wrong reason) |
 | 22 | replace the `all(.[]; (.id\|type)=="string")` refusal with the op=verify fallback | C18 (a run without id is silently deduped by (fn, startedAt)) |
 | 23 | delete the window-head coverage check | C5e |
-| 24 ★ | `jq -s '[.[][]]'` union → `jq -s 'add'` | C15/C1 (only the last slice survives; `RUN_FLOOR` reds and the union check reds) |
+| 24 ★ | `jq -s '[.[][]]'` union → spool whole objects and `jq -s 'add'` | C15/C1 (only the last slice survives; `RUN_FLOOR` reds and the union check reds) |
+| 25 ★ | delete the registry GET / drift gate | C0b/C0c (a 71-count or a missing id reads clean) |
+| 26 | `${VAR:+x}` in the xtrace test → `-n "$VAR"` | C13: the traced output contains the fixture credential value (`grep -c 'p-secret'` must be 0) |
+| 27 | delete the run-shape validation | C12b/C12c (a malformed functionID/startedAt is printed) |
+| 28 | HARNESS: delete the `assert_never_close_verb` call from `run()` | H3 (the invariant helper is never exercised) |
+| 29 | HARNESS: `expect_absent()` never calls `fail()` | H1 (drives it to a guaranteed mismatch) |
 
 **Anchor.** The explained triples and the four snapshot ids are literal constants inside the probe
 and are repeated in the ADR addendum and in #6178 comment 5738682595 — three independently
@@ -746,6 +888,23 @@ No product, marketing, sales, legal, finance, support, or operations implication
 an operator-facing verification script, an ADR addendum, and an issue-body directive; no
 user-facing surface, no vendor, no expense, no legal document. The mechanical UI-surface override
 does not fire (no `components/**`, `app/**`, or UI path in Files to Create/Edit).
+
+### deepen-plan pass (8 agents; applied)
+
+verify-the-negative: 14/14 claims confirmed by grep or execution. attribution: 9/10 confirmed;
+the tenth (run 35223389582 = `op=resume`) confirmed from the run's own log rather than PR #8252's
+body; AND the 09-15 anchor class corrected to `floor(override)` / QUALIFIED. security-sentinel:
+P1 xtrace-test spelling, P1 host-bytes-before-print shape validation, P1 `LC_ALL=C` UUID regex,
+P2 body-excerpt classification, P2 `--ref` wording + sweeper-diff precondition, P2 bucket regex
+— all applied. test-design (8.3/10 → fixed): ★ rows 4 and 19 did not red their cases; C7 could
+pass via `jq_failed`; invariant and negative helpers lacked self-tests; wall-clock dependence;
+builder under-specified; mixed-precision fixtures — all applied. observability: layer tags, the
+measured 500-on-HMAC-mismatch, `body_class`, loud/silent split of mode 1, the un-heartbeated
+sweeper (deferred #8349), participant routing — all applied. architecture: P2-a caveat + web-1
+evidence, registry-drift gate (validated live: 70/70, 52 ⊆ registry), close-LAST ordering, P2-c
+residual, anchor-class correction, Decision-7 framing, verdict-last output, ADR-146 — all
+applied. pattern-recognition: three novel mechanisms declared in the header; `--proto '=https'`;
+`WHY -uo AND NOT -euo` sub-heading. learnings: four learnings folded (above).
 
 ### plan-review panel (DHH, Kieran, code-simplicity, CTO-devex; consolidated)
 
@@ -828,7 +987,7 @@ REQUIRED lacked the reading and per-reason remedies (→ reading block before ev
       every `exit` maps to a row of the §Exit contract table.
 - [ ] AC3 The pinned constants are literal in the probe: `SOAK_FROM=2026-09-15T12:40:00Z`,
       `SOAK_END=2026-09-22T13:23:00Z`, `PERIOD=1200`, `SLICE_MAX=11`, `POPULATION_SIZE=52`, the two
-      explained triples with exact `count` 4 and 2 on bucket 1491374, `RUN_FLOOR=800`, and the four image ids
+      explained triples with exact `count` 4 and 2 on bucket 1491374, `RUN_FLOOR=800`, `REGISTRY_COUNT=70`, and the four image ids
       398857857 / 406654994 / 407991378 / 411798619 in the ACTION REQUIRED text
       (`grep -c 398857857` = 1 on an executable line).
 - [ ] AC4 `scripts/followthroughs/inngest-soak-6178.function-ids.txt` has a `#` provenance header
@@ -836,8 +995,8 @@ REQUIRED lacked the reading and per-reason remedies (→ reading block before ev
       lines, no duplicates, set-equal to the run-log extraction, ordered by the measured density
       ranking (heaviest first, ties by id).
 - [ ] AC5 `bash scripts/followthroughs/inngest-soak-6178.test.sh` exits 0 and prints
-      `inngest-soak-6178: <N> passed, 0 failed` with `<N>` equal to its FLOOR; `<N>` ≥ 32.
-- [ ] AC6 Every ★ row of Guard 1's mutation matrix (12 rows) was applied one at a time and
+      `inngest-soak-6178: <N> passed, 0 failed` with `<N>` equal to its FLOOR; `<N>` ≥ 40.
+- [ ] AC6 Every ★ row of Guard 1's mutation matrix (13 rows) was applied one at a time and
       reddened the named case (record the rc/first-line pairs in the PR body's test section); each
       revert restores green. Unstarred rows are covered by their harness cases.
 - [ ] AC7 `scripts/test-all.sh` carries
@@ -852,7 +1011,7 @@ REQUIRED lacked the reading and per-reason remedies (→ reading block before ev
       after the 2026-09-18 addendum, the frontmatter line `status: adopting` is unchanged
       (`git diff origin/main -- <ADR> | grep -c '^[-+]status:'` = 0), and
       `python3 scripts/lint-infra-no-human-steps.py <ADR path>` is OK.
-- [ ] AC10 Phase 6 live run (the `env -i` shape via `doppler run`) returned `rc=2`, five slices,
+- [ ] AC10 Phase 6 live run (the `env -i` shape via `doppler run`) returned `rc=2`, the registry GET 200 with `function_count=70`, five slices,
       ≥ 826 distinct runs, exactly the two explained groups and zero UNEXPLAINED; the per-slice
       `total_count` line is recorded in the population file header with its UTC timestamp.
 - [ ] AC11 The PR body says `Ref #6178` and contains no `Closes|Fixes|Resolves #6178`; the only
@@ -922,9 +1081,16 @@ REQUIRED lacked the reading and per-reason remedies (→ reading block before ev
 - **Order of enrollment vs. merge.** Enrolling before merge means the 18:00Z sweep could find the
   script absent on `main` (stderr-only, no comment). The window is minutes because ship merges in
   the same session; if a merge slips past 18:00Z, the log line is expected and harmless.
-- **CF Access or the webhook secret rotates before day 7.** Exit 3 `slice_unreadable http=403/401`
-  names it; the same secrets serve `canary-promotion-5875.sh`, so a rotation would already surface
-  on that tracker.
+- **CF Access or the webhook secret rotates before day 7.** Exit 3 names it — HMAC mismatch is
+  HTTP 500 `Error occurred while evaluating hook rules.` (measured), the CF pair is a 4xx HTML
+  page; the same secrets serve `canary-promotion-5875.sh`, so a rotation would already surface on
+  that tracker.
+- **The sweep itself does not fire on 09-22.** The sweeper has no `sentry-heartbeat`; "no
+  comment" is indistinguishable from "swept and found nothing". Pre-existing and outside this
+  PR's allowed edits — deferred as #8349 (re-evaluate on 2026-09-23 if no comment appeared).
+- **A cron registered mid-soak.** Outside the pinned population → never queried → the registry
+  drift gate refuses (`registry_drift`) rather than reading clean. Registry was 70 on 09-15,
+  09-19, and at plan time; the two cron files modified since SOAK_FROM added no function.
 
 ## Sharp Edges (for the implementer)
 
