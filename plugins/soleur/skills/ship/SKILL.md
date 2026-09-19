@@ -476,7 +476,7 @@ bash apps/web-platform/infra/run-registered-suites.sh
 
 **If tests fail:**
 
-1. **Check if failures are pre-existing:** Run the same test command on an unmodified checkout (or compare failure count/names with main). If the exact same tests fail on main, the failures are pre-existing.
+1. **Check if failures are pre-existing:** Run the same test command on an unmodified checkout (or compare failure count/names with main). If the exact same tests fail on main, the failures are pre-existing. **Classify per FILE, never per suite:** a vitest/bun suite with N failing files is N verdicts, and the first named cause does not speak for the rest. Enumerate them (`grep -E '❯.*failed'` on the runner log), compare each against `origin/main` or against CI's result for the same head, and file the tracker only over the ones that match. **Why:** PR #8297 — 19 failing web-platform files, the first read as environmental (`localStorage` absent locally), the whole suite filed as pre-existing (#8335); CI passed 18 and failed the one that was the PR's own, and it was already in the log.
 2. **If failures are caused by this branch:** Stop and fix before proceeding.
 3. **If failures are pre-existing:** Create a GitHub issue to track them (`gh issue create --title "fix: N pre-existing test failures in <app>" --milestone "Post-MVP / Later" --label bug`), then continue. Do not silently bypass pre-existing failures — a red test suite normalizes breakage and masks future regressions. **Why:** In #1411, 71 pre-existing web-platform test failures were silently bypassed during ship. The tracking issue (#1413) was only created after the founder noticed post-session.
 
@@ -1617,6 +1617,8 @@ git fetch origin main -q
 bash scripts/check-adr-ordinals.sh
 ```
 
+**Run every merge-base-relative lint the way its CI job does, and `rule-body-lint` is the one to get wrong.** `python3 scripts/lint-rule-bodies.py --check --base HEAD` compares the tree to itself and is green by construction; CI passes `--base "$(git merge-base origin/main HEAD)"`. A base that cannot see the change is not a check of the change. **Why:** PR #8297 — the local run said OK, CI named two un-acked rule-body amendments, one cycle lost.
+
 `check-adr-ordinals.sh` exits 1 with `NEW ADR ordinal collision (not in pre-existing allowlist): ADR-NNN` when two files share ordinal `NNN` (it does NOT heading-check a new ADR — its layer-3 heading check is pinned to ADR-041/ADR-042 only, per the script header; ADR-210 shipped without a `## Status` heading and it passed). Exit 0 → pass silently.
 
 **If it exits 1 on an ADR THIS branch introduced:** renumber to the next free ordinal BEFORE merge — never merge a colliding ADR:
@@ -2456,7 +2458,7 @@ Do NOT invert this into "ignore failures that look transient". The discriminator
 
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
-**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge.
+**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge. **Measure before you resolve: `git fetch origin main && git merge-tree --write-tree origin/main HEAD >/dev/null; echo rc=$?` — `rc=0` means GitHub's DIRTY is FALSE.** GitHub builds `refs/pull/N/merge` without this repo's `kb-index` merge driver, so any KB file landing on `main` reads there as an `INDEX.md` conflict that the local driver resolves cleanly; the remedy is an ordinary `git merge origin/main --no-edit && git push`, not conflict resolution. **Why:** PR #8297 — DIRTY eight times over ~5 hours, `merge-tree` rc 0 every time; each sync restarts the ~40-minute required-check cycle, so on a busy `main` this is the livelock's dominant form, and the hatch was not available (real code in the diff).
 
 Two failure paths exit early instead of looping:
 
