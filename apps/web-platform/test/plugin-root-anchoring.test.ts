@@ -82,10 +82,53 @@ const SENTINEL_LITERAL =
 const PREFLIGHT_ANCHOR = '"${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"';
 
 const ANCHOR_PREFIX = "${CLAUDE_PLUGIN_ROOT}/";
-/** Dual-harness alias after ROOT_ASSIGN_LITERAL in the same fence (go.md). */
+/**
+ * `${ROOT}/…` alias, valid only when the same fence first assigns ROOT from the loader
+ * token (go.md's shared resolver, ADR-179 decision 11).
+ *
+ * This used to read "dual-harness alias" and pin `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"`
+ * — i.e. it documented #8308's defect as the sanctioned form. Measured on both harnesses
+ * (#7450 phase-1-measurement.md §Arm 5, 2026-09-19): the loader substitutes ONLY the exact
+ * braced literal `${CLAUDE_PLUGIN_ROOT}`, so the `:-` wrapper reached bash verbatim and
+ * expanded empty in a session with neither variable set — which is what made all three
+ * `/soleur:go` session gates take their degraded branch for a week with CI green over them.
+ */
 const ROOT_ANCHOR_PREFIX = "${ROOT}/";
-const ROOT_ASSIGN_LITERAL = 'ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"';
+const ROOT_ASSIGN_LITERAL = 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token';
 const ROOT_PREFLIGHT_ANCHOR = '"${ROOT}/.claude-plugin/plugin.json"';
+
+/**
+ * P1b's predicate, shared by the live scan and its own positive-control fixtures so the
+ * control cannot drift from what the scan runs.
+ *
+ * The unbraced arm is a PLAIN token match, not the `/\$CLAUDE_PLUGIN_ROOT(?!\})/` a draft
+ * proposed. `${CLAUDE_PLUGIN_ROOT}` does not contain the substring `$CLAUDE_PLUGIN_ROOT`
+ * (the character after the `$` is `{`), so there is nothing to except; and a `(?!\})`
+ * lookahead would have excluded `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` — the exact form
+ * this guard exists to ban — leaving it vacuous on its own defect.
+ */
+function readsRootUnsafely(src: string): boolean {
+  return (
+    src.includes("${CLAUDE_PLUGIN_ROOT:-") ||
+    src.includes("${CLAUDE_PLUGIN_ROOT:?") ||
+    /\$CLAUDE_PLUGIN_ROOT\b/.test(src)
+  );
+}
+
+/**
+ * P1b's OWN fixtures. Deliberately not `ANCHOR_FIXTURES`: that array's consumers (G6/G6b)
+ * are gate-script scanners in the skills describe, and G6b asserts its tag union by SET
+ * EQUALITY — adding a row here would red an unrelated block.
+ */
+const P1B_FIXTURES: ReadonlyArray<{ readonly src: string; readonly mustFlag: boolean }> = [
+  { src: 'ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"', mustFlag: true },
+  { src: 'bash "$CLAUDE_PLUGIN_ROOT/scripts/x.sh"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:?set it}"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token', mustFlag: false },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"', mustFlag: false },
+  { src: 'if [ -n "${GROK_PLUGIN_ROOT:-}" ]; then ROOT="$GROK_PLUGIN_ROOT"; fi', mustFlag: false },
+];
 
 /**
  * Used by P7 only. P6 (presence-guard parity) deliberately spans the WHOLE command
@@ -384,14 +427,27 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     check(violations).toEqual([]);
   });
 
-  it("P1b: no :- or :? default on CLAUDE_PLUGIN_ROOT in the command surface", () => {
+  it("P1b: the command surface reads the plugin root ONLY through the exact loader token", () => {
+    // WHOLE-FILE over commandFiles(), deliberately not fence-scoped: narrowing to fences
+    // would silently shrink a guard that already covers prose and inline snippets. The
+    // assembly is a directory listing, so a fourth command file joins the guarded set by
+    // existing rather than by anyone remembering to add it.
     const violations = files
-      .filter((f) => {
-        const src = readFileSync(f, "utf8");
-        return src.includes("${CLAUDE_PLUGIN_ROOT:-") || src.includes("${CLAUDE_PLUGIN_ROOT:?");
-      })
+      .filter((f) => readsRootUnsafely(readFileSync(f, "utf8")))
       .map((f) => f.replace(REPO_ROOT + "/", ""));
     check(violations).toEqual([]);
+  });
+
+  it("P1b-control: the predicate flags every non-canonical form and no canonical one", () => {
+    // Without this, P1b passes on an empty or unreachable predicate exactly as it passes on
+    // a clean surface. Driven through the SAME `readsRootUnsafely` the live scan uses.
+    const wrong = P1B_FIXTURES.filter((fx) => readsRootUnsafely(fx.src) !== fx.mustFlag).map(
+      (fx) => `${fx.mustFlag ? "MISSED" : "FALSE-POSITIVE"}: ${fx.src}`,
+    );
+    check(wrong).toEqual([]);
+    // Length floor: deleting the #8061-form row would otherwise leave this green.
+    check(P1B_FIXTURES.filter((fx) => fx.mustFlag).length).toBeGreaterThanOrEqual(4);
+    check(P1B_FIXTURES.filter((fx) => !fx.mustFlag).length).toBeGreaterThanOrEqual(3);
   });
 
   it("P1c: every anchored operand is quoted", () => {
@@ -679,7 +735,13 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     //
     // Counts DECIDED assertions (see `check`), not `it` blocks: a per-block counter is
     // satisfied by a block whose body was gutted.
-    expect(assertions).toBe(14);
+    //
+    // 14 -> 16 for P1b-control's three checks less the one P1b itself no longer... no: P1b
+    // still decides one, and P1b-control decides three, so the command-surface block now
+    // decides 16. Raising this is PART of adding the control, not an afterthought: it is an
+    // exact-equality floor, so a green run here is only meaningful if the number moved with
+    // the diff that moved the assertions.
+    expect(assertions).toBe(16);
   });
 });
 

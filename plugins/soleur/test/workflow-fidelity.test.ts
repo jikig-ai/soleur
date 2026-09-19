@@ -523,14 +523,23 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(step1).toContain("Skill tool");
   });
 
-  test("go.md plugin-root prefers GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT with no CWD default", () => {
+  test("go.md plugin-root resolves from the loader token, then GROK_PLUGIN_ROOT, with no CWD default", () => {
+    // This test PINNED `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` from 2026-09-12 to
+    // 2026-09-19 (#8061 -> #8308). The loader substitutes only the exact braced literal
+    // `${CLAUDE_PLUGIN_ROOT}` — measured on Claude Code and Grok Build 1.0.34, #7450
+    // phase-1-measurement.md §Arm 5 — so that form reached bash verbatim and expanded empty,
+    // and all three /soleur:go session gates took their degraded branch while CI stayed green
+    // over the literal. A guard that pins the defect is worse than no guard.
     const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
-    expect(goMd).toContain('ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"');
+    expect(goMd).toContain('ROOT="${CLAUDE_PLUGIN_ROOT}"');
+    expect(goMd).toContain("GROK_PLUGIN_ROOT");
+    expect(goMd).toContain("SOLEUR_PLUGIN_ROOT_RESOLVE");
     expect(goMd).toContain("plugin-root-unverified");
-    expect(goMd).not.toContain(":-./plugins/soleur");
     expect(goMd).toContain("grok inspect");
+    expect(goMd).not.toContain(":-$CLAUDE_PLUGIN_ROOT");
+    expect(goMd).not.toContain(":-./plugins/soleur");
     const namePin = `grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"'`;
-    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(2);
+    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(3);
   });
 
   test("public getting-started does not overclaim Grok support", () => {
