@@ -40,5 +40,5 @@ Plan: `knowledge-base/project/plans/2026-09-19-fix-registry-dispatcher-derive-de
 ## Phase 5: Ship
 
 - [ ] 5.1 PR body: `Closes #8279`; render `decision-challenges.md` (T1 verdict-helper split, T2 AC trimming) per `ship` Phase 6.
-- [ ] 5.2 File the deferral from the plan (`resolve_pr_for_sha` extraction to `scripts/lib/` + adoption in the three callers, noting the anchored-suffix divergence from `reusable-release.yml`) as a `deferred-scope-out` issue if not already tracked.
+- [x] 5.2 (filed at review as #8365, CONCUR-gated, counter probe wired) File the deferral from the plan (`resolve_pr_for_sha` extraction to `scripts/lib/` + adoption in the three callers, noting the anchored-suffix divergence from `reusable-release.yml`) as a `deferred-scope-out` issue if not already tracked.
 - [ ] 5.3 Post-merge: read the registration-path dispatcher run per AC14 (`range=proven`, `deliver=false` unless a config-touching PR merged in the range, `success`).
