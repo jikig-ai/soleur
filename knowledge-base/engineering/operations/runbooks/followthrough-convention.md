@@ -151,6 +151,39 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - Issue body content reaches the sweeper via `awk` on stdin (no shell interpolation). Directive values are passed to the verification script as environment values and command-line args, never via shell-evaluated strings.
 - The sweeper uses `gh` CLI for issue close/comment, not raw token interpolation.
 
+- **An operator-confirmed probe filters verdicts through `scripts/lib/trusted-verdict.sh`, never an
+  inline `authorAssociation` select.** `jikig-ai/soleur` is public with issues open, so an
+  unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user (#7448). The
+  filter that closed that hole introduced a quieter one: **`authorAssociation` is computed against
+  the READING token's visibility**, so a member whose org membership is PRIVATE renders as
+  `CONTRIBUTOR` under the sweeper's `GITHUB_TOKEN` and their verdict is dropped silently.
+
+  Measured 2026-09-19 on the same comment, two tokens, in the same hour:
+
+  | Token | `authorAssociation` for `deruelle` | Old filter's verdict |
+  |---|---|---|
+  | operator PAT | `MEMBER` | honoured |
+  | sweeper `GITHUB_TOKEN` | `CONTRIBUTOR` | **dropped** |
+
+  That is why #6617 reported FAIL every night for two months against an issue whose
+  `RESULT: PASS` had been recorded on 2026-07-20 (sweeper run 35470503032 prints the
+  `CONTRIBUTOR` reading next to `would close with verdict=PASS`, i.e. the reading AND the fix in
+  one log). `GET /repos/{owner}/{repo}/collaborators/{login}/permission` resolves EFFECTIVE
+  permission, does not depend on membership visibility, and answers 200 under `GITHUB_TOKEN`
+  (measured in that same run, so the CODEOWNERS fallback the plan held in reserve was not needed).
+  The lib honours `admin`/`maintain`/`write` only.
+
+  Two arms of it are easy to get wrong and both have fixtures: a permission read that FAILS
+  (403, network) is `TRANSIENT`, never "untrusted" — absence of evidence is not evidence; but an
+  HTTP **404** (`"<login> is not a user"`) is DEFINITIVE and drops just that author. `github-actions`
+  comments on nearly every tracker and answers 404, so collapsing the two makes every such thread
+  permanently unresolvable — the same permanent red, reached from the other side.
+
+  `scripts/lint-followthrough-varq-ban.sh` rule 4 rejects an inline `authorAssociation` filter
+  anywhere under `scripts/followthroughs/`, so the lib is the chokepoint as a fact rather than a
+  convention. The ban is anchored on the FILTER SHAPE, not the bare word, so a comment explaining
+  any of this is still writable.
+
 ## Sharp edges for Better Stack log-content probes
 
 - **Discriminate on the journald SYSLOG_IDENTIFIER FIELD, never a bare payload substring, and model fixtures on the REAL escaped JSONEachRow shape.** The Vector source is shared: inngest ships GitHub-webhook logs (SYSLOG_IDENTIFIER=doppler etc.) that embed branch names, issue/PR bodies, and quoted marker strings — so any marker a human types into GitHub appears in *another* producer's rows, and a bare-substring probe self-contaminates (the tracker's own body quotes the marker → false-FAIL → sweeper re-seeds it). Isolate the field in both byte-forms: server `--grep 'SYSLOG_IDENTIFIER":"<tag>'` (LIKE, unescaped column) + client `grep -F 'SYSLOG_IDENTIFIER\":\"<tag>\"'` (escaped stdout). Fixtures must reproduce the escaped JSON `raw`, not bare syslog. **Run the live discoverability query at /work, not post-merge** — it is the only check that surfaces the escaping and the contamination before merge. See `knowledge-base/project/learnings/2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md` (#6475).
