@@ -69,6 +69,31 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(identityDiag)[0]?.wedged).toBe(false);
   });
 
+  test("matches the SOLEUR_BOOTSTRAP_* family (#8287), none classified as a wedge", () => {
+    // Membership by PREFIX: the family is owned by one library whose header is the contract.
+    // Three representative arms — the consumer-side refusals the drift guard actually
+    // collects from provision-hetzner.sh, plus one library-emitted marker — and the
+    // destructive-write acknowledgement, whose INPUT_REQUIRED line names NO variable by
+    // design. None is a wedge: each is a refusal working as designed or a customer-layout
+    // cause, and paging on it is noise.
+    const rows = [
+      "SOLEUR_BOOTSTRAP_LIB_MISSING path=/nonexistent/scripts/lib/operator-script.sh",
+      "SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=0",
+      "SOLEUR_BOOTSTRAP_BAD_ARG var=SOLEUR_OP_LIB reason=must-be-absolute value=oplib.sh",
+      "SOLEUR_BOOTSTRAP_INPUT_REQUIRED class=2 prompt=Create the billable probe server now?",
+      "SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=knowledge-base/project/specs/feat-x/.env",
+      "SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED name=HCLOUD_TOKEN repo=org/repo",
+    ];
+    for (const line of rows) {
+      const got = extractGitLockMarkers(line);
+      expect(got.length, `${line} not mirrored`).toBe(1);
+      expect(got[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+    // The prefix must not over-reach onto a bare namespace token or a different family.
+    expect(extractGitLockMarkers("SOLEUR_BOOTSTRAP_").length).toBe(0);
+    expect(extractGitLockMarkers("SOLEUR_BOOTSTRAPPED_SOMETHING x=1").length).toBe(0);
+  });
+
   test("matches both #7102 orphan-reaper sentinels, neither classified as a wedge", () => {
     // Scope note: this asserts REGEX MEMBERSHIP — that a marker reaching this
     // extractor is matched and correctly classified. It does not assert that

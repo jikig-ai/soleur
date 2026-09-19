@@ -1,0 +1,34 @@
+
+=== DRY RUN — No changes will be made ===
+
+--- Console guidance ---
+1. Log in to the tenant's Hetzner Cloud Console
+2. Create a sub-project named 'tenant-fixture-tenant-prd'
+3. Inside the sub-project, go to Security → API Tokens
+4. Create a project-scoped API token with Read+Write permissions
+5. Copy the token (shown only once)
+
+--- Smoke-test commands (run after token creation) ---
+read -rs -p 'Hetzner token: ' HCLOUD_TOKEN; echo
+(
+  export HCLOUD_TOKEN
+  hcloud server create --name 'probe-provision-fixture-tenant' --type cx11 --image ubuntu-22.04 --location nbg1
+  hcloud server delete 'probe-provision-fixture-tenant'
+)
+unset HCLOUD_TOKEN
+
+--- Teardown ---
+  Delete sub-project via Console: Projects → tenant-fixture-tenant-prd → Delete
+  Revoke the API token: Security → API Tokens → Revoke
+
+Next step: soleur:provision-github fixture-tenant <org> <reviewer>
+
+=== Teardown commands (resources created during this run) ===
+  (no resources were created)
+
+If the probe server 'probe-provision-fixture-tenant' was not cleaned up:
+  hcloud server delete 'probe-provision-fixture-tenant'
+
+To tear down the Hetzner sub-project:
+  Delete via Hetzner Console → Projects → tenant-fixture-tenant-prd → Delete
+  (CLI does not support project deletion)

@@ -73,7 +73,9 @@ Ask questions **one at a time** to understand the user's intent. Avoid overwhelm
    exploration, not an interview. Classify each candidate question via
    [decision-principles.md](./references/decision-principles.md) before asking —
    only user-legible Taste and User-Challenge decisions surface; Mechanical and
-   technical-taste calls are auto-answered.
+   technical-taste calls are auto-answered. When the answer is "stop here and
+   hand off rather than ask", pick the boundary with the ordered first-yes-wins
+   tree in [phase-boundaries.md](./references/phase-boundaries.md).
 
    Old (prescriptive):
    > "For authentication, you should use JWT tokens with refresh tokens

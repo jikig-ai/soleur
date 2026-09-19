@@ -18,7 +18,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 2442; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline)
+const SKILL_DESCRIPTION_WORD_BUDGET = 2499; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline)
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
@@ -381,6 +381,122 @@ describe("Decision-principles taxonomy wiring", () => {
         `ship/SKILL.md lost the "${token}" wiring — headless decision challenges would ` +
           `no longer reach the operator (regresses ADR-084's legible surface).`,
       ).toBe(true);
+    }
+  });
+});
+
+describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
+  // Loop until stable, not a single pass. A one-shot replace is incomplete
+  // multi-character sanitization (CodeQL js/incomplete-multi-character-sanitization,
+  // high): removing an inner `<!-- … -->` can splice its neighbours into a FRESH
+  // `<!--`, so a crafted overlap survives the strip. That matters here and not
+  // only in the abstract — this strip exists so a comment cannot satisfy the
+  // assertions below, and the surviving-comment case is exactly the one that
+  // would let a commented-out invocation certify the wiring as present.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
+
+  // The skill is only ever reached from ship's operator-step gate; an orphaned
+  // skill is the failure R14 folded this assertion in to catch. HTML comments
+  // are stripped BEFORE matching (a comment can carry the literal and would
+  // otherwise satisfy a bare regex), and the match is anchored to the option-4
+  // list item of the gate, not to any mention anywhere in the file.
+  // The strip is the guard's own precondition, so it gets its own row. The
+  // fixture is the overlap CodeQL named: a single-pass replace consumes the
+  // INNER comment and splices the remainder into a fresh, live
+  // `<!-- skill: soleur:operator-bootstrap -->` — the literal the assertion
+  // below matches. Measured: one pass leaves it, the loop removes it.
+  test("stripHtmlComments survives an overlapping comment that would re-form the invocation", () => {
+    const evil = "<!<!-- x -->-- skill: soleur:operator-bootstrap -->";
+    // The single-pass control is written with indexOf/slice, not a regex replace,
+    // on purpose: CodeQL's js/incomplete-multi-character-sanitization matches the
+    // replace shape and would flag the REPRODUCTION of the defect as the defect
+    // (alert #221 did exactly that). Semantics are identical on this fixture —
+    // remove the first `<!-- … -->` exactly once, which is what one pass of the
+    // old strip did.
+    const removeFirstComment = (input: string): string => {
+      const open = input.indexOf("<!--");
+      const close = open < 0 ? -1 : input.indexOf("-->", open + 4);
+      return open < 0 || close < 0 ? input : input.slice(0, open) + input.slice(close + 3);
+    };
+    const singlePass = removeFirstComment(evil);
+    expect(
+      singlePass.includes("skill: soleur:operator-bootstrap"),
+      "fixture no longer reproduces the single-pass defect — pick a new overlap or this row proves nothing",
+    ).toBe(true);
+    expect(
+      stripHtmlComments(evil).includes("skill: soleur:operator-bootstrap"),
+      "stripHtmlComments left a commented-out invocation intact — a comment can certify the wiring",
+    ).toBe(false);
+  });
+
+  test("ship's operator-step gate offers option 4 as the Skill-tool invocation of soleur:operator-bootstrap", () => {
+    const raw = stripHtmlComments(
+      readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8"),
+    );
+    const option4 = raw
+      .split("\n")
+      .find((line) => /^4\.\s+\*\*Generate a runnable script instead/.test(line));
+    expect(
+      option4,
+      "ship/SKILL.md lost the gate's option-4 line (`4. **Generate a runnable script instead …`).",
+    ).toBeDefined();
+    expect(
+      /skill:\s*soleur:operator-bootstrap(?![\w-])/.test(option4 ?? ""),
+      "the option-4 line no longer carries `skill: soleur:operator-bootstrap` — the " +
+        "hr-multi-step-post-merge-bootstrap-script artifact has no producer in the pipeline.",
+    ).toBe(true);
+  });
+
+  // help.md renders skills by prefix family (R23), so the two skills reach the
+  // menu through the `operator-*` family rule in EVERY harness block — checked
+  // per block (split on the `### ` headings), because a total count of 3 is
+  // satisfied by one block mentioning the family three times while another
+  // dropped it.
+  test("help.md carries the operator-* family in each harness block", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "commands", "help.md"), "utf-8");
+    const blocks = raw.split(/^### /m).slice(1);
+    const wanted = ["Claude Code", "Devin CLI", "Grok Build"];
+    for (const name of wanted) {
+      const block = blocks.find((b) => b.startsWith(name));
+      expect(block, `help.md has no \`### ${name}\` harness block`).toBeDefined();
+      expect(
+        /operator-\*/.test(block ?? ""),
+        `the \`### ${name}\` block of help.md does not name the operator-* family`,
+      ).toBe(true);
+    }
+    for (const skillName of ["operator-bootstrap", "operator-rephrase"]) {
+      expect(
+        existsSync(resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md")),
+        `${skillName} is missing — the operator-* family rule in help.md would render nothing for it.`,
+      ).toBe(true);
+    }
+  });
+
+  // Two Phase-6 body templates carry the Merge Danger block (gh pr edit and gh
+  // pr create); which one runs depends only on whether a draft PR exists, so
+  // an edit to one and not the other is a silent partial. Byte-identical after
+  // the indentation the fenced block adds is removed.
+  test("ship's two Merge Danger template blocks are byte-identical", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    const blocks: string[] = [];
+    const re = /^[ \t]*## Merge Danger\n([\s\S]*?)\n[ \t]*## Changelog/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) {
+      blocks.push(m[1].split("\n").map((l) => l.replace(/^[ \t]+/, "")).join("\n"));
+    }
+    expect(blocks.length, "expected exactly two `## Merge Danger` template blocks").toBe(2);
+    expect(blocks[0]).toBe(blocks[1]);
+    for (const b of blocks) {
+      expect(/^\*\*Undo:\*\*/m.test(b)).toBe(true);
+      expect(/^\*\*Blast Radius:\*\*/m.test(b)).toBe(true);
     }
   });
 });

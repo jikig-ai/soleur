@@ -157,7 +157,17 @@ description: Processes data
 </yaml_requirements>
 
 <naming_conventions>
-Use **verb-noun convention** for skill names:
+Use **`<noun|domain>-<verb>` prefix-grouping** for skill names: the shared grouping token comes
+first, the action second. Shipped evidence -- `flag-create`, `flag-delete`, `flag-list`,
+`flag-set-role`; `cron-list`, `cron-delete`; `legal-audit`, `legal-generate`; `operator-digest`,
+`operator-rephrase`; `release-announce`, `release-docs`. **No shipped Soleur skill uses the
+verb-first `create-*` / `setup-*` / `manage-*` / `generate-*` form.** Why the prefix leads: a sorted
+skill list then reads as families rather than as a flat wall, so every `flag-*` skill is found in
+one place -- which is how `plugins/soleur/commands/help.md` renders the listing.
+
+The patterns below are retained as upstream illustrations of the **pattern** shape (one pattern per
+capability class), not as Soleur name templates. Read them for the grouping idea, not for the word
+order.
 
 <pattern name="create">
 Building/authoring tools
