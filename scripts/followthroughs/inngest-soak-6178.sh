@@ -101,8 +101,10 @@ set -uo pipefail
 # ONE EXIT trap: cleanup + the rc filter. Bash keeps a SINGLE EXIT trap — a later
 # `trap 'rm -rf "$WORK"' EXIT` would silently REPLACE this filter and a `set -u` abort would then
 # exit 1 (= FAIL, a reopen in closed mode). EXIT-only on purpose: an INT/TERM arm would rewrite a
-# signal kill to 3.
-WORK=""
+# signal kill to 3. WORK is assigned ONCE, from a bare `mktemp -d`, so the `rm -rf` operand is
+# provably absolute (the P1b ratchet, plugins/soleur/test/fixture-relative-assert.test.sh); a
+# failed mktemp leaves it empty and the `-n` guard makes the cleanup a no-op.
+WORK="$(mktemp -d)"
 on_exit() {
   local rc=$?
   [[ -n "$WORK" ]] && rm -rf "$WORK"
@@ -186,7 +188,7 @@ if [[ "$pop_n" -ne "$POPULATION_SIZE" || "$pop_ok" -ne "$POPULATION_SIZE" || "$p
   cannot_establish "population_malformed lines=${pop_n} uuid=${pop_ok} unique=${pop_u} want=${POPULATION_SIZE}" "the committed population file must hold exactly ${POPULATION_SIZE} distinct UUID lines; regenerate from the run logs named in its header"
 fi
 
-WORK="$(mktemp -d)"
+[[ -n "$WORK" && -d "$WORK" ]] || cannot_establish "scratch_unavailable" "mktemp -d failed on the runner (TMPDIR full or unwritable)"
 printf '%s\n' "$pop_lines" > "$WORK/population.txt"
 
 # ── one request shape (canary-promotion-5875.sh: HMAC over the empty GET body) ───────────────
