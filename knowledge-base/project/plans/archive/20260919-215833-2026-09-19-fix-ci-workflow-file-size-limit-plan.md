@@ -165,8 +165,11 @@ logs:
   retention: "90 days (GitHub default)"
 
 discoverability_test:
-  command: bun test plugins/soleur/test/workflow-file-size.test.ts
-  expected_output: "0 fail"
+  # Same invariant the gate test asserts (every top-level workflow file <= 490,000 bytes),
+  # measured with python3 so it runs on the sandbox PATH with no toolchain; `bun test
+  # plugins/soleur/test/workflow-file-size.test.ts` is the fuller local form.
+  command: python3 -c "print(['OVER','OK'][max(__import__('os').path.getsize('.github/workflows/'+f) for f in __import__('os').listdir('.github/workflows') if f.endswith(('.yml','.yaml')))//490001==0])"
+  expected_output: "OK"
 ```
 
 ## Guard Contract
