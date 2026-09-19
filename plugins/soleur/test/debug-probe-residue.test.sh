@@ -173,11 +173,15 @@ fi
 CTRL_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$CTRL_ROOT"' EXIT INT TERM
 case "$CTRL_ROOT" in /?*) : ;; *) printf '[FATAL] mktemp gave %q\n' "$CTRL_ROOT" >&2; exit 2 ;; esac
+# Hermetic git environment for the control repo (the repo's chokepoint, #7849): sweeps inherited
+# GIT_*, GIT_CONFIG_GLOBAL=/dev/null, synthesized identity. The three tree rows above already ran
+# against $ROOT; the ceiling this pins (the control repo's parent) does not reach $ROOT.
+# shellcheck source=./lib/git-fixture-env.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/git-fixture-env.sh"
+git_fixture_env "$CTRL_ROOT" || { printf '[FATAL] git_fixture_env refused %s\n' "$CTRL_ROOT" >&2; exit 2; }
 M="SOLEUR_PROBE_DEB""UG"
 TAG="[DEBUG-$(printf '%04x' 43981)]"
 git -C "$CTRL_ROOT" init -q
-git -C "$CTRL_ROOT" config user.email "test@example.com"
-git -C "$CTRL_ROOT" config user.name "test"
 mkdir -p "$CTRL_ROOT/knowledge-base/notes"
 printf 'echo "%s fired"\n' "$M"                                   > "$CTRL_ROOT/p-echo-dq.sh"
 printf "echo '%s fired'\n" "$M"                                   > "$CTRL_ROOT/p-echo-sq.sh"
@@ -194,7 +198,7 @@ printf 'const on = process.env.%s === "1";\n' "$M"                > "$CTRL_ROOT/
 printf 'const t = "%s";\n' "$TAG"                                 > "$CTRL_ROOT/p-tag.ts"
 printf 'a session quoted %s here\n' "$TAG"                        > "$CTRL_ROOT/knowledge-base/notes/n-quoted-tag.md"
 git -C "$CTRL_ROOT" add -A
-git -C "$CTRL_ROOT" -c commit.gpgsign=false commit -q -m "controls"
+git -C "$CTRL_ROOT" commit -q -m "controls"
 # ctrl_scan <label> <flags> <regex> [<line-exclude>] -> rc, in the control repo, hits swallowed.
 ctrl_scan() {
   local rc=0
@@ -226,7 +230,7 @@ fi
 # line-level env exclusion is what keeps predicate 2 green, and the control proves it fires.
 git -C "$CTRL_ROOT" rm -q --cached -- 'p-*' >/dev/null
 rm -f -- "$CTRL_ROOT"/p-*
-git -C "$CTRL_ROOT" -c commit.gpgsign=false commit -q -m "negatives only"
+git -C "$CTRL_ROOT" commit -q -m "negatives only"
 n1_rc=0; ctrl_scan "control p1" -liE "$P1_RE" || n1_rc=$?
 n2_rc=0; ctrl_scan "control p2" -lE "$P2_RE" "$P2_LINE_EXCLUDE" || n2_rc=$?
 cases=$((cases + 1))

@@ -200,7 +200,10 @@ agent-instructions file. Six sub-decisions:
   actually hits exit 69 with nothing to clean. A failed first install is therefore re-runnable and
   never leaves a half-installed gate whose next run would exit 66; only a SIGKILL can, and the 66
   message names that recovery. Every failure message is printed on stdout before stderr (`die` is
-  the one failure path). Refresh mode removes nothing (the artifacts are committed) and says the
+  the one failure path), and a tool failure carries the tool's own last lines (git, depcruise)
+  plus a shallow-clone hint. One run per repository: a `mkdir` lock in the git common dir with the
+  owner pid, released by the same handler; a live lock is 69, a stale one is taken over. POSIX
+  tools only — the generator runs on founder hosts including stock macOS. Refresh mode removes nothing (the artifacts are committed) and says the
   baseline was rewritten and should be reviewed with `git diff`. *(Review of #8352 widened this from
   "on any bite failure": the merge-base 69 sat after the emits and before any trap, measured on a
   fixture without `origin/main` — five artifacts left, next run 66.)*

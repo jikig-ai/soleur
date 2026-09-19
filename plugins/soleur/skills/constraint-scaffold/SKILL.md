@@ -132,7 +132,11 @@ first install, never a 66 on a half-installed gate. Every failure message is on 
 stale `.git/worktrees` registration); the 66 message names that recovery (`git clean -n`, `git
 worktree prune`, re-run). The base ref is `origin/main`, else the remote's default branch
 (`origin/HEAD` — a founder repo on `master`); neither present exits 69 before anything is written.
-In refresh mode nothing is removed. A failure while writing the README or the pointer **after** a
+In refresh mode nothing is removed. One run per repository at a time: a `mkdir` lock in the git
+common dir (owner pid inside) makes a concurrent run a 69 naming the pid; a stale lock is taken
+over. The 68/69 messages carry git's / dependency-cruiser's own last lines (a failing
+`post-checkout` hook, a parse error) and name a shallow clone. The generator uses POSIX tools only
+(stock macOS included). A failure while writing the README or the pointer **after** a
 successful bite is a warning on stdout, not a fatal: the gate is installed and proven; the message
 names the file and the missing doc. **Hosted-runner deviation:** `plugins/soleur/` is vendored into
 the production image, so this script can run where no human reads stdout; there a 71–74 is

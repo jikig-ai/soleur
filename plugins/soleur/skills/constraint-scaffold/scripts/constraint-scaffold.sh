@@ -30,7 +30,8 @@
 #   66  refuse-if-exists (a non-baseline artifact already present; no --force)
 #   67  dirty working tree (baseline capture requires a clean tree)
 #   68  dependency-cruiser binary missing, or baseline capture failed
-#   69  git/base-ref/worktree/temp-dir error, or TMPDIR resolves inside the repository
+#   69  git/base-ref/worktree/temp-dir error, TMPDIR resolves inside the repository, or another
+#       scaffold run holds the run lock (<git-common-dir>/constraint-scaffold.lock, owner pid inside)
 #   70  --refresh-baseline before generation (no .dependency-cruiser.cjs yet — run default mode first)
 #   71  bite-proof: gate did not pass on the clean HEAD tree before the probe (config/toolchain)
 #   72  bite-proof: gate did NOT reject the injected client->server-secret imports on their edges
@@ -45,6 +46,10 @@
 # terminal Ctrl-C (rc 130) is treated as an interrupt, never as a verdict. Only a SIGKILL can
 # leave residue (the six files plus a stale `.git/worktrees` registration) — the 66 message
 # names the recovery.
+#
+# Portable: POSIX tools only (no `realpath -m`, no `sed -i`) — the generator runs on founder hosts
+# including stock macOS (bash 3.2, BSD sed). Tool errors (git worktree add, dependency-cruiser)
+# are carried into the 68/69 message, never discarded.
 #
 # No test seams: this script reads no test-only environment variable. The self-tests
 # drive every failure arm through a fixture-owned stub `depcruise` reached via the target's
@@ -68,9 +73,14 @@ case "$REPO_ROOT" in
   /*)            : ;;
   *)             printf 'FATAL: REPO_ROOT %s is RELATIVE; refusing\n' "$REPO_ROOT" >&2; exit 2 ;;
 esac
+# physdir <dir>: the physical path of an EXISTING directory (`pwd -P`), POSIX — the generator runs
+# on founder hosts where `realpath -m` does not exist (BSD/macOS). Prints nothing on a missing dir.
+physdir() { ( cd -- "$1" 2>/dev/null && pwd -P ); }
+# physpath <path>: physical path of a file that may not exist yet, via its (existing) parent.
+physpath() { local d; d="$(physdir "$(dirname -- "$1")")" || return 1; [[ -n "$d" ]] && printf '%s/%s' "$d" "$(basename -- "$1")"; }
 # Canonical form once (a trailing slash would defeat every `${f#"$REPO_ROOT"/}` display and the
 # TMPDIR containment case below), re-guarded: the value now comes from a command substitution.
-REPO_ROOT="$(realpath -- "$REPO_ROOT")"
+REPO_ROOT="$(physdir "$REPO_ROOT")"
 case "$REPO_ROOT" in
   /|//|/.) printf 'FATAL: REPO_ROOT canonicalises to the filesystem root; refusing\n' >&2; exit 2 ;;
   /*)      : ;;
@@ -161,6 +171,7 @@ WT=""
 # signal arrived; a failed step says "run aborted".
 _wt_cleanup() {
   local why="${1:-run aborted}"
+  release_run_lock
   if [[ -n "${WT:-}" ]]; then
     git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
     rm -rf -- "$WT"
@@ -173,11 +184,40 @@ _wt_cleanup() {
   fi
   return 0
 }
+# Run lock: two scaffold runs in one repo (a default run and a --refresh-baseline, or two
+# sessions) would each `mv` into the same baseline and one run's cleanup would delete the other's
+# staged inputs mid-bite. One `mkdir` lock in the git common dir, holding the owner pid; a stale
+# lock (owner gone) is taken over, a live one is a 69 with the pid named. Released by the handler.
+RUN_LOCK=""
+take_run_lock() {
+  local common
+  common="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)" || common=".git"
+  [[ "$common" == /* ]] || common="$REPO_ROOT/$common"
+  RUN_LOCK="$common/constraint-scaffold.lock"
+  if ! mkdir "$RUN_LOCK" 2>/dev/null; then
+    local owner
+    owner="$(cat "$RUN_LOCK/pid" 2>/dev/null || true)"
+    if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then
+      RUN_LOCK=""
+      fail_stdout 69 "another constraint-scaffold run (pid $owner) is in progress in this repository; wait for it"
+    fi
+    rm -rf -- "$RUN_LOCK"
+    mkdir "$RUN_LOCK" 2>/dev/null || { RUN_LOCK=""; fail_stdout 69 "cannot take the run lock at $RUN_LOCK"; }
+  fi
+  printf '%s\n' "$$" > "$RUN_LOCK/pid"
+}
+release_run_lock() {
+  [[ -n "${RUN_LOCK:-}" && -d "$RUN_LOCK" ]] && rm -rf -- "$RUN_LOCK"
+  RUN_LOCK=""
+  return 0
+}
 # TMPDIR containment, checked before the first write (a `mktemp -d` under a TMPDIR inside the
 # repo would land the bite worktree — and its logs — in the founder's tree as untracked files).
 check_tmpdir_outside_repo() {
   local t
-  t="$(realpath -m -- "${TMPDIR:-/tmp}")"
+  t="$(physdir "${TMPDIR:-/tmp}")" || t=""
+  # A TMPDIR that does not exist cannot be inside the repo; mktemp reports it (69) at first use.
+  [[ -n "$t" ]] || return 0
   case "$t" in
     "$REPO_ROOT"|"$REPO_ROOT"/*)
       fail_stdout 69 "TMPDIR ($t) resolves inside the repository; refusing to create the bite worktree there" ;;
@@ -188,12 +228,15 @@ with_detached_worktree() {
   trap '_wt_cleanup' EXIT
   trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM
   WT="$(mktemp -d)" || fail_stdout 69 "cannot create a temp dir under TMPDIR=${TMPDIR:-/tmp}"
-  case "$(realpath "$WT")" in
+  case "$(physdir "$WT")" in
     "$REPO_ROOT"/*)
       fail_stdout 69 "TMPDIR resolves inside the repository; refusing to create the bite worktree there" ;;
   esac
-  git -C "$REPO_ROOT" worktree add --detach "$WT" "$ref" >/dev/null 2>&1 \
-    || fail_stdout 69 "git worktree add at ${ref:0:12} failed"
+  # Keep git's own reason (a failing post-checkout hook, LFS, a corrupt object): a 69 whose
+  # message ends in "failed" with the cause discarded is a question the founder cannot answer.
+  local git_err
+  git_err="$(git -C "$REPO_ROOT" worktree add --detach "$WT" "$ref" 2>&1 >/dev/null)" \
+    || fail_stdout 69 "git worktree add at ${ref:0:12} failed: $(printf '%s' "$git_err" | tail -n 3 | tr '\n' ' ')"
   "$fn" "$WT"
   git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf -- "$WT"
@@ -215,11 +258,11 @@ capture_baseline() {
     [[ -d "$app_root/$d" ]] && scan_dirs+=("$d")
   done
   [[ "${#scan_dirs[@]}" -gt 0 ]] || fail_stdout 68 "no app/components/server dirs under $app_root — cannot capture baseline"
-  local tmp
+  local tmp dc_err
   tmp="$(mktemp)"
-  if ! ( cd "$app_root" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type baseline "${scan_dirs[@]}" ) > "$tmp" 2>/dev/null; then
+  if ! dc_err="$( ( cd "$app_root" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type baseline "${scan_dirs[@]}" ) 2>&1 > "$tmp" )"; then
     rm -f "$tmp"
-    fail_stdout 68 "baseline capture failed (dependency-cruiser config error, or the hoisted node_modules symlink did not resolve?)"
+    fail_stdout 68 "baseline capture failed — dependency-cruiser said: $(printf '%s' "$dc_err" | tail -n 5 | tr '\n' ' ') (config error, or the hoisted node_modules symlink did not resolve?)"
   fi
   mv "$tmp" "$BASELINE"
   log "captured baseline: $(grep -c '"rule"' "$BASELINE" 2>/dev/null || true) known violation(s) -> ${BASELINE#"$REPO_ROOT"/}"
@@ -248,8 +291,12 @@ resolve_base_ref() {
   else
     fail_stdout 69 "no origin/main and no origin/HEAD — fetch the default branch first (git fetch origin main, or git remote set-head origin -a)"
   fi
-  MB="$(git -C "$REPO_ROOT" merge-base "$BASE_REF" HEAD 2>/dev/null)" \
-    || fail_stdout 69 "could not compute merge-base of $BASE_REF and HEAD (unrelated histories, or $BASE_REF not fetched?)"
+  if ! MB="$(git -C "$REPO_ROOT" merge-base "$BASE_REF" HEAD 2>/dev/null)"; then
+    local shallow=""
+    [[ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]] \
+      && shallow=" — this is a SHALLOW clone: run \`git fetch --unshallow\` first"
+    fail_stdout 69 "could not compute merge-base of $BASE_REF and HEAD (unrelated histories, or $BASE_REF not fetched?)$shallow"
+  fi
 }
 
 # Capture the baseline against the base-ref merge-base in a detached worktree,
@@ -311,7 +358,7 @@ _run_gate() {
   fi
   # Belt and braces with the runner's NO_COLOR=1: a FORCE_COLOR environment decorates
   # depcruise's `error <rule>:` lines and both anchors below would match nothing.
-  sed -i 's/\x1b\[[0-9;]*m//g' "$logf"
+  sed $'s/\e\\[[0-9;]*m//g' "$logf" > "$logf.plain" && mv -f "$logf.plain" "$logf"
 }
 
 _depcruise_version() {
@@ -411,9 +458,11 @@ append_once() {
   local f="$1" marker="$2" content="$3"
   [[ -L "$f" ]] && { warn "refusing to append through a symlink: ${f#"$REPO_ROOT"/} -> $(readlink "$f")"; return 1; }
   # A symlinked PARENT (server/ -> outside) passes `-L` on the file: require containment.
-  case "$(realpath -m -- "$f")" in
+  local phys
+  phys="$(physpath "$f")" || phys=""
+  case "$phys" in
     "$REPO_ROOT"/*) ;;
-    *) warn "refusing to append outside the repository: ${f#"$REPO_ROOT"/} resolves to $(realpath -m -- "$f")"; return 1 ;;
+    *) warn "refusing to append outside the repository: ${f#"$REPO_ROOT"/} resolves to ${phys:-<unresolvable>}"; return 1 ;;
   esac
   grep -qF -- "$marker" "$f" 2>/dev/null && return 0
   [[ -s "$f" && -n "$(tail -c 1 "$f")" ]] && printf '\n' >> "$f"
@@ -423,7 +472,7 @@ append_once() {
 
 emit_readme() {
   local content
-  content="$(sed -e '1{/^<!-- Inspired by /d}' -e "s|__TARGET_DIR__|$TARGET_REL|g" "$REF_DIR/boundary-readme.template" 2>/dev/null || true)"
+  content="$(sed -e '1{/^<!-- Inspired by /d;}' -e "s|__TARGET_DIR__|$TARGET_REL|g" "$REF_DIR/boundary-readme.template" 2>/dev/null || true)"
   if [[ -n "$content" ]] && append_once "$README" "<!-- constraint-scaffold:readme:start -->" "$content"; then
     log "README block present in ${README#"$REPO_ROOT"/}"
   else
@@ -454,8 +503,15 @@ if [[ "$MODE" == "refresh" ]]; then
   require_clean_tree "before capturing the baseline"
   resolve_base_ref
   check_tmpdir_outside_repo
+  trap '_wt_cleanup' EXIT
+  trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM
+  CLEANUP_ARMED=1
+  take_run_lock
   capture_baseline_mergebase
   prove_bite
+  release_run_lock
+  CLEANUP_ARMED=0
+  trap - EXIT INT TERM
   log "refresh complete — review the baseline diff before merging."
   exit 0
 fi
@@ -484,10 +540,12 @@ check_tmpdir_outside_repo
 
 # Arm the self-cleanup before the first write (single handler: _wt_cleanup). Disarmed only
 # after prove_bite returns — the worktree helper re-installs the same handler and leaves it
-# armed while CLEANUP_ARMED=1.
+# armed while CLEANUP_ARMED=1. The run lock is taken inside the armed window so the handler
+# releases it on every exit.
 CLEANUP_ARMED=1
 trap '_wt_cleanup' EXIT
 trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM
+take_run_lock
 mkdir -p "$TARGET/scripts" "$TARGET/.github/workflows"
 
 # .dependency-cruiser.cjs — emitted verbatim (the from-set is computed at
@@ -519,6 +577,7 @@ capture_baseline_mergebase
 # (a tracked CLAUDE.md or server/README.md appended earlier would exit 67 with the executables
 # already emitted and leave the next run at 66), and a 71/72/73/74 never has to undo them.
 prove_bite
+release_run_lock
 CLEANUP_ARMED=0
 trap - EXIT INT TERM
 emit_readme

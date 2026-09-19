@@ -28,6 +28,12 @@ fail() { printf 'FAIL - %s\n' "$1"; fails=$((fails + 1)); }
 
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
+# Hermetic git environment for the fixtures (the repo's chokepoint, #7849): a developer
+# commit.gpgsign / signing key / GIT_DIR must not reach the fixture commits or the scaffold under test.
+# shellcheck source=../../../test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+mkdir -p "$TMPROOT/anchor"
+git_fixture_env "$TMPROOT/anchor" || { echo "FATAL: git_fixture_env refused $TMPROOT/anchor" >&2; exit 1; }
 
 # Throwaway git repo with a valid Next.js-shaped app dir, committed clean, origin/main == HEAD, and
 # a fixture-owned stub `depcruise` (baseline -> [], clean err -> rc 0, probe err -> both rules on

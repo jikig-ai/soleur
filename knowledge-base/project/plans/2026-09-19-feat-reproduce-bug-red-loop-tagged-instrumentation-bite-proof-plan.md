@@ -307,6 +307,8 @@ The panel measured six user-facing failure modes the section above did not name;
 | Founder-supplied HAR / recording | storage location unspecified (lands in the repo), strip list omitted `queryString`/`content.text`/`_webSocketMessages`/response cookies, no mechanical Phase 9 check, then `test-fix-loop`'s `git add -A` commits it | `mktemp -d` outside the repo, complete strip list, Phase 9 + test-fix-loop untracked-artifact grep |
 | Founder's stdout on 65(next.js)/66/67/68/70 | stderr-only; the 65 message did not name the missing dir | `die` prints on stdout first for every code; 65 names the dir |
 
+From the coverage consult (the question "which class is absent"), verified against the script and closed: GNU-only tools (`realpath -m` ×3, `sed -i` + `\x1b`, `1{…d}`) would abort with exit 1 and empty stdout on stock macOS — replaced with POSIX spellings (`pwd -P`, `sed … > tmp && mv`, `d;}`); `git worktree add` and depcruise stderr were discarded before the 68/69 message — now carried; a shallow clone's merge-base failure is named; two concurrent runs in one repo (default + refresh) could delete each other's staged inputs — a `mkdir` run lock with owner pid, S-lock rows; the new suites now source `git-fixture-env.sh` (a developer `commit.gpgsign` reached 20+ fixture commits). Not changed: hooks still run inside `worktree add` (same trust domain as `git checkout`; disabling them would also disable LFS smudge).
+
 Not a user-facing vector but recorded: Guard 4's second predicate missed the pino `log.warn({ SOLEUR_X_DEBUG: true })` form (the tree's dominant marker shape) and `echo '…'`; widened with eleven in-suite positive controls.
 
 ## Infrastructure (IaC)

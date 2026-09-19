@@ -166,7 +166,7 @@ fi
 #    against what the emitter actually writes.
 README_TMPL="$REF/boundary-readme.template"
 README_DOG="$APP/server/README.md"
-STRIP_EXPR="sed -e '1{/^<!-- Inspired by /d}' -e \"s|__TARGET_DIR__|\$TARGET_REL|g\""
+STRIP_EXPR="sed -e '1{/^<!-- Inspired by /d;}' -e \"s|__TARGET_DIR__|\$TARGET_REL|g\""
 GEN_SCRIPT="$REPO_ROOT/plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
 STRIP_PIN="$(grep -E '^\s*content="\$\(sed ' "$GEN_SCRIPT" 2>/dev/null | grep -cF -- "$STRIP_EXPR" || true)"
 D=""
@@ -179,7 +179,7 @@ elif [[ "$STRIP_PIN" != "1" ]]; then
 elif ! head -1 "$README_TMPL" | grep -q '^<!-- Inspired by '; then
   D="template line 1 is not the attribution comment (the emitter strips exactly that line)"
 else
-  EXPECTED_README="$(sed -e '1{/^<!-- Inspired by /d}' -e "s|__TARGET_DIR__|$TARGET_DIR|g" "$README_TMPL")"
+  EXPECTED_README="$(sed -e '1{/^<!-- Inspired by /d;}' -e "s|__TARGET_DIR__|$TARGET_DIR|g" "$README_TMPL")"
   D="$(printf '%s\n' "$EXPECTED_README" | diff - "$README_DOG" 2>&1 || true)"
 fi
 cases=$((cases + 1))

@@ -46,6 +46,12 @@ GEN="$SKILL/scripts/constraint-scaffold.sh"
 REF="$SKILL/references"
 APP="$REPO_ROOT/apps/web-platform"
 
+# Hermetic git environment for every fixture (the repo's chokepoint, #7849): sweeps inherited
+# GIT_*, pins discovery at $TMPROOT's parent, GIT_CONFIG_GLOBAL=/dev/null (a developer
+# commit.gpgsign=true or signing key would otherwise reach 20+ fixture commits), synthesized identity.
+# shellcheck source=../../../test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
 RULE_DIRECT="no-client-to-server-secret"
 RULE_TRANSITIVE="no-client-to-server-secret-transitive"
 PROBE_DIR="components/__constraint_scaffold_bite_probe__"
@@ -72,9 +78,9 @@ cases=0
 # `grep -cE '^\s*cases=\$\(\(cases \+ 1\)\)$'` over its segment of THIS file (the anchored form
 # skips the two prose mentions inside the accounting messages), minus the sites that are
 # legitimately conditional, so the floor is a genuine LOWER BOUND rather than a snapshot:
-#   TOOLCHAIN_FREE_MIN_ASSERTIONS = 75 call sites above the locate-or-install block, minus the 2
-#                                   C-chmod sites that only run when not root         = 73
-#   MIN_ASSERTIONS                = that + the 18 call sites of the real segment      = 91
+#   TOOLCHAIN_FREE_MIN_ASSERTIONS = 78 call sites above the locate-or-install block, minus the 2
+#                                   C-chmod sites that only run when not root         = 76
+#   MIN_ASSERTIONS                = that + the 18 call sites of the real segment      = 94
 ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
 # Instrument self-test — DIRECTION, not only presence: conservation (`pass + fail == cases`) and
@@ -97,6 +103,10 @@ TMPROOT="$(mktemp -d)" || { echo "FATAL: cannot create scratch root" >&2; exit 1
 : "${TMPROOT:?scratch root must be non-empty}"
 [[ "$TMPROOT" == /* && -d "$TMPROOT" && ! -L "$TMPROOT" ]] || {
   echo "FATAL: scratch root is not a plain absolute directory: '$TMPROOT'" >&2; exit 1; }
+# Every fixture lives under $TMPROOT; one anchor dir gives the ceiling ($TMPROOT's parent) and the
+# hermetic config to the whole suite, the scaffold under test included (it inherits the env).
+mkdir -p "$TMPROOT/anchor"
+git_fixture_env "$TMPROOT/anchor" || { echo "FATAL: git_fixture_env refused $TMPROOT/anchor" >&2; exit 1; }
 # EXIT **INT TERM**: a ^C during the on-demand `npm install` below must still remove the root.
 trap 'rm -rf -- "${TMPROOT:-}"' EXIT INT TERM
 assert_fixture_dir "$TMPROOT"
@@ -223,7 +233,7 @@ fi
 # also pins (one transform, two copies).
 # Anchored on the ASSIGNMENT form (`content="$(sed …`), so a stale comment quoting the expression
 # cannot stand in for the live one.
-STRIP_EXPR="sed -e '1{/^<!-- Inspired by /d}' -e \"s|__TARGET_DIR__|\$TARGET_REL|g\""
+STRIP_EXPR="sed -e '1{/^<!-- Inspired by /d;}' -e \"s|__TARGET_DIR__|\$TARGET_REL|g\""
 STRIP_CT="$(grep -E '^\s*content="\$\(sed ' "$GEN" | grep -cF -- "$STRIP_EXPR" || true)"
 cases=$((cases + 1))
 if [[ "$STRIP_CT" == "1" ]]; then
@@ -511,7 +521,7 @@ if [[ -s "$FX_A/apps/web-platform/server/README.md" ]] && ! grep -q 'Inspired by
 else
   bad "C3a: emitted README carries the attribution line or an unsubstituted placeholder"
 fi
-EXPECTED_README="$(sed -e '1{/^<!-- Inspired by /d}' -e "s|__TARGET_DIR__|apps/web-platform|g" "$REF/boundary-readme.template" 2>/dev/null)"
+EXPECTED_README="$(sed -e '1{/^<!-- Inspired by /d;}' -e "s|__TARGET_DIR__|apps/web-platform|g" "$REF/boundary-readme.template" 2>/dev/null)"
 cases=$((cases + 1))
 if [[ -n "$EXPECTED_README" ]] && diff -q <(printf '%s\n' "$EXPECTED_README") "$FX_A/apps/web-platform/server/README.md" >/dev/null 2>&1; then
   ok "C3a: emitted README == emitter transform of boundary-readme.template"
@@ -1011,6 +1021,37 @@ else
   bad "S-symlink-server: porcelain=[$(porcelain "$FX" | tr '\n' ' ')] ext=[$(ls -A "$TMPROOT/ext-server" | tr '\n' ' ')]"
 fi
 
+# --- S-lock: a second run while another is in progress -> 69 naming the pid, nothing written; a
+# STALE lock (owner gone) is taken over and released after the run ------------------------------
+FX="$(make_repo s-lock)"
+assert_fixture_dir "$FX"
+point_node_modules "$FX" "$STUB_CLEAN"
+LOCK_DIR="$FX/.git/constraint-scaffold.lock"
+mkdir -p "$LOCK_DIR"
+printf '%s\n' "$$" > "$LOCK_DIR/pid"          # this suite's own pid: alive for the whole run
+run_gen "$FX" s-lock-held
+cases=$((cases + 1))
+if [[ "$RC" == "69" ]] && grep -qF "FAILED (69): another constraint-scaffold run (pid $$) is in progress" "$TMPROOT/s-lock-held.out" && [[ -z "$(porcelain "$FX")" ]]; then
+  ok "S-lock: a live lock is a 69 naming the owner pid on STDOUT, nothing written"
+else
+  bad "S-lock: rc=$RC (want 69) stdout: $(grep -F FAILED "$TMPROOT/s-lock-held.out" | head -1) porcelain=[$(porcelain "$FX" | tr '\n' ' ')]"
+fi
+cases=$((cases + 1))
+if [[ -d "$LOCK_DIR" && "$(cat "$LOCK_DIR/pid")" == "$$" ]]; then
+  ok "S-lock: the refused run left the live lock in place (it was not its to release)"
+else
+  bad "S-lock: the refused run removed or rewrote a lock it did not own"
+fi
+sleep 0.01 & DEAD_PID=$!; wait "$DEAD_PID" 2>/dev/null || true
+printf '%s\n' "$DEAD_PID" > "$LOCK_DIR/pid"   # a pid that has exited: a stale lock
+run_gen "$FX" s-lock-stale
+cases=$((cases + 1))
+if [[ "$RC" == "0" && ! -e "$LOCK_DIR" ]] && grep -qE "$VERDICT_RE" "$TMPROOT/s-lock-stale.out"; then
+  ok "S-lock: a stale lock is taken over, the run completes, and the lock is released"
+else
+  bad "S-lock: stale-lock run rc=$RC lock_present=$([[ -e "$LOCK_DIR" ]] && echo yes || echo no)"
+fi
+
 # --- locate (or install) the dependency-cruiser binary -----------------------
 # Fast path: the installed web-platform binary (present locally + in the
 # test-webplat CI shard). Fallback: the test-scripts shard has node+npm but no
@@ -1066,7 +1107,7 @@ if ! [[ "$PARSED_COMPONENTS" =~ ^[0-9]+$ ]] || [[ "$PARSED_COMPONENTS" -lt 1 ]];
     echo "bite-proof.test.sh: $pass passed, $fail failed ($cases assertions, SKIPPED at the toolchain probe)"
     exit 1
   fi
-  TOOLCHAIN_FREE_MIN_ASSERTIONS=73
+  TOOLCHAIN_FREE_MIN_ASSERTIONS=76
   if [[ "$cases" -lt "$TOOLCHAIN_FREE_MIN_ASSERTIONS" ]]; then
     printf '\n[FATAL] anti-vacuity floor (toolchain-free half): only %d assertion(s) ran, expected >= %d.\n' \
       "$cases" "$TOOLCHAIN_FREE_MIN_ASSERTIONS" >&2
@@ -1284,7 +1325,7 @@ fi
 # A harness that silently asserted nothing (a fixture generator that no-ops, an editing slip that
 # drops a block) would otherwise print a clean smaller total and exit 0. See MIN_ASSERTIONS above
 # for how the number is derived and when to ratchet it.
-MIN_ASSERTIONS=91
+MIN_ASSERTIONS=94
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2
