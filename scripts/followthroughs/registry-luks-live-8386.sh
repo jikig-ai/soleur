@@ -511,17 +511,23 @@ _v4_add() { V4_REASONS="${V4_REASONS:+$V4_REASONS,}$1"; }
 # refuses to call them plaintext). Reading either as "not encrypted" here would contradict V1
 # fifty lines later and publish that contradiction to a PUBLIC tracker. They fall through to V4b
 # below, which fires only when NO other disjunct did — so an indeterminate reading never masks an
-# independently-measured devid mismatch or an unexpected mount source.
+# independently-measured devid mismatch or an unexpected mount source. `absent` cannot reach that
+# arm and is not meant to: the emitter sets it ONLY on the __NOMOUNT__ path, where the mount
+# source and the devid are both wrong, so two independent disjuncts fire first. The post-replace
+# mount race therefore remains the FAIL the header documents as an accepted residual.
 [[ "$N_LUKS" == "no" ]] && _v4_add "store_luks_no"
 [[ "$N_SRC" == "$EXPECTED_SRC" ]] || _v4_add "mount_src_unexpected"
 [[ "$N_DEVID" == "$N_EXPECTED" ]] || _v4_add "devid_mismatch"
-if [[ -z "$V4_REASONS" && ( "$N_LUKS" == "unknown" || "$N_LUKS" == "absent" ) ]]; then
+if [[ -z "$V4_REASONS" && "$N_LUKS" == "unknown" ]]; then
   marker "v4b_newest_indeterminate" "value=$N_LUKS boot=$NEWEST_BOOT measured=$D confirming=$Y"
-  echo "CANNOT ESTABLISH: the newest row on boot $NEWEST_BOOT reads \`$F_LUKS=$N_LUKS\` while every" >&2
+  echo "CANNOT ESTABLISH: the newest row on boot $NEWEST_BOOT reads \`$F_LUKS=unknown\` while every" >&2
   echo "           other measurement on that row is as declared. That is the emitter's" >&2
-  echo "           tool-refused state, or the post-replace mount race — not a reading of the" >&2
-  echo "           bytes. Refusing to publish it as 'not encrypted': real plaintext is caught by" >&2
-  echo "           V1, which counts \`no\` alone." >&2
+  echo "           TOOL-REFUSED state — cryptsetup rc 127/124, an empty blkid, a sentinel base —" >&2
+  echo "           not a reading of the bytes. Refusing to publish a refusal as 'not encrypted':" >&2
+  echo "           real plaintext is caught by V1, which counts \`no\` alone." >&2
+  echo "           NOT the post-replace mount race: that renders \`$F_LUKS=absent\` with" >&2
+  echo "           \`$F_SRC=__NOMOUNT__\`, which trips two independent disjuncts above and is" >&2
+  echo "           still a FAIL — the residual this probe's header states rather than hides." >&2
   if stale_now "v4b_newest_indeterminate"; then exit 5; fi
   exit 3
 fi
@@ -588,21 +594,28 @@ if [[ "$LEDGER_STATE" == "__UNREADABLE__" ]]; then
 fi
 
 if [[ "$LEDGER_STATE" == "other" ]]; then
-  marker "v6_flip_ledger" "boot=$NEWEST_BOOT confirming=$Y alias=$N_EXPECTED"
-  echo "ACTION REQUIRED: observed boot $NEWEST_BOOT measured encrypted on $N_EXPECTED across $Y" >&2
-  echo "           row(s), backing device $N_BACKING." >&2
+  marker "v6_flip_ledger" "boot=$NEWEST_BOOT confirming=$Y"
+  echo "ACTION REQUIRED: FLIP THE LEDGER. Observed boot $NEWEST_BOOT measured encrypted on the" >&2
+  echo "           declared volume across $Y row(s). The alias and the backing device are" >&2
+  echo "           WITHHELD: this comment is public and this verdict repeats DAILY, so printing" >&2
+  echo "           them here would defeat V1/V4's withholding on the same thread. Read them from" >&2
+  echo "           the private Better Stack view (command below)." >&2
   echo "           Flip hcloud_volume.registry's at_rest.live_verification to \`available\` AND" >&2
-  echo "           raise live_coverage_floor to 2 in a one-line PR, then this closes. TWO things," >&2
-  echo "           not three: the standing store_luks alert is the deferral issue's own" >&2
-  echo "           follow-through and must not hold this record hostage to its blocker." >&2
+  echo "           raise live_coverage_floor to 2 in a one-line PR. TWO things, not three: the" >&2
+  echo "           standing store_luks alert is the deferral issue's own follow-through and must" >&2
+  echo "           not hold this record hostage to its blocker." >&2
+  echo "           THIS DOES NOT THEN CLOSE. After the flip this probe reports evidence-complete" >&2
+  echo "           (ACTION REQUIRED, exit 5) on every sweep and never returns 0 — closing #8386" >&2
+  echo "           is a reviewed human decision, and closing it is what stops the daily comment." >&2
   exit 5
 fi
 
 # V7 — evidence complete AND the ledger already corrected. Exit 5, not 0: see the header.
-marker "v7_evidence_complete" "boot=$NEWEST_BOOT confirming=$Y alias=$N_EXPECTED ledger=available"
+marker "v7_evidence_complete" "boot=$NEWEST_BOOT confirming=$Y ledger=available"
 echo "ACTION REQUIRED: evidence complete — boot $NEWEST_BOOT measured encrypted on the declared" >&2
-echo "           volume $N_EXPECTED across $Y row(s) (backing device $N_BACKING, mount source" >&2
-echo "           the declared mapper), and the ledger reads \`available\`." >&2
+echo "           volume across $Y row(s), on the declared mapper, and the ledger reads" >&2
+echo "           \`available\`. The alias and the backing device are WITHHELD for the same reason" >&2
+echo "           V1/V4 withhold them: public comment, repeated daily." >&2
 echo "           Closing #8386 is a REVIEWED decision, taken after the boot is confirmed in the" >&2
 echo "           Better Stack read. This probe deliberately does not close it: source 2457081 is" >&2
 echo "           shared and multi-tenant with one ingest token, and host= / boot_id= are" >&2

@@ -188,7 +188,12 @@ write_files:
       # of cryptsetup and blkid, every five minutes. The behavioural suite gets its seam at RENDER
       # time (zot-disk-heartbeat-redaction.test.sh substitutes this literal), never at runtime.
       # APPEND, never prepend and never absolute paths: that suite's PATH stubs must still win.
-      PATH="$PATH:/usr/sbin:/sbin"
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin$${PATH:+:$$PATH}"
+      # LC_ALL=C for the same reason one line up: the guards below are character CLASSES, whose
+      # membership is locale-defined, and `doppler run` injects LANG/LC_ALL from the config store
+      # exactly as it injects PATH. betterstack-query.sh pins this and records why; the lesson was
+      # learned in that file and not carried here until the #8386 review.
+      export LC_ALL=C
       # (1) Absence-based liveness ping — ping ONLY while /var/lib/zot <85% (unchanged).
       USE=$(df --output=pcent /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9')
       PING_RC=0
@@ -701,8 +706,11 @@ write_files:
             fi
             ;;
         esac
+        # Charset, not just whitespace (#8386 review): this value reaches --data-raw's JSON body
+        # unescaped, so a quote or a backslash in a by-id basename would malform the envelope and
+        # lose EVERY field of the row on every tick, not just this one. Same class as the base.
         case "$STORE_MOUNT_DEVID" in
-          '' | *[[:space:]]*) STORE_MOUNT_DEVID=__UNREADABLE__ ;;
+          '' | *[!A-Za-z0-9_.-]*) STORE_MOUNT_DEVID=__UNREADABLE__ ;;
         esac
         # The LUKS discriminator, copied from luks-monitor.sh's first three steps: findmnt →
         # cryptsetup status → the `device:` line → blkid. Step 4 (re-testing the Doppler-held

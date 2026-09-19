@@ -253,6 +253,13 @@ expect() { # <name> <expected-rc> <fixture-file> <branch-marker>
   [[ -s "$WORK/out" ]] || { fail "$name — probe produced NO output; did it run?"; return; }
   [[ "$got" == "$want" ]] || ok=0
   grep -qF -- "$marker" "$WORK/out" || ok=0
+  # THE WITHHOLDING RULE, unconditionally. The sweeper posts this output into a PUBLIC comment,
+  # and the probe repeats daily, so a single verdict printing the Hetzner volume alias defeats
+  # the withholding on every other verdict in the same thread. Asserted here rather than per
+  # case: a per-case forbid covered 3 of 8 exit-1 cases and none of V6/V7 (#8386 review).
+  if grep -qF -- "$VOL" "$WORK/out"; then
+    ok=0; printf '        | LEAKED the volume alias into public output\n' >&2
+  fi
   if grep -qF "$CANARY" "$WORK/out"; then
     fail "$name — the probe ECHOED ROW CONTENT ($CANARY) into its output; the public issue gets counts only"
     return
@@ -428,14 +435,20 @@ CASE_LEDGER=available \
 expect "a tool-refused 'unknown' on the newest row -> CANNOT ESTABLISH, never a public FAIL" 3 "$WORK/f_v3b_unknown" \
   "verdict=v4b_newest_indeterminate value=unknown boot=$ALT13"
 
+# THE REAL MOUNT-RACE SHAPE, not a hand-built one. The emitter sets store_luks=absent ONLY on
+# its __NOMOUNT__ path, where the mount source and the devid are both sentinels — so the race
+# trips two INDEPENDENT disjuncts and is a FAIL, which is the residual this probe's header
+# states rather than hides. An earlier revision of this case fixtured `absent` beside a GOOD
+# mount source and asserted V4b covered it: a row the producer cannot emit, and therefore a
+# green assertion about coverage the code did not have.
 {
   rowgood "$DT_B" "$ALT14"
   rowgood "$DT_C" "$ALT14"
-  rowluks "$DT_D" "$ALT14" absent
-} > "$WORK/f_v3b_absent"
+  row "$DT_D" "$ALT14" "$(posture absent __NOMOUNT__ n/a "$VOL" n/a)"
+} > "$WORK/f_race"
 CASE_LEDGER=available \
-expect "the post-replace mount race ('absent') is not plaintext either" 3 "$WORK/f_v3b_absent" \
-  "verdict=v4b_newest_indeterminate value=absent boot=$ALT14"
+expect "the post-replace mount race is the documented FAIL, not a V4b cannot-establish" 1 "$WORK/f_race" \
+  "verdict=v4_not_encrypted reason=mount_src_unexpected,devid_mismatch boot=$ALT14"
 
 # ══ V5 — the evidence-depth floor, and boot scoping ═══════════════════════════════════════════
 # The OLDER boot's three confirming rows are emitted LAST in the file and carry OLDER dt values.
@@ -550,7 +563,7 @@ expect "evidence complete, ledger not yet flipped -> ACTION REQUIRED with the tw
 
 CASE_LEDGER=available CASE_REQUIRE="REVIEWED decision" \
 expect "evidence complete AND ledger available -> ACTION REQUIRED, deliberately not an auto-close" 5 "$WORK/f_v6" \
-  "verdict=v7_evidence_complete boot=$NEWBOOT confirming=3 alias=$VOL ledger=available"
+  "verdict=v7_evidence_complete boot=$NEWBOOT confirming=3 ledger=available"
 
 # ══ STALENESS — every exit-3 branch escalates, not just V2 ════════════════════════════════════
 # Scoping the clock to V2 would leave a STRUCTURALLY BROKEN probe parked on V3 / V5 / the integer
@@ -699,7 +712,7 @@ fi
 # block together with its THRESHOLD BINDINGS; a floor whose threshold is a bare literal is
 # unconstructible, so the suite silently leaves that meta-guard's covered population. The VALUE
 # stays a literal: binding it to a variable expansion re-creates the same unconstructible shape.
-MIN_CASES=36
+MIN_CASES=44
 if (( cases < MIN_CASES )); then
   # PHRASING IS LOAD-BEARING, not style. guard-vacuity-floor.test.sh classifies a mutant as FIRES
   # only when its output carries a floor-shaped sentinel from a fixed vocabulary; `only %s cases

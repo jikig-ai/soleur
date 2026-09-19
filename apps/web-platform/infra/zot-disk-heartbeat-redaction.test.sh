@@ -179,16 +179,30 @@ EOF
 
 # `-inso NAME` ONLY: -i (ASCII glyphs) and -s (inverse tree) with NO -d are the invariant the
 # leaf count rests on, so a mutant that drops either must not get an answer out of this stub.
+# PER-SUBJECT, like blkid below. Validating only the FLAG shape leaves the stub answering the
+# same tree whatever device it is asked about -- so the emitter could walk a hardcoded /dev/sda,
+# or (worse) the DECLARED expected alias, and stay green. The second makes store_mount_devid
+# equal store_expected_devid BY CONSTRUCTION, so the probe's devid_mismatch disjunct -- the whole
+# "is the store on the volume we declared?" question -- could never fire on a live host while
+# every suite passed. HB_LSBLK_SUBJ pins which device the walk must ask about (#8386 review).
 cat > "$BIN/lsblk" <<'EOF'
 #!/usr/bin/env bash
 [[ "$1" == "-inso" && "$2" == "NAME" && -n "${3:-}" ]] || { echo "lsblk stub: unexpected argv: $*" >&2; exit 64; }
+if [[ -n "${HB_LSBLK_SUBJ:-}" && "$3" != "$HB_LSBLK_SUBJ" ]]; then
+  echo "lsblk stub: walked '$3' but the fixture only maps '$HB_LSBLK_SUBJ'" >&2; exit 64
+fi
 [[ -n "${HB_LSBLK_OUT:-}" ]] && printf '%s\n' "$HB_LSBLK_OUT"
 exit "${HB_LSBLK_RC:-0}"
 EOF
 
+# PER-SUBJECT for the same reason: `cryptsetup status <name>` must be asked about the mapper the
+# store is actually mounted from, not a hardcoded name.
 cat > "$BIN/cryptsetup" <<'EOF'
 #!/usr/bin/env bash
 [[ "$1" == "status" && $# -eq 2 && -n "$2" ]] || { echo "cryptsetup stub: unexpected argv: $*" >&2; exit 64; }
+if [[ -n "${HB_CRYPT_SUBJ:-}" && "$2" != "$HB_CRYPT_SUBJ" ]]; then
+  echo "cryptsetup stub: asked about '$2' but the fixture only maps '$HB_CRYPT_SUBJ'" >&2; exit 64
+fi
 [[ -n "${HB_CRYPT_OUT:-}" ]] && printf '%s\n' "$HB_CRYPT_OUT"
 exit "${HB_CRYPT_RC:-0}"
 EOF
@@ -231,13 +245,26 @@ for _m in findmnt lsblk cryptsetup blkid; do cp "$BIN/$_m" "$BIN/sbin/$_m"; done
 # and blkid, every five minutes. So the script ships two LITERALS and the seams live HERE, in the
 # same render step that already substitutes the template variables above. Applied after the
 # bash -n / no-unrendered-interpolation assertions, because neither literal is TF interpolation.
-sed -i "s|/usr/sbin:/sbin|$BIN/sbin|g" "$HB"
+# The PATH assignment is substituted WHOLE, not by its sbin suffix. The shipped form PREPENDS
+# the trusted dirs and only appends the inherited value ($${PATH:+:$$PATH}), which is the point
+# of the #8386 review fix: a `PATH` secret in the config store can no longer win first
+# resolution. That also means the harness can no longer inject stubs THROUGH the environment --
+# the real /usr/bin would beat them -- so the seam has to replace the whole line.
+sed -i "s|^PATH=.*|PATH=\"$BIN:$BIN/sbin:\$PATH\"|" "$HB"
 sed -i "s|/dev/disk/by-id/|$TMP/by-id/|g" "$HB"
 # Non-vacuity for BOTH seams: if either literal is renamed in the template these substitutions
 # silently no-op and the sbin-only / devid cases would pass against an unseamed script.
 PHASE=posture   # both seams belong to the #8386 property, not to the #7500 floor
-assert "T1 sbin seam landed (the shipped PATH append now points at the stub sbin dir)" \
-  "grep -qF 'PATH=\"\$PATH:$BIN/sbin\"' '$HB'"
+assert "T1 PATH seam landed (the stub dirs now win first resolution)" \
+  "grep -qF 'PATH=\"$BIN:$BIN/sbin:\$PATH\"' '$HB'"
+# The RENDERED copy deliberately still inherits, so per-case `PATH=` overrides (the no-jq tier-4
+# cases) keep working. The SHIPPED template must NOT: it prepends the trusted dirs so a `PATH`
+# secret in the config store cannot win first resolution as root. That property belongs to the
+# template, so it is asserted against the template here rather than against this rendered copy.
+assert "the SHIPPED template prepends trusted dirs (a PATH secret cannot win first resolution)" \
+  "grep -qF 'PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\$\${PATH:+:\$\$PATH}\"' '$CI_YML'"
+assert "the SHIPPED template pins LC_ALL=C (the guards below are locale-defined character classes)" \
+  "grep -qF 'export LC_ALL=C' '$CI_YML'"
 assert "T1 by-id seam landed (the shipped reverse map now walks the fixture dir)" \
   "grep -qF '$TMP/by-id/scsi-0HC_Volume_' '$HB'"
 PHASE=redact
@@ -315,9 +342,19 @@ _head_tokens_ok() {
   return 0
 }
 
+# DERIVED from the LINE= assembly, never restated. A hand-listed set is a claim about which
+# fields exist, and it is wrong the moment one is added: `store_mount_base` was emitted in the
+# #8386 review and sat OUTSIDE this check until the review's structural-enumeration seat found
+# it, because the list said five and the row carried six. Deriving means a new posture field
+# joins the trusted-region ordering requirement by existing.
+POSTURE_FIELDS="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI_YML" | head -1 \
+  | grep -oE 'store_[a-z_]+=' | sed 's/=$//' | sort -u)"
+[ -n "$POSTURE_FIELDS" ] || { printf '  FATAL: derived ZERO posture fields from LINE= -- the extraction broke, so every ordering assertion below would pass vacuously.\n' >&2; exit 2; }
+POSTURE_FIELD_N="$(printf '%s\n' "$POSTURE_FIELDS" | wc -l | tr -d ' ')"
+[ "$POSTURE_FIELD_N" -ge 6 ] || { printf '  FATAL: derived only %s posture field(s); the floor is 6 (fix the emitter, do not lower this).\n' "$POSTURE_FIELD_N" >&2; exit 2; }
 _posture_fields_in_head() {
   local f
-  for f in store_mount_src store_backing_dev store_mount_devid store_expected_devid store_luks; do
+  for f in $POSTURE_FIELDS; do
     case " $HEAD " in *" $f="*) : ;; *) return 1 ;; esac
   done
   return 0
@@ -345,7 +382,7 @@ posture_case() {
   assert "$name | the heartbeat exits 0 (the 5-min cron must never wedge)" "[ $HB_EXIT -eq 0 ]"
   assert "$name | every trusted-head token is key=<non-empty>, no space/quote/backslash" \
     "_head_tokens_ok"
-  assert "$name | all five posture fields precede ' zot_last_err='" "_posture_fields_in_head"
+  assert "$name | all $POSTURE_FIELD_N posture fields precede ' zot_last_err='" "_posture_fields_in_head"
 }
 
 # assert_field <name> <key> <expected> -- EXACT TOKEN equality on the trusted head.
@@ -605,8 +642,15 @@ CRYPT_PLAIN="/dev/mapper/vgroot-lv is active.
 set_byid "$EXP_DEVID:sdb"
 
 # --- E1 healthy: mapper over a LUKS volume on the declared alias ---------------------------
+# SUBJECT-PINNED. Without HB_LSBLK_SUBJ/HB_CRYPT_SUBJ the stubs answer the same tree whatever
+# device they are asked about, so three mutations of the emitter stayed green: walking a
+# hardcoded /dev/sda, asking cryptsetup about a hardcoded name, and -- the dangerous one --
+# walking the DECLARED expected alias, which makes store_mount_devid == store_expected_devid by
+# construction and renders the probe's devid_mismatch disjunct unfirable on a live host while
+# every suite passes. These two pins kill all three (#8386 review, test-design seat R1/R2/R2b).
 posture_case "P-healthy" \
   HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_SUBJ="/dev/mapper/registry" HB_CRYPT_SUBJ="registry" \
   HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
   HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
 assert_field "P-healthy src"      store_mount_src      "/dev/mapper/registry"
@@ -867,7 +911,7 @@ fi
 # ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
 # redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
 CASES_REDACT_MIN=39
-CASES_POSTURE_MIN=162
+CASES_POSTURE_MIN=165
 if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
     "$CASES_REDACT" "$CASES_REDACT_MIN" >&2
