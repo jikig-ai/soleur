@@ -305,8 +305,15 @@ fi
 #
 # Per-root emitter: the exemplar `emit` above is bound to the first root's $log,
 # and case 25 needs two sessions in one root with A earlier than B.
-emit_to() { printf '{"schema":1,"ts":"%s","skill":"soleur:%s","session_id":"%s","hook_event":"PreToolUse"}\n' "$2" "$3" "$4" >> "$1/.claude/.skill-invocations.jsonl"; }
-new_root() { local r="$TMP_ROOT/$1"; mkdir -p "$r/.claude"; cp "$ROOT/.claude/workflow-transitions.json" "$r/.claude/"; printf '%s' "$r"; }
+emit_to() {
+  assert_fixture_dir "$1"
+  printf '{"schema":1,"ts":"%s","skill":"soleur:%s","session_id":"%s","hook_event":"PreToolUse"}\n' "$2" "$3" "$4" >> "$1/.claude/.skill-invocations.jsonl"
+}
+new_root() {
+  local r="$TMP_ROOT/$1"
+  assert_fixture_dir "$r"
+  mkdir -p "$r/.claude"; cp "$ROOT/.claude/workflow-transitions.json" "$r/.claude/"; printf '%s' "$r"
+}
 
 # --- 17. the designed handoff pairs as brainstorm -> plan --------------------
 R17=$(new_root sub17)
@@ -436,6 +443,7 @@ fi
 V26_OK=1
 for shape in missing null list; do
   R26=$(new_root "sub26-$shape")
+  assert_fixture_dir "$R26"
   case "$shape" in
     missing) jq 'del(.sub_steps)' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
     null)    jq '.sub_steps = null' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
