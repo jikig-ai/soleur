@@ -43,6 +43,7 @@ const HARNESS_ENV_KEYS = [
   "GROK_AGENT",
   "GROK_DEFAULT_MODEL",
   "GROK_SUBAGENTS",
+  "CODEX_THREAD_ID",
 ] as const;
 
 let savedHarnessEnv: Record<string, string | undefined>;
@@ -170,6 +171,45 @@ describe("workflow-fidelity contract", () => {
     expect(inv.instruction).toContain("Do NOT ask the operator");
   });
 
+  // arch F3 (#8299): the fidelity suffix used to emit the grok slash on EVERY harness, so
+  // `invokeSkill("ship")` on Codex said "invoke /postmerge" — the #8299 class emitted by the
+  // module ADR-226 names as the renderer. Each harness now receives its own form.
+  test("ship invokeSkill on Codex names $soleur:postmerge, never the grok slash", () => {
+    process.env.CODEX_THREAD_ID = "thread-1";
+    const inv = invokeSkill("ship", "");
+    expect(inv.harness).toBe("codex");
+    expect(inv.instruction).toContain("$soleur:postmerge");
+    expect(inv.instruction).not.toContain("/postmerge");
+  });
+
+  // Every branch of pipelineInvocationSuffix, not only `ship`: the first battery's N13 reverted
+  // the one-shot branch and the ship-only assertion above survived it.
+  test.each(["one-shot", "brainstorm", "plan", "work", "ship", "review", "compound"])(
+    "%s invokeSkill on Codex carries no grok slash form of a pipeline skill",
+    (skill) => {
+      process.env.CODEX_THREAD_ID = "thread-1";
+      const inv = invokeSkill(skill, "");
+      expect(inv.harness).toBe("codex");
+      expect(inv.instruction).not.toMatch(/(^|[^$\w:/])\/(postmerge|ship|plan|one-shot|work|review|qa|compound|brainstorm)\b/);
+    },
+  );
+
+  test("work invokeSkill on Claude names the canonical tail, never the grok slash", () => {
+    process.env.CLAUDECODE = "1";
+    const inv = invokeSkill("work", "");
+    expect(inv.harness).toBe("claude");
+    expect(inv.instruction).toContain("soleur:review → soleur:compound → soleur:ship → soleur:postmerge");
+    expect(inv.instruction).not.toContain("/review");
+  });
+
+  test("fidelity instructions render the successor chain per harness", () => {
+    expect(workflowFidelityInstructions("codex")).toContain("`plan` → `$soleur:work`");
+    expect(workflowFidelityInstructions("devin")).toContain("`plan` → `/soleur:work`");
+    expect(workflowFidelityInstructions("claude")).toContain("`plan` → `soleur:work`");
+    expect(workflowFidelityInstructions("grok")).toContain("`plan` → `/work`");
+    expect(workflowFidelityInstructions("codex")).not.toContain("`/postmerge`");
+  });
+
   test("brainstorm invokeSkill stresses handoff on Grok", () => {
     process.env.GROK_HOME = "/home/user/.grok";
     const inv = invokeSkill("brainstorm", "explore auth redesign");
@@ -236,7 +276,10 @@ describe("workflow-fidelity sentinel markers in skills", () => {
   test("plan SKILL.md contains anti-bypass protocol", () => {
     const skill = readFileSync(resolve(PLUGIN_ROOT, "skills/plan/SKILL.md"), "utf-8");
     expect(skill).toContain(PLAN_ANTI_BYPASS_SENTINEL);
-    expect(skill).toContain("/work");
+    // The canonical id, not the grok slash: plugin docs name skills as `soleur:<name>` and the
+    // adapter renders the harness form (ADR-226). The old `/work` pin would have survived
+    // remediation only because the doc names `work/SKILL.md` inside a path (CTO #6a).
+    expect(skill).toContain("soleur:work");
   });
 
   test("work SKILL.md contains anti-bypass protocol", () => {
@@ -389,6 +432,13 @@ describe("workflow-fidelity sentinel markers in skills", () => {
 
 const IN_PROCESS_READ = /in this process/i;
 const ADAPTER_CITE = /harness\.ts|invokeSkill/;
+// ADR-226: the preamble carries the general rule, because a skill entered directly on Grok has
+// only its preamble in context (spec-flow #1). Pinned here, where the carriers already are.
+const CANONICAL_NAME_RULE = /a one-segment `soleur:<name>` in this document names a SKILL/i;
+// The carve-out is the load-bearing half: these 12 docs carry 325+ AGENT ids between them
+// (review alone has 188), and read literally the earlier skill-only wording told a Grok agent
+// to Read `plugins/soleur/skills/engineering:review:security-sentinel/SKILL.md`.
+const AGENT_CLAUSE = /names an AGENT: spawn it, never Read it/;
 const LOCKED_PIPELINE_SKILLS = [
   "one-shot",
   "brainstorm",
@@ -419,6 +469,8 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
       expect(body).toMatch(ADAPTER_CITE);
       expect(body).toMatch(IN_PROCESS_READ);
       expect(body).toContain("SKILL.md");
+      expect(body).toMatch(CANONICAL_NAME_RULE);
+      expect(body).toMatch(AGENT_CLAUSE);
     },
   );
 
@@ -663,6 +715,8 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     }
   });
 
+  // `harness` is required (no default — a default silently reproduced the #8299 defect);
+  // the back-edge property is harness-agnostic, so grok is pinned here as the literal-slash form.
   test("the rendered directive never names a back-edge", () => {
     // pipelineInvocationSuffix is the emitter of "invoke next:"; the first
     // version of this test negated that string against
@@ -671,14 +725,14 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     // the same emitter for the node that carries a back-edge.
     // review and compound take the generic "invoke next:" branch; plan, work
     // and ship carry bespoke prose. Each is anchored on the string it emits.
-    expect(pipelineInvocationSuffix("review")).toContain("invoke next: /compound");
-    expect(pipelineInvocationSuffix("review")).not.toContain("/work");
-    expect(pipelineInvocationSuffix("compound")).toContain("invoke next: /ship");
-    expect(pipelineInvocationSuffix("compound")).not.toContain("/work");
-    expect(pipelineInvocationSuffix("work")).toContain("/review");
-    expect(pipelineInvocationSuffix("work")).not.toContain("/plan");
-    expect(pipelineInvocationSuffix("ship")).toContain("/postmerge");
-    expect(pipelineInvocationSuffix("ship")).not.toContain("/work");
+    expect(pipelineInvocationSuffix("review", "grok")).toContain("invoke next: /compound");
+    expect(pipelineInvocationSuffix("review", "grok")).not.toContain("/work");
+    expect(pipelineInvocationSuffix("compound", "grok")).toContain("invoke next: /ship");
+    expect(pipelineInvocationSuffix("compound", "grok")).not.toContain("/work");
+    expect(pipelineInvocationSuffix("work", "grok")).toContain("/review");
+    expect(pipelineInvocationSuffix("work", "grok")).not.toContain("/plan");
+    expect(pipelineInvocationSuffix("ship", "grok")).toContain("/postmerge");
+    expect(pipelineInvocationSuffix("ship", "grok")).not.toContain("/work");
   });
 
   // Typo guard: every destination must itself be a declared node, so a mistyped

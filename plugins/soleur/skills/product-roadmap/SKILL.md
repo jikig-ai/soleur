@@ -1,6 +1,6 @@
 ---
 name: product-roadmap
-description: "This skill should be used when roadmapping. Sub-commands: validate (read-only roadmap-vs-GitHub-milestone drift report) and next (advisory next-action, routes to /soleur:go or names an operator action)."
+description: "This skill should be used when roadmapping. Sub-commands: validate (read-only roadmap-vs-GitHub-milestone drift report) and next (advisory next-action, routes to soleur:go or names an operator action)."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -33,7 +33,7 @@ Run the shared module ([roadmap-reconcile.sh](./scripts/roadmap-reconcile.sh)) f
 bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh validate
 ```
 
-It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the same vocabulary the roadmap-review cron uses) and exits non-zero on drift. Relay the report verbatim. When drift is found, the report already names the remediation — trigger the roadmap-review cron (`/soleur:trigger-cron cron/roadmap-review.manual-trigger`), which opens a reviewed PR. Do **not** edit `roadmap.md` from this skill.
+It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the same vocabulary the roadmap-review cron uses) and exits non-zero on drift. Relay the report verbatim. When drift is found, the report already names the remediation — trigger the roadmap-review cron (`soleur:trigger-cron cron/roadmap-review.manual-trigger`), which opens a reviewed PR. Do **not** edit `roadmap.md` from this skill.
 
 ### Sub-command: next
 
@@ -43,7 +43,7 @@ Report the single next action for the first incomplete roadmap phase. **Read-onl
 bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next
 ```
 
-It finds the first phase with open issues, picks the lowest-numbered open issue (deterministic tie-break), and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `/soleur:go #N`; an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly; an empty milestone yields an explicit "no actionable next item". Relay the output. **Never** invoke `/soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
+It finds the first phase with open issues, picks the lowest-numbered open issue (deterministic tie-break), and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `soleur:go #N` (rendered as the active harness's operator-typed form per `formatSkillInvocation` before printing); an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly; an empty milestone yields an explicit "no actionable next item". Relay the output. **Never** invoke `soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
 
 ## Roadmap Context
 
@@ -82,7 +82,7 @@ gh api repos/{owner}/{repo}/milestones --jq '.[] | {title, open_issues, closed_i
 
 **Present Context Summary.** Display a table of what was found and what is missing. If an existing `roadmap.md` was found, ask whether to update it or start fresh. In headless mode: default to "Update existing" if found, "Start fresh" if not.
 
-**Fill gaps.** For each missing critical artifact, ask a brief targeted question or suggest running the relevant specialist agent (competitive-intelligence for competitive gaps, business-validator for validation gaps). In headless mode: skip gap-filling, proceed with available context.
+**Fill gaps.** For each missing critical artifact, ask a brief targeted question or suggest running the relevant specialist agent (soleur:product:competitive-intelligence for competitive gaps, soleur:product:business-validator for validation gaps). In headless mode: skip gap-filling, proceed with available context.
 
 ## Phase 0.5: CPO Pre-Analysis
 
@@ -234,7 +234,7 @@ Present an output summary listing the document path, milestones created, issues 
 **Ship and merge the roadmap.** The roadmap is a product decision, not a code change. Once the founder agrees, ship it through to merge:
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
-2. Use `/ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
+2. Use `soleur:ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
 3. After the PR is created, queue auto-merge under the merge-main lock. The `--` separator is required (terminates `with_lock`'s positional args).
 
    ```bash
@@ -259,18 +259,18 @@ Present an output summary listing the document path, milestones created, issues 
    ```
 
    rc=99 is reachable only from the LOCKED arm — the degrade-open arm runs `gh pr merge` bare, which has no lock semantics — so a run that emitted `reason=running-unlocked` queued its merge without serialisation rather than failing. Note 99 means "the lock could not be taken", which includes an unopenable lock file, not only >600s contention.
-4. Poll the PR using the Monitor tool with the same state machine as `/soleur:ship` Phase 7 (state+`mergeStateStatus`, BEHIND auto-sync capped at 6, required-check failure exit, DIRTY exit). Naive `gh pr view <number> --json state` is insufficient — it heartbeats silently through BEHIND / BLOCKED-with-CI-failure / DIRTY states. Reuse the loop body from `plugins/soleur/skills/ship/SKILL.md` Phase 7. **Precondition:** must run from inside a worktree (`git rev-parse --is-inside-work-tree`) — the BEHIND auto-sync uses `git merge origin/main && git push`.
+4. Poll the PR using the Monitor tool with the same state machine as `soleur:ship` Phase 7 (state+`mergeStateStatus`, BEHIND auto-sync capped at 6, required-check failure exit, DIRTY exit). Naive `gh pr view <number> --json state` is insufficient — it heartbeats silently through BEHIND / BLOCKED-with-CI-failure / DIRTY states. Reuse the loop body from `plugins/soleur/skills/ship/SKILL.md` Phase 7. **Precondition:** must run from inside a worktree (`git rev-parse --is-inside-work-tree`) — the BEHIND auto-sync uses `git merge origin/main && git push`.
 5. Run `cleanup-merged` to remove the worktree.
 
 Do not stop at "PR created" or "waiting for CI." The roadmap is not shipped until it is merged to main.
 
-**Next steps for the founder:** When ready to build a specific feature from the roadmap, run `/soleur:plan` on that individual feature (not the entire phase). Each feature gets its own plan, work, review, and ship cycle.
+**Next steps for the founder:** When ready to build a specific feature from the roadmap, run `soleur:plan` on that individual feature (not the entire phase). Each feature gets its own plan, work, review, and ship cycle.
 
 ```
-/soleur:product-roadmap → agree on roadmap → commit + PR + merge
+soleur:product-roadmap → agree on roadmap → commit + PR + merge
                                               ↓
                           then per feature:
-                          /soleur:plan → /soleur:work → /soleur:review → /soleur:ship
+                          soleur:plan → soleur:work → soleur:review → soleur:ship
 ```
 
-Do NOT suggest running `/soleur:plan` on an entire phase. Phases contain multiple independent features, each with their own scope, spec, and implementation. Planning a whole phase produces an unwieldy mega-plan.
+Do NOT suggest running `soleur:plan` on an entire phase. Phases contain multiple independent features, each with their own scope, spec, and implementation. Planning a whole phase produces an unwieldy mega-plan.

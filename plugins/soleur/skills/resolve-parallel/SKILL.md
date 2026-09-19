@@ -25,13 +25,13 @@ Create a TodoWrite list of all unresolved items grouped by type. Look at depende
 
 ### 3. Implement (PARALLEL)
 
-Spawn a pr-comment-resolver agent for each unresolved item in parallel.
+Spawn a soleur:engineering:workflow:pr-comment-resolver agent for each unresolved item in parallel.
 
-So if there are 3 items, spawn 3 pr-comment-resolver agents in parallel:
+So if there are 3 items, spawn 3 soleur:engineering:workflow:pr-comment-resolver agents in parallel:
 
-1. Task pr-comment-resolver(item1)
-2. Task pr-comment-resolver(item2)
-3. Task pr-comment-resolver(item3)
+1. Task soleur:engineering:workflow:pr-comment-resolver(item1)
+2. Task soleur:engineering:workflow:pr-comment-resolver(item2)
+3. Task soleur:engineering:workflow:pr-comment-resolver(item3)
 
 Always run all in parallel subagents/Tasks for each Todo item.
 

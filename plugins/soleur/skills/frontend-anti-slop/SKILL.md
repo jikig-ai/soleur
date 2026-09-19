@@ -13,7 +13,7 @@ A deterministic source-static audit for React/Next.js components that flags AI-d
 ## When this skill fires
 
 - Invoked by `soleur:review` when a PR touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$`. See `plugins/soleur/skills/review/SKILL.md § Anti-slop Scanner Hook`.
-- Manual: `/soleur:frontend-anti-slop --paths <files-or-dirs> [--dry-run|--json] [--rule <ID>]`.
+- Manual: `soleur:frontend-anti-slop --paths <files-or-dirs> [--dry-run|--json] [--rule <ID>]`.
 
 The scanner is **non-blocking by design** — exit code is 0 regardless of finding count. v1 ships in calibration mode: findings surface in PR review output for operator review, no auto-filing to GitHub issues. Calibration unlocks v1.5 (auto-file + Tier 2 agent) at ≤ 10% FP rate over ≥ 20 findings ≥ 2 weeks.
 

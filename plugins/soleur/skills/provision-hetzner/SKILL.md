@@ -46,7 +46,7 @@ The script:
 If this run provisions a persistent volume for the tenant, `hcloud_volume` carries no
 `encrypted` attribute -- encryption means the guest-side LUKS apparatus (`random_password` ->
 dedicated Doppler config -> `cryptsetup luksFormat` -> `/dev/mapper/*` mount; see
-terraform-architect's Hetzner/Cloudflare requirements). Do not complete the run without adding a
+soleur:engineering:infra:terraform-architect's Hetzner/Cloudflare requirements). Do not complete the run without adding a
 row to `encryption-posture-ledger.json` (repo-root `scripts/`) for the new volume: `at_rest.mechanism`
 (`luks` or a named `plaintext-exception` with `tracking_issue` + `expires_on`),
 `at_rest.evidence`, `at_rest.does_not_defend`, `at_rest.disclosed_as`, and

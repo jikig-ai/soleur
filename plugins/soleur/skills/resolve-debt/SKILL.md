@@ -5,9 +5,9 @@ description: "This skill should be used when triaging or closing open entries in
 
 # Resolve Tech-Debt Ledger Entries
 
-Operator-facing surface for the `knowledge-base/project/learnings/technical-debt/` ledger. The ledger is populated reactively by `/soleur:compound`; this skill is the read + close half of the loop.
+Operator-facing surface for the `knowledge-base/project/learnings/technical-debt/` ledger. The ledger is populated reactively by `soleur:compound`; this skill is the read + close half of the loop.
 
-Complement: [/soleur:harvest-debt](../harvest-debt/SKILL.md) surfaces inline `SOLEUR-DEBT:` markers in source code (the deferrals that have not yet been promoted into this ledger). harvest surfaces; compound promotes; this skill closes.
+Complement: [soleur:harvest-debt](../harvest-debt/SKILL.md) surfaces inline `SOLEUR-DEBT:` markers in source code (the deferrals that have not yet been promoted into this ledger). harvest surfaces; compound promotes; this skill closes.
 
 Four modes:
 
@@ -58,7 +58,7 @@ Prints a usage block enumerating the three modes; exit 0.
 
 ## Frontmatter Contract
 
-- `status`: required, enum `open | resolved | wont-fix`. Default `open` for new entries (set by `/soleur:compound`'s `resolution-template.md`).
+- `status`: required, enum `open | resolved | wont-fix`. Default `open` for new entries (set by `soleur:compound`'s `resolution-template.md`).
 - `linked_issue`: required when `status: resolved`; optional when `status: wont-fix`; forbidden when `status: open`. Stored as a YAML integer, no `#` prefix.
 
 Why `status` instead of "absence-of-`linked_issue`": `wont-fix` is the load-bearing discriminator of record. Without `status`, there is no way to express "we know about this debt and have decided not to fix it." Future schema simplification must preserve `status` for this reason.
