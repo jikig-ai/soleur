@@ -2162,6 +2162,7 @@ live-evidence
 live-probe
 live-repro
 live-verify
+livelock
 liveness
 llm
 llm integration tests
@@ -3118,6 +3119,7 @@ remediation
 remediation-tooling
 remote-exec
 rename
+rename-guard
 render-scrub
 render-sink-sweep
 render-tree
