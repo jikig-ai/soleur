@@ -25,6 +25,7 @@ on:
       - "apps/web-platform/infra/*.sh"
       - "apps/web-platform/test/infra/**"
       - ".github/workflows/validate-vector-config.yml"
+      - ".bun-version"
   pull_request:
     paths:
       - "apps/web-platform/infra/vector.toml"
@@ -36,6 +37,7 @@ on:
       - "apps/web-platform/infra/*.sh"
       - "apps/web-platform/test/infra/**"
       - ".github/workflows/validate-vector-config.yml"
+      - ".bun-version"
 
 permissions:
   contents: read

@@ -34,8 +34,15 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   exit 0
 fi
 
+# The in-image bun is the CI-pinned one (.bun-version, consumed by setup-bun in
+# ci.yml), so the probe runs on the same runtime as every other bun surface.
+# Read host-side: /src is apps/web-platform, and the pin lives at the repo root.
+BUN_VERSION="$(tr -d '[:space:]' < .bun-version)"
+export BUN_VERSION # `docker run -e NAME` reads the client ENVIRONMENT, not shell variables
+
 docker run --rm \
   -e ANTHROPIC_API_KEY \
+  -e BUN_VERSION \
   -v "$PWD/$APP_DIR:/src:ro" \
   "$IMG" bash -c '
     set -e
@@ -45,6 +52,6 @@ docker run --rm \
     bash /src/scripts/lib/in-image-copy-src.sh /src /build
     cd /build
     npm ci --no-audit --no-fund >/dev/null
-    npm i -g bun@1.3.11 >/dev/null
+    npm i -g "bun@${BUN_VERSION}" >/dev/null
     bun scripts/plugin-root-sandbox-propagation-probe.mjs
   '
