@@ -30,6 +30,8 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/rule-metrics-constants.sh
 source "$SCRIPT_DIR/lib/rule-metrics-constants.sh"
+# shellcheck source=lib/incidents-roots.sh
+source "$SCRIPT_DIR/lib/incidents-roots.sh"
 
 REPO_ROOT="${INCIDENTS_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
@@ -54,13 +56,28 @@ OUT="$REPO_ROOT/knowledge-base/project/rule-metrics.json"
 # seeing an empty log. Never widen past it.
 INCIDENTS_DIRS=("$REPO_ROOT/.claude")
 if [[ -z "${INCIDENTS_REPO_ROOT:-}" ]]; then
-  _common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)"
-  if [[ -n "$_common_dir" ]]; then
-    case "$_common_dir" in /*) : ;; *) _common_dir="$REPO_ROOT/$_common_dir" ;; esac
-    _shared_root="$(cd "$_common_dir/.." 2>/dev/null && pwd || true)"
-    if [[ -n "$_shared_root" && "$_shared_root/.claude" != "$REPO_ROOT/.claude" ]]; then
-      INCIDENTS_DIRS+=("$_shared_root/.claude")
-    fi
+  # EVERY ROOT, ONCE (#8029 -> #8302). A session running in ANY worktree writes
+  # to that worktree's own .claude. `git worktree list` yields the main worktree
+  # (which is also what --git-common-dir/.. resolved to before #8302) and every
+  # sibling; scripts/lib/incidents-roots.sh dedupes them BY INODE, NOT BY
+  # STRING, because the same directory reaches this list under different
+  # spellings, and an un-deduped union cats one log twice into a commutative
+  # reduce where the inflation is invisible. Measured 2026-09-18 on one
+  # machine: 23,882 rows readable from the two pre-#8302 roots against 11,346
+  # stranded across 34 sibling roots -- 32% of the corpus, reported as the
+  # whole. (Point-in-time; the brainstorm and learning carry the derivation.)
+  _deduped=()
+  while IFS= read -r -d '' _d; do
+    [[ -n "$_d" ]] || continue
+    _deduped+=("$_d")
+  done < <(incidents_enumerate_log_roots "$REPO_ROOT")
+  # PIN ELEMENT 0. AGGREGATOR_ROTATE truncates INCIDENTS_DIRS[0]; dedupe drops a
+  # non-existent dir, so on a fresh checkout with no .claude yet the repo root
+  # could vanish and a SIBLING's live log be promoted into the rotation slot.
+  if [[ ${#_deduped[@]} -eq 0 || "${_deduped[0]}" != "$REPO_ROOT/.claude" ]]; then
+    INCIDENTS_DIRS=("$REPO_ROOT/.claude" ${_deduped[@]+"${_deduped[@]}"})
+  else
+    INCIDENTS_DIRS=("${_deduped[@]}")
   fi
 fi
 INCIDENTS="${INCIDENTS_DIRS[0]}/.rule-incidents.jsonl"
@@ -157,7 +174,30 @@ INCIDENTS_MERGED="$_tmpdir/incidents-merged.jsonl"
 # rotated archive within each. Counts are commutative and first_seen/last_hit
 # come from event timestamps, so order does not matter.
 for _dir in "${INCIDENTS_DIRS[@]}"; do
-  [[ -s "$_dir/.rule-incidents.jsonl" ]] && cat "$_dir/.rule-incidents.jsonl" >> "$INCIDENTS_MERGED"
+  # `|| true` is load-bearing (#8302). Under `set -euo pipefail` the `cat` is the
+  # LAST member of this AND-OR list, so unlike the `[[ -s ]]` test its failure DOES
+  # trip errexit and aborts the whole aggregation. Widening the root set above makes
+  # another user's worktree reachable for the first time, so an EACCES here would
+  # take down a run that should simply skip that root.
+  # A root that is ENUMERATED but UNREADABLE must say so. `[[ -s ]]` is true for
+  # a mode-000 log (size is a stat, not a read), the `cat` then fails and is
+  # swallowed by the `|| true` above, and that root contributes zero rows while
+  # `_found_any` counts it as found -- so the null-reading sentinel is suppressed
+  # exactly when a root vanished from the corpus. One line to stderr, no abort.
+  # An enumerated dir that cannot be SEARCHED hides its files from `[[ -s ]]`
+  # entirely (a mode-000 .claude), so the file-level sentinel below never
+  # fires for it. Say so at the directory level first.
+  if [[ -d "$_dir" && ! -x "$_dir" ]]; then
+    echo "SOLEUR_RULE_METRICS_ROOT_UNREADABLE root=$_dir — enumerated but not searchable; its rows are ABSENT from this aggregate" >&2
+    continue
+  fi
+  if [[ -s "$_dir/.rule-incidents.jsonl" ]]; then
+    if [[ -r "$_dir/.rule-incidents.jsonl" ]]; then
+      cat "$_dir/.rule-incidents.jsonl" >> "$INCIDENTS_MERGED" || true
+    else
+      echo "SOLEUR_RULE_METRICS_ROOT_UNREADABLE root=$_dir — enumerated but not readable; its rows are ABSENT from this aggregate" >&2
+    fi
+  fi
   for _gz in "$_dir"/.rule-incidents-*.jsonl.gz; do
     [[ -e "$_gz" ]] || continue
     zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
@@ -182,7 +222,26 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
   # #3509 plan Sharp Edge #2). select(.rule_id != null) drops sentinels —
   # they have `error` but no `rule_id`, and entering the reduce would create
   # a `"null"` key that poisons $known_ids and trips the orphan gate.
-  valid_stream=$(jq -R 'fromjson? | select(.) | select(.schema == 1) | select(.rule_id != null)' \
+  #
+  # SHAPE-GATED, NOT MERELY NON-NULL (#8302 review). `rule_id` is the one field
+  # every downstream key is built from -- non_corpus_counts, orphan_rule_ids,
+  # hook_input_fault_reasons all use it VERBATIM as an object key in the
+  # COMMITTED aggregate. With the read widened to sibling worktrees, any row a
+  # session this checkout does not control writes can therefore put free text
+  # (a path, an identity string, an embedded newline) into a public file
+  # through a key name, satisfying the CLO condition by the letter (no new
+  # FIELD) and defeating it in substance. Measured at review: a row with
+  # rule_id "gh pr merge 123 --body \"user@example.com /home/user/secret\""
+  # committed that string as a non_corpus_counts key, and a row with
+  # `"rule_id":123` aborted the whole aggregation (jq: Cannot index object with
+  # number). A closed alphabet -- the corpus id shape plus the documented
+  # emitter-family prefixes -- closes all three in one place.
+  valid_stream=$(jq -R 'fromjson? | select(.) | select(.schema == 1)
+      | select((.rule_id | type) == "string" and (.rule_id | test("^[A-Za-z0-9._-]{1,128}$")))
+      # `timestamp` is copied VERBATIM into rules[].first_seen / last_hit of the
+      # committed file (the reduce below), so it is a second free-text channel
+      # into a public artifact. Same closed shape: RFC 3339 UTC, nothing else.
+      | select((.timestamp | type) == "string" and (.timestamp | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))' \
     < "$INCIDENTS_MERGED" 2>/dev/null || echo "")
   valid_lines=0
   if [[ -n "$valid_stream" ]]; then
@@ -204,7 +263,8 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
       | select(length > 0)
       | (fromjson? // empty)
       | select(.schema == 1)
-      | select(.error != null)
+      # Same closed alphabet as rule_id above: `error` becomes a key too.
+      | select((.error | type) == "string" and (.error | test("^[A-Za-z0-9._-]{1,128}$")))
     ]
     | reduce .[] as $e ({};
         .[$e.error] = ((.[$e.error] // 0) + 1)

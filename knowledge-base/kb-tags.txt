@@ -368,6 +368,7 @@ audit-logging
 audit-pattern
 audit-surface-coverage
 audit-trail
+audit-verification
 audit-writer
 auth
 auth-chain
@@ -1093,6 +1094,7 @@ debounce
 debugging
 decision-archaeology
 decision-challenge
+decision-challenges
 decision-ladder
 decision-recording
 decision-routing
@@ -1189,6 +1191,7 @@ detector-design
 determination
 determinism
 deterministic
+deterministic-lints
 dev-db
 dev-environment
 dev-prod-divergence
@@ -1555,6 +1558,7 @@ fixture-cardinality
 fixture-design
 fixture-direction
 fixture-fidelity
+fixture-identity
 fixture-population
 fixture-provenance
 fixture-redaction
@@ -1784,6 +1788,7 @@ guard-design
 guard-equals-claim
 guard-erosion
 guard-itself-dark
+guard-placement
 guard-residue
 guard-test
 guard-testing
@@ -1851,6 +1856,7 @@ hmac
 honest-reporting
 honesty-surface
 hook
+hook-bypass
 hook-design
 hook-test-isolation
 hook-timeout
@@ -1964,6 +1970,7 @@ installation-detection
 installation-id
 installation-takeover
 installation-token
+instance-vs-class
 instrument-error
 instrument-failure
 instrument-vacuity
@@ -2428,6 +2435,7 @@ notifications
 npm
 npm-packaged-binary
 npx
+nul-framing
 null
 null-delimited
 null-test
@@ -2536,6 +2544,7 @@ ownership-transfer
 p1s
 pa8-disclosure
 package-install
+packaging-boundary
 page
 paginate
 pagination
@@ -2921,6 +2930,7 @@ prompt-injection-mitigation
 prompt-injection-of-context
 prompt-injection-substitution
 prompt-structure
+prompt-text-vs-state
 promptfoo
 prop-vs-state
 prop-wiring
@@ -3149,6 +3159,7 @@ restatement
 restructure
 resume
 resume-from-memory
+resume-not-respawn
 resume-session
 retention
 retired-rules
@@ -3474,6 +3485,7 @@ session-key
 session-management
 session-manifest
 session-persistence
+session-rate-limit
 session-resume
 session-rules-loader
 session-start
@@ -3681,6 +3693,7 @@ stale
 stale mcp binary path after extension update
 stale worktree
 stale worktrees persist after cleanup-merged reports success
+stale-artifacts
 stale-bits
 stale-claim
 stale-claim-sweep
