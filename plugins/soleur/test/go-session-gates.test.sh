@@ -192,10 +192,16 @@ mk_workspace() {
   local dir="$1"
   assert_fixture_dir "$dir"
   mkdir -p "$dir"
-  if ! git_fixture_env "$dir"; then
+  # `name || { … }`, not `if ! name; then`. Both are CHECKED calls and Guard 5's assertion 4
+  # accepts either, but fixture-env-adoption.test.sh's out-of-scope counter derives helper
+  # calls with `(^|[;&|`]|$\()[[:space:]]*git_fixture_env`, which the `if ! ` prefix defeats --
+  # so the `if` form reads as adoption to one arm of that file and as NON-adoption to the
+  # other, and the second arm is the one with the ratchet. Measured: it took the ceiling
+  # 25 -> 26.
+  git_fixture_env "$dir" || {
     echo "FATAL: git_fixture_env refused to build an environment for $dir" >&2
     exit 2
-  fi
+  }
   git -C "$dir" init -q -b main
   cat > "$dir/.mcp.json" <<'MCP_EOF'
 {"fixture":"main"}
