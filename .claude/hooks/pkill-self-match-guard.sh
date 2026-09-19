@@ -79,10 +79,10 @@
 # (`2>&1`'s `&` is a redirect, not a terminator). Each stage's first word is
 # normalised — a leading `\`, a directory prefix, and `command`/`env`/`exec`/
 # `nice`/`time`/`timeout`/`nohup`/`stdbuf`/`sudo`/`VAR=x` prefixes are dropped —
-# and the walk continues while the word is a grep-family matcher (grep, egrep,
-# fgrep, rg, ugrep, ug, ag, zgrep, rgrep) or an awk (awk, gawk, mawk, nawk). Each
-# matcher stage's pattern is run against MODEL with its own flavour (-G/-E/-F,
-# -i/-w/-x): a non-`-v` stage that matches keeps the wrapper alive; a `-v` stage
+# and the walk continues while the word is grep/egrep/fgrep/rg or awk (gawk,
+# ugrep, ag …: nobody types them here; `rgrep` ignores stdin). Each matcher
+# stage's pattern is run against MODEL with the grep argv the parser built
+# (flavour, -i/-w/-x): a non-`-v` stage that matches keeps the wrapper alive; a `-v` stage
 # that matches, or a non-`-v` stage that does not, FILTERS the wrapper and the
 # pipeline is safe. A grep whose output is not lines (`-c` `-o` `-l` `-L` `-q`)
 # ENDS the walk with the verdict so far — a later `| grep -v grep` filters a
@@ -110,9 +110,8 @@
 # carries x (`-aux`, `-ax`), a Unix bundle carries f/F (`-ef`, `-F`), or
 # -o/-O/--format names args|cmd|command (quoted, `=`-suffixed or `:width`
 # forms included). `comm`-only, bare `-e`, `-l` are name-only (no self-match,
-# like pgrep without -f). Options that take a value (`-C` `-u` `-U` `-g` `-G`
-# `-t` `-s` `-p` `-q` `--sort` `--user` `--group` `--tty` `--sid` `--pid`
-# `--ppid`) consume it, so `ps -C bash -o comm` is name-only. A ps restricted to
+# like pgrep without -f). Options that take a value consume it (each is
+# commented in `classify_ps`), so `ps -C bash -o comm` is name-only. A ps restricted to
 # named pids (-p/--pid/-q/--quick-pid) is exempt — the one ps that cannot list
 # the wrapper (`--ppid` is NOT exempt: the wrapper is a child of `$PPID`).
 # `-C bash` is not a pid restriction (the wrapper's comm is bash); `-u`/`-t`/`-s`
@@ -145,9 +144,7 @@
 #     ends there, fail-open).
 #   * a `;`/`&`/`(` boundary inside a quoted string denies (the boundary regex
 #     does not track quotes) — an accepted FALSE DENY, suite row D19; the reason
-#     is self-explaining. A long flag taking a separate argument before the
-#     pattern (`--max-count 1 '[t]est'`) also denies (the argument is read as
-#     the pattern and is in the model) — same class.
+#     is self-explaining.
 #   * awk: `!~` is read as a match (false deny); `IGNORECASE` is ignored; a
 #     `/re/` after `=` (`{c+=/re/}`) or a string regex (`$0 ~ "re"`) is not seen
 #     (false allow); `-F' '` / `-W posix` attached forms mis-tokenize.
@@ -173,13 +170,12 @@
 #     neither arm runs there; the plugin ships no copy under plugins/soleur/hooks.
 #
 # Idioms new to this hook set, named so the next reader does not "fix" them:
-# the ps walk is a `while [[ "$rest" =~ … ]]; do …; rest="${rest#*"$m"}"; done`
-# consumption loop (siblings iterate `grep -o | while read`); `split_pipeline`
-# and `next_tok` are cursor tokenizers over globals (TOK_SRC/TOK/TOK_QUOTED,
-# STAGES) rather than `$( )` captures, because a function called as `x=$(fn)`
-# runs in a subshell and cannot report a parse failure through globals.
-# `${BASH_REMATCH[2]-}` is defensive only — bash sets non-participating groups
-# to the empty string — so the `-` default guards nothing today.
+# the ps walk is a literal `${rest/ps*/}` + substring cursor (siblings iterate
+# `grep -o | while read`); `split_pipeline` and `next_tok` are cursor
+# tokenizers over globals (TOK_SRC/TOK, STAGES) rather than `$( )` captures,
+# because a function called as `x=$(fn)` runs in a subshell and cannot report a
+# parse failure through globals (`classify_ps` has a one-bit outcome, so it is
+# a return code).
 #
 # Telemetry: the read-only arm emits rule id `pkill-self-match-guard-readonly`
 # through lib/incidents.sh (fail-soft); the -f arm emits none — its behaviour
@@ -235,18 +231,16 @@ RE_PS_QUICK="(^|[^A-Za-z0-9_.-])ps([[:space:]]|\\|)"
 # &, |, ;, {, ,) — not the `/` inside a string like "scripts/test-all.sh".
 RE_AWK='(^|[[:space:]~!(&|;{,])/([^/]+)/'
 
-# Stage-simulation state, reset by every sim_* entry. S_ = "stage".
-S_PAT=""; S_FLAV=G; S_INV=0; S_CI=0; S_W=0; S_X=0; S_TERM=0
-# ps classification, set by classify_ps.
-PS_ARGS=0; PS_PID=0
-
-# $1 = the ps stage's flag text. Sets PS_ARGS (full command line visible) and
-# PS_PID (restricted to named pids). One pass; options that take a value
-# consume it so `-C bash` / `-u jean` are never read as BSD letter bundles.
+# Stage-simulation state, reset by every sim_* entry. S_ = "stage". S_OPTS is
+# the grep argv the simulation runs (flavour first, then -i/-w/-x).
+S_PAT=""; S_OPTS=(-G); S_INV=0; S_TERM=0
+# $1 = the ps stage's flag text. 0 = the listing shows full command lines AND
+# is not restricted to named pids (the one ps that cannot list the wrapper).
+# One pass; options that take a value consume it so `-C bash` / `-u jean` are
+# never read as BSD letter bundles.
 classify_ps() {
   local -a toks=(); read -ra toks <<<"$1"
-  local tok fmt=0 skipv=0 letters
-  PS_ARGS=0; PS_PID=0
+  local tok fmt=0 skipv=0 letters PS_ARGS=0 PS_PID=0
   for tok in ${toks[@]+"${toks[@]}"}; do
     if (( fmt )); then
       fmt=0
@@ -260,7 +254,7 @@ classify_ps() {
       --format)   fmt=1 ;;
       --pid|--quick-pid) PS_PID=1; skipv=1 ;;
       --pid=*|--quick-pid=*) PS_PID=1 ;;
-      --sort|--user|--User|--group|--Group|--tty|--sid|--ppid|--cols|--columns|--width|--lines|--rows|--cumulative) skipv=1 ;;
+      --sort|--user|--User|--group|--Group|--tty|--sid|--ppid|--cols|--columns|--width|--lines|--rows) skipv=1 ;;
       --*)        : ;;
       -*)
         letters="${tok#-}"
@@ -275,6 +269,7 @@ classify_ps() {
         ;;
     esac
   done
+  (( PS_ARGS && ! PS_PID ))
 }
 
 # Quote-aware pipeline splitter. $1 = text after the `ps` word. Fills STAGES
@@ -309,17 +304,18 @@ split_pipeline() {
   STAGES+=("$cur")
 }
 
-# Consume one shell-ish token from $TOK_SRC into $TOK; $TOK_QUOTED=1 when it
-# was quoted. Returns 1 on an unterminated quote (fail-open), 2 at end.
-TOK_SRC=""; TOK=""; TOK_QUOTED=0
+# Consume one shell-ish token from $TOK_SRC into $TOK (quotes stripped — they
+# are shell-level, so a quoted '-v' still reaches grep as -v). Returns 1 on an
+# unterminated quote (fail-open), 2 at end.
+TOK_SRC=""; TOK=""
 next_tok() {
   TOK_SRC="${TOK_SRC#"${TOK_SRC%%[![:space:]]*}"}"
   [[ -z "$TOK_SRC" ]] && return 2
   local r
   case "$TOK_SRC" in
-    "'"*) r="${TOK_SRC#\'}"; [[ "$r" == *"'"* ]] || return 1; TOK="${r%%\'*}"; TOK_SRC="${r#*\'}"; TOK_QUOTED=1 ;;
-    '"'*) r="${TOK_SRC#\"}"; [[ "$r" == *'"'* ]] || return 1; TOK="${r%%\"*}"; TOK_SRC="${r#*\"}"; TOK_QUOTED=1 ;;
-    *)    TOK="${TOK_SRC%%[[:space:]]*}"; TOK_SRC="${TOK_SRC#"$TOK"}"; TOK_QUOTED=0 ;;
+    "'"*) r="${TOK_SRC#\'}"; [[ "$r" == *"'"* ]] || return 1; TOK="${r%%\'*}"; TOK_SRC="${r#*\'}" ;;
+    '"'*) r="${TOK_SRC#\"}"; [[ "$r" == *'"'* ]] || return 1; TOK="${r%%\"*}"; TOK_SRC="${r#*\"}" ;;
+    *)    TOK="${TOK_SRC%%[[:space:]]*}"; TOK_SRC="${TOK_SRC#"$TOK"}" ;;
   esac
   return 0
 }
@@ -350,41 +346,40 @@ stage_word() {
 # $1 = matcher word, $2 = the stage text after it. 0 = S_* set; 1 = fail-open.
 sim_grep() {
   local word="$1" pending=0 skip=0 dd=0 have=0 letters last rc
-  TOK_SRC="$2"; S_PAT=""; S_FLAV=G; S_INV=0; S_CI=0; S_W=0; S_X=0; S_TERM=0
-  case "$word" in egrep|rg|ugrep|ug|ag) S_FLAV=E ;; fgrep) S_FLAV=F ;; esac
+  TOK_SRC="$2"; S_PAT=""; S_OPTS=(-G); S_INV=0; S_TERM=0
+  case "$word" in egrep|rg) S_OPTS=(-E) ;; fgrep) S_OPTS=(-F) ;; esac
   while :; do
     next_tok; rc=$?
     (( rc == 2 )) && break
     (( rc == 1 )) && return 1
     if (( pending )); then S_PAT="$TOK"; have=1; break; fi
     if (( skip )); then skip=0; continue; fi
-    if (( dd == 0 )) && (( TOK_QUOTED == 0 )) && [[ "$TOK" == -* ]]; then
+    if (( dd == 0 )) && [[ "$TOK" == -* ]]; then
       case "$TOK" in
         --)                       dd=1 ;;
         -e|--regexp|--reg|--rege|--regex) pending=1 ;;
         --regexp=*|--reg=*|--rege=*|--regex=*) S_PAT="${TOK#*=}"; have=1; break ;;
-        --files-with*) S_TERM=1 ;;
         -f|-P|--fil*|--per*)      return 1 ;;
-        --ext*)                   S_FLAV=E ;;
-        --fix*)                   S_FLAV=F ;;
-        --bas*)                   S_FLAV=G ;;
-        --ign*)                   S_CI=1 ;;
+        --ext*)                   S_OPTS[0]=-E ;;
+        --fix*)                   S_OPTS[0]=-F ;;
+        --bas*)                   S_OPTS[0]=-G ;;
+        --ign*)                   S_OPTS+=(-i) ;;
         --inv*)                   S_INV=1 ;;
-        --wor*)                   S_W=1 ;;
-        --lin*)                   S_X=1 ;;
+        --wor*)                   S_OPTS+=(-w) ;;
+        --lin*)                   S_OPTS+=(-x) ;;
         --cou*|--onl*|--qui*|--sil*) S_TERM=1 ;;
-        --max-count|--context|--after-context|--before-context|--label|--include|--exclude|--exclude-dir|--exclude-from|--devices|--directories|--binary-files|--group-separator|--color|--colour) skip=1 ;;
+        --max-count|--context|--after-context|--before-context) skip=1 ;;
         --*)                      : ;;
         -*)
           letters="${TOK#-}"
           if [[ "$letters" == e?* ]]; then S_PAT="${letters#e}"; have=1; break; fi   # -epat (attached)
           [[ "$letters" == *[fP]* ]] && return 1
-          [[ "$letters" == *E* ]] && S_FLAV=E
-          [[ "$letters" == *F* ]] && S_FLAV=F
-          [[ "$letters" == *G* ]] && S_FLAV=G
-          [[ "$letters" == *i* ]] && S_CI=1
-          [[ "$letters" == *w* ]] && S_W=1
-          [[ "$letters" == *x* ]] && S_X=1
+          [[ "$letters" == *E* ]] && S_OPTS[0]=-E
+          [[ "$letters" == *F* ]] && S_OPTS[0]=-F
+          [[ "$letters" == *G* ]] && S_OPTS[0]=-G
+          [[ "$letters" == *i* ]] && S_OPTS+=(-i)
+          [[ "$letters" == *w* ]] && S_OPTS+=(-w)
+          [[ "$letters" == *x* ]] && S_OPTS+=(-x)
           [[ "$letters" == *v* ]] && S_INV=1
           [[ "$letters" == *[colLq]* ]] && S_TERM=1
           last="${letters: -1}"
@@ -395,9 +390,7 @@ sim_grep() {
     fi
     S_PAT="$TOK"; have=1; break
   done
-  (( have )) || return 1
-  literal_ok "$S_PAT" || return 1
-  return 0
+  literal_ok "$S_PAT"
 }
 
 # $1 = the stage text after `awk`. 0 = S_PAT set (always -E); 1 = fail-open;
@@ -405,13 +398,13 @@ sim_grep() {
 # the verdict so far.
 sim_awk() {
   local skip=0 prog="" have=0 rc
-  TOK_SRC="$1"; S_PAT=""; S_FLAV=E; S_INV=0; S_CI=0; S_W=0; S_X=0; S_TERM=0
+  TOK_SRC="$1"; S_PAT=""; S_OPTS=(-E); S_INV=0; S_TERM=0
   while :; do
     next_tok; rc=$?
     (( rc == 2 )) && break
     (( rc == 1 )) && return 1
     if (( skip )); then skip=0; continue; fi
-    if (( TOK_QUOTED == 0 )) && [[ "$TOK" == -* ]]; then
+    if [[ "$TOK" == -* ]]; then
       case "$TOK" in
         -f*|--file|--file=*) return 1 ;;   # program from a file
         -v|-F|-W)            skip=1 ;;     # awk's own flags, not grep's
@@ -423,7 +416,7 @@ sim_awk() {
   done
   (( have )) || return 1
   [[ "$prog" =~ $RE_AWK ]] || return 2
-  S_PAT="${BASH_REMATCH[2]-}"
+  S_PAT="${BASH_REMATCH[2]}"
   literal_ok "$S_PAT" || return 1
   return 0
 }
@@ -464,46 +457,34 @@ readonly_arm() {
     after="${rest:${#pre}+2}"
     rest="$after"
     case "${after:0:1}" in ' '|$'\t'|'|') ;; *) continue ;; esac
-    # Boundary triage on the last non-blank char before `ps`: a boundary char
-    # (or start of text / newline) triggers outright; a word-ish char may be a
-    # keyword, prefix word or path and gets the full regex over a bounded
-    # window (the regex is compiled per `=~`, ~0.8 ms — not per `ps` token);
-    # anything else (a quote, `$`, `)`, `>`…) is not a boundary.
-    ctx="${pre%"${pre##*[! $'\t']}"}"
-    case "${ctx: -1}" in
-      ""|"|"|";"|"&"|"("|"\`"|"{"|"!"|"$NL") ;;
-      [A-Za-z0-9_/\\=.:-])
-        if (( ${#pre} > 256 )); then ctx="#${pre: -256}"; else ctx="$pre"; fi   # `#` sentinel: a truncated window never reads as start-of-text
-        [[ "${ctx}ps" =~ $RE_PS_END ]] || continue ;;
-      *) continue ;;
-    esac
+    # Judge the boundary on a bounded window; `${pre: -256}` is EMPTY when pre is
+    # shorter, so the branch is load-bearing. `#` sentinel: a truncated window
+    # never reads as start-of-text.
+    if (( ${#pre} > 256 )); then ctx="#${pre: -256}"; else ctx="$pre"; fi
+    [[ "${ctx}ps" =~ $RE_PS_END ]] || continue
     pl="${after:0:4096}"                       # a pipeline is short; a cut stage fails open on its quote
     split_pipeline "$pl"
     (( ${#STAGES[@]} >= 2 )) || continue        # not a pipeline
-    classify_ps "${STAGES[0]}"
-    (( PS_ARGS )) || continue
-    (( PS_PID )) && continue
+    classify_ps "${STAGES[0]}" || continue
 
     local alive=0 filtered=0 bad=0
     for (( i = 1; i < ${#STAGES[@]}; i++ )); do
       stage="${STAGES[i]}"
       stage_word "$stage"
       case "$WORD" in
-        grep|egrep|fgrep|rg|ugrep|ug|ag|zgrep|rgrep) sim_grep "$WORD" "$WORD_REST"; rc=$? ;;
-        awk|gawk|mawk|nawk)                          sim_awk "$WORD_REST"; rc=$? ;;
-        *)                                           break ;;   # a stage that may rewrite the text: stop simulating
+        grep|egrep|fgrep|rg) sim_grep "$WORD" "$WORD_REST"; rc=$? ;;
+        awk)                 sim_awk "$WORD_REST"; rc=$? ;;
+        *)                   break ;;   # a stage that may rewrite the text: stop simulating
       esac
       if (( rc == 1 )); then bad=1; break; fi
       if (( rc == 2 )); then break; fi           # no regex: the walk ends with the verdict so far
-      local -a gf=("-$S_FLAV")
-      (( S_CI )) && gf+=(-i); (( S_W )) && gf+=(-w); (( S_X )) && gf+=(-x)
       # HERESTRING, never a pipe (#6992 / #7024, grep-q-pipe-guard.test.sh).
       # Address-space cap: GNU grep expands bounded repetition eagerly and a
       # group-free `.{1,32767}.{1,32767}b` reached 4.2 GB inside the 2 s window
       # (measured); ENOMEM → rc 2 → the fail-open arm below.
-      ( ulimit -v 262144 2>/dev/null; exec ${to[@]+"${to[@]}"} "$grep_bin" -q "${gf[@]}" -e "$S_PAT" <<<"$model" 2>/dev/null ); rc=$?
+      ( ulimit -v 262144 2>/dev/null; exec ${to[@]+"${to[@]}"} "$grep_bin" -q "${S_OPTS[@]}" -e "$S_PAT" <<<"$model" 2>/dev/null ); rc=$?
       case "$rc" in
-        0) if (( S_INV )); then filtered=1; break; else alive=1; DENY_STAGE="$WORD '$S_PAT' (-$S_FLAV)"; fi ;;
+        0) if (( S_INV )); then filtered=1; break; else alive=1; DENY_STAGE="$WORD '$S_PAT' (${S_OPTS[0]})"; fi ;;
         1) if (( S_INV )); then :; else filtered=1; break; fi ;;
         *) bad=1; break ;;                       # 2 invalid regex, 124 timeout, 127 no binary
       esac
