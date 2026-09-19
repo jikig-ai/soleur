@@ -24,7 +24,7 @@ body as informational statements.
 
 **Date:** 2026-09-19
 **Classification:** Taste (CTO devex lens; operator-visible message shape)
-**Status:** open — plan keeps the issue's verbatim message prefixes
+**Status:** partially applied at deepen-plan 2026-09-19 — the observability-coverage reviewer independently required the `[ship.phase7.<tag>]` grammar under `hr-observability-layer-citation` (second signal → promoted); the plan's lines now carry `[ship.phase7.sync_failed] kind=merge|merge_refused|merge_in_progress|push|fetch rc=N` prefixes and state the worktree condition (`the local merge commit is retained, nothing was aborted`; `Clear the worktree state on $BRANCH shown above, then re-run`). The issue's verbatim substrings are kept inside each line. NOT applied: the DIRTY-arm-style `Resolve locally: git merge origin/main, then git push` sentence on the conflict line — still open for the operator.
 
 - **What you said:** the messages `fetch origin main failed …`, `Manual conflict resolution required on $BRANCH. Stopping the poll.`, `git push failed after merge — auto-sync incomplete. Stopping the poll.` (the issue's own verification language; the plan preserves them verbatim).
 - **What the signal recommends:** prepend `[ship.phase7.sync_conflict]` / `[ship.phase7.sync_push_failed]` so the new exits are greppable like the block's other exits (`[ship.phase7.required_failed]`, `[ship.phase7.dirty]`, `[ship.phase7.behind_exhausted]`), and append one next-step line each: `Resolve locally: git merge origin/main, then git push` (the DIRTY arm already ends with a `Resolve locally:` line) and `Local branch is ahead by the sync merge commit: inspect the git push output, then git push`.
@@ -36,7 +36,7 @@ body as informational statements.
 
 **Date:** 2026-09-19
 **Classification:** Taste (CTO devex lens; scope widening)
-**Status:** open — recorded as an optional refinement on #8383, not in this fix
+**Status:** CLOSED — applied at deepen-plan 2026-09-19. The observability-coverage reviewer raised the same change independently under `hr-observability-as-plan-quality-gate` ("a verdict line that cannot be believed" — the class this fix exists to remove), which is the two-signal promotion ADR-084 prescribes. Plan v3 adds `fetch_fails` (initialised on the line after the fingerprint line) and `(fetch_failures=${fetch_fails}/${MAX_BEHIND_SYNCS})` on the `behind_exhausted` echo; scenario 8 asserts `fetch_failures=6/6`; the mirror carries it via parity token `fetch_failures=`. #8383 keeps only the consolidation and the `Already up to date` no-op-push item.
 
 - **What you said:** the fix is scoped to making the three failure branches reachable; a fetch failure "skips this sync attempt" (existing message, existing counting).
 - **What the signal recommends:** a separate `fetch_fails` counter included in the `behind_exhausted` line, so six network/auth failures do not print the "origin/main is moving faster than this PR's CI cycle" diagnosis.
