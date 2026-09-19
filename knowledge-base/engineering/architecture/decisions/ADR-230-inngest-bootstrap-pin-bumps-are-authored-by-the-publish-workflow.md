@@ -75,13 +75,19 @@ older-tag backfill therefore cannot fail the run on a mismatch that is
 expected-by-construction, and cannot downgrade the pin.
 
 **3. Authentication is a minted `soleur-ai` App installation token — never
-`GITHUB_TOKEN`, never a PAT.** The job inlines the board-status-sync JWT
-recipe (RS256 over `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` from Doppler
-`soleur/prd_terraform`, POST to
-`/app/installations/122213433/access_tokens`) and passes the result as
-`GH_TOKEN` to the script. The job's own `permissions:` block stays
-`contents: read` — the App token, not the workflow token, carries the write.
-The script refuses to run under `set -x` with `GH_TOKEN` set (the #7797
+`GITHUB_TOKEN`, never a PAT.** The mint lives in the composite action
+`.github/actions/mint-soleur-ai-app-token` (RS256 over `GITHUB_APP_ID` +
+`GITHUB_APP_PRIVATE_KEY` from Doppler `soleur/prd_terraform`, POST to
+`/app/installations/<id>/access_tokens`, emitted as a masked step output) —
+extracted when this job became the fourth copy of the inline recipe, the
+threshold the 2026-05-25-app-jwt-inline-mint learning named. The job passes
+the token as `GH_TOKEN` to the script. Separately, the job carries
+`packages: read` and its own `docker/login-action` GHCR login: the
+`soleur-inngest-bootstrap` package is private, `crane digest` reads it, and
+the build job's login does not cross job boundaries — without this the bump
+fails at digest resolution on every live run. GitHub *writes* still go
+through the App token only; `packages: read` is a read scope. The script
+refuses to run under `set -x` with `GH_TOKEN` set (the #7797
 credential-trace class) before any traced command executes.
 
 **4. The bump is a PR authored by `soleur-ai[bot]`, never a direct push to
@@ -95,18 +101,26 @@ superseded (comment + close) only when their tips are bot-authored — the
 script never closes a human-tipped PR. An existing PR for the target is
 reused, not duplicated.
 
-**5. Auto-merge is armed only on a healthy mirror.** `gh pr merge --auto
---squash` runs only when the build job reported `mirror_status == ok`;
-otherwise the PR gets a hold comment naming the verification needed. The
+**5. Auto-merge is armed only when this run's mirror attests the target.**
+`gh pr merge --auto --squash` runs only when the signed tag IS the semver-max
+target AND the build job reported `mirror_status == ok`. `mirror_status`
+attests the *triggered* tag's zot copy — a backfill of an older tag reports
+`ok` for the wrong tag, so the arm requires `signed_tag == target` first.
+Otherwise the PR gets a hold comment naming the verification needed. The
 merge-arm itself is a warning, not a fatal — a PR left open is recoverable,
 a failed run that hid the PR is not.
 
 **6. Idempotent and fail-closed.** All four pins already at target+digest →
-`result=noop`, no branch, no commit, no PR. Digest unresolvable, malformed
-arguments, or a non-converging rewrite → a stage-named fatal
+`result=noop`, no branch, no commit, no PR. Malformed arguments or a
+non-converging rewrite → a stage-named fatal
 (`args|resolve|rewrite|push|pr|merge`), and the workflow's `if: failure()`
-Slack step notifies. `result=opened|existing|noop|skipped|error` and
-`$GITHUB_STEP_SUMMARY` make each run's disposition readable without log
+Slack step notifies. An unresolvable digest splits on the same boundary as
+the merge gate: when the signed tag is NOT the semver-max target, the
+target's own publish is still in flight and the run defers
+(`result=skipped`, a `::notice::`) rather than paging on a self-healing
+race; when it IS the target, resolution failure is a `resolve` fatal —
+nobody else is coming to fix it. `result=opened|existing|noop|skipped|error`
+and `$GITHUB_STEP_SUMMARY` make each run's disposition readable without log
 archaeology.
 
 ## Alternatives Considered
@@ -144,9 +158,11 @@ archaeology.
   over real git repos with PATH-shimmed `crane`/`gh`, covering every Guard
   Contract row: happy path, noop, semver-max-over-older-signed-tag,
   signed/resolved digest mismatch, non-max backfill, partial pin state,
-  tag-only refs, human- and bot-tipped branches, existing PR, degraded
-  mirror, merge-arm failure, stale-PR supersede, human stale-PR
-  preservation, malformed args, and unresolved digest.
+  tag-only refs, human- and bot-tipped branches (linked and unlinked-author
+  shapes), existing PR, degraded mirror, merge-arm failure, merge-arm
+  withheld on non-max signed tag, stale-PR supersede, human stale-PR
+  preservation, malformed args, unresolved digest (fatal on-target,
+  deferred off-target).
 - `.github/scripts/test/run-all.sh` — suite registered; Bash-only by
   construction for the required merge-group path.
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — AC6/AC6b/

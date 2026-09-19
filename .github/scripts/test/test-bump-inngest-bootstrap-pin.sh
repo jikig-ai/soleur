@@ -13,8 +13,10 @@
 #
 # STUBS. `crane` and `gh` are PATH-shimmed; git is REAL against fixture repos
 # (the push remote is a local bare repo via BUMP_PUSH_URL). The gh stub derives
-# a commit's "author.login" from its author EMAIL in the bare origin — the same
-# mechanism GitHub uses — so the bot-vs-human tip check is exercised for real.
+# a commit's "author.login" AND "commit.author.email" from its author EMAIL in
+# the bare origin — the same mechanism GitHub uses — so the bot-vs-human tip
+# check is exercised for real. MOCK_GH_UNLINKED=1 drops .author to null to
+# exercise the email-fallback path; MOCK_GH_MERGE_FAIL=1 fails `gh pr merge`.
 #
 # GUARD CONTRACT (plan §Guard Contract). Guard 1 = behavior rows over the
 # script's mutation matrix; Guard 2 = workflow-shape + regex-parity asserts over
@@ -31,12 +33,34 @@ CONSUMER="$REPO_ROOT/apps/web-platform/infra/cloud-init-inngest-bootstrap.test.s
 [[ -f "$WORKFLOW" ]] || { echo "FAIL: $WORKFLOW not found"; exit 1; }
 [[ -f "$CONSUMER" ]] || { echo "FAIL: $CONSUMER not found"; exit 1; }
 
+# The shell fixture chokepoint (#7849): scrubs inherited GIT_* (a
+# lefthook-launched run otherwise leaks GIT_AUTHOR_*/GIT_COMMITTER_* into
+# fixture commits — measured: commits authored as the developer, not the bot),
+# pins a deterministic fixture identity + ceiling, and arms the #7833
+# git-location tripwire.
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
+# Canonical copy — fixture-dir-operand-assert.test.sh asserts every inline
+# definition is byte-identical to plugins/soleur/test/test-helpers.sh.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $TMP" >&2; exit 2; }
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=45   # anti-vacuity floor — raise when adding rows, never lower it silently
+MIN_ASSERTIONS=60   # anti-vacuity floor — raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -57,6 +81,7 @@ BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
 # Guard 1 row 7 exercises the two prefixes surviving the rewrite).
 write_fixture_cloud_inits() {
   local dir="$1" it="$2" id="$3" zt="$4" zd="$5"
+  assert_fixture_dir "$dir"
   mkdir -p "$dir/apps/web-platform/infra"
   cat > "$dir/apps/web-platform/infra/cloud-init.yml" <<EOF
 # fixture cloud-init.yml
@@ -92,8 +117,9 @@ new_fixture_repo() {
   F_ORIGIN="$TMP/$name/origin.git"
   mkdir -p "$F_REPO"
   git init -q -b main "$F_REPO"
-  git -C "$F_REPO" config user.name "fixture-human"
-  git -C "$F_REPO" config user.email "human@example.test"
+  # Identity comes from git_fixture_env (env beats repo-local config), so no
+  # user.name/user.email is set here: ambient caller env can never re-author a
+  # fixture commit.
   git init -q --bare "$F_ORIGIN"
   reset_state "$name"
 }
@@ -213,7 +239,14 @@ case "$sub" in
       elif [[ -n "$em" ]]; then login='fixture-human'
       else login=''
       fi
-      printf '{"author":{"login":"%s"}}\n' "$login"
+      # GitHub returns .author.login for a linked account and always carries
+      # .commit.author.email (the raw header). MOCK_GH_UNLINKED=1 drops .author
+      # to null so the script's email-fallback path is exercised for real.
+      if [[ "${MOCK_GH_UNLINKED:-0}" == "1" ]]; then
+        printf '{"author":null,"commit":{"author":{"email":"%s"}}}\n' "$em"
+      else
+        printf '{"author":{"login":"%s"},"commit":{"author":{"email":"%s"}}}\n' "$login" "$em"
+      fi
       exit 0
     fi
     echo "gh-stub: unhandled api: $ep" >&2; exit 1
@@ -384,6 +417,10 @@ assert_result 'g1.maxwins:result' opened
 assert_all_pins 'g1.maxwins:pins' "$F_REPO" v1.1.39 "$DIG_NEWER"
 assert_origin_branch 'g1.maxwins:branch' 'soleur/inngest-pin-v1.1.39' present
 assert_out_has 'g1.maxwins:note' 'v1.1.38'
+# AC9/P2: signed tag ≠ target → mirror_status ok attests the WRONG tag; merge
+# must NOT arm and a hold comment must explain why.
+assert_gh_not_called 'g1.maxwins:no-merge'      'gh pr merge '
+assert_gh_called     'g1.maxwins:hold-comment'  'gh pr comment '
 
 # ---------------------------------------------------------------------------
 # Row 5: signed digest ≠ crane-resolved while signed tag IS the max → halt.
@@ -423,6 +460,10 @@ assert_rc     'g1.backfill:exit' 0
 assert_result 'g1.backfill:result' opened
 assert_all_pins 'g1.backfill:pins' "$F_REPO" v1.1.38 "$DIG_NEW"
 assert_out_has 'g1.backfill:note' 'v1.1.37'
+# Same AC9/P2 gate as maxwins: a backfill's healthy mirror attests the OLDER
+# dispatched tag, not the target — no arm, hold comment instead.
+assert_gh_not_called 'g1.backfill:no-merge'     'gh pr merge '
+assert_gh_called     'g1.backfill:hold-comment' 'gh pr comment '
 
 # ---------------------------------------------------------------------------
 # Row 1: partial prior bump — IREF already at target, ZIREF stale → all four
@@ -494,6 +535,38 @@ assert_result 'g1.bottip:result' opened
 [[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == "$BOT_EMAIL" ]] \
   && pass 'g1.bottip:bot-tip-advanced' || fail 'g1.bottip:bot-tip-advanced' "bot tip not updated"
 assert_gh_called 'g1.bottip:pr-create' 'gh pr create '
+
+# Same shape again but GitHub links NO account to the tip commit (.author
+# null): the script must fall back to .commit.author.email — a bot email still
+# pushes, a human email still skips.
+new_fixture_repo unlinkedbot
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL" >/dev/null
+
+MOCK_GH_UNLINKED=1 run_bump unlinkedbot --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc     'g1.unlinkedbot:exit' 0
+assert_result 'g1.unlinkedbot:result' opened
+[[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == "$BOT_EMAIL" ]] \
+  && pass 'g1.unlinkedbot:tip-advanced' || fail 'g1.unlinkedbot:tip-advanced' "email-fallback bot tip not updated"
+
+new_fixture_repo unlinkedhuman
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'fixture-human' 'human@example.test' >/dev/null
+
+MOCK_GH_UNLINKED=1 run_bump unlinkedhuman --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc     'g1.unlinkedhuman:exit' 0
+assert_result 'g1.unlinkedhuman:result' skipped
+assert_out_has 'g1.unlinkedhuman:marker' 'branch-has-manual-commits'
+[[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == 'human@example.test' ]] \
+  && pass 'g1.unlinkedhuman:tip-preserved' || fail 'g1.unlinkedhuman:tip-preserved' "unlinked human tip clobbered"
 
 # ---------------------------------------------------------------------------
 # Row — existing PR for the same branch: comment + result=existing, no 2nd PR.
@@ -619,10 +692,28 @@ assert_origin_branch 'g1.noresolve:no-branch' 'soleur/inngest-pin-v1.1.38' ABSEN
 [[ -z $(git -C "$F_REPO" status --porcelain) ]] && pass 'g1.noresolve:clean-tree' \
   || fail 'g1.noresolve:clean-tree' "dirty: $(git -C "$F_REPO" status --porcelain | head -3)"
 
+# crane unresolvable for the semver-max while THIS run published a non-max tag:
+# the max tag's own publish is still in flight, so the run DEFERS
+# (result=skipped, rc 0) instead of erroring on a self-healing race. The
+# error path is preserved for signed==target (noresolve above).
+new_fixture_repo defer
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins"
+seed_tag vinngest-v1.1.37
+seed_tag vinngest-v1.1.38
+# (crane map deliberately empty for v1.1.38 — its publish is in flight)
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+run_bump defer --signed-tag v1.1.37 --signed-digest "$DIG_OLD" --mirror-status ok
+assert_rc     'g1.defer:exit' 0
+assert_result 'g1.defer:result' skipped
+assert_out_has 'g1.defer:notice' '::notice::'
+assert_origin_branch 'g1.defer:no-branch' 'soleur/inngest-pin-v1.1.38' ABSENT
+assert_gh_not_called 'g1.defer:no-pr' 'gh pr '
+[[ -z $(git -C "$F_REPO" status --porcelain) ]] && pass 'g1.defer:clean-tree' \
+  || fail 'g1.defer:clean-tree' "dirty: $(git -C "$F_REPO" status --porcelain | head -3)"
+
 echo ""
 echo "=== Guard 2: workflow shape + regex parity ==="
-
-WF=$(cat "$WORKFLOW")
 
 check_wf() { # name needle — literal present
   if grep -qF -- "$2" "$WORKFLOW"; then pass "$1"
@@ -655,14 +746,19 @@ check_block 'g2.bump:persist-creds-false'    'persist-credentials: false'
 check_block 'g2.bump:concurrency-group'      'inngest-pin-bump'
 check_block 'g2.bump:cancel-in-progress'     'cancel-in-progress: false'
 check_block 'g2.bump:contents-read'          'contents: read'
-check_block 'g2.bump:doppler-config'         'prd_terraform'
-check_block 'g2.bump:installation-id'        '122213433'
+# P1 (review): the package is private in GHCR and the build job's login does
+# not cross job boundaries — the bump job must carry packages:read + its own
+# GHCR login or `crane digest` fails on every live run.
+check_block 'g2.bump:packages-read'          'packages: read'
+check_block 'g2.bump:ghcr-login'             'docker/login-action'
+check_block 'g2.bump:ghcr-registry'          'registry: ghcr.io'
 check_block 'g2.bump:doppler-token-verify'   'DOPPLER_TOKEN'
-check_block 'g2.bump:app-id'                 'GITHUB_APP_ID'
-check_block 'g2.bump:app-key'                'GITHUB_APP_PRIVATE_KEY'
-check_block 'g2.bump:b64url'                 "b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\\n'; }"
-check_block 'g2.bump:jwt-exchange'           'access_tokens'
-check_block 'g2.bump:openssl-sign'           'openssl dgst -sha256 -sign'
+# P3 (review): the inline App-JWT recipe is extracted to a composite action —
+# the workflow wires the action, the recipe lives in the action file.
+check_block 'g2.bump:mint-action'            'uses: ./.github/actions/mint-soleur-ai-app-token'
+check_block 'g2.bump:mint-id'                'id: mint'
+check_block 'g2.bump:mint-token-env'         'steps.mint.outputs.token'
+check_block 'g2.bump:installation-id'        '122213433'
 check_block 'g2.bump:script-invoked'         'bump-inngest-bootstrap-pin.sh'
 check_block 'g2.bump:arg-signed-tag'         'needs.build.outputs.tag'
 check_block 'g2.bump:arg-signed-digest'      'needs.build.outputs.digest'
@@ -670,6 +766,24 @@ check_block 'g2.bump:arg-mirror-status'      'needs.build.outputs.mirror_status'
 check_block 'g2.bump:failure-slack'          'SLACK_RELEASES_WEBHOOK_URL'
 check_block 'g2.bump:if-failure'             'if: failure()'
 check_block 'g2.bump:timeout'                'timeout-minutes: 10'
+
+# The extracted composite action must carry the JWT recipe verbatim — the same
+# anchors the bump block used to pin when the recipe was inline.
+ACTION="$REPO_ROOT/.github/actions/mint-soleur-ai-app-token/action.yml"
+check_action() { # name needle
+  if [[ -f "$ACTION" ]] && grep -qF -- "$2" "$ACTION"; then pass "$1"
+  else fail "$1" "mint-soleur-ai-app-token action lacks: $2"; fi
+}
+check_action 'g2.action:exists'           "using: 'composite'"
+check_action 'g2.action:doppler-config'   'prd_terraform'
+check_action 'g2.action:app-id'           'GITHUB_APP_ID'
+check_action 'g2.action:app-key'          'GITHUB_APP_PRIVATE_KEY'
+check_action 'g2.action:b64url'           "b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\\n'; }"
+check_action 'g2.action:jwt-exchange'     'access_tokens'
+check_action 'g2.action:openssl-sign'     'openssl dgst -sha256 -sign'
+check_action 'g2.action:mask'             '::add-mask::'
+check_action 'g2.action:token-output'     'steps.mint.outputs.token'
+check_action 'g2.action:installation-id'  'installation-id'
 
 # The script-invoking step must NOT carry continue-on-error, or if: failure()
 # on the Slack step never fires. Slice THAT step: steps start at `      - `

@@ -500,6 +500,31 @@ describe("isStaleBotPr", () => {
     // returns null and the watchdog warns Sentry-only (!pr.scheduledLabel path).
     expect(scheduledLabelFromHead("bot-fix/4321-foo")).toBeNull();
   });
+
+  // #8359 — publish-workflow pin-bump PRs (ADR-230): `soleur/inngest-pin-*`
+  // heads arm auto-merge, which disarms on conflict — they rot-scan too.
+  it("soleur/inngest-pin-* prefix is covered by BOT_PR_HEAD_PREFIXES (#8359)", () => {
+    expect(BOT_PR_HEAD_PREFIXES).toContain("soleur/inngest-pin-");
+  });
+
+  it("49h-old soleur/inngest-pin-* non-draft PR IS stale (#8359)", () => {
+    expect(
+      isStaleBotPr(
+        botPr({
+          number: 8,
+          head: { ref: "soleur/inngest-pin-v1.1.38" },
+          draft: false,
+          labels: [],
+          created_at: ago(49),
+        }),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("a stale soleur/inngest-pin-* head routes Sentry-only (no reverse-derived label)", () => {
+    expect(scheduledLabelFromHead("soleur/inngest-pin-v1.1.38")).toBeNull();
+  });
 });
 
 // =============================================================================

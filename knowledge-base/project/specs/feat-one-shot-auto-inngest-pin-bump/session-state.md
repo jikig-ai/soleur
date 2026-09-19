@@ -29,3 +29,22 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
 ### Errors
 - Harness bugs fixed during RED→GREEN: `--author` misplacement in `push_branch_to_origin`; `env MOCK_GH_MERGE_FAIL=1 run_bump` (env can't call a bash function); stub-state accumulation across fixtures; sed `\|` alternation-vs-literal in the gh stub; `export LC_ALL=C` traced before the xtrace refusal (lint Rule A) — moved below it.
 - `github -> github` self-edge rejected by LikeC4 — fell back to extending the App-write edge description (plan-sanctioned).
+
+## Review Phase (in progress)
+- Mode: local. Seats run so far: design-validity + architecture-strategist (sequential). Remaining panel (9 seats) pending on the settled diff.
+- Findings applied (all verified independently before fixing):
+  - P1: bump job had NO GHCR auth — package is private, build job's docker login doesn't cross job boundaries → every live bump would die at `crane digest`. Fixed: `packages: read` + `docker/login-action` in `bump-cloud-init-pin`.
+  - P2: merge arm conditioned on `SIGNED_TAG == TARGET && MIRROR_STATUS == ok` (mirror_status attests the triggered tag, not the target). Same gate on PR-body hold note + summary.
+  - P2: `--limit 200` on the supersede `gh pr list`; pr-list failure now warns rather than silently degrading to `[]`.
+  - P2: `soleur/inngest-pin-` added to `BOT_PR_HEAD_PREFIXES` (watchdog rot-scan) + 3 tests.
+  - P2: crane-defer — digest unresolvable while signed≠target → `result=skipped` (in-flight publish race), `resolve` fatal only when signed==target.
+  - P2/P3: inline App-JWT mint extracted to `.github/actions/mint-soleur-ai-app-token` (4th copy crossed threshold).
+  - P3: dead `--dry-run` removed; `command -v gh` assert; `grep -oE | wc -l` counts; `.author.login // .commit.author.email` tip-author (no extra fetch); summary block simplified; stage vocab aligned (`mint` = workflow-level, not a script stage).
+- Re-verified: fixture suite 153/0 (MIN_ASSERTIONS=60); run-all.sh ALL PASS; drift guard 160/160; watchdog vitest 63/63; shellcheck clean; workflow+action YAML parse.
+- Docs synced: ADR-230 §3/§5/§6 + Verification; tasks.md Phase 5; plan §dry-run note.
+- Fixture-safety remediation (lefthook test-all run under sibling contention): the new files tripped three corpus guards. Fixes, all verified:
+  - `fixture-env-adoption` [UNACCOUNTED] → suite now sources `plugins/soleur/test/lib/git-fixture-env.sh` (arms the #7833 tripwire) and calls `git_fixture_env "$TMP" || exit 2` after mktemp. Root cause of the lefthook failures: inherited `GIT_AUTHOR_*`/`GIT_COMMITTER_*` re-authored fixture commits as the developer; the helper scrubs/pins identity. Proven: suite 153/0 under deliberately injected dev identity env.
+  - Script now pins `GIT_AUTHOR_*`/`GIT_COMMITTER_*` to the bot at env level — the "commits authored as soleur-ai[bot]" contract no longer depends on ambient caller env.
+  - `fixture-relative-assert` (5 sites): redirects now write directly to `$GITHUB_OUTPUT`/`$GITHUB_STEP_SUMMARY` (CI_SINK_VARS name exemption — aliases read as possibly-relative); `write_fixture_cloud_inits` carries `assert_fixture_dir "$dir"` (canonical byte-identical copy inlined).
+  - `fixture-dir-operand-assert` (7 sites): `: "${REPO_DIR:?...}"` empty-operand guard after the `cd && pwd` resolution.
+  - Re-verified: suite 153/0 (clean + contaminated env + run-all.sh ALL PASS); adoption 25/0; relative 62/0 (baseline unchanged at 1526/294 — sites cleared, not re-baselined); operand 71/0; drift guard 160/160; watchdog vitest 63/63; shellcheck clean.

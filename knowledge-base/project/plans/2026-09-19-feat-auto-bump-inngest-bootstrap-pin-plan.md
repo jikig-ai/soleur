@@ -550,7 +550,8 @@ new suite, which reads it.)*
    serves `pr list`), git real (fixture repo). Cover the mutation-matrix rows.
 2. Write `.github/scripts/bump-inngest-bootstrap-pin.sh` until green:
    - args: `--tag <vX.Y.Z> --digest <sha256:…> --mirror-status <ok|degraded|>`
-     plus `--dry-run` (no writes — used by the suite for the pure paths);
+     (a `--dry-run` arg was drafted here but removed in review — dead code,
+     no caller; the suite exercises real paths through stubs);
    - validate inputs (fail closed on malformed tag/digest);
    - compute target = semver-max `vinngest-v*` via the AC6-identical pipeline
      (`git -C <repo> tag --list 'vinngest-v*' | sed 's/^vinngest-//' |

@@ -928,9 +928,13 @@ jobs:
       group: inngest-pin-bump
       cancel-in-progress: false
     permissions:
-      # The job's own GITHUB_TOKEN needs nothing but the checkout read —
-      # every write goes through the minted installation token.
+      # contents:read — the checkout. packages:read — the soleur-inngest-bootstrap
+      # package is PRIVATE in GHCR and the build job's docker login does not
+      # cross job boundaries: this job must authenticate `crane digest` itself
+      # (Login to GHCR below) or every bump fails at digest resolution.
+      # Every GitHub WRITE still goes through the minted installation token.
       contents: read
+      packages: read
     steps:
       # `ref: main`, NOT the tag tree: the bump script and the files it edits
       # live on the default branch (contrast with the build job, which must
@@ -945,6 +949,15 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
+
+      # crane inherits the GHCR credential from ~/.docker/config.json — the
+      # package is private, so `crane digest` needs this login in THIS job.
+      - name: Login to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # crane, SHA-pinned — identical recipe to the build job's
       # "Install crane (pinned) for signing" above (keep them in step). The
@@ -995,86 +1008,37 @@ jobs:
             exit 1
           fi
 
-      # Mint the soleur-ai installation token and run the bump in ONE step —
-      # the token never leaves this step's env (board-status-sync.yml shape).
-      # The inline JWT recipe is verbatim from that workflow: `gh api` cannot
-      # take a JWT as GH_TOKEN, so the JWT is exchanged for an installation
-      # token via curl, then handed to the script as GH_TOKEN.
-      - name: Mint soleur-ai App token and bump the cloud-init pin
+      # Composite action — the fourth copy of the inline JWT recipe triggered
+      # the repo's extraction threshold (learning 2026-05-25-app-jwt-inline-mint:
+      # extract at three consumers). `gh api` cannot take a JWT as GH_TOKEN, so
+      # the action exchanges it for an installation token and emits it masked.
+      - name: Mint soleur-ai App token
+        id: mint
+        uses: ./.github/actions/mint-soleur-ai-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          installation-id: "122213433"
+
+      # The script re-resolves the digest via `crane digest` and
+      # cross-checks it against SIGNED_DIGEST ONLY when TAG is the
+      # semver-max target — a mirror_only backfill of an older tag signed
+      # a different tag's digest and must not RED on that comparison.
+      # NO continue-on-error on this step: the Slack step below is
+      # `if: failure()`, which never fires after a soft-failed step.
+      - name: Bump the cloud-init pin
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          DOPPLER_PROJECT: soleur
-          DOPPLER_CONFIG: prd_terraform
-          # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
-          # Permissions verified 2026-09-19 via `gh api
-          # /orgs/jikig-ai/installations`: contents:write + pull_requests:write.
-          INSTALLATION_ID: "122213433"
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
           TAG: ${{ needs.build.outputs.tag }}
           SIGNED_DIGEST: ${{ needs.build.outputs.digest }}
           MIRROR_STATUS: ${{ needs.build.outputs.mirror_status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-
-          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
-          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
-          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
-            echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
-          printf '::add-mask::%s\n' "$APP_ID"
-          # $GITHUB_ENV/log does NOT auto-mask a multi-line secret — mask each PEM line.
-          while IFS= read -r pem_line; do
-            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
-          done <<< "$PEM"
-
-          umask 077
-          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
-          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
-          chmod 600 "$APP_PEM_FILE"
-          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
-          # Catch a corrupted PEM (literal \n, BOM, partial paste) HERE with a
-          # routable error rather than a generic openssl "unable to load Private Key".
-          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
-            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
-
-          b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
-
-          now=$(date +%s)
-          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
-          payload=$(jq -nc \
-            --argjson iss "$APP_ID" \
-            --argjson iat "$((now - 60))" \
-            --argjson exp "$((now + 540))" \
-            '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
-          unsigned="${header}.${payload}"
-          signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
-          JWT="${unsigned}.${signature}"
-          [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
-          echo "::add-mask::$JWT"
-
-          INSTALL_TOKEN=$(curl -sS -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-            | jq -r '.token // empty')
-          [[ -n "$INSTALL_TOKEN" ]] || {
-            echo "::error::Installation-token exchange returned empty token (App permission or installation_id mismatch)."; exit 1; }
-          echo "::add-mask::$INSTALL_TOKEN"
-
-          # The script re-resolves the digest via `crane digest` and
-          # cross-checks it against SIGNED_DIGEST ONLY when TAG is the
-          # semver-max target — a mirror_only backfill of an older tag signed
-          # a different tag's digest and must not RED on that comparison.
-          # NO continue-on-error on this step: the Slack step below is
-          # `if: failure()`, which never fires after a soft-failed step.
-          GH_TOKEN="$INSTALL_TOKEN" \
-            bash .github/scripts/bump-inngest-bootstrap-pin.sh \
-              --signed-tag "$TAG" \
-              --signed-digest "$SIGNED_DIGEST" \
-              --mirror-status "$MIRROR_STATUS" \
-              --run-url "$RUN_URL"
+          bash .github/scripts/bump-inngest-bootstrap-pin.sh \
+            --signed-tag "$TAG" \
+            --signed-digest "$SIGNED_DIGEST" \
+            --mirror-status "$MIRROR_STATUS" \
+            --run-url "$RUN_URL"
 
       - name: Post to Slack (pin-bump failure)
         # A bump failure must not be silent — the drift guard stays red until
