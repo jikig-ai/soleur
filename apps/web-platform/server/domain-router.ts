@@ -138,9 +138,12 @@ async function classifyMessage(
     // It is kept inline (not routed through the helper) on purpose:
     // `_cron-shared.ts` statically imports octokit/github-app, and this module
     // is on the interactive request path and must stay leaf-light. Mirror any
-    // request-contract change (header version, output_config shape, new
-    // required field) in BOTH places — the model-tiers/helper tests cover only
-    // the helper copy.
+    // change to EITHER contract in BOTH places — the request side (header
+    // version, output_config shape, new required field) AND the RESPONSE-PARSE
+    // side (content-block ordering: a thinking-by-default model puts a thinking
+    // block first, #8392). Every example this NOTE used to list was request-side,
+    // which is how the two copies drifted silently. The model-tiers/helper tests
+    // cover only the helper copy.
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -178,7 +181,9 @@ Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`
     const data = (await response.json()) as {
       content: Array<{ type: string; text?: string }>;
     };
-    const text = data.content[0]?.type === "text" ? (data.content[0].text ?? "") : "";
+    // First TEXT block, not a fixed position: a thinking-by-default model puts a
+    // thinking block first (#8392). Mirrors the helper copy.
+    const text = data.content.find((b) => b.type === "text")?.text ?? "";
     // Structured output guarantees schema-valid JSON — parse directly, no fence strip.
     const parsed = JSON.parse(text) as { leaders?: unknown };
     const leaders = Array.isArray(parsed.leaders) ? parsed.leaders : [];

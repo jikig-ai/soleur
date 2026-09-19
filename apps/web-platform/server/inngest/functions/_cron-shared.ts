@@ -626,7 +626,7 @@ export async function postAnthropicMessage(args: {
   }
 
   const data = (await resp.json()) as {
-    content?: Array<{ text?: string }>;
+    content?: Array<{ type: string; text?: string }>;
     stop_reason?: string;
     model?: string;
     usage?: {
@@ -656,7 +656,12 @@ export async function postAnthropicMessage(args: {
     });
   }
 
-  return { text: data.content?.[0]?.text ?? "", stopReason: data.stop_reason };
+  // Sonnet 5 (EXECUTION_MODEL since #5849) runs adaptive thinking when `thinking`
+  // is omitted, so the first block is a thinking block and the structured-output
+  // text follows it. Take the first text block; an empty or thinking-only
+  // response still yields "" so every caller's empty-guard keeps its meaning (#8392).
+  const text = data.content?.find((b) => b.type === "text")?.text ?? "";
+  return { text, stopReason: data.stop_reason };
 }
 
 // #cost-attribution (plan Phase 3). GET transport for the Anthropic Admin Cost
