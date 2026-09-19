@@ -237,6 +237,7 @@ anchor-on-syntax
 anchor-preservation
 anchor-resolution-over-architecture
 anchoring
+anchors
 animation
 anomaly-detection
 anon
@@ -2117,6 +2118,7 @@ legal-docs
 legal-document-generator
 legal-documents
 legal-record
+legal-records
 legal-register
 leginfo
 lib-helpers
