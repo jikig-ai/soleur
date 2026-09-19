@@ -171,10 +171,10 @@ describe("Guard 1 — outcome-marker census", () => {
     const synthetic = [
       "async function h() {",
       "  if (a) {",
-      '    emitOutcomeMarker(logger, { status: "one" });',
+      '    emitOutcomeMarker({ status: "one" });',
       '    return { ok: true, status: "one" };',
       "  }",
-      '  emitOutcomeMarker(logger, { status: "two" });',
+      '  emitOutcomeMarker({ status: "two" });',
       '  return { ok: true, status: "two" };',
       "}",
     ].join("\n");
