@@ -409,7 +409,7 @@ expect_dispatch "G2.6 manifest_fetch_failed DOES dispatch (deliberate AP-021 dev
 # no runtime driver can reach.
 # ---------------------------------------------------------------------------------------------
 structural="$(python3 - "$WORKFLOW" <<'PY'
-import sys, re, yaml
+import pathlib, re, sys, yaml
 
 src = open(sys.argv[1]).read()
 wf = yaml.safe_load(src)
@@ -615,6 +615,29 @@ else:
     for req in ("sentry-ingest-domain", "sentry-project-id", "sentry-public-key"):
         if req not in hw:
             problems.append(f"sentry-heartbeat does not forward {req!r}; the composite degrades to a warning and exit 0, so the check-in silently never delivers")
+    # The composite's curl must carry a write-out naming http_code. Two comments in
+    # scheduled-marketplace-drift.yml and the 2026-08-13 post-mortem's amended `recovery_at`
+    # all cite `sentry-heartbeat: http_code=202` as the delivery evidence, and until this
+    # assertion existed nothing in the repo read the composite at all — the evidence was
+    # asserted in prose only, across 14 call sites.
+    composite = pathlib.Path(".github/actions/sentry-heartbeat/action.yml")
+    if not composite.is_file():
+        problems.append("the sentry-heartbeat composite is missing from .github/actions/")
+    else:
+        csrc = composite.read_text()
+        curl_lines = [ln for ln in csrc.splitlines() if re.match(r"^\s*curl ", ln)]
+        if len(curl_lines) != 1:
+            problems.append(f"expected exactly one curl line in the composite, found {len(curl_lines)}")
+        if not re.search(r"^\s*-w '[^']*sentry-heartbeat: http_code=%\{http_code\}", csrc, re.M):
+            problems.append(
+                "the composite's curl carries no `-w` write-out naming http_code; a 2xx then "
+                "prints nothing and a green step is indistinguishable from a delivered check-in"
+            )
+        if re.search(r"%\{(url|url_effective|redirect_url|json|header_json)", csrc):
+            problems.append(
+                "the composite's write-out names a URL/header curl variable; the ingest URL "
+                "carries SENTRY_PUBLIC_KEY and the Actions log is public"
+            )
 
 if not re.search(r'^\s*MANIFEST_URL="https://raw\.githubusercontent\.com/jikig-ai/soleur-marketplace/main/\.claude-plugin/marketplace\.json"', src, re.M):
     problems.append("does not read the published marketplace manifest over raw.githubusercontent.com")
