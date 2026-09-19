@@ -51,7 +51,7 @@ Phase 1 ends when telemetry has named the operative error, or you have measured 
 
 Spend disproportionate effort here. **Be aggressive. Be creative. Refuse to give up.**
 
-**Redact.** This phase has you show commands, outputs and captured artifacts. **Redact every secret first**: write `<REDACTED>` in its place. Build loops against env vars, so the credential stays in the environment rather than in what you show. Captured artifacts carry auth headers: quote only the lines that carry the signal. Two places where redaction is otherwise left to memory are mechanical here: a fixture derived from a captured trace (rung 5's Sentry payload or Better Stack rows — Sentry exception values carry emails and tokens) is synthesized or redacted before it is committed in Phase 9 (`cq-test-fixtures-synthesized-only`); and the whole Phase 8 comment body, the `--cmd` string included, is written to a temp file and passed through `python3 "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-engine.py" <file>` — the repo's existing redactor, exit 1 = redaction needed — and posted only on exit 0.
+**Redact.** This phase has you show commands, outputs and captured artifacts. **Redact every secret first**: write `<REDACTED>` in its place. Build loops against env vars, so the credential stays in the environment rather than in what you show. Captured artifacts carry auth headers: quote only the lines that carry the signal. Two places where redaction is otherwise left to memory are mechanical here: a fixture derived from a captured trace (rung 5's Sentry payload or Better Stack rows — an exception value can carry an email or a token; `apps/web-platform/server/sentry-scrub.ts` strips keyed fields, not message text) is synthesized or redacted before it is committed in Phase 9 (`cq-test-fixtures-synthesized-only`); and the whole Phase 8 comment body, the `--cmd` string included, goes through `bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh" <file>` — the repo's redactor (exit 1 = redaction needed, 2 = cannot evaluate) — and is posted only on exit 0. **Its ceiling is the mechanical part, not the whole job**: it matches vendor-prefixed and fixed-format tokens, emails and keys; an opaque `Authorization: Bearer …` value, a non-vendor `DATABASE_URL=…`, an internal hostname, a customer name or phone pass it. Phase 8 names the structural check that closes the first two; the rest you redact by hand before the file exists.
 
 **Completion criterion: a tight loop that goes red.** Phase 2 is done when you can name **one command** (a script path, a test invocation, a curl) that you have **already run at least once** (show the invocation and its output, redacted), and that is:
 
@@ -65,16 +65,16 @@ If you catch yourself reading code to build a theory before this command exists,
 **When you genuinely cannot build a loop.** Stop and say so explicitly. List what you tried, rung by rung. Then take the first option that applies; each is a decision with a default, and the default is option 1:
 
 1. **Add instrumentation (default).** Where a loop will follow once the signal exists, add a temporary `[DEBUG-<hex4>]` probe (Phase 6 spelling) and build the loop on its output. Where the failure lives on a blind production surface, apply Phase 1's blind-surface bullet: add a permanent `SOLEUR_*` marker so the next occurrence self-reports, write `no loop buildable yet; instrumentation added: SOLEUR_<…>; re-run soleur:reproduce-bug on the next occurrence` into the Phase 8 comment, and end the run.
-2. **Environment access — non-shell only.** Name the one environment that reproduces it and what you need from it: a preview or staging deploy to drive, a flag to flip, `soleur:trigger-cron` to fire. SSH and `docker exec` are never an ask (`hr-no-ssh-fallback-in-runbooks`); a blind production surface takes option 1. Only when option 1 cannot carry the signal.
-3. **A redacted captured artifact** (HAR file, log dump, core dump, screen recording with timestamps). The one data-retrieval ask permitted, and only after the ladder and option 1 are exhausted: a founder's local device state is the one thing no instrumentation can capture. You perform the redaction, not the founder — for a HAR, strip `cookies`, the `Authorization` / `Cookie` / `Set-Cookie` headers and `postData` before reading it. The artifact is never attached to the issue, never lands under `knowledge-base/`, and is deleted when the run ends.
+2. **Environment access — non-shell only.** Only when option 1 cannot carry the signal. Name the one environment that reproduces it and what you need from it: a preview or staging deploy to drive, a flag to flip, `soleur:trigger-cron` to fire. SSH and `docker exec` are never an ask (`hr-no-ssh-fallback-in-runbooks`); a blind production surface takes option 1. Carry the ask verbatim into Phase 8 item 6 and end the run.
+3. **A redacted captured artifact** (HAR file, log dump, core dump, screen recording with timestamps). The one data-retrieval ask permitted, and only after the ladder, option 1 and option 2 are exhausted: a founder's local device state is the one thing no instrumentation can capture. Carry the ask into Phase 8 item 6 and end the run; on the next run the artifact lands in a directory you create with `mktemp -d` — **never inside the repository** (`.gitignore` is not a control; `soleur:test-fix-loop` stages with `git add -A`). You perform the redaction, not the founder: for a HAR, drop every `headers[]` and `cookies[]` entry (request and response), `queryString[]`, `postData`, `content.text` and `_webSocketMessages`, keeping `url` path (no query), `status`, `time` and `mimeType`; for a log dump, keep only the lines that carry the signal. The artifact is never attached to the issue, never lands under `knowledge-base/`, and is deleted when the run ends (Phase 9 greps for it).
 
-Headless (one-shot, cloud, no TTY): take option 1 and end with the Phase 8 comment. Never downgrade silently to rung 10. **For a UI bug, Phase 3 is how rung 4 is built — go there and come back before declaring that no loop exists.**
+Headless (one-shot, cloud, no TTY): take option 1; if the temporary-probe arm applies, build the loop and continue; otherwise add the permanent marker, write the Phase 8 line, and end the run. Never substitute a founder clicking for rung 10. **For a UI bug, Phase 3 is how rung 4 is built — go there and come back before declaring that no loop exists.**
 
 ### Ways to construct one, in roughly this order
 
-1. **Failing test** at whatever seam reaches the bug: unit, integration, e2e.
-2. **Curl / HTTP script** against a running dev server.
-3. **CLI invocation** with a fixture input, diffing stdout against a known-good snapshot.
+1. **Write a failing test** at whatever seam reaches the bug: unit, integration, e2e.
+2. **Script a curl / HTTP call** against a running dev server.
+3. **Script a CLI invocation** with a fixture input, diffing stdout against a known-good snapshot.
 4. **Headless browser script** (Playwright / Puppeteer) that drives the UI and asserts on DOM/console/network. Phase 3 builds this rung.
 5. **Replay a captured trace.** Save a real network request / payload / event log to disk; replay it through the code path in isolation. The Sentry event payload or Better Stack rows you pulled in Phase 1 are a captured trace.
 6. **Throwaway harness.** Spin up a minimal subset of the system (one service, mocked deps) that exercises the bug code path with a single function call.
@@ -249,7 +249,7 @@ Record the set as a table; every row fills every column, and `Verdict` starts `U
 | # | Hypothesis (If X is the cause, then …) | Discriminator (what observation decides it, and where it is read) | Verdict |
 |---|---|---|---|
 
-**Founder checkpoint, in this turn, without a question tool.** Render the table in symptom language (what the founder would see; never a code path), with `Discriminator` rendered as *"what else you'd see if this is it"*, then continue in the same turn with: *"Here are the 3–5 likeliest causes, ranked; each says what else you would see if it were true. I will test them in this order unless you tell me one is wrong or you saw something that changes the order — proceed / re-rank / add a fact."* Do not call AskUserQuestion and do not wait: the default is your ranking and the founder's reply is an interrupt. **Headless (one-shot, cloud, no TTY):** the Phase 8 comment carries `founder checkpoint not presented (headless); proceeded with the agent's ranking` so the decision is auditable.
+**Founder notice, in this turn, without a question tool.** Render the table in symptom language (what the founder would see; never a code path), with `Discriminator` rendered as *"what else you'd see if this is it"*, then continue in the same turn with: *"Here are the 3–5 likeliest causes, ranked; each says what else you would see if it were true. I will test them in this order unless you tell me one is wrong or you saw something that changes the order — proceed / re-rank / add a fact."* Do not call AskUserQuestion and do not wait: the default is your ranking and the founder's reply is an interrupt — it usually lands after the first probe has run, so it re-orders what is left rather than vetoing the first test. **Headless (one-shot, cloud, no TTY):** the Phase 8 comment carries `founder notice not presented (headless); proceeded with the agent's ranking` so the decision is auditable.
 
 ## Phase 6: Instrument
 
@@ -261,7 +261,7 @@ Tool preference:
 2. **Targeted logs** at the boundaries that distinguish hypotheses.
 3. Never "log everything and grep".
 
-**Removable probes.** Mint one tag per investigation with `printf '[DEBUG-%04x]\n' $((RANDOM % 65536))` and prefix every debug log with it. Spelling: `[DEBUG-<hex4>]`, exactly four hex characters, never a `SOLEUR_` prefix — the permanent class is defined by `MARKER_RE` in `apps/web-platform/server/git-lock-marker-telemetry.ts` and its drift guard, and a `SOLEUR_*DEBUG*` spelling fails Soleur's CI. Decision rule: the signal dies with the fix → `[DEBUG-<hex4>]`; the signal must outlive the fix (a blind surface, a recurring class) → a permanent `SOLEUR_*` marker via Phase 1's blind-surface bullet. Payload: the discriminator only — booleans, lengths, ids, hashes. Never an env value, a header, a request body, PII, or a raw user-controlled string (a probe removed before merge has already reached Better Stack/Sentry retention if a preview deploy ran in between — CWE-532; interpolating user input into a log line is CWE-117). Probes are removed before any **push**, not only before commit. Cleanup is one grep, run in Phase 9 and expected to print nothing: `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- . ':!knowledge-base/**/*.md'`. In prose write the placeholder `<hex4>`, never a minted tag. Two-class table and rationale: ADR-230.
+**Removable probes.** Mint one tag per investigation with `printf '[DEBUG-%04x]\n' "$RANDOM"` and prefix every debug log with it. Spelling: `[DEBUG-<hex4>]`, exactly four hex characters, never a `SOLEUR_` prefix — the permanent class is defined by `MARKER_RE` in `apps/web-platform/server/git-lock-marker-telemetry.ts` and its drift guard, and a `SOLEUR_*DEBUG*` spelling on any emit call-form Soleur uses (`echo`/`printf`/`log "`, `console.<level>(`, pino `log.<level>({ KEY:`, `logger.<level>(`, `process.stdout.write(`, `print(`) fails Soleur's CI. Decision rule: the signal dies with the fix → `[DEBUG-<hex4>]`; the signal must outlive the fix (a blind surface, a recurring class) → a permanent `SOLEUR_*` marker via Phase 1's blind-surface bullet. Payload: the discriminator only — booleans, lengths, ids, hashes. Never an env value, a header, a request body, PII, or a raw user-controlled string (a probe removed before merge has already reached Better Stack/Sentry retention if a preview deploy ran in between — CWE-532; interpolating user input into a log line is CWE-117). Probes are removed before any **push**, not only before commit. Cleanup is one grep, run in Phase 9 and expected to print nothing: `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- ':/' ':(top,exclude)knowledge-base/**/*.md'` (top-anchored: it scans the whole repo from any cwd — Phase 3 leaves you in `apps/web-platform`). In prose write the placeholder `<hex4>`, never a minted tag. Two-class table and rationale: ADR-230.
 
 **Perf branch.** For performance regressions, logs are usually wrong. Instead: establish a baseline measurement (timing harness, `performance.now()`, profiler, query plan), then bisect. Measure first, fix second.
 
@@ -278,12 +278,12 @@ Tool preference:
 
   ```text
   Change point: <file:entry point>, reached via <call-site chain, outermost → innermost>.
-  Minimised repro (Phase 4): `<command>`; files: <list>.
+  Symptom (Phase 4): <expected> vs <actual>. Minimised repro: `<command>`; files: <list>.
   Seams already rejected as too shallow: <seam — why it cannot replicate the trigger>.
   Return your standard Change Analysis and Recommended Approach: the seam to break, the characterization tests to write first, the safe transformation path.
   ```
 
-  Carry its seam analysis and characterization-test plan into the Phase 8 comment, then label the issue (`<N>` is the number from `$ARGUMENTS`): `gh label create "action-required" --description "Needs a human action" --color "B60205" 2>/dev/null || true; gh issue edit <N> --add-label action-required` — create-then-add, never a flag that rewrites a founder's existing label. `soleur:operator-digest` reads that label when it runs against this repo (today: Soleur's own), and the digest is where a non-technical founder reads it as **"we cannot yet add an automatic test that keeps this bug from coming back"**; elsewhere it is a labelled issue the agent surfaces at the next session.
+  Carry its seam analysis and characterization-test plan into the Phase 8 comment, then label the issue (`<N>` is the number from `$ARGUMENTS`): `gh label create "action-required" --description "Needs a human action" --color "B60205" 2>/dev/null || true; gh issue edit <N> --add-label action-required` — create-then-add, never a flag that rewrites a founder's existing label. `soleur:operator-digest` reads that label when it runs against this repo (today: Soleur's own), and the digest is where a non-technical founder reads it as **"we cannot yet add an automatic test that keeps this bug from coming back"**; elsewhere the Phase 8 comment (item 8) is the only place the founder sees it, so say it there in those words.
 
 ## Phase 8: Report Back
 
@@ -291,21 +291,24 @@ This is the **single** issue comment of the run — nothing was posted in Phases
 
 1. **Findings** - What was discovered about the cause
 2. **Reproduction Steps** - Exact steps to reproduce (verified)
-3. **Screenshots** - Visual evidence of the bug (upload captured screenshots)
+3. **Screenshots** - Visual evidence of the bug (upload captured screenshots). A screenshot never passes through the redactor: review each for another person's name, email, amount or an internal hostname first — crop it or leave it out.
 4. **Relevant Code** - File paths and line numbers
 5. **Suggested Fix** - If one exists. Name the next step: *after Phase 9, commit the loop script yourself and hand it to `soleur:test-fix-loop --cmd '<the command>' --max 5` so the fix iterates on the user's symptom, not on a proxy* — after cleanup, never before, because `soleur:test-fix-loop` requires a clean tree and would otherwise hand the founder a git instruction.
-6. **The red-capable command** - Its redacted invocation and output, framed for the founder as *"a command your agent re-runs on request — red before the fix, green after — and shows you the result"*. When Phase 2 ended on the instrumentation arm, the `no loop buildable yet; instrumentation added: SOLEUR_<…>; re-run soleur:reproduce-bug on the next occurrence` line goes here instead.
-7. **The ranked hypotheses with verdicts** - The Phase 5 table; `UNKNOWN` is allowed, `CONFIRMED` only with the discriminating observation quoted. When the checkpoint was not presented, add `founder checkpoint not presented (headless); proceeded with the agent's ranking`.
+6. **The red-capable command** - Its redacted invocation and output, framed for the founder as *"a command your agent re-runs on request — red before the fix, green after — and shows you the result"*. When Phase 2 ended on option 1, 2 or 3 instead, this item carries that arm's line: `no loop buildable yet; instrumentation added: SOLEUR_<…>; re-run soleur:reproduce-bug on the next occurrence`, or the one environment ask, or the one artifact ask (what to capture and that it is handed to the agent, never attached here).
+7. **The ranked hypotheses with verdicts** - The Phase 5 table; `UNKNOWN` is allowed, `CONFIRMED` only with the discriminating observation quoted. When the notice was not presented, add `founder notice not presented (headless); proceeded with the agent's ranking`.
 8. **The regression seam verdict** - The seam (file + entry point), or `no correct seam` with the characterization-test plan from `soleur:engineering:review:legacy-code-expert`.
 
-Write the whole body — the `--cmd` string included — to a temp file and pass it through the redactor before posting; post only on exit 0 (exit 1 = redaction needed: fix the body and re-run; exit 2 = cannot evaluate: do not post):
+Write the whole body — the `--cmd` string included — with the Write tool to a file in your scratchpad directory (never the repo), then two gates before `gh issue comment`, each its own Bash call with the literal path (no `$( )`, no variables — the ship skill's convention). The structural check first: it catches what the redactor cannot (an opaque header value, a credential in a query string) — show a header's env-var NAME, never its value:
 
 ```bash
-BODY="$(mktemp)"
-# ... write the comment body to "$BODY" ...
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-engine.py" "$BODY" \
-  && gh issue comment <N> --body-file "$BODY"
-rm -f "$BODY"
+grep -niE '(authorization|proxy-authorization|cookie|set-cookie|apikey|x-api-key)[[:space:]]*:|[?&](token|access_token|apikey|key|secret|sig|signature)=' /path/to/scratchpad/reproduce-bug-<N>.md   # expected: no output; any line is a redaction to do by hand
+```
+
+Then the redactor, and post only on exit 0 (exit 1 = redaction needed: fix the body and re-run; exit 2 = cannot evaluate: do not post):
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh" /path/to/scratchpad/reproduce-bug-<N>.md \
+  && gh issue comment <N> --body-file /path/to/scratchpad/reproduce-bug-<N>.md
 ```
 
 ## Phase 9: Cleanup
@@ -325,15 +328,20 @@ fi
 
 Then walk the checklist; every box is required before declaring done:
 
-- [ ] Original repro no longer reproduces (re-run the Phase 2 loop against the original, un-minimised scenario)
-- [ ] Regression test passes, or the seam's absence is documented in the Phase 7 verdict
-- [ ] **No temporary probe ships with the fix** — the shape grep prints nothing (tracked and untracked files, either case, binaries included; `knowledge-base/**/*.md` is excluded only because a learning may quote a real tag):
+- [ ] Original repro no longer reproduces (re-run the Phase 2 loop against the original, un-minimised scenario) — when a fix was applied in this run; otherwise this box transfers to `soleur:test-fix-loop`'s success row, where the fix lands
+- [ ] Regression test passes (same transfer rule), or the seam's absence is documented in the Phase 7 verdict
+- [ ] **No temporary probe ships with the fix** — the shape grep prints nothing (whole repo from any cwd; tracked and untracked files, either case, binaries included; `knowledge-base/**/*.md` is excluded only because a learning may quote a real tag):
 
   ```bash
-  git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- . ':!knowledge-base/**/*.md'   # expected: no output
+  git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- ':/' ':(top,exclude)knowledge-base/**/*.md'   # expected: no output
   ```
 
 - [ ] Throwaway harness deleted, or moved to a clearly-marked debug location
-- [ ] **No production payload in the committed loop script or fixture** — a fixture derived from a captured trace is synthesized or redacted (`cq-test-fixtures-synthesized-only`); a captured artifact from Phase 2's option 3 is deleted
+- [ ] **No production payload in the committed loop script or fixture** — a fixture derived from a captured trace is synthesized or redacted (`cq-test-fixtures-synthesized-only`); a captured artifact from Phase 2's option 3 is deleted, and nothing of its shape is left for a later `git add -A` to sweep up:
+
+  ```bash
+  git ls-files --others --exclude-standard | grep -iE '\.(har|webm|mp4|mov|dmp|core)$'   # expected: no output
+  ```
+
 - [ ] The hypothesis that turned out correct is stated in the Phase 8 comment, so the next debugger learns
 - [ ] The loop script is committed — it is what `soleur:test-fix-loop --cmd '<the command>' --max 5` iterates on

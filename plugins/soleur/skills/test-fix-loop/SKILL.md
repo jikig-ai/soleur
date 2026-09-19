@@ -101,7 +101,7 @@ For each cluster, apply the diagnostic-first rule:
 <critical_sequence>
 Commit the current working tree as a rollback checkpoint before applying fixes. Skip on iteration 1 if the tree is clean -- `<initial-sha>` already serves as the rollback point.
 
-Before the checkpoint commit run `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- . ':!knowledge-base/**/*.md'`; it must print nothing. On output, remove the probes and re-run the suite before committing -- a probe removal is not a fix and never checkpoints as one (ADR-230).
+Before the checkpoint commit run `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- ':/' ':(top,exclude)knowledge-base/**/*.md'`; it must print nothing (top-anchored: the whole repo from whatever cwd the suite needs). On output, remove the probes and re-run the suite before committing -- a probe removal is not a fix and never checkpoints as one (ADR-230). Then `git ls-files --others --exclude-standard | grep -iE '\.(har|webm|mp4|mov|dmp|core)$'` -- also nothing: a captured artifact from `soleur:reproduce-bug` Phase 2 option 3 must never be swept up by the `git add -A` below.
 
     git add -A && git commit -m "test-fix-loop: checkpoint iteration N"
 
@@ -112,7 +112,7 @@ Re-run the full test suite after applying fixes.
 Evaluate the result (same `failures + killed` count and the same row order as §2):
 
 - Any `^[KILLED]` line or `rc` 3: do NOT stage, do NOT report success, do NOT reset — take the *Suite terminated* row
-- All pass (`rc` 0): run the same probe grep; on output, remove the probes, re-run the suite, and stage only when the grep is silent and `rc` is still 0. Then `git add -A`, report success, STOP
+- All pass (`rc` 0): run the same probe grep and the artifact grep; on output, remove the probes / the artifact, re-run the suite, and stage only when both are silent and `rc` is still 0. Then `git add -A`, report success, STOP
 - Failures decreased: continue to next iteration (fixes stay in working tree; the next iteration's checkpoint commits them)
 - Regression: `git reset --hard HEAD` (discard uncommitted fixes, return to checkpoint), STOP
 - Circular or non-convergence: `git reset --hard <initial-sha>` (revert ALL iterations), STOP

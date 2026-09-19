@@ -29,6 +29,16 @@ fails=0
 cases=0
 pass() { printf 'ok   - %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf 'FAIL - %s\n' "$1"; fails=$((fails + 1)); }
+# Instrument self-test — DIRECTION, not only presence (a fail() misrouted to `passes` keeps the
+# conservation check and the floor green). Reported via printf >&2 + exit 1, never through the
+# helper it checks (ADR-193).
+fail "instrument self-test (expected — proves fail() records a FAILURE)" >/dev/null
+pass "instrument self-test (expected — proves pass() records a PASS)" >/dev/null
+if [[ "$fails" != "1" || "$passes" != "1" ]]; then
+  printf '[FATAL] HELPER CONTROL BROKEN: after one fail() and one pass(), fails=%s passes=%s (want 1/1)\n' "$fails" "$passes" >&2
+  exit 1
+fi
+passes=0; fails=0
 
 # 1. dependency-cruiser config — byte-identical to the template.
 D="$(diff "$REF/depcruise-config.template" "$APP/.dependency-cruiser.cjs" 2>&1 || true)"
@@ -111,6 +121,17 @@ else
   fail "dogfood name-coupling BROKEN: Stage A name: ('$A_NAME') != Stage B workflows: ('$B_WF') — Stage B would never trigger"
 fi
 
+# 6a'. The same coupling on the TEMPLATES a founder repo receives: template A `name:` == template B
+#      `workflows:` filter (the dogfood pair above can hold while the emitted pair drifts).
+TA_NAME="$(grep -E '^name:' "$REF/fix-constraints-stage-a.template" | head -1 | sed -E 's/^name:[[:space:]]*//' || true)"
+TB_WF="$(grep -E '^[[:space:]]+workflows:' "$REF/fix-constraints-stage-b.template" | head -1 | sed -E 's/.*workflows:[[:space:]]*\[[[:space:]]*"?([^]"]*)"?[[:space:]]*\].*/\1/' || true)"
+cases=$((cases + 1))
+if [[ -n "$TA_NAME" && "$TA_NAME" == "$TB_WF" ]]; then
+  pass "template name-coupling: Stage A template name: ('$TA_NAME') == Stage B template workflows: filter"
+else
+  fail "template name-coupling BROKEN: Stage A template name: ('$TA_NAME') != Stage B template workflows: ('$TB_WF')"
+fi
+
 # 6b. Stage B (privileged) executes no untrusted tree: no checkout-of-head / bun install /
 #     git apply in its executable body (full-line comments stripped so the header's prose that
 #     NAMES these constructs cannot false-match).
@@ -138,12 +159,16 @@ fi
 # 7. Dogfood README block == the EMITTER's transform of boundary-readme.template (first-line
 #    attribution stripped, __TARGET_DIR__ substituted). `-s` FIRST: a `diff` of two empty
 #    operands passes, which is the parity vacuity that matters. The strip expression is pinned by
-#    `grep -cF` against the script so the two copies of the one transform cannot diverge silently.
+#    `grep -cF` against the script's `content="$(sed …` ASSIGNMENT (a stale comment quoting the
+#    expression cannot stand in for the live one) so the two copies of the one transform cannot
+#    diverge silently. The comparison normalises trailing newlines exactly as the emitter does
+#    (`content="$(…)"` then `printf '%s\n'`), so a template ending in 0 or 2 newlines compares
+#    against what the emitter actually writes.
 README_TMPL="$REF/boundary-readme.template"
 README_DOG="$APP/server/README.md"
 STRIP_EXPR="sed -e '1{/^<!-- Inspired by /d}' -e \"s|__TARGET_DIR__|\$TARGET_REL|g\""
 GEN_SCRIPT="$REPO_ROOT/plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
-STRIP_PIN="$(grep -cF -- "$STRIP_EXPR" "$GEN_SCRIPT" 2>/dev/null || true)"
+STRIP_PIN="$(grep -E '^\s*content="\$\(sed ' "$GEN_SCRIPT" 2>/dev/null | grep -cF -- "$STRIP_EXPR" || true)"
 D=""
 if [[ ! -s "$README_TMPL" ]]; then
   D="template $README_TMPL is missing or empty"
@@ -154,7 +179,8 @@ elif [[ "$STRIP_PIN" != "1" ]]; then
 elif ! head -1 "$README_TMPL" | grep -q '^<!-- Inspired by '; then
   D="template line 1 is not the attribution comment (the emitter strips exactly that line)"
 else
-  D="$(sed -e '1{/^<!-- Inspired by /d}' -e "s|__TARGET_DIR__|$TARGET_DIR|g" "$README_TMPL" | diff - "$README_DOG" 2>&1 || true)"
+  EXPECTED_README="$(sed -e '1{/^<!-- Inspired by /d}' -e "s|__TARGET_DIR__|$TARGET_DIR|g" "$README_TMPL")"
+  D="$(printf '%s\n' "$EXPECTED_README" | diff - "$README_DOG" 2>&1 || true)"
 fi
 cases=$((cases + 1))
 if [[ -z "$D" ]]; then
@@ -186,6 +212,18 @@ if [[ -z "$D" ]]; then
   pass "CLAUDE.md carries the constraint-scaffold pointer once, naming the README path, without @apps/"
 else
   fail "CLAUDE.md pointer: $D"
+fi
+
+# 9. Emission census: every `cp`/`sed` of a `$REF_DIR/*.template` in the script's default-mode
+#    emit block has a parity row above (rows 1–5 read one template each; the README template is
+#    row 7). A sixth emitted template with no dogfood row would otherwise red nothing here.
+EMITTED_TEMPLATES="$(grep -oE '"\$REF_DIR/[a-z-]+\.template"' "$GEN_SCRIPT" 2>/dev/null | sort -u | grep -c . || true)"
+ROW_TEMPLATES="$(grep -oE '"\$REF/[a-z-]+\.template"' "${BASH_SOURCE[0]}" | sort -u | grep -c . || true)"
+cases=$((cases + 1))
+if [[ "$EMITTED_TEMPLATES" -ge 6 && "$EMITTED_TEMPLATES" == "$ROW_TEMPLATES" ]]; then
+  pass "emission census: the script reads $EMITTED_TEMPLATES distinct templates and this suite has a row for each"
+else
+  fail "emission census: script reads $EMITTED_TEMPLATES distinct templates, this suite reads $ROW_TEMPLATES (want equal, >= 6)"
 fi
 
 echo "---"
@@ -220,7 +258,7 @@ fi
 # because guard-vacuity-floor's backward slice carries only contiguous simple assignments into
 # its neutered-machinery mutant; bound anywhere else, the mutant dies unbound and the floor
 # scores CONSTRUCTION instead of FIRES.
-MIN_ROWS=10
+MIN_ROWS=12
 if [[ "$cases" -lt "$MIN_ROWS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ROWS" >&2

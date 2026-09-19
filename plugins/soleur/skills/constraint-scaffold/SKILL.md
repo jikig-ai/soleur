@@ -95,9 +95,11 @@ emitted gate goes **pass → fail → pass**; the founder never sees a scaffold 
 that it ran green once:
 
 1. **Stage.** In a detached-HEAD worktree under `$TMPDIR` (a `TMPDIR` that resolves inside the
-   repository is refused, exit 69, so the worktree and its logs can never land in the founder's tree
-   as untracked files), copy the three artifacts that may be uncommitted — config, runner, baseline —
-   into the target path and symlink the target's `node_modules`, exactly as baseline capture does.
+   repository is refused, exit 69, before anything is written, so the worktree and its logs can never
+   land in the founder's tree as untracked files), copy the three artifacts that may be uncommitted —
+   config, runner, baseline — into the target path and symlink the target's `node_modules`, exactly
+   as baseline capture does. A symlinked `server/` or `components/` is refused (71): the probes are
+   never written through a link.
    Every runner invocation is captured to a `bite-N.log` so a failure can show its evidence before
    the worktree is removed.
 2. **Pass.** The runner must exit 0 on the clean tree. `error <rule>:` lines in the log → exit
@@ -119,17 +121,27 @@ that it ran green once:
 
 **Exit codes 71–74 and what the agent does next.** Every bite failure prints
 `constraint-scaffold: bite-proof FAILED (<code>): <msg>` and the last 40 lines of the relevant log
-on stdout. In **default mode** the script then removes every artifact this run emitted (config,
-runner, the three workflows, the baseline; empty `scripts/` and `.github/workflows/` directories
-are removed too) and says so — the README and pointer have not been written yet — so the repo is as
-it was and the next run is a clean first install, never a 66 on a half-installed gate. A SIGKILL may
-leave a stale registration: `git worktree prune`. In refresh mode nothing is removed. A failure
-while writing the README or the pointer **after** a successful bite is a warning on stdout, not a
-fatal: the gate is installed and proven; the message names the file and the missing doc.
+on stdout. In **default mode** the self-cleanup is armed before the first artifact is written and
+disarmed only after the bite has passed, so this holds for every failure in between — 66..74, an
+unusable `TMPDIR`, a `set -e` abort, an INT/TERM (143), a runner interrupted by a terminal Ctrl-C
+(130): the script removes every artifact this run emitted (config, runner, the three workflows, the
+baseline; empty `scripts/` and `.github/workflows/` directories are removed too) and says so — the
+README and pointer have not been written yet — so the repo is as it was and the next run is a clean
+first install, never a 66 on a half-installed gate. Every failure message is on stdout first
+(`constraint-scaffold: FAILED (<code>): …`). Only a SIGKILL can leave residue (the six files plus a
+stale `.git/worktrees` registration); the 66 message names that recovery (`git clean -n`, `git
+worktree prune`, re-run). The base ref is `origin/main`, else the remote's default branch
+(`origin/HEAD` — a founder repo on `master`); neither present exits 69 before anything is written.
+In refresh mode nothing is removed. A failure while writing the README or the pointer **after** a
+successful bite is a warning on stdout, not a fatal: the gate is installed and proven; the message
+names the file and the missing doc. **Hosted-runner deviation:** `plugins/soleur/` is vendored into
+the production image, so this script can run where no human reads stdout; there a 71–74 is
+transcript-only by design — no `SOLEUR_*` marker is emitted (AC13, the marker-population caution)
+— and the mirrored-not-paged `SOLEUR_CONSTRAINT_SCAFFOLD_HALT` is #8381 (`deferred-scope-out`).
 
 **Precondition (exit 65).** Default mode requires `app/`, `components/` and `server/` to exist under
 the target before anything is emitted — the emitted runner cruises all three and would fail its own
-CI otherwise. The README names the requirement.
+CI otherwise; the message names the missing one. The README names the requirement.
 
 The script carries **no test seams** (no `CONSTRAINT_SCAFFOLD_TEST_*` variable is honoured); the
 suite drives every failure arm through a fixture-owned stub `depcruise` reached via the fixture's

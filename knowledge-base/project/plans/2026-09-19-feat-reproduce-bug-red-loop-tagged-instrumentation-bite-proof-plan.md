@@ -294,6 +294,21 @@ C4: no view changes. Checked against all three model files (`knowledge-base/engi
 
 Controls carried into the implementation: the bite-proof's four failure arms each name **which** step failed, what to do, and (in default mode) that the repo was restored; the worktree isolation removes the residue class entirely; Phase 2's "cannot build a loop" arm is a **stop** with defaults, so (a) is a bounded exit not a loop; a founder-repo `tsconfig` without `@/*` presents as 71 with the runner's own alias-check message and the log tail, not as a mysterious 72. `user-impact-reviewer` runs at review time (single-user-incident threshold).
 
+### Addendum — 2026-09-19 review of PR #8352 (nine-seat panel)
+
+The panel measured six user-facing failure modes the section above did not name; each is now closed in the implementation and recorded here so the section stays a true map:
+
+| Artifact | Vector | Closed by |
+|---|---|---|
+| Five executables in the founder's repo | merge-base 69 (default branch `master`, no remote, `origin/main` unfetched) or an unusable `TMPDIR` fired **after** the emits and **before** any trap → residue, every re-run 66 | base ref (`origin/main`, else `origin/HEAD`) and `TMPDIR` containment resolved before the first write; cleanup armed before the first write, disarmed after `prove_bite`; S-noorigin / S-originhead / S-mktemp rows |
+| Same six artifacts | terminal Ctrl-C reaches the node child (rc 130) and was dispatched as a 72 verdict; SIGKILL residue had no recovery text | runner propagates 130 as an interrupt; scaffold treats it as such; the 66 message names the killed-install recovery (only SIGKILL can leave residue — the "at most a stale registration" sentence in §Observability was false and is superseded by this row) |
+| A correct install rolled back as 72 | `FORCE_COLOR=1` in the environment decorates depcruise's `error <rule>:` lines, both anchors match nothing; a real leak read 71 instead of 74 | runner exports `NO_COLOR=1`; scaffold strips ANSI before the anchors; S-ansi + C1-color rows |
+| Phase 8 comment fields 1/2/6/7 | opaque `Authorization: Bearer …`, non-vendor `DATABASE_URL=`, internal hostnames, customer names/phones pass `redact-engine.py` rc 0; screenshots never pass through it | Phase 1 states the redactor's ceiling; Phase 8 adds a structural header/query-string grep before the redactor, a screenshot PII rule, and posts via the fail-closed `redact-sentinel.sh` shim |
+| Founder-supplied HAR / recording | storage location unspecified (lands in the repo), strip list omitted `queryString`/`content.text`/`_webSocketMessages`/response cookies, no mechanical Phase 9 check, then `test-fix-loop`'s `git add -A` commits it | `mktemp -d` outside the repo, complete strip list, Phase 9 + test-fix-loop untracked-artifact grep |
+| Founder's stdout on 65(next.js)/66/67/68/70 | stderr-only; the 65 message did not name the missing dir | `die` prints on stdout first for every code; 65 names the dir |
+
+Not a user-facing vector but recorded: Guard 4's second predicate missed the pino `log.warn({ SOLEUR_X_DEBUG: true })` form (the tree's dominant marker shape) and `echo '…'`; widened with eleven in-suite positive controls.
+
 ## Infrastructure (IaC)
 
 Not applicable. No server, secret, vendor, DNS, cron or persistent runtime is introduced; every deliverable is plugin prose, one shell script, its tests, one template, two dogfood files and two ADR artifacts.
@@ -357,7 +372,7 @@ failure_modes:
       operator's marker-population caution), so no telemetry layer sees it. Recorded as Deferral 3:
       a mirrored-not-paged SOLEUR_CONSTRAINT_SCAFFOLD_HALT registered in MARKER_RE (inside the
       drift guard's _HALT$ domain) is the follow-up, not a silent gap
-    alert_route: none today (declared); layer 4 Sentry mirror after Deferral 3
+    alert_route: none today (declared); layers 2/3 (pino -> Sentry breadcrumb; journald -> Vector -> Better Stack) via the marker extractor after Deferral 3 (#8381)
 logs:
   where: >
     the founder's terminal / agent transcript for the scaffold run; Soleur plugin-CI logs for

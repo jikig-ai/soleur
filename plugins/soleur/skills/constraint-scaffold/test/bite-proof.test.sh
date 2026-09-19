@@ -72,11 +72,22 @@ cases=0
 # `grep -cE '^\s*cases=\$\(\(cases \+ 1\)\)$'` over its segment of THIS file (the anchored form
 # skips the two prose mentions inside the accounting messages), minus the sites that are
 # legitimately conditional, so the floor is a genuine LOWER BOUND rather than a snapshot:
-#   TOOLCHAIN_FREE_MIN_ASSERTIONS = 59 call sites above the locate-or-install block, minus the 2
-#                                   C-chmod sites that only run when not root         = 57
-#   MIN_ASSERTIONS                = that + the 17 call sites of the real segment      = 74
+#   TOOLCHAIN_FREE_MIN_ASSERTIONS = 75 call sites above the locate-or-install block, minus the 2
+#                                   C-chmod sites that only run when not root         = 73
+#   MIN_ASSERTIONS                = that + the 18 call sites of the real segment      = 91
 ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
+# Instrument self-test — DIRECTION, not only presence: conservation (`pass + fail == cases`) and
+# both floors count verdicts, so a bad() misrouted to the pass counter keeps every gate green while
+# printing FAIL rows. Drive each helper once, require the RIGHT counter moved, reset. Reported via
+# printf >&2 + exit 1, never through the helper it checks (ADR-193).
+bad "instrument self-test (expected — proves bad() records a FAILURE)" >/dev/null
+ok  "instrument self-test (expected — proves ok() records a PASS)" >/dev/null
+if [[ "$fail" != "1" || "$pass" != "1" ]]; then
+  printf '[FATAL] HELPER CONTROL BROKEN: after one bad() and one ok(), fail=%s pass=%s (want 1/1)\n' "$fail" "$pass" >&2
+  exit 1
+fi
+pass=0; fail=0
 
 [[ -f "$GEN" ]] || { echo "fatal: missing $GEN"; exit 2; }
 [[ -f "$REF/depcruise-config.template" ]] || { echo "fatal: missing depcruise-config.template"; exit 2; }
@@ -112,7 +123,8 @@ fi
 # Pin: inside with_detached_worktree(), the `trap '_wt_cleanup` line PRECEDES `worktree add
 # --detach` (ADR-129 — the trap owns the dir before the operation that can fail). Matched on the
 # specific handler so a `trap - EXIT` line cannot satisfy it.
-WT_BODY="$(awk '/^with_detached_worktree\(\)/{f=1} f{print} f && /^}/{exit}' "$GEN")"
+# Comment-STRIPPED: the script documents the very constructs these pins look for.
+WT_BODY="$(awk '/^with_detached_worktree\(\)/{f=1} f{print} f && /^}/{exit}' "$GEN" | grep -vE '^\s*#')"
 TRAP_LN="$(printf '%s\n' "$WT_BODY" | grep -nF "trap '_wt_cleanup" | head -1 | cut -d: -f1)"
 ADD_LN="$(printf '%s\n' "$WT_BODY" | grep -n 'worktree add --detach' | head -1 | cut -d: -f1)"
 cases=$((cases + 1))
@@ -125,8 +137,8 @@ fi
 # Pin: the INT/TERM arm clears EXIT inside itself and exits 143 (cleanup runs once; a TERM is a
 # property, not an accident).
 cases=$((cases + 1))
-if printf '%s\n' "$WT_BODY" | grep -qF "trap '_wt_cleanup; trap - EXIT; exit 143' INT TERM"; then
-  ok "pin: INT/TERM arm is '_wt_cleanup; trap - EXIT; exit 143'"
+if printf '%s\n' "$WT_BODY" | grep -qF "trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM"; then
+  ok "pin: INT/TERM arm is '_wt_cleanup interrupted; trap - EXIT; exit 143'"
 else
   bad "pin: INT/TERM arm missing or not the prescribed shape"
 fi
@@ -144,14 +156,33 @@ fi
 
 # Pin: verdict_fail prints its stdout line BEFORE it dies (agent runtimes surface stdout and
 # swallow stderr), and the stdout line is not itself redirected to stderr.
-VF_BODY="$(awk '/^verdict_fail\(\)/{f=1} f{print} f && /^}/{exit}' "$GEN")"
+VF_BODY="$(awk '/^verdict_fail\(\)/{f=1} f{print} f && /^}/{exit}' "$GEN" | grep -vE '^\s*#')"
 VF_PRINT_LN="$(printf '%s\n' "$VF_BODY" | grep -n "bite-proof FAILED" | grep -v '>&2' | head -1 | cut -d: -f1)"
-VF_DIE_LN="$(printf '%s\n' "$VF_BODY" | grep -nE '^\s*die ' | head -1 | cut -d: -f1)"
+VF_DIE_LN="$(printf '%s\n' "$VF_BODY" | grep -nE '^\s*(die |exit ")' | head -1 | cut -d: -f1)"
 cases=$((cases + 1))
 if [[ -n "$VF_PRINT_LN" && -n "$VF_DIE_LN" && "$VF_PRINT_LN" -lt "$VF_DIE_LN" ]]; then
-  ok "pin: verdict_fail prints 'bite-proof FAILED' on stdout (line $VF_PRINT_LN) before die (line $VF_DIE_LN)"
+  ok "pin: verdict_fail prints 'bite-proof FAILED' on stdout (line $VF_PRINT_LN) before it exits (line $VF_DIE_LN)"
 else
-  bad "pin: verdict_fail must print on stdout before die (print=$VF_PRINT_LN die=$VF_DIE_LN)"
+  bad "pin: verdict_fail must print on stdout before it exits (print=$VF_PRINT_LN exit=$VF_DIE_LN)"
+fi
+
+# Pin: the default-mode tail ARMS the cleanup handler (top-level `trap '_wt_cleanup' EXIT`) before
+# the first write (`mkdir -p "$TARGET/scripts"`) and DISARMS it (top-level `trap - EXIT INT TERM`)
+# after the last prove_bite and before emit_readme — the window every 66..74 / mktemp / set -e
+# failure falls inside. Column-0 call forms on a comment-stripped copy; the helper's own (indented)
+# trap lines cannot satisfy them.
+GEN_NOCOMMENT="$(grep -vE '^\s*#' "$GEN")"
+ARM_LN="$(printf '%s\n' "$GEN_NOCOMMENT" | grep -nF "trap '_wt_cleanup' EXIT" | grep -vE '^[0-9]+:\s' | head -1 | cut -d: -f1)"
+MKDIR_LN="$(printf '%s\n' "$GEN_NOCOMMENT" | grep -nE '^mkdir -p "\$TARGET/scripts"' | head -1 | cut -d: -f1)"
+NC_PB_LN="$(printf '%s\n' "$GEN_NOCOMMENT" | grep -nE '^prove_bite\s*$' | tail -1 | cut -d: -f1)"
+DISARM_LN="$(printf '%s\n' "$GEN_NOCOMMENT" | grep -nE '^trap - EXIT INT TERM$' | head -1 | cut -d: -f1)"
+NC_ER_LN="$(printf '%s\n' "$GEN_NOCOMMENT" | grep -nE '^emit_readme\s*$' | head -1 | cut -d: -f1)"
+cases=$((cases + 1))
+if [[ -n "$ARM_LN" && -n "$MKDIR_LN" && -n "$NC_PB_LN" && -n "$DISARM_LN" && -n "$NC_ER_LN" \
+      && "$ARM_LN" -lt "$MKDIR_LN" && "$MKDIR_LN" -lt "$NC_PB_LN" && "$NC_PB_LN" -lt "$DISARM_LN" && "$DISARM_LN" -lt "$NC_ER_LN" ]]; then
+  ok "pin: cleanup armed ($ARM_LN) < first write ($MKDIR_LN) < prove_bite ($NC_PB_LN) < disarmed ($DISARM_LN) < emit_readme ($NC_ER_LN)"
+else
+  bad "pin: default-mode cleanup window wrong: arm=$ARM_LN mkdir=$MKDIR_LN prove_bite=$NC_PB_LN disarm=$DISARM_LN emit_readme=$NC_ER_LN (want ascending)"
 fi
 
 # Pin: no test seam — the script honours no CONSTRAINT_SCAFFOLD_TEST_* variable.
@@ -190,13 +221,15 @@ fi
 
 # Pin: the emitter's strip/substitute expression is the one literal expression the parity suite
 # also pins (one transform, two copies).
+# Anchored on the ASSIGNMENT form (`content="$(sed …`), so a stale comment quoting the expression
+# cannot stand in for the live one.
 STRIP_EXPR="sed -e '1{/^<!-- Inspired by /d}' -e \"s|__TARGET_DIR__|\$TARGET_REL|g\""
-STRIP_CT="$(grep -cF -- "$STRIP_EXPR" "$GEN" || true)"
+STRIP_CT="$(grep -E '^\s*content="\$\(sed ' "$GEN" | grep -cF -- "$STRIP_EXPR" || true)"
 cases=$((cases + 1))
 if [[ "$STRIP_CT" == "1" ]]; then
-  ok "pin: the README strip/substitute sed expression appears exactly once in the script"
+  ok "pin: the README strip/substitute sed expression appears exactly once, on the content= assignment"
 else
-  bad "pin: README strip/substitute sed expression count=$STRIP_CT (want 1)"
+  bad "pin: README strip/substitute sed expression on a content= assignment count=$STRIP_CT (want 1)"
 fi
 
 # =============================================================================================
@@ -290,6 +323,10 @@ point_node_modules() {
 # <clean-out>/<probe-out> are files whose bytes the stub cats on the `err` clean/probe arms. With
 # <kill-pid-file>, the `err`-without-probe arm first sends TERM to the pid in that file (the
 # pre-probe pass runs after the scaffold's trap is installed; the `baseline` call precedes it).
+# Two flag FILES a case may touch in <dir> after building: `stateful` makes the clean arm fail
+# (probe bytes + probe rc) once a probe arm has run — a gate that stays red after the revert
+# (drives 73); `reach-baseline` makes the `baseline` arm emit a reachability entry, which the
+# emitted RUNNER refuses on its pre-probe pass (drives 71 through runner logic, not stub output).
 make_stub_depcruise() {
   local dir="$1" clean_out="$2" clean_rc="$3" probe_out="$4" probe_rc="$5" pidfile="${6:-}"
   assert_fixture_dir "$dir"
@@ -306,9 +343,18 @@ make_stub_depcruise() {
 printf '%s\n' "$*" >> "$STUB_DIR/calls.log"
 case " $* " in
   *" --output-type json "*)     printf '{"modules":[]}\n' ;;
-  *" --output-type baseline "*) printf '[]\n' ;;
+  *" --output-type baseline "*)
+    if [[ -e "$STUB_DIR/reach-baseline" ]]; then
+      printf '[{"type":"reachability","rule":{"name":"no-client-to-server-secret-transitive"}}]\n'
+    else
+      printf '[]\n'
+    fi ;;
   *" --output-type err "*)
     if [[ -e components/__constraint_scaffold_bite_probe__/direct.tsx ]]; then
+      touch "$STUB_DIR/probed"
+      cat "$STUB_DIR/probe.out"; exit "$PROBE_RC"
+    fi
+    if [[ -e "$STUB_DIR/stateful" && -e "$STUB_DIR/probed" ]]; then
       cat "$STUB_DIR/probe.out"; exit "$PROBE_RC"
     fi
     if [[ -n "$PIDFILE" && -s "$PIDFILE" ]]; then kill -TERM "$(cat "$PIDFILE")" 2>/dev/null || true; fi
@@ -374,6 +420,9 @@ cat > "$CANNED/bare-tokens.txt" <<'EOF'
 
 x 2 dependency violations (2 errors, 0 warnings). 5 modules, 3 dependencies cruised.
 EOF
+# S-ansi: today's real output as a FORCE_COLOR environment decorates it (chalk: red `error`, bold
+# from-path) — a correct gate whose stream carries escapes. Must still PASS the bite.
+sed -e 's/^  error \(no-client-to-server-secret[a-z-]*\): \([^ ]*\)/  \x1b[31merror\x1b[39m \1: \x1b[1m\2\x1b[22m/' "$CANNED/real.txt" > "$CANNED/real-ansi.txt"
 # S-preprobe-violation: the CLEAN arm carries a real violation on a non-probe file.
 cat > "$CANNED/preprobe-violation.txt" <<'EOF'
 
@@ -408,8 +457,8 @@ else
   bad "C2: artifacts present after 65: $(porcelain "$FX")"
 fi
 cases=$((cases + 1))
-if grep -q 'lacks one of app/ components/ server/' "$TMPROOT/c2.out"; then
-  ok "C2: the 65 message names the three dirs on STDOUT"
+if grep -q 'lacks components/ (the emitted runner cruises app/ components/ server/' "$TMPROOT/c2.out"; then
+  ok "C2: the 65 message names the MISSING dir and the three required ones on STDOUT"
 else
   bad "C2: 65 message not on stdout (stdout: $(head -c 200 "$TMPROOT/c2.out"))"
 fi
@@ -809,6 +858,159 @@ else
   bad "S-term: stub argv log unexpected: $(tr '\n' '|' < "$STUB_TERM/calls.log")"
 fi
 
+# --- S-ansi: ANSI-decorated real output on the probe arm -> still PASSES (the anchors read a
+# stripped stream; the runner exports NO_COLOR=1 as the first line of defence) ---------------------
+stub_case s-ansi "$CANNED/clean.txt" 0 "$CANNED/real-ansi.txt" 3
+cases=$((cases + 1))
+if [[ "$RC" == "0" ]] && grep -qE "$VERDICT_RE" "$TMPROOT/s-ansi.out"; then
+  ok "S-ansi: colour-decorated \`error <rule>:\` lines still satisfy both anchors (rc 0, verdict line present)"
+else
+  bad "S-ansi: rc=$RC verdict=$(grep -cE "$VERDICT_RE" "$TMPROOT/s-ansi.out" || true) — an ANSI-decorated stream must not read as 72 (stdout: $(grep -F FAILED "$TMPROOT/s-ansi.out" | head -1))"
+fi
+
+# --- S-73: the gate stays red after the revert -> 73, tree clean ---------------------------------
+STUB_73="$TMPROOT/stub-s-73"
+make_stub_depcruise "$STUB_73" "$CANNED/clean.txt" 0 "$CANNED/real.txt" 3
+touch "$STUB_73/stateful"
+FX="$(make_repo s-73)"
+assert_fixture_dir "$FX"
+point_node_modules "$FX" "$STUB_73"
+run_gen "$FX" s-73
+cases=$((cases + 1))
+if [[ "$RC" == "73" ]] && grep -qF 'bite-proof FAILED (73)' "$TMPROOT/s-73.out"; then
+  ok "S-73: a gate that does not return to green after the probes are removed exits 73 (verdict on stdout)"
+else
+  bad "S-73: expected 73 + stdout verdict, got rc=$RC (stdout: $(grep -F FAILED "$TMPROOT/s-73.out" | head -1))"
+fi
+cases=$((cases + 1))
+if [[ -z "$(porcelain "$FX")" ]]; then
+  ok "S-73: default-mode 73 leaves the tree clean"
+else
+  bad "S-73: residue after 73: $(porcelain "$FX" | tr '\n' ' ')"
+fi
+
+# --- S-71: the emitted RUNNER refuses a reachability baseline entry on the pre-probe pass -> 71 ---
+# (Runner logic, not stub bytes: the only stub shape that distinguishes "ran the emitted runner"
+# from "called depcruise directly with the runner's argv".)
+STUB_71="$TMPROOT/stub-s-71"
+make_stub_depcruise "$STUB_71" "$CANNED/clean.txt" 0 "$CANNED/real.txt" 3
+touch "$STUB_71/reach-baseline"
+FX="$(make_repo s-71)"
+assert_fixture_dir "$FX"
+point_node_modules "$FX" "$STUB_71"
+run_gen "$FX" s-71
+cases=$((cases + 1))
+if [[ "$RC" == "71" ]] && grep -qF 'bite-proof FAILED (71)' "$TMPROOT/s-71.out" && grep -qF 'suppress the transitive rule' "$TMPROOT/s-71.out"; then
+  ok "S-71: the runner's own pre-probe refusal surfaces as 71 with the runner's reason in the stdout log tail"
+else
+  bad "S-71: expected 71 + runner reason on stdout, got rc=$RC (stdout: $(grep -F FAILED "$TMPROOT/s-71.out" | head -1))"
+fi
+cases=$((cases + 1))
+if [[ -z "$(porcelain "$FX")" ]]; then
+  ok "S-71: default-mode 71 leaves the tree clean"
+else
+  bad "S-71: residue after 71: $(porcelain "$FX" | tr '\n' ' ')"
+fi
+
+# --- S-int130: the runner exits 130 (terminal Ctrl-C reached the node child) -> treated as an
+# interrupt, never as a 71/72 verdict; cleanup; exit 130 ----------------------------------------------
+stub_case s-int130 "$CANNED/clean.txt" 130 "$CANNED/real.txt" 3
+cases=$((cases + 1))
+if [[ "$RC" == "130" ]] && grep -qF 'interrupted; removed:' "$TMPROOT/s-int130.out" && ! grep -qF 'bite-proof FAILED' "$TMPROOT/s-int130.out"; then
+  ok "S-int130: runner rc 130 exits 130 with the interrupted line and NO verdict"
+else
+  bad "S-int130: rc=$RC (want 130) stdout: $(tail -2 "$TMPROOT/s-int130.out" | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+if [[ -z "$(porcelain "$FX")" && "$(worktree_count "$FX")" == "1" ]]; then
+  ok "S-int130: tree clean, no worktree left registered"
+else
+  bad "S-int130: porcelain=[$(porcelain "$FX" | tr '\n' ' ')] worktrees=$(worktree_count "$FX")"
+fi
+
+# --- S-noorigin: neither origin/main nor origin/HEAD -> 69 BEFORE any write; re-run is not 66 ------
+FX="$(make_repo s-noorigin)"
+assert_fixture_dir "$FX"
+point_node_modules "$FX" "$STUB_CLEAN"
+git -C "$FX" update-ref -d refs/remotes/origin/main
+run_gen "$FX" s-noorigin
+cases=$((cases + 1))
+if [[ "$RC" == "69" ]] && grep -qF 'FAILED (69): no origin/main and no origin/HEAD' "$TMPROOT/s-noorigin.out"; then
+  ok "S-noorigin: no base ref exits 69 with the fetch instruction on STDOUT"
+else
+  bad "S-noorigin: rc=$RC (want 69) stdout: $(tail -2 "$TMPROOT/s-noorigin.out" | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+if [[ -z "$(porcelain "$FX")" && ! -e "$FX/apps/web-platform/scripts" ]]; then
+  ok "S-noorigin: nothing was written (porcelain empty, no scripts/ dir)"
+else
+  bad "S-noorigin: residue after 69: $(porcelain "$FX" | tr '\n' ' ')"
+fi
+run_gen "$FX" s-noorigin-2
+cases=$((cases + 1))
+if [[ "$RC" == "69" ]]; then
+  ok "S-noorigin: the re-run is the same 69, not a 66 on a half-installed gate"
+else
+  bad "S-noorigin: re-run rc=$RC (want 69; 66 means a half-installed gate was left behind)"
+fi
+
+# --- S-originhead: a founder repo on master (origin/HEAD -> origin/master, no origin/main) -> 0 ---
+FX="$(make_repo s-originhead)"
+assert_fixture_dir "$FX"
+point_node_modules "$FX" "$STUB_CLEAN"
+git -C "$FX" update-ref refs/remotes/origin/master HEAD
+git -C "$FX" update-ref -d refs/remotes/origin/main
+git -C "$FX" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+run_gen "$FX" s-originhead
+cases=$((cases + 1))
+if [[ "$RC" == "0" ]] && grep -qF 'against origin/master merge-base' "$TMPROOT/s-originhead.err"; then
+  ok "S-originhead: falls back to the remote default branch (origin/master) and completes"
+else
+  bad "S-originhead: rc=$RC (want 0) stderr: $(grep -F 'merge-base' "$TMPROOT/s-originhead.err" | head -1)"
+fi
+
+# --- S-mktemp: TMPDIR that does not exist -> mktemp fails -> 69, tree clean (not a raw set -e abort) --
+FX="$(make_repo s-mktemp)"
+assert_fixture_dir "$FX"
+point_node_modules "$FX" "$STUB_CLEAN"
+RUN_TMPDIR="$TMPROOT/does-not-exist/nested" run_gen "$FX" s-mktemp
+cases=$((cases + 1))
+if [[ "$RC" == "69" ]] && grep -qF 'FAILED (69): cannot create a temp dir' "$TMPROOT/s-mktemp.out"; then
+  ok "S-mktemp: an unusable TMPDIR exits 69 with the cause on STDOUT"
+else
+  bad "S-mktemp: rc=$RC (want 69) stdout: $(tail -2 "$TMPROOT/s-mktemp.out" | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+if [[ -z "$(porcelain "$FX")" && ! -e "$FX/apps/web-platform/scripts" ]]; then
+  ok "S-mktemp: every emitted artifact removed (the cleanup was armed before the first write)"
+else
+  bad "S-mktemp: residue after 69: $(porcelain "$FX" | tr '\n' ' ')"
+fi
+
+# --- S-symlink-server: server/ is a committed symlink to a dir OUTSIDE the repo -> the bite refuses
+# to write probes through it (71), tree clean, external dir untouched ---------------------------------
+FX="$(make_repo s-symlink-server)"
+assert_fixture_dir "$FX"
+point_node_modules "$FX" "$STUB_CLEAN"
+mkdir -p "$TMPROOT/ext-server"
+printf 'export const X = 1;\n' > "$TMPROOT/ext-server/config.ts"
+rm -rf -- "$FX/apps/web-platform/server"
+ln -s "$TMPROOT/ext-server" "$FX/apps/web-platform/server"
+git -C "$FX" add -A && git -C "$FX" commit -q -m "server as symlink" && git -C "$FX" update-ref refs/remotes/origin/main HEAD
+run_gen "$FX" s-symlink-server
+cases=$((cases + 1))
+if [[ "$RC" == "71" ]] && grep -qF 'server is a symlink' "$TMPROOT/s-symlink-server.out"; then
+  ok "S-symlink-server: probes are never written through a symlinked server/ (71, reason on stdout)"
+else
+  bad "S-symlink-server: rc=$RC (want 71) stdout: $(grep -F FAILED "$TMPROOT/s-symlink-server.out" | head -1)"
+fi
+cases=$((cases + 1))
+if [[ -z "$(porcelain "$FX")" && "$(ls -A "$TMPROOT/ext-server" | tr '\n' ' ')" == "config.ts " ]]; then
+  ok "S-symlink-server: tree clean and the external directory holds only its own file"
+else
+  bad "S-symlink-server: porcelain=[$(porcelain "$FX" | tr '\n' ' ')] ext=[$(ls -A "$TMPROOT/ext-server" | tr '\n' ' ')]"
+fi
+
 # --- locate (or install) the dependency-cruiser binary -----------------------
 # Fast path: the installed web-platform binary (present locally + in the
 # test-webplat CI shard). Fallback: the test-scripts shard has node+npm but no
@@ -864,7 +1066,7 @@ if ! [[ "$PARSED_COMPONENTS" =~ ^[0-9]+$ ]] || [[ "$PARSED_COMPONENTS" -lt 1 ]];
     echo "bite-proof.test.sh: $pass passed, $fail failed ($cases assertions, SKIPPED at the toolchain probe)"
     exit 1
   fi
-  TOOLCHAIN_FREE_MIN_ASSERTIONS=57
+  TOOLCHAIN_FREE_MIN_ASSERTIONS=73
   if [[ "$cases" -lt "$TOOLCHAIN_FREE_MIN_ASSERTIONS" ]]; then
     printf '\n[FATAL] anti-vacuity floor (toolchain-free half): only %d assertion(s) ran, expected >= %d.\n' \
       "$cases" "$TOOLCHAIN_FREE_MIN_ASSERTIONS" >&2
@@ -892,6 +1094,19 @@ if [[ "$RC" == "0" ]]; then
   ok "C1: default mode exits 0 with the real toolchain"
 else
   bad "C1: expected 0, got rc=$RC (stdout: $(tail -3 "$TMPROOT/c1.out" | tr '\n' ' ')) (stderr: $(tail -3 "$TMPROOT/c1.err" | tr '\n' ' '))"
+fi
+# C1-color: the same run with FORCE_COLOR=1 in the environment (some CI images, some shells set
+# it) — the real depcruise decorates its `error <rule>:` lines; the runner's NO_COLOR=1 plus the
+# scaffold's strip must keep this a pass, never a 72 that rolls a correct install back.
+FX_COLOR="$(make_repo c1-color)"
+assert_fixture_dir "$FX_COLOR"
+point_node_modules "$FX_COLOR" "$NODE_MODULES"
+FORCE_COLOR=1 run_gen "$FX_COLOR" c1-color
+cases=$((cases + 1))
+if [[ "$RC" == "0" ]] && grep -qE "$VERDICT_RE" "$TMPROOT/c1-color.out"; then
+  ok "C1-color: FORCE_COLOR=1 in the environment still proves the bite (rc 0, verdict line)"
+else
+  bad "C1-color: rc=$RC verdict=$(grep -cE "$VERDICT_RE" "$TMPROOT/c1-color.out" || true) (stdout: $(grep -F FAILED "$TMPROOT/c1-color.out" | head -1))"
 fi
 C1_VERDICT="$(grep -E "$VERDICT_RE" "$TMPROOT/c1.out" | head -1)"
 cases=$((cases + 1))
@@ -1069,7 +1284,7 @@ fi
 # A harness that silently asserted nothing (a fixture generator that no-ops, an editing slip that
 # drops a block) would otherwise print a clean smaller total and exit 0. See MIN_ASSERTIONS above
 # for how the number is derived and when to ratchet it.
-MIN_ASSERTIONS=74
+MIN_ASSERTIONS=91
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2

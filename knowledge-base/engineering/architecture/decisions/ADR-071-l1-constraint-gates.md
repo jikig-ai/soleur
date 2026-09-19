@@ -165,8 +165,9 @@ agent-instructions file. Six sub-decisions:
   `worktree add --detach`, the `EXIT`/`INT`/`TERM` traps (the signal arm exits 143) and the
   removal; `capture_baseline_mergebase` and `prove_bite` are its two callers, so there is one trap
   owner and no ordering hazard between two copies. It refuses a `TMPDIR` that resolves inside the
-  repository, so neither the worktree nor its logs can ever appear in the founder's tree as
-  untracked files. Inside the worktree the three possibly-uncommitted artifacts (config, runner,
+  repository (exit 69, checked before the first write), so neither the worktree nor its logs can
+  ever appear in the founder's tree as untracked files, and it refuses to write the probes through
+  a symlinked `server/` or `components/` (71). Inside the worktree the three possibly-uncommitted artifacts (config, runner,
   baseline) are copied in and `node_modules` is symlinked, exactly as the baseline capture does.
 - **Both rules are asserted on their own edges, by call-form.** The injected probe is four files
   under `components/__constraint_scaffold_bite_probe__/` and `server/`: `direct.tsx` (a
@@ -188,13 +189,21 @@ agent-instructions file. Six sub-decisions:
   line, `constraint-scaffold: bite-proof pass -> fail(no-client-to-server-secret@direct,
   no-client-to-server-secret-transitive@via-hop) -> pass depcruise=<version>`. Stdout because agent
   runtimes surface stdout and swallow stderr.
-- **Default mode cleans up after itself on any bite failure.** Before dying, `verdict_fail`
-  removes every artifact the run emitted (config, runner, the three workflows, baseline), `rmdir`s
-  the two directories it created when empty, and says so. A TERM mid-bite does the same through
-  the helper's cleanup. A failed first install is therefore re-runnable and never leaves a
-  half-installed gate whose next run would exit 66 (artifacts exist). Refresh mode removes nothing
-  (the artifacts are committed) and says the baseline was rewritten and should be reviewed with
-  `git diff`.
+- **Default mode cleans up after itself on any failure after the first write.** The one cleanup
+  handler (`_wt_cleanup`) is armed before the first artifact is emitted and disarmed only after
+  `prove_bite` returns, so a bite failure (71–74), a helper failure (68/69), an unusable `TMPDIR`,
+  a `set -e` abort, an INT/TERM (143) and a runner interrupted by a terminal Ctrl-C (130 —
+  propagated by the runner, never dispatched as a verdict) all remove every artifact the run
+  emitted (config, runner, the three workflows, baseline), `rmdir` the directories it created when
+  empty, and say so on stdout. The base ref (`origin/main`, else `origin/HEAD`) and the `TMPDIR`
+  containment are resolved before the first write, so the two first-install failures a founder repo
+  actually hits exit 69 with nothing to clean. A failed first install is therefore re-runnable and
+  never leaves a half-installed gate whose next run would exit 66; only a SIGKILL can, and the 66
+  message names that recovery. Every failure message is printed on stdout before stderr (`die` is
+  the one failure path). Refresh mode removes nothing (the artifacts are committed) and says the
+  baseline was rewritten and should be reviewed with `git diff`. *(Review of #8352 widened this from
+  "on any bite failure": the merge-base 69 sat after the emits and before any trap, measured on a
+  fixture without `origin/main` — five artifacts left, next run 66.)*
 - **Precondition on the three directories.** Before anything is emitted, default mode requires
   `app/`, `components/` and `server/` to exist under the target (exit 65) — the emitted runner
   cruises all three and would fail its own CI otherwise. The README names the requirement.
@@ -268,9 +277,11 @@ symlink, so the code path a founder runs is the code path the suite runs.
   reads "bite-proof pass" as "CI path exercised".
 - **(e) Two sequential worktree adds per run, and the cost.** The baseline capture and the bite
   each take one `worktree add`/remove pair, and the bite adds three runner passes to both modes.
-  Measured on `apps/web-platform` on 2026-09-19 (depcruise 16.10.4): one runner pass is ~20 s
-  wall-clock, so the bite adds roughly a minute plus the worktree pair to every scaffold and refresh
-  run, on an agent-only path. The PR body carries the canonical Task 0.4 figure.
+  Measured on `apps/web-platform` on 2026-09-19 (depcruise 16.10.4): one runner pass is 16–20 s
+  wall-clock and a whole refresh run with the bite is ~49 s, so the bite adds ~45–60 s plus the
+  worktree pair to every scaffold and refresh run, on an agent-only path. Each `worktree add` runs
+  the founder repo's own `post-checkout` hook (same trust domain as `git checkout`; the pre-amendment
+  script already ran one, this adds the second). The PR body carries the canonical Task 0.4 figure.
 - **(f) Test-surface deltas.** The new operands in `constraint-scaffold.sh` may move its row count
   in `plugins/soleur/test/fixture-relative-assert.baseline.txt` (10 rows before this change); a
   regeneration is legal only in the same commit as the operand edits, diffed so that only rows for

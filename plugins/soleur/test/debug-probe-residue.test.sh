@@ -2,10 +2,15 @@
 # Guard 4 (#8288, ADR-230): no temporary debug probe survives in Soleur's own tracked tree.
 #
 # PROPERTY. No tracked file outside `knowledge-base/**/*.md` contains a real `[DEBUG-<hex4>]`
-# tag (either case) or EMITS a `SOLEUR_[A-Z_]*DEBUG` marker. The first is the removable probe
-# class; the second is a probe spelled with the permanent-marker prefix, which the marker drift
-# guard's SENTINEL_RE does not see at the realistic injection site (a log call). ADR-230 holds
-# the two-class table; this file enforces the tree-wide consequence.
+# tag (either case) or EMITS a `SOLEUR_[A-Z_]*DEBUG` marker on one of the emit call-forms this
+# tree uses: `echo`/`printf`/bash `log "…"`, JS `console.<level>(`, pino `log.<level>({ KEY:` or
+# `(“…`, `logger.<level>(`, `process.std{out,err}.write(`, python `print(`. The first is the
+# removable probe class; the second is a probe spelled with the permanent-marker prefix, which
+# the marker drift guard's SENTINEL_RE does not see at the realistic injection site (a log
+# call). Env READS (`process.env.SOLEUR_*`) are excluded at line level, not by narrowing the
+# emit anchor. Untracked and ignored files, submodules, and a form outside that list are out of
+# scope (the prose gate in reproduce-bug Phase 9 covers untracked files with `--untracked`).
+# ADR-230 holds the two-class table; this file enforces the tree-wide consequence.
 #
 # ASSEMBLY. Two `git grep -l` predicates over one derived population, run from the repo
 # toplevel because the exclusion pathspec is cwd-relative. `git grep -l` exits 1 on no match,
@@ -28,10 +33,13 @@
 # repos with MIN_POPULATION=1 (`cq-test-fixtures-synthesized-only`), never against a probe
 # planted in the real tree. The must-PASS rows run against the real tree with the defaults.
 #
-# ANTI-VACUITY (ADR-193). Three rows, one independent `cases` counter moved at each call site
-# (never inside ok()/bad(), never inside `$( ... )`), a conservation check, `MIN_CASES=3`
-# in the shape `scripts/guard-vacuity-floor.test.sh` derives, and a population floor. Every
-# floor reports with `printf >&2` + `exit 1` directly, never through the verdict helpers.
+# ANTI-VACUITY (ADR-193). Three tree rows plus in-suite positive/negative controls of both
+# predicates on a SYNTHESIZED throwaway repo (every marker token and tag is assembled at run
+# time so this file never carries one), one independent `cases` counter moved at each call
+# site (never inside ok()/bad(), never inside `$( ... )`), an instrument self-test, a
+# conservation check, `MIN_CASES` in the shape `scripts/guard-vacuity-floor.test.sh` derives,
+# and a population floor. Every floor reports with `printf >&2` + `exit 1` directly, never
+# through the verdict helpers.
 #
 # Auto-registers via scripts/test-all.sh's `plugins/soleur/test/*.test.sh` glob.
 set -euo pipefail
@@ -66,27 +74,50 @@ fail=0
 cases=0
 ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
+# Instrument self-test -- DIRECTION, not only presence (a bad() misrouted to `pass` keeps the
+# conservation check and the floor green). Reported via printf >&2 + exit 1, never through the
+# helper it checks (ADR-193).
+bad "instrument self-test (expected -- proves bad() records a FAILURE)" >/dev/null
+ok  "instrument self-test (expected -- proves ok() records a PASS)" >/dev/null
+if [[ "$fail" != "1" || "$pass" != "1" ]]; then
+  printf '[FATAL] HELPER CONTROL BROKEN: after one bad() and one ok(), fail=%s pass=%s (want 1/1)\n' "$fail" "$pass" >&2
+  exit 1
+fi
+pass=0; fail=0
 
 # The D4 predicate, tracked-files form. `-i` because a hand-typed uppercase tag is the
 # realistic leak; `-l` because the finding is the PATH; `-E` for the `{4}` quantifier. The
 # exclusion is the markdown under knowledge-base/ only -- a learning may quote a real tag from
 # a session -- and NOT the whole directory: executables are tracked under knowledge-base/ too.
 P1_RE='\[DEBUG-[0-9a-f]{4}\]'
-# The emit call-form only. The bare token `SOLEUR_[A-Z_]*DEBUG` is red on today's tree:
-# `apps/web-platform/server/permission-log.ts` READS `process.env.SOLEUR_DEBUG_PERMISSION_LAYER`,
-# a legitimate env flag, and its test names it too. Reading a flag is not emitting a marker.
-# The predicate therefore anchors on the emit sites -- `echo "`, `printf <any>`, and a
-# `console.<level>(` opened with any of the three JS quote characters -- immediately followed
-# by the token. Case-sensitive: the permanent class is upper-case by definition.
-P2_RE='(echo "|printf .|console\.(log|debug|warn|error)\(["'"'"'`])SOLEUR_[A-Z_]*DEBUG'
+# The emit call-forms this tree actually uses (measured 2026-09-19: 11 of the 12 real
+# `SOLEUR_*` emits under apps/web-platform/server are the pino object form
+# `log.warn({ SOLEUR_X: true, ...m }, "...")`; skill scripts use `echo "`/`printf '`/`log "`),
+# with the token ANYWHERE later on the same line -- a prefix string, a template literal with an
+# interpolation first, or a space after `(` must not hide it. The bare token alone is red on
+# today's tree: `apps/web-platform/server/permission-log.ts` READS
+# `process.env.SOLEUR_DEBUG_PERMISSION_LAYER`, a legitimate env flag, and its test names it too;
+# reading a flag is not emitting a marker, so those LINES are excluded below (P2_LINE_EXCLUDE),
+# never by narrowing the emit anchor. Case-sensitive: the permanent class is upper-case.
+P2_RE='(\becho\b|\bprintf\b|\blog "|\bprint\(|console\.[a-z]+\(|\b(log|logger)\.(trace|debug|info|warn|error|fatal)\(|process\.std(out|err)\.write\()[^;]*SOLEUR_[A-Z_]*DEBUG'
+P2_LINE_EXCLUDE='process\.env\.SOLEUR_[A-Z_]*DEBUG'
 EXCLUDE=':!knowledge-base/**/*.md'
 
-# Runs one predicate. Prints every hit on stdout, prefixed, and returns 0 (residue), 1 (clean)
-# or dies on a tool error. Captured with the exit decided explicitly: under `set -e` a bare
-# `x=$(git grep ...)` would abort the suite on the CLEAN answer.
-scan() { # <label> <grep-flags> <regex>
-  local label="$1" flags="$2" re="$3" hits rc=0
-  hits="$(git grep "$flags" -e "$re" -- . "$EXCLUDE")" || rc=$?
+# Runs one predicate in the cwd. Prints every hit on stdout, prefixed, and returns 0 (residue),
+# 1 (clean) or dies on a tool error. Captured with the exit decided explicitly: under `set -e` a
+# bare `x=$(git grep ...)` would abort the suite on the CLEAN answer. With <line-exclude>, hits
+# are taken per LINE (`-n`) and lines matching it are dropped before the verdict.
+scan() { # <label> <grep-flags> <regex> [<line-exclude>]
+  local label="$1" flags="$2" re="$3" lx="${4:-}" hits rc=0
+  if [[ -n "$lx" ]]; then
+    hits="$(git grep -nE -e "$re" -- . "$EXCLUDE")" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      hits="$(printf '%s\n' "$hits" | grep -vE "$lx" || true)"
+      [[ -n "$hits" ]] || rc=1
+    fi
+  else
+    hits="$(git grep "$flags" -e "$re" -- . "$EXCLUDE")" || rc=$?
+  fi
   if [[ "$rc" -gt 1 ]]; then
     printf '[FATAL] %s: git grep exited %d -- a tool error, not a verdict.\n' "$label" "$rc" >&2
     exit 2
@@ -111,10 +142,10 @@ fi
 
 # --- Row 2: no tracked file EMITS a SOLEUR_*DEBUG marker ---------------------------------
 p2_rc=0
-scan "predicate 2" -lE "$P2_RE" || p2_rc=$?
+scan "predicate 2" -lE "$P2_RE" "$P2_LINE_EXCLUDE" || p2_rc=$?
 cases=$((cases + 1))
 if [[ "$p2_rc" -eq 1 ]]; then
-  ok "predicate 2: no tracked file emits a SOLEUR_*DEBUG marker via echo/printf/console.<level> (env READS of such a flag are not emits and are not matched)"
+  ok "predicate 2: no tracked file emits a SOLEUR_*DEBUG marker on any listed call-form (env READS of such a flag are excluded per line, not by narrowing the anchor)"
 else
   bad "predicate 2: the file(s) named above EMIT a SOLEUR_*DEBUG marker -- a temporary probe never wears the permanent-marker prefix; respell it [DEBUG-<hex4>] or promote it through MARKER_RE (ADR-230)"
 fi
@@ -132,6 +163,77 @@ if [[ "$population" =~ ^[0-9]+$ && "$predicate_scope" =~ ^[0-9]+$ && "$predicate
   ok "population: $population tracked file(s) outside knowledge-base/; the predicate scope ($predicate_scope files) covers all of them"
 else
   bad "population: predicate scope ($predicate_scope) is NARROWER than the counted population ($population) -- the exclusion pathspecs have drifted apart"
+fi
+
+# --- Rows 4..: instrument controls on a SYNTHESIZED repo ------------------------------------
+# One throwaway git repo, one file per emit form (positives) plus the env-read negative. The
+# marker token and the hex tag are ASSEMBLED at run time (`DEB""UG`, printf %04x) so this file
+# never carries a concrete emit-form literal or tag itself. A control that cannot go red is not
+# a control: each positive must be found, the negative must not.
+CTRL_ROOT="$(mktemp -d)"
+trap 'rm -rf -- "$CTRL_ROOT"' EXIT INT TERM
+case "$CTRL_ROOT" in /?*) : ;; *) printf '[FATAL] mktemp gave %q\n' "$CTRL_ROOT" >&2; exit 2 ;; esac
+M="SOLEUR_PROBE_DEB""UG"
+TAG="[DEBUG-$(printf '%04x' 43981)]"
+git -C "$CTRL_ROOT" init -q
+git -C "$CTRL_ROOT" config user.email "test@example.com"
+git -C "$CTRL_ROOT" config user.name "test"
+mkdir -p "$CTRL_ROOT/knowledge-base/notes"
+printf 'echo "%s fired"\n' "$M"                                   > "$CTRL_ROOT/p-echo-dq.sh"
+printf "echo '%s fired'\n" "$M"                                   > "$CTRL_ROOT/p-echo-sq.sh"
+printf 'echo probe: %s\n' "$M"                                    > "$CTRL_ROOT/p-echo-bare.sh"
+printf "printf '%%s%s' \"%s\"\n" '\n' "$M"                          > "$CTRL_ROOT/p-printf-fmt.sh"
+printf 'log "%s: step 3"\n' "$M"                                  > "$CTRL_ROOT/p-log-helper.sh"
+printf 'console.info("%s");\n' "$M"                               > "$CTRL_ROOT/p-console-info.ts"
+printf 'console.log( `ctx ${id} %s`);\n' "$M"                     > "$CTRL_ROOT/p-console-tpl.ts"
+printf 'log.warn({ %s: true, ...m }, "probe");\n' "$M"            > "$CTRL_ROOT/p-pino-key.ts"
+printf 'logger.info("%s");\n' "$M"                                > "$CTRL_ROOT/p-logger.ts"
+printf 'process.stdout.write("%s%s");\n' "$M" '\n'                    > "$CTRL_ROOT/p-stdout.ts"
+printf 'print("%s")\n' "$M"                                       > "$CTRL_ROOT/p-print.py"
+printf 'const on = process.env.%s === "1";\n' "$M"                > "$CTRL_ROOT/n-env-read.ts"
+printf 'const t = "%s";\n' "$TAG"                                 > "$CTRL_ROOT/p-tag.ts"
+printf 'a session quoted %s here\n' "$TAG"                        > "$CTRL_ROOT/knowledge-base/notes/n-quoted-tag.md"
+git -C "$CTRL_ROOT" add -A
+git -C "$CTRL_ROOT" -c commit.gpgsign=false commit -q -m "controls"
+# ctrl_scan <label> <flags> <regex> [<line-exclude>] -> rc, in the control repo, hits swallowed.
+ctrl_scan() {
+  local rc=0
+  ( cd "$CTRL_ROOT" && scan "$@" >/dev/null ) || rc=$?
+  return "$rc"
+}
+# ctrl_hits <regex> [<line-exclude>] -> the sorted list of paths predicate 2 names.
+ctrl_hits() {
+  local re="$1" lx="${2:-}" out
+  out="$( cd "$CTRL_ROOT" && git grep -nE -e "$re" -- . "$EXCLUDE" | { if [[ -n "$lx" ]]; then grep -vE "$lx"; else cat; fi; } | cut -d: -f1 | LC_ALL=C sort -u | tr '\n' ' ' )" || true
+  printf '%s' "$out"
+}
+P2_HITS="$(ctrl_hits "$P2_RE" "$P2_LINE_EXCLUDE")"
+P2_WANT="p-console-info.ts p-console-tpl.ts p-echo-bare.sh p-echo-dq.sh p-echo-sq.sh p-log-helper.sh p-logger.ts p-pino-key.ts p-print.py p-printf-fmt.sh p-stdout.ts "
+cases=$((cases + 1))
+if [[ "$P2_HITS" == "$P2_WANT" ]]; then
+  ok "control: predicate 2 names exactly the 11 positive emit forms and not the env read (${P2_HITS% })"
+else
+  bad "control: predicate 2 named [$P2_HITS] want [$P2_WANT]"
+fi
+P1_HITS="$(ctrl_hits "$P1_RE")"
+cases=$((cases + 1))
+if [[ "$P1_HITS" == "p-tag.ts " ]]; then
+  ok "control: predicate 1 names the tracked tag and not the quoted tag under knowledge-base/**/*.md"
+else
+  bad "control: predicate 1 named [$P1_HITS] want [p-tag.ts ]"
+fi
+# The negative alone: with every positive removed, both predicates read CLEAN (rc 1) -- the
+# line-level env exclusion is what keeps predicate 2 green, and the control proves it fires.
+git -C "$CTRL_ROOT" rm -q --cached -- 'p-*' >/dev/null
+rm -f -- "$CTRL_ROOT"/p-*
+git -C "$CTRL_ROOT" -c commit.gpgsign=false commit -q -m "negatives only"
+n1_rc=0; ctrl_scan "control p1" -liE "$P1_RE" || n1_rc=$?
+n2_rc=0; ctrl_scan "control p2" -lE "$P2_RE" "$P2_LINE_EXCLUDE" || n2_rc=$?
+cases=$((cases + 1))
+if [[ "$n1_rc" -eq 1 && "$n2_rc" -eq 1 ]]; then
+  ok "control: with only the env read and the quoted learning tracked, both predicates read CLEAN (rc 1/1)"
+else
+  bad "control: negatives-only repo read p1=$n1_rc p2=$n2_rc (want 1/1)"
 fi
 
 # --- Accounting conservation (ADR-193 #3, #4) -----------------------------------------------
@@ -157,10 +259,10 @@ fi
 
 # --- Anti-vacuity floor (ADR-193 #1) -------------------------------------------------------
 # Reads the INDEPENDENT `cases` counter and reports with `printf >&2` + `exit 1` DIRECTLY.
-# Exactly three rows exist (predicate 1, predicate 2, population); fewer means a row was
-# deleted or skipped, and a green run here would be a coverage loss. The threshold sits on the
-# line directly above its `if` so guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=3
+# Exactly six rows exist (predicate 1, predicate 2, population, three controls); fewer means a
+# row was deleted or skipped, and a green run here would be a coverage loss. The threshold sits
+# on the line directly above its `if` so guard-vacuity-floor's backward slice-widening binds it.
+MIN_CASES=6
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2

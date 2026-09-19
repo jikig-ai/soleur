@@ -491,7 +491,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Learnings captured (soleur:compound)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
 - [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
-- [ ] No removable probe in the tree: `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- . ':!knowledge-base/**/*.md'` prints nothing (ADR-230)
+- [ ] No removable probe in the tree (Phase 5.4 gate, ADR-230)
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
@@ -505,6 +505,8 @@ Ship Checklist for [branch name]:
 ## Phase 5.4: Pre-Flight Validation
 
 Run technical readiness checks before creating the PR. This catches unapplied migrations, missing security headers, and bare-repo execution context.
+
+**Probe-residue gate (ADR-230), before preflight.** Run `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- ':/' ':(top,exclude)knowledge-base/**/*.md'` — top-anchored, so it scans the whole repo from any cwd. Any output blocks the PR: remove the probe (it is a `[DEBUG-<hex4>]` line left by `soleur:reproduce-bug` / `soleur:test-fix-loop`), re-run Phase 4's affected suites, and run the grep again until it prints nothing. On Soleur's own tree `plugins/soleur/test/debug-probe-residue.test.sh` repeats the check in CI; on a founder repo this gate is the only pre-PR site.
 
 Invoke the preflight skill via the **Skill tool**:
 

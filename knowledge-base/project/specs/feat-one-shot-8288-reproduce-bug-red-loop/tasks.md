@@ -85,4 +85,4 @@ Constraints in force: no new skills; nothing named `wizard`; no `description:` f
 ## Phase 7: Acceptance
 
 - [ ] 7.1 Walk AC1–AC23 with the exact commands in the plan; every "gate green" AC runs the gate's own invocation
-- [ ] 7.2 Deferrals 1–3 filed at ship with `deferred-scope-out` + re-evaluation criteria (3 = the mirrored-not-paged `SOLEUR_CONSTRAINT_SCAFFOLD_HALT` for the hosted surface); numbers on the `Filed:` line
+- [x] 7.2 (filed during review, so SKILL.md could cite Deferral 3 by number: #8379 generator floor, #8380 CI-time bite, #8381 hosted HALT marker) Deferrals 1–3 filed with `deferred-scope-out` + re-evaluation criteria (3 = the mirrored-not-paged `SOLEUR_CONSTRAINT_SCAFFOLD_HALT` for the hosted surface); numbers on the `Filed:` line

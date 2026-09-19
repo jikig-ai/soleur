@@ -18,23 +18,33 @@
 #                        grandfathered), then bite-proof. Never writes README/pointer.
 #                        Agent-only; never shown to the founder.
 #
-# Exit matrix (every non-zero is a hard, fail-closed stop):
+# Base ref: origin/main when it exists, else the remote's default branch (origin/HEAD, e.g. a
+# founder repo on master). Neither present -> 69 BEFORE anything is written.
+#
+# Exit matrix (every non-zero is a hard, fail-closed stop; every message is printed on STDOUT
+# first — agent runtimes surface stdout and swallow stderr — then on stderr):
 #   0   success
+#   2   CONSTRAINT_SCAFFOLD_REPO_ROOT override is empty, "/", or relative (refused before any git call)
 #   64  usage error (unknown argument)
 #   65  precondition failed (target is not a Next.js app, or lacks app/ components/ server/)
 #   66  refuse-if-exists (a non-baseline artifact already present; no --force)
 #   67  dirty working tree (baseline capture requires a clean tree)
 #   68  dependency-cruiser binary missing, or baseline capture failed
-#   69  git/merge-base/worktree error, or TMPDIR resolves inside the repository
+#   69  git/base-ref/worktree/temp-dir error, or TMPDIR resolves inside the repository
 #   70  --refresh-baseline before generation (no .dependency-cruiser.cjs yet — run default mode first)
 #   71  bite-proof: gate did not pass on the clean HEAD tree before the probe (config/toolchain)
 #   72  bite-proof: gate did NOT reject the injected client->server-secret imports on their edges
 #   73  bite-proof: gate did not return to green after the probes were removed
 #   74  bite-proof: real client->server-secret violation(s) on HEAD newer than the baseline
 #
-# In default mode a 71/72/73/74 REMOVES every artifact this run emitted (the README and the
-# pointer have not been written yet), so a failed first install is re-runnable and never
-# leaves a half-installed gate. An INT/TERM mid-bite does the same and exits 143.
+# In default mode the self-cleanup is armed BEFORE the first artifact is written and disarmed
+# only after the bite has passed: every failure in between (66..74, a failed `mktemp`, a
+# `set -e` abort) REMOVES every artifact this run emitted, so a failed first install is
+# re-runnable and never leaves a half-installed gate. The README and the pointer are written
+# after the disarm. An INT/TERM mid-run does the same and exits 143; a runner interrupted by a
+# terminal Ctrl-C (rc 130) is treated as an interrupt, never as a verdict. Only a SIGKILL can
+# leave residue (the six files plus a stale `.git/worktrees` registration) — the 66 message
+# names the recovery.
 #
 # No test seams: this script reads no test-only environment variable. The self-tests
 # drive every failure arm through a fixture-owned stub `depcruise` reached via the target's
@@ -57,6 +67,14 @@ case "$REPO_ROOT" in
   /|//|/.)       printf 'FATAL: REPO_ROOT resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
   /*)            : ;;
   *)             printf 'FATAL: REPO_ROOT %s is RELATIVE; refusing\n' "$REPO_ROOT" >&2; exit 2 ;;
+esac
+# Canonical form once (a trailing slash would defeat every `${f#"$REPO_ROOT"/}` display and the
+# TMPDIR containment case below), re-guarded: the value now comes from a command substitution.
+REPO_ROOT="$(realpath -- "$REPO_ROOT")"
+case "$REPO_ROOT" in
+  /|//|/.) printf 'FATAL: REPO_ROOT canonicalises to the filesystem root; refusing\n' >&2; exit 2 ;;
+  /*)      : ;;
+  *)       printf 'FATAL: REPO_ROOT %s did not canonicalise to an absolute path; refusing\n' "$REPO_ROOT" >&2; exit 2 ;;
 esac
 
 # v1: the one supported target.
@@ -87,13 +105,14 @@ PROBE_VIA_HOP="components/__constraint_scaffold_bite_probe__/via-hop.tsx"
 PROBE_SERVER="server/__constraint_scaffold_bite_probe__.ts"
 
 log()  { printf 'constraint-scaffold: %s\n' "$*" >&2; }
-die()  { log "$1"; exit "${2:-1}"; }
 # Agent runtimes surface stdout and swallow stderr, so anything the founder or the agent must
-# act on is printed on STDOUT too (warn/say), and only then logged.
+# act on is printed on STDOUT (warn/say) and only then logged. `die` is the ONE failure path:
+# every non-zero exit prints `FAILED (<code>): <msg>` on stdout, then the message on stderr.
 say()  { printf 'constraint-scaffold: %s\n' "$*"; }
 warn() { printf 'constraint-scaffold: WARNING: %s\n' "$*"; }
-# fail_stdout <code> <msg>: the stdout-then-die path every user-actionable failure uses.
-fail_stdout() { say "FAILED ($1): $2"; die "$2" "$1"; }
+die()  { say "FAILED (${2:-1}): $1"; log "$1"; exit "${2:-1}"; }
+# fail_stdout <code> <msg>: kept as the named form the tests and the header cite; same path.
+fail_stdout() { die "$2" "$1"; }
 
 MODE="default"
 case "${1:-}" in
@@ -137,36 +156,50 @@ remove_emitted_artifacts() {
 # both signals because the distinction buys nothing here). Both the baseline capture and the
 # bite-proof are callers, so there is exactly one trap owner and no ordering hazard.
 WT=""
+# _wt_cleanup [interrupted]: the ONE trap handler. Removes the worktree if one is open and, in
+# default mode, every artifact this run emitted. The word "interrupted" is printed only when a
+# signal arrived; a failed step says "run aborted".
 _wt_cleanup() {
+  local why="${1:-run aborted}"
   if [[ -n "${WT:-}" ]]; then
     git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
     rm -rf -- "$WT"
   fi
-  # Default mode: a TERM (or a die inside the helper) must not leave the repo at 66 next run.
+  # Default mode: a TERM (or a die anywhere after the first write) must not leave the repo at 66.
   if [[ "$MODE" == "default" ]]; then
     local removed
     removed="$(remove_emitted_artifacts)"
-    [[ -n "$removed" ]] && say "interrupted; removed: $removed"
+    [[ -n "$removed" ]] && say "$why; removed: $removed"
   fi
   return 0
 }
+# TMPDIR containment, checked before the first write (a `mktemp -d` under a TMPDIR inside the
+# repo would land the bite worktree — and its logs — in the founder's tree as untracked files).
+check_tmpdir_outside_repo() {
+  local t
+  t="$(realpath -m -- "${TMPDIR:-/tmp}")"
+  case "$t" in
+    "$REPO_ROOT"|"$REPO_ROOT"/*)
+      fail_stdout 69 "TMPDIR ($t) resolves inside the repository; refusing to create the bite worktree there" ;;
+  esac
+}
 with_detached_worktree() {
   local ref="$1" fn="$2"
-  WT="$(mktemp -d)"
+  trap '_wt_cleanup' EXIT
+  trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM
+  WT="$(mktemp -d)" || fail_stdout 69 "cannot create a temp dir under TMPDIR=${TMPDIR:-/tmp}"
   case "$(realpath "$WT")" in
-    "$REPO_ROOT"/*|"$(realpath "$REPO_ROOT")"/*)
-      _wt_cleanup
+    "$REPO_ROOT"/*)
       fail_stdout 69 "TMPDIR resolves inside the repository; refusing to create the bite worktree there" ;;
   esac
-  trap '_wt_cleanup' EXIT
-  trap '_wt_cleanup; trap - EXIT; exit 143' INT TERM
   git -C "$REPO_ROOT" worktree add --detach "$WT" "$ref" >/dev/null 2>&1 \
-    || die "git worktree add at ${ref:0:12} failed" 69
+    || fail_stdout 69 "git worktree add at ${ref:0:12} failed"
   "$fn" "$WT"
   git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf -- "$WT"
   WT=""
-  trap - EXIT INT TERM
+  # Leave the handler armed while the default-mode tail owns it (CLEANUP_ARMED=1).
+  [[ "${CLEANUP_ARMED:-0}" == 1 ]] || trap - EXIT INT TERM
 }
 
 # --- Baseline capture (shared) -----------------------------------------------
@@ -175,28 +208,28 @@ with_detached_worktree() {
 # single-client-dir app does not error on a missing dir.
 capture_baseline() {
   local app_root="$1"
-  [[ -x "$DEPCRUISE" ]] || die "dependency-cruiser not found at $DEPCRUISE — run 'npm ci --ignore-scripts' in $TARGET_REL first" 68
+  [[ -x "$DEPCRUISE" ]] || fail_stdout 68 "dependency-cruiser not found at ${DEPCRUISE#"$REPO_ROOT"/} — run 'npm ci --ignore-scripts' in $TARGET_REL first"
   local scan_dirs=()
   local d
   for d in app components server; do
     [[ -d "$app_root/$d" ]] && scan_dirs+=("$d")
   done
-  [[ "${#scan_dirs[@]}" -gt 0 ]] || die "no app/components/server dirs under $app_root — cannot capture baseline" 68
+  [[ "${#scan_dirs[@]}" -gt 0 ]] || fail_stdout 68 "no app/components/server dirs under $app_root — cannot capture baseline"
   local tmp
   tmp="$(mktemp)"
   if ! ( cd "$app_root" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type baseline "${scan_dirs[@]}" ) > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
-    die "baseline capture failed (dependency-cruiser config error, or the hoisted node_modules symlink did not resolve?)" 68
+    fail_stdout 68 "baseline capture failed (dependency-cruiser config error, or the hoisted node_modules symlink did not resolve?)"
   fi
   mv "$tmp" "$BASELINE"
-  log "captured baseline: $(grep -c '"rule"' "$BASELINE" 2>/dev/null || echo 0) known violation(s) -> ${BASELINE#"$REPO_ROOT"/}"
+  log "captured baseline: $(grep -c '"rule"' "$BASELINE" 2>/dev/null || true) known violation(s) -> ${BASELINE#"$REPO_ROOT"/}"
 }
 
 _capture_baseline_in_worktree() {
   local wt="$1"
   local wt_target="$wt/$TARGET_REL"
   [[ -d "$wt_target/app" || -d "$wt_target/components" ]] \
-    || die "merge-base tree has no $TARGET_REL/app|components — cannot capture baseline" 69
+    || fail_stdout 69 "base tree ($BASE_REF) has no $TARGET_REL/app|components — cannot capture baseline"
   # The merge-base may predate the gate: ensure the current config is present, and
   # reuse the installed node_modules (depcruise binary + resolver) via symlink.
   cp "$CFG" "$wt_target/.dependency-cruiser.cjs"
@@ -204,18 +237,36 @@ _capture_baseline_in_worktree() {
   capture_baseline "$wt_target"
 }
 
-# Capture the baseline against the origin/main merge-base in a detached worktree,
+# resolve_base_ref: sets BASE_REF (origin/main, else the remote's default branch via
+# origin/HEAD) and MB (its merge-base with HEAD). Runs BEFORE the first write in both modes, so
+# a founder repo without origin/main fails 69 with nothing to clean up. Read-only.
+resolve_base_ref() {
+  if git -C "$REPO_ROOT" rev-parse -q --verify origin/main >/dev/null 2>&1; then
+    BASE_REF="origin/main"
+  elif BASE_REF="$(git -C "$REPO_ROOT" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)" && [[ -n "$BASE_REF" ]]; then
+    :
+  else
+    fail_stdout 69 "no origin/main and no origin/HEAD — fetch the default branch first (git fetch origin main, or git remote set-head origin -a)"
+  fi
+  MB="$(git -C "$REPO_ROOT" merge-base "$BASE_REF" HEAD 2>/dev/null)" \
+    || fail_stdout 69 "could not compute merge-base of $BASE_REF and HEAD (unrelated histories, or $BASE_REF not fetched?)"
+}
+
+# Capture the baseline against the base-ref merge-base in a detached worktree,
 # so a violation introduced in the SAME PR (branch-added) is NOT grandfathered —
-# only violations pre-existing on main land in the baseline. Used by BOTH modes:
+# only violations pre-existing on the base land in the baseline. Used by BOTH modes:
 # first adoption (default) must not grandfather a same-PR leak any more than a
 # refresh does. Requires a clean tree (committed state == reviewable baseline).
-capture_baseline_mergebase() {
+# require_clean_tree <when>: 67 on a dirty tree (committed state == reviewable baseline).
+require_clean_tree() {
   if ! { git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet; }; then
-    die "working tree is dirty — commit or discard changes before capturing the baseline" 67
+    die "working tree is dirty — commit or discard changes $1" 67
   fi
-  MB="$(git -C "$REPO_ROOT" merge-base origin/main HEAD 2>/dev/null)" \
-    || die "could not compute merge-base with origin/main (is origin/main fetched?)" 69
-  log "capturing baseline against origin/main merge-base ${MB:0:12} (same-PR violations excluded)"
+}
+
+capture_baseline_mergebase() {
+  require_clean_tree "before capturing the baseline"
+  log "capturing baseline against $BASE_REF merge-base ${MB:0:12} (same-PR violations excluded)"
   with_detached_worktree "$MB" _capture_baseline_in_worktree
 }
 
@@ -240,7 +291,10 @@ verdict_fail() {
   else
     say "refresh mode: the baseline was rewritten by this run — review it with \`git diff\` before deciding; no artifact was removed"
   fi
-  die "$msg" "$code"
+  # The verdict line above IS the stdout copy; log to stderr and exit (not `die`, which would
+  # print a second FAILED line). The EXIT trap removes the worktree.
+  log "$msg"
+  exit "$code"
 }
 
 # Run the emitted runner against the worktree copy, capturing stdout+stderr to a file (so a
@@ -250,6 +304,14 @@ _run_gate() {
   local wt_target="$1" logf="$2"
   RC=0
   CONSTRAINT_GATES_DIR="$wt_target" bash "$wt_target/scripts/constraint-gates.sh" >"$logf" 2>&1 || RC=$?
+  # A terminal Ctrl-C reaches the node child first: it exits 130 and bash never sees the
+  # signal, so without this arm the interrupted run would be dispatched as a 71/72/73 verdict.
+  if [[ "$RC" -eq 130 ]]; then
+    _wt_cleanup interrupted; trap - EXIT; exit 130
+  fi
+  # Belt and braces with the runner's NO_COLOR=1: a FORCE_COLOR environment decorates
+  # depcruise's `error <rule>:` lines and both anchors below would match nothing.
+  sed -i 's/\x1b\[[0-9;]*m//g' "$logf"
 }
 
 _depcruise_version() {
@@ -273,7 +335,7 @@ _prove_bite_in_worktree() {
   cp "$BASELINE" "$wt_target/.dependency-cruiser-known-violations.json"
   [[ -e "$wt_target/node_modules" ]] || ln -s "$TARGET/node_modules" "$wt_target/node_modules"
   local ver
-  ver="$(_depcruise_version "$wt_target")"
+  ver="$(_depcruise_version "$wt_target" | tr -cd 'A-Za-z0-9.+-' | cut -c1-40)"
 
   # 2. Pass on the clean tree.
   _run_gate "$wt_target" "$wt/bite-1.log"
@@ -287,7 +349,14 @@ _prove_bite_in_worktree() {
     verdict_fail 71 "gate did not pass on the clean tree before the probe (rc=$RC) — config or toolchain error; see the log tail" "$wt/bite-1.log"
   fi
 
-  # 3. Inject — each rule on the edge it exists for. direct.tsx is a "use client" module
+  # 3. Inject — each rule on the edge it exists for. A symlinked server/ or components/ would
+  #    route the probes OUTSIDE the worktree (a checked-out link resolves the same as in the
+  #    founder's tree): refuse rather than write through it.
+  local d
+  for d in server components; do
+    [[ -L "$wt_target/$d" ]] && verdict_fail 71 "$TARGET_REL/$d is a symlink; refusing to write the bite probes through it"
+  done
+  #    Each rule on the edge it exists for. direct.tsx is a "use client" module
   #    value-importing the probe server module (direct rule); hop.ts is a NON-client helper that
   #    value-imports it; via-hop.tsx is a "use client" module value-importing ./hop (transitive
   #    rule). The server module exports one string that is visibly not a secret.
@@ -341,6 +410,11 @@ prove_bite() {
 append_once() {
   local f="$1" marker="$2" content="$3"
   [[ -L "$f" ]] && { warn "refusing to append through a symlink: ${f#"$REPO_ROOT"/} -> $(readlink "$f")"; return 1; }
+  # A symlinked PARENT (server/ -> outside) passes `-L` on the file: require containment.
+  case "$(realpath -m -- "$f")" in
+    "$REPO_ROOT"/*) ;;
+    *) warn "refusing to append outside the repository: ${f#"$REPO_ROOT"/} resolves to $(realpath -m -- "$f")"; return 1 ;;
+  esac
   grep -qF -- "$marker" "$f" 2>/dev/null && return 0
   [[ -s "$f" && -n "$(tail -c 1 "$f")" ]] && printf '\n' >> "$f"
   printf '%s\n' "$content" >> "$f" || return 1
@@ -377,6 +451,9 @@ emit_pointer() {
 
 if [[ "$MODE" == "refresh" ]]; then
   [[ -f "$CFG" ]] || die "no .dependency-cruiser.cjs at $TARGET_REL — run the default mode first to generate the gate" 70
+  require_clean_tree "before capturing the baseline"
+  resolve_base_ref
+  check_tmpdir_outside_repo
   capture_baseline_mergebase
   prove_bite
   log "refresh complete — review the baseline diff before merging."
@@ -387,21 +464,30 @@ fi
 # Clean-tree guard FIRST — the baseline is captured against the origin/main
 # merge-base (below), and we refuse to emit onto a dirty tree so the resulting
 # baseline + artifact diff is reviewable and deterministic.
-if ! { git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet; }; then
-  die "working tree is dirty — commit or discard changes before generating the gate" 67
-fi
+require_clean_tree "before generating the gate"
 
 for f in "$CFG" "$RUNNER" "$WORKFLOW" "$FIXWORKFLOW_A" "$FIXWORKFLOW_B"; do
-  [[ -e "$f" ]] && die "refuse-if-exists: ${f#"$REPO_ROOT"/} already present (no --force; re-baseline via --refresh-baseline)" 66
+  [[ -e "$f" ]] && die "refuse-if-exists: ${f#"$REPO_ROOT"/} already present (no --force). Committed gate: re-baseline via --refresh-baseline. Untracked leftovers of a killed first install: delete them (\`git clean -n $TARGET_REL\` lists them), run \`git worktree prune\`, re-run" 66
 done
 [[ -e "$BASELINE" ]] && die "refuse-if-exists: ${BASELINE#"$REPO_ROOT"/} already present (re-baseline via --refresh-baseline)" 66
 
 # Three-dirs precondition, BEFORE anything is emitted: the emitted runner cruises all three
 # and would fail its own CI on a target missing one; the README names the requirement.
 for d in app components server; do
-  [[ -d "$TARGET/$d" ]] || fail_stdout 65 "target $TARGET_REL lacks one of app/ components/ server/ — the emitted runner cruises all three and would fail its own CI"
+  [[ -d "$TARGET/$d" ]] || fail_stdout 65 "target $TARGET_REL lacks $d/ (the emitted runner cruises app/ components/ server/ and would fail its own CI)"
 done
 
+# Base ref and temp dir, BEFORE anything is emitted: the two first-install failures a founder
+# repo actually hits (no origin/main; an IDE TMPDIR inside the repo) must not write first.
+resolve_base_ref
+check_tmpdir_outside_repo
+
+# Arm the self-cleanup before the first write (single handler: _wt_cleanup). Disarmed only
+# after prove_bite returns — the worktree helper re-installs the same handler and leaves it
+# armed while CLEANUP_ARMED=1.
+CLEANUP_ARMED=1
+trap '_wt_cleanup' EXIT
+trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM
 mkdir -p "$TARGET/scripts" "$TARGET/.github/workflows"
 
 # .dependency-cruiser.cjs — emitted verbatim (the from-set is computed at
@@ -433,6 +519,8 @@ capture_baseline_mergebase
 # (a tracked CLAUDE.md or server/README.md appended earlier would exit 67 with the executables
 # already emitted and leave the next run at 66), and a 71/72/73/74 never has to undo them.
 prove_bite
+CLEANUP_ARMED=0
+trap - EXIT INT TERM
 emit_readme
 emit_pointer
 

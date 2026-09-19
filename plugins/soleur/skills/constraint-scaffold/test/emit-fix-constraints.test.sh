@@ -29,28 +29,61 @@ fail() { printf 'FAIL - %s\n' "$1"; fails=$((fails + 1)); }
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 
-# Throwaway git repo with a valid Next.js-shaped app dir, committed clean (no origin/main).
+# Throwaway git repo with a valid Next.js-shaped app dir, committed clean, origin/main == HEAD, and
+# a fixture-owned stub `depcruise` (baseline -> [], clean err -> rc 0, probe err -> both rules on
+# their edges, rc 1) so a default-mode run COMPLETES. Since #8288 a run that fails anywhere after
+# the first write removes every artifact it emitted, so the workflows can only be observed after a
+# run that reaches exit 0 — the pre-#8288 "assert on the artifacts a failed run left behind" is the
+# residue class that PR closed.
 make_repo() {
   local fx="$TMPROOT/$1"
   mkdir -p "$fx/apps/web-platform/app" "$fx/apps/web-platform/components" "$fx/apps/web-platform/server"
   git -C "$fx" init -q
   git -C "$fx" config user.email "test@example.com"
   git -C "$fx" config user.name "test"
+  printf 'node_modules\n' > "$fx/.gitignore"
   printf 'module.exports = {};\n' > "$fx/apps/web-platform/next.config.js"
   printf '{ "dependencies": { "next": "15.0.0" } }\n' > "$fx/apps/web-platform/package.json"
+  printf 'export default function Page() { return null; }\n' > "$fx/apps/web-platform/app/page.tsx"
+  printf '"use client";\nexport const G = () => "g";\n' > "$fx/apps/web-platform/components/g.tsx"
+  printf 'export const APP = "fixture";\n' > "$fx/apps/web-platform/server/config.ts"
   git -C "$fx" add -A
   git -C "$fx" commit -q -m "seed app"
+  git -C "$fx" update-ref refs/remotes/origin/main HEAD
+  local stub="$TMPROOT/stub-$1"
+  mkdir -p "$stub/.bin" "$stub/dependency-cruiser"
+  printf '{ "name": "dependency-cruiser", "version": "0.0.0-stub" }\n' > "$stub/dependency-cruiser/package.json"
+  cat > "$stub/.bin/depcruise" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *" --output-type json "*)     printf '{"modules":[]}\n' ;;
+  *" --output-type baseline "*) printf '[]\n' ;;
+  *" --output-type err "*)
+    if [[ -e components/__constraint_scaffold_bite_probe__/direct.tsx ]]; then
+      printf '\n  error no-client-to-server-secret-transitive: components/__constraint_scaffold_bite_probe__/via-hop.tsx → server/__constraint_scaffold_bite_probe__.ts\n  error no-client-to-server-secret: components/__constraint_scaffold_bite_probe__/direct.tsx → server/__constraint_scaffold_bite_probe__.ts\n\nx 2 dependency violations (2 errors, 0 warnings). 5 modules, 3 dependencies cruised.\n'
+      exit 1
+    fi
+    printf '\n✔ no dependency violations found (1 modules, 0 dependencies cruised)\n\n'; exit 0 ;;
+  *) echo "stub depcruise: unhandled argv: $*" >&2; exit 64 ;;
+esac
+STUB
+  chmod +x "$stub/.bin/depcruise"
+  ln -s "$stub" "$fx/apps/web-platform/node_modules"
   printf '%s' "$fx"
 }
 
-# --- Emit: default mode writes BOTH stage workflows (before baseline capture) --------
+# --- Emit: default mode writes BOTH stage workflows -------------------------------------
 FX="$(make_repo emit)"
 set +e
-CONSTRAINT_SCAFFOLD_REPO_ROOT="$FX" bash "$GEN" >/dev/null 2>&1
+CONSTRAINT_SCAFFOLD_REPO_ROOT="$FX" TMPDIR="$TMPROOT" bash "$GEN" >"$TMPROOT/emit.out" 2>"$TMPROOT/emit.err"
 EMIT_RC=$?
 set -e
-# The run intentionally fails at baseline capture (no origin/main merge-base in the
-# fixture), but the workflows are emitted first. We assert on the artifacts, not the rc.
+# The run must COMPLETE (rc 0) for the artifacts to remain; a non-zero rc here is a real failure.
+if [[ "$EMIT_RC" == "0" ]]; then
+  pass "emit: default mode completed (rc 0) against the stub toolchain"
+else
+  fail "emit: default mode rc=$EMIT_RC (stdout: $(tail -2 "$TMPROOT/emit.out" | tr '\n' ' '))"
+fi
 for pair in "A:$FIX_A" "B:$FIX_B"; do
   stage="${pair%%:*}"; rel="${pair#*:}"
   if [[ -f "$FX/$rel" ]]; then
