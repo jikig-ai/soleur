@@ -613,6 +613,14 @@
             "comparison": {
               "key": "stage",
               "match": "eq",
+              "value": "gitdata_luks_reopen_arm"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
               "value": "gitdata_nftables_metadata"
             },
             "type": "tagged_event"
@@ -630,6 +638,14 @@
               "key": "stage",
               "match": "eq",
               "value": "luks_open"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "luks_reopen"
             },
             "type": "tagged_event"
           },
@@ -686,7 +702,7 @@
             "comparison": {
               "key": "stage",
               "match": "in",
-              "value": "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report"
+              "value": "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report,gitdata_luks_reopen_arm_warn"
             },
             "type": "tagged_event"
           }

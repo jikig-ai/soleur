@@ -110,6 +110,39 @@ enrollment, not first on the day its verdict is due.
     now says which config holds the deploy-webhook triple; treat a zero count from an unfamiliar
     CLI subcommand as "the command failed" until its output shape is inspected.
 
+## Addendum — 2026-09-19 (ship phase of PR #8346, post-merge)
+
+Five more session errors from the ship phase, recorded after the merge (the branch was already
+squashed, so they travel in a docs PR):
+
+21. **`guard-vacuity-floor` (a repo-global ratchet) scored the new harness floor "mutant not
+    constructible"** — first seen in the ship battery, invisible to every file-selected suite —
+    Recovery: `FLOOR=117` moved to the line IMMEDIATELY above `if [[ "$passes" -lt "$FLOOR" ]]`
+    (24d8d7ff1). **Prevention:** the ratchet slices the floor block backward over CONTIGUOUS simple
+    assignments only, so any non-assignment line (`[[ "$fails" -eq 0 ]] || exit 1`) between the
+    threshold binding and the `if` leaves the mutant unbound. Bind the threshold adjacent to its
+    floor, and run `scripts/guard-vacuity-floor.test.sh` whenever a suite gains a floor.
+22. **My own mid-run fix commit tripped the battery's repo-write boundary FATAL** (`HEAD before
+    089e129ae / after 24d8d7ff1`, counted as the run's second "failed") — Recovery: read the FATAL's
+    before/after SHAs and matched them to my commit; the final tree was attested by CI
+    (`battery-owed.sh` rc 42). **Prevention:** a commit during a running `test-all.sh` is a write the
+    runner cannot distinguish from a suite's; batch fixes before launch, or accept that the run's
+    verdict becomes "record only" and re-attest the final SHA.
+23. **The sweeper dry-run job concluded `failure` while #6178's row was perfect** — the sweeper
+    fails any run in which ANY tracker carries a fenced directive, and #8210 does — Recovery: read the
+    per-issue lines, not the job conclusion. **Prevention:** a green/red job is not a per-tracker
+    verdict; grep the tracker's own `directive found → exit= → would comment` lines. #8210's fence is
+    the sweeper's to report (it did) and its owner's to unfence.
+24. **`gh issue create --body-file <scratchpad path>` was refused twice by the guardrails hook**
+    ("this gate cannot read") and a third time for naming no user-visible consequence —
+    Recovery: write the body under `/var/tmp` with the Write tool, add `meta/machinery`.
+    **Prevention:** the hook reads the body file itself; keep issue bodies outside the session
+    scratchpad, and a decision-challenge record is a machinery filing.
+25. **Two auto-close traps in PR prose** (`close #6178 LAST` in the verb list; a literal
+    `Closes|Fixes|Resolves #6178` in the gate record) — Recovery: reworded before `gh pr edit`;
+    `closingIssuesReferences` asserted `[]` after every body edit. **Prevention:** run
+    `auto-close-scan.sh` on the body FILE before editing the PR, and assert the FIELD, not the scan.
+
 ## Related
 
 - `knowledge-base/project/learnings/2026-09-17-followthrough-directive-on-existing-issue-three-silent-traps.md`

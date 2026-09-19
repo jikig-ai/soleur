@@ -1467,6 +1467,16 @@ if [[ -r "$_CAP" ]]; then
   # `stage` tag is the only positional fact in a FAIL row.
   _emit_src="${DIR}/cloud-init-git-data.yml"
   _boot_src="${DIR}/git-data-bootstrap.sh"
+  # (#8210) THE PRODUCER SET IS DERIVED, NOT ENUMERATED. It was this pair, which was exactly
+  # the payload that called git-data-emit at the time; the boot-reopen unit pair added two more
+  # callers (the script's success row and the OnFailure reporter's fatal), and their tags —
+  # `action=`, `restarts=` — read as unproduced against a hardcoded pair. Deriving it from
+  # "every payload file that calls the emitter" means the next caller enrols itself.
+  _tag_srcs=()
+  while IFS= read -r _f; do [[ -n "$_f" ]] && _tag_srcs+=("$_f"); done < <(
+    grep -rlF 'git-data-emit' "${DIR}"/git-data-*.sh "${DIR}"/git-data-*.service "$_emit_src" 2>/dev/null | sort -u
+  )
+  [[ "${#_tag_srcs[@]}" -ge 3 ]] || _tag_srcs=("$_emit_src" "$_boot_src")
   # ANCHORED ON THE EMISSION SITE, not on a bare-token scan of two whole files. The previous
   # form `grep -cE "\"${_k}\"|${_k}="` was satisfied by shell locals and prose: renaming the
   # Better Stack `detail` field to `diag` — which makes JSONExtractString(raw,'detail')
@@ -1491,7 +1501,7 @@ if [[ -r "$_CAP" ]]; then
   while IFS= read -r _k; do
     [[ -n "$_k" ]] || continue
     _in_body=$(printf '%s\n' "$_bs_body" | grep -cF -- "\"${_k}\":" || true)
-    _in_tags=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cF -- "\"${_k}=" || true)
+    _in_tags=$(cat "${_tag_srcs[@]}" 2>/dev/null | grep -cF -- "\"${_k}=" || true)
     [[ "${_in_body:-0}" -ge 1 || "${_in_tags:-0}" -ge 1 ]] || _unproduced="${_unproduced} ${_k}"
   done < <(printf '%s' "$_hostsql" | sed -nE "s/.*JSONExtractString\(raw,'([a-z_]+)'\).*/\1/p" | sort -u)
   if [[ -z "$_unproduced" ]]; then
@@ -1811,13 +1821,159 @@ else
   fail "TRANSIENT headings are not distinct" "branches=${_n_head} distinct=${_n_uniq}"
 fi
 
-if [[ "$cases" -lt 83 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 83.\n' "$cases" >&2
+# ══ (#8210) THE REBOOT ARM ═════════════════════════════════════════════════════════
+#
+# The birth boot proves nothing about the SECOND boot: cloud-init's runcmd opens the mapper once
+# per instance, so a first boot passes whether or not anything would reopen it. These arms pin
+# the wiring that makes the reboot claim measured rather than asserted.
+
+# (a) BOTH rcs gate the upload. Gating on capture_rc alone would publish evidence from a
+# rehearsal whose host never reopened its mapper — the exact artifact the arm exists to refuse.
+cases=$((cases + 1))
+if grep -qE "steps\.reboot_probe\.outputs\.reboot_rc == '0'" "$WF"; then
+  pass "the evidence upload gates on the reboot probe's rc as well as the capture's"
+else
+  fail "the evidence upload does not gate on steps.reboot_probe.outputs.reboot_rc == '0'" \
+    "evidence that the birth booted but the mapper never reopened unattended must not be publishable"
+fi
+cases=$((cases + 1))
+_upload_if=$(awk '/name: Upload the evidence file as an artifact/{f=1} f&&/^        if:/{print; exit}' "$WF")
+if [[ "$_upload_if" == *"capture_rc == '0'"* && "$_upload_if" == *"reboot_rc == '0'"* ]]; then
+  pass "both rcs are ANDed on the upload step itself, not merely present somewhere in the file"
+else
+  fail "the upload step's own if: does not carry both rcs" "got: ${_upload_if:-<none>}"
+fi
+
+# (b) EXACT-NAME RESOLUTION. A prefix match would resolve the PRODUCTION host (whose name is the
+# prefix without the run id) or a leftover survivor from an earlier rehearsal, and this step
+# POWER-CYCLES what it resolves.
+cases=$((cases + 1))
+_reset_body=$(awk '/id: reset$/{f=1} f{print} f&&/^      - name: Probe the unattended reopen/{exit}' "$WF")
+if [[ -n "$_reset_body" ]] \
+   && grep -qF 'servers?name=${REHEARSAL_HOST}' <<<"$_reset_body" \
+   && grep -qF 'select(.name == $n)' <<<"$_reset_body"; then
+  pass "the reset step resolves its target by EXACT name (server?name= plus an == filter)"
+else
+  fail "the reset step does not resolve by exact name" \
+    "a startswith(prefix) resolution reaches soleur-git-data and any survivor; this step resets what it resolves"
+fi
+cases=$((cases + 1))
+if grep -vE '^\s*#' <<<"$_reset_body" | grep -qF 'startswith'; then
+  fail "the reset step uses a prefix match" "$_reset_body"
+else
+  pass "the reset step carries no prefix match"
+fi
+cases=$((cases + 1))
+if grep -qE 'if \[\[ "\$n" -ne 1 \]\]' <<<"$_reset_body"; then
+  pass "the reset step refuses unless EXACTLY one server resolved"
+else
+  fail "the reset step does not assert exactly one resolved id" "zero or many must both refuse"
+fi
+
+# (c) ORDER: the `since` timestamp is recorded BEFORE the reset POST. Taken afterwards it can
+# land after the host has already booted and emitted, so the probe's window would exclude the
+# very row it looks for and every healthy reset would read TRANSIENT.
+cases=$((cases + 1))
+_since_at=$(grep -n 'RUNG2_REBOOT_SINCE=\$(date' <<<"$_reset_body" | head -1 | cut -d: -f1)
+_post_at=$(grep -n 'actions/reset"' <<<"$_reset_body" | head -1 | cut -d: -f1)
+if [[ -n "$_since_at" && -n "$_post_at" && "$_since_at" -lt "$_post_at" ]]; then
+  pass "RUNG2_REBOOT_SINCE is recorded BEFORE the reset POST (line ${_since_at} < ${_post_at})"
+else
+  fail "RUNG2_REBOOT_SINCE is not recorded before the reset POST" "since=${_since_at:-none} post=${_post_at:-none}"
+fi
+
+# (d) A HARD reset, not a graceful reboot: the ext4 journal replay on the mapper is part of what
+# this arm measures, and an ACPI shutdown leaves whether systemd unmounted cleanly unanswered.
+cases=$((cases + 1))
+if grep -qF 'actions/reset' <<<"$_reset_body" && ! grep -qE 'actions/(reboot|shutdown)' <<<"$_reset_body"; then
+  pass "the reset step uses the HARD reset action, never reboot/shutdown"
+else
+  fail "the reset step does not use actions/reset exclusively" "$_reset_body"
+fi
+
+# (e) THE SETTLE. boot_complete fires before cloud-final claims its scripts-user semaphore; a
+# reset inside that window re-runs the whole runcmd on the next boot, so the mapper would be
+# reopened by the BIRTH heredoc rather than by the unit under test and the arm would pass
+# without the unit existing.
+cases=$((cases + 1))
+_settle=$(awk '/name: Settle before the reset/{f=1} f{print} f&&/^      - name: Hard-reset/{exit}' "$WF")
+# Read the VALUE and compare numerically, rather than matching a 3-digit shape: a shape match
+# reports "no settle step" for a settle that was merely shortened, which is the likelier drift
+# and the one whose message would misdirect. `${_settle_s:-0}` keeps a missing step at 0 rather
+# than making this arm itself a syntax error under set -u.
+_settle_s=$(grep -oE '^\s*sleep [0-9]+$' <<<"$_settle" | grep -oE '[0-9]+' | head -1)
+if [[ "${_settle_s:-0}" -ge 100 ]]; then
+  pass "a settle of >= 100s precedes the reset (${_settle_s}s)"
+else
+  fail "the settle before the reset is ${_settle_s:-absent}, not >= 100s" \
+    "a reset before cloud-final claims its semaphore replays the whole runcmd, so the birth heredoc — not the unit under test — would reopen the mapper"
+fi
+
+# (f) THE PROBE calls the capture script's reboot mode with the recorded timestamp — not a
+# freshly computed one, which would silently re-open the window after the boot.
+cases=$((cases + 1))
+_probe=$(awk '/id: reboot_probe$/{f=1} f{print} f&&/reboot_rc=/{exit}' "$WF")
+if grep -qF -- '--reboot-since "${RUNG2_REBOOT_SINCE}"' <<<"$_probe" \
+   && grep -qF 'git-data-rung2-evidence-capture.sh' <<<"$_probe"; then
+  pass "the probe runs the capture script in --reboot-since mode with the recorded timestamp"
+else
+  fail "the probe does not call the capture script with the recorded --reboot-since" "${_probe:-<step not found>}"
+fi
+cases=$((cases + 1))
+if grep -qE '^\s*\[\[ "\$rc" -ne 2 \]\] && break$' <<<"$_probe"; then
+  pass "the probe's poll treats 0 and 1 as terminal and retries only 2"
+else
+  fail "the probe's poll does not stop on a terminal verdict" "retrying a FAIL turns a finding into a timeout"
+fi
+
+# (g) THE JOB BUDGET is DERIVED from the bounded polls the workflow actually contains, not a
+# literal anyone can drift. A ceiling reached inside a step leaves the always() teardown with
+# only the runner's cancellation grace to destroy a server, two volumes and a Doppler config.
+cases=$((cases + 1))
+_tmo=$(awk '/^    timeout-minutes:/{print $2; exit}' "$WF")
+# awk, NOT `paste | bc`: bc is not installed on this box (measured — the first draft of this arm
+# summed to an EMPTY string, so the comparison was `[[ -n "$_tmo" && "$_tmo" -gt "" ]]`, which
+# bash evaluates as -gt 0 and passes for every ceiling. The arm was vacuous in exactly the
+# direction it exists to catch: dropping the ceiling to 20 left it green.)
+_capture_budget=$(grep -oE 'deadline=\$\(\( SECONDS \+ [0-9]+ \* 60 \)\)' "$WF" \
+  | grep -oE '\+ [0-9]+' | grep -oE '[0-9]+' | awk '{t+=$1} END{print t+0}')
+_settle_budget=$(( ${_settle_s:-0} / 60 ))
+# The apply step's OWN timeout-minutes (indented under `steps:`, deeper than the job's) and the
+# reset loop (`seq 1 N` x `sleep S`). Review found the first revision of this arm summed only the
+# poll deadlines (28) and certified a 45-minute ceiling under a comment whose own worst case was
+# 55 — the apply, the largest term, was an estimate in prose that no arm read.
+_apply_tmo=$(awk '/^        timeout-minutes:/{print $2; exit}' "$WF")
+_reset_n=$(grep -oE 'for i in \$\(seq 1 [0-9]+\); do' "$WF" | grep -oE '[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+_reset_s=$(awk '/for i in \$\(seq 1 [0-9]+\); do/{f=1} f && /^\s*sleep [0-9]+$/{print $2; exit}' "$WF")
+_reset_budget=$(( ${_reset_n:-0} * ${_reset_s:-0} / 60 ))
+if [[ "${_apply_tmo:-0}" -lt 10 ]]; then
+  fail "the apply step carries no step-level timeout-minutes (or under 10) — the largest term in the job budget is unbounded" "got '${_apply_tmo:-none}'"
+fi
+if [[ "${_reset_budget:-0}" -lt 1 ]]; then
+  fail "the reset loop's bound could not be derived (n=${_reset_n:-?} s=${_reset_s:-?})" "the budget arm would sum a NARROWER set than the job contains"
+fi
+_bounded=$(( _capture_budget + _settle_budget + ${_apply_tmo:-0} + _reset_budget ))
+# Non-vacuity: if the poll-deadline extraction found nothing, this arm has no budget to compare
+# against and must say so rather than certify the ceiling.
+if [[ "${_capture_budget:-0}" -lt 20 ]]; then
+  fail "the bounded-poll extraction found only ${_capture_budget:-0} minutes of deadlines — the budget arm has no anchor" \
+    "a ceiling certified against an empty sum is the vacuous shape this arm was rewritten to remove"
+  _bounded=999
+fi
+if [[ -n "$_tmo" && "$_tmo" -gt "$_bounded" ]]; then
+  pass "timeout-minutes (${_tmo}) exceeds the sum of the workflow's own bounded polls (${_bounded})"
+else
+  fail "timeout-minutes (${_tmo:-none}) does not exceed the bounded polls it contains (${_bounded})" \
+    "a ceiling reached inside a step starves the teardown"
+fi
+
+if [[ "$cases" -lt 94 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 94.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 83)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 94)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

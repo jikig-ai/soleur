@@ -414,9 +414,50 @@ if command -v nft >/dev/null 2>&1 &&
    nft list chain inet soleur_git_data output 2>/dev/null | grep -q '169\.254\.169\.254'; then
   _nft_drop=yes
 fi
+# (#8210) The sixth boolean (the fifth TERMINAL one), MEASURED like nft_metadata_drop and — unlike it — TERMINAL for
+# the rung-2 capture and the boot-signal poll: the runcmd arm item ran `enable --now --no-block`
+# before this script, so at birth the reopen unit must be enabled AND have CONVERGED to
+# active(exited) — the only terminal-success state a Type=oneshot RemainAfterExit=yes unit has.
+#
+# WHY ActiveState=active AND NOT Result=success. An earlier revision read `Result`, and its own
+# comment claimed "a genuinely wedged unit still reports no". MEASURED on systemd 261 (review):
+# Result is RESET to `success` the moment a retry attempt STARTS —
+#   activating auto-restart exit-code NRestarts=0
+#   activating start        success   NRestarts=1   <- attempt 2 running, Result already "success"
+# — so a first attempt that hung on Doppler (killed at TimeoutStartSec=300, retried at ~360 s)
+# read `yes` at the 420 s mark on a unit that could still fail terminally twenty minutes later,
+# and a never-started oneshot reads `inactive success` too. ActiveState=active is reached only
+# when an attempt EXITED 0 (RemainAfterExit then holds it there); `activating` covers the whole
+# ladder under RestartMode=direct; `failed` is terminal failure. `is-enabled` alone would pass
+# a unit armed for next boot that died today.
+#
+# WAIT FOR A TERMINAL STATE FIRST, and this is the difference between a measurement and a
+# coin flip: sampling the instant the arm item returns reads a TRANSIENT state, not the unit's
+# verdict, and this boolean is TERMINAL — a `no` makes the boot-signal poll tell the operator
+# to treat the birth or replace as FAILED, whose remediation is another destroy/recreate of the
+# host holding every user's source. So a 30-second Doppler or DNS blip at birth must not order
+# a destructive remediation of a healthy host.
+#
+# THE BOUND IS DELIBERATELY BELOW THE LADDER. 420 s = one full attempt (300) + one RestartSec
+# (60) + margin; the unit's worst case is 5x300 + 4x60 = 1740 s, and waiting that long here
+# would blow the ~610 s birth poll on the apply side. So the boolean is FAIL-CLOSED WITH A
+# BOUNDED FALSE-NEGATIVE WINDOW: a ladder still running at 420 s reads `no`. The runbook's
+# instruction for `luks_reopen_unit=no` is therefore a Sentry read (a luks_reopen fatal, or a
+# LATER luks_reopen_ok row in the same boot) BEFORE any replace — never a replace first.
+_reopen_unit=no
+_reopen_wait=0
+while [ "$(systemctl show -p ActiveState --value git-data-luks-reopen.service 2>/dev/null)" = activating ] \
+      && [ "$_reopen_wait" -lt 420 ]; do
+  sleep 5
+  _reopen_wait=$((_reopen_wait + 5))
+done
+if systemctl is-enabled --quiet git-data-luks-reopen.service 2>/dev/null &&
+   [ "$(systemctl show -p ActiveState --value git-data-luks-reopen.service 2>/dev/null)" = active ]; then
+  _reopen_unit=yes
+fi
 if [[ -x "$GIT_DATA_EMIT" ]]; then
   "$GIT_DATA_EMIT" "git-data bootstrap complete" boot_complete info "" \
     "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
-    "nft_metadata_drop=${_nft_drop}" \
+    "nft_metadata_drop=${_nft_drop}" "luks_reopen_unit=${_reopen_unit}" \
     "disk_pct=${_disk_pct:-unknown}" "inode_pct=${_inode_pct:-unknown}" || true
 fi

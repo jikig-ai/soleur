@@ -167,12 +167,21 @@ write_files:
   # MOVED FROM runcmd TO write_files (#7460): the printf-then-chmod pair left this token at
   # 0644 between the two entries. write_files runs before runcmd, so every consumer below is
   # unaffected by the move.
+  #
+  # (#8210) TWO NON-SECRET LINES appended for the boot-time LUKS reopen unit pair, which
+  # EnvironmentFile= this same file: the by-id device pin the reopen asserts the mapper against,
+  # and the Doppler config name. The config name is TEMPLATED, never hardcoded — the rung-2
+  # rehearsal scopes its token to a scratch config, so a literal prd_git_data would exit 1 with
+  # the key absent on every rehearsal reboot. The passphrase itself is NEVER written here
+  # (git-data-luks-reopen.test.sh C9): the unit fetches it at boot under --no-fallback.
   - path: /etc/default/git-data-doppler
     content: |
       HOME=/root
       DOPPLER_TOKEN=${doppler_token}
       DOPPLER_CONFIG_DIR=/tmp/.doppler
       DOPPLER_ENABLE_VERSION_CHECK=false
+      GIT_DATA_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}
+      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}
     owner: root:root
     permissions: '0600'
 
@@ -488,6 +497,39 @@ write_files:
   - path: /etc/systemd/system/git-data-gc.timer
     content: |
       ${indent(6, git_data_gc_timer)}
+    owner: root:root
+    permissions: '0644'
+
+  # (#8210) Boot-time LUKS reopen. The STAGE=luks_open heredoc below runs ONCE per instance and
+  # the fstab line it appends is `nofail`, so without this unit every later boot left
+  # /mnt/git-data-luks without its backing device, silently. The script never formats and
+  # never calls mount(8) (PID 1 mounts via the fstab unit); the key arrives at boot through
+  # `doppler run --only-secrets --no-fallback` (ADR-198: never baked); every failure is shipped
+  # ONCE by the OnFailure= reporter. Armed by the runcmd item after the heredoc.
+  - path: /usr/local/bin/git-data-luks-reopen.sh
+    content: |
+      ${indent(6, git_data_luks_reopen)}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/git-data-luks-reopen.service
+    content: |
+      ${indent(6, git_data_luks_reopen_service)}
+    owner: root:root
+    permissions: '0644'
+
+  # The OnFailure= target — a real unit, so the reference is never dangling.
+  - path: /etc/systemd/system/git-data-luks-reopen-failure.service
+    content: |
+      ${indent(6, git_data_luks_reopen_failure_service)}
+    owner: root:root
+    permissions: '0644'
+
+  # The STANDING retry. The unit's own Restart= budget is 5 attempts in an hour; past that, a
+  # longer Doppler outage would leave the encrypted store closed until someone intervened.
+  - path: /etc/systemd/system/git-data-luks-reopen.timer
+    content: |
+      ${indent(6, git_data_luks_reopen_timer)}
     owner: root:root
     permissions: '0644'
 
@@ -1006,6 +1048,7 @@ runcmd:
       [ -b "$DEV" ] && [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
       sleep 1; _i=$((_i+1))
     done
+    _luks_created_now=0
     _isluks_rc=0
     _isluks_err="$(cryptsetup isLuks "$DEV" 2>&1)" || _isluks_rc=$?
     [ -z "$_isluks_err" ] || printf '%s\n' "$_isluks_err" >>"$GIT_DATA_LUKS_DETAIL" 2>/dev/null || true
@@ -1015,13 +1058,29 @@ runcmd:
         _blk_rc=0; _blk_type="$(/usr/sbin/blkid -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
         { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "[git-data-luks] FATAL: blkid could not read the device (rc=$_blk_rc) — refusing to write to a device whose contents are unknown" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
         [ "$_blk_type" != "crypto_LUKS" ] || { echo "[git-data-luks] FATAL: status probe rc=1 but blkid still reports crypto_LUKS — a DAMAGED header, not a blank volume. Refusing to overwrite a populated store." | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
-        printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL" ;;
+        printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$GIT_DATA_LUKS_DETAIL"
+        _luks_created_now=1 ;;
       *) { echo "[git-data-luks] FATAL: the LUKS-status probe could not run (rc=$_isluks_rc; 4=device absent, 126/127=cryptsetup unusable) — refusing to write to a device whose status is unknown" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; } ;;
     esac
     if [ ! -e /dev/mapper/git-data ]; then
       printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" git-data 2>>"$GIT_DATA_LUKS_DETAIL"
     fi
-    if ! blkid /dev/mapper/git-data >/dev/null 2>&1; then
+    # FAIL-CLOSED, and keyed on WHETHER THIS RUN CREATED THE CONTAINER, not on blkid's verdict
+    # alone (review, #8210). A bare `if ! blkid` folded "could not identify" — rc 2 on an ext4
+    # whose primary superblock is damaged or momentarily unreadable — into "no signature", and
+    # formatted a correctly-unlocked store; blkid CANNOT tell a blank plaintext from a damaged
+    # one (a fresh container decrypts to noise, not zeros). What can: an existing LUKS container
+    # (isLuks rc 0, so luksFormat did NOT run above) is by definition a store somebody made, and
+    # "no recognisable filesystem inside it" is damage or an aborted first birth — the ADR-068
+    # path, never mkfs. mkfs runs only inside the same run that luksFormat'd the device.
+    # Reachable otherwise by every replace the runbook orders and by a hard reset before
+    # cloud-final's semaphore. Absolute blkid path for the same reason as B18.
+    _fs_rc=0; _fs_type="$(/usr/sbin/blkid -o value -s TYPE /dev/mapper/git-data 2>/dev/null)" || _fs_rc=$?
+    { [ "$_fs_rc" -eq 0 ] || [ "$_fs_rc" -eq 2 ]; } || { echo "[git-data-luks] FATAL: blkid could not read the opened mapper (rc=$_fs_rc) — refusing to format a store whose contents are unknown" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
+    if [ -z "$_fs_type" ] && [ "$_luks_created_now" -ne 1 ]; then
+      echo "[git-data-luks] FATAL: the LUKS container already existed (not created by this run) and blkid finds no filesystem inside it — a damaged superblock or an aborted first birth. Refusing to mkfs over the only copy; this is the ADR-068 backup/rebuild path, not a replace." | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1
+    fi
+    if [ -z "$_fs_type" ]; then
       # (#7204) `-O project`, NOT `-O quota,project`. THE QUOTA FEATURE BRICKED EVERY BOOT.
       #
       # WHY: `quota` sets an ext4 RO_COMPAT bit that makes ext4_fill_super call
@@ -1055,6 +1114,42 @@ runcmd:
     # NO `trap - EXIT`: disarming on success would make the `rc` guard unreachable and so
     # untested. The guard IS what keeps a healthy boot silent (AC36/T17).
     LUKSEOF
+
+  # (#8210) Arm the boot-time LUKS reopen. PLACED AFTER THE HEREDOC (the mapper is open and
+  # mounted, so `enable --now` runs the script's NOOP path — which still proves the WIRING at
+  # birth: unit enabled, Doppler reachable from the unit's context with the templated config,
+  # device pin resolves, fstab target found; a broken unit fires the reporter's luks_reopen
+  # FATAL off-box) and BEFORE THE BOOTSTRAP, whose boot_complete carries the MEASURED
+  # `luks_reopen_unit` boolean — arming after it would have the boolean read an unarmed unit
+  # on every healthy birth (the #7772 item-2 placement lesson, one item down).
+  #
+  # Same substitution-plus-`if` shape and the same WARNING severity as the nftables arm below:
+  # an unarmed reopen is a hardening regression on a host that does not self-reboot, not a dark
+  # host. It is not silent either — the boolean is TERMINAL for the capture and the boot-signal
+  # poll, so a birth or replace whose unit did not arm FAILS its gate. Its own detail variable
+  # (_reopen_arm_detail): two emit windows sharing one name fails R3(3b)(iii).
+  # --no-block on both starts: under RestartMode=direct the unit reads `activating` for its
+  # WHOLE restart ladder (up to 5x300 + 4x60 s), and a blocking `enable --now` would hold
+  # cloud-final for all of it. The arm's verdict is "did it ENABLE"; whether it CONVERGED is
+  # git-data-bootstrap.sh's measurement, bounded there at 420 s, which is the single bound on
+  # the boot path.
+  - |
+    STAGE=gitdata_luks_reopen_arm
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
+    systemctl daemon-reload || true
+    _arm_rc=0
+    _arm_err="$(systemctl enable --now --no-block git-data-luks-reopen.service 2>&1)" || _arm_rc=$?
+    # The standing-retry timer is armed in the same item and folded into the same verdict: a host
+    # whose reopen unit is armed but whose retry timer is not has the 5-attempt bound with
+    # nothing behind it, which is the state the timer exists to remove.
+    _arm_err="$${_arm_err}$(systemctl enable --now --no-block git-data-luks-reopen.timer 2>&1)" || _arm_rc=$?
+    if [ "$_arm_rc" -ne 0 ]; then
+      _reopen_arm_detail=/run/git-data-luks-reopen-arm.err
+      [ -z "$_arm_err" ] || ( umask 077; printf '%s\n' "$_arm_err" > "$_reopen_arm_detail" ) 2>/dev/null || true
+      [ -s "$_reopen_arm_detail" ] || _reopen_arm_detail="git-data LUKS reopen unit failed to arm (rc=$_arm_rc): no stderr captured"
+      /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_LUKS_REOPEN unit failed to arm" "$${STAGE}_warn" warning \
+        "$_reopen_arm_detail" "luks_reopen_unit=unarmed" || true
+    fi
 
   # (#7772 item 2) Arm the metadata-endpoint drop. PLACED BEFORE THE BOOTSTRAP ITEM, and the
   # ordering is load-bearing rather than stylistic: git-data-bootstrap.sh emits
