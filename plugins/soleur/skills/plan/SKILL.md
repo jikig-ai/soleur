@@ -779,6 +779,8 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 
 **Reject conditions** (enforced mechanically by [lint-guard-contract.py](../../../../scripts/lint-guard-contract.py), and halted at deepen-plan Phase 4.11): the section missing while detection fires; a `## Guard Contract` heading with zero `### Guard` entries; a missing or placeholder `**Property.**` or `**Assembly.**`; a mutation matrix with fewer than 3 rows. The lint quantifies over EVERY entry, not the first.
 
+**A guard over a script that writes into a user's tree carries an exit-site table by position relative to the FIRST write, and one row per precondition proving it resolves before that write.** "Cleans up on failure" is a property of that window, not of the failure arms the script names; a claim scoped to named codes is true and useless when the failure that fires is a different one. **Why:** #8288/PR #8352 — a merge-base 69 sat after five emits and before any trap; six review seats measured five files left and a 66 on every re-run. See `knowledge-base/project/learnings/2026-09-19-cleanup-on-failure-is-a-property-of-the-window-not-the-arms.md`.
+
 **Skip silently** when the deliverable contains no guard — a copy change, a dependency bump, a pure refactor behind existing tests.
 
 <!-- lint-infra-ignore start: describes a gate trigger / a past defect; prescribes no operator step (pre-existing on main, surfaced when #8301 staged this file) -->

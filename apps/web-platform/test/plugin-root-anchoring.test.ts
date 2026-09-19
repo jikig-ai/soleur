@@ -748,6 +748,7 @@ const EXPECTED_GATE_REFS: readonly string[] = [
   "plugins/soleur/skills/linear-fetch/SKILL.md -> redact-linear-urls.sh",
   "plugins/soleur/skills/qa/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/reproduce-bug/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/reproduce-bug/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/test-browser/SKILL.md -> redact-a11y-snapshot.py",
 ];
 
