@@ -280,3 +280,59 @@ Three guards, plus two the review round added:
     instrument. Two filing gates also corrected me here and both were right: the body path had
     to be a literal (not `$BODY`) so the justification could be read, and "the guard is
     imperfect" is `meta/machinery`, never a user-impact claim.
+
+### Post-merge addendum (the ship of PR #8321, 2026-09-18 21:00 → 2026-09-19 05:04)
+
+27. **`main` moved under the PR eleven times between the first ship push and the merge** —
+    measured as eleven first-parent sync merges on the branch, interleaved with seven own-fix
+    pushes for reds this branch genuinely owned. Every branch necessarily carries a regenerated
+    `INDEX.md` (lefthook re-stages it on every commit) that GitHub cannot merge textually, so
+    any `main` commit makes the PR DIRTY; with sibling sessions shipping on the same ~65-minute
+    cadence, the window kept closing. — Recovery: the one vector I could remove, I removed —
+    reset `rule-metrics.json` to `main`'s blob so the branch carried no diff on it (the
+    aggregator rebuilds from the jsonl + archives, so nothing is lost); queued auto-merge early
+    so the merge fires the instant checks go green; let the Phase 7 BEHIND auto-sync do the
+    rest. The first head that reached a full green set without `main` moving merged. An earlier
+    draft of this entry said "eleven consecutive cycles" and "the thirteenth cycle" from memory;
+    both were wrong in shape and were replaced by the count above before it was committed to
+    `main`. — **Prevention:**
+    queue `--auto` as soon as the pre-ready gates pass, not after CI is green; carry no diff on
+    regenerable aggregates the branch does not need to own; and accept that the admin hatch is
+    correctly unavailable to a diff with real code and real overlap.
+
+28. **`rename-guard` attributed `main`'s own rename to this branch.** It walks every commit in
+    `BASE..HEAD` with `--diff-merges=first-parent`, so a merge commit of `origin/main` shows
+    `main`'s renames as ours; `git diff -M origin/main...HEAD` showed zero. — Recovery: a
+    `Rename-Allowed-By:` trailer on an empty commit whose body names the rename, its origin
+    (#8301) and why it is in range — the auditable exit, not the label. — **Prevention:** when a
+    guard names an artefact, reproduce it with the guard's OWN command before believing the
+    attribution; a first-parent walk and an endpoint diff answer different questions.
+
+29. **A born-blocking guard that landed mid-flight (#8299's canonical-name census) caught two
+    bare `/ship` references in the paragraph this branch added to `compound/SKILL.md`.** —
+    Recovery: `soleur:ship`; 156/0, full bun set 3079/0. — **Prevention:** after every sync
+    merge, run the full plugin bun set, not the diff-selected subset — a guard that arrived
+    with the sync is by definition not in the selection.
+
+30. **Two watches run from `/var/tmp` reported `total=0` and `fetch-error` because `gh` could
+    not resolve the repository outside a checkout** — one read as "no runs", the exact vacuous
+    settle the ship skill warns about. — Recovery: `-R jikig-ai/soleur` on every `gh` call in a
+    detached watch. — **Prevention:** a watch that must outlive a worktree runs from outside it
+    and therefore MUST name the repo explicitly; and a settle condition must require a non-empty
+    population, because `grep -vc pending` on empty input is 0.
+
+31. **Guard 2 fired on its first live run on `main` — on a tracker that was not in my census.**
+    #8210 gained a fenced directive tonight from a sibling ship using the pre-fix template. The
+    sweeper run exited 1 by design. Its probe was not yet on `main`, so unfencing would have
+    traded one loud error for a script-missing one, and the body belonged to an in-flight
+    sibling. — Recovery: left exact unfence + `secrets=` instructions on the issue; did not edit
+    it. — **Prevention:** none needed for the guard — this is the guard working. For the human
+    half: a census is a snapshot, and the window between census and merge is where the next
+    member arrives.
+
+32. **The archive-kb glob missed this branch's plan** (`*one-shot-7490-…*` does not match
+    `2026-09-18-fix-7490-…-plan.md`), exactly as the compound skill's own note warns. —
+    Recovery: `git mv` by hand, then swept both old paths repo-wide and repointed the six
+    references (all inside the archived artefacts themselves). — **Prevention:** after ANY
+    archive move, `grep -rl` both old paths across the tree before committing — the script
+    relocates, it does not sweep.
