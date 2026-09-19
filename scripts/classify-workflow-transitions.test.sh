@@ -494,16 +494,29 @@ fi
 
 # --- 29-32. review round (#8382): three fail-opens the sub_steps check exposed --
 
-# --- 29. a view without an OBJECT `transitions` fails closed ------------------
+# --- 29. a view without a NON-EMPTY `transitions` map of string arrays fails closed
 # Readability was the only check, so a stale/truncated mirror reported
 # `undeclared=0 ... rc 0` -- a clean-looking zero over an EMPTY edge set.
+#
+# `stringval`, `intval` and `empty` are the SAME asymmetry one level in, found
+# by the ship-gate consult: the first revision of this case (and of the guard)
+# covered only `missing` and `null`, while the `sub_steps` sibling at case 26
+# already drove all five. `{"plan":"workshop"}` then passed the container-only
+# check and matched `plan -> work` by jq `index`'s SUBSTRING semantics -- an
+# undeclared edge reported as DECLARED, at rc 0. The `plan, ship` log below is
+# the discriminator for it: `plan -> ship` is undeclared in the real view, so a
+# clean `undeclared=0` is the failure this case exists to catch.
 V29_OK=1
-for shape in missing null; do
+for shape in missing null list stringval intval empty; do
   R29=$(new_root "t29-$shape")
   assert_fixture_dir "$R29"
   case "$shape" in
-    missing) jq 'del(.transitions)' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
-    null)    jq '.transitions = null' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    missing)   jq 'del(.transitions)' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    null)      jq '.transitions = null' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    list)      jq '.transitions = []' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    stringval) jq '.transitions = {"plan":"workshop"}' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    intval)    jq '.transitions = {"plan":[7]}' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    empty)     jq '.transitions = {}' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
   esac
   emit_to "$R29" 2026-09-18T20:00:00Z plan s29
   emit_to "$R29" 2026-09-18T20:01:00Z ship s29
@@ -513,9 +526,9 @@ for shape in missing null; do
   fi
 done
 if [[ "$V29_OK" -eq 1 ]]; then
-  pass "a view with transitions missing or null exits 2 with a FATAL naming transitions (never a clean undeclared=0)"
+  pass "a view whose transitions is missing, null, [], {}, a STRING value or a non-string member exits 2 with a FATAL naming transitions (never a clean undeclared=0)"
 else
-  fail "empty edge set reported a clean zero"
+  fail "empty or wrong-typed edge set reported a clean zero"
 fi
 
 # --- 30. an EMPTY or corrupt rotated archive is still a null reading ----------

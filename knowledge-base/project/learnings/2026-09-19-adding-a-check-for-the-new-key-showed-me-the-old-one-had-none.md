@@ -48,6 +48,29 @@ rc 0, no null-reading marker.
 
 **When you add a guard, ask what its SIBLINGS are and whether they have one.**
 
+**And then it happened again, inside the fix.** The `transitions` check I added
+in that round was CONTAINER-ONLY — `type == "object"` and nothing more — while
+the `sub_steps` check written beside it already asserted its members, with a
+FATAL line naming the reason: *a STRING value would pass a container-only check
+and then collapse by SUBSTRING match*. I wrote that sentence and did not apply it
+to the sibling two lines above. A ship-gate consult found it:
+
+```
+$ jq '.transitions = {"plan":"workshop"}' view.json > bad.json
+$ classify-workflow-transitions.sh --summary
+undeclared=0 sessions=1 pairs=1 ...                                   # rc 0
+```
+
+`"workshop" | index("work")` is `0`, so `plan -> work` reads as declared. The
+suite agreed: case 26 drove five shapes at `sub_steps` (`missing`, `null`, `[]`,
+string value, non-string member) and case 29 drove **two** at `transitions`. The
+asymmetry survived the round whose whole subject was asymmetry, in both the code
+and the test, because "add the same check to the sibling" and "add the same SHAPE
+LIST to the sibling's case" are two separate acts and I only did the first.
+
+**A sibling sweep is not done when the guards match — it is done when the shape
+lists that DRIVE them match.** Grep the fixture loop, not the guard.
+
 ## Second lesson: a fix for a counter bug has two directions
 
 The first review round found that `dropped=` could go **negative** — `read_lines`
@@ -159,6 +182,15 @@ Three guards in this PR could not have failed, and each looked fine:
   against HEAD before acting. **Prevention:** `review/SKILL.md` tells the PANEL to
   be report-only; it should bind the LEAD too — spawn, then touch nothing until
   every seat returns.
+- **Added a fail-closed check for `transitions` that was container-only, in the
+  round whose subject was that exact asymmetry.** The `sub_steps` check beside it
+  already asserted its members and its FATAL text named the substring-collapse
+  mode; `{"plan":"workshop"}` passed the new check and matched `plan -> work`.
+  Found by the ship-gate advisor consult, not by the suite — case 29 drove two
+  shapes where its sibling case 26 drove five. Recovery: `length > 0` + member
+  type assertion on the guard, case 29 widened to all six shapes, both clauses
+  mutation-proven (31/1 each). **Prevention:** when adding a guard to a sibling,
+  diff the two guards' fixture SHAPE LISTS, not just the guards.
 - **Quoted two figures from reasoning rather than measurement** (`~450 MB`,
   `92 ADRs`). **Prevention:** the existing rule already covers this; the gap is
   that it is applied to numbers in *code* and not to numbers in *rationale

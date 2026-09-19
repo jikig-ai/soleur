@@ -72,22 +72,42 @@ if [[ ! -r "$VIEW" ]]; then
   echo "       runs only in a soleur source checkout. On such a checkout, restore it from git." >&2
   exit 2
 fi
-# FAIL CLOSED on a view without an OBJECT `transitions`. Readability was the
-# only thing checked, so `del(.transitions)` or `.transitions = null` reported
-# `undeclared=0 ... rc 0` -- a clean-looking zero over an empty edge set, which
-# is the silent-zero this script exists to refuse. (`[]` already errored, which
-# is how asymmetric the guard was.) Added #8325, alongside the `sub_steps` one
-# below, because adding the second check is what made the first one's absence
-# visible.
-if ! jq -e '.transitions | type == "object"' "$VIEW" >/dev/null 2>&1; then
-  echo "FATAL: declared view $VIEW carries no \`transitions\` object — stale or truncated mirror;" >&2
-  echo "       classifying against an empty edge set would report every transition as undeclared." >&2
+# FAIL CLOSED on a view without a NON-EMPTY `transitions` map of string arrays.
+# Readability was the only thing checked, so `del(.transitions)` or
+# `.transitions = null` reported `undeclared=0 ... rc 0` -- a clean-looking zero
+# over an empty edge set, which is the silent-zero this script exists to refuse.
+# (`[]` already errored, which is how asymmetric the guard was.) Added #8325,
+# alongside the `sub_steps` one below, because adding the second check is what
+# made the first one's absence visible.
+#
+# The member and length clauses are the SAME asymmetry one level in, found by
+# the ship-gate consult on this PR: the first revision of this check was
+# container-only while the `sub_steps` one below already asserted its members,
+# so `{"plan":"workshop"}` passed here and then matched `plan -> work` by jq
+# `index`'s SUBSTRING semantics -- an undeclared edge reported as declared, at
+# rc 0. `length > 0` moves the degenerate `{}` from the late `kept>0 && pairs==0`
+# warning to a FATAL here; a PARTIALLY truncated map is still not caught (its
+# missing nodes are silently reclassified `nonnode`), and cannot be from inside
+# this script, which has no independent copy of the node set -- that residue is
+# the parity block's job (workflow-fidelity.test.ts deep-equals this file against
+# DECLARED_TRANSITIONS, and is a required check).
+if ! jq -e '.transitions | type == "object" and length > 0
+            and all(.[]; type == "array" and all(.[]; type == "string"))' "$VIEW" >/dev/null 2>&1; then
+  echo "FATAL: declared view $VIEW carries no non-empty \`transitions\` map of string arrays —" >&2
+  echo "       stale or truncated mirror; classifying against an empty edge set would report" >&2
+  echo "       every transition as undeclared, and a STRING value would pass a container-only" >&2
+  echo "       check and then match by SUBSTRING (\"workshop\" contains \"work\")." >&2
+  echo "       Edit DECLARED_TRANSITIONS in plugins/soleur/lib/workflow-fidelity.ts first," >&2
+  echo "       then mirror it (ADR-229, amended #8325)." >&2
   exit 2
 fi
 # FAIL CLOSED on a view without an OBJECT `sub_steps` (#8325). A tolerant `// {}`
 # would silently reproduce the pre-collapse numbers on a stale mirror, and
 # `"sub_steps": null` or `[]` passes a bare has() check with the same silent
-# result -- so the type is asserted, not the presence.
+# result -- so the type is asserted, not the presence. `{}` is deliberately NOT
+# refused: it is the legitimate shape for a repo that declares no sub-steps, and
+# is indistinguishable from a truncated mirror from inside this script. The
+# parity block pins which entries must exist (see the `transitions` note above).
 if ! jq -e '.sub_steps | type == "object"
             and all(.[]; type == "array" and all(.[]; type == "string"))' "$VIEW" >/dev/null 2>&1; then
   echo "FATAL: declared view $VIEW carries no \`sub_steps\` map of string arrays — stale mirror;" >&2
@@ -234,7 +254,12 @@ read -r -d '' JQ <<'JQEOF' || true
   # first-record branch is not optional: `.kept[-1]` on an empty array is null
   # and `$SUB[null]` throws "Cannot index object with null", which `// []` does
   # not rescue (verified). Equal-second ties keep merged-file order (sort_by is
-  # stable).
+  # stable) -- and merged order is live-log-first, archives-after, so it is
+  # chronological only WITHIN one append-only file. `ts` is second-granularity,
+  # so an exact tie spanning a rotation boundary orders the older record last,
+  # which now decides drop-vs-keep in the collapse and not only pair direction.
+  # Accepted: two invocations in the same second across a rotation is rarer than
+  # the reading is precise.
   | map(reduce .[] as $r ({kept: [], sub: 0};
           if (.kept | length) == 0 then .kept += [$r]
           elif (($SUB[.kept[-1].skill] // []) | index($r.skill)) != null then .sub += 1
