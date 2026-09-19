@@ -771,6 +771,7 @@ cloud-routines
 cloud-task-silence
 cloudflare
 cloudflare-access
+cloudflare-bulk-redirects
 cloudflare-rulesets
 cloudflare-tunnel
 cmo
@@ -2276,6 +2277,7 @@ merge-time-verification
 message
 message-bubble
 meta-harness
+meta-refresh
 metadata-extraction
 metadata-routes
 metakey
@@ -3783,6 +3785,7 @@ stripe
 stripe-projects
 structural-boundary
 structural-enforcement
+structural-enumeration
 structural-test
 structured-data
 stub

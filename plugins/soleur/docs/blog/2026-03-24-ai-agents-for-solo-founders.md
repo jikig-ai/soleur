@@ -3,12 +3,14 @@ title: "AI Agents for Solo Founders: The Definitive Guide"
 date: 2026-03-24
 description: "The complete guide to AI agents for solo founders in 2026: what makes a true agent, the 8 domains every company needs, and how compound knowledge enables scale."
 ogImage: "blog/og-ai-agents-for-solo-founders.png"
+pillar: agentic-solo-founder
 tags:
   - ai-agents
   - solo-founder
   - solopreneur
   - agentic-engineering
   - company-as-a-service
+  - pillar
 ---
 
 Solo-founded startups rose from 23.7% to 36.3% of all new ventures between 2019 and the first half of 2025, according to the [Carta Solo Founders Report](https://carta.com/data/solo-founders-report/). The reason is not courage. It is infrastructure. AI tools now handle work that used to require a team — and most solo founders discover them the same way: a demo of something that writes code, generates copy, or drafts a legal template. It saves an hour. Then two. Then the plateau arrives.

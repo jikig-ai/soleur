@@ -4,6 +4,7 @@ seoTitle: "Soleur vs. Tanka: AI Co-Founder Comparison — Memory Platform vs. Cr
 date: 2026-05-05
 description: "Tanka remembers what your team said. Soleur executes across 9 departments and remembers what was decided. The difference determines what memory-native AI actually means for solo founders."
 ogImage: "blog/og-soleur-vs-tanka.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - tanka
