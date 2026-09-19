@@ -39,7 +39,7 @@
 #   74  bite-proof: real client->server-secret violation(s) on HEAD newer than the baseline
 #
 # In default mode the self-cleanup is armed BEFORE the first artifact is written and disarmed
-# only after the bite has passed: every failure in between (66..74, a failed `mktemp`, a
+# only after the bite has passed: every failure in between (67..74, a failed `mktemp`, a
 # `set -e` abort) REMOVES every artifact this run emitted, so a failed first install is
 # re-runnable and never leaves a half-installed gate. The README and the pointer are written
 # after the disarm. An INT/TERM mid-run does the same and exits 143; a runner interrupted by a
@@ -181,6 +181,8 @@ _wt_cleanup() {
     local removed
     removed="$(remove_emitted_artifacts)"
     [[ -n "$removed" ]] && say "$why; removed: $removed"
+  elif [[ "$why" == "interrupted" ]]; then
+    say "interrupted (refresh mode): nothing removed; the committed baseline may already have been rewritten — review it with \`git diff\` before deciding"
   fi
   return 0
 }

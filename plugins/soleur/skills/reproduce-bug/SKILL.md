@@ -304,7 +304,7 @@ Write the whole body — the `--cmd` string included — with the Write tool to 
 grep -niE '(authorization|proxy-authorization|cookie|set-cookie|apikey|x-api-key)[[:space:]]*:|[?&](token|access_token|apikey|key|secret|sig|signature)=' /path/to/scratchpad/reproduce-bug-<N>.md   # expected: no output; any line is a redaction to do by hand
 ```
 
-Then the redactor, and post only on exit 0 (exit 1 = redaction needed: fix the body and re-run; exit 2 = cannot evaluate: do not post):
+Then the redactor, and post only on exit 0 (exit 1 = redaction needed: fix the body and re-run; exit 2 = cannot evaluate: do not post). Run Phase 3's §Preflight plugin-identity check first on every run, UI bug or not — an unset `CLAUDE_PLUGIN_ROOT` fails closed (exit 127), but a wrong-shaped root carrying a script that exits 0 would post an unredacted body (ADR-179 decision 2):
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh" /path/to/scratchpad/reproduce-bug-<N>.md \

@@ -641,6 +641,18 @@ Each criterion names the command that decides it; where a gate is claimed green,
 22. **Deferrals filed at ship, not here.** The three deferrals in §Deferrals have a `deferred-scope-out`-labelled issue each with re-evaluation criteria; their numbers appear in the PR body's `Filed:` line.
 23. **Decision challenges rendered.** `knowledge-base/project/specs/feat-one-shot-8288-reproduce-bug-red-loop/decision-challenges.md` exists with the entries in §Plan Review, and `ship` renders it into the PR body / an `action-required` issue.
 
+### AC amendments — recorded at ship, 2026-09-19 (review of PR #8352)
+
+Five literals above were superseded by review fixes; QA ticked each against the amended form and the tree, never from memory:
+
+- AC5: `founder checkpoint not presented (headless)` → `founder notice not presented (headless)` (the notice cannot be vetoed in time; renamed).
+- AC7: the D4 command's exclusion `-- . ':!knowledge-base/**/*.md'` → top-anchored `-- ':/' ':(top,exclude)knowledge-base/**/*.md'` at all three prose sites (from `apps/web-platform` the old form found 2 of 4 planted probes); Guard 4 keeps `cd "$ROOT"` + the original pathspec.
+- AC9: `redact-engine.py` → `redact-sentinel.sh` (the fail-closed shim); the plugin-root-anchoring row updated.
+- AC12: `shared-runner.template` and the dogfood runner gained 12 lines each (`export NO_COLOR=1`; rc 130 propagated as an interrupt), zero removed; `boundary.test.sh` 37/37, parity row 2.
+- AC14: `parity.test.sh` prints `12 passed, 0 failed (12 rows)` (template name-coupling and emission-census rows added).
+- AC1: three files outside the enumerated lists carry compound's bounded route-to-definition bullets (`plans/qa/review` SKILL.md), and `knowledge-base/project/rule-metrics.json` + `kb-tags.txt` are the generated aggregates compound and the index hook produce by design (ADR-091).
+- AC18: a sibling draft (#8360) also claims ADR-230 on its branch; this branch's ADR predates it and `origin/main` tops out at ADR-229 — the ordinal is re-checked immediately before merge and, if the sibling lands first, renumbered with a repo-wide `git grep -n 'ADR-230'` sweep (the two SKILL.md files named above are not the only citers: ship, test-fix-loop, the routed bullets and the ADR-071 amendment cite it too).
+
 ### Post-merge
 
 24. `soleur:postmerge` confirms the plugin CI battery is green on `main` (scripts shard includes `bite-proof.test.sh`, `debug-probe-residue.test.sh` and the 10-row `parity.test.sh`).
