@@ -126,7 +126,15 @@ make_mock_curl() {
   # emits a canned Anthropic-shaped response (a single text content block
   # containing a valid empty JSON array — sufficient to exercise the response
   # parse path without staging cluster diffs).
-  local path="$1" capture="$2"
+  #
+  # $3 overrides that response body, so a case can pin a DIFFERENT wire shape
+  # (T7 uses a thinking-first body) without a near-copy of this helper.
+  local path="$1" capture="$2" body="${3:-}"
+  # The default must NOT be inlined into ${3:-…}: this JSON contains `}`, which
+  # would terminate the parameter expansion early and emit a truncated body.
+  if [[ -z "$body" ]]; then
+    body='{"content":[{"type":"text","text":"[]"}]}'
+  fi
   cat > "$path" <<EOF
 #!/usr/bin/env bash
 # Capture the request payload for assertions.
@@ -143,8 +151,8 @@ while [[ \$# -gt 0 ]]; do
       ;;
   esac
 done
-# Emit a canned Anthropic response: empty clusters array.
-printf '%s' '{"content":[{"type":"text","text":"[]"}]}'
+# Emit the canned Anthropic response (default: empty clusters array).
+printf '%s' '$body'
 EOF
   chmod +x "$path"
 }
@@ -352,12 +360,84 @@ EOF
   rm -rf "$root"
 }
 
+# --- T7: a thinking-first Anthropic response still parses (#8392) -------------
+# EXECUTION_MODEL is claude-sonnet-5 (pinned at compound-promote.sh:218) and
+# Sonnet 5 runs adaptive thinking when `thinking` is omitted, so content[0] is a
+# thinking block and the cluster JSON follows it. A fixed-position reader returns
+# empty and the SUT hard-exits 1. The payload is deliberately NON-EMPTY: the
+# default "[]" body makes a successful parse indistinguishable from the
+# legitimate no-clusters outcome.
+t7_thinking_first_response_parses() {
+  local root; root=$(make_temp_root)
+  copy_fixtures "$root"
+  cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+enabled: true
+EOF
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"
+  make_mock_curl "$curl_bin" "$root/curl-capture.txt" \
+    '{"content":[{"type":"thinking","thinking":""},{"type":"text","text":"[{\"cluster_hash\":\"t7-thinking-first-sentinel\"}]"}],"stop_reason":"end_turn"}'
+
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" \
+        GH_BIN="$gh_bin" \
+        CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="fake-key-for-mock" \
+        bash "$SUT" 2>&1) || exit_code=$?
+
+  assert_eq        "T7 exit code is 0"  "0" "$exit_code"
+  # The parse path was actually REACHED — the harness has arms (no-config,
+  # disabled, week-cap) where curl is never called, so a bare exit-0 assertion
+  # would pass on a short-circuit.
+  assert_eq        "T7 curl WAS called (parse path reached)" "true" \
+                   "$([[ -f "$root/curl-capture.txt" ]] && echo true || echo false)"
+  assert_not_contains "T7 does NOT report empty content" \
+                   "::error::Anthropic API returned empty content" "$out"
+  # Decode the emitted clusters payload and look for the sentinel.
+  local b64 decoded=""
+  b64=$(printf '%s\n' "$out" | sed -n 's/^::compound-promote-clusters-json:://p' | tail -1)
+  [[ -n "$b64" ]] && decoded=$(printf '%s' "$b64" | base64 -d 2>/dev/null || echo "")
+  assert_contains  "T7 clusters payload carries the thinking-first sentinel" \
+                   "t7-thinking-first-sentinel" "$decoded"
+  rm -rf "$root"
+}
+
+# --- T8: the two shell readers share one jq program, and it selects by type ---
+# scripts/learning-retrieval-bench.sh is the fourth reader of this shape and has
+# no suite of its own; this row covers it behaviorally rather than by spelling.
+t8_shell_jq_readers_are_identical_and_type_selecting() {
+  local bench="$REPO_ROOT/scripts/learning-retrieval-bench.sh"
+  local prog_promote prog_bench
+  prog_promote=$(grep -o "jq -r '[^']*'" "$SUT" | grep -F '.content' | head -1)
+  prog_bench=$(grep -o "jq -r '[^']*'" "$bench" | grep -F '.content' | head -1)
+
+  # Non-empty guard: an extraction that found NOTHING must abort loudly, not
+  # report a clean match of two empty strings.
+  if [[ -z "$prog_promote" || -z "$prog_bench" ]]; then
+    echo "FAIL: T8 INSTRUMENT FOUND NOTHING (promote='$prog_promote' bench='$prog_bench')"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+    return
+  fi
+  assert_eq        "T8 both shell readers use a byte-identical jq program" \
+                   "$prog_promote" "$prog_bench"
+
+  # Behavioral: run the extracted program against a thinking-first body.
+  local body='{"content":[{"type":"thinking","thinking":""},{"type":"text","text":"t8-payload"}]}'
+  local program extracted
+  program=$(printf '%s' "$prog_promote" | sed "s/^jq -r '//; s/'$//")
+  extracted=$(printf '%s' "$body" | jq -r "$program" 2>/dev/null || echo "")
+  assert_eq        "T8 the shared jq program selects the text block by type" \
+                   "t8-payload" "$extracted"
+}
+
 t1_no_config_returns_noop
 t2_disabled_config_returns_noop
 t3_gdpr_pre_pass_excludes_pii_files
 t4_retired_rule_pre_pass_excludes
 t5_week_cap_reached_short_circuits
 t6_byte_budget_sentinel_emitted
+t7_thinking_first_response_parses
+t8_shell_jq_readers_are_identical_and_type_selecting
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

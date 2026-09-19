@@ -995,6 +995,51 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     expect(sent).not.toHaveProperty("output_config");
   });
 
+  // #8392 — EXECUTION_MODEL has been claude-sonnet-5 since #5849, and Sonnet 5 runs
+  // adaptive thinking when `thinking` is omitted, so content[0] is a thinking block
+  // (display "omitted" → `thinking: ""`) and the structured-output text follows it.
+  it("#8392 — returns the first TEXT block when a thinking block precedes it", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [
+          { type: "thinking", thinking: "" },
+          { type: "text", text: '{"clusters":[]}' },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result).toEqual({ text: '{"clusters":[]}', stopReason: "end_turn" });
+  });
+
+  // Selection is by TYPE, not by position. The `text` key on the thinking block is a
+  // deliberate synthetic discriminator — the API never sends it — without which this
+  // case returns "" under both the old and new readers and kills no mutant.
+  it("#8392 — a thinking-only response yields \"\" even when the thinking block carries a text key", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [{ type: "thinking", thinking: "", text: "must-not-be-read" }],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result).toEqual({ text: "", stopReason: "end_turn" });
+  });
+
   it("throws `Anthropic API <status>` on a non-ok response (caller owns the fallback)", async () => {
     fetchSpy.mockResolvedValue(new Response("upstream error", { status: 503 }));
 
