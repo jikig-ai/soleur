@@ -978,40 +978,40 @@ REQUIRED lacked the reading and per-reason remedies (→ reading block before ev
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `scripts/followthroughs/inngest-soak-6178.sh` exists, is executable, begins with the
+- [x] AC1 `scripts/followthroughs/inngest-soak-6178.sh` exists, is executable, begins with the
       header grammar of `inngest-host-not-serving-7674.sh` (WHY, credential posture, `RETIREMENT:`,
       EXIT CONTRACT stating never-0/never-1), refuses xtrace with a live credential (exit 78), and
       uses `set -uo pipefail` (no `set -e`): `grep -c '^set -uo pipefail$'` = 1, `grep -c 'set -e'` = 0
       on non-comment lines.
-- [ ] AC2 `grep -E '^\s*exit (0|1)\b' scripts/followthroughs/inngest-soak-6178.sh` returns nothing;
+- [x] AC2 `grep -E '^\s*exit (0|1)\b' scripts/followthroughs/inngest-soak-6178.sh` returns nothing;
       every `exit` maps to a row of the §Exit contract table.
-- [ ] AC3 The pinned constants are literal in the probe: `SOAK_FROM=2026-09-15T12:40:00Z`,
+- [x] AC3 The pinned constants are literal in the probe: `SOAK_FROM=2026-09-15T12:40:00Z`,
       `SOAK_END=2026-09-22T13:23:00Z`, `PERIOD=1200`, `SLICE_MAX=11`, `POPULATION_SIZE=52`, the two
       explained triples with exact `count` 4 and 2 on bucket 1491374, `RUN_FLOOR=800`, `REGISTRY_COUNT=70`, and the four image ids
       398857857 / 406654994 / 407991378 / 411798619 in the ACTION REQUIRED text
       (`grep -c 398857857` = 1 on an executable line).
-- [ ] AC4 `scripts/followthroughs/inngest-soak-6178.function-ids.txt` has a `#` provenance header
+- [x] AC4 `scripts/followthroughs/inngest-soak-6178.function-ids.txt` has a `#` provenance header
       naming runs 34974655656 and 35415585389 and the extraction command, then exactly 52 UUID
       lines, no duplicates, set-equal to the run-log extraction, ordered by the measured density
       ranking (heaviest first, ties by id).
-- [ ] AC5 `bash scripts/followthroughs/inngest-soak-6178.test.sh` exits 0 and prints
+- [x] AC5 `bash scripts/followthroughs/inngest-soak-6178.test.sh` exits 0 and prints
       `inngest-soak-6178: <N> passed, 0 failed` with `<N>` equal to its FLOOR; `<N>` ≥ 40.
-- [ ] AC6 Every ★ row of Guard 1's mutation matrix (13 rows) was applied one at a time and
+- [x] AC6 Every ★ row of Guard 1's mutation matrix (13 rows) was applied one at a time and
       reddened the named case (record the rc/first-line pairs in the PR body's test section); each
       revert restores green. Unstarred rows are covered by their harness cases.
-- [ ] AC7 `scripts/test-all.sh` carries
+- [x] AC7 `scripts/test-all.sh` carries
       `run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh`
       and `bash scripts/lint-orphan-test-suites.sh` is clean.
-- [ ] AC8 `bash scripts/lint-followthrough-varq-ban.sh` is clean (rules 1–3, including rule 3 on
+- [x] AC8 `bash scripts/lint-followthrough-varq-ban.sh` is clean (rules 1–3, including rule 3 on
       the population-file default path); `bash scripts/followthrough-exec-bit.test.sh` and
       `bash scripts/followthrough-predicate-parity.test.sh` are green; the trap-tempfile lint's
       CI invocation is green.
-- [ ] AC9 ADR-100 has the new addendum heading
+- [x] AC9 ADR-100 has the new addendum heading
       `## Addendum — 2026-09-19 (#6178) — the soak reading at day 3.5 and what the day-7 probe measures`
       after the 2026-09-18 addendum, the frontmatter line `status: adopting` is unchanged
       (`git diff origin/main -- <ADR> | grep -c '^[-+]status:'` = 0), and
       `python3 scripts/lint-infra-no-human-steps.py <ADR path>` is OK.
-- [ ] AC10 Phase 6 live run (the `env -i` shape via `doppler run`) returned `rc=2`, the registry GET 200 with `function_count=70`, five slices,
+- [x] AC10 Phase 6 live run (the `env -i` shape via `doppler run`) returned `rc=2`, the registry GET 200 with `function_count=70`, five slices,
       ≥ 826 distinct runs, exactly the two explained groups and zero UNEXPLAINED; the per-slice
       `total_count` line is recorded in the population file header with its UTC timestamp.
 - [ ] AC11 The PR body says `Ref #6178` and contains no `Closes|Fixes|Resolves #6178`; the only
