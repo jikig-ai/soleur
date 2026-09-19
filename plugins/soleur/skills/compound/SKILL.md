@@ -431,7 +431,7 @@ Routing mechanics:
 1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
 2. Route **two categories** of insights:
    - **Solution insight:** The main learning (what was solved and how). Classify with the placement gate above, then propose a one-line bullet edit to the target file.
-   - **Error prevention:** For each session error that could have been prevented by a skill instruction, classify with the placement gate, then propose a one-line bullet to the target. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
+   - **Error prevention:** For each session error that could have been prevented by a skill instruction, classify with the placement gate, then propose a one-line bullet to the target. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges (`plugins/soleur/skills/plan/references/plan-sharp-edges.md` — the catalogue lives in references/ since #8302, not in SKILL.md) saying "Verify relative paths by tracing each `../` step before prescribing them."
 3. **Default action (interactive and headless):** Apply the edit directly to the
    target skill/agent/AGENTS.md file. **Always use worktree-absolute paths**
    (`<worktree-root>/plugins/soleur/skills/<skill>/SKILL.md`) for Edit/Write
