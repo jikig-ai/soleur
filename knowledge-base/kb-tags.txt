@@ -978,6 +978,7 @@ counting
 counts
 coupling-test
 coverage
+coverage-consult
 coverage-denominator
 coverage-gap
 cpo
@@ -1115,6 +1116,7 @@ deepen-plan
 deepen-plan-skill
 default
 default-deny
+default-parameter
 defeat
 defense
 defense-in-depth
@@ -1150,6 +1152,7 @@ dependency-cascade
 dependency-chains
 dependency-cruiser
 dependency-detection
+dependency-injection
 dependency-management
 dependency-rebase
 dependency-resolution
@@ -1184,6 +1187,7 @@ design-system
 design-tooling
 design-tooling/mcp-tools
 design-tools
+design-validity
 desktop-support
 destroy-gate
 destroy-guard
@@ -2160,6 +2164,7 @@ live-evidence
 live-probe
 live-repro
 live-verify
+livelock
 liveness
 llm
 llm integration tests
@@ -3116,6 +3121,7 @@ remediation
 remediation-tooling
 remote-exec
 rename
+rename-guard
 render-scrub
 render-sink-sweep
 render-tree
@@ -3380,6 +3386,7 @@ search-path-injection
 search-path-pinning
 seccomp
 second-order-defects
+second-order-effects
 second-reviewer-concur
 second-reviewer-gate
 secret

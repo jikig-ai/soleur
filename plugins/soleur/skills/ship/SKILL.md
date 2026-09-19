@@ -476,7 +476,7 @@ bash apps/web-platform/infra/run-registered-suites.sh
 
 **If tests fail:**
 
-1. **Check if failures are pre-existing:** Run the same test command on an unmodified checkout (or compare failure count/names with main). If the exact same tests fail on main, the failures are pre-existing.
+1. **Check if failures are pre-existing:** Run the same test command on an unmodified checkout (or compare failure count/names with main). If the exact same tests fail on main, the failures are pre-existing. **Classify per FILE, never per suite:** a vitest/bun suite with N failing files is N verdicts, and the first named cause does not speak for the rest. Enumerate them (vitest: `grep -E '❯.*failed'` on the runner log, unanchored so it also works on `gh run view --log` output; bun prints `(fail)` lines under a bare `path:` header and never emits `❯`), check the count against the runner's `Test Files N failed` summary line (a collection-error file prints `(0 test)` with no `failed` token, and an empty grep is not an empty set), compare each against `origin/main` or against CI's result for the same head, and file the tracker only over the ones that match. **Why:** PR #8297 — 19 failing web-platform files, the first read as environmental (`localStorage` absent locally), the whole suite filed as pre-existing (#8335); CI passed 18 and failed the one that was the PR's own, and it was already in the log.
 2. **If failures are caused by this branch:** Stop and fix before proceeding.
 3. **If failures are pre-existing:** Create a GitHub issue to track them (`gh issue create --title "fix: N pre-existing test failures in <app>" --milestone "Post-MVP / Later" --label bug`), then continue. Do not silently bypass pre-existing failures — a red test suite normalizes breakage and masks future regressions. **Why:** In #1411, 71 pre-existing web-platform test failures were silently bypassed during ship. The tracking issue (#1413) was only created after the founder noticed post-session.
 
@@ -1439,7 +1439,7 @@ done
 
 **If not triggered (`${#UNDEFERRED[@]}` is 0):** Skip silently.
 
-**If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (3-option choice). The operator chooses one:
+**If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (4-option choice). The operator chooses one — and option 4 is offered FIRST whenever its precondition holds, because filing or attesting a step that a script could have run is the accretion this gate exists to stop:
 
 1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then files with **`--body-file`, never `--body "…\n…"`**:
 
@@ -1473,8 +1473,9 @@ done
    with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
 3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
+4. **Generate a runnable script instead — invoke `skill: soleur:operator-bootstrap`.** Precondition: **≥2 of the undeferred matches are scriptable and blocked on the same credential the agent cannot mint.** That is the literal trigger of `hr-multi-step-post-merge-bootstrap-script`, and this gate is the only point in the pipeline where those steps are enumerated — so it is the only place the artifact that rule mandates can actually be produced. **Invoke the skill; do not paraphrase it inline** (`skill: soleur:operator-bootstrap`), pass the undeferred matches as its stage list, and let it emit the `knowledge-base/project/specs/<feature>/bootstrap.sh` the rule names (tracked, so it survives Phase 7's worktree reaping; the skill's §Where states why). This is also what discharges `hr-ship-message-no-operator-checklist`: with a script to point at, the tracked follow-through issue's `auto_command:` block is `bash knowledge-base/project/specs/<feature>/bootstrap.sh` rather than a prose checklist. Then fold any remaining non-scriptable matches — the true human gates (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token) — back through option 1, replace the scripted bullets with the single `Tracks #NNNN` companion for the ONE post-merge issue the rule requires (one issue, not N), and re-run detection. **If the precondition does not hold** (a single step, or steps blocked on different credentials), say so and fall through to options 1-3 — do not generate a one-stage script to satisfy the gate.
 
-**Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice.
+**Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice. The abort message MUST state whether option 4's precondition holds, naming `soleur:operator-bootstrap` when it does: a headless abort that lists only "file, cite or attest" hands the operator three ways to record the step and none to remove it.
 
 **Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late); this gate moved enforcement from honor-system to mechanical. The `playwright-attempt:` precondition (2026-06-10) closes a second bypass: PR #5082's CF-token-widen was classified "operator-only, MFA-gated" and filed as `deferred-automation` WITHOUT any browser attempt — a real attempt later reached the editable token form (the gate was the one-time login, not MFA), proving the assertion-without-attempt was the actual defect. See `knowledge-base/project/learnings/workflow-patterns/2026-06-10-playwright-attempt-evidence-before-operator-only.md`.
 
@@ -1604,6 +1605,10 @@ done
 **Headless mode.** Abort with the structured error. No auto-scaffold / auto-override in headless — the probe authorship + verifiable-vs-qualitative judgment require an interactive run.
 
 **Why:** On 2026-06-29 two PRs shipped soak-gated closures in prose with no sweeper enrollment — PR #5675 (#5689 soak) and PR #5671 (#5673 AC8 `op:founder-ambiguous` soak, enrolled retroactively via PR #5724). Both declared the soak in prose, so Phase 7 Step 3.5's `⏳`-only scan never fired and the trackers were left to rot open on human memory. This gate moves soak-class follow-through enrollment from honor-system to a mechanical block-before-ready, reusing the existing follow-through substrate. See `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
+
+### Merge-Base-Relative Lints (mandatory)
+
+**Run every merge-base-relative lint the way its CI job does, and `rule-body-lint` is the one to get wrong.** [scripts/lint-rule-bodies.py](../../../../scripts/lint-rule-bodies.py) with `--check --base HEAD` compares the tree to itself, so its merge-base ack arm is vacuous — only the manifest-hash arm can still fire, which is why a `lint-rule-bodies-live` PASS in the [scripts/test-all.sh](../../../../scripts/test-all.sh) battery is calibration, not the gate. CI passes `--base "$(git merge-base origin/main HEAD)"` (`.github/workflows/ci.yml`, `rule-body-lint`); run that form, and [scripts/lint-skill-body-budget.py](../../../../scripts/lint-skill-body-budget.py) `--base <merge-base>` from the same job. A base that cannot see the change is not a check of the change. **Why:** PR #8297 — the local run said OK, CI named two un-acked rule-body amendments, one cycle lost.
 
 ### ADR-Ordinal Collision Gate (mandatory)
 
@@ -1801,6 +1806,10 @@ Replace `BRANCH_NAME` with the actual branch name.
    Closes #ISSUE_NUMBER
    Filed: #A #B #C
 
+   ## Merge Danger
+   **Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
+   **Blast Radius:** docs | plugin | web-platform | user-data | money
+
    ## Changelog
    - changelog entries describing what changed
 
@@ -1835,6 +1844,92 @@ Replace `BRANCH_NAME` with the actual branch name.
    containing "filed:" cannot declare anything.
 
    Do not quote flag names -- write `--title` not `"--title"`.
+
+   <!-- Inspired by mattpocock/skills/skills/in-progress/pr/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
+
+   **The `## Merge Danger` block — TWO fields, both mandatory, placed ABOVE `## Changelog`.**
+   It sits above the changelog so the founder reads the undo before the list of changes — nothing
+   more. `.github/workflows/reusable-release.yml` extracts ONLY the lines between `## Changelog`
+   and the next `##` heading, so the block is excluded from release notes wherever it sits; placement
+   is a reading-order choice, not a release-note one. It also sits AFTER the `Filed:` line, which
+   must stay line-initial for `net-issue-flow.sh`'s declared-filing arm (the whole-line
+   `^[ \t\r]*([-*+][ \t]+)?[*_]*[Ff][Ii][Ll][Ee][Dd][*_]*:` assertion it calls the gate's ONLY
+   counted attribution source) — nothing in this section precedes, wraps or indents that line.
+
+   **`Undo:` is AUTHOR-WRITTEN by `soleur:ship`, from what `soleur:ship` actually knows at Phase 6**, keyed on
+   the blast radius it is about to write:
+
+   - `docs` or `plugin`: `ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged)` —
+     the FOUNDER ACTION first, the mechanism in parentheses. The founder reads this before the
+     merge exists, so the SHA placeholder cannot be filled in here; `#N` is the PR number, which
+     IS known, and "undo PR #N" is the request Soleur turns into the revert once the squash-merge
+     SHA exists. Nothing else is needed: the plugin is delivered by the source commit advancing,
+     so the revert IS the redeploy.
+   - `web-platform`: the same revert **plus** the redeploy step that ships it (name the workflow or
+     the `soleur:deploy` invocation), because a reverted commit that never deploys undoes nothing.
+   - `user-data` or `money`: quote a rollback procedure ONLY if one exists in this PR's review
+     artifacts — a `soleur:engineering:review:deployment-verification-agent` finding (it runs only on migration / record-
+     discarding PRs, via `plugins/soleur/skills/review/workflows/review.workflow.js`) or a
+     migration `down.sql`. Otherwise write `none known — <what is permanently lost>` on the same
+     line (the deleted rows, the charged card, the published tag). Do not invent a procedure the
+     artifacts do not contain.
+
+   **`Blast Radius:` is one value** from `docs | plugin | web-platform | user-data | money`.
+
+   **The rule is directionless: name the undo; if you cannot name one, say so and name what is
+   permanently lost.** Adopt no default in either direction. ADR-119
+   (`knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`,
+   §"Rollback is the retained plaintext volume") records a one-way-door ruling that was wrong: the
+   defect was a **label with no mechanism attached**, so a named command is the fix, not a verdict.
+
+   **Do NOT add a `Door:` (one-way / two-way) field.** It is derived — it cannot be written without
+   `Undo:` — and a one-word verdict is exactly the unfalsifiable label ADR-119 warns against. Two
+   fields, no third. There is also no merge hold on this block today: it renders, and nothing blocks
+   on it.
+
+   **Gate safety for this section — check the text you are about to write, not the text you wrote.**
+   `.claude/hooks/ship-operator-step-gate.sh`'s `DETECT_RE` anchors on a **list-bullet marker**
+   (`-`, `*`, `1.`, optional `[ ]` box, optional `**`) followed by a Group-A/B/C/D token — an
+   operator-action verb, `T+<N><unit>`, `Within <N><unit>:`, or `AC-PM<N>`. The heading is never
+   matched, which is why `## Model Dissents (informational)` is safe and why `## Merge Danger` is
+   too. `**Undo:**` and `**Blast Radius:**` are safe because the leading `*` is not followed by
+   whitespace. Do not put a bullet in front of either label, and do not continue either value onto a
+   bulleted line — that is the one edit that moves this section into the detector's reach. Three
+   more gates read the same body and each has a phrasing to avoid:
+
+   - Blast radius: write `user-data`, never the literal `prod-data`. The `PROD_RE` pattern in
+     [scripts/ship-incident-pir-gate.sh](../../../../scripts/ship-incident-pir-gate.sh) matches
+     `prod` followed by any non-letter, so that token alone supplies half of the incident-PIR
+     conjunction, and a reversibility narrative supplies the other half (past-tense outage
+     vocabulary).
+   - Undo phrasing: never "post-deploy verify / observe / soak the rollback".
+     `.claude/hooks/ship-soak-followthrough-gate.sh`'s `SOAK_RE` matches
+     `post-deploy (soak|verif|observ)` and then demands sweeper enrollment for every `Ref #N` in the
+     body. Write "run `<command>` to reverse it" instead.
+   - Undo phrasing: never "revert the PR that closes #N".
+     `.claude/hooks/pre-merge-auto-close-scan.sh` denies prose-embedded close keywords, so any
+     `closes`/`fixes`/`resolves` + `#N` pair inside this section blocks the merge. Name the commit
+     or the command, not the issue it closed.
+
+   **Evidence tiers — what the body should SHOW.** This ranks evidence *quality*. It does not decide
+   *sufficiency*, and it deliberately does not restate the three gates that do:
+
+   - **S-tier — screenshots, when the change is visual.** `plugins/soleur/skills/qa/SKILL.md` already
+     makes the screenshot the evidence unit — its Step 3 says *"Record the result for each scenario:
+     PASS or FAIL with evidence (screenshots, API response output, error messages)"* and its Step 4
+     report template carries `**Evidence:** <screenshot filenames>`. Paste the artifacts, not a prose
+     summary of them.
+   - **A-tier — execution-based evidence: the exact test that fails before the change and passes
+     after.** Name it by file and test name and show both runs. A test named but not run is C-tier.
+   - **C-tier — assertion.** "Verified locally", "all tests pass", "no regressions". Acceptable only
+     as a supplement to S or A, never as the whole test plan.
+
+   Sufficiency is decided by three existing gates this list points at rather than competes with:
+   **Phase 1.5 "Review Evidence Gate"** above answers *"did `soleur:review` run, and at what coverage?"*;
+   `plugins/soleur/skills/review/SKILL.md`'s degraded-review path already grades evidence adequacy
+   against the surface's reversibility — *"degraded review is adequate evidence for a docs PR and is
+   not adequate for an irreversible-blast-radius surface"*; and `qa/SKILL.md` fixes the unit. Those
+   three decide whether the evidence is enough; this list only tells you what to paste.
 
    **Carry forward every gate marker the OLD body carried (load-bearing).** This
    step **full-replaces** the body, and two blocking gates read markers that live
@@ -1903,6 +1998,10 @@ gh pr create --title "the pr title" --body "## Summary
 
 Closes #ISSUE_NUMBER
 
+## Merge Danger
+**Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
+**Blast Radius:** docs | plugin | web-platform | user-data | money
+
 ## Changelog
 - changelog entries describing what changed
 
@@ -1913,6 +2012,11 @@ Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
 If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If no issue was detected, omit it.
+
+The `## Merge Danger` block is the same two fields, under the same rules, as the `gh pr edit`
+template above — including its placement ABOVE `## Changelog` and the four gate-phrasings to avoid.
+Both templates carry it; editing one and not the other is a silent partial, because which template
+runs depends only on whether a draft PR already exists.
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -2356,7 +2460,7 @@ Do NOT invert this into "ignore failures that look transient". The discriminator
 
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
-**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge.
+**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge. **Measure before you resolve: `git fetch origin main && git merge-tree --write-tree origin/main HEAD >/dev/null; echo rc=$?` — `rc=0` means GitHub's DIRTY is FALSE** (no conflict; `merge-tree` runs the same driver `git merge` would, and a broken driver exits 1, so rc cannot be 0 by accident — but rc=0 is row arithmetic, not a regeneration, so run [scripts/generate-kb-index.sh](../../../../scripts/generate-kb-index.sh) `--check` after the sync, the local twin of CI's AC17). GitHub builds `refs/pull/N/merge` without this repo's `kb-index` merge driver — the same gap Phase 6.5 describes for the AC17 count, here surfacing as a conflict — so any KB file added or removed on `main` (the index's `Total files:` header moves) reads there as an `INDEX.md` conflict that the local driver resolves cleanly. The remedy is the BEHIND arm's own three commands from the worktree where `merge.kb-index.driver` is registered — `git fetch origin main && git merge origin/main --no-edit && git push` — not conflict resolution. If rc≠0, confirm `git config merge.kb-index.driver` is set before treating the conflict as real. **Why:** PR #8297 — DIRTY eight times over ~5 hours, `merge-tree` rc 0 every time; each sync restarts the ~40-minute required-check cycle, so on a busy `main` this is the livelock's dominant form, and the hatch was not available (real code in the diff).
 
 Two failure paths exit early instead of looping:
 

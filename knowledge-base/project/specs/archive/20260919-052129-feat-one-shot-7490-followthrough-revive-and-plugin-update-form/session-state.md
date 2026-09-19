@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-18-fix-7490-followthrough-revive-and-plugin-update-form-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260919-052129-2026-09-18-fix-7490-followthrough-revive-and-plugin-update-form-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 

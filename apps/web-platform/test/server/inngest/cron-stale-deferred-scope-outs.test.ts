@@ -18,6 +18,14 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
 }));
 
+// The off-box summary marker goes through the dedicated pino marker module
+// (server/cron-liveness-marker.ts), never ctx.logger — see the WARN-summary test.
+const emitRunReportSweepMock = vi.fn();
+vi.mock("@/server/cron-liveness-marker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/cron-liveness-marker")>()),
+  emitRunReportSweep: emitRunReportSweepMock,
+}));
+
 const octokitRequestSpy = vi.fn();
 const createProbeOctokitSpy = vi.fn();
 vi.mock("@/server/github/probe-octokit", async () => ({
@@ -112,6 +120,7 @@ beforeEach(() => {
   vi.resetModules();
   reportSilentFallbackSpy.mockReset();
   postSentryHeartbeatSpy.mockReset();
+  emitRunReportSweepMock.mockReset();
   octokitRequestSpy.mockReset();
   createProbeOctokitSpy.mockReset();
   createProbeOctokitSpy.mockImplementation(async () => ({
@@ -1191,17 +1200,23 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
     expect(commentsCalls()).toHaveLength(25);
   });
 
-  it("the WARN summary marker ships when something closed or was deferred, and stays silent on a quiet run", async () => {
+  it("the WARN summary marker ships through the pino marker module (never ctx.logger) when something closed or was deferred, and stays silent on a quiet run", async () => {
+    // ctx.logger is Inngest's console-backed ProxyLogger and renders the object
+    // multi-line (measured 2026-09-14/15: the runbook decode matched nothing).
+    // The marker must go through emitRunReportSweep; a ctx.logger spy would be
+    // blind to the render and is exactly what certified the defect before.
     const warnSpy = vi.fn();
     const warnLogger = { ...logger, warn: warnSpy } as typeof logger;
     const { __TESTING__ } = await importModule();
     mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7017, createdAt: "2026-09-01T08:00:00Z" })] });
     await __TESTING__.sweepRunReports({ octokit: { request: octokitRequestSpy } as never, now: NOW, dryRun: false, logger: warnLogger, paceMs: 0 });
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toMatchObject({ [__TESTING__.RUN_REPORT_SWEEP_MARKER]: true, closed: 1, deferred: 0 });
-    warnSpy.mockClear();
+    expect(emitRunReportSweepMock).toHaveBeenCalledTimes(1);
+    expect(emitRunReportSweepMock.mock.calls[0][0]).toMatchObject({ fn: "cron-stale-deferred-scope-outs", arm: "run-reports", closed: 1, deferred: 0 });
+    expect(warnSpy).not.toHaveBeenCalled();
+    emitRunReportSweepMock.mockClear();
     mockSearch({});
     await __TESTING__.sweepRunReports({ octokit: { request: octokitRequestSpy } as never, now: NOW, dryRun: false, logger: warnLogger, paceMs: 0 });
+    expect(emitRunReportSweepMock).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
   });
 

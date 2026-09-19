@@ -18,7 +18,7 @@ f986fe104836beadb13264dfdf5223c2a13cac35b29e54a9d5226d1cf8144a7b  hr-exhaust-all
 738a82a8ccf5c3187525393771e88e94c478d4b219ede66c2db4ba2ce504591c  hr-mcp-tools-playwright-etc-resolve-paths
 5cbdc0d4e9a5760e32ed53a4152f06914a270d4a82ccb007a0823db8f08f8d8f  hr-menu-option-ack-not-prod-write-auth
 f8a323e9c2570956a875ac91fa6a915df7dfad6b28513eee83dd5be0592f0c93  hr-monitor-not-run-in-background-for-polling
-4b10f78f8336089b290f2488c8c4c91e520cdb9890226d3b996d193210c475e4  hr-multi-step-post-merge-bootstrap-script
+2a780ef4f90dff71e1ae13c126f56a570598bc45675f0ba69d53882999c36240  hr-multi-step-post-merge-bootstrap-script
 9173df3a578ecdc1a4a64c3eccede6dcb7a57fed6474cb696875c2d5d7ff7e57  hr-never-git-add-a-in-user-repo-agents
 62de9f53146aa3f2e11109a0ffc4935ca0bf50f598688ac83998a887c84d97a2  hr-never-git-stash-in-worktrees
 830682ff0cf1734761217a9e848c1218e67e8889f03ca61731abedf9a275e82a  hr-never-label-any-step-as-manual-without
@@ -31,7 +31,7 @@ d9887c48b115bb8e8559d1859c2df9061a7eaae59232eb433ca3ba2919202f42  hr-observabili
 0028dfb57a9126ab758b0e6dd55dd2d65649f12b1333db320c8581cb2b4e652e  hr-observability-layer-citation
 b9e25473eb36c56dfc0aa07e7f09ccbaa4b936e73915aaa1288f2bf40b29fd1e  hr-pipeline-skills-never-inline-after-go-route
 cc3b752f99ec2d39e31fbb886178f5a2b530e2db7cce008512e3ccad8539001b  hr-prod-host-config-change-immutable-redeploy
-8888957e6cb050d24c89378c6ad0abd36eb6a877c7cac2c407af4d25c82eb76c  hr-ship-message-no-operator-checklist
+eed7ac668d91967fa6e7dae86acf68465119183fd547ddfc725e7fe6140fca73  hr-ship-message-no-operator-checklist
 2b23364feefbf97b8b4831fd7adfab30b3b50e206759a08503903910a28f2797  hr-ssh-diagnosis-verify-firewall
 2fdcf6b8ba9126c55e5b40e389d5150e220a7f4dae6ba1c782f7329c8972cc96  hr-tagged-build-workflow-needs-initial-tag-push
 b0a7be3e0167890fc8043b8ef46f0e86673fcd2ac03c2faa7a088045026cff9c  hr-technical-fork-is-not-an-operator-question

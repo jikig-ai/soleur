@@ -53,6 +53,8 @@ __pycache__/
 /.claude/worktrees/
 .playwright-mcp/
 .env
+# The mktemp sibling a generated bootstrap.sh writes beside its .env (operator-bootstrap)
+.env.tmp.*
 _site/
 _site_test/
 screenshot-gate-failures/

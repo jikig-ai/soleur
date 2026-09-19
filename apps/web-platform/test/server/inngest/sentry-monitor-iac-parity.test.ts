@@ -277,7 +277,15 @@ describe("Sentry cron-monitor IaC parity", () => {
 // own comment calls an intolerant version "the exact class this guard exists to
 // prevent". Measured: quoting the path removed a whole workflow from the cohort
 // with the suite still green.
-const HEARTBEAT_USES_RE = /uses:\s*"?\.\/\.github\/actions\/sentry-heartbeat"?/;
+//
+// `[.$]` covers BOTH same-repo reference forms. GitHub resolves `./path` from the
+// runner's workspace and `$/path` from the repository at the running commit; a
+// checkout-free job must use the second (#8313). A `./`-only key silently dropped
+// scheduled-marketplace-drift.yml from this cohort the moment it switched — the one
+// workflow that switch exists to repair would have lost every shape assertion here,
+// and the closure check below cannot see it because both populations derive from
+// this same regex. The floor could not see it either: 13 >= 12.
+const HEARTBEAT_USES_RE = /uses:\s*"?[.$]\/\.github\/actions\/sentry-heartbeat"?/;
 
 type HeartbeatStep = {
   file: string;
@@ -398,12 +406,12 @@ describe("Sentry heartbeat step shape (#7834)", () => {
 
   it("discovers the known heartbeat-step cohort (anti-vacuity)", () => {
     const steps = heartbeatSteps();
-    // Measured 2026-09-06 ON THIS BRANCH: 12 steps across 11 workflows
-    // (scheduled-terraform-drift.yml carries two). An earlier revision of this
-    // comment said 11/10 — the PRE-change tree — which left the floor two units
-    // slack instead of one, and a floor is an anti-vacuity counter, so an
-    // off-by-one in the comment is an off-by-one in the guard.
-    expect(steps.length).toBeGreaterThanOrEqual(12);
+    // Measured 2026-09-18: 14 steps across 13 workflows — 13 `./` steps across 12
+    // files (scheduled-terraform-drift.yml carries two) plus the one `$/` step in
+    // scheduled-marketplace-drift.yml. An earlier revision said 12/11 against a
+    // `./`-only key; the floor is an anti-vacuity counter, so an off-by-one in the
+    // comment is an off-by-one in the guard.
+    expect(steps.length).toBeGreaterThanOrEqual(14);
     expect(steps.map((s) => s.file)).toContain("scheduled-terraform-drift.yml");
   });
 
