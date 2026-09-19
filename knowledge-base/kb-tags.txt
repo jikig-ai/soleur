@@ -486,6 +486,7 @@ bootstrap
 born-blocking
 bot
 bot-attribution
+bot-automation
 bot-configuration
 bot-fix
 bot-fix-pipeline
@@ -1615,6 +1616,7 @@ force-with-lease
 forcenew
 foreground
 foreign-keys
+fork-pr
 format
 formatters-log
 formatting
@@ -1723,6 +1725,7 @@ git-show-main
 git-stash
 git-subdir
 git-tags
+git-trace
 git-trailers
 git-workflow
 git-worktree
@@ -4389,6 +4392,7 @@ wrong-layer
 wrong-skill-count
 ws-client
 ws-handler
+x-access-token
 x-api
 x-forwarded-host
 xargs
