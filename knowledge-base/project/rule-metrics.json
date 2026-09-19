@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-19T06:04:09Z",
+  "generated_at": "2026-09-19T06:46:46Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1086,11 +1086,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 30,
+      "applied_count": 31,
       "warn_count": 0,
-      "fire_count": 30,
+      "fire_count": 31,
       "prevented_errors": 0,
-      "last_hit": "2026-09-18T21:26:58Z",
+      "last_hit": "2026-09-19T06:34:13Z",
       "first_seen": "2026-05-22T07:01:41Z",
       "rule_text_prefix": ""
     },
@@ -1112,11 +1112,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 40,
+      "applied_count": 41,
       "warn_count": 0,
-      "fire_count": 40,
+      "fire_count": 41,
       "prevented_errors": 0,
-      "last_hit": "2026-09-19T04:05:10Z",
+      "last_hit": "2026-09-19T06:34:55Z",
       "first_seen": "2026-07-17T14:26:30Z",
       "rule_text_prefix": ""
     },
@@ -1199,19 +1199,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "wg-defer-only-after-inline-triage",
-      "section": "Workflow Gates",
-      "hit_count": 138,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 138,
-      "prevented_errors": 138,
-      "last_hit": "2026-09-19T03:50:30Z",
-      "first_seen": "2026-09-11T09:35:31Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
       "hit_count": 140,
@@ -1222,6 +1209,19 @@
       "prevented_errors": 140,
       "last_hit": "2026-09-19T04:42:10Z",
       "first_seen": "2026-05-12T07:00:34Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-defer-only-after-inline-triage",
+      "section": "Workflow Gates",
+      "hit_count": 141,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 141,
+      "prevented_errors": 141,
+      "last_hit": "2026-09-19T06:16:49Z",
+      "first_seen": "2026-09-11T09:35:31Z",
       "rule_text_prefix": ""
     },
     {
@@ -1242,11 +1242,11 @@
       "section": "Workflow Gates",
       "hit_count": 153,
       "bypass_count": 0,
-      "applied_count": 25,
+      "applied_count": 26,
       "warn_count": 0,
-      "fire_count": 178,
+      "fire_count": 179,
       "prevented_errors": 153,
-      "last_hit": "2026-09-18T22:22:28Z",
+      "last_hit": "2026-09-19T06:34:13Z",
       "first_seen": "2026-05-21T21:08:12Z",
       "rule_text_prefix": ""
     },
@@ -1283,10 +1283,9 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 259,
-      "monitor-supersede": 442,
-      "net-issue-flow": 570,
-      "post-dispatch-watch-gate": 5117,
+      "net-issue-flow": 574,
+      "monitor-supersede": 443,
+      "post-dispatch-watch-gate": 5118,
       "guardrails-block-recursive-delete": 360,
       "kb-domain-allowlist-guard": 217,
       "guardrails-require-milestone": 521,
@@ -1299,7 +1298,7 @@
       "pre-merge-auto-close-scan": 122,
       "net-issue-flow-mandated-filing--hr-never-git-stash-in-worktrees": 1,
       "guardrails-block-delete-branch": 124,
-      "net-issue-flow-body-attributed": 49,
+      "net-issue-flow-body-attributed": 53,
       "guardrails-block-rm-rf-worktrees": 23,
       "guardrails-block-conflict-markers": 3,
       "prod-write-defer-git-push-main": 6,
@@ -1310,6 +1309,7 @@
       "guardrails-worktree-write-guard": 259,
       "context-reviewed-hook-self-fault": 1,
       "adr-033-inngest-cron-canonical": 30,
+      "skill-security-scan": 259,
       "net-issue-flow-undelivered-declaration": 1,
       "prod-write-defer-doppler-prd-secrets": 6,
       "durable-reminder-prefer-inngest": 20,
@@ -1329,10 +1329,10 @@
         "bypass_count": 8
       }
     ],
-    "gate_override_count": 127,
+    "gate_override_count": 131,
     "gate_timeout_warn_count": 45,
     "gate_failopen_warn_count": 88,
-    "gate_body_attributed_count": 49,
+    "gate_body_attributed_count": 53,
     "gate_undelivered_declaration_count": 1,
     "gate_contradictory_declaration_count": 0,
     "gate_unbalanced_fence_count": 0,

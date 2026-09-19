@@ -4127,6 +4127,12 @@ fi
 #   inngest-wiped-volume-verify.sh  shape gate, quiesced_refused (named row below + its own suite)
 #   workspaces-cutover.sh    reconcile + dead-man shape gates (named row below + its own suite)
 #   inngest-cutover-flip.sh / inngest-redis-bootstrap.sh  variable units on the DEDICATED host / redis
+#   git-data-luks-reopen.sh  (#8210) `systemctl start "$_munit"` on the GIT-DATA host, where no
+#                            inngest-server unit exists; and the variable is provably never it:
+#                            `_munit=$(systemd-escape -p --suffix=mount "$TARGET")` with TARGET
+#                            allow-listed to /mnt/git-data|/mnt/git-data-luks two lines earlier
+#                            (git-data-luks-reopen.test.sh S11c pins the case). A `.mount` unit
+#                            cannot be inngest-server.service. Pinned as a change detector.
 QI_RE_A='systemctl([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+(start|restart|enable|try-restart|reload-or-restart)([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+inngest-server(\.service)?([^-A-Za-z0-9_.]|\.service|$)'
 QI_RE_B='systemctl(_cmd)?([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+(start|restart)([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+"\$'
 # shellcheck disable=SC2034  # read through qi_inventory's nameref
@@ -4149,6 +4155,7 @@ declare -A QI_PIN_B=(
   # Behavioural rows: inngest-luks-cutover.test.sh "a unit that was NOT running before the freeze
   # is not started by it" and "with no record … a disabled unit is still not started".
   [apps/web-platform/infra/inngest-luks-cutover.sh]=1
+  [apps/web-platform/infra/git-data-luks-reopen.sh]=1
 )
 QS_REPO="$SCRIPT_DIR/../../.."
 # qi_inventory <regex> <pin-array-name> <label>: sets QI_BAD (appends) and QI_SEEN (hit count).
@@ -4185,10 +4192,11 @@ qi_inventory "$QI_RE_A" QI_PIN_A "unit=inngest-server"
 qi_inventory "$QI_RE_B" QI_PIN_B "variable-unit"
 TOTAL=$((TOTAL + 1))
 # 15 -> 16 at #6894: inngest-luks-cutover.sh's single variable-unit resume (see QI_PIN_B).
-if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 16 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 7 files) (Guard 2 #6c)"
+# 16 -> 17 at #8210: git-data-luks-reopen.sh's mount-unit start (see QI_PIN_B).
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 17 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 8 files) (Guard 2 #6c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 16):${QI_BAD:- <per-file counts match but the total does not>}"
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 17):${QI_BAD:- <per-file counts match but the total does not>}"
 fi
 # Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
 # (a regex that silently matched nothing would pin an empty inventory as green).

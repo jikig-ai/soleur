@@ -94,6 +94,15 @@ files); the cost came from three habits below, each of which multiplies.
    names which. Either way: run your own targeted suites, not the gate; no marker + no rc file = harness reap, not
    your diff.
 
+8. **A full gate reads the LIVE tree: either stop editing the worktree until it ends, or run it
+   from a detached worktree at the SHA being certified — and a Monitor that re-greps a growing file
+   must emit only lines past its last count, resolve the runner's PID by `/proc/<pid>/cwd` (never
+   the `setsid` wrapper's), and heartbeat inside its own ceiling.** **Why:** #8210 — two full-gate
+   runs were edited underneath (one 11 commits behind HEAD by the time it reported), so a green from
+   either certified nothing and a red charged three reds to the branch that one cause explained;
+   one Monitor re-echoed every matched line each loop, one watched a wrapper PID that exited at
+   once, and one emitted only after a 40-minute inner loop so two silent expiries read as stalls.
+
 **Report cost honestly.** If a run was disproportionate, say so and name the cause — the
 operator paid for it and cannot see the breakdown.
 
