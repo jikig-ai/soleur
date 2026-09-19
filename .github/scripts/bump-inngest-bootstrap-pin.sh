@@ -328,14 +328,32 @@ else
     body+=$(printf '\n%s\n' "" \
       "Auto-merge is **not** armed: this publish's mirror status does not attest the target (signed=${SIGNED_TAG}, mirror_status=${MIRROR_STATUS:-unset}). Verify zot serves \`${RESOLVED}\` before merging — the dedicated inngest host cannot pull from GHCR (AP-016).")
   fi
-  PR_URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+  if ! PR_URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
     --title "chore(infra): bump inngest-bootstrap pin to ${TARGET}" \
-    --body "$body") || die pr "gh pr create failed for ${BRANCH}"
-  # The create-response URL is authoritative — re-listing would re-open the
-  # cross-repo/colliding-name selection surface filtered above.
-  PR_NUM="${PR_URL##*/}"
-  RESULT_KIND=opened
-  echo "opened ${PR_URL}"
+    --body "$body"); then
+    # A tolerated `gh pr list` failure above can hide an existing PR, and
+    # create then dies on "a pull request for branch X already exists". Re-list
+    # once through the SAME same-repo/bot filter before calling it fatal — a
+    # hidden collision is recoverable, an unfiltered retry is not.
+    PR_LIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+      --json url,number,author,isCrossRepository 2>/dev/null || echo '[]')
+    PR_URL=$(jq -r --arg bot "$BOT_NAME" \
+      '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].url // ""' \
+      <<<"$PR_LIST" 2>/dev/null || true)
+    PR_NUM=$(jq -r --arg bot "$BOT_NAME" \
+      '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].number // ""' \
+      <<<"$PR_LIST" 2>/dev/null || true)
+    [[ -n "$PR_URL" && -n "$PR_NUM" ]] \
+      || die pr "gh pr create failed for ${BRANCH} and the filtered re-list found no same-repo bot PR"
+    RESULT_KIND=existing
+    echo "reused ${PR_URL} (create reported a collision; filtered re-list found the existing PR)"
+  else
+    # The create-response URL is authoritative — re-listing would re-open the
+    # cross-repo/colliding-name selection surface filtered above.
+    PR_NUM="${PR_URL##*/}"
+    RESULT_KIND=opened
+    echo "opened ${PR_URL}"
+  fi
 fi
 
 # Supersede open bot-authored pin PRs for OTHER targets — never a human-tipped
@@ -363,7 +381,7 @@ while IFS='|' read -r n oid; do
     *) echo "::warning::open pin PR #${n} has a non-bot tip (login='${author:-<none>}') — left open for a human" ;;
   esac
 done < <(jq -r --arg b "$BRANCH" \
-  '.[] | select(.headRefName | startswith("soleur/inngest-pin-")) | select(.headRefName != $b) | "\(.number)|\(.headRefOid)"' \
+  '.[] | select(.headRefName != null) | select(.headRefName | startswith("soleur/inngest-pin-")) | select(.headRefName != $b) | "\(.number)|\(.headRefOid)"' \
   <<<"$OPEN_PRS" 2>/dev/null)
 
 # --- merge: arm auto-merge iff the zot mirror attests THIS target -------------

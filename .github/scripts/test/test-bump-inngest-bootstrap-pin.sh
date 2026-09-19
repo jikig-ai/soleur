@@ -208,12 +208,27 @@ pr_json() { # emit one PR object from a state line
   local n="$1" h="$2" u="$3" o="$4" s="$5" fl="${6:-}"
   local xr=false al='soleur-ai[bot]'
   if [[ "$fl" == *fork* ]]; then xr=true; al='fork-user'; fi
+  # |nullhead flag: GitHub emits headRefName:null for PRs whose head repo or
+  # branch was deleted — the supersede jq must skip, not throw mid-pipe.
+  if [[ "$fl" == *nullhead* ]]; then
+    printf '{"number":%s,"headRefName":null,"url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"}}' \
+      "$n" "$u" "$o" "$s" "$xr" "$al"
+    return
+  fi
   printf '{"number":%s,"headRefName":"%s","url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"}}' \
     "$n" "$h" "$u" "$o" "$s" "$xr" "$al"
 }
 
 case "$sub" in
   "pr list")
+    # MOCK_GH_LIST_FAIL_ONCE=1: the FIRST list call dies transiently (marker
+    # file arms once per fixture), exercising the script's tolerated-failure
+    # and create-collision re-list paths.
+    if [[ "${MOCK_GH_LIST_FAIL_ONCE:-0}" == "1" && ! -f "${MOCK_GH_PRS}.list-failed" ]]; then
+      : > "${MOCK_GH_PRS}.list-failed"
+      echo "mock transient pr list failure" >&2
+      exit 1
+    fi
     head="$(flag --head)"; want_state="$(flag --state)"; want_state="${want_state:-open}"
     out="["; first=1
     while IFS='|' read -r n h u o s fl; do
@@ -226,6 +241,10 @@ case "$sub" in
     printf '%s]\n' "$out"
     ;;
   "pr create")
+    # MOCK_GH_CREATE_COLLIDE=1: create exits 1 without writing a row —
+    # GitHub's "a pull request for branch X already exists" shape.
+    [[ "${MOCK_GH_CREATE_COLLIDE:-0}" == "1" ]] \
+      && { echo "a pull request for branch already exists" >&2; exit 1; }
     head="$(flag --head)"; title="$(flag --title)"
     n=$(( $(wc -l < "$MOCK_GH_PRS" 2>/dev/null || echo 0) + 1 ))
     url="https://github.test/mock/pull/$n"
@@ -626,6 +645,32 @@ assert_gh_called 'g1.existing:merge-arm' 'gh pr merge '
   || fail 'g1.existing:one-create' "$(grep -c 'gh pr create ' "$MOCK_GH_LOG") pr create calls"
 
 # ---------------------------------------------------------------------------
+# Row — create collision: the tolerated first `pr list` failure hides an
+# existing same-repo bot PR; `pr create` then reports "already exists". The
+# script must re-list through the same filter and reuse it — result=existing,
+# merge armed on the EXISTING number, no new PR row.
+# ---------------------------------------------------------------------------
+new_fixture_repo collide
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+# Pre-existing same-repo bot PR for the very branch this run will push — the
+# first (head-filtered) list call fails transiently, so create collides with it.
+collide_sha=$(git -C "$F_REPO" rev-parse HEAD)
+printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open\n' "$collide_sha" >> "$MOCK_GH_PRS"
+
+MOCK_GH_LIST_FAIL_ONCE=1 MOCK_GH_CREATE_COLLIDE=1 \
+  run_bump collide --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc     'g1.collide:exit' 0
+assert_result 'g1.collide:result' existing
+assert_gh_called 'g1.collide:merge-own' 'gh pr merge 9 '
+assert_gh_called 'g1.collide:relist' 'gh pr list .*--head soleur/inngest-pin-v1.1.38'
+[[ $(wc -l < "$MOCK_GH_PRS") == "1" ]] && pass 'g1.collide:no-new-pr' \
+  || fail 'g1.collide:no-new-pr' "state rows after collision: $(cat "$MOCK_GH_PRS")"
+
+# ---------------------------------------------------------------------------
 # AC9 — degraded mirror: PR opens, auto-merge NOT armed, hold comment lands.
 # ---------------------------------------------------------------------------
 new_fixture_repo degraded
@@ -671,11 +716,15 @@ git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 # Stale bot PR for the previous target.
 old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.37' 'soleur-ai[bot]' "$BOT_EMAIL")
 printf '7|soleur/inngest-pin-v1.1.37|https://github.test/mock/pull/7|%s|open\n' "$old_sha" >> "$MOCK_GH_PRS"
+# A null-headRefName PR (head repo deleted upstream) sits in the same list
+# output — the supersede jq must skip it without aborting the sweep.
+printf '6|deleted-head|https://github.test/mock/pull/6|%s|open|nullhead\n' "$old_sha" >> "$MOCK_GH_PRS"
 
 run_bump supersede --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc 'g1.supersede:exit' 0
 assert_gh_called 'g1.supersede:close'      'gh pr close 7'
 assert_gh_called 'g1.supersede:comment'    'gh pr comment 7 .*Superseded by https://github.test/mock/pull/'
+assert_gh_not_called 'g1.supersede:nullhead-skip' 'gh pr close 6'
 grep -qE '^7\|[^|]*\|[^|]*\|[^|]*\|closed$' "$MOCK_GH_PRS" && pass 'g1.supersede:state-closed' \
   || fail 'g1.supersede:state-closed' "PR 7 not marked closed: $(cat "$MOCK_GH_PRS")"
 
@@ -988,6 +1037,12 @@ else
   else
     pass 'g2.bump:no-continue-on-error'
   fi
+  # A step-level timeout below the job's 10 is what converts a hung gh/git call
+  # into a step FAILURE (reaching `if: failure()` Slack) instead of a job
+  # `cancelled` that skips every remaining step — no result=, no notification.
+  step_timeout=$(grep -oE 'timeout-minutes:[[:space:]]*[0-9]+' <<<"$STEP_BLOCK" | head -1 | grep -oE '[0-9]+')
+  [[ -n "$step_timeout" && "$step_timeout" -lt 10 ]] && pass 'g2.bump:step-timeout' \
+    || fail 'g2.bump:step-timeout' "script step timeout-minutes is '${step_timeout:-<absent>}', must be present and < job's 10"
 fi
 
 # AC5: no PAT anywhere in the workflow (precise literals — `dispatch` contains

@@ -1027,6 +1027,14 @@ jobs:
       # NO continue-on-error on this step: the Slack step below is
       # `if: failure()`, which never fires after a soft-failed step.
       - name: Bump the cloud-init pin
+        # Step-level timeout, deliberately below the job's 10: a hung gh/git
+        # network call otherwise burns the whole JOB budget, the job records
+        # `cancelled` (not `failure`), and `if: failure()` on the Slack step
+        # below never fires — the bump then fails with no result= and no
+        # notification (the silent-cancel class the health monitor exists to
+        # eliminate). A step timeout lands as a step FAILURE, which reaches the
+        # Slack step. 8 leaves headroom for the notification inside the job cap.
+        timeout-minutes: 8
         env:
           GH_TOKEN: ${{ steps.mint.outputs.token }}
           TAG: ${{ needs.build.outputs.tag }}
