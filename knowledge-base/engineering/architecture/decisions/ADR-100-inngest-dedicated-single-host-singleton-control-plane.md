@@ -1411,8 +1411,9 @@ documents (`op=resume` run 35223389582, created 2026-09-17T12:50:04Z). `cron-ghc
 ran once each = their one missed tick. Each missed tick fired exactly once on resume, on the
 dedicated host's own history (the probe reads only 10.0.1.40; web-1 is quiesced) — one scheduler
 draining its backlog, not two schedulers on one tick. Full record: #6178 comment 5738682595. A
-03:30Z re-read this day gave 826 runs and the same two groups; the committed probe's own first run at
-04:18Z gave 838 runs, the same two groups, and nothing else.
+03:30Z re-read this day (the plan phase) gave 826 runs and the same two groups; a 03:57Z read that
+ordered the population file gave 831; the committed probe's own first run at 04:18Z gave 838 runs, the
+same two groups, and nothing else.
 
 **Why the proxy flags it.** Decision 7 defines exactly-once as "every occupied
 `(functionID, floor(startedAt / cron_period))` bucket has exactly one run". That buckets by the
