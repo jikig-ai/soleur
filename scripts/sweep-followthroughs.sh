@@ -100,11 +100,56 @@ sanitize_name_for_comment() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '?' | head -c 64
 }
 
+# FENCE PREDICATE (#7490). `/^[ ]?[ ]?[ ]?(```|~~~)/` is CommonMark's "up to three leading
+# spaces", spelled without an interval expression. The safe spelling is NOT a repair for a live
+# break: measured 2026-09-18 against mawk 1.3.4 (the ubuntu-24.04 dialect, built from source
+# because neither mawk nor a container was available locally), BOTH spellings return
+# fenced_seen=1 on a 3-space-indented fence, and a line whose literal bytes are ` {0,3}``` ` is
+# NOT matched by the interval form -- so mawk honours intervals and the "silently matches the
+# literal bytes" failure is unreachable on today's runner. What the safe form buys is
+# independence from that version fact (mawk gained intervals in 1.3.4; 1.3.3 did not), and it
+# is this repo's standing convention -- `scripts/followthroughs/zot-last-err-redact-7500.sh`
+# states it verbatim and `git grep -nE "awk.*\{[0-9],[0-9]\}" -- scripts/ .claude/hooks/`
+# returns zero hits. `[[:space:]]` is banned here for the same reason.
+#
+# FENCE LENGTH IS TRACKED because a fence closes only on a run of the SAME character at least
+# as long as the opener; a shorter run, or the other character, is content. Without that, a
+# four-backtick block quoting a three-backtick example toggles `fence` on its inner line and
+# every subsequent classification inverts.
+#
+# THE DIRECTIVE ANCHOR STAYS COLUMN-0 (`/^<!-- *soleur:followthrough/`) because that is what
+# run_one honours. Widening it here would make a body the sweeper skips look enrolled.
 parse_directive() {
   awk '
-    BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0 }
+    BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0; fence_ch = ""; fence_len = 0; fenced_seen = 0; dir_fence = 0 }
     { sub(/\r$/, "") }  # a CRLF body (web-editor paste) must not leave `\r` glued to the last token
-    /^```/ { fence = !fence; next }
+    # A FENCE CANNOT OPEN INSIDE AN UNTERMINATED DIRECTIVE. `<!-- ... -->` is an HTML comment;
+    # its continuation lines are directive content, not markdown. Without this guard a stray
+    # ``` between `script=` and `earliest=` in the canonical MULTI-LINE body -- the shape
+    # `plugins/soleur/skills/ship/SKILL.md` emits and `plugins/soleur/test/fixtures/
+    # followthrough-directive/expected-issue-body.md` pins -- toggles `fence`, and the
+    # `fence { next }` below then swallows `earliest=` AND the closing `-->`. The directive is
+    # still honoured on its surviving `script=`, `earliest` renders through `${earliest:-now}`,
+    # the soak gate is skipped, and the tracker CLOSES PASS ON DAY 0. Measured 2026-09-18
+    # against the shipped sweeper with a matched control: the identical body without the stray
+    # fence line correctly reports `earliest=2099-01-01T00:00:00Z not yet reached -- skipping`.
+    # The anomaly is counted and reported rather than swallowed: the directive now parses
+    # correctly, but the body is still malformed and the author should be told.
+    in_dir && /^[ ]?[ ]?[ ]?(```|~~~)/ { dir_fence++; next }
+    /^[ ]?[ ]?[ ]?(```|~~~)/ {
+      fl = $0
+      sub(/^[ ]+/, "", fl)
+      fc = substr(fl, 1, 1)
+      fn = 0
+      while (substr(fl, fn + 1, 1) == fc) fn++
+      if (!fence) { fence = 1; fence_ch = fc; fence_len = fn; next }
+      if (fc == fence_ch && fn >= fence_len) { fence = 0; fence_ch = ""; fence_len = 0; next }
+      next
+    }
+    # The increment sits on the DIRECTIVE line inside a fence, never on the delimiter: 19 of
+    # the 56 open trackers carry a fence and no directive, and a delimiter-keyed counter would
+    # report every one of them as fenced-only.
+    fence && /^<!-- *soleur:followthrough/ { fenced_seen++ }
     fence { next }
     /^<!-- *soleur:followthrough/ {
       seen++
@@ -127,7 +172,14 @@ parse_directive() {
       }
     }
     closing { in_dir = 0; closing = 0 }
-    END { if (seen > 1) print "__sweeper_meta__ multi_directive_count " seen }
+    END {
+      if (seen > 1) print "__sweeper_meta__ multi_directive_count " seen
+      # Only when NO directive was honoured: a fenced EXAMPLE beside a real directive is the
+      # documented authoring shape and must stay silent.
+      if (seen == 0 && fenced_seen > 0) print "__sweeper_meta__ fenced_directive_count " fenced_seen
+      if (fence) print "__sweeper_meta__ fence_unbalanced 1"
+      if (dir_fence > 0) print "__sweeper_meta__ directive_fence_interrupted " dir_fence
+    }
   '
 }
 
@@ -271,6 +323,9 @@ run_one() {
   local mode="${3:-open}"
 
   local script earliest secrets
+  local fenced_count=0
+  local fence_unbalanced=0
+  local dir_fence_interrupted=0
   while read -r key val; do
     # First-wins, not last-wins: a directive line containing multiple
     # `script=`/`earliest=`/`secrets=` tokens (e.g.,
@@ -293,6 +348,15 @@ run_one() {
           multi_directive_count)
             log "issue #$issue_num: multi-directive body: $meta_args directives found, honoring first only"
             ;;
+          fenced_directive_count)
+            fenced_count="$meta_args"
+            ;;
+          fence_unbalanced)
+            fence_unbalanced=1
+            ;;
+          directive_fence_interrupted)
+            dir_fence_interrupted="$meta_args"
+            ;;
           *)
             log "issue #$issue_num: unknown __sweeper_meta__ kind '$meta_kind' (val='$val') — ignoring"
             ;;
@@ -302,6 +366,62 @@ run_one() {
   done < <(printf '%s' "$body" | parse_directive)
 
   if [[ -z "${script:-}" ]]; then
+    # A DIRECTIVE THAT EXISTS BUT SITS INSIDE A CODE FENCE IS NOT A MISSING DIRECTIVE (#7490).
+    # The fence skip is deliberate (#4200 Gap 3: a fenced EXAMPLE must not enrol a tracker),
+    # but its failure mode was silence — `no directive — skipping`, indistinguishable from a
+    # tracker nobody ever wrote a directive for. Six of 56 open trackers were dead this way,
+    # all authored from the ship skill's own template, which emitted the fenced form. The
+    # oldest had been quiet since 2026-06.
+    #
+    # This mirrors MISSING_SECRET exactly, INCLUDING the absence of dedup: the population is
+    # zero once the six bodies are unfenced, so a readback would rate-limit an empty stream,
+    # and MISSING_SECRET — the shape this copies — comments every run. A general per-verdict
+    # dedup is tracked separately; it changes the contract for every enrolled probe.
+    #
+    # NO AUTHOR-CONTROLLED BYTES REACH THE COMMENT. run_one gets the issue number and body,
+    # never the title; on a fenced-only body the extraction block never runs, so there is no
+    # directive token to quote; and the count is awk-generated and printed with `%d`. If a
+    # future revision quotes the offending line back "for clarity", that line is arbitrary
+    # body bytes — it must go through sanitize_probe_output and never before the heading, or a
+    # body whose fenced line begins `### Sweeper run: PASS` produces a github-actions-authored
+    # comment the closed-set PASS readback accepts.
+    if [[ "${fenced_count:-0}" -gt 0 && "$mode" == "open" ]]; then
+      log "issue #$issue_num: directive found INSIDE A CODE FENCE ($fenced_count) — not honored"
+      FENCED_DIRECTIVE=1
+      printf '::error::sweep-followthroughs: issue #%s: its soleur:followthrough directive is inside a code fence (%d occurrence(s)); the sweeper skips fenced blocks, so this tracker has never been evaluated.\n' \
+        "$issue_num" "${fenced_count:-0}" >&2
+      local fenced_msg
+      fenced_msg="### Sweeper run: DIRECTIVE INSIDE CODE FENCE ($(date -u +%FT%TZ))
+This tracker's \`soleur:followthrough\` directive sits inside a code fence, so the sweeper has **never evaluated it** — a fenced directive is treated as an example, not an enrolment (#4200).
+
+Fix: edit the issue body so the \`<!-- soleur:followthrough ... -->\` line sits at **column 0, outside any fence**. Remove only the fence delimiters; leave the directive itself unchanged."
+      if [[ "${fence_unbalanced:-0}" == "1" ]]; then
+        fenced_msg="$fenced_msg
+
+This body's code fences are also **unbalanced** — an earlier fence is never closed, so the directive may be swallowed by a block that looks closed in the rendered view. Check the fence delimiters above the directive, not just the ones around it."
+      fi
+      if [[ -n "${FENCED_FILE:-}" ]]; then
+        printf '%s\n' "$issue_num" >> "$FENCED_FILE"
+      fi
+      if [[ "$DRY_RUN" == "1" ]]; then
+        log "issue #$issue_num: DRY_RUN — would comment: directive inside code fence ($fenced_count)"
+        return 0
+      fi
+      if ! printf '%s' "$fenced_msg" | gh issue comment "$issue_num" --repo "$REPO" --body-file -; then
+        # The run is already going red; this makes a LOST COMMENT visible in the annotations
+        # too, so "red run, silent tracker" is not the outcome. Same arm as MISSING_SECRET's.
+        fail "issue #$issue_num: fenced-directive comment post failed"
+        printf '::warning::sweep-followthroughs: issue #%s: the DIRECTIVE INSIDE CODE FENCE comment could not be posted; the tracker was not told\n' "$issue_num" >&2
+      fi
+      return 0
+    fi
+    if [[ "${fenced_count:-0}" -gt 0 ]]; then
+      # CLOSED mode (the only way to reach here with a fenced count): logged, not commented,
+      # and NOT added to the no-directive list. A fenced tracker is not a directive-less one,
+      # and the reopen path has no verdict to post.
+      log "issue #$issue_num: directive found INSIDE A CODE FENCE ($fenced_count) — closed mode, not commented"
+      return 0
+    fi
     log "issue #$issue_num: no directive — skipping"
     # Visibility: aggregate no-directive issues into the end-of-sweep
     # summary. Without this, an issue filed without a directive (per the
@@ -309,6 +429,10 @@ run_one() {
     # silently never gets evaluated. The summary surfaces the gap so the
     # operator can either backfill the directive or close the issue as
     # wontfix. Path: $NO_DIRECTIVE_FILE if set by main(), else no-op.
+    #
+    # The append sits in the NON-fenced arm on purpose: a fenced tracker has its own summary
+    # section, and one tracker appearing under both "missing directive" and "fenced" would
+    # double-count `no_directive=N` and tell the operator two different things to do.
     if [[ -n "${NO_DIRECTIVE_FILE:-}" ]]; then
       printf '%s\n' "$issue_num" >> "$NO_DIRECTIVE_FILE"
     fi
@@ -316,6 +440,22 @@ run_one() {
   fi
 
   log "issue #$issue_num: directive found (script=$script earliest=${earliest:-now} secrets=${secrets:-none})"
+
+  # An unbalanced fence AFTER a valid directive does not change the verdict — the directive was
+  # honoured — but it is worth naming, because the next edit to that body may fall inside the
+  # block that was never closed. A warning, never a run-level flag.
+  if [[ "${fence_unbalanced:-0}" == "1" ]]; then
+    printf '::warning::sweep-followthroughs: issue #%s: its directive was honored, but the body has an unbalanced code fence; a later edit could fall inside the unclosed block and silently un-enrol the tracker.\n' "$issue_num" >&2
+  fi
+
+  # A fence delimiter INSIDE the directive's own lines. The parser now ignores it (a `<!-- -->`
+  # comment is not markdown), so `earliest=` survives and the verdict is correct — but before
+  # that guard existed this shape erased `earliest=`, `${earliest:-now}` skipped the soak gate
+  # entirely, and the tracker closed PASS on day 0. Name it so the body gets cleaned rather
+  # than left one parser change away from that behaviour again. A warning, never a run-level flag.
+  if [[ "${dir_fence_interrupted:-0}" != "0" ]]; then
+    printf '::warning::sweep-followthroughs: issue #%s: %s code-fence delimiter(s) sit INSIDE the soleur:followthrough directive. They are ignored and the directive was parsed in full, but remove them — the directive is an HTML comment, not a fenced block.\n' "$issue_num" "$dir_fence_interrupted" >&2
+  fi
 
   # Path safety: script MUST canonicalize to a path under
   # scripts/followthroughs/. Use realpath rather than a bare prefix-match —
@@ -660,6 +800,7 @@ TRUNCATED_SWEEP=0
 # Guard 3 (#7946): set inside run_one when a directive names a secret the env cannot
 # forward; read beside TRUNCATED_SWEEP after main returns, for the same reason.
 MISSING_SECRET=0
+FENCED_DIRECTIVE=0
 
 main() {
   log "sweep start (repo=$REPO dry_run=$DRY_RUN)"
@@ -670,7 +811,9 @@ main() {
   # never evaluates).
   NO_DIRECTIVE_FILE=$(mktemp -t followthrough-no-directive.XXXXXXXX.txt)
   export NO_DIRECTIVE_FILE
-  trap 'rm -f "$NO_DIRECTIVE_FILE"' EXIT
+  FENCED_FILE=$(mktemp -t followthrough-fenced.XXXXXXXX.txt)
+  export FENCED_FILE
+  trap 'rm -f "$NO_DIRECTIVE_FILE" "$FENCED_FILE"' EXIT
 
   # OPEN_LIMIT was 50 against 51 live open trackers (measured 2026-09-07), and
   # `gh issue list` returns NEWEST FIRST -- so the OLDEST tracker was silently
@@ -777,22 +920,59 @@ main() {
     fi
   fi
 
-  log "sweep done (no_directive=$no_dir_count)"
+  # Fenced-directive summary. Its own section, and its own count: a tracker here is NOT in the
+  # no-directive list (the append moved into run_one's non-fenced arm), because "you forgot to
+  # write a directive" and "your directive is fenced" have different fixes.
+  local fenced_count_total=0
+  if [[ -n "${FENCED_FILE:-}" && -s "$FENCED_FILE" ]]; then
+    fenced_count_total=$(wc -l < "$FENCED_FILE" | tr -d '[:space:]')
+  fi
+  if [[ "$fenced_count_total" -gt 0 ]]; then
+    log "WARN: $fenced_count_total open follow-through issue(s) carry a directive inside a code fence:"
+    while IFS= read -r issue_num; do
+      log "  - #$issue_num — unfence the directive (column 0, outside any fence)"
+    done < "$FENCED_FILE"
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      {
+        printf '### ⚠️ Follow-through directives inside a code fence (%d)\n\n' "$fenced_count_total"
+        printf 'These issues DO carry a `soleur:followthrough` directive, but it sits inside a code fence, and the sweeper skips fenced blocks (a fenced directive is an example, not an enrolment). They have never been evaluated.\n\n'
+        while IFS= read -r issue_num; do
+          printf -- '- [#%s](https://github.com/%s/issues/%s)\n' "$issue_num" "$REPO" "$issue_num"
+        done < "$FENCED_FILE"
+        printf '\nFix each by moving the `<!-- soleur:followthrough ... -->` line to column 0 outside any fence; remove only the fence delimiters.\n'
+      } >> "$GITHUB_STEP_SUMMARY"
+    fi
+  fi
+
+  log "sweep done (no_directive=$no_dir_count fenced_directive=$fenced_count_total)"
 }
 
 # Allow tests to source this script without running main().
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
-  # The truncation verdict. Raised here so the sweep completes first: every
-  # tracker the page DID reach is still swept, and only then does the run go
-  # red. A green run carrying an annotation is the silence this detector exists
-  # to break.
+  # RUN-LEVEL VERDICTS. Raised here so the sweep completes first: every tracker the page DID
+  # reach is still swept, and only then does the run go red. A green run carrying an annotation
+  # is the silence these detectors exist to break.
+  #
+  # EVERY flag is evaluated and EVERY annotation is printed BEFORE the single `exit 1`. The
+  # previous form returned inside each arm, so a truncated page suppressed the missing-secret
+  # and fenced-directive annotations entirely — the operator saw one cause and fixed it, and
+  # the others reappeared the next day looking new. An early exit in the first arm is exactly
+  # the mutation row 19 of the Guard 2 matrix restores.
+  run_verdict=0
   if [[ "$TRUNCATED_SWEEP" == "1" ]]; then
     printf '::error::sweep-followthroughs: FAILING THE RUN because the open follow-through page was full; some trackers were not swept at all.\n' >&2
-    exit 1
+    run_verdict=1  # truncation-verdict
   fi
   if [[ "$MISSING_SECRET" == "1" ]]; then
     printf '::error::sweep-followthroughs: FAILING THE RUN because at least one tracker directive names a secret the workflow env does not carry (see the comment posted on that tracker).\n' >&2
+    run_verdict=1
+  fi
+  if [[ "$FENCED_DIRECTIVE" == "1" ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because at least one tracker carries a soleur:followthrough directive inside a code fence and has therefore never been evaluated (see the comment posted on that tracker).\n' >&2
+    run_verdict=1
+  fi
+  if [[ "$run_verdict" == "1" ]]; then
     exit 1
   fi
 fi

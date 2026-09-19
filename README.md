@@ -129,9 +129,15 @@ check regardless of how you installed.
 Updating is **two steps**, and the first one looks sufficient on its own:
 
 ```bash
-claude plugin marketplace update soleur   # advances the marketplace checkout ONLY
-claude plugin update soleur               # updates the installed plugin (restart to apply)
+claude plugin marketplace update soleur-marketplace       # advances the marketplace checkout ONLY
+claude plugin update soleur@soleur-marketplace            # updates the installed plugin (restart to apply)
 ```
+
+Both halves name the marketplace. On current releases the bare plugin name can fail with
+`Plugin not found` — an Anthropic collaborator confirmed the `<plugin>@<marketplace>` form as
+the reliable one on anthropics/claude-code#76882 (2026-08-17). `soleur-marketplace` is the
+marketplace id on the path above; if you added this repository directly the id is `soleur`
+instead, so run `claude plugin list` and use whatever it prints beside `soleur`.
 
 `marketplace update` moves the marketplace checkout to the new HEAD. It does **not** touch
 the plugin install, which keeps its own `gitCommitSha` in `installed_plugins.json`. Soleur's
@@ -142,7 +148,7 @@ payload.
 **If the fix still isn't taking effect after both steps,** reinstall outright:
 
 ```bash
-claude plugin uninstall soleur && claude plugin install soleur
+claude plugin uninstall soleur@soleur-marketplace && claude plugin install soleur@soleur-marketplace
 ```
 
 That used to be the only step that worked, and the reason no longer holds. The manifests are

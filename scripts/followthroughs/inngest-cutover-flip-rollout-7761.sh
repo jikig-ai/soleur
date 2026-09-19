@@ -105,7 +105,7 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${FLIP_ROLLOUT_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
-AFTER_FILE="${FLIP_ROLLOUT_AFTER_FILE:-$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.after}"
+AFTER_FILE="${FLIP_ROLLOUT_AFTER_FILE:-$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.after}"  # repo-path: runtime -- written by the operator in response to this probe's own output; absent and untracked by design
 # Seamed like QUERY so the Doppler arm is drivable by the suite. Without this the corroboration
 # branch is unreachable by design and its FAIL arm has no coverage.
 DOPPLER_BIN="${FLIP_ROLLOUT_DOPPLER_BIN:-doppler}"

@@ -28,6 +28,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/sweep-followthroughs.sh"
 
 PASS=0
+# One owning trap for every tempfile/tempdir this suite allocates (ADR-129,
+# lint-trap-tempfile-ownership rule (c)). setup_tmpdir roots and per-row fixtures all live
+# under it, so a suite that dies mid-row leaks nothing.
+SUITE_TMP=$(mktemp -d)
+trap 'rm -rf "$SUITE_TMP"' EXIT
+declare -a FAILURES=()   # append-only ledger the verdict reads; see the instrument self-test
 FAIL=0
 TOTAL=0
 
@@ -36,7 +42,15 @@ TOTAL=0
 # a verdict helper therefore drops the verdict WITHOUT dropping its count, and the
 # conservation identity at the bottom catches it.
 pass() { PASS=$((PASS + 1)); echo "PASS: $1"; }
-fail() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }
+# TOTAL is deliberately NOT incremented here. A case counter moved inside a verdict helper
+# makes the conservation identity a tautology, and `scripts/guard-vacuity-floor.test.sh`
+# rejects exactly that shape -- measured: it caught this file the moment the increment moved
+# in. The six DIRECT `fail "...mutation did not land..."` call sites therefore carry their own
+# `TOTAL=$((TOTAL + 1));` prefix, at the CALL SITE, the same discipline the assert helpers use.
+# Before that, a fired landing check skewed the identity by +1 and the run died with
+# `accounting: PASS+FAIL (179) != TOTAL (178)` -- handing the operator "a verdict was dropped"
+# instead of the author`s carefully worded "mutation did not land" diagnosis.
+fail() { FAIL=$((FAIL + 1)); FAILURES+=("$1"); echo "FAIL: $1"; }
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -80,7 +94,7 @@ assert_not_contains() {
 # exists only as a safety net.
 setup_tmpdir() {
   local root
-  root=$(mktemp -d)
+  root=$(mktemp -d -p "$SUITE_TMP")
   mkdir -p "$root/scripts/followthroughs" "$root/bin"
   cat > "$root/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -307,9 +321,15 @@ EOF
   local combined
   combined=$(invoke_run_one "$root" "$body")
   local rc="${combined##*__RC__=}"
-  assert_eq        "T6 run_one returns 0 (no directive)" "0" "$rc"
-  assert_contains  "T6 reports no-directive skip" \
-                   "no directive" "$combined"
+  assert_eq        "T6 run_one returns 0 (the fenced directive is not honored)" "0" "$rc"
+  # RE-PINNED (#7490). The fence skip is unchanged -- the script still must not run -- but the
+  # SILENCE is gone: `no directive` was indistinguishable from a tracker nobody ever wrote a
+  # directive for, which is how six trackers stayed dead for months. The verdict now names the
+  # cause. Asserting the OLD string here would pin the very silence this change removes.
+  assert_contains  "T6 reports the fenced cause, not a bare no-directive skip" \
+                   "directive found INSIDE A CODE FENCE" "$combined"
+  assert_not_contains "T6 does NOT report a bare no-directive skip (that is a different fix)" \
+                   "no directive — skipping" "$combined"
   assert_not_contains "T6 fenced script is NOT executed" \
                    "running scripts/followthroughs/fenced.sh" "$combined"
   rm -rf "$root"
@@ -1044,6 +1064,403 @@ t_g3_h3_no_secrets_clause() {
   rm -rf "$root"
 }
 
+
+# =============================================================================
+# GUARD 2 (#7490) -- the sweeper's FENCED-ONLY DIRECTIVE verdict is LOUD.
+#
+# Property: an OPEN follow-through issue whose body carries a column-0 directive OPENER only
+# inside a code fence receives a comment naming the cause and the fix, and the run exits
+# non-zero -- while a body with NO directive at all, and a body with a fenced example beside a
+# real directive, are unaffected.
+#
+# WHICH HARNESS DECIDES WHICH ROW. `invoke_run_one` sources the SUT and calls run_one directly
+# under DRY_RUN=1: it can observe neither the run-level exit (raised in the `BASH_SOURCE == $0`
+# block) nor a posted comment. Every row asserting a run-level verdict or a comment therefore
+# uses `g3_run` -- `env -i ... bash "$SUT"` end to end. `FENCED_DIRECTIVE=1` is an internal
+# variable with NO observable, so no row asserts the flag; rows assert the ::error:: and the rc.
+#
+# Every source-mutation row goes through `g4_mutate`, which asserts the mutation LANDED in the
+# region under test: `diff -q` proves the file changed, not that the edit hit the right line.
+# =============================================================================
+
+G4_FENCED_BODY='Example (for reference):\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n```\n\nEnd.'
+
+g4_open_json() { # g4_open_json <number> <body-with-\n-escapes>
+  printf '[{"number":%s,"body":"%s"}]' "$1" "$2"
+}
+
+# g4_mutate <name> <sed-expr> <post-image-grep> <pre-image-grep> -> echoes the mutant path, or
+# the empty string when the mutation did not land (caller records a FAIL row in that case).
+g4_mutate() {
+  local root="$1" name="$2" expr="$3" post="$4" pre="$5"
+  local mut="$root/sut-$name.sh"
+  sed "$expr" "$SUT" > "$mut"
+  if diff -q "$SUT" "$mut" >/dev/null 2>&1; then printf ''; return; fi
+  local n_post; n_post=$(grep -cF -- "$post" "$mut" || true)
+  local n_pre;  n_pre=$(grep -cF -- "$pre" "$mut" || true)
+  if [[ "$n_post" != "1" || "$n_pre" != "0" ]]; then printf ''; return; fi
+  printf '%s' "$mut"
+}
+
+# --- G4-1: the target. Fenced-only body, open mode, end-to-end. ---
+t_g4_1_fenced_only_is_loud() {
+  local root; root=$(g3_root "$(g4_open_json 9101 "$G4_FENCED_BODY")")
+  g3_run "$root" "$SUT"
+  local rc; rc=$(cat "$root/rc"); local posted=""; [[ -f "$root/comment-9101" ]] && posted=$(cat "$root/comment-9101")
+  assert_contains "G4-1 the comment carries the fenced heading" "### Sweeper run: DIRECTIVE INSIDE CODE FENCE" "$posted"
+  assert_contains "G4-1 the comment names the fix (column 0, outside any fence)" "column 0, outside any fence" "$posted"
+  assert_contains "G4-1 the per-tracker ::error:: names the issue and the count" "issue #9101: its soleur:followthrough directive is inside a code fence (1 occurrence(s))" "$(cat "$root/err")"
+  assert_contains "G4-1 the run-level ::error:: names the cause" "FAILING THE RUN because at least one tracker carries a soleur:followthrough directive inside a code fence" "$(cat "$root/err")"
+  assert_not_contains "G4-1 the fenced script is NOT run" "running scripts/followthroughs/p.sh" "$(cat "$root/out")"
+  assert_eq "G4-1 the run exits non-zero" "1" "$([[ "$rc" != "0" ]] && echo 1 || echo 0)"
+  rm -rf "$root"
+}
+
+# --- G4-2: DISPATCH. Delete `FENCED_DIRECTIVE=1` -> the run exits 0 on the same body. ---
+t_g4_2_flag_is_the_mechanism() {
+  local root; root=$(g3_root "$(g4_open_json 9101 "$G4_FENCED_BODY")")
+  local mut; mut=$(g4_mutate "$root" nofence-flag 's|^      FENCED_DIRECTIVE=1$|      FENCED_DIRECTIVE_MUTATED=1|' 'FENCED_DIRECTIVE_MUTATED=1' '      FENCED_DIRECTIVE=1')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "G4-2 mutation did not land in the region under test (no lone FENCED_DIRECTIVE=1 assignment) -- the row would be vacuous"
+  else
+    g3_run "$root" "$mut"
+    assert_eq "G4-2 with FENCED_DIRECTIVE=1 deleted the same body exits 0 -- the flag is the mechanism" "0" "$(cat "$root/rc")"
+    assert_contains "G4-2 the mutant still posts the comment (only the VERDICT was removed)" "DIRECTIVE INSIDE CODE FENCE" "$(cat "$root/comment-9101" 2>/dev/null)"
+  fi
+  rm -rf "$root"
+}
+
+# --- G4-3: move the increment onto the FENCE DELIMITER line -> the 19 fenced-but-directive-less
+# trackers start reporting as fenced. The false positive pinned as a mutation. ---
+t_g4_3_increment_on_delimiter_false_positives() {
+  local root; root=$(g3_root "$(g4_open_json 9102 'Some prose.\n\n```bash\necho hi\n```\n\nMore prose, no directive anywhere.')")
+  local mut; mut=$(g4_mutate "$root" delimiter-increment \
+    's@fence = 1; fence_ch = fc; fence_len = fn; next@fence = 1; fence_ch = fc; fence_len = fn; fenced_seen++; next@' \
+    'fence_len = fn; fenced_seen++; next' \
+    'fence_len = fn; next')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "G4-3 mutation did not land -- the increment is not on the line this row mutates"
+  else
+    g3_run "$root" "$mut"
+    assert_eq "G4-3 with the increment on the delimiter, a fence-but-no-directive body reds (the 19-tracker false positive)" "1" "$([[ "$(cat "$root/rc")" != "0" ]] && echo 1 || echo 0)"
+  fi
+  rm -rf "$root"
+}
+
+# --- G4-7 (must-PASS): two fenced blocks, NO directive anywhere -> quiet, exit 0. ---
+t_g4_7_fences_without_directive_stay_quiet() {
+  local root; root=$(g3_root "$(g4_open_json 9102 'Prose.\n\n```bash\necho one\n```\n\n```json\n{\"a\":1}\n```\n\nNo directive.')")
+  g3_run "$root" "$SUT"
+  assert_eq "G4-7 must-PASS: fences with no directive exit 0" "0" "$(cat "$root/rc")"
+  assert_contains "G4-7 it is reported as a plain no-directive skip" "no directive — skipping" "$(cat "$root/out")"
+  assert_not_contains "G4-7 no fenced verdict is emitted" "INSIDE A CODE FENCE" "$(cat "$root/out")$(cat "$root/err")"
+  assert_eq "G4-7 no comment was posted" "absent" "$([[ -f "$root/comment-9102" ]] && echo present || echo absent)"
+  rm -rf "$root"
+}
+
+# --- G4-4 + G4-8 (must-PASS): a fenced EXAMPLE FIRST and a real unfenced directive AFTER.
+# The `fence &&` guard is what keeps this quiet; removing it reds this body. ---
+t_g4_8_example_beside_real_directive() {
+  local body='Example:\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n```\n\nReal:\n\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->'
+  local root; root=$(g3_root "$(g4_open_json 9103 "$body")")
+  g3_run "$root" "$SUT"
+  assert_eq "G4-8 must-PASS: a fenced example beside a real directive exits 0" "0" "$(cat "$root/rc")"
+  assert_contains "G4-8 the real directive is honored and the probe runs" "running scripts/followthroughs/p.sh" "$(cat "$root/out")"
+  assert_not_contains "G4-8 no fenced verdict" "INSIDE A CODE FENCE" "$(cat "$root/out")$(cat "$root/err")"
+
+  # G4-4. The example-beside-real shape is protected by TWO independent conditions, and the
+  # row reports that rather than pretending one of them is the mechanism:
+  #   (a) parse_directive's END emits the meta only when `seen == 0`;
+  #   (b) run_one's loud branch sits inside `if [[ -z "${script:-}" ]]`, so a honoured
+  #       directive never reaches it whatever the meta says.
+  # Each single mutation therefore SURVIVES -- not because the fixture is inadequate, but
+  # because the other condition still holds. That is a defence-in-depth result, and the rows
+  # below assert it in both directions: each alone survives (labelled equivalent under its
+  # sibling), and the PAIR is load-bearing.
+  local mut_a; mut_a=$(g4_mutate "$root" no-seen-zero-guard \
+    's@if (seen == 0 && fenced_seen > 0)@if (fenced_seen > 0)@' \
+    'if (fenced_seen > 0) print' \
+    'if (seen == 0 && fenced_seen > 0)')
+  if [[ -z "$mut_a" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "G4-4 mutation (a) did not land -- the END block's seen==0 condition is not where this row mutates"
+  else
+    local root2; root2=$(g3_root "$(g4_open_json 9103 "$body")")
+    g3_run "$root2" "$mut_a"
+    assert_eq "G4-4a dropping only END's 'seen == 0' SURVIVES -- equivalent while run_one's -z script gate stands" "0" "$(cat "$root2/rc")"
+    rm -rf "$root2"
+  fi
+  local mut_b; mut_b="$root/sut-both-guards-dropped.sh"
+  sed -e 's@if (seen == 0 && fenced_seen > 0)@if (fenced_seen > 0)@' \
+      -e 's@^  if \[\[ -z "\${script:-}" \]\]; then$@  if [[ 1 == 1 ]]; then  # both-guards-dropped@' "$SUT" > "$mut_b"
+  if [[ "$(grep -c 'both-guards-dropped' "$mut_b" || true)" != "1" || "$(grep -c 'seen == 0 && fenced_seen' "$mut_b" || true)" != "0" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "G4-4 mutation (b) did not land in both regions -- the paired row would be vacuous"
+  else
+    local root3; root3=$(g3_root "$(g4_open_json 9103 "$body")")
+    g3_run "$root3" "$mut_b"
+    assert_eq "G4-4b dropping BOTH guards reds the example-beside-real body -- the PAIR is what keeps row 8 quiet" "1" "$([[ "$(cat "$root3/rc")" != "0" ]] && echo 1 || echo 0)"
+    rm -rf "$root3"
+  fi
+  rm -rf "$root"
+}
+
+# --- G4-9: an INDENTED (3-space) fence. The widened predicate must see it; three live bodies
+# (#6678, #6565, #7674) carry indented fences, which is why the predicate is widened at all. ---
+t_g4_9_indented_fence() {
+  local root; root=$(g3_root "$(g4_open_json 9104 'Note:\n\n   ```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n   ```\n\nEnd.')")
+  g3_run "$root" "$SUT"
+  assert_eq "G4-9 a 3-space-indented fence is still a fence -> red" "1" "$([[ "$(cat "$root/rc")" != "0" ]] && echo 1 || echo 0)"
+  assert_contains "G4-9 the fenced verdict is emitted" "DIRECTIVE INSIDE CODE FENCE" "$(cat "$root/comment-9104" 2>/dev/null)"
+  rm -rf "$root"
+}
+
+# --- G4-5 + G4-10: the `mode == "open"` gate. A CLOSED tracker with a fenced-only body is
+# logged and returns 0 with no comment and no summary entry; deleting the gate reds it. ---
+t_g4_10_closed_mode_is_quiet() {
+  local root; root=$(setup_tmpdir)
+  cat > "$root/scripts/followthroughs/p.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$root/scripts/followthroughs/p.sh"
+  make_gh_stub "$root" '[]' '[]' '{"comments":[]}'
+  local body
+  body=$(printf 'Example:\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n```\n')
+  local out
+  out=$(
+    cd "$root"
+    export PATH="$root/bin:$PATH" GH_REPO="test/test" DRY_RUN=0
+    # shellcheck disable=SC1090
+    source "$SUT"
+    set +e
+    FENCED_FILE="$root/fenced.txt" NO_DIRECTIVE_FILE="$root/nodir.txt" run_one 9105 "$body" closed 2>&1
+    echo "__RC__=$?"
+  )
+  assert_eq       "G4-10 closed mode returns 0" "0" "${out##*__RC__=}"
+  assert_not_contains "G4-10 closed mode posts no fenced comment" "DIRECTIVE INSIDE CODE FENCE" "$out"
+  assert_eq       "G4-10 closed mode writes no FENCED_FILE entry" "absent" "$([[ -s "$root/fenced.txt" ]] && echo present || echo absent)"
+  assert_eq       "G4-10 closed mode writes no NO_DIRECTIVE_FILE entry either (it is not directive-less)" "absent" "$([[ -s "$root/nodir.txt" ]] && echo present || echo absent)"
+  rm -rf "$root"
+}
+
+t_g4_5_mode_gate_is_load_bearing() {
+  local root; root=$(g3_root '[]' )
+  local mut; mut=$(g4_mutate "$root" no-mode-gate \
+    's@ && "\$mode" == "open" \]\]; then$@ ]]; then  # mode-gate-removed@' \
+    '# mode-gate-removed' \
+    '&& "$mode" == "open" ]]; then')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "G4-5 mutation did not land -- the mode gate is not where this row mutates"
+  else
+    local body; body=$(printf 'Example:\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n```\n')
+    local out
+    out=$(
+      cd "$root"
+      export PATH="$root/bin:$PATH" GH_REPO="test/test" DRY_RUN=1
+      # shellcheck disable=SC1090
+      source "$mut"
+      set +e
+      run_one 9105 "$body" closed 2>&1
+    )
+    assert_contains "G4-5 with the mode gate deleted, a CLOSED tracker enters the fenced verdict branch (the gate is load-bearing)" "would comment: directive inside code fence" "$out"
+  fi
+  rm -rf "$root"
+}
+
+# --- G4-11 / G4-12: unbalanced fences. BEFORE a directive -> the verdict carries the extra
+# sentence; AFTER a valid directive -> the directive is honored and only a ::warning:: fires. ---
+t_g4_11_unbalanced_before_directive() {
+  local root; root=$(g3_root "$(g4_open_json 9106 'Note:\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n\n(the fence is never closed)')")
+  g3_run "$root" "$SUT"
+  local posted=""; [[ -f "$root/comment-9106" ]] && posted=$(cat "$root/comment-9106")
+  assert_eq       "G4-11 an unbalanced fence swallowing the directive reds the run" "1" "$([[ "$(cat "$root/rc")" != "0" ]] && echo 1 || echo 0)"
+  assert_contains "G4-11 the comment carries the UNBALANCED sentence, not just 'move it out'" "unbalanced" "$posted"
+  rm -rf "$root"
+}
+
+t_g4_12_unbalanced_after_directive() {
+  local root; root=$(g3_root "$(g4_open_json 9107 '<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n\nNotes:\n\n```bash\necho unterminated')")
+  g3_run "$root" "$SUT"
+  assert_eq       "G4-12 must-PASS: an unbalanced fence AFTER a valid directive still exits 0" "0" "$(cat "$root/rc")"
+  assert_contains "G4-12 the directive is honored and the probe runs" "running scripts/followthroughs/p.sh" "$(cat "$root/out")"
+  assert_contains "G4-12 a ::warning:: names the unbalanced fence" "::warning::sweep-followthroughs: issue #9107: its directive was honored, but the body has an unbalanced code fence" "$(cat "$root/err")"
+  assert_not_contains "G4-12 no fenced VERDICT is emitted" "INSIDE A CODE FENCE" "$(cat "$root/err")"
+  rm -rf "$root"
+}
+
+# --- G4-13: an UNFENCED but INDENTED directive. The column-0 contract means the sweeper does
+# not honor it, and it must report as a plain no-directive skip -- not as fenced. The AC14
+# verification check fails on the same body, so the two agree rather than disagreeing. ---
+t_g4_13_indented_directive_is_no_directive() {
+  local root; root=$(g3_root "$(g4_open_json 9108 'Notes:\n\n <!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->')")
+  g3_run "$root" "$SUT"
+  assert_eq       "G4-13 a one-space-indented directive is not honored (column-0 contract) -> exit 0" "0" "$(cat "$root/rc")"
+  assert_contains "G4-13 it reports as a plain no-directive skip" "no directive — skipping" "$(cat "$root/out")"
+  assert_not_contains "G4-13 it is NOT reported as fenced" "INSIDE A CODE FENCE" "$(cat "$root/out")$(cat "$root/err")"
+  rm -rf "$root"
+}
+
+# --- G4-14: CRLF bodies. `sub(/\r$/,"")` runs before the fence rule, so a web-editor paste
+# classifies identically to an LF body -- fenced-only reds, unfenced passes. ---
+t_g4_14_crlf() {
+  local root; root=$(g3_root "$(g4_open_json 9109 'Note:\r\n\r\n```html\r\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\r\n```\r\n')")
+  g3_run "$root" "$SUT"
+  assert_eq "G4-14 a CRLF fenced-only body still reds" "1" "$([[ "$(cat "$root/rc")" != "0" ]] && echo 1 || echo 0)"
+  rm -rf "$root"
+  local root2; root2=$(g3_root "$(g4_open_json 9110 '<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\r\n')")
+  g3_run "$root2" "$SUT"
+  assert_eq "G4-14 must-PASS: a CRLF UNFENCED directive is still honored" "0" "$(cat "$root2/rc")"
+  assert_contains "G4-14 the CRLF directive's probe runs" "running scripts/followthroughs/p.sh" "$(cat "$root2/out")"
+  rm -rf "$root2"
+}
+
+# --- G4-15: the comment post fails. The run is already red; the LOST COMMENT must be visible
+# in the annotations too, or the outcome is "red run, silent tracker". ---
+t_g4_15_comment_post_failure() {
+  local root; root=$(g3_root "$(g4_open_json 9101 "$G4_FENCED_BODY")")
+  cat > "$root/bin/gh" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"--state closed"*) cat "$root/closed.json" ;;
+  *"issue list"*)     cat "$root/open.json" ;;
+  *"--json comments"*) cat "$root/comments.json" ;;
+  *"issue comment"*)  cat > /dev/null; exit 1 ;;
+  *) exit 99 ;;
+esac
+EOF
+  chmod +x "$root/bin/gh"
+  g3_run "$root" "$SUT"
+  assert_contains "G4-15 a failed comment post emits the LOST-COMMENT ::warning::" "the DIRECTIVE INSIDE CODE FENCE comment could not be posted; the tracker was not told" "$(cat "$root/err")"
+  assert_eq       "G4-15 the run is still red" "1" "$([[ "$(cat "$root/rc")" != "0" ]] && echo 1 || echo 0)"
+  rm -rf "$root"
+}
+
+# --- G4-16: DRY_RUN. The comment is suppressed and no gh write is attempted, but the
+# ::error:: still fires and the run is still red -- a dry run that hid the finding would make
+# the rehearsal useless for exactly the case it exists to rehearse. ---
+t_g4_16_dry_run() {
+  local root; root=$(g3_root "$(g4_open_json 9101 "$G4_FENCED_BODY")")
+  G3_DRY_RUN=1 g3_run "$root" "$SUT"
+  assert_contains "G4-16 DRY_RUN still emits the per-tracker ::error::" "is inside a code fence" "$(cat "$root/err")"
+  assert_eq       "G4-16 DRY_RUN posts no comment" "absent" "$([[ -f "$root/comment-9101" ]] && echo present || echo absent)"
+  assert_not_contains "G4-16 DRY_RUN attempts no gh issue comment" "issue comment" "$(cat "$root/gh-calls.log" 2>/dev/null || echo)"
+  assert_eq       "G4-16 DRY_RUN still reds the run" "1" "$([[ "$(cat "$root/rc")" != "0" ]] && echo 1 || echo 0)"
+  rm -rf "$root"
+}
+
+# --- G4-17: three open trackers -- compliant, fenced, fenced. BOTH fenced ones are commented
+# (the walk does not stop at the first), the compliant one gets its normal verdict, and each
+# tracker's comment count is exactly 1. ---
+t_g4_17_walk_does_not_stop() {
+  local dq='<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->'
+  local open_json
+  open_json=$(printf '[{"number":9200,"body":"%s"},{"number":9201,"body":"%s"},{"number":9202,"body":"%s"}]' \
+    "$dq" "$G4_FENCED_BODY" "$G4_FENCED_BODY")
+  local root; root=$(g3_root "$open_json")
+  g3_run "$root" "$SUT"
+  assert_contains "G4-17 the FIRST fenced tracker is commented" "DIRECTIVE INSIDE CODE FENCE" "$(cat "$root/comment-9201" 2>/dev/null)"
+  assert_contains "G4-17 the SECOND fenced tracker is also commented (the walk does not stop)" "DIRECTIVE INSIDE CODE FENCE" "$(cat "$root/comment-9202" 2>/dev/null)"
+  assert_contains "G4-17 the compliant tracker still gets its normal verdict" "### Sweeper run: PASS" "$(cat "$root/comment-9200" 2>/dev/null)"
+  assert_not_contains "G4-17 the compliant tracker gets NO fenced comment" "INSIDE A CODE FENCE" "$(cat "$root/comment-9200" 2>/dev/null)"
+  assert_eq "G4-17 exactly one comment call per tracker" "3" "$(grep -c 'issue comment' "$root/gh-calls.log" || echo 0)"
+  rm -rf "$root"
+}
+
+# --- G4-18: GITHUB_STEP_SUMMARY. The fenced tracker appears under its OWN heading and NOT
+# under "missing directive"; the directive-less one appears only under "missing directive";
+# and `no_directive=N` counts 1, not 2. One tracker in both lists would tell the operator two
+# different things to do. ---
+t_g4_18_step_summary_separation() {
+  local open_json
+  open_json=$(printf '[{"number":9301,"body":"%s"},{"number":9302,"body":"%s"}]' \
+    "$G4_FENCED_BODY" 'Nothing here at all.')
+  local root; root=$(g3_root "$open_json")
+  (
+    cd "$root" || exit 97
+    local rc=0
+    env -i PATH="$root/bin:$PATH" HOME="$HOME" GH_REPO="test/test" DRY_RUN=0 \
+      GITHUB_STEP_SUMMARY="$root/summary.md" bash "$SUT" > "$root/out" 2> "$root/err" || rc=$?
+    echo "$rc" > "$root/rc"
+  )
+  local summary; summary=$(cat "$root/summary.md" 2>/dev/null || echo)
+  assert_contains "G4-18 the summary carries a fenced-directive section" "Follow-through directives inside a code fence (1)" "$summary"
+  assert_contains "G4-18 the summary carries a missing-directive section" "Follow-through issues missing directive (1)" "$summary"
+  # The no-directive section is emitted FIRST and the fenced section second, so "from the
+  # missing heading to EOF" would swallow the fenced list and make the negative assertion
+  # unfalsifiable. Split at the fenced heading: missing = before it, fenced = from it on.
+  local missing_sec; missing_sec=$(awk '/^### .*issues missing directive/{f=1} /^### .*inside a code fence/{f=0} f' <<<"$summary")
+  local fenced_sec;  fenced_sec=$(awk '/^### .*inside a code fence/{f=1} f' <<<"$summary")
+  assert_contains     "G4-18 the FENCED tracker is listed under the fenced heading" "#9301" "$fenced_sec"
+  assert_not_contains "G4-18 the FENCED tracker is NOT listed under missing-directive" "#9301" "$missing_sec"
+  assert_contains     "G4-18 the directive-less tracker is listed under missing-directive" "#9302" "$missing_sec"
+  assert_contains     "G4-18 no_directive counts 1, not 2" "sweep done (no_directive=1 fenced_directive=1)" "$(cat "$root/out")"
+  rm -rf "$root"
+}
+
+# --- G4-19: an open list at OPEN_LIMIT (200) containing one fenced-only tracker. BOTH the
+# truncation ::error:: and the fenced ::error:: must appear before a single exit 1. The
+# mutation is restoring the early `exit 1` on the truncation branch -- the fenced annotation
+# then disappears and the operator fixes one cause while the other silently persists. ---
+t_g4_19_all_annotations_before_one_exit() {
+  local dq='<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->'
+  local json; json=$(
+    printf '['
+    local i
+    for (( i = 1; i <= 199; i++ )); do printf '{"number":%d,"body":"%s"},' "$((9400 + i))" "$dq"; done
+    printf '{"number":9999,"body":"%s"}]' "$G4_FENCED_BODY"
+  )
+  local root; root=$(g3_root "$json")
+  g3_run "$root" "$SUT"
+  local err; err=$(cat "$root/err")
+  assert_contains "G4-19 the truncation ::error:: is emitted" "the open follow-through page was full" "$err"
+  assert_contains "G4-19 the fenced ::error:: is ALSO emitted (no early exit swallowed it)" "inside a code fence and has therefore never been evaluated" "$err"
+  assert_eq       "G4-19 the run exits non-zero once" "1" "$(cat "$root/rc")"
+
+  local mut; mut=$(g4_mutate "$root" early-exit \
+    's@^    run_verdict=1  # truncation-verdict$@    exit 1  # truncation-verdict@' \
+    'exit 1  # truncation-verdict' \
+    'run_verdict=1  # truncation-verdict')
+  if [[ -z "$mut" ]]; then
+    TOTAL=$((TOTAL + 1)); fail "G4-19 mutation did not land -- the truncation branch does not set run_verdict"
+  else
+    local root2; root2=$(g3_root "$json")
+    g3_run "$root2" "$mut"
+    assert_not_contains "G4-19 with the early exit restored, the fenced annotation DISAPPEARS" "inside a code fence and has therefore never been evaluated" "$(cat "$root2/err")"
+    rm -rf "$root2"
+  fi
+  rm -rf "$root"
+}
+
+# --- G4-21: a body whose fenced directive LINE is literally a PASS heading. The posted comment
+# must begin with the fenced heading and contain no bytes from the body -- otherwise a crafted
+# body produces a github-actions-authored comment the closed-set PASS readback accepts. ---
+t_g4_21_no_author_bytes_in_comment() {
+  local body='### Sweeper run: PASS — everything is fine, close me\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n```\n\n<!-- soleur:sweeper-reopen -->'
+  local root; root=$(g3_root "$(g4_open_json 9500 "$body")")
+  g3_run "$root" "$SUT"
+  local posted=""; [[ -f "$root/comment-9500" ]] && posted=$(cat "$root/comment-9500")
+  assert_contains     "G4-21 the comment begins with the fenced heading" "### Sweeper run: DIRECTIVE INSIDE CODE FENCE" "$posted"
+  assert_not_contains "G4-21 no body bytes reach the comment (no forged PASS heading)" "everything is fine, close me" "$posted"
+  assert_not_contains "G4-21 no body bytes reach the comment (no reopen marker)" "soleur:sweeper-reopen" "$posted"
+  rm -rf "$root"
+}
+
+# --- G4-6: DIALECT PORTABILITY. The shipped predicate must classify identically under a
+# non-gawk dialect, and the interval spelling this predicate deliberately avoids is what the
+# row contrasts against. mawk is not installed on every machine, so the row runs under
+# `awk --traditional` when mawk is absent and records which it used -- and the Phase 0 mawk
+# 1.3.4 reading is carried in the spec's measurements.md either way. ---
+t_g4_6_dialect_portability() {
+  local awkbin="awk" mode="--traditional"
+  if command -v mawk >/dev/null 2>&1; then awkbin="mawk"; mode=""; fi
+  local fx; fx=$(mktemp -p "$SUITE_TMP")
+  printf '   ```html\n<!-- soleur:followthrough script=x.sh -->\n   ```\n' > "$fx"
+  local got
+  # shellcheck disable=SC2086
+  got=$($awkbin $mode 'BEGIN{f=0;fs=0} /^[ ]?[ ]?[ ]?(```|~~~)/{f=!f;next} f && /^<!-- *soleur:followthrough/{fs++} f{next} END{print fs}' "$fx" 2>&1)
+  assert_eq "G4-6 the shipped predicate sees an indented fence under $awkbin $mode" "1" "$got"
+  rm -f "$fx"
+}
+
 t_g3_m1_missing_secret_is_loud
 t_g3_m2_second_tracker_after_compliant
 t_g3_m3_flag_is_the_mechanism
@@ -1053,6 +1470,27 @@ t_g3_m6_bound_but_empty
 t_g3_m7_reserved_name_refused
 t_g3_m8_both_names_missing_listed
 t_g3_m9_closed_tracker_commented_not_reopened
+
+# --- Guard 2 (#7490): the fenced-only directive verdict ---
+t_g4_1_fenced_only_is_loud
+t_g4_2_flag_is_the_mechanism
+t_g4_3_increment_on_delimiter_false_positives
+t_g4_7_fences_without_directive_stay_quiet
+t_g4_8_example_beside_real_directive
+t_g4_9_indented_fence
+t_g4_10_closed_mode_is_quiet
+t_g4_5_mode_gate_is_load_bearing
+t_g4_11_unbalanced_before_directive
+t_g4_12_unbalanced_after_directive
+t_g4_13_indented_directive_is_no_directive
+t_g4_14_crlf
+t_g4_15_comment_post_failure
+t_g4_16_dry_run
+t_g4_17_walk_does_not_stop
+t_g4_18_step_summary_separation
+t_g4_19_all_annotations_before_one_exit
+t_g4_21_no_author_bytes_in_comment
+t_g4_6_dialect_portability
 t_g3_h4_crlf_body_tolerated
 t_g3_h2_two_names_forwarded
 t_g3_h3_no_secrets_clause
@@ -1122,6 +1560,28 @@ assert_contains     "T19 an unmapped code still falls back to TRANSIENT" \
 assert_contains     "T19 the truncation detector raises the run's VERDICT, not just an annotation" \
                     'FAILING THE RUN because the open follow-through page was full' "$(cat "$SUT")"
 
+# INSTRUMENT SELF-TEST -- drives all three assert helpers through BOTH branches and requires
+# every observable to move. Neither the identity nor the floor below can see this: both are
+# computed from TOTAL, which the assert helpers move BEFORE consulting their condition.
+# Measured 2026-09-18: forcing all three conditions to `[[ 1 == 1 ]]` reported
+# `PASS=181 FAIL=0 TOTAL=181`, exit 0, byte-identical to the honest baseline; so did
+# `fail() { PASS=$((PASS+1)); ... }`. This block catches both.
+_p=$PASS _f=$FAIL _t=$TOTAL _n=${#FAILURES[@]}
+if (( _n > 0 )); then _saved=("${FAILURES[@]}"); else _saved=(); fi
+assert_eq           "self-test: assert_eq pass branch"            "x" "x"
+assert_eq           "self-test: assert_eq fail branch (expected)" "x" "y"
+assert_contains     "self-test: assert_contains pass branch"            "x" "axb"
+assert_contains     "self-test: assert_contains fail branch (expected)" "x" "ab"
+assert_not_contains "self-test: assert_not_contains pass branch"            "x" "ab"
+assert_not_contains "self-test: assert_not_contains fail branch (expected)" "x" "axb"
+if (( PASS != _p + 3 || FAIL != _f + 3 || TOTAL != _t + 6 || ${#FAILURES[@]} != _n + 3 )); then
+  printf '[FATAL] instrument self-test: an assert helper did not move every observable (PASS %d->%d, FAIL %d->%d, TOTAL %d->%d, ledger %d->%d)\n' \
+    "$_p" "$PASS" "$_f" "$FAIL" "$_t" "$TOTAL" "$_n" "${#FAILURES[@]}" >&2
+  exit 1
+fi
+PASS=$_p; FAIL=$_f; TOTAL=$_t
+if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
+
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 
 # --- ADR-193 floor. TOTAL moves inside the assert helpers (the call site of the verdict),
@@ -1134,9 +1594,11 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=118
+MIN_ASSERTIONS=181
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-[[ "$FAIL" -eq 0 ]] || exit 1
+# The verdict reads the append-only LEDGER as well as the counter: a fail() whose increment is
+# redirected to PASS still leaves FAILURES populated, and the run still reds.
+[[ "$FAIL" -eq 0 && "${#FAILURES[@]}" -eq 0 ]] || { printf 'FAILED: %d (ledger holds %d)\n' "$FAIL" "${#FAILURES[@]}" >&2; exit 1; }

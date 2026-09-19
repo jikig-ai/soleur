@@ -22,32 +22,27 @@ STUB="$REPO_ROOT/plugins/soleur/skills/ship/references/followthrough-stub-templa
 
 echo "=== ship-followthrough-directive tests ==="
 
-# Parser block mirrored from scripts/sweep-followthroughs.sh parse_directive()
-# so the test exercises the EXACT shape the sweeper runs. Edits to the sweeper
-# parser MUST be mirrored here; assertion 5 below diff-checks against the
-# sweeper's actual parse_directive() so drift is caught at PR time.
-# shellcheck disable=SC2016  # single quotes are intentional — awk vars ($i, $NF) must not be bash-expanded
-PARSER='BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0 }
-/^```/ { fence = !fence; next }
-fence { next }
-/^<!-- *soleur:followthrough/ {
-  seen++
-  if (seen == 1) in_dir = 1
-}
-/-->/ && in_dir {
-  closing = 1
-}
-in_dir {
-  gsub(/^<!-- *soleur:followthrough/, "")
-  gsub(/-->/, "")
-  for (i = 1; i <= NF; i++) {
-    if ($i ~ /^script=/)   { sub(/^script=/, "", $i);   print "script "   $i }
-    if ($i ~ /^earliest=/) { sub(/^earliest=/, "", $i); print "earliest " $i }
-    if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
-  }
-}
-closing { in_dir = 0; closing = 0 }
-END { if (seen > 1) print "__sweeper_meta__ multi_directive_count " seen }'
+# THE PARSER IS NO LONGER MIRRORED HERE -- it is the sweeper's own, sourced.
+#
+# This file used to carry a hand-copied `parse_directive`, with a header instructing future
+# authors to mirror edits into it and an assertion 5 that diff-checked the copy against the
+# real one. #7490 is the proof that both failed: the sweeper's predicate was widened (CommonMark
+# fences, `~~~`, fence-length tracking, CRLF, two new END metas) and this copy was not touched,
+# while assertion 5 stayed GREEN -- because its only fixture, `expected-issue-body.md`, contains
+# ZERO fence lines, so the comparison was blind to every property that changed.
+#
+# A copy that must be manually synced plus a comparison that cannot see the difference is worse
+# than no guard: it reports agreement. Sourcing the shipped function removes the copy, so
+# assertion 5 below is now a tautology and is replaced by a REACHABILITY check -- the thing that
+# can actually fail is the function no longer loading.
+# shellcheck disable=SC1090
+source "$REPO_ROOT/scripts/sweep-followthroughs.sh" >/dev/null 2>&1 || true
+if ! declare -F parse_directive >/dev/null; then
+  echo "FAIL: parse_directive did not load from scripts/sweep-followthroughs.sh" >&2
+  exit 1
+fi
+run_parser() { parse_directive < "$1"; }
+
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -55,7 +50,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -f "$FIXTURE_DIR/expected-issue-body.md" ]] \
   || fail "fixture missing: $FIXTURE_DIR/expected-issue-body.md"
 
-parsed=$(awk "$PARSER" "$FIXTURE_DIR/expected-issue-body.md")
+parsed=$(run_parser "$FIXTURE_DIR/expected-issue-body.md")
 script_path=$(echo "$parsed" | awk '/^script /{print $2}')
 earliest=$(echo "$parsed" | awk '/^earliest /{print $2}')
 
@@ -87,28 +82,27 @@ grep -qF 'knowledge-base/engineering/operations/runbooks/followthrough-conventio
   || fail "SKILL.md Step 3.5 does not reference the canonical runbook"
 echo "  PASS: SKILL.md references canonical runbook"
 
-# --- Assertion 5: this test's PARSER is behaviorally equivalent to the
-#     sweeper's parse_directive() on the canonical fixture. Catches drift
-#     between the test/SKILL.md awk-block copies and the authoritative parser
-#     at PR time (pattern-recognition P1-1, multi-agent review of #4190).
-SWEEPER="$REPO_ROOT/scripts/sweep-followthroughs.sh"
-[[ -f "$SWEEPER" ]] || fail "sweeper script missing: $SWEEPER"
-# Source parse_directive() in a subshell to avoid pulling in main(); use sed
-# to extract the function body and eval it in isolation.
-sweeper_fn=$(sed -n '/^parse_directive() {/,/^}/p' "$SWEEPER")
-[[ -n "$sweeper_fn" ]] || fail "could not extract parse_directive() from sweeper"
-sweeper_out=$(bash -c "$sweeper_fn
-parse_directive < '$FIXTURE_DIR/expected-issue-body.md'")
-test_out=$(awk "$PARSER" "$FIXTURE_DIR/expected-issue-body.md")
-if [[ "$sweeper_out" != "$test_out" ]]; then
-  echo "FAIL: test PARSER output differs from sweeper parse_directive()" >&2
-  echo "--- sweeper parse_directive ---" >&2
-  printf '%s\n' "$sweeper_out" >&2
-  echo "--- test PARSER ---" >&2
-  printf '%s\n' "$test_out" >&2
-  exit 1
-fi
-echo "  PASS: test PARSER and sweeper parse_directive produce equivalent output"
+# --- Assertion 5: the sourced parser actually SKIPS a fenced directive ---
+# The old assertion compared this file's copy of the parser against the sweeper's. With the
+# copy gone that is `x == x`. What is still worth pinning -- and what the old assertion could
+# never see, because its fixture had no fence -- is the BEHAVIOUR the ship template depends on:
+# a directive inside a fence must yield no `script=`, and must be reported as fenced.
+SUITE_TMP=$(mktemp -d)   # owning trap: lint-trap-tempfile-ownership rule (c), ADR-129
+trap 'rm -rf "$SUITE_TMP"' EXIT
+fenced_body=$(mktemp -p "$SUITE_TMP")
+{
+  printf '## Verification\n\n```html\n'
+  grep -m1 '^<!-- soleur:followthrough' "$FIXTURE_DIR/expected-issue-body.md" \
+    || printf '<!-- soleur:followthrough script=scripts/followthroughs/x.sh earliest=2020-01-01T00:00:00Z -->\n'
+  printf '```\n'
+} > "$fenced_body"
+fenced_out=$(run_parser "$fenced_body")
+rm -f "$fenced_body"
+grep -q '^script ' <<<"$fenced_out" \
+  && fail "a FENCED directive yielded a script= -- the sweeper's fence skip is not in effect"
+grep -q 'fenced_directive_count' <<<"$fenced_out" \
+  || fail "a FENCED directive did not emit fenced_directive_count -- the tracker would rot silently"
+echo "  PASS: a fenced directive yields no script= and is reported as fenced"
 
 echo ""
 echo "PASS: ship-followthrough-directive contract"
