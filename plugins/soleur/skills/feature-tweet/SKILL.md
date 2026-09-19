@@ -11,9 +11,9 @@ into a **draft** short-form X post — written to the existing
 existing `content-publisher.sh` cron. No new publishing path; nothing
 reaches X until the operator flips `status: draft` → `scheduled`.
 
-Invoked by `/soleur:ship` (Phase 6 "Feature-Tweet Draft (pre-merge bundle)")
+Invoked by `soleur:ship` (Phase 6 "Feature-Tweet Draft (pre-merge bundle)")
 which commits the draft to the feature branch so it rides the PR into `main` —
-where `content-publisher.sh` reads from. `/soleur:postmerge` Phase 3.8 then
+where `content-publisher.sh` reads from. `soleur:postmerge` Phase 3.8 then
 verifies + displays the on-`main` draft (and warns if deploy health is
 unverified). The draft stays inert (`status: draft`) until the operator
 schedules it, so "only tweet what actually deployed" is preserved by the
@@ -21,7 +21,7 @@ operator's post-deploy publish gate, not by withholding the draft. Also runnable
 standalone as a catch-up path:
 
 ```
-/soleur:feature-tweet #<pr>
+soleur:feature-tweet #<pr>
 ```
 
 The brand-critical floor is the deterministic, fail-closed eligibility filter
@@ -189,7 +189,7 @@ the path.
 
 ## Multi-PR contract (v1)
 
-One tweet per eligible PR. `/soleur:postmerge` passes its single bound PR
-number; batching multiple PRs from one deploy is deferred. A `/soleur:merge-pr`-
+One tweet per eligible PR. `soleur:postmerge` passes its single bound PR
+number; batching multiple PRs from one deploy is deferred. A `soleur:merge-pr`-
 only flow bypasses the postmerge hook by design — run standalone
-`/soleur:feature-tweet #<pr>` as the recovery path.
+`soleur:feature-tweet #<pr>` as the recovery path.

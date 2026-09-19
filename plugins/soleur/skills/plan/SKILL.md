@@ -8,21 +8,25 @@ description: "This skill should be used when transforming feature descriptions i
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/plan` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:plan`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 <!-- plan-anti-bypass-protocol:start -->
 ## Anti-bypass protocol (load-bearing — especially Grok Build)
 
-You are the **planning orchestrator**. Whether entered from `/brainstorm`, `/one-shot` Step 1, or direct `/plan`:
+You are the **planning orchestrator**. Whether entered from `soleur:brainstorm`, `soleur:one-shot` Step 1, or direct `soleur:plan`:
 
 - **FORBIDDEN:** Implementing product code (Write/Edit/Shell) before the plan artifact and tasks are written.
-- **FORBIDDEN:** Ending after saving `plans/` + `tasks.md` without invoking `/work` — the plan is a checkpoint, not a deliverable.
-- **REQUIRED (Grok Build):** Invoke `/work <plan-path>` (or `/deepen-plan` when the plan requests it) via slash command — never substitute ad-hoc implementation.
-- **Harness adapter:** `plugins/soleur/lib/harness.ts` — Grok uses `/work`, `/deepen-plan`; Claude uses Skill tool.
+- **FORBIDDEN:** Ending after saving `plans/` + `tasks.md` without invoking `soleur:work` — the plan is a checkpoint, not a deliverable.
+- **REQUIRED (Grok Build):** Invoke `soleur:work <plan-path>` (or `soleur:deepen-plan` when the plan requests it) via slash command — never substitute ad-hoc implementation.
+- **Harness adapter:** `plugins/soleur/lib/harness.ts` — Grok uses `soleur:work`, `soleur:deepen-plan`; Claude uses Skill tool.
 
 See `plugins/soleur/lib/workflow-fidelity.ts` (`HANDOFF_SKILLS`, `mandatorySuccessors('plan')`).
 <!-- plan-anti-bypass-protocol:end -->
+
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
 
 # Create a plan for a new feature or bug fix
 
@@ -63,7 +67,7 @@ Check if `knowledge-base/` directory exists. If it does:
 **If knowledge-base/ exists:**
 
 1. Read `CLAUDE.md` if it exists - apply project conventions during planning
-2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - use principles to guide planning decisions. Skip if already loaded (e.g., from a preceding `/soleur:brainstorm`).
+2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - use principles to guide planning decisions. Skip if already loaded (e.g., from a preceding `soleur:brainstorm`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/project/specs/feat-<name>/spec.md` if it exists - use as planning input
 5. Announce: "Loaded constitution and spec for `feat-<name>`"
@@ -154,7 +158,7 @@ Fires when a plan's justification is a **cost or performance saving** ("saves an
 
 Measure the thing actually claimed: if the case is "protects an expensive block", identify *which* block is expensive before designing the protection. If the saving cannot be measured at plan time, say so explicitly and record what would measure it — an unquantified saving is a hypothesis, and it must not be the sole justification for a mechanism that survives 0.6b.
 
-**Why:** #7418 / ADR-176 — the plan's stated case was "save an expensive research fan-out", and which fan-out was expensive went unmeasured until *review*, where `performance-oracle` established that the checkpoint boundaries subdivide neither expensive block: all five agents under `plugins/soleur/agents/engineering/research/` are pinned cheap (`grep -l '^model: haiku' plugins/soleur/agents/engineering/research/*.md` returns 5), while the un-pinned eleven-agent Phase 2.5 domain fan-out — the real cost — was unprotected either way. The answer was one grep of agent frontmatter, three phases earlier.
+**Why:** #7418 / ADR-176 — the plan's stated case was "save an expensive research fan-out", and which fan-out was expensive went unmeasured until *review*, where `soleur:engineering:review:performance-oracle` established that the checkpoint boundaries subdivide neither expensive block: all five agents under `plugins/soleur/agents/engineering/research/` are pinned cheap (`grep -l '^model: haiku' plugins/soleur/agents/engineering/research/*.md` returns 5), while the un-pinned eleven-agent Phase 2.5 domain fan-out — the real cost — was unprotected either way. The answer was one grep of agent frontmatter, three phases earlier.
 
 ### 0.7. Skeleton Checkpoint (Always)
 
@@ -271,8 +275,8 @@ First, I need to understand the project's conventions, existing patterns, and an
 
 Run these agents **in parallel** to gather local context:
 
-- Task repo-research-analyst(feature_description)
-- Task learnings-researcher(feature_description)
+- Task soleur:engineering:research:repo-research-analyst(feature_description)
+- Task soleur:engineering:research:learnings-researcher(feature_description)
 
 **What to look for:**
 
@@ -301,11 +305,11 @@ This step is a single file read, not a subagent spawn. If the feature descriptio
 
 ### 1.5. Community Discovery Check (Conditional)
 
-**Read `plugins/soleur/skills/plan/references/plan-community-discovery.md` now** for the full community discovery procedure (stack detection, coverage gap check, agent-finder). Skip if no uncovered stacks detected.
+**Read `plugins/soleur/skills/plan/references/plan-community-discovery.md` now** for the full community discovery procedure (stack detection, coverage gap check, soleur:engineering:discovery:agent-finder). Skip if no uncovered stacks detected.
 
 ### 1.5b. Functional Overlap Check
 
-**Read `plugins/soleur/skills/plan/references/plan-functional-overlap.md` now** for the functional overlap check procedure (always runs, spawns functional-discovery agent).
+**Read `plugins/soleur/skills/plan/references/plan-functional-overlap.md` now** for the functional overlap check procedure (always runs, spawns soleur:engineering:discovery:functional-discovery agent).
 
 ### 1.6. Research Decision
 
@@ -330,8 +334,8 @@ Examples:
 
 Run these agents in parallel:
 
-- Task best-practices-researcher(feature_description)
-- Task framework-docs-researcher(feature_description)
+- Task soleur:engineering:research:best-practices-researcher(feature_description)
+- Task soleur:engineering:research:framework-docs-researcher(feature_description)
 
 ### 1.7. Consolidate Research
 
@@ -342,7 +346,7 @@ After all research steps complete, consolidate findings:
 - Note external documentation URLs and best practices (if external research was done)
 - List related issues or PRs discovered
 - Capture CLAUDE.md conventions
-- **Reconcile spec claims against codebase reality.** If the repo-research-analyst returned any "Gap callouts" or equivalent mismatches, the plan MUST include a "Research Reconciliation — Spec vs. Codebase" section (3-column table: spec claim / reality / plan response) placed between "Overview" and "Implementation Phases". This prevents the plan from inheriting spec fiction (e.g., claimed infrastructure that doesn't exist) as phase estimates. See `knowledge-base/project/learnings/best-practices/2026-04-15-plan-skill-reconcile-spec-vs-codebase.md`.
+- **Reconcile spec claims against codebase reality.** If the soleur:engineering:research:repo-research-analyst returned any "Gap callouts" or equivalent mismatches, the plan MUST include a "Research Reconciliation — Spec vs. Codebase" section (3-column table: spec claim / reality / plan response) placed between "Overview" and "Implementation Phases". This prevents the plan from inheriting spec fiction (e.g., claimed infrastructure that doesn't exist) as phase estimates. See `knowledge-base/project/learnings/best-practices/2026-04-15-plan-skill-reconcile-spec-vs-codebase.md`.
 
 **Persist the research to the plan file now — this is the write that makes the Phase 0.7 checkpoint
 pay.** Write a `## Research Insights` section into the plan holding the consolidated findings above:
@@ -393,7 +397,7 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
     ```
 
     A later Bash call does not inherit `ISSUES_JSON`, so carry the echoed path forward (or
-    re-derive it in the same call). Do not substitute a fixed name: a concurrent `/plan`
+    re-derive it in the same call). Do not substitute a fixed name: a concurrent `soleur:plan`
     would overwrite the file between the write and this read.
 
 4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
@@ -446,7 +450,7 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] When the plan prescribes scoping a helper function by a new column/predicate, `rg` the codebase for every other inline query on the same table that BYPASSES the helper (id-based lookups, pre-helper historical queries, WS-handler inline SELECTs) and list each as a `Files to Edit` entry -- sibling queries are the most common silent backdoor after a tenant-scope change. See learning `2026-04-22-scope-by-new-column-audit-every-query-not-just-the-helper.md`.
 - [ ] When the plan prescribes any path glob (e.g., `apps/foo/**`, `**/doppler*.{yml,yaml,sh}`, `.github/workflows/*foo*.yml`), verify each glob matches ≥1 real file via `git ls-files | grep -E '<translated-glob>'` AND for negative-coverage gates (security gates, denylist filters, sensitive-path detectors) enumerate sibling files at the same architectural depth — globs constructed from a plan miss files the plan never inventoried. See AGENTS.md `hr-when-a-plan-specifies-relative-paths-e-g` and learning `2026-04-28-plan-globs-must-be-verified-against-repo-structure.md`.
 - [ ] **Wrapper-vs-curl check before adopting a workflow wrapper.** Before prescribing `claude-code-action`, `peter-evans/create-pull-request`, or any wrapper that constrains workflow architecture (token-revoking post-steps, hardcoded auto-merge, mandated job ordering), ask: "what does this look like as 5 lines of `curl` + `jq`?" If the answer is "fine," skip the wrapper. The wrapper's value is in agent tool-use loops or PR-creation generality; a single-shot LLM call or single-PR workflow doesn't need it. **Why:** 2026-05-11 #2720 v1 plan adopted `claude-code-action` and contorted into a two-job split + matrix to dodge its post-step token revocation; v2 dropped the wrapper and 4 P0 issues dissolved. See `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`.
-- [ ] **Paper-resolution lint.** Every FR/AC added to fold a review finding MUST cite the implementation location — e.g., `<script-file>:<line>`, `<workflow-file>:<section>`, or `prompt:step-N`. Without the pointer, the FR is paper — the planner could not encode the fix in code, only in prose, and the implementer will discover the gap at /work time. **Why:** 2026-05-11 #2720 v1 plan folded 6 spec-flow P0s as FRs/ACs; spec-flow re-validation against the plan caught 4 as "RESOLVED in spec, NOT IMPLEMENTED in code." Same learning file.
+- [ ] **Paper-resolution lint.** Every FR/AC added to fold a review finding MUST cite the implementation location — e.g., `<script-file>:<line>`, `<workflow-file>:<section>`, or `prompt:step-N`. Without the pointer, the FR is paper — the planner could not encode the fix in code, only in prose, and the implementer will discover the gap at soleur:work time. **Why:** 2026-05-11 #2720 v1 plan folded 6 spec-flow P0s as FRs/ACs; spec-flow re-validation against the plan caught 4 as "RESOLVED in spec, NOT IMPLEMENTED in code." Same learning file.
 
 ### 2.5. Domain Review Gate
 
@@ -464,15 +468,15 @@ After generating the plan structure, assess which business domains this plan has
 
 **Step 1.5 — Brainstorm Specialist Carry-Forward Gate:**
 
-After domain sweep, scan the brainstorm document's `## Domain Assessments` section (and any `## Capability Gaps` section) for domain leaders that recommended specific specialists by name (e.g., "delegates to conversion-optimizer", "recommends copywriter for cancellation copy", "invoke ux-design-lead for wireframes"). Build a `REQUIRED_SPECIALISTS` list from these recommendations.
+After domain sweep, scan the brainstorm document's `## Domain Assessments` section (and any `## Capability Gaps` section) for domain leaders that recommended specific specialists by name (e.g., "delegates to soleur:marketing:conversion-optimizer", "recommends soleur:marketing:copywriter for cancellation copy", "invoke soleur:product:design:ux-design-lead for wireframes"). Build a `REQUIRED_SPECIALISTS` list from these recommendations.
 
 For each specialist in `REQUIRED_SPECIALISTS`:
 
-1. If the specialist will be invoked by the Product/UX Gate pipeline below (ux-design-lead, copywriter, spec-flow-analyzer), mark it as "covered by UX Gate" — it will run in Step 2.
-2. If the specialist is NOT covered by the UX Gate pipeline (e.g., conversion-optimizer, retention-strategist, pricing-strategist), invoke it as a Task now with a scoped prompt derived from the recommendation context. Spawn in parallel if multiple.
+1. If the specialist will be invoked by the Product/UX Gate pipeline below (soleur:product:design:ux-design-lead, soleur:marketing:copywriter, soleur:product:spec-flow-analyzer), mark it as "covered by UX Gate" — it will run in Step 2.
+2. If the specialist is NOT covered by the UX Gate pipeline (e.g., soleur:marketing:conversion-optimizer, soleur:marketing:retention-strategist, soleur:marketing:pricing-strategist), invoke it as a Task now with a scoped prompt derived from the recommendation context. Spawn in parallel if multiple.
 3. Record all brainstorm-recommended specialists in the Domain Review section under `**Brainstorm-recommended specialists:**`.
 
-**Enforcement:** Specialists recommended by name in brainstorm domain assessments MUST be either invoked or explicitly declined by the user via AskUserQuestion ("Domain leader recommended [specialist] for [reason]. Run now / Skip with acknowledgment"). Silent skipping is a workflow violation. **Why:** In #1078, the CMO recommended conversion-optimizer and copywriter for the cancellation flow, but the plan skill silently wrote them into `Skipped specialists:` without asking, producing UX artifacts that lacked brand review.
+**Enforcement:** Specialists recommended by name in brainstorm domain assessments MUST be either invoked or explicitly declined by the user via AskUserQuestion ("Domain leader recommended [specialist] for [reason]. Run now / Skip with acknowledgment"). Silent skipping is a workflow violation. **Why:** In #1078, the CMO recommended soleur:marketing:conversion-optimizer and soleur:marketing:copywriter for the cancellation flow, but the plan skill silently wrote them into `Skipped specialists:` without asking, producing UX artifacts that lacked brand review.
 
 **Step 2 — Product/UX Gate:**
 
@@ -490,25 +494,25 @@ A plan that *discusses* UI concepts but *implements* orchestration changes (e.g.
 
 **On BLOCKING:**
 
-1. Run spec-flow-analyzer via Task with UI-flow-aware prompt: "Analyze the user flows in this plan. Map each screen, identify entry/exit points, dead ends, missing error states, and flows that drop the user. Focus on user journey completeness, not technical implementation."
+1. Run soleur:product:spec-flow-analyzer via Task with UI-flow-aware prompt: "Analyze the user flows in this plan. Map each screen, identify entry/exit points, dead ends, missing error states, and flows that drop the user. Focus on user journey completeness, not technical implementation."
 2. Run CPO via Task with scoped prompt: "Assess the product implications of this plan: {plan summary}. Cross-reference against brand-guide.md and constitution.md. Identify product strategy concerns, flow gaps, and positioning issues. Output a structured advisory — do not use AskUserQuestion."
-3. **Brainstorm carry-forward check.** Before invoking ux-design-lead, check the UX signal source. If the only UX validation is brainstorm carry-forward (brainstorm assessed the *idea*, not the *page design*), reject it: "Brainstorm validated the idea, not the page design. Proceeding to wireframes." Then continue to step 4. This check applies to BLOCKING tier only — ADVISORY and NONE tiers may still carry forward brainstorm UX findings.
-4. Invoke ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." **On the one-shot/pipeline path (no brainstorm ran), plan Phase 2.5 is the SOLE PRODUCER of wireframes — it must GENERATE the `.pen`, not defer.** If the agent self-stops because Pencil is unavailable, do NOT record a skip: run `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/pencil-setup/scripts/check_deps.sh --auto` (installs `@pencil.dev/cli`; auth via `PENCIL_CLI_KEY` from Doppler `soleur/dev`) and re-invoke. **Hard-block** (do not proceed, do not write to `Skipped specialists:`) only if auth is genuinely unsatisfiable or Node < 22.9.0, with a single instruction: "Provision PENCIL_CLI_KEY in Doppler soleur/dev (or `pencil login`), or install Node ≥ 22.9.0, then re-run plan." The two permitted outcomes are a committed `.pen` or this hard-block — `ux-design-lead` may never appear in `Skipped specialists:` for a UI feature (`wg-ui-feature-requires-pen-wireframe`). **Verifier asserts the invariant, not the proxy:** confirm the `.pen` exists on disk (non-empty) under `knowledge-base/product/design/{domain}/` and is referenced in the spec FRs — not "specialist reported done"; set `Pencil available: yes`.
-4b. **Wireframe review pause.** ux-design-lead ends by running `xdg-open <screenshots-directory>`, so the wireframes are already open when it returns here. A Task subagent cannot collect operator input (`2026-05-12-task-subagent-prompt-text-only.md`), so the review pause lives in this orchestrator, right after the step-4 invocation. Mode-branch gate (`2026-03-27-skill-defense-in-depth-gate-pattern.md`): always run, branch on mode.
-   - **Interactive arm** (interactive plan session): `AskUserQuestion` — "Wireframes are open for review at `<screenshots-dir>`. Approve and continue, or request changes?" Options: **Approve** → **record the approved design's aesthetic direction to the taste-profile** (the agent surface's write path — `ux-design-lead` never writes taste itself; #5990/ADR-090): `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/taste-profile-update.sh knowledge-base/product/design/taste-profile.md <context> aesthetic-direction <approved-direction> "$(date -u +%F)"` (`<context>` = the design's surface enum, `<approved-direction>` = a sanitized lowercase-hyphen token); then continue to step 5 (Content Review Gate). **Request changes** → collect a free-text note, re-invoke `ux-design-lead` with `feedback: <note>` plus the existing `.pen` path, let it re-export + re-open, then re-ask. **Loop until Approve** — the Approve branch is the only exit (no dead end).
-   - **Headless / pipeline arm:** mirror the auto-accept in the `On ADVISORY:` block below (step 1 — "If in pipeline/subagent context … auto-accept … proceed silently"). When plan runs in any non-interactive context — `HEADLESS_MODE=true`, no TTY, `/soleur:one-shot`, `/soleur:go --headless`, OR invoked with a plan-file-path argument (the one-shot path chains plan inside a Task subagent, `one-shot/SKILL.md:70`) — **do NOT pause.** Record `wireframes ready for async review at <dir>` and continue to step 5. **Load-bearing:** the subagent / file-path context is inherently non-interactive — the headless arm MUST fire there or the autonomous pipeline hangs on `AskUserQuestion`.
-   - **Why:** wireframes are a visual artifact the operator must eyeball before the design freezes into the spec; the headless suppression honors `one-shot/SKILL.md:11` ("no per-phase approval gates"). Keep this mode predicate in sync with brainstorm Phase 3.55b and the canonical Phase 0.4 mode-detection block (`brainstorm/SKILL.md:101`) — the four context terms (`HEADLESS_MODE`, no-TTY, `/soleur:one-shot`, `--headless`) must stay aligned across all copies; the plan-file-path term is a plan-specific addition.
+3. **Brainstorm carry-forward check.** Before invoking soleur:product:design:ux-design-lead, check the UX signal source. If the only UX validation is brainstorm carry-forward (brainstorm assessed the *idea*, not the *page design*), reject it: "Brainstorm validated the idea, not the page design. Proceeding to wireframes." Then continue to step 4. This check applies to BLOCKING tier only — ADVISORY and NONE tiers may still carry forward brainstorm UX findings.
+4. Invoke soleur:product:design:ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." **On the one-shot/pipeline path (no brainstorm ran), plan Phase 2.5 is the SOLE PRODUCER of wireframes — it must GENERATE the `.pen`, not defer.** If the agent self-stops because Pencil is unavailable, do NOT record a skip: run `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/pencil-setup/scripts/check_deps.sh --auto` (installs `@pencil.dev/cli`; auth via `PENCIL_CLI_KEY` from Doppler `soleur/dev`) and re-invoke. **Hard-block** (do not proceed, do not write to `Skipped specialists:`) only if auth is genuinely unsatisfiable or Node < 22.9.0, with a single instruction: "Provision PENCIL_CLI_KEY in Doppler soleur/dev (or `pencil login`), or install Node ≥ 22.9.0, then re-run plan." The two permitted outcomes are a committed `.pen` or this hard-block — `soleur:product:design:ux-design-lead` may never appear in `Skipped specialists:` for a UI feature (`wg-ui-feature-requires-pen-wireframe`). **Verifier asserts the invariant, not the proxy:** confirm the `.pen` exists on disk (non-empty) under `knowledge-base/product/design/{domain}/` and is referenced in the spec FRs — not "specialist reported done"; set `Pencil available: yes`.
+4b. **Wireframe review pause.** soleur:product:design:ux-design-lead ends by running `xdg-open <screenshots-directory>`, so the wireframes are already open when it returns here. A Task subagent cannot collect operator input (`2026-05-12-task-subagent-prompt-text-only.md`), so the review pause lives in this orchestrator, right after the step-4 invocation. Mode-branch gate (`2026-03-27-skill-defense-in-depth-gate-pattern.md`): always run, branch on mode.
+   - **Interactive arm** (interactive plan session): `AskUserQuestion` — "Wireframes are open for review at `<screenshots-dir>`. Approve and continue, or request changes?" Options: **Approve** → **record the approved design's aesthetic direction to the taste-profile** (the agent surface's write path — `soleur:product:design:ux-design-lead` never writes taste itself; #5990/ADR-090): `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/taste-profile-update.sh knowledge-base/product/design/taste-profile.md <context> aesthetic-direction <approved-direction> "$(date -u +%F)"` (`<context>` = the design's surface enum, `<approved-direction>` = a sanitized lowercase-hyphen token); then continue to step 5 (Content Review Gate). **Request changes** → collect a free-text note, re-invoke `soleur:product:design:ux-design-lead` with `feedback: <note>` plus the existing `.pen` path, let it re-export + re-open, then re-ask. **Loop until Approve** — the Approve branch is the only exit (no dead end).
+   - **Headless / pipeline arm:** mirror the auto-accept in the `On ADVISORY:` block below (step 1 — "If in pipeline/subagent context … auto-accept … proceed silently"). When plan runs in any non-interactive context — `HEADLESS_MODE=true`, no TTY, `soleur:one-shot`, `soleur:go --headless`, OR invoked with a plan-file-path argument (the one-shot path chains plan inside a Task subagent, `one-shot/SKILL.md:70`) — **do NOT pause.** Record `wireframes ready for async review at <dir>` and continue to step 5. **Load-bearing:** the subagent / file-path context is inherently non-interactive — the headless arm MUST fire there or the autonomous pipeline hangs on `AskUserQuestion`.
+   - **Why:** wireframes are a visual artifact the operator must eyeball before the design freezes into the spec; the headless suppression honors `one-shot/SKILL.md:11` ("no per-phase approval gates"). Keep this mode predicate in sync with brainstorm Phase 3.55b and the canonical Phase 0.4 mode-detection block (`brainstorm/SKILL.md:101`) — the four context terms (`HEADLESS_MODE`, no-TTY, `soleur:one-shot`, `--headless`) must stay aligned across all copies; the plan-file-path term is a plan-specific addition.
 
-5. **Content Review Gate.** Check if any domain leader (CMO, CRO, CPO, or other) recommended a copywriter or content specialist in their Step 1 assessment. If yes: invoke copywriter agent via Task with prompt: "Review the planned page content for brand voice compliance, value proposition clarity, and messaging effectiveness. Reference brand-guide.md." If copywriter ran successfully, add `copywriter` to `**Agents invoked:**`. If user declines, add `copywriter` to `**Skipped specialists:**` with the user's reason. If copywriter agent fails (timeout, error), add `copywriter` to `**Skipped specialists:**` with note `(agent error — review manually)` and set `**Decision:** reviewed (partial)`. If no domain leader recommended a copywriter, skip this step silently. This gate also fires on ADVISORY tier when a domain leader recommended a copywriter — the recommendation is the signal, not the tier.
-6. Phase 3 SpecFlow is skipped (spec-flow-analyzer already ran in step 1 with UI-aware prompt — avoids duplicate invocation).
-7. If any agent in the pipeline fails (timeout, error), write partial findings with `Decision: reviewed (partial)`. **BLOCKING gate enforcement:** If the tier is BLOCKING and a required specialist failed, do NOT silently proceed. For **`ux-design-lead`** specifically there is NO "skip" option — it is a non-skippable producer (step 4): retry via `pencil-setup --auto`, or hard-block until Pencil is provisioned. For **copywriter / spec-flow-analyzer** failures, use AskUserQuestion: "BLOCKING Product/UX Gate: [specialist] failed ([reason]). How to proceed?" Options: (a) **Retry now**, (b) **Skip with acknowledgment** (copywriter/spec-flow only — never ux-design-lead), (c) **Defer to next session**. Record the choice in the Domain Review section. For ADVISORY tier or non-specialist agents, proceed silently with partial findings as before.
+5. **Content Review Gate.** Check if any domain leader (CMO, CRO, CPO, or other) recommended a soleur:marketing:copywriter or content specialist in their Step 1 assessment. If yes: invoke soleur:marketing:copywriter agent via Task with prompt: "Review the planned page content for brand voice compliance, value proposition clarity, and messaging effectiveness. Reference brand-guide.md." If soleur:marketing:copywriter ran successfully, add `soleur:marketing:copywriter` to `**Agents invoked:**`. If user declines, add `soleur:marketing:copywriter` to `**Skipped specialists:**` with the user's reason. If soleur:marketing:copywriter agent fails (timeout, error), add `soleur:marketing:copywriter` to `**Skipped specialists:**` with note `(agent error — review manually)` and set `**Decision:** reviewed (partial)`. If no domain leader recommended a soleur:marketing:copywriter, skip this step silently. This gate also fires on ADVISORY tier when a domain leader recommended a soleur:marketing:copywriter — the recommendation is the signal, not the tier.
+6. Phase 3 SpecFlow is skipped (soleur:product:spec-flow-analyzer already ran in step 1 with UI-aware prompt — avoids duplicate invocation).
+7. If any agent in the pipeline fails (timeout, error), write partial findings with `Decision: reviewed (partial)`. **BLOCKING gate enforcement:** If the tier is BLOCKING and a required specialist failed, do NOT silently proceed. For **`soleur:product:design:ux-design-lead`** specifically there is NO "skip" option — it is a non-skippable producer (step 4): retry via `pencil-setup --auto`, or hard-block until Pencil is provisioned. For **soleur:marketing:copywriter / soleur:product:spec-flow-analyzer** failures, use AskUserQuestion: "BLOCKING Product/UX Gate: [specialist] failed ([reason]). How to proceed?" Options: (a) **Retry now**, (b) **Skip with acknowledgment** (soleur:marketing:copywriter/spec-flow only — never soleur:product:design:ux-design-lead), (c) **Defer to next session**. Record the choice in the Domain Review section. For ADVISORY tier or non-specialist agents, proceed silently with partial findings as before.
 
 **On ADVISORY:**
 
 1. If in pipeline/subagent context (plan file path was provided as argument, not interactive): auto-accept, write Product/UX Gate subsection with `Tier: advisory, Decision: auto-accepted (pipeline)`, proceed silently.
 2. If interactive: display notice via AskUserQuestion: "This plan modifies existing UI. Run UX review?" Options: "Yes, run full review" / "Skip — I'll handle UX manually". Record choice.
 3. If user chooses full review, run the BLOCKING pipeline above.
-4. **Content Review Gate (ADVISORY).** Regardless of the UX review choice, if any domain leader recommended a copywriter or content specialist, run step 5 from the BLOCKING pipeline (Content Review Gate). The recommendation is the signal, not the tier — modifying existing copy still benefits from content review.
+4. **Content Review Gate (ADVISORY).** Regardless of the UX review choice, if any domain leader recommended a soleur:marketing:copywriter or content specialist, run step 5 from the BLOCKING pipeline (Content Review Gate). The recommendation is the signal, not the tier — modifying existing copy still benefits from content review.
 
 **On NONE:** Skip — no Product/UX Gate subsection needed beyond the domain sweep finding.
 
@@ -534,8 +538,8 @@ After both steps complete, write the `## Domain Review` section to the plan file
 
 **Tier:** blocking | advisory
 **Decision:** reviewed | reviewed (partial) | skipped | auto-accepted (pipeline)
-**Agents invoked:** spec-flow-analyzer, cpo, ux-design-lead, copywriter | [subset] | none
-**Skipped specialists:** copywriter (<reason>) | none — `ux-design-lead` is NEVER valid here for a UI feature (non-skippable: `.pen` committed or hard-block per `wg-ui-feature-requires-pen-wireframe`)
+**Agents invoked:** soleur:product:spec-flow-analyzer, soleur:product:cpo, soleur:product:design:ux-design-lead, soleur:marketing:copywriter | [subset] | none
+**Skipped specialists:** soleur:marketing:copywriter (<reason>) | none — `soleur:product:design:ux-design-lead` is NEVER valid here for a UI feature (non-skippable: `.pen` committed or hard-block per `wg-ui-feature-requires-pen-wireframe`)
 **Pencil available:** yes | hard-blocked (auth/Node) | N/A (no UI surface)
 
 #### Findings
@@ -570,8 +574,8 @@ Every plan MUST include a `## User-Brand Impact` section. This is the framing-ti
 **Step 3 — Threshold-driven sign-off requirement.** If the threshold resolves to `single-user incident`:
 
 1. Add `requires_cpo_signoff: true` to the plan's YAML frontmatter.
-2. Display: "CPO sign-off required at plan time before `/work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
-3. Note in the plan that `user-impact-reviewer` will be invoked at review-time (handled by `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
+2. Display: "CPO sign-off required at plan time before `soleur:work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
+3. Note in the plan that `soleur:engineering:review:user-impact-reviewer` will be invoked at review-time (handled by `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
 
 **Sign-off lifecycle staging — who participates at which phase:**
 
@@ -579,7 +583,7 @@ The set of mandatory leaders changes by lifecycle phase, and that is by design �
 
 - **Brainstorm phase (framing time):** CPO + CLO + CTO are spawned in parallel when `USER_BRAND_CRITICAL=true`. Rationale: the approach has not been chosen yet, so all three lenses (product blast-radius framing, legal/compliance, architectural blast-radius) need to land before the plan exists. See `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` `## User-Brand-Critical Tag Processing`.
 - **Plan phase (this gate):** CPO sign-off only. Rationale: the plan implements the approach already framed by all three brainstorm leaders; the plan-time sign-off is the single product-owner ack on the technical approach. CLO and CTO concerns from brainstorm should be reflected in the plan body (Risks section, Sharp Edges, Domain Review carry-forward) — they do not re-sign here.
-- **Review phase (PR time):** CPO is not re-invoked; instead the `user-impact-reviewer` agent enumerates failure modes against the diff. Rationale: review-time concerns are diff-shaped, not approach-shaped.
+- **Review phase (PR time):** CPO is not re-invoked; instead the `soleur:engineering:review:user-impact-reviewer` agent enumerates failure modes against the diff. Rationale: review-time concerns are diff-shaped, not approach-shaped.
 - **Ship phase (preflight Check 6):** No human sign-off; mechanical gate that the section exists and the threshold is valid.
 
 This tiered model is intentional — re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
@@ -590,15 +594,15 @@ If the threshold resolves to `none` AND the diff touches a sensitive path (canon
 
 **Step 4 — Sharp-edge note.** When emitting the final plan output, add a Sharp Edges entry:
 
-> A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `/work`.
+> A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `soleur:work`.
 
-**Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped for months because every existing gate weighed the decision on technical and convenience axes only. The framing-time enforcement here, combined with deepen-plan Phase 4.6 (halt on missing section), preflight Check 6 (ship-time gate), and the `user-impact-reviewer` conditional agent, closes the workflow-level loop.
+**Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped for months because every existing gate weighed the decision on technical and convenience axes only. The framing-time enforcement here, combined with deepen-plan Phase 4.6 (halt on missing section), preflight Check 6 (ship-time gate), and the `soleur:engineering:review:user-impact-reviewer` conditional agent, closes the workflow-level loop.
 
 ### 2.7. GDPR / Compliance Gate
 
 [skill-enforced: gdpr-gate at plan Phase 2.7]
 
-If the plan touches regulated-data surfaces (per the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex — schemas, migrations, auth flows, API routes, `.sql` files), invoke `/soleur:gdpr-gate` against the plan doc + the FR/TR sections being authored. Output is advisory-only with mandatory disclaimer; Critical findings (Art. 9 special-category, missing lawful basis, Art. 30 trigger) prompt operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
+If the plan touches regulated-data surfaces (per the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex — schemas, migrations, auth flows, API routes, `.sql` files), invoke `soleur:gdpr-gate` against the plan doc + the FR/TR sections being authored. Output is advisory-only with mandatory disclaimer; Critical findings (Art. 9 special-category, missing lawful basis, Art. 30 trigger) prompt operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
 
 **Also invoke when canonical regex misses but ANY of these hold:** (a) new processing activity using LLM/external API on operator-session-derived data, (b) brand-survival threshold `single-user incident` declared in the plan, (c) new cron/workflow that READS from `knowledge-base/project/learnings/` or `knowledge-base/project/specs/`, (d) new artifact distribution surface (plugin update, public PR body, package release). The canonical regex covers schema/auth/API code surfaces; these four expand coverage to cross-controller data-movement surfaces. **Why:** 2026-05-11 #2720 — plan touched none of the regex surfaces but added Anthropic-bound LLM-summarization of operator-session learnings + draft PRs to public repo; gate-time invocation surfaced a pre-existing Anthropic-DPA gap that no other gate caught. See `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`.
 
@@ -606,7 +610,7 @@ Skip silently if no regulated-data surface is touched AND none of the (a)-(d) tr
 
 ### 2.8. Infrastructure-as-Code Routing Gate
 
-[skill-enforced: terraform-architect at plan Phase 2.8]
+[skill-enforced: soleur:engineering:infra:terraform-architect at plan Phase 2.8]
 
 If the plan introduces infrastructure that needs to live somewhere — a server, a systemd service, a cron job, a vendor account, a DNS record, a TLS cert, a secret, a firewall rule, a monitoring webhook — route the implementation through Terraform (or another IaC mechanism already in the repo) at plan time. Do NOT bake "operator runs `ssh root@host && ...`", "operator runs `doppler secrets set X=...`", or "operator clicks through the vendor dashboard" into the plan's Implementation Phases. Per `hr-all-infrastructure-provisioning-servers`, manual provisioning is not an acceptable phase output.
 
@@ -619,9 +623,9 @@ If the plan introduces infrastructure that needs to live somewhere — a server,
 - `terraform import` of a resource that should have been created by Terraform
 - vendor-dashboard wording: "go to the [Cloudflare|Hetzner|Stripe|Doppler|Better Stack|Sentry|R2|Supabase] dashboard and …", "in the … console click …"
 - `cron`/`crontab -e`, `at <time>`, `journalctl` (when used for state, not diagnosis)
-- new vendor account signups not already routed through `service-automator` or `ops-provisioner`
+- new vendor account signups not already routed through `soleur:operations:service-automator` or `soleur:operations:ops-provisioner`
 
-**If detected, invoke `terraform-architect` with the plan draft and the detected phrases.** The agent's job is to reshape the affected Implementation Phases so the new resource lives in `apps/<app>/infra/*.tf` (extending the existing root, or creating a new one with the R2 backend per `hr-every-new-terraform-root-must-include-an`), with cloud-init/`runcmd` for first-boot config and an idempotent bootstrap script (e.g. `apps/<app>/infra/<resource>-bootstrap.sh`) for applying the change to already-running hosts without re-provisioning.
+**If detected, invoke `soleur:engineering:infra:terraform-architect` with the plan draft and the detected phrases.** The agent's job is to reshape the affected Implementation Phases so the new resource lives in `apps/<app>/infra/*.tf` (extending the existing root, or creating a new one with the R2 backend per `hr-every-new-terraform-root-must-include-an`), with cloud-init/`runcmd` for first-boot config and an idempotent bootstrap script (e.g. `apps/<app>/infra/<resource>-bootstrap.sh`) for applying the change to already-running hosts without re-provisioning.
 
 **Required output: `## Infrastructure (IaC)` section in the plan.** Mirror the `## Domain Review` heading contract. Required subsections:
 
@@ -680,7 +684,7 @@ The deliverable names:
 - the tracker's `<!-- soleur:followthrough script=… earliest=<deploy+Nd> secrets=… -->` directive + the `follow-through` label;
 - any new `secrets=` to wire into `.github/workflows/scheduled-followthrough-sweeper.yml`.
 
-This is enforced at ship time (fail-closed) by `/ship` Phase 5.5's **Soak-Gated Follow-Through Enrollment Gate** + the `ship-soak-followthrough-gate.sh` PreToolUse hook; declaring it here means the work phase builds the probe instead of /ship blocking PR-ready on a missing one. **Why:** 2026-06-29 — PR #5671 (#5673) and PR #5675 (#5689) both shipped soak-gated closures in prose with no enrollment; both trackers were left to rot until caught manually.
+This is enforced at ship time (fail-closed) by `soleur:ship` Phase 5.5's **Soak-Gated Follow-Through Enrollment Gate** + the `ship-soak-followthrough-gate.sh` PreToolUse hook; declaring it here means the work phase builds the probe instead of soleur:ship blocking PR-ready on a missing one. **Why:** 2026-06-29 — PR #5671 (#5673) and PR #5675 (#5689) both shipped soak-gated closures in prose with no enrollment; both trackers were left to rot until caught manually.
 
 #### 2.9.2. Affected-surface observability (blind execution surfaces)
 
@@ -689,7 +693,7 @@ If the plan's Files-to-Edit touch a surface the operator/agent CANNOT directly i
 - Each `detection` names an **in-surface** probe (a signal emitted FROM the sandbox/container/worker), not only a host-side layer. A host gate cannot observe a sandbox's internal state.
 - The probe's **structured fields discriminate ALL competing root-cause hypotheses in one event** (e.g. `source` / `gitKind` / `gitRevParseValid` for a host-vs-sandbox-mount split) — not a single boolean that emits for only one failure shape.
 
-This is the affected-surface extension of `hr-observability-as-plan-quality-gate` — the diagnosis-first discipline for blind surfaces, enforced at review by `observability-coverage-reviewer` §Step 4.6. **Why:** #5733 — 6 blind server-side fixes over ~2 weeks because the failing agent-sandbox surface emitted no discriminating telemetry; one in-sandbox event decided the root cause the moment it shipped. See `knowledge-base/project/learnings/best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`.
+This is the affected-surface extension of `hr-observability-as-plan-quality-gate` — the diagnosis-first discipline for blind surfaces, enforced at review by `soleur:engineering:review:observability-coverage-reviewer` §Step 4.6. **Why:** #5733 — 6 blind server-side fixes over ~2 weeks because the failing agent-sandbox surface emitted no discriminating telemetry; one in-sandbox event decided the root cause the moment it shipped. See `knowledge-base/project/learnings/best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`.
 
 ### 2.10. Architecture Decision (ADR / C4) Gate
 
@@ -714,7 +718,7 @@ If the plan makes or changes an **architectural decision**, the ADR write and th
 
 **If detected, the plan MUST emit an `## Architecture Decision (ADR/C4)` section** naming, as in-scope plan tasks:
 
-- `### ADR` — the ADR to **create or amend** via `/soleur:architecture` (number + one-line decision). New decision → new ADR; divergence from an existing one → amend that ADR's `## Decision` + add to its `## Alternatives Considered`. This is a task in the implementation phases, not a "see also." The chosen ordinal for a NEW ADR is **provisional** — a sibling PR can claim it during the pipeline (a collision surfaces as a red `adr-ordinals` on the PR after a Phase 7 sync — it is a required check — and `/ship` catches it earlier at Phase 5.5). `/ship`'s "ADR-Ordinal Collision Gate" re-verifies the next-free ordinal against `origin/main` before merge and after every Phase 7 sync; do not treat the plan-time number as final. **When you DO renumber, sweep the whole feature's artifact set for the old ordinal in the same edit** — `grep -rn 'ADR-<old>' knowledge-base/project/{plans,specs}/feat-<slug>/` — because the renumber otherwise reaches only the ADR body/seed/code while the **plan + tasks + any AC that names the ordinal** keep the stale number (a `` `ADR-<old>-*.md` exists `` AC then verifies a nonexistent file). **Why:** #5945 chose ADR-081 → renumber to ADR-082 (#5952); #5990 collided TWICE in one ~2h pipeline (087→089 at rebase, 089→090 at ship as siblings claimed each free ordinal) and the first renumber left AC12 asserting a nonexistent `ADR-087-*.md` until review caught it (`2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`).
+- `### ADR` — the ADR to **create or amend** via `soleur:architecture` (number + one-line decision). New decision → new ADR; divergence from an existing one → amend that ADR's `## Decision` + add to its `## Alternatives Considered`. This is a task in the implementation phases, not a "see also." The chosen ordinal for a NEW ADR is **provisional** — a sibling PR can claim it during the pipeline (a collision surfaces as a red `adr-ordinals` on the PR after a Phase 7 sync — it is a required check — and `soleur:ship` catches it earlier at Phase 5.5). `soleur:ship`'s "ADR-Ordinal Collision Gate" re-verifies the next-free ordinal against `origin/main` before merge and after every Phase 7 sync; do not treat the plan-time number as final. **When you DO renumber, sweep the whole feature's artifact set for the old ordinal in the same edit** — `grep -rn 'ADR-<old>' knowledge-base/project/{plans,specs}/feat-<slug>/` — because the renumber otherwise reaches only the ADR body/seed/code while the **plan + tasks + any AC that names the ordinal** keep the stale number (a `` `ADR-<old>-*.md` exists `` AC then verifies a nonexistent file). **Why:** #5945 chose ADR-081 → renumber to ADR-082 (#5952); #5990 collided TWICE in one ~2h pipeline (087→089 at rebase, 089→090 at ship as siblings claimed each free ordinal) and the first renumber left AC12 asserting a nonexistent `ADR-087-*.md` until review caught it (`2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`).
 - `### C4 views` — which C4 view(s) (Context / Container / Component) change and how (e.g., "Container: repo connection edge moves from User to Workspace"). **The workflow edits the `.c4` model files DIRECTLY** (via the `architecture` skill / Edit tool, committed in THIS feature's lifecycle — not a separate issue). The `c4-edit` flag (commit `3c8849655`) gates ONLY direct end-user edits in the in-browser webapp editor (`PUT /api/kb/c4`, default OFF); it does **not** gate a workflow and the workflow never routes through that path. Concierge **and** the Claude Code plugin terminal are equally-trusted agent contexts that edit `.c4` on the filesystem and commit — do NOT instruct the implementer to "route the C4 edit through the Concierge."
 
   **C4 completeness mandate (load-bearing — no narrow-grep escape hatch).** Before writing the `### C4 views` task (INCLUDING a "no C4 impact" conclusion), you MUST actually READ all three model files — `knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}` — not a single keyword `grep`. A `grep` for the feature's own noun (e.g. `grep email-triage`) returning zero is **NOT** evidence of "no C4 impact": the relevant elements are frequently the feature's *external actors and systems* (a human role like an inbound email sender; an integration like Resend/Stripe/Twilio; a new data store), which are named by the vendor/role, not the feature. Enumerate, for the feature, EVERY: (a) **external human actor** (who sends/receives data — correspondents, reviewers, end recipients), (b) **external system / vendor** (inbound webhook, outbound API, third-party store), (c) **container/data-store** touched, (d) **actor↔surface access relationship** that changes (e.g. single-owner → workspace-Owner-shared). For each, confirm it is already modeled; if NOT, the `.c4` edit that adds it (element + `#external` tag if outside the boundary + the relationship edges + the `view … include` line in `views.c4` so it RENDERS) is an in-scope plan task. Reviewing all three `.c4` files for *correctness* also means fixing any element description the change falsifies (e.g. a "Solo founder" actor description when the change adds multi-Owner sharing). After editing, run the C4 validation tests (`apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`) — a `view include` that references an undefined element fails there, not at `tsc`. A "no C4 impact" line in the plan MUST cite which actors/systems/relationships were checked and found already-modeled; an unsupported "None" is a reject condition. **The actor/system/relationship rubric does NOT reach the derived CARDINALITIES `model.c4` embeds in edge prose ("…across 10 workflows", "56 monitors"), which `c4-count-parity` gates as required context — so a "no C4 impact" conclusion MUST also be backed by a green `plugins/soleur/test/c4-count-parity.test.sh` run (that is its path — an earlier revision cited `apps/web-platform/test/`, where no such file exists, and #8050's planner concluded the gate was missing), not by reasoning about actors. **Why:** #7826/#7834 — adding the 56th cron monitor and the 12th heartbeat slug moved four counts on the `github -> sentry` edge and reddened the gate in a file the diff never opened.
@@ -771,6 +775,8 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 
 **Write the matrix BEFORE the guard.** A matrix derived from finished code tests the code that exists; a matrix derived from the design tests the property. This ordering is the whole point of the gate.
 
+**One row must satisfy the guard's precondition and still fail the property — and every mechanism must be validated against the tree its own REMEDIATION produces, not the tree it finds.** Enumeration rows (is the marker present, is the population derived, does the floor fire) are statements about the population's *shape*; a property of the form "X implies Y" needs a row where X holds and Y fails. Without one, the matrix is measuring its own bookkeeping. The second half is the scheduling problem: a mechanism measured against the current tree can be sound now and dead after the backfill, and nothing in the authoring loop prompts the re-check because the post-change state does not exist yet — so for each mechanism, name the mutation that defeats it *after* the change lands. When the remediation writes text, the first candidate is always **"does the remediation's own text match the classifier?"** Two corollaries: an aggregate floor cannot express a per-member property (if the property is per-member, the artifact is an inventory, not a count); and after renaming any heading a gate keys on, re-run that gate and assert the **entry count** moved, not merely that it exits 0. **Why:** #8299 — a 454-line plan whose 13 rows all tested enumeration scored `ship/SKILL.md` QUALIFIED while it still dispatched `skill: soleur:preflight`, and scored the very `soleur:trigger-cron` form that opened the issue QUALIFIED in three more skills. Its marker block contains `Skill tool` and `invokeSkill`, so the backfill made every obliged skill trigger-bearing *by the block*: leave-one-out went from 6/12 alternatives unreachable to **12/12**, and a single-alternative pattern reported all four floors green over a fully vacuous gate. Its auto-exempt "ceiling" was a net-count identity an add-one-delete-one PR satisfied exactly. Separately, appending the revision under `## v2 Guard Contract` did not match `lint-guard-contract.py`'s `^##\s+Guard\s+Contract\b`, so the lint validated only the **superseded** v1 contract and reported one entry for a file with two. See `knowledge-base/project/learnings/2026-09-18-every-mechanism-was-validated-against-the-tree-before-its-own-backfill.md`.
+
 **Reject conditions** (enforced mechanically by [lint-guard-contract.py](../../../../scripts/lint-guard-contract.py), and halted at deepen-plan Phase 4.11): the section missing while detection fires; a `## Guard Contract` heading with zero `### Guard` entries; a missing or placeholder `**Property.**` or `**Assembly.**`; a mutation matrix with fewer than 3 rows. The lint quantifies over EVERY entry, not the first.
 
 **Skip silently** when the deliverable contains no guard — a copy change, a dependency bump, a pure refactor behind existing tests.
@@ -781,11 +787,11 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 
 ### 3. SpecFlow Analysis
 
-**If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
+**If soleur:product:spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
 
 After planning the issue structure, run SpecFlow Analyzer to validate and refine the feature specification. SpecFlow is especially valuable for CI/workflow and infrastructure changes where bash conditional logic can silently drop edge cases that human review misses.
 
-- Task spec-flow-analyzer(feature_description, research_findings)
+- Task soleur:product:spec-flow-analyzer(feature_description, research_findings)
 
 **SpecFlow Analyzer Output:**
 
@@ -920,15 +926,15 @@ has already paid for once.
 
 After writing the plan file, automatically run `/plan_review <plan_file_path>` to get feedback from the reviewer panel in parallel:
 
-- **Eng panel (always):** DHH Rails Reviewer (challenges overengineering), Kieran Rails Reviewer (correctness, convention), Code Simplicity Reviewer (YAGNI) — escalating to +architecture-strategist +spec-flow-analyzer at the single-user-incident threshold.
-- **Named CEO/design/devex panel (relevance-gated):** `cpo`/`cmo` (business), `ux-design-lead` (design), `cto` (devex) — spawned only when the plan is relevant to the lens, by an independent content scan (see `plan-review/SKILL.md`). Their findings are frequently **taste**, so `plan-review` tags each consolidated decision `decisionClass ∈ {mechanical, taste, user-challenge}` per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084).
+- **Eng panel (always):** DHH Rails Reviewer (challenges overengineering), Kieran Rails Reviewer (correctness, convention), Code Simplicity Reviewer (YAGNI) — escalating to +soleur:engineering:review:architecture-strategist +soleur:product:spec-flow-analyzer at the single-user-incident threshold.
+- **Named CEO/design/devex panel (relevance-gated):** `soleur:product:cpo`/`soleur:marketing:cmo` (business), `soleur:product:design:ux-design-lead` (design), `soleur:engineering:cto` (devex) — spawned only when the plan is relevant to the lens, by an independent content scan (see `plan-review/SKILL.md`). Their findings are frequently **taste**, so `plan-review` tags each consolidated decision `decisionClass ∈ {mechanical, taste, user-challenge}` per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084).
 
 **After review completes**, present the consolidated feedback (agreements first, then disagreements), then apply by class:
 
 1. **Mechanical** findings → auto-apply to the plan file (both modes). **Fail-closed default:** auto-apply *only* a decision **explicitly tagged `mechanical`**. Treat any decision that is **unclassified, ambiguous, or sourced from a named-panel (product/market/design/devex) finding** as **Taste** — surface it, never silently auto-apply. (The producer defaults named findings to Taste, but the consumer must not depend on producer-side tagging fidelity: an untagged decision on the prose path routes to surfacing, not to auto-apply.)
 2. **Taste / User-Challenge** findings →
    - *Operator-attached* (real TTY): present at the "Apply these changes?" gate below (Yes / Partially / Skip); a **User-Challenge** uses the 5-line frame (the operator's stated direction is the default).
-   - *Headless* (reuse the mode predicate at [`plan/SKILL.md` §Product/UX Gate step 4b, ":330"] — `HEADLESS_MODE`, no-TTY, `/soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.
+   - *Headless* (reuse the mode predicate at [`plan/SKILL.md` §Product/UX Gate step 4b, ":330"] — `HEADLESS_MODE`, no-TTY, `soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.
 
 **Operator-attached apply gate** (Mechanical already applied above):
 
@@ -1013,11 +1019,13 @@ and lifecycle progression.
    ```text
    All artifacts are on disk. Paste this to resume:
 
-   /soleur:work <plan-file-path>
+   soleur:work <plan-file-path>
 
    Context: branch <branch>, worktree <worktree-path>, PR #<N>, issue #<N>.
    <one-line summary of what was already done>
    ```
+
+   Render the `soleur:<skill>` entry as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`) before printing — the operator types it into a fresh session where no routing contract is in context; no agent reads it.
 
    Replace placeholders with actual values from the session. The user must be
    able to paste the command and go without re-explaining context.
@@ -1037,21 +1045,23 @@ and lifecycle progression.
 
 ```text
 Resume prompt (copy-paste after /clear):
-/soleur:work <plan-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. Issue: #<number>. PR: #<pr-number>. Plan reviewed, implementation next.
+soleur:work <plan-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. Issue: #<number>. PR: #<pr-number>. Plan reviewed, implementation next.
 ```
+
+Render the `soleur:<skill>` entry as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`) before printing — the operator types it into a fresh session where no routing contract is in context; no agent reads it.
 
 ## Post-Generation Options
 
 After plan review, use the **AskUserQuestion tool** to present these options:
 
-**Resume prompt (MANDATORY — AGENTS.md Communication):** Before presenting the question, generate a copy-pasteable resume prompt containing: skill to run (`/soleur:work`), plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. Display it in a fenced code block so the user can paste it into a fresh session after `/clear`. This is the single most important output of the post-generation phase — without it, the user cannot resume in a new session without re-explaining context.
+**Resume prompt (MANDATORY — AGENTS.md Communication):** Before presenting the question, generate a copy-pasteable resume prompt containing: skill to run (`soleur:work`), plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. Display it in a fenced code block so the user can paste it into a fresh session after `/clear`. This is the single most important output of the post-generation phase — without it, the user cannot resume in a new session without re-explaining context.
 
-**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk. What would you like to do next?" — append " Two automatic compactions have occurred, so `/clear` before `/soleur:work` is recommended." only when a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true` is present in this session (#8323). The unconditional "run `/clear` for maximum headroom" this replaces fired identically on a session with zero compactions and on one that had lost state twice, which is the whole defect.
+**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk. What would you like to do next?" — append " Two automatic compactions have occurred, so `/clear` before `soleur:work` is recommended." only when a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true` is present in this session (#8323). The unconditional "run `/clear` for maximum headroom" this replaces fired identically on a session with zero compactions and on one that had lost state twice, which is the whole defect.
 
 **Options:**
 
 1. **Open plan in editor** - Open the plan file for review
-2. **Run `/deepen-plan`** - Enhance each section with parallel research agents (best practices, performance, UI)
+2. **Run `soleur:deepen-plan`** - Enhance each section with parallel research agents (best practices, performance, UI)
 3. **Start `soleur:work`** - Begin implementing this plan locally
 4. **Start `soleur:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
 5. **Create Issue** - Create issue in project tracker (GitHub/Linear)
@@ -1060,7 +1070,7 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 Based on selection:
 
 - **Open plan in editor** → Run `open knowledge-base/project/plans/<plan_filename>.md` to open the file in the user's default editor
-- **`/deepen-plan`** → Call the /deepen-plan command with the plan file path to enhance with research
+- **`soleur:deepen-plan`** → Call the soleur:deepen-plan command with the plan file path to enhance with research
 - **`soleur:work`** → Use `skill: soleur:work` with the plan file path
 - **`soleur:work` on remote** → Use `skill: soleur:work` with `knowledge-base/project/plans/<plan_filename>.md` to start work in background for Claude Code web
 - **Create Issue** → See "Issue Creation" section below

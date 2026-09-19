@@ -50,14 +50,14 @@ The `validate` sub-command requires a built `_site/` directory. If missing:
 
 ## Sub-command: audit
 
-Run a comprehensive SEO/AEO audit using the seo-aeo-analyst agent.
+Run a comprehensive SEO/AEO audit using the soleur:marketing:seo-aeo-analyst agent.
 
 ### Steps
 
-1. Launch the seo-aeo-analyst agent via the Task tool:
+1. Launch the soleur:marketing:seo-aeo-analyst agent via the Task tool:
 
    ```
-   Task seo-aeo-analyst: "Audit this Eleventy documentation site for SEO and AEO issues.
+   Task soleur:marketing:seo-aeo-analyst: "Audit this Eleventy documentation site for SEO and AEO issues.
    Read the site configuration, templates, and data files. Produce a structured report
    with critical issues, warnings, and passed checks. Do NOT make any changes."
    ```
@@ -73,10 +73,10 @@ Analyze gaps and apply targeted fixes to source files.
 
 ### Steps
 
-1. Launch the seo-aeo-analyst agent via the Task tool with fix instructions:
+1. Launch the soleur:marketing:seo-aeo-analyst agent via the Task tool with fix instructions:
 
    ```
-   Task seo-aeo-analyst: "Audit this Eleventy documentation site for SEO and AEO issues.
+   Task soleur:marketing:seo-aeo-analyst: "Audit this Eleventy documentation site for SEO and AEO issues.
    For each issue found, apply a fix to the source files. Read each file before editing.
    After all fixes, build the site with `npx @11ty/eleventy` and run
    `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/seo-aeo/scripts/validate-seo.sh _site` and
