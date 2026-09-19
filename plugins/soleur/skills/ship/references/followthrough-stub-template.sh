@@ -47,8 +47,19 @@ esac
 #   - HTTP probe: curl -sS -o /dev/null -w '%{http_code}' "$URL" | grep -q '^200$' && exit 0 || exit 1
 #   - SQL probe:  doppler run -- psql "$SUPABASE_URL" -c "SELECT ..." | jq ... && exit 0 || exit 1
 #   - GH probe:   gh run list --workflow <wf>.yml --status success --limit 1 --json conclusion | jq -e ... && exit 0 || exit 1
-#   - Operator-confirmed: gh issue view <N> --comments --json comments \
-#                          | jq -re '.comments[].body' | grep -qE '^RESULT: PASS$' && exit 0 || exit 1
+#   - Operator-confirmed: source the trusted-verdict lib; NEVER read .comments[].body directly.
+#       source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
+#       bodies="$(trusted_verdict_bodies <N>)" || exit 2      # rc 2 = TRANSIENT, not "no verdict"
+#       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+#       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
+#
+#     The unfiltered `.comments[].body` form this line used to show is FORGEABLE: the repo is
+#     public with issues open, so one HTTP POST of `RESULT: PASS` from any authenticated user
+#     closes the tracker (#7448). An inline `authorAssociation` filter is not the fix either —
+#     it is computed against the READING token's visibility, so a member with private org
+#     membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped
+#     silently (#6617: two months of nightly FAIL on an already-recorded verdict). It is
+#     rejected under scripts/followthroughs/ by lint-followthrough-varq-ban.sh rule 4.
 
 echo "TRANSIENT: stub not customized" >&2
 exit 2

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lint-followthrough-varq-ban.sh -- the follow-through PROBE lint. Three rules, one exit
+# lint-followthrough-varq-ban.sh -- the follow-through PROBE lint. Four rules, one exit
 # contract. Rule 1 (#6757): no probe may gate its exit on the banned `: "${VAR:?msg}"` /
 # colon-less `${VAR?msg}` word-expansion. Rule 2 (#7946): no file under the target dir may
 # name the retired credential. Rule 3 (#7490): every repo-relative path a probe assigns must
@@ -146,6 +146,36 @@ while IFS= read -r hit; do
   violations=$((violations + 1))
 done <<<"$rule2_hits"
 
+# RULE 4: no probe may FILTER on `authorAssociation`. The trusted-verdict decision belongs to
+# scripts/lib/trusted-verdict.sh and nowhere else, which is what makes "the lib is the
+# chokepoint" a fact rather than an assertion: a probe cannot re-inline its own filter and stay
+# green.
+#
+# WHY IT IS BANNED. `authorAssociation` is computed against the READING token's visibility, so
+# under the sweeper's `GITHUB_TOKEN` an org member whose membership is PRIVATE renders as
+# CONTRIBUTOR and their verdict is dropped SILENTLY. Measured on #6617: the operator posted
+# `RESULT: PASS` on 2026-07-20 and the nightly sweeper reported FAIL for two months against an
+# issue whose verdict was already recorded. Effective repository permission does not depend on
+# membership visibility, so the lib resolves that instead.
+#
+# ANCHORED ON THE FILTER SHAPE, NOT THE BARE WORD — and this is the difference between a rule
+# that can be documented and one that cannot. Rule 2 bans a bare literal everywhere including
+# comments, which is right for a credential name. Here the bare word appears in every probe's
+# header explaining WHY not to use it, so a bare-word ban would false-fire on its own rationale
+# and force the explanation out of the file (cq-assert-anchor-not-bare-token). The property is
+# "no probe FILTERS on it", so the anchors are the comparison and the `select()` — a read for
+# reporting, e.g. printing the observed value, is not a filter and is not banned.
+BANNED_FILTER='\.authorAssociation[[:space:]]*(==|!=)|select\([^)]*\.authorAssociation'
+scanned_rule4=$(find "$TARGET_DIR" -type f | wc -l)  # rule4-count
+rule4_hits=""
+rule4_hits=$(grep -rnE -- "$BANNED_FILTER" "$TARGET_DIR" | grep -vE ':[0-9]+:[[:space:]]*#' || true)  # rule4-grep
+while IFS= read -r hit; do
+  [[ -z "$hit" ]] && continue
+  f="${hit%%:*}"; rest="${hit#*:}"; lineno="${rest%%:*}"
+  echo "$f:$lineno: rule 4: filters on 'authorAssociation' -- source scripts/lib/trusted-verdict.sh and call trusted_verdict_bodies instead. authorAssociation is computed against the READING token's visibility, so a member with PRIVATE org membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped silently (#6617: two months of nightly FAIL on an already-recorded verdict)." >&2
+  violations=$((violations + 1))
+done <<<"$rule4_hits"
+
 # RULE 3: repo-relative path literals must name something that exists in the checkout.
 # The tracked set is files PLUS every ancestor directory of a tracked file, so a probe that
 # legitimately cites a DIRECTORY is not reported as a miss.
@@ -282,11 +312,17 @@ if [[ "$is_production_run" == "yes" ]] && (( scanned_rule2 < MIN_PROBES )); then
   echo "ERROR: rule 2 (retired-name ban) checked only $scanned_rule2 file(s) in $TARGET_DIR -- its walk resolved nothing; the glob or path is broken" >&2
   exit 2
 fi
+# Rule 4's own floor, keyed on ITS counter for the same reason: no rule's floor may vouch for
+# another's walk.
+if [[ "$is_production_run" == "yes" ]] && (( scanned_rule4 < MIN_PROBES )); then
+  echo "ERROR: rule 4 (authorAssociation filter ban) checked only $scanned_rule4 file(s) in $TARGET_DIR -- its walk resolved nothing; the glob or path is broken" >&2
+  exit 2
+fi
 
 if (( violations > 0 )); then
-  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1), the retired credential name (rule 2), and/or a repo-relative path absent from this checkout (rule 3). See followthrough-convention.md §Author workflow." >&2
+  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1), the retired credential name (rule 2), a repo-relative path absent from this checkout (rule 3), and/or an inline authorAssociation filter (rule 4). See followthrough-convention.md §Author workflow." >&2
   exit 1
 fi
 
-echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing)"
+echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (authorAssociation filter ban) checked $scanned_rule4 file(s))"
 exit 0

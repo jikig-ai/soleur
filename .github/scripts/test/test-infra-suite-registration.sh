@@ -110,7 +110,7 @@ EXCLUSIONS=(
 # #7068 is cleaning up. Fixing the runner's derivation is #7076; until then a new
 # subdirectory suite must be a deliberate, visible decision.
 KNOWN_UNDERIVABLE=(
-  "$INFRA_PREFIX/inngest-rls/apply-inngest-rls-dev-workflow.test.sh"
+  "$INFRA_PREFIX/inngest-rls/apply-inngest-rls-workflow.test.sh"
   "$INFRA_PREFIX/inngest-rls/inngest-rls-mutation.test.sh"
   "$INFRA_PREFIX/inngest-rls/inngest-rls.test.sh"
   "$INFRA_PREFIX/scripts/gen-github-egress-cidr.test.sh"

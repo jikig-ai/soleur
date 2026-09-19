@@ -150,25 +150,33 @@ check_no_block_comments() {
     "FORBIDDEN: /* */ block comment present — \$CODE strips only --, so every check_has here can pass against commented-out code. Use -- instead."
 }
 
-# The 14 names live in THREE places: apply-inngest-rls-dev.yml's ALLOW literal,
-# 0002's `allow` array, and ALLOW_14 here. profile_0002 asserts the SQL against
-# ALLOW_14; the WORKFLOW's copy — which drives the authoritative catalog gate and
-# the non-allowlisted report — was asserted by nothing, so it could drift silently
-# and the gate would police a different set than the migration locks down.
+# The 14 names live in THREE places: apply-inngest-rls-dev.yml's name list, 0002's
+# `allow` array, and ALLOW_14 here. profile_0002 asserts the SQL against ALLOW_14;
+# the WORKFLOW's copy was asserted by nothing, so it could drift silently.
+#
+# The workflow at that path is now the TRANSIENT #6488 drop workflow, and its name
+# list is a bash array (`NAMES=( … )`) rather than the lockdown's SQL `ALLOW="ARRAY[…]"`
+# literal — so the extraction is repointed rather than deleted. Repointed, not
+# dropped, because the property it asserts got STRONGER: in the lockdown the copies
+# drifting meant the gate policed a different set than the migration locked down; in
+# the drop workflow the same array is the single source for both the catalog
+# predicate AND the `DROP TABLE` list, so a drift here is a drift in what gets
+# DROPPED. Both this check and the whole 0002 profile are deleted in commit B, with
+# the artifacts they guard.
 check_workflow_allowlist_matches() {
   local wf_names expected
   if [[ ! -f "$DEV_WF" ]]; then
-    bad "[cross-file] dev workflow not found at $DEV_WF"
+    bad "[cross-file] transient drop workflow not found at $DEV_WF"
     return
   fi
-  wf_names="$(grep -oE '^[[:space:]]*ALLOW="ARRAY\[[^]]*\]"' "$DEV_WF" | head -1 |
-    grep -oE "'[a-z0-9_]+'" | tr -d "'" | sort | tr '\n' ' ')"
+  wf_names="$(grep -oE '^[[:space:]]*NAMES=\( [a-z0-9_ ]+ \)' "$DEV_WF" | head -1 |
+    sed -E 's/^[[:space:]]*NAMES=\( //; s/ \)$//' | tr ' ' '\n' | sort | tr '\n' ' ')"
   expected="$(printf '%s\n' "${ALLOW_14[@]}" | sort | tr '\n' ' ')"
   if [[ -n "$wf_names" && "$wf_names" == "$expected" ]]; then
-    ok "[cross-file] apply-inngest-rls-dev.yml's ALLOW literal is EXACTLY the 14 (matches ALLOW_14)"
+    ok "[cross-file] apply-inngest-rls-dev.yml's NAMES array is EXACTLY the 14 (matches ALLOW_14)"
   else
-    printf '       workflow: %s\n       expected: %s\n' "${wf_names:-<no ALLOW literal found>}" "$expected"
-    bad "[cross-file] apply-inngest-rls-dev.yml's ALLOW literal drifted from ALLOW_14 — the gate would police a different set than 0002 locks down"
+    printf '       workflow: %s\n       expected: %s\n' "${wf_names:-<no NAMES array found>}" "$expected"
+    bad "[cross-file] apply-inngest-rls-dev.yml's NAMES array drifted from ALLOW_14 — it is the single source for BOTH the catalog predicate and the DROP TABLE list, so this is a drift in what gets dropped"
   fi
 }
 

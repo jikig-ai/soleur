@@ -1348,7 +1348,7 @@ else
   #
   # Matching against the PARSED pull_request filter with fnmatch closes all of them by
   # construction, and mirrors the in-repo instrument infra-validation.yml's own comment
-  # block cites: apply-inngest-rls-dev-workflow.test.sh's `routes()`.
+  # block cites: apply-inngest-rls-workflow.test.sh's `routes()`.
   #
   # The guarded set is DERIVED by grepping this file's own `*_WF=` assignments — not a
   # restated triple. An earlier version hardcoded three variable NAMES while its comment

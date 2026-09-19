@@ -65,21 +65,46 @@ fi
 # A script must not make that call. It reads the recorded verdict instead —
 # the sanctioned operator-confirmed pattern (the script reads the human
 # verdict; the human does not read a dashboard).
-# AUTHOR FILTER — load-bearing, and NOT optional. `jikig-ai/soleur` is a PUBLIC repo with issues
-# open to the world, and this probe's exit code makes the sweeper act on the tracker. An unfiltered
-# `.comments[].body` therefore accepts a verdict from ANY authenticated GitHub user: one HTTP POST
-# of `RESULT: PASS` was enough. See #7448.
-# `--comments` and `--json` are MUTUALLY EXCLUSIVE on current gh ("specify only one of
-# --comments or --json", measured rc=1), so this read failed on every sweep and the probe
-# reported a permanent TRANSIENT. `--comments` is the flag that goes: it renders comments as
-# TEXT, which has no author field at all — dropping `--json` instead would silently remove the
-# OWNER/MEMBER/COLLABORATOR filter and let any GitHub user's comment satisfy the probe.
-comments=$(gh issue view "$ISSUE" --json comments --jq '.comments[] | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR") | .body' 2>/dev/null)
+# TRUSTED-VERDICT FILTER — load-bearing, and NOT optional. `jikig-ai/soleur` is a PUBLIC
+# repo with issues open to the world, and this probe's exit code makes the sweeper act on
+# the tracker. An unfiltered `.comments[].body` accepts a verdict from ANY authenticated
+# GitHub user: one HTTP POST of `RESULT: PASS` was enough (#7448).
+#
+# The filter is `scripts/lib/trusted-verdict.sh`, NOT an inline `authorAssociation` select.
+# `authorAssociation` is computed against the READING token's visibility, so under the
+# sweeper's `GITHUB_TOKEN` a member whose org membership is PRIVATE renders as CONTRIBUTOR
+# and their verdict is dropped silently — see the lib's header and #6617. Re-inlining an
+# `authorAssociation` select here is blocked mechanically by scripts/lint-followthrough-varq-ban.sh.
+# shellcheck source=../lib/trusted-verdict.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
+
+# TRANSIENT MEASUREMENT (this probe is deleted in commit B of the PR that closes
+# #6617). The open question the lib was written against is whether
+# `GET /repos/{owner}/{repo}/collaborators/{login}/permission` answers 200 under the
+# sweeper's `GITHUB_TOKEN`, and what `authorAssociation` that token renders for the
+# operator. #6617 is the only tracker carrying a real verdict comment from a
+# private-membership author, so it is the only available fixture — and this PR
+# deletes it. Emitted as the LAST stderr line because the sweeper's dry-run tail is
+# capped at 600 bytes, so last is the only position that survives.
+_observed_report() {
+  local obs login
+  obs="$(gh issue view "$ISSUE" --json comments --jq '
+      [.comments[] | select((.body // "") | test("^RESULT: (PASS|FAIL)"; "m"))][-1]
+      | "\(.author.login // "?")\t\(.authorAssociation // "?")"' 2>/dev/null)" || obs=""
+  login="${obs%%$'\t'*}"
+  [[ -n "$obs" ]] || { login="?"; obs="?"$'\t'"unreadable"; }
+  printf 'observed authorAssociation=%s for verdict author %s (token=GITHUB_TOKEN)\n' \
+    "${obs##*$'\t'}" "$login" >&2
+}
+trap _observed_report EXIT
+
+comments=$(trusted_verdict_bodies "$ISSUE")
 rc=$?
 if [[ $rc -ne 0 ]]; then
-  echo "TRANSIENT: could not read #$ISSUE comments (gh rc=$rc)" >&2
+  echo "TRANSIENT: could not read #$ISSUE comments or resolve a commenter's permission (rc=$rc)" >&2
   exit 2
 fi
+
 
 # LAST verdict wins, and `\b` is load-bearing. Two independent greps with PASS tested first
 # accepted `RESULT: PASSing on this for now` (no word boundary) and let an early PASS outrank a

@@ -23,6 +23,12 @@
 #   R2-M7  two hits in ONE file                                      -> exit 1, BOTH lines cited (the read loop does not stop)
 #   R2-M8  a SUPERSTRING of the name (`MY_SENTRY_AUTH_TOKEN`)        -> exit 1 (the ban is on the substring, on purpose)
 #   R2-M9  the name in a NON-.sh file in a SUBDIRECTORY              -> exit 1 (any file, any depth)
+#   R4-M1  an inline `authorAssociation` FILTER in a probe           -> exit 1, cites file AT TRUE LINE
+#   R4-M2  must-PASS: the same shape inside a COMMENT                -> exit 0 (the anchor is the filter,
+#                                                                      not the bare word -- the rationale
+#                                                                      comment must stay writable)
+#   R4-M3  DISPATCH: guard COPY with the rule-4 grep deleted         -> exit 0 on the M1 fixture
+#   R4-M4  guard COPY with rule 4's file count forced to 0           -> exit 2, diagnostic names rule 4
 #   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
 #          name + a comment about "the sweeper's Sentry secret"
 #   R2-H3  must-PASS: an EMPTY sandbox dir                         -> exit 0 (pins the sandbox floor exemption)
@@ -553,6 +559,65 @@ fi
 grep -q 'specs/archive/.*feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md' "$REPO_ROOT/scripts/followthroughs/plugin-delivery-canary-7490.sh"
 check $? "R3-M18 plugin-delivery-canary-7490.sh cites the ARCHIVE path (the repoint landed where it should)" "R3-M18 the canary does not cite the archive path"
 
+# --- R4-M1: an inline `authorAssociation` filter in a probe -> exit 1, cited at its true line.
+# This is the mechanism that replaced the per-probe filter with scripts/lib/trusted-verdict.sh;
+# without the ban, a probe can re-inline it and the lib stops being the chokepoint. ---
+d=$(mkcase r4_m1)
+cat >"$d/probe-inline-filter.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# a comment line so the offender is NOT line 3
+body=$(gh issue view 1 --json comments --jq '.comments[] | select(.authorAssociation == "OWNER") | .body')
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M1 an inline authorAssociation filter -> exit 1" "R4-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-inline-filter.sh:4:' <<<"$GUARD_OUT"; check $? "R4-M1 cites the offender at its TRUE line (probe-inline-filter.sh:4)" "R4-M1 mis-cited the offender line: $GUARD_OUT"
+grep -q 'trusted_verdict_bodies' <<<"$GUARD_OUT"; check $? "R4-M1 diagnostic names the replacement helper" "R4-M1 diagnostic does not name trusted_verdict_bodies: $GUARD_OUT"
+
+# --- R4-M2 (must-PASS): the word in a COMMENT must NOT fire. Rule 2 bans its literal everywhere
+# including comments, and that is right for a credential name. It is wrong here: every migrated
+# probe's header explains WHY authorAssociation is not used, so a bare-word ban would false-fire
+# on its own rationale and force the explanation out of the file. The anchor is therefore the
+# FILTER shape, and this row is what pins that distinction (cq-assert-anchor-not-bare-token). ---
+d=$(mkcase r4_m2)
+cat >"$d/probe-comment-only.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# Do NOT write select(.authorAssociation == "OWNER") here -- see scripts/lib/trusted-verdict.sh.
+# authorAssociation is computed against the READING token's visibility (#6617).
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R4-M2 must-PASS: the banned shape inside a comment does not fire" "R4-M2 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M3 DISPATCH: a guard COPY with rule 4's grep line deleted must go GREEN on the M1
+# fixture. Without this the row above scores only "something reddened", not "rule 4 did it". ---
+d=$(mkcase r4_m3)
+cat >"$d/probe-inline-filter.sh" <<'EOF'
+#!/usr/bin/env bash
+body=$(gh issue view 1 --json comments --jq '.comments[] | select(.authorAssociation == "OWNER") | .body')
+EOF
+R4_GUARD="$SANDBOX/guard-no-rule4.sh"
+sed '/# rule4-grep/d' "$GUARD" >"$R4_GUARD"
+if diff -q "$GUARD" "$R4_GUARD" >/dev/null; then
+  check 1 "" "R4-M3 DISPATCH: the rule4-grep marker is absent from the guard -- the mutation did not land and the row is vacuous"
+else
+  R4_OUT="$(bash "$R4_GUARD" "$d" 2>&1)"; R4_RC=$?
+  (( R4_RC == 0 )); check $? "R4-M3 DISPATCH: deleting the rule-4 grep makes the M1 fixture pass -- that grep IS the mechanism" "R4-M3 expected exit 0 from the gutted guard, got $R4_RC: $R4_OUT"
+fi
+
+# --- R4-M4: rule 4's OWN floor. Forcing its file count below the min-cardinality floor must
+# exit 2 with a diagnostic naming RULE 4 -- no other rule's floor may vouch for its walk. ---
+R4F_GUARD="$SANDBOX/guard-rule4-zero.sh"
+sed 's|^scanned_rule4=.*# rule4-count$|scanned_rule4=0  # rule4-count|' "$GUARD" >"$R4F_GUARD"
+if diff -q "$GUARD" "$R4F_GUARD" >/dev/null; then
+  check 1 "" "R4-M4 the rule4-count marker is absent -- the mutation did not land and the row is vacuous"
+else
+  R4F_OUT="$(bash "$R4F_GUARD" 2>&1)"; R4F_RC=$?
+  (( R4F_RC == 2 )); check $? "R4-M4 rule 4's own floor breach -> exit 2" "R4-M4 expected exit 2, got $R4F_RC: $R4F_OUT"
+  grep -q 'rule 4 (authorAssociation filter ban)' <<<"$R4F_OUT"; check $? "R4-M4 the floor diagnostic names RULE 4 specifically" "R4-M4 diagnostic does not name rule 4: $R4F_OUT"
+fi
+
 # --- Accounting (ADR-193). Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it polices cannot report the fault that corrupted it. ---
 if (( passes + fails != asserted )); then
@@ -570,8 +635,8 @@ fi
 # verdict without dropping the count" is true of pass()/fail() and FALSE of check() itself:
 # `asserted` is incremented INSIDE check, so both backstops are dispatched through the one
 # helper they exist to police. Measured 2026-09-18: `check() { asserted=$((asserted+1)); pass "$2"; }`
-# -- a one-branch edit on the single call site of all 73 verdicts -- reported
-# `=== 73 passed, 0 failed (73 asserted, floor 73) === PASSED`, exit 0, byte-identical to the
+# -- a one-branch edit on the single call site of all 80 verdicts -- reported
+# `=== 80 passed, 0 failed (80 asserted, floor 80) === PASSED`, exit 0, byte-identical to the
 # honest run. So does `fail() { passes=$((passes+1)); ... }`. This block catches both.
 _p=$passes _f=$fails _a=$asserted _n=${#FAILURES[@]}
 if (( _n > 0 )); then _saved=("${FAILURES[@]}"); else _saved=(); fi
@@ -585,7 +650,7 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=73
+MIN_ASSERTIONS=80
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

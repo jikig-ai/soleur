@@ -111,7 +111,7 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
 KNOWN_UNDERIVED=(
   apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
   apps/web-platform/infra/workspaces-luks-loopback.test.sh
-  apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
+  apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh
   apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
   apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
   apps/web-platform/infra/scripts/gen-github-egress-cidr.test.sh

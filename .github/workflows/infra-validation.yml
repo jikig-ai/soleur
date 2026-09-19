@@ -58,11 +58,13 @@ on:
       # workflow's poll budget; without this path the guard never fires on
       # client-side edits (deploy-script-tests job is ungated).
       - ".github/workflows/restart-inngest-server.yml"
-      # apply-inngest-rls-dev-workflow.test.sh asserts the PAIR of RLS apply
-      # workflows (path routing, project pinning, issue/concurrency identity).
-      # Without these paths, an edit to either workflow — including re-widening
-      # the prd `paths:` glob that used to auto-apply 0001 to Inngest prd — would
-      # never run the guard that catches it.
+      # apply-inngest-rls-workflow.test.sh asserts the prd RLS apply workflow
+      # (path routing, project pinning, identity preflight, gate semantics).
+      # Without this path, an edit to it — including re-widening the `paths:`
+      # glob that used to auto-apply 0001 to Inngest prd — would never run the
+      # guard that catches it. The dev-workflow path is still listed because
+      # apply-inngest-rls-dev.yml exists for one more commit (it is the transient
+      # #6488 drop workflow) and is deleted, with this line, in commit B.
       - ".github/workflows/apply-inngest-rls.yml"
       - ".github/workflows/apply-inngest-rls-dev.yml"
       # (#7025) git-data-rung2-rehearsal.test.sh reads THREE workflows and asserts ~64
@@ -1495,8 +1497,8 @@ jobs:
       - name: Run inngest-rls lockdown SQL shape guards
         run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
 
-      - name: Run apply-inngest-rls{,-dev}.yml workflow shape guards
-        run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
+      - name: Run apply-inngest-rls.yml workflow shape guards
+        run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh
 
       # (#3366) This step is the ONLY thing that makes the advisor-scan shape
       # guard run in CI: this workflow hand-enumerates every .test.sh and has no
