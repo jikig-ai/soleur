@@ -14,6 +14,21 @@
 # accountant's name and direct line pass a secrets gate clean. And the `## Answers` section is filled
 # in by hand, after the skill has finished, by a founder pasting an email. No step covers that.
 #
+#
+# IT READS THE WORKING TREE, NOT THE STAGED BLOB, AND THAT IS A REAL HOLE — stated here because the
+# word this guard prints is "clean". lefthook hands `{staged_files}` as PATHS; every read below
+# (`head`, `awk`, `grep`) opens the file on disk. So: stage a poisoned entry, correct the worktree
+# copy, commit. The guard reports clean and the poisoned blob lands, with no `--no-verify` and no
+# `LEFTHOOK=0` — a bypass the DISPATCH enumeration above does not list. Measured on both this guard
+# and its questionnaire sibling. Partial staging gives the inverse: a false positive on content that
+# is not being committed.
+#
+# NOT FIXED HERE, deliberately. Reading `git show :<path>` instead is not a drop-in — it is correct
+# for the pre-commit arm and wrong for the other two (`--all` and `{push_files}` have no index entry
+# to read), and "check the staged blob" trades this false negative for the partial-stage false
+# positive rather than closing the class. The honest answer is to check BOTH, per arm, which is a
+# change to every content lint in this repository rather than to this one; the convention is
+# repo-wide. Carried as a review finding with this disclosure as its disposition.
 # SO THIS IS A FLOOR, NOT A SOLUTION, and the distinction is the honest part. It catches the shapes
 # that are mechanically recognisable — an email address, a long-form telephone number, a
 # signature-block salutation. It cannot catch a bare personal name, which is the most likely leak and
