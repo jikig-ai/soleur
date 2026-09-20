@@ -592,7 +592,7 @@ restructure scope the work target named explicitly ("its length, plus cheap bool
 for a leading code fence, presence of a `--- `/`+++ ` header pair, and presence of an
 `@@` hunk"), which makes them a User-Challenge rather than a mechanical
 simplification: they are recorded in
-`knowledge-base/project/specs/feat-one-shot-8427-diff-underivable-enum-split/decision-challenges.md`
+`knowledge-base/project/specs/archive/20260920-190851-feat-one-shot-8427-diff-underivable-enum-split/decision-challenges.md`
 for the operator to decide, and the plan implements the four fields as specified.
 What is **not** deferred is the false claim the draft attached to them: `len` and
 `hunk` do not discriminate anything at the apply arm (see the Overview), and the plan
