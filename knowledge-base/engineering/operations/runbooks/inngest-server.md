@@ -455,6 +455,12 @@ orphaning the scan). Triage off-box (no SSH):
    legitimately halts at its `registry_empty` precondition on the dark pre-cutover host
    (the `registry_empty` precondition check in the `verify)` arm of `cutover-inngest.yml`) — that is a verdict, not a transport hang, and a green op=verify
    job is a post-#6178 concern. Do NOT read a `registry_empty` halt as a pre-flight hang.
+   Two more readings that look like verdicts and are not (#8079): a standalone `op=registry-probe`
+   run that exits **0 without a `registry_empty=` line** printed a HOST-STATE VERDICT — the host was
+   dark and graded from its own rows; the registry was never read, and the run's own `::warning::`
+   says so. And a red `restart-inngest-server` run is a statement about the **restart workflow**,
+   not about this host — it can go red on the shared `deploy-inngest-restart` group's queue, on
+   its own gate, or on the web unit, none of which the dedicated host's rows would show.
 
 ### Inspecting inngest-server's connection log
 
@@ -1073,7 +1079,29 @@ ADR-100, amendment 2026-09-14.
 > redeployed. Nothing is persisted for a reminder that is refused in the window: the caller must
 > retry, and `op=rearm` re-arms only what the quiesce captured.
 >
-> 1. **(a) Confirm the dedicated host is ready.** The first `op=execute` must have passed 2.0 (the
+> 1. **(a) Confirm the dedicated host is ready.** Two readings, cheapest first.
+>
+>    **Before dispatching either, know the queue you are joining.** `cutover-inngest.yml` shares the
+>    `deploy-inngest-restart` concurrency group with the watchdog's auto-restart (`cancel-in-progress:
+>    false`, see §Concurrency conventions). During the incident this reading diagnoses — a dedicated
+>    host that is not answering — the watchdog may be dispatching restarts on that group, and each one
+>    serialises AHEAD of your diagnostic dispatch. A `queued` run is the queue, not a hang: read the
+>    group's in-flight run first (`gh run list --workflow scheduled-inngest-health.yml --limit 1`).
+>
+>    The cheaper reading is the standalone diagnostic (#8079): `gh workflow run cutover-inngest.yml
+>    -f op=registry-probe`. It is read-only and dispatchable outside any window. Read its run:
+>
+>    ```bash
+>    gh run view <op=registry-probe run id> --log | grep -E '::notice::registry-probe|::error::registry-probe'
+>    ```
+>
+>    A `registry_empty=` line is the **live measurement** (the host answered). A `HOST-STATE VERDICT:
+>    dark` notice at exit 0 is **not** — it says nothing can have registered since that boot, and
+>    its warning says what was not measured. Any `REFUSED (…)` line names its own remedy; none of
+>    them tells you to SSH or to dispatch a mutating op. The op cannot open the window and cannot
+>    stand in for 2.0's gate — it answers a weaker question.
+>
+>    The gating reading is 2.0 itself. The first `op=execute` must have passed it (the
 >    dedicated-host registry pre-flight). Read it from that run:
 >
 >    ```bash
@@ -1654,9 +1682,11 @@ ADR-100, amendment 2026-09-14.
 
 ### 2.0 registry-non-empty remediation (P1-6)
 
-If `op=execute` aborts at 2.0 with `registry-probe: dark registry NON-empty`, the dark host has
-functions registered against it — flipping now would carry stray state onto prod Postgres. To
-empty the dark registry and re-run (all no-SSH):
+If `op=execute` aborts at 2.0 with `registry-probe: dark registry NON-empty` — or a standalone
+`op=registry-probe` prints `registry_empty=false` with the `REGISTERED function(s)` warning (#8079;
+same hook, same reading, no window needed) — the dark host has functions registered against it —
+flipping now would carry stray state onto prod Postgres. To empty the dark registry and re-run
+(all no-SSH):
 
 1. Read `INNGEST_POSTGRES_URI` on `soleur-inngest/prd` and record which backend it targets.
    **Do NOT assert it should still be non-prod** — that instruction was correct only before the
