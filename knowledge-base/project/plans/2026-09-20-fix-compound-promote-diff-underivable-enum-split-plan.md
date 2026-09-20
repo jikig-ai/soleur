@@ -1,5 +1,5 @@
 ---
-title: "fix(compound-promote): split diff-underivable by emit site and carry detail into the outcome marker"
+title: "fix(compound-promote): split diff-underivable by emit site and record the diff shape"
 date: 2026-09-20
 slug: fix-compound-promote-diff-underivable-enum-split
 branch: feat-one-shot-8427-diff-underivable-enum-split
@@ -12,6 +12,46 @@ domain: engineering
 brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
 ---
+
+> ## [DOCUMENT-LEVEL SUPERSESSION — 2026-09-20, review panel]
+>
+> **This plan was written against a design that did not ship.** The draft carried git's
+> `detail` string in `refusal_detail[]` behind a redact → classify → cap transform. Review
+> falsified that transform end to end: `classifyPaths`'s `PATH_TOKEN_RE` required a `/`, so a
+> repository-ROOT filename — which the model names freely and `git diff-index` emits unquoted,
+> spaces included — passed through byte for byte. **The field was removed, not re-controlled.**
+> `scripts/checks/compound-promote-reason-sites.sh` was deleted in the same round.
+>
+> **The rule, rather than a list** — a list is what got this wrong once already, and an
+> off-by-one in an enumeration reads as a blessing:
+>
+> **Any statement in this document is SUPERSEDED if its subject is (a) a
+> `refusal_detail[].detail` free-text field, (b) any part of the transform chain that was to
+> bound it (`classifyPaths`, `transformDetail`, `DETAIL_CAP`, `[unclassified-path]`,
+> `[slug-elided]`, the redaction straddle rows, the tail-drop degradation flag), or (c)
+> `scripts/checks/compound-promote-reason-sites.sh`.** This governs every section — the
+> *Files to Edit* and *Files to Create* tables, the Acceptance Criteria, the Test Scenarios
+> matrix, the Guard Contract, and the `## Observability` block alike.
+>
+> **What shipped**, and what the merged tree is graded against: `RefusalDetailEntry` is
+> `{cluster_hash, reason, diff_len?, diff_fenced?, diff_header_pair?, diff_hunk?}` — numbers,
+> booleans and a fixed enum, no free-text limb at any arm. The full diagnostic still reaches
+> Sentry via `reportSilentFallback`, scrubbed by `redactGithubSourcedText` and capped by
+> `safeDetail`. Guard 3 of
+> `apps/web-platform/test/server/inngest/cron-compound-promote-outcome-marker.test.ts` is the
+> replacement pin.
+>
+> **One statement in this document is not merely superseded but AFFIRMATIVELY FALSE, and is
+> called out because a superseded-by-rule reading would not catch it.** Acceptance criterion
+> **11** says `spawnGitCapture`'s stderr accumulator "is raised to 64,000". It is not:
+> `cron-compound-promote.ts` reads `stderr = (stderr + chunk).slice(0, 4096)` under a comment
+> beginning *"The bound stays at 4096."* The raise was reverted because `MAX_INPUT_LEN` is
+> ALSO 64,000 and its guard is `> MAX_INPUT_LEN`, so the raise made this slice the silent cut
+> it claimed to remove — and every consumer head-anchors at 200 characters anyway. The same
+> reverted prescription survives in the D-section prose.
+>
+> **Grade against the merged tree, never against this document.** Criteria are retained
+> verbatim as the record of what was planned; a dated record is append-only.
 
 ## Enhancement Summary
 
@@ -313,7 +353,7 @@ The realistic exposure is a repository path — and, for a diff targeting the
 learnings corpus, a filename slug that is operator-authored prose and can name an
 incident or a person.
 
-**Brand-survival threshold:** aggregate pattern
+- **Brand-survival threshold:** `aggregate pattern`
 
 One refused cluster's bounded git stderr in a log sink is not a user incident; the
 harm shape is a pattern of steadily widening what an already-noisy channel carries
@@ -565,6 +605,10 @@ the handler's refusal branch so it can cover refusals that never enter
 
 ## Files to Edit
 
+> **Read with the DOCUMENT-LEVEL SUPERSESSION banner at the head of this file.** Several
+> rows below prescribe the `detail` free-text limb and its transform chain, which were
+> removed rather than shipped. A *Files to Edit* row reads as delivery; these are record.
+
 Paths are cited with **content anchors** — an `it(` title, a fixture literal, a
 symbol — rather than line numbers, because this PR itself moves every line in the
 suites it edits (`cq-cite-content-anchor-not-line-number`).
@@ -794,6 +838,13 @@ reviewed separately from the predicate.
 
 ### Guard 3 — The marker's `detail` boundary
 
+> **[SUPERSEDED — there is no `detail` boundary; there is no `detail`.]** The shipped
+> Guard 3 asserts the stronger property that NO free-text field reaches the row even when a
+> caller supplies one, that entries are rebuilt field-by-field rather than spread, that the
+> rebuild is total, that the 20-entry cap holds, and that a worst-case row stays under
+> `vector.toml`'s 10,000-byte slice. The Property statement and mutation matrix below describe
+> the unshipped transform. Read the suite, not this section.
+
 **Property.** No text written into `refusal_detail[].detail` on an emitted marker row
 is a control character (C0, C1, DEL, or a Unicode line/paragraph separator), exceeds
 200 characters, matches a credential / email / phone / UUID shape, or relays a
@@ -975,32 +1026,43 @@ logs:
     MaxRetentionSec rather than by either, which is a third retention and is recorded
     in the Encryption Posture block.
 discoverability_test:
-  command: bash scripts/checks/compound-promote-reason-sites.sh
-  expected_output: "COMPOUND_PROMOTE_REASON_SITES_OK"
+  command: >-
+    bash -c 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh
+    --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50
+    | jq -R -r "fromjson? | (.raw|fromjson?).message
+    | select(type == \"object\" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true
+    and .fn == \"cron-compound-promote\") | .refusal_detail[]? | .reason" | sort -u'
+  expected_output: "one line per distinct refusal reason actually emitted (diff-empty, diff-underivable-apply, ...). A non-empty set proves an operator can read WHICH checkDiffPaths site fired without SSH — the property this PR adds. An empty set over a window that DOES contain outcome rows means refusal_detail never reached the sink."
+  credentials_required: "BETTERSTACK_QUERY_HOST / BETTERSTACK_QUERY_USERNAME / BETTERSTACK_QUERY_PASSWORD (read-only Logs SQL) - the property is the CONTENT of warehouse rows the cron POSTs, and that sink has no unauthenticated read path; grepping the emitter source would verify the diff, not the delivery"
 ```
 
-**Why the probe is a committed script and not a grep pipeline.** The first draft
-declared a six-token comma-separated `expected_output` against an inline `grep`.
-Measured against Check 10's own matcher — `matchExpected` in
-`plugins/soleur/test/lib/discoverability-test-parser.ts`, which is
-`tokens.some((tok) => normalized.includes(tok))` — **any one** surviving token makes
-the probe PASS, so five of the six emit sites could be reverted and the probe would
-stay green. A second defect: the inline regex matched only single-line returns, and
-the two `underivable-unparsable-record` returns grow past 100 characters, so a
-formatter wrapping them removes their literal from stdout with no effect on the
-verdict.
-
-`scripts/checks/compound-promote-reason-sites.sh` is committed in the same PR. It
-derives the emitted set from the `checkDiffPaths` window (tolerating multi-line
-returns), compares it for **exact set identity** against the declared union, and
-prints the single token `COMPOUND_PROMOTE_REASON_SITES_OK` only on a match — so a
-one-token matcher and an exact-identity check coincide. First token `bash` is on
-Check 10's `PROBE_VERB_ALLOWLIST`; it is a small script, not a suite, and finishes
-far inside the 15-second cap. No SSH, no network, no credentials — so no
-`credentials_required` waiver is claimed and `BASELINE_DECLARED_PROBES` in
-`plugins/soleur/test/preflight-discoverability-test.test.ts` is unchanged. A
-`vitest -t`-filtered behavioural probe was considered and declined: it risks the
-15-second cap, where a timeout reports identically to a down endpoint.
+> **[SUPERSEDED 2026-09-20 by the review panel.]** This block previously declared
+> `bash scripts/checks/compound-promote-reason-sites.sh` with
+> `expected_output: "COMPOUND_PROMOTE_REASON_SITES_OK"`, and argued at length that a
+> committed script beat a grep pipeline. **That script is not in this change** — review
+> measured it printing its OK token vacuously (see the superseded banner under *Files to
+> Create*), and the AST census in
+> `apps/web-platform/test/server/inngest/cron-compound-promote-outcome-census.test.ts`
+> already pins the site-keyed multiset it could never see.
+>
+> The replacement above is the same probe the #8281 and #8392 plans declare against this
+> same marker, projected one level deeper: it reads `refusal_detail[].reason`, which is
+> exactly what this PR adds. It carries `credentials_required` because the property under
+> test is the CONTENT of warehouse rows in Better Stack Logs source 2457081, and that sink
+> has no unauthenticated read path — so preflight Check 10 SKIP-DECLAREs it rather than
+> executing it, and `BASELINE_DECLARED_PROBES` in
+> `plugins/soleur/test/preflight-discoverability-test.test.ts` rises 16 -> 17 as the
+> reviewable diff line that waiver's drift control depends on.
+>
+> A source-invariant probe was reconsidered and declined a second time, and the reason is the
+> DUPLICATION, not the sandbox. The census suite is the authority; re-deriving its comparison
+> as a standalone probe is what produced `compound-promote-reason-sites.sh`, whose weaker
+> re-derivation printed its OK token vacuously. Running the census ITSELF as the probe is
+> additionally impossible here — it is a vitest suite, and `bun`/`node`/`npx` all resolve under
+> `/home/.../mise`, which the bwrap sandbox replaces with a tmpfs. Note this rc=127 argument
+> covers only the TS runners: `/usr/bin/python3`, `/usr/bin/jq` and `/usr/bin/curl` DO resolve
+> inside the sandbox, so a reimplementation in one of those would have executed. It would also
+> have been the duplicate this paragraph declines.
 
 ## Architecture Decision (ADR/C4)
 
@@ -1063,8 +1125,11 @@ at_rest:
       control, not an encryption one.
     disclosed_as: >-
       Processing Activity 8 in knowledge-base/legal/article-30-register.md, whose
-      (c) categories cell this PR amends to name refusal_detail[].detail and the
-      diff-shape fields.
+      (c) categories cell this PR amends to name the four diff-shape fields
+      (diff_len, diff_fenced, diff_header_pair, diff_hunk) and to record that the
+      refusal_detail[].detail free-text limb was proposed and then REMOVED. An
+      earlier revision of this line said the cell names refusal_detail[].detail;
+      it does not, and the shipped cell is the correct one.
     live_verification: >-
       The authenticated POST probe above pins the ingesting region; retention and
       recipient are read from the register's Vendor / Sub-Processor Mapping. No
@@ -1126,6 +1191,24 @@ to deep-dive, and no `## Hypotheses` section is owed.
 Rows in the suites are named by their `it(` title or fixture literal, never by line
 number: this PR moves every line in the files it edits
 (`cq-cite-content-anchor-not-line-number`).
+
+> **[SUPERSEDED BY RULE — see the DOCUMENT-LEVEL SUPERSESSION banner at the head of this
+> file.]** These criteria were written against the `refusal_detail[].detail` free-text limb
+> and its transform chain, which review deleted rather than re-controlled. Apply the rule
+> stated in that banner to each criterion; do not read the presence of a criterion here as
+> evidence it was delivered.
+>
+> **Criterion 11 is affirmatively FALSE, not merely superseded** — the stderr bound is 4096,
+> not 64,000; see the head banner. Criteria whose subject survived the deletion (the
+> discriminator-key placement after the `...outcome` spread, the total field-by-field rebuild,
+> the Sentry `extra` widening, the Vector byte budget, the C1 strip class, the removal of
+> `detail` from the sibling ctx-logger line) DID ship and are graded by live rows in the
+> marker and census suites — but verify each against the merged tree rather than against this
+> paragraph. An earlier revision of this banner tried to enumerate both sets and got the
+> membership wrong in both directions, which is why it now states a rule instead.
+>
+> Criteria are retained verbatim as the record of what was planned
+> (`hr-when-a-workflow-concludes-with-an` — a dated record is append-only).
 
 1. `DiffPathVerdict["reason"]` declares eight values, and the site-keyed multiset of
    `reason` literals carried by `ok: false` returns inside `checkDiffPaths` matches
@@ -1341,6 +1424,11 @@ rather than reimplements are the existing `refusalDetail` accumulator and its si
 push site.
 
 ## Test Scenarios
+
+> **Read with the DOCUMENT-LEVEL SUPERSESSION banner at the head of this file.** Rows whose
+> subject is `detail`, the classifier, `[unclassified-path]`, the tail-drop degradation flag,
+> or `compound-promote-reason-sites.sh` describe the unshipped design. The rows that survived
+> are graded by the marker and census suites, not by this table.
 
 Every fixture below is either measured against git 2.55.0 in this worktree, or
 explicitly marked as owed a measurement. None is guessed.
