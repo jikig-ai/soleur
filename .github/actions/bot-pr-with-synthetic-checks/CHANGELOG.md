@@ -4,6 +4,20 @@ Composite-action behavior log. No test runner exists for composites in this
 repo, so backward-compat is asserted by reading existing callers and verifying
 their input set is unchanged. See `action.yml` for the live contract.
 
+## 2026-09-20 — ALLOWED_PATHS drops rule-metrics.json (#8377)
+
+`knowledge-base/project/rule-metrics.json` was removed from `ALLOWED_PATHS`. ADR-230
+reclassified it as an untracked cache (it aggregates gitignored local incident data per
+ADR-091, so the committed copy only ever reflected the worktree that last ran the
+aggregator), and `.github/workflows/rule-metrics-aggregate.yml` — the only workflow that
+staged it — was deleted in the same change. A bot PR can no longer produce that path at
+all, so the array entry was unreachable machinery.
+
+Earlier entries below reference `rule-metrics-aggregate.yml` and the two-member
+`ALLOWED_PATHS`; they are left as written because they were accurate when made. Every
+unreachability argument that named the two-member set still holds — removing a member can
+only shrink an intersection.
+
 ## v3 (2026-07-05)
 
 Issue: #6049. Plan:

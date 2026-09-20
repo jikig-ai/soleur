@@ -52,6 +52,36 @@ done
 ROOT="${RULE_METRICS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 METRICS="$ROOT/knowledge-base/project/rule-metrics.json"
 
+# ── BUILD THE METRICS FILE BEFORE READING IT (#8377 / ADR-230) ─────────────────────────────
+# rule-metrics.json is no longer committed. ADR-091 keeps the raw incident data local and
+# gitignored, so the aggregate was only ever a snapshot of whichever worktree last ran the
+# aggregator and committed it -- which is also why it conflicted on nearly every merge. It is
+# now an untracked cache, which means the honest default state on a fresh clone is ABSENT.
+#
+# Exiting 2 with "run the aggregator first" would make that the operator's problem for a file
+# this script knows how to build. Build it.
+#
+# SKIPPED WHEN RULE_METRICS_ROOT IS SET, and that conjunct is load-bearing: tests and CI point
+# that variable at a fixture they have already written, and regenerating over it would replace
+# the fixture with a scan of the real machine.
+if [[ -z "${RULE_METRICS_ROOT:-}" && -f "$SCRIPT_DIR/rule-metrics-aggregate.sh" ]]; then
+  _agg_log="$(mktemp)"
+  _agg_rc=0
+  bash "$SCRIPT_DIR/rule-metrics-aggregate.sh" >"$_agg_log" 2>&1 || _agg_rc=$?
+  if [[ "$_agg_rc" -ne 0 ]]; then
+    # REMOVE A PARTIAL WRITE. An aggregator that dies mid-write leaves truncated JSON, and the
+    # schema check below would then report it as a CORRUPT metrics file -- sending the operator
+    # to inspect data when the fault is in the producer. Delete it so the cause is the only
+    # thing reported.
+    rm -f "$METRICS"
+    echo "ERROR: aggregator failed (rc=$_agg_rc); rule-metrics.json not built." >&2
+    sed 's/^/  /' "$_agg_log" >&2
+    rm -f "$_agg_log"
+    exit 2
+  fi
+  rm -f "$_agg_log"
+fi
+
 [[ -f "$METRICS" ]] || { echo "ERROR: $METRICS not found — run scripts/rule-metrics-aggregate.sh first." >&2; exit 2; }
 
 # Schema contract: make SCHEMA_VERSION load-bearing at the consumer

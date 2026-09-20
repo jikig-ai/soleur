@@ -185,7 +185,9 @@ report on the `merge_group` temp ref, and it merges without stalling. **NOTE: as
 of 2026-07 this step is known to FAIL for `CodeQL` while it is a required check
 (codeql-action#1537) — that is exactly the deadlock. This canary is only runnable
 once CodeQL is either advisory or #1537 is fixed** (see the status note at the top
-of this section). Then confirm a `rule-metrics-aggregate.yml` bot PR flows through
+of this section). Then confirm a `weakness-miner.yml` bot PR flows through (it replaced
+`rule-metrics-aggregate.yml` as the canary when #8377 deleted that workflow — it is now the
+only bot PR workflow using the composite action)
 (CLA synthetics cover its CLA contexts — restore `merge-queue-cla-synthetics.yml`
 first, removed after the revert), and that the stall probe
 (`merge-queue-stall-check.yml`, also removed after the revert — restore it) has

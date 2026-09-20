@@ -298,20 +298,14 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
    B_TOTAL is informational only — the per-turn cost is `AGENTS.md`, the per-session-first-turn cost is the always-loaded payload the linter reports. Since ADR-151 there are no conditional sidecars, so `B_TOTAL == B_ALWAYS` and every rule is a first-turn cost on every session.
 
-   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it **for real** — compound is the authoritative local producer of `knowledge-base/project/rule-metrics.json` (ADR-091): it runs on the operator's machine where `.claude/.rule-incidents.jsonl` actually exists, so it, not a fresh-checkout CI cron, generates the metric. Stage the aggregate **only if it changed** (`git diff --quiet -- <OUT> || git add <OUT>`) so it lands in this session's compound commit; then parse `summary.rules_unused_over_8w` for the informational hint below. Only the redaction-safe aggregate (rule_id + counts + a 50-char public prefix) is committed — never the raw `command_snippet` log. On zero rule-carrying lines the aggregator no-ops (issue #6042), leaving the committed file untouched. Do not fail the phase if the aggregator is missing or errors, but do NOT silently swallow a crash — a stderr line tells the reader why the write/hint is absent:
+   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it **for real** — compound is the authoritative local producer of `knowledge-base/project/rule-metrics.json` (ADR-091): it runs on the operator's machine where `.claude/.rule-incidents.jsonl` actually exists, so it, not a fresh-checkout CI cron, generates the metric. **Nothing is staged.** The aggregate is an untracked cache since #8377 / ADR-230 — committing it was self-defeating, because a file rewritten by whichever worktree last ran the aggregator conflicts with every other open branch, and the committed copy was never more than one machine's snapshot anyway. Run it for the local file and the hint, then parse `summary.rules_unused_over_8w`. Readers build it themselves: [rule-prune.sh](../../../../scripts/rule-prune.sh) runs the aggregator ahead of its own read. Only the redaction-safe aggregate (rule_id + counts + a 50-char public prefix) is ever written — never the raw `command_snippet` log. On zero rule-carrying lines the aggregator no-ops (issue #6042), leaving the existing file untouched. Do not fail the phase if the aggregator is missing or errors, but do NOT silently swallow a crash — a stderr line tells the reader why the write/hint is absent:
 
    ```bash
    if [[ -x ./scripts/rule-metrics-aggregate.sh ]]; then
      OUT=knowledge-base/project/rule-metrics.json
      if bash ./scripts/rule-metrics-aggregate.sh >/dev/null 2>&1; then
-       # Conditional stage: skip unchanged (jq refactor no-diff) and no-op
-       # (zero rule-carrying lines) runs; stage only a real content change.
-       if git diff --quiet -- "$OUT"; then
-         echo "rule-metrics: $OUT unchanged; not staged." >&2
-       else
-         git add "$OUT"
-         echo "rule-metrics: $OUT changed; staged for the compound commit." >&2
-       fi
+       # NOT staged: $OUT is gitignored (ADR-230). It is a local cache read by
+       # scripts/rule-prune.sh, which regenerates it itself before reading.
        unused=$(jq -r '.summary.rules_unused_over_8w // "unknown"' "$OUT" 2>/dev/null || echo unknown)
        if [[ -n "$unused" && "$unused" != "0" && "$unused" != "unknown" ]]; then
          echo "[INFO] $unused rules recorded no ENFORCEMENT event (warn/deny/bypass/applied) in 8 weeks. NOT a retirement shortlist — not retirement evidence: an obeyed rule emits nothing, so this count nominates the best-obeyed rules first. Headroom comes from editorial trims or from migrating domain-scoped rules to their enforcing skill (cq-agents-md-tier-gate; checklist in the header of scripts/migrated-rule-ids.txt)."
@@ -319,10 +313,12 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
      else
        # The aggregator's orphan gate exits AFTER writing (CI forensic context),
        # so a failed run may have left a partial/orphan-flagged rule-metrics.json
-       # in the working tree. Revert it so a later blanket `git add -A
-       # knowledge-base/` (compound-capture consolidation) cannot stage a
-       # rejected aggregate.
-       git checkout -- "$OUT" 2>/dev/null || true
+       # on disk. REMOVE it rather than reverting: `git checkout -- "$OUT"` cannot
+       # restore an untracked file (it exits non-zero with "did not match any
+       # file"), so the partial would have survived. Deleting it makes the next
+       # reader rebuild from scratch, which is the only correct recovery for a
+       # cache with no committed copy to fall back to.
+       rm -f "$OUT"
        echo "[WARN] rule-metrics-aggregate.sh failed; reverted any partial write, skipped the unused-rules hint." >&2
      fi
    fi
@@ -513,7 +509,7 @@ If no artifacts are found for the feature slug, consolidation is skipped silentl
 
 **Do not skip this consolidation when driving compound's phases by hand.** The mechanism that durably archives is `archive-kb.sh` (`git mv` + a commit); this consolidation is its *automatic, unprompted* invoker, and `soleur:archive-kb` is a first-class manual one. `cleanup-merged` is NOT one — ship/SKILL.md Phase 7 Step 4 explains why — so an artifact left at a live path here stays there and costs a follow-up PR. The failure mode is specific: an agent invoking `soleur:compound` and then executing the phases itself gets everything except Auto-Consolidation **Step E**. In headless mode that step has no prompt to surface it (interactively it does ask). If you ran the phases manually, run archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `soleur:ship`.
 
-**`archive-kb.sh` MOVES artefacts and takes no signal from merge state — so it will archive the spec of a branch that is still in flight, and every reference to the live path goes stale in the same stroke.** Two checks before Step E, both cheap: (1) grep the branch's plan and spec for archival-deferral language — a plan that says "archival of this spec dir must be deferred until after `soleur:ship` Phase 6" means Step E runs AFTER ship, not before it, because `soleur:ship` Phase 6 step 2.5 reads `decision-challenges.md` out of that very directory; (2) after the move, grep the tree for the live spec path and repoint every hit. A script whose whole job is to relocate a file is the one place a reference sweep is mandatory. The rename is staged, so the recovery is `git mv` back plus a `generate-kb-index.sh` re-run — but only if you notice. **Why:** #7490 — Step E archived the in-flight spec of the PR *whose own subject was a probe broken by an archive move*, orphaning four references in that PR's plan, against the plan's explicit line forbidding exactly this ordering. See `knowledge-base/project/learnings/2026-09-18-every-instrument-i-built-to-check-the-guards-needed-checking.md`.
+**`archive-kb.sh` MOVES artefacts and takes no signal from merge state — so it will archive the spec of a branch that is still in flight, and every reference to the live path goes stale in the same stroke.** Two checks before Step E, both cheap: (1) grep the branch's plan and spec for archival-deferral language — a plan that says "archival of this spec dir must be deferred until after `soleur:ship` Phase 6" means Step E runs AFTER ship, not before it, because `soleur:ship` Phase 6 step 2.5 reads `decision-challenges.md` out of that very directory; (2) after the move, grep the tree for the live spec path and repoint every hit. A script whose whole job is to relocate a file is the one place a reference sweep is mandatory. The rename is staged, so the recovery is `git mv` back — the index needs no re-run, being regenerated on read since ADR-230 — but only if you notice. **Why:** #7490 — Step E archived the in-flight spec of the PR *whose own subject was a probe broken by an archive move*, orphaning four references in that PR's plan, against the plan's explicit line forbidding exactly this ordering. See `knowledge-base/project/learnings/2026-09-18-every-instrument-i-built-to-check-the-guards-needed-checking.md`.
 
 **Two known gaps in that script, so verify rather than assume:** it discovers plans by a `*<slug>*` glob (a topic-named plan whose name does not carry the branch slug is missed — #7373's plan was), and it probes specs only at `specs/feat-<slug>` (a `fix-*` branch's spec dir is missed; there are 27 live ones). When it reports "No artifacts found" but artifacts are visibly live, archive by hand with `git mv`.
 
