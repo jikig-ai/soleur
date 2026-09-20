@@ -2663,9 +2663,22 @@ if [[ -z "$_e2c_bad" ]]; then
 else
   fail "E2c: could-not-measure tokens not annotated as such — ${_e2c_bad}" "n/a" ""
 fi
-# E2d — the sets are DISJOINT and every bracketed token the gate can emit is in exactly one of
-# them. This is the parity mechanism the probe and the runbooks were missing: three
-# hand-maintained copies agreed at review time with nothing asserting they would keep agreeing.
+# E2d — the sets are DISJOINT, and every token that appears LITERALLY bracketed in the gate's
+# source is in exactly one of them.
+#
+# CORRECTED 2026-09-20 (#8412). This comment previously claimed "every bracketed token the gate
+# can emit" and called itself "the parity mechanism the probe and the runbooks were missing".
+# Both were false, and the second was a capability claim about OTHER files that nothing checked
+# (hr-verify-repo-capability-claim-before-assert). The haystack below greps the SOURCE for
+# `rehearsal_gate: (HOLD|ABORT) [TOKEN]`, so it sees 10 of 21: the 11 tokens reaching the verdict
+# line through the generic `HOLD [${_tok}]` sites are invisible to it — and those are precisely
+# the sites P1 #2 lived at. What E2d does buy is real but narrower: the literal emits cannot
+# drift out of the declared sets.
+#
+# The CROSS-COPY parity arm is in scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh,
+# which holds its own expectation and compares it to the gate's declaration, so moving a token
+# between the two sets reds there. Neither catches a token emitted through a generic site and
+# never declared at all; that residual is tracked in #8397.
 _e2d_bad=""
 while IFS= read -r _tok_lit; do
   [[ -n "$_tok_lit" ]] || continue
