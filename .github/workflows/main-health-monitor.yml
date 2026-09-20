@@ -663,7 +663,13 @@ jobs:
             echo "Those lines are deliberately withheld from this PUBLIC body — read them in"
             echo "the run log, no SSH required:"
             echo ""
-            echo "    gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
+            # No `^` anchor: `gh run view --log` prefixes EVERY line with
+            # `<job>\t<step>\t<ts> `, so a caret-anchored pattern matches nothing and
+            # the operator reads the empty result as "no markers were emitted" — an
+            # all-clear the query is incapable of contradicting. (#8431, same defect
+            # family as this PR's probe fix.) `:484` below is correct as written because
+            # it greps the raw local artifact, which carries no prefix.
+            echo "    gh run view ${GITHUB_RUN_ID} --log | grep 'SOLEUR| '"
             echo ""
             echo "### Actions required"
             echo ""
@@ -696,7 +702,8 @@ jobs:
               echo '`````'
               echo ""
               echo "Per-suite diagnostics are withheld from this public comment; read them"
-              echo "in the run log with: gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
+              # Unanchored, for the reason given at the sibling site above (#8431).
+              echo "in the run log with: gh run view ${GITHUB_RUN_ID} --log | grep 'SOLEUR| '"
               # The ACTIONS of THIS run, not of the run that opened the tracker.
               # Since ACTIONS became per-arm, a stale title+actions pair is actively
               # harmful rather than merely untidy: an issue opened by a KILLED run says
