@@ -383,7 +383,7 @@
 1	scripts/skill-freshness-aggregate.test.sh
 10	scripts/skill-security-scan-step-body.test.sh
 2	scripts/sweep-followthroughs.sh
-90	scripts/sweep-followthroughs.test.sh
+93	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh

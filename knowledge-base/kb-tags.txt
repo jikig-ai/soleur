@@ -238,6 +238,7 @@ analytics-track
 anchor-on-syntax
 anchor-preservation
 anchor-resolution-over-architecture
+anchor-verification
 anchoring
 anchors
 animation
@@ -817,6 +818,7 @@ commands
 commands/brainstorm
 comment-drift
 comment-mutability
+comment-relocation
 comment-rot
 comment-stripped-grep
 comments
@@ -1183,6 +1185,7 @@ der
 derivation-coupling
 derived
 derived-doc-refresh
+derived-floor
 derived-population
 derived-reference
 derived-set
@@ -1396,6 +1399,7 @@ enumerations
 env
 env-defaults
 env-file
+env-i
 env-inheritance
 env-injection
 env-leak
@@ -2876,6 +2880,7 @@ precondition-staleness
 precondition-verification
 preconditions
 predicate-placement
+predicate-reject-control
 prefers-reduced-motion
 prefix
 preflight
@@ -3406,6 +3411,7 @@ search
 search-path-injection
 search-path-pinning
 seccomp
+second-copy
 second-order-defects
 second-order-effects
 second-reviewer-concur
@@ -3761,8 +3767,10 @@ stale-references
 stale-response
 stale-snapshot
 stale-state
+staleness-clock
 staletimes
 start-fresh
+startup-failure
 stash conflict
 stash pop failure
 state
@@ -4348,6 +4356,7 @@ workflow-discipline
 workflow-dispatch
 workflow-edits
 workflow-enforcement
+workflow-file-size
 workflow-fsm
 workflow-gap
 workflow-gate
