@@ -294,13 +294,301 @@ else
   fail "mixed log did not warn — rc=$MRC out='$MOUT'"
 fi
 
+# --- 17-28. brainstorm sub-step collapse (#8325 §2) ---------------------------
+# `brainstorm` invokes `compound` as a designed sub-step and then hands off to
+# `plan`, so the log shows `brainstorm compound plan` for the designed handoff
+# (127 of the live corpus's undeclared rows were `brainstorm -> compound` and
+# 111 its tail `compound -> plan`). The view's `sub_steps` map names it; the
+# classifier drops a record whose skill is a sub-step of the PREVIOUS KEPT node
+# before pairing and reports the count as `substep=`. It is NOT an edge:
+# `review -> compound -> plan` (a ship skip) must still be reported.
+#
+# Per-root emitter: the exemplar `emit` above is bound to the first root's $log,
+# and case 25 needs two sessions in one root with A earlier than B.
+emit_to() {
+  assert_fixture_dir "$1"
+  printf '{"schema":1,"ts":"%s","skill":"soleur:%s","session_id":"%s","hook_event":"PreToolUse"}\n' "$2" "$3" "$4" >> "$1/.claude/.skill-invocations.jsonl"
+}
+new_root() {
+  local r="$TMP_ROOT/$1"
+  assert_fixture_dir "$r"
+  mkdir -p "$r/.claude"; cp "$ROOT/.claude/workflow-transitions.json" "$r/.claude/"; printf '%s' "$r"
+}
+
+# --- 17. the designed handoff pairs as brainstorm -> plan --------------------
+R17=$(new_root sub17)
+emit_to "$R17" 2026-09-18T18:00:00Z brainstorm s17
+emit_to "$R17" 2026-09-18T18:01:00Z compound   s17
+emit_to "$R17" 2026-09-18T18:02:00Z plan       s17
+O17=$(CLASSIFY_REPO_ROOT="$R17" bash "$SUT" --summary 2>&1); C17=$?
+R17ROWS=$(CLASSIFY_REPO_ROOT="$R17" bash "$SUT" 2>/dev/null)
+if [[ "$C17" -eq 0 && "$O17" == *"undeclared=0 "* && "$O17" == *"pairs=1 "* && "$O17" == *"substep=1 "* && -z "$R17ROWS" ]]; then
+  pass "brainstorm compound plan pairs as brainstorm -> plan (pairs=1 undeclared=0 substep=1), no row"
+else
+  fail "designed handoff not collapsed — rc=$C17 out='$O17' rows='$R17ROWS'"
+fi
+
+# --- 18. the collapse must not launder the edge it exposes -------------------
+R18=$(new_root sub18)
+emit_to "$R18" 2026-09-18T18:10:00Z brainstorm s18
+emit_to "$R18" 2026-09-18T18:11:00Z compound   s18
+emit_to "$R18" 2026-09-18T18:12:00Z review     s18
+O18=$(CLASSIFY_REPO_ROOT="$R18" bash "$SUT" 2>&1); C18=$?
+S18=$(CLASSIFY_REPO_ROOT="$R18" bash "$SUT" --summary 2>/dev/null)
+if [[ "$C18" -eq 0 && "$O18" == *"brainstorm -> review"* && "$S18" == *"substep=1 "* ]]; then
+  pass "brainstorm compound review still reports brainstorm -> review with substep=1"
+else
+  fail "collapse laundered brainstorm -> review — rc=$C18 out='$O18' summary='$S18'"
+fi
+
+# --- 19. a trailing sub-step forms no pair -----------------------------------
+R19=$(new_root sub19)
+emit_to "$R19" 2026-09-18T18:20:00Z brainstorm s19
+emit_to "$R19" 2026-09-18T18:21:00Z compound   s19
+O19=$(CLASSIFY_REPO_ROOT="$R19" bash "$SUT" --summary 2>&1); C19=$?
+if [[ "$C19" -eq 0 && "$O19" == *"pairs=0 "* && "$O19" == *"substep=1 "* && "$O19" == *"formed ZERO lifecycle pairs"* ]]; then
+  pass "a trailing brainstorm compound forms no pair (pairs=0 substep=1) and warns"
+else
+  fail "trailing sub-step mis-paired — rc=$C19 out='$O19'"
+fi
+
+# --- 20. the sub-step is keyed on brainstorm, not on every predecessor -------
+R20=$(new_root sub20)
+emit_to "$R20" 2026-09-18T18:30:00Z review   s20
+emit_to "$R20" 2026-09-18T18:31:00Z compound s20
+emit_to "$R20" 2026-09-18T18:32:00Z plan     s20
+O20=$(CLASSIFY_REPO_ROOT="$R20" bash "$SUT" 2>&1); C20=$?
+S20=$(CLASSIFY_REPO_ROOT="$R20" bash "$SUT" --summary 2>/dev/null)
+if [[ "$C20" -eq 0 && "$O20" == *"compound -> plan"* && "$S20" == *"substep=0 "* ]]; then
+  pass "review compound plan keeps compound -> plan as a row (substep=0): the ship skip is not laundered"
+else
+  fail "sub-step applied to a non-brainstorm predecessor — rc=$C20 out='$O20' summary='$S20'"
+fi
+
+# --- 21. the lookup keys on the previous KEPT node ----------------------------
+# The second compound's RAW predecessor is compound; keyed on the kept node it
+# is still brainstorm, so both drop.
+R21=$(new_root sub21)
+emit_to "$R21" 2026-09-18T18:40:00Z brainstorm s21
+emit_to "$R21" 2026-09-18T18:41:00Z compound   s21
+emit_to "$R21" 2026-09-18T18:42:00Z compound   s21
+emit_to "$R21" 2026-09-18T18:43:00Z plan       s21
+O21=$(CLASSIFY_REPO_ROOT="$R21" bash "$SUT" --summary 2>&1); C21=$?
+if [[ "$C21" -eq 0 && "$O21" == *"substep=2 "* && "$O21" == *"pairs=1 "* && "$O21" == *"undeclared=0 "* ]]; then
+  pass "brainstorm compound compound plan drops both (substep=2 pairs=1 undeclared=0): keyed on the previous KEPT node"
+else
+  fail "second compound not dropped — rc=$C21 out='$O21'"
+fi
+
+# --- 22. a self-loop the collapse exposes is reported, not hidden -------------
+R22=$(new_root sub22)
+emit_to "$R22" 2026-09-18T18:50:00Z brainstorm s22
+emit_to "$R22" 2026-09-18T18:51:00Z compound   s22
+emit_to "$R22" 2026-09-18T18:52:00Z brainstorm s22
+emit_to "$R22" 2026-09-18T18:53:00Z compound   s22
+emit_to "$R22" 2026-09-18T18:54:00Z plan       s22
+O22=$(CLASSIFY_REPO_ROOT="$R22" bash "$SUT" 2>&1); C22=$?
+S22=$(CLASSIFY_REPO_ROOT="$R22" bash "$SUT" --summary 2>/dev/null)
+if [[ "$C22" -eq 0 && "$O22" == *"brainstorm -> brainstorm"* && "$S22" == *"substep=2 "* && "$S22" == *"pairs=2 "* && "$S22" == *"undeclared=1 "* ]]; then
+  pass "brainstorm compound brainstorm compound plan → substep=2 pairs=2 undeclared=1 (brainstorm -> brainstorm exposed)"
+else
+  fail "self-loop hidden or miscounted — rc=$C22 out='$O22' summary='$S22'"
+fi
+
+# --- 23. non-node removal runs BEFORE the sub-step drop -----------------------
+# compound's RAW predecessor is one-shot (a non-node); after the node filter its
+# predecessor is brainstorm, so it drops.
+R23=$(new_root sub23)
+emit_to "$R23" 2026-09-18T19:00:00Z brainstorm s23
+emit_to "$R23" 2026-09-18T19:01:00Z one-shot   s23
+emit_to "$R23" 2026-09-18T19:02:00Z compound   s23
+emit_to "$R23" 2026-09-18T19:03:00Z plan       s23
+O23=$(CLASSIFY_REPO_ROOT="$R23" bash "$SUT" --summary 2>&1); C23=$?
+if [[ "$C23" -eq 0 && "$O23" == *"nonnode=1 "* && "$O23" == *"substep=1 "* && "$O23" == *"pairs=1 "* && "$O23" == *"undeclared=0 "* ]]; then
+  pass "brainstorm one-shot compound plan → nonnode=1 substep=1 pairs=1 undeclared=0 (node filter first)"
+else
+  fail "filter order wrong — rc=$C23 out='$O23'"
+fi
+
+# --- 24. a session whose FIRST record is a sub-step skill -----------------------
+# `.kept[-1]` on an empty array is null and `$SUB[null]` throws, which `// []`
+# does not rescue; the reduce needs an explicit empty-kept branch.
+R24=$(new_root sub24)
+emit_to "$R24" 2026-09-18T19:10:00Z compound s24
+emit_to "$R24" 2026-09-18T19:11:00Z plan     s24
+O24=$(CLASSIFY_REPO_ROOT="$R24" bash "$SUT" --summary 2>&1); C24=$?
+if [[ "$C24" -eq 0 && "$O24" == *"substep=0 "* && "$O24" == *"pairs=1 "* && "$O24" == *"undeclared=1 "* && "$O24" != *"Cannot index"* ]]; then
+  pass "compound plan as a session's first two records → substep=0 pairs=1 undeclared=1, no jq error"
+else
+  fail "first-record sub-step lookup broke — rc=$C24 out='$O24'"
+fi
+
+# --- 25. the drop is scoped to the session, not the merged stream -------------
+# Session A's brainstorm precedes session B's compound in time; an ungrouped
+# walk would drop B's compound.
+R25=$(new_root sub25)
+emit_to "$R25" 2026-09-18T19:20:00Z brainstorm sA25
+emit_to "$R25" 2026-09-18T19:21:00Z compound   sB25
+emit_to "$R25" 2026-09-18T19:22:00Z plan       sB25
+O25=$(CLASSIFY_REPO_ROOT="$R25" bash "$SUT" --summary 2>&1); C25=$?
+if [[ "$C25" -eq 0 && "$O25" == *"substep=0 "* && "$O25" == *"pairs=1 "* && "$O25" == *"undeclared=1 "* ]]; then
+  pass "session A brainstorm then session B compound plan → substep=0 pairs=1 undeclared=1 (grouped by session)"
+else
+  fail "cross-session drop — rc=$C25 out='$O25'"
+fi
+
+# --- 26. a view without an OBJECT sub_steps fails closed -------------------------
+# `// {}` or a bare has() would silently reproduce the pre-collapse numbers on a
+# stale mirror; `null` and `[]` both pass a presence check.
+V26_OK=1
+for shape in missing null list stringval intval; do
+  R26=$(new_root "sub26-$shape")
+  assert_fixture_dir "$R26"
+  case "$shape" in
+    missing) jq 'del(.sub_steps)' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
+    null)    jq '.sub_steps = null' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
+    list)    jq '.sub_steps = []' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
+    # A STRING value passes a container-only type check and then collapses by
+    # jq `index`'s SUBSTRING semantics -- silently, which is the whole failure
+    # mode the fail-closed check exists to refuse.
+    stringval) jq '.sub_steps = {"brainstorm":"compound"}' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
+    intval)    jq '.sub_steps = {"brainstorm":[7]}' "$ROOT/.claude/workflow-transitions.json" > "$R26/.claude/workflow-transitions.json" ;;
+  esac
+  emit_to "$R26" 2026-09-18T19:30:00Z brainstorm s26
+  emit_to "$R26" 2026-09-18T19:31:00Z plan       s26
+  O26=$(CLASSIFY_REPO_ROOT="$R26" bash "$SUT" --summary 2>&1); C26=$?
+  if [[ "$C26" -ne 2 || "$O26" != *FATAL* || "$O26" != *sub_steps* ]]; then
+    V26_OK=0; echo "    sub_steps=$shape: rc=$C26 out='$O26'"
+  fi
+done
+if [[ "$V26_OK" -eq 1 ]]; then
+  pass "a view whose sub_steps is missing, null, [], a STRING value or a non-string member exits 2 with a FATAL naming sub_steps"
+else
+  fail "stale mirror not fail-closed"
+fi
+
+# --- 27. the null-reading summary line carries substep=0 -----------------------
+# Case 8 runs default mode on an absent log and never prints the line; the
+# key set is the contract, so the null line is asserted as ONE string.
+N27=$(CLASSIFY_REPO_ROOT="$EMPTY" bash "$SUT" --summary 2>/dev/null); C27=$?
+if [[ "$C27" -eq 0 && "$N27" == "undeclared=0 sessions=0 pairs=0 nonnode=0 substep=0 read=0 dropped=0 null_reading=1" ]]; then
+  pass "the null-reading --summary line is exactly 'undeclared=0 sessions=0 pairs=0 nonnode=0 substep=0 read=0 dropped=0 null_reading=1'"
+else
+  fail "null-reading line drifted — rc=$C27 out='$N27'"
+fi
+
+# --- 28. postmerge -> work is a declared recovery edge (#8325 §1) ---------------
+R28=$(new_root sub28)
+emit_to "$R28" 2026-09-18T19:40:00Z postmerge s28
+emit_to "$R28" 2026-09-18T19:41:00Z work      s28
+emit_to "$R28" 2026-09-18T19:42:00Z review    s28
+emit_to "$R28" 2026-09-18T19:43:00Z compound  s28
+emit_to "$R28" 2026-09-18T19:44:00Z ship      s28
+emit_to "$R28" 2026-09-18T19:45:00Z postmerge s28
+O28=$(CLASSIFY_REPO_ROOT="$R28" bash "$SUT" --summary 2>&1); C28=$?
+if [[ "$C28" -eq 0 && "$O28" == *"undeclared=0 "* && "$O28" == *"pairs=5 "* ]]; then
+  pass "postmerge work review compound ship postmerge is fully declared (undeclared=0)"
+else
+  fail "postmerge -> work reported — rc=$C28 out='$O28'"
+fi
+
+# --- 29-32. review round (#8382): three fail-opens the sub_steps check exposed --
+
+# --- 29. a view without a NON-EMPTY `transitions` map of string arrays fails closed
+# Readability was the only check, so a stale/truncated mirror reported
+# `undeclared=0 ... rc 0` -- a clean-looking zero over an EMPTY edge set.
+#
+# `stringval`, `intval` and `empty` are the SAME asymmetry one level in, found
+# by the ship-gate consult: the first revision of this case (and of the guard)
+# covered only `missing` and `null`, while the `sub_steps` sibling at case 26
+# already drove all five. `{"plan":"workshop"}` then passed the container-only
+# check and matched `plan -> work` by jq `index`'s SUBSTRING semantics -- an
+# undeclared edge reported as DECLARED, at rc 0. The `plan, ship` log below is
+# the discriminator for it: `plan -> ship` is undeclared in the real view, so a
+# clean `undeclared=0` is the failure this case exists to catch.
+V29_OK=1
+for shape in missing null list stringval intval empty; do
+  R29=$(new_root "t29-$shape")
+  assert_fixture_dir "$R29"
+  case "$shape" in
+    missing)   jq 'del(.transitions)' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    null)      jq '.transitions = null' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    list)      jq '.transitions = []' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    stringval) jq '.transitions = {"plan":"workshop"}' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    intval)    jq '.transitions = {"plan":[7]}' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+    empty)     jq '.transitions = {}' "$ROOT/.claude/workflow-transitions.json" > "$R29/.claude/workflow-transitions.json" ;;
+  esac
+  emit_to "$R29" 2026-09-18T20:00:00Z plan s29
+  emit_to "$R29" 2026-09-18T20:01:00Z ship s29
+  O29=$(CLASSIFY_REPO_ROOT="$R29" bash "$SUT" --summary 2>&1); C29=$?
+  if [[ "$C29" -ne 2 || "$O29" != *FATAL* || "$O29" != *transitions* ]]; then
+    V29_OK=0; echo "    transitions=$shape: rc=$C29 out='$O29'"
+  fi
+done
+if [[ "$V29_OK" -eq 1 ]]; then
+  pass "a view whose transitions is missing, null, [], {}, a STRING value or a non-string member exits 2 with a FATAL naming transitions (never a clean undeclared=0)"
+else
+  fail "empty or wrong-typed edge set reported a clean zero"
+fi
+
+# --- 30. an EMPTY or corrupt rotated archive is still a null reading ----------
+# `found=1` was set before zcat produced anything, so a 0-byte .gz silenced the
+# marker AND the null_reading=1 flag while reporting an empty report at rc 0.
+R30=$(new_root t30)
+assert_fixture_dir "$R30"
+: > "$R30/.claude/.skill-invocations-20260918T140000Z.jsonl.gz"
+O30=$(CLASSIFY_REPO_ROOT="$R30" bash "$SUT" --summary 2>&1); C30=$?
+R30B=$(new_root t30b)
+assert_fixture_dir "$R30B"
+printf 'this is not gzip at all\n' > "$R30B/.claude/.skill-invocations-20260918T150000Z.jsonl.gz"
+O30B=$(CLASSIFY_REPO_ROOT="$R30B" bash "$SUT" --summary 2>&1); C30B=$?
+if [[ "$C30" -eq 0 && "$O30" == *NO_INVOCATIONS* && "$O30" == *null_reading=1* \
+      && "$C30B" -eq 0 && "$O30B" == *NO_INVOCATIONS* && "$O30B" == *null_reading=1* ]]; then
+  pass "a 0-byte or non-gzip rotated archive still emits the loud null reading, never an empty report at rc 0"
+else
+  fail "archive limb silenced the null reading — rc=$C30 out='$O30' / rc=$C30B out='$O30B'"
+fi
+
+# --- 31. a type-wrong record is DROPPED, not a blanked reading ----------------
+# `fromjson?` only catches SYNTACTICALLY bad lines. A JSON-valid record with a
+# non-string skill died at ltrimstr (rc 2, whole reading dark); a non-string
+# session_id died at @tsv and ECHOED ITS VALUE on stderr.
+R31=$(new_root t31)
+assert_fixture_dir "$R31"
+emit_to "$R31" 2026-09-18T21:00:00Z brainstorm s31
+emit_to "$R31" 2026-09-18T21:01:00Z plan       s31
+printf '{"schema":1,"ts":"2026-09-18T21:02:00Z","skill":123,"session_id":"s31"}\n' >> "$R31/.claude/.skill-invocations.jsonl"
+printf '{"schema":1,"ts":"2026-09-18T21:03:00Z","skill":"soleur:ship","session_id":{"leak":"OBJECT-VALUE-ECHOED"}}\n' >> "$R31/.claude/.skill-invocations.jsonl"
+O31=$(CLASSIFY_REPO_ROOT="$R31" bash "$SUT" --summary 2>&1); C31=$?
+if [[ "$C31" -eq 0 && "$O31" == *"dropped=2"* && "$O31" == *"pairs=1"* && "$O31" != *OBJECT-VALUE-ECHOED* ]]; then
+  pass "a non-string skill or session_id is dropped (dropped=2), the rest still classifies, and no record VALUE is echoed"
+else
+  fail "type-wrong record blanked the reading or leaked its value — rc=$C31 out='$O31'"
+fi
+
+# --- 32. a sub_steps value that is not a declared node is inert, not a crash ---
+# The node filter removes it first, so the entry is dead rather than dangerous;
+# Guard 1's invariants are what forbid writing one.
+R32=$(new_root t32)
+assert_fixture_dir "$R32"
+jq '.sub_steps = {"brainstorm":["deepen-plan"]}' "$ROOT/.claude/workflow-transitions.json" > "$R32/.claude/workflow-transitions.json"
+emit_to "$R32" 2026-09-18T22:00:00Z brainstorm s32
+emit_to "$R32" 2026-09-18T22:01:00Z deepen-plan s32
+emit_to "$R32" 2026-09-18T22:02:00Z plan       s32
+O32=$(CLASSIFY_REPO_ROOT="$R32" bash "$SUT" --summary 2>&1); C32=$?
+if [[ "$C32" -eq 0 && "$O32" == *"nonnode=1 "* && "$O32" == *"substep=0 "* && "$O32" == *"undeclared=0 "* ]]; then
+  pass "a non-node sub_steps value is removed by the node filter first (nonnode=1 substep=0), never a crash"
+else
+  fail "non-node sub_steps value misbehaved — rc=$C32 out='$O32'"
+fi
+
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
 # guard-vacuity-floor.test.sh slices the floor plus its CONTIGUOUS assignments into
 # a mutant, and a binding 130 lines up is unbound there (measured: CONSTRUCTION, not
 # FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=16
+MIN_CASES=32
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2
