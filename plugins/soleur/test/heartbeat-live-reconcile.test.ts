@@ -640,17 +640,87 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
     expect(v.map((x) => x.reason)).toEqual(["logs-alert-absent"]);
   });
 
-  it("parseLogsAlertBlocks reads the declared paused: literal false, an expression, and absent", () => {
+  it("parseLogsAlertBlocks reads the declared paused: literal false, an unresolved expression, and absent", () => {
     const tf = [
       `resource "logtail_exploration_alert" "literal" {\n  name = "a"\n  paused = false\n}`,
       `resource "logtail_exploration_alert" "expr" {\n  name = "b"\n  paused = !var.some_flag\n}`,
       `resource "logtail_exploration_alert" "absent" {\n  name = "c"\n}`,
     ].join("\n");
+    // No `vars` passed, so the expression is UNRESOLVED and stays exempt. This is the fail-closed
+    // arm: we never report a pause we cannot prove was unintended.
     expect(parseLogsAlertBlocks(tf).map((a) => [a.resourceName, a.pausedIsLiteralFalse])).toEqual([
       ["literal", true],
       ["expr", false],
       ["absent", true],
     ]);
+  });
+
+  // ── #8296: a var-driven `paused` resolves through the SAME InfraVariables the heartbeat and
+  // monitor arms already take. Before this, every expression was exempt forever — so the
+  // wrong-volume alert could be live-paused after the cutover armed it and nothing would say so.
+  describe("parseLogsAlertBlocks resolves a var-driven paused (#8296)", () => {
+    const alert = (expr: string) =>
+      `resource "logtail_exploration_alert" "wrong_volume" {\n  name = "x"\n  paused = ${expr}\n}`;
+    const intent = (expr: string, vars: Map<string, { kind: "bool"; value: boolean } | { kind: "other" } | { kind: "map"; keys: string[] }>) =>
+      parseLogsAlertBlocks(alert(expr), vars)[0].pausedIsLiteralFalse;
+
+    it("`!var.X` with X=true resolves paused=false — ARMED, so a live pause is drift", () => {
+      expect(intent("!var.cutover_complete", new Map([["cutover_complete", { kind: "bool", value: true }]]))).toBe(true);
+    });
+
+    it("`!var.X` with X=false resolves paused=true — intent IS paused, stays exempt", () => {
+      expect(intent("!var.cutover_complete", new Map([["cutover_complete", { kind: "bool", value: false }]]))).toBe(false);
+    });
+
+    it("bare `var.X` resolves without the negation", () => {
+      expect(intent("var.paused_flag", new Map([["paused_flag", { kind: "bool", value: false }]]))).toBe(true);
+      expect(intent("var.paused_flag", new Map([["paused_flag", { kind: "bool", value: true }]]))).toBe(false);
+    });
+
+    it("fails CLOSED on an unknown variable", () => {
+      expect(intent("!var.missing", new Map([["other", { kind: "bool", value: true }]]))).toBe(false);
+    });
+
+    it("fails CLOSED on a non-boolean default", () => {
+      expect(intent("!var.m", new Map([["m", { kind: "map", keys: ["a"] }]]))).toBe(false);
+      expect(intent("!var.o", new Map([["o", { kind: "other" }]]))).toBe(false);
+    });
+
+    it("fails CLOSED on an expression shape it does not understand", () => {
+      const vars = new Map<string, { kind: "bool"; value: boolean }>([["f", { kind: "bool", value: true }]]);
+      expect(intent("var.f ? true : false", vars)).toBe(false);
+      expect(intent("local.f", vars)).toBe(false);
+      expect(intent("!local.f", vars)).toBe(false);
+    });
+
+    it("anchors at END of expression: a var REFERENCE inside a larger expression is not resolved", () => {
+      // The discriminating direction. With the trailing `$` dropped from the match, `var.f && …`
+      // would capture `f` and resolve the WHOLE expression to f's value. Sampled with f=true both
+      // readings return false and the test proves nothing; f=FALSE is where they diverge —
+      // unanchored yields paused=false ("armed"), which would report a live pause on an alert
+      // whose real intent this parser never determined.
+      const vars = new Map<string, { kind: "bool"; value: boolean }>([["f", { kind: "bool", value: false }]]);
+      expect(intent("var.f && var.other", vars)).toBe(false);
+      expect(intent("var.f ? true : false", vars)).toBe(false);
+      expect(intent("!var.f || true", vars)).toBe(false);
+    });
+
+    it("matches the variable name EXACTLY, never by prefix", () => {
+      // `var.cutover` must not be satisfied by a declaration of `cutover_complete`, nor the
+      // reverse — a prefix match here would resolve the wrong variable and invert the verdict.
+      const vars = new Map<string, { kind: "bool"; value: boolean }>([
+        ["cutover_complete", { kind: "bool", value: true }],
+      ]);
+      expect(intent("!var.cutover", vars)).toBe(false);
+      expect(intent("!var.cutover_complete_extra", vars)).toBe(false);
+      expect(intent("!var.cutover_complete", vars)).toBe(true);
+    });
+
+    it("a literal still wins and needs no vars", () => {
+      const vars = new Map<string, { kind: "bool"; value: boolean }>([["x", { kind: "bool", value: true }]]);
+      expect(intent("false", vars)).toBe(true);
+      expect(intent("true", vars)).toBe(false);
+    });
   });
 
   it("flags a declared alert missing from the live payload as logs-alert-absent", () => {

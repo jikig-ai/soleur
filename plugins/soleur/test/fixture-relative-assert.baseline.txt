@@ -214,6 +214,7 @@
 10	apps/web-platform/scripts/sentry-monitors-audit.test.sh
 3	apps/web-platform/scripts/supabase-local.test.sh
 3	apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
+1	apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 1	.claude/hooks/agent-token-tee.sh
 21	.claude/hooks/agent-token-tee.test.sh
 1	.claude/hooks/brand-hex-commit-gate.test.sh
