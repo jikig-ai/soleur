@@ -194,3 +194,28 @@ the "a monitor may not exist in Sentry while ingest still answers 202" class is 
 - `knowledge-base/project/learnings/2026-08-13-every-guard-i-shipped-was-satisfiable-by-a-guard-that-asserts-nothing.md`
   — same failure class (a control that reports success while asserting nothing), found four more
   times in the same PR's review
+
+## Addendum — 2026-09-20 (#8313): the scheduled path is now proven, not just the fix
+
+The `recovery_at` above cites a `workflow_dispatch` check-in, which proves the repair RESOLVES
+(the composite loads in a checkout-free job) but not that the SCHEDULED path — the one the
+monitor exists to watch — delivers. That distinction is the point of this PIR, so the scheduled
+rows are recorded here rather than folded into the field above.
+
+Measured 2026-09-20T14:35Z via `GET /monitors/scheduled-marketplace-drift/checkins/`:
+
+| run | event | check-in id | dateCreated |
+|---|---|---|---|
+| 35419097145 | `workflow_dispatch` (on `main`, merge commit `a50cf9ad2`) | `357ad056-ccfa-4b6c-8c0c-8b4bb2dde5f0` | 2026-09-19T03:44:21Z |
+| 35440135873 | `schedule` | `b86e28dd-f6b0-4293-a90f-cb720d894b52` | 2026-09-19T11:27:55Z |
+| 35508695589 | `schedule` | `3e307148-2590-4ecb-88fb-7138dc4d2c5b` | 2026-09-20T11:46:41Z |
+
+Run 35508695589's `drift-check` log re-read directly: **0** `Can't find` lines, no checkout step,
+`Download action repository 'jikig-ai/soleur@18887f8d5…'` at `Set up job`, and
+`sentry-heartbeat: http_code=202`. Monitor state `active`, environment `production` `ok`.
+
+One observation the dark window hid: both scheduled ticks ran ~4h50m after the `37 6 * * *` cron
+(11:26Z and 11:45Z), which is ordinary GitHub scheduled-run queueing and sits inside
+`checkin_margin: 360`. The margin was never exercised before because no check-in had ever
+arrived; it is now doing real work, and tightening it would alarm on GitHub's lateness rather
+than on a dark heartbeat.

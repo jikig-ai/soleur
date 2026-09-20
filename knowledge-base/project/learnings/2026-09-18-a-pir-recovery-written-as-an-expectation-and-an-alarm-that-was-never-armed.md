@@ -82,6 +82,14 @@ margin will fire is a non-empty `environments` list. Both are one authenticated 
   evaluation of the manifest, and one dispatch masks at most one 6-hour window, not the
   weeks-long schedule-disabled mode the monitor exists for.)
 
+**Closed 2026-09-20.** The liveness half is now measured, not owed: `schedule`-event runs
+35440135873 and 35508695589 produced check-ins `b86e28dd-f6b0-4293-a90f-cb720d894b52`
+(2026-09-19T11:27:55Z) and `3e307148-2590-4ecb-88fb-7138dc4d2c5b` (2026-09-20T11:46:41Z), with
+the second run's `drift-check` log re-read as `http_code=202` and zero resolution errors. The
+table is in the PIR's `## Addendum — 2026-09-20 (#8313)`. Both ticks ran ~4h50m behind the
+`37 6 * * *` cron — GitHub queueing, inside `checkin_margin: 360` — which is a fact the dark
+window had hidden: the margin had never been exercised by a real check-in.
+
 ## Session Errors
 
 1. **The first branch dispatch failed `Set up job` on a committed dangling symlink.**

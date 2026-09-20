@@ -47,12 +47,40 @@ Plan: `knowledge-base/project/plans/2026-09-18-fix-marketplace-drift-heartbeat-l
 
 ## Phase 5: Ship-time artifacts
 
-- [ ] 5.1 PR body: "Why `$/` and not a checkout" option table; AC9 run URL + arm; AC10 row; actionlint delta; #7520/#7524/#8282 untouched; the `-w` User-Challenge from `decision-challenges.md` (AC13)
-- [ ] 5.2 Post the actionlint +1 as a comment on #7042
-- [ ] 5.3 `/compound`: learning only if novel — the two residue points, citing the existing learnings and the PR #8311 path in prose
-- [ ] 5.4 Diff-scope check (AC14); local greens (AC15)
+- [x] 5.1 PR body: "Why `$/` and not a checkout" option table; AC9 run URL + arm; AC10 row; actionlint delta; #7520/#7524/#8282 untouched; the `-w` User-Challenge from `decision-challenges.md` (AC13)
+- [x] 5.2 Post the actionlint +1 as a comment on #7042
+- [x] 5.3 `/compound`: learning only if novel — the two residue points, citing the existing learnings and the PR #8311 path in prose
+- [x] 5.4 Diff-scope check (AC14); local greens (AC15)
 
 ## Phase 6: Post-merge (pipeline-executed, no operator step)
 
-- [ ] 6.1 Reuse the run `/ship`'s modified-workflow validation dispatched on `main` (dispatch only if none); 0 `Can't find` lines; `http_code=2xx` (primary arm)
-- [ ] 6.2 `checkins/` read (`--only-secrets SENTRY_IAC_AUTH_TOKEN`) with the run's `createdAt`: ≥ 1 row after it. DONE cites the row, never the conclusion (AC16). No skill reads this block — the runner executes it by hand; the durable guard afterwards is the monitor's missed-check-in issue
+- [x] 6.1 Reuse the run `/ship`'s modified-workflow validation dispatched on `main` (dispatch only if none); 0 `Can't find` lines; `http_code=2xx` (primary arm)
+- [x] 6.2 `checkins/` read (`--only-secrets SENTRY_IAC_AUTH_TOKEN`) with the run's `createdAt`: ≥ 1 row after it. DONE cites the row, never the conclusion (AC16). No skill reads this block — the runner executes it by hand; the durable guard afterwards is the monitor's missed-check-in issue
+
+## Evidence (closed 2026-09-20)
+
+PR #8313 merged 2026-09-19T03:37:18Z as `a50cf9ad2382b7a3960b4571c8b0704b97d0b6df` (tag
+`web-v0.279.5`); production `/health` reports that `build_sha` with `supabase: connected`.
+
+- **5.1** — PR body carries the option table, the AC9/AC10 rows, the actionlint delta, the
+  `#7520/#7524/#8282 untouched` statement and the `-w` User-Challenge.
+- **5.2** — measured +1 (170 → 171 over `.github/workflows/*.yml`, CI's pinned actionlint 1.7.7,
+  merge commit vs its first parent; the one new line is the `$/` *ref is missing* `[action]`
+  finding). Posted: <https://github.com/jikig-ai/soleur/issues/7042#issuecomment-5739062992>.
+- **5.3** — `2026-09-18-a-pir-recovery-written-as-an-expectation-and-an-alarm-that-was-never-armed.md`.
+- **5.4** — diff scope held; CI verified the exact merged tree. The local battery was deliberately
+  **not** run (operator decision): only the untouched `infra` group differs locally.
+- **6.1 (resolution, primary arm)** — `workflow_dispatch` run 35419097145 on `main`: `drift-check`
+  log has **0** `Can't find` lines and no checkout step, `Set up job` resolved
+  `jikig-ai/soleur@a50cf9ad2…` through `$/`, and the step printed `sentry-heartbeat: http_code=202`.
+- **6.2 (resolution)** — check-in `357ad056-ccfa-4b6c-8c0c-8b4bb2dde5f0` (`ok`, `production`) at
+  2026-09-19T03:44:21Z, after that run's `createdAt` 03:37:59Z.
+- **6.2 (liveness — the claim a dispatch cannot make)** — two `schedule`-event runs have since
+  delivered: run 35440135873 → check-in `b86e28dd-f6b0-4293-a90f-cb720d894b52` (2026-09-19T11:27:55Z)
+  and run 35508695589 → `3e307148-2590-4ecb-88fb-7138dc4d2c5b` (2026-09-20T11:46:41Z), the latter
+  re-read from `drift-check` as `http_code=202` with 0 `Can't find` lines. The learning file
+  separates these two proofs; this row is the scheduled one.
+
+Both scheduled ticks landed ~4h50m after the `37 6 * * *` cron — ordinary GitHub scheduled-run
+queueing, and inside the monitor's `checkin_margin: 360`, so the margin did not fire. A tighter
+margin would alarm on GitHub's own lateness rather than on a dark heartbeat.
