@@ -55,6 +55,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      # The digest the sign step RESOLVED at GHCR — not a captured docker-push
+      # stdout token, so a stray notice line can never masquerade as a digest.
+      digest: ${{ steps.sign.outputs.digest }}
+      mirror_status: ${{ steps.zot_mirror.outputs.mirror_status }}
     permissions:
       contents: read
       packages: write
@@ -360,7 +366,7 @@ jobs:
               sudo tar -xzf "$RUNNER_TEMP/crane.tgz" -C /usr/local/bin crane || rc=12
             fi
             [[ "$rc" -eq 0 ]] && break
-            sleep $(( attempt * 5 ))
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 5 ))
           done
           case "$rc" in
             0)  crane version ;;
@@ -410,6 +416,7 @@ jobs:
           # reason ("no sign/verify version skew"); keep the two in step.
           cosign-release: v3.1.1
       - name: Cosign-sign the GHCR digest (keyless)
+        id: sign
         env:
           IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
           TAG: ${{ steps.tag.outputs.tag }}
@@ -426,7 +433,7 @@ jobs:
             rc=0
             crane digest "$IMAGE:$TAG" > "$RUNNER_TEMP/sign.digest" 2> "$RUNNER_TEMP/sign.err" || rc=$?
             [[ "$rc" -eq 0 ]] && break
-            sleep $(( attempt * 5 ))
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 5 ))
           done
           if [[ "$rc" -ne 0 ]]; then
             echo "::error::could not resolve ${IMAGE}:${TAG} at GHCR to sign it (rc=${rc}): $(tr '\n' ' ' < "$RUNNER_TEMP/sign.err")" >&2
@@ -444,7 +451,7 @@ jobs:
             rc=0
             cosign sign --yes "${IMAGE}@${DIGEST}" || rc=$?
             [[ "$rc" -eq 0 ]] && break
-            sleep $(( attempt * 10 ))
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 10 ))
           done
           if [[ "$rc" -ne 0 ]]; then
             echo "::error::cosign sign failed after 3 attempts for ${IMAGE}@${DIGEST} (rc=${rc}). The image IS pushed and unsigned; D10 A2 will refuse until this is re-run." >&2
@@ -452,6 +459,10 @@ jobs:
           fi
           echo "Signed ${IMAGE}@${DIGEST}"
           printf 'signed %s@%s\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          # Exported for the bump-cloud-init-pin job's signed-vs-resolved
+          # cross-check: this attests "what was signed"; the script's own
+          # `crane digest` attests "what the tag resolves to now".
+          printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Bridge to zot registry (CF Tunnel)
         id: zot_bridge
@@ -872,6 +883,200 @@ jobs:
             -d "$PAYLOAD" \
             "$WEBHOOK" || echo "000")
 
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
+          fi
+
+  # --- #8359 (ADR-232): after a successful publish, rewrite the
+  # soleur-inngest-bootstrap cloud-init pin (4 sites across
+  # apps/web-platform/infra/cloud-init.yml + cloud-init-inngest.yml) to the
+  # semver-max published tag + registry-resolved digest and open the pin-bump
+  # PR — closing the AC6/Guard-B drift window to one CI cycle instead of
+  # "until someone notices a red advisory check".
+  #
+  # WHY A JOB IN THIS WORKFLOW, not a tag-triggered sibling or a scheduled
+  # reconciler: the build job already holds the authoritative tag, signed
+  # digest and mirror outcome; `needs:` ordering cannot race the image push
+  # (a sibling workflow can — it fires on the tag, before the digest exists);
+  # and a cron reconciler reintroduces exactly the lag this removes. The
+  # target is the semver-max published tag, not blindly the triggered tag —
+  # a workflow_dispatch re-publish of an older tag correctly no-ops.
+  #
+  # All logic lives in .github/scripts/bump-inngest-bootstrap-pin.sh,
+  # fixture-tested by .github/scripts/test/test-bump-inngest-bootstrap-pin.sh
+  # — a workflow cannot be workflow_dispatch-tested from a feature branch, so
+  # the logic is tested out-of-band and this YAML stays a thin driver
+  # (board-status-sync.yml records the convention).
+  #
+  # Auth: the soleur-ai App installation token minted by the composite action
+  # below (the canonical App-JWT recipe — hr-github-app-auth-not-pat). The App
+  # token is load-bearing, not just policy: GITHUB_TOKEN pushes do not fire
+  # pull_request events, so required checks would never run on the bump PR
+  # and auto-merge could never release it. Never a PAT.
+  bump-cloud-init-pin:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Serialize bump runs across overlapping publishes: two rapid vinngest-v*
+    # tags both resolve the SAME semver-max target, and the loser finds the
+    # branch/PR already open and exits `existing` rather than stacking a
+    # duplicate PR. cancel-in-progress stays false — a cancelled run that had
+    # already pushed the branch would strand an un-PRed bump.
+    concurrency:
+      group: inngest-pin-bump
+      cancel-in-progress: false
+    permissions:
+      # contents:read — the checkout. packages:read — the soleur-inngest-bootstrap
+      # package is PRIVATE in GHCR and the build job's docker login does not
+      # cross job boundaries: this job must authenticate `crane digest` itself
+      # (Login to GHCR below) or every bump fails at digest resolution.
+      # Every GitHub WRITE still goes through the minted installation token.
+      contents: read
+      packages: read
+    steps:
+      # `ref: main`, NOT the tag tree: the bump script and the files it edits
+      # live on the default branch (contrast with the build job, which must
+      # check out the tag's tree to build its image). fetch-depth: 0 +
+      # fetch-tags: true so the script's semver-max tag computation sees the
+      # tag that triggered this run. persist-credentials: false so the
+      # GITHUB_TOKEN cannot linger as origin's credential next to an
+      # x-access-token push remote.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      # crane inherits the GHCR credential from ~/.docker/config.json — the
+      # package is private, so `crane digest` needs this login in THIS job.
+      - name: Login to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # crane, SHA-pinned — identical recipe to the build job's
+      # "Install crane (pinned) for signing" above (keep them in step). The
+      # bump script resolves the published digest itself rather than trusting
+      # the passed value: the crane read is the only context that can bind
+      # tag↔digest authoritatively at publish time.
+      - name: Install crane (pinned)
+        env:
+          CRANE_VERSION: v0.20.2
+          CRANE_SHA256: c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b
+        run: |
+          set -uo pipefail
+          : "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
+          command -v crane >/dev/null && { echo "crane already present"; exit 0; }
+          rc=0
+          for attempt in 1 2 3; do
+            rc=0
+            curl -fsSL -o "$RUNNER_TEMP/crane.tgz" \
+              "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" || rc=10
+            if [[ "$rc" -eq 0 ]]; then
+              echo "${CRANE_SHA256}  $RUNNER_TEMP/crane.tgz" | sha256sum -c - || rc=11
+            fi
+            # A CHECKSUM mismatch is a supply-chain signal, not a network fault: re-fetching the
+            # same pinned URL cannot clear it, so do not spend the remaining attempts on it.
+            if [[ "$rc" -eq 11 ]]; then break; fi
+            if [[ "$rc" -eq 0 ]]; then
+              sudo tar -xzf "$RUNNER_TEMP/crane.tgz" -C /usr/local/bin crane || rc=12
+            fi
+            [[ "$rc" -eq 0 ]] && break
+            [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 5 ))
+          done
+          case "$rc" in
+            0)  crane version ;;
+            11) echo "::error::crane tarball SHA256 mismatch — SUPPLY-CHAIN signal, not a network fault. A re-dispatch re-fetches the same pinned URL and cannot clear it." >&2; exit 1 ;;
+            *)  echo "::error::could not install crane (rc=${rc}) after 3 attempts." >&2; exit 1 ;;
+          esac
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify DOPPLER_TOKEN present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      # Composite action — the App-JWT recipe lived inline in three workflows;
+      # this job would have been the fourth copy, so the mint is extracted per
+      # learning 2026-05-25-app-jwt-inline-mint (extract at three consumers).
+      # `gh api` cannot take a JWT as GH_TOKEN, so the action exchanges it for
+      # an installation token and emits it masked.
+      - name: Mint soleur-ai App token
+        id: mint
+        uses: ./.github/actions/mint-soleur-ai-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          installation-id: "122213433"
+
+      # The script re-resolves the digest via `crane digest` and
+      # cross-checks it against SIGNED_DIGEST ONLY when TAG is the
+      # semver-max target — a mirror_only backfill of an older tag signed
+      # a different tag's digest and must not RED on that comparison.
+      # NO continue-on-error on this step: the Slack step below is
+      # `if: failure()`, which never fires after a soft-failed step.
+      - name: Bump the cloud-init pin
+        # Step-level timeout, deliberately below the job's 10: a hung gh/git
+        # network call otherwise burns the whole JOB budget, the job records
+        # `cancelled` (not `failure`), and `if: failure()` on the Slack step
+        # below never fires — the bump then fails with no result= and no
+        # notification (the silent-cancel class the health monitor exists to
+        # eliminate). A step timeout lands as a step FAILURE, which reaches the
+        # Slack step. 8 leaves headroom for the notification inside the job cap.
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          SIGNED_DIGEST: ${{ needs.build.outputs.digest }}
+          MIRROR_STATUS: ${{ needs.build.outputs.mirror_status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/bump-inngest-bootstrap-pin.sh \
+            --signed-tag "$TAG" \
+            --signed-digest "$SIGNED_DIGEST" \
+            --mirror-status "$MIRROR_STATUS" \
+            --run-url "$RUN_URL"
+
+      - name: Post to Slack (pin-bump failure)
+        # A bump failure must not be silent — the drift guard stays red until
+        # reconciled, and a failed job is otherwise only visible in the run
+        # log. `if: failure()` fires only because the step above carries no
+        # continue-on-error; do not add one there.
+        if: failure()
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          TAG: ${{ needs.build.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::SLACK_RELEASES_WEBHOOK_URL unset; skipping pin-bump failure notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+          MESSAGE="❌ inngest-bootstrap cloud-init pin bump FAILED for ${TAG:-unknown tag} — the deploy-script-tests drift guard will stay red until reconciled. Run: ${RUN_URL}"
+          # jq --arg keeps the payload injection-inert (TAG/URL are JSON-escaped).
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK" || echo "000")
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
             echo "Slack notification sent (HTTP $HTTP_CODE)"
           else

@@ -1,0 +1,98 @@
+name: 'Mint soleur-ai GitHub App installation token'
+description: >
+  Fetch the soleur-ai App credentials from Doppler, mint an RS256 App JWT,
+  exchange it for an installation token, and emit the token as the `token`
+  output (masked). Canonical recipe for new consumers — the learning
+  2026-05-25-app-jwt-inline-mint called for extraction at three consumers;
+  three inline copies still exist (board-status-sync.yml,
+  apply-github-infra.yml, apply-web-platform-infra.yml — migrating them is a
+  separate change). `gh api` cannot take a JWT as GH_TOKEN, so the JWT is
+  exchanged for an installation token via curl.
+
+inputs:
+  doppler-token:
+    description: >
+      Doppler service token (secrets.DOPPLER_TOKEN) scoped to the config
+      holding GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY.
+    required: true
+  doppler-project:
+    description: 'Doppler project'
+    required: false
+    default: 'soleur'
+  doppler-config:
+    description: 'Doppler config'
+    required: false
+    default: 'prd_terraform'
+  installation-id:
+    description: >
+      soleur-ai App org installation id. Permissions verified 2026-09-19 via
+      `gh api /orgs/jikig-ai/installations`: contents:write +
+      pull_requests:write.
+    required: true
+
+outputs:
+  token:
+    description: 'soleur-ai installation access token (masked)'
+    value: ${{ steps.mint.outputs.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Mint installation token
+      id: mint
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: ${{ inputs.doppler-project }}
+        DOPPLER_CONFIG: ${{ inputs.doppler-config }}
+        INSTALLATION_ID: ${{ inputs.installation-id }}
+      run: |
+        set -euo pipefail
+
+        APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
+          echo "::error::GITHUB_APP_ID not found in Doppler ${DOPPLER_CONFIG}."; exit 1; }
+        PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
+          echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler ${DOPPLER_CONFIG}."; exit 1; }
+        if [[ -z "$APP_ID" || -z "$PEM" ]]; then
+          echo "::error::GitHub App credentials empty in Doppler ${DOPPLER_CONFIG}."; exit 1; fi
+        printf '::add-mask::%s\n' "$APP_ID"
+        # $GITHUB_ENV/log does NOT auto-mask a multi-line secret — mask each PEM line.
+        while IFS= read -r pem_line; do
+          [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
+        done <<< "$PEM"
+
+        umask 077
+        APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
+        printf '%s\n' "$PEM" > "$APP_PEM_FILE"
+        chmod 600 "$APP_PEM_FILE"
+        trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
+        # Catch a corrupted PEM (literal \n, BOM, partial paste) HERE with a
+        # routable error rather than a generic openssl "unable to load Private Key".
+        if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
+          echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
+
+        b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
+
+        now=$(date +%s)
+        header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+        payload=$(jq -nc \
+          --argjson iss "$APP_ID" \
+          --argjson iat "$((now - 60))" \
+          --argjson exp "$((now + 540))" \
+          '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+        unsigned="${header}.${payload}"
+        signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
+        JWT="${unsigned}.${signature}"
+        [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
+        echo "::add-mask::$JWT"
+
+        INSTALL_TOKEN=$(curl -sS -X POST \
+          -H "Authorization: Bearer $JWT" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+          | jq -r '.token // empty')
+        [[ -n "$INSTALL_TOKEN" ]] || {
+          echo "::error::Installation-token exchange returned empty token (App permission or installation_id mismatch)."; exit 1; }
+        echo "::add-mask::$INSTALL_TOKEN"
+        echo "token=${INSTALL_TOKEN}" >> "$GITHUB_OUTPUT"
