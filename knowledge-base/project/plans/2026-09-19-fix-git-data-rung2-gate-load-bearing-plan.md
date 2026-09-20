@@ -286,8 +286,20 @@ logs:
   retention: "90 days (Actions log retention); the RELEASED/HOLD line is also in the PR check output"
 
 discoverability_test:
-  command: "bash tests/scripts/test-git-data-birth-readiness-gate.sh"
-  expected_output: "the suite's final ledger line reports 0 failures and an assertion count at or above its raised floor, including the S/R/A/H/T/E arms"
+  command: "bash scripts/git-data-rung2-gate-verdict.sh"
+  expected_output: "RELEASED or HOLD or ABORT"
+  # AMENDED 2026-09-20 at #8010's own ship gate, because the first declaration was not runnable
+  # by the thing that runs it. It named `bash tests/scripts/test-git-data-birth-readiness-gate.sh`
+  # with a PROSE expected_output. Measured: preflight Check 10 executes the declared command inside
+  # a bubblewrap sandbox under a 15s cap, and the suite takes minutes -- it was killed at rc=124
+  # with arms still passing, and no matcher can compare stdout against a sentence. A declared
+  # verification that cannot run where it is consumed verifies nothing, which is this plan's own
+  # thesis applied to its own Observability block.
+  #
+  # The suite remains the right command to TEST the gate (it is the AC for FR1-FR16 and runs in CI);
+  # it is the wrong command to DISCOVER the gate's verdict. This one prints the single
+  # RELEASED/HOLD/ABORT line that `liveness_signal.what` above already names as the signal, in ~1s,
+  # exiting with the gate's own status.
 ```
 
 Expected API budget, stated because it is shared: at most 2 requests per gate call, one freshness-step call per infra PR plus one sweeper call per day, all on the anonymous 60/h-per-IP budget until the blocker issue lands.
