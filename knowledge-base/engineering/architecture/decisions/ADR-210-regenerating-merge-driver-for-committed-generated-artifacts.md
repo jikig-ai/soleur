@@ -223,6 +223,6 @@ auto-merge — which is where most merges of this file actually happened. ADR-21
 Alternatives section lists "stop committing the generated artifacts entirely" and defers it on
 scope; that deferred option is what ADR-235 takes.
 
-**§Verification above is retained as written and is no longer runnable.** It exercises scripts
+**§Decision above (items 1, 4 and 9) is retained as written and is no longer runnable.** It names scripts
 this change deletes. It is kept rather than rewritten because a superseded record's verification
 is evidence about what was true then.

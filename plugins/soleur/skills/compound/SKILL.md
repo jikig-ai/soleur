@@ -319,7 +319,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
        # reader rebuild from scratch, which is the only correct recovery for a
        # cache with no committed copy to fall back to.
        rm -f "$OUT"
-       echo "[WARN] rule-metrics-aggregate.sh failed; reverted any partial write, skipped the unused-rules hint." >&2
+       echo "[WARN] rule-metrics-aggregate.sh failed; removed any partial write (the aggregate is an untracked cache, so there is no committed copy to revert to), skipped the unused-rules hint." >&2
      fi
    fi
    ```

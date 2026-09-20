@@ -2353,6 +2353,16 @@ if want_scripts; then
   # apps/ and scripts/lib/ but never the bare scripts/ directory), so this explicit line is
   # the suite's ONLY registration. Without it it runs nowhere and gates nothing.
   run_suite "scripts/ensure-kb-index" bash scripts/ensure-kb-index.test.sh
+  # THE GENERATOR AGAINST THE REAL TREE. `generate-kb-index.sh --check` used to do two jobs:
+  # assert the committed index was fresh (moot once untracked) AND execute the generator over
+  # the real ~9,500-file knowledge-base/ in the required `test-scripts` context. #8377 retired
+  # the flag as if it did one job, and every surviving caller is `--soft` (WARN + exit 0), so a
+  # regression that only manifests on real corpus content -- a frontmatter shape, a filename,
+  # a collation edge -- would have been green in CI and reached the operator as "no prior art"
+  # (#8384 review). Writes to a scratch dir, never the tree: this runner's boundary check
+  # treats any repo write as a FATAL. Measured 3 s. Positive floors, not `-s`: a generator that
+  # emitted a header and nothing else would pass an emptiness check.
+  run_suite "scripts/generate-kb-index-live" bash scripts/generate-kb-index-live.test.sh
   run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh

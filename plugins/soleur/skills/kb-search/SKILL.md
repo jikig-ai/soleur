@@ -59,29 +59,46 @@ Then exit without searching.
 
 Then validate. **A missing artifact is NOT an error here** — `--soft` cannot regenerate in a repo that has no generator, which is every self-hosted install, and exiting 1 there would make `--tag` unusable with a Soleur-only remediation the user cannot run. Fall back to reading the frontmatter directly:
 
+The two arms below are ONE `if/else`, not two blocks (#8384 review). An earlier draft ended the
+fallback with the comment "skip the artifact check" and then ran the artifact check
+unconditionally anyway — so on a fresh checkout the fallback passed, the artifact grep failed
+on the absent file, and the user was told `Valid values: knowledge-base/kb-tags.txt`, naming a
+file that did not exist. That is the exact Soleur-only remediation ADR-235 says this change
+removes. The earlier draft also grepped `^tags:` only, so a `--category`-only query (where
+`$TAG` is empty) degenerated to "any line starting with `tags:`" and ALWAYS hit.
+
 ```bash
+tag_lc=$(printf '%s' "${TAG:-}" | tr '[:upper:]' '[:lower:]')
+cat_lc=$(printf '%s' "${CATEGORY:-}" | tr '[:upper:]' '[:lower:]')
 if [ ! -f knowledge-base/kb-tags.txt ] || [ ! -f knowledge-base/kb-categories.txt ]; then
-  # No facet cache and no way to build one: validate the value against the corpus itself.
-  # Whole-word, case-insensitive, over the tags: line only.
-  if ! git grep -ilE "^tags:.*\\b${TAG}\\b" -- 'knowledge-base/**/*.md' >/dev/null 2>&1; then
+  # No facet cache and no way to build one: validate each supplied value against the corpus
+  # itself. Whole-word, case-insensitive, over its OWN frontmatter line only -- one branch per
+  # flag, each guarded on the flag being set, so an empty value can never degenerate the regex.
+  if [ -n "$TAG" ] \
+     && ! git grep -ilE "^tags:.*\\b${TAG}\\b" -- 'knowledge-base/**/*.md' >/dev/null 2>&1; then
     echo "No matches for --tag ${TAG}."
     exit 0
   fi
-  # A hit means the value is real; skip the artifact check and continue to Phase 2.
+  if [ -n "$CATEGORY" ] \
+     && ! git grep -ilE "^category:[[:space:]]*${CATEGORY}[[:space:]]*$" -- 'knowledge-base/**/*.md' >/dev/null 2>&1; then
+    echo "No matches for --category ${CATEGORY}."
+    exit 0
+  fi
+  # Every supplied value is real. Continue to Phase 2 -- the artifact checks in the else-arm
+  # are NOT reached.
+else
+  # Facet caches present: validate each supplied value against its artifact (case-insensitive,
+  # fixed-string, whole-line). On miss, emit and exit.
+  if [ -n "$TAG" ] && ! grep -Fxq "$tag_lc" knowledge-base/kb-tags.txt; then
+    echo "No matches. Valid values: knowledge-base/kb-tags.txt"
+    exit 0
+  fi
+  if [ -n "$CATEGORY" ] && ! grep -Fxq "$cat_lc" knowledge-base/kb-categories.txt; then
+    echo "No matches. Valid values: knowledge-base/kb-categories.txt"
+    exit 0
+  fi
 fi
 ```
-
-Validate each supplied value against its artifact (case-insensitive, fixed-string, whole-line). On miss, emit and exit:
-
-```bash
-tag_lc=$(printf '%s' "$TAG" | tr '[:upper:]' '[:lower:]')
-if [ -n "$TAG" ] && ! grep -Fxq "$tag_lc" knowledge-base/kb-tags.txt; then
-  echo "No matches. Valid values: knowledge-base/kb-tags.txt"
-  exit 0
-fi
-```
-
-Same pattern for `--category` against `knowledge-base/kb-categories.txt`.
 
 ### Phase 2: Filter Learnings by Frontmatter (only if `--tag` or `--category` supplied)
 

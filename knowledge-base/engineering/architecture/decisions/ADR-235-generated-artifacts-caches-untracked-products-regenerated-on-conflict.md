@@ -42,7 +42,21 @@ scope, not on merits.
 
 ## Decision
 
-**Classify every generated artifact as a CACHE or a PRODUCT, and treat the two differently.**
+**Classify the knowledge-base generated artifacts as CACHE or PRODUCT, and treat the two
+differently.** The scope is the six artifacts this decision enumerates below. It is NOT a
+classification of every generated file in the repository, and an earlier draft claimed it was:
+at review (#8384) at least eight further generated artifacts were found that the two-cell table
+either classifies differently from how they are handled or cannot classify at all —
+`plugins/soleur/skills/eval-harness/models.generated.json` (tree-derived yet committed and
+parity-guarded as such), `knowledge-base/project/weakness-digest.md` (tree-derived, committed
+back by a bot PR), `apps/web-platform/infra/cron-egress-allowlist-cidr.txt` (sourced from a live
+external API — a third class), `apps/web-platform/infra/cutover-monitor-baseline.txt` (a frozen
+snapshot whose value is that it is *never* regenerated), and
+`knowledge-base/engineering/architecture/diagrams/generated-components.c4` plus
+`knowledge-base/project/kb-coverage.md` (both untracked AND unignored today). Extending this
+decision to them needs at least a third term — PIN: committed because regeneration is not
+idempotent, or the source is outside the tree — and an admission gate derived by shape rather
+than a hand-maintained list. That is a separate decision; this one is honest about its edge.
 
 A **cache** is derivable from the repository tree, or from gitignored local data. It is
 **gitignored and never committed**, and a staleness-checked script regenerates it at read time.

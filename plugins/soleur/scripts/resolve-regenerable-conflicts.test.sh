@@ -422,6 +422,22 @@ CASES_RUN=$((CASES_RUN + 1))
 [[ "$(tree_fp "$r")" == "$fp_before" ]] && pass "no-conflict leaves the tree untouched" \
   || fail "the tree changed on a no-op run"
 
+# ── THE RESOLVABLE SET IS RATCHETED, like CACHE_PATHS on the cache side ────────────────────
+# The SUT's header says adding a second member "is an edit HERE plus an ADR-235 amendment, so
+# the cache-vs-product question gets asked each time." Nothing enforced the second half: the
+# cache side has `EXPECTED_N=5` in kb-caches-untracked.test.sh; the product side -- where the
+# ADR makes the STRONGER claim -- had no cardinality or membership assertion, so appending a path
+# left every suite green (#8384 review, structural roll-up). This pins the member SET, read from
+# the SUT's default arm with comments stripped. Growing it is a deliberate edit here.
+_default_paths="$(grep -v '^[[:space:]]*#' "$SUT" \
+  | sed -n 's/^[[:space:]]*RESOLVABLE_PATHS=(\(.*\))[[:space:]]*$/\1/p' | tail -1)"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_default_paths" == '"knowledge-base/engineering/architecture/diagrams/model.likec4.json"' ]]; then
+  pass "resolvable set: exactly one member, model.likec4.json (ratcheted; grow it deliberately + amend ADR-235)"
+else
+  fail "resolvable set changed: [$_default_paths] — an ADR-235 amendment is required alongside this edit"
+fi
+
 # ── The resolver must NEVER push. ──────────────────────────────────────────────────────────
 CASES_RUN=$((CASES_RUN + 1))
 if grep -v '^[[:space:]]*#' "$SUT" | grep -qE '(^|[^-[:alnum:]])git[[:space:]]+push'; then
@@ -495,7 +511,7 @@ CASES_RUN=$((CASES_RUN + 1))
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=39
+_min_cases=40
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

@@ -161,8 +161,10 @@ jobs:
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     # 2026-09-14 (#8149): the readme-counts, lint-conversations-update-callsites and
     # rule-metrics-shape jobs (each 0.2m measured over the same 10 runs, no `needs:`)
-    # were folded in as three steps — the job goes from 11 to 14 named steps; the
-    # 15m ceiling is unchanged and still >=3x the folded max. The three carry
+    # were folded in as three steps — the job went from 11 to 14 named steps. #8377
+    # then retired the rule-metrics-shape step with the committed aggregate (ADR-235),
+    # so the job is now 13 named steps; the 15m ceiling is unchanged and still >=3x
+    # the folded max. The two surviving folded steps carry
     # `if: ${{ !cancelled() }}` and the pre-existing eleven do not: they were
     # independent jobs and keep reporting after an earlier advisory lint reds,
     # which is what `gh run view --log-failed` shows the operator; the eleven
