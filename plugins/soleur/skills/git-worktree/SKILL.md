@@ -327,6 +327,7 @@ Navigate back to the repository root directory.
 
 ## Sharp Edges
 
+- **A `cd <abs path under the bare root>` from inside a worktree SUCCEEDS, and every command after it reads `main`.** The bare checkout carries the same tree (`apps/web-platform`, `plugins/soleur`, …) as every worktree, so a path written from memory resolves there without error and the suite you run reports on a branch you are not on — measured on #8418: `cd /data/…/soleur/apps/web-platform 2>/dev/null || cd <worktree>/apps/web-platform` took the FIRST arm and `vitest` printed 57/57 about `main`. The only tell is the harness's `# Environment update` notice. Anchor every `cd` on `$PWD` or `git rev-parse --show-toplevel`, never on a remembered absolute; `hr-when-in-a-worktree-never-read-from-bare` has no hook, so the discipline is the guard. **Why:** #8418.
 - **A git hook running in a LINKED WORKTREE exports `GIT_DIR` and `GIT_INDEX_FILE` as ABSOLUTE
   paths, and they override a subprocess's `cwd` and `git -C`.** A plain clone exports no
   `GIT_DIR` at all, and only a RELATIVE `GIT_INDEX_FILE` (`.git/index`) which resolves
