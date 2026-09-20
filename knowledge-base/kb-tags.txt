@@ -154,6 +154,7 @@ adr-166
 adr-181
 adr-193
 adr-194
+adr-211
 adr-217
 adr-corpus
 adr-drift
@@ -1158,6 +1159,7 @@ delivery
 demotion
 deny-by-default
 deny-vs-report
+denylist
 dependabot
 dependencies
 dependency check for gui app without package manager
@@ -3639,6 +3641,7 @@ single-source
 single-source-of-truth
 single-token
 single-user-incident
+sink-controls
 site.url
 sitemap
 size-budget
