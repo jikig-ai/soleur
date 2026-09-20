@@ -51,12 +51,23 @@ Then exit without searching.
 
 ### Phase 1: Facet Validation (only if `--tag` or `--category` supplied)
 
-Validate that autocomplete artifacts exist. If missing, emit and exit:
+**Regenerate first — the facet files are untracked caches (ADR-230), so they are routinely absent in a fresh clone and routinely stale on a branch that just added a learning.** This call is the fix for the #8177 class, where a search reported "no prior art" for a file written minutes earlier. It is silent and costs ~60 ms when the index is already fresh; it only regenerates (~3 s) when something eligible changed.
+
+```bash
+[ -f scripts/ensure-kb-index.sh ] && bash scripts/ensure-kb-index.sh --soft || true
+```
+
+Then validate. **A missing artifact is NOT an error here** — `--soft` cannot regenerate in a repo that has no generator, which is every self-hosted install, and exiting 1 there would make `--tag` unusable with a Soleur-only remediation the user cannot run. Fall back to reading the frontmatter directly:
 
 ```bash
 if [ ! -f knowledge-base/kb-tags.txt ] || [ ! -f knowledge-base/kb-categories.txt ]; then
-  echo "Autocomplete artifacts missing. Run: bash scripts/generate-kb-index.sh"
-  exit 1
+  # No facet cache and no way to build one: validate the value against the corpus itself.
+  # Whole-word, case-insensitive, over the tags: line only.
+  if ! git grep -ilE "^tags:.*\\b${TAG}\\b" -- 'knowledge-base/**/*.md' >/dev/null 2>&1; then
+    echo "No matches for --tag ${TAG}."
+    exit 0
+  fi
+  # A hit means the value is real; skip the artifact check and continue to Phase 2.
 fi
 ```
 
@@ -143,12 +154,12 @@ Per-session cap breach (executing agent has generated more paraphrase calls than
 
 - **Facet-only (no keyword):** Emit one line per surviving file in `- [Title](path)` form (title read from frontmatter or first `# heading`).
 - **Keyword-only (no facets):** Run the two-tier search with per-tier caps so tier-1 noise titles cannot starve tier-2 content matches (see #4119):
-  1. **Tier 1 (cap 8):** Grep `knowledge-base/INDEX.md` for the keyword, then restrict to lines whose link target is rooted under `knowledge-base/project/learnings/`. Anchor the filter so future paths like `sessions/learnings-retrospective/` cannot leak.
+  1. **Tier 1 (cap 8):** Run `[ -f scripts/ensure-kb-index.sh ] && bash scripts/ensure-kb-index.sh --soft || true` first (untracked cache — see Phase 1; the call is idempotent, so a second one after Phase 1 costs only the ~60 ms probe), then grep `knowledge-base/INDEX.md` for the keyword, then restrict to lines whose link target is rooted under `knowledge-base/project/learnings/`. Anchor the filter so future paths like `sessions/learnings-retrospective/` cannot leak.
   2. **Tier 2 (cap 12):** Grep `knowledge-base/project/learnings/**/*.md` content for the keyword. Exclude `archive/`.
 - Output tier-1 first, then tier-2, deduped by path. Maximum 20 total; each tier self-caps.
 - **Facets + keyword:** Apply keyword grep **only** to the facet-filtered file list (not the whole KB). Use `grep -F` (fixed-string).
 
-Missing `INDEX.md` → note and continue with content grep only.
+Missing `INDEX.md` after the ensure call → the repo has no generator (a self-hosted install). Note it and continue with the Tier-2 content grep only; never exit non-zero on this, and never print a remediation naming a script the user does not have.
 
 ### Phase 4: Display Results
 
@@ -163,7 +174,7 @@ Zero results → suggest:
 - Check spelling
 - Try broader or alternative keywords
 - For `--tag`/`--category` misses, inspect `knowledge-base/kb-tags.txt` or `kb-categories.txt`
-- Run `bash scripts/generate-kb-index.sh` to ensure artifacts are current
+- Run `bash scripts/ensure-kb-index.sh` to refresh the untracked caches (Soleur repo only; it is a no-op when they are already fresh)
 
 ## Examples
 

@@ -12,6 +12,14 @@ You are an expert institutional knowledge researcher specializing in efficiently
 
 ### Step 0: Check INDEX.md for Broad Discovery
 
+**Refresh it first.** `INDEX.md` is an untracked cache (ADR-230), so on a fresh clone it does not exist yet and on a branch that just added a learning it is stale — and a stale index is what produced the #8177 failure this step exists to avoid, where a search reported "no prior art" for a file written minutes earlier. The call is silent and costs ~60 ms when the index is already fresh:
+
+```bash
+[ -f scripts/ensure-kb-index.sh ] && bash scripts/ensure-kb-index.sh --soft || true
+```
+
+If the script is absent (a self-hosted install with no generator) the index may legitimately not exist at all — skip straight to the content sweep below rather than reporting a missing file.
+
 Before grepping individual files, check if `knowledge-base/INDEX.md` exists. If it does, grep it first for the task keywords — this reveals relevant files across ALL domains (not just learnings), including specs, brainstorms, plans, marketing, and operations documents that may contain relevant context. INDEX.md lists non-archived KB files with their titles, with one exception: inside `knowledge-base/project/specs/<feature>/` only `spec.md` and `tasks.md` are listed — a feature's other working files (`session-state.md`, phase-evidence notes, and other one-off names) are on disk but not in the index (ADR-174). So neither an EMPTY INDEX.md grep nor a PARTIAL one (spec.md/tasks.md match, the working files do not) is evidence about what exists. In both cases run the content sweep below before concluding there is no prior art — `git ls-files` matches paths, and these files' names are uninformative (over a thousand are literally `session-state.md`), so `git grep` is the one that reaches them.
 
 ```bash

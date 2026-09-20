@@ -34,6 +34,16 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEARNINGS_ROOT="${LEARNINGS_ROOT:-$REPO_ROOT/knowledge-base/project/learnings}"
 INDEX_PATH="${INDEX_PATH:-$REPO_ROOT/knowledge-base/INDEX.md}"
+# INDEX.md is an untracked cache (ADR-230), so refresh it before reading. ONLY when
+# INDEX_PATH is the default: an explicitly-set INDEX_PATH names a corpus the caller owns —
+# typically a frozen snapshot so two bench runs are comparable — and regenerating over it
+# would silently change the thing being measured.
+# (Compared by VALUE, not by whether INDEX_PATH is set: the assignment above always sets it,
+# so a `${INDEX_PATH+x}` test here would be dead.)
+if [[ "$INDEX_PATH" == "$REPO_ROOT/knowledge-base/INDEX.md" ]]; then
+  [[ -f "$REPO_ROOT/scripts/ensure-kb-index.sh" ]] \
+    && bash "$REPO_ROOT/scripts/ensure-kb-index.sh" --soft || true
+fi
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/knowledge-base/project}"
 CURL_BIN="${CURL_BIN:-curl}"
 
