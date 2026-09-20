@@ -31,8 +31,7 @@ if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
   printf 'INSTRUMENT BROKEN: self-test left PASS=%d FAIL=%d, expected 1/1.\n' "$PASS" "$FAIL" >&2
   exit 2
 fi
-SELFTEST_PASSES=1   # proven by the check immediately above
-SELFTEST_FAILS=1    # proven by the check immediately above (subtracted from FAIL below)
+SELFTEST_FAILS=1    # proven by the check immediately above (PASS==1 and FAIL==1 there)
 FAIL=$(( FAIL - SELFTEST_FAILS ))   # the self-test failure is not a real finding
 
 echo "=== scripts/lib/trusted-verdict.sh ==="
@@ -227,13 +226,33 @@ echo ""
 echo "passed=$PASS failed=$FAIL"
 
 # ANTI-VACUITY FLOOR. Reported with printf + exit, never through pass()/fail() —
-# those are the helpers this backstops. The subtrahends are literals adjacent to
-# the subtraction (a value bound far away is unbound in a mutation slice and the
-# floor then scores CONSTRUCTION instead of FIRING).
+# those are the helpers this backstops.
+#
+# TWO properties are load-bearing here, and only one of them is obvious.
+#
+# 1. SELFTEST_PASSES is re-bound HERE as a literal rather than reused from the
+#    self-test ~200 lines above. scripts/guard-vacuity-floor.test.sh proves a
+#    floor FIRES by slicing the `if` plus its CONTIGUOUS simple assignments into
+#    a mutant with every counter zeroed; a subtrahend bound far away is unbound
+#    in that slice and the mutant dies at `set -u` before reaching the floor.
+#    The literal is proven by the self-test, which asserts PASS==1 at that point.
+#
+# 2. The MESSAGE must carry a word from that guard's FIRES sentinel vocabulary
+#    (`anti-vacuity`, `assertion floor`, `only <n>`, `[FATAL]`, `vacuit`, …).
+#    This is the one that actually bit: the first version of this floor read
+#    `FLOOR: executed %d real assertions`, which satisfies property 1 perfectly
+#    and matches NO sentinel — so the guard saw a non-zero exit with no
+#    recognised output, fell through to its shell-error branch, and scored the
+#    floor CONSTRUCTION (status unknown) rather than FIRES. The repo-wide ratchet
+#    grew 15 -> 16 and named this file. Measured both ways before fixing: the
+#    hand-built mutant exited 1 correctly the whole time, which is exactly why
+#    reading the slice was the wrong place to look. A floor whose message the
+#    meta-guard cannot recognise is indistinguishable from a floor that crashed.
+SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
 MIN_ASSERTIONS=10
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
-  printf 'FLOOR: executed %d real assertions (PASS=%d minus %d self-test), minimum %d.\n' \
+  printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
   exit 1
 fi

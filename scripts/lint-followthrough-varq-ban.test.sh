@@ -559,43 +559,92 @@ fi
 grep -q 'specs/archive/.*feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md' "$REPO_ROOT/scripts/followthroughs/plugin-delivery-canary-7490.sh"
 check $? "R3-M18 plugin-delivery-canary-7490.sh cites the ARCHIVE path (the repoint landed where it should)" "R3-M18 the canary does not cite the archive path"
 
-# --- R4-M1: an inline `authorAssociation` filter in a probe -> exit 1, cited at its true line.
-# This is the mechanism that replaced the per-probe filter with scripts/lib/trusted-verdict.sh;
-# without the ban, a probe can re-inline it and the lib stops being the chokepoint. ---
+# --- R4-M1: reads comments AND branches on a RESULT: verdict, without the lib -> exit 1 ---
+# The obligation, not the old one-spelling ban. This fixture is the shape that was LIVE in the
+# tree when the rule was written (inngest-zot-client-authz-6500.sh): an unfiltered
+# `.comments[].body` feeding a verdict grep, which the authorAssociation-anchored version of
+# this rule could not see at all.
 d=$(mkcase r4_m1)
-cat >"$d/probe-inline-filter.sh" <<'EOF'
+cat >"$d/probe-unfiltered-verdict.sh" <<'EOF'
 #!/usr/bin/env bash
 set -uo pipefail
 # a comment line so the offender is NOT line 3
-body=$(gh issue view 1 --json comments --jq '.comments[] | select(.authorAssociation == "OWNER") | .body')
+bodies=$(gh issue view 1 --repo jikig-ai/soleur --json comments --jq '.comments[].body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
 EOF
 run_guard "$d"
-(( GUARD_RC == 1 )); check $? "R4-M1 an inline authorAssociation filter -> exit 1" "R4-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
-grep -q 'probe-inline-filter.sh:4:' <<<"$GUARD_OUT"; check $? "R4-M1 cites the offender at its TRUE line (probe-inline-filter.sh:4)" "R4-M1 mis-cited the offender line: $GUARD_OUT"
+(( GUARD_RC == 1 )); check $? "R4-M1 unfiltered comment read feeding a RESULT: verdict -> exit 1" "R4-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-unfiltered-verdict.sh:4:' <<<"$GUARD_OUT"; check $? "R4-M1 cites the offender at its comment-read line" "R4-M1 mis-cited the offender line: $GUARD_OUT"
 grep -q 'trusted_verdict_bodies' <<<"$GUARD_OUT"; check $? "R4-M1 diagnostic names the replacement helper" "R4-M1 diagnostic does not name trusted_verdict_bodies: $GUARD_OUT"
 
-# --- R4-M2 (must-PASS): the word in a COMMENT must NOT fire. Rule 2 bans its literal everywhere
-# including comments, and that is right for a credential name. It is wrong here: every migrated
-# probe's header explains WHY authorAssociation is not used, so a bare-word ban would false-fire
-# on its own rationale and force the explanation out of the file. The anchor is therefore the
-# FILTER shape, and this row is what pins that distinction (cq-assert-anchor-not-bare-token). ---
+# --- R4-M2 (must-PASS): the banned shape inside a COMMENT must not fire ---
+# The anchor is the code, not the word: every migrated probe's header explains WHY the lib is
+# mandatory, and those sentences quote the very constructs this rule matches
+# (cq-assert-anchor-not-bare-token). A bare-word rule would force the explanation out.
 d=$(mkcase r4_m2)
 cat >"$d/probe-comment-only.sh" <<'EOF'
 #!/usr/bin/env bash
 set -uo pipefail
-# Do NOT write select(.authorAssociation == "OWNER") here -- see scripts/lib/trusted-verdict.sh.
+# Do NOT write `--json comments --jq '.comments[].body'` and grep RESULT: PASS here --
 # authorAssociation is computed against the READING token's visibility (#6617).
 source "$(dirname "$0")/../lib/trusted-verdict.sh"
+bodies=$(trusted_verdict_bodies 1)
 EOF
 run_guard "$d"
 (( GUARD_RC == 0 )); check $? "R4-M2 must-PASS: the banned shape inside a comment does not fire" "R4-M2 expected exit 0, got $GUARD_RC: $GUARD_OUT"
 
-# --- R4-M3 DISPATCH: a guard COPY with rule 4's grep line deleted must go GREEN on the M1
-# fixture. Without this the row above scores only "something reddened", not "rule 4 did it". ---
-d=$(mkcase r4_m3)
+# --- R4-M2b (must-PASS): reading comments WITHOUT a verdict branch is not a verdict read ---
+# Both conjuncts are load-bearing. anthropic-admin-key-6297.sh counts bot-authored marker
+# comments and inngest-watchdog-functions-query-6407.sh greps issue text for a technical failure
+# signature; neither lets a comment decide a tracker's fate, so demanding an author filter of
+# them would be reaching for a filter with nothing to filter.
+d=$(mkcase r4_m2b)
+cat >"$d/probe-marker-count.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+n=$(gh issue view 1 --json comments --jq '[.comments[] | select(.body | contains("MARKER"))] | length')
+[[ "$n" -gt 0 ]] && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R4-M2b must-PASS: a comment read with no RESULT: verdict branch does not fire" "R4-M2b expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2c: an inline authorAssociation filter is SUBSUMED, with no rule of its own ---
+d=$(mkcase r4_m2c)
 cat >"$d/probe-inline-filter.sh" <<'EOF'
 #!/usr/bin/env bash
-body=$(gh issue view 1 --json comments --jq '.comments[] | select(.authorAssociation == "OWNER") | .body')
+set -uo pipefail
+bodies=$(gh issue view 1 --json comments --jq '.comments[] | select(.authorAssociation == "OWNER") | .body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2c an inline authorAssociation filter still fires (the old ban is subsumed)" "R4-M2c expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2d: SOURCING the lib and then ignoring it must still fire (the wire, not the endpoint) ---
+# Anchoring on the filename rather than the CALL accepted exactly this: both endpoints present,
+# the wire between them reverted. Measured during review -- the realistic regression (revert the
+# read, leave the source line) passed the first version of this rule at rc 0.
+d=$(mkcase r4_m2d)
+cat >"$d/probe-sources-but-ignores.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+bodies=$(gh issue view 1 --json comments --jq '.comments[].body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2d sourcing the lib but reverting the read still fires" "R4-M2d expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M3 DISPATCH: a guard COPY with rule 4's grep deleted must go GREEN on the M1 fixture ---
+d=$(mkcase r4_m3)
+cat >"$d/probe-unfiltered-verdict.sh" <<'EOF'
+#!/usr/bin/env bash
+bodies=$(gh issue view 1 --json comments --jq '.comments[].body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
 EOF
 R4_GUARD="$SANDBOX/guard-no-rule4.sh"
 sed '/# rule4-grep/d' "$GUARD" >"$R4_GUARD"
@@ -606,16 +655,18 @@ else
   (( R4_RC == 0 )); check $? "R4-M3 DISPATCH: deleting the rule-4 grep makes the M1 fixture pass -- that grep IS the mechanism" "R4-M3 expected exit 0 from the gutted guard, got $R4_RC: $R4_OUT"
 fi
 
-# --- R4-M4: rule 4's OWN floor. Forcing its file count below the min-cardinality floor must
-# exit 2 with a diagnostic naming RULE 4 -- no other rule's floor may vouch for its walk. ---
+# --- R4-M4: rule 4's OWN floor, on its OWN measure ---
+# The counter is comment-reading probes, not `find | wc -l`. The previous counter was
+# byte-identical to rule 2's, so rule 4's floor was true exactly when rule 2's was, rule 2's
+# exit 2 ran first, and this floor was unreachable for every input.
 R4F_GUARD="$SANDBOX/guard-rule4-zero.sh"
-sed 's|^scanned_rule4=.*# rule4-count$|scanned_rule4=0  # rule4-count|' "$GUARD" >"$R4F_GUARD"
+sed 's|^  scanned_rule4=\$((scanned_rule4 + 1)).*# rule4-count$|  scanned_rule4=$((scanned_rule4 + 0))  # rule4-count|' "$GUARD" >"$R4F_GUARD"
 if diff -q "$GUARD" "$R4F_GUARD" >/dev/null; then
   check 1 "" "R4-M4 the rule4-count marker is absent -- the mutation did not land and the row is vacuous"
 else
   R4F_OUT="$(bash "$R4F_GUARD" 2>&1)"; R4F_RC=$?
   (( R4F_RC == 2 )); check $? "R4-M4 rule 4's own floor breach -> exit 2" "R4-M4 expected exit 2, got $R4F_RC: $R4F_OUT"
-  grep -q 'rule 4 (authorAssociation filter ban)' <<<"$R4F_OUT"; check $? "R4-M4 the floor diagnostic names RULE 4 specifically" "R4-M4 diagnostic does not name rule 4: $R4F_OUT"
+  grep -q 'rule 4 (trusted-verdict obligation)' <<<"$R4F_OUT"; check $? "R4-M4 the floor diagnostic names RULE 4 specifically" "R4-M4 diagnostic does not name rule 4: $R4F_OUT"
 fi
 
 # --- Accounting (ADR-193). Emitted DIRECTLY, never through fail(): a conservation check routed

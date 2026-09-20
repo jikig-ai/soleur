@@ -165,14 +165,69 @@ done <<<"$rule2_hits"
 # and force the explanation out of the file (cq-assert-anchor-not-bare-token). The property is
 # "no probe FILTERS on it", so the anchors are the comparison and the `select()` — a read for
 # reporting, e.g. printing the observed value, is not a filter and is not banned.
-BANNED_FILTER='\.authorAssociation[[:space:]]*(==|!=)|select\([^)]*\.authorAssociation'
-scanned_rule4=$(find "$TARGET_DIR" -type f | wc -l)  # rule4-count
+# ANCHORED ON THE OBLIGATION, NOT ON ONE FORBIDDEN SPELLING -- and that distinction was
+# MEASURED, not reasoned. The first version of this rule banned the presence of the wrong
+# mechanism (`.authorAssociation ==` / `select(... .authorAssociation)`). Two independent
+# review lenses observed that the property the lib exists to establish is the ABSENCE of the
+# right one, which is not the same claim, and the gap was occupied: at the time this rule was
+# written `inngest-zot-client-authz-6500.sh` read `.comments[].body` with NO author filter at
+# all -- strictly WORSE than the spelling being banned, and invisible to it. The rule ran
+# clean (rc 0) over it while `grep -rn authorAssociation scripts/followthroughs/` found zero
+# live filters to ban. A rule green over the exact hole it advertises protection from is worse
+# than the documentation alone, because it converts "we wrote this down" into "we gated it".
+#
+# The obligation: a probe that reads issue COMMENTS and BRANCHES on an anchored `RESULT:`
+# verdict must route that decision through scripts/lib/trusted-verdict.sh. Both conjuncts are
+# load-bearing. Reading comments alone is not a verdict -- `anthropic-admin-key-6297.sh` counts
+# bot-authored marker comments and `inngest-watchdog-functions-query-6407.sh` greps issue text
+# for a technical failure signature; neither lets a comment decide a tracker's fate, and a rule
+# that fired on them would be reaching for an author filter that has nothing to filter.
+# An inline `authorAssociation` select is subsumed: it reads comments, branches on a verdict,
+# and does not source the lib, so it fires here without needing its own rule.
+READS_COMMENTS='--json[[:space:]]+comments|--comments|\.comments\[\]'
+VERDICT_BRANCH='RESULT:[[:space:]]*\\?\(?(PASS|FAIL)'
+# The CALL, never the `source` line. Sourcing the lib and then reading `.comments[].body`
+# anyway satisfies a source-anchored pattern while leaving the decision exactly as
+# forgeable -- both endpoints pinned, the wire between them unpinned. Measured: the first
+# version of this regex also accepted the filename, and the mutation that reverts the
+# verdict read to an unfiltered one while LEAVING the source line in place -- which is what
+# a real regression looks like -- passed the rule at rc 0.
+LIB_CALL='trusted_verdict_bodies'
+
+# Counted over the files the rule's own predicate SELECTS, not over `find`. The previous
+# counter was `find "$TARGET_DIR" -type f | wc -l` -- byte-identical to rule 2's, so rule 4's
+# floor was true exactly when rule 2's was, rule 2's `exit 2` ran first, and rule 4's floor was
+# unreachable for every input. It existed only to be mutated by the test that existed to prove
+# it. This counts comment-reading probes, so a broken READS_COMMENTS regex drives it to zero
+# and trips the floor -- which is the failure this rule's walk can actually have.
+scanned_rule4=0
 rule4_hits=""
-rule4_hits=$(grep -rnE -- "$BANNED_FILTER" "$TARGET_DIR" | grep -vE ':[0-9]+:[[:space:]]*#' || true)  # rule4-grep
-while IFS= read -r hit; do
-  [[ -z "$hit" ]] && continue
-  f="${hit%%:*}"; rest="${hit#*:}"; lineno="${rest%%:*}"
-  echo "$f:$lineno: rule 4: filters on 'authorAssociation' -- source scripts/lib/trusted-verdict.sh and call trusted_verdict_bodies instead. authorAssociation is computed against the READING token's visibility, so a member with PRIVATE org membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped silently (#6617: two months of nightly FAIL on an already-recorded verdict)." >&2
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  # Comment-stripped: a probe's header explains WHY the lib is mandatory, and every one of
+  # those sentences quotes the constructs below (cq-assert-anchor-not-bare-token).
+  code="$(sed -E 's/^[[:space:]]*#.*$//' "$f")"
+  # The DENOMINATOR is "consumes issue comments by ANY route" -- a direct read OR the lib --
+  # so migrating a probe onto the lib moves it within the corpus instead of out of it. Counting
+  # only direct readers would make the floor fall every time the rule succeeds at its job, which
+  # is a floor that punishes compliance. (Measured while writing this: the first version counted
+  # direct readers, I derived its floor from the PRE-migration tree, and it fired at 2-of-3 on
+  # the very run that proved the migration had worked.)
+  direct=0; via_lib=0
+  printf '%s' "$code" | grep -qE -- "$READS_COMMENTS" && direct=1   # rule4-grep
+  printf '%s' "$code" | grep -qE -- "$LIB_CALL" && via_lib=1
+  (( direct == 1 || via_lib == 1 )) || continue
+  scanned_rule4=$((scanned_rule4 + 1))                              # rule4-count
+  (( direct == 1 )) || continue
+  printf '%s' "$code" | grep -qE -- "$VERDICT_BRANCH" || continue
+  (( via_lib == 0 )) || continue
+  rule4_hits="${rule4_hits}${f}"$'\n'
+done < <(find "$TARGET_DIR" -type f -name '*.sh' ! -name '*.test.sh' | sort)
+
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  lineno="$(grep -nE -- "$READS_COMMENTS" "$f" | head -1 | cut -d: -f1)"
+  echo "$f:${lineno:-1}: rule 4: reads issue comments AND branches on a RESULT: verdict WITHOUT routing the decision through scripts/lib/trusted-verdict.sh. This repo is PUBLIC with issues open, so an unfiltered '.comments[].body' accepts a verdict from ANY authenticated GitHub user -- one HTTP POST of 'RESULT: PASS' closes the tracker (#7448). Source the lib and call trusted_verdict_bodies. Do NOT re-inline an authorAssociation select instead: it is computed against the READING token's visibility, so a member with PRIVATE org membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped silently (#6617: two months of nightly FAIL on an already-recorded verdict)." >&2
   violations=$((violations + 1))
 done <<<"$rule4_hits"
 
@@ -302,6 +357,14 @@ fi
 # real tree (set it above the probe count) and prove exit 2 fires; production CI never sets it
 # and gets the default 10.
 MIN_PROBES="${VARQ_BAN_MIN_PROBES:-10}"
+# Rule 4's own floor, on its OWN measure: probes that consume issue comments by any route.
+# MEASURED on the post-migration tree 2026-09-20 -- five, being anthropic-admin-key-6297 and
+# inngest-watchdog-functions-query-6407 (direct reads, neither a verdict) plus
+# concierge-strand-754ee124-5733, cpx22-invoice-reconcile-7431 and
+# inngest-zot-client-authz-6500 (via the lib). Floored at 3 rather than 5 so retiring a tracker
+# does not red the tree, and it is a FLOOR, not an equality: a new comment-reading probe must
+# not have to edit this number.
+MIN_COMMENT_READERS="${VARQ_BAN_MIN_COMMENT_READERS:-3}"
 if [[ "$is_production_run" == "yes" ]] && (( scanned < MIN_PROBES )); then
   echo "ERROR: only $scanned non-test probe(s) scanned in $TARGET_DIR -- expected the full set; the glob or path is broken" >&2
   exit 2
@@ -314,15 +377,15 @@ if [[ "$is_production_run" == "yes" ]] && (( scanned_rule2 < MIN_PROBES )); then
 fi
 # Rule 4's own floor, keyed on ITS counter for the same reason: no rule's floor may vouch for
 # another's walk.
-if [[ "$is_production_run" == "yes" ]] && (( scanned_rule4 < MIN_PROBES )); then
-  echo "ERROR: rule 4 (authorAssociation filter ban) checked only $scanned_rule4 file(s) in $TARGET_DIR -- its walk resolved nothing; the glob or path is broken" >&2
+if [[ "$is_production_run" == "yes" ]] && (( scanned_rule4 < MIN_COMMENT_READERS )); then
+  echo "ERROR: rule 4 (trusted-verdict obligation) found only $scanned_rule4 comment-reading probe(s) in $TARGET_DIR -- expected at least $MIN_COMMENT_READERS; the READS_COMMENTS regex or the walk is broken, and the rule is reporting clean over a corpus it cannot see" >&2
   exit 2
 fi
 
 if (( violations > 0 )); then
-  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1), the retired credential name (rule 2), a repo-relative path absent from this checkout (rule 3), and/or an inline authorAssociation filter (rule 4). See followthrough-convention.md §Author workflow." >&2
+  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1), the retired credential name (rule 2), a repo-relative path absent from this checkout (rule 3), and/or a comment-verdict read that bypasses scripts/lib/trusted-verdict.sh (rule 4). See followthrough-convention.md §Author workflow." >&2
   exit 1
 fi
 
-echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (authorAssociation filter ban) checked $scanned_rule4 file(s))"
+echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (trusted-verdict obligation) checked $scanned_rule4 comment-reading probe(s))"
 exit 0

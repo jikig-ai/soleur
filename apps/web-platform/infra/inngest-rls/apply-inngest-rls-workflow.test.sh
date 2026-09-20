@@ -47,7 +47,6 @@ PRD_WF="$REPO_ROOT/.github/workflows/apply-inngest-rls.yml"
 # chain) plus 2 file-level assertions (prd workflow exists, prd YAML parses) = 17.
 # A mismatch means an assert line was added or removed — investigate it, do not
 # bump this number to match.
-EXPECTED_TOTAL=17
 
 PASS=0
 FAIL=0
@@ -219,10 +218,42 @@ echo "passed=$PASS failed=$FAIL"
 # ANTI-VACUITY FLOOR (Guard 1). Reported with printf + exit rather than through
 # assert(), because assert() is the thing this backstops: a mutation that stops
 # assert() incrementing must not be able to route this verdict through it.
-if [[ $((PASS + FAIL)) -ne "$EXPECTED_TOTAL" ]]; then
-  printf 'FLOOR: executed %d assertions, declared EXPECTED_TOTAL=%d.\n' \
+# `-lt`, NOT `-ne`, and that is two decisions rather than a style choice.
+#
+# (a) A FLOOR is the correct semantics: the count is developer-incremented, so `-ne` turns
+#     every legitimately-added assertion into a spurious failure, which trains the next author
+#     to edit the number reflexively -- the exact habit the message below asks them not to form.
+#     Removal is the direction that loses coverage silently, and a floor catches it.
+# (b) `-ne` is INVISIBLE to scripts/guard-vacuity-floor.test.sh, the repo's meta-guard for
+#     "can this floor actually fire". Its population regex admits `-lt|-le|-ge` (its header
+#     records that `-eq`/`-gt` were tried and reverted), so a `-ne` floor is bounded by nothing
+#     and deleting this block outright would go unnoticed. Measured during review: this file
+#     returned ZERO candidate lines while the three other floors this PR adds all matched. That
+#     is the one failure mode the meta-guard's own header says it cannot report on itself.
+# Bound HERE as a literal, adjacent to the `if`, with NOTHING between them.
+# scripts/guard-vacuity-floor.test.sh builds its mutant by slicing the `if` plus the CONTIGUOUS
+# simple assignments above it, so a threshold bound far away is UNBOUND in that slice: the
+# mutant dies at `set -u` and the floor scores CONSTRUCTION (status unknown) rather than FIRING.
+#
+# "Contiguous" is literal. An intervening `if`/`fi` breaks the walk even when the binding is one
+# line further up -- measured during review: a drift-pin comparing this against a second
+# declaration sat between the two and put the file straight back into the uncovered set. Two
+# variables pinned to each other was the wrong shape; one literal in one place is the right one.
+#
+# Derived 2026-09-19 at the commit that retired the dev half: 15 `probe` assertions
+# (6 path-routing + 1 project pinning + 2 identity + 5 gate semantics + 1 supply chain) plus
+# 2 file-level assertions (prd workflow exists, prd YAML parses) = 17.
+EXPECTED_TOTAL=17
+if [[ $((PASS + FAIL)) -lt "$EXPECTED_TOTAL" ]]; then
+  # The wording carries a term from guard-vacuity-floor.test.sh's FIRES sentinel vocabulary
+  # (`anti-vacuity`, `assertion floor`, `only <n>`, `[FATAL]`, ...). That is not decoration: the
+  # meta-guard classifies a mutant by exit code AND recognised output, so a floor that exits
+  # non-zero with an unrecognised message is scored CONSTRUCTION -- status unknown -- rather
+  # than FIRING, and silently leaves the covered set. Measured twice in this PR, on two
+  # different files, which is why it is written down at the message rather than remembered.
+  printf '\n[FATAL] anti-vacuity assertion floor: only %d assertion(s) ran, expected >= %d (EXPECTED_TOTAL).\n' \
     "$((PASS + FAIL))" "$EXPECTED_TOTAL" >&2
-  printf 'An assert line was added or removed. Investigate it; do not bump the number to match.\n' >&2
+  printf 'An assert line was removed. Investigate it; do not lower the number to match.\n' >&2
   exit 1
 fi
 
