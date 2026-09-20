@@ -48,21 +48,21 @@ Derived from `knowledge-base/project/plans/2026-09-19-chore-retire-doublefire-pr
 
 ## Phase 3: Dispatch (each dispatch arms a Monitor in the same turn)
 
-- [ ] 3.1 Sweeper `dry_run=true` → log contains `issue #6617: DRY_RUN — would close with verdict=PASS`; read the `observed authorAssociation=` line
-- [ ] 3.2 If the permission endpoint 403s → take the CODEOWNERS fallback, push, re-run 3.1
-- [ ] 3.3 Quiesce: zero in-flight runs of `apply-inngest-rls-dev.yml`
-- [ ] 3.4 Drop `mode=dry-run` → `head_sha == SHA_A`; read the 14 per-table rows before authorising anything
-- [ ] 3.5 On `Unexpected inputs` → carry the mode in `reason`; re-dispatch; record which arm ran
-- [ ] 3.6 Drop `mode=drop` → echoed statement in the log, `tables_remaining=0`
-- [ ] 3.7 Re-assert quiesce
-- [ ] 3.8 Terminal: the #6488 probe → exit 0
-- [ ] 3.9 Capture the three run URLs and the echoed statement
+- [x] 3.1 Sweeper `dry_run=true` → log contains `issue #6617: DRY_RUN — would close with verdict=PASS`; read the `observed authorAssociation=` line
+- [x] 3.2 (arm NOT taken — the endpoint answered 200 under `GITHUB_TOKEN`; the CODEOWNERS fallback stayed unshipped) If the permission endpoint 403s → take the CODEOWNERS fallback, push, re-run 3.1
+- [x] 3.3 Quiesce: zero in-flight runs of `apply-inngest-rls-dev.yml`
+- [x] 3.4 Drop `mode=dry-run` → `head_sha == SHA_A`; read the 14 per-table rows before authorising anything
+- [x] 3.5 (arm NOT taken — both inputs were accepted; the SECOND dry-run 35471079218 was re-dispatched for an illegible listing, not an input error) On `Unexpected inputs` → carry the mode in `reason`; re-dispatch; record which arm ran
+- [x] 3.6 Drop `mode=drop` → echoed statement in the log, `tables_remaining=0`
+- [x] 3.7 Re-assert quiesce
+- [x] 3.8 Terminal: the #6488 probe → exit 0
+- [x] 3.9 Capture the three run URLs and the echoed statement
 
 ## Phase 4: Commit B — retire, record, close
 
-- [ ] 4.1 Delete the drop workflow, `0002`, `anon-probe.sh`, `inngest-rls-mutation.test.sh`, both probes, both lint-baseline entries
-- [ ] 4.2 `git mv` the shape guard; strip the `dev_*` block **with** `argv[2]`, the `dev =` load, `DEV_WF=` and the two dev asserts (else 13 of 15 prd probes red)
-- [ ] 4.3 `inngest-rls.test.sh`: hoist the `ALLOW_14` cardinality guard out of `profile_0002` first,
+- [x] 4.1 Delete the drop workflow, `0002`, `anon-probe.sh`, `inngest-rls-mutation.test.sh`, both probes, both lint-baseline entries
+- [x] 4.2 `git mv` the shape guard; strip the `dev_*` block **with** `argv[2]`, the `dev =` load, `DEV_WF=` and the two dev asserts (else 13 of 15 prd probes red)
+- [x] 4.3 `inngest-rls.test.sh`: hoist the `ALLOW_14` cardinality guard out of `profile_0002` first,
   then delete `profile_0002`, `SQL_0002`, the cross-file check and the newly dead helpers.
   **Hoist verified at work time, so it is not taken on faith:** the guard is
   `if [[ "${#ALLOW_14[@]}" -eq 14 ]]` inside `profile_0002`, and `profile_0001`'s negative-noun loop
@@ -72,41 +72,41 @@ Derived from `knowledge-base/project/plans/2026-09-19-chore-retire-doublefire-pr
   immediately after the `ALLOW_14=(` declaration.
   Note: commit A left ONE cross-file check, repointed at the drop workflow's `NAMES` array; it goes
   here with the workflow it reads.
-- [ ] 4.4 `infra-validation.yml`: drop the paths entry, rename the shape-guard step, delete the mutation step
-- [ ] 4.5 Both registration guards; `fixture-relative-assert.baseline.txt`; `lint-supabase-deprecated-endpoints.sh` allowlist (rename entry is mandatory — `UNPINNED-HOST`)
-- [ ] 4.6 Re-measure `lint-supabase-deprecated-endpoints.highwater` at this commit and write the provenance line naming the departed call sites
-- [ ] 4.7 Sweep the dangling references in surviving files. **The work-list below is
+- [x] 4.4 `infra-validation.yml`: drop the paths entry, rename the shape-guard step, delete the mutation step
+- [x] 4.5 Both registration guards; `fixture-relative-assert.baseline.txt`; `lint-supabase-deprecated-endpoints.sh` allowlist (rename entry is mandatory — `UNPINNED-HOST`)
+- [x] 4.6 Re-measure `lint-supabase-deprecated-endpoints.highwater` at this commit and write the provenance line naming the departed call sites
+- [x] 4.7 Sweep the dangling references in surviving files. **The work-list below is
   GREP-ENUMERATED against the live tree at `d5887b050`, not intuited** — the plan's prose
   enumeration (prd workflow header, `0001` RAISE, advisor scan, CODEOWNERS, scrub-pat "FOUR
   places", rehearsal comment, 7431 comment) is a starting hypothesis; these are the actual hits.
   Re-run each grep after the deletions rather than trusting this snapshot.
   - `git grep -nE 'anon-probe' -- . ':!knowledge-base' ':!*.md'`
-    - [ ] `.github/workflows/apply-inngest-rls.yml:50` — comment naming `anon-probe.sh` as a dev-only artifact
-    - [ ] `scripts/lint-shell-trace-credential-refusal.baseline.txt:17` and `-d.baseline.txt:15`
-    - [ ] `scripts/lint-supabase-deprecated-endpoints.sh:18,177` — comments citing `anon-probe.sh:30,55,66`
-    - [ ] `apply-inngest-rls-workflow.test.sh` — `prd_ignores_probe` KEEPS its assertion (the property
+    - [x] `.github/workflows/apply-inngest-rls.yml:50` — comment naming `anon-probe.sh` as a dev-only artifact
+    - [x] `scripts/lint-shell-trace-credential-refusal.baseline.txt:17` and `-d.baseline.txt:15`
+    - [x] `scripts/lint-supabase-deprecated-endpoints.sh:18,177` — comments citing `anon-probe.sh:30,55,66`
+    - [x] `apply-inngest-rls-workflow.test.sh` — `prd_ignores_probe` KEEPS its assertion (the property
       is that the `paths:` filter stays narrow, and a re-widening to `**` would match the path again
       whether or not the file exists); the header note added in commit A already says so. Verify, do not delete.
   - `git grep -nE 'inngest-rls-drop-6488' -- . ':!knowledge-base' ':!*.md'`
-    - [ ] both trace-credential baselines (`:58` / `:37`)
+    - [x] both trace-credential baselines (`:58` / `:37`)
   - `git grep -nE 'inngest-doublefire-reading-6617' -- . ':!knowledge-base' ':!*.md'`
-    - [ ] `scripts/followthroughs/cpx22-invoice-reconcile-7431.sh:65` — comment citing it as precedent
+    - [x] `scripts/followthroughs/cpx22-invoice-reconcile-7431.sh:65` — comment citing it as precedent
   - `git grep -nE 'inngest-rls-mutation' -- . ':!knowledge-base' ':!*.md'`
-    - [ ] `.github/scripts/test/test-infra-suite-registration.sh:114`
-    - [ ] `apps/web-platform/infra/run-registered-suites.test.sh:115`
-    - [ ] `.github/workflows/infra-validation.yml:1525` (the step) — and its `paths:` entry
-    - [ ] `apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:16` — comment citing it
-    - [ ] `plugins/soleur/test/fixture-relative-assert.baseline.txt:175` — regenerate, do not hand-edit
+    - [x] `.github/scripts/test/test-infra-suite-registration.sh:114`
+    - [x] `apps/web-platform/infra/run-registered-suites.test.sh:115`
+    - [x] `.github/workflows/infra-validation.yml:1525` (the step) — and its `paths:` entry
+    - [x] `apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:16` — comment citing it
+    - [x] `plugins/soleur/test/fixture-relative-assert.baseline.txt:175` — regenerate, do not hand-edit
   - `git grep -nE 'apply-inngest-rls-dev' -- . ':!knowledge-base' ':!*.md'`
-    - [ ] `.github/workflows/apply-inngest-rls.yml:54` — "The dev counterpart is …"
-    - [ ] `.github/workflows/infra-validation.yml:66,69` — the transitional comment and the `paths:` entry
-    - [ ] `apply-inngest-rls-workflow.test.sh:154` — `prd_ignores_devwf`: same disposition as `prd_ignores_probe`
-  - [ ] `scripts/lib/scrub-supabase-pat.sh:6` — "inlined in FOUR places"; re-count after the deletions
+    - [x] `.github/workflows/apply-inngest-rls.yml:54` — "The dev counterpart is …"
+    - [x] `.github/workflows/infra-validation.yml:66,69` — the transitional comment and the `paths:` entry
+    - [x] `apply-inngest-rls-workflow.test.sh:154` — `prd_ignores_devwf`: same disposition as `prd_ignores_probe`
+  - [x] `scripts/lib/scrub-supabase-pat.sh:6` — "inlined in FOUR places"; re-count after the deletions
     (the dev workflow and `anon-probe.sh` were two of them) and write the measured number.
-- [ ] 4.8 ADR-100 addendum (the URL-bearing record); ADR-030 amendment-log pointer; `expenses.md` pointer
-- [ ] 4.9 `followthrough-convention.md` rule citing the measured value; learning item 19 correction
-- [ ] 4.10 De-enrol both trackers (label + directive block)
-- [ ] 4.10b De-enrol **#5110** too. Found at work time, not in the plan: #5110 is CLOSED but still
+- [x] 4.8 ADR-100 addendum (the URL-bearing record); ADR-030 amendment-log pointer; `expenses.md` pointer
+- [x] 4.9 `followthrough-convention.md` rule citing the measured value; learning item 19 correction
+- [x] 4.10 De-enrol both trackers (label + directive block)
+- [x] 4.10b De-enrol **#5110** too. Found at work time, not in the plan: #5110 is CLOSED but still
   carries a `<!-- soleur:followthrough script=scripts/followthroughs/betterstack-quota-verdict-5105.sh`
   directive, and commit A deletes that script. `sweep-followthroughs.sh` fails a tracker whose script
   is "missing in repo HEAD", and it runs a closed-set reopen pass — so after merge the directive would
@@ -115,8 +115,8 @@ Derived from `knowledge-base/project/plans/2026-09-19-chore-retire-doublefire-pr
   is OUT of the window today and this is latent rather than live. De-enrol it anyway — a dangling
   directive whose script does not exist is exactly the cruft this PR exists to remove, and the window
   is a default someone can raise.
-- [ ] 4.11 Re-run every suite whose population changed, including `--check-highwater`
-- [ ] 4.12 PR body: Changelog, `Closes #6617`, `Closes #6488`, the dispatch arm taken, three run URLs, echoed DROP in `<details>`
+- [x] 4.11 Re-run every suite whose population changed, including `--check-highwater`
+- [x] 4.12 PR body: Changelog, `Closes #6617`, `Closes #6488`, the dispatch arm taken, three run URLs, echoed DROP in `<details>`
 
 ## Phase 5: Post-merge
 

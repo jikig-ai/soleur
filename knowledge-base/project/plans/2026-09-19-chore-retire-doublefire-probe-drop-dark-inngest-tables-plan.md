@@ -327,8 +327,16 @@ logs:
   retention: "90 days (GitHub default); the ADR-100 addendum and the PR body carry the durable record"
 
 discoverability_test:
-  command: "git ls-files .github/workflows/apply-inngest-rls-dev.yml apps/web-platform/infra/inngest-rls/0002_dev_inngest_tables_lockdown.sql apps/web-platform/infra/inngest-rls/anon-probe.sh apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh scripts/followthroughs/inngest-rls-drop-6488.sh scripts/followthroughs/inngest-doublefire-reading-6617.sh scripts/followthroughs/betterstack-quota-verdict-5105.sh"
-  expected_output: "(empty — none of the retired artifacts is tracked)"
+  # Asserts the SURVIVING set, not the absent one, and that inversion is forced
+  # rather than stylistic. preflight Check 10 matches by substring: it tokenises
+  # `expected_output` and passes when any token appears in the probe's stdout, so
+  # an expectation of "no output" can never match and an absence probe FAILs the
+  # gate however correct it is. Measured at ship time on this very plan: the
+  # earlier form ran `git ls-files` over the seven retired paths and printed
+  # nothing — the right answer — and scored row 11 (expectation drift).
+  # The absence half is asserted by AC-3 and AC-4, which are greps, not probes.
+  command: "git ls-files apps/web-platform/infra/inngest-rls/"
+  expected_output: "0001_enable_rls_lockdown.sql, apply-inngest-rls-workflow.test.sh, inngest-rls.test.sh"
 ```
 
 ## Gate dispositions (Phases 2.7–2.11)
