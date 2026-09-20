@@ -103,3 +103,61 @@ plan file removed:   scanned 1575 plan file(s), 32 with a Guard Contract, 77 gua
 
 One more file, two more guard entries — the delta the plan predicted. The invariant is the delta,
 not the literals.
+
+## Round 2 — the 11-seat review panel (2026-09-20)
+
+The first battery scored 27/27 and was measuring the axes its author imagined. The panel
+enumerated the axes it never edited, and every merge-blocking finding was in this PR's own
+verification rather than in the fix.
+
+### The axis the first battery never touched: the deciders' own branch
+
+`pass()`/`fail()` had a control (block `L`). That proves DISPATCH. `want_in`, `want_not_in`,
+`want_eq`, `check_r8` and `check_r9` each decide a branch and THEN call `pass()`, so a decider
+that always passes appends a genuine `PASS` row and counters, ledger and floor all reconcile.
+
+| Mutation | Before (measured) | After block L2 |
+|---|---|---|
+| `want_in() { ck; pass "$3"; }` | GREEN 137/0/137 | rc=2, named FATAL |
+| `want_not_in() { ck; pass "$3"; }` | GREEN 137/0/137 | rc=2, named FATAL |
+| `want_eq() { ck; pass "$3"; }` | GREEN 137/0/137 | rc=2, named FATAL |
+| `case "$1" in` → `case "$1$2" in` (one token, 21 rows blind) | GREEN 137/0/137 | rc=2, named FATAL |
+| `check_r8` body → `ck; pass` loop | GREEN 137/0/137 | rc=2, named FATAL |
+| `check_r9` body → `ck; pass` loop | GREEN 167/0/167 | rc=2, named FATAL |
+
+**The composite result, before the fix:** three decider bodies gutted **plus** a ban-evading
+revert of the resolver (`XROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${GROK_PLUGIN_ROOT:-$XROOT}"`) —
+the defect this PR exists to fix, live — reported `137 passed, 0 failed`, rc=0.
+
+### Other axes the panel added, each now mutation-proven
+
+| Axis | Mutation | Before | After |
+|---|---|---|---|
+| TS scan wiring | P1b scan body → `return []`, real violation planted | GREEN 27/27 | rc=1, 2 failed |
+| TS predicate | revert `readsRootUnsafely` to the 2-clause form | GREEN | rc=1, 2 failed |
+| TS anchor | `XROOT` indirection revert of the resolver | GREEN 83/0 | rc=1 |
+| Set cardinality | add a 4th gate fence to `go.md` | GREEN 137/0/137 | rc=1, named |
+| Set cardinality | shorten `GATE_NAMES` to 2 | raw `unbound variable` after 100+ PASS rows | rc=1, named |
+| SUT (the P1) | revert the `.mcp.json` write-then-rename | no row existed | rc=1, 2 failed |
+| SUT | restore the duplicate `absent-from-verified-root` marker | no row existed | rc=1, named |
+
+### Predicate bypasses found by measurement, not by mutation
+
+A mutation battery scores the SUT through the fixtures it already has, so it cannot see a
+fixture-space gap. These were found by feeding the PRISTINE predicate a corpus it should refuse:
+
+| Shape | Old predicate | Tightened |
+|---|---|---|
+| `${CLAUDE_PLUGIN_ROOT-./plugins/soleur}` (colon-less — the #7442 class) | NOT flagged | flagged |
+| `${CLAUDE_PLUGIN_ROOT:=./plugins/soleur}` | NOT flagged | flagged |
+| `$(printenv CLAUDE_PLUGIN_ROOT)` | NOT flagged | flagged |
+| `ROOT="${CLAUDE_PLUGIN_ROOT}"` … later `ROOT="${GROK_PLUGIN_ROOT:-$ROOT}"` | NOT flagged | caught by the new `workflow-fidelity` negative |
+
+### Instrument notes
+
+Two rows in this round initially reported a FALSE result and were re-run: one `perl`-style
+anchor did not land (the script asserts before its single write, so the whole batch was
+discarded while the suite reported its previous green — indistinguishable from a pass), and one
+vitest verdict grep was defeated by ANSI codes and returned empty for every arm. Both were
+caught by requiring the mutation to be asserted landed and by reading the exit code rather than
+a parsed summary line.

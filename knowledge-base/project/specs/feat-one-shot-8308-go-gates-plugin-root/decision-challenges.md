@@ -61,3 +61,47 @@ claims the plan itself had made (`cleanup-merged` being "read-mostly"; a new `.t
 of baseline churn; `ANCHOR_FIXTURES` being the home for a new positive control). Those are recorded
 in the plan's Research Reconciliation table rather than here, because they were errors, not
 disagreements.
+
+## Review-round declines (2026-09-20, 11-seat panel)
+
+Findings the panel raised that were NOT applied, with the reason. Recorded because a declined
+finding with no record reads later as one nobody noticed.
+
+### DECLINED — admit `not-local:sentinel-absent` to Step 0's proceed set
+
+**Raised by:** user-impact (Finding 8) and, in passing, code-quality. Both correct about the
+symptom: a local box with a stray `DEVIN_DIR` exported reports that verdict, so the preamble is
+skipped and the operator is told `reason=cloud-session` on their own laptop. Measured, and it is
+this repo's own operator profile.
+
+**Why declined.** `cloud-detect.sh`'s header is explicit: *"not-local:<reason> — everything else;
+consumers MUST fail closed on it"*, with exactly one documented carve-out (*"Callers treat
+no-devin-env like `local`"*). `sentinel-absent` means "a Devin-MARKED box with no sentinel" —
+the fail-closed case by construction. Admitting it would let a real Devin cloud session reach
+`cleanup-merged`, which is the destructive direction, to fix a cosmetic misattribution.
+
+**What was done instead.** The predicate is unchanged and now carries the classifier's contract
+as a comment. The skip reports `reason=cloud-session verdict=<v>`, and a fifth state-keyed
+sentence tells the operator which variable causes it and to unset it. The symptom is addressed
+in the reason; the safety property is untouched.
+
+### DECLINED — collapse the four state-keyed sentences to two
+
+**Raised by:** code-simplicity (mechanism 5), on the grounds that `grok-env verified=false` and
+`verified=false with any other source` resolve to the same operator action.
+
+**Why declined.** They do not: one says "your `GROK_PLUGIN_ROOT` points somewhere else, check it"
+and the other says "reinstall the plugin". AC7 mandates four, and the split exists because CPO
+note B objected to a blanket "file a defect" misattributing a customer's configuration to Soleur.
+The panel then ADDED a fifth (above), which is the opposite of the pressure to collapse.
+
+### DECLINED for this PR — version-sort the Devin cache arm
+
+**Raised by:** security (F3) and user-impact (Finding 6). Real: `find … | head -1` is readdir
+order, and a plugin cache holds several versions by design.
+
+**Why declined here.** The arm is confined to Step 0.5, whose only dispatch is a classifier, so
+the worst outcome is a wrong session class and no mutation — bounded, and the seats agreed it is
+not blocking. Version-sorting it correctly is coupled to the #8401 migration, which is where the
+requirement is now recorded (with the measurement that makes it load-bearing). Doing it here
+would put the harder half of #8401's design into a PR that deliberately does not take it.

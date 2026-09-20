@@ -265,8 +265,11 @@ want_eq "$(count_fences "$GO_MD")" "${#GATE_ANCHORS[@]}" "R10: every declared ga
 # The four tables below are parallel by construction and every row indexes all four. Without
 # this, adding a member to one silently desyncs the rest and every loop quietly covers N-1 of N.
 for _arr in GATE_NAMES GATE_ABSENT_MARKERS GATE_UNVERIFIED_MARKERS; do
-  eval "_n=\${#${_arr}[@]}"
-  want_eq "$_n" "${#GATE_ANCHORS[@]}" "R10: $_arr has one member per gate anchor"
+  # A nameref, not `eval "_n=\${#${_arr}[@]}"` — same result, but shellcheck can see the
+  # assignment (the eval form draws SC2154) and there is no quoting surface to get wrong.
+  declare -n _ref="$_arr"
+  want_eq "${#_ref[@]}" "${#GATE_ANCHORS[@]}" "R10: $_arr has one member per gate anchor"
+  unset -n _ref
 done
 # A FOURTH gate fence added to go.md is invisible to a check that only counts the anchors we
 # already declared — measured: appending a `## Step 0.9` fence carrying the #8061 form, a CWD
