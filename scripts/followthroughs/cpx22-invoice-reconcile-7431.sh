@@ -62,7 +62,8 @@
 # verdict-selection comment below.
 #
 # This probe follows the operator-confirmed shape already established by
-# `inngest-doublefire-reading-6617.sh`; it is not a new pattern. Two things are genuinely different
+# the now-retired #6617 doublefire probe (deleted with its tracker, 2026-09-19);
+# it is not a new pattern. Two things are genuinely different
 # and are argued where they occur: the author filter, and the last-verdict-wins selection.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):

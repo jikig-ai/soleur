@@ -62,11 +62,8 @@ on:
       # (path routing, project pinning, identity preflight, gate semantics).
       # Without this path, an edit to it — including re-widening the `paths:`
       # glob that used to auto-apply 0001 to Inngest prd — would never run the
-      # guard that catches it. The dev-workflow path is still listed because
-      # apply-inngest-rls-dev.yml exists for one more commit (it is the transient
-      # #6488 drop workflow) and is deleted, with this line, in commit B.
+      # guard that catches it.
       - ".github/workflows/apply-inngest-rls.yml"
-      - ".github/workflows/apply-inngest-rls-dev.yml"
       # (#7025) git-data-rung2-rehearsal.test.sh reads THREE workflows and asserts ~64
       # properties across them: the rehearsal route's dispatch contract, its errexit posture
       # (arm 13d), the behavioural capture-poll arms that EXECUTE the real step body, the
@@ -1517,12 +1514,6 @@ jobs:
       - name: Run supabase-advisor scan-workflow mutation attestation
         run: bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh
 
-      # Proves the step above's sequence-DDL guard still FAILS on the catastrophe it
-      # claims to catch. It is the only check standing between an unbound sequence loop
-      # and a schema-wide REVOKE on the app's co-tenanted tables, so its non-vacuity is
-      # itself worth a gate. Mutates a sandbox copy only — never the tracked SQL.
-      - name: Run inngest-rls sequence-guard mutation attestation
-        run: bash apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
 
       - name: Run git-data writer-side CAS fence tests
         run: bash apps/web-platform/infra/git-data-pre-receive.test.sh

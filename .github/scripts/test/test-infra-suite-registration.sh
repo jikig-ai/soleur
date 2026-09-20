@@ -111,7 +111,6 @@ EXCLUSIONS=(
 # subdirectory suite must be a deliberate, visible decision.
 KNOWN_UNDERIVABLE=(
   "$INFRA_PREFIX/inngest-rls/apply-inngest-rls-workflow.test.sh"
-  "$INFRA_PREFIX/inngest-rls/inngest-rls-mutation.test.sh"
   "$INFRA_PREFIX/inngest-rls/inngest-rls.test.sh"
   "$INFRA_PREFIX/scripts/gen-github-egress-cidr.test.sh"
   "$INFRA_PREFIX/scripts/sigpipe-triage-feasibility.test.sh"
