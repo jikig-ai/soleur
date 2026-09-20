@@ -216,10 +216,11 @@ Run every instrument against a case whose answer you already know before reading
 
 ## Addendum — 2026-09-20 (#8010 / PR #8412): the ship round, and how little of it was new
 
-Shipping this branch surfaced **ten** further defects (3 + 3 + 2 + 1 + 1 across the groups below).
-A four-seat review of the first draft of this addendum then found that **four of the five classes I
-had written up as discoveries were already documented**, with anchors I had loaded in the same
-session. That is the more useful finding, so it goes first.
+Shipping this branch surfaced **ten** further defects — 3 advisor consult + 3 AC sweep + 2 battery
++ 1 CI + 1 preflight Check 10, the five rows of the PR's instrument table. Review of this addendum
+then found that **all five classes I had written up as discoveries were already documented**, with
+anchors I had loaded in the same session; four are in the table below and the fifth is in
+*The one class stated three times* further down. That is the more useful finding, so it goes first.
 
 ### What was already written down
 
@@ -240,7 +241,7 @@ splits each rule's canonical home.
 **The rule this violates is already in the corpus too:** *the disposition for a recurring
 documented class is a mechanical gate, not another learning.*
 
-### The one class with no prior statement
+### The one class stated three times and gated zero times
 
 `soleur:preflight` Check 10 executes a plan's declared `discoverability_test.command` inside a
 bubblewrap sandbox under a **15-second cap**, and compares stdout against `expected_output`. This
@@ -248,16 +249,33 @@ plan declared `bash tests/scripts/test-git-data-birth-readiness-gate.sh` — the
 with a prose `expected_output`. Measured at this PR's own ship gate: killed at `rc=124` with arms
 still passing, and no matcher can compare stdout to a sentence.
 
-Check 10 behaved exactly as specified. The gap is upstream: `plan/SKILL.md`'s **Reject conditions**
-for `discoverability_test` cover `ssh`, the verb allowlist and placeholder text, and do not cover
-a command that cannot finish inside the cap, or an `expected_output` that is not a matchable
-literal. This PR adds both, mirrored into `deepen-plan` Phase 4.7 — so the class becomes a gate
-rather than a fourth learning.
+**I first wrote this section as "the one class with no prior statement". One grep against
+`origin/main` falsifies that** — the class was on record three times before this PR, and the
+durable sentence I thought I was deriving was written a month earlier:
 
-The durable shape: **a declared verification is only a verification if the thing that consumes it
-can run it.** Replaced here by `scripts/git-data-rung2-gate-verdict.sh`, which prints the single
-`RELEASED`/`HOLD [<TOKEN>]` line the plan's own `liveness_signal` already names as the signal, in
-about a second.
+| Where | When |
+| --- | --- |
+| `knowledge-base/project/plans/archive/20260811-002501-2026-08-10-fix-infra-suite-runner-parallel-flake-plan.md` — *"takes ~23 minutes against a 15-second cap. A command a gate cannot execute proves nothing about discoverability"* | 2026-08-10 |
+| `scripts/git-data-rung2-gate-verdict.sh` › `# WHY NOT THE SUITE` — both halves, cap and prose matcher | #8388, **written by me two days before this PR** |
+| `knowledge-base/project/plans/2026-09-19-fix-git-data-rung2-gate-load-bearing-plan.md` › `# AMENDED 2026-09-20` | this cycle |
+
+So this class belongs with the other five, not apart from them, and the count is **six of six**
+already on record. What was genuinely missing is not the statement but the **enforcement**: a plan
+comment is not a gate, and `plan/SKILL.md`'s **Reject conditions** for `discoverability_test`
+covered `ssh`, the verb allowlist and placeholder text, and neither of these. That is what this PR
+adds — mirrored into `deepen-plan` Phase 4.7, its Step 5 pass-through,
+`deepen-plan.workflow.js` (a second live runtime of the same gate, found disagreeing by review) and
+`observability-coverage-reviewer.md`.
+
+It is still prose, which is the weakest form available and is what AP-021/AP-022 say does not hold.
+The `expected_output` condition is decidable today with the shipped `tokenizeExpected`, and the
+`15` is now hand-copied to eight sites with a pin on one — the same restated-value class as row 1
+of the table above. Both are tracked in **#8413**, with `probe-verb-gate.sh` as the pattern.
+
+The durable shape was already stated in the 2026-08-10 plan above: **a declared verification is
+only a verification if the thing that consumes it can run it.** Here it was satisfied by
+`scripts/git-data-rung2-gate-verdict.sh`, which prints the single `RELEASED`/`HOLD [<TOKEN>]` line
+the plan's own `liveness_signal` already names as the signal, in about a second.
 
 ### Residual, not closed
 
@@ -307,6 +325,12 @@ with the other rung-2 residuals.
    **Prevention:** this file's own body already says *verify a measurement ONCE, before it
    propagates*. For a count, state the arithmetic inline (`3 + 3 + 2 + 1 + 1`) so the claim carries
    its own check.
-9. **Wrote up four documented classes as discoveries.** Before writing a learning, grep
-   `plugins/soleur/skills/*/SKILL.md` and `knowledge-base/project/learnings/` for the class and
-   cite it; a restatement splits the canonical home and is worse than silence.
+9. **Wrote up five documented classes as discoveries**, then wrote "the one class with no prior
+   statement" over a class with three — one of them a comment I had written myself two days
+   earlier, in a script this same PR cites.
+   **Prevention:** grep the class repo-wide before claiming novelty, not just
+   `plugins/soleur/skills/*/SKILL.md` and `knowledge-base/project/learnings/`. Those two scopes
+   are exactly what missed all three hits here, which lived in
+   `knowledge-base/project/plans/` (including `archive/`) and `scripts/`. A restatement splits the
+   canonical home and is worse than silence; "no prior statement" is a claim, so it needs the
+   command that falsifies it run before it is written.

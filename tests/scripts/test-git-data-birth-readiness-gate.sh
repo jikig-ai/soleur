@@ -2688,7 +2688,7 @@ while IFS= read -r _tok_lit; do
   [[ $((_n_cannot + _n_meas)) -eq 1 ]] || _e2d_bad+="${_tok_lit}(${_n_cannot}${_n_meas}) "
 done < <(grep -oE 'rehearsal_gate: (HOLD|ABORT) \[[A-Z0-9_]+\]' "$GATE" | grep -oE '\[[A-Z0-9_]+\]' | tr -d '[]' | sort -u)
 if [[ -z "$_e2d_bad" ]]; then
-  pass "E2d: every bracketed token the gate emits is classified in exactly one set"
+  pass "E2d: every LITERALLY-bracketed token in the gate source (10 of 21) is in exactly one set"
 else
   fail "E2d: tokens classified in neither or both sets — ${_e2d_bad}" "n/a" ""
 fi
@@ -2971,7 +2971,9 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #                       both counters and satisfies the floor. Contributes 0 to this count on
 #                       purpose (it snapshots and unwinds), like _am_self_test beside it.
 #     3  E2b/E2c/E2d    the annotation's two sets, asserted in BOTH directions plus disjoint
-#                       coverage of every bracketed token the gate emits. E2 itself was
+#                       coverage of the LITERALLY-bracketed tokens in the gate source -- 10 of
+#                       the 21 declared; the 11 emitted through the generic `HOLD [${_tok}]`
+#                       sites are outside E2d's haystack (#8397). E2 itself was
 #                       vacuous — its fixture refused at step B, which has no annotate call.
 #     2  N1b/N1c        the API base is a readonly https constant (an env override handed an
 #                       attacker the bearer AND step C's verdict); the sanitizer is driven

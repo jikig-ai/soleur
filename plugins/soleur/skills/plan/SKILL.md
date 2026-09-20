@@ -653,9 +653,13 @@ failure_modes:      # list of {mode, detection, alert_route}
 logs:               # where / retention
 discoverability_test:
   command:              # one command an operator can run LOCALLY (NO ssh). preflight Check 10
-                        # EXECUTES this in a sandbox, so the first token must be an allowlisted
-                        # probe verb or a repo-relative path — see the reject conditions below.
-  expected_output:      # canonical "everything OK" output
+                        # EXECUTES this in a sandbox under a 15s cap, so the first token must be
+                        # an allowlisted probe verb (NO path-shaped exemption — wrap anything
+                        # else in a committed repo-relative script invoked as `bash path/x.sh`),
+                        # and the whole command must finish inside the cap. Rejects below.
+  expected_output:      # the LITERAL string(s) the command prints — "200", "ok",
+                        # "RELEASED or HOLD or ABORT". Check 10 substring-matches these against
+                        # stdout, so a sentence DESCRIBING the output can never match.
   credentials_required: # OPTIONAL — only when the property has no unauthenticated substitute
 ```
 
@@ -666,8 +670,19 @@ discoverability_test:
 - `discoverability_test.command` contains `ssh ` (with trailing space — distinguish "ssh " the verb from "ssh-free" in docs). A `credentials_required` declaration does **not** override this. <!-- markdownlint-disable-line MD038 -->
 - `discoverability_test.command`'s first token is not on preflight Check 10's `PROBE_VERB_ALLOWLIST` (`curl bash grep rg jq python3 node bun printf git`). There is no path-shaped exemption — a first token containing `/` is subject to the same list. Check 10 executes this command inside a sandbox; the allowlist is schema validation ("can this run at all?"), not a security control, and every entry is an authority grant the sandbox — not the list — bounds. Wrap anything else in a repo-relative script committed in the SAME PR: it runs with `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME` on tmpfs, no credential stores, and the repo read-only.
 - `discoverability_test.credentials_required` is present but placeholder text. The field is **optional**; when a probe verifies a property with no unauthenticated substitute, state the credential scope and the justification (`"<scope> — <why no unauthenticated probe verifies the same property>"`) and Check 10 skips it explicitly (`SKIP-DECLARED`) instead of executing it. A declaration that says nothing waives nothing.
-- `discoverability_test.command` is a whole test suite, a full build, or anything else that cannot finish inside preflight Check 10's **15-second cap**. Check 10 runs the declared command in a bubblewrap sandbox under `timeout 15s`; a longer command is killed at `rc=124` and reported as a FAILED probe (row 9), which is indistinguishable from the endpoint being down. A suite is the right command to TEST the thing and the wrong one to DISCOVER its signal — declare the smallest command that prints the signal `liveness_signal.what` already names, and wrap it in a committed repo-relative script if it needs more than one statement. **Why:** #8010/PR #8412 — a plan declared its own 236-assertion gate suite here; Check 10 killed it with arms still passing.
-- `discoverability_test.expected_output` is PROSE rather than a matchable literal. Check 10 tokenizes this field and substring-matches it against the command's stdout (row 11), so a sentence like `"the suite's final ledger line reports 0 failures"` can never match and the probe FAILS on a healthy system. State the literal(s) the command actually prints — `"200"`, `"RELEASED or HOLD or ABORT"`, `"ok"` — not a description of what they mean.
+- `discoverability_test.command` is a whole test suite, a full build, or anything else that cannot finish inside preflight Check 10's **15-second cap**. Check 10 runs the declared command in a bubblewrap sandbox under `timeout 15s`; a longer command is killed at `rc=124` and reported as a FAILED probe (row 9), which is indistinguishable from the endpoint being down. A suite is the right command to TEST the thing and the wrong one to DISCOVER its signal — declare the smallest command that prints the signal `liveness_signal.what` already names. Wrapping in a committed repo-relative script satisfies the VERB allowlist, not this condition — a suite wrapped in a script is still a suite; the wrapper is the remedy for a multi-statement probe that is already fast. **Why:** #8010/PR #8412 — a plan declared its own 236-assertion gate suite here; Check 10 killed it with arms still passing.
+- `discoverability_test.expected_output` is PROSE rather than a matchable literal. Check 10 tokenizes this field and asks whether any token is a substring of the command's stdout (preflight `## Step 10.6` *Expected-output matching semantics*; note the row-11 cell states the direction backwards and is a known defect in that table), so a sentence like `"the suite's final ledger line reports 0 failures"` cannot be relied on to match and the probe FAILS on a healthy system. (Not *never*: the tokenizer splits on `,`, `or`, quotes, brackets and `/`, so a prose value containing those yields fragments, and a long enough fragment that happens to occur in stdout matches by accident — which is worse than a clean FAIL.) State the literal(s) the command actually prints — `"200"`, `"RELEASED or HOLD or ABORT"`, `"ok"` — not a description of what they mean. **Absent** counts as violating this too: an empty `expected_output` parses to `""`, matches nothing, and surfaces at ship time as a row-11 "expectation drift" FAIL — the misdiagnosis this condition exists to prevent.
+
+**Scope of the two conditions above (added #8412).** A non-placeholder `credentials_required`
+short-circuits both: preflight row 4 (`SKIP-DECLARED`) precedes rows 9 and 11, so the command is
+never executed and neither condition is reachable at ship time — `deepen-plan` Step 5 encodes this
+and this list must not disagree with it. Otherwise they bind a `discoverability_test` this change
+AUTHORS or AMENDS. They are not retroactive: measured at introduction, of the 856 plans under
+`knowledge-base/project/plans/` carrying the block, ~372 declare a prose or block-scalar
+`expected_output` and ~261 a suite-shaped `command`, every one of them compliant when written.
+`soleur:deepen-plan` run against a pre-existing block REPORTS these two as findings and proceeds;
+it HALTs on them only when the block is new or edited in the same change. Every other reject
+condition in this list is unscoped and halts either way.
 
 **Skip silently** when:
 
