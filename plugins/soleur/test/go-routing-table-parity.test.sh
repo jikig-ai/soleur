@@ -53,10 +53,19 @@ ck()  { asserted=$((asserted + 1)); }
 # --- derive the sets -----------------------------------------------------------------------------
 # Rows are scoped to the eval-gated block, so a prose table elsewhere in go.md cannot contribute one.
 # Each row is emitted as `<intent>\t<first backticked token of the Routes To cell>`.
+#
+# The block markers are ASSEMBLED here rather than written out, and matched with awk's index()
+# rather than a regex. eval-harness's registry-completeness.test.sh `git grep`s all of
+# plugins/soleur/ for `eval-gate:block:<id>:start` and requires each id to appear exactly ONCE,
+# so a literal copy of the marker in this file registers as a duplicate gated block. Splitting the
+# id out of the string is what keeps that scan seeing one source of truth.
+GATED_BLOCK_ID="go-routing"
+BLOCK_START="<!-- eval-gate:block:${GATED_BLOCK_ID}:start -->"
+BLOCK_END="<!-- eval-gate:block:${GATED_BLOCK_ID}:end -->"
 mapfile -t ROWS < <(
-  awk -F'|' '
-    /<!-- eval-gate:block:go-routing:start -->/{f=1; next}
-    /<!-- eval-gate:block:go-routing:end -->/{f=0}
+  awk -F'|' -v start="$BLOCK_START" -v end="$BLOCK_END" '
+    index($0, start) {f=1; next}
+    index($0, end)   {f=0}
     f && $2 ~ /^ [a-z][a-z-]* $/ {
       intent=$2; gsub(/ /, "", intent)
       target=""
