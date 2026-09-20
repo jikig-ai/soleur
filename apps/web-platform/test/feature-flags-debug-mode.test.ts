@@ -20,6 +20,7 @@ vi.mock("@sentry/nextjs", () => ({
 
 import {
   isDebugModeAvailable,
+  isEngineRolloutEnabled,
   __resetFeatureFlagsForTests,
   type Identity,
 } from "@/lib/feature-flags/server";
@@ -58,5 +59,20 @@ describe("isDebugModeAvailable (AC2 — fail-closed dev-cohort gate)", () => {
   it("prd identity + flag OFF → false (role gate)", async () => {
     delete process.env.FLAG_DEBUG_MODE;
     await expect(isDebugModeAvailable(prdIdentity)).resolves.toBe(false);
+  });
+});
+
+describe("isEngineRolloutEnabled (engine registry rollout mapping)", () => {
+  it("keeps the always-on Claude engine available without an organization flag", async () => {
+    await expect(isEngineRolloutEnabled("claude-code", null, prdIdentity)).resolves.toBe(true);
+  });
+
+  it("fails closed for an engine without an explicit rollout registration", async () => {
+    await expect(isEngineRolloutEnabled("grok-build", "org-1", { ...prdIdentity, orgId: "org-1" })).resolves.toBe(false);
+  });
+
+  it("requires the identity organization to match the rollout target", async () => {
+    process.env.FLAG_CODEX_ENGINE = "1";
+    await expect(isEngineRolloutEnabled("codex", "org-1", prdIdentity)).resolves.toBe(false);
   });
 });
