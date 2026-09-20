@@ -113,8 +113,8 @@ cache of gitignored data     rule-metrics.json (ADR-091)     untrack; regenerate
 product artifact             model.likec4.json               keep committed; regenerate on conflict
 ```
 
-Artifacts: `knowledge-base/project/brainstorms/2026-09-19-kb-index-untrack-generated-artifacts-brainstorm.md`,
-`knowledge-base/project/specs/feat-kb-index-untrack/spec.md`, draft PR #8384.
+Artifacts (archived at ship): `knowledge-base/project/brainstorms/archive/20260920-221256-2026-09-19-kb-index-untrack-generated-artifacts-brainstorm.md`,
+`knowledge-base/project/specs/archive/20260920-221256-feat-kb-index-untrack/spec.md`, PR #8384.
 
 ## Why This Works
 

@@ -2361,7 +2361,10 @@ if want_scripts; then
   # a collation edge -- would have been green in CI and reached the operator as "no prior art"
   # (#8384 review). Writes to a scratch dir, never the tree: this runner's boundary check
   # treats any repo write as a FATAL. Measured 3 s. Positive floors, not `-s`: a generator that
-  # emitted a header and nothing else would pass an emptiness check.
+  # emitted a header and nothing else would pass an emptiness check. It is a FILE, not an
+  # inline `bash -c '...'`: `--enumerate-commands` encodes each registration as one TSV row and
+  # refuses an argv element containing a NEWLINE, so a multi-line inline body reds
+  # battery-tag-authorship.test.sh ("refusing to classify against an empty root set").
   run_suite "scripts/generate-kb-index-live" bash scripts/generate-kb-index-live.test.sh
   run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
