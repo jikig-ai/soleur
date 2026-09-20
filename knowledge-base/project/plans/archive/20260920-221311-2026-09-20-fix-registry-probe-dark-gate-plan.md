@@ -772,7 +772,7 @@ logs:
   retention: "repository default for Actions logs (90 days)"
 discoverability_test:
   command: |
-    grep -c 'RPG_VERDICT="$(inngest_execute_registry_gate' scripts/cutover-inngest.sh
+    grep -c 'RPG_VERDICT=.*inngest_execute_registry_gate' scripts/cutover-inngest.sh
   expected_output: "1"
 ```
 
@@ -948,4 +948,4 @@ block is what the review changed and why. Nothing here reverses a D-number.
   third-consumer trigger, and the `(:1402-1530)` line citation is a content anchor.
 - **Observability `discoverability_test`** failed Check 10 both as parsed (YAML escapes reached
   `bash -c` unresolved) and as intended (the arm's own comment sat inside the awk range and printed
-  2); replaced by a block scalar anchored on the assignment form.
+  2); replaced by a block scalar anchored on the assignment form (`RPG_VERDICT=.*inngest_execute_registry_gate` — the `$(` form is a shell-active token Check 10's Step 10.5 rejects before running).
