@@ -31,7 +31,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
-import { emitOutcomeMarker, type CompoundPromoteStatus } from "@/server/compound-promote-marker";
+import {
+  emitOutcomeMarker,
+  type CompoundPromoteStatus,
+  type RefusalDetailEntry,
+} from "@/server/compound-promote-marker";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/server/observability";
 import {
@@ -261,15 +265,104 @@ export const TARGET_ALLOW_RE =
  */
 type ClusterOutcome =
   | { kind: "opened" }
-  | { kind: "refused"; reason: string };
+  | {
+      kind: "refused";
+      reason: string;
+      /**
+       * #8427. Optional because only the `checkDiffPaths` branch has one; every
+       * other refusal site carries its cause entirely in `reason`.
+       *
+       * These travel ON THE OUTCOME, computed INSIDE the memoized step callback,
+       * because `refusalDetail.push(...)` runs OUTSIDE it. An earlier revision
+       * pushed into a handler-scope array from inside the callback and emitted
+       * `refusals: []` on every real run — Guard 3 of the outcome-census suite
+       * exists for that regression.
+       */
+      detail?: string;
+      diff_len?: number;
+      diff_fenced?: boolean;
+      diff_header_pair?: boolean;
+      diff_hunk?: boolean;
+    };
 
 // =============================================================================
 // Diff path derivation (#8274)
 // =============================================================================
 
+/**
+ * CO-MOVING ARTIFACTS (#8427). Adding or removing a member of `reason` below is
+ * never a local edit. Seven artifacts must move together, and the AST census in
+ * `cron-compound-promote-outcome-census.test.ts` fails the build if the first
+ * two disagree:
+ *
+ *   1. this union;
+ *   2. the `reason:` literal on every `ok: false` return inside `checkDiffPaths`;
+ *   3. that site's behavioural row in `cron-compound-promote-allowlist.test.ts`;
+ *   4. the AST census's declared-vs-emitted multiset comparison;
+ *   5. the refusal-enum paragraph in
+ *      `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`;
+ *   6. the `failure_modes` table in this change's plan;
+ *   7. Processing Activity 8's `(c) Categories of personal data` cell in
+ *      `knowledge-base/legal/article-30-register.md`.
+ *
+ * Before #8427 SIX structurally different conditions all returned the single
+ * literal `underivable`, so a refusal told an operator that path derivation had
+ * failed and nothing about why. A broken checkout and a model emitting a fenced
+ * code block were the same string.
+ *
+ * `empty` deliberately does NOT carry the `underivable` prefix. The emit site
+ * renders these as `diff-<reason>`, so the five `underivable-*` members stay
+ * prefix-compatible with a saved `diff-underivable` query while `diff-empty`
+ * does not — that is a RECLASSIFICATION, not an oversight. An empty proposal was
+ * never a derivation failure.
+ */
 export type DiffPathVerdict =
   | { ok: true; paths: string[] }
-  | { ok: false; reason: "structural-op" | "underivable" | "path-refused"; detail: string };
+  | {
+      ok: false;
+      reason:
+        | "structural-op"
+        | "empty"
+        | "underivable-read-tree"
+        | "underivable-apply"
+        | "underivable-diff-index"
+        | "underivable-empty-pathset"
+        | "underivable-unparsable-record"
+        | "path-refused";
+      detail: string;
+    };
+
+/**
+ * The observable SHAPE of a proposal diff — never its content.
+ *
+ * `git apply` answers four structurally different inputs with the byte-identical
+ * message `No valid patches in input (allow with "--allow-empty")`: an empty
+ * string, a whitespace-only string, a markdown-fenced block, and a `---`/`+++`
+ * header pair with no `@@` hunk. Measured against git 2.55.0. The refusal reason
+ * alone therefore cannot name which one a run hit, and `PII_REGEX` exists to keep
+ * the diff body out of logs — so the marker carries this record instead: numbers
+ * and booleans only, decidable, and free of proposal text by construction.
+ */
+export interface DiffShape {
+  diff_len: number;
+  diff_fenced: boolean;
+  diff_header_pair: boolean;
+  diff_hunk: boolean;
+}
+
+/** Derive {@link DiffShape} from a proposal diff. Pure; never throws. */
+export function diffShape(diff: string): DiffShape {
+  return {
+    diff_len: diff.length,
+    // Anchored at the first non-whitespace run, not at index 0: a model that
+    // emits a leading blank line before its fence is still emitting a fence.
+    // A fence LATER in the text is ordinary diff content (a patch may add a
+    // line that happens to be three backticks) and must not set this.
+    diff_fenced: /^\s*(?:```|~~~)/.test(diff),
+    diff_header_pair: /^--- /m.test(diff) && /^\+\+\+ /m.test(diff),
+    diff_hunk: /^@@ /m.test(diff),
+  };
+}
 
 /**
  * Decide whether a proposal diff may be applied, deriving the affected paths
@@ -320,6 +413,18 @@ export async function checkDiffPaths(
   // Measured: a `GIT binary patch` replaced AGENTS.rules.md wholesale at rc 0
   // with every gate green. These targets are Markdown; a binary patch to one
   // is never an edit.
+  // FIRST, ahead of the binary-patch test and every spawnGitCapture call.
+  // `git apply` rejects an empty or whitespace-only patch with the same message
+  // it gives a fenced block or a hunk-less header pair, so before #8427 a no-op
+  // proposal was reported as a path-DERIVATION failure — a diagnosis about git
+  // for a condition git never saw. Decided from the string alone.
+  //
+  // `trim()`, not `=== ""`: a whitespace-only proposal is equally a no-op, and
+  // it is the member a stop-at-first predicate would miss.
+  if (diff.trim() === "") {
+    return { ok: false, reason: "empty", detail: "empty or whitespace-only diff" };
+  }
+
   if (/^(GIT binary patch|literal \d+|delta \d+)$/m.test(diff)) {
     return { ok: false, reason: "structural-op", detail: "binary patch" };
   }
@@ -329,13 +434,13 @@ export async function checkDiffPaths(
     const env = { GIT_INDEX_FILE: indexFile };
     const read = await spawnGitCapture(["read-tree", "HEAD"], repoRoot, "", env);
     if (read.exitCode !== 0) {
-      return { ok: false, reason: "underivable", detail: safeDetail(read.stderr) };
+      return { ok: false, reason: "underivable-read-tree", detail: stripControl(read.stderr) };
     }
     // `--cached` applies to the throwaway index only: a dry run that leaves the
     // worktree untouched while producing git's own account of every path.
     const applied = await spawnGitCapture(["apply", "--cached"], repoRoot, diff, env);
     if (applied.exitCode !== 0) {
-      return { ok: false, reason: "underivable", detail: safeDetail(applied.stderr) };
+      return { ok: false, reason: "underivable-apply", detail: stripControl(applied.stderr) };
     }
     const named = await spawnGitCapture(
       ["diff-index", "--cached", "-z", "HEAD"],
@@ -344,7 +449,7 @@ export async function checkDiffPaths(
       env,
     );
     if (named.exitCode !== 0) {
-      return { ok: false, reason: "underivable", detail: safeDetail(named.stderr) };
+      return { ok: false, reason: "underivable-diff-index", detail: stripControl(named.stderr) };
     }
 
     // RAW format, not `--name-status`: records alternate
@@ -360,19 +465,19 @@ export async function checkDiffPaths(
     if (fields.length === 0) {
       // An empty derived set must REFUSE. Reading it as "no forbidden paths"
       // is the vacuous pass a header-less diff exploited.
-      return { ok: false, reason: "underivable", detail: "diff changed nothing" };
+      return { ok: false, reason: "underivable-empty-pathset", detail: "diff changed nothing" };
     }
     const paths: string[] = [];
     for (let i = 0; i < fields.length; i += 2) {
       const meta = fields[i];
       const path = fields[i + 1];
       if (meta === undefined || path === undefined || !meta.startsWith(":")) {
-        return { ok: false, reason: "underivable", detail: "unparsable diff-index record" };
+        return { ok: false, reason: "underivable-unparsable-record", detail: "unparsable diff-index record" };
       }
       const parts = meta.slice(1).split(" ");
       const [srcMode, dstMode, , , status] = parts;
       if (parts.length !== 5 || srcMode === undefined || dstMode === undefined || !status) {
-        return { ok: false, reason: "underivable", detail: "unparsable diff-index record" };
+        return { ok: false, reason: "underivable-unparsable-record", detail: "unparsable diff-index record" };
       }
       if (status !== "M") {
         // Create (A), delete (D), rename (R), copy (C) and type-change (T) all
@@ -392,13 +497,13 @@ export async function checkDiffPaths(
         // and it is deliberately kept unreachable-alone rather than removed.
         // If `-M` is ever added here, this branch becomes load-bearing and
         // needs its own must-REFUSE row.
-        return { ok: false, reason: "structural-op", detail: safeDetail(`${status} ${path}`) };
+        return { ok: false, reason: "structural-op", detail: stripControl(`${status} ${path}`) };
       }
       if (srcMode !== dstMode) {
         return {
           ok: false,
           reason: "structural-op",
-          detail: safeDetail(`mode ${srcMode} => ${dstMode} ${path}`),
+          detail: stripControl(`mode ${srcMode} => ${dstMode} ${path}`),
         };
       }
       paths.push(path);
@@ -410,7 +515,7 @@ export async function checkDiffPaths(
     // allowlist-checked at all. Both were measured live.
     const bad = paths.find((p) => !TARGET_ALLOW_RE.test(p));
     if (bad !== undefined) {
-      return { ok: false, reason: "path-refused", detail: safeDetail(bad) };
+      return { ok: false, reason: "path-refused", detail: stripControl(bad) };
     }
     return { ok: true, paths };
   } finally {
@@ -560,7 +665,16 @@ function spawnGitCapture(
     child.stderr?.on("data", (chunk: string) => {
       // Bounded: git's diagnostic is the diagnosis a refusal carries, but it
       // is rendered from MODEL-SUPPLIED paths, so it is untrusted and capped.
-      if (stderr.length < 4096) stderr += chunk;
+      //
+      // #8427: was `if (stderr.length < 4096) stderr += chunk`, which cut at
+      // ~4096 NON-DETERMINISTICALLY — it tested the length BEFORE appending, so
+      // the final string overshot by up to one chunk and no straddle could be
+      // pinned by a test. The bound is now exact, and raised to 64_000 so that
+      // `redactGithubSourcedText`'s own MAX_INPUT_LEN is the ONLY cut before
+      // redaction; it appends an explicit `[…]` marker and is designed to be
+      // that truncation point. A credential straddling a cut placed upstream of
+      // redaction is halved into a fragment no pattern matches.
+      stderr = (stderr + chunk).slice(0, 64_000);
     });
     child.on("exit", (exitCode) => resolve({ exitCode, stdout, stderr }));
     child.on("error", (err) => resolve({ exitCode: -1, stdout: "", stderr: String(err) }));
@@ -574,13 +688,38 @@ function spawnGitCapture(
 
 /**
  * Strip control characters and the Unicode line separators that survive
- * `JSON.stringify`, then bound the length. Every `detail` we emit is rendered
- * by git from a MODEL-SUPPLIED path, so it is attacker-influenced text on its
- * way to a third-party log store.
+ * `JSON.stringify`. Every `detail` we emit is rendered by git from a
+ * MODEL-SUPPLIED path, so it is attacker-influenced text on its way to a
+ * third-party log store.
+ *
+ * DOES NOT TRUNCATE (#8427). The cut must happen AFTER redaction, not before:
+ * `redactGithubSourcedText` carries several unbounded runs (`JWT_RE`'s three
+ * `{10,}` segments, `AUTHORIZATION_HEADER_RE`'s `\S+`, `ENV_CRED_ASSIGN_RE`'s
+ * `[^\s'"]+`, `github_pat_…{59,}`), so a token straddling an upstream cut is
+ * halved into a fragment no pattern matches. The sink (`emitOutcomeMarker`)
+ * owns the cap; {@link safeDetail} keeps the old strip-then-cap behaviour for
+ * the Sentry copy, which is not that sink.
+ *
+ * The strip class includes C1 (U+0080–U+009F). U+0085 (NEL) is a line
+ * terminator for Python's `str.splitlines()`, for Java, and for Unicode-aware
+ * `(?m)` engines — exactly the derived-pipeline and log-viewer readers
+ * U+2028/U+2029 were added for — and `JSON.stringify` escapes only C0, so it
+ * reaches the NDJSON row raw. No legitimate git stderr carries C1.
+ * Escape sequences only, per `cq-regex-unicode-separators-escape-only`.
+ */
+function stripControl(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
+}
+
+/**
+ * {@link stripControl} plus the historical 200-character cap. Retained for the
+ * Sentry copy and for `error_message`, both of which are capped at the PRODUCER;
+ * `refusal_detail[].detail` is capped at the SINK instead. That asymmetry is
+ * deliberate and is documented on `CompoundPromoteOutcome.refusal_detail`.
  */
 function safeDetail(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ").slice(0, 200);
+  return stripControl(s).slice(0, 200);
 }
 
 async function setupEphemeralWorkspace(
@@ -723,7 +862,7 @@ export async function cronCompoundPromoteHandler({
   // entry per refusal that fired, plus a bounded per-cluster detail so a
   // cluster refused EVERY week is distinguishable from a quiet corpus.
   const refusals: string[] = [];
-  const refusalDetail: { cluster_hash: string; reason: string }[] = [];
+  const refusalDetail: RefusalDetailEntry[] = [];
 
   try {
     // Memoized run-start timestamp — safeCommitAndPr pins commit dates from
@@ -997,16 +1136,33 @@ export async function cronCompoundPromoteHandler({
         const pathVerdict = await checkDiffPaths(cluster.proposed_diff_unified, repoRoot);
         if (!pathVerdict.ok) {
           const reason = `diff-${pathVerdict.reason}`;
+          const shape = diffShape(cluster.proposed_diff_unified);
+          // `detail` is DELIBERATELY absent from this line. It used to be passed
+          // bare, which was harmless only while `verdict.detail` was already the
+          // 200-char capped form; #8427 widens it to the untruncated
+          // `stripControl` string, and this `logger` is the Inngest ctx
+          // ProxyLogger — journald -> Vector -> the SAME Better Stack source the
+          // marker uses. Passing it here would ship an unredacted, unclassified,
+          // 64 KB-capable attacker-influenced string to the exact sink the
+          // marker's transform exists to protect. The marker now carries it,
+          // redacted, classified and capped, which is the point of this change.
           logger.warn(
-            { fn: "cron-compound-promote", hash: clusterHash, reason, detail: pathVerdict.detail },
+            { fn: "cron-compound-promote", hash: clusterHash, reason, ...shape },
             "diff-path-refused",
           );
           reportSilentFallback(new Error(`diff refused: ${pathVerdict.reason}`), {
             feature: "cron-compound-promote",
             op: "diff-path-refused",
-            extra: { cluster_hash: clusterHash, reason, detail: pathVerdict.detail },
+            // safeDetail, not the bare value: Sentry keeps the FULL path for
+            // forensics but still gets the control-strip and the 200-char cap.
+            extra: {
+              cluster_hash: clusterHash,
+              reason,
+              detail: safeDetail(pathVerdict.detail),
+              ...shape,
+            },
           });
-          return { kind: "refused", reason: reason };
+          return { kind: "refused", reason: reason, detail: pathVerdict.detail, ...shape };
         }
 
         if (cluster.target_path === "AGENTS.rules.md" && diffRemovesHardRule(cluster.proposed_diff_unified)) {
@@ -1257,7 +1413,22 @@ export async function cronCompoundPromoteHandler({
         clustersOpened++;
       } else {
         refusals.push(outcome.reason);
-        refusalDetail.push({ cluster_hash: clusterHash, reason: outcome.reason });
+        // Destructured, never spread. A spread would relay every future field
+        // of ClusterOutcome into the marker around the sink's transform, and an
+        // allowlist that decides which ENTRIES pass is not an allowlist of what
+        // they CARRY. Stays outside the memoized step callback, exactly as
+        // `reason` always has — see the ClusterOutcome doc comment.
+        refusalDetail.push({
+          cluster_hash: clusterHash,
+          reason: outcome.reason,
+          ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
+          ...(outcome.diff_len === undefined ? {} : { diff_len: outcome.diff_len }),
+          ...(outcome.diff_fenced === undefined ? {} : { diff_fenced: outcome.diff_fenced }),
+          ...(outcome.diff_header_pair === undefined
+            ? {}
+            : { diff_header_pair: outcome.diff_header_pair }),
+          ...(outcome.diff_hunk === undefined ? {} : { diff_hunk: outcome.diff_hunk }),
+        });
       }
     }
 

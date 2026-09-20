@@ -25,6 +25,7 @@ import {
   existsSync,
   readFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +36,7 @@ vi.hoisted(() => {
 
 import {
   checkDiffPaths,
+  diffShape,
   TARGET_ALLOW_RE,
   MIN_TARGET_RETENTION,
   promotionShrankTarget,
@@ -57,6 +59,40 @@ const SKILL_HYPHEN = "plugins/soleur/skills/agent-browser/SKILL.md";
 // loop only ever driven with a one-element array, and `paths.find(...)` →
 // `[paths[0]].find(...)` survived the whole suite.
 const OUTSIDE = "README.md";
+
+// #8427 fixtures. Hand-written rather than captured via `patchFor`, because a
+// git-GENERATED patch cannot express the edit-then-revert pair below — git
+// would simply emit nothing. The fixture repo's AGENTS.rules.md is
+// "rules\nsecond line\n", so both halves apply cleanly.
+const EDIT_RULES_PATCH = [
+  "--- a/AGENTS.rules.md",
+  "+++ b/AGENTS.rules.md",
+  "@@ -1,2 +1,2 @@",
+  "-rules",
+  "+rules edited",
+  " second line",
+  "",
+].join("\n");
+
+// Two records against the SAME index entry, applied sequentially, whose net
+// result equals HEAD's blob. Measured against git 2.55.0: `git apply --cached`
+// exits 0 with empty stderr and `git diff-index --cached -z HEAD` emits zero
+// bytes — the only input that reaches the empty-pathset arm without a shim.
+const EDIT_THEN_REVERT_PATCH = [
+  "--- a/AGENTS.rules.md",
+  "+++ b/AGENTS.rules.md",
+  "@@ -1,2 +1,2 @@",
+  "-rules",
+  "+rules edited",
+  " second line",
+  "--- a/AGENTS.rules.md",
+  "+++ b/AGENTS.rules.md",
+  "@@ -1,2 +1,2 @@",
+  "-rules edited",
+  "+rules",
+  " second line",
+  "",
+].join("\n");
 
 beforeAll(() => {
   repoRoot = mkdtempSync(join(tmpdir(), "compound-allowlist-"));
@@ -134,10 +170,13 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
     expect(verdict.ok).toBe(false);
   });
 
-  it("row 2: a diff with no `+++` header at all is REFUSED (empty derived set)", async () => {
+  it("row 2: a diff with no `+++` header at all is REFUSED at the APPLY arm", async () => {
+    // #8427: this fixture reaches `git apply --cached`, which rejects it. Before
+    // the split every arm of checkDiffPaths said `underivable`, so this row and
+    // row 9 asserted the same word for two structurally different causes.
     const verdict = await checkDiffPaths("not a diff at all\n", repoRoot);
     expect(verdict.ok).toBe(false);
-    if (!verdict.ok) expect(verdict.reason).toBe("underivable");
+    if (!verdict.ok) expect(verdict.reason).toBe("underivable-apply");
   });
 
   it("row 3: two EDITS, first allowed and second forbidden, is REFUSED at the ALLOWLIST", async () => {
@@ -232,12 +271,224 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
     if (!verdict.ok) expect(verdict.reason).toBe("structural-op");
   });
 
-  it("row 9 (dispatch): a diff git cannot parse is REFUSED, never silently allowed", async () => {
-    // The vacuity row. If the derivation yields nothing, the verdict must be a
-    // refusal — an empty derived set must never read as "no forbidden paths".
+  it("row 9 (dispatch, re-based #8427): the EMPTY diff is REFUSED as a no-op", async () => {
+    // Re-based by #8427. This fixture is the empty string, which the new
+    // entry predicate intercepts before any git runs, so its reason is now
+    // `empty` rather than `underivable-empty-pathset`. The vacuity property it
+    // was written for — an empty derived set must never read as "no forbidden
+    // paths" — did not move: it is now carried by the `underivable-empty-pathset`
+    // row below, which drives a patch that really does reach diff-index and
+    // derive nothing.
     const verdict = await checkDiffPaths("", repoRoot);
     expect(verdict.ok).toBe(false);
-    if (!verdict.ok) expect(verdict.reason).toBe("underivable");
+    if (!verdict.ok) expect(verdict.reason).toBe("empty");
+  });
+
+  // -- #8427: one row per emit site of checkDiffPaths ----------------------
+  //
+  // Before #8427 six structurally different conditions all returned the single
+  // literal `underivable`, so the outcome marker could not distinguish a broken
+  // checkout from a model that emitted a fenced code block. Each row below
+  // drives ONE site and asserts ONE value; collapsing any two sites back onto a
+  // shared literal reddens the row belonging to the site that lost its value,
+  // which `tsc` cannot see because both literals stay declared members.
+
+  it("site `empty`: a whitespace-only diff is REFUSED as a no-op, not a derivation failure", async () => {
+    // The SECOND member. A predicate narrowed from `trim()` to `=== ""` still
+    // passes the empty-string row above, so that row alone cannot pin the
+    // predicate's shape — this one is where a stop-at-first check fails.
+    for (const ws of [" ", "\t", "\n", "  \t\n\n  "]) {
+      const verdict = await checkDiffPaths(ws, repoRoot);
+      expect(verdict.ok).toBe(false);
+      if (!verdict.ok) expect(verdict.reason).toBe("empty");
+    }
+  });
+
+  it("site `empty`: a two-newline diff refuses even though both existing bounds pass", async () => {
+    // Precondition-holds / property-fails. "\n\n" is non-empty and far under
+    // MAX_DIFF_BYTES, so the size gate and the non-empty gate are both
+    // satisfied; it must still refuse.
+    const verdict = await checkDiffPaths("\n\n", repoRoot);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("empty");
+  });
+
+  it("site `underivable-read-tree`: a repo with no commit fails at read-tree", async () => {
+    // `git init` with no commit makes `read-tree HEAD` fail with
+    // `fatal: Not a valid object name HEAD`, which is the only arm reachable
+    // before any patch is parsed.
+    const bare = mkdtempSync(join(tmpdir(), "compound-nocommit-"));
+    try {
+      gitFixture(bare)(["init", "-q", "."]);
+      const verdict = await checkDiffPaths(EDIT_RULES_PATCH, bare);
+      expect(verdict.ok).toBe(false);
+      if (!verdict.ok) {
+        expect(verdict.reason).toBe("underivable-read-tree");
+        expect(verdict.detail).toMatch(/HEAD/);
+      }
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("site `underivable-empty-pathset`: a patch that nets to no change is REFUSED", async () => {
+    // Measured against git 2.55.0: the two records apply sequentially to the
+    // same index entry and the net result equals HEAD's blob, so
+    // `git apply --cached` exits 0 with empty stderr and `diff-index` emits
+    // zero bytes. This is the arm row 9 used to cover before the empty-diff
+    // predicate intercepted its fixture.
+    //
+    // A create-then-delete pair does NOT work here: measured, it leaves an `A`
+    // record and refuses at the structural gate instead.
+    const verdict = await checkDiffPaths(EDIT_THEN_REVERT_PATCH, repoRoot);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("underivable-empty-pathset");
+
+    // Positive control IN THE SAME ROW: the first half alone derives cleanly.
+    // Without it a mutant that refuses everything passes the assertion above.
+    const control = await checkDiffPaths(EDIT_RULES_PATCH, repoRoot);
+    expect(control.ok).toBe(true);
+    if (control.ok) expect(control.paths).toEqual(["AGENTS.rules.md"]);
+  });
+
+  // The two `underivable-unparsable-record` sites and `underivable-diff-index`
+  // cannot be driven by real git: git never emits a malformed `diff-index`
+  // record, and the command does not fail for any input a patch can produce.
+  // The seam is a PATH shim — `spawnGitCapture` copies `process.env` (PATH
+  // included) and calls bare `spawn("git", …)`, so a shim directory prepended
+  // to PATH puts a fake `git` in front. The shim `exec`s REAL git for
+  // `read-tree` and `apply` and fabricates ONLY the `diff-index` stdout, so
+  // every other decision in the function is still made by real git. No mock,
+  // no spy on the module-local helper, no production signature change.
+  function withGitShim<T>(body: string, fn: () => Promise<T>): Promise<T> {
+    // The real git is resolved ONCE, before PATH is mutated, and the shim execs
+    // it by ABSOLUTE path. Resolving `git` by name inside the shim would
+    // re-enter the shim itself — PATH still has shimDir first — and recurse
+    // until the test times out. Measured: that spelling hung four unrelated
+    // must-PASS rows at 16s each, because vitest's timeout cut the promise
+    // before `finally` restored PATH, so the pollution outlived the row.
+    const realGit = execFileSync("command", ["-v", "git"], {
+      encoding: "utf8",
+      shell: "/bin/bash",
+    }).trim();
+    const shimDir = mkdtempSync(join(tmpdir(), "compound-gitshim-"));
+    writeFileSync(
+      join(shimDir, "git"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "diff-index" ]; then',
+        body,
+        "fi",
+        `exec ${realGit} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const prevPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${prevPath ?? ""}`;
+    // try/finally rather than promise .finally(): a timeout that rejects the
+    // promise must still restore PATH for every row that follows.
+    return (async () => {
+      try {
+        return await fn();
+      } finally {
+        process.env.PATH = prevPath;
+        rmSync(shimDir, { recursive: true, force: true });
+      }
+    })();
+  }
+
+  it("site `underivable-unparsable-record`: a record with no `:` prefix is REFUSED", async () => {
+    const verdict = await withGitShim(`printf 'notacolon\\0x.txt\\0'; exit 0`, () =>
+      checkDiffPaths(EDIT_RULES_PATCH, repoRoot),
+    );
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("underivable-unparsable-record");
+  });
+
+  it("site `underivable-unparsable-record`: a record whose meta is not 5 fields is REFUSED", async () => {
+    // The SECOND of the two sites sharing this literal. It is kept distinct
+    // from the row above because a set-valued census tolerates changing one of
+    // two shared-literal sites; these two rows are what make that mutant
+    // observable.
+    const verdict = await withGitShim(`printf ':100644 100644 aaa bbb\\0x.txt\\0'; exit 0`, () =>
+      checkDiffPaths(EDIT_RULES_PATCH, repoRoot),
+    );
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("underivable-unparsable-record");
+  });
+
+  it("site `underivable-diff-index`: a non-zero diff-index exit is REFUSED", async () => {
+    const verdict = await withGitShim(`echo "fatal: shimmed failure" >&2; exit 128`, () =>
+      checkDiffPaths(EDIT_RULES_PATCH, repoRoot),
+    );
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toBe("underivable-diff-index");
+  });
+
+  // -- #8427: diffShape() -------------------------------------------------
+  //
+  // The refusal reason alone still cannot separate the four inputs `git apply`
+  // rejects with the SAME byte-identical message ("No valid patches in input"):
+  // an empty string, a whitespace-only string, a markdown-fenced block, and a
+  // header pair with no hunk. diffShape() records the observable SHAPE of the
+  // proposal so that ambiguity is decidable from the marker — without ever
+  // putting the diff body itself into a log.
+
+  it("diffShape: records length and the three structural booleans", () => {
+    expect(diffShape(EDIT_RULES_PATCH)).toEqual({
+      diff_len: EDIT_RULES_PATCH.length,
+      diff_fenced: false,
+      diff_header_pair: true,
+      diff_hunk: true,
+    });
+  });
+
+  it("diffShape: a fenced block is flagged, and fencing does not imply a header pair", () => {
+    const fenced = "```diff\n--- a/x\n+++ b/x\n```\n";
+    const shape = diffShape(fenced);
+    expect(shape.diff_fenced).toBe(true);
+    expect(shape.diff_hunk).toBe(false);
+    expect(shape.diff_len).toBe(fenced.length);
+  });
+
+  it("diffShape: headers with no hunk are distinguishable from a real patch", () => {
+    // This is the input whose refusal is otherwise byte-identical to the empty
+    // string's. Without `diff_hunk` the two are indistinguishable downstream.
+    const headersOnly = "--- a/AGENTS.md\n+++ b/AGENTS.md\n";
+    expect(diffShape(headersOnly)).toEqual({
+      diff_len: headersOnly.length,
+      diff_fenced: false,
+      diff_header_pair: true,
+      diff_hunk: false,
+    });
+  });
+
+  it("diffShape: the empty and whitespace-only inputs are shape-distinguishable", () => {
+    expect(diffShape("")).toEqual({
+      diff_len: 0,
+      diff_fenced: false,
+      diff_header_pair: false,
+      diff_hunk: false,
+    });
+    expect(diffShape("  \t\n").diff_len).toBe(4);
+  });
+
+  it("diffShape: a leading fence is detected after leading whitespace, not only at index 0", () => {
+    expect(diffShape("\n   ```diff\n--- a/x\n").diff_fenced).toBe(true);
+    // A fence that is not leading is NOT a fenced proposal.
+    expect(diffShape("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+```\n").diff_fenced).toBe(false);
+  });
+
+  it("diffShape: never returns the diff body in any field", () => {
+    // The whole point of shape-over-content: PII_REGEX exists to keep proposal
+    // text out of logs, so the shape record must be numbers and booleans only.
+    const secretish = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+token=hunter2\n";
+    const shape = diffShape(secretish);
+    for (const v of Object.values(shape)) {
+      expect(typeof v === "number" || typeof v === "boolean").toBe(true);
+    }
+    expect(JSON.stringify(shape)).not.toMatch(/hunter2/);
   });
 
   it("row 10: an IMPLICIT rename (no rename headers) is REFUSED and the source survives", async () => {

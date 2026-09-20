@@ -46,6 +46,86 @@ export type CompoundPromoteStatus =
   | "completed"
   | "error";
 
+/**
+ * One refusal row. FLAT by design: a nested object would need the sink's
+ * transform to recurse, and a transform that recurses is one an added field can
+ * slip past.
+ */
+export interface RefusalDetailEntry {
+  cluster_hash: string;
+  reason: string;
+  detail?: string;
+  diff_len?: number;
+  diff_fenced?: boolean;
+  diff_header_pair?: boolean;
+  diff_hunk?: boolean;
+}
+
+/** Cap applied to `detail` AFTER redaction and classification. Characters. */
+const DETAIL_CAP = 200;
+
+/**
+ * Path-shaped tokens in `detail`, matched loosely on purpose: the goal is to
+ * catch anything a model could pass off as a path, not to parse paths.
+ */
+const PATH_TOKEN_RE = /[A-Za-z0-9_.\-/]*\/[A-Za-z0-9_.\-/]*/g;
+
+/**
+ * Prefixes whose IDENTITY is the diagnostic worth keeping — which corpus the
+ * proposal targeted. Anything else collapses to a constant.
+ */
+const CLASSIFIED_PREFIXES: readonly string[] = [
+  "AGENTS.rules.md",
+  "plugins/soleur/skills/",
+  "knowledge-base/project/learnings/",
+  ".github/workflows/",
+];
+
+/**
+ * CLASSIFY the path, do not relay it (#8427).
+ *
+ * The risk here is not incidental disclosure of repository content — it is that
+ * `detail` is at two arms a model-CHOSEN string, i.e. a controlled write channel
+ * into a third-party processor. Eliding one directory's slugs would do nothing
+ * about that. Collapsing every path-shaped token to a fixed vocabulary reduces
+ * the channel from 200 free characters to a few bits while preserving the
+ * diagnostic the marker actually owes. The full path stays in the Sentry copy.
+ *
+ * Non-path stderr (`error: corrupt patch at line 3`) passes through unchanged;
+ * this classifies path-shaped TOKENS, not the whole string.
+ */
+function classifyPaths(s: string): string {
+  // A FUNCTION replacement, never a string one: a string replacement containing
+  // `$&`, "$`" or `$'` would make attacker input live. A function makes those
+  // sequences inert by construction.
+  return s.replace(PATH_TOKEN_RE, (tok) => {
+    if (tok === "" || !tok.includes("/")) return tok;
+    const hit = CLASSIFIED_PREFIXES.find((pre) => tok.startsWith(pre));
+    return hit === undefined ? "[unclassified-path]" : `${hit}[elided]`;
+  });
+}
+
+/**
+ * Surrogate-safe cap. `.slice(0, N)` counts UTF-16 code units and can leave a
+ * lone high surrogate; `Array.from` iterates code points.
+ */
+function capChars(s: string, n: number): string {
+  const cps = Array.from(s);
+  return cps.length <= n ? s : cps.slice(0, n).join("");
+}
+
+/**
+ * redact -> classify -> cap, in that order.
+ *
+ * ORDER IS LOAD-BEARING. `redactGithubSourcedText` substitutes `[redacted-…]`
+ * markers that are LONGER than some shapes they replace, so a cap applied first
+ * can be exceeded by the time the row is written; and a cap applied before
+ * redaction halves a straddling credential into a fragment no pattern matches.
+ */
+function transformDetail(detail: string): string {
+  return capChars(classifyPaths(redactGithubSourcedText(detail)), DETAIL_CAP);
+}
+
 export interface CompoundPromoteOutcome {
   status: CompoundPromoteStatus;
   corpus_count?: number;
@@ -54,11 +134,37 @@ export interface CompoundPromoteOutcome {
   /** One entry per refusal site that fired, in order. */
   refusals?: string[];
   /**
-   * Bounded per-cluster refusal detail. Carries a cluster hash and a fixed
-   * reason enum ONLY — never learning text or paths — so a recurring refusal of
-   * the SAME cluster is distinguishable from a genuinely quiet corpus.
+   * Bounded per-cluster refusal detail.
+   *
+   * #8427 widened this beyond `{cluster_hash, reason}`. The old doc comment
+   * claimed it carries "a fixed reason enum ONLY — never learning text or
+   * paths"; that is no longer true and the widening is the point of the change.
+   * A run could report `clusters_proposed: 2, clusters_opened: 0` with both
+   * refusals reading `diff-underivable`, and nothing in the row said whether the
+   * proposer had emitted a malformed patch, an empty one, or a fenced one.
+   *
+   * WHAT `detail` IS: attacker-influenced text. At two `checkDiffPaths` arms it
+   * is not git's diagnosis at all but a VERBATIM MODEL-CHOSEN string — the
+   * `path-refused` arm returns the offending path, and the `structural-op` arms
+   * return `${status} ${path}`, where the path is whatever the model wrote into
+   * its diff. A prompt-injected proposer would otherwise get a free-text write
+   * channel into a third-party processor, weekly, on every refused cluster.
+   * {@link emitOutcomeMarker} therefore REDACTS, CLASSIFIES and CAPS it; see
+   * the transform there. This field is the untransformed input to that sink.
+   *
+   * PRODUCER/SINK CAP ASYMMETRY (deliberate). `error_message` is capped at the
+   * PRODUCER (`safeDetail`, 200 chars) and `detail` is capped HERE, at the sink,
+   * AFTER redaction. Capping `detail` upstream would cut a credential in half
+   * before `redactGithubSourcedText` could match it — its patterns carry several
+   * unbounded runs — so the only cut ahead of redaction is that function's own
+   * `MAX_INPUT_LEN`, which appends an explicit marker and is designed for it.
+   *
+   * The `diff_*` fields are the proposal's observable SHAPE, never its content:
+   * `git apply` answers an empty string, a whitespace-only string, a fenced
+   * block and a hunk-less header pair with the byte-identical message, so the
+   * reason alone cannot separate them. Numbers and booleans only.
    */
-  refusal_detail?: { cluster_hash: string; reason: string }[];
+  refusal_detail?: RefusalDetailEntry[];
   /** Bytes of the corpus payload serialized into the Anthropic message. */
   corpus_input_bytes?: number;
   /**
@@ -90,15 +196,37 @@ export function emitOutcomeMarker(outcome: CompoundPromoteOutcome): void {
   try {
     log.warn(
       {
+        ...outcome,
+        // AFTER the spread, not before (#8427). These two are the marker's
+        // machine-readability contract: `SOLEUR_COMPOUND_PROMOTE_OUTCOME` is the
+        // top-level boolean discriminator every reader keys on. Placed before
+        // `...outcome` they could be SHADOWED by a widened or dynamically
+        // assembled outcome, and TypeScript's excess-property check fires only
+        // on fresh object literals — it does not protect a spread.
         SOLEUR_COMPOUND_PROMOTE_OUTCOME: true,
         fn: "cron-compound-promote",
-        ...outcome,
         // Both arrays capped — `refusals` used to be spread uncapped, so the
         // "one pathological run cannot flood the sink" property held for only
         // one of the two. The total is recorded so a capped list is
         // distinguishable from a complete one.
         refusals: outcome.refusals?.slice(0, REFUSAL_DETAIL_CAP),
-        refusal_detail: outcome.refusal_detail?.slice(0, REFUSAL_DETAIL_CAP),
+        // Every surviving entry is REBUILT by destructuring the known fields,
+        // never `{...entry, detail: t(entry.detail)}`. A spread would relay any
+        // future field straight around the transform — and an allowlist that
+        // decides which entries pass is not an allowlist of what they carry.
+        refusal_detail: outcome.refusal_detail
+          ?.slice(0, REFUSAL_DETAIL_CAP)
+          .map((e) => ({
+            cluster_hash: e.cluster_hash,
+            reason: e.reason,
+            ...(e.detail === undefined ? {} : { detail: transformDetail(e.detail) }),
+            ...(e.diff_len === undefined ? {} : { diff_len: e.diff_len }),
+            ...(e.diff_fenced === undefined ? {} : { diff_fenced: e.diff_fenced }),
+            ...(e.diff_header_pair === undefined
+              ? {}
+              : { diff_header_pair: e.diff_header_pair }),
+            ...(e.diff_hunk === undefined ? {} : { diff_hunk: e.diff_hunk }),
+          })),
         refusals_total: outcome.refusals?.length,
         // The one free-text field. `redactGithubSourcedText` is idempotent on
         // its own `[redacted-*]` output, so a caller that already scrubbed
