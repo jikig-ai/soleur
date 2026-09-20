@@ -2179,7 +2179,7 @@ mutate_file() {
 # Known-negative for mutate_file itself: a comment-only mutation must be reported as NOT reddening.
 _kn_p=$PASS; _kn_f=$FAIL
 check_always_true() { grep -qE '^set -euo pipefail$' "$1"; }
-mutate_file "known-negative" "$BODY_SH" 's|^# _bs_read_remedy <label> <rc> <errfile> <rowsfile> — .*|# (comment mutated by the known-negative)|' check_always_true >/dev/null
+mutate_file "known-negative" "$BODY_SH" 's|^# _bs_read_remedy <label> <rc> <errfile> <rowsfile> \[step\] — .*|# (comment mutated by the known-negative)|' check_always_true >/dev/null
 if [[ "$FAIL" -eq $((_kn_f + 1)) && "$PASS" -eq "$_kn_p" ]]; then
   FAIL=$((FAIL - 1)); assert "#8054 mutate_file known-negative: a comment-only mutation is reported as NOT reddening" "true"
 else
@@ -2866,6 +2866,18 @@ assert "#6894 op=luks-rollback G1 admits 'aborted' as a case arm (G2's pointer d
 assert "#6894 no raw Better Stack row is echoed by either verb (the standing purity contract)" \
   "! grep -qE 'jq \\.(\$|[^a-zA-Z_])' '$LUKS_FILE'"
 
+# #8079 D4/AC12 — `_bs_read_remedy` no longer hardcodes the step it is reporting for. The census IS
+# the assertion, not the number nine: a tenth message added later cannot slip through with a `2.0`
+# prefix, and one added with no prefix at all fails the equality arm. Scoped to `$BS_REMEDY_FN` —
+# the SAME awk-by-name extraction the renders drive — so the two `execute)` call sites and 2.0's own
+# inline `::error::2.0 …` strings are out of frame, and a rename reddens this row too. Herestrings,
+# never a pipe into `grep -c`: under `pipefail` an early SIGPIPE would make the count a lie.
+_RM_HARDCODED=$(grep -c '::error::2\.0 ' <<<"$BS_REMEDY_FN" || true)
+_RM_PARAM=$(grep -c '::error::\$step ' <<<"$BS_REMEDY_FN" || true)
+_RM_TOTAL=$(grep -c '::error::' <<<"$BS_REMEDY_FN" || true)
+assert "#8079 _bs_read_remedy census: 0 hardcoded '2.0 ' prefixes and all $_RM_TOTAL ::error:: lines carry \$step (hardcoded=$_RM_HARDCODED param=$_RM_PARAM)" \
+  "[[ '$_RM_HARDCODED' -eq 0 && '$_RM_PARAM' -eq '$_RM_TOTAL' && '$_RM_TOTAL' -gt 0 ]]"
+
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
@@ -2879,7 +2891,10 @@ _DISPATCHED=$((PASS + FAIL))
 #   stdout discarded, guards-before-write ordering, the pointer gate in both directions, the
 #   own-tag liveness + confirm, the write-anchored confirm window, and the terminal-flag reporting).
 #   Re-derived at the merge with main's #8178 row: 649 + 15, measured, not summed from memory.
-_EXACT_FLOOR=665
+# 664 -> 665 … (main). 665 -> 666 (+1) at #8079 Phase 1, ITEMISED — one assertion: the
+#   `_bs_read_remedy` step-parameterisation census (D4/AC12). Raised in the SAME edit that
+#   adds the row; a floor that lags the count it guards is slack, and slack is attack budget.
+_EXACT_FLOOR=666
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

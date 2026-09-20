@@ -114,8 +114,8 @@ _bs_query_rows() {
   return "$rc"
 }
 
-# _bs_read_remedy <label> <rc> <errfile> <rowsfile> — the operator-facing diagnosis of a failed
-# Better Stack read, branched on the reader's rc (measured partition: 3 = credentials absent;
+# _bs_read_remedy <label> <rc> <errfile> <rowsfile> [step] — the operator-facing diagnosis of a
+# failed Better Stack read, branched on the reader's rc (measured partition: 3 = credentials absent;
 # 1 = `doppler run` or the reader exited 1; 22 = the transport's `--fail-with-body` saw an HTTP
 # error; 6/7/28/35 = transport faults (DNS/connect/timeout/TLS); 2/64/78 = the reader's own refusals).
 #
@@ -128,11 +128,11 @@ _bs_query_rows() {
 # and of `*.betterstackdata.com` hostnames before it is echoed. Every pipeline here is `|| true`
 # so this function — whose only job is to print the remedy — cannot itself die mute under `set -e`.
 _bs_read_remedy() {
-  local label="$1" rc="$2" errfile="$3" rowsfile="$4" err1 body_len body_class
+  local label="$1" rc="$2" errfile="$3" rowsfile="$4" step="${5:-2.0}" err1 body_len body_class
   err1="$(head -1 "$errfile" 2>/dev/null | tr -d '\r\n' | sed -E "s/'[^']*'/'<redacted>'/g; s/[A-Za-z0-9.-]*betterstackdata\.com/<host>/g" | cut -c1-200 || true)"
   case "$rc" in
-    3)  echo "::error::2.0 $label read: betterstack-query.sh rc=3 — BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not injected. Check: doppler secrets get BETTERSTACK_QUERY_HOST -p soleur -c prd_terraform --plain | wc -c (value-silent) must be non-zero. stderr: ${err1:-<none>}" ;;
-    1)  echo "::error::2.0 $label read: doppler run or the reader exited 1 — read stderr: if it begins 'Doppler Error' check the DOPPLER_TOKEN repo secret; otherwise file an issue with this run URL. stderr: ${err1:-<none>}" ;;
+    3)  echo "::error::$step $label read: betterstack-query.sh rc=3 — BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not injected. Check: doppler secrets get BETTERSTACK_QUERY_HOST -p soleur -c prd_terraform --plain | wc -c (value-silent) must be non-zero. stderr: ${err1:-<none>}" ;;
+    1)  echo "::error::$step $label read: doppler run or the reader exited 1 — read stderr: if it begins 'Doppler Error' check the DOPPLER_TOKEN repo secret; otherwise file an issue with this run URL. stderr: ${err1:-<none>}" ;;
     22) body_len="$(wc -c < "$rowsfile" 2>/dev/null | tr -d '[:space:]' || true)"
         # (#8178) The partition moved to scripts/lib/betterstack-read-classify.sh so the
         # git-data boot poll classifies a failed read identically instead of re-deriving
@@ -146,15 +146,15 @@ _bs_read_remedy() {
         # token directly rather than through this printer.
         body_class="$(bs_read_classify "$rc" "$rowsfile")"
         case "$body_class" in
-          credentials-rejected) echo "::error::2.0 $label read: the ClickHouse read path REJECTED the credentials (HTTP error under --fail-with-body, rc=22; body ${body_len:-?} bytes, not printed — it names the username). Rotate/verify BETTERSTACK_QUERY_{USERNAME,PASSWORD} in prd_terraform against the Better Stack query endpoint; re-dispatching without that will not clear it." ;;
-          source-under-maintenance) echo "::error::2.0 $label read: the ClickHouse read path is under maintenance (HTTP error under --fail-with-body, rc=22; the 2026-09-03 503 precedent; body ${body_len:-?} bytes, not printed). Re-dispatch later." ;;
-          *) echo "::error::2.0 $label read: the ClickHouse read path returned an HTTP error (transport rc=22 under --fail-with-body; body ${body_len:-?} bytes, not printed). Re-dispatch later; if it persists, file an issue with this run URL. stderr: ${err1:-<none>}" ;;
+          credentials-rejected) echo "::error::$step $label read: the ClickHouse read path REJECTED the credentials (HTTP error under --fail-with-body, rc=22; body ${body_len:-?} bytes, not printed — it names the username). Rotate/verify BETTERSTACK_QUERY_{USERNAME,PASSWORD} in prd_terraform against the Better Stack query endpoint; re-dispatching without that will not clear it." ;;
+          source-under-maintenance) echo "::error::$step $label read: the ClickHouse read path is under maintenance (HTTP error under --fail-with-body, rc=22; the 2026-09-03 503 precedent; body ${body_len:-?} bytes, not printed). Re-dispatch later." ;;
+          *) echo "::error::$step $label read: the ClickHouse read path returned an HTTP error (transport rc=22 under --fail-with-body; body ${body_len:-?} bytes, not printed). Re-dispatch later; if it persists, file an issue with this run URL. stderr: ${err1:-<none>}" ;;
         esac ;;
-    6|7|28|35) echo "::error::2.0 $label read: the transport could not reach the read path (rc=$rc: DNS / connect / timeout / TLS from the runner) — a transient network fault on the RUNNER side, not a host state. Re-dispatch later. stderr: ${err1:-<none>}" ;;
-    2|64|78) echo "::error::2.0 $label read: betterstack-query.sh refused (rc=$rc: destination pin / usage / trace) — a reader misconfiguration, not a host state. File an issue with this run URL. stderr: ${err1:-<none>}" ;;
-    *)  echo "::error::2.0 $label read: betterstack-query.sh rc=$rc (unclassified). File an issue with this run URL. stderr: ${err1:-<none>}" ;;
+    6|7|28|35) echo "::error::$step $label read: the transport could not reach the read path (rc=$rc: DNS / connect / timeout / TLS from the runner) — a transient network fault on the RUNNER side, not a host state. Re-dispatch later. stderr: ${err1:-<none>}" ;;
+    2|64|78) echo "::error::$step $label read: betterstack-query.sh refused (rc=$rc: destination pin / usage / trace) — a reader misconfiguration, not a host state. File an issue with this run URL. stderr: ${err1:-<none>}" ;;
+    *)  echo "::error::$step $label read: betterstack-query.sh rc=$rc (unclassified). File an issue with this run URL. stderr: ${err1:-<none>}" ;;
   esac
-  echo "::error::2.0 $label read failed — NOTHING about the dedicated host was measured. This is a read-path fault, not a host verdict; do not proceed and do not SSH the host."
+  echo "::error::$step $label read failed — NOTHING about the dedicated host was measured. This is a read-path fault, not a host verdict; do not proceed and do not SSH the host."
 }
 
 confirm_flip_state() {
