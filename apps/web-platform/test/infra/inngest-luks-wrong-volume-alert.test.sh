@@ -125,17 +125,24 @@ grep -qF 'inngest-luks-cutover-6894.md' "$TF" \
   || no "no runbook URL on the incident_cause/metadata"
 
 # ── Mutation rows: each must make the rows above RED ───────────────────────────────────────────
-MUT_DIR="$(mktemp -d -t luksalert.XXXXXX)"
-# Take BOTH pristine copies BEFORE arming the trap, and make the trap RESTORE them. The previous
-# form was `trap 'rm -rf "$MUT_DIR"' EXIT` armed before the copies existed: it deleted the only
-# pristine copy and restored nothing, so any interruption mid-row (Ctrl-C, a reap, an abort
-# inside a row) left a MUTATED tracked file in the worktree with its backup already gone.
-# That was survivable while the mutator only touched $TF; extending it to $VARS is what makes
-# it dangerous, because variables.tf is read by the apply on every push to main — a stranded
-# mutation there is a live infrastructure change, not a dirty test file.
-cp "$TF" "$MUT_DIR/pristine.tf"
-cp "$VARS" "$MUT_DIR/pristine.vars.tf"
-trap 'cp -f "$MUT_DIR/pristine.tf" "$TF" 2>/dev/null || true; cp -f "$MUT_DIR/pristine.vars.tf" "$VARS" 2>/dev/null || true; rm -rf "$MUT_DIR"' EXIT INT TERM HUP
+# OUTER RUN ONLY. Every mutation row re-invokes this file with MUT_SKIP=1 to grade the mutated
+# tree; that inner run only asserts, so it needs no scratch dir, no pristine copy and no trap.
+# (A restoring trap in the inner run is NOT a stranding hazard, and this was measured rather
+# than reasoned: 8 SIGINT-mid-row trials against the unconditional form stranded 0/8, because
+# bash defers a trap until its foreground child exits, so the inner trap always runs first and
+# its mutated->mutated copy is a no-op before the outer restores the real pristine. Skipping it
+# here is a simplification, not a fix.)
+if [ -z "${MUT_SKIP:-}" ]; then
+  MUT_DIR="$(mktemp -d -t luksalert.XXXXXX)"
+  # Take BOTH pristine copies BEFORE arming the trap, and make the trap RESTORE them. The
+  # previous form was `trap 'rm -rf "$MUT_DIR"' EXIT` armed before the copies existed: it
+  # deleted the only pristine copy and restored nothing, so any interruption mid-row left a
+  # MUTATED tracked file in the worktree with its backup already gone. Survivable while the
+  # mutator only touched $TF; extending it to $VARS is what makes it dangerous.
+  cp "$TF" "$MUT_DIR/pristine.tf"
+  cp "$VARS" "$MUT_DIR/pristine.vars.tf"
+  trap 'cp -f "$MUT_DIR/pristine.tf" "$TF" 2>/dev/null || true; cp -f "$MUT_DIR/pristine.vars.tf" "$VARS" 2>/dev/null || true; rm -rf "$MUT_DIR"' EXIT INT TERM HUP
+fi
 SELF="${BASH_SOURCE[0]}"
 mutate_red() {  # mutate_red <label> <target-file> <pristine-copy> <python-expr-on-s>
   local label="$1" target="$2" pristine="$3" prog="$4" rc=0

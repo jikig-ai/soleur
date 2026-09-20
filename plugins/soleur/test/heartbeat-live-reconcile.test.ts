@@ -796,6 +796,57 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
     });
   });
 
+  // ── #8296: the WIRE, not the endpoints. parseLogsAlertBlocks resolves a var-driven `paused`
+  // (unit-tested above) and runReconcile passes `vars` into discoverLogsAlertsFromInfra. Those
+  // are two covered endpoints and one uncovered edge: `vars` has a DEFAULT (`= new Map()`), so
+  // dropping the argument at the call site COMPILES and every fixture above — all literal
+  // `paused = false` — stays green while the resolution silently reverts to "exempt". This
+  // case drives the full path through a var-driven declaration. The mutation that reds it is
+  // dropping `vars` from the `parseLogsAlertBlocks(t, vars)` call INSIDE discoverLogsAlertsFromInfra
+  // (reverting to parseLogsAlertBlocks' own `new Map()` default) — measured 130/1 with only this
+  // case failing. Dropping `vars` at runReconcile's call site is NOT that mutation: it is
+  // EQUIVALENT for this property, because discoverLogsAlertsFromInfra's default re-resolves the
+  // same map from the dir (measured 131/0); it diverges only on a malformed variables.tf, where
+  // the strict resolver throws instead of collecting the error.
+  const VAR_ALERT_TF = `resource "logtail_exploration_alert" "wrong_volume" {\n  name = "soleur-wrong-volume-prd"\n  paused = !var.cutover_complete\n}`;
+  const VARS_ARMED_TF = `variable "cutover_complete" {\n  type    = bool\n  default = true\n}`;
+  const VARS_PAUSED_TF = `variable "cutover_complete" {\n  type    = bool\n  default = false\n}`;
+
+  it("var-driven paused resolved through runReconcile: armed declaration + live pause → logs-alert-paused (#8296)", async () => {
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": VAR_ALERT_TF, "variables.tf": VARS_ARMED_TF }, async (dir) => {
+      const result = await runReconcile(
+        dir,
+        {
+          token: "t",
+          fetchImpl: routed([{ attributes: { name: "soleur-wrong-volume-prd", paused: true, paused_reason: "hand paused" } }]),
+          sleepImpl: noSleep,
+        },
+        manifest,
+      );
+      expect(result.code).toBe(2);
+      expect(result.markers.join("\n")).toContain(
+        "name=soleur-wrong-volume-prd live=logs_alert reason=logs-alert-paused resource=logtail_exploration_alert.wrong_volume",
+      );
+    });
+  });
+
+  it("var-driven paused resolved through runReconcile: PAUSED declaration + live pause → intent, not drift (#8296)", async () => {
+    // The direction that keeps this from being a one-sided fixture: with the variable false the
+    // declaration RESOLVES to paused=true, so a live pause is intent and must NOT be reported.
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": VAR_ALERT_TF, "variables.tf": VARS_PAUSED_TF }, async (dir) => {
+      const result = await runReconcile(
+        dir,
+        {
+          token: "t",
+          fetchImpl: routed([{ attributes: { name: "soleur-wrong-volume-prd", paused: true, paused_reason: "pre-cutover" } }]),
+          sleepImpl: noSleep,
+        },
+        manifest,
+      );
+      expect(result.markers.join("\n")).not.toContain("reason=logs-alert-paused");
+    });
+  });
+
   it("absent live alert → code 2 + reason=logs-alert-absent", async () => {
     await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
       const result = await runReconcile(dir, { token: "t", fetchImpl: routed([]), sleepImpl: noSleep }, manifest);
