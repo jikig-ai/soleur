@@ -48,9 +48,24 @@ replaces it — a deadline the founder did not name is a deadline nobody is wait
 
 A questionnaire that is only sent is a question that gets lost. Two sections carry the return leg:
 
-- `## Answers` — where the reply is recorded. The recipient may answer inside the file, on the blank
-  quote line under each question. More often the reply arrives as an email, in which case it is pasted
-  into this section verbatim and `status` becomes `answered`.
+- `## Answers` — where the reply is recorded, and the one place an outside person's words enter this
+  repository. The recipient may answer inside the file, on the blank quote line under each question.
+  More often the reply arrives as an email.
+
+  **Record the substance; never paste the message.** An inbound reply carries the sender's name,
+  their signature block, a direct line, a firm address and a confidentiality footer, and this
+  repository is PUBLIC with permanent history — so a verbatim paste publishes a third party's
+  contact details, which they gave to answer a question and not to be indexed. It is also
+  inconsistent with the rest of this design: the frontmatter records a recipient ROLE and never an
+  identity, and the sibling rejected-concepts record removed `requester` from its schema outright
+  for exactly this reason. A rule that strips the identity from the question and restores it from
+  the answer protects nothing.
+
+  So: transcribe each answer under its question, drop the greeting, the sign-off, the signature
+  block and any contact detail, and keep the professional's role as the attribution ("the
+  accountant", not a name). Where a verbatim sentence matters — a figure, a statutory citation, a
+  commitment the founder may need to rely on — quote that sentence and say it is a quotation.
+  `status` becomes `answered` either way.
 - `## Blocked on` — a back-pointer to the artifact that caused the ask: a repo-relative path, or an
   issue reference. This is what lets the next session pick the thread up without anyone remembering
   it. Read from the other direction, it answers "why is this plan still open".

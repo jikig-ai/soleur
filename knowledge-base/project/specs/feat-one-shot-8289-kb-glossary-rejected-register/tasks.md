@@ -8,7 +8,8 @@ Derived from the plan **after** the six-reviewer panel and its R1–R27 revision
 written, and the corrections are load-bearing.
 
 Naming: the store is **the no-list** in prose, **rejected-concepts record** where a formal noun is
-needed. Never "register" — that word has eight live compliance senses in this repo (D1).
+needed. Never "register" — the word already names eight compliance artifacts in this repo, which
+carry one settled compliance sense between them (D1).
 
 ---
 
@@ -64,7 +65,9 @@ needed. Never "register" — that word has eight live compliance senses in this 
   - [x] 2.2b Seed only terms with an existing definer to point at. `lane` →
         `brainstorm/references/brainstorm-domain-config.md` `## Lane Inference` is the worked example.
   - [x] 2.2c `register` as the first entry, as a **pointer with four disambiguated senses** (R17):
-        compliance (the eight `knowledge-base/legal/*-register.md`), domain-model
+        compliance (the seven `knowledge-base/legal/*-register.md` plus
+        `knowledge-base/engineering/architecture/nfr-register.md` — eight artifacts, one sense),
+        domain-model
         (`preflight/SKILL.md` Check 11), prose/voice (`operator-digest/SKILL.md` `## Register (how to
         write)`), and the verb. `_Avoid_` names both the banned synonym and "store".
   - [x] 2.2d No attribution comment anywhere under `knowledge-base/`.

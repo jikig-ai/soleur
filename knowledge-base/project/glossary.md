@@ -17,8 +17,9 @@ stale. Follow the pointer when the detail matters.
 
 - Not `plugins/soleur/docs/pages/glossary.njk`. That is the **public** marketing glossary: category
   terms, written for someone deciding whether to use Soleur, and a Nunjucks template rather than
-  readable text. Its term list is pinned by a rendered-page guard, so internal nouns must never be
-  added to it.
+  readable text. A rendered-page guard floors it at eight term definitions, which bounds it from
+  BELOW only — nothing rejects an addition, so "don't put internal nouns there" is a discipline this
+  file states, not a guarantee the guard provides.
 - Not `knowledge-base/marketing/brand-guide.md`. That owns the **founder-facing** lexicon — the words
   the founder reads, and the jargon those words replace.
 
@@ -54,7 +55,11 @@ Four senses here, and they do not share a file. Disambiguate before using the wo
   `plugins/soleur/skills/operator-digest/SKILL.md` §Register (how to write) and reused by
   `plugins/soleur/skills/operator-rephrase/SKILL.md`.
 - _The verb_ — to enter something into an existing register, or to declare a component to a manifest
-  (a skill into the docs categories, a flag into the runtime map). Always say which one.
+  (a skill into the docs categories, a flag into the runtime map). Always say which one. This sense
+  alone has **no definer to point at**, which by this file's own criterion 2 would make it a
+  candidate rather than an entry. It is carried anyway, and deliberately: it is listed here to be
+  ruled OUT when the bare word is encountered, and a sense that exists only to be excluded needs no
+  definer. If the verb ever acquires a contract worth citing, that path replaces this note.
 
 _Avoid_: "register" and "store" as names for the record of concepts that were considered and
 declined — that artifact is **the no-list** in prose and the **rejected-concepts record** where a

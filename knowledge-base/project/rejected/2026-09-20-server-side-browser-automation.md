@@ -39,7 +39,11 @@ revisit_if: >-
   raised technical, legal and cost objections independently, and removing one of the three does not
   answer the other two.
 redundancy_check: not-implemented
+prior_requests:
+  - "#1050 — feat: service automation (API + MCP integrations + guided fallback). CLOSED/COMPLETED. Not a filing OF this concept: its body records the refusal, under 'Domain Review Findings (why server-side was rejected)', as context for the tier-1/2/3 design that shipped in its place."
 searched:
+  - "gh issue list --state all --search '\"server-side Playwright\"' -> 1, #1050 (closed COMPLETED, carries the refusal in its body; see prior_requests)"
+  - "gh issue list --state all --search 'server-side playwright in:title' -> 0, which is why an in:title search alone reads as 'never filed' and is the wrong question to ask"
   - "git ls-files | grep -icE 'server[- ]side[- ]playwright' -> 0"
   - "git grep -ilE '(chromium|firefox|webkit)\\.launch' -- apps/web-platform/server apps/web-platform/app -> 0"
   - "git grep -ilE 'hosted[- ](browser|playwright)' -- apps -> 0"

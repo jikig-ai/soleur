@@ -235,7 +235,12 @@ jobs:
       # knowledge-base/project/rejected/ rather than by reading a manifest — a manifest goes
       # stale the first time somebody adds an entry without editing it. A walk that finds no
       # entries exits 3 and does NOT report success: "nothing checked" is not "clean".
-      - name: "lint-bot-statuses — rejected-concepts record, full glob (#8289)"
+      # ADVISORY, like the job it sits in: `lint-bot-statuses` is absent from
+      # scripts/required-checks.txt and from the ruleset, so a PR merges with this red. It is
+      # still the only arm that sees the WHOLE record, which is why it exists — but it reports,
+      # it does not block. Promotion is gated on the auto-fabrication guard (#6049) and the
+      # Terraform-managed canonical list; see the DISPATCH note in the script.
+      - name: "lint-bot-statuses — rejected-concepts record, full glob (#8289, advisory)"
         if: ${{ !cancelled() }}
         run: bash scripts/lint-rejected-register.sh --all
       # Supabase Management API deprecation + host-pin assembly guard.

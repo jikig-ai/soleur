@@ -103,6 +103,15 @@ Two checks run before anything is closed, deduplicated or recorded, and they run
 **Check 1 takes precedence over check 2.** If the capability turns out to exist, the entry is wrong
 and the entry is what gets corrected. An existing file never outranks the running code.
 
+**And an entry never outranks the decision it records.** An entry is *evidence that a refusal was
+recorded*; it is never the refusal itself. So where an entry and a primary record disagree — a
+GitHub issue's own closure, an ADR, a roadmap decision — the primary record wins and **the entry is
+STALE**: correct it, or supersede it, and never argue from it. The order is running code, then the
+primary record, then the entry. This matters more here than it would in a record of facts, because
+an entry is the only artifact in the chain that a single commit can create and that nothing outside
+this repository can contradict; a reader who treats it as the decision has skipped the two things
+that actually are.
+
 **An uncertain match fails open.** Report the candidate, name the doubt, and hand it to a human.
 Silence is not a match, and a near-match is not a match.
 

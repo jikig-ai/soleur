@@ -20,12 +20,21 @@
 # `hr-never-label-any-step-as-manual-without` already forbid this; prose did not hold, so this is
 # the mechanical form.
 #
-# CONSERVATIVE BY CONSTRUCTION. The deny needs an investigative signal AND the absence of any
-# authority signal. A question that mentions BOTH ("investigate, or merge with [ack-destroy]?")
-# is ALLOWED — an ask that carries a real authorization is never blocked on the strength of one
-# co-occurring word. This fails toward permitting, because a wrongly-blocked authorization is a
-# production action taken without consent, which is strictly worse than a wrongly-permitted
-# question.
+# CONSERVATIVE BY CONSTRUCTION, WITH ONE DECLARED CARVE-OUT. The deny needs an investigative signal
+# AND the absence of any authority signal. A question that mentions BOTH ("investigate, or merge with
+# [ack-destroy]?") is ALLOWED — an ask that carries a real authorization is never blocked on the
+# strength of one co-occurring word. This fails toward permitting, because a wrongly-blocked
+# authorization is a production action taken without consent, which is strictly worse than a
+# wrongly-permitted question.
+#
+# THE CARVE-OUT: the EXTERNAL EXPERT arm below is evaluated AHEAD of the authority short-circuit and
+# denies on a profession noun without requiring an investigative signal — so for that one vocabulary
+# the polarity above is inverted, deliberately. Stated here rather than only at the arm, because this
+# paragraph is the contract a reader takes away and an absolute claim it no longer honours is how a
+# later session "fixes" the ordering and silently removes the routing. The arm's own comment block
+# carries the reason (an accountant question always carries cost/scope/schedule, so behind the
+# authority arm it is unreachable), its residual, and the `AUTHZ_VERB_RE` conjunct that returns real
+# authorizations to the permitting side. Test D4 pins the ordering behaviourally.
 #
 # Escape hatch: SOLEUR_ACK_TECHNICAL_FORK=1 — announced, never silent.
 #
@@ -99,6 +108,25 @@ if [[ "$__CORPUS_RC" -ne 0 ]]; then
 fi
 CORPUS="$(printf '%s' "$CORPUS" | tr '\n' ' ' | tr '[:upper:]' '[:lower:]')"
 [[ -n "$CORPUS" ]] || exit 0
+
+# THE QUESTION TEXT ALONE, as a second, narrower corpus. Used by exactly one conjunct below, and the
+# distinction is what stops the expert arm's own exemption from being a one-word bypass.
+#
+# An AUTHORIZATION is asked in the QUESTION. An option LABEL reading "Approve" is a button — it is
+# what the founder clicks, not what they are being asked to decide. Testing the authorization
+# vocabulary against the full corpus therefore let any question be exempted by relabelling a button:
+# measured, the suite's OWN deny fixtures escaped that way. "Should the new rack be capex or opex?"
+# with an option labelled `Approve as capex`, and "Can you ask my accountant whether this is
+# deductible?" with an option labelled `Approve`, both flipped from deny to ALLOW — two fixtures the
+# suite carries specifically to prove the arm fires, disarmed by one word in a place the founder does
+# not read as a question.
+#
+# The full corpus stays correct for DETECTION (a profession noun or an investigative cue is a real
+# signal wherever it appears, which is why the option text is flattened in at all). It is only the
+# EXEMPTION that has to be narrow, because an exemption is the one thing an author can add.
+QUESTION_CORPUS="$(printf '%s' "$__HI_RAW" | jq -r '
+  ( .tool_input.questions // [] )[] | (.question // "")
+' 2>/dev/null | tr '\n' ' ' | tr '[:upper:]' '[:lower:]')"
 
 # EXTERNAL EXPERT signal — a question whose answer is held OUTSIDE the company, by a professional
 # the founder pays: an accountant, a bookkeeper, a lawyer, a notary, an auditor, an insurer, a bank,
@@ -194,9 +222,11 @@ EXTERNAL_EXPERT_RE='(\baccountant|\bbookkeep|\blawyer|\bsolicitor|\bnotar(y|ies)
 QUESTIONNAIRE_INTERVIEW_RE='(who (receives|should receive) (this|it)|what (has to|needs to|must) come back|who holds the answer)'
 
 AUTHZ_VERB_RE='(ack-destroy|authori[sz]|approve|\bmerge|replace|destroy|delete|force-push|deploy|dispatch|apply |arm the|flip |rotate|revoke|roll ?out|proceed with the (merge|replace|destroy|apply|cutover))'
+# Detection reads the FULL corpus; both exemptions read the QUESTION only. See the QUESTION_CORPUS
+# comment above for why the asymmetry is the point rather than an oversight.
 if grep -qE "$EXTERNAL_EXPERT_RE" <<<"$CORPUS" \
-   && ! grep -qE "$AUTHZ_VERB_RE" <<<"$CORPUS" \
-   && ! grep -qiE "$QUESTIONNAIRE_INTERVIEW_RE" <<<"$CORPUS"; then
+   && ! grep -qE "$AUTHZ_VERB_RE" <<<"$QUESTION_CORPUS" \
+   && ! grep -qiE "$QUESTIONNAIRE_INTERVIEW_RE" <<<"$QUESTION_CORPUS"; then
   EXPERT_REASON="BLOCKED: this AskUserQuestion puts an OUTSIDE EXPERT's question to the founder.
 
 The answer is held by an accountant, bookkeeper, lawyer, notary, auditor, insurer, bank, regulator or landlord — not by the founder, and not by you. Asking the founder produces a guess that then gets acted on.

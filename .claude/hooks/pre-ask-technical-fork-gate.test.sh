@@ -296,9 +296,87 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# D9 — the expert arm's exemption is scoped to the QUESTION, and the verbs that exempt are witnessed.
+#
+# Two defects in one case, because they are two ends of the same conjunct.
+#
+# (a) THE EXEMPTION WAS A ONE-WORD BYPASS. `AUTHZ_VERB_RE` was tested against the whole flattened
+#     corpus, so relabelling a BUTTON exempted the question. Measured: this suite's own D4 fixture
+#     ("Should the new rack be capex or opex?") and its own D6 fixture ("Can you ask my accountant
+#     whether this is deductible?") both flipped deny -> ALLOW when an option was labelled `Approve`.
+#     Two fixtures that exist to prove the arm fires, disarmed by one word in a place a founder reads
+#     as a button rather than as a question. The exemption now reads the question text only.
+#
+# (b) `AUTHZ_VERB_RE` HAD NO WITNESS AT ALL. An independent per-member sweep found all 17 alternatives
+#     individually deletable with the suite still green — on the arm that decides which outside-expert
+#     questions escape the deny, and therefore on the exact edge where this hook's header says a wrong
+#     answer is "strictly worse". D4 exercises the arm's ORDERING and D5 its non-firing, but nothing
+#     exercised the vocabulary that lets a real authorization through. The sweep below pins the five
+#     highest-consequence verbs one at a time, so deleting any of them reds this case by name.
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 17 ]]; then echo "  PASS: V1 full inventory ran (17 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 17 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+d9_fail=0
+
+# (a) The authorization verb lives ONLY in an option label. Both of the suite's own escaped fixtures.
+d9_out=$(payload "Should the new rack be capex or opex?" \
+  "Approve as capex" "cost lands this year" "Opex" "spread it" | "$HOOK" 2>/dev/null)
+d9_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d9_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$d9_dec" != "deny" ]]; then
+  printf '  FAIL: D9(a) an option LABEL carrying an authorization verb exempted an expert question (%s) — the exemption reads the whole corpus, so relabelling a button bypasses the arm\n' "$d9_dec" >&2
+  d9_fail=$((d9_fail+1))
+fi
+d9_out=$(payload "Can you ask my accountant whether this is deductible?" \
+  "Approve" "put it to them" "No" "leave it" | "$HOOK" 2>/dev/null)
+d9_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d9_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$d9_dec" != "deny" ]]; then
+  printf '  FAIL: D9(a) D6 own fixture escaped once an option was labelled Approve (%s)\n' "$d9_dec" >&2
+  d9_fail=$((d9_fail+1))
+fi
+
+# (b) The verb IN THE QUESTION must still exempt — one case per verb, so each is individually pinned.
+# Every payload names a profession, so the expert arm is live and only the exemption can permit it.
+# THE PRECONDITION IS ASSERTED, not assumed. A payload that does not match EXTERNAL_EXPERT_RE is
+# permitted by a later arm and says nothing whatever about the exemption — it is the "fixture passes
+# for a second reason" shape. Measured on the first draft of this sweep: "Rotate the bank API token
+# now?" matched no expert token (`bank API` satisfies neither `\bbank(er|ing)\b` nor
+# `\bbank (account|statement|transfer|mandate|covenant)\b`), so deleting `rotate` from AUTHZ_VERB_RE
+# left the suite fully green and that sub-case witnessed nothing.
+d9_expert_re="$(sed -n "s/^EXTERNAL_EXPERT_RE='\(.*\)'$/\1/p" "$HOOK")"
+if [[ -z "$d9_expert_re" ]]; then
+  printf '  FAIL: D9(b) could not read EXTERNAL_EXPERT_RE out of the hook — the precondition below cannot be checked\n' >&2
+  d9_fail=$((d9_fail+1))
+fi
+while IFS='|' read -r d9_q d9_why; do
+  [[ -n "$d9_q" ]] || continue
+  if [[ -n "$d9_expert_re" ]] \
+     && ! grep -qE "$d9_expert_re" <<<"$(printf '%s' "$d9_q" | tr '[:upper:]' '[:lower:]')"; then
+    printf '  FAIL: D9(b) the payload does not arm the expert regex, so it cannot witness %s: %s\n' "$d9_why" "$d9_q" >&2
+    d9_fail=$((d9_fail+1))
+    continue
+  fi
+  d9_out=$(payload "$d9_q" "Yes" "go ahead" "No" "hold" | "$HOOK" 2>/dev/null)
+  d9_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d9_out:-{\}}" 2>/dev/null || echo allow)
+  if [[ "$d9_dec" != "allow" ]]; then
+    printf '  FAIL: D9(b) a real authorization was BLOCKED (%s): %s — %s. This hook header calls a wrongly-blocked authorization strictly worse than a wrongly-permitted question.\n' \
+      "$d9_dec" "$d9_q" "$d9_why" >&2
+    d9_fail=$((d9_fail+1))
+  fi
+done <<'D9CASES'
+Approve the September payroll run now?|approve
+Authorize the bank mandate change?|authori[sz]
+Deploy the tax calculation fix to production now?|deploy
+Rotate the credentials on the bank mandate now?|rotate
+Delete the landlord contact record? This is irreversible.|delete
+D9CASES
+
+if [[ "$d9_fail" -eq 0 ]]; then
+  echo "  PASS: D9 the expert exemption reads the question only, and its five load-bearing verbs are each witnessed"; PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
+TOTAL=$((TOTAL+1))
+if [[ "$TOTAL" -eq 18 ]]; then echo "  PASS: V1 full inventory ran (18 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 18 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -347,7 +425,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=17
+MIN_CASES=18
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

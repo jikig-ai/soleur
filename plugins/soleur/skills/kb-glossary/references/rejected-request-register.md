@@ -55,9 +55,13 @@ Every durable refusal has an `instead`. If nothing goes in that field, stop: eit
 rare category-level never — which is worth saying out loud, in `why` — or what is really being
 refused is a mechanism, and this is the wrong record for it.
 
-The `why`/`public_note` split exists so that the blunt version stays internal. Write `why` for the
-team, at whatever length the reasoning needs. Write `public_note` as one sentence that could be
-pasted into a reply without editing. An agent quotes `public_note` and never `why`.
+The `why`/`public_note` split is about AUDIENCE, not secrecy — and the distinction matters because
+this repository is public, so `why` is world-readable the moment it is committed and its history is
+permanent. Nothing here "stays internal". Write `why` for the team, at whatever length the reasoning
+needs, and write it as something you would be content to have quoted. Write `public_note` as one
+sentence that could be pasted into a reply without editing. An agent quotes `public_note` and never
+`why` — not because `why` is hidden, but because it is addressed to a reader who already has the
+context, and pasting it at someone who does not is how a refusal reads as contempt.
 
 ## Never write a built feature into the no-list
 

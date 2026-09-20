@@ -19,10 +19,12 @@
 # `prior_requests` resolves to an issue closed as `completed` — needs the network and is
 # deliberately not in the pre-commit tier, so it is not in this battery either.
 #
-# THE MATRIX. 16 rows across 5 axes (SUT, fixture shape, fixture direction, dispatch, cardinality).
-# Rows 1–11 and 13–16 must drive the guard RED; ROW 12 IS THE MUST-PASS ROW and is labelled as such
-# at its definition. Each RED row asserts the guard's own rule tag, not merely a non-zero exit — a
-# row that reddens for the wrong reason is a row that proves nothing.
+# THE MATRIX. 29 rows across 7 axes (SUT, fixture shape, fixture direction, dispatch, cardinality,
+# value shape, assembly). Every row must drive the guard RED except the four MUST-PASS rows — 12, 17,
+# 23 and 28 — each labelled as such at its definition. Each RED row asserts the guard's own rule tag,
+# not merely a non-zero exit: a row that reddens for the wrong reason is a row that proves nothing,
+# and each MUST-PASS row exists because its RED partner would otherwise be satisfied by a guard that
+# simply refuses more.
 #
 #   #   axis               mutation                                          reddens because
 #   1   fixture shape      redundancy_check: implemented                     the poisoning class
@@ -41,6 +43,26 @@
 #  14   dispatch           invoked with zero path arguments                  "no paths, exit 0" is the vacuous arm
 #  15   SUT                drop implemented_at from the forbidden-key set    proves row 3 is carried by the guard
 #  16   SUT                enum comparison replaced by a substring match     `not-implemented` CONTAINS `implemented`
+#  17   fixture direction  redundancy_check: "not-implemented" (quoted)      MUST PASS — quoting is presentation
+#  18   value shape        "requester": (quoted key)                         the FIELD is forbidden, not a spelling
+#  19   value shape        Requester: (capitalised key)                      same field, same reason
+#  20   value shape        searched: present, no `->` result                 an intention is not an audit trail
+#  21   value shape        public_note: byte-equal to why:                   the outward text becomes the blunt one
+#  22   value shape        superseded_by: names no existing entry            drops the refusal instead of redirecting
+#  23   fixture direction  superseded_by: names a real entry                 MUST PASS — or row 22 proves nothing
+#  24   assembly           a poisoned entry in a SUBDIRECTORY                indexed by kb-search, invisible to the walk
+#  25   assembly           a poisoned entry named `.MD`                      and it is still checked for PII once reached
+#  26   assembly           an entry that is a SYMLINK                        certified bytes living outside the record
+#  27   assembly           a poisoned `archive/README.md`                    a basename skip is not a document identity
+#  28   assembly           the record's OWN README.md                        MUST PASS — row 27's fix must not over-reach
+#  29   assembly           two entries claiming one alias                    per-file checks are blind to this by construction
+#
+# Rows 18–23 exist because the structural enumeration of this guard found the same defect eight
+# times: the required-key loop proves a key is PRESENT and non-empty, and most of the fields have a
+# contract that presence does not express. Rows 24–29 exist because the checks were never the defect
+# — THE WALK WAS. Measured on the pre-fix `--all`: one clean entry plus three poisoned members
+# (subdirectory, symlink, `.MD`) reported `1 file(s) checked, clean` and exited 0, while handing the
+# guard those same files explicitly reddened on every one.
 #
 # THE HARNESS ROWS. A battery that cannot fail is worth nothing, so the instrument is tested too.
 #
@@ -56,16 +78,23 @@
 #      README.md. A suite whose only must-PASS input is the convention document proves nothing about
 #      the inputs the contract actually permits.
 #
-# THE FLOORS. Two, direct, in the ADR-193 shape: `printf >&2` + `exit 1`, never routed through this
+# THE FLOORS. Three, direct, in the ADR-193 shape: `printf >&2` + `exit 1`, never routed through this
 # suite's own verdict helpers, because a floor enforced through the suspect cannot witness the
-# suspect. Each floor's bound is DERIVED by a recipe over this file, written beside it — never
-# hand-summed. MIN_CASES counts ROWS; MIN_AXES counts AXES. That distinction is ADR-193 Decision 2
-# and must not collapse: eleven rows on one axis is eleven rows and one axis.
+# suspect. THREE floors, each bound DERIVED by a recipe over this file, written beside it — never
+# hand-summed. MIN_CASES counts ROWS; MIN_AXES counts AXES; MIN_ASSERTIONS counts EXECUTIONS. The
+# first distinction is ADR-193 Decision 2 and must not collapse: eleven rows on one axis is eleven
+# rows and one axis. The third exists because the first two are read from the emitted-ids file and
+# are therefore satisfied by CARDINALITY — a battery whose every assertion had been neutered still
+# emitted sixteen ids and cleared both, measured.
 #
-# Note on shape: these floors use the `[[ … ]] && { … }` form the plan prescribes rather than an
-# `if` opener, so `scripts/guard-vacuity-floor.test.sh` — whose candidate pattern requires a
-# conditional opener — does not enumerate them. They are mutation-tested HERE instead, by H2 and H3,
-# which is local and stronger than enumeration; the trade is recorded rather than left implied.
+# Note on shape: these floors are written with `if` openers, not the `[[ … ]] && { … }` form the plan
+# prescribes. The plan is authoritative for the floors' INTENT and not for their syntax, and the
+# syntax is load-bearing here: `floor_lines_of()` in `scripts/guard-vacuity-floor.test.sh` matches
+# only a conditional opener, so in the `&&` form this suite sat OUTSIDE the repo's own anti-vacuity
+# population entirely — three healthy floors that no meta-ratchet could see. An earlier revision of
+# this comment claimed that exclusion was a deliberate trade covered by H2 and H3; it was neither
+# deliberate nor covered, and it is recorded here because the claim is exactly the kind a later
+# reader would trust. The floors are now enumerated by that guard AND mutation-tested here.
 #
 # WHY THIS SOURCES lib/git-fixture-env.sh: BY CHOICE, NOT BY OBLIGATION. The fixture-env adoption
 # gate's SHELL_ROOTS do not cover `plugins/soleur/test/*` — that root is explicitly out of its
@@ -552,13 +581,19 @@ h3_verdict_weakened_zero_cases() {
   must cp "$SELF" "$child"
   # Two mutations, and both are needed to state the case: remove every row so the run is 0/0, and
   # weaken the success condition to `fail == 0` alone. `0 passed, 0 failed` must not exit 0.
+  #
+  # The second sed strips BOTH pass-guards, because the verdict is reconciled against two independent
+  # records — the append-only ledger and the mutable counters — and weakening only one leaves the
+  # other still requiring a pass. That is deliberate: a future rewrite of the verdict breaks this row
+  # loudly instead of silently reducing what it proves.
   must sed -i '/^row[0-9][0-9]_[a-z0-9_]*$/d' "$child"
-  must sed -i 's/^\[\[ "\$fails" -eq 0 \]\] && \[\[ "\$passes" -gt 0 \]\] || exit 1$/[[ "$fails" -eq 0 ]] || exit 1/' "$child"
+  must sed -i 's/\[\[ "${_final_pass:-0}" -gt 0 \]\] && //; s/&& \[\[ "\$passes" -gt 0 \]\] //' "$child"
   ck
   # Asserted on the child's LAST LINE, not by grepping the file for the old text: this function's
   # own source carries that text too, so a file-wide grep would read itself and never land.
   if [[ "$(grep -cE '^row[0-9][0-9]_[a-z0-9_]*$' "$child")" -eq 0 ]] \
-     && [[ "$(tail -n 1 "$child")" == '[[ "$fails" -eq 0 ]] || exit 1' ]]; then
+     && [[ "$(tail -n 1 "$child")" == '  && [[ "$fails" -eq 0 ]] || exit 1' ]] \
+     && [[ "$(grep -c -- '-gt 0' "$child")" -lt "$(grep -c -- '-gt 0' "$SELF")" ]]; then
     ok "h3: the child runs no rows and its success condition is fail==0 alone"
   else
     bad "h3: one of the two mutations did NOT land — the child is not a 0/0 weakened-verdict suite"
@@ -607,11 +642,228 @@ row08_public_note_missing
 row09_instead_missing
 row10_filename_outruns_scope
 row11_authority_claim
+
+# --- axis: VALUE SHAPE (the required-key loop checks PRESENCE; the contract is the VALUE) ---------
+# Every row above this point drives a check that existed. These drive checks added because the
+# structural enumeration of the guard found the same gap eight times: `fm_value` proves a key is
+# present and non-empty, and eight of the required fields have a CONTRACT that presence does not
+# express. A field satisfied by any non-empty string is a field the schema documents and the guard
+# does not enforce.
+
+row17_quoted_enum_accepted() {
+  emit_id row17-quoted-enum-accepted fixture-direction
+  local d f; d="$(new_dir row17)"; f="${d:?}/$VALID_BASENAME"
+  write_valid_entry "$f"
+  # YAML quoting is presentation. This spelling is the SAME value and was REJECTED, so the entry a
+  # careful author writes was the one the guard refused. MUST-PASS in the quoted direction.
+  must sed -i 's/^redundancy_check: not-implemented$/redundancy_check: "not-implemented"/' "$f"
+  ck
+  if assert_mutated "$f" "$PRISTINE"; then ok "row17: mutation landed"; else bad "row17: mutation did NOT land"; return; fi
+  run_lint "$LINT" "$f"
+  ck
+  if [[ "$RC" -eq 0 ]]; then
+    ok "row17-quoted-enum-accepted (MUST-PASS): a quoted enum scalar is the same value and is accepted"
+  else
+    bad "row17-quoted-enum-accepted (MUST-PASS): the quoted spelling was REJECTED (rc=$RC): $OUT"
+  fi
+}
+
+row18_requester_quoted_key() {
+  emit_id row18-requester-quoted-key value-shape
+  local d f; d="$(new_dir row18)"; f="${d:?}/$VALID_BASENAME"
+  write_valid_entry "$f"
+  # `"requester":` is the same FIELD. An anchored lower-case-only pattern accepted it, so the PII
+  # check was about a spelling rather than about the schema.
+  must sed -i 's|^redundancy_check: not-implemented$|"requester": a-role-that-should-not-be-here\nredundancy_check: not-implemented|' "$f"
+  ck
+  if assert_mutated "$f" "$PRISTINE"; then ok "row18: mutation landed"; else bad "row18: mutation did NOT land"; return; fi
+  red_row row18-requester-quoted-key '[forbidden-key:requester]' "$f"
+}
+
+row19_requester_capitalised_key() {
+  emit_id row19-requester-capitalised-key value-shape
+  local d f; d="$(new_dir row19)"; f="${d:?}/$VALID_BASENAME"
+  write_valid_entry "$f"
+  must sed -i 's|^redundancy_check: not-implemented$|Requester: a-role-that-should-not-be-here\nredundancy_check: not-implemented|' "$f"
+  ck
+  if assert_mutated "$f" "$PRISTINE"; then ok "row19: mutation landed"; else bad "row19: mutation did NOT land"; return; fi
+  red_row row19-requester-capitalised-key '[forbidden-key:requester]' "$f"
+}
+
+row20_searched_no_result() {
+  emit_id row20-searched-no-result value-shape
+  local d f; d="$(new_dir row20)"; f="${d:?}/$VALID_BASENAME"
+  write_valid_entry "$f"
+  # The key is present and non-empty, so row04's emptiness check is satisfied. What is missing is the
+  # RESULT — and `searched` exists to make the redundancy search auditable, which an intention is not.
+  must sed -i 's|^  - "git.*-> 0"$|  - "had a look around the codebase"|' "$f"
+  ck
+  if assert_mutated "$f" "$PRISTINE"; then ok "row20: mutation landed"; else bad "row20: mutation did NOT land"; return; fi
+  red_row row20-searched-no-result '[searched-no-result]' "$f"
+}
+
+row21_public_note_equals_why() {
+  emit_id row21-public-note-equals-why value-shape
+  local d f; d="$(new_dir row21)"; f="${d:?}/$VALID_BASENAME"
+  write_valid_entry "$f"
+  # Both keys present, both non-empty, and the split has collapsed — so the blunt internal reasoning
+  # is what an agent now quotes at the person whose request was refused.
+  must python3 - "$f" <<'PYX'
+import re, sys
+p = sys.argv[1]
+t = open(p, encoding='utf-8').read()
+m = re.search(r'^why: >-\n((?:  .*\n)+)', t, re.M)
+assert m, 'why: block not found in the canonical entry'
+body = m.group(1)
+t = re.sub(r'^public_note: >-\n(?:  .*\n)+', 'public_note: >-\n' + body, t, count=1, flags=re.M)
+open(p, 'w', encoding='utf-8').write(t)
+PYX
+  ck
+  if assert_mutated "$f" "$PRISTINE"; then ok "row21: mutation landed"; else bad "row21: mutation did NOT land"; return; fi
+  red_row row21-public-note-equals-why '[public_note-equals-why]' "$f"
+}
+
+row22_dangling_superseded_by() {
+  emit_id row22-dangling-superseded-by value-shape
+  local d f; d="$(new_dir row22)"; f="${d:?}/$VALID_BASENAME"
+  write_valid_entry "$f"
+  # A superseded entry is EXCLUDED from concept matching, so a dangling pointer does not redirect the
+  # refusal — it removes it from the record while looking like a redirection.
+  must sed -i 's|^redundancy_check: not-implemented$|redundancy_check: superseded\nsuperseded_by: 2027-01-01-no-such-entry.md|' "$f"
+  ck
+  if assert_mutated "$f" "$PRISTINE"; then ok "row22: mutation landed"; else bad "row22: mutation did NOT land"; return; fi
+  red_row row22-dangling-superseded-by '[dangling-superseded_by]' "$f"
+}
+
+row23_superseded_by_resolves() {
+  emit_id row23-superseded-by-resolves fixture-direction
+  local d f g; d="$(new_dir row23)"; f="${d:?}/$VALID_BASENAME"
+  g="${d:?}/2026-04-03-inbox-zero-successor.md"
+  write_valid_entry "$f"
+  write_valid_entry "$g"
+  must sed -i 's|^redundancy_check: not-implemented$|redundancy_check: superseded\nsuperseded_by: 2026-04-03-inbox-zero-successor.md|' "$f"
+  # The successor needs its own slug inside its own scope (the row-10 property) and its own aliases,
+  # or it reds for reasons that have nothing to do with what this row asserts.
+  # BOTH spellings. The slug check lowers `-` to `[- ]`, so `scope:` satisfies it with the SPACED
+  # form, and a hyphens-only rewrite left the successor reddening on `slug-outruns-scope` — which
+  # would have made row22 pass for a reason unrelated to the pointer being dangling.
+  must sed -i 's|inbox-zero-autopilot|inbox-zero-successor|g; s|inbox zero autopilot|inbox zero successor|g' "$g"
+  ck
+  if assert_mutated "$f" "$PRISTINE"; then ok "row23: mutation landed"; else bad "row23: mutation did NOT land"; return; fi
+  run_lint "$LINT" "$f" "$g"
+  ck
+  if [[ "$RC" -eq 0 ]]; then
+    ok "row23-superseded-by-resolves (MUST-PASS): a superseded_by naming a real entry is accepted"
+  else
+    bad "row23-superseded-by-resolves (MUST-PASS): a resolvable superseded_by was REJECTED (rc=$RC): $OUT — row22 would then pass for the wrong reason"
+  fi
+}
+
+# --- axis: ASSEMBLY (which files are MEMBERS of the record at all) --------------------------------
+# The checks above are sound and were never the defect. THE WALK WAS. Every predicate that narrowed
+# `--all`'s `find` carved an exact hole in the property "no file in the record violates this", and a
+# file in the hole was a member for every CONSUMER — `generate-kb-index.sh` walks the record
+# recursively with no depth bound, so it reaches subdirectories the guard could not — while being a
+# non-member for the guard. Measured on the pre-fix walk: one clean entry plus three poisoned members
+# reported `1 file(s) checked, clean`, rc=0.
+#
+# These five rows are the holes, each driven through `--all` because that is the only dispatch whose
+# assembly is the guard's own.
+
+row24_assembly_subdirectory() {
+  emit_id row24-assembly-subdirectory assembly
+  local d rec; d="$(new_dir row24)"; rec="${d:?}/rejected"
+  must mkdir -p "${rec:?}/archive"
+  write_valid_entry "${rec:?}/$VALID_BASENAME"
+  write_valid_entry "${rec:?}/archive/$VALID_BASENAME"
+  must sed -i 's|^redundancy_check: not-implemented$|requester: a-role-that-should-not-be-here\nredundancy_check: not-implemented|' "${rec:?}/archive/$VALID_BASENAME"
+  red_row row24-assembly-subdirectory '[forbidden-key:requester]' --all "${rec:?}"
+}
+
+row25_assembly_uppercase_extension() {
+  emit_id row25-assembly-uppercase-extension assembly
+  local d rec; d="$(new_dir row25)"; rec="${d:?}/rejected"
+  must mkdir -p "${rec:?}"
+  write_valid_entry "${rec:?}/$VALID_BASENAME"
+  write_valid_entry "${rec:?}/2026-04-02-inbox-zero-autopilot.MD"
+  must sed -i 's|^redundancy_check: not-implemented$|requester: a-role-that-should-not-be-here\nredundancy_check: not-implemented|' "${rec:?}/2026-04-02-inbox-zero-autopilot.MD"
+  # Two properties in one dispatch: the member is REACHED (bad-filename), and reaching it is not the
+  # end of it — the PII check still runs, which an early `return 0` on a bad filename prevented.
+  red_row row25-assembly-uppercase-extension '[forbidden-key:requester]' --all "${rec:?}"
+}
+
+row26_assembly_symlink() {
+  emit_id row26-assembly-symlink assembly
+  local d rec out; d="$(new_dir row26)"; rec="${d:?}/rejected"; out="${d:?}/outside.md"
+  must mkdir -p "${rec:?}"
+  write_valid_entry "${rec:?}/$VALID_BASENAME"
+  write_valid_entry "${out:?}"
+  must ln -s "${out:?}" "${rec:?}/2026-04-02-inbox-zero-symlinked.md"
+  red_row row26-assembly-symlink '[symlink-entry]' --all "${rec:?}"
+}
+
+row27_assembly_subdirectory_readme() {
+  emit_id row27-assembly-subdirectory-readme assembly
+  local d rec; d="$(new_dir row27)"; rec="${d:?}/rejected"
+  must mkdir -p "${rec:?}/archive"
+  write_valid_entry "${rec:?}/$VALID_BASENAME"
+  # A README.md in a SUBDIRECTORY is not the convention document. Skipping on basename alone made
+  # this path return rc=0 with arbitrary contents — the largest of the four holes, because it is the
+  # one an author could reach without doing anything unusual.
+  write_valid_entry "${rec:?}/archive/README.md"
+  must sed -i 's|^redundancy_check: not-implemented$|requested_by: a-role-that-should-not-be-here\nredundancy_check: not-implemented|' "${rec:?}/archive/README.md"
+  red_row row27-assembly-subdirectory-readme '[forbidden-key:requested_by]' --all "${rec:?}"
+}
+
+row28_assembly_root_readme_exempt() {
+  emit_id row28-assembly-root-readme-exempt assembly
+  local d rec; d="$(new_dir row28)"; rec="${d:?}/rejected"
+  must mkdir -p "${rec:?}"
+  write_valid_entry "${rec:?}/$VALID_BASENAME"
+  # The OTHER direction of row27, and it is why that fix is root-scoped rather than a deletion: the
+  # record's own README is the convention document and must stay exempt. Without this row, "report
+  # every README" would satisfy row27 and break the record.
+  printf '# The no-list\n\nConvention document, not an entry. No frontmatter, no schema.\n' > "${rec:?}/README.md"
+  run_lint "$LINT" --all "${rec:?}"
+  ck
+  if [[ "$RC" -eq 0 ]]; then
+    ok "row28-assembly-root-readme-exempt (MUST-PASS): the record's own README.md is still the convention document"
+  else
+    bad "row28-assembly-root-readme-exempt (MUST-PASS): the root README was linted as an entry (rc=$RC): $OUT — row27's fix over-reached"
+  fi
+}
+
+row29_cross_entry_duplicate_alias() {
+  emit_id row29-cross-entry-duplicate-alias assembly
+  local d rec; d="$(new_dir row29)"; rec="${d:?}/rejected"
+  must mkdir -p "${rec:?}"
+  write_valid_entry "${rec:?}/$VALID_BASENAME"
+  # A second entry claiming the same alias. Every OTHER check in this guard is per-file and therefore
+  # structurally blind to this: the lookup key is the concept plus its aliases, so two claimants make
+  # the answer depend on which the walk reached first, and the two may disagree about the refusal.
+  write_valid_entry "${rec:?}/2026-04-04-inbox-zero-duplicate.md"
+  must sed -i 's|inbox-zero-autopilot|inbox-zero-duplicate|g' "${rec:?}/2026-04-04-inbox-zero-duplicate.md"
+  red_row row29-cross-entry-duplicate-alias '[duplicate-alias]' --all "${rec:?}"
+}
+
 row12_valid_entry_passes
 row13_second_of_two_invalid
 row14_zero_paths
 row15_sut_drop_implemented_at
 row16_sut_substring_enum
+row17_quoted_enum_accepted
+row18_requester_quoted_key
+row19_requester_capitalised_key
+row20_searched_no_result
+row21_public_note_equals_why
+row22_dangling_superseded_by
+row23_superseded_by_resolves
+row24_assembly_subdirectory
+row25_assembly_uppercase_extension
+row26_assembly_symlink
+row27_assembly_subdirectory_readme
+row28_assembly_root_readme_exempt
+row29_cross_entry_duplicate_alias
 
 if [[ "$CHILD" != "1" ]]; then
   h1_bad_misrouted_direction
@@ -652,14 +904,14 @@ hcases="$(grep -cE '^(h[0-9]+|p[0-9]+)' "$IDS_FILE" || true)"
 # hand-summed:
 #   grep -cE '^row[0-9][0-9]_[a-z0-9_]+$' plugins/soleur/test/lint-rejected-register.test.sh  -> 16
 # (that is the invocation list above; the matrix table in the header names the same 16 rows.)
-MIN_CASES=16
+MIN_CASES=29
 # MIN_AXES counts AXES, not rows — ADR-193 Decision 2, and the distinction must not collapse:
 # eleven rows on one axis is eleven rows and one axis, and raising MIN_CASES must never be able to
 # satisfy this one. Derived by recipe over the same segment:
 #   grep -oE 'emit_id row[0-9a-z-]+ [A-Za-z-]+' plugins/soleur/test/lint-rejected-register.test.sh \
-#     | awk '{print $3}' | sort -u | wc -l                                                    -> 5
-# The five are SUT, fixture-shape, fixture-direction, dispatch, cardinality.
-MIN_AXES=5
+#     | awk '{print $3}' | sort -u | wc -l                                                    -> 7
+# The seven are SUT, fixture-shape, fixture-direction, dispatch, cardinality, value-shape, assembly.
+MIN_AXES=7
 
 # Both floors APPEND TO THE LEDGER THE VERDICT READS before exiting. Without that their non-zero
 # exit would be an accident of control flow and the printed verdict would contradict the exit code.
@@ -713,13 +965,43 @@ fi
 # check below — and under its neutering (every counter forced to 0) `0 -lt 0` is false, so the suite
 # exited 0 and it reported NO_FIRE. The guard was right.
 #
-# THE VALUE IS THE MEASURED RUNTIME COUNT, NOT THE STATIC ONE, and the two differ on purpose:
-#   grep -cE '^[[:space:]]*ck$' plugins/soleur/test/lint-rejected-register.test.sh   -> 31 call sites
-#   the suite's own epilogue line, run                                              -> 40 executed
-# The gap is nine: several ck call sites sit inside per-row loops, so the static recipe is a LOWER
-# BOUND on executions and would leave nine assertions droppable without tripping anything. 40 is the
-# tight bound. It ratchets the safe way round — adding rows pushes `asserted` up and never reds this.
-MIN_ASSERTIONS=40
+# THE VALUE IS THE MEASURED RUNTIME COUNT, NOT THE STATIC ONE, and the two differ on purpose. An
+# earlier revision of this comment explained the gap as "several ck call sites sit inside per-row
+# loops". That is FALSE and was measured so: ZERO ck sites sit inside a loop (p1's only `for` has its
+# ck after `done`). The entire gap is `red_row`'s single ck, executed once per caller. The number was
+# right and the stated mechanism was wrong, which is worse than a wrong number — anyone re-deriving
+# it looks for loops that do not exist. Recipe, corrected:
+#   static ck call sites                                    grep -cE '^[[:space:]]*ck$' <this file>
+#   plus one per red_row caller                             grep -cE '^  red_row ' <this file>
+#   = the executed count, which the epilogue line prints
+#
+# AND IT IS MODE-DEPENDENT. `SOLEUR_RR_CHILD=1` skips the four harness rows, so a child executes
+# strictly fewer assertions than a parent. A single parent-mode literal therefore FIRED on every
+# intact child — which silently voided h1's presence control, whose only assertion is `CRC -ne 0`:
+# the rc=1 it observed was this floor misfiring on the mode mismatch, not the child's rows catching
+# the accept-everything stub. It would have passed with every row in the child hollowed out. Two
+# bounds, so each mode is floored at its own tight count and an intact child can be GREEN.
+# Measured, both modes, on this tree:
+#   bash <this file>                    -> 60 executed   (29 matrix rows + 4 harness rows)
+#   SOLEUR_RR_CHILD=1 bash <this file>  -> 51 executed   (29 matrix rows alone)
+# The harness contribution is the difference, 9, and is asserted separately so that adding a harness
+# row cannot be absorbed by slack in the matrix bound or vice versa.
+MIN_ASSERTIONS_MATRIX=51
+MIN_ASSERTIONS_HARNESS=9
+EXPECTED_ASSERTIONS="$MIN_ASSERTIONS_MATRIX"
+[[ "$CHILD" == "1" ]] || EXPECTED_ASSERTIONS=$((MIN_ASSERTIONS_MATRIX + MIN_ASSERTIONS_HARNESS))
+# THE SHAPE OF THE NEXT TWO LINES IS LOAD-BEARING, and the reason is mechanical rather than stylistic.
+# `scripts/guard-vacuity-floor.test.sh` mutation-tests this floor by slicing the block below into a
+# standalone script, widening BACKWARD only over contiguous simple assignments. The mode selection
+# above is not one, so an `if/else/fi` writing `MIN_ASSERTIONS` left it UNBOUND in the mutant, which
+# aborted under `set -u` before the floor ran: the guard then scored this floor CONSTRUCTION, the
+# suite lost its only FIRES floor, and the whole suite was reported as having a floor "enforced
+# THROUGH the machinery it guards". Measured — the mode-aware fix reintroduced exactly that.
+#
+# So the threshold is bound by ONE simple assignment adjacent to the floor, with a fallback that
+# applies only inside the mutant (in a real run EXPECTED_ASSERTIONS is always set). `1` cannot rot as
+# rows are added, and any positive value discriminates because the mutant zeroes `asserted` to 0.
+MIN_ASSERTIONS=${EXPECTED_ASSERTIONS:-1}
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: only %s assertion(s) executed, floor is %s. The battery ran but did not assert.\n' \
     "$asserted" "$MIN_ASSERTIONS" >&2
@@ -747,6 +1029,19 @@ MATRIX_IDS=(
   row14-zero-paths
   row15-sut-drop-implemented-at
   row16-sut-substring-enum
+  row17-quoted-enum-accepted
+  row18-requester-quoted-key
+  row19-requester-capitalised-key
+  row20-searched-no-result
+  row21-public-note-equals-why
+  row22-dangling-superseded-by
+  row23-superseded-by-resolves
+  row24-assembly-subdirectory
+  row25-assembly-uppercase-extension
+  row26-assembly-symlink
+  row27-assembly-subdirectory-readme
+  row28-assembly-root-readme-exempt
+  row29-cross-entry-duplicate-alias
 )
 HARNESS_IDS=(
   h1-bad-misrouted-direction
@@ -775,4 +1070,13 @@ fi
 
 printf '\nlint-rejected-register.test.sh: %d passed, %d failed, %d assertion(s) executed; %s mutation rows across %s axes, %s harness rows (floors %s/%s)\n' \
   "$passes" "$fails" "$asserted" "$cases" "$axes" "$hcases" "$MIN_CASES" "$MIN_AXES"
-[[ "$fails" -eq 0 ]] && [[ "$passes" -gt 0 ]] || exit 1
+# THE VERDICT READS THE APPEND-ONLY LEDGER, not the counters. `$fails` is a mutable number: any line
+# inserted between the conservation check above and this point can zero it, and the exit code would
+# then contradict the FAIL lines already printed. The ledger can only be appended to, so it is the
+# authority — the same precedent as fixture-relative-assert.test.sh's own verdict. The counters are
+# kept in the condition as well: they are reconciled against the ledger above, so requiring both to
+# agree costs nothing and means a mutation has to defeat two independent records.
+_final_fail="$(grep -c '^FAIL$' "$VERDICT_LOG" || true)"
+_final_pass="$(grep -c '^PASS$' "$VERDICT_LOG" || true)"
+[[ "${_final_fail:-1}" -eq 0 ]] && [[ "${_final_pass:-0}" -gt 0 ]] \
+  && [[ "$fails" -eq 0 ]] && [[ "$passes" -gt 0 ]] || exit 1

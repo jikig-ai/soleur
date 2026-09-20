@@ -441,7 +441,10 @@ pre-commit:
     #
     # THIS IS ONE OF THREE DISPATCHES, not a chokepoint. See the pre-push mirror below and the
     # CI step in .github/workflows/ci.yml (the `lint-bot-statuses` job), which runs --all over
-    # the WHOLE glob rather than the staged set.
+    # the WHOLE glob rather than the staged set. That CI job is ADVISORY — absent from
+    # scripts/required-checks.txt, so a PR merges with it red. All three dispatches are advisory;
+    # none of them blocks. Rationale and the promotion issue: the DISPATCH note at the top of
+    # scripts/lint-rejected-register.sh.
     rejected-register-guard:
       priority: 12
       glob: "knowledge-base/project/rejected/*.md"
@@ -469,9 +472,13 @@ pre-push:
       # against lefthook 2.1.6 with a real `git push`.
       run: bash .github/scripts/check-client-pii-sentry.sh {push_files}
     # pre-push mirror of the no-list guard (#8289), same shared script, same scope, for the
-    # same reason the client-pii-grep mirror above exists: `git commit --no-verify` and a
-    # merge-resolution commit both reach the repository without the pre-commit hook, so a
-    # bypass is surfaced at push time instead of at review time.
+    # same reason the client-pii-grep mirror above exists: `git commit --no-verify`, LEFTHOOK=0
+    # and a clone without lefthook installed all reach the repository without the pre-commit
+    # hook, so a bypass is surfaced at push time instead of at review time. (NOT a
+    # merge-resolution commit — lefthook keys `merge` on MERGE_HEAD and this entry carries no
+    # `skip: merge`, so the pre-commit arm does run on one. The uncovered merges are the clean
+    # one and the server-side one, and the server-side one this mirror cannot see either,
+    # because no push occurs.)
     rejected-register-guard:
       priority: 6
       # Flat depth-1 glob, same gobwas rationale as the pre-commit entry.

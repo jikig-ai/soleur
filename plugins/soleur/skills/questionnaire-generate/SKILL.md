@@ -16,8 +16,10 @@ This skill produces that document. It never sends it — the founder sends it fr
 so nothing here becomes an intermediary for anyone's correspondence.
 
 `.claude/hooks/pre-ask-technical-fork-gate.sh` routes here. Its external-expert arm denies the
-`AskUserQuestion` that would have gone to the founder and names this skill as rung 5 of its resolution
-ladder. That deny is the main way this skill is reached, which is why every guardrail below is about
+`AskUserQuestion` that would have gone to the founder and names this skill in the deny reason. That
+arm has no resolution ladder — it is a single unconditional deny evaluated ahead of the authority
+short-circuit — so citing a "rung" of one would be the invented-precision this repository's own
+glossary discipline exists to stop. That deny is the main way this skill is reached, which is why every guardrail below is about
 protecting a founder who did not ask for the document and will not audit it.
 
 ## What the document is
@@ -86,21 +88,7 @@ fields, so there is nothing to remove".
 A future session will read this section and think the rule is over-strict. It is not: the allowlist is
 the only part of this design that survives contact with a document written to be sent.
 
-## Step 3 — Compute, preview, then take a typed confirmation
-
-The shape is `plugins/soleur/skills/invoice/SKILL.md` S4 steps 4 and 5: compute the artifact, show the
-founder what will actually go out, and take a literal typed `yes` before it becomes sendable.
-
-1. Assemble the whole document in memory.
-2. Show the founder the recipient role, the deadline, the question list, and the `## Context` paragraph
-   **verbatim** — the real bytes, not a summary of them.
-3. **Append nothing after the Context paragraph.** Whatever the preview ends with is what the recipient
-   reads. A line added after the confirmation is a line the founder never approved.
-4. Require a single literal `yes`. Any other token — `y`, `Yes`, `yes go ahead` — re-shows the Context
-   paragraph once, then aborts. There is no force flag.
-5. Only then write the file.
-
-## Step 4 — The redaction floor
+## Step 3 — The redaction floor
 
 Before the file is written, run the document through
 `plugins/soleur/skills/incident/scripts/redact-sentinel.sh`, the same boundary
@@ -115,13 +103,27 @@ exit code, fail-closed:
 This sentinel is a **floor and never a ceiling**. Exit 0 means no secret was found. It does not mean
 the document is safe to send — Step 2 is what makes it safe to send.
 
-## Step 5 — The glossary as the outbound stop-list
+## Step 4 — The glossary as the outbound stop-list
 
 `knowledge-base/project/glossary.md` is the list of internal words that must not leave the repository
-inside a document attributed to the founder. Read it as a stop-list before the preview: if a word in
+inside a document attributed to the founder. Read it as a stop-list here, before the preview is computed: if a word in
 the document has an entry there, it is an internal noun and the emitted document says the plain thing
 instead. Skill names, agent names, phase names, lane names and workflow nouns do not appear in a
 document a founder signs.
+
+## Step 5 — Compute, preview, then take a typed confirmation
+
+The shape is `plugins/soleur/skills/invoice/SKILL.md` S4 steps 4 and 5: compute the artifact, show the
+founder what will actually go out, and take a literal typed `yes` before it becomes sendable.
+
+1. Assemble the whole document in memory.
+2. Show the founder the recipient role, the deadline, the question list, and the `## Context` paragraph
+   **verbatim** — the real bytes, not a summary of them.
+3. **Append nothing after the Context paragraph.** Whatever the preview ends with is what the recipient
+   reads. A line added after the confirmation is a line the founder never approved.
+4. Require a single literal `yes`. Any other token — `y`, `Yes`, `yes go ahead` — re-shows the Context
+   paragraph once, then aborts. There is no force flag.
+5. Only then write the file.
 
 ## Step 6 — Emit
 

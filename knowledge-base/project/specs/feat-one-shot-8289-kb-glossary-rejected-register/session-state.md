@@ -158,11 +158,15 @@ files proves nothing about them. That re-run is what surfaced the vacuity findin
   `gh issue list --state all --search "server-side playwright in:title"` returns `[]` — the seed refusal
   is real, dated and recorded by three domain leaders, and no issue exists for a `not-planned` sweep to
   find at any keyword quality.
-- **`glossary-format.md` and `rejected-request-register.md` carry the attribution on LINE 1, not after a
-  frontmatter fence**, because reference `.md` files in this repo carry no frontmatter (102 of 108; the 6
-  that do are `skill-security-scan` fixtures). The shipped precedent is
-  `brainstorm-techniques/references/phase-boundaries.md`. AC-19's "after the closing fence" is right for
-  the two `SKILL.md` files and unsatisfiable for the reference docs.
+- **Attribution placement in the two reference docs, corrected.** An earlier revision of this bullet
+  said BOTH `glossary-format.md` and `rejected-request-register.md` carry the attribution on line 1
+  "because reference `.md` files in this repo carry no frontmatter". That is true of
+  `glossary-format.md` (line 1) and **false of `rejected-request-register.md`**, which opens with a
+  `title`/`applies_to` fence and carries its attribution on line 6, after the closing fence — i.e.
+  exactly what AC-19 prescribes. Re-measured at HEAD: 7 of 110 reference `.md` files carry
+  frontmatter, and this PR added one of them — the very file the claim was about. So AC-19 is
+  unsatisfiable only where no fence exists; where one does, the rule applies and is followed. The
+  line-1 precedent for the fenceless case is `brainstorm-techniques/references/phase-boundaries.md`.
 - **Two paths outside `## Files to Edit`** are in the diff and are pipeline-written in the same sense as
   `INDEX.md`: `plugins/soleur/skills/eval-harness/prompts/go-skill.txt` (finding 7) and
   `scripts/guard-vacuity-floor.test.sh`'s `MIN_FIRING_SUITES` (finding 3).
