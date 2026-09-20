@@ -546,9 +546,13 @@ describe("soleur-cloud-mode marker fleet", () => {
 // ASSEMBLY — and this is the part that matters. The 67-member marker list is a SNAPSHOT, not
 // the population. The property quantifies over every file under `plugins/soleur/` that names
 // a Devin plugin-cache path, DERIVED at test time. Measured today that is 71 files: the 67
-// marker blocks plus `devin/INSTRUCTIONS.md`, `AGENTS.md`, `commands/go.md` and
-// `test/go-session-gates.test.sh` — four sites the marker-block test structurally cannot see,
-// because it only opens `*/SKILL.md`. The existing byte-identity + cardinality test is a
+// marker blocks plus `devin/INSTRUCTIONS.md`, `commands/go.md`, `test/go-session-gates.test.sh`
+// and THIS FILE — four sites the marker-block test structurally cannot see, because it only
+// opens `*/SKILL.md`. That membership is NOT the one an earlier draft of this comment carried:
+// `AGENTS.md` LEFT the population when its rule body became a pointer (asserted positively in
+// the harness row below), and this file ENTERED it by naming both cache paths as fragments.
+// Two changes that cancelled in the total — which is the argument for deriving the total
+// rather than asserting it. The existing byte-identity + cardinality test is a
 // sub-guard over one SUBSET; this is the guard over the population. Both ship.
 //
 // SCOPE NOTE, stated so this is not read as more than it is: the identity preflight is a
@@ -608,6 +612,43 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
       .map((l) => l.trim());
   }
 
+  /**
+   * The SAME property, over the shape `basenameSelectionHits` structurally cannot see.
+   *
+   * That detector is LINE-SCOPED: both its regexes require the cache fragment and the
+   * `-name` on one line. But the sanctioned recipe — and therefore the shape a regression
+   * would be written in — is a multi-line `for d in <cacheA> <cacheB>; do … find "$d" … done`,
+   * where the cache paths are on the `for` line and the selector is two lines below. Every
+   * one of the three non-marker members of the derived population (`commands/go.md`,
+   * `devin/INSTRUCTIONS.md`, `test/go-session-gates.test.sh`) is written that way, so the
+   * line-scoped scan could not have flagged any of them. A guard that cannot reach the files
+   * it enumerates is a guard that reports clean for a reason unrelated to the tree.
+   *
+   * Block scope, not a fixed lookahead: a `for` line naming a cache path opens a window that
+   * closes at its `done` (or at end of text). Inside it, any `find` carrying `-name`/`-iname`
+   * is a hit regardless of whether the path literal is on that line — the loop variable IS
+   * the cache path. `-path` selection is untouched, which is the whole point: identity
+   * selection over the same directory must keep passing.
+   */
+  function blockScopedSelectionHits(text: string): string[] {
+    const cacheRe = new RegExp(CACHE_FRAGMENTS.join("|"));
+    const selectorRe = new RegExp(`${FIND}[^\n|]*${SELECTOR}\\s`);
+    const lines = text.split("\n");
+    const out: string[] = [];
+    let depth = 0;
+    for (const line of lines) {
+      if (depth > 0) {
+        if (/\bdone\b/.test(line)) { depth -= 1; continue; }
+        if (selectorRe.test(line)) out.push(line.trim());
+        continue;
+      }
+      // Open a window only on a `for`-style line that itself names a cache path; a bare
+      // mention elsewhere in the file opens nothing, so this adds no reach beyond loops.
+      if (/\bfor\s+\w+\s+in\b/.test(line) && cacheRe.test(line)) depth = 1;
+    }
+    return out;
+  }
+
   // HARNESS ROW — planted-positive self-test. A detector whose pattern cannot match reports
   // a clean sweep, which is byte-identical to a healthy run. Before reading ANY verdict
   // below, prove the detector fires on an input it must flag. The planted string is
@@ -640,6 +681,29 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
     const identity =
       "MANIFEST=\"$(find \"$d\" -path '*/.claude-plugin/plugin.json' -exec grep -l soleur {} + | head -1)\"";
     expect(basenameSelectionHits(identity).length).toBe(0);
+
+    // BLOCK-SCOPED detector, planted both ways. The offending form is the one the shipped
+    // fences are written in, so a detector that misses it reports clean about the files it
+    // enumerates. Assembled from the same fragments — no source line carries the shape.
+    const loopBad = [
+      `for d in "$HOME/.local/share/${"devin/cli/plugins/cache"}" ${OPT}; do`,
+      '  [ -d "$d" ] || continue',
+      `  X="$(find "$d" ${N} cloud-detect.sh 2>/dev/null | head -1)"`,
+      "done",
+    ].join("\n");
+    expect(blockScopedSelectionHits(loopBad).length).toBe(1);
+    // …and the LINE-scoped detector is blind to exactly this, which is why both ship.
+    expect(basenameSelectionHits(loopBad).length).toBe(0);
+    // The sanctioned identity loop must stay clean under the new detector too.
+    const loopGood = [
+      `for d in "$HOME/.local/share/${"devin/cli/plugins/cache"}" ${OPT}; do`,
+      '  [ -d "$d" ] || continue',
+      "  MANIFEST=\"$(find \"$d\" -path '*/.claude-plugin/plugin.json' -exec grep -l soleur {} + | head -1)\"",
+      "done",
+    ].join("\n");
+    expect(blockScopedSelectionHits(loopGood).length).toBe(0);
+    // A selector AFTER the loop closes is out of scope — the window must not leak.
+    expect(blockScopedSelectionHits(loopGood + `\nfind /tmp ${N} x.sh`).length).toBe(0);
   });
 
   // HARNESS ROW — non-vacuity. A derived population that comes back empty (a moved root, a
@@ -694,7 +758,8 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
   test("no shipped file selects a Devin-cache executable by filename", () => {
     const offenders: string[] = [];
     for (const f of deriveCachePathFiles()) {
-      const hits = basenameSelectionHits(readFileSync(f, "utf8"));
+      const text = readFileSync(f, "utf8");
+      const hits = [...basenameSelectionHits(text), ...blockScopedSelectionHits(text)];
       if (hits.length) offenders.push(`${f.slice(PLUGIN_ROOT.length + 1)}: ${hits[0]}`);
     }
     expect(

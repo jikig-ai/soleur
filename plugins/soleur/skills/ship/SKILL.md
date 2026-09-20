@@ -2081,11 +2081,20 @@ Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Rep
 
 ### Feature-Tweet Draft (pre-merge bundle)
 
-After the semver/`app:*` labels are applied, check feature-tweet eligibility (it reads the
-PR labels + title). **If eligible, read
-[references/feature-tweet-draft.md](./references/feature-tweet-draft.md) now and follow it
-to completion** — the draft must be committed to the feature branch so it rides this PR
-into `main`. If not eligible, skip to Phase 6.5.
+After the semver/`app:*` labels are applied, run the eligibility gate — **in this body, not
+behind the pointer.** The extraction under ADR-229 moved the whole step to the reference,
+including the one command that DECIDES it, which left the decision to agent judgement over
+the PR's labels and title and demoted a fail-closed check to a guess:
+
+```bash
+bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>
+```
+
+Non-zero (`excluded: <reason>`) → **skip silently** and go to Phase 6.5. Most PRs land here
+(fixes, infra, non-product); do not surface the exclusion. Exit 0 → read
+[references/feature-tweet-draft.md](./references/feature-tweet-draft.md) now and follow it to
+completion — the draft must be committed to the feature branch so it rides this PR into
+`main`. Only generate/commit lives behind the pointer; the gate does not.
 
 ## Phase 6.5: Verify PR Mergeability
 

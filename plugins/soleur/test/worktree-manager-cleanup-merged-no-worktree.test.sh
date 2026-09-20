@@ -179,6 +179,14 @@ build_mutant() {
 # `git` is configured through GIT_CONFIG_GLOBAL=/dev/null rather than by writing a fixture
 # config: the suite must not read the developer's ~/.gitconfig (a global `init.defaultBranch`
 # or a commit hook would change what these arms measure).
+# The shared builder, not a hand-rolled env array: it sets a ceiling
+# (`GIT_CEILING_DIRECTORIES`) so a fixture git command cannot walk UP into a live repository,
+# which a bare `GIT_CONFIG_GLOBAL=/dev/null` array does not. `fixture-env-adoption.test.sh` is
+# the ratchet that derives this; adopting is its prescribed remedy, and a ceiling bump is
+# documented there as being for suites that arrive from main rather than one in the bumping
+# PR's own diff.
+# shellcheck source=plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
 FIXTURE_GIT_ENV=(
   GIT_CONFIG_GLOBAL=/dev/null
   GIT_CONFIG_SYSTEM=/dev/null
@@ -194,14 +202,19 @@ fgit() { env "${FIXTURE_GIT_ENV[@]}" git "$@"; }
 mk_repo() {
   local dir="$1"
   assert_fixture_dir "$dir"
-  mkdir -p "$dir"
+  mkdir -p "$dir" || { printf 'FATAL: mkdir failed for %s\n' "$dir" >&2; exit 2; }
+  git_fixture_env "$dir" || {
+    printf 'FATAL: git_fixture_env refused to build an environment for %s\n' "$dir" >&2
+    exit 2
+  }
   fgit init -q --bare "$dir/origin.git" || { printf 'FATAL: bare init failed\n' >&2; exit 2; }
-  fgit clone -q "$dir/origin.git" "$dir/clone" 2>/dev/null
-  # Split, NOT `a && b`: `set -e` does not fire on a failing NON-FINAL member of an AND-OR
-  # list, so a failing init would fall through into the arm with its preconditions unmet and
-  # surface later as whichever guard trips first — asserting a cause that never occurred.
+  fgit clone -q "$dir/origin.git" "$dir/clone" || { printf 'FATAL: clone failed\n' >&2; exit 2; }
+  # Every setup command carries its own `|| exit 2`. This file is `set -uo pipefail`, NOT
+  # `set -e` (an assertion failure must not abort the run), so nothing catches a failing
+  # setup command implicitly — a silently failed clone would leave the fixture absent and the
+  # arm would then report a confident wrong CAUSE rather than a missing fixture.
   fgit -C "$dir/clone" commit -q --allow-empty -m init || { printf 'FATAL: seed commit failed\n' >&2; exit 2; }
-  fgit -C "$dir/clone" branch -M main
+  fgit -C "$dir/clone" branch -M main || { printf 'FATAL: branch -M main failed\n' >&2; exit 2; }
   fgit -C "$dir/clone" push -q -u origin main || { printf 'FATAL: seed push failed\n' >&2; exit 2; }
 }
 
@@ -223,6 +236,34 @@ mk_merged_branch() {
   fgit -C "$clone" push -q origin main
 }
 
+# mk_squash_merged_branch <clone> <branch> — the cohort THIS REPO produces for every PR.
+# A squash merge puts the content on main under a NEW sha, so the branch is NOT an ancestor of
+# `refs/heads/main`. Every other fixture here uses `--no-ff` and is therefore always an
+# ancestor, which is exactly why the `-D`/`-d` downgrade shipped untested: no fixture
+# instantiated the shape the producer actually emits.
+mk_squash_merged_branch() {
+  local clone="$1" branch="$2" age="${3:-100000}"
+  assert_fixture_dir "$clone"
+  # Backdated for the same reason `mk_merged_branch` is, but the arm it clears is a
+  # DIFFERENT one. This fixture's branch carries a worktree (that is the only shape
+  # `gh_merged_branches` is built from), so the guard that measures it is the WORKTREE
+  # commit-age arm, not the worktree-less one — and that arm's skip line is `verbose`-gated,
+  # i.e. `[[ -t 1 ]]`, i.e. silent under a redirected test run. A fresh commit here produced
+  # a reaper that printed NOTHING AT ALL and an A9a failure reading as "the merge-evidence
+  # block is broken". It was not; the loop never reached it.
+  local when; when="$(( $(date +%s) - age ))"
+  fgit -C "$clone" checkout -q -b "$branch"
+  printf 'squashed work\n' > "$clone/$branch.txt"
+  fgit -C "$clone" add "$branch.txt"
+  env "${FIXTURE_GIT_ENV[@]}" GIT_COMMITTER_DATE="$when" GIT_AUTHOR_DATE="$when" \
+    git -C "$clone" commit -q -m "work on $branch"
+  fgit -C "$clone" push -q -u origin "$branch"
+  fgit -C "$clone" checkout -q main
+  fgit -C "$clone" merge -q --squash "$branch"
+  fgit -C "$clone" commit -q -m "squash: $branch"
+  fgit -C "$clone" push -q origin main
+}
+
 # hold_lease <state-root> <key> — take a real lease through session-state.sh's own CLI, so
 # the arm exercises the production lease format rather than a hand-written file that could
 # drift from it.
@@ -230,7 +271,13 @@ hold_lease() {
   local root="$1" key="$2"
   assert_fixture_dir "$root"
   SOLEUR_SESSION_STATE_ROOT="$root" \
-    bash "$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh" acquire_lease "$key" soleur-fixture 240 >/dev/null 2>&1
+    bash "$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh" acquire_lease "$key" soleur-fixture 240 >/dev/null 2>&1 \
+    || { printf 'FATAL: acquire_lease failed for key %s\n' "$key" >&2; exit 2; }
+  # LANDING ASSERTION. Without it M1/M2 report "killed" vacuously: their assertion is that the
+  # leased branch IS reaped, which is also what happens when no lease was ever taken.
+  SOLEUR_SESSION_STATE_ROOT="$root" \
+    bash "$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh" is_lease_active "$key" >/dev/null 2>&1 \
+    || { printf 'FATAL: lease for key %s is not active after acquire\n' "$key" >&2; exit 2; }
 }
 
 # arm_reaper <state-root> — the PRE-STAMP. See the header: without this every arm below is
@@ -473,7 +520,6 @@ else
 fi
 # Observable at runtime, on stdout: stderr is invisible under `claude --bg`, the mode
 # cleanup-merged actually runs in.
-if grep -qF 'A8-probe' /dev/null 2>&1; then :; fi
 _probe_log="$TMP/capability-probe.log"
 ( cd "$A1/clone" && env "${FIXTURE_GIT_ENV[@]}" bash "$SCRIPT" list ) > "$_probe_log" 2>/dev/null
 if grep -qE '^SOLEUR_WORKTREE_REAP_CAPABILITY=.*branch-keyed-guards' "$_probe_log"; then
@@ -550,6 +596,158 @@ fi
 # Runs LAST against saved-and-restored counters rather than first, so the self-test's own
 # synthetic verdicts never enter the tally and the floor below needs no subtrahend.
 # ===========================================================================================
+# ===========================================================================================
+# A9 — the SQUASH-MERGED cohort must still be reaped, with no partial state.
+#
+# Before the review fix this arm was impossible to pass: the remote delete ran first, pruning
+# the upstream that `git branch -d` relies on, the ancestry test then downgraded to `-d`, `-d`
+# refused, and the loop `continue`d — leaving the remote ref deleted (PR closed), the worktree
+# removed and the local ref kept, with no reap sentinel. Reproduced end to end before fixing.
+# ===========================================================================================
+echo "A9. squash-merged branch (this repo's default merge) -> reaped cleanly"
+A9="$TMP/a9"; mk_repo "$A9"
+mk_squash_merged_branch "$A9/clone" "feat-a9-squashed"
+# `gh_merged_branches` is the ONLY evidence available for a squash merge, it is built from
+# `gh pr list`, and the loop that builds it only considers branches that still have a worktree.
+# So the fixture needs both a worktree and a `gh` stub reporting the PR merged.
+A9_WT="$A9/wt-a9"; assert_fixture_dir "$A9_WT"
+fgit -C "$A9/clone" worktree add -q "$A9_WT" "feat-a9-squashed"
+A9_BIN="$TMP/a9-bin"; mkdir -p "$A9_BIN"
+cat > "$A9_BIN/gh" <<'GH_EOF'
+#!/usr/bin/env bash
+# Model the real contract: `gh pr list --head <b> --state merged --limit 1 --json number
+# --jq length` prints the COUNT. Refuse anything else so a drifted call shape is loud (exit 64)
+# rather than silently answering the wrong question.
+if [ "$1" = pr ] && [ "$2" = list ]; then
+  case " $* " in *" --state merged "*) printf '1
+'; exit 0 ;; esac
+  printf '0
+'; exit 0
+fi
+echo "gh stub: unexpected invocation: $*" >&2
+exit 64
+GH_EOF
+chmod +x "$A9_BIN/gh"
+A9_STATE="$TMP/a9-state"; arm_reaper "$A9_STATE"
+PATH="$A9_BIN:$PATH" run_reaper "$SCRIPT" "$A9/clone" "$A9_STATE" "$TMP/a9.log"
+
+if local_branch_exists "$A9/clone" "feat-a9-squashed"; then
+  fail "A9a: a squash-merged branch was NOT reaped — the dominant cohort stopped being cleaned up"
+else
+  pass "A9a: a squash-merged branch is reaped (merge evidence, not ancestry, licenses it)"
+fi
+if grep -qE '^SOLEUR_WORKTREE_REAP_PARTIAL' "$TMP/a9.log"; then
+  fail "A9b: a partial reap was reported — the remote was deleted and the local delete refused"
+else
+  pass "A9b: no partial state (remote and local agree)"
+fi
+
+# ===========================================================================================
+# A10 — a [gone] branch with NO merge evidence must be skipped BEFORE any write.
+# ===========================================================================================
+echo "A10. [gone] upstream, unmerged -> skipped before any destructive write"
+A10="$TMP/a10"; mk_repo "$A10"
+fgit -C "$A10/clone" checkout -q -b feat-a10-gone
+printf 'unmerged\n' > "$A10/clone/a10.txt"
+fgit -C "$A10/clone" add a10.txt
+env "${FIXTURE_GIT_ENV[@]}" GIT_COMMITTER_DATE="$(( $(date +%s) - 100000 ))" \
+  GIT_AUTHOR_DATE="$(( $(date +%s) - 100000 ))" \
+  git -C "$A10/clone" commit -q -m "unmerged work"
+fgit -C "$A10/clone" push -q -u origin feat-a10-gone
+fgit -C "$A10/clone" push -q origin --delete feat-a10-gone
+fgit -C "$A10/clone" fetch -q --prune
+fgit -C "$A10/clone" checkout -q main
+A10_STATE="$TMP/a10-state"; arm_reaper "$A10_STATE"
+run_reaper "$SCRIPT" "$A10/clone" "$A10_STATE" "$TMP/a10.log"
+
+if local_branch_exists "$A10/clone" "feat-a10-gone"; then
+  pass "A10a: an unmerged [gone] branch survives (a deleted upstream is not merge evidence)"
+else
+  fail "A10a: an unmerged [gone] branch was force-deleted — its commits exist nowhere else"
+fi
+if grep -qF 'no merge evidence' "$TMP/a10.log"; then
+  pass "A10b: the skip names the measured cause"
+else
+  fail "A10b: the skip did not report the absence of merge evidence"
+fi
+
+# ===========================================================================================
+# A11 — F2: the dirty file must exist ON MAIN TOO. `git checkout main` refuses only when the
+# dirty paths would be OVERWRITTEN; when the committed content matches it SUCCEEDS and carries
+# the edit onto main, where the NEXT run's reset destroys it. A5's fixture commits its file
+# only on the feature branch, which is the case where checkout does refuse — so A5 alone
+# cannot see this.
+# ===========================================================================================
+echo "A11. dirty file that also exists on main -> not carried onto main"
+A11="$TMP/a11"; mk_repo "$A11"
+printf 'base\n' > "$A11/clone/shared.txt"
+fgit -C "$A11/clone" add shared.txt
+fgit -C "$A11/clone" commit -q -m "shared on main"
+fgit -C "$A11/clone" push -q origin main
+mk_merged_branch "$A11/clone" "feat-a11-reapme"
+fgit -C "$A11/clone" checkout -q -b parked
+printf 'PRECIOUS UNCOMMITTED WORK\n' > "$A11/clone/shared.txt"
+A11_STATE="$TMP/a11-state"; arm_reaper "$A11_STATE"
+run_reaper "$SCRIPT" "$A11/clone" "$A11_STATE" "$TMP/a11.log"
+
+if [[ "$(fgit -C "$A11/clone" rev-parse --abbrev-ref HEAD)" == "parked" ]]; then
+  pass "A11a: the operator was left on their own branch"
+else
+  fail "A11a: cleanup switched the checkout to $(fgit -C "$A11/clone" rev-parse --abbrev-ref HEAD) while it was dirty"
+fi
+if [[ "$(cat "$A11/clone/shared.txt" 2>/dev/null)" == "PRECIOUS UNCOMMITTED WORK" ]]; then
+  pass "A11b: the uncommitted edit survived"
+else
+  fail "A11b: the uncommitted edit was lost"
+fi
+
+# ===========================================================================================
+# A12 — the reap sentinel is PER-REAP, not once per run. A8e greps a one-reap log, which is
+# satisfied identically by an emit hoisted out of the loop.
+# ===========================================================================================
+echo "A12. two reaps in one pass -> two sentinels"
+A12="$TMP/a12"; mk_repo "$A12"
+mk_merged_branch "$A12/clone" "feat-a12-one"
+mk_merged_branch "$A12/clone" "feat-a12-two"
+A12_STATE="$TMP/a12-state"; arm_reaper "$A12_STATE"
+run_reaper "$SCRIPT" "$A12/clone" "$A12_STATE" "$TMP/a12.log"
+_n_reaped=$(grep -cE '^SOLEUR_WORKTREE_REAPED ' "$TMP/a12.log" 2>/dev/null || true)
+if [[ "${_n_reaped:-0}" -eq 2 ]]; then
+  pass "A12: two reaps emitted two SOLEUR_WORKTREE_REAPED lines"
+else
+  fail "A12: two reaps emitted ${_n_reaped:-0} sentinel(s), want 2 (is the emit inside the loop?)"
+fi
+
+# ===========================================================================================
+# A13 — the WORKTREE commit-age hold must be AUDIBLE. Sibling of the worktree-less arm, and
+# until this PR the two disagreed: the worktree-less one prints unconditionally, the
+# worktree one was `verbose`-gated, and `verbose` is `[[ -t 1 ]]`. `cleanup-merged` runs at
+# session start under `claude --bg`, where stdout is not a tty, so the gated line printed
+# nothing and a HELD branch was byte-identical on stdout to a branch the loop never
+# considered. That collapse is the #7442 class this PR exists to remove, one guard over.
+#
+# Not a duplicate of A2 (which asserts the branch SURVIVES): survival is satisfiable by any
+# skip, including a silent one. This row asserts the REASON reached stdout.
+# ===========================================================================================
+echo "A13. worktree-bearing merged branch, fresh commit -> held AUDIBLY"
+A13="$TMP/a13"; mk_repo "$A13"
+# age 0: the commit is seconds old, so the worktree commit-age arm is the guard that fires.
+mk_merged_branch "$A13/clone" "feat-a13-fresh" 0
+A13_WT="$A13/wt-a13"; assert_fixture_dir "$A13_WT"
+fgit -C "$A13/clone" worktree add -q "$A13_WT" "feat-a13-fresh"
+A13_STATE="$TMP/a13-state"; arm_reaper "$A13_STATE"
+run_reaper "$SCRIPT" "$A13/clone" "$A13_STATE" "$TMP/a13.log"
+if grep -qE '^\(skip\) feat-a13-fresh - recent commit' "$TMP/a13.log"; then
+  pass "A13a: the worktree commit-age hold names itself on stdout with no tty"
+else
+  fail "A13a: the worktree commit-age hold was SILENT — a held branch is indistinguishable from an unconsidered one"
+fi
+if local_branch_exists "$A13/clone" "feat-a13-fresh"; then
+  pass "A13b: the freshly-committed branch survives"
+else
+  fail "A13b: the freshly-committed branch was reaped inside its grace window"
+fi
+
 echo "S. instrument self-test"
 _real_pass=$PASS; _real_fail=$FAIL; _real_asserted=$ASSERTED
 _real_failures=("${FAILURES[@]+"${FAILURES[@]}"}")
@@ -578,7 +776,7 @@ printf '  pass: self-test — pass() and fail() both move the counters and the l
 # above is unbound in that slice, so the mutant dies at `set -u` and the floor scores
 # CONSTRUCTION rather than FIRES.
 # ===========================================================================================
-MIN_ASSERTIONS=21
+MIN_ASSERTIONS=30
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions executed, floor is %s — rows were removed or an arm aborted early.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2

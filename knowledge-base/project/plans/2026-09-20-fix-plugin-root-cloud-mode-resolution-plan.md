@@ -503,9 +503,13 @@ never on the line numbers quoted above.
    feature branch being reset. The correct shape is three ordered steps:
    1. read `current_branch` with `|| true`;
    2. if it is **empty or** not `main`/`master`, skip the reset, the checkout **and** the pull
-      entirely, and emit `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED reason=not-on-main branch=<b>` on
-      **stdout** (stderr is invisible under `claude --bg` — the file's own comment beside the
-      `LEASE_LIB_MISSING` emit). Empty is an unmeasured state and fails closed with the rest, per
+      entirely, and say so on **stdout** (stderr is invisible under `claude --bg` — the file's
+      own comment beside the `LEASE_LIB_MISSING` emit). **Superseded 2026-09-20 (#8400):** `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED` was demoted during implementation per challenge B5 below and never shipped. What ships is two plain stdout lines — `Skipped stale-index reset: checkout is on '<b>', not main/master` and `Skipped main checkout: uncommitted changes on '<b>' (switching would carry them onto main)`. Read every mention of the marker in this plan as naming those lines. Also note the premise in
+      the paragraph above is measured FALSE: `git checkout main` with a dirty tree does NOT
+      always refuse — it succeeds whenever the dirty paths would not be overwritten, which is
+      the ordinary case of editing a file that also exists on main, and it then carries the edit
+      onto `main` for the next session's reset to destroy. The tree state is read once and gates
+      both the reset and the checkout. Empty is an unmeasured state and fails closed with the rest, per
       the AP-021 discipline the cloud-detect fence already cites;
    3. only on a confirmed `main`/`master` do the dirty check and the reset.
 
@@ -605,9 +609,14 @@ sentinel-based rather than env-based).
    invocation to share a subprocess and `plugin-root-anchoring.test.ts` P6 anchors on a `[ -f` at
    statement start — a `grep -q` for the token decides between dispatching and emitting
    `SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified`. A cache copy that predates
-   Phase 1 is refused, by name, instead of run. The gate is arm-agnostic on purpose: it protects
-   the `GROK_PLUGIN_ROOT` arm and a stale marketplace install on the token arm just as well as it
-   protects the cache arm, which is strictly more than the confinement ever did.
+   Phase 1 is refused, by name, instead of run. **Superseded by blocking correction B1 below:**
+   this paragraph argued the gate should be arm-agnostic, "which is strictly more than the
+   confinement ever did". The panel MEASURED that blast radius — the arm-agnostic form stops
+   reaping for every long-lived worktree in this repository on a pre-merge branch and every
+   marketplace install between releases, because their `worktree-manager.sh` predates Phase 1
+   too. What ships is `[ "$VERIFIED" = true ] && [ "$SRC" = devin-cache ]`, with
+   `REAP_CAP=not-applicable` initialised above it so the other arms are untouched. That closes
+   ADR-179's ground exactly and no more.
 
    **Path pinning is part of the design, not an implementation detail.** The `grep -q` and the
    `bash` invocation MUST operate on the same `${ROOT}`-derived path, resolved once by the
@@ -834,7 +843,7 @@ mirrored to Better Stack by the server-side telemetry hook.
 
 ```yaml
 liveness_signal:
-  what:            "SOLEUR_WORKTREE_* stdout sentinel family emitted by every worktree-manager.sh invocation (LEASE_LIB_OK | LEASE_LIB_MISSING | REAPER_ARMED | GIT_LOCK_DIAG | MAIN_UPDATE_SKIPPED, the last added by this change), plus SOLEUR_PLUGIN_ROOT_RESOLVE gate=<g> source=<s> verified=<b> from each go.md session gate"
+  what:            "SOLEUR_WORKTREE_* stdout sentinel family emitted by every worktree-manager.sh invocation (LEASE_LIB_OK | LEASE_LIB_MISSING | REAPER_ARMED | REAP_CAPABILITY | REAPED | REAP_PARTIAL | SLUG_COLLISION | LEASE_ACQUIRE_FAILED; REAP_CAPABILITY, REAPED and REAP_PARTIAL are the three this change adds), plus SOLEUR_PLUGIN_ROOT_RESOLVE gate=<g> source=<s> verified=<b> from each go.md session gate and SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified source=<arm> from the Step 0 capability gate"
   cadence:         "per invocation — once per session start, and on every explicit worktree-manager.sh call"
   alert_target:    "the operator's own terminal (layer 7); in this repo's CI, the job log; SOLEUR_GIT_REPO_DIAG additionally to Better Stack via the server-side telemetry hook"
   configured_in:   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh (load-time lease-library block and the cleanup_merged_worktrees reap loop) and plugins/soleur/commands/go.md (the three gate fences)"
@@ -848,8 +857,17 @@ failure_modes:
     detection:     "SOLEUR_WORKTREE_LEASE_LIB_MISSING on stdout at load, once per invocation, emitted from the surface itself"
     alert_route:   "operator terminal; the [warn] block names the one-line git checkout that restores it"
   - mode:          "the non-bare main checkout is parked on a feature branch with uncommitted work when a reap succeeds — the pre-fix path reset --hard over it"
-    detection:     "SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED reason=not-on-main branch=<b> on stdout (new in this change); its absence when a reap occurred means the checkout was on main, which is the precondition the reset assumed"
+    detection:     "two plain stdout lines, NOT a SOLEUR_* sentinel: `Skipped stale-index reset: checkout is on '<b>', not main/master` and `Skipped main checkout: uncommitted changes on '<b>' (switching would carry them onto main)`. SUPERSEDED: this row said `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED reason=not-on-main branch=<b> (new in this change)` and that marker was never shipped. It was demoted during implementation because a non-bare clone parked on a feature branch is the ORDINARY developer state, and a sentinel on it would page at happy-path volume while owing a git-lock-telemetry disposition it does not earn. The plan is corrected here rather than quietly: a declared-but-absent marker is what a consumer greps for and never finds."
     alert_route:   "operator terminal"
+  - mode:          "a reap deletes a branch the operator still wanted — the single irreversible write in this function"
+    detection:     "SOLEUR_WORKTREE_REAPED branch=<b> sha=<short> local=yes remote=<y|n> on stdout, once PER REAP, ungated by verbose (verbose is `[[ -t 1 ]]`, so a gated line is invisible under `claude --bg`, the mode session-start actually runs in). The sha= field is the recovery handle: `git branch <b> <sha>`."
+    alert_route:   "operator terminal; mirrored to Better Stack via MARKER_RE in apps/web-platform/server/git-lock-marker-telemetry.ts"
+  - mode:          "the remote ref was deleted (closing the PR) but the local delete then failed — a partial state downstream of the irreversible write"
+    detection:     "SOLEUR_WORKTREE_REAP_PARTIAL branch=<b> local=no remote=<y|n> rc=<n> on stdout, followed by git's own error text. The cause is MEASURED, never named (AP-021) — `-D` never refuses for merge reasons, and the reachable causes are a live worktree holding the branch and a ref that vanished mid-run."
+    alert_route:   "operator terminal; _HALT-group MARKER_RE mirror to Better Stack"
+  - mode:          "a Step 0 dispatch resolves a CACHED worktree-manager.sh that predates the branch-keyed guards"
+    detection:     "SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified source=<arm> on stdout; the reaper that WOULD have run emits SOLEUR_WORKTREE_REAP_CAPABILITY=branch-keyed-guards at load, and its absence is what the gate greps for"
+    alert_route:   "operator terminal; go-session-gates.test.sh R11 in CI"
   - mode:          "a Devin CLI session newly reaches cleanup-merged after the Step 0 widening"
     detection:     "SOLEUR_PLUGIN_ROOT_RESOLVE gate=session-start source=devin-cache verified=true followed by the reaper's own output; the discriminating fields are gate/source/verified, so 'which arm resolved it' and 'did the dispatch happen' are one event, not an inference"
     alert_route:   "operator terminal; go-session-gates.test.sh R5d in CI"
@@ -1061,8 +1079,9 @@ ordinal is claimed, so there is nothing for `soleur:ship`'s ADR-Ordinal Collisio
 - supersedes the blanket *"#8401 must NOT be resolved by moving the cache arms into the shared
   resolver"* with the narrower rule it was standing in for: **Step 0 may resolve from any arm; it
   may dispatch `cleanup-merged` only from a root whose reaper declares
-  `SOLEUR_WORKTREE_REAP_CAPABILITY`** — a feature detect, never a version sniff, and arm-agnostic,
-  so it also covers the `GROK_PLUGIN_ROOT` arm and a stale token-substituted install;
+  `SOLEUR_WORKTREE_REAP_CAPABILITY`** — a feature detect, never a version sniff, and **scoped to
+  the `devin-cache` arm** (superseded here per B1: the arm-agnostic form was measured to stop
+  reaping on the token and `GROK_PLUGIN_ROOT` arms too, which the confinement never did);
 - records that the residual ADR-179 names (`cleanup_orphan_worktree_dirs` →
   `rm -rf --one-file-system`) is now behind the same gate, because the gate covers the whole
   dispatch rather than the reap loop alone, and that the remaining per-branch gap in that function
@@ -1278,10 +1297,13 @@ the number does not rot.
   (`worktree-manager.sh`, the grace guard.)
 - [ ] **FR3** — When the non-bare `$GIT_ROOT` is not on `main`/`master`, or its branch cannot be
   read, `cleanup_merged_worktrees` performs no `reset --hard`, no `checkout` and no `pull`, and
-  emits `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED reason=not-on-main branch=<b>` on stdout.
-  (`worktree-manager.sh`, post-loop non-bare tail.)
-- [ ] **FR4** — `worktree-manager.sh` declares `SOLEUR_WORKTREE_REAP_CAPABILITY=branch-keyed-guards-v1`
-  as a literal and emits it on stdout at load.
+  says so on stdout in plain prose. **Superseded 2026-09-20 (#8400):** `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED` was demoted during implementation per challenge B5 below and never shipped. What ships is two plain stdout lines — `Skipped stale-index reset: checkout is on '<b>', not main/master` and `Skipped main checkout: uncommitted changes on '<b>' (switching would carry them onto main)`. Read every mention of the marker in this plan as naming those lines.
+  (`worktree-manager.sh`, post-loop non-bare tail. Asserted by A11/M3 in
+  `worktree-manager-cleanup-merged-no-worktree.test.sh`.)
+- [ ] **FR4** — `worktree-manager.sh` declares `SOLEUR_WORKTREE_REAP_CAPABILITY=branch-keyed-guards`
+  as a literal and emits it on stdout at load. **Superseded 2026-09-20:** the `-v1` suffix was
+  dropped per challenge B5 below — the token names the CAPABILITY, not a version, and the gate
+  tests set membership so adding a capability stays additive.
 - [ ] **FR5** — The `[warn]` block that fires when `session-state.sh` is unresolvable states that
   cleanup will refuse to reap any worktree **or delete any branch**.
   (`worktree-manager.sh`, the `_SS_LIB_MISSING` arm.)
@@ -1309,8 +1331,9 @@ the number does not rot.
   `apps/web-platform/server/git-lock-marker-telemetry.ts`:
   `SOLEUR_WORKTREE_REAP_CAPABILITY` joins `SUCCESS_PATH_CONTROL_SIGNALS` (it is emitted on every
   invocation, exactly like `SOLEUR_WORKTREE_LEASE_LIB_OK`);
-  `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED`, if it stays in the `SOLEUR_*` family, joins `MARKER_RE`
-  and not `PAGING_RE`.
+  `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED` does not ship (see above), so it owes no disposition.
+  What shipped instead: `SOLEUR_WORKTREE_REAPED` and `SOLEUR_WORKTREE_REAP_PARTIAL` join
+  `MARKER_RE` (the latter in the `_HALT` group), and `PRECOMMIT_GUARD` joins `_HALT` too.
 - [ ] **FR9** — No file under `plugins/soleur/` selects a Devin-cache executable by filename
   (`find <cache> … -name/-iname <script>`), with exactly one allowlisted path — the guard file
   itself — and an assertion that the allowlist holds exactly one entry.
@@ -1372,8 +1395,9 @@ the number does not rot.
   different set than the gate. Note `test-all.sh`'s exit contract: `3` is UNRESOLVED (a killed or
   declined suite), which is **not** green.
 - [ ] **Consumer sweep for the `worktree-manager.sh` output change.** Phase 1 changes what the
-  script prints (a new load-time token line, a new `(skip)` reason, a new
-  `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED` marker). Every consumer that *executes these bytes* or
+  script prints (a new load-time token line, two new `(skip)` reasons, the `SOLEUR_WORKTREE_REAPED`
+  and `SOLEUR_WORKTREE_REAP_PARTIAL` sentinels, and two plain off-main lines — not the
+  `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED` marker this plan originally declared). Every consumer that *executes these bytes* or
   greps this output must be re-run, not only the suites whose names match:
   `git grep -l 'worktree-manager.sh' -- '*.test.ts' '*.test.sh' '.github' 'scripts' '.claude'`
   returned 21 files at plan time, spanning `apps/web-platform/test/` (`plugin-root-anchoring`,
@@ -1396,8 +1420,9 @@ the number does not rot.
 3. **Worktree-less + no lease + old tip.** Assert: it **is** reaped — both deletions recorded. This
    is the must-PASS control that the fix has not become a blanket refusal.
 4. **Non-bare `$GIT_ROOT` parked off main with an uncommitted file, after a successful reap.**
-   Assert: the file still exists, no `reset --hard` recorded, and
-   `SOLEUR_WORKTREE_MAIN_UPDATE_SKIPPED reason=not-on-main` on stdout.
+   Assert: the file still exists and no `reset --hard` is recorded. **Superseded:** the marker
+   named here was demoted; assert the plain `Skipped stale-index reset: …` line instead. Shipped
+   as A11 + mutant M3.
 5. **Step 0 on a Devin-cache-only host, token-bearing root.** `gate=session-start
    source=devin-cache verified=true` **and** `STUB_WORKTREE_MANAGER argv=cleanup-merged`.
 6. **Step 0 on a verified root whose manager lacks the token.**

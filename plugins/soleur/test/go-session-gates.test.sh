@@ -195,11 +195,13 @@ mk_decoy_root() {
   cat > "$dir/.claude-plugin/plugin.json" <<MANIFEST_EOF
 { "name": "${name}", "description": "go-session-gates DECOY root" }
 MANIFEST_EOF
-  # The decoy reaper carries the capability token too. R6b is a MUST-PASS row asserting the
-  # decoy EXECUTES for all three gates; a token-less decoy plus the new gate would turn it
-  # red. Planting it RESTATES A11 rather than weakening it — the token is a declaration a
-  # planted root can make as easily as `{"name":"soleur"}`, which is exactly the limitation
-  # R6b documents. Do NOT "fix" a red R6b by relaxing the gate.
+  # The decoy reaper carries the capability token. NOTE, because an earlier comment here said
+  # the opposite: this is NOT load-bearing for R6b. R6b delivers its decoy through
+  # `delivered_fence`, i.e. `source=plugin-root-token`, and the capability gate is narrowed to
+  # `SRC = devin-cache` — so `REAP_CAP=not-applicable` and the check never evaluates on it.
+  # Measured. The token is planted anyway so a future row that DOES reach the decoy through the
+  # cache arm restates A11 (a planted root declares the token as easily as the manifest) rather
+  # than tripping over a fixture gap.
   local s
   for s in "$dir/scripts/cloud-detect.sh" \
            "$dir/skills/git-worktree/scripts/git-repo-readiness-diag.sh" \
@@ -585,9 +587,17 @@ echo "R3e. a verified root whose CLASSIFIER is absent is reported distinctly"
 # SESSION_PROBE=absent had no row: mk_root's absent=session-start drops only worktree-manager.sh.
 CLASSLESS="$TMP_ROOT/root-no-classifier"; mk_root "$CLASSLESS" soleur cloud-detect
 ws="$(fresh_ws r3e)"
+# Dirtied for the same reason R11 dirties its copy: the restore is observable only against a
+# file that differs from `main`. This arm sets DO_RESTORE by the restore's own argument — the
+# `.mcp.json` refresh needs neither the classifier nor the reaper, so a torn install missing
+# `cloud-detect.sh` has no reason to lose it. (`git worktree list` is deliberately NOT hoisted
+# here: it is the documented companion of `cleanup-merged`, which did not run.)
+assert_fixture_dir "$ws"
+printf '{"fixture":"DIRTY"}\n' > "$ws/.mcp.json"
 out="$(run_gate "$(delivered_fence 2 "$CLASSLESS" noclass)" "$ws" "$SCRATCH_HOME")"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=classifier-absent" "R3e: names the ABSENT CLASSIFIER, not the absent manager"
 want_not_in "$out" "STUB_WORKTREE_MANAGER" "R3e: dispatches nothing without a session class"
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"main"}' "R3e: the .mcp.json restore still ran — a missing classifier takes only the dispatch"
 
 echo "R3c. session-class gate: a not-local verdict never reaches cleanup-merged"
 CLOUD_ROOT="$TMP_ROOT/root-cloud"; mk_root "$CLOUD_ROOT" soleur
@@ -691,8 +701,29 @@ echo "R11. the reap-capability gate: a cache root whose reaper lacks the token"
 NOCAP_HOME="$TMP_ROOT/home-nocap"
 NOCAP_ROOT="$NOCAP_HOME/.local/share/devin/cli/plugins/cache/soleur-nocap1"
 mk_root "$NOCAP_ROOT" soleur no-capability
+# LEDGER CLASSIFIER (plan B3). The fence executes TWO artifacts from the resolved root, and
+# the FIRST — `cloud-detect.sh` — decides whether the second runs, so "the gate covers the
+# dispatch DECISION CHAIN, not only the dispatched artifact" is a claim that needs a row.
+# `mk_root` copies the real classifier, whose stdout the fence consumes into a `$( )` and is
+# therefore invisible; this stub writes the shared decoy ledger instead, which `decoy_ran`
+# reads from the PARENT shell. Prints `local` so that, if it DOES run, the gate proceeds and
+# the failure shows up as a reaper dispatch too rather than as a silent no-op.
+cat > "$NOCAP_ROOT/scripts/cloud-detect.sh" <<'NOCAP_CLASSIFIER_EOF'
+#!/usr/bin/env bash
+printf 'CLASSIFIER_EXECUTED\n' >> "${SOLEUR_DECOY_LOG:-/dev/null}"
+echo local
+NOCAP_CLASSIFIER_EOF
+chmod +x "$NOCAP_ROOT/scripts/cloud-detect.sh"
 ws="$(fresh_ws r11)"
+# DIRTY the workspace copy first. FR8d has two halves and `want_not_in … STUB_WORKTREE_MANAGER`
+# only pins the negative one; an implementation that kills all three gates together satisfies
+# every row above. Restoring `.mcp.json` from `main` is observable only against a file that
+# DIFFERS from main, so plant one.
+assert_fixture_dir "$ws"
+printf '{"fixture":"DIRTY"}\n' > "$ws/.mcp.json"
 out="$(run_gate "${FENCE_LITERAL[2]}" "$ws" "$NOCAP_HOME")"
+want_eq "$(decoy_ran)" "none" "R11: the CLASSIFIER did not run either — the gate covers the decision chain, not just the dispatch (B3)"
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"main"}' "R11: the .mcp.json restore RAN on the refusal arm (positive half of FR8d)"
 want_in "$out" "gate=session-start source=devin-cache verified=true" "R11: the root itself still verifies"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified source=devin-cache" "R11: the dispatch is refused BY NAME, with its source"
 want_not_in "$out" "STUB_WORKTREE_MANAGER" "R11: the token-less reaper did NOT run"
@@ -961,7 +992,7 @@ fi
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
 # 155 is the H3-SKIPPED total; H3 running adds two more (157), so the floor holds on both paths.
 # Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155.
-MIN_ASSERTIONS=175
+MIN_ASSERTIONS=178
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2

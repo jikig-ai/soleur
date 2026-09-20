@@ -348,8 +348,15 @@ Navigate back to the repository root directory.
 
   ```bash
   # Run this from INSIDE the new worktree. The lease key is the worktree
-  # DIRECTORY name, not the branch: cleanup-merged checks
-  # `is_lease_active "$(basename "$worktree_path")"`, and the acquire side keys on
+  # DIRECTORY name, not the branch. Since #8400 cleanup-merged probes TWO keys per
+  # candidate — `is_lease_active "$(_safe_worktree_name "$branch")"` first, then
+  # `is_lease_active "$(basename "$worktree_path")"` — and holding EITHER is a hold.
+  # The directory basename is still the key to use here, because it is the one that
+  # survives `switch`'s legacy-nested fallback (which leases under `foo` for a branch
+  # `ci/foo`, where the safe name is `ci-foo`). For a worktree created flat by the
+  # script the two keys are the same slug. The branch-keyed probe is the one that runs
+  # for a merged branch whose worktree is ALREADY GONE — the cohort that used to
+  # short-circuit every guard in the loop. The acquire side keys on
   # the same slug (every `/` becomes `-`). Passing a branch name with a slash
   # writes nothing at all — the validator rejects `/` — and says so only in a
   # per-PID log file the agent never reads, so the worktree runs unleased and
@@ -395,7 +402,7 @@ SOLEUR_ORPHAN_UNREMOVABLE count=<n> cleaned=<n> errno=<LABEL> names=<basename,ba
 
 `count=` is how many could not be removed, `cleaned=` how many actually were (carried here so the success counter is readable at the default `verbose=false`, where the success summary is suppressed), and `names=` is sanitized basenames only. A human-readable failure summary naming each full path goes to stderr and prints even at `verbose=false`. A separate `SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE` fires when `git worktree list` fails — the reaper then refuses to reap anything rather than treat an empty registry as "everything is an orphan". To clear it, stop the local Supabase stack (`supabase stop`) so the bind-mount is released, then re-run `cleanup-merged`. **Do not reach for a containerized `rm -rf` as a privileged workaround.** `guardrails:block-rm-rf-worktrees` still matches most docker-wrapped forms (the `.worktrees/` path survives in the command line), but it is defeated by a **remapped mount** — `docker run -v <abs>/.worktrees/foo:/target alpine rm -rf /target` never names `.worktrees/` after the `rm -rf`, so it is allowed. Measured; matcher gap tracked in #7113 (which also covers `rm -rf -- <path>`, where the `--` separator defeats the same matcher). A safely-designed privileged fallback is tracked in #7112; the producer-side fix that would stop the residue being created at all is #7114.
 
-- **A slash-bearing branch produces a HYPHENATED directory; the branch keeps its slashes; the directory basename is the lease key (#7408).** `create ci/rule-metrics` makes `.worktrees/ci-rule-metrics` — two levels below the repo root, never three — while `git branch --show-current` inside it still reports `ci/rule-metrics`. `switch` accepts either form. This matters because three consumers assume the flat layout: `cleanup_orphan_worktree_dirs` globs exactly one level, `cleanup_merged_worktrees` reads the lease back as `basename "$worktree_path"`, and [scripts/test-all.sh](../../../../scripts/test-all.sh) documents `cd .worktrees/<name> && bash ../../scripts/test-all.sh`. Before this fix the producer used the raw refname for both the path and the lease key, so a slash branch nested three levels, failed `_validate_worktree_name` and ran **unleased**, and its unregistered intermediate (`.worktrees/ci`) matched no guard in the reaper and was `rm -rf`'d with the live worktree inside it. `tr '/' '-'` is identity for every non-slash name, so nothing about existing worktrees changed.
+- **A slash-bearing branch produces a HYPHENATED directory; the branch keeps its slashes; the directory basename is the lease key (#7408).** `create ci/rule-metrics` makes `.worktrees/ci-rule-metrics` — two levels below the repo root, never three — while `git branch --show-current` inside it still reports `ci/rule-metrics`. `switch` accepts either form. This matters because three consumers assume the flat layout: `cleanup_orphan_worktree_dirs` globs exactly one level, `cleanup_merged_worktrees` reads the lease back as `$safe_branch`, with `basename "$worktree_path"` as a fallback (#8400), and [scripts/test-all.sh](../../../../scripts/test-all.sh) documents `cd .worktrees/<name> && bash ../../scripts/test-all.sh`. Before this fix the producer used the raw refname for both the path and the lease key, so a slash branch nested three levels, failed `_validate_worktree_name` and ran **unleased**, and its unregistered intermediate (`.worktrees/ci`) matched no guard in the reaper and was `rm -rf`'d with the live worktree inside it. `tr '/' '-'` is identity for every non-slash name, so nothing about existing worktrees changed.
   - **Migrating a worktree that is ALREADY nested** (created by a pre-fix version). The reaper now *skips* it and emits `SOLEUR_ORPHAN_SKIP_DESCENDANT dir=… reason=holds-live-worktree` rather than deleting it. `switch <name>` still reaches it (it falls back to the raw name and warns), so you can get in and commit; it stays invisible to `list` and `copy-env` until moved. Commit any uncommitted work first, then:
 
     ```bash

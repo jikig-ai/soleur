@@ -354,11 +354,14 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
     //     invocation including `list`, and READ LOCALLY — /soleur:go's session-start
     //     fence greps the shipped file for this literal before it dispatches
     //     cleanup-merged. It is a capability declaration, not an observation about
-    //     the machine, so there is no failure direction for it to report: the
-    //     interesting state is its ABSENCE, and that is mirrored by the consumer as
-    //     SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified. Mirroring
-    //     the declaration itself would be pure volume on the highest-frequency script
-    //     in the system.
+    //     the machine, so there is no failure direction for it to report. The exemption
+    //     rests on VOLUME alone, and that is stated plainly because an earlier revision
+    //     justified it by claiming the absence "is mirrored by the consumer as
+    //     SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified" — measured
+    //     FALSE twice over: that marker is not in MARKER_RE, and commands/*.md is outside
+    //     this guard's scan set entirely, so the consumer mirrors to nothing. The refusal
+    //     is visible on the operator's terminal (layer 7) and nowhere else, which is the
+    //     honest scope.
     const SUCCESS_PATH_CONTROL_SIGNALS = new Set([
       "SOLEUR_GIT_REPO_READY",
       "SOLEUR_WORKTREE_LEASE_LIB_OK",

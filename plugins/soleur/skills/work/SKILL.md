@@ -761,9 +761,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    # it. The identity preflight is a shape check, not authentication — a planted
    # `{"name":"soleur"}` manifest passes it (ADR-179 A11).
    GUARD="${CLAUDE_PLUGIN_ROOT}/scripts/precommit-guard.sh"
+   # Arm 2, mirroring go.md's arm order. Grok Build addresses the plugin by GROK_PLUGIN_ROOT
+   # (lib/agent-registry.ts), and omitting it made this ladder fall through to `exit 1` on a
+   # Grok box with a perfectly good plugin root — turning a fail-open into a hard stop for the
+   # one harness that cannot satisfy arm 1.
+   [ -f "$GUARD" ] || GUARD="${GROK_PLUGIN_ROOT:-}/scripts/precommit-guard.sh"
    if [ ! -f "$GUARD" ]; then
      GUARD=""
-     for d in "$HOME/.local/share/devin/cli/plugins/cache" /opt/.devin/plugins; do
+     for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do
        [ -d "$d" ] || continue
        MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
          -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
@@ -783,8 +788,15 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    # stdout, not stderr: stderr is invisible under `claude --bg`, and a backstop
    # that cannot resolve itself must say so where the operator will see it.
    if [ -z "$GUARD" ]; then
-     echo "SOLEUR_PRECOMMIT_GUARD_UNRESOLVED reason=no-soleur-root-in-plugin-cache"
-     exit 1
+     # The block's own justification is "hooks do not fire in cloud". LOCALLY the PreToolUse
+     # hook is present and already blocks a commit to main, so a hard stop there would block a
+     # commit that previously succeeded without buying any protection. Refuse in cloud, warn
+     # locally — and say which, so the operator is not left guessing.
+     echo "SOLEUR_PRECOMMIT_GUARD_HALT reason=no-soleur-root-in-plugin-cache"
+     case "${SOLEUR_SESSION_CLASS:-unknown}" in
+       not-local*) exit 1 ;;
+       *) echo "[warn] proceeding: the PreToolUse hook guards commits on a local session" ;;
+     esac
    fi
    bash "$GUARD" "git commit -m \"feat(scope): description of this unit\"" || exit 1
 

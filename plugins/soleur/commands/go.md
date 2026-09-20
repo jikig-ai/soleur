@@ -45,8 +45,24 @@ fi
 # `run_gate` already contains the `$HOME` arm by overriding HOME, and a MUST-PASS suite whose
 # verdict is a property of the host is not a suite. It is env-directed like `GROK_PLUGIN_ROOT`
 # and subject to the same identity preflight, so it adds no trust class.
-if [ -z "$ROOT" ]; then
-  SRC=none
+# Verify what arms 1-2 produced BEFORE deciding whether arm 3 is needed. A root that arrives
+# but carries no Soleur manifest is not a usable root, and it must fall through exactly as an
+# absent one does.
+VERIFIED=false
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
+  VERIFIED=true
+fi
+# Arm 3 fires on `VERIFIED != true`, NOT on `-z "$ROOT"`. An earlier revision of this change
+# used the empty test and thereby NARROWED Step 0.5: on `main` a set-but-unverified root still
+# fell through to the cache, and under the empty test it stopped doing so — so a Devin host
+# with a torn `CLAUDE_PLUGIN_ROOT` silently stopped engaging Cloud Mode, which is the fail-open
+# class this work exists to close. Measured on both fences before and after.
+PRIOR_SRC="$SRC"
+PRIOR_ROOT="$ROOT"
+if [ "$VERIFIED" != true ]; then
+  ROOT=""; SRC=none
   for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do
     [ -d "$d" ] || continue
     # A cache directory EXISTED and was searched. That is a different state from "no cache at
@@ -56,17 +72,16 @@ if [ -z "$ROOT" ]; then
     MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
       -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
     if [ -n "$MANIFEST" ]; then
-      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache
+      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache; VERIFIED=true
       break
     fi
   done
-fi
-if [ -n "$ROOT" ] \
-   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
-   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
-  VERIFIED=true
-else
-  VERIFIED=false
+  # Nothing resolved anywhere. If arms 1-2 DID name a root, report that arm rather than the
+  # cache's miss: "your token points at something that is not Soleur" is the actionable fact,
+  # and reporting `none` there would name a cause this gate did not measure.
+  if [ "$VERIFIED" != true ] && [ -n "$PRIOR_ROOT" ]; then
+    SRC="$PRIOR_SRC"
+  fi
 fi
 # EXACTLY ONE RESOLVE line per gate, emitted after verification. The cache arm used to print
 # its own, so a cache hit emitted two and nothing pinned the count — `grep -F` is a presence
@@ -97,15 +112,18 @@ else
 fi
 ```
 
-**Read the `SOLEUR_PLUGIN_ROOT_RESOLVE` line before anything else — it says which arm produced the root, and four different states need four different actions. One blanket "file a defect" would misattribute a customer's own configuration to Soleur.**
+**Read the `SOLEUR_PLUGIN_ROOT_RESOLVE` line before anything else — it says which arm produced the root, and each state below needs a different action. One blanket "file a defect" would misattribute a customer's own configuration to Soleur.** (The list is deliberately not headed by a count: it grew from four states to eight across #7442, #8308 and #8401, and a hard-coded number is the part that goes stale without anything noticing.)
 
 - `source=none` **on Claude Code or Concierge** — no arm produced a root on a harness where the loader was expected to substitute one. That is a **Soleur plugin defect**. Per `wg-every-session-error-must-produce-either`, file an issue on `jikig-ai/soleur` quoting the three `RESOLVE` lines, then continue on the fallback.
-- `source=none` **on a read-from-disk harness (Codex, Devin CLI)** — nothing substituted, nothing set the variable, **and no Devin plugin cache directory existed to search**. Since #8401 all three gates also try the two managed Devin caches, so on a Devin CLI host this value now means the caches are genuinely absent rather than merely unsearched. **Set `CLAUDE_PLUGIN_ROOT` per your harness's `INSTRUCTIONS.md` §"Paths and entry points"** and re-run. Not a Soleur defect.
+- `source=none` **on a read-from-disk harness (Codex, Devin CLI, Grok Build)** — nothing substituted, nothing set the variable, **and no Devin plugin cache directory existed to search**. Since #8401 all three gates also try the two managed Devin caches, so on a Devin CLI host this value now means the caches are genuinely absent rather than merely unsearched. **Set `CLAUDE_PLUGIN_ROOT` — or, on Grok Build, `GROK_PLUGIN_ROOT`, the one variable arm 2 consults — per your harness's `INSTRUCTIONS.md` §"Paths and entry points"**, and re-run. Not a Soleur defect.
+- `source=devin-cache verified=true` — **nothing to do; this is the healthy Devin path.** Arms 1–2 produced nothing and a managed Devin plugin cache supplied the root, so the bytes about to run are the ones in that cache, not in any checkout on screen. Worth knowing for exactly one reason: when a later line refuses with `reason=reaper-capability-unverified source=devin-cache`, the stale artifact is that cached copy and `git pull` in your repository will not move it.
 - `source=devin-cache-nomatch` — a Devin plugin cache directory EXISTS and was searched, but holds no `.claude-plugin/plugin.json` naming `soleur`. Distinct from `none`, and with a different remedy: the cache is present but does not carry Soleur. **Reinstall or update the plugin in that cache** (`devin plugins install ./plugins/soleur`, or `devin plugins update soleur`), then re-run. A **local configuration fact**, not a Soleur defect.
-- `SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified source=<arm>` — the plugin root resolved and verified, but its `worktree-manager.sh` predates the branch-keyed reap guards (#8400), so the session-start gate refused to dispatch `cleanup-merged` from it rather than run a reaper whose per-branch safety guards may not cover a worktree-less merged branch. **A stale install, not a defect:** `claude plugin update soleur@soleur-marketplace` or `devin plugins update soleur`, then restart the session. The `source=` field says which arm produced the refused root — the three arms have three different remedies, and for `source=devin-cache` the stale artifact is in the Devin plugin cache rather than in any checkout you can see. Session-start maintenance is skipped until then, deliberately; everything else in the gate (the worktree listing and the `.mcp.json` restore) still runs.
+- `SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified source=<arm>` — the plugin root resolved and verified, but its `worktree-manager.sh` predates the branch-keyed reap guards (#8400), so the session-start gate refused to dispatch `cleanup-merged` from it rather than run a reaper whose per-branch safety guards may not cover a worktree-less merged branch. **A stale install, not a defect.** On Claude Code it takes TWO commands and the second one alone is a no-op: `claude plugin marketplace update soleur-marketplace` advances the marketplace checkout, then `claude plugin update soleur@soleur-marketplace` updates the plugin you actually run — skipping the first leaves you on the old bytes while the update reports success (this repo's own getting-started page says the same). On Devin, `devin plugins update soleur`. Restart the session either way. The `source=` field says which arm produced the refused root — the three arms have three different remedies, and for `source=devin-cache` the stale artifact is in the Devin plugin cache rather than in any checkout you can see. Session-start maintenance is skipped until then, deliberately; everything else in the gate (the worktree listing and the `.mcp.json` restore) still runs.
 - `source=grok-env verified=false` — `GROK_PLUGIN_ROOT` is set but does not point at the Soleur plugin. A **local configuration fact**: check what it targets (`grok plugin list`). Not a Soleur defect.
 - `SOLEUR_SESSION_START_SKIPPED reason=cloud-session verdict=<v>` **on a machine you know is local** — `cloud-detect.sh` classified the session as a Devin one. The usual cause is a stray `DEVIN_DIR` or `DEVIN_DISABLE_HISTEXPAND` exported by your shell profile, which makes the box Devin-marked; unset it and re-run. Session-start maintenance is skipped until then, deliberately — the classifier fails closed by contract.
 - `verified=false` with any other `source` — a root arrived but carries no Soleur manifest: a **torn or stale install**. Reinstall or update the plugin; file an issue only if a fresh install reproduces it.
+
+**One caveat that applies to every `devin-cache*` value above.** The `/opt` arm is read through `${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}`, so if that variable is exported the three bullets above are reporting on whatever it points at, not on `/opt/.devin/plugins`. It exists because `/opt/.devin/plugins` is absolute, and a MUST-PASS suite whose verdict depends on whether the host happens to carry a populated one is not a suite — `go-session-gates.test.sh` pins it to a scratch path (ADR-179 A16). It is env-directed exactly as `GROK_PLUGIN_ROOT` is and runs through the same identity preflight, so it adds no trust class; but if a `devin-cache` verdict surprises you, `echo "${SOLEUR_DEVIN_CACHE_OPT:-unset}"` before reading further.
 
 The `else` branch runs the bare inline probes when the plugin payload cannot be verified (e.g. a repo-less workspace whose plugin symlink was not scaffolded). Readiness = the output contains `SOLEUR_GIT_REPO_READY=true` (script path) OR a bare `true` (fallback path).
 
@@ -150,8 +168,24 @@ fi
 # `run_gate` already contains the `$HOME` arm by overriding HOME, and a MUST-PASS suite whose
 # verdict is a property of the host is not a suite. It is env-directed like `GROK_PLUGIN_ROOT`
 # and subject to the same identity preflight, so it adds no trust class.
-if [ -z "$ROOT" ]; then
-  SRC=none
+# Verify what arms 1-2 produced BEFORE deciding whether arm 3 is needed. A root that arrives
+# but carries no Soleur manifest is not a usable root, and it must fall through exactly as an
+# absent one does.
+VERIFIED=false
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
+  VERIFIED=true
+fi
+# Arm 3 fires on `VERIFIED != true`, NOT on `-z "$ROOT"`. An earlier revision of this change
+# used the empty test and thereby NARROWED Step 0.5: on `main` a set-but-unverified root still
+# fell through to the cache, and under the empty test it stopped doing so — so a Devin host
+# with a torn `CLAUDE_PLUGIN_ROOT` silently stopped engaging Cloud Mode, which is the fail-open
+# class this work exists to close. Measured on both fences before and after.
+PRIOR_SRC="$SRC"
+PRIOR_ROOT="$ROOT"
+if [ "$VERIFIED" != true ]; then
+  ROOT=""; SRC=none
   for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do
     [ -d "$d" ] || continue
     # A cache directory EXISTED and was searched. That is a different state from "no cache at
@@ -161,17 +195,16 @@ if [ -z "$ROOT" ]; then
     MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
       -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
     if [ -n "$MANIFEST" ]; then
-      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache
+      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache; VERIFIED=true
       break
     fi
   done
-fi
-if [ -n "$ROOT" ] \
-   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
-   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
-  VERIFIED=true
-else
-  VERIFIED=false
+  # Nothing resolved anywhere. If arms 1-2 DID name a root, report that arm rather than the
+  # cache's miss: "your token points at something that is not Soleur" is the actionable fact,
+  # and reporting `none` there would name a cause this gate did not measure.
+  if [ "$VERIFIED" != true ] && [ -n "$PRIOR_ROOT" ]; then
+    SRC="$PRIOR_SRC"
+  fi
 fi
 # EXACTLY ONE RESOLVE line per gate, emitted after verification. The cache arm used to print
 # its own, so a cache hit emitted two and nothing pinned the count — `grep -F` is a presence
@@ -226,8 +259,24 @@ fi
 # `run_gate` already contains the `$HOME` arm by overriding HOME, and a MUST-PASS suite whose
 # verdict is a property of the host is not a suite. It is env-directed like `GROK_PLUGIN_ROOT`
 # and subject to the same identity preflight, so it adds no trust class.
-if [ -z "$ROOT" ]; then
-  SRC=none
+# Verify what arms 1-2 produced BEFORE deciding whether arm 3 is needed. A root that arrives
+# but carries no Soleur manifest is not a usable root, and it must fall through exactly as an
+# absent one does.
+VERIFIED=false
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
+  VERIFIED=true
+fi
+# Arm 3 fires on `VERIFIED != true`, NOT on `-z "$ROOT"`. An earlier revision of this change
+# used the empty test and thereby NARROWED Step 0.5: on `main` a set-but-unverified root still
+# fell through to the cache, and under the empty test it stopped doing so — so a Devin host
+# with a torn `CLAUDE_PLUGIN_ROOT` silently stopped engaging Cloud Mode, which is the fail-open
+# class this work exists to close. Measured on both fences before and after.
+PRIOR_SRC="$SRC"
+PRIOR_ROOT="$ROOT"
+if [ "$VERIFIED" != true ]; then
+  ROOT=""; SRC=none
   for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do
     [ -d "$d" ] || continue
     # A cache directory EXISTED and was searched. That is a different state from "no cache at
@@ -237,17 +286,16 @@ if [ -z "$ROOT" ]; then
     MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
       -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
     if [ -n "$MANIFEST" ]; then
-      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache
+      ROOT="${MANIFEST%/.claude-plugin/plugin.json}"; SRC=devin-cache; VERIFIED=true
       break
     fi
   done
-fi
-if [ -n "$ROOT" ] \
-   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
-   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
-  VERIFIED=true
-else
-  VERIFIED=false
+  # Nothing resolved anywhere. If arms 1-2 DID name a root, report that arm rather than the
+  # cache's miss: "your token points at something that is not Soleur" is the actionable fact,
+  # and reporting `none` there would name a cause this gate did not measure.
+  if [ "$VERIFIED" != true ] && [ -n "$PRIOR_ROOT" ]; then
+    SRC="$PRIOR_SRC"
+  fi
 fi
 # EXACTLY ONE RESOLVE line per gate, emitted after verification. The cache arm used to print
 # its own, so a cache hit emitted two and nothing pinned the count — `grep -F` is a presence
@@ -291,9 +339,15 @@ REAP_CAP=not-applicable
 DO_RESTORE=false
 if [ "$VERIFIED" = true ] && [ "$SRC" = devin-cache ]; then
   REAP_CAP=unverified
-  if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ] \
-     && grep -q 'SOLEUR_WORKTREE_REAP_CAPABILITY=.*branch-keyed-guards' "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh"; then
-    REAP_CAP=ok
+  if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
+    # ANCHORED at statement start, so a COMMENT mentioning the token cannot satisfy the gate,
+    # and read as a SET so `no-branch-keyed-guards` / `branch-keyed-guards-v2` are not accepted
+    # as the capability by substring. The value is space-separated; membership is additive.
+    CAP_VAL="$(sed -n 's/^[[:space:]]*SOLEUR_WORKTREE_REAP_CAPABILITY="\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' \
+      "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" | head -1)"
+    case " ${CAP_VAL} " in
+      *" branch-keyed-guards "*) REAP_CAP=ok ;;
+    esac
   fi
 fi
 if [ "$VERIFIED" = true ] && [ "$REAP_CAP" != unverified ]; then
@@ -342,6 +396,12 @@ elif [ "$SESSION_PROBE" != present ]; then
   # saying which, and (b) made plugin-root-anchoring.test.ts P8 satisfiable by this sibling — the
   # exact vacuity P8's own comment records having closed for this producer.
   echo "SOLEUR_SESSION_START_SKIPPED reason=classifier-absent"
+  # Same argument as the capability arm above, applied to the arm it was missing from: the
+  # `.mcp.json` restore needs neither the classifier nor the reaper, so a torn install missing
+  # `cloud-detect.sh` has no reason to lose it. The `cloud-session` arm below deliberately does
+  # NOT set this — there the classifier ANSWERED and said this is a cloud session, and skipping
+  # session-start maintenance is the contract, not a casualty.
+  DO_RESTORE=true
 elif [ "$SESSION_OK" != true ]; then
   # Name the VERDICT. A blanket `reason=cloud-session` told an operator with a stray DEVIN*
   # variable on an ordinary laptop that their local session was a cloud one, and gave them

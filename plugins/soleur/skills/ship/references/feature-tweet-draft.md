@@ -17,9 +17,10 @@ pre-merge does NOT weaken the "only tweet what actually deployed" property;
 `soleur:postmerge` Phase 3.8 still verifies deploy health and warns before the
 operator schedules.
 
-1. **Eligibility (fail-closed):** `bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>`.
-   Ineligible (exit non-zero, `excluded: <reason>`) → **skip silently** (most PRs
-   land here: fixes, infra, non-product). Do not surface the exclusion.
+1. **Eligibility is already decided.** `bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>`
+   ran in the skill body and exited 0; that is what loaded this file. It stays there rather
+   than here because a gate whose invocation lives inside the document you only open after
+   deciding is not a gate. Re-running it here is harmless but redundant.
 2. **Eligible →** invoke `skill: soleur:feature-tweet #<PR_NUMBER>` (writes +
    displays the draft for approval per its §Output contract).
 3. **Commit + push the draft to the feature branch** so it lands on `main` with
