@@ -181,7 +181,15 @@ Each was seconds to falsify and none had been.
     right *workflow*, and the `head_sha` pin picks the right *run* — the same file's "Select by
     the merge SHA, never by recency" note exists because an event filter alone returns whichever
     merge's deploy arm fired last, routinely another PR's. So this was an execution gap, not a
-    doc gap.
+    doc gap. **The `head_sha` half has a precondition the sentence above omits, and it bit on
+    #8428:** a `workflow_run` run's `head_sha` is the default-branch tip *at trigger time*, not
+    the merge that caused the CI run, so the pin identifies your merge only while your merge is
+    still `main`'s tip when your CI completes. Land another commit on `main` inside that window
+    and the deploy arm registers under the NEW tip, your `head_sha=<your merge>` query returns
+    empty, and an empty result reads exactly like "the arm has not fired yet". `postmerge/SKILL.md`
+    states the precondition where it defines the predicate; an entry that cites the predicate
+    without it is a half-quote. Practical consequence while verifying a merge: hold sibling merges
+    until the deploy arm has registered.
 24. **Reported a job as hung for 2h24m by comparing a UTC `started_at` against a local-time
     clock.** It was 24 minutes. **Prevention:** read both sides in the same timezone before
     computing an elapsed time.
