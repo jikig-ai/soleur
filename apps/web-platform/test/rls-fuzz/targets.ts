@@ -4,7 +4,7 @@
 // per-table seed + attack SQL. The driver asserts registry ⇔ catalog (AC1): a new
 // isolated table with no entry here fails the coverage gate, and an entry naming a
 // table the catalog no longer classifies as isolated fails too. Seeds are hand-
-// written (heterogeneous columns/FKs/CHECKs across 18 tables), never generic —
+// written (heterogeneous columns/FKs/CHECKs across 21 tables), never generic —
 // but every seed is validated against the live migrated schema, and the driver's
 // service_role `count=1` precondition (AC2) proves each seed actually landed a row
 // before any tenant-B `count=0` is read as "denied" rather than "empty".
@@ -27,6 +27,8 @@ export interface Ctx {
   convA: string;
   /** A second A-owned conversation — the ucs INSERT-forge needs a non-colliding (user,conv) pair. */
   convA2: string;
+  /** An A-owned engine run shared by event-table and append-RPC isolation attacks. */
+  engineRunA: string;
 }
 
 /** A WHERE clause + params that uniquely identify A's seeded canonical row. */
@@ -46,7 +48,8 @@ export interface Target {
    * attack handle with FRESH unique values (so a real leak surfaces as a committed
    * row, never masked by a 23505 unique_violation). `undefined` when the table has
    * a BEFORE-INSERT trigger/validation that fires ahead of the RLS WITH CHECK and
-   * would raise a non-42501 error — those tables still get UPDATE + DELETE attacks.
+   * would raise a non-42501 error, or the schema cannot express a fresh,
+   * non-conflicting cross-tenant row (for example, one row per workspace).
    */
   forge?(h: Handle, ctx: Ctx): Promise<unknown>;
   /**
@@ -183,6 +186,45 @@ export const ISOLATION_TARGETS: Target[] = [
     updateCol: "name",
     seed: async (_b, c) => ({ where: "id = $1", params: [c.orgA] }),
     // forge omitted: organizations rows are created by the onboarding path only.
+  },
+
+  // ---- agent-engine records (mig 138; mutations are RPC-only) ----
+  {
+    table: "workspace_engine_settings",
+    updateCol: "default_engine_id",
+    seed: async (b, c) => {
+      await b`insert into workspace_engine_settings (workspace_id, default_engine_id, default_auth_mode, updated_by)
+        values (${c.wsA}, 'claude-code', 'managed', ${c.userA})`;
+      return { where: "workspace_id = $1", params: [c.wsA] };
+    },
+    // No faithful INSERT-forge: workspace_id is the primary key, and the one A
+    // workspace already has the row. set_workspace_default_engine is fuzzed via RPC.
+  },
+  {
+    table: "agent_engine_runs",
+    updateCol: "status",
+    seed: async (_b, c) => idLocate(c.engineRunA),
+    forge: (h, c) =>
+      h`insert into agent_engine_runs (
+        workspace_id, execution_kind, conversation_id, engine_id, auth_mode,
+        adapter_version, status, created_by
+      ) values (
+        ${c.wsA}, 'conversation', ${c.convA2}, 'claude-code', 'managed',
+        'rls-fuzz-forge', 'queued', ${c.userA}
+      )`,
+  },
+  {
+    table: "agent_engine_events",
+    updateCol: "payload",
+    seed: async (b, c) => {
+      const [{ id }] = await b`insert into agent_engine_events (run_id, event_id, sequence, payload)
+        values (${c.engineRunA}, 'engine-event-1', 1, '{"type":"lifecycle","source_type":"text"}'::jsonb)
+        returning id`;
+      return idLocate(id);
+    },
+    forge: (h, c) =>
+      h`insert into agent_engine_events (run_id, event_id, sequence, payload)
+        values (${c.engineRunA}, 'engine-event-2', 2, '{"type":"lifecycle","source_type":"text"}'::jsonb)`,
   },
 
   // ---- workspace-keyed rows (is_workspace_member(workspace_id, uid)) ----

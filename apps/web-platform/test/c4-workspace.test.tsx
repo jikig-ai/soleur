@@ -23,6 +23,7 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
     support: false,
     "support-live": false,
     "guided-tour": false,
+    "codex-engine": false,
   };
 }
 
