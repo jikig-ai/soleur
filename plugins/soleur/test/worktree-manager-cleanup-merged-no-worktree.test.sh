@@ -370,7 +370,13 @@ fi
 # ===========================================================================================
 echo "A3. worktree-bearing, unleased, clean, old commit -> reaped (no blanket refusal)"
 A3="$TMP/a3"; mk_repo "$A3"
-mk_merged_branch "$A3/clone" "feat-a3-reapme"
+# 900s, NOT the 100000s default, and the number is the assertion. The grace is `_delta < 600`;
+# with fixtures at 5s (held) and 27.8h (reaped) every window in that range satisfies both arms,
+# so widening the constant to a DAY stayed green — a grace silently widened to 86400 stops
+# reaping the entire normal cohort, which is the blanket-refusal failure this very row exists to
+# catch, one dimension over. 900 sits 300s outside the window: tight enough that a widening reds
+# here, loose enough that suite runtime cannot drift a fixture across it.
+mk_merged_branch "$A3/clone" "feat-a3-reapme" 900
 A3_WT="$A3/wt-a3"; assert_fixture_dir "$A3_WT"
 fgit -C "$A3/clone" worktree add -q "$A3_WT" "feat-a3-reapme"
 A3_STATE="$TMP/a3-state"; arm_reaper "$A3_STATE"
@@ -380,6 +386,24 @@ if local_branch_exists "$A3/clone" "feat-a3-reapme"; then
   fail "A3a: an unleased, clean, old worktree-bearing branch was NOT reaped — the fix degraded into a blanket refusal"
 else
   pass "A3a: an unleased, clean, old worktree-bearing branch is still reaped"
+fi
+# THE POSITIVE WITNESS FOR THE REMOTE DELETE. `remote_branch_exists` was called twice in this
+# file, both times expecting TRUE, so `remote_branch_exists() { return 0; }` — and disabling the
+# SUT's remote delete outright — both scored a clean 30/30. "The remote branch survived" was
+# therefore indistinguishable from "this fixture can never delete a remote ref": every hold row
+# passed at a gate EARLIER than the one under test. The SUT's own comment calls this "the one
+# irreversible write" (it closes the PR), and it had no witness at all.
+if remote_branch_exists "$A3/clone" "feat-a3-reapme"; then
+  fail "A3b: the remote ref survived a reap — the hold rows above prove nothing about a delete that never fires"
+else
+  pass "A3b: the remote ref is deleted too (the hold rows are measuring a live delete path)"
+fi
+# The sentinel already CARRIES the field; nothing read it. A8e greps only `^SOLEUR_WORKTREE_REAPED `,
+# which is satisfied by a reap that silently failed to reach the remote.
+if grep -qE '^SOLEUR_WORKTREE_REAPED .*[[:space:]]remote=yes' "$TMP/a3.log"; then
+  pass "A3c: the sentinel reports remote=yes, so the marker's own field is load-bearing"
+else
+  fail "A3c: the reap sentinel does not report remote=yes — recovery reads a field nothing asserts"
 fi
 
 # ===========================================================================================
@@ -776,7 +800,7 @@ printf '  pass: self-test — pass() and fail() both move the counters and the l
 # above is unbound in that slice, so the mutant dies at `set -u` and the floor scores
 # CONSTRUCTION rather than FIRES.
 # ===========================================================================================
-MIN_ASSERTIONS=30
+MIN_ASSERTIONS=32
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions executed, floor is %s — rows were removed or an arm aborted early.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2

@@ -575,6 +575,39 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
   const SELECTOR = "-i?name";
   const FIND = "\\bfind\\b";
 
+  /**
+   * A backslash line-continuation between `find` and its selector splits the construct across
+   * two physical lines, and BOTH detectors below are line- or window-oriented over physical
+   * lines. Joining first makes the continuation a non-axis rather than a hole — it is the
+   * cheapest of the same-mechanism variants, and the one a reformatter produces by accident.
+   */
+  function joinContinuations(text: string): string {
+    return text.replace(/\\\n[ \t]*/g, " ");
+  }
+
+  // `-path` / `-wholename` whose pattern's LAST component is not `plugin.json`.
+  //
+  // `-path` is the SANCTIONED selector — the identity recipe uses it to reach
+  // `.claude-plugin/plugin.json` — so it cannot simply join SELECTOR. But the same flag
+  // pointed at `scripts/precommit-guard.sh`, and its GNU alias `-wholename`, select the
+  // executable by name just as surely as `-name` does, through a spelling the `-name` regex
+  // cannot see. The discriminator is the pattern's TAIL: identity selection ends at the
+  // manifest, name selection ends at the script.
+  //
+  // Line comments, not a JSDoc block: a glob pattern in this comment would contain the
+  // sequence that CLOSES a block comment, which is how the first draft of this paragraph
+  // turned the file into a syntax error.
+  const PATH_SELECTOR = /-(?:path|wholename)[ \t]+(['"]?)([^'"\s|;)]+)\1/g;
+  function selectsByPathTail(line: string): boolean {
+    PATH_SELECTOR.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = PATH_SELECTOR.exec(line)) !== null) {
+      const tail = m[2].split("/").pop() ?? "";
+      if (tail && tail !== "plugin.json") return true;
+    }
+    return false;
+  }
+
   /** Every file under plugins/soleur/ that NAMES a Devin plugin-cache path. */
   function deriveCachePathFiles(): string[] {
     const cacheRe = new RegExp(CACHE_FRAGMENTS.join("|"));
@@ -603,11 +636,15 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
     const cache = CACHE_FRAGMENTS.join("|");
     const forward = new RegExp(`${FIND}[^\n|]*(?:${cache})[^\n|]*${SELECTOR}\\s`, "g");
     const reverse = new RegExp(`${FIND}[^\n|]*${SELECTOR}\\s[^\n|]*(?:${cache})`, "g");
-    return text
+    const cacheLine = new RegExp(cache);
+    return joinContinuations(text)
       .split("\n")
       .filter((l) => {
         forward.lastIndex = 0; reverse.lastIndex = 0;
-        return forward.test(l) || reverse.test(l);
+        if (forward.test(l) || reverse.test(l)) return true;
+        // Same line, other spelling: a cache path plus a `-path`/`-wholename` that ends at a
+        // script rather than at the manifest.
+        return cacheLine.test(l) && selectsByPathTail(l);
       })
       .map((l) => l.trim());
   }
@@ -633,13 +670,13 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
   function blockScopedSelectionHits(text: string): string[] {
     const cacheRe = new RegExp(CACHE_FRAGMENTS.join("|"));
     const selectorRe = new RegExp(`${FIND}[^\n|]*${SELECTOR}\\s`);
-    const lines = text.split("\n");
+    const lines = joinContinuations(text).split("\n");
     const out: string[] = [];
     let depth = 0;
     for (const line of lines) {
       if (depth > 0) {
         if (/\bdone\b/.test(line)) { depth -= 1; continue; }
-        if (selectorRe.test(line)) out.push(line.trim());
+        if (selectorRe.test(line) || selectsByPathTail(line)) out.push(line.trim());
         continue;
       }
       // Open a window only on a `for`-style line that itself names a cache path; a bare
@@ -704,6 +741,59 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
     expect(blockScopedSelectionHits(loopGood).length).toBe(0);
     // A selector AFTER the loop closes is out of scope — the window must not leak.
     expect(blockScopedSelectionHits(loopGood + `\nfind /tmp ${N} x.sh`).length).toBe(0);
+
+    // AXIS: backslash line-continuation. The construct is one logical line and two physical
+    // ones, so both detectors would miss it unless the text is joined first. This is the
+    // variant a reformatter produces by accident.
+    const CONT = `GUARD="$(find ${OPT} \\\n  ${N} precommit-guard.sh | head -1)"`;
+    expect(basenameSelectionHits(CONT).length).toBe(1);
+
+    // AXIS: `-path` / `-wholename` pointed at a SCRIPT. `-path` is the sanctioned selector, so
+    // the discriminator is the pattern's tail, not the flag.
+    const STAR = "*";
+    const P = "-" + "path";
+    const WP = "-" + "wholename";
+    expect(basenameSelectionHits(`find ${OPT} ${P} '${STAR}/scripts/precommit-guard.sh'`).length).toBe(1);
+    expect(basenameSelectionHits(`find ${OPT} ${WP} '${STAR}/cloud-detect.sh'`).length).toBe(1);
+    // …and the identity recipe, which uses the SAME flag, must stay clean.
+    expect(
+      basenameSelectionHits(`find ${OPT} ${P} '${STAR}/.claude-plugin/plugin.json'`).length,
+    ).toBe(0);
+    // Inside a loop too, where the cache path is on the `for` line.
+    const loopPath = [
+      `for d in "$HOME/.local/share/${"devin/cli/plugins/cache"}" ${OPT}; do`,
+      `  X="$(find "$d" ${P} '${STAR}/scripts/cloud-detect.sh' | head -1)"`,
+      "done",
+    ].join("\n");
+    expect(blockScopedSelectionHits(loopPath).length).toBe(1);
+  });
+
+  // SCOPE, stated rather than implied. Two same-mechanism spellings remain out of reach, and
+  // an unstated limit reads as coverage:
+  //
+  //   (a) a shell GLOB with no `find` at all — `ls <cache>/*/scripts/precommit-guard.sh`.
+  //       Detecting it means flagging any glob whose tail is a script name, which over
+  //       markdown prose (most of this population is `*.md`) produces false positives the
+  //       guard cannot adjudicate, and a guard that cries wolf gets an allowlist — the thing
+  //       this suite cut on purpose.
+  //   (b) the cache path bound to a variable by a plain assignment, then used outside any
+  //       loop. The block detector opens its window only on a `for … in <cache>` line,
+  //       because that is the shipped shape; a general def-use chain over shell text is a
+  //       different tool.
+  //
+  // Both are strictly harder to write by accident than the four axes covered above, which is
+  // the reason for the ordering, not a claim that they cannot happen.
+  test("HARNESS: the stated scope limits are real, not aspirational", () => {
+    const OPT = "/opt/" + ".devin/plugins";
+    const STAR = "*";
+    // (a) — documented as UNCOVERED. If this ever starts returning 1, the scope note above is
+    // stale and must be rewritten; an assertion that silently becomes true is how a limit
+    // turns into folklore.
+    expect(basenameSelectionHits(`ls ${OPT}/${STAR}/scripts/precommit-guard.sh`).length).toBe(0);
+    // (b) — same.
+    const varForm = [`CACHE=${OPT}`, `X="$(find "$CACHE" -name cloud-detect.sh)"`].join("\n");
+    expect(basenameSelectionHits(varForm).length).toBe(0);
+    expect(blockScopedSelectionHits(varForm).length).toBe(0);
   });
 
   // HARNESS ROW — non-vacuity. A derived population that comes back empty (a moved root, a

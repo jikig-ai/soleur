@@ -376,10 +376,47 @@ check_r9() {
     # OCCURRENCES, not matching lines: both cache paths sit on one `for d in ...` line, so a
     # line count reports 1 for a correct fence and the row would false-fail forever.
     n_cache="$(printf '%s\n' "$code" | grep -oE 'devin/cli/plugins/cache|/opt/\.devin/plugins' | grep -c . || true)"
-    ck; if [ "$n_cache" -ge 2 ]; then
-      pass "$label: ${GATE_NAMES[$i]} carries both Devin cache paths"
+    # EXACTLY two, not `-ge 2`. A floor is satisfied by three, and the third member of this list
+    # is a new directory from which `go.md` SEARCHES FOR AND THEN EXECUTES a payload. Measured:
+    # adding one to all three fences left this suite at its baseline and devin-cloud-mode at
+    # 41/0 — R8's byte-identity only proves the three fences agree with EACH OTHER, so a
+    # three-fence edit is invisible to it, and the marker-block cardinality pin counts blocks,
+    # not paths. The resolution-source SET is the property; a floor cannot express it.
+    ck; if [ "$n_cache" -eq 2 ]; then
+      pass "$label: ${GATE_NAMES[$i]} carries exactly the two documented Devin cache paths"
     else
-      fail "$label: ${GATE_NAMES[$i]} is missing a Devin cache path (found $n_cache)"
+      fail "$label: ${GATE_NAMES[$i]} names $n_cache Devin cache path(s), want exactly 2 — a third is a new execute-from directory"
+    fi
+
+    # …and the SET, not just the count of KNOWN members. The row above counts occurrences of
+    # the two documented spellings, so a third directory with any OTHER name leaves it at 2 and
+    # passes — measured: appending `/srv/extra-plugins` to the `for d in` list in all three
+    # fences was green under the count row alone. The property is the arity of the search list
+    # itself, so count ITS members: `for d in <a> <b>; do`, two words between `in` and `;`.
+    local for_line n_arms
+    for_line="$(printf '%s\n' "$code" | grep -E '^[[:space:]]*for[[:space:]]+d[[:space:]]+in[[:space:]]' | head -1)"
+    # `eval` is deliberate and safe on a fence this suite has already pinned byte-identical:
+    # the members are quoted shell words, and word-splitting them any other way would count
+    # `"$HOME/.local/share/devin/cli/plugins/cache"` as one word only by accident.
+    n_arms="$(printf '%s\n' "$for_line" | sed -E 's/^[[:space:]]*for[[:space:]]+d[[:space:]]+in[[:space:]]+//; s/;[[:space:]]*do[[:space:]]*$//' | tr -s '[:space:]' '\n' | grep -c . || true)"
+    ck; if [ "$n_arms" -eq 2 ]; then
+      pass "$label: ${GATE_NAMES[$i]} searches exactly 2 directories for a payload to execute"
+    else
+      fail "$label: ${GATE_NAMES[$i]} searches $n_arms directories, want exactly 2 (line: ${for_line:-<none>})"
+    fi
+
+    # THE SUITE'S OWN HOST-INDEPENDENCE LEVER, asserted rather than assumed. `$HOME` is
+    # overridden by `run_gate`, but `/opt/.devin/plugins` is ABSOLUTE and has no such lever —
+    # the fences read it through `${SOLEUR_DEVIN_CACHE_OPT:-…}` and every row pins that to a
+    # path which does not exist. Measured: replacing the parameter expansion with the bare
+    # literal in all three fences left this suite GREEN, because this host carries no
+    # `/opt/.devin/plugins`. On a Devin CLI host — the audience #8401 exists for — R4, R6 and
+    # R6c would silently change verdict with no diff change, which is the one thing this
+    # suite's own header says a MUST-PASS suite may not do.
+    ck; if printf '%s\n' "$code" | grep -qF '${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}'; then
+      pass "$label: ${GATE_NAMES[$i]} reads the /opt arm through the containment override"
+    else
+      fail "$label: ${GATE_NAMES[$i]} hard-codes /opt/.devin/plugins — this suite's verdict becomes a property of the host"
     fi
 
     # EXACTLY ONE RESOLVE line per gate (spec-flow A3). Moving the cache arms inside the
@@ -734,6 +771,37 @@ want_in "$out" "$ws" "R11: git worktree list still ran (its output names this wo
 want_not_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified" "R11: it is not reported as an unresolved root"
 want_not_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=classifier-absent" "R11: nor as an absent classifier — the gate names the cause it measured"
 
+echo "R11b. the narrowing itself: a token-less reaper on the TOKEN arm must still dispatch"
+# THE PREMISE OF ADR-179 A16, and until now nothing instantiated it. The gate is
+# `[ "$VERIFIED" = true ] && [ "$SRC" = devin-cache ]`, narrowed because the arm-agnostic form
+# was measured to stop reaping for every long-lived worktree in this repository on a pre-merge
+# branch and every marketplace install between releases — their worktree-manager.sh predates
+# the capability token too. Dropping the `$SRC` conjunct was caught only INCIDENTALLY, by
+# R3f/R6c's ABSENT-file fixtures: the shape that matters — arm is NOT devin-cache, the manager
+# is PRESENT but carries no token — was built by nothing, because `mk_root` plants the token in
+# every mode except `no-capability` and `no-capability` was only ever paired with CACHE_HOME.
+NOCAP_TOKEN_ROOT="$TMP_ROOT/root-nocap-token"
+mk_root "$NOCAP_TOKEN_ROOT" soleur no-capability
+ws="$(fresh_ws r11b)"
+out="$(run_gate "$(delivered_fence 2 "$NOCAP_TOKEN_ROOT" nocaptok)" "$ws" "$SCRATCH_HOME")"
+want_in "$out" "gate=session-start source=plugin-root-token verified=true" "R11b: the token arm resolves as itself"
+want_in "$out" "${R1_EFFECT[2]}" "R11b: and STILL DISPATCHES — the capability gate is scoped to devin-cache, not fleet-wide"
+want_not_in "$out" "reason=reaper-capability-unverified" "R11b: the refusal does not fire on the token arm"
+
+echo "R11c. a cache directory that exists but carries no soleur manifest"
+# `SRC=devin-cache-nomatch` is emitted by all three fences and carries its OWN operator remedy
+# in go.md — distinct from `none`, whose remedy is "set CLAUDE_PLUGIN_ROOT". Deleting the arm
+# that produces it left the suite green: every row built either "no cache dir at all"
+# (SCRATCH_HOME) or "cache dir holding a matching manifest" (CACHE_HOME). A value a customer is
+# told to act on, produced by nothing under test.
+NOMATCH_HOME="$TMP_ROOT/home-nomatch"
+mk_root "$NOMATCH_HOME/.local/share/devin/cli/plugins/cache/some-other-plugin" not-soleur
+ws="$(fresh_ws r11c)"
+out="$(run_gate "${FENCE_LITERAL[2]}" "$ws" "$NOMATCH_HOME")"
+want_in "$out" "gate=session-start source=devin-cache-nomatch verified=false" "R11c: a searched-but-unmatched cache reports its own source"
+want_not_in "$out" "source=none" "R11c: and is NOT collapsed into 'no cache existed', whose remedy is different"
+want_not_in "$out" "STUB_WORKTREE_MANAGER" "R11c: nothing under that cache is executed"
+
 echo "R6/R6b/R6c. identity preflight and the payload-absent state"
 for i in "${!GATE_ANCHORS[@]}"; do
   ws="$(fresh_ws "r6$i")"
@@ -942,23 +1010,46 @@ s = sub(s, 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token',
 # which every fence carries and which no arm-ordering change removes.
 s = sub(s, 'echo "SOLEUR_PLUGIN_ROOT_RESOLVE',
         'ROOT="${ROOT:-./plugins/soleur}"\necho "SOLEUR_PLUGIN_ROOT_RESOLVE', 'break (b)')
+# (c) DROP one cache arm in ONE fence -> R9's arity and occurrence rows must fail. Without
+# this, both of those rows could be replaced by `ck; pass` and the composite still scored a
+# failure from (a)/(b) -- a threshold of one makes every sub-row after the first free.
+s = sub(s, 'for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do',
+        'for d in "$HOME/.local/share/devin/cli/plugins/cache"; do', 'break (c)')
+# (d) DUPLICATE the RESOLVE echo in one fence -> R9's exactly-one-RESOLVE row must fail.
+s = sub(s, 'echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"',
+        'echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"\n'
+        'echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"',
+        'break (d)')
 pathlib.Path(dst).write_text(s)
 L2PY
-_l2_composite() {                  # _l2_composite <label> <fn>
-  local label="$1" fn="$2"
+# _l2_composite <label> <fn> <expected-failures>
+#
+# The threshold is an EXACT count, not `-ge 1`. A floor of one is satisfied by whichever
+# sub-row happens to fire first, which makes every other sub-row in the same decider free:
+# measured, replacing BOTH rows this PR adds to check_r9 with `ck; pass "$label: …"` left the
+# suite green, because break (b) still tripped the banned-form row. The broken fixture now
+# carries one break per sub-row class, and the count is what ties them together — a sub-row
+# that stops deciding lowers `df` and is reported by name rather than absorbed.
+_l2_composite() {                  # _l2_composite <label> <fn> <expected>
+  local label="$1" fn="$2" want="$3"
   local p0=$passes f0=$fails a0=$asserted l0
   l0=$(wc -l < "$VERDICT_LOG")
   "$fn" "$L2_BAD" "L2" >/dev/null 2>&1
   local df=$((fails - f0))
   passes=$p0; fails=$f0; asserted=$a0
   head -n "$l0" "$VERDICT_LOG" > "$TMP_ROOT/verdicts.l2" && mv "$TMP_ROOT/verdicts.l2" "$VERDICT_LOG"
-  if [ "$df" -lt 1 ]; then
-    printf 'FATAL: composite self-test %s scored 0 failures against a deliberately broken go.md — it decides nothing\n' "$label" >&2
+  if [ "$df" -ne "$want" ]; then
+    printf 'FATAL: composite self-test %s scored %s failures against a deliberately broken go.md, want exactly %s — a sub-row stopped deciding, or the fixture stopped breaking it\n' "$label" "$df" "$want" >&2
     _L2_FAILED=1
   fi
 }
-_l2_composite "check_r8" check_r8
-_l2_composite "check_r9" check_r9
+# Declared on the lines IMMEDIATELY above their `_l2_composite` calls, for the reason the
+# anti-vacuity floor below states: guard-vacuity-floor's mutant slices a predicate plus its
+# CONTIGUOUS simple assignments, and a threshold bound far above is unbound in that slice.
+L2_WANT_R8=1
+L2_WANT_R9=5
+_l2_composite "check_r8" check_r8 "$L2_WANT_R8"
+_l2_composite "check_r9" check_r9 "$L2_WANT_R9"
 [ "$_L2_FAILED" -eq 0 ] || { printf 'FATAL: the deciders are not load-bearing; every behavioural row above is unproven\n' >&2; exit 2; }
 ck; pass "L2: want_in/want_not_in/want_eq/check_r8/check_r9 each decide both ways"
 
@@ -992,7 +1083,7 @@ fi
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
 # 155 is the H3-SKIPPED total; H3 running adds two more (157), so the floor holds on both paths.
 # Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155.
-MIN_ASSERTIONS=178
+MIN_ASSERTIONS=196
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
