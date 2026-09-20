@@ -1107,6 +1107,34 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed at anonymise-routine-runs. Please try again." };
   }
 
+  // 3.996 Anonymise engine settings and run ownership (migration 138).
+  //       Engine lineage and lifecycle events remain for operational
+  //       accountability, while user identity references are severed before
+  //       auth deletion. The service-role-only RPC is idempotent.
+  try {
+    const { error: anonEngineErr } = await service.rpc(
+      "anonymise_agent_engine_data",
+      { p_user_id: userId },
+    );
+    if (anonEngineErr) {
+      reportSilentFallback(anonEngineErr, {
+        feature: "account-delete",
+        op: "anonymise-agent-engine-data",
+        extra: { userId },
+        message: "anonymise_agent_engine_data failed — aborting deletion to avoid FK-block",
+      });
+      return { success: false, error: "Account deletion failed at anonymise-agent-engine-data. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-agent-engine-data",
+      extra: { userId },
+      message: "anonymise_agent_engine_data threw — aborting deletion to avoid FK-block",
+    });
+    return { success: false, error: "Account deletion failed at anonymise-agent-engine-data. Please try again." };
+  }
+
   // 4. Delete auth record — FK cascade handles public.users and all children
   //    IMPORTANT: auth deletion runs LAST among destructive steps. If it
   //    fails, the preceding steps are idempotent (anonymise re-runs as a

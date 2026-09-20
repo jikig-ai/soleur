@@ -5,6 +5,7 @@ import { RenameWorkspaceAction } from "./rename-workspace-action";
 import { WorkspaceLogoSettings } from "./workspace-logo-settings";
 import { KeyboardShortcutsToggle } from "./keyboard-shortcuts-toggle";
 import type { WorkspaceIdentity } from "@/server/workspace-identity-resolver";
+import { AgentEngineSettings } from "./agent-engine-settings";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -64,6 +65,8 @@ export function SettingsContent({
           />
         </section>
       )}
+
+      <AgentEngineSettings isOwner={workspaceIdentity?.isOwner ?? true} />
 
       {/* Account Section */}
       <section>
