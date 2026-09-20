@@ -2535,6 +2535,27 @@ else
   fail "T1-control: the farm itself breaks the gate, so T1 proves nothing" "$_t1c_rc" "$_t1c_out"
 fi
 
+# T1-ORDER — the tooling check's POSITION, not just its token. T1 proves a missing binary is
+# reported; it says nothing about WHEN, and the position is load-bearing: the live-hash step
+# calls git_data_rung2_user_data_sha256, which runs `sha256sum`, and it runs BEFORE Guard 4.
+# The plan's FR14 pinned tooling AFTER Guard 4 — at that position the gate would hash the
+# template with an UNCHECKED sha256sum, which is P1 #3 (`find` absent from the list) one step
+# further along. So drop ONLY sha256sum: if tooling runs first the verdict is
+# ABORT [TOOLING_MISSING] naming sha256sum; if it ran late, the hash step speaks first with a
+# different token and this arm reds. Nothing else pins this ordering.
+_T1O="$TMP/t1obin"
+mkdir -p "$_T1O"
+for _b in bash sed grep awk sort tr cut git curl tar jq date printf dirname basename cmp mktemp rm cat head wc find; do
+  _p="$(command -v "$_b" 2>/dev/null)" && ln -sf "$_p" "$_T1O/$_b"
+done
+_t1o_out="$(PATH="$_T1O" bash -c "source '$GATE'; git_data_rung2_rehearsal_gate '$R2/ci.yml' '$R2/s1.env'" 2>&1)"; _t1o_rc=$?
+if [[ "$_t1o_rc" -ne 0 && "$_t1o_out" == *"[TOOLING_MISSING]"* && "$_t1o_out" == *"sha256sum"* ]]; then
+  pass "T1-ORDER: tooling is checked BEFORE the live hash consumes sha256sum"
+else
+  fail "T1-ORDER: dropping sha256sum must ABORT [TOOLING_MISSING] naming it, proving tooling runs before the hash step" "$_t1o_rc" "$_t1o_out"
+fi
+
+
 # T-SEAM1 — the seam ANNOUNCES ITSELF on every verdict line. infra-validation.yml triggers on
 # pull_request, so a PR author controls that step's env: block; without the announcement two
 # innocuous env lines would produce a RELEASED line indistinguishable from a real one.
@@ -2914,9 +2935,13 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #     1  R16            the 5xx retry's far side — always-500 could not see the retry at all.
 #     7  F1-F7          Guard 5: the monotonic run floor, its ack grammar, and the DELETION
 #                       case that makes voiding an attestation not a bypass.
+#     1  T1-ORDER       the tooling check's POSITION (#8010 AC sweep, 2026-09-20). T1 pinned
+#                       the TOKEN only, so FR14's planned order -- tooling AFTER Guard 4 --
+#                       drifted silently against a live-hash step that runs `sha256sum`
+#                       BEFORE Guard 4. Dropping only sha256sum discriminates the two.
 #   ----
-#    17
-_FLOOR=234
+#    18
+_FLOOR=235
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
