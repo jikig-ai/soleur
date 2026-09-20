@@ -84,6 +84,18 @@ Four deliverables, scoped exactly to issue #8289:
    than asserted. The third one is what confirmed R20's relocation was right rather than merely
    convenient.
 
+6. **Verify-the-negative pass (Phase 4.45): twelve negative claims checked by command, zero
+   contradictions.** Every absolute or negative assertion this plan rests on was re-grepped against the
+   named or implied implementation file, and all twelve came back CONFIRMS with a `file:line` citation —
+   including the four that would have been most expensive to discover wrong at `/work`: that
+   `scripts/lint-agents-rule-budget.py` counts *only* `AGENTS.md` + `AGENTS.rules.md` (so the hook pointer
+   genuinely costs zero always-loaded bytes), that `skill-body-budget.json` has exactly ten ceiling keys
+   and `compound` is one of them, that `.openhands/skills/ticket-triage/SKILL.md` carries neither the
+   `eval-gate` markers nor the `meta/machinery` rule, and that `scripts/*.test.sh` is absent from
+   `test-all.sh --print-suite-globs`. One refinement from that pass: `compound`'s headroom is 2744 bytes
+   raw and **2886 after the frontmatter strip**, which is the basis the lint actually measures.
+   Nothing here needed changing — which is the point of running it rather than assuming it.
+
 ### What deepen-plan did NOT change
 
 The research fan-out found no new best-practice or framework guidance to fold in, and that is the honest
