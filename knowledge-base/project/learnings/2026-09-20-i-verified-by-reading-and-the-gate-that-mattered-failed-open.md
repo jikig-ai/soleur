@@ -137,7 +137,7 @@ for the class before deriving anything.**
 
 ## Session Errors
 
-Items 1–8 forwarded from `specs/feat-one-shot-8289-kb-glossary-rejected-register/session-state.md`;
+Items 1–8 forwarded from `specs/archive/20260920-174117-feat-one-shot-8289-kb-glossary-rejected-register/session-state.md`;
 9–24 are this phase.
 
 1. **Two tool calls denied by hooks** — `iac-plan-write-guard.sh` matched prose *describing the

@@ -870,7 +870,7 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
 | `scripts/lint-rejected-register.sh` | Guard 1 | No |
 | `plugins/soleur/test/lint-rejected-register.test.sh` | Guard 1's battery. **Located here, not under `scripts/` (P1-2).** `scripts/test-all.sh --print-suite-globs` does not include `scripts/*.test.sh` — the runner says so itself (*"Registered explicitly — `scripts/*.test.sh` is not auto-globbed"*), and 94 of the 95 tracked `scripts/*.test.sh` carry a hand-written `run_suite` line. Placing it there would have required editing `scripts/test-all.sh`, which AC-33 forbade, making AC-7 unsatisfiable. `plugins/soleur/test/*.test.sh` **is** glob-registered, so the suite is reachable with no runner edit | No |
 | `knowledge-base/engineering/architecture/decisions/ADR-234-<slug>.md` | ADR-234 | No |
-| `knowledge-base/project/specs/feat-one-shot-8289-kb-glossary-rejected-register/decision-challenges.md` | DC-1 and any further User-Challenge, rendered by `ship` Phase 6 into the PR body and an `action-required` issue | No |
+| `knowledge-base/project/specs/archive/20260920-174117-feat-one-shot-8289-kb-glossary-rejected-register/decision-challenges.md` | DC-1 and any further User-Challenge, rendered by `ship` Phase 6 into the PR body and an `action-required` issue | No |
 
 ## Files to Edit
 
