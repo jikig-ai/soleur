@@ -130,8 +130,15 @@ for f in "${entries[@]}"; do
   # Malformedness is a COUNTED PREDICATE, never a caught exception carrying the value that caused
   # it: `date -u -d "$bad"` prints `date: invalid date '<value>'`, and that value would land in a
   # public comment. Every read below is guarded and nothing echoes file content.
+  # THREE states, and `draft` is the one that keeps this sweep honest. This skill EMITS a document;
+  # the founder sends it later, by hand, from their own mail client. An emitted file therefore claims
+  # nothing about whether it was sent, and an earlier revision emitted `status: sent` at write time —
+  # so an unsent draft became an ACTION REQUIRED on its own `needed_by`, reporting an overdue answer
+  # to a question nobody had asked. `draft` is a valid, readable state that is simply not yet
+  # awaiting a reply: it must not count as malformed (that would be a CANNOT ESTABLISH) and must not
+  # count as overdue (that would be the false alarm).
   case "$status" in
-    sent | answered) ;;
+    draft | sent | answered) ;;
     *) n_bad=$((n_bad + 1)); continue ;;
   esac
   [[ "$needed" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { n_bad=$((n_bad + 1)); continue; }
@@ -139,6 +146,7 @@ for f in "${entries[@]}"; do
   needed_s="$(date -u -d "${needed}T00:00:00Z" +%s 2>/dev/null)"
   [[ "$needed_s" =~ ^[0-9]+$ ]] || { n_bad=$((n_bad + 1)); continue; }
 
+  # Only `sent` starts the clock. `draft` has not been sent and `answered` has come back.
   [[ "$status" == "sent" ]] || continue
   n_sent=$((n_sent + 1))
   if (( needed_s < TODAY_S )); then

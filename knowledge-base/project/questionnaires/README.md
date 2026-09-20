@@ -39,7 +39,7 @@ Four fields, all four required:
 | `recipient_role` | The role the document was addressed to, lowercase, never a person |
 | `needed_by` | The date the founder said the answers were needed, `YYYY-MM-DD` |
 | `blocked_decision` | The one decision that cannot be made until the answers arrive |
-| `status` | `sent` while an answer is outstanding, `answered` once a reply has been recorded |
+| `status` | `draft` when the document has been written but not yet sent, `sent` once the founder has actually sent it, `answered` once a reply has been recorded. The skill emits `draft`: it writes the document and never sends anything, so only the founder can say when `sent` becomes true. The overdue sweep starts its clock at `sent`, which is why emitting `sent` would report an overdue answer to a question nobody had asked |
 
 `needed_by` is the founder's own stated date. Nothing derives it, nothing rounds it, and no default
 replaces it — a deadline the founder did not name is a deadline nobody is waiting on.

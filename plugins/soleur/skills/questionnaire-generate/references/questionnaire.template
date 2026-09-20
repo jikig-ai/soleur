@@ -3,7 +3,7 @@
 recipient_role: <recipient-role, lowercase, no person's name>
 needed_by: <YYYY-MM-DD, the date the founder stated>
 blocked_decision: <the one decision that cannot be made until these answers arrive>
-status: sent
+status: draft   # flip to `sent` when you actually send it; the overdue sweep starts from that
 ---
 
 # Questions for my <recipient-role>

@@ -248,8 +248,25 @@ the emitter drops line 1 and the document starts at the frontmatter fence. The e
 vendor mark of any kind.
 
 Frontmatter, all four fields required: `recipient_role` (a role, never a person's name), `needed_by`
-(the date from Step 1 question 3), `blocked_decision`, and `status: sent`. The conventions for this
-directory, including the `## Answers` section and the `## Blocked on` back-pointer, are in
+(the date from Step 1 question 4), `blocked_decision` (Step 1 question 1), and **`status: draft`**.
+
+**`draft`, not `sent`, and this is a correctness matter rather than a nicety.** This skill writes a
+document; it never sends anything — the founder sends it later, by hand, from their own mail client.
+So at emit time nothing is known about whether it was sent, and an earlier revision emitted
+`status: sent`. [questionnaire-unanswered-8289.sh](../../../../scripts/followthroughs/questionnaire-unanswered-8289.sh)
+starts its overdue clock at
+`sent`, so an unsent draft became an ACTION REQUIRED on its own `needed_by` — reporting an overdue
+answer to a question nobody had asked, in an unattended sweep that writes to a public issue comment.
+Tell the founder, in the hand-off line, to change `draft` to `sent` when they actually send it.
+
+`<topic>` in the filename is a two-or-three-word slug of `blocked_decision`, lower-case and
+hyphenated — derived from a field Step 1 collected, never invented from the subject matter.
+
+`## Blocked on` takes the artifact that caused the ask: a repo-relative path, or an issue reference.
+If Step 1 produced no such artifact, write the plan or decision record the founder named when they
+described the block; if there is genuinely none, say so in one line rather than leaving the section
+empty, because the section is what lets the next session pick the thread up. The remaining conventions
+for this directory, including the `## Answers` discipline, are in
 `knowledge-base/project/questionnaires/README.md`.
 
 ## Voice
