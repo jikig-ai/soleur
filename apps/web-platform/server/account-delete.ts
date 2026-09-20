@@ -1109,5 +1109,10 @@ export async function deleteAccount(
   }
 
   log.info({ userId }, "Account deleted successfully (GDPR Art. 17)");
-  return { success: true, gitDataErasurePending };
+  // OMITTED when nothing is outstanding, not set to `false`. The field means "an erasure
+  // is still owed"; its absence is the ordinary, honest shape, and four sibling cascade
+  // tests assert `toEqual({ success: true })` on the happy path. Returning an explicit
+  // `false` broke deep equality in all four while saying nothing extra — the flag is
+  // read for truthiness at every call site.
+  return gitDataErasurePending ? { success: true, gitDataErasurePending: true } : { success: true };
 }
