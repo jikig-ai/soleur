@@ -57,7 +57,7 @@ implementation record, and not scratch space for anything that fitted nowhere el
 those grows the file an agent loads at decision time and none of them makes a word mean more.
 
 Two neighbours it is explicitly not, and the glossary itself says so by path: the public marketing
-glossary page, and the founder-facing brand lexicon. Never add an internal machinery noun to either.
+glossary page, and the founder-facing register in `knowledge-base/marketing/brand-guide.md` §Voice. Never add an internal machinery noun to either.
 
 ## Siblings
 

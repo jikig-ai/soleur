@@ -47,7 +47,12 @@ Is there a question I should have put on this list? Write it here with your answ
 ## Answers
 
 <Left blank when this is sent. If the reply arrives as an email rather than as an edit to this file,
-paste the reply here and change status to answered in the frontmatter above.>
+transcribe each answer under its question here and change status to answered in the frontmatter
+above. Do NOT paste the message itself: an inbound reply carries the sender's name, signature block
+and contact details, and this repository is PUBLIC with permanent history. Drop the greeting, the
+sign-off and the signature; attribute to the ROLE ('the accountant'), never to a person. Quote a
+sentence verbatim only where the exact wording matters — a figure, a statutory citation, a
+commitment — and say that it is a quotation. See knowledge-base/project/questionnaires/README.md.>
 
 ## Blocked on
 

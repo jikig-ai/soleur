@@ -20,7 +20,7 @@ stale. Follow the pointer when the detail matters.
   readable text. A rendered-page guard floors it at eight term definitions, which bounds it from
   BELOW only — nothing rejects an addition, so "don't put internal nouns there" is a discipline this
   file states, not a guarantee the guard provides.
-- Not `knowledge-base/marketing/brand-guide.md`. That owns the **founder-facing** lexicon — the words
+- Not `knowledge-base/marketing/brand-guide.md`. Its `## Voice` section owns the **founder-facing** register — the words
   the founder reads, and the jargon those words replace.
 
 This file is neither of those. It is machinery vocabulary for the agent that loads it at decision

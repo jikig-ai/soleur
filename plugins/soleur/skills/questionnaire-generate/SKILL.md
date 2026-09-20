@@ -15,8 +15,16 @@ questions down, hand the founder one document, and let them send it.
 This skill produces that document. It never sends it — the founder sends it from their own mail client,
 so nothing here becomes an intermediary for anyone's correspondence.
 
-`.claude/hooks/pre-ask-technical-fork-gate.sh` routes here. Its external-expert arm denies the
-`AskUserQuestion` that would have gone to the founder and names this skill in the deny reason. That
+Two entry paths, and the reliable one is the route. `/soleur:go` carries a `questionnaire` row that
+dispatches here directly. Separately, `.claude/hooks/pre-ask-technical-fork-gate.sh` denies an
+`AskUserQuestion` whose answer is held outside the company and names this skill in the deny reason.
+
+That hook arm is a BACKSTOP, not the main entrance, and the distinction is measured rather than
+assumed: its vocabulary is a fixed list of profession nouns, so a question can be squarely in scope and
+still not match. This skill's own worked example is one — "should the prepaid hosting contract be
+expensed now or spread across the term?" names no profession and is ALLOWED by the hook in both of its
+phrasings (measured). An earlier revision of this paragraph called the deny "the main way this skill is
+reached", which is false for the very example the skill ships. That
 arm has no resolution ladder — it is a single unconditional deny evaluated ahead of the authority
 short-circuit — so citing a "rung" of one would be the invented-precision this repository's own
 glossary discipline exists to stop. That deny is the main way this skill is reached, which is why every guardrail below is about
@@ -38,9 +46,17 @@ The founder cannot warrant another party's behaviour.
 
 Exactly three questions to the founder, and all three are about the send:
 
-1. **Who receives this?** The role, and what they know that the founder does not.
-2. **What has to come back?** The specific facts or decisions the founder cannot resolve alone.
-3. **By when?** A date the founder names.
+1. **What decision is blocked?** One sentence, in the founder's own words. This is the third
+   allowlisted Context field and the frontmatter's `blocked_decision`, and an earlier revision of this
+   step did not collect it — leaving Step 2 to claim "all three came out of Step 1" when only two did,
+   and the executor to recover the third from the triggering context or from a file, which the
+   allowlist forbids. Ask it; never infer it.
+2. **Who receives this?** The role, and what they know that the founder does not.
+3. **What has to come back?** The specific facts or decisions the founder cannot resolve alone.
+4. **By when?** A date the founder names. If the founder answers with a PERIOD rather than a date
+   ("before the quarter closes"), ask once for the date — do not convert it. The record's README is
+   explicit that nothing derives this field, nothing rounds it and no default replaces it, so a
+   derived date would be the skill inventing the one fact the follow-through sweep alarms on.
 
 That is the whole interview. **If a question about the subject matter can usefully be put to the
 founder, this skill had no reason to run** — the founder's not knowing the subject is the precondition
@@ -87,7 +103,30 @@ fields, so there is nothing to remove".
 A future session will read this section and think the rule is over-strict. It is not: the allowlist is
 the only part of this design that survives contact with a document written to be sent.
 
-## Step 3 — The redaction floor
+## Step 3 — Assemble the whole document, then apply the glossary as an outbound stop-list
+
+1. Assemble the whole document in memory: the `## Context` paragraph from Step 2, the questions, and
+   the template's remaining sections.
+2. Then apply the stop-list below.
+
+THIS STEP RUNS BEFORE THE REDACTION FLOOR, AND THE ORDER IS THE WHOLE POINT. The floor must scan the
+bytes that actually go out, so nothing may edit the document after it. An earlier revision put the
+floor here and the stop-list after it, which meant the stop-list rewrote text the sentinel had already
+cleared — reintroducing, legitimately, the un-scanned preview the floor exists to prevent.
+
+`knowledge-base/project/glossary.md` is the list of internal words that must not leave the repository
+inside a document attributed to the founder. Read it as a stop-list here, before the redaction floor runs: if a word in
+the document has an entry there, it is an internal noun and the emitted document says the plain thing
+instead. Skill names, agent names, phase names, lane names and workflow nouns do not appear in a
+document a founder signs.
+
+**This is the one sanctioned knowledge-base read on the drafting path, and it is not an exception to
+Step 2.** Step 2 forbids SOURCING a fact from the knowledge base into the document. This read does the
+opposite: it supplies a list of words to TAKE OUT. Nothing read here can enter the document, so the
+allowlist is intact. Stated explicitly because the two rules otherwise read as a contradiction — one
+says "no file read on the drafting path" and this step is a file read on the drafting path.
+
+## Step 4 — The redaction floor
 
 Before the file is written, run the document through the redaction sentinel — the same boundary
 `soleur:legal-generate` applies before it presents a draft. Run this as ONE fence: each fenced block is
@@ -148,9 +187,30 @@ SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
 
 bash "$SENTINEL" "$DRAFT"
 sentinel_rc=$?
+
+# DISPATCH HERE, INSIDE THE FENCE, AND EMIT THE VERDICT. Assigning `sentinel_rc` and dispatching in
+# prose below does not work and was measured not working: an assignment is the fence's terminal
+# statement so the fence exits 0 whatever the sentinel said, shell state does not persist to the next
+# fence (see the note above), and — the part that matters — rc=0 and rc=2 produce BYTE-IDENTICAL
+# stdout, zero bytes each, because the sentinel writes its cannot-evaluate diagnostic to stderr.
+# Measured: clean rc=0/0 bytes, matches rc=1/53 bytes, unreadable rc=2/0 bytes. So a document that was
+# never scanned was indistinguishable from one that scanned clean, and the "cannot evaluate -> halt"
+# arm below was unreachable. That is fail-OPEN, in the one gate whose whole purpose is to fail closed.
+case "$sentinel_rc" in
+  0) echo "SOLEUR_QUESTIONNAIRE_SENTINEL verdict=clean" ;;
+  1) echo "SOLEUR_QUESTIONNAIRE_HALT reason=sentinel-matches"
+     echo "questionnaire-generate: the sentinel matched. Do NOT write and do NOT present." >&2
+     echo "  The allowlist was violated upstream — fix the CONSTRUCTION in Step 2, not the output." >&2
+     exit 1 ;;
+  *) echo "SOLEUR_QUESTIONNAIRE_HALT reason=sentinel-cannot-evaluate rc=[$sentinel_rc]"
+     echo "questionnaire-generate: the sentinel could not evaluate the draft — stopping." >&2
+     echo "  An un-scanned document is not a clean one. Do not present it and do not send it." >&2
+     exit 2 ;;
+esac
 ```
 
-Dispatch on `$sentinel_rc`, fail-closed:
+The fence above emits exactly one `SOLEUR_QUESTIONNAIRE_*` marker and halts on anything but a clean
+scan. For reference, the arms it implements:
 
 - **0** — clean. Proceed.
 - **1** — matches found. Do not write and do not present. The allowlist was violated upstream; fix the
@@ -160,27 +220,18 @@ Dispatch on `$sentinel_rc`, fail-closed:
 This sentinel is a **floor and never a ceiling**. Exit 0 means no secret was found. It does not mean
 the document is safe to send — Step 2 is what makes it safe to send.
 
-## Step 4 — The glossary as the outbound stop-list
-
-`knowledge-base/project/glossary.md` is the list of internal words that must not leave the repository
-inside a document attributed to the founder. Read it as a stop-list here, before the preview is computed: if a word in
-the document has an entry there, it is an internal noun and the emitted document says the plain thing
-instead. Skill names, agent names, phase names, lane names and workflow nouns do not appear in a
-document a founder signs.
-
 ## Step 5 — Compute, preview, then take a typed confirmation
 
 The shape is `plugins/soleur/skills/invoice/SKILL.md` S4 steps 4 and 5: compute the artifact, show the
 founder what will actually go out, and take a literal typed `yes` before it becomes sendable.
 
-1. Assemble the whole document in memory.
-2. Show the founder the recipient role, the deadline, the question list, and the `## Context` paragraph
+1. Show the founder the recipient role, the deadline, the question list, and the `## Context` paragraph
    **verbatim** — the real bytes, not a summary of them.
-3. **Append nothing after the Context paragraph.** Whatever the preview ends with is what the recipient
+2. **Append nothing after the Context paragraph.** Whatever the preview ends with is what the recipient
    reads. A line added after the confirmation is a line the founder never approved.
-4. Require a single literal `yes`. Any other token — `y`, `Yes`, `yes go ahead` — re-shows the Context
+3. Require a single literal `yes`. Any other token — `y`, `Yes`, `yes go ahead` — re-shows the Context
    paragraph once, then aborts. There is no force flag.
-5. Only then write the file.
+4. Only then write the file.
 
 ## Step 6 — Emit
 

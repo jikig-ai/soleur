@@ -50,7 +50,10 @@ All four must hold. Three of four is a candidate, not an entry.
    difference ends up in a file that gets committed. "It's a bit ambiguous" does not qualify: name
    the wrong commit the wrong reading produces.
 4. **Not founder-facing** — if the founder should ever read the word, it belongs in the brand guide's
-   lexicon instead. This glossary is machinery vocabulary, written for the agent that loads it at
+   `## Voice` section instead, which is where the founder-facing register and the audience voice
+   profiles live. (There is no section literally called "lexicon" — an earlier revision of this line
+   pointed at one, and a pointer whose target does not exist is precisely the defect this file exists
+   to prevent.) This glossary is machinery vocabulary, written for the agent that loads it at
    decision time.
 
 A term also has to be shared traffic: it belongs here only when two or more skills or agents hand it
