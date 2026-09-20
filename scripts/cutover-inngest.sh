@@ -833,6 +833,10 @@ case "$OP" in
     # Single-shot (no transport retry), mirroring op=execute 2.0: a verdict
     # here is diagnostic, not gating, so a transient is re-run by dispatching
     # again rather than by an in-arm loop.
+    # ---- registry-probe host-state gate (#8079) ------------------------------------
+    # Region start is BEFORE `SIG=` deliberately: the render driver sources this region
+    # under `set -u`, and a region starting after `BODY=$(cat …)` would die on an unbound
+    # `CODE`. Everything the gate branch reads is bound inside the region.
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/registry-probe-body
     CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
@@ -845,20 +849,23 @@ case "$OP" in
     if [[ "$CODE" != "200" ]]; then
       CAUSE="${BODY//[$'\n\r']/ }"
       echo "::error::registry-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
-    fi
-    if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1; then
-      echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object"; echo "$BODY"; exit 1
-    fi
-    REG_EMPTY=$(echo "$BODY" | jq -r '.registry_empty')
-    REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
-    # Counts + ids ONLY (AC-NOBODY) — never a payload.
-    REG_IDS=$(echo "$BODY" | jq -r '[.function_ids[]?] | join(",")')
-    echo "::notice::registry-probe: registry_empty=$REG_EMPTY function_count=$REG_COUNT ids=[$REG_IDS]"
-    if [[ "$REG_EMPTY" == "false" ]]; then
-      echo "::warning::registry-probe: the dedicated host (10.0.1.40) has $REG_COUNT REGISTERED function(s). Pre-cutover this is UNEXPECTED — it means an SDK has registered against the dark host. Run op=doublefire-probe to establish whether those registrations have also EXECUTED runs (registration alone is not proof of a double-fire)."
     else
-      echo "::notice::registry-probe: dedicated registry is EMPTY — no SDK has registered functions against 10.0.1.40."
+      if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1; then
+        echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object"; echo "$BODY"; exit 1
+      fi
+      REG_EMPTY=$(echo "$BODY" | jq -r '.registry_empty')
+      REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
+      # Counts + ids ONLY (AC-NOBODY) — never a payload.
+      REG_IDS=$(echo "$BODY" | jq -r '[.function_ids[]?] | join(",")')
+      echo "::notice::registry-probe: registry_empty=$REG_EMPTY function_count=$REG_COUNT ids=[$REG_IDS]"
+      if [[ "$REG_EMPTY" == "false" ]]; then
+        echo "::warning::registry-probe: the dedicated host (10.0.1.40) has $REG_COUNT REGISTERED function(s). Pre-cutover this is UNEXPECTED — it means an SDK has registered against the dark host. Run op=doublefire-probe to establish whether those registrations have also EXECUTED runs (registration alone is not proof of a double-fire)."
+      else
+        echo "::notice::registry-probe: dedicated registry is EMPTY — no SDK has registered functions against 10.0.1.40."
+      fi
     fi
+
+    # ---- end registry-probe host-state gate (#8079) --------------------------------
     ;;
 
   doublefire-probe)
@@ -1431,7 +1438,7 @@ case "$OP" in
       # the same path and would have failed on them anyway). Only the fetch-failure signature
       # enters the dark arm. `webhook_path` is a script-level refusal, not one of the lib's tokens.
       if [[ "$CODE" != "500" || "$BODY" != *"__FETCH_FAILED__"* ]]; then
-        echo "::error::2.0 REFUSED (webhook_path): the registry-probe webhook returned HTTP $CODE without the dedicated host's fetch-failure signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so this is a WEBHOOK-PATH fault, not evidence about the host. Check the path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / webhook.service on the web host); when it returns the __FETCH_FAILED__ refusal or HTTP 200, re-dispatch op=execute. Do NOT SSH the host."
+        echo "::error::2.0 REFUSED (webhook_path): the registry-probe webhook returned HTTP $CODE without the dedicated host's fetch-failure signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so this is a WEBHOOK-PATH fault, not evidence about the host. Check the path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / webhook.service on the web host); when that run prints a registry_empty= line (the live measurement) or reports its own HOST-STATE VERDICT, the webhook path is answering — re-dispatch op=execute. Do not wait for a refusal: since #8079 that op grades the host and may exit 0. Do NOT SSH the host."
         echo "2.0 webhook body (HTTP $CODE): ${CAUSE:-<empty body>}"
         exit 1
       fi
@@ -1504,7 +1511,7 @@ case "$OP" in
           fi
           exit 1 ;;
         silent)
-          echo "::error::2.0 REFUSED (silent): the read path answered but the dedicated host emitted NO probe row in the window — silence is not darkness. Read the latest health run: gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'. Two consecutive probe-unavailable readings there make it: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why> (the only no-SSH path to a dead Vector/timer). Do NOT SSH the host."; exit 1 ;;
+          echo "::error::2.0 REFUSED (silent): the read path answered but the dedicated host emitted NO probe row in the window — silence is not darkness. Read the latest health run: gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'. BEFORE treating silence as a dead host, confirm INGEST health/quota: on 2026-08-14 the Better Stack Logs quota exhausted and ingest returned 402 for ~49h while the READ path answered 200 — rows absent, read healthy, i.e. exactly this verdict with no host fault. Two consecutive probe-unavailable readings there, with ingest healthy, make it: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why> (the only no-SSH path to a dead Vector/timer). Do NOT SSH the host."; exit 1 ;;
         wrong_host)
           echo "::error::2.0 REFUSED (wrong_host): probe rows are present but none carries the dedicated host's identity (host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND host_role=dedicated) — an identity mislabel (#6616 class). File an issue with this run URL; the host is not the problem and needs no action."; exit 1 ;;
         stale_row)
@@ -1512,7 +1519,7 @@ case "$OP" in
         stale_schema)
           echo "::error::2.0 REFUSED (stale_schema): the dedicated host's probe row is not probe_schema=${_IHDG_EXPECTED_SCHEMA} — the emitter is BAKED, so it needs a host replace on a pin that carries the schema-${_IHDG_EXPECTED_SCHEMA} emitter. Confirm first: git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh | grep -c "^probe_schema=${_IHDG_EXPECTED_SCHEMA}$" (a replace on an unbumped pin re-delivers the same bytes), then gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why>."; exit 1 ;;
         host_serving)
-          echo "::error::2.0 REFUSED (host_serving): the dedicated host's own row says it is serving (loopback 200 or unit active) while the webhook returned HTTP $CODE — the row and the webhook disagree. Check the WEBHOOK path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / web host). If that returns 200 the host IS serving pre-arm: gh workflow run cutover-inngest.yml -f op=doublefire-probe -f cron_period_seconds=1200; a double-fire means op=rollback; clean means re-dispatch op=execute. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::2.0 REFUSED (host_serving): the dedicated host's own row says it is serving (loopback 200 or unit active) while the webhook returned HTTP $CODE — the row and the webhook disagree. Check the WEBHOOK path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / web host). If that run prints a registry_empty= line the host IS serving: gh workflow run cutover-inngest.yml -f op=doublefire-probe -f cron_period_seconds=1200; a double-fire means op=rollback; clean means re-dispatch op=execute. Do NOT SSH the host."; exit 1 ;;
         flag_armed)
           # TWO SOURCES, DIFFERENT AGES. E11 grades the HOURLY probe row's flag (up to 90 min old)
           # before E13 grades the ~1/min heartbeat, so `hb_flag` is still unread here when the probe
