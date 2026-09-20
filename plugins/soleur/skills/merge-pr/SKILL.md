@@ -415,9 +415,22 @@ while true; do
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$fetch_rc — fetch origin main failed while classifying DIRTY — retrying next tick"
     elif mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
       s="OPEN BEHIND"
+    elif [[ -f plugins/soleur/scripts/resolve-regenerable-conflicts.sh ]] \
+         && bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh origin/main; then
+      # The resolver merged and regenerated model.likec4.json from the MERGED sources and
+      # committed locally; it never pushes, so the push is ours. Keep polling -- the new head
+      # clears CI like any other sync.
+      if git push >/dev/null 2>&1; then
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] regen resolved + pushed — polling" >&2
+        continue
+      fi
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] regen resolved but push rejected — main moved; exiting" >&2
+      break
     else
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll"
+      echo "Conflicted paths (merge-tree; no merge is in progress, so --diff-filter=U is empty):"
       printf '%s\n' "$mt_out" | grep '^CONFLICT ' || true
+      echo "Resolve locally: git merge origin/main"
       break
     fi
   fi
