@@ -2260,7 +2260,22 @@ fi
 # would pass against an implementation that simply ignores a 401.
 _stub_run 80000015 "head_sha=$_R2_C1" http=401once
 _r_ev r15.env 80000015
+# THE NO-BEARER CONDITION IS ESTABLISHED HERE, NOT ASSUMED — and the difference is the whole
+# arm. The gate takes its bearer from GH_TOKEN then GITHUB_TOKEN. This row was written on a
+# workstation where neither is set, so "no bearer" was true by accident of the environment; in
+# CI, GITHUB_TOKEN IS exported, the gate therefore HAD a credential to drop, the 401once was
+# retried anonymously, and the row RELEASED. Measured on PR #8388: 236/0 locally, 235/1 in CI,
+# and this was the one. An arm whose premise is ambient is not a control — it is a coin flip
+# that happens to land the same way on the machine where it was written.
+_r15_saved_gh="${GH_TOKEN:-}"; _r15_saved_ght="${GITHUB_TOKEN:-}"
+unset GH_TOKEN GITHUB_TOKEN
+if [[ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]]; then
+  fail "R14-control: could not clear GH_TOKEN/GITHUB_TOKEN, so the no-bearer premise does not hold" "n/a" ""
+fi
 _row R "R14-control: a 401 with no bearer to drop is could-not-measure, not a free pass" 1 "[RUN_UNRESOLVABLE]" "$R2/ci.yml" "$R2/r15.env"
+[[ -n "$_r15_saved_gh" ]] && export GH_TOKEN="$_r15_saved_gh"
+[[ -n "$_r15_saved_ght" ]] && export GITHUB_TOKEN="$_r15_saved_ght"
+unset _r15_saved_gh _r15_saved_ght
 
 # R16 — THE 5xx RETRY'S FAR SIDE. R2 is always-500, so it yields the same refusal whether the
 # retry exists or not — measured, deleting the retry arm survived the whole battery. The
