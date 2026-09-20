@@ -95,7 +95,28 @@ a separate Bash call and shell state does not persist, so a preflight in one fen
 the next.
 
 ```bash
-# PLUGIN IDENTITY FIRST (ADR-179 decision 2). `[[ -r "$SENTINEL" ]]` alone is a SHAPE check, and
+# ALLOCATE THE DRAFT FIRST. Everything below operates on "$DRAFT", and an earlier revision of this
+# fence referenced it four times without ever defining it — so `[ -s "$DRAFT" ]` was false on every
+# run and the floor halted with `reason=draft-empty` unconditionally. A gate that always refuses is
+# not a strict gate, it is an unrunnable skill, and it is worse than the unanchored path it replaced.
+DRAFT="$(mktemp)" || { echo "SOLEUR_QUESTIONNAIRE_HALT reason=draft-alloc-failed"
+                       echo "questionnaire-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
+                       exit 2; }
+trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+
+# Write the assembled document into "$DRAFT" HERE, in THIS fence, before the gate below — each fenced
+# block is a separate Bash call and shell state does not persist, so a draft written in another fence
+# is not visible to this one and the emptiness check below would refuse.
+#
+# Use a QUOTED heredoc delimiter (`<<'DOC_EOF'`). The founder's three Step 1 answers are free text and
+# can contain `$(…)`, backticks or `$VAR`; an unquoted delimiter would EXECUTE those substitutions on
+# the founder's machine and expand `$VAR` to empty — mutating the very text the sentinel is about to
+# scan, so a secret's shape can be destroyed by the shell rather than caught by the redactor.
+#   cat > "$DRAFT" <<'DOC_EOF'
+#   <the assembled questionnaire, verbatim — the Step 2 Context paragraph plus the questions>
+#   DOC_EOF
+
+# PLUGIN IDENTITY (ADR-179 decision 2). `[[ -r "$SENTINEL" ]]` alone is a SHAPE check, and
 # ADR-179 §(a) measured that shape as bypassable: with an ambient CLAUDE_PLUGIN_ROOT pointing at an
 # attacker-chosen directory a `test -d` preflight PASSED and the hostile payload executed. Verify the
 # plugin's IDENTITY, and halt in THIS arm — a sibling halt further down the fence does not make this
