@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Guard 3 (#8377, ADR-230) — the generated knowledge-base caches stay UNTRACKED.
+# Guard 3 (#8377, ADR-235) — the generated knowledge-base caches stay UNTRACKED.
 #
 # ── WHY A GUARD AND NOT JUST A .gitignore LINE ─────────────────────────────────────────────
 # .gitignore refuses an accidental `git add`, and that covers the common case. It does NOT
 # cover `git add -f`, and it does not cover a file that is ALREADY tracked: ignore rules are
 # silently inert for tracked paths, so re-adding one of these re-opens the entire defect class
-# ADR-230 closed — every advance of main conflicting with every open PR — with no error
+# ADR-235 closed — every advance of main conflicting with every open PR — with no error
 # anywhere. This suite is the thing that notices.
 #
 # The oracle is `git ls-files` (what is tracked) plus `git check-ignore` (what the rules match),
@@ -69,7 +69,7 @@ for p in "${CACHE_PATHS[@]}"; do
   if [[ -z "$tracked" ]]; then
     pass "untracked: $p"
   else
-    fail "TRACKED: $p — a generated cache is committed again; every main advance will conflict with every open PR (ADR-230)"
+    fail "TRACKED: $p — a generated cache is committed again; every main advance will conflict with every open PR (ADR-235)"
   fi
 done
 

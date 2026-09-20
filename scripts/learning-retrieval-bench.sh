@@ -30,11 +30,10 @@
 
 set -euo pipefail
 
-# XTRACE REFUSAL (#7797). This script binds ANTHROPIC_API_KEY, and `set -x` echoes every
-# expansion -- so a traced run prints the live credential into whatever captured the output.
-# Placed immediately after `set` so no credential-bearing line can execute ahead of it.
-# Required in full here rather than via the baseline: CI runs the linter in its `--changed`
-# form, which bypasses the baseline for every touched file (#8054).
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
 case "$-" in
   *x*)
     if [ -n "${ANTHROPIC_API_KEY:+x}${WILL_NEED_API_KEY:+x}" ]; then
@@ -48,7 +47,7 @@ esac
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEARNINGS_ROOT="${LEARNINGS_ROOT:-$REPO_ROOT/knowledge-base/project/learnings}"
 INDEX_PATH="${INDEX_PATH:-$REPO_ROOT/knowledge-base/INDEX.md}"
-# INDEX.md is an untracked cache (ADR-230), so refresh it before reading. ONLY when
+# INDEX.md is an untracked cache (ADR-235), so refresh it before reading. ONLY when
 # INDEX_PATH is the default: an explicitly-set INDEX_PATH names a corpus the caller owns —
 # typically a frozen snapshot so two bench runs are comparable — and regenerating over it
 # would silently change the thing being measured.
@@ -381,7 +380,7 @@ anthropic_paraphrase() {
     rc=$(printf '%s' "$resp" | awk -F: '/^__HTTP_STATUS__:/{print $2}' | tr -d ' ')
     body=$(printf '%s' "$resp" | sed '/^__HTTP_STATUS__:/d')
     if [[ "$rc" =~ ^2[0-9][0-9]$ ]]; then
-      text=$(printf '%s' "$body" | jq -r '.content[0].text // empty' 2>/dev/null || echo "")
+      text=$(printf '%s' "$body" | jq -r 'first(.content[]? | select(.type == "text") | .text | strings) // empty' 2>/dev/null || echo "")
       stop_reason=$(printf '%s' "$body" | jq -r '.stop_reason // empty' 2>/dev/null || echo "")
       if [[ -n "$text" ]]; then
         if [[ "$stop_reason" == "max_tokens" ]]; then

@@ -502,12 +502,12 @@ do
 done
 
 # ---------------------------------------------------------------------------
-# TS10 — the index carries no count header, and --check is gone (#8377 / ADR-230)
+# TS10 — the index carries no count header, and --check is gone (#8377 / ADR-235)
 #
 # The derived count header existed so the retired merge driver could rebuild a
 # line the default text merge would otherwise fold cleanly and wrongly. With
 # INDEX.md untracked there is no merge to resolve, no driver, and no reader of
-# the count — ADR-230 retires the whole surface. Asserted as ABSENCE of the
+# the count — ADR-235 retires the whole surface. Asserted as ABSENCE of the
 # literal the retired renderer emitted, not as presence of a replacement, so
 # re-introducing the header reddens this row.
 #

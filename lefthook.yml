@@ -383,7 +383,7 @@ pre-commit:
         echo "Move to knowledge-base/project/ before committing:" >&2
         echo "  knowledge-base/{brainstorms,learnings,plans,specs}/ -> knowledge-base/project/{brainstorms,learnings,plans,specs}/" >&2
         exit 1
-    # NO generate-kb-index STEP (#8377 / ADR-230). The KB index and its two facet
+    # NO generate-kb-index STEP (#8377 / ADR-235). The KB index and its two facet
     # files are untracked caches now, so there is nothing to stage and a
     # pre-commit regeneration would only write a snapshot that the next reader
     # re-derives anyway. scripts/ensure-kb-index.sh regenerates them on demand at

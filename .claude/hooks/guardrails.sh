@@ -355,7 +355,7 @@ fi
 #     underlines, ASCII rules), so only the terminator is free of false positives.
 #
 #     A PATH-CONDITIONAL ARM USED TO LIVE HERE and was retired with the thing it
-#     served (#8377 / ADR-230). A custom merge driver that exits non-zero makes git
+#     served (#8377 / ADR-235). A custom merge driver that exits non-zero makes git
 #     write no markers at all -- it marks the path `UU` and leaves ours-content in
 #     place, so the file reads as cleanly merged -- and the kb-index driver wrote a
 #     lone sentinel into knowledge-base/INDEX.md expressly so this guard would fire.

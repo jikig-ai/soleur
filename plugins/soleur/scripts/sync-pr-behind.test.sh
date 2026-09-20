@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Suite for plugins/soleur/scripts/sync-pr-behind.sh -- specifically its regenerable-conflict
-# arm (#8377, ADR-230).
+# arm (#8377, ADR-235).
 #
 # ── SCOPE, STATED HONESTLY ──────────────────────────────────────────────────────────────────
 # This covers the branch the resolver added and the two outcomes the caller must distinguish:

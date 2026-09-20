@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Guard 1 (#8377, ADR-230) — resolve-regenerable-conflicts.sh fails CLOSED.
+# Guard 1 (#8377, ADR-235) — resolve-regenerable-conflicts.sh fails CLOSED.
 #
 # ── THE PROPERTY ────────────────────────────────────────────────────────────────────────────
 # The resolver commits a merge ONLY when every conflicted path is a CONTENT conflict on a

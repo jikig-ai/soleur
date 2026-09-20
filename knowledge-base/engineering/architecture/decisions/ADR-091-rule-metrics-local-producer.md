@@ -38,3 +38,29 @@ The **authoritative producer** of `rule-metrics.json` is the **local compound fl
 ## Deferred to follow-up
 
 Tracked in one issue (`Ref #6042`, milestone `Post-MVP / Later`): (1) cross-worktree read-merge (aggregator reads all worktree logs read-only via `git worktree list --porcelain`, including the bare primary root); (2) a `first_observed` obsolescence age-proxy so never-fired-but-long-present rules become prunable; (3) the rule-prune proxy swap; (4) the read-only scheduled canary. Both simplification reviewers and both correctness reviewers converged on deferring these — they carry multiple concrete bugs best resolved against real accumulated data.
+
+## Amendment — 2026-09-20 (#8377, PR #8384)
+
+Amended by [ADR-235](./ADR-235-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md).
+
+**The local-producer model is unchanged and is the part that mattered.** `.claude/.rule-incidents.jsonl`
+stays gitignored, compound on the operator's machine stays the authoritative producer, and a
+fresh-checkout CI cron still cannot generate the metric because the inputs do not exist there.
+This ADR's rejection of committing raw incidents (privacy) and of CI aggregation both stand.
+
+**What changes: the AGGREGATE is no longer committed.** `knowledge-base/project/rule-metrics.json`
+is gitignored and regenerated on demand — `scripts/rule-prune.sh` runs the aggregator ahead of
+its own read. The reason is the one this ADR half-anticipated: a file rewritten by whichever
+worktree last ran the aggregator conflicts with every other open branch (20 of 20 recent merges
+touched it, #8301), and it was never more than one machine's snapshot in the first place.
+
+Retired with it:
+
+- The **"the committed metric reflects the committing worktree"** consequence. It is not a
+  caveat any more; there is no committed metric.
+- The deferred **read-only scheduled canary on the committed file**. There is no committed file
+  to watch. The shape check that ran in `ci.yml` went with it — untracked, the file is never
+  present in a CI checkout, so the step sat permanently on its skip path (ADR-151 dead
+  machinery). `scripts/rule-metrics-aggregate.test.sh` validates the shape where it is produced.
+- `.github/workflows/rule-metrics-aggregate.yml`, and the path's entry in the bot-PR composite
+  action's `ALLOWED_PATHS`.

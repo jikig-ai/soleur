@@ -64,7 +64,7 @@ screenshot-gate-failures/
 
 knowledge-base/private/
 
-# Generated knowledge-base caches (ADR-230). Each is a pure function of the tree, or -- for
+# Generated knowledge-base caches (ADR-235). Each is a pure function of the tree, or -- for
 # the rule-metrics aggregate -- of gitignored local incident data, so none of them is
 # committed. They were, until #8377: a committed generated file conflicts with every other
 # branch that touches the same tree, and GitHub's server-side merge cannot run the local merge

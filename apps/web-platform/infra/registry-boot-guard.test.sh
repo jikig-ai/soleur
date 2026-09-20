@@ -101,17 +101,56 @@ assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' 
 # the old anywhere grep false-passes a field named only in a comment). LINE= is one physical line.
 # shellcheck disable=SC2034  # used inside the eval'd `assert` condition strings below (shellcheck can't see it)
 LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
+# DERIVED, not restated. A hardcoded list is a claim about which posture fields exist and is
+# wrong the moment one is added: `store_mount_base` and `store_probe_rc` each sat outside this
+# loop until a review found them. Deriving means a new field joins the presence requirement by
+# existing. The floor keeps the derivation from silently returning nothing.
+POSTURE_NAMES="$(grep -oE 'store_[a-z_]+=' <<<"$LINE_ASSIGN" | sort -u | tr '\n' ' ')"
+if [ "$(grep -c . <<<"$(grep -oE 'store_[a-z_]+=' <<<"$LINE_ASSIGN" | sort -u)")" -lt 7 ]; then
+  printf '  FATAL: derived %s posture field name(s) from LINE=, floor is 7 -- the extraction broke.\n' \
+    "$(grep -c . <<<"$(grep -oE 'store_[a-z_]+=' <<<"$LINE_ASSIGN" | sort -u)")" >&2
+  exit 2
+fi
 assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 # zot_uptime_s + zot_last_err_src (#7247): the two ambiguity discriminators. Guarded here so
 # neither can be silently dropped — without zot_uptime_s, `exit_code=0 state_status=running` is
 # unfalsifiable mid-loop; without zot_last_err_src, a routine-traffic FALLBACK is indistinguishable
 # from a real match and a downstream alarm will print it as the crash cause (ADR-166).
+# store_* (#8386): the at-rest posture of the zot store. hcloud_volume.registry's LUKS claim is
+# asserted by a ledger row and verified by nothing that runs until these six leave the host, and
+# they are only readable off-box while they stay inside the TRUSTED region (the pin below).
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          zot_uptime_s= zot_last_err_src= err_redact_rev= \
+         $POSTURE_NAMES \
          oom_kills_5m= zot_last_err= boot_id= zot_image_digest= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
+# ── the producer<->consumer seam (#8386 review, structural-enumeration seat) ─────────────────
+# Nothing asserted that the grader's field constants equal the names the emitter ships. The
+# grader's own suite reads those constants FROM the grader, so a rename on either side keeps
+# BOTH suites green while the live grader reads __ABSENT__ on every row and reports "undelivered"
+# forever — the failure is silent, off-box, and indistinguishable from an undelivered emitter.
+# Derive both sides and compare SETS: a count would miss a substitution.
+PROBE_SRC="$SCRIPT_DIR/../../../scripts/followthroughs/registry-luks-live-8386.sh"
+if [ -r "$PROBE_SRC" ]; then
+  # shellcheck disable=SC2034  # read inside assert()'s eval'd condition string, which shellcheck cannot follow
+  EMITTED_NAMES="$(printf '%s\n' "$LINE_ASSIGN" | grep -oE 'store_[a-z_]+=' | sed 's/=$//' | sort -u)"
+  # shellcheck disable=SC2034  # read inside assert()'s eval'd condition string, which shellcheck cannot follow
+  CONSUMED_NAMES="$(grep -oE '^F_[A-Z]+="store_[a-z_]+"' "$PROBE_SRC" | sed -E 's/.*"(store_[a-z_]+)"/\1/' | sort -u)"
+  assert "the emitter ships at least one store_* field (extraction non-vacuity)" \
+    "[ -n \"\$EMITTED_NAMES\" ]"
+  assert "the grader names at least one store_* field (extraction non-vacuity)" \
+    "[ -n \"\$CONSUMED_NAMES\" ]"
+  # Every name the GRADER reads must be a name the EMITTER ships. The converse is deliberately
+  # not required: store_mount_base is emitted for off-box auditability of a __NOMATCH__ row and
+  # is producer-only by design (CTO ruling, #8386 review).
+  assert "every field the grader reads is a field the emitter ships" \
+    "[ -z \"\$(comm -23 <(printf '%s\\n' \"\$CONSUMED_NAMES\") <(printf '%s\\n' \"\$EMITTED_NAMES\"))\" ]"
+else
+  assert "the grader source is readable (the seam assertion above is not vacuous)" "false"
+fi
+
 # zot_last_err MUST be the LAST field. This is a SECURITY invariant, not cosmetics:
 # scripts/lib/zot-telemetry-parse.sh strips `zot_last_err=` and everything after it so a crafted
 # zot log line cannot spoof boot_id=/exit_code=137. Any field emitted after it is (a) outside the
@@ -120,6 +159,51 @@ done
 # it had not.
 assert "zot_last_err is the LAST field in the LINE (trusted-region boundary)" \
   "[[ \"\$LINE_ASSIGN\" == *'zot_last_err=\$ZOT_LAST_ERR\"' ]]"
+
+# --- #8386: the posture block's PATH append is a LITERAL, and that is a SECURITY constraint ---
+# The heartbeat's cron line is `*/5 * * * * root ... doppler run --project soleur-registry
+# --config prd -- /usr/local/bin/zot-disk-heartbeat.sh`, and `doppler run` injects EVERY secret in
+# that config as an environment variable. An env-overridable sbin list would therefore let anyone
+# who can write a secret into soleur-registry/prd append a directory to ROOT's PATH -- and because
+# cron's own PATH (/usr/bin:/bin) carries neither cryptsetup nor blkid, that directory would win
+# the FIRST resolution of both, every five minutes. The suite's seams live at RENDER time instead
+# (zot-disk-heartbeat-redaction.test.sh substitutes this literal), so BOTH halves are pinned here:
+# the literal is present, and no env read replaces it.
+# PROPERTY, not a name ban (#8386 review, test-design seat). The two name bans below are kept as
+# regression pins for the specific seams that were proposed and rejected, but they are a claim
+# about which SPELLINGS an attacker would choose: a SECOND `PATH=` line carrying any other
+# `${VAR:-/opt/x}` default passes both bans while winning root's first resolution every five
+# minutes. So the load-bearing assertion is over every PATH assignment in the block: each must
+# PREPEND the trusted dirs (so an injected `PATH` secret can only ever append) and must expand
+# nothing but $PATH itself.
+# The heartbeat's write_files block, scoped so the assertions below cannot be satisfied by a
+# PATH= or an LC_ALL= belonging to a DIFFERENT script in the same template (this file carries
+# several). Non-vacuity is asserted before anything reads it: an empty block would make every
+# `! grep` below pass and every `grep -q` fail for the wrong reason.
+HB_BLOCK="$(awk '/^  - path: \/usr\/local\/bin\/zot-disk-heartbeat\.sh$/{f=1} f&&/^  - path: /&&!/zot-disk-heartbeat\.sh$/{exit} f' "$CI")"
+if [ -z "$HB_BLOCK" ]; then
+  printf '  FATAL: could not extract the zot-disk-heartbeat.sh write_files block from %s -- every PATH/LC_ALL assertion below would be vacuous.\n' "$CI" >&2
+  exit 2
+fi
+# shellcheck disable=SC2034  # read inside assert()'s eval'd condition string
+HB_PATH_LINES="$(grep -E '^[[:space:]]*PATH=' <<<"$HB_BLOCK" || true)"
+assert "#8386 the heartbeat sets PATH at all (extraction non-vacuity)" \
+  "[ -n \"\$HB_PATH_LINES\" ]"
+assert "#8386 exactly ONE PATH assignment in the heartbeat block" \
+  "[ \"\$(grep -c . <<<\"\$HB_PATH_LINES\")\" -eq 1 ]"
+assert "#8386 that assignment PREPENDS the trusted dirs (an injected PATH secret cannot win first resolution)" \
+  "grep -qF 'PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' <<<\"\$HB_PATH_LINES\""
+assert "#8386 that assignment expands NOTHING but PATH (no \${VAR:-dir} seam of any spelling)" \
+  "[ -z \"\$(grep -oE '[\$][\$]?[{]?[A-Za-z_][A-Za-z0-9_]*' <<<\"\$HB_PATH_LINES\" | grep -vE '^[\$][\$]?[{]?PATH\$' || true)\" ]"
+assert "#8386 the heartbeat pins LC_ALL=C (its guards are locale-defined character classes)" \
+  "grep -qF 'export LC_ALL=C' <<<\"\$HB_BLOCK\""
+assert "#8386 NO ZOT_SBIN_DIRS env seam reaches the script (root-RCE under doppler run)" \
+  "! grep -q 'ZOT_SBIN_DIRS' '$CI'"
+assert "#8386 NO ZOT_BYID_DIR env seam reaches the script (a config write could forge the devid match)" \
+  "! grep -q 'ZOT_BYID_DIR' '$CI'"
+# The by-id reverse map walks a LITERAL Hetzner-namespaced glob for the same reason.
+assert "#8386 the by-id reverse map is scoped to the Hetzner namespace, as a literal" \
+  "grep -qF '/dev/disk/by-id/scsi-0HC_Volume_*' '$CI'"
 
 # --- #6497: the htpasswd-divergence probe -------------------------------------------------
 # zot-disk-heartbeat.sh runs `set -u`. A BARE "$ZOT_PULL_TOKEN" on an unset token raises
@@ -457,7 +541,7 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # assertions); #7960 adds 1 (the `err_redact_rev=` field-presence row). Measured, not tallied by
 # hand: the suite runs 105, and leaving the floor at 104 left #7960's own assertion deletable at
 # green -- exactly the slack this comment warns about.
-MIN_ASSERTIONS=105
+MIN_ASSERTIONS=123
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Unit suite for scripts/ensure-kb-index.sh — the regen-if-stale gate in front of
-# the untracked knowledge-base index (#8377, ADR-230). Implements Guard 2.
+# the untracked knowledge-base index (#8377, ADR-235). Implements Guard 2.
 #
 # ── WHAT THIS PINS, AND WHY A "DOES IT RUN" TEST WOULD BE WORTHLESS ─────────────────────────
 # The SUT exists because INDEX.md, kb-tags.txt and kb-categories.txt stopped being committed.

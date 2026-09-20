@@ -46,7 +46,7 @@ the fingerprint probe (`git ls-files -s` + `git status --porcelain -uall`, both 
 | FR5: `rule-prune.sh` "runs the aggregator before reading" | It reads the committed file cold: `rule-prune.sh:55` `[[ -f "$METRICS" ]] \|\| { …; exit 2; }` (`:53` is the `METRICS=` assignment — insert the aggregator call between them) | Add an aggregator call ahead of the read, skipped when `RULE_METRICS_ROOT` is set; discard a partial write on non-zero exit |
 | FR5: CI `rule-metrics-shape` keeps its skip path | Once untracked the file is never present in CI; the step (`ci.yml:269-290`) is dead machinery (ADR-151 class) | Delete the step |
 | FR6: resolver lives in `sync-pr-behind.sh` + `pre-merge-rebase.sh` | ship Phase 7's DIRTY arm (`ship/SKILL.md:2299-2309`) inlines its own `git merge-tree` and never calls `sync-pr-behind.sh` | ONE script (`plugins/soleur/scripts/resolve-regenerable-conflicts.sh`), three call sites |
-| FR6: a manifest of regenerable artifacts | One product artifact exists; a manifest is speculative generality (advisor consult) | Hardcode the single path→command pair in the resolver; ADR-230 says how a second one is added |
+| FR6: a manifest of regenerable artifacts | One product artifact exists; a manifest is speculative generality (advisor consult) | Hardcode the single path→command pair in the resolver; ADR-235 says how a second one is added |
 | FR3: "the SessionStart entry" | Two registries: `.claude/settings.json:48-50` and `.devin/config.json:22-25`, plus the audited row `.claude/hooks/devin-dispositions.tsv:111` (ADR-223) | Edit all three; `devin-matcher-parity.test.sh` stays green |
 | FR4: delete `scripts/lib/kb-index-render.sh` | `kb_render_index()` (`:35-57`) is the whole row/domain renderer; `generate-kb-index.sh:41` sources it | Inline the header-less renderer, then delete the lib |
 | FR7: transition is a documented `git rm` | An open PR's sync runs the **branch's** copy of `sync-pr-behind.sh` / `pre-merge-rebase.sh`, which predates this change, so no resolver rule can automate the first sync from the branch side | Keep the one-liner; no sweep script (both simplification reviewers cut it) |
@@ -59,7 +59,7 @@ the fingerprint probe (`git ls-files -s` + `git status --porcelain -uall`, both 
 §Alternatives rejected lists "Stop committing the generated artifacts entirely" as deferred on
 scope, not merits. ADR-091 rejected committing raw incidents (privacy) and CI-zero; untracking
 the *aggregate* contradicts neither. No cited symbol was missing on `origin/main`. Next free ADR
-ordinal on `origin/main`: **ADR-230** (provisional — re-verify at ship). `git merge-tree
+ordinal on `origin/main`: **ADR-235** (provisional — re-verify at ship). `git merge-tree
 --write-tree` (git ≥ 2.38) is already what `sync-pr-behind.sh:63` and ship Phase 7 use, so the
 resolver adds no new git-version precondition.
 
@@ -87,7 +87,7 @@ resolver adds no new git-version precondition.
 - "`regen-resolve` lock on the resolver" → P4 → the clean-tree/no-merge precondition plus git's `index.lock` already serialize it, fail-closed; no reviewer could name two call sites racing on one tree.
 - "Distinct resolver exit 1 vs exit 2" → P4 → no call site branches on the difference; collapsed to 0 / non-zero with the diagnosis in stderr.
 - "`scripts/transition-untrack-caches.sh`" → no Property (P1 is forward-looking) → one documented `git rm --cached` per affected branch.
-- "Web-platform renders the C4 model at sync time instead of committing it" → P4 → a product-architecture change to the customer read path (`c4-render.ts` commits rendered bytes by design, #4976); out of scope, recorded in ADR-230 alternatives.
+- "Web-platform renders the C4 model at sync time instead of committing it" → P4 → a product-architecture change to the customer read path (`c4-render.ts` commits rendered bytes by design, #4976); out of scope, recorded in ADR-235 alternatives.
 
 **Relevant files.**
 
@@ -102,7 +102,7 @@ resolver adds no new git-version precondition.
 
 **Institutional learnings applied.**
 
-- `2026-09-19-a-generated-artifact-in-my-diff-made-every-landing-on-main-a-conflict.md` — names INDEX.md and rule-metrics.json as the DIRTY mechanism; cite in ADR-230.
+- `2026-09-19-a-generated-artifact-in-my-diff-made-every-landing-on-main-a-conflict.md` — names INDEX.md and rule-metrics.json as the DIRTY mechanism; cite in ADR-235.
 - `2026-07-06-aggregator-must-run-where-its-gitignored-input-lives.md`, `2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`, `2026-06-16-infra-test-orphan-suites-and-node-options-env-file-clobber.md` — a new `scripts/*.test.sh` is an orphan until `test-all.sh` registers it.
 - `2026-06-11-posttooluse-hooks-that-write-files-need-atomic-restore-symlink-refusal-and-orphan-gate-exemption.md` — `mktemp` + `mv -f`, symlink refusal, re-run the source command for the write.
 - `2026-06-18-likec4-exits-0-on-syntax-error-gate-on-diagnostic-not-just-element-count.md` — the regen script already gates on diagnostics + element count; the resolver trusts its exit code.
@@ -118,7 +118,7 @@ resolver adds no new git-version precondition.
 
 **External research:** skipped — strong local context; every mechanism is repo-internal bash/git.
 
-**Advisor consult (Phase 4.5).** Accepted: drop the manifest; move the transition out of prose. Rejected with reason: "regenerate `model.likec4.json` on `main` only" and "web-platform renders at sync" — the first re-creates the `main`-advance cost for a ~1.2/day file with a bypass-actor dependency; the second changes the customer read path (out of scope, recorded as an ADR-230 alternative). The transition cannot be automated from the branch side (reconciliation row FR7), so it stayed a documented one-liner rather than becoming a resolver rule — and the sweep script the advisor's point implied was then cut by both simplification reviewers.
+**Advisor consult (Phase 4.5).** Accepted: drop the manifest; move the transition out of prose. Rejected with reason: "regenerate `model.likec4.json` on `main` only" and "web-platform renders at sync" — the first re-creates the `main`-advance cost for a ~1.2/day file with a bypass-actor dependency; the second changes the customer read path (out of scope, recorded as an ADR-235 alternative). The transition cannot be automated from the branch side (reconciliation row FR7), so it stayed a documented one-liner rather than becoming a resolver rule — and the sweep script the advisor's point implied was then cut by both simplification reviewers.
 
 **SpecFlow (Phase 3).** 11 findings folded: per-file absence check before staleness (§1), symlink refusal (§1), temp cleanup (§1), set-atomicity accepted explicitly (Technical Considerations), timestamp-preserving edits caught by the content fingerprint (§1), resolver concurrency (§6 — answered by the precondition rather than a lock), push ownership (§6), modify/delete transition (§8), partial aggregate discard (Phase 3), `prepare` blast radius via `--soft` (§1, §3).
 
@@ -212,7 +212,7 @@ a single-line JSON that conflicts whenever two PRs edit `.c4` sources.
      rc 0 → continue as merged), ship Phase 7 DIRTY arm (before the poll exit; rc 0 → push, keep
      polling). No manifest → not applicable here (customer repos have no `regenerate-c4-model.sh`;
      the resolver exits non-zero when the command is absent).
-7. **ADR-230** — "Generated artifacts: caches are untracked and regenerated on demand; products
+7. **ADR-235** — "Generated artifacts: caches are untracked and regenerated on demand; products
    are committed and regenerated on conflict" — supersedes ADR-210, amends ADR-091.
 8. **Transition**: one line in `merge-pr` and `ship` — an open branch that still tracks the caches
    hits a one-time modify/delete conflict on its next sync, resolved with
@@ -354,7 +354,7 @@ discoverability_test:
 
 ### ADR
 
-Create **ADR-230 — Generated artifacts: caches are untracked and regenerated on demand; products are committed and regenerated on conflict** via `soleur:architecture` (ordinal provisional; ship's ADR-Ordinal Collision Gate re-verifies). Decision: classify every generated file as a *cache* (derivable from the tree or from gitignored local data → untracked, regenerated by a staleness-checked script at read/start time) or a *product* (read by a consumer that cannot regenerate it → committed, regenerated on conflict by `resolve-regenerable-conflicts.sh`, whose resolvable set is edited with the ADR, not a manifest); no generated artifact is resolved by a merge driver, because the server-side merge cannot run one. **Supersedes ADR-210** (status → `Superseded by ADR-230`; note that its regeneration-diff reasoning and the ADR-174 predicate remain valid history). **Amends ADR-091**: the aggregate is no longer committed; the "committed metric reflects the committing worktree" consequence and the deferred "read-only scheduled canary on the committed file" are retired; the local producer model is unchanged. Alternatives table: option 1 (regen on `main`), count-header-only removal, driver + resolver for INDEX.md, untracking `model.likec4.json`, web-platform rendering at sync time, a regenerable-artifacts manifest.
+Create **ADR-235 — Generated artifacts: caches are untracked and regenerated on demand; products are committed and regenerated on conflict** via `soleur:architecture` (ordinal provisional; ship's ADR-Ordinal Collision Gate re-verifies). Decision: classify every generated file as a *cache* (derivable from the tree or from gitignored local data → untracked, regenerated by a staleness-checked script at read/start time) or a *product* (read by a consumer that cannot regenerate it → committed, regenerated on conflict by `resolve-regenerable-conflicts.sh`, whose resolvable set is edited with the ADR, not a manifest); no generated artifact is resolved by a merge driver, because the server-side merge cannot run one. **Supersedes ADR-210** (status → `Superseded by ADR-235`; note that its regeneration-diff reasoning and the ADR-174 predicate remain valid history). **Amends ADR-091**: the aggregate is no longer committed; the "committed metric reflects the committing worktree" consequence and the deferred "read-only scheduled canary on the committed file" are retired; the local producer model is unchanged. Alternatives table: option 1 (regen on `main`), count-header-only removal, driver + resolver for INDEX.md, untracking `model.likec4.json`, web-platform rendering at sync time, a regenerable-artifacts manifest.
 
 ### C4 views
 
@@ -397,7 +397,7 @@ The ADR describes the target state and ships in this PR (no soak).
 
 ### Phase 5 — Decision record and sweeps (P6)
 
-- ADR-230 via `soleur:architecture`; ADR-210 → superseded; ADR-091 amended (§Consequences + §Deferred).
+- ADR-235 via `soleur:architecture`; ADR-210 → superseded; ADR-091 amended (§Consequences + §Deferred).
 - Sweep §Verification sections and ticked checkboxes that assert the deleted mechanism (ADR-210 §Verification gets the supersession note rather than a rewrite).
 - Zero-hit sweeps (AC5).
 - Comment on #6109 at ship: §1's `merge=ours` item is moot; the rest unchanged.
@@ -408,7 +408,7 @@ The ADR describes the target state and ships in this PR (no soak).
 - `plugins/soleur/scripts/resolve-regenerable-conflicts.sh`, `plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh`
 - `plugins/soleur/scripts/sync-pr-behind.test.sh` (if no suite exists)
 - `plugins/soleur/test/kb-caches-untracked.test.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-230-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-235-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md`
 
 ## Files to Edit
 
@@ -442,7 +442,7 @@ The ADR describes the target state and ships in this PR (no soak).
 | Drop only the `> Total files:` header | Adjacent same-day row inserts still conflict; the driver and AC17 remain. |
 | Keep the driver and add the resolver for `INDEX.md` too | Every branch conflicts with every other on `main`; automating resolution keeps the DIRTY state and the check restarts. |
 | Untrack `model.likec4.json` as well | The web-platform C4 viewer reads it from synced repos without the compiler; its write path commits rendered bytes by design (#4976). |
-| Web-platform renders the C4 model at sync time | Changes the customer read path in `apps/web-platform/server/` — a product-architecture decision outside this PR; recorded in ADR-230. |
+| Web-platform renders the C4 model at sync time | Changes the customer read path in `apps/web-platform/server/` — a product-architecture decision outside this PR; recorded in ADR-235. |
 | Regenerate `model.likec4.json` on `main` only | Same `main`-advance and bypass-actor cost as option 1, for a file whose conflicts are rare (concurrent `.c4` edits only). |
 | A `regenerable-artifacts.tsv` manifest | One member; a manifest invites re-tracking regenerable files and adds a parse surface. |
 | Resolver auto-`git rm`s the caches on modify/delete | The first sync of an open PR runs the branch's pre-change scripts; the rule would never execute where it is needed. |
@@ -465,8 +465,28 @@ The ADR describes the target state and ships in this PR (no soak).
        ':!knowledge-base/project/brainstorms/**'
   ```
 
-  Expected: **zero hits.** The six exclusions are the historical record (archive, learnings, ADRs,
-  plans, specs, brainstorms) which must keep citing the retired mechanism. Measured on the
+  Expected (**amended at work time — the original "zero hits" is unachievable**): every hit is
+  either (a) prose that records the retirement ("X was deleted by #8377"), (b) the regression
+  guard that must quote the retired literal in order to assert its ABSENCE, or (c) the compiled
+  C4 artifact carrying (a) from its source. **Measured 2026-09-20: 17 hits, all three classes,
+  none instructing the retired mechanism.**
+
+  Why the original form could never be green: retiring a mechanism and DOCUMENTING that you
+  retired it are the same commit, and the sweep's literals are exactly the words that
+  documentation must use. `generate-kb-index.test.sh` is the sharpest case — it greps for
+  `> Total files:` to prove the header is gone, so the assertion that enforces the retirement is
+  itself a hit. Obfuscating the literal to satisfy the grep would weaken the assertion to satisfy
+  a checker, which is the inversion the AC exists to prevent. The AC's real intent is "no LIVE
+  surface still INSTRUCTS or IMPLEMENTS the retired mechanism", and that is what was verified.
+
+  Dispositions: `bot-pr-with-synthetic-checks/CHANGELOG.md` (4 — an append-only record; the two
+  new lines describe the removal, the two old ones were accurate when written),
+  `weakness-miner.yml`, `infra/github/README.md`, `audit-bot-codeql-coverage.sh`,
+  `lint-bot-synthetic-completeness.sh`, `lint-bot-statuses.md`,
+  `tests/scripts/test-audit-bot-codeql-coverage.sh` (2) — all class (a);
+  `plugins/soleur/test/generate-kb-index.test.sh` (3) — class (b);
+  `model.c4` + `model.likec4.json` — class (c); `brainstorm/SKILL.md:235` — a forward-looking
+  rule added BY #8377 that cites the retired header as its worked example. Measured on the
   pre-change tree this command returns 127 lines across 30 files, and every one of those 30 is in
   this plan's Files-to-Edit/Delete set — that equivalence is the AC. An earlier draft excluded only
   `specs/feat-kb-index-untrack/**` and asserted zero; that form returns unrelated sibling-spec prose
@@ -478,13 +498,13 @@ The ADR describes the target state and ships in this PR (no soak).
 - [ ] AC8 `scripts/rule-prune.sh` runs the aggregator before its `-f` check when `RULE_METRICS_ROOT` is unset, and removes the file + exits 2 on aggregator failure (both suite cases green); `compound/SKILL.md` no longer stages `rule-metrics.json`; `rule-metrics-aggregate.yml` deleted; `ci.yml` has no `rule-metrics-shape` step; `action.yml` `ALLOWED_PATHS` has one entry and the comments that reasoned from two are updated.
 - [ ] AC9 `plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh` green, implementing Guard 1 rows 1–8, H1, P1; `sync-pr-behind.sh`, `pre-merge-rebase.sh` and ship Phase 7's DIRTY arm each call the resolver (three `git grep -n resolve-regenerable-conflicts` hits in those files); the resolver never pushes (`git grep -c 'git push' plugins/soleur/scripts/resolve-regenerable-conflicts.sh` prints nothing and exits 1 — `grep -c` on a no-match single file emits no `0`).
 - [ ] AC10 In a fixture where only `model.likec4.json` conflicts, `bash plugins/soleur/scripts/sync-pr-behind.sh` completes the merge with a regenerated model and pushes; with a non-resolvable conflict it exits 6 with a clean tree; with a rejected push after a resolved merge it exits 7 and the merge commit remains local.
-- [ ] AC11 `ADR-230-*.md` exists with `Supersedes: ADR-210`; ADR-210 status reads `Superseded by ADR-230`; ADR-091 carries a dated amendment; `check-adr-ordinals.sh` green; the ordinal was probed across every pushed ref at work time and again immediately before merge, with a **per-ref loop** — `git ls-tree` takes exactly ONE tree-ish and silently treats extra refs as (non-matching) pathspecs, so a single multi-ref invocation checks one arbitrary ref and reports clean:
+- [ ] AC11 `ADR-235-*.md` exists with `Supersedes: ADR-210`; ADR-210 status reads `Superseded by ADR-235`; ADR-091 carries a dated amendment; `check-adr-ordinals.sh` green; the ordinal was probed across every pushed ref at work time and again immediately before merge, with a **per-ref loop** — `git ls-tree` takes exactly ONE tree-ish and silently treats extra refs as (non-matching) pathspecs, so a single multi-ref invocation checks one arbitrary ref and reports clean:
 
   ```bash
   git fetch --all --prune
   for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do
     git ls-tree -r --name-only "$r" -- knowledge-base/engineering/architecture/decisions/
-  done | grep 'ADR-230-' | sort -u
+  done | grep 'ADR-235-' | sort -u
   ```
 
   Expected: only this PR's own filename (or nothing, before it is committed).
@@ -521,7 +541,7 @@ The ADR describes the target state and ships in this PR (no soak).
 - ~20 open PRs carry the caches; each hits a one-time modify/delete conflict on its next sync, resolved by the documented `git rm --cached`. Documented, low risk.
 - `c4-count-parity` may move when a workflow is deleted — handled in Phase 3.
 - Resolver depends on `npx -y likec4@1.50.0` being reachable where the sync runs (operator host: yes; hosted ship clone: verify at work time — if absent the regen exits 1 and the caller surfaces, never a silent commit).
-- ADR-230 ordinal may collide with a sibling PR — ship's collision gate renumbers; sweep the plan and tasks for the old ordinal.
+- ADR-235 ordinal may collide with a sibling PR — ship's collision gate renumbers; sweep the plan and tasks for the old ordinal.
 - Push-after-resolve can be rejected when `main` moves again — pre-existing strict-up-to-date behaviour, handled by the callers' existing paths; out of scope.
 
 ## Domain Review

@@ -4,7 +4,7 @@
 #
 # Usage: bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh <base-ref>
 #
-# WHY THIS EXISTS (#8377, ADR-230). A generated file that is COMMITTED conflicts with every
+# WHY THIS EXISTS (#8377, ADR-235). A generated file that is COMMITTED conflicts with every
 # other branch that regenerates it, and side-picking is always wrong: `--ours` and `--theirs`
 # each produce an artifact that matches neither side's sources. The correct resolution is to
 # take the merged SOURCES and re-run the generator over them.
@@ -63,7 +63,7 @@ git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || na "base ref '$BAS
 # ── THE RESOLVABLE SET ─────────────────────────────────────────────────────────────────────
 # One hardcoded path -> command pair. NOT a manifest file, deliberately: a manifest is a
 # parse surface, and worse, it invites re-tracking generated files by making the list feel
-# cheap to extend. Adding a second member is an edit HERE plus an ADR-230 amendment, so the
+# cheap to extend. Adding a second member is an edit HERE plus an ADR-235 amendment, so the
 # cache-vs-product question gets asked each time.
 #
 # RESOLVABLE_OVERRIDE is a TEST SEAM ONLY (a TSV of `path<TAB>command`), used by this script's

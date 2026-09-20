@@ -29,6 +29,22 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+# Never touch an operation this script did not start (#8339): an unconditional
+# `git merge --abort` below would discard an operator's staged resolution of a
+# merge/rebase/cherry-pick/revert in progress — measured on real git. The same
+# precondition guards the ship / merge-pr Phase 7 fences.
+git_dir="$(git rev-parse --git-dir)"
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+   || [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" \
+         || -f "$git_dir/CHERRY_PICK_HEAD" || -f "$git_dir/REVERT_HEAD" ]]; then
+  echo "[pr-behind-sync] merge in progress — a merge/rebase/cherry-pick/revert is in progress on $BRANCH; not touching it. Finish or abort it by hand, then re-run." >&2
+  exit 9
+fi
+if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
+  echo "[pr-behind-sync] ERROR: HEAD is detached — git push would have no branch to update; check out the PR branch first" >&2
+  exit 9
+fi
 attempt=0
 
 while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
@@ -60,7 +76,7 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   # Key on merge-tree's exit code; on failure its stdout carries the real conflicted paths
   # (no merge is in progress, so `git diff --diff-filter=U` could only ever print nothing).
   if ! mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
-    # REGENERABLE-ARTIFACT CONFLICT (ADR-230). One generated file is still committed --
+    # REGENERABLE-ARTIFACT CONFLICT (ADR-235). One generated file is still committed --
     # model.likec4.json, which the web-platform C4 viewer reads out of repos that ship no
     # likec4 compiler -- so it conflicts whenever two branches touch the .c4 sources. The
     # resolver completes the merge and regenerates it from the MERGED sources, which is the

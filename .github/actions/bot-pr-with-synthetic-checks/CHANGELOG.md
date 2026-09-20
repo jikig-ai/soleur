@@ -6,7 +6,7 @@ their input set is unchanged. See `action.yml` for the live contract.
 
 ## 2026-09-20 — ALLOWED_PATHS drops rule-metrics.json (#8377)
 
-`knowledge-base/project/rule-metrics.json` was removed from `ALLOWED_PATHS`. ADR-230
+`knowledge-base/project/rule-metrics.json` was removed from `ALLOWED_PATHS`. ADR-235
 reclassified it as an untracked cache (it aggregates gitignored local incident data per
 ADR-091, so the committed copy only ever reflected the worktree that last ran the
 aggregator), and `.github/workflows/rule-metrics-aggregate.yml` — the only workflow that

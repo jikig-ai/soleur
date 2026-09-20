@@ -483,7 +483,7 @@ Nothing above is an unresolved conflict."
 assert_run "conflict: single quoted marker in prose allows" "<none>" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 
-# THE RETIRED SENTINEL ARM, pinned as ABSENCE (#8377 / ADR-230).
+# THE RETIRED SENTINEL ARM, pinned as ABSENCE (#8377 / ADR-235).
 #
 # Until this change the awk carried an extra rule: a lone `<<<<<<< kb-index:`
 # opener denied, but ONLY in knowledge-base/INDEX.md, because the retired merge

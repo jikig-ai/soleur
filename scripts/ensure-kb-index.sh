@@ -9,8 +9,8 @@
 #            SessionStart hooks, where a malformed knowledge-base/ must not break
 #            `bun install` or refuse to start a session.
 #
-# WHY THIS SCRIPT EXISTS (#8377, ADR-230). knowledge-base/INDEX.md, kb-tags.txt and
-# kb-categories.txt are CACHES: pure functions of the tree, so ADR-230 untracks them and
+# WHY THIS SCRIPT EXISTS (#8377, ADR-235). knowledge-base/INDEX.md, kb-tags.txt and
+# kb-categories.txt are CACHES: pure functions of the tree, so ADR-235 untracks them and
 # regenerates them on demand instead of committing them. That removed a whole defect class —
 # a file that is never committed can never conflict, and these three conflicted on almost
 # every advance of main (42 of 71 first-parent commits in the 7 days before the change) —
@@ -177,7 +177,7 @@ for _t in "${TARGETS[@]}"; do
 done
 
 # PUBLISH. Per-file atomic via `mv -f` within one filesystem; the three are NOT swapped as a
-# set. Accepted deliberately (ADR-230): two sessions regenerating in one worktree can leave a
+# set. Accepted deliberately (ADR-235): two sessions regenerating in one worktree can leave a
 # reader INDEX.md from generation A beside kb-tags.txt from generation B. Both derive from
 # near-identical trees and are consumed independently — rows versus facet validation — and
 # the next read regenerates. A lock to close that costs more than the race does.

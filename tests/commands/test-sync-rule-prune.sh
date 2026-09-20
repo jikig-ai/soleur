@@ -500,7 +500,7 @@ if [[ ! -f "$SCRIPT" ]]; then
 fi
 
 
-# ── AGGREGATOR-BEFORE-READ (#8377 / ADR-230) ───────────────────────────────────────────────
+# ── AGGREGATOR-BEFORE-READ (#8377 / ADR-235) ───────────────────────────────────────────────
 #
 # rule-metrics.json is no longer committed: it aggregates gitignored local incident data
 # (ADR-091), so the committed copy only ever reflected whichever worktree last ran the

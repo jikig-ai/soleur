@@ -261,7 +261,7 @@
 45	plugins/soleur/skills/community/test/github-community.test.sh
 7	plugins/soleur/skills/compound/scripts/token-efficiency-report.sh
 23	plugins/soleur/skills/compound/test/phase-16.test.sh
-10	plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh
+19	plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh
 11	plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh
 1	plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh
 3	plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
@@ -284,6 +284,7 @@
 2	plugins/soleur/test/fixture-env-adoption.test.sh
 1	plugins/soleur/test/fixture-relative-assert.test.sh
 2	plugins/soleur/test/git-fixture-env.mutation.sh
+5	plugins/soleur/test/go-session-gates.test.sh
 4	plugins/soleur/test/harvest-debt.test.sh
 3	plugins/soleur/test/hook-git-env-coverage.mutation.sh
 14	plugins/soleur/test/lint-bot-synthetic-completeness.test.sh
@@ -378,7 +379,7 @@
 1	scripts/skill-freshness-aggregate.test.sh
 10	scripts/skill-security-scan-step-body.test.sh
 2	scripts/sweep-followthroughs.sh
-90	scripts/sweep-followthroughs.test.sh
+93	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh

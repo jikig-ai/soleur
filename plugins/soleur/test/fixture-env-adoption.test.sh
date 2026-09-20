@@ -688,7 +688,7 @@ fi
 # treatment as the 20 -> 22 and 22 -> 24 bumps: this root is out of scope by construction, so the
 # ceiling moves with the reason recorded rather than converting someone else's new suite mid-flight.
 # 25 -> 23 on 2026-09-20 (#8377). The 22 -> 24 bump above was taken FOR
-# kb-index-merge-driver.test.sh and kb-index-merge-driver-registration.test.sh; ADR-230 retires
+# kb-index-merge-driver.test.sh and kb-index-merge-driver-registration.test.sh; ADR-235 retires
 # the merge driver those two covered and both suites are deleted in this PR, so the ceiling
 # gives back exactly what they took. This is the ratchet's own instruction ("lower the ceiling
 # when you convert one") applied to a DELETION rather than a conversion — the effect on the gate

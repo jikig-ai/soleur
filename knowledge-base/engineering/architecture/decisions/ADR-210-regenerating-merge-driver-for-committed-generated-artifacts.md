@@ -1,6 +1,6 @@
 # ADR-210 — A committed generated artifact is merged by re-deriving it, never by picking a side
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-235](./ADR-235-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md)
 - **Date:** 2026-09-08
 - **PR:** #7938
 - **Issue:** #7935
@@ -201,3 +201,28 @@ at the next `startup|resume|clear|compact`, which is precisely the window this c
 registration failure. `--check` is what closes all four downstream, and its only real-tree caller is
 the `AC17` case in `plugins/soleur/test/kb-index-merge-driver.test.sh`, reached through `SUITE_GLOBS`
 in `scripts/test-all.sh` — there is no step for it in `.github/workflows/` or `lefthook.yml`.
+
+## Superseded — 2026-09-20 (#8377, PR #8384)
+
+Superseded by [ADR-235](./ADR-235-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md).
+`knowledge-base/INDEX.md` is no longer committed, so there is no merge to resolve and the
+driver, its installer, its render library and the root `.gitattributes` are deleted.
+
+**What this ADR got right, and why it is worth reading anyway.** The decision it records —
+that a generated artifact is merged by RE-DERIVING it, never by picking a side — is correct and
+is exactly what ADR-235's `resolve-regenerable-conflicts.sh` does for the one artifact that is
+still committed. The ADR-174 row-eligibility predicate it refuses to re-implement is still the
+generator's, still un-duplicated. Its observation that git gives NO signal when `.gitattributes`
+names an unregistered driver remains true and is a good reason to distrust driver-based
+resolution generally.
+
+**What it got wrong** was the scope of the mechanism, not its logic: a merge driver lives in
+local `git config`, so GitHub's server-side merge cannot run one. The driver was therefore
+inert on `gh pr update-branch`, the Update-branch button, and every strict-up-to-date
+auto-merge — which is where most merges of this file actually happened. ADR-210's own
+Alternatives section lists "stop committing the generated artifacts entirely" and defers it on
+scope; that deferred option is what ADR-235 takes.
+
+**§Verification above is retained as written and is no longer runnable.** It exercises scripts
+this change deletes. It is kept rather than rewritten because a superseded record's verification
+is evidence about what was true then.

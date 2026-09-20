@@ -52,7 +52,7 @@ done
 ROOT="${RULE_METRICS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 METRICS="$ROOT/knowledge-base/project/rule-metrics.json"
 
-# ── BUILD THE METRICS FILE BEFORE READING IT (#8377 / ADR-230) ─────────────────────────────
+# ── BUILD THE METRICS FILE BEFORE READING IT (#8377 / ADR-235) ─────────────────────────────
 # rule-metrics.json is no longer committed. ADR-091 keeps the raw incident data local and
 # gitignored, so the aggregate was only ever a snapshot of whichever worktree last ran the
 # aggregator and committed it -- which is also why it conflicted on nearly every merge. It is

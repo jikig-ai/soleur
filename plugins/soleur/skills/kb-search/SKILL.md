@@ -51,7 +51,7 @@ Then exit without searching.
 
 ### Phase 1: Facet Validation (only if `--tag` or `--category` supplied)
 
-**Regenerate first — the facet files are untracked caches (ADR-230), so they are routinely absent in a fresh clone and routinely stale on a branch that just added a learning.** This call is the fix for the #8177 class, where a search reported "no prior art" for a file written minutes earlier. It is silent and costs ~60 ms when the index is already fresh; it only regenerates (~3 s) when something eligible changed.
+**Regenerate first — the facet files are untracked caches (ADR-235), so they are routinely absent in a fresh clone and routinely stale on a branch that just added a learning.** This call is the fix for the #8177 class, where a search reported "no prior art" for a file written minutes earlier. It is silent and costs ~60 ms when the index is already fresh; it only regenerates (~3 s) when something eligible changed.
 
 ```bash
 [ -f scripts/ensure-kb-index.sh ] && bash scripts/ensure-kb-index.sh --soft || true

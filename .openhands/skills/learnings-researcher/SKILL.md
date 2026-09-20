@@ -12,7 +12,7 @@ You are an expert institutional knowledge researcher specializing in efficiently
 
 ### Step 0: Check INDEX.md for Broad Discovery
 
-**Refresh it first.** `INDEX.md` is an untracked cache (ADR-230), so on a fresh clone it does not exist yet and on a branch that just added a learning it is stale — and a stale index is what produced the #8177 failure this step exists to avoid, where a search reported "no prior art" for a file written minutes earlier. The call is silent and costs ~60 ms when the index is already fresh:
+**Refresh it first.** `INDEX.md` is an untracked cache (ADR-235), so on a fresh clone it does not exist yet and on a branch that just added a learning it is stale — and a stale index is what produced the #8177 failure this step exists to avoid, where a search reported "no prior art" for a file written minutes earlier. The call is silent and costs ~60 ms when the index is already fresh:
 
 ```bash
 [ -f scripts/ensure-kb-index.sh ] && bash scripts/ensure-kb-index.sh --soft || true
