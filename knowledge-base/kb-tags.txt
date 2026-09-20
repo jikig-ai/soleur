@@ -239,6 +239,7 @@ anchor-assertion
 anchor-on-syntax
 anchor-preservation
 anchor-resolution-over-architecture
+anchor-verification
 anchoring
 anchors
 animation
@@ -818,6 +819,7 @@ commands
 commands/brainstorm
 comment-drift
 comment-mutability
+comment-relocation
 comment-rot
 comment-stripped-grep
 comments
@@ -3760,6 +3762,7 @@ stale-snapshot
 stale-state
 staletimes
 start-fresh
+startup-failure
 stash conflict
 stash pop failure
 state
@@ -4344,6 +4347,7 @@ workflow-discipline
 workflow-dispatch
 workflow-edits
 workflow-enforcement
+workflow-file-size
 workflow-fsm
 workflow-gap
 workflow-gate

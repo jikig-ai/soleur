@@ -13,6 +13,16 @@ Written because the recovery lever the email prescribes had no runbook entry whi
 `apply_target` in that workflow had one (#7659 F4). An agent — or a person — who learns the apply
 pipeline is red from CI status alone had nothing to follow.
 
+## Zero jobs and no email: the file itself was refused
+
+If the run page shows **0 jobs** (conclusion `startup_failure` on a dispatch, `failure` on a
+push) and `gh run view` says only "This run likely failed because of a workflow file issue",
+nothing below applies — no step ran, so the `notify-apply-failure` email never fires. GitHub
+refused the workflow file: either it is over the 512,000-byte limit or it does not parse. Run
+`bun test plugins/soleur/test/workflow-file-size.test.ts` and `actionlint` on the file; the size
+gate's failure text names the overage and the relocation precedent
+(`apply-web-platform-infra-job-rationale.md`). #8361 is the measured instance.
+
 ## Read the email first. It is not a form letter.
 
 Four of its lines are computed per run and each one changes what you should do.
