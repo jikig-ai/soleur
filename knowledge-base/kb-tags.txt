@@ -4344,6 +4344,7 @@ workflow-discipline
 workflow-dispatch
 workflow-edits
 workflow-enforcement
+workflow-fsm
 workflow-gap
 workflow-gate
 workflow-gate-gaps
