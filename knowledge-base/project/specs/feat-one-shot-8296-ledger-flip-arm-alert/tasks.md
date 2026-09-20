@@ -144,3 +144,7 @@ start until AC-25 and AC-26 both hold — the record may lag the detector, never
 
 - [ ] 7.1 File D1, D3, D4, D5, D8, D9, D10, D11 per the plan's table, each with its measured
       evidence. D2 (move #8285 to Phase 4) and D6/D7 are operator/CLO actions.
+
+## Archival note (compound, 2026-09-20, PR #8439)
+
+Compound Step E archival of this spec dir and the plan is DEFERRED to PR-2's compound run: Phase 5 (ledger flip) is gated on AC-25/AC-26 after this PR's apply and its tasks live here, and `soleur:ship` Phase 6 step 2.5 reads `decision-challenges.md` at this live path.
