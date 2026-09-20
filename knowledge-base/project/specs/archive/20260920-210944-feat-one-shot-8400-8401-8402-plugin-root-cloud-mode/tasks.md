@@ -1,7 +1,7 @@
 ---
 title: "Tasks — plugin-root / cloud-mode resolution (#8400, #8401, #8402)"
 branch: feat-one-shot-8400-8401-8402-plugin-root-cloud-mode
-plan: knowledge-base/project/plans/2026-09-20-fix-plugin-root-cloud-mode-resolution-plan.md
+plan: knowledge-base/project/plans/archive/20260920-210944-2026-09-20-fix-plugin-root-cloud-mode-resolution-plan.md
 lane: cross-domain
 ---
 

@@ -1313,11 +1313,18 @@ the number does not rot.
 - [ ] **FR7** — On a host where only the Devin cache arm can resolve, the session-start gate emits
   `SOLEUR_PLUGIN_ROOT_RESOLVE gate=session-start source=devin-cache verified=true` and dispatches
   `cleanup-merged`. (`go.md` Step 0; `go-session-gates.test.sh` R5d.)
-- [ ] **FR8** — A verified root whose `worktree-manager.sh` lacks the capability token produces
-  `SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified` and **no** dispatch.
-  (`go.md` Step 0; `go-session-gates.test.sh` R11.)
-- [ ] **FR8b** — The capability `grep -q` and the `cleanup-merged` invocation operate on the same
-  `${ROOT}`-derived path with no re-resolution between them. (`go.md` Step 0; Guard 2 row 10.)
+- [ ] **FR8** — A verified root **resolved from the `devin-cache` arm** whose `worktree-manager.sh`
+  lacks the capability token produces `SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified
+  source=devin-cache` and **no** dispatch. **Superseded 2026-09-20 (ship advisor):** this AC was
+  written arm-agnostic; B1 narrowed the gate to the cache arm, so a token-less reaper on the
+  `plugin-root-token` arm still dispatches — asserted positively by R11b, and the reason it is
+  correct is that the arm-agnostic form was measured to stop reaping fleet-wide.
+  (`go.md` Step 0; `go-session-gates.test.sh` R11 + R11b.)
+- [ ] **FR8b** — The capability read and the `cleanup-merged` invocation operate on the same
+  `${ROOT}`-derived path with no re-resolution between them. **Superseded 2026-09-20:** the read is
+  an anchored `sed -n 's/^[[:space:]]*SOLEUR_WORKTREE_REAP_CAPABILITY=…/p' | head -1` into a `case`
+  set-membership test, not a `grep -q` — a comment mentioning the token cannot satisfy it and
+  `branch-keyed-guards-v2` is not accepted by substring. (`go.md` Step 0; R10b pins the single operand.)
 - [ ] **FR8c** — `go-session-gates.test.sh` R6b remains green and **unmodified**, including its
   harness. Measured at plan review: R6b's session-start leg never reaches the decoy reaper (the
   decoy classifier's banner is not an accepted verdict, so `SESSION_OK=false`), so the capability

@@ -183,4 +183,4 @@ that its comment and its code disagreed.
 - [Every instrument that answered instead of failing](2026-09-20-every-instrument-that-answered-instead-of-failing.md) — fail-open helpers and floors (errors 7, 20, 22).
 - [Every defect was in my verification, not the feature](2026-09-18-every-defect-was-in-my-verification-not-the-feature.md) — records asserting delivery that the deletion never swept (error 24).
 - [I tested both endpoints and left the wire between them unpinned](2026-09-14-i-tested-both-endpoints-and-left-the-wire-between-them-unpinned.md) — the block-scoped detector is the seam this learning prescribes.
-- ADR-179 A16; plan `2026-09-20-fix-plugin-root-cloud-mode-resolution-plan.md`; PR #8418; scope-out tracker #8440.
+- ADR-179 A16; plan `plans/archive/20260920-210944-2026-09-20-fix-plugin-root-cloud-mode-resolution-plan.md`; PR #8418; scope-out tracker #8440.

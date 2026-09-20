@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-20-fix-plugin-root-cloud-mode-resolution-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260920-210944-2026-09-20-fix-plugin-root-cloud-mode-resolution-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 - Scope verification: PASS — subagent touched only `knowledge-base/project/{plans,specs}/` + auto-generated `INDEX.md`
