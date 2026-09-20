@@ -57,6 +57,7 @@
 #  28   assembly           the record's OWN README.md                        MUST PASS — row 27's fix must not over-reach
 #  29   assembly           two entries claiming one alias                    per-file checks are blind to this by construction
 #  30   dispatch           the root README under a RELATIVE path spelling     MUST PASS — the spelling the hooks actually pass
+#  31   dispatch           staged poison + corrected worktree, and its inverse  the guard must certify the BLOB, not the tree
 #
 # Rows 18–23 exist because the structural enumeration of this guard found the same defect eight
 # times: the required-key loop proves a key is PRESENT and non-empty, and most of the fields have a
@@ -892,6 +893,73 @@ row30_dispatch_relative_paths() {
   fi
 }
 
+row31_staged_blob_is_certified() {
+  emit_id row31-staged-blob-is-certified dispatch
+  # WHAT THE GUARD CERTIFIES MUST BE WHAT GETS COMMITTED. lefthook hands `{staged_files}` as PATHS,
+  # and a filesystem read certifies the WORKING TREE — so stage a poisoned entry, correct the worktree
+  # copy, and the guard reported clean while the poisoned blob committed, with no `--no-verify` and no
+  # `LEFTHOOK=0`. That is a bypass the script's own DISPATCH enumeration did not list, and no other row
+  # here can see it: every other fixture is a plain file under $TMP_ROOT with no index at all.
+  #
+  # Both directions, because the fix has two failure modes and they point opposite ways. Reading the
+  # staged blob closes the false NEGATIVE above; it must not introduce a false POSITIVE, and the case
+  # that would is `git add -p` — an UNSTAGED violation must not block a commit that does not contain it.
+  local d rec; d="$(new_dir row31)"; rec="${d:?}/repo"
+  must mkdir -p "${rec:?}/knowledge-base/project/rejected"
+  local rel="knowledge-base/project/rejected/$VALID_BASENAME"
+  write_valid_entry "${rec:?}/$rel"
+  # The fixture env is already hermetic (git_fixture_env at the top of this file sets a ceiling at
+  # $TMP_ROOT and pins identity), so `git init` here cannot reach the developer's repository.
+  must git -C "${rec:?}" init -q
+  must git -C "${rec:?}" add -A
+  must git -C "${rec:?}" commit -qm base
+
+  # (a) staged poison + corrected worktree -> the guard must read the BLOB and redden.
+  must sed -i 's|^redundancy_check: not-implemented$|requester: a-role-that-should-not-be-here\nredundancy_check: not-implemented|' "${rec:?}/$rel"
+  must git -C "${rec:?}" add -A
+  must sed -i '/^requester: a-role-that-should-not-be-here$/d' "${rec:?}/$rel"
+  ck
+  if grep -q '^requester:' "${rec:?}/$rel"; then
+    bad "row31: setup — the worktree copy still carries requester:, so this row would pass for the wrong reason"
+    return
+  else
+    ok "row31: setup — the poison is in the INDEX only, absent from the worktree"
+  fi
+  local rc_staged out_staged
+  out_staged="$( cd "${rec:?}" && "$BASH" "$LINT" "$rel" 2>&1 || true )"
+  ( cd "${rec:?}" && "$BASH" "$LINT" "$rel" >/dev/null 2>&1 ); rc_staged=$?
+  ck
+  if [[ "$rc_staged" -eq 1 && "$out_staged" == *'[forbidden-key:requester]'* ]]; then
+    ok "row31-staged-blob-is-certified: the STAGED blob is what gets checked (rc=1)"
+  else
+    bad "row31-staged-blob-is-certified: staged poison with a clean worktree gave rc=$rc_staged — the guard certified the working tree, so the poisoned blob commits with no --no-verify: $out_staged"
+  fi
+  # The diagnostic must name the path as HANDED. A mirror path under $TMPDIR is an internal detail the
+  # operator cannot act on, and leaking it is what a lazily-created mirror did.
+  ck
+  if [[ "$out_staged" != *"$TMPDIR"* ]] || [[ "$out_staged" == *"$rel"* ]]; then
+    ok "row31: the diagnostic names the path as handed, not an internal mirror path"
+  else
+    bad "row31: the diagnostic leaked an internal mirror path: $out_staged"
+  fi
+
+  # (b) the inverse. Unstaged violation only -> must NOT block.
+  #
+  # `git checkout -- .` is WRONG here and was the first spelling: it restores the worktree from the
+  # INDEX, and phase (a) deliberately left the poison staged — so it handed the poison straight back
+  # and this arm reddened for a reason that had nothing to do with the property. Reset BOTH, from HEAD.
+  must git -C "${rec:?}" reset -q --hard HEAD
+  must sed -i 's|^redundancy_check: not-implemented$|requester: a-role-that-should-not-be-here\nredundancy_check: not-implemented|' "${rec:?}/$rel"
+  local rc_unstaged
+  ( cd "${rec:?}" && "$BASH" "$LINT" "$rel" >/dev/null 2>&1 ); rc_unstaged=$?
+  ck
+  if [[ "$rc_unstaged" -eq 0 ]]; then
+    ok "row31: an UNSTAGED violation does not block a commit that would not contain it (git add -p)"
+  else
+    bad "row31: an unstaged-only violation reddened (rc=$rc_unstaged) — the staged read traded a false negative for a false positive"
+  fi
+}
+
 row12_valid_entry_passes
 row13_second_of_two_invalid
 row14_zero_paths
@@ -911,6 +979,7 @@ row27_assembly_subdirectory_readme
 row28_assembly_root_readme_exempt
 row29_cross_entry_duplicate_alias
 row30_dispatch_relative_paths
+row31_staged_blob_is_certified
 
 if [[ "$CHILD" != "1" ]]; then
   h1_bad_misrouted_direction
@@ -951,7 +1020,7 @@ hcases="$(grep -cE '^(h[0-9]+|p[0-9]+)' "$IDS_FILE" || true)"
 # hand-summed:
 #   grep -cE '^row[0-9][0-9]_[a-z0-9_]+$' plugins/soleur/test/lint-rejected-register.test.sh  -> 16
 # (that is the invocation list above; the matrix table in the header names the same 16 rows.)
-MIN_CASES=30
+MIN_CASES=31
 # MIN_AXES counts AXES, not rows — ADR-193 Decision 2, and the distinction must not collapse:
 # eleven rows on one axis is eleven rows and one axis, and raising MIN_CASES must never be able to
 # satisfy this one. Derived by recipe over the same segment:
@@ -1029,11 +1098,11 @@ fi
 # the accept-everything stub. It would have passed with every row in the child hollowed out. Two
 # bounds, so each mode is floored at its own tight count and an intact child can be GREEN.
 # Measured, both modes, on this tree:
-#   bash <this file>                    -> 63 executed   (30 matrix rows + 4 harness rows)
-#   SOLEUR_RR_CHILD=1 bash <this file>  -> 54 executed   (30 matrix rows alone)
+#   bash <this file>                    -> 67 executed   (31 matrix rows + 4 harness rows)
+#   SOLEUR_RR_CHILD=1 bash <this file>  -> 58 executed   (31 matrix rows alone)
 # The harness contribution is the difference, 9, and is asserted separately so that adding a harness
 # row cannot be absorbed by slack in the matrix bound or vice versa.
-MIN_ASSERTIONS_MATRIX=54
+MIN_ASSERTIONS_MATRIX=58
 MIN_ASSERTIONS_HARNESS=9
 EXPECTED_ASSERTIONS="$MIN_ASSERTIONS_MATRIX"
 [[ "$CHILD" == "1" ]] || EXPECTED_ASSERTIONS=$((MIN_ASSERTIONS_MATRIX + MIN_ASSERTIONS_HARNESS))
@@ -1090,6 +1159,7 @@ MATRIX_IDS=(
   row28-assembly-root-readme-exempt
   row29-cross-entry-duplicate-alias
   row30-dispatch-relative-paths
+  row31-staged-blob-is-certified
 )
 HARNESS_IDS=(
   h1-bad-misrouted-direction

@@ -87,20 +87,11 @@
 # the CLEAN one, which auto-commits, and the server-side one, which runs no hook at all.
 #
 #
-# IT READS THE WORKING TREE, NOT THE STAGED BLOB, AND THAT IS A REAL HOLE — stated here because the
-# word this guard prints is "clean". lefthook hands `{staged_files}` as PATHS; every read below
-# (`head`, `awk`, `grep`) opens the file on disk. So: stage a poisoned entry, correct the worktree
-# copy, commit. The guard reports clean and the poisoned blob lands, with no `--no-verify` and no
-# `LEFTHOOK=0` — a bypass the DISPATCH enumeration above does not list. Measured on both this guard
-# and its questionnaire sibling. Partial staging gives the inverse: a false positive on content that
-# is not being committed.
-#
-# NOT FIXED HERE, deliberately. Reading `git show :<path>` instead is not a drop-in — it is correct
-# for the pre-commit arm and wrong for the other two (`--all` and `{push_files}` have no index entry
-# to read), and "check the staged blob" trades this false negative for the partial-stage false
-# positive rather than closing the class. The honest answer is to check BOTH, per arm, which is a
-# change to every content lint in this repository rather than to this one; the convention is
-# repo-wide. Carried as a review finding with this disclosure as its disposition.
+# IT READS THE STAGED BLOB, NOT THE WORKING TREE, for any path git has an index entry for — see
+# `staged_view` below. What remains uncovered is narrower and is not a staging question: a bare
+# personal name is not a decidable property of text, so the editorial rule in the record's own README
+# (record the substance, attribute to a ROLE) is the control for that and this guard is the floor
+# under it.
 # Path filtering is the DISPATCH's job (lefthook's `glob:`, or `--all`'s walk). This script checks
 # the files it is handed, by basename rules, so it is testable outside the repository tree.
 #
@@ -141,8 +132,66 @@ AUTHORITY_PATTERNS=(
 violations=0
 checked=0
 
+# --- CERTIFY THE STAGED BLOB, NOT THE WORKING TREE ------------------------------------------------
+#
+# lefthook hands `{staged_files}` as PATHS, and every read here opens the file on disk. Measured:
+# append a forbidden key, `git add`, delete the line from the worktree copy, and this guard exits 0
+# while the poisoned blob commits — with no `--no-verify` and no `LEFTHOOK=0`, so it is a bypass the
+# DISPATCH note above does not list.
+#
+# THE INVERSE IS ALSO A DEFECT, and it is the one a worktree read causes rather than misses: under
+# `git add -p` an UNSTAGED violation blocks a commit that does not contain it. The staged blob is by
+# definition the commit`s content, so reading it removes a false negative AND a false positive. An
+# earlier disposition here claimed the opposite trade and deferred the fix on that basis; the claim
+# was inverted and the CONCUR gate refused the deferral.
+#
+# NO MODE FLAG AND NO DISPATCH CHANGE, because the case is DETECTABLE rather than declared:
+# `git ls-files --error-unmatch` fails for an untracked path (a `--all` walk of an unstaged fixture,
+# or a brand-new entry), and those fall back to the path as handed. For pre-push and CI the index
+# matches what is being pushed on a clean tree, so the substitution is byte-identical there; on a
+# dirty tree the index is still the closer proxy for committed content than the worktree is.
+#
+# The mirror preserves the FULL RELATIVE PATH so that every derivation downstream is unaffected —
+# `basename` still yields the dated slug and `dirname`s parent still yields the record directory,
+# which the filename, slug-in-scope, root-README and superseded_by checks all depend on.
+# THE MIRROR DIRECTORY IS CREATED IN THE PARENT SHELL, EAGERLY, AND THAT IS NOT A STYLE CHOICE.
+# `staged_view` is called from `paths+=("$(staged_view "$f")")`, i.e. inside a command substitution —
+# a SUBSHELL. A first version created the directory lazily inside it, which put two bugs in one line:
+# the assignment never reached the parent (so `unmirror` was a no-op and diagnostics printed the
+# mirror path an operator cannot act on), and the cleanup `trap ... EXIT` fired at SUBSHELL exit,
+# deleting the mirror between writing it and reading it. Measured: the leaked path appeared in the
+# first diagnostic line. State that must outlive a command substitution is set before it.
+# The trap is registered UNCONDITIONALLY and immediately after the allocation, never behind a
+# `[[ -n … ]] &&` guard. `scripts/lint-trap-tempfile-ownership.py` rule (c) reads it that way for a
+# reason that is not stylistic: a conditional trap statement is one the linter cannot see owns the
+# allocation, and more importantly a script that dies between `mktemp -d` and a deferred registration
+# leaks the directory. The emptiness check belongs in the trap BODY, where it costs nothing.
+STAGED_MIRROR=""
+trap '[[ -n "${STAGED_MIRROR:-}" ]] && rm -rf -- "${STAGED_MIRROR:?}"' EXIT INT TERM
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  STAGED_MIRROR="$(mktemp -d)" || STAGED_MIRROR=""
+fi
+# staged_view <path> -> prints a path whose CONTENT is what would be committed.
+staged_view() {
+  local p="$1" rel m out
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { printf "%s" "$p"; return 0; }
+  git ls-files --error-unmatch -- "$p" >/dev/null 2>&1 || { printf "%s" "$p"; return 0; }
+  rel="$(git ls-files --full-name -- "$p" 2>/dev/null | head -n 1)"
+  [[ -n "$rel" ]] || { printf "%s" "$p"; return 0; }
+  [[ -n "$STAGED_MIRROR" ]] || { printf "%s" "$p"; return 0; }
+  out="$STAGED_MIRROR/$rel"
+  mkdir -p "$(dirname "$out")" 2>/dev/null || { printf "%s" "$p"; return 0; }
+  # A path staged as a DELETION has no blob; nothing to certify, so hand back the original and let
+  # the existence checks speak.
+  git show ":$rel" > "$out" 2>/dev/null || { printf "%s" "$p"; return 0; }
+  printf "%s" "$out"
+}
+# Report paths as the caller spelled them: a mirror path in a diagnostic is an internal detail that
+# the operator cannot act on.
+unmirror() { local p="$1"; [[ -n "$STAGED_MIRROR" ]] && printf "%s" "${p#"$STAGED_MIRROR"/}" || printf "%s" "$p"; }
+
 report() { # <file> <tag> <message>
-  printf '%s: [%s] %s\n' "$1" "$2" "$3" >&2
+  printf '%s: [%s] %s\n' "$(unmirror "$1")" "$2" "$3" >&2
   violations=$((violations + 1))
 }
 
@@ -238,7 +287,7 @@ check_entry() { # <path>
   base="$(basename "$file")"
 
   if [[ ! -r "$file" ]]; then
-    printf 'lint-rejected-register: path not readable: %s\n' "$file" >&2
+    printf 'lint-rejected-register: path not readable: %s\n' "$(unmirror "$file")" >&2
     return 2
   fi
 
@@ -407,7 +456,7 @@ if [[ "${1:-}" == "--all" ]]; then
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
     is_record_root_readme "$f" "$dir" && continue
-    paths+=("$f")
+    paths+=("$(staged_view "$f")")
   done < <(find "$dir" \( -type f -o -type l \) -print | LC_ALL=C sort)
 else
   if [[ $# -eq 0 ]]; then
@@ -420,7 +469,7 @@ else
     # contents. Shared rather than re-derived, because the two arms receive different path spellings
     # and a second copy is where that difference goes unnoticed.
     is_record_root_readme "$f" "$DEFAULT_DIR" && continue
-    paths+=("$f")
+    paths+=("$(staged_view "$f")")
   done
 fi
 
@@ -443,7 +492,7 @@ for f in "${paths[@]}"; do
   # as `symlink-entry`. Under `-f` a broken symlink also read as "file not found", which is an
   # infrastructure complaint rather than the finding it actually is.
   if [[ ! -e "$f" && ! -L "$f" ]]; then
-    printf 'lint-rejected-register: file not found: %s\n' "$f" >&2
+    printf 'lint-rejected-register: file not found: %s\n' "$(unmirror "$f")" >&2
     missing=1
     continue
   fi
