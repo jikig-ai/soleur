@@ -20,8 +20,11 @@
 #
 # PROPERTY: for every session in the invocation log, each consecutive pair of
 # LIFECYCLE-NODE records (non-node records removed first, so a sub-skill hop
-# collapses to the transition it encloses) whose edge is absent from the
-# declared set is reported exactly once, attributed to its session.
+# collapses to the transition it encloses; then a node record whose skill the
+# view's `sub_steps` names as a designed sub-step of the PREVIOUS KEPT node is
+# dropped and counted as `substep`, so `brainstorm compound plan` pairs as
+# `brainstorm -> plan` -- #8325) whose edge is absent from the declared set is
+# reported exactly once, attributed to its session.
 #
 # Usage:
 #   scripts/classify-workflow-transitions.sh              # one row per violation
@@ -40,7 +43,8 @@ for arg in "$@"; do
       cat <<'USAGE'
 usage: classify-workflow-transitions.sh [--summary]
   default    one TSV row per undeclared lifecycle transition: <session_id>\t<from> -> <to>
-  --summary  one key=value line: undeclared= sessions= pairs= nonnode= read= dropped= [null_reading=1]
+  --summary  one key=value line: undeclared= sessions= pairs= nonnode= substep= read= dropped= [null_reading=1]
+             (substep = node records dropped as a designed sub-step of the previous kept node, per the view's sub_steps)
 env: CLASSIFY_REPO_ROOT=<dir>  read ONLY that root (skips the main-checkout/sibling enumeration)
 exit: 0 classified (a null reading still exits 0 and says so); 2 could not classify
 USAGE
@@ -66,6 +70,50 @@ if [[ ! -r "$VIEW" ]]; then
   echo "FATAL: declared transition view not readable at $VIEW" >&2
   echo "       The view is repo tooling, not part of the shipped plugin (ADR-229): this probe" >&2
   echo "       runs only in a soleur source checkout. On such a checkout, restore it from git." >&2
+  exit 2
+fi
+# FAIL CLOSED on a view without a NON-EMPTY `transitions` map of string arrays.
+# Readability was the only thing checked, so `del(.transitions)` or
+# `.transitions = null` reported `undeclared=0 ... rc 0` -- a clean-looking zero
+# over an empty edge set, which is the silent-zero this script exists to refuse.
+# (`[]` already errored, which is how asymmetric the guard was.) Added #8325,
+# alongside the `sub_steps` one below, because adding the second check is what
+# made the first one's absence visible.
+#
+# The member and length clauses are the SAME asymmetry one level in, found by
+# the ship-gate consult on this PR: the first revision of this check was
+# container-only while the `sub_steps` one below already asserted its members,
+# so `{"plan":"workshop"}` passed here and then matched `plan -> work` by jq
+# `index`'s SUBSTRING semantics -- an undeclared edge reported as declared, at
+# rc 0. `length > 0` moves the degenerate `{}` from the late `kept>0 && pairs==0`
+# warning to a FATAL here; a PARTIALLY truncated map is still not caught (its
+# missing nodes are silently reclassified `nonnode`), and cannot be from inside
+# this script, which has no independent copy of the node set -- that residue is
+# the parity block's job (workflow-fidelity.test.ts deep-equals this file against
+# DECLARED_TRANSITIONS, and is a required check).
+if ! jq -e '.transitions | type == "object" and length > 0
+            and all(.[]; type == "array" and all(.[]; type == "string"))' "$VIEW" >/dev/null 2>&1; then
+  echo "FATAL: declared view $VIEW carries no non-empty \`transitions\` map of string arrays —" >&2
+  echo "       stale or truncated mirror; classifying against an empty edge set would report" >&2
+  echo "       every transition as undeclared, and a STRING value would pass a container-only" >&2
+  echo "       check and then match by SUBSTRING (\"workshop\" contains \"work\")." >&2
+  echo "       Edit DECLARED_TRANSITIONS in plugins/soleur/lib/workflow-fidelity.ts first," >&2
+  echo "       then mirror it (ADR-229, amended #8325)." >&2
+  exit 2
+fi
+# FAIL CLOSED on a view without an OBJECT `sub_steps` (#8325). A tolerant `// {}`
+# would silently reproduce the pre-collapse numbers on a stale mirror, and
+# `"sub_steps": null` or `[]` passes a bare has() check with the same silent
+# result -- so the type is asserted, not the presence. `{}` is deliberately NOT
+# refused: it is the legitimate shape for a repo that declares no sub-steps, and
+# is indistinguishable from a truncated mirror from inside this script. The
+# parity block pins which entries must exist (see the `transitions` note above).
+if ! jq -e '.sub_steps | type == "object"
+            and all(.[]; type == "array" and all(.[]; type == "string"))' "$VIEW" >/dev/null 2>&1; then
+  echo "FATAL: declared view $VIEW carries no \`sub_steps\` map of string arrays — stale mirror;" >&2
+  echo "       (a STRING value would pass a container-only check and then collapse by SUBSTRING match)" >&2
+  echo "       edit DECLARED_SUB_STEPS" >&2
+  echo "       in plugins/soleur/lib/workflow-fidelity.ts first, then mirror it (ADR-229, amended #8325)." >&2
   exit 2
 fi
 
@@ -112,10 +160,17 @@ for d in "${ROOTS[@]}"; do
   # (plan in the archive, ship in the live file) report pairs=1 undeclared=0 --
   # and the corpus, and the followthrough's baseline with it, would have shrunk
   # silently at every rotation. Found at review by two independent seats.
+  # `-s` not `-f`, and `found=1` only once bytes actually landed: a 0-byte or
+  # non-gzip archive used to set found=1 with nothing appended, so `read=0` fell
+  # through every downstream guard and the run reported an empty report at rc 0
+  # with NO null-reading marker -- the exact failure case 8 pins for the live
+  # log, reachable through the archive limb the corpus was later widened to.
   for _gz in "$d"/.skill-invocations-*.jsonl.gz; do
-    [[ -f "$_gz" ]] || continue
+    [[ -s "$_gz" ]] || continue
+    _before=$(wc -c < "$MERGED" 2>/dev/null || echo 0)
     zcat -- "$_gz" >> "$MERGED" 2>/dev/null || true
-    found=1
+    _after=$(wc -c < "$MERGED" 2>/dev/null || echo 0)
+    [[ "$_after" -gt "$_before" ]] && found=1
   done
 done
 
@@ -129,7 +184,7 @@ if [[ "$found" -eq 0 ]]; then
   echo "       where sessions have run. A fresh checkout or CI runner has none, by construction." >&2
   # Same key set as the real summary line, plus an explicit flag -- one schema
   # per flag, so a key=value consumer never sees two shapes.
-  [[ "$SUMMARY" -eq 1 ]] && echo "undeclared=0 sessions=0 pairs=0 nonnode=0 read=0 dropped=0 null_reading=1"
+  [[ "$SUMMARY" -eq 1 ]] && echo "undeclared=0 sessions=0 pairs=0 nonnode=0 substep=0 read=0 dropped=0 null_reading=1"
   exit 0
 fi
 
@@ -144,6 +199,13 @@ fi
 #     two lifecycle nodes collapses to the lifecycle transition it encloses.
 #     Their count is surfaced as `nonnode` in --summary so the exclusion is
 #     visible rather than silent.
+#   - THEN (#8325) a node record whose skill is in sub_steps[<previous KEPT
+#     node>] is dropped before pairing: brainstorm runs compound as its own
+#     designed sub-step and hands off to plan, so `brainstorm compound plan` is
+#     the designed handoff, not two undeclared edges. Keyed on the previous KEPT
+#     record, so `brainstorm compound compound plan` drops both. The count is
+#     surfaced as `substep`. Order is load-bearing: non-node removal first, so
+#     `brainstorm one-shot compound plan` still collapses.
 read -r -d '' JQ <<'JQEOF' || true
   # `-R` + `fromjson?`: one malformed line (a truncated tail in the live log or
   # any rotated archive) must count as DROPPED, not blank the whole reading.
@@ -160,7 +222,8 @@ read -r -d '' JQ <<'JQEOF' || true
   # `session_id != ""` as well as `!= null`: an empty string passes a null test
   # and would POOL every such record into one phantom session, fabricating pairs.
   | . as $raw
-  | map(select(.skill != null and .session_id != null and .session_id != "" and .ts != null))
+  | map(select((.skill | type) == "string" and (.session_id | type) == "string"
+               and .session_id != "" and (.ts | type) == "string"))
   | map(.t = .ts)
   # ltrimstr, not sub(): identical for a prefix strip and ~35% cheaper at 10x
   # volume (regex compiled per record).
@@ -172,6 +235,7 @@ read -r -d '' JQ <<'JQEOF' || true
   # as `list | index(.key)`. It fails loudly ("Cannot check whether object has a
   # null key"), but the `index` variant would silently never match.
   | ($decl[0].transitions) as $T
+  | ($decl[0].sub_steps) as $SUB
   # LIFECYCLE NODES ONLY, then pair. The first version paired RAW adjacent
   # records and required both endpoints to be nodes, which was correct about one
   # thing (ship -> preflight is not a lifecycle transition) and wrong about the
@@ -186,6 +250,22 @@ read -r -d '' JQ <<'JQEOF' || true
   | $nodes
   | group_by(.session_id)
   | map(sort_by(.t))
+  # SUB-STEP COLLAPSE, per session, after sorting and before pairing. The
+  # first-record branch is not optional: `.kept[-1]` on an empty array is null
+  # and `$SUB[null]` throws "Cannot index object with null", which `// []` does
+  # not rescue (verified). Equal-second ties keep merged-file order (sort_by is
+  # stable) -- and merged order is live-log-first, archives-after, so it is
+  # chronological only WITHIN one append-only file. `ts` is second-granularity,
+  # so an exact tie spanning a rotation boundary orders the older record last,
+  # which now decides drop-vs-keep in the collapse and not only pair direction.
+  # Accepted: two invocations in the same second across a rotation is rarer than
+  # the reading is precise.
+  | map(reduce .[] as $r ({kept: [], sub: 0};
+          if (.kept | length) == 0 then .kept += [$r]
+          elif (($SUB[.kept[-1].skill] // []) | index($r.skill)) != null then .sub += 1
+          else .kept += [$r] end))
+  | (map(.sub) | add // 0) as $substep
+  | map(.kept)
   | map(. as $s | [range(1; ($s | length))]
         | map({ session: $s[0].session_id, from: $s[. - 1].skill, to: $s[.].skill }))
   | flatten
@@ -193,6 +273,7 @@ read -r -d '' JQ <<'JQEOF' || true
       kept: $kept,
       dropped: ($read - $kept),
       nonnode: $nonnode,
+      substep: $substep,
       pairs: length,
       sessions: (map(.session) | unique | length),
       violations: map(select(. as $p | ($T[$p.from] // []) | index($p.to) == null)) }
@@ -217,6 +298,7 @@ n=$(printf '%s' "$RESULT" | jq -r '.violations | length')
 pairs=$(printf '%s' "$RESULT" | jq -r '.pairs')
 sessions=$(printf '%s' "$RESULT" | jq -r '.sessions')
 nonnode=$(printf '%s' "$RESULT" | jq -r '.nonnode')
+substep=$(printf '%s' "$RESULT" | jq -r '.substep')
 read_n=$(printf '%s' "$RESULT" | jq -r '.read')
 kept=$(printf '%s' "$RESULT" | jq -r '.kept')
 dropped=$(printf '%s' "$RESULT" | jq -r '.dropped')
@@ -243,7 +325,7 @@ if [[ "$kept" -gt 0 && "$pairs" -eq 0 ]]; then
 fi
 
 if [[ "$SUMMARY" -eq 1 ]]; then
-  echo "undeclared=$n sessions=$sessions pairs=$pairs nonnode=$nonnode read=$read_n dropped=$dropped"
+  echo "undeclared=$n sessions=$sessions pairs=$pairs nonnode=$nonnode substep=$substep read=$read_n dropped=$dropped"
   exit 0
 fi
 
