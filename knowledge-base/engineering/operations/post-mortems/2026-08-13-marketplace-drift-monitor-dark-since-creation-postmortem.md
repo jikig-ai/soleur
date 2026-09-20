@@ -214,8 +214,16 @@ Run 35508695589's `drift-check` log re-read directly: **0** `Can't find` lines, 
 `Download action repository 'jikig-ai/soleur@18887f8d5…'` at `Set up job`, and
 `sentry-heartbeat: http_code=202`. Monitor state `active`, environment `production` `ok`.
 
-One observation the dark window hid: both scheduled ticks ran ~4h50m after the `37 6 * * *` cron
-(11:26Z and 11:45Z), which is ordinary GitHub scheduled-run queueing and sits inside
-`checkin_margin: 360`. The margin was never exercised before because no check-in had ever
-arrived; it is now doing real work, and tightening it would alarm on GitHub's lateness rather
-than on a dark heartbeat.
+One observation the dark window hid. Both scheduled ticks fired well after the `37 6 * * *`
+cron minute: 2026-09-19 at 11:26:55Z (**4h49m** late) and 2026-09-20 at 11:45:08Z (**5h08m**
+late). The lag is **not** runner queueing — each run's `created_at` equals its `run_started_at`
+to the second, so a runner was available immediately and the delay is in GitHub's delivery of
+the `schedule` event itself. Why GitHub delayed it is not measured here; the numbers are, and
+they are what matters downstream.
+
+The live monitor config reads `checkin_margin: 360` (re-read 2026-09-20), so a 5h08m tick clears
+the 6h margin with **~52 minutes** of headroom. That margin had never been exercised before,
+because until 2026-09-18 no check-in had ever arrived for it to be measured against. Two
+consequences worth carrying forward: tightening it toward the cron would alarm on GitHub's
+delivery lag rather than on a dark heartbeat, and the current headroom is thin enough that a
+worse-than-usual delivery day can page without anything being wrong with this workflow.

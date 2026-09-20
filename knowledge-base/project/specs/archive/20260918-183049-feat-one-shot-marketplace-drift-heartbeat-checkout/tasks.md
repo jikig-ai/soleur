@@ -68,8 +68,12 @@ PR #8313 merged 2026-09-19T03:37:18Z as `a50cf9ad2382b7a3960b4571c8b0704b97d0b6d
   merge commit vs its first parent; the one new line is the `$/` *ref is missing* `[action]`
   finding). Posted: <https://github.com/jikig-ai/soleur/issues/7042#issuecomment-5739062992>.
 - **5.3** — `2026-09-18-a-pir-recovery-written-as-an-expectation-and-an-alarm-that-was-never-armed.md`.
-- **5.4** — diff scope held; CI verified the exact merged tree. The local battery was deliberately
-  **not** run (operator decision): only the untouched `infra` group differs locally.
+- **5.4** — diff scope re-derived 2026-09-20 from the merge itself
+  (`git diff --name-only a50cf9ad2^1 a50cf9ad2`): 19 files, all inside the planned surfaces —
+  the workflow + composite, the parity test, the two new `scripts/` guards plus `test-all.sh`
+  and `marketplace-drift-check.test.sh`, the PIR/learning/runbook/plan/spec docs, and the
+  dangling-fixture removal with its README. CI verified that exact tree. The local battery was
+  deliberately **not** run (operator decision): only the untouched `infra` group differs locally.
 - **6.1 (resolution, primary arm)** — `workflow_dispatch` run 35419097145 on `main`: `drift-check`
   log has **0** `Can't find` lines and no checkout step, `Set up job` resolved
   `jikig-ai/soleur@a50cf9ad2…` through `$/`, and the step printed `sentry-heartbeat: http_code=202`.
@@ -81,6 +85,7 @@ PR #8313 merged 2026-09-19T03:37:18Z as `a50cf9ad2382b7a3960b4571c8b0704b97d0b6d
   re-read from `drift-check` as `http_code=202` with 0 `Can't find` lines. The learning file
   separates these two proofs; this row is the scheduled one.
 
-Both scheduled ticks landed ~4h50m after the `37 6 * * *` cron — ordinary GitHub scheduled-run
-queueing, and inside the monitor's `checkin_margin: 360`, so the margin did not fire. A tighter
-margin would alarm on GitHub's own lateness rather than on a dark heartbeat.
+The two scheduled ticks fired 4h49m and 5h08m after the `37 6 * * *` cron, with
+`created_at == run_started_at` on both runs — GitHub's delivery of the `schedule` event lagged,
+no runner queueing involved. Both clear `checkin_margin: 360`, the later one by ~52 minutes.
+See the PIR addendum for what that headroom implies.
