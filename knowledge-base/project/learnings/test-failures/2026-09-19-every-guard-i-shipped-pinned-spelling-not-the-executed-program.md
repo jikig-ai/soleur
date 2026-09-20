@@ -173,10 +173,15 @@ Each was seconds to falsify and none had been.
 23. **Watched a job matched by `test("deploy";"i")`, which resolved to "Deploy Documentation
     to Cloudflare Pages" rather than the web-platform deploy arm.** Had it gone green, the prd
     cron would have fired against the PREVIOUS build — the exact #8276 failure the deploy-arm
-    rule exists to prevent. Caught before it mattered. **Prevention:** select the arm by
-    `name == "Web Platform Release"` AND `event == "workflow_run"`, then the job named exactly
-    `deploy`. `postmerge/SKILL.md` already documents this predicate, so this was an execution
-    gap, not a doc gap.
+    rule exists to prevent. Caught before it mattered. **Prevention:** never match a job by a
+    loose name regex. `postmerge/SKILL.md` already ships the correct selector — its "DEPLOY-arm
+    release run for THIS merge" block queries `actions/runs` with `event=workflow_run` AND
+    `head_sha=${MERGE_SHA}`, filters `.path == ".github/workflows/web-platform-release.yml"`,
+    and reads the job named exactly `deploy`. Both halves matter: the path/event pair picks the
+    right *workflow*, and the `head_sha` pin picks the right *run* — the same file's "Select by
+    the merge SHA, never by recency" note exists because an event filter alone returns whichever
+    merge's deploy arm fired last, routinely another PR's. So this was an execution gap, not a
+    doc gap.
 24. **Reported a job as hung for 2h24m by comparing a UTC `started_at` against a local-time
     clock.** It was 24 minutes. **Prevention:** read both sides in the same timezone before
     computing an elapsed time.
