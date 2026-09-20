@@ -1,87 +1,27 @@
+# AC12 — real-harness contact, #8308
+#
+# Captured 2026-09-20 from a SCRATCH git workspace, not the operator's repo. The earlier
+# capture was taken against the live repo and therefore performed a real destructive
+# cleanup (it deleted a merged branch and reset the main checkout) and committed ~60
+# absolute paths under the operator's $HOME — a review seat flagged both, and the suite's
+# own H3 row had already learned the lesson and routes through a scratch workspace.
+#
+# Recipe (both corrections are load-bearing — see go-session-gates.test.sh H3):
+#   prompt on STDIN; the positional form is rejected by the CLI outright.
+#   the prompt must INVOKE /soleur:go — asked to 'run the blocks', the agent Reads go.md
+#   from disk, the UNDELIVERED path, and the capture then reads source=none verified=false.
+#
+#   cd <scratch repo> && printf '%s\n' "/soleur:go run ONLY the Step 0.0, Step 0.5 and Step 0"
+#     " bash blocks exactly as delivered, then print their combined raw stdout verbatim..."
+#     | claude -p --plugin-dir <repo>/plugins/soleur --allowedTools Bash
+
 ```
 SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=plugin-root-token verified=true
 SOLEUR_GIT_REPO_READY=true
 SOLEUR_PLUGIN_ROOT_RESOLVE gate=cloud-detect source=plugin-root-token verified=true
 not-local:no-devin-env
 SOLEUR_PLUGIN_ROOT_RESOLVE gate=session-start source=plugin-root-token verified=true
-SOLEUR_WORKTREE_LEASE_LIB_OK path=/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8308-go-gates-plugin-root/plugins/soleur/skills/git-worktree/scripts/../../../scripts/lib/session-state.sh
-SOLEUR_GIT_BARE_POISON git_dir=/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8308-go-gates-plugin-root shared_bare=absent extension=absent git_version=2.55.0 branch=guard-skip
-(skip) feat-one-shot-7937-ship-discipline-rules - has uncommitted changes
-Deleted branch feat-one-shot-8288-reproduce-bug-red-loop (was d9606f0f4).
-Cleaned 1 merged worktree(s): feat-one-shot-8288-reproduce-bug-red-loop
-Resetting stale main checkout (0 staged files)
-Warning: Could not pull latest main: From https://github.com/jikig-ai/soleur
- * branch                main       -> FETCH_HEAD
-hint: Diverging branches can't be fast-forwarded, you need to either:
-hint:
-hint: 	git merge --no-ff
-hint:
-hint: or:
-hint:
-hint: 	git rebase
-hint:
-hint: Disable this message with "git config set advice.diverging false"
-fatal: Not possible to fast-forward, aborting.
-/data/git-repositories/jikig-ai/soleur                                                                       (bare)
-/data/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a62374875e579c0c8                             70ddb8708 (detached HEAD)
-/data/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a83017eac83874504                             0d11ec22e (detached HEAD)
-/data/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a915b3dc16e44bc0c                             0d11ec22e [sandbox-8300]
-/data/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a9c05fbb0e3faa8bc                             0d11ec22e (detached HEAD)
-/data/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-ae1ba77bd2cfc15cc                             0d11ec22e [review-8300-local]
-/data/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-af249e5f1c3ca376b                             0d11ec22e (detached HEAD)
-/data/git-repositories/jikig-ai/soleur/.worktrees/chore-bump-bun-1.4.2                                       9bb30842c [chore-bump-bun-1.4.2]
-/data/git-repositories/jikig-ai/soleur/.worktrees/chore-rung2-evidence-35465756680                           d7b279c39 [chore-rung2-evidence-35465756680]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-8322-affected-test-gate                               08708c76e [feat-8322-affected-test-gate]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-ci-mattpocock-skills-audit                            41ea2b6a7 [feat-ci-mattpocock-skills-audit]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-devin-upstream-asks-posture                           d2f426d52 [review-evidence-8311]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-kb-index-untrack                                      b1ddc9029 [feat-kb-index-untrack]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-luks-cutover-6894                                     839911538 [feat-luks-cutover-6894]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-6617-6488-retire-doublefire-drop-dark-tables 431996ddb [feat-one-shot-6617-6488-retire-doublefire-drop-dark-tables]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8010-rung2-gate-load-bearing                 14dd1b52e [feat-one-shot-8010-rung2-gate-load-bearing]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8308-go-gates-plugin-root                    355466101 [feat-one-shot-8308-go-gates-plugin-root]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8325-fsm-decision-challenges                 65dbd1fff [feat-one-shot-8325-fsm-decision-challenges]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8339-poll-block-pipe-rc                      cf9466697 [feat-one-shot-8339-poll-block-pipe-rc]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8361-workflow-size-limit                     185af9660 [feat-one-shot-8361-workflow-size-limit]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8386-registry-posture-emitter                04317b0d0 [feat-one-shot-8386-registry-posture-emitter]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8392-anthropic-text-block                    65c05ef22 [feat-one-shot-8392-anthropic-text-block]
-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-auto-inngest-pin-bump                        09aabd7f8 [feat-one-shot-auto-inngest-pin-bump]
-/data/git-repositories/jikig-ai/soleur/.worktrees/fix-apply-infra-workflow-size                              ca5ac0dc5 [fix-apply-infra-workflow-size]
-/data/git-repositories/jikig-ai/soleur/.worktrees/postmerge-8151                                             4463fa764 [chore/archive-8151-spec-artifacts]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a1a80e528a06befd6                        a223fb9a5 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a1e7ebb251314557c                        4083075e9 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a1f9a366bb29f78ae                        4083075e9 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a25a757ed16e673a5                        2b82e0949 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a30e0c2d7c1e40cb5                        2cb2259a0 [pr7868]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a3d04850a729f7308                        bcaad0f92 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a52ece94c1951ff1b                        3fecf956e [worktree-agent-a52ece94c1951ff1b]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a5fde3a5a67be708c                        5053dd6ae [audit-7500-local]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a6c578a85b1848268                        73dade45f [pr8092-review]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a782207c783488fb3                        2b82e0949 [review-pr7984]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a811d2555d81d874d                        302bad308 [worktree-agent-a811d2555d81d874d]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-a9b40df417128f3c0                        98865cd38 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-aaf5efb8b98d765e4                        2b78be246 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-ab5f99d2a0ae875db                        4083075e9 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-aba89c7739f961d5d                        9bac2b218 [review-7869]
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-ac552519f1c55518f                        2b78be246 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-aea6f4d2bb5f5bb42                        2e5a74fb9 (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.claude/worktrees/agent-afe7d4ed30afc420e                        6b494f16c (detached HEAD)
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-7867-bs-connection-lesson                        3695903ef [feat-7867-bs-connection-lesson]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-codebase-memory-mcp-eval                         baba66d51 [feat-codebase-memory-mcp-eval]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-eve-competitive-eval                             351396559 [feat-eve-competitive-eval]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-herdr-worktree-placement                         e355a20b0 [feat-herdr-worktree-placement]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-hetzner-host-class-strategy                      7ddd82acc [feat-hetzner-host-class-strategy]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-lifeos-adaptations                               c075bb36e [feat-lifeos-adaptations]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-6766-6774-ci-guards-cannot-fail         0d3a33adb [feat-one-shot-6766-6774-ci-guards-cannot-fail]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7056-soak-gate-negation-strip           192f53fc3 [feat-one-shot-7056-soak-gate-negation-strip]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7389-provenance-buildarg-secret         a22fcd78f [feat-one-shot-7389-provenance-buildarg-secret]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7395-release-esm-build-failure          fe357c850 [feat-one-shot-7395-release-esm-build-failure]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7937-ship-discipline-rules              ef4409c57 [feat-one-shot-7937-ship-discipline-rules]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-8189-git-data-root-key                  a6044bf11 [main]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pluggable-web-agent-engines                      d11c8b1ec [feat-pluggable-web-agent-engines]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-tenant-version-routing                           f1f72a13e [feat-tenant-version-routing]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-workflow-state-machine                           f7de7425c [feat-workflow-state-machine]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-zot-primary-write-path                           afd14d6f0 [feat-zot-primary-write-path]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/fix-6808-heartbeat-wire                               844c9c2f0 [docs-redaction-fails-open]
-/home/jean/git-repositories/jikig-ai/soleur/.worktrees/inngest-replace-7695                                  a50ef75e2 (detached HEAD)
-/var/tmp/soleur-main-check                                                                                   dd5c52fa5 (detached HEAD)
+SOLEUR_WORKTREE_LEASE_LIB_OK path=<worktree>/plugins/soleur/skills/git-worktree/scripts/../../../scripts/lib/session-state.sh
+SOLEUR_GIT_BARE_POISON git_dir=/tmp/ac12.j8eNisAO/.git shared_bare=false extension=absent git_version=2.55.0 branch=guard-skip
+/tmp/ac12.j8eNisAO 8d25de4 [main]
 ```
