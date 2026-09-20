@@ -242,21 +242,45 @@ else
   if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
     bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
     git worktree list
-    # Write-then-rename, NEVER `git show … > .mcp.json`. The shell TRUNCATES the redirect target
-    # before forking `git show`, so every failure mode leaves a 0-byte .mcp.json: no `.mcp.json`
-    # on main (the normal case for a customer repo — this repo tracks one, which is why it was
-    # never noticed), no local `main`, or any other git error. Measured: 67 bytes -> 0, silently,
-    # with `2>/dev/null || true` swallowing the status and reporting rc 0. On a customer machine
-    # that file is their MCP server registry, commonly holding per-server tokens, and it is
-    # untracked — so the loss is unrecoverable.
-    if git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
-      mv .mcp.json.soleur-tmp .mcp.json
-    else
-      rm -f .mcp.json.soleur-tmp
-      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main"
-    fi
   else
     echo "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root"
+  fi
+  # The .mcp.json restore is a SIBLING of the reaper, not nested inside it. It was nested, and
+  # that re-created in miniature the coupling #8308 is about: the restore needs no part of
+  # worktree-manager.sh, so on a verified-but-torn install missing that one script it silently
+  # did not run and the only marker named the reaper. The PR's own account lists the never-
+  # running restore as a SEPARATE consequence of the bug; keeping it behind the reaper's
+  # presence check would have contradicted that.
+  #
+  # Write-then-rename, NEVER `git show … > .mcp.json`. The shell TRUNCATES the redirect target
+  # before forking `git show`, so every failure mode leaves a 0-byte .mcp.json. Measured:
+  # 67 bytes -> 0, silently, with `2>/dev/null || true` swallowing the status and reporting
+  # rc 0. On a customer machine that file is their MCP server registry, commonly holding
+  # per-server tokens, and it is untracked — so the loss is unrecoverable.
+  if git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
+    if mv .mcp.json.soleur-tmp .mcp.json; then
+      :
+    else
+      # A failed rename leaves the temp file in the customer's worktree. Report it and
+      # remove it; silence here is how a stray .soleur-tmp becomes someone's mystery file.
+      rm -f .mcp.json.soleur-tmp
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-rename-failed"
+    fi
+  else
+    # MEASURE the cause; do not name one (AP-021 — the rule this file's other markers enforce).
+    # `git show main:.mcp.json` fails for at least three distinct reasons and the previous
+    # single `reason=mcp-json-absent-on-main` asserted the first of them for all three, which
+    # is the same defect as `reason=cloud-session` before it learned to print its verdict.
+    # $? here is the `if` condition's status, so it is captured before `rm` overwrites it.
+    SHOW_RC=$?
+    rm -f .mcp.json.soleur-tmp
+    if ! git rev-parse --verify -q main >/dev/null 2>&1; then
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-no-local-main"
+    elif ! git cat-file -e main:.mcp.json 2>/dev/null; then
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main"
+    else
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-read-failed rc=${SHOW_RC}"
+    fi
   fi
 fi
 ```

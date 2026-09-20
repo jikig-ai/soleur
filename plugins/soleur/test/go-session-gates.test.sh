@@ -480,6 +480,49 @@ want_eq "$(cat "$ws/.mcp.json")" '{"local":"customer-edits"}' "R3d: a local .mcp
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main" "R3d: and the skip is reported, not swallowed"
 ck; if [ -e "$ws/.mcp.json.soleur-tmp" ]; then fail "R3d: the temp file was left behind"; else pass "R3d: no temp file left behind"; fi
 
+echo "R3f. the .mcp.json restore does not depend on worktree-manager.sh"
+# Added at ship time on an advisor finding. The restore was NESTED inside the
+# `[ -f worktree-manager.sh ]` arm, so a verified-but-torn root missing that one script
+# skipped the restore too and the only marker named the reaper. That is the #8308 coupling in
+# miniature, and no row saw it: R6c asserts the reaper did NOT dispatch and says nothing about
+# .mcp.json, so decoupling left the suite byte-identical at 149/0. This row is what makes the
+# two independent.
+NOMGR="$TMP_ROOT/root-no-manager"; mk_root "$NOMGR" soleur session-start
+ws="$(fresh_ws r3f)"
+out="$(run_gate "$(delivered_fence 2 "$NOMGR" nomgr)" "$ws" "$SCRATCH_HOME")"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root" "R3f: the absent reaper is still reported"
+want_not_in "$out" "STUB_WORKTREE_MANAGER" "R3f: and nothing was dispatched for it"
+want_eq "$(cat "$ws/.mcp.json")" "$(git -C "$ws" show main:.mcp.json)" "R3f: the restore ran anyway"
+
+echo "R3g. a git show failure names the cause it MEASURED, not the first of three (AP-021)"
+# `git show main:.mcp.json` fails for at least three reasons and the marker asserted one of
+# them for all three. This drives the arm the old spelling got WRONG: a repo with no local
+# `main` at all. R3d already covers "main exists, carries no .mcp.json".
+ws="$(fresh_ws r3g)"
+: "${ws:?fresh_ws r3g produced no workspace path; refusing to run git against the caller repo}"
+git -C "$ws" branch -m main notmain
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-no-local-main" "R3g: names the missing branch"
+want_not_in "$out" "reason=mcp-json-absent-on-main" "R3g: and does NOT claim main lacks the file"
+ck; if [ -e "$ws/.mcp.json.soleur-tmp" ]; then fail "R3g: the temp file was left behind"; else pass "R3g: no temp file left behind"; fi
+
+echo "R3h. the verdict is the classifier's FIRST stdout line, and trailing output is ignored"
+# `SESSION_VERDICT="$(… | head -1)"` assumes cloud-detect.sh's non-banner stdout leads with the
+# verdict. R2 drives the REAL script (one line) and R3c a one-line stub, so neither can tell
+# `head -1` from `tail -1` — both pass under either. This stub prints the verdict first and
+# noise after, which only `head -1` reads correctly.
+NOISY="$TMP_ROOT/root-noisy-classifier"; mk_root "$NOISY" soleur
+cat > "$NOISY/scripts/cloud-detect.sh" <<'NOISY_EOF'
+#!/usr/bin/env bash
+echo "local"
+echo "note: some future diagnostic line"
+NOISY_EOF
+chmod +x "$NOISY/scripts/cloud-detect.sh"
+ws="$(fresh_ws r3h)"
+out="$(run_gate "$(delivered_fence 2 "$NOISY" noisy)" "$ws" "$SCRATCH_HOME")"
+want_in "$out" "STUB_WORKTREE_MANAGER argv=cleanup-merged" "R3h: a leading 'local' verdict proceeds despite trailing output"
+want_not_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=cloud-session" "R3h: and the trailing line is not read as the verdict"
+
 echo "R3e. a verified root whose CLASSIFIER is absent is reported distinctly"
 # SESSION_PROBE=absent had no row: mk_root's absent=session-start drops only worktree-manager.sh.
 CLASSLESS="$TMP_ROOT/root-no-classifier"; mk_root "$CLASSLESS" soleur cloud-detect
@@ -779,9 +822,9 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 147 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
-# Raising it is part of adding a row.
-MIN_ASSERTIONS=147
+# 155 is the H3-SKIPPED total; H3 running adds two more (157), so the floor holds on both paths.
+# Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155.
+MIN_ASSERTIONS=155
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2

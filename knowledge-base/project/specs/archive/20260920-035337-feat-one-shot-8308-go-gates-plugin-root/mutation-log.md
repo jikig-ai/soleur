@@ -161,3 +161,31 @@ discarded while the suite reported its previous green — indistinguishable from
 vitest verdict grep was defeated by ANSI codes and returned empty for every arm. Both were
 caught by requiring the mutation to be asserted landed and by reading the exit code rather than
 a parsed summary line.
+
+## Round 3 — the pre-ship advisor consult (2026-09-20)
+
+Three defects found AFTER the 11-seat panel had finished, all in code this PR authored, all
+fixed inline. Two got rows; the third is stated as uncovered rather than implied to be covered.
+
+| # | Defect | Fix | Row | Mutation | Result |
+|---|---|---|---|---|---|
+| 3.1 | `reason=mcp-json-absent-on-main` asserted one of three possible causes for every `git show` failure — AP-021, the rule this file's other markers enforce. The adjacent comment enumerated the other two. | measure: `mcp-json-no-local-main` / `mcp-json-absent-on-main` / `mcp-json-read-failed rc=<n>`, with `$?` captured before `rm` overwrites it | `R3g` | collapse the three arms back to the single `mcp-json-absent-on-main` echo | **RED** — exactly 2 assertions: `R3g: names the missing branch` (missing) and `R3g: and does NOT claim main lacks the file` (present). 153 passed / 2 failed. |
+| 3.2 | the `.mcp.json` restore was nested inside `if [ -f worktree-manager.sh ]`, so a verified-but-torn root missing only that script skipped the restore and the only marker named the reaper — #8308's own coupling in miniature | make the restore a SIBLING of the reaper arm | `R3f` | re-gate only the restore on the reaper's presence (`[ -f … ] && git show …`) | **RED** — exactly 1 assertion: `R3f: the restore ran anyway`. 154 passed / 1 failed. |
+| 3.4 | `SESSION_VERDICT="$(… \| head -1)"` assumes the classifier leads with the verdict. R2 drives the real one-line script and R3c a one-line stub, so neither can tell `head -1` from `tail -1` — both pass under either. | none needed; the row is the fix | `R3h` | `head -1` -> `tail -1` in go.md | **RED** — exactly 2 assertions: `R3h: a leading 'local' verdict proceeds despite trailing output` (missing `STUB_WORKTREE_MANAGER`) and `R3h: and the trailing line is not read as the verdict` (present `reason=cloud-session`). 155 passed / 2 failed. |
+| 3.3 | a failed `mv` left `.mcp.json.soleur-tmp` in the customer's worktree with no output | `reason=mcp-json-rename-failed` + `rm -f` | **none** | — | **NOT COVERED.** Driving a failed rename needs a read-only fixture directory. Recorded as a gap rather than left to be inferred from the two rows beside it. |
+
+**Row 3.4 was an assumption, not a defect.** `head -1` is correct today; what was missing was
+anything that could tell it from `tail -1`. Both existing classifier fixtures print exactly one
+line, so the two spellings are indistinguishable to the suite — the classic one-element-fixture
+blind spot, and the reason the new stub prints the verdict FIRST and noise after.
+
+**Why no row saw 3.2 before.** `R6c` for the session-start gate asserts the reaper did NOT
+dispatch and says nothing about `.mcp.json`, so decoupling the restore left the suite
+byte-identical at `149 passed, 0 failed`. That is the same shape as round 2's disarmable
+deciders: a green suite over a changed property.
+
+Control before each mutation: green. Restore after each: `cmp -s` byte-identical against a
+pre-mutation copy, asserted rather than assumed.
+
+Assertion floor raised 147 -> 155 in the same edit (the H3-SKIPPED total; H3 running adds two,
+for 157). Raising it is part of adding a row.
