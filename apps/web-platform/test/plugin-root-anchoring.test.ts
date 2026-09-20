@@ -109,10 +109,31 @@ const ROOT_PREFLIGHT_ANCHOR = '"${ROOT}/.claude-plugin/plugin.json"';
  */
 function readsRootUnsafely(src: string): boolean {
   return (
-    src.includes("${CLAUDE_PLUGIN_ROOT:-") ||
-    src.includes("${CLAUDE_PLUGIN_ROOT:?") ||
-    /\$CLAUDE_PLUGIN_ROOT\b/.test(src)
+    // ANY modifier on the braced token, not an enumeration of the two spellings anyone
+    // thought of. Measured bypasses of the `:-`/`:?` pair: `${CLAUDE_PLUGIN_ROOT-default}`
+    // (colon-less, the #7442 CWD-default class) and `${CLAUDE_PLUGIN_ROOT:=default}` both
+    // passed. A character-class exception cannot be evaded by reaching for another sigil.
+    /\$\{CLAUDE_PLUGIN_ROOT[^}]/.test(src) ||
+    /\$CLAUDE_PLUGIN_ROOT\b/.test(src) ||
+    // Reading the root WITHOUT naming the token defeats loader substitution entirely.
+    /(?:printenv|\$\{!)[^\n]*CLAUDE_PLUGIN_ROOT/.test(src) ||
+    /CLAUDE_PLUGIN_ROOT[^\n]*\$\{!/.test(src)
   );
+}
+
+/**
+ * P1b's SCAN, extracted so its control can drive the same code path the live assertion uses.
+ *
+ * Measured before this existed: replacing the inline scan body with `const violations:
+ * string[] = []` left the suite at 27/27 — P1b-control green, P5 still exactly 17 — while a
+ * real prose-level violation sat in go.md. The control proved the PREDICATE and nothing
+ * proved the SCAN was wired to it. Same shape as the bash deciders in
+ * plugins/soleur/test/go-session-gates.test.sh block L2, one language over.
+ */
+function scanForUnsafeRootReads(
+  sources: ReadonlyArray<{ readonly name: string; readonly src: string }>,
+): string[] {
+  return sources.filter((f) => readsRootUnsafely(f.src)).map((f) => f.name);
 }
 
 /**
@@ -125,6 +146,10 @@ const P1B_FIXTURES: ReadonlyArray<{ readonly src: string; readonly mustFlag: boo
   { src: 'bash "$CLAUDE_PLUGIN_ROOT/scripts/x.sh"', mustFlag: true },
   { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"', mustFlag: true },
   { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:?set it}"', mustFlag: true },
+  // Measured bypasses of the original `:-`/`:?` pair, added with the fix that closes them.
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT-./plugins/soleur}"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:=./plugins/soleur}"', mustFlag: true },
+  { src: 'ROOT="$(printenv CLAUDE_PLUGIN_ROOT)"', mustFlag: true },
   { src: 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token', mustFlag: false },
   { src: 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"', mustFlag: false },
   { src: 'if [ -n "${GROK_PLUGIN_ROOT:-}" ]; then ROOT="$GROK_PLUGIN_ROOT"; fi', mustFlag: false },
@@ -330,9 +355,13 @@ function isAnchored(operand: string): boolean {
 }
 
 /**
- * `${ROOT}/…` is only an anchor when the same fence first assigns ROOT from
- * GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT, with no CWD default. A bare
- * `${ROOT}` with no assignment is the #7442 CWD-relative hazard again.
+ * `${ROOT}/…` is only an anchor when the same fence first assigns ROOT from the
+ * loader-substituted `${CLAUDE_PLUGIN_ROOT}` token, then GROK_PLUGIN_ROOT, with no CWD
+ * default (ADR-179 decision 11). A bare `${ROOT}` with no assignment is the #7442
+ * CWD-relative hazard again.
+ *
+ * This comment described the OPPOSITE order until #8308 — the #8061 arm order, which is
+ * the form A15 rejects. It was the last place in the repo asserting it as current.
  */
 function isSafelyAnchored(inv: Invocation, fences: Fence[]): boolean {
   const bare = unquote(inv.operand);
@@ -432,10 +461,11 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     // would silently shrink a guard that already covers prose and inline snippets. The
     // assembly is a directory listing, so a fourth command file joins the guarded set by
     // existing rather than by anyone remembering to add it.
-    const violations = files
-      .filter((f) => readsRootUnsafely(readFileSync(f, "utf8")))
-      .map((f) => f.replace(REPO_ROOT + "/", ""));
-    check(violations).toEqual([]);
+    check(
+      scanForUnsafeRootReads(
+        files.map((f) => ({ name: f.replace(REPO_ROOT + "/", ""), src: readFileSync(f, "utf8") })),
+      ),
+    ).toEqual([]);
   });
 
   it("P1b-control: the predicate flags every non-canonical form and no canonical one", () => {
@@ -445,8 +475,15 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
       (fx) => `${fx.mustFlag ? "MISSED" : "FALSE-POSITIVE"}: ${fx.src}`,
     );
     check(wrong).toEqual([]);
+    // Drive the SCAN, not only the predicate — a gutted scan is invisible to the line above.
+    check(
+      scanForUnsafeRootReads([
+        { name: "dirty.md", src: 'ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"' },
+        { name: "clean.md", src: 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token' },
+      ]),
+    ).toEqual(["dirty.md"]);
     // Length floor: deleting the #8061-form row would otherwise leave this green.
-    check(P1B_FIXTURES.filter((fx) => fx.mustFlag).length).toBeGreaterThanOrEqual(4);
+    check(P1B_FIXTURES.filter((fx) => fx.mustFlag).length).toBeGreaterThanOrEqual(7);
     check(P1B_FIXTURES.filter((fx) => !fx.mustFlag).length).toBeGreaterThanOrEqual(3);
   });
 
@@ -736,11 +773,11 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     // Counts DECIDED assertions (see `check`), not `it` blocks: a per-block counter is
     // satisfied by a block whose body was gutted.
     //
-    // 14 -> 17: P1b-control adds three decided checks. (16 was measured against a RED tree
+    // 14 -> 18: P1b-control adds four decided checks (three predicate, one driving the SCAN). (16 was measured against a RED tree
     // where P1 short-circuited before its own check; the number a failing run reports is not
     // the number a green run reports, which is the trap in reading an exact-equality floor
     // off a red baseline.) Raising this is PART of adding the control, not an afterthought.
-    expect(assertions).toBe(17);
+    expect(assertions).toBe(18);
   });
 });
 

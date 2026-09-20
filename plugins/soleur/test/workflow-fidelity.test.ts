@@ -531,13 +531,24 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     // and all three /soleur:go session gates took their degraded branch while CI stayed green
     // over the literal. A guard that pins the defect is worse than no guard.
     const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
-    expect(goMd).toContain('ROOT="${CLAUDE_PLUGIN_ROOT}"');
-    expect(goMd).toContain("GROK_PLUGIN_ROOT");
-    expect(goMd).toContain("SOLEUR_PLUGIN_ROOT_RESOLVE");
+    // CALL-FORM anchors, not bare tokens. `toContain("GROK_PLUGIN_ROOT")` and
+    // `toContain("SOLEUR_PLUGIN_ROOT_RESOLVE")` were both satisfied by this PR's OWN new
+    // operator-facing prose ("Read the `SOLEUR_PLUGIN_ROOT_RESOLVE` line…", "`GROK_PLUGIN_ROOT`
+    // is set but…"), so deleting all four echo lines and the entire grok-env arm left this test
+    // green. The diff created the satisfier and the assertion together —
+    // `cq-assert-anchor-not-bare-token`.
+    expect(goMd).toContain('ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token');
+    expect(goMd).toContain('ROOT="$GROK_PLUGIN_ROOT"; SRC=grok-env');
+    expect(goMd).toContain('echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=');
     expect(goMd).toContain("plugin-root-unverified");
     expect(goMd).toContain("grok inspect");
+    // A bare `ROOT="${CLAUDE_PLUGIN_ROOT}"` prefix is not enough on its own: an indirection
+    // (`XROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${GROK_PLUGIN_ROOT:-$XROOT}"`) contains it while
+    // functionally reverting the arm order, and dodges both negatives below. Measured green
+    // before the call-form anchors above were added.
     expect(goMd).not.toContain(":-$CLAUDE_PLUGIN_ROOT");
     expect(goMd).not.toContain(":-./plugins/soleur");
+    expect(goMd).not.toMatch(/ROOT="\$\{GROK_PLUGIN_ROOT:-/);
     const namePin = `grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"'`;
     expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(3);
   });
