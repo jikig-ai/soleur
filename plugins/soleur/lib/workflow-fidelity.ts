@@ -158,10 +158,13 @@ export function formatSkillRef(skill: string, harness: Harness): string {
  * Putting `plan` into `work`'s successors to express the `work -> plan` back-edge
  * would instruct the model to re-enter planning after EVERY work run.
  *
- * The three back-edges are operator-approved (#8302): `review -> work` (review
- * produced findings that need implementing), `ship -> work` (postmerge failed),
- * and `work -> plan` (implementation invalidated the plan). `postmerge -> work`
- * was considered and REJECTED as redundant with `ship -> work`.
+ * The four back-edges are operator-approved: `review -> work` (review produced
+ * findings that need implementing), `ship -> work` (a pre-merge gate —
+ * preflight/QA — failed), `postmerge -> work` (post-merge verification failed;
+ * declared 2026-09-19 on #8325 — 7 sessions took it, 5 re-entered
+ * `work -> review -> compound -> ship -> postmerge` in full, 2 ended at `work`,
+ * none skipped `ship`) and `work -> plan` (implementation invalidated the
+ * plan). The first, second and fourth were approved on #8302.
  *
  * `plan -> ship` is deliberately ABSENT. It is the path that lets a session skip
  * `review` entirely, which surfaces only after merge — the operator-facing loss
@@ -184,7 +187,29 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
   review: ["compound", "work"],
   compound: ["ship"],
   ship: ["postmerge", "work"],
-  postmerge: [],
+  postmerge: ["work"],
+};
+
+/**
+ * Node skills that another node's SKILL.md invokes as a designed SUB-STEP of
+ * its own run, keyed by the invoking node. `brainstorm` runs `compound` to
+ * capture learnings and then hands off to `plan`, so the invocation log
+ * shows `brainstorm compound plan` for the designed handoff. The classifier
+ * drops a record whose skill is a sub-step of the PREVIOUS KEPT node before
+ * pairing, so that sequence pairs as `brainstorm -> plan`. This is NOT an
+ * edge: `brainstorm -> compound` and `compound -> plan` stay undeclared, so
+ * `review -> compound -> plan` (a ship skip) is still reported. Mirrored in
+ * .claude/workflow-transitions.json under `sub_steps` (parity-pinned).
+ *
+ * To add an entry: the key and every value must be DECLARED_TRANSITIONS nodes
+ * (a non-node is removed by the classifier's node filter first, so the entry
+ * would be dead); a value must not be a declared successor of its key (the
+ * collapse would silently delete a declared pair from `pairs`). Edit this
+ * const first, mirror the JSON, then run
+ * `bun test plugins/soleur/test/workflow-fidelity.test.ts`.
+ */
+export const DECLARED_SUB_STEPS: Readonly<Record<string, readonly string[]>> = {
+  brainstorm: ["compound"],
 };
 
 /** Edges declared FROM `skill`. Unknown nodes declare nothing. */

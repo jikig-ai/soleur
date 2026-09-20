@@ -359,7 +359,7 @@ emit_incident "<rule_id>" "<event_type>" "<rule_text_prefix>" ["<command_snippet
 
 | Field | Meaning |
 |---|---|
-| `rule_id` | Stable slug from `AGENTS.md` (`hr-*`, `wg-*`, `cq-*`, `rf-*`, `pdr-*`, `cm-*`) or a `guardrails-*` sentinel for constitution-only rules. |
+| `rule_id` | Stable slug from `AGENTS.md` (`hr-*`, `wg-*`, `cq-*`, `rf-*`, `pdr-*`, `cm-*`), a `guardrails-*` sentinel for constitution-only rules, or a hook-local id with no section prefix (`pkill-self-match-guard-readonly`, `context-reviewed-gate`) — counted by the aggregator under `non_corpus_counts`, never an orphan (#7853). |
 | `event_type` | `deny` (hook blocked the action) or `bypass` (user used a skip flag). |
 | `rule_text_prefix` | First ~50 chars of the rule's prose, for forensic context. |
 | `command_snippet` | Optional: the full command (or file path) that triggered the event. |
@@ -465,6 +465,7 @@ helper itself errors.
 | `guardrails.sh` | 6 | `guardrails-block-commit-on-main`, `guardrails-block-rm-rf-worktrees`, `guardrails-block-delete-branch`, `guardrails-block-conflict-markers`, `guardrails-require-milestone`, `hr-never-git-stash-in-worktrees` |
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
+| `pkill-self-match-guard.sh` | 2 | `pkill-self-match-guard-readonly` (the `-f` arm emits none) |
 | `browser-snapshot-credential-guard.sh` — **ships in `plugins/soleur/hooks/`**, not here, because `${CLAUDE_PLUGIN_ROOT}` resolves into the installed plugin and a script under `.claude/` never reaches a customer (#7947). Its suite lives here because `.claude/hooks/*.test.sh` is an auto-globbed suite path. | 1 | — (plain deny) |
 
 ### PreToolUse rewriters (no deny semantics)

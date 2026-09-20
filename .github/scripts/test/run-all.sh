@@ -161,10 +161,10 @@ suite_exit_class() {
 # this runner carried none for its own.
 #
 # A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn every added
-# suite into a spurious failure. Derived from a green run (11 suites, 2026-08-13; was 10 until
-# test-run-all-signal-propagation.sh landed with #7429). Raise it when suites are added; lower
+# suite into a spurious failure. Derived from a green run (12 suites, 2026-09-19; was 11 until
+# test-bump-inngest-bootstrap-pin.sh landed with #8359). Raise it when suites are added; lower
 # it deliberately, with a reason.
-MIN_SUITES=11
+MIN_SUITES=12
 
 for t in "$DIR"/test-*.sh; do
   [[ -e "$t" ]] || continue

@@ -653,9 +653,13 @@ failure_modes:      # list of {mode, detection, alert_route}
 logs:               # where / retention
 discoverability_test:
   command:              # one command an operator can run LOCALLY (NO ssh). preflight Check 10
-                        # EXECUTES this in a sandbox, so the first token must be an allowlisted
-                        # probe verb or a repo-relative path — see the reject conditions below.
-  expected_output:      # canonical "everything OK" output
+                        # EXECUTES this in a sandbox under a 15s cap, so the first token must be
+                        # an allowlisted probe verb (NO path-shaped exemption — wrap anything
+                        # else in a committed repo-relative script invoked as `bash path/x.sh`),
+                        # and the whole command must finish inside the cap. Rejects below.
+  expected_output:      # the LITERAL string(s) the command prints — "200", "ok",
+                        # "RELEASED or HOLD or ABORT". Check 10 substring-matches these against
+                        # stdout, so a sentence DESCRIBING the output can never match.
   credentials_required: # OPTIONAL — only when the property has no unauthenticated substitute
 ```
 
@@ -666,6 +670,19 @@ discoverability_test:
 - `discoverability_test.command` contains `ssh ` (with trailing space — distinguish "ssh " the verb from "ssh-free" in docs). A `credentials_required` declaration does **not** override this. <!-- markdownlint-disable-line MD038 -->
 - `discoverability_test.command`'s first token is not on preflight Check 10's `PROBE_VERB_ALLOWLIST` (`curl bash grep rg jq python3 node bun printf git`). There is no path-shaped exemption — a first token containing `/` is subject to the same list. Check 10 executes this command inside a sandbox; the allowlist is schema validation ("can this run at all?"), not a security control, and every entry is an authority grant the sandbox — not the list — bounds. Wrap anything else in a repo-relative script committed in the SAME PR: it runs with `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME` on tmpfs, no credential stores, and the repo read-only.
 - `discoverability_test.credentials_required` is present but placeholder text. The field is **optional**; when a probe verifies a property with no unauthenticated substitute, state the credential scope and the justification (`"<scope> — <why no unauthenticated probe verifies the same property>"`) and Check 10 skips it explicitly (`SKIP-DECLARED`) instead of executing it. A declaration that says nothing waives nothing.
+- `discoverability_test.command` is a whole test suite, a full build, or anything else that cannot finish inside preflight Check 10's **15-second cap**. Check 10 runs the declared command in a bubblewrap sandbox under `timeout 15s`; a longer command is killed at `rc=124` and reported as a FAILED probe (row 9), which is indistinguishable from the endpoint being down. A suite is the right command to TEST the thing and the wrong one to DISCOVER its signal — declare the smallest command that prints the signal `liveness_signal.what` already names. Wrapping in a committed repo-relative script satisfies the VERB allowlist, not this condition — a suite wrapped in a script is still a suite; the wrapper is the remedy for a multi-statement probe that is already fast. **Why:** #8010/PR #8412 — a plan declared its own 236-assertion gate suite here; Check 10 killed it with arms still passing.
+- `discoverability_test.expected_output` is PROSE rather than a matchable literal. Check 10 tokenizes this field and asks whether any token is a substring of the command's stdout (preflight `## Step 10.6` *Expected-output matching semantics*; note the row-11 cell states the direction backwards and is a known defect in that table), so a sentence like `"the suite's final ledger line reports 0 failures"` cannot be relied on to match and the probe FAILS on a healthy system. (Not *never*: the tokenizer splits on `,`, `or`, quotes, brackets and `/`, so a prose value containing those yields fragments, and a long enough fragment that happens to occur in stdout matches by accident — which is worse than a clean FAIL.) State the literal(s) the command actually prints — `"200"`, `"RELEASED or HOLD or ABORT"`, `"ok"` — not a description of what they mean. **Absent** counts as violating this too: an empty `expected_output` parses to `""`, matches nothing, and surfaces at ship time as a row-11 "expectation drift" FAIL — the misdiagnosis this condition exists to prevent.
+
+**Scope of the two conditions above (added #8412).** A non-placeholder `credentials_required`
+short-circuits both: preflight row 4 (`SKIP-DECLARED`) precedes rows 9 and 11, so the command is
+never executed and neither condition is reachable at ship time — `deepen-plan` Step 5 encodes this
+and this list must not disagree with it. Otherwise they bind a `discoverability_test` this change
+AUTHORS or AMENDS. They are not retroactive: measured at introduction, of the 856 plans under
+`knowledge-base/project/plans/` carrying the block, ~372 declare a prose or block-scalar
+`expected_output` and ~261 a suite-shaped `command`, every one of them compliant when written.
+`soleur:deepen-plan` run against a pre-existing block REPORTS these two as findings and proceeds;
+it HALTs on them only when the block is new or edited in the same change. Every other reject
+condition in this list is unscoped and halts either way.
 
 **Skip silently** when:
 
@@ -778,6 +795,8 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 **One row must satisfy the guard's precondition and still fail the property — and every mechanism must be validated against the tree its own REMEDIATION produces, not the tree it finds.** Enumeration rows (is the marker present, is the population derived, does the floor fire) are statements about the population's *shape*; a property of the form "X implies Y" needs a row where X holds and Y fails. Without one, the matrix is measuring its own bookkeeping. The second half is the scheduling problem: a mechanism measured against the current tree can be sound now and dead after the backfill, and nothing in the authoring loop prompts the re-check because the post-change state does not exist yet — so for each mechanism, name the mutation that defeats it *after* the change lands. When the remediation writes text, the first candidate is always **"does the remediation's own text match the classifier?"** Two corollaries: an aggregate floor cannot express a per-member property (if the property is per-member, the artifact is an inventory, not a count); and after renaming any heading a gate keys on, re-run that gate and assert the **entry count** moved, not merely that it exits 0. **Why:** #8299 — a 454-line plan whose 13 rows all tested enumeration scored `ship/SKILL.md` QUALIFIED while it still dispatched `skill: soleur:preflight`, and scored the very `soleur:trigger-cron` form that opened the issue QUALIFIED in three more skills. Its marker block contains `Skill tool` and `invokeSkill`, so the backfill made every obliged skill trigger-bearing *by the block*: leave-one-out went from 6/12 alternatives unreachable to **12/12**, and a single-alternative pattern reported all four floors green over a fully vacuous gate. Its auto-exempt "ceiling" was a net-count identity an add-one-delete-one PR satisfied exactly. Separately, appending the revision under `## v2 Guard Contract` did not match `lint-guard-contract.py`'s `^##\s+Guard\s+Contract\b`, so the lint validated only the **superseded** v1 contract and reported one entry for a file with two. See `knowledge-base/project/learnings/2026-09-18-every-mechanism-was-validated-against-the-tree-before-its-own-backfill.md`.
 
 **Reject conditions** (enforced mechanically by [lint-guard-contract.py](../../../../scripts/lint-guard-contract.py), and halted at deepen-plan Phase 4.11): the section missing while detection fires; a `## Guard Contract` heading with zero `### Guard` entries; a missing or placeholder `**Property.**` or `**Assembly.**`; a mutation matrix with fewer than 3 rows. The lint quantifies over EVERY entry, not the first.
+
+**A guard over a script that writes into a user's tree carries an exit-site table by position relative to the FIRST write, and one row per precondition proving it resolves before that write.** "Cleans up on failure" is a property of that window, not of the failure arms the script names; a claim scoped to named codes is true and useless when the failure that fires is a different one. **Why:** #8288/PR #8352 — a merge-base 69 sat after five emits and before any trap; six review seats measured five files left and a 66 on every re-run. See `knowledge-base/project/learnings/2026-09-19-cleanup-on-failure-is-a-property-of-the-window-not-the-arms.md`.
 
 **Skip silently** when the deliverable contains no guard — a copy change, a dependency bump, a pure refactor behind existing tests.
 

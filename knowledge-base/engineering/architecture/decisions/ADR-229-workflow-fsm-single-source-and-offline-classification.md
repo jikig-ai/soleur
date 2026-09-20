@@ -58,7 +58,9 @@ of truth. `.claude/workflow-transitions.json` is a *derived view*: **hand-mirror
 (there is no generator)** and pinned by a parity block that fails in both
 directions — a view carrying an edge the const lacks is exactly as wrong as one
 missing an edge. The view has one consumer: the offline classifier (bash,
-decision 3). A `bun -e` read of the const from that script was weighed at
+decision 3). **[Amended 2026-09-19 (#8325): the view also carries `sub_steps`,
+mirroring `DECLARED_SUB_STEPS` under the same parity block; it still has one
+consumer.]** A `bun -e` read of the const from that script was weighed at
 review (bun is present wherever the classifier runs) and not taken — see the
 Alternatives table — so the mirror stays.
 
@@ -77,8 +79,10 @@ JSON is not shipped.
 `toEqual` assertions on the latter enforce the separation rather than merely
 documenting it.
 
-Declared back-edges: `review → work`, `ship → work`, `work → plan`.
-`postmerge → work` was considered and rejected as redundant with `ship → work`.
+Declared back-edges: `review → work`, `ship → work`, `postmerge → work`,
+`work → plan`. **[Amended 2026-09-19 (#8325): `postmerge → work` was originally
+considered and rejected as redundant with `ship → work`; it is declared as of
+this amendment on the seven-session reading in Consequences.]**
 `plan → ship` is deliberately absent and asserted *as an absence* — it is the
 path that skips `review`, which surfaces only after merge.
 
@@ -148,6 +152,29 @@ the base, which closes the rename escape.
   laundered through `plan → deepen-plan → ship`, which that walk classified as
   two unclassified pairs and zero violations. `postmerge → work` — the edge
   rejected as redundant — occurs 7 times, recorded here rather than acted on.
+- **`postmerge → work` is declared (2026-09-19, #8325).** The seven sessions
+  were read: five continue `postmerge → work → review → compound → ship →
+  postmerge` (a full re-entry of the implementation tail after post-merge
+  verification found something), two end the session at `work`; none skipped
+  `ship`. The doc comment already described `ship → work` as "postmerge
+  failed" — the recovery edge was recorded on the wrong node. `ship → work`
+  stays declared as the pre-merge failure path (2 sessions in the same corpus).
+- **Re-baselined 2026-09-19 (#8325, after the sub-step collapse and
+  `postmerge → work`):** on the same machine, immediately before the change,
+  `undeclared=622 sessions=1277 pairs=5026 nonnode=4019 read=10472 dropped=0`;
+  immediately after, `undeclared=379 sessions=1264 pairs=4897 nonnode=4019
+  substep=129 read=10472 dropped=0`. **Quote the DELTAS, not the absolutes:**
+  the log is append-only and rotates under other sessions, so every absolute
+  here is a snapshot that has already moved (a re-run hours later read 624→380,
+  pairs 5041→4911, substep 130). The deltas reproduce. Undeclared −243: 127
+  `brainstorm → compound` and 111 `compound → plan` rows collapse and 7
+  `postmerge → work` rows become declared, while the collapse EXPOSES a few
+  pairs that sat behind `compound` — measured `brainstorm → review` (3),
+  `brainstorm → work` (2), `brainstorm → ship` (1). Pairs −243 + 114 = −129,
+  i.e. exactly `substep`. `sessions` counts sessions forming at least one pair,
+  so the 13 that were only `brainstorm compound` leave it. `ship → plan` (50),
+  `postmerge → plan` (31), `review → ship` (51) and `plan → ship` (7) are
+  unchanged.
 - There is no follow-through probe. One was written, could not PASS where the
   sweeper runs (Alternatives table), and as an operator-run script was a
   wrapper around `classify --summary` restating this section's numbers — the
@@ -157,11 +184,22 @@ the base, which closes the rename escape.
 - **The reading needs interpretation, not just counting.** Of the 604,
   `brainstorm → compound` (125) is `brainstorm/SKILL.md` invoking `compound` as
   a designed sub-step — a node skill used as a sub-skill, which the non-node
-  filter cannot see; `compound → plan`, `ship → plan`, `postmerge → plan/work`
-  (~190) are sessions chaining a second feature; 65 are self-loops. Over half
-  the undeclared edges are not review-skips. Whether to declare
-  `brainstorm → compound` is the edge-set question recorded in
-  decision-challenges §2.
+  filter cannot see. **Corrected 2026-09-19 (#8325):** `compound → plan` is the
+  tail of that same handoff, `brainstorm → compound → plan` (live: 108 of 111;
+  2 have no predecessor, 1 follows `ship`), not second-feature chaining; and
+  `plan → compound` (31) is likewise `plan`'s own exit-gate compound
+  (`plan/SKILL.md`, "Run `skill: soleur:compound` to capture learnings from the
+  planning session"), followed by `work` in 13 of the 16 cases with a
+  successor. `ship → plan` and `postmerge → plan` are the second-feature
+  starts; 65 are self-loops. Over half the undeclared edges are not
+  review-skips. Resolved 2026-09-19 (#8325): `brainstorm → compound` is not
+  declared; it is collapsed as a classifier sub-step (`DECLARED_SUB_STEPS`,
+  mirrored as `sub_steps`, counted as `substep=`), because declaring
+  `compound → plan` as an edge would legitimise `review → compound → plan`, the
+  ship-skip class the classifier exists to surface. `plan → compound` and
+  `postmerge → compound` (11) have the same shape and were not added — the
+  ruling named `brainstorm` only; recorded as a User-Challenge in the #8325
+  spec's `decision-challenges.md`.
 - **The committed aggregate is now a function of which worktrees exist at
   regeneration time.** `cleanup-merged` deletes sibling worktrees and their
   logs, so hits and `last_hit` for rules exercised only there regress on the
@@ -186,8 +224,29 @@ the base, which closes the rename escape.
   "150 KB saved". What it does buy is per-turn: a block injected at turn 0 is
   re-sent on every turn of the run, a block injected at the end is re-sent on
   none of the earlier ones, so placing the load last avoids ~58k × k cache-read
-  tokens per run, where k is the number of turns before the pass. That is
-  plausibly large and **unmeasured** — no turn telemetry exists — but the
+  tokens per run, where k is the number of turns before the pass.
+  Measured on 2026-09-19 with `scripts/measure-plan-sharp-edges-turns.sh` over
+  local transcripts 2026-09-17 → 2026-09-19 (Skill-tool and slash-typed
+  invocations). Local retention is three days, so the corpus is a ROLLING
+  WINDOW and a re-run does not reproduce a prior reading: two readings the same
+  day gave n = 2 and n = 7. Post-extraction k over 7 runs:
+  {31, 36, 38, 73, 81, 86, 125}, median 73 — every individual run clears the
+  ~8-turn break-even by at least 3.9×, which is what carries the decision at
+  this n, not the median alone. Pre-extraction proxies: k'_first median 7
+  (n = 25; turns to the ADR-176 skeleton write, so an early bound) and k'_ac
+  median 46 (n = 17; turns to the `## Acceptance Criteria` write, the faithful
+  stand-in). Median per-run saving ≈ 58k × 73 ≈ **4.2M cache-READ tokens** —
+  billed an order of magnitude below input rate, so price it before comparing
+  against a run's billed total; the n = 17 k'_ac proxy independently implies
+  ≈ 2.7M. Kept on measured evidence (#8325 §3 closed). Three caveats, each of
+  which a later reader must re-take rather than quote: the ~8-turn break-even
+  is asserted rather than measured and is the cost side of this comparison;
+  `k` is right-CENSORED, because a run still in flight when the script runs has
+  no catalogue Read yet and scores `post_skipped` — an earlier reading the same
+  day scored 4 of 6 extracted runs `post_skipped` for exactly that reason and
+  all four later scored `post` with k ∈ {38, 73, 81, 125}, so a genuine-skip
+  count may only be taken over completed runs and says nothing against the
+  ~95% figure above; and the whole reading is a rolling-window snapshot. The
   break-even is ~8 turns before the pass and a `plan` run's research and
   drafting exceed that by an order of magnitude, so it is structural rather
   than speculative. The directive
@@ -222,16 +281,35 @@ the base, which closes the rename escape.
 
 ## Verification
 
-- `plugins/soleur/test/workflow-fidelity.test.ts` — edge set, the `plan → ship`
-  absence, `mandatorySuccessors` forward-only **and a subset of the declared
-  edges** (the wire between the two functions), derived-view parity in both
-  directions, and budget-file keys equal to the lifecycle set. Runs
+- `plugins/soleur/test/workflow-fidelity.test.ts` — edge set (four back-edges
+  since #8325), the `plan → ship` absence, `mandatorySuccessors` forward-only
+  **and a subset of the declared edges** (the wire between the two functions),
+  derived-view parity in both directions for `transitions` **and `sub_steps`**,
+  the three `DECLARED_SUB_STEPS` invariants (keys and values are nodes; a value
+  is not a declared successor of its key), and budget-file keys equal to the
+  lifecycle set. Runs
   in the required `grok-fidelity` CI check (and as a pre-push gate under the
   Grok harness only).
-- `scripts/classify-workflow-transitions.test.sh` — 16 assertions including a
+- `scripts/classify-workflow-transitions.test.sh` — 28 assertions including a
   present-but-unparseable log failing loudly, sub-skill hops not laundering the
-  enclosing transition, rotated `.jsonl.gz` archives read, and timestamp order
-  over file order.
+  enclosing transition, rotated `.jsonl.gz` archives read, timestamp order
+  over file order, and (#8325) the sub-step collapse: keyed on the previous
+  KEPT node, after the non-node filter, per session, never on a session's
+  first record, exposing rather than hiding `brainstorm → review` and the
+  self-loop, and a view whose `sub_steps` is missing, `null` or `[]` failing
+  closed (rc 2).
+- `scripts/measure-plan-sharp-edges-turns.test.sh` — 21 assertions over
+  synthesized transcripts: turns are requestId groups in file order, the
+  invocation may sit in any record of its turn, the catalogue is matched by
+  suffix (installed-plugin cache path counts, a `.bak` sibling does not),
+  post/pre decided by the preamble block that starts `Base directory for this
+  skill`, the slash-typed form starts a run while a tool_result or a mid-text
+  quote does not, API-error records are not turns, windows end at the next
+  run, `k = 0` is legal, percentiles, the exact null line, and a sentinel
+  planted in every parsed string field never reaching stdout or stderr under an
+  ARMED inherited xtrace (via `BASH_ENV`, with a positive control that the
+  vector fired — the obvious `SHELLOPTS=xtrace` spelling is silently inert,
+  because `SHELLOPTS` is readonly and the child runs untraced).
 - `scripts/lint-skill-body-budget.test.sh` — 15 assertions including the
   same-diff ceiling raise, the unavailable base, the empty row set, a row for a
   sub-skill the FSM does not model, same-diff row removal, the rename escape

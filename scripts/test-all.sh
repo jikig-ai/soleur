@@ -1780,6 +1780,10 @@ if want_scripts; then
   # double-emit). The gate blocks NEW occurrences only; the baseline may shrink and must never
   # grow. Burn-down is tracked in the learning that ships with this gate. Registering it
   # baseline-free would have meant either a permanently red suite or a silently narrowed rule.
+  # #8392 twin registration: the fixture suite pins the DETECTOR, the -live row runs
+  # it over the repo. Registering only one makes a lint decoration.
+  run_suite "scripts/lint-anthropic-content-position" bash scripts/lint-anthropic-content-position.test.sh
+  run_suite "scripts/lint-anthropic-content-position-live" python3 scripts/lint-anthropic-content-position.py
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
@@ -2152,6 +2156,13 @@ if want_scripts; then
   # only: deleting the no-boot_id guard, deleting the trusted-region cut (while the forge
   # succeeded), and replacing the probe invocation with the expected value all left it 6/0 green.
   run_suite "scripts/zot-last-err-redact-7500" bash scripts/followthroughs/zot-last-err-redact-7500.test.sh
+  # #8386 registry-host at-rest posture probe. Registered at birth, beside its sibling on the same
+  # stream: the probe decides unattended whether to post a PUBLIC comment saying the registry
+  # volume is mounted unencrypted, and whether the evidence is complete enough to flip a security
+  # ledger row. It has 9 `exit 2`, 8 `exit 3` and 10 `exit 5` sites, so an exit-code-only suite
+  # would collapse most of its cases onto three integers — the suite therefore pins a branch
+  # marker per case and DERIVES its distinct-marker floor from the shipped probe.
+  run_suite "scripts/registry-luks-live-8386" bash scripts/followthroughs/registry-luks-live-8386.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
@@ -2200,6 +2211,11 @@ if want_scripts; then
   # dispatch whose boot poll ANSWERED — never on a boot_complete row, which was already true
   # before the fix. Pins the run anchor, the log-marker anchoring and the 2-vs-3 split.
   run_suite "scripts/git-data-boot-poll-8178" bash scripts/followthroughs/git-data-boot-poll-8178.test.sh
+  # #8210's close criterion (git-data-reboot-evidence-landed-8210.sh). Since #8010 the probe is
+  # four-state: it splits "the gate could not LOOK" (exit 3, rendered CANNOT ESTABLISH) out of
+  # "the gate looked and the answer is no" (exit 2, NOT YET), keyed on the bracketed token of the
+  # gate's verdict line. One arm per member of BOTH token sets, plus the never-0 invariant.
+  run_suite "scripts/git-data-reboot-evidence-landed-8210" bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -2331,13 +2347,15 @@ if want_scripts; then
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
-  # #8302 / ADR-229: the offline transition classifier and the SKILL.md byte ratchet.
-  # scripts/lib/incidents-roots.test.sh rides the scripts/lib/*.test.sh glob; these two do
-  # not sit under a globbed directory, so they are registered here explicitly. This is the
+  # #8302 / ADR-229: the offline transition classifier and the SKILL.md byte ratchet;
+  # #8325: the Sharp Edges turn-measurement script. scripts/lib/incidents-roots.test.sh
+  # rides the scripts/lib/*.test.sh glob; these three do not sit under a globbed
+  # directory, so they are registered here explicitly. This is the
   # ratchet SUITE's only registration: lint-orphan-test-suites.sh refuses double coverage,
   # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
   # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
   run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
+  run_suite "scripts/measure-plan-sharp-edges-turns" bash scripts/measure-plan-sharp-edges-turns.test.sh
   run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
@@ -2688,11 +2706,13 @@ if want_webplat; then
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
-# Co-located because validate-blog-links.sh reads _site/, which
-# plugins/soleur/test/seo-aeo-drift-guard.test.ts builds. Under matrix
-# sharding (separate runners) there is no race; co-location is a perf
-# optimization (build once, reuse) AND defense against any future xargs-P
-# attempt that would re-introduce the race within one runner.
+# Co-located because validate-blog-links.sh's link-check half reads _site/
+# at the repo root, which plugins/soleur/test/marketing-content-drift.test.ts
+# builds inside `bun test plugins/soleur/` (the drift-guard builds to
+# mkdtemp, not _site). Suites run sequentially and the script self-builds
+# when no site-dir is passed, so there is no live race today; co-location
+# is defense against any future xargs-P attempt that would introduce one
+# within a runner.
 if want_bun; then
   run_suite "plugins/soleur" bun test plugins/soleur/
   run_suite "blog-link-validation" bash scripts/validate-blog-links.sh

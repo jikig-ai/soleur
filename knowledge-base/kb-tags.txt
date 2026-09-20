@@ -235,9 +235,11 @@ alpine
 always-function
 analytics
 analytics-track
+anchor-assertion
 anchor-on-syntax
 anchor-preservation
 anchor-resolution-over-architecture
+anchor-verification
 anchoring
 anchors
 animation
@@ -245,6 +247,7 @@ anomaly-detection
 anon
 anon-key
 ansi
+ansi-anchors
 anthropic
 anthropic-api
 anthropic-credits
@@ -430,6 +433,7 @@ bash-cwd
 bash-hooks
 bash-mocks
 bash-parsing
+bash-performance
 bash-pipefail
 bash-set-e
 bash-strict-mode
@@ -464,6 +468,7 @@ binary-serving
 binary-verification
 bind-mount
 binding-resolution
+bite-proof
 blanket-replace
 blast-radius
 blind-surface
@@ -486,6 +491,7 @@ bootstrap
 born-blocking
 bot
 bot-attribution
+bot-automation
 bot-configuration
 bot-fix
 bot-fix-pipeline
@@ -693,6 +699,7 @@ ci-guards
 ci-infrastructure
 ci-issues
 ci-planning
+ci-ratchets
 ci-release
 ci-required-checks
 ci-required-ruleset
@@ -743,6 +750,7 @@ clean-urls
 cleanup
 cleanup-design
 cleanup-merged
+cleanup-window
 cli
 cli-integration
 cli-model-table
@@ -770,6 +778,7 @@ cloud-routines
 cloud-task-silence
 cloudflare
 cloudflare-access
+cloudflare-bulk-redirects
 cloudflare-rulesets
 cloudflare-tunnel
 cmo
@@ -812,6 +821,7 @@ commands
 commands/brainstorm
 comment-drift
 comment-mutability
+comment-relocation
 comment-rot
 comment-stripped-grep
 comments
@@ -895,6 +905,7 @@ consolidation
 constitution-md
 constitution.md
 constraint-precision
+constraint-scaffold
 consumer-enumeration
 consumer-sweep
 contagious-interview
@@ -1177,6 +1188,7 @@ der
 derivation-coupling
 derived
 derived-doc-refresh
+derived-floor
 derived-population
 derived-reference
 derived-set
@@ -1390,6 +1402,7 @@ enumerations
 env
 env-defaults
 env-file
+env-i
 env-inheritance
 env-injection
 env-leak
@@ -1398,6 +1411,7 @@ env-var
 env-var-inert-without-code
 env-vars
 environment
+environment-shape
 environment-variables
 eprivacy
 equivalent-mutants
@@ -1583,6 +1597,7 @@ fixture-shape
 fixture-size
 fixture-space
 fixture-sync
+fixture-vacuity
 fixtures
 fk-cascade
 flags
@@ -1615,6 +1630,7 @@ force-with-lease
 forcenew
 foreground
 foreign-keys
+fork-pr
 format
 formatters-log
 formatting
@@ -1712,6 +1728,7 @@ git-identity
 git-index
 git-ls-files
 git-manager-proxy
+git-merge-abort
 git-mv
 git-pull
 git-rebase
@@ -1723,6 +1740,7 @@ git-show-main
 git-stash
 git-subdir
 git-tags
+git-trace
 git-trailers
 git-workflow
 git-worktree
@@ -1805,6 +1823,7 @@ guard-erosion
 guard-itself-dark
 guard-placement
 guard-residue
+guard-review
 guard-test
 guard-testing
 guard-vacuity
@@ -2274,6 +2293,7 @@ merge-time-verification
 message
 message-bubble
 meta-harness
+meta-refresh
 metadata-extraction
 metadata-routes
 metakey
@@ -2324,6 +2344,7 @@ mode-name-collision
 model-disaggregation
 model-ids
 model-launch
+model-swap
 module
 module-internal-binding
 module-level-state
@@ -2332,6 +2353,7 @@ modulesupabase
 monitor
 monitor-hygiene
 monitor-lifetime
+monitor-tool
 monitoring
 monorepo
 mount-namespace
@@ -2654,6 +2676,7 @@ phase
 phase-0
 phase-5.5
 phase-7
+phase-7-poll
 phase-collision
 phase-e
 phase-ordering
@@ -2671,6 +2694,7 @@ pipe-buf
 pipefail
 pipeline
 pipeline-gotchas
+pipeline-parsing
 pir
 pir-gate
 pivot
@@ -2862,6 +2886,7 @@ precondition-staleness
 precondition-verification
 preconditions
 predicate-placement
+predicate-reject-control
 prefers-reduced-motion
 prefix
 preflight
@@ -2957,6 +2982,7 @@ propagation
 prose-claims
 prose-conventions
 prose-counts
+prose-dry-run
 prose-guard
 prose-guards
 prose-sweep
@@ -3139,6 +3165,7 @@ replan
 replay
 replay-safety
 repo-global-guards
+repo-lints
 repo-readiness
 repo-readiness-gate
 repo-research
@@ -3390,6 +3417,7 @@ search
 search-path-injection
 search-path-pinning
 seccomp
+second-copy
 second-order-defects
 second-order-effects
 second-reviewer-concur
@@ -3745,8 +3773,10 @@ stale-references
 stale-response
 stale-snapshot
 stale-state
+staleness-clock
 staletimes
 start-fresh
+startup-failure
 stash conflict
 stash pop failure
 state
@@ -3754,6 +3784,7 @@ state-file
 state-machine
 state-management
 state-mv
+stateless-stub
 static-analysis
 static-content-extraction
 static-grep-test
@@ -3762,6 +3793,7 @@ static-site
 statistical-power
 stderr
 stderr-stdout
+stdout-stderr
 step
 step-output
 step-run
@@ -3780,6 +3812,7 @@ stripe
 stripe-projects
 structural-boundary
 structural-enforcement
+structural-enumeration
 structural-test
 structured-data
 stub
@@ -3913,6 +3946,7 @@ terraform_data
 test-all
 test-authoring
 test-baseline
+test-battery
 test-blast-radius
 test-coverage
 test-coverage-gaps
@@ -4048,6 +4082,7 @@ transparency
 transport-confinement
 trap
 trap-cleanup
+trap-ordering
 traversal
 triage
 trigger
@@ -4327,6 +4362,8 @@ workflow-discipline
 workflow-dispatch
 workflow-edits
 workflow-enforcement
+workflow-file-size
+workflow-fsm
 workflow-gap
 workflow-gate
 workflow-gate-gaps
@@ -4391,6 +4428,7 @@ wrong-layer
 wrong-skill-count
 ws-client
 ws-handler
+x-access-token
 x-api
 x-forwarded-host
 xargs

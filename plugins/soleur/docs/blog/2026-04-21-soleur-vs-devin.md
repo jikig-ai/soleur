@@ -4,11 +4,13 @@ seoTitle: "Soleur vs. Devin: Autonomous Coding vs. Full-Stack AI Organization"
 date: 2026-04-21
 description: "Devin automates software engineering at $20/month. Soleur deploys a 9-department AI organization. When you need an engineer vs. when you need an org."
 ogImage: "blog/og-soleur-vs-devin.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - devin
   - company-as-a-service
   - solo-founder
+  - pillar
 ---
 
 Devin is the price anchor for autonomous AI agents. Cognition Labs' AI software engineer handles long-horizon coding tasks -- writing code, running tests, fixing bugs, browsing documentation, and deploying software -- with a degree of autonomy that made it the reference point for what "AI doing real engineering work" means. At $20/month, it is accessible to every solo founder who codes.

@@ -4,6 +4,7 @@ seoTitle: "Soleur vs. CrewAI: Build Custom Multi-Agent Systems vs. Deploy a Read
 date: 2026-05-07
 description: "CrewAI is a Python framework for building custom multi-agent systems. Soleur is a ready-made AI organization with agents across 8 departments. Choosing between them is choosing between building infrastructure and deploying one."
 ogImage: "blog/og-soleur-vs-crewai.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - crewai
