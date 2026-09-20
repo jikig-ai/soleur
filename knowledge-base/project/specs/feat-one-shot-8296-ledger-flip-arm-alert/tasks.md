@@ -54,10 +54,16 @@ start until AC-25 and AC-26 both hold — the record may lag the detector, never
 
 ## Phase 3 — PR-1: stop exempting this alert from drift reporting
 
-- [ ] 3.1 `plugins/soleur/lib/heartbeat-live-reconcile.ts` — `parseLogsAlertBlocks` resolves
-      `paused = !var.<name>` against that variable's declared default in `variables.tf`. Fail
-      **closed**: an unresolvable variable stays an expression (exempt), never a false literal-false.
-      Match the variable name exactly, not by prefix.
+- [ ] 3.1 `plugins/soleur/lib/heartbeat-live-reconcile.ts` — **thread the existing `vars` parameter;
+      do NOT write a new `variables.tf` reader.** `parseInfraVariables` / `listTfFiles` /
+      `resolveInfraVariablesPerFile` / `resolveInfraVariables` already exist in this file and already
+      record boolean defaults as `{ kind: "bool", value: raw === "true" }`, and
+      `discoverHeartbeatsFromInfra` / `discoverMonitorsFromInfra` already take
+      `vars: InfraVariables = resolveInfraVariables(infraDir)`. Only `discoverLogsAlertsFromInfra`
+      and `parseLogsAlertBlocks` lack it. Give them the same parameter, then resolve
+      `paused = !var.<name>` through `vars.get(name)` when `kind === "bool"`. Fail **closed**: an
+      unresolved or non-bool variable stays an expression (exempt). Match the name exactly, never by
+      prefix.
 - [ ] 3.2 `plugins/soleur/test/heartbeat-live-reconcile.test.ts` — the `inngest_luks_wrong_volume`
       fixture's expectation **inverts**: a live pause is now a reported `logs-alert-paused`. Add
       Guard 2's four mutation rows and two harness rows.
@@ -102,9 +108,20 @@ start until AC-25 and AC-26 both hold — the record may lag the detector, never
 - [ ] 5.10 Create `scripts/followthroughs/inngest-luks-property-8296.sh` + its `.test.sh`. It
       asserts the **property** (store's actual alias vs the ledger's claim), not "is the alert
       armed" — after a rollback the alert is unpaused and firing, so an arm-probe would PASS while
-      the claim is false. Arms `0` / `1` / `3 CANNOT ESTABLISH`; include a `RETIREMENT:` line.
-- [ ] 5.11 Delete `scripts/followthroughs/inngest-luks-staging-6894.sh` — permanently falsified by
-      the cutover, so it exits 1 on every sweep and posts a false regression comment daily.
+      the claim is false. Arms `0` / `1` / `3 CANNOT ESTABLISH`. Copy four structural elements from
+      `scripts/followthroughs/registry-luks-live-8386.sh` rather than reinventing them:
+      `set -uo pipefail` (**never `-euo`**); the `case "$-" in *x*)` xtrace-refusal exiting **78**
+      when `BETTERSTACK_QUERY_PASSWORD` is set (#7797); `--limit "${SOLEUR_FT_LIMIT:-5000}"` on the
+      query (**not optional** — the default reads only the newest ~8h20m); and the ledger read
+      positioned **after** every measurement verdict. `RETIREMENT:` in the dominant colon-prose form,
+      naming the `.test.sh` sibling, any `scripts/test-all.sh` `run_suite` line, and the #8285
+      directive.
+- [ ] 5.11 Delete `scripts/followthroughs/inngest-luks-staging-6894.sh` — it asks a staging-era
+      question the cutover has settled, and until deleted it exits 1 on every sweep and posts a false
+      regression comment on #6894. **Do not write "permanently falsified" in the PR body**: its PASS
+      is driven by live host state through the durable `INNGEST_LUKS_ACTIVE_VOLUME_ID` pointer, which
+      `op=luks-rollback` clears and any boot can re-arm, so it *could* exit 0 again. The reason is
+      obsolescence, not impossibility.
 - [ ] 5.12 Enroll the new probe on **#8285** (OPEN) with the `follow-through` label — never on
       #8296, which closes. The sweeper is a one-shot latch: exit 0 closes and is never re-litigated,
       closed mode reopens only on exit 1, and after 14 days the issue leaves the window entirely.

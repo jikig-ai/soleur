@@ -15,6 +15,50 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-20. **Review panel:** 7 agents (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, CTO, CPO) plus the earlier IaC-routing, CLO and
+GDPR-gate passes. **Deepen passes:** precedent-diff and verify-the-negative.
+
+### What review changed, not polished
+
+1. **This became two PRs.** One PR cannot enforce the plan's own ordering rule — only
+   `apps/web-platform/infra/**` fires the apply, so the encryption claim would land at merge and
+   the detector minutes later, or never if the apply halted on unrelated drift.
+2. **A safety claim was retracted.** The plan had asserted CODEOWNERS + branch protection made the
+   merge the authorization. `main` has no `pull_request` rule at all. PR-1 now restores a real
+   per-command ack and corrects the workflow comment the claim was inherited from.
+3. **The mechanism fork dissolved instead of being decided.** Three reviewers argued for deleting
+   the arming variable, all from one premise — a permanent reconciler exemption. The premise was
+   removable in a parameter, so the variable stays and the coverage comes back.
+4. **The bespoke arm-probe was cut and replaced.** It would have retired on its own first success
+   (the sweeper closes on exit 0 and never re-litigates), and it measured the detector rather than
+   the property — after a rollback the alert is unpaused and firing, so it would have passed while
+   the claim was false.
+5. **`live_verification` stays `unavailable:` and the floor stays 1.** The plan had claimed
+   `available` while its own Cut List said the evidence did not support it.
+
+### Defects found in this plan's own verification commands
+
+Five AC commands would have false-failed a correct implementation, each measured rather than
+reasoned: AC-4's diff-grep (returns `1`, because the sibling row carries the same `expires_on`),
+AC-18/AC-19's absence greps (the register quotes the retired sentence inside its supersession
+bracket, on the same table line), AC-20's diff-text limb, AC-22's unrestricted context lines, and
+AC-27's `grep '^-'` (always matches `--- a/`). Two guard defects too: a `MUT_SKIP` floor of 14 would
+have made every mutation row report RED over a dead battery, and a "lower the floor" mutation row
+could not have reddened the guard at all.
+
+### What the deepen passes caught
+
+The precedent-diff found that `heartbeat-live-reconcile.ts` **already** resolves `.tf` variable
+defaults and already threads them to the heartbeat and monitor paths — so Phase 3 is a parameter,
+not a new parser, and the plan's stated premise was false. It also supplied four structural elements
+the new probe must copy (`set -uo pipefail` never `-euo`; the exit-78 xtrace refusal; a non-optional
+`--limit`; the ledger read after the measurement verdicts) and established that the multi-file
+mutation harness has **no precedent in this repo**. The verify-the-negative pass confirmed 11 of 12
+negative claims and contradicted one: the staging probe is obsolete, not permanently falsified.
+
 ## Overview
 
 No `spec.md` exists for this branch, so `lane:` could not be carried forward and is defaulted to
@@ -135,9 +179,12 @@ one file the flipped row cites.
   `gh workflow run apply-web-platform-infra.yml -f apply_target=main`: `main` is not among
   `apply_target`'s `choice` options (the escape hatch is `manual-rerun`), **and** the `reason` input
   is `required: true` and is omitted. Either alone fails at the API.
-- **Unbounded consumer sweep.** `git grep -l 'inngest_luks_cutover_complete'` → **eight** files.
-  `git grep -n 'inngest_luks_cutover_complete=true'` → exactly **two** carriers of the dead `-var`
-  route (`betterstack-logs-alerts.tf`, `betterstack-log-query.md`). A third was reported by the IaC
+- **Unbounded consumer sweep**, excluding this change's own planning artifacts — which quote both
+  strings and would otherwise count themselves (the self-grep-scope trap):
+  `git grep -l 'inngest_luks_cutover_complete' -- . ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'`
+  → **eight** files; the same sweep for `inngest_luks_cutover_complete=true` → exactly **two**
+  carriers of the dead `-var` route (`betterstack-logs-alerts.tf`, `betterstack-log-query.md`).
+  Without the exclusions the counts read 11 and 4. A third `-var` carrier was reported by the IaC
   review and does not hold: ADR-218 carries the `paused = !var…` expression, not the `-var` route.
 
 ### The guards that the ask did not name
@@ -254,7 +301,7 @@ register is terminal on its first reading.
 | `apps/web-platform/infra/variables.tf` | `variable "inngest_luks_cutover_complete"`: `default     = false` → `default     = true`. **Five spaces before `=`** — `terraform fmt` alignment against the 11-char `description` key, and the byte the drift guard greps. Rewrite the comment above it to record the inverting event, its evidence, and the Doppler-override hazard. **Do not let `description` wrap to a second line and do not add a `validation {}` block**: either pushes `default` past `grep -A4`'s reach and silently kills both AC-11 and the guard assertion. |
 | `apps/web-platform/infra/betterstack-logs-alerts.tf` | Comment-only: drop `terraform apply -var inngest_luks_cutover_complete=true  (or the tfvars entry)` — it names a mechanism that has never existed in this root. **`paused = !var.inngest_luks_cutover_complete` is unchanged.** |
 | `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` | Invert the default assertion to `default     = true`; rewrite its `ok()` text (the current one states a rationale the cutover inverted); parameterise `mutate_red` to take a target file and fix its restore, per `## Guard Contract`; add two mutation rows; raise `_floor` 19 → 21. **`MUT_SKIP`'s floor stays 13.** |
-| `plugins/soleur/lib/heartbeat-live-reconcile.ts` | `parseLogsAlertBlocks`: resolve `paused = !var.<name>` against that variable's declared default in `variables.tf`, so `pausedIsLiteralFalse` is true when the default is `true`. Fail **closed** — an unresolvable variable stays an expression (exempt), never a false literal-false. ~15 lines. |
+| `plugins/soleur/lib/heartbeat-live-reconcile.ts` | Thread the **existing** `vars: InfraVariables` parameter into the logs-alert path — `parseLogsAlertBlocks(tfText, vars)` and `discoverLogsAlertsFromInfra(infraDir, vars = resolveInfraVariables(infraDir))` — then resolve `paused = !var.<name>` via `vars.get(name)` with `kind === "bool"`. **Do not write a new `variables.tf` reader.** Measured: `parseInfraVariables` / `listTfFiles` / `resolveInfraVariablesPerFile` / `resolveInfraVariables` already exist in this same file and already parse boolean defaults (`{ kind: "bool", value: raw === "true" }`), and `discoverHeartbeatsFromInfra` / `discoverMonitorsFromInfra` already take `vars` — `discoverLogsAlertsFromInfra` is the only one of the three that does not. Fail **closed**: an unresolvable variable stays an expression (exempt), which `resolveInfraVariablesPerFile` already gives for free by failing a file into `errors` rather than defaulting. |
 | `plugins/soleur/test/heartbeat-live-reconcile.test.ts` | Guard 2's matrix. The existing `inngest_luks_wrong_volume` fixture's expectation inverts: a live pause on this alert is now reported. |
 | `.github/workflows/apply-web-platform-infra.yml` | Comment-only: the `apply` job header claims CODEOWNERS + branch protection are the gate. Measured false. Correct it so it is not copied again. |
 
@@ -276,9 +323,9 @@ register is terminal on its first reading.
 
 | File | Purpose |
 | --- | --- |
-| `scripts/followthroughs/inngest-luks-property-8296.sh` **(create)** | Asserts the **property**, not the detector. Reads the same probe rows the alert's SQL reads, via `scripts/betterstack-query.sh`, and cross-reads the ledger. Arms: `0 PASS` — the store is on the LUKS alias **and** the ledger reads `luks`; `1 FAIL` — the store is on the **plaintext** alias while the ledger claims `luks` (the rollback inversion: the record must be reverted); `3 CANNOT ESTABLISH` — **no probe rows in the window**, which also covers the dead-probe gap that `on_missing_data = "treat_as_zero"` leaves open. Carries a `RETIREMENT:` line naming its back-references. |
+| `scripts/followthroughs/inngest-luks-property-8296.sh` **(create)** | Asserts the **property**, not the detector. Reads the same probe rows the alert's SQL reads, via `scripts/betterstack-query.sh`, and cross-reads the ledger. Arms: `0 PASS` — the store is on the LUKS alias **and** the ledger reads `luks`; `1 FAIL` — the store is on the **plaintext** alias while the ledger claims `luks` (the rollback inversion: the record must be reverted); `3 CANNOT ESTABLISH` — **no probe rows in the window**, which also covers the dead-probe gap that `on_missing_data = "treat_as_zero"` leaves open. Four structural elements copied verbatim from `scripts/followthroughs/registry-luks-live-8386.sh` rather than reinvented: (a) `set -uo pipefail`, **never `-euo`** — all nine sibling probes use it, because the probe must continue past a failing command to classify *why* rather than aborting; (b) the `case "$-" in *x*)` xtrace-refusal block exiting **78** when `BETTERSTACK_QUERY_PASSWORD` is set (#7797) — eight of nine carry it, and this probe declares that secret; (c) `--limit "${SOLEUR_FT_LIMIT:-5000}"` on the query — **not optional**, the default silently reads only the newest ~8h20m; (d) the ledger read positioned **after** every measurement verdict, so its failure arm cannot precede them. `RETIREMENT:` uses the dominant colon-prose form (7 of 8) and names every reference site — its `.test.sh` sibling, any `run_suite` registration in `scripts/test-all.sh`, and the directive on #8285 — closing with "Nothing else references it" once verified. |
 | `scripts/followthroughs/inngest-luks-property-8296.test.sh` **(create)** | Guard 3's harness. |
-| `scripts/followthroughs/inngest-luks-staging-6894.sh` **(delete)** | Requires a `stage=staging_verify` row **and** a probe row still pinning the plaintext volume. The cutover falsified both halves permanently, so it now exits 1 on every sweep — which the sweeper comments as "still exits 1" and reads as a regression, i.e. a false daily regression comment on #6894 until that closes. |
+| `scripts/followthroughs/inngest-luks-staging-6894.sh` **(delete)** | Requires a `stage=staging_verify` row **and** a probe row still pinning the plaintext volume (`UNDISTURBED`). Post-cutover it exits 1 on every sweep, which the sweeper comments as a regression — a false daily regression comment on #6894 until that closes. **The rationale is "its question is obsolete", not "it can never pass again"**: an earlier draft said the cutover falsified both halves *permanently*, and that overclaims. Its PASS is driven by live host and Better Stack state through the FSM's durable `INNGEST_LUKS_ACTIVE_VOLUME_ID` pointer, not by the Terraform variable this change flips — and `scripts/cutover-inngest.sh op=luks-rollback` clears that pointer, while the staging block in `cloud-init-inngest.yml` re-arms on any boot when `MODE != pointer`. So a sanctioned rollback plus a reboot could legitimately make it exit 0 again. It is deleted because it asks a staging-era question the cutover has settled, and because leaving it running emits a false regression in the meantime — not because it is incapable of passing. |
 
 **Not created:** a counsel-review audit file. `soleur:ship` Phase 5.5 **produces** it by invoking the
 CLO agent, and the house filename is `<YYYY-MM>-counsel-review-<issue>.md` (all 11 existing files),
@@ -329,10 +376,23 @@ ship time.
 
 ### Phase 3 — PR-1: stop exempting this alert from drift reporting (P5)
 
-`parseLogsAlertBlocks` resolves `!var.<name>` against the declared default; an unresolvable variable
-stays an expression. Update the paired fixture in `heartbeat-live-reconcile.test.ts`, whose
-expectation for this alert inverts. This is the change that makes the durable un-arm visible, twice
-daily, on a runner that already exists.
+**This is a parameter-threading change, not a new parser.** An earlier draft of this plan said "the
+variable's default lives in a third file, `variables.tf`, which the parser does not read today —
+adding that read is the change". That premise is **false, measured**: `heartbeat-live-reconcile.ts`
+already exports `parseInfraVariables`, `listTfFiles`, `resolveInfraVariablesPerFile` and
+`resolveInfraVariables`, which walk every `.tf` under `infraDir` and record boolean defaults as
+`{ kind: "bool", value: raw === "true" }`. `discoverHeartbeatsFromInfra` and
+`discoverMonitorsFromInfra` already accept `vars: InfraVariables = resolveInfraVariables(infraDir)`;
+`discoverLogsAlertsFromInfra` is the lone sibling that does not, and `parseLogsAlertBlocks` takes
+only the file text.
+
+So the change is: give the logs-alert pair the same `vars` parameter its two siblings already carry,
+and in `parseLogsAlertBlocks` resolve a `!var.<name>` expression through `vars.get(name)` when
+`kind === "bool"`. Fail closed — an unresolved or non-bool variable leaves the alert an expression
+(exempt), which is what `resolveInfraVariablesPerFile`'s `errors` arm already produces. Update the
+paired fixture in `heartbeat-live-reconcile.test.ts`, whose expectation for this alert inverts. This
+is what makes the durable un-arm visible, twice daily, on a runner that already exists — reusing a
+tested helper rather than adding a second `.tf` reader that could drift from it.
 
 ### Phase 4 — PR-1: apply, and read the property back
 
@@ -628,6 +688,16 @@ make it pass; and `mutate_red` writes `$TF`, not `$SELF`, whose `REPO` is derive
 from `${BASH_SOURCE[0]}`. A row that cannot fail would make the guard permanently red on the
 `mutation SURVIVED` arm. The anti-vacuity property it was reaching for is held instead by AC-14.
 
+**No precedent; the pattern is novel.** A sweep of every mutation-battery suite in the repo
+(`orphan-process-reaper-mutation.test.sh`, `ship-incident-pir-gate-mutation.test.sh`,
+`lint-encryption-posture.test.sh`, `lint-legal-mirror-drift-baseline.test.sh`,
+`lint-window-closure-assertion.test.sh`, `lint-legal-scope-block-placement.test.sh`) found the same
+shape throughout: each mutator targets **one** fixed file and varies only the in-file span per row.
+None takes a caller-supplied target or restores a second file. Reviewers should scrutinise the
+parameterisation below as new surface rather than as an established convention — and the fact that
+the existing `trap` restores nothing is itself evidence there was never a working two-file
+precedent to lean on.
+
 **Harness change — required, and it fixes a pre-existing defect this change makes dangerous.**
 
 ```bash
@@ -672,9 +742,12 @@ integrity.
 **Property.** A logs alert whose declared `paused` is `!var.X` is treated as literal-false — and so
 reported when it is live-paused — exactly when `X`'s declared default is `true`.
 
-**Assembly.** Two chokepoints: `parseLogsAlertBlocks`, which decides `pausedIsLiteralFalse`, and the
-`l.paused && d.pausedIsLiteralFalse` gate in `reconcileLogsAlerts`. The variable's default lives in
-a third file, `variables.tf`, which the parser does not read today — adding that read is the change.
+**Assembly.** Three chokepoints: `parseLogsAlertBlocks`, which decides `pausedIsLiteralFalse`; the
+`l.paused && d.pausedIsLiteralFalse` gate in `reconcileLogsAlerts`; and `discoverLogsAlertsFromInfra`,
+which is where the `vars` parameter has to arrive for the first to have anything to resolve against.
+The resolver itself (`resolveInfraVariables`) is **not** a chokepoint of this change — it already
+exists and is already exercised by the heartbeat and monitor paths, so a mutation of it would redden
+their suites first. That is why mutation row 4 targets name-matching rather than the parse.
 
 **Mutation matrix:**
 
