@@ -258,6 +258,10 @@ registries. The dated ordinal history above remains unchanged.
 **Ordinal correction, 2026-09-18:** Resyncing with current main required
 ADR-225 because upstream ADR-224 now records slash-name uniqueness.
 
+**Ordinal correction, 2026-09-20:** The next main resync showed that ADR-225
+was already used by the per-operation latched-flags decision. The feature ADR
+is therefore ADR-230.
+
 The work-phase ledger now lives at
 `knowledge-base/project/specs/feat-pluggable-web-agent-engines/tasks.md`; it is
 the execution checklist for the RED/GREEN slices below and records verification
@@ -448,7 +452,7 @@ evidence as implementation proceeds.
 - Workspace settings explain default scope, existing-conversation continuity,
   routine-run binding, both Codex auth modes, missing credentials, and capability
   gaps; the committed `.pen` wireframe exists and matches the shipped flow.
-- ADR-225, `model.c4`, and the regenerated `model.likec4.json` describe the
+- ADR-230, `model.c4`, and the regenerated `model.likec4.json` describe the
   same registry, adapter, persistence, credential, remote-execution, and
   observability boundaries.
 
@@ -508,7 +512,7 @@ evidence as implementation proceeds.
 - `apps/web-platform/test/codex-agent-adapter.test.ts`
 - `apps/web-platform/test/agent-engine-security-boundary.test.ts`
 - `apps/web-platform/test/agent-engine-dsar.test.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-230-pluggable-web-agent-engine-boundary.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/agent-engine-consumer-inventory.md`
 - `knowledge-base/product/design/agent-engine-selection/implementation-brief.md`
 - `knowledge-base/product/design/agent-engine-selection/workspace-default-engine.pen`

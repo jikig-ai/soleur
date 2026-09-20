@@ -170,7 +170,9 @@ path alone cannot show that replay drift is visible.
 
 73. Finishing the inherited merge resolved its original conflicts but did not establish mergeability against current main: GitHub still reported conflicts after the push. A fresh fetch exposed another generated-diagram conflict and a second ADR ordinal collision. **Prevention:** verify the live PR head and mergeability after recovery, resync against current main, regenerate derived artifacts, and recheck ordinal uniqueness before reporting the branch conflict-free.
 
-74. The recovery probe initially required every historical ADR ordinal to be unique and failed on unchanged legacy names. Comparing the complete duplicate map against current main confirmed no added collisions, and ADR-225 is unique. **Prevention:** check the newly allocated ordinal directly and compare repository-wide findings with the merge base before treating historical naming as a new regression.
+74. The recovery probe initially required every historical ADR ordinal to be unique and failed on unchanged legacy names. Comparing the complete duplicate map against current main confirmed no added collisions, and ADR-225 was unique at that checkpoint. **Prevention:** check the newly allocated ordinal directly and compare repository-wide findings with the merge base before treating historical naming as a new regression.
+
+87. A subsequent main resync made that allocation stale: upstream had claimed ADR-225 for the per-operation latched-flags decision, so the feature decision collided with main and failed the ordinal guard. The feature decision was renumbered to ADR-230, with its plan, task ledger, and decision link updated. **Prevention:** rerun the ordinal guard after every main resync and allocate from the merged tree, not from the pre-resync branch.
 
 75. The settings regression commit's fresh hook run captured the full-gate failure identity: `scripts/test-all.sh` ran 439 suites (429 passed, 6 failed, 4 skipped); failing suites were `scripts/lint-legal-scope-block-placement-unit`, `apps/web-platform [repo-wide+component]`, `plugins/soleur/test/_base-notice-frontmatter.test.sh`, `plugins/soleur/test/notice-frontmatter.test.sh`, `.claude/hooks/guardrails.test.sh`, and `scripts/lib/scratch-root.test.sh`. The changed settings suites, ESLint, and TypeScript check passed separately. **Prevention:** preserve the complete gate log and report the exact failing suite set; do not infer that an aggregate failure belongs to the changed files or claim the aggregate gate is green from focused evidence.
 
@@ -198,7 +200,7 @@ path alone cannot show that replay drift is visible.
 
 ## Related
 
-- `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-230-pluggable-web-agent-engine-boundary.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/codex-qualification-record.md`
 
 ## Tags

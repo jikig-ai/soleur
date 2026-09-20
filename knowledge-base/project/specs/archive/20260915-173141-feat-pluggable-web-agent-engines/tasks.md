@@ -87,7 +87,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] New-run composition slice: bind-first dispatch composes persistence and adapter invocation without client engine selection (3 dispatch tests green).
   - [x] Routine chokepoint slice: `runRoutine` binds trusted workspace/routine identity before Inngest dispatch and fails closed on persistence errors (9 routine tests green).
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
-  - [x] ADR-225 records persisted binding authority, adapter lifecycle, registry qualification, and the remaining service-identity consequence (renumbered from ADR-223 to ADR-224 on 2026-09-17, then ADR-225 on 2026-09-18 after the latest main resync).
+  - [x] ADR-230 records persisted binding authority, adapter lifecycle, registry qualification, and the remaining service-identity consequence (renumbered from ADR-223 to ADR-224 on 2026-09-17, ADR-225 on 2026-09-18, then ADR-230 on 2026-09-20 after the latest main resync).
   - [x] C4 slice: canonical LikeC4 source and regenerated artifact model registry, binding/event ledger, and Claude adapter boundaries.
   - [x] C4 verification slice: freshness gate passed 3/3 and LikeC4 version-pin suite passed 2/2.
   - [x] Focused regression slice: the combined engine/settings/routine suite passes 82/82 with typecheck green after widening selectable engine state.
