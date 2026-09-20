@@ -37,7 +37,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
 const PAGE_EXTS = new Set([".md", ".njk", ".html"]);
@@ -306,21 +306,26 @@ export function liveUrlPaths(repoDir: string, docsPrefix: string): Set<string> {
   const live = new Set<string>();
   const root = join(repoDir, docsPrefix);
   const walk = (dir: string) => {
-    let entries: string[];
+    let entries: Dirent[];
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
-    for (const name of entries) {
-      const full = join(dir, name);
-      if (statSync(full).isDirectory()) {
+    for (const ent of entries) {
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) {
         walk(full);
         continue;
       }
       const rel = full.slice(root.length + 1).replaceAll("\\", "/");
       if (!isPageEmitting(rel)) continue;
-      const blob = readFileSync(full, "utf8");
+      let blob: string;
+      try {
+        blob = readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
       const perm = frontmatterPermalink(blob);
       const urls = perm === null ? pathDerivedUrls(rel) : permalinkUrls(perm);
       for (const u of urls ?? []) live.add(u);
