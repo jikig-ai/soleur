@@ -117,7 +117,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // MIRRORED-NOT-PAGED (#8287): the SOLEUR_BOOTSTRAP_* family.
 //
@@ -206,6 +206,20 @@ const MARKER_RE =
 // local-only branch), OR a rejected worktree (SOLEUR_GIT_WORKTREE_VERIFY_FAILED → creation
 // aborted with exit 1). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
 // (precondition) and SOLEUR_GIT_CONFIG_MASK_SKIP (non-bare-skip-under-mask → creation proceeds).
+// MIRRORED-NOT-PAGED (#8400): SOLEUR_WORKTREE_REAPED. It records the single
+// IRREVERSIBLE event cleanup-merged performs — a local branch deleted, and often
+// its remote ref with it, which also closes the PR. Before #8400 that event had no
+// sentinel at all: the only line naming it was `Deleted remote branch:`, which is
+// `verbose`-gated, i.e. `[[ -t 1 ]]`, i.e. invisible under `claude --bg` — the mode
+// cleanup-merged actually runs in. So the one destructive action in the function was
+// the one action with no record on any observability layer.
+//
+// Mirrored rather than paged because a reap is the NORMAL outcome: paging would fire
+// on the happy path several times a session. What it buys is forensics — an operator
+// asking "where did my branch go?" can answer it from Better Stack instead of from a
+// reflog they have to know to look at. The fail-closed refusals that PREVENT a reap
+// page through their own markers; this one records that a reap happened.
+//
 //   - SOLEUR_WORKTREE_REAPER_ARMED (#7409) — the one-time dry pass taken the first
 //     time cleanup-merged can reap on a given store. MIRRORED so the transition is
 //     measurable across the installed base (it fires once per machine, ever), NOT

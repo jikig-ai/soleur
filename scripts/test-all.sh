@@ -603,7 +603,7 @@ source "$_REL_LIB"
 #   all      every suite, in original order (no-args default)
 #   webplat  only apps/web-platform vitest
 #   bun      3 named bun tests + plugins/soleur + blog-link-validation
-#   scripts  11 pre-suite bash/python + 21 plugins/soleur/test/*.test.sh
+#   scripts  11 pre-suite bash/python + 22 plugins/soleur/test/*.test.sh
 #   infra    ONLY the CI-registered apps/web-platform/infra/ runner (#7103 R5(a)).
 #            This is the "TEST_GROUP asks" arm of the relevance gate below: an
 #            explicit ask bypasses the diff check, so an infra run is reachable

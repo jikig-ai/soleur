@@ -349,9 +349,20 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
     //     the system would be pure volume, and paging on it is meaningless: it
     //     reports that nothing is wrong. The FAILURE direction stays mirrored via
     //     ..._LIB_MISSING, so the signal this telemetry exists for is unaffected.
+    //   - SOLEUR_WORKTREE_REAP_CAPABILITY (#8400/#8401) — exactly parallel to
+    //     ..._LEASE_LIB_OK: emitted once per worktree-manager.sh load, i.e. on EVERY
+    //     invocation including `list`, and READ LOCALLY — /soleur:go's session-start
+    //     fence greps the shipped file for this literal before it dispatches
+    //     cleanup-merged. It is a capability declaration, not an observation about
+    //     the machine, so there is no failure direction for it to report: the
+    //     interesting state is its ABSENCE, and that is mirrored by the consumer as
+    //     SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified. Mirroring
+    //     the declaration itself would be pure volume on the highest-frequency script
+    //     in the system.
     const SUCCESS_PATH_CONTROL_SIGNALS = new Set([
       "SOLEUR_GIT_REPO_READY",
       "SOLEUR_WORKTREE_LEASE_LIB_OK",
+      "SOLEUR_WORKTREE_REAP_CAPABILITY",
     ]);
     for (const name of unique) {
       if (SUCCESS_PATH_CONTROL_SIGNALS.has(name)) continue;
