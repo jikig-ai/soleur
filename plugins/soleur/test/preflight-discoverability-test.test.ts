@@ -2373,7 +2373,22 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // SQL) to count decoded outcome rows. NO SUBSTITUTE: the property is the CONTENT of warehouse
   // rows the cron POSTs, and that sink has no unauthenticated read path — grepping the emitter
   // would verify the diff, not the delivery.
-  const BASELINE_DECLARED_PROBES = 16;
+  // 17th declaration — #8427 (PR #8428) raised this 16 -> 17. PLACEMENT: two-space child of
+  // `discoverability_test:` in the diff-underivable enum-split plan, single-line quoted scalar.
+  // TRUTH: the probe is the `scripts/betterstack-query.sh --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME`
+  // pipeline in that plan's `command:`, projected one level deeper than #8392's — it reads
+  // `refusal_detail[].reason`, which is the field this PR adds — and reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL). NO SUBSTITUTE: the property
+  // is the CONTENT of warehouse rows the cron POSTs, and that sink has no unauthenticated read
+  // path — a source grep verifies the diff, not the delivery. A source-invariant probe was
+  // considered and declined TWICE, on DUPLICATION: the AST census in
+  // cron-compound-promote-outcome-census.test.ts is the authority, and re-deriving its
+  // comparison standalone is exactly what produced the vacuous compound-promote-reason-sites.sh
+  // this PR deletes. Running the census ITSELF is separately impossible — it is a vitest suite
+  // and bun/node/npx all resolve under /home/.../mise, which the bwrap sandbox tmpfs's. That
+  // rc=127 point covers the TS runners ONLY: /usr/bin/{python3,jq,curl} DO resolve in the
+  // sandbox, so a reimplementation would have run; it would also have been the duplicate.
+  const BASELINE_DECLARED_PROBES = 17;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
