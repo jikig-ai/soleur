@@ -1082,11 +1082,14 @@ ADR-100, amendment 2026-09-14.
 > 1. **(a) Confirm the dedicated host is ready.** Two readings, cheapest first.
 >
 >    **Before dispatching either, know the queue you are joining.** `cutover-inngest.yml` shares the
->    `deploy-inngest-restart` concurrency group with the watchdog's auto-restart (`cancel-in-progress:
->    false`, see §Concurrency conventions). During the incident this reading diagnoses — a dedicated
->    host that is not answering — the watchdog may be dispatching restarts on that group, and each one
->    serialises AHEAD of your diagnostic dispatch. A `queued` run is the queue, not a hang: read the
->    group's in-flight run first (`gh run list --workflow scheduled-inngest-health.yml --limit 1`).
+>    `deploy-inngest-restart` concurrency group with `restart-inngest-server.yml` (job-level,
+>    `cancel-in-progress: false`). GitHub keeps one running and ONE pending run per group, and a
+>    newly queued run REPLACES the pending one — so during the incident this reading diagnoses, a
+>    watchdog-dispatched restart can silently CANCEL your queued diagnostic, not merely delay it.
+>    A `cancelled` op is that, not a verdict: re-dispatch it. The mechanism and the re-dispatch
+>    recipe are under **"Concurrency: a watchdog restart can cancel a queued cutover op"** in
+>    § Web scheduler QUIESCED. Read the group's in-flight run first
+>    (`gh run list --workflow scheduled-inngest-health.yml --limit 1`).
 >
 >    The cheaper reading is the standalone diagnostic (#8079): `gh workflow run cutover-inngest.yml
 >    -f op=registry-probe`. It is read-only and dispatchable outside any window. Read its run:
