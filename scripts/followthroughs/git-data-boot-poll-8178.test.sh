@@ -119,16 +119,31 @@ add_job() {
                     conclusion:$pc, started_at:$ps, completed_at:$pe}] end)}]' \
     "$d/jobs-$2.json" > "$d/jobs.tmp" && mv "$d/jobs.tmp" "$d/jobs-$2.json"
 }
+# GH_LOG_BOM — the UTF-8 byte-order mark `gh run view --log` writes at the start of EVERY
+# step's log section. NOT decoration and NOT a captured artifact: these are three literal
+# bytes (EF BB BF), synthesized here per cq-test-fixtures-synthesized-only.
+#
+# WHY THE FIXTURE CARRIES IT NOW. It did not, and that omission is why this suite went 86/86
+# green against a probe that could not read a single real log. Measured on job 106093730126
+# (run 35516692240): the job log carries 15 `##[group]Run` headers and 14 of them begin with
+# the BOM — only the job's FIRST section ("Set up job") lacks one, because gh strips the mark
+# from the head of the concatenated stream and not from each section it appends. The poll step
+# is never the first section, so on a REAL log its header always carries the BOM. A fixture
+# that omits it tests a shape gh never emits, and the probe's region extractor — anchored on
+# `^[0-9]` after the tab fields are stripped — matched the fixture while failing on every real
+# log, returning CANNOT ESTABLISH against the exact evidence it exists to read.
+GH_LOG_BOM=$'\357\273\277'
 # log_lines_at <fx> <job_id> <job_name> <ts> <line>... — one `<job>\t<step>\t<ts> <line>` per
-# arg, the shape `gh run view --job --log` emits (measured on run 34836141887).
+# arg, the shape `gh run view --job --log` emits (measured on run 34836141887). The `<ts>` is
+# prefixed by ${LOG_BOM:-}, so a caller opening a step section sets LOG_BOM="$GH_LOG_BOM".
 log_lines_at() {
   local d="$1" jid="$2" jn="$3" ts="$4"; shift 4; assert_fixture_dir "$d"
   local l
-  for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s %s\n' "$jn" "$ts" "$l"; done >> "$d/log-$jid.txt"
+  for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s%s %s\n' "$jn" "${LOG_BOM:-}" "$ts" "$l"; done >> "$d/log-$jid.txt"
 }
 # log_poll_header — the runner's `##[group]Run` header that opens the poll step's output,
 # stamped in the step's start second.
-log_poll_header() { log_lines_at "$1" "$2" "$3" "2026-09-20T09:59:00.1000000Z" "##[group]Run set -uo pipefail"; }
+log_poll_header() { LOG_BOM="$GH_LOG_BOM" log_lines_at "$1" "$2" "$3" "2026-09-20T09:59:00.1000000Z" "##[group]Run set -uo pipefail"; }
 # log_lines — the poll step's OWN output. Writes the header first if the job has none yet.
 # A summary line `answered=N/M …` is preceded by the N `poll k/M: answered` lines the real
 # loop prints, so a fixture summary is consistent unless NOEXPAND=1 says otherwise.
@@ -147,7 +162,7 @@ log_lines() {
 # log_next_step <fx> <job_id> <job_name> <ts> <line>... — the NEXT step's header and output.
 log_next_step() {
   local d="$1" jid="$2" jn="$3" ts="$4"; shift 4
-  log_lines_at "$d" "$jid" "$jn" "$ts" "##[group]Run {" "$@"
+  LOG_BOM="$GH_LOG_BOM" log_lines_at "$d" "$jid" "$jn" "$ts" "##[group]Run {" "$@"
 }
 
 # run_arm <fx> [extra env...] — runs the REAL probe with the shim first on PATH; prints rc.
