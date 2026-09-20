@@ -442,6 +442,8 @@ until 0, launch detached with the rc to a file, and if that file reads `4` go ba
 #8135 — two probe-then-launch attempts lost the race by seconds; two fixed-iteration Monitors timed out still
 contended after three hours; the one-script loop launched cleanly on its first `measured_runs=0`.
 
+**`measured_runs=0` is unbounded on a busy host — after ~30 min of contention with NEW siblings still arriving, queue inside the lock instead.** The wait loop only wins when the existing runs drain; when a fresh worktree starts a run every 20–40 min it never reaches zero. Launch `SOLEUR_ALLOW_FULL_GATE=1 TC_LOCK_TIMEOUT=14400 TC_RUNTIME_CEILING_S=25200 TEST_GROUP=all bash scripts/test-all.sh` (same rc-file wrapper): `flock` serializes you behind the holder and `LOCK_WAIT_HEARTBEAT` lines prove you are queued, not hung. **Why:** PR #8354 — the zero-wait loop sat 110 min while four different worktrees started runs; the lock-queued form acquired after 87 min.
+
 **Identify the runner by its rc file, never by a pid and never by shape.** `tc_acquire` forks its heartbeat as a background subshell, so during a lock wait there are two `bash scripts/test-all.sh` processes with the same argv, cwd and fds; the heartbeat's fingerprint is a lone `sleep <n>` child and a silent self-exit at exactly the lock budget. If the wrapper's rc file reads 143 while such a process is still writing heartbeats, the runner is dead and the rc file is its verdict — a live runner whose budget expired would have printed `LOCK_CONTENDED_PROCEEDING` and run the battery unserialized beside the holder (the false-RED shape; expiry never aborts). Launch with `setsid nohup … &` (the new session is what keeps a group-kill off the runner), have the script write its rc as its LAST act, and wait on that FILE: `setsid nohup bash -c 'TEST_GROUP=all bash scripts/test-all.sh > "$LOG" 2>&1; echo $? > "$RCF"' >/dev/null 2>&1 &` then `until [ -s "$RCF" ]; do sleep 30; done`. **Do NOT watch `$!` — it does not track the runner.** `setsid` forks when it is not already a process-group leader, so `$!` is a short-lived parent that exits in under a second while the battery runs on, and a `kill -0 $!` loop falls through immediately: every line after it then reports a verdict for a run that has not finished. Measured 2026-09-17 with both controls — under `setsid` the pid was gone after 1 s with the runner still working, and the same launch WITHOUT `setsid` kept `$!` alive and tracking correctly, which is what makes the cause the fork rather than the timing. Observed live: `BATTERY COMPLETE rc=1` printed for a battery that had died in under a second on a mise shim fault and never ran a single suite — rc=1 with no `[FAIL]` lines reads exactly like "the battery ran and one suite failed". This is the #8137 trap below one level up: there the watched process was the runner’s own heartbeat subshell, here it is `setsid`’s forked parent, and in both the pid you can see is not the runner. The rc file is already this skill’s stated source of truth ("Read the rc file, never the background-task completion notification"), so polling it is what makes the wait agree with the verdict. **And rc is only a test verdict once the toolchain started:** grep the log for `mise ERROR|command not found` first — a shim with no resolved version exits 1 emitting no `[FAIL]` lines at all, and `rc=4` is REFUSED (nothing ran), not a reap. If you do queue inside the lock (`SOLEUR_ALLOW_FULL_GATE=1`) and raise `TC_LOCK_TIMEOUT`, raise `TC_RUNTIME_CEILING_S` with it (`$((TC_LOCK_TIMEOUT + 10800))`): the wait is charged against the ceiling, so `10800` under the 14400 s default leaves 3600 s of execution, under the contended readings the lib records. **Why:** #8137 merge tail — the runner was SIGTERM'd an hour into a queue; its orphaned heartbeat (same argv, `sleep 60` child, same log) was watched as the runner for another hour and exited at 3600 s with no banner. See `knowledge-base/project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md`.
 
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `soleur:work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
@@ -491,6 +493,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Learnings captured (soleur:compound)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
 - [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
+- [ ] No removable probe in the tree (Phase 5.4 gate, ADR-230)
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
@@ -504,6 +507,8 @@ Ship Checklist for [branch name]:
 ## Phase 5.4: Pre-Flight Validation
 
 Run technical readiness checks before creating the PR. This catches unapplied migrations, missing security headers, and bare-repo execution context.
+
+**Probe-residue gate (ADR-230), before preflight.** Run `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- ':/' ':(top,exclude)knowledge-base/**/*.md'` — top-anchored, so it scans the whole repo from any cwd. Any output blocks the PR: remove the probe (it is a `[DEBUG-<hex4>]` line left by `soleur:reproduce-bug` / `soleur:test-fix-loop`), re-run Phase 4's affected suites, and run the grep again until it prints nothing. On Soleur's own tree `plugins/soleur/test/debug-probe-residue.test.sh` repeats the check in CI; on a founder repo this gate is the only pre-PR site.
 
 Invoke the preflight skill via the **Skill tool**:
 
@@ -1796,7 +1801,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
 1. The PR was likely created as a draft earlier in the workflow.
 2. **Headless mode:** Auto-accept the generated PR title/body from diff analysis. **Interactive mode:** Confirm the PR title and body with the user before editing.
-2.5. **Decision-challenges render (ADR-084).** If `knowledge-base/project/specs/<branch>/decision-challenges.md` exists and is non-empty, an earlier headless phase (`plan`/`work`) recorded auto-decided dissents against the operator's stated direction — the operator has not seen them. Since Phase 6 **full-replaces** the body, fold the artifact's content into the generated body under a `## Model Dissents (informational)` heading (this name is deliberately outside the `ship-operator-step-gate` deny set `Operator`/`Post-merge`/`Follow-up`; use informational statements, never operator-action bullets). THEN open one idempotent issue — check `gh issue list --search "decision-challenge <branch>" --state open -L 200` first — via `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. See [decision-principles.md](../brainstorm-techniques/references/decision-principles.md).
+2.5. **Decision-challenges render (ADR-084).** If `knowledge-base/project/specs/<branch>/decision-challenges.md` exists and is non-empty, an earlier headless phase (`plan`/`work`) recorded auto-decided dissents against the operator's stated direction — the operator has not seen them. Since Phase 6 **full-replaces** the body, fold the artifact's content into the generated body under a `## Model Dissents (informational)` heading (this name is deliberately outside the `ship-operator-step-gate` deny set `Operator`/`Post-merge`/`Follow-up`; use informational statements, never operator-action bullets). THEN open one idempotent issue — check `gh issue list --search "decision-challenge <branch>" --state open -L 200` first — via `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. See [decision-principles.md](../brainstorm-techniques/references/decision-principles.md). `guardrails.sh`'s filing gate refuses this `gh issue create` unless the body names a user-visible consequence; when the dissent is about a hook/gate/guard, the honest exit is `--label meta/machinery` (measured on PR #8354) — that ledger is excluded from the digest, so the `## Model Dissents` section in the PR body is then the operator-visible surface, not the issue.
 3. Update the PR. Pass the body as a multi-line string (no `$()` needed):
 
    ```bash
@@ -2220,7 +2225,7 @@ Bash `run_in_background` is forbidden on all harnesses — opaque until completi
 
 **Claude — Monitor tool loop** (Grok: same loop body via AwaitShell/Shell per `pollInstructions()`):
 
-Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured "main moving faster than CI" warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
+Use the **Monitor tool** with this shell loop (state-change + heartbeat, max `MAX_POLL_MIN` iterations = `MAX_POLL_MIN` minutes). Beyond the terminal MERGED/CLOSED exits it covers three unmergeable states: **required-check failure** (exit at the first failing required check, named on stdout — Monitor streams stdout only), **BEHIND** (auto-sync main in, up to 6 attempts, then a warning naming either a fast-moving main or a run of failed fetches), and **DIRTY** (server-side conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
 ```bash
 # <!-- phase-7-poll-block:start --> (do NOT edit without updating the
@@ -2228,23 +2233,27 @@ Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 
 # at plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh; the fixture's awk
 # extractor anchors on this fence + the variable-set fingerprint below.)
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
+fetch_failures=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
 # Minutes to poll before giving up (one iteration = one `sleep 60`).
-# DERIVED, not chosen: measured over the last 12 CI runs on main, a full
-# run takes min 22 / median 32 / p90 43 / max 54 minutes, and `test-scripts`
-# alone is a median 28. The previous budget was 15, i.e. BELOW the fastest
-# run ever observed — so it could not succeed, and every ship run reported a
-# spurious timeout on a PR that was merging fine. 60 covers the observed max
-# with headroom. This is a BACKSTOP: the loop already exits early on MERGED,
-# a failed required check, and DIRTY, so a longer budget costs nothing on
-# the healthy paths. Re-derive it if CI wall-clock changes materially.
+# DERIVED, not chosen: over the last 12 CI runs on main a full run took
+# min 22 / median 32 / p90 43 / max 54 min (`test-scripts` alone medians 28).
+# The old budget sat BELOW the fastest run ever observed, so it could not
+# succeed and every ship run reported a spurious timeout on a PR that was
+# merging fine. 60 covers the observed max with headroom, and is a BACKSTOP —
+# the loop already exits early on MERGED, a failed required check and DIRTY,
+# so a longer budget costs nothing on the healthy paths. Re-derive it if CI
+# wall-clock changes materially.
 MAX_POLL_MIN=60
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
 # + `git push` which require a checked-out work tree. Bare-repo invocation
 # would silently corrupt state or fail mid-sync. soleur:ship always runs
 # from a worktree (Step 0b creates one); the guard is defense-in-depth.
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled" >&2
+# `--is-inside-work-tree` prints `false` (rc 0) in a bare repo: compare OUTPUT.
+sync_ok=1
+if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != true ]]; then
+  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled; the poll heartbeats, sync by hand from a worktree"
+  sync_ok=0
 fi
 # Required-check name set — fetched ONCE at loop entry (branch-protection
 # rules change only via operator action; per-tick fetches cost rate-limit
@@ -2272,7 +2281,7 @@ while true; do
 
   # Required-check failure scan: if a required check has transitioned to
   # bucket == "fail", exit immediately with the failing check name instead
-  # of heartbeating to the 15-minute cap. Tolerates absent checks (CI not
+  # of heartbeating to the MAX_POLL_MIN cap. Tolerates absent checks (CI not
   # yet registered) — only bucket="fail" produces an intersection match.
   # Same fail-open rationale as the once-fetch above: transient `gh pr
   # checks` 5xx → empty failure set → no-op for this tick.
@@ -2287,8 +2296,8 @@ while true; do
         done
       done
       if [[ -n "$required_failed" ]]; then
-        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
-        echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)" >&2
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_failed] check='${required_failed}' — exiting poll"
+        echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)"
         break
       fi
     fi
@@ -2299,15 +2308,18 @@ while true; do
   # auto-sync. Real conflicts still dirty-exit. Glob `*DIRTY*` (not
   # `*" DIRTY"`) tolerates whitespace variants.
   if [[ "$s" == *DIRTY* ]]; then
-    mt_out=""
-    if git fetch origin main >/dev/null 2>&1 \
-       && mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
+    mt_out=""; fetch_rc=0
+    git fetch origin main >/dev/null 2>&1 || fetch_rc=$?
+    if (( fetch_rc != 0 )); then
+      # A fetch outage is not a conflict: report, retry next tick.
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$fetch_rc — fetch origin main failed while classifying DIRTY — retrying next tick"
+    elif mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
       s="OPEN BEHIND"
     else
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
-      echo "Conflicted paths (merge-tree; no merge is in progress, so --diff-filter=U is empty):" >&2
-      printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
-      echo "Resolve locally: git merge origin/main" >&2
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll"
+      echo "Conflicted paths (merge-tree; no merge is in progress, so --diff-filter=U is empty):"
+      printf '%s\n' "$mt_out" | grep '^CONFLICT ' || true
+      echo "Resolve locally: git merge origin/main"
       break
     fi
   fi
@@ -2317,21 +2329,59 @@ while true; do
   # queued auto-merge can re-evaluate. Capped at MAX_BEHIND_SYNCS so a
   # pathological merge-loop (every sync produces a fresh BEHIND) does not
   # consume the whole poll budget — fall through to a structured warning.
-  if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+  if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
-    if ! git fetch origin main 2>&1 | tail -2; then
-      echo "fetch origin main failed — skipping this sync attempt"
-    elif ! git merge origin/main --no-edit 2>&1 | tail -5; then
-      echo "git merge origin/main produced conflicts — aborting sync, reporting:"
-      git diff --name-only --diff-filter=U
-      git merge --abort 2>/dev/null
-      echo "Manual conflict resolution required on $BRANCH. Stopping the poll."
+    # Capture rc BEFORE displaying through `tail` (`cmd | tail` returns tail's
+    # 0 — #8339); `|| sync_rc=$?` not a bare `x="$(cmd)"; rc=$?`, which dies
+    # under an errexit host shell. Not `set -o pipefail`: two skills copy this
+    # block. printf is a builtin (no ARG_MAX); GIT_TRACE* off so a traced
+    # remote URL cannot reach the display. Never touch an operation this arm
+    # did not start — an --abort there discards the operator's staged work.
+    git_dir="$(git rev-parse --git-dir 2>/dev/null)"
+    if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+       || [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" \
+             || -f "$git_dir/CHERRY_PICK_HEAD" || -f "$git_dir/REVERT_HEAD" ]]; then
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_in_progress — a merge/rebase/cherry-pick/revert is in progress on $BRANCH; not touching it. If you did not start it (a previous poll may have died mid-sync), run git status, abort it, then re-arm the poll. Stopping the poll."
       break
-    elif ! git push 2>&1 | tail -2; then
-      echo "git push failed after merge — auto-sync incomplete. Stopping the poll."
+    fi
+    if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=detached_head — HEAD is detached; git push would have no branch to update. Check out the PR branch first. Stopping the poll."
       break
+    fi
+    sync_rc=0; sync_out="$(GIT_TRACE=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0 git fetch origin main 2>&1)" || sync_rc=$?
+    [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -2   # display only — never test this pipe
+    if (( sync_rc != 0 )); then
+      fetch_failures=$((fetch_failures+1))
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$sync_rc — fetch origin main failed — skipping this sync attempt"
     else
+      sync_rc=0; sync_out="$(GIT_TRACE=0 git merge origin/main --no-edit 2>&1)" || sync_rc=$?
+      [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -5
+      if (( sync_rc != 0 )); then
+        # rc 1 = conflict. Any other rc with MERGE_HEAD present appeared during
+        # the fetch window (operator-started) — not ours to abort.
+        if (( sync_rc == 1 )) && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge rc=$sync_rc — git merge origin/main failed — merge conflict, aborting sync. Conflicted paths:"
+          git diff --name-only --diff-filter=U
+          # rerere.autoupdate can empty --diff-filter=U; the merge output cannot.
+          printf '%s\n' "$sync_out" | grep '^CONFLICT ' || true
+          git merge --abort 2>&1 || echo "git merge --abort failed (rc=$?)"
+          echo "Manual conflict resolution required on $BRANCH. Stopping the poll."
+        elif git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_in_progress rc=$sync_rc — MERGE_HEAD appeared during the sync (not started by this arm); not touching it. Stopping the poll."
+        else
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_refused rc=$sync_rc — git merge origin/main failed — refused to start (nothing to abort; run git status to see which operation is in progress). Worktree state:"
+          git status --short | head -20
+          echo "Clear the worktree state on $BRANCH shown above, then re-run. Stopping the poll."
+        fi
+        break
+      fi
+      sync_rc=0; sync_out="$(GIT_TRACE=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0 git push 2>&1)" || sync_rc=$?
+      [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -2
+      if (( sync_rc != 0 )); then
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=push rc=$sync_rc — git push failed after merge — auto-sync incomplete; any local merge commit from this sync is retained, nothing was aborted. Stopping the poll."
+        break
+      fi
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
       # Re-fetch state immediately after a successful sync. GitHub may
       # have already cleared OPEN BEHIND → OPEN CLEAN → MERGED in the time
@@ -2342,13 +2392,17 @@ while true; do
         || s="fetch-error: $s"
       echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
     fi
-  elif [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
+  elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
     # BEHIND cap exhausted: emit structured operator signal exactly once at
     # the inflection point (sync #${MAX_BEHIND_SYNCS}+1), then fall through
     # to heartbeat. PR may still merge if main calms down — but the
     # operator now has the diagnosis without log-archaeology.
     elapsed=$((i * 60))
-    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
+    if (( fetch_failures == MAX_BEHIND_SYNCS )); then
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}). Every attempt failed at git fetch — a network/credential outage, not main moving. Check connectivity and credentials, then re-arm the poll."
+    else
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window."
+    fi
     behind_warned=1
   fi
 
@@ -2371,13 +2425,16 @@ done
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
 
-**Auto-sync on BEHIND.** When the polling loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch's head since the queued auto-merge started waiting on CI. GitHub's auto-merge does not fire while the branch is behind base — it observes the BEHIND state and silently waits forever. The poll loop closes this by:
+**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI. GitHub's auto-merge does not fire while the branch is behind base — it sees BEHIND and waits forever. The poll loop closes this by:
 
-1. Fetching origin/main once.
-2. Merging origin/main into the branch with `--no-edit`. If conflicts arise (`--diff-filter=U` returns paths), the loop aborts the merge and stops polling — manual resolution is required and continuing would mask the conflict.
-3. Pushing the merge commit. This bumps the PR head ref, GitHub re-evaluates the queued auto-merge, and (assuming CI passes) the merge fires.
+1. Refusing to touch an operation it did not start: `MERGE_HEAD`, or a rebase / cherry-pick / revert / `am` in progress → `kind=merge_in_progress`, stop (an unconditional `--abort` there discards the operator's staged resolution — measured). Detached HEAD → `kind=detached_head`, stop.
+2. Fetching origin/main. A fetch failure (`kind=fetch rc=N`) skips and counts the attempt; the next tick retries.
+3. Merging origin/main with `--no-edit`, reading git's own exit status — captured before `tail`, since `cmd | tail` returns tail's 0 (#8339). rc 1 with `MERGE_HEAD` is a conflict it started: print the conflicted paths, abort, stop (`kind=merge`). Any other rc with `MERGE_HEAD` arrived during the fetch window — left alone (`kind=merge_in_progress`). Non-zero without `MERGE_HEAD` is a refusal (dirty tree, untracked overwrite, unmerged index): nothing to abort, worktree state printed (`kind=merge_refused`). Looping with `--abort` only buys time on a resolution that is fundamentally not automatic.
+4. Pushing the merge commit so GitHub re-evaluates the queued auto-merge. A push failure (`kind=push rc=N`) stops the poll; any local merge commit from this sync is retained. The usual cause is a concurrent push — force-push, branch protection, or a sibling session — and the operator decides whether to fetch and retry.
 
-The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+Every `[ship.phase7.*]` line is on stdout (Monitor streams stdout only); `Stopping the poll.` means the loop exited.
+
+The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→BEHIND→BEHIND (every sync triggering a new commit on main) cannot spend the whole `MAX_POLL_MIN`-minute budget making no progress. After 6 syncs the loop emits a `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the diagnosis lands at the inflection point rather than at the timeout. At `fetch_failures=6/6` it names a network/credential failure instead of a fast-moving main.
 
 **ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` IS a required status check — [scripts/required-checks.txt](../../../../scripts/required-checks.txt) is the SSOT row, applied via [infra/github/ruleset-ci-required.tf](../../../../infra/github/ruleset-ci-required.tf) (#6049/#6050, 2026-07-05); read the current set with `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq '[.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]'` — and `main` enforces the strict up-to-date policy, so the collision is caught on the PR, not on `main`: the sync pushes a new head, the PR's `adr-ordinals` job re-runs red, and the required-check-failure exit below names it. The queued auto-merge does not fire and nothing lands red on `main` (an earlier revision of this paragraph said the opposite; #7941 corrected it — PR #5945's collision landed on `main` because the ruleset did not yet carry the check, which #6050 fixed two days later). What the loop does NOT do is renumber for you: whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push — that restarts the poll loop on a head that can go green. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
@@ -2463,18 +2520,13 @@ Both work **while the run is still in progress**, which `gh run view --log-faile
 
 Do NOT invert this into "ignore failures that look transient". The discriminator is the failing step's **command** and whether your diff touches what it fetches — never the step's name, which is author-chosen prose the API returns verbatim. This is not hypothetical: measured on this repo's `ci.yml`, `Install root dependencies` and `Install web-platform dependencies` run `bun install --frozen-lockfile` and `npm ci`, so any name-shaped rule reads five of six dependency-install steps as tool downloads and classifies lockfile drift as a CDN outage. The step name narrows where to look; it never decides. **Why:** PR #7470 — one GitHub release-CDN outage broke the Doppler CLI download (`cla-evidence`), `gitleaks.tgz`'s sha (three `smoke` jobs) and `actionlint`'s sha (`lint-bot-statuses`) simultaneously. Every failure was at setup, none in a gate, and the merge still cost three rerun cycles because the loop keyed on check names.
 
-**Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
+**Required-check failure exit.** Each tick the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection it exits, naming the failing check plus a pointer to `gh pr checks <number>` / `gh run view --log-failed` — replacing the silent heartbeat-to-timeout when a required check fails mid-poll while auto-merge waits for a transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo) the scan is a no-op and the CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
 **DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally. The loop first runs `git fetch origin main` and `git merge-tree --write-tree origin/main HEAD` (exit code only). A clean merge-tree is the kb-index class — GitHub lacks the local merge driver — and the loop rewrites state to `OPEN BEHIND` and falls through to the existing auto-sync (counts against `MAX_BEHIND_SYNCS`). A non-zero merge-tree is a real conflict: the loop exits, prints merge-tree's `CONFLICT` lines (no merge is in progress, so `--diff-filter=U` would be empty), and prints a `git merge origin/main` recovery pointer. The admin-merge hatch stays BEHIND-only.
 
 - **A diff that regenerates `INDEX.md` goes stale on GitHub's merge ref the moment main lands another kb file — merge `origin/main` and re-run [scripts/generate-kb-index.sh](../../../../scripts/generate-kb-index.sh) immediately before pushing.** `actions/checkout` on `pull_request` checks out `refs/pull/N/merge`, where GitHub's driverless textual merge keeps both sides' entries but one side's `Total files:` header — the AC17 freshness check then fails on the merge ref while `--check` is green on your head. Same #8116 class, CI-check surface (#8370).
 
 - **A DIRTY that recurs on every landing is usually a file in YOUR diff that `main` rewrites every merge — name the file before resolving it a second time.** Intersect `git diff --name-only origin/main...HEAD` with the paths of `main`'s last 20 merges; a generated artifact with one producer per PR (`knowledge-base/project/rule-metrics.json`, compound's ADR-091 output — 20 of 20 recent merges touched it) conflicts on EVERY landing, and DIRTY is the one state the `--admin` hatch cannot cross. Take `main`'s copy so the PR stops diffing it; afterwards `main`'s churn makes the PR merely BEHIND, where the hatch applies once every required context is green on the current head (hold, do not re-sync — a sync restarts CI and re-opens the window). Two more measured facts: GitHub reports `CONFLICTING` while `git merge-tree --write-tree origin/main HEAD` is clean whenever both sides touched `knowledge-base/INDEX.md` — `.gitattributes` gives it the custom `kb-index` merge driver, which GitHub's server-side merge cannot run and local git can (reproduced: `git -c merge.kb-index.driver=false merge-tree …` conflicts on exactly that file), so such a DIRTY is cured by a local sync + push, which is what `pre-merge-rebase.sh` does when you run `gh pr merge`; and re-run `check-adr-ordinals.sh` after EVERY sync, not once at ship start. **Why:** #8301 — three DIRTY cycles (~4 h) on a regenerated aggregate before the cause was named, then an ADR-225 → ADR-229 renumber three syncs in. See `knowledge-base/project/learnings/2026-09-19-a-generated-artifact-in-my-diff-made-every-landing-on-main-a-conflict.md`.
-
-Two failure paths exit early instead of looping:
-
-- **Merge conflicts** — `git diff --name-only --diff-filter=U` lists conflicted paths and the operator must resolve. Looping with `--abort` only buys time on a fundamentally non-automatic resolution.
-- **Push failure** — usually means a concurrent push raced this one (force-push, branch protection, or a sibling session). Stop and surface; the operator decides whether to fetch + retry.
 
 This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) which fires on certain Bash invocations during the ship flow (commit, push, merge). The hook handles the pre-merge case (branch is behind when auto-merge is FIRST queued); this loop handles the post-merge-queue case (branch becomes behind WHILE the queued auto-merge is waiting on CI). The two surfaces don't overlap — the hook fires on operator-triggered git/gh commands; the poll loop fires on a fixed 60-second cadence regardless of operator activity.
 

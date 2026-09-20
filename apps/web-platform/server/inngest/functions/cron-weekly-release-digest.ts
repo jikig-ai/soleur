@@ -263,6 +263,11 @@ async function curateViaAnthropic(releases: SanitizedRelease[]): Promise<Highlig
     messages: [{ role: "user", content: buildCuratePrompt(releases) }],
     timeoutMs: ANTHROPIC_TIMEOUT_MS,
     outputConfig: { format: { type: "json_schema", schema: CURATE_OUTPUT_SCHEMA } },
+    // The digest emitted NO cost row at all (the marker is gated on markerSource),
+    // so any detection clause reading its output tokens was fiction (#8392). No
+    // markerRunId: runId is not in scope in this free function, and inventing a
+    // signature change for it is out of scope here.
+    markerSource: "cron-weekly-release-digest",
   });
   if (stopReason === "max_tokens") {
     // The curate step's catch mirrors this to Sentry — no duplicate warn.

@@ -131,7 +131,7 @@ const discordPosts: { url: string; body: Record<string, unknown> }[] = [];
 function validAnthropicResponse(highlights: unknown) {
   return new Response(
     JSON.stringify({
-      content: [{ text: JSON.stringify({ highlights }) }],
+      content: [{ type: "text", text: JSON.stringify({ highlights }) }],
       stop_reason: "end_turn",
     }),
     { status: 200 },
@@ -457,6 +457,7 @@ describe("curate step (via handler)", () => {
         JSON.stringify({
           content: [
             {
+              type: "text",
               text: '{"highlights":[{"tag":"v3.154.0","title":"t","why":"Schema-valid JSON."}]}',
             },
           ],
@@ -484,7 +485,7 @@ describe("curate step (via handler)", () => {
     fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
     fetchBehavior.anthropic = async () =>
       new Response(
-        JSON.stringify({ content: [{ text: "{}" }], stop_reason: "max_tokens" }),
+        JSON.stringify({ content: [{ type: "text", text: "{}" }], stop_reason: "max_tokens" }),
         { status: 200 },
       );
     const { result } = await runHandler();

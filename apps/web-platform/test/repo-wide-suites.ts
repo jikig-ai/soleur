@@ -60,6 +60,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/phase-surface-map-parity.test.ts",
   "test/plugin-root-anchoring.test.ts",
   "test/plugin-root-list-carveout-coupling.test.ts",
+  "test/anthropic-text-block-parity.test.ts",
   "test/repo-wide-containment.test.ts",
   "test/resend-sender-domain.test.ts",
   "test/safe-bash.test.ts",
