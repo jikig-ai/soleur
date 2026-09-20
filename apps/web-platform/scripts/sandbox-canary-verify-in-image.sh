@@ -25,6 +25,17 @@
 # root) — see sandbox-canary.mjs.
 set -euo pipefail
 
+# An xtrace of this script would print the credential bound below into whatever
+# captures stderr (see #7797). Refuse rather than trace.
+case "$-" in
+  *x*)
+    if [ -n "${ANTHROPIC_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 APP_DIR="${SANDBOX_CANARY_APP_DIR:-apps/web-platform}"
 # Pin to the same base as apps/web-platform/Dockerfile (keep in sync on a base bump).
 IMG="${SANDBOX_CANARY_BASE_IMAGE:-node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d}"
@@ -37,8 +48,16 @@ fi
 # Run the whole verify inside the base image. `--verify` re-captures (bwrap is
 # replaced by an in-process PATH shim, so no real bubblewrap is needed here) and
 # byte-diffs the committed fixture the branch carries. stdout carries the verdict.
+# The in-image bun is the CI-pinned one (.bun-version, consumed by setup-bun in
+# ci.yml): bun.sh/install takes a `bun-v<version>` argument, so the canary runs on
+# the same runtime as every other bun surface instead of whatever bun.sh serves.
+# Read host-side: /src is apps/web-platform, and the pin lives at the repo root.
+BUN_VERSION="$(tr -d '[:space:]' < .bun-version)"
+export BUN_VERSION # `docker run -e NAME` reads the client ENVIRONMENT, not shell variables
+
 docker run --rm \
   -e ANTHROPIC_API_KEY \
+  -e BUN_VERSION \
   -e SANDBOX_CANARY_CAPTURE=1 \
   -v "$PWD/$APP_DIR:/src:ro" \
   "$IMG" bash -c '
@@ -48,7 +67,7 @@ docker run --rm \
     bash /src/scripts/lib/in-image-copy-src.sh /src /build
     cd /build
     npm ci --no-audit --no-fund >/dev/null
-    curl -fsSL https://bun.sh/install 2>/dev/null | bash >/dev/null
+    curl -fsSL https://bun.sh/install 2>/dev/null | bash -s "bun-v${BUN_VERSION}" >/dev/null
     export PATH="/root/.bun/bin:$PATH"
     bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json
   '
