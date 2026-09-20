@@ -1780,6 +1780,10 @@ if want_scripts; then
   # double-emit). The gate blocks NEW occurrences only; the baseline may shrink and must never
   # grow. Burn-down is tracked in the learning that ships with this gate. Registering it
   # baseline-free would have meant either a permanently red suite or a silently narrowed rule.
+  # #8392 twin registration: the fixture suite pins the DETECTOR, the -live row runs
+  # it over the repo. Registering only one makes a lint decoration.
+  run_suite "scripts/lint-anthropic-content-position" bash scripts/lint-anthropic-content-position.test.sh
+  run_suite "scripts/lint-anthropic-content-position-live" python3 scripts/lint-anthropic-content-position.py
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
@@ -2144,6 +2148,13 @@ if want_scripts; then
   # only: deleting the no-boot_id guard, deleting the trusted-region cut (while the forge
   # succeeded), and replacing the probe invocation with the expected value all left it 6/0 green.
   run_suite "scripts/zot-last-err-redact-7500" bash scripts/followthroughs/zot-last-err-redact-7500.test.sh
+  # #8386 registry-host at-rest posture probe. Registered at birth, beside its sibling on the same
+  # stream: the probe decides unattended whether to post a PUBLIC comment saying the registry
+  # volume is mounted unencrypted, and whether the evidence is complete enough to flip a security
+  # ledger row. It has 9 `exit 2`, 8 `exit 3` and 10 `exit 5` sites, so an exit-code-only suite
+  # would collapse most of its cases onto three integers — the suite therefore pins a branch
+  # marker per case and DERIVES its distinct-marker floor from the shipped probe.
+  run_suite "scripts/registry-luks-live-8386" bash scripts/followthroughs/registry-luks-live-8386.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op

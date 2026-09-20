@@ -177,6 +177,23 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -u
+      # (#8386) cron's own PATH is /usr/bin:/bin and carries neither cryptsetup nor blkid, so
+      # without this append both LUKS discriminators below return 127 and every row would read
+      # store_luks=unknown forever -- a failure that costs a second host replace to correct,
+      # behind a dispatcher that is currently dead.
+      # A LITERAL, and that is a SECURITY constraint rather than a style one: this script runs as
+      # root under `doppler run --project soleur-registry --config prd`, which injects EVERY
+      # secret in that config as an environment variable. An env-overridable directory list would
+      # therefore let anyone who can write a secret into that config own root's FIRST resolution
+      # of cryptsetup and blkid, every five minutes. The behavioural suite gets its seam at RENDER
+      # time (zot-disk-heartbeat-redaction.test.sh substitutes this literal), never at runtime.
+      # APPEND, never prepend and never absolute paths: that suite's PATH stubs must still win.
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin$${PATH:+:$$PATH}"
+      # LC_ALL=C for the same reason one line up: the guards below are character CLASSES, whose
+      # membership is locale-defined, and `doppler run` injects LANG/LC_ALL from the config store
+      # exactly as it injects PATH. betterstack-query.sh pins this and records why; the lesson was
+      # learned in that file and not carried here until the #8386 review.
+      export LC_ALL=C
       # (1) Absence-based liveness ping — ping ONLY while /var/lib/zot <85% (unchanged).
       USE=$(df --output=pcent /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9')
       PING_RC=0
@@ -572,6 +589,239 @@ write_files:
           esac
         done < /var/lib/zot-log-shipper/state
       fi
+      # (3) #8386: the AT-REST POSTURE of the zot store, inside the row's TRUSTED region.
+      # scripts/encryption-posture-ledger.json claims hcloud_volume.registry is LUKS and nothing
+      # that runs verifies it: the only host-side facts that left here were pcent/fs_size_gb (a
+      # filesystem exists somewhere) and a mountpoint boolean. These five fields are what make
+      # the claim checkable off-box, via scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK.
+      #
+      # EVERY NAME IS BOUND BEFORE ANY MEASUREMENT. The emit below is unconditional (ADR-117), so
+      # a name left unset would render as the empty string and silently drop a field from the row.
+      # EVERY CALL IS `timeout 5`-BOUNDED: a stall before LINE= loses the WHOLE row, and this
+      # heartbeat's absence is itself the alarm.
+      STORE_MOUNT_SRC=__UNREADABLE__
+      STORE_MOUNT_BASE=n/a
+      STORE_MOUNT_DEVID=n/a
+      STORE_BACKING_DEV=n/a
+      # WHY the verdict is `unknown`, not just THAT it is. cryptsetup rc 127 (a PATH regression),
+      # rc 1 (not root), rc 124 (timeout) and an empty blkid all collapse to store_luks=unknown,
+      # and they select DIFFERENT remedies — the first costs a host replace behind a dispatcher
+      # that is currently dead. Without this field the probe parks all of them on the same
+      # cannot-establish verdict for 30 days with nothing naming which tool refused (#8386 review).
+      STORE_PROBE_RC=n/a
+      STORE_LUKS=unknown
+      # The rc is CAPTURED, never `|| true`. __NOMOUNT__ is a CONJUNCTION -- findmnt exited 1 AND
+      # printed nothing, which is "not a mountpoint" -- and `|| true` clobbers exactly the byte
+      # that separates it from a read that broke. `head -1` is applied AFTER the capture rather
+      # than inside the substitution: this script sets no `pipefail`, so `findmnt … | head -1`
+      # would return HEAD's status and the __NOMOUNT__ arm could never fire. A stacked mount
+      # still collapses to the top source, which is what head -1 was for.
+      _sp_rc=0
+      _sp_raw="$(timeout 5 findmnt -no SOURCE /var/lib/zot 2>/dev/null)" || _sp_rc=$?
+      _sp_out="$(printf '%s\n' "$_sp_raw" | head -1)"
+      if [ "$_sp_rc" -eq 1 ] && [ -z "$_sp_out" ]; then
+        STORE_MOUNT_SRC=__NOMOUNT__
+      elif [ "$_sp_rc" -eq 0 ] && [ -n "$_sp_out" ]; then
+        STORE_MOUNT_SRC="$_sp_out"
+      fi
+      # Charset guard. The row is POSTed unescaped inside {"message":"…"} and read downstream as
+      # space-separated key=value, so a byte outside this class would split one field into two.
+      # A bracketed bind-mount source (X[/sub]) is a shape this emitter does not decode, and it
+      # says so rather than emitting half of it.
+      case "$STORE_MOUNT_SRC" in
+        __NOMOUNT__) : ;;
+        '' | *[!A-Za-z0-9_./:-]*) STORE_MOUNT_SRC=__UNREADABLE__ ;;
+      esac
+      if [ "$STORE_MOUNT_SRC" = __NOMOUNT__ ]; then
+        # The store is a directory on the root filesystem. That is a MEASUREMENT (the fstab line
+        # is `nofail` by design), not a fault, and it is distinct from "the question was refused".
+        STORE_LUKS=absent
+      elif [ "$STORE_MOUNT_SRC" = __UNREADABLE__ ]; then
+        # THE SOURCE READ ITSELF FAILED, so nothing downstream was measured. Bind all three
+        # explicitly: the `n/a` initialiser passes the charset guard below unchanged, so leaving
+        # it here would ship the never-measured value on the wire indistinguishably from a
+        # measurement. The sibling binds the same sentinel on this path for the same reason
+        # (inngest-bootstrap.sh, the __UNREADABLE__ arm of its own source case).
+        STORE_MOUNT_BASE=__UNREADABLE__
+        STORE_MOUNT_DEVID=__UNREADABLE__
+        STORE_BACKING_DEV=__UNREADABLE__
+      else
+        # `lsblk -s` walks the INVERSE tree: through a device-mapper node to its backing device
+        # AND through a partition to its parent disk. `-i` (ASCII) is load-bearing: the default
+        # box-drawing prefix is 4 bytes under a non-last sibling and 2 under the last, so a byte
+        # depth differs between two nodes at the same LOGICAL depth. NO `-d` -- that prints one
+        # node instead of the chain. COUNT THE LEAVES: a forked tree (md/multipath) has two
+        # ancestors at the same depth and a last-row read picks one ARBITRARILY, which is a
+        # confident pin naming a volume the mount is NOT on.
+        _sl_rc=0
+        _sl_out="$(timeout 5 lsblk -inso NAME "$STORE_MOUNT_SRC" 2>/dev/null)" || _sl_rc=$?
+        if [ "$_sl_rc" -eq 0 ] && [ -n "$_sl_out" ]; then
+          STORE_MOUNT_BASE="$(printf '%s\n' "$_sl_out" \
+            | awk 'NF {
+                   p = match($0, /[[:alnum:]]/)
+                   if (p > 0) {
+                     nrow++
+                     dep[nrow] = p - 1
+                     nm = substr($0, p); sub(/[^A-Za-z0-9_.-].*$/, "", nm)
+                     nam[nrow] = nm
+                   }
+                 }
+                 END {
+                   cnt = 0
+                   for (i = 1; i <= nrow; i++) {
+                     if (i == nrow || dep[i + 1] <= dep[i]) { cnt++; base = nam[i] }
+                   }
+                   if (cnt > 1) print "__AMBIGUOUS__"
+                   else if (cnt == 1 && base != "") print base
+                 }')"
+        else
+          STORE_MOUNT_BASE=__UNREADABLE__
+        fi
+        case "$STORE_MOUNT_BASE" in
+          __AMBIGUOUS__) : ;;
+          '' | *[!A-Za-z0-9_.-]*) STORE_MOUNT_BASE=__UNREADABLE__ ;;
+        esac
+        # Reverse-map the base inside the HETZNER NAMESPACE ONLY, and COUNT the hits. Measured on
+        # the sibling host: an unconstrained by-id walk returns THREE aliases for one device, so
+        # it is multi-valued and would need an arbitrary tiebreak. Counting instead of asserting
+        # single-valuedness is what keeps this a measurement rather than a premise. The glob root
+        # is a LITERAL for the same reason the PATH append is -- see the top of this script.
+        case "$STORE_MOUNT_BASE" in
+          __AMBIGUOUS__) STORE_MOUNT_DEVID=__AMBIGUOUS__ ;;
+          __UNREADABLE__) STORE_MOUNT_DEVID=__UNREADABLE__ ;;
+          *)
+            _devid_hits=0
+            _devid_match=""
+            for _alias in /dev/disk/by-id/scsi-0HC_Volume_*; do
+              [ -e "$_alias" ] || continue
+              _devid_target="$(readlink -f "$_alias" 2>/dev/null)" || _devid_target=""
+              [ -n "$_devid_target" ] || continue
+              case "$_devid_target" in
+                */"$STORE_MOUNT_BASE")
+                  _devid_hits=$((_devid_hits + 1))
+                  _devid_match="$${_alias##*/}"
+                  ;;
+              esac
+            done
+            if [ "$_devid_hits" -eq 0 ]; then
+              STORE_MOUNT_DEVID=__NOMATCH__
+            elif [ "$_devid_hits" -gt 1 ]; then
+              STORE_MOUNT_DEVID=__AMBIGUOUS__
+            else
+              STORE_MOUNT_DEVID="$_devid_match"
+            fi
+            ;;
+        esac
+        # Charset, not just whitespace (#8386 review): this value reaches --data-raw's JSON body
+        # unescaped, so a quote or a backslash in a by-id basename would malform the envelope and
+        # lose EVERY field of the row on every tick, not just this one. Same class as the base.
+        case "$STORE_MOUNT_DEVID" in
+          '' | *[!A-Za-z0-9_.-]*) STORE_MOUNT_DEVID=__UNREADABLE__ ;;
+        esac
+        # The LUKS discriminator, copied from luks-monitor.sh's first three steps: findmnt →
+        # cryptsetup status → the `device:` line → blkid. Step 4 (re-testing the Doppler-held
+        # passphrase) and step 5 (the header UUID) are deliberately NOT folded in -- a per-tick
+        # `doppler secrets get` on a 5-min cron is a different risk posture, and the workspaces
+        # probe runs DAILY for that reason. So store_luks=yes means "the store is on a LUKS
+        # device", never "we can still unlock it".
+        _sp_state=plain
+        # Bound BEFORE the branch: only the mapper arm assigns it, so a raw-ext4 mount left it
+        # unset and `set -u` aborted the entire heartbeat -- no row at all on every non-mapper
+        # path. The suite's P-raw-ext4 case caught this on the first run.
+        _cs_rc=na
+        case "$STORE_MOUNT_SRC" in
+          /dev/mapper/*)
+            _cs_name="$${STORE_MOUNT_SRC##*/}"
+            _cs_rc=0
+            _cs_out="$(timeout 5 cryptsetup status "$_cs_name" 2>/dev/null)" || _cs_rc=$?
+            _cs_type="$(printf '%s\n' "$_cs_out" | sed -n 's/^[[:space:]]*type:[[:space:]]*//p' | head -1)"
+            _cs_dev="$(printf '%s\n' "$_cs_out" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p' | head -1)"
+            if [ "$_cs_rc" -eq 0 ]; then
+              case "$_cs_type" in
+                *LUKS*)
+                  if [ -n "$_cs_dev" ]; then
+                    STORE_BACKING_DEV="$_cs_dev"
+                    _sp_state=luks_candidate
+                  else
+                    # cryptsetup says LUKS and will not name the device the bytes are on. There
+                    # is nothing for a positive verdict to rest on.
+                    STORE_BACKING_DEV=__UNREADABLE__
+                    _sp_state=unanswered
+                  fi
+                  ;;
+                *)
+                  STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+                  [ -n "$_cs_dev" ] && STORE_BACKING_DEV="$_cs_dev"
+                  _sp_state=not_luks
+                  ;;
+              esac
+            elif [ "$_cs_rc" -eq 4 ]; then
+              # 4 is documented "wrong device specified": a device-mapper node that is not a
+              # crypt mapping. blkid is what says whether the bytes are a container.
+              STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+              _sp_state=wrong_device
+            else
+              # 1 = wrong parameters (also what a non-root run returns), 2 = no permission,
+              # 3 = out of memory, 5 = busy, 124 = our timeout, 127 = absent. Every one of them
+              # says the TOOL refused, which is not a statement about the bytes.
+              STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+              _sp_state=unanswered
+            fi
+            ;;
+          *)
+            STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+            _sp_state=plain
+            ;;
+        esac
+        # blkid reads the device CRYPTSETUP NAMED, never /dev/$STORE_MOUNT_BASE: on a partitioned
+        # volume the crypto_LUKS signature lives on sdb1 while the base disk is sdb, so a read
+        # against the base would report `unknown` on a correctly encrypted store. The base stays
+        # the input to the by-id map (the aliases name the DISK); the signature question is asked
+        # of the device cryptsetup itself reported.
+        _bk_out=""
+        _bk_rc=na
+        case "$STORE_BACKING_DEV" in
+          /dev/*)
+            _bk_out="$(timeout 5 blkid -o value -s TYPE "$STORE_BACKING_DEV" 2>/dev/null)" || _bk_rc=$?
+            ;;
+        esac
+        STORE_PROBE_RC="cs$$_cs_rc.bk$$_bk_rc"
+        case "$STORE_PROBE_RC" in
+          '' | *[!A-Za-z0-9_.-]*) STORE_PROBE_RC=__UNREADABLE__ ;;
+        esac
+        # THE POSITIVE VERDICT ALWAYS RESTS ON blkid, never on a cryptsetup exit code alone: an
+        # exit code says the tool refused, a TYPE says what the bytes are.
+        case "$_sp_state" in
+          luks_candidate)
+            case "$_bk_out" in
+              crypto_LUKS) STORE_LUKS=yes ;;
+              '') STORE_LUKS=unknown ;;
+              *) STORE_LUKS=no ;;
+            esac
+            ;;
+          wrong_device)
+            case "$_bk_out" in
+              '') STORE_LUKS=unknown ;;
+              *) STORE_LUKS=no ;;
+            esac
+            ;;
+          plain | not_luks) STORE_LUKS=no ;;
+          *) STORE_LUKS=unknown ;;
+        esac
+        # A confident verdict needs a confident base. store_mount_devid is what ties this row to
+        # the DECLARED volume, so a base that could not be resolved downgrades the verdict rather
+        # than standing beside it as though the two were independent.
+        case "$STORE_MOUNT_BASE" in
+          __UNREADABLE__ | __AMBIGUOUS__) STORE_LUKS=unknown ;;
+        esac
+      fi
+      # Whitespace/charset guards on the remaining emitted values, same contract as above.
+      case "$STORE_BACKING_DEV" in
+        '' | *[!A-Za-z0-9_./:-]*) STORE_BACKING_DEV=__UNREADABLE__ ;;
+      esac
+      case "$STORE_LUKS" in
+        '' | *[[:space:]]*) STORE_LUKS=unknown ;;
+      esac
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
       # err_redact_rev (#7960, ADR-211): integer revision of the zot_last_err redaction gate — the
@@ -579,7 +829,7 @@ write_files:
       # follow-through probe keys delivery proof on it, read from this trusted region. A LITERAL, not
       # a $VAR: this script runs set -u. Bump when the gate changes; never decrement or reuse; never
       # keep the token while removing the gate.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -597,6 +847,10 @@ write_files:
   - path: /etc/cron.d/zot-disk-heartbeat
     content: |
       # Emit the zot disk heartbeat + SOLEUR_ZOT_DISK self-report every 5 min (#6122 / #6244).
+      # PATH: this line sets none, unlike its two siblings in this template (zot-log-shipper and
+      # the NIC guard both pin PATH=/usr/local/sbin:…:/sbin). That is now a THIRD model of cron's
+      # PATH in one file, and the difference is deliberate: zot-disk-heartbeat.sh appends the sbin
+      # dirs ITSELF, as a literal, for the reason documented at the top of that script (#8386).
       # Wrapped in `doppler run` so BETTERSTACK_LOGS_TOKEN (isolated soleur-registry/prd config)
       # is injected for the Better Stack Logs POST — never baked into user_data.
       */5 * * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh
