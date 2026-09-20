@@ -25,7 +25,7 @@ model {
   }
 
   founder -> devin "Runs Soleur sessions locally in the CLI or remotely in Devin Cloud"
-  devin -> platform.plugin "Loads skills, AGENTS.md rules, and MCP in both substrates; plugin subagents and SessionStart/SessionEnd hooks only on local" { technology "File I/O" }
+  devin -> platform.plugin "Loads skills, AGENTS.md rules, and MCP in both substrates; plugin subagents and SessionStart/SessionEnd hooks only on local. Since #8401 all three /soleur:go session gates also resolve the plugin root from the two managed Devin plugin caches by .claude-plugin/plugin.json IDENTITY (never by script basename), so a cloud session with no *_PLUGIN_ROOT exported no longer runs every gate dead; the session-start gate dispatches cleanup-merged from a cache root only when that root's worktree-manager.sh carries the reap-capability token, because the cached copy may predate the #8400 guards (ADR-179 A16)" { technology "File I/O" }
 
   founder = actor "Founder / Operator" {
     description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-073 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
@@ -110,7 +110,7 @@ model {
     }
 
     plugin = system "Soleur Plugin" {
-      description "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user."
+      description "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user."
 
       skills = container "Skills" {
         technology "Markdown SKILL.md"
@@ -420,7 +420,7 @@ model {
   // ---- C4 L1 (System Context) — 18 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
   founder -> grokBuild "Runs /go (local plugin CLI)" { technology "Grok Build" }
-  grokBuild -> plugin "Loads via .grok/config.toml; the plugin root resolves from the loader-substituted ${CLAUDE_PLUGIN_ROOT} token first, then GROK_PLUGIN_ROOT (ADR-179 decision 11)" { technology "File I/O" }
+  grokBuild -> plugin "Loads via .grok/config.toml; the plugin root resolves from the loader-substituted ${CLAUDE_PLUGIN_ROOT} token first, then GROK_PLUGIN_ROOT, then the two managed Devin plugin caches by manifest identity (ADR-179 decision 11 as amended by A16, #8401 — the cache arms are no longer confined to the cloud-mode gate)" { technology "File I/O" }
 
   // Host resource control (ADR-161). The Hook Engine never writes a cgroup
   // directory itself; it asks the user's systemd manager to create the scope.
