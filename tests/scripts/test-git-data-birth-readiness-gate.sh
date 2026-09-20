@@ -2663,9 +2663,22 @@ if [[ -z "$_e2c_bad" ]]; then
 else
   fail "E2c: could-not-measure tokens not annotated as such — ${_e2c_bad}" "n/a" ""
 fi
-# E2d — the sets are DISJOINT and every bracketed token the gate can emit is in exactly one of
-# them. This is the parity mechanism the probe and the runbooks were missing: three
-# hand-maintained copies agreed at review time with nothing asserting they would keep agreeing.
+# E2d — the sets are DISJOINT, and every token that appears LITERALLY bracketed in the gate's
+# source is in exactly one of them.
+#
+# CORRECTED 2026-09-20 (#8412). This comment previously claimed "every bracketed token the gate
+# can emit" and called itself "the parity mechanism the probe and the runbooks were missing".
+# Both were false, and the second was a capability claim about OTHER files that nothing checked
+# (hr-verify-repo-capability-claim-before-assert). The haystack below greps the SOURCE for
+# `rehearsal_gate: (HOLD|ABORT) [TOKEN]`, so it sees 10 of 21: the 11 tokens reaching the verdict
+# line through the generic `HOLD [${_tok}]` sites are invisible to it — and those are precisely
+# the sites P1 #2 lived at. What E2d does buy is real but narrower: the literal emits cannot
+# drift out of the declared sets.
+#
+# The CROSS-COPY parity arm is in scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh,
+# which holds its own expectation and compares it to the gate's declaration, so moving a token
+# between the two sets reds there. Neither catches a token emitted through a generic site and
+# never declared at all; that residual is tracked in #8397.
 _e2d_bad=""
 while IFS= read -r _tok_lit; do
   [[ -n "$_tok_lit" ]] || continue
@@ -2675,7 +2688,7 @@ while IFS= read -r _tok_lit; do
   [[ $((_n_cannot + _n_meas)) -eq 1 ]] || _e2d_bad+="${_tok_lit}(${_n_cannot}${_n_meas}) "
 done < <(grep -oE 'rehearsal_gate: (HOLD|ABORT) \[[A-Z0-9_]+\]' "$GATE" | grep -oE '\[[A-Z0-9_]+\]' | tr -d '[]' | sort -u)
 if [[ -z "$_e2d_bad" ]]; then
-  pass "E2d: every bracketed token the gate emits is classified in exactly one set"
+  pass "E2d: every LITERALLY-bracketed token in the gate source (10 of 21) is in exactly one set"
 else
   fail "E2d: tokens classified in neither or both sets — ${_e2d_bad}" "n/a" ""
 fi
@@ -2958,7 +2971,9 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #                       both counters and satisfies the floor. Contributes 0 to this count on
 #                       purpose (it snapshots and unwinds), like _am_self_test beside it.
 #     3  E2b/E2c/E2d    the annotation's two sets, asserted in BOTH directions plus disjoint
-#                       coverage of every bracketed token the gate emits. E2 itself was
+#                       coverage of the LITERALLY-bracketed tokens in the gate source -- 10 of
+#                       the 21 declared; the 11 emitted through the generic `HOLD [${_tok}]`
+#                       sites are outside E2d's haystack (#8397). E2 itself was
 #                       vacuous — its fixture refused at step B, which has no annotate call.
 #     2  N1b/N1c        the API base is a readonly https constant (an env override handed an
 #                       attacker the bearer AND step C's verdict); the sanitizer is driven

@@ -5,7 +5,8 @@ category: security-issues
 module: git-data
 issue: 8010
 pr: 8388
-tags: [guard-design, review-panel, seam, anchor-assertion, instrument-verification]
+refs: [8388, 8412, 8397]
+tags: [guard-design, review-panel, seam, anchor-assertion, instrument-verification, acceptance-criteria, ci-vs-local, control-arm, discoverability-test, ci-ratchets, env-inheritance]
 ---
 
 # The gate I built to resolve a run could be redirected by one env var
@@ -70,9 +71,11 @@ A tooling list is a claim about what a library CALLS; mine was a claim about wha
 - `GIT_DATA_RUNG2_API_BASE` is now a `readonly` https constant with no override.
 - `_git_data_rung2_annotate` filters on exported token sets (`git_data_rung2_token_sets`), and
   emits `REFUSED` for the measured half. `E2` re-pointed at a step-C fixture; `E2b`/`E2c`
-  assert **both directions** over every set member; `E2d` asserts every bracketed token the
-  gate emits is classified in exactly one set — the parity mechanism three hand-maintained
-  copies (gate, probe, probe suite) lacked.
+  assert **both directions** over every set member; `E2d` asserts every **literally** bracketed
+  token in the gate's source is classified in exactly one set. Corrected 2026-09-20 (see the
+  Addendum): that is 10 of 21 — the 11 reaching the verdict line through the generic
+  `HOLD [${_tok}]` sites are outside its haystack, so `E2d` is NOT the cross-copy parity
+  mechanism this bullet originally claimed. That parity arm now lives in the #8210 probe suite.
 - `find` and `sha256sum` added to the tooling list.
 - **Guard 5** (a `soleur:engineering:cto` ruling): a change-triggered monotonic run-id floor.
   Steps D and E are hash-EQUALITY checks, so reverting the payload and citing the genuine older
@@ -116,7 +119,8 @@ Mutate each one back out in the same commit.
 
 ### An instrument's silence is not a measurement
 
-Five verification commands in this session returned confident wrong answers rather than errors:
+Five verification commands in this session returned confident wrong answers rather than errors
+(the ship round added more — see the Addendum's session errors):
 
 - `bunx vitest` on a `bun:test` suite → "2 failed, no tests", which reads as a real failure.
 - `grep -c ... -r` → per-file counts, not a total.
@@ -209,3 +213,124 @@ Run every instrument against a case whose answer you already know before reading
 - **Route design forks to `soleur:engineering:cto`**, not the operator. The downgrade-shape
   ruling sharpened a residual I had recorded as accepted into a mechanism that ships, and it
   found the exploit payload already committed in our own history.
+
+## Addendum — 2026-09-20 (#8010 / PR #8412): the ship round, and how little of it was new
+
+Shipping this branch surfaced **ten** further defects — 3 advisor consult + 3 AC sweep + 2 battery
++ 1 CI + 1 preflight Check 10, the five rows of the PR's instrument table. Review of this addendum
+then found that **all five classes I had written up as discoveries were already documented**, with
+anchors I had loaded in the same session; four are in the table below and the fifth is in
+*The one class stated three times* further down. That is the more useful finding, so it goes first.
+
+### What was already written down
+
+| What I "found" | Where it already lives |
+| --- | --- |
+| A hand-copied set drifts from its source, silently and green | `review/SKILL.md` — *"A guard that RESTATES the value it guards goes stale silently and fails GREEN"* |
+| A comment claiming a sibling consumer is checked against this mechanism | `review/SKILL.md` — *"Self-claimed cross-artifact contract drift"* |
+| Acceptance criteria that assert the opposite of what shipped | `2026-09-08-the-guard-was-deleted-the-plan-still-cited-it-and-the-linter-validated-the-citation.md` §2 |
+| A repo-global ratchet is unreachable from a diff-derived suite selection | `work/SKILL.md` — *"A REFUSED gate also owes the repo-global RATCHETS"*, **which already names `lint-trap-tempfile-ownership` as the instance** |
+| A control whose premise is inherited from the environment | `review/SKILL.md` — *"A suite must clear EVERY env var the SUT branches on"*, including the litmus *"treat any PASS-count change as a finding"* |
+
+The `R14-control` defect (236/0 locally, 235/1 in CI, on `GH_TOKEN`/`GITHUB_TOKEN`) is that last
+litmus firing exactly as written. I reported it as a discovery. The instances are still worth
+naming — `E2d`, the #8210 probe's stale copy, FR15/FR5/FR14, `lint-trap-tempfile-ownership`,
+`battery-tag-authorship`, `R14-control` — but the classes are not new, and writing them up again
+splits each rule's canonical home.
+
+**The rule this violates is already in the corpus too:** *the disposition for a recurring
+documented class is a mechanical gate, not another learning.*
+
+### The one class stated three times and gated zero times
+
+`soleur:preflight` Check 10 executes a plan's declared `discoverability_test.command` inside a
+bubblewrap sandbox under a **15-second cap**, and compares stdout against `expected_output`. This
+plan declared `bash tests/scripts/test-git-data-birth-readiness-gate.sh` — the 236-assertion suite —
+with a prose `expected_output`. Measured at this PR's own ship gate: killed at `rc=124` with arms
+still passing, and no matcher can compare stdout to a sentence.
+
+**I first wrote this section as "the one class with no prior statement". One grep against
+`origin/main` falsifies that** — the class was on record three times before this PR, and the
+durable sentence I thought I was deriving was written a month earlier:
+
+| Where | When |
+| --- | --- |
+| `knowledge-base/project/plans/archive/20260811-002501-2026-08-10-fix-infra-suite-runner-parallel-flake-plan.md` — *"takes ~23 minutes against a 15-second cap. A command a gate cannot execute proves nothing about discoverability"* | 2026-08-10 |
+| `scripts/git-data-rung2-gate-verdict.sh` › `# WHY NOT THE SUITE` — both halves, cap and prose matcher | #8388, **written by me two days before this PR** |
+| `knowledge-base/project/plans/2026-09-19-fix-git-data-rung2-gate-load-bearing-plan.md` › `# AMENDED 2026-09-20` | this cycle |
+
+So this class belongs with the other five, not apart from them, and the count is **six of six**
+already on record. What was genuinely missing is not the statement but the **enforcement**: a plan
+comment is not a gate, and `plan/SKILL.md`'s **Reject conditions** for `discoverability_test`
+covered `ssh`, the verb allowlist and placeholder text, and neither of these. That is what this PR
+adds — mirrored into `deepen-plan` Phase 4.7, its Step 5 pass-through,
+`deepen-plan.workflow.js` (a second live runtime of the same gate, found disagreeing by review) and
+`observability-coverage-reviewer.md`.
+
+It is still prose, which is the weakest form available and is what AP-021/AP-022 say does not hold.
+The `expected_output` condition is decidable today with the shipped `tokenizeExpected`, and the
+`15` is now hand-copied to eight sites with a pin on one — the same restated-value class as row 1
+of the table above. Both are tracked in **#8413**, with `probe-verb-gate.sh` as the pattern.
+
+The durable shape was already stated in the 2026-08-10 plan above: **a declared verification is
+only a verification if the thing that consumes it can run it.** Here it was satisfied by
+`scripts/git-data-rung2-gate-verdict.sh`, which prints the single `RELEASED`/`HOLD [<TOKEN>]` line
+the plan's own `liveness_signal` already names as the signal, in about a second.
+
+### Residual, not closed
+
+`E2d` still matches only the **10 literally-bracketed** tokens; the 11 reaching the verdict line
+through the generic `HOLD [${_tok}]` sites are outside its haystack. Within its 10 it is sound — it
+requires each token to score `_n_cannot + _n_meas -eq 1`, so one emitted and never declared reds it.
+For the other 11 nothing does. The cross-file parity arm added to the #8210 probe suite catches a
+token *moved between the declared sets* — moving `RUN_NO_EVIDENCE_ARTIFACT` reds 2/152 there while
+the gate's own 236 stay green — but it, too, cannot see a token that was never declared at all.
+
+Impact is triage accuracy, not release. Both consumers refuse either way:
+`infra-validation.yml` `exit 1`s on both branches (the classification selects only the `::error::`
+wording), and the #8210 probe picks exit 2 `NOT YET` vs exit 3 `CANNOT ESTABLISH`. A misclassified
+token degrades what the operator is told; it cannot turn a HOLD into a RELEASE. Tracked in #8397
+with the other rung-2 residuals.
+
+### Session errors — the ship round
+
+1. **Ran `sync-pr-behind.sh 8393` by absolute path from a different worktree.** The script derives
+   its repo root from its OWN location and ignores the PR argument for branch selection, so it
+   merged `main` into my branch and pushed it.
+   **Prevention:** a script taking an identifier as an argument does not necessarily ACT on it —
+   run repo-scoped scripts from the worktree they target, and read the push line's branch name.
+2. **Merged `main` into a STALE local worktree** for #8393 (`d7b279c39` vs the PR head
+   `79dc3b433`); the push was rejected as non-fast-forward.
+   **Prevention:** `git fetch <branch> && git reset --hard origin/<branch>` before syncing a branch
+   whose worktree this session did not create.
+3. **Started the full battery before the tree was final.** Re-reading the plan's acceptance criteria
+   against the tree then forced an edit, so the queued run was killed and relaunched.
+   **Prevention:** re-read the ACs against the tree BEFORE Phase 4 — `ship/SKILL.md` has no
+   AC-verification step, and the Phase 5.5 advisor consult is after Phase 4, so it is too late to
+   absorb an edit.
+4. **`ls … && python3 lint.py` short-circuited**, running a Python lint under `bash`.
+   **Prevention:** never gate an interpreter invocation on a test whose success also selects it.
+5. **Read UTC CI timestamps as local**, briefly concluding I had the wrong run.
+   **Prevention:** compare `date -u` against the log's `Z` stamps before calling a run stale.
+6. **A monitor filter excluded uppercase `EXPECTED` only**, so lowercase self-labelled expected
+   failures read as new ones.
+   **Prevention:** discriminate on the suite-level shape (`^\[FAIL\] <path> (<N>ms)$`), never prose.
+7. **Treated a red `deploy-script-tests` as a defect before establishing which tree it described.**
+   All three trees measured 113/0 and it cleared on re-run — a flake.
+   **Prevention:** re-run a red check before reconciling trees; if it persists, `refs/pull/N/merge`
+   is the tree under test (see `2026-09-19-githubs-merge-ref-runs-your-prs-own-defect-against-it.md`).
+8. **Wrote "eleven" into three artifacts before anything counted the sections**, which sum to ten.
+   It reached the learning, the commit message, and the PR title and body — seven sites — and was
+   caught by a review seat, not by me.
+   **Prevention:** this file's own body already says *verify a measurement ONCE, before it
+   propagates*. For a count, state the arithmetic inline (`3 + 3 + 2 + 1 + 1`) so the claim carries
+   its own check.
+9. **Wrote up five documented classes as discoveries**, then wrote "the one class with no prior
+   statement" over a class with three — one of them a comment I had written myself two days
+   earlier, in a script this same PR cites.
+   **Prevention:** grep the class repo-wide before claiming novelty, not just
+   `plugins/soleur/skills/*/SKILL.md` and `knowledge-base/project/learnings/`. Those two scopes
+   are exactly what missed all three hits here, which lived in
+   `knowledge-base/project/plans/` (including `archive/`) and `scripts/`. A restatement splits the
+   canonical home and is worse than silence; "no prior statement" is a claim, so it needs the
+   command that falsifies it run before it is written.
