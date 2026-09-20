@@ -170,26 +170,35 @@ Each was seconds to falsify and none had been.
     never reached. Each fix bought one more step of visibility and one more CI round.
     **Prevention:** when a JOB fails, extract and run ALL of its steps locally, not just the
     one named in the failure. Parse the job body out of `ci.yml` and run the list.
-23. **Watched a job matched by `test("deploy";"i")`, which resolved to "Deploy Documentation
-    to Cloudflare Pages" rather than the web-platform deploy arm.** Had it gone green, the prd
-    cron would have fired against the PREVIOUS build — the exact #8276 failure the deploy-arm
-    rule exists to prevent. Caught before it mattered. **Prevention:** never match a job by a
-    loose name regex. `postmerge/SKILL.md` already ships the correct selector — its "DEPLOY-arm
-    release run for THIS merge" block queries `actions/runs` with `event=workflow_run` AND
-    `head_sha=${MERGE_SHA}`, filters `.path == ".github/workflows/web-platform-release.yml"`,
-    and reads the job named exactly `deploy`. Both halves matter: the path/event pair picks the
-    right *workflow*, and the `head_sha` pin picks the right *run* — the same file's "Select by
-    the merge SHA, never by recency" note exists because an event filter alone returns whichever
-    merge's deploy arm fired last, routinely another PR's. So this was an execution gap, not a
-    doc gap. **The `head_sha` half has a precondition the sentence above omits, and it bit on
-    #8428:** a `workflow_run` run's `head_sha` is the default-branch tip *at trigger time*, not
-    the merge that caused the CI run, so the pin identifies your merge only while your merge is
-    still `main`'s tip when your CI completes. Land another commit on `main` inside that window
-    and the deploy arm registers under the NEW tip, your `head_sha=<your merge>` query returns
-    empty, and an empty result reads exactly like "the arm has not fired yet". `postmerge/SKILL.md`
-    states the precondition where it defines the predicate; an entry that cites the predicate
-    without it is a half-quote. Practical consequence while verifying a merge: hold sibling merges
-    until the deploy arm has registered.
+23. **Watched a job matched by `test("deploy";"i")`, which resolved to the docs workflow
+    "Deploy Documentation to Cloudflare Pages" rather than the web-platform deploy arm.** Had it
+    gone green, the prd cron would have fired against the PREVIOUS build — the exact #8276
+    failure the deploy-arm rule exists to prevent. Caught before it mattered. The sharp part is
+    that TIGHTENING the regex would not have helped: `deploy-docs.yml`'s only job is declared
+    `deploy:` with no `name:`, so it is named **exactly** `deploy`, byte-identical to the
+    web-platform-release job. No name predicate at any tightness discriminates them — only
+    `.path` does. `postmerge/SKILL.md`'s "DEPLOY-arm release run for THIS merge" block queries
+    `actions/runs` with `event=workflow_run` AND `head_sha=${MERGE_SHA}`, filters
+    `.path == ".github/workflows/web-platform-release.yml"`, and reads the job named exactly
+    `deploy`. **That query narrows candidates; it does not identify one.** The same file's next
+    paragraph says the FALSE-POSITIVE direction is the dangerous one: `head_sha` is the
+    default-branch tip *at trigger time*, so an arm triggered by the PREVIOUS merge's CI is
+    stamped with YOUR sha, both match the predicate, and the API returns the older one first —
+    fully green, having deployed someone else's commit. The shipped query takes `[0]`, which is
+    that one. Identity comes from a third step: read `resolve-target`'s log for
+    `depth=1 origin <sha>` (`--allow-escape-sequences` is required, or `gh api` exits 1 writing
+    zero bytes, which reads as "no log"). The false-NEGATIVE direction is the milder twin —
+    land a commit on `main` inside the CI window and the arm registers under the new tip, so a
+    `head_sha=<your merge>` query returns empty, which reads like "not fired yet". #8428 sat
+    inside that window (a sibling landed ~5 min after the merge) and did not hit it. Note the
+    precondition was added to `postmerge/SKILL.md` on 2026-09-20 in #8411, one day AFTER this
+    error — so the original entry could not have quoted it. Resolution for both directions is
+    already shipped in that file's `absent` row: fetch `main`, then take the arm whose
+    `created_at` is adjacent to your merge-CI's `updated_at`, whose `head_sha` passes
+    `git merge-base --is-ancestor`, and whose log names your sha. **Prevention:** identify a
+    deploy arm by what it DEPLOYS, never by a job name and never by `head_sha` alone — pin the
+    WORKFLOW with `.path`, then confirm the run from `resolve-target`'s log. Full treatment:
+    `knowledge-base/project/learnings/2026-09-20-the-deploy-arm-that-said-success-had-deployed-someone-elses-commit.md`.
 24. **Reported a job as hung for 2h24m by comparing a UTC `started_at` against a local-time
     clock.** It was 24 minutes. **Prevention:** read both sides in the same timezone before
     computing an elapsed time.
@@ -198,6 +207,9 @@ Each was seconds to falsify and none had been.
 
 - #5849 (EXECUTION_MODEL → claude-sonnet-5), #6100 (cron enabled), #8281/#8293
   (the tracker this unblocks), #8344 (the outcome marker).
+- #8428 (the merge whose CI window entry 23 describes) and
+  `knowledge-base/project/learnings/2026-09-20-the-deploy-arm-that-said-success-had-deployed-someone-elses-commit.md`
+  — the dedicated treatment of deploy-arm identification; entry 23 is the name-predicate half.
 - `knowledge-base/project/learnings/2026-07-25-a-stale-presence-guard-fails-green-and-an-unknown-model-id-halves-max-tokens.md`
   — the same class at the Opus 5 launch: a model swap silently broke a parser while
   `audit-models.sh` reported clean.
