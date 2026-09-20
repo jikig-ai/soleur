@@ -137,6 +137,7 @@ F_BACKING="store_backing_dev"
 F_DEVID="store_mount_devid"
 F_EXPECTED="store_expected_devid"
 F_LUKS="store_luks"
+F_PROBE_RC="store_probe_rc"
 # The mapper NAME is a committed constant, and the one committed constant any verdict reads. It
 # is fixed by the same template that renders the volume id, so it is not an independent claim --
 # it is an assertion that the mount is the one this template creates, not some other LUKS device.
@@ -230,6 +231,7 @@ RAWOUT="$("$QUERY" --since "$WINDOW" --grep "$MARKER" --limit "$LIMIT" 2>/dev/nu
   echo "TRANSIENT: betterstack-query.sh exited non-zero — channel_dark or auth failure. Its" >&2
   echo "           output is deliberately NOT reproduced here: the credential is bound in that" >&2
   echo "           process and this text lands on a public issue. Read it from the workflow log." >&2
+  if stale_now "g3_query_failed"; then exit 5; fi
   exit 2
 }
 
@@ -255,6 +257,7 @@ fi
   marker "g5_parse_lib_unreadable" "path=scripts/lib/zot-telemetry-parse.sh"
   echo "TRANSIENT: $PARSE_LIB is not readable — refusing to hand-roll the trusted-region parse" >&2
   echo "           when the invariants this file mirrors cannot be read beside it." >&2
+  if stale_now "g5_parse_lib_unreadable"; then exit 5; fi
   exit 2
 }
 ENVELOPE="$(printf '%s\n' "$RAWOUT" | { grep -F '"raw":"{\"message\":\"'"$MARKER"' ' || true; })"
@@ -264,6 +267,7 @@ if [[ -z "$ENVELOPE" ]]; then
   echo "TRANSIENT: $MARKER_ROWS row(s) matched the marker but NONE carries the direct-POST" >&2
   echo "           producer envelope. Rows merely QUOTING the marker are not evidence about the" >&2
   echo "           producer, in either direction." >&2
+  if stale_now "g6_envelope_absent"; then exit 5; fi
   exit 2
 fi
 
@@ -285,6 +289,7 @@ if [[ -z "$DECODED_TSV" ]]; then
   marker "g7_decode_failed" "window=$WINDOW"
   echo "TRANSIENT: could not decode the JSONEachRow envelope — matching the undecoded form would" >&2
   echo "           silently match nothing, which reads exactly like an undelivered emitter." >&2
+  if stale_now "g7_decode_failed"; then exit 5; fi
   exit 2
 fi
 
@@ -305,6 +310,7 @@ if [[ -z "$SCOPED_TSV" ]]; then
   echo "TRANSIENT: $ALL_ROWS decoded producer row(s), NONE from host=$EXPECTED_HOST. Grading" >&2
   echo "           another host's rows would answer a question about a volume this ledger row" >&2
   echo "           does not describe." >&2
+  if stale_now "g8_host_filter_empty"; then exit 5; fi
   exit 2
 fi
 
@@ -523,7 +529,10 @@ if [[ -z "$V4_REASONS" && "$N_LUKS" == "unknown" ]]; then
   echo "CANNOT ESTABLISH: the newest row on boot $NEWEST_BOOT reads \`$F_LUKS=unknown\` while every" >&2
   echo "           other measurement on that row is as declared. That is the emitter's" >&2
   echo "           TOOL-REFUSED state — cryptsetup rc 127/124, an empty blkid, a sentinel base —" >&2
-  echo "           not a reading of the bytes. Refusing to publish a refusal as 'not encrypted':" >&2
+  echo "           not a reading of the bytes. WHICH tool refused is in \`$F_PROBE_RC\` on the same" >&2
+  echo "           row (cs<rc>.bk<rc>): cs127 is a PATH regression on the host, cs124 a timeout," >&2
+  echo "           cs1 a non-root run, and bk-with-empty-output a blkid that answered nothing." >&2
+  echo "           Refusing to publish a refusal as 'not encrypted':" >&2
   echo "           real plaintext is caught by V1, which counts \`no\` alone." >&2
   echo "           NOT the post-replace mount race: that renders \`$F_LUKS=absent\` with" >&2
   echo "           \`$F_SRC=__NOMOUNT__\`, which trips two independent disjuncts above and is" >&2

@@ -641,6 +641,18 @@ CRYPT_PLAIN="/dev/mapper/vgroot-lv is active.
 
 set_byid "$EXP_DEVID:sdb"
 
+# --- fixture DIRECTION: a value that VIOLATES the charset contract -------------------------
+# Every other posture fixture sits on the same side of the emitter's charset guards, so all
+# three (STORE_LUKS, STORE_BACKING_DEV, STORE_MOUNT_DEVID) were free to delete at full green --
+# and they are what stop a space-bearing value from splitting one field into two tokens and
+# corrupting the row the probe parses. cryptsetup reports a device: line carrying a space here;
+# the emitter must refuse it rather than ship it (#8386 review, test-design seat Finding 3).
+posture_case "P-space-in-backing" \
+  HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+  HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_RC=0 \
+  HB_CRYPT_OUT="$(printf 'type:    LUKS2\n  device:  /dev/sd b\n')"
+assert_field "P-space-in-backing backing" store_backing_dev "__UNREADABLE__"
+
 # --- E1 healthy: mapper over a LUKS volume on the declared alias ---------------------------
 # SUBJECT-PINNED. Without HB_LSBLK_SUBJ/HB_CRYPT_SUBJ the stubs answer the same tree whatever
 # device they are asked about, so three mutations of the emitter stayed green: walking a
@@ -884,7 +896,17 @@ assert_emit "reject control for assert_emit() (this FAIL line is EXPECTED)" "$TI
 # `store_luks=yes` is a substring of `store_luks=yesX`, and every posture expectation written
 # through assert_emit would have been satisfiable by a longer wrong value.
 assert_field "reject control for assert_field() (this FAIL line is EXPECTED)" store_luks "yesX"
-if [[ "$FAIL" -ne $((_c_f0 + 3)) ]]; then
+# --- reject controls for the two PREDICATE helpers -------------------------------------------
+# Neither is reachable through assert()/assert_emit()/assert_field()'s controls above: they OWN
+# the verdict for the two assertions posture_case emits, so a `return 0` in either silently
+# unbacked ~64 posture assertions. Drive each with an input that MUST fail.
+_HEAD_SAVE="$HEAD"
+HEAD='SOLEUR_ZOT_DISK store_mount_src=/dev/mapper/registry a="b" store_luks=yes'
+assert "reject control for _head_tokens_ok() (this FAIL line is EXPECTED)" "_head_tokens_ok"
+HEAD='SOLEUR_ZOT_DISK store_luks=yes'
+assert "reject control for _posture_fields_in_head() (this FAIL line is EXPECTED)" "_posture_fields_in_head"
+HEAD="$_HEAD_SAVE"
+if [[ "$FAIL" -ne $((_c_f0 + 5)) ]]; then
   printf '\n[FATAL] harness: a verdict wrapper did not register a failure for an input that MUST fail (FAIL %s -> %s) -- every assertion above is unbacked.\n' "$_c_f0" "$FAIL" >&2
   exit 1
 fi
@@ -911,7 +933,7 @@ fi
 # ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
 # redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
 CASES_REDACT_MIN=39
-CASES_POSTURE_MIN=165
+CASES_POSTURE_MIN=170
 if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
     "$CASES_REDACT" "$CASES_REDACT_MIN" >&2

@@ -592,6 +592,31 @@ CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
 expect "stale: the newest row lacks the field -> ACTION REQUIRED" 5 "$WORK/f_v3" \
   "escalation=stale branch=v3_newest_field_absent"
 
+# The clock now reaches the STRUCTURAL exit-2 guards too. Its own rationale names "a jq upgrade",
+# which lands on g7 -- an exit-2 branch that previously parked on NOT YET forever, getting
+# MILDER the longer it stayed broken. g1/g2/g4 stay unclocked deliberately: an unprovisioned
+# secret and a missing query script are pre-enrolment states, and a dark channel is owned by
+# scheduled-zot-restart-loop.yml's PRODUCER_SILENT/INGEST_DARK alarm (#8386 review).
+CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available STUB_RC=7 \
+expect "stale: a query that has failed for 30 days is a defect, not a wait" 5 "$WORK/one_good" \
+  "escalation=stale branch=g3_query_failed"
+
+CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available CASE_NO_LIB=1 \
+expect "stale: an unreadable parse library past the horizon -> ACTION REQUIRED" 5 "$WORK/one_good" \
+  "escalation=stale branch=g5_parse_lib_unreadable"
+
+CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
+expect "stale: 30 days of marker-quoting rows with no envelope -> ACTION REQUIRED" 5 "$WORK/f_foreign" \
+  "escalation=stale branch=g6_envelope_absent"
+
+CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
+expect "stale: 30 days undecodable (the jq upgrade the clock's rationale names) -> ACTION REQUIRED" 5 "$WORK/f_nodecode" \
+  "escalation=stale branch=g7_decode_failed"
+
+CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
+expect "stale: 30 days of rows from another host only -> ACTION REQUIRED" 5 "$WORK/f_otherhost" \
+  "escalation=stale branch=g8_host_filter_empty"
+
 CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
 expect "stale: a boot stuck below the evidence floor -> ACTION REQUIRED" 5 "$WORK/f_v5" \
   "escalation=stale branch=v5_boot_too_young"
@@ -712,7 +737,7 @@ fi
 # block together with its THRESHOLD BINDINGS; a floor whose threshold is a bare literal is
 # unconstructible, so the suite silently leaves that meta-guard's covered population. The VALUE
 # stays a literal: binding it to a variable expansion re-creates the same unconstructible shape.
-MIN_CASES=44
+MIN_CASES=49
 if (( cases < MIN_CASES )); then
   # PHRASING IS LOAD-BEARING, not style. guard-vacuity-floor.test.sh classifies a mutant as FIRES
   # only when its output carries a floor-shaped sentinel from a fixed vocabulary; `only %s cases

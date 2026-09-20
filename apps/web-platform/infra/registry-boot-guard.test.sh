@@ -101,6 +101,16 @@ assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' 
 # the old anywhere grep false-passes a field named only in a comment). LINE= is one physical line.
 # shellcheck disable=SC2034  # used inside the eval'd `assert` condition strings below (shellcheck can't see it)
 LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
+# DERIVED, not restated. A hardcoded list is a claim about which posture fields exist and is
+# wrong the moment one is added: `store_mount_base` and `store_probe_rc` each sat outside this
+# loop until a review found them. Deriving means a new field joins the presence requirement by
+# existing. The floor keeps the derivation from silently returning nothing.
+POSTURE_NAMES="$(grep -oE 'store_[a-z_]+=' <<<"$LINE_ASSIGN" | sort -u | tr '\n' ' ')"
+if [ "$(grep -c . <<<"$(grep -oE 'store_[a-z_]+=' <<<"$LINE_ASSIGN" | sort -u)")" -lt 7 ]; then
+  printf '  FATAL: derived %s posture field name(s) from LINE=, floor is 7 -- the extraction broke.\n' \
+    "$(grep -c . <<<"$(grep -oE 'store_[a-z_]+=' <<<"$LINE_ASSIGN" | sort -u)")" >&2
+  exit 2
+fi
 assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 # zot_uptime_s + zot_last_err_src (#7247): the two ambiguity discriminators. Guarded here so
 # neither can be silently dropped — without zot_uptime_s, `exit_code=0 state_status=running` is
@@ -112,7 +122,7 @@ assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          zot_uptime_s= zot_last_err_src= err_redact_rev= \
-         store_mount_src= store_mount_base= store_backing_dev= store_mount_devid= store_expected_devid= store_luks= \
+         $POSTURE_NAMES \
          oom_kills_5m= zot_last_err= boot_id= zot_image_digest= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
@@ -531,7 +541,7 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # assertions); #7960 adds 1 (the `err_redact_rev=` field-presence row). Measured, not tallied by
 # hand: the suite runs 105, and leaving the floor at 104 left #7960's own assertion deletable at
 # green -- exactly the slack this comment warns about.
-MIN_ASSERTIONS=122
+MIN_ASSERTIONS=123
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2

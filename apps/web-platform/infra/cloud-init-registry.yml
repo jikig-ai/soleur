@@ -603,6 +603,12 @@ write_files:
       STORE_MOUNT_BASE=n/a
       STORE_MOUNT_DEVID=n/a
       STORE_BACKING_DEV=n/a
+      # WHY the verdict is `unknown`, not just THAT it is. cryptsetup rc 127 (a PATH regression),
+      # rc 1 (not root), rc 124 (timeout) and an empty blkid all collapse to store_luks=unknown,
+      # and they select DIFFERENT remedies — the first costs a host replace behind a dispatcher
+      # that is currently dead. Without this field the probe parks all of them on the same
+      # cannot-establish verdict for 30 days with nothing naming which tool refused (#8386 review).
+      STORE_PROBE_RC=n/a
       STORE_LUKS=unknown
       # The rc is CAPTURED, never `|| true`. __NOMOUNT__ is a CONJUNCTION -- findmnt exited 1 AND
       # printed nothing, which is "not a mountpoint" -- and `|| true` clobbers exactly the byte
@@ -719,6 +725,10 @@ write_files:
         # probe runs DAILY for that reason. So store_luks=yes means "the store is on a LUKS
         # device", never "we can still unlock it".
         _sp_state=plain
+        # Bound BEFORE the branch: only the mapper arm assigns it, so a raw-ext4 mount left it
+        # unset and `set -u` aborted the entire heartbeat -- no row at all on every non-mapper
+        # path. The suite's P-raw-ext4 case caught this on the first run.
+        _cs_rc=na
         case "$STORE_MOUNT_SRC" in
           /dev/mapper/*)
             _cs_name="$${STORE_MOUNT_SRC##*/}"
@@ -769,11 +779,15 @@ write_files:
         # the input to the by-id map (the aliases name the DISK); the signature question is asked
         # of the device cryptsetup itself reported.
         _bk_out=""
-        _bk_rc=0
+        _bk_rc=na
         case "$STORE_BACKING_DEV" in
           /dev/*)
             _bk_out="$(timeout 5 blkid -o value -s TYPE "$STORE_BACKING_DEV" 2>/dev/null)" || _bk_rc=$?
             ;;
+        esac
+        STORE_PROBE_RC="cs$$_cs_rc.bk$$_bk_rc"
+        case "$STORE_PROBE_RC" in
+          '' | *[!A-Za-z0-9_.-]*) STORE_PROBE_RC=__UNREADABLE__ ;;
         esac
         # THE POSITIVE VERDICT ALWAYS RESTS ON blkid, never on a cryptsetup exit code alone: an
         # exit code says the tool refused, a TYPE says what the bytes are.
@@ -815,7 +829,7 @@ write_files:
       # follow-through probe keys delivery proof on it, read from this trusted region. A LITERAL, not
       # a $VAR: this script runs set -u. Bump when the gate changes; never decrement or reuse; never
       # keep the token while removing the gate.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_luks=$STORE_LUKS host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
