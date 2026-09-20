@@ -82,6 +82,18 @@ margin will fire is a non-empty `environments` list. Both are one authenticated 
   evaluation of the manifest, and one dispatch masks at most one 6-hour window, not the
   weeks-long schedule-disabled mode the monitor exists for.)
 
+**Closed 2026-09-20.** The liveness half is now measured, not owed: `schedule`-event runs
+35440135873 (2026-09-19T11:27:55Z) and 35508695589 (2026-09-20T11:46:41Z) each recorded a
+check-in, with the second run's `drift-check` log re-read as `http_code=202` and zero
+resolution errors. The check-in ids are in the PIR's `## Addendum — 2026-09-20 (#8313)` and
+deliberately not repeated here — `lint-fixture-content.mjs` scopes this directory and rejects
+prod-shape UUIDs, which is the correct place to draw that line.
+
+The two ticks fired 4h49m and 5h08m behind the `37 6 * * *` cron, with
+`created_at == run_started_at` on both — so that lag is GitHub's delivery of the `schedule`
+event, not runner queueing, and the 5h08m one clears `checkin_margin: 360` by only ~52 minutes.
+The dark window had hidden all of this: the margin had never been exercised by a real check-in.
+
 ## Session Errors
 
 1. **The first branch dispatch failed `Set up job` on a committed dangling symlink.**
