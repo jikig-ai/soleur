@@ -462,6 +462,16 @@ echo "R3d. .mcp.json is never truncated when main does not carry one"
 # before forking, so a repo whose main has no .mcp.json ended up with a 0-byte file, silently,
 # rc 0. THIS repo tracks one, which is why every fixture had one and nobody saw it.
 ws="$(fresh_ws r3d)"
+# `:?`, not a bare use. `fresh_ws` runs `mk_workspace`, whose `assert_fixture_dir` failure path
+# is `exit 2` — but it runs inside THIS command substitution, so that exit kills the SUBSHELL
+# and the parent continues with ws="". The next line would then be `git -C "" rm --cached`,
+# which git resolves against the CALLER's repository: it would unstage this repo's own
+# .mcp.json and commit the removal. `${ws:?}` aborts the parent, which is the only scope that
+# can stop it. (P1a flags exactly these two writes; the read-only sites above are unaffected.)
+# No apostrophe in the :? word. Measured on bash 5.3.15: inside "${v:?word}" an unpaired '
+# opens a single-quote context that runs past the closing brace, and the parse dies ~80 lines
+# later on an unrelated "(" with no hint of the real cause.
+: "${ws:?fresh_ws r3d produced no workspace path; refusing to run git against the caller repo}"
 git -C "$ws" rm -q --cached .mcp.json
 git -C "$ws" commit -q -m "main carries no .mcp.json"
 printf '%s' '{"local":"customer-edits"}' > "$ws/.mcp.json"
