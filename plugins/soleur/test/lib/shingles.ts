@@ -58,10 +58,3 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
   for (const s of a) if (b.has(s)) inter++;
   return inter / (a.size + b.size - inter);
 }
-
-/** The shingles `a` and `b` share. Its `.size` is the shared-shingle count. */
-export function sharedShingles(a: Set<string>, b: Set<string>): Set<string> {
-  const out = new Set<string>();
-  for (const s of a) if (b.has(s)) out.add(s);
-  return out;
-}

@@ -142,7 +142,11 @@ mattpocock/skills
     skills/questionnaire-generate/ (SKILL.md,
     references/questionnaire.template),
     skills/triage/SKILL.md (intake pre-checks),
-    agents/support/ticket-triage.md (intake pre-checks) (#8289)
+    agents/support/ticket-triage.md (intake pre-checks),
+    ../../.openhands/skills/ticket-triage/SKILL.md (intake pre-checks --
+      the OpenHands mirror of the agent above; it carries the same derived
+      prose and is listed because a Used-in list that omits one of three
+      mirrors understates the reach of the attribution) (#8289)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent

@@ -3,6 +3,8 @@ name: triage
 description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use soleur:support:ticket-triage agent."
 ---
 
+<!-- Inspired by mattpocock/skills/skills/engineering/triage/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
+
 <!-- soleur-cloud-mode:start -->
 **Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
@@ -60,7 +62,10 @@ Nothing about a finding is self-evidently new.
 
 Both pre-checks **advise; neither acts.** A hit is escalated to the founder with the entry named, and
 an already-built finding outranks a no-list hit: if the capability exists, the entry is wrong and the
-entry is what gets corrected. An uncertain match **fails open** — name the candidate, say why it is
+entry is what gets corrected. An entry is also never the decision itself, only evidence that a refusal
+was RECORDED, so where it disagrees with a primary record — the issue's own closure, an ADR, a roadmap
+decision — the primary record wins and the entry is STALE. Order: running code, then the primary
+record, then the entry. An uncertain match **fails open** — name the candidate, say why it is
 uncertain, and leave the finding open. Report both results in the presentation block, including the
 search that found nothing: a negative carries only the scope that produced it.
 

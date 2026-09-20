@@ -374,9 +374,57 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# V3 — AUTHZ_VERB_RE must be a SUBSET of AUTHORITY_RE. Structural, not behavioural, and deliberately
+# so: the behavioural symptom needs a payload carrying a profession noun AND an authorization verb AND
+# an investigative cue all at once, which is why it survived a suite that tests each of those.
+#
+# The two lists answer the same question — "is this an operator authorization?" — for two different
+# arms. `AUTHZ_VERB_RE` exempts a question from the expert arm; `AUTHORITY_RE` short-circuits it to
+# allow. A verb in the first and not the second therefore produces a question that is exempted from
+# the deny it should have been exempted from and then falls PAST the allow into the investigative
+# default-deny. Measured: `roll ?out` was in AUTHZ and absent from AUTHORITY, so "Roll out the payroll
+# export now, or read the runbook first?" was DENIED while the same question with `Approve` was
+# allowed — a wrongly-blocked authorization, which this hook's header calls strictly worse than a
+# wrongly-permitted question, reached by two token lists drifting rather than by a missing token.
+#
+# Asserted over the MEMBERS rather than by a payload sweep, because containment is the invariant and a
+# sweep would need one fixture per member to say the same thing less reliably. `\b` is stripped before
+# comparing: AUTHZ spells one member `\bmerge` where AUTHORITY spells it `merge`, and the anchored form
+# is strictly narrower, so it cannot match anything the looser one misses.
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 18 ]]; then echo "  PASS: V1 full inventory ran (18 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 18 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+v3_authz="$(sed -n "s/^AUTHZ_VERB_RE='(\(.*\))'$/\1/p" "$HOOK")"
+v3_authority="$(sed -n "s/^AUTHORITY_RE='(\(.*\))'$/\1/p" "$HOOK")"
+if [[ -z "$v3_authz" || -z "$v3_authority" ]]; then
+  printf '  FAIL: V3 could not extract one of the two vocabularies (AUTHZ=%s chars, AUTHORITY=%s chars) — the containment below would pass over an empty set\n' \
+    "${#v3_authz}" "${#v3_authority}" >&2
+  FAIL=$((FAIL+1))
+else
+  v3_missing=""
+  v3_n=0
+  while IFS= read -r v3_m; do
+    [[ -n "$v3_m" ]] || continue
+    v3_n=$((v3_n+1))
+    v3_bare="${v3_m//\\b/}"
+    printf '%s\n' "$v3_authority" | tr '|' '\n' | sed 's/\\b//g' | grep -qxF -- "$v3_bare" \
+      || v3_missing="$v3_missing $v3_m"
+  done <<< "$(printf '%s\n' "$v3_authz" | tr '|' '\n')"
+  # Non-vacuity: a split that yielded nothing would report perfect containment.
+  if [[ "$v3_n" -lt 10 ]]; then
+    printf '  FAIL: V3 the AUTHZ vocabulary split yielded only %s member(s) — containment over a near-empty set proves nothing\n' "$v3_n" >&2
+    FAIL=$((FAIL+1))
+  elif [[ -n "$v3_missing" ]]; then
+    printf '  FAIL: V3 AUTHZ_VERB_RE is not a subset of AUTHORITY_RE; missing from AUTHORITY_RE:%s. Each such verb exempts the expert arm and then falls past the authority arm into the investigative default-deny, blocking a real authorization.\n' \
+      "$v3_missing" >&2
+    FAIL=$((FAIL+1))
+  else
+    printf '  PASS: V3 all %s AUTHZ_VERB_RE members are present in AUTHORITY_RE (no verb exempts the expert arm and then falls past the allow)\n' "$v3_n"
+    PASS=$((PASS+1))
+  fi
+fi
+
+TOTAL=$((TOTAL+1))
+if [[ "$TOTAL" -eq 19 ]]; then echo "  PASS: V1 full inventory ran (19 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 19 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -425,7 +473,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=18
+MIN_CASES=19
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

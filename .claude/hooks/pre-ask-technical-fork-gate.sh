@@ -251,7 +251,16 @@ fi
 # AUTHORITY signal — a real operator decision. Checked FIRST among the remaining arms and wins
 # outright. (The external-expert arm above is the one decision evaluated ahead of it, and its
 # comment block says why.)
-AUTHORITY_RE='(ack-destroy|authori[sz]|approve|merge|replace|destroy|delete|force-push|deploy|dispatch|apply |arm the|flip |rotate|revoke|spend|cost|budget|price|priorit|scope|schedule|which (issue|feature|milestone)|proceed with the (merge|replace|destroy|apply|cutover))'
+#
+# THIS SET MUST CONTAIN EVERY MEMBER OF `AUTHZ_VERB_RE`, and `roll ?out` was missing. The two sets
+# answer the same question — "is this an operator authorization?" — for two different arms, so a verb
+# in one and not the other produces a question that is exempted from the expert arm and then falls
+# past this one into the investigative default-deny. Measured: "Roll out the payroll export now, or
+# read the runbook first?" was DENIED, while the identical question with `Approve` in place of
+# `Roll out` was allowed. That is a wrongly-blocked authorization, which this file's own header calls
+# strictly worse than a wrongly-permitted question — reached not by a missing token but by two token
+# lists drifting apart. `V3` in the suite now asserts the containment mechanically.
+AUTHORITY_RE='(ack-destroy|authori[sz]|approve|merge|replace|destroy|delete|force-push|deploy|dispatch|apply |arm the|flip |rotate|revoke|roll ?out|spend|cost|budget|price|priorit|scope|schedule|which (issue|feature|milestone)|proceed with the (merge|replace|destroy|apply|cutover))'
 if grep -qE "$AUTHORITY_RE" <<<"$CORPUS"; then exit 0; fi
 
 # INVESTIGATIVE signal — work the agent can do itself.
