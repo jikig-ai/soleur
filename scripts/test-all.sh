@@ -2457,8 +2457,10 @@ _emit_bytes_probe "__run_boundary_start__"
 # Skipped under _ENUMERATE: enumerate exits before the boundary epilogue, so
 # the sampling subprocess would be dead work the nested affected pre-pass
 # pays once per dispatch.
-if (( _ENUMERATE == 0 )) && _repo_state_before="$(_repo_state)"; then
-  _repo_guard_ok=1
+if (( _ENUMERATE == 0 )); then
+  if _repo_state_before="$(_repo_state)"; then
+    _repo_guard_ok=1
+  fi
 fi
 
 # Pre-suite bash/python tests — scripts shard.

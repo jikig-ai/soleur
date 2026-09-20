@@ -124,7 +124,8 @@ build_sandbox() {
   local dir; dir="$(dirname "$out")"
   mkdir -p "$dir/lib" || return 1
   cp "$RUNNER" "$out" || return 1
-  cp "$REL_LIB" "$RWB_LIB" "$dir/lib/" || return 1
+  cp "$REL_LIB" "$dir/lib/" || return 1
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$dir/lib/" || return 1
   if [[ "$with_lib" == "with-lib" ]]; then
     cp "$AFF_LIB" "$dir/lib/" || return 1
   fi

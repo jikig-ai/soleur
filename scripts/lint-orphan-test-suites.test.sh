@@ -513,8 +513,8 @@ assert_has "M14 — and the suite that surface covered is named" "${HOOK_SUITE} 
 row M15 "the runner no longer answers --print-suite-globs (the derivation contract itself)"
 new_sandbox m15
 mutate_or_die "$SB/scripts/test-all.sh" \
-  'if [[ "${1:-}" == "--print-suite-globs" ]]; then' \
-  'if [[ "${1:-}" == "--this-flag-was-removed" ]]; then'
+  '--print-suite-globs) _query_globs=1 ;;' \
+  '--this-flag-was-removed) _query_globs=1 ;;'
 run_lint "$SB"; rc=$?
 assert_red "M15" "$rc"
 assert_has "M15 — names the broken contract rather than reporting 167 phantom orphans" \
