@@ -13,6 +13,61 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-20 · **Reviewers:** 7 (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow, CTO-devex, CPO) + a scoped advisor consult.
+
+### Key improvements
+
+1. **Phase 2 was reversed twice.** The brief's mechanism (move the cache arms into the shared
+   resolver) is named and forbidden by ADR-179; the replacement (an arm-agnostic capability gate)
+   had a measured fleet-wide blast radius. The shipped design is a capability feature-detect
+   **narrowed to the `devin-cache` arm**, which closes the ADR's ground and leaves every other arm
+   untouched.
+2. **A falsified research premise was caught and corrected.** "No test drives the reap loop
+   end-to-end" was false — `lease-protects-active.test.sh` is 1015 lines that do. The consequence
+   was material: its arming-hold stamp is required for Guard 1's central mutation rows to be able
+   to go RED at all.
+3. **A claim marked "verified at plan time" was falsified by execution.** The R6b breakage
+   prediction was reasoned from reading the fixture, not run. A reviewer ran it; R6b is indifferent
+   to the gate. The claim is struck in place, with the lesson attached.
+4. **Two new sentinels would have reddened a CI gate nobody had listed** —
+   `git-lock-marker-telemetry.test.ts` derives its scan set from the very directory the script
+   lives in.
+5. **An ambient-machine dependency was found before it shipped:** `/opt/.devin/plugins` has no test
+   override, and widening the arms to three fences triples an exposure that flips MUST-PASS rows on
+   exactly the hosts this change targets.
+
+### Gate verification (all mechanical, run at deepen time)
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | PASS — present, non-empty, threshold `single-user incident` |
+| 4.7 Observability | PASS — all 5 fields present; `discoverability_test` verb `bash` is allowlisted, runs in ~0.05s (inside the 15s cap), `expected_output` is a single matchable literal |
+| 4.8 PAT-shaped variable | PASS — no matches |
+| 4.9 UI wireframe | SKIP — 0 UI-surface paths in `## Files to Edit` / `## Files to Create` (the 2 whole-file regex hits are the Product/UX Gate prose *naming* the globs to record their absence — the absence-grep self-match trap, confirmed by scoping the grep to the gate's real input) |
+| 4.10 Encryption Posture | SKIP — no persistent store, no new cross-component connection |
+| 4.11 Guard Contract | PASS — `lint-guard-contract.py` green, 3 entries; assemblies are structural (chokepoints and derived scans, not member lists) |
+| 4.5 / 4.55 | SKIP — no network-outage trigger, no downtime-inducing operation |
+
+### Citation verification
+
+- **12 of 12** cited AGENTS rule IDs resolve as **active** — none fabricated, none retired.
+- **15 of 15** cited `#N` resolve live, and each title matches the semantic role the plan assigns
+  it (#7408 slash-bearing branches, #7409 lease library, #7442 silent-skip, #7474
+  identity-is-not-freshness, #8308 the three no-op gates, #5454 the fail-closed origin).
+  #8400/#8401/#8402 all OPEN.
+- Every cited `knowledge-base/**.md` path resolves on disk.
+- `lint-infra-no-human-steps.py` green on the plan and the decision-challenges record.
+
+### Read this first
+
+`## Plan Review Consolidation` is authoritative where it conflicts with an earlier section, and
+`## Sharp Edges` carries the traps that will otherwise be rediscovered at implementation time. Two
+design questions (`/opt` containment under test; fleet full-recipe vs pointer) are listed in
+`tasks.md` Phase 0 and must close **before** RED-phase work.
+
 ## Overview
 
 Three coupled defects in how Soleur resolves a plugin root and decides whether it is running in a
