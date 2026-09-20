@@ -209,3 +209,118 @@ Run every instrument against a case whose answer you already know before reading
 - **Route design forks to `soleur:engineering:cto`**, not the operator. The downgrade-shape
   ruling sharpened a residual I had recorded as accepted into a mechanism that ships, and it
   found the exploit payload already committed in our own history.
+
+## Addendum — the SHIP round found eleven more, and the panel could not have seen any of them
+
+The body above ends at the nine-seat panel. Shipping the same branch then surfaced eleven further
+defects, and the pattern is sharper than "more review finds more bugs": **each was invisible to the
+instrument the work had chosen, and visible only to an instrument the work had not yet run.** That is
+one claim, demonstrated four different ways.
+
+### 1. The mandated advisor consult found three, all in code the REVIEW ROUND had added
+
+- **The token-set parity assertion was blind to 11 of 21 tokens.** `E2d` matched only *literally*
+  bracketed emits, so every token reaching the verdict line through the generic `HOLD [${_tok}]`
+  sites was invisible — exactly the sites where the panel's P1 #2 had lived. Demonstrated by moving
+  `RUN_NO_EVIDENCE_ARTIFACT` between the two sets: suite stayed green.
+- **The #8210 probe hand-copied the could-not-measure set and had already drifted**, missing
+  `RUN_FLOOR_UNREADABLE` — a token this very PR adds. A Guard 5 instrument failure would have
+  rendered `NOT YET` ("the gate looked and the answer was no") instead of `CANNOT ESTABLISH`. The
+  gate's own comment claimed consumers were checked against `git_data_rung2_token_sets`; true of
+  `infra-validation.yml`, false of the probe. **A capability claim about a consumer is a claim about
+  that consumer's code, not about the mechanism you built for it.**
+- **The downgrade ack stated a `'#'` rule its code did not implement** — the helper read the
+  comment-stripped body, so `…:see #8399` became the reason `"see"`, non-empty, accepted. The Sentry
+  ack had refused this by name since Phase 2 and was pinned by `M3c`; this arm had neither.
+
+### 2. The AC sweep found three acceptance criteria asserting the opposite of what shipped
+
+FR15 ("`infra-validation.yml` is not modified" — the review round modified it), FR5 (a three-binary
+tooling list that was already five), and FR14 (tooling pinned AFTER Guard 4).
+
+**None was machine-asserted, so nothing could red.** A prose AC that contradicts the tree is
+invisible to every gate and ships as a true-looking record.
+
+FR14 was not merely stale — **the planned order was itself a fail-open.** The live-hash step calls
+`sha256sum` before Guard 4, so at FR14's position the gate would have hashed the template with an
+unchecked binary: P1 #3 (`find` absent from the list) one step further along. The suite pinned the
+TOKEN and not the POSITION, which is why it drifted silently. `T1-ORDER` now pins it.
+
+### 3. The full battery found two that no file-selected suite could return
+
+`TEST_GROUP=all` → 457/465. `lint-trap-tempfile-ownership` (this PR's new `mktemp`, whose
+escape-hatch marker sat outside `escaped()`'s one-line window) and `battery-tag-authorship` (the
+probe's `git fetch` without `--no-tags`; the line predates this PR, but registering the probe's
+suite pulled the file into the battery closure).
+
+**A repo-global ratchet references no changed file, so no file-based suite query can ever return
+it.** The gate's own suite read 236/0 throughout. This is the argument for the unsharded battery
+being non-negotiable at ship, and it is not a matter of diligence: the selection is *correct* and
+still structurally blind.
+
+### 4. CI found one that no local run could reproduce
+
+`R14-control` needed NO bearer in play and took that from the ambient environment. On a workstation
+neither `GH_TOKEN` nor `GITHUB_TOKEN` is set, so the premise held by accident; CI exports
+`GITHUB_TOKEN`, so the gate HAD a credential to drop, retried the one-shot 401 anonymously, and
+RELEASED — precisely the "passes against an implementation that ignores a 401" outcome the control
+exists to reject. 236/0 locally, 235/1 in CI.
+
+**An arm whose premise is ambient is not a control. It is a coin flip that lands the same way on the
+machine where it was written**, and it fails first on the machine that matters. The row now clears
+both variables, restores them, and FAILS BY NAME if the clear did not take.
+
+### 5. And preflight found the Observability block's own probe could not run
+
+`discoverability_test.command` named the 236-assertion suite with a prose `expected_output`. Check 10
+executes the declared command in a bubblewrap sandbox under a 15 s cap: killed at `rc=124` with arms
+still passing, and no matcher can compare stdout to a sentence. **A declared verification that cannot
+run where it is consumed verifies nothing** — this plan's own thesis, applied to its own plan.
+
+## Session Errors — the ship round
+
+1. **Ran `sync-pr-behind.sh 8393` by absolute path from a different worktree.** The script derives
+   its repo root from its OWN location and ignores the PR argument for branch selection, so it
+   merged `main` into my branch and pushed it. No damage (that sync was owed anyway) but #8393 went
+   unsynced while I believed it had.
+   **Prevention:** a script that takes an identifier as an argument does not necessarily ACT on it.
+   Run repo-scoped scripts from the worktree they are meant to act on, and verify the push line names
+   the branch you intended.
+2. **Merged `main` into a STALE local worktree** for #8393 (`d7b279c39` vs the PR head
+   `79dc3b433`); the push was rejected as non-fast-forward.
+   **Prevention:** `git fetch <branch>` + `git reset --hard origin/<branch>` before syncing a branch
+   whose worktree this session did not create.
+3. **Launched the full battery before the tree was final.** The AC sweep then forced an edit, so the
+   queued run was killed and relaunched.
+   **Prevention:** the AC sweep is a tree-changing step — run it BEFORE starting the battery, not in
+   parallel with it.
+4. **`bunx vitest` on a `bun:test` suite** → "2 failed, no tests", read as a real failure for one
+   cycle. Already recorded in the body above; it recurred in the same session.
+   **Prevention:** it is in this very file. Check the suite's import before choosing the runner.
+5. **`ls … && python3 lint.py` short-circuited** so a Python lint ran under `bash`, producing syntax
+   errors that looked like a broken lint.
+   **Prevention:** never gate an interpreter invocation on an `ls` whose success also selects the
+   interpreter.
+6. **Read UTC CI timestamps as local time** and briefly concluded I was looking at a stale run.
+   **Prevention:** compare `date -u` against the log's `Z` stamps before concluding a run is stale.
+7. **A monitor filter excluded uppercase `EXPECTED` only**, so self-tests labelled "expected" in
+   lowercase were reported as new failures.
+   **Prevention:** when a suite self-labels expected failures, discriminate on the suite-level shape
+   (`^\[FAIL\] <path> (<N>ms)$`), never on prose.
+8. **Diagnosed a red `deploy-script-tests` before establishing which tree it described.** A
+   `pull_request` check runs against `refs/pull/N/merge`, not the branch head; on a fast-moving
+   `main` those differ, and the red described a tree that no longer existed. Confirmed by testing all
+   three — `main`, the head, and the live merge ref — all 113/0. It cleared on re-run.
+   **Prevention:** before treating a `pull_request` check as a verdict on your branch, fetch
+   `refs/pull/N/merge` and test THAT tree.
+
+## Prevention (workflow-level)
+
+- **Budget the ship round as a review round.** Eleven defects surfaced after a nine-seat panel
+  signed off. The panel was not deficient — it read the diff, and these live in the interaction
+  between the diff and an environment (an exported token, a repo-global ratchet, a sandbox cap, a
+  merge ref).
+- **When a fix adds a consumer, re-derive the producer's capability claim.** The gate's parity
+  comment was true when written and false by the time the probe shipped.
+- **Pin the POSITION, not just the TOKEN, wherever ordering is load-bearing.** `T1` asserted a
+  missing binary is reported and said nothing about when; the when was the fail-open.
