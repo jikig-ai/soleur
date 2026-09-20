@@ -139,6 +139,12 @@ suite for the files it opens and diff that list against the filter.
    interventions for closing text that named an untaken action. **Prevention:** each is documented
    in its own learning; the recurring one is the last — end a pipeline turn with the next skill
    INVOKED, not named.
+9. **The ship-time incident-PIR gate fired on this PR** (`INCIDENT-SIGNAL: yes`) because the plan
+   and body say "production outage" while describing the event class the diagnostic serves; no
+   event occurred. Recovery: declared it in the PR body as preventive and filed nothing — a PIR for a
+   non-event is a fabricated record. **Prevention:** the #6813 false-positive class; a diagnostic
+   whose subject is outages will always trip a vocabulary gate, so state "no live event took place"
+   in the body up front rather than after the gate names it.
 
 ## Tags
 
