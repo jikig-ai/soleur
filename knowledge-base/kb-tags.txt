@@ -2910,6 +2910,7 @@ primitive
 printf-newline-read
 prior-art
 prior-art-discovery
+prior-art-search
 prior-decision-recovery
 privacy
 private-documents
@@ -3165,6 +3166,7 @@ replan
 replay
 replay-safety
 repo-global-guards
+repo-global-ratchet
 repo-lints
 repo-readiness
 repo-readiness-gate
@@ -4242,6 +4244,7 @@ verification-grep
 verification-grep-scope
 verification-habits
 verification-instruments
+verification-method
 verification-scope
 verification-shape
 verify
