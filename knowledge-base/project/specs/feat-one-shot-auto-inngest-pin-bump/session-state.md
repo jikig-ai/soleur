@@ -22,7 +22,7 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
 
 ## Work Phase
 - Status: implementation complete; verification green (2026-09-19)
-- Delivered: `.github/scripts/bump-inngest-bootstrap-pin.sh` + fixture suite `test-bump-inngest-bootstrap-pin.sh` (126 assertions, MIN_ASSERTIONS=45 floor); `build-inngest-bootstrap-image.yml` gains `build.outputs.{tag,digest,mirror_status}` + `bump-cloud-init-pin` job (App-JWT mint, installation 122213433); ADR-231 (provisional); `model.c4`/`views.c4` write-back documented on the `github -> soleurMarketplace` App-write edge — LikeC4 rejects self-relations ("Invalid parent-child relationship"), so `github -> github` is unrepresentable.
+- Delivered: `.github/scripts/bump-inngest-bootstrap-pin.sh` + fixture suite `test-bump-inngest-bootstrap-pin.sh` (126 assertions, MIN_ASSERTIONS=45 floor); `build-inngest-bootstrap-image.yml` gains `build.outputs.{tag,digest,mirror_status}` + `bump-cloud-init-pin` job (App-JWT mint, installation 122213433); ADR-232 (provisional); `model.c4`/`views.c4` write-back documented on the `github -> soleurMarketplace` App-write edge — LikeC4 rejects self-relations ("Invalid parent-child relationship"), so `github -> github` is unrepresentable.
 - Verified: new suite 126/0; `run-all.sh` ALL PASS (12 suites ≥ MIN_SUITES=11); `cloud-init-inngest-bootstrap.test.sh` 160/160 (pins untouched); c4-code-syntax + c4-render vitest 23/23; `c4-model-freshness.test.sh` 3/3 (model.likec4.json regenerated, byte-fresh); lint-shell-trace-credential-refusal clean (xtrace refusal precedes every traced command incl. `export LC_ALL=C`); `bash -n` both scripts; workflow YAML parses.
 - Deferred by design: AC14 end-to-end proof — first post-merge `vinngest-v*` publish (workflow can't be dispatch-tested from a feature branch); recorded for PR body.
 
@@ -41,7 +41,7 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
   - P2/P3: inline App-JWT mint extracted to `.github/actions/mint-soleur-ai-app-token` (4th copy crossed threshold).
   - P3: dead `--dry-run` removed; `command -v gh` assert; `grep -oE | wc -l` counts; `.author.login // .commit.author.email` tip-author (no extra fetch); summary block simplified; stage vocab aligned (`mint` = workflow-level, not a script stage).
 - Re-verified: fixture suite 153/0 (MIN_ASSERTIONS=60); run-all.sh ALL PASS; drift guard 160/160; watchdog vitest 63/63; shellcheck clean; workflow+action YAML parse.
-- Docs synced: ADR-231 §3/§5/§6 + Verification; tasks.md Phase 5; plan §dry-run note.
+- Docs synced: ADR-232 §3/§5/§6 + Verification; tasks.md Phase 5; plan §dry-run note.
 - Fixture-safety remediation (lefthook test-all run under sibling contention): the new files tripped three corpus guards. Fixes, all verified:
   - `fixture-env-adoption` [UNACCOUNTED] → suite now sources `plugins/soleur/test/lib/git-fixture-env.sh` (arms the #7833 tripwire) and calls `git_fixture_env "$TMP" || exit 2` after mktemp. Root cause of the lefthook failures: inherited `GIT_AUTHOR_*`/`GIT_COMMITTER_*` re-authored fixture commits as the developer; the helper scrubs/pins identity. Proven: suite 153/0 under deliberately injected dev identity env.
   - Script now pins `GIT_AUTHOR_*`/`GIT_COMMITTER_*` to the bot at env level — the "commits authored as soleur-ai[bot]" contract no longer depends on ambient caller env.
@@ -72,4 +72,5 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
 - `credential-path-guard` red: `tasks.md` carried a resolvable `~/.docker/config.json` literal → neutralized to the directory-only form.
 - `deploy-script-tests` red: `inngest-bootstrap-mirror-only.test.sh` asserted exactly one job; `bump-cloud-init-pin` is now enumerated as the sanctioned second job, with its own `needs:`/`if:`/`continue-on-error:` surface asserted (60/0).
 - Post-merge ADR-230 collision with main's debug-probes ADR → renumbered mine to **ADR-231** (file, title, and all in-branch references; `model.likec4.json` regenerated; PR body updated). `adr-ordinals` + `test-bun` failures were the same root cause.
+- Second ordinal collision on the next main sync: main took ADR-231 (workflow byte-budget) → renumbered mine to **ADR-232**; byte-budget ADR-231 references in `workflow-file-size.test.ts`, `apply-web-platform-infra-job-rationale.md`, and the byte-limit learning are main's and were left untouched.
 - Merge gate note: under this harness the pre-merge hook's evidence range resolves against the project-root detached-HEAD checkout, so branch-local trailers are invisible; review evidence is recorded as code-review issue #8403.

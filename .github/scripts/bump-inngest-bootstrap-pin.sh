@@ -2,7 +2,7 @@
 # bump-inngest-bootstrap-pin.sh — move the soleur-inngest-bootstrap cloud-init
 # pin to the semver-max published vinngest-v* tag + registry-resolved digest,
 # and open (or reuse) the pin-bump PR. Invoked by the bump-cloud-init-pin job of
-# build-inngest-bootstrap-image.yml after a successful publish (#8359, ADR-231).
+# build-inngest-bootstrap-image.yml after a successful publish (#8359, ADR-232).
 #
 # WHY THE TARGET IS THE SEMVER-MAX TAG, NEVER THE TRIGGERED TAG. The drift
 # guard (AC6 in cloud-init-inngest-bootstrap.test.sh) compares the pin against
@@ -317,13 +317,13 @@ else
   body=$(printf '%s\n' \
     "$ISSUE_REF" \
     "" \
-    "Automated pin bump for \`soleur-inngest-bootstrap\`, authored by the publishing workflow (ADR-231)." \
+    "Automated pin bump for \`soleur-inngest-bootstrap\`, authored by the publishing workflow (ADR-232)." \
     "" \
     "- tag: \`${TARGET}\` (\`vinngest-${TARGET}\`)" \
     "- digest: \`${RESOLVED}\`" \
     "- publishing run: ${RUN_URL:-n/a}" \
     "- sites: 4 refs across \`apps/web-platform/infra/cloud-init.yml\` and \`apps/web-platform/infra/cloud-init-inngest.yml\`" \
-    "- decision record: [ADR-231](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/decisions/ADR-231-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md)")
+    "- decision record: [ADR-232](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md)")
   if [[ "$SIGNED_TAG" != "$TARGET" || "$MIRROR_STATUS" != "ok" ]]; then
     body+=$(printf '\n%s\n' "" \
       "Auto-merge is **not** armed: this publish's mirror status does not attest the target (signed=${SIGNED_TAG}, mirror_status=${MIRROR_STATUS:-unset}). Verify zot serves \`${RESOLVED}\` before merging — the dedicated inngest host cannot pull from GHCR (AP-016).")

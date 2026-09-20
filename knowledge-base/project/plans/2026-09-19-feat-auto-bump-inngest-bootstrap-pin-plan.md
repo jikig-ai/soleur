@@ -490,9 +490,9 @@ event-driven repo-write automation (tag publish → App-token PR + auto-merge),
 a third consumer of the soleur-ai App credential boundary, and a new
 invariant ("pin follows publish within one CI cycle").
 
-- `### ADR` — create **ADR-231** (provisional ordinal — `ship`'s ADR-Ordinal
+- `### ADR` — create **ADR-232** (provisional ordinal — `ship`'s ADR-Ordinal
   Collision Gate re-verifies against `origin/main`; on renumber, sweep
-  `grep -rn 'ADR-231' knowledge-base/project/{plans,specs}/feat-one-shot-auto-inngest-pin-bump/`):
+  `grep -rn 'ADR-232' knowledge-base/project/{plans,specs}/feat-one-shot-auto-inngest-pin-bump/`):
   *"Pin-bump PRs are authored by the publishing workflow via the soleur-ai
   App installation token — never a scheduled reconciler, never GITHUB_TOKEN,
   never a direct push."* Alternatives Considered must record: scheduled
@@ -523,7 +523,7 @@ invariant ("pin follows publish within one CI cycle").
 
 - `.github/scripts/bump-inngest-bootstrap-pin.sh` — the bump writer (contract below).
 - `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh` — fixture suite, bash-only, PATH-shimmed `crane`/`gh`/git (auto-globbed by `run-all.sh` → required `guard-script-fixture-tests`).
-- `knowledge-base/engineering/architecture/decisions/ADR-231-*.md` — per the ADR task above.
+- `knowledge-base/engineering/architecture/decisions/ADR-232-*.md` — per the ADR task above.
 - `knowledge-base/project/specs/feat-one-shot-auto-inngest-pin-bump/tasks.md` — generated at Save Tasks.
 
 ## Files to Edit
@@ -608,7 +608,7 @@ new suite, which reads it.)*
 
 ### Phase 3: ADR + C4
 
-5. ADR-231 (provisional) + `model.c4`/`views.c4` repo-write relationship;
+5. ADR-232 (provisional) + `model.c4`/`views.c4` repo-write relationship;
    run the two c4 tests.
 
 ## Success Metrics
@@ -737,7 +737,7 @@ PAT-literal precision (Guard 2 row 3).
 - [ ] AC9: Auto-merge is armed (`gh pr merge --auto --squash`) iff `mirror_status == 'ok'`; on `degraded` the PR carries a comment stating the hold and the verification needed.
 - [ ] AC10: Bump commits carry `soleur-ai[bot]` + `273333864+soleur-ai[bot]@users.noreply.github.com` (the CLA-allowlisted identity).
 - [ ] AC11: The bump PR body names the tag, the resolved digest, the publishing run URL, and carries `Ref #8359` on its own line — no close-keywords inside prose (pr-auto-close-scanner-clean).
-- [ ] AC12: `## Observability`, `## Encryption Posture`, `## Guard Contract`, `## User-Brand Impact`, and `## Architecture Decision (ADR/C4)` sections are present here and the ADR-231 (provisional) file + C4 edit land in the same PR.
+- [ ] AC12: `## Observability`, `## Encryption Posture`, `## Guard Contract`, `## User-Brand Impact`, and `## Architecture Decision (ADR/C4)` sections are present here and the ADR-232 (provisional) file + C4 edit land in the same PR.
 - [ ] AC13: `guard-script-fixture-tests` is green on this PR with the new suite included (suite count 12, matching the raised `MIN_SUITES=12` floor), and `deploy-script-tests` remains green (the plan edits neither cloud-init file's pin).
 - [ ] AC14: End-to-end proof is deferred-by-design to the first post-merge `vinngest-v*` publish (workflows cannot be dispatch-tested from a feature branch — the repo's stated reason for script+fixture coverage); the PR body records this explicitly.
 

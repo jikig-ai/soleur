@@ -420,7 +420,7 @@ assert_gh_called 'g1.happy:pr-create-base' 'gh pr create .* --base main'
 assert_gh_called 'g1.happy:body-ref'     'Ref #8359'
 assert_gh_called 'g1.happy:body-digest'  "$DIG_NEW"
 assert_gh_called 'g1.happy:body-run'     'github.test/runs/1'
-assert_gh_called 'g1.happy:body-adr'     'ADR-231'
+assert_gh_called 'g1.happy:body-adr'     'ADR-232'
 assert_gh_called 'g1.happy:auto-merge'   'gh pr merge .* --auto --squash'
 assert_gh_not_called 'g1.happy:no-close' 'gh pr close '
 [[ -s "$TMP/happy.summary" ]] && pass 'g1.happy:summary' \

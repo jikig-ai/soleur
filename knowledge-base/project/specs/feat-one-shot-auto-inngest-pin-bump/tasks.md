@@ -32,7 +32,7 @@ Reviewed-Coverage: sequential-fallback.
 
 ## Phase 3: ADR + C4
 
-- [x] 3.1 Author ADR-231 (provisional ordinal — `ship` re-verifies; on renumber sweep `grep -rn 'ADR-231' knowledge-base/project/{plans,specs}/feat-one-shot-auto-inngest-pin-bump/`): pin-bump PRs authored by the publishing workflow via soleur-ai App token — never scheduled reconciler, never GITHUB_TOKEN, never direct push; Alternatives Considered per plan §ADR
+- [x] 3.1 Author ADR-232 (provisional ordinal — `ship` re-verifies; on renumber sweep `grep -rn 'ADR-232' knowledge-base/project/{plans,specs}/feat-one-shot-auto-inngest-pin-bump/`): pin-bump PRs authored by the publishing workflow via soleur-ai App token — never scheduled reconciler, never GITHUB_TOKEN, never direct push; Alternatives Considered per plan §ADR
 - [x] 3.2 `model.c4`/`views.c4`: documented repo-write relationship for tag-publish-driven pin-bump PRs; run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`
 
 ## Phase 4: Verification

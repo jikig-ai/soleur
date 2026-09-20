@@ -10,7 +10,7 @@ views {
 
     include
       founder, emailSender, betaContact, contributor, publicReader,
-      // NOTE (#8359/ADR-231): the CI pin-bump write-back is a github-INTERNAL
+      // NOTE (#8359/ADR-232): the CI pin-bump write-back is a github-INTERNAL
       // relationship and LikeC4 rejects self-relations ("Invalid parent-child
       // relationship"), so no `github -> github` edge exists to include here —
       // it is documented in-model on the `github -> soleurMarketplace` App-write
