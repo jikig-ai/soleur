@@ -77,8 +77,9 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   # (no merge is in progress, so `git diff --diff-filter=U` could only ever print nothing).
   if ! mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
     # REGENERABLE-ARTIFACT CONFLICT (ADR-235). One generated file is still committed --
-    # model.likec4.json, which the web-platform C4 viewer reads out of repos that ship no
-    # likec4 compiler -- so it conflicts whenever two branches touch the .c4 sources. The
+    # model.likec4.json, which the web-platform C4 viewer fetches from GitHub as a committed
+    # blob on the request path (app/api/kb/c4/project/route.ts; no build step) -- so it
+    # conflicts whenever two branches touch the .c4 sources. The
     # resolver completes the merge and regenerates it from the MERGED sources, which is the
     # only correct resolution (side-picking yields an artifact matching neither side).
     #

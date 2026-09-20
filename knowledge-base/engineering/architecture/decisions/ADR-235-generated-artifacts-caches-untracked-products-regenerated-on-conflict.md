@@ -23,7 +23,7 @@ therefore cannot run one. So every `gh pr update-branch`, every "Update branch" 
 strict-up-to-date auto-merge resolved `knowledge-base/INDEX.md` with the default text merge —
 the exact path ADR-210 existed to prevent, on the surface that produces most merges.
 
-Measured on 2026-09-19: **42 of 71 first-parent `main` commits in 7 days touched `INDEX.md`.**
+Measured on 2026-09-19: **71 of 102 first-parent `main` commits in 7 days touched `INDEX.md`.**
 Under `strict_required_status_checks_policy = true` (ADR-032) every one of those re-`BEHIND`s
 every open PR, and a PR that is `DIRTY` is the one state the `--admin` hatch cannot cross. PRs
 #8319 / #8321 / #8347 paid 7 / 11 / 3 forced resyncs; the first two cost roughly six hours of
@@ -66,8 +66,12 @@ conflicts are resolved by regenerating from the MERGED sources.
 
 - The only member is
   `knowledge-base/engineering/architecture/diagrams/model.likec4.json`. The web-platform C4
-  viewer reads it out of synced repos, and the browser ships `@likec4/diagram` **without** the
-  compiler (`apps/web-platform/server/c4-render.ts`), so the bytes have to exist.
+  viewer (`apps/web-platform/app/api/kb/c4/project/route.ts`) fetches the committed blob from
+  the GitHub source of truth on the request path, with no build step, so the bytes have to
+  exist as a committed blob. (Corrected at review: an earlier draft cited
+  `server/c4-render.ts` and "no likec4 compiler". That file is the *writer*, and it proves a
+  compiler exists in the runner image (`npm install -g likec4@1.50.0`). The classification
+  held; the cited reason did not.)
 - `plugins/soleur/scripts/resolve-regenerable-conflicts.sh <base-ref>` does the resolution, and
   is called from all three DIRTY-handling paths: `sync-pr-behind.sh`, `pre-merge-rebase.sh`, and
   ship Phase 7. Any fourth path that merges `origin/main` without it is a defect.
@@ -102,7 +106,7 @@ the next tracked change picks it up.
 
 ## Consequences
 
-- Open PRs stop conflicting on the caches. The measured 42-of-71 `main`-advance cost goes to
+- Open PRs stop conflicting on the caches. The measured 71-of-102 `main`-advance cost goes to
   zero for those paths.
 - **One-time transition cost.** A branch opened before this landed still tracks the four files
   while `main` has deleted them, so its next sync is a modify/delete conflict. It is resolved
@@ -133,7 +137,7 @@ the next tracked change picks it up.
 | Alternative | Why not |
 |---|---|
 | Keep the driver (ADR-210 status quo) | It cannot run server-side, which is where most merges happen. Local correctness does not reach `refs/pull/N/merge` or the Update-branch button. |
-| Regenerate `INDEX.md` on `main` post-merge | Every regeneration commit is a `main` advance that re-`BEHIND`s every open PR under ADR-032 (~6/day), needs a GitHub-App `bypass_mode = always` actor or a bot PR per merge, spends CI runs, and still leaves the branch-local index stale — the #8177 shape it was meant to fix. |
+| Regenerate `INDEX.md` on `main` post-merge | Every regeneration commit is a `main` advance that re-`BEHIND`s every open PR under ADR-032 (~14/day, measured 2026-09-13..19), needs a GitHub-App `bypass_mode = always` actor or a bot PR per merge, spends CI runs, and still leaves the branch-local index stale — the #8177 shape it was meant to fix. |
 | Drop only the `> Total files:` header | Adjacent same-day row inserts still conflict; the driver and AC17 remain. |
 | Keep the driver and add the resolver for `INDEX.md` too | Automating the resolution keeps the DIRTY state and the CI restarts. The cost is the merge, not the resolution. |
 | Untrack `model.likec4.json` as well | The web-platform C4 viewer reads it from synced repos with no compiler; its write path commits rendered bytes by design (#4976). |

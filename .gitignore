@@ -68,8 +68,10 @@ knowledge-base/private/
 # the rule-metrics aggregate -- of gitignored local incident data, so none of them is
 # committed. They were, until #8377: a committed generated file conflicts with every other
 # branch that touches the same tree, and GitHub's server-side merge cannot run the local merge
-# driver that used to resolve one of them, so 42 of 71 first-parent main commits in a single
-# week made every open PR unmergeable.
+# driver that used to resolve one of them. Every main advance re-BEHINDs every open PR under
+# strict required checks; the 71 of 102 first-parent main commits in one week that touched
+# INDEX.md also made every open PR that touched it DIRTY -- the one state the admin hatch
+# cannot cross.
 #
 # Regenerated on demand, never by a commit hook: scripts/ensure-kb-index.sh for the three
 # index files (called by kb-search, learnings-researcher, the retrieval bench, `prepare` and
@@ -78,7 +80,8 @@ knowledge-base/private/
 #
 # NOT listed here, deliberately:
 # knowledge-base/engineering/architecture/diagrams/model.likec4.json. That one is a PRODUCT --
-# the web-platform C4 viewer reads it out of synced repos that have no likec4 compiler -- so it
+# the web-platform C4 viewer (app/api/kb/c4/project/route.ts) fetches the committed blob from
+# GitHub on the request path, with no build step -- so it has to exist as a committed blob. It
 # stays committed and is regenerated on conflict by
 # plugins/soleur/scripts/resolve-regenerable-conflicts.sh.
 knowledge-base/INDEX.md

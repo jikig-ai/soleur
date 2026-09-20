@@ -14,7 +14,8 @@
 #
 # ── WHAT IS DELIBERATELY *NOT* HERE ────────────────────────────────────────────────────────
 # knowledge-base/engineering/architecture/diagrams/model.likec4.json is a PRODUCT, not a cache:
-# the web-platform C4 viewer reads it out of synced repos that have no likec4 compiler, so it
+# the web-platform C4 viewer (app/api/kb/c4/project/route.ts) fetches the committed blob from
+# GitHub on the request path with no build step, so it must exist as a committed blob. It
 # stays committed and is resolved on conflict by resolve-regenerable-conflicts.sh. Adding it to
 # the list below would be wrong, and the sixth-path row is what makes that a deliberate edit.
 export TMPDIR="${TMPDIR:-/var/tmp}"

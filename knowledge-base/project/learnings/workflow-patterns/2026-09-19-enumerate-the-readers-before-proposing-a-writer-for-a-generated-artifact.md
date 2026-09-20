@@ -51,7 +51,7 @@ scope". Two further operator assertions ("INDEX.md is the GitHub landing page",
 - Soleur repo, worktree `feat-kb-index-untrack`, brainstorm phase, 2026-09-19.
 - `scripts/generate-kb-index.sh` regenerates all three files in 3.0 s on this host
   (7–11 s measured on slower hosts in `2026-09-08-i-grepped-the-config-for-a-gate-that-lives-in-a-test.md`).
-- 42 of 71 first-parent `main` commits in the prior 7 days touched INDEX.md; the last
+- 71 of 102 first-parent `main` commits in the prior 7 days touched INDEX.md; the last
   10 diffs were exactly 2 lines each (one new row + the count header).
 
 ## Symptoms

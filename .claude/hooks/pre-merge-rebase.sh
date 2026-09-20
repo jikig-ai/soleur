@@ -337,8 +337,9 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   git -C "$WORK_DIR" merge --abort 2>/dev/null || true
 
   # REGENERABLE-ARTIFACT RETRY (ADR-235). model.likec4.json is the one generated file still
-  # committed -- the web-platform C4 viewer reads it from repos with no likec4 compiler -- so
-  # concurrent .c4 edits conflict on it. The resolver completes the merge and regenerates it
+  # committed -- the web-platform C4 viewer fetches it from GitHub as a committed blob on the
+  # request path (app/api/kb/c4/project/route.ts; no build step) -- so concurrent .c4 edits
+  # conflict on it. The resolver completes the merge and regenerates it
   # from the MERGED sources; anything else it refuses, leaving the tree byte-identical, so the
   # deny below is unchanged for every other conflict.
   #

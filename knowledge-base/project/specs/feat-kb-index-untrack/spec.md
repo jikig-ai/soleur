@@ -18,7 +18,7 @@ category: spec
 
 Three committed machine-generated files conflict on every advance of `main` because
 GitHub's server-side merge cannot run the local merge driver that resolves them
-(ADR-210). `knowledge-base/INDEX.md` alone was touched by 42 of 71 first-parent `main`
+(ADR-210). `knowledge-base/INDEX.md` alone was touched by 71 of 102 first-parent `main`
 commits in 7 days; PRs #8319 / #8321 / #8347 paid 7 / 11 / 3 forced resyncs (~6 h each
 for the first two). #8151 shortened the resync; it did not remove the class. AC17
 (`generate-kb-index.sh --check`) additionally fails on `refs/pull/N/merge` (#8370).

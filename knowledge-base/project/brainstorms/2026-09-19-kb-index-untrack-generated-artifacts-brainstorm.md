@@ -37,7 +37,7 @@ README.md and nothing links to INDEX.md, so it is not a landing page either.
 
 **Server-side merge is the constraint, not the driver.** ADR-210's regenerating driver is
 correct locally and inert on GitHub (`refs/pull/N/merge`, `update-branch`, auto-merge).
-#8151 (option 2 from #8116) shortened the resync loop but left the class: 42 of 71
+#8151 (option 2 from #8116) shortened the resync loop but left the class: 71 of 102
 first-parent `main` commits in the last 7 days touched INDEX.md; PRs #8319 / #8321 /
 #8347 measured 7 / 11 / 3 forced resyncs (~6 h wall-clock each for the first two).
 
@@ -49,7 +49,7 @@ settle-then-admin-merge hatch (it keys on `BEHIND`, never `DIRTY`), #8370 (AC17 
 merge ref) dissolves, and no branch carries a regenerable file at all.
 
 **Why not the issue's literal option 1 (keep committed, regenerate on `main`)?** Every
-regen commit on `main` is itself an advance that re-`BEHIND`s every open PR (~6/day),
+regen commit on `main` is itself an advance that re-`BEHIND`s every open PR (~14/day, measured 2026-09-13..19),
 spends a CI run, and needs either a GitHub-App `bypass_mode = always` actor on the
 ruleset or a bot PR per merge that is itself subject to strict up-to-date. It also
 leaves the branch-local index stale until merge (the #8177 shape). On-demand local

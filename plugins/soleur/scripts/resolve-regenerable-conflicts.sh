@@ -11,8 +11,11 @@
 #
 # Most of this repo's generated files stopped being committed for exactly that reason. One did
 # not: knowledge-base/engineering/architecture/diagrams/model.likec4.json is a PRODUCT, not a
-# cache -- the web-platform C4 viewer reads it out of synced repos that ship no likec4
-# compiler (apps/web-platform/server/c4-render.ts), so it has to exist as bytes. This script is
+# cache -- the web-platform C4 viewer (apps/web-platform/app/api/kb/c4/project/route.ts)
+# fetches the committed blob from GitHub on the request path with no build step, so it has to
+# exist as a committed blob. (An earlier draft cited c4-render.ts and "no likec4 compiler";
+# c4-render.ts is the WRITER, and it proves a compiler exists in the runner image. The
+# conclusion held; the reason did not.) This script is
 # what keeps that one file from costing what the caches used to.
 #
 # ── THE CONTRACT: TWO OUTCOMES, AND THE DIAGNOSIS IS IN THE TEXT ───────────────────────────

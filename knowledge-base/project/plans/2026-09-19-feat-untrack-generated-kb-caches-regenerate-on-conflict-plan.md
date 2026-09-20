@@ -33,7 +33,7 @@ The merge driver, its installer, its `.gitattributes` routing, the guardrails se
 and five test suites exist only to protect the committed caches and retire with them. A new
 ADR records the classification so the next generated file lands in the right column.
 
-Measured baseline (2026-09-19): 42 of 71 first-parent `main` commits in 7 days touched
+Measured baseline (2026-09-19): 71 of 102 first-parent `main` commits in 7 days touched
 `INDEX.md`; regeneration takes 3.0 s on the operator host (7–11 s on slower hosts);
 the fingerprint probe (`git ls-files -s` + `git status --porcelain -uall`, both scoped to
 `knowledge-base`, hashed with `git hash-object`) takes ~60 ms.
@@ -438,7 +438,7 @@ The ADR describes the target state and ships in this PR (no soak).
 
 | Alternative | Why not |
 |---|---|
-| Issue's option 1: keep committed, regenerate on `main` post-merge | Every regen commit is a `main` advance that re-`BEHIND`s every open PR under `strict_required_status_checks_policy = true` (~6/day), needs a GitHub-App `bypass_mode = always` actor or per-merge bot PRs, spends CI runs, and leaves the branch-local index stale (#8177 shape). |
+| Issue's option 1: keep committed, regenerate on `main` post-merge | Every regen commit is a `main` advance that re-`BEHIND`s every open PR under `strict_required_status_checks_policy = true` (~14/day, measured 2026-09-13..19), needs a GitHub-App `bypass_mode = always` actor or per-merge bot PRs, spends CI runs, and leaves the branch-local index stale (#8177 shape). |
 | Drop only the `> Total files:` header | Adjacent same-day row inserts still conflict; the driver and AC17 remain. |
 | Keep the driver and add the resolver for `INDEX.md` too | Every branch conflicts with every other on `main`; automating resolution keeps the DIRTY state and the check restarts. |
 | Untrack `model.likec4.json` as well | The web-platform C4 viewer reads it from synced repos without the compiler; its write path commits rendered bytes by design (#4976). |

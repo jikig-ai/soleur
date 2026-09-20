@@ -391,8 +391,9 @@ pre-commit:
     #
     # Auto-regenerate the compiled LikeC4 model whenever a .c4 source is staged,
     # then re-stage it. model.likec4.json is a PRODUCT, not a cache: the
-    # web-platform C4 viewer reads it out of synced repos that have no likec4
-    # compiler, so it stays committed and this step keeps it honest. NOTE the
+    # web-platform C4 viewer (app/api/kb/c4/project/route.ts) fetches the committed
+    # blob from GitHub on the request path with no build step, so it must exist as
+    # a committed blob and this step keeps it honest. NOTE the
     # single-star glob: the .c4 sources are FLAT depth-1 and gobwas `**` requires
     # ≥1 intermediate dir, so a `**` form would silently skip every one of them
     # — see 2026-03-21-lefthook-gobwas-glob-double-star.md. The script

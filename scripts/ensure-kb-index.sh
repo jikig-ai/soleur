@@ -13,7 +13,7 @@
 # kb-categories.txt are CACHES: pure functions of the tree, so ADR-235 untracks them and
 # regenerates them on demand instead of committing them. That removed a whole defect class —
 # a file that is never committed can never conflict, and these three conflicted on almost
-# every advance of main (42 of 71 first-parent commits in the 7 days before the change) —
+# every advance of main (71 of 102 first-parent commits in the 7 days before the change) —
 # but it moves the freshness obligation to READ TIME. Every reader calls this first.
 #
 # THE PROBE IS A CONTENT FINGERPRINT, NOT AN MTIME COMPARISON, and that is the one design
