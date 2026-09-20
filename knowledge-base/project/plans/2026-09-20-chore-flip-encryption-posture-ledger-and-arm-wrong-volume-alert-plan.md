@@ -455,25 +455,28 @@ exit status; under `set -e` write `[ "$(grep -c … || true)" = 0 ]`.
 - [ ] **AC-16** `bun test plugins/soleur/test/heartbeat-live-reconcile.test.ts` green, **with the `inngest_luks_wrong_volume` fixture's expectation inverted** — a live pause on this alert is now a reported `logs-alert-paused`, not `[]`. A green run against the *old* fixture means the resolution never landed.
 - [ ] **AC-17** Fail-closed: with a `!var.X` whose variable cannot be resolved, `pausedIsLiteralFalse` is `false` (exempt), never `true`.
 - [ ] **AC-25** The live `paused` field is read back from the vendor, **as two assertions, not one**: (a) HTTP status is 200, (b) the payload's alert is unpaused. Non-200 is `3 CANNOT ESTABLISH` and must **not** be read as "paused" — a 401 from the wrong Better Stack token and a genuine pause are otherwise indistinguishable, and the latter triggers a revert of a true claim.
-      ```
+
+  ```
       code=$(curl --disable --noproxy "*" -sS --max-time 30 -o /tmp/bs.json -w '%{http_code}' \
         -H "Authorization: Bearer $BETTERSTACK_API_TOKEN" \
         https://telemetry.betterstack.com/api/v2/alerts)
       [ "$code" = 200 ] || exit 3
       jq -e '[.data[] | select(.attributes.name=="soleur-inngest-luks-wrong-volume-prd")]
              | length == 1 and (.[0].attributes.paused == false)' /tmp/bs.json
-      ```
-      `length == 1` is load-bearing: zero and two are both failures, and zero is what an
-      unapplied resource looks like. The endpoint is not invented — ADR-218 names
-      `GET telemetry.betterstack.com/api/v2/alerts`; the `curl` shape is the repo's own from the
-      `app-database-readiness-alarm` runbook. **The response shape `.data[].attributes.paused` is
-      resolved in Phase 0.3, not assumed here.**
+
+  ```
+
+  `length == 1` is load-bearing: zero and two are both failures, and zero is what an
+  unapplied resource looks like. The endpoint is not invented — ADR-218 names
+  `GET telemetry.betterstack.com/api/v2/alerts`; the `curl` shape is the repo's own from the
+  `app-database-readiness-alarm` runbook. **The response shape `.data[].attributes.paused` is
+  resolved in Phase 0.3, not assumed here.**
 - [ ] **AC-26** The apply is polled to a **terminal conclusion** before AC-25 is evaluated, with a
-      stated bound: `gh run list --workflow=apply-web-platform-infra.yml --branch main` for the run
-      this dispatch created. `success` → evaluate AC-25. `failure`/`cancelled` → the detector is not
-      live; PR-2 does not proceed. Still running at the bound → treated as not live (fail-closed),
-      never "assume it landed". Without this, AC-25 can read `paused: true` against a queued apply
-      and condemn a correct change.
+  stated bound: `gh run list --workflow=apply-web-platform-infra.yml --branch main` for the run
+  this dispatch created. `success` → evaluate AC-25. `failure`/`cancelled` → the detector is not
+  live; PR-2 does not proceed. Still running at the bound → treated as not live (fail-closed),
+  never "assume it landed". Without this, AC-25 can read `paused: true` against a queued apply
+  and condemn a correct change.
 - [ ] **AC-34** All carriers of the dead arming route are gone: `grep -c 'or the tfvars entry' apps/web-platform/infra/betterstack-logs-alerts.tf` → `0`, and `betterstack-log-query.md` no longer names `-var inngest_luks_cutover_complete=true`. Measured: exactly two carriers, not three.
 - [ ] **AC-36** `.github/workflows/apply-web-platform-infra.yml`'s `apply` job header no longer claims branch protection or CODEOWNERS is the gate.
 
@@ -483,12 +486,15 @@ exit status; under `set -e` write `[ "$(grep -c … || true)" = 0 ]`.
 - [ ] **AC-2** `jq -e '.stores[]|select(.store=="hcloud_volume.inngest_redis_luks")|.at_rest|has("exception")|not' …` exits 0. **Neither gate can catch this**: `check_at_rest` early-returns on `luks` before `check_exception_block`, and the schema permits `exception` on `at_rest`.
 - [ ] **AC-3** `… select(.store=="hcloud_volume.inngest_redis") | .at_rest.mechanism` → `plaintext-exception`. The backstop row did **not** flip.
 - [ ] **AC-4** The backstop's expiry is unmoved — compare the **value** across revisions, never the diff text:
-      ```
+
+  ```
       Q='.stores[]|select(.store=="hcloud_volume.inngest_redis")|.at_rest.exception.expires_on'
       test "$(jq -r "$Q" scripts/encryption-posture-ledger.json)" \
          = "$(git show origin/main:scripts/encryption-posture-ledger.json | jq -r "$Q")"
-      ```
-      **A diff-text grep is rejected, and the reason is measured.** `git diff … | grep -c '^[-+].*expires_on.*2026-10-22'` expecting `0` returns **`1`** on a correct implementation, because the sibling `inngest_redis_luks` row carries the same date and Phase 5 step 1 deletes its whole `exception` block. That is the `workspaces`/`workspaces_luks` name-similarity trap ADR-140 names, landing on the two rows this plan is about.
+
+  ```
+
+  **A diff-text grep is rejected, and the reason is measured.** `git diff … | grep -c '^[-+].*expires_on.*2026-10-22'` expecting `0` returns **`1`** on a correct implementation, because the sibling `inngest_redis_luks` row carries the same date and Phase 5 step 1 deletes its whole `exception` block. That is the `workspaces`/`workspaces_luks` name-similarity trap ADR-140 names, landing on the two rows this plan is about.
 - [ ] **AC-5** `… .at_rest.live_verification` on the flipped row starts `unavailable:` and names the cipher-half gap. It is **not** the bare literal `available`.
 - [ ] **AC-6** `jq -r '.live_coverage_floor' …` → `1`, and `jq '[.stores[]|select(.at_rest.live_verification=="available")]|length' …` → `1`. Unchanged.
 - [ ] **AC-7** The flipped row's `does_not_defend` contains `hcloud_volume.inngest_redis` — it names the retained plaintext copy.
@@ -538,33 +544,50 @@ error_reporting:
     renamed, dropped or unreadable FIRES rather than going quiet.
 failure_modes:
   - mode: the store is remounted on the plaintext backstop (on-host rollback, a boot taking the pre-cutover arm, a replace whose first boot resolved the plaintext volume)
-    detection: the probe row's data_mount_devid stops matching the encrypted alias
-    alert_route: logtail_exploration_alert.inngest_luks_wrong_volume (email)
+    detection: >-
+      layer 3 (Vector journald shipper on the dedicated host, Source 4 allowlist tag
+      inngest-server-probe in apps/web-platform/infra/vector.toml, sink source 2457081) delivers
+      the hourly probe row; the alert's SQL sees data_mount_devid stop matching the encrypted alias
+    alert_route: layer 4 (Better Stack Logs alert logtail_exploration_alert.inngest_luks_wrong_volume, email incident)
   - mode: the probe emitter changes shape and the devid field is renamed or dropped
-    detection: the negated predicate matches nothing and counts the row
-    alert_route: same alert — the deliberate fail-loud arm
+    detection: layer 3 as above; the negated predicate matches nothing and counts the row
+    alert_route: layer 4, same alert — the deliberate fail-loud arm
   - mode: the alert is re-paused after arming (a later apply, a Doppler value appearing, or a vendor-side pause — `paused` is optional+computed, so it can be changed outside Terraform)
-    detection: heartbeat-live-reconcile now reports logs-alert-paused for this alert, because parseLogsAlertBlocks resolves !var.X against the declared default. Twice daily, on an existing runner. This is Phase 3 and it is why no bespoke arm-probe is needed
-    alert_route: the reconciler's drift report
-  - mode: a sanctioned op=luks-rollback puts the store back on the plaintext volume and no commit reverts the ledger or the register
-    detection: scripts/followthroughs/inngest-luks-property-8296.sh exit 1 — it reads the store's actual alias and the ledger's claim together. The alert alone cannot see this: after a rollback the alert is unpaused and firing, so an "is it armed?" probe would report PASS while the claim is false
-    alert_route: the sweeper reopens #8285 and comments ACTION REQUIRED
-  - mode: the probe -> vector -> Better Stack path dies, so no rows arrive and on_missing_data = "treat_as_zero" reads absence as healthy
+    detection: >-
+      layer 6 (workflow run log of scheduled-terraform-drift.yml, "Reconcile live heartbeats"
+      step): heartbeat-live-reconcile reports logs-alert-paused for this alert, because
+      parseLogsAlertBlocks resolves !var.X against the declared default. Dispatched twice daily by
+      layer 1 (cron-terraform-drift, sentry-correlation middleware; the Sentry cron monitor
+      scheduled-terraform-drift pages a missed run). This is Phase 3 and it is why no bespoke
+      arm-probe is needed
+    alert_route: >-
+      layer 6: `::warning::` annotation + the heartbeat-reconcile-mismatch GitHub issue
+      (labels action-required + priority/p1-high since #8296) + escalation email on a new route key
+  - mode: a sanctioned op=luks-rollback puts the store back on the plaintext volume and no commit reverts the ledger or the register — PR-2
+    detection: >-
+      scripts/followthroughs/inngest-luks-property-8296.sh exit 1 (created in PR-2, tasks.md 5.10)
+      — it reads the store's actual alias and the ledger's claim together. The alert alone cannot see
+      this: after a rollback the alert is unpaused and firing, so an "is it armed?" probe would
+      report PASS while the claim is false
+    alert_route: layer 6 (workflow run log of scheduled-followthrough-sweeper.yml) + the tracker comment on #8285 (reopened, ACTION REQUIRED)
+  - mode: the probe -> vector -> Better Stack path dies, so no rows arrive and on_missing_data = "treat_as_zero" reads absence as healthy — PR-2
     detection: the same probe's 3 CANNOT ESTABLISH arm (no rows in the window). Partial: it reports, it does not page. The full fix is a dead-probe heartbeat, deferred as D1 with a dated trigger
-    alert_route: the sweeper's comment
-logs:
-  where: >-
-    Better Stack Logs, source id 2457081 (local.vector_prd_source_id), table
-    t520508_soleur_inngest_vector_prd_3_logs as scripts/betterstack-query.sh defaults it
-  retention: per the Better Stack plan recorded against the vendor row; not set by this change
+    alert_route: layer 6 (scheduled-followthrough-sweeper.yml run log) + the sweeper's comment on #8285
 discoverability_test:
-  command: bash scripts/followthroughs/inngest-luks-property-8296.sh
-  expected_output: "PASS"
-  credentials_required: >-
-    BETTERSTACK_QUERY_HOST/_USERNAME/_PASSWORD — the probe rows live in a private Better Stack Logs
-    stream, there is no unauthenticated endpoint reporting which device backs /mnt/data, and the
-    host has no SSH by design (hr-no-ssh-fallback-in-runbooks). All three are already wired into
-    scheduled-followthrough-sweeper.yml.
+  # PR-1's deliverable is the reconciler resolving `!var.inngest_luks_cutover_complete` to ARMED
+  # against the real root. That is credential-free and sub-second, so it is what THIS PR's
+  # discoverability test runs. An earlier form of this block named
+  # scripts/followthroughs/inngest-luks-property-8296.sh, which PR-2 creates — a command that
+  # does not exist yet, behind a credentials waiver that made the ADR-175 gate SKIP-DECLARED
+  # and verify nothing. The live-device half (which device backs /mnt/data) genuinely needs the
+  # Better Stack credentials and moves to PR-2's block with that script.
+  command: >-
+    bun -e 'import {discoverLogsAlertsFromInfra} from "./plugins/soleur/scripts/reconcile-live-heartbeats.ts";
+    const a = discoverLogsAlertsFromInfra("apps/web-platform/infra").find((x) => x.resourceName === "inngest_luks_wrong_volume");
+    console.log(a?.pausedResolvesFalse ? "ARMED" : "EXEMPT")'
+  expected_output: "ARMED"
+  # No credentials_required line: that field is the WAIVER register (the #7393 G1 baseline counts
+  # plans that declare one), and this probe needs none. Declaring `none` would enrol a non-waiver.
 ```
 
 A credential-free supplementary probe covers the record half only:

@@ -705,10 +705,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
-    # reviewer click was duplicative friction on top of the PR-merge gate
-    # (CODEOWNERS review + branch protection on main), and was blocking
-    # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
-    # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
+    # reviewer click was duplicative friction on top of the PR-merge gate,
+    # and was blocking apply runs for up to 13h (#4204 on 2026-05-20). The
+    # merge is the human authorization BY CONVENTION per
+    # `hr-menu-option-ack-not-prod-write-auth`, not by an enforced review:
+    # this comment used to say "CODEOWNERS review + branch protection on
+    # main", which was measured false 2026-09-20 (#8296) — no ruleset on
+    # `main` carries a `pull_request` rule. The measurement lives once, in
+    # apply-web-platform-infra.yml's header "Authorization model" block.
     # `apply-github-infra.yml` already omits the gate without incident.
     # See PR #4218 for the failed App-as-reviewer attempt; GitHub does
     # not allow Apps in env reviewers (User/Team only).

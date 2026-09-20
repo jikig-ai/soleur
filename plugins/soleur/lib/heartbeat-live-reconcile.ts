@@ -299,11 +299,21 @@ export interface DiscoveredLogsAlert {
    * permanently — including after the cutover armed it, when a live pause is exactly the silent
    * failure the arm exists to surface.
    *
-   * Resolving the expression removes the exemption without removing the variable. FAILS CLOSED: an
-   * unresolved variable, a non-boolean default, or any expression shape this does not understand
-   * stays exempt (false), because reporting a pause we cannot prove is unintended is a false page.
+   * Resolving the expression removes the exemption without removing the variable. An unresolved
+   * variable, a non-boolean default, or an expression shape `resolvePausedIntent` does not
+   * understand stays EXEMPT (this field reads false and nothing is reported). Note the polarity:
+   * this file's header calls "throw `UnresolvableDeclaration`" fail-closed, and the monitor arm
+   * does exactly that for a non-literal `paused`; this arm deliberately does the QUIET thing
+   * instead, because reporting a pause we cannot prove is unintended is a false page. Quiet is
+   * not free — it collapses "could not resolve" into "nothing to report" — and the trade is
+   * recorded here rather than hidden behind the word "closed".
+   *
+   * Resolved from the SOURCE default only. A `TF_VAR_*` override in Doppler (the apply reads
+   * `soleur/prd_terraform`) is invisible here, so an override that PAUSES an alert whose default
+   * arms it will be reported as `logs-alert-paused`. That is intended: it is the only detector a
+   * forgotten override has. The triage text in scheduled-terraform-drift.yml names the check.
    */
-  pausedIsLiteralFalse: boolean;
+  pausedResolvesFalse: boolean;
 }
 
 /** One alert as reported by `GET telemetry.betterstack.com/api/v2/alerts` (`data[].attributes`). */
@@ -681,6 +691,12 @@ export function listTfFiles(infraDir: string): string[] {
     if (f === "override.tf" || f.endsWith("_override.tf") || f.endsWith(".tf.json")) {
       throw new UnresolvableDeclaration(f, "override and JSON configuration files are unsupported");
     }
+    // A tfvars file is a value source the apply WOULD read and this resolver does not model; since
+    // #8296 a var-driven `paused` is resolved from declared defaults, so a silently-ignored tfvars
+    // could invert that verdict in either direction. Refuse rather than resolve past it.
+    if (f === "terraform.tfvars" || f === "terraform.tfvars.json" || f.endsWith(".auto.tfvars") || f.endsWith(".auto.tfvars.json")) {
+      throw new UnresolvableDeclaration(f, "tfvars files are unsupported: this resolver reads declared defaults only");
+    }
   }
   return names.filter((f) => f.endsWith(".tf"));
 }
@@ -888,9 +904,9 @@ export function parseLogsAlertBlocks(tfText: string, vars: InfraVariables = new 
     // `paused` is read from the block rather than assumed. A resource with no `paused` at all also
     // counts as intent-false: the provider's default is unpaused, which is the same intent.
     const pausedMatch = /^\s*paused\s*=\s*(.+?)\s*$/m.exec(body);
-    const pausedIsLiteralFalse =
+    const pausedResolvesFalse =
       pausedMatch === null || resolvePausedIntent(pausedMatch[1].trim(), vars) === false;
-    return { resourceName, liveName: nameMatch ? nameMatch[1] : "", pausedIsLiteralFalse };
+    return { resourceName, liveName: nameMatch ? nameMatch[1] : "", pausedResolvesFalse };
   });
 }
 
@@ -899,13 +915,15 @@ export function parseLogsAlertBlocks(tfText: string, vars: InfraVariables = new 
  *
  * Understands exactly three shapes: a boolean literal, `var.<name>`, and `!var.<name>`. The name is
  * matched EXACTLY — never by prefix, so `var.foo_complete` can never be satisfied by a declaration
- * of `var.foo`. Anything else (a conditional, a `local.`, a function call, a variable whose default
- * is not a literal boolean) returns `null`, and every caller treats `null` as "leave it exempt".
+ * of `var.foo`. Anything else (a conditional, a `local.`, a function call, a QUOTED literal such as
+ * `"false"` which HCL would coerce but this does not, a variable whose default is not a literal
+ * boolean) returns `null`, and the caller treats `null` as "leave it exempt".
  */
+const PAUSED_VAR_RE = new RegExp(`^(!?)\\s*var\\.(${IDENT})$`);
 function resolvePausedIntent(raw: string, vars: InfraVariables): boolean | null {
   if (raw === "false") return false;
   if (raw === "true") return true;
-  const m = /^(!?)\s*var\.([A-Za-z_][A-Za-z0-9_-]*)$/.exec(raw);
+  const m = PAUSED_VAR_RE.exec(raw);
   if (m === null) return null;
   const def = vars.get(m[2]);
   if (def === undefined || def.kind !== "bool") return null;
@@ -940,10 +958,11 @@ export function reconcileLogsAlerts(
       violations.push({ kind: "logs_alert", resourceName: d.resourceName, liveName: d.liveName, live: "logs_alert", reason: "logs-alert-absent" });
       continue;
     }
-    // A live pause is drift ONLY where the declaration says `paused = false`. Where the declaration
-    // is an expression, the pause is what the author asked for and the apply re-asserts it every
-    // merge — so flagging it would be a standing false page, not a finding.
-    if (l.paused && d.pausedIsLiteralFalse) {
+    // A live pause is drift ONLY where the declaration RESOLVES to `paused = false` — a literal, an
+    // absent attribute, or (since #8296) a `var`-driven expression whose default resolves to false;
+    // see `resolvePausedIntent`. Where it resolves to true, or cannot be resolved, the pause is
+    // taken as what the author asked for and is not reported.
+    if (l.paused && d.pausedResolvesFalse) {
       violations.push({
         kind: "logs_alert",
         resourceName: d.resourceName,

@@ -181,14 +181,16 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # the cutover — and an alert that pages when nothing is wrong is one that gets muted, which is how
 # a real page is missed later. The 2026-09-20 additive cutover inverted that: the store now reports
 # on the encrypted alias, so a probe row pinning the plaintext one is the regression this rule
-# exists to catch. `var.inngest_luks_cutover_complete` was flipped to true in #8296 and the rule
-# is armed.
+# exists to catch. `var.inngest_luks_cutover_complete` was flipped to true in #8296 and the
+# DECLARATION is armed.
 #
 # ARMING HAPPENS ON THE APPLY, NOT AT MERGE — `paused` is a provider-side attribute, so until an
 # apply runs, this file says armed and Better Stack still has it paused. There is no
 # `terraform apply -var …` route here: this root is applied by apply-web-platform-infra.yml, which
 # takes no such input. Flip the declared default in variables.tf (or the Doppler override the
-# comment there names) and let the workflow apply it.
+# comment there names) and let the workflow apply it. The declared/live divergence in between is
+# what the reconciler (heartbeat-live-reconcile.ts) reports as `logs-alert-paused` twice daily;
+# since #8296 that report is no longer suppressed for this alert.
 #
 # THE ID COMES FROM THE RESOURCE, never a literal: a volume re-created under a new id would
 # otherwise leave the rule watching for an alias that no longer exists — the alert would go quiet,
@@ -263,8 +265,9 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   recovery_period     = 10800
   on_missing_data     = "treat_as_zero"
 
-  # Armed by the operator AFTER a confirmed cutover — see "WHY IT SHIPS PAUSED" above. This is the
-  # one alert in this file whose paused state is a variable rather than a constant `false`.
+  # Armed since #8296 by var.inngest_luks_cutover_complete's declared default (takes effect on the
+  # apply) — see "WHY IT SHIPPED PAUSED, AND WHY IT NO LONGER IS" above. This is the one alert in
+  # this file whose paused state is a variable rather than a constant `false`.
   paused = !var.inngest_luks_cutover_complete
 
   email          = true

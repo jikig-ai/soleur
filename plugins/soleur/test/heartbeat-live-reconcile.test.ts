@@ -35,6 +35,7 @@ import {
 } from "../lib/heartbeat-live-reconcile";
 import {
   discoverHeartbeatsFromInfra,
+  discoverLogsAlertsFromInfra,
   discoverMonitorsFromInfra,
   fetchLiveHeartbeats,
   fetchLiveMonitors,
@@ -598,14 +599,14 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
       `resource "logtail_exploration_alert" "second" {\n  name = "soleur-second-prd"\n}`,
     ].join("\n");
     expect(parseLogsAlertBlocks(tf)).toEqual([
-      { resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true },
-      { resourceName: "second", liveName: "soleur-second-prd", pausedIsLiteralFalse: true },
+      { resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedResolvesFalse: true },
+      { resourceName: "second", liveName: "soleur-second-prd", pausedResolvesFalse: true },
     ]);
   });
 
   it("flags a declared alert that is paused live as logs-alert-paused, carrying paused_reason", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true }],
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedResolvesFalse: true }],
       [{ name: "soleur-monitor-send-failed-prd", paused: true, pausedReason: "complexity issues, too many failures" }],
     );
     expect(v).toEqual([
@@ -620,21 +621,22 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
     ]);
   });
 
-  // #6894: a DECLARED pause is intent, not drift. The wrong-volume alert ships
-  // `paused = !var.inngest_luks_cutover_complete` because before the cutover the condition it
-  // watches is the correct state — so an armed rule would page continuously and get muted before it
-  // ever mattered, and reporting the pause would be a standing false page for that whole window.
-  it("does NOT flag a live pause when the declaration is an expression rather than literal false", () => {
+  // A declaration whose `paused` does NOT resolve to false (a literal true, or an expression the
+  // resolver could not settle) is intent, not drift — the consumer exempts it. The var-driven case that
+  // originally motivated this (#6894) now RESOLVES through `vars` and is covered by the #8296 block
+  // in "parseLogsAlertBlocks resolves a var-driven paused" below; the real wrong-volume alert
+  // resolves to armed since #8296, so this case uses a synthesized name (cq-test-fixtures-synthesized-only).
+  it("does NOT flag a live pause when the declared `paused` did not resolve to false (exempt, quiet)", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "inngest_luks_wrong_volume", liveName: "soleur-inngest-luks-wrong-volume-prd", pausedIsLiteralFalse: false }],
-      [{ name: "soleur-inngest-luks-wrong-volume-prd", paused: true, pausedReason: null }],
+      [{ resourceName: "some_var_paused_alert", liveName: "soleur-some-var-paused-prd", pausedResolvesFalse: false }],
+      [{ name: "soleur-some-var-paused-prd", paused: true, pausedReason: null }],
     );
     expect(v).toEqual([]);
   });
 
-  it("still flags an expression-paused alert that is ABSENT live — the pause exemption is not an absence exemption", () => {
+  it("still flags an exempt-paused alert that is ABSENT live — the pause exemption is not an absence exemption", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "inngest_luks_wrong_volume", liveName: "soleur-inngest-luks-wrong-volume-prd", pausedIsLiteralFalse: false }],
+      [{ resourceName: "some_var_paused_alert", liveName: "soleur-some-var-paused-prd", pausedResolvesFalse: false }],
       [],
     );
     expect(v.map((x) => x.reason)).toEqual(["logs-alert-absent"]);
@@ -648,7 +650,7 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
     ].join("\n");
     // No `vars` passed, so the expression is UNRESOLVED and stays exempt. This is the fail-closed
     // arm: we never report a pause we cannot prove was unintended.
-    expect(parseLogsAlertBlocks(tf).map((a) => [a.resourceName, a.pausedIsLiteralFalse])).toEqual([
+    expect(parseLogsAlertBlocks(tf).map((a) => [a.resourceName, a.pausedResolvesFalse])).toEqual([
       ["literal", true],
       ["expr", false],
       ["absent", true],
@@ -661,36 +663,37 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
   describe("parseLogsAlertBlocks resolves a var-driven paused (#8296)", () => {
     const alert = (expr: string) =>
       `resource "logtail_exploration_alert" "wrong_volume" {\n  name = "x"\n  paused = ${expr}\n}`;
-    const intent = (expr: string, vars: Map<string, { kind: "bool"; value: boolean } | { kind: "other" } | { kind: "map"; keys: string[] }>) =>
-      parseLogsAlertBlocks(alert(expr), vars)[0].pausedIsLiteralFalse;
+    // `armed(expr, vars)` is `pausedResolvesFalse` for a one-block file — true means the declaration
+    // resolves to paused=false, i.e. the alert is declared ARMED and a live pause is drift.
+    const armed = (expr: string, vars: InfraVariables) => parseLogsAlertBlocks(alert(expr), vars)[0].pausedResolvesFalse;
 
     it("`!var.X` with X=true resolves paused=false — ARMED, so a live pause is drift", () => {
-      expect(intent("!var.cutover_complete", new Map([["cutover_complete", { kind: "bool", value: true }]]))).toBe(true);
+      expect(armed("!var.cutover_complete", new Map([["cutover_complete", { kind: "bool", value: true }]]))).toBe(true);
     });
 
     it("`!var.X` with X=false resolves paused=true — intent IS paused, stays exempt", () => {
-      expect(intent("!var.cutover_complete", new Map([["cutover_complete", { kind: "bool", value: false }]]))).toBe(false);
+      expect(armed("!var.cutover_complete", new Map([["cutover_complete", { kind: "bool", value: false }]]))).toBe(false);
     });
 
     it("bare `var.X` resolves without the negation", () => {
-      expect(intent("var.paused_flag", new Map([["paused_flag", { kind: "bool", value: false }]]))).toBe(true);
-      expect(intent("var.paused_flag", new Map([["paused_flag", { kind: "bool", value: true }]]))).toBe(false);
+      expect(armed("var.paused_flag", new Map([["paused_flag", { kind: "bool", value: false }]]))).toBe(true);
+      expect(armed("var.paused_flag", new Map([["paused_flag", { kind: "bool", value: true }]]))).toBe(false);
     });
 
     it("fails CLOSED on an unknown variable", () => {
-      expect(intent("!var.missing", new Map([["other", { kind: "bool", value: true }]]))).toBe(false);
+      expect(armed("!var.missing", new Map([["other", { kind: "bool", value: true }]]))).toBe(false);
     });
 
     it("fails CLOSED on a non-boolean default", () => {
-      expect(intent("!var.m", new Map([["m", { kind: "map", keys: ["a"] }]]))).toBe(false);
-      expect(intent("!var.o", new Map([["o", { kind: "other" }]]))).toBe(false);
+      expect(armed("!var.m", new Map([["m", { kind: "map", keys: ["a"] }]]))).toBe(false);
+      expect(armed("!var.o", new Map([["o", { kind: "other" }]]))).toBe(false);
     });
 
     it("fails CLOSED on an expression shape it does not understand", () => {
-      const vars = new Map<string, { kind: "bool"; value: boolean }>([["f", { kind: "bool", value: true }]]);
-      expect(intent("var.f ? true : false", vars)).toBe(false);
-      expect(intent("local.f", vars)).toBe(false);
-      expect(intent("!local.f", vars)).toBe(false);
+      const vars = new Map([["f", { kind: "bool", value: true }]]);
+      expect(armed("var.f ? true : false", vars)).toBe(false);
+      expect(armed("local.f", vars)).toBe(false);
+      expect(armed("!local.f", vars)).toBe(false);
     });
 
     it("anchors at END of expression: a var REFERENCE inside a larger expression is not resolved", () => {
@@ -699,33 +702,33 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
       // readings return false and the test proves nothing; f=FALSE is where they diverge —
       // unanchored yields paused=false ("armed"), which would report a live pause on an alert
       // whose real intent this parser never determined.
-      const vars = new Map<string, { kind: "bool"; value: boolean }>([["f", { kind: "bool", value: false }]]);
-      expect(intent("var.f && var.other", vars)).toBe(false);
-      expect(intent("var.f ? true : false", vars)).toBe(false);
-      expect(intent("!var.f || true", vars)).toBe(false);
+      const vars = new Map([["f", { kind: "bool", value: false }]]);
+      expect(armed("var.f && var.other", vars)).toBe(false);
+      expect(armed("var.f ? true : false", vars)).toBe(false);
+      expect(armed("!var.f || true", vars)).toBe(false);
     });
 
     it("matches the variable name EXACTLY, never by prefix", () => {
       // `var.cutover` must not be satisfied by a declaration of `cutover_complete`, nor the
       // reverse — a prefix match here would resolve the wrong variable and invert the verdict.
-      const vars = new Map<string, { kind: "bool"; value: boolean }>([
+      const vars = new Map([
         ["cutover_complete", { kind: "bool", value: true }],
       ]);
-      expect(intent("!var.cutover", vars)).toBe(false);
-      expect(intent("!var.cutover_complete_extra", vars)).toBe(false);
-      expect(intent("!var.cutover_complete", vars)).toBe(true);
+      expect(armed("!var.cutover", vars)).toBe(false);
+      expect(armed("!var.cutover_complete_extra", vars)).toBe(false);
+      expect(armed("!var.cutover_complete", vars)).toBe(true);
     });
 
     it("a literal still wins and needs no vars", () => {
-      const vars = new Map<string, { kind: "bool"; value: boolean }>([["x", { kind: "bool", value: true }]]);
-      expect(intent("false", vars)).toBe(true);
-      expect(intent("true", vars)).toBe(false);
+      const vars = new Map([["x", { kind: "bool", value: true }]]);
+      expect(armed("false", vars)).toBe(true);
+      expect(armed("true", vars)).toBe(false);
     });
   });
 
   it("flags a declared alert missing from the live payload as logs-alert-absent", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true }],
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedResolvesFalse: true }],
       [{ name: "Output utilization high", paused: true, pausedReason: "Manually paused" }],
     );
     expect(v.map((x) => x.reason)).toEqual(["logs-alert-absent"]);
@@ -733,7 +736,7 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
 
   it("returns no violations when every declared alert is present and unpaused (foreign paused alerts ignored)", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true }],
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedResolvesFalse: true }],
       [
         { name: "soleur-monitor-send-failed-prd", paused: false, pausedReason: "" },
         { name: "Output utilization high", paused: true, pausedReason: "Manually paused" },
@@ -844,7 +847,39 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
         manifest,
       );
       expect(result.markers.join("\n")).not.toContain("reason=logs-alert-paused");
+      // POSITIVE CONTROL. Without it this case is negative-only and cannot tell "not reported"
+      // from "arm 3 never ran": measured, both `.filter((a) => a.pausedResolvesFalse)` on the
+      // declared set (which would also stop reporting an intentionally-paused alert as ABSENT)
+      // and skipping arm 3 when every declaration is exempt passed 131/0. The OK marker proves
+      // the arm ran, saw one declaration, matched one live alert, and chose not to report.
+      expect(result.markers).toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=logs_alert declared=1 live=1");
     });
+  });
+
+  it("arm-3 blast radius: an unbalanced UNRELATED variable file is contained — the logs_alert arm still resolves and reports (#8296)", async () => {
+    // Guard-2's blast-radius suite (see "Guard 2 review fixes") proves an unrelated declaration
+    // error is contained for arms 1 and 2. It never asserted arm 3. That gap is exactly what made
+    // "drop `vars` at runReconcile's call site" look EQUIVALENT: with the arg gone,
+    // discoverLogsAlertsFromInfra's default runs the STRICT resolver, which throws on the broken
+    // sibling, `discover()` swallows it into a marker the per-file resolution already emitted,
+    // and arm 3 goes silent — no OK, no MISMATCH. Measured: this case alone reds that mutant (131/1).
+    await withInfra(
+      { "hb.tf": HB_TF, "alerts.tf": VAR_ALERT_TF, "variables.tf": VARS_ARMED_TF, "zz-broken.tf": `variable "unrelated" {\n  default = {\n` },
+      async (dir) => {
+        const result = await runReconcile(
+          dir,
+          {
+            token: "t",
+            fetchImpl: routed([{ attributes: { name: "soleur-wrong-volume-prd", paused: true, paused_reason: "hand paused" } }]),
+            sleepImpl: noSleep,
+          },
+          manifest,
+        );
+        const out = result.markers.join("\n");
+        expect(out).toContain("reason=parse-error");
+        expect(out).toContain("live=logs_alert reason=logs-alert-paused resource=logtail_exploration_alert.wrong_volume");
+      },
+    );
   });
 
   it("absent live alert → code 2 + reason=logs-alert-absent", async () => {
@@ -1579,6 +1614,15 @@ describe("Guard 2 (#7884) — harness rows H1-H6", () => {
     const heartbeats = discoverHeartbeatsFromInfra(REAL, vars);
     const monitors = discoverMonitorsFromInfra(REAL, vars);
     expect(monitors.map((m) => m.url)).toContain(HEALTH);
+    // #8296: the logs-alert arm against the REAL root. This is the only place the resolver and the
+    // real variables.tf meet — the bash guard pins the TEXT of `paused = !var…` and `default = true`,
+    // the unit cases above pin the resolver on SYNTHETIC fixtures, and the two agree only by naming.
+    // A per-file parse regression on variables.tf would leave the var unresolved and silently return
+    // the alert to the pre-#8296 exempt state with both suites green; this row is what reds.
+    const alerts = discoverLogsAlertsFromInfra(REAL, vars);
+    const wrongVolume = alerts.find((a) => a.resourceName === "inngest_luks_wrong_volume");
+    expect(wrongVolume).toBeDefined();
+    expect(wrongVolume?.pausedResolvesFalse).toBe(true);
     for (const h of heartbeats) expect(h.liveName).not.toContain("${");
     // Every templated (for_each) heartbeat declaration in the real root resolves to ≥1 instance.
     const templated = new Set<string>();
@@ -1964,6 +2008,22 @@ describe("Guard 2 review fixes — HCL scanner", () => {
       expect(r.code).toBe(1);
       expect(r.markers).toContain(`SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=declarations reason=unresolvable-declaration resource=${file}`);
       expect(r.markers.filter((m) => m.includes(`resource=${file}`))).toHaveLength(1); // one marker, not one per arm
+      expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors");
+      expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats");
+    });
+  }
+
+  // #8296: tfvars files are a value source the apply reads and this resolver does not model. Before
+  // this row `listTfFiles` silently skipped them (`.endsWith(".tf")` filter) while refusing
+  // override.tf; with a var-driven `paused` now RESOLVED from declared defaults, a silently-ignored
+  // tfvars could invert that verdict in either direction. The refusal is the same shape as the
+  // override refusal one block up, so the assertions mirror it.
+  for (const file of ["terraform.tfvars", "prod.auto.tfvars", "terraform.tfvars.json", "x.auto.tfvars.json"]) {
+    it(`a tfvars file (${file}) in the infra dir — UnresolvableDeclaration (rc 1), no uptime OK (#8296)`, async () => {
+      const r = await g2({ files: { [file]: file.endsWith(".json") ? "{}" : `inngest_luks_cutover_complete = false\n` } });
+      expect(r.code).toBe(1);
+      expect(r.markers).toContain(`SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=declarations reason=unresolvable-declaration resource=${file}`);
+      expect(r.markers.filter((m) => m.includes(`resource=${file}`))).toHaveLength(1);
       expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors");
       expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats");
     });
