@@ -171,23 +171,31 @@ for run_id in "${run_ids[@]}"; do
     # region is everything after the first header stamped at or after the poll step's start
     # second, up to the next header. Each line is reduced to its third field, so a tab inside
     # echoed text cannot place a line of its own choosing at the start.
-    log=${log//$'\r'/}
-    # STRIP THE BOM, NOT JUST THE CR. `gh run view --log` writes a UTF-8 byte-order mark at the
-    # start of EVERY step's log section, and the mark lands AFTER the two tab fields — i.e.
-    # immediately before the timestamp this block anchors on. Measured on job 106093730126
-    # (run 35516692240): 15 `##[group]Run` headers, 14 of them BOM-prefixed; only the job's
-    # first section ("Set up job") is bare, because gh strips the mark from the head of the
-    # concatenated stream and not from each section it appends.
+    # STRIP THE BOM ALONGSIDE THE CR, AND IN BASH RATHER THAN IN awk. `gh run view --log` writes
+    # a UTF-8 byte-order mark at the start of EVERY step's log section, and the mark lands AFTER
+    # the two tab fields — i.e. immediately before the timestamp the awk block below anchors on.
+    # Measured on job 106093730126 (run 35516692240): 15 `##[group]Run` headers, 14 of them
+    # BOM-prefixed; only the job's first section ("Set up job") is bare, because gh strips the
+    # mark from the head of the concatenated stream and not from each section it appends.
     #
     # Without this, `^[0-9]` matched ONLY that first bare header, whose ts is the job start and
     # therefore always < the poll step's start, so `started` never flipped, `region` came back
     # empty, and the probe took the `_cannot` arm on every real log it has ever read — reporting
     # CANNOT ESTABLISH against the exact evidence it exists to read. The mark also shifted
     # `substr(line, 1, 19)` by three bytes, corrupting the ts compare even had a header matched.
-    # Stripped per-line rather than over the whole blob so the reduction stays inside the one
-    # block that owns this line shape.
+    #
+    # WHY HERE AND NOT IN THE awk PROGRAM. A `sub(/^\357\273\277/, ...)` inside awk would read
+    # naturally beside the tab-field strip, but octal escapes in a regex LITERAL are not POSIX
+    # and their handling is dialect-dependent; this probe invokes bare `awk`, which on a Debian
+    # /Ubuntu runner is whatever `/etc/alternatives/awk` points at (commonly mawk, not the gawk
+    # this was developed against), and no other awk program in this repo relies on an octal
+    # escape. A `${var//…}` substitution is plain bash with no such variance, it sits beside the
+    # \r strip that already establishes this exact pattern two characters away, and it clears the
+    # mark for EVERY consumer of "$log" rather than only the one block that happens to normalize.
+    log=${log//$'\r'/}
+    log=${log//$'\357\273\277'/}
     region=$(awk -v ps="${poll_start:0:19}" '
-      { line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); sub(/^\357\273\277/, "", line); ts = substr(line, 1, 19) }
+      { line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); ts = substr(line, 1, 19) }
       line ~ /^[0-9][0-9TZ:.-]* ##\[group\]Run / { if (started) exit; if (ts >= ps) { started = 1; next } }
       started { print line }' <<<"$log")
     [[ -n "$region" ]] \
