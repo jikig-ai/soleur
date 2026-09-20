@@ -61,8 +61,21 @@ export async function POST(request: Request) {
     );
   }
 
+  // (#8094) Relay whether the git-data bare-repo erasure actually completed. The
+  // deletion succeeded either way — this flag is what stops the client claiming an
+  // erasure the server never observed, against DPD s10.3(b) and T&C s14.1b.
+  if (result.gitDataErasurePending) {
+    log.warn(
+      { userId: user.id },
+      "Account deleted but the git-data bare-repo erasure did not complete — reported to the user as pending",
+    );
+  }
+
   // Build response and clear all Supabase cookies
-  const response = NextResponse.json({ success: true });
+  const response = NextResponse.json({
+    success: true,
+    ...(result.gitDataErasurePending ? { gitDataErasurePending: true } : {}),
+  });
 
   // Clear all sb-* cookies to fully sign out the deleted user
   const cookieHeader = request.headers.get("cookie") ?? "";

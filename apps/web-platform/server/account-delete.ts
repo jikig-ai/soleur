@@ -42,6 +42,16 @@ async function listAllStorageObjects(
 export interface DeleteAccountResult {
   success: boolean;
   error?: string;
+  /**
+   * (#8094) True when the account was deleted but the git-data bare-repo erasure was
+   * NOT observed to complete — the host refused it, or was unreachable. The cascade
+   * deliberately still succeeds (a git-data fault must not strand the auth-user
+   * deletion), so this is how the caller learns not to claim the erasure happened.
+   *
+   * Absent/false means one of two things that are both honest to report as done: the
+   * erasure completed, or this environment never had git-data to erase.
+   */
+  gitDataErasurePending?: boolean;
 }
 
 /**
@@ -206,18 +216,44 @@ export async function deleteAccount(
   // the sole-owned workspace's git-data repo id). NO-OP at flag-off (inside the call).
   // Best-effort, mirroring the attachments/logo purges: reports, never throws — a
   // reachability blip must not abort the auth-user deletion that follows.
+  // (#8094) The OUTCOME is consumed, not discarded. `removeGitDataRepo` used to return
+  // void, so a refusal by the host and a completed erasure were the same value here and
+  // both fell through to `{ success: true }` — the user was told the account was
+  // permanently deleted while their bare repository may still have been on the host.
+  // Still non-fatal, still reported to Sentry; the change is that we no longer claim an
+  // erasure we did not observe.
+  let gitDataErasurePending = false;
   try {
-    await removeGitDataRepo(userId);
+    const outcome = await removeGitDataRepo(userId);
+    if (outcome.status === "refused" || outcome.status === "unreachable") {
+      gitDataErasurePending = true;
+      // A compliance event either way, but the two are distinguishable in Sentry now:
+      // `refused` means the host looked and declined (it needs a fix, and the repo is
+      // probably still there); `unreachable` means we never got an answer (the repo's
+      // state is unknown, which is not the same as un-erased).
+      reportSilentFallback(new Error(`git-data erasure ${outcome.status}`), {
+        feature: "account-delete",
+        op: "git-data-bare-repo-erasure",
+        extra: {
+          userId,
+          outcome: outcome.status,
+          ...(outcome.status === "refused" ? { exitCode: outcome.exitCode } : {}),
+          detail: outcome.detail,
+        },
+        message:
+          "git-data bare-repo erasure did not complete during Art. 17 deletion — the repo may persist on the git-data host",
+      });
+    }
   } catch (err) {
-    // Non-fatal (a git-data reachability blip must not strand the auth-user
-    // deletion), but a failed Art. 17 erasure is a compliance event — mirror to
-    // Sentry so an un-erased bare repo is observable and can be swept, rather than
-    // silently logged (cq-silent-fallback-must-mirror-to-sentry).
+    // An unexpected throw (assertSafeWorkspaceId, a programming fault) must reach the
+    // SAME honest answer as a refusal. Before #8094 this arm existed and set nothing, so
+    // it was the one route that could still report an unobserved success.
+    gitDataErasurePending = true;
     reportSilentFallback(err, {
       feature: "account-delete",
       op: "git-data-bare-repo-erasure",
       extra: { userId },
-      message: "removeGitDataRepo failed during Art. 17 deletion — bare repo may persist on the git-data host",
+      message: "removeGitDataRepo threw during Art. 17 deletion — bare repo may persist on the git-data host",
     });
   }
 
@@ -1073,5 +1109,5 @@ export async function deleteAccount(
   }
 
   log.info({ userId }, "Account deleted successfully (GDPR Art. 17)");
-  return { success: true };
+  return { success: true, gitDataErasurePending };
 }

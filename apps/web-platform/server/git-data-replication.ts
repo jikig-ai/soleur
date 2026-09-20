@@ -213,7 +213,36 @@ export async function provisionGitDataRepo(workspaceId: string): Promise<void> {
  * chat-attachments purge) so the shared-store copy is erased alongside the
  * host-local working tree — closing the DL-1 bare-repo erasure gap.
  */
-export async function removeGitDataRepo(workspaceId: string): Promise<void> {
+export type GitDataErasureOutcome =
+  /** No REMOVE key in this env — git-data was never in play here. Nothing to erase. */
+  | { status: "skipped" }
+  /** The remote forced command ran and exited 0. The bare repo is gone. */
+  | { status: "erased" }
+  /** The host LOOKED and declined (non-zero from the remote command). Carries its own words. */
+  | { status: "refused"; exitCode: number; detail: string }
+  /** ssh never established a session (rc 255). Says NOTHING about the repo's fate. */
+  | { status: "unreachable"; detail: string };
+
+/**
+ * (#8094) WHY THIS RETURNS AN OUTCOME INSTEAD OF void.
+ *
+ * After #8043 F8 the host-side `git-data-remove.sh` REFUSES — named message, non-zero
+ * exit — on an unmounted store, rather than reporting `not present (no-op)` and exiting
+ * 0. The host stopped lying. This function kept the lie alive one level up: it was
+ * `Promise<void>`, so "the repo is gone" and "the host refused to touch it" were the
+ * same value to every caller, and the only caller treated both as done.
+ *
+ * `refused` and `unreachable` are split rather than folded into one failure, because
+ * they warrant different responses and collapsing them is how a transport blip comes to
+ * read as a compliance event (and vice versa). The discriminator is ssh's own
+ * convention: 255 is ssh failing to establish the session; any other non-zero is the
+ * REMOTE command's exit status, relayed through ssh.
+ *
+ * Erasure is still best-effort at the call site — a blip must not strand the auth-user
+ * deletion — but "best-effort" now means the caller KNOWS the effort failed and can say
+ * so, instead of reporting a success it never observed. See #8094.
+ */
+export async function removeGitDataRepo(workspaceId: string): Promise<GitDataErasureOutcome> {
   assertSafeWorkspaceId(workspaceId);
   // NOT gated on isGitDataStoreEnabled() (data-integrity review LOW): a bare repo
   // provisioned during a flag-ON window PERSISTS on the git-data host after a
@@ -226,9 +255,29 @@ export async function removeGitDataRepo(workspaceId: string): Promise<void> {
   // flag. The host-side wrapper is idempotent — a remove of a non-existent repo is
   // a no-op — so an over-eager call is harmless.
   const removeKey = process.env.GIT_REMOVE_SSH_PRIVATE_KEY?.trim();
-  if (!removeKey) return;
+  if (!removeKey) return { status: "skipped" };
   const host = resolveGitDataSshHost();
-  await sshWithPrivateKeyAuth(host, workspaceId, removeKey, { timeout: 30_000 });
+  try {
+    await sshWithPrivateKeyAuth(host, workspaceId, removeKey, { timeout: 30_000 });
+    return { status: "erased" };
+  } catch (err) {
+    // execFileAsync rejects with the child's exit status on `code` and its stderr on
+    // `stderr`. sshWithPrivateKeyAuth does not catch (its `finally` only shreds the temp
+    // key), so both reach us unchanged. Read them defensively anyway: a timeout rejects
+    // with a `killed` error whose `code` is null, and that is an `unreachable`, not a
+    // refusal by a host that never answered.
+    const e = err as { code?: unknown; stderr?: unknown };
+    const exitCode = typeof e.code === "number" ? e.code : null;
+    const detail = String(
+      typeof e.stderr === "string" && e.stderr.trim()
+        ? e.stderr.trim()
+        : err instanceof Error
+          ? err.message
+          : err,
+    ).slice(0, 2000);
+    if (exitCode === null || exitCode === 255) return { status: "unreachable", detail };
+    return { status: "refused", exitCode, detail };
+  }
 }
 
 /**
