@@ -1780,6 +1780,10 @@ if want_scripts; then
   # double-emit). The gate blocks NEW occurrences only; the baseline may shrink and must never
   # grow. Burn-down is tracked in the learning that ships with this gate. Registering it
   # baseline-free would have meant either a permanently red suite or a silently narrowed rule.
+  # #8392 twin registration: the fixture suite pins the DETECTOR, the -live row runs
+  # it over the repo. Registering only one makes a lint decoration.
+  run_suite "scripts/lint-anthropic-content-position" bash scripts/lint-anthropic-content-position.test.sh
+  run_suite "scripts/lint-anthropic-content-position-live" python3 scripts/lint-anthropic-content-position.py
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
