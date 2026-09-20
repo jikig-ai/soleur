@@ -289,10 +289,10 @@ REAP_CAP=not-applicable
 # `.mcp.json` restore with it (FR8d). Before #8401 the restore was nested inside the
 # success arm, where any new refusal arm would have skipped it by construction.
 DO_RESTORE=false
-WM="${ROOT}/skills/git-worktree/scripts/worktree-manager.sh"
 if [ "$VERIFIED" = true ] && [ "$SRC" = devin-cache ]; then
   REAP_CAP=unverified
-  if [ -f "$WM" ] && grep -q 'SOLEUR_WORKTREE_REAP_CAPABILITY=.*branch-keyed-guards' "$WM"; then
+  if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ] \
+     && grep -q 'SOLEUR_WORKTREE_REAP_CAPABILITY=.*branch-keyed-guards' "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh"; then
     REAP_CAP=ok
   fi
 fi
@@ -352,8 +352,8 @@ else
   # loader-substituted token, then GROK_PLUGIN_ROOT (ADR-179 decision 11); the name=soleur
   # preflight in the resolver runs on whichever arm produced the root.
   DO_RESTORE=true
-  if [ -f "$WM" ]; then
-    bash "$WM" cleanup-merged
+  if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
+    bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
     git worktree list
   else
     echo "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root"

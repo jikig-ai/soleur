@@ -656,6 +656,35 @@ out="$(run_gate "${FENCE_LITERAL[0]}" "$ws" "$CACHE_HOME")"
 want_in "$out" "gate=readiness source=devin-cache verified=true" "R5e: Step 0.0 resolves from the Devin CLI cache"
 want_in "$out" "${R1_EFFECT[0]}" "R5e: and reached its own probe"
 
+echo "R10b. the capability check and the dispatch operate on the SAME path (no re-resolution)"
+# Guard 2 row 10, and it is STATIC because no behavioural row can see it. A `grep -q` that
+# re-resolves the root is check-A/execute-B across two independent `head -1` calls — the same
+# defect one level down from the one the gate closes, and both halves behave identically in a
+# fixture where the cache holds exactly one manifest.
+_ss_body="$(extract_fence "${GATE_ANCHORS[2]}" "$GO_MD")"
+_ss_code="$(code_lines "$_ss_body")"
+# Every `find` in the session-start fence must belong to the resolver, which is bounded by its
+# own anchors. Anything between `end resolver` and the dispatch would be a re-resolution.
+_after_resolver="$(printf '%s\n' "$_ss_body" | sed -n '/# --- end resolver ---/,$p')"
+_n_find="$(printf '%s\n' "$(code_lines "$_after_resolver")" | grep -c 'find ' || true)"
+ck; if [ "$_n_find" -eq 0 ]; then
+  pass "R10b: no second find between the resolver and the dispatch"
+else
+  fail "R10b: session-start re-resolves the root after the resolver ($_n_find find call(s)) — check-A/execute-B"
+fi
+# The grep operand and the bash operand must be the SAME ${ROOT}-derived string. Compared as
+# text rather than through a shared variable, because ADR-179's anchoring contract
+# (plugin-root-anchoring.test.ts P1/P8) requires the invocation operand to be the bare
+# ${ROOT}-anchored literal — so textual identity is both what that contract wants and a
+# stronger pin than a shared variable would be.
+_grep_operand="$(printf '%s\n' "$_ss_code" | grep -oE '"\$\{ROOT\}[^"]*worktree-manager\.sh"' | sort -u)"
+_n_operands="$(printf '%s\n' "$_grep_operand" | grep -c . || true)"
+ck; if [ "$_n_operands" -eq 1 ]; then
+  pass "R10b: the capability grep and the dispatch name one identical \${ROOT}-anchored operand"
+else
+  fail "R10b: session-start names $_n_operands distinct worktree-manager operands, want exactly 1"
+fi
+
 echo "R11. the reap-capability gate: a cache root whose reaper lacks the token"
 # THE row that makes the Phase 2 widening admissible. Without it the capability check is
 # decoration and the ADR-179 A16 amendment rests on nothing.
@@ -932,7 +961,7 @@ fi
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
 # 155 is the H3-SKIPPED total; H3 running adds two more (157), so the floor holds on both paths.
 # Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155.
-MIN_ASSERTIONS=173
+MIN_ASSERTIONS=175
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2

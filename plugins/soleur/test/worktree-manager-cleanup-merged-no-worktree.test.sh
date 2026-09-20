@@ -249,6 +249,10 @@ RC=0
 run_reaper() {
   local script="$1" cwd="$2" root="$3" log="$4"
   assert_fixture_dir "$cwd"
+  # The redirect target is bound OUTSIDE this function, so its writing window is unguarded
+  # from here — an empty or relative `$log` would retarget the write. Guard the directory it
+  # lands in with the same canonical helper (P1b, fixture-relative-assert.test.sh).
+  assert_fixture_dir "${log%/*}"
   ( cd "$cwd" && env "${FIXTURE_GIT_ENV[@]}" SOLEUR_SESSION_STATE_ROOT="$root" \
       bash "$script" cleanup-merged ) > "$log" 2>&1
   RC=$?
