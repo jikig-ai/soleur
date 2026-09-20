@@ -747,6 +747,7 @@ const EXPECTED_GATE_REFS: readonly string[] = [
   "plugins/soleur/skills/legal-generate/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/linear-fetch/SKILL.md -> redact-linear-urls.sh",
   "plugins/soleur/skills/qa/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/questionnaire-generate/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/reproduce-bug/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/reproduce-bug/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/test-browser/SKILL.md -> redact-a11y-snapshot.py",
@@ -771,6 +772,7 @@ const SECRET_GATE_SKILLS: readonly string[] = [
   "plugins/soleur/skills/legal-generate/SKILL.md",
   "plugins/soleur/skills/linear-fetch/SKILL.md",
   "plugins/soleur/skills/qa/SKILL.md",
+  "plugins/soleur/skills/questionnaire-generate/SKILL.md",
   "plugins/soleur/skills/reproduce-bug/SKILL.md",
   "plugins/soleur/skills/test-browser/SKILL.md",
 ];

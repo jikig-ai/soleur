@@ -68,8 +68,7 @@ document.
 ### Why an allowlist and not a scan
 
 Because a scan cannot hold this line and a construction rule can. Every one of the following passes
-`plugins/soleur/skills/incident/scripts/redact-sentinel.sh` completely clean, because that engine
-matches **secrets**:
+`redact-sentinel.sh` completely clean, because that engine matches **secrets**:
 
 - the all-in monthly burn and the break-even user count from `knowledge-base/finance/cost-model.md`
 - a `PIVOT` validation verdict
@@ -90,10 +89,47 @@ the only part of this design that survives contact with a document written to be
 
 ## Step 3 — The redaction floor
 
-Before the file is written, run the document through
-`plugins/soleur/skills/incident/scripts/redact-sentinel.sh`, the same boundary
-`plugins/soleur/skills/legal-generate/SKILL.md` applies before it presents a draft. Dispatch on the
-exit code, fail-closed:
+Before the file is written, run the document through the redaction sentinel — the same boundary
+`soleur:legal-generate` applies before it presents a draft. Run this as ONE fence: each fenced block is
+a separate Bash call and shell state does not persist, so a preflight in one fence protects nothing in
+the next.
+
+```bash
+# PLUGIN IDENTITY FIRST (ADR-179 decision 2). `[[ -r "$SENTINEL" ]]` alone is a SHAPE check, and
+# ADR-179 §(a) measured that shape as bypassable: with an ambient CLAUDE_PLUGIN_ROOT pointing at an
+# attacker-chosen directory a `test -d` preflight PASSED and the hostile payload executed. Verify the
+# plugin's IDENTITY, and halt in THIS arm — a sibling halt further down the fence does not make this
+# check fail-closed.
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_QUESTIONNAIRE_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+       echo "questionnaire-generate: cannot verify the Soleur plugin installation — stopping before any document is written." >&2
+       echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart." >&2
+       echo "  Do NOT hand-write and send this document instead — the allowlist in Step 2 is what makes it safe to send, and this gate is the floor under it." >&2
+       exit 2; }
+
+SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
+[[ -r "$SENTINEL" ]] || { echo "SOLEUR_QUESTIONNAIRE_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
+       echo "questionnaire-generate: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
+       echo "  Expected at: [$SENTINEL]" >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur@soleur-marketplace', then RESTART Claude Code." >&2
+       exit 2; }
+
+# EMPTINESS IS A FAILURE, NOT A CLEAN SCAN. The sentinel exits 0 on zero bytes, so an unwritten draft
+# passes this gate vacuously and the preview then presents un-scanned text. Same shape as
+# legal-generate's `[ -s "$DRAFT" ]`.
+[ -s "$DRAFT" ] || { echo "SOLEUR_QUESTIONNAIRE_HALT reason=draft-empty draft=[$DRAFT]"
+       echo "questionnaire-generate: the draft is empty — nothing was scanned, so nothing is safe to send." >&2
+       echo "  Write the document into \"\$DRAFT\" in the SAME fence as this gate, then re-run." >&2
+       exit 2; }
+
+bash "$SENTINEL" "$DRAFT"
+sentinel_rc=$?
+```
+
+Dispatch on `$sentinel_rc`, fail-closed:
 
 - **0** — clean. Proceed.
 - **1** — matches found. Do not write and do not present. The allowlist was violated upstream; fix the
