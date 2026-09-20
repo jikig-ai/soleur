@@ -91,7 +91,9 @@ const ANCHOR_PREFIX = "${CLAUDE_PLUGIN_ROOT}/";
  * (#7450 phase-1-measurement.md §Arm 5, 2026-09-19): the loader substitutes ONLY the exact
  * braced literal `${CLAUDE_PLUGIN_ROOT}`, so the `:-` wrapper reached bash verbatim and
  * expanded empty in a session with neither variable set — which is what made all three
- * `/soleur:go` session gates take their degraded branch for a week with CI green over them.
+ * `/soleur:go` session gates take their degraded branch with CI green over them — Steps 0.0
+ * and 0 for 7 days, Step 0.5 for 3 (it did not exist until #8159 on 2026-09-16, so "all
+ * three, for a week" overstates the third).
  */
 const ROOT_ANCHOR_PREFIX = "${ROOT}/";
 const ROOT_ASSIGN_LITERAL = 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token';

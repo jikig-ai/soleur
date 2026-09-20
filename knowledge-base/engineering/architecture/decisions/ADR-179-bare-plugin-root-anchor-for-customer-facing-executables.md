@@ -882,9 +882,10 @@ three session-gate fences from the canonical braced token to
 inner `$CLAUDE_PLUGIN_ROOT` is unbraced and therefore **is not the loader's token**: the whole
 line reached bash verbatim and expanded empty in any session with neither variable exported —
 which is every local Claude Code session (§R3, A10). All three gates then took their degraded
-branch for a week, emitting only `reason=plugin-root-unverified`, while two CI guards pinned the
+branch, emitting only `reason=plugin-root-unverified`, while two CI guards pinned the
 broken literal and stayed green over it (#8308; #8283 §2 records the same symptom from a
-different session).
+different session). Measured window: Steps 0.0 and 0 from 2026-09-12, 7 days; Step 0.5 from
+2026-09-16, 3 days — it did not exist before #8159, so "all three, for a week" overstates it.
 
 **Measured before deciding** (#7450 `phase-1-measurement.md` §Arm 5, 2026-09-19, on the
 **command** surface, with a live decoy `CLAUDE_PLUGIN_ROOT` as the control on both runs):
@@ -895,6 +896,7 @@ different session).
 | `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` | literal | literal |
 | `$CLAUDE_PLUGIN_ROOT` | literal | literal |
 | `'${CLAUDE_PLUGIN_ROOT}'` | SUBSTITUTED | SUBSTITUTED |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` | literal | not re-run (Arm 3 measured it on the skill surface) |
 
 **Decision.** Each of the three fences carries one byte-identical resolver with this arm order:
 
@@ -921,10 +923,21 @@ Never a CWD default, in any arm (#7442, and option (d) above).
 | `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/…` | **`/…`** | **not the loader's token; reaches bash verbatim, expands EMPTY, and the guard `[ -n "$ROOT" ]` then takes the degraded branch on every session — fail-CLOSED on the safety axis and fail-OPEN on the "did the gate run" axis** |
 
 The last row is why #8308 is not #7453 in reverse. #7453 migrates skill sites whose `:-` default
-executes the customer's file; this form never executes anything. It makes a session-start gate a
-silent no-op, which is the failure ADR-177 names UNRESOLVED and which nothing alarmed on.
+executes the customer's file; this form executes nothing **when both variables are unset** —
+the row's stated condition, and the common case. It is not inert in general: with
+`GROK_PLUGIN_ROOT` exported, bash expands the construct at runtime and the gates execute
+whatever it names. Demonstrated at review against `main`'s own fences with a planted
+`{"name":"soleur"}` manifest — all three gates ran attacker-authored scripts, and `main`'s
+Step 0.5 fence carried **no identity check at all**, so a directory with no manifest executed
+too. What the unset case produces is a session-start gate that is a silent no-op, the failure
+ADR-177 names UNRESOLVED and which nothing alarmed on.
 
-**Arms 2 and 3 promote the identity preflight to the SOLE control, which A11 declined to do.**
+**Arms 2 and 3 rest on the identity preflight as their only control — and on Step 0.5 this
+change ADDS that control where there was none.** An earlier draft said the change "promotes"
+the preflight to a role A11 declined. Measured at review, that understated the change in its
+own favour: `main` already reached both arms (the #8061 form reaches bash, and bash expands it
+whenever `GROK_PLUGIN_ROOT` is set), and `main`'s Step 0.5 had no manifest check whatsoever. The
+arm order narrows the environment-controlled surface rather than widening it.
 On arm 1 the security claim is carried by the loader. On arms 2 and 3 the root comes from a
 runtime value, so the only thing standing between the gate and an attacker-chosen directory is
 `plugin.json` naming `soleur` — a **shape check, not authentication**: a planted directory
@@ -936,15 +949,26 @@ R6b ever goes red, someone has added the trust assertion A11 rejected, and A11 m
 before that row is changed.
 
 **Why arm 3 is confined to Step 0.5.** Step 0 dispatches `worktree-manager.sh cleanup-merged`.
-For a merged branch with **no** worktree, every one of that script's safety guards is gated on a
-non-empty worktree path and is therefore skipped, while the loop still reaches
-`git push origin --delete`, `git branch -D` and `git -C "$GIT_ROOT" reset --hard HEAD`; ADR-178
+For a merged branch with **no** worktree, every one of that script's PER-BRANCH safety guards is
+gated on a non-empty worktree path and is therefore skipped (`:2851`, the lease check `:2868`,
+`:2890`, `:2905`, `:2942`), while the loop still reaches `git push origin --delete` (`:2954`)
+and `git branch -D` (`:2960`), and the post-loop non-bare tail reaches
+`git -C "$GIT_ROOT" reset --hard HEAD` (`:2999`). Two guards are NOT per-branch and so are not
+in that list: the one-time reaper-arming hold (`:2860`), which fires for every branch on a
+machine whose stamp is unspent, and `cleanup_orphan_worktree_dirs`, which runs after the loop
+regardless and reaches `rm -rf --one-file-system`. ADR-178
 §Context calls the operation unrecoverable. Putting the cache arms in the shared resolver would
 make that gate newly reachable on a harness where it has always skipped. Step 0.5 only
 classifies the session and Step 0.0 only probes readiness (and already answers correctly through
 its inline `git rev-parse` fallback), so the cache arms buy cloud-mode classification — what
-Devin sessions actually need — at no blast radius. Extending Step 0 to Devin cloud is filed,
-explicitly gated on the script-side fix.
+Devin sessions actually need — at no MUTATING blast radius. (It is not zero: the gate classifies
+by *executing* a script from the resolved root, and its verdict then steers the agent to read
+that root's `devin/INSTRUCTIONS.md`. One `bash` exec, no `git` mutation.) Extending Step 0 to
+Devin cloud is filed as **#8401**, explicitly gated on the script-side fix **#8400**. #8401 must
+NOT be resolved by moving the cache arms into the shared resolver: measured on an ordinary LOCAL
+box — where `cloud-detect.sh` returns `not-local:no-devin-env`, so the session-class gate passes
+— that makes Step 0 dispatch `cleanup-merged` out of a stale `0.0.0-unversioned` Devin cache
+selected by `find … | head -1`.
 
 **Step 0 additionally gates on the SESSION CLASS, in its own fence.** Bash carries no state
 between fences (see §"Why the axes stay separate" item 3), so Step 0.5's verdict is unavailable
@@ -966,10 +990,15 @@ box carrying both installs, arm 3 is reached only when arms 1–2 produced nothi
 agent did not follow its own INSTRUCTIONS) and returns an identity-verified **Soleur** plugin —
 the same plugin, not another harness's.
 
-**A recorded inconsistency.** The 74-file `soleur-cloud-mode` fleet block resolves the same Devin
-cloud cache **by basename, with no `name=soleur` check**. go.md's arm 3 is now stricter than the
-fleet block it resembles. Filed rather than fixed here: widening 74 files is a different change
-with a different guard (`devin-cloud-mode.test.ts`).
+**A recorded inconsistency.** The `soleur-cloud-mode` fleet block — **67 blocks**, measured: 64
+skills + 3 Devin shims, which is what `devin-cloud-mode.test.ts` pins as `marked.length === 67`
+— resolves the same Devin cloud cache **by basename, with no `name=soleur` check**. (An earlier
+draft said 74; that figure was wrong here, in the plan, and in the filed issue's title.) go.md's
+arm 3 is now stricter than the fleet block it resembles — this change *reversed* the direction
+of the inconsistency, since go.md's Step 0.5 previously used the same basename recipe. Filed as
+**#8402** rather than fixed here: it is a different change behind a different guard, and the
+deferral rests on review scope rather than on mechanical cost (the block is a byte-identity-pinned
+literal with a canonical source, so widening it is one edit plus regeneration).
 
 **Marker vocabulary.** Each fence emits exactly one
 `SOLEUR_PLUGIN_ROOT_RESOLVE gate=<readiness|cloud-detect|session-start> source=<plugin-root-token|grok-env|devin-cache|none> verified=<true|false>`

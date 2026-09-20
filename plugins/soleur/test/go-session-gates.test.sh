@@ -15,9 +15,14 @@
 # run is UNRESOLVED, not passed).
 #
 # The loader's delivery transform is modelled by `deliver`, pinned by row H1 to
-# `arm4-probe/arm5-delivered.txt` — an artifact produced by a DIFFERENT process (a headless
-# `claude -p --plugin-dir` run, #8308 Phase 0 / Arm 5), so this diff cannot edit the
-# simulator into agreement with itself. Row H3 bypasses the simulator entirely.
+# `arm4-probe/arm5-delivered.txt` — a capture from a headless `claude -p --plugin-dir` run
+# (#8308 Phase 0 / Arm 5). Stated precisely, because the weaker claim is the true one: that
+# file is ADDED BY THIS DIFF, and H1 reads its comparison root back out of the capture's own
+# `BARE=` line, so the pin is self-consistent whatever that path is. What it establishes is
+# that the transform is context-free text replacement (the probe body is a QUOTED heredoc, so
+# bash expanded nothing — anything substituted came from the loader). Commit discipline, not
+# structure, is what keeps both sides from being edited together. Row H3 bypasses the
+# simulator entirely and is the only row that does.
 #
 # Verdict accounting is the fixture-relative-assert.test.sh TRIPLE-CHECK: counters, an
 # append-only VERDICT_LOG ledger, and an exit-time floor with the LEDGER as the authority.
@@ -82,8 +87,11 @@ GATE_UNVERIFIED_MARKERS=(
 # whenever the end pattern matches it, silently yielding an empty body that every downstream
 # assertion then passes over. The fence bookkeeping is `extract_gate_anchor()`'s from
 # plugins/soleur/skills/incident/test/redact-sentinel.test.sh with only the inner match changed;
-# it handles the info string and leading whitespace but NOT `~~~` or CRLF, which R10 asserts
-# go.md carries neither of rather than assuming it.
+# It handles leading whitespace. It does NOT handle an info string (the pattern is anchored to
+# end-of-line, so ```` ```bash title=x ```` does not match), nor `~~~`, nor CRLF — R10 asserts
+# go.md carries none of those rather than assuming it. An earlier version of this comment
+# credited the info-string handling to `extract_gate_anchor`; that property belongs to
+# `exec_lines`, a different helper in the same file, and neither source has it.
 #
 # The heading match is WHOLE-LINE equality, not `index($0, anchor) == 1`. A prefix match still
 # matched `## Step 0.5: Cloud Mode detection (renamed)`, so mutation row 14 -- renaming a gate

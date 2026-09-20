@@ -17,7 +17,7 @@ go-session-gates.test.sh: 72 passed, 60 failed, 132 assertion(s) executed (floor
 ```
 
 Red rows: R1, R2, R3, R3b(0), R3c, R4(partial), R5b, R5c, R6, R6b, R6c, R7, R8, R9, H2.
-Verbatim run: [`phase1-red-run.log`](./phase1-red-run.log).
+Verbatim run: [`phase1-red-run.txt`](./phase1-red-run.txt).
 
 `plugin-root-anchoring.test.ts` against the same tree: P1, P1b and P6 red, and **P6's own
 `checked` floor dropped 8 → 6** — the measurement that `ROOT_ASSIGN_LITERAL` was load-bearing
