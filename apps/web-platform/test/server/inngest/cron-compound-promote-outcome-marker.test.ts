@@ -91,6 +91,187 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(row).not.toHaveProperty("hostname");
   });
 
+  // -- Guard 3 (#8427): the refusal_detail sink transform -------------------
+  //
+  // `detail` is attacker-influenced. At two `checkDiffPaths` arms it is not
+  // git's diagnosis at all but a VERBATIM MODEL-CHOSEN string, so without a
+  // transform a prompt-injected proposer gets a free-text write channel into a
+  // third-party processor, weekly, on every refused cluster. These rows pin the
+  // transform, its ORDER, and its totality over entries.
+
+  /** Emit one refusal row and return the parsed `refusal_detail` array. */
+  const emitDetail = (
+    entries: Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"],
+  ): Record<string, unknown>[] => {
+    emitOutcomeMarker({ status: "completed", refusal_detail: entries });
+    expect(captured.lines).toHaveLength(1);
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    return row.refusal_detail as Record<string, unknown>[];
+  };
+
+  it("redacts credential shapes in `detail` before they reach the sink", () => {
+    const out = emitDetail([
+      {
+        cluster_hash: "abc",
+        reason: "diff-underivable-apply",
+        detail: "error: cannot read ghp_0123456789012345678901234567890123456789",
+      },
+    ]);
+    expect(out[0].detail).not.toMatch(/ghp_0123456789/);
+    expect(String(out[0].detail)).toMatch(/redacted/);
+  });
+
+  it("CLASSIFIES path-shaped tokens rather than relaying them", () => {
+    // The write-channel control. An allowlisted prefix is preserved (that IS
+    // the diagnostic the marker owes — which corpus was targeted) and the
+    // model-chosen remainder is elided.
+    const out = emitDetail([
+      {
+        cluster_hash: "abc",
+        reason: "diff-path-refused",
+        detail: "plugins/soleur/skills/attacker-chosen-slug/SKILL.md",
+      },
+    ]);
+    expect(out[0].detail).toBe("plugins/soleur/skills/[elided]");
+    expect(String(out[0].detail)).not.toMatch(/attacker-chosen-slug/);
+  });
+
+  it("collapses an UNRECOGNISED path to a constant, carrying no model-chosen bytes", () => {
+    const out = emitDetail([
+      {
+        cluster_hash: "abc",
+        reason: "diff-path-refused",
+        detail: "../../etc/evil-payload-the-model-picked",
+      },
+    ]);
+    expect(out[0].detail).toBe("[unclassified-path]");
+    expect(String(out[0].detail)).not.toMatch(/evil-payload/);
+  });
+
+  it("leaves NON-path stderr intact — the classification is per token, not whole-string", () => {
+    const out = emitDetail([
+      { cluster_hash: "abc", reason: "diff-underivable-apply", detail: "error: corrupt patch at line 3" },
+    ]);
+    expect(out[0].detail).toBe("error: corrupt patch at line 3");
+  });
+
+  it("caps AFTER redaction, not before", () => {
+    // Order row. `redactGithubSourcedText` substitutes markers that can be
+    // LONGER than what they replace, so a cap applied first can be exceeded by
+    // the time the row is written. The output must respect the cap regardless.
+    const long = "x".repeat(400);
+    const out = emitDetail([
+      { cluster_hash: "abc", reason: "diff-underivable-apply", detail: long },
+    ]);
+    expect(Array.from(String(out[0].detail)).length).toBeLessThanOrEqual(200);
+  });
+
+  it("the cap counts CODE POINTS and never leaves a lone surrogate", () => {
+    // `.slice(0, 200)` counts UTF-16 code units and can split an astral pair.
+    const out = emitDetail([
+      { cluster_hash: "abc", reason: "diff-underivable-apply", detail: "\u{1F600}".repeat(300) },
+    ]);
+    const detail = String(out[0].detail);
+    expect(Array.from(detail).length).toBeLessThanOrEqual(200);
+    // A lone surrogate would survive a round-trip as U+FFFD; assert none.
+    expect(detail).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(detail).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+
+  it("the transform is TOTAL over entries — every entry, not just the first", () => {
+    // A `.map` that transformed only [0], or a loop with an early break, passes
+    // a single-entry fixture. The second member is where that fails.
+    const out = emitDetail([
+      { cluster_hash: "a", reason: "diff-path-refused", detail: "secret/one-slug/x.md" },
+      { cluster_hash: "b", reason: "diff-path-refused", detail: "secret/two-slug/y.md" },
+      { cluster_hash: "c", reason: "diff-path-refused", detail: "secret/three-slug/z.md" },
+    ]);
+    expect(out).toHaveLength(3);
+    for (const e of out) expect(e.detail).toBe("[unclassified-path]");
+  });
+
+  it("relays the diff-shape fields untouched and carries no diff body", () => {
+    const out = emitDetail([
+      {
+        cluster_hash: "abc",
+        reason: "diff-empty",
+        detail: "empty or whitespace-only diff",
+        diff_len: 0,
+        diff_fenced: false,
+        diff_header_pair: false,
+        diff_hunk: false,
+      },
+    ]);
+    expect(out[0]).toMatchObject({
+      diff_len: 0,
+      diff_fenced: false,
+      diff_header_pair: false,
+      diff_hunk: false,
+    });
+  });
+
+  it("REBUILDS each entry: an unknown field is dropped, never relayed around the transform", () => {
+    // The spread-vs-destructure row. `{...entry, detail: t(entry.detail)}`
+    // would relay every future field — and an allowlist that decides which
+    // ENTRIES pass is not an allowlist of what they CARRY.
+    const rogue = {
+      cluster_hash: "abc",
+      reason: "diff-path-refused",
+      detail: "error: nothing",
+      smuggled: "model-chosen-payload",
+    } as unknown as NonNullable<Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"]>[number];
+    const out = emitDetail([rogue]);
+    expect(out[0]).not.toHaveProperty("smuggled");
+    expect(JSON.stringify(out)).not.toMatch(/model-chosen-payload/);
+  });
+
+  it("the entry cap still applies, and the transform runs on the surviving entries", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      cluster_hash: `h${i}`,
+      reason: "diff-path-refused",
+      detail: "unknown/slug/path.md",
+    }));
+    const out = emitDetail(many);
+    expect(out).toHaveLength(20);
+    for (const e of out) expect(e.detail).toBe("[unclassified-path]");
+  });
+
+  it("the discriminator keys survive an outcome that tries to shadow them", () => {
+    // They are written AFTER the spread. Before #8427 they were before it, so a
+    // widened or dynamically assembled outcome could overwrite the top-level
+    // boolean every reader keys on — and TypeScript's excess-property check
+    // does not fire on a spread.
+    const shadowing = {
+      status: "completed",
+      SOLEUR_COMPOUND_PROMOTE_OUTCOME: false,
+      fn: "not-the-cron",
+    } as unknown as Parameters<typeof emitOutcomeMarker>[0];
+    emitOutcomeMarker(shadowing);
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(row.SOLEUR_COMPOUND_PROMOTE_OUTCOME).toBe(true);
+    expect(row.fn).toBe("cron-compound-promote");
+  });
+
+  it("the handler never passes a bare `detail` to the ctx logger", () => {
+    // That logger reaches the SAME Better Stack source as the marker, and
+    // `verdict.detail` is now the untruncated, unredacted, unclassified form.
+    const handler = stripComments(
+      readFileSync(
+        join(__dirname, "..", "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts"),
+        "utf-8",
+      ),
+    );
+    // Scoped to the ctx-logger CALL, not the whole file: the in-memory
+    // ClusterOutcome return legitimately carries `detail: pathVerdict.detail`
+    // — that value is the sink transform's INPUT, and narrowing here is what
+    // keeps this row about the log line rather than about the data flow.
+    const call = handler.match(/logger\.warn\([\s\S]*?"diff-path-refused"/);
+    expect(call).not.toBeNull();
+    expect(call?.[0]).not.toMatch(/detail:/);
+    // ...and the Sentry copy goes through safeDetail.
+    expect(handler).toMatch(/detail:\s*safeDetail\(pathVerdict\.detail\)/);
+  });
+
   it("shape-scrubs error_message — the one free-text field — on the DEFAULT path", () => {
     // The instance carries no `redact` paths (sibling-marker boundary), so the
     // emitter must scrub the field itself; a mutant deleting that call must

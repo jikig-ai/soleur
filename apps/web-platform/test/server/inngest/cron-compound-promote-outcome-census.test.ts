@@ -270,3 +270,215 @@ describe("Guard 3 — replay safety of the outcome accumulators", () => {
     expect(returns.length).toBeGreaterThanOrEqual(9);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Guard 1 (#8427) — emit-site attribution of a `checkDiffPaths` refusal.
+//
+// PROPERTY: the multiset of `reason` literals carried by the `ok: false`
+// returns inside `checkDiffPaths`, keyed by site, matches the declared
+// `DiffPathVerdict["reason"]` union exactly.
+//
+// An AST census, not a regex one. A regex over comment-stripped text was the
+// first design and every one of its failure modes is real in this file: the
+// stripper reused above is line-oriented (`^\s*//`, `^\s*\*`), so it misses a
+// single-line `/* … */`, a `/**` opener and a TRAILING `// …` after code; the
+// file carries ~97 block-comment lines and narrates its own literals in them;
+// the two `underivable-unparsable-record` returns exceed 100 characters and
+// this repo has NO formatter config, so whether they are one line or three is
+// an implementer's choice; and hoisting the refusals behind an ordinary
+// `const refuse = (reason, detail) => ({ ok: false, reason, detail })` would
+// remove every `reason: "` literal from the window with the property intact.
+// The AST census is immune to all four by construction.
+//
+// Comparison is by SITE-KEYED MULTISET, not by set. Two sites legitimately
+// share `underivable-unparsable-record`; a plain set tolerates changing ONE of
+// them to another declared literal, leaving the set unchanged and the census
+// green while the property is false.
+import ts from "typescript";
+
+/**
+ * Both sides come from the parse tree: (a) the string-literal members of
+ * `DiffPathVerdict`'s `reason` property type, (b) the `reason` initializer of
+ * every `ok: false` object literal returned inside `checkDiffPaths`.
+ *
+ * Exported so the dispatch row can drive it with a source that has neither and
+ * assert it THROWS — a census finding nothing must never read as a pass.
+ */
+export function censusDiffReasons(src: string): {
+  declared: string[];
+  emitted: string[];
+} {
+  const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+  const declared: string[] = [];
+  const emitted: string[] = [];
+
+  const literalsOf = (node: ts.TypeNode | undefined): string[] => {
+    const out: string[] = [];
+    const walk = (n: ts.Node): void => {
+      if (ts.isLiteralTypeNode(n) && ts.isStringLiteral(n.literal)) out.push(n.literal.text);
+      n.forEachChild(walk);
+    };
+    if (node) walk(node);
+    return out;
+  };
+
+  const visit = (node: ts.Node): void => {
+    // (a) declared side — the `reason` member of the DiffPathVerdict union.
+    if (ts.isTypeAliasDeclaration(node) && node.name.text === "DiffPathVerdict") {
+      const walk = (n: ts.Node): void => {
+        if (ts.isPropertySignature(n) && ts.isIdentifier(n.name) && n.name.text === "reason") {
+          declared.push(...literalsOf(n.type));
+        }
+        n.forEachChild(walk);
+      };
+      walk(node);
+    }
+    // (b) emitted side — every `ok: false` return inside checkDiffPaths.
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "checkDiffPaths") {
+      const walk = (n: ts.Node): void => {
+        if (ts.isReturnStatement(n) && n.expression && ts.isObjectLiteralExpression(n.expression)) {
+          const props = n.expression.properties;
+          const isFalse = props.some(
+            (pr) =>
+              ts.isPropertyAssignment(pr) &&
+              ts.isIdentifier(pr.name) &&
+              pr.name.text === "ok" &&
+              pr.initializer.kind === ts.SyntaxKind.FalseKeyword,
+          );
+          if (isFalse) {
+            for (const pr of props) {
+              if (
+                ts.isPropertyAssignment(pr) &&
+                ts.isIdentifier(pr.name) &&
+                pr.name.text === "reason" &&
+                ts.isStringLiteral(pr.initializer)
+              ) {
+                emitted.push(pr.initializer.text);
+              }
+            }
+          }
+        }
+        n.forEachChild(walk);
+      };
+      walk(node);
+    }
+    node.forEachChild(visit);
+  };
+  visit(sf);
+
+  if (declared.length === 0) throw new Error("census found no declared reason literals");
+  if (emitted.length === 0) throw new Error("census found no emitted reason literals");
+  return { declared, emitted };
+}
+
+const sortedUnique = (xs: string[]): string[] => [...new Set(xs)].sort();
+
+describe("Guard 1 (#8427) — checkDiffPaths reason attribution", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+
+  it("every declared reason is emitted by a site, and every emitted one is declared", () => {
+    const { declared, emitted } = censusDiffReasons(readFileSync(SRC_PATH, "utf-8"));
+    // Set identity in BOTH directions. A one-way census is satisfied by a union
+    // that grows without emitters (mutation row 2).
+    expect(sortedUnique(emitted)).toEqual(sortedUnique(declared));
+    // The two shared-literal sites make emitted longer than declared.
+    expect(emitted.length).toBeGreaterThan(declared.length);
+  });
+
+  it("the two `underivable-unparsable-record` sites are both still present", () => {
+    // Site-keyed, not set-keyed: changing ONE of the two leaves the SET
+    // identical. This count is what makes that mutant observable here, and the
+    // two behavioural rows in the allowlist suite catch it a second time.
+    const { emitted } = censusDiffReasons(readFileSync(SRC_PATH, "utf-8"));
+    expect(emitted.filter((r) => r === "underivable-unparsable-record")).toHaveLength(2);
+  });
+
+  it("mutation row 2: a declared-but-unemitted member is RED", () => {
+    const src = readFileSync(SRC_PATH, "utf-8").replace(
+      '        | "path-refused";',
+      '        | "path-refused"\n        | "never-emitted";',
+    );
+    const { declared, emitted } = censusDiffReasons(src);
+    expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
+  });
+
+  it("mutation row 5: collapsing read-tree onto underivable-apply is RED", () => {
+    // Precondition holds — every emitted literal is still a declared member —
+    // yet two structurally different causes would share one reason.
+    const src = readFileSync(SRC_PATH, "utf-8").replace(
+      'reason: "underivable-read-tree"',
+      'reason: "underivable-apply"',
+    );
+    const { declared, emitted } = censusDiffReasons(src);
+    expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
+  });
+
+  it("mutation row 3 (dispatch): a census finding zero sites THROWS, never reads clean", () => {
+    expect(() => censusDiffReasons("export const x = 1;\n")).toThrow(/found no declared/);
+    expect(() =>
+      censusDiffReasons('type DiffPathVerdict = { reason: "a" };\n'),
+    ).toThrow(/found no emitted/);
+  });
+
+  it("mutation row 6 (comment): all three comment spellings leave the census unchanged", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const base = censusDiffReasons(src);
+    const spellings = [
+      // (a) asterisk-continuation line inside a block comment
+      ['export async function checkDiffPaths(', '/**\n * reason: "underivable-apply"\n */\nexport async function checkDiffPaths('],
+      // (b) single-line block comment
+      ['export async function checkDiffPaths(', '/* reason: "underivable-apply" */\nexport async function checkDiffPaths('],
+      // (c) TRAILING comment after a statement — stripped by NEITHER
+      //     line-oriented stripper in this repo, which is why this is a
+      //     three-spelling loop rather than one insertion.
+      ['const indexFile = join(', 'const zzz = 1; // reason: "underivable-apply"\n  const indexFile = join('],
+    ];
+    for (const [from, to] of spellings) {
+      expect(src).toContain(from);
+      const mutated = censusDiffReasons(src.replace(from, to));
+      expect(sortedUnique(mutated.emitted)).toEqual(sortedUnique(base.emitted));
+      expect(sortedUnique(mutated.declared)).toEqual(sortedUnique(base.declared));
+    }
+  });
+
+  it("mutation row 7 (refactor-tolerance): a `refuse()` helper keeps the census GREEN", () => {
+    // The property is unchanged by hoisting, so the census must not redden —
+    // a census that fails here is pinning formatting, not behaviour. Under the
+    // AST walk this holds by construction for the returns it can still see.
+    const src = [
+      'export type DiffPathVerdict =',
+      '  | { ok: true; paths: string[] }',
+      '  | { ok: false; reason: "a" | "b"; detail: string };',
+      'export async function checkDiffPaths(): Promise<DiffPathVerdict> {',
+      '  if (x) {',
+      '    return {',
+      '      ok: false,',
+      '      reason: "a",',
+      '      detail: "d",',
+      '    };',
+      '  }',
+      '  return { ok: false, reason: "b", detail: "d" };',
+      '}',
+    ].join("\n");
+    const { declared, emitted } = censusDiffReasons(src);
+    expect(sortedUnique(emitted)).toEqual(sortedUnique(declared));
+  });
+
+  it("harness row: the declared side comes from the AST, not a literal in this file", () => {
+    // If someone replaces the derived read with a hard-coded array of today's
+    // values, this row must redden. It does so by feeding a source whose union
+    // differs from production: a hard-coded declared side would still report
+    // today's members and the equality below would fail.
+    const src = [
+      'export type DiffPathVerdict =',
+      '  | { ok: true; paths: string[] }',
+      '  | { ok: false; reason: "only-one"; detail: string };',
+      'export async function checkDiffPaths(): Promise<DiffPathVerdict> {',
+      '  return { ok: false, reason: "only-one", detail: "d" };',
+      '}',
+    ].join("\n");
+    expect(censusDiffReasons(src).declared).toEqual(["only-one"]);
+  });
+});
