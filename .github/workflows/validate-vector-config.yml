@@ -25,6 +25,7 @@ on:
       - "apps/web-platform/infra/*.sh"
       - "apps/web-platform/test/infra/**"
       - ".github/workflows/validate-vector-config.yml"
+      - ".bun-version"
   pull_request:
     paths:
       - "apps/web-platform/infra/vector.toml"
@@ -36,6 +37,7 @@ on:
       - "apps/web-platform/infra/*.sh"
       - "apps/web-platform/test/infra/**"
       - ".github/workflows/validate-vector-config.yml"
+      - ".bun-version"
 
 permissions:
   contents: read
@@ -52,7 +54,7 @@ jobs:
       # TS primitive byte-for-byte; openssl is the secondary backstop).
       - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
-          bun-version: latest
+          bun-version-file: ".bun-version"
 
       # observability.ts imports @sentry/nextjs + @/server/* path aliases --
       # the fixture script's parity check needs node_modules to resolve those.
