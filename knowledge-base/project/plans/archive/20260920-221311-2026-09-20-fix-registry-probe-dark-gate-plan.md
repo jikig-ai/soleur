@@ -460,7 +460,7 @@ serving."* The existing assertion's `REFUSED \(webhook_path\).*op=registry-probe
 read-only, and gates nothing. The path to user harm is indirect: post-cutover `10.0.1.40` is the only
 cron scheduler, so a non-200 here can mean every scheduled job is down, and a remedy that misdirects
 the operator (2.0's "the cutover already completed: dispatch op=verify", which **D8** forbids, or a
-host REPLACE triggered off a 60-minute-stale flag, which **D8**'s staleness qualifier forbids)
+host REPLACE triggered off a 90-minute-stale flag, which **D8**'s staleness qualifier forbids)
 lengthens an outage in which no reminder email, no SLA sweep and no billing cron fires. The outage is
 always caused elsewhere; this arm only shortens or lengthens the diagnosis.
 
@@ -610,7 +610,7 @@ Every criterion below is a property of the ARTIFACT, verified by a named asserti
 - [ ] **AC3** — the caveat warning contains both clause openers and names the follow-up op.
 - [ ] **AC4** — `flag_armed` renders **four** distinct messages across the 2×2 (`__UNREAD__` ×
       `done` | `armed|flipping|flushed`); each names which sample it quotes; the probe-row `done`
-      branch carries the 60-minute staleness qualifier and does not interpolate `RPG_HB_AGE`; and no
+      branch carries the 90-minute staleness qualifier (60 as first written; the lib admits rows up to 5400s) and does not interpolate `RPG_HB_AGE`; and no
       `done` message contains "the cutover already completed", `op=verify` or `restart-inngest-server`.
 - [ ] **AC5** — every token the gate can emit has a `case` arm in the probe arm, checked by the SAME
       lib-derived loop the exec arm uses, with the `ERG_TOKEN_N -eq 11` non-vacuity row intact.

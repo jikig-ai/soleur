@@ -869,7 +869,7 @@ case "$OP" in
       # (2) THIS OP IS DISPATCHED OUTSIDE A WINDOW, frequently during an incident. 2.0's remedies
       # legitimately end in op=execute / op=resume / op=rollback; here every remedy ends at a READ,
       # and where recovery needs a mutating op the remedy points at the cutover runbook. Flat ban,
-      # not a qualifier: `! grep -qE 'op=(execute|resume|rollback|arm)'` over this region.
+      # not a qualifier: `! grep -qE 'op=(execute|resume|rollback|arm)'` over this region, comment-stripped (the suite strips comments first; this comment is the one hit otherwise).
       #
       # THE NON-200 MUST BE THE DEDICATED HOST'S FETCH FAILURE, NOT THE WEBHOOK PATH'S — same
       # discrimination 2.0 makes, with a different sibling op named, because naming
