@@ -6,7 +6,7 @@ issue: none
 supersedes: null
 ---
 
-# ADR-230: Pluggable web agent engines bind execution before dispatch
+# ADR-233: Pluggable web agent engines bind execution before dispatch
 
 **Number corrected 2026-09-17:** This feature initially used ADR-223. Merging
 main revealed that ADR-223 belongs to the per-harness hook-registry decision;
@@ -18,8 +18,9 @@ ADR-224 now belongs to slash-name uniqueness. This decision was ADR-225 at
 that point; the earlier dated ordinal history above remains unchanged.
 
 **Number corrected 2026-09-20:** A later main resync revealed that ADR-225
-was already used by the per-operation latched-flags decision. This decision is
-ADR-230; the earlier dated ordinal history above remains unchanged.
+was already used by the per-operation latched-flags decision. This decision was
+ADR-230 until the merged tree also introduced ADR-230, so it is now ADR-233;
+the earlier dated ordinal history above remains unchanged.
 
 ## Context
 

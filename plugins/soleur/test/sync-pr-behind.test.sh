@@ -4,6 +4,7 @@
 #   BEHIND + merge-tree clean → merge + push
 #   DIRTY  + merge-tree rc=0  → merge + push (the kb-index GitHub-DIRTY class)
 #   DIRTY  + merge-tree rc≠0  → exit 6
+#   BEHIND + merge in progress (staged resolution) → exit 9, nothing aborted (#8339)
 #
 # Synthesized file:// repos. PATH-shimmed `gh`. No network.
 set -uo pipefail
@@ -17,6 +18,12 @@ SUT="$REPO_ROOT/plugins/soleur/scripts/sync-pr-behind.sh"
 # git_fixture_env, the hermetic env for this suite's git fixture writes. It
 # sets -euo pipefail, so the +e below restores this suite's
 # accumulate-then-exit contract.
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every run (#8339 review).
+FIXTURES=()
+cleanup_fixtures() { rm -rf ${FIXTURES[@]+"${FIXTURES[@]}"}; }
+trap cleanup_fixtures EXIT
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$REPO_ROOT/plugins/soleur/test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
@@ -25,9 +32,6 @@ PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-FIXTURES=()
-cleanup_fixtures() { rm -rf ${FIXTURES[@]+"${FIXTURES[@]}"}; }
-trap cleanup_fixtures EXIT
 
 make_pair() {
   local d="$1"
@@ -167,6 +171,39 @@ else
 fi
 rm -rf "$DIRTY_CONFLICT"
 
+# --- BEHIND + a merge already in progress: refuse, abort nothing (#8339) ------
+INPROG="$(mktemp -d "$TMPDIR/sync-behind-inprogress.XXXXXXXX")"
+FIXTURES+=("$INPROG")
+make_pair "$INPROG"
+git clone -q "file://$INPROG/origin.git" "$INPROG/mainwt"
+git -C "$INPROG/mainwt" config user.email t@t
+git -C "$INPROG/mainwt" config user.name t
+git -C "$INPROG/mainwt" checkout -q main
+echo main-side > "$INPROG/mainwt/f"
+git -C "$INPROG/mainwt" commit -q -am main-side
+git -C "$INPROG/mainwt" push -q origin main
+echo feat-side > "$INPROG/work/f"
+git -C "$INPROG/work" commit -q -am feat-side
+git -C "$INPROG/work" push -q origin feat
+# The operator started the merge, hit the conflict, and staged a resolution.
+git -C "$INPROG/work" fetch -q --no-tags origin main
+git -C "$INPROG/work" merge origin/main --no-edit >/dev/null 2>&1
+echo resolved > "$INPROG/work/f"
+git -C "$INPROG/work" add f
+install_gh "$INPROG/bin" "OPEN BEHIND"
+PATH="$INPROG/bin:$PATH" bash "$INPROG/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 >"$INPROG/out" 2>&1
+rc=$?
+if [[ "$rc" -eq 9 ]] \
+   && git -C "$INPROG/work" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+   && [[ "$(git -C "$INPROG/work" diff --cached --name-only)" == "f" ]] \
+   && [[ "$(cat "$INPROG/work/f")" == "resolved" ]] \
+   && grep -q 'merge in progress' "$INPROG/out"; then
+  pass "BEHIND merge-in-progress: exit 9, MERGE_HEAD kept, staged resolution survived"
+else
+  fail "BEHIND merge-in-progress: rc=$rc (want 9) merge_head=$(git -C "$INPROG/work" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && echo yes || echo no) staged=$(git -C "$INPROG/work" diff --cached --name-only | tr '\n' ' ') out=$(tr '\n' ' ' < "$INPROG/out")"
+fi
+rm -rf "$INPROG"
+
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 4 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 5 ]]
 exit $?

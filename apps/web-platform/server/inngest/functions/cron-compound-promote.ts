@@ -906,6 +906,7 @@ export async function cronCompoundPromoteHandler({
         outputConfig: { format: { type: "json_schema", schema: CLUSTER_OUTPUT_SCHEMA } },
         // #cost-attribution (plan Phase 2, choke point #3): real per-cron spend.
         markerSource: "cron-compound-promote",
+        markerRunId: runId,
       });
 
       if (stopReason === "max_tokens") {

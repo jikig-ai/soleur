@@ -174,6 +174,8 @@ path alone cannot show that replay drift is visible.
 
 87. A subsequent main resync made that allocation stale: upstream had claimed ADR-225 for the per-operation latched-flags decision, so the feature decision collided with main and failed the ordinal guard. The feature decision was renumbered to ADR-230, with its plan, task ledger, and decision link updated. **Prevention:** rerun the ordinal guard after every main resync and allocate from the merged tree, not from the pre-resync branch.
 
+88. The same resync-and-regenerate cycle exposed a second collision: merged main had since claimed ADR-230 for temporary debug probes. The feature decision was renumbered again to ADR-233 and its index/link references were regenerated. **Prevention:** run the ordinal guard only after the complete merge and artifact regeneration, then choose the next free ordinal in that resulting tree.
+
 75. The settings regression commit's fresh hook run captured the full-gate failure identity: `scripts/test-all.sh` ran 439 suites (429 passed, 6 failed, 4 skipped); failing suites were `scripts/lint-legal-scope-block-placement-unit`, `apps/web-platform [repo-wide+component]`, `plugins/soleur/test/_base-notice-frontmatter.test.sh`, `plugins/soleur/test/notice-frontmatter.test.sh`, `.claude/hooks/guardrails.test.sh`, and `scripts/lib/scratch-root.test.sh`. The changed settings suites, ESLint, and TypeScript check passed separately. **Prevention:** preserve the complete gate log and report the exact failing suite set; do not infer that an aggregate failure belongs to the changed files or claim the aggregate gate is green from focused evidence.
 
 76. Bounded reruns isolated the aggregate failures further: the legal-scope unit returned 16 failures, the scratch-root test exposed two `env` option-ordering defects that let ambient `XDG_CACHE_HOME` override its HOME fixtures, and the representative web-platform component test failed before exercising the hook because the component project exposes no `localStorage` (`localStorage.clear` is undefined). The notice-frontmatter scripts reached their final timing case without a terminating status in the bounded shell probe, and an aggregate Vitest child outlived its wait window until explicitly terminated. **Prevention:** run failing suites one at a time with explicit exit capture, place `env --unset` options before assignments, classify environment/setup failures separately from product regressions, and terminate orphaned test processes before editing or committing the worktree.
@@ -200,7 +202,7 @@ path alone cannot show that replay drift is visible.
 
 ## Related
 
-- `knowledge-base/engineering/architecture/decisions/ADR-230-pluggable-web-agent-engine-boundary.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-233-pluggable-web-agent-engine-boundary.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/codex-qualification-record.md`
 
 ## Tags

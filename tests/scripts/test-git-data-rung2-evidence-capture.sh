@@ -201,6 +201,91 @@ make_probe() {  # $1 = exit code the stub reports (0 accepting | 4 refused | 2 u
 make_probe 0
 export BETTERSTACK_INGEST_PROBE="$PROBE"
 
+# ── THE RUN-RESOLUTION SEAM'S STUB (#8010) ────────────────────────────────────────
+#
+# git_data_rung2_rehearsal_gate resolves the evidence URL's run against the GitHub Actions
+# API. This suite must run offline and must not depend on whether a token happens to be in the
+# environment, so the gate's `SOLEUR_RUNG2_RUN_FETCH` seam is pointed here — on ONE invocation
+# only (see the producer/consumer row). The contract is the seam's: argv is the API path
+# suffix, stdout is the body followed by the HTTP status on its own last line, and nothing
+# else. Shapes are the API's own field names (cq-test-fixtures-synthesized-only: no live
+# response, no token, is embedded).
+RUN_FETCH="$TMP/run-fetch-stub.sh"
+cat > "$RUN_FETCH" <<'FETCHEOF'
+#!/usr/bin/env bash
+case "$1" in
+  */artifacts*)
+    printf '{"total_count":1,"artifacts":[{"name":"git-data-rung2-boot-evidence","expired":false}]}\n200\n' ;;
+  *)
+    printf '{"id":%s,"head_sha":"%s","status":"completed","conclusion":"success","event":"workflow_dispatch","head_branch":"main","path":".github/workflows/git-data-rung2-rehearsal.yml","name":"git-data rung-2 boot rehearsal","created_at":"2026-09-19T00:00:00Z"}\n200\n' \
+      "${RUN_FETCH_ID:-0}" "${RUN_FETCH_SHA:-}" ;;
+esac
+FETCHEOF
+chmod +x "$RUN_FETCH"
+
+# ── the consult, driven end to end through the real transient() ─────────────────────
+#
+# A STUB, because these verdicts are not reachable against the live API from a suite that must
+# run offline. It records its argv so the CALL SHAPE is assertable too: a stub that answered
+# identically regardless of arguments could not detect the caller dropping the window, which is
+# defect 5. Fixtures model the measured production schema (cq-test-fixtures-synthesized-only);
+# no live token appears in any of them.
+SENTRY_STUB="$TMP/sentry-stub.sh"
+SENTRY_ARGV="$TMP/sentry-argv.txt"
+cat > "$SENTRY_STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SENTRY_ARGV_FILE"
+[[ -n "${STUB_RC:-}" && "${STUB_RC}" != "0" ]] && { echo "stubbed refusal"; exit "$STUB_RC"; }
+# (#8210) ARGV DISPATCH, for the same reason the Better Stack stub dispatches semantically: the
+# real reader sends TWO different queries. The default host-events read is pinned to
+# `level:fatal`; only the --stage read can return a level:info luks_reopen_ok row. A stub that
+# answered identically would hand the reopen row to the FATAL consult, making a healthy reset
+# read as a fatal — and, in the other direction, would let the SUT drop --stage entirely and
+# still pass. STUB_STAGE_BODY answers the --stage call; STUB_BODY answers the fatal call.
+# (#8010) A THIRD QUERY. `--liveness` asks whether the SOURCE is answering at all, and it is
+# what turns a zero-row fatal read into CLEAN rather than UNAVAILABLE. It answered through the
+# STUB_BODY branch before, which returned `{"data":[]}` on every no-fatal arm — so the CLEAN
+# branch of _sentry_consult was unreachable from this suite and every PASS-path evidence file
+# it wrote recorded a degrade. The DEFAULT is a live source (a positive `count()`), because
+# that is the ordinary production state; STUB_LIVENESS_BODY overrides it for the dark-source
+# arms.
+if printf '%s' "$*" | grep -q -- '--liveness '; then
+  # The default is held in a variable rather than written inline in `${VAR:-...}`: the
+  # liveness body NESTS a brace, and an unescaped inner `}` closes the parameter expansion
+  # early — measured here, it emitted `{"data":[{"count()":7]}}`, which jq reads as empty, so
+  # every arm degraded to UNAVAILABLE for a reason that had nothing to do with the SUT.
+  _live_default='{"data":[{"count()":7}]}'
+  printf '%s\n' "${STUB_LIVENESS_BODY:-$_live_default}"
+  exit 0
+fi
+if printf '%s' "$*" | grep -q -- '--stage '; then
+  printf '%s\n' "${STUB_STAGE_BODY:-{\"data\":[]\}}"
+  exit 0
+fi
+printf '%s\n' "${STUB_BODY:-{\"data\":[]\}}"
+exit 0
+STUBEOF
+chmod +x "$SENTRY_STUB"
+
+run_sut_sentry() {  # $1 = STUB_RC, $2 = STUB_BODY, rest appended to the SUT
+  local rc="$1" body="$2"; shift 2
+  # SOLEUR_TEST_MODE IS REQUIRED, and that it is required is the point: the SUT honours
+  # SOLEUR_SENTRY_READER only under this marker, because the script runs under
+  # `doppler run -c prd_terraform` where a bare env override would be an arbitrary-command
+  # sink one config entry away (CWE-427). These arms are what prove the gate is load-bearing:
+  # drop SOLEUR_TEST_MODE and all four Sentry arms redden, measured.
+  SOLEUR_TEST_MODE=1 \
+  SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
+  SENTRY_ISSUE_RO_TOKEN='stub-token-not-a-real-credential' \
+  STUB_RC="$rc" STUB_BODY="$body" \
+    run_sut "$@"
+}
+
+# The measured production shape: stage, rc and detail per EVENT.
+_FATAL_WITH_CAUSE='{"data":[{"timestamp":"2026-07-31T17:11:22+00:00","level":"fatal","host_name":"H","stage":"luks_open","rc":"32","detail":"mount: /mnt/git-data-luks: mount(2) system call failed: No such process."}]}'
+_FATAL_NO_CAUSE='{"data":[{"timestamp":"2026-07-31T17:11:22+00:00","level":"fatal","host_name":"H","stage":"luks_open","rc":"32","detail":""}]}'
+_NO_FATAL='{"data":[]}'
+
 ANCHOR_LIVE="$TMP/anchor-live.jsonl"
 ANCHOR_DEAD="$TMP/anchor-dead.jsonl"
 # THE REAL ROW SHAPE. ANCHOR_SQL selects `JSONExtractString(raw,'host_name') AS host`, so
@@ -216,7 +301,13 @@ HOSTROWS="$TMP/rows-pass.jsonl"
 row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=yes > "$HOSTROWS"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
 OUT="$TMP/evidence-pass.env"
-out="$(run_sut --out "$OUT")"; rc=$?
+# (#8010) THE PASS PATH RUNS WITH THE SECOND CHANNEL ANSWERING, and answering CLEAN. The
+# producer/consumer row below hands THIS file to git_data_rung2_rehearsal_gate, and the gate
+# now refuses `RUNG2_SENTRY_CROSSCHECK=NOT_RUN` outright and HOLDs `UNAVAILABLE` unless a human
+# acknowledges it. Run bare — no reader, no token — this arm wrote NOT_RUN, i.e. evidence the
+# gate is right to refuse, which would have made the arm named "producer/consumer are bound"
+# assert the opposite of its own name for a reason unrelated to either.
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$OUT")"; rc=$?
 if [[ "$rc" -eq 0 ]]; then pass "all-positive boot_complete => exit 0 (PASS)"; else
   fail "all-positive boot_complete => exit 0 (PASS)" "$rc" "$out"; fi
 if [[ -f "$OUT" ]]; then pass "PASS writes the evidence file"; else
@@ -238,7 +329,25 @@ if [[ -f "$OUT" ]]; then
     || fail "the evidence could be committed alone into the fixture repository" "1" "git commit failed"
   if cmp -s "$OUT" "$OUT_TRACKED"; then pass "the tracked evidence is byte-identical to what the SUT wrote"; else
     fail "the tracked evidence is byte-identical to what the SUT wrote" "1" "cmp differs"; fi
-  if gate_out="$(git_data_rung2_rehearsal_gate "$FIX/cloud-init-git-data.yml" "$OUT_TRACKED" 2>&1)"; then
+  # (#8010 task 1.13) THE RUN-RESOLUTION SEAM, AS A PER-COMMAND PREFIX ON THIS ONE CALL.
+  # The gate resolves the evidence URL's run against the Actions API; offline, it must be
+  # handed a stub. The prefix form is NOT a style choice here: this suite's OTHER arms exist
+  # to prove the SUT honours `SOLEUR_SENTRY_READER` only under `SOLEUR_TEST_MODE` (CWE-427 —
+  # under `doppler run -c prd_terraform` a bare env override is an arbitrary-command sink one
+  # config entry away). Exporting `SOLEUR_TEST_MODE` suite-wide would disarm that double gate
+  # for every arm downstream of the export, which is the property those arms measure. Scoped
+  # to this command, it cannot reach them. (It is additionally inside a command substitution,
+  # so even bash's assignment-persistence-for-functions rule cannot leak it to the suite.)
+  #
+  # `head_sha` is the FIXTURE's own HEAD, read after the evidence commit: the gate re-hashes
+  # `git archive <head_sha>:<repo-rel-dir>` and compares it to the recorded hash, so a stub
+  # naming any other sha asserts nothing about the producer. `$FIX` is repo-root-shaped, so
+  # this also exercises the `<sha>:` (repo-root) form of that archive path.
+  _fix_head="$(git -C "$FIX" rev-parse HEAD)"
+  if gate_out="$(SOLEUR_TEST_MODE=1 SOLEUR_RUNG2_RETRY_SLEEP=0 \
+                 SOLEUR_RUNG2_RUN_FETCH="$RUN_FETCH" \
+                 RUN_FETCH_ID="${URL##*/}" RUN_FETCH_SHA="$_fix_head" \
+                 git_data_rung2_rehearsal_gate "$FIX/cloud-init-git-data.yml" "$OUT_TRACKED" 2>&1)"; then
     pass "the written evidence RELEASES the rung-2 gate (producer/consumer are bound)"
   else
     fail "the written evidence does not satisfy the gate it exists to release" "1" "$gate_out"
@@ -950,52 +1059,12 @@ else
        "files_read=${_eyeball_files}/3 hits=${_eyeball_hits}"
 fi
 
-# ── the consult, driven end to end through the real transient() ─────────────────────
+# ── the consult, driven end to end through the real transient() ───────────────────
 #
-# A STUB, because these verdicts are not reachable against the live API from a suite that must
-# run offline. It records its argv so the CALL SHAPE is assertable too: a stub that answered
-# identically regardless of arguments could not detect the caller dropping the window, which is
-# defect 5. Fixtures model the measured production schema (cq-test-fixtures-synthesized-only);
-# no live token appears in any of them.
-SENTRY_STUB="$TMP/sentry-stub.sh"
-SENTRY_ARGV="$TMP/sentry-argv.txt"
-cat > "$SENTRY_STUB" <<'STUBEOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$SENTRY_ARGV_FILE"
-[[ -n "${STUB_RC:-}" && "${STUB_RC}" != "0" ]] && { echo "stubbed refusal"; exit "$STUB_RC"; }
-# (#8210) ARGV DISPATCH, for the same reason the Better Stack stub dispatches semantically: the
-# real reader sends TWO different queries. The default host-events read is pinned to
-# `level:fatal`; only the --stage read can return a level:info luks_reopen_ok row. A stub that
-# answered identically would hand the reopen row to the FATAL consult, making a healthy reset
-# read as a fatal — and, in the other direction, would let the SUT drop --stage entirely and
-# still pass. STUB_STAGE_BODY answers the --stage call; STUB_BODY answers the fatal call.
-if printf '%s' "$*" | grep -q -- '--stage '; then
-  printf '%s\n' "${STUB_STAGE_BODY:-{\"data\":[]\}}"
-  exit 0
-fi
-printf '%s\n' "${STUB_BODY:-{\"data\":[]\}}"
-exit 0
-STUBEOF
-chmod +x "$SENTRY_STUB"
-
-run_sut_sentry() {  # $1 = STUB_RC, $2 = STUB_BODY, rest appended to the SUT
-  local rc="$1" body="$2"; shift 2
-  # SOLEUR_TEST_MODE IS REQUIRED, and that it is required is the point: the SUT honours
-  # SOLEUR_SENTRY_READER only under this marker, because the script runs under
-  # `doppler run -c prd_terraform` where a bare env override would be an arbitrary-command
-  # sink one config entry away (CWE-427). These arms are what prove the gate is load-bearing:
-  # drop SOLEUR_TEST_MODE and all four Sentry arms redden, measured.
-  SOLEUR_TEST_MODE=1 \
-  SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
-  SENTRY_ISSUE_RO_TOKEN='stub-token-not-a-real-credential' \
-  STUB_RC="$rc" STUB_BODY="$body" \
-    run_sut "$@"
-}
-
-# The measured production shape: stage, rc and detail per EVENT.
-_FATAL_WITH_CAUSE='{"data":[{"timestamp":"2026-07-31T17:11:22+00:00","level":"fatal","host_name":"H","stage":"luks_open","rc":"32","detail":"mount: /mnt/git-data-luks: mount(2) system call failed: No such process."}]}'
-_FATAL_NO_CAUSE='{"data":[{"timestamp":"2026-07-31T17:11:22+00:00","level":"fatal","host_name":"H","stage":"luks_open","rc":"32","detail":""}]}'
-_NO_FATAL='{"data":[]}'
+# The stub, `run_sut_sentry` and the fixture bodies are defined ABOVE, beside the Better Stack
+# stub, because ARM 1's PASS path now needs a CLEAN cross-check to hand the producer/consumer
+# row evidence the gate will release (#8010: NOT_RUN is refused outright and UNAVAILABLE HOLDs
+# unless acknowledged). Only the arms follow here.
 
 # ARM 17 — A SENTRY FATAL UPGRADES A BETTER-STACK-SILENT TRANSIENT TO A NAMED FAIL. This is
 # #7481's whole thesis: the 2026-07-31 rehearsal died at luks_open, which is BEFORE
@@ -1588,6 +1657,229 @@ if [[ "$rc" -eq 64 ]]; then pass "ARM 38: a malformed --reboot-since is refused 
   fail "ARM 38: a malformed --reboot-since is refused (64)" "$rc" "$out"; fi
 
 
+
+# ══ ARMS C1-C6 (#8010) — the capture's half of the load-bearing rung-2 gate ═══════════
+#
+# The gate this script writes for stopped being advisory: `RUNG2_SENTRY_CROSSCHECK=NOT_RUN` is
+# refused outright, `UNAVAILABLE` HOLDs unless a human acknowledges it by run id, and the
+# host/run pair is resolved against the Actions API. Every one of those reads a field THIS
+# script is the sole writer of, so the arms below pin the write side.
+
+# ── C1 — GUARD 4: THE HOST AND THE URL MUST NAME THE SAME RUN ────────────────────────
+#
+# Both shapes validate independently while still describing two different rehearsals. The
+# evidence binds a user_data hash MEASURED ON THE HOST to the run whose log proves it; a
+# mismatched pair makes the gate resolve a run that did not produce these bytes, and the gate
+# cannot tell — the URL is all it has. This script is the only writer of the pair.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
+OUT_C1="$TMP/ev-c1.env"
+out="$(BETTERSTACK_QUERY_SH="$STUB" \
+       BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+       bash "$SUT" --host-name "$HOST" \
+         --evidence-url "https://github.com/jikig-ai/soleur/actions/runs/99999999999" \
+         --divergence "$DIVERGENCE" --cloud-init "$FIX/cloud-init-git-data.yml" \
+         --out "$OUT_C1" 2>&1)"; rc=$?
+if [[ "$rc" -eq 64 && ! -f "$OUT_C1" ]]; then
+  pass "C1: a host/url pair naming DIFFERENT runs is refused (64) and writes no evidence"
+else
+  fail "C1: a host/url pair naming DIFFERENT runs is refused (64) and writes no evidence" "$rc" "$out"
+fi
+# THE MESSAGE NAMES BOTH IDS. A refusal that says only "mismatch" sends the operator back to
+# re-read two long strings; this route's whole failure mode is a value that looks right.
+if [[ "$out" == *"17250000001"* && "$out" == *"99999999999"* ]]; then
+  pass "C1: the refusal names the host's run id AND the url's"
+else
+  fail "C1: the refusal names the host's run id AND the url's" "$rc" "$out"
+fi
+
+# C1b — MUTATION 3 FROM GUARD 4'S MATRIX: `--host-name` twice, first coupled and second not.
+# The parse is last-wins, so a check placed INSIDE the parse loop (or against the first value)
+# would pass a pair the writer then contradicts. The check lives after the loop, where both
+# variables hold what the writer will use.
+OUT_C1B="$TMP/ev-c1b.env"
+out="$(BETTERSTACK_QUERY_SH="$STUB" \
+       BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+       bash "$SUT" --host-name "$HOST" --host-name "soleur-git-data-rehearsal-99999999999" \
+         --evidence-url "$URL" --divergence "$DIVERGENCE" \
+         --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_C1B" 2>&1)"; rc=$?
+if [[ "$rc" -eq 64 && ! -f "$OUT_C1B" ]]; then
+  pass "C1b: a second, uncoupled --host-name (last-wins) is still refused"
+else
+  fail "C1b: a second, uncoupled --host-name (last-wins) is still refused" "$rc" "$out"
+fi
+
+# ── C2 (MUST-PASS) — THE NON-CANONICAL RE-RUN URL STILL COUPLES ──────────────────────
+#
+# GitHub serves `.../runs/<id>/attempts/<n>` on a re-run, and the rehearsal workflow builds its
+# URL from `${GITHUB_RUN_ID}` — so a coupling check that compared the whole tail rather than the
+# first path segment would refuse the one shape a re-run produces. A guard that only ever
+# refuses is not the guard; this is the half that keeps C1 from being a tautology.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
+OUT_C2="$TMP/ev-c2.env"
+out="$(SOLEUR_TEST_MODE=1 SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
+       SENTRY_ISSUE_RO_TOKEN='stub-token-not-a-real-credential' STUB_BODY="$_NO_FATAL" \
+       BETTERSTACK_QUERY_SH="$STUB" \
+       BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+       bash "$SUT" --host-name "$HOST" --evidence-url "${URL}/attempts/2" \
+         --divergence "$DIVERGENCE" --cloud-init "$FIX/cloud-init-git-data.yml" \
+         --out "$OUT_C2" 2>&1)"; rc=$?
+if [[ "$rc" -eq 0 && -f "$OUT_C2" ]]; then
+  pass "C2: the re-run URL shape (.../runs/<id>/attempts/2) is ACCEPTED"
+else
+  fail "C2: the re-run URL shape (.../runs/<id>/attempts/2) is ACCEPTED" "$rc" "$out"
+fi
+if grep -qF "RUNG2_EVIDENCE_URL=${URL}/attempts/2" "$OUT_C2" 2>/dev/null; then
+  pass "C2: and the attempt-pinned URL is recorded verbatim, not normalised away"
+else
+  fail "C2: and the attempt-pinned URL is recorded verbatim, not normalised away" "$rc" \
+       "$(grep RUNG2_EVIDENCE_URL "$OUT_C2" 2>/dev/null || echo '<no key>')"
+fi
+
+# ── C3 — THE LIVENESS WINDOW IS DECOUPLED FROM THE FATAL WINDOW ──────────────────────
+#
+# The anchor asks whether the INSTRUMENT is answering. That is a question about the last day,
+# not about this run's two minutes: inherited from `--since`, it asked whether any OTHER host
+# emitted inside a two-minute window, whose honest answer on a quiet Sunday is "no" — which
+# downgraded a genuine CLEAN to UNAVAILABLE, and UNAVAILABLE now HOLDs the gate. The fatal read
+# MUST stay run-pinned (defect 5), so both halves are asserted on the SAME invocation.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --since 2026-09-02T10:00:00 --out "$TMP/ev-c3.env")"; rc=$?
+_c3_live="$(grep -- '--liveness' "$SENTRY_ARGV" | head -1)"
+if [[ "$_c3_live" == "--liveness ${HOST} --stats-period 24h" ]]; then
+  pass "C3: the liveness read is --stats-period 24h, whatever --since says"
+else
+  fail "C3: the liveness read is --stats-period 24h, whatever --since says" "$rc" "${_c3_live:-<no --liveness call>}"
+fi
+if [[ -n "$_c3_live" && "$_c3_live" != *"--start"* && "$_c3_live" != *"2026-09-02T10:00:00"* ]]; then
+  pass "C3: ...and carries no --start, so it cannot inherit the run-pinned window"
+else
+  fail "C3: ...and carries no --start, so it cannot inherit the run-pinned window" "$rc" "${_c3_live:-<no --liveness call>}"
+fi
+# THE OTHER DIRECTION, on the same argv log: decoupling the anchor must not widen the FATAL
+# read, which is the one whose window is the verdict.
+if grep -- '--host-events' "$SENTRY_ARGV" | grep -q -- '--start 2026-09-02T10:00:00'; then
+  pass "C3: the --host-events fatal read stays pinned to --since"
+else
+  fail "C3: the --host-events fatal read stays pinned to --since" "$rc" "$(cat "$SENTRY_ARGV" 2>/dev/null)"
+fi
+
+# ── C4 — ARTIFACT 4 RECORDS THE LIVENESS QUESTION, THE HOLD AND THE SCOPE ────────────
+#
+# The evidence file is what the human at the second gate reads and what the machine gate reads.
+# It recorded only the fatal query, described UNAVAILABLE as advisory (it is not, any more),
+# and said nothing about the reset arm re-running the consult without re-recording it. $OUT is
+# ARM 1's PASS-path file — the bytes the producer/consumer row hands to the gate.
+if grep -qF -- "# QUERY: sentry-issue.sh --liveness ${HOST} --stats-period 24h" "$OUT" 2>/dev/null; then
+  pass "C4: ARTIFACT 4 records the LIVENESS query beside the fatal one"
+else
+  fail "C4: ARTIFACT 4 records the LIVENESS query beside the fatal one" "n/a" \
+       "$(grep -n 'QUERY: sentry-issue' "$OUT" 2>/dev/null || echo '<no sentry QUERY line>')"
+fi
+if grep -q 'RUNG2_SENTRY_CROSSCHECK_ACK' "$OUT" 2>/dev/null \
+   && grep -qi 'HOLD' "$OUT" 2>/dev/null; then
+  pass "C4: ...and says UNAVAILABLE now HOLDs the gate unless acknowledged"
+else
+  fail "C4: ...and says UNAVAILABLE now HOLDs the gate unless acknowledged" "n/a" \
+       "$(grep -n 'ARTIFACT 4' -A 8 "$OUT" 2>/dev/null || echo '<no ARTIFACT 4 block>')"
+fi
+if grep -q '^# SCOPE: this verdict covers the PRE-RESET window only' "$OUT" 2>/dev/null; then
+  pass "C4: ...and scopes the key to the PRE-RESET window"
+else
+  fail "C4: ...and scopes the key to the PRE-RESET window" "n/a" \
+       "$(grep -n 'SCOPE' "$OUT" 2>/dev/null || echo '<no SCOPE note>')"
+fi
+# EXACTLY ONE. The gate counts this key before it reads its value: a file carrying both CLEAN
+# and UNAVAILABLE would otherwise release on whichever the parser reached last.
+if [[ "$(grep -c '^RUNG2_SENTRY_CROSSCHECK=' "$OUT" 2>/dev/null)" -eq 1 ]]; then
+  pass "C4: the evidence carries RUNG2_SENTRY_CROSSCHECK exactly once"
+else
+  fail "C4: the evidence carries RUNG2_SENTRY_CROSSCHECK exactly once" "n/a" \
+       "$(grep -c '^RUNG2_SENTRY_CROSSCHECK=' "$OUT" 2>/dev/null)"
+fi
+
+# ── C5 — THE RESET ARM RECORDS ITS REAL END TIMESTAMP ────────────────────────────────
+#
+# The appended QUERY line wrote the literal string `<now>`: not a timestamp, not replayable,
+# and the one field that says how far past the reset this arm looked. $OUT_RB is ARM 28's
+# MUST-PASS production-shape file, so this cannot pass against an arm that never ran.
+_c5_line="$(grep -- '--stage luks_reopen_ok' "$OUT_RB" 2>/dev/null | head -1)"
+if [[ "$_c5_line" =~ --end\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+  pass "C5: the reset arm's recorded --end is a RESOLVED timestamp"
+else
+  fail "C5: the reset arm's recorded --end is a RESOLVED timestamp" "n/a" "${_c5_line:-<no luks_reopen_ok QUERY line>}"
+fi
+if [[ -n "$_c5_line" && "$_c5_line" != *"<now>"* ]]; then
+  pass "C5: ...and never the literal <now>"
+else
+  fail "C5: ...and never the literal <now>" "n/a" "${_c5_line:-<no luks_reopen_ok QUERY line>}"
+fi
+# SOURCE HALF, so the placeholder cannot be reintroduced behind a fixture that stopped reading
+# that line.
+if ! grep -qF -- '--end <now>' "$SUT"; then
+  pass "C5: the capture script carries no '--end <now>' placeholder"
+else
+  fail "C5: the capture script carries no '--end <now>' placeholder" "n/a" \
+       "$(grep -n -- '--end <now>' "$SUT")"
+fi
+
+# ── C6 — "NEVER CONSULTED" STOPS READING AS "DEGRADED" ───────────────────────────────
+#
+# NOT_RUN and UNAVAILABLE are different facts and the difference is now load-bearing:
+# UNAVAILABLE can be ACKNOWLEDGED by a human and release the birth hold, NOT_RUN cannot. Before
+# this, a capture on a runner with no jq and no token committed bytes identical to one whose
+# read genuinely degraded — so the ack would have blessed a cross-check that never happened.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
+OUT_C6="$TMP/ev-c6.env"
+out="$(SENTRY_ISSUE_RO_TOKEN='' BETTERSTACK_QUERY_SH="$STUB" \
+       BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+       bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+         --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_C6" 2>&1)"; rc=$?
+if grep -q '^RUNG2_SENTRY_CROSSCHECK=NOT_RUN$' "$OUT_C6" 2>/dev/null; then
+  pass "C6: an unset SENTRY_ISSUE_RO_TOKEN records NOT_RUN, not UNAVAILABLE"
+else
+  fail "C6: an unset SENTRY_ISSUE_RO_TOKEN records NOT_RUN, not UNAVAILABLE" "$rc" \
+       "$(grep RUNG2_SENTRY_CROSSCHECK "$OUT_C6" 2>/dev/null || echo '<no key>')"
+fi
+if [[ "$out" == *"SKIPPED"* ]]; then
+  pass "C6: ...and the log says SKIPPED, so the operator reads 'never ran', not 'degraded'"
+else
+  fail "C6: ...and the log says SKIPPED, so the operator reads 'never ran', not 'degraded'" "$rc" "$out"
+fi
+OUT_C6B="$TMP/ev-c6b.env"
+out="$(SOLEUR_TEST_MODE=1 SOLEUR_SENTRY_READER="$TMP/there-is-no-reader-here.sh" \
+       SENTRY_ISSUE_RO_TOKEN='stub-token-not-a-real-credential' BETTERSTACK_QUERY_SH="$STUB" \
+       BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+       bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+         --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_C6B" 2>&1)"; rc=$?
+if grep -q '^RUNG2_SENTRY_CROSSCHECK=NOT_RUN$' "$OUT_C6B" 2>/dev/null; then
+  pass "C6: a missing reader records NOT_RUN too"
+else
+  fail "C6: a missing reader records NOT_RUN too" "$rc" \
+       "$(grep RUNG2_SENTRY_CROSSCHECK "$OUT_C6B" 2>/dev/null || echo '<no key>')"
+fi
+# THE THIRD BRANCH IS jq, which cannot be removed from this runner without removing it from the
+# SUT's other readers too, so it is pinned at the source: all three structural preflights, and
+# only those three, set NOT_RUN. A count, not a presence check — the defect being fixed was two
+# of three branches being converted and the third left behind.
+_c6_nr="$(grep -c '_SENTRY_VERDICT="NOT_RUN"' "$SUT")"
+if [[ "$_c6_nr" -eq 3 ]]; then
+  pass "C6: all three never-consulted branches (jq, token, reader) set NOT_RUN"
+else
+  fail "C6: all three never-consulted branches (jq, token, reader) set NOT_RUN" "n/a" \
+       "found ${_c6_nr} assignment(s), expected 3"
+fi
+# NON-VACUITY: if every path wrote NOT_RUN the arms above would pass for the wrong reason. The
+# PASS path with a live second channel records CLEAN — and CLEAN is the only value that
+# releases the gate without a human acknowledgement.
+if grep -q '^RUNG2_SENTRY_CROSSCHECK=CLEAN$' "$OUT" 2>/dev/null; then
+  pass "C6: a consulted, answering second channel records CLEAN (NOT_RUN arms are non-vacuous)"
+else
+  fail "C6: a consulted, answering second channel records CLEAN (NOT_RUN arms are non-vacuous)" "n/a" \
+       "$(grep RUNG2_SENTRY_CROSSCHECK "$OUT" 2>/dev/null || echo '<no key>')"
+fi
+
+
 _ran=$((passes + fails))
 # FLOOR = main's 62 + the 11 assertions #7855 adds (GUARD1 arms 25-27, two harness rows, the
 # enumerator). Stated as a derivation rather than a bare literal because a sibling PR raising
@@ -1597,7 +1889,28 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=107  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file)
+# RAISED 107 -> 130 (#8010), ITEMISED:
+#     3  pre-existing SLACK, retired. The suite measured 110 against a floor of 107, so three
+#        arms could have been deleted without the floor noticing — which is the exact failure
+#        the floor exists to catch. The new value is the MEASURED total, zero slack.
+#     2  C1      a host/url pair naming different runs is refused 64 and writes nothing; the
+#                refusal names BOTH run ids
+#     1  C1b     Guard 4 mutation 3: a second, uncoupled --host-name (last-wins parse)
+#     2  C2      MUST-PASS: the .../runs/<id>/attempts/2 re-run URL is accepted, and recorded
+#                verbatim
+#     3  C3      the --liveness read is --stats-period 24h; carries no --start; and the
+#                --host-events fatal read STAYS pinned to --since
+#     4  C4      ARTIFACT 4 records the liveness QUERY line, the UNAVAILABLE-HOLDs-unless-
+#                acknowledged sentence and the PRE-RESET scope note, and carries
+#                RUNG2_SENTRY_CROSSCHECK exactly once
+#     3  C5      the reset arm's recorded --end is a resolved timestamp, never `<now>`, and
+#                the placeholder is absent from the SUT's source
+#     5  C6      an unset token and a missing reader both record NOT_RUN and say SKIPPED; all
+#                three preflight branches set it (source count); and a consulted, answering
+#                channel still records CLEAN, so the NOT_RUN arms are non-vacuous
+#   ----
+#    23   (measured against the as-written file: 107 + 23 = 130 = 130 passed, 0 failed)
+_FLOOR=130  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file) + ARMS C1-C6 above
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).

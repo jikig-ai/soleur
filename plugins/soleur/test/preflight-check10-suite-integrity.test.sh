@@ -323,12 +323,13 @@ assert_parse "S1 plain summary parses all six fields" "122 3 1 2 514 128" \
   <(printf ' 122 pass\n 3 fail\n 1 skip\n 2 todo\n 514 expect() calls\nRan 128 tests across 1 file.\n')
 
 # S2a/S2b — REAL bytes captured from bun 1.3.11 with FORCE_COLOR=1, pasted from
-# `cat -v`. VERIFIED ALSO ON 1.3.14, which is what CI installs (`.bun-version`,
-# consumed by setup-bun in ci.yml) — the local toolchain here is 1.3.11, so every
-# other measurement in this file was taken on a version CI does not run. Same
+# `cat -v`. VERIFIED ALSO ON 1.3.14 and on 1.4.2, which is what CI installs
+# (`.bun-version`, consumed by setup-bun in ci.yml) — measured 2026-09-19 by
+# running the same pass/fail/skip/todo suite on both binaries under FORCE_COLOR=1
+# and diffing `cat -v`: byte-identical apart from the elapsed-time suffix. Same
 # counter shapes, same value-dependent colour placement, same
 # `Ran N tests across M file.` terminator, and the parse returns all six fields
-# on both. That terminator is now load-bearing (it bounds the trusted region), so
+# on each. That terminator is now load-bearing (it bounds the trusted region), so
 # a bun upgrade that reworded it turns every run UNMEASURED — which is
 # fail-closed and loud, not silent. Colour placement is VALUE-DEPENDENT, so one coloured fixture cannot
 # represent bun's output: a non-zero counter is `^[[0m^[[32m 132 pass^[[0m` (ESC
