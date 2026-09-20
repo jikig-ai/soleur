@@ -34,7 +34,10 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+# jq is REQUIRED, not optional: T7 and T8 are the only pins on the shell readers
+# (#8392), so a jq-less runner skipping at exit 0 takes the whole parity guard
+# with it and reports green. Refuse instead.
+command -v jq >/dev/null 2>&1 || { echo "FATAL: jq missing — T7/T8 cannot run" >&2; exit 2; }
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -77,6 +80,38 @@ assert_not_contains() {
   fi
   TOTAL=$((TOTAL + 1))
 }
+
+# Instrument self-test (ADR-193): drive EVERY verdict-owning helper through both
+# branches once and require both counters to move, before any real case. Review
+# measured all three conditions -> `if true` at 28/28 green, exit 0, and separately
+# measured every case commented out reporting PASS=0 FAIL=0 TOTAL=0, exit 0.
+# Reports with printf + exit, never through the helpers it guards.
+assert_eq           "self-test eq pass"  "1" "1"        >/dev/null
+assert_eq           "self-test eq fail"  "1" "2"        >/dev/null
+assert_contains     "self-test in pass"  "a" "xax"      >/dev/null
+assert_contains     "self-test in fail"  "a" "xxx"      >/dev/null
+assert_not_contains "self-test out pass" "a" "xxx"      >/dev/null
+assert_not_contains "self-test out fail" "a" "xax"      >/dev/null
+if [[ "$PASS" -ne 3 || "$FAIL" -ne 3 || "$TOTAL" -ne 6 ]]; then
+  printf 'FATAL: verdict helpers are not dispatching (PASS=%s FAIL=%s TOTAL=%s)\n' \
+    "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 2
+fi
+PASS=0; FAIL=0; TOTAL=0
+
+# ONE owning tempdir with ONE trap (ADR-129 / lint-trap-tempfile-ownership rule (c)).
+# Each case's trailing `rm -rf "$root"` only runs when the case reaches it; the FATAL
+# `exit 2` paths and any mid-case death leak the whole skeleton.
+#
+# Ownership is established by redirecting TMPDIR rather than by passing make_temp_root's
+# `mktemp -d` a destination. Both put every case root under $TMPROOT, but a destination
+# argument costs the call its absoluteness proof: fixture-scan classifies bare `mktemp -d`
+# as mktemp-abs and `mktemp -d "$R/c.XXXXXX"` as inheriting $R, so that spelling turned
+# `$root` unresolvable and moved this file from 3 to 20 not-provably-absolute sites in
+# plugins/soleur/test/fixture-relative-assert.baseline.txt. Measured, not reasoned.
+TMPROOT="$(mktemp -d)"
+trap 'rm -rf "$TMPROOT"' EXIT
+export TMPDIR="$TMPROOT"
 
 make_temp_root() {
   # Throwaway repo skeleton: matches the layout the SUT expects relative to
@@ -126,7 +161,18 @@ make_mock_curl() {
   # emits a canned Anthropic-shaped response (a single text content block
   # containing a valid empty JSON array — sufficient to exercise the response
   # parse path without staging cluster diffs).
-  local path="$1" capture="$2"
+  #
+  # $3 overrides that response body, so a case can pin a DIFFERENT wire shape
+  # (T7 uses a thinking-first body) without a near-copy of this helper.
+  local path="$1" capture="$2" body="${3:-}"
+  # The default must NOT be inlined into ${3:-…}: this JSON contains `}`, which
+  # terminates the parameter expansion at the FIRST one. Measured — the body comes
+  # back MANGLED, not truncated: `{"content":[{"type":"text","text":"[]"]}}` (a brace
+  # consumed, the remainder appended literally), and the escaped form additionally
+  # loses its quotes to quote removal. A separate statement avoids the whole class.
+  if [[ -z "$body" ]]; then
+    body='{"content":[{"type":"text","text":"[]"}]}'
+  fi
   cat > "$path" <<EOF
 #!/usr/bin/env bash
 # Capture the request payload for assertions.
@@ -143,8 +189,8 @@ while [[ \$# -gt 0 ]]; do
       ;;
   esac
 done
-# Emit a canned Anthropic response: empty clusters array.
-printf '%s' '{"content":[{"type":"text","text":"[]"}]}'
+# Emit the canned Anthropic response (default: empty clusters array).
+printf '%s' '$body'
 EOF
   chmod +x "$path"
 }
@@ -352,13 +398,120 @@ EOF
   rm -rf "$root"
 }
 
+# --- T7: a thinking-first Anthropic response still parses (#8392) -------------
+# EXECUTION_MODEL is claude-sonnet-5 (pinned in compound-promote.sh next to the
+# jq reader). MEASURED, not assumed: a live prd fire on 2026-09-19 returned a
+# thinking block at content[0] with the cluster JSON behind it, so the old reader
+# saw "" while the answer was billed. (The bundled claude-api reference documents
+# the thinking DISPLAY default for Sonnet 5, not the on-by-default claim — so the
+# run is the evidence here, not the model card.) A fixed-position reader returns
+# empty and the SUT hard-exits 1. The payload is deliberately NON-EMPTY: the
+# default "[]" body makes a successful parse indistinguishable from the
+# legitimate no-clusters outcome.
+t7_thinking_first_response_parses() {
+  local root; root=$(make_temp_root)
+  copy_fixtures "$root"
+  cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+enabled: true
+EOF
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"
+  make_mock_curl "$curl_bin" "$root/curl-capture.txt" \
+    '{"content":[{"type":"thinking","thinking":""},{"type":"text","text":"[{\"cluster_hash\":\"t7-thinking-first-sentinel\"}]"}],"stop_reason":"end_turn"}'
+
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" \
+        GH_BIN="$gh_bin" \
+        CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="fake-key-for-mock" \
+        bash "$SUT" 2>&1) || exit_code=$?
+
+  assert_eq        "T7 exit code is 0"  "0" "$exit_code"
+  # The parse path was actually REACHED — the harness has arms (no-config,
+  # disabled, week-cap) where curl is never called, so a bare exit-0 assertion
+  # would pass on a short-circuit.
+  assert_eq        "T7 curl WAS called (parse path reached)" "true" \
+                   "$([[ -f "$root/curl-capture.txt" ]] && echo true || echo false)"
+  assert_not_contains "T7 does NOT report empty content" \
+                   "::error::Anthropic API returned empty content" "$out"
+  # Decode the emitted clusters payload and look for the sentinel.
+  local b64 decoded=""
+  b64=$(printf '%s\n' "$out" | sed -n 's/^::compound-promote-clusters-json:://p' | tail -1)
+  [[ -n "$b64" ]] && decoded=$(printf '%s' "$b64" | base64 -d 2>/dev/null || echo "")
+  assert_contains  "T7 clusters payload carries the thinking-first sentinel" \
+                   "t7-thinking-first-sentinel" "$decoded"
+  rm -rf "$root"
+}
+
+# --- T8: the two shell readers share one jq program, and it selects by type ---
+# scripts/learning-retrieval-bench.sh is the fourth reader of this shape and has
+# no suite of its own; this row covers it behaviorally rather than by spelling.
+t8_shell_jq_readers_are_identical_and_type_selecting() {
+  local bench="$REPO_ROOT/scripts/learning-retrieval-bench.sh"
+  local prog_promote prog_bench
+
+  # Extract the jq program from the ASSIGNMENT that feeds the reader, with comment
+  # lines stripped first. Two measured defeats of the previous `head -1` form:
+  #   * a comment carrying the canonical spelling above a REVERTED live line made
+  #     both assertions pass over the #8392 bug restored in production;
+  #   * a second `.content` jq program earlier in the file was compared instead.
+  # `|| true` is load-bearing: `grep`'s no-match exit 1 propagates through pipefail,
+  # so the bare assignment aborted the suite BEFORE the guard below could report —
+  # measured as exit 1 with no T8 line and no summary at all.
+  extract_reader_jq() { # $1 = file, $2 = assignment anchor
+    grep -v '^[[:space:]]*#' "$1" \
+      | grep -E "^[[:space:]]*$2=" \
+      | grep -o "jq -r '[^']*'" \
+      | grep -F '.content' \
+      | head -1 || true
+  }
+  prog_promote=$(extract_reader_jq "$SUT" 'CLUSTERS_TEXT')
+  prog_bench=$(extract_reader_jq "$bench" 'text')
+
+  # Non-empty guard: an extraction that found NOTHING must abort loudly, not
+  # report a clean match of two empty strings.
+  if [[ -z "$prog_promote" || -z "$prog_bench" ]]; then
+    echo "FAIL: T8 INSTRUMENT FOUND NOTHING (promote='$prog_promote' bench='$prog_bench')"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+    return
+  fi
+  assert_eq        "T8 both shell readers use a byte-identical jq program" \
+                   "$prog_promote" "$prog_bench"
+
+  # Behavioral: run the extracted program against a thinking-first body.
+  local body='{"content":[{"type":"thinking","thinking":""},{"type":"text","text":"t8-payload"}]}'
+  local program extracted
+  program=$(printf '%s' "$prog_promote" | sed "s/^jq -r '//; s/'$//")
+  extracted=$(printf '%s' "$body" | jq -r "$program" 2>/dev/null || echo "")
+  assert_eq        "T8 the shared jq program selects the text block by type" \
+                   "t8-payload" "$extracted"
+}
+
 t1_no_config_returns_noop
 t2_disabled_config_returns_noop
 t3_gdpr_pre_pass_excludes_pii_files
 t4_retired_rule_pre_pass_excludes
 t5_week_cap_reached_short_circuits
 t6_byte_budget_sentinel_emitted
+t7_thinking_first_response_parses
+t8_shell_jq_readers_are_identical_and_type_selecting
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+# Dispatch floor. The verdict below is `[[ "$FAIL" -eq 0 ]] || exit 1`, which cannot
+# distinguish "every case passed" from "no case ran" — measured: commenting out the
+# call list reported PASS=0 FAIL=0 TOTAL=0 and exit 0. Derived from a green run, and
+# a FLOOR (never -eq) so adding a case is not a spurious failure.
+#
+# (ADR-193.) The threshold is declared on the line IMMEDIATELY
+# above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
+# by slicing the floor block plus the CONTIGUOUS simple assignments above it, so a
+# threshold declared further up leaves the mutant unbound under `set -u` and the floor
+# scores as a construction failure instead of as a firing floor.
+MIN_ASSERTIONS=28
+if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FATAL: assertion floor breached (TOTAL=%s < %s) — cases did not dispatch\n' \
+    "$TOTAL" "$MIN_ASSERTIONS" >&2
+  exit 2
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

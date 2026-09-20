@@ -86,6 +86,7 @@ _trusted_verdict_permission() {
   #   anything else (403, 5xx, network, malformed) — TRANSIENT. The caller must
   #     NOT fall through to "untrusted": an unresolvable permission is not a
   #     negative answer.
+  # lint-trap-ownership: ok sourced library — an EXIT trap here would REPLACE the caller's; every return path below rm -f's it, so the residual is one empty file per SIGKILL in a two-statement window (ADR-129; same reasoning as scripts/lib/git-data-boot-signal-poll.sh)
   local errf; errf="$(mktemp)"
   if ! perm="$(gh api "repos/${repo}/collaborators/${login}/permission" \
                  --jq '.permission // empty' 2>"$errf")"; then

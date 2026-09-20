@@ -1926,6 +1926,116 @@ else
   fail "the probe's poll does not stop on a terminal verdict" "retrying a FAIL turns a finding into a timeout"
 fi
 
+# (f2) THE ACK DECISION IS EMITTED EXACTLY ONCE, AFTER THE RESET PROBE (#8010).
+#
+# git_data_rung2_rehearsal_gate HOLDs on an UNAVAILABLE Sentry cross-check unless the operator
+# appends `RUNG2_SENTRY_CROSSCHECK_ACK=<this run id>:<reason>`. Whether that is needed depends
+# on a value only this run can see -- the evidence is an artifact, not a commit -- so the run
+# has to answer it rather than print a conditional for the operator to evaluate. EXACTLY ONE
+# line is the property: two would mean the operator picks, and zero means they go and look.
+#
+# EXECUTED, not grepped. The step has three branches and a CR/LF strip; a text guard would pass
+# against a body that emits both lines, or against one whose strip was deleted ($GITHUB_STEP_
+# SUMMARY is line-oriented, so a single CR from the evidence file splits the line in two).
+# The body is extracted by `id: sentry_ack` -- free-text names have no consumers, ids do.
+_ack_body="$(mktemp -t gdr2ack.XXXXXXXX)" || exit 2
+python3 - "$WF" "$_ack_body" <<'ACKPY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+step = next((s for s in d["jobs"]["rehearse"]["steps"] if s.get("id") == "sentry_ack"), None)
+if step is None or not step.get("run"):
+    sys.exit(3)
+open(sys.argv[2], "w").write(step["run"])
+ACKPY
+_ack_x=$?
+if [[ "$_ack_x" -ne 0 || ! -s "$_ack_body" ]]; then
+  cases=$((cases + 1))
+  fail "could not extract the ack-decision step body keyed on 'id: sentry_ack'" \
+    "an empty extraction must FAIL, never silently skip: this step is the only place the run tells the operator whether the gate needs an acknowledgement"
+else
+  # `bash -n` ON THE EXTRACTED SNIPPET, never on the YAML (task 3.11): `bash -n` over a
+  # workflow file parses YAML as shell and reports nothing useful in either direction.
+  cases=$((cases + 1))
+  if bash -n "$_ack_body" 2>/dev/null; then
+    pass "the ack-decision run: body is syntactically valid bash (bash -n on the extracted snippet)"
+  else
+    fail "the ack-decision run: body does not parse as bash" "$(bash -n "$_ack_body" 2>&1 | head -3)"
+  fi
+
+  # Shares the body's hardcoded /tmp/rung2 with the capture arms above, so it clears it first
+  # and cannot run concurrently with them or with a real dispatch on the same runner.
+  _ACK_ROOT="$(mktemp -d -t gdr2ackr.XXXXXXXX)" || exit 2
+  _ack_run() {  # $1 = the verdict to plant, or __NOFILE__ ; echoes the summary file path
+    local v="$1" od
+    od="$(mktemp -d -p "$_ACK_ROOT" ack.XXXXXXXX)" || return 2
+    rm -rf /tmp/rung2; mkdir -p /tmp/rung2
+    if [[ "$v" != "__NOFILE__" ]]; then
+      # A TRAILING CR IS PLANTED DELIBERATELY. The evidence is written by a script whose reads
+      # cross two HTTP APIs; a CR that reaches $GITHUB_STEP_SUMMARY splits the ack line, and
+      # the strip is what this fixture makes load-bearing.
+      printf 'RUNG2_BOOT_REHEARSAL=PASS\r\nRUNG2_SENTRY_CROSSCHECK=%s\r\n' "$v" \
+        > /tmp/rung2/git-data-rung2-boot-evidence.env
+    fi
+    GITHUB_STEP_SUMMARY="$od/summary" GITHUB_RUN_ID=30560266736 \
+      bash -e "$_ack_body" >/dev/null 2>&1
+    printf '%s\n' "$od/summary"
+  }
+  _ack_count() { grep -cE '^ACK (NOT )?REQUIRED' "$1" 2>/dev/null || true; }
+
+  _ack_u="$(_ack_run UNAVAILABLE)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_u")" -eq 1 ]] \
+     && grep -q '^ACK REQUIRED .* RUNG2_SENTRY_CROSSCHECK_ACK=30560266736:' "$_ack_u"; then
+    pass "UNAVAILABLE emits EXACTLY ONE ack line, and it is the run-id-pinned ACK REQUIRED one"
+  else
+    fail "UNAVAILABLE did not emit exactly one run-id-pinned ACK REQUIRED line" \
+      "got: $(cat "$_ack_u" 2>/dev/null || echo '<no summary>')"
+  fi
+  # THE CR-STRIP, asserted on the bytes rather than on the presence of the expression: the
+  # fixture's verdict carries a trailing CR, so an unstripped value lands mid-line.
+  cases=$((cases + 1))
+  if ! grep -q $'\r' "$_ack_u" 2>/dev/null; then
+    pass "the summary line carries no CR - the value is stripped before it reaches \$GITHUB_STEP_SUMMARY"
+  else
+    fail "a CR from the evidence file reached \$GITHUB_STEP_SUMMARY" \
+      "the summary is line-oriented; a CR splits the one line the operator is supposed to read"
+  fi
+
+  _ack_c="$(_ack_run CLEAN)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_c")" -eq 1 ]] && grep -q 'cross-check CLEAN$' "$_ack_c"; then
+    pass "CLEAN emits EXACTLY ONE ack line, and it is ACK NOT REQUIRED"
+  else
+    fail "CLEAN did not emit exactly one ACK NOT REQUIRED line" \
+      "got: $(cat "$_ack_c" 2>/dev/null || echo '<no summary>')"
+  fi
+
+  # NOT_RUN is neither of the two the plan names, and it is the one an ack must NOT rescue --
+  # the gate refuses it outright. It still owes the operator exactly one decision line.
+  _ack_n="$(_ack_run NOT_RUN)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_n")" -eq 1 ]] && grep -q 'no acknowledgement can rescue' "$_ack_n"; then
+    pass "NOT_RUN emits EXACTLY ONE ack line, and it says no acknowledgement rescues it"
+  else
+    fail "NOT_RUN did not emit exactly one ack line naming it unrescuable" \
+      "got: $(cat "$_ack_n" 2>/dev/null || echo '<no summary>')"
+  fi
+
+  # NO EVIDENCE FILE AT ALL. `set -euo pipefail` over a `grep` that matches nothing is the
+  # ordinary way a step like this dies silently and emits zero lines.
+  _ack_m="$(_ack_run __NOFILE__)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_m")" -eq 1 ]]; then
+    pass "an unreadable evidence file still emits exactly one ack decision, not zero"
+  else
+    fail "an unreadable evidence file emitted $(_ack_count "$_ack_m") ack line(s)" \
+      "a step that dies on its own grep leaves the operator with no decision at all"
+  fi
+
+  rm -rf "$_ACK_ROOT"; rm -rf /tmp/rung2
+fi
+rm -f "$_ack_body"
+
 # (g) THE JOB BUDGET is DERIVED from the bounded polls the workflow actually contains, not a
 # literal anyone can drift. A ceiling reached inside a step leaves the always() teardown with
 # only the runner's cancellation grace to destroy a server, two volumes and a Doppler config.
@@ -1967,13 +2077,23 @@ else
     "a ceiling reached inside a step starves the teardown"
 fi
 
-if [[ "$cases" -lt 94 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 94.\n' "$cases" >&2
+# RAISED 94 -> 100 (#8010), ITEMISED — arm (f2), the ack decision after the reset probe:
+#     1  the step body is extractable by `id: sentry_ack` and parses as bash (`bash -n` on the
+#        EXTRACTED snippet, never on the YAML — task 3.11)
+#     1  UNAVAILABLE  => exactly one ack line, and it is the run-id-pinned ACK REQUIRED one
+#     1  ...and no CR reaches $GITHUB_STEP_SUMMARY (the fixture plants one)
+#     1  CLEAN        => exactly one ack line, ACK NOT REQUIRED
+#     1  NOT_RUN      => exactly one ack line, naming it unrescuable by any acknowledgement
+#     1  no evidence file => still exactly one decision, never zero
+#   ----
+#     6   (measured against the as-written file: 94 + 6 = 100 = 100 passed, 0 failed)
+if [[ "$cases" -lt 100 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 100.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 94)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 100)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

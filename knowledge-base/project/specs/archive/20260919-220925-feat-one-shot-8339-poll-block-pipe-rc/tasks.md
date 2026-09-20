@@ -1,0 +1,30 @@
+# Tasks: fix-ship-phase-7-poll-block-pipe-rc (#8339)
+
+Plan: `knowledge-base/project/plans/2026-09-19-fix-ship-phase-7-poll-block-pipe-rc-plan.md` (v3, deepened 2026-09-19). AC numbers refer to that plan's `## Acceptance Criteria`; scenario mocks are specified verbatim in its `## Technical Considerations`.
+
+## Phase 1: RED — harness + fixtures first (one commit, before any SKILL.md edit; AC1)
+
+- [x] 1.1 `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`: source `plugins/soleur/test/test-helpers.sh` at file top (tripwire + `git_fixture_env`); in `run_scenario` add `set +o pipefail` as the first statement of the `( … )` subshell, a 5th parameter `local block="${5:-$BLOCK_FILE}"` (`source "$block"`), a per-row `MOCK_STATE="$(mktemp -d)"` (exported, removed at row end), and make `must_match` a newline-separated list looped with one `pass`/`fail` per pattern (AC6).
+- [x] 1.2 Default `git` mock in `run_scenario`: `rev-parse) [[ "${2:-}" == "-q" ]] && return 1; echo "test-branch" ;;` (AC6). Mirror extraction: `extract_block "$MIRROR" | sed 's/<number>/4387/g' > "$MIRROR_FILE"`; add `bash -n "$MIRROR_FILE"` pass/fail (AC7). Do NOT touch `extract_block()` or the fingerprint loop (AC8).
+- [x] 1.3 Scenario 0 (self-check): QUOTED heredoc mocks file with `false | true; echo "harness-pipefail-status=$?"` + `gh` → `MERGED CLEAN`; must-match `harness-pipefail-status=0` (AC4). Drive it RED once by temporarily removing `set +o pipefail`; paste that line into the PR body.
+- [x] 1.4 Shared `git`/`gh` mock (`SYNC_MOCKS` string — the plan called it `GIT_MOCK`, knobs `MOCK_FETCH_RC`, `MOCK_MERGE=ok|conflict|refused`, `MOCK_PUSH_RC`; file-backed `$MOCK_STATE/{MERGE_HEAD,pushed}`; `"rev-parse -q"` case BEFORE the `"rev-parse "*` glob; abort sentinel on stdout) exactly as in plan §Technical Considerations.
+- [x] 1.5 Scenarios 6 (`MOCK_MERGE=conflict`), 6b (`refused`), 6c (`MERGE_HEAD` pre-created), 7 (`MOCK_PUSH_RC=1`), 8 (`MOCK_FETCH_RC=1`), 9 (defaults) with the AC2/AC3 must/must-not lists, each run against `"$BLOCK_FILE"` and `"$MIRROR_FILE"` with `:ship` / `:merge-pr` label suffixes.
+- [x] 1.6 Scenario 3 additionally against `"$MIRROR_FILE"`: must-match `auto-sync 6/6 pushed`, must-not-match `auto-sync 6 pushed` (AC3, row H3).
+- [x] 1.7 Fix scenario 4b: `gh` flips on `[[ -e "$MOCK_STATE/dirty_seen" ]]`; add `ship\.phase7\.behind_exhausted` to its must-not-match (AC6; RED today).
+- [x] 1.8 Scenario 10 (real git, AC11): fixture under `git_fixture_env` in `mktemp -d -t ship-phase7-realgit.XXXXXX` (the `-p "$(dirname …)"` form is not provable-absolute to the fixture scanner); bare origin + clones `a`/`b`; its own subshell, so no `git` mock is installed (no `REAL_GIT` knob needed); `gh` marker-file stub; guarded `cd "$tmp/a" || exit 2`; assert stream + `MERGE_HEAD` rc 1 + clean porcelain + unchanged `origin/main`/`origin/feat`; second sub-row with a pre-staged resolution asserts `kind=merge_in_progress` and `git diff --cached --name-only` non-empty.
+- [x] 1.9 Parity token loop: add (fresh `\` continuation line) `'sync_out="$(git merge origin/main --no-edit 2>&1)"'`, `'merge conflict, aborting sync'`, `'kind=merge_refused'`, `'kind=merge_in_progress'`, `'git push failed after merge'`, `'fetch_failures='` (AC5). Update the file header comment's scenario list.
+- [x] 1.10 Run the suite: 6/6b/6c/7/8 RED on both blocks, 0/3/4b/9 GREEN (4b's mock fix and forbid land together; measured 31 pass / 54 fail); quote the summary line in the PR body. Commit (`test(ship): RED fixtures for #8339 — pipefail-off harness, sync-arm scenarios`).
+
+## Phase 2: GREEN — the fix in both fenced blocks
+
+- [x] 2.1 `plugins/soleur/skills/ship/SKILL.md`, inside the fence only: `fetch_fails=0` on the line after the `prev=""; …` line; replace the `if ! git fetch … | tail` chain with the v3 arm from plan §Proposed Solution (MERGE_HEAD precondition, capture-then-display ×3, conflict vs refused branch, `[ship.phase7.sync_failed] kind=… rc=…` prefixes with the issue's verbatim substrings, existing re-fetch kept inside the new `else`); append `(fetch_failures=${fetch_fails}/${MAX_BEHIND_SYNCS})` after `in ${elapsed}s` in the `behind_exhausted` echo. `OUTAGE_RE` / §5.5 untouched (AC8). Run suite: ship rows GREEN, mirror rows still RED.
+- [x] 2.2 `plugins/soleur/skills/merge-pr/SKILL.md` §5.2, inside the mirror fence: same three edits, keeping merge-pr's success echo `auto-sync ${behind_syncs}/${MAX_BEHIND_SYNCS} pushed` and its re-fetch; update the prose sentence "this mirror is not directly tested". Run suite: `0 fail`. Commit (`fix(ship): capture rc before tail in the phase-7 BEHIND sync arm; never abort a merge the arm did not start (#8339)`).
+
+## Phase 3: Verification
+
+- [x] 3.1 AC8 diff-scope check (hunk positions inside both fences + line 374; `grep -c OUTAGE_RE` = 0; fixture diff has no `in_block` / `for token in 'MAX_BEHIND_SYNCS' ` lines).
+- [~] 3.2 AC9 (shard refused rc=4 — sibling full-gate in flight; consumer-derived substitutes + corpus ratchets green; re-run at ship Phase 4): `bash plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh` → `0 fail`; `TEST_GROUP=scripts bash scripts/test-all.sh` green.
+- [x] 3.3 AC10: `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-19-fix-ship-phase-7-poll-block-pipe-rc-plan.md`.
+- [x] 3.4 Drive mutation rows 1–12 and harness rows H1–H7 once each against the fixed block; quote the RED lines (one per row) in the PR body.
+- [x] 3.6 Review panel (9 seats): applied inline — errexit-safe capture + 6f; sequencer/detached precondition + rc==1 abort gate + 6d/6g/6h/10C–E; tagged exits to stdout + stderr invariant; `behind_exhausted` fetch-outage branch; DIRTY-arm fetch failure; `sync_ok` gating + 11; `sync-pr-behind.sh` precondition + row; assertion floor (191); mirror runs of 1/2/4/4b/5; prose + 15-minute strings; plan/tasks wording; fixture citation (#4388).
+- [ ] 3.5 PR body: `Closes #8339`, `Ref #8383`, `## Changelog` (patch), the AC1/AC4 RED lines and the mutation-row RED lines; `ship` renders `decision-challenges.md` (DC-1..DC-3) as informational.

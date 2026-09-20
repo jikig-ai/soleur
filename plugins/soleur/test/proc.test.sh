@@ -41,6 +41,21 @@ CONTENTION_LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
 # hostile environment; test-all.sh:851 classifies rc 97 as [TRIPWIRE], not a failing assertion.
 # test-helpers.sh runs `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
 # deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every run (#8339 review).
+ROOTS=()
+SPAWNED=()
+cleanup() {
+  local p r
+  for p in ${SPAWNED[@]+"${SPAWNED[@]}"}; do
+    kill -KILL "$p" 2>/dev/null || true
+  done
+  for r in ${ROOTS[@]+"${ROOTS[@]}"}; do
+    rm -rf "$r" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: missing test-helpers.sh" >&2; exit 2; }
 
@@ -73,18 +88,6 @@ _harness_selfcheck() {
   FAIL="$f0"
 }
 
-ROOTS=()
-SPAWNED=()
-cleanup() {
-  local p r
-  for p in ${SPAWNED[@]+"${SPAWNED[@]}"}; do
-    kill -KILL "$p" 2>/dev/null || true
-  done
-  for r in ${ROOTS[@]+"${ROOTS[@]}"}; do
-    rm -rf "$r" 2>/dev/null || true
-  done
-}
-trap cleanup EXIT
 
 if [[ ! -f "$HELPER" ]]; then
   echo "ERROR: $HELPER does not exist" >&2

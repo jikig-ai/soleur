@@ -90,8 +90,7 @@ Create a new ADR with the next sequential number.
 
    **Pipeline mode default.** If running inside `soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
 
-6. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the chosen shape's body block from the template. Fill in frontmatter:
-   - `adr: ADR-<NNN>`
+6. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the chosen shape's body block from the template. The filename is the sole ordinal authority; do not add an `adr:` frontmatter key. Fill in frontmatter:
    - `title: <title>`
    - `status: active`
    - `date: <today YYYY-MM-DD>`

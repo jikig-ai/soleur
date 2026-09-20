@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-20T14:33:55Z",
+  "generated_at": "2026-09-20T14:36:42Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1227,13 +1227,13 @@
     {
       "id": "wg-defer-only-after-inline-triage",
       "section": "Workflow Gates",
-      "hit_count": 177,
+      "hit_count": 179,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 177,
-      "prevented_errors": 177,
-      "last_hit": "2026-09-20T14:33:29Z",
+      "fire_count": 179,
+      "prevented_errors": 179,
+      "last_hit": "2026-09-20T14:35:45Z",
       "first_seen": "2026-09-11T09:35:31Z",
       "rule_text_prefix": ""
     },
@@ -1283,13 +1283,12 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 342,
       "monitor-supersede": 520,
       "net-issue-flow": 613,
       "post-dispatch-watch-gate": 5478,
       "guardrails-block-recursive-delete": 387,
       "kb-domain-allowlist-guard": 222,
-      "guardrails-require-milestone": 535,
+      "guardrails-require-milestone": 536,
       "context-reviewed-gate": 13,
       "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 8,
       "git-commit-secret-scan": 431,
@@ -1310,6 +1309,7 @@
       "guardrails-worktree-write-guard": 261,
       "context-reviewed-hook-self-fault": 1,
       "adr-033-inngest-cron-canonical": 30,
+      "skill-security-scan": 345,
       "net-issue-flow-undelivered-declaration": 1,
       "pkill-self-match-guard-readonly": 5,
       "prod-write-defer-doppler-prd-secrets": 6,
