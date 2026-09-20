@@ -437,7 +437,7 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   # the trailing `>>>>>>> other` behind -- a two-type rule alone would pass it,
   # and in the .md files that dominate this repo nothing else would catch it.
   CONFLICT_HIT=$(awk '
-    /^\+\+\+ b\// { lt = 0; eq = 0; next }
+    /^\+\+\+ (a|b|c|i|o|w)\// { lt = 0; eq = 0; next }
     /^\+>>>>>>>( |$)/ { print "hit"; exit }
     /^\+<<<<<<<( |$)/ { lt = 1 }
     /^\+=======\r?$/  { eq = 1 }
