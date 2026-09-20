@@ -86,13 +86,19 @@ fi
 # WITHOUT writing when the incident corpus has zero rule-carrying rows -- the normal state of
 # any fresh clone, since .claude/.rule-incidents* is gitignored. Telling the operator to "run
 # the aggregator first" there sends them to the thing that just no-opped (#8384 review).
+# EXIT 3 IS "NOT APPLICABLE", NOT "FAILED", and the distinction is the whole point.
+# This is the NORMAL state of any checkout without a local incident log -- which is every
+# fresh clone, including the one cron-rule-prune makes. Exiting 2 there makes an automated
+# caller either page every quarter (if it branches on rc) or report health while having
+# pruned nothing (if it does not). Neither is true. A distinct code lets the caller say
+# "not applicable" without conflating it with a real failure.
 [[ -f "$METRICS" ]] || {
-  echo "ERROR: $METRICS not found and the aggregator produced none." >&2
+  echo "NOT-APPLICABLE: $METRICS not found and the aggregator produced none." >&2
   echo "  This is the expected state on a checkout with no local incident log:" >&2
   echo "  $ROOT/.claude/.rule-incidents.jsonl is gitignored (ADR-091), and the aggregate has" >&2
   echo "  been an untracked cache since ADR-235 — so there is nothing to prune here." >&2
   echo "  Rule metrics are produced on the machine where the incidents were recorded." >&2
-  exit 2
+  exit 3
 }
 
 # Schema contract: make SCHEMA_VERSION load-bearing at the consumer

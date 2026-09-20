@@ -232,6 +232,26 @@ export async function cronRulePruneHandler({
       // so a clone carries none, and the aggregator's zero-row guard exits 0 WITHOUT writing
       // -- after which rule-prune.sh hits `[[ -f "$METRICS" ]] || exit 2` on every run.
       // Without this branch the monitor could never fail again.
+      // rc 3 is NOT-APPLICABLE, not a failure: the clone carries no
+      // .claude/.rule-incidents*.jsonl (gitignored, ADR-091), so the aggregator writes
+      // nothing and there is no corpus to prune. That is the steady state for this cron
+      // after #8377 untracked the aggregate — every fresh clone hits it. Throwing would
+      // page the operator quarterly for a condition that is correct; reporting plain
+      // health would claim work that did not happen. Say what is true, and keep the
+      // monitor green so a REAL failure (rc 1/2) still stands out.
+      if (result.exitCode === 3) {
+        logger.info(
+          { fn: "cron-rule-prune", exitCode: 3 },
+          "rule-prune.sh: no incident corpus in this clone — not applicable",
+        );
+        return {
+          noCandidates: true,
+          notApplicable: true,
+          prTitle: null as string | null,
+          prBody: null as string | null,
+        };
+      }
+
       if (result.exitCode !== 0) {
         throw new Error(
           `rule-prune.sh exited ${result.exitCode}: ${(result.stderr || result.stdout || "").trim().slice(0, 500)}`,
@@ -253,6 +273,7 @@ export async function cronRulePruneHandler({
         }
         return {
           noCandidates: true,
+          notApplicable: false,
           prTitle: null as string | null,
           prBody: null as string | null,
         };
@@ -260,6 +281,7 @@ export async function cronRulePruneHandler({
 
       return {
         noCandidates: false,
+        notApplicable: false,
         prTitle: sentinels.prTitle,
         prBody: sentinels.prBody,
       };
@@ -274,7 +296,10 @@ export async function cronRulePruneHandler({
           logger,
         }),
       );
-      return { ok: true, status: "no-candidates" };
+      return {
+        ok: true,
+        status: pruneResult.notApplicable ? "not-applicable" : "no-candidates",
+      };
     }
 
     // Open bot-PR via safeCommitAndPr (#5111) — gains the deletion guard,

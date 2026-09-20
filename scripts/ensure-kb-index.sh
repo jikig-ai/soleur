@@ -37,10 +37,20 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-KB_DIR="${KB_DIR:-$REPO_ROOT/knowledge-base}"
-KB_DIR="${KB_DIR%/}"
+# KB_DIR IS ARGV-ONLY (--kb-dir), NOT INHERITED. It steers a `find` walk and four
+# `mv -f` writes, so an inherited value redirects both: a developer with KB_DIR
+# exported for an unrelated tool (it is a generic name) gets, on `bun install`, a
+# walk of that tree and four files overwritten at those names there -- and every
+# wired call site passes --soft, which swallows the diagnostic. This PR is what
+# put this script on `prepare` and on three SessionStart hooks, so it is what made
+# the inherited value reachable from an ordinary install.
+#
+# It is the SAME CLASS the #8384 review closed in resolve-regenerable-conflicts.sh
+# (RESOLVABLE_OVERRIDE -> argv-only seam): argv cannot be inherited, an exported
+# variable can. Closing it there and leaving it here would have fixed the instance
+# and not the class.
+KB_DIR=""
 GENERATOR="$SCRIPT_DIR/generate-kb-index.sh"
-STAMP="$KB_DIR/.kb-index.stamp"
 TARGETS=(INDEX.md kb-tags.txt kb-categories.txt)
 
 SOFT=0
@@ -51,12 +61,19 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     --soft) SOFT=1; shift ;;
+    --kb-dir)
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "ERROR: --kb-dir requires a directory" >&2; exit 2; }
+      KB_DIR="${2%/}"; shift 2 ;;
     *)
       echo "ERROR: unknown argument '$1' (see --help)" >&2
       exit 2
       ;;
   esac
 done
+
+# Defaulted AFTER the arg loop: --kb-dir may set it, the environment may not.
+[[ -n "$KB_DIR" ]] || KB_DIR="$REPO_ROOT/knowledge-base"
+STAMP="$KB_DIR/.kb-index.stamp"
 
 # die <exit-code> <message> — the single exit path for every failure.
 #

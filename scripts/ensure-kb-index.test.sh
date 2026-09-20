@@ -214,6 +214,38 @@ else
   fail "row 4: expected reason=stale, got '$(sut_out "$res")'"
 fi
 
+# ── Guard 2 row 3b: an exported KB_DIR must NOT steer the writes ───────────────────────────
+#    KB_DIR names a `find` walk and four `mv -f` targets. It was read from the plain inherited
+#    environment while THIS change wired the script into `prepare` and three SessionStart hooks
+#    — so a developer with KB_DIR exported for an unrelated tool would have had four files
+#    overwritten in that tree by an ordinary `bun install`, with --soft swallowing the
+#    diagnostic. Same class the #8384 review closed in resolve-regenerable-conflicts.sh
+#    (RESOLVABLE_OVERRIDE -> argv-only): argv cannot be inherited, an exported variable can.
+echo ""
+echo "--- Guard 2 row 3b: an exported KB_DIR is ignored; --kb-dir is honoured ---"
+r="$(mkrepo row3b)"
+mkdir -p "$r/victim"
+printf 'PRECIOUS\n' > "$r/victim/INDEX.md"
+# The victim tree needs an indexable file of its own, or the --kb-dir arm below asserts
+# against a generator that correctly refused an empty corpus rather than against the seam.
+printf -- '---\ntitle: "Victim Note"\ntags: [victim-tag]\n---\n\nbody\n' > "$r/victim/v.md"
+# The fixture's OWN copy via run_sut — `bash "$SUT"` would resolve REPO_ROOT to the
+# real repo and write there, so the row would assert against the wrong tree.
+( cd "$r" && KB_DIR="$r/victim" bash scripts/ensure-kb-index.sh >/dev/null 2>&1 )
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(head -1 "$r/victim/INDEX.md")" == "PRECIOUS" ]] \
+  && pass "row 3b: an exported KB_DIR does not redirect the write" \
+  || fail "row 3b: exported KB_DIR steered the write — the inherited-env class is open"
+CASES_RUN=$((CASES_RUN + 1))
+[[ -f "$r/$IDX" ]] \
+  && pass "row 3b: the default knowledge-base/ path was used instead" \
+  || fail "row 3b: nothing was written to the default path"
+CASES_RUN=$((CASES_RUN + 1))
+( cd "$r" && bash scripts/ensure-kb-index.sh --kb-dir "$r/victim" >/dev/null 2>&1 )
+[[ -f "$r/victim/kb-tags.txt" ]] \
+  && pass "row 3b: --kb-dir IS honoured (the seam moved to argv, it did not disappear)" \
+  || fail "row 3b: --kb-dir did not write — the argv seam is broken"
+
 # ── Guard 2 row 4b/4c: the SECOND edit. THE case row 4 cannot reach. ───────────────────────
 #    `git status --porcelain` carries a path and two status letters, never content, and
 #    `ls-files -s` carries the INDEX blob, which a worktree edit does not move. So the FIRST
@@ -454,7 +486,7 @@ echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 # floor dispatched through the helper it backstops is disarmed by the same one-line edit that
 # disarms every assertion under it. `[FATAL]` is the sentinel scripts/guard-vacuity-floor.test.sh
 # matches on; a bare `FATAL:` scores the mutant CONSTRUCTION rather than FIRES.
-_min_cases=45
+_min_cases=48
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2
