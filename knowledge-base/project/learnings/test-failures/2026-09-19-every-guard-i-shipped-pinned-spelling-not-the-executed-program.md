@@ -136,6 +136,31 @@ Each was seconds to falsify and none had been.
 15. **My first lint regex missed a dotted `.length - 1`** — caught by my own fixture.
     **Prevention:** known-positive controls, per spelling.
 16. **Shell CWD reset twice** after `cd` into `/tmp`. One-off.
+17. **Six CI suites red after the local substitute set reported green** — the substitute
+    recipe I had just routed into `work/SKILL.md` selects `lint-*-live` rows by NAME, and
+    three of the six (`fixture-relative-assert`, `fixture-dir-operand-assert`,
+    `preflight-check10-suite-integrity`) have no `run_suite` line at all: `SUITE_GLOBS`
+    auto-registers them, so no `run_suite` grep can return them.
+    **Prevention:** select by SHAPE (rows with no path argument) AND expand `SUITE_GLOBS`;
+    the corrected recipe is in `work/SKILL.md`. Measured: 221 rows vs the filter's 19.
+18. **My new floor scored as a construction failure, not a firing floor** —
+    `guard-vacuity-floor` builds its mutant from the floor block plus the CONTIGUOUS simple
+    assignments above it, so `MIN_ASSERTIONS` declared with the other constants left the
+    mutant unbound under `set -u`. The ratchet read that as a new uncovered floor (15 → 17).
+    **Prevention:** declare a floor's threshold on the line IMMEDIATELY above its `if`.
+19. **The trap that fixed one ratchet broke another** — giving `mktemp -d` a destination
+    under an owned root satisfied `lint-trap-tempfile-ownership` and cost the call its
+    absoluteness proof, moving `fixture-relative-assert` from 3 to 20 sites. Redirecting
+    `TMPDIR` at the owned root keeps the binding byte-identical and owns the same dirs.
+    **Prevention:** after a ratchet fix, re-measure the OTHER ratchets reading those bytes.
+20. **I read a ratchet's verdict from a name-filtered grep of the CI log** and concluded
+    zero suite-level failures, because my regex anchored `^[FAIL]` while every CI line
+    carries a `job\tstep\ttimestamp` prefix. The battery, not the log, surfaced the other
+    three. **Prevention:** strip the known prefix before anchoring, and cross-read two
+    independent sources before calling a failure set complete.
+21. **Ran `lint-window-closure-assertion.py` without `--allowlist`** and read the rc=1 as a
+    defect in files I had not touched. **Prevention:** copy the invocation from its
+    `run_suite` row, including continuation lines, rather than retyping the script name.
 
 ## Related
 

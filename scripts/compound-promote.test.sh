@@ -99,11 +99,19 @@ if [[ "$PASS" -ne 3 || "$FAIL" -ne 3 || "$TOTAL" -ne 6 ]]; then
 fi
 PASS=0; FAIL=0; TOTAL=0
 
-# Dispatch floor. The verdict below is `[[ "$FAIL" -eq 0 ]] || exit 1`, which cannot
-# distinguish "every case passed" from "no case ran" — measured: commenting out the
-# call list reported PASS=0 FAIL=0 TOTAL=0 and exit 0. Derived from a green run, and
-# a FLOOR (never -eq) so adding a case is not a spurious failure.
-MIN_ASSERTIONS=28
+# ONE owning tempdir with ONE trap (ADR-129 / lint-trap-tempfile-ownership rule (c)).
+# Each case's trailing `rm -rf "$root"` only runs when the case reaches it; the FATAL
+# `exit 2` paths and any mid-case death leak the whole skeleton.
+#
+# Ownership is established by redirecting TMPDIR rather than by passing make_temp_root's
+# `mktemp -d` a destination. Both put every case root under $TMPROOT, but a destination
+# argument costs the call its absoluteness proof: fixture-scan classifies bare `mktemp -d`
+# as mktemp-abs and `mktemp -d "$R/c.XXXXXX"` as inheriting $R, so that spelling turned
+# `$root` unresolvable and moved this file from 3 to 20 not-provably-absolute sites in
+# plugins/soleur/test/fixture-relative-assert.baseline.txt. Measured, not reasoned.
+TMPROOT="$(mktemp -d)"
+trap 'rm -rf "$TMPROOT"' EXIT
+export TMPDIR="$TMPROOT"
 
 make_temp_root() {
   # Throwaway repo skeleton: matches the layout the SUT expects relative to
@@ -490,6 +498,17 @@ t8_shell_jq_readers_are_identical_and_type_selecting
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+# Dispatch floor. The verdict below is `[[ "$FAIL" -eq 0 ]] || exit 1`, which cannot
+# distinguish "every case passed" from "no case ran" — measured: commenting out the
+# call list reported PASS=0 FAIL=0 TOTAL=0 and exit 0. Derived from a green run, and
+# a FLOOR (never -eq) so adding a case is not a spurious failure.
+#
+# (ADR-193.) The threshold is declared on the line IMMEDIATELY
+# above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
+# by slicing the floor block plus the CONTIGUOUS simple assignments above it, so a
+# threshold declared further up leaves the mutant unbound under `set -u` and the floor
+# scores as a construction failure instead of as a firing floor.
+MIN_ASSERTIONS=28
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s) — cases did not dispatch\n' \
     "$TOTAL" "$MIN_ASSERTIONS" >&2

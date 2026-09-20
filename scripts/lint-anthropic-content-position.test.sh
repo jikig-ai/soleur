@@ -22,12 +22,22 @@ if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 || "$TOTAL" -ne 2 ]]; then
   exit 2
 fi
 PASS=0; FAIL=0; TOTAL=0
-MIN_ASSERTIONS=7
+
+# ONE owning tempdir with ONE trap (ADR-129 / lint-trap-tempfile-ownership
+# rule (c)). A per-case `mktemp -d` plus a trailing `rm -rf` leaks the whole
+# fixture tree whenever the script dies between allocation and cleanup — and
+# the FATAL `exit 2` inside run_case is exactly such a death. Cases take
+# subdirectories of this root, so the trap owns every one of them.
+TMPROOT="$(mktemp -d)"
+trap 'rm -rf "$TMPROOT"' EXIT
+CASE_N=0
 
 # $1 = case name, $2 = expected rc, $3 = file basename, $4 = file body
 run_case() {
   local name="$1" want="$2" base="$3" body="$4" root rc=0
-  root="$(mktemp -d)"
+  CASE_N=$((CASE_N + 1))
+  root="$TMPROOT/case-$CASE_N"
+  mkdir -p "$root"
   git -C "$root" init -q 2>/dev/null || { echo "FATAL: git init failed" >&2; exit 2; }
   mkdir -p "$root/server"
   printf '%s\n' "$body" > "$root/server/$base"
@@ -51,6 +61,12 @@ run_case "jq type selection passes"     0 r.sh "jq -r 'first(.content[] | select
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+# Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY
+# above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
+# by slicing the floor block plus the CONTIGUOUS simple assignments above it, so a
+# threshold declared further up leaves the mutant unbound under `set -u` and the floor
+# scores as a construction failure instead of as a firing floor.
+MIN_ASSERTIONS=7
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2
