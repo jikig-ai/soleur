@@ -96,6 +96,20 @@ Four deliverables, scoped exactly to issue #8289:
    raw and **2886 after the frontmatter strip**, which is the basis the lint actually measures.
    Nothing here needed changing — which is the point of running it rather than assuming it.
 
+7. **Post-edit self-audit pass (Phase 4.45): five stale references found and fixed — all of them mine.**
+   A revision log is not a substitute for re-reading the document it revised, and this sweep proved it.
+   R20 moved the guard's battery from `scripts/` to `plugins/soleur/test/`, but **three** sites still named
+   the old path — Phase 3 step 1, AC-5 and AC-7 — which would have sent `/work` to the exact location R20
+   established was unregisterable. R12 removed the `requester` field from the schema, but **two** sites
+   still described it as *"a role token from a closed vocabulary"* — the Observability `failure_modes`
+   detection line and a Risks row — so the plan simultaneously forbade the key and specified its legal
+   values. AC-5's row floor also still read `≥10` after R11 and R12 raised the matrix to 16 rows; it is now
+   `≥16` rows against an unchanged `≥5` axes, with row **identity** asserted separately at AC-42 because a
+   count is satisfied by N copies of one row.
+   Nothing else was stale: the cut store probe, the withdrawn layer-7 routes, the `iac-routing-ack` comment
+   and the ships-empty claim are all gone from live prose and survive only inside the revision table, where
+   they belong as history.
+
 ### What deepen-plan did NOT change
 
 The research fan-out found no new best-practice or framework guidance to fold in, and that is the honest
@@ -419,7 +433,7 @@ failure_modes:
     detection: the same lint asserts searched is a non-empty list of command-plus-result lines
     alert_route: no layer — same invocation
   - mode: an entry names a person rather than a role, creating a personal-data record in public git
-    detection: the same lint rejects an entry whose requester field is anything but a role token from a closed vocabulary
+    detection: the same lint rejects an entry carrying a requester/requested_by key at all — the field was removed from the schema by R12, so this is a forbidden-key check rather than an enum check
     alert_route: no layer — same invocation
   - mode: a pre-check block reports a Verdict with no command behind it (performative audit)
     detection: the lint rejects a Verdict line inside a pre-check block containing zero executed-command lines
@@ -1039,7 +1053,8 @@ durable reason.
 
 Ordered so the battery exists before the guard, per Phase 2.12.
 
-1. Write the mutation matrix and `scripts/lint-rejected-register.test.sh` from the **design** — RED.
+1. Write the mutation matrix and `plugins/soleur/test/lint-rejected-register.test.sh` from the
+   **design** — RED. The path is glob-registered; `scripts/*.test.sh` is not (R20).
 2. `scripts/lint-rejected-register.sh` — GREEN.
 3. Wire it in `lefthook.yml` on the glob.
 4. `references/rejected-request-register.md` (the derived convention) and
@@ -1152,12 +1167,15 @@ verification below is automatable, and the three tracking issues are filed by th
    (real rejections, but scoped to *mechanisms* rather than concepts — importing them poisons the store
    from the other direction). The README cites the ADR tables as a sibling store the lookup also checks,
    and imports nothing from them.
-5. `bash scripts/lint-rejected-register.test.sh` exits 0, reports ≥10 mutation rows across ≥5 axes and
-   ≥4 harness rows, and both floors are direct (`[[ … -lt … ]]` + `printf >&2` + `exit 1`), not routed
-   through the verdict helper — asserted by grep on the suite source.
+5. `bash plugins/soleur/test/lint-rejected-register.test.sh` exits 0, reports **≥16 mutation rows across
+   ≥5 axes** and ≥4 harness rows, and both floors are direct (`[[ … -lt … ]]` + `printf >&2` + `exit 1`),
+   not routed through the verdict helper — asserted by grep on the suite source. The row floor moved from
+   10 to 16 when R12 added the four field-coverage rows and R11 added the two mis-keying rows; the **axis**
+   floor stays at 5, which is the distinction ADR-193 Decision 2 preserves. Row identity is asserted
+   separately at AC-42, because a count is satisfied by N copies of one row.
 6. The instrument self-test proves **direction**: with `bad()` rerouted to the pass counter the suite
    exits **non-zero**.
-7. `scripts/lint-rejected-register.test.sh` sources `plugins/soleur/test/lib/git-fixture-env.sh`
+7. `plugins/soleur/test/lint-rejected-register.test.sh` sources `plugins/soleur/test/lib/git-fixture-env.sh`
    (grep), and `bash scripts/lint-orphan-test-suites.sh` reports it registered, not orphaned.
 8. `lefthook.yml` carries the `knowledge-base/project/rejected/*.md` glob wired to the lint with
    `{staged_files}`.
@@ -1648,7 +1666,7 @@ shape applied to a gate rather than to a capability.
 | A false rejection poisons concept-dedup, and the mechanism that would catch the error is the one the error disabled | Guard 1 asserts the mutual exclusion at commit time: `redundancy_check` exactly `not-implemented`, `searched` non-empty, `implemented_at` absent |
 | An entry's blunt internal reason is quoted back to a requester | `why` and `public_note` are separate required fields, and only `public_note` may be reused outward |
 | A narrower incoming request matches a broader rejection and is closed with a reason that does not address it | `scope` is required, and an uncertain match **fails open** — escalate, never auto-close |
-| A register entry names a person, creating permanent personal data in a public repository | `requester` is a closed-vocabulary role token, asserted by the lint (mutation row 5), not requested in prose |
+| An entry names a person, creating permanent personal data in a public repository | The `requester` field is **removed from the schema entirely** (R12) and the lint rejects the key outright (mutation row 5). With zero external filers there is nobody to record, so a forbidden-key check is strictly safer than the closed-vocabulary role token, asserted by the lint (mutation row 5), not requested in prose |
 | The `ticket-triage` body mirror in `.openhands/` silently drifts (no generator, no parity test) | Both files are in `## Files to Edit`; AC9 asserts the pre-checks in both |
 | The two new `go.md` rows cannibalise `default → brainstorm`, which currently absorbs "questions" | Trigger signals key on *a document to send to a named third party*, and the `go-routing` eval is the empirical check rather than a judgement call |
 | ADR-232's ordinal is claimed mid-pipeline (it has happened twice on one branch before) | Phase 6 re-derives across every `origin/*` ref immediately before merge and sweeps the whole artifact set on renumber |
