@@ -75,7 +75,7 @@ SKILLS: [N] skills
   The operator-* family is not routed from /soleur:go; invoke it via the Skill tool.
   [List all skills found with brief descriptions, grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
-   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   operator-*, kb-*, questionnaire-*, and so on. Order the families largest first. List skills with
    no prefix last, under the heading "Core workflow".]
 
 MCP SERVERS:
@@ -115,7 +115,7 @@ SKILLS: [N] skills
   The operator-* family is not routed from /soleur:go; invoke it as /soleur:<skill>.
   [List all skills found with brief descriptions, grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
-   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   operator-*, kb-*, questionnaire-*, and so on. Order the families largest first. List skills with
    no prefix last, under the heading "Core workflow".]
 
 MCP SERVERS:
@@ -152,7 +152,7 @@ SKILLS: [N] skills
   The operator-* family is not routed from /go; invoke it as /<skill-name>.
   (list all skills — invoke as /<skill-name> — grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
-   operator-*, kb-*, and so on. Order the families largest first. List skills with
+   operator-*, kb-*, questionnaire-*, and so on. Order the families largest first. List skills with
    no prefix last, under the heading "Core workflow".)
 
 MCP SERVERS:
