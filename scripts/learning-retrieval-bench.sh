@@ -30,6 +30,20 @@
 
 set -euo pipefail
 
+# XTRACE REFUSAL (#7797). This script binds ANTHROPIC_API_KEY, and `set -x` echoes every
+# expansion -- so a traced run prints the live credential into whatever captured the output.
+# Placed immediately after `set` so no credential-bearing line can execute ahead of it.
+# Required in full here rather than via the baseline: CI runs the linter in its `--changed`
+# form, which bypasses the baseline for every touched file (#8054).
+case "$-" in
+  *x*)
+    if [ -n "${ANTHROPIC_API_KEY:+x}${WILL_NEED_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # ─── globals ────────────────────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEARNINGS_ROOT="${LEARNINGS_ROOT:-$REPO_ROOT/knowledge-base/project/learnings}"

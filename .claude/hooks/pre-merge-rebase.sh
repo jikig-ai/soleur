@@ -335,6 +335,24 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   CONFLICT_FILES=$(git -C "$WORK_DIR" diff --name-only --diff-filter=U 2>/dev/null \
     | head -5 | tr '\n' ', ' | sed 's/,$//')
   git -C "$WORK_DIR" merge --abort 2>/dev/null || true
+
+  # REGENERABLE-ARTIFACT RETRY (ADR-230). model.likec4.json is the one generated file still
+  # committed -- the web-platform C4 viewer reads it from repos with no likec4 compiler -- so
+  # concurrent .c4 edits conflict on it. The resolver completes the merge and regenerates it
+  # from the MERGED sources; anything else it refuses, leaving the tree byte-identical, so the
+  # deny below is unchanged for every other conflict.
+  #
+  # AFTER the abort, deliberately: the resolver requires a clean tree and no merge in
+  # progress, and it is a precondition rather than a nicety -- running it on the conflicted
+  # tree would make it refuse, which reads identically to "not regenerable".
+  #
+  # It does not take the rebase-main lock: this hook already holds it (acquired above) and the
+  # resolver is documented as taking none, so there is no re-entrancy here.
+  REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+  if [[ -f "$REGEN_RESOLVER" ]] && ( cd "$WORK_DIR" && bash "$REGEN_RESOLVER" origin/main >/dev/null 2>&1 ); then
+    headless_or_stderr info "regenerable conflict resolved — merge committed, continuing"
+  else
+
   emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
     "When a command exits non-zero or prints a warning" "$CMD"
   jq -n --arg files "${CONFLICT_FILES:-unknown}" '{
@@ -345,6 +363,7 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
     }
   }'
   exit 0
+  fi
 fi
 
 # Merge succeeded -- push to update the remote branch.

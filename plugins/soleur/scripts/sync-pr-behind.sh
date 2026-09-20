@@ -56,22 +56,41 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
     exit 5
   fi
 
-  # GitHub DIRTY with a clean local merge-tree is the kb-index class: the
-  # server-side merge lacks the local driver. Key on merge-tree exit code;
-  # on failure its stdout carries the real conflicted paths (no merge is in
-  # progress, so `git diff --diff-filter=U` could only ever print nothing).
+  resolved_by_regen=0
+  # Key on merge-tree's exit code; on failure its stdout carries the real conflicted paths
+  # (no merge is in progress, so `git diff --diff-filter=U` could only ever print nothing).
   if ! mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
-    echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
-    printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
-    git merge --abort 2>/dev/null || true
-    exit 6
+    # REGENERABLE-ARTIFACT CONFLICT (ADR-230). One generated file is still committed --
+    # model.likec4.json, which the web-platform C4 viewer reads out of repos that ship no
+    # likec4 compiler -- so it conflicts whenever two branches touch the .c4 sources. The
+    # resolver completes the merge and regenerates it from the MERGED sources, which is the
+    # only correct resolution (side-picking yields an artifact matching neither side).
+    #
+    # FAIL-CLOSED BY CONTRACT: it exits non-zero having touched nothing unless it committed
+    # the merge, so the fall-through below is exactly today's behaviour. It never pushes --
+    # the push and its rejection handling (exit 7) stay here.
+    resolver="$REPO_ROOT/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+    if [[ -f "$resolver" ]] && bash "$resolver" origin/main; then
+      echo "[pr-behind-sync] regenerable conflict resolved — merge committed locally"
+      resolved_by_regen=1
+    else
+      echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
+      printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
+      git merge --abort 2>/dev/null || true
+      exit 6
+    fi
   fi
 
-  if ! git merge origin/main --no-edit 2>&1 | tail -8; then
-    echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
-    git diff --name-only --diff-filter=U >&2 || true
-    git merge --abort 2>/dev/null || true
-    exit 6
+  # Skip the merge when the resolver already committed one. `git merge` would report
+  # "Already up to date" and exit 0 here, so this guard is for the LOG rather than for
+  # correctness -- it keeps the output honest about which path produced the commit.
+  if [[ "$resolved_by_regen" -eq 0 ]]; then
+    if ! git merge origin/main --no-edit 2>&1 | tail -8; then
+      echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
+      git diff --name-only --diff-filter=U >&2 || true
+      git merge --abort 2>/dev/null || true
+      exit 6
+    fi
   fi
 
   if ! git push 2>&1 | tail -3; then
