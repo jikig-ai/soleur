@@ -35,3 +35,13 @@ Persisted headless (no TTY, one-shot pipeline) per ADR-084 / `plan-review` class
 ## Note — decided, not challenged
 
 `hr-technical-fork-is-not-an-operator-question`: DHH's suggestion that the **replace** route proceed when the network is unreachable (its hash binding being local) was decided in-plan against, and the reasoning is recorded in `## Alternative Approaches Considered`. It is a technical fork, not a change to operator-stated scope.
+
+## Supersession — UC4 was ACCEPTED, not declined (2026-09-20)
+
+> **Superseded 2026-09-20 (#8010, commit `237a49299`):** UC4 above records the plan's position as "keep FR15 and file the grant for all four sites as a blocker". That was the position at plan time. During the nine-seat review round it was **reversed**: `infra-validation.yml` is modified in this PR after all.
+>
+> **What changed the decision.** The panel measured that all four gate call sites resolved the Actions run anonymously (60 requests/hour per IP, shared behind hosted-runner NAT), so a rate limit turns an unrelated infra PR into a red check. `infra-validation.yml` is the only one of the four editable this cycle — the two apply-workflow sites are blocked behind #8361/#8362, and the sweeper runs under `env -i`.
+>
+> **What shipped.** `deploy-script-tests` gained `permissions: {contents: read, actions: read}`; the freshness step gained `env: GH_TOKEN: ${{ github.token }}` and a tri-state branch that distinguishes a could-not-measure token from a measured refusal. The brief's explicit prohibition — do not edit the apply workflow — is respected and asserted: `git diff --name-only origin/main...HEAD` contains no `apply-web-platform-infra.yml`.
+>
+> **Residual.** The other three call sites remain anonymous and are carried by #8397. The plan's FR15 has been amended in place to record the same supersession; UC1, UC2 and UC3 above stand as written.
