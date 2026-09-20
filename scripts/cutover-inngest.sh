@@ -880,7 +880,7 @@ case "$OP" in
       echo "registry-probe webhook body (HTTP $CODE, informational — grading from host rows): ${CAUSE:-<empty body>}"
       # shellcheck source=tests/scripts/lib/inngest-host-dark-gate.sh
       source tests/scripts/lib/inngest-host-dark-gate.sh || { echo "::error::registry-probe: gate library tests/scripts/lib/inngest-host-dark-gate.sh not found on this ref — dispatch with --ref main"; exit 1; }
-      RPG_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/rpg.XXXXXXXX") || { echo "::error::registry-probe: mktemp -d failed under ${RUNNER_TEMP:-/tmp}"; exit 1; }
+      RPG_DIR=$(mktemp -d -t rpg.XXXXXXXX) || { echo "::error::registry-probe: mktemp -d failed under ${TMPDIR:-/tmp}"; exit 1; }
       trap 'rm -rf "$RPG_DIR"' EXIT
       RPG_PROBE_ROWS="$RPG_DIR/probe.rows"; RPG_PROBE_ERR="$RPG_DIR/probe.err"
       RPG_HB_ROWS="$RPG_DIR/hb.rows";       RPG_HB_ERR="$RPG_DIR/hb.err"
@@ -1580,7 +1580,7 @@ case "$OP" in
       # is unreadable to other users without a process-wide umask change), removed on exit, and
       # NEVER echoed — the gate's stdout is exactly one token and its notice fields come back
       # through --emit-file, each written only after the predicate that validated it.
-      ERG_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/erg.XXXXXXXX") || { echo "::error::2.0: mktemp -d failed under ${RUNNER_TEMP:-/tmp}"; exit 1; }
+      ERG_DIR=$(mktemp -d -t erg.XXXXXXXX) || { echo "::error::2.0: mktemp -d failed under ${TMPDIR:-/tmp}"; exit 1; }
       trap 'rm -rf "$ERG_DIR"' EXIT
       PROBE_ROWS="$ERG_DIR/probe.rows"; PROBE_ERR="$ERG_DIR/probe.err"
       HB_ROWS="$ERG_DIR/hb.rows";       HB_ERR="$ERG_DIR/hb.err"

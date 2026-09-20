@@ -1999,8 +1999,10 @@ assert "#8054 one read carries the probe marker, the other the flip tag, and nei
 assert "#8054 both reads capture stderr to a file and return the query's rc into a *_RC variable" \
   "[[ \$(printf '%s\n' \"\$ERG_READS\" | grep -cE '^[[:space:]]*(PROBE|HB)_RC=0;[[:space:]]+_bs_query_rows .* \"\\\$(PROBE|HB)_ERR\" > \"\\\$(PROBE|HB)_ROWS\" \|\| (PROBE|HB)_RC=\\\$\?$') -eq 2 ]]"
 _trap_line="trap 'rm -rf \"\$ERG_DIR\"' EXIT"
-_mktemp_line='mktemp -d "${RUNNER_TEMP:-/tmp}/erg.XXXXXXXX"'
-assert "#8054 the row files live under a private mktemp -d (0700) directory under RUNNER_TEMP, removed on EXIT" \
+# `-t <prefix>` since #8079: TMPDIR-based and PROVABLY absolute to fixture-scan (a destination
+# argument rooted on ${RUNNER_TEMP:-/tmp} was not, and rooted 4 baselined sites per arm).
+_mktemp_line='mktemp -d -t erg.XXXXXXXX'
+assert "#8054 the row files live under a private mktemp -d -t (0700, TMPDIR-based, provably absolute) directory, removed on EXIT" \
   "grep -qF -- \"\$_mktemp_line\" '$EXEC_ARM_FILE' && grep -qF -- \"\$_trap_line\" '$EXEC_ARM_FILE' && ! grep -qE '^[[:space:]]*umask ' '$EXEC_ARM_FILE'"
 # The dark arm is entered ONLY on the dedicated host's own connection-refused signature (HTTP 500
 # + __FETCH_FAILED__ from inngest-registry-probe.sh); every other non-200 is a WEBHOOK-PATH fault
@@ -2142,7 +2144,7 @@ render_2_0() {
   {
     printf 'cd %q || exit 97\n' "$REPO_ROOT"
     printf 'set -euo pipefail\n'
-    printf 'export RUNNER_TEMP=%q\n' "$tmpd"
+    printf 'export RUNNER_TEMP=%q TMPDIR=%q\n' "$tmpd" "$tmpd"
     printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
     printf 'INNGEST_HOST="soleur-inngest"; INNGEST_HOST_NAME="soleur-inngest-prd"; FLIP_LIVENESS_SINCE="15m"\n'
     printf 'STUB_CODE=%q; STUB_BODY=%q; PMODE=%q; HMODE=%q; TMPD=%q\n' "$code" "$body" "$pmode" "$hmode" "$tmpd"
