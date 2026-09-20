@@ -1483,7 +1483,7 @@ HTTP 200, or `exit 1` on any non-200. Since #8079 its non-200 branch routes thro
 `HOST-STATE VERDICT: dark` (exit 0, NO `registry_empty=` line, a `::warning::` naming what was not
 measured), and a `REFUSED (<token>)` (exit 1) whose remedy is written for a standalone read-only
 diagnostic — never a mutating op, never SSH. The plan at
-`knowledge-base/project/plans/2026-09-20-fix-registry-probe-dark-gate-plan.md` is the design record
+`knowledge-base/project/plans/archive/20260920-221311-2026-09-20-fix-registry-probe-dark-gate-plan.md` is the design record
 (D1–D10 and its review round).
 
 **Why `dark` exits 0 here.** The op answers "is the dedicated registry empty"; a dark host answers
