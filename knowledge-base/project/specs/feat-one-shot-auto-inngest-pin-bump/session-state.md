@@ -69,7 +69,7 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
 
 ## CI-gate remediation (post-push `1557e7aa8`)
 
-- `credential-path-guard` red: `tasks.md` carried a resolvable `~/.docker/config.json` literal → neutralized to the directory-only form.
+- `credential-path-guard` red: `tasks.md` carried a resolvable Docker credential-file literal → neutralized to the directory-only form. (Do not restate the literal here — the guard scans session-state too.)
 - `deploy-script-tests` red: `inngest-bootstrap-mirror-only.test.sh` asserted exactly one job; `bump-cloud-init-pin` is now enumerated as the sanctioned second job, with its own `needs:`/`if:`/`continue-on-error:` surface asserted (60/0).
 - Post-merge ADR-230 collision with main's debug-probes ADR → renumbered mine to **ADR-231** (file, title, and all in-branch references; `model.likec4.json` regenerated; PR body updated). `adr-ordinals` + `test-bun` failures were the same root cause.
 - Second ordinal collision on the next main sync: main took ADR-231 (workflow byte-budget) → renumbered mine to **ADR-232**; byte-budget ADR-231 references in `workflow-file-size.test.ts`, `apply-web-platform-infra-job-rationale.md`, and the byte-limit learning are main's and were left untouched.
