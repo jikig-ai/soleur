@@ -454,6 +454,27 @@ for i in "${!GATE_ANCHORS[@]}"; do
   fi
 done
 
+echo "R3d. .mcp.json is never truncated when main does not carry one"
+# The P1 this suite did not cover: `git show main:.mcp.json > .mcp.json` truncates the target
+# before forking, so a repo whose main has no .mcp.json ended up with a 0-byte file, silently,
+# rc 0. THIS repo tracks one, which is why every fixture had one and nobody saw it.
+ws="$(fresh_ws r3d)"
+git -C "$ws" rm -q --cached .mcp.json
+git -C "$ws" commit -q -m "main carries no .mcp.json"
+printf '%s' '{"local":"customer-edits"}' > "$ws/.mcp.json"
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
+want_eq "$(cat "$ws/.mcp.json")" '{"local":"customer-edits"}' "R3d: a local .mcp.json survives when main has none"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main" "R3d: and the skip is reported, not swallowed"
+ck; if [ -e "$ws/.mcp.json.soleur-tmp" ]; then fail "R3d: the temp file was left behind"; else pass "R3d: no temp file left behind"; fi
+
+echo "R3e. a verified root whose CLASSIFIER is absent is reported distinctly"
+# SESSION_PROBE=absent had no row: mk_root's absent=session-start drops only worktree-manager.sh.
+CLASSLESS="$TMP_ROOT/root-no-classifier"; mk_root "$CLASSLESS" soleur cloud-detect
+ws="$(fresh_ws r3e)"
+out="$(run_gate "$(delivered_fence 2 "$CLASSLESS" noclass)" "$ws" "$SCRATCH_HOME")"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=classifier-absent" "R3e: names the ABSENT CLASSIFIER, not the absent manager"
+want_not_in "$out" "STUB_WORKTREE_MANAGER" "R3e: dispatches nothing without a session class"
+
 echo "R3c. session-class gate: a not-local verdict never reaches cleanup-merged"
 CLOUD_ROOT="$TMP_ROOT/root-cloud"; mk_root "$CLOUD_ROOT" soleur
 cat > "$CLOUD_ROOT/scripts/cloud-detect.sh" <<'CLOUD_EOF'
@@ -745,9 +766,9 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 142 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
+# 147 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
 # Raising it is part of adding a row.
-MIN_ASSERTIONS=142
+MIN_ASSERTIONS=147
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
