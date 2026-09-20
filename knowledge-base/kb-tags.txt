@@ -235,6 +235,7 @@ alpine
 always-function
 analytics
 analytics-track
+anchor-assertion
 anchor-on-syntax
 anchor-preservation
 anchor-resolution-over-architecture

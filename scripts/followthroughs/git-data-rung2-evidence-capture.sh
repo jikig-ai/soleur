@@ -215,6 +215,28 @@ if [[ ! "$EVIDENCE_URL" =~ ^https://github\.com/jikig-ai/soleur/actions/runs/[0-
   exit 64
 fi
 
+# (#8010 Guard 4) THE HOST AND THE URL MUST NAME THE SAME RUN. Both shapes above pass
+# independently while still describing two different rehearsals: `--host-name
+# soleur-git-data-rehearsal-17250000001` beside `--evidence-url .../runs/9999999999` is a file
+# whose hash-bound payload was measured on one host and whose provenance points at another
+# run's log, and the gate that reads it resolves the URL's run — so the run it verifies is not
+# the run that produced the bytes. THIS SCRIPT IS THE ONLY WRITER of that pair, so the coupling
+# is pinned here, at the source, rather than only being detected downstream.
+#
+# Exit 64 (usage), not 2: a mismatched pair is a fixed input error that no re-dispatch fixes,
+# and the rehearsal workflow retries rc=2.
+#
+# The URL's run id is the FIRST path segment after `/runs/`, so the non-canonical
+# `.../runs/<id>/attempts/2` form GitHub serves on a re-run still couples.
+_url_run_id="${EVIDENCE_URL#https://github.com/jikig-ai/soleur/actions/runs/}"
+_url_run_id="${_url_run_id%%/*}"
+_url_run_id="${_url_run_id%%\?*}"
+_host_run_id="${HOST_NAME#soleur-git-data-rehearsal-}"
+if [[ "$_host_run_id" != "$_url_run_id" ]]; then
+  echo "refusing: --host-name and --evidence-url name DIFFERENT runs (host suffix '${_host_run_id}', url run id '${_url_run_id}'). The evidence file binds a user_data hash measured on the host to the run whose log proves it; a mismatched pair makes the gate resolve a run that did not produce these bytes. Pass \${REHEARSAL_PREFIX}\${GITHUB_RUN_ID} and this run's own URL." >&2
+  exit 64
+fi
+
 # (#8210) --reboot-since needs no shape check of its own: it assigns SENTRY_SINCE above, and
 # the existing SENTRY_SINCE validation below applies the identical ISO8601 regex to it. A
 # second copy was cut at review -- it only shadowed that one with a different message, which
@@ -301,7 +323,17 @@ _sentry_window_args() {
   esac
 }
 
-# Prints the consult's verdict lines. Sets _SENTRY_VERDICT to FATAL | CLEAN | UNAVAILABLE.
+# Prints the consult's verdict lines. Sets _SENTRY_VERDICT to FATAL | CLEAN | UNAVAILABLE |
+# NOT_RUN.
+#
+# (#8010 item 3) NOT_RUN AND UNAVAILABLE ARE DIFFERENT FACTS, and the difference is now
+# load-bearing. UNAVAILABLE means the cross-check RAN and could not be trusted; NOT_RUN means
+# it never ran at all. They used to commit byte-identical evidence, so a capture on a runner
+# with no jq and no token wrote the same `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` as one whose
+# read genuinely degraded — and git_data_rung2_rehearsal_gate now lets a human ACKNOWLEDGE an
+# UNAVAILABLE and release the birth hold. An ack is a statement about a read that happened;
+# it must not be usable to bless a read that never did, so the three structural preflights
+# below report NOT_RUN, which the gate refuses outright and no ack can rescue.
 _sentry_consult() {
   _SENTRY_VERDICT="UNAVAILABLE"
   # STRUCTURAL PREFLIGHTS FIRST, so an absent tool or token is a cheap named refusal rather
@@ -311,11 +343,13 @@ _sentry_consult() {
     # cause, and that cause is the branch condition itself — but lint-diagnosis-claims cannot
     # see a basis that lives in the enclosing `if`, and its baseline ratchets DOWN only, so
     # the annotation is the sanctioned fix rather than a baseline bump (ADR-166).
+    _SENTRY_VERDICT="NOT_RUN"
     echo "  second channel: SKIPPED — jq is not installed, so a Sentry result could not be parsed."
     echo "  **Next:** install jq on the runner. Re-dispatching will not change this."
     return 0
   fi
   if [[ -z "${SENTRY_ISSUE_RO_TOKEN:-}" ]]; then
+    _SENTRY_VERDICT="NOT_RUN"
     echo "  second channel: SKIPPED — SENTRY_ISSUE_RO_TOKEN is unset, so the Sentry-only stages"
     echo "  (everything before \`doppler run\`) could not be read. This is NOT evidence the host"
     echo "  emitted nothing there."
@@ -324,6 +358,7 @@ _sentry_consult() {
     return 0
   fi
   if [[ ! -r "$SENTRY_READER" ]]; then
+    _SENTRY_VERDICT="NOT_RUN"
     echo "  second channel: SKIPPED — ${SENTRY_READER} not found."
     echo "  **Next:** this is a repo defect, not a host condition. Re-dispatching will not change it."
     return 0
@@ -387,10 +422,22 @@ _sentry_consult() {
     #
     # The anchor EXCLUDES this host by design: its own unconditional level:info bootcmd
     # beacon would otherwise satisfy it, making it vacuous exactly when it matters.
-    local _lw=() _lout _lrc _lerrf _lcount
-    mapfile -t _lw < <(_sentry_window_args)
+    #
+    # (#8010 item 2) THE LIVENESS WINDOW IS DECOUPLED FROM THE FATAL WINDOW, DELIBERATELY.
+    # This call used to inherit `_sentry_window_args`, so under `--since` it asked "did any
+    # OTHER host emit inside this run's two minutes?" — a question whose honest answer on a
+    # quiet Sunday is "no", which then downgraded a perfectly good CLEAN to UNAVAILABLE. The
+    # anchor is not asking about this run at all: it asks whether the INSTRUMENT is answering,
+    # and that is a question about the last day. 24h is wide enough that a live project always
+    # has traffic in it and narrow enough that an ingest which died yesterday still shows as
+    # dead. Pinned at the one call site rather than behind a helper — a second helper for a
+    # single caller only invites the next reader to route the fatal read through it too, and
+    # the fatal read MUST stay run-pinned (defect 5: host_name embeds a run id that is stable
+    # across re-run attempts, so an unpinned fatal read surfaces attempt 1's fatal in
+    # attempt 2).
+    local _lout _lrc _lerrf _lcount
     _lerrf="$(mktemp -t rung2-live.XXXXXXXX.err)"
-    _lout="$(bash "$SENTRY_READER" --liveness "$HOST_NAME" "${_lw[@]}" 2>"$_lerrf")"; _lrc=$?
+    _lout="$(bash "$SENTRY_READER" --liveness "$HOST_NAME" --stats-period 24h 2>"$_lerrf")"; _lrc=$?
     rm -f "$_lerrf"
     _lcount=""
     if [[ "$_lrc" -eq 0 ]]; then
@@ -921,11 +968,22 @@ if [[ -n "$REBOOT_SINCE" ]]; then
   _bs_reopen="$(grep 'luks_reopen_ok' <<<"$host_out" || true)"
   _bs_fatal="$(grep '"level":"fatal"' <<<"$fatal_out" || true)"
 
+  # (#8010 item 5) RESOLVE THE WINDOW ONCE, BEFORE THE CALL, and record THAT.
+  # `_sentry_window_args` resolves `--end` from `date -u` at call time, and the QUERY line
+  # appended below used to write the literal string `<now>` — which is not a timestamp, cannot
+  # be replayed, and hides the single field that says how far past the reset this arm looked.
+  # Resolved into `_rw` here (unconditionally: the helper is pure and cheap) so the line
+  # recorded is the line that ran, even on the branch where no Sentry read happens at all.
+  mapfile -t _rw < <(_sentry_window_args)
+  _reboot_end=""
+  for ((_i = 0; _i + 1 < ${#_rw[@]}; _i++)); do
+    if [[ "${_rw[_i]}" == "--end" ]]; then _reboot_end="${_rw[_i+1]}"; break; fi
+  done
+
   _sentry_reopen=""; _sentry_reopen_rc=1
   if [[ -n "${SENTRY_ISSUE_RO_TOKEN:-}" && -r "$SENTRY_READER" ]] && command -v jq >/dev/null 2>&1; then
     # The window comes from the ONE helper every other Sentry read here uses (`--reboot-since`
     # assigns SENTRY_SINCE, so it emits the same --start/--end this line used to re-type).
-    mapfile -t _rw < <(_sentry_window_args)
     _sentry_reopen="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" --stage luks_reopen_ok \
       "${_rw[@]}" 2>/dev/null)"; _sentry_reopen_rc=$?
   fi
@@ -989,7 +1047,11 @@ if [[ -n "$REBOOT_SINCE" ]]; then
   assert_fixture_dir "$OUT"
   {
     printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
-    printf '# QUERY: sentry-issue.sh --host-events %s --stage luks_reopen_ok --start %s --end <now>\n' "$HOST_NAME" "$REBOOT_SINCE"
+    # `--reboot-since` always assigns SENTRY_SINCE, so the helper always emits --start/--end
+    # here; the `:-unresolved` guard says so out loud rather than printing an empty field if
+    # that ever stops being true.
+    printf '# QUERY: sentry-issue.sh --host-events %s --stage luks_reopen_ok --start %s --end %s\n' \
+      "$HOST_NAME" "$REBOOT_SINCE" "${_reboot_end:-unresolved}"
     printf 'RUNG2_REBOOT_REOPEN=PASS\n'
     printf 'RUNG2_REBOOT_REOPEN_CHANNEL=%s\n' "$_channel"
     printf 'RUNG2_REBOOT_REOPEN_RESTARTS=%s\n' "${_restarts:-unknown}"
@@ -1214,13 +1276,27 @@ assert_fixture_dir "$OUT"
   # cross-check ran at all. The human at the second gate merges THIS file, so the verdict
   # has to survive into it.
   #
-  # Recorded, not enforced: an UNAVAILABLE second channel still passes (see the precedence
-  # note above). This puts the degrade in front of the reviewer who is the actual control.
+  # Recorded here, ENFORCED downstream: this capture still exits 0 on an UNAVAILABLE second
+  # channel (see the precedence note above), but git_data_rung2_rehearsal_gate no longer does
+  # — so the line below is what the reviewer reads AND what the gate reads.
   printf '# ARTIFACT 4 — the Sentry cross-check, run before this file was written.\n'
-  printf '# CLEAN = a fatal read returned zero rows AND the liveness anchor confirmed the\n'
-  printf '# source is answering. UNAVAILABLE = the read did not happen or could not be\n'
-  printf '# trusted; the PASS below rests on Better Stack alone.\n'
+  printf '# CLEAN = the fatal read returned zero rows AND the liveness anchor confirmed the\n'
+  printf '# source is answering. UNAVAILABLE = the read RAN and could not be trusted (refused,\n'
+  printf '# unparseable, or zero rows from a source that could not be shown to be answering);\n'
+  printf '# NOT_RUN = it never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, no reader).\n'
+  printf '# UNAVAILABLE now HOLDS git_data_rung2_rehearsal_gate unless a human appends\n'
+  printf '# RUNG2_SENTRY_CROSSCHECK_ACK=<this run id>:<why the second channel may be skipped>;\n'
+  printf '# NOT_RUN is refused outright and no acknowledgement rescues it.\n'
+  # BOTH READS ARE RECORDED, because they ask different questions over different windows and
+  # an evidence file that records only one under-states what was actually asked.
   printf '# QUERY: sentry-issue.sh --host-events %s %s\n' "$HOST_NAME" "$(_sentry_window_args | tr '\n' ' ')"
+  printf '# QUERY: sentry-issue.sh --liveness %s --stats-period 24h\n' "$HOST_NAME"
+  # SCOPE, STATED RATHER THAN ASSUMED (#8010 item 6). `--reboot-since` re-runs the consult but
+  # appends only the RUNG2_REBOOT_REOPEN* keys, so the verdict recorded here describes the
+  # PRE-RESET window only. A reader who assumes it covers the whole run would read a
+  # post-reset Sentry degrade as having been cross-checked when it was not.
+  printf '# SCOPE: this verdict covers the PRE-RESET window only. The reboot arm below (if\n'
+  printf '# present) re-runs the cross-check but records only RUNG2_REBOOT_REOPEN*.\n'
   printf 'RUNG2_SENTRY_CROSSCHECK=%s\n' "${_SENTRY_VERDICT:-NOT_RUN}"
   printf 'RUNG2_BOOT_REHEARSAL=PASS\n'
   printf 'RUNG2_EVIDENCE_URL=%s\n' "$EVIDENCE_URL"
