@@ -848,7 +848,132 @@ case "$OP" in
     BODY=$(cat /tmp/registry-probe-body 2>/dev/null || echo "")
     if [[ "$CODE" != "200" ]]; then
       CAUSE="${BODY//[$'\n\r']/ }"
-      echo "::error::registry-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+      # ---- registry-probe DARK ARM (#8079). Mirrors 2.0's arm (:1402-1530) in PLUMBING and
+      # differs deliberately in every REMEDY, for two reasons that are not cosmetic.
+      #
+      # (1) THE QUESTION IS DIFFERENT. 2.0 is a pre-flight gate INSIDE a cutover window, and for it
+      # a host that CANNOT START satisfies its property ("no registry can double-fire") more
+      # strongly than one that answered empty. This op is a STANDALONE READ-ONLY DIAGNOSTIC that
+      # stops after reading: the operator asked "has an SDK registered functions against
+      # 10.0.1.40?", and darkness answers a WEAKER proposition — nothing can have registered since
+      # this boot — while measuring no registry contents at all (E12 REQUIRES
+      # registry_fns=__UNREADABLE__ on a dark row). So `dark` exits 0 with a notice AND a caveat
+      # warning, mirroring this arm's own convention of printing its worst finding
+      # (registry_empty=false) as a warning at exit 0 and reserving non-zero for "could not run".
+      # The confusion cost is paid in the MESSAGE, because an exit code has two values and cannot
+      # carry the distinction.
+      #
+      # (2) THIS OP IS DISPATCHED OUTSIDE A WINDOW, frequently during an incident. 2.0's remedies
+      # legitimately end in op=execute / op=resume / op=rollback; here every remedy ends at a READ,
+      # and where recovery needs a mutating op the remedy points at the cutover runbook. Flat ban,
+      # not a qualifier: `! grep -qE 'op=(execute|resume|rollback|arm)'` over this region.
+      #
+      # THE NON-200 MUST BE THE DEDICATED HOST'S FETCH FAILURE, NOT THE WEBHOOK PATH'S — same
+      # discrimination 2.0 makes, with a different sibling op named, because naming
+      # op=registry-probe here would be self-referential.
+      if [[ "$CODE" != "500" || "$BODY" != *"__FETCH_FAILED__"* ]]; then
+        echo "::error::registry-probe REFUSED (webhook_path): the webhook returned HTTP $CODE without the dedicated host's fetch-failure signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so this is a WEBHOOK-PATH fault and says NOTHING about the host. Isolate it with a sibling GET through the SAME path: gh workflow run cutover-inngest.yml -f op=inventory. If op=inventory returns 200 the path is healthy and the fault is in the inngest-registry-probe hook itself; if it also fails, the path is at fault (CF Access / WAF / webhook.service on the web host). Do NOT SSH the host."
+        echo "registry-probe webhook body (HTTP $CODE): ${CAUSE:-<empty body>}"
+        exit 1
+      fi
+      echo "::notice::registry-probe: webhook HTTP $CODE carries the dedicated host's fetch-failure signature (the web host could not reach 10.0.1.40:8288 just now) — grading the HOST STATE from the host's own rows instead of a live registry read"
+      echo "registry-probe webhook body (HTTP $CODE, informational — grading from host rows): ${CAUSE:-<empty body>}"
+      # shellcheck source=tests/scripts/lib/inngest-host-dark-gate.sh
+      source tests/scripts/lib/inngest-host-dark-gate.sh || { echo "::error::registry-probe: gate library tests/scripts/lib/inngest-host-dark-gate.sh not found on this ref — dispatch with --ref main"; exit 1; }
+      RPG_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/rpg.XXXXXXXX") || { echo "::error::registry-probe: mktemp -d failed under ${RUNNER_TEMP:-/tmp}"; exit 1; }
+      trap 'rm -rf "$RPG_DIR"' EXIT
+      RPG_PROBE_ROWS="$RPG_DIR/probe.rows"; RPG_PROBE_ERR="$RPG_DIR/probe.err"
+      RPG_HB_ROWS="$RPG_DIR/hb.rows";       RPG_HB_ERR="$RPG_DIR/hb.err"
+      RPG_EMIT="$RPG_DIR/emit.txt"
+      RPG_PROBE_RC=0; _bs_query_rows 24h SOLEUR_INNGEST_SERVER_PROBE 500 "$RPG_PROBE_ERR" > "$RPG_PROBE_ROWS" || RPG_PROBE_RC=$?
+      RPG_HB_RC=0;    _bs_query_rows 30m inngest-cutover-flip 200 "$RPG_HB_ERR" > "$RPG_HB_ROWS" || RPG_HB_RC=$?
+      : > "$RPG_EMIT"
+      RPG_RC=0
+      RPG_VERDICT="$(inngest_execute_registry_gate --rows-file "$RPG_PROBE_ROWS" --query-rc "$RPG_PROBE_RC" --hb-file "$RPG_HB_ROWS" --hb-rc "$RPG_HB_RC" --emit-file "$RPG_EMIT" --host "$INNGEST_HOST" --host-name "$INNGEST_HOST_NAME")" || RPG_RC=$?
+      RPG_FLAG="__UNREAD__"; RPG_BOOT="__UNREAD__"; RPG_ROW_AGE="__UNREAD__"; RPG_HB_AGE="__UNREAD__"; RPG_HB_FLAG="__UNREAD__"
+      while IFS= read -r _rpg_line; do
+        [[ "$_rpg_line" =~ ^(flag|boot_id|row_age|hb_age|hb_flag)=([A-Za-z0-9_-]{1,64})$ ]] || continue
+        case "${BASH_REMATCH[1]}" in
+          flag)    RPG_FLAG="${BASH_REMATCH[2]}" ;;
+          boot_id) RPG_BOOT="${BASH_REMATCH[2]}" ;;
+          row_age) RPG_ROW_AGE="${BASH_REMATCH[2]}" ;;
+          hb_age)  RPG_HB_AGE="${BASH_REMATCH[2]}" ;;
+          hb_flag) RPG_HB_FLAG="${BASH_REMATCH[2]}" ;;
+        esac
+      done < "$RPG_EMIT"
+      # twin: the 2.0 arm's `case "$ERG_VERDICT" in` (anchor: "2.0 DARK ARM (#8054)"). Every token the lib can emit from
+      # inngest_execute_registry_gate has an arm in BOTH; the suite derives the set from the lib.
+      case "$RPG_VERDICT" in
+        dark)
+          if [[ "$RPG_RC" -ne 0 ]]; then
+            echo "::error::registry-probe REFUSED: the dark-host gate printed dark but exited rc=$RPG_RC — token and exit code disagree. This is a defect in the gate, not a host state — file an issue with this run URL. Do NOT SSH the host."; exit 1
+          fi
+          echo "::notice::registry-probe HOST-STATE VERDICT: dark — the dedicated host is positively dark on boot_id=$RPG_BOOT: probe row ${RPG_ROW_AGE}s old with flag=$RPG_FLAG, FSM heartbeat ${RPG_HB_AGE}s old with flag=$RPG_HB_FLAG. Its inngest-server has not been bound on this boot."
+          echo "::warning::registry-probe: What this establishes: nothing can have registered against 10.0.1.40 since boot $RPG_BOOT — its inngest-server has not been bound on this boot, so no SDK can have reached it. What it does not establish: what the registry HOLDS; registry_empty was not measured, because a dark host answers no read. Dispatch op=doublefire-probe for the stronger reading (whether the dark host has EXECUTED runs, which is the harm itself rather than a proxy for it)." ;;
+        flag_armed)
+          # TWO SAMPLES, DIFFERENT AGES, and the branch must say which one it is quoting. E11 grades
+          # the HOURLY probe row's flag BEFORE E13 reads the ~1/min heartbeat, so on an E11 refusal
+          # hb_flag is still __UNREAD__; on an E13 refusal BOTH are populated and may DISAGREE. A
+          # branch keyed on "either equals done" mis-grades the second; one keyed on hb_flag alone
+          # drops the first into *). Hence 2x2: outer picks the SAMPLE, inner picks its VALUE.
+          if [[ "$RPG_HB_FLAG" == "__UNREAD__" ]]; then
+            if [[ "$RPG_FLAG" == "done" ]]; then
+              echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag reads 'done'. Since cutover step 2.4 this host owns production cron scheduling, so scheduling may be DOWN."
+              echo "registry-probe: this reading is the HOURLY probe row, ${RPG_ROW_AGE}s old — it can lag reality by up to 60 minutes, so a rollback you performed minutes ago would not appear here yet."
+              echo "registry-probe: 1. read the latest watchdog verdict first — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'."
+              echo "registry-probe: 2. read the host's own current state — doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
+              echo "registry-probe: 3. if the watchdog also reports the host down, recovery is a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) for the dispatch and its preconditions."
+              echo "registry-probe: Do NOT SSH the host."
+              exit 1
+            fi
+            echo "::error::registry-probe REFUSED (flag_armed): the dedicated host's newest HOURLY probe row (${RPG_ROW_AGE}s old) reads INNGEST_CUTOVER_FLIP='$RPG_FLAG' — a cutover sequence is in flight. Read that run before doing anything else: gh run list --workflow cutover-inngest.yml --limit 5. Dispatch nothing from here; this op is a read and its answer would describe a host mid-transition. Note the row can lag reality by up to 60 minutes. Do NOT SSH the host."; exit 1
+          fi
+          if [[ "$RPG_HB_FLAG" == "done" ]]; then
+            echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and the flip FSM's newest same-boot heartbeat (${RPG_HB_AGE}s old — a live sample, not the hourly row) reads INNGEST_CUTOVER_FLIP='$RPG_HB_FLAG'. Since cutover step 2.4 this host owns production cron scheduling, so scheduling may be DOWN."
+            echo "registry-probe: 1. read the latest watchdog verdict first — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'."
+            echo "registry-probe: 2. read the host's own current state — doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
+            echo "registry-probe: 3. if the watchdog also reports the host down, recovery is a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) for the dispatch and its preconditions."
+            echo "registry-probe: Do NOT SSH the host."
+            exit 1
+          fi
+          echo "::error::registry-probe REFUSED (flag_armed): the flip FSM's newest same-boot heartbeat (${RPG_HB_AGE}s old) reads INNGEST_CUTOVER_FLIP='$RPG_HB_FLAG' — a cutover sequence is in flight right now. Read that run: gh run list --workflow cutover-inngest.yml --limit 5. Dispatch nothing from here. Do NOT SSH the host."; exit 1 ;;
+        host_serving)
+          echo "::error::registry-probe REFUSED (host_serving): the dedicated host's own row says it IS serving (loopback 200 or unit active) while the webhook returned HTTP $CODE — the row and the webhook disagree, so neither reading can be trusted on its own. Post-cutover this is usually the webhook path, not the host. Isolate it with a sibling GET through the SAME path: gh workflow run cutover-inngest.yml -f op=inventory. If op=inventory returns 200 the path is healthy and the fault is in the inngest-registry-probe hook; if it also fails, the path is at fault (CF Access / WAF / webhook.service on the web host). Then read the host's own state: doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh. Do NOT SSH the host."; exit 1 ;;
+        silent)
+          echo "::error::registry-probe REFUSED (silent): the read path answered but the dedicated host emitted NO probe row in the window — silence is not darkness, and it is not a host verdict. BEFORE treating it as a dead host, confirm INGEST health/quota: on 2026-08-14 the Better Stack Logs quota exhausted and ingest returned 402 for ~49h while the READ path answered 200, which presents as exactly this verdict with no host fault at all. Then read the latest watchdog verdict: gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'. Two consecutive probe-unavailable readings there, with ingest healthy, make it a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md). Do NOT SSH the host."; exit 1 ;;
+        unreadable)
+          if [[ "$RPG_PROBE_RC" -ne 0 ]]; then
+            _bs_read_remedy probe "$RPG_PROBE_RC" "$RPG_PROBE_ERR" "$RPG_PROBE_ROWS" "registry-probe"
+          else
+            echo "::error::registry-probe REFUSED (unreadable): the probe read answered (rc=0) but the dedicated host's newest row could not be graded — rows arrived and did not decode, two rows at the newest dt disagree, or a field is absent/malformed/incoherent. Nothing about the host was measured. If it is a tie, wait one probe period (<= 60 min) and re-dispatch this op; otherwise file an issue with this run URL against inngest-bootstrap.sh. Do NOT SSH the host."
+          fi
+          exit 1 ;;
+        fsm_unreadable)
+          if [[ "$RPG_HB_RC" -ne 0 ]]; then
+            _bs_read_remedy heartbeat "$RPG_HB_RC" "$RPG_HB_ERR" "$RPG_HB_ROWS" "registry-probe"
+          else
+            echo "::error::registry-probe REFUSED (fsm_unreadable): the heartbeat read answered (rc=0) but the flip FSM's rows could not be graded — the payload did not parse as an object, or two heartbeats at the newest dt disagree. This is a read-path or emitter fault, not a host verdict. Wait one heartbeat (~1 min) and re-dispatch this op; if it persists, file an issue with this run URL. Do NOT SSH the host."
+          fi
+          exit 1 ;;
+        fsm_silent)
+          echo "::error::registry-probe REFUSED (fsm_silent): the heartbeat read answered but the flip FSM emitted NO same-boot heartbeat in the window, so the host's flag could not be corroborated against a live sample and darkness cannot be established. Confirm INGEST health/quota first (a 402 presents as silence with no host fault), then read the latest watchdog verdict: gh run list --workflow scheduled-inngest-health.yml --limit 1. Do NOT SSH the host."; exit 1 ;;
+        wrong_host)
+          echo "::error::registry-probe REFUSED (wrong_host): probe rows are present but none carries the dedicated host's identity (host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND host_role=dedicated) — an identity mislabel (#6616 class). Note web-1 emits this same marker with host_name=soleur-inngest-prd, so a read that is not pinned on BOTH conjuncts reads the wrong machine while looking correct. File an issue with this run URL; the host is not the problem and needs no action. Do NOT SSH the host."; exit 1 ;;
+        stale_row)
+          echo "::error::registry-probe REFUSED (stale_row): the dedicated host's newest probe row is older than the gate's bound (or future-dated), so it cannot support a verdict about the host NOW. Wait for the next hourly probe and re-dispatch this op; if it stays stale, treat it as silent (see that remedy, including the ingest-quota check). There is no no-SSH way to fire the probe early. Do NOT SSH the host."; exit 1 ;;
+        stale_schema)
+          echo "::error::registry-probe REFUSED (stale_schema): the dedicated host's probe row is not probe_schema=${_IHDG_EXPECTED_SCHEMA} — the emitter is BAKED into the image, so it needs a host replace on a pin that carries the schema-${_IHDG_EXPECTED_SCHEMA} emitter. Confirm the pin carries it first: git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh | grep -c \"^probe_schema=${_IHDG_EXPECTED_SCHEMA}\$\" (a replace on an unbumped pin re-delivers the same bytes), then see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md). Do NOT SSH the host."; exit 1 ;;
+        flag_unreadable)
+          if [[ "$RPG_HB_FLAG" == "__UNREAD__" ]]; then
+            echo "::error::registry-probe REFUSED (flag_unreadable): the dedicated host's newest HOURLY probe row (${RPG_ROW_AGE}s old) reads a cutover flag that is neither pre-arm nor in the arm set — the emitter could not read it ('unknown': a Doppler read failure, OR a host that has never been armed and so has no INNGEST_CUTOVER_FLIP at all) or it is mid-transition ('rollback'). Darkness cannot be established without it. Wait for the next hourly probe row (<= 60 min) and re-dispatch this op; if it persists, file an issue naming this run. Do NOT write the flag by hand. Do NOT SSH the host."
+          else
+            echo "::error::registry-probe REFUSED (flag_unreadable): the flip FSM's newest same-boot heartbeat (${RPG_HB_AGE}s old) reads a cutover flag ('$RPG_HB_FLAG') that is neither pre-arm nor in the arm set, so darkness cannot be established. Wait one heartbeat (~1 min) and re-dispatch this op; if it persists, file an issue naming this run. Do NOT write the flag by hand. Do NOT SSH the host."
+          fi
+          exit 1 ;;
+        *)
+          RPG_SAFE="$(printf '%s' "${RPG_VERDICT:-<empty>}" | tr -cd '[:alnum:]_-' | cut -c1-64)"
+          echo "::error::registry-probe REFUSED: the dark-host gate returned a token this arm does not handle ('${RPG_SAFE:-<unprintable>}', rc=$RPG_RC). That is a defect in tests/scripts/lib/inngest-host-dark-gate.sh or in this arm's case coverage, NOT a host state — the host may be perfectly healthy. File an issue with this run URL naming the token. Do NOT SSH the host."; exit 1 ;;
+      esac
     else
       if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1; then
         echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object"; echo "$BODY"; exit 1
@@ -1495,6 +1620,9 @@ case "$OP" in
           hb_flag) ERG_HB_FLAG="${BASH_REMATCH[2]}" ;;
         esac
       done < "$ERG_EMIT"
+      # twin: the registry-probe arm's `case "$RPG_VERDICT" in` (#8079). Same token set, derived
+      # from the lib by the suite; remedies differ on purpose (2.0 runs inside a window, the
+      # probe runs outside one — see D5 there). A remedy edit here has a twin to check.
       case "$ERG_VERDICT" in
         dark)
           # Token AND rc. `_ihdg_verdict` maps `dark` to rc 0; a `dark` with any other rc is a gate

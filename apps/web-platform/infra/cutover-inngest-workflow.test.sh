@@ -1052,8 +1052,8 @@ FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\(|[A-Z_]+_RC=0;[[:space:]]+)?_bs_que
 # CALLERS of the shared reader, not a second reader — which is the property this row protects. They
 # are a separate pair on purpose: they query a different tag, because a flip row proves nothing
 # about a unit that may never have installed (see the luks) rows below).
-assert "#7674/#8054/#6894 the shared reader has exactly 6 call sites (flip confirm + flip liveness + execute 2.0 probe + heartbeat + LUKS confirm + LUKS liveness), got $FLQ_SITES" \
-  "[[ '$FLQ_SITES' -eq 6 ]]"
+assert "#7674/#8054/#6894/#8079 the shared reader has exactly 8 call sites (flip confirm + flip liveness + execute 2.0 probe + heartbeat + LUKS confirm + LUKS liveness + registry-probe probe + heartbeat), got $FLQ_SITES" \
+  "[[ '$FLQ_SITES' -eq 8 ]]"
 FLQ_LUKS_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_bs_query_rows "\$[A-Za-z_]+" inngest-luks-cutover [0-9]+\)' "$BODY_SH") || true
 assert "#6894 the two LUKS call sites pass the CUTOVER tag (never the flip tag), got $FLQ_LUKS_SITES" \
   "[[ '$FLQ_LUKS_SITES' -eq 2 ]]"
@@ -1242,6 +1242,21 @@ assert "#7228 op=arm does NOT unpause the consumer heartbeat (ADR-117: never arm
 PROBE_ARMS_FILE="$(mktemp)"; SCRATCH+=("$PROBE_ARMS_FILE")
 awk '/^[[:space:]]+registry-probe\)$/,/^[[:space:]]+rearm\)$/' "$WF" > "$PROBE_ARMS_FILE"
 PROBE_ARMS_N=$(wc -l < "$PROBE_ARMS_FILE" | tr -d '[:space:]')
+# #8079 D7 — the read-only contract is about what these arms EXECUTE, and the dark arm's
+# remedies legitimately NAME tools in prose ("gh run list …", "doppler run … inngest-host-state.sh").
+# A regex over the raw region conflates a tool named in prose with a tool invoked. So every
+# tool/body/loop predicate below reads PROBE_ARMS_CODE: comment lines dropped, the quoted argument
+# of every `echo "…"` / `printf "…"` emptied, escaped-quote aware (the LINE survives — the guarded
+# `source … || { echo "::error::…"; exit 1; }` is one physical line and line-stripping would hide a
+# real invocation), and backslash continuations joined so a multi-line curl is one logical line.
+# Positive control two lines down: the strip must have REMOVED something, or it is a no-op that
+# reads as coverage.
+PROBE_ARMS_CODE="$(mktemp)"; SCRATCH+=("$PROBE_ARMS_CODE")
+grep -v '^[[:space:]]*#' "$PROBE_ARMS_FILE" \
+  | sed -E 's/(echo|printf)[[:space:]]+"([^"\\]|\\.)*"/\1 "…"/g' \
+  | sed -e ':a' -e '/\\$/N; s/\\\n//; ta' > "$PROBE_ARMS_CODE"
+_PAC_STRIPPED=$(( $(wc -c < "$PROBE_ARMS_FILE") - $(wc -c < "$PROBE_ARMS_CODE") ))
+assert "#8079 PROBE_ARMS_CODE strip is non-vacuous (removed $_PAC_STRIPPED bytes of comments/annotation prose)" "[[ '$_PAC_STRIPPED' -gt 2000 ]]"
 
 assert "#6617 choice includes registry-probe" "grep -qE '^[[:space:]]+-[[:space:]]*registry-probe\$' '$WF'"
 assert "#6617 choice includes doublefire-probe" "grep -qE '^[[:space:]]+-[[:space:]]*doublefire-probe\$' '$WF'"
@@ -1266,17 +1281,17 @@ assert "#6617 probe-arm extraction is non-vacuous" "[[ '$PROBE_ARMS_N' -gt 20 ]]
 # 1. Exactly two network calls, both bounded GET curls. Counting the whitelist
 #    AND the total tool invocations together means an added call of ANY shape
 #    fails one of them: not-a-bounded-GET, or an extra tool.
-assert "#6617 probe arms make exactly 2 network/tool calls" "[[ \"\$(grep -cE '(^|[^a-z-])(curl|wget|nc|ncat|socat|python3?|perl|gh|aws|doppler|hcloud)[[:space:]]' '$PROBE_ARMS_FILE')\" == '2' ]]"
+assert "#6617 probe arms make exactly 2 network/tool calls" "[[ \"\$(grep -cE '(^|[^a-z-])(curl|wget|nc|ncat|socat|python3?|perl|gh|aws|doppler|hcloud)[[:space:]]' '$PROBE_ARMS_CODE')\" == '2' ]]"
 assert "#6617 both are curl -X GET" "[[ \"\$(grep -c -- '-X GET' '$PROBE_ARMS_FILE')\" == '2' ]]"
 assert "#6617 both are bounded (--max-time)" "[[ \"\$(grep -c -- '--max-time' '$PROBE_ARMS_FILE')\" == '2' ]]"
 
 # 2. No request body, by any tool or flag spelling.
-assert "#6617 probe arms send NO request body" "! grep -qE '(^|[[:space:]])(-d|--data|--data-binary|--data-raw|--data-urlencode|--post-data|--post-file|-T|--upload-file)([[:space:]]|=)' '$PROBE_ARMS_FILE'"
+assert "#6617 probe arms send NO request body (long forms anywhere; -d/-T only judged on a curl line — mktemp -d is not a body)" "! grep -qE '(^|[[:space:]])(--data|--data-binary|--data-raw|--data-urlencode|--post-data|--post-file|--upload-file)([[:space:]]|=)' '$PROBE_ARMS_CODE' && ! grep -E '(^|[^a-z-])curl[[:space:]]' '$PROBE_ARMS_CODE' | grep -qE '[[:space:]](-d|-T)([[:space:]]|=)'"
 assert "#6617 probe arms use NO non-GET method flag" "! grep -qE '(-X|--request)[[:space:]]*(POST|PUT|PATCH|DELETE)' '$PROBE_ARMS_FILE'"
 
 # 3. No mutating tool present at all, whatever its flag order.
-assert "#6617 probe arms invoke NO doppler at all" "! grep -qE '(^|[^a-z-])doppler([[:space:]]|\$)' '$PROBE_ARMS_FILE'"
-assert "#6617 probe arms invoke NO wget/nc/socat egress" "! grep -qE '(^|[^a-z-])(wget|ncat|socat)([[:space:]]|\$)' '$PROBE_ARMS_FILE'"
+assert "#6617 probe arms invoke NO doppler at all" "! grep -qE '(^|[^a-z-])doppler([[:space:]]|\$)' '$PROBE_ARMS_CODE'"
+assert "#6617 probe arms invoke NO wget/nc/socat egress" "! grep -qE '(^|[^a-z-])(wget|ncat|socat)([[:space:]]|\$)' '$PROBE_ARMS_CODE'"
 
 # 4. No cutover-state transition — matching the JSON form the workflow uses,
 #    not the bare token that only ever appears in prose.
@@ -1288,7 +1303,7 @@ assert "#6617 probe arms touch NO flip/quiesce/rearm hook" "! grep -qE 'inngest-
 # Anchored at LINE START: a loop keyword only ever begins a statement there.
 # The unanchored form matched the word "for" inside this arm's own comments —
 # the same comment-vs-code collision cq-assert-anchor-not-bare-token warns about.
-assert "#6617 probe arms add NO retry loop" "! grep -qE '^[[:space:]]*(for|while|until)[[:space:]]' '$PROBE_ARMS_FILE'"
+assert "#6617 probe arms add NO retry loop (the one emit-file read loop is allowlisted by its exact header)" "! grep -vF 'while IFS= read -r _rpg_line; do' '$PROBE_ARMS_CODE' | grep -qE '^[[:space:]]*(for|while|until)[[:space:]]'"
 
 # --- Reviewer-gate membership (B-AC3, amended #7228) -----------------------------------------
 # This was a byte-identity pin on the environment: expression, whose purpose is to stop the
@@ -1869,8 +1884,29 @@ assert "#8054 the gate call is ||-guarded (a bare \$(…) under set -e aborts be
   "grep -v '^[[:space:]]*#' '$EXEC_ARM_FILE' | grep -E '^[[:space:]]*ERG_VERDICT=' | grep -qE '\|\| ERG_RC=\\\$\?'"
 assert "#8054 the gate lib is sourced under an || guard (a missing lib on an old ref names the fix, not a mute abort)" \
   "grep -qE '^[[:space:]]*source tests/scripts/lib/inngest-host-dark-gate.sh \|\| \{' '$EXEC_ARM_FILE'"
-assert "#8054 no other arm sources or calls the gate (2.0 is the only consumer in this script)" \
-  "[[ \$(grep -v '^[[:space:]]*#' '$BODY_SH' | grep -c 'inngest_execute_registry_gate') -eq 1 ]]"
+# #8079 D7 row 1 / AC13 — the gate's consumer set is exactly {execute, registry-probe}. A per-arm
+# census derived from the arm enumeration (so a new arm is counted, not assumed), and the
+# whole-file total pinned at 2 (so a call in a top-level function or the `*)` catch-all — which
+# sits in no arm — cannot escape). Dispatch floor >= 12 arms, or an emptied enumeration passes.
+PROBE_ARM_FILE="$(mktemp)"; SCRATCH+=("$PROBE_ARM_FILE")
+awk '/^  registry-probe\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$BODY_SH" > "$PROBE_ARM_FILE"
+PROBE_ARM_N=$(grep -cv '^[[:space:]]*#' "$PROBE_ARM_FILE" || true)
+assert "#8079 registry-probe arm extraction is non-vacuous (>80 non-comment lines, got $PROBE_ARM_N)" "[[ '$PROBE_ARM_N' -gt 80 ]]"
+_arm_census=""; _arm_n=0; _census_bad=""
+while IFS= read -r _arm; do
+  _arm_n=$((_arm_n + 1))
+  _c=$(awk -v a="$_arm" '$0 ~ "^  "a"\\)$"{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$BODY_SH" | grep -v '^[[:space:]]*#' | grep -c 'inngest_execute_registry_gate' || true)
+  _arm_census="$_arm_census $_arm=$_c"
+  case "$_arm" in
+    execute|registry-probe) [[ "$_c" -eq 1 ]] || _census_bad="$_census_bad $_arm=$_c(want 1)" ;;
+    *)                      [[ "$_c" -eq 0 ]] || _census_bad="$_census_bad $_arm=$_c(want 0)" ;;
+  esac
+done < <(grep -oE '^  [a-z-]+\)$' "$BODY_SH" | tr -d ' )' | sort -u)
+_gate_total=$(grep -v '^[[:space:]]*#' "$BODY_SH" | grep -c 'inngest_execute_registry_gate' || true)
+assert "#8079 gate consumer census: 1 in execute, 1 in registry-probe, 0 in every other arm, >= 12 arms enumerated (arms=$_arm_n bad:${_census_bad:- none})" \
+  "[[ '$_arm_n' -ge 12 && -z '$_census_bad' ]]"
+assert "#8079 gate consumer whole-file total is exactly 2 (a call outside every arm cannot hide from the census), got $_gate_total" \
+  "[[ '$_gate_total' -eq 2 ]]"
 
 # ── Every token the lib can emit has a case arm; the *) arm exits 1 ─────────────
 LIB_TOKENS=$(grep -v '^[[:space:]]*#' "$GATE_LIB" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u || true)
@@ -1889,6 +1925,65 @@ for _tok in $ERG_TOKENS; do
   grep -qE "^[[:space:]]+${_tok}\)$" "$EXEC_ARM_FILE" || _missing_arms="$_missing_arms $_tok"
 done
 assert "#8054 every execute-gate token has its own case arm in 2.0 (missing:${_missing_arms:- none})" "[[ -z '$_missing_arms' ]]"
+
+# ── #8079 D10 — three drift guards for the accepted duplication of the gate plumbing ──────────
+# Guard 1: token coverage, by the SAME lib-derived loop. Both arms quantify over the lib's set, so
+# a 12th lib token reddens both. Non-vacuity rides on the ERG_TOKEN_N -eq 11 row above — three
+# empty sets are equal. Probe emit `case` arms must stay single-line (as 2.0's are), which is what
+# keeps the `$`-anchored token pattern from swallowing `flag)`, `boot_id)` etc.
+_missing_probe_arms=""
+for _tok in $ERG_TOKENS; do
+  grep -qE "^[[:space:]]+${_tok}\)$" "$PROBE_ARM_FILE" || _missing_probe_arms="$_missing_probe_arms $_tok"
+done
+assert "#8079 every execute-gate token has its own case arm in registry-probe too (missing:${_missing_probe_arms:- none})" "[[ -z '$_missing_probe_arms' ]]"
+assert "#8079 the registry-probe *) arm exits 1 and names the GATE as the defect, never the host" \
+  "awk '/^        \*\)\$/{f=1} f' '$PROBE_ARM_FILE' | sed -n '1,8p' | grep -qE 'defect in tests/scripts/lib/inngest-host-dark-gate.sh or in this arm.*NOT a host state' && awk '/^        \*\)\$/{f=1} f' '$PROBE_ARM_FILE' | sed -n '1,8p' | grep -q 'exit 1 ;;'"
+_probe_case_exits=$(awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$PROBE_ARM_FILE" | grep -c 'exit 1' || true)
+assert "#8079 the registry-probe case carries an exit 1 per refusal token (>= 10, got $_probe_case_exits)" "[[ '$_probe_case_exits' -ge 10 ]]"
+
+# Guard 2: plumbing parity by prefix normalisation. ONE row pins the trap POSITION, the
+# `: > "$EMIT"` pre-touch, the `|| RC=$?` call shape, both read windows, the emit shape regex and
+# the absence of a umask: the probe plumbing region, with its RPG_ prefix and step label
+# normalised, must be BYTE-EQUAL to the exec plumbing region normalised the same way. The
+# uniform prefix is what makes this mechanical. Region = the guarded `source` line through the
+# emit read loop's `done`, comments dropped.
+_plumb() {
+  awk '/^      source tests\/scripts\/lib\/inngest-host-dark-gate.sh \|\| \{/{f=1} f{print} f&&/^      done < "\$(ERG|RPG)_EMIT"$/{exit}' "$1" \
+    | grep -v '^[[:space:]]*#' \
+    | sed -E 's/(ERG|RPG)_//g; s/_(erg|rpg)_/_/g; s/(erg|rpg)\.XXXXXXXX/x.XXXXXXXX/g; s/::(error|notice|warning)::(2\.0|registry-probe):/::\1::STEP:/g'
+}
+_PL_EXEC="$(_plumb "$EXEC_ARM_FILE")"; _PL_PROBE="$(_plumb "$PROBE_ARM_FILE")"
+_PL_N=$(printf '%s\n' "$_PL_EXEC" | grep -c . || true)
+assert "#8079 plumbing parity extraction is non-vacuous (>= 18 lines each, got $_PL_N / $(printf '%s\n' "$_PL_PROBE" | grep -c . || true))" "[[ '$_PL_N' -ge 18 && \$(printf '%s\n' \"\$_PL_PROBE\" | grep -c .) -ge 18 ]]"
+assert "#8079 plumbing parity: the probe arm's gate plumbing, prefix-normalised, is BYTE-EQUAL to 2.0's (trap position, pre-touch, || RC=\$? shape, both windows, emit regex)" \
+  "[[ \"\$_PL_EXEC\" == \"\$_PL_PROBE\" ]]"
+assert "#8079 plumbing parity guard is load-bearing: the two UN-normalised regions differ (so equality above is the normaliser's work, not a tautology)" \
+  "[[ \"\$(awk '/^      source tests/{f=1} f{print} f&&/^      done </{exit}' '$EXEC_ARM_FILE')\" != \"\$(awk '/^      source tests/{f=1} f{print} f&&/^      done </{exit}' '$PROBE_ARM_FILE')\" ]]"
+
+# Guard 3: cross-arm remedy guard. Guards 1 and 2 pin the token set and the plumbing; nothing
+# pins the ELEVEN remedy strings, where all the divergence and all the value live. One row per
+# arm: every non-dark token's remedy names at least one no-SSH instrument OR one action from the
+# closed no-SSH set (file an issue / wait for the next probe or heartbeat) — a remedy naming
+# nothing, or naming SSH, is what this catches. Plus the `# twin:`
+# comment at each `case` head, so a remedy edit in one arm has a pointer to the other.
+_remedy_instruments='gh workflow run|gh run list|scripts/inngest-host-state\.sh|op=inventory|_bs_read_remedy|scheduled-inngest-health|runbooks/inngest-server\.md|git show vinngest-|[Ff]ile an issue|[Ww]ait for the next hourly probe|[Ww]ait one heartbeat|[Ww]ait one probe period'
+_arm_remedy_gaps() {  # $1 = arm file, $2 = verdict var name
+  local tok gaps="" body
+  for tok in $ERG_TOKENS; do
+    [[ "$tok" == "dark" ]] && continue
+    body=$(awk -v t="$tok" '$0 ~ "^        "t"\\)"{f=1;print;next} f&&/^        [a-z_*]+\)/{exit} f' "$1")
+    # Herestring, never `printf | grep -q`: under pipefail an early match SIGPIPEs the producer
+    # (141) and `||` reads that as "no instrument" — the flake fired on the arm whose match
+    # sits earliest in its body, exactly as the pipefail-grep-q learning predicts.
+    grep -qE "$_remedy_instruments" <<<"$body" || gaps="$gaps $tok"
+  done
+  printf '%s' "$gaps"
+}
+_EXEC_GAPS="$(_arm_remedy_gaps "$EXEC_ARM_FILE")"; _PROBE_GAPS="$(_arm_remedy_gaps "$PROBE_ARM_FILE")"
+assert "#8079 every non-dark 2.0 remedy names a no-SSH instrument (gaps:${_EXEC_GAPS:- none})" "[[ -z '$_EXEC_GAPS' ]]"
+assert "#8079 every non-dark registry-probe remedy names a no-SSH instrument (gaps:${_PROBE_GAPS:- none})" "[[ -z '$_PROBE_GAPS' ]]"
+assert "#8079 each case head carries a # twin: pointer at the other arm" \
+  "grep -B3 '^      case \"\$ERG_VERDICT\" in$' '$EXEC_ARM_FILE' | grep -q '# twin: the registry-probe arm' && grep -B3 '^      case \"\$RPG_VERDICT\" in$' '$PROBE_ARM_FILE' | grep -q '# twin: the 2.0 arm'"
 assert "#8054 the *) arm exits 1 and names the gate as the defect, never the host" \
   "awk '/^        \*\)\$/{f=1} f' '$EXEC_ARM_FILE' | sed -n '1,8p' | grep -qE 'defect in the gate, not a host state.*exit 1 ;;'"
 # Every refusal arm exits 1: count `exit 1` inside the case at least once per non-dark token.
