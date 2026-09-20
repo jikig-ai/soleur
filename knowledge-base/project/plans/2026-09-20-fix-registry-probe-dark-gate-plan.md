@@ -89,10 +89,34 @@ corrections are folded into the decisions, and they are recorded here because th
 | **C3** | **Two draft collisions were phantoms.** The no-mutating-hook row and the no-doppler row do not break, and both proposed re-aims were strictly WEAKER than the assertions they replaced. | `echo 'inngest-cutover-flip' \| grep -cE 'inngest-(arm\|flip\|quiesce\|rearm\|wiped)'` → **0**; `grep -cE '(^\|[^a-z-])doppler([[:space:]]\|$)'` over the 2.0 region → **0** |
 | **C4** | `_bs_read_remedy` hardcodes `2.0` in **nine** messages, not eight. The ninth is the trailing "NOTHING about the dedicated host was measured" summary — the one most likely to be read during an incident. | `awk '/^_bs_read_remedy\(\) \{$/,/^\}$/' scripts/cutover-inngest.sh \| grep -c '::error::2\.0 '` → **9** |
 | **C5** | D4's behaviour-preservation proof was overstated: there is **no `heartbeat read:` render**. Two of the nine messages are render-pinned; seven are not. | `grep -c 'heartbeat read:' apps/web-platform/infra/cutover-inngest-workflow.test.sh` → **0** |
-| **C6** | A broken knowledge-base citation — the `awk \b` learning has no `best-practices/` path segment. The #4173 defect class, in a plan that cites the rule against it. | `ls knowledge-base/project/learnings/best-practices/2026-09-17-awk-…md` → No such file |
+| **C6** | A broken knowledge-base citation — the `awk \b` learning has no `best-practices/` path segment, so the path resolved to nothing. (The reviewer who found it attributed the class to "#4173"; probed here, **#4173 is a GitHub Actions secrets 403 and has nothing to do with citation paths**, so that attribution is dropped rather than propagated — which is the same class as the finding itself.) | `ls knowledge-base/project/learnings/best-practices/2026-09-17-awk-…md` → No such file; `gh issue view 4173` → "apply step fails 403 on github" |
 | **C7** | D8's `flag_armed` branch was **wrong**, not merely under-specified: it keyed on "`flag`/`hb_flag` == `done`" without the `__UNREAD__` sample discriminator that 2.0 documents as mandatory. | `sed -n '1517,1523p' scripts/cutover-inngest.sh`; lib emits at `:1253`/`:1304` then refuses |
 | **C8** | The draft's `M1.1` was anchored on `enumerate)` — the **first** arm in the file (`:791`), before both compliant members — so it could not test the "second member" property it claimed. | arm offsets: `enumerate) :791`, `registry-probe) :821`, `execute) :1290` |
 | **C9** | The draft's `M2.7` (move the `trap`) was **unkillable and inexpressible**: nothing between the two positions can exit, and `mutate_file` requires a one-line diff while a move changes two. | `mutate_file` hard-fails on `changed != 1` |
+
+## Deepen-Plan Verification
+
+Run 2026-09-20. This pass added no new mechanism — the substantive depth came from the review panel
+above. What it did was **resolve every citation in the plan against the live tree and GitHub**, which
+is the one thing a long document reliably gets wrong.
+
+| Check | Result |
+|---|---|
+| Halt gate 4.6 — `## User-Brand Impact` | PASS: present, threshold `aggregate pattern`, non-placeholder body |
+| Halt gate 4.7 — `## Observability` | PASS: all 5 fields present; `command` verb `bash` is allowlisted; no `ssh`; not suite-shaped (finishes well inside the 15 s cap); `expected_output: "1"` is a matchable literal, not prose |
+| Halt gate 4.8 — PAT-shaped variables | PASS: no matches |
+| Halt gate 4.9 — UI wireframe | SKIP: no UI-surface path in Files to Edit/Create |
+| Halt gate 4.10 — `## Encryption Posture` | SKIP, reasoned: no `.tf` / migration / cloud-init / compose path, and the Better Stack read is **not a new cross-component connection** — `_bs_query_rows` already has 6 call sites in this same script. This change adds callers, not a connection. |
+| Halt gate 4.11 — Guard Contract | PASS: `python3 scripts/lint-guard-contract.py` → 2 guard entries, 0 failures |
+| Every cited `#N` resolved live | 9/9 resolve (`#4173 #6178 #6488 #6617 #7695 #8054 #8079 #8191 #8389`) |
+| Every cited AGENTS rule ID active | 7/7 present in `AGENTS.rules.md` |
+| Every cited learning path resolves | 10/10 exist on disk (one was broken in the draft — **C6**) |
+| **Attribution probe** | **1 FAILURE, corrected.** The draft's **C6** row attributed the broken-path class to "#4173". `gh issue view 4173` → *"apply-web-platform-infra apply step fails 403 on github"* — a GitHub Actions secrets 403, unrelated to citation paths. The attribution came from a reviewer and was propagated without checking. Dropped. That a correction table meant to catch unverified claims itself carried one is the sharpest evidence in this plan for why this check exists. |
+| Internal count consistency | D7 prose "six" = 6 table rows; Guard 1 = M1.1-M1.5; Guard 2 = M2.1-M2.12; ACs AC1-AC17 with no plan-internal count asserted in any AC |
+| Literal consistency | `nine` used for `_bs_read_remedy` at all 5 sites; `__FETCH_FAILED__` one spelling; the reserved triple cited identically in D2, AC2 and the Test Scenarios; `render_arm_region` appears ONLY as a rejected alternative |
+| Network-outage gate 4.5 | Keyword `ssh` matches, but only as the prohibition `Do NOT SSH the host` and the AC that forbids it. The plan diagnoses no network symptom and proposes no sshd/firewall fix, so the L3→L7 checklist has no subject. Recorded rather than silently skipped. |
+
+Baseline suite runs are in the table below (measured, not asserted).
 
 ## Research Insights
 
