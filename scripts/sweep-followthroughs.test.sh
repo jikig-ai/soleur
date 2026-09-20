@@ -862,6 +862,11 @@ g3_root() {
   cat > "$root/scripts/followthroughs/p.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'FOO_TOKEN=%s\n' "${FOO_TOKEN:-<unset>}"
+# `-` not `:-`, so SET-BUT-EMPTY and UNSET are distinguishable from the outside. They are
+# different states for the clock channel: empty means "the directive carries no earliest=",
+# unset means "the sweeper never forwarded one at all", and a probe must be able to tell them
+# apart to say which fix the operator owes (#8386).
+printf 'SOLEUR_FT_EARLIEST=[%s]\n' "${SOLEUR_FT_EARLIEST-<unset>}"
 exit 0
 EOF
   chmod +x "$root/scripts/followthroughs/p.sh"
@@ -1050,6 +1055,60 @@ t_g3_h2_two_names_forwarded() {
   assert_contains "G3-H2 the second name was forwarded into the env -i sandbox" "FOO_TOKEN=forwarded-7946" "$posted"
   assert_not_contains "G3-H2 no missing-secret comment on this path" "required secret" "$posted"
   assert_not_contains "G3-H2 no ::error:: on this path" "::error::" "$(cat "$root/err")"
+  rm -rf "$root"
+}
+
+# =============================================================================
+# THE CLOCK CHANNEL (#8386) -- the sweeper forwards the `earliest` IT GATED ON.
+#
+# A probe that measures how long it has been parked needs the horizon this sweep actually
+# applied. Before this, probes re-derived it from a copy in their own file header -- a second
+# copy of an issue-body value. The two drift the moment a body directive is re-baselined, or a
+# SECOND tracker enrols the same script with its own `earliest=`; the probe then escalates (or
+# declines to) on a horizon nobody set. These rows pin the producer half of that seam. The
+# consumer half is pinned in scripts/followthroughs/registry-luks-live-8386.test.sh
+# (the WHOSE CLOCK block).
+# =============================================================================
+
+# --- CLK-1: the value the probe receives IS the directive's, byte for byte ---
+t_clk1_earliest_forwarded() {
+  local root; root=$(g3_root "$(g3_body "")")
+  g3_run "$root" "$SUT"
+  local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "CLK-1 forwarding the clock does not change the verdict" "0" "$(cat "$root/rc")"
+  # By VALUE, not presence: a forward that hardcoded a constant, or passed the wrong variable,
+  # satisfies every presence-only assertion. g3_body's directive says earliest=2020-01-01.
+  assert_contains "CLK-1 the probe receives the directive's own earliest" \
+                  "SOLEUR_FT_EARLIEST=[2020-01-01T00:00:00Z]" "$posted"
+  rm -rf "$root"
+}
+
+# --- CLK-2: a directive with NO `earliest=` forwards SET-BUT-EMPTY, never unset ---
+# The sweeper gates on `${earliest:-}` -> iso_to_epoch "" -> 0, i.e. it runs. The probe must be
+# able to see that it ran with no horizon: unset would be indistinguishable from a standalone
+# run, which is exactly the case where falling back to a file-header copy is correct.
+t_clk2_absent_earliest_is_empty_not_unset() {
+  local root; root=$(g3_root \
+    '[{"number":9001,"body":"<!-- soleur:followthrough script=scripts/followthroughs/p.sh -->"}]')
+  g3_run "$root" "$SUT"
+  local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "CLK-2 a directive with no earliest= still runs" "0" "$(cat "$root/rc")"
+  assert_contains "CLK-2 the probe sees SET-BUT-EMPTY, not <unset>" \
+                  "SOLEUR_FT_EARLIEST=[]" "$posted"
+  rm -rf "$root"
+}
+
+# --- CLK-3: a directive cannot name the channel in `secrets=` ---
+# Forwarding is last-assignment-wins, so a directive-supplied SOLEUR_FT_EARLIEST placed after
+# the sweeper's own would hand the probe a horizon this sweep did not gate on -- the whole
+# defect the channel closes, re-opened from the issue body. Reserved, and refused loudly.
+t_clk3_channel_name_is_reserved() {
+  local root; root=$(g3_root "$(g3_body SOLEUR_FT_EARLIEST)")
+  g3_run "$root" "$SUT" SOLEUR_FT_EARLIEST=2099-01-01T00:00:00Z
+  local rc; rc=$(cat "$root/rc"); local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "CLK-3 naming the clock channel reds the run" "1" "$([[ "$rc" != "0" ]] && echo 1 || echo 0)"
+  assert_contains "CLK-3 the comment says the name is reserved" "reserved name" "$posted"
+  assert_not_contains "CLK-3 the probe was NOT run" "running scripts/followthroughs/p.sh" "$(cat "$root/out")"
   rm -rf "$root"
 }
 
@@ -1494,6 +1553,9 @@ t_g4_6_dialect_portability
 t_g3_h4_crlf_body_tolerated
 t_g3_h2_two_names_forwarded
 t_g3_h3_no_secrets_clause
+t_clk1_earliest_forwarded
+t_clk2_absent_earliest_is_empty_not_unset
+t_clk3_channel_name_is_reserved
 
 echo
 
@@ -1594,7 +1656,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=181
+MIN_ASSERTIONS=188
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
