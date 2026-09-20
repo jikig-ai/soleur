@@ -1596,6 +1596,7 @@ fixture-shape
 fixture-size
 fixture-space
 fixture-sync
+fixture-vacuity
 fixtures
 fk-cascade
 flags
@@ -1725,6 +1726,7 @@ git-identity
 git-index
 git-ls-files
 git-manager-proxy
+git-merge-abort
 git-mv
 git-pull
 git-rebase
@@ -2348,6 +2350,7 @@ modulesupabase
 monitor
 monitor-hygiene
 monitor-lifetime
+monitor-tool
 monitoring
 monorepo
 mount-namespace
@@ -2670,6 +2673,7 @@ phase
 phase-0
 phase-5.5
 phase-7
+phase-7-poll
 phase-collision
 phase-e
 phase-ordering
@@ -3786,6 +3790,7 @@ static-site
 statistical-power
 stderr
 stderr-stdout
+stdout-stderr
 step
 step-output
 step-run
