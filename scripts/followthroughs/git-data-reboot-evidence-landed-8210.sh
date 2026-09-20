@@ -161,11 +161,29 @@ else
   token=""
 fi
 
-# The COULD-NOT-MEASURE set, copied from the gate's own contract. Membership is the whole
-# decision: every other token means the gate looked at the run and the run was wrong.
-case "$token" in
-  TOOLING_MISSING|RUN_OFFLINE|RUN_RATE_LIMITED|RUN_UNRESOLVABLE|RUN_SHA_UNREACHABLE|\
-  RUN_HASH_UNCOMPUTABLE|RUN_ARTIFACT_RECORD_UNREADABLE|SENTRY_VERDICT_UNREADABLE)
+# The COULD-NOT-MEASURE set, READ FROM THE GATE rather than copied from it. Membership is the
+# whole decision: every other token means the gate looked at the run and the run was wrong.
+#
+# THIS WAS A HAND-COPIED `case` LIST AND IT HAD ALREADY GONE STALE (#8010, 2026-09-20). It
+# predated RUN_FLOOR_UNREADABLE, the token #8010 adds, so a Guard 5 instrument failure would
+# have fallen through to the measured arm and rendered as NOT YET -- "the gate looked and the
+# answer was no" -- when the truth is that the gate could not look. That is the exact
+# measured/could-not-measure collapse this vocabulary exists to prevent, in the one consumer
+# it was built for. The gate's own comment claimed consumers "are checked against"
+# git_data_rung2_token_sets; that was true of infra-validation.yml and false of this file.
+# Reading the function is what makes the claim true. Fail CLOSED if it is unavailable: an
+# unclassifiable token must not be read as a measured refusal.
+if ! declare -F git_data_rung2_token_sets >/dev/null 2>&1; then
+  echo "CANNOT ESTABLISH: the gate library defines no git_data_rung2_token_sets, so this probe"
+  echo "cannot tell an instrument failure from a measured refusal. Refusing to guess."
+  exit 3
+fi
+_cannot_measure=0
+for _t in $(git_data_rung2_token_sets cannot); do
+  [ "$_t" = "$token" ] && _cannot_measure=1
+done
+case "$_cannot_measure:$token" in
+  1:*)
     echo "CANNOT ESTABLISH: main's evidence records RUNG2_REBOOT_REOPEN=PASS, but the rung-2 gate"
     echo "could not MEASURE whether that evidence is valid for the current payload (rc=${gate_rc})."
     echo "This is a statement about the INSTRUMENT, not about the host and not about the payload:"

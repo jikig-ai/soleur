@@ -640,3 +640,41 @@ None.
 
 - PRs #8002, #8052, #8126, #8171, #8312; PR #8393 (open, the evidence this gate will judge).
 - Issues #8010 (this), #8361, #8178, #8210, #7098 (overlap, acknowledged).
+
+## Addendum — 2026-09-20 (#8010): what the ship-time advisor consult changed
+
+`soleur:ship` Phase 5.5's scoped advisor consult ran against PR #8388 after the nine-seat panel
+had closed three P1s. It measured five further concerns. Recorded here because three of them
+changed the shipped code after the plan's Phase 3 was marked done.
+
+**Fixed inline on this branch:**
+
+- **The token-set parity assertion was vacuous for 11 of 21 tokens.** `E2d`'s haystack matched
+  only *literally* bracketed emits, so every token reaching the verdict line through the generic
+  `HOLD [${_tok}]` sites was invisible to it — exactly the sites where the panel's P1 #2 lived.
+  Demonstrated: moving `RUN_NO_EVIDENCE_ARTIFACT` between the two sets left the suite green.
+  The pin now lives in the #8210 probe suite, which compares the gate's declaration against its
+  own independently-held expectation; the same mutation now reds it and names the token.
+- **The #8210 probe hand-copied the could-not-measure set and had already drifted.** Its `case`
+  predated `RUN_FLOOR_UNREADABLE` — a token *this plan adds* — so a Guard 5 instrument failure
+  would have rendered `NOT YET` instead of `CANNOT ESTABLISH`: the measured/could-not-measure
+  collapse this whole plan exists to prevent, in the one consumer the vocabulary was built for.
+  The gate's own comment claimed consumers "are checked against `git_data_rung2_token_sets`";
+  that was true of `infra-validation.yml` and false of the probe. The probe now reads the
+  function and fails closed when it is absent.
+- **The downgrade ack stated a `'#'` rule its code did not implement.** `RUN_ID_REGRESSED`'s
+  HOLD told the operator "the reason may not contain '#'", while the helper read the
+  comment-stripped body, so `...:see #8399 for why` arrived as the reason `"see"` — non-empty,
+  therefore accepted, authorising a deliberate replay on text nobody wrote. The Sentry ack had
+  refused this by name since Phase 2 and is pinned by `M3c`; this arm had neither. Fixed at the
+  call site in the Sentry ack's shape and pinned by `F3b`.
+
+**Recorded as residuals, not fixed** — see ADR-149 `## Amendment — 2026-09-20 (#8010)` and the
+comment on #8397: Guard 5's floor is read from a commit that was itself ungated (the two-commit
+downgrade), and `RUN_FLOOR_UNREADABLE` is an unreachable arm whose remedy names a different case.
+
+**The pattern worth keeping.** All three fixed findings, and both residuals, are in code the
+review round ADDED. A review-driven fix is written after the tests exist, so nothing forces
+coverage for it — the plan already said this under "The fixes for a review round are as unpinned
+as the blind spots they close", and it recurred one layer further out. The consult that caught it
+is a mandated ship phase, not an optional extra.

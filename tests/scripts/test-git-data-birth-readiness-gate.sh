@@ -2454,6 +2454,24 @@ printf 'RUNG2_EVIDENCE_DOWNGRADE_ACK=80000800:reinstating the pre-regression pay
 _r2_commit_alone "$_FX/evidence.env"
 _row F "F3: a well-formed, run-bound downgrade ack releases the deliberate replay" 0 "RELEASED" "$_FX/ci.yml" "$_FX/evidence.env"
 
+# F3b — THE DOWNGRADE ACK OBEYS THE '#' RULE ITS OWN HOLD MESSAGE STATES. The helper reads the
+# COMMENT-STRIPPED body, so `...:see #8399 for why` arrives as the reason "see" -- non-empty,
+# therefore ACCEPTED, and the deliberate-replay hatch would authorise a replay on text nobody
+# wrote. The Sentry ack refuses this by name and is pinned by M3c; this arm had the rule in its
+# message and not in its code until #8010's ship-time consult measured it. Same class as the P1
+# the panel caught: a documented property that was not there.
+#
+# THE MARK IS RE-ESTABLISHED FIRST, for the reason the F4/F5 note below states in full: F3's ack
+# was ACCEPTED, so 80000800 legitimately became the floor, and without this commit F3b would
+# compare 80000800 against 80000800, never reach the downgrade branch at all, and RELEASE --
+# measured exactly that on the first draft of this arm.
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000900" "$_FX_SHA" none CLEAN
+_r2_commit_alone "$_FX/evidence.env"
+_r2_evidence_write "$_FX/evidence.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/80000800" "$_FX_SHA" none CLEAN
+printf 'RUNG2_EVIDENCE_DOWNGRADE_ACK=80000800:see #8399 for why the older bytes go back\n' >> "$_FX/evidence.env"
+_r2_commit_alone "$_FX/evidence.env"
+_row F "F3b: a downgrade ack whose reason contains '#' is REFUSED, not silently truncated" 1 "[RUN_ID_REGRESSED]" "$_FX/ci.yml" "$_FX/evidence.env"
+
 # RE-ESTABLISH THE HIGH-WATER MARK BEFORE F4/F5, and the reason is a property worth stating:
 # F3's ack was ACCEPTED, so its downgrade legitimately became the new floor. That is the
 # ratchet working — an acknowledged replay is the attested state from then on — and it means
@@ -2508,7 +2526,7 @@ _stub_run 80000700 "head_sha=$_HX_C2"
 _hx_ev f7.env 80000700
 _row F "F7: a first-ever evidence file has no floor to regress against" 1 "[RUN_HASH_MISMATCH]" "$_HX/ci.yml" "$_HX/f7.env"
 
-_expect_rows F 7
+_expect_rows F 8
 
 printf '\n(#8010) T/E — tooling, the seam, and the gate'"'"'s own CI annotation\n'
 
@@ -2935,13 +2953,17 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #     1  R16            the 5xx retry's far side — always-500 could not see the retry at all.
 #     7  F1-F7          Guard 5: the monotonic run floor, its ack grammar, and the DELETION
 #                       case that makes voiding an attestation not a bypass.
+#     1  F3b            the downgrade ack's '#' rule, which the HOLD message stated and the
+#                       code did not implement (#8010 ship-time consult, 2026-09-20). The
+#                       helper reads the comment-STRIPPED body, so a reason carrying '#'
+#                       arrived truncated-but-non-empty and the replay hatch accepted it.
 #     1  T1-ORDER       the tooling check's POSITION (#8010 AC sweep, 2026-09-20). T1 pinned
 #                       the TOKEN only, so FR14's planned order -- tooling AFTER Guard 4 --
 #                       drifted silently against a live-hash step that runs `sha256sum`
 #                       BEFORE Guard 4. Dropping only sha256sum discriminates the two.
 #   ----
-#    18
-_FLOOR=235
+#    19
+_FLOOR=236
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

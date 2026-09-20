@@ -943,3 +943,49 @@ closes on the first post-merge git-data dispatch whose poll answers, judged by
 already existed before the fix).
 
 A producer with no reader is not a signal; a reader that has never read is not a reader.
+
+## Amendment — 2026-09-20 (#8010): two residuals the ship-time consult measured
+
+`soleur:ship` Phase 5.5's scoped advisor consult, run against PR #8388 after the nine-seat
+panel had already closed three P1s, measured five further concerns. Three were fixed inline
+(the token-set parity assertion was blind to 11 of 21 tokens; the #8210 probe hand-copied a
+stale could-not-measure set and had already drifted; the downgrade ack stated a `'#'` rule its
+code did not implement). Two are recorded here rather than fixed, because neither is a
+one-line change:
+
+**R1 — Guard 5's floor is read from a commit that was itself ungated, so the downgrade shape
+survives in two commits.** `_git_data_rung2_run_floor` walks history, skips entry 0, and
+returns at the first prior version in which the evidence file exists — printing whatever that
+version's `RUNG2_EVIDENCE_URL` parses to, and printing *nothing* when it parses to nothing.
+Nothing is indistinguishable from "first-ever evidence file, no floor". So: commit A reverts
+the payload tree **and** writes the evidence with a non-parsing or deliberately low URL;
+commit B (evidence-only) restores the old evidence naming the genuine older run. Guard 4 arm 1
+passes because the *last* commit touching the evidence touches no bound file; Guard 5 reads
+entry 1 = commit A = no floor, and stays silent; steps C/D/E are all honestly true. Measured
+against the real helper:
+
+```text
+floor after v1 (runs/80000900):   []
+floor after v2 (URL="pending"):   [80000900]
+floor seen at v3 (runs/80000800): []      <-- Guard 5 silent
+```
+
+F1-F8 only ever feed a well-formed prior version and the deletion case, so nothing covers an
+*existing but unparseable* intermediate. A max-over-all-prior-versions walk closes the
+unparseable variant. The low-id variant needs the floor to come from a version that itself
+passed a gate, which is a design question, not an edit — and it is the honest statement of what
+Guard 5 is: the CTO ruling framed it as a **mitigation** of the downgrade shape, never a
+closure. It requires a non-squash merge, which the evidence runbook mandates, so it is live.
+
+**R2 — `RUN_FLOOR_UNREADABLE` is an unreachable refusal path whose remedy names a different
+case.** It fires only when `git rev-parse --show-toplevel` fails from the evidence's directory,
+but Guard 4 runs first and already refuses exactly that ("is not inside a git work tree"), and
+refuses shallow clones too. Zero test references. Its message prescribes `git fetch origin main`
+/ `fetch-depth: 0` — the *shallow* case, where the floor actually returns EMPTY (one `git log`
+entry, consumed as entry 0) and Guard 5 skips silently rather than reporting UNREADABLE. So the
+dead arm's remedy addresses a live gap that takes a different path. The token stays in the
+could-not-measure set (both consumers now read that set, so classification is correct); what is
+owed is either reachability or deletion, plus a floor that distinguishes "shallow, cannot see
+history" from "no prior version".
+
+Both are carried by #8397.

@@ -1713,6 +1713,17 @@ HOLD
     return 1
   fi
   _floor="$_floor_out"
+  # THE DOWNGRADE ACK OBEYS THE SAME '#' RULE THE HOLD BELOW STATES. _git_data_rung2_downgrade_acked
+  # reads the COMMENT-STRIPPED body, so `ACK=<id>:see #8399 for why` arrives as reason "see" —
+  # non-empty, so the ack is ACCEPTED on text nobody wrote, and a deliberate-replay hatch releases
+  # on a truncated justification. The Sentry ack already refuses this by name a few lines below and
+  # is pinned by M3c; this arm had the rule in its message and not in its code.
+  local _dack_raw
+  _dack_raw="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_EVIDENCE_DOWNGRADE_ACK[[:space:]]*=' "$evidence" | head -1 || true)"
+  if [[ -n "$_floor" && "$_run_id" -lt "$_floor" && "$_dack_raw" == *"#"* ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_ID_REGRESSED] — the downgrade acknowledgement in ${evidence} contains '#'. This gate strips from ' #' onward before reading, so such a reason would be SILENTLY TRUNCATED and the replay would be authorised by text nobody wrote. Re-word the reason without '#'.${_seam_note}"
+    return 1
+  fi
   if [[ -n "$_floor" && "$_run_id" -lt "$_floor" ]] && ! _git_data_rung2_downgrade_acked "$body" "$_run_id"; then
     echo "git_data_rung2_rehearsal_gate: HOLD [RUN_ID_REGRESSED] — ${evidence} names run ${_run_id}, but the version of this file it replaces named run ${_floor}. Every fact this file asserts may be true and the bytes still be OLDER than the last attested ones: that is the downgrade shape — revert the payload, then cite the genuine older run that really did boot it. Re-run the rehearsal from main against the current payload. If this replay is DELIBERATE, append RUNG2_EVIDENCE_DOWNGRADE_ACK=${_run_id}:<why older bytes are being reinstated> in this file's own commit (the reason may not contain '#').${_seam_note}"
     return 1

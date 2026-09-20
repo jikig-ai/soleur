@@ -113,6 +113,19 @@ git_data_rung2_rehearsal_gate() {
   [[ -n "${T8210_OUT:-}" ]] && printf '%s\n' "$T8210_OUT"
   return "${T8210_RC:-0}"
 }
+# The probe now READS its could-not-measure set from the gate instead of hand-copying it
+# (#8010). The stub therefore has to supply the function -- and it emits THIS SUITE'S
+# expectation, injected via T8210_CANNOT, not the real library's, so the per-token arms below
+# stay an independent second opinion. The PARITY arm binds that expectation to the real gate.
+# T8210_NOFN drops the function entirely, to drive the probe's fail-closed branch.
+if [[ -z "${T8210_NOFN:-}" ]]; then
+git_data_rung2_token_sets() {
+  case "${1:-}" in
+    cannot) printf '%s\n' "${T8210_CANNOT:-}" ;;
+    measured) printf '%s\n' "${T8210_MEASURED:-}" ;;
+  esac
+}
+fi
 GATE
 }
 
@@ -143,11 +156,19 @@ deny_out() { if printf '%s' "$OUT" | grep -qF -- "$2"; then fail "$1: output car
 # The two token sets, copied from the gate's contract (#8010) and from the probe's own `case`.
 # Driven one arm per member: membership IS the decision, so a sampled table would leave the
 # untested members free to fall into the wrong bucket.
+# RUN_FLOOR_UNREADABLE and RUN_ID_REGRESSED were MISSING here and in the probe (#8010,
+# 2026-09-20). Both are tokens #8010 itself adds, so the suite could not have caught the
+# probe's stale copy: the two hand-maintained lists were stale in the SAME direction, which is
+# what a second opinion is supposed to make impossible. The PARITY arm below now binds this
+# list to the gate's declaration, so the next added token reds here instead of falling through.
 CANNOT_TOKENS=(TOOLING_MISSING RUN_OFFLINE RUN_RATE_LIMITED RUN_UNRESOLVABLE RUN_SHA_UNREACHABLE
-               RUN_HASH_UNCOMPUTABLE RUN_ARTIFACT_RECORD_UNREADABLE SENTRY_VERDICT_UNREADABLE)
+               RUN_HASH_UNCOMPUTABLE RUN_ARTIFACT_RECORD_UNREADABLE RUN_FLOOR_UNREADABLE
+               SENTRY_VERDICT_UNREADABLE)
 MEASURED_TOKENS=(SENTRY_VERDICT_FATAL SENTRY_UNAVAILABLE_UNACKED SENTRY_ACK_MISMATCH RUN_NOT_FOUND
                  RUN_WRONG_WORKFLOW RUN_WRONG_EVENT RUN_NOT_MAIN RUN_NOT_COMPLETED RUN_NOT_SUCCESS
-                 RUN_HASH_MISMATCH RUN_NO_EVIDENCE_ARTIFACT)
+                 RUN_HASH_MISMATCH RUN_NO_EVIDENCE_ARTIFACT RUN_ID_REGRESSED)
+export T8210_CANNOT="${CANNOT_TOKENS[*]}"
+export T8210_MEASURED="${MEASURED_TOKENS[*]}"
 
 hold_line() { printf 'git_data_rung2_rehearsal_gate: HOLD [%s] — %s' "$1" "the remedy sentence for $1, which head -1 used to cut off"; }
 
@@ -262,8 +283,52 @@ for t in "${CANNOT_TOKENS[@]}" "${MEASURED_TOKENS[@]}"; do
   if [[ "$RC" != 0 ]]; then pass "never-0: HOLD [$t] (rc=$RC)"; else fail "never-0: HOLD [$t] reached PASS"; fi
 done
 
+# ---- PARITY WITH THE REAL GATE. The arms above run against a STUB whose sets this suite
+# injects, so on their own they prove only that the probe honours whatever it is told. That is
+# precisely how both hand-maintained lists went stale in the same direction (#8010). This arm
+# reads the REAL library and requires its declaration to equal this suite's expectation, so a
+# token added to the gate without a decision here RED-s instead of silently falling through to
+# the measured arm. It is the one arm that is allowed to know about the real file.
+_real_gate="${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+if [[ -r "$_real_gate" ]]; then
+  _real_cannot="$(bash -c "source '$_real_gate' >/dev/null 2>&1; git_data_rung2_token_sets cannot" | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
+  _real_meas="$(bash -c "source '$_real_gate' >/dev/null 2>&1; git_data_rung2_token_sets measured" | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
+  _exp_cannot="$(printf '%s\n' "${CANNOT_TOKENS[@]}" | sort | tr '\n' ' ')"
+  _exp_meas="$(printf '%s\n' "${MEASURED_TOKENS[@]}" | sort | tr '\n' ' ')"
+  if [[ "$_real_cannot" == "$_exp_cannot" ]]; then
+    pass "parity: the gate's could-not-measure set is exactly this suite's expectation"
+  else
+    fail "parity: gate cannot-set [$_real_cannot] != expected [$_exp_cannot]"
+  fi
+  if [[ "$_real_meas" == "$_exp_meas" ]]; then
+    pass "parity: the gate's measured set is exactly this suite's expectation"
+  else
+    fail "parity: gate measured-set [$_real_meas] != expected [$_exp_meas]"
+  fi
+else
+  fail "parity: the real gate library is unreadable at $_real_gate, so parity was not checked"
+fi
+
+# ---- FAIL-CLOSED when the gate defines no token sets at all. An unclassifiable token must
+# render CANNOT ESTABLISH (exit 3), never the measured NOT YET -- the probe must not guess.
+T8210_NOFN=1 run_probe "$R" 1 "$(hold_line TOOLING_MISSING)"
+if [[ "$RC" == 3 && "$OUT" == *"CANNOT ESTABLISH"* ]]; then
+  pass "no-token-sets: an unclassifiable verdict exits 3, it does not fall through to NOT YET"
+else
+  fail "no-token-sets: must exit 3 CANNOT ESTABLISH when git_data_rung2_token_sets is absent (rc=$RC)"
+fi
+unset T8210_NOFN
+
 # Assertion count, EXACT, reported with printf + exit, never through fail() (ADR-193).
-EXACT=138
+# RAISED 138 -> 152 (#8010, 2026-09-20), ITEMISED (each count measured from the run, not estimated):
+#     6  RUN_FLOOR_UNREADABLE joins CANNOT_TOKENS -- it was missing from the probe AND from
+#        this suite, so a Guard 5 instrument failure rendered NOT YET instead of CANNOT ESTABLISH.
+#     5  RUN_ID_REGRESSED joins MEASURED_TOKENS, missing here for the same reason.
+#     2  parity with the real gate's declared sets, both directions.
+#     1  fail-closed when the gate defines no token sets at all.
+#   ----
+#    14
+EXACT=152
 if (( total != EXACT )); then
   printf 'FATAL: %d assertions ran, expected exactly %d -- coverage changed; update EXACT deliberately\n' "$total" "$EXACT" >&2
   exit 1
