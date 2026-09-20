@@ -4347,6 +4347,7 @@ workflow-dispatch
 workflow-edits
 workflow-enforcement
 workflow-file-size
+workflow-fsm
 workflow-gap
 workflow-gate
 workflow-gate-gaps
