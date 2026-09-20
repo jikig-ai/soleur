@@ -33,6 +33,8 @@ message, synchronously**, when something just said did not land. It is not bound
 business-consequence rule above — that rule is a digest rule. Use the digest weekly; use
 `soleur:operator-rephrase` in the turn.
 
+**Vocabulary (stop-list).** `knowledge-base/project/glossary.md` lists the internal words that must NOT reach the founder; each entry — or each sense of a multi-sense one — opens with the plain clause to translate into, and its path is for the agent only. The instruction is stated once in [glossary-format.md](../kb-glossary/references/glossary-format.md) §The consumer pointer.
+
 ## Date window
 
 The digest covers the **last 7 days**. Anchor to the checkout root and compute the window once at the start:

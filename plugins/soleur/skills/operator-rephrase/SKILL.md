@@ -47,12 +47,24 @@ to, and no gate that could check the claim. What is adopted is the checkable par
 
 ## Vocabulary
 
-**v1 ships with no vocabulary source, and that is the durable state.** There is no repository
-glossary to draw approved terms from, so rule 3 above is satisfied by choosing plain everyday words,
-not by looking a term up. A repository glossary is a separate piece of work tracked in **#8289**; if
-one lands later, this skill can cite it then. Do not invent one here, and do not point at
-`plugins/soleur/docs/pages/glossary.njk` — that is marketing surface, its entries are category terms
-rather than operational ones, and it is a Nunjucks template rather than readable plain text.
+**The glossary is a stop-list, not a source of approved terms.** Rule 3 above is still satisfied by
+choosing plain everyday words, not by looking a term up — there is no controlled vocabulary of
+approved founder words here and there is not meant to be one.
+
+What `knowledge-base/project/glossary.md` gives this skill is the inverse, and it serves **rule 5**:
+it is the list of internal words that **must** be translated before the operator sees them. Each
+entry — or each sense of a multi-sense entry — opens with a plain clause saying what the thing is,
+and that clause is what you translate *into*. The repo-relative path in the entry body is for the
+agent; it is one of the things rule 5 strips, so it never appears in the restatement.
+
+Use it as a check, not as a lookup table: if a word you are about to say has an entry, say the plain
+clause instead of the word. A word with no entry is not thereby approved — plain language is still
+your own judgment.
+
+Do not point at `plugins/soleur/docs/pages/glossary.njk` — that is marketing surface, its entries are
+category terms rather than operational ones, and it is a Nunjucks template rather than readable plain
+text. `knowledge-base/marketing/brand-guide.md` is the founder-facing lexicon and is the right place
+for a word the operator *should* see.
 
 ## When to self-invoke
 
