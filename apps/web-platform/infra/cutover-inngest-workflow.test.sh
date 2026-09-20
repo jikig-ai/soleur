@@ -2093,6 +2093,17 @@ H5_HB_DT="$(date -u -d '-1 min' '+%Y-%m-%d %H:%M:%S')"
 H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=8 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ zz_trailing=1"
 H5_PROBE_ROW=$(jq -cn --arg dt "$H5_PROBE_DT" --arg m "$H5_MSG" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-server-probe", _BOOT_ID:$b, message:$m} | tojson)}')
 H5_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{flag:"rolled-back", reason:"noop-rolled-back", guard:"7761", exit_code:0}} | tojson)}')
+# #8079 D8 — the flag_armed 2x2 needs the probe row and the heartbeat each sampled at `done`
+# and at an in-flight value. Each is the H5 fixture with ONE substitution, so it reaches the
+# same E-step and refuses there for the flag and nothing else.
+DONE_MSG="${H5_MSG/cutover_flag=rolled-back/cutover_flag=done}"
+ARMED_MSG="${H5_MSG/cutover_flag=rolled-back/cutover_flag=armed}"
+DONE_PROBE_ROW=$(jq -cn --arg dt "$H5_PROBE_DT" --arg m "$DONE_MSG" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-server-probe", _BOOT_ID:$b, message:$m} | tojson)}')
+ARMED_PROBE_ROW=$(jq -cn --arg dt "$H5_PROBE_DT" --arg m "$ARMED_MSG" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-server-probe", _BOOT_ID:$b, message:$m} | tojson)}')
+DONE_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{flag:"done", reason:"noop-done", guard:"7761", exit_code:0}} | tojson)}')
+ARMED_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{flag:"armed", reason:"noop-armed", guard:"7761", exit_code:0}} | tojson)}')
+assert "#8079 2x2 fixtures differ from H5 in the flag ONLY (done/armed probe rows; done/armed heartbeats)" \
+  "[[ \"\$DONE_MSG\" != \"\$H5_MSG\" && \"\$ARMED_MSG\" != \"\$H5_MSG\" && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$DONE_MSG\") | grep -c '^[<>]') -eq 2 && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$ARMED_MSG\") | grep -c '^[<>]') -eq 2 ]]"
 # render_2_0 <region-file> <webhook-code> <webhook-body> <probe-mode> <hb-mode>  — echoes stdout+stderr, returns rc
 #
 # RUNS IN A FRESH `bash` PROCESS, NOT A SUBSHELL. Row 19's property is "a refusal is not MUTE under
@@ -2136,6 +2147,7 @@ render_2_0() {
     printf 'INNGEST_HOST="soleur-inngest"; INNGEST_HOST_NAME="soleur-inngest-prd"; FLIP_LIVENESS_SINCE="15m"\n'
     printf 'STUB_CODE=%q; STUB_BODY=%q; PMODE=%q; HMODE=%q; TMPD=%q\n' "$code" "$body" "$pmode" "$hmode" "$tmpd"
     printf 'H5_PROBE_ROW=%q; H5_HB_ROW=%q\n' "$H5_PROBE_ROW" "$H5_HB_ROW"
+    printf 'DONE_PROBE_ROW=%q; ARMED_PROBE_ROW=%q; DONE_HB_ROW=%q; ARMED_HB_ROW=%q\n' "$DONE_PROBE_ROW" "$ARMED_PROBE_ROW" "$DONE_HB_ROW" "$ARMED_HB_ROW"
     printf '%s\n' "$BS_CLASSIFY_FN"
     printf '%s\n' "$BS_READER_FN"
     printf '%s\n' "$BS_REMEDY_FN"
@@ -2151,6 +2163,8 @@ doppler() {
     SOLEUR_INNGEST_SERVER_PROBE)
       case "$PMODE" in
         h5)        printf '%s\n' "$H5_PROBE_ROW"; return 0 ;;
+        done)      printf '%s\n' "$DONE_PROBE_ROW"; return 0 ;;
+        armed)     printf '%s\n' "$ARMED_PROBE_ROW"; return 0 ;;
         empty)     return 0 ;;
         fail)      printf '{"exception":"Code: 241. DB::Exception: Memory limit exceeded; source under maintenance"}'; return 22 ;;
         authfail)  printf '{"exception":"Code: 516. DB::Exception: u123secretuser-connect: Authentication failed: password is incorrect, or there is no user with such name."}'; return 22 ;;
@@ -2159,6 +2173,8 @@ doppler() {
     inngest-cutover-flip)
       case "$HMODE" in
         h5)        printf '%s\n' "$H5_HB_ROW"; return 0 ;;
+        done)      printf '%s\n' "$DONE_HB_ROW"; return 0 ;;
+        armed)     printf '%s\n' "$ARMED_HB_ROW"; return 0 ;;
         empty)     return 0 ;;
         forbidden) touch "$TMPD/HB_READ_HAPPENED"; return 0 ;;
       esac ;;
@@ -2246,6 +2262,161 @@ assert "#8054 webhook_path render: HTTP 500 WITHOUT __FETCH_FAILED__ (a reachabl
 assert "#8054 webhook_path render: the refusal never falls through to 2.1" \
   "! printf '%s\n' \"\$WP403_OUT\" | grep -q '__REGION_FELL_THROUGH__' && ! printf '%s\n' \"\$WP500_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# #8079 — op=registry-probe routes its non-200 branch through the SAME gate. The region is
+# extracted by its markers (opened BEFORE `SIG=` so the driver, under set -u, binds CODE/BODY
+# itself) and sourced by the same render_2_0 driver — stubbed curl, REAL reader, REAL lib.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+PROBE_REGION_FILE="$(mktemp)"; SCRATCH+=("$PROBE_REGION_FILE")
+awk '/# ---- registry-probe host-state gate \(#8079\)/{f=1} f&&/# ---- end registry-probe host-state gate \(#8079\)/{exit} f' "$BODY_SH" > "$PROBE_REGION_FILE"
+PROBE_REGION_N=$(grep -cv '^[[:space:]]*#' "$PROBE_REGION_FILE" || true)
+assert "#8079 probe region extraction is non-vacuous (>90 non-comment lines, got $PROBE_REGION_N)" "[[ '$PROBE_REGION_N' -gt 90 ]]"
+assert "#8079 probe region starts at SIG= (binds CODE/BODY itself; a later start dies on unbound CODE under set -u) and ends at the arm's fi" \
+  "grep -vE '^[[:space:]]*(#|$)' '$PROBE_REGION_FILE' | sed -n '1p' | grep -qE '^    SIG=' && grep -vE '^[[:space:]]*(#|$)' '$PROBE_REGION_FILE' | sed -n '\$p' | grep -qE '^    fi$'"
+# Selection control: the markers must select the REGISTRY-PROBE arm, not 2.0's — a marker
+# collision would source 2.0 here and every render below would certify the wrong arm.
+assert "#8079 probe region is the registry-probe arm, not 2.0 (carries RPG_VERDICT, no ERG_VERDICT)" \
+  "grep -v '^[[:space:]]*#' '$PROBE_REGION_FILE' | grep -q 'RPG_VERDICT' && ! grep -v '^[[:space:]]*#' '$PROBE_REGION_FILE' | grep -q 'ERG_VERDICT'"
+
+# ── static rows over the region (comment-stripped, so a rationale comment cannot satisfy them) ──
+PROBE_REGION_CODE="$(mktemp)"; SCRATCH+=("$PROBE_REGION_CODE")
+grep -v '^[[:space:]]*#' "$PROBE_REGION_FILE" > "$PROBE_REGION_CODE"
+# D5 / AC8 — flat ban on mutating ops and on SSH, anywhere in the region.
+assert "#8079 AC8: the probe region names NO mutating op (op=execute|resume|rollback|arm) — this op runs outside a window" \
+  "! grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|\$)' '$PROBE_REGION_CODE'"
+assert "#8079 AC8: the probe region never says 'ssh ' as an instruction (lowercase: a command; 'Do NOT SSH' is the opposite)" "! grep -qE '(^|[^a-zA-Z])ssh ' '$PROBE_REGION_CODE'"
+# D2 / AC2 — the dark sub-block (non-200 branch up to the `else` terminator) never emits the
+# live-measurement triple. Scoped by the `^    else$` terminator, as ANNOT_LEAKS scopes 2.0's.
+DARK_SUBBLOCK="$(awk '/^    if \[\[ "\$CODE" != "200" \]\]; then$/{f=1} f&&/^    else$/{exit} f' "$PROBE_REGION_CODE")"
+assert "#8079 AC2 dark sub-block extraction is non-vacuous and stops at the else terminator" \
+  "[[ \$(printf '%s\n' \"\$DARK_SUBBLOCK\" | grep -c .) -gt 60 ]] && ! printf '%s\n' \"\$DARK_SUBBLOCK\" | grep -q 'REG_EMPTY='"
+assert "#8079 AC2: the dark sub-block emits none of registry_empty= / function_count= / ids=[ (reserved for the live HTTP-200 measurement)" \
+  "! printf '%s\n' \"\$DARK_SUBBLOCK\" | grep -qE 'registry_empty=|function_count=|ids=\['"
+assert "#8079 AC2 control: the 200 path (outside the sub-block) DOES emit the triple, so the absence above is a measurement" \
+  "grep -qE 'registry_empty=\\\$REG_EMPTY function_count=\\\$REG_COUNT ids=\[' '$PROBE_REGION_CODE'"
+# D2 / AC3 — the caveat warning: two greppable clause openers, the field named with NO trailing
+# `=` (which is what keeps it clear of AC2), and the follow-up op named.
+assert "#8079 AC3: the dark warning carries both clause openers and names op=doublefire-probe" \
+  "grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -q 'What it does not establish:' && grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -q 'op=doublefire-probe'"
+assert "#8079 AC3: the warning names registry_empty with NO trailing = (a mutation appending =false must redden AC2)" \
+  "grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -qE 'registry_empty was not measured' && ! grep -E '^[[:space:]]*echo \"::warning::registry-probe: What this establishes:' '$PROBE_REGION_CODE' | grep -q 'registry_empty='"
+# D6 — webhook_path names op=inventory AND carries the discrimination rule in the string.
+assert "#8079 D6: the webhook_path refusal names op=inventory with its discrimination rule (200 -> hook; non-200 -> path)" \
+  "grep -E 'REFUSED \(webhook_path\)' '$PROBE_REGION_CODE' | grep -q 'op=inventory' && grep -E 'REFUSED \(webhook_path\)' '$PROBE_REGION_CODE' | grep -qE 'returns 200 the path is healthy.*if it also fails, the path is at fault'"
+# Every refusal arm ends 'Do NOT SSH the host.' — count against the case's exit 1 lines.
+_probe_case="$(awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$PROBE_REGION_CODE")"
+_pc_exits=$(printf '%s\n' "$_probe_case" | grep -c 'exit 1' || true)
+_pc_nossh=$(printf '%s\n' "$_probe_case" | grep -c 'Do NOT SSH the host' || true)
+assert "#8079 every refusal in the probe case says 'Do NOT SSH the host' (exit-1 lines=$_pc_exits, no-SSH lines=$_pc_nossh, need no-SSH >= exits and both > 10)" \
+  "[[ '$_pc_nossh' -ge '$_pc_exits' && '$_pc_exits' -gt 10 ]]"
+# D8 / AC4 static half — the done message must NOT reproduce 2.0's remedy, and must qualify the
+# hourly sample's staleness; the emit read must not interpolate RPG_HB_AGE on the E11 path.
+assert "#8079 AC4: no done-branch message says 'the cutover already completed', names op=verify, or names restart-inngest-server" \
+  "! printf '%s\n' \"\$_probe_case\" | grep -qE 'the cutover already completed|op=verify|restart-inngest-server'"
+assert "#8079 AC4: the hourly-row done branch carries the 60-minute staleness qualifier and does not interpolate RPG_HB_AGE" \
+  "printf '%s\n' \"\$_probe_case\" | grep -A3 'REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag' | grep -q 'lag reality by up to 60 minutes' && ! printf '%s\n' \"\$_probe_case\" | grep -A6 'REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag' | grep -q 'RPG_HB_AGE'"
+# AC10 — no annotation interpolates a raw rows file, BODY, or CAUSE; the only body prints are
+# the CR/LF-stripped CAUSE on plain lines.
+# Scoped to the DARK sub-block (the code this PR adds). The 200 path's malformed-JSON branch
+# carries a PRE-EXISTING raw `echo "$BODY"` that AC9 pins byte-for-byte to main; it is recorded
+# in the PR rather than fixed here, because fixing it breaks the content pin the plan requires.
+assert "#8079 AC10: no ::error/notice/warning:: in the dark sub-block interpolates RPG_PROBE_ROWS, RPG_HB_ROWS, \$BODY or \$CAUSE" \
+  "! printf '%s\n' \"\$DARK_SUBBLOCK\" | grep -E '\"::(error|notice|warning)::' | grep -qE 'RPG_PROBE_ROWS|RPG_HB_ROWS|\\\$BODY|\\\$CAUSE'"
+assert "#8079 AC10: in the dark sub-block every print of the webhook body uses the CR/LF-stripped CAUSE on a plain line, never raw BODY" \
+  "[[ \$(printf '%s\n' \"\$DARK_SUBBLOCK\" | grep -cE '^[[:space:]]*echo \"registry-probe webhook body \(HTTP \\\$CODE.*\\\$\{CAUSE:-') -eq 2 ]] && ! printf '%s\n' \"\$DARK_SUBBLOCK\" | grep -E '^[[:space:]]*echo ' | grep -v 'CAUSE' | grep -qE '\\\$BODY'"
+# AC9 — the HTTP-200 path is content-pinned modulo leading whitespace and comments against the
+# pre-#8079 arm on origin/main. "Byte-unchanged" is unsatisfiable (the if/else restructure changes
+# indentation), so this is the same pin the existing AC7 uses for 2.0.
+_strip() { sed -E 's/^[[:space:]]+//' | grep -v '^#' | grep -v '^$'; }
+_MAIN_SH="$(mktemp)"; SCRATCH+=("$_MAIN_SH")
+# To a FILE first: an awk `exit` mid-pipeline SIGPIPEs git show, and under set -e the failing
+# assignment took the whole suite down at rc 141 before any render ran (measured).
+git -C "$REPO_ROOT" show origin/main:scripts/cutover-inngest.sh > "$_MAIN_SH" 2>/dev/null || : > "$_MAIN_SH"
+_MAIN_200="$(awk '/^  registry-probe\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$_MAIN_SH" | awk '/if ! echo "\$BODY" \| jq -e/{f=1} f' | sed '/^    ;;$/,$d' | _strip || true)"
+_HEAD_200="$(awk '/^    else$/{f=1;next} f&&/^    fi$/{exit} f' "$PROBE_REGION_FILE" | _strip)"
+if [[ -n "$_MAIN_200" ]]; then
+  assert "#8079 AC9: the HTTP-200 path is content-identical to origin/main's, modulo indentation and comments ($(printf '%s\n' "$_HEAD_200" | grep -c .) lines)" \
+    "[[ \"\$_MAIN_200\" == \"\$_HEAD_200\" ]] && [[ \$(printf '%s\n' \"\$_HEAD_200\" | grep -c .) -ge 10 ]]"
+else
+  assert "#8079 AC9: origin/main unreadable here (fetch-depth or no remote) — the 200-path pin could not be measured; REFUSING rather than passing vacuously" "false"
+fi
+
+# ── renders ───────────────────────────────────────────────────────────────────────────────────
+# AC1 — dark: rc 0, the HOST-STATE notice, the caveat warning, and the region reaches its END
+# (the else-branch is skipped, the fi is reached) rather than falling into the 200 path.
+RPG_DARK_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 h5)"; RPG_DARK_TMPD="$(render_tmpd_of "$RPG_DARK_OUT")"
+assert "#8079 AC1 dark render: rc 0 and the region reaches its end (no exit, no fall-through into the 200 path)" \
+  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$RPG_DARK_OUT\" | grep -qx '__REGION_FELL_THROUGH__'"
+assert "#8079 AC1 dark render: prints the HOST-STATE VERDICT notice with boot_id, both ages and both flags from the emit file" \
+  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -E '^::notice::registry-probe HOST-STATE VERDICT: dark' | grep -qE 'boot_id=[0-9a-f-]{36}: probe row [0-9]+s old with flag=rolled-back, FSM heartbeat [0-9]+s old with flag=rolled-back'"
+assert "#8079 AC1/AC3 dark render: the caveat warning is emitted with both clauses and the follow-up op" \
+  "printf '%s\n' \"\$RPG_DARK_OUT\" | grep -E '^::warning::registry-probe: What this establishes:' | grep -q 'What it does not establish:.*op=doublefire-probe'"
+assert "#8079 AC2 dark render: the OUTPUT carries none of registry_empty= / function_count= / ids=[ (a dark verdict is not a live measurement)" \
+  "! printf '%s\n' \"\$RPG_DARK_OUT\" | grep -qE 'registry_empty=|function_count=|ids=\['"
+assert "#8079 dark render: the REAL reader was exec'd twice with the pinned operands (same windows as 2.0)" \
+  "grep -qE -- '--since 24h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 500' '$RPG_DARK_TMPD/doppler.argv' && grep -qE -- '--since 30m --grep inngest-cutover-flip --limit 200' '$RPG_DARK_TMPD/doppler.argv' && [[ \$(wc -l < '$RPG_DARK_TMPD/doppler.argv') -eq 2 ]]"
+assert "#8079 dark render: the webhook body appears exactly once, as a plain informational line" \
+  "[[ \$(printf '%s\n' \"\$RPG_DARK_OUT\" | grep -c '__FETCH_FAILED__') -eq 1 ]] && printf '%s\n' \"\$RPG_DARK_OUT\" | grep -q '^registry-probe webhook body (HTTP 500, informational'"
+# AC7 — webhook_path: a 403 and a 500 without the signature refuse BEFORE any read, rc 1, naming
+# op=inventory; the marker control from 2.0 (both reads happen on the graded path) makes the
+# absence a measurement.
+RPG_WP403_OUT="$(render_2_0 "$PROBE_REGION_FILE" 403 '{"error":"cf access"}' forbidden forbidden)"; RPG_WP403_TMPD="$(render_tmpd_of "$RPG_WP403_OUT")"
+RPG_WP500_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 'inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["some other graphql error"] data_keys=["functions"])' forbidden forbidden)"; RPG_WP500_TMPD="$(render_tmpd_of "$RPG_WP500_OUT")"
+RPG_CTRL_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" forbidden forbidden)"; RPG_CTRL_TMPD="$(render_tmpd_of "$RPG_CTRL_OUT")"
+assert "#8079 AC7 marker control: on the graded path BOTH reads happen (so the absences below are measurements)" \
+  "[[ -e '$RPG_CTRL_TMPD/PROBE_READ_HAPPENED' && -e '$RPG_CTRL_TMPD/HB_READ_HAPPENED' ]]"
+assert "#8079 AC7 render: HTTP 403 refuses as webhook_path naming op=inventory, rc 1, NO Better Stack read, never reaches the end" \
+  "printf '%s\n' \"\$RPG_WP403_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_WP403_OUT\" | grep -qE '^::error::registry-probe REFUSED \(webhook_path\).*op=inventory' && [[ ! -e '$RPG_WP403_TMPD/PROBE_READ_HAPPENED' && ! -e '$RPG_WP403_TMPD/HB_READ_HAPPENED' ]] && ! printf '%s\n' \"\$RPG_WP403_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
+assert "#8079 AC7 render: HTTP 500 WITHOUT __FETCH_FAILED__ refuses as webhook_path, rc 1, no read" \
+  "printf '%s\n' \"\$RPG_WP500_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_WP500_OUT\" | grep -qE '^::error::registry-probe REFUSED \(webhook_path\)' && [[ ! -e '$RPG_WP500_TMPD/PROBE_READ_HAPPENED' ]]"
+# AC4 — flag_armed 2x2: four DISTINCT messages, each naming the sample it quotes.
+RPG_FA11D_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" done h5)"
+RPG_FA11A_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" armed h5)"
+RPG_FA13D_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 done)"
+RPG_FA13A_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 armed)"
+assert "#8079 AC4 E11/done render: rc 1, headline names flag_armed/done and 'scheduling may be DOWN', quotes the HOURLY row with the 60-minute qualifier" \
+  "printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed/done\).*scheduling may be DOWN' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q 'HOURLY probe row.*lag reality by up to 60 minutes'"
+assert "#8079 AC4 E11/done render: the ordered steps are PLAIN log lines, the watchdog read comes FIRST, the state script names its prerequisite, the runbook is third" \
+  "printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q '^registry-probe: 1. read the latest watchdog verdict first' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q '^registry-probe: 2. read the host.*inngest-host-state.sh (needs BETTERSTACK_QUERY_' && printf '%s\n' \"\$RPG_FA11D_OUT\" | grep -q '^registry-probe: 3. .*runbooks/inngest-server.md'"
+assert "#8079 AC4 E11/armed render: rc 1, names flag_armed with the HOURLY row and 'in flight', dispatches nothing" \
+  "printf '%s\n' \"\$RPG_FA11A_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA11A_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed\): the dedicated host.s newest HOURLY probe row.*in flight.*Dispatch nothing'"
+assert "#8079 AC4 E13/done render: rc 1, headline quotes the same-boot HEARTBEAT as a live sample and does NOT call it hourly" \
+  "printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed/done\).*same-boot heartbeat.*a live sample, not the hourly row' && ! printf '%s\n' \"\$RPG_FA13D_OUT\" | grep -q 'HOURLY probe row'"
+assert "#8079 AC4 E13/armed render: rc 1, quotes the same-boot heartbeat, 'in flight right now'" \
+  "printf '%s\n' \"\$RPG_FA13A_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FA13A_OUT\" | grep -qE '^::error::registry-probe REFUSED \(flag_armed\): the flip FSM.s newest same-boot heartbeat.*in flight right now'"
+assert "#8079 AC4: the four 2x2 headlines are pairwise DISTINCT" \
+  "[[ \$(for o in \"\$RPG_FA11D_OUT\" \"\$RPG_FA11A_OUT\" \"\$RPG_FA13D_OUT\" \"\$RPG_FA13A_OUT\"; do printf '%s\n' \"\$o\" | grep -E '^::error::registry-probe REFUSED \(flag_armed' | head -1; done | sort -u | wc -l) -eq 4 ]]"
+assert "#8079 AC4/D5: no 2x2 message names a mutating op or 2.0's remedy" \
+  "! printf '%s\n%s\n%s\n%s\n' \"\$RPG_FA11D_OUT\" \"\$RPG_FA11A_OUT\" \"\$RPG_FA13D_OUT\" \"\$RPG_FA13A_OUT\" | grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|\$)|the cutover already completed|op=verify|restart-inngest-server'"
+# AC6 — a refusing fixture still prints its ::error:: (the || RPG_RC=\$? guard is load-bearing).
+RPG_SILENT_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" empty h5)"
+assert "#8079 AC6 silent render: rc 1 with the silent remedy — and it names the 2026-08-14 ingest-402 case BEFORE the host-replace step" \
+  "printf '%s\n' \"\$RPG_SILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_SILENT_OUT\" | grep -E '^::error::registry-probe REFUSED \(silent\)' | grep -qE 'confirm INGEST health/quota.*402.*Two consecutive probe-unavailable'"
+RPG_FSMSILENT_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" h5 empty)"
+assert "#8079 fsm_silent render: rc 1 with the fsm_silent remedy" \
+  "printf '%s\n' \"\$RPG_FSMSILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FSMSILENT_OUT\" | grep -qE '^::error::registry-probe REFUSED \(fsm_silent\)'"
+# D4 — the read-failure arms delegate to _bs_read_remedy with the TRAILING step operand, so the
+# nine messages report 'registry-probe', never '2.0'. This is the render that proves D4's operand
+# reaches the printer; the census row proved the printer has no hardcoded step left.
+RPG_FAILREAD_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" fail h5)"
+assert "#8079 D4 read-failure render: rc 22 routes to the shared remedy and it reports 'registry-probe', never '2.0' (the step operand landed)" \
+  "printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -qE '^::error::registry-probe probe read: the ClickHouse read path is under maintenance' && printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -qE '^::error::registry-probe probe read failed — NOTHING about the dedicated host was measured' && ! printf '%s\n' \"\$RPG_FAILREAD_OUT\" | grep -q '::error::2\.0 '"
+RPG_AUTHFAIL_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY" authfail h5)"
+assert "#8079 D4 auth-failure render: a credentials-rejected body is classified and NEVER printed (the username must not reach the run log)" \
+  "printf '%s\n' \"\$RPG_AUTHFAIL_OUT\" | grep -qE '^::error::registry-probe probe read: the ClickHouse read path REJECTED the credentials' && ! printf '%s\n' \"\$RPG_AUTHFAIL_OUT\" | grep -q 'u123secretuser'"
+# AC9 renders — the 200 path is untouched in behaviour and performs NO Better Stack read.
+RPG_200_OUT="$(render_2_0 "$PROBE_REGION_FILE" 200 '{"registry_empty":true,"function_count":0}' forbidden forbidden)"; RPG_200_TMPD="$(render_tmpd_of "$RPG_200_OUT")"
+assert "#8079 AC9 render: HTTP 200 + empty registry -> rc 0, the live triple with registry_empty=true, the EMPTY notice, NO Better Stack read" \
+  "printf '%s\n' \"\$RPG_200_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$RPG_200_OUT\" | grep -q '^::notice::registry-probe: registry_empty=true function_count=0 ids=\[\]' && printf '%s\n' \"\$RPG_200_OUT\" | grep -q 'dedicated registry is EMPTY' && [[ ! -e '$RPG_200_TMPD/PROBE_READ_HAPPENED' && ! -e '$RPG_200_TMPD/HB_READ_HAPPENED' ]]"
+RPG_200N_OUT="$(render_2_0 "$PROBE_REGION_FILE" 200 '{"registry_empty":false,"function_count":3,"function_ids":["a","b","c"]}' forbidden forbidden)"
+assert "#8079 AC9 render: HTTP 200 + non-empty registry -> rc 0 (diagnostic, not gating), live triple with the ids, the REGISTERED warning" \
+  "printf '%s\n' \"\$RPG_200N_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$RPG_200N_OUT\" | grep -q '^::notice::registry-probe: registry_empty=false function_count=3 ids=\[a,b,c\]' && printf '%s\n' \"\$RPG_200N_OUT\" | grep -qE '^::warning::registry-probe: the dedicated host \(10.0.1.40\) has 3 REGISTERED'"
+# AC10 render — annotation log-injection: a body carrying a literal newline followed by a
+# forged ::notice:: must NOT produce that line at column 0 in the output.
+RPG_INJ_OUT="$(render_2_0 "$PROBE_REGION_FILE" 500 "$FF_BODY"$'\n'"::notice::PASS forged" h5 h5)"
+assert "#8079 AC10 render: a webhook body with an embedded newline + forged ::notice:: is CR/LF-stripped — the forged line never lands at column 0" \
+  "! printf '%s\n' \"\$RPG_INJ_OUT\" | grep -qx '::notice::PASS forged' && printf '%s\n' \"\$RPG_INJ_OUT\" | grep -q '__FETCH_FAILED__.* ::notice::PASS forged'"
+
 # ── mutate_file: the matrix rows that live in the SCRIPT (17, 18, 19) and the lib (20) ────
 # Patches a PRISTINE copy of a file with one single-line `sed` (same cmp + exactly-one-line guards
 # as the dark-gate suite's mutate()), then re-runs a named assertion FUNCTION against the copy and
@@ -2313,7 +2484,71 @@ check_403_refuses_without_read() {
   out="$(render_2_0 "$region" 403 '{"error":"cf access"}' forbidden forbidden)"; tmpd="$(render_tmpd_of "$out")"
   printf '%s\n' "$out" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\)' && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
 }
-mutate_file "webhook_path gate neutered" "$BODY_SH" 's|^      if \[\[ "\$CODE" != "500" \|\| "\$BODY" != \*"__FETCH_FAILED__"\* \]\]; then$|      if false; then|' check_403_refuses_without_read
+# Range-scoped to the 2.0 region since #8079: the probe arm carries this line byte-identically
+# (the plumbing-parity guard requires it), so a file-global sed would change 2 lines.
+mutate_file "webhook_path gate neutered" "$BODY_SH" '/# ---- 2\.0 empty-registry pre-flight/,/# ---- 2\.1 capture/s|^      if \[\[ "\$CODE" != "500" \|\| "\$BODY" != \*"__FETCH_FAILED__"\* \]\]; then$|      if false; then|' check_403_refuses_without_read
+
+# ── #8079 — mutation rows over the PROBE region. Each sed is RANGE-SCOPED to the probe markers,
+# because the signature test, the guarded source, the mktemp and the emit loop now exist
+# byte-identically in both arms (the plumbing-parity guard REQUIRES that); a file-global
+# single-line sed would change 2 lines and mutate_file refuses it. That refusal fired on 2.0's
+# own `webhook_path gate neutered` row the moment the probe arm landed — the row above is now
+# scoped the same way.
+_RPG_RANGE='/# ---- registry-probe host-state gate (#8079)/,/# ---- end registry-probe host-state gate (#8079)/'
+_rpg_region_of() {  # $1 = (possibly mutated) script → prints a temp file holding its probe region
+  local r; r="$(mktemp)"; SCRATCH+=("$r")
+  awk '/# ---- registry-probe host-state gate \(#8079\)/{f=1} f&&/# ---- end registry-probe host-state gate \(#8079\)/{exit} f' "$1" > "$r"
+  printf '%s' "$r"
+}
+# Row A — the || RPG_RC=$? guard removed. Property (DYNAMIC): a refusing fixture still prints its
+# ::error::; un-guarded, set -e aborts before the case — fail-closed but MUTE.
+check_rpg_refusal_is_not_mute() {
+  local out; out="$(render_2_0 "$(_rpg_region_of "$1")" 500 "$FF_BODY" empty h5)"
+  printf '%s\n' "$out" | grep -qE '^::error::registry-probe REFUSED \(silent\)' && printf '%s\n' "$out" | grep -qx '__RC=1'
+}
+mutate_file "rpg gate call un-guarded" "$BODY_SH" "${_RPG_RANGE}"'s|^      RPG_VERDICT="\$(inngest_execute_registry_gate \(.*\))" \|\| RPG_RC=\$?$|      RPG_VERDICT="$(inngest_execute_registry_gate \1)"|' check_rpg_refusal_is_not_mute
+# Row B — the signature test neutered. Property (DYNAMIC): a 403 must refuse without a read.
+check_rpg_403_refuses_without_read() {
+  local out tmpd; out="$(render_2_0 "$(_rpg_region_of "$1")" 403 '{"error":"cf access"}' forbidden forbidden)"; tmpd="$(render_tmpd_of "$out")"
+  printf '%s\n' "$out" | grep -qE '^::error::registry-probe REFUSED \(webhook_path\)' && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
+}
+mutate_file "rpg webhook_path gate neutered" "$BODY_SH" "${_RPG_RANGE}"'s|^      if \[\[ "\$CODE" != "500" \|\| "\$BODY" != \*"__FETCH_FAILED__"\* \]\]; then$|      if false; then|' check_rpg_403_refuses_without_read
+# Row C — D1 inverted: `dark` made to exit 1. Property (DYNAMIC): the dark render is rc 0 and
+# reaches the region's end.
+check_rpg_dark_exits_zero() {
+  local out; out="$(render_2_0 "$(_rpg_region_of "$1")" 500 "$FF_BODY" h5 h5)"
+  printf '%s\n' "$out" | grep -qx '__RC=0' && printf '%s\n' "$out" | grep -qx '__REGION_FELL_THROUGH__'
+}
+mutate_file "rpg dark verdict exits 1" "$BODY_SH" "${_RPG_RANGE}"'s|^\(          echo "::warning::registry-probe: What this establishes:.*\) ;;$|\1; exit 1 ;;|' check_rpg_dark_exits_zero
+# Row D — D2 violated: the warning names the field WITH a trailing `=false`. Property (STATIC +
+# DYNAMIC): the dark sub-block and the dark OUTPUT carry none of the reserved triple.
+check_rpg_dark_emits_no_triple() {
+  local r out; r="$(_rpg_region_of "$1")"
+  ! awk '/^    if \[\[ "\$CODE" != "200" \]\]; then$/{f=1} f&&/^    else$/{exit} f' "$r" | grep -v '^[[:space:]]*#' | grep -qE 'registry_empty=|function_count=|ids=\[' \
+    && out="$(render_2_0 "$r" 500 "$FF_BODY" h5 h5)" && ! printf '%s\n' "$out" | grep -qE 'registry_empty=|function_count=|ids=\['
+}
+mutate_file "rpg warning appends =false to the reserved field" "$BODY_SH" "${_RPG_RANGE}"'s|registry_empty was not measured, because a dark host answers no read\.|registry_empty=false was not measured, because a dark host answers no read.|' check_rpg_dark_emits_no_triple
+# Row E — D7 row 4's mutation: a request body on the probe's curl. Property (STATIC): the #6617
+# no-request-body row (judged on the curl's joined logical line) must redden — proving `-d/-T
+# adjacent to curl` is still load-bearing after `mktemp -d` was allowed.
+check_rpg_no_request_body() {
+  local code; code="$(mktemp)"; SCRATCH+=("$code")
+  awk '/^[[:space:]]+registry-probe\)$/,/^[[:space:]]+rearm\)$/' "$1" | grep -v '^[[:space:]]*#' \
+    | sed -E 's/(echo|printf)[[:space:]]+"([^"\\]|\\.)*"/\1 "…"/g' | sed -e ':a' -e '/\\$/N; s/\\\n//; ta' > "$code"
+  ! grep -E '(^|[^a-z-])curl[[:space:]]' "$code" | grep -qE '[[:space:]](-d|-T)([[:space:]]|=)'
+}
+mutate_file "rpg curl gains a request body" "$BODY_SH" "${_RPG_RANGE}"'s|^      "\$BASE/inngest-registry-probe" \|\| echo "000")$|      -d '"'"'{}'"'"' "$BASE/inngest-registry-probe" \|\| echo "000")|' check_rpg_no_request_body
+# Row F — D5 violated: a remedy names op=execute. Property (STATIC): AC8's flat ban reds.
+check_rpg_no_mutating_op() {
+  ! grep -v '^[[:space:]]*#' "$(_rpg_region_of "$1")" | grep -qE 'op=(execute|resume|rollback|arm)([^a-z-]|$)'
+}
+mutate_file "rpg remedy names op=execute" "$BODY_SH" "${_RPG_RANGE}"'s|Dispatch nothing from here; this op is a read and its answer would describe a host mid-transition\.|Then re-dispatch op=execute.|' check_rpg_no_mutating_op
+# Row G — D8 violated: the done branch reverts to 2.0's remedy. Property (STATIC): AC4's ban on
+# "the cutover already completed" reds.
+check_rpg_done_not_2_0_remedy() {
+  ! awk '/^      case "\$RPG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$(_rpg_region_of "$1")" | grep -v '^[[:space:]]*#' | grep -qE 'the cutover already completed|op=verify|restart-inngest-server'
+}
+mutate_file "rpg done branch reverts to 2.0 remedy" "$BODY_SH" "${_RPG_RANGE}"'s|^\(              echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag reads .done.\.\) Since cutover step 2\.4 this host owns production cron scheduling, so scheduling may be DOWN\."$|\1 done => the cutover already completed: dispatch op=verify."|' check_rpg_done_not_2_0_remedy
 # Row 20 — the lib's allowlist retyped with one member missing. Property: set-equality with P1-5.
 check_e11_set_equal() { [[ "$(e11_set_of "$1")" == "$P15_SET" ]]; }
 mutate_file "row20 E11 allowlist minus flushed" "$GATE_LIB" "s|^    armed\|flipping\|flushed\|done) printf 'armed' ;;|    armed\|flipping\|done) printf 'armed' ;;|" check_e11_set_equal
