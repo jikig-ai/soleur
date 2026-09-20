@@ -472,8 +472,19 @@ ws="$(fresh_ws r3d)"
 # opens a single-quote context that runs past the closing brace, and the parse dies ~80 lines
 # later on an unrelated "(" with no hint of the real cause.
 : "${ws:?fresh_ws r3d produced no workspace path; refusing to run git against the caller repo}"
-git -C "$ws" rm -q --cached .mcp.json
-git -C "$ws" commit -q -m "main carries no .mcp.json"
+# In a SUBSHELL with the fixture environment, because these two run in the PARENT shell and
+# `fresh_ws` cannot hand its environment back: `mk_workspace` calls `git_fixture_env` inside
+# `$(fresh_ws …)`, so the exports die with that command substitution. Without them `git commit`
+# has no identity, and a runner with no global `user.email` — every CI runner — aborts with
+# `fatal: empty ident name`, taking the whole suite down at this row. Measured on CI run
+# 35483661921: 149 rows PASS locally, `[FAIL] go-session-gates.test.sh (255ms)` in CI, and
+# every row after R3d never executed. The subshell is what keeps the ceiling and the pinned
+# identity from leaking into H3's real-harness run further down.
+(
+  git_fixture_env "$ws" || { echo "FATAL: git_fixture_env refused an environment for $ws" >&2; exit 2; }
+  git -C "$ws" rm -q --cached .mcp.json
+  git -C "$ws" commit -q -m "main carries no .mcp.json"
+) || { echo "FATAL: R3d fixture setup failed" >&2; exit 2; }
 printf '%s' '{"local":"customer-edits"}' > "$ws/.mcp.json"
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_eq "$(cat "$ws/.mcp.json")" '{"local":"customer-edits"}' "R3d: a local .mcp.json survives when main has none"
@@ -500,7 +511,10 @@ echo "R3g. a git show failure names the cause it MEASURED, not the first of thre
 # `main` at all. R3d already covers "main exists, carries no .mcp.json".
 ws="$(fresh_ws r3g)"
 : "${ws:?fresh_ws r3g produced no workspace path; refusing to run git against the caller repo}"
-git -C "$ws" branch -m main notmain
+(
+  git_fixture_env "$ws" || { echo "FATAL: git_fixture_env refused an environment for $ws" >&2; exit 2; }
+  git -C "$ws" branch -m main notmain
+) || { echo "FATAL: R3g fixture setup failed" >&2; exit 2; }
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-no-local-main" "R3g: names the missing branch"
 want_not_in "$out" "reason=mcp-json-absent-on-main" "R3g: and does NOT claim main lacks the file"
