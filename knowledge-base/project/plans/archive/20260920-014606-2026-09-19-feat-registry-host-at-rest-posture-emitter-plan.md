@@ -362,7 +362,17 @@ logs:
 
 discoverability_test:
   command: "bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh"
-  expected_output: "zero FAIL lines with BOTH per-property floors satisfied; the discriminating assertion is that all five posture fields are present AND positioned ahead of ` zot_last_err=` on EVERY path, including each measurement-failure path — not merely that a count was reported. The LIVE read is `scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK --limit 12` under BETTERSTACK_QUERY_* — the probe wraps it."
+  # CORRECTED 2026-09-20 (ship Check 10): this field LED with the property prose below,
+  # which no substring matcher can ever match — so the check could run the command, see it
+  # pass, and still report expectation drift. `discoverability_test` exists so an operator
+  # can compare one command's output against a stated token; a field that only describes
+  # the property pushes that judgement back onto the reader. The literal comes first now;
+  # the property is what the literal MEANS and is retained verbatim after it. The COMMA
+  # after the literal is load-bearing: Check 10 tokenizes this field on commas (and
+  # backticks/quotes) and substring-matches each token, so a literal that is not
+  # delimiter-terminated is swallowed into one unmatchable run of prose — which is
+  # exactly how the prose-only form failed.
+  expected_output: "RESULT: PASS, with zero FAIL lines and BOTH per-property floors satisfied; the discriminating assertion is that all five posture fields are present AND positioned ahead of ` zot_last_err=` on EVERY path, including each measurement-failure path — not merely that a count was reported. The LIVE read is `scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK --limit 12` under BETTERSTACK_QUERY_* — the probe wraps it."
 ```
 
 ## Encryption Posture
