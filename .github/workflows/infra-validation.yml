@@ -1387,6 +1387,14 @@ jobs:
       - name: Run zot disk-heartbeat redaction tests (#7500 — per-line redact, tier gate, degrade-closed)
         run: bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
 
+      # Guard 3 (#8386). Every mount-source resolution in the repo (lsblk inverse walk + Hetzner
+      # by-id reverse map) agrees on leaf-counting, namespace scoping and hit-counting. Registered
+      # HERE, as a SINGLE-LINE `run:`: run-registered-suites.sh derives its list from the
+      # `run: bash …` steps in this file, and a multi-line `run: |` block de-registers the suite.
+      # Needs only bash + git; no terraform, cloud-init, docker, network or root.
+      - name: Run store-vs-data mount-source parity drift-guard (#8386 — leaf count, namespace scope, hit count)
+        run: bash apps/web-platform/infra/store-vs-data-mount-parity.test.sh
+
       # Guard 3 (#7555). Needs bash + python3 + terraform (the render) + docker (the pinned
       # digest adjudicates the config), all of which this job already provides — terraform via
       # the setup-terraform step above, docker via the runner. It renders the user_data and
