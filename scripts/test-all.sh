@@ -2330,6 +2330,11 @@ if want_scripts; then
   # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
   # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
   run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
+  # #8377 / ADR-230 — the regen-if-stale gate in front of the now-untracked KB index.
+  # `scripts/*.test.sh` is not covered by SUITE_GLOBS (which reaches plugins/, .claude/hooks/,
+  # apps/ and scripts/lib/ but never the bare scripts/ directory), so this explicit line is
+  # the suite's ONLY registration. Without it it runs nowhere and gates nothing.
+  run_suite "scripts/ensure-kb-index" bash scripts/ensure-kb-index.test.sh
   run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh

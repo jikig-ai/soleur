@@ -687,7 +687,16 @@ fi
 # from main with #7987 (the parallel fixture-containment work) and is not in this PR's diff. Same
 # treatment as the 20 -> 22 and 22 -> 24 bumps: this root is out of scope by construction, so the
 # ceiling moves with the reason recorded rather than converting someone else's new suite mid-flight.
-readonly OUT_CEILING=25
+# 25 -> 23 on 2026-09-20 (#8377). The 22 -> 24 bump above was taken FOR
+# kb-index-merge-driver.test.sh and kb-index-merge-driver-registration.test.sh; ADR-230 retires
+# the merge driver those two covered and both suites are deleted in this PR, so the ceiling
+# gives back exactly what they took. This is the ratchet's own instruction ("lower the ceiling
+# when you convert one") applied to a DELETION rather than a conversion — the effect on the gate
+# is the same, and a ceiling left at 25 would silently admit two future unconverted suites.
+# Measured after the deletion: OUT_N == 23. The separate no-tripwire ceiling is NOT touched:
+# both deleted suites sourced test-helpers.sh, so they were never in that set, and its headroom
+# (4 <= 7) predates this change and is not ours to absorb.
+readonly OUT_CEILING=23
 if (( OUT_N <= OUT_CEILING )); then
   pass "out-of-scope unconverted count $OUT_N <= ceiling $OUT_CEILING (ratchet: lower the ceiling when you convert one)"
 else

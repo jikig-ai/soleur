@@ -193,18 +193,10 @@
 # explicit load-bearing-files-get-explicit-rows row).
 /.github/actions/cf-tunnel-ssh-bridge/                  @deruelle
 
-# Knowledge-base index merge driver (#7935). Once registered, merge-kb-index.sh
-# is UNATTENDED EXECUTABLE CODE ON THE MERGE PATH: an ordinary merge, rebase,
-# pull or cherry-pick that touches knowledge-base/INDEX.md runs it as the
-# invoking user, with no prompt and nothing in the merge output distinguishing
-# it from a conflict-free merge. The CI freshness guard validates artifact
-# CONTENT, so a driver that emits a byte-correct index while also doing
-# something else passes every check in the repo. These are the
-# load-bearing-files-get-explicit-rows rows for that surface.
-/scripts/merge-kb-index.sh                              @deruelle
-/scripts/lib/kb-index-render.sh                         @deruelle
-/scripts/install-kb-merge-driver.sh                     @deruelle
-# .gitattributes decides WHICH paths reach a merge driver, so it is the lever that
-# governs the surface the three rows above describe — a single line there can point
-# any path at any driver. It had only the blanket `*` rule.
-/.gitattributes                                         @deruelle
+# The knowledge-base index merge driver (#7935) and the root .gitattributes that
+# routed paths to it were RETIRED by #8377 / ADR-230: the index is an untracked
+# cache now, and a file that is never committed can never conflict, so there is
+# no merge-path code left to own. The rows that guarded the driver, its render
+# library, its installer and .gitattributes went with the files themselves. plugins/soleur/scripts/resolve-regenerable-conflicts.sh is the
+# replacement surface and is NOT unattended: it runs only when a sync script
+# calls it by name, never from git's merge machinery.

@@ -18,8 +18,8 @@
 #      `.claude/hooks/devin-dispositions.tsv`.
 #   2. Every `bind` row is backed by a live `.devin/config.json` entry whose
 #      matcher is anchored and regex-EVALUATES true on a real Devin tool name
-#      (jq `test()` — never string-compare; `kb-index-merge-driver-registration`
-#      precedent).
+#      (jq `test()` — never string-compare; a matcher that string-compares passes
+#      for an exact tool name and silently fails every prefixed variant).
 #   3. Every `covered-by-twin` row is backed by an anchored lowercase matcher
 #      in settings.json that fires under Devin.
 #   4. No hook is dispatched by two registries for the same Devin tool —

@@ -346,15 +346,24 @@ fi
 #     which made `git merge origin/main` uncommittable through this hook repo-wide
 #     -- no override, and `--no-verify` does not reach a PreToolUse hook.
 #
-#  2. But "a real conflict always writes all three markers" is FALSE HERE. When a
-#     merge driver exits non-zero git writes NO markers at all: it marks the path
-#     `UU` and leaves ours-content in place, so the file reads as cleanly merged.
-#     `scripts/merge-kb-index.sh` therefore writes its OWN lone `<<<<<<< kb-index:`
-#     sentinel EXPRESSLY so this guard fires (see its header, and
-#     merge-pr/SKILL.md). Requiring two types would silently disarm the only
-#     mechanism that makes a failed INDEX.md merge visible -- discarding the other
-#     side's index rows on commit. So that sentinel keeps a single-marker arm,
-#     scoped to the file it can legitimately appear in.
+#  2. But "a real conflict always writes all three markers" is FALSE. The
+#     commonest botched resolution deletes the opener and the `=======` and
+#     leaves the trailing `>>>>>>> other` behind, which a two-type rule passes.
+#     So a lone TERMINATOR keeps its own arm. The asymmetry is measured, not
+#     assumed: on origin/main `^>{7}( |$)` appears in ZERO files while `^<{7}( |$)`
+#     and `^={7,}$` both have large prose classes (fenced examples, setext
+#     underlines, ASCII rules), so only the terminator is free of false positives.
+#
+#     A PATH-CONDITIONAL ARM USED TO LIVE HERE and was retired with the thing it
+#     served (#8377 / ADR-230). A custom merge driver that exits non-zero makes git
+#     write no markers at all -- it marks the path `UU` and leaves ours-content in
+#     place, so the file reads as cleanly merged -- and the kb-index driver wrote a
+#     lone sentinel into knowledge-base/INDEX.md expressly so this guard would fire.
+#     That driver is gone and INDEX.md is an untracked cache, so the sentinel can no
+#     longer be produced OR staged. .claude/hooks/guardrails.test.sh pins its absence
+#     rather than its behaviour: re-adding any path-conditional arm reddens a passing
+#     assertion, which is the signal the next reader of this awk should have to
+#     override deliberately.
 #
 #  3. Counting must be PER FILE. A global count lets two unrelated prose files
 #     (one quoting `<<<<<<<`, one with a lone `=======`) satisfy a two-type rule
@@ -428,10 +437,7 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   # the trailing `>>>>>>> other` behind -- a two-type rule alone would pass it,
   # and in the .md files that dominate this repo nothing else would catch it.
   CONFLICT_HIT=$(awk '
-    /^\+\+\+ b\// { path = substr($0, 7); lt = 0; eq = 0; next }
-    /^\+<<<<<<< kb-index:/ {
-      if (path == "knowledge-base/INDEX.md") { print "hit"; exit }
-    }
+    /^\+\+\+ b\// { lt = 0; eq = 0; next }
     /^\+>>>>>>>( |$)/ { print "hit"; exit }
     /^\+<<<<<<<( |$)/ { lt = 1 }
     /^\+=======\r?$/  { eq = 1 }
@@ -442,7 +448,7 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
     jq -n '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",        permissionDecision: "deny",
-        permissionDecisionReason: "BLOCKED: Staged content contains an unresolved conflict — a file with two or more marker types, or the kb-index merge-driver sentinel in knowledge-base/INDEX.md. Resolve all conflicts before committing."
+        permissionDecisionReason: "BLOCKED: Staged content contains an unresolved conflict — a file with two or more marker types, or a lone trailing `>>>>>>>`. Resolve all conflicts before committing."
       }
     }'
     exit 0

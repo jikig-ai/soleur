@@ -471,27 +471,70 @@ assert_run "conflict: partial resolution (2 of 3) still denies" "deny" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 
 # THE FALSE POSITIVE this fix exists for: prose quoting ONE marker → allow.
-# Shape taken from the kb-index merge-driver plan now on origin/main.
-cm_stage "Example sentinel the driver writes:
+# Documentation that shows a conflict marker inside a fenced block is ordinary
+# in this repo — every runbook that explains resolving one does it.
+cm_stage "Example of what an unresolved hunk looks like:
 
 \`\`\`
-$MK_LT kb-index: merge driver could not resolve — re-run the merge
+$MK_LT HEAD
 \`\`\`
 
 Nothing above is an unresolved conflict."
 assert_run "conflict: single quoted marker in prose allows" "<none>" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 
-# THE REGRESSION A TWO-OF-THREE RULE WOULD CAUSE. scripts/merge-kb-index.sh
-# writes a LONE sentinel when the driver fails, because git itself writes NO
-# markers in that case (it marks the path UU and leaves ours-content in place,
-# so the file reads clean). The sentinel is the only visible signal, and it must
-# still deny -- but ONLY in the file it can legitimately appear in.
-cm_stage "$MK_LT kb-index: merge driver could not resolve (driver exited 3)
-- [Some Entry](project/x.md)" "knowledge-base/INDEX.md"
-assert_run "conflict: lone kb-index sentinel in INDEX.md denies" "deny" \
+# THE RETIRED SENTINEL ARM, pinned as ABSENCE (#8377 / ADR-230).
+#
+# Until this change the awk carried an extra rule: a lone `<<<<<<< kb-index:`
+# opener denied, but ONLY in knowledge-base/INDEX.md, because the retired merge
+# driver wrote that sentinel when it failed and git itself writes no markers in
+# that case. The driver, the file's tracked copy and the sentinel are all gone,
+# so the generic asymmetry governs: a LONE opener allows (it has a large
+# false-positive class — every doc that quotes one), and only a lone TERMINATOR
+# or two marker types deny.
+#
+# These two rows are the regression guard on the DELETION. Re-adding any
+# path-conditional arm makes them RED, which is the point: the next reader of
+# that awk should have to delete a passing assertion to bring the sentinel back.
+cm_stage "$MK_LT ours
+A lone opener at column 0, in an ordinary file."
+assert_run "conflict: lone opener alone allows (no path-conditional arm)" "<none>" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 
+cm_stage "$MK_LT kb-index: merge driver could not resolve (driver exited 3)
+- [Some Entry](project/x.md)" "knowledge-base/INDEX.md"
+assert_run "conflict: lone opener in knowledge-base/INDEX.md allows — the kb-index sentinel arm is retired" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+git -C "$CM/repo" rm -q --cached knowledge-base/INDEX.md
+rm -f "$CM/repo/knowledge-base/INDEX.md"
+
+# Second false-positive class: a Markdown setext underline is 7+ `=` at line
+# start, which the unanchored `={7}` matched.
+cm_stage 'A Heading
+=========
+
+Body text.'
+assert_run "conflict: setext heading underline allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# Exactly seven `=` alone, no other marker type in the file → allow.
+cm_stage "Rule below:
+$MK_EQ
+done"
+assert_run "conflict: lone seven-equals line allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# PER-FILE counting: two types split across two files is NOT a conflict.
+# A global counter would deny this pair. The opener sits at COLUMN 0: an earlier
+# revision put it mid-line ("Doc A quotes <marker> once."), which the `^\+<{7}`
+# anchor never matches, so the per-file reset was never exercised at all.
+cm_stage "$MK_LT ours
+Doc A quotes an opener." "a.md"
+cm_stage "Doc B has a rule:
+$MK_EQ
+end" "b.md"
+assert_run "conflict: two types split across two files allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 # USER GIT CONFIG must not change the verdict (#8263). The awk keys on the
 # `+++ b/` header, and a developer's global config can rewrite it:
 # diff.mnemonicprefix=true prints `+++ i/…`, diff.noprefix=true prints `+++ …`,
@@ -536,47 +579,19 @@ if [[ "$_cm_seen" != "count=1 key0=diff.noprefix" ]]; then
   echo "GUARD FAIL: run_decision_cfg did not deliver the injected config to the process it runs (saw '$_cm_seen', want 'count=1 key0=diff.noprefix'); every config row below is a duplicate of its default-config sibling." >&2
   exit 2
 fi
-assert_run_cfg "conflict: lone kb-index sentinel denies under diff.mnemonicprefix=true" "deny" \
-  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.mnemonicprefix true
-assert_run_cfg "conflict: lone kb-index sentinel denies under diff.noprefix=true" "deny" \
-  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.noprefix true
-mkdir -p "$CM/repo/sub"
-assert_run_cfg "conflict: lone kb-index sentinel denies under diff.relative=true from a subdirectory" "deny" \
-  "$(mk_payload 'git commit -m x')" "$CM/repo/sub" "$CM/repo" diff.relative true
-git -C "$CM/repo" rm -q --cached knowledge-base/INDEX.md
-rm -f "$CM/repo/knowledge-base/INDEX.md"
-
-# Second false-positive class: a Markdown setext underline is 7+ `=` at line
-# start, which the unanchored `={7}` matched.
-cm_stage 'A Heading
-=========
-
-Body text.'
-assert_run "conflict: setext heading underline allows" "<none>" \
-  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
-
-# Exactly seven `=` alone, no other marker type in the file → allow.
-cm_stage "Rule below:
-$MK_EQ
-done"
-assert_run "conflict: lone seven-equals line allows" "<none>" \
-  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
-
-# PER-FILE counting: two types split across two files is NOT a conflict.
-# A global counter would deny this pair. The opener sits at COLUMN 0: an earlier
-# revision put it mid-line ("Doc A quotes <marker> once."), which the `^\+<{7}`
-# anchor never matches, so the per-file reset was never exercised at all.
-cm_stage "$MK_LT ours
-Doc A quotes an opener." "a.md"
-cm_stage "Doc B has a rule:
-$MK_EQ
-end" "b.md"
-assert_run "conflict: two types split across two files allows" "<none>" \
-  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 # Under diff.noprefix the `+++ b/` header never matches, the per-file reset never
 # runs, and counting goes global — an over-fire that denies a clean pair (#8263).
+# ONE CONFIG PER ROW, so a hardening that covers one and not another is visible.
+# The hook defends against all three by passing --src-prefix/--dst-prefix and
+# --no-relative explicitly, which override diff.noprefix, diff.mnemonicprefix and
+# diff.relative respectively; each row is the regression guard on one of those.
 assert_run_cfg "conflict: two types split across two files allows under diff.noprefix=true" "<none>" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.noprefix true
+assert_run_cfg "conflict: two types split across two files allows under diff.mnemonicprefix=true" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.mnemonicprefix true
+mkdir -p "$CM/repo/sub"
+assert_run_cfg "conflict: two types split across two files allows under diff.relative=true from a subdirectory" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo/sub" "$CM/repo" diff.relative true
 git -C "$CM/repo" rm -q --cached a.md b.md; rm -f "$CM/repo/a.md" "$CM/repo/b.md"
 
 # The gate must also cover `git merge --continue`, the command in the real bug.

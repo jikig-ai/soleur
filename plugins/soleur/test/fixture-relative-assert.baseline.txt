@@ -286,12 +286,8 @@
 2	plugins/soleur/test/git-fixture-env.mutation.sh
 4	plugins/soleur/test/harvest-debt.test.sh
 3	plugins/soleur/test/hook-git-env-coverage.mutation.sh
-10	plugins/soleur/test/kb-index-check-guard-mutation.test.sh
-7	plugins/soleur/test/kb-index-merge-driver-registration.test.sh
-18	plugins/soleur/test/kb-index-merge-driver.test.sh
 14	plugins/soleur/test/lint-bot-synthetic-completeness.test.sh
 13	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
-1	plugins/soleur/test/merge-kb-index-driver-mutation.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
 1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
@@ -359,7 +355,6 @@
 7	scripts/lint-workflow-install-sites.test.sh
 1	scripts/machinery-backfill-propose.sh
 8	scripts/markdown-lint.test.sh
-6	scripts/merge-kb-index.sh
 8	scripts/orphan-process-reaper-mutation.test.sh
 4	scripts/orphan-process-reaper.sh
 7	scripts/orphan-process-reaper.test.sh

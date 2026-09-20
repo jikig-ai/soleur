@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # generate-kb-index.sh — Generate knowledge-base/INDEX.md from file metadata.
 #
-# Usage: bash scripts/generate-kb-index.sh [--help] [--out DIR] [--check]
+# Usage: bash scripts/generate-kb-index.sh [--help] [--out DIR]
 #
 # Walks knowledge-base/**/*.md, extracts titles from YAML frontmatter
 # (fallback: first # heading, then kebab-to-title-case filename), and
@@ -13,14 +13,15 @@
 #
 # Flags:
 #   --out DIR   Write INDEX.md, kb-tags.txt and kb-categories.txt into DIR
-#               instead of the tracked knowledge-base/ artifacts.
-#   --check     Regenerate off to the side and diff against the committed
-#               artifacts; print the diff and exit non-zero on any mismatch.
+#               instead of the knowledge-base/ artifacts.
 #
-# INDEX.md is resolved on merge by scripts/merge-kb-index.sh, registered as
-# merge.kb-index.driver by scripts/install-kb-merge-driver.sh and selected by
-# the root .gitattributes. If a merge of INDEX.md ever conflicts, re-run the
-# merge after fixing that registration -- never resolve it by taking one side.
+# THE THREE ARTIFACTS ARE UNTRACKED CACHES (ADR-230). They are derivable from
+# the tree, so they are gitignored and regenerated on demand by
+# scripts/ensure-kb-index.sh, which every reader calls before reading. There is
+# no merge driver and no committed copy to diff against: a cache that is never
+# committed can never conflict, which is the whole point of ADR-230 superseding
+# ADR-210. Do not re-add a --check flag -- it compared against a committed
+# artifact that no longer exists.
 
 set -euo pipefail
 
@@ -37,14 +38,10 @@ LEARNINGS_DIR="$KB_DIR/project/learnings"
 TAGS_FILE="$KB_DIR/kb-tags.txt"
 CATEGORIES_FILE="$KB_DIR/kb-categories.txt"
 
-# shellcheck source=scripts/lib/kb-index-render.sh
-source "$SCRIPT_DIR/lib/kb-index-render.sh"
-
-# --out DIR is the primitive (mirroring regenerate-c4-model.sh --out); --check is
-# a thin wrapper around it. Both are additive: the four live callers all invoke
-# this script with no arguments and are unaffected.
+# --out DIR is the primitive, mirroring regenerate-c4-model.sh. It is what
+# scripts/ensure-kb-index.sh regenerates through: generate off to the side, then
+# publish each file with `mv -f`, so a reader never sees a half-written index.
 OUT_DIR=""
-CHECK=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help)
@@ -56,64 +53,12 @@ while [[ $# -gt 0 ]]; do
       [[ -n "$OUT_DIR" ]] || { echo "ERROR: --out requires a directory" >&2; exit 2; }
       shift 2
       ;;
-    --check)
-      CHECK=1
-      shift
-      ;;
     *)
       echo "ERROR: unknown argument '$1' (see --help)" >&2
       exit 2
       ;;
   esac
 done
-
-if [[ "$CHECK" == 1 ]]; then
-  # Regenerate into a scratch directory and diff against the committed
-  # artifacts. This is a REGENERATION DIFF and not a structural lint on purpose:
-  # a checklist of structural assertions would re-implement the generator's own
-  # row-eligibility predicate in a second place (which ADR-174 warns will
-  # drift), and it still could not see title drift, renderer drift, or the
-  # rename-plus-edit divergence the merge driver documents as its honest limit.
-  # Regenerating catches all of them, including the case where no merge driver
-  # was registered at all and git line-merged the file into something that reads
-  # as clean.
-  [[ -z "$OUT_DIR" ]] || { echo "ERROR: --check and --out are mutually exclusive" >&2; exit 2; }
-  _check_dir="$(mktemp -d)"
-  trap 'rm -rf "$_check_dir"' EXIT
-  "$0" --out "$_check_dir" >/dev/null
-  # CAPPED, and on ONE stream. `diff -u` was both the gate and the diagnostic,
-  # uncapped and on stdout while the ERROR line went to stderr — so a stale index
-  # emitted unbounded interleaved output (measured: 295 lines for a 280-row
-  # drift; issue #7401 records main being stale by 3,711 rows, which is ~4.5k
-  # lines). That is hr-never-run-commands-with-unbounded-output in the guard the
-  # design designates as the last thing between a line-merged index and main.
-  # The c4 precedent this flag is modelled on gates on `cmp -s` and caps its
-  # diagnostic at `head -20`.
-  _check_rc=0
-  _check_cap=40
-  for _f in INDEX.md kb-tags.txt kb-categories.txt; do
-    if ! cmp -s "$KB_DIR/$_f" "$_check_dir/$_f"; then
-      {
-        echo "ERROR: $KB_DIR/$_f differs from a fresh generation (first $_check_cap diff lines):"
-        # `|| true` is load-bearing: `diff` exits 1 when files differ — which is
-        # the whole reason we are here — and under `pipefail` that status
-        # survives `head`, so `set -e` killed the script mid-diagnostic before
-        # `_check_rc=1` was ever reached. The guard still exited non-zero, so it
-        # LOOKED correct, while the remediation line never printed and the two
-        # mutation rows pinning that exit path went vacuous. Caught by this
-        # change's own battery (C1/C2 SURVIVED).
-        diff -u "$KB_DIR/$_f" "$_check_dir/$_f" | head -n "$_check_cap" || true
-      } >&2
-      _check_rc=1
-    fi
-  done
-  if [[ "$_check_rc" -ne 0 ]]; then
-    echo "Run: bash scripts/generate-kb-index.sh" >&2
-    exit 1
-  fi
-  echo "kb index artifacts are fresh."
-  exit 0
-fi
 
 if [[ -n "$OUT_DIR" ]]; then
   mkdir -p "$OUT_DIR"
@@ -209,10 +154,23 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
 
 # Build the index from the sorted entries.
 #
-# The layout lives in scripts/lib/kb-index-render.sh, sourced above, because
-# scripts/merge-kb-index.sh must emit byte-identical content from git's three
-# merge inputs. A second copy here would drift, and the drift would be invisible
-# -- both files would still look like an index.
+# THE LAYOUT IS INLINE, AND HAS NO COUNT HEADER. It used to live in its own
+# library because the retired merge driver had to emit byte-identical content
+# from git's three merge inputs; with the artifact untracked (ADR-230) that
+# driver is gone and this is the only renderer, so the extraction bought nothing
+# and the second file was pure drift surface.
+#
+# The derived count header went with it. It existed because the default text
+# merge folds two branches' identical count text cleanly into a wrong number --
+# a defect that requires a merge, which an untracked file never has. No reader
+# ever parsed it.
+#
+# THE TSV CONTRACT. Rows arrive as `rel<TAB>title`, sorted with `LC_ALL=C sort`
+# BY REL -- not by rendered line, which would order differently because a row
+# renders title-first. Titles arrive ALREADY ESCAPED (the extractor escapes `[`
+# and `]`), so this emits them verbatim. `printf '%s'` and not `echo`: a title
+# legitimately contains backslashes, and `%s` passes them through untouched
+# while `echo` may interpret them under xpg_echo.
 # PUBLISHED ATOMICALLY, mirroring regenerate-c4-model.sh's `--out` contract
 # rather than only its flag shape. A bare `> "$INDEX_FILE"` truncates the TRACKED
 # artifact before the renderer runs, so a SIGINT, a full disk, or an OOM-killed
@@ -222,19 +180,33 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
 # UNLINK BEFORE REDIRECTING. A redirect FOLLOWS an existing symlink, so a
 # pre-planted `<artifact>.tmp.<pid>` pointing anywhere writable makes this write
 # through it and the following `mv -f` then replaces the tracked artifact with a
-# symlink. scripts/merge-kb-index.sh documents this exact class for its own
-# scratch file and applies the same remedy; measured here before the fix, the
-# tracked artifact became a symlink to the planted target.
+# symlink. The retired merge driver documented this exact class for its own
+# scratch file and applied the same remedy; measured here before the fix, the
+# artifact became a symlink to the planted target.
 _index_tmp="$INDEX_FILE.tmp.$$"
 rm -f "$_index_tmp"
-kb_render_index "$tmpfile" > "$_index_tmp"
+{
+  printf '# Knowledge Base Index\n'
+  printf '\n'
+  printf '> Auto-generated by `scripts/generate-kb-index.sh` (untracked cache, ADR-230).\n'
+  printf '> Do not edit manually; run `bash scripts/ensure-kb-index.sh` to refresh.\n'
+
+  _render_domain="" _render_rel="" _render_title="" _render_cur=""
+  while IFS=$'\t' read -r _render_rel _render_title; do
+    _render_domain="${_render_rel%%/*}"
+    if [[ "$_render_domain" != "$_render_cur" ]]; then
+      printf '\n## %s\n\n' "$_render_domain"
+      _render_cur="$_render_domain"
+    fi
+    printf -- '- [%s](%s)\n' "$_render_title" "$_render_rel"
+  done < "$tmpfile"
+} > "$_index_tmp"
 mv -f "$_index_tmp" "$INDEX_FILE"
 
-# DERIVED FROM THE ARTIFACT, not from `${#all_files[@]}`. That second derivation
-# is the exact mechanism behind main's off-by-one headers -- the find pass and
-# the row pass can disagree -- and this echo was the last place it survived after
-# kb-index-render.sh started deriving the header from the row count. AC13 cannot
-# see it: it greps for `Total files:`, which this line does not contain.
+# DERIVED FROM THE ARTIFACT, not from `${#all_files[@]}`. The find pass and the
+# row pass can disagree, and a count re-derived from the array rather than read
+# back off the rendered file is how main once carried off-by-one headers. This
+# is stdout only -- nothing writes a count into the artifact any more.
 _indexed="$(grep -c '^- \[' "$INDEX_FILE" || true)"
 echo "Generated $INDEX_FILE ($_indexed files indexed)"
 
