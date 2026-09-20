@@ -524,14 +524,34 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(step1).toContain("Skill tool");
   });
 
-  test("go.md plugin-root prefers GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT with no CWD default", () => {
+  test("go.md plugin-root resolves from the loader token, then GROK_PLUGIN_ROOT, with no CWD default", () => {
+    // This test PINNED `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` from 2026-09-12 to
+    // 2026-09-19 (#8061 -> #8308). The loader substitutes only the exact braced literal
+    // `${CLAUDE_PLUGIN_ROOT}` — measured on Claude Code and Grok Build 1.0.34, #7450
+    // phase-1-measurement.md §Arm 5 — so that form reached bash verbatim and expanded empty,
+    // and all three /soleur:go session gates took their degraded branch while CI stayed green
+    // over the literal. A guard that pins the defect is worse than no guard.
     const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
-    expect(goMd).toContain('ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"');
+    // CALL-FORM anchors, not bare tokens. `toContain("GROK_PLUGIN_ROOT")` and
+    // `toContain("SOLEUR_PLUGIN_ROOT_RESOLVE")` were both satisfied by this PR's OWN new
+    // operator-facing prose ("Read the `SOLEUR_PLUGIN_ROOT_RESOLVE` line…", "`GROK_PLUGIN_ROOT`
+    // is set but…"), so deleting all four echo lines and the entire grok-env arm left this test
+    // green. The diff created the satisfier and the assertion together —
+    // `cq-assert-anchor-not-bare-token`.
+    expect(goMd).toContain('ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token');
+    expect(goMd).toContain('ROOT="$GROK_PLUGIN_ROOT"; SRC=grok-env');
+    expect(goMd).toContain('echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=');
     expect(goMd).toContain("plugin-root-unverified");
-    expect(goMd).not.toContain(":-./plugins/soleur");
     expect(goMd).toContain("grok inspect");
+    // A bare `ROOT="${CLAUDE_PLUGIN_ROOT}"` prefix is not enough on its own: an indirection
+    // (`XROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${GROK_PLUGIN_ROOT:-$XROOT}"`) contains it while
+    // functionally reverting the arm order, and dodges both negatives below. Measured green
+    // before the call-form anchors above were added.
+    expect(goMd).not.toContain(":-$CLAUDE_PLUGIN_ROOT");
+    expect(goMd).not.toContain(":-./plugins/soleur");
+    expect(goMd).not.toMatch(/ROOT="\$\{GROK_PLUGIN_ROOT:-/);
     const namePin = `grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"'`;
-    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(2);
+    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(3);
   });
 
   test("public getting-started does not overclaim Grok support", () => {
