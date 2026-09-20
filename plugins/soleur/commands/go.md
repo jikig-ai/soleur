@@ -74,6 +74,7 @@ fi
 - `source=none` **on Claude Code or Concierge** — no arm produced a root on a harness where the loader was expected to substitute one. That is a **Soleur plugin defect**. Per `wg-every-session-error-must-produce-either`, file an issue on `jikig-ai/soleur` quoting the three `RESOLVE` lines, then continue on the fallback.
 - `source=none` **on a read-from-disk harness (Codex, Devin CLI)** — nothing substituted and nothing set the variable. **Set `CLAUDE_PLUGIN_ROOT` per your harness's `INSTRUCTIONS.md` §"Paths and entry points"** and re-run. Not a Soleur defect.
 - `source=grok-env verified=false` — `GROK_PLUGIN_ROOT` is set but does not point at the Soleur plugin. A **local configuration fact**: check what it targets (`grok plugin list`). Not a Soleur defect.
+- `SOLEUR_SESSION_START_SKIPPED reason=cloud-session verdict=<v>` **on a machine you know is local** — `cloud-detect.sh` classified the session as a Devin one. The usual cause is a stray `DEVIN_DIR` or `DEVIN_DISABLE_HISTEXPAND` exported by your shell profile, which makes the box Devin-marked; unset it and re-run. Session-start maintenance is skipped until then, deliberately — the classifier fails closed by contract.
 - `verified=false` with any other `source` — a root arrived but carries no Soleur manifest: a **torn or stale install**. Reinstall or update the plugin; file an issue only if a fresh install reproduces it.
 
 The `else` branch runs the bare inline probes when the plugin payload cannot be verified (e.g. a repo-less workspace whose plugin symlink was not scaffolded). Readiness = the output contains `SOLEUR_GIT_REPO_READY=true` (script path) OR a bare `true` (fallback path).
@@ -149,7 +150,10 @@ if [ "$VERIFIED" = true ]; then
     echo "SOLEUR_CLOUD_DETECT_SKIPPED reason=script-unreachable"
   fi
 else
-  echo "SOLEUR_CLOUD_DETECT_SKIPPED reason=script-unreachable"
+  # NOT `script-unreachable` — nothing looked for the script, so that would name a cause this
+  # gate did not measure (AP-021), and it is the #7442 class this change exists to remove. Steps
+  # 0.0 and 0 already discriminate these two states; this one used to collapse them.
+  echo "SOLEUR_CLOUD_DETECT_SKIPPED reason=plugin-root-unverified"
 fi
 ```
 
@@ -191,6 +195,7 @@ echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}
 # fire. This is the only gate below that mutates anything.
 SESSION_OK=false
 SESSION_PROBE=absent
+SESSION_VERDICT=none
 if [ "$VERIFIED" = true ]; then
   # The classifier itself is presence-guarded (#7474). Without this, a verified-but-TORN
   # install runs a missing script, the `case` sees empty output, and the gate reports
@@ -198,7 +203,18 @@ if [ "$VERIFIED" = true ]; then
   # guard that misattributes is worse than one that skips.
   if [ -f "${ROOT}/scripts/cloud-detect.sh" ]; then
     SESSION_PROBE=present
-    case "$(bash "${ROOT}/scripts/cloud-detect.sh" 2>/dev/null | head -1)" in
+    # The proceed set is EXACTLY the classifier's own documented exception — its header says
+    # "consumers MUST fail closed on [not-local:<reason>]" and names one carve-out: "Callers
+    # treat no-devin-env like `local`". Do not widen it. A review pass proposed adding
+    # `not-local:sentinel-absent` because a local box with a stray `DEVIN_DIR` exported reports
+    # it (measured, and it is this repo's own operator profile); but that reason means "a
+    # Devin-MARKED box with no sentinel", which is precisely the fail-closed case — admitting it
+    # would let a real Devin cloud session reach `cleanup-merged`. The symptom is real and the
+    # fix belongs in the REASON, not the predicate: SESSION_VERDICT is reported below so the
+    # operator sees which verdict skipped them and can clear it.
+    SESSION_VERDICT="$(bash "${ROOT}/scripts/cloud-detect.sh" 2>/dev/null | head -1)"
+    [ -n "$SESSION_VERDICT" ] || SESSION_VERDICT=classifier-silent
+    case "$SESSION_VERDICT" in
       local|not-local:no-devin-env) SESSION_OK=true ;;
     esac
   fi
@@ -209,17 +225,36 @@ if [ "$VERIFIED" != true ]; then
   # no output at all. The RESOLVE line above now also says WHICH arm produced nothing.
   echo "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified"
 elif [ "$SESSION_PROBE" != present ]; then
-  echo "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root"
+  # A DISTINCT reason from the worktree-manager arm below. Both said
+  # `reason=absent-from-verified-root`, which (a) told the operator a script was missing without
+  # saying which, and (b) made plugin-root-anchoring.test.ts P8 satisfiable by this sibling — the
+  # exact vacuity P8's own comment records having closed for this producer.
+  echo "SOLEUR_SESSION_START_SKIPPED reason=classifier-absent"
 elif [ "$SESSION_OK" != true ]; then
-  echo "SOLEUR_SESSION_START_SKIPPED reason=cloud-session"
+  # Name the VERDICT. A blanket `reason=cloud-session` told an operator with a stray DEVIN*
+  # variable on an ordinary laptop that their local session was a cloud one, and gave them
+  # nothing to act on.
+  echo "SOLEUR_SESSION_START_SKIPPED reason=cloud-session verdict=${SESSION_VERDICT}"
 else
   # Identity is not freshness (#7474) — see the Step 0.0 probe above. Arm order is the
   # loader-substituted token, then GROK_PLUGIN_ROOT (ADR-179 decision 11); the name=soleur
   # preflight in the resolver runs on whichever arm produced the root.
   if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
-    bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
-      git worktree list && \
-      git show main:.mcp.json > .mcp.json 2>/dev/null || true
+    bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
+    git worktree list
+    # Write-then-rename, NEVER `git show … > .mcp.json`. The shell TRUNCATES the redirect target
+    # before forking `git show`, so every failure mode leaves a 0-byte .mcp.json: no `.mcp.json`
+    # on main (the normal case for a customer repo — this repo tracks one, which is why it was
+    # never noticed), no local `main`, or any other git error. Measured: 67 bytes -> 0, silently,
+    # with `2>/dev/null || true` swallowing the status and reporting rc 0. On a customer machine
+    # that file is their MCP server registry, commonly holding per-server tokens, and it is
+    # untracked — so the loss is unrecoverable.
+    if git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
+      mv .mcp.json.soleur-tmp .mcp.json
+    else
+      rm -f .mcp.json.soleur-tmp
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main"
+    fi
   else
     echo "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root"
   fi

@@ -70,7 +70,7 @@ GATE_ABSENT_MARKERS=(
 )
 GATE_UNVERIFIED_MARKERS=(
   "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=plugin-root-unverified"
-  "SOLEUR_CLOUD_DETECT_SKIPPED reason=script-unreachable"
+  "SOLEUR_CLOUD_DETECT_SKIPPED reason=plugin-root-unverified"
   "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified"
 )
 
@@ -131,6 +131,10 @@ resolver_snippet() {
 # fence comment on main), so an unscoped absence grep false-fails a correct file. The
 # fence-scoping TECHNIQUE is redact-sentinel.test.sh's `exec_lines`; that suite scans the three
 # SECRET gates, not go.md, so this is a pattern copied rather than coverage inherited.
+# NOTE on `<<<"$var"` throughout this file rather than `printf … | grep -q`: under
+# `set -o pipefail` an early `grep -q` match closes the pipe, the producer takes SIGPIPE (141),
+# and the pipeline's non-zero status makes the `if` read FALSE — so a NEGATIVE guard fails OPEN.
+# The ban and portability rows are the highest-value static rows in this file.
 code_lines() { printf '%s\n' "$1" | grep -vE '^[[:space:]]*#' || true; }
 
 # mk_root <dir> <manifest-name> [absent-gate]
@@ -249,17 +253,29 @@ DECOY_LOG="$TMP_ROOT/decoy-ran.log"; : > "$DECOY_LOG"
 # --- R10 (part 1): the extractor answered, or nothing below means anything --------------------
 echo "R10. extractor integrity (asserted BEFORE any row that depends on it)"
 ck; if [ -f "$GO_MD" ]; then pass "go.md exists"; else fail "go.md missing at $GO_MD"; exit 2; fi
-want_eq "$(count_fences "$GO_MD")" "3" "R10: exactly 3 gate fences extracted by heading anchor"
+want_eq "$(count_fences "$GO_MD")" "${#GATE_ANCHORS[@]}" "R10: every declared gate anchor yields a fence"
+# The four tables below are parallel by construction and every row indexes all four. Without
+# this, adding a member to one silently desyncs the rest and every loop quietly covers N-1 of N.
+for _arr in GATE_NAMES GATE_ABSENT_MARKERS GATE_UNVERIFIED_MARKERS; do
+  eval "_n=\${#${_arr}[@]}"
+  want_eq "$_n" "${#GATE_ANCHORS[@]}" "R10: $_arr has one member per gate anchor"
+done
+# A FOURTH gate fence added to go.md is invisible to a check that only counts the anchors we
+# already declared — measured: appending a `## Step 0.9` fence carrying the #8061 form, a CWD
+# default AND `set -u` left this suite at 137/0/137, because count_fences only ever looks where
+# GATE_ANCHORS points. Count the bash fences in the WHOLE file instead: every one of them is a
+# gate, so a new fence must either join the declared set or red this row.
+_go_fences="$(grep -c '^```bash$' "$GO_MD" || true)"
+want_eq "$_go_fences" "${#GATE_ANCHORS[@]}" "R10: go.md carries no bash fence outside the declared gate anchors"
 ck; if grep -q '~~~' "$GO_MD"; then fail "R10: go.md uses a ~~~ fence the extractor cannot see"; else pass "R10: no ~~~ fences"; fi
 ck; if grep -q $'\r' "$GO_MD"; then fail "R10: go.md carries CR bytes the extractor cannot see"; else pass "R10: no CRLF"; fi
 
-declare -a FENCE_LITERAL FENCE_SNIPPET
-for i in 0 1 2; do
+declare -a FENCE_LITERAL
+for i in "${!GATE_ANCHORS[@]}"; do
   body="$(extract_fence "${GATE_ANCHORS[$i]}" "$GO_MD")"
   ck; if [ -n "$body" ]; then pass "R10: ${GATE_NAMES[$i]} fence body non-empty"; else fail "R10: ${GATE_NAMES[$i]} fence body EMPTY"; fi
   f="$TMP_ROOT/fence-${GATE_NAMES[$i]}.sh"; printf '%s\n' "$body" > "$f"
   FENCE_LITERAL[$i]="$f"
-  FENCE_SNIPPET[$i]="$(resolver_snippet "$body")"
 done
 
 # --- R8: the three resolver snippets are one artifact, not three -----------------------------
@@ -267,7 +283,7 @@ echo "R8. resolver byte-identity across the three fences"
 check_r8() {
   local file="$1" label="$2" i b s
   local -a snip
-  for i in 0 1 2; do
+  for i in "${!GATE_ANCHORS[@]}"; do
     b="$(extract_fence "${GATE_ANCHORS[$i]}" "$file")"
     snip[$i]="$(resolver_snippet "$b")"
   done
@@ -278,8 +294,10 @@ check_r8() {
   fi
   ck; if [ "${snip[0]}" = "${snip[1]}" ]; then pass "$label: readiness == cloud-detect"; else fail "$label: readiness != cloud-detect"; fi
   ck; if [ "${snip[1]}" = "${snip[2]}" ]; then pass "$label: cloud-detect == session-start"; else fail "$label: cloud-detect != session-start"; fi
-  for i in 0 1 2; do
-    s="$(printf '%s\n' "${snip[$i]}" | grep -c -F '${CLAUDE_PLUGIN_ROOT}' || true)"
+  for i in "${!GATE_ANCHORS[@]}"; do
+    # OCCURRENCES, not matching lines -- the sibling at the Devin-cache row already documents
+    # this trap and this row was written with the wrong idiom anyway.
+    s="$(printf '%s\n' "${snip[$i]}" | grep -oF '${CLAUDE_PLUGIN_ROOT}' | grep -c . || true)"
     want_eq "$s" "1" "$label: ${GATE_NAMES[$i]} snippet holds the loader token exactly once"
   done
 }
@@ -289,14 +307,18 @@ check_r8 "$GO_MD" "R8"
 echo "R9. static bans over fence CODE lines (comments stripped)"
 check_r9() {
   local file="$1" label="$2" i body code all_code=""
-  for i in 0 1 2; do
+  for i in "${!GATE_ANCHORS[@]}"; do
     body="$(extract_fence "${GATE_ANCHORS[$i]}" "$file")"
     code="$(code_lines "$body")"
     all_code="${all_code}${code}"$'\n'
 
     # Shell options: `set -u` would abort the resolver BEFORE it prints its own marker, which is
     # the silent-skip class this whole change exists to remove.
-    ck; if printf '%s\n' "$code" | grep -qE '(^|[[:space:];])set +-(e|u|eu|euo|o)\b'; then
+    # A CHARACTER CLASS, not an enumeration of spellings. Measured: the enumerated form
+    # `-(e|u|eu|euo|o)\b` CAUGHT `set -euo pipefail`/`set -u`/`set -o pipefail` and EVADED
+    # `set -ue` and `set -eo pipefail` -- and `set -ue` is precisely the `-u` this bans.
+    # `\b` is also a GNU extension, in a guard whose own R9 bans non-POSIX constructs.
+    ck; if grep -qE '(^|[[:space:];])set +[-+]([a-z]*[eu][a-z]*|o[[:space:]])' <<<"$code"; then
       fail "$label: ${GATE_NAMES[$i]} fence enables a set option"
     else
       pass "$label: ${GATE_NAMES[$i]} fence enables no set -e/-u/-o pipefail"
@@ -320,7 +342,7 @@ check_r9() {
     echoed="$(printf '%s\n' "$code" | grep -F 'SOLEUR_PLUGIN_ROOT_RESOLVE' || true)"
     ck; if [ -z "$echoed" ]; then
       fail "$label: ${GATE_NAMES[$i]} emits no SOLEUR_PLUGIN_ROOT_RESOLVE line"
-    elif printf '%s\n' "$echoed" | grep -qE '\$\{?ROOT\}?'; then
+    elif grep -qE '\$\{?ROOT\}?' <<<"$echoed"; then
       fail "$label: ${GATE_NAMES[$i]} RESOLVE line interpolates the resolved path"
     else
       pass "$label: ${GATE_NAMES[$i]} RESOLVE line carries no path"
@@ -341,7 +363,7 @@ check_r9() {
   #     lookahead-equivalent ERE scored PASS against unmodified go.md.
   local b
   for b in '$CLAUDE_PLUGIN_ROOT' '${CLAUDE_PLUGIN_ROOT:' ':-./plugins/soleur' ':-plugins/soleur'; do
-    ck; if printf '%s\n' "$all_code" | grep -qF -- "$b"; then
+    ck; if grep -qF -- "$b" <<<"$all_code"; then
       fail "$label: banned form '$b' in fence code"
     else
       pass "$label: no '$b' in fence code"
@@ -349,7 +371,7 @@ check_r9() {
   done
   # Portability: none of these is on stock macOS in the form used here.
   for b in 'xargs -r' 'readlink -f' 'stat -c' 'sed -i' 'timeout '; do
-    ck; if printf '%s\n' "$all_code" | grep -qF -- "$b"; then
+    ck; if grep -qF -- "$b" <<<"$all_code"; then
       fail "$label: non-POSIX '$b' in fence code"
     else
       pass "$label: no '$b' in fence code"
@@ -363,7 +385,7 @@ check_r9 "$GO_MD" "R9"
 # 2026-02-22 cleanup-merged-path-mismatch class.
 echo "R3b. \${ROOT}-relative dispatch operands resolve under plugins/soleur/"
 r3b_n=0
-for i in 0 1 2; do
+for i in "${!GATE_ANCHORS[@]}"; do
   body="$(extract_fence "${GATE_ANCHORS[$i]}" "$GO_MD")"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
@@ -383,7 +405,13 @@ DECOY_EVIL="$TMP_ROOT/root-evil";    mk_decoy_root "$DECOY_EVIL" evil
 DECOY_CLAIM="$TMP_ROOT/root-claim";  mk_decoy_root "$DECOY_CLAIM" soleur
 
 delivered_fence() {
-  local i="$1" root="$2" out="$TMP_ROOT/delivered-${GATE_NAMES[$i]}-$3.sh"
+  # TWO `local` statements, deliberately. Word expansion happens before `local` takes effect,
+  # so `${GATE_NAMES[$i]}` inside the SAME `local` resolves against the OUTER `i` -- measured:
+  # `A=(x y z); f(){ local i="$1" out="p-${A[$i]}-q"; echo "$out"; }; i=0; f 2` prints `p-x-q`.
+  # Every caller but one sits in a `for i in …` loop where the two coincide, which is what hid
+  # it; the D self-test passes a literal and wrote fence 0's body to a session-start filename.
+  local i="$1"
+  local root="$2" out="$TMP_ROOT/delivered-${GATE_NAMES[$i]}-$3.sh"
   deliver "$root" < "${FENCE_LITERAL[$i]}" > "$out"
   printf '%s' "$out"
 }
@@ -403,7 +431,7 @@ R1_EXPECT=(
   "SOLEUR_PLUGIN_ROOT_RESOLVE gate=session-start source=plugin-root-token verified=true"
 )
 R1_EFFECT=("SOLEUR_GIT_REPO_READY=true" "not-local:no-devin-env" "STUB_WORKTREE_MANAGER argv=cleanup-merged")
-for i in 0 1 2; do
+for i in "${!GATE_ANCHORS[@]}"; do
   ws="$(fresh_ws "r$i")"
   out="$(run_gate "$(delivered_fence "$i" "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
   want_in "$out" "${R1_EXPECT[$i]}" "R$((i+1)): ${GATE_NAMES[$i]} resolves via the loader token"
@@ -427,11 +455,11 @@ CLOUD_EOF
 chmod +x "$CLOUD_ROOT/scripts/cloud-detect.sh"
 ws="$(fresh_ws r3c)"
 out="$(run_gate "$(delivered_fence 2 "$CLOUD_ROOT" cloud)" "$ws" "$SCRATCH_HOME")"
-want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=cloud-session" "R3c: cloud session skips session-start"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=cloud-session verdict=not-local:sentinel-absent" "R3c: cloud session skips session-start, naming the verdict"
 want_not_in "$out" "STUB_WORKTREE_MANAGER" "R3c: cleanup-merged never dispatched on a cloud session"
 
 echo "R4. undelivered fence, environment unset -> source=none, honest skip"
-for i in 0 1 2; do
+for i in "${!GATE_ANCHORS[@]}"; do
   ws="$(fresh_ws "r4$i")"
   out="$(run_gate "${FENCE_LITERAL[$i]}" "$ws" "$SCRATCH_HOME")"
   want_in "$out" "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE_NAMES[$i]} source=none verified=false" "R4: ${GATE_NAMES[$i]} reports source=none"
@@ -445,7 +473,7 @@ pair="$(printf '%s\n' "$out" | grep -E '^(true|false)$' | tr '\n' ',' || true)"
 want_eq "$pair" "false,true," "R4: Step 0.0 fallback prints the ordered pair false then true"
 
 echo "R5/R5b. undelivered fence + an explicit root in the environment"
-for i in 0 1 2; do
+for i in "${!GATE_ANCHORS[@]}"; do
   ws="$(fresh_ws "r5$i")"
   out="$(run_gate "${FENCE_LITERAL[$i]}" "$ws" "$SCRATCH_HOME" "GROK_PLUGIN_ROOT=$FIX_ROOT")"
   want_in "$out" "gate=${GATE_NAMES[$i]} source=grok-env verified=true" "R5: ${GATE_NAMES[$i]} falls through to GROK_PLUGIN_ROOT"
@@ -466,7 +494,7 @@ want_in "$out" "gate=cloud-detect source=devin-cache verified=true" "R5c: Step 0
 want_in "$out" "not-local:no-devin-env" "R5c: the real cloud-detect.sh ran from the cache root"
 
 echo "R6/R6b/R6c. identity preflight and the payload-absent state"
-for i in 0 1 2; do
+for i in "${!GATE_ANCHORS[@]}"; do
   ws="$(fresh_ws "r6$i")"
   out="$(run_gate "$(delivered_fence "$i" "$DECOY_EVIL" evil)" "$ws" "$SCRATCH_HOME")"
   want_in "$out" "gate=${GATE_NAMES[$i]} source=plugin-root-token verified=false" "R6: ${GATE_NAMES[$i]} refuses a non-Soleur manifest"
@@ -493,7 +521,7 @@ for i in 0 1 2; do
 done
 
 echo "R7. ambient decoys never win against a delivered token (the A10 control)"
-for i in 0 1 2; do
+for i in "${!GATE_ANCHORS[@]}"; do
   ws="$(fresh_ws "r7$i")"
   out="$(run_gate "$(delivered_fence "$i" "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME" \
         "CLAUDE_PLUGIN_ROOT=$DECOY_EVIL" "GROK_PLUGIN_ROOT=$DECOY_CLAIM")"
@@ -587,13 +615,99 @@ if [ -z "$H3_SKIP_REASON" ]; then
 else
   # The reason must be TRUE, not merely printed. A skip claiming the binary is absent while
   # `command -v` finds it is precisely the disarm this arm exists to refuse.
+  # The reason must be TRUE. Written as `[ "$R" = claude-binary-absent ] && command -v claude`
+  # this was `¬P ∧ P` — that branch is set only inside `if ! command -v claude`, so the guard
+  # could never fire and counted as a decided assertion while deciding nothing. Assert the
+  # REASON matches an independently re-derived observation instead.
   ck
-  if [ "$H3_SKIP_REASON" = claude-binary-absent ] && command -v claude >/dev/null 2>&1; then
-    fail "H3: SKIP-DECLARED reason=claude-binary-absent but command -v claude FOUND it - the skip is not derived"
+  if command -v claude >/dev/null 2>&1; then _h3_expect=explicit-opt-out; else _h3_expect=claude-binary-absent; fi
+  if [ "$H3_SKIP_REASON" = "$_h3_expect" ]; then
+    pass "H3: SKIP-DECLARED reason=${H3_SKIP_REASON}, re-derived from command -v claude (AC12 carries the mandatory pre-merge run)"
   else
-    pass "H3: SKIP-DECLARED reason=${H3_SKIP_REASON} (AC12 carries the mandatory pre-merge run)"
+    fail "H3: SKIP-DECLARED reason=${H3_SKIP_REASON} contradicts command -v claude (expected ${_h3_expect}) — the skip is not derived"
   fi
 fi
+
+# --- L2. DECIDER self-tests: the axis a pass()/fail() control cannot reach -------------------
+#
+# A control on pass()/fail() proves DISPATCH. It says nothing about a helper that OWNS a
+# verdict: want_in/want_not_in/want_eq each decide a branch and THEN call pass(), so a decider
+# that always takes the pass branch appends a genuine PASS row and every leg of the
+# triple-check -- counters, append-only ledger, assertion floor -- reconciles exactly.
+#
+# Measured on this file before this block existed, each a single edit, each leaving the suite
+# byte-identical at `137 passed, 0 failed, 137 assertion(s) executed (floor 137)`:
+#   want_in()  { ck; pass "$3"; }                    -> GREEN (21 rows blind)
+#   want_not_in() { ck; pass "$3"; }                 -> GREEN
+#   want_eq()  { ck; pass "$3"; }                    -> GREEN
+#   case "$1" in  ->  case "$1$2" in   (one token)   -> GREEN
+#   check_r8 / check_r9 bodies -> `ck; pass` loops    -> GREEN
+# With three of those applied plus an R9-ban-evading revert of go.md's resolver
+# (`XROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${GROK_PLUGIN_ROOT:-$XROOT}"`), the defect this suite
+# exists to catch was live and the suite still reported 137/0/137, rc=0.
+#
+# So each decider is driven in BOTH directions and the observables are reconciled, then the
+# whole probe is retracted from the counters AND the ledger. Verdicts here are reported with
+# printf + exit 1 -- never through the helpers under test, which is the mutation being defended
+# against.
+echo "L2. decider self-tests"
+_L2_FAILED=0
+_l2_drive() {                      # _l2_drive <want-passes> <want-fails> <label> <cmd...>
+  local wp="$1" wf="$2" label="$3"; shift 3
+  local p0=$passes f0=$fails a0=$asserted l0
+  l0=$(wc -l < "$VERDICT_LOG")
+  "$@" >/dev/null 2>&1
+  local dp=$((passes - p0)) df=$((fails - f0)) da=$((asserted - a0))
+  local dl=$(( $(wc -l < "$VERDICT_LOG") - l0 ))
+  # Retract from BOTH the counters and the append-only ledger, so the floor stays exact.
+  passes=$p0; fails=$f0; asserted=$a0
+  head -n "$l0" "$VERDICT_LOG" > "$TMP_ROOT/verdicts.l2" && mv "$TMP_ROOT/verdicts.l2" "$VERDICT_LOG"
+  if [ "$dp" -ne "$wp" ] || [ "$df" -ne "$wf" ] || [ "$da" -ne 1 ] || [ "$dl" -ne $((wp + wf)) ]; then
+    printf 'FATAL: decider self-test %s: got passes+=%s fails+=%s asserted+=%s ledger+=%s; want %s/%s/1/%s\n' \
+      "$label" "$dp" "$df" "$da" "$dl" "$wp" "$wf" "$((wp + wf))" >&2
+    _L2_FAILED=1
+  fi
+}
+_l2_drive 1 0 "want_in/accept"      want_in     "haystack" "hay" "L2 probe"
+_l2_drive 0 1 "want_in/reject"      want_in     "haystack" "zzz" "L2 probe"
+_l2_drive 1 0 "want_not_in/accept"  want_not_in "haystack" "zzz" "L2 probe"
+_l2_drive 0 1 "want_not_in/reject"  want_not_in "haystack" "hay" "L2 probe"
+_l2_drive 1 0 "want_eq/accept"      want_eq     "a" "a" "L2 probe"
+_l2_drive 0 1 "want_eq/reject"      want_eq     "a" "b" "L2 probe"
+
+# The COMPOSITE deciders get the same treatment: a go.md variant broken in exactly the two ways
+# they exist to detect must drive each of them to a non-zero fail delta. Without this, replacing
+# either body with a `ck; pass` loop is green (measured above).
+L2_BAD="$TMP_ROOT/l2-broken-go.md"
+python3 - "$GO_MD" "$L2_BAD" <<'L2PY'
+import sys, pathlib
+src, dst = sys.argv[1], sys.argv[2]
+s = pathlib.Path(src).read_text()
+# (a) make ONE fence's resolver differ -> R8 byte-identity must fail.
+s = s.replace('ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token',
+              'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token # L2-divergence', 1)
+# (b) introduce a banned form in fence CODE -> R9 must fail.
+s = s.replace('[ -n "$ROOT" ] || SRC=none',
+              'ROOT="${ROOT:-./plugins/soleur}"\n[ -n "$ROOT" ] || SRC=none', 1)
+pathlib.Path(dst).write_text(s)
+L2PY
+_l2_composite() {                  # _l2_composite <label> <fn>
+  local label="$1" fn="$2"
+  local p0=$passes f0=$fails a0=$asserted l0
+  l0=$(wc -l < "$VERDICT_LOG")
+  "$fn" "$L2_BAD" "L2" >/dev/null 2>&1
+  local df=$((fails - f0))
+  passes=$p0; fails=$f0; asserted=$a0
+  head -n "$l0" "$VERDICT_LOG" > "$TMP_ROOT/verdicts.l2" && mv "$TMP_ROOT/verdicts.l2" "$VERDICT_LOG"
+  if [ "$df" -lt 1 ]; then
+    printf 'FATAL: composite self-test %s scored 0 failures against a deliberately broken go.md — it decides nothing\n' "$label" >&2
+    _L2_FAILED=1
+  fi
+}
+_l2_composite "check_r8" check_r8
+_l2_composite "check_r9" check_r9
+[ "$_L2_FAILED" -eq 0 ] || { printf 'FATAL: the deciders are not load-bearing; every behavioural row above is unproven\n' >&2; exit 2; }
+ck; pass "L2: want_in/want_not_in/want_eq/check_r8/check_r9 each decide both ways"
 
 # --- L. instrument self-test: drive the helpers, do not read them -----------------------------
 echo "L. verdict accounting"
@@ -623,9 +737,9 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 137 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
+# 142 is the H3-SKIPPED total; H3 running adds two more, so the floor holds on both paths.
 # Raising it is part of adding a row.
-MIN_ASSERTIONS=137
+MIN_ASSERTIONS=142
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
