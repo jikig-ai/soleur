@@ -889,7 +889,7 @@ jobs:
             echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
           fi
 
-  # --- #8359 (ADR-230): after a successful publish, rewrite the
+  # --- #8359 (ADR-231): after a successful publish, rewrite the
   # soleur-inngest-bootstrap cloud-init pin (4 sites across
   # apps/web-platform/infra/cloud-init.yml + cloud-init-inngest.yml) to the
   # semver-max published tag + registry-resolved digest and open the pin-bump

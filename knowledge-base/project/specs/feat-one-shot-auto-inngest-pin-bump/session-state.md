@@ -22,7 +22,7 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
 
 ## Work Phase
 - Status: implementation complete; verification green (2026-09-19)
-- Delivered: `.github/scripts/bump-inngest-bootstrap-pin.sh` + fixture suite `test-bump-inngest-bootstrap-pin.sh` (126 assertions, MIN_ASSERTIONS=45 floor); `build-inngest-bootstrap-image.yml` gains `build.outputs.{tag,digest,mirror_status}` + `bump-cloud-init-pin` job (App-JWT mint, installation 122213433); ADR-230 (provisional); `model.c4`/`views.c4` write-back documented on the `github -> soleurMarketplace` App-write edge — LikeC4 rejects self-relations ("Invalid parent-child relationship"), so `github -> github` is unrepresentable.
+- Delivered: `.github/scripts/bump-inngest-bootstrap-pin.sh` + fixture suite `test-bump-inngest-bootstrap-pin.sh` (126 assertions, MIN_ASSERTIONS=45 floor); `build-inngest-bootstrap-image.yml` gains `build.outputs.{tag,digest,mirror_status}` + `bump-cloud-init-pin` job (App-JWT mint, installation 122213433); ADR-231 (provisional); `model.c4`/`views.c4` write-back documented on the `github -> soleurMarketplace` App-write edge — LikeC4 rejects self-relations ("Invalid parent-child relationship"), so `github -> github` is unrepresentable.
 - Verified: new suite 126/0; `run-all.sh` ALL PASS (12 suites ≥ MIN_SUITES=11); `cloud-init-inngest-bootstrap.test.sh` 160/160 (pins untouched); c4-code-syntax + c4-render vitest 23/23; `c4-model-freshness.test.sh` 3/3 (model.likec4.json regenerated, byte-fresh); lint-shell-trace-credential-refusal clean (xtrace refusal precedes every traced command incl. `export LC_ALL=C`); `bash -n` both scripts; workflow YAML parses.
 - Deferred by design: AC14 end-to-end proof — first post-merge `vinngest-v*` publish (workflow can't be dispatch-tested from a feature branch); recorded for PR body.
 
@@ -41,7 +41,7 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
   - P2/P3: inline App-JWT mint extracted to `.github/actions/mint-soleur-ai-app-token` (4th copy crossed threshold).
   - P3: dead `--dry-run` removed; `command -v gh` assert; `grep -oE | wc -l` counts; `.author.login // .commit.author.email` tip-author (no extra fetch); summary block simplified; stage vocab aligned (`mint` = workflow-level, not a script stage).
 - Re-verified: fixture suite 153/0 (MIN_ASSERTIONS=60); run-all.sh ALL PASS; drift guard 160/160; watchdog vitest 63/63; shellcheck clean; workflow+action YAML parse.
-- Docs synced: ADR-230 §3/§5/§6 + Verification; tasks.md Phase 5; plan §dry-run note.
+- Docs synced: ADR-231 §3/§5/§6 + Verification; tasks.md Phase 5; plan §dry-run note.
 - Fixture-safety remediation (lefthook test-all run under sibling contention): the new files tripped three corpus guards. Fixes, all verified:
   - `fixture-env-adoption` [UNACCOUNTED] → suite now sources `plugins/soleur/test/lib/git-fixture-env.sh` (arms the #7833 tripwire) and calls `git_fixture_env "$TMP" || exit 2` after mktemp. Root cause of the lefthook failures: inherited `GIT_AUTHOR_*`/`GIT_COMMITTER_*` re-authored fixture commits as the developer; the helper scrubs/pins identity. Proven: suite 153/0 under deliberately injected dev identity env.
   - Script now pins `GIT_AUTHOR_*`/`GIT_COMMITTER_*` to the bot at env level — the "commits authored as soleur-ai[bot]" contract no longer depends on ambient caller env.
@@ -66,3 +66,10 @@ None. No fatal command errors; several bounded searches truncated to overflow fi
 - P3 batch applied: supersede `gh pr list` failure warns; dead final-attempt sleeps removed in script AND all four workflow retry loops; `sleep` PATH-shim for fast retries; hold comments not reposted on existing-PR reuse; ADR link in PR body; `result=` emitted on exit-78; action.yml + model.c4 + plan stale wording (inline-mint provenance, suite counts, AC3) synced; `model.likec4.json` regenerated (75 elements / 153 relations / 77 views).
 - Re-verified: suite 191/0 (MIN_ASSERTIONS=150); run-all.sh ALL PASS (12 suites); drift guard 160/160; watchdog vitest 63/63; shellcheck clean; adoption 25/0, relative 62/0, operand 71/0; c4-model-freshness 3/3, c4-count-parity 10/10, c4-from-components 14/14; workflow+action YAML parse.
 - Ship Phase 5.5 advisor consult (post-panel): verdict genuinely complete; three P3s applied — step-level `timeout-minutes: 8` on the bump step (a job-level timeout records `cancelled`, which `if: failure()` Slack never sees — the silent-cancel class), create-collision filtered re-list (`gh pr create` "already exists" → re-list once through the same same-repo/bot filter → `result=existing`), supersede jq null-`headRefName` guard (deleted head repos no longer abort the sweep mid-pipe). Suite 198/0 (new rows: collide.*, supersede:nullhead-skip, bump:step-timeout).
+
+## CI-gate remediation (post-push `1557e7aa8`)
+
+- `credential-path-guard` red: `tasks.md` carried a resolvable `~/.docker/config.json` literal → neutralized to the directory-only form.
+- `deploy-script-tests` red: `inngest-bootstrap-mirror-only.test.sh` asserted exactly one job; `bump-cloud-init-pin` is now enumerated as the sanctioned second job, with its own `needs:`/`if:`/`continue-on-error:` surface asserted (60/0).
+- Post-merge ADR-230 collision with main's debug-probes ADR → renumbered mine to **ADR-231** (file, title, and all in-branch references; `model.likec4.json` regenerated; PR body updated). `adr-ordinals` + `test-bun` failures were the same root cause.
+- Merge gate note: under this harness the pre-merge hook's evidence range resolves against the project-root detached-HEAD checkout, so branch-local trailers are invisible; review evidence is recorded as code-review issue #8403.

@@ -67,4 +67,4 @@ PR #8360 added `bump-inngest-bootstrap-pin.sh`, a workflow-invoked script that p
 - #7797 — credential leakage through traced commands (the `set -x` refusal this extends)
 - #8359 / PR #8360 — the automation this review round hardened
 - cli/cli#10945 — `gh pr list --head` cross-repo matching
-- ADR-230 — the shipped design record
+- ADR-231 — the shipped design record

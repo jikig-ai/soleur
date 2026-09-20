@@ -501,7 +501,7 @@ describe("isStaleBotPr", () => {
     expect(scheduledLabelFromHead("bot-fix/4321-foo")).toBeNull();
   });
 
-  // #8359 — publish-workflow pin-bump PRs (ADR-230): `soleur/inngest-pin-*`
+  // #8359 — publish-workflow pin-bump PRs (ADR-231): `soleur/inngest-pin-*`
   // heads arm auto-merge, which disarms on conflict — they rot-scan too.
   it("soleur/inngest-pin-* prefix is covered by BOT_PR_HEAD_PREFIXES (#8359)", () => {
     expect(BOT_PR_HEAD_PREFIXES).toContain("soleur/inngest-pin-");
