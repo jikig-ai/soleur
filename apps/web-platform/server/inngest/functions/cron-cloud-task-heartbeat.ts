@@ -94,10 +94,14 @@ const SILENCE_ISSUE_TITLE_PREFIX = "[cloud-task-silence]";
 const STALE_BOT_PR_THRESHOLD_MS = 48 * 60 * 60 * 1000;
 // #5199 — `bot-fix/*` added (cron-bug-fixer restore): its auto-merge PRs disarm
 // on conflict like the `ci/*` cohort and must be age-scanned.
+// #8359 — `soleur/inngest-pin-*` added (ADR-232): publish-workflow pin-bump
+// PRs arm auto-merge, which disarms on conflict and stalls under the strict
+// up-to-date policy; a rotted pin PR is exactly the drift this cohort detects.
 export const BOT_PR_HEAD_PREFIXES = [
   "ci/",
   "self-healing/auto-",
   "bot-fix/",
+  "soleur/inngest-pin-",
 ] as const;
 export const STALE_BOT_PR_WARN_OP = "stale-bot-pr";
 

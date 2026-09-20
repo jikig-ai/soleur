@@ -17,8 +17,9 @@
 #     deletes nothing on a schedule.
 #
 # Coverage: closed-unmerged PRs whose head branch matches a known bot prefix
-#   (ci/, bot-fix, learning-, review-). MERGED PRs are excluded (already
-#   auto-deleted). Human feature branches are excluded by prefix.
+#   (ci/, bot-fix, learning-, review-, soleur/inngest-pin-). MERGED PRs are
+#   excluded (already auto-deleted). Human feature branches are excluded by
+#   prefix.
 #
 # Known residual (intentionally NOT covered): branches that were pushed but never
 #   opened a PR (e.g. `gh pr create` failed after `git push`). No PR-close event
@@ -52,7 +53,8 @@ jobs:
         startsWith(github.event.pull_request.head.ref, 'ci/') ||
         startsWith(github.event.pull_request.head.ref, 'bot-fix') ||
         startsWith(github.event.pull_request.head.ref, 'learning-') ||
-        startsWith(github.event.pull_request.head.ref, 'review-')
+        startsWith(github.event.pull_request.head.ref, 'review-') ||
+        startsWith(github.event.pull_request.head.ref, 'soleur/inngest-pin-')
       )
     runs-on: ubuntu-latest
     steps:
