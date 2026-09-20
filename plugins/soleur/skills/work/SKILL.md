@@ -4,7 +4,7 @@ description: "This skill should be used when executing work plans efficiently wh
 ---
 
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
@@ -752,13 +752,43 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    # 2b. Commit-on-main backstop (Soleur Cloud Mode, FR5): PreToolUse hooks do
    # not fire in cloud sessions, so the hook's block-commit-on-main arm is
    # absent there. Run the canonical check directly — a no-op locally where the
-   # hook already guards, load-bearing in cloud. If CLAUDE_PLUGIN_ROOT is unset
-   # (cloud exec shells), locate the script in the plugin cache instead.
+   # hook already guards, load-bearing in cloud.
+   #
+   # Resolve the plugin ROOT by IDENTITY and name the script relative to it,
+   # never by the script's own basename (#8402): a basename search accepts any
+   # directory under the cache holding a file with that name and then EXECUTES
+   # it. The identity preflight is a shape check, not authentication — a planted
+   # `{"name":"soleur"}` manifest passes it (ADR-179 A11).
    GUARD="${CLAUDE_PLUGIN_ROOT}/scripts/precommit-guard.sh"
-   [ -f "$GUARD" ] || GUARD="$(find /opt/.devin/plugins -name precommit-guard.sh 2>/dev/null | head -1)"
-   [ -n "$GUARD" ] && bash "$GUARD" "git commit -m \"feat(scope): description of this unit\""
+   if [ ! -f "$GUARD" ]; then
+     GUARD=""
+     for d in "$HOME/.local/share/devin/cli/plugins/cache" /opt/.devin/plugins; do
+       [ -d "$d" ] || continue
+       MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
+         -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
+       [ -n "$MANIFEST" ] || continue
+       GUARD="${MANIFEST%/.claude-plugin/plugin.json}/scripts/precommit-guard.sh"
+       [ -f "$GUARD" ] && break
+       GUARD=""
+     done
+   fi
+   # BOTH arms must block, and before #8402 NEITHER did. The old form was
+   # `[ -n "$GUARD" ] && bash "$GUARD" …` followed by an UNCONDITIONAL
+   # `git commit` — no `&&`, no `|| exit`, no `if` — so an unresolved guard fell
+   # through to the commit, AND a guard that resolved and REFUSED fell through to
+   # the same commit. In a cloud session this is the only commit-on-main
+   # protection that exists, which made it the opposite of a backstop.
+   #
+   # stdout, not stderr: stderr is invisible under `claude --bg`, and a backstop
+   # that cannot resolve itself must say so where the operator will see it.
+   if [ -z "$GUARD" ]; then
+     echo "SOLEUR_PRECOMMIT_GUARD_UNRESOLVED reason=no-soleur-root-in-plugin-cache"
+     exit 1
+   fi
+   bash "$GUARD" "git commit -m \"feat(scope): description of this unit\"" || exit 1
 
-   # 3. Commit with conventional message
+   # 3. Commit with conventional message. Reachable ONLY through a guard that
+   # resolved AND passed.
    git commit -m "feat(scope): description of this unit"
    ```
 
