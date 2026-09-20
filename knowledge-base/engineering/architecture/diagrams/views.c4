@@ -10,6 +10,12 @@ views {
 
     include
       founder, emailSender, betaContact, contributor, publicReader,
+      // NOTE (#8359/ADR-232): the CI pin-bump write-back is a github-INTERNAL
+      // relationship and LikeC4 rejects self-relations ("Invalid parent-child
+      // relationship"), so no `github -> github` edge exists to include here —
+      // it is documented in-model on the `github -> soleurMarketplace` App-write
+      // edge description instead. Deliberately NOT a standalone box: adding a
+      // pseudo-node for it would render disconnected (#7332).
       platform, platform.webapp, platform.engine, platform.grokBuild, platform.infra.supabase,
       // platform.plugin is included explicitly so the delivery edges from
       // soleurMarketplace have a rendered target — without it the marketplace
@@ -82,6 +88,8 @@ views {
       // playwrightMcp) must be listed or the edges do not render (#7332).
       platform.plugin.snapshotGuard, playwrightMcp,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb,
+      platform.engine.claude.registry, platform.engine.claude.binding, platform.engine.claude.adapter,
+      platform.engine.claude.factory, platform.engine.claude.composition,
       // #7332: BOTH endpoints of an edge must be in a view's include list or the
       // edge does not render. `sync -> connectedRepoKb` and
       // `architecture -> connectedRepoKb` live here because this is the only

@@ -2366,7 +2366,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL) to decode the
   // SOLEUR_COMPOUND_PROMOTE_OUTCOME marker the cron emits. NO SUBSTITUTE: the property is that a
   // SCHEDULED fire's marker reached Better Stack, and that sink has no unauthenticated read path.
-  const BASELINE_DECLARED_PROBES = 15;
+  // 16th declaration — #8392 (PR #8394) raised this 15 -> 16. PLACEMENT: two-space child of
+  // `discoverability_test:` in the first-text-block plan, single-line quoted scalar. TRUTH: the
+  // probe is the `scripts/betterstack-query.sh --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME` pipeline in
+  // that plan's `command:`, which reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs
+  // SQL) to count decoded outcome rows. NO SUBSTITUTE: the property is the CONTENT of warehouse
+  // rows the cron POSTs, and that sink has no unauthenticated read path — grepping the emitter
+  // would verify the diff, not the delivery.
+  const BASELINE_DECLARED_PROBES = 16;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

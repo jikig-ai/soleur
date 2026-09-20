@@ -99,7 +99,8 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
-  expected_output: # canonical "everything OK" output
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
                    # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
@@ -294,7 +295,8 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
-  expected_output: # canonical "everything OK" output
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
                    # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
@@ -504,7 +506,8 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
-  expected_output: # canonical "everything OK" output
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
                    # "<scope> — <why no unauthenticated probe verifies the same property>".
                    # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.

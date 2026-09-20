@@ -103,8 +103,8 @@ by_id = {s.get("id"): s for s in steps if s.get("id")}
 # job under mirror_only (workflow reports SUCCESS, nothing mirrored, no mirror_status, no
 # Slack), and a job-level `continue-on-error: true` reports the workflow green while the
 # mirror step fails. Both are one-line edits and both passed the previous revision 42/0.
-check("the workflow has exactly the `build` job (a second job is an unparsed surface)",
-      sorted(jobs) == ["build"], repr(sorted(jobs)))
+check("the workflow has exactly the `build` + `bump-cloud-init-pin` jobs (a third job is an unparsed surface)",
+      sorted(jobs) == ["build", "bump-cloud-init-pin"], repr(sorted(jobs)))
 _bj = jobs.get("build") or {}
 check("jobs.build carries no job-level if: (it would skip the whole mirror)",
       "if" not in _bj, repr(_bj.get("if")))
@@ -112,6 +112,16 @@ check("jobs.build carries no job-level continue-on-error: (it would mask a red m
       "continue-on-error" not in _bj, repr(_bj.get("continue-on-error")))
 check("jobs.build carries no matrix strategy (it would race duplicate mirrors of one tag)",
       "strategy" not in _bj, repr(_bj.get("strategy")))
+# The pin-bump job (#8359) is the sanctioned second job — it runs AFTER a successful publish
+# and so is out of mirror_only's blast radius, but its own masking surface must stay parsed:
+# a job-level `if:` could skip it silently, and `continue-on-error:` would mask a red bump.
+_pj = jobs.get("bump-cloud-init-pin") or {}
+check("jobs.bump-cloud-init-pin needs: build (it consumes the published tag/digest)",
+      _pj.get("needs") == "build", repr(_pj.get("needs")))
+check("jobs.bump-cloud-init-pin carries no job-level if: (it would skip the pin bump silently)",
+      "if" not in _pj, repr(_pj.get("if")))
+check("jobs.bump-cloud-init-pin carries no job-level continue-on-error: (it would mask a red bump)",
+      "continue-on-error" not in _pj, repr(_pj.get("continue-on-error")))
 
 
 def code_of(body):

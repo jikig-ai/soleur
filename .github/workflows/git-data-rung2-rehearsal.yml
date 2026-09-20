@@ -442,12 +442,21 @@ jobs:
               echo '```bash'
               echo "gh run download ${GITHUB_RUN_ID} -n git-data-rung2-boot-evidence"
               echo "mv git-data-rung2-boot-evidence.env apps/web-platform/infra/"
-              echo "# (#8043 Guard 4) COMMIT FIRST, ALONE: the gate's provenance arm reads the evidence's own commit and HOLDs on an untracked file or on a commit that also touches a hash-bound file (commit the evidence in a commit that touches none of them)."
+              echo "# (#8010) THE ACK GOES ON BEFORE \`git add\`. If the ack line printed after the reboot-arm summary says ACK REQUIRED, append it HERE:"
+              echo "#   Guard 4 compares the evidence to its committed state, so appending after the commit HOLDs the gate and forces an amend."
+              echo "# echo 'RUNG2_SENTRY_CROSSCHECK_ACK=${GITHUB_RUN_ID}:<why the second channel may be skipped for this run>' >> apps/web-platform/infra/git-data-rung2-boot-evidence.env"
+              echo "# (#8043 Guard 4) COMMIT SECOND, ALONE: the gate's provenance arm reads the evidence's own commit and HOLDs on an untracked file or on a commit that also touches a hash-bound file (commit the evidence in a commit that touches none of them)."
               echo "git checkout -b evidence-git-data-rung2 && git add apps/web-platform/infra/git-data-rung2-boot-evidence.env && git commit -m 'feat(git-data): commit the rung-2 boot evidence from run ${GITHUB_RUN_ID}'"
               echo "source tests/scripts/lib/git-data-birth-readiness-gate.sh"
               echo "git_data_rung2_rehearsal_gate apps/web-platform/infra/cloud-init-git-data.yml apps/web-platform/infra/git-data-rung2-boot-evidence.env"
               echo "gh pr create"
               echo '```'
+              echo ""
+              # THE ARTIFACT IS READY BEFORE THE RUN IS. Upload happens here, teardown happens
+              # after, and a teardown that fails reds the run once the operator has already
+              # downloaded a file that looks fine. The gate resolves this run's conclusion, so a
+              # red run releases nothing no matter how good the bytes are.
+              echo "**Wait for the WHOLE run to conclude \`success\` before you use this file** — \`gh run watch ${GITHUB_RUN_ID}\` (or \`gh run view ${GITHUB_RUN_ID} --json conclusion\`). This artifact uploads BEFORE teardown, so a failed teardown reds the run after you have already downloaded it, and the gate refuses a run that did not conclude \`success\`."
               echo ""
               echo "Open the PR promptly: the evidence carries a sha256 of \`cloud-init-git-data.yml\`, so any merge touching that template or its nine payloads invalidates it and costs a full re-rehearsal."
               echo "See \`${RUNBOOK}\`."
@@ -608,6 +617,42 @@ jobs:
             echo "A FAIL or TRANSIENT here RELEASES NOTHING: the evidence upload below is gated on this step, so the birth and replace gates stay held." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$rc"
+
+      # ── THE ACK DECISION, EMITTED ONCE, AFTER THE RESET PROBE (#8010) ──────────────
+      #
+      # git_data_rung2_rehearsal_gate no longer treats an UNAVAILABLE Sentry cross-check as
+      # advisory: it HOLDs unless a human appends RUNG2_SENTRY_CROSSCHECK_ACK=<this run
+      # id>:<reason>. That decision depends on a value only this run can see (the evidence file
+      # is an artifact, not a commit), and it is taken ONCE, here, rather than as instructions-
+      # plus-caveats scattered through the capture summary — an operator reading "append an ack
+      # if ..." has to go and look the condition up; this run already knows the answer.
+      #
+      # AFTER the reset probe, because the reset arm re-runs the consult and only the pre-reset
+      # verdict is recorded in the key; emitting it mid-run would name a value the file may not
+      # end up carrying.
+      - name: Report whether the Sentry cross-check needs an acknowledgement
+        id: sentry_ack
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
+        run: |
+          set -euo pipefail
+          ev=/tmp/rung2/git-data-rung2-boot-evidence.env
+          v=""
+          if [[ -r "$ev" ]]; then
+            v="$(grep -m1 '^RUNG2_SENTRY_CROSSCHECK=' "$ev" | cut -d'=' -f2- || true)"
+          fi
+          # $GITHUB_STEP_SUMMARY IS LINE-ORIENTED. A stray CR (the file is written by a script
+          # whose own reads cross two HTTP APIs) or an embedded LF would split this into two
+          # lines, and "exactly one ack decision per run" is the property the operator reads.
+          v="${v//[$'\n\r']/}"
+          if [[ "$v" == "UNAVAILABLE" ]]; then
+            echo "ACK REQUIRED — append RUNG2_SENTRY_CROSSCHECK_ACK=${GITHUB_RUN_ID}:<why the second channel may be skipped for this run> to the evidence file BEFORE you \`git add\` it. The reason may not contain \`#\`." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$v" == "CLEAN" ]]; then
+            echo "ACK NOT REQUIRED — cross-check CLEAN" >> "$GITHUB_STEP_SUMMARY"
+          else
+            # NOT_RUN, FATAL, an unreadable file: no acknowledgement rescues any of these, so
+            # the honest line is still exactly one ack decision — "none will help".
+            echo "ACK NOT REQUIRED — cross-check ${v:-unreadable}, which no acknowledgement can rescue: the gate refuses it outright. This evidence cannot release the birth hold; fix the instrument and re-dispatch." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # UPLOADED, NEVER COMMITTED. This is the release artifact for the birth interlock; the
       # operator opens a PR with it themselves after reading it. `permissions: contents: read`
