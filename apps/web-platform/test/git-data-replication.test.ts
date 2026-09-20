@@ -178,7 +178,129 @@ describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)"
   it("no REMOVE key configured (env never had git-data): skips silently — no ssh, no throw (avoids Sentry noise)", async () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "");
-    await expect(removeGitDataRepo(WS)).resolves.toBeUndefined();
+    // A genuinely non-git-data env has NO git-data inputs at all. The suite arms the
+    // provision key globally in beforeEach, so it must be cleared here — otherwise this
+    // fixture describes a partial birth (provision armed, remove key missing) and the
+    // honest answer to it is `unconfigured`, not `skipped`.
+    vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "");
+    vi.stubEnv("GIT_DATA_SSH_HOST", "");
+    // `skipped` is a MEASURED outcome, not an absent one. It used to resolve undefined,
+    // which the caller could not tell from a completed erasure — the #8094 defect one
+    // level down: "nothing to erase here" and "erased" both read as success.
+    await expect(removeGitDataRepo(WS)).resolves.toEqual({ status: "skipped" });
+    expect(sshProvision).not.toHaveBeenCalled();
+  });
+
+  // ------------------------------------------------------------------------------
+  // (#8094) THE REFUSAL MUST SURVIVE THE RETURN. After #8043 F8 the host-side
+  // `git-data-remove.sh` REFUSES (named message, non-zero exit) on an unmounted store
+  // instead of reporting a no-op. The app kept lying anyway: `removeGitDataRepo` was
+  // `Promise<void>`, so a refusal and a completed erasure were indistinguishable to the
+  // caller, and `sshWithPrivateKeyAuth` returns stdout only — no rc, no stderr.
+  //
+  // The discriminator is ssh's own convention: 255 is ssh failing to establish the
+  // session (unreachable — say nothing about the store), any other non-zero is the
+  // REMOTE forced command's exit status (refused — the host looked and said no).
+  const sshErr = (code: number, stderr: string) =>
+    Object.assign(new Error(`Command failed with exit code ${code}`), { code, stderr });
+
+  it("host REFUSES the erasure (non-zero, not 255): reports refused with the remote's rc + stderr — never a silent success", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    sshProvision.mockRejectedValueOnce(sshErr(3, "git-data-remove: /mnt/git-data is not mounted; refusing\n"));
+    const outcome = await removeGitDataRepo(WS);
+    expect(outcome.status).toBe("refused");
+    if (outcome.status !== "refused") throw new Error("unreachable");
+    expect(outcome.exitCode).toBe(3);
+    // The remote's OWN words reach the caller. Without this the operator sweeping an
+    // un-erased repo has an exit code and no reason.
+    expect(outcome.detail).toContain("not mounted");
+  });
+
+  it("ssh cannot establish the session (rc 255): reports unreachable — a blip is NOT evidence the store refused", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    sshProvision.mockRejectedValueOnce(sshErr(255, "ssh: connect to host 10.0.1.20 port 22: Connection refused\n"));
+    const outcome = await removeGitDataRepo(WS);
+    // Deliberately NOT "refused": nothing here says the host looked at the repo. The two
+    // need different operator responses, so collapsing them is the measured/could-not-
+    // measure collapse in the erasure path.
+    expect(outcome.status).toBe("unreachable");
+  });
+
+  it("the REMOVE key is REJECTED by the host (255 + publickey): reports unauthorized, NOT unreachable", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    sshProvision.mockRejectedValueOnce(
+      sshErr(255, "git@10.0.1.20: Permission denied (publickey).\n"),
+    );
+    const outcome = await removeGitDataRepo(WS);
+    // The host ANSWERED and refused the credential. That is not "we never got an answer":
+    // the REMOVE public key is baked into cloud-init authorized_keys and user_data is
+    // ForceNew, so a Doppler-side rotation without a host replace fails this way on EVERY
+    // deletion, permanently, fleet-wide — with every repo definitively un-erased. Reading
+    // it as a transient blip is the exact collapse this module exists to prevent.
+    expect(outcome.status).toBe("unauthorized");
+  });
+
+  it("a malformed REMOVE key (255 + invalid format): also unauthorized", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    sshProvision.mockRejectedValueOnce(
+      sshErr(255, 'Load key "/tmp/.git-provision-x.key": invalid format\n'),
+    );
+    expect((await removeGitDataRepo(WS)).status).toBe("unauthorized");
+  });
+
+  it("a 255 with NO auth signature stays unreachable (a genuine transport failure)", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    sshProvision.mockRejectedValueOnce(
+      sshErr(255, "ssh: connect to host 10.0.1.20 port 22: Connection refused\n"),
+    );
+    expect((await removeGitDataRepo(WS)).status).toBe("unreachable");
+  });
+
+  it("the 30s ssh TIMEOUT (code null) reports unreachable — the arm the comment calls out and nothing exercised", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    // execFileAsync's timeout rejects with a `killed` error whose `code` is null, not a
+    // number. A hung git-data host is the scenario this whole feature exists for, and it
+    // was the one classifier arm with no test.
+    sshProvision.mockRejectedValueOnce(
+      Object.assign(new Error("Command failed: ssh ..."), { killed: true, code: null, signal: "SIGTERM" }),
+    );
+    expect((await removeGitDataRepo(WS)).status).toBe("unreachable");
+  });
+
+  it("scrubs the workspace UUID out of detail — it is auth.users.id and must not ship raw", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    sshProvision.mockRejectedValueOnce(
+      sshErr(1, `git-data-remove: could not acquire init lock for '${WS}'\n`),
+    );
+    const outcome = await removeGitDataRepo(WS);
+    if (outcome.status !== "refused") throw new Error("expected refused");
+    // workspace_id === auth.users.id (mig-053 N2). reportSilentFallback pseudonymizes
+    // extra.userId two lines from where this detail is attached; shipping the same id raw
+    // in detail would route around that contract while looking compliant.
+    expect(outcome.detail).not.toContain(WS);
+    expect(outcome.detail).toContain("WORKSPACE_ID_REDACTED");
+  });
+
+  it("remove key absent BUT git-data otherwise armed: unconfigured, not skipped", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "");
+    vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "provision-key");
+    const outcome = await removeGitDataRepo(WS);
+    // A partial birth or a half-applied rotation. Reporting `skipped` here would tell the
+    // user their data is gone while a host that is actively provisioning repos keeps theirs.
+    expect(outcome.status).toBe("unconfigured");
+    expect(sshProvision).not.toHaveBeenCalled();
+  });
+
+  it("erasure succeeds: reports erased", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    const outcome = await removeGitDataRepo(WS);
+    expect(outcome).toEqual({ status: "erased" });
+  });
+
+  it("an unsafe workspace_id still THROWS rather than returning an outcome (CWE-22 is a bug, not a result)", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    await expect(removeGitDataRepo("../evil")).rejects.toThrow();
     expect(sshProvision).not.toHaveBeenCalled();
   });
 
