@@ -797,11 +797,18 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
        not-local*) exit 1 ;;
        *) echo "[warn] proceeding: the PreToolUse hook guards commits on a local session" ;;
      esac
+   else
+     # `else`, not a fall-through. The first draft ran this line unconditionally after the
+     # warn above, so on a LOCAL session with no resolvable guard it printed "proceeding" and
+     # then executed `bash ""` — `No such file or directory`, `|| exit 1` — and the commit was
+     # never reached. The comment said warn-and-proceed; the code halted. Found by DRY-RUNNING
+     # the block in both session classes rather than reading it (qa/SKILL.md, #8288 class).
+     bash "$GUARD" "git commit -m \"feat(scope): description of this unit\"" || exit 1
    fi
-   bash "$GUARD" "git commit -m \"feat(scope): description of this unit\"" || exit 1
 
-   # 3. Commit with conventional message. Reachable ONLY through a guard that
-   # resolved AND passed.
+   # 3. Commit with conventional message. Reachable through a guard that resolved AND
+   # passed, or — locally only, where the PreToolUse hook is the real gate — through the
+   # warned no-guard arm. In cloud the no-guard arm exits above and never gets here.
    git commit -m "feat(scope): description of this unit"
    ```
 

@@ -1335,15 +1335,26 @@ the number does not rot.
   What shipped instead: `SOLEUR_WORKTREE_REAPED` and `SOLEUR_WORKTREE_REAP_PARTIAL` join
   `MARKER_RE` (the latter in the `_HALT` group), and `PRECOMMIT_GUARD` joins `_HALT` too.
 - [ ] **FR9** — No file under `plugins/soleur/` selects a Devin-cache executable by filename
-  (`find <cache> … -name/-iname <script>`), with exactly one allowlisted path — the guard file
-  itself — and an assertion that the allowlist holds exactly one entry.
-  (`devin-cloud-mode.test.ts`, derived negative scan.)
+  (`find <cache> … -name/-iname <script>`). **Superseded 2026-09-20 (QA):** the "exactly one
+  allowlisted path — the guard file itself" clause did not ship, and deliberately so. The guard
+  assembles the forbidden shape from fragments at runtime so its own body never contains it,
+  which removes the need for an allowlist — and an allowlist is precisely the thing that would
+  grow into the hole the guard exists to close. The scan is also no longer line-scoped: a
+  block-scoped detector covers the multi-line `for d … done` recipe, and `-path`/`-wholename`
+  pointed at a script, with planted positives per axis and a row that pins the two axes still
+  out of reach. (`devin-cloud-mode.test.ts`, derived negative scan.)
 - [ ] **FR10** — The canonical `soleur-cloud-mode` block is `[ -d ]`-gated, names both documented
   cache paths, and selects on `.claude-plugin/plugin.json` containing
   `"name"[[:space:]]*:[[:space:]]*"soleur"`; all 67 copies are byte-identical to it and the marked
   path *set* matches a committed list. (`devin-cloud-mode.test.ts`.)
-- [ ] **FR11** — `work/SKILL.md`'s commit-on-main backstop emits
-  `SOLEUR_PRECOMMIT_GUARD_UNRESOLVED` when no guard resolves, instead of proceeding silently.
+- [ ] **FR11** — `work/SKILL.md`'s commit-on-main backstop emits a marker when no guard resolves,
+  instead of proceeding silently. **Superseded 2026-09-20 (QA):** the marker is
+  `SOLEUR_PRECOMMIT_GUARD_HALT reason=no-soleur-root-in-plugin-cache`, not
+  `SOLEUR_PRECOMMIT_GUARD_UNRESOLVED` — the cause lives in the `reason=` field so the `_HALT`
+  family stays one name for `MARKER_RE`'s `_HALT` group. It is also stronger than written: on a
+  `not-local` session it exits 1 rather than warning, because in cloud this backstop is the only
+  commit-on-main protection there is. Same class as the `MAIN_UPDATE_SKIPPED` correction above:
+  a declared-but-absent marker is what a consumer greps for and never finds.
 - [ ] **FR12** — ADR-179 decision 11 records the confinement as lifted, names both original grounds
   and what closed each, and leaves A11 and R6b untouched. The `model.c4` `devin -> platform.plugin`
   and `grokBuild -> plugin` edge descriptions match the shipped arm order.

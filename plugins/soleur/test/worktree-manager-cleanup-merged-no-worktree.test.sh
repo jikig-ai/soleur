@@ -361,6 +361,17 @@ if remote_branch_exists "$A2/clone" "feat-a2-fresh"; then
 else
   fail "A2b: its remote ref was deleted"
 fi
+# THE REASON, not only the survival. Plan scenario 2 asks for both and only survival was
+# ticked — but survival is satisfiable by ANY skip, including the lease guard firing by
+# accident, and including a silent one. This arm is the worktree-LESS grace, whose whole
+# point is that it prints unconditionally (the worktree arm's line was `verbose`-gated, i.e.
+# invisible under `claude --bg`, which is how A9 went undiagnosed for a round). Asserting the
+# wording is what makes "held BY THE COMMIT-AGE GRACE" distinguishable from "held somehow".
+if grep -qE '^\(skip\) feat-a2-fresh - branch ref committed <10min ago' "$TMP/a2.log"; then
+  pass "A2c: the worktree-less grace names itself, and does so with no tty"
+else
+  fail "A2c: the hold is unattributed — plan scenario 2 asks for the branch-ref skip reason, not just survival"
+fi
 
 # ===========================================================================================
 # A3 — must-PASS, and NOT the canonical input. A stale branch WITH a worktree, unleased,
@@ -800,7 +811,7 @@ printf '  pass: self-test — pass() and fail() both move the counters and the l
 # above is unbound in that slice, so the mutant dies at `set -u` and the floor scores
 # CONSTRUCTION rather than FIRES.
 # ===========================================================================================
-MIN_ASSERTIONS=32
+MIN_ASSERTIONS=33
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions executed, floor is %s — rows were removed or an arm aborted early.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2
