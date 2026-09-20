@@ -140,6 +140,46 @@ describe("routeMessage classify (auto) path", () => {
     expect(sent.output_config.format.schema.properties).toHaveProperty("leaders");
   });
 
+  // #8392 — latent today (this path pins claude-haiku-4-5, which emits no thinking
+  // block when `thinking` is omitted) and live the day a model swap changes that.
+  // Discriminating: the old index-0 reader yields "", JSON.parse("") throws, and the
+  // catch falls back to ["cpo"].
+  test("#8392 — reads the first TEXT block when a thinking block precedes it", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [
+          // The decoy `text` is the discriminator: without it, a reader that joins
+          // every block's text survives here while the same mutation is killed in
+          // the helper copy. Measured.
+          { type: "thinking", thinking: "", text: "must-not-be-read" },
+          { type: "text", text: '{"leaders":["cmo"]}' },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await routeMessage("What is our marketing strategy?", "fake-api-key");
+
+    expect(result).toEqual({ leaders: ["cmo"], source: "auto" });
+  });
+
+  test("#8392 — takes the FIRST text block and skips a non-thinking, non-text block", async () => {
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: '{"leaders":["cmo"]}' },
+          { type: "text", text: '{"leaders":["cto"]}' },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await routeMessage("What is our marketing strategy?", "fake-api-key");
+
+    expect(result).toEqual({ leaders: ["cmo"], source: "auto" });
+  });
+
   test("caps extracted leaders at MAX_LEADERS_PER_MESSAGE", async () => {
     fetchSpy.mockResolvedValue(
       anthropicResponse({

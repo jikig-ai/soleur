@@ -33,6 +33,19 @@
 # Plan: knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md.
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${ANTHROPIC_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="${COMPOUND_PROMOTE_FIXTURE_ROOT:-$(git rev-parse --show-toplevel)}"
 # #6794: frontmatter-strip contract (defines strip_frontmatter). Sourced so the
 # always-loaded byte measurement below runs on the same stripped basis as the
@@ -228,7 +241,7 @@ RESPONSE=$("$CURL_BIN" -sS https://api.anthropic.com/v1/messages \
   -d "$REQUEST")
 
 # Extract the assistant's text reply.
-CLUSTERS_TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty' 2>/dev/null || echo "")
+CLUSTERS_TEXT=$(echo "$RESPONSE" | jq -r 'first(.content[]? | select(.type == "text") | .text | strings) // empty' 2>/dev/null || echo "")
 if [[ -z "$CLUSTERS_TEXT" ]]; then
   echo "::error::Anthropic API returned empty content" >&2
   echo "$RESPONSE" | head -c 500 >&2
