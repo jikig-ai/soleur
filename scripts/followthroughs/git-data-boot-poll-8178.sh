@@ -184,14 +184,21 @@ for run_id in "${run_ids[@]}"; do
     # CANNOT ESTABLISH against the exact evidence it exists to read. The mark also shifted
     # `substr(line, 1, 19)` by three bytes, corrupting the ts compare even had a header matched.
     #
-    # WHY HERE AND NOT IN THE awk PROGRAM. A `sub(/^\357\273\277/, ...)` inside awk would read
-    # naturally beside the tab-field strip, but octal escapes in a regex LITERAL are not POSIX
-    # and their handling is dialect-dependent; this probe invokes bare `awk`, which on a Debian
-    # /Ubuntu runner is whatever `/etc/alternatives/awk` points at (commonly mawk, not the gawk
-    # this was developed against), and no other awk program in this repo relies on an octal
-    # escape. A `${var//…}` substitution is plain bash with no such variance, it sits beside the
-    # \r strip that already establishes this exact pattern two characters away, and it clears the
-    # mark for EVERY consumer of "$log" rather than only the one block that happens to normalize.
+    # WHY HERE AND NOT IN THE awk PROGRAM. `sub(/^\357\273\277/, "", line)` beside the tab-field
+    # strip also works, and it is NOT a portability problem — that was this change's first
+    # rationale and it was wrong. Measured during review on gawk 5.4.1, mawk 1.3.4 and busybox
+    # 1.35.0 awk, under both LC_ALL=C and a UTF-8 locale: all three match the three bytes and
+    # emit a byte-identical region. POSIX XCU requires `\ddd` in ERE tokens, and two awk programs
+    # in this repo already depend on exactly that (scripts/tenant-dpa-register-guard.sh gsub
+    # /\002/, plugins/soleur/hooks/browser-snapshot-credential-guard.sh gsub /\001/). Do not
+    # cite this comment to "fix" either of those.
+    #
+    # The bash form is kept on its own merits, which are real but ordinary: it sits beside the
+    # \r strip that already establishes this exact pattern one line up, it is one mechanism
+    # rather than two for the same normalization, and it clears the mark for EVERY consumer of
+    # "$log" rather than only the block that happens to normalize. Pinned by the suite: turning
+    # the `//` into a single `/` drives 18 failures, because a real log carries one mark per
+    # step section and clearing only the first leaves the poll step's header BOM-prefixed.
     log=${log//$'\r'/}
     log=${log//$'\357\273\277'/}
     region=$(awk -v ps="${poll_start:0:19}" '
