@@ -79,7 +79,61 @@ CORPUS="$(printf '%s' "$__HI_RAW" | jq -r '
 ' 2>/dev/null | tr '\n' ' ' | tr '[:upper:]' '[:lower:]')"
 [[ -n "$CORPUS" ]] || exit 0
 
-# AUTHORITY signal — a real operator decision. Checked FIRST and wins outright.
+# EXTERNAL EXPERT signal — a question whose answer is held OUTSIDE the company, by a professional
+# the founder pays: an accountant, a bookkeeper, a lawyer, a notary, an auditor, an insurer, a bank,
+# a regulator, a landlord. The founder cannot answer it either, so putting it to them is the same
+# dead end this hook exists to remove — one class over.
+#
+# THIS ARM IS EVALUATED BEFORE THE AUTHORITY SHORT-CIRCUIT, AND THAT ORDER IS THE WHOLE MECHANISM.
+# Placed after it, the arm is unreachable: an accountant or lawyer question almost always carries a
+# money word, and AUTHORITY_RE matches cost/budget/price/priorit/scope/schedule/spend and wins
+# outright. ("capex or opex" arrives with "cost" in the same breath.) The surviving path then also
+# demands INVESTIGATIVE_RE, which this class never matches. So a deny ladder naming the skill would
+# have shipped as a string nothing could reach — measured, not supposed.
+#
+# THE RESIDUAL, STATED. This ordering means an authorization that merely NAMES one of these
+# professions is denied rather than reaching the founder — the one direction this hook's header
+# otherwise refuses to fail in. It is accepted because the remedy is cheap and announced in the
+# reason text (re-word to name the action, or SOLEUR_ACK_TECHNICAL_FORK=1), whereas the failure it
+# replaces is silent: the founder guesses at an accountant's answer and the guess becomes a filing.
+# Word-anchored on purpose, and the anchoring is TWO-SIDED where it has to be — measured, because a
+# leading `\b` alone is not enough. `\btax` rejects "syntax" (no boundary before "tax" there) but
+# ACCEPTS "taxonomy", which begins at one; an AskUserQuestion about renaming an event taxonomy would
+# have been denied and routed to a questionnaire. Hence `\btax(es|ation|able|payer)?\b`.
+# `statutory` was proposed for this list and cut for the same reason at one remove: it is ambient in
+# this repository's own compliance prose ("statutory clock", "statutory register"), it identifies no
+# profession, and on this arm — which denies ahead of the authority short-circuit — it would have
+# blocked authorization questions about breach-notification deadlines. The profession nouns plus
+# `fiscal`/`vat`/`capex`/`opex` carry the intent without the collision.
+# `tax` in a genuinely technical sentence ("fix the tax calculation bug") still matches; that is
+# accepted rather than hidden, because an AskUserQuestion naming tax is far more often an
+# accountant's question than a code question, and the reason text names the override.
+EXTERNAL_EXPERT_RE='(\baccountant|\bbookkeep|\blawyer|\bsolicitor|\bnotar(y|ies)|\bauditor|\btax(es|ation|able|payer)?\b|\binsurer|\binsurance\b|\bbank|\bregulator|\blandlord|\bcapex|\bopex|\bdepreciat|\bamorti[sz]|\bpayroll|\bvat\b|\bfiscal\b)'
+if grep -qE "$EXTERNAL_EXPERT_RE" <<<"$CORPUS"; then
+  EXPERT_REASON="BLOCKED: this AskUserQuestion puts an OUTSIDE EXPERT's question to the founder.
+
+The answer is held by an accountant, bookkeeper, lawyer, notary, auditor, insurer, bank, regulator or landlord — not by the founder, and not by you. Asking the founder produces a guess that then gets acted on.
+
+Write them the questions instead: soleur:questionnaire-generate.
+
+That skill interviews the founder about the SEND only — who receives it, what has to come back, by when — and emits one document they send from their own mail client. It never asks the founder about the subject matter, because not knowing the subject matter is why it is being used.
+
+Ask the founder ONLY for: authorization for an irreversible or production-mutating action, money, scope, priority, or schedule.
+
+If this question genuinely carries an authorization and the wording tripped the classifier, re-word it to name the action being authorized — or re-run with SOLEUR_ACK_TECHNICAL_FORK=1.
+
+See hr-technical-fork-is-not-an-operator-question."
+
+  declare -f emit_incident >/dev/null 2>&1 && \
+    emit_incident pre-ask-technical-fork-gate deny "outside-expert question put to a non-expert founder" "$CORPUS" 2>/dev/null || true
+
+  jq -n --arg r "$EXPERT_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+fi
+
+# AUTHORITY signal — a real operator decision. Checked FIRST among the remaining arms and wins
+# outright. (The external-expert arm above is the one decision evaluated ahead of it, and its
+# comment block says why.)
 AUTHORITY_RE='(ack-destroy|authori[sz]|approve|merge|replace|destroy|delete|force-push|deploy|dispatch|apply |arm the|flip |rotate|revoke|spend|cost|budget|price|priorit|scope|schedule|which (issue|feature|milestone)|proceed with the (merge|replace|destroy|apply|cutover))'
 if grep -qE "$AUTHORITY_RE" <<<"$CORPUS"; then exit 0; fi
 
@@ -96,6 +150,9 @@ Resolve it yourself, in this order, before asking anything:
   2. The RUNBOOK for the operation             (knowledge-base/engineering/operations/runbooks/)
   3. The ADR that owns the decision            (knowledge-base/engineering/architecture/decisions/)
   4. The guard's / script's own comments       (the code refusing you usually says why)
+  5. If the answer is held OUTSIDE the company — by an accountant, lawyer, auditor, insurer, bank,
+     regulator or landlord — the founder cannot answer it either. Write them the questions:
+     soleur:questionnaire-generate.
 
 Then ACT on what you find.
 

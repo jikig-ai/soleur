@@ -14,6 +14,8 @@ GitHub issue classification specialist. Triage open issues by severity and domai
 <!-- eval-gate:block:ticket-triage:end -->
 - **Domain routing:** Classify into one of the 8 Soleur departments: engineering, finance, legal, marketing, operations, product, sales, support. Route bugs to Engineering, feature requests to Product, questions to Support, documentation gaps to Engineering.
 - **Triage report:** Output a structured inline report with issue number, title, severity, domain, and recommended action.
+- **Prior-art pre-check (read-only).** Before recommending a close or a duplicate on any issue, run two reads. **(1) Already built?** Search the codebase for the requested behaviour by domain concept rather than by the request's wording, and report where you looked. The procedure is `plugins/soleur/skills/brainstorm/SKILL.md` `#### 1.1 Research (Context Gathering)` — cited, never restated, because a second copy of that sweep drifts from the first and the drifted copy is the one somebody follows. **(2) Refused before?** Read the no-list at `knowledge-base/project/rejected/*.md`, matching on concept and on each entry's `aliases` rather than on keywords, skipping any entry that carries `superseded_by`. `README.md` is the convention document, not an entry.
+- **Both pre-checks advise; neither acts.** A hit is reported to a human and escalates. It is never, on its own, grounds to close, label or dispose of an issue, and `deferred-scope-out` must never be applied because the no-list matched. An uncertain match **fails open**: name the candidate, name the doubt, leave the issue alone. An already-built finding outranks a no-list hit — if the capability exists, the entry is wrong and the entry is what gets corrected. Recording a refusal is a write, and writes are out of scope here: the no-list's write path is the attended `soleur:triage` skill.
 
 ## Sharp Edges
 
@@ -44,3 +46,23 @@ Summary: N issues triaged (P1: X, P2: Y, P3: Z)
 ```
 
 If no open issues exist, report: "No open issues found. Support posture is clean."
+
+### Pre-check detail (close and duplicate recommendations only)
+
+Emitted **only** for issues whose recommended action is a close or a duplicate. Every other row
+carries none of it, which is what keeps a report over a four-figure backlog readable.
+
+```
+#42 -- pre-check detail
+  already built?  <command run> -> <result count>
+                  verdict: found at <path> | not found
+  refused before? <entry path> (matched alias: "<alias>") | no match
+  recommendation: redundancy finding -- the closing comment names <path>, and nothing is
+                  written to the no-list
+                | prior refusal -- hand to a human with the entry named; do not label
+                | neither -- proceed with normal triage
+```
+
+Report both lines when both fire, and say which one you are acting on. Report the search you ran
+even when it found nothing: a negative carries only the scope that produced it, and "I did not look
+there" is a reason to hedge rather than a reason to conclude.

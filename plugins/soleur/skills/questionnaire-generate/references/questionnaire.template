@@ -1,0 +1,55 @@
+<!-- Inspired by mattpocock/skills/skills/productivity/to-questionnaire/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
+---
+recipient_role: <recipient-role, lowercase, no person's name>
+needed_by: <YYYY-MM-DD, the date the founder stated>
+blocked_decision: <the one decision that cannot be made until these answers arrive>
+status: sent
+---
+
+# Questions for my <recipient-role>
+
+I am the founder of Jikigai. What follows is a list of questions and nothing else. It is not a
+position, not a brief, and not advice from me to you. I am asking because the answers sit with you
+and not with me.
+
+## Context
+
+<One paragraph. It is built from exactly three things the founder stated out loud: the decision being
+made, the role of the person receiving this, and the date the answers are needed. Nothing is added to
+it and nothing is looked up for it.>
+
+## How to answer
+
+Write your answer on the blank quote line under each question. A partial answer is worth more to me
+than a blank one, and "I do not know" is a real answer I can act on. Where a question rests on
+something you need from me first, say what you need rather than assuming it.
+
+I need this back by <YYYY-MM-DD>.
+
+## Questions
+
+### <First question. One idea, phrased as a question, most consequential first.>
+
+_Why I am asking: <one line, and only where the question reads two ways without it>_
+
+>
+
+### <Next question. Same shape. Group under a `### ` theme heading once there are more than six.>
+
+>
+
+## Anything I have not asked
+
+Is there a question I should have put on this list? Write it here with your answer.
+
+>
+
+## Answers
+
+<Left blank when this is sent. If the reply arrives as an email rather than as an edit to this file,
+paste the reply here and change status to answered in the frontmatter above.>
+
+## Blocked on
+
+<Repo-relative path, or issue reference, for the artifact that could not be finished without these
+answers.>

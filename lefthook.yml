@@ -430,6 +430,22 @@ pre-commit:
       priority: 11
       glob: "knowledge-base/marketing/distribution-content/*.md"
       run: bash scripts/lint-distribution-content.sh {staged_files}
+    # The no-list guard (#8289): every entry in the rejected-concepts record
+    # (knowledge-base/project/rejected/) must carry the fields concept matching depends on,
+    # must not claim a concept is unimplemented while carrying a key that is only true of a
+    # built feature, must not identify a requester, and must never name itself as grounds to
+    # close or label an issue. Single-star glob: entries are FLAT at depth 1, and gobwas `**`
+    # requires >=1 intermediate directory and would silently skip every one of them
+    # (2026-03-21-lefthook-gobwas-glob-double-star.md). Priority 12 so it runs after
+    # generate-kb-index (10) has re-staged the index.
+    #
+    # THIS IS ONE OF THREE DISPATCHES, not a chokepoint. See the pre-push mirror below and the
+    # CI step in .github/workflows/ci.yml (the `lint-bot-statuses` job), which runs --all over
+    # the WHOLE glob rather than the staged set.
+    rejected-register-guard:
+      priority: 12
+      glob: "knowledge-base/project/rejected/*.md"
+      run: bash scripts/lint-rejected-register.sh {staged_files}
 
 # pre-push mirror of the client-pii-grep signal-quality gate (#3703) so a bypass
 # is surfaced at push time even if the pre-commit hook was skipped (e.g. amended
@@ -452,3 +468,15 @@ pre-push:
       # {push_files} is the pre-push file set (the push range). Verified e2e
       # against lefthook 2.1.6 with a real `git push`.
       run: bash .github/scripts/check-client-pii-sentry.sh {push_files}
+    # pre-push mirror of the no-list guard (#8289), same shared script, same scope, for the
+    # same reason the client-pii-grep mirror above exists: `git commit --no-verify` and a
+    # merge-resolution commit both reach the repository without the pre-commit hook, so a
+    # bypass is surfaced at push time instead of at review time.
+    rejected-register-guard:
+      priority: 6
+      # Flat depth-1 glob, same gobwas rationale as the pre-commit entry.
+      glob: "knowledge-base/project/rejected/*.md"
+      # {push_files}, NOT {staged_files}: in a pre-push hook lefthook resolves {staged_files}
+      # to empty (nothing is staged at push time) and the command skips with "no files for
+      # inspection" — a vacuous gate. Same correction as client-pii-grep above.
+      run: bash scripts/lint-rejected-register.sh {push_files}

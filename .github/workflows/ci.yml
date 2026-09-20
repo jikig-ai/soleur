@@ -228,6 +228,16 @@ jobs:
         run: python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # THE THIRD DISPATCH of the no-list guard (#8289). lefthook's pre-commit and pre-push
+      # entries see only the staged / pushed set; `git commit --no-verify` and a
+      # merge-resolution commit reach the repository through neither. So CI walks the WHOLE
+      # glob with --all, which discovers entries by walking
+      # knowledge-base/project/rejected/ rather than by reading a manifest — a manifest goes
+      # stale the first time somebody adds an entry without editing it. A walk that finds no
+      # entries exits 3 and does NOT report success: "nothing checked" is not "clean".
+      - name: "lint-bot-statuses — rejected-concepts record, full glob (#8289)"
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-rejected-register.sh --all
       # Supabase Management API deprecation + host-pin assembly guard.
       #
       # ENFORCEMENT LEVEL IS ADVISORY, NOT BLOCKING, exactly as stated for every other

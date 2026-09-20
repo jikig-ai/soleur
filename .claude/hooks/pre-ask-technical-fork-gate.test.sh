@@ -53,6 +53,46 @@ run_case "D2 which file to inspect" deny \
 run_case "D3 hypothesis selection" deny \
   "How do we find the cause?" "Investigate the pooler" "diagnose the connection path" "Look into the guard" "read the guard comments"
 
+# D4 — BEHAVIOURAL, and the reason it is not a grep on the hook source.
+#
+# An outside expert's question (accountant / lawyer / auditor / insurer / bank / regulator /
+# landlord) is a dead end at the founder too: they cannot answer it either. The hook's
+# EXTERNAL_EXPERT arm denies it and names the skill that writes the questions instead.
+#
+# Asserting only that the skill's NAME appears in the hook file would have passed against the
+# design this replaced. The name was present, in rung 5 of the investigative REASON ladder, and the
+# deny was UNREACHABLE: AUTHORITY_RE is evaluated first and wins outright on cost / budget / price /
+# priorit / scope / schedule / spend, which this class carries in the same breath, and the surviving
+# path then also requires INVESTIGATIVE_RE, which this class never matches. So the payload below
+# deliberately carries "cost" in an option description — it passes only if the expert arm is
+# evaluated AHEAD of the authority short-circuit. Decision AND reason are both asserted; a deny
+# carrying a reason that does not route anywhere is the same dead end wearing a hook's clothes.
+#
+# Both halves of the routing claim are checked here rather than in two cases, so the inventory
+# below moves by one: the dedicated arm, and rung 5 of the ladder the investigative path emits.
+TOTAL=$((TOTAL+1))
+expert_out=$(payload "Should we treat the plugin revenue as capex or opex this year?" \
+  "Capex" "capitalise it and carry the cost forward across future years" \
+  "Opex" "expense the whole amount in the current year" | "$HOOK" 2>/dev/null)
+expert_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${expert_out:-{\}}" 2>/dev/null || echo allow)
+expert_reason=$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"${expert_out:-{\}}" 2>/dev/null || echo "")
+ladder_out=$(payload "How should I resolve the cutover path?" \
+  "Read the runbook properly first" "find the documented order rather than reasoning it out" \
+  "Ask whoever owns the cutover section" "the plan deferred it to numbered steps I have not read" | "$HOOK" 2>/dev/null)
+ladder_reason=$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"${ladder_out:-{\}}" 2>/dev/null || echo "")
+if [[ "$expert_dec" == "deny" ]] \
+   && grep -qF 'instead: soleur:questionnaire-generate' <<<"$expert_reason" \
+   && grep -qE '^ +5\. If the answer is held OUTSIDE the company' <<<"$ladder_reason" \
+   && grep -qF 'soleur:questionnaire-generate' <<<"$ladder_reason"; then
+  echo "  PASS: D4 outside-expert question denied AND routed to soleur:questionnaire-generate (arm + ladder rung 5)"; PASS=$((PASS+1))
+else
+  printf '  FAIL: D4 outside-expert routing — decision was %s; arm reason named the skill: %s; ladder rung 5 present: %s\n' \
+    "$expert_dec" \
+    "$(grep -qF 'instead: soleur:questionnaire-generate' <<<"$expert_reason" && echo yes || echo no)" \
+    "$(grep -qE '^ +5\. If the answer is held OUTSIDE the company' <<<"$ladder_reason" && echo yes || echo no)" >&2
+  FAIL=$((FAIL+1))
+fi
+
 # --- ALLOW: real operator decisions --------------------------------------------------------
 run_case "A1 the ack-destroy authorization from the same session" allow \
   "This merge fires a production apply. How do you want to proceed?" \
@@ -94,9 +134,42 @@ if [[ "$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${out:-{\
 else echo "  FAIL: H1 hatch silent or ineffective" >&2; FAIL=$((FAIL+1)); fi
 
 # --- anti-vacuity ----------------------------------------------------------------------------
+# D5 — the OTHER DIRECTION of D4, which D4 alone cannot see.
+#
+# D4 fixtures the direction where a weak implementation under-fires: it proves the expert arm is
+# reachable. Every fixture pointed that way passes just as well against an arm that fires on
+# EVERYTHING, and this arm is evaluated BEFORE the authority short-circuit and DENIES — so an
+# over-broad token silently converts legitimate authorization questions into refusals. That is the
+# one direction this hook's header otherwise refuses to fail in, so it gets its own case.
+#
+# Both inputs below were measured as FALSE POSITIVES against the arm as first written and are the
+# reason the pattern changed: a leading-only `\btax` accepts "taxonomy" (it rejects "syntax" only
+# because there is no boundary before "tax" there), and `statutory` is ambient in this repository's
+# own compliance prose while identifying no profession. The assertion is scoped to the expert arm's
+# own sentinel rather than to overall allow, so an unrelated arm denying for an unrelated reason
+# cannot make this case pass or fail for the wrong reason.
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 12 ]]; then echo "  PASS: V1 full inventory ran (12 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 12 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+neg_fp=0
+for neg_q in "Should we rename the event taxonomy before the launch?" \
+             "Approve the statutory breach-notification clock change?"; do
+  neg_out=$(payload "$neg_q" \
+    "Yes" "go ahead with it as described" \
+    "No" "leave it as it stands for now" | "$HOOK" 2>/dev/null)
+  neg_reason=$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"${neg_out:-{\}}" 2>/dev/null || echo "")
+  if grep -qF 'instead: soleur:questionnaire-generate' <<<"$neg_reason"; then
+    printf '  FAIL: D5 expert arm fired on a non-expert question: %s\n' "$neg_q" >&2
+    neg_fp=$((neg_fp+1))
+  fi
+done
+if [[ "$neg_fp" -eq 0 ]]; then
+  echo "  PASS: D5 expert arm does not fire on taxonomy/statutory (negative control, both directions covered)"; PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
+TOTAL=$((TOTAL+1))
+if [[ "$TOTAL" -eq 14 ]]; then echo "  PASS: V1 full inventory ran (14 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 14 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 echo ""
 echo "=== $PASS/$TOTAL passed ==="
