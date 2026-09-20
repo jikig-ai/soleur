@@ -117,7 +117,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // MIRRORED-NOT-PAGED (#8287): the SOLEUR_BOOTSTRAP_* family.
 //
@@ -166,19 +166,26 @@ const MARKER_RE =
 // publishes a --json array on stdout, so its xtrace refusal is emitted as a marker rather
 // than as prose that a consumer would parse as a data row.
 
-// MIRRORED-NOT-PAGED, deliberately: the seven SOLEUR_*_HALT families (#7450, #7898, #7947, #7941).
+// MIRRORED-NOT-PAGED, deliberately: the nine SOLEUR_*_HALT families (#7450, #7898, #7947, #7941, #8289, #8402).
 //
 // SOLEUR_SHIP_PIR_GATE_HALT (#7941) is the /ship Phase 5.5 Incident-PIR gate refusing to give a
 // verdict: `reason=signal-scan-unavailable` (the signal scan did not run) or `reason=unavailable`
 // (the shape-check script did not run — absent from the plugin snapshot, or `origin/main`
-// unresolvable). Same shape as the six below: a refusal that must reach a sink, and a dominant
+// unresolvable). Same shape as the eight below: a refusal that must reach a sink, and a dominant
 // cause (a customer's plugin layout) that is not an operator page.
 //
-// The six below are the secret gates' fail-closed refusals — `incident`, `legal-generate`,
-// `linear-fetch`, `trigger-cron`, `flag-list` (#7898), and `snapshot` (#7947: one shared sentinel for the six
+// The eight below are the fail-closed refusals — `incident`, `legal-generate`,
+// `linear-fetch`, `trigger-cron`, `flag-list` (#7898), `questionnaire-generate` (#8289: the
+// redaction floor between an un-scanned questionnaire and the founder's mail client, whose
+// `reason=` discriminates sentinel-matches / sentinel-cannot-evaluate / draft-empty /
+// plugin-root-unverified — the cannot-evaluate arm exists because rc=0 and rc=2 were measured
+// byte-identical on stdout, so an unscanned document read as a clean one), and `snapshot` (#7947: one shared sentinel for the six
 // browser-driving skills that reach the accessibility-snapshot redactor, because the halt
 // condition — plugin root unverified before a snapshot — is identical across all six and a
-// per-skill name would buy six rows of noise and no extra signal). They belong in MARKER_RE because a refusal that reaches no
+// per-skill name would buy six rows of noise and no extra signal). `precommit-guard` (#8402) is
+// the odd one: it is not a SECRET gate but the commit-on-main backstop, and in a cloud session
+// where hooks do not fire it is the only such protection there is — so an unresolved or refusing
+// guard must reach a sink for exactly the reason the seven others must. They belong in MARKER_RE because a refusal that reaches no
 // sink is indistinguishable from a run that never happened, and the gate's whole purpose is to
 // refuse. They must NOT go in WEDGE_RE: the dominant cause is a customer whose plugin simply
 // is not installed, and paging an operator for that is how a page becomes noise.

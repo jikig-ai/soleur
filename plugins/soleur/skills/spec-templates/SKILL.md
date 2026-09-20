@@ -17,6 +17,8 @@ Provides templates for structured feature specifications.
 - At the end of `soleur:plan` to create tasks.md
 - When starting any new feature in `knowledge-base/project/specs/`
 
+**Vocabulary.** Before committing a word that names a concept, check it against `knowledge-base/project/glossary.md` and use the sense its pointer settles; if the word is materially ambiguous and has no entry, hedge in the artifact and name the ambiguity. The instruction is stated once in [glossary-format.md](../kb-glossary/references/glossary-format.md) §The consumer pointer and is not restated here.
+
 ## spec.md Template
 
 Use this template for feature specifications:
