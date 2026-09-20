@@ -2554,7 +2554,12 @@ assert "#8079 AC10 render: a webhook body with an embedded newline + forged ::no
 mutate_file() {
   local label="$1" src="$2" expr="$3" check_fn="$4" mutated changed
   mutated="$(mktemp)"; SCRATCH+=("$mutated")
-  sed "$expr" "$src" > "$mutated"
+  # A malformed expression is a FAILED ROW, not a dead suite: under set -e a sed parse error here
+  # aborted the whole run with no Results line and no floor verdict (measured on a `RANGE/pat/d`
+  # missing its braces — every row after it, and the exact-floor gate, silently never ran).
+  if ! sed "$expr" "$src" > "$mutated" 2>/dev/null; then
+    assert "#8054 mutate[$label]: the sed expression itself failed to parse — the row ran nothing" "false"; return
+  fi
   if cmp -s "$mutated" "$src"; then
     assert "#8054 mutate[$label]: the mutation matched NOTHING (byte-identical copy) — the line drifted" "false"; return
   fi
