@@ -159,8 +159,17 @@ Each was seconds to falsify and none had been.
     three. **Prevention:** strip the known prefix before anchoring, and cross-read two
     independent sources before calling a failure set complete.
 21. **Ran `lint-window-closure-assertion.py` without `--allowlist`** and read the rc=1 as a
-    defect in files I had not touched. **Prevention:** copy the invocation from its
-    `run_suite` row, including continuation lines, rather than retyping the script name.
+    defect in files I had not touched. Same shape recurred: I ran
+    `lint-shell-trace-credential-refusal.py` bare (rc=0, repo-wide mode) when CI runs it
+    `--changed --base origin/main`, so the two violations this PR owned were invisible.
+    **Prevention:** copy the invocation from its `run_suite` row OR its `ci.yml` step —
+    flags select the MODE, and the wrong mode reports on a corpus that is not yours.
+22. **A green step is not a clean job: CI aborts at the FIRST failing step.** `lint-bot-statuses`
+    reddened twice on two different steps — `Lint tempfile-cleanup ownership`, then, once that
+    passed, `shell-trace credential refusal (#7797)` on the same two files, which the job had
+    never reached. Each fix bought one more step of visibility and one more CI round.
+    **Prevention:** when a JOB fails, extract and run ALL of its steps locally, not just the
+    one named in the failure. Parse the job body out of `ci.yml` and run the list.
 
 ## Related
 
