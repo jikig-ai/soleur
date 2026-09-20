@@ -581,6 +581,12 @@ export async function postAnthropicMessage(args: {
   // credit-probe canary). Optional so the two existing callers/tests that omit
   // it stay compiling.
   markerSource?: string;
+  /**
+   * Per-run id for the cost marker. Without it the marker carries only the cron
+   * NAME, identical on every run — so a `SOLEUR_CLAUDE_COST output_tokens > 0`
+   * row could be joined to its `reportSilentFallback` only by wall clock (#8392).
+   */
+  markerRunId?: string;
 }): Promise<{ text: string; stopReason?: string }> {
   let resp: Response;
   try {
@@ -626,7 +632,7 @@ export async function postAnthropicMessage(args: {
   }
 
   const data = (await resp.json()) as {
-    content?: Array<{ text?: string }>;
+    content?: Array<{ type: string; text?: string }>;
     stop_reason?: string;
     model?: string;
     usage?: {
@@ -645,7 +651,7 @@ export async function postAnthropicMessage(args: {
   if (args.markerSource) {
     emitClaudeCostMarker({
       source: `cron:${args.markerSource}`,
-      id: args.markerSource,
+      id: args.markerRunId ?? args.markerSource,
       model: data.model ?? args.model ?? null,
       cost_usd: null,
       input_tokens: data.usage?.input_tokens ?? null,
@@ -656,7 +662,17 @@ export async function postAnthropicMessage(args: {
     });
   }
 
-  return { text: data.content?.[0]?.text ?? "", stopReason: data.stop_reason };
+  // MEASURED on prd 2026-09-19 with EXECUTION_MODEL = claude-sonnet-5 (since #5849):
+  // position 0 held a thinking block and the structured-output text sat behind it, so
+  // the old positional read returned "" while the answer was billed. Take the first
+  // TEXT block — selection is an ALLOWLIST, since a `!== "thinking"` denylist returns
+  // undefined on tool_use / redacted_thinking and reopens the same class. An empty,
+  // thinking-only, or non-array response still yields "" so every caller's
+  // empty-guard keeps its meaning (#8392).
+  const text = Array.isArray(data.content)
+    ? (data.content.find((b) => b.type === "text")?.text ?? "")
+    : "";
+  return { text, stopReason: data.stop_reason };
 }
 
 // #cost-attribution (plan Phase 3). GET transport for the Anthropic Admin Cost

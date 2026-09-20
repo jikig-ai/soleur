@@ -697,6 +697,7 @@ ci-guards
 ci-infrastructure
 ci-issues
 ci-planning
+ci-ratchets
 ci-release
 ci-required-checks
 ci-required-ruleset
@@ -2337,6 +2338,7 @@ mode-name-collision
 model-disaggregation
 model-ids
 model-launch
+model-swap
 module
 module-internal-binding
 module-level-state
