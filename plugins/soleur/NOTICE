@@ -136,7 +136,17 @@ mattpocock/skills
     skills/brainstorm-techniques/references/phase-boundaries.md,
     skills/ship/SKILL.md (Merge Danger section) (#8287),
     skills/reproduce-bug/SKILL.md, skills/test-fix-loop/SKILL.md,
-    skills/constraint-scaffold/ (#8288)
+    skills/constraint-scaffold/ (#8288),
+    skills/kb-glossary/ (SKILL.md, references/glossary-format.md,
+    references/rejected-request-register.md),
+    skills/questionnaire-generate/ (SKILL.md,
+    references/questionnaire.template),
+    skills/triage/SKILL.md (intake pre-checks),
+    agents/support/ticket-triage.md (intake pre-checks),
+    ../../.openhands/skills/ticket-triage/SKILL.md (intake pre-checks --
+      the OpenHands mirror of the agent above; it carries the same derived
+      prose and is listed because a Used-in list that omits one of three
+      mirrors understates the reach of the attribution) (#8289)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent
@@ -182,6 +192,50 @@ mattpocock/skills
     Soleur's distribution. The template the README is rendered from
     (references/boundary-readme.template) carries the attribution
     comment; the emitter strips that first line.
+
+    Bundle 3 (#8289, from skills/engineering/domain-modeling/SKILL.md
+    and CONTEXT-FORMAT.md, skills/engineering/triage/OUT-OF-SCOPE.md and
+    SKILL.md step 1, and skills/productivity/to-questionnaire/SKILL.md at
+    the same HEAD) imports four mechanics, again as prose composed into
+    Soleur skills: the glossary write discipline (challenge a term that
+    conflicts with the glossary, sharpen a fuzzy or overloaded one,
+    update inline as a decision settles it rather than batching, and the
+    hard scope line that the artifact is a glossary and nothing else) and
+    the entry format with its opinionated-single-term and _Avoid_-list
+    shape (kb-glossary); the one-file-per-concept rejected-concepts
+    convention with concept-not-keyword matching, the durable-reason
+    test and the built-is-not-rejected prohibition (kb-glossary/
+    references/rejected-request-register.md; substrate decision in
+    ADR-234); the two intake pre-checks -- redundancy search keyed on
+    domain concept with the searched surfaces reported, and a
+    prior-rejection lookup (skills/triage/SKILL.md,
+    agents/support/ticket-triage.md); and grill-the-send-not-the-subject
+    with its two-exchange interview and questionnaire-template shape
+    (questionnaire-generate). Four upstream elements were deliberately
+    NOT imported: the three-way Confirm / Reconsider / Disagree
+    maintainer prompt (a recorded refusal that can be re-litigated with
+    no new information is a suggestion, and on a non-technical founder it
+    becomes click-through that launders auto-closes as consent); ADR-FORMAT.md
+    (Soleur has 234 ADRs on an established format in
+    skills/architecture/references/adr-template.md, and adopting a peer
+    format would fork a live internal convention); the .out-of-scope/
+    dotted-directory location (a dotfile hides founder-readable records
+    from the founder, against the principle that a founder can clone the
+    repository and see all of it); and CONTEXT-MAP.md's multi-context
+    mechanism (Soleur's glossary is single-context -- one company, one
+    vocabulary -- so a bounded-context map would ship as dead structure,
+    and that need already routes to the ddd-architect agent).
+    The questionnaire that questionnaire-generate emits into a founder's
+    repository is Soleur-authored on the same terms as the emitted
+    server/README.md above: it shares no 8-word shingle with any peer
+    file, and it carries no credit because the emitter strips the first
+    line of the template, which is where the attribution comment lives.
+    Nothing under knowledge-base/ carries the comment at all --
+    knowledge-base/project/glossary.md and
+    knowledge-base/project/rejected/ are Soleur's own vocabulary and
+    Soleur's own record, so attributing them would be a false
+    attribution, and they are outside the plugin payload
+    (.claude-plugin/marketplace.json sets source to ./plugins/soleur).
 
   MIT License (upstream)
 

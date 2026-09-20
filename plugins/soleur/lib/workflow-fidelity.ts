@@ -93,6 +93,8 @@ export const GO_SKILL_ROUTES: Record<string, string> = {
   "drain-prs": "drain-prs",
   review: "review",
   incident: "incident",
+  questionnaire: "questionnaire-generate",
+  glossary: "kb-glossary",
   default: "brainstorm",
 };
 
