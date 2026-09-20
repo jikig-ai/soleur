@@ -647,11 +647,18 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
   test("HARNESS: the derived population is non-empty and covers the non-marker sites", () => {
     const files = deriveCachePathFiles();
     expect(files.length).toBeGreaterThanOrEqual(67);
-    // The four sites the marker-block test structurally cannot see. These are the whole
-    // reason the assembly is DERIVED rather than a member list — mutation row 2 (revert
-    // AGENTS.md's rule body) is red only through this scan.
+    // Sites the marker-block test structurally cannot see — it only ever opens `*/SKILL.md`.
+    // These are the whole reason the assembly is DERIVED rather than a member list.
+    //
+    // `AGENTS.md` is deliberately NOT in this list. It was a member before #8402 and is the
+    // witness that the derived scan reaches what the marker test cannot (it carried the
+    // basename recipe and only this scan could see it). Its rule body is now a POINTER to
+    // devin/INSTRUCTIONS.md §Detection, because a multi-line identity recipe cannot live
+    // legibly on one line in a customer-shipped, always-loaded rules file — so it no longer
+    // names a cache path at all and correctly leaves the population. Requiring it to stay
+    // would pin the defect's shape rather than the property. Its treatment is asserted
+    // positively in the next test instead.
     for (const rel of [
-      "AGENTS.md",
       "devin/INSTRUCTIONS.md",
       "commands/go.md",
       "test/go-session-gates.test.sh",
@@ -661,6 +668,27 @@ describe("devin cache recipe: identity-selected, never basename-selected", () =>
         `${rel} names a Devin cache path but fell out of the derived population — the scan no longer reaches the non-marker sites`,
       ).toBe(true);
     }
+  });
+
+  // The pointer treatment, pinned positively. AGENTS.md leaves the derived population by
+  // becoming a pointer, so no absence-based assertion can distinguish "correctly a pointer"
+  // from "the rule was deleted" — and an absence that reads as safety is the failure mode
+  // this suite exists for.
+  test("the AGENTS.md rule points at the identity recipe rather than carrying one", () => {
+    const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8");
+    const rule = agents
+      .split("\n")
+      .find((l) => l.includes("[id: cloud-detect-before-pipeline]"));
+    expect(rule, "the cloud-detect-before-pipeline rule is missing entirely").toBeDefined();
+    const r = rule as string;
+    // Still tells the agent to run the classifier.
+    expect(r).toContain("scripts/cloud-detect.sh");
+    // Points at where the recipe lives, and forbids the basename shortcut by name.
+    expect(r).toContain("devin/INSTRUCTIONS.md");
+    expect(r).toMatch(/identity/i);
+    expect(r).toMatch(/never by the script's basename/i);
+    // Carries no cache path of its own — that is what took it out of the derived population.
+    expect(basenameSelectionHits(r).length).toBe(0);
   });
 
   test("no shipped file selects a Devin-cache executable by filename", () => {
