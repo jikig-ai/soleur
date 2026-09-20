@@ -176,6 +176,16 @@ that its comment and its code disagreed.
 25. **`work/SKILL.md` backstop: comment said proceed, code halted** (`bash ""`). Recovery: `else`
     arm; five arms dry-run. **Prevention:** `qa/SKILL.md` — prose that executes gets a constrained
     dry run in every branch the comment claims, not a read.
+26. **`MIN_ASSERTIONS` raised four times from LOCAL counts** (178, 184, 190, 196) while the
+    comment above it said "the H3-SKIPPED total; H3 running adds two more". CI has no `claude`
+    binary, ran 194, and reddened. Recovery: floor 194, measured with `SOLEUR_GO_GATES_SKIP_H3=1`.
+    **Prevention:** a floor whose comment names an environment-dependent arm is measured on the
+    arm that runs in CI, with the lever the suite provides for that purpose.
+27. **`lint-shell-capture-exit` reddened CI on two new `x="$(… | grep …)"` captures** with no
+    `|| true` — the fourth repo-global ratchet this branch reached only by running it, after
+    `fixture-relative-assert` (twice) and `skill-body-budget`. **Prevention:** before every push,
+    run the ratchets `test-all.sh` registers under `scripts/lint-*-live` with their baselines —
+    they reference no changed file and never appear in a diff-derived selection.
 
 ## Related
 

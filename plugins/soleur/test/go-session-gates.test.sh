@@ -394,7 +394,7 @@ check_r9() {
     # fences was green under the count row alone. The property is the arity of the search list
     # itself, so count ITS members: `for d in <a> <b>; do`, two words between `in` and `;`.
     local for_line n_arms
-    for_line="$(printf '%s\n' "$code" | grep -E '^[[:space:]]*for[[:space:]]+d[[:space:]]+in[[:space:]]' | head -1)"
+    for_line="$(printf '%s\n' "$code" | grep -E '^[[:space:]]*for[[:space:]]+d[[:space:]]+in[[:space:]]' | head -1 || true)"
     # `eval` is deliberate and safe on a fence this suite has already pinned byte-identical:
     # the members are quoted shell words, and word-splitting them any other way would count
     # `"$HOME/.local/share/devin/cli/plugins/cache"` as one word only by accident.
@@ -724,7 +724,7 @@ fi
 # (plugin-root-anchoring.test.ts P1/P8) requires the invocation operand to be the bare
 # ${ROOT}-anchored literal — so textual identity is both what that contract wants and a
 # stronger pin than a shared variable would be.
-_grep_operand="$(printf '%s\n' "$_ss_code" | grep -oE '"\$\{ROOT\}[^"]*worktree-manager\.sh"' | sort -u)"
+_grep_operand="$(printf '%s\n' "$_ss_code" | grep -oE '"\$\{ROOT\}[^"]*worktree-manager\.sh"' | sort -u || true)"
 _n_operands="$(printf '%s\n' "$_grep_operand" | grep -c . || true)"
 ck; if [ "$_n_operands" -eq 1 ]; then
   pass "R10b: the capability grep and the dispatch name one identical \${ROOT}-anchored operand"
@@ -1081,9 +1081,12 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 155 is the H3-SKIPPED total; H3 running adds two more (157), so the floor holds on both paths.
+# 194 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (196), so the
+# floor holds on both paths. MEASURE IT WITH `SOLEUR_GO_GATES_SKIP_H3=1`, never from a local run
+# where the harness is present: #8418 raised it four times from local counts and CI reddened on
+# `194 < 196` — the same floor this comment already said to derive from the skipped path.
 # Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155.
-MIN_ASSERTIONS=196
+MIN_ASSERTIONS=194
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
