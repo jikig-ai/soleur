@@ -225,18 +225,36 @@ export async function deleteAccount(
   let gitDataErasurePending = false;
   try {
     const outcome = await removeGitDataRepo(userId);
-    if (outcome.status === "refused" || outcome.status === "unreachable") {
+    if (outcome.status !== "erased" && outcome.status !== "skipped") {
       gitDataErasurePending = true;
-      // A compliance event either way, but the two are distinguishable in Sentry now:
-      // `refused` means the host looked and declined (it needs a fix, and the repo is
-      // probably still there); `unreachable` means we never got an answer (the repo's
-      // state is unknown, which is not the same as un-erased).
+      // The four non-terminal states mean genuinely different things and need different
+      // operator responses, so the discriminator rides a TAG, not only `extra`:
+      //   refused      — the host looked and declined; the repo is probably still there.
+      //   unauthorized — the REMOVE key was rejected. PERMANENT and fleet-wide until a
+      //                  host replace re-bakes authorized_keys; every repo is un-erased.
+      //   unconfigured — the remove key is missing while git-data is otherwise armed.
+      //   unreachable  — no answer at all; the repo's state is unknown, which is not the
+      //                  same as un-erased.
+      // Sentry does not index `extra`, so an alert rule cannot key on a value that lives
+      // only there — which is why `outcome` moved out of it.
       reportSilentFallback(new Error(`git-data erasure ${outcome.status}`), {
         feature: "account-delete",
         op: "git-data-bare-repo-erasure",
+        tags: { erasure_outcome: outcome.status },
         extra: {
           userId,
-          outcome: outcome.status,
+          // DELIBERATE, and not a duplicate of `userId` above: `reportSilentFallback`
+          // pseudonymizes `extra.userId` by policy (ADR-029), which is correct for a
+          // subject identifier and fatal for this one — `workspaceId === auth.users.id`
+          // is the bare-repo NAME on the host, and the users/workspaces rows are deleted
+          // seconds later in this same cascade. Hashed, the record names an outstanding
+          // erasure nobody can locate; the sweep runbook's `.extra.userId` query already
+          // returns "no-user-id" for exactly this reason.
+          // Lawful basis for retaining it: completing the Art. 17 erasure the subject
+          // requested. It is the minimum needed to identify the object still to delete,
+          // and it is scrubbed out of `detail` (see scrubErasureDetail) so this is the
+          // single, documented carrier rather than an incidental one.
+          gitDataRepoId: userId,
           ...(outcome.status === "refused" ? { exitCode: outcome.exitCode } : {}),
           detail: outcome.detail,
         },

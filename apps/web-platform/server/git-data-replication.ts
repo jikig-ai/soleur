@@ -214,14 +214,77 @@ export async function provisionGitDataRepo(workspaceId: string): Promise<void> {
  * host-local working tree — closing the DL-1 bare-repo erasure gap.
  */
 export type GitDataErasureOutcome =
-  /** No REMOVE key in this env — git-data was never in play here. Nothing to erase. */
+  /**
+   * No REMOVE key AND no sibling git-data inputs — this env never had git-data.
+   * The only outcome besides `erased` that is honest to report as "nothing owed".
+   */
   | { status: "skipped" }
-  /** The remote forced command ran and exited 0. The bare repo is gone. */
+  /**
+   * The remote forced command ran and exited 0.
+   *
+   * Scoped claim: rc 0 proves *a* mounted store was acted on, not *which* — the
+   * wrong-store gap is tracked separately (#8101, Art. 30 register TOM (g)(4)).
+   */
   | { status: "erased" }
   /** The host LOOKED and declined (non-zero from the remote command). Carries its own words. */
   | { status: "refused"; exitCode: number; detail: string }
-  /** ssh never established a session (rc 255). Says NOTHING about the repo's fate. */
+  /**
+   * ssh presented a key and the host DECLINED it (255 + an auth signature in stderr).
+   *
+   * Split out of `unreachable` deliberately. The REMOVE public key is baked into
+   * `cloud-init-git-data.yml` authorized_keys, and `user_data` is ForceNew — so rotating
+   * GIT_REMOVE_SSH_PRIVATE_KEY in Doppler WITHOUT a host replace yields `Permission
+   * denied (publickey)` on every deletion, permanently. That is the opposite of "we
+   * never got an answer": the host answered, refused the credential, and every repo is
+   * definitively un-erased. Folding it into `unreachable` made the one failure mode that
+   * is permanent, reproducible and fleet-wide read as a transient blip.
+   */
+  | { status: "unauthorized"; detail: string }
+  /**
+   * The REMOVE key is absent while the sibling git-data inputs ARE set — a partial
+   * birth or a half-applied rotation, not a non-git-data env.
+   *
+   * Without this, `skipped` silently absorbed it and reported "nothing to erase" for a
+   * host that is actively provisioning repos: the #8094 defect through a second door.
+   */
+  | { status: "unconfigured"; detail: string }
+  /** ssh never established a session at all. Says NOTHING about the repo's fate. */
   | { status: "unreachable"; detail: string };
+
+/**
+ * Scrub the identifiers out of remote stderr before it is shipped anywhere.
+ *
+ * `workspace_id === auth.users.id` (mig-053 N2), and `git-data-remove.sh`'s `reject()`
+ * interpolates it verbatim into its messages ("workspace_id has unsafe characters:
+ * '<uuid>'", lock paths under /mnt/git-data/repositories/…). Node's own
+ * `Command failed: …` fallback carries it too, because the remote command IS the raw id.
+ *
+ * Shipping that raw would route around two contracts at once: `reportSilentFallback`
+ * pseudonymizes `extra.userId` by policy (ADR-029, Recital 26), and the git-data host's
+ * own emitter redacts this exact byte class before it leaves the box. An event that both
+ * pseudonymizes and de-pseudonymizes the same identifier is worse than one that does
+ * neither, because it reads as compliant.
+ */
+function scrubErasureDetail(raw: string, workspaceId: string): string {
+  // The id we are scrubbing is the one we were called with, so remove it BY VALUE first
+  // rather than trusting it to match a canonical UUID shape. The regex below is the net
+  // for ids this function was not handed (a lock path naming a different repo); it is not
+  // the primary mechanism, because a workspace id that is not canonically formatted would
+  // slip straight through a shape-based scrub.
+  const byValue = workspaceId
+    ? raw.split(workspaceId).join("WORKSPACE_ID_REDACTED")
+    : raw;
+  return byValue
+    .replace(
+      /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g,
+      "UUID_REDACTED",
+    )
+    .replace(/\/[^\s'"]*\/[^\s'"]*/g, "<path>")
+    .slice(0, 2000);
+}
+
+/** ssh's own 255 covers both "could not connect" and "you may not in". Only stderr tells them apart. */
+const SSH_AUTH_FAILURE = /permission denied|publickey|host key verification failed|too many authentication failures|load key|invalid format/i;
 
 /**
  * (#8094) WHY THIS RETURNS AN OUTCOME INSTEAD OF void.
@@ -255,7 +318,23 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
   // flag. The host-side wrapper is idempotent — a remove of a non-existent repo is
   // a no-op — so an over-eager call is harmless.
   const removeKey = process.env.GIT_REMOVE_SSH_PRIVATE_KEY?.trim();
-  if (!removeKey) return { status: "skipped" };
+  if (!removeKey) {
+    // "Never in play" is only supportable when the SIBLING arming inputs are absent too.
+    // Provisioning arms on a DIFFERENT variable (GIT_PROVISION_SSH_PRIVATE_KEY), so a
+    // half-applied rotation or a partial birth can leave repos being created while the
+    // remove key is missing — and reporting that as `skipped` tells the user their data
+    // is gone while their bare repo sits on the host.
+    const provisionKey = process.env.GIT_PROVISION_SSH_PRIVATE_KEY?.trim();
+    const sshHost = process.env.GIT_DATA_SSH_HOST?.trim();
+    if (provisionKey || sshHost) {
+      return {
+        status: "unconfigured",
+        detail:
+          "GIT_REMOVE_SSH_PRIVATE_KEY is absent while the provision key and/or GIT_DATA_SSH_HOST are set",
+      };
+    }
+    return { status: "skipped" };
+  }
   const host = resolveGitDataSshHost();
   try {
     await sshWithPrivateKeyAuth(host, workspaceId, removeKey, { timeout: 30_000 });
@@ -268,13 +347,21 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
     // refusal by a host that never answered.
     const e = err as { code?: unknown; stderr?: unknown };
     const exitCode = typeof e.code === "number" ? e.code : null;
-    const detail = String(
-      typeof e.stderr === "string" && e.stderr.trim()
-        ? e.stderr.trim()
-        : err instanceof Error
-          ? err.message
-          : err,
-    ).slice(0, 2000);
+    const detail = scrubErasureDetail(
+      String(
+        typeof e.stderr === "string" && e.stderr.trim()
+          ? e.stderr.trim()
+          : err instanceof Error
+            ? err.message
+            : err,
+      ),
+      workspaceId,
+    );
+    // 255 is ssh's own status and covers two very different facts. Read the stderr to
+    // tell them apart before defaulting to the benign one.
+    if (exitCode === 255 && SSH_AUTH_FAILURE.test(detail)) {
+      return { status: "unauthorized", detail };
+    }
     if (exitCode === null || exitCode === 255) return { status: "unreachable", detail };
     return { status: "refused", exitCode, detail };
   }
