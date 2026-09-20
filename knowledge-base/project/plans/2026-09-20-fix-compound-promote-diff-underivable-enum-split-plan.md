@@ -579,6 +579,22 @@ suites it edits (`cq-cite-content-anchor-not-line-number`).
 | `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` | Rewrite the two now-false claims; extend the refusal-enum paragraph with the five split values and `diff-empty`, calling out that `diff-empty` does **not** carry the `diff-underivable` prefix; document the shape fields; and **amend the `SOLEUR_COMPOUND_PROMOTE_OUTCOME` jq recipe so it projects `refusal_detail`** — without that, the fields this PR adds never reach the operator's copy-paste command. |
 | `knowledge-base/legal/article-30-register.md` | Amend Processing Activity 8's `(c) Categories of personal data` cell to name `refusal_detail[].detail` and the diff-shape fields. Tier 1, in-cell; no `docs/legal/**` edit, so the five legal CI gates are not engaged. |
 
+
+> **[SUPERSEDED 2026-09-20 by the review panel — the probe script was deleted.]**
+> `scripts/checks/compound-promote-reason-sites.sh` is NOT in this change. Review
+> measured it printing `COMPOUND_PROMOTE_REASON_SITES_OK` **vacuously**: reindent
+> the union and hoist two sibling unions, and its declared-window terminator
+> `/^    \};$/` never fires, the window runs to EOF, and the remaining `| "…"`
+> lines are the eight members — so it agrees with itself over a window it never
+> closed. It also FALSE-POSITIVES on reflowing the union onto one line, which is
+> the exact formatter freedom its own comment cites as its design rationale, and
+> its `[a-z-]` class silently exempts any future member containing a digit,
+> underscore or capital — on BOTH sides, so the sets stay equal.
+>
+> It was a weaker duplicate of the AST census, which its own header called "the
+> authority". The census now pins the site-keyed multiset the probe could never
+> see. Every reference below is retained as the record of what was planned.
+
 ## Files to Create
 
 | Path | Why |

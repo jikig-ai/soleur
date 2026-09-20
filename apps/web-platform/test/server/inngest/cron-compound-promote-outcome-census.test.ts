@@ -282,7 +282,9 @@ describe("Guard 3 — replay safety of the outcome accumulators", () => {
 // first design and every one of its failure modes is real in this file: the
 // stripper reused above is line-oriented (`^\s*//`, `^\s*\*`), so it misses a
 // single-line `/* … */`, a `/**` opener and a TRAILING `// …` after code; the
-// file carries ~97 block-comment lines and narrates its own literals in them;
+// file carries ~552 comment lines (as-written; the ~97 this said before was the
+// origin/main figure, i.e. the count for the file BEFORE this change) and
+// narrates its own reason literals in them;
 // the two `underivable-unparsable-record` returns exceed 100 characters and
 // this repo has NO formatter config, so whether they are one line or three is
 // an implementer's choice; and hoisting the refusals behind an ordinary
@@ -312,10 +314,30 @@ export function censusDiffReasons(src: string): {
   const declared: string[] = [];
   const emitted: string[] = [];
 
-  const literalsOf = (node: ts.TypeNode | undefined): string[] => {
+  // Collect string-literal members, following a TYPE REFERENCE to an alias
+  // declared in the same file. Without that hop, extracting the union to
+  // `type DiffPathReason = …` — an ordinary refactor a reviewer would ask for —
+  // made this census throw "no declared" and report a FALSE RED, whose obvious
+  // repair is to loosen the census.
+  const aliases = new Map<string, ts.TypeNode>();
+  const collectAliases = (n: ts.Node): void => {
+    if (ts.isTypeAliasDeclaration(n) && n.type) aliases.set(n.name.text, n.type);
+    n.forEachChild(collectAliases);
+  };
+  collectAliases(sf);
+
+  const literalsOf = (node: ts.TypeNode | undefined, seen = new Set<string>()): string[] => {
     const out: string[] = [];
     const walk = (n: ts.Node): void => {
       if (ts.isLiteralTypeNode(n) && ts.isStringLiteral(n.literal)) out.push(n.literal.text);
+      if (ts.isTypeReferenceNode(n) && ts.isIdentifier(n.typeName)) {
+        const name = n.typeName.text;
+        const target = aliases.get(name);
+        if (target !== undefined && !seen.has(name)) {
+          seen.add(name);
+          out.push(...literalsOf(target, seen));
+        }
+      }
       n.forEachChild(walk);
     };
     if (node) walk(node);
@@ -350,10 +372,25 @@ export function censusDiffReasons(src: string): {
               if (
                 ts.isPropertyAssignment(pr) &&
                 ts.isIdentifier(pr.name) &&
-                pr.name.text === "reason" &&
-                ts.isStringLiteral(pr.initializer)
+                pr.name.text === "reason"
               ) {
-                emitted.push(pr.initializer.text);
+                // BOTH literal forms. `ts.isStringLiteral` is false for a
+                // NoSubstitutionTemplateLiteral, so `` reason: `structural-op` ``
+                // — a semantically identical spelling — made its site invisible
+                // to this walk while the property stayed intact.
+                if (
+                  ts.isStringLiteral(pr.initializer) ||
+                  ts.isNoSubstitutionTemplateLiteral(pr.initializer)
+                ) {
+                  emitted.push(pr.initializer.text);
+                } else {
+                  // A non-literal initializer (a const, a call, a conditional)
+                  // means a site this census cannot read. Refuse rather than
+                  // silently shrink the emitted multiset.
+                  throw new Error(
+                    `census: non-literal reason initializer at position ${pr.getStart()}`,
+                  );
+                }
               }
             }
           }
@@ -387,12 +424,71 @@ describe("Guard 1 (#8427) — checkDiffPaths reason attribution", () => {
     expect(emitted.length).toBeGreaterThan(declared.length);
   });
 
-  it("the two `underivable-unparsable-record` sites are both still present", () => {
-    // Site-keyed, not set-keyed: changing ONE of the two leaves the SET
-    // identical. This count is what makes that mutant observable here, and the
-    // two behavioural rows in the allowlist suite catch it a second time.
+  // The SITE-KEYED MULTISET, pinned per literal rather than for one of them.
+  //
+  // The previous form asserted a count for `underivable-unparsable-record`
+  // alone, which left `structural-op`'s THREE sites unpinned: retargeting one
+  // of them to another declared literal kept the SET identical and this census
+  // green while the property was false (measured). A count map is a ratchet —
+  // it must be edited when a site is added or removed, and that is the point.
+  const EXPECTED_SITE_COUNTS: Readonly<Record<string, number>> = {
+    "structural-op": 3,
+    empty: 1,
+    "underivable-read-tree": 1,
+    "underivable-apply": 1,
+    "underivable-diff-index": 1,
+    "underivable-empty-pathset": 1,
+    "underivable-unparsable-record": 2,
+    "path-refused": 1,
+  };
+
+  it("every reason literal is emitted by exactly the sites it should be", () => {
     const { emitted } = censusDiffReasons(readFileSync(SRC_PATH, "utf-8"));
-    expect(emitted.filter((r) => r === "underivable-unparsable-record")).toHaveLength(2);
+    const actual: Record<string, number> = {};
+    for (const r of emitted) actual[r] = (actual[r] ?? 0) + 1;
+    expect(actual).toEqual(EXPECTED_SITE_COUNTS);
+  });
+
+  it("mutation: retargeting ONE of the three structural-op sites is RED", () => {
+    // The mutant a set comparison cannot see. Only the FIRST occurrence is
+    // replaced, so two structural-op sites remain and the set is unchanged.
+    const src = readFileSync(SRC_PATH, "utf-8").replace(
+      'reason: "structural-op", detail: "binary patch"',
+      'reason: "path-refused", detail: "binary patch"',
+    );
+    const { emitted } = censusDiffReasons(src);
+    const actual: Record<string, number> = {};
+    for (const r of emitted) actual[r] = (actual[r] ?? 0) + 1;
+    expect(sortedUnique(emitted)).toEqual(sortedUnique(Object.keys(EXPECTED_SITE_COUNTS)));
+    expect(actual).not.toEqual(EXPECTED_SITE_COUNTS);
+  });
+
+  it("mutation: a template-literal reason is seen, not silently skipped", () => {
+    const src = readFileSync(SRC_PATH, "utf-8").replace(
+      'reason: "underivable-read-tree"',
+      "reason: `underivable-read-tree`",
+    );
+    const { emitted } = censusDiffReasons(src);
+    expect(emitted.filter((r) => r === "underivable-read-tree")).toHaveLength(1);
+  });
+
+  it("refactor-tolerance: extracting the union to a named alias stays GREEN", () => {
+    // Previously a FALSE RED. The census follows a type reference to an alias
+    // declared in the same file, so this ordinary refactor does not look like a
+    // regression.
+    const src = [
+      'export type DiffPathReason = "a" | "b";',
+      "export type DiffPathVerdict =",
+      "  | { ok: true; paths: string[] }",
+      "  | { ok: false; reason: DiffPathReason; detail: string };",
+      "export async function checkDiffPaths(): Promise<DiffPathVerdict> {",
+      '  if (x) return { ok: false, reason: "a", detail: "d" };',
+      '  return { ok: false, reason: "b", detail: "d" };',
+      "}",
+    ].join("\n");
+    const { declared, emitted } = censusDiffReasons(src);
+    expect(sortedUnique(declared)).toEqual(["a", "b"]);
+    expect(sortedUnique(emitted)).toEqual(["a", "b"]);
   });
 
   it("mutation row 2: a declared-but-unemitted member is RED", () => {

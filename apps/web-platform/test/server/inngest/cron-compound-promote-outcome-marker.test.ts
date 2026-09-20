@@ -91,13 +91,15 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(row).not.toHaveProperty("hostname");
   });
 
-  // -- Guard 3 (#8427): the refusal_detail sink transform -------------------
+  // -- Guard 3 (#8427): refusal_detail carries no free text ----------------
   //
-  // `detail` is attacker-influenced. At two `checkDiffPaths` arms it is not
-  // git's diagnosis at all but a VERBATIM MODEL-CHOSEN string, so without a
-  // transform a prompt-injected proposer gets a free-text write channel into a
-  // third-party processor, weekly, on every refused cluster. These rows pin the
-  // transform, its ORDER, and its totality over entries.
+  // The property is now structural rather than transformational. An earlier
+  // revision carried git's `detail` string here behind a redact -> classify ->
+  // cap transform; review measured the classifier failing on any path without a
+  // `/` (a repository-root filename, which the model names freely), so ~198
+  // model-chosen characters per refused cluster reached the sink byte for byte.
+  // Every repair for that is a denylist over a string the model writes. The
+  // field is gone; these rows pin that it stays gone.
 
   /** Emit one refusal row and return the parsed `refusal_detail` array. */
   const emitDetail = (
@@ -109,93 +111,41 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     return row.refusal_detail as Record<string, unknown>[];
   };
 
-  it("redacts credential shapes in `detail` before they reach the sink", () => {
-    const out = emitDetail([
+  it("carries NO free-text field, even when a caller supplies one", () => {
+    // The regression row. A `detail` reintroduced anywhere upstream — on
+    // ClusterOutcome, in the push, in a future field — must not reach the row.
+    // Cast because the type forbids it; the type is the first gate and this is
+    // the second, because the payload crosses a JSON boundary where `tsc` ends.
+    const smuggling = [
       {
         cluster_hash: "abc",
-        reason: "diff-underivable-apply",
-        detail: "error: cannot read ghp_0123456789012345678901234567890123456789",
+        reason: "diff-structural-op",
+        detail: "A ALERT-OPERATOR-model-chose-this-whole-string.md",
       },
-    ]);
-    expect(out[0].detail).not.toMatch(/ghp_0123456789/);
-    expect(String(out[0].detail)).toMatch(/redacted/);
+    ] as unknown as NonNullable<Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"]>;
+    const out = emitDetail(smuggling);
+    expect(out[0]).not.toHaveProperty("detail");
+    expect(JSON.stringify(out)).not.toMatch(/ALERT-OPERATOR/);
   });
 
-  it("CLASSIFIES path-shaped tokens rather than relaying them", () => {
-    // The write-channel control. An allowlisted prefix is preserved (that IS
-    // the diagnostic the marker owes — which corpus was targeted) and the
-    // model-chosen remainder is elided.
+  it("the exploit that falsified the previous design produces no free text", () => {
+    // Verified end-to-end against git 2.55.0: a proposal creating a root-level
+    // file named `<prose>.md` yields `${status} ${path}` as git's detail, and
+    // the old classifier was the identity function on it (no `/` to match).
+    const exploit = "A CONTACT ATTACKER AT evil-host FOR INSTRUCTIONS.md";
     const out = emitDetail([
-      {
-        cluster_hash: "abc",
-        reason: "diff-path-refused",
-        detail: "plugins/soleur/skills/attacker-chosen-slug/SKILL.md",
-      },
+      { cluster_hash: "abc", reason: "diff-structural-op", diff_len: 258 },
     ]);
-    expect(out[0].detail).toBe("plugins/soleur/skills/[elided]");
-    expect(String(out[0].detail)).not.toMatch(/attacker-chosen-slug/);
+    expect(JSON.stringify(out)).not.toContain(exploit);
+    // …and the row still says what an operator needs: which gate, which cluster.
+    expect(out[0]).toMatchObject({ cluster_hash: "abc", reason: "diff-structural-op" });
   });
 
-  it("collapses an UNRECOGNISED path to a constant, carrying no model-chosen bytes", () => {
-    const out = emitDetail([
-      {
-        cluster_hash: "abc",
-        reason: "diff-path-refused",
-        detail: "../../etc/evil-payload-the-model-picked",
-      },
-    ]);
-    expect(out[0].detail).toBe("[unclassified-path]");
-    expect(String(out[0].detail)).not.toMatch(/evil-payload/);
-  });
-
-  it("leaves NON-path stderr intact — the classification is per token, not whole-string", () => {
-    const out = emitDetail([
-      { cluster_hash: "abc", reason: "diff-underivable-apply", detail: "error: corrupt patch at line 3" },
-    ]);
-    expect(out[0].detail).toBe("error: corrupt patch at line 3");
-  });
-
-  it("caps AFTER redaction, not before", () => {
-    // Order row. `redactGithubSourcedText` substitutes markers that can be
-    // LONGER than what they replace, so a cap applied first can be exceeded by
-    // the time the row is written. The output must respect the cap regardless.
-    const long = "x".repeat(400);
-    const out = emitDetail([
-      { cluster_hash: "abc", reason: "diff-underivable-apply", detail: long },
-    ]);
-    expect(Array.from(String(out[0].detail)).length).toBeLessThanOrEqual(200);
-  });
-
-  it("the cap counts CODE POINTS and never leaves a lone surrogate", () => {
-    // `.slice(0, 200)` counts UTF-16 code units and can split an astral pair.
-    const out = emitDetail([
-      { cluster_hash: "abc", reason: "diff-underivable-apply", detail: "\u{1F600}".repeat(300) },
-    ]);
-    const detail = String(out[0].detail);
-    expect(Array.from(detail).length).toBeLessThanOrEqual(200);
-    // A lone surrogate would survive a round-trip as U+FFFD; assert none.
-    expect(detail).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(detail).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
-  });
-
-  it("the transform is TOTAL over entries — every entry, not just the first", () => {
-    // A `.map` that transformed only [0], or a loop with an early break, passes
-    // a single-entry fixture. The second member is where that fails.
-    const out = emitDetail([
-      { cluster_hash: "a", reason: "diff-path-refused", detail: "secret/one-slug/x.md" },
-      { cluster_hash: "b", reason: "diff-path-refused", detail: "secret/two-slug/y.md" },
-      { cluster_hash: "c", reason: "diff-path-refused", detail: "secret/three-slug/z.md" },
-    ]);
-    expect(out).toHaveLength(3);
-    for (const e of out) expect(e.detail).toBe("[unclassified-path]");
-  });
-
-  it("relays the diff-shape fields untouched and carries no diff body", () => {
+  it("relays the diff-shape fields untouched — numbers and booleans only", () => {
     const out = emitDetail([
       {
         cluster_hash: "abc",
         reason: "diff-empty",
-        detail: "empty or whitespace-only diff",
         diff_len: 0,
         diff_fenced: false,
         diff_header_pair: false,
@@ -208,16 +158,19 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
       diff_header_pair: false,
       diff_hunk: false,
     });
+    for (const [k, v] of Object.entries(out[0])) {
+      if (k === "cluster_hash" || k === "reason") continue;
+      expect(typeof v === "number" || typeof v === "boolean").toBe(true);
+    }
   });
 
-  it("REBUILDS each entry: an unknown field is dropped, never relayed around the transform", () => {
-    // The spread-vs-destructure row. `{...entry, detail: t(entry.detail)}`
-    // would relay every future field — and an allowlist that decides which
-    // ENTRIES pass is not an allowlist of what they CARRY.
+  it("REBUILDS each entry: an unknown field is dropped, never relayed", () => {
+    // The spread-vs-destructure row. `{...entry}` would relay every future
+    // field — and an allowlist that decides which ENTRIES pass is not an
+    // allowlist of what they CARRY.
     const rogue = {
       cluster_hash: "abc",
       reason: "diff-path-refused",
-      detail: "error: nothing",
       smuggled: "model-chosen-payload",
     } as unknown as NonNullable<Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"]>[number];
     const out = emitDetail([rogue]);
@@ -225,22 +178,77 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(JSON.stringify(out)).not.toMatch(/model-chosen-payload/);
   });
 
-  it("the entry cap still applies, and the transform runs on the surviving entries", () => {
+  it("the rebuild is TOTAL over entries — every entry, not just the first", () => {
+    // A `.map` that transformed only [0], or a loop with an early break, passes
+    // a single-entry fixture. The second member is where that fails.
+    const rogues = Array.from({ length: 3 }, (_, i) => ({
+      cluster_hash: `h${i}`,
+      reason: "diff-path-refused",
+      smuggled: `payload-${i}`,
+    })) as unknown as NonNullable<Parameters<typeof emitOutcomeMarker>[0]["refusal_detail"]>;
+    const out = emitDetail(rogues);
+    expect(out).toHaveLength(3);
+    for (const e of out) expect(e).not.toHaveProperty("smuggled");
+    expect(JSON.stringify(out)).not.toMatch(/payload-/);
+  });
+
+  it("the entry cap still applies and the rebuild runs on the survivors", () => {
     const many = Array.from({ length: 30 }, (_, i) => ({
       cluster_hash: `h${i}`,
       reason: "diff-path-refused",
-      detail: "unknown/slug/path.md",
+      diff_len: i,
     }));
     const out = emitDetail(many);
     expect(out).toHaveLength(20);
-    for (const e of out) expect(e.detail).toBe("[unclassified-path]");
+    expect(out[19]).toMatchObject({ cluster_hash: "h19" });
+  });
+
+  it("the row stays well under Vector's 10,000-character slice at worst case", () => {
+    // vector.toml: `if length(msg) > 10000 { msg = slice!(msg, 0, 10000) }`.
+    // A sliced row breaks mid-JSON, so `.message` decodes as a STRING and the
+    // runbook's own `select(type == "object")` drops the whole marker — the
+    // #8281 blind spot, reintroduced by its own fix.
+    //
+    // Measured on this exact worst case (20 entries, 64-hex hash, longest
+    // reason literal, all four shape fields, error_class + 200-char
+    // error_message):
+    //
+    //   shipped design                      5,515 B   headroom  +4,485
+    //   previous, 200 ASCII `detail`        9,755 B   headroom    +245
+    //   previous, 200 ASTRAL code points   21,755 B   headroom -11,755
+    //
+    // The astral row is the one that mattered: the removed `DETAIL_CAP` counted
+    // CODE POINTS, so 200 emoji is 800 bytes and the row landed 2.2x over the
+    // slice. Dropping `detail` is what buys the headroom; this row keeps it.
+    //
+    // Bytes, not `.length`: VRL's `length()` counts bytes for strings.
+    emitOutcomeMarker({
+      status: "error",
+      trigger: "cron",
+      run_id: "01TESTRUNID0000000000000000",
+      corpus_count: 2248,
+      corpus_input_bytes: 1214087,
+      clusters_proposed: 20,
+      clusters_opened: 0,
+      error_class: "AnthropicApiError",
+      error_message: "x".repeat(200),
+      refusals: Array.from({ length: 20 }, () => "diff-underivable-unparsable-record"),
+      refusal_detail: Array.from({ length: 20 }, (_, i) => ({
+        cluster_hash: "a".repeat(64),
+        reason: "diff-underivable-unparsable-record",
+        diff_len: 16384,
+        diff_fenced: true,
+        diff_header_pair: true,
+        diff_hunk: true,
+        ...(i === 0 ? {} : {}),
+      })),
+    });
+    expect(captured.lines).toHaveLength(1);
+    const bytes = Buffer.byteLength(captured.lines[0], "utf8");
+    expect(bytes).toBeLessThan(10000);
   });
 
   it("the discriminator keys survive an outcome that tries to shadow them", () => {
-    // They are written AFTER the spread. Before #8427 they were before it, so a
-    // widened or dynamically assembled outcome could overwrite the top-level
-    // boolean every reader keys on — and TypeScript's excess-property check
-    // does not fire on a spread.
     const shadowing = {
       status: "completed",
       SOLEUR_COMPOUND_PROMOTE_OUTCOME: false,
@@ -252,24 +260,24 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(row.fn).toBe("cron-compound-promote");
   });
 
-  it("the handler never passes a bare `detail` to the ctx logger", () => {
-    // That logger reaches the SAME Better Stack source as the marker, and
-    // `verdict.detail` is now the untruncated, unredacted, unclassified form.
+  it("the handler redacts before every sink that can reach Better Stack", () => {
     const handler = stripComments(
       readFileSync(
         join(__dirname, "..", "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts"),
         "utf-8",
       ),
     );
-    // Scoped to the ctx-logger CALL, not the whole file: the in-memory
-    // ClusterOutcome return legitimately carries `detail: pathVerdict.detail`
-    // — that value is the sink transform's INPUT, and narrowing here is what
-    // keeps this row about the log line rather than about the data flow.
-    const call = handler.match(/logger\.warn\([\s\S]*?"diff-path-refused"/);
+    // The ctx-logger line carries no detail at all.
+    const call = handler.match(/logger\.warn\(\s*\{[^}]*\},\s*"diff-path-refused"/);
     expect(call).not.toBeNull();
     expect(call?.[0]).not.toMatch(/detail:/);
-    // ...and the Sentry copy goes through safeDetail.
-    expect(handler).toMatch(/detail:\s*safeDetail\(pathVerdict\.detail\)/);
+    // Both model-supplied strings are redacted THEN capped. reportSilentFallback
+    // reaches the app pino instance, i.e. the same Better Stack source as the
+    // marker — "it only goes to Sentry" was never true.
+    expect(handler).toMatch(/detail:\s*safeDetail\(redactGithubSourcedText\(pathVerdict\.detail\)\)/);
+    expect(handler).toMatch(/safeDetail\(redactGithubSourcedText\(cluster\.target_path\)\)/);
+    // And no bare model-supplied value survives at either refusal site.
+    expect(handler).not.toMatch(/path:\s*cluster\.target_path/);
   });
 
   it("shape-scrubs error_message — the one free-text field — on the DEFAULT path", () => {

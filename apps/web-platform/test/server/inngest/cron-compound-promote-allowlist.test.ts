@@ -480,6 +480,41 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
     expect(diffShape("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+```\n").diff_fenced).toBe(false);
   });
 
+  it("diffShape: a PROSE PREAMBLE before the fence still counts as fenced", () => {
+    // The row the field exists for, and the one the anchored predicate missed.
+    // `^\s*` skips whitespace, not a sentence — so "Here is the patch:" made
+    // the dominant LLM failure shape report `diff_fenced: false`, which is the
+    // opposite of what the runbook tells an operator to key on.
+    const proseThenFence = "Here is the patch:\n```diff\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n```\n";
+    expect(diffShape(proseThenFence).diff_fenced).toBe(true);
+  });
+
+  it("diffShape: a fence ADDED by the patch is not a wrapper", () => {
+    // Direction control. The predicate must not become so aggressive that an
+    // ordinary patch touching a Markdown file reads as fenced. An added line
+    // renders "+```" and a removed one "-```"; neither is line-initial.
+    const addsAFence = "--- a/x\n+++ b/x\n@@ -1 +2 @@\n-a\n+```js\n+code\n";
+    expect(diffShape(addsAFence).diff_fenced).toBe(false);
+  });
+
+  it("diffShape: a combined/merge hunk is not reported as hunk-less", () => {
+    // `/^@@ /` required the third character to be a space, so `@@@` — a real
+    // hunk — answered false.
+    expect(diffShape("@@@ -1,2 -1,2 +1,2 @@@\n  a\n").diff_hunk).toBe(true);
+    expect(diffShape("@@ -1,2 +1,2 @@\n a\n").diff_hunk).toBe(true);
+  });
+
+  it("diffShape: header_pair is not tripped by diff CONTENT", () => {
+    // Two independent existence tests fired on content: a removed line whose
+    // text begins "-- " renders "--- ", and an added one beginning "++ "
+    // renders "+++ ". Both are plausible in a Markdown corpus, and together
+    // they forged a header pair inside a hunk body. "Pair" means adjacent.
+    const contentLooksLikeHeaders = "@@ -1,2 +1,2 @@\n--- removed prose line\n+++ added prose line\n";
+    expect(diffShape(contentLooksLikeHeaders).diff_header_pair).toBe(false);
+    // …and a real adjacent pair still reads true.
+    expect(diffShape("--- a/x\n+++ b/x\n").diff_header_pair).toBe(true);
+  });
+
   it("diffShape: never returns the diff body in any field", () => {
     // The whole point of shape-over-content: PII_REGEX exists to keep proposal
     // text out of logs, so the shape record must be numbers and booleans only.

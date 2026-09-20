@@ -269,7 +269,7 @@ type ClusterOutcome =
       kind: "refused";
       reason: string;
       /**
-       * #8427. Optional because only the `checkDiffPaths` branch has one; every
+       * #8427. Optional because only the `checkDiffPaths` branch has them; every
        * other refusal site carries its cause entirely in `reason`.
        *
        * These travel ON THE OUTCOME, computed INSIDE the memoized step callback,
@@ -277,8 +277,14 @@ type ClusterOutcome =
        * pushed into a handler-scope array from inside the callback and emitted
        * `refusals: []` on every real run — Guard 3 of the outcome-census suite
        * exists for that regression.
+       *
+       * NO `detail` HERE. An earlier revision carried git's diagnostic string on
+       * this outcome, which made it a `step.run` RETURN VALUE — Inngest
+       * serializes and persists those, so a 20-cluster run would have held up to
+       * ~1.28 MB of model-authored step state where it previously held
+       * `{kind, reason}`. The string is used at the refusal site for the Sentry
+       * copy and does not survive the step boundary.
        */
-      detail?: string;
       diff_len?: number;
       diff_fenced?: boolean;
       diff_header_pair?: boolean;
@@ -291,19 +297,28 @@ type ClusterOutcome =
 
 /**
  * CO-MOVING ARTIFACTS (#8427). Adding or removing a member of `reason` below is
- * never a local edit. Seven artifacts must move together, and the AST census in
- * `cron-compound-promote-outcome-census.test.ts` fails the build if the first
- * two disagree:
+ * never a local edit. Five artifacts must move together, and only the first two
+ * are MACHINE-ENFORCED — the AST census in
+ * `cron-compound-promote-outcome-census.test.ts` fails the build when they
+ * disagree, and it pins the per-site COUNT, not just the set:
  *
- *   1. this union;
- *   2. the `reason:` literal on every `ok: false` return inside `checkDiffPaths`;
- *   3. that site's behavioural row in `cron-compound-promote-allowlist.test.ts`;
- *   4. the AST census's declared-vs-emitted multiset comparison;
- *   5. the refusal-enum paragraph in
+ *   1. this union;                                              [enforced]
+ *   2. the `reason:` literal on every `ok: false` return inside
+ *      `checkDiffPaths`;                                        [enforced]
+ *   3. that site's behavioural row in
+ *      `cron-compound-promote-allowlist.test.ts`;               [by convention]
+ *   4. the refusal-enum table in
  *      `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`;
- *   6. the `failure_modes` table in this change's plan;
- *   7. Processing Activity 8's `(c) Categories of personal data` cell in
- *      `knowledge-base/legal/article-30-register.md`.
+ *                                                               [by convention]
+ *   5. this change's plan, under its Guard 1 section.           [by convention]
+ *
+ * Items 3–5 are held by THIS COMMENT and nothing else. That is stated rather
+ * than implied because an earlier revision listed SEVEN artifacts and read as
+ * though all seven were gated; two of them were not even coupled to this enum —
+ * the plan's `failure_modes` block names two members of eight, and Processing
+ * Activity 8's categories cell in the Art. 30 register is coupled to the
+ * `refusal_detail[]` FIELD SET, not to these values. A list that overstates its
+ * own enforcement is worse than a shorter honest one.
  *
  * Before #8427 SIX structurally different conditions all returned the single
  * literal `underivable`, so a refusal told an operator that path derivation had
@@ -338,10 +353,19 @@ export type DiffPathVerdict =
  * `git apply` answers four structurally different inputs with the byte-identical
  * message `No valid patches in input (allow with "--allow-empty")`: an empty
  * string, a whitespace-only string, a markdown-fenced block, and a `---`/`+++`
- * header pair with no `@@` hunk. Measured against git 2.55.0. The refusal reason
- * alone therefore cannot name which one a run hit, and `PII_REGEX` exists to keep
- * the diff body out of logs — so the marker carries this record instead: numbers
- * and booleans only, decidable, and free of proposal text by construction.
+ * header pair with no `@@` hunk. Measured against git 2.55.0.
+ *
+ * TWO of those four are why the `empty` arm exists, not why this does. Since
+ * that arm decides emptiness at the function entry, an empty or whitespace-only
+ * proposal never reaches `git apply` and can never carry
+ * `underivable-apply` — so an operator hunting that reason with `diff_len: 0`
+ * is hunting a row that cannot exist. The ambiguity THIS record resolves is the
+ * remaining one: a fenced block versus a hunk-less header pair versus any other
+ * malformed patch, all of which do reach the apply arm and are indistinguishable
+ * from its message alone.
+ *
+ * `PII_REGEX` exists to keep the diff body out of logs, so the record is numbers
+ * and booleans only — decidable, and free of proposal text by construction.
  */
 export interface DiffShape {
   diff_len: number;
@@ -354,14 +378,36 @@ export interface DiffShape {
 export function diffShape(diff: string): DiffShape {
   return {
     diff_len: diff.length,
-    // Anchored at the first non-whitespace run, not at index 0: a model that
-    // emits a leading blank line before its fence is still emitting a fence.
-    // A fence LATER in the text is ordinary diff content (a patch may add a
-    // line that happens to be three backticks) and must not set this.
-    diff_fenced: /^\s*(?:```|~~~)/.test(diff),
-    diff_header_pair: /^--- /m.test(diff) && /^\+\+\+ /m.test(diff),
-    diff_hunk: /^@@ /m.test(diff),
+    // MULTILINE, not anchored at index 0. The anchored form missed the
+    // dominant failure shape: a model that writes "Here is the patch:" before
+    // its fence returned `false`, and catching that is the field's entire
+    // reason to exist. A fence INSIDE a hunk is diff content, not a wrapper,
+    // and stays excluded because an added line renders as "+```" and a removed
+    // one as "-```" — neither matches a line-initial fence. Residual, accepted
+    // and stated rather than hidden: a CONTEXT line (space-prefixed) that is
+    // itself a fence does match.
+    diff_fenced: /^[ \t]*(?:```|~~~)/m.test(diff),
+    // ADJACENT **and before the first hunk**. Two independent existence tests
+    // fired on diff CONTENT — a removed line beginning "-- " renders as "--- "
+    // and an added one beginning "++ " as "+++ ", both plausible in a Markdown
+    // corpus — and adjacency alone does not separate them, because those two
+    // content lines sit next to each other just as real headers do. Position
+    // does: a header pair precedes the first hunk, content follows it.
+    diff_header_pair: headerPairBeforeFirstHunk(diff),
+    // `@@+` so a combined/merge hunk ("@@@ -1,2 -1,2 +1,2 @@@") is not reported
+    // as hunk-less.
+    diff_hunk: HUNK_RE.test(diff),
   };
+}
+
+/** First hunk header, or -1. `@@+` covers combined/merge hunks. */
+const HUNK_RE = /^@@+ /m;
+
+function headerPairBeforeFirstHunk(diff: string): boolean {
+  const pair = /^--- [^\n]*\n\+\+\+ /m.exec(diff);
+  if (pair === null) return false;
+  const hunk = HUNK_RE.exec(diff);
+  return hunk === null || pair.index < hunk.index;
 }
 
 /**
@@ -666,15 +712,23 @@ function spawnGitCapture(
       // Bounded: git's diagnostic is the diagnosis a refusal carries, but it
       // is rendered from MODEL-SUPPLIED paths, so it is untrusted and capped.
       //
-      // #8427: was `if (stderr.length < 4096) stderr += chunk`, which cut at
-      // ~4096 NON-DETERMINISTICALLY — it tested the length BEFORE appending, so
-      // the final string overshot by up to one chunk and no straddle could be
-      // pinned by a test. The bound is now exact, and raised to 64_000 so that
-      // `redactGithubSourcedText`'s own MAX_INPUT_LEN is the ONLY cut before
-      // redaction; it appends an explicit `[…]` marker and is designed to be
-      // that truncation point. A credential straddling a cut placed upstream of
-      // redaction is halved into a fragment no pattern matches.
-      stderr = (stderr + chunk).slice(0, 64_000);
+      // #8427 made this cut EXACT. It was `if (stderr.length < 4096) stderr +=
+      // chunk`, which tested the length BEFORE appending, so the final string
+      // overshot by up to one chunk and no straddle could be pinned by a test.
+      //
+      // The bound stays at 4096. An earlier revision raised it to 64_000 on the
+      // theory that `redactGithubSourcedText`'s MAX_INPUT_LEN should own the
+      // only cut ahead of redaction. Review falsified both halves: that constant
+      // IS 64_000 and its guard is `s.length > MAX_INPUT_LEN`, so a string cut
+      // to exactly 64_000 never takes the truncation branch and the `[…]` marker
+      // it appends is unreachable — the raise made this slice the silent cut it
+      // claimed to remove. And it bought nothing: every consumer of this stderr
+      // is head-anchored at 200 characters (`safeDetail`), so a credential past
+      // that offset cannot reach a sink whatever the bound. It also made
+      // `EMAIL_RE` backtrack quadratically — measured 8.1 s on a 64,000-char
+      // dotted path, versus 22 ms at this bound.
+      if (stderr.length >= 4096) return;
+      stderr = (stderr + chunk).slice(0, 4096);
     });
     child.on("exit", (exitCode) => resolve({ exitCode, stdout, stderr }));
     child.on("error", (err) => resolve({ exitCode: -1, stdout: "", stderr: String(err) }));
@@ -692,20 +746,22 @@ function spawnGitCapture(
  * MODEL-SUPPLIED path, so it is attacker-influenced text on its way to a
  * third-party log store.
  *
- * DOES NOT TRUNCATE (#8427). The cut must happen AFTER redaction, not before:
- * `redactGithubSourcedText` carries several unbounded runs (`JWT_RE`'s three
- * `{10,}` segments, `AUTHORIZATION_HEADER_RE`'s `\S+`, `ENV_CRED_ASSIGN_RE`'s
- * `[^\s'"]+`, `github_pat_…{59,}`), so a token straddling an upstream cut is
- * halved into a fragment no pattern matches. The sink (`emitOutcomeMarker`)
- * owns the cap; {@link safeDetail} keeps the old strip-then-cap behaviour for
- * the Sentry copy, which is not that sink.
+ * DOES NOT TRUNCATE. Truncation is {@link safeDetail}'s job, and every consumer
+ * of a `detail` string goes through that — there is no longer a sink-side cap,
+ * because the marker no longer carries the string at all (see
+ * `RefusalDetailEntry`).
  *
  * The strip class includes C1 (U+0080–U+009F). U+0085 (NEL) is a line
- * terminator for Python's `str.splitlines()`, for Java, and for Unicode-aware
- * `(?m)` engines — exactly the derived-pipeline and log-viewer readers
- * U+2028/U+2029 were added for — and `JSON.stringify` escapes only C0, so it
- * reaches the NDJSON row raw. No legitimate git stderr carries C1.
- * Escape sequences only, per `cq-regex-unicode-separators-escape-only`.
+ * terminator for Python's `str.splitlines()` (verified) and for Unicode-aware
+ * `(?m)` regex engines — exactly the derived-pipeline and log-viewer readers
+ * U+2028/U+2029 were added for — and `JSON.stringify` escapes only C0
+ * (verified), so it reaches an NDJSON row raw. No legitimate git stderr carries
+ * C1. Escape sequences only, per `cq-regex-unicode-separators-escape-only`.
+ *
+ * Java was named here too and has been dropped: `String.lines()` and
+ * `BufferedReader.readLine()` do NOT treat U+0085 as a terminator — only
+ * `java.util.regex` with `UNIX_LINES` off does. Unverified on this host, and
+ * the claim was stated more broadly than it holds.
  */
 function stripControl(s: string): string {
   // eslint-disable-next-line no-control-regex
@@ -713,10 +769,11 @@ function stripControl(s: string): string {
 }
 
 /**
- * {@link stripControl} plus the historical 200-character cap. Retained for the
- * Sentry copy and for `error_message`, both of which are capped at the PRODUCER;
- * `refusal_detail[].detail` is capped at the SINK instead. That asymmetry is
- * deliberate and is documented on `CompoundPromoteOutcome.refusal_detail`.
+ * {@link stripControl} plus the 200-character cap. Every `detail`-shaped string
+ * that leaves this module goes through here, at the PRODUCER. An earlier
+ * revision of #8427 introduced a second, sink-side cap for the marker copy and
+ * documented the asymmetry at length; the marker no longer carries the string,
+ * so there is one cap again and it is this one.
  */
 function safeDetail(s: string): string {
   return stripControl(s).slice(0, 200);
@@ -1117,10 +1174,20 @@ export async function cronCompoundPromoteHandler({
         const octokit = new Octokit({ auth: installationToken });
 
         if (!TARGET_ALLOW_RE.test(cluster.target_path)) {
-          logger.warn({ fn: "cron-compound-promote", path: cluster.target_path }, "target-path-refused");
+          // `cluster.target_path` is model-supplied and this branch fires
+          // PRECISELY when the allowlist has just rejected it, so it is
+          // arbitrary by construction — the tool schema declares it `{type:
+          // "string"}` with no pattern and no maxLength. Both sinks below reach
+          // Better Stack (the ctx logger via journald/Vector, reportSilentFallback
+          // via the app's pino instance), and `util.inspect` passes U+2028
+          // through RAW, so the un-stripped form defeats the separator handling
+          // `stripControl` exists for. Same write-boundary class as the
+          // diff-path refusal below; swept here rather than left for later.
+          const refusedTarget = safeDetail(redactGithubSourcedText(cluster.target_path));
+          logger.warn({ fn: "cron-compound-promote", path: refusedTarget }, "target-path-refused");
           reportSilentFallback(new Error("target_path not in allowlist"), {
             feature: "cron-compound-promote", op: "target-path-refused",
-            extra: { path: cluster.target_path },
+            extra: { path: refusedTarget },
           });
           return { kind: "refused", reason: "target-path-refused" };
         }
@@ -1158,11 +1225,16 @@ export async function cronCompoundPromoteHandler({
             extra: {
               cluster_hash: clusterHash,
               reason,
-              detail: safeDetail(pathVerdict.detail),
+              // redact THEN cap. reportSilentFallback's logger is the app's main
+              // pino instance, which reaches the SAME Better Stack source as the
+              // marker — so "it only goes to Sentry" was never true, and
+              // `safeDetail` alone does not scrub credential shapes.
+              detail: safeDetail(redactGithubSourcedText(pathVerdict.detail)),
               ...shape,
             },
           });
-          return { kind: "refused", reason: reason, detail: pathVerdict.detail, ...shape };
+          // `detail` deliberately NOT returned: see the ClusterOutcome comment.
+          return { kind: "refused", reason: reason, ...shape };
         }
 
         if (cluster.target_path === "AGENTS.rules.md" && diffRemovesHardRule(cluster.proposed_diff_unified)) {
@@ -1421,7 +1493,6 @@ export async function cronCompoundPromoteHandler({
         refusalDetail.push({
           cluster_hash: clusterHash,
           reason: outcome.reason,
-          ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
           ...(outcome.diff_len === undefined ? {} : { diff_len: outcome.diff_len }),
           ...(outcome.diff_fenced === undefined ? {} : { diff_fenced: outcome.diff_fenced }),
           ...(outcome.diff_header_pair === undefined

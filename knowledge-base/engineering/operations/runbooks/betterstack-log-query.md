@@ -357,7 +357,6 @@ doppler run -p soleur -c prd_terraform -- \
                  (.clusters_opened//"-"), ((.refusals//[])|join(",")),
                  ((.refusal_detail//[])
                     | map("\(.cluster_hash[0:8]):\(.reason)"
-                          + ":detail=\(.detail//"-")"
                           + ":len=\(.diff_len//"-")"
                           + ":fenced=\(if .diff_fenced == null then "-" else .diff_fenced end)"
                           + ":hdr=\(if .diff_header_pair == null then "-" else .diff_header_pair end)"
@@ -394,9 +393,11 @@ Reading it:
   | `diff-empty` | the proposal was empty or whitespace-only |
 
   **`diff-empty` deliberately does NOT carry the `diff-underivable` prefix.**
-  The five `underivable-*` values do, so a saved query on `diff-underivable`
-  keeps matching those — but it stops matching the empty-proposal rows, which
-  is intended. An empty proposal was never a derivation failure; this is a
+  The five `underivable-*` values do, so a SUBSTRING or full-text query on
+  `diff-underivable` keeps matching those — but it stops matching the
+  empty-proposal rows, which is intended. An EXACT-match alert condition on
+  `refusals[]` breaks on all six values, not just `diff-empty`; nothing in this
+  repo has one, and a saved query outside it cannot be verified from here. An empty proposal was never a derivation failure; this is a
   reclassification, not a compatibility break to route around.
 - **Do not write `.diff_fenced // "-"` in a jq projection.** jq's `//` yields
   its right-hand side when the left is `null` **or `false`**, so every `false`
@@ -421,29 +422,36 @@ Reading it:
   ctx logger and rendered as multi-line text) and any diagnostic `ctx.logger`
   line matched by the grep decode to a STRING `.message`, and `.SOLEUR_… ==
   true` on a string is a jq error, not a miss.
-- **Per-refusal git detail IS in Better Stack, in the marker (#8427).** This
-  paragraph used to say it was not. That was wrong twice over: the marker now
-  carries `refusal_detail[].detail` directly, and even before #8427 the
-  per-cluster `diff-path-refused` line reached THIS source anyway — measured
-  2026-09-20 by recovering the 05:39Z run's `detail` from it. Those ctx-logger
-  lines render as multi-line `util.inspect` text (one journald row per line),
-  which makes them unpleasant to query, not absent.
+- **The marker carries NO free-text field, and that is deliberate (#8427).**
+  An earlier revision of that change put git's `detail` string into
+  `refusal_detail[]` behind a redact-then-classify-then-cap transform. Review
+  falsified the control: the classifier only collapsed tokens containing `/`,
+  so a proposal creating a file at the repository ROOT — a name the model picks
+  freely, and which `git diff-index` emits unquoted, spaces included — passed
+  through byte for byte. Measured against git 2.55.0, a diff creating
+  `ALERT <arbitrary prose>.md` produced `detail = "A ALERT <arbitrary prose>.md"`
+  in the row. At ~198 characters × 20 entries that is ~3,960 model-chosen
+  characters per weekly run into this processor.
 
-  Read `detail` from the marker, and know what it is:
+  Every repair for that is a denylist over a string the model writes, so the
+  field was removed instead. What the row carries is decidable by construction:
+  a closed `reason` enum chosen by our code, a sha256 `cluster_hash`, and the
+  numeric/boolean `diff_*` shape fields.
 
-  - **Classified, not verbatim.** At two `checkDiffPaths` arms `detail` is a
-    model-CHOSEN string (the refused path; `${status} ${path}`), so relaying it
-    would hand a prompt-injected proposer a free-text write channel into this
-    third-party processor, weekly, on every refused cluster. Every path-shaped
-    token is collapsed to `<allowlisted-prefix>/[elided]` or to the constant
-    `[unclassified-path]`. Non-path stderr (`error: corrupt patch at line 3`)
-    passes through intact.
-  - Redacted (`redactGithubSourcedText`), then classified, then capped at 200
-    characters — in that order.
-  - The **full, unclassified** path is still in Sentry via
-    `reportSilentFallback` (`feature: cron-compound-promote`,
-    `op: diff-path-refused`, `extra.detail`). When the elision hides what you
-    need, read it with `scripts/sentry-issue.sh`.
+  **Where the diagnostic went.** The full, unelided string reaches **Sentry**
+  via `reportSilentFallback` (`feature: cron-compound-promote`,
+  `op: diff-path-refused`, `extra.detail`), redacted by
+  `redactGithubSourcedText` and capped by `safeDetail`. Read it with
+  `scripts/sentry-issue.sh`, not from this source.
+
+  Two things worth knowing when you go looking. The per-cluster
+  `diff-path-refused` ctx-logger line DOES reach this source (measured
+  2026-09-20 by recovering the 05:39Z run's `detail` from it) — it renders as
+  multi-line `util.inspect` text, one journald row per line, so it is unpleasant
+  to query rather than absent, and it no longer carries `detail`. And
+  `reportSilentFallback` writes through the app's main pino instance, which also
+  lands here — so "it only goes to Sentry" is false for that copy, which is why
+  it is redacted rather than merely capped.
 - **A dark channel reads as zero.** Before grading an absence, confirm
   `SOLEUR_CLAUDE_COST` rows exist in the same window — same emitter class,
   same path. The #8281 soak probe (`scripts/followthroughs/compound-promote-outcome-8281.sh`)
