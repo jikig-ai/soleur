@@ -728,6 +728,22 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      an assertion count that did not move. After ANY scripted multi-edit, assert the ARTIFACT
      changed (grep the new anchor, or `diff` against a pre-edit copy); never infer that an edit
      landed from a passing suite, which answers "does the tree pass", never "did my edit apply".
+   - **The assertion you add to catch that (`assert old in s`) RAISES before the write, so the
+     tree is untouched and the NEXT measurement returns the baseline — which is the reassuring
+     answer.** The guard is correct and its failure mode is the same shape it guards against, one
+     level up: a drifted anchor or a literal retyped rather than copied aborts the heredoc, nothing
+     is written, and any mutation row, lint or suite run afterwards measures the UNCHANGED artifact
+     and reports exactly what a working fix would report. Measured: four mutation rows scored an
+     unmutated rule this way, all four returning the verdict that said "fine". Print the changed
+     line back (`print([l for l in open(p) if l.startswith("X=")][0])`) rather than trusting the
+     batch's own success message, and treat any post-edit result identical to the pre-edit baseline
+     as UN-RUN rather than as evidence. Cheapest structural form: `git status --short <file>` — a
+     file absent from that listing did not change, whatever the script printed.
+   - **Simulating a missing dependency: shadow the ONE binary, never empty `PATH`.** `PATH=/nonexistent`
+     removes `cat`, `sed` and every other external the fallback itself needs, so the fallback under
+     test could not have run either and the empty output proves nothing about it. Put a stub that
+     `exit 127`s on a scratch dir at the FRONT of the real PATH. **Why:** #6488 — a `column`-absence
+     proof "passed" against a condition that had disabled the remedy along with the tool.
    - **Commit each verified unit IMMEDIATELY — a worktree sync can revert uncommitted work with no warning.** `worktree-manager.sh` carries a "Syncing on-disk files from git HEAD" pass that restores tracked files to HEAD, and `.claude/hooks/guardrails.sh` can invoke it mid-session; anything verified-but-uncommitted is silently lost. Never hold verified work in the working tree across a long-running background job (a full test-all, a review agent). Where an edit must be followed by a commit, do BOTH IN ONE Bash call (`cat > file <<'EOF' … EOF; git add …; git commit`) so no window exists. Corollary: a reconciliation script that silently no-ops on a missing anchor (`python str.replace`, `sed s///`) will print success against a reverted file — assert the anchor (`assert old in s`) or the edit is unverified. **Why:** #6578 — two full re-applications of verified work; the revert was caught only because a re-run printed numbers that contradicted a result verified minutes earlier.
 
    **UX artifact heuristic:** "Did a specialist just produce or revise artifacts? If yes, commit with `wip: UX <description> for feat-X`. UX artifacts are high-effort and low-recoverability -- err on the side of committing too often rather than too rarely."

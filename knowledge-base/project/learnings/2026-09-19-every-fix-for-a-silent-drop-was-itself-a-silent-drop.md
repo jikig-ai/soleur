@@ -132,3 +132,100 @@ row's verdict, ask what in the SUT's output would differ if the mutation had not
   caller's data looks like before reusing a scrubber, parser or formatter.
 - **Before recording a mutation row's verdict, name what would differ if the mutation had not
   landed.** If nothing would, the row is void and needs a paired fixture.
+
+## Review round (2026-09-20): the same shape, now in the guards
+
+The review found nine more instances. All but one were in code I had written to CHECK the
+work, not in the work — and the one exception was a live hole the PR's own claim denied.
+
+### The claim that was false as shipped
+
+Rule 4 of `lint-followthrough-varq-ban.sh` banned an inline `authorAssociation` select and its
+header asserted that this "makes 'the lib is the chokepoint' a fact rather than an assertion."
+
+It banned the presence of the WRONG mechanism. The property the lib establishes is the ABSENCE
+of the right one, and those are different claims. Measured: `grep -rn authorAssociation
+scripts/followthroughs/` found **zero** live filters to ban, while
+`inngest-zot-client-authz-6500.sh` read `.comments[].body` with **no author filter at all** —
+the verbatim #7448 forgery shape, strictly worse than what the rule banned, and invisible to
+it. The lint ran **rc=0** over it. That probe's `exit 0` closes #6500, the ADR-096 supply-chain
+authorization gate, on a public repo with issues open.
+
+**A rule that is green over the exact hole it advertises protection from is worse than the
+documentation alone**, because it converts "we wrote this down" into "we gated it".
+
+It was inert rather than exploitable only because `--comments` and `--json` are mutually
+exclusive on current `gh` — so the probe had been permanently TRANSIENT, the identical
+dead-probe defect #6617 carried, sitting unmigrated in the same directory as the PR fixing that
+class. Repairing the flag pair without adding a filter would have armed the forgery.
+
+### Four defects in the fix for it
+
+Each found by mutating the thing I had just written:
+
+1. **`LIB_CALL` matched the filename.** Sourcing the lib and then reverting the read passed at
+   rc 0 — both endpoints pinned, the wire between them unpinned. Anchor on the CALL.
+2. **The floor's denominator counted direct readers only**, and I derived it from the
+   PRE-migration tree — so it fired at 2-of-3 on the very run proving the migration had worked.
+   A floor that falls every time the rule succeeds is a floor that punishes compliance.
+3. **An edit batch failed its anchor assertion and I read the rows anyway.** The `python3`
+   heredoc raised `AssertionError: LIB_CALL anchor missing`, wrote nothing, and the four
+   mutation rows below it measured the UNCHANGED rule — all reporting the reassuring answer.
+   A failed edit batch looks exactly like a landed one unless you read the artifact back.
+4. **The harness stubbed `gh` through an injected `GH_BIN` path.** A security lib must not take
+   an injectable binary path, so the seam could not reach it. Moved to a PATH shim, which also
+   intercepts the lib's own permission call — and the harness then had no forgery row at all,
+   because every fixture was implicitly the operator.
+
+### Three anti-vacuity floors that could not fire
+
+`guard-vacuity-floor.test.sh` — a repo-global ratchet no file-selected suite set can see — went
+RED, and the causes came in the wrong order:
+
+- **The slice was not the problem.** The subtrahend was bound ~200 lines above the `if`, which
+  is a real defect and I fixed it first. The hand-built mutant had been exiting 1 correctly the
+  whole time.
+- **The MESSAGE was.** The floor printed `FLOOR: executed N real assertions`, which matches no
+  term in the meta-guard's FIRES sentinel vocabulary — so a correctly-firing floor was scored
+  CONSTRUCTION (status unknown) and silently left the covered set. **A floor whose message the
+  meta-guard cannot recognise is indistinguishable from a floor that crashed.**
+- **I fixed the instance, not the class**, so it recurred on a second file. The sweep afterwards
+  found 19 of 20 floor messages in the diff already carried the vocabulary; one did not.
+- **A fourth floor was written `-ne`**, a shape the meta-guard's population regex does not match
+  (it admits `-lt|-le|-ge`), so it was bounded by NOTHING while the three others were enrolled.
+  That is the one failure mode the meta-guard's own header says it cannot report on itself.
+  `-lt` is also the correct semantics: the count is developer-incremented, so `-ne` makes every
+  added assertion a spurious failure and trains exactly the reflex the message asks the reader
+  not to form.
+- **My first repair re-broke it.** I pinned the threshold against a second declaration, and the
+  drift-pin `if` sat between the binding and the floor — putting the file straight back into
+  the uncovered set. **"Contiguous" is literal.** Two variables pinned to each other was the
+  wrong shape; one literal in one place was the right one.
+
+### Instrument errors, again
+
+- **`PATH=/nonexistent` does not simulate one missing binary** — it removes `cat` too, so the
+  fallback under test could not have run either. The empty output proved nothing. Shadow the
+  ONE binary with a stub that exits 127.
+- **A mutation row whose fixture fails for a second reason proves nothing.** Guard-1 row 3
+  ("make `assert()` never increment FAIL") reported PASS on its first run because, with the
+  guard otherwise intact, no assertion fails — so the mutation changed nothing observable. Its
+  own matrix text had already said it needed a known-bad fixture.
+
+### Prevention
+
+- **A rule that bans a spelling is not a rule that establishes a property.** Write the property
+  as one sentence, then ask whether the predicate expresses THAT. Prefer the positive
+  obligation: it subsumes the ban and covers the shapes nobody enumerated.
+- **A new floor owes three things, not one:** a shape inside the meta-guard's population
+  (`-lt`, not `-ne`), a threshold literal ADJACENT to the `if` with nothing between, and a
+  MESSAGE carrying the sentinel vocabulary. Two of the three are invisible to the suite's own
+  green run.
+- **After any scripted edit, read the artifact back.** An `AssertionError` in a heredoc writes
+  nothing and the next command reports the baseline, which is the reassuring answer.
+- **When a finding names an instance, sweep the class in the same commit.** Measured here: one
+  sweep over 20 floor messages found the second instance in seconds, after the first had been
+  fixed in isolation and had already recurred.
+- **The review summary is a continuation gate, not a turn boundary.** I stopped at it and the
+  operator had to ask "why did you stop?". Findings are fixed inline, so a clean review means
+  the PR is ready to go out — not ready to be handed over.
