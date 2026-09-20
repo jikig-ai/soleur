@@ -470,6 +470,13 @@ Every criterion is **pre-merge**. The one item that reads like an operator step 
 - `knowledge-base/project/specs/feat-one-shot-8308-go-gates-plugin-root/ac12-capture.txt` — the committed real-harness capture (AC12; the layer-7 durable artifact for this repo).
 - `knowledge-base/project/specs/feat-one-shot-8308-go-gates-plugin-root/phase-0-stop.md` — **only** if Phase 0 matches a STOP or `deferred-to-AC12` row.
 
+**Archived location.** The three `specs/feat-one-shot-8308-go-gates-plugin-root/` paths above,
+and the `session-state.md`/`tasks.md`/`decision-challenges.md` beside them, now live at
+`knowledge-base/project/specs/archive/20260920-035337-feat-one-shot-8308-go-gates-plugin-root/`.
+The paths are left as written rather than rewritten: each records where the artifact was committed
+at the time the criterion was discharged, and `git log --follow` resolves the move. `phase-0-stop.md`
+was never created — Phase 0's probe ran, so no STOP row matched.
+
 ## Open Code-Review Overlap
 
 None — `gh issue list --label code-review --state open` (65 issues, fetched to a scratchpad JSON and searched per path with standalone `jq --arg`) contains no body naming `plugins/soleur/commands/go.md`, `apps/web-platform/test/plugin-root-anchoring.test.ts`, `apps/web-platform/server/git-lock-marker-telemetry.ts` or `plugins/soleur/test/workflow-fidelity.test.ts`.

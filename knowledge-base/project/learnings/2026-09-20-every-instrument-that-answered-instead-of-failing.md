@@ -127,4 +127,4 @@ This repo tracks one, which is exactly why every fixture had one and nobody saw 
 
 - ADR-179 decision 11 + amendment A15
 - #8400 / #8401 / #8402 (filed), #7453 (deliberately not folded in)
-- `knowledge-base/project/specs/feat-one-shot-8308-go-gates-plugin-root/mutation-log.md`
+- `knowledge-base/project/specs/archive/20260920-035337-feat-one-shot-8308-go-gates-plugin-root/mutation-log.md` (archived at ship time; `git log --follow` resolves the move from `specs/feat-one-shot-8308-go-gates-plugin-root/`)
