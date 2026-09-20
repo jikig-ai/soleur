@@ -141,6 +141,6 @@ commit hook.
 
 - Issue: #8322; motivating review session: #8270/#8231; duplicate-full-run
   dedup: #8247 (`battery-owed.sh`); prior affected-test win: #8045.
-- Plan: `knowledge-base/project/plans/2026-09-18-feat-test-all-affected-gate-default-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20260920-163321-feat-test-all-affected-gate-default-plan.md`
 - Index: `scripts/lib/test-affected-paths.sh`; classifier + mode matrix:
   `scripts/test-all.sh`; mutation suite: `scripts/test-all-affected.test.sh`.
