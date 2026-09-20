@@ -143,6 +143,27 @@ fm_value() {
 
 has_frontmatter() { [[ "$(head -n 1 "$1")" == "---" ]]; }
 
+# is_record_root_readme <path> <record-root> — the convention document, and ONLY at the root.
+#
+# Compared on the CANONICAL directory, never on the path string. The first version of this exemption
+# was a string equality against `$DEFAULT_DIR/README.md`, and `DEFAULT_DIR` is an ABSOLUTE path
+# derived from the script's own location (`$SELF_DIR/../knowledge-base/project/rejected`) while
+# lefthook hands `{staged_files}`/`{push_files}` as REPOSITORY-RELATIVE paths. The two spellings never
+# matched, so the record's own README was linted as an entry and the pre-push hook refused the push —
+# caught by the hook rather than by the battery, because every battery row builds its fixtures from an
+# absolute `$TMP_ROOT` and so only ever exercised the spelling that worked.
+#
+# `cd … && pwd -P` resolves `.`, `..`, a relative prefix and a symlinked root alike, and it keeps the
+# exemption root-scoped: `<root>/archive/README.md` canonicalises to a different directory and stays a
+# subject, which is the hole this exemption had to stop being.
+is_record_root_readme() {
+  local f="$1" root="$2" fd rd
+  [[ "$(basename "$f")" == "README.md" ]] || return 1
+  fd="$(cd "$(dirname "$f")" 2>/dev/null && pwd -P)" || return 1
+  rd="$(cd "$root" 2>/dev/null && pwd -P)" || return 1
+  [[ "$fd" == "$rd" ]]
+}
+
 # Block scalar indicators are structure, not content: `>-` alone is an empty value.
 strip_block_indicators() {
   printf '%s' "$1" | sed -e 's/^[[:space:]]*[|>][+-]\?[[:space:]]*$//' -e 's/^[[:space:]]*-[[:space:]]*//' \
@@ -334,7 +355,7 @@ if [[ "${1:-}" == "--all" ]]; then
   # made `rejected/archive/README.md` a hole large enough to park an entry in.
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    [[ "$f" == "$dir/README.md" ]] && continue
+    is_record_root_readme "$f" "$dir" && continue
     paths+=("$f")
   done < <(find "$dir" \( -type f -o -type l \) -print | LC_ALL=C sort)
 else
@@ -343,9 +364,11 @@ else
     exit 3
   fi
   for f in "$@"; do
-    # Root-only, matching the walk above: `<record>/archive/README.md` is not the convention
-    # document, and skipping it on basename alone returned rc=0 for a file with arbitrary contents.
-    [[ "$f" == "$DEFAULT_DIR/README.md" || "$f" == "./$DEFAULT_DIR/README.md" ]] && continue
+    # Root-only, via the SAME predicate the walk uses: `<record>/archive/README.md` is not the
+    # convention document, and skipping it on basename alone returned rc=0 for a file with arbitrary
+    # contents. Shared rather than re-derived, because the two arms receive different path spellings
+    # and a second copy is where that difference goes unnoticed.
+    is_record_root_readme "$f" "$DEFAULT_DIR" && continue
     paths+=("$f")
   done
 fi

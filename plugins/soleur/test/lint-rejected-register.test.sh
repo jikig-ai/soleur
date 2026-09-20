@@ -56,6 +56,7 @@
 #  27   assembly           a poisoned `archive/README.md`                    a basename skip is not a document identity
 #  28   assembly           the record's OWN README.md                        MUST PASS — row 27's fix must not over-reach
 #  29   assembly           two entries claiming one alias                    per-file checks are blind to this by construction
+#  30   dispatch           the root README under a RELATIVE path spelling     MUST PASS — the spelling the hooks actually pass
 #
 # Rows 18–23 exist because the structural enumeration of this guard found the same defect eight
 # times: the required-key loop proves a key is PRESENT and non-empty, and most of the fields have a
@@ -846,6 +847,51 @@ row29_cross_entry_duplicate_alias() {
   red_row row29-cross-entry-duplicate-alias '[duplicate-alias]' --all "${rec:?}"
 }
 
+row30_dispatch_relative_paths() {
+  emit_id row30-dispatch-relative-paths dispatch
+  # THE PATH SPELLING IS PART OF THE DISPATCH. Every other row builds its fixtures under an absolute
+  # $TMP_ROOT, so the suite only ever exercised the spelling that happened to work — and the root-README
+  # exemption was first written as a string equality against `$DEFAULT_DIR/README.md`, which is
+  # ABSOLUTE (derived from the script's own location), while lefthook hands `{staged_files}` and
+  # `{push_files}` as REPOSITORY-RELATIVE paths. The two spellings never matched: the record's own
+  # convention document was linted as an entry and the PRE-PUSH HOOK REFUSED THE PUSH. Measured, and
+  # caught by the hook rather than by this battery, which is the gap this row closes.
+  #
+  # This row therefore drives the REAL dispatch: cwd at the repository root, repo-relative paths into
+  # the repository's own record, read-only. It cannot use a $TMP_ROOT fixture, because the exemption is
+  # deliberately scoped to the record root that `DEFAULT_DIR` names — a README somewhere else is not
+  # this repository's convention document, and rows 27 and 28 already pin that boundary.
+  local entry
+  entry="$( cd "$REPO_ROOT" && ls knowledge-base/project/rejected/2*-*.md 2>/dev/null | head -n 1 )"
+  ck
+  if [[ -n "$entry" ]]; then
+    ok "row30: the repository's record has an entry to drive the real dispatch against ($entry)"
+  else
+    bad "row30: no dated entry found under knowledge-base/project/rejected/ — this row cannot exercise the hook's invocation, so it is reporting on nothing"
+    return
+  fi
+  ck
+  local rc_rel
+  ( cd "$REPO_ROOT" && "$BASH" "$LINT" knowledge-base/project/rejected/README.md "$entry" >/dev/null 2>&1 )
+  rc_rel=$?
+  if [[ "$rc_rel" -eq 0 ]]; then
+    ok "row30-dispatch-relative-paths (MUST-PASS): the hook's own spelling — repo-relative paths — exempts the root README"
+  else
+    bad "row30-dispatch-relative-paths (MUST-PASS): repo-relative paths rc=$rc_rel. The exemption is comparing path STRINGS, so it holds for the absolute spelling the fixtures use and fails for the one lefthook actually passes — this is the pre-push refusal, reproduced."
+  fi
+  # The absolute spelling of the same two files must agree. Two spellings of one path disagreeing is
+  # the defect itself, so the row asserts agreement rather than each in isolation.
+  ck
+  local rc_abs
+  ( cd "$REPO_ROOT" && "$BASH" "$LINT" "$REPO_ROOT/knowledge-base/project/rejected/README.md" "$REPO_ROOT/$entry" >/dev/null 2>&1 )
+  rc_abs=$?
+  if [[ "$rc_abs" -eq "$rc_rel" ]]; then
+    ok "row30: the absolute and relative spellings of the same paths agree (both rc=$rc_abs)"
+  else
+    bad "row30: the same two files gave rc=$rc_rel relative and rc=$rc_abs absolute — the guard's verdict depends on how its caller spells the path"
+  fi
+}
+
 row12_valid_entry_passes
 row13_second_of_two_invalid
 row14_zero_paths
@@ -864,6 +910,7 @@ row26_assembly_symlink
 row27_assembly_subdirectory_readme
 row28_assembly_root_readme_exempt
 row29_cross_entry_duplicate_alias
+row30_dispatch_relative_paths
 
 if [[ "$CHILD" != "1" ]]; then
   h1_bad_misrouted_direction
@@ -904,7 +951,7 @@ hcases="$(grep -cE '^(h[0-9]+|p[0-9]+)' "$IDS_FILE" || true)"
 # hand-summed:
 #   grep -cE '^row[0-9][0-9]_[a-z0-9_]+$' plugins/soleur/test/lint-rejected-register.test.sh  -> 16
 # (that is the invocation list above; the matrix table in the header names the same 16 rows.)
-MIN_CASES=29
+MIN_CASES=30
 # MIN_AXES counts AXES, not rows — ADR-193 Decision 2, and the distinction must not collapse:
 # eleven rows on one axis is eleven rows and one axis, and raising MIN_CASES must never be able to
 # satisfy this one. Derived by recipe over the same segment:
@@ -982,11 +1029,11 @@ fi
 # the accept-everything stub. It would have passed with every row in the child hollowed out. Two
 # bounds, so each mode is floored at its own tight count and an intact child can be GREEN.
 # Measured, both modes, on this tree:
-#   bash <this file>                    -> 60 executed   (29 matrix rows + 4 harness rows)
-#   SOLEUR_RR_CHILD=1 bash <this file>  -> 51 executed   (29 matrix rows alone)
+#   bash <this file>                    -> 63 executed   (30 matrix rows + 4 harness rows)
+#   SOLEUR_RR_CHILD=1 bash <this file>  -> 54 executed   (30 matrix rows alone)
 # The harness contribution is the difference, 9, and is asserted separately so that adding a harness
 # row cannot be absorbed by slack in the matrix bound or vice versa.
-MIN_ASSERTIONS_MATRIX=51
+MIN_ASSERTIONS_MATRIX=54
 MIN_ASSERTIONS_HARNESS=9
 EXPECTED_ASSERTIONS="$MIN_ASSERTIONS_MATRIX"
 [[ "$CHILD" == "1" ]] || EXPECTED_ASSERTIONS=$((MIN_ASSERTIONS_MATRIX + MIN_ASSERTIONS_HARNESS))
@@ -1042,6 +1089,7 @@ MATRIX_IDS=(
   row27-assembly-subdirectory-readme
   row28-assembly-root-readme-exempt
   row29-cross-entry-duplicate-alias
+  row30-dispatch-relative-paths
 )
 HARNESS_IDS=(
   h1-bad-misrouted-direction
