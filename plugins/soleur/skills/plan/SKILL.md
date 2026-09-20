@@ -72,6 +72,8 @@ Check if `knowledge-base/` directory exists. If it does:
 4. Read `knowledge-base/project/specs/feat-<name>/spec.md` if it exists - use as planning input
 5. Announce: "Loaded constitution and spec for `feat-<name>`"
 
+**Vocabulary.** Before committing a word that names a concept, check it against `knowledge-base/project/glossary.md` and use the sense its pointer settles; if the word is materially ambiguous and has no entry, hedge in the artifact and name the ambiguity. The instruction is stated once in [glossary-format.md](../kb-glossary/references/glossary-format.md) §The consumer pointer and is not restated here.
+
 **If knowledge-base/ does NOT exist:**
 
 - Continue with standard planning flow
