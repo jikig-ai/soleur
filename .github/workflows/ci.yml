@@ -945,6 +945,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # redirect-tombstones.test.ts enumerates `git log --diff-filter=RD
+          # <baseline>..HEAD` — a depth-1 clone has no baseline and the census
+          # fails closed ("zero events — the enumerator broke"). #8364.
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
