@@ -341,8 +341,8 @@ them), `run_id` (join key to Sentry `inngest.run_id`), `corpus_count`,
 `corpus_input_bytes`, `clusters_proposed`, `clusters_opened`, `refusals[]`
 (one enum per refused cluster, capped at 20), `refusals_total` (the uncapped
 count — compare it with `refusals | length` before reading a capped list as
-complete), `refusal_detail[]` (`{cluster_hash, reason}`, capped at 20,
-enum-only — never a path or learning text), and on `error` only,
+complete), `refusal_detail[]` (capped at 20 — see below; #8427 widened it past
+`{cluster_hash, reason}`), and on `error` only,
 `error_class` + an `error_message` scrubbed by `redactGithubSourcedText`
 (token / JWT / email / credential-URL shapes) and capped at 200 bytes. The
 row carries `component: "compound-promote"` (emitter:
@@ -354,7 +354,15 @@ doppler run -p soleur -c prd_terraform -- \
   | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?).message
               | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote")
               | [$r.dt, .trigger, .status, (.corpus_count//"-"), (.clusters_proposed//"-"),
-                 (.clusters_opened//"-"), ((.refusals//[])|join(","))] | @tsv'
+                 (.clusters_opened//"-"), ((.refusals//[])|join(",")),
+                 ((.refusal_detail//[])
+                    | map("\(.cluster_hash[0:8]):\(.reason)"
+                          + ":detail=\(.detail//"-")"
+                          + ":len=\(.diff_len//"-")"
+                          + ":fenced=\(if .diff_fenced == null then "-" else .diff_fenced end)"
+                          + ":hdr=\(if .diff_header_pair == null then "-" else .diff_header_pair end)"
+                          + ":hunk=\(if .diff_hunk == null then "-" else .diff_hunk end)")
+                    | join(" | "))] | @tsv'
 ```
 
 Reading it:
@@ -367,11 +375,44 @@ Reading it:
   `refusals[]` is what separates "the corpus had nothing to propose"
   (`no-qualifying-clusters`, or `completed` with empty refusals) from "every
   cluster was refused" — the two states #8281 was filed to distinguish. The
-  refusal enums name the gate: `diff-structural-op` / `diff-path-refused` /
-  `diff-underivable` (the allowlist), `corpus-shrink-refused` (the post-apply
-  floor), `skill-conflict-guard`, `byte-budget-overflow`, `not-committed-*`.
+  refusal enums name the gate: `diff-structural-op` / `diff-path-refused` (the
+  allowlist), `corpus-shrink-refused` (the post-apply floor),
+  `skill-conflict-guard`, `byte-budget-overflow`, `not-committed-*`.
   `refusal_detail[].cluster_hash` recurring week over week is a cluster the
   proposer keeps producing and the gates keep refusing.
+- **`diff-underivable` is no longer an emitted value (#8427).** It was ONE
+  literal covering SIX structurally different conditions, so a refusal said
+  derivation had failed and nothing about why. It is now one value per site:
+
+  | reason | what actually happened |
+  |---|---|
+  | `diff-underivable-read-tree` | `git read-tree HEAD` failed — a broken or empty checkout, not a bad proposal |
+  | `diff-underivable-apply` | `git apply --cached` rejected the patch — the model's diff is malformed |
+  | `diff-underivable-diff-index` | `git diff-index` failed — a git output-format break |
+  | `diff-underivable-empty-pathset` | the patch applied but derived NO paths — a proposal that nets to no change |
+  | `diff-underivable-unparsable-record` | a `diff-index` record we could not parse |
+  | `diff-empty` | the proposal was empty or whitespace-only |
+
+  **`diff-empty` deliberately does NOT carry the `diff-underivable` prefix.**
+  The five `underivable-*` values do, so a saved query on `diff-underivable`
+  keeps matching those — but it stops matching the empty-proposal rows, which
+  is intended. An empty proposal was never a derivation failure; this is a
+  reclassification, not a compatibility break to route around.
+- **Do not write `.diff_fenced // "-"` in a jq projection.** jq's `//` yields
+  its right-hand side when the left is `null` **or `false`**, so every `false`
+  renders identically to an absent field — and `false` is a meaningful value for
+  all three booleans. The recipe above uses an explicit `== null` test. (`//` is
+  fine for `diff_len`: `0` is truthy in jq.)
+- **The diff-SHAPE fields disambiguate the apply arm.** `git apply` emits
+  `No valid patches in input (allow with "--allow-empty")` byte-identically for
+  an empty string, a whitespace-only string, a markdown-fenced block, and a
+  `---`/`+++` header pair with no `@@` hunk (measured, git 2.55.0), so
+  `diff-underivable-apply` alone still cannot name the input. Every
+  `refusal_detail[]` entry therefore carries `diff_len`, `diff_fenced`,
+  `diff_header_pair` and `diff_hunk` — numbers and booleans only, never the
+  diff body. `diff_fenced: true` is the high-value one: it means the proposer
+  wrapped its diff in a markdown code fence, which is a PROMPT defect rather
+  than a proposal-quality one.
 - **`refusals` is derived from the step's RETURN VALUE**, so it is correct on
   a replayed run. An earlier revision pushed into a handler-scope array from
   inside the memoized step and emitted `[]` on every real run.
@@ -380,13 +421,29 @@ Reading it:
   ctx logger and rendered as multi-line text) and any diagnostic `ctx.logger`
   line matched by the grep decode to a STRING `.message`, and `.SOLEUR_… ==
   true` on a string is a jq error, not a miss.
-- **Per-refusal git detail is NOT in Better Stack.** The per-cluster
-  `diff-path-refused` / `target-path-refused` WARN lines still go through the
-  console-backed Inngest ctx logger. The marker's
-  `refusal_detail[].reason` names the gate; git's own diagnosis (`detail`,
-  scrubbed, 200 bytes) reaches Sentry through `reportSilentFallback`
-  (`feature: cron-compound-promote`, `op: diff-path-refused`, `extra.detail`)
-  — read it with `scripts/sentry-issue.sh`, not from this source.
+- **Per-refusal git detail IS in Better Stack, in the marker (#8427).** This
+  paragraph used to say it was not. That was wrong twice over: the marker now
+  carries `refusal_detail[].detail` directly, and even before #8427 the
+  per-cluster `diff-path-refused` line reached THIS source anyway — measured
+  2026-09-20 by recovering the 05:39Z run's `detail` from it. Those ctx-logger
+  lines render as multi-line `util.inspect` text (one journald row per line),
+  which makes them unpleasant to query, not absent.
+
+  Read `detail` from the marker, and know what it is:
+
+  - **Classified, not verbatim.** At two `checkDiffPaths` arms `detail` is a
+    model-CHOSEN string (the refused path; `${status} ${path}`), so relaying it
+    would hand a prompt-injected proposer a free-text write channel into this
+    third-party processor, weekly, on every refused cluster. Every path-shaped
+    token is collapsed to `<allowlisted-prefix>/[elided]` or to the constant
+    `[unclassified-path]`. Non-path stderr (`error: corrupt patch at line 3`)
+    passes through intact.
+  - Redacted (`redactGithubSourcedText`), then classified, then capped at 200
+    characters — in that order.
+  - The **full, unclassified** path is still in Sentry via
+    `reportSilentFallback` (`feature: cron-compound-promote`,
+    `op: diff-path-refused`, `extra.detail`). When the elision hides what you
+    need, read it with `scripts/sentry-issue.sh`.
 - **A dark channel reads as zero.** Before grading an absence, confirm
   `SOLEUR_CLAUDE_COST` rows exist in the same window — same emitter class,
   same path. The #8281 soak probe (`scripts/followthroughs/compound-promote-outcome-8281.sh`)
