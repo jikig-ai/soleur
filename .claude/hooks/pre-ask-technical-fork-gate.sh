@@ -73,10 +73,31 @@ fi
 # Flatten every operator-visible string: question text, option labels, option descriptions. The
 # label alone is too thin — "Option A" carries no signal while its description says "read the
 # runbook", and the description is what the operator actually reads.
+# `if type == "string"` is load-bearing, not defensive garnish. Claude Code sends each option as an
+# OBJECT (`{label, description}`), but a foreign harness may send a bare string, and `.label` on a
+# string is a jq ERROR — jq exits 5 having already emitted the question, so `CORPUS` came back
+# non-empty, the emptiness guard below did not fire, `2>/dev/null` ate the diagnostic, and EVERY
+# label and description was silently dropped. That is precisely the loss the comment above says this
+# corpus exists to prevent, and it is worse than an empty corpus because a truncated one looks clean:
+# D4 denies on a word carried only in an option DESCRIPTION, so in that shape the arm went dark on
+# exactly the input it exists to catch. Measured on this file before the fix.
+__CORPUS_RC=0
 CORPUS="$(printf '%s' "$__HI_RAW" | jq -r '
   ( .tool_input.questions // [] )[]
-  | (.question // ""), ( (.options // [])[] | (.label // ""), (.description // "") )
-' 2>/dev/null | tr '\n' ' ' | tr '[:upper:]' '[:lower:]')"
+  | (.question // ""),
+    ( (.options // [])[]
+      | if type == "string" then . else (.label // ""), (.description // "") end )
+' 2>/dev/null)" || __CORPUS_RC=$?
+# A non-zero jq status means the corpus is PARTIAL, and a partial corpus must never be judged: every
+# arm below is a positive match, so missing text can only ever produce a false allow. Fail toward
+# permitting (this hook's stated polarity, see the header) but ANNOUNCE it — the silent version of
+# this path is the could-not-measure/measured-clean collapse.
+if [[ "$__CORPUS_RC" -ne 0 ]]; then
+  printf 'pre-ask-technical-fork-gate: corpus extraction failed (jq rc=%s) — unrecognised questions/options shape, allowing without classification.\n' \
+    "$__CORPUS_RC" >&2
+  exit 0
+fi
+CORPUS="$(printf '%s' "$CORPUS" | tr '\n' ' ' | tr '[:upper:]' '[:lower:]')"
 [[ -n "$CORPUS" ]] || exit 0
 
 # EXTERNAL EXPERT signal — a question whose answer is held OUTSIDE the company, by a professional
@@ -108,8 +129,74 @@ CORPUS="$(printf '%s' "$__HI_RAW" | jq -r '
 # `tax` in a genuinely technical sentence ("fix the tax calculation bug") still matches; that is
 # accepted rather than hidden, because an AskUserQuestion naming tax is far more often an
 # accountant's question than a code question, and the reason text names the override.
-EXTERNAL_EXPERT_RE='(\baccountant|\bbookkeep|\blawyer|\bsolicitor|\bnotar(y|ies)|\bauditor|\btax(es|ation|able|payer)?\b|\binsurer|\binsurance\b|\bbank|\bregulator|\blandlord|\bcapex|\bopex|\bdepreciat|\bamorti[sz]|\bpayroll|\bvat\b|\bfiscal\b)'
-if grep -qE "$EXTERNAL_EXPERT_RE" <<<"$CORPUS"; then
+# Every token here is RIGHT-anchored or bound to a profession sense, because the list's failure mode
+# is one-directional: a domain term of art is always also somebody's ordinary noun, and the ordinary
+# use is what an engineer types. Measured false positives that shaped this line, each found only by
+# feeding real AskUserQuestion JSON: `\btax` accepted "taxonomy"; `statutory` is ambient compliance
+# prose and was dropped; `\bregulator` accepted "regulatory" (43 files); `\bauditor` accepted the
+# shipped agent name `legal-compliance-auditor` (210 hyphenated hits repo-wide); `\bamorti[sz]`
+# accepted "amortized" (live in apps/web-platform/server/observability.ts and stream-replay-buffer.ts);
+# `\bbank` accepted "bank holiday", which is SCHEDULE and therefore the founder's own call; and
+# `\bfiscal\b` was dropped outright — its only three repo hits were this PR's own documents, and
+# `capex`/`opex`/`vat`/`depreciat`/`payroll` already carry the accounting sense.
+EXTERNAL_EXPERT_RE='(\baccountant|\bbookkeep|\blawyer|\bsolicitor|\bnotar(y|ies)|(^|[^A-Za-z0-9-])auditors?\b|\btax(es|ation|able|payer)?\b|\binsurer|\binsurance (claim|polic|premium|cover|renewal|broker)|\bbank(er|ing)\b|\bbank (account|statement|transfer|mandate|covenant)\b|\bregulators?\b|\blandlord|\bcapex|\bopex|\bdepreciat|\bamorti[sz]ation\b|\bpayroll|\bvat\b)'
+
+# THE AUTHORIZATION EXEMPTION — this is what keeps the arm inside the invariant the header states,
+# and it is a PREDICATE, not another token trim. Two tokens were removed from the list above by
+# hand (`taxonomy` via a right-anchor, `statutory` outright) and review then measured four MORE
+# false positives on the same axis: `\bregulator` accepted "regulatory" (43 files),
+# `\bauditor` accepted the shipped agent name `legal-compliance-auditor`, `\bamorti[sz]` accepted
+# "amortized" (live in apps/web-platform/server/observability.ts), and `\binsurance\b` accepted
+# "insurance-claims". Trimming tokens one at a time was fixing the INSTANCE; the class needed the
+# predicate to change, because the list can never be finished — any domain term of art is also
+# somebody's ordinary noun.
+#
+# So the arm now requires an external-expert signal AND the absence of an authorization VERB,
+# which is exactly the "conservative by construction" shape this file's header promises 90 lines
+# above: "an ask that carries a real authorization is never blocked on the strength of one
+# co-occurring word. This fails toward permitting, because a wrongly-blocked authorization is a
+# production action taken without consent."
+#
+# It exempts on the ACTION-AUTHORIZING verbs only, never on the money nouns (`cost`, `budget`, `price`,
+# `spend`, `priorit`, `scope`, `schedule`) that `AUTHORITY_RE` also carries. That split is the
+# whole reason this arm exists: an accountant question arrives WITH a money noun ("treat the
+# plugin revenue as capex or opex"), so exempting on those would restore the unreachability the
+# arm was added to fix, while exempting on "approve"/"merge"/"deploy" costs nothing — a founder
+# authorizing a deploy is not asking their accountant anything.
+#
+# It is NOT a strict subset of AUTHORITY_RE, and that is deliberate rather than drift:
+# it spells `\bmerge` where AUTHORITY_RE has a bare `merge` (which also matches
+# "submerge"), and it adds `roll ?out`, which AUTHORITY_RE lacks. Both differences make
+# this arm exempt MORE readily than AUTHORITY_RE would, which is the safe direction for
+# a DENY arm. The hook's own test pins the relationship so the two cannot drift apart
+# unnoticed — review measured them disagreeing within one edit of each other.
+# SELF-INVOCATION ALLOW ARM — evaluated BEFORE the expert arm, and it is what makes the skill the
+# expert arm routes to actually runnable. Measured: `soleur:questionnaire-generate` Step 1 asks the
+# founder "Who receives this?" with options labelled `Accountant` / `Lawyer`, because the recipient's
+# role is one of exactly three fields its `## Context` allowlist permits — so the skill is SPECIFIED
+# to emit the precise string the expert arm denies. Driven through this hook, both spellings of its
+# own interview came back `deny`: the primary invocation path was a loop, and the advertised override
+# is unreachable from a tool call because `SOLEUR_ACK_TECHNICAL_FORK` is read from the hook process
+# environment and shell state does not persist between Bash calls.
+#
+# The exemption keys on the send-interview SHAPE, which is fixed by that skill's Step 1 and is not a
+# phrase an ordinary technical or authorization ask produces. It is deliberately narrow: it does not
+# allow on the mere presence of a profession noun, so an expert question that does not carry the
+# interview shape is still denied.
+#
+# IT IS A CONJUNCT OF THE EXPERT ARM, NEVER A STANDALONE `exit 0`. An earlier revision of this file
+# wrote it as its own `if … then exit 0` block placed here, ahead of every arm — which made it a
+# WHOLE-HOOK BYPASS: any corpus carrying the interview phrase also skipped the AUTHORITY arm and, far
+# worse, the INVESTIGATIVE default-deny at the bottom. Measured: this hook's own founding fixture (the
+# 2026-08-19 technical fork it was built to refuse) was ALLOWED once `"Who receives this?"` was
+# prefixed to it, and the suite stayed fully green because nothing asserted the investigative arm was
+# still armed. The narrowing belongs to the arm it narrows; `D7` pins that scoping from the other side.
+QUESTIONNAIRE_INTERVIEW_RE='(who (receives|should receive) (this|it)|what (has to|needs to|must) come back|who holds the answer)'
+
+AUTHZ_VERB_RE='(ack-destroy|authori[sz]|approve|\bmerge|replace|destroy|delete|force-push|deploy|dispatch|apply |arm the|flip |rotate|revoke|roll ?out|proceed with the (merge|replace|destroy|apply|cutover))'
+if grep -qE "$EXTERNAL_EXPERT_RE" <<<"$CORPUS" \
+   && ! grep -qE "$AUTHZ_VERB_RE" <<<"$CORPUS" \
+   && ! grep -qiE "$QUESTIONNAIRE_INTERVIEW_RE" <<<"$CORPUS"; then
   EXPERT_REASON="BLOCKED: this AskUserQuestion puts an OUTSIDE EXPERT's question to the founder.
 
 The answer is held by an accountant, bookkeeper, lawyer, notary, auditor, insurer, bank, regulator or landlord — not by the founder, and not by you. Asking the founder produces a guess that then gets acted on.

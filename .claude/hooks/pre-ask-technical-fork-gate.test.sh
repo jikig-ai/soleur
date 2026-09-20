@@ -150,8 +150,19 @@ else echo "  FAIL: H1 hatch silent or ineffective" >&2; FAIL=$((FAIL+1)); fi
 # cannot make this case pass or fail for the wrong reason.
 TOTAL=$((TOTAL+1))
 neg_fp=0
+# Six cases, not two, and that distinction is the finding. The first two are the tokens that were
+# trimmed by hand; the last four were measured by the review panel AFTER that trim, on the same axis
+# — `\bregulator` accepting "regulatory", `\bauditor` accepting the shipped agent name
+# `legal-compliance-auditor`, `\bamorti[sz]` accepting "amortized", `\binsurance\b` accepting
+# "insurance-claims". A control that covers only the tokens someone already noticed pins the
+# INSTANCES; these six pin the PREDICATE, because every one of them carries an authorization verb
+# or a right-anchoring failure and none of them names a profession.
 for neg_q in "Should we rename the event taxonomy before the launch?" \
-             "Approve the statutory breach-notification clock change?"; do
+             "Approve the statutory breach-notification clock change?" \
+             "Approve deploying the regulatory-disclosure page to prd?" \
+             "Run legal-compliance-auditor before merge, or merge now?" \
+             "Authorize the amortized replay-buffer rollout to production?" \
+             "Merge the insurance-claims copy fix?"; do
   neg_out=$(payload "$neg_q" \
     "Yes" "go ahead with it as described" \
     "No" "leave it as it stands for now" | "$HOOK" 2>/dev/null)
@@ -162,14 +173,186 @@ for neg_q in "Should we rename the event taxonomy before the launch?" \
   fi
 done
 if [[ "$neg_fp" -eq 0 ]]; then
-  echo "  PASS: D5 expert arm does not fire on taxonomy/statutory (negative control, both directions covered)"; PASS=$((PASS+1))
+  echo "  PASS: D5 expert arm does not fire on any of 6 non-expert asks (4 of them authorization verbs)"; PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
+# D6 — the skill the expert arm ROUTES TO must be able to run its own first step.
+#
+# This is the case the suite was missing, and its absence is why 14/14 was green over an unrunnable
+# skill. `soleur:questionnaire-generate` Step 1 asks the founder "Who receives this?" with options
+# labelled `Accountant` / `Lawyer`, because the recipient's role is one of exactly three fields its
+# `## Context` allowlist permits. So the skill is SPECIFIED to emit the string the expert arm denies,
+# and the primary invocation path was a loop: deny -> invoke the skill -> the skill asks -> deny.
+# The advertised override cannot break it either, because SOLEUR_ACK_TECHNICAL_FORK is read from the
+# hook process environment and shell state does not persist between Bash tool calls.
+#
+# Both directions are asserted, because an allow arm that fires on any profession noun would be a
+# bypass rather than a fix: the interview shape must ALLOW, and a real expert ask carrying no
+# interview shape must still DENY.
+TOTAL=$((TOTAL+1))
+d6_fail=0
+for d6_q in "Who receives this?" "What has to come back from them?"; do
+  d6_out=$(payload "$d6_q" \
+    "Accountant" "the firm that files our accounts" \
+    "Lawyer" "outside counsel" | "$HOOK" 2>/dev/null)
+  d6_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d6_out:-{\}}" 2>/dev/null || echo allow)
+  if [[ "$d6_dec" != "allow" ]]; then
+    printf '  FAIL: D6 the skill cannot run its own interview — %s was %s\n' "$d6_q" "$d6_dec" >&2
+    d6_fail=$((d6_fail+1))
+  fi
+done
+# The other direction: the arm must not have become a bypass.
+d6_out=$(payload "Can you ask my accountant whether this is deductible?" \
+  "Yes" "put it to them" "No" "leave it" | "$HOOK" 2>/dev/null)
+d6_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d6_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$d6_dec" != "deny" ]]; then
+  printf '  FAIL: D6 the self-invocation arm became a bypass — a real expert ask was %s\n' "$d6_dec" >&2
+  d6_fail=$((d6_fail+1))
+fi
+if [[ "$d6_fail" -eq 0 ]]; then
+  echo "  PASS: D6 questionnaire-generate can run its own interview, and the arm is not a bypass"; PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
+# D7 — the interview exemption is scoped to the EXPERT ARM, and disarms nothing else.
+#
+# D6 asserts the exemption WORKS. It cannot see the failure mode that matters, because an exemption
+# written as a standalone `if … then exit 0` block ahead of every arm satisfies D6 exactly as well as
+# one written as a conjunct of the expert arm — and the standalone form is a whole-hook bypass. It was
+# the shipped form until this case existed: prefixing `"Who receives this?"` to D1, the verbatim
+# 2026-08-19 fork this hook was built to refuse, ALLOWED it, and the suite stayed 15/15.
+#
+# So D7 asserts from the other side: a corpus carrying the interview shape must still be judged by
+# every arm below the expert one. Two payloads, because they fail for different reasons — the first
+# carries a profession noun (so the expert arm's other conjuncts are live), the second carries none
+# (so only the investigative default-deny can refuse it), and a regression in either direction shows
+# up in exactly one of them.
+TOTAL=$((TOTAL+1))
+d7_fail=0
+
+d7_out=$(payload "Who receives this? How should I resolve the cutover path?" \
+  "Read the runbook properly first" "Find the documented order for a cold host rather than reasoning it out from guard comments." \
+  "Ask whoever owns the cutover section" "The plan deferred the cutover window to numbered steps I have not read." | "$HOOK" 2>/dev/null)
+d7_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d7_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$d7_dec" != "deny" ]]; then
+  printf '  FAIL: D7 the interview shape disarmed the INVESTIGATIVE arm — D1 prefixed with the interview phrase was %s, so the exemption is a whole-hook bypass, not a narrowing of the expert arm\n' "$d7_dec" >&2
+  d7_fail=$((d7_fail+1))
+fi
+
+d7_out=$(payload "What has to come back? Which source should I check for the retry semantics?" \
+  "Check whether the ADR says" "look at the decision record" \
+  "Grep the codebase" "search the repo for callers" | "$HOOK" 2>/dev/null)
+d7_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d7_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$d7_dec" != "deny" ]]; then
+  printf '  FAIL: D7 an investigative fork carrying NO profession noun was %s once the interview phrase was present — the exemption reaches arms it has no business reaching\n' "$d7_dec" >&2
+  d7_fail=$((d7_fail+1))
+fi
+
+if [[ "$d7_fail" -eq 0 ]]; then
+  echo "  PASS: D7 the interview exemption narrows only the expert arm; the investigative default-deny stays armed"; PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
+# D8 — the corpus survives a foreign OPTION SHAPE, and a partial corpus is never judged.
+#
+# Every other case here goes through `payload`, which emits Claude Code's own shape: each option is
+# an object, `{label, description}`. A foreign harness may send a bare string instead. `.label` on a
+# string is a jq ERROR: jq exits 5 having already printed the question, so the corpus came back
+# NON-EMPTY with every label and description missing, the emptiness guard did not fire, and
+# `2>/dev/null` ate the diagnostic. The arm then classified a question whose entire signal lives in
+# the option text — which is the shape D4 exists to catch — and allowed it. Measured.
+#
+# Both halves are asserted. First: the signal is reachable in the string shape at all. The question
+# text is deliberately contentless ("Which one?") so the ONLY thing that can produce a deny is option
+# text, which is what makes this a real reachability assertion rather than a restatement of D1.
+# Second: an option shape nothing can read must announce itself on stderr and allow, never allow
+# silently — a partial corpus can only ever produce a false allow, so it must not be judged.
+TOTAL=$((TOTAL+1))
+d8_fail=0
+
+d8_out=$(printf '%s' '{"tool_name":"AskUserQuestion","cwd":".","session_id":"t","tool_input":{"questions":[{"question":"Which one?","options":["Read the runbook properly first","Ask whoever owns the cutover section"]}]}}' \
+  | "$HOOK" 2>/dev/null)
+d8_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${d8_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$d8_dec" != "deny" ]]; then
+  printf '  FAIL: D8 option-as-string shape was %s — the label/description text is being dropped, so every arm classifies a TRUNCATED corpus and can only fail toward a false allow\n' "$d8_dec" >&2
+  d8_fail=$((d8_fail+1))
+fi
+
+# An options value that is neither an object nor a string: unreadable, so it must be announced.
+d8_err=$(printf '%s' '{"tool_name":"AskUserQuestion","cwd":".","session_id":"t","tool_input":{"questions":[{"question":"How should I resolve the cutover path?","options":[[1,2]]}]}}' \
+  | "$HOOK" 2>&1 >/dev/null)
+if ! grep -q 'corpus extraction failed' <<<"$d8_err"; then
+  printf '  FAIL: D8 an unreadable options shape produced no stderr breadcrumb — a could-not-measure is being reported as a clean measurement\n' >&2
+  d8_fail=$((d8_fail+1))
+fi
+
+if [[ "$d8_fail" -eq 0 ]]; then
+  echo "  PASS: D8 option text is reachable in a foreign shape, and an unreadable corpus announces itself"; PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
 fi
 
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 14 ]]; then echo "  PASS: V1 full inventory ran (14 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 14 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 17 ]]; then echo "  PASS: V1 full inventory ran (17 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 17 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+
+# --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
+#
+# Measured on this file: paying `PASS=$((PASS+1))` from `run_case`'s FAIL branch reported `17/17
+# passed` and exited 0 while every `FAIL:` line still printed to stderr, so the human-readable and
+# machine verdicts actively disagreed. The accounting identity below CANNOT see it — exactly one
+# bucket pays per case either way, so `PASS + FAIL == TOTAL` holds under the swap. Nor can any floor:
+# they all bound how MUCH was counted, never WHERE it landed.
+#
+# Only driving both branches catches it. Each is run in a subshell with its own counters, against the
+# real hook, with a payload whose correct decision is known — so the expectation, not the hook, is
+# what differs between the two. `V2` is the reason a misrouted verdict cannot ship green; it is the
+# same gap the lint battery's H1 has, and the same remedy.
+v2_probe() { # <expect> -> "PASS/FAIL" from a single isolated case
+  ( PASS=0; FAIL=0; TOTAL=0
+    run_case "v2 instrument self-test" "$1" \
+      "Approve the production deploy of the retry fix?" \
+      "Yes, deploy now" "ship it" "No, hold" "wait for the window" >/dev/null 2>&1
+    printf '%s/%s' "$PASS" "$FAIL" )
+}
+# The payload is an authorization, so the hook allows it. Expecting `allow` must pay PASS; expecting
+# `deny` must pay FAIL. Any other pair of readings means the buckets are crossed or one is dead.
+v2_ok="$(v2_probe allow)"
+v2_bad="$(v2_probe deny)"
+if [[ "$v2_ok" != "1/0" || "$v2_bad" != "0/1" ]]; then
+  printf '\nFATAL: instrument: run_case does not discriminate — a satisfied expectation scored %s and a violated one scored %s (want 1/0 and 0/1). The verdict helper is misrouting, so every PASS above is unproven.\n' \
+    "$v2_ok" "$v2_bad" >&2
+  exit 1
+fi
+
+# --- ACCOUNTING CONSERVATION + ASSERTION FLOOR ----------------------------------------------------
+# Measured on this file: paying `PASS=$((PASS+1))` from the FAIL branch reported `17/17 passed` and
+# exited 0 while every `FAIL:` line still printed — to stderr, where the footer's own claim
+# contradicted it. Nothing reddened, because `TOTAL` increments once per case regardless of branch and
+# nothing compared the buckets against it. The same shape appears in this PR's lint battery, and both
+# get the same remedy: a case must land in exactly one bucket, and the buckets must account for the
+# population.
+#
+# Reported with printf + exit 1, never through a verdict helper — a floor routed through the
+# machinery it backstops is disarmed by the same edit it exists to catch (ADR-193).
+if (( PASS + FAIL != TOTAL )); then
+  printf '\nFATAL: accounting: PASS(%d) + FAIL(%d) != TOTAL(%d) — a case was counted but landed in neither bucket, or in both.\n' \
+    "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 1
+fi
+# The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
+# added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
+# paying anything, cannot satisfy it.
+MIN_CASES=17
+if (( TOTAL < MIN_CASES )); then
+  printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
+    "$TOTAL" "$MIN_CASES" >&2
+  exit 1
+fi
 
 echo ""
 echo "=== $PASS/$TOTAL passed ==="
