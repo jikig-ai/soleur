@@ -771,7 +771,8 @@ logs:
   where: "GitHub Actions run log for .github/workflows/cutover-inngest.yml"
   retention: "repository default for Actions logs (90 days)"
 discoverability_test:
-  command: "bash -c 'awk \"/^  registry-probe\\\\)\\$/{f=1;next} f&&/^  [a-z-]+\\\\)\\$/{exit} f\" scripts/cutover-inngest.sh | grep -c inngest_execute_registry_gate'"
+  command: |
+    grep -c 'RPG_VERDICT="$(inngest_execute_registry_gate' scripts/cutover-inngest.sh
   expected_output: "1"
 ```
 
@@ -891,3 +892,60 @@ EXECUTED unless marked *(static)*. Dynamic scenarios run the FULL extracted arm 
 24. **Exec-arm regression.** Every existing `#8054` render and the AC7 content pin green with no edit
     to their expectations.
 25. **Mutation matrix.** M1.1-M1.5 and M2.1-M2.12 redden; H4's known-negative does not.
+
+## Review round — 2026-09-20 (PR #8426, 10 seats + coverage consult)
+
+Corrections applied on the branch; the sections above are the design record as planned, this
+block is what the review changed and why. Nothing here reverses a D-number.
+
+- **D2 wording was false post-rollback.** "nothing can have registered since boot `<id>` — its
+  inngest-server has not been bound on this boot" is a universal the gate never measures: `op=rollback`
+  is `systemctl stop`, same `boot_id`, and the server served ~70 registered functions on that boot
+  before the stop (ADR-100 addendum 2026-09-15). E9–E14 establish "not serving as of the newest row,
+  flag pre-arm on the heartbeat, no FSM transition since". The notice and the warning now say
+  exactly that, plus the same-boot rollback caveat; a render row pins the interval wording and bans
+  the since-boot phrasing. (data-integrity + architecture seats, converged.)
+- **`host_serving` blamed the webhook path inside the branch that had already proved the path
+  answered**, and sent the operator to `op=inventory`, which reads the WEB host's loopback. Rewritten:
+  row age with the 90-minute bound first, `inngest-host-state.sh` first, the `op=inventory` caveat
+  stated. `wrong_host` no longer says "the host is not the problem" (a dedicated host absent > 24 h
+  while web hosts emit lands there); `fsm_silent` names its three inputs and the 15-minute
+  re-dispatch; `stale_row` names E14; the E13 `flag_unreadable` message no longer quotes the lib's
+  `__UNREADABLE__` sentinel as if it were the flag; `*)` prints both read rcs as 2.0 does. The
+  staleness bound is 90 minutes everywhere (lib `max_row_age=5400`), not 60.
+- **`webhook_path` for a 500 whose body is the hook's own `FATAL … errors=[…]`** (the host ANSWERED
+  `/v0/gql` with a GraphQL error) was attributed to the hook; the message now discriminates on the
+  body's `inngest-registry-probe: FATAL` prefix before naming the path. (observability seat.)
+- **The 200-path REGISTERED warning said "Pre-cutover this is UNEXPECTED" on every healthy
+  post-cutover run.** AC9's pin is now a verbatim heredoc (the `origin/main` comparison is
+  `main == main` after merge and measured RED with HEAD standing in for main), and the one intended
+  change it carries is the cutover-state qualifier.
+- **Guard Contract realised in full.** The branch shipped M2.1–M2.5 and M2.10 only. Added: M1.1,
+  M1.2, a same-line second call (the census now counts OCCURRENCES, not lines), M2.6 (with row ages
+  normalised — the 2x2 headlines interpolate the age and a mutant survived 1 run in 3 on a second
+  boundary), M2.7, M2.8, M2.9 and its nested-`$(gh …)` sibling (the echo-arg emptier now refuses to
+  empty a string carrying `$(` or a backtick), H2 (`aborted`/`aborted` must-PASS), H3. Every token
+  the case handles now has a render (host_serving, wrong_host, stale_row, stale_schema, both
+  `flag_unreadable` cells, `unreadable`/`fsm_unreadable` at rc 0, the heartbeat read-failure leg);
+  the `>= 10 exit 1` and `no-SSH >= exits` aggregates are replaced by a per-arm row over tokens + `*)`
+  (the aggregates had one line of slack — `host_serving` could lose its `exit 1` green). Test
+  Scenario 19's "≥ 10 `exit 1`" is superseded by that row; Scenario 16's `RUNNER_TEMP` is now
+  `TMPDIR` (`mktemp -d -t`). Both region markers are asserted exactly-once and the end marker must
+  be the arm's last line before `;;`. Negated rows over the region views use herestrings (the
+  `producer | grep -q` form under pipefail measured a 1-in-8 false verdict).
+- **The suite could not run on the PR shape every remedy edit takes.** `infra-validation.yml`'s
+  path filter listed `.github/workflows/cutover-inngest.yml` but not `scripts/cutover-inngest.sh`,
+  the gate lib or the read classifier (the three files the suite reads since ADR-150), so an
+  arm-only PR skipped its own guard. Added. (coverage consult.)
+- **Runbook.** The read recipe grepped `::notice::`, which the runner renders as `##[notice]` —
+  zero matches on a real run (run 34948634783); now `grep -F 'registry-probe'`, and the two sibling
+  2.0 recipes accept both spellings. The "group's in-flight run" pointed at the watchdog, which runs
+  in its own group; it now lists the group's workflows and names all four members. The P1-6
+  widening was gated **pre-arm only** — post-cutover `registry_empty=false` is the healthy state and
+  the section's remedy replaces the production scheduler host. A displaced run shows `cancelled`,
+  not red.
+- **D3's `SOLEUR-DEBT:` marker** was claimed and absent; it is now at the arm's head with the
+  third-consumer trigger, and the `(:1402-1530)` line citation is a content anchor.
+- **Observability `discoverability_test`** failed Check 10 both as parsed (YAML escapes reached
+  `bash -c` unresolved) and as intended (the arm's own comment sat inside the awk range and printed
+  2); replaced by a block scalar anchored on the assignment form.

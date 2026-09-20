@@ -459,8 +459,9 @@ orphaning the scan). Triage off-box (no SSH):
    run that exits **0 without a `registry_empty=` line** printed a HOST-STATE VERDICT — the host was
    dark and graded from its own rows; the registry was never read, and the run's own `::warning::`
    says so. And a red `restart-inngest-server` run is a statement about the **restart workflow**,
-   not about this host — it can go red on the shared `deploy-inngest-restart` group's queue, on
-   its own gate, or on the web unit, none of which the dedicated host's rows would show.
+   not about this host — it shows `cancelled` when displaced from the shared `deploy-inngest-restart`
+   group's queue, and red on its own gate or on the web unit, none of which the dedicated host's rows
+   would show.
 
 ### Inspecting inngest-server's connection log
 
@@ -1082,25 +1083,37 @@ ADR-100, amendment 2026-09-14.
 > 1. **(a) Confirm the dedicated host is ready.** Two readings, cheapest first.
 >
 >    **Before dispatching either, know the queue you are joining.** `cutover-inngest.yml` shares the
->    `deploy-inngest-restart` concurrency group with `restart-inngest-server.yml` (job-level,
->    `cancel-in-progress: false`). GitHub keeps one running and ONE pending run per group, and a
->    newly queued run REPLACES the pending one — so during the incident this reading diagnoses, a
->    watchdog-dispatched restart can silently CANCEL your queued diagnostic, not merely delay it.
->    A `cancelled` op is that, not a verdict: re-dispatch it. The mechanism and the re-dispatch
->    recipe are under **"Concurrency: a watchdog restart can cancel a queued cutover op"** in
->    § Web scheduler QUIESCED. Read the group's in-flight run first
->    (`gh run list --workflow scheduled-inngest-health.yml --limit 1`).
+>    `deploy-inngest-restart` concurrency group (job-level, `cancel-in-progress: false`) with
+>    `restart-inngest-server.yml`, `deploy-inngest-image.yml` and the `apply-web-platform-infra.yml`
+>    apply jobs — including the `inngest-host-replace` remedy several verdicts below point at.
+>    GitHub keeps one running and ONE pending run per group, and a newly queued run REPLACES the
+>    pending one — so during the incident this reading diagnoses, a watchdog-dispatched restart can
+>    silently CANCEL your queued diagnostic, not merely delay it. A `cancelled` op is that, not a
+>    verdict: re-dispatch it. The mechanism and the re-dispatch recipe are under **"Concurrency: a
+>    watchdog restart can cancel a queued cutover op"** in § Web scheduler QUIESCED. Read the group's
+>    own workflows first — the watchdog (`scheduled-inngest-health.yml`) runs in its own group and only
+>    DISPATCHES into this one, so its run list does not show what is queued here:
+>
+>    ```bash
+>    gh run list --workflow cutover-inngest.yml --limit 3 --json databaseId,status,conclusion,createdAt
+>    gh run list --workflow restart-inngest-server.yml --limit 3 --json databaseId,status,conclusion,createdAt
+>    ```
 >
 >    The cheaper reading is the standalone diagnostic (#8079): `gh workflow run cutover-inngest.yml
 >    -f op=registry-probe`. It is read-only and dispatchable outside any window. Read its run:
 >
 >    ```bash
->    gh run view <op=registry-probe run id> --log | grep -E '::notice::registry-probe|::error::registry-probe'
+>    # The runner RENDERS workflow commands: a `::notice::` in the script is `##[notice]` in the log,
+>    # so a grep on the `::` spelling matches nothing on a real run (measured on run 34948634783).
+>    # Anchor on the body prefix; it catches the notice, the error, the `::warning::` caveat and
+>    # the plain `registry-probe: 1./2./3.` next-step lines a refusal prints after its headline.
+>    gh run view <op=registry-probe run id> --log | grep -F 'registry-probe'
 >    ```
 >
 >    A `registry_empty=` line is the **live measurement** (the host answered). A `HOST-STATE VERDICT:
->    dark` notice at exit 0 is **not** — it says nothing can have registered since that boot, and
->    its warning says what was not measured. Any `REFUSED (…)` line names its own remedy; none of
+>    dark` notice at exit 0 is **not** — it says the host was not serving as of its newest row and
+>    that nothing has registered SINCE that row (after a rollback the server served earlier on the
+>    same boot, and those registrations persist), and its warning says what was not measured. Any `REFUSED (…)` line names its own remedy; none of
 >    them tells you to SSH or to dispatch a mutating op. The op cannot open the window and cannot
 >    stand in for 2.0's gate — it answers a weaker question.
 >
@@ -1108,7 +1121,7 @@ ADR-100, amendment 2026-09-14.
 >    dedicated-host registry pre-flight). Read it from that run:
 >
 >    ```bash
->    gh run view <first op=execute run id> --log | grep -E '::notice::2\.0|::error::2\.0'
+>    gh run view <first op=execute run id> --log | grep -E '(::|##\[)(notice|error)(::|\])2\.0'
 >    ```
 >
 >    A `2.0 … REFUSED` line means do not open the window; follow its remedy first.
@@ -1285,7 +1298,7 @@ ADR-100, amendment 2026-09-14.
    Read the SEAM from the run log:
 
    ```bash
-   gh run view <op=execute run id> --log | grep -E '::notice::|::error::|::warning::'
+   gh run view <op=execute run id> --log | grep -E '(::|##\[)(notice|error|warning)(::|\])'
    ```
 
 1a. **web-2 needs no cutover step (corrected 2026-09-14, #6921).** web-2 (`10.0.1.11`, hel1
@@ -1685,11 +1698,14 @@ ADR-100, amendment 2026-09-14.
 
 ### 2.0 registry-non-empty remediation (P1-6)
 
-If `op=execute` aborts at 2.0 with `registry-probe: dark registry NON-empty` — or a standalone
+If `op=execute` aborts at 2.0 with `::error::2.0 ABORT — dark registry is NON-empty` — or, **while
+the cutover flag is still pre-arm** (`INNGEST_CUTOVER_FLIP` not `done`), a standalone
 `op=registry-probe` prints `registry_empty=false` with the `REGISTERED function(s)` warning (#8079;
 same hook, same reading, no window needed) — the dark host has functions registered against it —
-flipping now would carry stray state onto prod Postgres. To empty the dark registry and re-run
-(all no-SSH):
+flipping now would carry stray state onto prod Postgres. **This section is pre-arm only.** After
+step 2.4 the dedicated host owns production scheduling and `registry_empty=false` with ~70 functions
+is the HEALTHY reading (ADR-100 addendum 2026-09-15); following the steps below then would replace
+the production scheduler host. To empty a pre-arm dark registry and re-run (all no-SSH):
 
 1. Read `INNGEST_POSTGRES_URI` on `soleur-inngest/prd` and record which backend it targets.
    **Do NOT assert it should still be non-prod** — that instruction was correct only before the
