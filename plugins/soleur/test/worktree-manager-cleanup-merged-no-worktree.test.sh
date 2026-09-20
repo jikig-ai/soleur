@@ -690,7 +690,10 @@ env "${FIXTURE_GIT_ENV[@]}" GIT_COMMITTER_DATE="$(( $(date +%s) - 100000 ))" \
   git -C "$A10/clone" commit -q -m "unmerged work"
 fgit -C "$A10/clone" push -q -u origin feat-a10-gone
 fgit -C "$A10/clone" push -q origin --delete feat-a10-gone
-fgit -C "$A10/clone" fetch -q --prune
+# `--no-tags` is the battery-tag-authorship declaration (ADR-207): this fetch exists to prune
+# the deleted upstream, and it authors no tag. Without it the site grades OFFENDER in a census
+# no diff-derived suite selection reaches.
+fgit -C "$A10/clone" fetch -q --prune --no-tags
 fgit -C "$A10/clone" checkout -q main
 A10_STATE="$TMP/a10-state"; arm_reaper "$A10_STATE"
 run_reaper "$SCRIPT" "$A10/clone" "$A10_STATE" "$TMP/a10.log"

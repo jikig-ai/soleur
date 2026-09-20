@@ -186,6 +186,16 @@ that its comment and its code disagreed.
     `fixture-relative-assert` (twice) and `skill-body-budget`. **Prevention:** before every push,
     run the ratchets `test-all.sh` registers under `scripts/lint-*-live` with their baselines —
     they reference no changed file and never appear in a diff-derived selection.
+28. **`battery-tag-authorship` graded A10's `fetch -q --prune` an OFFENDER** — a repo-global
+    census over a 990-file closure, reached only by the full battery. `--no-tags` is the
+    declaration (ADR-207). **Prevention:** a fixture that adds ANY `git fetch`/`pull`/`tag`
+    line owes `--no-tags` (or a ledger entry) in the same edit; the census references no
+    changed file, so it is the fifth ratchet on this branch invisible to diff-derived selection.
+29. **I edited the worktree while the full battery was running**, which is the dirty-tree
+    invalidation `work/SKILL.md` §9 names: the run then certifies no single SHA. Recovery: the
+    pushed head is verified by CI, and the two affected suites are re-run by hand.
+    **Prevention:** when a battery is in flight, queue the fix and apply it after the rc file
+    lands — or accept the run is diagnostic only and say so.
 
 ## Related
 
