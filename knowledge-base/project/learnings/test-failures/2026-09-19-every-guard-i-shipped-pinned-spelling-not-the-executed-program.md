@@ -170,6 +170,16 @@ Each was seconds to falsify and none had been.
     never reached. Each fix bought one more step of visibility and one more CI round.
     **Prevention:** when a JOB fails, extract and run ALL of its steps locally, not just the
     one named in the failure. Parse the job body out of `ci.yml` and run the list.
+23. **Watched a job matched by `test("deploy";"i")`, which resolved to "Deploy Documentation
+    to Cloudflare Pages" rather than the web-platform deploy arm.** Had it gone green, the prd
+    cron would have fired against the PREVIOUS build — the exact #8276 failure the deploy-arm
+    rule exists to prevent. Caught before it mattered. **Prevention:** select the arm by
+    `name == "Web Platform Release"` AND `event == "workflow_run"`, then the job named exactly
+    `deploy`. `postmerge/SKILL.md` already documents this predicate, so this was an execution
+    gap, not a doc gap.
+24. **Reported a job as hung for 2h24m by comparing a UTC `started_at` against a local-time
+    clock.** It was 24 minutes. **Prevention:** read both sides in the same timezone before
+    computing an elapsed time.
 
 ## Related
 
