@@ -46,6 +46,10 @@ commit hook.
    source/import closure, name-stem resolution, and the declared edges in
    `scripts/lib/test-affected-paths.sh` — plus every `ALWAYS_ON_SUITES`
    repo-global ratchet (`*-live` scanners, runner-SUT suites, corpus linters).
+   `edge:declared`/`edge:consumed` UNION with derivation rather than shadow
+   it: a declared array records only what derivation could not reach at write
+   time, so a dependency a suite gains afterwards widens its edge set instead
+   of being declined behind a stale declaration.
    CI (`CI` set) and explicit `TEST_GROUP` group runs are unaffected; CI keeps
    the full battery.
 
@@ -126,6 +130,14 @@ commit hook.
 - A healthy affected run reports `N-k/N` with a `not-affected` breakdown —
   `N/N` is now the exception, and a reader must not read the smaller numerator
   as incompleteness.
+- **Accepted niche: a diff that ONLY deletes a derivable SUT.** Edge
+  registration filters on `[[ -e ]]`, so a pure deletion diff never matches an
+  edge that no longer exists — a suite whose SUT vanishes in the same commit
+  declines. This is bounded (deleting a SUT while keeping its test is rare,
+  and always-on ratchets still run) and fixing it would mint dead edges for
+  argv tokens that merely look like paths — the `[[ -e ]]` test is the garbage
+  filter that keeps the edge set honest. Fail-safe via `unclassified` already
+  covers the common case (the deletion removes the suite's only edge).
 
 ## Alternatives considered
 

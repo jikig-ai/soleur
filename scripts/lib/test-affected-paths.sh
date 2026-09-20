@@ -57,6 +57,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
   "scripts/lint-agents-rule-budget-live"
+  "scripts/lint-anthropic-content-position-live"
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-guard-contract-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
@@ -128,6 +129,10 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-statuses.test.sh"
   "plugins/soleur/test/lint-distribution-content.test.sh"
+  # debug-probe-residue scans the whole tracked tree for DEBUG-hex4 residue —
+  # a diff adding a probe anywhere must re-run it (same discovered-corpus shape
+  # as operator-script.test.sh below).
+  "plugins/soleur/test/debug-probe-residue.test.sh"
   # operator-script's property is discovered, not enumerated: it greps the whole
   # tree for `lib/operator-script.sh` sourcers and asserts the no-secret-leak
   # property over each. A diff adding a consumer anywhere must re-run it —
@@ -956,4 +961,13 @@ AFFECTED_SCRIPTS_LIB_RULE_LINE_REGEX_PARITY_TEST_SH_PATHS=(
   "scripts/lib/rule-line-regex-parity.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/followthroughs/registry-luks-live-8386.test.sh — a battery named for the live
+# follow-through probe it mutates; declared per the census's live-scanner arm even though
+# the name-stem convention would reach the SUT, so the binding is explicit.
+AFFECTED_SCRIPTS_REGISTRY_LUKS_LIVE_8386_PATHS=(
+  "scripts/followthroughs/registry-luks-live-8386.sh"
+  "scripts/followthroughs/registry-luks-live-8386.test.sh"
+  "scripts/lib/test-affected-paths.sh"
 )

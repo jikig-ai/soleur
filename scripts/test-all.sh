@@ -1435,6 +1435,12 @@ _diff_touches() {
 #   3. declared — AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh.
 #   4. derived — argv literals, `-c` payload paths, name-stem conventions, and
 #      the source/import closure of the suite file itself.
+#
+#   Rungs 2–3 UNION with rung 4 rather than replace it: a declared array
+#   records only what derivation could not reach AT WRITE TIME, so a
+#   dependency the suite gains afterwards must widen its edge set — never be
+#   shadowed by the declaration into a silent decline. The label keeps
+#   provenance; the edge set is declared ∪ derived.
 #   5. unclassified — SELECTS anyway. A suite the derivation cannot reach runs
 #      rather than skipping; the census linter is what makes that state loud.
 #
@@ -1798,21 +1804,33 @@ _affected_classify() {
   for _m in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do
     if [[ "${_m%%|*}" == "$_label" ]]; then
       _affected_resolve_edges "${_m#*|}"
-      _AC_CLASS="edge:consumed"; return 0
+      _AC_CLASS="edge:consumed"; break
     fi
   done
-  local _arr _u
-  # One fork, not a tr|tr|sed pipeline — and the SAME normalisation the
-  # census linter applies (uppercase, non-alnum to _, leading _ stripped): the
-  # two must compute the same name for the same label or a declared array is
-  # invisible to exactly one of them.
-  _u="$(printf '%s' "$_label" | tr 'a-z' 'A-Z')"
-  _u="${_u//[!A-Z0-9]/_}"
-  _u="${_u#_}"
-  _arr="AFFECTED_${_u}_PATHS"
-  if declare -p "$_arr" >/dev/null 2>&1; then
-    _affected_resolve_edges "$_arr"
-    _AC_CLASS="edge:declared"; return 0
+  if [[ -z "$_AC_CLASS" ]]; then
+    local _arr _u
+    # One fork, not a tr|tr|sed pipeline — and the SAME normalisation the
+    # census linter applies (uppercase, non-alnum to _, leading _ stripped): the
+    # two must compute the same name for the same label or a declared array is
+    # invisible to exactly one of them.
+    _u="$(printf '%s' "$_label" | tr 'a-z' 'A-Z')"
+    _u="${_u//[!A-Z0-9]/_}"
+    _u="${_u#_}"
+    _arr="AFFECTED_${_u}_PATHS"
+    if declare -p "$_arr" >/dev/null 2>&1; then
+      _affected_resolve_edges "$_arr"
+      _AC_CLASS="edge:declared"
+    fi
+  fi
+  if [[ -n "$_AC_CLASS" ]]; then
+    # Union, not shadow: buffer the declared/consumed edges, derive the suite's
+    # reachable set, then re-add the declared entries so the edge set is
+    # declared ∪ derived. A suite that gains a dependency tomorrow selects on
+    # it even though its array predates the dependency.
+    local _decl=( ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} ) _e
+    _affected_derive "$_label" "$@"
+    for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_edge "$_e"; done
+    return 0
   fi
   _affected_derive "$_label" "$@"
   if (( ${#_AC_EDGES[@]} == 0 )); then _AC_CLASS="unclassified"; return 0; fi

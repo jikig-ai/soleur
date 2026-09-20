@@ -643,6 +643,40 @@ else
   fail "u2: class='${_ucls:-<none>}' expected unclassified"
 fi
 
+# --- Row x: declared edges UNION with derived, never shadow ---------------------
+# A declared array records what derivation could not reach AT WRITE TIME. If the
+# suite later gains a derivable dependency — modelled here by splicing the suite
+# file OUT of its declared array and diff-touching it — the suite must still
+# select. Under the shadowing semantics this row replaces, it would decline:
+# the declaration would hide the dependency the diff just reached.
+cases=$((cases + 1))
+_sbn="$TESTROOT/sb-union/test-all.sh"
+build_sandbox "$_sbn" with-lib >/dev/null || { fail "x: sandbox build"; }
+python3 - "$(dirname "$_sbn")" <<'PY' || { fail "x: splice"; }
+import sys, re
+p = sys.argv[1] + "/lib/test-affected-paths.sh"
+s = open(p).read()
+old = '  "tests/commands/test-sync-domain-model.sh"\n'
+assert old in s, "self-edge line not found"
+s2 = s.replace(old, '', 1)
+open(p, 'w').write(s2)
+PY
+rc=0
+( cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+    SANDBOX_RECORD="$TESTROOT/rec-$cases" \
+    'SANDBOX_DIFF_NAMES=tests/commands/test-sync-domain-model.sh' \
+    bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || rc=$?
+ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
+_xcls=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$_sbn" --print-affected-set 2>/dev/null \
+  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/commands/sync-domain-model"{print $3}')
+if grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD" \
+  && [[ "$_xcls" == "edge:declared" ]]; then
+  pass "x: declared ∪ derived — diff to a derived-only path still selects (class=edge:declared)"
+else
+  fail "x: rc=$rc class='${_xcls:-<none>}' ran=$(grep -c 'sync-domain-model' <<<"$ARM_RECORD")"
+fi
+
 # --- Rows w: the unscoped untracked append --------------------------------------
 # w1 is the source pin: under _AFFECTED the runner appends `git ls-files
 # --others --exclude-standard` UNSCOPED — a brand-new suite file's self-edge and
@@ -734,7 +768,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=30
+MIN_CASES=31
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
