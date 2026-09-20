@@ -221,6 +221,23 @@ export async function cronRulePruneHandler({
         "rule-prune.sh completed",
       );
 
+      // THE EXIT CODE IS A VERDICT, NOT A LOG FIELD (#8384 review). It was logged above and
+      // never branched on, so the outcome came solely from parseSentinels(stdout): a
+      // rule-prune.sh that exited 2 emitted no sentinels, left retired-rule-ids.txt clean,
+      // and was reported as `noCandidates` -> ok:true heartbeat -> "no-candidates". A hard
+      // failure was indistinguishable from a healthy quiet run on the ONLY automated caller.
+      //
+      // #8377 is what made that reachable: rule-metrics.json used to be committed, so a
+      // fresh clone had it. It is an untracked cache now, .rule-incidents.jsonl is gitignored
+      // so a clone carries none, and the aggregator's zero-row guard exits 0 WITHOUT writing
+      // -- after which rule-prune.sh hits `[[ -f "$METRICS" ]] || exit 2` on every run.
+      // Without this branch the monitor could never fail again.
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `rule-prune.sh exited ${result.exitCode}: ${(result.stderr || result.stdout || "").trim().slice(0, 500)}`,
+        );
+      }
+
       const sentinels = parseSentinels(result.stdout);
 
       if (!sentinels.prTitle || !sentinels.prBody) {

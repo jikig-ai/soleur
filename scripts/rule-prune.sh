@@ -82,7 +82,18 @@ if [[ -z "${RULE_METRICS_ROOT:-}" && -f "$SCRIPT_DIR/rule-metrics-aggregate.sh" 
   rm -f "$_agg_log"
 fi
 
-[[ -f "$METRICS" ]] || { echo "ERROR: $METRICS not found — run scripts/rule-metrics-aggregate.sh first." >&2; exit 2; }
+# The remedy must not name the step that just ran and declined. The aggregator above exits 0
+# WITHOUT writing when the incident corpus has zero rule-carrying rows -- the normal state of
+# any fresh clone, since .claude/.rule-incidents* is gitignored. Telling the operator to "run
+# the aggregator first" there sends them to the thing that just no-opped (#8384 review).
+[[ -f "$METRICS" ]] || {
+  echo "ERROR: $METRICS not found and the aggregator produced none." >&2
+  echo "  This is the expected state on a checkout with no local incident log:" >&2
+  echo "  $ROOT/.claude/.rule-incidents.jsonl is gitignored (ADR-091), and the aggregate has" >&2
+  echo "  been an untracked cache since ADR-235 — so there is nothing to prune here." >&2
+  echo "  Rule metrics are produced on the machine where the incidents were recorded." >&2
+  exit 2
+}
 
 # Schema contract: make SCHEMA_VERSION load-bearing at the consumer
 # boundary. If the aggregator ever bumps to schema 2 with a different
