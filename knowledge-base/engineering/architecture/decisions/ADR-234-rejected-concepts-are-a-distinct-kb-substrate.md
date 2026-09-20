@@ -1,4 +1,4 @@
-# ADR-232: Rejected concepts are a distinct KB substrate from a `not-planned` close
+# ADR-234: Rejected concepts are a distinct KB substrate from a `not-planned` close
 
 - **Date:** 2026-09-20
 - **Issue:** #8289

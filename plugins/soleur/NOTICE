@@ -206,7 +206,7 @@ mattpocock/skills
     convention with concept-not-keyword matching, the durable-reason
     test and the built-is-not-rejected prohibition (kb-glossary/
     references/rejected-request-register.md; substrate decision in
-    ADR-232); the two intake pre-checks -- redundancy search keyed on
+    ADR-234); the two intake pre-checks -- redundancy search keyed on
     domain concept with the searched surfaces reported, and a
     prior-rejection lookup (skills/triage/SKILL.md,
     agents/support/ticket-triage.md); and grill-the-send-not-the-subject

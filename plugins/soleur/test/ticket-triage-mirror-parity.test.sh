@@ -12,7 +12,7 @@
 # writes reach the repository with the fewest gates in front of them. And the specific prose at stake
 # is the advisory-only clause plus the precedence rule: a mirror that loses the sentence "a hit is
 # reported to a human and escalates; it never acts" is a mirror that authorises an agent to close
-# issues on the strength of a no-list entry, which ADR-232 traces through two automated hops to a
+# issues on the strength of a no-list entry, which ADR-234 traces through two automated hops to a
 # permanently-closed issue attributed to a human decision that never happened.
 #
 # So the property is not "both files exist" and not "both mention the no-list". It is that the shared

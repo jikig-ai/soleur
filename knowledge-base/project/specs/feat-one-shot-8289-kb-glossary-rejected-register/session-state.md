@@ -32,13 +32,13 @@ None fatal. Six recoverable, each fixed and recorded as a numbered revision in t
 ## Collision Gate
 - Step 0a.5 (pre-plan): #8289 OPEN, `closedByPullRequestsReferences` empty, zero linked PRs in any state. Body-probe hits #6664 (merged 2026-07-18) and #3940 (merged 2026-05-17) both predate the issue (created 2026-09-18) and intersect none of its named paths → citations, not collisions. Title probe and `git log --grep` empty. Duplicate-open-issue search over glossary / ubiquitous language / rejected request / questionnaire / out-of-scope surfaced nothing on this scope (#6008 is product-onboarding questionnaires, unrelated).
 - Post-plan re-probe (this step, against the plan's `closes: 8289`): still OPEN, still no linked PR, and no open PR other than this branch's own #8405 references it.
-- ADR ordinal re-derived across every `origin/*` ref: highest is ADR-231 (claimed on a sibling ref), so this bundle uses **ADR-232**. Re-derive again immediately before merge.
+- ADR ordinal re-derived across every `origin/*` ref: highest is ADR-231 (claimed on a sibling ref), so this bundle uses **ADR-234**. Re-derive again immediately before merge.
 
 ## Work Phase
 
 - Status: complete. Merge-base `f9cd8dc2cb91bde560e34e6c4d1dfa02c113a159`; 42 files staged.
 - Execution: Tier B fan-out, three write-only agents on disjoint file sets (Phase 2 glossary / Phase 3
-  no-list+reader / Phase 4 questionnaire). The lead ran Phase 0, Phase 1 (ADR-232), Phase 5 wiring, the
+  no-list+reader / Phase 4 questionnaire). The lead ran Phase 0, Phase 1 (ADR-234), Phase 5 wiring, the
   ratchets, and committed everything from one known SHA — no agent ran a git write command.
 
 ### Battery owed — `scripts/test-all.sh --capacity` reported CAPACITY_CONTENDED
@@ -146,7 +146,7 @@ files proves nothing about them. That re-run is what surfaced the vacuity findin
   as an added path, and the questionnaire deliverable the Phase 0 placement existed to interrogate is
   present as code rather than as description — so the single pass is strictly more informative, and
   ADR-026 TR3 caps the skill at one pass per phase.
-- **ADR-232 follows ADR-230's live shape** (Status / Context / Decision / Enforcement sites /
+- **ADR-234 follows ADR-230's live shape** (Status / Context / Decision / Enforcement sites /
   Alternatives Considered / Consequences), not the template's 8-section rich block. The rubric's
   trigger 5 is hit, but the two most recent ADRs on `main` carry no YAML frontmatter at all and the
   template itself warns that an 8-section ADR with four `None` stanzas is worse than a terse one.

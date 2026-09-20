@@ -133,7 +133,7 @@ plan's shape. Nothing here is inferred — every row names the command that prod
 | P3 | Tier 1 audit entry "landed via PR #8284" in `knowledge-base/product/competitive-intelligence.md` | **STALE.** PR #8284 is still `OPEN` (`mergedAt: null`); `git show origin/main:knowledge-base/product/competitive-intelligence.md \| grep mattpocock` returns nothing, and so does the branch copy | Cite `plugins/soleur/NOTICE` (which does carry the pinned SHA) as the provenance authority, never competitive-intelligence.md. No dependency on #8284 landing |
 | P4 | Bundle 1 shipped `operator-explain`, which must read the glossary | **WRONG NAME.** `plugins/soleur/skills/operator-explain/` does not exist; `grep -rn operator-explain` returns zero. Bundle 1 shipped the peer `wait-what` as **`operator-rephrase`** (`ls -d plugins/soleur/skills/operator-*` → `operator-bootstrap`, `operator-digest`, `operator-rephrase`) | Wire `operator-rephrase`. See P5 — this is not optional |
 | P5 | `operator-rephrase` is a consumer to wire | **STRONGER THAN THAT.** Its `## Vocabulary` section says verbatim: *"v1 ships with no vocabulary source, and that is the durable state. There is no repository glossary to draw approved terms from… A repository glossary is a separate piece of work tracked in #8289; if one lands later, this skill can cite it then."* | Landing the glossary makes shipped prose FALSE. Rewriting that paragraph is a **required** deliverable, not a courtesy wiring |
-| P6 | `origin/main` tops at ADR-230, so a new ADR starts at **ADR-231** | **ALREADY CLAIMED.** Enumerated across all 97 `origin/*` refs: ADR-231 is taken by `origin/feat-one-shot-8361-workflow-size-limit` (`ADR-231-workflow-files-are-byte-budgeted…`). Two further branches claim a *different* ADR-230 title (`feat-8322-affected-test-gate`, and #8360's `feat-one-shot-auto-inngest-pin-bump`) | Next free is **ADR-232**. Re-derive across every `origin/*` ref immediately before merge |
+| P6 | `origin/main` tops at ADR-230, so a new ADR starts at **ADR-231** | **ALREADY CLAIMED.** Enumerated across all 97 `origin/*` refs: ADR-231 is taken by `origin/feat-one-shot-8361-workflow-size-limit` (`ADR-231-workflow-files-are-byte-budgeted…`). Two further branches claim a *different* ADR-230 title (`feat-8322-affected-test-gate`, and #8360's `feat-one-shot-auto-inngest-pin-bump`) | Next free is **ADR-234**. Re-derive across every `origin/*` ref immediately before merge |
 | P7 | `plugins/soleur/skills/triage/SKILL.md` is the issue-intake surface | **IT IS NOT.** Its own description: *"This skill should be used when triaging legacy local todo files in `todos/`. For GitHub issues, use soleur:support:ticket-triage agent."* Workflow is Step 1 present finding → Step 2 handle decision → Step 3 loop → Step 4 summary, over files in `todos/` (which exists and is populated). `grep -cniE 'dedup\|duplicate\|reject\|declin'` → **0** | Both pre-checks still land there, but scoped to what a `todos/` finding *is* — an internally-generated review finding that can legitimately restate an already-built or already-refused concept. Recorded as a reconciliation row, not silently reinterpreted |
 | P8 | `plugins/soleur/agents/support/ticket-triage.md` can perform the no-list write | **READ-ONLY BY DECLARATION.** Its Sharp Edges: *"Do not close or modify issues. Read-only access via `gh issue list` and `gh issue view`."* | The agent gets READ-only pre-checks; the no-list **write** lands on the attended `triage` path behind a confirmation gate. An agent that cannot close an issue cannot be the one that records why it was closed |
 | P9 | The unattended daily pass will pick the pre-checks up | **IT CANNOT — but not for the reason I first wrote.** `.github/workflows/scheduled-daily-triage.yml` is **deleted**; `apps/web-platform/server/inngest/functions/cron-daily-triage.ts` says *"Source: extracted from .github/workflows/scheduled-daily-triage.yml (deleted in the same commit)"* and carries a self-contained `DAILY_TRIAGE_PROMPT` referencing no skill or agent file. My first reading was that its `--allowedTools` had no file-read verb; the product lens corrected me and the correction is right. Line 171 **does** grant `Read,Glob,Grep`. The real blocker is line 216: *"This cron never clones, so `gh` runs from…"* — there is **no working tree**, so `Read` has nothing to point at | Out of scope and out of reach. Deferred to a filed issue whose named blocker is the **absent checkout**, not a missing tool. This distinction is load-bearing: a follow-up written against the wrong cause gets closed by a one-line `--allowedTools` change that fixes nothing |
@@ -318,7 +318,7 @@ honoured and the divergence is recorded here rather than silently reinterpreted.
 | `ticket-triage.md` performs the no-list write | Declared read-only: *"Do not close or modify issues."* | Read-only pre-checks there; the write procedure is owned by `knowledge-base/project/rejected/README.md` and gated by a lint plus a typed confirmation |
 | The `wontfix` label carries the rejection signal | `wontfix` has been applied to **0 issues in repository history** (3,182 closed). Rejection is expressed as a `not-planned` closure (187 instances) | The register keys on the concept, not on a label. The convention names the `not-planned` closure state, not `wontfix` |
 | The register serves "every re-arriving feature request" from outside | **Zero external filers.** 300-issue sample of the open backlog: 3 distinct authors, all internal — `deruelle` 215, `app/soleur-ai` 68, `app/github-actions` 17; 1,507 open issues total | v1 is an **internal concept-dedup index** over a large, largely agent-generated backlog. The requester-facing half (auto-posted closing comments, a public rejection record, the three-way "do you still feel the same way" prompt) is a **Non-Goal** — it designs for an audience that does not exist yet |
-| A new ADR starts at ADR-231 | ADR-231 is claimed on `origin/feat-one-shot-8361-workflow-size-limit` | **ADR-232**, re-derived across every `origin/*` ref immediately before merge |
+| A new ADR starts at ADR-231 | ADR-231 is claimed on `origin/feat-one-shot-8361-workflow-size-limit` | **ADR-234**, re-derived across every `origin/*` ref immediately before merge |
 | `find knowledge-base -iname '*glossar*'` returns zero, so no glossary exists | True for `knowledge-base/`, but `plugins/soleur/docs/pages/glossary.njk` exists as a **public SEO** glossary | Declared audience split plus a one-line cross-pointer. Not a second copy |
 | (my own working premise, corrected by the legal lens) root `knowledge-base/` ships to every plugin installer | **False.** `.claude-plugin/marketplace.json` sets `"source": "./plugins/soleur"`, so the payload is `plugins/soleur/` only. Customers receive the four-item seed tree `plugins/soleur/knowledge-base/` (`INDEX.md`, `kb-categories.txt`, `kb-tags.txt`, `project/learnings/` × 10 onboarding docs) — not Soleur's company KB | The glossary and the no-list are **Soleur's own corpus**, publicly readable because the repo is public, but not distributed as Software. No seed copy is added to the payload tree in v1 |
 
@@ -350,7 +350,7 @@ be misled about which store answers "was this concept refused?".
 
 ### ADR
 
-**ADR-232 — Rejected concepts are a distinct KB substrate from a `not-planned` close.**
+**ADR-234 — Rejected concepts are a distinct KB substrate from a `not-planned` close.**
 
 Decision, one line: *rejected concepts are recorded as durable, concept-keyed files under
 `knowledge-base/project/rejected/`, distinct from a GitHub `not-planned` closure (per-issue,
@@ -393,7 +393,7 @@ three model files were read — `knowledge-base/engineering/architecture/diagram
 
 ### Sequencing
 
-The decision is true the moment the no-list directory and its reader land, so ADR-232 ships at
+The decision is true the moment the no-list directory and its reader land, so ADR-234 ships at
 `status: accepted` in this PR. No soak, no `adopting` interim.
 
 ## Observability
@@ -624,7 +624,7 @@ set. The `{staged_files}` form also means the lint must behave correctly when ha
 mutation row below, because "no paths, exit 0, nothing checked" is the vacuous arm.
 
 **Advisory-only clause — the single highest-value line in this plan.** It goes in
-`knowledge-base/project/rejected/README.md`, in ADR-232, and is asserted by the lint:
+`knowledge-base/project/rejected/README.md`, in ADR-234, and is asserted by the lint:
 
 > A rejected-concepts entry may never be the sole basis for closing, labelling or auto-closing an issue.
 > A prior-rejection hit is **reported to a human and escalates; it never acts.** In particular
@@ -869,7 +869,7 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
 | `scripts/followthroughs/questionnaire-unanswered-8289.sh` | The return-leg probe (Phase 2.9.1) | No |
 | `scripts/lint-rejected-register.sh` | Guard 1 | No |
 | `plugins/soleur/test/lint-rejected-register.test.sh` | Guard 1's battery. **Located here, not under `scripts/` (P1-2).** `scripts/test-all.sh --print-suite-globs` does not include `scripts/*.test.sh` — the runner says so itself (*"Registered explicitly — `scripts/*.test.sh` is not auto-globbed"*), and 94 of the 95 tracked `scripts/*.test.sh` carry a hand-written `run_suite` line. Placing it there would have required editing `scripts/test-all.sh`, which AC-33 forbade, making AC-7 unsatisfiable. `plugins/soleur/test/*.test.sh` **is** glob-registered, so the suite is reachable with no runner edit | No |
-| `knowledge-base/engineering/architecture/decisions/ADR-232-<slug>.md` | ADR-232 | No |
+| `knowledge-base/engineering/architecture/decisions/ADR-234-<slug>.md` | ADR-234 | No |
 | `knowledge-base/project/specs/feat-one-shot-8289-kb-glossary-rejected-register/decision-challenges.md` | DC-1 and any further User-Challenge, rendered by `ship` Phase 6 into the PR body and an `action-required` issue | No |
 
 ## Files to Edit
@@ -885,7 +885,7 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
 | `plugins/soleur/skills/brainstorm/SKILL.md` | One glossary read-pointer | Lifecycle ceiling 134628/141000 → 6372 B headroom |
 | `plugins/soleur/skills/plan/SKILL.md` | One glossary read-pointer | Lifecycle ceiling 115271/120000 → 4729 B headroom |
 | `plugins/soleur/skills/spec-templates/SKILL.md` | One glossary read-pointer | Not governed by the ceiling |
-| `plugins/soleur/skills/architecture/SKILL.md` | One glossary read-pointer plus the ADR-232 cross-reference | Not governed by the ceiling |
+| `plugins/soleur/skills/architecture/SKILL.md` | One glossary read-pointer plus the ADR-234 cross-reference | Not governed by the ceiling |
 | `.claude/hooks/pre-ask-technical-fork-gate.sh` | Rung **5** in the `REASON` ladder naming `soleur:questionnaire-generate`, **and — load-bearing (R1) — a dedicated `EXTERNAL_EXPERT_RE` arm evaluated as its own decision BEFORE the `AUTHORITY_RE` short-circuit at line 84.** Rung 5 alone is unreachable: `AUTHORITY_RE` wins outright and matches `cost`/`budget`/`price`/`priorit`/`scope`/`schedule`/`spend`, which an accountant or lawyer question almost always carries, and the surviving path still requires `INVESTIGATIVE_RE`, which this class never matches. The arm covers `accountant`/`bookkeeper`/`lawyer`/`solicitor`/`notary`/`auditor`/`tax`/`insurer`/`bank`/`regulator`/`landlord` and must precede the short-circuit because this class legitimately co-occurs with `cost` | **Byte cost to `B_ALWAYS`: zero.** Hooks are not in the always-loaded payload. See the rule-pointer note |
 | `.claude/hooks/pre-ask-technical-fork-gate.test.sh` | Assert rung 5 is present, anchored on surrounding syntax not a bare token (`cq-assert-anchor-not-bare-token`); bump the inventory by **one**, whatever it measures at edit time (it is `[[ "$TOTAL" -eq 12 ]]` today). Do not hardcode 13 — AC11 disclaims the literal, because a sibling branch adding a rung moves it |
 | `plugins/soleur/test/components.test.ts` | Bump `SKILL_DESCRIPTION_WORD_BUDGET` by exactly the two new descriptions' word count, appending to the comment log in the established shape: `bumped +N for #8289 (<skill> skill description, N words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline)` | **Measured 2499/2499, zero headroom.** Both descriptions must open `This skill should be used when` and stay ≤1024 chars |
@@ -1023,7 +1023,7 @@ Phase order is dependency-directed, not file-grouped: a contract lands before it
    `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md`, and the description-word
    measurement through `discoverSkills()`/`parseComponent()`.
 2. Re-derive the free ADR ordinal across **every** `origin/*` ref after a fresh `git fetch origin` —
-   not `origin/main` alone. Expect ADR-232; treat it as provisional.
+   not `origin/main` alone. Expect ADR-234; treat it as provisional.
 3. Re-fetch the five peer blobs at the pinned SHA into the scratchpad. They are read-only inputs and
    are never committed.
 4. Run `/soleur:gdpr-gate` against this plan document.
@@ -1032,9 +1032,9 @@ Phase order is dependency-directed, not file-grouped: a contract lands before it
 6. Confirm both new skill directory names are free and kebab-case, and that no `questionnaire-*` family
    exists yet (it does not).
 
-### Phase 1 — ADR-232 first (the go/no-go gate for Phases 2 and 3)
+### Phase 1 — ADR-234 first (the go/no-go gate for Phases 2 and 3)
 
-Author ADR-232 via `/soleur:architecture` with the four-row `## Alternatives Considered` table and the
+Author ADR-234 via `/soleur:architecture` with the four-row `## Alternatives Considered` table and the
 measurement behind each row. If drafting the alternatives establishes that a `--state all --search`
 sweep over `not-planned` closes already answers "was this concept refused?", **stop and re-scope**
 rather than shipping a third store, recording that as a decision challenge. The expected outcome is
@@ -1121,9 +1121,9 @@ Ordered so the battery exists before the guard, per Phase 2.12.
 
 ### Phase 6 — Ordinal re-derivation immediately before merge
 
-Re-run the all-refs ADR probe after the final `origin` sync. If ADR-232 has been claimed, renumber and
+Re-run the all-refs ADR probe after the final `origin` sync. If ADR-234 has been claimed, renumber and
 **sweep the whole feature artifact set in the same edit**:
-`grep -rn 'ADR-232' knowledge-base/project/{plans,specs}/` plus the ADR body and every AC naming the
+`grep -rn 'ADR-234' knowledge-base/project/{plans,specs}/` plus the ADR body and every AC naming the
 ordinal — the #5990 failure was a renumber that reached the ADR but left an AC asserting a nonexistent
 file.
 
@@ -1335,7 +1335,7 @@ eval API budget, disclosed in Phase 5.
 construction and needs no ADR, but standing up a third rejection store alongside two with live
 consumers (`not-planned` closes, which `scripts/sweep-followthroughs.sh` already treats as
 authoritative; and `deferred-scope-out`, which has a scheduled consumer in
-`cron-stale-deferred-scope-outs.ts`) does. Adopted as ADR-232, with the alternatives table as the
+`cron-stale-deferred-scope-outs.ts`) does. Adopted as ADR-234, with the alternatives table as the
 go/no-go gate. Lifecycle registration declined for both skills, with the measured reason that
 `workflow-fidelity.test.ts` pins the ceiling key set to exactly the lifecycle set, so a ceiling row
 without registration fails the suite while registration buys a permanent down-only ratchet and a
@@ -1345,7 +1345,7 @@ in its `REASON` string — zero always-loaded bytes, no WORM ack, and it fires a
 dead-end. The committed shingle suite was cut on the grounds recorded in the Guard Contract. Recommended
 cutting the `triage/SKILL.md` pre-checks entirely (DC-1) and, separately, argued the whole store could
 collapse into a `--state all --search` sweep — that argument is answered, not ignored: it is exactly
-what ADR-232's alternatives table must decide on the record.
+what ADR-234's alternatives table must decide on the record.
 
 ### Support
 
@@ -1501,7 +1501,7 @@ the **one file the glob excludes**, and two of my four flows had **no producer a
 | **R7** | **Flow B's read-pointers were unasserted.** Only `operator-rephrase` had an AC (AC3). `brainstorm`/`plan` were covered only by AC18, which passes identically whether the pointer exists; `spec-templates` and `architecture` appeared in no AC; and AC33's **subset** check permits their absence entirely — so Flow B's entry point could be wholly missing from the diff with every AC green | A new AC greps each consumer for `knowledge-base/project/glossary.md`. AC33 gains the **other direction**: every `Files to Create` path exists and every `Files to Edit` path has a non-empty diff |
 | **R8** | **AC1 and AC11 asserted existence where the invariant is reachability** — the repo's "function exists vs reachable" class, which DC-2 names in the plan's own words | AC1 additionally asserts each skill is reachable from a **named invoker**: the `go.md` row for both, `compound/SKILL.md` for `kb-glossary`, and the hook's behavioural deny for `questionnaire-generate` |
 | **R9** | **The ADR's alternatives table was falsified in two of four rows, and its load-bearing row was missing.** Row 2 was wrong: `cron-stale-deferred-scope-outs.ts` closes stale `deferred-scope-out` issues with `state_reason: "not_planned"` after 90 days, so deferred and refused **converge on the same terminal state** — it is a *delayed* refusal, not an opposite. Row 1's "no durable reason surviving closure" was wrong: a closed issue's body and comments persist. And the real property went unstated | Rows 1 and 2 are restated accurately, and **the load-bearing row is added**: *the no-list can record a refusal that was never filed as an issue.* Verified on the plan's own seed — the roadmap records the refusal, and `gh issue list --state all --search "playwright server-side"` returns nothing. Corroborated across the last 400 closed issues: `NOT_PLANNED` is 14, and all 14 are machinery (`decision-challenge:`, `[gdpr-gate]`, a test name), so the `not-planned` corpus is essentially devoid of concept refusals. Row 1's surviving clause is narrower and still true: GitHub search is a keyword index with no synonym expansion, so "night theme" never reaches `dark-mode` |
-| **R10** | **No precedence rule between the no-list, a tracker state and an ADR** | Added to ADR-232 and the README: **an entry is evidence that a refusal was recorded, never the refusal itself.** The store is an index into trackers and ADRs, never authoritative over them. If `prior_requests` resolves to an issue closed `completed`, or an ADR accepts the mechanism, the entry is **stale** and the pre-check reports STALE rather than REFUSED |
+| **R10** | **No precedence rule between the no-list, a tracker state and an ADR** | Added to ADR-234 and the README: **an entry is evidence that a refusal was recorded, never the refusal itself.** The store is an index into trackers and ADRs, never authoritative over them. If `prior_requests` resolves to an issue closed `completed`, or an ADR accepts the mechanism, the entry is **stale** and the pre-check reports STALE rather than REFUSED |
 | **R11** | **The seed was a mechanism rejection imported as a concept — AC-4c contradicted AC-4d**, and it published a "we rejected Playwright" record while `plugins/soleur/docs/pages/goal-primitive.md` (live at `goal-primitive/`) tells readers *"Use Playwright MCP, `xdg-open`, CLI tools, or APIs to drive completion."* The roadmap refused **one execution location** and shipped a 3-tier architecture in its place | The seed is re-keyed to the concept as actually refused — *running the automation browser on Soleur's own servers* — with `scope:` naming the shipped answer (the API+MCP tier at ~80% and local-browser at ~15%) and a pointer to the 3-tier table. A new required **`instead:`** field makes this structural: every mechanism refusal has an instead, so an entry without one is either a deliberate category-level never or a mis-keyed mechanism rejection. Mutation rows 9 and 10 assert `instead:` and slug-inside-`scope` |
 | **R12** | **The guard could not see the three fields declared required.** `aliases`, `scope` and the `why`/`public_note` split were required by the support lens and asserted by nothing — *"the failure mode the support lens named as primary is the one the guard cannot see"* | Mutation rows 6, 7, 8 added. Row 5 changes from an enum check on `requester` to a **forbidden-key** check: the field is removed from the schema entirely, because with zero external filers there is nobody to put in it and a forbidden-key check is strictly safer at the same cost. Axis count stays five — these lift `MIN_CASES`, not `MIN_AXES` |
 | **R13** | **The follow-through probe counted its own seed.** AC-4c ships one entry in this PR, whose add-commit lands at the start of the 180-day window, so the probe reports the no-list alive on zero real usage — the exact confound `--diff-filter=A` was chosen to avoid. Separately, `wg-pm-class-followthrough-for-operator-dogfood` does **not** fire here (no operator-only route, no cross-origin POST, no custom CSP, no new `process.env.*` read), so enrollment was discretionary; and the plan had already argued at length that it refuses to invent a usage signal, then exempted the no-list from its own test | **The store probe is cut.** The probe budget moves to Flow D's return leg (R6), which has a genuine time-gated external dependency and a signal that cannot be confounded — a questionnaire still `status: sent` past its own `needed_by` |
@@ -1705,7 +1705,7 @@ shape applied to a gate rather than to a capability.
 | An entry names a person, creating permanent personal data in a public repository | The `requester` field is **removed from the schema entirely** (R12) and the lint rejects the key outright (mutation row 5). With zero external filers there is nobody to record, so a forbidden-key check is strictly safer than the closed-vocabulary role token, asserted by the lint (mutation row 5), not requested in prose |
 | The `ticket-triage` body mirror in `.openhands/` silently drifts (no generator, no parity test) | Both files are in `## Files to Edit`; AC9 asserts the pre-checks in both |
 | The two new `go.md` rows cannibalise `default → brainstorm`, which currently absorbs "questions" | Trigger signals key on *a document to send to a named third party*, and the `go-routing` eval is the empirical check rather than a judgement call |
-| ADR-232's ordinal is claimed mid-pipeline (it has happened twice on one branch before) | Phase 6 re-derives across every `origin/*` ref immediately before merge and sweeps the whole artifact set on renumber |
+| ADR-234's ordinal is claimed mid-pipeline (it has happened twice on one branch before) | Phase 6 re-derives across every `origin/*` ref immediately before merge and sweeps the whole artifact set on renumber |
 | The glossary drifts from the definers it points at | Entries are pointers, not restatements — the drift surface is removed rather than monitored |
 | The emitted questionnaire carries internal context to a third party with no data-processing agreement | The `## Context` guardrails are a Phase 4 deliverable, the GDPR gate is asked that exact question in Phase 0, and the threshold puts `user-impact-reviewer` on the diff |
 | The questionnaire component is vetoed by the published legal corpus after the other three land | Phase 0 step 5 runs that grep **before** Phase 4, so the veto surfaces while a split is still cheap |

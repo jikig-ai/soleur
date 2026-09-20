@@ -21,7 +21,7 @@ carry one settled compliance sense between them (D1).
 - [x] 0.3 Re-measure the skill count with `find plugins/soleur/skills -type f -name SKILL.md | wc -l`
       (**not** `ls -d`, which over-counts `flag-bootstrap/`). Expect 100 → 102.
 - [x] 0.4 `git fetch origin`, then re-derive the free ADR ordinal across **every** `origin/*` ref.
-      Provisional: ADR-232.
+      Provisional: ADR-234.
 - [x] 0.5 Re-fetch the five peer blobs at `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` into the scratchpad.
       Read-only inputs; never committed.
 - [x] 0.6 Run `/soleur:gdpr-gate` against the plan document.

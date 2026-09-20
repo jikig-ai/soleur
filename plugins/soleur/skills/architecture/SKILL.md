@@ -61,7 +61,7 @@ mkdir -p knowledge-base/engineering/architecture/diagrams
 **Vocabulary.** Before committing a word that names a concept, check it against `knowledge-base/project/glossary.md` and use the sense its pointer settles; if the word is materially ambiguous and has no entry, hedge in the artifact and name the ambiguity. The instruction is stated once in [glossary-format.md](../kb-glossary/references/glossary-format.md) §The consumer pointer and is not restated here.
 
 **Rejected-concepts substrate.** Before recording a decision that refuses a *concept* rather than a
-*mechanism*, read [ADR-232](../../../../knowledge-base/engineering/architecture/decisions/ADR-232-rejected-concepts-are-a-distinct-kb-substrate.md):
+*mechanism*, read [ADR-234](../../../../knowledge-base/engineering/architecture/decisions/ADR-234-rejected-concepts-are-a-distinct-kb-substrate.md):
 an ADR's `## Alternatives Considered` table is scoped to the mechanisms of one decision, so a
 concept-level refusal belongs in the no-list at `knowledge-base/project/rejected/` instead, where the
 intake pre-check can find it by concept. The two are siblings, not substitutes — the no-list cites ADR

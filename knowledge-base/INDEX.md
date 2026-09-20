@@ -241,7 +241,7 @@
 - [ADR-230: Temporary debug probes are `\[DEBUG-<hex4>\]`, never `SOLEUR_*` sentinels](engineering/architecture/decisions/ADR-230-temporary-debug-probes-are-debug-hex4-never-soleur-sentinels.md)
 - [ADR-231: Workflow files are byte-budgeted at 490,000 bytes, and job rationale relocates to a runbook](engineering/architecture/decisions/ADR-231-workflow-files-are-byte-budgeted-and-rationale-relocates-to-a-runbook.md)
 - [ADR-232: The `vinngest-v*` publish workflow authors its own cloud-init pin-bump PRs, authenticated as the `soleur-ai` App — never `GITHUB_TOKEN`, never a direct push to main](engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md)
-- [ADR-232: Rejected concepts are a distinct KB substrate from a `not-planned` close](engineering/architecture/decisions/ADR-232-rejected-concepts-are-a-distinct-kb-substrate.md)
+- [ADR-234: Rejected concepts are a distinct KB substrate from a `not-planned` close](engineering/architecture/decisions/ADR-234-rejected-concepts-are-a-distinct-kb-substrate.md)
 - [Architecture Diagrams — LikeC4 C4 Model](engineering/architecture/diagrams/README.md)
 - [Soleur Platform — C4 Model](engineering/architecture/diagrams/c4-model.md)
 - [Domain Model & Business Rules Register](engineering/architecture/domain-model.md)

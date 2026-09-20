@@ -113,7 +113,7 @@ whose corpus is a `todos/` backlog.
 
 **What changes if you accept.** One issue is filed with the criterion Non-Goal 2 already wrote — *the
 first rejection request from an author outside the org* — applied to the store as a whole. The bundle
-ships the glossary, the two intake pre-checks (redundancy only), and `questionnaire-generate`. ADR-232,
+ships the glossary, the two intake pre-checks (redundancy only), and `questionnaire-generate`. ADR-234,
 the lint, its battery, the `lefthook`/pre-push/CI wiring, the README and the seed all come out.
 
 **What it costs to accept.** G2 and half of B11 are not delivered, and the issue's second outcome clause
@@ -172,7 +172,7 @@ ceiling rather than by a property — `work` (82 hits), `ship` (57, and `soak`'s
 
 ## Panel findings deliberately NOT recorded as challenges
 
-- **Folding ADR-232 into the README** was recommended by the simplicity lens and is **declined on a
+- **Folding ADR-234 into the README** was recommended by the simplicity lens and is **declined on a
   workflow gate, not on taste**: `wg-architecture-decision-is-a-plan-deliverable` (migrated to plan
   Phase 2.10, still ACTIVE in `scripts/migrated-rule-ids.txt`) requires the ADR write to be a deliverable
   of the plan that makes the decision. Folding it would violate that gate.
