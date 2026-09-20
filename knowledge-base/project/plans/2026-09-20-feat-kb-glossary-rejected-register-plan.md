@@ -1,5 +1,5 @@
 ---
-title: "feat(kb): domain glossary + rejected-request register wired into triage"
+title: "feat(kb): domain glossary + rejected-concepts record wired into triage"
 date: 2026-09-20
 slug: feat-kb-glossary-rejected-register
 branch: feat-one-shot-8289-kb-glossary-rejected-register
@@ -33,7 +33,7 @@ Four deliverables, scoped exactly to issue #8289:
 - A committed ubiquitous-language glossary under `knowledge-base/`, plus the format doc that governs
   it and a write discipline that sharpens a term the moment a decision settles it. Consumers read it:
   `brainstorm`, `plan`, `spec-templates`, `architecture`, `triage`, and bundle 1's rephrase skill.
-- A rejected-request register: one file per rejected concept recording why, checked at triage by
+- A rejected-concepts record: one file per rejected concept recording why, checked at triage by
   concept similarity rather than keyword. An already-implemented `wontfix` is never written there —
   that would seed the dedup check with rejections that never happened.
 - Two intake pre-checks in the triage skill and the ticket-triage agent: a redundancy search keyed on
@@ -135,7 +135,7 @@ plan's shape. Nothing here is inferred — every row names the command that prod
 | P5 | `operator-rephrase` is a consumer to wire | **STRONGER THAN THAT.** Its `## Vocabulary` section says verbatim: *"v1 ships with no vocabulary source, and that is the durable state. There is no repository glossary to draw approved terms from… A repository glossary is a separate piece of work tracked in #8289; if one lands later, this skill can cite it then."* | Landing the glossary makes shipped prose FALSE. Rewriting that paragraph is a **required** deliverable, not a courtesy wiring |
 | P6 | `origin/main` tops at ADR-230, so a new ADR starts at **ADR-231** | **ALREADY CLAIMED.** Enumerated across all 97 `origin/*` refs: ADR-231 is taken by `origin/feat-one-shot-8361-workflow-size-limit` (`ADR-231-workflow-files-are-byte-budgeted…`). Two further branches claim a *different* ADR-230 title (`feat-8322-affected-test-gate`, and #8360's `feat-one-shot-auto-inngest-pin-bump`) | Next free is **ADR-232**. Re-derive across every `origin/*` ref immediately before merge |
 | P7 | `plugins/soleur/skills/triage/SKILL.md` is the issue-intake surface | **IT IS NOT.** Its own description: *"This skill should be used when triaging legacy local todo files in `todos/`. For GitHub issues, use soleur:support:ticket-triage agent."* Workflow is Step 1 present finding → Step 2 handle decision → Step 3 loop → Step 4 summary, over files in `todos/` (which exists and is populated). `grep -cniE 'dedup\|duplicate\|reject\|declin'` → **0** | Both pre-checks still land there, but scoped to what a `todos/` finding *is* — an internally-generated review finding that can legitimately restate an already-built or already-refused concept. Recorded as a reconciliation row, not silently reinterpreted |
-| P8 | `plugins/soleur/agents/support/ticket-triage.md` can perform the register write | **READ-ONLY BY DECLARATION.** Its Sharp Edges: *"Do not close or modify issues. Read-only access via `gh issue list` and `gh issue view`."* | The agent gets READ-only pre-checks; the register **write** lands on the attended `triage` path behind a confirmation gate. An agent that cannot close an issue cannot be the one that records why it was closed |
+| P8 | `plugins/soleur/agents/support/ticket-triage.md` can perform the no-list write | **READ-ONLY BY DECLARATION.** Its Sharp Edges: *"Do not close or modify issues. Read-only access via `gh issue list` and `gh issue view`."* | The agent gets READ-only pre-checks; the no-list **write** lands on the attended `triage` path behind a confirmation gate. An agent that cannot close an issue cannot be the one that records why it was closed |
 | P9 | The unattended daily pass will pick the pre-checks up | **IT CANNOT — but not for the reason I first wrote.** `.github/workflows/scheduled-daily-triage.yml` is **deleted**; `apps/web-platform/server/inngest/functions/cron-daily-triage.ts` says *"Source: extracted from .github/workflows/scheduled-daily-triage.yml (deleted in the same commit)"* and carries a self-contained `DAILY_TRIAGE_PROMPT` referencing no skill or agent file. My first reading was that its `--allowedTools` had no file-read verb; the product lens corrected me and the correction is right. Line 171 **does** grant `Read,Glob,Grep`. The real blocker is line 216: *"This cron never clones, so `gh` runs from…"* — there is **no working tree**, so `Read` has nothing to point at | Out of scope and out of reach. Deferred to a filed issue whose named blocker is the **absent checkout**, not a missing tool. This distinction is load-bearing: a follow-up written against the wrong cause gets closed by a one-line `--allowedTools` change that fixes nothing |
 | P10 | No `*glossar*` file exists | **KB-SCOPED ONLY.** `find knowledge-base plugins -iname '*glossar*'` returns `plugins/soleur/docs/pages/glossary.njk` — a **public SEO** glossary of 10 product-category terms (Company-as-a-Service, MCP, skill, vibe coding), pinned by `plugins/soleur/test/seo-aeo-drift-guard.test.ts` (≥8 canonical terms + a `DefinedTermSet` JSON-LD block) | Named explicitly, with a declared audience split and a one-line cross-pointer. `operator-rephrase` §Vocabulary already adjudicated it: *"do not point at `plugins/soleur/docs/pages/glossary.njk` — that is marketing surface"* |
 | P11 | Phase 5 runs `scripts/lint-skill-body-budget.py` | **WOULD ERROR.** `--base` is `required=True`; the bare form exits non-zero on a missing argument | Phase 5 invokes it as `--base <merge-base>` |
@@ -175,7 +175,7 @@ Each deliverable restated as an observable outcome, so a mechanism can be compar
 | Restating each term's definition in the glossary | PR-1 | Where a canonical definer already exists the entry is a **pointer**, not a restatement (e.g. `lane` → `brainstorm/references/brainstorm-domain-config.md` `## Lane Inference`, cited by `brainstorm/SKILL.md`). A second copy drifts from the first — the exact failure `operator-rephrase` §Register already names about `operator-digest` |
 | A new `AGENTS.md` rule for the glossary read/write discipline | PR-1, PR-2 | `cq-agents-md-tier-gate`: a domain-scoped rule (skills, docs) belongs in its enforcing skill, never AGENTS.md. Cost avoided: ~600 B body + ~55 B index pointer against 1080 B of headroom to the WARN tier |
 | A prior-rejection check inside the unattended Inngest pass | PR-3 | Unreachable: `DAILY_TRIAGE_PROMPT`'s `--allowedTools` has no file-read verb (P9). Deferred with a named blocker, not silently dropped |
-| Seeding the store with a **synthesized** example entry | PR-3 | A synthesized example is a rejection that never happened — it violates PR-4 directly. **This row was originally written as "the store ships empty", and that is now superseded:** the product lens found a real, dated, concept-scoped refusal already on record (the server-side-Playwright decision at `knowledge-base/product/roadmap.md`), so AC-4c seeds exactly that one. Seeding a *recorded* rejection satisfies PR-3 without touching PR-4; seeding an *invented* one remains cut. Two reviewers caught the contradiction between this row and AC-4c before `/work` — the row is corrected rather than deleted so the reasoning stays auditable |
+| Seeding the no-list with a **synthesized** example entry | PR-3 | A synthesized example is a rejection that never happened — it violates PR-4 directly. **This row was originally written as "the no-list ships empty", and that is now superseded:** the product lens found a real, dated, concept-scoped refusal already on record (the server-side-Playwright decision at `knowledge-base/product/roadmap.md`), so AC-4c seeds exactly that one. Seeding a *recorded* rejection satisfies PR-3 without touching PR-4; seeding an *invented* one remains cut. Two reviewers caught the contradiction between this row and AC-4c before `/work` — the row is corrected rather than deleted so the reasoning stays auditable |
 
 ### Repo facts that constrain the plan (all measured)
 
@@ -315,12 +315,12 @@ honoured and the divergence is recorded here rather than silently reinterpreted.
 | "bundle 1's `operator-explain`" reads the glossary | No such skill. Bundle 1 shipped `operator-rephrase` | Wire `operator-rephrase`, and rewrite its `## Vocabulary` paragraph, which currently asserts no glossary exists |
 | Tier 1 entry "landed via PR #8284" | PR #8284 is OPEN; the entry is on neither `origin/main` nor this branch | Provenance authority is `plugins/soleur/NOTICE`. No dependency on #8284 |
 | `triage/SKILL.md` is the issue-intake surface for the pre-checks | It triages **legacy local `todos/*.md`**. Its own body: *"The `soleur:review` skill now creates GitHub issues directly for all new findings. This triage skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration."* | Pre-checks land there **scoped to what a todo finding is**, per the operator's stated direction. Two domain leaders recommended cutting them from this file entirely; recorded as a User-Challenge (DC-1) with the operator's direction kept as the default |
-| `ticket-triage.md` performs the register write | Declared read-only: *"Do not close or modify issues."* | Read-only pre-checks there; the write procedure is owned by `knowledge-base/project/rejected/README.md` and gated by a lint plus a typed confirmation |
+| `ticket-triage.md` performs the no-list write | Declared read-only: *"Do not close or modify issues."* | Read-only pre-checks there; the write procedure is owned by `knowledge-base/project/rejected/README.md` and gated by a lint plus a typed confirmation |
 | The `wontfix` label carries the rejection signal | `wontfix` has been applied to **0 issues in repository history** (3,182 closed). Rejection is expressed as a `not-planned` closure (187 instances) | The register keys on the concept, not on a label. The convention names the `not-planned` closure state, not `wontfix` |
 | The register serves "every re-arriving feature request" from outside | **Zero external filers.** 300-issue sample of the open backlog: 3 distinct authors, all internal — `deruelle` 215, `app/soleur-ai` 68, `app/github-actions` 17; 1,507 open issues total | v1 is an **internal concept-dedup index** over a large, largely agent-generated backlog. The requester-facing half (auto-posted closing comments, a public rejection record, the three-way "do you still feel the same way" prompt) is a **Non-Goal** — it designs for an audience that does not exist yet |
 | A new ADR starts at ADR-231 | ADR-231 is claimed on `origin/feat-one-shot-8361-workflow-size-limit` | **ADR-232**, re-derived across every `origin/*` ref immediately before merge |
 | `find knowledge-base -iname '*glossar*'` returns zero, so no glossary exists | True for `knowledge-base/`, but `plugins/soleur/docs/pages/glossary.njk` exists as a **public SEO** glossary | Declared audience split plus a one-line cross-pointer. Not a second copy |
-| (my own working premise, corrected by the legal lens) root `knowledge-base/` ships to every plugin installer | **False.** `.claude-plugin/marketplace.json` sets `"source": "./plugins/soleur"`, so the payload is `plugins/soleur/` only. Customers receive the four-item seed tree `plugins/soleur/knowledge-base/` (`INDEX.md`, `kb-categories.txt`, `kb-tags.txt`, `project/learnings/` × 10 onboarding docs) — not Soleur's company KB | The glossary and the register are **Soleur's own corpus**, publicly readable because the repo is public, but not distributed as Software. No seed copy is added to the payload tree in v1 |
+| (my own working premise, corrected by the legal lens) root `knowledge-base/` ships to every plugin installer | **False.** `.claude-plugin/marketplace.json` sets `"source": "./plugins/soleur"`, so the payload is `plugins/soleur/` only. Customers receive the four-item seed tree `plugins/soleur/knowledge-base/` (`INDEX.md`, `kb-categories.txt`, `kb-tags.txt`, `project/learnings/` × 10 onboarding docs) — not Soleur's company KB | The glossary and the no-list are **Soleur's own corpus**, publicly readable because the repo is public, but not distributed as Software. No seed copy is added to the payload tree in v1 |
 
 ## User-Brand Impact
 
@@ -360,7 +360,7 @@ one decision's mechanisms); the concept file is the authority the intake pre-che
 request is re-proposed.*
 
 Authored via `/soleur:architecture` as an in-scope task of Phase 1, not a follow-up. The
-`## Alternatives Considered` table is the **go/no-go gate** for the register, not paperwork after it,
+`## Alternatives Considered` table is the **go/no-go gate** for the no-list, not paperwork after it,
 and must carry all four rows below with the measurement that decides each:
 
 | Alternative | Why not |
@@ -393,7 +393,7 @@ three model files were read — `knowledge-base/engineering/architecture/diagram
 
 ### Sequencing
 
-The decision is true the moment the register directory and its reader land, so ADR-232 ships at
+The decision is true the moment the no-list directory and its reader land, so ADR-232 ships at
 `status: accepted` in this PR. No soak, no `adopting` interim.
 
 ## Observability
@@ -471,7 +471,7 @@ Three pattern-bound behaviours, each diffed against its sibling precedent rather
   battery is relocated to `plugins/soleur/test/` (R20): the precedent exists, and following it would
   have required a runner edit AC-33 forbade.
 
-### Phase 2.9.1 — Follow-Through Enrollment (fires, but on Flow D — not on the store)
+### Phase 2.9.1 — Follow-Through Enrollment (fires, but on Flow D — not on the no-list)
 
 **The store probe is cut (R13), and its budget moves to the questionnaire's return leg (R6).** Three
 measured reasons for the cut: `wg-pm-class-followthrough-for-operator-dogfood` does not fire here (no
@@ -479,7 +479,7 @@ operator-only route, no cross-origin form POST, no custom CSP, no new `process.e
 enrollment was discretionary rather than mandated; AC-4c ships one seed entry in this PR whose add-commit
 lands at the start of the window, so the probe would have counted **its own seed** as usage — the exact
 confound `--diff-filter=A` was chosen to avoid; and the plan had already spent a section refusing to
-invent a usage signal for the glossary, then exempted the store from its own test.
+invent a usage signal for the glossary, then exempted the no-list from its own test.
 
 What is enrolled instead is the one flow in this bundle with a genuine time-gated external dependency and
 a signal that cannot be confounded: **a questionnaire still `status: sent` past its own `needed_by`.**
@@ -510,7 +510,7 @@ ask — so the next session finds the open question without anyone remembering i
 ### The glossary has no honest usage signal — stated rather than invented
 
 The register's precedent (`technical-debt/`: 11 entries, 0 closures) does **not** transfer to the
-glossary, because a glossary has no drain — it is never "closed". Worse for the store and better for the
+glossary, because a glossary has no drain — it is never "closed". Worse for the no-list and better for the
 glossary: a stale debt entry is inert, whereas a stale rejection actively says "no" to something that
 should now be "yes".
 
@@ -690,7 +690,7 @@ not the canonical:
 command plus its result count, re-runnable by a reviewer or a later session. A second assertion needing
 network is therefore deliberately **not** in the pre-commit tier — *no number in `prior_requests`
 resolves to an issue closed as `completed`*, which catches the drift case where the concept is built
-later and nobody updates the register. That one runs in the full battery.
+later and nobody updates the no-list. That one runs in the full battery.
 
 **Floors.** Direct, in the ADR-193 shape, never routed through the verdict helper:
 
@@ -733,7 +733,7 @@ AC-L1/L2/L3.
 
 ## Design Decisions
 
-### D1 — The store is called the rejected-concepts store, never "the register"
+### D1 — The artifact is "the no-list" in prose and "rejected-concepts record" formally
 
 `register` is a **term of art in this repository**, and measurement makes the case stronger than the
 product lens put it: eight live instances, seven of them compliance artifacts with counsel review and
@@ -742,13 +742,23 @@ an inclusion predicate — `knowledge-base/legal/{article-30-register,article-30
 one shared vocabulary cannot ship by overloading a compliance noun; it would commit the defect it
 claims to cure.
 
-So: the directory stays `knowledge-base/project/rejected/`, and every piece of prose in this bundle —
-the skill, the convention, the pre-checks, the ADR, the PR body — calls it the **rejected-concepts
-store**. The issue body's word "register" is retained only where it quotes the issue.
+So: the directory stays `knowledge-base/project/rejected/` (repathing costs a lot for nothing), and
+every piece of prose in this bundle — the skill, the convention, the pre-checks, the ADR, the PR body —
+uses **two fixed names**: **"the no-list"** in founder-facing and skill prose, and **"rejected-concepts
+record"** where a formal noun is required. The issue body's word "register" is retained only where it
+quotes the issue.
+
+**"Store" is banned alongside "register", and that is the marketing lens's correction to my own first
+answer.** I originally settled on "rejected-concepts store", which fails three tests: "store" is
+datastore jargon on the wrong side of the brand guide's business-analogy rule; "rejected-concepts" leads
+with what is dead rather than what becomes possible; and a three-word hyphenated name gets shortened in
+speech — and the shortening is *"the register"*, the exact word D1 exists to ban. A name that decays back
+into the banned word has not solved the problem. "The no-list" is the founder's own phrasing, taken
+straight from the issue: *"'no' only has to be said once."*
 
 And the near-miss becomes the proof the artifact is needed: **`register` is the glossary's first
 entry**, defined as the compliance sense, with an `_Avoid_` list naming the rejected synonyms and an
-explicit note that the rejected-concepts store is deliberately not one.
+explicit note that the no-list is deliberately not one. `_Avoid_` names both banned synonyms — "register" and "store".
 
 ### D2 — The glossary is an agent artifact, and the inclusion test is four-part
 
@@ -851,11 +861,11 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
 | `plugins/soleur/skills/kb-glossary/SKILL.md` | The write discipline, **plus a `## When to self-invoke` section (R3)** in the shape of the repo's only precedent, `operator-rephrase/SKILL.md` — without it nothing reaches this skill and PR-2 has no producer. The discipline: challenge a term that conflicts with the glossary, sharpen a fuzzy or overloaded one, update inline the moment it resolves rather than batching, and the hard scope line that the artifact is a glossary and nothing else — no specs, no implementation detail, no scratch space | **Yes**, after the closing frontmatter fence — `.../engineering/domain-modeling/SKILL.md` |
 | `plugins/soleur/skills/kb-glossary/references/glossary-format.md` | **Must be named from `SKILL.md` or a sibling** — `components.test.ts` asserts every `.md` under a skill's `references/` is reachable, and the only permitted orphan today is `skill-security-scan/references/disclaimer.md`. Entry format and inclusion test. Two rules Soleur adds to the peer shape: an entry whose term already has a canonical definer is a **pointer** to that definer, never a restatement; and a term belongs only if two or more skills or agents pass it to each other | **Yes**, after the fence — `.../domain-modeling/CONTEXT-FORMAT.md` |
 | `knowledge-base/project/glossary.md` | The artifact. Sits beside `constitution.md` as a project-wide governing document. Seeded only with terms whose definers already exist and can be pointed at | **No** — Soleur-authored, not derived |
-| `knowledge-base/project/rejected/README.md` | The register convention, co-located with the store (the `learnings/technical-debt/README.md` shape): the field set, the concept-and-aliases key, the role-not-identity requirement, the write procedure with its machine gate and typed confirmation, and the built-is-not-rejected prohibition as the store's first rule | **No** — the *derived* prose lives in the skill-side reference; this file is the founder-facing convention |
+| `knowledge-base/project/rejected/README.md` | The register convention, co-located with the no-list (the `learnings/technical-debt/README.md` shape): the field set, the concept-and-aliases key, the role-not-identity requirement, the write procedure with its machine gate and typed confirmation, and the built-is-not-rejected prohibition as the no-list's first rule | **No** — the *derived* prose lives in the skill-side reference; this file is the founder-facing convention |
 | `plugins/soleur/skills/kb-glossary/references/rejected-request-register.md` | Also must be named from `SKILL.md` (same reachability assertion). The derived half of the convention: the one-file-per-concept discipline, concept-not-keyword matching, the durable-reason test, and the built-is-not-rejected prohibition | **Yes**, after the fence — `.../engineering/triage/OUT-OF-SCOPE.md` |
 | `plugins/soleur/skills/questionnaire-generate/SKILL.md` | Grill the send, not the subject: two interview exchanges (who it goes to; what is needed back), then questions aimed at the gap. Plus the founder-protection guardrails — what `## Context` must never carry, and the refusal to frame output as analysis | **Yes**, after the fence — `.../productivity/to-questionnaire/SKILL.md` |
 | `plugins/soleur/skills/questionnaire-generate/references/questionnaire.template` | The document template. Carries the comment on **line 1**, because the emitter strips the first line. **Extension is `.template`, not `.md` — three measured reasons, all from bundle 2's direct precedent:** all six files in `constraint-scaffold/references/` use `.template`; `scripts/markdown-lint.sh` scopes to `git ls-files '*.md'`, so a `.template` escapes markdown-lint (a template full of `<placeholder>` tokens and `>` answer stubs would otherwise fight it); and `components.test.ts`'s references/-reachability assertion walks **only `.md`** files, which is why `boundary-readme.template` is legitimately un-named from its own `SKILL.md` (`grep -c` → 0) without being an orphan | **Yes on line 1**; **stripped** from the emitted document |
-| `knowledge-base/project/questionnaires/` (directory + `README.md`) | **R5 — the emitted questionnaire had no address.** No output path, filename convention or directory appeared anywhere in the earlier plan: the artifact existed and could not be located. Emission path is `YYYY-MM-DD-<recipient-role>-<topic>.md`, reusing the dated-slug convention AC-4b mandates for the store. The README states the frontmatter contract (`recipient_role`, `needed_by`, `blocked_decision`, `status: sent\|answered`), the `## Answers` section a reply is pasted into, and the `## Blocked on` back-pointer | **No** — founder-facing, Soleur-authored |
+| `knowledge-base/project/questionnaires/` (directory + `README.md`) | **R5 — the emitted questionnaire had no address.** No output path, filename convention or directory appeared anywhere in the earlier plan: the artifact existed and could not be located. Emission path is `YYYY-MM-DD-<recipient-role>-<topic>.md`, reusing the dated-slug convention AC-4b mandates for the no-list. The README states the frontmatter contract (`recipient_role`, `needed_by`, `blocked_decision`, `status: sent\|answered`), the `## Answers` section a reply is pasted into, and the `## Blocked on` back-pointer | **No** — founder-facing, Soleur-authored |
 | `scripts/followthroughs/questionnaire-unanswered-8289.sh` | The return-leg probe (Phase 2.9.1) | No |
 | `scripts/lint-rejected-register.sh` | Guard 1 | No |
 | `plugins/soleur/test/lint-rejected-register.test.sh` | Guard 1's battery. **Located here, not under `scripts/` (P1-2).** `scripts/test-all.sh --print-suite-globs` does not include `scripts/*.test.sh` — the runner says so itself (*"Registered explicitly — `scripts/*.test.sh` is not auto-globbed"*), and 94 of the 95 tracked `scripts/*.test.sh` carry a hand-written `run_suite` line. Placing it there would have required editing `scripts/test-all.sh`, which AC-33 forbade, making AC-7 unsatisfiable. `plugins/soleur/test/*.test.sh` **is** glob-registered, so the suite is reachable with no runner edit | No |
@@ -870,14 +880,14 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
 | `plugins/soleur/commands/help.md` | `kb-*` is **already** in the prefix-family enumeration, so `kb-glossary` groups with no edit. `questionnaire-*` is a new single-member family and must be added to the enumeration in **all three** harness blocks (Claude Code, Devin CLI, Grok Build). Note the blocks are **not** byte-identical: the Claude Code and Devin CLI forms open `[List all skills found with brief descriptions, grouped by the token before the first hyphen: …]` while the Grok Build form opens `(list all skills — invoke as /<skill-name> — grouped by the token before the first hyphen: …)`. An edit keyed on the bracket form reaches only two of three | `skills/help/SKILL.md` defers to this file and must not be edited instead. The family token goes on the existing `flag-*, cron-*, …` line so the count in AC16 stays one line per block |
 | `plugins/soleur/agents/support/ticket-triage.md` | Two read-only pre-check bullets under `## Scope`, **outside** the `eval-gate:block:ticket-triage` markers (which wrap only the severity bullet), plus the per-issue pre-check detail block appended to `## Output Format`. The 6-column table stays byte-identical | Agent is read-only by declaration; the block is emitted only for close/dedup recommendations, so a 1,507-issue report stays readable |
 | `.openhands/skills/ticket-triage/SKILL.md` | The same two bullets and the same block. This file mirrors the agent **body**, and there is no generator and no parity test — the mirror drifts by hand | Verified 42 L with the output table mirrored verbatim. `.grok/agents/soleur-support-ticket-triage.md` and `agents.manifest.json` mirror only the *description*, which this plan does not change, so they are **not** edited |
-| `plugins/soleur/skills/triage/SKILL.md` | Both pre-checks in **Step 1**, scoped to what a `todos/` finding is: an internally-generated review finding that can legitimately restate an already-built or already-refused concept. **Plus Step 2 (R4)** — it has exactly three branches today (yes → promote, **next → deletes the todo file**, custom → loops), so the reject path destroys the finding with no record, the opposite of the store's purpose. A fourth branch, *"reject: record why"*, becomes the only branch that removes a finding, and it is the store's named write path | Not eval-gated; not a lifecycle skill, so no byte ceiling. Two leaders recommended cutting this edit — DC-1 |
+| `plugins/soleur/skills/triage/SKILL.md` | Both pre-checks in **Step 1**, scoped to what a `todos/` finding is: an internally-generated review finding that can legitimately restate an already-built or already-refused concept. **Plus Step 2 (R4)** — it has exactly three branches today (yes → promote, **next → deletes the todo file**, custom → loops), so the reject path destroys the finding with no record, the opposite of the no-list's purpose. A fourth branch, *"reject: record why"*, becomes the only branch that removes a finding, and it is the no-list's named write path | Not eval-gated; not a lifecycle skill, so no byte ceiling. Two leaders recommended cutting this edit — DC-1 |
 | `plugins/soleur/skills/operator-rephrase/SKILL.md` | Rewrite `## Vocabulary`. It currently states no repository glossary exists and *"that is the durable state"*, naming #8289 as the work that would change it | Not a lifecycle skill; no ceiling |
 | `plugins/soleur/skills/brainstorm/SKILL.md` | One glossary read-pointer | Lifecycle ceiling 134628/141000 → 6372 B headroom |
 | `plugins/soleur/skills/plan/SKILL.md` | One glossary read-pointer | Lifecycle ceiling 115271/120000 → 4729 B headroom |
 | `plugins/soleur/skills/spec-templates/SKILL.md` | One glossary read-pointer | Not governed by the ceiling |
 | `plugins/soleur/skills/architecture/SKILL.md` | One glossary read-pointer plus the ADR-232 cross-reference | Not governed by the ceiling |
 | `.claude/hooks/pre-ask-technical-fork-gate.sh` | Rung **5** in the `REASON` ladder naming `soleur:questionnaire-generate`, **and — load-bearing (R1) — a dedicated `EXTERNAL_EXPERT_RE` arm evaluated as its own decision BEFORE the `AUTHORITY_RE` short-circuit at line 84.** Rung 5 alone is unreachable: `AUTHORITY_RE` wins outright and matches `cost`/`budget`/`price`/`priorit`/`scope`/`schedule`/`spend`, which an accountant or lawyer question almost always carries, and the surviving path still requires `INVESTIGATIVE_RE`, which this class never matches. The arm covers `accountant`/`bookkeeper`/`lawyer`/`solicitor`/`notary`/`auditor`/`tax`/`insurer`/`bank`/`regulator`/`landlord` and must precede the short-circuit because this class legitimately co-occurs with `cost` | **Byte cost to `B_ALWAYS`: zero.** Hooks are not in the always-loaded payload. See the rule-pointer note |
-| `.claude/hooks/pre-ask-technical-fork-gate.test.sh` | Assert rung 5 is present, anchored on surrounding syntax not a bare token (`cq-assert-anchor-not-bare-token`); bump the strict inventory count | Currently `[[ "$TOTAL" -eq 12 ]]` exactly → 13 |
+| `.claude/hooks/pre-ask-technical-fork-gate.test.sh` | Assert rung 5 is present, anchored on surrounding syntax not a bare token (`cq-assert-anchor-not-bare-token`); bump the inventory by **one**, whatever it measures at edit time (it is `[[ "$TOTAL" -eq 12 ]]` today). Do not hardcode 13 — AC11 disclaims the literal, because a sibling branch adding a rung moves it |
 | `plugins/soleur/test/components.test.ts` | Bump `SKILL_DESCRIPTION_WORD_BUDGET` by exactly the two new descriptions' word count, appending to the comment log in the established shape: `bumped +N for #8289 (<skill> skill description, N words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline)` | **Measured 2499/2499, zero headroom.** Both descriptions must open `This skill should be used when` and stay ≤1024 chars |
 | `lefthook.yml` | Register Guard 1 on `glob: "knowledge-base/project/rejected/*.md"`, copying the `distribution-content-liquid-guard` shape | `run: bash scripts/lint-rejected-register.sh {staged_files}` |
 | `plugins/soleur/NOTICE` | Append the `(#8289)` group to `Used in:` (paths relative to `plugins/soleur/`, naming the actual host files); append the bundle-3 `Portions adopted:` paragraph with what was imported, all four deliberately-not-imported items, and the narrowed emission sentence | Pinned SHA `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` is already on the stanza and does not change |
@@ -912,7 +922,7 @@ not.
 ### Deliberately NOT adopted (all four recorded in NOTICE, ranked by what the omission protects)
 
 1. **The three-way Confirm / Reconsider / Disagree maintainer prompt.** A prompt that invites reopening
-   a recorded rejection defeats the register's purpose — a register that can be argued with is a
+   a recorded rejection defeats the no-list's purpose — a register that can be argued with is a
    suggestion. It also hands a non-technical founder a re-litigation with no new information, which
    becomes click-through within weeks and then launders auto-closes as consent. Soleur's register is
    read, not negotiated; the founder is interrupted only when their own recorded `revisit_if` trigger
@@ -983,9 +993,9 @@ at ship via `gh issue create`.
    `DAILY_TRIAGE_PROMPT` references no skill or agent file. Its `--allowedTools` (line 171) **does**
    grant `Read,Glob,Grep` — so the named blocker is **not** the tool list. It is that the function
    **never clones** (line 216), so there is no working tree for `Read` to point at. The tracking issue
-   must say *"give the scheduled pass a checkout, or serve the store over an API"*; a follow-up written
+   must say *"give the scheduled pass a checkout, or serve the no-list over an API"*; a follow-up written
    against a missing-tools cause would be closed by a one-line change that fixes nothing.
-2. **The requester-facing half of the register.** No auto-posted closing comment, no public rejection
+2. **The requester-facing half of the no-list.** No auto-posted closing comment, no public rejection
    record, no three-way prompt. Measured reason: **zero external filers**; `wontfix` applied to 0
    issues in history. Re-evaluation criterion: the first rejection request from an author outside the
    org.
@@ -1073,7 +1083,7 @@ Ordered so the battery exists before the guard, per Phase 2.12.
 1. `references/questionnaire.template`, attribution comment on line 1.
 2. `SKILL.md`, including the strip-the-first-line emitter rule, the `## Context` guardrails, and the
    refusal to frame output as analysis or to warrant how the recipient will handle the data.
-3. Rung 5 in `.claude/hooks/pre-ask-technical-fork-gate.sh`, plus the assertion and the 12 → 13
+3. Rung 5 in `.claude/hooks/pre-ask-technical-fork-gate.sh`, plus the assertion and a **+1**
    inventory bump in its companion test.
 
 ### Phase 5 — Wiring, then the repo-global ratchets, then the panel
@@ -1138,7 +1148,7 @@ verification below is automatable, and the three tracking issues are filed by th
    role-not-identity requirement, and the entry-naming convention.
 4b. Entries are named `YYYY-MM-DD-<concept-slug>.md`, and anything not matching that pattern is not an
    entry. This is mechanical, not advisory: a concept-similarity lookup over the directory would
-   otherwise match `README.md` itself and manufacture the exact false rejection the store exists to
+   otherwise match `README.md` itself and manufacture the exact false rejection the no-list exists to
    prevent. The convention is already shipped in `knowledge-base/project/learnings/` and
    `learnings/technical-debt/`.
 4c. **Exactly one seed entry exists, it is a real dated rejection, and its scope is narrowed so it is not
@@ -1164,7 +1174,7 @@ verification below is automatable, and the three tracking issues are filed by th
 4d. Two things that look like seeds are **not** seeded, and the README says why: the Telegram bridge
    (roadmap records *"Removed in April 2026 — will redesign as channel connector"* — a deferral awaiting
    redesign, and filing it as rejected would kill the redesign) and ADR rejected-alternatives tables
-   (real rejections, but scoped to *mechanisms* rather than concepts — importing them poisons the store
+   (real rejections, but scoped to *mechanisms* rather than concepts — importing them poisons the no-list
    from the other direction). The README cites the ADR tables as a sibling store the lookup also checks,
    and imports nothing from them.
 5. `bash plugins/soleur/test/lint-rejected-register.test.sh` exits 0, reports **≥16 mutation rows across
@@ -1369,7 +1379,7 @@ rather than implied as coverage.
 **Assessment:** proceed, with three corrections, all adopted. (1) The premise that root
 `knowledge-base/` ships to installers is **false** — `.claude-plugin/marketplace.json` sets
 `"source": "./plugins/soleur"`, so the payload is `plugins/soleur/` and customers receive only the
-four-item seed tree `plugins/soleur/knowledge-base/`. The glossary and the store are Soleur's own
+four-item seed tree `plugins/soleur/knowledge-base/`. The glossary and the no-list are Soleur's own
 corpus, publicly readable because the repo is public, which is a confidentiality consideration and not a
 licensing one. (2) The grep obligation is cited to the **constitution's vendored-content clause**, not
 to `hr-third-party-content-grep-on-undertaking`, whose trigger is an undertaking about a third party's
@@ -1381,8 +1391,8 @@ stated in the PR body so no later reader "fixes" a false positive by deleting at
 any `knowledge-base/` path carries the comment, because putting it on Soleur's own vocabulary would be a
 false attribution; the template carries it on line 1 above frontmatter while the SKILL.md files carry it
 after the closing fence, and the two placements must not be interchanged; the strip is **verified on the
-emitted artifact** produced by running the skill, not inferred from the emitter; the store is a
-potential personal-data surface in public git, so `requester` is role-only and lint-asserted; and the
+emitted artifact** produced by running the skill, not inferred from the emitter; the no-list is a
+potential personal-data surface in public git, so the `requester` field is **removed from the schema entirely** and the lint rejects the key outright (R12) — a forbidden-key check, not a role enum, because with zero external filers there is nobody to record; and the
 published-legal-corpus grep is a **gate** on the questionnaire component, not a review item, because a
 published disclaimer's wording is a genuine veto candidate. The advisory carries the standard
 not-legal-advice disclaimer and creates no attorney-client relationship.
@@ -1485,16 +1495,16 @@ the **one file the glob excludes**, and two of my four flows had **no producer a
 | **R1** | **The rule pointer is unreachable.** `.claude/hooks/pre-ask-technical-fork-gate.sh` evaluates `AUTHORITY_RE` **first and wins outright** (line 84: `if grep -qE "$AUTHORITY_RE" <<<"$CORPUS"; then exit 0; fi`), and that pattern includes `cost\|budget\|price\|priorit\|scope\|schedule\|spend`. An accountant or lawyer question almost always carries one, so the hook **allows** and rung 5 is never emitted. If it survives that, the deny still requires `INVESTIGATIVE_RE` (line 88, `if ! grep -qE … then exit 0`), which matches investigation phrasings only — "which VAT scheme applies to plugin revenue" matches nothing, and `ask the accountant` does not match `ask (the )?(owner\|author\|whoever)`. The third-bucket question is *definitionally* the one carrying neither signal, so rung 5 sat in a string emitted only for a disjoint class | Rung 5 alone is **not sufficient**. The hook gains a dedicated `EXTERNAL_EXPERT_RE` arm — `accountant\|bookkeeper\|lawyer\|solicitor\|notary\|auditor\|tax\|insurer\|bank\|regulator\|landlord` — evaluated as **its own decision before** the `AUTHORITY_RE` short-circuit, because this class legitimately co-occurs with `cost` and `budget`. It denies with a reason pointing straight at `questionnaire-generate`. AC11 is rewritten from a string grep to a **behavioural case**: feed a representative external-expert question as JSON to the hook and assert `permissionDecision == "deny"` with a reason naming the skill |
 | **R2** | **The `discoverability_test` exercised the lint on the one path the glob excludes.** It ran `lint-rejected-register.sh knowledge-base/project/rejected/README.md`, and the Assembly deliberately excludes `README.md` — so the probe stayed green with every entry check deleted, and it also contradicted AC-4c, which ships one seed | The probe points at the **seed entry**, and expects `1 file checked, 1 entry, OK` |
 | **R3** | **Flow A had no producer.** PR-2 (sharpen at the moment a decision settles) had no trigger anywhere: the four consumer edits are read-pointers with no write obligation, `workflow-fidelity.ts` registration is declined so there is no phase edge, no hook points at `kb-glossary`, and the `go.md` row is the founder's surface — the one actor D2 test 4 says the artifact excludes | `plugins/soleur/skills/compound/SKILL.md` and `compound-capture/SKILL.md` join `## Files to Edit`. `compound`'s existing pass (*"Could a rule, hook, or skill instruction have prevented this?"*) is the exact moment a session has settled what a word means. `kb-glossary/SKILL.md` gains a `## When to self-invoke` section in the shape of the repo's only precedent, `operator-rephrase/SKILL.md`. The `kb-glossary` routing row's trigger signals are specified so they enter the eval candidate, and an AC greps `compound/SKILL.md` for the invocation |
-| **R4** | **Flow C had no producer.** `triage/SKILL.md` Step 2 has exactly three branches — yes (promote), **next (deletes the todo file)**, custom (loops) — so on the only attended surface the reject path *destroys the finding with no record*, the opposite of the store's purpose. The plan edited Step 1 only | Step 2 joins `## Files to Edit` and Phase 3, gaining a **fourth branch — "reject: record why"** — which becomes the only branch that removes a finding. The write procedure is named and reachable rather than living only in a convention document |
+| **R4** | **Flow C had no producer.** `triage/SKILL.md` Step 2 has exactly three branches — yes (promote), **next (deletes the todo file)**, custom (loops) — so on the only attended surface the reject path *destroys the finding with no record*, the opposite of the no-list's purpose. The plan edited Step 1 only | Step 2 joins `## Files to Edit` and Phase 3, gaining a **fourth branch — "reject: record why"** — which becomes the only branch that removes a finding. The write procedure is named and reachable rather than living only in a convention document |
 | **R5** | **The emitted questionnaire had no address.** No output path, filename convention or directory appeared anywhere in the plan | Emission path specified as `knowledge-base/project/questionnaires/YYYY-MM-DD-<recipient-role>-<topic>.md`, reusing the dated-slug convention AC-4b already mandates, with an AC that the fixture lands there |
-| **R6** | **Flow D's answer never came back.** The flow terminated at "file written": no ingest, no status field, no reader of a completed questionnaire, and no Non-Goal deferring the return leg. G1 collects "what is needed back, by when" and then discards the deadline; the asking session is gone days before the answer exists; and the repo's own time-gated follow-through primitive was applied to the store but not to the one flow with a real external dependency | The emitted document carries frontmatter (`recipient_role`, `needed_by`, `blocked_decision`, `status: sent\|answered`) and an `## Answers` section the reply is pasted into, plus a `## Blocked on` back-pointer into the artifact that caused the ask, so the next session finds the open question without remembering it. A notify-only follow-through probe keyed on `status` still `sent` past `needed_by` replaces the cut store probe (R13) |
+| **R6** | **Flow D's answer never came back.** The flow terminated at "file written": no ingest, no status field, no reader of a completed questionnaire, and no Non-Goal deferring the return leg. G1 collects "what is needed back, by when" and then discards the deadline; the asking session is gone days before the answer exists; and the repo's own time-gated follow-through primitive was applied to the no-list but not to the one flow with a real external dependency | The emitted document carries frontmatter (`recipient_role`, `needed_by`, `blocked_decision`, `status: sent\|answered`) and an `## Answers` section the reply is pasted into, plus a `## Blocked on` back-pointer into the artifact that caused the ask, so the next session finds the open question without remembering it. A notify-only follow-through probe keyed on `status` still `sent` past `needed_by` replaces the cut store probe (R13) |
 | **R7** | **Flow B's read-pointers were unasserted.** Only `operator-rephrase` had an AC (AC3). `brainstorm`/`plan` were covered only by AC18, which passes identically whether the pointer exists; `spec-templates` and `architecture` appeared in no AC; and AC33's **subset** check permits their absence entirely — so Flow B's entry point could be wholly missing from the diff with every AC green | A new AC greps each consumer for `knowledge-base/project/glossary.md`. AC33 gains the **other direction**: every `Files to Create` path exists and every `Files to Edit` path has a non-empty diff |
 | **R8** | **AC1 and AC11 asserted existence where the invariant is reachability** — the repo's "function exists vs reachable" class, which DC-2 names in the plan's own words | AC1 additionally asserts each skill is reachable from a **named invoker**: the `go.md` row for both, `compound/SKILL.md` for `kb-glossary`, and the hook's behavioural deny for `questionnaire-generate` |
-| **R9** | **The ADR's alternatives table was falsified in two of four rows, and its load-bearing row was missing.** Row 2 was wrong: `cron-stale-deferred-scope-outs.ts` closes stale `deferred-scope-out` issues with `state_reason: "not_planned"` after 90 days, so deferred and refused **converge on the same terminal state** — it is a *delayed* refusal, not an opposite. Row 1's "no durable reason surviving closure" was wrong: a closed issue's body and comments persist. And the real property went unstated | Rows 1 and 2 are restated accurately, and **the load-bearing row is added**: *the store can record a refusal that was never filed as an issue.* Verified on the plan's own seed — the roadmap records the refusal, and `gh issue list --state all --search "playwright server-side"` returns nothing. Corroborated across the last 400 closed issues: `NOT_PLANNED` is 14, and all 14 are machinery (`decision-challenge:`, `[gdpr-gate]`, a test name), so the `not-planned` corpus is essentially devoid of concept refusals. Row 1's surviving clause is narrower and still true: GitHub search is a keyword index with no synonym expansion, so "night theme" never reaches `dark-mode` |
-| **R10** | **No precedence rule between the store, a tracker state and an ADR** | Added to ADR-232 and the README: **an entry is evidence that a refusal was recorded, never the refusal itself.** The store is an index into trackers and ADRs, never authoritative over them. If `prior_requests` resolves to an issue closed `completed`, or an ADR accepts the mechanism, the entry is **stale** and the pre-check reports STALE rather than REFUSED |
+| **R9** | **The ADR's alternatives table was falsified in two of four rows, and its load-bearing row was missing.** Row 2 was wrong: `cron-stale-deferred-scope-outs.ts` closes stale `deferred-scope-out` issues with `state_reason: "not_planned"` after 90 days, so deferred and refused **converge on the same terminal state** — it is a *delayed* refusal, not an opposite. Row 1's "no durable reason surviving closure" was wrong: a closed issue's body and comments persist. And the real property went unstated | Rows 1 and 2 are restated accurately, and **the load-bearing row is added**: *the no-list can record a refusal that was never filed as an issue.* Verified on the plan's own seed — the roadmap records the refusal, and `gh issue list --state all --search "playwright server-side"` returns nothing. Corroborated across the last 400 closed issues: `NOT_PLANNED` is 14, and all 14 are machinery (`decision-challenge:`, `[gdpr-gate]`, a test name), so the `not-planned` corpus is essentially devoid of concept refusals. Row 1's surviving clause is narrower and still true: GitHub search is a keyword index with no synonym expansion, so "night theme" never reaches `dark-mode` |
+| **R10** | **No precedence rule between the no-list, a tracker state and an ADR** | Added to ADR-232 and the README: **an entry is evidence that a refusal was recorded, never the refusal itself.** The store is an index into trackers and ADRs, never authoritative over them. If `prior_requests` resolves to an issue closed `completed`, or an ADR accepts the mechanism, the entry is **stale** and the pre-check reports STALE rather than REFUSED |
 | **R11** | **The seed was a mechanism rejection imported as a concept — AC-4c contradicted AC-4d**, and it published a "we rejected Playwright" record while `plugins/soleur/docs/pages/goal-primitive.md` (live at `goal-primitive/`) tells readers *"Use Playwright MCP, `xdg-open`, CLI tools, or APIs to drive completion."* The roadmap refused **one execution location** and shipped a 3-tier architecture in its place | The seed is re-keyed to the concept as actually refused — *running the automation browser on Soleur's own servers* — with `scope:` naming the shipped answer (the API+MCP tier at ~80% and local-browser at ~15%) and a pointer to the 3-tier table. A new required **`instead:`** field makes this structural: every mechanism refusal has an instead, so an entry without one is either a deliberate category-level never or a mis-keyed mechanism rejection. Mutation rows 9 and 10 assert `instead:` and slug-inside-`scope` |
 | **R12** | **The guard could not see the three fields declared required.** `aliases`, `scope` and the `why`/`public_note` split were required by the support lens and asserted by nothing — *"the failure mode the support lens named as primary is the one the guard cannot see"* | Mutation rows 6, 7, 8 added. Row 5 changes from an enum check on `requester` to a **forbidden-key** check: the field is removed from the schema entirely, because with zero external filers there is nobody to put in it and a forbidden-key check is strictly safer at the same cost. Axis count stays five — these lift `MIN_CASES`, not `MIN_AXES` |
-| **R13** | **The follow-through probe counted its own seed.** AC-4c ships one entry in this PR, whose add-commit lands at the start of the 180-day window, so the probe reports the store alive on zero real usage — the exact confound `--diff-filter=A` was chosen to avoid. Separately, `wg-pm-class-followthrough-for-operator-dogfood` does **not** fire here (no operator-only route, no cross-origin POST, no custom CSP, no new `process.env.*` read), so enrollment was discretionary; and the plan had already argued at length that it refuses to invent a usage signal, then exempted the store from its own test | **The store probe is cut.** The probe budget moves to Flow D's return leg (R6), which has a genuine time-gated external dependency and a signal that cannot be confounded — a questionnaire still `status: sent` past its own `needed_by` |
+| **R13** | **The follow-through probe counted its own seed.** AC-4c ships one entry in this PR, whose add-commit lands at the start of the 180-day window, so the probe reports the no-list alive on zero real usage — the exact confound `--diff-filter=A` was chosen to avoid. Separately, `wg-pm-class-followthrough-for-operator-dogfood` does **not** fire here (no operator-only route, no cross-origin POST, no custom CSP, no new `process.env.*` read), so enrollment was discretionary; and the plan had already argued at length that it refuses to invent a usage signal, then exempted the no-list from its own test | **The store probe is cut.** The probe budget moves to Flow D's return leg (R6), which has a genuine time-gated external dependency and a signal that cannot be confounded — a questionnaire still `status: sent` past its own `needed_by` |
 | **R14** | **"Exactly one write chokepoint" was false.** `--no-verify` and merge-resolution commits bypass pre-commit, and the repo already ships the remedy pattern (`lefthook.yml`: *"pre-push mirror of the client-pii-grep signal-quality gate (#3703) so a bypass is surfaced at push time"*) | Dispatch set is **three** and all three are deliverables: pre-commit on the glob, a pre-push mirror, and a CI step over the **full** glob rather than `{staged_files}` |
 | **R15** | **`docs/_data/skills.js` was missing, and AC33 forbade adding it.** `knowledge-base/project/constitution.md` line 88 mandates manual `SKILL_CATEGORIES` registration; both sibling `kb-*` skills are registered. Separately AC33 permitted only `INDEX.md` while `lefthook.yml` line 402 stages **three** generated KB files | Both added to `## Files to Edit`; AC33 lists all four paths |
 | **R16** | **Nine ACs asserted absolute literals a sibling branch flips** (`B_ALWAYS=42920`, `2499/2499`, `103 skills`, hook inventory `13`, ADR ordinal `232`). My own standing-check verdict said "clean" because I tested for ambient machine state and never for *a sibling branch moving a shared constant* — the same class, missed | Each rewritten to assert the **delta, the empty diff, or the green suite** rather than the baseline literal. The standing-check verdict is corrected below rather than left as a false pass |
@@ -1529,6 +1539,32 @@ pre-check block cannot work, because pre-check blocks are emitted inline by a re
 under the lint's glob ever contains one — the plan's own Support finding says exactly that. Keeping it
 would have shipped an unasserted, unmutated lint arm.
 
+### R28 — The naming decision was never propagated into the body (found by the self-audit, not the log)
+
+The most instructive finding of the whole session, because it is a failure of the revision log itself.
+D1 decided the rename and the marketing lens refined it to two fixed names — and **neither decision
+reached the plan body**. Measured at the time of the sweep: `register` appeared **64 times** and "the
+store" **19 times** naming the new artifact, including the plan's own `title:` frontmatter and its
+Overview, while the canonical replacements appeared **once each** — one inside its own defining bullet.
+`tasks.md`, written after the refinement, used the corrected names consistently, so the plan and the task
+list `/work` executes against disagreed on what the artifact is called.
+
+Worse, D1's heading asserted `never "the register"` while the section body then called it the
+"rejected-concepts store" — the name the refinement had already banned, for the specific reason that it
+decays in speech back into "the register".
+
+Applied: a protected sweep across the body (the eight compliance `*-register.md` artifacts, the
+domain-model and prose/voice senses, `## Register (how to write)`, the `lint-rejected-register` and
+`rejected-request-register.md` paths, and the glossary's own first entry were all shielded), the `title:`
+and Overview corrected, and D1's heading and body rewritten to carry both fixed names plus the reason
+"store" is banned alongside "register". The only surviving instances of either word naming this artifact
+are the two deliberate quotes inside D1's explanation of why they were rejected.
+
+**The lesson worth keeping:** a revision log records what was decided, not what was changed. Five stale
+references survived my own sweep and this sixth — the largest — survived it too, because I grepped for the
+symbols I remembered dropping rather than for the decisions I remembered making. The independent pass is
+what found it.
+
 ### Also applied, from the same panel
 
 - **The `requester` closed vocabulary was never enumerated anywhere**, so a writer could be blocked by a
@@ -1559,7 +1595,7 @@ would have shipped an unasserted, unmutated lint arm.
   named blocker needing its own cycle, not documentable-in-place because it is a different surface); 2,
   5 and 6 stay **documented in place**, which is the rule's default and avoids phantom backlog.
 - **`prior_requests` and `public_note` are writer-only in v1** — their readers are Non-Goals 2 and 5.
-  Both stay in the schema because the store's value is the record, but the plan now says so plainly
+  Both stay in the schema because the no-list's value is the record, but the plan now says so plainly
   instead of implying a reader exists.
 - **The outcome claim is 1-for-3 and is restated for the PR body.** The issue's sentence is kept as the
   aspiration; what ships is: *agents resolve internal nouns the same way across sessions; a refusal is
@@ -1573,7 +1609,7 @@ would have shipped an unasserted, unmutated lint arm.
   "Soleur" does not appear. D4's six guardrails were all *provenance* and none was *register*, and there
   was no voice AC anywhere. One AC now runs over the fixture AC-20 already produces: zero emoji, zero
   sender-referring `\bwe\b`/`\bour\b`, zero hedges from a fixed list, zero occurrences of `Soleur`.
-- **Naming, refined.** "Rejected-concepts store" decays in speech back to "the register" — the word D1
+- **Naming, refined.** "Rejected-concepts store" decays in speech back to "the no-list" — the word D1
   banned — and "store" is datastore jargon on the wrong side of the brand guide's business-analogy rule.
   Two fixed names replace it: **"the no-list"** in founder-facing and skill prose (the founder's own
   words — the issue says *"'no' only has to be said once"*), and **"rejected-concepts record"** where a
@@ -1683,10 +1719,10 @@ Written as `mutation → guard reddens`, not `command → terminal output`.
 2. An entry with no `redundancy_check` key → RED.
 3. An entry carrying `implemented_at:` → RED.
 4. An entry with `searched:` present but empty → RED.
-5. An entry whose `requester:` is a personal name → RED.
+5. An entry carrying a `requester:` or `requested_by:` key **at all** → RED. The field does not exist in the schema (R12), so this is a forbidden-key case, not a personal-name case.
 6. A **valid** entry that is not `README.md` → the lint **passes** (must-PASS, non-canonical).
 7. Two entries, first valid and second invalid → RED (the check does not stop at the first member).
-8. The lint invoked with zero path arguments → reports `0 files` and does **not** certify the store.
+8. The lint invoked with zero path arguments → reports `0 files` and does **not** certify the no-list.
 9. Delete the `implemented_at` branch from the lint → the battery reddens.
 10. Replace the enum comparison with a substring match → the battery reddens, because
     `not-implemented` contains `implemented`.

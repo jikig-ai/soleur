@@ -4974,7 +4974,7 @@
 - [feat: upstream — request Devin cloud support for plugin subagents and plugin hooks](project/plans/2026-09-17-feat-upstream-devin-cloud-parity-asks-plan.md)
 - [feat: Ship the proxy-wrapped Playwright MCP path by default so P7 holds on customer browser skills](project/plans/2026-09-18-feat-proxy-wrapped-playwright-mcp-default-plan.md)
 - [fix: give the registry heartbeat a positive Phase-B delivery field so #7960 can close on proof](project/plans/2026-09-18-fix-registry-heartbeat-phase-b-delivery-field-plan.md)
-- [feat(kb): domain glossary + rejected-request register wired into triage](project/plans/2026-09-20-feat-kb-glossary-rejected-register-plan.md)
+- [feat(kb): domain glossary + rejected-concepts record wired into triage](project/plans/2026-09-20-feat-kb-glossary-rejected-register-plan.md)
 - [fix: downgrade reconcile no-workspace-match Sentry severity from error to warning](project/plans/feat-one-shot-reconcile-no-workspace-match/plan.md)
 - [plan feat account delete anonymise action sends](project/plans/plan-feat-account-delete-anonymise-action-sends.md)
 - [Workspace Reconcile Push — "no workspace matched" Sentry noise](project/plans/plan-workspace-reconcile-push-noise.md)
