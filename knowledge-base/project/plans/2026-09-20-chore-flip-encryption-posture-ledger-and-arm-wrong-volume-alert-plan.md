@@ -286,9 +286,9 @@ full second copy of the same AOF until #8285 (expiry 2026-10-22), and whose byte
 erasure path, including account deletion. The flip narrows the exposure to one volume; it does not
 end it, and the record must not read as though it did.
 
-**Brand-survival threshold:** single-user incident. The AOF is undifferentiated, so one seized
-volume exposes every in-flight user's prompts at once, and one false limb in a regulator-facing
-register is terminal on its first reading.
+- **Brand-survival threshold:** single-user incident. The AOF is undifferentiated, so one seized
+  volume exposes every in-flight user's prompts at once, and one false limb in a regulator-facing
+  register is terminal on its first reading.
 
 `requires_cpo_signoff: true` — granted conditionally, conditions folded in; see `## Domain Review`.
 
@@ -453,7 +453,7 @@ exit status; under `set -e` write `[ "$(grep -c … || true)" = 0 ]`.
 - [ ] **AC-14** `MUT_SKIP=1 bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` reports **13 passed, floor 13** — unchanged. **Load-bearing**: this change adds no non-mutation assertion, so raising the `MUT_SKIP` floor to 14 would make every inner run exit 1 on the FATAL floor check, `mutate_red` would read that as RED for *every* row including vacuous ones, and the outer run would print green over a dead battery.
 - [ ] **AC-15** Mutation rows 7 and 8 are real: reverting `default     = true` to `false` in a scratch `variables.tf` reds the guard, and rewriting `paused` to a constant `false` reds it.
 - [ ] **AC-16** `bun test plugins/soleur/test/heartbeat-live-reconcile.test.ts` green, **with the `inngest_luks_wrong_volume` fixture's expectation inverted** — a live pause on this alert is now a reported `logs-alert-paused`, not `[]`. A green run against the *old* fixture means the resolution never landed.
-- [ ] **AC-17** Fail-closed: with a `!var.X` whose variable cannot be resolved, `pausedIsLiteralFalse` is `false` (exempt), never `true`.
+- [ ] **AC-17** Fail-closed: with a `!var.X` whose variable cannot be resolved, `pausedResolvesFalse` (renamed from `pausedIsLiteralFalse` in PR-1's review round) is `false` (exempt), never `true`.
 - [ ] **AC-25** The live `paused` field is read back from the vendor, **as two assertions, not one**: (a) HTTP status is 200, (b) the payload's alert is unpaused. Non-200 is `3 CANNOT ESTABLISH` and must **not** be read as "paused" — a 401 from the wrong Better Stack token and a genuine pause are otherwise indistinguishable, and the latter triggers a revert of a true claim.
 
   ```
@@ -581,10 +581,9 @@ discoverability_test:
   # does not exist yet, behind a credentials waiver that made the ADR-175 gate SKIP-DECLARED
   # and verify nothing. The live-device half (which device backs /mnt/data) genuinely needs the
   # Better Stack credentials and moves to PR-2's block with that script.
-  command: >-
-    bun -e 'import {discoverLogsAlertsFromInfra} from "./plugins/soleur/scripts/reconcile-live-heartbeats.ts";
-    const a = discoverLogsAlertsFromInfra("apps/web-platform/infra").find((x) => x.resourceName === "inngest_luks_wrong_volume");
-    console.log(a?.pausedResolvesFalse ? "ARMED" : "EXEMPT")'
+  # A tracked script rather than a `bun -e` one-liner: Check 10's shell-active reject refuses
+  # `=>` and `;` (measured at ship — the inline form FAILed the gate it was written to satisfy).
+  command: bun plugins/soleur/scripts/inngest-luks-alert-armed-probe.ts
   expected_output: "ARMED"
   # No credentials_required line: that field is the WAIVER register (the #7393 G1 baseline counts
   # plans that declare one), and this probe needs none. Declaring `none` would enrol a non-waiver.
