@@ -41,7 +41,7 @@ import {
   MIN_TARGET_RETENTION,
   promotionShrankTarget,
 } from "@/server/inngest/functions/cron-compound-promote";
-import { gitFixture } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
+import { gitFixture, gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 let repoRoot: string;
 let git: (args: string[]) => string;
@@ -367,11 +367,21 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
     // until the test times out. Measured: that spelling hung four unrelated
     // must-PASS rows at 16s each, because vitest's timeout cut the promise
     // before `finally` restored PATH, so the pollution outlived the row.
+    const shimDir = mkdtempSync(join(tmpdir(), "compound-gitshim-"));
+    // `env:` is bound on purpose, and the ratchet in
+    // plugins/soleur/test/fixture-env-adoption.test.sh (derivation C) is what
+    // requires it: this file adopted the fixture-env helper, so every direct
+    // spawn in it must carry an explicit env, or a `GIT_DIR`/`GIT_WORK_TREE`
+    // inherited from a lefthook parent reaches the child (#7822). This lookup
+    // never runs git — `command -v` reads PATH only, and gitFixtureEnv keeps
+    // PATH while stripping GIT_* — so the ceiling it adds is inert here. It is
+    // built from process.env BEFORE the PATH mutation below, which is the
+    // ordering that keeps the shim from resolving itself.
     const realGit = execFileSync("command", ["-v", "git"], {
       encoding: "utf8",
       shell: "/bin/bash",
+      env: gitFixtureEnv(shimDir),
     }).trim();
-    const shimDir = mkdtempSync(join(tmpdir(), "compound-gitshim-"));
     writeFileSync(
       join(shimDir, "git"),
       [
