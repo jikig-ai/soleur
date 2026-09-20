@@ -3221,10 +3221,12 @@ _DISPATCHED=$((PASS + FAIL))
 #   stdout discarded, guards-before-write ordering, the pointer gate in both directions, the
 #   own-tag liveness + confirm, the write-anchored confirm window, and the terminal-flag reporting).
 #   Re-derived at the merge with main's #8178 row: 649 + 15, measured, not summed from memory.
-# 664 -> 665 … (main). 665 -> 666 (+1) at #8079 Phase 1, ITEMISED — one assertion: the
-#   `_bs_read_remedy` step-parameterisation census (D4/AC12). Raised in the SAME edit that
-#   adds the row; a floor that lags the count it guards is slack, and slack is attack budget.
-_EXACT_FLOOR=666
+# 665 -> 726 (+61) at #8079, measured on the tree rebased onto main at 665 (never summed
+#   from memory): the D4 census, the gate-consumer census + whole-file total, PROBE_ARMS_CODE
+#   non-vacuity, three D10 guards (token loop, plumbing parity + its control, cross-arm remedy
+#   + twin pointers), the probe region extraction + selection control, AC2/3/8/9/10 static
+#   rows, the 2x2 fixture control, sixteen renders, and seven range-scoped mutation rows.
+_EXACT_FLOOR=726
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
