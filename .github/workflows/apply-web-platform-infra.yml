@@ -51,9 +51,20 @@
 # (`hr-menu-option-ack-not-prod-write-auth`). PR #4220 dropped the
 # `environment:` reviewer-click gate after measuring its real-world cost
 # (apply runs sitting in `waiting` for up to 13h, blocking sibling
-# applies via the concurrency group). The merge-time gate (CODEOWNERS
-# on `.github/workflows/` + branch protection on `main`) is the load-
-# bearing control; the env-reviewer click was duplicative.
+# applies via the concurrency group).
+#
+# CORRECTED 2026-09-20 (#8296): this block used to name "the merge-time gate
+# (CODEOWNERS on `.github/workflows/` + branch protection on `main`)" as the
+# load-bearing control. MEASURED, that gate does not exist. `main` has no
+# branch protection (`GET /repos/{owner}/{repo}/branches/main/protection` ->
+# 404 "Branch not protected") and its three active rulesets carry NO
+# `pull_request` rule: "CI Required" and "CLA Required" are both
+# `required_status_checks`, and "Force Push Prevention" is `deletion` +
+# `non_fast_forward`. `.github/CODEOWNERS` is present, but with no rule
+# requiring code-owner review it assigns reviewers and blocks nothing.
+# So status checks and force-push prevention gate this workflow; a human
+# review does not. Re-measure before restating either claim — a ruleset is
+# server-side and is not checked into this repo.
 #
 # Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
 # commit message to skip auto-apply for that merge.
@@ -387,8 +398,9 @@ jobs:
   # Vector config + VRL fixture validation lives in its own workflow at
   # .github/workflows/validate-vector-config.yml (#4293 FR5) so it can trigger
   # on pull_request -- this workflow only triggers on push to main, which is
-  # the apply gate. Branch protection requires the validate workflow's check
-  # before merge.
+  # the apply gate. The validate workflow's check is required before merge by
+  # the "CI Required" RULESET, not by branch protection: `main` has none
+  # (measured 2026-09-20, #8296 — the protection endpoint 404s).
   apply:
     needs: preflight
     # Runs on push (auto-apply) and on the `manual-rerun` dispatch (the historical
@@ -464,7 +476,10 @@ jobs:
     timeout-minutes: 41
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
     # reviewer click was duplicative friction on top of the PR-merge gate
-    # (CODEOWNERS review + branch protection on main), and was blocking
+    # (believed at the time to be CODEOWNERS review + branch protection on
+    # main; MEASURED FALSE 2026-09-20 — see the header block, #8296: no
+    # ruleset requires a pull request or a review, so nothing puts a human in
+    # front of this apply), and was blocking
     # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
     # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
     # `apply-github-infra.yml` already omits the gate without incident.

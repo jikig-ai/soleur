@@ -777,12 +777,28 @@ variable "inngest_expect_luks" {
 }
 
 # #6894 / ADR-142 — arms the "store is not on the encrypted volume" Better Stack alert
-# (betterstack-logs-alerts.tf). FALSE until the cutover has completed and been confirmed: before
-# the swap, /mnt/data is legitimately backed by the plaintext volume, so an armed rule would page
-# continuously — and a rule that pages when nothing is wrong is a rule that gets muted.
-# Flipped to true in the apply that follows a confirmed op=luks-cutover.
+# (betterstack-logs-alerts.tf, logtail_exploration_alert.inngest_luks_wrong_volume).
+#
+# TRUE since #8296. The inverting event is the additive cutover of 2026-09-20, and the evidence is
+# two measurements rather than a dispatch's exit code: the on-host FSM's terminal row
+# (reason=cutover-complete, flag=done, phase=swapped, exit_code=0, k_freeze=1366) at 15:29:10Z, and
+# the first post-cutover probe row, which reports data_mount on /dev/mapper/inngest-redis with
+# data_mount_devid=scsi-0HC_Volume_106903269 — the encrypted volume, not the plaintext
+# scsi-0HC_Volume_106261946 it replaced. Before that swap /mnt/data was legitimately backed by the
+# plaintext volume, so an armed rule would have paged continuously, and a rule that pages when
+# nothing is wrong is a rule that gets muted. After it, a probe row still pinning the PLAINTEXT
+# alias means the store came back — which is precisely what this alert exists to catch.
+#
+# HAZARD: this default governs only while no Doppler override exists. The apply reads
+# TF_VAR_inngest_luks_cutover_complete from soleur/prd_terraform, so a secret set there SILENTLY
+# WINS over this line and no plan diff would explain why the alert stayed paused. Measured
+# 2026-09-20: the secret does not exist, so this default is the operative value. Re-read it
+# (doppler secrets get INNGEST_LUKS_CUTOVER_COMPLETE -p soleur -c prd_terraform --plain) before
+# concluding from a plan that this variable is or is not in effect.
+#
+# Arming takes effect on the APPLY, not at merge — see the Phase 4 dispatch in #8296.
 variable "inngest_luks_cutover_complete" {
   description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
   type        = bool
-  default     = false
+  default     = true
 }

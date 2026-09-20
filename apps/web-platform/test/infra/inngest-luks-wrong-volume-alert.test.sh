@@ -97,9 +97,9 @@ grep -qF 'paused = !var.inngest_luks_cutover_complete' "$TF" \
   || no "paused is not variable-driven — it would page continuously from merge, and get muted"
 
 grep -qF 'variable "inngest_luks_cutover_complete"' "$VARS" \
-  && grep -A4 'variable "inngest_luks_cutover_complete"' "$VARS" | grep -qF 'default     = false' \
-  && ok "the arming variable exists and defaults to FALSE (pre-cutover, the plaintext alias is correct)" \
-  || no "variable inngest_luks_cutover_complete is absent or does not default to false"
+  && grep -A4 'variable "inngest_luks_cutover_complete"' "$VARS" | grep -Eq 'default[[:space:]]+= true' \
+  && ok "the arming variable exists and defaults to TRUE (post-cutover, the PLAINTEXT alias is the regression)" \
+  || no "variable inngest_luks_cutover_complete is absent or does not default to true"
 
 grep -qF '            -target=logtail_exploration.inngest_luks_wrong_volume \' "$WF" \
   && grep -qF '            -target=logtail_exploration_alert.inngest_luks_wrong_volume \' "$WF" \
@@ -125,48 +125,72 @@ grep -qF 'inngest-luks-cutover-6894.md' "$TF" \
   || no "no runbook URL on the incident_cause/metadata"
 
 # ── Mutation rows: each must make the rows above RED ───────────────────────────────────────────
-MUT_DIR="$(mktemp -d -t luksalert.XXXXXX)"; trap 'rm -rf "$MUT_DIR"' EXIT
+MUT_DIR="$(mktemp -d -t luksalert.XXXXXX)"
+# Take BOTH pristine copies BEFORE arming the trap, and make the trap RESTORE them. The previous
+# form was `trap 'rm -rf "$MUT_DIR"' EXIT` armed before the copies existed: it deleted the only
+# pristine copy and restored nothing, so any interruption mid-row (Ctrl-C, a reap, an abort
+# inside a row) left a MUTATED tracked file in the worktree with its backup already gone.
+# That was survivable while the mutator only touched $TF; extending it to $VARS is what makes
+# it dangerous, because variables.tf is read by the apply on every push to main — a stranded
+# mutation there is a live infrastructure change, not a dirty test file.
 cp "$TF" "$MUT_DIR/pristine.tf"
+cp "$VARS" "$MUT_DIR/pristine.vars.tf"
+trap 'cp -f "$MUT_DIR/pristine.tf" "$TF" 2>/dev/null || true; cp -f "$MUT_DIR/pristine.vars.tf" "$VARS" 2>/dev/null || true; rm -rf "$MUT_DIR"' EXIT INT TERM HUP
 SELF="${BASH_SOURCE[0]}"
-mutate_red() {  # mutate_red <label> <python-expr-on-s>
-  local label="$1" prog="$2" rc=0
-  assert_fixture_dir "$TF"   # P1b: every arm below writes to $TF, whose root is a $(cd … && pwd)
-  python3 - "$MUT_DIR/pristine.tf" "$TF" <<PY || { no "mutation '$label' did not land (anchor drifted)"; cp "$MUT_DIR/pristine.tf" "$TF"; return 0; }
+mutate_red() {  # mutate_red <label> <target-file> <pristine-copy> <python-expr-on-s>
+  local label="$1" target="$2" pristine="$3" prog="$4" rc=0
+  assert_fixture_dir "$target"   # P1b: every arm writes to $target, whose root is a $(cd … && pwd)
+  python3 - "$pristine" "$target" <<PY || { no "mutation '$label' did not land (anchor drifted)"; cp "$pristine" "$target"; return 0; }
 import sys
 s = open(sys.argv[1]).read()
 $prog
 open(sys.argv[2], 'w').write(s)
 PY
   MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$?
-  cp "$MUT_DIR/pristine.tf" "$TF"
+  cp "$pristine" "$target"
   if [ "$rc" -ne 0 ]; then ok "mutation RED: $label"; else no "mutation SURVIVED: $label — the row above pins nothing"; fi
 }
 if [ -z "${MUT_SKIP:-}" ]; then
-  mutate_red "the alias becomes a literal id" \
+  mutate_red "the alias becomes a literal id" "$TF" "$MUT_DIR/pristine.tf" \
     's = s.replace("scsi-0HC_Volume_${hcloud_volume.inngest_redis_luks.id}", "scsi-0HC_Volume_106261946")
 assert "106261946" in s'
-  mutate_red "the devid match loses its trailing space" \
+  mutate_red "the devid match loses its trailing space" "$TF" "$MUT_DIR/pristine.tf" \
     'old = "data_mount_devid=${local.inngest_luks_wrong_volume_alias} \x27) = 0"
 assert s.count(old) == 1
 s = s.replace(old, "data_mount_devid=${local.inngest_luks_wrong_volume_alias}\x27) = 0")'
-  mutate_red "the negation flips to a positive match (fires on the RIGHT volume)" \
+  mutate_red "the negation flips to a positive match (fires on the RIGHT volume)" "$TF" "$MUT_DIR/pristine.tf" \
     'old = "inngest_luks_wrong_volume_alias} \x27) = 0"
 assert s.count(old) == 1
 s = s.replace(old, "inngest_luks_wrong_volume_alias} \x27) > 0")'
-  mutate_red "the host_role scope is dropped (web-1 rows drive the alert)" \
+  mutate_red "the host_role scope is dropped (web-1 rows drive the alert)" "$TF" "$MUT_DIR/pristine.tf" \
     'old = "      AND position(JSONExtractString(raw, \x27message\x27), \x27host_role=dedicated \x27) > 0\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
-  mutate_red "paused becomes a constant true (armed never)" \
+  mutate_red "paused becomes a constant true (armed never)" "$TF" "$MUT_DIR/pristine.tf" \
     's = s.replace("paused = !var.inngest_luks_cutover_complete", "paused = true")
 assert "paused = true" in s'
-  mutate_red "the window shrinks below the probe cadence" \
+  mutate_red "the window shrinks below the probe cadence" "$TF" "$MUT_DIR/pristine.tf" \
     'old = "  query_period        = 5400"
 assert s.count(old) == 1
 s = s.replace(old, "  query_period        = 300")'
+  # Row 7 targets $VARS, not $TF, and is the whole reason the mutator became parameterised.
+  # The arming default reverting to false is the silent-disarm this guard now exists to catch:
+  # the .tf still reads `paused = !var…`, so every $TF-anchored row above stays green while
+  # the RESOLVED value is `paused = true` and Better Stack never fires.
+  mutate_red "the arming default reverts to false (alert silently disarmed)" "$VARS" "$MUT_DIR/pristine.vars.tf" \
+    'old = "  default     = true\n}"
+assert s.count(old) >= 1
+s = s.replace(old, "  default     = false\n}", 1)'
+  mutate_red "paused becomes a constant false (armed unconditionally, variable ignored)" "$TF" "$MUT_DIR/pristine.tf" \
+    's = s.replace("paused = !var.inngest_luks_cutover_complete", "paused = false")
+assert "paused = false" in s'
 fi
 
-_floor=19
+# 21 = 19 + the two rows added in #8296 (arming default reverts; paused becomes constant false).
+# The MUT_SKIP floor stays 13 DELIBERATELY: an inner run asserts only the non-mutation rows, so
+# raising it to 14 makes every inner run exit 1 on this FATAL check, which would make mutate_red
+# read RED for every row — including vacuous ones — and print green over a dead battery.
+_floor=21
 [ -n "${MUT_SKIP:-}" ] && _floor=13
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
