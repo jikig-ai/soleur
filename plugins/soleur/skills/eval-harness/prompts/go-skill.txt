@@ -15,7 +15,7 @@ Routing table:
 | glossary | The user asks what a term MEANS inside this repository, reports that two agents or documents use one word for different things, or asks to record or sharpen the definition of a project term ("what do we mean by lane", "shard and shard mean two different things here", "write down what a rung is"). Scoped to the repository's own vocabulary — a question about a third-party product's terminology is `default` | `soleur:kb-glossary` |
 | default | Everything else — features, exploration, questions, generation, vague scope without implement/build/ship intent | `soleur:brainstorm` |
 
-Respond with ONLY the single route token (one of: fix, drain, clo-attestation, review, legal-threshold, incident, implement, default). No explanation, no punctuation, no extra words.
+Respond with ONLY the single route token (one of: fix, drain, drain-prs, clo-attestation, review, legal-threshold, incident, implement, questionnaire, glossary, default). No explanation, no punctuation, no extra words.
 
 User request: {{input}}
 Route:
