@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "live_coverage_floor": 1,
+  "live_coverage_floor": 2,
   "store_classes": {
     "hcloud_volume": {
       "kind": "guest-luks-volume",
@@ -240,11 +240,12 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-registry.yml — content anchors: `cryptsetup luksFormat --batch-mode --type luks2 --key-file - \"$DEV\"`, `cryptsetup luksOpen --key-file - \"$DEV\" registry`, fstab `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2`, and the registry-luks-open.sh write_files block (the boot-time reopen); key: random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf). CORRECTED 2026-09-19 (#8386): the previous citation addressed this file by line number, which the dispatcher-era edits had already moved; anchors are content, never coordinates.",
+        "evidence": "apps/web-platform/infra/cloud-init-registry.yml — content anchors: `cryptsetup luksFormat --batch-mode --type luks2 --key-file - \"$DEV\"`, `cryptsetup luksOpen --key-file - \"$DEV\" registry`, fstab `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2`, and the registry-luks-open.sh write_files block (the boot-time reopen); key: random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf). CORRECTED 2026-09-19 (#8386): the previous citation addressed this file by line number, which the dispatcher-era edits had already moved; anchors are content, never coordinates. HONESTY NOTE, carried forward from the live_verification prose this row's 2026-09-20 flip replaced: disclosed_as is ASSERTED rather than linted for a luks row — check_at_rest hands mechanism=luks to check_luks_row, which returns before check_disclosed_as_not_encrypted ever runs, so the `not-publicly-claimed` value below is verified by no gate. And the apparatus behind live_verification carries a known broken discriminator: store_probe_rc emits a PID rather than an exit code (#8417), so the v4b_newest_indeterminate arm cannot be decoded until the next registry-host replace delivers the fix. Neither affects this row's at-rest evidence, which rests on store_luks=yes and store_mount_devid == store_expected_devid.",
         "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: OCI blobs + cosign signatures are unreadable without the Doppler-held LUKS passphrase",
-        "does_not_defend": "a leaked credential, an app-layer read on the unlocked live registry host, or exfiltration via a compromised zot process — and, until the deferred launch gate lands, the reboot window in which zot can serve a root-fs directory, which becomes MEASURABLE ONCE DELIVERED (#8386, see live_verification) and is still not PREVENTED.",
+        "does_not_defend": "a leaked credential, an app-layer read on the unlocked live registry host, or exfiltration via a compromised zot process — and, until the deferred launch gate lands, the reboot window in which zot can serve a root-fs directory. That window is MEASURABLE since #8386 delivered the store_luks field (first observed on boot b3ec6c3b, 2026-09-20) but is NOT YET GRADED: it renders as store_luks=absent, which registry-luks-live-8386.sh deliberately excludes from its plaintext count because a legitimate boot reads absent for a tick or two before the mount, and the standing alert that would grade it is #8408. Measurable, not measured — and still not PREVENTED.",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:the host-side emitter EXISTS in code since #8386 (the SOLEUR_ZOT_DISK row carries store_mount_src/store_backing_dev/store_mount_devid/store_expected_devid/store_luks ahead of its free-text tail) but has NOT been observed on a boot — delivery needs a registry-host replace, which is blocked while #8361 keeps apply-web-platform-infra.yml over GitHub's workflow-file size limit. Flip to available only in the commit that records an observed boot, per scripts/followthroughs/registry-luks-live-8386.sh; live_coverage_floor moves with that flip. Note: disclosed_as is ASSERTED rather than linted for a luks row — check_at_rest hands mechanism=luks to check_luks_row, which returns before the disclosure check. Tracked #8386."
+        "retrieved_on": "2026-09-20",
+        "live_verification": "available"
       }
     },
     {
