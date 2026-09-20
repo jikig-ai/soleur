@@ -2,6 +2,8 @@
 vendor: Anthropic PBC
 role: independent controller/processor under operator BYOK; processor for the Jikigai-keyed email-triage summarizer (PA-27), for the Anthropic-egressing Inngest function fleet (PA-31), for the community observation and republication activity's collection limb (PA-32), for the Jikigai-keyed Anthropic API surface in GitHub Actions CI (PA-33), and — NEW 2026-08-06 (#7331) — as JIKIGAI'S SUB-PROCESSOR for operator-assisted alpha-tester runs (PA-34 controller limb; Art. 30(2) record P-1 processor limb), which is the first engagement where Anthropic sits downstream of Jikigai in a chain whose ultimate controller is a THIRD PARTY rather than the operator
 status_snapshot_date: 2026-08-06
+customer_content_status: restricted-pending-retention-and-counsel-evidence
+latest_disposition_review: 2026-09-20
 register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33, PA-34]  # Art. 30(1) gap for the in-repo fleet + CI surface closed 2026-07-31 (#7100); the 2026-07-30 INCOMPLETE marker is retired. 2026-08-01 at review: PA-33's predicate widened repo-wide after a Jikigai-keyed egress in the sibling repo jikig-ai/operator-digest was found outside it; now PA-33 member (7), registered from committed source with asset-vs-deployed drift named as a residual. 2026-08-06 (#7331): PA-34 added, plus record P-1 in the separate knowledge-base/legal/article-30-2-register.md
 zero_retention_amendment: unsigned  # FIRED CONSEQUENCE 2026-08-06: an alpha tester's repository content egressed under the Jikigai key, so the 30-day retention window now attaches to a THIRD PARTY's data, not only the operator's. Session of 2026-08-06 expires ~2026-09-05.
 ---
@@ -24,6 +26,28 @@ operator BYOK).
 | **Anthropic Commercial Terms URL** | <https://www.anthropic.com/legal/commercial-terms> |
 | **Anthropic DPA URL** | <https://www.anthropic.com/legal/dpa> |
 | **Anthropic Sub-Processors list** | <https://www.anthropic.com/legal/subprocessors> |
+
+## Customer-content disposition
+
+Claude customer-content processing uses the same evidence gate as Codex. The
+existing Commercial Terms/DPA and transfer mechanisms are recorded, but this
+account's Zero-Retention amendment is still unsigned and the account's
+Commercial-versus-Consumer status remains unverified. Those are blocking
+conditions for Jikigai-keyed third-party repository content. Operator-BYOK
+traffic remains a separate posture and must not be used to imply that
+Jikigai-keyed processing is approved.
+
+Customer-content enablement requires all of the following to be evidenced:
+
+1. Commercial account status and the applicable DPA/Art. 28 terms.
+2. A signed Zero-Retention amendment or an explicitly approved alternative
+   retention restriction.
+3. Transfer geography and safeguards recorded for the actual account.
+4. Remote-erasure and downstream-subprocessor behavior accepted by counsel.
+5. For third-party controller data, the required authorization and notice.
+
+Until then, Claude remains available only for operator-BYOK use and synthetic
+or explicitly redacted internal qualification within the approved scope.
 
 ## Zero-Retention amendment
 
