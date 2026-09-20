@@ -186,6 +186,25 @@ while IFS=$'\t' read -r ev m p; do
   [[ -f "$REPO_ROOT/$p" ]] || { echo "  registration points at missing file: $p" >&2; t1_fail=1; }
 done < <(cat "$WORK/settings.tsv" "$WORK/devin.tsv" "$WORK/plugin.tsv")
 
+# The path check above canon()s the command and then stats the PATH — so it is
+# satisfied by a command whose path resolves while the COMMAND ITSELF cannot run.
+# That is not hypothetical: #8377 shipped
+#   bash "${...}/scripts/ensure-kb-index.sh --soft"
+# with the closing quote AFTER the flag, so bash received ONE argv entry — a
+# filename ending in ".sh --soft" — and exited 127 on every Devin SessionStart.
+# canon()'s regex stops at `.sh` and discards the ` --soft"` remainder, so
+# [[ -f ]] was true and this suite stayed green while the hook was dead.
+# Assert the SHAPE the bug takes: a script extension followed by whitespace and a
+# flag while still inside the double-quoted span.
+while IFS= read -r cmd; do
+  [[ -n "$cmd" ]] || continue
+  if printf '%s' "$cmd" | grep -qE '\.(sh|py)[[:space:]]+-[^"]*"'; then
+    echo "  flag glued inside the quoted script path (bash would treat it as a filename): $cmd" >&2
+    t1_fail=1
+  fi
+done < <(jq -r '.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command // empty' \
+           "$SETTINGS" "$DEVIN_CFG" "$PLUGIN_HOOKS" 2>/dev/null)
+
 # anti-vacuity: the enumeration must actually have found rows. 50 is a floor,
 # not a count assertion — ~100 registrations exist today; the floor only
 # catches a wholesale enumeration collapse (empty jq output, moved files).

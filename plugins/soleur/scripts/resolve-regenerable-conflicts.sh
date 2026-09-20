@@ -28,11 +28,17 @@
 # NEVER PUSHES. Callers own the push and its rejection handling -- sync-pr-behind.sh has exit
 # 7 for a rejected push, ship Phase 7 re-polls and re-syncs. A push from here would race them.
 #
-# NO LOCK. The clean-tree/no-merge-in-progress precondition below IS the serialization: a
-# second concurrent run in the same worktree fails it, or fails on git's own index.lock, and
-# exits non-zero having touched nothing. That is fail-closed. A dedicated lock beside the
-# caller's own (pre-merge-rebase.sh already holds `rebase-main`) would add a failure mode
-# without removing one.
+# NO LOCK, and the reason is narrower than an earlier draft of this comment claimed. That
+# draft said a second concurrent run "fails on git's own index.lock ... having touched
+# nothing". Both halves were wrong (#8384 review): a LINKED WORKTREE keeps its index,
+# index.lock, HEAD and MERGE_HEAD under .git/worktrees/<name>/, so index.lock is NOT shared
+# between the 70+ worktrees of this repo; and when the merge did lose that race the regen had
+# already run and written the tree -- only `git add` failed.
+# What actually makes concurrent runs safe is per-worktree index/HEAD/MERGE_HEAD, an
+# append-only object store, and per-ref locking. WITHIN one worktree the clean-tree and
+# no-merge-in-progress preconditions serialize, and the MERGE_HEAD assertion below is what
+# makes a lost race fail closed rather than commit a non-merge. Not covered by any of that:
+# the shared npm/npx cache the regen command pulls through.
 set -uo pipefail
 
 # THE REPO IS THE CALLER'S, NOT THIS SCRIPT'S. Resolved from the CWD via
@@ -42,7 +48,9 @@ set -uo pipefail
 # this root, so getting it wrong does not fail loudly; it operates on the wrong tree.
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
-BASE="${1:-}"
+# BASE is assigned AFTER the --test-resolvable seam shifts its two argv slots (below);
+# reading $1 here would capture the flag itself.
+BASE=""
 
 # na <reason> — refuse before anything has been touched.
 na()   { echo "[regen-on-conflict] not applicable: $*" >&2; exit 1; }
@@ -53,12 +61,7 @@ bail() {
   exit 1
 }
 
-[[ -n "$BASE" ]] || na "no base ref given (usage: resolve-regenerable-conflicts.sh <base-ref>)"
 [[ -n "$REPO_ROOT" ]] || na "not inside a git work tree (run from the repository being merged)"
-
-cd "$REPO_ROOT" || na "cannot enter repo root $REPO_ROOT"
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || na "not inside a git work tree"
-git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || na "base ref '$BASE' does not resolve to a commit"
 
 # ── THE RESOLVABLE SET ─────────────────────────────────────────────────────────────────────
 # One hardcoded path -> command pair. NOT a manifest file, deliberately: a manifest is a
@@ -66,27 +69,51 @@ git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || na "base ref '$BAS
 # cheap to extend. Adding a second member is an edit HERE plus an ADR-235 amendment, so the
 # cache-vs-product question gets asked each time.
 #
-# RESOLVABLE_OVERRIDE is a TEST SEAM ONLY (a TSV of `path<TAB>command`), used by this script's
-# suite to drive the two-path and empty-set rows. Nothing in production sets it.
+# THE SEAM IS ARGV, NOT THE ENVIRONMENT, AND THE COMMAND IS AN ARGV VECTOR, NOT A STRING.
+# Both halves are load-bearing and both were defects (#8384 review):
+#
+#   1. This ran `eval "$cmd"` on the command column. `eval` needs a shell for a value that is
+#      a fixed argv -- so the default arm was eval'd too, for no benefit.
+#   2. The seam was `RESOLVABLE_OVERRIDE`, an ordinary INHERITED environment variable, read
+#      with no validation but `[[ -f ]]` and no test-mode gate. "TEST SEAM ONLY ... Nothing in
+#      production sets it" is a statement about who DOES set it, not who CAN. All three
+#      production call sites (sync-pr-behind.sh, pre-merge-rebase.sh, ship Phase 7) invoke
+#      this script with a plain inherited environment, and pre-merge-rebase.sh does so from a
+#      PreToolUse hook on `gh pr merge` with stdout and stderr discarded. Demonstrated: one
+#      exported variable made this script run an arbitrary command, side-pick a conflicted
+#      file to attacker-chosen content, COMMIT the merge and exit 0 -- whereupon the caller
+#      pushes it.
+#
+# argv cannot be inherited. A caller who can set this script's argv can already run anything;
+# a caller who merely exports a variable cannot. The flag is accepted only as argument 1.
 RESOLVABLE_PATHS=()
-RESOLVABLE_CMDS=()
-if [[ -n "${RESOLVABLE_OVERRIDE:-}" ]]; then
-  [[ -f "$RESOLVABLE_OVERRIDE" ]] || na "RESOLVABLE_OVERRIDE=$RESOLVABLE_OVERRIDE is not a file"
-  while IFS=$'\t' read -r _p _c; do
+RESOLVABLE_ARGVS=()   # one TAB-joined argv vector per path, index-aligned with the above
+if [[ "${1:-}" == "--test-resolvable" ]]; then
+  _tsv="${2:-}"
+  [[ -f "$_tsv" ]] || na "--test-resolvable: '$_tsv' is not a file"
+  while IFS=$'\t' read -r _p _rest; do
     [[ -n "$_p" ]] || continue
-    RESOLVABLE_PATHS+=("$_p"); RESOLVABLE_CMDS+=("$_c")
-  done < "$RESOLVABLE_OVERRIDE"
+    RESOLVABLE_PATHS+=("$_p"); RESOLVABLE_ARGVS+=("$_rest")
+  done < "$_tsv"
+  shift 2
 else
   RESOLVABLE_PATHS=("knowledge-base/engineering/architecture/diagrams/model.likec4.json")
-  RESOLVABLE_CMDS=("bash scripts/regenerate-c4-model.sh")
+  RESOLVABLE_ARGVS=("$(printf 'bash\tscripts/regenerate-c4-model.sh')")
 fi
 
-# is_resolvable <path> -> echoes the command, or returns 1.
+BASE="${1:-}"
+[[ -n "$BASE" ]] || na "no base ref given (usage: resolve-regenerable-conflicts.sh [--test-resolvable <tsv>] <base-ref>)"
+
+cd "$REPO_ROOT" || na "cannot enter repo root $REPO_ROOT"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || na "not inside a git work tree"
+git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || na "base ref '$BASE' does not resolve to a commit"
+
+# is_resolvable <path> -> echoes the TAB-joined argv, or returns 1.
 is_resolvable() {
   local want="$1" i
   for i in "${!RESOLVABLE_PATHS[@]}"; do
     if [[ "${RESOLVABLE_PATHS[$i]}" == "$want" ]]; then
-      printf '%s' "${RESOLVABLE_CMDS[$i]}"
+      printf '%s' "${RESOLVABLE_ARGVS[$i]}"
       return 0
     fi
   done
@@ -154,7 +181,30 @@ done
 # ── APPLY ──────────────────────────────────────────────────────────────────────────────────
 # --no-ff so the merge is always recorded as a merge; --no-commit so the regenerated artifact
 # is part of the merge commit rather than a follow-up.
-git merge --no-ff --no-commit "$BASE" >/dev/null 2>&1 || true   # expected to conflict
+# THE MERGE MUST ACTUALLY HAVE STARTED. This was `|| true` with stderr discarded, and that
+# is the one path where this script both writes and commits something it should not: if the
+# merge fails for any reason OTHER than a content conflict -- a held index.lock, refusing to
+# clobber an ignored working-tree file, merge.verifySignatures, ENOSPC -- there is no
+# MERGE_HEAD and no conflict, so the regen ran, `git add` succeeded, `residual` came back
+# empty, and `git commit --no-edit` created an ORDINARY NON-MERGE commit and exited 0. Every
+# caller reads 0 as "merged, go push" (sync-pr-behind.sh then SKIPS the real merge). Measured
+# in review: rc=1 with `M  gen.txt` still STAGED, against a header promising byte-identical.
+merge_err="$(git merge --no-ff --no-commit "$BASE" 2>&1 >/dev/null)" || true
+if [[ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]]; then
+  git merge --abort 2>/dev/null || true
+  _dirty="$(git status --porcelain)"
+  if [[ -n "$_dirty" ]]; then
+    echo "[regen-on-conflict] regen failed: the merge did not start AND the tree is not clean — resolve by hand: $(tr '\n' ' ' <<<"$_dirty")" >&2
+  else
+    echo "[regen-on-conflict] not applicable: the merge did not start: ${merge_err:-no output}" >&2
+  fi
+  exit 1
+fi
+
+# A regen is a 10-60s network operation (npx likec4) running while MERGE_HEAD is live. Without
+# this, a SIGINT or a killed session leaves the worktree mid-merge carrying conflict markers --
+# a third state the two-outcome contract does not admit.
+trap 'git merge --abort 2>/dev/null || true' INT TERM HUP
 
 for i in "${!conflicted[@]}"; do
   p="${conflicted[$i]}"
@@ -163,10 +213,24 @@ for i in "${!conflicted[@]}"; do
   if [[ -L "$p" ]]; then
     bail "not applicable: refusing to write through symlink $p"
   fi
-  if ! eval "${cmds[$i]}" >/dev/null 2>&1; then
-    bail "regen failed: '${cmds[$i]}' exited non-zero for $p"
+  # argv, never `eval` -- see THE RESOLVABLE SET above.
+  IFS=$'\t' read -r -a _argv <<< "${cmds[$i]}"
+  [[ "${#_argv[@]}" -gt 0 ]] || bail "regen failed: empty command for $p"
+  # DELETE THE PATH BEFORE REGENERATING, so "the regen did not write this path" becomes "the
+  # path does not exist" -- which the `-e` check below already catches. Without this the only
+  # evidence that the command touched $p is the conflict-marker grep, and git writes NO markers
+  # for a path it treats as BINARY: it marks the path UU and leaves OURS-content in place, so
+  # the file reads clean and a no-op regen commits the ours-side artifact at rc=0. That is
+  # side-picking dressed as a regeneration -- the exact outcome this script exists to prevent.
+  # (Demonstrated in review against a `*.likec4.json binary` attribute; this PR also deletes
+  # the repo's only .gitattributes, so nothing in-tree pins that artifact as text.)
+  # Safe for the one production member: regenerate-c4-model.sh reads the .c4 sources, never
+  # its own output. A future incremental generator would need a different discriminator.
+  rm -f -- "$p"
+  if ! "${_argv[@]}" >/dev/null 2>&1; then
+    bail "regen failed: '${_argv[*]}' exited non-zero for $p"
   fi
-  [[ -e "$p" ]] || bail "regen failed: '${cmds[$i]}' did not produce $p"
+  [[ -e "$p" ]] || bail "regen failed: '${_argv[*]}' did not produce $p"
   # THE REGENERATED FILE MUST NOT STILL CARRY MARKERS. `git add` on a conflicted path marks it
   # resolved with whatever bytes are in the worktree -- so a regen command that silently did
   # not touch THIS path would otherwise have its conflict markers staged and committed as the
@@ -174,7 +238,7 @@ for i in "${!conflicted[@]}"; do
   # what clears the U flag. Measured: without this, a two-path fixture whose command
   # regenerates only the first commits the second with `<<<<<<<` in it.
   if grep -qE '^(<{7}|={7}|>{7})( |$)' -- "$p" 2>/dev/null; then
-    bail "regen failed: $p still contains conflict markers after '${cmds[$i]}'"
+    bail "regen failed: $p still contains conflict markers after '${_argv[*]}'"
   fi
   git add -- "$p" || bail "regen failed: could not stage $p"
 done

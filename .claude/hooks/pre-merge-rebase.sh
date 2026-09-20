@@ -349,20 +349,32 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   # It does not take the rebase-main lock: this hook already holds it (acquired above) and the
   # resolver is documented as taking none, so there is no re-entrancy here.
   REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
-  if [[ -f "$REGEN_RESOLVER" ]] && ( cd "$WORK_DIR" && bash "$REGEN_RESOLVER" origin/main >/dev/null 2>&1 ); then
+  REGEN_ERR=""
+  REGEN_OK=0
+  if [[ -f "$REGEN_RESOLVER" ]]; then
+    # CAPTURE stderr, never discard it. This was `>/dev/null 2>&1`, which falsified the
+    # resolver's central design contract -- "the distinction lives in stderr, prefixed
+    # `not applicable:` or `regen failed:`, where a human reads it" -- at the one call site
+    # that is genuinely UNATTENDED (a PreToolUse hook on `gh pr merge`). The operator got
+    # only "Merge of origin/main failed." with no way to tell a refusal from a failure.
+    if REGEN_ERR="$( cd "$WORK_DIR" && bash "$REGEN_RESOLVER" origin/main 2>&1 >/dev/null )"; then
+      REGEN_OK=1
+    fi
+  fi
+  if [[ "$REGEN_OK" -eq 1 ]]; then
     headless_or_stderr info "regenerable conflict resolved — merge committed, continuing"
   else
-
-  emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
-    "When a command exits non-zero or prints a warning" "$CMD"
-  jq -n --arg files "${CONFLICT_FILES:-unknown}" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". Resolve conflicts manually before merging.")
-    }
-  }'
-  exit 0
+    [[ -n "$REGEN_ERR" ]] && headless_or_stderr info "regen-on-conflict declined: $REGEN_ERR"
+    emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
+      "When a command exits non-zero or prints a warning" "$CMD"
+    jq -n --arg files "${CONFLICT_FILES:-unknown}" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". Resolve conflicts manually before merging.")
+      }
+    }'
+    exit 0
   fi
 fi
 

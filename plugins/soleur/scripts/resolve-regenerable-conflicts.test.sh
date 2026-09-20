@@ -133,10 +133,16 @@ STUB
   chmod +x "$1/scripts/regenerate-c4-model.sh"
 }
 
-run_sut() {  # <repo> <base-ref> [extra env assignments via RESOLVABLE_OVERRIDE]
-  local r="$1" base="$2"; shift 2
+run_sut() {  # <repo> <base-ref> [resolvable-tsv]
+  # The seam is ARGV, not the environment (#8384): an inherited env var that reaches an
+  # unattended `git commit` is a command-execution channel, and was demonstrated as one.
+  local r="$1" base="$2" tsv="${3:-}"
   local out rc=0
-  out="$(cd "$r" && env "$@" bash "$SUT" "$base" 2>&1)" || rc=$?
+  if [[ -n "$tsv" ]]; then
+    out="$(cd "$r" && bash "$SUT" --test-resolvable "$tsv" "$base" 2>&1)" || rc=$?
+  else
+    out="$(cd "$r" && bash "$SUT" "$base" 2>&1)" || rc=$?
+  fi
   printf '%s\n%s' "$out" "$rc"
 }
 sut_rc()  { tail -n1 <<<"$1"; }
@@ -237,7 +243,8 @@ setup_row3() {  # TWO resolvable paths conflict; the stub regenerates only the f
   _git "$r" add -A >/dev/null; _git "$r" commit -q -m main-second
   _git "$r" checkout -q feature; printf '{"v":"feature2"}\n' > "$r/$second"
   _git "$r" add -A >/dev/null; _git "$r" commit -q -m feature-second
-  printf '%s\tbash scripts/regenerate-c4-model.sh\n%s\tbash scripts/regenerate-c4-model.sh\n' \
+  # argv vector, TAB-separated -- the SUT splits on TAB and execs directly (no eval).
+  printf '%s\tbash\tscripts/regenerate-c4-model.sh\n%s\tbash\tscripts/regenerate-c4-model.sh\n' \
     "$MODEL" "$second" > "${r}.override.tsv"
 }
 setup_row4() {  # the resolvable set is EMPTY
@@ -294,7 +301,7 @@ for spec in \
   "$fn" "$r"
   fp_before="$(tree_fp "$r")"
   if [[ -n "$ovr" ]]; then
-    res="$(run_sut "$r" main "RESOLVABLE_OVERRIDE=${r}.override.tsv")"
+    res="$(run_sut "$r" main "${r}.override.tsv")"
   else
     res="$(run_sut "$r" main)"
   fi
@@ -337,10 +344,11 @@ fi
 # carrying conflict markers. `git add` clears the U flag, so the residual check cannot see it.
 CASES_RUN=$((CASES_RUN + 1))
 r3="$SANDBOX/row3asecondresolvablepathisleftconflicted"
-if grep -q 'conflict markers' <<<"$(sut_out "$(run_sut "$r3" main "RESOLVABLE_OVERRIDE=${r3}.override.tsv")")"; then
-  pass "row 3: refuses a path the regen left carrying conflict markers"
+_r3_out="$(sut_out "$(run_sut "$r3" main "${r3}.override.tsv")")"
+if grep -qE 'did not produce|conflict markers' <<<"$_r3_out"; then
+  pass "row 3: refuses a path the regen did not write"
 else
-  fail "row 3: the un-regenerated path was not detected by its markers"
+  fail "row 3: the un-regenerated path was not refused: $_r3_out"
 fi
 
 # Row 7b's extra observable: the in-loop refusal must NAME the symlink, and the link target
@@ -416,16 +424,78 @@ CASES_RUN=$((CASES_RUN + 1))
 
 # ── The resolver must NEVER push. ──────────────────────────────────────────────────────────
 CASES_RUN=$((CASES_RUN + 1))
-if grep -qE '(^|[^-[:alnum:]])git[[:space:]]+push' "$SUT"; then
+if grep -v '^[[:space:]]*#' "$SUT" | grep -qE '(^|[^-[:alnum:]])git[[:space:]]+push'; then
   fail "the resolver contains a 'git push' — callers own the push and its rejection handling"
 else
   pass "the resolver never pushes (callers own the push)"
 fi
 
+# ── tree_fp POSITIVE CONTROL ───────────────────────────────────────────────────────────────
+# tree_fp owns 9 "the tree is byte-identical to entry" verdicts and was never driven with a
+# tree that MUST differ: `tree_fp() { echo CONSTANT; }` left this suite 39/39 GREEN (#8384
+# review). The instrument self-test covers pass()/fail(); it is blind to an ORACLE that has
+# stopped observing. These two rows are that control.
+_fpctl="$(mkrepo fpcontrol)"
+_fp0="$(tree_fp "$_fpctl")"
+printf 'dirty\n' >> "$_fpctl/$SRC"
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(tree_fp "$_fpctl")" != "$_fp0" ]] \
+  && pass "tree_fp control: a modified tracked file changes the fingerprint" \
+  || fail "tree_fp is not observing — every 'tree untouched' verdict in this suite is vacuous"
+_git "$_fpctl" checkout -q -- "$SRC"
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(tree_fp "$_fpctl")" == "$_fp0" ]] \
+  && pass "tree_fp control: reverting restores the fingerprint" \
+  || fail "tree_fp is not stable across a revert — it cannot distinguish touched from untouched"
+
+# ── THE SEAM IS NOT REACHABLE FROM THE ENVIRONMENT ─────────────────────────────────────────
+# Regression guard for the demonstrated P1 (#8384): RESOLVABLE_OVERRIDE was an inherited env
+# var whose TSV command column reached `eval` inside a script that commits unattended and
+# whose callers then push. Setting it must now do NOTHING.
+_envr="$(mkrepo envseam)"
+# MUST map the CONFLICTED path ($MODEL). $SRC text-merges cleanly, so it is never in the
+# conflicted set and the payload could never fire -- a fixture that cannot contain the thing
+# it looks for. (Caught by mutation M2: this row passed against an env-reachable seam.)
+printf '%s\ttouch\t%s/PWNED\n' "$MODEL" "$_envr" > "${_envr}.evil.tsv"
+_env_res="$(cd "$_envr" && RESOLVABLE_OVERRIDE="${_envr}.evil.tsv" bash "$SUT" main 2>&1; printf '|rc=%s' "$?")"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ -e "$_envr/PWNED" ]]; then
+  fail "RESOLVABLE_OVERRIDE still directs the resolver from the environment: $_env_res"
+else
+  pass "the resolvable set is not reachable from the environment (argv-only seam)"
+fi
+
+# ── A NO-OP REGEN CANNOT COMMIT THE OURS-SIDE ARTIFACT ─────────────────────────────────────
+# git writes NO conflict markers for a path it treats as BINARY -- it marks it UU and leaves
+# ours-content in place -- so the marker grep alone let a regen that never wrote commit the
+# ours artifact at rc=0: side-picking dressed as regeneration. The SUT now deletes the path
+# before regenerating, so a non-writing command is caught as "did not produce".
+_noop="$(mkrepo noopregen)"
+cat > "$_noop/scripts/regenerate-c4-model.sh" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$_noop/scripts/regenerate-c4-model.sh"
+# Commit the stub: an uncommitted edit trips the clean-tree precondition first, and the row
+# would then pass for a reason that has nothing to do with the no-op regen.
+_git "$_noop" add -A >/dev/null; _git "$_noop" commit -q -m noop-stub
+_noop_before="$(tree_fp "$_noop")"
+_noop_res="$(run_sut "$_noop" main)"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$(sut_rc "$_noop_res")" != "0" ]] && grep -q 'did not produce' <<<"$(sut_out "$_noop_res")"; then
+  pass "a regen that writes nothing is refused, not committed as the ours-side artifact"
+else
+  fail "a no-op regen was accepted (ours-side side-pick at rc=0): $(sut_out "$_noop_res")"
+fi
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(tree_fp "$_noop")" == "$_noop_before" ]] \
+  && pass "the refused no-op regen left the tree byte-identical" \
+  || fail "the no-op refusal left residue behind"
+
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=34
+_min_cases=39
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
