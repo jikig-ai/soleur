@@ -42,6 +42,57 @@ Four deliverables, scoped exactly to issue #8289:
 - A questionnaire-generation skill that converts a decision the founder cannot answer into a
   document aimed at whoever can, interviewing only about the send rather than the subject.
 
+## Enhancement Summary (deepen-plan)
+
+**Deepened on:** 2026-09-20 · **Halt gates:** 4.6, 4.7, 4.8, 4.9, 4.10, 4.11 — all pass
+**Preceded by:** a six-reviewer `plan-review` panel whose findings are logged as R1–R27 below.
+
+### Halt-gate results
+
+| Gate | Verdict |
+|---|---|
+| 4.6 User-Brand Impact | PASS — section present, threshold `single-user incident`, concrete artifact and vector |
+| 4.7 Observability | PASS — all five fields present and non-placeholder; `discoverability_test.command` starts with `bash` (allowlisted) and contains no `ssh` |
+| 4.8 PAT-shaped variable | PASS — zero matches across all four PAT patterns |
+| 4.9 UI-wireframe | SKIP — no UI-surface path in either file list; the two `components/**/*.tsx` matches are prose explaining that the override does not fire |
+| 4.10 Encryption Posture | SKIP — no persistent store, no cross-component connection; the one `*.tf` match is prose stating the globs match nothing |
+| 4.11 Guard Contract | PASS — `lint-guard-contract.py` green, and the **adequacy read** passes: the Assembly names the *chokepoint* (the glob, plus three enumerated dispatches) rather than a snapshot of today's members |
+
+### Deepen findings applied
+
+1. **Every cited rule ID verified active.** All 15 `(hr|wg|cq|rf|pdr|cm)-*` tokens in the plan resolve to
+   an `[id: …]` in `AGENTS.md`/`AGENTS.rules.md` or to a live row in `scripts/migrated-rule-ids.txt`
+   (`cq-ac-must-not-depend-on-concurrent-sessions`; plus `wg-architecture-decision-is-a-plan-deliverable`
+   in `decision-challenges.md`). **Zero fabricated, zero retired** — the fabrication class that shipped
+   five bad citations in #3486.
+2. **Every prescribed GitHub label exists.** `action-required`, `follow-through`, `compliance/critical`,
+   `deferred-scope-out`, `code-review`, `meta/machinery`, `wontfix` — all confirmed against
+   `gh label list --limit 300`.
+3. **The emitter template's extension is corrected from `.md` to `.template`**, matching bundle 2's direct
+   precedent. Three measured reasons, all of which would have bitten at `/work`: every one of the six
+   files in `constraint-scaffold/references/` uses `.template`; `scripts/markdown-lint.sh` scopes to
+   `git ls-files '*.md'`, so a `.md` template full of `<placeholder>` tokens and `>` answer stubs would
+   fight the linter; and `components.test.ts`'s references/-reachability assertion walks **only** `.md`
+   files, which is why `boundary-readme.template` is legitimately un-named from its own `SKILL.md`
+   without being an orphan. The two genuine prose references (`glossary-format.md`,
+   `rejected-request-register.md`) keep `.md` and now carry an explicit must-be-named-from-`SKILL.md` note.
+4. **`compound` is the tightest lifecycle ceiling this plan touches** — 54256 / 57000, **2744 bytes** of
+   headroom, against `brainstorm`'s 6372 and `plan`'s 4729. R3 added that file, so the constraint is new;
+   the sharpening trigger must be a sentence, not a section. The ceiling ratchets down-only.
+5. **Precedent diff run for all three pattern-bound behaviours** (the lint's dispatch shape, the probe's
+   exit contract, and the `.test.sh`-under-`scripts/` question) — recorded as its own subsection rather
+   than asserted. The third one is what confirmed R20's relocation was right rather than merely
+   convenient.
+
+### What deepen-plan did NOT change
+
+The research fan-out found no new best-practice or framework guidance to fold in, and that is the honest
+result rather than a gap: this plan ships Markdown and one shell lint into an existing plugin, so its
+correctness surface is entirely **this repository's own conventions** — which is what the six-reviewer
+panel and the gates above measured. No Context7 query, no web search and no external-pattern lookup would
+have caught any of R1–R27, because every one of them was a fact about this repo that only a command could
+settle.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -377,6 +428,22 @@ discoverability_test:
 
 No blind execution surface (sandbox, container dispatch, scheduled worker) is touched, so Phase 2.9.2
 does not fire.
+
+### Precedent diff (Phase 4.4)
+
+Three pattern-bound behaviours, each diffed against its sibling precedent rather than invented:
+
+- **The lint's dispatch shape** copies `distribution-content-liquid-guard` (`priority:` / `glob:` /
+  `run: bash scripts/<lint>.sh {staged_files}`) for pre-commit, and the `client-pii-grep` gate for the
+  pre-push mirror. Both live in `lefthook.yml`; neither is paraphrased.
+- **The probe's exit contract** copies `scripts/followthroughs/ccla-representative-icla-7922.sh`, whose
+  live shape is `exit 2` (not yet), `exit 5` (action required) and a terminal `exit 2` default —
+  verified in that file, not recalled.
+- **A `.test.sh` under `scripts/`** is a real and common shape in this repo
+  (`lint-agents-compound-sync.test.sh`, `lint-agents-rule-budget.test.sh`, and 93 more), but every one
+  is registered by a hand-written `run_suite` line rather than by a glob. That is precisely why the
+  battery is relocated to `plugins/soleur/test/` (R20): the precedent exists, and following it would
+  have required a runner edit AC-33 forbade.
 
 ### Phase 2.9.1 — Follow-Through Enrollment (fires, but on Flow D — not on the store)
 
@@ -756,12 +823,12 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
 | Path | What | `Inspired by` comment |
 |---|---|---|
 | `plugins/soleur/skills/kb-glossary/SKILL.md` | The write discipline, **plus a `## When to self-invoke` section (R3)** in the shape of the repo's only precedent, `operator-rephrase/SKILL.md` — without it nothing reaches this skill and PR-2 has no producer. The discipline: challenge a term that conflicts with the glossary, sharpen a fuzzy or overloaded one, update inline the moment it resolves rather than batching, and the hard scope line that the artifact is a glossary and nothing else — no specs, no implementation detail, no scratch space | **Yes**, after the closing frontmatter fence — `.../engineering/domain-modeling/SKILL.md` |
-| `plugins/soleur/skills/kb-glossary/references/glossary-format.md` | Entry format and inclusion test. Two rules Soleur adds to the peer shape: an entry whose term already has a canonical definer is a **pointer** to that definer, never a restatement; and a term belongs only if two or more skills or agents pass it to each other | **Yes**, after the fence — `.../domain-modeling/CONTEXT-FORMAT.md` |
+| `plugins/soleur/skills/kb-glossary/references/glossary-format.md` | **Must be named from `SKILL.md` or a sibling** — `components.test.ts` asserts every `.md` under a skill's `references/` is reachable, and the only permitted orphan today is `skill-security-scan/references/disclaimer.md`. Entry format and inclusion test. Two rules Soleur adds to the peer shape: an entry whose term already has a canonical definer is a **pointer** to that definer, never a restatement; and a term belongs only if two or more skills or agents pass it to each other | **Yes**, after the fence — `.../domain-modeling/CONTEXT-FORMAT.md` |
 | `knowledge-base/project/glossary.md` | The artifact. Sits beside `constitution.md` as a project-wide governing document. Seeded only with terms whose definers already exist and can be pointed at | **No** — Soleur-authored, not derived |
 | `knowledge-base/project/rejected/README.md` | The register convention, co-located with the store (the `learnings/technical-debt/README.md` shape): the field set, the concept-and-aliases key, the role-not-identity requirement, the write procedure with its machine gate and typed confirmation, and the built-is-not-rejected prohibition as the store's first rule | **No** — the *derived* prose lives in the skill-side reference; this file is the founder-facing convention |
-| `plugins/soleur/skills/kb-glossary/references/rejected-request-register.md` | The derived half of the register convention: the one-file-per-concept discipline, concept-not-keyword matching, the durable-reason test, and the built-is-not-rejected prohibition | **Yes**, after the fence — `.../engineering/triage/OUT-OF-SCOPE.md` |
+| `plugins/soleur/skills/kb-glossary/references/rejected-request-register.md` | Also must be named from `SKILL.md` (same reachability assertion). The derived half of the convention: the one-file-per-concept discipline, concept-not-keyword matching, the durable-reason test, and the built-is-not-rejected prohibition | **Yes**, after the fence — `.../engineering/triage/OUT-OF-SCOPE.md` |
 | `plugins/soleur/skills/questionnaire-generate/SKILL.md` | Grill the send, not the subject: two interview exchanges (who it goes to; what is needed back), then questions aimed at the gap. Plus the founder-protection guardrails — what `## Context` must never carry, and the refusal to frame output as analysis | **Yes**, after the fence — `.../productivity/to-questionnaire/SKILL.md` |
-| `plugins/soleur/skills/questionnaire-generate/references/questionnaire-template.md` | The document template. Carries the comment on **line 1, above any frontmatter**, because the emitter strips the first line — the `constraint-scaffold/references/boundary-readme.template` shape. Do not interchange the two placements | **Yes on line 1**; **stripped** from the emitted document |
+| `plugins/soleur/skills/questionnaire-generate/references/questionnaire.template` | The document template. Carries the comment on **line 1**, because the emitter strips the first line. **Extension is `.template`, not `.md` — three measured reasons, all from bundle 2's direct precedent:** all six files in `constraint-scaffold/references/` use `.template`; `scripts/markdown-lint.sh` scopes to `git ls-files '*.md'`, so a `.template` escapes markdown-lint (a template full of `<placeholder>` tokens and `>` answer stubs would otherwise fight it); and `components.test.ts`'s references/-reachability assertion walks **only `.md`** files, which is why `boundary-readme.template` is legitimately un-named from its own `SKILL.md` (`grep -c` → 0) without being an orphan | **Yes on line 1**; **stripped** from the emitted document |
 | `knowledge-base/project/questionnaires/` (directory + `README.md`) | **R5 — the emitted questionnaire had no address.** No output path, filename convention or directory appeared anywhere in the earlier plan: the artifact existed and could not be located. Emission path is `YYYY-MM-DD-<recipient-role>-<topic>.md`, reusing the dated-slug convention AC-4b mandates for the store. The README states the frontmatter contract (`recipient_role`, `needed_by`, `blocked_decision`, `status: sent\|answered`), the `## Answers` section a reply is pasted into, and the `## Blocked on` back-pointer | **No** — founder-facing, Soleur-authored |
 | `scripts/followthroughs/questionnaire-unanswered-8289.sh` | The return-leg probe (Phase 2.9.1) | No |
 | `scripts/lint-rejected-register.sh` | Guard 1 | No |
@@ -789,7 +856,7 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
 | `lefthook.yml` | Register Guard 1 on `glob: "knowledge-base/project/rejected/*.md"`, copying the `distribution-content-liquid-guard` shape | `run: bash scripts/lint-rejected-register.sh {staged_files}` |
 | `plugins/soleur/NOTICE` | Append the `(#8289)` group to `Used in:` (paths relative to `plugins/soleur/`, naming the actual host files); append the bundle-3 `Portions adopted:` paragraph with what was imported, all four deliberately-not-imported items, and the narrowed emission sentence | Pinned SHA `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` is already on the stanza and does not change |
 | `knowledge-base/INDEX.md` | Regenerate: `bash scripts/generate-kb-index.sh` | Tracked and generated; `scripts/merge-kb-index.sh` resolves landing conflicts, `--check` gated via `plugins/soleur/test/kb-index-merge-driver.test.sh` |
-| `plugins/soleur/skills/compound/SKILL.md` | **R3 — Flow A's producer.** Add the glossary sharpening trigger at the existing pass *"Could a rule, hook, or skill instruction have prevented this?"* — the exact moment a session has settled what a word means. Without it the write discipline has no producer anywhere and PR-2 ships as prose nothing reaches | Lifecycle skill: `compound`'s ceiling is pinned in `skill-body-budget.json`; measure headroom before writing |
+| `plugins/soleur/skills/compound/SKILL.md` | **R3 — Flow A's producer.** Add the glossary sharpening trigger at the existing pass *"Could a rule, hook, or skill instruction have prevented this?"* — the exact moment a session has settled what a word means. Without it the write discipline has no producer anywhere and PR-2 ships as prose nothing reaches | **Lifecycle skill, and the tightest of the three this plan edits: measured 54256 / 57000 → 2744 bytes of headroom** (vs `brainstorm` 6372 and `plan` 4729). The ceiling ratchets down-only, so the trigger prose must be a sentence, not a section |
 | `plugins/soleur/skills/compound-capture/SKILL.md` | The same trigger on the capture path | Not a lifecycle skill; no ceiling |
 | `plugins/soleur/skills/operator-digest/SKILL.md` | **R17.** It owns `## Register (how to write)` — the canonical definer `operator-rephrase` already points at — so the glossary's `register` entry must point here too. An earlier revision wired the pointer and skipped the referent | Not a lifecycle skill; no ceiling |
 | `knowledge-base/project/constitution.md` | **R18.** One line pointing at the glossary. `work`, `compound`, `compound-capture` and `spec-templates` already read the constitution, so future skills inherit the pointer with no per-file edit and no lifecycle byte cost. The five named consumers keep explicit pointers as a declared phase-1 set | Not byte-ratcheted |
@@ -803,7 +870,7 @@ discharged solely by `plugins/soleur/NOTICE` shipping in the payload.
     skills/kb-glossary/ (SKILL.md, references/glossary-format.md,
     references/rejected-request-register.md),
     skills/questionnaire-generate/ (SKILL.md,
-    references/questionnaire-template.md),
+    references/questionnaire.template),
     skills/triage/SKILL.md (intake pre-checks),
     agents/support/ticket-triage.md (intake pre-checks) (#8289)
 ```
@@ -976,7 +1043,7 @@ Ordered so the battery exists before the guard, per Phase 2.12.
 
 ### Phase 4 — `questionnaire-generate` (PR-6, PR-7), gated on Phase 0 step 5
 
-1. `references/questionnaire-template.md`, attribution comment on line 1.
+1. `references/questionnaire.template`, attribution comment on line 1.
 2. `SKILL.md`, including the strip-the-first-line emitter rule, the `## Context` guardrails, and the
    refusal to frame output as analysis or to warrant how the recipient will handle the data.
 3. Rung 5 in `.claude/hooks/pre-ask-technical-fork-gate.sh`, plus the assertion and the 12 → 13
@@ -1134,7 +1201,7 @@ verification below is automatable, and the three tracking issues are filed by th
 19. Exactly the five derived files carry the comment verbatim **including the trailing period inside
     the comment**: for each of `kb-glossary/SKILL.md`, `kb-glossary/references/glossary-format.md`,
     `kb-glossary/references/rejected-request-register.md`, `questionnaire-generate/SKILL.md`,
-    `questionnaire-generate/references/questionnaire-template.md`,
+    `questionnaire-generate/references/questionnaire.template`,
     `grep -cF 'MIT, Copyright (c) 2026 Matt Pocock). -->'` returns exactly `1`. Placement asserted:
     line 1 for the template, after the closing frontmatter fence for the other four.
 20. **No** `Inspired by` line and no vendor mark appears in `knowledge-base/project/glossary.md`,
@@ -1155,7 +1222,7 @@ verification below is automatable, and the three tracking issues are filed by th
 22. **AC-L2 (verbatim cap, derived artifacts).** The five files in AC19 intentionally adopt peer prose,
     so AC-L1(b) does **not** apply to them. Instead: no shared **25-word** shingle with any pinned peer
     blob. This is the line between "informed by" and "copied", and it is the only AC that actually
-    constrains `references/questionnaire-template.md` — the one file rendered from a peer template
+    constrains `references/questionnaire.template` — the one file rendered from a peer template
     block.
 23. **AC-L3 (discharge).** AC-L1 and AC-L2 are originality hygiene, **not** the licence discharge. The
     MIT notice is discharged solely by `plugins/soleur/NOTICE` shipping in the plugin payload, and the

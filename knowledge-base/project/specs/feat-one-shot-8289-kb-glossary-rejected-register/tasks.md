@@ -127,7 +127,7 @@ needed. Never "register" — that word has eight live compliance senses in this 
 ## Phase 4 — `questionnaire-generate` (PR-6, PR-7) — gated on 0.7
 
 - [ ] 4.1 Top up the description budget for this skill's description.
-- [ ] 4.2 `references/questionnaire-template.md` — attribution comment on **line 1, above frontmatter**
+- [ ] 4.2 `references/questionnaire.template` — attribution comment on **line 1, above frontmatter**
       (the emitter strips the first line). Do not use the after-the-fence placement here.
 - [ ] 4.3 `knowledge-base/project/questionnaires/README.md` — the emission path
       `YYYY-MM-DD-<recipient-role>-<topic>.md`, the frontmatter contract (`recipient_role`, `needed_by`,
