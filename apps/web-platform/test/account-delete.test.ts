@@ -46,6 +46,16 @@ vi.mock("@/server/git-data-replication", () => ({
   removeGitDataRepo: (...args: unknown[]) => mockRemoveGitDataRepo(...args),
 }));
 
+// (#8094) A failed Art. 17 erasure is a compliance event, so the cascade mirrors it to
+// Sentry as well as returning it. PARTIAL mock: the SUT graph also reads hashUserId and
+// warnSilentFallback from this module, and a wholesale factory would drop them and crash
+// at call time (the sibling git-data-replication.test.ts documents the same trap).
+const mockReportSilentFallback = vi.fn();
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  reportSilentFallback: (...args: unknown[]) => mockReportSilentFallback(...args),
+}));
+
 // ---------------------------------------------------------------------------
 // Import the module under test
 // ---------------------------------------------------------------------------
@@ -75,7 +85,8 @@ function setupSupabaseMocks(overrides: {
   });
 
   mockDeleteWorkspace.mockResolvedValue(undefined);
-  mockRemoveGitDataRepo.mockResolvedValue(undefined);
+  mockRemoveGitDataRepo.mockResolvedValue({ status: "erased" });
+  mockReportSilentFallback.mockReset();
   mockAbortAllUserSessions.mockReturnValue(undefined);
 
   mockStorageFrom.mockReturnValue({
@@ -266,6 +277,83 @@ describe("deleteAccount", () => {
     // what this asserts; the flag gate + key authority are covered in
     // git-data-replication.test.ts.
     expect(mockRemoveGitDataRepo).toHaveBeenCalledWith("user-123");
+  });
+
+  // --------------------------------------------------------------------------------
+  // (#8094) NEVER REPORT AN ERASURE THIS CASCADE DID NOT OBSERVE.
+  //
+  // Today the store holds nothing, so a swallowed refusal is substantively accurate. At
+  // the GIT_DATA_STORE_ENABLED cutover it becomes an Art. 17 erasure reported as success
+  // against three already-published statements (DPD s10.3(b), T&C s14.1b, and the Delete
+  // Account dialog). The cascade still COMPLETES on a refusal — a git-data fault must not
+  // strand the auth-user deletion — but it must say so.
+
+  test("host REFUSES the erasure: deletion still succeeds, and the result says erasure is PENDING", async () => {
+    setupSupabaseMocks();
+    mockRemoveGitDataRepo.mockResolvedValue({
+      status: "refused",
+      exitCode: 3,
+      detail: "git-data-remove: /mnt/git-data is not mounted; refusing",
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    // The cascade is NOT aborted — that is the deliberate part.
+    expect(result.success).toBe(true);
+    // But the caller is told, so the dialog can stop claiming "permanently deleted".
+    expect(result.gitDataErasurePending).toBe(true);
+    // And it remains a compliance event in Sentry, not merely a return value.
+    expect(mockReportSilentFallback).toHaveBeenCalled();
+  });
+
+  test("git-data UNREACHABLE: deletion succeeds and erasure is still reported PENDING", async () => {
+    setupSupabaseMocks();
+    mockRemoveGitDataRepo.mockResolvedValue({
+      status: "unreachable",
+      detail: "ssh: connect to host 10.0.1.20 port 22: Connection refused",
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    // A blip leaves the repo in an UNKNOWN state, and unknown is not erased. Reporting
+    // this as done would be the same lie as reporting a refusal as done.
+    expect(result.gitDataErasurePending).toBe(true);
+  });
+
+  test("erasure succeeds: NOT pending, and no compliance report", async () => {
+    setupSupabaseMocks();
+    mockRemoveGitDataRepo.mockResolvedValue({ status: "erased" });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(result.gitDataErasurePending).toBeFalsy();
+  });
+
+  test("no git-data in this env (skipped): NOT pending — nothing was ever stored to erase", async () => {
+    setupSupabaseMocks();
+    mockRemoveGitDataRepo.mockResolvedValue({ status: "skipped" });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    // `skipped` must not read as `pending`, or every delete in a non-git-data env would
+    // tell the user their repository erasure is outstanding when there is no repository.
+    expect(result.gitDataErasurePending).toBeFalsy();
+  });
+
+  test("removeGitDataRepo THROWS (unexpected): deletion still succeeds, pending, and reported", async () => {
+    setupSupabaseMocks();
+    mockRemoveGitDataRepo.mockRejectedValue(new Error("boom"));
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    // The throw path must reach the same honest answer as the refusal path — otherwise
+    // the one route that bypasses the new outcome type silently restores the old lie.
+    expect(result.gitDataErasurePending).toBe(true);
+    expect(mockReportSilentFallback).toHaveBeenCalled();
   });
 
   test("when auth deletion fails, public.users data remains intact (no partial deletion)", async () => {

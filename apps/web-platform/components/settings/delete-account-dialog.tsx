@@ -39,7 +39,21 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
       // account deletion is the strongest principal-LEAVING boundary — hard-nav
       // so the App Router Router Cache is fully wiped (a soft push would leave
       // the deleted user's warm RSC shells reachable on this device).
-      window.location.assign("/login?deleted=true");
+      //
+      // (#8094) THE HARD NAV STAYS UNCONDITIONAL, and the pending fact rides the URL.
+      // A first cut of this change rendered the erasure-pending notice HERE and left
+      // navigation to a "Continue" button — which made GAP F user-discretionary. The
+      // cookies are already cleared by the response this fetch consumed, so the server
+      // side was closed; but the page underneath the notice is the full authenticated
+      // settings page, and with staleTimes.dynamic=30 a soft nav serves warm RSC
+      // segments from client memory with no middleware round-trip. A deleted principal
+      // could browse their own shells for as long as the notice sat open. The notice
+      // belongs on the unauthenticated side of the boundary, not in front of it.
+      window.location.assign(
+        data.gitDataErasurePending
+          ? "/login?deleted=true&erasure=pending"
+          : "/login?deleted=true",
+      );
     } catch {
       setError("Network error. Please try again.");
       setIsDeleting(false);
