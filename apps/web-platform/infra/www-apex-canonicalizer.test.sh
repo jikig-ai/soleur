@@ -635,8 +635,9 @@ SIBLING_PNS="$(strip_comments "$UPTIME_TF" | awk '
   }
 ')"
 sib_n="$(printf '%s\n' "$SIBLING_PNS" | grep -c . || true)"
-# 3 = soleur_apex, app, app_health (#7884). Exact, so a sibling losing its name fails here.
-eq_case '3' "$sib_n" \
+# 6 = soleur_apex, app, app_health (#7884) + the three sampled seo_redirect_*
+# deep-URL probes (#8364). Exact, so a sibling losing its name fails here.
+eq_case '6' "$sib_n" \
   "the sibling pronounceable_name set is non-empty (distinctness over an empty set is vacuous); found ${sib_n}"
 
 pn_rc=1

@@ -52,12 +52,18 @@ BLOG_DIR="$REPO_ROOT/plugins/soleur/docs/blog"
 TF_FILE="$REPO_ROOT/apps/web-platform/infra/seo-bulk-redirects.tf"
 
 # File side: date-prefixed basenames (same glob class as the deleted
-# DATE_PREFIX_RE — YYYY-MM-DD-slug.md).
+# DATE_PREFIX_RE — YYYY-MM-DD-slug.md). Recursive (#8364): a dated post under
+# a subdirectory used to escape the one-level glob entirely — find covers any
+# depth. file_paths maps slug -> path relative to BLOG_DIR so the frontmatter
+# and stale-key checks below stay correct for nested posts.
 file_slugs=()
-for md_file in "$BLOG_DIR"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md; do
-  [[ -f "$md_file" ]] || continue
-  file_slugs+=("$(basename "$md_file" .md)")
-done
+declare -A file_paths=()
+while IFS= read -r md_file; do
+  rel="${md_file#"$BLOG_DIR"/}"
+  slug="$(basename "$md_file" .md)"
+  file_slugs+=("$slug")
+  file_paths["$slug"]="$rel"
+done < <(find "$BLOG_DIR" -type f -name '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md' | sort)
 
 if [[ ${#file_slugs[@]} -eq 0 ]]; then
   fail "parity: no date-prefixed blog files found under $BLOG_DIR (guard cannot be vacuous)"
@@ -80,7 +86,7 @@ if ! grep -qF '"permalink": "blog/{{ page.fileSlug }}/index.html"' "$BLOG_JSON";
   fail "parity: blog.json permalink template changed — canonical blog URLs no longer derive from fileSlug; update blog_redirect_pairs values"
 fi
 for slug in "${file_slugs[@]}"; do
-  fm_body="$(awk '/^---$/{c++; if(c==2) exit; next} c==1' "$BLOG_DIR/$slug.md")"
+  fm_body="$(awk '/^---$/{c++; if(c==2) exit; next} c==1' "$BLOG_DIR/${file_paths[$slug]}")"
   if printf '%s\n' "$fm_body" | grep -qiE '^permalink\s*:'; then
     fail "parity: $slug.md sets permalink: — canonical slug is no longer filename-derived; update its redirect target manually"
   fi
@@ -126,9 +132,10 @@ for slug in "${file_slugs[@]}"; do
 done
 
 # map -> file: every key maps to a live date-prefixed file (a stale key means
-# the edge redirects a URL with no backing post).
+# the edge redirects a URL with no backing post). Lookup goes through
+# file_paths so a nested post counts the same as a top-level one.
 for key in "${!map_vals[@]}"; do
-  if [[ ! -f "$BLOG_DIR/$key.md" ]]; then
+  if [[ -z "${file_paths[$key]:-}" ]]; then
     fail "parity: blog_redirect_pairs key '$key' is stale — no $key.md under docs/blog/"
   fi
 done

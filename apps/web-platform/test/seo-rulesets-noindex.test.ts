@@ -1,6 +1,10 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import {
+  extractResourceBody,
+  extractRuleBlocks,
+} from "./lib/terraform-hcl-blocks";
 
 // Source-text regression guard for the X-Robots-Tag noindex Transform Rules.
 //
@@ -37,71 +41,21 @@ const TF_PATH = path.join(
 const RESOURCE_NAME = "seo_response_headers";
 
 /**
- * Extract the body of a `resource "cloudflare_ruleset" "<name>" { ... }` block
- * by brace-counting from the resource declaration. Returns the substring
- * between the opening `{` and its matching `}` (exclusive). Throws if the
- * resource is absent so a deleted-resource regression fails loudly rather than
- * silently passing on an empty string.
- */
-function extractResourceBody(src: string, name: string): string {
-  const marker = `resource "cloudflare_ruleset" "${name}"`;
-  const start = src.indexOf(marker);
-  if (start === -1) {
-    throw new Error(`resource "cloudflare_ruleset" "${name}" not found in ${TF_PATH}`);
-  }
-  const openBrace = src.indexOf("{", start);
-  if (openBrace === -1) {
-    throw new Error(`opening brace for resource "${name}" not found`);
-  }
-  let depth = 0;
-  for (let i = openBrace; i < src.length; i++) {
-    const ch = src[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return src.slice(openBrace + 1, i);
-    }
-  }
-  throw new Error(`unbalanced braces in resource "${name}"`);
-}
-
-/**
- * Within a resource body, return the `rules { ... }` block whose body contains
- * the given host literal. Brace-counts each `rules {` so action_parameters /
- * headers nesting is captured in full. Throws if no matching rule is found.
+ * Within a resource body, return the `rules { ... }` block whose body carries
+ * the given `http.host eq "<host>"` literal. Throws if no matching rule is
+ * found so a deleted-rule regression fails loudly rather than passing on an
+ * empty string.
  */
 function extractRuleBlockForHost(resourceBody: string, host: string): string {
-  // Anchor on the `rules {` block opener specifically — NOT the bare word
-  // "rules", which also appears in `provider = cloudflare.rulesets`, in prose
-  // ("locks both rules into source"), and in the developers.cloudflare.com/rules/
-  // URL. Matching `rules\s*{` prevents a future comment with a stray `{` before
-  // the first real rules block from desyncing the brace count and binding the
-  // wrong rule.
-  const opener = /\brules\s*\{/g;
-  let m: RegExpExecArray | null;
-  while ((m = opener.exec(resourceBody)) !== null) {
-    const openBrace = resourceBody.indexOf("{", m.index);
-    let depth = 0;
-    let end = -1;
-    for (let i = openBrace; i < resourceBody.length; i++) {
-      const ch = resourceBody[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
-    if (end === -1) break;
-    const block = resourceBody.slice(openBrace + 1, end);
-    if (block.includes(`http.host eq \\"${host}\\"`)) {
-      return block;
-    }
-    opener.lastIndex = end + 1;
+  const match = extractRuleBlocks(resourceBody).find((block) =>
+    block.includes(`http.host eq \\"${host}\\"`),
+  );
+  if (!match) {
+    throw new Error(
+      `no rules block matching host "${host}" found in ${RESOURCE_NAME}`,
+    );
   }
-  throw new Error(`no rules block matching host "${host}" found in ${RESOURCE_NAME}`);
+  return match;
 }
 
 describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {

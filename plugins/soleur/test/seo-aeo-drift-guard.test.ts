@@ -22,6 +22,7 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import {
+  allDeclaredSources,
   bulkRedirectPairs,
   missingEdge301Flags,
 } from "./lib/bulk-redirect-pairs";
@@ -642,8 +643,9 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
   });
 
   test("the generated-item expansion (3 arms + dynamic block) is intact", () => {
-    // The pairs map only reaches Cloudflare through the 3-arm flatten in
-    // local.blog_redirect_items and the `dynamic "item"` block on the list
+    // The pairs maps only reach Cloudflare through the 3-arm flattens in
+    // local.blog_redirect_items + local.tombstone_redirect_items, the concat
+    // into local.redirect_items, and the `dynamic "item"` block on the list
     // resource. Dropping one arm un-serves a whole URL shape per pair;
     // dropping the dynamic block un-serves every generated item — and every
     // pair assertion above stays green because it never reads the expansion.
@@ -659,10 +661,91 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
         `blog_redirect_items is missing the expansion arm: ${arm} — a whole URL shape loses its edge 301`,
       ).toBe(true);
     }
+    // #8364: tombstone expansion — same 3 shapes, ${prefix} keyed.
+    for (const arm of [
+      'source = "soleur.ai/${prefix}/"',
+      'source = "soleur.ai/${prefix}/index.html"',
+      'source = "soleur.ai/${prefix}"',
+    ]) {
+      expect(
+        tf.includes(arm),
+        `tombstone_redirect_items is missing the expansion arm: ${arm} — a tombstoned URL shape loses its edge 301`,
+      ).toBe(true);
+    }
     expect(
-      /dynamic "item"[\s\S]*?for_each = local\.blog_redirect_items/.test(tf),
-      'cloudflare_list.legal_redirects has no dynamic "item" over blog_redirect_items — all 69 generated redirects would vanish',
+      /redirect_items = concat\(local\.blog_redirect_items, local\.tombstone_redirect_items\)/.test(
+        tf,
+      ),
+      "local.redirect_items must concat both generated-item expansions — a dropped side un-serves that whole class",
     ).toBe(true);
+    expect(
+      /dynamic "item"[\s\S]*?for_each = local\.redirect_items/.test(tf),
+      'cloudflare_list.legal_redirects has no dynamic "item" over redirect_items — all generated redirects would vanish',
+    ).toBe(true);
+  });
+
+  test("bulk-list freshness: every declared source is dead on disk and every target resolves to a built page (#8364)", () => {
+    // The declared redirect set must be internally fresh in BOTH directions:
+    //   - a source_url still served by the built site means the redirect
+    //     shadows a live page (the edge 301 wins over the origin — the page
+    //     becomes unreachable);
+    //   - a target_url with no built page is a redirect-to-404 rot.
+    // Sources: literal items + both pair-map expansions. Non-apex hosts
+    // (the www_canonical item) are out of scope — that list's semantics are
+    // subpath-matching, not exact-path.
+    const tf = readTf();
+    // allDeclaredSources throws on a cross-set source_url collision — a
+    // generated expansion that duplicates a literal item is a defect, not a
+    // merge (same last-wins masking class as the parser's in-list throw).
+    const allSources = allDeclaredSources(tf);
+    expect(
+      allSources.size,
+      "no redirect sources parsed — the parser or the file drifted",
+    ).toBeGreaterThan(0);
+
+    // Candidate built-file paths a URL maps to (dir index, literal file,
+    // or extension-suffixed twin).
+    const builtCandidates = (path: string): string[] => {
+      if (path === "/" || path === "") return ["index.html"];
+      const p = path.replace(/^\//, "");
+      if (p.endsWith("/")) return [`${p}index.html`];
+      const last = p.split("/").pop()!;
+      if (last.includes(".")) return [p];
+      return [`${p}/index.html`, `${p}.html`, p];
+    };
+
+    const shadowed: string[] = [];
+    const deadTargets: string[] = [];
+    for (const [src, target] of allSources) {
+      if (!src.startsWith("soleur.ai")) continue; // non-apex host (www list)
+      const srcPath = src.slice("soleur.ai".length);
+      if (
+        builtCandidates(srcPath).some((rel) => existsSync(resolve(SITE, rel)))
+      ) {
+        shadowed.push(src);
+      }
+      const tm = target.match(/^https:\/\/soleur\.ai(\/.*)?$/);
+      if (!tm) {
+        deadTargets.push(`${src} -> ${target} (off-host target)`);
+        continue;
+      }
+      const targetPath = tm[1] ?? "/";
+      if (
+        !builtCandidates(targetPath).some((rel) =>
+          existsSync(resolve(SITE, rel)),
+        )
+      ) {
+        deadTargets.push(`${src} -> ${target} (no built page)`);
+      }
+    }
+    expect(
+      shadowed,
+      `redirect sources still served by the built site (a live page is shadowed by its own 301): ${shadowed.join(", ")}`,
+    ).toEqual([]);
+    expect(
+      deadTargets,
+      `redirect targets with no built page (redirect-to-404 rot): ${deadTargets.join(", ")}`,
+    ).toEqual([]);
   });
 });
 

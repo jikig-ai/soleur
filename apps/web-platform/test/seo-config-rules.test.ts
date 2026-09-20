@@ -1,6 +1,10 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import {
+  extractResourceBody,
+  extractRuleBlocks,
+} from "./lib/terraform-hcl-blocks";
 
 // Source-text regression guard for the host-scoped Email Obfuscation
 // Configuration Rule.
@@ -90,8 +94,9 @@ const OUT_OF_SCOPE_HOSTS = [
  * Strip HCL comments — `#` and `//` line comments AND `/* *\/` block comments —
  * while respecting double-quoted strings.
  *
- * Block-comment handling is load-bearing for the EXTRACTION helpers below, not
- * for the assertions. `extractResourceBody` and `extractRuleBlocks` brace-count
+ * Block-comment handling is load-bearing for the EXTRACTION helpers (imported
+ * from ./lib/terraform-hcl-blocks), not for the assertions.
+ * `extractResourceBody` and `extractRuleBlocks` brace-count
  * over raw text, so a commented-out `rules { }` block would otherwise be
  * indistinguishable from a live one: review demonstrated a mutant that wraps
  * the real rule in a block comment and adds a live wider rule beside it, which
@@ -146,67 +151,6 @@ function stripHclComments(src: string): string {
     out += ch;
   }
   return out;
-}
-
-/**
- * Extract the body of a `resource "cloudflare_ruleset" "<name>" { ... }` block
- * by brace-counting. Throws if absent so a deleted-resource regression fails
- * loudly rather than passing on an empty string.
- */
-function extractResourceBody(src: string, name: string): string {
-  const marker = `resource "cloudflare_ruleset" "${name}"`;
-  const start = src.indexOf(marker);
-  if (start === -1) {
-    throw new Error(
-      `resource "cloudflare_ruleset" "${name}" not found in ${TF_PATH}`,
-    );
-  }
-  const openBrace = src.indexOf("{", start);
-  if (openBrace === -1) {
-    throw new Error(`opening brace for resource "${name}" not found`);
-  }
-  let depth = 0;
-  for (let i = openBrace; i < src.length; i++) {
-    const ch = src[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return src.slice(openBrace + 1, i);
-    }
-  }
-  throw new Error(`unbalanced braces in resource "${name}"`);
-}
-
-/**
- * Return EVERY `rules { ... }` block body within a resource body, brace-counted
- * so nested `action_parameters { ... }` is captured in full. Anchors on
- * `rules\s*\{` (the block opener) rather than the bare word "rules", which also
- * appears in `provider = cloudflare.rulesets`.
- */
-function extractRuleBlocks(resourceBody: string): string[] {
-  const opener = /\brules\s*\{/g;
-  const blocks: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = opener.exec(resourceBody)) !== null) {
-    const openBrace = resourceBody.indexOf("{", m.index);
-    let depth = 0;
-    let end = -1;
-    for (let i = openBrace; i < resourceBody.length; i++) {
-      const ch = resourceBody[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
-    if (end === -1) break;
-    blocks.push(resourceBody.slice(openBrace + 1, end));
-    opener.lastIndex = end + 1;
-  }
-  return blocks;
 }
 
 /**
