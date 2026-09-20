@@ -15,7 +15,7 @@ questions down, hand the founder one document, and let them send it.
 This skill produces that document. It never sends it — the founder sends it from their own mail client,
 so nothing here becomes an intermediary for anyone's correspondence.
 
-Two entry paths, and the reliable one is the route. `/soleur:go` carries a `questionnaire` row that
+Two entry paths, and the reliable one is the route. `soleur:go` carries a `questionnaire` row that
 dispatches here directly. Separately, `.claude/hooks/pre-ask-technical-fork-gate.sh` denies an
 `AskUserQuestion` whose answer is held outside the company and names this skill in the deny reason.
 
