@@ -46,6 +46,19 @@
 #   GH_TOKEN
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). Must be the first thing after `set`: this probe binds a live
+# GH_TOKEN, and under `set -x` every `gh` invocation echoes its argv to stderr, which the
+# sweeper posts back as an issue comment on a PUBLIC repo. Refusing is the only safe arm —
+# a traced run with a live credential has already leaked by the time anything could redact it.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 ISSUE="${INNGEST_AUTHZ_6500_ISSUE:-6500}"
 REPO="${INNGEST_AUTHZ_6500_REPO:-jikig-ai/soleur}"
 

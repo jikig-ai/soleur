@@ -3,7 +3,12 @@
 # contract. Rule 1 (#6757): no probe may gate its exit on the banned `: "${VAR:?msg}"` /
 # colon-less `${VAR?msg}` word-expansion. Rule 2 (#7946): no file under the target dir may
 # name the retired credential. Rule 3 (#7490): every repo-relative path a probe assigns must
-# exist in the checkout. The name is kept although the file now does more than rule 1: it is
+# exist in the checkout. Rule 4 (#6617): a probe that reads issue comments AND branches on a
+# `RESULT:` verdict must route that decision through scripts/lib/trusted-verdict.sh -- stated
+# as the POSITIVE OBLIGATION, because a ban on the wrong mechanism was green over a probe that
+# read `.comments[].body` with no author filter at all. (Rule 4 had a body heading and no index
+# entry here, which is the same defect this header already records for rule 1 -- a reader
+# looking for it found it only in the failure message.) The name is kept although the file now does more than rule 1: it is
 # cited from followthrough-convention.md, ADR-031, the Article 30 register and several
 # learnings, and renaming it would churn point-in-time records.
 #
@@ -184,8 +189,24 @@ done <<<"$rule2_hits"
 # that fired on them would be reaching for an author filter that has nothing to filter.
 # An inline `authorAssociation` select is subsumed: it reads comments, branches on a verdict,
 # and does not source the lib, so it fires here without needing its own rule.
-READS_COMMENTS='--json[[:space:]]+comments|--comments|\.comments\[\]'
-VERDICT_BRANCH='RESULT:[[:space:]]*\\?\(?(PASS|FAIL)'
+# Three bypasses, all measured against synthetic probes at ship time (#8389 advisor consult),
+# all of them shapes a compliant-LOOKING probe reaches for:
+#   (a) the REST route was invisible. `gh api "repos/$R/issues/$N/comments" --jq '.[].body'`
+#       matched none of the three `gh issue view` spellings, so such a probe was neither a
+#       violation NOR counted in scanned_rule4 -- invisible to the rule AND to its own floor.
+#       LATENT, not live: measured 2026-09-20, no probe under scripts/followthroughs/ uses
+#       the REST comments route today, and the corpus is the same 5 probes before and after
+#       this widening. It is the idiom next door rather than an exotic one -- several probes
+#       already reach GitHub through `gh api` for other reads -- so the gap is one a future
+#       author walks into, which is exactly when a rule that cannot see them is worst.
+#   (b) the verdict only had to be EXTRACTED, not matched adjacently. The old regex required
+#       PASS/FAIL to sit next to `RESULT:`, so `v=$(grep -oE '^RESULT: [A-Z]+' | awk '{print $2}')`
+#       then `[[ $v == PASS ]]` decided a tracker's fate and passed. The obligation is about
+#       reading a verdict at all, so the anchor is now `RESULT:` on an executable line.
+#       Over-detection is deliberate and cheap: the remedy is "call the lib", which every
+#       legitimate comment-reading probe already does.
+READS_COMMENTS='--json[[:space:]]+comments|--comments|\.comments\[\]|issues/[^[:space:]"]*/comments'
+VERDICT_BRANCH='RESULT:'
 # The CALL, never the `source` line. Sourcing the lib and then reading `.comments[].body`
 # anyway satisfies a source-anchored pattern while leaving the decision exactly as
 # forgeable -- both endpoints pinned, the wire between them unpinned. Measured: the first
@@ -220,7 +241,14 @@ while IFS= read -r f; do
   scanned_rule4=$((scanned_rule4 + 1))                              # rule4-count
   (( direct == 1 )) || continue
   printf '%s' "$code" | grep -qE -- "$VERDICT_BRANCH" || continue
-  (( via_lib == 0 )) || continue
+  # (c) NO via_lib exemption for a DIRECT reader. The old line was `(( via_lib == 0 )) || continue`,
+  # so a single occurrence of the call anywhere in the file exempted it -- a probe could call the
+  # lib once and then decide on an unfiltered `.comments[].body`, which is the "both endpoints
+  # pinned, the wire between them unpinned" shape this rule's own header says it closed, one level
+  # up. R4-M2d pinned only the `source`-line variant of it. A COMPLIANT probe has no raw comment
+  # read at all: it takes its bodies from the lib, so `direct == 1` is itself the defect and
+  # via_lib cannot excuse it. via_lib keeps its OTHER job untouched -- holding a lib-routed probe
+  # inside scanned_rule4 so the floor is not lowered by the rule succeeding.
   rule4_hits="${rule4_hits}${f}"$'\n'
 done < <(find "$TARGET_DIR" -type f -name '*.sh' ! -name '*.test.sh' | sort)
 

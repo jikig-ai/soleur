@@ -222,6 +222,50 @@ else
   fail "failed comment read: expected rc=2; got rc=$rc"
 fi
 
+# --- row 8: BOTH fence spellings are stripped ---------------------------------
+# The strip exists so a quoted template in a trusted author's comment cannot arm the
+# probe. It matched ``` only, so the CommonMark-equivalent ~~~ fence was a live
+# channel for exactly that — and it is a TRUSTED author's comment, so the fixture
+# below is the realistic shape (someone pasting the convention into the tracker),
+# not an attack. Both spellings are driven, because fixing one and asserting one
+# proves nothing about the other.
+cat > "$SB/fenced-both.json" <<'JSON'
+{"comments":[{"author":{"login":"deruelle"},"body":"here is the template:\n```\nRESULT: PASS\n```\nand the other spelling:\n~~~\nRESULT: PASS\n~~~\nnot a verdict either way"}]}
+JSON
+printf 'deruelle\tadmin\n' > "$SB/perms-fence"
+r="$(run_case 5733 "$SB/fenced-both.json" "$SB/perms-fence")"; rc="${r%%|*}"; body="${r#*|}"
+if [[ "$rc" == "0" ]] && ! grep -q 'RESULT: PASS' <<<"$body"; then
+  pass "row 8: both backtick and tilde fenced blocks are stripped — neither spelling can arm the probe"
+else
+  fail "row 8: expected rc=0 with no RESULT: PASS surviving; got rc=$rc body=[$body]"
+fi
+
+# --- row 9 (MUTATION): an unresolved author is TRANSIENT, never a silent drop ---
+# Loop 1 resolves exactly the author set loop 2 reads, so a memo MISS is unreachable
+# in the shipped lib. That is why it needs a mutation rather than a fixture: the
+# original code said `*) continue ;;`, which merges "resolved as untrusted" with
+# "never resolved at all" — the collapse this lib's own header forbids, at the one
+# place the header did not assert it. Neuter loop 1's resolver call and require the
+# lib to REFUSE rather than quietly return a shorter list.
+MUT="$SB/trusted-verdict-no-resolve.sh"
+sed 's|^    if ! _trusted_verdict_permission "$login" "$repo" >/dev/null; then|    if false; then|' "$LIB" > "$MUT"
+if diff -q "$LIB" "$MUT" >/dev/null; then
+  fail "row 9: the resolver-call marker is absent from the lib — the mutation did not land and this row is vacuous"
+else
+  cat > "$SB/one-verdict.json" <<'JSON'
+{"comments":[{"author":{"login":"deruelle"},"body":"RESULT: PASS"}]}
+JSON
+  printf 'deruelle\tadmin\n' > "$SB/perms-mut"
+  mout="$(
+    PATH="$SB/bin:$PATH" STUB_COMMENTS="$SB/one-verdict.json" STUB_PERMS="$SB/perms-mut"     STUB_EXPECT_ISSUE=5733 STUB_EXPECT_REPO="jikig-ai/soleur"     bash -c 'set -uo pipefail; source "$1"; trusted_verdict_bodies "$2" >/dev/null 2>&1; echo $?' _ "$MUT" 5733
+  )"
+  if [[ "$mout" == "2" ]]; then
+    pass "row 9 MUTATION: an author with no memoized permission yields TRANSIENT (rc=2), not a silent drop"
+  else
+    fail "row 9 MUTATION: expected rc=2 from the un-resolved author; got rc=$mout"
+  fi
+fi
+
 echo ""
 echo "passed=$PASS failed=$FAIL"
 
@@ -250,7 +294,7 @@ echo "passed=$PASS failed=$FAIL"
 #    meta-guard cannot recognise is indistinguishable from a floor that crashed.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=10
+MIN_ASSERTIONS=12
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

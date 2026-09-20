@@ -27,6 +27,10 @@
 #   R4-M2  must-PASS: the same shape inside a COMMENT                -> exit 0 (the anchor is the filter,
 #                                                                      not the bare word -- the rationale
 #                                                                      comment must stay writable)
+#   R4-M2e the `gh api .../comments` REST route                     -> exit 1 (route was invisible)
+#   R4-M2f extract-the-verdict-then-compare-later                    -> exit 1 (PASS need not adjoin)
+#   R4-M2g calls the lib once, then decides on a RAW read            -> exit 1 (presence != use)
+#   R4-M2h must-PASS: the lib-routed compliant shape                 -> exit 0 (widening counterweight)
 #   R4-M3  DISPATCH: guard COPY with the rule-4 grep deleted         -> exit 0 on the M1 fixture
 #   R4-M4  guard COPY with rule 4's file count forced to 0           -> exit 2, diagnostic names rule 4
 #   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
@@ -637,6 +641,79 @@ exit 1
 EOF
 run_guard "$d"
 (( GUARD_RC == 1 )); check $? "R4-M2d sourcing the lib but reverting the read still fires" "R4-M2d expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2e: the REST comment route must be visible to the rule AND to its own floor ---
+# `gh api "repos/$R/issues/$N/comments" --jq '.[].body'` matched none of the three
+# `gh issue view` spellings, so such a probe was neither a violation NOR counted in
+# scanned_rule4 -- invisible to the rule and to the floor that exists to catch a blind rule.
+# LATENT, not live. Measured at ship time (#8389): no probe under scripts/followthroughs/ uses
+# the REST comments route today, and scanned_rule4 reads 5 both before and after the widening.
+# (The first draft of this comment claimed the corpus moved 3 -> 5; that was the FLOOR value
+# misread as the count, caught by re-running the pre-patch guard. A rule's own blind spot is
+# the last place to assert an unverified number.) Several probes already reach GitHub through
+# `gh api` for other reads, so this is the shape a future author walks into.
+d=$(mkcase r4_m2e)
+cat >"$d/probe-rest-route.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+bodies=$(gh api "repos/jikig-ai/soleur/issues/1234/comments" --jq '.[].body')
+grep -qE '^RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2e the gh api REST comment route fires (not just gh issue view)" "R4-M2e expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-rest-route.sh:3:' <<<"$GUARD_OUT"; check $? "R4-M2e cites the REST read at its TRUE line" "R4-M2e mis-cited the offender line: $GUARD_OUT"
+
+# --- R4-M2f: EXTRACTING the verdict and comparing later is still branching on it ---
+# VERDICT_BRANCH required PASS/FAIL adjacent to `RESULT:`, so splitting the two across a
+# pipeline decided a tracker's fate and passed. The obligation is about reading a verdict at
+# all, so the anchor is now `RESULT:` on an executable line. Over-detection is deliberate:
+# the remedy is "call the lib", which every legitimate comment-reading probe already does.
+d=$(mkcase r4_m2f)
+cat >"$d/probe-extract-then-compare.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+v="$(gh issue view 1234 --json comments --jq '.comments[].body' | grep -oE '^RESULT: [A-Z]+' | tail -1 | awk '{print $2}')"
+[[ "$v" == PASS ]] && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2f extract-then-compare still fires (PASS need not be adjacent to RESULT:)" "R4-M2f expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2g: CALLING the lib once does not license a raw read beside it ---
+# R4-M2d pins the `source`-line variant. This is the CALL-line variant, one level up: the
+# exemption was `(( via_lib == 0 )) || continue`, so a single occurrence of the call anywhere
+# in the file exempted it -- both endpoints pinned, the wire between them unpinned, which is
+# the exact shape this rule's header claims to have closed.
+d=$(mkcase r4_m2g)
+cat >"$d/probe-lib-present-raw-decide.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+_unused=$(trusted_verdict_bodies 9999)
+raw=$(gh issue view 1234 --json comments --jq '.comments[].body')
+grep -qE '^RESULT: PASS\b' <<<"$raw" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2g calling the lib once does not exempt a raw comment read beside it" "R4-M2g expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2h (must-PASS): the COMPLIANT shape stays green ---
+# The three rows above widen the rule; this one is the counterweight that keeps the widening
+# from being "fires on everything". A compliant probe has NO raw comment read at all -- it
+# takes its bodies from the lib -- so `direct == 1` is itself the defect being detected.
+d=$(mkcase r4_m2h)
+cat >"$d/probe-compliant.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+bodies=$(trusted_verdict_bodies 1234) || exit 2
+last="$(grep -E '^RESULT: (PASS|FAIL)\b' <<<"$bodies" | tail -1)"
+[[ "$last" =~ ^RESULT:\ PASS ]] && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R4-M2h must-PASS: the lib-routed compliant shape stays green" "R4-M2h expected exit 0, got $GUARD_RC: $GUARD_OUT"
 
 # --- R4-M3 DISPATCH: a guard COPY with rule 4's grep deleted must go GREEN on the M1 fixture ---
 d=$(mkcase r4_m3)

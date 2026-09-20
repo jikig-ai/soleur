@@ -58,8 +58,14 @@ esac
 #     closes the tracker (#7448). An inline `authorAssociation` filter is not the fix either —
 #     it is computed against the READING token's visibility, so a member with private org
 #     membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped
-#     silently (#6617: two months of nightly FAIL on an already-recorded verdict). It is
-#     rejected under scripts/followthroughs/ by lint-followthrough-varq-ban.sh rule 4.
+#     silently (#6617: two months of nightly FAIL on an already-recorded verdict).
+#
+#     lint-followthrough-varq-ban.sh rule 4 enforces the OBLIGATION, not a ban on one spelling:
+#     under scripts/followthroughs/, reading issue comments AND branching on a RESULT: verdict
+#     without calling trusted_verdict_bodies is the violation. The authorAssociation form is
+#     subsumed by that, and so is an unfiltered read with no author filter at all — which is the
+#     shape a ban on the wrong mechanism could not see. Calling the lib does not license a raw
+#     .comments[].body read beside it.
 
 echo "TRANSIENT: stub not customized" >&2
 exit 2

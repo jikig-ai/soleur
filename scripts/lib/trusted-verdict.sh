@@ -20,7 +20,10 @@
 # `GET /repos/{owner}/{repo}/collaborators/{login}/permission` resolves EFFECTIVE
 # permission and does not depend on membership visibility (measured 2026-09-19:
 # `admin` for the operator, `none` for `github-actions[bot]`, under the operator
-# token). One call per DISTINCT author, memoized, so a thread with many comments
+# token). One call per DISTINCT author, memoized WITHIN ONE `trusted_verdict_bodies`
+# INVOCATION — every consumer calls it under command substitution, so the memo dies
+# with that subshell and does not carry across calls (measured; the upside is that a
+# login-keyed, repo-unaware table cannot leak a permission between repos). So a thread with many comments
 # from one author costs one request.
 #
 # SOURCED, never executed: no top-level `exit` (a sourced `exit` terminates the
@@ -34,7 +37,18 @@
 
 # Memo table: login -> permission string. Declared once; `declare -gA` so it
 # survives being sourced from inside a function.
-declare -gA _TRUSTED_VERDICT_PERM 2>/dev/null || true
+if ! declare -gA _TRUSTED_VERDICT_PERM 2>/dev/null; then
+  # REFUSE, never degrade. Without associative arrays (bash 3.2 — stock macOS
+  # /bin/bash), `_TRUSTED_VERDICT_PERM[$login]=` creates an INDEXED array whose
+  # subscript is evaluated ARITHMETICALLY, so every login collapses to index 0:
+  # the first resolved permission would then apply to every author, and one
+  # trusted commenter in the thread would authorise a stranger's verdict. That is
+  # a silent authorization bypass, i.e. exactly the #7448 forgery this lib exists
+  # to close, reached from the other side. CI runs bash 5, so this is a guard for
+  # an operator running the probe by hand, not a path the merge gate takes.
+  echo "trusted-verdict: this shell has no associative arrays (bash >= 4 required; found ${BASH_VERSION:-unknown}). REFUSING rather than degrading — an indexed-array fallback would authorise every author with the first resolved permission." >&2
+  return 2 2>/dev/null || exit 2
+fi
 
 # _trusted_verdict_permission <login> [repo]
 #   Resolves once and MEMOIZES into _TRUSTED_VERDICT_PERM[$login].
@@ -127,12 +141,26 @@ trusted_verdict_bodies() {
     author="$(printf '%s' "$pair" | jq -r '.[0]')"
     body="$(printf '%s' "$pair" | jq -r '.[1]')"
     perm="${_TRUSTED_VERDICT_PERM[$author]:-}"
+    # An ABSENT memo entry is not a negative answer. Loop 1 above resolves exactly
+    # this author set and returns 2 on any failure, so this is unreachable today —
+    # which is precisely why it is worth pinning: `*) continue ;;` alone silently
+    # merged "resolved as untrusted" with "never resolved at all", the collapse
+    # this lib's own header forbids ("an unresolvable permission is not a negative
+    # answer"), at the one place the header did not assert it. A future edit that
+    # makes loop 1 partial — batching, caching, a per-author skip — would turn a
+    # silent drop back on, and a dropped verdict is invisible by construction.
+    if [[ -z "$perm" ]]; then
+      echo "trusted-verdict: no memoized permission for '${author}' — the resolver did not run for this author. TRANSIENT, not untrusted." >&2
+      return 2
+    fi
     case "$perm" in
       admin|maintain|write) ;;
       *) continue ;;
     esac
     # Drop fenced blocks so a quoted template cannot arm the probe.
-    body="$(printf '%s\n' "$body" | awk '/^[[:space:]]*```/ { f = !f; next } !f { print }')"
+      # Both fence spellings: CommonMark allows ``` and ~~~, and stripping only one
+    # left the other as a live channel for a quoted template to arm a probe.
+  body="$(printf '%s\n' "$body" | awk '/^[[:space:]]*(```|~~~)/ { f = !f; next } !f { print }')"
     out="${out}${body}"$'\n'
   done <<<"$raw"
 

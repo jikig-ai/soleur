@@ -179,10 +179,26 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   comments on nearly every tracker and answers 404, so collapsing the two makes every such thread
   permanently unresolvable — the same permanent red, reached from the other side.
 
-  `scripts/lint-followthrough-varq-ban.sh` rule 4 rejects an inline `authorAssociation` filter
-  anywhere under `scripts/followthroughs/`, so the lib is the chokepoint as a fact rather than a
-  convention. The ban is anchored on the FILTER SHAPE, not the bare word, so a comment explaining
-  any of this is still writable.
+  `scripts/lint-followthrough-varq-ban.sh` rule 4 enforces the POSITIVE OBLIGATION, not a ban on
+  one wrong spelling: a probe under `scripts/followthroughs/` that reads issue comments AND
+  branches on a `RESULT:` verdict must route that decision through the lib. An inline
+  `authorAssociation` select is subsumed — it reads comments, branches on a verdict and does not
+  call `trusted_verdict_bodies`, so it fires without needing a rule of its own.
+
+  The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
+  live probe read `.comments[].body` with **no author filter at all** — strictly worse than what
+  was banned, and invisible to it: the lint ran rc 0 over the verbatim #7448 forgery shape. A rule
+  green over the exact hole it advertises protection from is worse than the doc, because it
+  converts "we wrote this down" into "we gated it".
+
+  What the rule does and does not see. It reads comments through `gh issue view --json comments`,
+  `--comments`, `.comments[]` or the `gh api .../issues/N/comments` REST route; it treats any
+  `RESULT:` on an executable line as a verdict branch, so extracting the verdict and comparing it
+  later is still branching on it; and **calling the lib does not exempt a raw read beside it** —
+  a compliant probe has no direct comment read at all, because it takes its bodies from the lib.
+  It is comment-stripped, so a comment explaining any of this is still writable. Its own floor is
+  keyed on comment-reading probes by ANY route (direct or via the lib), so migrating a probe onto
+  the lib moves it within the corpus instead of out of it.
 
 ## Sharp edges for Better Stack log-content probes
 
