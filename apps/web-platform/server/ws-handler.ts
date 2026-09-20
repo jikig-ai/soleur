@@ -18,6 +18,7 @@ import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -1117,6 +1118,16 @@ async function createConversation(
     }
     throw new Error(`Failed to create conversation: ${error.message}`);
   }
+
+  // Bind the provider before any first-turn dispatch can occur. The repository
+  // resolves the workspace default inside the trusted RPC; this path never
+  // accepts an engine id from the websocket payload.
+  await new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient).bind({
+    workspaceId: wsId,
+    executionKind: "conversation",
+    conversationId: id,
+    createdBy: userId,
+  });
 
   return id;
 }
