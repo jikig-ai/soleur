@@ -146,10 +146,26 @@ for f in "${entries[@]}"; do
   fi
 done
 
-# An unreadable entry is refused rather than skipped. Reporting "1 overdue" while silently failing
-# to evaluate a second entry is the never-notice this exit contract exists to remove, one line over.
+# An unreadable entry is refused rather than skipped: reporting "1 overdue" while silently failing to
+# evaluate a second entry is the never-notice this exit contract exists to remove.
+#
+# BUT THE UNREADABLE COUNT IS A CAVEAT, NEVER A SUBSTITUTE, and the order below is the whole of that
+# distinction. An earlier revision evaluated `n_bad` FIRST and exited 3 from inside it, so a single
+# entry with a capitalised `status: Sent` — which the `case` arm does not match — replaced a real
+# overdue ask instead of qualifying it. Measured: two entries, one genuinely overdue and one merely
+# mis-capitalised, reported `CANNOT ESTABLISH` at rc=3 and the ACTION line was absent from the output
+# ENTIRELY, not merely demoted. `scripts/sweep-followthroughs.sh` maps rc to the heading an operator
+# reads without expanding the `<details>` block (2 NOT YET, 3 CANNOT ESTABLISH, 5 ACTION REQUIRED), so
+# the overdue ask disappeared from the only line most readers see. That is the same shape as the arm's
+# own comment, inverted: the masking entry was the one that could not be evaluated, and the thing it
+# masked was the actionable signal.
+#
+# So: ACTION wins whenever there is one, the unreadable count rides along as a named caveat, and
+# CANNOT ESTABLISH is the verdict only when there is nothing actionable to report. Both facts always
+# reach the operator; what changes is which one sets the heading.
+bad_caveat=""
 if (( n_bad > 0 )); then
-  cannot_establish "${n_bad} of ${n_total} entr(ies) carry no readable status/needed_by pair, so the deadline test cannot be evaluated for them. Operator: correct the frontmatter in ${QDIR_REL} (status must be sent or answered; needed_by must be YYYY-MM-DD)."
+  bad_caveat="CAVEAT: ${n_bad} of ${n_total} entr(ies) carry no readable status/needed_by pair and were NOT evaluated, so this count is a floor. Operator: correct the frontmatter in ${QDIR_REL} (status must be sent or answered, lower-case; needed_by must be YYYY-MM-DD)."
 fi
 
 if (( n_overdue > 0 )); then
@@ -157,7 +173,14 @@ if (( n_overdue > 0 )); then
     "$n_overdue" "$n_sent" "$n_total" "$TODAY"
   printf 'The founder set that date themselves and the answer has not come back. This is NOT authority to chase anyone — whether to follow up, re-send or drop the question is the founder call.\n'
   printf 'Operator: open %s and look at the entries still marked sent. When a reply lands, paste it under ## Answers and set status to answered.\n' "$QDIR_REL"
+  [[ -n "$bad_caveat" ]] && printf '%s\n' "$bad_caveat"
   exit 5
+fi
+
+# Nothing actionable. NOW an unevaluable entry is the most informative thing there is to say, because
+# the "none overdue" it would otherwise report is a claim the run did not establish.
+if (( n_bad > 0 )); then
+  cannot_establish "${n_bad} of ${n_total} entr(ies) carry no readable status/needed_by pair, so the deadline test cannot be evaluated for them and no overdue ask was found among the rest. Operator: correct the frontmatter in ${QDIR_REL} (status must be sent or answered, lower-case; needed_by must be YYYY-MM-DD)."
 fi
 
 # All three counts are carried. "no entries open", "none overdue" and "everything answered" are

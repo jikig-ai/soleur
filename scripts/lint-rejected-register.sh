@@ -63,11 +63,20 @@
 # `scripts/required-checks.txt`, so a PR merges with it RED. Verified:
 # `grep -c lint-bot-statuses scripts/required-checks.txt` -> 0.
 #
-# Promoting it is deliberately NOT done here. `required-checks.txt` carries an auto-fabrication guard
-# (#6049): adding a content-scoped gate name fabricates a green for bot PRs, and the canonical list
-# is pinned by `required-checks-canonical-parity.test.sh` against a Terraform-managed ruleset, so the
-# promotion is a separate change with its own review. Tracked as its own issue; until it lands, this
-# guard is an ADVISORY one at every dispatch, and the record's correctness rests on review.
+# Promoting it is deliberately NOT done here, and the path is known rather than hypothetical.
+# `required-checks.txt` carries an auto-fabrication guard (#6049): the bot-PR composite action posts
+# an unconditional green synthetic check-run for every name listed there, and it cannot reproduce a
+# CONTENT-SCOPED scan over the bot diff — so naively adding a name FABRICATES a pass for bot PRs and
+# defeats the guard it was meant to arm. The precedent that solves it is #6883 / ADR-139: the
+# credential-path guard was promoted by EXTRACTING it out of this advisory job into its own required
+# context (`credential-path-guard`), listed in `required-checks.txt`, the canonical ruleset JSON and
+# `infra/github/ruleset-ci-required.tf`, with the unreachability argument RE-DERIVED for that gate
+# rather than inherited. ADR-139 is explicit that the argument is per-gate and never inheritable, so
+# this guard cannot ride on that derivation and needs its own.
+#
+# That is a cross-repo Terraform + ruleset change with its own ADR obligation, which is why it is a
+# separate piece of work and not a line added here. Until it lands this guard is ADVISORY at every
+# dispatch, and the record's correctness rests on review.
 #
 # One rationale that was wrong and is corrected rather than deleted, because it is load-bearing for
 # anyone reasoning about coverage: earlier revisions of this comment (and of the two lefthook
@@ -185,8 +194,28 @@ unquote_scalar() {
 # Normalise prose for an EQUALITY comparison between two fields: case, punctuation and whitespace
 # all folded away, because `public_note` duplicating `why` is a content defect and not a formatting
 # one, and the two will never be byte-identical.
+#
+# `tr -cd '[:alnum:]'` is BYTE-oriented, so it deletes every byte of a multi-byte character. Measured:
+# `дарк` folds to the EMPTY STRING and `dárk mőde` to `drkmde`. For the public_note/why comparison
+# that is harmless — both sides fold the same way. For the cross-entry uniqueness index it is not: an
+# alias that folds to empty is SKIPPED by the `[[ -n "$a" ]]` guard there, so a Cyrillic or accented
+# alias claims nothing and two entries can both hold it while the guard reports the record unique —
+# and the CONSUMERS (the intake pre-checks in triage/SKILL.md and its two mirrors) match raw alias
+# text, so that alias is live for matching and invisible to the guard certifying it.
+#
+# So the uniqueness index gets a fold that PRESERVES non-ASCII rather than deleting it: lower-case via
+# the same ASCII `tr` (correct for ASCII, a no-op elsewhere, which is the conservative direction — it
+# can only ever fail to merge two spellings, never merge two distinct concepts), then strip only the
+# characters that are genuinely punctuation and whitespace. `cq-regex-unicode-separators-escape-only`
+# is the rule this class belongs to.
 normalise_prose() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'
+}
+
+# normalise_key — the fold used by the cross-entry uniqueness index. See normalise_prose above for why
+# these are two functions rather than one: that one may delete non-ASCII, this one must not.
+normalise_key() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:][:punct:]'
 }
 
 check_entry() { # <path>
@@ -222,6 +251,13 @@ check_entry() { # <path>
 
   if ! has_frontmatter "$file"; then
     report "$file" "no-frontmatter" "an entry opens with a YAML frontmatter fence on line 1"
+    # SAME REASON AS THE bad-filename ARM ABOVE, and this arm was missed when that one was fixed —
+    # the instance, not the class. Measured: identical bytes in two files, one with a bad NAME and one
+    # with no FENCE, reported three findings and one. The `requester:` naming a person and the
+    # self-granted authority to apply `deferred-scope-out` went unnamed in the second, because the
+    # schema checks below need frontmatter and these two do not: they grep the whole file.
+    check_forbidden_keys "$file"
+    check_authority_claim "$file"
     return 0
   fi
 
@@ -413,9 +449,9 @@ if [[ "${1:-}" == "--all" && "${#paths[@]}" -gt 1 ]]; then
       b="$(basename "$f")"
       [[ "$b" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}- ]] || continue
       # The slug is itself an alias for this purpose — a lookup matches on either.
-      sl="${b%.md}"; printf '%s\t%s\n' "$(normalise_prose "${sl#????-??-??-}")" "$f"
+      sl="${b%.md}"; printf '%s\t%s\n' "$(normalise_key "${sl#????-??-??-}")" "$f"
       while IFS= read -r a; do
-        a="$(normalise_prose "$a")"
+        a="$(normalise_key "$a")"
         [[ -n "$a" ]] && printf '%s\t%s\n' "$a" "$f"
       done <<< "$(fm_value "$f" aliases)"
     done | LC_ALL=C sort | awk -F'\t' '

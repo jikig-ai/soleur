@@ -109,10 +109,17 @@ mechanism that would catch the error is the one the error disables.
    **None of the three blocks a merge, and this ADR does not claim otherwise.** The CI arm — the one
    that exists to cover the local bypasses — runs in the `lint-bot-statuses` job, which declares
    itself advisory and is absent from `scripts/required-checks.txt`, so a PR merges with it red.
-   Promotion is a separate change: `required-checks.txt` carries an auto-fabrication guard (#6049)
-   whereby adding a content-scoped gate name fabricates a green for bot PRs, and the canonical list
-   is pinned against a Terraform-managed ruleset. Until that lands the guard is advisory at every
-   dispatch, and the record's correctness rests on review. One rationale corrected rather than
+   Promotion is a separate change, and its path is precedented rather than hypothetical: #6883 /
+   [ADR-139](ADR-139-earned-green-required-for-reachable-surface-content-gates.md) promoted the
+   credential-path guard by EXTRACTING it out of this same advisory job into its own required
+   context, listed in `required-checks.txt`, the canonical ruleset JSON and
+   `infra/github/ruleset-ci-required.tf`. The trap that makes the naive version wrong is the #6049
+   auto-fabrication guard: the bot-PR composite action posts an unconditional green for every listed
+   name and cannot reproduce a content-scoped scan over the bot diff, so adding this name would
+   fabricate a pass for exactly the PRs the guard exists to police. ADR-139 is explicit that the
+   unreachability argument is per-gate and never inheritable, so this guard needs its own derivation
+   and cannot ride on that one. Until that work lands the guard is advisory at every dispatch, and
+   the record's correctness rests on review. One rationale corrected rather than
    deleted: earlier text here cited "merge-resolution commits" as an uncovered case. Lefthook keys
    `merge` on `MERGE_HEAD` and this entry carries no `skip: merge`, so those DO run the guard; the
    genuinely uncovered merges are the clean one and the server-side one.
@@ -141,8 +148,13 @@ narrows outside the commit rather than inside it, because each `searched` line i
 result and is therefore re-runnable by a reviewer or a later session — the shape check is what makes
 that re-run possible, and it is the whole of what the guard contributes to truth. The assertion that
 needs the network — *no number in `prior_requests` resolves to an issue closed as `completed`* — is
-deliberately **not** in the pre-commit tier, and is tracked as its own issue together with the
-unattended-triage precondition named in the advisory-only clause above.
+deliberately **not** in the pre-commit tier. It is UNFILED, and named here rather than left implied:
+the cost-of-filing arithmetic in `plugins/soleur/skills/review/SKILL.md` puts a tracker for it below
+the crossover, so recording the residual with its trigger IS the disposition. The trigger is
+concrete — the first entry carrying a `prior_requests` number, which the seed entry now does (#1050).
+The unattended-triage precondition named in the advisory-only clause above is the same shape: it is a
+precondition on work that has no tracker yet, so it is stated here and carried into whichever issue
+eventually proposes that work.
 
 ## Alternatives Considered
 

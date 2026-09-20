@@ -449,6 +449,17 @@ pre-commit:
       priority: 12
       glob: "knowledge-base/project/rejected/*.md"
       run: bash scripts/lint-rejected-register.sh {staged_files}
+    # The sibling surface, and the one that needs a gate MORE. knowledge-base/project/questionnaires/
+    # is the only directory here designed to ingest another person's words, and this repository is
+    # public with permanent history — the same ground on which the guard above rejects `requester`
+    # outright. The skill's own defences (the three-field allowlist, the preview, redact-sentinel.sh)
+    # stop at the skill: the `## Answers` section is filled in by hand afterwards, and the sentinel is
+    # secret-scoped, which the skill's own rationale records as insufficient for an identity.
+    # ADVISORY like its sibling; see the DISPATCH note in scripts/lint-rejected-register.sh.
+    questionnaire-identity-guard:
+      priority: 12
+      glob: "knowledge-base/project/questionnaires/*.md"
+      run: bash scripts/lint-questionnaire-identity.sh {staged_files}
 
 # pre-push mirror of the client-pii-grep signal-quality gate (#3703) so a bypass
 # is surfaced at push time even if the pre-commit hook was skipped (e.g. amended
@@ -479,6 +490,12 @@ pre-push:
     # `skip: merge`, so the pre-commit arm does run on one. The uncovered merges are the clean
     # one and the server-side one, and the server-side one this mirror cannot see either,
     # because no push occurs.)
+    questionnaire-identity-guard:
+      priority: 6
+      glob: "knowledge-base/project/questionnaires/*.md"
+      # {push_files} for the same reason as every mirror here: {staged_files} resolves to empty in a
+      # pre-push hook and the gate would skip with "no files for inspection" — a vacuous gate.
+      run: bash scripts/lint-questionnaire-identity.sh {push_files}
     rejected-register-guard:
       priority: 6
       # Flat depth-1 glob, same gobwas rationale as the pre-commit entry.

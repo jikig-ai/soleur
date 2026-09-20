@@ -238,11 +238,18 @@ jobs:
       # ADVISORY, like the job it sits in: `lint-bot-statuses` is absent from
       # scripts/required-checks.txt and from the ruleset, so a PR merges with this red. It is
       # still the only arm that sees the WHOLE record, which is why it exists — but it reports,
-      # it does not block. Promotion is gated on the auto-fabrication guard (#6049) and the
-      # Terraform-managed canonical list; see the DISPATCH note in the script.
+      # it does not block. The promotion path is #6883 / ADR-139 (extract into its own required
+      # context, re-deriving the unreachability argument per-gate — it is never inheritable), and
+      # the trap it avoids is the #6049 auto-fabrication guard. See the DISPATCH note in the script.
       - name: "lint-bot-statuses — rejected-concepts record, full glob (#8289, advisory)"
         if: ${{ !cancelled() }}
         run: bash scripts/lint-rejected-register.sh --all
+
+      # Same advisory caveat as the step above, same reason. The whole-directory pass is the only arm
+      # that sees a questionnaire nobody staged.
+      - name: "lint-bot-statuses — questionnaire third-party identity, full glob (#8289, advisory)"
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-questionnaire-identity.sh --all
       # Supabase Management API deprecation + host-pin assembly guard.
       #
       # ENFORCEMENT LEVEL IS ADVISORY, NOT BLOCKING, exactly as stated for every other

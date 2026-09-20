@@ -291,6 +291,7 @@
 18	plugins/soleur/test/kb-index-merge-driver.test.sh
 14	plugins/soleur/test/lint-bot-synthetic-completeness.test.sh
 13	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
+5	plugins/soleur/test/lint-questionnaire-identity.test.sh
 1	plugins/soleur/test/merge-kb-index-driver-mutation.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
 1	plugins/soleur/test/operator-script.test.sh
