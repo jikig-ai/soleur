@@ -214,6 +214,55 @@ else
   fail "row 4: expected reason=stale, got '$(sut_out "$res")'"
 fi
 
+# ── Guard 2 row 4b/4c: the SECOND edit. THE case row 4 cannot reach. ───────────────────────
+#    `git status --porcelain` carries a path and two status letters, never content, and
+#    `ls-files -s` carries the INDEX blob, which a worktree edit does not move. So the FIRST
+#    edit to a clean file is seen (a ` M` line appears) and every edit AFTER it is not --
+#    nothing in the fingerprint changes. Row 4 does exactly one edit, so it is structurally
+#    blind to this; measured before the fix, the second edit left the script SILENT (its
+#    "the index is good" contract) with the stale tag still in kb-tags.txt.
+#    Both directions matter, so each row is followed by a must-stay-silent assertion: a
+#    fingerprint that regenerates unconditionally would satisfy the staleness half perfectly.
+echo ""
+echo "--- Guard 2 row 4b: a second edit to an already-modified TRACKED file ---"
+r="$(mkrepo row4b)"; run_sut "$r" >/dev/null
+printf -- '---\ntitle: "Alpha Once"\n---\n\nbody\n' > "$r/knowledge-base/engineering/alpha.md"
+run_sut "$r" >/dev/null   # first edit: seen even by the pre-fix probe
+printf -- '---\ntitle: "Alpha Twice"\n---\n\nbody\n' > "$r/knowledge-base/engineering/alpha.md"
+res="$(run_sut "$r")"
+CASES_RUN=$((CASES_RUN + 1))
+grep -q 'Alpha Twice' "$r/$IDX" \
+  && pass "row 4b: the SECOND edit to a tracked file is detected" \
+  || fail "row 4b: second edit missed — the index still reads '$(grep -o 'Alpha [A-Za-z]*' "$r/$IDX" | head -1)'"
+CASES_RUN=$((CASES_RUN + 1))
+grep -q 'reason=stale' <<<"$(sut_out "$res")" \
+  && pass "row 4b: reported as reason=stale" \
+  || fail "row 4b: expected reason=stale, got '$(sut_out "$res")'"
+CASES_RUN=$((CASES_RUN + 1))
+[[ -z "$(sut_out "$(run_sut "$r")")" ]] \
+  && pass "row 4b: a following no-change call stays SILENT (no over-regeneration)" \
+  || fail "row 4b: regenerates when nothing changed — the fingerprint is unconditional"
+
+echo ""
+echo "--- Guard 2 row 4c: a second edit to an UNTRACKED file ---"
+r="$(mkrepo row4c)"; run_sut "$r" >/dev/null
+printf -- '---\ntitle: "Untracked One"\n---\n\nbody\n' > "$r/knowledge-base/engineering/new-note.md"
+run_sut "$r" >/dev/null   # creation: seen (a `??` line appears)
+printf -- '---\ntitle: "Untracked Two"\n---\n\nbody\n' > "$r/knowledge-base/engineering/new-note.md"
+res="$(run_sut "$r")"
+CASES_RUN=$((CASES_RUN + 1))
+grep -q 'Untracked Two' "$r/$IDX" \
+  && pass "row 4c: the SECOND edit to an untracked file is detected" \
+  || fail "row 4c: second edit to an untracked file missed"
+CASES_RUN=$((CASES_RUN + 1))
+grep -q 'Untracked One' "$r/$IDX" \
+  && fail "row 4c: the stale untracked title survived" \
+  || pass "row 4c: the stale untracked title is gone"
+CASES_RUN=$((CASES_RUN + 1))
+[[ -z "$(sut_out "$(run_sut "$r")")" ]] \
+  && pass "row 4c: a following no-change call stays SILENT (no over-regeneration)" \
+  || fail "row 4c: regenerates when nothing changed"
+
 # ── Guard 2 row 5: one target removed while the index itself is fresh ───────────────────────
 echo ""
 echo "--- Guard 2 row 5: per-target absence beats a fresh fingerprint ---"
@@ -405,7 +454,7 @@ echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 # floor dispatched through the helper it backstops is disarmed by the same one-line edit that
 # disarms every assertion under it. `[FATAL]` is the sentinel scripts/guard-vacuity-floor.test.sh
 # matches on; a bare `FATAL:` scores the mutant CONSTRUCTION rather than FIRES.
-_min_cases=36
+_min_cases=45
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2

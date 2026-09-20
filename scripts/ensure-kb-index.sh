@@ -114,14 +114,48 @@ done
 # fingerprint hashes to a stable value, so the script regenerates on its first call (the
 # stamp is absent) and then no-ops. That is the correct behaviour for an exported tarball:
 # generate once, then stop paying for it.
+# THE FIRST TWO COMMANDS CARRY NO WORKING-TREE CONTENT, so on their own they answer a
+# different question than this probe's name (#8384 review, reproduced):
+#   - `ls-files -s` emits the INDEX blob of each tracked path. A worktree edit does not
+#     change it.
+#   - `status --porcelain` emits a path and two status letters. No content, ever.
+# So the FIRST edit to a clean file moves the fingerprint (a ` M` line appears) and the
+# SECOND and every later edit does not -- the path is already listed and nothing else
+# changes. Same for an untracked file: creating it adds a `??` line, editing it after that
+# is invisible. Measured: write b.md tags [beta] -> regenerates; rewrite it to tags [gamma]
+# -> this script prints NOTHING (its "the index is good" contract) while kb-tags.txt still
+# reads `beta` and INDEX.md still carries the old title. kb-search validates facets with
+# `grep -Fxq`, so the new tag reads as nonexistent -- verbatim the "greps an index that does
+# not list what is on disk and reports 'no prior art'" failure this probe exists to prevent.
+# And it is the COMMON path here: an agent iterating on a learning within one session keeps
+# that file in `??` or ` M` for the whole session.
+#
+# The third and fourth commands close it by folding in actual CONTENT: the diff text for
+# tracked modifications (which also covers renames and deletions), and a blob hash per
+# untracked file. `-z` + `read -d ''` keeps paths with spaces or newlines intact.
+# EXCLUDES are declared ONCE. They were typed out twice, eight literals that had to stay in
+# lockstep with TARGETS by hand -- and the comment above states exactly what drift costs.
+_EXCL=()
+for _t in "${TARGETS[@]}" ".kb-index.stamp"; do _EXCL+=(":(exclude)$_t"); done
+
 fingerprint() {
+  local _status
+  _status="$(git -C "$KB_DIR" status --porcelain --untracked-files=all -- . "${_EXCL[@]}" 2>/dev/null)"
   {
-    git -C "$KB_DIR" ls-files -s -- . \
-      ':(exclude)INDEX.md' ':(exclude)kb-tags.txt' ':(exclude)kb-categories.txt' \
-      ':(exclude).kb-index.stamp' 2>/dev/null
-    git -C "$KB_DIR" status --porcelain --untracked-files=all -- . \
-      ':(exclude)INDEX.md' ':(exclude)kb-tags.txt' ':(exclude)kb-categories.txt' \
-      ':(exclude).kb-index.stamp' 2>/dev/null
+    git -C "$KB_DIR" ls-files -s -- . "${_EXCL[@]}" 2>/dev/null
+    printf '%s\n' "$_status"
+    # CONTENT, and only when something is non-clean. On a clean tree the two commands above
+    # already answer completely, so the common path pays nothing for this (measured: 68 ms
+    # clean either way; the content pass costs ~55 ms and runs only when there is something
+    # to hash).
+    if [[ -n "$_status" ]]; then
+      git -C "$KB_DIR" diff --no-ext-diff HEAD -- . "${_EXCL[@]}" 2>/dev/null
+      git -C "$KB_DIR" ls-files --others --exclude-standard -z -- . "${_EXCL[@]}" 2>/dev/null \
+        | while IFS= read -r -d '' _f; do
+            printf '%s ' "$_f"
+            git -C "$KB_DIR" hash-object -- "$_f" 2>/dev/null || echo UNREADABLE
+          done
+    fi
   } | git hash-object --stdin 2>/dev/null
 }
 
