@@ -1086,11 +1086,19 @@ _git_data_rung2_fetch() {
       _resp="$("$_seam" "$_suffix" 2>/dev/null)"; _rc=$?
       [[ "$_rc" -ne 0 ]] && _rc=7
     else
-      # lint-trap-ownership: ok — every path out of this block removes it explicitly (the
-      # `rm -f` below runs on both the success and the failure arm, and the two early returns
-      # above it precede the allocation), and a sourced library must not install an EXIT trap
-      # over its caller's (ADR-129 rule (c), stated in this file's own header). The residual
-      # is a hard kill, which no trap would survive either.
+      # Every path out of this block removes it explicitly (the `rm -f` below runs on both the
+      # success and the failure arm, and the two early returns above it precede the
+      # allocation), and a sourced library must not install an EXIT trap over its caller's
+      # (ADR-129 rule (c), stated in this file's own header). The residual is a hard kill,
+      # which no trap would survive either.
+      #
+      # THE MARKER IS ON THE LINE IMMEDIATELY ABOVE THE ALLOCATION, and that placement is
+      # load-bearing: lint-trap-tempfile-ownership's escaped() honours only the offending line
+      # and the ONE above it. This annotation originally opened the explanation five lines up,
+      # which reads to the linter as no annotation at all -- the full-repo scan flagged it while
+      # this file's own 236-assertion suite was green, because a repo-global ratchet is invisible
+      # to a file-selected suite.
+      # lint-trap-ownership: ok — bounded; every return path rm -f's it, and a sourced library must not trap EXIT over its caller's (ADR-129 rule (c)).
       _err="$(umask 077; mktemp -t rung2-fetch.XXXXXXXX)" || { eval "$_restore"; return 8; }
       # --disable: the gate also runs on a workstation, where a ~/.curlrc could otherwise add
       # flags this function did not choose. --noproxy '*': the same reasoning for the

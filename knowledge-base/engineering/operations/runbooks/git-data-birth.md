@@ -344,11 +344,19 @@ gate manage to look at all**. Work in this order, and do not skip to the last on
 1. **Read the token.** The two sets and their remedies are tabulated in
    `git-data-rung2-rehearsal.md` › *The gate's refusals — token → remedy*. `TOOLING_MISSING`,
    `RUN_OFFLINE`, `RUN_RATE_LIMITED`, `RUN_UNRESOLVABLE`, `RUN_SHA_UNREACHABLE`,
-   `RUN_HASH_UNCOMPUTABLE`, `RUN_ARTIFACT_RECORD_UNREADABLE` and `SENTRY_VERDICT_UNREADABLE`
-   mean the gate could not measure. Nothing has been said about the evidence or the host.
+   `RUN_HASH_UNCOMPUTABLE`, `RUN_ARTIFACT_RECORD_UNREADABLE`, `RUN_FLOOR_UNREADABLE` and
+   `SENTRY_VERDICT_UNREADABLE` mean the gate could not measure. Nothing has been said about
+   the evidence or the host. This list is a RESTATEMENT — the set that actually decides is
+   `git_data_rung2_token_sets cannot` in the gate library, which the #8210 probe and
+   `infra-validation.yml` both read. It had already drifted once (#8010 shipped
+   `RUN_FLOOR_UNREADABLE` and this line did not follow), so check it against the function
+   rather than trusting it.
 2. **Re-run the gate locally with a token.** Every CI call site resolves the run **anonymously**
-   — no workflow in this repository grants `actions: read` yet, which is tracked as this cycle's
-   blocker issue and cited from the `RUN_RATE_LIMITED` message itself. The anonymous limit is 60
+   — three of the four call sites still do. Since #8010, `infra-validation.yml`'s
+   `deploy-script-tests` job grants `actions: read` and passes `GH_TOKEN`, so that one is
+   authenticated; the two `apply-web-platform-infra.yml` sites are blocked behind #8361 and the
+   sweeper runs under `env -i`. The remainder is tracked as this cycle's blocker issue (#8397)
+   and cited from the `RUN_RATE_LIMITED` message itself. The anonymous limit is 60
    requests/hour per IP, shared behind NAT on hosted runners, so a rate limit on CI is expected
    weather rather than a finding. On a clean checkout of the ref the job used:
 

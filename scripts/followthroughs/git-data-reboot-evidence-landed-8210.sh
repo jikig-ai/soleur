@@ -74,7 +74,11 @@ EVIDENCE=apps/web-platform/infra/git-data-rung2-boot-evidence.env
 
 cd "$ROOT" || { echo "NOT YET: cannot enter the repo root"; exit 2; }
 
-git fetch -q origin main 2>/dev/null || true
+# --no-tags is load-bearing, not tidiness: since #8010 registered this probe's suite into
+# scripts/test-all.sh, this file is inside the battery closure, and `battery-tag-authorship`
+# refuses an undeclared tag-authoring command there (a bare fetch writes tags). Every sibling
+# call site in the closure already carries the flag.
+git fetch -q --no-tags origin main 2>/dev/null || true
 head_sha="$(git rev-parse --verify HEAD 2>/dev/null || true)"
 main_sha="$(git rev-parse --verify origin/main 2>/dev/null || true)"
 if [[ -z "$main_sha" ]]; then

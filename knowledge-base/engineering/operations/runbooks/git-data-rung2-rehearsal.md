@@ -221,6 +221,7 @@ tracker rather than as `NOT YET`.
 | `RUN_NOT_COMPLETED` | The run is still in flight. | Do **not** re-dispatch — `gh run watch <id>`, then re-run the gate. See *Three things that will mislead you*. |
 | `RUN_NOT_SUCCESS` | The run completed with a conclusion other than `success`. | Usually a failed teardown after a good capture. The evidence is unusable either way: clear the host with `teardown_only=true`, then re-dispatch. |
 | `RUN_HASH_MISMATCH` | The tree at the run's `head_sha` does not hash to the evidence's `RUNG2_TEMPLATE_SHA256`. | The evidence does not belong to the payload that run booted. Re-rehearse; do not hand-edit the hash. |
+| `RUN_ID_REGRESSED` | The evidence names an OLDER run than the version of the file it replaces — the downgrade shape: revert the payload, then cite the genuine older run that really did boot it. Every other fact can be true. | Re-rehearse from `main` against the CURRENT payload. If the replay is deliberate, append `RUNG2_EVIDENCE_DOWNGRADE_ACK=<run-id>:<why older bytes are being reinstated>` in the evidence file's own commit. The reason **may not contain `#`** — the gate strips any trailing comment (a space followed by a hash) before reading, so such a reason would arrive truncated; it is refused by name rather than silently accepted. |
 | `RUN_NO_EVIDENCE_ARTIFACT` | The run uploaded no `git-data-rung2-boot-evidence` artifact. | The signature of a `dry_run=true` dispatch. Re-dispatch with `dry_run=false`. |
 
 **Could-not-measure** — the gate could not reach an answer. Fail-closed, and none of these is a
@@ -228,7 +229,7 @@ statement about the host:
 
 | Token | What it could not do | What to do |
 |---|---|---|
-| `TOOLING_MISSING` (an ABORT) | Run at all — `jq`, `curl` or `tar` is absent. | Install them and re-run. Nothing was measured. |
+| `TOOLING_MISSING` (an ABORT) | Run at all — one of `jq`, `curl`, `tar`, `find` or `sha256sum` is absent. | Install it and re-run. Nothing was measured. `find` and `sha256sum` are on the list because they are USED (the archive symlink sweep and the tree hash); the check runs FIRST, before the live hash consumes `sha256sum`. |
 | `RUN_OFFLINE` | Reach `api.github.com`. | Check the network/proxy and re-run. |
 | `RUN_RATE_LIMITED` | Spend a request — the anonymous limit is 60/hour per IP, shared behind NAT on hosted runners. | Locally: `export GH_TOKEN=…` and re-run. In CI it needs `actions: read` plus a threaded token at the call site, which is tracked as this cycle's blocker issue and cited from the message itself. |
 | `RUN_UNRESOLVABLE` | Tell "no such run" from "not visible to me" — an authenticated read was refused and the anonymous retry 404'd. | Re-run with a token that can read this repository's Actions. |
@@ -236,6 +237,7 @@ statement about the host:
 | `RUN_HASH_UNCOMPUTABLE` | Extract and hash the tree at that sha. | Re-run in a clean checkout; if it repeats, the archive at that sha is the thing to look at, not the evidence. |
 | `RUN_ARTIFACT_RECORD_UNREADABLE` | Read the run's artifact record — including the case where the run is old enough that GitHub no longer keeps one. | For a recent run, re-run (usually transport or rate limit). For an old run, re-rehearse: the record cannot be recovered. |
 | `SENTRY_VERDICT_UNREADABLE` | Parse `RUNG2_SENTRY_CROSSCHECK` out of the evidence. | Its value is `NOT_RUN` (the cross-check never ran — no `jq`, no `SENTRY_ISSUE_RO_TOKEN`, or no reader on the rehearsal runner), or a value outside the set the capture can write. An **absent** key does not reach this token: the required-key loop refuses it first, with an untokenised cardinality message. |
+| `RUN_FLOOR_UNREADABLE` | Read which run the PREVIOUS version of the evidence attested, so Guard 5 cannot tell a fresh rehearsal from a replay of an older one. | Re-run in a full checkout (`git fetch --unshallow`). Note the known gap recorded in ADR-149 `## Amendment — 2026-09-20 (#8010)`: on a shallow clone the floor comes back EMPTY and Guard 5 skips silently rather than reaching this token, so an absent HOLD here is not proof the floor was checked. |
 
 ## Changing the payload: the two-PR sequence
 
