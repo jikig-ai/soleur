@@ -158,6 +158,8 @@ foreign() { # <dt> <boot>
 # ── the runner ────────────────────────────────────────────────────────────────────────────────
 # Per-case seams, all read with a default so a case that sets none gets the canonical world:
 #   CASE_EARLIEST   the tracker-directive date written into the copy (default: 5 days ago)
+#   CASE_SWEEPER_EARLIEST  value of SOLEUR_FT_EARLIEST, the sweeper's forwarded clock (default:
+#                   UNSET, i.e. the probe falls back to the header copy above)
 #   CASE_PROBE_SED  a sed -E expression applied to the copy, asserted to have LANDED
 #   CASE_LEDGER     available | other | malformed | absent   (default: other)
 #   CASE_APPLY      byte size of the stub apply workflow     (default: 1000, i.e. UNDER)
@@ -229,9 +231,20 @@ STUB
     chmod +x "$root/scripts/betterstack-query.sh"
   fi
 
+  # THE SWEEPER'S CLOCK CHANNEL. Unset by default, so an ordinary case grades the header copy
+  # exactly as a standalone run does; `+x` (not `:-`) so a case can drive the SET-BUT-EMPTY state,
+  # which is a distinct branch from unset. The value is the one the sweep gated on -- see the
+  # probe's THE STALENESS CLOCK block for why the header is the fallback and not the source.
+  local -a sweeper_env=()
+  if [[ -n "${CASE_SWEEPER_EARLIEST+x}" ]]; then
+    sweeper_env=("SOLEUR_FT_EARLIEST=$CASE_SWEEPER_EARLIEST")
+  else
+    sweeper_env=("-u" "SOLEUR_FT_EARLIEST")
+  fi
+
   # env -u mirrors the `env -i` the sweeper runs probes under: no ambient SOLEUR_FT_* may reach
   # the probe, or the stub's --since/--limit assertions above would grade the harness's shell.
-  env -u SOLEUR_FT_WINDOW -u SOLEUR_FT_LIMIT \
+  env -u SOLEUR_FT_WINDOW -u SOLEUR_FT_LIMIT "${sweeper_env[@]}" \
     STUB_RC="${STUB_RC:-0}" \
     BETTERSTACK_QUERY_HOST="$([[ "${CASE_UNSET:-}" == BETTERSTACK_QUERY_HOST ]] && echo "" || echo stub)" \
     BETTERSTACK_QUERY_USERNAME="$([[ "${CASE_UNSET:-}" == BETTERSTACK_QUERY_USERNAME ]] && echo "" || echo stub)" \
@@ -629,6 +642,51 @@ CASE_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=absent \
 expect "stale: an unreadable ledger -> ACTION REQUIRED" 5 "$WORK/f_good10" \
   "escalation=stale branch=v6_ledger_unreadable"
 
+# ══ WHOSE CLOCK — the sweeper's earliest beats this file's header ═════════════════════════════
+# sweep-followthroughs.sh parses `earliest=` from the ISSUE BODY and gates the run on it; it never
+# reads this script. So the header copy is a SECOND copy, and it drifts the moment a body directive
+# is re-baselined or a second tracker enrols this same probe with its own `earliest=`. The sweeper
+# now forwards what it gated on as SOLEUR_FT_EARLIEST.
+#
+# BOTH DIRECTIONS ARE LOAD-BEARING. A single "stale env -> escalates" case is satisfied by a probe
+# that ORs the two sources, or that reads whichever happens to be stale; only the fresh-env /
+# stale-header direction can tell "prefers the sweeper" from "escalates if either is old". The pair
+# pins the precedence, and each row reds on its own mutation.
+#
+# THREE OF THESE ASSERT THE PROVENANCE LINE, NOT A BRANCH MARKER, and that is deliberate. They
+# exercise branches other cases already own (v3 at exit 3, v3-stale at exit 5), so asserting the
+# branch marker again would trip the marker-uniqueness guard below — correctly: a second case on
+# the same literal reads as double coverage. `clock=` carries no `verdict=`/`branch=` token, so
+# expect() logs an EMPTY floor token and these rows add nothing to any per-exit-code bucket. The
+# floors stay exact and the property under test is the one asserted.
+
+CASE_EARLIEST="$FRESH_EARLIEST" CASE_SWEEPER_EARLIEST="$STALE_EARLIEST" CASE_LEDGER=available \
+CASE_REQUIRE="clock=sweeper" \
+expect "sweeper says 40 days, header says 1 -> escalates on the sweeper's clock" 5 "$WORK/f_v3" \
+  "escalation=stale branch=v3_newest_field_absent days=40 clock=sweeper"
+
+CASE_EARLIEST="$STALE_EARLIEST" CASE_SWEEPER_EARLIEST="$FRESH_EARLIEST" CASE_LEDGER=available \
+CASE_FORBID="escalation=stale" CASE_REQUIRE="verdict=v3_newest_field_absent" \
+expect "sweeper says 1 day, header says 40 -> the stale HEADER does not escalate" 3 "$WORK/f_v3" \
+  "clock=sweeper days=0"
+
+# MALFORMED IS A REFUSAL, NOT A FALLBACK. `date -d` accepts "next friday", "@0" and "yesterday",
+# so the shape regex is the validator. Falling back to the header here would restore the drift in
+# the one case where the two values are KNOWN to disagree, so the clock is disabled instead: the
+# header is 40 days stale and must still not produce an ACTION REQUIRED out of a bad directive.
+CASE_EARLIEST="$STALE_EARLIEST" CASE_SWEEPER_EARLIEST="next friday" CASE_LEDGER=available \
+CASE_FORBID="escalation=stale" \
+expect "malformed sweeper clock -> refused, and the stale header is NOT substituted" 3 "$WORK/f_v3" \
+  "clock=refused reason=malformed_sweeper_earliest"
+
+# SET-BUT-EMPTY is the shape a directive with no `earliest=` produces: the sweeper forwards
+# `${earliest:-}` unconditionally, so the probe sees "" rather than an unset variable. Empty fails
+# the shape regex, so it lands on the same refusal — never on a silent header fallback.
+CASE_EARLIEST="$STALE_EARLIEST" CASE_SWEEPER_EARLIEST="" CASE_LEDGER=available \
+CASE_FORBID="escalation=stale" \
+expect "sweeper forwarded an empty earliest -> refused, not the stale header" 3 "$WORK/f_v3" \
+  "clock=refused reason=empty_sweeper_earliest"
+
 # ══ MUST-PASS CONTROLS — the other half of the battery ════════════════════════════════════════
 # Counting these in a "caught N of N" mutation tally would overstate it; they are here because a
 # guard that reddens on a correct tree is worse than no guard.
@@ -737,7 +795,7 @@ fi
 # block together with its THRESHOLD BINDINGS; a floor whose threshold is a bare literal is
 # unconstructible, so the suite silently leaves that meta-guard's covered population. The VALUE
 # stays a literal: binding it to a variable expansion re-creates the same unconstructible shape.
-MIN_CASES=49
+MIN_CASES=53
 if (( cases < MIN_CASES )); then
   # PHRASING IS LOAD-BEARING, not style. guard-vacuity-floor.test.sh classifies a mutant as FIRES
   # only when its output carries a floor-shaped sentinel from a fixed vocabulary; `only %s cases

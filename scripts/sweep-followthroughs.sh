@@ -88,6 +88,12 @@ valid_secret_name() {
   [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
   case "$name" in
     PATH|HOME|IFS|BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|CDPATH|LD_*|BASH_FUNC_*) return 2 ;;
+    # The sweeper's own channel to the probe (SOLEUR_FT_EARLIEST below; SOLEUR_FT_WINDOW and
+    # SOLEUR_FT_LIMIT are read by probes as operator overrides). A directive must not be able to
+    # name one in `secrets=`: forwarding is last-assignment-wins, so a directive-supplied copy
+    # placed after ours would hand the probe a horizon the sweeper did not gate on -- which is
+    # the whole defect this channel closes. Reserved, so the attempt is REFUSED loudly instead.
+    SOLEUR_FT_*) return 2 ;;
   esac
   return 0
 }
@@ -612,6 +618,16 @@ Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followt
     fi
     return 0
   fi
+
+  # ONE CLOCK FOR BOTH HALVES. A probe that measures how long it has been parked needs the same
+  # `earliest` this sweep gated on at line ~530. Before this, probes re-derived it from a copy in
+  # their own file header -- a second copy of an issue-body value, which drifts the moment a body
+  # directive is re-baselined or a second tracker enrols the same script with its own `earliest=`.
+  # Forwarded unconditionally (it is not a secret, and `${earliest:-}` may legitimately be empty:
+  # a probe treats an empty/unparseable value as "no clock" and never escalates on it). Appended
+  # AFTER the secrets loop so ours is the last assignment `env` sees, independent of the reserved
+  # -name refusal above -- two mechanisms, because only one of them is a validator.
+  env_args+=("SOLEUR_FT_EARLIEST=${earliest:-}")
 
   log "issue #$issue_num: running $script"
   local rc=0

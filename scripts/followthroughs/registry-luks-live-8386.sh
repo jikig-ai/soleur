@@ -97,8 +97,9 @@
 # BROKEN probe — an awk dialect change, a jq upgrade, a renamed field — parked on V3 / V5 / the
 # integer guard / producer_silent forever, all exit 3, indistinguishable from legitimately
 # waiting to anyone not diffing daily comments. Every exit-3 branch therefore consults the clock
-# against the `earliest=` constant in the tracker directive below and exits 5 instead once more
-# than 30 days have elapsed, naming the branch.
+# and exits 5 instead once more than 30 days have elapsed, naming the branch. The horizon is the
+# `earliest=` the SWEEPER gated on, forwarded as `SOLEUR_FT_EARLIEST`; the directive below is the
+# fallback for a standalone run. See THE STALENESS CLOCK for why that order, not the reverse.
 #
 # Secrets: BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD
 #
@@ -177,9 +178,57 @@ marker() { # <verdict-token> <extra k=v pairs>
 }
 
 # ── THE STALENESS CLOCK ───────────────────────────────────────────────────────────────────────
-# Read from the tracker directive in this file's OWN header, never from a second copy: the
-# directive is what the sweeper acts on, so anything else would let the two drift.
+# WHERE `earliest` COMES FROM, and why the header copy is the FALLBACK and not the source.
+# An earlier revision of this block read the header copy and justified it as "never from a second
+# copy: the directive is what the sweeper acts on". That rationale was backwards and is recorded
+# here rather than deleted. `sweep-followthroughs.sh` parses `earliest=` out of the ISSUE BODY
+# (`parse_directive`, awk over the fetched body) and gates the run on THAT value; it never reads
+# this file. So the header copy is precisely the second copy, and the two drift the moment a body
+# directive is re-baselined or a SECOND tracker enrols this same script with its own `earliest=` —
+# at which point the clock escalates on a horizon nobody set.
+#
+# The sweeper now forwards the value it actually gated on as `SOLEUR_FT_EARLIEST`. Reading it here
+# makes one value authoritative for both halves. Three states, and the malformed one is the reason
+# this is not a bare `${SOLEUR_FT_EARLIEST:-<header>}`:
+#   set + well-formed  -> the sweeper's value. One clock, no drift.
+#   set + malformed    -> REFUSE the clock. Silently falling back to the header would restore the
+#                         exact drift this exists to remove, and would do it in the one case where
+#                         the two values are known to disagree. No clock = never escalates, which
+#                         is this block's standing fail-safe.
+#   unset              -> the header copy. A manual/standalone run has no sweeper to ask, and this
+#                         file's own directive is the best available statement of its horizon.
+# The shape regex is the validator in all three states: the env value is author-controlled text
+# that reached the runner through an issue body, and `date -d` accepts a great deal more than an
+# ISO instant ("next friday", "@0", "yesterday" -- each of which would silently re-date the clock).
+EARLIEST_SHAPE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+EARLIEST_SRC="header"
 EARLIEST_RAW="$(grep -oE 'earliest=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' "${BASH_SOURCE[0]}" | head -1 | cut -d= -f2)" || EARLIEST_RAW=""
+if [[ -n "${SOLEUR_FT_EARLIEST+x}" ]]; then
+  if [[ "${SOLEUR_FT_EARLIEST}" =~ $EARLIEST_SHAPE ]]; then
+    EARLIEST_RAW="$SOLEUR_FT_EARLIEST"
+    EARLIEST_SRC="sweeper"
+  else
+    # TWO REASONS, because they are two different operator fixes. Empty is what a directive with
+    # NO `earliest=` produces (the sweeper forwards `${earliest:-}` unconditionally); non-empty
+    # and non-ISO is a directive whose date is malformed. Collapsing them would tell the operator
+    # to correct a value that is not there.
+    if [[ -z "${SOLEUR_FT_EARLIEST}" ]]; then
+      printf 'registry-luks[#8386]: clock=refused reason=empty_sweeper_earliest\n' >&2
+      printf 'WARNING: the tracker directive carries no `earliest=`, so this sweep gated on nothing\n' >&2
+      printf '         and the staleness clock is DISABLED for this run (it will not escalate).\n' >&2
+      printf '         Add `earliest=<ISO instant>` to the directive in the tracker body.\n' >&2
+    else
+      printf 'registry-luks[#8386]: clock=refused reason=malformed_sweeper_earliest\n' >&2
+      printf 'WARNING: the sweeper forwarded an earliest= that is not an ISO instant. The staleness\n' >&2
+      printf '         clock is DISABLED for this run (it will not escalate). Fix the `earliest=` in\n' >&2
+      printf '         the tracker directive.\n' >&2
+    fi
+    printf '         The header copy is deliberately NOT substituted: falling back would restore\n' >&2
+    printf '         the drift this channel removes, in the one case the two are known to differ.\n' >&2
+    EARLIEST_RAW=""
+    EARLIEST_SRC="refused"
+  fi
+fi
 NOW_EPOCH="$(date -u +%s)"
 EARLIEST_EPOCH="$(date -u -d "$EARLIEST_RAW" +%s 2>/dev/null)" || EARLIEST_EPOCH=""
 ELAPSED_DAYS=""
@@ -188,6 +237,11 @@ if [[ -n "$EARLIEST_EPOCH" ]]; then
   ELAPSED_SECS=$(( NOW_EPOCH - EARLIEST_EPOCH ))
   ELAPSED_DAYS=$(( ELAPSED_SECS / 86400 ))
 fi
+# PROVENANCE, once per run, on every path. Which clock a verdict was graded against is not
+# recoverable from the verdict, and the escalation marker only exists on the branches that DID
+# escalate -- so without this line the interesting case (a probe that did not escalate because
+# its clock was refused) is silent about why.
+printf 'registry-luks[#8386]: clock=%s days=%s\n' "$EARLIEST_SRC" "${ELAPSED_DAYS:-na}" >&2
 
 # Returns 0 when the caller's exit-3 state has been parked past the horizon, having printed the
 # escalation marker and prose. A clock that cannot be read NEVER escalates: an unparseable
@@ -195,7 +249,7 @@ fi
 stale_now() { # <branch-token>
   [[ -n "$ELAPSED_DAYS" ]] || return 1
   (( ELAPSED_DAYS > STALE_DAYS )) || return 1
-  printf 'registry-luks[#8386]: escalation=stale branch=%s days=%s\n' "$1" "$ELAPSED_DAYS" >&2
+  printf 'registry-luks[#8386]: escalation=stale branch=%s days=%s clock=%s\n' "$1" "$ELAPSED_DAYS" "$EARLIEST_SRC" >&2
   printf 'ACTION REQUIRED: in this state for %s days — treat this as a defect, not a wait.\n' "$ELAPSED_DAYS" >&2
   printf '           Branch: %s. Past %s days a probe parked on one CANNOT ESTABLISH branch is\n' "$1" "$STALE_DAYS" >&2
   printf '           indistinguishable from one legitimately waiting; this escalation separates them.\n' >&2
