@@ -1,83 +1,80 @@
 # Tasks — fix: route op=registry-probe's non-200 branch through the dark-host gate
 
 Plan: `knowledge-base/project/plans/2026-09-20-fix-registry-probe-dark-gate-plan.md`
-Branch: `feat-one-shot-8079-registry-probe-dark-gate`
-Issue: #8079
-Lane: single-domain (engineering)
+Branch: `feat-one-shot-8079-registry-probe-dark-gate` · Issue: #8079 · Lane: single-domain (engineering)
 
-> READ THE PLAN'S `## Premise Correction` FIRST. The issue argues from a pre-arm world that ended
-> on 2026-09-15 when the cutover completed. `dark` is now the rollback-only branch; `flag_armed`
-> under `flag=done` is the branch that will actually fire, and it means production cron scheduling
-> may be down.
+> **Read `## Premise Correction` and `## Review Corrections` FIRST.** The issue argues from a
+> pre-arm world that ended 2026-09-15. And the arm has **no `else`** (C1) — restructuring it is
+> Phase 2, before any new logic, or a non-exiting `dark)` falls into the 200-path shape check and
+> prints the raw body.
 
-## 1. Setup and baseline
+## 1. Phase 0 — live state and rebase
 
-- [ ] 1.1 Re-confirm live host state: `doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh`. Expect `cutover_flag=done`, `server_active=active`, `http_code=200`. If it disagrees, STOP and re-read `## Premise Correction`.
-- [ ] 1.2 `bash scripts/test-all.sh --capacity`. On rc=4, do not claim a full gate later.
-- [ ] 1.3 Baseline both suites; confirm `cutover-inngest-workflow.test.sh` dispatches exactly `_EXACT_FLOOR` (665).
-- [ ] 1.4 Baseline `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt` as clean.
+- [ ] 1.1 `doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh`. Expect `cutover_flag=done`, `server_active=active`, `http_code=200`. If it reads `rolled-back`/`aborted`, `dark` becomes the live branch, D8's `done` remedy is fixture-only, and Test Scenario 4 must be labelled synthetic.
+- [ ] 1.2 Re-sync `main` (PR #8389 touches ADR-100 and `plugins/soleur/test/fixture-relative-assert.baseline.txt`).
+- [ ] 1.3 Baselines are already measured in the plan's `## Research Insights` — re-run only if main moved.
 
-## 2. Phase 1 — `_bs_read_remedy` step parameter (D4)
+## 2. Phase 1 — `_bs_read_remedy` (D4), alone
 
-- [ ] 2.1 Read `_bs_read_remedy` and its doc comment before editing.
-- [ ] 2.2 Add the leading `<step>` parameter; replace the 8 `2.0 ` prefixes with `$step `.
-- [ ] 2.3 Update the doc-comment signature line.
-- [ ] 2.4 Update the two `execute)` call sites to pass `"2.0"`.
-- [ ] 2.5 Update `mutate_file`'s known-negative `sed` pattern to the new comment text.
-- [ ] 2.6 Suite must be green at 665 with NO count change (this is the behaviour-preserving proof).
+- [ ] 2.1 Read the function and its doc comment.
+- [ ] 2.2 Add TRAILING `step="${5:-2.0}"`. **Do not touch either `execute)` call site.**
+- [ ] 2.3 Replace all **nine** `::error::2.0 ` prefixes with `$step ` (the ninth is the trailing "NOTHING about the dedicated host was measured" summary).
+- [ ] 2.4 Update the doc-comment signature line.
+- [ ] 2.5 Update `mutate_file`'s known-negative `sed` to the new comment text.
+- [ ] 2.6 Add the census assertion: inside the function body, `grep -c '::error::2\.0 '` is 0 and `grep -c '::error::\$step '` equals the total `::error::` line count.
+- [ ] 2.7 Suite green; the two `probe read:` renders unchanged (necessary, not sufficient — there is no `heartbeat read:` render).
 
-## 3. Phase 2 — 2.0 text corrections (D9, D8 silent clause)
+## 3. Phase 2 — restructure the arm (C1), before any new logic
 
-- [ ] 3.1 Amend `scripts/cutover-inngest.sh:1434` (2.0 `webhook_path`) to key on the `registry_empty=` marker, not the run's colour.
-- [ ] 3.2 Amend `:1515` (2.0 `host_serving`) the same way.
-- [ ] 3.3 Add the Better Stack ingest/quota clause to 2.0's `silent)` remedy.
-- [ ] 3.4 Re-run the suite; both renders pin prefixes only and should stay green.
+- [ ] 3.1 Convert to `if [[ "$CODE" != "200" ]]; then <non-200> else <200 path unchanged> fi`.
+- [ ] 3.2 Region-open marker immediately BEFORE `SIG=$(printf '' | openssl …)`; close marker immediately before the arm's `;;`.
+- [ ] 3.3 Confirm the region sources cleanly under the existing render driver (it sets `BASE`/`WEBHOOK_SECRET`/`CF_ACCESS_*`/`INNGEST_HOST*` but NOT `CODE`/`BODY` — starting at `SIG=` is what avoids `CODE: unbound variable` under `set -u`). Verify, do not assume.
+- [ ] 3.4 Suite green at 665 — structure-only.
 
-## 4. Phase 3 — the registry-probe dark arm
+## 4. Phase 3 — the 2.0 text corrections
 
-- [ ] 4.1 Re-read `scripts/cutover-inngest.sh:821-863` and the 2.0 region.
-- [ ] 4.2 Add the region-open marker and the `webhook_path` pre-refusal naming `op=inventory` (D6), before any Better Stack read.
-- [ ] 4.3 Add the signature notice + the one plain-line body echo.
-- [ ] 4.4 Source the gate lib under an `||` guard.
-- [ ] 4.5 `mktemp -d` then IMMEDIATELY `trap 'rm -rf "$RPG_DIR"' EXIT`.
-- [ ] 4.6 The two `_bs_query_rows` reads (24h probe / 30m heartbeat), stderr to files, rc into `RPG_PROBE_RC` / `RPG_HB_RC`.
-- [ ] 4.7 `: > "$RPG_EMIT"`, then the gate call with `|| RPG_RC=$?`.
-- [ ] 4.8 The sentinel-initialised emit-file read loop behind the shape regex.
-- [ ] 4.9 `dark)` — rc/token agreement check, then the D2 notice + `ANSWERED:` / `NOT ANSWERED:` warning, NO exit.
-- [ ] 4.10 `flag_armed)` — the D8 `done` vs `armed|flipping|flushed` split. The `done` branch must NOT say "the cutover already completed", must not name `op=verify`, and must not name `restart-inngest-server.yml`.
-- [ ] 4.11 `host_serving)` and `silent)` per D8.
-- [ ] 4.12 `unreadable)` / `fsm_unreadable)` — branch on read rc, call `_bs_read_remedy "registry-probe" …`.
-- [ ] 4.13 The remaining tokens, one remedy each; `*)` sanitised and naming the gate as the defect.
-- [ ] 4.14 Every non-`dark` arm exits 1; every remedy ends `Do NOT SSH the host.` and obeys D5.
-- [ ] 4.15 Region-close marker before the arm's `;;`.
-- [ ] 4.16 Confirm the HTTP-200 path is byte-unchanged.
+- [ ] 4.1 Amend `:1434` and `:1515` to key on the `registry_empty=` marker (D9).
+- [ ] 4.2 Add the Better Stack ingest/quota clause to 2.0's `silent)` remedy (D8).
+- [ ] 4.3 Re-run; both renders pin prefixes only.
 
-## 5. Phase 4 — suite extension
+## 5. Phase 4 — the non-200 branch
 
-- [ ] 5.1 Rename `render_2_0` → `render_arm_region` (11 call sites + 3 comment mentions).
-- [ ] 5.2 D7 #1 — replace the consumer `-eq 1` with the per-arm census + ≥12-arm dispatch floor.
-- [ ] 5.3 D7 #2 — re-aim `#6617 exactly 2 network/tool calls` at INVOCATIONS (strip comments and annotation lines).
-- [ ] 5.4 D7 #3 — re-aim `NO retry loop` at loops containing `curl` / `_bs_query_rows`.
-- [ ] 5.5 D7 #4 — re-aim `NO flip/quiesce/rearm hook` at the hook-path shape, not the log tag.
-- [ ] 5.6 D7 #5 — re-aim the doppler denial at secret WRITES + bare invocations outside `_bs_query_rows`.
-- [ ] 5.7 D7 #6 — `FLQ_SITES` 6 → 8, message extended to name the two new sites.
-- [ ] 5.8 D10 — three-way token-set parity (exec arm == probe arm == lib).
-- [ ] 5.9 Probe-arm static rows: call shape, source guard, token coverage, two reads, mktemp/trap, purity, emit regex, reserved-triple, no-SSH, no-bare-mutating-op, HTTP-200 content pin.
-- [ ] 5.10 Probe-region extraction + H3 extraction control.
-- [ ] 5.11 Renders: scenarios 1-15 from the plan's `## Test Scenarios`.
-- [ ] 5.12 Mutation rows M1.1-M1.4 and M2.1-M2.10; confirm H4's known-negative still reports NOT reddening.
-- [ ] 5.13 Run the suite, read `_DISPATCHED` from its own message, set `_EXACT_FLOOR` to exactly that, itemised `665 -> NNN (+k)`. Never increment by guess.
+- [ ] 5.1 `webhook_path` pre-refusal naming `op=inventory` **with the 200-vs-non-200 discrimination rule in the string**, before any Better Stack read.
+- [ ] 5.2 Signature notice; the webhook body once, CR/LF-stripped, as a plain line.
+- [ ] 5.3 Guarded `source` of the gate lib.
+- [ ] 5.4 `mktemp -d` then IMMEDIATELY `trap 'rm -rf "$RPG_DIR"' EXIT`.
+- [ ] 5.5 Two reads (24h probe / 30m heartbeat), stderr to files, rc into `RPG_PROBE_RC`/`RPG_HB_RC`.
+- [ ] 5.6 `: > "$RPG_EMIT"`, then the gate call with `|| RPG_RC=$?`.
+- [ ] 5.7 Emit read loop behind the shape regex; its inner `case` arms **single-line** (D10.1).
+- [ ] 5.8 `dark)` — rc/token agreement, the D2 notice + two-clause warning (field named `registry_empty` with NO trailing `=`), NO exit.
+- [ ] 5.9 `flag_armed)` — D8's **2×2**: outer on `__UNREAD__` picks the sample, inner picks `done` vs `armed|flipping|flushed`. Four messages. The probe-row `done` branch carries the ≤60-min staleness qualifier and must not interpolate `RPG_HB_AGE`.
+- [ ] 5.10 `done` output shape: short `::error::` headline, ordered steps as plain lines, dispatchable read FIRST (`scheduled-inngest-health.yml`), then `inngest-host-state.sh` with prerequisites stated, then `inngest-host-replace`.
+- [ ] 5.11 `host_serving)`, `silent)` per D8; `unreadable)`/`fsm_unreadable)` delegate with `"registry-probe"`.
+- [ ] 5.12 The other five tokens: 2.0's host fact + one op-appropriate line. Do not author five bespoke strings.
+- [ ] 5.13 `*)` sanitised, names the GATE as the defect. Every non-`dark` arm exits 1; every remedy ends `Do NOT SSH the host.`; none names a mutating op (D5).
+- [ ] 5.14 Do NOT write `/hooks/deploy-status` into a code comment inside the arm (latent `hooks/deploy` collision).
 
-## 6. Phase 5 — runbook and gates
+## 6. Phase 5 — suite extension
 
-- [ ] 6.1 Runbook edit (a) at ~:1075 (window procedure + the concurrency-group sentence).
-- [ ] 6.2 Runbook edit (b) at ~:453 (a green probe without a `registry_empty=` line is the dark verdict).
-- [ ] 6.3 Runbook edit (c) at :1657 (widen to the standalone op).
-- [ ] 6.4 Optional: fix the `.github/workflows/cutover-inngest.yml:15-16` section pointer.
-- [ ] 6.5 Run all gates in plan Phase 5 and record each verbatim, including the four repo-global ratchets BY HAND.
-- [ ] 6.6 Confirm every AC1-AC18 is satisfied by a named assertion or render, not by inspection.
+- [ ] 6.1 D7 row 1 — per-arm census **plus** whole-file total `-eq 2`.
+- [ ] 6.2 D7 rows 2/5 — one `PROBE_ARMS_CODE` with comments removed and the quoted ARGUMENT of each annotation `echo` stripped (not the line); the existing assertions ship unedited.
+- [ ] 6.3 D7 row 3 — keep the total loop ban, allowlist the one known loop header.
+- [ ] 6.4 D7 row 4 — re-aim `NO request body` so `-d`/`-T` must be adjacent to a `curl` (C2).
+- [ ] 6.5 D7 row 5 — `FLQ_SITES` 6 → 8 with the enumerating message extended.
+- [ ] 6.6 D10 guards: token coverage via the existing loop; plumbing parity by prefix normalisation; cross-arm remedy guard + `# twin:` comments.
+- [ ] 6.7 Probe-arm static rows, region extraction + selection control, renders (scenarios 1-17), mutation rows M1.1-M1.5 and M2.1-M2.12.
+- [ ] 6.8 **Do NOT** rename `render_2_0` and **do NOT** add re-aims for the two phantom assertions (C3).
+- [ ] 6.9 Run the suite, read `_DISPATCHED` from its own failure message, set `_EXACT_FLOOR`. **Re-measure after the FINAL rebase.** Do not grow the itemised delta comment.
 
-## 7. Ship
+## 7. Phase 6 — runbook and gates
 
-- [ ] 7.1 Post the plan's `## Premise Correction` to issue #8079 as a comment before merge (plan `## Follow-Through Directives`).
-- [ ] 7.2 PR body: `Closes #8079`; state whether a full gate ran or only the diff's suites plus the ratchets.
+- [ ] 7.1 Runbook edits, each located by SECTION HEADING (edit (b) shifts the others). § "Cutover procedure" is NOT edited.
+- [ ] 7.2 Include: the concurrency group in the operator-facing direction; "a red `restart-inngest-server` run is not a statement about this host".
+- [ ] 7.3 Run and record verbatim: both suites, the dark-gate lib suite, the four repo-global ratchets BY HAND, `bash -n`, `shellcheck` if available.
+- [ ] 7.4 Verify AC1-AC17 each against a named assertion or render, not by inspection.
+
+## 8. Ship
+
+- [ ] 8.1 Post the plan's `## Premise Correction` to #8079 before merge (plan `## Follow-Through Directives`).
+- [ ] 8.2 PR body: `Closes #8079`; state which suites ran — `--capacity` measured CONTENDED, so do not claim a full gate.
+- [ ] 8.3 `ship` Phase 6 renders `decision-challenges.md` (UC1 mechanism scope, UC2 dispatchable host-state, UC3 floor convention) into the PR body and files the `action-required` issue.
