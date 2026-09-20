@@ -503,4 +503,222 @@ describe("soleur-cloud-mode marker fleet", () => {
       expect(markerBlock(p)).not.toBeNull();
     }
   });
+
+  // SET IDENTITY, alongside the cardinality (#8402).
+  //
+  // `expect(marked.length).toBe(67)` is a stored value, and any `== N` floor survives every
+  // substitution that keeps N — an add-one-delete-one diff satisfies it exactly. So the
+  // sorted member list is pinned too: swapping one member for another has to edit a list a
+  // reviewer reads.
+  //
+  // A DERIVED form was specified instead of this list ("assert every
+  // plugins/soleur/skills/*/SKILL.md is marked") and is NOT implemented, because measuring
+  // it falsified its premise: 64 of 100 skills carry the block, not 100 of 100. Membership
+  // is a curated union — spawn sites, the FR4 secrets/prod set, the pipeline skills and the
+  // devin shims — not a property of being a skill, so no derivation over the directory can
+  // reproduce it. Asserting the universal would red a correct tree.
+  test("the marked set is pinned by identity, not only by cardinality", () => {
+    const { readdirSync } = require("fs");
+    const marked: string[] = [];
+    for (const dir of [SKILLS_DIR, DEVIN_SKILLS_DIR]) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const p = join(dir, entry.name, "SKILL.md");
+        if (!existsSync(p)) continue;
+        if (!readFileSync(p, "utf8").includes(MARKER_START)) continue;
+        marked.push(`${dir === SKILLS_DIR ? "skills" : "devin"}/${entry.name}`);
+      }
+    }
+    expect(marked.sort()).toEqual(MARKED_SET);
+    // Cross-check against the cardinality the sibling test pins, so the two cannot drift
+    // apart into a pair that each pass while disagreeing about the population.
+    expect(marked.length).toBe(67);
+  });
 });
+
+// ===========================================================================================
+// #8402 — one cloud-cache recipe across the shipped cohort.
+//
+// PROPERTY: no file shipped under `plugins/soleur/` instructs an agent to locate an
+// executable in the Devin plugin cache BY FILENAME. Every such instruction selects by
+// `.claude-plugin/plugin.json` identity, `[ -d ]`-gated, over both documented cache paths.
+//
+// ASSEMBLY — and this is the part that matters. The 67-member marker list is a SNAPSHOT, not
+// the population. The property quantifies over every file under `plugins/soleur/` that names
+// a Devin plugin-cache path, DERIVED at test time. Measured today that is 71 files: the 67
+// marker blocks plus `devin/INSTRUCTIONS.md`, `AGENTS.md`, `commands/go.md` and
+// `test/go-session-gates.test.sh` — four sites the marker-block test structurally cannot see,
+// because it only opens `*/SKILL.md`. The existing byte-identity + cardinality test is a
+// sub-guard over one SUBSET; this is the guard over the population. Both ship.
+//
+// SCOPE NOTE, stated so this is not read as more than it is: the identity preflight is a
+// SHAPE CHECK, not authentication. A planted directory containing `{"name":"soleur"}` passes
+// it (ADR-179 A11, and `go-session-gates.test.sh` row R6b is a MUST-PASS row asserting
+// exactly that limitation). This guard buys consistency and defence-in-depth. It does not
+// prevent executing an untrusted script, and nothing derived from it may say that it does.
+// ===========================================================================================
+describe("devin cache recipe: identity-selected, never basename-selected", () => {
+  const { readdirSync } = require("fs");
+
+  // The two documented cache paths, as REGEX FRAGMENTS. Assembled at runtime rather than
+  // written as one literal so that this guard's own body never contains the forbidden
+  // shape it searches for. That is what removes the need for an allowlist — and an
+  // allowlist is the thing that would quietly grow into the hole the guard exists to close.
+  const CACHE_FRAGMENTS = ["/opt/\\.devin/plugins", "devin/cli/plugins/cache"];
+  // `-name`/`-iname` with ANY basename argument. The property is "selects a Devin-cache
+  // executable by filename", and one specific script name is a single member of that set:
+  // a literal-only scan is a universal negative over one spelling.
+  const SELECTOR = "-i?name";
+  const FIND = "\\bfind\\b";
+
+  /** Every file under plugins/soleur/ that NAMES a Devin plugin-cache path. */
+  function deriveCachePathFiles(): string[] {
+    const cacheRe = new RegExp(CACHE_FRAGMENTS.join("|"));
+    const out: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === "node_modules" || e.name === ".git") continue;
+        const full = join(dir, e.name);
+        if (e.isDirectory()) { walk(full); continue; }
+        if (!e.isFile()) continue;
+        let text: string;
+        try { text = readFileSync(full, "utf8"); } catch { continue; }
+        if (cacheRe.test(text)) out.push(full);
+      }
+    };
+    walk(PLUGIN_ROOT);
+    return out.sort();
+  }
+
+  /**
+   * Lines where a `find` rooted at (or arguments containing) a Devin cache path selects by
+   * basename. Both operand orders are matched: `find <cache> -name X` and the rarer
+   * `find -name X <cache>`.
+   */
+  function basenameSelectionHits(text: string): string[] {
+    const cache = CACHE_FRAGMENTS.join("|");
+    const forward = new RegExp(`${FIND}[^\n|]*(?:${cache})[^\n|]*${SELECTOR}\\s`, "g");
+    const reverse = new RegExp(`${FIND}[^\n|]*${SELECTOR}\\s[^\n|]*(?:${cache})`, "g");
+    return text
+      .split("\n")
+      .filter((l) => {
+        forward.lastIndex = 0; reverse.lastIndex = 0;
+        return forward.test(l) || reverse.test(l);
+      })
+      .map((l) => l.trim());
+  }
+
+  // HARNESS ROW — planted-positive self-test. A detector whose pattern cannot match reports
+  // a clean sweep, which is byte-identical to a healthy run. Before reading ANY verdict
+  // below, prove the detector fires on an input it must flag. The planted string is
+  // assembled from the same fragments, so it is synthesized rather than quoted and needs no
+  // exemption of its own.
+  test("HARNESS: the detector reports a planted positive", () => {
+    // SYNTHESIZED, never quoted. Writing the forbidden shape as a literal would put it in
+    // this file, which the derived scan then reports as an offender — and the obvious repair
+    // (an allowlist entry for this path) is precisely the hole the guard exists to close,
+    // which is why the allowlist was cut rather than added. Concatenation keeps the two
+    // halves on either side of a `+` so no source line carries the contiguous shape.
+    const OPT = "/opt/" + ".devin/plugins";
+    const HOME_CACHE = "$HOME/.local/share/" + "devin/cli/plugins/cache";
+    const N = "-" + "name";
+    const IN = "-i" + "name";
+    const planted = `GUARD="$(find ${OPT} ${N} precommit-guard.sh 2>/dev/null | head -1)"`;
+    expect(basenameSelectionHits(planted).length).toBe(1);
+    const plantedHome = `X="$(find "${HOME_CACHE}" ${N} cloud-detect.sh | head -1)"`;
+    expect(basenameSelectionHits(plantedHome).length).toBe(1);
+    // Variant spellings of the SAME mechanism must be caught, or the scan is a universal
+    // negative over one member of a set: `-iname`, a glob argument, and a third script name
+    // are all "selects a Devin-cache executable by filename".
+    expect(basenameSelectionHits(`find ${OPT} ${IN} 'cloud-detect*' | head -1`).length).toBe(1);
+    expect(basenameSelectionHits(`find ${OPT} ${N} some-other-script.sh`).length).toBe(1);
+    // must-PASS input that is NOT the canonical: naming the directory is permitted; only
+    // SELECTING BY BASENAME is forbidden. devin/INSTRUCTIONS.md does exactly this.
+    const pathOnly = `the lock file is \`${OPT}/lock.json\``;
+    expect(basenameSelectionHits(pathOnly).length).toBe(0);
+    // Identity selection over the same directory must PASS.
+    const identity =
+      "MANIFEST=\"$(find \"$d\" -path '*/.claude-plugin/plugin.json' -exec grep -l soleur {} + | head -1)\"";
+    expect(basenameSelectionHits(identity).length).toBe(0);
+  });
+
+  // HARNESS ROW — non-vacuity. A derived population that comes back empty (a moved root, a
+  // typo'd fragment) would make every assertion below pass while measuring nothing.
+  test("HARNESS: the derived population is non-empty and covers the non-marker sites", () => {
+    const files = deriveCachePathFiles();
+    expect(files.length).toBeGreaterThanOrEqual(67);
+    // The four sites the marker-block test structurally cannot see. These are the whole
+    // reason the assembly is DERIVED rather than a member list — mutation row 2 (revert
+    // AGENTS.md's rule body) is red only through this scan.
+    for (const rel of [
+      "AGENTS.md",
+      "devin/INSTRUCTIONS.md",
+      "commands/go.md",
+      "test/go-session-gates.test.sh",
+    ]) {
+      expect(
+        files.some((f) => f.endsWith(rel)),
+        `${rel} names a Devin cache path but fell out of the derived population — the scan no longer reaches the non-marker sites`,
+      ).toBe(true);
+    }
+  });
+
+  test("no shipped file selects a Devin-cache executable by filename", () => {
+    const offenders: string[] = [];
+    for (const f of deriveCachePathFiles()) {
+      const hits = basenameSelectionHits(readFileSync(f, "utf8"));
+      if (hits.length) offenders.push(`${f.slice(PLUGIN_ROOT.length + 1)}: ${hits[0]}`);
+    }
+    expect(
+      offenders,
+      `these files locate a Devin-cache executable by basename; select by .claude-plugin/plugin.json identity instead:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  test("the canonical block carries the full identity recipe", () => {
+    const canonical = readFileSync(join(PLUGIN_ROOT, "skills", "work", "SKILL.md"), "utf8")
+      .match(/<!-- soleur-cloud-mode:start -->[\s\S]*?<!-- soleur-cloud-mode:end -->/)?.[0];
+    expect(canonical).toBeDefined();
+    const c = canonical as string;
+    // Both documented cache paths.
+    expect(c).toContain("/opt/.devin/plugins");
+    expect(c).toContain("devin/cli/plugins/cache");
+    // Identity, not basename.
+    expect(c).toContain(".claude-plugin/plugin.json");
+    expect(c).toContain('"name"[[:space:]]*:[[:space:]]*"soleur"');
+    // `[ -d ]`-gated, so a non-Devin box searches nothing.
+    expect(c).toMatch(/\[ -d /);
+    // One resolution, two consumers.
+    expect(c).toContain("scripts/cloud-detect.sh");
+    expect(c).toContain("scripts/precommit-guard.sh");
+    // The scope note must travel WITH the recipe: this is where a reader forms the belief
+    // that the check is stronger than it is.
+    expect(c).toMatch(/shape check, not authentication/i);
+    // And it must not overstate. CPO-C3: downstream copy generators read this text.
+    expect(c).not.toMatch(/\b(prevents|protects against|secures)\b/i);
+  });
+});
+
+// The marked cohort, pinned by identity. See the set-identity test above for why this is a
+// committed list rather than a derivation over the skills directory.
+const MARKED_SET: string[] = [
+  "devin/go", "devin/help", "devin/sync", "skills/admin-ip-refresh",
+  "skills/agent-native-architecture", "skills/agent-native-audit", "skills/atdd-developer",
+  "skills/brainstorm", "skills/cf-token-scope", "skills/code-to-prd", "skills/community",
+  "skills/competitive-analysis", "skills/compound", "skills/compound-capture",
+  "skills/content-writer", "skills/deepen-plan", "skills/deploy",
+  "skills/drain-labeled-backlog", "skills/drain-prs", "skills/eval-harness",
+  "skills/fix-issue", "skills/flag-create", "skills/flag-delete", "skills/flag-list",
+  "skills/flag-set-role", "skills/frontend-design", "skills/gdpr-gate", "skills/go",
+  "skills/growth", "skills/incident", "skills/legal-audit", "skills/legal-generate",
+  "skills/merge-pr", "skills/model-launch-review", "skills/one-shot", "skills/operator-digest",
+  "skills/pencil-setup", "skills/plan", "skills/plan-review", "skills/postmerge",
+  "skills/preflight", "skills/product-roadmap", "skills/provision-cloudflare",
+  "skills/provision-doppler", "skills/provision-github", "skills/provision-hetzner",
+  "skills/qa", "skills/rclone", "skills/reproduce-bug", "skills/resolve-parallel",
+  "skills/resolve-pr-parallel", "skills/resolve-todo-parallel", "skills/review",
+  "skills/schedule", "skills/seo-aeo", "skills/ship", "skills/skill-security-scan",
+  "skills/spec-templates", "skills/sync", "skills/test-browser", "skills/test-fix-loop",
+  "skills/triage", "skills/trigger-cron", "skills/user-set-role", "skills/ux-audit",
+  "skills/work", "skills/xcode-test",
+];
