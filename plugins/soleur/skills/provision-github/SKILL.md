@@ -1,6 +1,7 @@
 ---
 name: provision-github
 description: "This skill should be used when provisioning GitHub repos and environments for tenant workflows."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->
