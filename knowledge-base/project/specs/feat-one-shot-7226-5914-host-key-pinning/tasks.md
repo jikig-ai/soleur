@@ -12,7 +12,7 @@
   - runs `ssh-keyscan -T 10 -t ecdsa`;
   - cross-checks the result against the operator's known_hosts;
   - writes the file header.
-- [ ] 0.2 If the egress IP is not allowlisted, run `soleur:admin-ip-refresh` first. It needs its own ack.
+- [ ] 0.2 Run `soleur:admin-ip-refresh` first; it needs its own ack. At plan time (2026-09-21) this session's egress IP was **not** in `ADMIN_IPS`.
 - [ ] 0.3 Run the capture script. It writes `apps/web-platform/infra/web-1-ssh-host-key.pub` with one ECDSA-P256 line and its fingerprint header. If web-1 has no ECDSA-P256 key, stop and re-plan.
 
 ## Phase 1: Tests first (RED)
@@ -28,13 +28,17 @@
   - `host_key_mismatch` classification;
   - `provisionGitDataRepo`.
 - [ ] 1.6 Add rows to `git-data-flag-precheck.test.sh`: `git_data_host_key_unavailable reason=absent|invalid|unreadable` and `TOFU_ARM present|absent`.
+- [ ] 1.6b Guard 6: rows for the boot-proof function (two hostkeys → fatal, fingerprint mismatch → fatal, no `ssh-keygen` → warn).
+- [ ] 1.6c Guard 7: `tests/scripts/test-dispatch-web-redeploy.sh`, using a `gh` stub and fast intervals.
+- [ ] 1.6d `apps/web-platform/infra/web-1-host-key-local.test.sh`: `terraform console` fixtures, plus a structural check that the precheck step comes before the bridge step.
+- [ ] 1.6e Vitest for the startup line: both forms, warn level, and the `fp=SHA256:` format. The pinned argv must include `-F /dev/null`, `GlobalKnownHostsFile=/dev/null`, `LogLevel=ERROR` and `UpdateHostKeys=no`. Tests call `vi.resetModules()` and `vi.unstubAllEnvs()`.
 - [ ] 1.7 Add rows to `git-data-cutover-access.test.sh`: `host_key_mismatch reason=changed|unknown|alg`. Update the fixtures that currently assert TOFU literals.
 
 ## Phase 2: Core implementation, infra and CI (GREEN)
 
 - [ ] 2.1 `git-data.tf`: add `tls_private_key.git_data_host_ssh` (ED25519, `private_key_openssh`) and `doppler_secret.git_data_ssh_host_key` (prd, with `depends_on` on the server), and pass both to the module.
 - [ ] 2.2 `modules/git-data-userdata`: add two MAY-DIVERGE variables, each map entry on one line.
-- [ ] 2.3 `cloud-init-git-data.yml`: add the `ssh_keys` block with correct `indent()`, the `HostKey` line, and the boot proof in `STAGE=sshd_config`. A mismatch is fatal; a missing `ssh-keygen` only warns.
+- [ ] 2.3 `cloud-init-git-data.yml`: add the `ssh_keys` block with correct `indent()` and the `HostKey` line. Add the boot-proof function in `STAGE=sshd_config`. A mismatch is a fatal under the routed `sshd_config` stage with `detail=hostkey_mismatch|hostkey_count`; a missing `ssh-keygen` only warns.
 - [ ] 2.4 Give `rung2-rehearsal/rehearsal.tf` its own tls key. Extend the `RUNG2_VAR_DIVERGENCE` allow-lists. Delete `git-data-rung2-boot-evidence.env`.
 - [ ] 2.5 `server.tf`: add the `web_1_ssh_host_key` local (`regex(one(...))`), set `host_key` on 18 blocks, and add `terraform_data.web_1_host_key_probe`. In `ci-ssh-key.tf`, set `host_key`. In `variables.tf`, add `terraform_version`.
 - [ ] 2.6 `apply-web-platform-infra.yml`:
@@ -43,12 +47,14 @@
   - birth job: add `-target`s;
   - add two `git_data_redeploy` jobs;
   - keep the file byte budget in check.
-- [ ] 2.7 Create `.github/actions/dispatch-web-redeploy/action.yml`. It records a baseline `databaseId`, dispatches a patch release with a "pin rotation" note, waits for any later run whose deploy job succeeded (not skipped), and times out after 75 minutes.
+- [ ] 2.7 Create `.github/actions/dispatch-web-redeploy/action.yml` and `track.sh`. The job runs only on `main`, uses a sparse checkout, and sets `persist-credentials: false`. Its summary prints the Terraform fingerprint. It records a baseline `databaseId`, dispatches a patch release with a "pin rotation" note, waits for any later run whose deploy job succeeded (not skipped), and times out after 75 minutes.
 - [ ] 2.8 Update the gate allow-sets in `git-data-host-replace-gate.sh`, `git-data-host-birth-gate.sh` and `plugins/soleur/test/terraform-target-parity.test.ts`. Run the orphan-suite sweep grep.
 - [ ] 2.9 Create `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh` (validated writer, mode 0444).
 - [ ] 2.10 Bridge `action.yml`: build `WEB_HOST_SSH` with the pinned options and `UpdateHostKeys=no`, keep the export set unchanged, and add a header contract.
 - [ ] 2.11 `git-data-flag-precheck.sh`: read the pin, add the unavailable verdict and the `TOFU_ARM` line.
 - [ ] 2.12 `git-data-cutover.yml`: use the writer to build `gd-known-hosts`, pin both Host blocks, add teardown. `git-data-cutover.sh`: order the H4 classifier branches.
+- [ ] 2.12b Error-output hygiene on every CI ssh path. Decide verdicts from the exit code plus anchored patterns, strip control characters, wrap output in `::stop-commands::`, and print fingerprints only. Add a test row where a banner injects `::error::` and `verdict=ok`.
+- [ ] 2.12c `.github/CODEOWNERS`: add rows for the pin file, the bridge, `dispatch-web-redeploy`, `git-auth.ts` and the gate libraries. Check branch protection, and record any gap in ADR-237. Gate libraries must never print `.change.before` or `.change.after`.
 - [ ] 2.13 Run `terraform fmt -check` and `validate` on both roots, plus the render, budget and strip suites and all gate suites.
 
 ## Phase 3: Core implementation, app (GREEN)
@@ -59,7 +65,7 @@
   - add guarded pin resolution in remove, provision and replicate;
   - add the `host_key_mismatch` outcome, classified before `SSH_AUTH_FAILURE`.
 - [ ] 3.3 `git-data-client.ts`: guarded pin resolution in `fetchFromGitData`.
-- [ ] 3.4 Log a startup line, `git_data_pin=present fp=…|absent`.
+- [ ] 3.4 Log a startup line at `logger.warn` (Vector ships only lines at level 40 and above): `git_data_pin=present fp=…|absent`.
 - [ ] 3.5 Update the comment table in `account-delete.ts`.
 - [ ] 3.6 Run `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` and `./node_modules/.bin/vitest run <touched tests>`.
 
@@ -69,7 +75,7 @@
   - rewrite the precondition checklist, including "pin present AND #5914 closed" before any flag flip;
   - add the post-merge sequence and the verdict rows;
   - add the notes on rotation, expected drift, operator-local `host_key`, the emergency-replace gap, H4 escalation and re-capture.
-- [ ] 4.2 ADR-235 (provisional ordinal, status adopting). Amend ADR-220 (close the D4 residual, record the D6 design change) and ADR-068 (one line).
+- [ ] 4.2 ADR-237 (provisional ordinal, status adopting). Amend ADR-220 (close the D4 residual, record the D6 design change) and ADR-068 (one line).
 - [ ] 4.3 `model.c4`: update the edge text. Run c4-count-parity, c4-code-syntax and c4-render.
 - [ ] 4.4 Rewrite the header comment in `workspaces-luks-verify.yml` without the literal option strings.
 - [ ] 4.5 Article 30 register, PA-36 §(g): add the new DRAFTED item and correct (g)(11). Do not touch the sentences #8218 covers.
@@ -80,5 +86,5 @@
 ## Phase 5: Pre-merge verification
 
 - [ ] 5.1 Push, then dispatch `workspaces-luks-verify.yml --ref <branch>` and wait for `success` (AC15).
-- [ ] 5.2 Re-check that the ADR-235 ordinal is free across all `origin/*` refs.
-- [ ] 5.3 Walk through AC1–AC15.
+- [ ] 5.2 Re-check that the ADR-237 ordinal is free across all `origin/*` refs.
+- [ ] 5.3 Walk through AC1–AC16.

@@ -26,6 +26,38 @@ pin (D4). #5914 stays open as that arm's tracking issue. It closes with the foll
 deletes the arm, which is a hard cutover precondition (see the runbook update). This follows
 the plan-sharp-edges rule for fixes that complete after merge.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21. Every section was touched.
+
+**Agents used:**
+- deepen pass: security-sentinel, framework-docs-researcher, deployment-verification-agent, observability-coverage-reviewer, test-design-reviewer, verify-the-negative / self-audit (sonnet)
+- plan-review panel: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO devex
+- domain leaders: CTO, CLO, CPO
+- advisor consult
+
+### Key improvements
+
+1. **The startup pin line now actually reaches Better Stack.** Vector ships only lines at level ≥ 40 (warn), so the line is logged at `warn`.
+2. **The boot-proof fatal is routed.** It uses the existing `stage:sshd_config` with a `detail`, so no Sentry TF change is needed while #8453 owns that file.
+3. **ssh error output is treated as hostile.** A compromised jump host controls the banner, so verdicts come from the exit code plus anchored patterns, and workflow commands in that output are stopped with `::stop-commands::`.
+4. **Other ssh config cannot add trust.** The app runs `-F /dev/null`, and every path sets `GlobalKnownHostsFile=/dev/null`.
+5. **Two new guards.** Guard 6 is the boot proof. Guard 7 is the redeploy tracker, tested with a `gh` stub.
+6. **Guard 2 is per block.** It checks each block instead of comparing totals.
+7. **The HCL pin selector matches the bash writer's "exactly one key line" rule.**
+8. **Hardening elsewhere:** CODEOWNERS rows for the trust files, gate libraries that never print plan before- or after-values, and a redeploy job restricted to `main` with a sparse checkout that does not persist credentials.
+9. **ADR ordinal moved from 235 to 237.** 235 and 236 are already claimed on pushed branches.
+
+### New considerations discovered
+
+- **Phase 0 needs an admin-IP refresh.** The planning session's egress IP is **not** in `ADMIN_IPS` (checked 2026-09-21). The direct-vantage capture therefore needs `soleur:admin-ip-refresh` first.
+- **`Downtime & Cutover`:** the only offline surface is git-data during the replace. The store is empty and the flag is off, and the only live traffic, Art. 17 erasure, pages and is swept.
+- **Unverified against docs** (documentation was unreachable):
+  - cloud-init's rule that `ssh_keys` skips key generation;
+  - Terraform's `@cert-authority` host_key form.
+
+  The CTO confirmed both by reading source. The work phase proves them through the rung-2 rehearsal and the merge-time probe, not by assertion.
+
 ## Overview
 
 Every SSH session the system opens to web-1 or to the git-data host accepts whatever host key
@@ -229,13 +261,13 @@ out the lower layers first:
   - **Boot proof.** Inside the `STAGE=sshd_config` block, after `sshd -t`:
     - `sshd -T` must list exactly one `hostkey` (the ED25519 path);
     - `ssh-keygen -lf` of that key must equal the fingerprint of the Terraform public key;
-    - a fingerprint or count mismatch emits `stage:sshd_hostkey` fatal via `git-data-emit`;
+    - a fingerprint or count mismatch emits a fatal under the **already-routed** `stage:sshd_config`, with `detail=hostkey_mismatch` (or `hostkey_count`), via `git-data-emit`. It deliberately does not use a new `sshd_hostkey` stage, because `git_data_boot_fatal` (`issue-alerts.tf`) routes only a fixed list of stage values, and adding one would mean editing Sentry TF, which #8453 owns. The block extracts the check into a shell function that can be tested (Guard 6);
     - a missing `ssh-keygen` only warns. This follows the block's existing "`sshd -t` must abort, restart must tolerate" rule.
 
     The replace and birth jobs already run `git_data_boot_verify` (`scripts/lib/git-data-boot-signal-poll.sh`) after the apply, so a fatal here turns the job red **before** D6 redeploys anything. A rung-2 PASS proves the pin is live on a real boot. Keep the existing `systemctl restart ssh`: socket activation can start sshd before cc_ssh writes the keys, and the restart fixes that.
   - **Publishing.** One TF-owned secret: `doppler_secret.git_data_ssh_host_key`, in `soleur/prd`, named `GIT_DATA_SSH_HOST_KEY`. It has the same shape as `doppler_secret.git_data_ssh_host`, `visibility = "unmasked"`, no `ignore_changes`, and **`depends_on = [hcloud_server.git_data]`**, so it is written only after the host that carries the key exists. That narrows the partial-failure window in R7.
   - **Rotation.** The replace job adds `-replace='tls_private_key.git_data_host_ssh'` and `-target='doppler_secret.git_data_ssh_host_key'`. The birth job adds both as `-target`. No per-PR `-target` reaches either one.
-  - **Exposure (an ADR-235 residual).** The private key sits in main-root state twice: in the `tls_private_key` and inside `hcloud_server.git_data.user_data`. A separate root would not change that (A3). The Hetzner metadata endpoint also serves user_data to local processes on git-data. Anyone who can read either copy **and** has a network position (the private net or web-1) can pretend to be git-data. This falls within #8209's scope. F5 blocks non-root metadata access.
+  - **Exposure (an ADR-237 residual).** The private key sits in main-root state twice: in the `tls_private_key` and inside `hcloud_server.git_data.user_data`. A separate root would not change that (A3). The Hetzner metadata endpoint also serves user_data to local processes on git-data. Anyone who can read either copy **and** has a network position (the private net or web-1) can pretend to be git-data. This falls within #8209's scope. F5 blocks non-root metadata access.
 - **D2 — web-1 pin: captured once, committed, ECDSA-P256.**
   - **The file.** New file `apps/web-platform/infra/web-1-ssh-host-key.pub`: `#` header lines (capture method, UTC date, SHA256 fingerprint), then exactly one key line, `ecdsa-sha2-nistp256 …`.
   - **Capture (Phase 0).** Run `ssh-keyscan -T 10 -t ecdsa <web-1 public IPv4>` from an egress IP listed in `var.admin_ips`. That reaches web-1's public port 22 directly, without passing through Cloudflare, which is the threat position #7226 names. If the session's egress is not on the allowlist, run `soleur:admin-ip-refresh` first (that step needs its own ack). Cross-check against the operator's existing known_hosts entry (`ssh-keygen -F <ip>`) if one exists, and record the fingerprint in the PR body.
@@ -249,32 +281,38 @@ out the lower layers first:
     - Validates the line against the regex for its algorithm (Guard 3), using `[[ $pin =~ $RE ]]` with `$RE` **unquoted**.
     - Writes `<alias> <key>` and sets mode 0444.
     - Rejects an `<out>` path that does not match `^/[A-Za-z0-9/_.-]+$`, because callers expand `${WEB_HOST_SSH}` unquoted.
-  - *Bridge, bash mode:* runs `"${{ github.action_path }}/write-known-hosts.sh" web-1 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub" "$RUNNER_TEMP/web-1.known_hosts"` and exports `WEB_HOST_SSH="ssh -i $KEYFILE -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KH -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -l root"`. The exported variables stay exactly `{CI_SSH_KEYFILE, WEB_HOST_SSH}`. Each of the two `workspaces-luks-cutover.yml` jobs writes its own file.
+  - *Bridge, bash mode:* runs `"${{ github.action_path }}/write-known-hosts.sh" web-1 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub" "$RUNNER_TEMP/web-1.known_hosts"` and exports `WEB_HOST_SSH="ssh -i $KEYFILE -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KH -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR -l root"`. The exported variables stay exactly `{CI_SSH_KEYFILE, WEB_HOST_SSH}`. Each of the two `workspaces-luks-cutover.yml` jobs writes its own file.
   - *Terraform:*
 
     ```hcl
     locals {
       web_1_ssh_host_key = regex(
         "^ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB[A-Za-z0-9+/]{86}=$",  # twin: write-known-hosts.sh
-        one([for l in split("\n", replace(file("${path.module}/web-1-ssh-host-key.pub"), "\r", "")) : l if startswith(l, "ecdsa-sha2-nistp256 ")]),
+        one([for l in split("\n", replace(file("${path.module}/web-1-ssh-host-key.pub"), "\r", "")) : l if trimspace(l) != "" && !startswith(trimspace(l), "#")]),
       )
     }
     ```
 
-    `one()` errors on two or more lines and returns null on zero, and `regex()` errors on null or on no match. So every plan that uses the pin fails closed. A `check` block would only warn, and a precondition is skipped by `-target` plans that leave its resource out. All 19 `connection {}` blocks set `host_key = local.web_1_ssh_host_key`. Changing `connection` re-runs no provisioner, so only the probe fires. Operator-local applies now also enforce `host_key` (runbook note).
+    `one()` selects **every** non-comment, non-blank line. It errors when there are two or more and returns null when there are none, and `regex()` errors on null or on anything that is not the ECDSA line. So the HCL site agrees with the bash writer's "exactly one key line" rule. So every plan that uses the pin fails closed. A `check` block would only warn, and a precondition is skipped by `-target` plans that leave its resource out. All 19 `connection {}` blocks set `host_key = local.web_1_ssh_host_key`. Changing `connection` re-runs no provisioner, so only the probe fires. Operator-local applies now also enforce `host_key` (runbook note).
   - *git-data-cutover.yml:*
-    - **Pin read.** `git-data-flag-precheck.sh` already runs as its own step, before the bridge, with `DOPPLER_TOKEN_PRD`. It now also reads `GIT_DATA_SSH_HOST_KEY`, using the same measured `--no-exit-on-missing-secret` semantics. It validates the value and writes it to `$RUNNER_TEMP/git-data.pin`. It refuses (exit 5) with `verdict=git_data_host_key_unavailable reason=absent|invalid|unreadable`. It also prints an informational `TOFU_ARM present|absent` line, read from `apps/web-platform/server/git-auth.ts` in the checkout, which the flag-flip precondition uses (D4).
+    - **Pin read.** `git-data-flag-precheck.sh` already runs as its own step, before the bridge, with `DOPPLER_TOKEN_PRD`. It now also reads `GIT_DATA_SSH_HOST_KEY`, using the same measured `--no-exit-on-missing-secret` semantics. It validates the value and writes it to `$RUNNER_TEMP/git-data.pin`. It refuses (exit 5) with `verdict=git_data_host_key_unavailable reason=absent|invalid|unreadable`. It also prints an informational `TOFU_ARM present|absent` line. The line is read from the file named by `GIT_AUTH_TS_PATH`, which defaults to `apps/web-platform/server/git-auth.ts` in the checkout; tests point it at a fixture. It which the flag-flip precondition uses (D4).
     - **Known hosts.** "Write git-data ssh_config" calls the writer twice into `$RUNNER_TEMP/gd-known-hosts`: `web-1` from the committed file, and `git-data` from `$RUNNER_TEMP/git-data.pin`. It checks the result with `-s`.
     - **Host blocks.** Both blocks set `StrictHostKeyChecking yes`, `UserKnownHostsFile <gd-known-hosts>`, and `HostKeyAlias web-1|git-data`. They set `HostKeyAlgorithms` to `ecdsa-sha2-nistp256` for web-1 and `ssh-ed25519` for git-data. The inner `ProxyCommand ssh -F cfg -W 10.0.1.20:22 10.0.1.10` resolves to the `10.0.1.10` block, so the jump hop is pinned too.
     - **Teardown.** Teardown shreds both files. They hold public data, so this is hygiene only.
   - *git-data-cutover.sh `_access_reason`:* add the H4 branches, in the order given under H4, ahead of `Permission denied`. Each reason gets a test row.
+  - *Error-output hygiene (every CI ssh path):* a compromised web-1 controls the jump hop's banner and error output, so treat that text as hostile.
+    - The verdict is decided from the **exit code plus line-anchored patterns**. A free `verdict=` substring in ssh output is never matched.
+    - Before any echo, strip control characters, including `\x7f`, U+2028 and U+2029.
+    - Wrap raw ssh text in `::stop-commands::<random token>`, so an embedded `::error::` or `::add-mask::` cannot become a workflow command.
+    - Pins are printed only as `SHA256:` fingerprints, computed after validation. A raw Doppler value is never printed.
+    - Test row: a banner containing `::error::` and `verdict=ok` does not change the verdict.
 <!-- lint-infra-ignore end -->
 - **D4 — app consumer.**
-  - **The resolver.** Add `resolveGitDataHostKeyPin(): string | null` to `git-data-replication.ts`. It returns the valid pin (ED25519 regex, `# twin:` comment) and otherwise:
+  - **The resolver.** Add `resolveGitDataHostKeyPin(): string | null` to `git-data-replication.ts`. It trims the value first, and the regex never uses the `m` flag, so a value with a trailing newline is rejected rather than half-matched. It returns the valid pin (ED25519 regex, `# twin:` comment) and otherwise:
     - wrong shape: **throw**;
     - absent, and `isGitDataStoreEnabled()` is true: **throw**;
     - absent, and the store is disabled: return `null`, and call `reportSilentFallback({ feature: "git_data_host_key_pin", op: "pin_absent_store_disabled" })` once per process.
-  - **Startup evidence.** At app startup, log one line to Better Stack: `git_data_pin=present fp=SHA256:<fingerprint>` or `git_data_pin=absent`. This is only the public-key fingerprint. It is the **positive** evidence for post-merge steps 3 and 5. Erasures are rare, so a quiet Sentry proves nothing.
+  - **Startup evidence.** At app startup, log one line at **`logger.warn` (pino level 40)**. It must be warn, because Vector's `app_container_warn_filter` (`infra/vector.toml`) ships only lines at level ≥ 40 to Better Stack; an `info` line never arrives. Add a code comment saying so. Read it back with `scripts/betterstack-query.sh --since 30m --grep git_data_pin=`. The line: `git_data_pin=present fp=SHA256:<fingerprint>` or `git_data_pin=absent`. This is only the public-key fingerprint. It is the **positive** evidence for post-merge steps 3 and 5. Erasures are rare, so a quiet Sentry proves nothing.
   - **Where the pin is resolved.** Each caller resolves the pin in a **dedicated guard before its ssh `try`**. The existing catch sorts errors by `e.code`, so a resolver throw inside the `try` would be misread as `unreachable`. The callers:
     - `removeGitDataRepo`:
 
@@ -286,7 +324,7 @@ out the lower layers first:
     - `provisionGitDataRepo` (its `sshWithPrivateKeyAuth` call): same guard. Its failure goes to the caller's existing report.
     - `replicateToGitData` / `fetchFromGitData`: the existing failure report. Neither ever breaks the turn.
   - **Helper signatures.** The helpers take the pin as a **required** positional parameter, placed before the defaulted `opts`: `gitWithPrivateKeyAuth(args, privateKey, hostKeyPin, opts = {})` and `sshWithPrivateKeyAuth(host, remoteCommand, privateKey, hostKeyPin, opts = {})`.
-    - With a pin, the helper writes `git-data <pin>\n` into the per-call 0600 known_hosts file and passes `StrictHostKeyChecking=yes`, `HostKeyAlias=git-data`, `HostKeyAlgorithms=ssh-ed25519` and `UpdateHostKeys=no`.
+    - With a pin, the helper writes `git-data <pin>\n` into the per-call 0600 known_hosts file and passes `-F /dev/null`, `StrictHostKeyChecking=yes`, `HostKeyAlias=git-data`, `HostKeyAlgorithms=ssh-ed25519`, `UpdateHostKeys=no`, `GlobalKnownHostsFile=/dev/null` and `LogLevel=ERROR`. `-F /dev/null` and the global-file override stop any user or system ssh config in the container from adding a trusted key or rerouting the connection.
     - With `null`, the helper applies one shared module-level `const TOFU_FALLBACK_OPTS` (the single `accept-new` literal that Guard 1 counts) against the empty file.
   - **New erasure outcome `{ status: "host_key_mismatch"; detail }`.** Classify it in the H4 order, on exit 255, **before** `SSH_AUTH_FAILURE`, and remove `host key verification failed` from `SSH_AUTH_FAILURE`. `account-delete.ts` already routes every non-`erased`/`skipped` status to `erasure_outcome=<status>` under the paging Art. 17 rule. Add the new value to its comment table with the correct remedy: "the web app holds a stale or wrong pin — redeploy; or the host was re-keyed outside the replace job". Widen the union using `tsc --noEmit` as the enumerator.
   - **Why the `null` arm is allowed, and why it cannot outlive the empty store.** Strict mode is impossible until the first replace publishes the pin. Removing the arm now would fail every production erasure and show users a false "erasure pending" notice. The flag condition alone is **not** enough, because repos survive a rollback. So "pin present in prd AND #5914 closed (the arm deleted)" is a **hard precondition for ever setting `GIT_DATA_STORE_ENABLED`**:
@@ -296,7 +334,7 @@ out the lower layers first:
 
     Before the flag is first set, the store holds no repository. DC-1 records the reviewers' alternative: split the app change into a second PR that is strict from its first commit.
 - **D5 — rung-2 rehearsal root.** The rehearsal root mints its own `tls_private_key` and passes it to the module. Both new variables are declared **MAY DIVERGE (identity class)**, and the `RUNG2_VAR_DIVERGENCE` allow-list is extended to match. This PR deletes `git-data-rung2-boot-evidence.env` (step 1 of the two-PR sequence).
-- **D6 — pin propagation to the app (bounds R2).** Add a new follow-on job, `git_data_redeploy`, in `apply-web-platform-infra.yml`, with `needs: [<birth or replace job>]` and `if: needs.<job>.result == 'success'`. It has `permissions: { actions: write, contents: read }`, no secrets, no Terraform, and no environment. It sits outside the apply concurrency group, so it holds no infra lock. Its logic lives in the composite action `.github/actions/dispatch-web-redeploy/action.yml`, and follows the `scheduled-marketplace-drift.yml` precedent:
+- **D6 — pin propagation to the app (bounds R2).** Add a new follow-on job, `git_data_redeploy`, in `apply-web-platform-infra.yml`, with `needs: [<birth or replace job>]` and `if: needs.<job>.result == 'success'`. It has `permissions: { actions: write, contents: read }`, no secrets, no Terraform and no environment. It runs only under `if: github.ref == 'refs/heads/main'`, and checks out with `persist-credentials: false` and a sparse checkout of `.github/actions/dispatch-web-redeploy` only. The polling logic lives in `.github/actions/dispatch-web-redeploy/track.sh`, driven by a `gh` stub in tests. Its poll interval and timeout come from env vars, so tests can run in seconds. On timeout, its `::error::` names the baseline `databaseId` and the last one seen. The job summary prints the Terraform-side `SHA256:` fingerprint of the new pin, for the step-3 comparison. It sits outside the apply concurrency group, so it holds no infra lock. Its logic lives in the composite action `.github/actions/dispatch-web-redeploy/action.yml`, and follows the `scheduled-marketplace-drift.yml` precedent:
   1. Record `T0` and the baseline `databaseId` of the latest `web-platform-release.yml` run. Fail closed if the baseline cannot be read.
   2. Run `gh workflow run web-platform-release.yml --ref main -f bump_type=patch`, labelling the release note "pin rotation, no code change".
   3. Poll, bounded by `timeout-minutes: 75` (the release takes ~24 minutes at worst, and the deploy comes on top), for **any** `web-platform-release` run of any event type with `databaseId` > baseline whose deploy job concluded `success`. A `skipped` deploy does not count.
@@ -308,16 +346,72 @@ out the lower layers first:
 ### Post-merge sequence (goes into the runbook; each prod step needs its own authorization)
 
 1. **Merge.** Any merge-triggered `apply-web-platform-infra.yml` run from this merge onward runs `terraform_data.web_1_host_key_probe` through the strict Terraform path and must end `success`. The bash path was already proven before merge (AC15).
-2. **Rung-2 re-rehearsal** (`REHEARSE-GIT-DATA`, `dry_run=false`, `--ref main`), then the **evidence-only PR**. Schedule the rehearsal right after merge. Until the evidence PR merges, birth and replace refuse, **including an emergency replace**. ADR-235 records this as an accepted gap. The break-glass path is the documented operator-local apply per ADR-096.
+2. **Rung-2 re-rehearsal** (`REHEARSE-GIT-DATA`, `dry_run=false`, `--ref main`), then the **evidence-only PR**. Schedule the rehearsal right after merge. Until the evidence PR merges, birth and replace refuse, **including an emergency replace**. ADR-237 records this as an accepted gap. The break-glass path is the documented operator-local apply per ADR-096.
 3. **git-data-host-replace.**
    - The replace rotates the key, `git_data_boot_verify` passes (which includes the boot proof), and the secret publishes.
    - `git_data_redeploy` succeeds, and Better Stack shows `git_data_pin=present` with the fingerprint Terraform printed.
    - **If the replace job fails after the secret published:** re-dispatch the replace. Guard 4 accepts that plan.
    - **If only `git_data_redeploy` failed:** re-run that job only.
-4. **Strict dry run.** Dispatch `git-data-cutover.yml`. It must read `role=git-data-auth verdict=ok` with both hops pinned. Then tick the #7226 line and flip ADR-235 to `accepted` in a docs PR.
+4. **Strict dry run.** Dispatch `git-data-cutover.yml`. It must read `role=git-data-auth verdict=ok` with both hops pinned. Then tick the #7226 line and flip ADR-237 to `accepted` in a docs PR.
 5. **The #5914 follow-up PR.** It deletes the `null` arm and `TOFU_FALLBACK_OPTS`, removes `git-auth.ts` from Guard 1's allow-list, and closes #5914. It is gated on the step-3 startup line (`git_data_pin=present` on the current deploy), not on silence. It must merge before any `GIT_DATA_STORE_ENABLED` flip.
 
 Step 3 is not ADR-220 D6's "fresh replace immediately before the real cutover". That replace is still required, and it rotates the pin and redeploys again automatically.
+
+### Research Insights (deepen)
+
+**Network-outage deep-dive** (`hr-ssh-diagnosis-verify-firewall`, L3 → L7):
+
+| Layer | Path | Status |
+|---|---|---|
+| L3 firewall | CI → web-1: goes through the CF tunnel. The runner's IP needs no allowlist; admission is decided by CF Access (bridge verdict `ci_ssh_access_denied`). | not a dependency |
+| L3 firewall | Phase 0 direct capture → web-1 public :22 | **Verified 2026-09-21:** the session's egress IP (`curl -s https://ifconfig.me/ip`) is **not** in Doppler `prd_terraform` `ADMIN_IPS`. Run `soleur:admin-ip-refresh` before Phase 0, then retry. |
+| L3 private net | runner → git-data (`-W 10.0.1.20:22`) and app → git-data | Use the existing Private-NIC readiness read. A timeout is H2, never H4. |
+| L3 DNS | none | All targets are IP literals or tunnel hostnames already proven by the bridge liveness step |
+| L7 TLS | CF edge | cloudflared verifies it (unchanged) |
+| L7 SSH identity | all hops | The subject of this plan: named verdicts, per H4 |
+
+**Framework and source verification:**
+
+| Claim | Status |
+|---|---|
+| TF 1.10.5 vendors `golang.org/x/crypto` v0.27.0 | verified (go.mod at the v1.10.5 tag) |
+| x/crypto v0.27.0 lists ED25519 last in `supportedHostKeyAlgos` | verified (common.go) |
+| OpenSSH `REMOTE HOST IDENTIFICATION HAS CHANGED`, `No %s host key is known for …` | verified (sshconnect.c) |
+| `no matching host key type found` | This comes from key-exchange negotiation (`Unable to negotiate with … : no matching host key type found`), not from sshconnect.c. The classifier matches `no matching host key type found` anywhere in the line. |
+| `gh run list --json databaseId,createdAt,event,conclusion`; `gh run view --json jobs` | verified; job-level `conclusion` confirmed from existing repo usage in the work phase |
+| cloud-init: `ssh_keys` skips key generation; TF `host_key` written as `@cert-authority`; `private_key_openssh` format | Docs unreachable. The CTO read the source. Proven at rung 2 (boot proof) and at the merge-time probe. |
+
+**Deploy-day go/no-go** (goes into the runbook with the Post-merge sequence):
+
+- **Step 3 GO** requires two things:
+  - Better Stack `git_data_pin=present fp=SHA256:X` (`scripts/betterstack-query.sh --since 30m --grep git_data_pin=`), where X equals the fingerprint printed in the `git_data_redeploy` job summary.
+  - Zero Sentry events tagged `erasure_outcome=*` between the dispatch and that line. If there are any, follow the sweep runbook using `gitDataRepoId`.
+- **The first rotation cannot produce `host_key_mismatch`.** The app had no pin, so it stays on the fallback against the new host until the redeploy. Pin lag matters only from the second rotation on.
+- **A full revert of this PR is never the rollback.** It would restore `accept-new`. Every fix goes forward.
+
+**Verify-the-negative:** seven load-bearing negatives were confirmed with file:line (per-PR target set, `ci-deploy.sh` prd download, helper chokepoint, bridge export assertion, no `environment:` on verify, `git_data_boot_verify` in both jobs, catch mapping to `unreachable`). The self-audit found no stale references after the v3 revisions.
+
+## Downtime & Cutover
+
+- **Operation that takes something offline:** post-merge step 3, `git-data-host-replace`. It destroys `hcloud_server.git_data` before creating the new one. The affected surface is the git-data SSH endpoint `10.0.1.20:22`. **No user-serving web surface goes offline.** web-1 is not replaced and not rebooted, and the only new web-1 change is a no-op remote-exec probe. The app's `GIT_DATA_STORE_ENABLED` is off, so no read or write path depends on git-data.
+- **What still reaches git-data during the window:**
+  - Art. 17 erasure (`removeGitDataRepo`). It is not gated on the flag, so an account deletion during the window gets `unreachable`, which marks `erasure=pending`.
+  - `web-git-data-probe.sh`, a TCP heartbeat. It misses during the window.
+- **Zero-downtime evaluation.**
+  - A blue-green git-data (born fresh at a second address, then cut over) does not fit. `GIT_DATA_SSH_HOST` is fixed at `10.0.1.20` by `network.tf`. The ADR-220 access design, the gates and the runbook all assume a single git-data host. A replace also rotates the key (P4).
+  - The store holds no repository (#6976), so there is nothing to drain or copy.
+  - The path is therefore a **bounded replace**, the same operation ADR-220 D6 already requires. This plan adds no new replace; it adds key rotation to the existing one.
+- **Bounding and mitigation:**
+  - Dispatch in a low-traffic window.
+  - The boot-verify poll bounds the window (`git_data_boot_verify`, the existing timeout).
+  - An erasure that fails in the window pages through `art17_erasure_incomplete`. It is then retried by the sweep runbook, which locates the repo by `gitDataRepoId`. Before cutover the store is empty, so no data is owed and the retry is a no-op success.
+  - The heartbeat gap is expected; the runbook already covers it under git-data replaces.
+- **Rollback per stage:**
+  - Replace failed before the server exists: nothing was published (the secret `depends_on` the server). Re-dispatch the replace.
+  - Replace failed after the secret was published: re-dispatch the replace.
+  - Only `git_data_redeploy` failed: re-run that job.
+  - Never re-enable `accept-new`.
+- **Sign-off:** each step needs its own operator authorization (`hr-menu-option-ack-not-prod-write-auth`). The residual unavailability (git-data only, store empty) is accepted as the same window ADR-220 D6 already accepted.
 
 ## Files to Edit
 
@@ -347,7 +441,9 @@ Step 3 is not ADR-220 D6's "fresh replace immediately before the real cutover". 
 - `apps/web-platform/infra/server.tf`: the `web_1_ssh_host_key` local, `host_key` on 18 blocks, the new probe.
 - `apps/web-platform/infra/ci-ssh-key.tf`: `host_key` on `terraform_data.root_authorized_keys`.
 - `apps/web-platform/infra/variables.tf`: `variable "terraform_version" { type = string, default = "" }`.
-- `apps/web-platform/infra/git-data-cutover.sh`: the H4 branches.
+- `apps/web-platform/infra/git-data-cutover.sh`: the H4 branches and the error-output hygiene (D3).
+- `.github/CODEOWNERS`: explicit rows for `apps/web-platform/infra/web-1-ssh-host-key.pub`, `.github/actions/cf-tunnel-ssh-bridge/`, `.github/actions/dispatch-web-redeploy/`, `apps/web-platform/server/git-auth.ts`, and `tests/scripts/lib/git-data-host-{replace,birth}-gate.sh`. Keep these paths off any auto-merge label path. Check whether branch protection enforces code-owner review (`gh api repos/jikig-ai/soleur/branches/main/protection`). If it does not, record the gap in ADR-237 rather than claiming a review anchor that nothing enforces.
+- `tests/scripts/lib/git-data-host-{replace,birth}-gate.sh`: failure output prints only `.address` and `.change.actions`, never `.change.before` or `.change.after`, because the replace plan's before-values carry the old user_data and host key. Add a test row that fails if a gate prints those fields. `tfplan.json` is not uploaded as an artifact today (the only `upload-artifact` in the workflow uploads a manifest); keep it that way.
 - `apps/web-platform/infra/git-data-cutover-access.test.sh`: update the fixtures that assert TOFU; add rows for `git_data_host_key_unavailable` and for `host_key_mismatch` reasons `changed|unknown|alg`.
 - `apps/web-platform/infra/web-host-provisioner-parity.test.sh` (+ `-mutation.test.sh`): Guard 2, plus the probe in the per-PR list parity.
 - `plugins/soleur/test/terraform-target-parity.test.ts`: the authority on `-target` lists. Add the probe (per-PR) and the key + secret (birth/replace).
@@ -367,7 +463,7 @@ Step 3 is not ADR-220 D6's "fresh replace immediately before the real cutover". 
   - the rung-2 emergency-replace gap and its break-glass path;
   - the H4 escalation;
   - a web-1 re-capture section (script + PR).
-- `knowledge-base/engineering/architecture/decisions/ADR-220-*.md`: an amendment-log entry. D4's first residual is closed by ADR-235 (effective at step 4). **D6's pre-cutover fresh replace now also rotates the host key and redeploys the app**; record that as a design change.
+- `knowledge-base/engineering/architecture/decisions/ADR-220-*.md`: an amendment-log entry. D4's first residual is closed by ADR-237 (effective at step 4). **D6's pre-cutover fresh replace now also rotates the host key and redeploys the app**; record that as a design change.
 - `knowledge-base/engineering/architecture/decisions/ADR-068-*.md`: one amendment line at "Rotations against a populated store stay gated on #7226".
 - `knowledge-base/engineering/architecture/diagrams/model.c4`: edge descriptions only (see C4 views).
 - `knowledge-base/legal/article-30-register.md` PA-36 §(g) (CLO):
@@ -384,11 +480,13 @@ Step 3 is not ADR-220 D6's "fresh replace immediately before the real cutover". 
 
 - `apps/web-platform/infra/web-1-ssh-host-key.pub`: the D2 pin (one ECDSA-P256 line).
 - `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh`: the shared, validated writer (D3).
-- `.github/actions/dispatch-web-redeploy/action.yml`: D6 logic.
+- `.github/actions/dispatch-web-redeploy/action.yml` + `track.sh`: D6 logic (Guard 7).
+- `tests/scripts/test-dispatch-web-redeploy.sh`: Guard 7, with a `gh` stub.
+- `apps/web-platform/infra/web-1-host-key-local.test.sh`: runs `terraform console` in a scratch copy with no providers, against fixture pin files: 0 lines, 2 lines, CRLF, a trailing comment, a leading space, and a truncated key. Each must error; the valid file must return the key. It also checks structurally that the precheck step comes before the bridge step in `git-data-cutover.yml`.
 - `scripts/capture-web-1-host-key.sh`: the Phase 0 capture as one command. It runs keyscan, prints the fingerprint, cross-checks against the operator's known_hosts, and writes the header. It refuses to run when `CI`/`GITHUB_ACTIONS` is set (Guard 1 row 7). It also serves future re-captures.
 - `tests/scripts/test-no-tofu-ssh.sh`: Guard 1. Confirm that the CI runner's `tests/scripts/test-*.sh` glob picks it up.
 - `tests/scripts/test-write-known-hosts.sh`: Guard 3 fixtures for the bash writer.
-- `knowledge-base/engineering/architecture/decisions/ADR-235-ssh-host-keys-are-pinned.md`. The ordinal is **provisional**: re-probe across all `origin/*` refs right before merge. On a renumber, sweep this plan, tasks.md and the ADR-220/068 amendments.
+- `knowledge-base/engineering/architecture/decisions/ADR-237-ssh-host-keys-are-pinned.md`. The ordinal is **provisional**: re-probe across all `origin/*` refs right before merge. On a renumber, sweep this plan, tasks.md and the ADR-220/068 amendments.
 
 ## Open Code-Review Overlap
 
@@ -447,7 +545,7 @@ error_reporting:
   fail_loud: "::error title=git-data-cutover …::verdict=host_key_mismatch reason=changed|unknown|alg; ::error title=git-data-flag-precheck::verdict=git_data_host_key_unavailable reason=absent|invalid|unreadable; Sentry tag erasure_outcome=host_key_mismatch; Sentry op=pin_absent_store_disabled"
 failure_modes:
   - mode: "web-1 committed pin wrong, or web-1 re-keyed"
-    detection: "merge-time web_1_host_key_probe apply fails; cutover fails host_key_mismatch role=web; workspaces-luks-* runs fail with ssh's raw stderr in the log (no named verdict)"
+    detection: "merge-time web_1_host_key_probe apply fails with ::error:: on the apply job (layer 6: workflow run log); cutover annotates host_key_mismatch role=web; workspaces-luks-verify scheduled-failure issue"
     alert_route: "workspaces-luks-verify scheduled-failure issue; apply workflow failure notification"
   - mode: "git-data re-keyed but the app did not reload the pin (redeploy job failed)"
     detection: "git_data_redeploy job fails with a pin-lag annotation; erasures emit erasure_outcome=host_key_mismatch; startup line fingerprint differs from the Terraform-printed one"
@@ -456,10 +554,10 @@ failure_modes:
     detection: "startup line git_data_pin=absent; Sentry op=pin_absent_store_disabled once per process"
     alert_route: "Sentry issue stream (warning); expected to stop after post-merge step 3"
   - mode: "app pin absent or malformed while the store is enabled"
-    detection: "resolveGitDataHostKeyPin throws in the caller's guard; erasure reports erasure_outcome=unconfigured"
+    detection: "resolveGitDataHostKeyPin throws in the caller's guard; erasure reports erasure_outcome=unconfigured (pages); replicateToGitData reports feature=worktree_lease op=git_data_replication_push and fetchFromGitData/provisionGitDataRepo report through their existing reportSilentFallback ops (layer 2, Sentry; non-paging today because both paths are gated off while the store flag is off, and #8211 owns their alerting at cutover)"
     alert_route: "art17_erasure_incomplete Sentry alert"
   - mode: "git-data boots with a host key other than the Terraform one"
-    detection: "cloud-init boot proof emits stage:sshd_hostkey fatal via git-data-emit; git_data_boot_verify turns the replace job red before any redeploy"
+    detection: "cloud-init boot proof emits a fatal under the routed stage:sshd_config with detail=hostkey_mismatch via git-data-emit (layer 3: Sentry + Better Stack); git_data_boot_verify turns the replace job red before any redeploy (layer 6: workflow ::error::)"
     alert_route: "existing git_data_boot_fatal route (Sentry + Better Stack); workflow failure"
 logs:
   where: "GitHub Actions run logs; Sentry; Better Stack (git-data boot emits, container stdout incl. the startup pin line)"
@@ -509,7 +607,7 @@ exception:
 
 ### ADR
 
-- **Create ADR-235 (provisional ordinal): "SSH host keys are pinned".** The decisions:
+- **Create ADR-237 (provisional ordinal): "SSH host keys are pinned".** The decisions:
   - Hosts born by Terraform get Terraform-minted ED25519 host keys, installed through cloud-config `ssh_keys` and checked by a boot proof.
   - The host's replace job rotates the key. The public key is published as a TF-owned Doppler `prd` secret, and a follow-on job reloads it into the app.
   - Hosts that cannot be re-provisioned (web-1) get a committed, reviewed ECDSA-P256 pin, captured from a vantage outside Cloudflare. ECDSA is a constraint of x/crypto's host-key preference order for the pinned Terraform version. The probe re-runs on Terraform bumps, so a change there breaks applies loudly.
@@ -523,8 +621,8 @@ exception:
 
   Alternatives A1–A8. Status `adopting` until post-merge step 4, then `accepted`.
 - **Amend ADR-220.** Add an amendment-log entry:
-  - D4's first residual is closed by ADR-235, effective at step 4.
-  - D2's `accepted` precondition points to ADR-235.
+  - D4's first residual is closed by ADR-237, effective at step 4.
+  - D2's `accepted` precondition points to ADR-237.
   - D6's fresh replace now rotates the host key and redeploys the app. Record this as a design change.
 - **Amend ADR-068.** Add one line at "Rotations against a populated store stay gated on #7226".
 
@@ -541,12 +639,12 @@ All three files were read (`model.c4` 820 lines, `views.c4` 104, `spec.c4` 54). 
     Terraform provisioners);
   - `github -> gitDataStore`: replace "Host keys unverified on both hops (#7226), so the store
     answers are unauthenticated" with the pinned state, effective at step 4;
-  - `claude -> gitDataStore`: add "host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-235)";
+  - `claude -> gitDataStore`: add "host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-237)";
   - `doppler -> claude`: edit only if the edge lists secret names.
   - `github -> doppler`: the cutover job's new pin read uses the `prd` read token it already
     holds (the flag precheck), so the access set does not change. Confirm the edge text does
     not claim that `prd` is read only for the flag. The replace job dispatching
-    `web-platform-release` is a CI-to-CI edge, which C4 does not model; ADR-235 records it
+    `web-platform-release` is a CI-to-CI edge, which C4 does not model; ADR-237 records it
     under its consequences.
 - **Cardinalities:** the `github -> tunnel` edge says "17 terraform_data SSH provisioners".
   Leave counts alone unless `plugins/soleur/test/c4-count-parity.test.sh` requires a change. Run
@@ -554,7 +652,7 @@ All three files were read (`model.c4` 820 lines, `views.c4` 104, `spec.c4` 54). 
 
 ### Sequencing
 
-ADR-235 is written now with status `adopting`, and the step-4 docs PR flips it.
+ADR-237 is written now with status `adopting`, and the step-4 docs PR flips it.
 
 ## Guard Contract
 
@@ -563,7 +661,7 @@ ADR-235 is written now with status `adopting`, and the step-4 docs PR flips it.
 **Property.** No tracked file outside a named allow-list configures an SSH client with
 `StrictHostKeyChecking` set to `accept-new`, `no` or `off`, points `UserKnownHostsFile` at
 `/dev/null`, or pipes `ssh-keyscan` output into a known_hosts file. The match is
-case-insensitive and covers every spelling: `-o K=V`, `-oK=V`, ssh_config `K V`, and TS literals.
+case-insensitive and covers every spelling: `-o K=V`, `-oK=V`, `-o "K V"`, ssh_config `K V`, TS literals and `GIT_SSH_COMMAND` strings. `GlobalKnownHostsFile=/dev/null` is **allowed**: it is a hardening option that removes a trust source, whereas `UserKnownHostsFile=/dev/null` removes the pin.
 
 **Assembly.** There is no single chokepoint: SSH options appear in workflow YAML, composite
 actions, bash, cloud-init templates, TS and HCL. The guard's universe is `git ls-files`, minus
@@ -589,6 +687,9 @@ allow-list file and the line to edit. The #5914 follow-up PR removes the `git-au
 | 5 | A second TOFU literal in `git-auth.ts` (count 2 ≠ 1) | RED |
 | 6 | An allow-list entry for a path with zero hits | RED |
 | 7 | `ssh-keyscan 10.0.1.10 >> "$KH"` in a workflow | RED |
+| 8 | `-o "StrictHostKeyChecking accept-new"` (quoted space form) | RED |
+| 9 | `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"` in a script | RED |
+| 10 | `-o GlobalKnownHostsFile=/dev/null` alone | PASS (must not be flagged) |
 
 **Harness rows.**
 
@@ -605,8 +706,7 @@ allow-list file and the line to edit. The #5914 follow-up PR removes the `git-au
 
 **Assembly.** All `connection` blocks in every `*.tf` of the root and its modules. Today that is
 18 in `server.tf` and 1 in `ci-ssh-key.tf`. The walker skips comment lines (the `tunnel.tf`
-comment contains `connection { host }`). It asserts that the count of `host_key` equals the count
-of `connection`, and that the count is at least 19.
+comment contains `connection { host }`). It asserts that **every** `connection` block contains exactly one `host_key`. That is a per-block check, not a comparison of totals, so moving a `host_key` from one block to another cannot pass. It also asserts at least 19 blocks.
 
 **Mutation matrix:**
 
@@ -616,8 +716,10 @@ of `connection`, and that the count is at least 19.
 | 2 | Delete it from the **last** block only | RED |
 | 3 | Walker finds 0 blocks | RED (floor) |
 | 4 | Add a new `terraform_data` + `connection` without `host_key` in a different `.tf` | RED |
+| 5 | Move one block's `host_key` into another block (totals unchanged) | RED |
+| 6 | A web-1 block with `host_key` set to anything other than `local.web_1_ssh_host_key` | RED |
 
-**Harness rows.** The mutation test runs rows 1 and 3 on a temp copy. Must-PASS: different
+**Harness rows.** The mutation test runs rows 1–4 on a temp copy. Must-PASS: different
 whitespace or attribute order, and the `tunnel.tf` comment is not counted.
 
 **Anchor.** None. The structural parse runs every time.
@@ -719,10 +821,61 @@ makes TypeScript enforce the parameter at every caller.
 | 5 | Mismatch stderr classified as `unauthorized` | RED |
 | 6 | Pin resolved inside `removeGitDataRepo`'s ssh `try` (an invalid pin becomes `unreachable`) | RED |
 | 7 | `provisionGitDataRepo` passes `null` although a pin is set | RED |
+| 8 | The pinned argv drops `-F /dev/null`, `GlobalKnownHostsFile=/dev/null`, `HostKeyAlgorithms=ssh-ed25519` or `UpdateHostKeys=no` | RED |
+| 9 | stderr `Unable to negotiate … no matching host key type found` classified as anything other than `host_key_mismatch` | RED |
 
-**Harness rows.** known_hosts content is read **inside** the mocked `execFile` call. The file is
+**Harness rows.** Each test resets module state with `vi.resetModules()` and `vi.unstubAllEnvs()`, because the once-per-process Sentry report is module-level state. known_hosts content is read **inside** the mocked `execFile` call. The file is
 unlinked in `finally`, so reading it afterwards proves nothing. Must-PASS: a pin with surrounding
 whitespace is trimmed and accepted.
+
+**Anchor.** None.
+
+### Guard 6 — git-data boot proof
+
+**Property.** A git-data boot succeeds only if sshd serves exactly one host key, and that key's
+fingerprint equals the Terraform public key's fingerprint.
+
+**Assembly.** A single shell function (`git_data_hostkey_proof`) inside the
+`STAGE=sshd_config` block of `cloud-init-git-data.yml`. It reads `sshd -T` output and the
+expected fingerprint. It is extracted verbatim for rung-1 tests by the existing
+render/extraction harness (`git-data-runcmd-rehearsal.test.sh`).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Fake `sshd -T` lists two `hostkey` lines | fatal (`detail=hostkey_count`) |
+| 2 | Fingerprint differs from the expected one | fatal (`detail=hostkey_mismatch`) |
+| 3 | `ssh-keygen` absent | warn only (`sshd_config_warn`), boot continues |
+| 4 | Function body replaced by `return 0` | RED (rows 1–2 no longer fatal) |
+
+**Harness rows.** Must-PASS: one `hostkey` whose fingerprint matches, with `sshd -T` output in a
+different line order.
+
+**Anchor.** The payload is hash-bound to the rung-2 evidence, and rung 2 proves the proof on a
+real boot.
+
+### Guard 7 — redeploy tracker
+
+**Property.** `git_data_redeploy` succeeds only if some `web-platform-release` run newer than
+the pre-dispatch baseline has a deploy job that concluded `success`.
+
+**Assembly.** `.github/actions/dispatch-web-redeploy/track.sh` is the only decision point. It is
+tested by `tests/scripts/test-dispatch-web-redeploy.sh`, which uses a `gh` stub and 1–2 s
+intervals.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Baseline read fails (stub exits 1 or returns non-numeric) | RED (fail closed before dispatch) |
+| 2 | Newer run `success`, but its deploy job is `skipped` | RED at timeout |
+| 3 | Deploy job renamed or missing from `jobs` | RED (not treated as success) |
+| 4 | Only a run at or below the baseline succeeds | RED |
+| 5 | Dispatched run `cancelled`, then a later push-triggered run deploys `success` | PASS |
+
+**Harness rows.** A run that qualifies before `gh workflow run` returns still counts, because it
+is newer than the baseline: PASS. Stubbing the decision to `exit 0` must fail rows 1–4.
 
 **Anchor.** None.
 
@@ -759,7 +912,7 @@ whitespace is trimmed and accepted.
 
 ### Phase 4: Docs + legal
 
-- The runbook, ADR-235, the ADR-220/068 amendments, the C4 edge text and C4 tests, and the workspaces-luks-verify comment.
+- The runbook, ADR-237, the ADR-220/068 amendments, the C4 edge text and C4 tests, and the workspaces-luks-verify comment.
 - PA-36, the counsel-audit addendum, and the encryption ledger.
 - File F1, F2, F4, F5, and add the notes on #8211 and #5914.
 
@@ -784,7 +937,7 @@ whitespace is trimmed and accepted.
   - **Mitigation.** Neither address is on any per-PR `-target` list, and Guard 4 row 6 enforces that. The secret also `depends_on` the server.
   - **Expected drift.** `scheduled-terraform-drift` will show a pending **server replace** and the key and secret creates until step 3. The runbook says this is expected.
 - **R2: pin lag after a rotation.** D6 bounds it to one release cycle. If the redeploy job fails, erasures page through the Art. 17 alert, and the fix is to re-run that job. #8211 inherits this.
-- **R3: rung-2 interlock.** This PR voids the evidence. Birth and replace, including an emergency replace, refuse until the evidence PR lands. Break-glass is the operator-local apply (ADR-096), and ADR-235 records the gap.
+- **R3: rung-2 interlock.** This PR voids the evidence. Birth and replace, including an emergency replace, refuse until the evidence PR lands. Break-glass is the operator-local apply (ADR-096), and ADR-237 records the gap.
 - **R4: Terraform algorithm negotiation.** Terraform 1.10.5 uses x/crypto v0.27.0, which negotiates ECDSA-P256 against Ubuntu's default host keys (CTO source read). The web-1 pin is therefore ECDSA. If a later Terraform bump changes that preference, the probe re-runs (its trigger includes `terraform_version`) and fails loudly.
 - **R5: web-1 lacks ECDSA-P256.** Phase 0 stops.
 - **R6: byte budget.** About 2 KB of the ~11 KB headroom. The redeploy logic lives in a composite action, and `workflow-file-size.test.ts` checks the budget.
@@ -898,16 +1051,17 @@ On the devex panel: D6 now uses the baseline-`databaseId` pattern and a 75-minut
 - [ ] **AC8:** the Guard 5 vitest matrix passes. It covers `host_key_mismatch` classification, an invalid pin returning `unconfigured` (not `unreachable`), and `provisionGitDataRepo` passing the pin. `tsc --noEmit` is clean.
 - [ ] **AC9:** `web-1-ssh-host-key.pub` has exactly one ECDSA-P256 line that passes Guard 3, and its header fingerprint equals `ssh-keygen -lf` of that line. The PR body names the capture vantage point and the cross-check result.
 - [ ] **AC10:** the runbook's "#7226 — pin git-data's SSH host key…" bullet is replaced by a staged list: mechanism merged ✔, post-merge steps 1–5 as open items, and the flag-flip precondition "pin present in prd AND #5914 closed". The runbook also has the verdict rows, the expected-drift note, the emergency-replace gap and the re-capture section.
-- [ ] **AC11:** ADR-235 exists with status `adopting`, and its ordinal is free across all `origin/*` refs at merge time. The ADR-220 amendment (including the D6 design change) and the ADR-068 amendment exist. The C4 edge text is updated, and `c4-count-parity`, `c4-code-syntax` and `c4-render` pass.
+- [ ] **AC11:** ADR-237 exists with status `adopting`, and its ordinal is free across all `origin/*` refs at merge time. The ADR-220 amendment (including the D6 design change) and the ADR-068 amendment exist. The C4 edge text is updated, and `c4-count-parity`, `c4-code-syntax` and `c4-render` pass.
 - [ ] **AC12:** the PA-36 §(g) item and the (g)(11) correction exist. The counsel-audit addendum exists. `python3 scripts/lint-encryption-posture.py --repo-sweep` passes with the four new connections.
 - [ ] **AC13:** `workflow-file-size.test.ts` passes, and so does the git-data user_data budget suite.
 - [ ] **AC14:** `bash tests/scripts/test-write-known-hosts.sh` passes. The `dispatch-web-redeploy` action's embedded shell passes `bash -c` syntax checks. Both `git_data_redeploy` jobs carry `permissions: {actions: write, contents: read}` and no `secrets.` reference. F1, F2, F4 and F5 are filed with labels that exist.
+- [ ] **AC16:** `tests/scripts/test-dispatch-web-redeploy.sh`, `web-1-host-key-local.test.sh`, the boot-proof rows (Guard 6), and a vitest for the startup line (both forms, `fp=SHA256:` format, warn level) all pass. `.github/CODEOWNERS` has the listed rows. The gate libraries print no `.change.before`/`.after`.
 - [ ] **AC15:** after pushing, `workspaces-luks-verify.yml` dispatched with `--ref <branch>` ends `success`. This is the strict bash path through Cloudflare, and it is the second observation of web-1's pin.
 
 ### Post-merge (operator; each separately authorized; runbook Post-merge sequence)
 
 - [ ] Step 1: every merge-triggered apply that follows is `success` (the probe ran).
-- [ ] Steps 2–5 as described in the runbook. Step 4 flips ADR-235 to `accepted` and ticks the precondition. Step 5 closes #5914.
+- [ ] Steps 2–5 as described in the runbook. Step 4 flips ADR-237 to `accepted` and ticks the precondition. Step 5 closes #5914.
 
 ## Test Scenarios
 
