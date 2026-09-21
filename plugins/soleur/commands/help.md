@@ -73,6 +73,8 @@ AGENTS: [N] agents across [M] categories
 SKILLS: [N] skills
   Start here: /soleur:go <what you want> picks the right skill for you.
   The operator-* family is not routed from /soleur:go; invoke it via the Skill tool.
+  Mark each skill whose SKILL.md frontmatter sets `disable-model-invocation: true` with
+  `(type /soleur:<name>)`: it is user-invoked, so only the operator can run it (ADR-236).
   [List all skills found with brief descriptions, grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
    operator-*, kb-*, questionnaire-*, and so on. Order the families largest first. List skills with
@@ -113,6 +115,8 @@ AGENTS: [N] agents across [M] categories
 SKILLS: [N] skills
   Start here: /soleur:go <what you want> picks the right skill for you.
   The operator-* family is not routed from /soleur:go; invoke it as /soleur:<skill>.
+  Mark each skill whose SKILL.md frontmatter sets `disable-model-invocation: true` with
+  `(type /soleur:<name>)`: it is user-invoked, so only the operator can run it (ADR-236).
   [List all skills found with brief descriptions, grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
    operator-*, kb-*, questionnaire-*, and so on. Order the families largest first. List skills with

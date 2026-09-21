@@ -23,9 +23,12 @@ active flags before a promotion (`flag-set-role`) or a delete (`flag-delete`).
 
 ## When NOT to use
 
-- Creating a flag → `soleur:flag-create`.
-- Toggling a flag per role/org → `soleur:flag-set-role`.
-- Removing a flag → `soleur:flag-delete`.
+The three mutating flag skills are user-invoked (ADR-236): the model cannot run them, so hand
+the operator the exact command to type.
+
+- Creating a flag → the operator types `soleur:flag-create`.
+- Toggling a flag per role/org → the operator types `soleur:flag-set-role`.
+- Removing a flag → the operator types `soleur:flag-delete`.
 
 ## When to use this skill vs other flag skills
 

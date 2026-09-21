@@ -1,6 +1,7 @@
 ---
 name: flag-delete
 description: "This skill should be used to delete a runtime feature flag end-to-end (the inverse of flag-create): removes it from Flagsmith, server.ts RUNTIME_FLAGS, .env.example, the flag-set-role flip.sh map, and Doppler dev+prd, with a WORM audit and typed-yes guardrail."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -23,7 +24,8 @@ mutation.
 
 ## When NOT to use
 
-- Turning a flag off without removing it → `soleur:flag-set-role <flag> <env> off`.
+- Turning a flag off without removing it → tell the operator to type
+  `soleur:flag-set-role <flag> <env> off`.
 - Removing a build-time DCE flag (`dev-signin`) → hand-edit `ENV_FLAGS` in
   `server.ts` + `.env.example` (it has no Flagsmith feature).
 

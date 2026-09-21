@@ -1,6 +1,7 @@
 ---
 name: flag-set-role
 description: "This skill should be used to flip a flag's per-role or per-org state in Flagsmith, mirroring prd flips to Doppler."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -24,8 +25,8 @@ Per-org targeting uses a **per-feature segment** `<flag>-orgs` (ADR-043 §"Per-f
 
 ## When NOT to use
 
-- Creating a brand-new flag → use `soleur:flag-create`.
-- Promoting a user to dev → use `soleur:user-set-role`.
+- Creating a brand-new flag → tell the operator to type `soleur:flag-create`.
+- Promoting a user to dev → tell the operator to type `soleur:user-set-role`.
 
 ## Arguments
 

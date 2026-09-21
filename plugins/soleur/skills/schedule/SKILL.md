@@ -729,7 +729,7 @@ If the run fails, diagnose the issue, fix the workflow file, and re-run. Do not 
 
 ### `list`
 
-> Also exposed as the first-class verb `soleur:cron-list` (Read), which runs these exact steps. The cron CRUD set: `soleur:schedule` (Create — this), `soleur:cron-list` (Read), `soleur:cron-delete` (Delete), `soleur:trigger-cron` (Run-now).
+> The operator can also type `soleur:cron-list` (Read) as a shortcut for these exact steps. That verb is user-invoked (ADR-236), so when you need the list, run the steps below in place. The cron CRUD set: `soleur:schedule` (Create — this, plus its list and delete steps), `soleur:cron-list` and `soleur:cron-delete` (operator-typed shortcuts for those steps), `soleur:trigger-cron` (Run-now).
 
 Display all existing scheduled workflows, distinguishing recurring from one-time by cron shape.
 
@@ -768,7 +768,7 @@ V1 reports mode + cron only. Richer state (`pending` / `disabled_inactivity` / `
 
 ### `delete <name>`
 
-> Also exposed as the first-class verb `soleur:cron-delete` (Delete), which runs these exact steps.
+> The operator can also type `soleur:cron-delete` (Delete) as a shortcut for these exact steps. That verb is user-invoked (ADR-236), so run the steps below in place.
 
 Remove a scheduled workflow.
 
