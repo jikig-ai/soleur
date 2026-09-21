@@ -786,6 +786,80 @@ else
   fail "A13b: the freshly-committed branch was reaped inside its grace window"
 fi
 
+# ===========================================================================================
+# A14 — #8490: a [gone] branch MUST still be asked about on GitHub. The merge-evidence guard
+# no longer accepts [gone] alone, so for a squash-merged branch whose remote was auto-deleted
+# (this repo's default: squash + delete-branch-on-merge) `gh_merged_branches` is the ONLY
+# evidence. The builder used to skip every branch already in `gone_branches`, so that cohort
+# reached the guard with no evidence and was never reaped — cleanup-merged reaped nothing.
+#
+# One fixture, two [gone] branches with worktrees, a `gh` stub keyed on `--head`: the merged
+# one must be reaped with a sentinel, the unmerged one must still be kept (A10's contract, but
+# here on the worktree-bearing path that the gh loop actually walks).
+# ===========================================================================================
+echo "A14. [gone] + worktree + gh-merged -> reaped; [gone] + worktree + not merged -> kept"
+A14="$TMP/a14"; mk_repo "$A14"
+mk_squash_merged_branch "$A14/clone" "feat-a14-merged"
+mk_squash_merged_branch "$A14/clone" "feat-a14-unmerged"
+# The short tip, captured BEFORE the reaper runs: the sentinel records `rev-parse --short`.
+A14_SHA="$(fgit -C "$A14/clone" rev-parse --short refs/heads/feat-a14-merged)"
+A14_WT1="$A14/wt-a14-merged"; assert_fixture_dir "$A14_WT1"
+fgit -C "$A14/clone" worktree add -q "$A14_WT1" "feat-a14-merged"
+A14_WT2="$A14/wt-a14-unmerged"; assert_fixture_dir "$A14_WT2"
+fgit -C "$A14/clone" worktree add -q "$A14_WT2" "feat-a14-unmerged"
+# Both upstreams deleted, then pruned: both branches are now `[gone]`.
+fgit -C "$A14/clone" push -q origin --delete feat-a14-merged
+fgit -C "$A14/clone" push -q origin --delete feat-a14-unmerged
+fgit -C "$A14/clone" fetch -q --prune --no-tags
+A14_BIN="$TMP/a14-bin"; mkdir -p "$A14_BIN"
+A14_GHLOG="$TMP/a14-gh.log"; : > "$A14_GHLOG"
+cat > "$A14_BIN/gh" <<'GH_EOF'
+#!/usr/bin/env bash
+# Keyed on --head so "one merged, one not" is expressible; logs each queried head so the row
+# can prove the [gone] branches were ASKED about (the defect was that they never were).
+if [ "$1" = pr ] && [ "$2" = list ]; then
+  head=""; prev=""
+  for a in "$@"; do [ "$prev" = --head ] && head="$a"; prev="$a"; done
+  case " $* " in *" --state merged "*) : ;; *) echo "gh stub: missing --state merged: $*" >&2; exit 64 ;; esac
+  [ -n "$head" ] || { echo "gh stub: missing --head: $*" >&2; exit 64; }
+  printf '%s\n' "$head" >> "$A14_GHLOG"
+  if [ "$head" = feat-a14-merged ]; then printf '1\n'; else printf '0\n'; fi
+  exit 0
+fi
+echo "gh stub: unexpected invocation: $*" >&2
+exit 64
+GH_EOF
+chmod +x "$A14_BIN/gh"
+A14_STATE="$TMP/a14-state"; arm_reaper "$A14_STATE"
+export A14_GHLOG
+PATH="$A14_BIN:$PATH" run_reaper "$SCRIPT" "$A14/clone" "$A14_STATE" "$TMP/a14.log"
+
+if local_branch_exists "$A14/clone" "feat-a14-merged"; then
+  fail "A14a: a [gone] squash-merged branch with a worktree was NOT reaped — the gh query skipped it (#8490)"
+else
+  pass "A14a: a [gone] squash-merged branch with a worktree is reaped on gh merge evidence"
+fi
+if grep -qxF "SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=$A14_SHA local=yes remote=no" "$TMP/a14.log"; then
+  pass "A14b: the reap emitted its sentinel with the pre-run short tip (sha=$A14_SHA)"
+else
+  fail "A14b: no exact SOLEUR_WORKTREE_REAPED line for feat-a14-merged sha=$A14_SHA remote=no"
+fi
+if local_branch_exists "$A14/clone" "feat-a14-unmerged" && [[ -d "$A14_WT2" ]]; then
+  pass "A14c: the [gone]-only branch (gh says not merged) and its worktree are kept"
+else
+  fail "A14c: the [gone]-only branch or its worktree was removed with no merge evidence"
+fi
+if grep -qE '^\(skip\) feat-a14-unmerged - upstream is \[gone\] but no merge evidence' "$TMP/a14.log"; then
+  pass "A14d: the [gone]-only skip names its cause"
+else
+  fail "A14d: the [gone]-only branch was not skipped with the no-merge-evidence line"
+fi
+if grep -qxF feat-a14-merged "$A14_GHLOG" && grep -qxF feat-a14-unmerged "$A14_GHLOG"; then
+  pass "A14e: both [gone] worktree branches were queried on GitHub"
+else
+  fail "A14e: a [gone] worktree branch was never queried on GitHub (log: $(tr '\n' ' ' < "$A14_GHLOG"))"
+fi
+
 echo "S. instrument self-test"
 _real_pass=$PASS; _real_fail=$FAIL; _real_asserted=$ASSERTED
 _real_failures=("${FAILURES[@]+"${FAILURES[@]}"}")
@@ -814,7 +888,7 @@ printf '  pass: self-test — pass() and fail() both move the counters and the l
 # above is unbound in that slice, so the mutant dies at `set -u` and the floor scores
 # CONSTRUCTION rather than FIRES.
 # ===========================================================================================
-MIN_ASSERTIONS=33
+MIN_ASSERTIONS=38
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions executed, floor is %s — rows were removed or an arm aborted early.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2

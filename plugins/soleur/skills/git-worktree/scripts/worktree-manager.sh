@@ -2795,9 +2795,10 @@ cleanup_merged_worktrees() {
     | grep -v -E '^(main|master)$' \
     || true)
 
-  # Squash-merged branches produce a new commit on main with a different SHA, so
-  # they appear in neither [gone] nor --merged main during the auto-delete propagation
-  # window. Query GitHub directly as the authoritative source of truth.
+  # Squash-merged branches produce a new commit on main with a different SHA, so they
+  # are never in --merged main, and once the remote is auto-deleted they are [gone] —
+  # which is NOT merge evidence. Query GitHub directly as the authoritative source of
+  # truth for every worktree branch not already proven merged by ancestry.
   local gh_merged_branches=""
   local _wt_branch
   while IFS= read -r _line; do
@@ -2806,7 +2807,11 @@ cleanup_merged_worktrees() {
       [[ "$_wt_branch" == "main" || "$_wt_branch" == "master" ]] && continue
       # Same pipefail/SIGPIPE hazard as _porcelain_has_line: `grep -q` closing
       # the pipe early makes printf's next write fail. Match in-shell instead.
-      if [[ $'\n'"$gone_branches"$'\n'"$merged_branches"$'\n' == *$'\n'"$_wt_branch"$'\n'* ]]; then continue; fi
+      # Skip only branches that ALREADY carry merge evidence (`merged_branches`). A
+      # `[gone]` branch must still be asked about (#8490): the merge-evidence guard
+      # below does not accept `[gone]` alone, and a squash-merged branch whose remote
+      # was auto-deleted is `[gone]` with no ancestry — gh is its only evidence.
+      if [[ $'\n'"$merged_branches"$'\n' == *$'\n'"$_wt_branch"$'\n'* ]]; then continue; fi
       local _merged_count
       _merged_count=$(gh pr list --head "$_wt_branch" --state merged --limit 1 --json number --jq 'length' 2>/dev/null || echo "0")
       [[ "$_merged_count" == "1" ]] && gh_merged_branches+="${_wt_branch}"$'\n'
