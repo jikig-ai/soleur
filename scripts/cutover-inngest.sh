@@ -3050,6 +3050,11 @@ case "$OP" in
     LK_STATE=$(confirm_luks_state "$LK_ISO")
     if [[ "$LK_STATE" == "$LK_EXPECT" ]]; then
       echo "::notice::op=$OP: FSM confirmed '$LK_EXPECT' via Better Stack (since $LK_ISO). The store is on $( [[ "$OP" == luks-cutover ]] && echo 'the ENCRYPTED volume' || echo 'the PLAINTEXT volume' ), proven byte-identical before the swap."
+      # The notice above is SHARED with luks-cutover; this line is rollback-only (#8296). A rollback
+      # makes no commit, so the record it falsifies must be reverted in a PR (runbook section 5a).
+      if [[ "$OP" == luks-rollback ]]; then
+        echo "::notice::NEXT (not automatic): the store is on the plaintext volume, so if scripts/encryption-posture-ledger.json claims luks for hcloud_volume.inngest_redis_luks the record is now false. Revert that row and the PA-21/PA-22/PA-13 #8296 amendments in knowledge-base/legal/article-30-register.md in one PR (agent or operator), and re-pause the wrong-volume alert, per runbook inngest-luks-cutover-6894.md section 5a. The backstop hcloud_volume.inngest_redis is now the LIVE store: do NOT destroy it."
+      fi
     else
       case "$LK_STATE" in
         rolled-back)
@@ -3057,6 +3062,9 @@ case "$OP" in
         aborted)
           echo "::error::op=$OP: the FSM aborted. Every refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
         *)
+          if [[ "$OP" == luks-rollback ]]; then
+            echo "::warning::op=luks-rollback: if this rollback does complete, the store lands on the plaintext volume and the encryption record must be reverted: runbook inngest-luks-cutover-6894.md section 5a."
+          fi
           echo "::error::op=$OP: no terminal LUKS FSM flag within 900s since $LK_ISO (the write DID land). That is not itself a statement about the store: the confirm path may have failed (a betterstack-query.sh ::warning:: above names that case). The on-host FSM holds a flock and resumes from its own state on the next 30s tick, so do NOT re-dispatch blind — read the inngest-luks-cutover rows first. Do NOT SSH the host."; exit 1 ;;
       esac
     fi

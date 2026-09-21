@@ -266,3 +266,20 @@ edited (dated records are append-only). Since #8296:
 
 The 2026-09-18 clause "It ships PAUSED" is falsified by PR-2 of #8296 (the ledger flip), which
 carries its own amendment; this one is scoped to the reconciler sentence, which PR-1 falsifies.
+
+## Amendment — 2026-09-21 (#8296): "It ships PAUSED" is falsified at the arm
+
+Appended, not edited. The 2026-09-18 amendment's clause "It ships PAUSED" (via
+`paused = !var.inngest_luks_cutover_complete`) was true until the cutover. It no longer is.
+PR-1 of #8296 flipped the variable's declared default to `true`, and the push apply of
+`b53173a04` (run 35605929787) armed the alert. The live alert `soleur-inngest-luks-wrong-volume-prd`
+(id `2988582970`) read back `paused=false`, `paused_reason=null`, at 2026-09-21T14:18:56Z.
+It had read `paused=true` before that apply.
+
+The `paused` attribute is still an expression, not a literal, so the reconciler behaviour recorded
+in the 2026-09-20 amendment applies: a live pause on this alert is now reported as drift. This is
+the amendment the 2026-09-20 one pointed forward to. That forward pointer named the wrong PR: it said
+PR-2 of #8296 falsifies "It ships PAUSED", but PR-1 and its push apply did; PR-2 only records it.
+
+One known gap is open: `on_missing_data = "treat_as_zero"` reads a probe pipeline that has gone
+silent as healthy, so this alert cannot page on a dead producer. The paging fix is tracked in #8516.
