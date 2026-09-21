@@ -277,8 +277,10 @@ if ! grep -qE '(^|[;&|[:space:](])(exec|kill)([[:space:]]|$)' <<<"$STRIPPED"; th
 else fail "probe: exec/kill found: $(grep -nE '(^|[;&|[:space:](])(exec|kill)([[:space:]]|$)' <<<"$STRIPPED" | head -3)"; fi
 cases=$((cases + 1))
 _tl="$(grep -nxF 'trap on_exit EXIT' "$PROBE_SRC" | cut -d: -f1)"
-_first="$(grep -nvE '^[[:space:]]*(#.*)?$|^set -uo pipefail$|^marker\(\) \{( |$)|^on_exit\(\) \{( |$)|^  |^\}$' "$PROBE_SRC" | head -1 | cut -d: -f1)"
-if [[ -n "$_tl" && "$_tl" == "$_first" ]]; then pass "probe: the trap is the first top-level statement after the helpers it needs"
+_xe="$(grep -nxF 'esac' "$PROBE_SRC" | head -1 | cut -d: -f1)"
+_first="$(awk -v x="${_xe:-0}" 'NR > x' "$PROBE_SRC" | grep -nvE '^[[:space:]]*(#.*)?$|^marker\(\) \{( |$)|^on_exit\(\) \{( |$)|^  |^\}$' | head -1 | cut -d: -f1)"
+[[ -n "$_first" ]] && _first=$(( _first + _xe ))
+if [[ -n "$_tl" && -n "$_xe" && "$_tl" == "$_first" ]]; then pass "probe: the trap is the first top-level statement after the xtrace refusal"
 else fail "probe: the first top-level statement is line $_first, the trap is line $_tl"; fi
 printf '#!/usr/bin/env bash\nexec true\nfoo; kill -9 $$\n' > "$WORK/ban-positive.sh"
 cases=$((cases + 1))

@@ -65,14 +65,26 @@
 # scripts/betterstack-query.sh in a fake tree; this file resolves its repo from its own location).
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). Tracing echoes a command after expansion, so under bash -x a credential
+# reaches the transcript the moment it is bound. Any of the three refuses.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${BETTERSTACK_QUERY_USERNAME:+x}${BETTERSTACK_QUERY_HOST:+x}" ]; then
+      printf 'inngest-luks-property[#8296]: verdict=xtrace_refused refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 marker() { # <verdict> [k=v …]
   printf 'inngest-luks-property[#8296]: verdict=%s %s\n' "$1" "${2:-}"
 }
 
 # NEVER 0, NEVER 1. Every status outside the contract -- a fall-off, an unset variable under
 # set -u, a stray `$?` -- is rewritten to 3. Each allowed status is spelled out as a literal so the
-# harness's static allowlist can read every one. Installed FIRST, before any other statement, so no
-# line of this file runs without it; the harness also forbids exec, kill and a second trap.
+# harness's static allowlist can read every one. Installed directly after the xtrace refusal (which
+# can only exit 78), before any other statement; the harness also forbids exec, kill and a second
+# trap.
 on_exit() {
   local rc=$?
   case "$rc" in
@@ -87,17 +99,6 @@ on_exit() {
   exit 3
 }
 trap on_exit EXIT
-
-# XTRACE REFUSAL (#7797). Tracing echoes a command after expansion, so under bash -x a credential
-# reaches the transcript the moment it is bound. Any of the three refuses.
-case "$-" in
-  *x*)
-    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${BETTERSTACK_QUERY_USERNAME:+x}${BETTERSTACK_QUERY_HOST:+x}" ]; then
-      printf 'inngest-luks-property[#8296]: verdict=xtrace_refused refusing to trace with a live credential set (see #7797)\n' >&2
-      exit 78
-    fi
-    ;;
-esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="$REPO_ROOT/scripts/betterstack-query.sh"
