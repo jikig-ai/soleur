@@ -145,8 +145,10 @@ fi
 # Sanity floor (deferred until after enumeration): require >= 1 workflow.
 # Floor lowered from 6 → 1 after TR9 Phase 2 (#3948) migrated 22 scheduled
 # workflows to Inngest cron functions. The remaining GHA bot-pr consumer is
-# rule-metrics-aggregate.yml. The floor exists to catch accidental deletion
-# of the last remaining bot-pr workflow.
+# weakness-miner.yml (it was rule-metrics-aggregate.yml until #8377 deleted that
+# workflow along with the committed rule-metrics.json it produced). The floor exists
+# to catch accidental deletion of the last remaining bot-pr workflow -- and it is now
+# EXACTLY met at 1, so that deletion would trip it immediately, which is the point.
 WORKFLOWS=$(enumerate_workflows)
 COUNT=$(printf '%s\n' "$WORKFLOWS" | grep -v '^$' | wc -l)
 if [[ -z "$WORKFLOWS_OVERRIDE" && "$COUNT" -lt 1 ]]; then
@@ -171,8 +173,8 @@ if [[ -n "${AUDIT_FIXED_WORKFLOWS:-}" ]]; then
 else
   # Fetch a wide page of recent bot PRs once. Bot branches follow
   # `ci/<short-name>-<date>` convention but the short-name slug is NOT
-  # the workflow filename stem (e.g., `rule-metrics-aggregate.yml`
-  # creates `ci/rule-metrics-*` branches). Rather than encode the mapping
+  # the workflow filename stem (e.g., `weakness-miner.yml` creates
+  # `ci/weakness-digest-*` branches). Rather than encode the mapping
   # (which would drift), sample the most-recent LIMIT*N bot PRs flat and
   # attribute each by best-effort stem prefix match for reporting.
   # GitHub GraphQL cost: requesting `commits[]` for N PRs blows the
