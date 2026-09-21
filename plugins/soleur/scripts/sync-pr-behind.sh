@@ -114,10 +114,12 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 
 # One sync attempt. Returns the exit code documented in usage(); prints the
 # tagged line for every non-zero outcome. Every git call's rc is captured with
-# `|| rc=$?` (an errexit-safe capture) before anything displays its output, and
-# every display pipe ends in `|| true`: under this script's own pipefail a
-# `git status | head` that outlives head is SIGPIPE 141, and a `grep` with no
-# match is 1 — either would kill the script before the --abort below runs.
+# `|| rc=$?` before anything displays its output. Both callers below invoke it as
+# `sync_step || rc=$?`, and bash suspends errexit inside a function called from
+# an `||` list — so today a SIGPIPE'd `git status | head` or a no-match `grep`
+# cannot abort it (measured: dropping the `|| true` guards leaves every fixture
+# row green). The guards stay so a future bare `sync_step` call — where errexit
+# WOULD fire, before the --abort — is still safe.
 sync_step() {
   local git_dir rc out
   git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"

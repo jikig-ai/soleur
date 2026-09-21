@@ -142,11 +142,11 @@ else
                '[ship.phase7.required_failed]' '[ship.phase7.dirty]' \
                '[ship.phase7.behind_exhausted]' '*DIRTY*' 'mapfile -t REQUIRED_CHECKS' \
                'is-inside-work-tree' \
-               'sync_out="$(GIT_TRACE=0 git merge origin/main --no-edit 2>&1)" || sync_rc=$?' \
-               'merge conflict, aborting sync' 'kind=merge_refused' \
-               'kind=merge_in_progress' 'git push failed after merge' \
+               'bash "$SYNC_SNAP" 4387 --step || sync_rc=$?' \
+               'sync-pr-behind.sh exited $sync_rc' '--help 2>/dev/null | grep -q -- '"'"'--step'"'"'' \
+               'SYNC_ROOT="$(set +u; printf '"'"'%s'"'"' "${CLAUDE_PLUGIN_ROOT}")"' \
                'fetch_failures='; do
-    if ! grep -qF "$token" "$MIRROR_FILE"; then
+    if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
   done
@@ -195,8 +195,8 @@ assert_log() {
 # raises no notification), so every tagged exit line must be on stdout.
 assert_no_tag_on_stderr() {
   local label="$1" errfile="$2"
-  if grep -q 'ship\.phase7\.' "$errfile"; then
-    fail "[$label] tagged line on stderr (Monitor streams stdout only): $(grep 'ship\.phase7\.' "$errfile" | head -1 | cut -c1-120)"
+  if grep -qE 'ship\.phase7\.|\[pr-behind-sync\] kind=' "$errfile"; then
+    fail "[$label] tagged line on stderr (Monitor streams stdout only): $(grep -E 'ship\.phase7\.|\[pr-behind-sync\] kind=' "$errfile" | head -1 | cut -c1-120)"
   else
     pass "[$label] no tagged line on stderr"
   fi
@@ -235,9 +235,23 @@ run_scenario() {
   _TMP_OWNED+=("$MOCK_STATE")
   export MOCK_STATE
 
+  mkdir -p "$MOCK_STATE/cwd"
+
   (
     set +o pipefail
     [[ "${SCENARIO_SET_E:-0}" == 1 ]] && set -e
+    # The BEHIND arm runs `bash "$SYNC_SNAP" --step`, a CHILD process: it sees the
+    # mocks only through `export -f` and the MOCK_* knobs only through `set -a`.
+    # If an export is ever dropped the child's real git runs from a directory
+    # under a git ceiling, finds no repository, and exits 3 — a red row, never a
+    # push to the live repo.
+    cd "$MOCK_STATE/cwd" || exit 97
+    export GIT_CEILING_DIRECTORIES="$MOCK_STATE"
+    case "${SCEN_ROOT:-}" in
+      unset) unset CLAUDE_PLUGIN_ROOT ;;
+      "")    export CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur" ;;
+      *)     export CLAUDE_PLUGIN_ROOT="$SCEN_ROOT" ;;
+    esac
     sleep() { return 0; }
     date() { echo "00:00:00"; }
     git() {
@@ -253,8 +267,12 @@ run_scenario() {
         *) return 0 ;;
       esac
     }
+    set -a
     # shellcheck disable=SC1090
     source "$mocks_file"
+    set +a
+    export -f git gh
+    declare -F _gh_unexpected >/dev/null && export -f _gh_unexpected
     # shellcheck disable=SC1090
     source "$block"
   ) > "$logfile" 2> "$errfile"
@@ -387,10 +405,12 @@ EOF
 run_scenario "3-behind-saturation:ship" "$SCEN3" \
   "\[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
+\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs
 moving faster than this PR" \
   "ship.phase7.(required_failed|dirty)|Every attempt failed at git fetch|UNEXPECTED gh call"
 run_scenario "3-behind-saturation:merge-pr" "$SCEN3" \
   "auto-sync 6/6 pushed
+\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs
 \[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
 moving faster than this PR" \
@@ -582,7 +602,11 @@ git() {
       if (( ${MOCK_ABORT_RC:-0} )); then echo "fatal: mock abort failure"; return "${MOCK_ABORT_RC}"; fi
       rm -f "$MOCK_STATE/MERGE_HEAD" ;;
     "diff --name-only") [[ -e "$MOCK_STATE/MERGE_HEAD" ]] && echo "foo.md" ;;
-    "status --short") echo " M f" ;;
+    "status --short")
+      echo " M f"
+      if (( ${MOCK_STATUS_LINES:-0} )); then
+        n=0; while (( n < MOCK_STATUS_LINES )); do echo "?? untracked-padding-file-$n.txt"; n=$((n+1)); done
+      fi ;;
     "push ")
       if (( ${MOCK_PUSH_RC:-0} )); then
         echo "error: failed to push some refs to 'origin'"
@@ -624,7 +648,8 @@ run_scenario_both "6-merge-conflict-in-sync" "$SCEN6" \
   "MOCK: git merge --abort observed
 git merge origin/main failed — merge conflict, aborting sync\. Conflicted paths:
 ^foo\.md$
-Manual conflict resolution required on test-branch\. Stopping the poll\.
+Manual conflict resolution required on test-branch\.
+sync-pr-behind\.sh exited 6 \(see its line above\)\. Stopping the poll\.
 kind=merge rc=1" \
   "$STOP_FORBID"
 
@@ -642,7 +667,8 @@ EOF
 run_scenario_both "6b-merge-refused" "$SCEN6B" \
   "kind=merge_refused rc=2
 refused to start \(nothing to abort
-^ M f$" \
+^ M f$
+sync-pr-behind\.sh exited 10 \(see its line above\)" \
   "$STOP_FORBID|MOCK: git merge --abort observed|Manual conflict resolution required"
 rm -f "$SCEN6B"
 
@@ -694,7 +720,8 @@ EOF
 run_scenario_both "6e-abort-fails" "$SCEN6E" \
   "MOCK: git merge --abort observed
 git merge --abort failed \(rc=1\)
-Manual conflict resolution required on test-branch\. Stopping the poll\." \
+Manual conflict resolution required on test-branch\.
+sync-pr-behind\.sh exited 6 \(see its line above\)\. Stopping the poll\." \
   "$STOP_FORBID"
 rm -f "$SCEN6E"
 
@@ -708,7 +735,8 @@ rm -f "$SCEN6E"
 # ---------------------------------------------------------------------------
 SCENARIO_SET_E=1 run_scenario_both "6f-conflict-under-errexit" "$SCEN6" \
   "MOCK: git merge --abort observed
-Manual conflict resolution required on test-branch\. Stopping the poll\.
+Manual conflict resolution required on test-branch\.
+sync-pr-behind\.sh exited 6 \(see its line above\)\. Stopping the poll\.
 kind=merge rc=1
 \[scenario exit rc=0\]" \
   "$STOP_FORBID"
@@ -803,6 +831,119 @@ run_scenario "9-success-path:merge-pr" "$SCEN9" \
 rm -f "$SCEN9"
 
 # ---------------------------------------------------------------------------
+# Scenario 6i — merge refused with a ≥100 KB worktree status (#8383). The
+# script runs under `set -euo pipefail`; `git status --short | head -20` then
+# outlives head and takes SIGPIPE (141), which — without its `|| true` — would
+# kill the script before it reports. 20000 lines make the SIGPIPE deterministic
+# (a 25-line status fits in the pipe buffer and never trips it). Measured: the
+# `|| true` is NOT load-bearing today (errexit is suspended inside sync_step,
+# which both callers run under `||`); this row pins exit 10 over a huge status
+# and would catch a future bare `sync_step` call.
+# ---------------------------------------------------------------------------
+SCEN6I="$(mktemp)"
+_TMP_OWNED+=("$SCEN6I")
+cat > "$SCEN6I" <<EOF
+MOCK_MERGE=refused
+MOCK_STATUS_LINES=20000
+${SYNC_MOCKS}
+EOF
+run_scenario_both "6i-refused-huge-status" "$SCEN6I" \
+  "kind=merge_refused rc=2
+Clear the worktree state on test-branch shown above
+sync-pr-behind\.sh exited 10 \(see its line above\)" \
+  "$STOP_FORBID|MOCK: git merge --abort observed"
+rm -f "$SCEN6I"
+
+# ---------------------------------------------------------------------------
+# Scenario 13 — version skew: the plugin root carries an OLDER sync script that
+# ignores --step (it would run a full standalone sync and exit 0 on "no sync
+# needed", which the arm would print as `pushed`). The --help probe must refuse
+# it at loop entry; BEHIND auto-sync is disabled and the poll heartbeats.
+# ---------------------------------------------------------------------------
+SKEW_ROOT="$(mktemp -d)"
+assert_fixture_dir "$SKEW_ROOT"
+_TMP_OWNED+=("$SKEW_ROOT")
+mkdir -p "$SKEW_ROOT/.claude-plugin" "$SKEW_ROOT/scripts"
+printf '{ "name": "soleur" }\n' > "$SKEW_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho "usage: sync-pr-behind.sh <pr-number> [--max-attempts N]"\nexit 0\n' \
+  > "$SKEW_ROOT/scripts/sync-pr-behind.sh"
+SCEN13="$(mktemp)"
+_TMP_OWNED+=("$SCEN13")
+cat > "$SCEN13" <<EOF
+${SYNC_MOCKS}
+EOF
+SCEN_ROOT="$SKEW_ROOT" run_scenario_both "13-version-skew" "$SCEN13" \
+  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable
+Merge poll timed out" \
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|UNEXPECTED gh call"
+rm -f "$SCEN13"
+
+# ---------------------------------------------------------------------------
+# Scenario 13b — CLAUDE_PLUGIN_ROOT unset (the Devin-cloud / Codex shape: the
+# token is neither substituted nor exported). A missing script must not read as
+# success: precondition line, no sync, and the poll still exits on MERGED.
+# ---------------------------------------------------------------------------
+SCEN13B="$(mktemp)"
+_TMP_OWNED+=("$SCEN13B")
+cat > "$SCEN13B" <<EOF
+${PRELUDE}
+gh() {
+  case "\$1 \$2" in
+    "pr view")
+      if (( i >= 3 )); then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
+    "pr checks") : ;;
+    "api "*)     : ;;
+    *) _gh_unexpected "\$@" ;;
+  esac
+}
+EOF
+SCEN_ROOT=unset run_scenario_both "13b-plugin-root-unset" "$SCEN13B" \
+  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '/scripts/sync-pr-behind\.sh'
+PR 4387 MERGED CLEAN" \
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN13B"
+
+# ---------------------------------------------------------------------------
+# AC1 — one BEHIND implementation (#8383). Neither fence may carry a merge/push
+# of its own; each runs the script exactly once per attempt. Comment and echo
+# lines are excluded, so the DIRTY arm's `git merge-tree` and its
+# `echo "Resolve locally: git merge origin/main"` do not count.
+# ---------------------------------------------------------------------------
+for pair in "ship:$BLOCK_FILE" "merge-pr:$MIRROR_FILE"; do
+  lbl="${pair%%:*}"; f="${pair#*:}"
+  inline="$(grep -vE '^[[:space:]]*(#|echo )' "$f" \
+    | grep -nE '(^|[;&|([:space:]`])git (merge( |$)(origin|--abort|--no-edit)|push( |$))' || true)"
+  calls="$(grep -cF 'bash "$SYNC_SNAP" 4387 --step' "$f" || true)"
+  if [[ -z "$inline" && "$calls" -eq 1 ]]; then
+    pass "[$lbl] no inline git merge/push; exactly one sync-pr-behind.sh --step call"
+  else
+    fail "[$lbl] inline merge/push: ${inline:-none}; --step calls: $calls (want 1)"
+  fi
+done
+
+# Every `git <sub> <arg>` the script's sync_step() makes must have an arm in
+# SYNC_MOCKS — otherwise the mock's `*) return 0` default answers it silently
+# and a new call ships untested. Keyed exactly as the mock dispatches:
+# "$1 ${2:-}", matched against a quoted exact key or a `"<sub> "*` glob.
+SYNC_SCRIPT="$REPO_ROOT/plugins/soleur/scripts/sync-pr-behind.sh"
+keys="$(awk '/^sync_step\(\) \{/{f=1} f&&/^\}/{exit} f' "$SYNC_SCRIPT" \
+  | grep -vE '^[[:space:]]*(#|echo )' \
+  | grep -oE '(^|[^a-z-])git [a-z-]+( [^ ;|)"&>]+)?' \
+  | sed -E 's/^[^g]*git //; s/ [0-9].*$//' | sort -u)"
+nkeys=0; missing=""
+while IFS= read -r k; do
+  [[ -z "$k" ]] && continue
+  nkeys=$((nkeys+1))
+  sub="${k%% *}"; arg=""; [[ "$k" == *" "* ]] && arg="${k#* }"
+  if grep -qF "\"$sub $arg\")" <<<"$SYNC_MOCKS" || grep -qF "\"$sub \"*)" <<<"$SYNC_MOCKS"; then :; else missing+="[$sub $arg] "; fi
+done <<<"$keys"
+if [[ "$nkeys" -ge 8 && -z "$missing" ]]; then
+  pass "every git call in sync_step() ($nkeys) has a SYNC_MOCKS arm"
+else
+  fail "sync_step() git calls without a mock arm: ${missing:-none} (calls found: $nkeys, want >= 8)"
+fi
+
+# ---------------------------------------------------------------------------
 # Scenario 11 — not inside a worktree (`--is-inside-work-tree` prints
 # `false`, rc 0 — a bare repo): the precondition disables the BEHIND arm and
 # says so; the poll heartbeats to timeout instead of running git merge in a
@@ -868,6 +1009,7 @@ _TMP_OWNED+=("$SCEN10_ERR")
 (
   set +o pipefail
   git_fixture_env "$SCEN10_TMP" || exit 2
+  export CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur"
   tmp="$SCEN10_TMP"
   assert_fixture_dir "$tmp"
   git init -q --bare -b main "$tmp/origin" || exit 2
@@ -1048,7 +1190,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=191
+MIN_VERDICTS=230
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

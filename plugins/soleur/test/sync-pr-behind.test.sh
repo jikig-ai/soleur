@@ -300,6 +300,7 @@ advance_main() {
 # stderr are captured SEPARATELY so the stdout-only tagging contract is checkable.
 run_step() {
   local d="$1"; shift
+  assert_fixture_dir "$d"
   ( cd "$d/work" && assert_in_fixture "$d/work" \
       && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 --step "$@" ) \
     >"$d/out" 2>"$d/err"
