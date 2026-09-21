@@ -97,6 +97,10 @@ row() { # <dt> <message> [host] -> one JSONEachRow line with the documented doub
 }
 ded()  { row "$1" "$(msg dedicated "$2" "${3:-$VOL}" "${4:-}")"; }
 web()  { row "$1" "$(msg web "$2" "${3:-$VOL}")" soleur-web-1; }
+# A web-ROLE row stamped with the dedicated host: isolates the role filter from the host pin.
+sweb() { row "$1" "$(msg web "$2" "${3:-$VOL}")"; }
+# A DEDICATED-role row from another host: isolates the host pin from the role filter.
+odd()  { row "$1" "$(msg dedicated "$2" "${3:-$VOL}")" soleur-web-1; }
 fx() { # <name> < rows on stdin -> path
   cat > "$WORK/fx/$1.jsonl"
   printf '%s' "$WORK/fx/$1.jsonl"
@@ -122,7 +126,7 @@ ledger() { # <out> <luks-mechanism> <luks-mapper> <backstop-expires|__none__>
 #   C_XTRACE  1 -> run under bash -x                     C_UNSET   a BETTERSTACK_QUERY_* to blank
 reset_case() {
   C_ROWS="/dev/null"; C_LEDGER="luks inngest-redis $EXP_FUTURE"; C_STUB="ok"; C_NOW="$NOW"
-  C_PROBE="$PROBE_SRC"; C_XTRACE=0; C_UNSET=""; C_REQUIRE=""; C_LEAD=0
+  C_PROBE="$PROBE_SRC"; C_XTRACE=0; C_UNSET=""; C_REQUIRE=""; C_LEAD=0; C_ARGS=""
 }
 reset_case
 
@@ -145,10 +149,9 @@ run_probe() { # -> echoes the status; combined output in $OUT
     cat > "$root/scripts/betterstack-query.sh" <<STUB
 #!/usr/bin/env bash
 argv="\$*"
-# Asserted BY VALUE: a presence-only check lets --limit 1 or --since 1h pass silently.
-case "\$argv" in *"--since 26h"*) : ;; *) echo "STUB: expected --since 26h, got: \$argv" >&2; exit 64 ;; esac
-case "\$argv" in *"--grep SOLEUR_INNGEST_SERVER_PROBE"*) : ;; *) echo "STUB: expected the probe-row grep, got: \$argv" >&2; exit 64 ;; esac
-case "\$argv" in *"--limit 5000"*) : ;; *) echo "STUB: expected --limit 5000, got: \$argv" >&2; exit 64 ;; esac
+# Asserted as the EXACT argument list: a substring check lets a suffixed grep value or a repeated
+# --since/--limit (the helper keeps the last one) pass silently.
+[[ "\$argv" == "--since 26h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 5000" ]] || { echo "STUB: unexpected argv: \$argv" >&2; exit 64; }
 case "$C_STUB" in
   fail)
     echo "betterstack-query: auth failed for user=stub password=$FAKE_CRED" >&2
@@ -174,7 +177,8 @@ STUB
   local -a sh=(bash)
   [[ "$C_XTRACE" == "1" ]] && sh=(bash -x)
   # env -i mirrors the sweeper: no ambient SOLEUR_FT_* reaches the probe.
-  env -i "${envv[@]}" "${sh[@]}" "$probe" >"$OUT" 2>&1
+  # shellcheck disable=SC2086
+  env -i "${envv[@]}" "${sh[@]}" "$probe" $C_ARGS >"$OUT" 2>&1
   echo $?
 }
 
@@ -211,8 +215,8 @@ expect() { # <name> <rc> <marker>
   if [[ -n "$C_REQUIRE" ]] && ! grep -qF -- "$C_REQUIRE" <<<"$all"; then
     ok=0; printf '        | missing required text: %s\n' "$C_REQUIRE" >&2
   fi
-  if [[ "$C_LEAD" == "1" ]] && [[ "$(head -1 "$OUT")" != "$LEAD" ]]; then
-    ok=0; printf '        | the output does not LEAD with the backstop warning\n' >&2
+  if [[ "$C_LEAD" == "1" ]] && [[ "$(grep -v '^inngest-luks-property\[' "$OUT" | head -1)" != "ACTION REQUIRED: $LEAD"* ]]; then
+    ok=0; printf '        | the first human-readable line does not LEAD with the backstop warning\n' >&2
   fi
   if (( ok )); then
     pass "$name (status $got, verdict $marker)"
@@ -263,6 +267,23 @@ cases=$((cases + 1))
 if grep -qE '^trap on_exit EXIT$' "$PROBE_SRC" && grep -qE '^on_exit\(\) \{$' "$PROBE_SRC"; then
   pass "probe: an EXIT trap (on_exit) is installed"
 else fail "probe: no 'trap on_exit EXIT' / on_exit() found"; fi
+
+STRIPPED="$(sed -E 's/^[[:space:]]*#.*$//' "$PROBE_SRC")"
+cases=$((cases + 1))
+if [[ "$(grep -cE '(^|[;&|[:space:]])trap[[:space:]]' <<<"$STRIPPED" || true)" == 1 ]]; then pass "probe: exactly one trap statement (no trap -, trap '', or re-trap)"
+else fail "probe: expected exactly one trap statement, found $(grep -cE '(^|[;&|[:space:]])trap[[:space:]]' <<<"$STRIPPED" || true)"; fi
+cases=$((cases + 1))
+if ! grep -qE '(^|[;&|[:space:](])(exec|kill)([[:space:]]|$)' <<<"$STRIPPED"; then pass "probe: no exec or kill (both bypass the EXIT trap's remap)"
+else fail "probe: exec/kill found: $(grep -nE '(^|[;&|[:space:](])(exec|kill)([[:space:]]|$)' <<<"$STRIPPED" | head -3)"; fi
+cases=$((cases + 1))
+_tl="$(grep -nxF 'trap on_exit EXIT' "$PROBE_SRC" | cut -d: -f1)"
+_first="$(grep -nvE '^[[:space:]]*(#.*)?$|^set -uo pipefail$|^marker\(\) \{( |$)|^on_exit\(\) \{( |$)|^  |^\}$' "$PROBE_SRC" | head -1 | cut -d: -f1)"
+if [[ -n "$_tl" && "$_tl" == "$_first" ]]; then pass "probe: the trap is the first top-level statement after the helpers it needs"
+else fail "probe: the first top-level statement is line $_first, the trap is line $_tl"; fi
+printf '#!/usr/bin/env bash\nexec true\nfoo; kill -9 $$\n' > "$WORK/ban-positive.sh"
+cases=$((cases + 1))
+if [[ "$(sed -E 's/^[[:space:]]*#.*$//' "$WORK/ban-positive.sh" | grep -cE '(^|[;&|[:space:](])(exec|kill)([[:space:]]|$)' || true)" == 2 ]]; then pass "ban scan known-positive: flags exec and kill"
+else fail "ban scan known-positive: did not flag both"; fi
 
 cases=$((cases + 1))
 if [[ -x "$PROBE_SRC" ]]; then pass "probe is executable"; else fail "probe is not executable"; fi
@@ -362,7 +383,7 @@ expect "row8 / mut2 ledger plaintext-exception, store on LUKS" 5 under_claim
 
 # Row 9: encrypted and agreeing, backstop past its expiry.
 reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="luks inngest-redis $EXP_PAST"
-C_REQUIRE="destroy the backstop under #8285"
+C_REQUIRE="Destroy the backstop under #8285"
 expect "row9 luks + on mapper + a day past expires_on + backstop row present" 5 backstop_expired
 reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="luks inngest-redis 2026-13-45"
 expect "row9 backstop expires_on malformed in the agreeing state" 3 ledger_unreadable
@@ -379,11 +400,84 @@ expect "clock SOLEUR_FT_NOW malformed" 3 clock_malformed
 reset_case; C_ROWS="$_fresh_luks"; C_NOW=""
 expect "clock SOLEUR_FT_NOW set but empty" 3 clock_malformed
 
+# expect() OWNS the verdict, so it gets its own known-negative: a wrong status and a wrong marker
+# must each move fails. Counters and the case tally are unwound so the floor stays exact.
+_p0=$passes; _f0=$fails; _c0=$cases
+reset_case; C_ROWS="$_fresh_luks"; expect "SELFTEST expect() wrong status" 5 agree 2>/dev/null >/dev/null
+_f1=$fails
+reset_case; C_ROWS="$_fresh_luks"; expect "SELFTEST expect() wrong marker" 2 under_claim 2>/dev/null >/dev/null
+if (( _f1 != _f0 + 1 || fails != _f0 + 2 || passes != _p0 )); then
+  printf 'FATAL: expect() did not reject a wrong status and a wrong marker -- every decision-table case is unbacked.\n' >&2
+  exit 1
+fi
+passes=$_p0; fails=$_f0; cases=$_c0
+
+# The other direction of mut4: newest on LUKS, an older dedicated row on plaintext (the day after a
+# re-cutover) must be 2 agree, whichever order the helper lists them in.
+reset_case; C_ROWS="$({ ded "$DT_OLDER" "$PLAIN_SRC"; ded "$DT_FRESH" "$LUKS_SRC"; } | fx twoRowsLuksNewest)"
+expect "mut4c newest row LUKS, older row plaintext" 2 agree
+reset_case; C_ROWS="$({ ded "$DT_FRESH" "$LUKS_SRC"; ded "$DT_OLDER" "$PLAIN_SRC"; } | fx twoRowsLuksNewestDesc)"
+expect "mut4d newest-by-dt is LUKS even when listed first" 2 agree
+# A 'T'-separated dt sorts with the ' '-separated ones (normalised), so the newer row still wins.
+reset_case; C_ROWS="$({ ded "2026-10-01T09:00:00Z" "$LUKS_SRC"; ded "$DT_OLDER" "$PLAIN_SRC"; } | fx mixedDt)"
+expect "dt 'T' vs ' ' forms compare as instants, not strings" 2 agree
+
+# dt that cannot be read, or lies in the future.
+reset_case; C_ROWS="$(ded "not-a-date" "$LUKS_SRC" | fx dtBad)"
+expect "row5 newest dt unreadable" 3 row_unusable
+reset_case; C_ROWS="$({ ded "$DT_FRESH" "$PLAIN_SRC"; ded "2027-01-01 00:00:00.000000" "$LUKS_SRC"; } | fx dtFuture)"
+C_REQUIRE="field=dt_future"
+expect "row5 newest dt in the future never decides" 3 row_unusable
+
+# Usage.
+reset_case; C_ROWS="$_fresh_luks"; C_ARGS="extra"
+expect "usage: any argument" 64 usage
+
+# First host_role token wins; an appended role cannot promote a web row.
+reset_case; C_ROWS="$(row "$DT_FRESH" "$(msg web "$LUKS_SRC" "$VOL" "host_role=dedicated")" | fx roleTail)"
+expect "row3 appended host_role=dedicated cannot promote a web-role row" 3 no_rows
+
+# Ledger shape: duplicate luks rows, duplicate backstop rows.
+jq -n '{stores:[
+  {store:"hcloud_volume.inngest_redis_luks", device_binding:{mapper:"inngest-redis"}, at_rest:{mechanism:"luks"}},
+  {store:"hcloud_volume.inngest_redis_luks", device_binding:{mapper:"inngest-redis"}, at_rest:{mechanism:"luks"}}]}' > "$WORK/fx/ledger-twoluks.json"
+reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="raw:$WORK/fx/ledger-twoluks.json"; C_REQUIRE="reason=luks_row_count"
+expect "row6 two luks rows" 3 ledger_unreadable
+jq -n --arg a "$EXP_FUTURE" --arg b "$EXP_PAST" '{stores:[
+  {store:"hcloud_volume.inngest_redis_luks", device_binding:{mapper:"inngest-redis"}, at_rest:{mechanism:"luks"}},
+  {store:"hcloud_volume.inngest_redis", at_rest:{mechanism:"plaintext-exception", exception:{expires_on:$a}}},
+  {store:"hcloud_volume.inngest_redis", at_rest:{mechanism:"plaintext-exception", exception:{expires_on:$b}}}]}' > "$WORK/fx/ledger-twoback.json"
+reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="raw:$WORK/fx/ledger-twoback.json"; C_REQUIRE="reason=backstop_row_count"
+expect "row6 two backstop rows (a stale duplicate cannot hide a sooner expiry)" 3 ledger_unreadable
+
+# Expiry boundary: expires_on == today is not yet past.
+reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="luks inngest-redis 2026-10-01"
+expect "row9 boundary: expires_on is today -> still agree" 2 agree
+
+# The REAL ledger, read by the shipped probe: it must parse and agree with a fresh LUKS row.
+reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="raw:$REPO/scripts/encryption-posture-ledger.json"
+expect "the committed ledger parses and agrees with a fresh LUKS row (row names, paths, mapper)" 2 agree
+
+# The runbook every ACTION message points at exists and carries the revert section.
+cases=$((cases + 1))
+if [[ -f "$REPO/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md" ]] \
+   && grep -qE '^## 5a\. .*op=luks-rollback' "$REPO/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"; then
+  pass "runbook inngest-luks-cutover-6894.md exists and carries section 5a for op=luks-rollback"
+else fail "runbook or its section 5a (op=luks-rollback) is missing -- the ACTION messages point nowhere"; fi
+
 echo "== harness rows =="
 # H1: a web-1 row on plaintext is the NEWEST; the dedicated row is on LUKS. The stub returned both.
 _h1="$({ ded "$DT_FRESH" "$LUKS_SRC"; web "$DT_NEWEST" "$PLAIN_SRC"; } | fx h1)"
 reset_case; C_ROWS="$_h1"
 expect "H1 newest web-role row on plaintext is ignored; the dedicated row decides" 2 agree
+# H1r: the same host, a web ROLE (isolates the role filter from the host pin).
+_h1r="$({ ded "$DT_FRESH" "$LUKS_SRC"; sweb "$DT_NEWEST" "$PLAIN_SRC"; } | fx h1r)"
+reset_case; C_ROWS="$_h1r"
+expect "H1r newest same-host web-role row is ignored" 2 agree
+# H1h: another HOST claiming host_role=dedicated (isolates the host pin from the role filter).
+_h1h="$({ ded "$DT_FRESH" "$LUKS_SRC"; odd "$DT_NEWEST" "$PLAIN_SRC"; } | fx h1h)"
+reset_case; C_ROWS="$_h1h"
+expect "H1h newest other-host row claiming host_role=dedicated is ignored" 2 agree
 # H2: non-canonical mapper, read from the ledger, plus unrelated rows around the fresh newest.
 reset_case
 C_ROWS="$({ ded "$DT_OLDEST" "/dev/mapper/vault-x"; web "$DT_OLDER" "$PLAIN_SRC";
@@ -553,12 +647,18 @@ else fail "mutation row 9: backstop_expired still present in the copy"; fi
 reset_case; C_ROWS="$_fresh_luks"; C_LEDGER="luks inngest-redis $EXP_PAST"; C_PROBE="$M"
 expect_red 9 "backstop_expired arm deleted" 5 backstop_expired
 
-# H1 code mutation: remove the probe's OWN host_role=dedicated filter; the H1 fixture must turn.
-M="$WORK/mut/h1.sh"
-grep -vF 'host_role=dedicated( |$)' "$PROBE_SRC" > "$M"
-assert_landed H1 "$M" "$MEASURE_R"
-reset_case; C_ROWS="$_h1"; C_PROBE="$M"
-expect_red H1 "probe's host_role=dedicated filter removed" 2 agree
+# H1 code mutations: remove the probe's OWN role filter, then its OWN host pin; each isolating
+# fixture must turn.
+M="$WORK/mut/h1r.sh"
+grep -vF 'host_role=(?<r>' "$PROBE_SRC" > "$M"
+assert_landed H1r "$M" "$MEASURE_R"
+reset_case; C_ROWS="$_h1r"; C_PROBE="$M"
+expect_red H1r "probe's host_role filter removed" 2 agree
+M="$WORK/mut/h1h.sh"
+grep -vF 'select(.host == $h and .host_name == $hn)' "$PROBE_SRC" > "$M"
+assert_landed H1h "$M" "$MEASURE_R"
+reset_case; C_ROWS="$_h1h"; C_PROBE="$M"
+expect_red H1h "probe's host pin removed" 2 agree
 
 echo "== rollback NEXT placement (AC-32) =="
 # placement_check <file>: prints a reason and returns 1 on any violation.
@@ -589,10 +689,28 @@ placement_check() {
       | grep -qE '^[[:space:]]*(else|elif|fi|esac)\b|;;|REFUSING|::error::|\bexit\b'; then
     echo "a branch boundary or refusal sits between the success branch and NEXT"; return 1
   fi
-  sed -n "${nl}p" <<<"$body" | grep -qE '::notice::' || { echo "NEXT is not a ::notice:: line"; return 1; }
+  sed -n "${nl}p" <<<"$body" | grep -qE '^[[:space:]]*echo "::notice::NEXT \(not automatic\):[^"]*"$' \
+    || { echo "NEXT is not a bare echo \"::notice::NEXT (not automatic): ...\" line (redirected, conditional or reshaped)"; return 1; }
+  if (( gl + 1 <= nl - 1 )) && sed -n "$((gl + 1)),$((nl - 1))p" <<<"$body" | grep -qvE '^[[:space:]]*(#.*)?$'; then
+    echo "something other than comments sits between the luks-rollback guard and NEXT (a loop, heredoc or function would make it dead)"; return 1
+  fi
   if sed -n "${nl}p" <<<"$body" | grep -qE 'REFUSING|::error::'; then echo "NEXT sits on a refusal line"; return 1; fi
   return 0
 }
+
+cases=$((cases + 1))
+_nx="$(grep -F 'NEXT (not automatic)' "$CUTOVER_SRC")"
+if grep -qF 'scripts/encryption-posture-ledger.json' <<<"$_nx" && grep -qF 'knowledge-base/legal/article-30-register.md' <<<"$_nx" \
+   && grep -qF 'inngest-luks-cutover-6894.md section 5a' <<<"$_nx" && grep -qF 'do NOT destroy' <<<"$_nx"; then
+  pass "AC-32 the NEXT line names the ledger, the register, runbook section 5a and the do-not-destroy warning"
+else fail "AC-32 the NEXT line lacks a required anchor: $_nx"; fi
+for _dead in 'while false; do' '_next_unused() {'; do
+  _m="$WORK/mut/cut-dead-$RANDOM.sh"
+  awk -v nl="$(grep -nF 'NEXT (not automatic)' "$CUTOVER_SRC" | cut -d: -f1)" -v w="$_dead" 'NR == nl { print "      " w } { print }' "$CUTOVER_SRC" > "$_m"
+  cases=$((cases + 1))
+  if [[ -n "$(placement_check "$_m")" ]]; then pass "placement check reds when '$_dead' wraps the NEXT line"
+  else fail "placement check PASSED with '$_dead' above the NEXT line"; fi
+done
 
 cases=$((cases + 1))
 _why="$(placement_check "$CUTOVER_SRC")"
@@ -663,7 +781,7 @@ if (( passes + fails != cases )); then
   exit 1
 fi
 # H4: a HARD-CODED floor. A runtime-derived one falls when a case is deleted.
-MIN_PASSES=91
+MIN_PASSES=114
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

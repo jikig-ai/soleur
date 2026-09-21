@@ -22,9 +22,11 @@
 # EXIT CONTRACT: 0 = the invariant holds; 1 = read succeeded, it does not yet; 2 = TRANSIENT;
 # 78 = refused under xtrace.
 #
-# RETIREMENT: delete this file after #8295 (the cutover tracker it is enrolled on, closed 2026-09-20)
-# leaves the sweeper's 14-day closed lookback on 2026-10-04. Until then it is the only detector that
-# can REOPEN #8295 if the cutover regresses. It has no sibling.
+# RETIREMENT: RETIRED 2026-09-21 (#8296). Its #8295 directive was removed: after the cutover the only
+# reason=cutover-complete row leaves this probe's 48h window, so every sweep from 2026-09-23 would
+# exit 1 and falsely reopen the correctly-closed #8295. Nothing runs this file now. Delete it in any
+# change that also drops its row from plugins/soleur/test/fixture-relative-assert.baseline.txt
+# (deleting it alone reddens that ratchet, and editing the baseline fires a plugin release).
 set -uo pipefail
 
 case "$-" in

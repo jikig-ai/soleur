@@ -199,23 +199,62 @@ there is no backfill, and no dispatch that can synthesise one.
    assuming. #8296 (the encryption-posture ledger flip) is a human decision and does not close
    itself. #8285 is the backstop volume's retirement, expiring 2026-10-22.
 
-   **Superseded 2026-09-21 (#8296), appended rather than edited:** the ledger flip has landed.
-   #8296 is closed by hand once PR-2 has merged, never by a sweeper. The one open step is now #8285:
-   destroy `hcloud_volume.inngest_redis` by 2026-10-22.
-   - #8285 carries the directive for `scripts/followthroughs/inngest-luks-property-8296.sh`. The probe is
-     NOTIFY-ONLY: it never exits 0 or 1, so the sweeper never closes that tracker. It comments on
-     #8285 every day: "NOT YET" when the ledger claim and the device agree, "ACTION REQUIRED" when
-     they do not. **Do not close #8285 before the backstop is destroyed**, because closing it turns
-     the probe off.
+   **Superseded 2026-09-21 (#8296), appended rather than edited:** the ledger flip has landed, and
+   the sentence above about #8294/#8295 is historical. Neither closed through the sweeper: both were
+   closed explicitly, and both follow-through directives were retired on 2026-09-21 (#8294's probe is
+   deleted as obsolete; #8295's would have falsely reopened it once its 48h window passed the
+   cutover). #8296 is closed explicitly (`gh issue close 8296`) once PR-2 has merged and its
+   post-merge steps are read back, never by a sweeper. The one open step is now #8285: destroy
+   `hcloud_volume.inngest_redis` by 2026-10-22.
+   - #8285 is enrolled, as a post-merge step of #8296 PR-2, with the `follow-through` label and the
+     directive for `scripts/followthroughs/inngest-luks-property-8296.sh`. The probe is NOTIFY-ONLY:
+     it never exits 0 or 1, so the sweeper never closes that tracker. It comments on #8285 every
+     day. The heading reads "NOT YET" when the ledger claim and the device agree (the body says
+     "healthy: nothing to do"), and "ACTION REQUIRED" when they do not. **Do not close #8285 before
+     the backstop is destroyed**: on a closed issue the sweeper does nothing with 2, 3 or 5, so
+     closing it turns the probe off.
+   - **Retiring the probe** happens only AFTER the destroy apply has run and the Hetzner API shows
+     the volume gone, never in the PR that merely removes it from Terraform. That PR's body carries
+     no closing keyword next to #8285; #8285 is closed explicitly after the check. The probe
+     header's RETIREMENT line lists what to delete.
    - A silent probe pipeline reads as healthy to the wrong-volume alert (`treat_as_zero`). The
      property probe reports that as "CANNOT ESTABLISH", and the paging fix is tracked in #8516 (D1).
-   - **After a sanctioned `op=luks-rollback`** the store is back on `hcloud_volume.inngest_redis`,
-     which is then the LIVE store: do NOT destroy it. The dispatch prints a
-     `NEXT (not automatic):` line. Revert the record by hand in one PR:
-     `scripts/encryption-posture-ledger.json` (`hcloud_volume.inngest_redis_luks` back to
-     `plaintext-exception`, with an exception block) and the three
-     `[2026-09-20 AMENDMENT (#8296)` cells in `knowledge-base/legal/article-30-register.md`
-     (PA-21 §(f), PA-22 §(f), PA-13 §(e)), each answered by a new dated amendment, never deleted.
+   - **After a sanctioned `op=luks-rollback`**, see §5a.
+
+---
+
+## 5a. After a sanctioned `op=luks-rollback`: revert the record
+
+The store is back on `hcloud_volume.inngest_redis`, which is now the **LIVE store: do NOT destroy
+it**, and do not act on #8285's expiry until the store is re-cut. A rollback makes no commit, so the
+record it falsifies is reverted in one PR. An agent can do every step; none needs a console.
+
+1. **Confirm the store moved.** The newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row
+   reads `data_mount_src` other than `/dev/mapper/inngest-redis` (§5 step 1's query). The property
+   probe reports this as `rollback_inversion` on #8285, and the wrong-volume alert pages on it.
+2. **Re-pause the wrong-volume alert** with the Doppler override described in §5 step 2
+   (`INNGEST_LUKS_CUTOVER_COMPLETE=false` in `soleur/prd_terraform`, then the manual-rerun apply).
+   This is a production write: it needs the operator's per-command go-ahead.
+3. **Revert the ledger row.** Take `hcloud_volume.inngest_redis_luks` back to its pre-flip shape,
+   which is recoverable verbatim from the parent of the #8296 PR-2 merge commit:
+
+   ```
+   git show <pr2-merge-sha>^:scripts/encryption-posture-ledger.json \
+     | jq '.stores[] | select(.store == "hcloud_volume.inngest_redis_luks")'
+   ```
+
+   Restore `mechanism: plaintext-exception` with that `exception` block (update `reassessed_on` and
+   append the rollback to `justification`), then run
+   `python3 scripts/lint-encryption-posture.py --repo-sweep` (must print `0 failing checks -> PASS`).
+4. **Answer the three `[2026-09-21 AMENDMENT (#8296)` cells** in
+   `knowledge-base/legal/article-30-register.md` (PA-21 §(f), PA-22 §(f), PA-13 §(e)) with a new
+   dated bracket appended to each, never by deleting text:
+   `**[<date> AMENDMENT (#<issue>): a sanctioned op=luks-rollback on <date> returned the store to
+   the plaintext volume hcloud_volume.inngest_redis; the #8296 amendment recorded above in this
+   cell no longer holds.]**`
+5. **Update the two other records:** `platform.infra.inngestRedis` in
+   `knowledge-base/engineering/architecture/diagrams/model.c4` (then
+   `bash scripts/regenerate-c4-model.sh`), and an appended amendment to ADR-142.
 
 ---
 

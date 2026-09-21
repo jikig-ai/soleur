@@ -363,3 +363,11 @@ through this correction.
 
 The decision, and the status. The ledger row keeps `live_verification` at `unavailable:`: the probe
 row proves which device backs `/mnt/data`, not that it is crypto_LUKS.
+
+Two earlier lines of this ADR now read through this amendment. The Status paragraph's "Supersedes the
+`plaintext-exception` for `hcloud_volume.inngest_redis`" is wrong for the same reason as item 8:
+that row keeps its exception as the backstop, and it is the sibling row whose exception went away.
+The "Where it lives" row's "(ships paused; armed post-cutover)" is still true as history: the alert
+did ship paused and was armed after the cutover (ADR-218, 2026-09-21 amendment). One known gap in
+that detector is open: a probe pipeline that goes silent reads as healthy (`treat_as_zero`), tracked
+in #8516.

@@ -22,14 +22,23 @@
 #    3 clock_malformed    SOLEUR_FT_NOW is set but is not an ISO-8601 UTC instant
 #    3 query_failed       the helper is missing, a credential is unset, the helper failed, or it
 #                         answered lines of which none decode as warehouse rows
-#    3 no_rows            no host_role=dedicated SOLEUR_INNGEST_SERVER_PROBE row in --since 26h
+#   64 usage              any argument was passed
+#    3 no_rows            no row from the dedicated host (host=soleur-inngest,
+#                         host_name=soleur-inngest-prd) whose message STARTS with
+#                         SOLEUR_INNGEST_SERVER_PROBE and whose FIRST host_role= token is dedicated,
+#                         in --since 26h
+#    3 row_unusable       the newest such row (by dt, 'T' and ' ' normalised) has a dt that is not
+#                         YYYY-MM-DD HH:MM:SS (field=dt) or lies more than 5 min in the future
+#                         (field=dt_future)
 #    3 producer_silent    the newest such row is older than 3 h (hourly cadence plus slack)
 #    3 row_unusable       its data_mount_src is empty, n/a, __UNREADABLE__ or not under /dev/, or
 #                         its data_mount_devid is not a scsi-0HC_Volume_<n> alias
-#    3 ledger_unreadable  the ledger, the luks row, its mechanism or its mapper cannot be read
+#    3 ledger_unreadable  the ledger, the luks row (exactly one), its mechanism or its mapper cannot
+#                         be read, or there is more than one backstop row
 #    5 rollback_inversion claims luks, store NOT on the LUKS mapper -- the backstop is the live store
 #    5 under_claim        does not claim luks, store on the LUKS mapper
-#    5 backstop_expired   ONLY when claims luks AND on the mapper AND now is past the backstop
+#    3 ledger_unreadable  (agreeing state only) the backstop row's expires_on is not YYYY-MM-DD
+#    5 backstop_expired   ONLY when claims luks AND on the mapper AND today is AFTER the backstop
 #                         row's exception.expires_on AND that row still exists
 #    2 agree              claims_luks == on_luks_mapper (a correct post-rollback revert lands here
 #                         too, even past the expiry)
@@ -44,20 +53,46 @@
 # Tracker directive (goes in the #8285 issue body, never #8296's):
 #   <!-- soleur:followthrough script=scripts/followthroughs/inngest-luks-property-8296.sh secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
 #
-# RETIREMENT: coverage ends when #8285 closes. The PR that destroys the backstop deletes this file,
-# its harness scripts/followthroughs/inngest-luks-property-8296.test.sh, the
-# run_suite "scripts/inngest-luks-property-8296" line in scripts/test-all.sh, and the #8285
-# directive, in the same change.
+# RETIREMENT: coverage ends when #8285 closes, because the sweeper does nothing with 2, 3 or 5 on a
+# closed issue. So retire it only AFTER the destroy apply has run and the Hetzner API shows
+# hcloud_volume.inngest_redis gone -- never in the PR that merely removes the volume from
+# Terraform. Then delete this file, its harness scripts/followthroughs/inngest-luks-property-8296.test.sh,
+# the run_suite "scripts/inngest-luks-property-8296" line in scripts/test-all.sh and the #8285
+# directive, and close #8285 explicitly (gh issue close 8285). The destroy PR's body must carry no
+# closing keyword next to #8285.
 #
 # Harness: scripts/followthroughs/inngest-luks-property-8296.test.sh (a fixture ledger and a stubbed
 # scripts/betterstack-query.sh in a fake tree; this file resolves its repo from its own location).
 set -uo pipefail
 
-# XTRACE REFUSAL (#7797). Tracing echoes a command after expansion, so under bash -x the
-# credential reaches the transcript the moment it is bound.
+marker() { # <verdict> [k=v …]
+  printf 'inngest-luks-property[#8296]: verdict=%s %s\n' "$1" "${2:-}"
+}
+
+# NEVER 0, NEVER 1. Every status outside the contract -- a fall-off, an unset variable under
+# set -u, a stray `$?` -- is rewritten to 3. Each allowed status is spelled out as a literal so the
+# harness's static allowlist can read every one. Installed FIRST, before any other statement, so no
+# line of this file runs without it; the harness also forbids exec, kill and a second trap.
+on_exit() {
+  local rc=$?
+  case "$rc" in
+    2) exit 2 ;;
+    3) exit 3 ;;
+    5) exit 5 ;;
+    64) exit 64 ;;
+    78) exit 78 ;;
+  esac
+  marker "trap_remapped" "rc=$rc"
+  echo "CANNOT ESTABLISH: the probe ended on a status outside its contract; nothing was decided. This probe never closes #8285."
+  exit 3
+}
+trap on_exit EXIT
+
+# XTRACE REFUSAL (#7797). Tracing echoes a command after expansion, so under bash -x a credential
+# reaches the transcript the moment it is bound. Any of the three refuses.
 case "$-" in
   *x*)
-    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${BETTERSTACK_QUERY_USERNAME:+x}${BETTERSTACK_QUERY_HOST:+x}" ]; then
       printf 'inngest-luks-property[#8296]: verdict=xtrace_refused refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -75,28 +110,11 @@ WINDOW="26h"
 LIMIT="${SOLEUR_FT_LIMIT:-5000}"
 STALE_SECS=10800
 RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
-
-marker() { # <verdict> [k=v …]
-  printf 'inngest-luks-property[#8296]: verdict=%s %s\n' "$1" "${2:-}"
-}
-
-# NEVER 0, NEVER 1. Every status outside the contract -- a fall-off, an unset variable under
-# set -u, a stray `$?` -- is rewritten to 3. Each allowed status is spelled out as a literal so the
-# harness's static allowlist can read every one.
-on_exit() {
-  local rc=$?
-  case "$rc" in
-    2) exit 2 ;;
-    3) exit 3 ;;
-    5) exit 5 ;;
-    64) exit 64 ;;
-    78) exit 78 ;;
-  esac
-  marker "trap_remapped" "rc=$rc"
-  echo "CANNOT ESTABLISH: the probe ended on a status outside its contract; nothing was decided. This probe never closes #8285."
-  exit 3
-}
-trap on_exit EXIT
+# The dedicated Inngest host, as vector stamps it (inngest-luks-cutover-6894.sh pins the same pair).
+# Every host writes into one Logs source, so a row is only this host's measurement if BOTH match.
+HOST="soleur-inngest"
+HOST_NAME="soleur-inngest-prd"
+FUTURE_SLACK_SECS=300
 
 if [[ "$#" -ne 0 ]]; then
   marker "usage" "argc=$#"
@@ -166,17 +184,20 @@ measure() {
     exit 3
   fi
 
-  # ANCHORED, NOT A BARE TOKEN: the message must START with the marker (a webhook body quoting it
-  # is third-party content), and the role is matched as a whole field. The helper's --grep is
-  # an unanchored LIKE, so this filter is the probe's own, never the query's.
+  # ANCHORED, NOT A BARE TOKEN: the row must come from the dedicated host (every host writes into
+  # one Logs source), the message must START with the marker (a webhook body quoting it is
+  # third-party content), and the role is the FIRST host_role= token, the same first-wins rule the
+  # field reader applies. The helper's --grep is an unanchored LIKE, so this filter is the probe's
+  # own, never the query's. dt is normalised ('T' -> ' ') so the sort compares like with like.
   local rows
-  rows="$(printf '%s\n' "$raw" | jq -R -r '
+  rows="$(printf '%s\n' "$raw" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" --arg pm "$PROBE_MARKER " '
       fromjson? | select(type == "object") | . as $o
       | ((.raw // "") | fromjson?) | select(type == "object")
+      | select(.host == $h and .host_name == $hn)
       | (.message // "") | select(type == "string")
-      | select(startswith("SOLEUR_INNGEST_SERVER_PROBE "))
-      | select(test("(^| )host_role=dedicated( |$)"))
-      | [(($o.dt // "") | tostring), .] | @tsv' 2>/dev/null \
+      | select(startswith($pm))
+      | select(((capture("(?:^| )host_role=(?<r>[^ ]*)")? // {r: ""}).r) == "dedicated")
+      | [(($o.dt // "") | tostring | sub("T"; " ")), .] | @tsv' 2>/dev/null \
     | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1)"
   if [[ -z "$rows" ]]; then
     marker "no_rows" "window=$WINDOW role=dedicated"
@@ -190,13 +211,21 @@ measure() {
   newest="$(printf '%s\n' "$rows" | tail -1)"
   dt="${newest%%$'\t'*}"
   ROW_MSG="${newest#*$'\t'}"
-  dt_epoch="$(date -u -d "${dt:0:19}" +%s 2>/dev/null)" || dt_epoch=""
+  dt_epoch=""
+  if [[ "$dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+    dt_epoch="$(date -u -d "${dt:0:19}" +%s 2>/dev/null)" || dt_epoch=""
+  fi
   if [[ -z "$dt_epoch" ]]; then
     marker "row_unusable" "field=dt"
-    echo "CANNOT ESTABLISH: the newest probe row carries no readable timestamp."
+    echo "CANNOT ESTABLISH: the newest probe row carries no readable YYYY-MM-DD HH:MM:SS timestamp."
     exit 3
   fi
   age=$(( NOW_EPOCH - dt_epoch ))
+  if (( age < -FUTURE_SLACK_SECS )); then
+    marker "row_unusable" "field=dt_future age_s=$age"
+    echo "CANNOT ESTABLISH: the newest probe row is dated in the future. A row that never goes stale must not decide the verdict."
+    exit 3
+  fi
   if (( age > STALE_SECS )); then
     marker "producer_silent" "age_s=$age limit_s=$STALE_SECS"
     echo "CANNOT ESTABLISH: the newest dedicated probe row is ${age}s old (limit ${STALE_SECS}s). A silent producer must never read as a healthy store."
@@ -266,6 +295,11 @@ read_ledger() {
     exit 3
   fi
   BACKSTOP_N="$(ledger_q '[.stores[]? | select(.store == $b)] | length')"
+  if [[ "$BACKSTOP_N" != "0" && "$BACKSTOP_N" != "1" ]]; then
+    marker "ledger_unreadable" "reason=backstop_row_count count=${BACKSTOP_N:-none}"
+    echo "CANNOT ESTABLISH: the ledger holds ${BACKSTOP_N:-an unreadable number of} $BACKSTOP_ROW row(s); at most one is allowed."
+    exit 3
+  fi
   BACKSTOP_EXPIRES="$(ledger_q '[.stores[]? | select(.store == $b)] | first // {} | (.at_rest.exception.expires_on // .exception.expires_on // "") | select(type == "string")')"
 }
 
@@ -276,14 +310,13 @@ decide() {
   [[ "$SRC" == "/dev/mapper/$MAPPER" ]] && on=1
 
   if (( claims && ! on )); then
-    echo "backstop is the LIVE store — do NOT destroy hcloud_volume.inngest_redis"
     marker "rollback_inversion" "claim=$MECH store=$(safe "$SRC") mapper=$MAPPER age_s=$ROW_AGE"
-    echo "ACTION REQUIRED: the ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER. The record is false: revert it (the ledger row and the Article 30 amendments) by following $RUNBOOK section 5. The plaintext backstop is holding the live data."
+    echo "ACTION REQUIRED: backstop is the LIVE store — do NOT destroy hcloud_volume.inngest_redis. The ledger claims $LUKS_ROW is LUKS-encrypted, but the store is measured OFF /dev/mapper/$MAPPER, so the record is false. If this follows a sanctioned op=luks-rollback, revert the record per $RUNBOOK section 5a. If no rollback was run, investigate the mount first (the wrong-volume alert should also have paged)."
     exit 5
   fi
   if (( ! claims && on )); then
     marker "under_claim" "claim=$MECH store=$(safe "$SRC") mapper=$MAPPER age_s=$ROW_AGE"
-    echo "ACTION REQUIRED: the store is measured ON /dev/mapper/$MAPPER, but the ledger claims '$MECH' for $LUKS_ROW. The record under-states the encryption; flip it to luks per $RUNBOOK."
+    echo "ACTION REQUIRED: the store is measured ON /dev/mapper/$MAPPER, but the ledger claims '$MECH' for $LUKS_ROW. The record under-states the encryption: re-apply the luks row (the #8296 PR-2 flip) in a PR, see $RUNBOOK section 5a."
     exit 5
   fi
   # ARM-BEGIN backstop_expired
@@ -298,7 +331,7 @@ decide() {
     EXPIRES_S=$(date -u -d "$BACKSTOP_EXPIRES" +%s 2>/dev/null || echo 0)
     if (( NOW_DAY_S > EXPIRES_S && EXPIRES_S > 0 )); then
       marker "backstop_expired" "expires_on=$BACKSTOP_EXPIRES now=$NOW_DAY"
-      echo "ACTION REQUIRED: the store is on the LUKS mapper and the ledger agrees, and the plaintext backstop $BACKSTOP_ROW is past its expires_on ($BACKSTOP_EXPIRES). destroy the backstop under #8285."
+      echo "ACTION REQUIRED: the store is on the LUKS mapper and the ledger agrees, and the plaintext backstop $BACKSTOP_ROW is past its expires_on ($BACKSTOP_EXPIRES). Destroy the backstop under #8285, then retire this probe as its RETIREMENT header says."
       exit 5
     fi
   fi
