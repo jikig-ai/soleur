@@ -352,6 +352,12 @@ write_files:
       # exactly the case that produces a tail worth shipping, so omitting this value would leak
       # the credential in clear on the one path that carries it.
       . /etc/default/soleur-zot-read 2>/dev/null; vals+=("$ZOT_PULL_TOKEN")
+      # #6500: the baked Sentry DSN and its key, by VALUE. READ with sed, never sourced: the file
+      # is a templatefile() substitution of a variable with no validation block, and sourcing it
+      # would run its bytes as root. The key is enumerated on its own line because a tail can
+      # carry the key without the rest of the DSN, and it is too short for the pattern backstop.
+      sf=/etc/default/soleur-sentry-dsn; [ -n "$SOLEUR_SENTRY_DSN_FILE" ] && sf="$SOLEUR_SENTRY_DSN_FILE"; sdsn="$(sed -n "s/^SOLEUR_SENTRY_DSN='\(.*\)'$/\1/p" "$sf" 2>/dev/null | head -n 1)"; vals+=("$sdsn")
+      vals+=("$(printf %s "$sdsn" | sed -E 's#https://([^@]+)@.*#\1#')")
       . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
       if [ -n "$DOPPLER_TOKEN" ]; then
         while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config prd 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
@@ -362,6 +368,53 @@ write_files:
       printf '%s' "$data" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#[0-9a-f]{32,}#REDACTED#g; s#[A-Za-z0-9_+/-]{40,}#REDACTED#g'
     owner: root:root
     permissions: '0755'
+
+  # --- #6500: the pull outcome on the Sentry `stage:` schema -------------------------------
+  # The web host's soleur-boot-emit ships in its host-script bundle, which this host never
+  # receives, so this is a host-local copy of the same event shape (message, level, and the
+  # tag set stage/host_id/region/host_name/detail). zot-soak-6122.sh counts these events, and
+  # its denominator filters on host_name, so HOST_NAME is a literal the soak pins.
+  # Fail-open: always exits 0, and a non-delivery is reported to the Better Stack phone-home
+  # with a numeric (or nodsn/baddsn) reason, never silently. The DSN is READ, never sourced,
+  # and its shape is checked before curl sees it: the key reaches curl on stdin (`-K -`), so a
+  # quote or newline in it would otherwise inject curl config. Bounded to about 16 s worst case
+  # because the call sites run in the foreground (a backgrounded emit would race the exit of
+  # the fallback arm and could be killed with the cloud-final control group).
+  - path: /usr/local/bin/soleur-boot-emit
+    content: |
+      #!/bin/sh
+      ( set +e
+        STAGE="$1"; LEVEL="$2"; [ -n "$LEVEL" ] || LEVEL=info
+        DETAIL=$(printf '%s' "$3" | LC_ALL=C tr -cd 'A-Za-z0-9=.:_-' | cut -c1-120)
+        f=/etc/default/soleur-sentry-dsn; [ -n "$SOLEUR_SENTRY_DSN_FILE" ] && f="$SOLEUR_SENTRY_DSN_FILE"
+        ph=/usr/local/bin/inngest-boot-phone-home.sh; [ -n "$SOLEUR_INNGEST_PHONE_HOME" ] && ph="$SOLEUR_INNGEST_PHONE_HOME"
+        DSN=$(sed -n "s/^SOLEUR_SENTRY_DSN='\(.*\)'$/\1/p" "$f" 2>/dev/null | head -n 1)
+        if [ -z "$DSN" ]; then [ -x "$ph" ] && "$ph" sentry-emit-FAILED "stage=$STAGE rc=nodsn"; exit 0; fi
+        printf '%s' "$DSN" | grep -qE '^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$' || { [ -x "$ph" ] && "$ph" sentry-emit-FAILED "stage=$STAGE rc=baddsn"; exit 0; }
+        KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+        SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+        PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+        HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd 'A-Za-z0-9._-' )
+        HOST_NAME='soleur-inngest'
+        BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"%s","tags":{"stage":"%s","host_id":"%s","region":"cloud-init","host_name":"%s","detail":"%s"}}' "$LEVEL" "$STAGE" "$HOST_ID" "$HOST_NAME" "$DETAIL")
+        printf 'header = "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=%s"\n' "$KEY" | curl -K - -sf --connect-timeout 5 --max-time 8 --retry 1 --retry-max-time 15 -X POST "https://$SHOST/api/$PROJ/store/" -H 'Content-Type: application/json' -d "$BODY" >/dev/null 2>&1
+        crc=$?
+        if [ "$crc" -ne 0 ]; then [ -x "$ph" ] && "$ph" sentry-emit-FAILED "stage=$STAGE rc=$crc"; fi
+      ) || true
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  # #6500: the Sentry DSN, baked from the root variable web-1 and git-data already bake. NOT a
+  # Doppler key: soleur-inngest/prd is checked by exact name-set equality at boot, and one more
+  # name there would make the boot fatal. Semi-public (it is in the web client bundle) and
+  # ingest-only; 0600 anyway, the /etc/default/soleur-zot-read precedent. Written at the init
+  # stage, before runcmd. Its consumers READ it with sed; nothing sources it.
+  - path: /etc/default/soleur-sentry-dsn
+    content: |
+      SOLEUR_SENTRY_DSN='${sentry_dsn}'
+    owner: root:root
+    permissions: '0600'
 
   # --- #7228: re-stage the boot-trace token on EVERY boot, not just the first ------------
   # THE DEFECT. Every write of /run/inngest-bs-logs-token lives inside `runcmd:`. cloud-init
@@ -1416,19 +1469,17 @@ runcmd:
         IREF="$ZIREF"
         ZOT_LEG=ok
         /usr/local/bin/inngest-boot-phone-home.sh inngest_zot "bootstrap image served by zot ep=$ZOT_EP"
+        soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
       else
-        # The fallback-rate signal. This host has NO soleur-boot-emit (that emitter ships with
-        # the WEB host's host-script bundle), and inngest-boot-phone-home.sh takes no severity
-        # argument — the STAGE NAME is the whole signal. The name matches the web host's, but
-        # that does NOT mean one query covers both, and an earlier draft of this comment claimed
-        # it did: `soleur-boot-emit` POSTs to Sentry and nothing else, this emitter POSTs to
-        # Better Stack and nothing else. So the web host's fallback exists ONLY in Sentry and
-        # this one ONLY in Better Stack — no single query in either system sees both. The shared
-        # name buys future convenience, not a query today. Read this host via
-        # `betterstack-query.sh --grep inngest_ghcr_fallback`; the Sentry-based zot-soak
-        # `[freshboot]` count is web-host-only.
+        # The fallback-rate signal, on BOTH channels (#6500). This host now carries its own
+        # soleur-boot-emit (write_files above), so the stage reaches Sentry under the same name
+        # the web host uses, and the zot-soak `[freshboot]` count covers both hosts; the soak's
+        # denominator separately requires a `host_name:"soleur-inngest"` inngest_zot event. The
+        # Better Stack marker stays as the second, independently-credentialed channel. Both calls
+        # are foreground and `|| true`: set -e is live here, and the emitter must never cost a boot.
         ZOT_LEG="failed rc=$zot_rc tail=$zot_tail"
         /usr/local/bin/inngest-boot-phone-home.sh inngest_ghcr_fallback "zot miss ep=$ZOT_EP rc=$zot_rc tail=$zot_tail"
+        soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true
       fi
     fi
     # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE

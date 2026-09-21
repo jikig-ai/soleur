@@ -775,13 +775,10 @@ assert "Row2: both legs pin the SAME digest (crane copy is digest-preserving)" \
   "[[ -n '$ZG_ZOT_DIGEST' && '$ZG_ZOT_DIGEST' == '$ZG_GHCR_DIGEST' ]]"
 
 # --- Row 3: every registry outcome is reported off-box ------------------------------------
-# This host has NO `soleur-boot-emit` (grep: zero occurrences) — that emitter is delivered by
-# the WEB host's host-script bundle. Its only channel is inngest-boot-phone-home.sh, whose
-# signature is `<stage> [detail]` with NO severity argument, so the STAGE NAME carries the
-# whole signal. The names match the web host's (`inngest_zot`, `inngest_ghcr_fallback`) — but
-# that does NOT mean one query covers both, and an earlier draft of this comment said it did:
-# `soleur-boot-emit` POSTs to Sentry only, this emitter to Better Stack only, so no single
-# query in either system sees both hosts.
+# The Better Stack half. inngest-boot-phone-home.sh's signature is `<stage> [detail]` with NO
+# severity argument, so the STAGE NAME carries the whole signal. Since #6500 the same two
+# outcomes ALSO reach Sentry through a host-local soleur-boot-emit; that half is Guard 1b below,
+# which pins the call sites per ARM rather than per file.
 assert "Row3: a zot HIT emits inngest_zot" \
   "grep -qF 'inngest-boot-phone-home.sh inngest_zot' '$DED_CODE_FILE'"
 assert "Row3: the zot->GHCR flip emits inngest_ghcr_fallback (the fallback-rate signal)" \
@@ -1010,6 +1007,62 @@ assert "GuardB anti-vacuity: the section ran its full inventory (expected 9, ran
 ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
 assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 50, ran $ZG_SECTION_ASSERTIONS)" \
   "(( ZG_SECTION_ASSERTIONS == 50 ))"
+
+# --- Guard 1b (#6500): each pull-outcome ARM reports on the Sentry `stage:` schema ----------
+# zot-soak-6122.sh counts `stage:"inngest_zot"`/`"inngest_ghcr_fallback"` in Sentry and anchors
+# its #6500 corroboration on `^\s*soleur-boot-emit inngest_zot ` / `... inngest_ghcr_fallback `.
+# A file-level grep would accept both calls in ONE arm, so the zot `if` is split at its own
+# `if [ "$zot_rc" -eq 0 ]` / `else` / `fi` and each ARM is asserted separately. The arms are
+# comment-stripped: DED_BLOCK_FILE is extracted from the raw file, and a commented-out call must
+# not count.
+echo ""
+echo "--- Guard 1b (#6500): per-arm Sentry stage emits (dedicated host) ---"
+G1B_BEFORE="$TOTAL"
+ARM_ZOT="$(mktemp -t inngest-arm-zot-XXXXXX)"
+ARM_FB="$(mktemp -t inngest-arm-fb-XXXXXX)"
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"' EXIT
+sed -E '/^[[:space:]]*#/d' "$DED_BLOCK_FILE" | awk -v Z="$ARM_ZOT" -v F="$ARM_FB" '
+  /^[[:space:]]*if \[ "\$zot_rc" -eq 0 \]; then$/ { arm = "z"; next }
+  arm == "z" && /^[[:space:]]*else$/ { arm = "f"; next }
+  arm == "f" && /^[[:space:]]*fi$/ { exit }
+  arm == "z" { print > Z }
+  arm == "f" { print > F }
+'
+G1B_ZOT_LINES=$(grep -c . "$ARM_ZOT" || true)
+G1B_FB_LINES=$(grep -c . "$ARM_FB" || true)
+# Dispatch floor (row 12): an anchor that drifted yields an EMPTY arm, and every negative below
+# would then pass over nothing.
+assert "G1b dispatch: the served (zot) arm was extracted (>=3 code lines, found $G1B_ZOT_LINES)" \
+  "(( G1B_ZOT_LINES >= 3 ))"
+assert "G1b dispatch: the missed (fallback) arm was extracted (>=3 code lines, found $G1B_FB_LINES)" \
+  "(( G1B_FB_LINES >= 3 ))"
+G1B_ZOT_OK=$(grep -cE '^[[:space:]]*soleur-boot-emit inngest_zot info "ep=\$ZOT_EP" \|\| true$' "$ARM_ZOT" || true)
+G1B_FB_OK=$(grep -cE '^[[:space:]]*soleur-boot-emit inngest_ghcr_fallback warning "rc=\$zot_rc" \|\| true$' "$ARM_FB" || true)
+G1B_ZOT_ANY=$(grep -c 'soleur-boot-emit' "$ARM_ZOT" || true)
+G1B_FB_ANY=$(grep -c 'soleur-boot-emit' "$ARM_FB" || true)
+assert "G1b: the served arm emits inngest_zot exactly once, bare name, foreground, || true (found $G1B_ZOT_OK)" \
+  "(( G1B_ZOT_OK == 1 ))"
+assert "G1b: the missed arm emits inngest_ghcr_fallback exactly once, bare name, foreground, || true (found $G1B_FB_OK)" \
+  "(( G1B_FB_OK == 1 ))"
+assert "G1b: each arm carries exactly ONE soleur-boot-emit call (served $G1B_ZOT_ANY, missed $G1B_FB_ANY)" \
+  "(( G1B_ZOT_ANY == 1 && G1B_FB_ANY == 1 ))"
+assert "G1b: no soleur-boot-emit call is backgrounded (a background emit races the fallback arm's exit)" \
+  "! grep -qE '^[[:space:]]*soleur-boot-emit .*&[[:space:]]*\$' '$DED_CODE_FILE'"
+# The write_files half: the emitter is delivered executable, the DSN file 0600, and the DSN file
+# carries the templatefile variable. Each entry is sliced to its own `- path:` block so a
+# permissions line from the NEXT entry cannot satisfy it.
+wf_block() { awk -v p="  - path: $1" '$0==p{f=1;print;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI_YML"; }
+assert "G1b: write_files delivers /usr/local/bin/soleur-boot-emit 0755" \
+  "wf_block /usr/local/bin/soleur-boot-emit | grep -qxF \"    permissions: '0755'\""
+assert "G1b: write_files delivers /etc/default/soleur-sentry-dsn 0600 (the DSN never world-readable)" \
+  "wf_block /etc/default/soleur-sentry-dsn | grep -qxF \"    permissions: '0600'\""
+assert "G1b: the DSN file is the templatefile sentry_dsn value" \
+  "wf_block /etc/default/soleur-sentry-dsn | grep -qxF \"      SOLEUR_SENTRY_DSN='\\\${sentry_dsn}'\""
+assert "G1b: inngest-host.tf threads sentry_dsn = var.sentry_dsn into this template" \
+  "grep -qE '^[[:space:]]*sentry_dsn[[:space:]]*=[[:space:]]*var\.sentry_dsn\$' '$SCRIPT_DIR/inngest-host.tf'"
+G1B_ASSERTIONS=$(( TOTAL - G1B_BEFORE ))
+assert "G1b anti-vacuity: the section ran its full inventory (expected 10, ran $G1B_ASSERTIONS)" \
+  "(( G1B_ASSERTIONS == 10 ))"
 
 # --- Row 7: a failed bootstrap must say WHY, on the one channel that still works -----------
 # The failure that kills the bootstrap also kills Vector, which is installed BY the bootstrap. So

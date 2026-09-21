@@ -430,6 +430,15 @@ locals {
     # pre-Doppler fallback). Retrievable via the host metadata API — acceptable for an ingest-only
     # logs token on a deny-all host given the diagnosability it buys (weigh before widening use).
     betterstack_logs_token = var.betterstack_logs_token
+    # #6500: the Sentry DSN for the host-local soleur-boot-emit, so the bootstrap-pull outcome
+    # reaches the Sentry `stage:` schema zot-soak-6122.sh counts. This is the root variable
+    # web-1 and git-data already bake (TF_VAR_sentry_dsn from prd_terraform), NOT a Doppler
+    # key: soleur-inngest/prd is checked by exact name-set equality at boot, so adding a name
+    # there would make the boot fatal. An empty value makes the emitter phone home rc=nodsn,
+    # and the soak's host-pinned denominator then reads 0 and FAILs closed. Cost: rotating
+    # SENTRY_DSN changes this host's user_data, so the next hcloud_server.inngest apply
+    # force-replaces the sole scheduler (ADR-096, 2026-09-21 amendment).
+    sentry_dsn = var.sentry_dsn
   }), local.inngest_rationale_strip, "")
 
   # base64gzip of the stripped render — THE value Hetzner stores against its 32,768 B cap,

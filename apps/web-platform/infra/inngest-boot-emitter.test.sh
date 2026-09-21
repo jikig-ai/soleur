@@ -219,8 +219,13 @@ else
   # Keys come from the templatefile() call site in inngest-host.tf — the authoritative statement
   # of what this template receives. A missing key is a render error, not a silent empty string,
   # so a future var addition trips this loudly rather than degrading the assertions to vacuity.
-  printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt" })\n' \
-    "$CLOUD_INIT" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
+  # #6500: the render expression is kept in a variable so the Guard 2 row 4 mutation can re-render
+  # a mutated copy of the template through the SAME map.
+  # `sentry_dsn` (#6500) is short, alphanumeric and non-hex on purpose: it must pass the emitter's
+  # DSN shape check, and the redaction pattern backstop must NOT be able to catch its key, so the
+  # Guard 4 cases prove the explicit enumeration rather than the backstop.
+  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
+  printf '%s\n' "$RENDER_EXPR" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
   # above it promises a future var addition "trips this loudly". It does — but it trips as
@@ -256,10 +261,10 @@ else
   MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | head -1 \
     | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
   # Non-vacuity: an extraction that found nothing must not report parity. The floor is the ACTUAL
-  # key count, not a round number safely below it — a `-ge 10` passed at 13 while three keys were
+  # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`) — a `-ge 10` passed at 13 while three keys were
   # missing from both sides, which is precisely the state it was supposed to make visible.
   assert "AC5 key-set parity: the .tf call site's keys were extracted" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 17 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 18 ]]"
   # ...and an OVER-extraction bound, the direction the floor above is blind to. A range whose end
   # anchor stops matching runs to EOF and harvests unrelated assignments; that is not a missing
   # key and should not be reported as one. 17 is the call site's actual key count, so this is
@@ -267,7 +272,7 @@ else
   # `inngest_luks_volume_id`, the additive volume's id the two-device resolver needs, and this
   # suite's map was not updated in the same commit — so the over-read guard fired on a real key.)
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 17 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 18 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
@@ -318,6 +323,247 @@ else
     "grep -qF 'SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED' <<<\"\$RESTAGE_BODY\""
   assert "AC5 the re-stage emits a positive control on success (else 'no rows' is ambiguous — ADR-117)" \
     "grep -qF 'SOLEUR_INNGEST_BS_TOKEN_RESTAGED' <<<\"\$RESTAGE_BODY\""
+
+  # === #6500: the dedicated host reports its pull outcome on the Sentry `stage:` schema ============
+  # Guards 2, 3 and 4 of the #6500 plan (Guard Contract). Everything below runs against the RENDERED
+  # userdata above, never the raw template: `$${...}` collapses and `%{...}` evaluates at render, so
+  # a raw body is a script no host receives. Each case is a FUNCTION that returns 0 when its property
+  # holds, so the same function scores the real body (must PASS) and every mutant (must go RED).
+  echo ""
+  echo "--- #6500: soleur-boot-emit + inngest-redact.sh DSN enumeration (asserted over the RENDER) ---"
+
+  # write_files body of <path>, from a rendered (or raw) cloud-config: the path line to the next
+  # `  - path:`, minus the YAML keys, dedented out of the 6-space block scalar.
+  extract_wf() {
+    awk -v p="  - path: $1" '$0==p{f=1;next} f&&/^  - path: /{f=0} f' "$2" \
+      | sed -e '/^    content: |$/d' -e '/^    owner:/d' -e '/^    permissions:/d' -e 's/^      //'
+  }
+
+  EMIT="$WORK/soleur-boot-emit"
+  REDACT="$WORK/inngest-redact.sh"
+  extract_wf /usr/local/bin/soleur-boot-emit "$RENDERED" > "$EMIT"
+  extract_wf /usr/local/bin/inngest-redact.sh "$RENDERED" > "$REDACT"
+  assert "G3 extraction: the rendered soleur-boot-emit body is non-empty, has a shebang and a curl" \
+    "[[ -s '$EMIT' ]] && head -1 '$EMIT' | grep -q '^#!/bin/sh' && grep -q 'curl ' '$EMIT'"
+  assert "G3 extraction: the rendered soleur-boot-emit is valid sh" "sh -n '$EMIT'"
+  assert "G4 extraction: the rendered inngest-redact.sh body is non-empty and valid bash" \
+    "[[ -s '$REDACT' ]] && bash -n '$REDACT'"
+
+  # --- stubs ---------------------------------------------------------------------------------------
+  # curl records argv (one per line), stdin (where `-K -` carries the auth header) and the `-d` body,
+  # and exits EC_CURL_RC. The phone-home stub records its argv and EXITS 3: a removed `|| true`
+  # wrapper then surfaces as a non-zero emitter exit instead of an equivalent mutant (G3 row 1).
+  EB="$WORK/emitbin"; mkdir -p "$EB"
+  cat > "$EB/curl" <<'ECURL'
+#!/bin/sh
+echo call >> "$EC_CALLS"
+printf '%s\n' "$@" > "$EC_ARGV"
+cat > "$EC_STDIN"
+prev=""
+for a in "$@"; do [ "$prev" = "-d" ] && printf '%s' "$a" > "$EC_BODY"; prev="$a"; done
+exit "${EC_CURL_RC:-0}"
+ECURL
+  cat > "$EB/phone-home" <<'EPH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$EC_PH"
+exit 3
+EPH
+  chmod +x "$EB/curl" "$EB/phone-home"
+
+  DSN_OK="https://pubKEYx7@o1.ingest.invalid/42"
+  EC_DIR="$WORK/ec"
+  # run_emit <emitter> <dsn-file> <curl-rc> <stage> <level> <detail>; leaves the recordings in EC_DIR
+  # and the emitter's exit code in EC_RC. Every recording is truncated first so a case can never read
+  # a previous case's result.
+  run_emit() {
+    rm -rf "$EC_DIR"; mkdir -p "$EC_DIR"
+    : > "$EC_DIR/calls"; : > "$EC_DIR/ph"
+    PATH="$EB:$PATH" EC_CALLS="$EC_DIR/calls" EC_ARGV="$EC_DIR/argv" EC_STDIN="$EC_DIR/stdin" \
+      EC_BODY="$EC_DIR/body" EC_PH="$EC_DIR/ph" EC_CURL_RC="$3" \
+      SOLEUR_SENTRY_DSN_FILE="$2" SOLEUR_INNGEST_PHONE_HOME="$EB/phone-home" \
+      sh "$1" "$4" "$5" "$6" < /dev/null > "$EC_DIR/out" 2> "$EC_DIR/err"
+    EC_RC=$?
+  }
+  dsn_file() { printf "SOLEUR_SENTRY_DSN='%s'\n" "$1" > "$WORK/dsn.env"; echo "$WORK/dsn.env"; }
+  ncalls() { grep -c . "$EC_DIR/calls" 2>/dev/null || true; }
+
+  # G2 + G3 happy path: one POST, the web emitter's event shape, the key only on stdin, bounded.
+  case_happy() {
+    run_emit "$1" "$(dsn_file "$DSN_OK")" 0 inngest_zot info "ep=10.0.1.30:5000"
+    [[ "$EC_RC" -eq 0 ]] || return 1
+    [[ "$(ncalls)" -eq 1 ]] || return 1
+    [[ -s "$EC_DIR/body" ]] || return 1
+    grep -qxF 'https://o1.ingest.invalid/api/42/store/' "$EC_DIR/argv" || return 1
+    ! grep -qF 'pubKEYx7' "$EC_DIR/argv" || return 1
+    grep -qF 'sentry_key=pubKEYx7' "$EC_DIR/stdin" || return 1
+    grep -qxF -- '--connect-timeout' "$EC_DIR/argv" || return 1
+    grep -qxF -- '--max-time' "$EC_DIR/argv" || return 1
+    grep -qxF -- '--retry-max-time' "$EC_DIR/argv" || return 1
+    [[ ! -s "$EC_DIR/out" ]] || return 1
+    ! grep -qF 'pubKEYx7' "$EC_DIR/err" || return 1
+    [[ ! -s "$EC_DIR/ph" ]] || return 1
+    local keys
+    keys="$(jq -r '.tags | keys | join(",")' "$EC_DIR/body" 2>/dev/null)"
+    [[ "$keys" == "detail,host_id,host_name,region,stage" ]] || return 1
+    jq -e '.message == "soleur-cloud-init boot stage" and .level == "info"
+      and .tags.stage == "inngest_zot" and .tags.region == "cloud-init"
+      and .tags.host_name == "soleur-inngest" and .tags.detail == "ep=10.0.1.30:5000"' \
+      "$EC_DIR/body" >/dev/null 2>&1 || return 1
+  }
+  # G2 row 6: the level and detail arguments are carried, not hardcoded.
+  case_warning() {
+    run_emit "$1" "$(dsn_file "$DSN_OK")" 0 inngest_ghcr_fallback warning "rc=7"
+    [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 1 ]] || return 1
+    jq -e '.level == "warning" and .tags.stage == "inngest_ghcr_fallback" and .tags.detail == "rc=7"' \
+      "$EC_DIR/body" >/dev/null 2>&1
+  }
+  # G3 row 10 / 6: DSN file absent or empty -> exit 0, no curl, exactly one rc=nodsn phone-home.
+  case_nodsn() {
+    run_emit "$1" "$WORK/absent-dsn.env" 0 inngest_zot info "ep=x"
+    [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 0 && ! -s "$EC_DIR/out" ]] || return 1
+    [[ "$(cat "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_zot rc=nodsn" ]] || return 1
+    run_emit "$1" "$(dsn_file "")" 0 inngest_zot info "ep=x"
+    [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 0 ]] || return 1
+    [[ "$(cat "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_zot rc=nodsn" ]]
+  }
+  # G3 row 7: a malformed DSN (a quote that would inject into `curl -K -`, or no `@`) never reaches curl.
+  case_baddsn() {
+    local d
+    for d in 'https://a"b@h/1' 'https://nokeyhost/1' 'https://k\\x@h/1'; do
+      run_emit "$1" "$(dsn_file "$d")" 0 inngest_zot info "ep=x"
+      [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 0 ]] || return 1
+      [[ "$(head -1 "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_zot rc=baddsn" ]] || return 1
+    done
+  }
+  # G3 row 8 / G4 row 4: the DSN file is READ, never executed.
+  case_inject_emit() {
+    rm -f "$WORK/SENTINEL_EMIT"
+    printf "SOLEUR_SENTRY_DSN='x'; touch %s; X='y'\n" "$WORK/SENTINEL_EMIT" > "$WORK/evil.env"
+    run_emit "$1" "$WORK/evil.env" 0 inngest_zot info "ep=x"
+    [[ "$EC_RC" -eq 0 && ! -e "$WORK/SENTINEL_EMIT" ]]
+  }
+  # G3 rows 1 + 5: curl fails -> exit 0 anyway, and the failure reaches the phone-home seam, numeric.
+  case_curlfail() {
+    run_emit "$1" "$(dsn_file "$DSN_OK")" 7 inngest_ghcr_fallback warning "rc=1"
+    [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 1 ]] || return 1
+    [[ "$(cat "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_ghcr_fallback rc=7" ]]
+  }
+  # G1 row 10 (emitter half): the host_name the event carries is the literal the soak filters on.
+  case_hostname_literal() { grep -qxF "  HOST_NAME='soleur-inngest'" "$1"; }
+
+  for c in case_happy case_warning case_nodsn case_baddsn case_inject_emit case_curlfail case_hostname_literal; do
+    assert "G2/G3 must-PASS: $c holds for the rendered emitter" "$c '$EMIT'"
+  done
+
+  # G2 row 4: the BODY line survives templatefile byte-for-byte (no `%{`/`$${` for the renderer to eat).
+  RAW_EMIT="$WORK/raw-soleur-boot-emit"
+  extract_wf /usr/local/bin/soleur-boot-emit "$CLOUD_INIT" > "$RAW_EMIT"
+  case_body_parity() { # $1 raw body, $2 rendered body
+    local r n
+    r="$(grep -E '^  BODY=' "$1")"; n="$(grep -E '^  BODY=' "$2")"
+    [[ -n "$r" && "$r" == "$n" ]]
+  }
+  assert "G2 must-PASS: the rendered BODY line equals the raw one (the renderer changed nothing)" \
+    "case_body_parity '$RAW_EMIT' '$EMIT'"
+
+  # --- the in-suite mutation battery (landed-diff contract) ----------------------------------------
+  # mutant_red <label> <sed-script> <case> [<file>]: copy the body, apply the sed, REQUIRE the
+  # mutation landed (a non-empty diff — otherwise the row would score the unmutated body and report
+  # the baseline as a verdict), then require the case to go RED on the mutant.
+  mutant_red() {
+    local label="$1" script="$2" fn="$3" src="${4:-$EMIT}" m="$WORK/mutant.$RANDOM"
+    sed -e "$script" "$src" > "$m"
+    if cmp -s "$src" "$m"; then
+      fail "$label — HARNESS ABORT: the mutation did not land (sed matched nothing)"
+      return
+    fi
+    if "$fn" "$m"; then fail "$label — mutant SURVIVED"; else pass "$label — mutant killed"; fi
+  }
+  # Harness row: prove the landed-diff check itself fires (G1 row 13 shape, applied here too).
+  HARNESS_PROBE="$(mutant_red "probe" 's/THIS-STRING-IS-NOT-IN-THE-BODY/x/' case_happy 2>&1; true)"
+  assert "harness: a mutation that matches nothing is reported as HARNESS ABORT, never as a verdict" \
+    "grep -qF 'HARNESS ABORT' <<<\"\$HARNESS_PROBE\""
+
+  mutant_red "G3 row 1: drop the || true wrapper + final exit 0 (curl 7, phone-home exits 3)" \
+    's/^) || true$/)/; /^exit 0$/d' case_curlfail
+  mutant_red "G3 row 2: the auth header on argv instead of -K -" \
+    "s#printf 'header = [^|]*| curl -K - #curl -H \"X-Sentry-Auth: Sentry sentry_version=7, sentry_key=\$KEY\" #" case_happy
+  mutant_red "G3 row 3: echo the DSN to stderr" '/^  DSN=/a\
+  echo "$DSN" >\&2' case_happy
+  mutant_red "G3 row 4a: drop --connect-timeout" 's/--connect-timeout 5 //' case_happy
+  mutant_red "G3 row 4b: drop --max-time" 's/--max-time 8 //' case_happy
+  mutant_red "G3 row 4c: drop --retry-max-time" 's/--retry-max-time 15 //' case_happy
+  mutant_red "G3 row 5: drop the phone-home on a curl failure" '/rc=\$crc/d' case_curlfail
+  mutant_red "G3 row 6: drop the rc=nodsn phone-home" 's/"\$ph" sentry-emit-FAILED "stage=\$STAGE rc=nodsn"/:/' case_nodsn
+  mutant_red "G3 row 7: drop the DSN shape check" '/rc=baddsn/d' case_baddsn
+  mutant_red "G3 row 8: source the DSN file instead of reading it" \
+    's/^  DSN=.*/  . "$f"; DSN="$SOLEUR_SENTRY_DSN"/' case_inject_emit
+  mutant_red "G3 row 9: the emitter body is empty (dispatch)" '2,$d' case_happy
+  mutant_red "G2 row 1: change region" 's/"region":"cloud-init"/"region":"host"/' case_happy
+  mutant_red "G2 row 2: drop the host_name tag" 's/,"host_name":"%s"//' case_happy
+  mutant_red "G2 row 3: add an extra tag key" 's/"detail":"%s"}}/"detail":"%s","shipper":"x"}}/' case_happy
+  mutant_red "G1 row 10 (emitter half): HOST_NAME literal drifts" \
+    "s/HOST_NAME='soleur-inngest'/HOST_NAME='soleur-inngest-1'/" case_hostname_literal
+  # G2 row 4 needs a RE-RENDER of a mutated template: put a `$${...}` into the BODY line so the
+  # rendered bytes differ from the raw ones.
+  MUT_TPL="$WORK/mut-tpl.yml"
+  sed -e '/^ *BODY=/s/"level":"%s"/"level":"$${LEVEL}"/' "$CLOUD_INIT" > "$MUT_TPL"
+  if cmp -s "$CLOUD_INIT" "$MUT_TPL"; then
+    fail "G2 row 4 — HARNESS ABORT: the template mutation did not land"
+  else
+    sed -e "s#\"$CLOUD_INIT\"#\"$MUT_TPL\"#" <<<"$RENDER_EXPR" | terraform -chdir="$RENDER_DIR" console \
+      > "$WORK/mut-rendered.yml" 2>/dev/null
+    extract_wf /usr/local/bin/soleur-boot-emit "$WORK/mut-rendered.yml" > "$WORK/mut-emit"
+    extract_wf /usr/local/bin/soleur-boot-emit "$MUT_TPL" > "$WORK/mut-raw-emit"
+    if [[ ! -s "$WORK/mut-emit" ]]; then
+      fail "G2 row 4 — HARNESS ABORT: the mutated template did not render"
+    elif case_body_parity "$WORK/mut-raw-emit" "$WORK/mut-emit"; then
+      fail "G2 row 4: a templatefile escape in the BODY line — mutant SURVIVED"
+    else
+      pass "G2 row 4: a templatefile escape in the BODY line — mutant killed"
+    fi
+  fi
+
+  # --- Guard 4: inngest-redact.sh enumerates the DSN and its key by VALUE ---------------------------
+  # env -i: the redactor also reads DOPPLER_TOKEN / GHCR_READ_TOKEN from sourced files and would
+  # enumerate an operator's live values from their shell; the case must see only the fixture.
+  run_redact() { # $1 redactor, $2 dsn file, stdin = tail
+    env -i PATH="$PATH" HOME="$WORK" SOLEUR_SENTRY_DSN_FILE="$2" bash "$1"
+  }
+  case_redact() {
+    local f out
+    f="$(dsn_file "$DSN_OK")"
+    out="$(printf 'curl: (22) %s rejected\n' "$DSN_OK" | run_redact "$1" "$f")"
+    [[ -n "$out" ]] || return 1
+    ! grep -qF 'pubKEYx7' <<<"$out" || return 1
+    ! grep -qF 'o1.ingest.invalid/42' <<<"$out" || return 1
+    out="$(printf 'header sentry_key=pubKEYx7 only\n' | run_redact "$1" "$f")"
+    [[ -n "$out" ]] && ! grep -qF 'pubKEYx7' <<<"$out" || return 1
+    # G4 row 6: a tail with no secret passes through byte-identical.
+    out="$(printf 'zot pull rc=1 manifest unknown' | run_redact "$1" "$f")"
+    [[ "$out" == "zot pull rc=1 manifest unknown" ]]
+  }
+  case_inject_redact() {
+    rm -f "$WORK/SENTINEL_REDACT"
+    printf "SOLEUR_SENTRY_DSN='x'; touch %s; X='y'\n" "$WORK/SENTINEL_REDACT" > "$WORK/evil-r.env"
+    printf 'x' | run_redact "$1" "$WORK/evil-r.env" >/dev/null
+    [[ ! -e "$WORK/SENTINEL_REDACT" ]]
+  }
+  # G4 row 3: the redactor's default path IS the path write_files writes (the seam masks a drift).
+  case_redact_path() {
+    grep -qF 'sf=/etc/default/soleur-sentry-dsn;' "$1" \
+      && grep -qxF '  - path: /etc/default/soleur-sentry-dsn' "$CLOUD_INIT"
+  }
+  for c in case_redact case_inject_redact case_redact_path; do
+    assert "G4 must-PASS: $c holds for the rendered redactor" "$c '$REDACT'"
+  done
+  mutant_red "G4 row 1: drop the DSN enumeration" '/soleur-sentry-dsn/d' case_redact "$REDACT"
+  mutant_red "G4 row 2: enumerate the DSN but not its key" '/printf %s "\$sdsn"/d' case_redact "$REDACT"
+  mutant_red "G4 row 3: point the read at a path write_files never writes" \
+    's#sf=/etc/default/soleur-sentry-dsn;#sf=/run/soleur-sentry-dsn;#' case_redact_path "$REDACT"
+  mutant_red "G4 row 4: source the DSN file instead of reading it" \
+    's/sdsn="\$(sed [^;]*;/. "$sf"; sdsn="$SOLEUR_SENTRY_DSN";/' case_inject_redact "$REDACT"
+  mutant_red "G4 row 5: the redactor body is empty (dispatch)" '2,$d' case_redact "$REDACT"
 fi
 
 echo ""
