@@ -38,5 +38,5 @@
 # temp explicitly (filter failure, append failure, commit failure; success mv's
 # it away), so the residual leak is a hard kill, which no trap would survive
 # either.
-# 79 -> 78 (#8451): tests/scripts/test-sentry-brownout-retry.sh LEFT the population by
+# 79 -> 78 (#8451): the brownout-retry suite (deleted with the ladder it tested) LEFT the population by
 # deletion (it tested the brownout retry ladder that #8451 removed).
