@@ -44,9 +44,10 @@ Live standing alarms over this source:
   is **not** the encrypted volume's — i.e. Redis is writing unencrypted again after the cutover
   (an on-host rollback, a reboot that took the pre-cutover arm, or a replace whose first boot
   resolved the plaintext volume). Nothing else notices: the scheduler is healthy in all three.
-  **Ships PAUSED** and is armed by `-var inngest_luks_cutover_complete=true` in the apply that
-  follows a confirmed `op=luks-cutover` — before the cutover the plaintext alias is the CORRECT
-  value, so an armed rule would page continuously. The watched alias is built from
+  **Armed.** It shipped paused, because before the cutover the plaintext alias was the CORRECT
+  value and an armed rule would have paged continuously. Since #8296 the variable's declared
+  default is `true`, so every apply arms it: the push apply of `b53173a04` did so, and the alert
+  read back `paused=false` on 2026-09-21. No `-var` flag and no tfvars entry is involved. The watched alias is built from
   `hcloud_volume.inngest_redis_luks.id`, never a literal. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).

@@ -199,6 +199,24 @@ there is no backfill, and no dispatch that can synthesise one.
    assuming. #8296 (the encryption-posture ledger flip) is a human decision and does not close
    itself. #8285 is the backstop volume's retirement, expiring 2026-10-22.
 
+   **Superseded 2026-09-21 (#8296), appended rather than edited:** the ledger flip has landed.
+   #8296 is closed by hand once PR-2 has merged, never by a sweeper. The one open step is now #8285:
+   destroy `hcloud_volume.inngest_redis` by 2026-10-22.
+   - #8285 carries the directive for `scripts/followthroughs/inngest-luks-property-8296.sh`. The probe is
+     NOTIFY-ONLY: it never exits 0 or 1, so the sweeper never closes that tracker. It comments on
+     #8285 every day: "NOT YET" when the ledger claim and the device agree, "ACTION REQUIRED" when
+     they do not. **Do not close #8285 before the backstop is destroyed**, because closing it turns
+     the probe off.
+   - A silent probe pipeline reads as healthy to the wrong-volume alert (`treat_as_zero`). The
+     property probe reports that as "CANNOT ESTABLISH", and the paging fix is tracked in #8516 (D1).
+   - **After a sanctioned `op=luks-rollback`** the store is back on `hcloud_volume.inngest_redis`,
+     which is then the LIVE store: do NOT destroy it. The dispatch prints a
+     `NEXT (not automatic):` line. Revert the record by hand in one PR:
+     `scripts/encryption-posture-ledger.json` (`hcloud_volume.inngest_redis_luks` back to
+     `plaintext-exception`, with an exception block) and the three
+     `[2026-09-20 AMENDMENT (#8296)` cells in `knowledge-base/legal/article-30-register.md`
+     (PA-21 §(f), PA-22 §(f), PA-13 §(e)), each answered by a new dated amendment, never deleted.
+
 ---
 
 ## 6. If something looks stuck
