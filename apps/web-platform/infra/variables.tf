@@ -777,12 +777,30 @@ variable "inngest_expect_luks" {
 }
 
 # #6894 / ADR-142 — arms the "store is not on the encrypted volume" Better Stack alert
-# (betterstack-logs-alerts.tf). FALSE until the cutover has completed and been confirmed: before
-# the swap, /mnt/data is legitimately backed by the plaintext volume, so an armed rule would page
-# continuously — and a rule that pages when nothing is wrong is a rule that gets muted.
-# Flipped to true in the apply that follows a confirmed op=luks-cutover.
+# (betterstack-logs-alerts.tf, logtail_exploration_alert.inngest_luks_wrong_volume).
+#
+# TRUE since #8296. The inverting event is the 2026-09-20 additive cutover (ADR-142), measured
+# rather than inferred: the on-host FSM's terminal `cutover-complete` row and the first
+# post-cutover probe row reporting /mnt/data on the encrypted volume. The evidence is recorded
+# ONCE, content-anchored, in the encryption-posture ledger row for hcloud_volume.inngest_redis_luks
+# (scripts/encryption-posture-ledger.json, flipped in the follow-up to #8296) — not restated here,
+# where two literal volume ids would rot on the next re-create. Before the swap /mnt/data was
+# legitimately on the plaintext volume, so an armed rule would have paged continuously and been
+# muted; after it, a probe row still pinning the plaintext alias means the store came back.
+#
+# HAZARD: this default governs only while no Doppler override exists. The apply reads
+# TF_VAR_inngest_luks_cutover_complete from soleur/prd_terraform (`--name-transformer tf-var`), so
+# a secret named INNGEST_LUKS_CUTOVER_COMPLETE there SILENTLY WINS over this line and no plan diff
+# would explain why the alert stayed paused. Re-read it before concluding from a plan that this
+# default is or is not in effect:
+#   doppler secrets get INNGEST_LUKS_CUTOVER_COMPLETE -p soleur -c prd_terraform --plain
+# Since #8296 the reconciler resolves THIS default, so an override that pauses the alert is
+# reported twice daily as `logs-alert-paused` — by design; it is the only detector a forgotten
+# override has.
+#
+# Arms on the APPLY, not at merge — see the resource comment in betterstack-logs-alerts.tf.
 variable "inngest_luks_cutover_complete" {
   description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
   type        = bool
-  default     = false
+  default     = true
 }
