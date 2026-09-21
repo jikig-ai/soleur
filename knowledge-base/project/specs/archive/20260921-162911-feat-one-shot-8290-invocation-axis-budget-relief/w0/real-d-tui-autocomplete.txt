@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.278
+▝▜██████▀  Haiku 4.5 · Claude Max
+  ▝▝ ▝▝    /tmp/claude-1000/w0tui2.hQzr
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /soleur:flag-create                   (soleur) This skill should be used to create a runtime feature flag end-to-end across Flagsmith, server.ts, .env.example, and Doppler.
+  /soleur:plan-review                   (soleur) This skill should be used when having multiple specialized agents review a plan in parallel. It spawns DHH, Kieran, and code simplicity reviewers to provide diverse
+                                        feedback on implementation plans.
+  /soleur:flag-list                     (soleur) This skill should be used to read and audit all runtime feature flags before a promotion or delete decision: Flagsmith state, server.ts code-wiring, live Doppler dev/prd
+                                        values, and per-segment overrides, with drift detection.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /soleur:flag-cr
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

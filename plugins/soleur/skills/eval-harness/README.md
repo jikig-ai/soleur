@@ -82,6 +82,14 @@ Opus cells, but outputs are single tokens so per-call cost is small (the first f
 under $1). This is why the harness is **opt-in and manual** and is NOT wired into per-PR CI. See the
 `<decision_gate>` in [SKILL.md](./SKILL.md) for the billing disclosure.
 
+Before any paid grid that asks for free-text generation, smoke it with
+`--filter-first-n 1 --repeat 1 --no-cache` and read each row's output length and `finishReason`.
+Opus 5 and Sonnet 5 think by default, so a small `ANTHROPIC_MAX_TOKENS` (300 measured) spends the whole
+budget on thinking and returns empty text, which a lexical scorer reads as compliant (#8290 needed
+3000). Estimate spend from a measured prompt size rather than from file bytes (the #8290 estimate ran
+39% low). promptfoo prints no progress when it isn't writing to a terminal, so poll
+`sqlite3 ~/.promptfoo/promptfoo.db "select count(*) from eval_results where eval_id like '<id>%'"`.
+
 ## First recorded delta (2026-06-15, `--repeat 3`, opus-4-8 / sonnet-4-6 / haiku-4-5)
 
 The baseline run that proved the rig pays off (point-in-time; model updates will shift these):
@@ -153,6 +161,13 @@ risk. `pdr`'s breadth factor is exactly the `lane-inference` enum (`procedural`/
 defers only the irreducible set factor. Half-covering a multi-label surface with a single-label
 harness ships false confidence — defer it whole instead. See
 `knowledge-base/project/learnings/2026-06-29-multi-label-classifier-gateable-core-is-its-single-token-output-slice.md`.
+
+## Archived measurement: `rule-phrasing` (B5, #8290)
+
+B5 measured positive-led vs prohibition-led phrasing of four always-loaded rules (648 calls,
+2026-09-21). The verdict was INCONCLUSIVE with limited instrument validity, and the machinery was
+archived rather than kept: see `knowledge-base/project/specs/archive/20260921-162911-feat-one-shot-8290-invocation-axis-budget-relief/b5-eval-results.md`
+for the record and the recovery command, and #8497 for the rerun conditions.
 
 ## Files
 

@@ -3,9 +3,9 @@ name: {{SKILL_NAME}}
 description: {{What it does}} Use when {{trigger conditions}}.
 ---
 
-<essential_principles>
+# {{Skill Name}}
 
-## {{Core Concept}}
+## Essential principles: {{Core Concept}}
 
 {{Principles that ALWAYS apply, regardless of which workflow runs}}
 
@@ -20,9 +20,9 @@ description: {{What it does}} Use when {{trigger conditions}}.
 ### 3. {{Third principle}}
 
 {{Explanation}}
-</essential_principles>
 
-<intake>
+## Intake
+
 **Ask the user:**
 
 What would you like to do?
@@ -32,9 +32,9 @@ What would you like to do?
 3. {{Third option}}
 
 **Wait for response before proceeding.**
-</intake>
 
-<routing>
+## Routing
+
 | Response | Workflow |
 |----------|----------|
 | 1, "{{keywords}}" | `workflows/{{first-workflow}}.md` |
@@ -42,16 +42,10 @@ What would you like to do?
 | 3, "{{keywords}}" | `workflows/{{third-workflow}}.md` |
 
 **After reading the workflow, follow it exactly.**
-</routing>
-
-<quick_reference>
 
 ## {{Skill Name}} Quick Reference
 
 {{Brief reference information always useful to have visible}}
-</quick_reference>
-
-<reference_index>
 
 ## Domain Knowledge
 
@@ -59,9 +53,6 @@ All in `references/`:
 
 - {{reference-1.md}} - {{purpose}}
 - {{reference-2.md}} - {{purpose}}
-</reference_index>
-
-<workflows_index>
 
 ## Workflows
 
@@ -73,12 +64,10 @@ All in `workflows/`:
 | {{second-workflow}}.md | {{purpose}} |
 | {{third-workflow}}.md | {{purpose}} |
 
-</workflows_index>
+## Success criteria
 
-<success_criteria>
 A well-executed {{skill name}}:
 
 - {{First criterion}}
 - {{Second criterion}}
 - {{Third criterion}}
-</success_criteria>

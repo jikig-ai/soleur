@@ -1,6 +1,7 @@
 ---
 name: flag-delete
 description: "This skill should be used to delete a runtime feature flag end-to-end (the inverse of flag-create): removes it from Flagsmith, server.ts RUNTIME_FLAGS, .env.example, the flag-set-role flip.sh map, and Doppler dev+prd, with a WORM audit and typed-yes guardrail."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->

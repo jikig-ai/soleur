@@ -79,15 +79,16 @@ echo "Deployment complete."
 <workflow_integration>
 Workflows reference scripts like this:
 
-```xml
-<process>
+```markdown
+## Process
+
 ## Step 5: Deploy
 
 1. Ensure all tests pass
 2. Run `scripts/deploy.sh production`
 3. Verify deployment succeeded
 4. Update user with deployment URL
-</process>
+
 ```
 
 The workflow tells Claude WHEN to run the script. The script handles HOW the operation executes.
