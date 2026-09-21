@@ -2371,6 +2371,24 @@ if want_scripts; then
   # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
   run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
   run_suite "scripts/measure-plan-sharp-edges-turns" bash scripts/measure-plan-sharp-edges-turns.test.sh
+  # #8377 / ADR-235 — the regen-if-stale gate in front of the now-untracked KB index.
+  # `scripts/*.test.sh` is not covered by SUITE_GLOBS (which reaches plugins/, .claude/hooks/,
+  # apps/ and scripts/lib/ but never the bare scripts/ directory), so this explicit line is
+  # the suite's ONLY registration. Without it it runs nowhere and gates nothing.
+  run_suite "scripts/ensure-kb-index" bash scripts/ensure-kb-index.test.sh
+  # THE GENERATOR AGAINST THE REAL TREE. `generate-kb-index.sh --check` used to do two jobs:
+  # assert the committed index was fresh (moot once untracked) AND execute the generator over
+  # the real ~9,500-file knowledge-base/ in the required `test-scripts` context. #8377 retired
+  # the flag as if it did one job, and every surviving caller is `--soft` (WARN + exit 0), so a
+  # regression that only manifests on real corpus content -- a frontmatter shape, a filename,
+  # a collation edge -- would have been green in CI and reached the operator as "no prior art"
+  # (#8384 review). Writes to a scratch dir, never the tree: this runner's boundary check
+  # treats any repo write as a FATAL. Measured 3 s. Positive floors, not `-s`: a generator that
+  # emitted a header and nothing else would pass an emptiness check. It is a FILE, not an
+  # inline `bash -c '...'`: `--enumerate-commands` encodes each registration as one TSV row and
+  # refuses an argv element containing a NEWLINE, so a multi-line inline body reds
+  # battery-tag-authorship.test.sh ("refusing to classify against an empty root set").
+  run_suite "scripts/generate-kb-index-live" bash scripts/generate-kb-index-live.test.sh
   run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh

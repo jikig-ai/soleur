@@ -248,6 +248,7 @@
 4	plugins/soleur/scripts/domain-model-drift.sh
 5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
+11	plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
@@ -287,13 +288,9 @@
 5	plugins/soleur/test/go-session-gates.test.sh
 4	plugins/soleur/test/harvest-debt.test.sh
 3	plugins/soleur/test/hook-git-env-coverage.mutation.sh
-10	plugins/soleur/test/kb-index-check-guard-mutation.test.sh
-7	plugins/soleur/test/kb-index-merge-driver-registration.test.sh
-18	plugins/soleur/test/kb-index-merge-driver.test.sh
 14	plugins/soleur/test/lint-bot-synthetic-completeness.test.sh
 13	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
 11	plugins/soleur/test/lint-questionnaire-identity.test.sh
-1	plugins/soleur/test/merge-kb-index-driver-mutation.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
 1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
@@ -321,6 +318,8 @@
 1	scripts/derive-app-domain-base.test.sh
 1	scripts/dogfood/grok-measure.sh
 1	scripts/domain-model-drift.test.sh
+3	scripts/ensure-kb-index.sh
+13	scripts/ensure-kb-index.test.sh
 1	scripts/expenses-verify-by-check.test.sh
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
@@ -362,7 +361,6 @@
 7	scripts/lint-workflow-install-sites.test.sh
 1	scripts/machinery-backfill-propose.sh
 8	scripts/markdown-lint.test.sh
-6	scripts/merge-kb-index.sh
 8	scripts/orphan-process-reaper-mutation.test.sh
 4	scripts/orphan-process-reaper.sh
 7	scripts/orphan-process-reaper.test.sh
