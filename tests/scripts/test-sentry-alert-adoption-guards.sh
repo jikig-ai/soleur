@@ -37,7 +37,7 @@ BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=52
+EXPECTED_TESTS=53
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -748,9 +748,9 @@ case "$path" in
       # "succeeded" — the event filter must pass over it.
       json=$(printf '{"workflow_runs":[{"id":100,"head_sha":"%s","event":"pull_request"},{"id":101,"head_sha":"%s","event":"push"},{"id":102,"head_sha":"%s","event":"workflow_dispatch"}]}' "$SHA_C" "$SHA_A" "$SHA_B")
     fi ;;
-  "repos/o/r/actions/runs/100/jobs?per_page=100")
+  "repos/o/r/actions/runs/100/jobs?filter=all&per_page=100")
     json="{\"jobs\":[$(job apply success success)]}" ;;
-  "repos/o/r/actions/runs/101/jobs?per_page=100")
+  "repos/o/r/actions/runs/101/jobs?filter=all&per_page=100")
     # A decoy job listed FIRST carrying the same step name, succeeded: the job
     # filter must not credit it.
     decoy=$(job plan_pr success success)
@@ -759,9 +759,12 @@ case "$path" in
       skipfirst)  json="{\"jobs\":[$decoy,$(job apply skipped none)]}" ;;
       probefail)  json="{\"jobs\":[$decoy,$(job apply failure success)]}" ;;
       applyfail)  json="{\"jobs\":[$decoy,$(job apply failure failure)]}" ;;
+      # Attempt 1 applied, a re-run attempt 2 failed at the apply step: the run
+      # WAS applied (filter=all returns both attempts' jobs).
+      rerun)      json="{\"jobs\":[$decoy,$(job apply failure failure),$(job apply success success)]}" ;;
       *)          json="{\"jobs\":[$decoy]}" ;;
     esac ;;
-  "repos/o/r/actions/runs/102/jobs?per_page=100")
+  "repos/o/r/actions/runs/102/jobs?filter=all&per_page=100")
     json="{\"jobs\":[$(job apply success success)]}" ;;
   *) echo "unexpected gh path: $path" >&2; exit 64 ;;
 esac
@@ -797,6 +800,12 @@ t_l7_failed_apply_step_is_not_applied() {
   if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_B" ]]; then
     _report "L7 last-applied: a run whose apply STEP failed is passed over" ok
   else _report "L7 last-applied skips a failed apply step" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l9_earlier_attempt_applied() {
+  _la_run rerun
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_A" ]]; then
+    _report "L9 last-applied: an earlier ATTEMPT that applied counts even when a later re-run attempt failed" ok
+  else _report "L9 last-applied counts an earlier applied attempt" fail "rc=$LA_RC out=$LA_OUT"; fi
 }
 t_l3_api_error_fails_closed() {
   _la_run apierr
@@ -1090,6 +1099,7 @@ t_l5_both_sites_use_the_window
 t_l6_post_apply_probe_failure_still_applied
 t_l7_failed_apply_step_is_not_applied
 t_l8_step_name_is_the_workflows
+t_l9_earlier_attempt_applied
 t_c4_clean_adoption_green
 t_c5_import_id_not_in_capture_red
 t_c7_swapped_import_ids_red
