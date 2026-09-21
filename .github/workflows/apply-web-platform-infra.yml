@@ -734,6 +734,9 @@ jobs:
               -target=betteruptime_monitor.app \
               -target=betteruptime_monitor.soleur_www_redirect \
               -target=betteruptime_monitor.app_health \
+              -target=betteruptime_monitor.seo_redirect_zone_ruleset \
+              -target=betteruptime_monitor.seo_redirect_bulk_item \
+              -target=betteruptime_monitor.seo_redirect_blog_pair \
               -target=random_id.inngest_signing_key_prd \
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \

@@ -967,6 +967,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # redirect-tombstones.test.ts enumerates ALL history (`git log
+          # --diff-filter=RD` + `git log -p -Gpermalink:`) and fails closed on
+          # a shallow clone via --is-shallow-repository — a depth-1 checkout
+          # reads as "nothing died". #8364.
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
