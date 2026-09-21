@@ -113,34 +113,37 @@ Phase 5 (5.1–5.12). Gate met: PR-1 `b53173a04`, apply run 35605929787, alert 2
 
 ## Phase 6: Verification
 
-- [ ] 6.1 Check every PR-2 AC in the plan: AC-G2/G3, AC-1…AC-10, AC-6b, AC-18…AC-24b, AC-27/27b,
+- [x] 6.1 Check every PR-2 AC in the plan: AC-G2/G3, AC-1…AC-10, AC-6b, AC-18…AC-24b, AC-27/27b,
       AC-28, AC-29/29b/29d, AC-31, AC-32/32b, AC-33, AC-35, AC-37, AC-38, AC-40.
-- [ ] 6.2 Unchanged-gate floors: 96/96, 57/57, 665/665, 160/160, 79/79.
-- [ ] 6.3 Run `python3 scripts/lint-encryption-posture.py --repo-sweep`,
+- [x] 6.2 Unchanged-gate floors: 96/96, 57/57, 753/753, 160/160, 79/79. (the plan's 665 was stale)
+- [x] 6.3 Run `python3 scripts/lint-encryption-posture.py --repo-sweep`,
       `bash scripts/lint-encryption-posture.test.sh` and
       `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- [ ] 6.4 Run `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exactly
+- [x] 6.4 Run `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exactly
       as written.
-- [ ] 6.5 PR body (AC-39):
+- [x] 6.5 PR body (AC-39):
       - **First line:** merging this alone mutates nothing in production (fact (c)).
       - Say `Ref #8296`.
       - Do not mention #7529.
       - Put no closing keyword next to any `#N` (AC-39b).
       - Include the mutation REDs and the live verdict.
       - Include the decision challenges.
-- [ ] 6.6 **Ask the operator before merging. Do not auto-merge.**
+- [x] 6.6 **Ask the operator before merging. Do not auto-merge.**
+      Asked; the operator chose "merge once CI is green". Auto-merge (squash) was enabled after
+      that answer, because main kept moving faster than CI and the ruleset requires an up-to-date
+      branch.
 
 ## Phase 7: Post-merge (agent-run, GitHub writes only)
 
-- [ ] 7.1 Enroll on #8285:
+- [x] 7.1 Enroll on #8285:
       - add the `follow-through` label;
       - add the column-0 directive with `earliest=<merge+1d>`;
       - add the line "Do NOT close before the backstop is destroyed";
       - add the retirement line.
       Read it back (AC-30).
-- [ ] 7.2 Dedup-search, then file D3, D4, D5, D8, D10, D11, D2, D6, D7 and D12 with milestones.
+- [x] 7.2 Dedup-search, then file D3, D4, D5, D8, D10, D11, D2, D6, D7 and D12 with milestones.
       Put D9's evidence in a comment on #6907.
-- [ ] 7.3 Strip the directive from the #8294 body.
-- [ ] 7.4 Close #8296 with `gh issue close 8296` once AC-P8's gates hold. List every deferral
+- [x] 7.3 Strip the directive from the #8294 body.
+- [x] 7.4 Close #8296 with `gh issue close 8296` once AC-P8's gates hold. List every deferral
       number in the closing comment.
-- [ ] 7.5 Compound, including the deferred Step E archival of the parent spec dir and plan.
+- [x] 7.5 Compound, including the deferred Step E archival of the parent spec dir and plan.
