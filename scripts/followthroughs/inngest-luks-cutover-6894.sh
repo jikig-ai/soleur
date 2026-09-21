@@ -22,7 +22,11 @@
 # EXIT CONTRACT: 0 = the invariant holds; 1 = read succeeded, it does not yet; 2 = TRANSIENT;
 # 78 = refused under xtrace.
 #
-# RETIREMENT: when #6894's cutover tracker closes, delete this file with its staging sibling.
+# RETIREMENT: RETIRED 2026-09-21 (#8296). Its #8295 directive was removed: after the cutover the only
+# reason=cutover-complete row leaves this probe's 48h window, so every sweep from 2026-09-23 would
+# exit 1 and falsely reopen the correctly-closed #8295. Nothing runs this file now. Delete it in any
+# change that also drops its row from plugins/soleur/test/fixture-relative-assert.baseline.txt
+# (deleting it alone reddens that ratchet, and editing the baseline fires a plugin release).
 set -uo pipefail
 
 case "$-" in
@@ -122,7 +126,7 @@ if [[ "$DONE_N" -ge 1 && "$ON_MAPPER" -ge 1 ]]; then
     exit 1
   fi
   echo "PASS: the FSM completed and the host reports /mnt/data on the canonical mapper with a pinned volume alias (#6894 AC-35)."
-  echo "NEXT (not automatic): flip hcloud_volume.inngest_redis_luks to mechanism=luks in scripts/encryption-posture-ledger.json, and rewrite the hcloud_volume.inngest_redis row as a retained plaintext backstop (#8285)."
+  echo "NEXT (not automatic): the ledger flip landed in #8296. The one remaining step is #8285: destroy the retained plaintext backstop hcloud_volume.inngest_redis by 2026-10-22."
   exit 0
 fi
 echo "not yet: the cutover has not completed on this host, or the store is not yet reported on the canonical mapper"
