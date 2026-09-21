@@ -265,6 +265,9 @@ sed -i "s|/dev/disk/by-id/|$TMP/by-id/|g" "$HB"
 # (#8408) the per-boot tmpfs state dir, re-rooted the same way (a render-time literal seam).
 sed -i "s|/run/soleur-registry/|$TMP/run-soleur-registry/|g" "$HB"
 mkdir -p "$TMP/run-soleur-registry"
+# (#8408 (c)) the escrow state dir, re-rooted the same way.
+sed -i "s|/var/lib/soleur-registry/|$TMP/var-lib-soleur-registry/|g" "$HB"
+mkdir -p "$TMP/var-lib-soleur-registry"
 # Non-vacuity for BOTH seams: if either literal is renamed in the template these substitutions
 # silently no-op and the sbin-only / devid cases would pass against an unseamed script.
 PHASE=posture   # both seams belong to the #8386 property, not to the #7500 floor
@@ -928,6 +931,44 @@ rm -f "$LOA"
 assert "P-loa luks_open_arm precedes ' zot_last_err=' in the LINE= assembly" \
   "grep -qE 'store_luks=[^ ]+ luks_open_arm=' <<<\"\$(grep -F 'LINE=\"SOLEUR_ZOT_DISK' '$RAW' | head -1 | sed 's/ zot_last_err=.*//')\""
 
+# --- (#8408 (c)) store_escrow: the daily escrow re-test's verdict, READ (never run) here ---------
+ESC="$TMP/var-lib-soleur-registry/escrow.state"
+_esc_case() { # <label> <file-content|__ABSENT__> <expected-token> <expected-age: exact|pos>
+  rm -f "$ESC"
+  [ "$2" = __ABSENT__ ] || printf '%s\n' "$2" > "$ESC"
+  posture_case "P-esc-$1" \
+    HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+    HB_LSBLK_SUBJ="/dev/mapper/registry" HB_CRYPT_SUBJ="registry" \
+    HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+    HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+  assert_field "P-esc-$1 store_escrow" store_escrow "$3"
+  if [ "$4" = pos ]; then
+    assert "P-esc-$1 store_escrow_age_s is a non-negative integer" \
+      "[[ \"\$(_field_value store_escrow_age_s)\" =~ ^[0-9]+\$ ]]"
+  else
+    assert_field "P-esc-$1 store_escrow_age_s" store_escrow_age_s "$4"
+  fi
+}
+_now="$(date +%s)"
+_esc_case absent __ABSENT__ none -1
+_esc_case fresh-ok "result=ok at=$((_now - 60))" ok pos
+_esc_case fail-pass "result=fail_passphrase at=$((_now - 60))" fail_passphrase pos
+_esc_case fail-header "result=fail_header at=$((_now - 60))" fail_header pos
+_esc_case fail-key "result=fail_key_absent at=$((_now - 60))" fail_key_absent pos
+_esc_case indet "result=indeterminate at=$((_now - 60))" indeterminate pos
+# 26 h plus one minute: a dead escrow job must surface as stale within a day, not hide as ok.
+_esc_case stale-ok "result=ok at=$((_now - 93660))" stale pos
+_esc_case three-days "result=ok at=$((_now - 259200))" stale pos
+_esc_case offvocab "result=okay at=$((_now - 60))" __UNREADABLE__ pos
+_esc_case bad-epoch "result=ok at=yesterday" __UNREADABLE__ -1
+_esc_case future "result=ok at=$((_now + 3600))" ok -1
+rm -f "$ESC"
+_ESC_LINE_HEAD="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1 | sed 's/ zot_last_err=.*//')"
+assert "P-esc store_escrow and store_escrow_age_s precede ' zot_last_err=' in the LINE= assembly" \
+  "grep -qE 'store_escrow=[^ ]+ store_escrow_age_s=[^ ]+ host=' <<<\"\$_ESC_LINE_HEAD\""
+assert "P-esc the heartbeat never RUNS the escrow (no luksOpen / test-passphrase in its body)" \
+  "! grep -qE 'luksOpen|test-passphrase' '$HB'"
+
 # --- Structural: the order pin, on the source text rather than one rendered row --------------
 _P_LINE="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1)"
 assert "P-s all five posture fields precede ' zot_last_err=' in the LINE= assembly" \
@@ -989,7 +1030,7 @@ fi
 # ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
 # redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
 CASES_REDACT_MIN=39
-CASES_POSTURE_MIN=201
+CASES_POSTURE_MIN=269
 if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
     "$CASES_REDACT" "$CASES_REDACT_MIN" >&2

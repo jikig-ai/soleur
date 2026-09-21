@@ -1447,6 +1447,12 @@ jobs:
       - name: Run registry LUKS launch-gate guard (#8408 — sentinel bind, recovery arm, arm vocabulary)
         run: bash apps/web-platform/infra/registry-luks-launch-gate.test.sh
 
+      # Guard 5 (#8408 c). The daily escrow re-test: every result token reachable from one stubbed
+      # condition, the memory pre-check, atomic state writes, and a key canary over the state
+      # file, stdout, stderr and every argv. Needs only bash + coreutils.
+      - name: Run registry LUKS escrow re-test guard (#8408 — vocabulary, memory pre-check, key canary)
+        run: bash apps/web-platform/infra/registry-luks-escrow.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 

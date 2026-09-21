@@ -831,6 +831,29 @@ write_files:
           *) LUKS_OPEN_ARM=__UNREADABLE__ ;;
         esac
       fi
+      # (#8408 (c)) The daily escrow re-test's verdict, written by registry-luks-escrow.sh. READ
+      # here, never run here (its KDF would break this script's 5 s discipline). An age past
+      # 93600 s (one daily run plus two hours) reads `stale`: a dead escrow job must surface within
+      # a day, not hide. Absent file = none. Anything off-vocabulary = __UNREADABLE__.
+      STORE_ESCROW=none
+      STORE_ESCROW_AGE_S=-1
+      if [ -e /var/lib/soleur-registry/escrow.state ]; then
+        _esc="$(timeout 5 cat /var/lib/soleur-registry/escrow.state 2>/dev/null | head -c 128)"
+        _esr="$(printf '%s\n' "$_esc" | sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' | head -1)"
+        _esa="$(printf '%s\n' "$_esc" | sed -n 's/^result=[a-z_]* at=\([0-9]*\)$/\1/p' | head -1)"
+        case "$_esr" in
+          ok | fail_passphrase | fail_header | fail_key_absent | indeterminate) STORE_ESCROW="$_esr" ;;
+          *) STORE_ESCROW=__UNREADABLE__ ;;
+        esac
+        case "$_esa" in
+          '' | *[!0-9]*) STORE_ESCROW=__UNREADABLE__ ;;
+          *)
+            STORE_ESCROW_AGE_S=$(( $(date +%s) - _esa ))
+            if [ "$STORE_ESCROW_AGE_S" -lt 0 ]; then STORE_ESCROW_AGE_S=-1
+            elif [ "$STORE_ESCROW_AGE_S" -gt 93600 ] && [ "$STORE_ESCROW" != __UNREADABLE__ ]; then STORE_ESCROW=stale; fi
+            ;;
+        esac
+      fi
       # Whitespace/charset guards on the remaining emitted values, same contract as above.
       case "$STORE_BACKING_DEV" in
         '' | *[!A-Za-z0-9_./:-]*) STORE_BACKING_DEV=__UNREADABLE__ ;;
@@ -845,7 +868,7 @@ write_files:
       # follow-through probe keys delivery proof on it, read from this trusted region. A LITERAL, not
       # a $VAR: this script runs set -u. Bump when the gate changes; never decrement or reuse; never
       # keep the token while removing the gate.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM store_escrow=$STORE_ESCROW store_escrow_age_s=$STORE_ESCROW_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -1764,6 +1787,95 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #8408 (c): the daily escrow re-test -----------------------------------------------
+  # store_luks=yes says the HEADER is LUKS. It does not say the passphrase Doppler holds still
+  # opens it -- and that key is the only thing that reopens the store on the next reboot. So once
+  # a day (and once in the background at boot, after zot starts) this proves the Doppler-held key
+  # opens the header, with `cryptsetup luksOpen --test-passphrase` (which opens nothing), and
+  # records ONE closed-vocabulary token that the heartbeat carries in its trusted head as
+  # store_escrow=. This host runs no Vector: its only off-box channels are the three direct POSTs,
+  # so the remediation cue has to ride the field itself -- hence three distinct fail_* tokens.
+  #   ok               the key opened the header
+  #   fail_passphrase  cryptsetup rejected the key (exit 2)
+  #   fail_header      the device carries no readable LUKS header UUID
+  #   fail_key_absent  REGISTRY_LUKS_KEY is empty: the NEXT REBOOT CANNOT REOPEN the store
+  #   indeterminate    a tool refused, the memory pre-check failed, a timeout/OOM, or no mapper
+  # The escrow never runs inside the heartbeat: the KDF would break its 5 s discipline. The state
+  # file holds a token and an epoch, never key material. --only-secrets narrows doppler's env to
+  # the one secret, which closes the LD_PRELOAD/BASH_ENV-from-the-config-store class (#7761).
+  - path: /usr/local/bin/registry-luks-escrow.sh
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      # The key is in this process's environment: refuse to run traced.
+      case "$-" in *x*) echo "[escrow] refusing to run under xtrace (REGISTRY_LUKS_KEY is in the env)" >&2; exit 78 ;; esac
+      # A LITERAL, for the reason the heartbeat's is: doppler injects the config store as env.
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      export LC_ALL=C
+      STATE_DIR=/var/lib/soleur-registry
+      STATE="$STATE_DIR/escrow.state"
+      RESULT=""
+      # Atomic: a temp file in the SAME directory, then rename(2), so a reader sees the old file or
+      # the new one and never a torn one. A failed write leaves the previous state intact.
+      write_state() {
+        local tmp="$STATE_DIR/.escrow.state.tmp"
+        mkdir -p -m 0700 "$STATE_DIR" 2>/dev/null || return 1
+        ( umask 077; printf 'result=%s at=%s\n' "$1" "$(date +%s)" > "$tmp" ) 2>/dev/null || { rm -f "$tmp"; return 1; }
+        mv -f "$tmp" "$STATE" 2>/dev/null || { rm -f "$tmp"; return 1; }
+        RESULT="$1"
+      }
+      # A crash before any verdict is written must be VISIBLE on the next heartbeat, not age
+      # silently into `stale` a day later.
+      trap '[ -n "$RESULT" ] || write_state indeterminate' EXIT
+      if [ -z "$${REGISTRY_LUKS_KEY:-}" ]; then write_state fail_key_absent; exit 0; fi
+      # The device backing /var/lib/zot, by the heartbeat's own chain: findmnt -> cryptsetup status.
+      _src="$(timeout 5 findmnt -no SOURCE /var/lib/zot 2>/dev/null | head -1)"
+      case "$_src" in /dev/mapper/*) : ;; *) write_state indeterminate; exit 0 ;; esac
+      _st_rc=0
+      _st="$(timeout 5 cryptsetup status "$${_src##*/}" 2>/dev/null)" || _st_rc=$?
+      DEV="$(printf '%s\n' "$_st" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p' | head -1)"
+      if [ "$_st_rc" -ne 0 ] || [ -z "$DEV" ]; then write_state indeterminate; exit 0; fi
+      # The header: an empty UUID is a missing or unreadable header. A tool that could not run
+      # (127 absent, 124 timeout) is a refusal, not a statement about the header.
+      _uu_rc=0
+      _uuid="$(timeout 10 cryptsetup luksUUID "$DEV" 2>/dev/null)" || _uu_rc=$?
+      case "$_uu_rc" in
+        0) [ -n "$_uuid" ] || { write_state fail_header; exit 0; } ;;
+        124 | 126 | 127) write_state indeterminate; exit 0 ;;
+        *) write_state fail_header; exit 0 ;;
+      esac
+      # Memory pre-check. The zot cap is host RAM minus ~1024 MB and an argon2id keyslot can ask
+      # for up to ~1 GiB, so the first runtime KDF with zot resident is exactly when an OOM kill
+      # would take zot. Proceed only with the slot's PBKDF memory plus 256 MiB available.
+      # (luksDump's `Memory:` line is non-secret KDF metadata; LUKS1/pbkdf2 has none, i.e. 0.)
+      _need_kib="$(timeout 10 cryptsetup luksDump "$DEV" 2>/dev/null | awk '/^[[:space:]]*Memory:/ { if ($2 + 0 > m) m = $2 + 0 } END { print m + 0 }')"
+      _avail_kib="$(awk '/^MemAvailable:/ { print $2 + 0; exit }' /proc/meminfo 2>/dev/null)"
+      case "$_need_kib" in '' | *[!0-9]*) write_state indeterminate; exit 0 ;; esac
+      case "$_avail_kib" in '' | *[!0-9]*) write_state indeterminate; exit 0 ;; esac
+      if [ "$_avail_kib" -lt $(( _need_kib + 262144 )) ]; then write_state indeterminate; exit 0; fi
+      # The proof. --test-passphrase opens nothing. OOMScoreAdjust=1000 makes the kernel pick this
+      # test over zot if memory runs out anyway. The key goes through a pipe, never argv or a
+      # here-string (which bash writes to a temp file).
+      _tp_rc=0
+      printf '%s' "$REGISTRY_LUKS_KEY" | timeout 120 systemd-run --scope --quiet -p OOMScoreAdjust=1000 \
+        cryptsetup luksOpen --test-passphrase --key-file - "$DEV" >/dev/null 2>&1 || _tp_rc=$?
+      case "$_tp_rc" in
+        0) write_state ok ;;
+        2) write_state fail_passphrase ;;
+        *) write_state indeterminate ;;
+      esac
+      exit 0
+    owner: root:root
+    permissions: '0700'
+
+  - path: /etc/cron.d/registry-luks-escrow
+    content: |
+      # #8408 (c): daily escrow re-test. Minute 19 intersects none of this host's other cron.d
+      # minute sets (*/5, 2-59/5, 3-59/5): concurrent `doppler run` jobs strain the ~1024 MB reserve.
+      19 3 * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh
+    owner: root:root
+    permissions: '0644'
+
   # --- #6415 / ADR-115: private-NIC boot converger ----------------------------------------
   # Root cause of the 2026-07-14 outage (#6400). hcloud_server_network is an ADDITIVE ONLINE
   # ATTACH (network.tf:9-13) — it needs a created server, and a created server is already
@@ -2203,6 +2315,12 @@ runcmd:
       sleep 2
     done
     ZOTEOF
+
+  # #8408 (c): the escrow re-test, once at boot, BACKGROUNDED and AFTER zot's start, so a slow
+  # KDF can never lengthen the pull path's downtime, and store_escrow= is populated from this boot
+  # rather than sitting at `none` until 03:19. The SAME wrapper as the cron line: a bare run would
+  # have no key in its env and record fail_key_absent.
+  - set -a; . /etc/default/registry-doppler; set +a; nohup doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh >/dev/null 2>&1 &
 
   # Disk-capacity guard: ensure cron is active and emit the first disk heartbeat + SOLEUR_ZOT_DISK
   # self-report now that zot is up, so Better Stack goes green AND the first telemetry event lands
