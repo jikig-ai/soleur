@@ -1,4 +1,7 @@
-# PLACEHOLDER-NOT-CAPTURED: synthetic key generated for development; MUST be replaced by
-# scripts/capture-web-1-host-key.sh output before merge (Phase 0).
-# fingerprint: SHA256:clmH9maQf+kbDLyqQSbcz4RH+U2JnJUq53OkhIEUAq8
-ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBKaRzXqeHeuNnbp/KHNgTQ++luAR8Vi1NjI3s1C/tKnN3TvCIMPVKMUFV7naut3rOHkQEAVa6UqVuUkkuZ7yuqs=
+# web-1 SSH host key pin (#7226, ADR-237). ECDSA-P256: the algorithm Terraform's Go client
+# negotiates. Consumed by the cf-tunnel-ssh-bridge writer and local.web_1_ssh_host_key.
+# captured: 2026-09-21T18:12:21Z by scripts/capture-web-1-host-key.sh (ssh-keyscan -T 10 -t ecdsa, direct to
+#   web-1's public :22 from an ADMIN_IPS egress, not via Cloudflare)
+# fingerprint: SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok
+# cross-check: no prior known_hosts entry for this IP
+ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBIMe82wwMJX3C59BL5dbZtqo1teDuEY7rPJoZZg8jvfA1b1Rj8pmFyJbVlVAyBSIroZS7NlHqlJnrev/K6Mtons=
