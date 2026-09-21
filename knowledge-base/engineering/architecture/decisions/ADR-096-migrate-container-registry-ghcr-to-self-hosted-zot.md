@@ -340,8 +340,8 @@ host. Read the amendment before relying on any bullet below:
       `cloud-init-inngest.yml:337` hard-pins a `ghcr.io` ref with no zot path, no `/v2/` probe and
       no fallback, and whose pull is **fail-closed** (`:349`). It reports via
       `inngest-boot-phone-home.sh` to Better Stack, not the Sentry `stage:` schema, so every query
-      in the soak is structurally blind to it (**superseded 2026-09-21 (#6500)**: the host now
-      reports on the Sentry `stage:` schema — see "Amendment 2026-09-21 (#6500)"). **Task 5.3 revokes the PAT ⇒ its next fresh boot
+      in the soak is structurally blind to it (**superseded 2026-09-21 (#6500)**: the template now
+      reports on the Sentry `stage:` schema — the running host only after an `inngest-host-replace` — see "Amendment 2026-09-21 (#6500)"). **Task 5.3 revokes the PAT ⇒ its next fresh boot
       401s ⇒ the host never comes up.** Unlike #6437 this residual is **machine-enforced, not
       merely disclosed**: the soak's blocker arm reads #6500's state via `gh` and refuses `exit 0`
       while it is OPEN. Closing #6500 is therefore an **authorization act** — see the pinned note
@@ -1113,7 +1113,8 @@ docker daemon config; authenticates before the pull; and reports `inngest_zot` /
   inngest-freshboot count as covering the **web** host only, and read this host's fallback rate
   from Better Stack separately. This is a live gap, not a resolved one.
   > **Superseded 2026-09-21 (#6500):** the cut was a #7516 scope decision, not a design
-  > objection, and the next amendment routes these markers to Sentry. See
+  > objection, and the next amendment routes these markers to Sentry — in the template; the gap
+  > stays live on the running host until an `inngest-host-replace` builds one from it. See
   > "Amendment 2026-09-21 (#6500)" below.
 - **Retire the GHCR leg** — but "retained as break-glass" would be false, and an earlier draft
   of this amendment said exactly that. AP-016 **LAPSED 2026-07-30 (#7071)**: the interim read PAT
@@ -1140,9 +1141,20 @@ docker daemon config; authenticates before the pull; and reports `inngest_zot` /
 - **The soak.** `zot-soak-6122.sh` gains a host-pinned denominator
   (`stage:"inngest_zot" host_name:"soleur-inngest"`, FAIL on 0) and a syntax-anchored
   corroboration that both call sites exist. `[freshboot]` stays bare.
-- **New coupling.** Rotating `SENTRY_DSN` in `prd_terraform` changes this host's `user_data`, so
-  the next `hcloud_server.inngest` apply force-replaces the sole scheduler. Web hosts avoid this
-  with `ignore_changes = [user_data]`, which this host deliberately lacks (ADR-100).
+- **New coupling.** `var.sentry_dsn` is baked into the `user_data` of three roots, and only the web
+  hosts carry `ignore_changes = [user_data]`: rotating `SENTRY_DSN` in `prd_terraform` now leaves
+  `hcloud_server.inngest` (this amendment), `hcloud_server.git_data` (pre-existing,
+  `git-data.tf` ignores only `ssh_keys`) and the rung2 rehearsal host pending a replace. Nothing
+  automated plans those servers, so the practical effect is that the `inngest-host` dispatch aborts
+  on `server_touched` until an `inngest-host-replace` window, and an operator-local full apply
+  would replace the scheduler. Rotate the DSN only together with those windows.
+- **Guards.** A second `lifecycle.precondition` on `hcloud_server.inngest` refuses a malformed DSN
+  (a trailing newline makes the whole cloud-config unparseable, so the replacement would boot with
+  none of its configuration), and the `inngest-host-replace` job refuses an empty or unreadable
+  `SENTRY_DSN` before it plans.
+- **Delivery hazard.** Every replace of this host inherits the `INNGEST_CUTOVER_FLIP` stranding
+  hazard: check the flag first, per `runbooks/inngest-server.md` § "Inherited `done` after a host
+  replace (#7228)".
 - **What it does NOT do.** It does not close #6500 and does not authorize 5.3–5.5. It takes
   effect only after an `inngest-host-replace` dispatch in an ADR-100 window, and a Sentry event
   is forgeable with the public DSN, so the Better Stack marker must corroborate it before anyone

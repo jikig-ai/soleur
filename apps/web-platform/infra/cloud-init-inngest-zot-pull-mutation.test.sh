@@ -400,6 +400,38 @@ g1_replace g1-row12-arm-anchor-drifted "G1b dispatch: the served (zot) arm was e
   "'''      if [ \"\$zot_rc\" -eq 0 ]; then\n'''" "'''      if [ \"\$zot_rc\" = 0 ]; then\n'''"
 g1_replace g1-extra-backgrounded-emit "G1b: no soleur-boot-emit call is backgrounded" \
   "'''$G1_FB'''" "'''        soleur-boot-emit inngest_ghcr_fallback warning \"rc=\$zot_rc\" || true &\n'''"
+# Review P1-2: a nested if/else inside the SERVED arm must not be read as the arm split. Delete
+# the real fallback emit and plant one behind a nested `else` in the served arm.
+case_mutate g1-row14-nested-else-hijack "G1b: the missed arm emits inngest_ghcr_fallback exactly once" "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+assert s.count(zot)==1 and s.count(fb)==1, "call sites not found"
+plant=("        if [ -n \"$IREF\" ]; then :\n        else\n"
+       "          ZOT_LEG=\"$ZOT_LEG\"\n          ZOT_LEG=\"$ZOT_LEG\"\n"
+       "          soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n        fi\n")
+s=s.replace(fb,"",1).replace(zot,zot+plant,1)
+open(p,"w").write(s)
+'
+# Review P2-3: a call that can never run is not a call. Dead code behind `if false`, and dead code
+# inside a heredoc (data, not shell).
+case_mutate g1-row15-dead-if-false "G1b: the served arm emits inngest_zot exactly once" "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+assert s.count(zot)==1, "call site not found"
+s=s.replace(zot,"        if false; then\n  "+zot+"        fi\n",1)
+open(p,"w").write(s)
+'
+case_mutate g1-row16-dead-heredoc "G1b: the missed arm emits inngest_ghcr_fallback exactly once" "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+assert s.count(fb)==1, "call site not found"
+s=s.replace(fb,"        : <<'"'"'OFF'"'"'\n"+fb+"        OFF\n",1)
+open(p,"w").write(s)
+'
 # Row 13 (harness): a mutator that changes nothing must ABORT the battery, never score a verdict.
 # Run in a subshell so the die() it triggers is observed rather than inherited.
 G1_PROBE_RC=0

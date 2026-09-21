@@ -2005,6 +2005,27 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false -lockfile=readonly
 
+      - name: Assert SENTRY_DSN present (#6500)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # #6500: this host now bakes SENTRY_DSN, and its Sentry event is what zot-soak-6122.sh
+          # counts. An empty or unreadable value would spend a maintenance window on a replace that
+          # reports nothing. Fail closed on BOTH, before the plan; the shape is the precondition's
+          # job (inngest-host.tf). The value is never printed.
+          dsn_rc=0
+          DSN=$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
+          if [[ "$dsn_rc" -ne 0 ]]; then
+            echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}) — fail-closed. doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
+            exit 1
+          fi
+          if [[ -z "$DSN" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform — the replacement's soleur-boot-emit would phone home rc=nodsn and the soak's inngest_zot denominator would stay 0. Set it before replacing (#6500)."
+            exit 1
+          fi
+          echo "SENTRY_DSN present and non-empty (value not printed)."
+
       - name: Terraform plan (scoped inngest-host -replace) + destroy-guard
         id: plan
         working-directory: ${{ env.INFRA_DIR }}

@@ -13,7 +13,7 @@
 #       close the tracker. Proof the flip was actually exercised.
 #
 # The five watched signals and their emitters (anchored on EMIT NAMES, not line numbers —
-# ADR-096 mandates this; line citations rot). FOUR emit functions across three files, in TWO
+# ADR-096 mandates this; line citations rot). FIVE emit functions across four files, in TWO
 # schema families (feature/op-prefixed vs bare-stage) — that split is the whole reason the
 # queries differ:
 #   registry:"ghcr-fallback"       ci-deploy.sh  `registry_pull_event ghcr-fallback`
@@ -22,6 +22,9 @@
 #                                  jq tags: {feature, op, registry, zot_gate_reason}
 #   stage:"inngest_ghcr_fallback"  cloud-init.yml calls `soleur-boot-emit inngest_ghcr_fallback`
 #                                  (defined in soleur-host-bootstrap.sh) tags: {stage, host_id, region}
+#                                  AND, since #6500, cloud-init-inngest.yml's host-local copy
+#                                  `soleur-boot-emit inngest_ghcr_fallback warning` (write_files)
+#                                  tags: {stage, host_id, region, host_name, detail}
 #   stage:"app_ghcr_fallback"      cloud-init.yml `_emit ... "app_ghcr_fallback" warning`
 #                                  tags: {stage, image_ref, host_id, detail}
 #   stage:"app_ghcr_served"        cloud-init.yml `_emit ... "app_ghcr_served" warning` (#6462)
@@ -99,8 +102,10 @@
 #     WHAT REMAINED UNCOVERED until 2026-09-21, and was the whole residual: it reported via
 #     inngest-boot-phone-home.sh to Better Stack only, NOT the Sentry `stage:` schema, so every
 #     query in this file was structurally blind to it.
-#       NOW (#6500 close condition 2): it carries a host-local `soleur-boot-emit` and reports
-#       both outcomes on the Sentry `stage:` schema with `host_name:"soleur-inngest"`. The bare
+#       NOW (#6500 close condition 2): the TEMPLATE carries a host-local `soleur-boot-emit`, so
+#       a host BUILT from it (i.e. after an inngest-host-replace — the running host never re-runs
+#       runcmd) reports both outcomes on the Sentry `stage:` schema with
+#       `host_name:"soleur-inngest"`. The bare
 #       `[freshboot]` query therefore covers it, and the host-pinned INNGEST_ZOT denominator
 #       below FAILs unless this host reported at least one zot-served fresh boot in the window.
 #       The Better Stack marker is kept as a second, independently-credentialed channel; a
@@ -208,8 +213,11 @@ END=$(date -u +%Y-%m-%dT%H:%M:%S)
 # START <= cutover_utc, and a START pinned LATE is a false-PASS route: it excludes flip-day
 # fallbacks while the remaining days still clear MIN_SAMPLE. The window bound is
 # operator-asserted and unverified. Tracked on #6122 (which owns the true cutover UTC).
-if [[ ! "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
-  echo "TRANSIENT: START is unpinned ($START) — pin ZOT_SOAK_START in this script to the cutover UTC before this gate can report a verdict." >&2
+# FULLY anchored (#6500 review): START is spliced into the query URL unencoded, so a
+# prefix-only check admitted `2026-01-01T&start=<later>`, a second `start=` that silently moves
+# the window.
+if [[ ! "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?$ ]]; then
+  echo "TRANSIENT: START is unpinned or malformed ($START) — pin ZOT_SOAK_START in this script to the cutover UTC before this gate can report a verdict." >&2
   exit 2
 fi
 
@@ -356,7 +364,7 @@ if [[ ! "$INNGEST_ZOT" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 if (( INNGEST_ZOT == 0 )); then
-  echo "FAIL(no-inngest-freshboot-evidence): 0 fallbacks, but NO zot-served fresh boot of the dedicated soleur-inngest host since $START. That host is UNOBSERVED, not clean. A soleur-inngest fresh boot must happen inside [START, END] — an inngest-host-replace dispatch carrying the #6500 emitter, in an ADR-100 maintenance window."
+  echo "FAIL(no-inngest-freshboot-evidence): 0 fallbacks, but NO zot-served fresh boot of the dedicated soleur-inngest host since $START. That host is UNOBSERVED, not clean. If NO replace has run in the window: dispatch apply-web-platform-infra.yml with apply_target=inngest-host-replace (the host must be BUILT from the #6500 template), in an ADR-100 maintenance window. If a replace DID run, do not replace again yet — read the host's Better Stack channel first: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<window start>' --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST. inngest_zot present plus sentry-emit-FAILED (or TRACE_LOST) is a DELIVERY fault (DSN or egress), not a missing boot."
   exit 1
 fi
 
@@ -387,11 +395,12 @@ fi
 # 5.3 rotates AND revokes the GHCR PAT: after it, a fleet that still needs GHCR can pull from
 # neither registry, with no rollback.
 #
-# #6500: the dedicated inngest host (cloud-init-inngest.yml:337) hard-pins a ghcr.io ref with
-# NO zot path and a fail-closed pull, and reports to Better Stack rather than the
-# Sentry `stage:` schema — so every query in this file is structurally blind to it. It is a
-# LIVE host (hcloud_server.inngest is unconditional, inngest-host.tf:181). Revoke the PAT and
-# its next fresh boot 401s and never comes up, while this soak reports PASS.
+# #6500: the dedicated inngest host. WAS (until #7462/#7516): a hard-pinned ghcr.io ref with no
+# zot path, reporting only to Better Stack, so every query in this file was blind to it. NOW:
+# the template pulls zot-primary and (#6500) reports on the Sentry `stage:` schema — but only a
+# host BUILT from it does, and closing #6500 is still the human authorization that the live host
+# was replaced and observed. It is a LIVE host (hcloud_server.inngest is unconditional); if it
+# cannot pull zot, the revoke leaves it unable to boot, while this soak could report PASS.
 #
 # ⚠ This reads issue STATE, not fixedness. Closing #6500 IS the authorization act — see the
 # pinned warning on the issue. Do not close it to make this gate pass, and do not delete this
@@ -421,7 +430,7 @@ if [[ "$st" != "OPEN" && "$st" != "CLOSED" ]]; then
   exit 2
 fi
 if [[ "$st" == "OPEN" ]]; then
-  echo "FAIL(blocked): soak criteria hold (0 fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST, $APP_ZOT zot-served fresh boot(s)), but #$BLOCKER is OPEN — the dedicated inngest host pulls GHCR fail-closed with no zot path, so 5.3 (PAT revoke) would leave it unable to boot. NOT authorized to retire GHCR."
+  echo "FAIL(blocked): soak criteria hold (0 fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST, $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s)), but #$BLOCKER is OPEN — the operator has not yet authorized that the dedicated inngest host pulls zot-primary and reports on the Sentry stage: schema (RESULT: PASS on #$BLOCKER, then close it as completed). NOT authorized to retire GHCR."
   exit 1
 fi
 
@@ -468,8 +477,8 @@ fi
 # ⚠ TWO EMITTER SHAPES, NOT ONE (#7462). The anchors above were written when the only imagined
 # fix was "make cloud-init-inngest.yml look like cloud-init.yml". #7462 implemented the zot arm
 # with a DIFFERENT and deliberate shape — `ZIREF="$ZOT_EP/…"` + `IREF="$ZIREF"`, reporting via
-# `inngest-boot-phone-home.sh` — because this host has no `soleur-boot-emit` (that emitter ships
-# in the WEB host's host-script bundle) and reads its endpoint from a baked file rather than
+# `inngest-boot-phone-home.sh` — because at #7462 this host had no `soleur-boot-emit` (#6500
+# later added a host-local one) and reads its endpoint from a baked file rather than
 # `$ZURL` from Doppler. Measured against that implementation, BOTH original anchors return ZERO
 # hits. Left as-is, this arm would have gone from "correctly blocks" to "can never agree": once
 # #6500 is legitimately closed the gate would emit `blocker-closed-but-condition-unmet` forever,
@@ -491,18 +500,20 @@ _zot_reports_offbox() {
 # of the call sites; this predicate reads the code as it is now.
 _zot_reports_sentry_stage() {
   grep -qE '^[[:space:]]*soleur-boot-emit inngest_zot ' "$1" \
-    && grep -qE '^[[:space:]]*soleur-boot-emit inngest_ghcr_fallback ' "$1"
+    && grep -qE '^[[:space:]]*soleur-boot-emit inngest_ghcr_fallback ' "$1" \
+    && grep -qE '^  - path: /usr/local/bin/soleur-boot-emit$' "$1"
 }
 if ! _zot_path_in_code "$INNGEST_CI" || ! _zot_reports_offbox "$INNGEST_CI" || ! _zot_reports_sentry_stage "$INNGEST_CI"; then
-  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path and/or no off-box reporting of it — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
+  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path, no off-box reporting of it, or no Sentry `stage:` emit (both outcome arms calling soleur-boot-emit, and the write_files entry that delivers it) — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
   exit 1
 fi
-# The channel now reaches this query set (#6500): the dedicated host emits inngest_zot /
-# inngest_ghcr_fallback on the Sentry `stage:` schema, and INNGEST_ZOT above requires one of its
-# own zot-served boots in the window. The Sentry event is forgeable with the public DSN, so
-# whoever authorises 5.3-5.5 still corroborates it on the independently-credentialed channel:
+# The channel reaches this query set once the host is built from the #6500 template: it emits
+# inngest_zot / inngest_ghcr_fallback on the Sentry `stage:` schema, and INNGEST_ZOT above
+# requires one of its own zot-served boots in the window. The Sentry event is forgeable with the
+# public DSN — as is every Sentry signal this gate reads — so whoever authorises 5.3-5.5 still
+# corroborates it on the independently-credentialed channel, and the PASS line says so:
 #   doppler run -p soleur -c prd_terraform -- \
 #     scripts/betterstack-query.sh --since <window> --grep inngest_ghcr_fallback --grep inngest_zot
 
-echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER is CLOSED — since $START. zot-primary soak holds. Safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
+echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER is CLOSED — since $START. zot-primary soak holds on Sentry evidence, which is forgeable with the public DSN: before 5.3-5.5, corroborate the dedicated host's inngest_zot on Better Stack (scripts/betterstack-query.sh --grep 'stage=inngest_zot'). Then safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
 exit 0

@@ -231,7 +231,7 @@ The first draft backgrounded the call sites (`… &`). That was **reversed at de
 applies. Research sources disagreed on whether a process left in the cgroup after the runcmd script exits survives,
 and the fallback arm reaches `exit "$pull_rc"` (`:1455`) seconds after the emit. The plan therefore **does not rely
 on orphan survival**. Both call sites run in the **foreground**, ending in `|| true`, with the emitter's curl bounded
-by `--connect-timeout 5 --max-time 8 --retry 1 --retry-max-time 15`. The worst case is about 16 s of added boot time,
+by `--connect-timeout 5 --max-time 8` (review: `--retry` dropped — curl reports a declined 429 retry as rc 0). The worst case is about 16 s of added boot time (8 s emit + the 8 s failure phone-home),
 and only when Sentry is unreachable. The emit then completes before the fallback arm's `exit`, deterministically.
 
 Verification command (no credentials):
@@ -467,7 +467,7 @@ Write the Guard Contract assertions below before any product edit, and confirm e
   - **State-only re-address does not deliver user_data.**
   - ADR-100 already records that every `cloud-init-inngest.yml` change implies a cron-outage window.
 - **Accepted: a bounded maintenance window.** The window runs from destroy through first-boot `runcmd` to
-  `inngest-server` bind. Crons due inside the gap fire **zero** times, not late. This PR adds at most about 16 s to
+  `inngest-server` bind. Crons due inside the gap fire **zero** times, not late. This PR adds at most about 16 s (8 s emit + 8 s failure phone-home) to
   that window, and only when Sentry is unreachable.
 - **Known way a replace strands the scheduler** (`runbooks/inngest-server.md` § "Inherited `done` after a host
   replace (#7228)"). If Doppler `soleur-inngest/prd` `INNGEST_CUTOVER_FLIP=done`, every replace leaves
@@ -706,12 +706,23 @@ mutations as the control, and the harness rows below exist so a vacuous harness 
 - [x] AC9: `plugins/soleur/test/cloud-init-user-data-size.test.ts`, `apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts` and `plugins/soleur/test/c4-count-parity.test.sh` are green, and `model.c4` has an `inngest -> sentry` edge.
 - [x] AC10: ADR-096 has the `Amendment 2026-09-21 (#6500)` section, including the DSN-rotation coupling and supersession pointers at the 2026-08-13 bullet and at `:343`. `model.c4`'s "Deliberately NO `inngest -> sentry` edge" comment is rewritten (`grep -c 'Deliberately NO .inngest -> sentry. edge' knowledge-base/engineering/architecture/diagrams/model.c4` prints `0`).
 - [ ] AC11: the PR body contains `Ref #6500` and no closing keyword for it. `gh pr view 8488 --json body --jq .body | grep -ciE '(close[sd]?|fix(e[sd])?|resolve[sd]?):? #6500'` prints `0`. The body must not put any closing verb (close/fix/resolve, in any tense) directly before `#6500`, not even in a negated sentence ("does not close #6500" still matches both this grep and GitHub's keyword parser). Write "leaves issue 6500 open" instead. An accidental auto-close would authorize the PAT revoke.
-- [x] AC12: `terraform validate` in `apps/web-platform/infra` passes, and the `lifecycle.precondition` on `hcloud_server.inngest` (`:516`) is unchanged.
+- [x] AC12: `terraform validate` in `apps/web-platform/infra` passes, and the existing size `lifecycle.precondition` on `hcloud_server.inngest` is byte-unchanged. (Review amendment: a SECOND precondition refusing a malformed `var.sentry_dsn` was added beside it.)
 
 ### Post-merge (operator window, not a merge blocker)
 
 - [ ] PM1: `inngest-host-replace` dispatched in an ADR-100 maintenance window, after the `## Downtime & Cutover` pre-dispatch flag check (Phase 6). The job's plan shows only the scoped server recreate. `Automation: not feasible in-session because` the window is an operator-scheduled downtime of the sole scheduler (ADR-100). The dispatch itself is one `gh workflow run`.
 - [ ] PM2: Sentry shows one `stage:inngest_zot` (or `inngest_ghcr_fallback`) event with `host_name:soleur-inngest` for that boot, Better Stack shows the matching `SOLEUR_INNGEST_BOOT_STAGE stage=inngest_zot` marker, and there is no `sentry-emit-FAILED` marker. This Better Stack corroboration is **required** before anyone posts `RESULT: PASS` on #6500, because the Sentry event alone is forgeable with the public DSN (P5).
+  Runnable (an agent can execute it; `T0` = the replace dispatch time, UTC):
+  ```bash
+  T0=<dispatch UTC, 2026-..T..:..:..>; T1=<T0 + 60 min>
+  doppler run -p soleur -c prd -- scripts/sentry-issue.sh --host-events soleur-inngest --stage inngest_zot --start "$T0" --end "$T1"            # PASS: >= 1 row
+  doppler run -p soleur -c prd -- scripts/sentry-issue.sh --host-events soleur-inngest --stage inngest_ghcr_fallback --start "$T0" --end "$T1"  # expect 0 rows
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since "<T0 as YYYY-MM-DD HH:MM:SS>" \
+    --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST
+  # PASS: >= 1 SOLEUR_INNGEST_BOOT_STAGE stage=inngest_zot, 0 sentry-emit-FAILED, 0 TRACE_LOST
+  ```
+  The soak is the 7-day gate, not the one-boot verifier: right after a replace it usually stops at
+  its `MIN_SAMPLE` arm before printing the `INNGEST_ZOT` count.
 - [ ] PM3: #6500 stays OPEN until an operator posts `RESULT: PASS`. This PR does not change that.
 - [ ] PM4: after the replace, `zot-soak-6122.sh`'s `INNGEST_ZOT` count for the window is at least 1 once `ZOT_SOAK_START` is pinned (the pin itself is tracked on #6122).
 
@@ -829,7 +840,7 @@ are Mechanical unless marked otherwise. The two Taste items are in `decision-cha
 
 - **A boot-path regression on the sole scheduler.** Mitigated by:
   - G1 rows 3a/3b and 7-8;
-  - G3 (a foreground `|| true` call site, `set +e`, exit 0, curl bounds of about 16 s worst case);
+  - G3 (a foreground `|| true` call site, `set +e`, exit 0, curl bounded at 8 s with no retry, about 16 s worst case with the failure phone-home);
   - a planned window with a documented rollback (Phase 6).
 - **A lost fallback emit.** Residual, accepted: a missed-arm boot fails anyway (the GHCR leg 401s), so the scheduler
   is down and the existing inngest liveness probes page. See Alternatives.

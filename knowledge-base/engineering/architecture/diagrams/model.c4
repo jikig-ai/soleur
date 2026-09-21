@@ -715,7 +715,8 @@ model {
   // outage is survivable, and it is the property most worth not "simplifying" away.
   //
   // The `inngest -> sentry` edge is the BOOT EMITTER only (#6500): the host-local
-  // soleur-boot-emit POSTs the bootstrap-pull outcome to the store API. The host's Vector
+  // soleur-boot-emit POSTs the bootstrap-pull outcome to the store API. It is live only on a
+  // host built from the #6500 template, i.e. after an inngest-host-replace. The host's Vector
   // sink stays on Better Stack — it was pivoted OFF Sentry's HTTP envelope endpoint after
   // ~6 PR cycles of interop failures (#4273; grep `[sinks.betterstack]` in inngest.tf and
   // the pivot note in inngest-bootstrap.sh), and #6500 did not reverse that. The Inngest-FIRED crons'

@@ -1021,10 +1021,25 @@ G1B_BEFORE="$TOTAL"
 ARM_ZOT="$(mktemp -t inngest-arm-zot-XXXXXX)"
 ARM_FB="$(mktemp -t inngest-arm-fb-XXXXXX)"
 trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"' EXIT
+# DEPTH-AWARE (review P1-2/P2-3): the split happens only at nesting depth 0, and only depth-0
+# statements are emitted into an arm file, because a statement inside a nested block (`if false;
+# then … fi`, a `case`, a loop) is not an unconditional statement of the arm. A nested `else` must
+# not flip arms and a nested `fi` must not end the extraction. Heredoc bodies are data, not code,
+# and are skipped whole (`: <<'OFF' … OFF` is the other way to write dead code).
 sed -E '/^[[:space:]]*#/d' "$DED_BLOCK_FILE" | awk -v Z="$ARM_ZOT" -v F="$ARM_FB" '
-  /^[[:space:]]*if \[ "\$zot_rc" -eq 0 \]; then$/ { arm = "z"; next }
-  arm == "z" && /^[[:space:]]*else$/ { arm = "f"; next }
-  arm == "f" && /^[[:space:]]*fi$/ { exit }
+  hd != "" { t = $0; sub(/^[[:space:]]+/, "", t); if (t == hd) hd = ""; next }
+  !arm && /^[[:space:]]*if \[ "\$zot_rc" -eq 0 \]; then$/ { arm = "z"; d = 0; next }
+  !arm { next }
+  match($0, /<<-?[[:space:]]*\047?[A-Za-z_]+\047?/) {
+    hd = substr($0, RSTART, RLENGTH); gsub(/[<\047 -]/, "", hd); next
+  }
+  /^[[:space:]]*(if|case|while|until|for)[[:space:]]/ { d++; next }
+  /^[[:space:]]*(fi|esac|done)([[:space:]]|;|$)/ {
+    if (d == 0) { if (arm == "f") exit; next }
+    d--; next
+  }
+  d == 0 && arm == "z" && /^[[:space:]]*else$/ { arm = "f"; next }
+  d > 0 { next }
   arm == "z" { print > Z }
   arm == "f" { print > F }
 '
@@ -1046,7 +1061,7 @@ assert "G1b: the missed arm emits inngest_ghcr_fallback exactly once, bare name,
   "(( G1B_FB_OK == 1 ))"
 assert "G1b: each arm carries exactly ONE soleur-boot-emit call (served $G1B_ZOT_ANY, missed $G1B_FB_ANY)" \
   "(( G1B_ZOT_ANY == 1 && G1B_FB_ANY == 1 ))"
-assert "G1b: no soleur-boot-emit call is backgrounded (a background emit races the fallback arm's exit)" \
+assert "G1b: no soleur-boot-emit call is backgrounded (it could outlive cloud-final and be killed with its cgroup)" \
   "! grep -qE '^[[:space:]]*soleur-boot-emit .*&[[:space:]]*\$' '$DED_CODE_FILE'"
 # The write_files half: the emitter is delivered executable, the DSN file 0600, and the DSN file
 # carries the templatefile variable. Each entry is sliced to its own `- path:` block so a
