@@ -50,10 +50,12 @@
 # auth-callback-no-code-burst were adopted as `sentry_alert` with their real
 # definitions and now carry `ignore_changes = [environment]` only, so Terraform
 # owns their filters exactly as it owns the EXPECTED_RULES four. Only
-# `auth-per-user-loop` still declares the v2 attributes empty under the wide
-# `ignore_changes`, and it is the only rule `configure-sentry-alerts.sh` still
-# writes. The distinction above is therefore NARROWER, not gone — the two sets
-# are still disjoint and the per-RESOURCE-BLOCK instruction still stands.
+# `auth-per-user-loop` is still outside that ownership: since #8451 it is a
+# `sentry_alert` frozen under `ignore_changes = all` (its trigger type is
+# unmodelable at the pinned provider, and any write would zero the threshold),
+# and it is the only rule `configure-sentry-alerts.sh` still writes. The
+# distinction above is therefore NARROWER, not gone — the two sets are still
+# disjoint and the per-RESOURCE-BLOCK instruction still stands.
 #
 # SCOPE — org-wide since #7590, previously project-scoped. The replacement
 # endpoint (below) is org-scoped and its payload carries no project binding, so

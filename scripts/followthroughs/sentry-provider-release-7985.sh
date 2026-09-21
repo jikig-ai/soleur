@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Follow-through verification for #7985 — sentry Phase 3.4.
 #
-# `auth_per_user_loop` and `sandbox_startup_failure` cannot leave the deprecated
-# `sentry_issue_alert` resource because their `event_unique_user_frequency_count`
-# trigger is absent from `sentry_alert.trigger_conditions` at the pinned provider
-# version.
+# `auth_per_user_loop` and `sandbox_startup_failure` cannot carry a native trigger
+# because their `event_unique_user_frequency_count` trigger is absent from
+# `sentry_alert.trigger_conditions` at the pinned provider version. (Until #8451
+# they sat on the deprecated `sentry_issue_alert`; they are now frozen
+# `sentry_alert` blocks — see below.)
 #
 # Upstream jianyuan/terraform-provider-sentry#950 FIXED this on 2026-09-09
 # (PR #953, commit 0deba790) — but SEVEN DAYS AFTER the most recent release,
@@ -18,9 +19,18 @@
 # write Terraform against a condition the provider still cannot express. The
 # commit-containment check is the claim; the tag is just how we find candidates.
 #
+# PASS MEANS CONVERTED, NOT RELEASED (#8451). Since #8451 the two rules are
+# adopted as `sentry_alert` and FROZEN (`legacy_trigger_conditions` +
+# `ignore_changes = all`). A release that contains the fix is the moment the work
+# becomes POSSIBLE, not the moment it is done — if this probe passed then, the
+# sweeper would close #7985 and the freeze would have no remaining owner. So the
+# repo's own state is checked FIRST, and a release alone reports FAIL "unblocked".
+#
 # Exit semantics (per sweep-followthroughs.sh contract):
-#   0 = PASS       (a release containing the fix exists; sweeper closes #7985)
-#   1 = FAIL       (no such release yet; sweeper comments, leaves open)
+#   0 = PASS       (issue-alerts.tf carries no legacy trigger and no
+#                   `ignore_changes = all`; sweeper closes #7985)
+#   1 = FAIL       (not converted: either no fixed release yet, or one exists and
+#                   the conversion is owed; sweeper comments, leaves open)
 #   * = TRANSIENT  (GitHub API unreachable / rate-limited; retry next sweep)
 #
 # Required env: GH_TOKEN (the sweeper provides it). No Sentry credential is
@@ -52,6 +62,19 @@ FIX_SUBJECT="event unique user frequency count"    # corroborating subject match
 
 api () { gh api "$@" 2>/dev/null; }
 
+# --- converted? (checked first: after the bump PINNED is stale, so the release
+# comparison below is no longer meaningful) -------------------------------------
+TF="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/apps/web-platform/infra/sentry/issue-alerts.tf"
+if [[ ! -r "$TF" ]]; then
+  echo "TRANSIENT: cannot read ${TF} (probe not run from a repository checkout)"
+  exit 2
+fi
+if ! grep -qE '^[[:space:]]*legacy_trigger_conditions[[:space:]]*=' "$TF" \
+   && ! grep -qE '^[[:space:]]*ignore_changes[[:space:]]*=[[:space:]]*all\b' "$TF"; then
+  echo "PASS: converted — issue-alerts.tf carries no legacy_trigger_conditions and no ignore_changes = all."
+  exit 0
+fi
+
 # --- candidate releases -------------------------------------------------------
 RELEASES=$(api "repos/${UPSTREAM}/releases?per_page=30" --jq '.[] | select(.draft==false and .prerelease==false) | .tag_name')
 if [[ -z "$RELEASES" ]]; then
@@ -78,8 +101,8 @@ for v in $NEWER; do
     exit 2
   fi
   if printf '%s' "$CMP" | grep -qi -e "^${FIX_SHA}" -e "$FIX_SUBJECT"; then
-    echo "PASS: provider v${v} contains the #950 fix (${FIX_SHA}). Bump versions.tf to v${v}, then migrate auth_per_user_loop and sandbox_startup_failure via removed{} + import{} (never destroy/recreate a live rule)."
-    exit 0
+    echo "FAIL: unblocked — provider v${v} contains ${FIX_SHA}; bump versions.tf, convert auth_per_user_loop and sandbox_startup_failure to native trigger_conditions, drop legacy_trigger_conditions and ignore_changes = all (the plan must show 0 changes). See #7985's exit checklist."
+    exit 1
   fi
 done
 
