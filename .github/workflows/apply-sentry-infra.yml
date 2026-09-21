@@ -1321,6 +1321,7 @@ jobs:
           # Pinned empty (#8451): the frozen-rule pin reads the committed capture
           # unless overridden; a later $GITHUB_ENV write must not repoint it.
           SENTRY_FROZEN_CAPTURE_FILE: ""
+          SENTRY_FROZEN_TF_DIR: ""
         run: |
           set -euo pipefail
           bash scripts/sentry-alert-live-fidelity.sh
