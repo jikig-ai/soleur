@@ -1412,7 +1412,7 @@ the state file (the one channel), and the heartbeat reader (the one consumer).
   - `python3 scripts/lint-guard-contract.py <this plan>` clean
 
   Any floor raised is raised in the same edit as its row.
-- [ ] The PR body names the four merge-time pipelines. It uses `Ref #8036 #8037 #8417 #8408
+- [ ] The PR body names the four merge-time pipelines. It uses `Refs #8036 #8037 #8417 #8408
       #8449 #8278`. It contains **no** closing keyword for any of them, not even in prose. It
       carries the 1c recommendation, the UC1 recommendation, the 1b closed-vocabulary deviation
       (no username or identity field), the ≤5-min fail-closed bound of the sentinel gate, and the
