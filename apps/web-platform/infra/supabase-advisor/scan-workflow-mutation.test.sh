@@ -13,7 +13,7 @@
 # The fix (capture once, match a here-string) and its residual-shape guard are
 # only worth what their evidence is worth. Asserted in a comment that evidence is
 # prose; asserted here it is re-checked on every CI run. The sibling precedent
-# inngest-rls/inngest-rls-mutation.test.sh exists because a session crash
+# inngest-rls/inngest-rls-mutation.test.sh existed (retired 2026-09-19 with 0002) because a session crash
 # destroyed exactly such an ad-hoc matrix — this file is that lesson applied
 # rather than re-learned.
 #
