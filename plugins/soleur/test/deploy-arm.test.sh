@@ -130,7 +130,18 @@ export PATH="$WORK/bin:$PATH"
 # Fixture builder. new_fx [M_AGE_S] -> S, CLONE, STUB_FX, A M D X
 # ---------------------------------------------------------------------------
 SEQ=0
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 commit() { # commit <repo> <msg> <epoch>
+  assert_fixture_dir "$1"
   GIT_COMMITTER_DATE="@$3 +0000" GIT_AUTHOR_DATE="@$3 +0000" \
     git -C "$1" commit -q --allow-empty -m "$2"
   git -C "$1" rev-parse HEAD

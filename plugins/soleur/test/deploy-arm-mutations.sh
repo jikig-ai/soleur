@@ -40,7 +40,8 @@ s = open(os.environ["SRC"]).read()
 count = int(os.environ["ROW_COUNT"])
 m = s
 # "|||" separates several (old, new) pairs applied to one mutant.
-for old, new in zip(os.environ["ROW_OLD"].split("|||"), os.environ["ROW_NEW"].split("|||")):
+# "{GT}" stands for ">" so a row's redirect text is not itself a shell redirect site.
+for old, new in zip(os.environ["ROW_OLD"].replace("{GT}", ">").split("|||"), os.environ["ROW_NEW"].replace("{GT}", ">").split("|||")):
     assert old in m, "anchor not found: " + old[:60]
     m = m.replace(old, new, count)
 assert m != s, "mutation did not land"
@@ -68,8 +69,8 @@ row G1-4 KILLED 'rc="$(ancestry "$MERGE" "$d")"' 'rc="$(ancestry "$d" "$MERGE")"
 row G1-5 KILLED 'pending) blk_pending=1 ;;' 'pending) : ;;' 1
 row G1-6 KILLED '    (( C_CREATED[i] >= ci_started_e )) || continue
     delivering "${C_DEPLOY[i]}" && best="$i"' '    delivering "${C_DEPLOY[i]}" && (( best < 0 )) && best="$i"' 1
-row G1-7 KILLED 'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" > "$lf" 2>>"$TMP/gh.err"; then' \
-  'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" 2>>"$TMP/gh.err" | grep -m1 -E "depth=1 origin|resolving deploy target" > "$lf"; then' 1
+row G1-7 KILLED 'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" {GT} "$lf" 2{GT}{GT}"$TMP/gh.err"; then' \
+  'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" 2{GT}{GT}"$TMP/gh.err" | grep -m1 -E "depth=1 origin|resolving deploy target" {GT} "$lf"; then' 1
 row G1-8 KILLED '  fetch_default
   while IFS=' '  while IFS=' 1
 row G1-9 KILLED '[[ "$wc" == "failure" || "$wc" == "timed_out" ]] && { printf '"'"'blocked'"'"'; return 0; }' \

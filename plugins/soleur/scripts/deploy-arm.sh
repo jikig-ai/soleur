@@ -29,7 +29,7 @@ set -Eeuo pipefail
 
 SUB="${1:-}"
 EMITTED=0
-TMP=""
+TMP="$(mktemp -d -t deploy-arm.XXXXXXXX)"
 
 emit() { # emit <line> <rc> — the only writer of stdout besides the ERR trap
   printf '%s\n' "$1"
@@ -55,7 +55,7 @@ on_err() {
   exit 2
 }
 trap 'on_err "$LINENO" "$BASH_COMMAND"' ERR
-trap '[[ -n "$TMP" ]] && rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"' EXIT
 
 NOW="${DEPLOY_ARM_NOW:-$(date +%s)}"
 SLEEP_MULT="${DEPLOY_ARM_SLEEP:-1}"
@@ -156,9 +156,9 @@ cmd_served() {
 GH_JOBS_JQ='.jobs[] | [.name, (.id|tostring), .status, (.conclusion // "-"), (.completed_at // "-")] | @tsv'
 GH_RUNS_JQ='.workflow_runs[] | select(.path == ".github/workflows/web-platform-release.yml") | [.created_at, (.id|tostring), .status, (.conclusion // "-")] | @tsv'
 
-gh_or_die() { # gh_or_die <outfile> <gh args...>
-  local out="$1"; shift
-  if ! gh "$@" > "$out" 2>>"$TMP/gh.err"; then
+gh_or_die() { # gh_or_die <outfile under $TMP> <gh args...>
+  local rel="${1#"$TMP"/}"; shift
+  if ! gh "$@" > "$TMP/$rel" 2>>"$TMP/gh.err"; then
     printf 'deploy-arm: gh %s failed\n' "${*:1:3}" >&2
     emit "$(err_line gh_failed)" 2
   fi
@@ -379,7 +379,6 @@ cmd_find() {
   is_sha "$MERGE" || emit "$(err_line bad_input)" 2
   require gh git jq
   scope_guard
-  TMP="$(mktemp -d -t deploy-arm.XXXXXXXX)"
   local iter=0 reason
   while :; do
     evaluate
