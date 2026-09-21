@@ -404,8 +404,8 @@ The margin quoted in Consequences (42,547 B, 1,453 B to warn) is stale. Re-measu
 before and after #8290's flip. Live headroom is **1,080 B** to warn (44,000) and **3,080 B** to reject
 (46,000).
 
-#8290 moved 12 operator skills to `disable-model-invocation: true`. The measured `B_ALWAYS` delta is
+#8290 moved 8 operator skills to `disable-model-invocation: true`. The measured `B_ALWAYS` delta is
 **0 B**, by construction: `B_ALWAYS` sums `AGENTS.md` + `AGENTS.rules.md` only
 (`scripts/lint-agents-rule-budget.py`, `b_always = b_index + b_corpus`). Skill descriptions load
-through a different always-loaded budget, the harness skill listing, which ADR-236 governs (−266
-words / −1,733 B there). The shrink levers for `B_ALWAYS` remain trimming prose and migrating a rule.
+through a different always-loaded budget, the harness skill listing, which ADR-236 governs (−172
+words / −1,152 B there). The shrink levers for `B_ALWAYS` remain trimming prose and migrating a rule.

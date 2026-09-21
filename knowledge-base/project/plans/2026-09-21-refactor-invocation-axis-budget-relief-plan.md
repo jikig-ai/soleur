@@ -1469,3 +1469,23 @@ total, and a concurrent description bump on `main` moves it. The criterion is th
   at 0 vs 79, and git has no `{a,b}` brace expansion.
 - **Under W0-STOP, `closes: 8290` becomes a false claim.** Switch the frontmatter to `refs: 8290`, and
   use `Ref #8290` in the PR body, before the first push.
+
+## Post-review amendments (2026-09-21)
+
+Recorded after the 9-seat review and a binding CTO ruling. The sections above are left as written.
+
+- **D1 reversed for four skills.** flag-create, flag-set-role, cron-list and cron-delete stay
+  model-invocable. Plans prescribe the flag pair as agent steps (`wg-plan-prescribed-skills-must-run-inline`),
+  and `soleur:schedule` runs the cron pair's steps in place. The final flip set is 8, and the budget
+  is 2561 -> 2389 (-172 words / -1,152 B). ADR-236 carries the reasons; the AC-A1/A2 figures (12 and
+  3) now read 8 and 7.
+- **B5 run deviation.** `ANTHROPIC_MAX_TOKENS` was raised from 300 to 3000 before the paid run: at
+  300, Opus 5 and Sonnet 5 returned empty text (evidence in `b5-eval-results.md` §Deviation).
+- **B5 machinery archived.** It was removed after the run and is recoverable at 1a5b79261 through
+  `pull/8484/head`. The verdict stays INCONCLUSIVE with an "instrument validity limited" qualifier
+  after a post-verdict scorer audit. AC-E1, AC-E3 and AC-E7 held at 1a5b79261 and no longer apply to
+  the merged tree, and the `rule-phrasing.test.sh` Phase 5 command is dropped.
+- **AC-S3.** authoring-levers.md now points at ADR-236 for the headless-refusal policy and the
+  flip checklist, rather than restating them (single source).
+- **Rollback re-probe.** Tracked in #8499 instead of `soleur:model-launch-review`, which runs on the
+  wrong cadence.

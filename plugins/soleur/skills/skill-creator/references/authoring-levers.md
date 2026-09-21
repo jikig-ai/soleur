@@ -31,8 +31,10 @@ not" becomes one word used at every step: the deploy is **green** or it is rolle
 front of the model. Pair every prohibition with the positive target, and lead with the target:
 "write the health-check result to the PR body" beats "do not skip the health check". Keep a bare
 prohibition only as a hard guardrail with no positive form, and even then state what to do instead.
-Soleur measured this on its own always-loaded rules with the `rule-phrasing` eval in
-`eval-harness`; ADR-236 records the verdict, and that verdict governs how Soleur phrases rules.
+This lever comes from the model vendors' prompting guidance, not from a Soleur measurement.
+Soleur's attempt to measure it on its own always-loaded rules (B5, #8290) was inconclusive with
+limited instrument validity. ADR-236 records it and #8497 tracks a rerun. Apply the lever to new
+text; do not rewrite existing rules for phrasing alone.
 
 ## The two loads (context vs cognitive)
 
@@ -59,40 +61,17 @@ listing. Measured on Claude Code 2.1.278:
   `/plugin:skill`;
 - the user's slash command still runs, both headless and in the interactive TUI.
 
-ADR-236 sets three necessary conditions. A skill is flipped only when all three hold:
-
-- **K1.** No model-read surface (a skill, agent, rule, or workflow) directs the agent to invoke it.
-- **K2.** It is not a founder-facing capability the web Command Center must reach. The web product
-  reaches skills only through the model, so a user-invoked skill is invisible there.
-- **K3.** Its capability is not otherwise stranded: something a human can type still reaches it.
+ADR-236 holds the rest and is the single source for it: the three necessary conditions (K1-K3,
+where K3 means the model can still reach the capability another way, or it is deliberately
+operator-only), each harness's behaviour (the flag is inert on Codex and Grok), the headless-refusal
+policy (stop and file an `action-required` issue naming the command; never re-run the skill's steps
+by hand), and the sites that move together when a skill is flipped.
 
 "Operator tooling" and "only a human should fire it" are different properties. A skill that an
-always-loaded rule lists as the agent's own tool, or a read-only audit the agent must pull itself
-before acting, stays model-invocable however operator-flavoured it looks. `my-deploy-skill` would
-qualify for the flag only if no other skill's steps call it and no founder reaches it from the web.
-
-**Harness caveat.** The flag is a Claude Code field, and each harness treats it differently:
-
-- Devin CLI 3000.10.31 honours it: the skill is listed as `[user]` and is still typeable.
-- Codex CLI 0.155.1 ignores it: the description still loads. The flag is inert there, and nothing
-  regresses.
-- Grok reads `SKILL.md` directly, so the flag is inert by construction.
-
-**Headless refusal policy.** When an unattended run hits a Skill-tool refusal for a user-invoked
-skill, the run stops and files an `action-required` issue that names the exact command the operator
-must type (for example `/soleur:my-deploy-skill`). Do the hand-off, not the work: the agent never
-re-runs the skill's steps by hand. The harness refusal itself says not to replicate the workflow by
-other means, and a hand-rolled copy skips the guardrails the skill exists to hold.
-
-**The 13th-flip checklist.** Flipping one more skill is one diff that moves four sites together:
-
-1. the exact-set pin in `plugins/soleur/test/invocation-axis.test.ts`;
-2. that test's ack table;
-3. ADR-236's list of flipped skills;
-4. `SKILL_DESCRIPTION_WORD_BUDGET` in `plugins/soleur/test/components.test.ts`, lowered by the
-   flipped skill's description word count.
-
-A diff that moves fewer than four leaves the cap loose or the pin stale.
+always-loaded rule lists as the agent's own tool, a skill plans prescribe as an agent step, or a
+read-only audit the agent must pull itself before acting, stays model-invocable however
+operator-flavoured it looks. `my-deploy-skill` would qualify for the flag only if no other skill's
+steps call it and no founder reaches it from the web.
 
 ## Co-location (vs duplication, single source of truth)
 

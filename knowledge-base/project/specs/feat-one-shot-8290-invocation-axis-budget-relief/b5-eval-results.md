@@ -1,9 +1,8 @@
 # B5 eval results (#8290)
 
-> **DRAFT: pre-run section only.** No API call has been made. The verdict, rates, tokens and cost are
-> added after the paid run (Phase 3 steps 5-6). The raw grid is kept outside the repo.
->
-> **Superseded 2026-09-21:** the paid run happened. See "Run and verdict" at the end of this file.
+> The pre-registration below was committed before the paid run; the run, the verdict and a
+> post-verdict instrument audit follow it. The eval machinery was archived after the run (see
+> Disposition).
 
 ## Pre-registration (committed before the run)
 
@@ -122,7 +121,7 @@ node scripts/rule-phrasing-verdict.cjs "${XDG_CACHE_HOME:-$HOME/.cache}/soleur-8
 - Verdict module sha256 `18c2481ca32bab7176cbfcb737b3b4233c38436e116438e59a6db5828c9cbf28`
 - Scoring module sha256 `8a2d24bd61941dfe97ef0563d070c8d2e5d78495ce6f58f03a0718846b0bbce2`
 
-### Verdict: **INCONCLUSIVE**
+### Verdict: **INCONCLUSIVE** (pre-registered token; instrument validity limited)
 
 Δ = +8.0 pts over the 3 rules that pass V1 (n = 18 tasks), SE 3.9 pts, 2·SE interval **[+0.2, +15.8]**.
 Not EXTEND, because Δ < MWE (10 pts). Not REJECT, because the upper bound is above the MWE.
@@ -163,11 +162,33 @@ the omission scoring.
 Prompt 10842876, completion 1034200, total 11877076 tokens. Cost **$48.85** (promptfoo's
 own pricing), under the $60 cap. The two smoke tests cost about $1 more.
 
+### Post-verdict instrument audit (2026-09-21, not pre-registered; does not change the verdict)
+
+Code review after the run found scorer defects that bias the recorded rates.
+
+1. The `hr-never-run-commands-with-unbounded-output` scorer flags compliant answers: multi-line
+   pipelines ending in `| head`, commands inside prose code spans, refusals using "unbounded" or "off
+   the table", and `-10` / `-l` bounds. Re-scored by hand, that rule's non-compliance falls from 28 to
+   6 of 54 (prohibition), 22 to 4 (positive) and 41 to 20 (none). Its Δ_r falls from +0.111 to about
+   +0.037, and the aggregate point estimate from +8.0 to about +5.6 pts. No interval was recomputed.
+2. The other rules' scorers also have false positives and false negatives, which were not quantified.
+3. The verdict module scores empty or truncated answers as compliant, never gates on truncation, and
+   does not bind arm, provider or grid size to this pre-registration. Several verdict mutants survive
+   its test suite.
+
+So the per-rule rates partly measure the scorer, and the interval's lower bound above zero (+0.2)
+must not be read as directional evidence for positive phrasing. The run neither supports nor refutes
+the positive-phrasing lever. The machinery was archived at 1a5b79261; recover it with
+`git fetch origin pull/8484/head && git show 1a5b79261:plugins/soleur/skills/eval-harness/scripts/rule-phrasing-verdict.cjs`
+(the sha256 values above verify the recovered files). #8497 holds the rerun conditions, now including
+a validated scorer.
+
 ### Disposition (plan D6.1 / DC-1)
 
 INCONCLUSIVE closes B5 in #8290. It is recorded here and in ADR-236's alternatives table. **No
 rejected-concepts entry is written**, because an unrefused, underpowered null is not a refusal. The
-`revisit_if` follow-up is #8497. `AGENTS.rules.md` and `.claude/rule-weakening-acks.txt` are unchanged.
+`revisit_if` follow-up is #8497. `AGENTS.rules.md` and `.claude/rule-weakening-acks.txt` are unchanged. Machinery archived; see the
+audit above.
 
 ### Verdict module output (verbatim)
 

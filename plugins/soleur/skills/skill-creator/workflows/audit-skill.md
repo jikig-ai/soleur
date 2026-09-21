@@ -70,7 +70,7 @@ Evaluate against each criterion:
 Apply the decision test in `references/authoring-levers.md` (could the model usefully reach for this on its own, or must another skill reach it?). Either of these is a finding:
 
 - [ ] A human-only skill (fails the test, and meets ADR-236's K1-K3) lacks `disable-model-invocation: true` in its frontmatter
-- [ ] A skill that sets `disable-model-invocation: true` is named by another file (a skill, agent, rule, or workflow) as something the model should invoke. Search for its name across `plugins/soleur/` and `AGENTS.rules.md`, then read each hit.
+- [ ] A skill that sets `disable-model-invocation: true` is named by another file as something the model should invoke. `plugins/soleur/test/invocation-axis.test.ts` enforces this; run it.
 
 ### Router Pattern (if complex skill)
 

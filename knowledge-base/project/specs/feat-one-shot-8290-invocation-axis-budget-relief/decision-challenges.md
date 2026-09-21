@@ -65,3 +65,7 @@ by the W0-f before/after listing probe on a 200k-window model.
 - **DC-7:** the run used `--repeat 3` and all three arms. It cost $48.85, inside the $60 cap. One
   deviation was made before spending: `ANTHROPIC_MAX_TOKENS` went from 300 to 3000, because thinking
   models returned empty text at 300 (evidence in `b5-eval-results.md`).
+- **DC-4 revised by review:** the final flip set is 8, not 12. flag-create, flag-set-role, cron-list
+  and cron-delete stay model-invocable (CTO ruling; ADR-236 reviewed list).
+- **B5 disposition refined:** the verdict carries the qualifier "instrument validity limited", and the
+  machinery is archived (b5-eval-results.md §Post-verdict instrument audit).

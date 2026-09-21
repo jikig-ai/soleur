@@ -150,3 +150,11 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, l
   never argv (credential hygiene handled operator-side).
 - The pre-registered 300-token cap silently emptied thinking-model answers. Prevention: smoke-test any
   paid grid with 1 task per arm per model and check the output length before the full run.
+
+## Review Phase (2026-09-21)
+
+- 9-seat panel (history, pattern, architecture, security, agent-native, code-quality, test-design,
+  simplicity, structural enumeration) plus deterministic semgrep (79 rules, 0 findings) and shellcheck.
+- CTO ruling: un-flip flag-create/flag-set-role/cron-list/cron-delete (8 flips), archive B5 machinery,
+  harden Guard 1 (approved scope), reword the rollback re-probe with tracking issue #8499.
+- Guard 1 hardening was mutation-checked in a detached worktree: 8/8 mutations killed, control green.

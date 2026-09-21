@@ -113,3 +113,6 @@ lane: cross-domain (the spec has no valid lane, so the default fails closed).
 
 - [ ] 6.1 Re-run the ADR ordinal probe across every `origin/*` ref. On collision, renumber and sweep `ADR-236` in `knowledge-base/`, `plugins/` and the PR body.
 - [ ] 6.2 Post-merge: after release, `soleur:postmerge` repeats the tmux TUI capture against the released plugin. A failure fires the ADR-236 rollback trigger.
+
+> Status 2026-09-21: the checkboxes above were not updated as work progressed. The authoritative
+> record is `session-state.md` and the plan's "Post-review amendments" section (8 flips, B5 archived).
