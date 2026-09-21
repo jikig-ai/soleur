@@ -713,8 +713,8 @@ logs:
   where: "the git-data-cutover.yml run log and its check-run annotations (GitHub Actions)"
   retention: "GitHub Actions default log retention for the repository (90 days)"
 discoverability_test:
-  command: "grep -o -m1 'probe=fence-shape' apps/web-platform/infra/git-data-cutover.sh"
-  expected_output: "probe=fence-shape"
+  command: "grep -o -m1 '_store_emit fence-shape ok' apps/web-platform/infra/git-data-cutover.sh"
+  expected_output: "_store_emit fence-shape ok"
 ```
 
 ## Acceptance Criteria
