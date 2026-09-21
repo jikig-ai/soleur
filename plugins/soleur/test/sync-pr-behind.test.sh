@@ -33,6 +33,17 @@ pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 
+# The SUT operates on $PWD by design (it syncs the CALLER's worktree). That makes an
+# un-cd'd invocation a live-repo hazard, so every case below runs inside `( cd "$X/work" && … )`
+# and this guard turns a failed cd into an abort rather than a silent fall-through to the
+# runner's own checkout. Before the BASH_SOURCE escape was removed the SUT's own `cd` masked
+# this; it was protection by accident, and it was the same line that made the script sync the
+# wrong repository in production.
+assert_in_fixture() {
+  local want="$1"
+  [[ "$PWD" == "$want" ]] || { echo "FATAL: fixture cd failed, refusing to run against $PWD" >&2; exit 97; }
+}
+
 make_pair() {
   local d="$1"
   assert_fixture_dir "$d"
@@ -84,7 +95,7 @@ FIXTURES+=("$CLEAN")
 make_pair "$CLEAN"
 install_gh "$CLEAN/bin" "OPEN CLEAN"
 sha_before="$(git -C "$CLEAN/work" rev-parse HEAD)"
-PATH="$CLEAN/bin:$PATH" bash "$CLEAN/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 >"$CLEAN/out" 2>&1
+( cd "$CLEAN/work" && PATH="$CLEAN/bin:$PATH" bash "$CLEAN/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 ) >"$CLEAN/out" 2>&1
 rc=$?
 sha_after="$(git -C "$CLEAN/work" rev-parse HEAD)"
 if [[ "$rc" -eq 0 && "$sha_before" == "$sha_after" ]] \
@@ -109,7 +120,7 @@ git -C "$BEHIND/mainwt" add h && git -C "$BEHIND/mainwt" commit -q -m extra
 git -C "$BEHIND/mainwt" push -q origin main
 install_gh "$BEHIND/bin" "OPEN BEHIND"
 sha_before="$(git -C "$BEHIND/work" rev-parse HEAD)"
-PATH="$BEHIND/bin:$PATH" bash "$BEHIND/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 >"$BEHIND/out" 2>&1
+( cd "$BEHIND/work" && PATH="$BEHIND/bin:$PATH" bash "$BEHIND/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 ) >"$BEHIND/out" 2>&1
 rc=$?
 sha_after="$(git -C "$BEHIND/work" rev-parse HEAD)"
 if [[ "$rc" -eq 0 && "$sha_before" != "$sha_after" ]] \
@@ -134,7 +145,7 @@ git -C "$DIRTY_CLEAN/mainwt" add h && git -C "$DIRTY_CLEAN/mainwt" commit -q -m 
 git -C "$DIRTY_CLEAN/mainwt" push -q origin main
 install_gh "$DIRTY_CLEAN/bin" "OPEN DIRTY"
 sha_before="$(git -C "$DIRTY_CLEAN/work" rev-parse HEAD)"
-PATH="$DIRTY_CLEAN/bin:$PATH" bash "$DIRTY_CLEAN/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 >"$DIRTY_CLEAN/out" 2>&1
+( cd "$DIRTY_CLEAN/work" && PATH="$DIRTY_CLEAN/bin:$PATH" bash "$DIRTY_CLEAN/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 ) >"$DIRTY_CLEAN/out" 2>&1
 rc=$?
 sha_after="$(git -C "$DIRTY_CLEAN/work" rev-parse HEAD)"
 if [[ "$rc" -eq 0 && "$sha_before" != "$sha_after" ]] \
@@ -162,7 +173,7 @@ echo feat-side > "$DIRTY_CONFLICT/work/f"
 git -C "$DIRTY_CONFLICT/work" commit -q -am feat-side
 git -C "$DIRTY_CONFLICT/work" push -q origin feat
 install_gh "$DIRTY_CONFLICT/bin" "OPEN DIRTY"
-PATH="$DIRTY_CONFLICT/bin:$PATH" bash "$DIRTY_CONFLICT/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 >"$DIRTY_CONFLICT/out" 2>&1
+( cd "$DIRTY_CONFLICT/work" && PATH="$DIRTY_CONFLICT/bin:$PATH" bash "$DIRTY_CONFLICT/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 ) >"$DIRTY_CONFLICT/out" 2>&1
 rc=$?
 if [[ "$rc" -eq 6 ]]; then
   pass "DIRTY merge-tree-conflict: exit 6"
@@ -191,7 +202,7 @@ git -C "$INPROG/work" merge origin/main --no-edit >/dev/null 2>&1
 echo resolved > "$INPROG/work/f"
 git -C "$INPROG/work" add f
 install_gh "$INPROG/bin" "OPEN BEHIND"
-PATH="$INPROG/bin:$PATH" bash "$INPROG/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 >"$INPROG/out" 2>&1
+( cd "$INPROG/work" && PATH="$INPROG/bin:$PATH" bash "$INPROG/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 ) >"$INPROG/out" 2>&1
 rc=$?
 if [[ "$rc" -eq 9 ]] \
    && git -C "$INPROG/work" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
@@ -204,6 +215,57 @@ else
 fi
 rm -rf "$INPROG"
 
+# --- SUT OUTSIDE THE TARGET REPO: operates on the CALLER's worktree, not its own ----------
+#
+# THE CONFIGURATION PRODUCTION ACTUALLY HAS, and the one every case above lacks. The others
+# `cp` the SUT into their fixture repo, so the script's directory and the target are the SAME
+# directory — under which a `cd "$(dirname "$BASH_SOURCE")/../../.."` is a no-op and its effect
+# is unobservable. In production the script lives in the plugin install (or the primary
+# checkout) while the target is a worktree: two different directories.
+#
+# This case makes the difference load-bearing by putting a DECOY repo exactly where the old
+# BASH_SOURCE arithmetic pointed, on its own branch. Under the pre-fix code the run relocates
+# into the decoy and syncs THAT; under the fix it stays in the caller's worktree. Assert both
+# halves — the caller's repo moved AND the decoy did not — so a fix that merely stops working
+# cannot pass.
+OUTSIDE="$(mktemp -d "$TMPDIR/sync-behind-outside.XXXXXXXX")"
+FIXTURES+=("$OUTSIDE")
+make_pair "$OUTSIDE"
+# Advance origin/main so the caller's `feat` is genuinely BEHIND and a sync must move it.
+git -C "$OUTSIDE/work" checkout -q main
+echo more > "$OUTSIDE/work/h"
+git -C "$OUTSIDE/work" add h && git -C "$OUTSIDE/work" commit -q -m more
+git -C "$OUTSIDE/work" push -q origin main
+git -C "$OUTSIDE/work" checkout -q feat
+# The decoy sits where `<script>/../../..` resolves, and is a valid repo on its own branch —
+# i.e. the "primary checkout on a feature branch" case, which is the dangerous one.
+mkdir -p "$OUTSIDE/decoy/plugins/soleur/scripts"
+git init -q "$OUTSIDE/decoy"
+git -C "$OUTSIDE/decoy" config user.email t@t
+git -C "$OUTSIDE/decoy" config user.name t
+echo decoy > "$OUTSIDE/decoy/d"
+git -C "$OUTSIDE/decoy" add d && git -C "$OUTSIDE/decoy" commit -q -m decoy
+git -C "$OUTSIDE/decoy" checkout -q -b decoy-branch
+cp "$SUT" "$OUTSIDE/decoy/plugins/soleur/scripts/sync-pr-behind.sh"
+install_gh "$OUTSIDE/bin" "OPEN BEHIND"
+work_before="$(git -C "$OUTSIDE/work" rev-parse HEAD)"
+decoy_before="$(git -C "$OUTSIDE/decoy" rev-parse HEAD)"
+decoy_branch_before="$(git -C "$OUTSIDE/decoy" rev-parse --abbrev-ref HEAD)"
+( cd "$OUTSIDE/work" && PATH="$OUTSIDE/bin:$PATH" bash "$OUTSIDE/decoy/plugins/soleur/scripts/sync-pr-behind.sh" 1 ) >"$OUTSIDE/out" 2>&1
+rc=$?
+work_after="$(git -C "$OUTSIDE/work" rev-parse HEAD)"
+decoy_after="$(git -C "$OUTSIDE/decoy" rev-parse HEAD)"
+decoy_branch_after="$(git -C "$OUTSIDE/decoy" rev-parse --abbrev-ref HEAD)"
+if [[ "$rc" -eq 0 ]] \
+   && [[ "$work_before" != "$work_after" ]] \
+   && [[ "$decoy_before" == "$decoy_after" ]] \
+   && [[ "$decoy_branch_before" == "$decoy_branch_after" ]]; then
+  pass "SUT outside repo: synced the CALLER's worktree, decoy untouched"
+else
+  fail "SUT outside repo: rc=$rc work_moved=$([[ "$work_before" != "$work_after" ]] && echo yes || echo NO) decoy_moved=$([[ "$decoy_before" != "$decoy_after" ]] && echo YES || echo no) decoy_branch=$decoy_branch_before->$decoy_branch_after out=$(tr '\n' ' ' < "$OUTSIDE/out")"
+fi
+rm -rf "$OUTSIDE"
+
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 5 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 6 ]]
 exit $?
