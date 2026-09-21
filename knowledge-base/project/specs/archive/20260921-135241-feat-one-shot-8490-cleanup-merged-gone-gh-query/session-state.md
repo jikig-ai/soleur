@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-21-fix-cleanup-merged-gone-branches-gh-query-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260921-135241-2026-09-21-fix-cleanup-merged-gone-branches-gh-query-plan.md
 - Status: complete
 
 ### Errors

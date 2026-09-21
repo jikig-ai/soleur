@@ -1,6 +1,6 @@
 # Tasks: fix cleanup-merged [gone] branches skip gh merge query (#8490)
 
-Plan: `knowledge-base/project/plans/2026-09-21-fix-cleanup-merged-gone-branches-gh-query-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260921-135241-2026-09-21-fix-cleanup-merged-gone-branches-gh-query-plan.md`
 
 ## 1. Setup
 
