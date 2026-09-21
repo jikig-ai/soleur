@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$REPO_ROOT/scripts/sentry-alert-reference-gate.sh"
 PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 pass=0; fail=0
-EXPECTED_TESTS=29
+EXPECTED_TESTS=34
 
 # A sandbox harness inherits the bare 4 GiB /tmp tmpfs on a direct invocation;
 # every other runner in this repo defaults TMPDIR to /var/tmp. Match them.
@@ -228,10 +228,13 @@ t_m9() {
     "enabled is not a boolean"
 }
 t_m10() {
-  local t; t=$(_trig event_frequency_count '{"interval":"1h","value":1}' | jq '. + {event_unique_user_frequency_count: {"interval":"1h","value":1}} | .event_frequency_count = null')
-  _red "M10 a trigger kind outside the allowlist (event_unique_user_frequency_count — the sentry_issue_alert survivors' type) → not mapped" \
+  # `event_unique_user_frequency_count` is in `excluded` and is now DROPPED on the
+  # TF side (Guard 1 row L3), so the unmapped-kind floor is exercised with a kind
+  # that is neither mapped nor excluded.
+  local t; t=$(_trig event_frequency_count '{"interval":"1h","value":1}' | jq '. + {event_frequency_percent: {"interval":"1h","value":1}} | .event_frequency_count = null')
+  _red "M10 a trigger kind outside the allowlist and outside excluded (event_frequency_percent) → not mapped" \
     "$(_mut_plan m10 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .values.trigger_conditions) = [$t]' --argjson t "$t")" "$REF" \
-    "trigger kind 'event_unique_user_frequency_count' is not mapped by the projection"
+    "trigger kind 'event_frequency_percent' is not mapped by the projection"
 }
 t_m11() {
   _red "M11 two resources sharing one name → duplicate sentry_alert name" \
@@ -362,6 +365,85 @@ t_h2_empty_plan() {
   fi
 }
 
+# ── Guard 1 (#8451) — projection scope symmetry. A `sentry_alert` whose trigger
+# type is in `excluded` is outside the TF-side projection exactly as it is
+# outside the live side's `in_scope`, in EITHER representation: native
+# (`trigger_conditions[]` key) or legacy (`legacy_trigger_conditions` string —
+# what the provider's Read returns for an adopted type-only rule). A legacy type
+# NOT in `excluded` is an error, never a silent under-projection.
+#
+# _rule_legacy <tf-name> <name> <legacy-json> <trigger-conditions-json|null> [nomask]
+# `nomask` drops `sensitive_values` — a type-only adopted rule under
+# `ignore_changes = all` may render with `trigger_conditions: null` and no mask,
+# and the exclusion must run BEFORE `tf_rule`'s floors see it.
+_rule_legacy() {
+  local r; r=$(_rule "$1" "$2" '[]' "$AF_B")
+  jq --argjson l "$3" --argjson tc "$4" --arg mask "${5:-}" '
+    .values.legacy_trigger_conditions = $l | .values.trigger_conditions = $tc
+    | if $mask == "nomask" then del(.sensitive_values) else . end' <<<"$r"
+}
+# 30 normal rules (the live scope's size) and the reference projected from them
+# alone — the adopted rows must add NOTHING to it.
+NORMAL30=$(jq -n --argjson r "$RULE_B" '[range(30) as $i | $r
+  | .name = "normal_\($i)" | .address = "sentry_alert.normal_\($i)" | .values.name = "normal-\($i)"]')
+REF30="$TMPD/reference-30.json"
+_plan_doc "$NORMAL30" > "$TMPD/plan-30.json"
+jq -S --arg side tf -f "$PROJ" "$TMPD/plan-30.json" > "$REF30" 2>"$TMPD/ref30.err" \
+  || { echo "ERROR: the tf projection of the 30-rule plan failed: $(cat "$TMPD/ref30.err")" >&2; exit 1; }
+[[ "$(jq 'length' "$REF30")" == "30" ]] \
+  || { echo "ERROR: fixture self-check failed — the 30-rule reference has $(jq length "$REF30") keys" >&2; exit 1; }
+_NATIVE_EUU=$(_trig event_frequency_count '{"interval":"1h","value":1}' \
+  | jq '. + {event_unique_user_frequency_count: {"interval":"1h","value":20}} | .event_frequency_count = null')
+
+# _plan30 <label> <extra-resources-json> — the 30 normal rows plus the extras.
+_plan30() {
+  local f="$TMPD/plan30-$1.json"
+  _plan_doc "$(jq -n --argjson n "$NORMAL30" --argjson x "$2" '$n + $x')" > "$f"
+  echo "$f"
+}
+
+t_l1_legacy_excluded_drops() {
+  # Matrix row 1: two well-formed adopted rows (trigger_conditions [], mask
+  # present). Without the exclusion they project → 32 names vs 30 → ADDED.
+  local x; x=$(jq -n \
+    --argjson a "$(_rule_legacy auth_per_user_loop "auth-per-user-loop" '["event_unique_user_frequency_count"]' '[]')" \
+    --argjson b "$(_rule_legacy sandbox_startup_failure "sandbox-startup-failure" '["event_unique_user_frequency_count"]' '[]')" '[$a,$b]')
+  _green "L1 30 normal + 2 legacy-excluded rows project to the 30-key reference (TF side mirrors live in_scope)" \
+    "$(_plan30 l1 "$x")" "$REF30" "PASS (30 rules, plan == alert-reference.json)"
+}
+t_l3_native_excluded_drops() {
+  # Matrix row 3: a legacy row PLUS a second row carrying the excluded type in
+  # the NATIVE form (the post-#7985 shape). Both must be dropped.
+  local x; x=$(jq -n \
+    --argjson a "$(_rule_legacy auth_per_user_loop "auth-per-user-loop" '["event_unique_user_frequency_count"]' '[]')" \
+    --argjson b "$(_rule native_euu "native-euu" "$(jq -n --argjson t "$_NATIVE_EUU" '[$t]')" "$AF_B")" '[$a,$b]')
+  _green "L3 a native-form excluded row is dropped alongside the legacy one" \
+    "$(_plan30 l3 "$x")" "$REF30" "PASS (30 rules, plan == alert-reference.json)"
+}
+t_l4_unmapped_legacy_errors() {
+  # Matrix row 4: a legacy type NOT in `excluded` must ERROR (jq exit 5), never
+  # project with no triggers.
+  local x plan rc=0 out
+  x=$(jq -n --argjson a "$(_rule_legacy resolution "resolution-change" '["issue_resolution_change"]' '[]')" '[$a]')
+  plan=$(_plan30 l4 "$x")
+  out=$(jq --arg side tf -f "$PROJ" "$plan" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -eq 5 ]] && grep -qF -- "unmapped legacy trigger type" <<<"$out" && grep -qF -- "issue_resolution_change" <<<"$out"; then
+    _report "L4 a legacy trigger type outside excluded (issue_resolution_change) → jq exit 5, unmapped legacy trigger type" ok
+  else
+    _report "L4 unmapped legacy trigger type errors" fail "rc=$rc (want 5). Output: $(head -c 400 <<<"$out")"
+  fi
+  _red "L4b the gate refuses the same plan (projection floor), never PASS" "$plan" "$REF30" "unmapped legacy trigger type"
+}
+t_l5_legacy_null_nomask() {
+  # Matrix row 5: the imported-state render — `trigger_conditions: null` and no
+  # `sensitive_values`. The exclusion runs before `tf_rule`, so neither floor fires.
+  local x; x=$(jq -n \
+    --argjson a "$(_rule_legacy auth_per_user_loop "auth-per-user-loop" '["event_unique_user_frequency_count"]' 'null' nomask)" \
+    --argjson b "$(_rule_legacy sandbox_startup_failure "sandbox-startup-failure" '["event_unique_user_frequency_count"]' 'null' nomask)" '[$a,$b]')
+  _green "L5 legacy rows with trigger_conditions null and no sensitive_values are dropped before tf_rule (no crash)" \
+    "$(_plan30 l5 "$x")" "$REF30" "PASS (30 rules, plan == alert-reference.json)"
+}
+
 t_g0
 t_m1
 t_m2
@@ -389,6 +471,10 @@ t_swap_values_reds
 t_detector_hint
 t_remedy_and_expected_file
 t_h2_empty_plan
+t_l1_legacy_excluded_drops
+t_l3_native_excluded_drops
+t_l4_unmapped_legacy_errors
+t_l5_legacy_null_nomask
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))

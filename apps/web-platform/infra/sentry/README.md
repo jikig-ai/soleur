@@ -2,26 +2,27 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **30 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (32 alert rules total)
-  (#7650 Phase 2). The 27 are adopted from live Sentry and fully Terraform-owned:
-  `ignore_changes = [environment]` only, real `trigger_conditions` and
-  `action_filters`, read through the non-deprecated
+- **32 `sentry_alert` rules** (32 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451. 30 are
+  fully Terraform-owned: `ignore_changes = [environment]` only, real
+  `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint.
 
-  **TWO remain on `sentry_issue_alert`, and both are blocked by the same thing.**
-  `auth-per-user-loop` and `sandbox-startup-failure` trigger on
-  `event_unique_user_frequency_count`, which the pinned provider's
+  **TWO are FROZEN (#8451).** `auth-per-user-loop` and `sandbox-startup-failure`
+  trigger on `event_unique_user_frequency_count`, which the pinned provider's
   `trigger_conditions` does not offer (upstream
-  jianyuan/terraform-provider-sentry issue 950) — they *cannot* migrate.
-  `git-data-boot-warning` is different: it landed on `main` in #7772, AFTER the
-  live capture this adoption generates from, so it is out of scope here for a
-  sequencing reason rather than a technical one and can migrate whenever someone
-  re-captures. Do not read "three remain" as "three are blocked".
+  jianyuan/terraform-provider-sentry issue 950, fixed on main but unreleased). They
+  were `sentry_issue_alert` until Sentry removed the legacy alert-rule API (a
+  persistent 410 on every plan since 2026-09-18). They are now adopted as
+  `sentry_alert` with the trigger carried by type in `legacy_trigger_conditions`
+  and `lifecycle { ignore_changes = all }`: any provider write would re-send the
+  trigger with `comparison: true` and destroy the threshold, so
+  `scripts/sentry-issue-alert-create-tripwire.sh` refuses create/update/replace and
+  `scripts/sentry-alert-live-fidelity.sh` pins their live content against the
+  committed capture. **Editing these two blocks is inert** — Terraform owns their
+  existence only, until #7985's native conversion. No resource reads the legacy
+  endpoint, and `apply-sentry-infra.yml`'s brownout retry was deleted in #8451.
 
-  All three still refresh through the DEPRECATED alert-rule endpoint, so **a
-  clean plan is not evidence the deprecation lifted** — it may only mean the plan
-  ran outside a brownout window, which is why `apply-sentry-infra.yml` keeps its
-  brownout retry. `configure-sentry-alerts.sh` is NOT deleted: it remains the
+  `configure-sentry-alerts.sh` is NOT deleted: it remains the
   only executable definition of `auth-per-user-loop`. Older rules that terraform
   owns from real `conditions_v2`/`filters_v2`/`actions_v2` include the
   BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`, #4364).
@@ -84,15 +85,18 @@ terraform plan
 ## First-time import — COMPLETE, runbook retired (#7590)
 
 First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this root
-declares **29 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
-`sentry_issue_alert`) and plans clean against the full root.
+declared **29 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
+`sentry_issue_alert`). Since #8451 the last two are adopted as frozen
+`sentry_alert` blocks (see the top of this file), so every rule is a `sentry_alert`.
 
 `git-data-boot-warning` WAS a third `sentry_issue_alert` — it landed after the
 Phase 2 adoption capture was taken and so was never in that migration's scope.
 Phase 3.4 (#7985) migrated it, which took this paragraph to 28 + 2. It now
 says 29 + 2 because #7989 ADDED a rule (`ops_email_delivery_failure`) rather than
 migrating one — the only entry here whose +1 is a new rule, not a type change.
-The two survivors are blocked on upstream 950, which is fixed but unreleased.
+(That was the count before #8451; #8442 then added `art17_erasure_incomplete`,
+and #8451 adopted the last two as frozen `sentry_alert`, so the root declares 32
+and 0. The current count is at the top of this file, pinned by T25.)
 Historical note, kept because this count has been wrong twice: this paragraph
 said **2** until 2026-09-06 (#7826) while line 5 of this same file
 
@@ -244,8 +248,10 @@ self-skipping bijection input), not the probe's reference.
 
 **Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
 matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
-the fix for the alert rules. That leg would plan the FULL ROOT, which still
-refreshes the two surviving `sentry_issue_alert` resources through the
-deprecated endpoint — with none of `apply-sentry-infra.yml`'s brownout retry —
-so it would go red on Sentry's brownout calendar rather than on drift, and get
-muted. The remaining gap (cron and uptime monitors) is unchanged from #3814.
+the fix for the alert rules. That leg would plan the FULL ROOT, which until
+#8451 refreshed the last two `sentry_issue_alert` resources through the
+deprecated endpoint, so it would have gone red on Sentry's read failures (a
+brownout, then #8451's persistent 410) rather than on drift, and been muted.
+Since #8451 no resource reads that endpoint; the alert rules' drift is covered by
+the live probe above, and the remaining gap (cron and uptime monitors) is
+unchanged from #3814.
