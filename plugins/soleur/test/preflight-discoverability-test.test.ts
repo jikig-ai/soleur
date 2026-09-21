@@ -2388,7 +2388,10 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // and bun/node/npx all resolve under /home/.../mise, which the bwrap sandbox tmpfs's. That
   // rc=127 point covers the TS runners ONLY: /usr/bin/{python3,jq,curl} DO resolve in the
   // sandbox, so a reimplementation would have run; it would also have been the duplicate.
-  const BASELINE_DECLARED_PROBES = 17;
+  // #8450 (2026-09-21): +1 for the actions-queue-tail soak probe — the plan's
+  // discoverability_test declares credentials_required for `gh` (Actions read);
+  // live queue state has no unauthenticated substitute. Genuine declaration.
+  const BASELINE_DECLARED_PROBES = 18;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
