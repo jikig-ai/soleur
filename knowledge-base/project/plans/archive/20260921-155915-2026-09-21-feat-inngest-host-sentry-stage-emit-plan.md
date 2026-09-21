@@ -544,7 +544,7 @@ logs:
   retention: "Sentry project retention (90 d); Better Stack source retention"
 
 discoverability_test:
-  command: "grep -cE '^[[:space:]]*soleur-boot-emit inngest_(zot|ghcr_fallback) ' apps/web-platform/infra/cloud-init-inngest.yml"
+  command: "grep -c -e '^[[:space:]]*soleur-boot-emit inngest_zot ' -e '^[[:space:]]*soleur-boot-emit inngest_ghcr_fallback ' apps/web-platform/infra/cloud-init-inngest.yml"
   expected_output: "2"
 ```
 
