@@ -60,35 +60,48 @@ Phase 5 (5.1–5.12). Gate met: PR-1 `b53173a04`, apply run 35605929787, alert 2
 - [ ] 3.1 `scripts/followthroughs/inngest-luks-cutover-6894.sh`: re-point `NEXT` at #8285 and
       set `RETIREMENT:` to 2026-10-04 with no sibling. Change comment and echo text only; exit
       statements stay as they are (AC-32b).
-- [ ] 3.2 `scripts/cutover-inngest.sh`: add one `NEXT (not automatic):` line, only on the
-      `op=luks-rollback` path after the confirmed `rolled-back`. Name the ledger and the register.
+- [ ] 3.2 `scripts/cutover-inngest.sh`: add one `NEXT (not automatic):` line that names the
+      ledger and the register. Place it right after the `FSM confirmed '$LK_EXPECT'` notice, behind
+      an explicit `[[ "$OP" == luks-rollback ]]` guard, because `luks-cutover` shares that notice.
 - [ ] 3.3 Run the `cutover-inngest-workflow.test.sh` floor (665/665).
 
 ## Phase 4: Property probe (5.10, notify-only)
 
 - [ ] 4.1 **RED first.** Write `scripts/followthroughs/inngest-luks-property-8296.test.sh` from
       Guard 3:
+      - copy the fake-tree stub and `run_probe()` sandbox from `registry-luks-live-8386.test.sh`;
       - every Decision-table row, with a branch marker per case;
-      - harness rows H1–H4;
-      - the never-0/1 allowlist scan plus the fall-through and unset-variable behavioural cases;
-      - the rollback-NEXT placement check for `scripts/cutover-inngest.sh` (AC-32).
+      - harness rows H1–H5;
+      - the never-0/1 allowlist scan (strip comments, exclude quotes), fall-through and
+        unset-variable cases, and `assert_never_close_verb`;
+      - an "output never contains `exit`" check;
+      - the rollback-NEXT placement check for `scripts/cutover-inngest.sh` (AC-32), including the
+        label-found-once and non-empty extraction assertions;
+      - **committed** code-mutation rows 5, 7, 8, 9 and 10 on scratch copies, each with a landing
+        assertion, after a known-positive and known-negative self-test;
+      - pin `SOLEUR_FT_NOW` in every fixture, with times kept away from the 3 h and `expires_on`
+        edges;
+      - a hard-coded `FLOOR` literal.
 - [ ] 4.2 **GREEN.** Write `scripts/followthroughs/inngest-luks-property-8296.sh`:
       - carry the `NOTIFY-ONLY` / `never closes #8285` header;
       - use `set -uo pipefail`, the xtrace refusal (78), and
         `--since 26h --limit "${SOLEUR_FT_LIMIT:-5000}"`;
-      - take the newest row from the last line, with a 3 h staleness check;
+      - derive `REPO_ROOT` from the script's own dirname, not `git rev-parse`;
+      - take the newest row by `.dt`, with a 3 h staleness check;
+      - read the clock from `SOLEUR_FT_NOW`; a malformed value exits 3 `clock_malformed`;
       - map unreadable values to 3 and require the devid;
       - read the ledger after the measurement;
-      - decide by the equivalence `claims_luks == on_luks_mapper`;
-      - add the `backstop_expired` arm;
-      - install an EXIT trap that remaps 0/1 to 3;
+      - fire `backstop_expired` (exit 5) ONLY when the ledger claims luks, the store is on the LUKS
+        mapper, and `expires_on` has passed, and check it before `agree`;
+      - otherwise, the equivalence `claims_luks == on_luks_mapper` gives exit 2;
+      - install an EXIT trap that remaps 0/1 to 3 (precedent: `inngest-soak-6178.sh`);
       - make the final line `exit 3`;
       - write `RETIREMENT:` to say coverage ends when #8285 closes;
       - on exit 5, output "backstop is the LIVE store — do NOT destroy" and point to runbook §5.
 - [ ] 4.3 Register `run_suite "scripts/inngest-luks-property-8296"` in `scripts/test-all.sh`. Run
       `lint-orphan-test-suites.sh` and `lint-followthrough-varq-ban.sh`.
-- [ ] 4.4 Apply each of the 9 mutation rows by hand to a scratch copy. Record the RED marker and
-      exit for each in the PR body (AC-29).
+- [ ] 4.4 Check that the committed mutation rows go red. Record each verdict in the PR body
+      (AC-29).
 - [ ] 4.5 **Mandatory live read (AC-29d).** Run one read-only invocation with the Better Stack
       query credentials from Doppler `prd_terraform`. Expect `agree` with exit 2. Paste it into the
       PR body.
@@ -112,6 +125,7 @@ Phase 5 (5.1–5.12). Gate met: PR-1 `b53173a04`, apply run 35605929787, alert 2
       - **First line:** merging this alone mutates nothing in production (fact (c)).
       - Say `Ref #8296`.
       - Do not mention #7529.
+      - Put no closing keyword next to any `#N` (AC-39b).
       - Include the mutation REDs and the live verdict.
       - Include the decision challenges.
 - [ ] 6.6 **Ask the operator before merging. Do not auto-merge.**

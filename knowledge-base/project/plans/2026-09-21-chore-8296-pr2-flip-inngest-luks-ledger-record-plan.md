@@ -16,6 +16,42 @@ parent_plan: knowledge-base/project/plans/2026-09-20-chore-flip-encryption-postu
 draft_pr: 8514
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21. **Before deepen**, a 7-seat plan-review panel ran (DHH, Kieran,
+code-simplicity, architecture-strategist, spec-flow-analyzer, CTO, CPO) plus a strong-model advisor
+consult. Their changes are listed in `## Plan Review Revisions`. **Deepen passes:**
+verify-the-negative (7/7 claims confirmed, including a scratch-ledger dry-run of the `luks` flip →
+`0 failing checks -> PASS`), precedent research, test-design review (Farley, planned-suite score
+6.5/10 before fixes), and institutional learnings.
+
+### Key improvements
+
+1. **The property probe cannot close #8285, and this is structural rather than a convention.**
+   Notify-only exits, an EXIT trap that remaps 0/1 to 3, a final `exit 3`, and an allowlist scan.
+   It adopts the `inngest-soak-6178.sh` trap precedent and the `assert_never_close_verb` helper.
+2. **The expiry arm can no longer tell anyone to destroy the live store.** `backstop_expired` fires
+   only in the encrypted-and-agreeing state, and a must-PASS case pins the reverted-past-expiry
+   state to `2`.
+3. **The suite is repeatable.** It uses an injected clock `SOLEUR_FT_NOW`, and fixtures sit well
+   away from the edges, so the suite does not flip verdicts on 2026-10-22.
+4. **The code-editing mutations are committed.** Rows 5 and 7–10 run in the suite against scratch
+   copies, instead of being hand-run and pasted into the PR body.
+5. **The rollback NEXT line is guarded explicitly.** The success notice it attaches to is shared
+   with `luks-cutover`.
+
+### New considerations discovered
+
+- The sweeper posts a comment on every non-0/1 verdict with no dedup
+  (`2026-09-17-followthrough-directive-on-existing-issue-three-silent-traps.md`), and names the
+  sweeper as the wrong vehicle for **indefinite** watches. This watch is **bounded**: it ends when
+  #8285 closes, targeted for 2026-10-22. D12 records the escalation and dedup question. DC-1 and
+  DC-2 remain open for the operator.
+- A PR-body sentence like "the sweeper closes #8285" would itself auto-close #8285 on squash-merge
+  (AC-39b).
+- One learnings-agent suggestion was **rejected**: restoring `0 PASS / 1 FAIL` arms. That
+  reintroduces the R1 defect.
+
 ## Overview
 
 This is **PR-2 of #8296**, and only PR-2: tasks.md Phase 5 (items 5.1–5.12) of the parent plan
@@ -243,7 +279,10 @@ runs at review time.
 | File | Change (parent task) |
 | --- | --- |
 | `scripts/encryption-posture-ledger.json` | **5.1–5.3.** Parent `### Phase 5` steps 1–3 and `## Encryption Posture`, verbatim in intent. `hcloud_volume.inngest_redis_luks` → `mechanism: luks`, **`exception` block deleted**, one `evidence` string (content anchors only), `defends_against`, and a `does_not_defend` that names `hcloud_volume.inngest_redis` **and the D1 issue number** (R4). `live_verification` → `unavailable:<cipher half unobserved …>`, which now names `hcloud_volume.registry`'s `store_luks` promotion (#8423) as the precedent (R2). `hcloud_volume.inngest_redis`: keep `plaintext-exception`; rewrite `evidence`, `live_verification`, `exception.justification`, `exception.reevaluate_when` (add `INNGEST_LUKS_CUTOVER=rolled-back`), `tracking_issue` → `#8285`, `reassessed_on` → `2026-09-21` (the date the reassessment is made; see Sharp Edges); **`expires_on: "2026-10-22"` and `expires_on_not_extended` byte-untouched**. `live_coverage_floor` untouched (`2`). |
-| `knowledge-base/legal/article-30-register.md` | **5.4.** Dated in-cell amendments to PA-21 §(f), PA-22 §(f) and PA-13 §(e) in the register's `**[2026-09-20 AMENDMENT (#8296): …]**` / `**[Superseded 2026-09-20 (#8296): …]**` convention. The date is the cutover's. The "Two copies, bounded" fact and the EXPIRED clause are kept verbatim. The pinned phrase `the apply that follows` is present in each amended cell (parent AC-21). The amendment states that the apply **has run** (run 35605929787, 2026-09-21) and the alert read back unpaused. |
+| `knowledge-base/legal/article-30-register.md` | **5.4.** Dated in-cell amendments to PA-21 §(f), PA-22 §(f) and PA-13 §(e) in the register's `**[2026-09-20 AMENDMENT (#8296): …]**` / `**[Superseded 2026-09-20 (#8296): …]**` convention. The date is the cutover's. The "Two copies, bounded" fact and the EXPIRED clause are kept verbatim. The pinned phrase `the apply that follows` is present in each amended cell (parent AC-21). Any
+back-reference inside an amendment is written as "recorded above in this cell", never "immediately
+above" or "the preceding row". The register is append-only, so positional locators go false
+(learning `2026-09-18-my-supersession-pointer-named-the-wrong-bracket.md`). The amendment states that the apply **has run** (run 35605929787, 2026-09-21) and the alert read back unpaused. |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | **5.5.** Replace `platform.infra.inngestRedis`'s falsified description. Drop `AT REST: STILL PLAINTEXT ext4`, `AT REST IS STILL PLAINTEXT AS OF THIS EDIT`, and the `format = "ext4"` / `ignore_changes = [format]` citation. State the post-cutover shape: LUKS-backed store, a retained plaintext backstop until #8285. |
 | `knowledge-base/engineering/architecture/diagrams/model.likec4.json` | **R6.** Regenerated by `bash scripts/regenerate-c4-model.sh`. Never hand-edited. |
 | `knowledge-base/engineering/architecture/decisions/ADR-142-inngest-redis-aof-zero-data-loss-luks-migration.md` | **5.6.** Appended `## Amendment — 2026-09-21 (#8296)`: the observed cutover (15:29:10Z terminal row, 15:36:40 probe row), and a correction of **apparatus scope item 8**: the row to flip is `hcloud_volume.inngest_redis_luks`, never `hcloud_volume.inngest_redis`. Additions only (`--numstat` deletions `0`). |
@@ -251,7 +290,7 @@ runs at review time.
 | `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` | **5.7 (R3).** Line 47's "**Ships PAUSED** and is armed by `-var inngest_luks_cutover_complete=true` …" becomes the current state (armed by the declared default since #8296). |
 | `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` | **5.7 (R3).** §5 step 4: #8296 closes post-merge by hand after PR-2. #8285 now carries the property probe's directive (notify-only, never closes itself). Cite D1. **Leave step 2's CORRECTED paragraph alone** (PR-1 already landed it). |
 | `scripts/followthroughs/inngest-luks-cutover-6894.sh` | **5.8 (R7).** Comment and `echo` text only; no exit statement changes (AC-32b). #8295 is re-verified in closed mode until 2026-10-04, and it is the only detector that can REOPEN on a rollback until then. `NEXT (not automatic):` → the one remaining step: destroy the backstop under #8285 by 2026-10-22. `RETIREMENT:` → "delete after #8295 leaves the sweeper's 14-day closed lookback (2026-10-04); it has no sibling". |
-| `scripts/cutover-inngest.sh` | **5.9.** On the `op=luks-rollback` **success** path only (the `FSM confirmed '$LK_EXPECT'` notice, `$OP == luks-rollback`), add one `NEXT (not automatic):` line. It names `scripts/encryption-posture-ledger.json` (`hcloud_volume.inngest_redis_luks` back to `plaintext-exception`) and `knowledge-base/legal/article-30-register.md` (PA-21/PA-22/PA-13 amendments). It is **not** added to the `luks-cutover` success path. |
+| `scripts/cutover-inngest.sh` | **5.9.** On the `op=luks-rollback` **success** path only, add one `NEXT (not automatic):` line. **The `FSM confirmed '$LK_EXPECT'` notice is SHARED by `luks-cutover` and `luks-rollback`** (one `case` arm, with `LK_EXPECT=rolled-back` set only for rollback, confirmed by the verify-the-negative pass). So the line must sit behind an explicit `[[ "$OP" == luks-rollback ]]` guard right after that notice. It must not be written unguarded next to the notice. It names `scripts/encryption-posture-ledger.json` (`hcloud_volume.inngest_redis_luks` back to `plaintext-exception`) and `knowledge-base/legal/article-30-register.md` (PA-21/PA-22/PA-13 amendments). It is **not** added to the `luks-cutover` success path. |
 | `scripts/test-all.sh` | Register `run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh` beside the #8386 entry (the `lint-orphan-test-suites.sh` gate). |
 
 ## Files to Create
@@ -473,6 +512,11 @@ The parent's `### PR-2 — the record` ACs apply unchanged **except where re-bas
 - [ ] **AC-37** Unchanged-gate floors hold: 96/96, 57/57, 665/665, 160/160, 79/79. The 665 floor
   is load-bearing here, because `cutover-inngest-workflow.test.sh` reads `scripts/cutover-inngest.sh`.
 - [ ] **AC-38** Constraint: `git diff --name-only origin/main... | grep -cE '^(\.github/workflows/apply-sentry-infra\.yml|infra/sentry/)'` → `0`.
+- [ ] **AC-39b** No closing keyword sits next to an issue number anywhere in the PR title or body.
+  `grep -ciE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b[^.#]{0,3}#[0-9]+'` on the body prints
+  `0`. Prose like "the sweeper closes #8285" would auto-close the backstop tracker on squash-merge
+  (learning `2026-06-05-followthrough-pr-body-prose-closes-keyword-autocloses-tracker.md`). Write
+  it as "the sweeper never closes that tracker".
 - [ ] **AC-39** The PR body's **first line** answers "does merging this alone mutate production?"
   with the measured answer (no: no apply, deploy or image build fires). This is the plan-sharp-edges
   rule from #8296/PR #8439. The body also says `Ref #8296` (never `Closes`), never mentions #7529,
@@ -567,6 +611,62 @@ Inherited verbatim in intent from the parent's `## Encryption Posture`, which ca
 `in_transit`: unchanged. No new cross-component connection is introduced.
 `exception.expires_on: "2026-10-22"` is not moved.
 
+The block below is restated here so the deepen-plan Phase 4.10 field check has something concrete
+to verify. The work phase writes the final ledger strings from it.
+
+```yaml
+at_rest:
+  - store: hcloud_volume.inngest_redis_luks
+    mechanism: luks
+    evidence: >-
+      apps/web-platform/infra/inngest-redis-luks.tf, resource "hcloud_volume" "inngest_redis_luks";
+      cryptsetup luksFormat + luksOpen apparatus resolving to mapper inngest-redis; key =
+      random_password + doppler_secret co-located in inngest-redis-luks.tf. OBSERVED 2026-09-20:
+      terminal SOLEUR_INNGEST_LUKS_CUTOVER row 15:29:10Z (reason=cutover-complete, flag=done) and
+      post-cutover probe row 15:36:40 with data_mount_src=/dev/mapper/inngest-redis,
+      data_mount_devid=scsi-0HC_Volume_106903269. Content anchors only, no line numbers.
+    defends_against: >-
+      a seized, RMA'd or snapshot-imaged Hetzner block volume. The Inngest queue and run-state AOF
+      are unreadable without the Doppler-held passphrase
+    does_not_defend: >-
+      a leaked credential; an app-layer read on the unlocked host; exfiltration through a
+      compromised redis or inngest process; a dead probe pipeline, which the wrong-volume alert
+      reads as healthy under treat_as_zero (D1, #<D1>). Also, until #8285, the retained plaintext
+      backstop hcloud_volume.inngest_redis holds a full second copy of this same AOF
+    disclosed_as: not-publicly-claimed
+    live_verification: >-
+      unavailable:the hourly probe row proves WHICH device backs /mnt/data (data_mount_devid), not
+      that it is crypto_LUKS; the cipher half is the statically-resolved apparatus check_luks_row
+      verifies. Flip to available in the commit recording a probe row with an explicit LUKS-type
+      field, as hcloud_volume.registry's store_luks did (#8423)
+  - store: hcloud_volume.inngest_redis
+    mechanism: plaintext-exception
+    evidence: >-
+      apps/web-platform/infra/inngest-host.tf, resource "hcloud_volume" "inngest_redis". It was
+      retained, attached and intact after the additive cutover, by design
+    defends_against: nothing at the volume layer
+    does_not_defend: >-
+      a seized or snapshot disk exposes a full second copy of the Inngest queue and run-state AOF
+      (in-flight user prompts and agent output), and no erasure path, including account deletion,
+      reaches those bytes
+    disclosed_as: not-publicly-claimed
+    live_verification: >-
+      unavailable:this row asserts the OPPOSITE of its sibling. A fresh probe row whose
+      data_mount_src is not /dev/mapper/inngest-redis means the store came back, which the
+      wrong-volume alert pages on and inngest-luks-property-8296.sh reports as exit 5
+    exception:
+      justification: >-
+        retained plaintext backstop. The cutover is additive, so a rollback is a mount move plus a
+        reverse copy, not a restore from a snapshot of unknown age
+      tracking_issue: "#8285"
+      reassessed_on: "2026-09-21"
+      reevaluate_when: >-
+        the backstop is DETACHED and DESTROYED under #8285; ALSO on INNGEST_LUKS_CUTOVER=rolled-back,
+        which inverts the sibling row's claim and requires reverting it and the Article 30 cells
+      expires_on: "2026-10-22"
+in_transit: unchanged
+```
+
 ## Guard Contract
 
 Guards 1 and 2 shipped in PR-1 and are not touched. **Guard 3 is re-specified** because R1 changes
@@ -590,19 +690,34 @@ no path through the script ends with status 0 or 1.**
 | 4 | the newest such row (the **last** line; the helper outputs ascending) is older than **3 h** (hourly cadence plus slack) | `3` | `producer_silent` |
 | 5 | the newest row's `data_mount_src` is empty, `n/a`, `__UNREADABLE__`, or does not start with `/dev/`; or its `data_mount_devid` does not match `scsi-0HC_Volume_[0-9]+` | `3` | `row_unusable` |
 | 6 | the ledger is unreadable, or the `hcloud_volume.inngest_redis_luks` row, its `at_rest.mechanism` or its `device_binding.mapper` is missing | `3` | `ledger_unreadable` |
-| 7 | `claims_luks` (`mechanism == "luks"`) **equals** `on_luks_mapper` (`data_mount_src == "/dev/mapper/" + mapper`, exact string equality, no prefix or glob) | `2` | `agree` (a correct post-rollback revert, plaintext claim on the plaintext volume, also lands here) |
-| 8 | claims `luks`, store not on the LUKS mapper | `5` | `rollback_inversion`. The output leads with "backstop is the LIVE store — do NOT destroy hcloud_volume.inngest_redis" and points to runbook §5 for the revert |
-| 9 | does not claim `luks`, store on the LUKS mapper | `5` | `under_claim` |
-| 10 | today is after the backstop row's `exception.expires_on` and that row still exists, when rows 7–9 would give `2` | `5` | `backstop_expired`: "destroy the backstop under #8285" (spec-flow P1-8) |
+| 7 | claims `luks`, store not on the LUKS mapper | `5` | `rollback_inversion`. The output leads with "backstop is the LIVE store — do NOT destroy hcloud_volume.inngest_redis" and points to runbook §5 for the revert |
+| 8 | does not claim `luks`, store on the LUKS mapper | `5` | `under_claim` |
+| 9 | **only when** claims `luks` **and** store on the LUKS mapper, **and** `now` (see Clock) is after the backstop row's `exception.expires_on`, **and** that row still exists | `5` | `backstop_expired`: "destroy the backstop under #8285". It is restricted to the encrypted-and-agreeing state, so it can never tell anyone to destroy a volume that is the live store after a revert (test-design P1) |
+| 10 | otherwise: `claims_luks` (`mechanism == "luks"`) **equals** `on_luks_mapper` (`data_mount_src == "/dev/mapper/" + mapper`, exact string equality, no prefix or glob) | `2` | `agree`. A correct post-rollback revert (plaintext claim on the plaintext volume) also lands here, even after the expiry date |
 | — | fall-through: the last line of the file | `3` | `unreachable` |
+
+**Clock.** "Now" is read from an injected `SOLEUR_FT_NOW` (ISO-8601 UTC) when set, and from
+`date -u` otherwise. A value that is set but malformed goes to `3 clock_malformed`; there is no
+silent fallback (learning `2026-09-20-my-probe-graded-itself-against-a-clock-its-grader-never-read.md`).
+Every fixture pins `SOLEUR_FT_NOW`. Fixture times sit well away from each boundary: 2 h 50 m vs
+3 h 10 m for staleness, and a day either side of `expires_on`. Nothing depends on the real date,
+so the suite does not change verdict on 2026-10-22.
 
 **Structural enforcement of never-0 / never-1** (Kieran P0):
 
 - An `EXIT` trap maps any status of `0` or `1` to `3`, with marker `trap_remapped`.
 - The file's last non-blank line is a literal `exit 3`.
-- The static scan is an **allowlist**. Every `exit` token in the file must be followed by a literal
-  `2`, `3`, `5`, `64` or `78`. A bare `exit`, `exit $?` or `exit "$rc"` fails the scan.
-- Human-readable output never contains the word `exit`.
+- The static scan is an **allowlist**, run over the file with comment lines stripped. Every `exit`
+  token must be followed by a literal `2`, `3`, `5`, `64` or `78`, and the capture excludes quote
+  characters so `trap '…; exit 3' EXIT` parses. A bare `exit`, `exit $?` or `exit "$rc"` fails
+  the scan.
+- Human-readable output never contains the word `exit`. The suite greps the stdout and stderr of
+  every case for it.
+- Precedent for the trap: `scripts/followthroughs/inngest-soak-6178.sh` (`on_exit()` rewrites any
+  rc outside `{2,3,5,78}` to `3`, installed by `trap on_exit EXIT`). It is the only rc-filtering
+  EXIT trap in the corpus; the other EXIT traps are cleanup-only.
+  `ccla-representative-icla-7922.test.sh` supplies `assert_never_close_verb()`, which is
+  self-tested with `assert_never_close_verb 0 SELFTEST`. Reuse its shape.
 
 **Assembly.** Four chokepoints:
 
@@ -626,7 +741,15 @@ no path through the script ends with status 0 or 1.**
 | 6 | newest row `data_mount_src=__UNREADABLE__` (and separately `n/a`) | `3 row_unusable`, never a false `5` alarm on #8285 |
 | 7 | any `exit 2` edited to `exit 0`; separately, the trailing `exit 3` deleted and a function made to fall off the end; separately, an unset variable referenced | both the static allowlist and the behavioural scan red. This row targets the guard's own dispatch: an exit-0 path closes #8285 |
 | 8 | a second non-allowlisted exit added after a compliant first (`exit 1` in a new arm) | the allowlist scan reds on the **second** member |
-| 9 | the `backstop_expired` arm deleted, with the fixture date after `expires_on` | the fixture expecting `5 backstop_expired` gets `2` |
+| 9 | the `backstop_expired` arm deleted, with `SOLEUR_FT_NOW` after `expires_on` | the fixture expecting `5 backstop_expired` gets `2` |
+| 10 | the rollback NEXT line in a scratch copy of `scripts/cutover-inngest.sh` is moved into the `luks-cutover` success path, and separately above the `rolled-back` confirm | the placement check reds. The check also asserts the case label is found exactly once and the extracted body is non-empty, so a failed extraction cannot pass |
+
+**Committed, not hand-run** (test-design P1). Rows 5, 7, 8, 9 and 10 edit **code** (the probe or
+`cutover-inngest.sh`). The suite applies each of them to a scratch copy under `mktemp -d`, never
+to the tracked file. It asserts that each edit landed inside the target arm's line range, then
+expects RED. A known-positive and a known-negative run first prove the runner works. Rows 1–4 and
+6 change fixtures only, so they are ordinary table cases. Nothing restores a tracked file, so
+there is no restore trap to get wrong.
 
 **Harness rows:**
 
@@ -637,8 +760,32 @@ no path through the script ends with status 0 or 1.**
   name with the row on that name, which proves the mapper is read from the ledger.
 - **H3 (must-PASS, non-canonical).** A reverted pair (ledger `plaintext-exception`, store on the
   plaintext mapper) gives `2 agree`.
-- **H4.** The suite's success condition is `fail == 0 && pass >= floor`, with the floor derived
-  from the case count. `0 passed, 0 failed` must exit non-zero.
+- **H4.** The suite's success condition is `fail == 0 && pass >= FLOOR`, with `FLOOR` a
+  **hard-coded literal**. A runtime-derived floor falls when a case is deleted. `0 passed, 0 failed`
+  must exit non-zero.
+- **H5 (must-PASS).** A reverted pair (ledger `plaintext-exception`, store on the plaintext mapper)
+  with `SOLEUR_FT_NOW` a day **after** `expires_on` gives `2 agree`, never `backstop_expired`.
+- **H1, spelled out.** The fixture mixes a web-1 row on the plaintext source (newest) with a
+  dedicated row on the LUKS mapper, and expects `2`. With the probe's own `host_role=dedicated`
+  filter removed, which is a code mutation on the scratch copy, the verdict must turn to `5`, so
+  the case reds. The probe must filter by itself and not rely on the stub's `--grep`.
+
+**Implementation precedents** (copy them; do not invent):
+
+- **Stub mechanism: a fake-tree file drop.** It is not an env override or a PATH shim.
+  `registry-luks-live-8386.test.sh` `run_probe()` copies the probe into `$WORK/root/scripts/followthroughs/`
+  and writes an executable stub at `$root/scripts/betterstack-query.sh`. The stub asserts its argv
+  (e.g. `--since 26h`) and exits 64 otherwise.
+- **The probe resolves the repo from its own location:**
+  `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` (`registry-luks-live-8386.sh`
+  line 125). This is what lets the fixture ledger at `$root/scripts/encryption-posture-ledger.json`
+  be injected with no env var. **Do not** copy the `git rev-parse --show-toplevel` form from
+  `inngest-luks-cutover-6894.sh`, which does not work in a non-git sandbox.
+- **Row parsing:**
+  `jq -R -r 'fromjson? | .raw? | fromjson? | select(.host == $h and .host_name == $hn) | …'`
+  (`inngest-luks-cutover-6894.sh`, the `DONE_N` / `ON_MAPPER` blocks). Take the newest row by `.dt`.
+- The sweeper forwards `SOLEUR_FT_EARLIEST` (`sweep-followthroughs.sh`, `env_args+=`). This probe
+  does not need it; its clock is `SOLEUR_FT_NOW`.
 
 **Also in this suite: the rollback NEXT placement check (AC-32).** It extracts the
 `luks-cutover|luks-rollback)` case body from `scripts/cutover-inngest.sh`. It asserts exactly one
@@ -765,7 +912,7 @@ a deliverable. DPIA no. Art. 33/34 no. `disclosed_as: not-publicly-claimed` stay
 | T1 | `lint-encryption-posture.py --repo-sweep` after both row rewrites | `0 failing checks -> PASS` |
 | T2 | Flipped row with its `exception` block left in | passes both gates. AC-2 is the only catch |
 | T3 | `live_verification: "available: observed …"` | schema failure (`^(available\|unavailable:.+)$`) |
-| T4 | Guard 3 rows 1–7 | each reds its named arm |
+| T4 | Guard 3 mutation rows 1–9 and every Decision-table row | each reds its named arm and marker |
 | T5 | Guard 3 H1–H4 | as specified |
 | T6 | `c4-model-freshness.test.sh` after the `model.c4` edit without regeneration | FAIL. After `regenerate-c4-model.sh`: PASS |
 | T7 | `cutover-inngest-workflow.test.sh` after the rollback NEXT line | 665/665 |
