@@ -504,7 +504,7 @@ _zot_reports_sentry_stage() {
     && grep -qE '^  - path: /usr/local/bin/soleur-boot-emit$' "$1"
 }
 if ! _zot_path_in_code "$INNGEST_CI" || ! _zot_reports_offbox "$INNGEST_CI" || ! _zot_reports_sentry_stage "$INNGEST_CI"; then
-  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path, no off-box reporting of it, or no Sentry `stage:` emit (both outcome arms calling soleur-boot-emit, and the write_files entry that delivers it) — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
+  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path, no off-box reporting of it, or no Sentry 'stage:' emit (both outcome arms calling soleur-boot-emit, and the write_files entry that delivers it) — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
   exit 1
 fi
 # The channel reaches this query set once the host is built from the #6500 template: it emits
