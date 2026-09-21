@@ -1489,3 +1489,12 @@ Recorded after the 9-seat review and a binding CTO ruling. The sections above ar
   flip checklist, rather than restating them (single source).
 - **Rollback re-probe.** Tracked in #8499 instead of `soleur:model-launch-review`, which runs on the
   wrong cadence.
+- **Controls this plan names that no longer exist in the tree (QA, 2026-09-21).** Guard 2 (the B5
+  verdict pipeline: `rule-phrasing-verdict.cjs`, `measure-rule-compliance.cjs`, `rule-phrasing.cjs`,
+  `rule-phrasing.test.sh`) was archived. So the Observability `failure_modes` entry whose `detection:`
+  names `rule-phrasing-verdict.cjs` (the B5 ABORTED case), and the Guard 2 section of the Guard
+  Contract, describe a control that is recoverable only from 1a5b79261. The failure mode they guard
+  (a truncated or errored paid run producing a verdict) cannot occur in the merged tree, because the
+  eval is no longer in it. A #8497 rerun must restore both. Test Scenarios 2, 9 and 10 are superseded:
+  cron-list is model-invocable, a new flip moves five sites (not four), and the E0-E9 battery is
+  archived. Guard 1 (`invocation-axis.test.ts`) is present and is the live control for scenarios 1-8.
