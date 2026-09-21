@@ -1021,6 +1021,15 @@ Sentry-infra PR and `main` were red.
 - The TF-side fidelity projection excludes a rule whose trigger type is in `excluded` in either
   representation (native or legacy), mirroring the live side, so `alert-reference.json` stays at
   30 keys.
+- **The adoption lands on a wedged root, so two gates are re-scoped (CTO ruling).** Main carried
+  changes merged while no plan could complete (at authoring time two blocks added since the last
+  applied commit `d8b5fa1fd`, plus drifted updates), and they ride in the adoption plan.
+  `scripts/sentry-adoption-plan-assert.sh` therefore asserts inertness at the ADOPTED rows (every
+  import row no-op, every forget a `sentry_issue_alert`) plus no delete or replace anywhere, and
+  prints the other creates/updates as delegated backlog rather than refusing them. The create
+  gate's diff window, at both sites, starts at the last APPLIED commit
+  (`scripts/sentry-last-applied-sha.sh`: the newest run whose `apply` job succeeded) instead of the
+  PR diff or `HEAD~1`, so a block merged during a wedge is still explained by a reviewed diff.
 - The brownout retry ladder at both plan sites is deleted: with zero `sentry_issue_alert`
   resources it had no target. A plan failure carrying a 410 is reported on its only attempt,
   naming the failing addresses, and says what persistence across runs would mean rather than

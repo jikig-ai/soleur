@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # AC2 / AC10 — assert an adoption plan is EXACTLY an adoption: N forgets, N
-# matching imports, and every other managed row a no-op (#7650 Phase 2).
+# matching imports, every adopted row inert, and no delete or replace anywhere
+# (#7650 Phase 2; scoped to the adopted rows in #8451 — see section 3).
 #
 # Usage: sentry-adoption-plan-assert.sh <plan.json> [expected-pairs] [capture.json]
 #   expected-pairs  default 27 — the landed scope
@@ -19,7 +20,14 @@
 # found, and this assertion is the plug. It runs BEFORE `terraform apply` and is
 # NOT reachable from the ack.
 #
-# ── WHY IT IS CONDITIONAL ──────────────────────────────────────────────────
+# ── WHY IT IS CONDITIONAL, AND WHY IT IS SCOPED ─────────────────────────────
+# (#8451) An adoption that lands on a WEDGED root carries the unapplied backlog:
+# #8451's adoption could only plan once it existed, so every create/update that
+# merged while plans failed rides in the same plan. Global inertness therefore
+# cannot hold, and section 3 asserts it at the adopted rows (plus no delete or
+# replace anywhere), delegating backlog rows to the create gate, the reference
+# gate and the tripwire. The paragraph below is the Phase 2 reasoning, kept.
+#
 # "Every managed row is a no-op or a forget" is true of THIS apply and of no
 # other. A later PR that adds a cron monitor legitimately plans a create, and a
 # permanent version of this assertion would red it. So the discriminator is the
@@ -118,34 +126,65 @@ if [[ "$n_forget" -ne "$EXPECTED" || "$n_import" -ne "$EXPECTED" ]]; then
   rc=1
 fi
 
-# ── 3. `0 to add, 0 to change, 0 to destroy` — asserted per ROW, not from the
-#       summary line. Data-source reads are excluded: `.mode == "managed"`. ──
-others=$(jq -r '
+# ── 3. Inertness AT THE ADOPTED ROWS, plus no delete/replace anywhere ──────
+#       (#8451 CTO ruling). Per ROW, never from the summary line; data-source
+#       reads are excluded (`.mode == "managed"`). Four predicates:
+#   3a  every IMPORT row is `["no-op"]` — an update at an imported address is
+#       drift between the authored block and live config;
+#   3b  every FORGET moves `sentry_issue_alert` — the only legacy type;
+#   3c  no managed row anywhere carries `delete` (delete or either replace
+#       order) — overlaps the destroy gate, but `[ack-destroy]` greens that
+#       gate and does not reach this one;
+#   3d  every OTHER create/update is BACKLOG: allowed, and printed as a notice.
+# Why 3d exists: an adoption landing on a wedged root carries every change that
+# merged while no plan could complete. Those rows are delegated to the create
+# gate (diff-matched against the last successfully applied commit), the
+# alert-reference gate and the legacy-trigger tripwire, which all run on this
+# same plan before apply.
+violations=$(jq -r '
   [ .resource_changes[]?
     | select((.mode // "managed") == "managed")
-    | select((.change.actions // []) != ["no-op"])
-    | select((.change.actions // []) != ["forget"])
-    | "\(.address) actions=\((.change.actions // []) | join(","))" ]
+    | (.change.actions // []) as $a
+    | if (.change.importing.id != null) and ($a != ["no-op"]) then
+        "\(.address) actions=\($a | join(",")) (3a: an imported address must plan no-op)"
+      elif ($a == ["forget"]) and (.type != "sentry_issue_alert") then
+        "\(.address) actions=forget (3b: only sentry_issue_alert may be forgotten)"
+      elif ($a | index("delete")) != null then
+        "\(.address) actions=\($a | join(",")) (3c: no delete or replace in an adoption plan)"
+      else empty end ]
   | .[]
-' "$PLAN") || others="JQFAIL"
+' "$PLAN") || violations="JQFAIL"
+backlog=$(jq -r '
+  [ .resource_changes[]?
+    | select((.mode // "managed") == "managed")
+    | select(.change.importing.id == null)
+    | (.change.actions // []) as $a
+    | select($a != ["no-op"] and $a != ["forget"] and ($a | index("delete")) == null)
+    | "\(.address) actions=\($a | join(","))" ]
+  | .[]
+' "$PLAN") || backlog="JQFAIL"
 
-# A jq failure must not read as the SUCCESS signal. An empty `$others` means
-# "every managed row is a no-op or a forget" — the strongest claim this script
-# makes — so `|| others=""` made an unparseable plan indistinguishable from a
-# clean one. The sentinel mirrors the capture cross-check twenty lines down,
-# which already got this right.
-if [[ "$others" == "JQFAIL" ]]; then
-  echo "::error::adoption plan assert: could not scan managed rows in '$PLAN'; refusing to report the 0-add/0-change/0-destroy assertion as passed." >&2
+# A jq failure must not read as the SUCCESS signal: an empty `$violations` is
+# the strongest claim this section makes.
+if [[ "$violations" == "JQFAIL" || "$backlog" == "JQFAIL" ]]; then
+  echo "::error::adoption plan assert: could not scan managed rows in '$PLAN'; refusing to report the adopted-rows-inert assertion as passed." >&2
   rc=1
-  others=""
+  violations=""; backlog=""
 fi
 
-if [[ -n "$others" ]]; then
-  count=$(grep -c '' <<<"$others")
-  echo "::error::adoption plan assert: ${count} managed row(s) are neither no-op nor forget — this plan does more than adopt:" >&2
-  sed 's/^/::error::  /' <<<"$others" >&2
-  echo "::error::An adoption must be inert on live Sentry: it moves addresses in state and changes nothing in the product. A create here is a dropped import{} colliding with the live rule it should have adopted; an update is drift between the authored block and live config; a delete is a paging rule about to disappear." >&2
+if [[ -n "$violations" ]]; then
+  count=$(grep -c '' <<<"$violations")
+  echo "::error::adoption plan assert: ${count} managed row(s) break the adoption's inertness:" >&2
+  while IFS= read -r line; do echo "::error::  $line" >&2; done <<<"$violations"
+  echo "::error::An adoption must move addresses in state and change nothing at the adopted rules. A non-no-op import row is drift between the authored block and live config; a forget of anything but sentry_issue_alert drops a live resource from management; a delete or replace is a live object about to disappear, and no acknowledgement reaches this check." >&2
   rc=1
+fi
+
+n_backlog=0
+if [[ -n "$backlog" ]]; then
+  n_backlog=$(grep -c '' <<<"$backlog")
+  echo "::notice::adoption plan assert: ${n_backlog} non-adoption backlog row(s), delegated to the create, reference and tripwire gates (not asserted inert here):"
+  while IFS= read -r line; do echo "::notice::  $line"; done <<<"$backlog"
 fi
 
 # ── 3b. Import ids are UNIQUE. ──────────────────────────────────────────────
@@ -196,6 +235,6 @@ if [[ -n "$CAPTURE" ]]; then
 fi
 
 if [[ "$rc" -eq 0 ]]; then
-  echo "adoption plan assert: PASS (${n_forget} forget(s), ${n_import} import(s), 0 add / 0 change / 0 destroy across every managed row)"
+  echo "adoption plan assert: PASS (${n_forget} forget(s), ${n_import} import(s); adopted rows no-op, 0 deletes/replaces, ${n_backlog} backlog row(s) delegated)"
 fi
 exit "$rc"

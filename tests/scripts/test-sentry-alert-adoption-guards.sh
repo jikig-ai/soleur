@@ -37,7 +37,7 @@ BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=37
+EXPECTED_TESTS=46
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -657,19 +657,123 @@ t_c1_non_adoption_plan_skips() {
   fi
 }
 
-# C2 — the AC10 property itself: an adoption plan carrying anything that is not
-# a no-op or a forget is rejected. This is the hole the apply arm had, where a
-# blanket [ack-destroy] greened every non-delete change.
-t_c2_extra_change_red() {
-  local f
-  f=$(_pairs 3 | jq -c '.resource_changes += [{"type":"sentry_alert","address":"sentry_alert.drifted","mode":"managed","change":{"actions":["update"],"before":{},"after":{}}}]' | _write c2)
-  local rc; rc=$(_rc bash "$ADOPT" "$f" 3)
-  local msg; msg=$(_err bash "$ADOPT" "$f" 3)
-  if [[ "$rc" -eq 1 ]] && grep -q 'sentry_alert.drifted' <<<"$msg"; then
-    _report "C2 an adoption plan with an extra UPDATE row REDs and names it (AC10)" ok
+# C2 — the AC10 property, SCOPED TO THE ADOPTED ROWS (#8451 CTO ruling). An
+# adoption landing on a wedged root necessarily carries the unapplied backlog
+# (creates/updates merged while every plan failed), so global inertness cannot
+# hold. Inertness is asserted where the adoption acts: every IMPORT row must be
+# a no-op, every FORGET must move the legacy type, and nothing anywhere may
+# delete or replace. Backlog creates/updates are delegated to the create gate
+# (diff-matched against the last applied commit), the reference gate and the
+# tripwire, and are printed, never silently passed.
+_c2_run() { # $1=label-slug $2=jq-edit -> sets C2_RC, C2_MSG (stdout+stderr)
+  local f; f=$(_pairs 3 | jq -c "$2" | _write "c2-$1")
+  C2_RC=$(_rc bash "$ADOPT" "$f" 3)
+  C2_MSG=$(bash "$ADOPT" "$f" 3 2>&1)
+}
+t_c2a_import_with_update_red() {
+  _c2_run a '(.resource_changes[] | select(.address == "sentry_alert.p2") | .change.actions) = ["update"]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_alert.p2 .*(3a:' <<<"$C2_MSG"; then
+    _report "C2a an UPDATE at an imported address REDs and names it (the adopted row is not inert)" ok
   else
-    _report "C2 an adoption plan with an extra update row REDs" fail "rc=$rc; msg=$msg"
+    _report "C2a an update at an imported address REDs" fail "rc=$C2_RC; msg=$C2_MSG"
   fi
+}
+t_c2b_backlog_rows_pass_and_are_printed() {
+  _c2_run b '.resource_changes += [
+    {"type":"sentry_alert","address":"sentry_alert.backlog_update","mode":"managed","change":{"actions":["update"],"before":{},"after":{}}},
+    {"type":"sentry_cron_monitor","address":"sentry_cron_monitor.backlog_create","mode":"managed","change":{"actions":["create"],"before":null,"after":{}}}]'
+  if [[ "$C2_RC" -eq 0 ]] && grep -q 'sentry_alert.backlog_update' <<<"$C2_MSG" \
+     && grep -q 'sentry_cron_monitor.backlog_create' <<<"$C2_MSG"; then
+    _report "C2b backlog create/update rows elsewhere PASS and are printed (delegated, not silent)" ok
+  else
+    _report "C2b backlog rows pass and are printed" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+t_c2c_replace_anywhere_red() {
+  _c2_run c '.resource_changes += [{"type":"sentry_alert","address":"sentry_alert.replaced","mode":"managed","change":{"actions":["create","delete"],"before":{},"after":{}}}]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_alert.replaced .*(3c:' <<<"$C2_MSG"; then
+    _report "C2c a REPLACE anywhere REDs and names it (no ack reaches it)" ok
+  else
+    _report "C2c a replace anywhere REDs" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+t_c2d_delete_anywhere_red() {
+  _c2_run d '.resource_changes += [{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.gone","mode":"managed","change":{"actions":["delete"],"before":{},"after":null}}]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_cron_monitor.gone .*(3c:' <<<"$C2_MSG"; then
+    _report "C2d a DELETE anywhere REDs and names it" ok
+  else
+    _report "C2d a delete anywhere REDs" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+t_c2e_forget_of_non_legacy_type_red() {
+  _c2_run e '.resource_changes += [{"type":"sentry_alert","address":"sentry_alert.forgotten","mode":"managed","change":{"actions":["forget"],"before":{},"after":null}}]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_alert.forgotten .*(3b:' <<<"$C2_MSG"; then
+    _report "C2e a FORGET of a sentry_alert REDs (forgets may only move the legacy type)" ok
+  else
+    _report "C2e a forget of a sentry_alert REDs" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+
+# L — scripts/sentry-last-applied-sha.sh: the create gate's window starts at the
+# commit last APPLIED (the newest run whose `apply` JOB succeeded), not the
+# newest successful RUN — a kill-switch run concludes success with apply skipped.
+LAST_APPLIED="$REPO_ROOT/scripts/sentry-last-applied-sha.sh"
+SHA_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+SHA_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+_la_stub() { # $1=mode -> a PATH dir with a fake gh
+  local d="$TMPD/la-$1"; mkdir -p "$d"
+  cat > "$d/gh" <<'STUB'
+#!/usr/bin/env bash
+# Refuse anything but the two expected endpoints (exit 64 = unexpected request).
+case "$*" in
+  *"actions/workflows/apply-sentry-infra.yml/runs?branch=main&status=success"*)
+    [[ "$LA_MODE" == apierr ]] && exit 1
+    [[ "$LA_MODE" == none ]] && exit 0
+    printf '101 %s\n102 %s\n' "$SHA_A" "$SHA_B" ;;
+  *"actions/runs/101/jobs"*)
+    case "$LA_MODE" in first) echo success ;; *) echo skipped ;; esac ;;
+  *"actions/runs/102/jobs"*)
+    case "$LA_MODE" in skipfirst) echo success ;; *) echo failure ;; esac ;;
+  *) echo "unexpected gh call: $*" >&2; exit 64 ;;
+esac
+STUB
+  chmod +x "$d/gh"; echo "$d"
+}
+_la_run() { # $1=mode -> LA_OUT, LA_RC
+  local d; d=$(_la_stub "$1")
+  LA_RC=0
+  LA_OUT=$(LA_MODE="$1" SHA_A="$SHA_A" SHA_B="$SHA_B" GITHUB_REPOSITORY=o/r PATH="$d:$PATH" bash "$LAST_APPLIED" 2>&1) || LA_RC=$?
+}
+t_l1_newest_applied_run() {
+  _la_run first
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_A" ]]; then
+    _report "L1 last-applied: the newest run whose apply job succeeded is returned" ok
+  else _report "L1 last-applied newest applied run" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l2_skipped_apply_is_not_applied() {
+  _la_run skipfirst
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_B" ]]; then
+    _report "L2 last-applied: a successful run whose apply job was SKIPPED is passed over" ok
+  else _report "L2 last-applied skips a run with a skipped apply" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l3_api_error_fails_closed() {
+  _la_run apierr
+  if [[ "$LA_RC" -eq 1 && "$LA_OUT" == *"::error::"* ]]; then
+    _report "L3 last-applied: an unreadable run list fails CLOSED" ok
+  else _report "L3 last-applied fails closed on API error" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l4_nothing_applied_fails_closed() {
+  _la_run none
+  if [[ "$LA_RC" -eq 1 && "$LA_OUT" == *"none of the newest"* ]]; then
+    _report "L4 last-applied: no applied run found fails CLOSED" ok
+  else _report "L4 last-applied fails closed when nothing applied" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l5_both_sites_use_the_window() {
+  local n; n=$(grep -c 'scripts/sentry-last-applied-sha.sh")' "$WF")
+  local stale; stale=$(grep -cE 'diff (HEAD~1 HEAD|"origin/\$\{BASE_REF\}\.\.\.HEAD") *\\$' "$WF")
+  if [[ "$n" -eq 2 && "$stale" -eq 0 ]]; then
+    _report "L5 both create-gate sites diff from the last applied commit (no HEAD~1 / PR-only window left)" ok
+  else _report "L5 both create-gate sites use the last-applied window" fail "helper calls=$n stale diffs=$stale"; fi
 }
 
 # C3 — cardinality. The bijection holds for 26 pairs too; dropping a
@@ -860,8 +964,17 @@ t_b_harness_three_pairs_green
 t_b_harness_constant_extractor_defeats_b1
 t_b7_locale_collation
 t_c1_non_adoption_plan_skips
-t_c2_extra_change_red
+t_c2a_import_with_update_red
+t_c2b_backlog_rows_pass_and_are_printed
+t_c2c_replace_anywhere_red
+t_c2d_delete_anywhere_red
+t_c2e_forget_of_non_legacy_type_red
 t_c3_dropped_pair_red
+t_l1_newest_applied_run
+t_l2_skipped_apply_is_not_applied
+t_l3_api_error_fails_closed
+t_l4_nothing_applied_fails_closed
+t_l5_both_sites_use_the_window
 t_c4_clean_adoption_green
 t_c5_import_id_not_in_capture_red
 t_c6_duplicate_import_id_red

@@ -126,6 +126,9 @@ concurrency:
 
 permissions:
   contents: read
+  # (#8451) the create gate's window starts at the last APPLIED commit, read from
+  # this workflow's own run history (scripts/sentry-last-applied-sha.sh).
+  actions: read
   # Read the PR's branch commit messages to detect a pre-staged [ack-destroy]
   # (see the destroy gate). Read-only. The DEFAULT for every job is read-only;
   # the `apply` job overrides this block with a job-scoped `issues: write` so its
@@ -395,7 +398,16 @@ jobs:
           if [[ "$resource_creates" -gt 0 ]]; then
             jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
               /tmp/sentry-pr-plan.json > /tmp/sentry-creates.txt
-            git -C "${GITHUB_WORKSPACE}" diff "origin/${BASE_REF}...HEAD" \
+            # Window = last APPLIED commit..HEAD, not origin/main...HEAD (#8451):
+            # a block merged while the apply was wedged is created by this plan
+            # and appears in no PR diff. Fail-closed on lookup or ancestry.
+            last_applied=$(GITHUB_REPOSITORY="$REPO" bash "${GITHUB_WORKSPACE}/scripts/sentry-last-applied-sha.sh") || exit 1
+            if ! git -C "${GITHUB_WORKSPACE}" merge-base --is-ancestor "$last_applied" HEAD; then
+              echo "::error::create gate: last applied commit ${last_applied} is not an ancestor of HEAD; refusing to bound the create window." >&2
+              exit 1
+            fi
+            echo "create gate: window ${last_applied}..HEAD (last applied commit on main)"
+            git -C "${GITHUB_WORKSPACE}" diff "$last_applied" HEAD \
               -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-tf.diff
             bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
               /tmp/sentry-creates.txt /tmp/sentry-tf.diff
@@ -624,6 +636,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read   # scripts/sentry-last-applied-sha.sh (#8451)
     # Event guard (#6589): this workflow now also triggers on pull_request and
     # merge_group for the destroy gate. Without this guard, adding those triggers
     # would make the APPLY job reachable from a PR — applying prod Sentry infra
@@ -645,12 +658,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # Two commits, not one. Guard A(i) — the diff-matched create gate that
-          # until #7650 Phase 2 ran ONLY in `plan_pr` — needs the merge commit's
-          # own diff to decide whether a planned create is explained by a block
-          # this merge added. On the squash merges this repo uses, `HEAD~1..HEAD`
-          # IS the merged change. The default depth-1 checkout has no HEAD~1.
-          fetch-depth: 2
+          # Full history (was 2, #8451). Guard A(i) — the diff-matched create
+          # gate — diffs from the LAST APPLIED commit, not HEAD~1: when an apply
+          # wedges, blocks merged in between are created by the next apply and
+          # appear in no single merge's diff. That commit can be arbitrarily far
+          # back, so the checkout must hold it.
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -764,6 +777,7 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ github.token }}   # scripts/sentry-last-applied-sha.sh (#8451)
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
           # with the ::error:: below instead of aborting silently. Re-enabled with `set -e`
@@ -885,17 +899,19 @@ jobs:
           # This job computed `$resource_creates` and never read it: the apply
           # arm had NO create check at all, so the one worst case of a botched
           # adoption — 27 duplicate live paging rules — was created ungated.
-          # `HEAD~1..HEAD` is the merged change on a squash merge, which is why
-          # the checkout above asks for depth 2. On `workflow_dispatch` it is the
-          # last merge, i.e. the change whose state is being applied.
+          # Window = last APPLIED commit..HEAD (#8451), not HEAD~1..HEAD: every
+          # merge since the last successful apply is what this apply creates.
+          # Fail-closed on lookup or ancestry.
           if [[ "$resource_creates" -gt 0 ]]; then
-            if ! git -C "${GITHUB_WORKSPACE}" rev-parse --verify -q HEAD~1 >/dev/null; then
-              echo "::error::apply create gate: no HEAD~1 available, so a planned create cannot be matched against the merged diff. Refusing to apply ${resource_creates} unexplained create(s)." >&2
+            last_applied=$(GH_TOKEN="$GH_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" bash "${GITHUB_WORKSPACE}/scripts/sentry-last-applied-sha.sh") || exit 1
+            if ! git -C "${GITHUB_WORKSPACE}" merge-base --is-ancestor "$last_applied" HEAD; then
+              echo "::error::apply create gate: last applied commit ${last_applied} is not an ancestor of HEAD. Refusing to apply ${resource_creates} create(s) against an unbounded window." >&2
               exit 1
             fi
+            echo "apply create gate: window ${last_applied}..HEAD (last applied commit on main)"
             jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
               /tmp/sentry-apply-plan.json > /tmp/sentry-apply-creates.txt
-            git -C "${GITHUB_WORKSPACE}" diff HEAD~1 HEAD \
+            git -C "${GITHUB_WORKSPACE}" diff "$last_applied" HEAD \
               -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-apply-tf.diff
             bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
               /tmp/sentry-apply-creates.txt /tmp/sentry-apply-tf.diff
@@ -1277,6 +1293,9 @@ jobs:
           # a future `$GITHUB_ENV` write of this name would turn the one
           # post-apply probe into a green no-op with a log warning nobody reads.
           SENTRY_FIXTURE_RULES: ""
+          # Pinned empty (#8451): the frozen-rule pin reads the committed capture
+          # unless overridden; a later $GITHUB_ENV write must not repoint it.
+          SENTRY_FROZEN_CAPTURE_FILE: ""
         run: |
           set -euo pipefail
           bash scripts/sentry-alert-live-fidelity.sh

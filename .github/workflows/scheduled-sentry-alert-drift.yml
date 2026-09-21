@@ -128,6 +128,9 @@ jobs:
           # whose own comment exists to stop "a false all-clear ... auto-closing a
           # live drift issue". The script's header names this reachability path.
           SENTRY_FIXTURE_RULES: ""
+          # Pinned empty (#8451): the frozen-rule pin reads the committed capture
+          # unless overridden; a later $GITHUB_ENV write must not repoint it.
+          SENTRY_FROZEN_CAPTURE_FILE: ""
           # Pinned empty too: the probe's `${SENTRY_REFERENCE_FILE:-<committed>}`
           # treats empty as unset, so this reads the committed copy and no
           # earlier `$GITHUB_ENV` write can repoint the daily job's reference.
