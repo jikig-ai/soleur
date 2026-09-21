@@ -2360,6 +2360,7 @@ module-level-state
 module-resolution
 modulesupabase
 monitor
+monitor-hook
 monitor-hygiene
 monitor-lifetime
 monitor-tool
@@ -3894,6 +3895,7 @@ symlink
 sync
 sync-command
 sync-gate
+sync-pr-behind
 syntax
 synthetic-aggregator
 synthetic-check-runs
