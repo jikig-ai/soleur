@@ -251,6 +251,7 @@
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
+1	plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh
 1	plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh
 2	plugins/soleur/skills/community/scripts/bsky-setup.sh
 4	plugins/soleur/skills/community/scripts/discord-setup.sh
@@ -317,7 +318,6 @@
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
 4	scripts/content-publisher.test.sh
-4	scripts/cutover-inngest.sh
 1	scripts/derive-app-domain-base.test.sh
 1	scripts/dogfood/grok-measure.sh
 1	scripts/domain-model-drift.test.sh

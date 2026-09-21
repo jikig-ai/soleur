@@ -4,14 +4,15 @@
 # (allow-list, non-SSH resources only)" step). Closes #4419 (sibling of
 # #4420 — the github-infra widening).
 #
-# Five nested-block Cloudflare surfaces plus one reboot-update surface are
+# Six nested-block Cloudflare surfaces plus one reboot-update surface are
 # covered:
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
 #   3. cloudflare_zone_settings_override.*               .settings[0].security_header
 #   4. cloudflare_notification_policy.*                  .email_integration
 #   5. cloudflare_zero_trust_access_policy.*             .include
-#   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
+#   6. cloudflare_list.*                                 .item (#8364)
+#   7. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
 #
 # Deterministic; no network. Uses synthesized fixtures plus one captured
@@ -46,7 +47,7 @@
 #   #         random_id.{b64_*,hex}, github_actions_secret.plaintext_value).
 #   #   (3) .planned_values / .prior_state mirror the same fields.
 #   # The filter only consumes .resource_changes[].change.actions and the
-#   # path-specific nested counts on the 5 vulnerable Cloudflare types — every
+#   # path-specific nested counts on the 6 vulnerable Cloudflare types — every
 #   # other key is dead weight.
 #   jq 'del(.variables, .planned_values, .prior_state, .configuration,
 #          .relevant_attributes)
@@ -148,7 +149,7 @@ _run_gate() {
   echo "$rdel:$ndel:$rupd:$dcount:$rc"
 }
 
-# 7th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
+# 8th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
 # rc source rather than a 6th field threaded through _run_gate, for two reasons:
 #
 #   1. _run_gate's "$rdel:$ndel:$rupd:$dcount:$rc" string encodes the ack
@@ -182,7 +183,7 @@ _run_host_creates_gate() {
   echo "$hc:$rc"
 }
 
-# 8th surface (#7695): the `luks_passphrase_rotations` HALT. Same shape and same reasoning as
+# 10th surface (#7695): the `luks_passphrase_rotations` HALT. Same shape and same reasoning as
 # _run_host_creates_gate above — a SECOND, ack-INDEPENDENT rc source, taking no head_msg
 # parameter, because the workflow's HALT never reads HEAD_MSG. Returns "lr:rc".
 _run_luks_rotation_gate() {
@@ -258,6 +259,36 @@ t_access_policy_include_removal_trips() {
     _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" ok
   else
     _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
+# T61: cloudflare_list item removal trips guard (#8364 — the 6th nested
+# surface). legal_redirects carries the whole bulk-redirect set; an item
+# leaving the array strands that legacy URL's edge 301 with no resource
+# delete and no reboot. items 3 → 2.
+t_list_item_removal_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-cf-list-item-removal.json" "feat: drop a bulk redirect")
+  if [[ "$out" == "0:1:0:1:1" ]]; then
+    _report "T61 cloudflare_list.item removal trips guard (rdel=0 ndel=1 rupd=0 dcount=1 rc=1)" ok
+  else
+    _report "T61 cloudflare_list.item removal trips guard" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
+# T62: item ADDITION (the control arm — before=2, after=3) must NOT page the
+# destroy guard: select(. > 0) filters growth, dcount=0. Derived from the
+# removal fixture by swapping change.before/change.after, so the only variable
+# between T61 and this arm is the direction of the diff.
+t_list_item_addition_passes() {
+  local tmp; tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup; bounded (matches T55's pattern, #6734)
+  jq '.resource_changes[].change |= (. as $c | .before = $c.after | .after = $c.before)' \
+    "$FIXTURES/tfplan-cf-list-item-removal.json" > "$tmp"
+  local out; out=$(_run_gate "$tmp" "feat: add a bulk redirect")
+  rm -f "$tmp"
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T62 cloudflare_list item addition is ignored (rdel=0 ndel=0)" ok
+  else
+    _report "T62 cloudflare_list item addition is ignored" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -344,9 +375,9 @@ t_ack_destroy_substring_rejected() {
 }
 
 # ---------------------------------------------------------------------------
-# 6th surface (#5911): hcloud_server.* reboot-forcing in-place `update`.
+# 7th surface (#5911): hcloud_server.* reboot-forcing in-place `update`.
 # `placement_group_id` / `server_type` change → power-off reboot of the
-# RUNNING host with ZERO destroys — invisible to resource_deletes + the 5
+# RUNNING host with ZERO destroys — invisible to resource_deletes + the 6
 # Cloudflare nested clauses. reboot_updates (rupd) counts these. Reuses the
 # same `[ack-destroy]` gate (no new token; regex-parity still 6 sites).
 # ---------------------------------------------------------------------------
@@ -449,10 +480,10 @@ t_hcloud_reboot_ack_allows() {
 }
 
 # ---------------------------------------------------------------------------
-# 7th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
+# 8th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
 # hcloud_volume on the per-PR apply path.
 #
-# Why a 7th counter was needed: `-target` is transitive at the RESOURCE level, so
+# Why an 8th counter was needed: `-target` is transitive at the RESOURCE level, so
 # every allow-listed resource referencing ANY hcloud_server.web instance
 # (cloudflare_record.app at dns.tf:16, hcloud_firewall_attachment.web at
 # firewall.tf:93) pulls the whole for_each map — web-2 included. A pure create
@@ -470,7 +501,7 @@ t_hcloud_reboot_ack_allows() {
 # `hcloud_server.web["web-2"]` create — HALTs. Reuses the EXISTING
 # tfplan-hcloud-server-create.json fixture (measured host_creates=1); T18 above
 # asserts the same fixture is invisible to all three legacy counters, so this
-# pair is the whole argument for the 7th surface in two tests.
+# pair is the whole argument for the 8th surface in two tests.
 t_host_create_halts() {
   local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-create.json")
   if [[ "$out" == "1:1" ]]; then
@@ -930,6 +961,8 @@ t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
 t_notification_email_removal_trips
 t_access_policy_include_removal_trips
+t_list_item_removal_trips
+t_list_item_addition_passes
 t_no_changes_passes
 t_ruleset_resource_delete_no_double_count
 t_mixed_delete_and_nested
@@ -1465,16 +1498,17 @@ t_apply_job_luks_halt_job_scoped
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
 # Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
-# + 9 added by this branch, + 15 added by main (PR4b/AC72) = 73. Exact, not a ceiling: deleting a
-# single arm invocation reports "only 72 assertions ran, floor is 75".
+# + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
+# + 2 cloudflare_list arms (#8364, T61/T62) = 77. Exact, not a ceiling: deleting a
+# single arm invocation reports "only 76 assertions ran, floor is 77".
 # current count rather than leaving slack — the review panel showed 3 assertions
 # of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
 # is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 75 ]]; then
+if [[ "$_ran" -lt 77 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 75. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 77. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 75)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 77)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

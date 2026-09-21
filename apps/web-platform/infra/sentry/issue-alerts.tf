@@ -603,6 +603,57 @@ resource "sentry_alert" "byok_art_33_breach" {
   }
 }
 
+# Rule 1b — GDPR Art. 17 erasure did not complete (#8094). The Art. 30 register records
+# this gap at TOM (g)(3): the cascade emits feature=account-delete
+# op=git-data-bare-repo-erasure, "no Sentry issue-alert rule matches that `op`, so the
+# event lands in the issue stream un-routed (#8094 carries the rule)". This is that rule.
+#
+# It is load-bearing for a USER-FACING PROMISE, which is why it ships with the code rather
+# than after it. On a non-completing erasure the deleted user is told, on the login page,
+# that the outstanding erasure "will be completed". Without a route to a human that
+# sentence is false — the event would sit in the un-routed issue stream and the subject's
+# bare repo would persist with nobody assigned to sweep it.
+#
+# Keys on the `erasure_outcome` TAG, not on `extra`: Sentry does not index `extra`, so a
+# rule cannot filter on a value that lives only there. The four routed values are
+# refused | unauthorized | unconfigured | unreachable; `erased` and `skipped` never emit.
+#
+# Frequency matches the Art. 33 rule rather than the cap rules: these are per-deletion
+# events, so volume is naturally low, and each one is a subject whose erasure is owed.
+# `unauthorized` in particular is fleet-wide when it fires — the REMOVE key is baked into
+# cloud-init authorized_keys, so a Doppler rotation without a host replace fails EVERY
+# deletion until the host is replaced.
+resource "sentry_alert" "art17_erasure_incomplete" {
+  organization      = var.sentry_org
+  name              = "art17-erasure-incomplete"
+  enabled           = true
+  frequency_minutes = 5
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "account-delete" } },
+        { tagged_event = { key = "op", match = "eq", value = "git-data-bare-repo-erasure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # Rule 2 — BYOK delegation cap exceeded (hourly | daily). Lower urgency:
 # wider frequency + quieter `NoOne` fallthrough. Filters require
 # feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}
