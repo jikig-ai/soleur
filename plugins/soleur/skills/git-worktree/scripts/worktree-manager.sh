@@ -2925,7 +2925,9 @@ cleanup_merged_worktrees() {
     safe_branch=$(_safe_worktree_name "$branch")
     # Skip if active worktree
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
+      # Unconditional, like the other hold lines: `verbose` is a tty test, so a gated line is
+      # silent under `claude --bg` and a held branch reads as an unconsidered one.
+      echo "(skip) $branch - currently active; keeping"
       continue
     fi
 
