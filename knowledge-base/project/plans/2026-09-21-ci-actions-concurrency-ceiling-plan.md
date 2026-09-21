@@ -159,7 +159,8 @@ the worst-case added lag (FR2; ADR-231 byte budget — one line, no essays).
   hourly while the live `zot` monitor still expects `*/30`/margin-30 → one transient
   missed-check-in issue is EXPECTED (the 2026-06-15 false-page class this file documents).
   Mitigation, recorded in `operator-upgrade-steps.md`/PR: immediately post-merge run
-  `gh workflow run apply-sentry-infra.yml` (dispatch exists, :112) to shorten the gap, and
+  `gh workflow run apply-sentry-infra.yml -f reason="post-8450 monitor transition"` (dispatch
+  exists, :112; `reason` is a required input) to shorten the gap, and
   pre-note the expected transient Sentry issue on #8450 — a real subsequent miss must not be
   dismissed under Sentry's repeat-issue silence (#7142).
 
@@ -183,7 +184,7 @@ flips only after its verdict is observed correct on this PR's own runs.
   plan/spec/learning paths, root `*.md` — **NOT `docs/**`**: repo-root `docs/` is only
   `docs/legal/**`, which IS app-coupled via the pinned SHA-256s in
   `apps/web-platform/lib/legal/legal-doc-shas.ts` — the anchor audit caught it). Enumeration:
-  `fetch-depth: 0` on the `e2e` checkout + guarded `if ! CHANGED=$(git diff --name-only
+  `fetch-depth: 0` on the `e2e` checkout + guarded `if ! CHANGED=$(git diff --name-status
   "origin/${BASE_REF}...HEAD"); then echo true; exit 0; fi` (bare `bash -e` abort would exit
   non-zero before the emit — Kieran finding; enumeration failure must emit `true`, only a
   genuinely broken script exits non-zero). Empty/unresolvable diff and every non-PR event
@@ -350,39 +351,53 @@ discoverability_test:
 
 ### Guard 1 — `ci-e2e-skip-anchors.test.sh`: the e2e skip gate cannot certify an app-affecting diff
 
-- **Property.** `e2e` skips heavy steps only when `ci-e2e-classify.sh` emits `false`, which it
-  does only on `pull_request` with a non-empty all-allowlisted changed-file list; classifier
-  failure exits non-zero → `e2e` reds (never a fabricated green-skip).
-- **Assembly.** Two chokepoints: (a) the shipped classifier `scripts/ci-e2e-classify.sh` — the
-  test executes the real artifact over fixture file-lists, never a re-implemented mirror; (b)
-  grep-anchored assertions on `ci.yml` itself — the classify step precedes the heavy steps, the
-  heavy-step `if:` references `steps.<id>.outputs.applicable == 'true'`, and the skip-verdict
-  step exists — a dropped wiring line reds even when the classifier is correct.
-- **Mutation matrix.**
-  - Classifier fed a change-set with one path outside the allowlist (`apps/web-platform/x.ts`) → `true`.
-  - Pure `knowledge-base/**` + root `*.md` change-set → `false` (must-PASS the skip arm — proves the gate isn't run-everything vacuous).
-  - `docs/legal/foo.md`-only change-set → `true` (the allowlist does NOT cover `docs/**` — pinned-SHA coupling).
-  - Mixed allowlist + `apps/` change-set → `true`; deleted-file-only, renamed-file, and empty change-sets → `true` (fail-closed).
-  - `push`, `merge_group`, `workflow_dispatch` event args → `true` unconditionally.
-  - Simulated diff/enumeration failure → classifier emits `true` (e2e runs — unresolvable is indistinguishable from unsafe); a genuinely broken script exits non-zero → `e2e` reds.
-  - Suite row: rename the `applicable` output key / drop the skip-verdict step → guard reds on a stale harness (self-check).
-- **Anchor.** The allowlist is the stored set; weakening it (adding `apps/**` or `docs/**`)
-  must red the audit assertion that safe-set ∩ app-affecting-set = ∅.
+**Property.** `e2e` skips heavy steps only when `ci-e2e-classify.sh` emits `false`, which it
+does only on `pull_request` with a non-empty all-allowlisted changed-file list; classifier
+failure exits non-zero → `e2e` reds (never a fabricated green-skip).
+
+**Assembly.** Two chokepoints: (a) the shipped classifier `scripts/ci-e2e-classify.sh` — the
+test executes the real artifact over fixture file-lists, never a re-implemented mirror; (b)
+grep-anchored assertions on `ci.yml` itself — the classify step precedes the heavy steps, the
+heavy-step `if:` references `steps.<id>.outputs.applicable == 'true'`, and the skip-verdict
+step exists — a dropped wiring line reds even when the classifier is correct.
+
+**Mutation matrix.**
+
+| # | Mutation | Must |
+|---|---|---|
+| 1 | Feed the classifier a change-set with one path outside the allowlist (`apps/web-platform/x.ts`) | `true` — unsafe paths can never skip. |
+| 2 | Pure `knowledge-base/**` + root `*.md` change-set | `false` — must-PASS the skip arm; proves the gate isn't run-everything vacuous. |
+| 3 | `docs/legal/foo.md`-only change-set | `true` — the allowlist does NOT cover `docs/**` (pinned-SHA coupling). |
+| 4 | Mixed allowlist + `apps/` change-set; deleted-file-only, renamed-file, typechange, and empty change-sets | `true` — fail-closed on every non-`M`/`A` row and on empty input. |
+| 5 | `push`, `merge_group`, `workflow_dispatch` event args | `true` unconditionally — skip is PR-diff-only. |
+| 6 | Simulated diff/enumeration failure (`--enum-failed`) | `true` — unresolvable is indistinguishable from unsafe; a genuinely broken script exits non-zero → `e2e` reds. |
+| 7 | Delete the `echo "applicable=$APPLICABLE" >> "$GITHUB_OUTPUT"` emit | RED — every `steps.detect.outputs.applicable` gate reads empty and green-skips e2e universally. |
+
+**Anchor.** The allowlist is the stored set; weakening it (adding `apps/**` or `docs/**`)
+must red the audit assertion that safe-set ∩ app-affecting-set = ∅.
 
 ### Guard 2 — `actions-queue-tail-8450.test.sh`: the soak probe cannot pass on stale or empty samples
 
-- **Property.** The probe exits 0 only when `plan.name == team`, ≥5 deploy-arm runs postdate
-  `UPGRADE_NOT_BEFORE` in-window, AND their p95 queued age is <15 min; empty or unmeasurable
-  samples fail, never pass.
-- **Assembly.** `gh api` per-workflow `actions/workflows/<id>/runs` + `actions/runs/<id>/jobs`;
-  never the repo-wide `?event=` filter (documented stale-window trap).
-- **Mutation matrix.**
-  - Fixture API response with zero deploy-arm runs in-window → probe reds (no vacuous pass on empty data).
-  - Fixture with p95 ≥15 min → reds.
-  - Fixture predating `UPGRADE_NOT_BEFORE` → reds (stale window rejected — same class as the `?event=schedule` trap).
-  - Fixture containing `push`-arm `web-platform-release` runs (release-only, no deploy chain) → excluded by the `--event workflow_run` filter; unfiltered fixture reds.
-  - Precondition fixture `plan.name == free` → `SKIP-DECLARED`, exit 0 (no alarm fatigue while AC-TEAM is pending).
-  - Harness row: point the probe at a synthetic fixture dir with a passing dataset → must PASS (proves the probe isn't fail-everything).
+**Property.** The probe exits 0 only when the plan is not a readable non-`team` value, ≥5
+deploy-arm runs postdate `UPGRADE_NOT_BEFORE` in-window, AND their p95 queued age is <15 min;
+empty or unmeasurable samples fail, never pass.
+
+**Assembly.** `gh api` per-workflow `actions/workflows/<id>/runs` + `actions/runs/<id>/jobs`;
+never the repo-wide `?event=` filter (documented stale-window trap).
+
+**Mutation matrix.**
+
+| # | Mutation | Must |
+|---|---|---|
+| 1 | Fixture API response with zero deploy-arm runs in-window | RED (exit 2, NOT YET) — no vacuous pass on empty data. |
+| 2 | Fixture with p95 ≥15 min | RED (exit 1, FAIL). |
+| 3 | Fixture predating `UPGRADE_NOT_BEFORE` | RED — stale window rejected, same class as the `?event=schedule` trap. |
+| 4 | Fixture containing `push`-arm `web-platform-release` runs (release-only, no deploy chain) | Excluded by the `workflow_run` event filter; unfiltered fixture reds. |
+| 5 | Precondition fixture `plan.name == free` (readable non-Team) | `SKIP-DECLARED`, exit 2 — no alarm fatigue while AC-TEAM is pending; an unreadable `.plan` proceeds on the cutoff instead. |
+| 6 | Fixture with queued-only jobs (`started_at == created_at`) or negative waits | Excluded — fake zero waits cannot fabricate a PASS. |
+
+**Harness row.** Point the probe at a synthetic fixture dir with a passing dataset → must
+PASS (proves the probe isn't fail-everything).
 
 ## Infrastructure (IaC)
 

@@ -2225,6 +2225,12 @@ if want_scripts; then
   # "the gate looked and the answer is no" (exit 2, NOT YET), keyed on the bracketed token of the
   # gate's verdict line. One arm per member of BOTH token sets, plus the never-0 invariant.
   run_suite "scripts/git-data-reboot-evidence-landed-8210" bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh
+  # #8450's close criterion (actions-queue-tail-8450.sh): PASS only on >=5
+  # post-upgrade workflow_run runs with p95 deploy-arm wait < 15 min — never on
+  # stale/empty/push-arm/queued-job samples, and never on an unmet precondition
+  # (exit 0 would auto-close the issue). Explicit run_suite —
+  # scripts/followthroughs/ is covered by no glob here.
+  run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.

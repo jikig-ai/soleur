@@ -88,12 +88,15 @@ alloc_port() {
 }
 
 # Start a python http.server in $FIXTURE_ROOT on $PORT. Wait for readiness with
-# a hard timeout (4s, 20 × 0.2s) — protects CI from a Python startup hang.
+# a hard timeout (15s, 75 × 0.2s) — protects CI from a Python startup hang. The
+# window was 4s; Python 3.14's `http.server` spends ~5.1s in address-family
+# probing before bind on a loaded host (measured 2026-09-21, 5/5 trials), so 4s
+# flaked RED on every run while the server was perfectly healthy.
 start_server() {
   PORT=$(alloc_port)
   python3 -m http.server "$PORT" --directory "$FIXTURE_ROOT" >/dev/null 2>&1 &
   HTTP_PID=$!
-  for _ in $(seq 1 20); do
+  for _ in $(seq 1 75); do
     if curl -fsS -m 1 "http://localhost:$PORT/" >/dev/null 2>&1; then
       return 0
     fi

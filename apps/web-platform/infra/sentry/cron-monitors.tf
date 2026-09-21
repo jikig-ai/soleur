@@ -25,12 +25,15 @@
 # issue). All hourly Inngest-fired monitors use 1; daily/weekly monitors
 # use 1 because a single miss on a daily monitor is itself noteworthy.
 #
-# `checkin_margin_minutes` is sized per-substrate. All hourly cron monitors
-# are now Inngest-fired (`scheduled_oauth_probe`, `scheduled_github_app_drift_guard`)
-# and use a 30-min margin — Inngest fires deterministically with ≤2-min
-# jitter, so 30 is honest. Daily/weekly monitors use 30-240 min as their
-# observed jitter dictates. The TR9 substrate-migration sequence completed
-# the move off GHA hourly cron: PR-1 #3985 (daily-triage), PR-2 #4062
+# `checkin_margin_minutes` is sized per-substrate. Hourly Inngest-fired
+# monitors (`scheduled_oauth_probe`, `scheduled_github_app_drift_guard`) use a
+# 30-min margin — Inngest fires deterministically with ≤2-min jitter, so 30 is
+# honest. #8450 re-added two hourly GHA-fired monitors
+# (`scheduled_prod_version_drift`, `zot_restart_loop_alarm`) with larger
+# margins (360/120) sized for GHA schedule-delivery jitter, not Inngest's.
+# Daily/weekly monitors use 30-240 min as their observed jitter dictates.
+# The TR9 substrate-migration sequence completed the move off GHA hourly cron
+# for the Inngest-fired cohort: PR-1 #3985 (daily-triage), PR-2 #4062
 # (follow-through), PR-3 #4227 closing issue #4211 (oauth-probe), PR-4
 # closing issue #4235 (github-app-drift-guard).
 #
@@ -1051,7 +1054,9 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 # succeeded and filed #5318 at 09:09 UTC; only its heartbeat was late). This monitor posts a SINGLE
 # end-of-run heartbeat within ~1-2 min of the checker finishing (a small bash probe, not a claude-eval
 # spawn). margin (120) == 2× the hourly inter-fire gap BY DESIGN: measured delivery of the old */30
-# cadence gapped up to 243 min, so margin == interval would false-page on ordinary jitter, while a
+# cadence gapped up to 243 min, so margin == interval would false-page on ordinary jitter — and an
+# unusually late check-in (gap > 120 min) can still false-page; that residual is accepted because
+# detection is window-bound (the alarm's own 3h look-back catches loops retroactively) while a
 # genuinely dead alarm still pages within ~2h of a missed expected fire. max_runtime_minutes = 10
 # mirrors the GHA-fired small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG
 # in the workflow's sentry-heartbeat step (scheduled-zot-restart-loop).

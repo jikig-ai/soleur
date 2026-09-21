@@ -1,4 +1,5 @@
 ---
+title: "gh api actions/runs?event=schedule can return a stale window — measure cron cadence per-workflow"
 synced_to: [brainstorm]
 ---
 

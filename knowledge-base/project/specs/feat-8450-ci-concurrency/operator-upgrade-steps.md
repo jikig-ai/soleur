@@ -47,13 +47,22 @@ current tier, not when it changed).
 After the PR merges, immediately shorten the Sentry monitor transition gap:
 
 ```bash
-gh workflow run apply-sentry-infra.yml
+gh workflow run apply-sentry-infra.yml -f reason="post-8450 monitor transition"
 ```
 
 Until that apply lands, the workflow schedules run at the new hourly cadence
 while the `zot_restart_loop_alarm` monitor still expects `*/30`/margin-30 — one
 transient missed-check-in issue is EXPECTED. A second, subsequent miss is a real
 signal, not the transition (Sentry repeat-issue silence class, #7142).
+
+Caveats:
+
+- The merge-triggered apply (the normal satisfier) must conclude **success** —
+  a failed apply leaves the same skew. `bootstrap.sh` checks `conclusion ==
+  success` since the merge before it reports this step done.
+- `apply-sentry-infra.yml` honors a `[skip-sentry-apply]` token in the push
+  commit message. If the merge commit ever carries it (it should not), the
+  merge-triggered apply is skipped silently and this dispatch is required.
 
 ## Step 5 — Enroll the soak probe
 

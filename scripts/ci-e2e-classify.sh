@@ -15,10 +15,11 @@
 #   * `docs/**` is deliberately NOT safe: the repo-root `docs/` tree is only
 #     `docs/legal/**`, which is app-coupled via the pinned document SHA-256s in
 #     apps/web-platform/lib/legal/legal-doc-shas.ts.
-#   * Any status other than M/A/T (deletion D, rename R, copy C, typechange T
-#     is allowed, unmerged U, …) emits `true` — an unresolvable or mutating
-#     changeset is indistinguishable from unsafe. Bare path-only lines (no
-#     status column) are treated as modified.
+#   * Only statuses M (modified) and A (added) may skip. Every other status —
+#     deletion D, rename R, copy C, typechange T (a file's KIND changed, e.g.
+#     file→symlink), unmerged U, … — emits `true`: an unresolvable or
+#     mutating changeset is indistinguishable from unsafe. Bare path-only
+#     lines (no status column) are treated as modified.
 #   * Any event other than `pull_request` (push, merge_group,
 #     workflow_dispatch, …) emits `true` unconditionally — only a PR diff has
 #     a trustworthy base.
@@ -45,7 +46,7 @@ case "$event" in
 esac
 
 saw_any=0
-while IFS= read -r line; do
+while IFS= read -r line || [ -n "$line" ]; do
   [ -z "$line" ] && continue
   saw_any=1
 
@@ -59,8 +60,8 @@ while IFS= read -r line; do
   fi
 
   case "$status" in
-    M|A|T) ;;
-    *) emit true ;;                          # D/R/C/U/… — mutating or unresolvable
+    M|A) ;;
+    *) emit true ;;                          # D/R/C/T/U/… — mutating or unresolvable
   esac
 
   case "$path" in

@@ -1599,10 +1599,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # Full history so the classifier's `origin/${GITHUB_BASE_REF}...HEAD`
-          # diff can resolve; a shallow clone would make every PR look
-          # unresolvable (which fails closed to applicable=true anyway).
-          fetch-depth: 0
+          # Full history on pull_request so the classifier's
+          # `origin/${GITHUB_BASE_REF}...HEAD` diff can resolve; a shallow
+          # clone would make every PR look unresolvable (which fails closed to
+          # applicable=true anyway). Other events never diff — depth 1.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
 
       # (#8450) In-job applicability probe — verdict observed correct on this
       # PR's own diff (report-only push), so the heavy steps below are gated on
@@ -1625,6 +1626,12 @@ jobs:
           else
             APPLICABLE="$(bash scripts/ci-e2e-classify.sh "$EVENT_NAME" </dev/null)"
           fi
+          # Empty/unknown verdict must red the job, not silently skip both the
+          # heavy steps AND the skip-verdict step.
+          case "$APPLICABLE" in
+            true|false) ;;
+            *) echo "::error::classifier emitted invalid verdict '$APPLICABLE'" >&2; exit 1 ;;
+          esac
           echo "applicable=$APPLICABLE" >> "$GITHUB_OUTPUT"
           echo "::notice::e2e applicable=$APPLICABLE (event=$EVENT_NAME)"
 

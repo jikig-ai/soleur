@@ -32,7 +32,7 @@
 ## Phase D — Probe + verification wiring
 
 - [x] D.0 RED: `scripts/followthroughs/actions-queue-tail-8450.test.sh` Guard 2 fixture matrix — must fail before probe exists
-- [x] D.1 Write `scripts/followthroughs/actions-queue-tail-8450.sh` (run-level `created_at→run_started_at`, `--event workflow_run` filter, `plan.name` precondition → SKIP-DECLARED, `UPGRADE_NOT_BEFORE` cutoff, ≥5 runs / p95<15min); pin `job.created_at` semantics empirically first
+- [x] D.1 Write `scripts/followthroughs/actions-queue-tail-8450.sh` (per-job `started_at − created_at` on the deploy-arm jobs — run-level `created_at→run_started_at` was falsified as vacuous, `--event workflow_run` filter, `plan.name` precondition → SKIP-DECLARED/NOT-YET, `UPGRADE_NOT_BEFORE` cutoff, ≥5 runs / p95<15min); pin `job.created_at` semantics empirically first
 - [x] D.1b Add `actions: read` to `scheduled-followthrough-sweeper.yml` job permissions
 - [x] D.1c `bootstrap.sh` — runnable form of `operator-upgrade-steps.md` (hr-multi-step-post-merge-bootstrap-script): class-3 barrier + `plan.name` verify, ledger/measurements PR, class-2-acked monitor dispatch, body directive + label
 - [ ] D.3b (post-upgrade, separate commit) ADR-032 reopener-(iii) flip

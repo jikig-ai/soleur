@@ -3438,7 +3438,7 @@
 - [shell inline env assignment expands before command](project/learnings/workflow-patterns/2026-09-15-shell-inline-env-assignment-expands-before-command.md)
 - [The collision gate is point-in-time: a cleared ref goes stale during planning](project/learnings/workflow-patterns/2026-09-17-the-collision-gate-is-point-in-time-a-cleared-ref-goes-stale-during-planning.md)
 - [Compaction state lives in the transcript, not a counter file — and a local SOLEUR_* marker never reaches Better Stack](project/learnings/workflow-patterns/2026-09-18-compaction-state-lives-in-the-transcript-not-a-counter-file.md)
-- [gh actions runs event schedule filter returns stale window](project/learnings/workflow-patterns/2026-09-21-gh-actions-runs-event-schedule-filter-returns-stale-window.md)
+- [gh api actions/runs?event=schedule can return a stale window — measure cron cadence per-workflow](project/learnings/workflow-patterns/2026-09-21-gh-actions-runs-event-schedule-filter-returns-stale-window.md)
 - [Version bump classification when wiring existing agents](project/learnings/workflow-patterns/version-bump-for-wiring-existing-agents.md)
 - [fix: Archiving broken due to slug extraction mismatch and incomplete cleanup](project/plans/2026-02-22-fix-archiving-broken-slug-extraction-plan.md)
 - [fix: Clean up plugin loader autocomplete pollution](project/plans/2026-02-22-fix-cleanup-autocomplete-pollution-plan.md)

@@ -21,8 +21,22 @@ run-level metric and the reviewers' job-level conflation concern alike:
   Sample finished jobs only.
 
 **Probe metric (corrected):** per-job `started_at − created_at` on the
-deploy-arm jobs (`migrate`, `deploy`) of `web-platform-release.yml` runs
-filtered `--event workflow_run` (excludes the push-arm release-only runs).
+deploy-arm jobs (`resolve-target`, `migrate`, `deploy`, `live-verify`) of
+`web-platform-release.yml` runs filtered `--event workflow_run` (excludes the
+push-arm release-only runs).
+
+**Caveat — two contaminants the metric does not separate:**
+
+1. *Concurrency-lock wait.* For a `needs:`-gated job the delta is
+   runner-acquisition wait PLUS any job-level concurrency-lock wait between
+   instantiation and start (e.g. the `web-1-swap` lock). Fail-safe direction —
+   it can delay a PASS, never fabricate one — but a PASS reads as "post-upgrade
+   deploy latency", not strictly "runner-pool wait".
+2. *Quiet-window bias.* The API cannot report how deep the org queue was at
+   each sampled run's `created_at`; baseline deploy-arm waits were already
+   0–4 s in quiet windows, so five quiet-window samples can PASS while a
+   saturated-window tail persists. The probe logs the CURRENT queued depth for
+   context; **D.4's manual re-evaluation is the load-conditioned check.**
 
 ## Baseline (pre-change, 2026-09-21)
 

@@ -106,7 +106,9 @@ expect_verdict "pure kb + root-md diff skips"           false pull_request $'M\t
 expect_verdict "docs/legal is NOT safe (pinned SHAs)"   true  pull_request $'M\tdocs/legal/foo.md\n'
 expect_verdict "mixed allowlist + app path runs"        true  pull_request $'M\tknowledge-base/a.md\nM\tapps/web-platform/x.ts\n'
 expect_verdict "deleted-file-only diff runs"            true  pull_request $'D\tknowledge-base/a.md\n'
+expect_verdict "typechange is NOT safe (kind mutates)"  true  pull_request $'T\tknowledge-base/a.md\n'
 expect_verdict "renamed file runs"                      true  pull_request $'R100\tknowledge-base/a.md\tknowledge-base/b.md\n'
+expect_verdict "added allowlisted file skips"           false pull_request $'A\tknowledge-base/a.md\n'
 expect_verdict "empty changeset runs"                   true  pull_request ''
 expect_verdict "subdir .md is NOT root-md safe"         true  pull_request $'M\tplugins/soleur/README.md\n'
 expect_verdict "workflow edit itself runs"              true  pull_request $'M\t.github/workflows/ci.yml\n'
@@ -125,18 +127,45 @@ expect_rc_nonzero "missing event arg exits non-zero"
 expect_rc_nonzero "unknown event arg exits non-zero"    bogus_event
 
 echo "── Guard 1: ci.yml wiring anchors"
-anchor "e2e classify step id: detect"                    "id: detect"
-anchor "classifier invoked from workflow"               "scripts/ci-e2e-classify.sh"
-anchor "full-history checkout for diff"                 "fetch-depth: 0"
-anchor "heavy-step gate expression"                     "if: steps.detect.outputs.applicable == 'true'"
-anchor "skip verdict surfaced"                          "e2e skipped"
-anchor "enum-failure fallback wired"                    "--enum-failed"
+# Section-scoped, not whole-file: needles like `fetch-depth: 0` appear a dozen
+# times outside the e2e job, so a whole-file grep is pre-satisfied and pins
+# nothing (the anchor would stay green if the e2e copy were deleted).
+e2e_section="$(awk '/^  e2e:/{f=1} f{print} /^  [a-z-]+:/ && f && !/^  e2e:/{exit}' "$CI_YML")"
+
+anchor_in_e2e() { # <desc> <fixed-string> — must appear INSIDE the e2e job.
+  local desc="$1" needle="$2"
+  if printf '%s\n' "$e2e_section" | grep -qF -e "$needle"; then
+    PASS=$((PASS + 1)); echo "ok   $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL $desc (missing in e2e job section: $needle)"
+  fi
+}
+
+anchor_in_e2e "e2e classify step id: detect"            "id: detect"
+anchor_in_e2e "classifier invoked from workflow"        "scripts/ci-e2e-classify.sh"
+anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && 0 || 1"
+# The diff range is load-bearing: a narrowed spec (HEAD~1, fixed base) hides
+# app changes in earlier commits of a multi-commit PR.
+anchor_in_e2e "diff range is the PR merge-base"         'git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD"'
+# The output emit is the single most dangerous line to lose: without it every
+# `== 'true'` gate is false and e2e green-skips on every PR.
+anchor_in_e2e "verdict emitted to GITHUB_OUTPUT"        'applicable=$APPLICABLE" >> "$GITHUB_OUTPUT'
+anchor_in_e2e "skip verdict surfaced"                   "e2e skipped"
+anchor_in_e2e "enum-failure fallback wired"             "--enum-failed"
 anchor_absent "no trigger-level paths: on e2e/CI"       "paths-ignore"
+
+# Every heavy step carries the gate — count, not presence: dropping the `if:`
+# from a subset of steps (e.g. leaving `Run E2E tests` ungated) must red.
+gate_count="$(printf '%s\n' "$e2e_section" | grep -c "steps.detect.outputs.applicable == 'true'")"
+if [ "$gate_count" -eq 4 ]; then
+  PASS=$((PASS + 1)); echo "ok   all 4 heavy/upload steps gated on applicable"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL applicable gate count is $gate_count, want 4"
+fi
 
 # The classify step must precede the heavy steps. Positional check: the
 # classifier invocation line must appear before the first `npm ci` inside the
 # e2e job section.
-e2e_section="$(awk '/^  e2e:/{f=1} f{print} /^  [a-z-]+:/ && f && !/^  e2e:/{exit}' "$CI_YML")"
 detect_line="$(printf '%s\n' "$e2e_section" | grep -n 'ci-e2e-classify' | head -1 | cut -d: -f1)"
 first_npm="$(printf '%s\n' "$e2e_section" | grep -n 'npm ci' | head -1 | cut -d: -f1)"
 if [ -n "$detect_line" ] && [ -n "$first_npm" ] && [ "$detect_line" -lt "$first_npm" ]; then
