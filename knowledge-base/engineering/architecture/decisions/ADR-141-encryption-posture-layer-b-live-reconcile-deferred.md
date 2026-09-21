@@ -4,7 +4,7 @@ status: adopting
 date: 2026-07-24
 related: [6902, 6588]
 related_adrs: [ADR-140-encryption-posture-as-a-design-time-default, ADR-117, ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn, ADR-123, ADR-126]
-blockers: [6894, 8386, 6897]  # 6895 superseded 2026-09-19 (#8386): closed on PR #6926's design merge, never shipped an emitter
+blockers: [6894, 6897]  # 6895 superseded 2026-09-19 (#8386): closed on PR #6926's design merge, never shipped an emitter. 8386 DISCHARGED 2026-09-20: the emitter landed (e193d7b8b), a registry-host replace delivered it (run 35489418603), and hcloud_volume.registry flipped to `available` with the floor at 2 — see the Addendum.
 brand_survival_threshold: aggregate pattern
 ---
 
@@ -79,7 +79,7 @@ guard, and file a tracking issue for the armed reconcile:
    on the ledger's own declared value, NOT an identity pin on `workspaces_luks`, so an honest
    individual re-ledgering (available → unavailable with a tracking issue) does not
    false-fail; only dropping below the floor does. The real ledger declares
-   `live_coverage_floor: 1`; every synthesized fixture omits the field, so the floor no-ops
+   `live_coverage_floor: 2` (it read 1 when this was written; raised 2026-09-20 — see the Addendum); every synthesized fixture omits the field, so the floor no-ops
    for them and no existing test changes.
 
 3. **Arm trigger.** Build the live reconcile only when an emitter (#6894 / #6895 / #6897)
@@ -141,6 +141,17 @@ the host does not run the emitter, because delivery costs a registry-host replac
 `apply-web-platform-infra.yml` is over GitHub's workflow-file size limit (#8361). The row flips —
 and the floor moves with it — in the commit recording an observed boot, graded by
 `scripts/followthroughs/registry-luks-live-8386.sh`.
+
+> **Superseded 2026-09-20 (#8386).** Both conditions in the paragraph above have discharged, in the
+> order it anticipated. #8361 closed 02:57Z; PR #8387 merged the emitter at 04:18Z (`e193d7b8b`);
+> `registry-host-replace` run 35489418603 delivered it at 04:33Z with the zot store volume
+> preserved; the host booted 04:35:35Z as `b3ec6c3b-e25d-4786-8c2e-66621e2de8aa`. The probe named
+> above graded that boot `v6_flip_ledger` over 120 confirming rows, and this is the commit it
+> asked for: `hcloud_volume.registry` reads `available` and `live_coverage_floor` is 2. The
+> paragraph is kept rather than rewritten because it records what was true when the decision was
+> taken — and because its **arm trigger** (Decision 3, *"build the live reconcile only when an
+> emitter lands a runner-reachable signal for a store the runner cannot see today"*) has now fired,
+> which is a live consequence rather than history.
 
 Restated blocker set: **#6894 / #8386 / #6897**, and the frontmatter is updated to match.
 #6895 is superseded rather than satisfied: it closed 2026-07-24T18:49:47Z on the merge of PR #6926,
