@@ -289,6 +289,48 @@ arm_reaper() {
   : > "$root/reaper-armed"
 }
 
+# ONE suite-wide `gh` stub, first on PATH for every arm (#8490 review). Before it, arms
+# without their own stub (A5, M3, …) reached the REAL `gh`, and the two per-arm stubs
+# checked only part of the call shape — dropping `--jq` left the suite green while the real
+# `gh` would have printed JSON that never counts as merged.
+#
+# Contract it enforces (exit 64 on ANY drift, so a changed call shape is loud):
+#   gh pr list --head <b> --state merged --limit 20 --json headRefOid,isCrossRepository --jq <expr>
+# It answers by running the SUT's own `<expr>` with the real `jq` over a per-arm JSON fixture
+# (`$GH_STUB_DIR/<head with / as __>.json`; absent = `[]`), so the jq filter itself — e.g. the
+# same-repo `isCrossRepository` select — is under test, not re-implemented here.
+# `GH_STUB_FAIL_HEAD=<b>` makes the query for <b> fail (rc 1). Every queried head is logged.
+GH_BIN="$TMP/gh-bin"
+assert_fixture_dir "$GH_BIN"
+mkdir -p "$GH_BIN" "$TMP/gh-empty" || { printf 'FATAL: cannot create gh stub dirs\n' >&2; exit 2; }
+cat > "$GH_BIN/gh" <<'GH_EOF'
+#!/usr/bin/env bash
+if [ "$#" -ne 12 ] || [ "$1" != pr ] || [ "$2" != list ] || [ "$3" != --head ] \
+   || [ "$5" != --state ] || [ "$6" != merged ] || [ "$7" != --limit ] || [ "$8" != 20 ] \
+   || [ "$9" != --json ] || [ "${10}" != headRefOid,isCrossRepository ] || [ "${11}" != --jq ]; then
+  echo "gh stub: call shape drift: $*" >&2
+  exit 64
+fi
+head="$4"; expr="${12}"
+[ -n "$head" ] || { echo "gh stub: empty --head" >&2; exit 64; }
+printf '%s\n' "$head" >> "${GH_STUB_LOG:?}"
+[ "$head" = "${GH_STUB_FAIL_HEAD:-}" ] && { echo "gh stub: simulated API failure" >&2; exit 1; }
+f="${GH_STUB_DIR:?}/${head//\//__}.json"
+if [ -f "$f" ]; then jq -r "$expr" "$f"; else printf '[]' | jq -r "$expr"; fi
+GH_EOF
+chmod +x "$GH_BIN/gh" || { printf 'FATAL: chmod gh stub failed\n' >&2; exit 2; }
+export PATH="$GH_BIN:$PATH"
+export GH_STUB_DIR="$TMP/gh-empty" GH_STUB_LOG="$TMP/gh-default.log"
+: > "$GH_STUB_LOG"
+
+# gh_merged_fixture <dir> <head> <json> — the merged-PR list the stub returns for <head>.
+gh_merged_fixture() {
+  local dir="$1" head="$2" json="$3"
+  assert_fixture_dir "$dir"
+  mkdir -p "$dir" || { printf 'FATAL: mkdir %s failed\n' "$dir" >&2; exit 2; }
+  printf '%s\n' "$json" > "$dir/${head//\//__}.json" || { printf 'FATAL: fixture write failed\n' >&2; exit 2; }
+}
+
 # run_reaper <script> <cwd> <state-root> <logfile> — drive cleanup-merged and capture rc.
 # `rc=$?` on its own line immediately after the command whose status matters, never through
 # a pipe: `cmd | tail` takes the pipe's status and destroys the evidence in the same stroke.
@@ -647,24 +689,11 @@ mk_squash_merged_branch "$A9/clone" "feat-a9-squashed"
 # So the fixture needs both a worktree and a `gh` stub reporting the PR merged.
 A9_WT="$A9/wt-a9"; assert_fixture_dir "$A9_WT"
 fgit -C "$A9/clone" worktree add -q "$A9_WT" "feat-a9-squashed"
-A9_BIN="$TMP/a9-bin"; mkdir -p "$A9_BIN"
-cat > "$A9_BIN/gh" <<'GH_EOF'
-#!/usr/bin/env bash
-# Model the real contract: `gh pr list --head <b> --state merged --limit 1 --json number
-# --jq length` prints the COUNT. Refuse anything else so a drifted call shape is loud (exit 64)
-# rather than silently answering the wrong question.
-if [ "$1" = pr ] && [ "$2" = list ]; then
-  case " $* " in *" --state merged "*) printf '1
-'; exit 0 ;; esac
-  printf '0
-'; exit 0
-fi
-echo "gh stub: unexpected invocation: $*" >&2
-exit 64
-GH_EOF
-chmod +x "$A9_BIN/gh"
+A9_GH="$TMP/a9-gh"
+gh_merged_fixture "$A9_GH" "feat-a9-squashed" \
+  "[{\"headRefOid\":\"$(fgit -C "$A9/clone" rev-parse refs/heads/feat-a9-squashed)\",\"isCrossRepository\":false}]"
 A9_STATE="$TMP/a9-state"; arm_reaper "$A9_STATE"
-PATH="$A9_BIN:$PATH" run_reaper "$SCRIPT" "$A9/clone" "$A9_STATE" "$TMP/a9.log"
+GH_STUB_DIR="$A9_GH" run_reaper "$SCRIPT" "$A9/clone" "$A9_STATE" "$TMP/a9.log"
 
 if local_branch_exists "$A9/clone" "feat-a9-squashed"; then
   fail "A9a: a squash-merged branch was NOT reaped — the dominant cohort stopped being cleaned up"
@@ -811,33 +840,17 @@ fgit -C "$A14/clone" worktree add -q "$A14_WT2" "feat-a14-unmerged"
 fgit -C "$A14/clone" push -q origin --delete feat-a14-merged
 fgit -C "$A14/clone" push -q origin --delete feat-a14-unmerged
 fgit -C "$A14/clone" fetch -q --prune --no-tags
-A14_BIN="$TMP/a14-bin"; mkdir -p "$A14_BIN"
+A14_GH="$TMP/a14-gh"
+gh_merged_fixture "$A14_GH" "feat-a14-merged" \
+  "[{\"headRefOid\":\"$(fgit -C "$A14/clone" rev-parse refs/heads/feat-a14-merged)\",\"isCrossRepository\":false}]"
 A14_GHLOG="$TMP/a14-gh.log"; : > "$A14_GHLOG"
-cat > "$A14_BIN/gh" <<'GH_EOF'
-#!/usr/bin/env bash
-# Keyed on --head so "one merged, one not" is expressible; logs each queried head so the row
-# can prove the [gone] branches were ASKED about (the defect was that they never were).
-if [ "$1" = pr ] && [ "$2" = list ]; then
-  head=""; prev=""
-  for a in "$@"; do [ "$prev" = --head ] && head="$a"; prev="$a"; done
-  case " $* " in *" --state merged "*) : ;; *) echo "gh stub: missing --state merged: $*" >&2; exit 64 ;; esac
-  [ -n "$head" ] || { echo "gh stub: missing --head: $*" >&2; exit 64; }
-  printf '%s\n' "$head" >> "$A14_GHLOG"
-  if [ "$head" = feat-a14-merged ]; then printf '1\n'; else printf '0\n'; fi
-  exit 0
-fi
-echo "gh stub: unexpected invocation: $*" >&2
-exit 64
-GH_EOF
-chmod +x "$A14_BIN/gh"
 A14_STATE="$TMP/a14-state"; arm_reaper "$A14_STATE"
-export A14_GHLOG
-PATH="$A14_BIN:$PATH" run_reaper "$SCRIPT" "$A14/clone" "$A14_STATE" "$TMP/a14.log"
+GH_STUB_DIR="$A14_GH" GH_STUB_LOG="$A14_GHLOG" run_reaper "$SCRIPT" "$A14/clone" "$A14_STATE" "$TMP/a14.log"
 
-if local_branch_exists "$A14/clone" "feat-a14-merged"; then
-  fail "A14a: a [gone] squash-merged branch with a worktree was NOT reaped — the gh query skipped it (#8490)"
+if [[ "$RC" -eq 0 ]] && ! local_branch_exists "$A14/clone" "feat-a14-merged" && [[ ! -d "$A14_WT1" ]]; then
+  pass "A14a: a [gone] squash-merged branch and its worktree are reaped on gh merge evidence (rc 0)"
 else
-  pass "A14a: a [gone] squash-merged branch with a worktree is reaped on gh merge evidence"
+  fail "A14a: a [gone] squash-merged branch with a worktree was NOT fully reaped (rc=$RC) — the gh query skipped it (#8490)"
 fi
 if grep -qxF "SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=$A14_SHA local=yes remote=no" "$TMP/a14.log"; then
   pass "A14b: the reap emitted its sentinel with the pre-run short tip (sha=$A14_SHA)"
@@ -858,6 +871,72 @@ if grep -qxF feat-a14-merged "$A14_GHLOG" && grep -qxF feat-a14-unmerged "$A14_G
   pass "A14e: both [gone] worktree branches were queried on GitHub"
 else
   fail "A14e: a [gone] worktree branch was never queried on GitHub (log: $(tr '\n' ' ' < "$A14_GHLOG"))"
+fi
+
+# ===========================================================================================
+# A15 — the gh evidence is pinned to the COMMIT, not the branch NAME (#8490 review, P1).
+# With [gone] branches now reaching the gh query, a name-only match would license
+# `git branch -D` over commits that exist nowhere else. Three [gone] worktree branches:
+#   * feat-a15-moved — a merged PR exists, but the local tip carries a (backdated) commit
+#     made AFTER the merged head: must be KEPT.
+#   * feat-a15-fork  — the only merged PR with this head name is a FORK's
+#     (`isCrossRepository: true`), at this very tip: must be KEPT (the jq filter is the SUT's).
+#   * feat-a15-ghdown — the gh query fails: must be KEPT, and the failure must be reported
+#     on stdout rather than read as "not merged".
+# ===========================================================================================
+echo "A15. merged-PR evidence must contain the local tip, be same-repo, and a gh failure is loud"
+A15="$TMP/a15"; mk_repo "$A15"
+mk_squash_merged_branch "$A15/clone" "feat-a15-moved"
+mk_squash_merged_branch "$A15/clone" "feat-a15-fork"
+mk_squash_merged_branch "$A15/clone" "feat-a15-ghdown"
+A15_MERGED_HEAD="$(fgit -C "$A15/clone" rev-parse refs/heads/feat-a15-moved)"
+# The post-merge commit: backdated past the commit-age grace, committed (clean tree), unpushed.
+_a15_when="$(( $(date +%s) - 100000 ))"
+fgit -C "$A15/clone" checkout -q feat-a15-moved || { printf 'FATAL: checkout failed\n' >&2; exit 2; }
+env "${FIXTURE_GIT_ENV[@]}" GIT_COMMITTER_DATE="$_a15_when" GIT_AUTHOR_DATE="$_a15_when" \
+  git -C "$A15/clone" commit -q --allow-empty -m "follow-up after the merge" \
+  || { printf 'FATAL: post-merge commit failed\n' >&2; exit 2; }
+fgit -C "$A15/clone" checkout -q main || { printf 'FATAL: checkout main failed\n' >&2; exit 2; }
+for _b in moved fork ghdown; do
+  _wt="$A15/wt-a15-$_b"; assert_fixture_dir "$_wt"
+  fgit -C "$A15/clone" worktree add -q "$_wt" "feat-a15-$_b" || { printf 'FATAL: worktree add failed\n' >&2; exit 2; }
+  fgit -C "$A15/clone" push -q origin --delete "feat-a15-$_b" || { printf 'FATAL: remote delete failed\n' >&2; exit 2; }
+done
+fgit -C "$A15/clone" fetch -q --prune --no-tags
+A15_GH="$TMP/a15-gh"
+gh_merged_fixture "$A15_GH" "feat-a15-moved" "[{\"headRefOid\":\"$A15_MERGED_HEAD\",\"isCrossRepository\":false}]"
+gh_merged_fixture "$A15_GH" "feat-a15-fork" \
+  "[{\"headRefOid\":\"$(fgit -C "$A15/clone" rev-parse refs/heads/feat-a15-fork)\",\"isCrossRepository\":true}]"
+gh_merged_fixture "$A15_GH" "feat-a15-ghdown" \
+  "[{\"headRefOid\":\"$(fgit -C "$A15/clone" rev-parse refs/heads/feat-a15-ghdown)\",\"isCrossRepository\":false}]"
+A15_STATE="$TMP/a15-state"; arm_reaper "$A15_STATE"
+GH_STUB_DIR="$A15_GH" GH_STUB_FAIL_HEAD="feat-a15-ghdown" run_reaper "$SCRIPT" "$A15/clone" "$A15_STATE" "$TMP/a15.log"
+
+if local_branch_exists "$A15/clone" "feat-a15-moved" && [[ -d "$A15/wt-a15-moved" ]]; then
+  pass "A15a: a tip with commits after the merged head is kept (evidence is pinned to the commit)"
+else
+  fail "A15a: a branch with post-merge commits was force-deleted on a name-only merge match"
+fi
+if grep -qE '^\(skip\) feat-a15-moved - a merged PR uses this name but the local tip [0-9a-f]{12} is not in any merged head' "$TMP/a15.log"; then
+  pass "A15b: the pinning skip names its cause"
+else
+  fail "A15b: no pinning skip line for feat-a15-moved"
+fi
+if local_branch_exists "$A15/clone" "feat-a15-fork" && [[ -d "$A15/wt-a15-fork" ]]; then
+  pass "A15c: a fork PR sharing the head name is not merge evidence"
+else
+  fail "A15c: a branch was reaped on a cross-repository (fork) PR's merge"
+fi
+if local_branch_exists "$A15/clone" "feat-a15-ghdown" \
+   && grep -qxF 'SOLEUR_CLEANUP_GH_QUERY_FAILED branch=feat-a15-ghdown rc=1' "$TMP/a15.log"; then
+  pass "A15d: a failed gh query keeps the branch and is reported on stdout"
+else
+  fail "A15d: a gh failure was silent or reaped the branch"
+fi
+if [[ "$RC" -eq 0 ]] && ! grep -qE '^SOLEUR_WORKTREE_REAPED ' "$TMP/a15.log"; then
+  pass "A15e: nothing was reaped in the pinning fixture (rc 0)"
+else
+  fail "A15e: a reap happened in a fixture with no pinned merge evidence (rc=$RC)"
 fi
 
 echo "S. instrument self-test"
@@ -888,7 +967,7 @@ printf '  pass: self-test — pass() and fail() both move the counters and the l
 # above is unbound in that slice, so the mutant dies at `set -u` and the floor scores
 # CONSTRUCTION rather than FIRES.
 # ===========================================================================================
-MIN_ASSERTIONS=38
+MIN_ASSERTIONS=43
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions executed, floor is %s — rows were removed or an arm aborted early.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2
