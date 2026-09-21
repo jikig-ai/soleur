@@ -21,10 +21,20 @@ if [[ ! -x "$SCRIPT" ]]; then
   exit 2
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "FATAL: python3 required for fixture HTTP server" >&2
-  exit 2
-fi
+# Capability-absent on a dev host is a printed SKIP with exit 0, not a RED; under
+# CI the same absence is a runner-contract breach and must fail. Verbatim shape
+# from git-data-emit.test.sh's _skip.
+_skip() {
+  if [ "${CI:-}" = "true" ]; then
+    echo "$1 — and CI=true, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
+    exit 1
+  fi
+  echo "$1" >&2
+  exit 0
+}
+
+command -v python3 >/dev/null 2>&1 || _skip "canary-bundle-claim-check: SKIP — python3 required for fixture HTTP server"
+command -v curl >/dev/null 2>&1 || _skip "canary-bundle-claim-check: SKIP — curl required for the fixture readiness probe"
 
 # Canonical anon-key payload: {iss:"supabase", role:"anon", ref:"aaaaaaaaaaaaaaaaaaaa"}
 # (20-char placeholder ref, passes all canonical claim checks). Pre-baked so each
@@ -102,6 +112,40 @@ start_server() {
   echo "FATAL: http.server did not start on port $PORT within 4s" >&2
   return 1
 }
+
+# Up-front capability probe: run the suite's real fixture mechanism once before
+# any F-row. A raw socket bind is NOT a substitute — measured on a host where
+# `socketserver.TCPServer` binds instantly but `python3 -m http.server` never
+# serves loopback within the readiness window, so only the real invocation is an
+# honest precondition for all 13 fixtures. The server's stderr is captured (not
+# discarded like start_server's) so the SKIP verdict carries why the capability
+# is absent.
+probe_loopback_http() {
+  local scratch port pid
+  scratch=$(mktemp -d /tmp/canary-probe.XXXXXX)
+  port=$(alloc_port)
+  python3 -m http.server "$port" --directory "$scratch" >"$scratch/server.log" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 20); do
+    if curl -fsS -m 1 "http://localhost:$port/" >/dev/null 2>&1; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      rm -rf "$scratch"
+      return 0
+    fi
+    sleep 0.2
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  echo "http.server probe stderr (last 5 lines):" >&2
+  tail -5 "$scratch/server.log" >&2
+  rm -rf "$scratch"
+  return 1
+}
+
+if ! probe_loopback_http; then
+  _skip "canary-bundle-claim-check: SKIP — python3 http.server cannot bind+serve loopback on this host; the fixture mechanism every F-row depends on is absent (CI exercises the full suite)"
+fi
 
 # Build a minimal /login HTML body that references the given chunk paths. Each
 # arg is a chunk path under /_next/static/chunks/...; the function emits a

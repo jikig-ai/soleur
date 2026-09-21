@@ -33,10 +33,14 @@ SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
 
 PASS=0
 FAIL=0
+SKIPPED=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 finish() {
+  if [[ "$SKIPPED" -gt 0 ]]; then
+    echo "=== Skipped: $SKIPPED assertion(s) declined ==="
+  fi
   echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
   [[ "$FAIL" -eq 0 ]]
 }
@@ -196,8 +200,15 @@ else
   if [[ -z "$ZOT_IMAGE" ]]; then
     fail "could not read the pinned zot image from zot-registry.tf — acceptance cannot be tested against an unpinned digest"
   elif ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    fail "docker is unavailable, so the pinned digest could not adjudicate the config. This guard FAILS CLOSED: set SOLEUR_ZOT_GUARD_NO_DIGEST=1 to decline the half explicitly rather than have it pass silently."
+    if [[ "${CI:-}" == "true" || -n "${GITHUB_ACTIONS:-}" ]]; then
+      fail "docker is unavailable, so the pinned digest could not adjudicate the config. This guard FAILS CLOSED in CI: the deploy-script-tests runner is contracted to provide docker (the 'Assert docker is available' step precedes this suite), so a daemonless run is a runner defect — never a decline."
+    else
+      echo "  SKIP: docker absent or daemon unreachable by this user — digest acceptance half declined"
+      echo "        The static relations above were checked; ACCEPTANCE BY ZOT WAS NOT OBTAINED."
+      SKIPPED=$((SKIPPED + 2))
+    fi
   else
+    DIGEST_RAN=1
     zot_verify() { # $1=config path -> prints combined output; returns zot's rc
       timeout 300 docker run --rm -v "$1:/tmp/zot-guard.json:ro" "$ZOT_IMAGE" verify /tmp/zot-guard.json 2>&1
     }
@@ -232,7 +243,7 @@ fi
 #   1  split-brain (both keys present)
 #   1  gcDelay parses
 #   2  deadlines x 2 relations each (>= largest-layer budget, < gcDelay)
-#   2  digest acceptance + its negative control   [only when the digest half runs]
+#   2  digest acceptance + its negative control   [only when the digest half RAN]
 # A short count means an early `continue` fired or an unpopulated config slipped through as
 # green — both of which look identical to a pass from the summary line alone.
 # ---------------------------------------------------------------------------
@@ -240,7 +251,9 @@ DEADLINE_KEYS=2
 RELATIONS_PER_KEY=2
 EXPECTED_MIN=$(( 1 + 1 + (DEADLINE_KEYS * RELATIONS_PER_KEY) ))
 [[ -z "${CONFIG_JSON_OVERRIDE:-}" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 3 ))
-[[ "${SOLEUR_ZOT_GUARD_NO_DIGEST:-0}" != "1" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 2 ))
+# Keyed on the digest half having actually dispatched (DIGEST_RAN), not on the env var —
+# a capability decline leaves NO_DIGEST unset but runs neither digest assertion.
+[[ -n "${DIGEST_RAN:-}" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 2 ))
 # ---------------------------------------------------------------------------
 # S4 — SYNTHESIZED ROWS. Every assertion above ran against ONE fixture (the real render), in which
 # both keys are present and 1800s sits far from both bounds — so `&&` was indistinguishable from
@@ -306,6 +319,15 @@ fi
 # unresolved class — the exact FAIL-vs-cannot-measure confusion this suite's exit contract turns
 # on. The derived check above carries the parent's stronger requirement; this one only has to
 # catch a total collapse, and under a neutered assertion machinery the count goes to 0.
+#
+# DECLINE CEILING. Exactly one capability-decline site exists (the digest half) and its
+# cost is fixed at the digest pair, so SKIPPED is 0 or 2 by construction — anything higher
+# means a second decline site snuck in and must not pass silently.
+if [[ "$SKIPPED" -gt 2 ]]; then
+  echo "  FATAL: decline ceiling — $SKIPPED assertions were declined, max 2 (the digest pair). A second decline site is not permitted." >&2
+  exit 2
+fi
+
 FAIL_FLOOR_MIN=7
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
