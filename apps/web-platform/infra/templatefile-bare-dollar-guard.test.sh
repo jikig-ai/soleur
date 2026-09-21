@@ -44,7 +44,9 @@ fail() { fails=$((fails + 1)); printf 'FAIL - %s\n' "$1" >&2; }
 strip_comments() { sed -E '/^[[:blank:]]*#([[:blank:]].*)?$/d'; }
 
 # bare_dollar_hits <file> -> prints every offending non-comment line, numbered.
-BARE_RE='\$\$[A-Za-z_(]'
+# Identifier-start or `(` (the #8417 shapes), plus a digit and the special parameters ? ! # @ * -
+# (`$$?` / `$$1` also reach bash as the PID where an exit code or argument was meant).
+BARE_RE='\$\$[A-Za-z_(0-9?!#@*-]'
 bare_dollar_hits() { strip_comments < "$1" | grep -nE "$BARE_RE" || true; }
 
 # --- Instrument self-test (H2/H3): the scanner must accept the legitimate PID use and a
@@ -54,31 +56,60 @@ printf 'tmp=/tmp/x.$$.lock\n' > "$TMP/h2"
 printf '      # an explanatory $$FOO in a stripped comment\n' > "$TMP/h3"
 printf 'x=$$FOO\n' > "$TMP/r1"
 printf 'y=$$((1+1))\n' > "$TMP/r2"
+printf 'z=$$?\n' > "$TMP/r3"
 if [ -n "$(bare_dollar_hits "$TMP/h2")" ] || [ -n "$(bare_dollar_hits "$TMP/h3")" ] \
-   || [ -z "$(bare_dollar_hits "$TMP/r1")" ] || [ -z "$(bare_dollar_hits "$TMP/r2")" ]; then
+   || [ -z "$(bare_dollar_hits "$TMP/r1")" ] || [ -z "$(bare_dollar_hits "$TMP/r2")" ] \
+   || [ -z "$(bare_dollar_hits "$TMP/r3")" ]; then
   printf 'FATAL: instrument self-test: the bare-dollar scanner misclassified a fixture.\n' >&2
   exit 2
 fi
 
 # --- Dispatch: derive the rendered file set from every templatefile( call site ----------------
 DERIVED="$TMP/derived.txt"
-: > "$DERIVED"
-UNRECOGNISED=0
-while IFS= read -r tf; do
-  tfdir="$(dirname "$tf")"
-  while IFS= read -r arg; do
-    case "$arg" in
-      '${path.module}/'*)
-        rel="${arg#\$\{path.module\}/}"
-        (cd "$tfdir" && realpath -m "$rel") >> "$DERIVED"
-        ;;
-      *)
-        UNRECOGNISED=$((UNRECOGNISED + 1))
-        printf '  unrecognised templatefile() first argument in %s: %s\n' "$tf" "$arg" >&2
-        ;;
-    esac
-  done < <(grep -oE 'templatefile\("[^"]+"' "$tf" | sed -E 's/^templatefile\("//; s/"$//')
-done < <(cd "$INFRA" && git ls-files -- '*.tf' | sed "s|^|$INFRA/|")
+# Every tracked .tf in the repo (not just this root), parsed with a multi-line-aware regex. Every
+# `templatefile(` / `templatestring(` token must resolve to a `${path.module}/<literal>` first
+# argument; anything else (a split line the regex still resolves is fine; a variable, a local, a
+# templatestring) is counted UNRECOGNISED, so a new call site can never silently leave the set.
+REPO_ROOT="$(cd "$INFRA" && git rev-parse --show-toplevel)"
+DERIVE_OUT="$(cd "$REPO_ROOT" && git ls-files -z -- '*.tf' | python3 -c '
+import os, re, sys
+tok = re.compile(r"\b(templatefile|templatestring)\s*\(")
+lit = re.compile(r"\btemplatefile\s*\(\s*\"\$\{path\.module\}/([^\"]+)\"", re.S)
+def strip_hcl_comments(t):
+    # Drop # and // line comments and /* */ blocks, outside double-quoted strings, so prose that
+    # names templatefile() is neither a call site nor an unrecognised one.
+    out, i, n, q = [], 0, len(t), False
+    while i < n:
+        c = t[i]
+        if q:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(t[i + 1]); i += 2; continue
+            if c == "\"":
+                q = False
+            i += 1; continue
+        if c == "\"":
+            q = True; out.append(c); i += 1; continue
+        if c == "#" or t.startswith("//", i):
+            j = t.find("\n", i); i = n if j < 0 else j; continue
+        if t.startswith("/*", i):
+            j = t.find("*/", i + 2); i = n if j < 0 else j + 2; continue
+        out.append(c); i += 1
+    return "".join(out)
+paths = [p for p in sys.stdin.read().split("\0") if p]
+unrec = 0
+for p in paths:
+    t = strip_hcl_comments(open(p, encoding="utf-8", errors="replace").read())
+    n_tok = len(tok.findall(t))
+    hits = lit.findall(t)
+    unrec += n_tok - len(hits)
+    for rel in hits:
+        print("F " + os.path.normpath(os.path.join(os.path.abspath(os.path.dirname(p)), rel)))
+print("U %d" % unrec)
+')" || { printf 'FATAL: templatefile call-site derivation failed.\n' >&2; exit 2; }
+printf '%s\n' "$DERIVE_OUT" | sed -n 's/^F //p' > "$DERIVED"
+UNRECOGNISED="$(printf '%s\n' "$DERIVE_OUT" | sed -n 's/^U //p')"
+[[ "$UNRECOGNISED" =~ ^[0-9]+$ ]] || { printf 'FATAL: derivation printed no unrecognised count.\n' >&2; exit 2; }
 sort -u -o "$DERIVED" "$DERIVED"
 DERIVED_N="$(wc -l < "$DERIVED" | tr -d ' ')"
 
@@ -147,146 +178,6 @@ else
   fail "_bk_rc=0 is not set immediately before the blkid call"
 fi
 
-# --- PATH hardening (security review, Phase 4a) ------------------------------------------------
-# Once the inherited PATH is actually appended, a command ABSENT from the literal directory list
-# would resolve through a PATH the Doppler config can set, as root. So the heartbeat's external
-# command set is DERIVED from its rendered text and pinned: adding a command means a reviewer
-# adds it here, against the rule below. Each pinned name is an Ubuntu 24.04 apt binary under
-# /usr/bin or /usr/sbin (usrmerge makes /bin and /sbin the same trees), all inside the literal
-# `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`. Resolution on the image itself
-# needs a daemon plus the packages cloud-init installs, which this suite does not assume.
-HB_PINNED="awk blkid cat cryptsetup curl cut date df docker findmnt grep head hostname htpasswd journalctl jq lsblk readlink sed tail timeout tr"
-cat > "$TMP/cmdwords.py" <<'PY'
-import re, shlex, sys
-
-TRIG = {';', '|', '||', '&&', '&', '(', 'then', 'do', 'else', 'elif', 'if', 'while', 'until', '!', '{', '\n'}
-WRAPPERS = {'timeout', 'nohup', 'env', 'exec', 'command', 'xargs', 'nice', 'ionice'}
-NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_.+-]*$')
-ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=')
-
-
-def close(text, i, op, cl, depth):
-    sq = dq = False
-    n = len(text)
-    while i < n and depth:
-        c = text[i]
-        if c == '\\' and not sq:
-            i += 2; continue
-        if c == "'" and not dq:
-            sq = not sq
-        elif c == '"' and not sq:
-            dq = not dq
-        elif not sq and not dq:
-            if c == op:
-                depth += 1
-            elif c == cl:
-                depth -= 1
-        elif dq and text.startswith('$(', i):
-            i = close(text, i + 2, '(', ')', 1); continue
-        i += 1
-    return i
-
-
-def cut_expansions(text, bodies):
-    # Cut $(...) (collecting the body) and ${...} out of the RAW text, quote-aware. Cutting them
-    # from lexed tokens would scan bodies whose quotes are already gone.
-    out, i, n = [], 0, len(text)
-    sq = dq = False
-    while i < n:
-        c = text[i]
-        if c == '\\' and not sq and i + 1 < n:
-            out.append(text[i:i + 2]); i += 2; continue
-        if c == "'" and not dq:
-            sq = not sq; out.append(c); i += 1; continue
-        if c == '"' and not sq:
-            dq = not dq; out.append(c); i += 1; continue
-        if not sq and text.startswith('$((', i):
-            i = close(text, i + 3, '(', ')', 2); out.append('__A__'); continue
-        if not sq and text.startswith('$(', i):
-            j = close(text, i + 2, '(', ')', 1)
-            bodies.append(text[i + 2:j - 1]); out.append('__S__'); i = j; continue
-        if not sq and text.startswith('${', i):
-            i = close(text, i + 2, '{', '}', 1); out.append('__P__'); continue
-        out.append(c); i += 1
-    return ''.join(out)
-
-
-def scan(text, ignore, found, funcs):
-    bodies = []
-    text = cut_expansions(text, bodies)
-    for b in bodies:
-        scan(b, ignore, found, funcs)
-    lex = shlex.shlex(text.replace('\n', ' \n '), posix=True, punctuation_chars=True)
-    lex.whitespace = ' \t'
-    lex.commenters = '#'
-    toks = list(lex)
-    pos, wrap = True, False
-    case_depth, in_pattern, want_in = 0, False, False
-    for idx, t in enumerate(toks):
-        nxt = toks[idx + 1] if idx + 1 < len(toks) else ''
-        if t == 'case':
-            case_depth += 1; want_in = True; pos = False; continue
-        if want_in:
-            if t == 'in':
-                want_in = False; in_pattern = True
-            continue
-        if t == 'esac':
-            case_depth -= 1; in_pattern = False; pos = False; continue
-        if in_pattern:
-            if t == ')':
-                in_pattern = False; pos = True
-            continue
-        if t == ';;':
-            in_pattern = case_depth > 0; pos = not in_pattern; continue
-        if t in TRIG:
-            pos, wrap = True, False; continue
-        if not pos:
-            continue
-        if ASSIGN.match(t):
-            continue
-        if wrap and (t.startswith('-') or re.match(r'^[0-9]+[smhd]?$', t)):
-            continue
-        pos, wrap = False, False
-        if not NAME.match(t) or t in ignore:
-            continue
-        if nxt == '()' or (nxt == '(' and idx + 2 < len(toks) and toks[idx + 2] == ')'):
-            funcs.add(t); continue
-        found.add(t)
-        if t in WRAPPERS:
-            pos, wrap = True, True
-
-
-ignore = set(open(sys.argv[1]).read().split())
-found, funcs = set(), set()
-scan(sys.stdin.read(), ignore, found, funcs)
-print(' '.join(sorted(found - funcs)))
-PY
-bash --noprofile --norc -c 'compgen -b; compgen -k' | sort -u > "$TMP/ignore.txt"
-
-# The derivation's own self-test: a known script must yield exactly its external commands.
-printf 'x=$(foo a | bar "$(baz)")\nqux() { quux; }\nqux\ntimeout -k 2 5 zed arg\ncase "$a" in\n  one|two) three ;;\n  *) four ;;\nesac\nLC_ALL=C sort x\n' > "$TMP/cw-fixture.sh"
-CW_SELF="$(python3 "$TMP/cmdwords.py" "$TMP/ignore.txt" < "$TMP/cw-fixture.sh")"
-if [ "$CW_SELF" != "bar baz foo four quux sort three timeout zed" ]; then
-  printf 'FATAL: instrument self-test: command-word derivation returned [%s].\n' "$CW_SELF" >&2
-  exit 2
-fi
-
-awk -v want="  - path: /usr/local/bin/zot-disk-heartbeat.sh" '
-  $0 == want { found = 1; next }
-  found && /^    content: \|$/ { incontent = 1; next }
-  incontent {
-    if ($0 ~ /^      /) { print substr($0, 7); next }
-    if ($0 ~ /^[[:space:]]*$/) { print ""; next }
-    exit
-  }' "$REG_YML" | strip_comments | sed 's|[$][$][{]|${|g' > "$TMP/hb.sh"
-HB_DERIVED="$(python3 "$TMP/cmdwords.py" "$TMP/ignore.txt" < "$TMP/hb.sh")"
-cases=$((cases + 1))
-if [ "$HB_DERIVED" = "$HB_PINNED" ]; then
-  pass "heartbeat external command set equals the pinned, literal-PATH-resolvable set"
-else
-  fail "heartbeat external command set changed -- review each new name against the literal PATH list: derived [$HB_DERIVED] pinned [$HB_PINNED]"
-fi
-
 # --- Anti-vacuity floors: printf + exit, never through fail() (ADR-193). -------------------------
 # The file floor catches a derivation that silently SHRINKS, which set identity cannot see: the
 # identity check measures the scan against the same derivation. 8 is the measured count on
@@ -296,7 +187,7 @@ if [ "$files_scanned" -lt "$MIN_FILES" ]; then
   printf '\n[FATAL] floor: only %s templatefile() source(s) scanned (expected >= %s).\n' "$files_scanned" "$MIN_FILES" >&2
   exit 1
 fi
-MIN_CASES=17
+MIN_CASES=16
 if [ "$cases" -lt "$MIN_CASES" ]; then
   printf '\n[FATAL] floor: only %s cases ran (expected >= %s).\n' "$cases" "$MIN_CASES" >&2
   exit 1

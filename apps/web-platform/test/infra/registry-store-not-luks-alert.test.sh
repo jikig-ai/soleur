@@ -86,6 +86,15 @@ grep -qF 'sql_query = replace(trimspace(local.registry_store_not_luks_sql), "/\\
   && ok "the exploration carries THIS predicate, collapsed to one line (the siblings' perpetual-diff rule)" \
   || no "the exploration does not carry local.registry_store_not_luks_sql"
 
+# EXACT PIN. The per-arm rows below say WHY each piece matters; this row says nothing else is
+# there. Arithmetic on a comparison (`+ 100000`), a zeroed aggregate (`count(*) * 0`) or an extra
+# disjunct all keep every per-arm substring present, and only a whole-predicate pin sees them.
+_M="JSONExtractString(raw, 'message')"
+EXPECTED_FLAT="SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}} AND startsWith(raw, '{\"message\":\"SOLEUR_ZOT_DISK ') AND position($_M, 'SOLEUR_ZOT_DISK ') = 1 AND ( NOT (position($_M, 'store_luks=yes ') > 0 AND position($_M, 'store_luks=yes ') < position($_M, ' zot_last_err=')) OR (position($_M, 'store_escrow=') > 0 AND position($_M, 'store_escrow=') < position($_M, ' zot_last_err=') AND position($_M, 'store_escrow=ok ') != position($_M, 'store_escrow=') AND position($_M, 'store_escrow=pending ') != position($_M, 'store_escrow=')) ) GROUP BY time"
+[ "$FLAT" = "$EXPECTED_FLAT" ] \
+  && ok "the whole predicate is byte-exact (SELECT, aggregate, both arms, GROUP BY)" \
+  || no "the predicate drifted from the pinned text — diff FLAT against EXPECTED_FLAT"
+
 # Column form. Every position() reads JSONExtractString(raw, 'message'); a bare column is an
 # unknown-identifier error at query time, i.e. a rule that never pages.
 n_pos="$(printf '%s' "$FLAT" | grep -oF 'position(' | wc -l | tr -d ' ')"
@@ -144,6 +153,10 @@ grep -qF "position(JSONExtractString(raw, 'message'), 'store_escrow=') > 0" <<<"
 grep -qF "position(JSONExtractString(raw, 'message'), 'store_escrow=ok ') != position(JSONExtractString(raw, 'message'), 'store_escrow=')" <<<"$ARM_B" \
   && ok "arm B's only quiet state is 'store_escrow=ok ' at the head field's own position (any other token pages)" \
   || no "arm B no longer negates the exact 'store_escrow=ok ' literal — stale/none/indeterminate would go silent"
+
+grep -qF "position(JSONExtractString(raw, 'message'), 'store_escrow=pending ') != position(JSONExtractString(raw, 'message'), 'store_escrow=')" <<<"$ARM_B" \
+  && ok "arm B also exempts 'store_escrow=pending ' (the first-boot window before the deferred run lands)" \
+  || no "arm B pages on 'pending' — every registry replace would page for its first 15+ minutes"
 
 # Resource-block scoped reads (awk range from the resource header to its closing brace).
 EXP_BLOCK="$(awk '/^resource "logtail_exploration" "registry_store_not_luks"/,/^}/' "$TF")"
@@ -243,7 +256,7 @@ blk = s[i:j]
 assert blk.count("\x27store_luks=yes \x27") == 2
 s = s[:i] + blk.replace("\x27store_luks=yes \x27", "\x27store_luks=yes\x27") + s[j:]'
   mutate red "M5 arm B narrowed back to store_escrow=fail" tf \
-    'old = "\n          AND position('"$Q"', \x27store_escrow=ok \x27) != position('"$Q"', \x27store_escrow=\x27))"
+    'old = "\n          AND position('"$Q"', \x27store_escrow=ok \x27) != position('"$Q"', \x27store_escrow=\x27)\n          AND position('"$Q"', \x27store_escrow=pending \x27) != position('"$Q"', \x27store_escrow=\x27))"
 assert s.count(old) == 1
 s = s.replace(old, ")")
 i = s.index("registry_store_not_luks_sql = <<-SQL"); j = s.index("  SQL\n", i)
@@ -255,6 +268,20 @@ s = s[:i] + blk.replace("\x27store_escrow=\x27", "\x27store_escrow=fail\x27") + 
 blk = s[i:j]
 assert blk.count("JSONExtractString(raw, \x27message\x27)") >= 7
 s = s[:i] + blk.replace("JSONExtractString(raw, \x27message\x27)", "msg") + s[j:]'
+  mutate red "M7 arm B drops the pending exemption" tf \
+    'old = "\n          AND position('"$Q"', \x27store_escrow=pending \x27) != position('"$Q"', \x27store_escrow=\x27))"
+assert s.count(old) == 1
+s = s.replace(old, ")")'
+  mutate red "M8 arithmetic on arm A's ordering comparison (+ 100000)" tf \
+    'old = "\x27store_luks=yes \x27) < position('"$Q"', \x27 zot_last_err=\x27))"
+assert s.count(old) == 1
+s = s.replace(old, "\x27store_luks=yes \x27) < position('"$Q"', \x27 zot_last_err=\x27) + 100000)")'
+  mutate red "M9 the aggregate is zeroed (count(*) * 0)" tf \
+    'i = s.index("registry_store_not_luks_sql = <<-SQL"); j = s.index("  SQL\n", i)
+blk = s[i:j]
+old = "SELECT {{time}} AS time, count(*) AS value"
+assert blk.count(old) == 1
+s = s[:i] + blk.replace(old, "SELECT {{time}} AS time, count(*) * 0 AS value") + s[j:]'
   mutate red "H1 the heredoc the extractor reads is renamed (extracted SQL empty)" tf \
     'assert s.count("registry_store_not_luks_sql = <<-SQL") == 1
 s = s.replace("registry_store_not_luks_sql = <<-SQL", "registry_store_not_luks_sql_v2 = <<-SQL")'
@@ -267,8 +294,8 @@ assert s.count(old2) == 1
 s = s.replace(old2, "\n  OR   (position(")'
 fi
 
-_floor=26
-[ -n "${MUT_SKIP:-}" ] && _floor=18
+_floor=35
+[ -n "${MUT_SKIP:-}" ] && _floor=24
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi

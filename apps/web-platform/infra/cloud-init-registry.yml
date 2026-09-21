@@ -187,8 +187,11 @@ write_files:
       # therefore let anyone who can write a secret into that config own root's FIRST resolution
       # of cryptsetup and blkid, every five minutes. The behavioural suite gets its seam at RENDER
       # time (zot-disk-heartbeat-redaction.test.sh substitutes this literal), never at runtime.
-      # APPEND, never prepend and never absolute paths: that suite's PATH stubs must still win.
-      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin$${PATH:+:$${PATH}}"
+      # LITERAL ONLY (#8417 review): the inherited PATH is never appended. Every command this script
+      # runs lives in the list, and an append would let a PATH secret in the config store resolve
+      # any command absent from it, as root. (Until #8417 the append never worked anyway: a bare
+      # `$$PATH` rendered as the PID, so production has only ever run with exactly this list.)
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       # LC_ALL=C for the same reason one line up: the guards below are character CLASSES, whose
       # membership is locale-defined, and `doppler run` injects LANG/LC_ALL from the config store
       # exactly as it injects PATH. betterstack-query.sh pins this and records why; the lesson was
@@ -837,6 +840,11 @@ write_files:
       # a day, not hide. Absent file = none. Anything off-vocabulary = __UNREADABLE__.
       STORE_ESCROW=none
       STORE_ESCROW_AGE_S=-1
+      # `pending`: no result yet on a freshly booted instance (the boot run is deferred 15 min).
+      # Only before two hours of uptime; after that an absent file is `none`, which pages.
+      _up_s="$(awk '{ printf "%d", $1 }' /proc/uptime 2>/dev/null)"
+      case "$_up_s" in '' | *[!0-9]*) _up_s=999999 ;; esac
+      if [ ! -e /var/lib/soleur-registry/escrow.state ] && [ "$_up_s" -lt 7200 ]; then STORE_ESCROW=pending; fi
       if [ -e /var/lib/soleur-registry/escrow.state ]; then
         _esc="$(timeout 5 cat /var/lib/soleur-registry/escrow.state 2>/dev/null | head -c 128)"
         _esr="$(printf '%s\n' "$_esc" | sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' | head -1)"
@@ -845,12 +853,18 @@ write_files:
           ok | fail_passphrase | fail_header | fail_key_absent | indeterminate) STORE_ESCROW="$_esr" ;;
           *) STORE_ESCROW=__UNREADABLE__ ;;
         esac
+        # 10#: a leading zero would otherwise be read as octal, and `09` is an arithmetic ERROR
+        # that aborts this script under `set -u` -- losing the whole row, not just this field.
         case "$_esa" in
-          '' | *[!0-9]*) STORE_ESCROW=__UNREADABLE__ ;;
+          '' | *[!0-9]* | ?????????????*) STORE_ESCROW=__UNREADABLE__ ;;
           *)
-            STORE_ESCROW_AGE_S=$(( $(date +%s) - _esa ))
+            STORE_ESCROW_AGE_S=$(( $(date +%s) - 10#$_esa ))
+            # `stale` replaces only a result that claims health or says nothing (ok /
+            # indeterminate): a fail_* token keeps its remediation cue however old it is.
             if [ "$STORE_ESCROW_AGE_S" -lt 0 ]; then STORE_ESCROW_AGE_S=-1
-            elif [ "$STORE_ESCROW_AGE_S" -gt 93600 ] && [ "$STORE_ESCROW" != __UNREADABLE__ ]; then STORE_ESCROW=stale; fi
+            elif [ "$STORE_ESCROW_AGE_S" -gt 93600 ]; then
+              case "$STORE_ESCROW" in ok | indeterminate) STORE_ESCROW=stale ;; esac
+            fi
             ;;
         esac
       fi
@@ -1846,19 +1860,34 @@ write_files:
       esac
       # Memory pre-check. The zot cap is host RAM minus ~1024 MB and an argon2id keyslot can ask
       # for up to ~1 GiB, so the first runtime KDF with zot resident is exactly when an OOM kill
-      # would take zot. Proceed only with the slot's PBKDF memory plus 256 MiB available.
-      # (luksDump's `Memory:` line is non-secret KDF metadata; LUKS1/pbkdf2 has none, i.e. 0.)
-      _need_kib="$(timeout 10 cryptsetup luksDump "$DEV" 2>/dev/null | awk '/^[[:space:]]*Memory:/ { if ($2 + 0 > m) m = $2 + 0 } END { print m + 0 }')"
-      _avail_kib="$(awk '/^MemAvailable:/ { print $2 + 0; exit }' /proc/meminfo 2>/dev/null)"
+      # would take zot. Proceed only with the largest slot's PBKDF memory plus 256 MiB available.
+      # (luksDump's `Memory:` lines are non-secret KDF metadata; LUKS1/pbkdf2 has none, i.e. 0.)
+      # luksDump's own rc is checked: an awk over empty input prints 0, which would pass the
+      # check with only 256 MiB free.
+      _ld_rc=0
+      _dump="$(timeout 10 cryptsetup luksDump "$DEV" 2>/dev/null)" || _ld_rc=$?
+      [ "$_ld_rc" -eq 0 ] || { write_state indeterminate; exit 0; }
+      _need_kib="$(printf '%s\n' "$_dump" | awk '/^[[:space:]]*Memory:/ { if ($2 + 0 > m) m = $2 + 0 } END { print m + 0 }')"
       case "$_need_kib" in '' | *[!0-9]*) write_state indeterminate; exit 0 ;; esac
-      case "$_avail_kib" in '' | *[!0-9]*) write_state indeterminate; exit 0 ;; esac
-      if [ "$_avail_kib" -lt $(( _need_kib + 262144 )) ]; then write_state indeterminate; exit 0; fi
-      # The proof. --test-passphrase opens nothing. OOMScoreAdjust=1000 makes the kernel pick this
-      # test over zot if memory runs out anyway. The key goes through a pipe, never argv or a
+      # A single sample would turn one busy minute into a day of `indeterminate` (the result is
+      # re-reported every 5 min until the next run). Three samples, five minutes apart.
+      _mem_ok=0
+      for _try in 1 2 3; do
+        _avail_kib="$(awk '/^MemAvailable:/ { print $2 + 0; exit }' /proc/meminfo 2>/dev/null)"
+        case "$_avail_kib" in '' | *[!0-9]*) write_state indeterminate; exit 0 ;; esac
+        if [ "$_avail_kib" -ge $(( _need_kib + 262144 )) ]; then _mem_ok=1; break; fi
+        [ "$_try" -lt 3 ] && sleep 300
+      done
+      [ "$_mem_ok" -eq 1 ] || { write_state indeterminate; exit 0; }
+      # OOM shield: make THIS process (and so the cryptsetup it starts, which inherits the value)
+      # the kernel's first victim, never zot. Written directly: `systemd-run --scope` rejects
+      # OOMScoreAdjust= (an exec property, not a scope one), which is how the first cut of this
+      # script could never run a single test. If the shield cannot be raised, do not run the KDF.
+      printf '1000\n' > /proc/self/oom_score_adj 2>/dev/null || { write_state indeterminate; exit 0; }
+      # The proof. --test-passphrase opens nothing. The key goes through a pipe, never argv or a
       # here-string (which bash writes to a temp file).
       _tp_rc=0
-      printf '%s' "$REGISTRY_LUKS_KEY" | timeout 120 systemd-run --scope --quiet -p OOMScoreAdjust=1000 \
-        cryptsetup luksOpen --test-passphrase --key-file - "$DEV" >/dev/null 2>&1 || _tp_rc=$?
+      printf '%s' "$REGISTRY_LUKS_KEY" | timeout 120 cryptsetup luksOpen --test-passphrase --key-file - "$DEV" >/dev/null 2>&1 || _tp_rc=$?
       case "$_tp_rc" in
         0) write_state ok ;;
         2) write_state fail_passphrase ;;
@@ -1872,7 +1901,10 @@ write_files:
     content: |
       # #8408 (c): daily escrow re-test. Minute 19 intersects none of this host's other cron.d
       # minute sets (*/5, 2-59/5, 3-59/5): concurrent `doppler run` jobs strain the ~1024 MB reserve.
-      19 3 * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh
+      # --no-fallback: the test must use the key Doppler holds NOW, never a cached copy (and must
+      # not refresh the on-disk fallback cache with the LUKS key daily). The heartbeat's `stale`
+      # threshold (93600 s) is one day of this schedule plus two hours; move them together.
+      19 3 * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY --no-fallback -- /usr/local/bin/registry-luks-escrow.sh
     owner: root:root
     permissions: '0644'
 
@@ -1967,7 +1999,13 @@ write_files:
       ZOT_START_ACTION=none
       if mountpoint -q /var/lib/zot 2>/dev/null; then
         ZOT_STORE_MOUNTED=true
-        if [ "$(docker inspect -f '{{.State.Running}}' zot 2>/dev/null)" != true ] && [ -e "$R/var/lib/zot/.soleur-luks-sentinel" ]; then
+        # Only a container that EXISTS and is neither running nor mid-restart (racing docker's own
+        # restart manager would report a false start_failed), and only a REGULAR-file sentinel (a
+        # symlink here is the escape the launch block hardens against). Note: this also undoes a
+        # deliberate `docker stop zot` within one tick -- stop the guard's cron first for maintenance.
+        _zst="$(docker inspect -f '{{.State.Running}} {{.State.Restarting}}' zot 2>/dev/null)"
+        if [ -n "$_zst" ] && [ "$_zst" = "false false" ] \
+           && [ -f "$R/var/lib/zot/.soleur-luks-sentinel" ] && [ ! -L "$R/var/lib/zot/.soleur-luks-sentinel" ]; then
           if docker start zot >/dev/null 2>&1; then ZOT_START_ACTION=start_ok; else ZOT_START_ACTION=start_failed; fi
         fi
       else
@@ -2296,8 +2334,16 @@ runcmd:
     # sentinel, no start. The write sits inside the same findmnt conjunction as this gate, so it
     # can never land on the root disk. It proves the failure mode (a closed mapper) is absent; it
     # is not an adversary control -- a root copy of the store, sentinel included, would pass it.
+    # Hardened against the one party that can write here: zot itself (it mounts /var/lib/zot rw).
+    # Docker FOLLOWS a symlink bind source on the host, so a zot that replaced the sentinel with a
+    # link to /etc/default/registry-doppler would get that file mounted in on its next start. A
+    # symlink is removed and re-created, and the file is made immutable (+i), which a container
+    # without CAP_LINUX_IMMUTABLE cannot unlink or rename over. A failed write is not fatal: a
+    # missing sentinel refuses zot's start by itself, which is the fail-closed direction.
     if [ "$(findmnt -no SOURCE /var/lib/zot)" = /dev/mapper/registry ]; then
-      [ -e /var/lib/zot/.soleur-luks-sentinel ] || install -m 0444 -o root -g root /dev/null /var/lib/zot/.soleur-luks-sentinel
+      [ -L /var/lib/zot/.soleur-luks-sentinel ] && rm -f /var/lib/zot/.soleur-luks-sentinel
+      [ -e /var/lib/zot/.soleur-luks-sentinel ] || install -m 0444 -o root -g root /dev/null /var/lib/zot/.soleur-luks-sentinel || true
+      chattr +i /var/lib/zot/.soleur-luks-sentinel 2>/dev/null || true
     fi
     docker run -d --name zot --restart unless-stopped \
       --log-driver journald \
@@ -2316,11 +2362,12 @@ runcmd:
     done
     ZOTEOF
 
-  # #8408 (c): the escrow re-test, once at boot, BACKGROUNDED and AFTER zot's start, so a slow
-  # KDF can never lengthen the pull path's downtime, and store_escrow= is populated from this boot
-  # rather than sitting at `none` until 03:19. The SAME wrapper as the cron line: a bare run would
-  # have no key in its env and record fail_key_absent.
-  - set -a; . /etc/default/registry-doppler; set +a; nohup doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh >/dev/null 2>&1 &
+  # #8408 (c): the escrow re-test on an instance's FIRST boot (runcmd is per-instance), BACKGROUNDED,
+  # and deferred 15 minutes past zot's start so its KDF never competes with zot's startup store scan
+  # or the boot heartbeat/NIC-guard `doppler run`s. Until it lands the heartbeat reads
+  # `store_escrow=pending` (uptime < 2 h, no state file), which the alert does not page on. The SAME
+  # wrapper as the cron line: a bare run would have no key in its env and record fail_key_absent.
+  - set -a; . /etc/default/registry-doppler; set +a; nohup sh -c 'sleep 900; exec doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY --no-fallback -- /usr/local/bin/registry-luks-escrow.sh' >/dev/null 2>&1 &
 
   # Disk-capacity guard: ensure cron is active and emit the first disk heartbeat + SOLEUR_ZOT_DISK
   # self-report now that zot is up, so Better Stack goes green AND the first telemetry event lands

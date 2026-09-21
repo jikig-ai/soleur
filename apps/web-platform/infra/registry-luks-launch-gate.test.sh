@@ -59,10 +59,21 @@ passes=0; fails=0; cases=0
 JOINED="$TMP/joined.txt"
 awk '{ if (sub(/\\[[:blank:]]*$/, "")) { buf = buf $0; next } print NR ": " buf $0; buf = "" }' "$CI_YML" > "$JOINED"
 ZOT_RUNS="$(grep -E 'docker run [^#]*--name zot( |$)' "$JOINED" || true)"
+# Repo-wide, any spelling: `docker [container] run|create ... --name[= ]zot`, in every tracked
+# script, template and workflow (not only this template). A second site in ANY file is a second
+# way to start zot that the sentinel bind may not cover.
+REPO_ROOT="$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel 2>/dev/null)"
+ALL_ZOT_SITES="$(cd "$REPO_ROOT" && git ls-files -z -- '*.yml' '*.yaml' '*.sh' '*.tf' '*.tmpl' ':!*.test.sh' ':!knowledge-base/**' \
+  | xargs -0 awk '{ if (sub(/\\[[:blank:]]*$/, "")) { buf = buf $0; next } line = buf $0; buf = "" }
+      line ~ /^[[:blank:]]*#/ { next }
+      line ~ /docker[[:blank:]]+(container[[:blank:]]+)?(run|create)[[:blank:]]/ && line ~ /--name[= ]zot([[:blank:]]|$)/ { print FILENAME }' 2>/dev/null | sort | uniq -c)"
+ALL_ZOT_N="$(printf '%s\n' "$ALL_ZOT_SITES" | awk 'NF { s += $1 } END { print s + 0 }')"
 ZOT_RUN_N="$(grep -c . <<<"$ZOT_RUNS" || true)"
 [ -n "$ZOT_RUNS" ] || ZOT_RUN_N=0
 check "exactly ONE \`docker run … --name zot\` site in the template (set identity; found $ZOT_RUN_N)" \
   "[ '$ZOT_RUN_N' -eq 1 ]"
+check "repo-wide, exactly ONE zot run/create site of any spelling, and it is this template (found: $(tr -s ' \n' ' ' <<<"$ALL_ZOT_SITES"))" \
+  "[ '$ALL_ZOT_N' -eq 1 ] && grep -qE '^ *1 apps/web-platform/infra/cloud-init-registry.yml$' <<<\"\$ALL_ZOT_SITES\""
 check "the zot run binds the sentinel with --mount type=bind (a missing source refuses the start)" \
   "grep -qF -- '--mount type=bind,source=$SENT,target=/run/soleur-luks-sentinel,readonly' <<<\"\$ZOT_RUNS\""
 check "the zot run never binds the sentinel with -v (which would CREATE a missing source)" \
@@ -71,7 +82,7 @@ check "the zot run never binds the sentinel with -v (which would CREATE a missin
 # Ordering, on physical line numbers: gate < conjunction < write < run.
 GATE_LN="$(grep -nF 'findmnt -no SOURCE /var/lib/zot | grep -qx /dev/mapper/registry ||' "$CI_YML" | head -1 | cut -d: -f1)"
 CONJ_LN="$(grep -nF 'if [ "$(findmnt -no SOURCE /var/lib/zot)" = /dev/mapper/registry ]; then' "$CI_YML" | head -1 | cut -d: -f1)"
-WRITE_LN="$(grep -nE "install -m 0444 -o root -g root /dev/null $SENT\$" "$CI_YML" | head -1 | cut -d: -f1)"
+WRITE_LN="$(grep -nE "install -m 0444 -o root -g root /dev/null $SENT( \|\| true)?\$" "$CI_YML" | head -1 | cut -d: -f1)"
 FI_LN="$(awk -v s="${CONJ_LN:-0}" 'NR > s && /^[[:blank:]]*fi[[:blank:]]*$/ { print NR; exit }' "$CI_YML")"
 RUN_LN="$(grep -nE '^[[:blank:]]*docker run -d --name zot ' "$CI_YML" | head -1 | cut -d: -f1)"
 check "the first-boot findmnt gate, the sentinel conjunction, the write and the zot run were all located" \
@@ -84,8 +95,12 @@ check "exactly one sentinel write in the template (no second, unconditional copy
   "[ \"\$(grep -cE 'install [^#]*$SENT' '$CI_YML')\" -eq 1 ]"
 
 # The recovery arm (its behaviour is pinned in private-nic-guard.test.sh T12*).
-check "the NIC guard's recovery arm is keyed on .State.Running AND the sentinel" \
-  "grep -qF \"if [ \\\"\\\$(docker inspect -f '{{.State.Running}}' zot 2>/dev/null)\\\" != true ] && [ -e \\\"\\\$R$SENT\\\" ]; then\" '$CI_YML'"
+check "the NIC guard's recovery arm reads .State.Running AND .State.Restarting of an EXISTING container" \
+  "grep -qF \"_zst=\\\"\\\$(docker inspect -f '{{.State.Running}} {{.State.Restarting}}' zot 2>/dev/null)\\\"\" '$CI_YML' && grep -qF 'if [ -n \"\$_zst\" ] && [ \"\$_zst\" = \"false false\" ]' '$CI_YML'"
+check "the recovery arm requires a REGULAR-file, non-symlink sentinel (the bind-source escape)" \
+  "grep -qF '&& [ -f \"\$R$SENT\" ] && [ ! -L \"\$R$SENT\" ]; then' '$CI_YML'"
+check "the launch block removes a symlinked sentinel and makes the sentinel immutable (+i)" \
+  "grep -qF '[ -L $SENT ] && rm -f $SENT' '$CI_YML' && grep -qF 'chattr +i $SENT' '$CI_YML'"
 check "the recovery arm starts zot (docker start, not a re-run)" \
   "grep -qF 'if docker start zot >/dev/null 2>&1; then ZOT_START_ACTION=start_ok; else ZOT_START_ACTION=start_failed; fi' '$CI_YML'"
 check "zot_start_action rides the POSTed SOLEUR_PRIVATE_NIC line, before zot_last_err=" \
@@ -102,6 +117,11 @@ check "the writer emits all six luks-open arms (derived: $(tr '\n' ' ' <<<"$WRIT
   "[ \"\$(grep -c . <<<\"\$WRITTEN\")\" -eq 6 ]"
 check "writer set == reader set (a token the reader rejects would read __UNREADABLE__ forever)" \
   "[ \"\$WRITTEN\" = \"\$READ_SET\" ]"
+ARM_DEFS="$(grep -E '^[[:blank:]]*arm\(\) \{' "$CI_YML" | sed -E 's/^[[:blank:]]+//')"
+check "arm() is defined exactly twice (outer script + the doppler heredoc) and the two are byte-identical" \
+  "[ \"\$(grep -c . <<<\"\$ARM_DEFS\")\" -eq 2 ] && [ \"\$(sort -u <<<\"\$ARM_DEFS\" | grep -c .)\" -eq 1 ]"
+check "the reader reads the SAME path every arm() writer renames into" \
+  "grep -qF 'mv -f /run/soleur-registry/luks-open.arm.tmp /run/soleur-registry/luks-open.arm' <<<\"\$ARM_DEFS\" && grep -qF '[ -e /run/soleur-registry/luks-open.arm ]' '$CI_YML'"
 check "the arm file lives on tmpfs (/run), so it can never carry a previous boot's answer" \
   "grep -qF 'printf '\\''%s\\n'\\'' \"\$1\" > /run/soleur-registry/luks-open.arm.tmp' '$CI_YML'"
 
@@ -159,12 +179,12 @@ check "-v NEGATIVE CONTROL: start still SUCCEEDS after the source is deleted (do
   "[ \"\$(start_rc '$V')\" -eq 0 ]"
 
 # --- Anti-vacuity floors: printf + exit, never through check() (ADR-193) ------------------------
-MIN_STATIC=13
+MIN_STATIC=18
 if [ "$STATIC_CASES" -lt "$MIN_STATIC" ]; then
   printf '\n[FATAL] floor: only %s static cases ran (expected >= %s).\n' "$STATIC_CASES" "$MIN_STATIC" >&2
   exit 1
 fi
-MIN_CASES=22
+MIN_CASES=27
 if [ "$cases" -lt "$MIN_CASES" ]; then
   printf '\n[FATAL] floor: only %s cases ran (expected >= %s).\n' "$cases" "$MIN_CASES" >&2
   exit 1

@@ -601,6 +601,50 @@ onto an unencrypted path would pass the gate.
 
 ---
 
+## `registry_store_not_luks` fired: triage
+
+The Better Stack alert `soleur-registry-store-not-luks-prd` (#8408) pages when the registry
+heartbeat's trusted head (everything before ` zot_last_err=`) lacks `store_luks=yes`, **or** carries <!-- markdownlint-disable-line MD038 -->
+a `store_escrow=` token other than `ok` or `pending`. Nothing here needs SSH. Read the newest rows:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK
+```
+
+Decode each row per the query script's header, cut it at ` zot_last_err=`, and read `store_luks=`, <!-- markdownlint-disable-line MD038 -->
+`luks_open_arm=`, `store_escrow=` and `store_escrow_age_s=` from the part before the cut. Never read
+a field from the tail: it is zot's own log text.
+
+**Arm A: `store_luks` is not `yes`.** `luks_open_arm=` says which branch of `registry-luks-open.sh`
+ran this boot:
+
+| `luks_open_arm=` | Meaning | Action |
+|---|---|---|
+| `key_empty` | Doppler returned no `REGISTRY_LUKS_KEY` | Restore the secret in `soleur-registry/prd` from Doppler's history, then replace the host (`registry-host-replace`). zot stays fail-closed until then. |
+| `open_failed` | The key did not open the header, or `doppler run` never reached the open | Check `store_escrow=`. `fail_passphrase` there confirms a key/header mismatch: restore the key the header was formatted with, from Doppler's history. |
+| `dev_absent` | The volume is not attached | Re-run the infra apply; the attachment is Terraform-owned. |
+| `not_luks` | The attached volume has no LUKS header | The store is plaintext or blank. Walk this runbook from **What authorizes a recut**. |
+| `none` / `already_open` / `opened` | The open path is not the cause | Read `store_mount_src=` and `store_backing_dev=`. A mount that does not come from `/dev/mapper/registry` means something other than the reopen script mounted `/var/lib/zot`. |
+
+**Arm B: `store_escrow` is not `ok`.** The store is up and on LUKS, and the question is whether the
+next reboot can reopen it:
+
+| `store_escrow=` | Meaning | Action |
+|---|---|---|
+| `fail_passphrase` | The Doppler key no longer opens the header | **Do not reboot or replace the host.** The mapper is open now, and the next reopen will fail. Restore the matching key from Doppler's history before anything restarts the host. |
+| `fail_header` | No readable LUKS header on the backing device | Treat as a store integrity incident. Do not reboot; plan a recut (this runbook). |
+| `fail_key_absent` | The escrow run had no key in its environment | Same as `key_empty` above, caught before a reboot needed it. |
+| `indeterminate` | The test could not run (low memory after three samples, a refused tool, a crash) | Not a verdict. One day of this is noise; two consecutive days means the job is not measuring. Check host memory on the heartbeat (`mem_total_mb`, `zot_anon_mb`). |
+| `stale` | The last `ok`/`indeterminate` is older than 26 h | The daily cron (03:19 UTC) is not running or not writing. |
+| `none` | No result file, and the host has been up for more than 2 h | The escrow job has never written on this boot. The first-boot run is deferred 15 minutes. |
+| `__UNREADABLE__` | The state file is off-vocabulary | Treat as `none`. |
+
+`pending` does **not** page. It means no result exists yet and the host has been up for less than
+2 hours (the first-boot run lands about 15 minutes after zot starts). One transient row does not page
+either: the rule needs at least 2 matching rows in a 900 s bucket.
+
+---
+
 ## Related
 
 **Unblocking this runbook:**

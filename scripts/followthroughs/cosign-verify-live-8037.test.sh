@@ -25,6 +25,13 @@ checks=0
 cases=0
 pass() { printf '  PASS: %s\n' "$1"; checks=$((checks + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); checks=$((checks + 1)); }
+# INSTRUMENT SELF-TEST: pass() and fail() must each move their counters, or every verdict below
+# is unmeasured (a neutered fail() would turn this whole file green).
+pass "self-test" >/dev/null; fail "self-test" 2>/dev/null
+if [[ "$checks" -ne 2 || "$fails" -ne 1 ]]; then
+  echo "[FATAL] instrument self-test: pass()/fail() did not record one pass and one fail" >&2; exit 2
+fi
+fails=0; checks=0
 
 [[ -f "$SUT" ]] || { echo "FATAL: SUT not found at $SUT" >&2; exit 1; }
 [[ -x "$SUT" ]] || { echo "FATAL: SUT not executable at $SUT" >&2; exit 1; }
@@ -126,6 +133,12 @@ run_case "exact 'IMAGE_VERIFY: ok' message under SYSLOG_IDENTIFIER=doppler does 
 row "$HA" "$T1" "$OK_MSG" ci-deploy-canary > "$(fx contam-prefix)"
 run_case "SYSLOG_IDENTIFIER that merely CONTAINS ci-deploy does not count -> 2" 2 "Zero hosts" "$(fx contam-prefix)"
 
+# The evidence gate's BOUNDARY: a record at exactly earliest counts (>=), one microsecond before it
+# does not. The +/-1h rows around it cannot tell `>=` from `>` or from an off-by-one-second cut.
+row "$HA" "$E_US" "$OK_MSG" > "$(fx ok-at-earliest)"
+run_case "ok at EXACTLY earliest counts -> PASS" 0 "PASS: 1 host(s)" "$(fx ok-at-earliest)"
+row "$HA" "$((E_US - 1))" "$OK_MSG" > "$(fx ok-1us-before-earliest)"
+run_case "ok 1 microsecond before earliest is not counted -> zero hosts -> 2" 2 "Zero hosts" "$(fx ok-1us-before-earliest)"
 row "$HA" "$T_OLD" "$OK_MSG" > "$(fx ok-before-earliest)"
 run_case "ok only BEFORE earliest -> zero hosts -> 2" 2 "Zero hosts" "$(fx ok-before-earliest)"
 
@@ -205,7 +218,7 @@ OUT="$(env BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUE
 if [[ "$rc" -eq 78 ]]; then pass "refuses to run under xtrace with a credential bound (exit=78)"; else fail "xtrace refusal -- rc=$rc want=78"; fi
 
 # --- anti-vacuity floor + accounting conservation (never routed through fail()) -----------------
-MIN_CASES=40
+MIN_CASES=42
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] vacuity guard: only %s cases ran (floor %s)\n' "$cases" "$MIN_CASES" >&2
   exit 1

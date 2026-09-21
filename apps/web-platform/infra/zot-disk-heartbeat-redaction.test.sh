@@ -255,11 +255,10 @@ for _m in findmnt lsblk cryptsetup blkid; do cp "$BIN/$_m" "$BIN/sbin/$_m"; done
 # and blkid, every five minutes. So the script ships two LITERALS and the seams live HERE, in the
 # same render step that already substitutes the template variables above. Applied after the
 # bash -n / no-unrendered-interpolation assertions, because neither literal is TF interpolation.
-# The PATH assignment is substituted WHOLE, not by its sbin suffix. The shipped form PREPENDS
-# the trusted dirs and only appends the inherited value ($${PATH:+:$$PATH}), which is the point
-# of the #8386 review fix: a `PATH` secret in the config store can no longer win first
-# resolution. That also means the harness can no longer inject stubs THROUGH the environment --
-# the real /usr/bin would beat them -- so the seam has to replace the whole line.
+# The PATH assignment is substituted WHOLE. The shipped form is a LITERAL trusted list that
+# inherits nothing (#8417 review): a `PATH` secret in the config store can neither win first
+# resolution nor be searched at all. That also means the harness cannot inject stubs THROUGH the
+# environment, so the seam has to replace the whole line.
 sed -i "s|^PATH=.*|PATH=\"$BIN:$BIN/sbin:\$PATH\"|" "$HB"
 sed -i "s|/dev/disk/by-id/|$TMP/by-id/|g" "$HB"
 # (#8408) the per-boot tmpfs state dir, re-rooted the same way (a render-time literal seam).
@@ -268,31 +267,37 @@ mkdir -p "$TMP/run-soleur-registry"
 # (#8408 (c)) the escrow state dir, re-rooted the same way.
 sed -i "s|/var/lib/soleur-registry/|$TMP/var-lib-soleur-registry/|g" "$HB"
 mkdir -p "$TMP/var-lib-soleur-registry"
+# (#8408 (c)) /proc/uptime, which decides `pending`. Default: a long-running host (27.8 h).
+sed -i "s|/proc/uptime|$TMP/uptime|g" "$HB"
+printf '99999.50 12345.00\n' > "$TMP/uptime"
 # Non-vacuity for BOTH seams: if either literal is renamed in the template these substitutions
 # silently no-op and the sbin-only / devid cases would pass against an unseamed script.
 PHASE=posture   # both seams belong to the #8386 property, not to the #7500 floor
 assert "T1 PATH seam landed (the stub dirs now win first resolution)" \
   "grep -qF 'PATH=\"$BIN:$BIN/sbin:\$PATH\"' '$HB'"
+assert "T1 uptime seam landed (the pending arm now reads the fixture)" "grep -qF '$TMP/uptime' '$HB'"
 # The RENDERED copy deliberately still inherits, so per-case `PATH=` overrides (the no-jq tier-4
-# cases) keep working. The SHIPPED template must NOT: it prepends the trusted dirs so a `PATH`
-# secret in the config store cannot win first resolution as root. That property belongs to the
+# cases) keep working. The SHIPPED template must NOT: it is the literal trusted list, so a `PATH`
+# secret in the config store changes nothing about what root runs. That property belongs to the
 # template, so it is asserted against the template here rather than against this rendered copy.
 #
 # (#8417) EVALUATED, not grepped. The assert this replaces pinned the SPELLING
 # `$${PATH:+:$$PATH}` -- and that spelling was the defect: Terraform renders `$${` to `${` but
 # leaves a bare `$$` verbatim, so bash expanded it to `:<PID>PATH` and the inherited PATH was
 # never appended at all. A grep of the spelling was green over the bug for its whole life. So
-# render the shipped line the way templatefile does, run it, and assert what PATH BECOMES.
-_SHIPPED_PATH_LINE="$(grep -E '^[[:blank:]]+PATH="/usr/local/sbin:' "$CI_YML" | head -1 | sed -E 's/^[[:blank:]]+//; s/[$][$][{]/${/g')"
+# render the shipped line the way templatefile does, run it, and assert what PATH BECOMES. The
+# review then dropped the append entirely: the evaluated PATH must equal the trusted list EXACTLY,
+# whatever was inherited. Taken from the HEARTBEAT block ($RAW), not the first match in the file.
+_SHIPPED_PATH_LINE="$(grep -E '^[[:blank:]]*PATH=' "$RAW" | sed -E 's/^[[:blank:]]+//; s/[$][$][{]/${/g')"
 _TRUSTED='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 _EVAL_INHERIT="$(env -i /bin/bash --noprofile --norc -c "PATH=/inherited/dir; $_SHIPPED_PATH_LINE; printf '%s' \"\$PATH\"" 2>/dev/null)"
 _EVAL_UNSET="$(env -i /bin/bash --noprofile --norc -c "unset PATH; $_SHIPPED_PATH_LINE; printf '%s' \"\$PATH\"" 2>/dev/null)"
-assert "the SHIPPED PATH line was found in the template (non-empty extraction)" \
-  "[[ -n \"\$_SHIPPED_PATH_LINE\" ]]"
-assert "the SHIPPED template prepends trusted dirs (a PATH secret cannot win first resolution)" \
-  "[[ \"\$_EVAL_INHERIT\" == \"\$_TRUSTED:\"* ]]"
-assert "(#8417) the SHIPPED template APPENDS the inherited PATH (evaluated: exact result)" \
-  "[[ \"\$_EVAL_INHERIT\" == \"\$_TRUSTED:/inherited/dir\" ]]"
+assert "the heartbeat has exactly ONE PATH assignment (non-empty, single-line extraction)" \
+  "[[ -n \"\$_SHIPPED_PATH_LINE\" ]] && [[ \"\$(grep -c . <<<\"\$_SHIPPED_PATH_LINE\")\" -eq 1 ]]"
+assert "the SHIPPED PATH line is a literal: no expansion of any kind (\$ absent)" \
+  "! grep -qF '\$' <<<\"\$_SHIPPED_PATH_LINE\""
+assert "(#8417 review) with PATH inherited, the evaluated PATH is EXACTLY the trusted list" \
+  "[[ \"\$_EVAL_INHERIT\" == \"\$_TRUSTED\" ]]"
 assert "(#8417) the evaluated PATH carries no PID-shaped token (a bare \$\$ renders as <pid>PATH)" \
   "! grep -qE '[0-9]+PATH' <<<\"\$_EVAL_INHERIT\""
 assert "(#8417) with PATH unset the SHIPPED line yields exactly the trusted list (no stray colon)" \
@@ -962,6 +967,30 @@ _esc_case three-days "result=ok at=$((_now - 259200))" stale pos
 _esc_case offvocab "result=okay at=$((_now - 60))" __UNREADABLE__ pos
 _esc_case bad-epoch "result=ok at=yesterday" __UNREADABLE__ -1
 _esc_case future "result=ok at=$((_now + 3600))" ok -1
+# The threshold is `-gt 93600`: 25 h is still ok, 26 h + 1 s is stale (clock drift only ages it).
+_esc_case 25h "result=ok at=$((_now - 90000))" ok pos
+_esc_case 26h-plus-1 "result=ok at=$((_now - 93601))" stale pos
+_esc_case indet-old "result=indeterminate at=$((_now - 259200))" stale pos
+# A fail_* token keeps its remediation cue however old it is: `stale` never masks a failure.
+_esc_case fail-pass-old "result=fail_passphrase at=$((_now - 259200))" fail_passphrase pos
+_esc_case fail-key-old "result=fail_key_absent at=$((_now - 259200))" fail_key_absent pos
+# 10#: a leading zero is decimal, and `08`/`09` (invalid octal) must not abort the whole row.
+_esc_case leading-zero "result=ok at=0$((_now - 60))" ok pos
+_esc_case octal-invalid "result=ok at=09" stale pos
+# Length bound: 13+ digits is not an epoch this reader will do arithmetic on.
+_esc_case long-epoch "result=ok at=1234567890123" __UNREADABLE__ -1
+# `pending`: no state file yet on a freshly booted instance, only before 2 h of uptime.
+printf '100.25 50.00\n' > "$TMP/uptime"
+_esc_case pending-fresh-boot __ABSENT__ pending -1
+printf '7199.99 50.00\n' > "$TMP/uptime"
+_esc_case pending-boundary-7199 __ABSENT__ pending -1
+printf '7200.00 50.00\n' > "$TMP/uptime"
+_esc_case none-at-7200 __ABSENT__ none -1
+printf '100.25 50.00\n' > "$TMP/uptime"
+_esc_case present-on-fresh-boot "result=fail_header at=$((_now - 60))" fail_header pos
+rm -f "$TMP/uptime"
+_esc_case uptime-unreadable-absent __ABSENT__ none -1
+printf '99999.50 12345.00\n' > "$TMP/uptime"
 rm -f "$ESC"
 _ESC_LINE_HEAD="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1 | sed 's/ zot_last_err=.*//')"
 assert "P-esc store_escrow and store_escrow_age_s precede ' zot_last_err=' in the LINE= assembly" \
@@ -1030,7 +1059,7 @@ fi
 # ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
 # redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
 CASES_REDACT_MIN=39
-CASES_POSTURE_MIN=269
+CASES_POSTURE_MIN=348
 if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
     "$CASES_REDACT" "$CASES_REDACT_MIN" >&2

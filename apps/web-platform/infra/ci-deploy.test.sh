@@ -372,8 +372,8 @@ if [[ "${1:-}" == "run" ]]; then
         printf 'DOCKER_CONFIG_AT_VERIFY:%s\n' "${DOCKER_CONFIG-UNSET}" >> "$MOCK_COSIGN_ARGS_FILE"
         _isdir=0; [[ -n "$_dc" && -d "$_dc" && ! -L "$_dc" ]] && _isdir=1
         _hascfg=0; [[ -n "$_dc" && -f "$_dc/config.json" ]] && _hascfg=1
-        _empty=0; [[ "$_hascfg" == "1" && "$(cat "$_dc/config.json" 2>/dev/null)" == '{"auths":{}}' ]] && _empty=1
-        printf 'ANON_CFG_AT_VERIFY:isdir=%s has_config_json=%s config_is_empty_auths=%s auth_config_env=%s\n' \
+        _empty=0; [[ "$_hascfg" == "1" && "$(cat "$_dc/config.json" 2>/dev/null)" == '{"auths":{},"credHelpers":{"ghcr.io":""}}' ]] && _empty=1
+        printf 'ANON_CFG_AT_VERIFY:isdir=%s has_config_json=%s config_is_anon=%s auth_config_env=%s\n' \
           "$_isdir" "$_hascfg" "$_empty" "$([[ -n "${DOCKER_AUTH_CONFIG+x}" ]] && echo set || echo unset)" >> "$MOCK_COSIGN_ARGS_FILE"
         # T-1a-3: the canary is grepped for across EVERYTHING the CLI could read for the pull —
         # its config dir (or the ~/.docker fallback when DOCKER_CONFIG is empty) and
@@ -1867,7 +1867,7 @@ assert_bprime_cosign_invocation
 # The docker CLI resolves the implicit `$COSIGN_IMAGE` pull's credentials from its own
 # DOCKER_CONFIG. A dead ghcr.io inline auth in the deploy config turned the pull of a PUBLIC image
 # into a 401 (cosign_absent on every deploy). ci-deploy.sh now hands the verify run an isolated
-# `{"auths":{}}` config + `env -u DOCKER_AUTH_CONFIG`; the deploy config stays on the :ro mount.
+# anonymous `{"auths":{},"credHelpers":{"ghcr.io":""}}` config + `env -u DOCKER_AUTH_CONFIG`; the deploy config stays on the :ro mount.
 # Every canary below is synthesized (cq-test-fixtures-synthesized-only).
 COSIGN_ANON_CANARY="canary-ghcr-auth-5d2b"
 
@@ -1921,10 +1921,10 @@ if [[ -n "$T1A_DC" && "$T1A_DC" != "UNSET" && "$T1A_DC" == /* \
       && "$T1A_DC" != "$T1A_DIR/deploy-cfg" && "${T1A_DC%/}" != "$T1A_DIR/deploy-cfg" \
       && "$(_anon_field "$T1A_DIR/cosign.args" isdir)" == "1" \
       && "$(_anon_field "$T1A_DIR/cosign.args" has_config_json)" == "1" \
-      && "$(_anon_field "$T1A_DIR/cosign.args" config_is_empty_auths)" == "1" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" config_is_anon)" == "1" \
       && "$(_anon_field "$T1A_DIR/cosign.args" auth_config_env)" == "unset" \
       && "$(cat "$T1A_DIR/rc")" == "0" ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-1a-1 verify run gets an absolute, existing, non-deploy DOCKER_CONFIG holding exactly {\"auths\":{}} with DOCKER_AUTH_CONFIG unset (#8036 1a)"
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-1 verify run gets an absolute, existing, non-deploy DOCKER_CONFIG holding exactly the anonymous config with DOCKER_AUTH_CONFIG unset (#8036 1a)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-1 anonymous verifier config (#8036 1a) rc=$(cat "$T1A_DIR/rc")"
   sed 's/^/        /' "$T1A_DIR/cosign.args"
@@ -1948,7 +1948,7 @@ mkdir -p "$T1A_DIR/deploy-cfg"
 printf '{"auths":{"10.0.1.30:5000":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$T1A_DIR/deploy-cfg/config.json"
 run_cosign_anon_capture "$T1A_DIR" ""
 TOTAL=$((TOTAL + 1))
-if [[ "$(_anon_field "$T1A_DIR/cosign.args" config_is_empty_auths)" == "1" ]] \
+if [[ "$(_anon_field "$T1A_DIR/cosign.args" config_is_anon)" == "1" ]] \
    && grep -qx 'CANARY_VISIBLE_AT_VERIFY:0' "$T1A_DIR/cosign.args" \
    && [[ "$(cat "$T1A_DIR/rc")" == "0" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: H2 zot-only deploy config: the verify still sees the empty anonymous config (#8036 1a)"
@@ -1979,7 +1979,7 @@ assert_anon_dir_removed "verify-fail" "export MOCK_COSIGN_VERIFY_FAIL=1"
 
 # T-1a-5a: the primary `mktemp -d` fails (the named seam, NOT a mktemp stub — ci-deploy.sh calls
 # mktemp ~20 times). The fallback dir is recreated (a PRE-SEEDED one holding a real-looking auth is
-# wiped), is not $DOCKER_CONFIG, holds exactly {"auths":{}}, and is removed afterwards. No
+# wiped), is not $DOCKER_CONFIG, holds exactly the anonymous config, and is removed afterwards. No
 # fail-open line: the fallback succeeded.
 T1A_DIR="$(mktemp -d)"
 seed_canary_deploy_cfg "$T1A_DIR"
@@ -1989,12 +1989,12 @@ run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1"
 T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | head -1)"
 TOTAL=$((TOTAL + 1))
 if [[ "$T1A_DC" == "$T1A_DIR/deploy-cfg/anon-cosign" \
-      && "$(_anon_field "$T1A_DIR/cosign.args" config_is_empty_auths)" == "1" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" config_is_anon)" == "1" \
       && "$(_anon_field "$T1A_DIR/cosign.args" auth_config_env)" == "unset" ]] \
    && grep -qx 'CANARY_VISIBLE_AT_VERIFY:0' "$T1A_DIR/cosign.args" \
    && ! grep -qF 'anon_config=unavailable' "$T1A_DIR/logger.txt" \
    && [[ ! -e "$T1A_DIR/deploy-cfg/anon-cosign" && -f "$T1A_DIR/deploy-cfg/config.json" && "$(cat "$T1A_DIR/rc")" == "0" ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-1a-5 mktemp failure → fallback dir recreated (pre-seeded auth wiped), not \$DOCKER_CONFIG, {\"auths\":{}}, removed after (#8036 1a)"
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-5 mktemp failure → fallback dir recreated (pre-seeded auth wiped), not \$DOCKER_CONFIG, anonymous config, removed after (#8036 1a)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-5 fallback dir (dc=$T1A_DC rc=$(cat "$T1A_DIR/rc"))"; sed 's/^/        /' "$T1A_DIR/cosign.args"
 fi
@@ -2016,6 +2016,43 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-5 fail-open (dc=$T1A_DC rc=$(cat "$T1A_DIR/rc"))"; sed 's/^/        /' "$T1A_DIR/logger.txt" | grep -F IMAGE_VERIFY || true
 fi
 rm -rf "$T1A_DIR"
+
+# T-1a-5c: the CONTENT check, driven on its own. The fallback dir is a real, absolute, non-symlink
+# directory that cannot be wiped or rewritten (0555, so the recreate fails) and still holds a
+# credential. Every structural check passes; only the byte comparison stands between the canary
+# and the verifier-image pull. As root, DAC override lets the wipe succeed, so the row is skipped.
+if [[ "$(id -u)" -ne 0 ]]; then
+  T1A_DIR="$(mktemp -d)"
+  seed_canary_deploy_cfg "$T1A_DIR"
+  mkdir -p "$T1A_DIR/deploy-cfg/anon-cosign"
+  printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$T1A_DIR/deploy-cfg/anon-cosign/config.json"
+  chmod 555 "$T1A_DIR/deploy-cfg/anon-cosign"
+  run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1"
+  T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | head -1)"
+  TOTAL=$((TOTAL + 1))
+  if [[ -d "$T1A_DIR/deploy-cfg/anon-cosign" && "$T1A_DC" == "$T1A_DIR/deploy-cfg" && "$(cat "$T1A_DIR/rc")" == "0" ]] \
+     && grep -qF 'IMAGE_VERIFY_PREP: anon_config=unavailable' "$T1A_DIR/logger.txt"; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1a-5c a valid dir with the WRONG content is refused (logged unavailable), never handed to the pull (#8036 1a)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-5c wrong-content anon dir (dc=$T1A_DC rc=$(cat "$T1A_DIR/rc"))"
+  fi
+  chmod -R u+rwx "$T1A_DIR" 2>/dev/null || true
+  rm -rf "$T1A_DIR"
+fi
+
+# T-1a-7: the verify `docker run` is the ONE $COSIGN_IMAGE site, and it carries `--quiet` (the cold
+# pull's "Unable to find image" line must not reach the stderr classifier) and closes FD 200 (#5062).
+T1A7_JOINED="$(awk '/^[[:space:]]*#/ { next } { line = buf $0 } /\\[[:space:]]*$/ { sub(/\\[[:space:]]*$/, "", line); buf = line " "; next } { print line; buf = "" }' "$DEPLOY_SCRIPT" \
+  | grep -F '"${verify_env[@]}" docker run ' || true)"
+TOTAL=$((TOTAL + 1))
+if [[ "$(printf '%s\n' "$T1A7_JOINED" | grep -c .)" == "1" \
+      && "$T1A7_JOINED" == *'docker run --rm --network host --quiet '* \
+      && "$T1A7_JOINED" == *' >/dev/null 2>"$err" 200>&-; then'* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-7 the one verify docker run carries --quiet and closes FD 200 (#8036 1a, #5062)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-7 verify docker run: --quiet / 200>&- missing, or not exactly one site"
+fi
+unset T1A7_JOINED
 
 # T-1a-6: verify_image_signature runs inside VERIFIED_REF="$(…)", so its stdout IS the ref the
 # deploy runs. Executed (not grepped): the function is extracted and called under the production
@@ -7322,6 +7359,45 @@ else
   assert_ghcr_cfg_row unsearchable "SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg deploy_cfg=present deploy_ghcr_auth=inline deploy_creds_store=none deploy_ghcr_helper=none home_cfg=unreadable home_ghcr_auth=na home_creds_store=na home_ghcr_helper=na root_cfg=unreadable root_ghcr_auth=na root_creds_store=na root_ghcr_helper=na"
 fi
 
+# T-1b-4: the unsearchable directory is the GRANDPARENT, the real layout (/root is 0700, the file
+# is /root/.docker/config.json). Checking only the immediate parent reads `absent` here, because
+# `-d` on a directory under an unsearchable one is false too. Non-root only (root bypasses DAC).
+if [[ "$(id -u)" -ne 0 ]]; then
+  TOTAL=$((TOTAL + 1))
+  GCFG_A="$(mktemp -d)"
+  _gcfg_place "$GCFG_A" inline
+  mkdir -p "$GCFG_A/root/.docker"; _gcfg_body inline > "$GCFG_A/root/.docker/config.json"
+  chmod 000 "$GCFG_A/root"
+  run_ghcr_cfg_capture "$GCFG_A" "export SOLEUR_GHCR_CONFIG_ROOT_PATH=\"$GCFG_A/root/.docker/config.json\""
+  got="$(_gcfg_lines "$GCFG_A/logger.txt")"
+  if [[ "$got" == *" root_cfg=unreadable root_ghcr_auth=na root_creds_store=na root_ghcr_helper=na" \
+        && "$got" == *" home_cfg=present home_ghcr_auth=inline "* && "$(cat "$GCFG_A/rc")" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1b-4 an unsearchable GRANDPARENT reads unreadable, never absent (#8036 1b)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-4 grandparent-unsearchable root slot: $got"
+  fi
+  chmod -R u+rwx "$GCFG_A" 2>/dev/null || true
+  rm -rf "$GCFG_A"
+fi
+
+# T-1b-5: DISTINCT fixtures per slot, so a label wired to the wrong path cannot pass (the matrix
+# above places the same bytes at all three slots, where a swap is invisible).
+TOTAL=$((TOTAL + 1))
+GCFG_A="$(mktemp -d)"
+mkdir -p "$GCFG_A/deploy-cfg" "$GCFG_A/home/.docker" "$GCFG_A/root"
+_gcfg_body inline > "$GCFG_A/deploy-cfg/config.json"
+_gcfg_body credsstore > "$GCFG_A/home/.docker/config.json"
+_gcfg_body credhelper > "$GCFG_A/root/config.json"
+run_ghcr_cfg_capture "$GCFG_A" ""
+got="$(_gcfg_lines "$GCFG_A/logger.txt")"
+want="SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg deploy_cfg=present deploy_ghcr_auth=inline deploy_creds_store=none deploy_ghcr_helper=none home_cfg=present home_ghcr_auth=none home_creds_store=set home_ghcr_helper=none root_cfg=present root_ghcr_auth=none root_creds_store=none root_ghcr_helper=set"
+if [[ "$got" == "$want" && "$(cat "$GCFG_A/rc")" == "0" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1b-5 each slot's tokens come from ITS path (deploy inline, home credsStore, root credHelper) (#8036 1b)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-5 distinct slots"; echo "        want: $want"; echo "        got:  $got"
+fi
+rm -rf "$GCFG_A"; unset GCFG_A got want
+
 # T-1b-2: the leak canary. Every slot holds the canary auth AND canary store/helper names, and the
 # baked login user is a canary too. None of the auth, its decoded user or token, the helper/store
 # names or the username may reach the journald sink (shipped unscrubbed) or the deploy's
@@ -7465,7 +7541,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # iterates zero times, a helper that returns before counting) still ends "N/N passed". Pinned to the
 # exact count at the time of writing; raise it when rows are added. Deliberately a bare printf +
 # exit 1 — NOT a counted assertion through a helper that could itself be the thing that broke.
-CI_DEPLOY_ASSERT_FLOOR=325
+CI_DEPLOY_ASSERT_FLOOR=329
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

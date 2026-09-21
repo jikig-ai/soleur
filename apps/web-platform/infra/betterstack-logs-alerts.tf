@@ -289,7 +289,9 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 #       re-test says the next reboot may not be able to reopen the store (fail_passphrase,
 #       fail_header, fail_key_absent), or the re-test itself stopped measuring (stale, none,
 #       indeterminate, __UNREADABLE__). "Anything but ok" is deliberate: a fail-only arm leaves a
-#       dead escrow job silent, which is exactly how it would rot.
+#       dead escrow job silent, which is exactly how it would rot. The one other quiet token is
+#       `pending`: the heartbeat writes it only while no result exists yet AND uptime < 2 h (the
+#       first-boot run is deferred 15 min); after 2 h an absent result reads `none`, which pages.
 #
 # WHY IT SHIPS UNPAUSED AT MERGE. Every live row today carries `store_luks=yes ` (measured below),
 # and rows that predate the escrow field carry no `store_escrow=` at all, so arm (B) cannot fire on
@@ -311,6 +313,14 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 #   (iii) arm-B presence 'store_escrow=' -> 'store_luks='        -> 288 (arm B is live SQL, not dead syntax)
 #   (iv)  (iii) plus 'store_escrow=ok ' -> 'store_luks=yes ', arm A forced false
 #                                                                -> 0   (arm B's ok-negation suppresses)
+#   (v)   2026-09-21, hot table only (remote(), 24h), AFTER the `pending` conjunct was added:
+#         envelope 119, as written 0, arm-A positive control 119, rows carrying store_escrow= 0.
+#         So arm B is not yet exercisable live: no delivered heartbeat carries the field until the
+#         next registry replace. (iii)/(iv) above are its evidence that the SQL is live.
+#
+# NO BOOT GRACE FOR ARM A. On the last registry replace boot (b3ec6c3b) 342 of 342 heartbeat rows
+# read `store_luks=yes ` and none read `absent`: the mapper is open before the first heartbeat, so
+# arm A needs no uptime exemption. `value = 1` still absorbs one transient row.
 #
 # PAGING SEMANTICS. The alert is a per-bucket threshold, and the bucket (`aggregation_interval`,
 # omitted here as in every sibling) is snapped by the API to query_period: measured 2026-09-21 on
@@ -329,7 +339,8 @@ locals {
           AND position(JSONExtractString(raw, 'message'), 'store_luks=yes ') < position(JSONExtractString(raw, 'message'), ' zot_last_err='))
         OR (position(JSONExtractString(raw, 'message'), 'store_escrow=') > 0
           AND position(JSONExtractString(raw, 'message'), 'store_escrow=') < position(JSONExtractString(raw, 'message'), ' zot_last_err=')
-          AND position(JSONExtractString(raw, 'message'), 'store_escrow=ok ') != position(JSONExtractString(raw, 'message'), 'store_escrow='))
+          AND position(JSONExtractString(raw, 'message'), 'store_escrow=ok ') != position(JSONExtractString(raw, 'message'), 'store_escrow=')
+          AND position(JSONExtractString(raw, 'message'), 'store_escrow=pending ') != position(JSONExtractString(raw, 'message'), 'store_escrow='))
       )
     GROUP BY time
   SQL

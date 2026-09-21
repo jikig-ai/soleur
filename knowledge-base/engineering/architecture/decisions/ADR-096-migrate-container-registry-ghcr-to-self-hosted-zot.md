@@ -1130,9 +1130,16 @@ container start**. It is an explicit trade of availability for integrity on the 
 guard's `docker restart zot` bypassed it, so a reboot with the mapper still closed served the empty
 root-disk directory. zot now bind-mounts `/var/lib/zot/.soleur-luks-sentinel` with `--mount`, which
 refuses a missing source (`-v` would create one), and the sentinel lives only inside the opened LUKS
-filesystem. The recovery is the NIC guard's new `.State.Running` arm, which starts zot within one
-5-minute tick once the store is mounted. So the worst case is ≤5 minutes of fail-closed downtime
-and never a silent empty-store serve. The gate proves the failure mode is absent. It is not an adversary
+filesystem. The recovery is the NIC guard's new arm, which starts zot within one 5-minute tick once the store
+is mounted, and only when the container exists, is neither running nor restarting, and the sentinel
+is a regular file rather than a symlink. So once the mapper is open, fail-closed downtime is at most
+one tick. While the mapper cannot open (a wrong or missing key, a detached volume), the downtime is
+**unbounded**: zot stays down until that is fixed. That is the intended trade, and it is never a
+silent empty-store serve. The gate proves the failure mode is absent. It is not an adversary
 control: a root copy of the store that carried the sentinel would pass it. The same change adds a
 daily escrow re-test (`store_escrow=` on SOLEUR_ZOT_DISK) and the `registry_store_not_luks` alert.
 This otherwise implements the LUKS decision above (#6895 D2); no topology changes.
+
+**Status: CODE-DECLARED.** The template reaches the registry host only on a replace (ForceNew
+`user_data`). Until the next replace boots it, none of this amendment has run on a host; the
+first boot's `luks_open_arm=` and `store_escrow=` rows are the evidence that it has.

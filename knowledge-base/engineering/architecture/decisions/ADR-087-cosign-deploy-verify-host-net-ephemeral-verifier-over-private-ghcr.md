@@ -207,8 +207,12 @@ private-package storage/egress is within the existing GitHub plan.
 ## Amendment 2026-09-21 (#8036) — the verifier image is pulled anonymously
 
 **What changed.** The verify `docker run` in `verify_image_signature()` now executes with the
-docker CLI's `DOCKER_CONFIG` pointed at a fresh directory holding exactly `{"auths":{}}`, and with
-`DOCKER_AUTH_CONFIG` unset. The CLI resolves auths for the implicit `COSIGN_IMAGE` pull from its
+docker CLI's `DOCKER_CONFIG` pointed at a fresh directory holding exactly
+`{"auths":{},"credHelpers":{"ghcr.io":""}}`, and with `DOCKER_AUTH_CONFIG` unset. A bare
+`{"auths":{}}` would not be enough: the CLI treats a config with no auth entries as unconfigured and
+auto-detects a default credential store (`docker-credential-pass`/`secretservice` when on PATH),
+which could still hand the pull a stored `ghcr.io` token. A non-empty `credHelpers` map disables
+that detection, and the empty helper name resolves `ghcr.io` to the empty file store. The CLI resolves auths for the implicit `COSIGN_IMAGE` pull from its
 own config, so the verifier **image** (`ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a…`, public) is
 always pulled anonymously. The `-v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro"` mount is a
 host-path bind resolved independently of the CLI's `DOCKER_CONFIG`, so the `.sig` referrer fetch
@@ -226,8 +230,10 @@ seven weeks (#8037).
 **A per-deploy dependency on public ghcr.io, stated.** `ci-deploy.sh` runs `docker image prune -af`
 before the verify, and the verifier image has no live container, so it is pruned and re-pulled on
 **every** deploy. It always was; the pull just used to fail. If the anonymous pull fails (a ghcr.io
-outage or its anonymous rate limit), the run fails with `Unable to find image`/`denied` and is
-classified `cosign_absent`. Under WARN the deploy runs the digest unverified and Sentry receives
+outage or its anonymous rate limit), the run fails. It is classified `cosign_absent` only when
+its stderr carries a pull error the classifier recognises (`manifest unknown`, `pull access
+denied`, `no such image`); any other text reads `verify_failed`. The run passes `--quiet`, so the
+cold pull's `Unable to find image … locally` progress line no longer reaches that classifier. Under WARN the deploy runs the digest unverified and Sentry receives
 `cosign_verify_event`. Under ENFORCE it would block the deploy. **An ENFORCE flip must therefore
 first decide whether to keep the verifier image locally** (excluded from the prune, or loaded from a
 pinned tarball), and must cite the #8037 follow-through probe's PASS.
@@ -243,3 +249,7 @@ verdict preceded by that line as action-required, so the fail-open cannot pass s
   needs no credential at all.
 - *`docker logout ghcr.io` on relogin failure.* Deferred to #8036 1c (GHCR's fate on hosts): it
   changes the GHCR-fallback semantics, and the isolated config already buys the property.
+
+**Status: CODE-DECLARED.** Merging applies `ci-deploy.sh` to the web host through the
+`deploy_pipeline_fix` auto-apply; the amendment is LIVE only once a post-apply deploy logs
+`IMAGE_VERIFY: ok`. The #8037 follow-through probe grades exactly that, per host.

@@ -11,7 +11,8 @@
 # live in zot-disk-heartbeat-redaction.test.sh). This suite extracts the producer from the
 # template, renders it the way templatefile does, re-roots its literal paths with sed (the same
 # render-time seam the heartbeat suite uses -- there is no runtime env override), and drives it
-# against PATH stubs for findmnt, cryptsetup and systemd-run.
+# against PATH stubs for findmnt and cryptsetup. The memory-retry `sleep 300` and the
+# /proc/self/oom_score_adj write are re-rooted the same way, so the suite neither waits nor needs root.
 #
 # Needs only bash, awk, sed and coreutils. No terraform, docker, cryptsetup, network or root.
 
@@ -59,9 +60,13 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 check "the shipped script carries the literal trusted PATH" \
   "grep -qxF 'PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"' '$ES'"
 sed -i "s|^PATH=.*|PATH=\"$BIN:\$PATH\"|" "$ES"
+check "the shipped script has exactly ONE retry sleep, of 300 s, and ONE oom_score_adj write of 1000" \
+  "[ \"\$(grep -c 'sleep 300' '$ES')\" -eq 1 ] && [ \"\$(grep -cF \"printf '1000\\\\n' > /proc/self/oom_score_adj\" '$ES')\" -eq 1 ]"
 sed -i "s|/proc/meminfo|$TMP/meminfo|g; s|/var/lib/soleur-registry|$TMP/state|g" "$ES"
-check "the three seams landed" \
-  "grep -qF 'PATH=\"$BIN:' '$ES' && grep -qF '$TMP/meminfo' '$ES' && grep -qF 'STATE_DIR=$TMP/state' '$ES'"
+# The retry sleep becomes a stub that records itself and can change memory between samples.
+sed -i "s|sleep 300|fake_sleep 300|; s|/proc/self/oom_score_adj|$TMP/oom|g" "$ES"
+check "the five seams landed" \
+  "grep -qF 'PATH=\"$BIN:' '$ES' && grep -qF '$TMP/meminfo' '$ES' && grep -qF 'STATE_DIR=$TMP/state' '$ES' && grep -qF 'fake_sleep 300' '$ES' && grep -qF '> $TMP/oom' '$ES'"
 
 # --- Stubs -----------------------------------------------------------------------------------
 # Every stub records its argv to $CALLS, which the key canary reads: the key must never be an
@@ -88,7 +93,11 @@ case "$1" in
     exit "${STUB_UUID_RC:-0}" ;;
   luksDump)
     [ "$2" = /dev/sdb ] || { echo "cryptsetup stub: luksDump of $2" >&2; exit 64; }
-    printf 'LUKS header information\nKeyslots:\n  0: luks2\n\tPBKDF:      argon2id\n\tMemory:     %s\n' "${STUB_PBKDF_KIB:-1048576}" ;;
+    [ "${STUB_LD_RC:-0}" -eq 0 ] || exit "$STUB_LD_RC"
+    printf 'LUKS header information\nKeyslots:\n  0: luks2\n\tPBKDF:      argon2id\n\tMemory:     %s\n' "${STUB_PBKDF_KIB:-1048576}"
+    # A second keyslot with a different cost: the pre-check must take the LARGEST, not the first.
+    [ -n "${STUB_PBKDF2_KIB:-}" ] && printf '  1: luks2\n\tPBKDF:      argon2id\n\tMemory:     %s\n' "$STUB_PBKDF2_KIB"
+    exit 0 ;;
   luksOpen)
     [ "$*" = "luksOpen --test-passphrase --key-file - /dev/sdb" ] || { echo "cryptsetup stub: luksOpen argv: $*" >&2; exit 64; }
     cat > "$KEYSEEN"
@@ -96,12 +105,12 @@ case "$1" in
   *) echo "cryptsetup stub: unexpected subcommand $1" >&2; exit 64 ;;
 esac
 EOS
-cat > "$BIN/systemd-run" <<'EOS'
+# fake_sleep: records each retry wait; with STUB_MEM_AFTER set, memory becomes that value.
+cat > "$BIN/fake_sleep" <<EOS
 #!/usr/bin/env bash
-echo "systemd-run $*" >> "$CALLS"
-[ "$1 $2 $3 $4" = "--scope --quiet -p OOMScoreAdjust=1000" ] || { echo "systemd-run stub: argv: $*" >&2; exit 64; }
-shift 4
-exec "$@"
+echo "fake_sleep \$*" >> "\$CALLS"
+[ -n "\${STUB_MEM_AFTER:-}" ] && printf 'MemTotal:        3905536 kB\nMemAvailable:    %s kB\n' "\$STUB_MEM_AFTER" > "$TMP/meminfo"
+exit 0
 EOS
 chmod +x "$BIN"/*
 # mv: a passthrough to the real binary by ABSOLUTE path (a PATH lookup would find this stub
@@ -115,7 +124,7 @@ STATE="$TMP/state/escrow.state"
 
 # run_escrow [env...] -> runs the producer once; sets RC, OUT, ERR, RESULT_TOKEN.
 run_escrow() {
-  : > "$TMP/calls"; rm -f "$TMP/keyseen"
+  : > "$TMP/calls"; rm -rf "$TMP/keyseen" "$TMP/oom"
   env CALLS="$TMP/calls" KEYSEEN="$TMP/keyseen" REGISTRY_LUKS_KEY="$KEY" "$@" \
     bash "$ES" > "$TMP/out" 2> "$TMP/err"
   RC=$?
@@ -129,8 +138,10 @@ meminfo 3000000
 fresh; run_escrow
 check "ok: the key opened the header -> result=ok" "[ '$RESULT_TOKEN' = ok ] && [ '$RC' -eq 0 ]"
 check "ok: the key reached cryptsetup through the pipe (stdin), byte-exact" "[ \"\$(cat '$TMP/keyseen')\" = '$KEY' ]"
-check "ok: the test ran under systemd-run --scope with OOMScoreAdjust=1000" \
-  "grep -qxF 'systemd-run --scope --quiet -p OOMScoreAdjust=1000 cryptsetup luksOpen --test-passphrase --key-file - /dev/sdb' '$TMP/calls'"
+check "ok: the OOM shield was raised to exactly 1000 before the KDF" "[ \"\$(cat '$TMP/oom')\" = 1000 ]"
+check "ok: luksOpen ran exactly once, with the exact argv, and no retry wait happened" \
+  "[ \"\$(grep -cxF 'cryptsetup luksOpen --test-passphrase --key-file - /dev/sdb' '$TMP/calls')\" -eq 1 ] && ! grep -q fake_sleep '$TMP/calls'"
+check "ok: no systemd-run in the comment-stripped script (it rejects OOMScoreAdjust= on a scope)" "! grep -q 'systemd-run' '$ES'"
 check "ok: the state file is 0600 in a 0700 directory" \
   "[ \"\$(stat -c %a '$STATE')\" = 600 ] && [ \"\$(stat -c %a '$TMP/state')\" = 700 ]"
 check "ok: the state file is exactly one 'result=<token> at=<epoch>' line" \
@@ -153,6 +164,19 @@ check "indeterminate: MemAvailable below PBKDF memory + 256 MiB -> indeterminate
 meminfo 1310720
 fresh; run_escrow STUB_PBKDF_KIB=1048576
 check "memory pre-check boundary: exactly PBKDF + 256 MiB available -> proceeds (ok)" "[ '$RESULT_TOKEN' = ok ]"
+meminfo 1310719
+fresh; run_escrow STUB_PBKDF_KIB=1048576
+check "memory pre-check boundary: one KiB short of PBKDF + 256 MiB -> indeterminate, NO KDF run" \
+  "[ '$RESULT_TOKEN' = indeterminate ] && ! grep -q luksOpen '$TMP/calls'"
+check "memory short on every sample: exactly TWO retry waits of 300 s (three samples)" \
+  "[ \"\$(grep -cxF 'fake_sleep 300' '$TMP/calls')\" -eq 2 ]"
+fresh; run_escrow STUB_PBKDF_KIB=524288 STUB_PBKDF2_KIB=1048576
+check "two keyslots: the LARGER second slot's memory is the one required (1310719 KiB -> indeterminate)" \
+  "[ '$RESULT_TOKEN' = indeterminate ]"
+meminfo 1000000
+fresh; run_escrow STUB_PBKDF_KIB=1048576 STUB_MEM_AFTER=3000000
+check "memory retry: short on the first sample, enough after one wait -> ok, with exactly one wait" \
+  "[ '$RESULT_TOKEN' = ok ] && [ \"\$(grep -cxF 'fake_sleep 300' '$TMP/calls')\" -eq 1 ]"
 meminfo 3000000
 fresh; run_escrow STUB_SRC=/dev/sda1
 check "indeterminate: /var/lib/zot not on a mapper -> indeterminate" "[ '$RESULT_TOKEN' = indeterminate ]"
@@ -160,6 +184,18 @@ fresh; run_escrow STUB_STATUS_RC=1
 check "indeterminate: cryptsetup status refused -> indeterminate" "[ '$RESULT_TOKEN' = indeterminate ]"
 fresh; run_escrow STUB_UUID_RC=127
 check "indeterminate: luksUUID tool absent (127) is a refusal, not a header verdict" "[ '$RESULT_TOKEN' = indeterminate ]"
+fresh; run_escrow STUB_UUID_RC=124
+check "indeterminate: luksUUID timed out (124) is a refusal, not a header verdict" "[ '$RESULT_TOKEN' = indeterminate ]"
+fresh; run_escrow STUB_LD_RC=1
+check "indeterminate: luksDump failed -> indeterminate, NO KDF run (an empty dump must not read as 0 KiB)" \
+  "[ '$RESULT_TOKEN' = indeterminate ] && ! grep -q luksOpen '$TMP/calls'"
+fresh; rm -rf "$TMP/oom"; mkdir -p "$TMP/oom"
+: > "$TMP/calls"; rm -f "$TMP/keyseen"
+env CALLS="$TMP/calls" KEYSEEN="$TMP/keyseen" REGISTRY_LUKS_KEY="$KEY" bash "$ES" > "$TMP/out" 2> "$TMP/err"
+RESULT_TOKEN="$(sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' "$STATE" 2>/dev/null | head -1)"
+check "indeterminate: the OOM shield could not be raised -> indeterminate, NO KDF run" \
+  "[ '$RESULT_TOKEN' = indeterminate ] && ! grep -q luksOpen '$TMP/calls'"
+rm -rf "$TMP/oom"
 fresh; run_escrow STUB_OPEN_RC=3
 check "indeterminate: luksOpen out of memory (3) -> indeterminate, never ok" "[ '$RESULT_TOKEN' = indeterminate ]"
 fresh; run_escrow STUB_OPEN_RC=137
@@ -182,7 +218,7 @@ check "key canary: absent from the state file" "! grep -qF '$KEY' '$STATE'"
 check "key canary: absent from stdout and stderr" "! grep -qF '$KEY' '$TMP/out' '$TMP/err'"
 check "key canary: absent from every stubbed argv" "! grep -qF '$KEY' '$TMP/calls'"
 check "static: the key is fed through printf into a pipe, never a here-string" \
-  "grep -qF \"printf '%s' \\\"\\\$REGISTRY_LUKS_KEY\\\" | timeout 120 systemd-run\" '$RAW' && ! grep -qE '<<<.*REGISTRY_LUKS_KEY' '$RAW'"
+  "grep -qF \"printf '%s' \\\"\\\$REGISTRY_LUKS_KEY\\\" | timeout 120 cryptsetup luksOpen --test-passphrase --key-file - \\\"\\\$DEV\\\"\" '$RAW' && ! grep -qE '<<<.*REGISTRY_LUKS_KEY' '$RAW'"
 
 # --- Refusals and the EXIT trap -----------------------------------------------------------------
 : > "$TMP/calls"
@@ -193,11 +229,20 @@ check "the xtrace refusal leaks no key into the trace" "! grep -qF '$KEY' '$TMP/
 check "static: an EXIT trap writes indeterminate when no verdict was recorded (a crash stays visible)" \
   "grep -qF \"trap '[ -n \\\"\\\$RESULT\\\" ] || write_state indeterminate' EXIT\" '$RAW'"
 
+# --- Writer == reader vocabulary ------------------------------------------------------------------
+# Every token the producer can write must be one the heartbeat reader accepts, and vice versa: a
+# token only one side knows is either an unreadable verdict or a dead reader arm.
+WRITER_TOKS="$(grep -oE 'write_state [a-z_]+' "$RAW" | awk '{print $2}' | sort -u | tr '\n' ' ')"
+READER_TOKS="$(grep -E '^[[:blank:]]+ok \| fail_passphrase .*\) STORE_ESCROW="\$_esr" ;;$' "$CI_YML" \
+  | sed -E 's/^[[:blank:]]+//; s/\).*$//' | tr -d ' ' | tr '|' '\n' | sort -u | tr '\n' ' ')"
+check "writer vocabulary ($WRITER_TOKS) == heartbeat reader vocabulary ($READER_TOKS), and non-trivial" \
+  "[ -n '$WRITER_TOKS' ] && [ '$WRITER_TOKS' = '$READER_TOKS' ] && [ \"\$(wc -w <<<'$WRITER_TOKS')\" -eq 5 ]"
+
 # --- Delivery: the cron line, the boot call, and minute isolation --------------------------------
 # shellcheck disable=SC2034  # read inside check()'s eval'd condition string
 CRON_LINE="$(grep -E '^      19 3 \* \* \* root .*registry-luks-escrow\.sh$' "$CI_YML" || true)"
-check "the cron line runs daily at 03:19 under doppler run --only-secrets REGISTRY_LUKS_KEY" \
-  "grep -qF 'doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh' <<<\"\$CRON_LINE\""
+check "the cron line is EXACTLY: 03:19 daily, sourced doppler env, --only-secrets, --no-fallback" \
+  "[ \"\$CRON_LINE\" = '      19 3 * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY --no-fallback -- /usr/local/bin/registry-luks-escrow.sh' ]"
 # Every other cron.d minute field on this host, expanded, must not contain 19.
 OTHER_MIN="$(grep -E '^      [0-9*][0-9*/,-]* [0-9*][0-9*/,-]* [0-9*] [0-9*] [0-9*] root ' "$CI_YML" | grep -v registry-luks-escrow | awk '{print $1}')"
 minutes_of() { # expand one cron minute field to its minute list
@@ -221,7 +266,9 @@ while IFS= read -r f; do
   minutes_of "$f" | grep -qx 19 && CLASH=$((CLASH + 1))
 done <<<"$OTHER_MIN"
 check "no other cron.d minute set on this host contains minute 19" "[ '$CLASH' -eq 0 ]"
-BOOT_LN="$(grep -nF 'nohup doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh >/dev/null 2>&1 &' "$CI_YML" | head -1 | cut -d: -f1)"
+BOOT_LN="$(grep -nxF "  - set -a; . /etc/default/registry-doppler; set +a; nohup sh -c 'sleep 900; exec doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY --no-fallback -- /usr/local/bin/registry-luks-escrow.sh' >/dev/null 2>&1 &" "$CI_YML" | cut -d: -f1)"
+check "exactly one boot escrow call, deferred 900 s, with the cron's exact wrapper (found line(s): ${BOOT_LN//$'\n'/,})" \
+  "[ \"\$(grep -c . <<<'$BOOT_LN')\" -eq 1 ] && [ \"\$(grep -vE '^[[:blank:]]*#' '$CI_YML' | grep -c 'doppler run .*-- /usr/local/bin/registry-luks-escrow.sh')\" -eq 2 ]"
 ZOT_RUN_LN="$(grep -nE '^[[:blank:]]*docker run -d --name zot ' "$CI_YML" | head -1 | cut -d: -f1)"
 HB_BOOT_LN="$(grep -nF -- '-- bash /usr/local/bin/zot-disk-heartbeat.sh || true' "$CI_YML" | head -1 | cut -d: -f1)"
 check "the boot escrow run exists, backgrounded, with the cron's wrapper (a bare run records fail_key_absent)" "[ -n '$BOOT_LN' ]"
@@ -230,7 +277,7 @@ check "the boot escrow run comes AFTER zot's docker run (a slow KDF never length
 check "the boot escrow run comes BEFORE the first boot heartbeat" "[ '${BOOT_LN:-0}' -lt '${HB_BOOT_LN:-0}' ]"
 
 # --- Anti-vacuity floors: printf + exit, never through check() (ADR-193) ------------------------
-MIN_CASES=39
+MIN_CASES=51
 if [ "$cases" -lt "$MIN_CASES" ]; then
   printf '\n[FATAL] floor: only %s cases ran (expected >= %s).\n' "$cases" "$MIN_CASES" >&2
   exit 1

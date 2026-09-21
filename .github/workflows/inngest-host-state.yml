@@ -24,7 +24,8 @@
 # ── EXIT BEHAVIOUR ─────────────────────────────────────────────────────────────
 # Green ONLY on rc 0. Every other rc — including 4, which the script's own header calls a
 # finding ("SILENCE IS NOT HEALTH") — emits `::error::` and fails the job: a red run is the
-# correct phone-visible signal. The rc table in the summary covers every code the script's
+# correct phone-visible signal. rc 0 with `SERVING=no` stays green (the READ succeeded) and adds a
+# `::warning::` annotation, so a not-serving host is never a plain green tick. The rc table in the summary covers every code the script's
 # `Exit codes:` header lists; apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh
 # derives that set from the header and asserts identity, and executes this `run:` body per code.
 name: "Inngest host state (read-only)"
@@ -97,10 +98,15 @@ jobs:
 
           # The ONLY thing read out of out.txt is the anchored VERDICT line. Everything else in
           # it is unscrubbed host text and stays on the runner (public repo).
+          # Read ONLY on rc 0: on any other rc the script has not vouched for a verdict, and a line
+          # that happens to match is not one. Anchored at BOTH ends, and the optional age note
+          # may not contain `:`, so no `::workflow-command` can ride on the line.
           verdict=""
           wrapper_fault=""
           if [ -f out.txt ]; then
-            verdict="$(grep -m1 -E '^  VERDICT        (NOT )?SERVING   SERVING=(yes|no)' out.txt || true)"
+            if [ "$rc" -eq 0 ]; then
+              verdict="$(grep -m1 -E '^  VERDICT        (NOT )?SERVING   SERVING=(yes|no)(   AS OF [^:]*)?$' out.txt || true)"
+            fi
             verdict="${verdict//::/: :}"
           elif [ "$rc" -eq 0 ]; then
             wrapper_fault="out.txt is missing although the script exited 0 — nothing can be reported"
@@ -148,4 +154,9 @@ jobs:
             echo "::error::inngest-host-state rc=${rc} — $(meaning "$rc")"
             exit "$rc"
           fi
+          # A successful READ of a host that is not serving is still green (the read worked), so
+          # the finding is raised as a warning annotation that shows on the run page.
+          case "$verdict" in
+            *" SERVING=no"*) echo "::warning::inngest-host-state: the dedicated inngest host is NOT SERVING — see the run summary" ;;
+          esac
           echo "inngest-host-state rc=0 — $(meaning 0)"

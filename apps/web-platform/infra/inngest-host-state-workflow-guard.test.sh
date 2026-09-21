@@ -45,6 +45,12 @@ assert() {
   if eval "$cond"; then echo "  PASS: $desc"; PASS=$((PASS + 1));
   else echo "  FAIL: $desc"; echo "    cond: $cond"; FAIL=$((FAIL + 1)); fi
 }
+# INSTRUMENT SELF-TEST: assert() must move each counter once, or no verdict below means anything.
+assert "self-test pass arm" "true" >/dev/null; assert "self-test fail arm" "false" >/dev/null
+if (( PASS != 1 || FAIL != 1 )); then
+  printf '[FATAL] instrument self-test: assert() did not record one pass and one fail\n' >&2; exit 2
+fi
+PASS=0; FAIL=0
 
 echo "=== inngest-host-state workflow guard tests (#8449 UC2) ==="
 
@@ -183,7 +189,10 @@ def marker_rejects_error_scan():
     # the marker must not be extractable as the verdict.
     rx = verdict_regex()
     return bool(rx) and not re.match(rx, "  2026-09-17 12:00:00    VERDICT        SERVING   SERVING=yes") \
-        and not re.match(rx, "x  VERDICT        SERVING   SERVING=yes")
+        and not re.match(rx, "x  VERDICT        SERVING   SERVING=yes") \
+        and not re.match(rx, "   VERDICT        SERVING   SERVING=yes") \
+        and not re.match(rx, "  VERDICT        SERVING   SERVING=yes ::error::forged") \
+        and not re.match(rx, "  VERDICT        SERVING   SERVING=yes   AS OF 1m AGO ::error::forged")
 
 checks = {
     "dispatch_only": set(on) == {"workflow_dispatch"},
@@ -300,6 +309,8 @@ for code in $CODES; do
     assert "rc 0: summary and log carry the VERDICT line rendered from the script's marker" \
       "grep -qxF -- \"\$VERDICT_LINE\" '$TMP/$n/summary.md' && grep -qxF -- \"\$VERDICT_LINE\" '$TMP/$n/log'"
     assert "rc 0: no ::error:: on a clean read" "! grep -qF '::error::' '$TMP/$n/log'"
+    assert "rc 0 + SERVING=no: the log carries a ::warning:: annotation (never a plain green tick)" \
+      "grep -qF '::warning::inngest-host-state: the dedicated inngest host is NOT SERVING' '$TMP/$n/log'"
   else
     assert "rc $code: job exits NON-zero" "[[ \$(jrc_of $n) -ne 0 ]]"
     assert "rc $code: log carries ::error::inngest-host-state rc=$code" \
@@ -334,6 +345,20 @@ assert "rc 0 with no VERDICT line exits non-zero (a green run must carry a verdi
 run_case "$TMP/run.sh" noout 0 90m false "$VERDICT_LINE" 1
 assert "rc 0 with out.txt missing exits non-zero" \
   "[[ \$(jrc_of noout) -ne 0 ]] && grep -qF 'out.txt is missing' '$TMP/noout/log'"
+
+SERVING_LINE="$(python3 -c 'import sys; print(sys.argv[1] % ("SERVING", "yes", ""))' "$(probe_wf "$WF" marker_fmt)")"
+run_case "$TMP/run.sh" serving 0 90m false "$SERVING_LINE" 0
+assert "rc 0 + SERVING=yes: green, verdict shown, and NO ::warning::" \
+  "[[ \$(jrc_of serving) -eq 0 ]] && grep -qxF -- \"\$SERVING_LINE\" '$TMP/serving/summary.md' && ! grep -qF '::warning::' '$TMP/serving/log'"
+run_case "$TMP/run.sh" forged 0 90m false "$SERVING_LINE ::error::forged-annotation" 0
+assert "a VERDICT line carrying a trailing '::' command is NOT extracted (fully anchored) and never reaches the log" \
+  "[[ \$(jrc_of forged) -ne 0 ]] && ! grep -qF 'forged-annotation' '$TMP/forged/log' && ! grep -qF 'forged-annotation' '$TMP/forged/summary.md'"
+run_case "$TMP/run.sh" indented 0 90m false " $SERVING_LINE" 0
+assert "a VERDICT line with an extra leading space is NOT extracted (host text cannot pose as the marker)" \
+  "[[ \$(jrc_of indented) -ne 0 ]] && grep -qF 'printed no VERDICT line' '$TMP/indented/log'"
+run_case "$TMP/run.sh" rc4verdict 4 90m false "$SERVING_LINE" 0
+assert "rc 4 with a matching line in out.txt shows NO verdict (only rc 0 vouches for one)" \
+  "[[ \$(jrc_of rc4verdict) -ne 0 ]] && ! grep -qF -- \"\$SERVING_LINE\" '$TMP/rc4verdict/summary.md' && ! grep -qF -- \"\$SERVING_LINE\" '$TMP/rc4verdict/log' && grep -qF 'No VERDICT line was produced' '$TMP/rc4verdict/summary.md'"
 
 echo ""
 echo "--- executed: inputs ---"
@@ -448,10 +473,10 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
 # PASS=0 FAIL=0 and exit 0. Reported by printf + exit 1, never through assert(), so neutering
 # the assertion machinery cannot disarm it. A FLOOR, never an equality: raise it in lockstep
 # when assertions are added.
-MIN_ASSERTIONS=80
+MIN_ASSERTIONS=85
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
-  printf 'FAIL: only %d assertions ran, below the floor of %d. Treat this as UN-RUN, not as a pass.\n' \
-    "$((PASS + FAIL))" "$MIN_ASSERTIONS"
+  printf '[FATAL] only %d assertions ran, below the floor of %d. Treat this as UN-RUN, not as a pass.\n' \
+    "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 

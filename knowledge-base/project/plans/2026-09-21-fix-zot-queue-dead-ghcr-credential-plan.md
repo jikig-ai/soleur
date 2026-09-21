@@ -929,7 +929,7 @@ liveness_signal:
     line, once per deploy on SYSLOG_IDENTIFIER=ci-deploy.
     (2) The SOLEUR_ZOT_DISK heartbeat (*/5), now carrying a well-formed
     store_probe_rc=cs<rc|na>.bk<rc|na> and store_escrow=<token> store_escrow_age_s=<n>.
-  cadence: per deploy (6-12/day); heartbeat every 5 min; escrow daily at 03:17 UTC
+  cadence: per deploy (6-12/day); heartbeat every 5 min; escrow daily at 03:19 UTC, plus one deferred run (+15 min) on first boot
   alert_target: >-
     Better Stack exploration alert registry_store_not_luks (email + escalation policy, as the
     inngest_luks_wrong_volume sibling), plus the existing zot heartbeat-liveness alarm for "zot
@@ -938,6 +938,12 @@ liveness_signal:
     apps/web-platform/infra/betterstack-logs-alerts.tf (new pair);
     apps/web-platform/infra/cloud-init-registry.yml (heartbeat + escrow cron);
     apps/web-platform/infra/ci-deploy.sh (journald lines)
+  layers: >-
+    ci-deploy lines: journald -> Vector `host_scripts_journald` source (SYSLOG_IDENTIFIER=ci-deploy)
+    -> Better Stack. SOLEUR_ZOT_DISK: a direct HTTPS POST from the registry host to the Better Stack
+    ingest endpoint, OUTSIDE the Vector layers 1-5 (the registry host runs no Vector). Heartbeat
+    silence: scheduled-zot-restart-loop.yml's SILENT / INGEST_DARK verdicts, surfaced as a workflow
+    `::error::` in the run log (layer 6). Sentry: cosign_verify_event (unchanged).
 error_reporting:
   destination: >-
     Better Stack (journald -> Vector for ci-deploy; direct POST for the registry heartbeat).
@@ -961,14 +967,16 @@ failure_modes:
     detection: >-
       zot fails to start (sentinel bind source missing), so zot-liveness-heartbeat stops pinging.
       Corroboration in SOLEUR_ZOT_DISK: state_status=exited|created and luks_open_arm=<arm>.
-      The NIC-guard recovery (<=5 min) always pages before it heals, and that is correct.
+      The NIC-guard recovery starts zot within one 5-min tick once the store is mounted; while the
+      mapper cannot open, zot stays down (unbounded) and the page stands. It pages before it heals,
+      and that is correct.
     alert_route: betteruptime_heartbeat.registry_prd ("soleur-registry-prd", 60 s period + 30 s grace; measured live and unpaused)
   - mode: the passphrase no longer opens the header, the header is unreadable, or the key is absent from Doppler
     detection: store_escrow=fail_passphrase|fail_header|fail_key_absent in the trusted head
     alert_route: registry_store_not_luks arm (B) (Better Stack)
   - mode: the escrow job silently stops running
-    detection: store_escrow=stale (age > 48h), none, or indeterminate
-    alert_route: registry_store_not_luks arm (B) (Better Stack). Plan review widened the arm from fail-only to any value other than ok
+    detection: store_escrow=stale (age > 26 h, i.e. > 93600 s), none, or indeterminate
+    alert_route: registry_store_not_luks arm (B) (Better Stack). Plan review widened the arm from fail-only to any value other than ok; review then exempted `pending` (no result yet AND uptime < 2 h), which is the first-boot window only
 logs:
   where: Better Stack source shared with vector_prd (SYSLOG_IDENTIFIER=ci-deploy; SOLEUR_ZOT_DISK direct POST)
   retention: Better Stack plan retention (unchanged)
@@ -1331,7 +1339,7 @@ the filesystem returns, zot is started within one NIC-guard tick.
 ### Guard 5 — escrow result is honest and keyless
 
 **Property.** `store_escrow=ok` is emitted only when `luksOpen --test-passphrase` exited 0 with the
-Doppler-held key, against the device backing `/var/lib/zot`, within the last 48 h. The key never
+Doppler-held key, against the device backing `/var/lib/zot`, within the last 26 h. The key never
 leaves the process.
 
 **Assembly.** `registry-luks-escrow.sh` (the producer: the cron line and the runcmd boot call),
