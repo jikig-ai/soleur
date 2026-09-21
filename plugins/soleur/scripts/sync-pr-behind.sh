@@ -55,6 +55,8 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
        sync-pr-behind.sh <pr-number> --step
        sync-pr-behind.sh --help
 
+  Run from the PR's feature worktree, on its branch: the script syncs $PWD's branch.
+
   --step            one sync attempt on the current branch (merge origin/main, push);
                     no gh calls — the caller already read mergeStateStatus
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
@@ -68,8 +70,10 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
   5   fetching main failed (kind=fetch)
   6   merge conflict, or merge not committed (hook) — the merge was aborted (kind=merge)
   7   git push failed — the local merge commit is retained (kind=push)
-  8   still BEHIND after N attempts (standalone, kind=exhausted)
+  8   still BEHIND after N attempts (standalone, kind=exhausted); after a kind=pushed
+      line the push landed and GitHub has not recomputed yet — re-arm the poll
   9   a merge/rebase/cherry-pick/revert this script did not start, or detached HEAD
+      (kind=merge_in_progress or detached_head)
   10  git merge refused to start (nothing to abort, kind=merge_refused)
   11  origin/main already merged and pushed — nothing to push (kind=noop); GitHub's
       mergeStateStatus lags the ref. Fences keep polling; standalone exits so the
@@ -145,7 +149,11 @@ sync_step() {
         tag merge "$rc" "git merge origin/main failed — merge not committed (hook rejected?), no conflicted paths; aborting sync."
       fi
       git merge --abort 2>&1 || echo "git merge --abort failed (rc=$?)"
-      echo "Manual conflict resolution required on $BRANCH. Next: git merge origin/main, resolve, commit, push, then re-arm the poll."
+      if [[ -n "$conflicted" ]]; then
+        echo "Manual conflict resolution required on $BRANCH. Next: git merge origin/main, resolve, commit, push, then re-arm the poll."
+      else
+        echo "No conflict on $BRANCH. Next: run git merge origin/main and read the pre-merge-commit hook's output; fix what it reports, commit, push, then re-arm the poll."
+      fi
       return 6
     elif git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
       tag merge_in_progress "$rc" "MERGE_HEAD appeared during the sync (not started by this script); not touching it. Run git status, finish or abort it, then re-arm the poll."
@@ -161,14 +169,14 @@ sync_step() {
   # commit from an earlier failed push (HEAD != upstream) still gets pushed below.
   if [[ -n "$before" && "$(git rev-parse HEAD 2>/dev/null || true)" == "$before" \
         && "$(git rev-parse '@{u}' 2>/dev/null || true)" == "$before" ]]; then
-    tag noop 0 "origin/main is already merged into $BRANCH and pushed; nothing to push. GitHub's mergeStateStatus lags — keep polling."
+    tag noop 11 "origin/main is already merged into $BRANCH and pushed; nothing to push. GitHub's mergeStateStatus lags — keep polling."
     return 11
   fi
 
   rc=0; out="$(git push 2>&1)" || rc=$?
   if [[ -n "$out" ]]; then printf '%s\n' "$out" | tail -2 || true; fi
   if [[ "$rc" -ne 0 ]]; then
-    tag push "$rc" "git push failed after merge — auto-sync incomplete; the local merge commit is retained, nothing was aborted. Usually a concurrent push to $BRANCH: run git fetch origin $BRANCH, inspect git log --oneline HEAD...origin/$BRANCH, reconcile, then re-arm the poll."
+    tag push "$rc" "git push failed after merge — auto-sync incomplete; the local merge commit is retained, nothing was aborted. Usually a concurrent push to $BRANCH: run git fetch origin $BRANCH, inspect git log --oneline HEAD...origin/$BRANCH, then git merge origin/$BRANCH (do not rebase — it would flatten the retained merge commit), push, then re-arm the poll."
     return 7
   fi
   return 0

@@ -534,10 +534,10 @@ make_pair "$S_NO"
 install_gh_forbidden "$S_NO/bin"
 before="$(git -C "$S_NO/work" rev-parse HEAD)"
 run_step "$S_NO"; rc=$?
-if [[ "$rc" -eq 11 ]] && grep -q '^\[pr-behind-sync\] kind=noop rc=0 — ' "$S_NO/out" \
+if [[ "$rc" -eq 11 ]] && grep -q '^\[pr-behind-sync\] kind=noop rc=11 — ' "$S_NO/out" \
    && ! grep -q 'Everything up-to-date' "$S_NO/out" \
    && [[ "$(git -C "$S_NO/work" rev-parse HEAD)" == "$before" ]] && no_gh "$S_NO"; then
-  pass "--step with main already merged: rc 11, kind=noop rc=0, no push"
+  pass "--step with main already merged: rc 11, kind=noop rc=11, no push"
 else
   fail "--step noop: rc=$rc out=$(tr '\n' ' ' < "$S_NO/out")"
 fi

@@ -1065,7 +1065,7 @@ MOCK_MERGE=noop
 ${SYNC_MOCKS}
 EOF
 run_scenario_both "16-sync-noop" "$SCEN16" \
-  "kind=noop rc=0
+  "kind=noop rc=11
 \[1/60\] \[ship\.phase7\.sync_noop\] main already merged and pushed
 \[60/60\] \[ship\.phase7\.sync_noop\]
 Merge poll timed out" \

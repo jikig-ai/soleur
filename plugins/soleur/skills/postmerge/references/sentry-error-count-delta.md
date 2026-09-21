@@ -29,7 +29,8 @@ Loaded by [postmerge SKILL.md](../SKILL.md) Phase 3.6 when the PR body or linked
 # (a bare token: letters, digits, `-`, `_`). DEPLOY_TS = the merge commit's
 # committer date (Phase 1 recorded the merge SHA) — the reference point for
 # "did the error stop firing post-deploy?".
-DEPLOY_TS=$(git show -s --format=%cI "<merge-commit-sha-from-phase-1>")
+ISSUE_ID="<sentry-issue-id-from-pr-body>"
+DEPLOY_TS=$(git show -s --format=%cI "<merge-commit-sha-from-phase-1>" 2>/dev/null || true)
 # Same resolution as Phase 3.5 — this block runs on its own.
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
 API_HOST="${SENTRY_ORG}.sentry.io"
@@ -64,11 +65,22 @@ else
     if [[ "$ISSUE_STATUS" == "resolved" || "$ISSUE_STATUS" == "ignored" ]]; then
       ISSUE_STOPPED=true
     elif [[ -n "$ISSUE_LASTSEEN" && "$ISSUE_LASTSEEN" != "null" ]]; then
-      LASTSEEN_EPOCH=$(date -d "$ISSUE_LASTSEEN" +%s 2>/dev/null || echo 9999999999)
-      DEPLOY_EPOCH=$(date -d "$DEPLOY_TS" +%s 2>/dev/null || echo 0)
-      (( LASTSEEN_EPOCH < DEPLOY_EPOCH )) && ISSUE_STOPPED=true
+      # An empty DEPLOY_TS (wrong/unfetched SHA) or an unparseable date (BSD date has
+      # no -d) is SKIPPED: `date -d ""` is today's midnight and would read as STOPPED.
+      LASTSEEN_EPOCH=""; DEPLOY_EPOCH=""
+      if [[ -n "$DEPLOY_TS" ]]; then
+        LASTSEEN_EPOCH=$(date -d "$ISSUE_LASTSEEN" +%s 2>/dev/null || true)
+        DEPLOY_EPOCH=$(date -d "$DEPLOY_TS" +%s 2>/dev/null || true)
+      fi
+      if [[ -z "$LASTSEEN_EPOCH" || -z "$DEPLOY_EPOCH" ]]; then
+        echo "WARNING: deploy timestamp or lastSeen unparseable. Sentry error-count delta: SKIPPED."
+        ISSUE_STATUS=""
+      elif (( LASTSEEN_EPOCH < DEPLOY_EPOCH )); then
+        ISSUE_STOPPED=true
+      fi
     fi
-    if [[ "$ISSUE_STOPPED" == "true" ]]; then SENTRY_DELTA=STOPPED; else SENTRY_DELTA=STILL-FIRING; fi
+    if [[ "$ISSUE_STOPPED" == "true" ]]; then SENTRY_DELTA=STOPPED
+    elif [[ -n "$ISSUE_STATUS" ]]; then SENTRY_DELTA=STILL-FIRING; fi
   fi
 fi
 echo "Sentry error-count delta: $SENTRY_DELTA"
@@ -80,7 +92,7 @@ Interpretation (all outcomes are **WARN-only — never a merge blocker**):
 - `lastSeen` is after the deploy timestamp (`SENTRY_DELTA=STILL-FIRING` — the GET succeeded and `ISSUE_STOPPED=false`): "WARNING: Sentry issue `<shortId>` is still firing after the deploy (lastSeen <ts>). The fix may be ineffective or the root cause may differ from the diagnosis — recommend re-opening for investigation rather than closing." Report `STILL-FIRING` and surface it prominently in the Phase 7 report. **Never auto-resolve in this branch.**
 - No read token, Sentry API unreachable / issue not found / non-200 (`SENTRY_DELTA=SKIPPED`): warn and report `SKIPPED`. A failed GET never reads as `STILL-FIRING`.
 
-**Auto-resolve (expected-good-outcome branch only).** When the GET above shows the error has stopped firing (`lastSeen` older than the deploy **or** `status` already `resolved`/`ignored`) **and** the issue is not already `resolved`, PUT `status:"resolved"` so the historical issue leaves the active list automatically. This requires a dedicated write-scoped token — the `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` read tokens resolved from `soleur/prd` lack `event:write`/`event:admin` and return 403 on the write endpoint, so resolve a separate token and **skip (do NOT fall back to a read token)** when it is absent:
+**Auto-resolve (expected-good-outcome branch only).** Run this block in the SAME shell invocation as the block above — it reads that block's variables, and the Bash tool keeps no shell state between calls. When the GET above shows the error has stopped firing (`lastSeen` older than the deploy **or** `status` already `resolved`/`ignored`) **and** the issue is not already `resolved`, PUT `status:"resolved"` so the historical issue leaves the active list automatically. This requires a dedicated write-scoped token — the `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` read tokens resolved from `soleur/prd` lack `event:write`/`event:admin` and return 403 on the write endpoint, so resolve a separate token and **skip (do NOT fall back to a read token)** when it is absent:
 
 ```bash
 # SENTRY_RW_TOKEN, API_HOST and SENTRY_ORG were resolved in the block above; the
@@ -101,6 +113,7 @@ if [[ -n "$SENTRY_RW_TOKEN" && "$ISSUE_STOPPED" == "true" && "$ISSUE_STATUS" != 
     -d '{"status":"resolved"}' \
     "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/")
   if [[ "$RESOLVE_HTTP" == "200" ]]; then
+    SENTRY_DELTA=AUTO-RESOLVED
     echo "Sentry error-count delta: AUTO-RESOLVED issue ${ISSUE_ID}."
   else
     echo "WARNING: Sentry issue auto-resolve failed (${RESOLVE_HTTP}): verify SENTRY_ISSUE_RW_TOKEN has event:admin on ${SENTRY_ORG}; resolve manually in the UI."
@@ -108,6 +121,6 @@ if [[ -n "$SENTRY_RW_TOKEN" && "$ISSUE_STOPPED" == "true" && "$ISSUE_STATUS" != 
 fi
 ```
 
-The PUT reuses the SAME `API_HOST`/`SENTRY_ORG` resolution as the GET above (Phase 3.5's, from Doppler `prd`). On any non-200 (403 under-scoped, transient) it emits a WARN and continues — **never blocks**. Report vocabulary for this phase is `AUTO-RESOLVED` (write succeeded) / `STOPPED` (stopped firing, no token or already resolved) / `STILL-FIRING` / `SKIPPED`.
+The PUT reuses the SAME `API_HOST`/`SENTRY_ORG` resolution as the GET above (Phase 3.5's, from Doppler `prd`). On any non-200 (403 under-scoped, transient) it emits a WARN and continues — **never blocks**. Report vocabulary for this phase is `$SENTRY_DELTA`: `AUTO-RESOLVED` (write succeeded) / `STOPPED` (stopped firing; no write token, already resolved, or the PUT returned non-200) / `STILL-FIRING` / `SKIPPED`.
 
 **Why WARN-only, not a blocker:** a true pre/post delta needs the original error to actually re-fire in the brief post-merge window. Low-frequency bugs (daily-cron failures, rare-path exceptions) legitimately show zero events for hours after a correct fix, so a hard gate here would produce noisy false negatives that erode trust in the pipeline. The signal is a prompt to *look*, not a verdict. For high-frequency errors a continued-firing signal is strong evidence the fix missed; consider a `/loop` re-check 15–30 min out before marking the linked issue resolved.
