@@ -44,6 +44,9 @@
 #     anything in this repo (every in-tree sample is synthetic or redacted), so the bound is made
 #     true by construction rather than by belief. Same reasoning, same width, as the registry
 #     sibling's heartbeat-token stub.
+#   * `sentry_dsn` (#6500) — 149 B, in the DSN shape. A Sentry DSN is
+#     `https://<32-hex key>@o<org id>.ingest.<region>.sentry.io/<project id>`, about 90 B; the stub
+#     widens the org and project ids well past any issued value, so it bounds the real one.
 #
 # MEASURE WITH TERRAFORM'S OWN `base64gzip`, NEVER `gzip -9`. They are different compression
 # levels and `-9` OVERSTATES headroom. On a hard gate an optimistic measurement is worse
@@ -182,6 +185,7 @@ locals {
     zot_pull_token         = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"
     web_host_private_ips   = "10.0.1.10,10.0.1.11"
     betterstack_logs_token = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"
+    sentry_dsn             = "https://STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB@o0000000000000000.ingest.us.sentry.io/0000000000000000000000000000000000000000000000000000000000000000000000"
   }
 
   inngest_rationale_strip = ${STRIP_EXPR}
