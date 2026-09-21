@@ -203,3 +203,43 @@ private-package storage/egress is within the existing GitHub plan.
 - **AP (deterministic/pinned supply chain): Aligned** — SHA-pinned cosign + pinned
   trusted-root make verification reproducible and independent of sigstore uptime; the
   one deviation (deprecated `--offline`) is contained by the pin and tracked as debt.
+
+## Amendment 2026-09-21 (#8036) — the verifier image is pulled anonymously
+
+**What changed.** The verify `docker run` in `verify_image_signature()` now executes with the
+docker CLI's `DOCKER_CONFIG` pointed at a fresh directory holding exactly `{"auths":{}}`, and with
+`DOCKER_AUTH_CONFIG` unset. The CLI resolves auths for the implicit `COSIGN_IMAGE` pull from its
+own config, so the verifier **image** (`ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a…`, public) is
+always pulled anonymously. The `-v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro"` mount is a
+host-path bind resolved independently of the CLI's `DOCKER_CONFIG`, so the `.sig` referrer fetch
+inside the container still authenticates to the registry the digest came from. The mounted
+config's purpose therefore narrows to that `.sig` fetch alone. The Design B′ topology decided above
+is unchanged.
+
+**Why.** The implicit pull presented the deploy config's inline `ghcr.io` entry, a revoked classic
+PAT. GHCR answers a revoked credential with DENIED where it serves the same public image
+anonymously (measured 2026-09-21T07:49Z: `GET api.github.com/user` with the token → 401;
+anonymous manifest HEAD on the pinned digest → 200). Every deploy classified that DENIED as
+`IMAGE_VERIFY_FAIL result=cosign_absent`, so signature verification had not actually run for
+seven weeks (#8037).
+
+**A per-deploy dependency on public ghcr.io, stated.** `ci-deploy.sh` runs `docker image prune -af`
+before the verify, and the verifier image has no live container, so it is pruned and re-pulled on
+**every** deploy. It always was; the pull just used to fail. If the anonymous pull fails (a ghcr.io
+outage or its anonymous rate limit), the run fails with `Unable to find image`/`denied` and is
+classified `cosign_absent`. Under WARN the deploy runs the digest unverified and Sentry receives
+`cosign_verify_event`. Under ENFORCE it would block the deploy. **An ENFORCE flip must therefore
+first decide whether to keep the verifier image locally** (excluded from the prune, or loaded from a
+pinned tarball), and must cite the #8037 follow-through probe's PASS.
+
+**Fallback.** If the isolated directory cannot be created or fails its content check, the verify
+runs as before and `IMAGE_VERIFY_PREP: anon_config=unavailable` is logged. The #8037 probe grades a
+verdict preceded by that line as action-required, so the fail-open cannot pass silently.
+
+**Alternatives considered.**
+
+- *Mint a new GHCR read credential for hosts.* Rejected: a host can only hold a personal
+  credential (ADR-088 arm-b), which contradicts hr-github-app-auth-not-pat, and the verifier image
+  needs no credential at all.
+- *`docker logout ghcr.io` on relogin failure.* Deferred to #8036 1c (GHCR's fate on hosts): it
+  changes the GHCR-fallback semantics, and the isolated config already buys the property.
