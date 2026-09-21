@@ -1,6 +1,7 @@
 ---
 name: provision-doppler
 description: "This skill should be used when provisioning Doppler projects and OIDC identities for tenants."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->

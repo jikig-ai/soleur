@@ -1,0 +1,10 @@
+INIT model=claude-sonnet-5 claude_code=2.1.278
+TOOL_USE Skill {"skill": "soleur:cron-list"}
+TOOL_RESULT <tool_use_error>Skill soleur:cron-list cannot be used with Skill tool due to disable-model-invocation. Ask the user to run /soleur:cron-list themselves — it cannot be invoked via the Skill tool. Do not replicate this skill's workflow by other means — it is reserved for explicit user invocation.</tool_use_error>
+RESULT The Skill tool returned this error, quoted verbatim:
+
+```
+<tool_use_error>Skill soleur:cron-list cannot be used with Skill tool due to disable-model-invocation. Ask the user to run /soleur:cron-list themselves — it cannot be invoked via the Skill tool. Do not replicate this skill's workflow by other means — it is reserved for explicit user invocation.</tool_use_error>
+```
+
+You'll need to run `/soleur:cron-list` yourself.
