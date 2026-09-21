@@ -286,7 +286,7 @@ if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED
 else
   bad "chunked-hold acquire: rc=$rc out=$out"
 fi
-chunks=$(grep -c '^SELECT pg_sleep(10);$' "$STUB_DB_DIR/state-chunk/holder.sql")
+chunks=$(grep -c '^SELECT pg_sleep(10);$' "$STUB_DB_DIR/state-chunk/holder.sql") || true
 if [[ "$chunks" == "2" ]]; then
   ok "holder SQL emits 2 full pg_sleep(10) chunks for HOLD_S=25"
 else
