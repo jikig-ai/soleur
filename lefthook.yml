@@ -383,30 +383,20 @@ pre-commit:
         echo "Move to knowledge-base/project/ before committing:" >&2
         echo "  knowledge-base/{brainstorms,learnings,plans,specs}/ -> knowledge-base/project/{brainstorms,learnings,plans,specs}/" >&2
         exit 1
-    # DUAL GLOB, and both arms are load-bearing (#7935). lefthook uses gobwas
-    # semantics where `**` requires at least ONE intermediate directory, so the
-    # single `knowledge-base/**/*.md` arm has NEVER matched knowledge-base/INDEX.md
-    # itself -- it sits at depth 1. Measured against lefthook 2.1.6: with only
-    # INDEX.md staged, the single-glob form printed `(skip) no matching staged
-    # files` and the command never ran, while the dual form executed. That is
-    # exactly the merge-resolution commit shape where regeneration matters most.
-    # See 2026-03-21-lefthook-gobwas-glob-double-star.md.
+    # NO generate-kb-index STEP (#8377 / ADR-235). The KB index and its two facet
+    # files are untracked caches now, so there is nothing to stage and a
+    # pre-commit regeneration would only write a snapshot that the next reader
+    # re-derives anyway. scripts/ensure-kb-index.sh regenerates them on demand at
+    # read time, which also covers cloud harnesses that never run git hooks.
     #
-    # The `git add` covers all THREE generated artifacts: one generator run
-    # rewrites all three, and staging only INDEX.md left kb-categories.txt a
-    # month stale on disk, committed only when some unrelated change happened to
-    # sweep it up.
-    generate-kb-index:
-      priority: 10
-      glob: ["knowledge-base/*.md", "knowledge-base/**/*.md"]
-      run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md knowledge-base/kb-tags.txt knowledge-base/kb-categories.txt
     # Auto-regenerate the compiled LikeC4 model whenever a .c4 source is staged,
-    # then re-stage it — mirrors the generate-kb-index precedent above (its
-    # priority 10 + `run: <script> && git add <generated-file>` shape). NOTE the
-    # glob differs deliberately: generate-kb-index uses `**` because KB markdown
-    # is nested, but the .c4 sources are FLAT depth-1, so this glob is single-star
-    # (gobwas `**` requires ≥1 intermediate dir and would silently skip depth-1
-    # files — see 2026-03-21-lefthook-gobwas-glob-double-star.md). The script
+    # then re-stage it. model.likec4.json is a PRODUCT, not a cache: the
+    # web-platform C4 viewer (app/api/kb/c4/project/route.ts) fetches the committed
+    # blob from GitHub on the request path with no build step, so it must exist as
+    # a committed blob and this step keeps it honest. NOTE the
+    # single-star glob: the .c4 sources are FLAT depth-1 and gobwas `**` requires
+    # ≥1 intermediate dir, so a `**` form would silently skip every one of them
+    # — see 2026-03-21-lefthook-gobwas-glob-double-star.md. The script
     # renders off-tree + validates (refuses to publish an empty/invalid model),
     # so a broken .c4 BLOCKS the commit instead of clobbering the good artifact.
     # The CI freshness test (plugins/soleur/test/c4-model-freshness.test.sh)
@@ -421,7 +411,7 @@ pre-commit:
         git diff --cached --name-only | grep -qx 'knowledge-base/engineering/architecture/diagrams/c4-model.md' \
           || echo "NOTE: .c4 model changed but c4-model.md was not staged — review its ## Notes prose for staleness (advisory; commit not blocked)." >&2
         exit 0
-    # priority 11: runs after generate-kb-index (priority 10) so the linter
+    # priority 11: runs after the priority-10 regenerators above so the linter
     # sees the final staged file. Single-star glob is intentional — content
     # files are flat; gobwas's ** requires 1+ directory levels and would
     # silently skip everything. See knowledge-base/project/learnings/

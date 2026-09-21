@@ -107,7 +107,15 @@ t_in_progress() {
 # T6: dynamic enumeration smoke — script can list >= 1 workflow from
 # the bot-workflow union (composite + inline) without AUDIT_FIXED_WORKFLOWS.
 # Threshold lowered from 6 → 1 in TR9 Phase 2 (#3948) after 22 scheduled
-# workflows migrated to Inngest. Only rule-metrics-aggregate.yml remains.
+# workflows migrated to Inngest. The comment then claimed "only
+# rule-metrics-aggregate.yml remains", which was already false — weakness-miner.yml is
+# enumerated too. #8377 deleted rule-metrics-aggregate.yml, so weakness-miner.yml is now
+# the ONLY member and the enumeration measures exactly 1 (verified 2026-09-20).
+#
+# THE FLOOR IS THEREFORE EXACTLY MET, WITH NO SLACK. Deleting or renaming
+# weakness-miner.yml, or changing how the union enumerates it, takes this to 0 and reds
+# this case — which is the intended signal, not a surprise: at zero members the audit has
+# nothing to audit and the gate should say so rather than pass emptily.
 t_enumeration_count() {
   local tmp; tmp=$(mktemp -d)
   local count; count=$(AUDIT_ENUMERATE_ONLY=1 bash "$SCRIPT" 2>"$tmp/stderr" | wc -l)
