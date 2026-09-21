@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 
 // Cross-artifact contract test for the zot mirror-staleness fallback-rate alarm
 // (#6278 / ADR-096 "Loud, no-SSH signal").
@@ -138,19 +138,11 @@ const observability = readFileSync(join(here, "../server/observability.ts"), "ut
 // find the paragraph the pointer names — so deleting the real paragraph still passed.
 // Nested HCL braces are indented, so a column-0 `\n}` is unambiguously the resource's own.
 function _scopeHeader(name: string): number {
-  // The file now legitimately holds BOTH types: 28 rules as
-  // `sentry_alert` (27 adopted in #7650 Phase 2, plus `git_data_boot_warning`
-  // in Phase 3.4), and 2 that stay `sentry_issue_alert`
-  // because the pinned provider cannot express their
-  // `event_unique_user_frequency_count` trigger. `sandbox_startup_failure` is
-  // one of those two and shares this helper, so hardcoding either type makes
-  // the OTHER rule throw "resource not found" — a suite that reds while naming
-  // the wrong cause.
-  for (const type of ["sentry_alert", "sentry_issue_alert"]) {
-    const i = tf.indexOf(`resource "${type}" "${name}"`);
-    if (i !== -1) return i;
-  }
-  return -1;
+  // Every rule is a `sentry_alert` since #8451 adopted the last two
+  // `sentry_issue_alert` blocks (the legacy alert-rule API answers 410). A
+  // `sentry_issue_alert` header is therefore "not found" here — which is the
+  // correct failure, not a helper gap.
+  return tf.indexOf(`resource "sentry_alert" "${name}"`);
 }
 
 function scopeResource(name: string): string {
@@ -379,29 +371,22 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
 // (sentry/rules/conditions/event_frequency.py) — the same semantics
 // zot_mirror_fallback_rate's comment already documents.
 describe("sandbox-startup-failure alert op contract (#6429)", () => {
-  it("fires at its STATED intent: >2 distinct tenants == the comment's >=3", () => {
-    // BODY ONLY — deliberately not scopeResourceWithComment(). The rule's rationale
-    // comment necessarily spells out "value = 2 and not 3", so a bare /value\s*=\s*2/
-    // over comment+body matches the PROSE and stays green with the config reverted to
-    // 3. That false-pass was caught by mutation-testing this very assertion. Anchor on
-    // the HCL assignment at line-start: a comment line begins with `#` and can never
-    // match `^\s*value`.
-    const body = scopeResource("sandbox_startup_failure");
+  it("keeps the distinct-USER trigger class, carried by type while the provider cannot model it (#8451)", () => {
+    // BODY ONLY. Since #8451 the rule is a frozen `sentry_alert`: pinned provider
+    // v0.15.7 cannot express `event_unique_user_frequency_count` natively, so the
+    // HCL carries the trigger TYPE in `legacy_trigger_conditions` and the live
+    // threshold (`{value = 2, interval = "1h"}`, strict `>`) is not in config at all.
+    // The threshold is pinned by the live probe against the committed capture
+    // (scripts/sentry-alert-live-fidelity.sh), not by this file.
+    //
     // Guard the condition CLASS: the discriminator vs the zot rule (RR-1). If this
     // ever became event_frequency, the count would be events-per-group rather than
-    // distinct tenants and the threshold below would mean something else entirely.
-    expect(body).toContain("event_unique_user_frequency");
-    // SURVIVOR — `sandbox_startup_failure` stays `sentry_issue_alert` because the
-    // pinned provider cannot express `event_unique_user_frequency_count` as a
-    // trigger. So its shape is UNCHANGED by #7650 and this assertion must keep
-    // the v2 spelling; rewriting it to the sentry_alert form asserts against a
-    // shape this resource does not have.
-    expect(body).toMatch(/comparison_type\s*=\s*"count"/);
-    expect(body).toMatch(/interval\s*=\s*"1h"/);
-    // RED pre-fix: value = 3 under a strict `>` fires at >=4 tenants, contradicting
-    // the resource comment's ">=3 distinct tenants".
-    expect(body).toMatch(/^\s*value\s*=\s*2\b/m);
-    expect(body).not.toMatch(/^\s*value\s*=\s*3\b/m);
+    // distinct tenants. Anchored on the assignment so the rationale prose above the
+    // block (which names the type) cannot satisfy it.
+    const body = scopeResource("sandbox_startup_failure");
+    expect(body).toMatch(
+      /^\s*legacy_trigger_conditions\s*=\s*\["event_unique_user_frequency_count"\]/m,
+    );
   });
 
   it("states the strict-`>` semantics inline so the 2 cannot be 'corrected' to 3", () => {
@@ -421,14 +406,11 @@ describe("sandbox-startup-failure alert op contract (#6429)", () => {
 
   it("pins the no-SSH page target (fire-but-page-nobody guard)", () => {
     const scoped = scopeResource("sandbox_startup_failure");
-    // Anchored, not toContain() — see the zot sibling above. The in-body comment at
-    // issue-alerts.tf:260 names both literals, so toContain() passed with actions_v2
-    // deleted entirely: this "fire-but-page-nobody guard" guarded nothing.
-    // SURVIVOR — unchanged by #7650: `sandbox_startup_failure` keeps the
-    // `sentry_issue_alert` shape (CamelCase, its own line under actions_v2),
-    // because the pinned provider cannot express its trigger.
-    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
-    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
+    // Anchored on the `email = {` construct, not toContain() — see the zot sibling
+    // above: prose naming both literals must not satisfy it. `sentry_alert` spells the
+    // action inline and lowercase (#8451 moved this rule off `sentry_issue_alert`).
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*target_type\s*=\s*"issue_owners"/);
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*fallthrough_type\s*=\s*"ActiveMembers"/);
   });
 
   it("keeps the sandbox emitter EXCEPTION-shaped so its issue-group stays stack-keyed", () => {
@@ -485,4 +467,119 @@ describe("web-host-terminal-boot-fatal comment anchors (#6429 / #6424 repeat-off
       /^#\s*GROUPING\b/m,
     );
   });
+});
+
+// ── #8451: the two FROZEN rules ──────────────────────────────────────────────
+// `auth_per_user_loop` and `sandbox_startup_failure` were adopted as `sentry_alert`
+// under `lifecycle { ignore_changes = all }`, because any Create/Update from provider
+// v0.15.7 re-sends their legacy trigger with `comparison: true` and destroys the paging
+// threshold. Under the freeze an edit to these blocks plans "0 changes" — it LOOKS
+// applied and is not. This is the static half of Guard 4: the frozen literals must
+// equal the committed live capture, so a stale or edited block reds here instead of
+// silently documenting a rule that does not exist. The live half (enabled, detector,
+// threshold, action) is scripts/sentry-alert-live-fidelity.sh.
+const CAPTURE = JSON.parse(
+  readFileSync(
+    join(
+      here,
+      "../../../knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json",
+    ),
+    "utf8",
+  ),
+) as Array<{
+  id: string;
+  name: string;
+  config: { frequency: number };
+  actionFilters: Array<{
+    logicType: string;
+    conditions: Array<{ type: string; comparison: { key: string; match: string; value: string } }>;
+    actions: Array<{ type: string; config: { targetType: string }; data: { fallthroughType: string } }>;
+  }>;
+}>;
+
+const FROZEN = [
+  { label: "auth_per_user_loop", id: "566671" },
+  { label: "sandbox_startup_failure", id: "669246" },
+] as const;
+
+describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 4 static half)", () => {
+  for (const { label, id } of FROZEN) {
+    describe(label, () => {
+      // Resolved lazily, inside each it(): a missing block must red THESE rows,
+      // not abort collection of the whole file (which reports "no tests").
+      let body = "";
+      let nameInTf = "";
+      let entry: (typeof CAPTURE)[number] | undefined;
+      beforeAll(() => {
+        body = scopeResource(label);
+        const m = body.match(/^\s*name\s*=\s*"([^"]*)"/m);
+        if (!m) throw new Error(`${label}: no name assignment`);
+        nameInTf = m[1];
+        entry = CAPTURE.find((w) => w.name === nameInTf);
+      });
+
+      it("has a capture entry for its name, and that entry is the imported workflow id", () => {
+        expect(entry, `no capture entry named ${nameInTf}`).toBeDefined();
+        expect(entry!.id).toBe(id);
+        // The import block must adopt THAT id — a wrong id is a plausible number that
+        // adopts a different object (issue-alerts.tf "THE ID IS A WORKFLOW ID").
+        expect(tf).toMatch(
+          new RegExp(
+            `import\\s*\\{\\s*to\\s*=\\s*sentry_alert\\.${label}\\s*id\\s*=\\s*"\\$\\{var\\.sentry_org\\}/${id}"`,
+          ),
+        );
+        expect(tf).toMatch(
+          new RegExp(
+            `removed\\s*\\{\\s*from\\s*=\\s*sentry_issue_alert\\.${label}\\s*lifecycle\\s*\\{\\s*destroy\\s*=\\s*false`,
+          ),
+        );
+      });
+
+      it("frequency_minutes equals the capture", () => {
+        const m = body.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
+        expect(m, `${label}: no frequency_minutes`).not.toBeNull();
+        expect(Number(m![1])).toBe(entry!.config.frequency);
+      });
+
+      it("action filter (logic, tag conditions, email action) equals the capture", () => {
+        expect(entry!.actionFilters).toHaveLength(1);
+        const af = entry!.actionFilters[0];
+        expect(body).toMatch(new RegExp(`^\\s*logic_type\\s*=\\s*"${af.logicType}"`, "m"));
+        const tfTags = [
+          ...body.matchAll(
+            /tagged_event\s*=\s*\{\s*key\s*=\s*"([^"]*)",\s*match\s*=\s*"([^"]*)",\s*value\s*=\s*"([^"]*)"\s*\}/g,
+          ),
+        ].map((m) => `${m[1]}|${m[2]}|${m[3]}`);
+        const capTags = af.conditions
+          .filter((c) => c.type === "tagged_event")
+          .map((c) => `${c.comparison.key}|${c.comparison.match}|${c.comparison.value}`);
+        // Guard against a vacuous equality of two empty lists.
+        expect(capTags.length).toBeGreaterThan(0);
+        expect(af.conditions).toHaveLength(capTags.length);
+        expect(tfTags.sort()).toEqual(capTags.sort());
+        const tfEmail = [
+          ...body.matchAll(
+            /email\s*=\s*\{\s*target_type\s*=\s*"([^"]*)",\s*fallthrough_type\s*=\s*"([^"]*)"\s*\}/g,
+          ),
+        ].map((m) => `${m[1]}|${m[2]}`);
+        const capEmail = af.actions
+          .filter((a) => a.type === "email")
+          .map((a) => `${a.config.targetType}|${a.data.fallthroughType}`);
+        expect(capEmail.length).toBeGreaterThan(0);
+        expect(af.actions).toHaveLength(capEmail.length);
+        expect(tfEmail).toEqual(capEmail);
+      });
+
+      it("is frozen: legacy trigger by type, ignore_changes = all, and the INERT warning", () => {
+        expect(body).toMatch(
+          /^\s*legacy_trigger_conditions\s*=\s*\["event_unique_user_frequency_count"\]/m,
+        );
+        expect(body).toMatch(/^\s*trigger_conditions\s*=\s*\[\]/m);
+        expect(body).toMatch(/lifecycle\s*\{\s*ignore_changes\s*=\s*all\s*\}/);
+        expect(scopeResourceWithComment(label)).toMatch(
+          /^#\s*EDITS TO THIS BLOCK ARE INERT until #7985 \(ignore_changes = all\)/m,
+        );
+      });
+    });
+  }
 });

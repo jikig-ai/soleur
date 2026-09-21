@@ -31,6 +31,12 @@
 # > TWO, not the three it names. Phase 3.4 added one further `removed{}`/
 # > `import{}` pair, which the forget/import bijection gate checks as a set and
 # > not against a hardcoded 27.
+#
+# > **Superseded 2026-09-21 (#8451):** the legacy alert-rule family is REMOVED —
+# > a persistent 410 on every plan since 2026-09-18 — so no resource reads it. The
+# > last two are adopted as `sentry_alert` under an `ignore_changes = all` freeze
+# > until #7985 (see the frozen-rules banner below). Every rule here is now a
+# > `sentry_alert`; AC17 derives the counts from this file, so none is restated.
 
 # NAMES ARE LOAD-BEARING. `apps/web-platform/scripts/assert-byok-rules-exist.sh`
 # EXPECTED_RULES and the operator dashboard queries both key on the `name`
@@ -118,6 +124,11 @@
 # which `sentry_alert.trigger_conditions` already expresses in 11 of the 27 blocks
 # below — it is migratable today, and stays only because it landed after the
 # adoption capture was taken.
+#
+# > **Superseded 2026-09-21 (#8451):** the family is removed (persistent 410); no
+# > resource reads it and the brownout retry is gone from apply-sentry-infra.yml.
+# > The last two are adopted as `sentry_alert` under an `ignore_changes = all`
+# > freeze until #7985.
 
 data "sentry_project_issue_stream_monitor" "web_platform" {
   organization = var.sentry_org
@@ -126,44 +137,72 @@ data "sentry_project_issue_stream_monitor" "web_platform" {
 }
 
 # --------------------------------------------------------------------------
-# The TWO surviving `sentry_issue_alert` resources. BOTH are blocked by the same
-# thing: `event_unique_user_frequency_count` is absent from `trigger_conditions`
-# at v0.15.7 (upstream issue 950 — fixed on main 2026-09-09, but unreleased, so
-# still blocking; see #7985). Unlike the previous revision of this banner, there
-# is no unblocked straggler among them — `git_data_boot_warning` was migrated in
-# Phase 3.4 and is now a `sentry_alert` above.
+# The TWO FROZEN rules (#8451). Both read through Sentry's legacy alert-rule API,
+# which now answers `410 {"detail":"This API no longer exists."}` on every plan
+# since 2026-09-18, so as `sentry_issue_alert` they wedged every full-root plan.
+# They are adopted as `sentry_alert` below, with their trigger carried by TYPE
+# only: `event_unique_user_frequency_count` is absent from `trigger_conditions`
+# at v0.15.7 (upstream issue 950 — fixed on main 2026-09-09, unreleased; #7985).
+#
+# WHY `ignore_changes = all`, AND WHY THE TRIPWIRE. The provider reads an
+# unmodeled trigger into `legacy_trigger_conditions` as a bare type string and
+# DISCARDS its `{value, interval}`; on ANY Create or Update it re-sends each
+# legacy entry with `comparison: true` (resource_alert_impl.go
+# getTriggerConditions). One write would replace "> 3 distinct users / 5m" and
+# "> 2 distinct tenants / 1h" with a boolean, and `terraform plan` could not show
+# it. `ignore_changes = all` removes Update structurally;
+# scripts/sentry-issue-alert-create-tripwire.sh refuses Create, replace, and an
+# Update after someone narrows `ignore_changes`, at plan_pr and before apply.
+# The live values are pinned by scripts/sentry-alert-live-fidelity.sh against the
+# committed capture. Terraform owns these rules' EXISTENCE (the address and the
+# destroy gate), not their content, until #7985's native conversion.
 # --------------------------------------------------------------------------
 
-resource "sentry_issue_alert" "auth_per_user_loop" {
-  organization = var.sentry_org
-  project      = data.sentry_project.web_platform.slug
-  name         = "auth-per-user-loop"
-  action_match = "all"
-  filter_match = "all"
-  frequency    = 30
+removed {
+  from = sentry_issue_alert.auth_per_user_loop
+  lifecycle {
+    destroy = false
+  }
+}
 
-  # Provider schema requires actions_v2 ≥ 1 at config-time even for
-  # imported resources. The placeholder is overwritten by import; lifecycle
-  # ignore_changes (below) keeps the real state authoritative thereafter.
-  conditions_v2 = []
-  filters_v2    = []
-  actions_v2 = [
+import {
+  to = sentry_alert.auth_per_user_loop
+  id = "${var.sentry_org}/566671" # WORKFLOW id (GET /workflows/), not the /rules/ id
+}
+
+# EDITS TO THIS BLOCK ARE INERT until #7985 (ignore_changes = all). Terraform owns this rule's
+# EXISTENCE only. Change its content in a #7985 conversion, never by editing these values.
+# Values below are the live workflow 566671 as read 2026-09-21, equal to the committed capture
+# phase34-live-workflows-capture-2026-09-09.json (pinned by the op-contract test).
+resource "sentry_alert" "auth_per_user_loop" {
+  organization      = var.sentry_org
+  name              = "auth-per-user-loop"
+  enabled           = true
+  frequency_minutes = 30
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  # Live trigger: event_unique_user_frequency_count {value = 3, interval = "5m"} (STRICT `>`).
+  # v0.15.7 cannot model it, so it is carried by TYPE only.
+  trigger_conditions        = []
+  legacy_trigger_conditions = ["event_unique_user_frequency_count"]
+
+  action_filters = [
     {
-      notify_email = {
-        target_type      = "IssueOwners"
-        fallthrough_type = "ActiveMembers"
-      }
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "auth" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
     },
   ]
 
+  # ALL, not [environment]: any Create/Update re-sends every legacy trigger with
+  # `comparison: true`, destroying the threshold. Remove only together with the
+  # native-trigger conversion (#7985).
   lifecycle {
-    ignore_changes = [
-      conditions_v2,
-      filters_v2,
-      actions_v2,
-      environment,
-      frequency,
-    ]
+    ignore_changes = all
   }
 }
 
@@ -294,6 +333,18 @@ resource "sentry_alert" "git_data_boot_warning" {
   }
 }
 
+removed {
+  from = sentry_issue_alert.sandbox_startup_failure
+  lifecycle {
+    destroy = false
+  }
+}
+
+import {
+  to = sentry_alert.sandbox_startup_failure
+  id = "${var.sentry_org}/669246" # WORKFLOW id (GET /workflows/), not the /rules/ id
+}
+
 # ── Sandbox-startup failure alert (#5875 / ADR-079) — APPLY-CREATED ──────────
 # Pages when the agent-sandbox startup path fails for ≥K DISTINCT tenants in a
 # rolling window. The 2026-07-01 P0 (#5873 — a seccomp EPERM on the SDK's split
@@ -307,23 +358,25 @@ resource "sentry_alert" "git_data_boot_warning" {
 # can distinguish a one-tenant blip from a fleet-wide outage (the #5873 class,
 # where every tenant's Bash sandbox is down at once).
 #
-# Native affected-users threshold (event_unique_user_frequency): fire when ≥3
-# distinct tenants hit a sandbox-startup failure within 1h. Verified against
-# jianyuan/sentry 0.15.4 via `terraform providers schema -json` (condition
-# type event_unique_user_frequency; comparison_type ∈ {count,percent}; interval
-# valid values incl. 1h). Distinct frequency=22 avoids Sentry POST-time
+# Native affected-users threshold (event_unique_user_frequency_count): fire when ≥3
+# distinct tenants hit a sandbox-startup failure within 1h. LIVE carries
+# `{value = 2, interval = "1h"}`; since #8451 this block carries only the trigger TYPE
+# (see the frozen-rules banner above). Distinct frequency=22 avoids Sentry POST-time
 # exact-duplicate dedup (keyed on action-shape + frequency + match — see the auth
 # rules' comment above).
 #
 # ═══ WHY value = 2 AND NOT 3 (#6429) ═══
 #
-# `value` is compared with a STRICT `current_value > value` — `event_unique_user_frequency`
+# The live comparison `value` is a STRICT `current_value > value` — `event_unique_user_frequency`
 # extends the same BaseEventFrequencyCondition as `event_frequency`, whose strict-`>`
 # semantics zot_mirror_fallback_rate documents below
 # (sentry/rules/conditions/event_frequency.py). So `value = 2` means ">2 distinct users",
 # i.e. it fires at **≥3** — the stated intent above. It shipped as `3`, which fires at ≥4:
 # a silent off-by-one against its own comment, and #6429's real defect. Do NOT "restore"
-# this to 3 to match the "≥3" prose — the prose is the intent, `2` is how you spell it.
+# the live value to 3 to match the "≥3" prose — the prose is the intent, `2` is how you
+# spell it. The live value is pinned against the committed capture by
+# scripts/sentry-alert-live-fidelity.sh; when #7985 converts this block to a native
+# trigger, it must carry `value = 2`.
 #
 # NOT the zot rule's defect (#6429's filed premise, falsified). That rule is
 # `event_frequency` — a count of EVENTS in one issue-group, which a high-cardinality
@@ -342,56 +395,47 @@ resource "sentry_alert" "git_data_boot_warning" {
 # web_terminal_boot_fatal (value = 1, reachable only because its shared `soleur-boot-emit`
 # group is always already hot) — plus THIS ONE `event_unique_user_frequency`. The issue's
 # "three event_frequency rules" was wrong on both the count and every line it cited.
-resource "sentry_issue_alert" "sandbox_startup_failure" {
-  organization = var.sentry_org
-  project      = data.sentry_project.web_platform.slug
-  name         = "sandbox-startup-failure"
-  action_match = "all"
-  filter_match = "all"
-  frequency    = 22
+#
+# EDITS TO THIS BLOCK ARE INERT until #7985 (ignore_changes = all). Terraform owns this rule's
+# EXISTENCE only. Change its content in a #7985 conversion, never by editing these values.
+# Values below are the live workflow 669246 as read 2026-09-21, equal to the committed capture
+# phase34-live-workflows-capture-2026-09-09.json (pinned by the op-contract test).
+resource "sentry_alert" "sandbox_startup_failure" {
+  organization      = var.sentry_org
+  name              = "sandbox-startup-failure"
+  enabled           = true
+  frequency_minutes = 22
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  conditions_v2 = [
-    {
-      event_unique_user_frequency = {
-        comparison_type = "count"
-        value           = 2 # STRICT `>`: fires at ≥3 distinct tenants (#6429)
-        interval        = "1h"
-      }
-    },
-  ]
-  filters_v2 = [
-    {
-      tagged_event = {
-        key   = "feature"
-        match = "EQUAL"
-        value = "agent-sandbox"
-      }
-    },
-    {
-      tagged_event = {
-        key   = "op"
-        match = "EQUAL"
-        value = "sdk-startup"
-      }
-    },
-  ]
-  # N=1 accepted risk (mirrors the sibling rules in this file): IssueOwners has no
+  # Live trigger: event_unique_user_frequency_count {value = 2, interval = "1h"} (STRICT `>`,
+  # fires at >=3 distinct tenants, #6429). v0.15.7 cannot model it, so it is carried by TYPE only.
+  trigger_conditions        = []
+  legacy_trigger_conditions = ["event_unique_user_frequency_count"]
+
+  # N=1 accepted risk (mirrors the sibling rules in this file): issue_owners has no
   # ownership rule on this project → falls through to ActiveMembers, paging the
   # active founder + ops@soleur.ai. The event carries only a userIdHash (Recital
   # 26 pseudonymized at the emit boundary) + bwrap/kernel stderr — no plaintext
   # tenant PII — so the fallthrough does not over-disclose. Revisit recipient
   # pinning (target_type="Member") before the first non-ops Sentry seat.
-  actions_v2 = [
+  action_filters = [
     {
-      notify_email = {
-        target_type      = "IssueOwners"
-        fallthrough_type = "ActiveMembers"
-      }
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-sandbox" } },
+        { tagged_event = { key = "op", match = "eq", value = "sdk-startup" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
     },
   ]
 
+  # ALL, not [environment]: any Create/Update re-sends every legacy trigger with
+  # `comparison: true`, destroying the threshold. Remove only together with the
+  # native-trigger conversion (#7985).
   lifecycle {
-    ignore_changes = [environment]
+    ignore_changes = all
   }
 }
 
