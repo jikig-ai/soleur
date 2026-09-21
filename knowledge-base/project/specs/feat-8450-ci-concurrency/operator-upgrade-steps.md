@@ -5,6 +5,12 @@ the GitHub org plan-tier upgrade is a **payment authorization** and is not
 reachable by `gh`, REST, or Terraform (the `github` provider has no
 billing/plan resource).
 
+**Runnable form:** `bash bootstrap.sh` (same directory) chains Steps 2–5
+behind the Step-1 payment gate — one command instead of this checklist. It
+verifies each step's precondition against the vendor, so a re-run skips what
+is already done. This document remains the reference for what each stage does
+and why.
+
 **Automation status: UNVERIFIED-blocked.** Attempted 2026-09-21: Playwright MCP
 cannot launch a browser on this host
 (`Chromium distribution 'chrome' not found at /opt/google/chrome/chrome`).
@@ -52,9 +58,11 @@ signal, not the transition (Sentry repeat-issue silence class, #7142).
 ## Step 5 — Enroll the soak probe
 
 The follow-through probe `scripts/followthroughs/actions-queue-tail-8450.sh`
-enrolls via the repo convention — post this directive comment on #8450 with the
-`earliest=` field set to the `UPGRADE_NOT_BEFORE` timestamp from Step 2, then
-add the `follow-through` label to #8450:
+enrolls via the repo convention — append this directive to the #8450 **issue
+body** (unfenced, column 0 — the sweeper parses bodies, not comments, and skips
+fenced/indented directives) with the `earliest=` field set to the
+`UPGRADE_NOT_BEFORE` timestamp from Step 2, then add the `follow-through`
+label to #8450:
 
 ```text
 <!-- soleur:followthrough script=scripts/followthroughs/actions-queue-tail-8450.sh earliest=<UPGRADE_NOT_BEFORE> secrets=GH_TOKEN -->
