@@ -74,3 +74,18 @@ Jikigai — <legal@jikigai.com>
 - **Record the countersigned agreement** in `knowledge-base/legal/ccla-register.md` (to be created) with the doc hash: `git rev-parse HEAD` and `git show <sha>:docs/legal/corporate-cla.md | sha256sum`.
 - **The harness paragraph is optional.** It is a courtesy warning about review burden, not a condition. Whether Soleur accepts a third harness at all is a separate strategic decision that has not been made — do not let the CCLA correspondence imply it has.
 - **Outbound transfer:** sending correspondence naming their signatory to Pakistan is a Chapter V transfer to a non-adequate third country. Covered for one-off correspondence, but the published corpus does not yet disclose it — see the brainstorm's Chapter V section and FR9.
+
+---
+
+## Record — reply received
+
+**2026-09-20.** The counterparty replied to the above, providing all three
+requested items: the organisation's legal name, registered address and
+registration identifiers (Islamabad Chamber of Commerce registration plus
+confirmation of the NTN and PSEB numbers quoted above); a named authorised
+signatory with title and an individually attributable mailbox — both held
+off-repo under the register's prohibited-fields rule; and a Section 4(c)
+designation given as a mailbox rather than a GitHub username, with the note
+that the account will be operated by their AI. The execution-countersign reply
+prepared from it is at
+`knowledge-base/legal/drafts/2026-09-20-convergence-ccla-execution.md`.
