@@ -17,6 +17,9 @@
 #
 # Every key here is generated at test time, except the committed pin file itself.
 #
+# H1: the committed pin's `# fingerprint:` header must equal `ssh-keygen -lf` of its key line, so
+# the reviewed header (what the PR body records, AC9) cannot drift from the key Terraform trusts.
+#
 # (Not covered here: "the precheck step runs before the bridge in git-data-cutover.yml" --
 # that workflow's structure is asserted by git-data-cutover-access.test.sh.)
 set -uo pipefail
@@ -133,6 +136,21 @@ fixture "$ED"$'\n'; expect_error_hcl_only "E7: an ED25519 key (Terraform negotia
 fixture "$RSA"$'\n'; expect_error "E7b: an ssh-rsa key" "$FX"
 fixture "* $EC"$'\n'; expect_error "E8: host-pattern prefix" "$FX"
 fixture "@cert-authority * $EC"$'\n'; expect_error "E8b: @cert-authority marker" "$FX"
+# Correct length (140-char body) with ONE character outside the base64 alphabet.
+_ec_bad="${EC:0:80}!${EC:81}"
+fixture "$_ec_bad"$'\n'; expect_error "E9: correct length, one invalid character ('!') in the body" "$FX"
+fixture "${EC:0:80}-${EC:81}"$'\n'; expect_error "E9b: correct length, one invalid character ('-') in the body" "$FX"
+
+# ── H1: the committed header fingerprint equals the key line's real fingerprint ───────────
+cases=$((cases + 1))
+_pin="$INFRA/web-1-ssh-host-key.pub"
+_hdr_fp="$(sed -n 's/^# fingerprint: \(SHA256:[A-Za-z0-9+\/]*\)[[:space:]]*$/\1/p' "$_pin")"
+_key_fp="$(awk '!/^[[:space:]]*#/ && NF' "$_pin" | ssh-keygen -lf - 2>/dev/null | awk '{ print $2 }')"
+if [[ -n "$_hdr_fp" && "$_hdr_fp" == "$_key_fp" && "$(grep -c '^# fingerprint: ' "$_pin")" -eq 1 ]]; then
+  ok "H1: the committed '# fingerprint:' header ($_hdr_fp) equals ssh-keygen -lf of the key line"
+else
+  no "H1: header fingerprint [$_hdr_fp] != key-line fingerprint [$_key_fp] (or the header is missing/duplicated)"
+fi
 
 # ── mutation: the harness can see a loosened expression ─────────────────────────────────
 # Dropping the regex's `$` anchor must let the trailing-comment fixture through. If it does not,
@@ -148,10 +166,10 @@ else
   no "M1: the unanchored mutation still errored -- hcl_eval cannot observe acceptance"
 fi
 
-FLOOR=20
 if (( pass + fail != cases )); then
   printf '[FATAL] accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
 fi
+FLOOR=23
 if (( cases < FLOOR )); then
   printf '[FATAL] anti-vacuity floor: %d cases ran, expected >= %d\n' "$cases" "$FLOOR" >&2; exit 1
 fi

@@ -882,6 +882,9 @@ runcmd:
       elif [ "$_hk_rc" -ne 0 ]; then
         /usr/local/bin/git-data-emit "git-data sshd host-key proof FAILED" sshd_config fatal "$_hk_detail" || true
         echo "[git-data] FATAL: sshd does not serve exactly the Terraform-minted host key ($_hk_verdict)." >&2
+        # The EXIT trap's own fatal ships $GIT_DATA_RUNCMD_DETAIL as its cause: give it the verdict
+        # word, or that second event reads "no stderr captured" for a failure whose cause is known.
+        ( printf 'sshd host-key proof: %s\n' "$_hk_verdict" >> "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
         exit 1
       fi
     fi

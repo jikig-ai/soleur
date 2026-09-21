@@ -541,7 +541,7 @@
         "does_not_defend": "until the exception closes, an impersonator of 10.0.1.20 on the private network during an Art. 17 erasure call (the only live call; the store holds no repository); after it closes, a reader of main-root Terraform state with a network position (#8209) and a rooted web-1 (it holds the transport, provision and remove keys)",
         "disclosed_as": "not-publicly-claimed",
         "exception": {
-          "justification": "Until the first git-data replace publishes GIT_DATA_SSH_HOST_KEY and git_data_redeploy loads it, the app keeps an unpinned fallback arm (TOFU_FALLBACK_OPTS in git-auth.ts), reachable only with no pin in the environment AND the store flag off; with the flag on a missing pin throws. The store holds no repository until the flag is first set, and deleting the arm is a precondition for that. Failing closed now would fail every production Art. 17 erasure.",
+          "justification": "Until the first git-data replace publishes GIT_DATA_SSH_HOST_KEY and the git-data-pin-redeploy.yml workflow loads it, the app keeps an unpinned fallback arm (TOFU_FALLBACK_OPTS in git-auth.ts), reachable only with no pin in the environment AND the store flag off; with the flag on a missing pin throws. The store holds no repository until the flag is first set, and deleting the arm is a precondition for that. Failing closed now would fail every production Art. 17 erasure.",
           "tracking_issue": "#5914",
           "reevaluate_when": "post-merge step 3 completes (startup line git_data_pin=present on the current deploy); the #5914 follow-up PR then deletes the arm and this row flips to cert_verification on",
           "expires_on": "2026-12-20"

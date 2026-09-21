@@ -3,20 +3,29 @@
 # A git-data birth (git_data_host_create) or replace (git_data_host_replace) in
 # apply-web-platform-infra.yml re-keys the host and re-publishes GIT_DATA_SSH_HOST_KEY to
 # Doppler prd. The running app loads prd only at deploy (ci-deploy.sh), so this workflow forces
-# one web-platform-release and waits until a newer release's `deploy` job succeeds.
+# one web-platform-release and waits until a newer release's `deploy` job succeeds
+# (.github/actions/dispatch-web-redeploy/track.sh, run directly by the `redeploy` job).
 #
 # WHY A SEPARATE WORKFLOW (not a job in the apply workflow): apply-web-platform-infra.yml holds
 # the fleet-wide WORKFLOW-level concurrency group terraform-apply-web-platform-host for its whole
-# run. A job there polling a release for up to 75 minutes would keep that lock, queueing merge
+# run. A job there polling a release for up to 70 minutes would keep that lock, queueing merge
 # applies (and a second pending run cancels the first pending one). Here the poll holds only
-# its own group.
+# its own group, declared on the JOB: an ordinary merge apply's follower run has its job
+# skipped by `if:`, so it never enters the group and can never cancel a pending redeploy.
 #
-# SECRET-FREE: github.token only (actions:write to dispatch and read runs). It never reads
-# Terraform state, so it cannot know the new pin; the source run's summary carries the
-# fingerprint, and this run's summary links to it.
+# ANY BRANCH: birth and replace are dispatch-only targets, and a dispatch from ANY branch
+# rotates the live key, so every dispatched apply run is gated regardless of head_branch.
+# The follower itself always runs main's copy (workflow_run executes the default branch's
+# workflow and checks out main) and dispatches the release with --ref main.
 #
-# Recovery: re-run this workflow's failed job, or dispatch it with source_run_id. Never replace
-# git-data again to get a redeploy.
+# SECRETS: github.token only for the gate and the poll (actions:write to dispatch and read
+# runs). It never reads Terraform state, so it cannot know the new pin; the source run's
+# summary and its `git-data-pin` notice annotation carry the fingerprint, and this run's
+# summary links to it. The ONLY secret is RESEND_API_KEY, bound solely to the failure email.
+#
+# Recovery: re-run this workflow's failed job, or
+#   gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply run id>
+# (no source_run_id = redeploy unconditionally). Never replace git-data again to get a redeploy.
 name: git-data pin redeploy
 
 on:
@@ -33,19 +42,18 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: git-data-pin-redeploy
-  cancel-in-progress: false
-
 jobs:
   redeploy:
-    # Birth and replace are dispatch-only targets, so only a dispatched apply run on main can
-    # carry a rotation. A manual recovery dispatch must itself run from main.
+    # Birth and replace are dispatch-only targets, so only a dispatched apply run (from any
+    # branch) can carry a rotation. A manual recovery dispatch must itself run from main.
     if: >-
       (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event == 'workflow_dispatch') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    # JOB-level, not workflow-level: a skipped follower run never enters the group.
+    concurrency:
+      group: git-data-pin-redeploy
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 80
     permissions:
@@ -55,7 +63,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-          sparse-checkout: .github/actions/dispatch-web-redeploy
+          sparse-checkout: |
+            .github/actions/dispatch-web-redeploy
+            .github/actions/notify-ops-email
 
       - name: Gate on the source run's git-data birth/replace outcome
         id: gate
@@ -94,7 +104,25 @@ jobs:
 
       - name: Dispatch web-platform-release and wait for its deploy
         if: steps.gate.outputs.proceed == 'true'
-        uses: ./.github/actions/dispatch-web-redeploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/actions/dispatch-web-redeploy/track.sh
+
+      - name: Email ops when the pin is not confirmed loaded
+        if: ${{ failure() }}
+        uses: ./.github/actions/notify-ops-email
         with:
-          github-token: ${{ github.token }}
-          fingerprint: ""
+          subject: "git-data pin NOT loaded by the app — erasures will fail host_key_mismatch"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          # Workflow-context scalars only; never a step log.
+          body: |
+            <p><strong>git-data pin redeploy</strong> did not confirm that the web app loaded the
+            current git-data SSH host-key pin (source apply run
+            <code>${{ github.event.workflow_run.id || inputs.source_run_id || 'manual' }}</code>).
+            Until a web-platform-release deploys, git-data SSH from the app fails host-key
+            verification, so account erasures fail with <code>host_key_mismatch</code>.</p>
+            <p>Recovery: re-run this run, or
+            <code>gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=&lt;apply run id&gt;</code>.
+            Do NOT replace git-data again.</p>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>

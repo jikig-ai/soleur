@@ -31,7 +31,7 @@
 - [ ] 1.6b Guard 6: rows for the boot-proof function (two hostkeys → fatal, fingerprint mismatch → fatal, no `ssh-keygen` → warn).
 - [ ] 1.6c Guard 7: `tests/scripts/test-dispatch-web-redeploy.sh`, using a `gh` stub and fast intervals.
 - [ ] 1.6d `apps/web-platform/infra/web-1-host-key-local.test.sh`: `terraform console` fixtures, plus a structural check that the precheck step comes before the bridge step.
-- [ ] 1.6e Vitest for the startup line: both forms, warn level, and the `fp=SHA256:` format. The pinned argv must include `-F /dev/null`, `GlobalKnownHostsFile=/dev/null`, `LogLevel=ERROR` and `UpdateHostKeys=no`. Tests call `vi.resetModules()` and `vi.unstubAllEnvs()`.
+- [ ] 1.6e Vitest for the startup line: both forms, warn level, and the `fp=SHA256:` format. The pinned argv must include `-F /dev/null`, `GlobalKnownHostsFile=/dev/null`, no `LogLevel` (ERROR hides OpenSSH's host-key-type negotiation error; see the plan addendum) and `UpdateHostKeys=no`. Tests call `vi.resetModules()` and `vi.unstubAllEnvs()`.
 - [ ] 1.7 Add rows to `git-data-cutover-access.test.sh`: `host_key_mismatch reason=changed|unknown|alg`. Update the fixtures that currently assert TOFU literals.
 
 ## Phase 2: Core implementation, infra and CI (GREEN)

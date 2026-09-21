@@ -155,9 +155,10 @@ export function resolveGitDataSshHost(): string {
 // Exactly one key of the expected algorithm: no host pattern, marker, comment or newline.
 // The value is trimmed first, and the regex has NO `m` flag, so an embedded second line
 // can never half-match. 68 base64 characters, no padding (a 51-byte ED25519 wire blob).
-// # twin: apps/web-platform/infra/git-data-flag-precheck.sh and
-// #       .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh carry the same shape
-// #       check (and the HCL `regex()` for web-1's ECDSA pin). Change them together.
+// # twin: apps/web-platform/infra/git-data-flag-precheck.sh,
+// #       .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh (ED25519 arm) and
+// #       apps/web-platform/infra/modules/git-data-userdata/variables.tf carry the same
+// #       shape check. Change them together.
 const GIT_DATA_HOST_KEY_PIN_RE = /^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$/;
 
 type GitDataHostKeyPinState =
@@ -248,8 +249,17 @@ export function logGitDataHostKeyPinAtStartup(): void {
         ? `git_data_pin=present fp=${gitDataHostKeyFingerprint(s.pin)}`
         : `git_data_pin=${s.state}`;
     log.warn({ gitDataPin: s.state }, line);
-  } catch {
-    // Observability must never take down startup.
+    if (s.state === "invalid") {
+      // An invalid pin fails every git-data call closed, so it is an operator fault worth
+      // an event at boot, not only a log line. The value is never included.
+      reportSilentFallback(new Error("git-data host-key pin invalid at startup"), {
+        feature: "git_data_host_key_pin",
+        op: "pin_invalid_at_startup",
+      });
+    }
+  } catch (err) {
+    // review: swallowed — observability must never take down startup; leave a trace.
+    console.warn("git-data: startup host-key pin inspection failed", err);
   }
 }
 
@@ -298,14 +308,20 @@ function requireEnvKey(name: string): string {
  * `SSH_ORIGINAL_COMMAND`; a re-provision is a server-side no-op. MUST run before
  * the first push (`git-receive-pack` never auto-creates its target).
  */
-export async function provisionGitDataRepo(workspaceId: string): Promise<void> {
+export async function provisionGitDataRepo(
+  workspaceId: string,
+  // A caller that already resolved the pin (replicateToGitData) passes it so the env is
+  // read once per push; omitted (`undefined`), it is resolved here.
+  preResolvedHostKeyPin?: string | null,
+): Promise<void> {
   if (!isGitDataStoreEnabled()) return;
   assertSafeWorkspaceId(workspaceId);
   const host = resolveGitDataSshHost();
   const provisionKey = requireEnvKey("GIT_PROVISION_SSH_PRIVATE_KEY");
   // Guard: resolved before any ssh. A throw (store enabled + absent/invalid pin) reaches
   // the caller's existing failure report; nothing is dialed unpinned.
-  const hostKeyPin = resolveGitDataHostKeyPin();
+  const hostKeyPin =
+    preResolvedHostKeyPin === undefined ? resolveGitDataHostKeyPin() : preResolvedHostKeyPin;
   // The forced command receives `workspaceId` as SSH_ORIGINAL_COMMAND (one opaque
   // argv element); the requested command word is irrelevant.
   await sshWithPrivateKeyAuth(host, workspaceId, provisionKey, hostKeyPin, { timeout: 30_000 });
@@ -353,8 +369,11 @@ export type GitDataErasureOutcome =
    */
   | { status: "unauthorized"; detail: string }
   /**
-   * The REMOVE key is absent while the sibling git-data inputs ARE set — a partial
-   * birth or a half-applied rotation, not a non-git-data env.
+   * A configuration fault; `detail` starts with a fixed reason word:
+   *   - `remove_key_absent` — the REMOVE key is absent while the sibling git-data inputs
+   *     ARE set: a partial birth or a half-applied rotation, not a non-git-data env.
+   *   - `pin_invalid` / `pin_absent_store_enabled` (#7226) — GIT_DATA_SSH_HOST_KEY is
+   *     malformed, or absent while the store is enabled; nothing was dialed.
    *
    * Without this, `skipped` silently absorbed it and reported "nothing to erase" for a
    * host that is actively provisioning repos: the #8094 defect through a second door.
@@ -460,7 +479,8 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
       return {
         status: "unconfigured",
         detail:
-          "GIT_REMOVE_SSH_PRIVATE_KEY is absent while the provision key and/or GIT_DATA_SSH_HOST are set",
+          "remove_key_absent: GIT_REMOVE_SSH_PRIVATE_KEY is absent while the provision key " +
+          "and/or GIT_DATA_SSH_HOST are set",
       };
     }
     return { status: "skipped" };
@@ -473,7 +493,15 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
   try {
     hostKeyPin = resolveGitDataHostKeyPin();
   } catch (e) {
-    return { status: "unconfigured", detail: e instanceof Error ? e.message : String(e) };
+    // Same `unconfigured` status as a missing remove key, but a different fault with a
+    // different remedy, so `detail` leads with a FIXED reason word an operator (or a
+    // Sentry search) can key on: `pin_invalid` | `pin_absent_store_enabled`.
+    const reason =
+      inspectGitDataHostKeyPin().state === "invalid" ? "pin_invalid" : "pin_absent_store_enabled";
+    return {
+      status: "unconfigured",
+      detail: `${reason}: ${e instanceof Error ? e.message : String(e)}`,
+    };
   }
   try {
     await sshWithPrivateKeyAuth(host, workspaceId, removeKey, hostKeyPin, { timeout: 30_000 });
@@ -667,7 +695,7 @@ export async function replicateToGitData(params: {
     // (#7226) Resolved first, so a store-enabled run without a valid pin performs NO ssh
     // (neither the provision below nor the push) and lands in this catch's existing report.
     const hostKeyPin = resolveGitDataHostKeyPin();
-    await provisionGitDataRepo(workspaceId);
+    await provisionGitDataRepo(workspaceId, hostKeyPin);
     ensureGitDataRemote(workspacePath, workspaceId);
 
     const transportKey = requireEnvKey("GIT_TRANSPORT_SSH_PRIVATE_KEY");

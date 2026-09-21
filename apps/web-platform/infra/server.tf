@@ -501,8 +501,10 @@ locals {
 # no-op over the SAME connection as its siblings, re-run whenever the pin OR the Terraform
 # version changes: a Terraform bump can change x/crypto's host-key algorithm preference (plan
 # R4), and a wrong pin must fail THIS apply at merge time rather than weeks later inside an
-# unrelated PR's provisioner. var.terraform_version is fed from the workflow's
-# TERRAFORM_VERSION as TF_VAR_terraform_version (empty in operator-local applies).
+# unrelated PR's provisioner. var.terraform_version is mirrored from each workflow's
+# TERRAFORM_VERSION (parity-pinned by terraform-target-parity.test.ts) and passed as
+# TF_VAR_terraform_version; an operator-local apply must export the same value, or it
+# re-triggers the probe (empty is the default).
 # Writes nothing on the host, so the provisioner-parity sweep has no destination to match.
 resource "terraform_data" "web_1_host_key_probe" {
   triggers_replace = sha256("${local.web_1_ssh_host_key}|${var.terraform_version}")

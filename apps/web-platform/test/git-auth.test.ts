@@ -15,6 +15,8 @@ import {
   closeSync,
 } from "fs";
 import { randomUUID } from "crypto";
+// Real child_process, bound before any vi.doMock (doMock is not hoisted) — the ssh probe.
+import { execFileSync as realExecFileSync } from "child_process";
 import { makeEd25519Pin, TOFU_OPT } from "./helpers/ssh-host-key-fixture";
 
 type ExecFileCallback = (
@@ -660,4 +662,101 @@ describe("git-data host-key pinning (Guard 5, #7226)", () => {
     expect(src.split(needle).length - 1).toBe(1);
     expect(src).toMatch(new RegExp(`const TOFU_FALLBACK_OPTS[^\\n]*\\n?[^\\n]*${needle}`));
   });
+});
+
+// ---------------------------------------------------------------------------------
+// #7226 review (tdr P2) — option PRESENCE is not option EFFECT. ssh keeps the FIRST
+// value it sees for an option, so a host-key-checking override prepended ahead of
+// the pinned block would pass every `toContain` above while ssh runs unpinned. These
+// tests bind the value ssh actually RESOLVES (`ssh -G`) for both helpers' real argv.
+// ---------------------------------------------------------------------------------
+describe("git-data pinned argv — what ssh resolves (ssh -G)", () => {
+  const KEY =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nc3ludGhldGljLXBpbm5pbmc=\n-----END OPENSSH PRIVATE KEY-----";
+  const DEST = "git@10.0.1.20";
+  // Every host-key trust option the pinned arm sets — each must be set EXACTLY once.
+  const TRUST_KEYS = [
+    "StrictHostKeyChecking",
+    "HostKeyAlias",
+    "UserKnownHostsFile",
+    "GlobalKnownHostsFile",
+    "HostKeyAlgorithms",
+    "UpdateHostKeys",
+  ];
+
+  let sshAvailable = false;
+  try {
+    realExecFileSync("ssh", ["-V"], { stdio: "ignore" });
+    sshAvailable = true;
+  } catch {
+    sshAvailable = false;
+  }
+
+  /** The ssh option argv (everything before the destination) of each helper. */
+  async function captureOpts(): Promise<{ helper: string; opts: string[] }[]> {
+    const pin = makeEd25519Pin();
+    const out: { helper: string; opts: string[] }[] = [];
+
+    const sshCalls: ExecFileMockArgs[] = [];
+    mockExecFile(sshCalls);
+    const { sshWithPrivateKeyAuth } = await import("../server/git-auth");
+    await sshWithPrivateKeyAuth("10.0.1.20", "ws-uuid-123", KEY, pin);
+    const a = sshCalls[0].args;
+    out.push({ helper: "sshWithPrivateKeyAuth", opts: a.slice(0, a.indexOf(DEST)) });
+
+    vi.resetModules();
+    vi.doUnmock("child_process");
+    const gitCalls: ExecFileMockArgs[] = [];
+    mockExecFile(gitCalls);
+    const { gitWithPrivateKeyAuth } = await import("../server/git-auth");
+    await gitWithPrivateKeyAuth(["fetch", `ssh://${DEST}/repositories/x.git`], KEY, pin);
+    const cmd = (gitCalls[0].opts?.env?.GIT_SSH_COMMAND ?? "").split(" ");
+    expect(cmd[0]).toBe("ssh");
+    out.push({ helper: "gitWithPrivateKeyAuth", opts: cmd.slice(1) });
+    return out;
+  }
+
+  function optionValues(opts: string[], key: string): string[] {
+    const vals: string[] = [];
+    for (let i = 0; i < opts.length - 1; i++) {
+      if (opts[i] !== "-o") continue;
+      const [k, ...rest] = opts[i + 1].split("=");
+      if (k.toLowerCase() === key.toLowerCase()) vals.push(rest.join("="));
+    }
+    return vals;
+  }
+
+  test("each host-key trust option (and -F) appears EXACTLY once in both helpers' argv", async () => {
+    for (const { helper, opts } of await captureOpts()) {
+      for (const k of TRUST_KEYS) {
+        expect(optionValues(opts, k), `${helper}: ${k}`).toHaveLength(1);
+      }
+      expect(opts.filter((o) => o === "-F"), `${helper}: -F`).toHaveLength(1);
+    }
+  });
+
+  test.skipIf(!sshAvailable)(
+    "ssh -G resolves the pinned trust values for both helpers",
+    async () => {
+      for (const { helper, opts } of await captureOpts()) {
+        const kh = optionValues(opts, "UserKnownHostsFile")[0];
+        expect(kh, helper).toMatch(/\.known_hosts$/);
+        const resolved = realExecFileSync("ssh", ["-G", ...opts, DEST], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        const get = (k: string) =>
+          resolved
+            .split("\n")
+            .find((l) => l.startsWith(`${k} `))
+            ?.slice(k.length + 1);
+        expect(get("stricthostkeychecking"), helper).toBe("true");
+        expect(get("hostkeyalias"), helper).toBe("git-data");
+        expect(get("userknownhostsfile"), helper).toBe(kh);
+        expect(get("globalknownhostsfile"), helper).toBe("/dev/null");
+        expect(get("hostkeyalgorithms"), helper).toBe("ssh-ed25519");
+        expect(get("updatehostkeys"), helper).toBe("false");
+      }
+    },
+  );
 });

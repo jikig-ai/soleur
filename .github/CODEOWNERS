@@ -211,14 +211,18 @@
 
 # SSH host-key pinning trust files (#7226 / #5914, ADR-237). Each of these decides which
 # host key an SSH session to web-1 or git-data will accept: the committed web-1 pin, the
-# bridge that writes it into known_hosts, the redeploy that loads the git-data pin into the
-# app, the app's git-data SSH transport, and the plan-gate libraries whose allow-sets govern
-# when the git-data key rotates. A drive-by edit to any one can reopen TOFU without a failing
-# test, so they carry explicit rows (load-bearing-files-get-explicit-rows). NOTE: as the
-# header says, CODEOWNERS review is only an anchor once branch protection requires it.
+# bridge that writes it into known_hosts, the redeploy workflow and its scripts that load the
+# git-data pin into the app, the app's git-data SSH transport and pin resolver, the cutover
+# precheck that reads the pin, and the plan-gate libraries whose allow-sets govern when the
+# git-data key rotates. A drive-by edit to any one can reopen TOFU without a failing test, so
+# they carry explicit rows (load-bearing-files-get-explicit-rows). NOTE: as the header says,
+# CODEOWNERS review is only an anchor once branch protection requires it.
 /apps/web-platform/infra/web-1-ssh-host-key.pub         @deruelle
+/.github/workflows/git-data-pin-redeploy.yml            @deruelle
 /.github/actions/dispatch-web-redeploy/                 @deruelle
 /apps/web-platform/server/git-auth.ts                   @deruelle
+/apps/web-platform/server/git-data-replication.ts       @deruelle
+/apps/web-platform/infra/git-data-flag-precheck.sh      @deruelle
 /tests/scripts/lib/git-data-host-replace-gate.sh        @deruelle
 /tests/scripts/lib/git-data-host-birth-gate.sh          @deruelle
 /tests/scripts/test-no-tofu-ssh.sh                      @deruelle

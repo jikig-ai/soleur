@@ -5,8 +5,9 @@
 # minus knowledge-base/**), mutated one way, then restored from the copy's index. The
 # real worktree is never written.
 #
-#   (SHKC = the StrictHost-KeyChecking option, UKHF = the UserKnown-HostsFile option;
-#   spelled split here so this header is not itself a Guard 1 hit)
+#   (SHKC = the StrictHost-KeyChecking option, UKHF = the UserKnown-HostsFile option,
+#   KHC = the KnownHosts-Command option; spelled split here so this header is not itself
+#   a Guard 1 hit)
 #
 #   row  mutation                                                        expected
 #   1    the bridge's pinned SHKC=yes flipped back to accept-new          RED
@@ -14,13 +15,21 @@
 #   3    bridge compliant; lower-case `shkc no` in a NEW file            RED
 #   4    ssh_config-form `UKHF /dev/null` in git-data-cutover.yml        RED
 #   5    a second TOFU literal in git-auth.ts (count 2 != 1)             RED
+#   5b   a second TOFU literal appended to the SAME allow-listed line     RED (per-match count)
 #   6    an allow-list entry for a path with zero hits                   RED
 #   7    keyscan appended into "$KH" in a workflow                       RED
 #   8    quoted space form  -o "SHKC accept-new"                         RED
 #   9    GIT_SSH_COMMAND carrying SHKC=no in a script                    RED
 #   10   -o GlobalKnownHostsFile=/dev/null alone                         PASS
+#   A*   one NEW file per header arm (each file matches only that arm):  RED
+#        tee -a, pipe on a known-hosts line, `SHKC off`, `=false`, `UKHF none`, YAML
+#        `SHKC: no`, `1>`, `|& tee`, `| sudo -n tee`, `| dd of=`, `| sponge`,
+#        KHC=<command>
+#   A-pass  KHC none                                                     PASS
+#   D-<dir> one hit planted in a new file under plugins/ apps/ scripts/ .github/ tests/  RED
 #   H-a  guard's verdict stubbed to `exit 0`: the row-1 must-RED check must itself fail
 #   H-b  SHKC=yes + UKHF=/tmp/kh                                         PASS
+#   K-pass  keyscan into a variable / into ssh-keygen -lf                PASS
 #
 # Every banned literal below is built by concatenation, so this file has zero Guard 1
 # hits and needs no allow-list entry.
@@ -38,8 +47,11 @@ GUARD_REL="tests/scripts/test-no-tofu-ssh.sh"
 SHKC="StrictHost""KeyChecking"
 UKHF="UserKnown""HostsFile"
 GKHF="GlobalKnown""HostsFile"
+KHC="KnownHosts""Command"
 KS="ssh-""keyscan"
 AN="accept""-new"
+KH_REF='"$''KH"'                 # the text "$KH", as a workflow would spell it
+GT='>'                             # a redirect operator, kept out of this file's own code
 
 pass=0; fail=0; FAILURES=()
 _report() {
@@ -89,6 +101,9 @@ _row_pass() {
   _restore
 }
 
+# _plant <relpath> <line>: write one line into a NEW file of the copy.
+_plant() { mkdir -p "$(dirname "$COPY/$1")"; printf '%s\n' "$2" > "$COPY/$1"; }
+
 # Baseline: the unmutated copy must be green.
 if ! _check_pass; then
   echo "FAIL: baseline copy is RED, so no mutation row can be interpreted. Guard output:" >&2
@@ -121,7 +136,7 @@ fi
 # Row 3
 mkdir -p "$COPY/scripts"
 # lower-case key, space-separated value, in a brand-new ssh_config-shaped file
-printf 'Host x\n  %s no\n' "$(tr 'A-Z' 'a-z' <<<"$SHKC")" > "$COPY/scripts/zz-new-mutation.conf"
+printf 'Host x\n  %s no\n' "${SHKC,,}" > "$COPY/scripts/zz-new-mutation.conf"
 _row_red "row 3 lower-case ${SHKC,,} no in a new file" "zz-new-mutation.conf"
 
 # Row 4
@@ -132,12 +147,20 @@ _row_red "row 4 ssh_config ${UKHF} /dev/null in cutover.yml" "git-data-cutover.y
 printf 'const MUTATION_OPTS = ["-o", "%s=%s"];\n' "$SHKC" "$AN" >> "$COPY/apps/web-platform/server/git-auth.ts"
 _row_red "row 5 second TOFU literal in git-auth.ts" "expects 1 hit(s) and has 2"
 
+# Row 5b: the second literal lands on the allow-listed line itself. A per-LINE count stays 1
+# here; only the per-MATCH count sees it.
+GA="$COPY/apps/web-platform/server/git-auth.ts"
+cp "$GA" "$WORK/ga.orig"
+sed -i "s/\"${SHKC}=${AN}\"\\];/\"${SHKC}=${AN}\", \"-o\", \"${SHKC}=no\"];/" "$GA"
+if cmp -s "$GA" "$WORK/ga.orig"; then _report "row 5b precondition" bad "(allow-listed line not found)"; _restore
+else _row_red "row 5b second literal on the SAME allow-listed line" "expects 1 hit(s) and has 2"; fi
+
 # Row 6
 sed -i "/^ALLOWLIST=/a apps/web-platform/package.json|1|mutation row 6 (zero hits)" "$GUARD"
 _row_red "row 6 zero-hit allow-list entry" "'apps/web-platform/package.json' (mutation row 6 (zero hits)) expects 1 hit(s) and has 0"
 
 # Row 7
-printf '      - run: %s 10.0.1.10 >> "$KH"\n' "$KS" > "$COPY/.github/workflows/zz-mutation.yml"
+_plant .github/workflows/zz-mutation.yml "      - run: $KS 10.0.1.10 ${GT}${GT} ${KH_REF}"
 _row_red "row 7 keyscan appended into \$KH in a workflow" "zz-mutation.yml"
 
 # Row 8
@@ -147,6 +170,34 @@ _row_red "row 8 quoted space form" "zz-mutation-8.sh"
 # Row 9
 printf 'GIT_SSH_COMMAND="ssh -o %s=no" git fetch\n' "$SHKC" > "$COPY/scripts/zz-mutation-9.sh"
 _row_red "row 9 GIT_SSH_COMMAND with =no" "zz-mutation-9.sh"
+
+# A*: one NEW file per arm the header promises. Each line matches only its own arm, so a
+# deleted arm leaves its row GREEN and this harness RED.
+_arm() { # <n> <label> <line>
+  _plant "scripts/zz-arm-$1.txt" "$3"
+  _row_red "A$1 $2" "zz-arm-$1.txt"
+}
+_arm 1  "keyscan | tee -a"                 "$KS -t ecdsa h | tee -a ${KH_REF}"
+_arm 2  "keyscan pipe on a known-hosts line" "$KS h 2${GT}/dev/null | install -m 600 /dev/stdin ~/.ssh/known""_hosts"
+_arm 3  "ssh_config ${SHKC} off"           "  ${SHKC} off"
+_arm 4  "${SHKC}=false"                    "ssh -o ${SHKC}=false host true"
+_arm 5  "${UKHF} none"                     "  ${UKHF} none"
+_arm 6  "YAML ${SHKC}: no"                 "    ${SHKC}: no"
+_arm 7  "keyscan 1${GT}\$KH"               "$KS h 1${GT}${KH_REF}"
+_arm 8  "keyscan |& tee"                   "$KS h |& tee kh"
+_arm 9  "keyscan | sudo -n tee"            "$KS h | sudo -n tee -a /etc/ssh/pinned"
+_arm 10 "keyscan | dd of="                 "$KS h | dd of=/root/.ssh/kh status=none"
+_arm 11 "keyscan | sponge"                 "$KS h | sponge /root/.ssh/kh"
+_arm 12 "${KHC}=<command>"                 "ssh -o ${KHC}=/usr/local/bin/print-keys host true"
+_arm 13 "ssh_config ${KHC} <command>"      "  ${KHC} /usr/local/bin/print-keys %H"
+_plant scripts/zz-arm-pass.txt "ssh -o ${KHC}=none host true"
+_row_pass "A-pass ${KHC}=none"
+
+# D-<dir>: the enumeration reaches every top-level code directory.
+for d in plugins apps scripts .github tests; do
+  _plant "$d/zz-dir-probe.sh" "ssh -o ${SHKC}=no host true"
+  _row_red "D-$d one hit planted under $d/" "$d/zz-dir-probe.sh"
+done
 
 # Row 10
 printf 'ssh -o %s=/dev/null host true\n' "$GKHF" > "$COPY/scripts/zz-mutation-10.sh"
@@ -158,6 +209,7 @@ _row_pass "H-b ${SHKC}=yes + ${UKHF}=/tmp/kh"
 
 # K-pass: a keyscan captured by command substitution (the capture-script shape) and a
 # keyscan piped into ssh-keygen for a fingerprint write no known-hosts file.
+# shellcheck disable=SC2016  # the $(...) is literal text written into the planted file
 printf 'pin="$(%s -T 10 -t ecdsa 192.0.2.1 2>/dev/null)"\n%s -t ecdsa 192.0.2.1 2>/dev/null | ssh-keygen -lf -\n' "$KS" "$KS" \
   > "$COPY/scripts/zz-mutation-kpass.sh"
 _row_pass "K-pass keyscan into a variable / into ssh-keygen -lf"

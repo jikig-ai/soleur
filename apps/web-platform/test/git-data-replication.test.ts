@@ -294,6 +294,9 @@ describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)"
     // A partial birth or a half-applied rotation. Reporting `skipped` here would tell the
     // user their data is gone while a host that is actively provisioning repos keeps theirs.
     expect(outcome.status).toBe("unconfigured");
+    if (outcome.status !== "unconfigured") throw new Error("narrow");
+    // Fixed reason word, distinct from the pin faults (#7226): pin_invalid / pin_absent_store_enabled.
+    expect(outcome.detail).toMatch(/^remove_key_absent: /);
     expect(sshProvision).not.toHaveBeenCalled();
   });
 

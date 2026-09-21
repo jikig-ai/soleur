@@ -2112,6 +2112,12 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     const perMerge = extractAllTargets(stripDispatchJobs(wf));
     for (const a of GIT_DATA_PIN_ADDRS) expect(perMerge.has(a)).toBe(false);
     expect(perMerge.has("terraform_data.web_1_host_key_probe")).toBe(true);
+    // Every OTHER main-root planner too (apply-deploy-pipeline-fix applies per merge; the
+    // drift / validation plans must never grow a -target on a pin address either).
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const t = extractAllTargets(stripDispatchJobs(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")));
+      for (const a of GIT_DATA_PIN_ADDRS) expect([f, a, t.has(a)]).toEqual([f, a, false]);
+    }
   });
 
   test("the birth job -targets both pin addresses; the replace job -replace's the key and -targets the pin", () => {
@@ -2126,7 +2132,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     test(`${job}: prints ONLY a regex-validated SHA256 fingerprint to the summary after apply`, () => {
       const block = stripComments(extractJobBlock(wf, job));
       expect(block).toContain("terraform output -raw git_data_ssh_host_key_fingerprint");
-      expect(block).toMatch(/\[\[ "\$fp" =~ \^SHA256:\[A-Za-z0-9\+\/\]\{43\}\$ \]\]; then echo "git-data host key fingerprint: \$fp" >> "\$GITHUB_STEP_SUMMARY"/);
+      expect(block).toMatch(/\[\[ "\$fp" =~ \^SHA256:\[A-Za-z0-9\+\/\]\{43\}\$ \]\]; then echo "git-data host key fingerprint: \$fp" >> "\$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: \$fp"; else/);
     });
   }
 
@@ -2138,24 +2144,51 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
 
   test("every main-root Terraform workflow feeds TF_VAR_terraform_version == its TERRAFORM_VERSION", () => {
     for (const f of MAIN_ROOT_TF_WORKFLOWS) {
-      const env = ((parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")) as { env?: Record<string, unknown> }).env) ?? {};
+      const doc = parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")) as {
+        env?: Record<string, unknown>;
+        jobs?: Record<string, { env?: Record<string, unknown>; steps?: Array<{ name?: string; env?: Record<string, unknown> }> }>;
+      };
+      const env = doc.env ?? {};
       expect(typeof env.TERRAFORM_VERSION).toBe("string");
       expect([f, env.TF_VAR_terraform_version]).toEqual([f, env.TERRAFORM_VERSION]);
+      // A job- or step-level env: override of either key to another value would split the
+      // probe trigger per job. Undefined (inherit) is the only other accepted value.
+      for (const [jn, job] of Object.entries(doc.jobs ?? {})) {
+        const scopes: Array<[string, Record<string, unknown> | undefined]> = [[`${f}:${jn}`, job?.env]];
+        for (const [i, st] of (job?.steps ?? []).entries()) scopes.push([`${f}:${jn}:step${i}(${st?.name ?? ""})`, st?.env]);
+        for (const [where, e] of scopes) {
+          for (const k of ["TF_VAR_terraform_version", "TERRAFORM_VERSION"]) {
+            if (e && k in e) expect([where, k, e[k]]).toEqual([where, k, env.TERRAFORM_VERSION]);
+          }
+        }
+      }
     }
   });
 
   test("the main-root workflow census is complete (a new planner cannot skip the variable)", () => {
     const dir = resolve(REPO_ROOT, ".github/workflows");
+    // Every spelling of "this workflow runs Terraform in the main root": an INFRA_DIR env, a
+    // static matrix entry, a literal working-directory, or `terraform -chdir=`. Sub-roots
+    // (apps/web-platform/infra/<sub>) do not match: each pattern ends at the root.
+    const MAIN_ROOT_FORMS = [
+      /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /^\s*-\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /working-directory:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /-chdir=["']?apps\/web-platform\/infra(?![\w\/-])/,
+    ];
     const found = readdirSync(dir)
       .filter((f) => f.endsWith(".yml"))
       .filter((f) => {
         const t = stripComments(readFileSync(join(dir, f), "utf8"));
-        const plans = /terraform\s+(plan|apply)\b/.test(t);
-        const mainRoot = /INFRA_DIR:\s*apps\/web-platform\/infra\s*$/m.test(t) || /^\s*-\s*apps\/web-platform\/infra\s*$/m.test(t);
-        return plans && mainRoot;
-      });
-    expect(found.length).toBeGreaterThanOrEqual(3);
-    for (const f of found) expect(MAIN_ROOT_TF_WORKFLOWS).toContain(f);
+        const plans = /terraform\s+(-chdir=\S+\s+)?(plan|apply)\b/.test(t);
+        return plans && MAIN_ROOT_FORMS.some((re) => re.test(t));
+      })
+      .sort();
+    // Exact: infra-validation.yml is the one planner the census cannot see (its matrix is
+    // computed at runtime from a changed-files job), so it is listed by hand; every other
+    // entry must be found, and nothing else may be.
+    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
+    expect(found.length).toBe(3);
   });
 
   describe("git-data-pin-redeploy.yml", () => {
@@ -2171,35 +2204,50 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       expect(on.workflow_dispatch.inputs.source_run_id.required).toBe(false);
     });
 
-    test("runs only for dispatched apply runs on main, in its own lock", () => {
+    test("runs for dispatched apply runs from ANY branch, in its own JOB-level lock", () => {
       const cond = String(job.if ?? "");
-      expect(cond).toContain("github.event.workflow_run.head_branch == 'main'");
+      // A replace dispatched from a non-main branch rotates the live key too.
+      expect(cond).not.toContain("head_branch");
       expect(cond).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
       expect(cond).toContain("github.ref == 'refs/heads/main'");
-      expect(d.concurrency).toEqual({ group: "git-data-pin-redeploy", "cancel-in-progress": false });
+      // Job-level so a skipped follower run (every ordinary merge apply) never enters the
+      // group and cannot cancel a pending redeploy.
+      expect(d.concurrency).toBeUndefined();
+      expect(job.concurrency).toEqual({ group: "git-data-pin-redeploy", "cancel-in-progress": false });
       expect(stripComments(src)).not.toContain("terraform-apply-web-platform-host");
     });
 
-    test("least privilege: actions:write + contents:read, no secrets, no environment, 80 min", () => {
+    test("least privilege: actions:write + contents:read, only RESEND_API_KEY on the failure email, no environment, 80 min", () => {
       expect(job.permissions).toEqual({ actions: "write", contents: "read" });
       expect(job.environment).toBeUndefined();
-      expect(stripComments(src)).not.toMatch(/secrets\./);
+      expect([...stripComments(src).matchAll(/secrets\.[A-Za-z0-9_]+/g)].map((m) => m[0])).toEqual(["secrets.RESEND_API_KEY"]);
       expect(Number(job["timeout-minutes"])).toBe(80);
     });
 
-    test("sparse credential-less checkout, the source-run gate, then the action gated on it", () => {
+    test("sparse credential-less checkout, the source-run gate, the tracker gated on it, a failure email", () => {
       const steps = (job.steps as Array<Record<string, any>>) ?? [];
       const co = steps.findIndex((s) => String(s.uses ?? "").startsWith("actions/checkout@"));
       const gate = steps.findIndex((s) => String(s.run ?? "").includes("dispatch-web-redeploy/source-run-gate.sh"));
-      const act = steps.findIndex((s) => s.uses === "./.github/actions/dispatch-web-redeploy");
+      const act = steps.findIndex((s) => String(s.run ?? "").trim() === "bash .github/actions/dispatch-web-redeploy/track.sh");
+      const mail = steps.findIndex((s) => s.uses === "./.github/actions/notify-ops-email");
       expect(co).toBe(0);
       expect(steps[co].with["persist-credentials"]).toBe(false);
-      expect(String(steps[co].with["sparse-checkout"]).trim()).toBe(".github/actions/dispatch-web-redeploy");
+      expect(String(steps[co].with["sparse-checkout"]).trim().split(/\s+/).sort()).toEqual([
+        ".github/actions/dispatch-web-redeploy",
+        ".github/actions/notify-ops-email",
+      ]);
       expect(gate).toBeGreaterThan(co);
       expect(act).toBeGreaterThan(gate);
       expect(steps[gate].id).toBe("gate");
       expect(steps[act].if).toBe("steps.gate.outputs.proceed == 'true'");
-      expect(steps[act].with["github-token"]).toBe("${{ github.token }}");
+      expect(steps[act].env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" });
+      expect(steps.some((s) => String(s.uses ?? "").includes("dispatch-web-redeploy"))).toBe(false);
+      // The failure email: last step, failure() only, the one secret bound here and nowhere else.
+      expect(mail).toBe(steps.length - 1);
+      expect(String(steps[mail].if).replace(/\s+/g, "")).toBe("${{failure()}}");
+      expect(steps[mail].with["resend-api-key"]).toBe("${{ secrets.RESEND_API_KEY }}");
+      expect(String(steps[mail].with.subject)).toContain("git-data pin NOT loaded by the app");
+      expect(String(steps[mail].with.body)).toContain("gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=");
       // The gate names the two jobs by their exact apply-workflow ids.
       const g = readFileSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"), "utf8");
       const jobs = (parseYaml(wf) as { jobs: Record<string, unknown> }).jobs;

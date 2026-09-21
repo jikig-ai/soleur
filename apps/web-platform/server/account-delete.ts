@@ -232,7 +232,13 @@ export async function deleteAccount(
       //   refused      — the host looked and declined; the repo is probably still there.
       //   unauthorized — the REMOVE key was rejected. PERMANENT and fleet-wide until a
       //                  host replace re-bakes authorized_keys; every repo is un-erased.
-      //   unconfigured — the remove key is missing while git-data is otherwise armed.
+      //   unconfigured — a config fault; nothing was dialed. `detail` leads with the cause:
+      //                  remove_key_absent — the remove key is missing while git-data is
+      //                    otherwise armed. Remedy: restore GIT_REMOVE_SSH_PRIVATE_KEY in
+      //                    Doppler prd and redeploy.
+      //                  pin_invalid | pin_absent_store_enabled — GIT_DATA_SSH_HOST_KEY is
+      //                    malformed, or unset while the store is enabled (#7226). Remedy:
+      //                    republish the pin (the replace job does) and redeploy.
       //   unreachable  — no answer at all; the repo's state is unknown, which is not the
       //                  same as un-erased.
       //   host_key_mismatch — ssh reached a host whose key does not match the pin (#7226).

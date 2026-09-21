@@ -805,23 +805,35 @@ main_rc=$?
 
 # ── GUARD 2 (#7226 / #8125, ADR-237): every Terraform SSH connection block pins the host key ──
 # PROPERTY. Every `connection {}` block (type "ssh", which is also Terraform's default) in any
-# `.tf` under this directory -- the root, its modules and the rung-2 rehearsal root -- sets
-# EXACTLY ONE `host_key`, and a block whose host is hcloud_server.web["web-1"] sets it to
-# `local.web_1_ssh_host_key`. Without host_key, Terraform's Go client accepts whatever key the
-# peer presents on every provisioner run, the same TOFU the bash bridge had (#7226).
+# `.tf` or `.tf.json` file of the repository sets EXACTLY ONE `host_key`, and that value is in
+# the ALLOW-SET below (today only `local.web_1_ssh_host_key`; git-data's pin joins it when a
+# connection block dials git-data). `null`, `""` and any other expression are outside the set.
+# A block whose host is hcloud_server.web["web-1"] (whitespace inside the reference is
+# normalised away before the match) must use `local.web_1_ssh_host_key` specifically. Without
+# host_key, Terraform's Go client accepts whatever key the peer presents on every provisioner
+# run, the same TOFU the bash bridge had (#7226).
+#
+# UNIVERSE. `git ls-files --cached --others --exclude-standard -- '*.tf' '*.tf.json'` at the
+# repository root (tracked files plus new files not yet added), so a connection block in ANY
+# Terraform root -- apps/*/infra, infra/github, a new root nobody listed -- is swept. The
+# §0-§5 parity program above reads the web-platform infra directory only; this one does not.
 #
 # PER BLOCK, not a comparison of totals: moving a host_key from one block into another keeps the
 # totals equal and must still go RED (one block has 0, the other 2). The walker strips comments
-# first, so tunnel.tf's prose mention of `connection { host }` is not a block. It has its own
-# universe (every *.tf, found by walking the directory), which is why it is a separate program
-# from the §0-§5 parity check above; the mutation battery sandboxes every .tf for it.
+# first, so tunnel.tf's prose mention of `connection { host }` is not a block. .tf.json files are
+# parsed as JSON and every `connection` object (or list of objects) at any depth is a block.
 #
 # Floors: at least 19 blocks (18 in server.tf incl. web_1_host_key_probe, 1 in ci-ssh-key.tf)
-# and at least 40 scanned files. The local must be defined exactly once, from the committed pin.
-python3 - "$INFRA" <<'G2EOF'
-import pathlib, re, sys
+# and at least 70 scanned files (79 tracked today). The local must be defined exactly once, from
+# the committed pin. SOLEUR_TF_REPO overrides the repository root for the mutation battery, which
+# builds a scratch repository whose apps/web-platform/infra IS the SOLEUR_INFRA_DIR sandbox.
+TF_REPO="${SOLEUR_TF_REPO:-$ROOT}"
+python3 - "$TF_REPO" "$INFRA" <<'G2EOF'
+import json, pathlib, re, subprocess, sys
 
-INFRA = pathlib.Path(sys.argv[1])
+REPO = pathlib.Path(sys.argv[1]).resolve()
+INFRA = pathlib.Path(sys.argv[2]).resolve()
+ALLOWED_HOST_KEYS = {"local.web_1_ssh_host_key"}
 npass = nfail = 0
 def ok(m):
     global npass; npass += 1; print(f"[ok] {m}")
@@ -865,18 +877,57 @@ def block_body(text, start):
         i += 1
     return text[start:i - 1]
 
-files = sorted(p for p in INFRA.rglob("*.tf") if ".terraform" not in p.parts)
-FLOOR_FILES = 40
+if INFRA != REPO / "apps/web-platform/infra":
+    no(f"G2: the analysed infra dir {INFRA} is not <repo>/apps/web-platform/infra under {REPO}; "
+       "Guard 2 would sweep a different server.tf than the parity program")
+ls = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others",
+                     "--exclude-standard", "--", "*.tf", "*.tf.json"],
+                    capture_output=True, text=True)
+if ls.returncode != 0:
+    no(f"G2: git ls-files failed under {REPO}: {ls.stderr.strip()}")
+files = sorted({REPO / p for p in ls.stdout.split("\0") if p and ".terraform/" not in p})
+FLOOR_FILES = 70
 if len(files) >= FLOOR_FILES:
-    ok(f"G2: scanned {len(files)} .tf files (floor {FLOOR_FILES})")
+    ok(f"G2: scanned {len(files)} .tf/.tf.json files (floor {FLOOR_FILES})")
 else:
-    no(f"G2: scanned only {len(files)} .tf files (floor {FLOOR_FILES}) -- the walk is broken")
+    no(f"G2: scanned only {len(files)} .tf/.tf.json files (floor {FLOOR_FILES}) -- the walk is broken")
 
-blocks = []   # (file:line, body)
+def json_blocks(node, path):
+    """Every `connection` value in a .tf.json document, at any depth."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "connection":
+                for i, c in enumerate(v if isinstance(v, list) else [v]):
+                    yield (f"{path}.connection[{i}]", c)
+            else:
+                yield from json_blocks(v, f"{path}.{k}")
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from json_blocks(v, f"{path}[{i}]")
+
+blocks = []   # (file:line, body-or-dict)
 local_defs = []
 for f in files:
-    src = strip_hcl(f.read_text())
-    rel = f.relative_to(INFRA)
+    raw = f.read_text()
+    rel = f.relative_to(REPO)
+    if f.name.endswith(".tf.json"):
+        try:
+            doc = json.loads(raw)
+        except ValueError as e:
+            no(f"G2: {rel} is not valid JSON ({e}); its connection blocks cannot be checked")
+            continue
+        for loc, c in json_blocks(doc, ""):
+            blocks.append((f"{rel}:{loc}", c))
+        def defines_local(node):
+            if isinstance(node, dict):
+                return ("web_1_ssh_host_key" in node) or any(defines_local(v) for v in node.values())
+            if isinstance(node, list):
+                return any(defines_local(v) for v in node)
+            return False
+        if defines_local(doc):
+            local_defs.append((f"{rel}:json", ""))
+        continue
+    src = strip_hcl(raw)
     for m in re.finditer(r'(?<![\w.])connection\s*\{', src):
         line = src.count('\n', 0, m.start()) + 1
         blocks.append((f"{rel}:{line}", block_body(src, m.end())))
@@ -884,8 +935,12 @@ for f in files:
         line = src.count('\n', 0, m.start()) + 1
         local_defs.append((f"{rel}:{line}", src[m.end():m.end() + 600]))
 
-ssh_blocks = [(loc, b) for loc, b in blocks
-              if not re.search(r'(?m)^\s*type\s*=\s*"winrm"', b)]
+def is_winrm(b):
+    if isinstance(b, dict):
+        return b.get("type") == "winrm"
+    return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
+
+ssh_blocks = [(loc, b) for loc, b in blocks if not is_winrm(b)]
 FLOOR_BLOCKS = 19
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
@@ -893,13 +948,34 @@ else:
     no(f"G2: swept only {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS}). A block "
        "was removed or the walker broke -- check which before editing this floor.")
 
-bad_count, bad_web1 = [], []
+# host_key values, normalised: HCL `local.x` stays as written; a JSON "${local.x}" template is
+# unwrapped to the same expression; JSON null and "" become the HCL spellings `null` / `""`.
+def host_keys(b):
+    if isinstance(b, dict):
+        if "host_key" not in b:
+            return []
+        v = b["host_key"]
+        if v is None:
+            return ["null"]
+        if isinstance(v, str):
+            m = re.fullmatch(r'\$\{\s*(.*?)\s*\}', v)
+            return [m.group(1) if m else json.dumps(v)]
+        return [json.dumps(v)]
+    return re.findall(r'(?m)^\s*host_key\s*=\s*(.+?)\s*$', b)
+
+def dials_web_1(b):
+    text = json.dumps(b) if isinstance(b, dict) else b
+    return 'hcloud_server.web["web-1"]' in re.sub(r'\s+', '', text).replace('\\"', '"')
+
+bad_count, bad_value, bad_web1 = [], [], []
 for loc, b in ssh_blocks:
-    keys = re.findall(r'(?m)^\s*host_key\s*=\s*(.+?)\s*$', b)
+    keys = host_keys(b)
     if len(keys) != 1:
         bad_count.append(f"{loc} (host_key x{len(keys)})")
         continue
-    if re.search(r'hcloud_server\.web\["web-1"\]', b) and keys[0] != "local.web_1_ssh_host_key":
+    if keys[0] not in ALLOWED_HOST_KEYS:
+        bad_value.append(f"{loc} (host_key = {keys[0]})")
+    if dials_web_1(b) and keys[0] != "local.web_1_ssh_host_key":
         bad_web1.append(f"{loc} (host_key = {keys[0]})")
 if not bad_count:
     ok(f"G2: every one of the {len(ssh_blocks)} SSH connection blocks sets exactly one host_key")
@@ -907,6 +983,12 @@ else:
     no("G2: connection block without exactly one host_key: " + ", ".join(bad_count) + ". Every "
        "Terraform SSH connection must pin the peer's host key (ADR-237); a web-1 block uses "
        "`host_key = local.web_1_ssh_host_key`.")
+if not bad_value:
+    ok(f"G2: every host_key is in the allow-set {sorted(ALLOWED_HOST_KEYS)}")
+else:
+    no("G2: host_key outside the allow-set " + str(sorted(ALLOWED_HOST_KEYS)) + ": "
+       + ", ".join(bad_value) + ". null, \"\" or an ad-hoc expression disables or bypasses the pin; "
+       "add a new pin local to ALLOWED_HOST_KEYS (with review) instead.")
 if not bad_web1:
     ok("G2: every web-1 connection block pins host_key to local.web_1_ssh_host_key")
 else:

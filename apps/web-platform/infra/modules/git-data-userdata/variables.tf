@@ -161,7 +161,9 @@ variable "host_ssh_ed25519_public_key" {
   description = "The matching public key, trimspace()'d by the caller. It is the pin: published as GIT_DATA_SSH_HOST_KEY by the production root, and the value the boot proof fingerprints."
   type        = string
 
-  # twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh, resolveGitDataHostKeyPin (git-data-replication.ts)
+  # twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh (ED25519 arm);
+  # apps/web-platform/infra/git-data-flag-precheck.sh (the GIT_DATA_SSH_HOST_KEY read);
+  # apps/web-platform/server/git-data-replication.ts (resolveGitDataHostKeyPin)
   validation {
     condition     = can(regex("^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$", var.host_ssh_ed25519_public_key))
     error_message = "host_ssh_ed25519_public_key must be exactly one bare ssh-ed25519 key (no comment, no newline)."

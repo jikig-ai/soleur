@@ -89,9 +89,11 @@
 # checkout at $GITHUB_WORKSPACE, so every caller MUST check the repo out before this action).
 # write-known-hosts.sh (next to this file) validates the pin and writes
 # $RUNNER_TEMP/web-1.known_hosts as `web-1 <key>`, mode 0444; the invocation sets
-# StrictHostKeyChecking=yes, HostKeyAlias=web-1, HostKeyAlgorithms=ecdsa-sha2-nistp256,
-# UpdateHostKeys=no and GlobalKnownHostsFile=/dev/null, so a changed or unknown web-1 key
-# fails the connection instead of being learned. The export set is unchanged:
+# `-F /dev/null` (no user or system ssh_config is read, so a runner image cannot add a
+# known-hosts command, a ProxyCommand or a second known-hosts file), StrictHostKeyChecking=yes,
+# HostKeyAlias=web-1, HostKeyAlgorithms=ecdsa-sha2-nistp256, UpdateHostKeys=no and
+# GlobalKnownHostsFile=/dev/null, so a changed or unknown web-1 key fails the connection
+# instead of being learned. The export set is unchanged:
 # {CI_SSH_KEYFILE, WEB_HOST_SSH}. Terraform callers are pinned by `host_key =
 # local.web_1_ssh_host_key` on every connection block (server.tf, ci-ssh-key.tf), whose HCL
 # regex() is this writer's twin. A host-key failure is NEVER fixed by re-enabling TOFU: it is a
@@ -218,9 +220,9 @@ runs:
           # trip the writer's duplicate-alias refusal.
           KH="$RUNNER_TEMP/web-1.known_hosts"
           rm -f "$KH"
-          "$ACTION_PATH/write-known-hosts.sh" web-1 \
+          bash "$ACTION_PATH/write-known-hosts.sh" web-1 \
             "$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub" "$KH"
-          SSH_INVOCATION="ssh -i $KEYFILE -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KH -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root"
+          SSH_INVOCATION="ssh -F /dev/null -i $KEYFILE -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KH -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root"
           printf 'WEB_HOST_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
         else
           # terraform callers (apply-web-platform-infra.yml): the Go SSH client

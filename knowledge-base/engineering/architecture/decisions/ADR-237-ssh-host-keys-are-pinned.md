@@ -29,7 +29,7 @@ peer presented, in three places:
    between connections, so web-1's key was re-accepted unchecked on every run (#7226). Its five
    callers include the daily `workspaces-luks-verify.yml` run behind a published Article 32 claim. The
    Terraform `connection {}` blocks that reach web-1 through the same bridge set no `host_key` (#8125):
-   18 in `server.tf` and 1 in `ci-ssh-key.tf`.
+   17 in `server.tf` and 1 in `ci-ssh-key.tf`.
 2. **The git-data cutover workflow** did the same on both hops. Per ADR-220 D4, every store-probe
    answer was therefore unauthenticated, and a compromised web-1 could pretend to be git-data.
 3. **The app's private-network git transport** (`apps/web-platform/server/git-auth.ts`) trusted on
@@ -52,12 +52,13 @@ Terraform SSH client negotiates ECDSA-P256.
    proof in the `sshd_config` stage checks that sshd serves exactly one host key and that its
    fingerprint equals the Terraform key's; a mismatch is a routed boot fatal, and
    `git_data_boot_verify` turns the replace or birth job red before anything is redeployed.
-2. **The host's replace job rotates the key, and a follow-on job loads it into the app.** The gated
+2. **The host's replace job rotates the key, and a follow-on workflow loads it into the app.** The gated
    replace re-mints the key with the host; the birth job mints it. The public half is published as a
    Terraform-owned Doppler `prd` secret, `GIT_DATA_SSH_HOST_KEY` (`doppler_secret.git_data_ssh_host_key`,
-   written only after the server exists). The `git_data_redeploy_*` job then forces a
-   `web-platform-release` and waits for a newer run's deploy to succeed, so the app loads the new pin
-   within about one release cycle. Nothing outside Terraform copies the pin, and no per-PR `-target`
+   written only after the server exists). When the apply run completes, `git-data-pin-redeploy.yml`
+   (`workflow_run`, job `redeploy`) forces a `web-platform-release` and waits for a newer run's deploy
+   to succeed, so the app loads the new pin within about one release cycle. The apply run prints the
+   new fingerprint to its job summary and log; a failed redeploy emails ops. Nothing outside Terraform copies the pin, and no per-PR `-target`
    reaches the key or the secret.
 3. **Hosts that cannot be re-provisioned get a committed, reviewed pin.** web-1's ECDSA-P256 key is
    captured once from a vantage outside Cloudflare (`scripts/capture-web-1-host-key.sh`, from an
@@ -73,24 +74,40 @@ Terraform SSH client negotiates ECDSA-P256.
    sources removed. Pins are shape-validated at every site that turns one into trust (the bash writer,
    the app resolver, the HCL local). A mismatch fails closed with a named verdict
    (`host_key_mismatch reason=changed|unknown|alg`; `git_data_host_key_unavailable
-   reason=absent|invalid|unreadable` for the pin read).
+   reason=absent|invalid`, or the flag read's own reason words plus `rc=` when the pin read fails).
 5. **Trust-on-first-use options are banned** outside the allow-list of the no-TOFU guard
    (`tests/scripts/test-no-tofu-ssh.sh`), which counts each allowed site exactly.
 
 ## Consequences
 
-- **A CI-to-CI dispatch edge.** The replace and birth jobs now trigger `web-platform-release` through
-  `git_data_redeploy_*` (`actions: write`, no secrets, `main` only, outside the apply lock). C4 does not
-  model CI-to-CI edges, so this ADR is where it is recorded. #8211's same-version redeploy is the
-  intended replacement (DC-2 in the feature's `decision-challenges.md`).
+- **A CI-to-CI dispatch edge.** A completed birth or replace run now triggers `web-platform-release`
+  through `git-data-pin-redeploy.yml`: `workflow_run` on the apply workflow's completion (any
+  branch, dispatched runs only; birth and replace are dispatch-only targets), plus `workflow_dispatch` with an optional `source_run_id` for recovery. It runs
+  `.github/actions/dispatch-web-redeploy/track.sh` with `actions: write` and no Terraform secrets
+  (only the failure email's Resend key), outside the apply lock. C4 does not model CI-to-CI edges, so
+  this ADR is where it is recorded. #8211's same-version redeploy is the intended replacement (DC-2 in
+  the feature's `decision-challenges.md`).
+- **Coupled to a display name.** `workflow_run` matches the apply workflow by its `name:` string
+  (`Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)`), not its
+  path. Renaming that workflow silently stops every automatic redeploy: the replace still succeeds and
+  the app keeps the old pin. A rename must update both files in the same PR.
+- **The redeploy dispatches and judges (accepted AP-024 deviation).** The same job dispatches the
+  release and decides whether a newer release's deploy succeeded. AP-024 separates the write from the
+  verdict; here the write is one release dispatch with no Terraform credentials, and the
+  authoritative proof is independent of the job anyway: the app's startup line `git_data_pin=present
+  fp=` must match the apply run's fingerprint (runbook go/no-go). The deviation is accepted for that
+  reason.
 - **The rung-2 emergency-replace gap.** PR #8511 changes the hash-bound git-data payload, so the rung-2
   interlock refuses every git-data birth and replace, an emergency replace included, from its merge
   until the rehearsal's evidence-only PR lands. This gap is accepted. The break-glass path is the
   operator-local apply under the `OPERATOR_APPLIED_EXCLUSIONS` contract (ADR-096). Keep the window
   short by rehearsing right after merge.
-- **Pin lag is bounded, not zero.** From the second rotation on, the app holds the previous pin until
-  `git_data_redeploy_*` succeeds; erasures in that window page as `erasure_outcome=host_key_mismatch`.
-  The first rotation cannot mismatch, because the app has no pin until then.
+- **Pin lag is bounded, not zero.** The first rotation cannot mismatch, because the app has no pin
+  until then. From the second rotation on, the app holds the previous pin until the redeploy
+  succeeds: erasures in that window page as `erasure_outcome=host_key_mismatch`, and once the store
+  flag is on, replication pushes and fetches stall too. Recovery is `gh run rerun <run-id> --failed` on
+  the pin-redeploy run, or `gh workflow run git-data-pin-redeploy.yml --ref main -f
+  source_run_id=<apply run id>`; never another replace.
 - **Expected drift until the first replace.** Scheduled drift shows a pending replace of
   `hcloud_server.git_data` and creates of the key and the secret until post-merge step 3.
 - **Operator-local applies enforce `host_key` too.** A laptop apply now verifies web-1 the same way CI
@@ -103,8 +120,10 @@ Terraform SSH client negotiates ECDSA-P256.
 
 ### Code-owner review is not an enforced anchor
 
-The PR adds explicit `.github/CODEOWNERS` rows for the trust files (the web-1 pin, the redeploy action,
-`git-auth.ts`, both gate libraries, the no-TOFU guard; the bridge directory already had one). On
+The PR adds explicit `.github/CODEOWNERS` rows for the trust files: the web-1 pin,
+`.github/workflows/git-data-pin-redeploy.yml`, the `.github/actions/dispatch-web-redeploy/` directory,
+`git-auth.ts`, `git-data-replication.ts`, `git-data-flag-precheck.sh`, both gate libraries and the
+no-TOFU guard (the bridge directory already had one). On
 2026-09-21, `gh api repos/jikig-ai/soleur/branches/main/protection` returned **404 "Branch not
 protected"**, and the active rulesets on `main` contain only `required_status_checks` (CI Required,
 CLA Required), `deletion` and `non_fast_forward` (Force Push Prevention). Nothing requires a code-owner
@@ -122,14 +141,19 @@ change compares the fingerprint independently.
   deferral F5 (block non-root metadata access) is already in place and needs no new issue. Anyone who
   can read the state copy **and** holds a network position (the private network or web-1) can pretend
   to be git-data. This is within #8209's scope.
-- **web-1's pin rests on a single capture event.** It is cross-checked before merge by a second,
-  independent observation: a strict `workspaces-luks-verify.yml` run through Cloudflare, dispatched on
-  the branch (AC15). An independent in-band vantage on git-data is a deferred option (F2).
+- **web-1's pin rests on a single capture event.** It was cross-checked before merge by a second,
+  independent observation (AC15): `workspaces-luks-verify.yml` run 35636913078, dispatched on the
+  branch at `d916e62f1`, concluded `success` through Cloudflare over the pinned strict path (log:
+  `pinned web-1 ecdsa-sha2-nistp256 SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok`,
+  `workspaces-luks re-assert PASSED`). An independent in-band vantage on git-data is a deferred option
+  (F2).
 - **The transitional app arm (#5914).** Until the first replace publishes the pin and the redeploy
   loads it, the app keeps one unpinned fallback arm. It is reachable only with no pin in the
   environment **and** the store flag off; with the flag on, a missing pin throws. The store holds no
   repository until the flag is first set, and deleting the arm (the #5914 follow-up PR) is a hard
-  precondition for that flag flip. The cutover precheck's `TOFU_ARM` line surfaces it on every dry run.
+  precondition for that flag flip. The cutover precheck's `TOFU_ARM` line is a reminder read from the
+  dispatched source tree on every dry run; the enforcing control is the resolver's throw on an absent
+  pin while the store flag is on.
 - **A pinned key authenticates the host, not its answers.** A rooted git-data can still answer the
   store probes falsely, so the probes stay bounded and fail-closed.
 

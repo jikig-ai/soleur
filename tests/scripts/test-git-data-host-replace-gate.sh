@@ -402,8 +402,22 @@ check_hk "HK10 canonical: key replaced + pin secret update => PASS" 0 "PASS"
 write_plan "${BASE_NO_HK},$(rc_obj 'tls_private_key.git_data_host_ssh' '"no-op"'),${HK_SECRET_UPDATE}"
 cp "$TMP/plan.json" "$TMP/hk-noop.json"
 gate_mutate_and_check "HK11 host-key rotation arm (the only check that the key rotates with the host)" \
-  's/ && "\$hkr" -eq 1 && "\$hkp" -eq 1 && "\$hkb" -eq 0//' \
+  's/ && "\$hkr" -eq 1 && "\$hkp" -eq 1//' \
   git_data_host_replace_gate "$TMP/hk-noop.json"
+
+# HK14/HK15 (#7226 review F2) the action lists are EXACT. A create-before-destroy KEY is not a
+# rotation this job plans (-replace on a tls_private_key without create_before_destroy is
+# ["delete","create"]); the pin SECRET's provider may order either way, so both replace
+# orderings publish.
+write_plan "${BASE_NO_HK},$(rc_obj 'tls_private_key.git_data_host_ssh' '"create","delete"'),${HK_SECRET_UPDATE}"
+cp "$TMP/plan.json" "$TMP/hk-key-cbd.json"
+check_hk "HK14 host key [\"create\",\"delete\"] => ABORT" 1 "ABORT"
+write_plan "${BASE_NO_HK},${HK_ROTATE},$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"create","delete"')"
+check_hk "HK15 pin secret [\"create\",\"delete\"] => PASS" 0 "PASS"
+# MUTATION: widen hk_key_ok to "any action list containing create" and HK14's plan passes.
+gate_mutate_and_check "HK14 exact key action list (widening hk_key_ok to any list containing create)" \
+  's/def hk_key_ok: (.change.actions? == \["delete","create"\]) or (.change.actions? == \["create"\]);/def hk_key_ok: (.change.actions? | index("create") != null);/' \
+  git_data_host_replace_gate "$TMP/hk-key-cbd.json"
 
 # HK12 THE GATE NEVER PRINTS PLAN VALUES. A replace plan's .change.before carries the OLD
 # user_data (the old host private key) and .after the new public key; the gate's output lands
@@ -458,11 +472,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 43 ]]; then
+if [[ "$_ran" -lt 46 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 43 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 46 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 46)\n' "$_ran"
 fi
 
 echo ""

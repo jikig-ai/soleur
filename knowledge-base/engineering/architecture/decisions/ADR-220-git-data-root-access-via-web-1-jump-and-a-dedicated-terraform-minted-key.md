@@ -546,9 +546,10 @@ records what changes in them.
 - **D6 — design change.** The fresh replace immediately before the real cutover (a #8211
   precondition) now also **rotates git-data's SSH host key** and **redeploys the app**: the replace
   job re-mints `tls_private_key.git_data_host_ssh`, republishes `GIT_DATA_SSH_HOST_KEY` to `prd`, and
-  its follow-on `git_data_redeploy_*` job forces a web release so the app loads the new pin. Nothing
-  planted during the read-only period survives into the cutover, now including the host key. The
-  replace is still required; ADR-237's post-merge step 3 is a separate, earlier replace, not this one.
+  the `git-data-pin-redeploy.yml` workflow, triggered when that apply run completes, forces a web
+  release so the app loads the new pin. Nothing planted during the read-only period survives into
+  the cutover, now including the host key. The replace is still required; ADR-237's post-merge
+  step 3 is a separate, earlier replace, not this one.
 - **New constraint from ADR-237.** Setting `GIT_DATA_STORE_ENABLED` requires the pin present in `prd`
   **and** #5914 closed (the app's unpinned fallback arm deleted). The runbook's precondition list
   carries it.

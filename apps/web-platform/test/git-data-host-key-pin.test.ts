@@ -159,13 +159,20 @@ describe("removeGitDataRepo — guarded pin resolution + host_key_mismatch (Guar
     const { removeGitDataRepo } = await load();
     const outcome = await removeGitDataRepo(WS);
     expect(outcome.status).toBe("unconfigured");
+    if (outcome.status !== "unconfigured") throw new Error("narrow");
+    // Fixed reason word, distinct from `remove_key_absent` — different remedy.
+    expect(outcome.detail).toMatch(/^pin_invalid: /);
+    expect(outcome.detail).not.toContain(PIN.split(" ")[1].slice(0, 30));
     expect(sshTransport).not.toHaveBeenCalled();
   });
 
   it("store ENABLED + absent pin returns `unconfigured` and never dials", async () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     const { removeGitDataRepo } = await load();
-    expect((await removeGitDataRepo(WS)).status).toBe("unconfigured");
+    const outcome = await removeGitDataRepo(WS);
+    expect(outcome.status).toBe("unconfigured");
+    if (outcome.status !== "unconfigured") throw new Error("narrow");
+    expect(outcome.detail).toMatch(/^pin_absent_store_enabled: /);
     expect(sshTransport).not.toHaveBeenCalled();
   });
 
@@ -201,6 +208,15 @@ describe("removeGitDataRepo — guarded pin resolution + host_key_mismatch (Guar
     expect(outcome.status).toBe("host_key_mismatch");
     if (outcome.status !== "host_key_mismatch") throw new Error("narrow");
     expect(outcome.detail.length).toBeGreaterThan(0);
+  });
+
+  it("a NON-255 exit with a host-key string is NOT host_key_mismatch (the 255 gate is load-bearing)", async () => {
+    // A non-255 status is the REMOTE command's own exit: the session was established, so
+    // the host key verified. Only ssh's own 255 can mean a host-identity failure.
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    sshTransport.mockRejectedValueOnce(sshErr(3, "Host key verification failed.\n"));
+    const { removeGitDataRepo } = await load();
+    expect((await removeGitDataRepo(WS)).status).not.toBe("host_key_mismatch");
   });
 
   it("exit 255 + `Permission denied (publickey)` stays unauthorized", async () => {
@@ -244,6 +260,28 @@ describe("provisionGitDataRepo / replicateToGitData / fetchFromGitData — pin t
     expect(gitTransport.mock.calls[0][2]).toBe(PIN);
   });
 
+  it("replicateToGitData resolves the pin ONCE and hands it to provision (no second env read)", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    const repl = await load();
+    // process.env rejects accessor descriptors, so count reads through a Proxy instead.
+    const realEnv = process.env;
+    let pinReads = 0;
+    process.env = new Proxy(realEnv, {
+      get(t, k) {
+        if (k === "GIT_DATA_SSH_HOST_KEY") pinReads++;
+        return Reflect.get(t, k);
+      },
+    });
+    try {
+      await repl.replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 2, userId: USER });
+    } finally {
+      process.env = realEnv;
+    }
+    expect(sshTransport.mock.calls[0][3]).toBe(PIN);
+    expect(gitTransport.mock.calls[0][2]).toBe(PIN);
+    expect(pinReads).toBe(1);
+  });
+
   it("replicateToGitData with store enabled + no pin: NO exec happens, the failure is reported, and the rejection is catchable (turn not broken)", async () => {
     const { replicateToGitData } = await load();
     const settled = await replicateToGitData({
@@ -284,6 +322,19 @@ describe("provisionGitDataRepo / replicateToGitData / fetchFromGitData — pin t
   });
 });
 
+// Probed at collection time with the REAL execFileSync: this file's vi.mock replaces
+// child_process.execFileSync, so a static import would hit the mock and always "succeed".
+const { execFileSync: realExecFileSync } =
+  await vi.importActual<typeof import("child_process")>("child_process");
+let sshKeygenAvailable = false;
+try {
+  realExecFileSync("ssh-keygen", ["-l", "-f", "/dev/null"], { stdio: "ignore" });
+  sshKeygenAvailable = true;
+} catch (e) {
+  // ssh-keygen exists but rejects /dev/null (non-zero exit) → available; ENOENT → absent.
+  sshKeygenAvailable = (e as NodeJS.ErrnoException).code !== "ENOENT";
+}
+
 describe("startup pin line (AC16) — logged once at WARN so Vector ships it", () => {
   const warnMessages = () => logWarn.mock.calls.map((c) => String(c[c.length - 1]));
 
@@ -300,18 +351,15 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
     expect(logInfo.mock.calls.some((c) => String(c[c.length - 1]).includes("git_data_pin="))).toBe(false);
   });
 
-  it("the fingerprint matches `ssh-keygen -lf` (when ssh-keygen is available)", async () => {
+  it.skipIf(!sshKeygenAvailable)("the fingerprint matches `ssh-keygen -lf`", async () => {
     let keygen = "";
     const dir = mkdtempSync(join(tmpdir(), "pin-fp-"));
     try {
       const f = join(dir, "k.pub");
       writeFileSync(f, `${PIN}\n`);
       const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      try {
-        keygen = actual.execFileSync("ssh-keygen", ["-lf", f], { encoding: "utf8" });
-      } catch {
-        return; // ssh-keygen absent on this runner; the independent computation above still binds the format
-      }
+      // No catch: with ssh-keygen present, a failure here is a real failure, not a skip.
+      keygen = actual.execFileSync("ssh-keygen", ["-lf", f], { encoding: "utf8" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -335,6 +383,38 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
     expect(() => logGitDataHostKeyPinAtStartup()).not.toThrow();
     expect(warnMessages()).toEqual(["git_data_pin=invalid"]);
     expect(JSON.stringify(logWarn.mock.calls)).not.toContain("ssh-rsa");
+    // An invalid pin is also a Sentry event at boot (it fails every git-data call closed),
+    // and the event never carries the value.
+    expect(pinReports()).toHaveLength(1);
+    expect(pinReports()[0][1]).toEqual({
+      feature: "git_data_host_key_pin",
+      op: "pin_invalid_at_startup",
+    });
+    expect(String((pinReports()[0][0] as Error).message)).toBe("git-data host-key pin invalid at startup");
+    expect(JSON.stringify(reportSilentFallback.mock.calls)).not.toContain(PIN.split(" ")[1].slice(0, 30));
+  });
+
+  it("present: no Sentry event at startup (the log line is the evidence)", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(pinReports()).toHaveLength(0);
+  });
+
+  it("a throw inside the startup log is swallowed but leaves a console.warn trace", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    logWarn.mockImplementationOnce(() => {
+      throw new Error("logger down");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { logGitDataHostKeyPinAtStartup } = await load();
+      expect(() => logGitDataHostKeyPinAtStartup()).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/pin inspection failed/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("does not fire the pin_absent Sentry report (startup evidence is the log line, not an event)", async () => {
@@ -343,9 +423,7 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
     expect(pinReports()).toHaveLength(0);
   });
 
-  it("server/index.ts calls it at boot", async () => {
-    const { readFileSync } = await vi.importActual<typeof import("fs")>("fs");
-    const src = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
-    expect(src).toMatch(/logGitDataHostKeyPinAtStartup\(\);/);
-  });
+  // The boot wiring (server/index.ts calls it once) is bound by importing the boot module
+  // itself: test/server-index-boot-pin-line.test.ts. A source regex here matched a
+  // commented-out call.
 });

@@ -19,8 +19,10 @@
 #     ECDSA-P256 key is a STOP-and-re-plan condition, plan R5 -- never rotate web-1's key in place);
 #   * the operator's known_hosts already holds an ECDSA key for this IP that DIFFERS from the
 #     scanned one (investigate before pinning anything; see ADR-237 / the runbook's H4 triage);
-#   * the result does not pass the shared pin writer (.github/actions/cf-tunnel-ssh-bridge/
-#     write-known-hosts.sh), i.e. the same shape check every CI consumer applies.
+#   * the scanned key does not pass the shared pin writer (.github/actions/cf-tunnel-ssh-bridge/
+#     write-known-hosts.sh), i.e. the same shape check every CI consumer applies. The composed
+#     file (header + that one key line) is not re-validated here: the hermetic suite's C3 row runs
+#     the writer over the written file.
 #
 # Env overrides (tests): SSH_KEYSCAN (default ssh-keyscan), KNOWN_HOSTS (default
 # ~/.ssh/known_hosts).
@@ -29,6 +31,19 @@
 set -euo pipefail
 
 usage() { echo "usage: $0 <web-1-public-ipv4> [--out <pin-file>]" >&2; exit 2; }
+# The canonical fixture-dir assertion, byte-equal to plugins/soleur/test/test-helpers.sh
+# (fixture-dir-operand-assert.test.sh compares every tracked copy against it). It refuses an
+# empty, relative or `..`-bearing --out before the pin file is written.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 die() { printf 'capture-web-1-host-key: %s\n' "$*" >&2; exit 1; }
 
 if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
@@ -48,6 +63,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$IP" ]] || usage
+[[ "$OUT" == /* ]] || OUT="$PWD/$OUT"   # a relative --out is relative to the caller's cwd
 IPV4_RE='^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$'
 [[ "$IP" =~ $IPV4_RE ]] || die "not an IPv4 address: $IP"
 case "$IP" in
@@ -110,7 +126,7 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "# cross-check: $xcheck"
   printf '%s\n' "$KEY"
 } > "$WORK/pin"
-bash "$WRITER" web-1 "$WORK/pin" "$WORK/kh2" >/dev/null || die "the composed pin file failed validation"
+assert_fixture_dir "$OUT"
 mkdir -p "$(dirname "$OUT")"
 cp "$WORK/pin" "$OUT.tmp.$$" && mv -f "$OUT.tmp.$$" "$OUT"
 

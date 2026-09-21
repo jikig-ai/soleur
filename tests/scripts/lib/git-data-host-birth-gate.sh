@@ -30,6 +30,7 @@
 #   the three ENTAILED members each create exactly once
 #   the seventeen PRESENCE members each appear with actions ⊆ {create, no-op}
 #   host key created   =>  its pin doppler_secret.git_data_ssh_host_key is a CREATE (#7226)
+#   pin UPDATE         =>  only while hcloud_server.git_data is ["create"] (post-rotation retry)
 #
 # OUTPUT DISCIPLINE (#7226): this gate prints counters, verdicts and ADDRESSES only, never a
 # .change.before / .change.after value — a plan's values can carry user_data, which embeds the
@@ -497,6 +498,30 @@ git_data_host_birth_gate() {
   #
   # `no-op` is accepted here and ONLY here. A destroy on one of these is caught above by
   # the destroy arm; an update on the passphrase pair or the firewall by their own arms.
+  #
+  # ONE EXCEPTION: doppler_secret.git_data_ssh_host_key may also be an `update` — see the
+  # (#7226) POST-ROTATION RETRY block just below, which owns the condition.
+  #
+  # (#7226, ADR-237) POST-ROTATION RETRY. The pin secret depends_on hcloud_server.git_data,
+  # so it CAN already exist on a birth: a REPLACE that rotated tls_private_key.git_data_host_ssh
+  # and then failed after destroying the old host but before creating the new one leaves
+  # state = new key, no server, pin = the OLD host's public key. The recovery route is this
+  # birth, and its plan is key `no-op`, server `create`, pin `update` (the pin's value tracks
+  # the key). Refusing that update would wedge the only automated recovery (the replace gate
+  # needs a server to delete). The update is accepted ONLY while this same plan creates
+  # hcloud_server.git_data — a pin rewritten with no host being born is not a birth.
+  # LAYERED: the `creates -ne 1` arm above already refuses every plan with no server
+  # create, so this arm owns the message, not the refusal (the suite proves it under a
+  # double mutation).
+  local host_key_pin_updated server_created_exact
+  host_key_pin_updated=$(jq '[.resource_changes[] | select(.address == "doppler_secret.git_data_ssh_host_key") | select(.change.actions == ["update"])] | length' < "$plan_json" 2>/dev/null)
+  server_created_exact=$(jq '[.resource_changes[] | select(.address == "hcloud_server.git_data") | select(.change.actions == ["create"])] | length' < "$plan_json" 2>/dev/null)
+  plan_gate_assert_numeric "git_data_host_birth_gate" "host_key_pin_updated=${host_key_pin_updated}" "server_created_exact=${server_created_exact}" || return 1
+  if [[ "$host_key_pin_updated" -ne 0 && "$server_created_exact" -ne 1 ]]; then
+    echo "git_data_host_birth_gate: ABORT — the plan UPDATES doppler_secret.git_data_ssh_host_key (GIT_DATA_SSH_HOST_KEY) while hcloud_server.git_data is not being created. A pin rewrite is permitted on a birth only as the post-rotation retry (new key in state, no host, old pin), where the host is born in the same plan; rewriting the pin with no host being born would repoint every pinned consumer at a key no host serves (ADR-237)."
+    return 1
+  fi
+
   for present_addr in \
     "hcloud_volume.git_data" \
     "hcloud_volume.git_data_luks" \
@@ -516,7 +541,7 @@ git_data_host_birth_gate() {
     "tls_private_key.git_data_host_ssh" \
     "doppler_secret.git_data_ssh_host_key"; do
     present=$(jq --arg a "$present_addr" \
-      '[.resource_changes[] | select(.address == $a) | select((.change.actions | length) > 0 and (.change.actions | all(. == "create" or . == "no-op")))] | length' \
+      '[.resource_changes[] | select(.address == $a) | select((.change.actions | length) > 0 and ((.change.actions | all(. == "create" or . == "no-op")) or ($a == "doppler_secret.git_data_ssh_host_key" and .change.actions == ["update"])))] | length' \
       < "$plan_json" 2>/dev/null)
     plan_gate_assert_numeric "git_data_host_birth_gate" "present[${present_addr}]=${present}" || return 1
     if [[ "$present" -eq 0 ]]; then
@@ -529,7 +554,9 @@ git_data_host_birth_gate() {
   # The presence loop above accepts a no-op for BOTH tls_private_key.git_data_host_ssh and
   # doppler_secret.git_data_ssh_host_key: on a resumed dispatch or a RE-BIRTH (host destroyed
   # outside Terraform) both legitimately exist, the key is the one the new host will install,
-  # and the pin already names it. What must never pass is a key CREATE without a pin CREATE:
+  # and the pin already names it. After a failed rotation the pin exists with the OLD value
+  # and plans an `update` (see POST-ROTATION RETRY above) — the pin is NOT guaranteed absent
+  # on a birth even though it depends_on the server. What must never pass is a key CREATE without a pin CREATE:
   # the new host would serve a key whose pin nobody published, and every pinned consumer
   # would keep a stale pin. (A real plan cannot produce that shape — the pin's value is the
   # key's public half, so a new key re-plans the pin — which is why the arm is cheap; it is

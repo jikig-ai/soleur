@@ -5,8 +5,8 @@
 # the running web app still holds the OLD pin until a release redeploys it (ci-deploy.sh
 # re-downloads prd at deploy time). This script forces that redeploy and succeeds ONLY if
 # some web-platform-release run NEWER than the pre-dispatch baseline has a `deploy` job
-# that concluded `success`. It is the single decision point; the composite action around
-# it only prints the pin fingerprint.
+# that concluded `success`. It is the single decision point; git-data-pin-redeploy.yml's
+# `redeploy` job runs it directly (`bash .github/actions/dispatch-web-redeploy/track.sh`).
 #
 #   1. Baseline: the databaseId of the latest web-platform-release.yml run (any event).
 #      databaseId is monotonic per repository, so "strictly greater" identifies a newer
@@ -17,24 +17,29 @@
 #      forced (workflow_dispatch or force_run)"), so it deploys with no app change. The
 #      workflow has no release-note input; the pin-rotation context lives in this job's
 #      summary instead.
-#   3. Poll ANY-event runs with databaseId > baseline. `gh workflow run` returns no run id
-#      and exits 0 on mere acceptance, so we never try to identify "our" run: a push-
+#   3. Poll the two deploying arms (workflow_dispatch, workflow_run) for runs with
+#      databaseId > baseline. `gh workflow run` returns no run id
+#      and exits 0 on mere acceptance, so we never try to identify "our" run: a merge-
 #      triggered release that deploys after the pin was published loads it just as well.
+#      A run whose list status is still `queued` has no jobs yet, so it is not viewed.
 #      Qualifies: the job named exactly `deploy` concluded `success`. `skipped`,
 #      `cancelled`, `failure`, a missing or renamed job, or an ambiguous (duplicate) name
 #      never qualify. A cancelled dispatched run is tolerated when a later run qualifies.
 #   4. Timeout: ::error:: naming the baseline databaseId and the last one seen.
 #
 # Env (interval/timeout are env so the test suite runs in seconds):
-#   REDEPLOY_POLL_INTERVAL_S  seconds between polls (default 30)
+#   REDEPLOY_POLL_INTERVAL_S  seconds between polls (default 60)
 #   REDEPLOY_TIMEOUT_S        give-up bound in seconds (default 4200 = 70 min, inside the
-#                             job's 75-minute timeout-minutes so the named error, not a
+#                             job's 80-minute timeout-minutes so the named error, not a
 #                             runner kill, is what the operator sees)
 #   GH_TOKEN / GH_REPO        consumed by gh itself (actions: write to dispatch).
 #
 # Recovery on failure: RE-RUN THIS JOB. Do not replace git-data again; the pin is already
 # published, only its load into the app is missing.
 set -euo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential (GH_TOKEN) and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 WORKFLOW="web-platform-release.yml"
 DEPLOY_JOB="deploy"
@@ -43,7 +48,7 @@ DEPLOY_JOB="deploy"
 # on a `workflow_dispatch` (this job's own dispatch). Only those two arms are polled, so
 # a push-arm run can never be read as the redeploy.
 EVENT_ARM='["workflow_dispatch","workflow_run"]'  # --event workflow_run | workflow_dispatch
-INTERVAL="${REDEPLOY_POLL_INTERVAL_S:-30}"
+INTERVAL="${REDEPLOY_POLL_INTERVAL_S:-60}"
 TIMEOUT="${REDEPLOY_TIMEOUT_S:-4200}"
 
 _summary() { [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && printf '%s\n' "$*" >> "$GITHUB_STEP_SUMMARY" || true; }
@@ -80,22 +85,25 @@ last_seen="$baseline"
 declare -A FINAL=()   # run id -> terminal non-success deploy conclusion (no re-query)
 
 while :; do
-  ids=""
+  rows=""
   if raw="$(gh run list --workflow "$WORKFLOW" --limit 50 --json databaseId,status,conclusion,event 2>/dev/null)"; then
-    ids="$(jq -r --argjson b "$baseline" \
+    # One "<databaseId> <status>" line per candidate, ascending by databaseId.
+    rows="$(jq -r --argjson b "$baseline" \
              --argjson arms "$EVENT_ARM" \
              '[.[]? | select((.databaseId | type) == "number" and .databaseId > $b)
-                    | select(.event as $e | $arms | index($e)) | .databaseId] | sort | .[]' \
+                    | select(.event as $e | $arms | index($e))
+                    | [.databaseId, (.status // "" | tostring)]] | sort | .[] | "\(.[0]) \(.[1])"' \
              <<<"$raw" 2>/dev/null || true)"
   else
     echo "::warning::dispatch-web-redeploy: 'gh run list' failed this tick; retrying."
   fi
 
-  for id in $ids; do
+  while read -r id status; do
     [[ "$id" =~ ^[0-9]+$ ]] || continue
     (( id > last_seen )) && last_seen="$id"
     [[ -n "${FINAL[$id]:-}" ]] && continue
-    jobs="$(gh run view "$id" --json jobs 2>/dev/null)" || continue
+    [[ "$status" == queued ]] && continue   # no jobs yet; nothing to read
+    jobs="$(gh run view "$id" --json jobs 2>/dev/null </dev/null)" || continue
     concl="$(jq -r --arg n "$DEPLOY_JOB" \
                '[.jobs[]? | select(.name == $n)] | if length == 1 then (.[0].conclusion // "") else "" end' \
                <<<"$jobs" 2>/dev/null)" || continue
@@ -111,7 +119,7 @@ while :; do
         ;;
       *) ;;   # in progress, or no uniquely-named deploy job yet
     esac
-  done
+  done <<<"$rows"
 
   if (( SECONDS - start >= TIMEOUT )); then
     echo "::error::dispatch-web-redeploy: no ${WORKFLOW} run newer than baseline databaseId=${baseline} had a '${DEPLOY_JOB}' job conclude success within ${TIMEOUT}s (last seen databaseId=${last_seen}). The new git-data host-key pin is in Doppler prd but the app is still running with the OLD pin, so git-data SSH from the app will fail host-key verification. Recovery: re-run this job (do NOT replace git-data again)."

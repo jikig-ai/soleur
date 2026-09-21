@@ -258,7 +258,7 @@ SHIM
 chmod +x "$BIN/ssh" "$BIN/findmnt" "$BIN/doppler" "$BIN/timeout" "$BIN/stat" "$BIN/git" "$BIN/runuser" || { printf 'FAIL SETUP: chmod shims\n' >&2; exit 1; }
 
 # The bridge's pinned bash-mode invocation (plan D3), with fixture paths.
-WEB_INV='ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root'
+WEB_INV='ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root'
 GD_INV='ssh -F /fixture/gd-ssh-config'
 
 # run_case <name> [VAR=value ...] — runs the script (CASE_SCRIPT, default the real one) under the
@@ -282,7 +282,7 @@ no_count_probe() { ! grep -qE '^ssh .* d=' "$TLF"; }
 # Detail text for a failure, neutralised so a failing row cannot raise a real annotation.
 ctx() { printf 'rc=%s | out: %s | tl: %s' "$RC" "$(tail -c 600 "$OUT" | tr '\n' '|')" "$(tr '\n' '|' < "$TLF" | cut -c1-400)" | sed 's/::/: :/g; s/##\[/#-#[/g'; }
 
-WEB_PROBE='^ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1\.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20'
+WEB_PROBE='^ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1\.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20'
 JUMP_PROBE="$WEB_PROBE -W 10\\.0\\.1\\.20:22 10\\.0\\.1\\.10\$"
 KEYED=(WEB_HOST_SSH="$WEB_INV" GIT_DATA_SSH="$GD_INV")
 
@@ -526,7 +526,13 @@ case_hk_rc1() { # the same text on a remote (non-255) exit is not ssh's verdict:
 }
 case_hk_midline() { # the phrase inside a banner line, not at its start, picks nothing
   case_hk midline web "failed rc=255 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 \
-    SHIM_WEB_STDERR=$'banner: Host key verification failed.\nbanner: @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nbanner: Unable to negotiate with x: no matching host key type found\n'
+    SHIM_WEB_STDERR=$'banner: Host key verification failed.\nbanner: @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nbanner: Unable to negotiate with x: no matching host key type found\nbanner: No ECDSA host key is known for web-1\n'
+}
+case_hk_rc1_unknown() { # the unknown text on a remote (non-255) exit: failed, never host_key_mismatch
+  case_hk rc1u web "failed rc=1 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_RC=1 SHIM_WEB_STDERR="$HK_UNKNOWN"
+}
+case_hk_rc1_alg() { # the alg text on a remote (non-255) exit: failed, never host_key_mismatch
+  case_hk rc1a web "failed rc=1 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_RC=1 SHIM_WEB_STDERR="$HK_ALG"
 }
 if case_hk_changed; then pass "HK1: REMOTE HOST IDENTIFICATION HAS CHANGED + Host key verification failed (rc 255) -> role=web verdict=host_key_mismatch reason=changed, exit 3"
 else fail "HK1: a changed web-1 host key was not host_key_mismatch reason=changed" "$(ctx)"; fi
@@ -546,7 +552,11 @@ if case_hk perm web "failed rc=255 reason=auth_refused" WEB_HOST_SSH="$WEB_INV" 
 else fail "HK6: a plain auth refusal changed verdict" "$(ctx)"; fi
 if case_hk_rc1; then pass "HK7: host-key text on a non-255 exit -> failed reason=unknown (the verdict needs ssh's own exit code)"
 else fail "HK7: host-key text on a remote exit picked host_key_mismatch" "$(ctx)"; fi
-if case_hk_midline; then pass "HK8: the H4 phrases inside banner lines (not line-anchored) -> failed reason=unknown"
+if case_hk_rc1_unknown; then pass "HK7b: 'No ECDSA host key is known' on a non-255 exit -> failed reason=unknown, not host_key_mismatch"
+else fail "HK7b: the unknown-key text on a remote exit picked host_key_mismatch" "$(ctx)"; fi
+if case_hk_rc1_alg; then pass "HK7c: 'no matching host key type found' on a non-255 exit -> failed reason=unknown, not host_key_mismatch"
+else fail "HK7c: the alg text on a remote exit picked host_key_mismatch" "$(ctx)"; fi
+if case_hk_midline; then pass "HK8: the H4 phrases (changed, alg, unknown) inside banner lines (not line-anchored) -> failed reason=unknown"
 else fail "HK8: an unanchored H4 phrase picked a verdict" "$(ctx)"; fi
 if grep -qxF '[git-data-cutover] probe-stderr: @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @' "$T/hk-changed.out"; then
   pass "HK9: the raw ssh text of a host_key_mismatch is printed behind the probe-stderr prefix, inside the stop-commands span"
@@ -603,8 +613,8 @@ else fail "X11: GIT_DATA_HOST default '$_sh_ip' != git-data.tf '$_tf_ip'"; fi
 
 # ── AC2 — the canonical read-only proof and its exact remote timeline ─────────────────
 cat > "$T/ac2.expected" <<'EXP'
-ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 10.0.1.10 true
-ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 -W 10.0.1.20:22 10.0.1.10
+ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 10.0.1.10 true
+ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 -W 10.0.1.20:22 10.0.1.10
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 true
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -no SOURCE /mnt/git-data
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 d=/mnt/git-data/repositories; src=/dev/sdb; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; s=$(findmnt -no SOURCE -T "$d") || exit 5; [ "$s" = "$src" ] || exit 6; n=$(find -H "$d" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo "${#n}"
@@ -1092,7 +1102,7 @@ SHIM
     _got="$(_names "$G2_ENV")"
     _kf="$(sed -n 's/^CI_SSH_KEYFILE=//p' "$G2_ENV")"
     _kh="$T/g2-$variant/rt/web-1.known_hosts"
-    _want_inv="ssh -i ${_kf} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${_kh} -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root"
+    _want_inv="ssh -F /dev/null -i ${_kf} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${_kh} -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root"
     if [ "$G2_RC" = 0 ] && [ "$_got" = "CI_SSH_KEYFILE,WEB_HOST_SSH" ]; then
       pass "BR (server-ip $variant): server-ip branch exports exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}"
     else fail "BR (server-ip $variant): export set is [$_got] (rc=$G2_RC), expected CI_SSH_KEYFILE,WEB_HOST_SSH" "$(tail -3 "$T/g2-$variant/stdout" | tr '\n' '|' | sed 's/::/: :/g')"; fi
@@ -1631,6 +1641,22 @@ fi
 if mutate hk-m5-perm-first "$SCRIPT" 1 's#^  if \[ "\$1" = 124 \]; then echo "failed timeout"$#&\n  elif grep -qF "Host key verification failed" <<< "$t"; then echo "failed auth_refused"#'; then
   CASE_SCRIPT="$MUTANT" mutant_red hk-m5-perm-first case_hk_changed
 fi
+# HK-M6 — the unknown pattern loses its line anchor: a banner line naming the phrase picks it.
+if mutate hk-m6-unknown-unanchored "$SCRIPT" 2 "s#grep -qE '\\^No \\[A-Za-z0-9-\\]#grep -qE 'No [A-Za-z0-9-]#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m6-unknown-unanchored case_hk_midline
+fi
+# HK-M7 — the unknown branch no longer requires ssh's own exit code 255.
+if mutate hk-m7-unknown-no-rc-gate "$SCRIPT" 2 's#^  elif \[ "\$1" = 255 \] && (grep -qE .\^No )#  elif \1#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m7-unknown-no-rc-gate case_hk_rc1_unknown
+fi
+# HK-M8 — the alg branch no longer requires ssh's own exit code 255.
+if mutate hk-m8-alg-no-rc-gate "$SCRIPT" 2 's#^  elif \[ "\$1" = 255 \] && (grep -qE .\^Unable to negotiate)#  elif \1#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m8-alg-no-rc-gate case_hk_rc1_alg
+fi
+# HK-M9 — the alg pattern loses its line anchor.
+if mutate hk-m9-alg-unanchored "$SCRIPT" 2 "s#grep -qE '\\^Unable to negotiate#grep -qE 'Unable to negotiate#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m9-alg-unanchored case_hk_midline
+fi
 
 # Fence (#8101) mutants. M6 and M9 were cut in plan review; the rows below follow the review round.
 # M1 — own dispatch: the probe is never called.
@@ -1737,7 +1763,7 @@ else
   # The bridge's exported WEB_HOST_SSH (captured by the BR rows); the plan-D3 literal if the
   # decode step could not be run (the BR rows then already fail).
   if grep -q '@KEY@' "$T/bridge-inv.tmpl" 2>/dev/null && grep -q '@KH@' "$T/bridge-inv.tmpl"; then cp "$T/bridge-inv.tmpl" "$T/rt/web-inv.tmpl"
-  else printf '%s\n' 'ssh -i @KEY@ -o StrictHostKeyChecking=yes -o UserKnownHostsFile=@KH@ -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root' > "$T/rt/web-inv.tmpl"; fi
+  else printf '%s\n' 'ssh -F /dev/null -i @KEY@ -o StrictHostKeyChecking=yes -o UserKnownHostsFile=@KH@ -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root' > "$T/rt/web-inv.tmpl"; fi
   cat > "$T/rt/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
@@ -1981,9 +2007,10 @@ fi
 # MUTANT_FLOOR = the matrix rows this suite owns: Guard 2 x4, Guard 5 x4, Guard 6 (cutover half) x1,
 # Guard 7 x3, C1 (transport vs store state) x1, C3 (count on the accepted source) x2, C7 (step
 # gating + executed teardown) x4, Fence (#8101: M1-M5, M4b, M7, M8, M10-M18, M13b, harness H-a) x19,
-# H4 host identity (#7226: HK-M1..HK-M5) x5 = 43.
+# H4 host identity (#7226: HK-M1..HK-M5) x5, H4 review rows (anchor + exit-255 on the No/Unable
+# branches) x4 = 47.
 # Guard 3's four rows moved with the census to tests/scripts/test-git-data-root-token-census.sh.
-MUTANT_FLOOR=43
+MUTANT_FLOOR=47
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -1997,8 +2024,9 @@ fi
 # known_hosts x2); workflow YAML 31 (incl. WF-gating); executed workflow steps 21 (key fetch 8,
 # ssh_config 9 incl. SC7-SC9, secrets check 3, teardown 1); mutants 43 x 2 = 86;
 # runtime 26 (incl. RF2, RFSRC, RFINC, RF17, RF18, RHK1-RHK4).
-# Total 297 — exact, not a margin: removing an assertion on purpose costs one edit here.
-FLOOR=297
+# Review round (#7226): HK7b/HK7c + the hostile-banner mid-line row, and 4 new mutants (x2) = +10.
+# Total 307 — exact, not a margin: removing an assertion on purpose costs one edit here.
+FLOOR=307
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

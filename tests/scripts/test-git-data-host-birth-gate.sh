@@ -1192,15 +1192,30 @@ mutate_and_check "root-key arm call" \
 
 # ── (#7226, ADR-237) GUARD 4, BIRTH ARM: the birth publishes the pin of the key it installs ──
 # The key may be a no-op on a resumed dispatch (it was never on any host: the pin secret
-# depends_on the server, so nothing published it). The PIN SECRET, though, must be a CREATE:
-# it depends_on hcloud_server.git_data, so on a genuine birth it cannot already exist, and a
-# no-op there means a stale pin from some earlier host would survive the birth unrewritten.
+# depends_on the server, so nothing published it). When the KEY is created, the pin must be
+# a CREATE too: a no-op pin there means a stale pin from some earlier host survives the birth
+# unrewritten. The pin CAN already exist on a birth, though: a replace that rotated the key
+# and failed after destroying the old host leaves new key + no server + OLD pin, and the
+# re-dispatched birth plans key no-op, server create, pin UPDATE (HKB2a/HKB2b below).
 mk_plan "$TMP/hk-pin-noop.json" "$(printf '[%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" \
   "$(rest_members_with 'doppler_secret.git_data_ssh_host_key' '["no-op"]')")"
 check "HKB1 a birth that creates the host key but leaves its pin secret a no-op (stale pin) => ABORT" 1 "does not CREATE doppler_secret.git_data_ssh_host_key" "$TMP/hk-pin-noop.json"
-mk_plan "$TMP/hk-pin-update.json" "$(printf '[%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" \
-  "$(rest_members_with 'doppler_secret.git_data_ssh_host_key' '["update"]')")"
-check "HKB2 a birth that UPDATES an existing host-key pin => ABORT" 1 "ABORT" "$TMP/hk-pin-update.json"
+# HKB2a THE POST-ROTATION RETRY (#7226 review F1): state = new key, no server, OLD pin. The
+# birth plans key no-op, server create, pin update — it must PASS, or the only automated
+# recovery after a failed rotation is wedged (the replace gate needs a server to delete).
+# rest_members_with swaps only ONE address; here the key must ALSO be a no-op (it is in state).
+printf '[%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" "$(rest_members)" \
+  | jq -c '[.[] | if .address == "doppler_secret.git_data_ssh_host_key" then .change.actions = ["update"]
+                  elif .address == "tls_private_key.git_data_host_ssh" then .change.actions = ["no-op"]
+                  else . end]' > "$TMP/hk-rotation-retry.changes"
+mk_plan "$TMP/hk-rotation-retry.json" "$(cat "$TMP/hk-rotation-retry.changes")"
+check "HKB2a post-rotation retry: key no-op, server CREATE, pin UPDATE => PASS" 0 "PASS" "$TMP/hk-rotation-retry.json"
+# HKB2b a pin rewrite with NO host being born is refused (layered behind the creates arm;
+# the double mutation below proves the pin arm owns the refusal once that arm is gone).
+jq -c '[.[] | if .address == "hcloud_server.git_data" then .change.actions = ["no-op"] else . end]' \
+  "$TMP/hk-rotation-retry.changes" > "$TMP/hk-pin-update-noserver.changes"
+mk_plan "$TMP/hk-pin-update-noserver.json" "$(cat "$TMP/hk-pin-update-noserver.changes")"
+check "HKB2b pin UPDATE while hcloud_server.git_data is NOT created => ABORT" 1 "ABORT" "$TMP/hk-pin-update-noserver.json"
 mk_plan "$TMP/hk-key-noop.json" "$(printf '[%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" \
   "$(rest_members_with 'tls_private_key.git_data_host_ssh' '["no-op"]')")"
 check "HKB3 resumed birth: host key already in state (no-op), pin created => PASS" 0 "PASS" "$TMP/hk-key-noop.json"
@@ -1210,6 +1225,43 @@ check "HKB4 a SECOND tls address created in a birth => ABORT (out of scope)" 1 "
 cp "$TMP/hk-pin-noop.json" "$TMP/hk-pin-noop-mut.json"
 mutate_and_check "host-key pin CREATE arm" \
   's/if \[\[ "\$host_key_created" -ne 0 && "\$host_key_pin_created" -ne 1 \]\]; then/if false; then/' "$TMP/hk-pin-noop-mut.json"
+
+# HKB2 MUTATIONS (#7226 review F1).
+# (i) The presence-loop exception is what lets the post-rotation retry through: drop it and
+#     HKB2a must turn into an ABORT. This is the inverse direction of mutate_and_check (the
+#     mutated gate must REJECT a legitimate plan), so it is spelled out here.
+_hkb2_mut="$TMP/mutated-hkb2.sh"
+sed 's/ or (\$a == "doppler_secret.git_data_ssh_host_key" and .change.actions == \["update"\])//' "$GATE" > "$_hkb2_mut"
+if cmp -s "$_hkb2_mut" "$GATE"; then
+  fail "HKB2a mutation (drop pin-update presence exception) matched NOTHING in the gate" "n/a" "no textual change"
+else
+  _hkb2_rc=0
+  _hkb2_out="$(bash -c "source '$PREAMBLE'; source '$_hkb2_mut'; git_data_host_birth_gate '$TMP/hk-rotation-retry.json'" 2>&1)" || _hkb2_rc=$?
+  if [[ "$_hkb2_rc" -ne 0 && "$_hkb2_out" == *"doppler_secret.git_data_ssh_host_key is not present"* ]]; then
+    pass "HKB2a mutation: without the presence exception the post-rotation retry is wedged (exception is load-bearing)"
+  else
+    fail "HKB2a mutation: dropping the presence exception did NOT refuse the retry plan — the exception is dead code" "$_hkb2_rc" "$_hkb2_out"
+  fi
+fi
+# (ii) LAYERED behind the creates arm and the identity arm, which both refuse a plan with no
+#      server create before this arm runs. Neuter those two: the pin-update arm must now own
+#      the ABORT.
+_hkb2_shadow='s/if \[\[ "\$creates" -ne 1 \]\]; then/if false; then/; s/if \[\[ "\$created_addr" != "\$want_addr" \]\]; then/if false; then/'
+_hkb2_mut2="$TMP/mutated-hkb2b.sh"
+sed "$_hkb2_shadow" "$GATE" > "$_hkb2_mut2"
+_hkb2_rc=0
+_hkb2_out="$(bash -c "source '$PREAMBLE'; source '$_hkb2_mut2'; git_data_host_birth_gate '$TMP/hk-pin-update-noserver.json'" 2>&1)" || _hkb2_rc=$?
+if ! cmp -s "$_hkb2_mut2" "$GATE" && [[ "$_hkb2_rc" -ne 0 && "$_hkb2_out" == *"UPDATES doppler_secret.git_data_ssh_host_key"* ]]; then
+  pass "HKB2b layered control: with the creates+identity arms neutered, the pin-update arm owns the refusal"
+else
+  fail "HKB2b layered control: the pin-update arm did not refuse once the creates+identity arms were neutered" "$_hkb2_rc" "$_hkb2_out"
+fi
+#      ...and neutering it too lets the pin rewrite through. (The root-key arm, which runs
+#      AFTER it and also refuses a plan with no server create, is removed as well — it is a
+#      third, later layer; the pin-update arm is the only one of the four that names the pin.)
+mutate_and_check "pin-update-without-server-create arm (with creates+identity+root-key arms also neutered)" \
+  "$_hkb2_shadow"'; /^  git_data_root_key_arm "\$plan_json" /d; s/if \[\[ "\$host_key_pin_updated" -ne 0 \&\& "\$server_created_exact" -ne 1 \]\]; then/if false; then/' \
+  "$TMP/hk-pin-update-noserver.json"
 
 # HKB5 THE GATE NEVER PRINTS PLAN VALUES: a sentinel planted in every before/after must not
 # reach the output on either verdict (this output lands in a public Actions log).
@@ -1243,11 +1295,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 131 ]]; then
+if [[ "$_ran" -lt 135 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 131. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 135. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 131)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 135)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

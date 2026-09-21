@@ -26,14 +26,19 @@ The real cutover does not exist yet. It is blocked on all of:
     and rotated on every replace; the app's transport pins when a pin is published.
   - [ ] Step 1 — every merge-triggered apply is `success` (the `web_1_host_key_probe` ran).
   - [ ] Step 2 — rung-2 re-rehearsal, then the evidence-only PR.
-  - [ ] Step 3 — `git-data-host-replace` publishes `GIT_DATA_SSH_HOST_KEY`, and `git_data_redeploy_*`
-    loads it (startup line `git_data_pin=present`).
+  - [ ] Step 3 — `git-data-host-replace` publishes `GIT_DATA_SSH_HOST_KEY`, and the
+    `git-data-pin-redeploy.yml` run it triggers loads it (startup line `git_data_pin=present`).
   - [ ] Step 4 — the strict dry run reads `role=git-data-auth verdict=ok`; then tick this item and flip
     ADR-237 to `accepted` in a docs PR.
-  - [ ] Step 5 — the #5914 follow-up PR deletes the app's unpinned fallback arm and closes #5914.
+  - [ ] Step 5 — every erasure left pending by the pin window is discharged.
+  - [ ] Step 6 — the #5914 follow-up PR deletes the app's unpinned fallback arm and closes #5914.
   - **Flag-flip precondition (hard):** `GIT_DATA_STORE_ENABLED` is never set until the pin is present
-    in `prd` **and** #5914 is closed. The flag precheck's `TOFU_ARM present|absent|unknown` line surfaces
-    the second half on every dry run; only `TOFU_ARM absent` satisfies it.
+    in `prd`, #5914 is closed, **and** #8211 pages on `git_data_replication_push` pin faults (with the
+    store on, a stale pin fails every replication push, and today that failure does not page). The
+    flag precheck's `TOFU_ARM present|absent|unknown` line is a reminder read from the dispatched
+    source tree, not a control: it says whether that ref still carries the fallback arm, not what the
+    running app does. The enforcing control is the app's pin resolver, which throws on an absent pin
+    while the store flag is on. Only `TOFU_ARM absent` satisfies the reminder.
 - A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation immediately before the real
   cutover, so nothing planted during the read-only period survives into it (ADR-220 D6).
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
@@ -60,8 +65,8 @@ any remote call.
    `GIT_DATA_STORE_ENABLED=true` refuses `verdict=flag_already_true`. All exit 5.
    It then prints the informational `TOFU_ARM present|absent|unknown` line (whether the app still
    carries the unpinned fallback arm, #5914) and reads git-data's host-key pin, `GIT_DATA_SSH_HOST_KEY`,
-   with the same token. An absent, malformed or unreadable pin refuses
-   `verdict=git_data_host_key_unavailable reason=<absent|invalid|unreadable>` (exit 5). A valid pin is
+   with the same token. An absent or malformed pin, or a failed read, refuses
+   `verdict=git_data_host_key_unavailable reason=<absent|invalid>` (exit 5), or `reason=<word> rc=<n>` when the read itself fails. A valid pin is
    written to `$RUNNER_TEMP/git-data.pin` and only its `SHA256:` fingerprint is printed.
 3. **Secrets present.** An empty `DOPPLER_TOKEN_GIT_DATA_ROOT` refuses `verdict=git_data_root_token_absent`.
 4. CF tunnel bridge to web-1.
@@ -163,8 +168,17 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
 
 1. **Merge.** From this merge on, any merge-triggered `apply-web-platform-infra.yml` run runs
    `terraform_data.web_1_host_key_probe` (a read-only `true` over the strict Terraform path) and must
-   end `success`. The bash path was already proven before merge by a `workspaces-luks-verify.yml`
-   dispatch on the branch (AC15).
+   end `success`. Read the latest ones; every `conclusion` must be `success`:
+
+   ```bash
+   gh run list --workflow apply-web-platform-infra.yml --event push -L 5 --json conclusion,databaseId,createdAt
+   ```
+
+   The bash path was proven before merge (AC15): `workspaces-luks-verify.yml` run
+   [35636913078](https://github.com/jikig-ai/soleur/actions/runs/35636913078), on branch commit
+   `d916e62f1`, concluded `success` over the pinned strict path. Its log shows
+   `pinned web-1 ecdsa-sha2-nistp256 SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok` and
+   `workspaces-luks re-assert PASSED`.
 2. **Rung-2 re-rehearsal, then the evidence-only PR.** Dispatch `git-data-rung2-rehearsal.yml`
    (`REHEARSE-GIT-DATA`, `dry_run=false`, `--ref main`) right after merge, then land its evidence in an
    evidence-only PR ([two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence);
@@ -174,17 +188,44 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
    - The replace rotates the host key (`-replace` of `tls_private_key.git_data_host_ssh`),
      `git_data_boot_verify` passes (it includes the cloud-init boot proof that sshd serves exactly the
      Terraform key), and `GIT_DATA_SSH_HOST_KEY` publishes to `prd`.
-   - The follow-on `git_data_redeploy_after_replace` job succeeds (after a birth it is
-     `git_data_redeploy_after_birth`; this runbook writes `git_data_redeploy_*` for either), and Better
-     Stack shows `git_data_pin=present` with the fingerprint that job printed in its summary (go/no-go
-     below).
+   - The completed apply run (replace or birth) triggers `git-data-pin-redeploy.yml` (`workflow_run`),
+     whose `redeploy` job dispatches `web-platform-release.yml` and waits until a newer release's
+     deploy succeeds; a failure emails ops. Find the run:
+
+     ```bash
+     gh run list --workflow git-data-pin-redeploy.yml -L 5 --json databaseId,conclusion,event,createdAt
+     ```
+
+     It must end `success`, and Better Stack must then show `git_data_pin=present` with the
+     fingerprint the source apply run printed (go/no-go below).
    - **If the replace failed after the secret published:** re-dispatch the replace. The replace gate
      accepts that plan.
-   - **If only `git_data_redeploy_*` failed:** re-run that job only. Never replace again for it.
+   - **If the replace failed before the new server was created:** state holds the new key, no server,
+     and the old host's pin. The replace gate needs a server to delete, so re-dispatch
+     `git-data-host-create` instead (see `git-data-birth.md`). The birth gate accepts a pin `update`
+     only while the same plan creates `hcloud_server.git_data`.
+   - **If only the redeploy failed:** never replace again for it. Re-run its failed job, or dispatch it
+     against the source apply run:
+
+     ```bash
+     gh run rerun <pin-redeploy-run-id> --failed
+     gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>
+     ```
+
 4. **Strict dry run.** Dispatch `git-data-cutover.yml` from `main`. It must read
    `role=git-data-auth verdict=ok` with both hops pinned. Then tick the #7226 item under Preconditions
    and flip ADR-237 to `accepted` in a docs PR.
-5. **The #5914 follow-up PR.** It deletes the app's unpinned fallback arm (`TOFU_FALLBACK_OPTS` and the
+5. **Discharge the erasures left pending.** After the pin is fixed (step 3 GO) and before step 6 or any
+   flag flip:
+   1. Collect every repository id from `erasure_outcome` events since the PR #8511 merge, with the
+      sweep query under "Store not empty" (step 3 there), widening its period to cover the merge.
+   2. Re-drive the erasure for each id. No per-id erasure trigger exists today, and none is needed
+      before the first flag flip: the store cannot hold a repository while the flag has never been on,
+      so the step-4 dry run clearing `store_not_empty` (zero repositories) discharges every collected
+      id. Record the ids and that dry run's id on #5914.
+   3. If the dry run reads `store_not_empty`, stop and follow "Store not empty": erasing those
+      repositories is the incident's decision.
+6. **The #5914 follow-up PR.** It deletes the app's unpinned fallback arm (`TOFU_FALLBACK_OPTS` and the
    `null`-pin path), removes `git-auth.ts` from the no-TOFU guard's allow-list
    (`tests/scripts/test-no-tofu-ssh.sh`), and closes #5914. Gate it on the positive step-3 startup line
    (`git_data_pin=present` on the current deploy), not on the absence of Sentry events. It must merge
@@ -196,22 +237,44 @@ required; it now also rotates the host key and redeploys the app automatically.
 ### Deploy-day go/no-go (step 3)
 
 - **GO** requires both:
-  - Better Stack shows `git_data_pin=present fp=SHA256:X`, where X equals the fingerprint in the
-    `git_data_redeploy_*` job summary. The line is logged at warn level because only lines at warn or
-    above reach Better Stack:
+  - Better Stack shows `git_data_pin=present fp=SHA256:X`, where X is the fingerprint the **source**
+    apply run (the replace or birth) printed. The redeploy never reads Terraform state, so it cannot
+    print X itself. Read X from that run's log (the same line is in its job summary):
 
     ```bash
-    doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep git_data_pin=
+    gh run view <apply-run-id> --log | grep 'git-data host key fingerprint'
     ```
 
-  - Zero Sentry events tagged `erasure_outcome=*` between the replace dispatch and that line. If there
-    are any, collect the affected user ids with the `extra.userId` query under "Store not empty" (step
-    3); the erasure record keeps `gitDataRepoId` for exactly this retry. Before cutover the store is
-    empty, so the retry is a no-op success.
+    Then read the startup line. It is logged at warn level because only lines at warn or above reach
+    Better Stack. The redeploy can wait up to 75 minutes for its release, so a fixed `30m` window can
+    miss the line: start the window at the apply run's start (UTC), and read the newest line after
+    the redeploy run's deploy finished:
+
+    ```bash
+    doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+      --since 'YYYY-MM-DD HH:MM:SS' --grep git_data_pin=
+    ```
+
+  - Zero Sentry events tagged `erasure_outcome` between the replace dispatch and that line. The query
+    must print nothing; read any issue it lists in full with `scripts/sentry-issue.sh`:
+
+    ```bash
+    SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)
+    curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+      'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=feature%3Aaccount-delete%20op%3Agit-data-bare-repo-erasure%20has%3Aerasure_outcome&start=<dispatch ISO>&end=<now ISO>' \
+      | jq -r '.[] | [.id, .count, .title] | @tsv'
+    doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event <issue-id>
+    ```
+
+    If there are any, collect the repository ids with the sweep query under "Store not empty" (step
+    3) and discharge them in post-merge step 5.
 - `git_data_pin=absent` or `git_data_pin=invalid` on the new deploy is **NO-GO**: the release did not
-  load the pin. Re-run `git_data_redeploy_*`, then read again.
+  load the pin. Re-run the redeploy (`gh run rerun <pin-redeploy-run-id> --failed`, or
+  `gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>`), then read
+  again.
 - **The first rotation cannot produce `host_key_mismatch`.** Until the redeploy, the app has no pin
-  and stays on its fallback arm against the new host. Pin lag matters only from the second rotation on.
+  and stays on its fallback arm against the new host. Pin lag matters only from the second rotation
+  on, and once the store flag is on it stalls replication pushes and fetches as well as erasures.
 - **A full revert of PR #8511 is never the rollback.** It would restore trust-on-first-use on every
   path. Every fix goes forward.
 
@@ -223,13 +286,19 @@ required; it now also rotates the host key and redeploys the app automatically.
   (its `user_data` now carries the host key) plus creates of `tls_private_key.git_data_host_ssh` and
   `doppler_secret.git_data_ssh_host_key`, until step 3 applies them. Neither address is on any per-PR
   `-target` list, so no routine apply publishes a pin the live host does not carry.
+- **Drift is red for this whole window, including the rung-2 gap.** While these three addresses are
+  pending, a red drift verdict says nothing about anything else. Read other drift from the plan diff:
+  any address other than these three is real drift. Step 3 is the deadline for this blind spot, so
+  do not let the window run on.
 - **The app logs `git_data_pin=absent`** at every start, and Sentry receives one
   `feature=git_data_host_key_pin op=pin_absent_store_disabled` event per process. Expected until step 3.
 
 ### Operator-local applies enforce `host_key`
 
 Every Terraform `connection` block that dials web-1 now sets `host_key = local.web_1_ssh_host_key`, so
-an operator-local apply verifies web-1 exactly as CI does. If an operator-local apply fails at a
+an operator-local apply verifies web-1 exactly as CI does. A local apply must also export
+`TF_VAR_terraform_version` equal to the workflows' `TERRAFORM_VERSION` (currently `1.10.5`), or it
+re-triggers `terraform_data.web_1_host_key_probe`. If an operator-local apply fails at a
 provisioner with a host-key error, the committed pin is wrong or web-1 was re-keyed: follow the H4
 triage below. Do not edit the pin file to whatever the laptop sees; a re-capture follows the web-1
 re-capture section.
@@ -244,11 +313,16 @@ merge.
 - **The break-glass path inside the gap** is the operator-local apply under the
   `OPERATOR_APPLIED_EXCLUSIONS` contract (ADR-096), with its own explicit authorization. Give it the
   same `-replace` and `-target` set as the gated replace job, so the host key rotates and the secret
-  publishes with the host. It has no `git_data_redeploy_*` follow-on: dispatch
-  `web-platform-release.yml -f bump_type=patch` afterwards and read the startup line as in the
-  go/no-go.
+  publishes with the host, and export `TF_VAR_terraform_version` as above. It triggers no
+  `git-data-pin-redeploy.yml` run (that listens only for the apply workflow): dispatch
+  `gh workflow run git-data-pin-redeploy.yml --ref main` (no `source_run_id`, so it redeploys
+  unconditionally) afterwards. Read X from the published pin
+  (`doppler secrets get GIT_DATA_SSH_HOST_KEY -p soleur -c prd --plain | ssh-keygen -lf -`), then read
+  the startup line as in the go/no-go.
 - **The known-good-tag route** under "Break-glass for the rung-2 interlock" is not a substitute. Inside
-  the gap the only candidate tag predates PR #8511: it boots a host with sshd's self-generated keys and
+  the gap the only candidate tag predates PR #8511 (PR #8511 deleted the evidence file, so find it
+  with `git log -1 --diff-filter=AM --format=%H -- apps/web-platform/infra/git-data-rung2-boot-evidence.env`;
+  a plain `git log -1` returns the deletion): it boots a host with sshd's self-generated keys and
   publishes no pin, so it restores the pre-#8511 state (the app on its fallback arm, dry runs refusing
   `reason=absent`). Once a pin is published, a replace from such a tag leaves the pin not matching the
   host, and every pinned consumer fails `host_key_mismatch reason=changed`. Never use a pre-#8511 tag
@@ -275,7 +349,9 @@ merge.
 | Between the PR #8511 merge and post-merge step 3 | `verdict=git_data_host_key_unavailable reason=absent` (exit 5, precheck) | Expected: no pin is published yet. Run host-key step 3. |
 | After step 3, `GIT_DATA_SSH_HOST_KEY` missing from `prd` | `verdict=git_data_host_key_unavailable reason=absent` (exit 5) | The TF-owned secret was deleted outside Terraform. Read `doppler configs logs --project soleur --config prd` for who removed it, then re-dispatch `git-data-host-replace`, which rotates and republishes. An unexplained removal is a Breach-triage trigger. |
 | The published pin is not one ED25519 key line | `verdict=git_data_host_key_unavailable reason=invalid` (exit 5) | Terraform only writes a valid key, so the value was edited outside it. Same as the row above: read the config log, re-dispatch the replace, and treat an unexplained edit as a Breach-triage trigger. |
-| The pin read failed | `verdict=git_data_host_key_unavailable reason=unreadable` (exit 5) | The same token and read as the flag; handle it like `flag_read_failed`. Re-dispatch once; a repeat means the `DOPPLER_TOKEN_PRD` token needs replacing. |
+| A replace failed before the new server was created | the replace gate refuses the retry (no server to delete); state holds the new key and the old host's pin | Re-dispatch `git-data-host-create` (`git-data-birth.md`). The birth gate accepts the pin `update` only while the same plan creates `hcloud_server.git_data`. |
+| The app, an Art. 17 erasure, pin fault | Sentry `erasure_outcome=unconfigured` with `detail` starting `pin_invalid:` or `pin_absent_store_enabled:` | The app's pin resolver refused before dialing: the published pin is malformed, or absent while the store flag is on. Nothing was erased. Fix the pin (re-dispatch `git-data-host-replace`; for `pin_absent_store_enabled` also check the flag, see "Flag already on"), then discharge the ids as in host-key step 5. An `unconfigured` whose `detail` starts `remove_key_absent:` is a different fault: the remove key is missing while git-data is otherwise armed (a partial birth or a half-applied rotation), and the pin is not involved. |
+| The pin read failed | `verdict=git_data_host_key_unavailable reason=<word> rc=<n>` (exit 5; the same reason words as `flag_read_failed`, e.g. `auth_invalid`, `forbidden`, `network`) | The same token and read as the flag; handle it like `flag_read_failed`. Re-dispatch once; a repeat means the `DOPPLER_TOKEN_PRD` token needs replacing. |
 | The committed web-1 pin file is malformed | `verdict=web_1_host_key_invalid` (ssh_config step) | A defect in `apps/web-platform/infra/web-1-ssh-host-key.pub` on the dispatched ref. Fix it in a reviewed PR (see "Re-capturing web-1's host key"). |
 | **L7 host identity** — a hop presented a key other than its pin | `role=<web\|git-data-jump\|git-data-auth> verdict=host_key_mismatch reason=changed` | Rule out L3 and L7 auth first, then follow "Host-key mismatch (H4)" below. |
 | **L7 host identity** — no pin for the alias | `verdict=host_key_mismatch reason=unknown` | A configuration bug (a typo'd `HostKeyAlias` or an empty known_hosts file), not an attack signal. Fix the workflow in a reviewed PR. |
@@ -330,8 +406,8 @@ workflows name no verdict: their log shows ssh's raw error output and the run fa
 
 In the app, the same mismatch surfaces as the Art. 17 erasure outcome `erasure_outcome=host_key_mismatch`
 (paging through the existing `art17_erasure_incomplete` rule). Its first remedy is (b)'s redeploy half:
-the app holds a stale or wrong pin. Re-run `git_data_redeploy_*`, or dispatch
-`web-platform-release.yml -f bump_type=patch`.
+the app holds a stale or wrong pin. Re-run the redeploy (`gh run rerun <pin-redeploy-run-id> --failed`),
+or dispatch `gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>`.
 
 ### Store not empty (`store_not_empty`)
 
@@ -342,19 +418,21 @@ remain on the plaintext volume.
 1. Open an incident (`/soleur:incident`) and route it to the CLO for an Art. 33 assessment.
 2. **Do not replace the host and do not wipe either volume.** The store's contents are the evidence,
    and the Art. 17 question is about them.
-3. Pull the user ids whose erasure may not have completed from Sentry: every event tagged
-   `feature:account-delete op:git-data-bare-repo-erasure` carries the id in its `extra.userId`. The
-   issue's event listing returns each event in full, `extra` included:
+3. Pull the repository ids whose erasure may not have completed from Sentry: every event tagged
+   `feature:account-delete op:git-data-bare-repo-erasure` carries the id in `extra.gitDataRepoId`.
+   Read that field, not `userId`: `extra.userId` is pseudonymized by policy (ADR-029), so it returns
+   `no-user-id` or a hash, never the repository name. The issue's event listing returns each event in
+   full, `extra` included (token and host as in `scripts/sentry-issue.sh`):
 
    ```bash
-   SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain)
-   curl -fsS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-     'https://sentry.io/api/0/organizations/jikigai-eu/issues/?query=feature%3Aaccount-delete%20op%3Agit-data-bare-repo-erasure&statsPeriod=90d' \
+   SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)
+   curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+     'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=feature%3Aaccount-delete%20op%3Agit-data-bare-repo-erasure&statsPeriod=90d' \
      | jq -r '.[].id'
    # for each issue id:
-   curl -fsS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-     "https://sentry.io/api/0/organizations/jikigai-eu/issues/<issue-id>/events/?full=true" \
-     | jq -r '.[] | [.dateCreated, (.context.userId // .extra.userId // "no-user-id")] | @tsv'
+   curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+     "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/<issue-id>/events/?full=true" \
+     | jq -r '.[] | [.dateCreated, (.tags[]? | select(.key == "erasure_outcome") | .value) // "-", (.context.gitDataRepoId // .extra.gitDataRepoId // "no-repo-id")] | @tsv'
    ```
 
 4. Attach the list to the incident. Whether and how each repository is erased is the incident's
@@ -481,10 +559,12 @@ re-mint refusal, which blocks a create of the key while the fingerprint file is 
 
 **git-data's SSH host key rotates on every replace (ADR-237).** The gated replace job re-mints
 `tls_private_key.git_data_host_ssh` with the host and republishes `GIT_DATA_SSH_HOST_KEY`; the birth
-job mints and publishes it the same way. The follow-on `git_data_redeploy_*` job then forces a web
-release, so the app loads the new pin within about one release cycle. No step outside Terraform copies
-the pin, and no separate rotation input exists. If `git_data_redeploy_*` fails, re-run it; until it
-succeeds, erasures page with `erasure_outcome=host_key_mismatch` (from the second rotation on).
+job mints and publishes it the same way. When that apply run completes, `git-data-pin-redeploy.yml`
+forces a web release, so the app loads the new pin within about one release cycle. No step outside
+Terraform copies the pin, and no separate rotation input exists. If the redeploy fails (it emails
+ops), re-run it with `gh run rerun <pin-redeploy-run-id> --failed`; until it succeeds, erasures page
+with `erasure_outcome=host_key_mismatch` from the second rotation on, and with the store on,
+replication pushes and fetches fail too.
 
 web-1's host key does not rotate: it is a committed pin, changed only by the re-capture procedure below.
 
@@ -549,7 +629,8 @@ HOLDs). An emergency replace is therefore refused whenever `main` has drifted si
 rehearsal, including when the host is already down. The route:
 
 1. Find the candidate: **the last commit that touched the evidence file**,
-   `git log -1 --format=%H -- apps/web-platform/infra/git-data-rung2-boot-evidence.env`, or any
+   `git log -1 --diff-filter=AM --format=%H -- apps/web-platform/infra/git-data-rung2-boot-evidence.env`
+   (`--diff-filter=AM` skips a commit that deleted the file, as PR #8511 did), or any
    descendant of it up to the next change of a bound file. (Not the template's own log: those
    commits are where the template CHANGED, and by Guard 4 the evidence for a template always lands
    in a LATER, evidence-only commit — at every SHA that log prints the in-tree evidence is the
@@ -625,6 +706,6 @@ These stay recorded for the rebuild; none applies to the read-only proof.
 - Root-key Terraform root: `apps/web-platform/infra/git-data-root-key/`
 - Create-gate arm: `tests/scripts/lib/git-data-root-key-arm-gate.sh`
 - ADR-220 (access and credential), ADR-068 (cutover design), ADR-149 (birth route)
-- ADR-237 (SSH host keys are pinned); web-1 pin: `apps/web-platform/infra/web-1-ssh-host-key.pub`; capture: `scripts/capture-web-1-host-key.sh`; known_hosts writer: `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh`; redeploy: `.github/actions/dispatch-web-redeploy/`
+- ADR-237 (SSH host keys are pinned); web-1 pin: `apps/web-platform/infra/web-1-ssh-host-key.pub`; capture: `scripts/capture-web-1-host-key.sh`; known_hosts writer: `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh`; redeploy: `.github/workflows/git-data-pin-redeploy.yml` (runs `.github/actions/dispatch-web-redeploy/track.sh`)
 - Soak script: `scripts/followthroughs/phase3-ga-soak-5274.sh`
 - Convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`

@@ -67,6 +67,22 @@ cases=$((cases + 1)); run c5 "$IP $EC\n" "$IP $EC2"$'\n'
 if [[ "$RC" -ne 0 && ! -e "$S/out.pub" ]] && grep -qF "MISMATCH" "$S/stderr"; then ok "C5: a differing known_hosts ECDSA entry refuses"
 else no "C5: mismatch (rc=$RC)"; fi
 
+# C5b: the prior DIFFERENT entry is HASHED (ssh-keygen -H, HashKnownHosts yes) -> still refuses.
+cases=$((cases + 1))
+printf '%s %s\n' "$IP" "$EC2" > "$S/kh.hashed"
+ssh-keygen -H -f "$S/kh.hashed" >/dev/null 2>&1; rm -f "$S/kh.hashed.old"
+if grep -q '^|1|' "$S/kh.hashed" && ! grep -qF "$IP" "$S/kh.hashed"; then
+  run c5b "$IP $EC\n" "$(<"$S/kh.hashed")"$'\n'
+  if [[ "$RC" -ne 0 && ! -e "$S/out.pub" ]] && grep -qF "MISMATCH" "$S/stderr"; then ok "C5b: a HASHED differing known_hosts entry refuses"
+  else no "C5b: hashed mismatch (rc=$RC) $(<"$S/stderr")"; fi
+else no "C5b: fixture: ssh-keygen -H did not hash the known_hosts line"; fi
+
+# C5c: an entry for a DIFFERENT IP that contains this one as a substring (203.0.113.70) is not a
+# prior entry for $IP: no mismatch, recorded as "no prior entry".
+cases=$((cases + 1)); run c5c "$IP $EC\n" "${IP}0 $EC2"$'\n'
+if [[ "$RC" -eq 0 ]] && grep -qF "no prior known_hosts entry" "$S/out.pub"; then ok "C5c: a substring-IP entry (${IP}0) is not treated as this host's"
+else no "C5c: substring IP (rc=$RC) $(<"$S/stderr")"; fi
+
 # C6: prior entry of another type only -> not comparable, still written.
 cases=$((cases + 1)); run c6 "$IP $EC\n" "$IP $ED"$'\n'
 if [[ "$RC" -eq 0 ]] && grep -qF "none of type ecdsa-sha2-nistp256" "$S/out.pub"; then ok "C6: a non-ECDSA prior entry is reported as not comparable"
@@ -91,13 +107,22 @@ refuse "R6: an answer for a different host refuses" "198.51.100.9 $EC\n"
 refuse "R7: a malformed key body refuses" "$IP ${EC}xx\n"
 
 cases=$((cases + 1))
-env -u CI -u GITHUB_ACTIONS SSH_KEYSCAN="$S/keyscan" bash "$SUT" 10.0.1.10 --out "$S/out.pub" >/dev/null 2>&1; rc=$?
-if [[ "$rc" -ne 0 ]]; then ok "R8: a private address refuses"; else no "R8: private address accepted"; fi
+rm -f "$S/argv" "$S/out.pub"
+env -u CI -u GITHUB_ACTIONS SSH_KEYSCAN="$S/keyscan" SCAN_OUT="10.0.1.10 $EC\n" SCAN_ARGV="$S/argv" \
+  bash "$SUT" 10.0.1.10 --out "$S/out.pub" >/dev/null 2>"$S/stderr"; rc=$?
+if [[ "$rc" -ne 0 && ! -e "$S/argv" && ! -e "$S/out.pub" ]] && grep -qF "is a private/loopback address" "$S/stderr"; then
+  ok "R8: a private address refuses with the private/loopback message, before any keyscan"
+else no "R8: private address (rc=$rc, keyscan called: $([[ -e $S/argv ]] && echo yes || echo no)) $(<"$S/stderr")"; fi
 cases=$((cases + 1))
 env -u CI -u GITHUB_ACTIONS bash "$SUT" >/dev/null 2>&1; rc=$?
 if [[ "$rc" -eq 2 ]]; then ok "R9: no argument is a usage error (exit 2)"; else no "R9: rc=$rc"; fi
 
-if (( pass + fail != cases )); then echo "[FATAL] accounting: $((pass + fail)) != $cases" >&2; exit 1; fi
-if (( cases < 15 )); then echo "[FATAL] floor: $cases < 15" >&2; exit 1; fi
+if (( pass + fail != cases )); then
+  printf '[FATAL] accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
+fi
+FLOOR=17
+if (( cases < FLOOR )); then
+  printf '[FATAL] anti-vacuity floor: only %d cases ran, expected >= %d\n' "$cases" "$FLOOR" >&2; exit 1
+fi
 echo "=== capture-web-1-host-key: $pass passed, $fail failed ($cases cases) ==="
 [[ "$fail" -eq 0 ]]

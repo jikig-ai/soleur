@@ -4268,7 +4268,7 @@ jobs:
           echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
           # (#7226) The rotated pin, for git-data-pin-redeploy.yml's comparison.
           fp=$(doppler run -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
-          if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
+          if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
       - name: Poll for the git-data boot-completion signal (replace)
         id: poll
@@ -6081,7 +6081,7 @@ jobs:
           echo "birth applied. A green apply is NOT a green boot — the boot-signal poll below is what decides whether this host actually came up."
           # (#7226) The published pin, for git-data-pin-redeploy.yml's comparison.
           fp=$(doppler run -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
-          if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
+          if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
       # (#6982, R20) POLL FOR THE BOOT SIGNAL. This is ADR-149 checklist item 4's honest
       # discharge, and the step whose absence made the previous one a lie: until now the

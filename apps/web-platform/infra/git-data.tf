@@ -343,14 +343,16 @@ resource "doppler_secret" "git_data_ssh_host" {
 # doppler_secret.git_data_ssh_host above, with two deliberate differences:
 #
 #   visibility = "unmasked" — it is a PUBLIC key; masking it would only hide the value an
-#     operator compares against the fingerprint the redeploy job and the startup line print.
+#     operator compares against the fingerprint the birth/replace apply run and the startup
+#     line print.
 #   depends_on = [hcloud_server.git_data] — the pin is written only AFTER the host that carries
 #     the key exists, so a replace that fails before the server is created publishes nothing
 #     and the app keeps the pin of the host that is still running (plan R7). Unlike the
 #     ADDRESS secret above, co-landing with the server is exactly the property wanted here.
 #
 # NO ignore_changes: Terraform owns the value, and it MUST move on every replace. The
-# git_data_redeploy_after_{birth,replace} jobs then force a web release so the app loads it.
+# git-data-pin-redeploy.yml workflow (triggered when the apply workflow's birth or replace run
+# completes) then forces a web release so the app loads it.
 resource "doppler_secret" "git_data_ssh_host_key" {
   project    = "soleur"
   config     = "prd"

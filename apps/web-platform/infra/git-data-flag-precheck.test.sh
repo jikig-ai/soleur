@@ -9,8 +9,12 @@
 #
 # Host-key pin (#7226, plan D3): the same step reads GIT_DATA_SSH_HOST_KEY, validates the ED25519
 # shape, writes $RUNNER_TEMP/git-data.pin and prints only its SHA256 fingerprint. An absent,
-# invalid or unreadable pin refuses with verdict=git_data_host_key_unavailable reason=<word>. An
-# informational `TOFU_ARM present|absent` line reads the file GIT_AUTH_TS_PATH names (fixtures here).
+# invalid or unreadable pin refuses with verdict=git_data_host_key_unavailable reason=<word> (an
+# unreadable one through the flag read's own classifier: reason=<auth_invalid|...> rc=<n>). An
+# informational `TOFU_ARM present|absent|unknown` line reads the file GIT_AUTH_TS_PATH names
+# (fixtures here; one row runs the default path in a mirrored tree) for the accept-new ssh option
+# itself, not for a constant's name. Every fixture that must carry that option builds it by
+# concatenation (TOFU_OPT below), so this suite is not itself a tests/scripts/test-no-tofu-ssh.sh hit.
 #
 # The script is driven through a PER-NAME Doppler shim that answers per project/config/secret
 # AND per --no-exit-on-missing-secret presence, mirroring the measured CLI v3.75.3 semantics
@@ -94,6 +98,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "${DOPPLER_TOKEN:-}" ] || { echo "Doppler Error: you must provide a token" >&2; exit 1; }
+# SHIM_PIN_ERR forces one error class on the pin read ONLY (the flag and scope reads succeed).
+if [ "$name" = GIT_DATA_SSH_HOST_KEY ]; then
+  case "${SHIM_PIN_ERR:-}" in
+    auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+    network) echo "Doppler Error: dial tcp: lookup api.doppler.com: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+  esac
+fi
 [ "${SHIM_SCOPE_ERROR:-0}" = 1 ] && { echo "Doppler Error: This token does not have access to requested config '$cfg' STDERR-CANARY-3b" >&2; exit 1; }
 case "${SHIM_ERR:-}" in
   auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
@@ -126,8 +137,20 @@ ssh-keygen -q -t ecdsa -b 256 -N '' -f "$T/ecdsakey" || { printf 'FAIL SETUP: ss
 ECDSA_PIN="$(cut -d' ' -f1,2 "$T/ecdsakey.pub")"
 # One base64 character short, and a regex-valid body that is still 68 characters (shape-only).
 PIN_SHORT="${PIN%?}"
-printf 'const TOFU_FALLBACK_OPTS = ["-o", "fixture"];\n' > "$T/git-auth-tofu.ts"
+TOFU_OPT="StrictHostKeyChecking=accept-""new"
+printf 'const TOFU_FALLBACK_OPTS = ["-o", "%s"];\n' "$TOFU_OPT" > "$T/git-auth-tofu.ts"
 printf 'export const PINNED_ONLY = true;\n' > "$T/git-auth-strict.ts"
+# The constant's NAME without the option (a stale comment or a rename-in-progress) is not the arm.
+printf '// TOFU_FALLBACK_OPTS was here\nexport const PINNED_ONLY = true;\n' > "$T/git-auth-name-only.ts"
+# The option under a RENAMED constant, and in lower case: both are still the arm.
+printf 'const UNPINNED_OPTS = ["-o", "%s"];\n' "$TOFU_OPT" > "$T/git-auth-renamed.ts"
+printf 'const UNPINNED_OPTS = ["-o", "%s"];\n' "$(printf '%s' "$TOFU_OPT" | tr 'A-Z' 'a-z')" > "$T/git-auth-lower.ts"
+# A mirrored checkout for the DEFAULT-path row: <tree>/apps/web-platform/{infra,server}, the same
+# relative layout the script's default resolves against, so a mutant that miscounts the `..`
+# lands on a path that does not exist instead of on the real checkout.
+MIRROR="$T/tree/apps/web-platform"
+mkdir -p "$MIRROR/infra" "$MIRROR/server" || { printf 'FAIL SETUP: mirror\n' >&2; exit 1; }
+cp "$T/git-auth-tofu.ts" "$MIRROR/server/git-auth.ts" || { printf 'FAIL SETUP: mirror git-auth\n' >&2; exit 1; }
 
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
 # unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
@@ -147,8 +170,11 @@ run_case() {
   assert_fixture_dir "$RT"
   rm -rf "$CTMP" "$RT"; mkdir -p "$CTMP" "$RT" || { printf 'FAIL SETUP: case tmp\n' >&2; exit 1; }
   OUT="$T/$name.out"; DLOG="$T/$name.dlog"; : > "$DLOG"
+  # CASE_DEFAULT_GIT_AUTH=1 leaves GIT_AUTH_TS_PATH genuinely UNSET (not empty).
+  local gat=(GIT_AUTH_TS_PATH="$T/git-auth-tofu.ts")
+  [ "${CASE_DEFAULT_GIT_AUTH:-0}" = 1 ] && gat=()
   timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$CTMP" DOPPLER_STORE="$store" DOPPLER_LOG="$DLOG" \
-    RUNNER_TEMP="$RT" GIT_AUTH_TS_PATH="$T/git-auth-tofu.ts" \
+    RUNNER_TEMP="$RT" "${gat[@]}" \
     DOPPLER_TOKEN=fixture-prd-read "$@" bash "${CASE_SCRIPT:-$PRECHECK}" > "$OUT" 2>&1
   RC=$?
 }
@@ -237,10 +263,11 @@ else fail "P5b: 'true ' was not flag=off" "$(detail)"; fi
 if case_off canary 'off-CANARY-5d1e' && ! grep -q 'CANARY' "$OUT"; then pass "P6: the flag value itself is never printed"
 else fail "P6: the flag value was printed" "out=[$(tr '\n' '|' < "$OUT")]"; fi
 # ── host-key pin (#7226, plan D3) ─────────────────────────────────────────────────────
-case_pin_ok() { # the pin file holds exactly the key line; only its fingerprint is printed
+case_pin_ok() { # the pin file holds exactly the key line, read-only (0444); only its fingerprint is printed
   run_case pin-ok false
   [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(ok_out flag=off)" ] \
-    && [ "$(cat "$RT/git-data.pin" 2>/dev/null)" = "$PIN" ] && ! grep -qF "${PIN#* }" "$OUT"
+    && [ "$(cat "$RT/git-data.pin" 2>/dev/null)" = "$PIN" ] && ! grep -qF "${PIN#* }" "$OUT" \
+    && [ "$(stat -c %a "$RT/git-data.pin" 2>/dev/null)" = 444 ]
 }
 case_pin_refused() { # <label> <reason> [VAR=value ...] — CASE_PIN set by the caller
   local label="$1" reason="$2"; shift 2
@@ -252,12 +279,16 @@ case_tofu() { # <label> <git-auth-path> <expected-line>
   run_case "tofu-$1" false GIT_AUTH_TS_PATH="$2"
   [ "$RC" = 0 ] && [ "$(head -1 "$OUT")" = "$3" ] && ! grep -q '::warning' "$OUT"
 }
-if case_pin_ok; then pass "K1: a valid ED25519 pin -> \$RUNNER_TEMP/git-data.pin holds exactly the key line; stdout carries its SHA256 fingerprint, never the key"
-else fail "K1: a valid pin was not written or was printed raw" "$(detail) pin=[$(head -c 120 "$RT/git-data.pin" 2>/dev/null)]"; fi
+if case_pin_ok; then pass "K1: a valid ED25519 pin -> \$RUNNER_TEMP/git-data.pin holds exactly the key line, mode 444; stdout carries its SHA256 fingerprint, never the key"
+else fail "K1: a valid pin was not written read-only, or was printed raw" "$(detail) mode=$(stat -c %a "$RT/git-data.pin" 2>/dev/null) pin=[$(head -c 120 "$RT/git-data.pin" 2>/dev/null)]"; fi
 if CASE_PIN=ABSENT case_pin_refused absent absent; then pass "K2: GIT_DATA_SSH_HOST_KEY absent (exit 0, empty WITH the flag) -> verdict=git_data_host_key_unavailable reason=absent, exit 5, no pin file"
 else fail "K2: an absent pin was not refused as reason=absent" "$(detail)"; fi
-if CASE_PIN=ABSENT case_pin_refused unreadable unreadable SHIM_IGNORE_FLAG=1; then pass "K3: a pin read that exits non-zero -> reason=unreadable (never absent, never flag_read_failed), stderr not printed"
-else fail "K3: a failed pin read was not reason=unreadable" "$(detail)"; fi
+if CASE_PIN=ABSENT case_pin_refused unreadable 'unknown rc=1' SHIM_IGNORE_FLAG=1; then pass "K3: a pin read that exits non-zero -> git_data_host_key_unavailable reason=unknown rc=1 (never absent, never flag_read_failed), stderr not printed"
+else fail "K3: a failed pin read was not git_data_host_key_unavailable reason=unknown rc=1" "$(detail)"; fi
+if case_pin_refused unreadable-auth 'auth_invalid rc=1' SHIM_PIN_ERR=auth; then pass "K3b: a pin read refused as 'Invalid Auth token' -> reason=auth_invalid rc=1, the flag read's own classifier"
+else fail "K3b: a pin auth failure was not reason=auth_invalid rc=1" "$(detail)"; fi
+if case_pin_refused unreadable-net 'network rc=3' SHIM_PIN_ERR=network; then pass "K3c: a pin read that times out -> reason=network, keeping doppler's rc (3)"
+else fail "K3c: a pin network failure was not reason=network rc=3" "$(detail)"; fi
 _inv_n=0
 for spec in "ecdsa|$ECDSA_PIN" "short|$PIN_SHORT" "comment|$PIN pin@host-CANARY" "twolines|$PIN"$'\n'"$PIN" \
             "lead-space| $PIN" "marker|@cert-authority $PIN" "rsa|ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ-CANARY" "cr|$PIN"$'\r'; do
@@ -280,6 +311,26 @@ if case_tofu absent "$T/git-auth-strict.ts" "TOFU_ARM absent"; then pass "K7: gi
 else fail "K7: the strict fixture did not print TOFU_ARM absent" "$(detail)"; fi
 if case_tofu missing "$T/no-such-git-auth.ts" "TOFU_ARM unknown"; then pass "K8: an unreadable git-auth.ts -> TOFU_ARM unknown (never absent)"
 else fail "K8: an unreadable git-auth.ts was not TOFU_ARM unknown" "$(detail)"; fi
+case_tofu_file() { # <label> <git-auth-path> — the probe reports present, with its warning
+  run_case "tofu-$1" false GIT_AUTH_TS_PATH="$2"
+  [ "$RC" = 0 ] && [ "$(head -2 "$OUT")" = "$TOFU_PRESENT" ]
+}
+if case_tofu_file renamed "$T/git-auth-renamed.ts"; then pass "K10: the accept-new option under a RENAMED constant -> TOFU_ARM present (the probe keys on the behaviour, not the name)"
+else fail "K10: a renamed constant carrying the option was not TOFU_ARM present" "$(detail)"; fi
+if case_tofu_file lower "$T/git-auth-lower.ts"; then pass "K10b: the option in lower case (ssh reads option names case-insensitively) -> TOFU_ARM present"
+else fail "K10b: the lower-case option was not TOFU_ARM present" "$(detail)"; fi
+if case_tofu name-only "$T/git-auth-name-only.ts" "TOFU_ARM absent"; then pass "K10c: the constant's NAME without the option -> TOFU_ARM absent"
+else fail "K10c: a name-only mention was read as the arm" "$(detail)"; fi
+# K11 — GIT_AUTH_TS_PATH UNSET: the script's own default resolves to <infra>/../server/git-auth.ts.
+# Run from the mirrored tree, whose server/git-auth.ts carries the option; the real checkout must
+# have the same layout for the mirror to model it.
+cp "$PRECHECK" "$MIRROR/infra/git-data-flag-precheck.sh" || { printf 'FAIL SETUP: mirror script\n' >&2; exit 1; }
+case_tofu_default() { # [script] — defaults to the mirrored copy of the real script
+  CASE_DEFAULT_GIT_AUTH=1 CASE_SCRIPT="${1:-$MIRROR/infra/git-data-flag-precheck.sh}" run_case tofu-default false
+  [ "$RC" = 0 ] && [ "$(head -2 "$OUT")" = "$TOFU_PRESENT" ]
+}
+if [ -f "$DIR/../server/git-auth.ts" ] && case_tofu_default; then pass "K11: GIT_AUTH_TS_PATH unset -> the default <infra>/../server/git-auth.ts resolves (real layout present) -> TOFU_ARM present"
+else fail "K11: the default git-auth.ts path did not resolve to TOFU_ARM present" "$(detail) real=$([ -f "$DIR/../server/git-auth.ts" ] && echo yes || echo no)"; fi
 run_case pin-no-rt false RUNNER_TEMP=
 if [ "$RC" = 5 ] && [ "$(tail -2 "$OUT")" = "$(refusal pin_write_failed)" ]; then pass "K9: RUNNER_TEMP unset -> verdict=pin_write_failed, exit 5"
 else fail "K9: an unset RUNNER_TEMP was not refused" "$(detail)"; fi
@@ -432,7 +483,7 @@ if mutate auth-reason-collapsed "$PRECHECK" 2 's#then echo auth_invalid$#then ec
 fi
 # Row 8 — print doppler's captured stderr on a failed read.
 # shellcheck disable=SC2016
-if mutate stderr-printed "$PRECHECK" 2 's#^    refuse "flag_read_failed reason=\$\(reason_of "\$ERRF"\) rc=\$\{rc\}"$#    cat "$ERRF"; &#'; then
+if mutate stderr-printed "$PRECHECK" 2 's#^    refuse "\$2 reason=\$\(reason_of "\$ERRF"\) rc=\$\{rc\}"$#    cat "$ERRF"; &#'; then
   CASE_SCRIPT="$MUTANT" mutant_red stderr-printed case_reason mprint auth_invalid 1 SHIM_ERR=auth
 fi
 
@@ -443,8 +494,13 @@ if mutate pin-shape-unchecked "$PRECHECK" 2 's#^if ! \[\[ \$pin =~ \$PIN_RE \]\]
 fi
 # Row 10 — read a failed pin read as an absent pin.
 # shellcheck disable=SC2016
-if mutate pin-unreadable-as-absent "$PRECHECK" 2 's#^  refuse "git_data_host_key_unavailable reason=unreadable"$#  pin=""#'; then
-  CASE_PIN=ABSENT CASE_SCRIPT="$MUTANT" mutant_red pin-unreadable-as-absent case_pin_refused m-unreadable unreadable SHIM_IGNORE_FLAG=1
+if mutate pin-unreadable-as-absent "$PRECHECK" 2 's#^read_secret GIT_DATA_SSH_HOST_KEY git_data_host_key_unavailable --no-exit-on-missing-secret$#VAL="$(doppler secrets get GIT_DATA_SSH_HOST_KEY --plain --no-exit-on-missing-secret -p soleur -c prd 2>/dev/null)" || VAL=""#'; then
+  CASE_PIN=ABSENT CASE_SCRIPT="$MUTANT" mutant_red pin-unreadable-as-absent case_pin_refused m-unreadable 'unknown rc=1' SHIM_IGNORE_FLAG=1
+fi
+# Row 10b — the pin read's failure reported under the FLAG's verdict (the classifier reused, the
+# verdict not): an operator reading the log would chase the flag, not the pin.
+if mutate pin-verdict-as-flag "$PRECHECK" 2 's#^read_secret GIT_DATA_SSH_HOST_KEY git_data_host_key_unavailable #read_secret GIT_DATA_SSH_HOST_KEY flag_read_failed #'; then
+  CASE_SCRIPT="$MUTANT" mutant_red pin-verdict-as-flag case_pin_refused m-auth 'auth_invalid rc=1' SHIM_PIN_ERR=auth
 fi
 # Row 11 — print the raw pin next to its fingerprint.
 # shellcheck disable=SC2016
@@ -453,17 +509,35 @@ if mutate pin-printed "$PRECHECK" 2 's#^echo "git_data_pin=present fp=\$\{fp\}"$
 fi
 # Row 12 — the TOFU_ARM probe never reports present.
 # shellcheck disable=SC2016
-if mutate tofu-arm-blind "$PRECHECK" 2 "s#^elif grep -qw 'TOFU_FALLBACK_OPTS' \"\\\$GIT_AUTH_TS\"; then\$#elif false; then#"; then
+if mutate tofu-arm-blind "$PRECHECK" 2 's#^elif grep -qiF "StrictHostKeyChecking=accept-""new" "\$GIT_AUTH_TS"; then$#elif false; then#'; then
   CASE_SCRIPT="$MUTANT" mutant_red tofu-arm-blind case_tofu_present
+fi
+# Row 13 — key the probe on the constant's NAME again: a renamed constant then reads absent.
+if mutate tofu-arm-by-name "$PRECHECK" 2 's#^elif grep -qiF "StrictHostKeyChecking=accept-""new" "\$GIT_AUTH_TS"; then$#elif grep -qw TOFU_FALLBACK_OPTS "$GIT_AUTH_TS"; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red tofu-arm-by-name case_tofu_file m-renamed "$T/git-auth-renamed.ts"
+fi
+# Row 14 — case-sensitive match: the lower-case spelling ssh accepts then reads absent.
+if mutate tofu-arm-case-sensitive "$PRECHECK" 2 's#^elif grep -qiF #elif grep -qF #'; then
+  CASE_SCRIPT="$MUTANT" mutant_red tofu-arm-case-sensitive case_tofu_file m-lower "$T/git-auth-lower.ts"
+fi
+# Row 15 — miscount the default path's `..`: GIT_AUTH_TS_PATH unset then reads unknown. The mutant
+# runs from the SAME mirrored location as K11's control, so only the edit differs.
+if mutate tofu-default-path "$PRECHECK" 2 's#/\.\./server/git-auth\.ts\}"$#/../../server/git-auth.ts}"#'; then
+  cp "$MUTANT" "$MIRROR/infra/mut-default.sh" || { printf 'FAIL SETUP: mirror mutant\n' >&2; exit 1; }
+  mutant_red tofu-default-path case_tofu_default "$MIRROR/infra/mut-default.sh"
+fi
+# Row 16 — drop the read-only chmod on the pin file.
+if mutate pin-writable "$PRECHECK" 2 's#^chmod 0444 "\$PIN_OUT" \|\| refuse pin_write_failed$#:#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red pin-writable case_pin_ok
 fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=12  # Guard 1 matrix rows 1-8, pin rows 9-12
+MUTANT_FLOOR=17  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 20 + pin/TOFU_ARM cases 9 (K1-K9) + workflow rows 7 + mutants 12 x 2 = 60 (exact).
-FLOOR=60
+# Assertion FLOOR: script cases 20 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 7 + mutants 17 x 2 = 76 (exact).
+FLOOR=76
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

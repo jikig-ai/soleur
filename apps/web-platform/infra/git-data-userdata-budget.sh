@@ -64,7 +64,7 @@ else
   { printf -- '-----BEGIN %s-----\n' "$_pk"
     for _i in 1 2 3 4 5; do printf '%s\n' "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBST"; done
     printf -- '-----END %s-----\n' "$_pk"; } > "$TFDIR/hostkey"
-  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBHOSTKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' > "$TFDIR/hostkey.pub"
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBHOSTKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' > "$TFDIR/hostkey.pub"
 fi
 
 # templatefile()/base64gzip() are builtins, so an EMPTY scratch dir needs no providers, no

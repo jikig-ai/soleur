@@ -101,9 +101,10 @@ INPUTS=("${DERIVED_INPUTS[@]}")
 # through `def read(n)`, and EVERY call site passes a string literal.
 # (#7226) The guard now runs TWO python programs. These read()-discipline invariants are about
 # the §0-§5 parity program, whose inputs are the five files above, so they are scoped to its
-# heredoc. Guard 2 is a separate program with its own universe (every *.tf under the directory,
-# found by walking it); its read discipline is pinned separately below, and the sandbox carries
-# every .tf so its checks run against the real file set.
+# heredoc. Guard 2 is a separate program with its own universe (every tracked *.tf / *.tf.json
+# in the REPOSITORY, found by `git ls-files`); its read discipline is pinned separately below, and
+# the sandbox is a scratch git repository carrying every such file at its repo path, so its
+# checks run against the real file set.
 MAIN_PROG="$(mktemp -t provparity-main.XXXXXXXX)" || exit 2
 G2_PROG="$(mktemp -t provparity-g2.XXXXXXXX)" || exit 2
 sed -n "/<<'PYEOF'\$/,/^PYEOF\$/p" "$GUARD" > "$MAIN_PROG"
@@ -178,17 +179,21 @@ if [[ "$n_reads" -lt "${#INPUTS[@]}" ]]; then
   exit 2
 fi
 
-# Guard 2 reads files ONLY through one rglob("*.tf") walk and one read_text() on its results.
-# A second reader (an open(), a literal path) could take a file the .tf sandbox below does not
-# carry, so each shape is pinned to exactly one site and nothing else may open a file.
-if [[ "$(grep -c 'rglob("\*\.tf")' "$G2_PROG")" != 1 || "$(grep -c 'read_text(' "$G2_PROG")" != 1 \
-      || "$(grep -c 'open(' "$G2_PROG")" != 0 ]]; then
-  echo "FATAL: Guard 2 must read files only via one INFRA.rglob(\"*.tf\") walk and one read_text()." >&2
+# Guard 2 reads files ONLY through one `git ls-files` enumeration and one read_text() on its
+# results. A second reader (an open(), a literal path, an rglob) could take a file the scratch
+# repository below does not carry, so each shape is pinned and nothing else may open a file.
+if [[ "$(grep -c '"ls-files"' "$G2_PROG")" != 1 || "$(grep -c 'read_text(' "$G2_PROG")" != 1 \
+      || "$(grep -c 'open(' "$G2_PROG")" != 0 || "$(grep -c 'glob(' "$G2_PROG")" != 0 ]]; then
+  echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()." >&2
   exit 2
 fi
-mapfile -t TF_FILES < <(cd "$REAL_INFRA" && find . -name '*.tf' -not -path '*/.terraform/*' | sed 's#^\./##' | LC_ALL=C sort)
-if (( ${#TF_FILES[@]} < 40 )); then
-  echo "FATAL: found only ${#TF_FILES[@]} .tf files to sandbox for Guard 2 (expected >= 40)." >&2
+# Every tracked (or new, unignored) .tf / .tf.json in the repo, as a path RELATIVE TO THE INFRA
+# DIR: web-platform infra files keep their short name (server.tf), the rest are reached through
+# ../../../ so the same SANDBOX/PRISTINE-relative copy and restore loops carry them.
+mapfile -t TF_FILES < <(git -C "$ROOT" ls-files --cached --others --exclude-standard -- '*.tf' '*.tf.json' \
+  | grep -v '/\.terraform/' | sed -e 's#^apps/web-platform/infra/##' -e t -e 's#^#../../../#' | LC_ALL=C sort)
+if (( ${#TF_FILES[@]} < 70 )); then
+  echo "FATAL: found only ${#TF_FILES[@]} .tf/.tf.json files to sandbox for Guard 2 (expected >= 70)." >&2
   exit 2
 fi
 # server.tf is already an INPUT; the rest are Guard 2-only.
@@ -210,10 +215,16 @@ cases=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 
-SANDBOX="$(mktemp -d -t provparity.XXXXXXXX)" || exit 2
-PRISTINE="$(mktemp -d -t provparity-pristine.XXXXXXXX)" || exit 2
+# The sandbox is apps/web-platform/infra INSIDE a scratch git repository (TF_REPO), so Guard 2's
+# repo-wide `git ls-files` walk sees the sandboxed server.tf and every other Terraform root.
+TF_REPO="$(mktemp -d -t provparity.XXXXXXXX)" || exit 2
+PRISTINE_REPO="$(mktemp -d -t provparity-pristine.XXXXXXXX)" || exit 2
+SANDBOX="$TF_REPO/apps/web-platform/infra"
+PRISTINE="$PRISTINE_REPO/apps/web-platform/infra"
+mkdir -p "$SANDBOX" "$PRISTINE" || exit 2
+git -C "$TF_REPO" init -q || exit 2
 OUT="$(mktemp -t provparity-out.XXXXXXXX)" || exit 2
-trap 'rm -rf "$SANDBOX" "$PRISTINE" "$OUT" "$MAIN_PROG" "$G2_PROG"' EXIT INT TERM HUP
+trap 'rm -rf "$TF_REPO" "$PRISTINE_REPO" "$OUT" "$MAIN_PROG" "$G2_PROG"' EXIT INT TERM HUP
 
 for f in "${SANDBOX_FILES[@]}"; do
   mkdir -p "$(dirname "$SANDBOX/$f")" "$(dirname "$PRISTINE/$f")" || exit 2
@@ -222,7 +233,7 @@ for f in "${SANDBOX_FILES[@]}"; do
 done
 
 # Runs the real guard against the sandbox; combined output lands in $OUT for attribution.
-run_guard() { SOLEUR_INFRA_DIR="$SANDBOX" bash "$GUARD" >"$OUT" 2>&1; }
+run_guard() { SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" bash "$GUARD" >"$OUT" 2>&1; }
 # restore() FAILS LOUDLY. An unchecked `cp` here is a silent-corruption vector, not a tidiness
 # nit: when it fails, the sandbox keeps the PREVIOUS case's mutation and every later case runs
 # against a fixture nobody chose. The observable symptom is a case reporting "guard still PASSED
@@ -852,7 +863,7 @@ expect_probe_red() {
   fi
   probes_run=$((probes_run + 1))
   probe_reds=$((probe_reds + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
+  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
   elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
@@ -867,7 +878,7 @@ expect_probe_green() {
   cases=$((cases + 1))
   restore
   probes_run=$((probes_run + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
+  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     ok "$label: guard stayed GREEN on a well-formed entry"
   else
     no "$label: guard went RED on a WELL-FORMED probe entry, so the two REDs above prove only
@@ -1112,7 +1123,7 @@ s = s.replace(old, "    host_key    = var.ci_ssh_private_key\n", 1)
 '
 
 expect_red "G2-7 (the local loses one(): a second key line would slip through)" server.tf \
-  "local.web_1_ssh_host_key (server.tf:" '
+  "local.web_1_ssh_host_key (apps/web-platform/infra/server.tf:" '
 old = "    one([for l in split("
 assert old in s
 s = s.replace(old, "    element([for l in split(", 1).replace("startswith(trimspace(l), \"#\")]),\n  )", "startswith(trimspace(l), \"#\")], 0),\n  )", 1)
@@ -1125,6 +1136,77 @@ assert old in s
 s = s.replace("    host_key    = local.web_1_ssh_host_key\n", "", 1)
 s = s.replace(old, "  connection {\n    host_key=local.web_1_ssh_host_key\n    type        = \"ssh\"\n", 1)
 '
+
+# Allow-set rows: null, "" and an ad-hoc expression are each outside it.
+expect_red "G2-8 (host_key = null)" server.tf "G2: host_key outside the allow-set" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "    host_key    = null\n", 1)
+'
+expect_red "G2-9 (host_key = \"\")" server.tf "(host_key = \"\")" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "    host_key    = \"\"\n", 1)
+'
+# Repo-wide walk: a Terraform root OUTSIDE apps/web-platform/infra. Only `git ls-files` over the
+# whole repository reaches it; the old INFRA.rglob walk did not.
+expect_red "G2-10 (a non-web-1 block in infra/github with an ad-hoc host_key)" ../../../infra/github/main.tf \
+  "infra/github/main.tf:" '
+s += """
+resource "terraform_data" "g2_elsewhere" {
+  connection {
+    type     = "ssh"
+    host     = "192.0.2.10"
+    host_key = var.some_other_key
+  }
+  provisioner "remote-exec" {
+    inline = ["true"]
+  }
+}
+"""
+'
+expect_red "G2-11 (a connection block with NO host_key in infra/github)" ../../../infra/github/main.tf \
+  "(host_key x0)" '
+s += "\nresource \"terraform_data\" \"g2_nokey\" {\n  connection {\n    host = \"192.0.2.11\"\n  }\n}\n"
+'
+# Whitespace normalisation: `hcloud_server.web[ "web-1" ]` still names web-1. Anchored on the
+# web-1-specific message, which only fires when the reference is recognised.
+expect_red "G2-12 (web-1 reference with inner whitespace, host_key not the web-1 local)" server.tf \
+  "G2: web-1 connection block pins host_key to something other than" '
+old = "    host        = hcloud_server.web[\"web-1\"].ipv4_address\n"
+assert old in s
+i = s.index(old)
+s = s[:i] + "    host        = hcloud_server.web[ \"web-1\" ].ipv4_address\n" + s[i + len(old):]
+key = "    host_key    = local.web_1_ssh_host_key\n"
+j = s.index(key, i)
+s = s[:j] + "    host_key    = var.ci_ssh_private_key\n" + s[j + len(key):]
+'
+
+# .tf.json: a NEW file (so it is created and removed inline, not through restore()).
+G2_JSON="$SANDBOX/zz-g2.tf.json"
+_g2_json_row() { # <label> <json> <expect: red|green> <anchor>
+  local label="$1" json="$2" want="$3" anchor="${4:-}"
+  cases=$((cases + 1))
+  restore
+  printf '%s\n' "$json" > "$G2_JSON"
+  mutations_run=$((mutations_run + 1))
+  if run_guard; then
+    if [[ "$want" == green ]]; then ok "$label: guard stayed GREEN"
+    else no "$label: guard still PASSED -- a .tf.json connection block is invisible to it"; fi
+  elif [[ "$want" == red ]] && grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
+    ok "$label: guard went RED on '$anchor'"
+  else
+    no "$label: unexpected verdict (want $want, anchor '$anchor'). Output: $(<"$OUT")"
+  fi
+  rm -f "$G2_JSON"
+  restore
+}
+_g2_json_row "G2-13 (.tf.json connection without host_key)" \
+  '{"resource":{"terraform_data":{"j":{"connection":{"type":"ssh","host":"192.0.2.12"}}}}}' red "zz-g2.tf.json:"
+_g2_json_row "G2-14 (.tf.json connection with host_key null)" \
+  '{"resource":{"terraform_data":{"j":{"connection":[{"host":"192.0.2.13","host_key":null}]}}}}' red "(host_key = null)"
+_g2_json_row "G2-C3 (.tf.json connection pinned to the local stays GREEN)" \
+  '{"resource":{"terraform_data":{"j":{"connection":{"host":"192.0.2.14","host_key":"${local.web_1_ssh_host_key}"}}}}}' green
 
 cases=$((cases + 1))
 restore

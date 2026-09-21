@@ -30,9 +30,11 @@
 >   disposition orders "evidence PR, then the banner PR, then the birth" (Guard 4 of `git_data_rung2_rehearsal_gate` reads the evidence's own commit and
 >   HOLDs on a co-edit with any of the 13 hash-bound inputs). Template sha256
 >   `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`.
-> - **Gate:** `git_data_rung2_rehearsal_gate` reads `RELEASED`, provenance `PASS`. It
->   self-invalidates the moment any bound input moves — re-check it rather than trusting
->   this paragraph:
+> - **Gate:** `git_data_rung2_rehearsal_gate` read `RELEASED`, provenance `PASS`, when this
+>   record landed. PR #8511 (ADR-237) moved a bound input, so from its merge the gate reads
+>   `HOLD` until the rung-2 evidence PR lands (`git-data-luks-cutover-5274.md` › host-key
+>   post-merge step 2). It self-invalidates the moment any bound input moves — re-check it
+>   rather than trusting this paragraph:
 >
 > ```bash
 > source tests/scripts/lib/git-data-birth-readiness-gate.sh

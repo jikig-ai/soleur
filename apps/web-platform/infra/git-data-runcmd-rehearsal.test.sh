@@ -1656,6 +1656,16 @@ G6RUN
   _g6_case "row 1b: NO hostkey line => hostkey_count" "1 hostkey_count" "port 22\n" "$_g6/a.pub"
   _g6_case "row 2: fingerprint differs => hostkey_mismatch" "1 hostkey_mismatch" "hostkey $_g6/a\n" "$_g6/b.pub"
   _g6_case "row 2b: unparsable Terraform pin => hostkey_mismatch" "1 hostkey_mismatch" "hostkey $_g6/a\n" "/dev/null"
+  # row 2c: sshd -T names a key file that does not exist AND the pin is empty/unreadable: both
+  # fingerprints are EMPTY, so they compare equal. Only the `[ -z "$_hk_want" ] ||` arm refuses.
+  _g6_case "row 2c: hostkey /nonexistent + empty pin => hostkey_mismatch" "1 hostkey_mismatch" "hostkey $_g6/nonexistent\n" "/dev/null"
+  # ...and the arm is load-bearing: with it removed from a copy of the extracted proof, row 2c's
+  # input reads ok (two empty fingerprints "match").
+  sed 's/\[ -z "\$_hk_want" \] || //' "$_g6_fn" > "$_g6/no-empty-want.sh"
+  printf 'hostkey %s\n' "$_g6/nonexistent" > "$_g6/dump"
+  _g6_m3="$(dash "$_g6/run.sh" "$_g6/no-empty-want.sh" "$_g6/dump" /dev/null 2>&1 | tail -1)"
+  if ! cmp -s "$_g6_fn" "$_g6/no-empty-want.sh" && [ "$_g6_m3" = "0 ok" ]; then pass; else
+    fail "G6 row 2c mutation: dropping [ -z \"\$_hk_want\" ] || did not turn the empty/empty input into ok (got [$_g6_m3]; mutation landed: $(cmp -s "$_g6_fn" "$_g6/no-empty-want.sh" && echo no || echo yes)) — row 2c is not what decides it"; fi
   # row 3: ssh-keygen ABSENT is could-not-measure (warn), never fatal. PATH holds only what the
   # function and the runner need besides ssh-keygen.
   mkdir -p "$_g6/nokg"
@@ -1675,7 +1685,7 @@ G6RUN
 else
   # NOT a skip: ssh-keygen ships with openssh-client on every runner this suite targets, and the
   # arm_skip roster is reserved for container-dependent declines (see the skip stanza).
-  fail "G6: ssh-keygen absent — the host-key proof rows cannot mint throwaway keys (9 rows not run)"
+  fail "G6: ssh-keygen absent — the host-key proof rows cannot mint throwaway keys (11 rows not run)"
 fi
 
 # ── S1 — the sshd_config stage must SURVIVE a fresh 24.04 boot ─────────────────────
@@ -1762,6 +1772,10 @@ cp /work/01-hardening.conf /etc/ssh/sshd_config.d/01-hardening.conf
 rm -f /etc/ssh/ssh_host_*
 if [ "${S1_HOSTKEY_MODE:-rendered}" = foreign ]; then
   ssh-keygen -q -t ed25519 -N "" -C "" -f /etc/ssh/ssh_host_ed25519_key
+  # The boot's shared stderr log, which runcmd item 1's EXIT trap ships as its fatal's cause. The
+  # extracted stage does not seed it, so the foreign-key row seeds it here to read what the proof
+  # left behind for that trap.
+  export GIT_DATA_RUNCMD_DETAIL=/out/runcmd-detail.log
 else
   install -m 600 /work/hostkey /etc/ssh/ssh_host_ed25519_key
   install -m 644 /work/hostkey.pub /etc/ssh/ssh_host_ed25519_key.pub
@@ -2018,16 +2032,35 @@ S1DRV
   S1_HOSTKEY_MODE=foreign _s1_run "$TMP/sshd-stage.sh"
   case "$S1_STATE" in
     did-not-run)
-      arm_skip "S1 G6 host-key row did not run: the container never reached the stage. ${S1_NOTE}" 2 ;;
+      arm_skip "S1 G6 host-key row did not run: the container never reached the stage. ${S1_NOTE}" 3 ;;
     harness-defect|fixture-defect)
       fail "G6 container row: ${S1_STATE} — docker rc=${S1_DOCKER_RC}, not an environment skip" "${S1_NOTE}"
-      fail "G6 container row: the same defect leaves the host-key fatal undemonstrated" "${S1_NOTE}" ;;
+      fail "G6 container row: the same defect leaves the host-key fatal undemonstrated" "${S1_NOTE}"
+      fail "G6 container row: the same defect leaves the verdict-in-detail property undemonstrated" "${S1_NOTE}" ;;
     *)
       if [ "${S1_RC:-none}" = "1" ]; then pass; else
         fail "G6 container row: with a foreign host key the sshd stage exited ${S1_RC:-<no marker>}, expected 1 (boot aborted)" "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
       if grep -q '^git-data sshd host-key proof FAILED|sshd_config|fatal$' "$S1_CAP" 2>/dev/null && grep -q 'hostkey_mismatch' "$S1_CAP"; then pass; else
-        fail "G6 container row: no sshd_config fatal naming hostkey_mismatch was emitted" "$(head -4 "$S1_CAP" 2>/dev/null)"; fi ;;
+        fail "G6 container row: no sshd_config fatal naming hostkey_mismatch was emitted" "$(head -4 "$S1_CAP" 2>/dev/null)"; fi
+      # The EXIT trap's fatal ships $GIT_DATA_RUNCMD_DETAIL: the proof must leave its verdict there.
+      if grep -qxF 'sshd host-key proof: hostkey_mismatch' "$TMP/s1out/runcmd-detail.log" 2>/dev/null; then pass; else
+        fail "G6 container row: the verdict was not appended to \$GIT_DATA_RUNCMD_DETAIL, so the EXIT-trap fatal would say 'no stderr captured'" "$(head -3 "$TMP/s1out/runcmd-detail.log" 2>/dev/null)"; fi ;;
   esac
+  # MUTATION — drop that append from a copy of the stage: the same boot leaves no verdict behind.
+  grep -vF "( printf 'sshd host-key proof: %s\\n' \"\$_hk_verdict\" >> \"\$GIT_DATA_RUNCMD_DETAIL\" ) 2>/dev/null || true" \
+    "$TMP/sshd-stage.sh" > "$TMP/sshd-stage.noverdict.sh"
+  if [ "$(( $(wc -l < "$TMP/sshd-stage.sh") - $(wc -l < "$TMP/sshd-stage.noverdict.sh") ))" != 1 ]; then
+    fail "G6 container mutation: removing the verdict append did not delete exactly one line — the pattern drifted" ""
+  else
+    S1_HOSTKEY_MODE=foreign _s1_run "$TMP/sshd-stage.noverdict.sh"
+    case "$S1_STATE" in
+      did-not-run) arm_skip "S1 G6 verdict-append mutation did not run: ${S1_NOTE}" 1 ;;
+      harness-defect|fixture-defect) fail "G6 container mutation: ${S1_STATE} — docker rc=${S1_DOCKER_RC}" "${S1_NOTE}" ;;
+      *)
+        if [ "${S1_RC:-none}" = 1 ] && ! grep -qF 'hostkey_mismatch' "$TMP/s1out/runcmd-detail.log" 2>/dev/null; then pass; else
+          fail "G6 container mutation: without the append the detail log still named the verdict (rc=${S1_RC:-none}) — the row above does not measure the append" "$(head -3 "$TMP/s1out/runcmd-detail.log" 2>/dev/null)"; fi ;;
+    esac
+  fi
 
   # MUTATION — strip the WHOLE privsep preamble so the mutant is the pre-fix stage, and prove
   # S1 reproduces the MEASURED production failure rather than merely "some" failure. Leaving
@@ -2101,6 +2134,10 @@ else
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  # +4 (#7226): the G6 container rows — rc 1 + named fatal (2, which this branch had omitted, so
+  # it contributed 13 against the invariant's 15) and the verdict-in-detail row + its mutation (2).
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
 fi
 
 # S1's OWN INVARIANT, not the suite's. Twelve assertions are made, declared-skipped, or
@@ -2111,8 +2148,9 @@ fi
 # of `passes` without moving them out of the total.
 _S1_TOTAL=$(( (passes - _S1_P0) + (fails - _S1_F0) + (SKIPPED_ASSERTIONS - _S1_S0) ))
 # 13 -> 15 (#7226): the G6 host-key container row (stage rc 1 + the named sshd_config fatal).
-if [ "$_S1_TOTAL" -eq 15 ]; then pass; else
-  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 15 on every route" \
+# 15 -> 17 (#7226 review): the verdict appended to $GIT_DATA_RUNCMD_DETAIL, and its mutation.
+if [ "$_S1_TOTAL" -eq 17 ]; then pass; else
+  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 17 on every route" \
        "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
 
 # ── S2 (#8043 F11, Guard 2) — the drop-in is MEASURABLY in effect, and the stage cannot go dark
