@@ -2289,6 +2289,7 @@ merge-conflict
 merge-conflicts
 merge-direction
 merge-driver
+merge-is-apply
 merge-livelock
 merge-pr
 merge-queue
@@ -3059,6 +3060,7 @@ ratcheted-guards
 ratchets
 rate-limit
 rate-limit-loop
+rate-limit-resume
 rate-limiting
 rate-limits
 rbac
@@ -4093,6 +4095,7 @@ transcript
 transcript-judging
 transition
 transparency
+transport
 transport-confinement
 trap
 trap-cleanup

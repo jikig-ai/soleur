@@ -516,3 +516,14 @@ authorization.
 - **AP-008:** the key is in the Doppler project `soleur-git-data-root`, and the repo secret carries only a
   read token.
 - **AP-003:** the root has its own state key in the R2 backend's shared bucket.
+
+### 2026-09-21 (#8101, PR #8454): a fourth read probe, the pre-receive fence
+
+The dry run now runs a fourth read-only probe after the three store probes: `probe=fence-shape`
+(`git-data-cutover.sh` › `refuse_if_fence_not_intact`). It checks that a push would run a root-owned
+`pre-receive` of the planted shape. That means the hooks directory and hook are owned and permissioned
+as the bootstrap sets them, the `git` user can run the hook, the installed transport wrapper and the
+system `core.hooksPath` both name the directory, and it sits on the accepted store device. The 2026-09-15
+D5 row for D1b is unchanged: D1b is judged on the access gate and the three store probes. Exit 0 of the
+dry run now also requires the fence probe. Like every store probe, its answer is unauthenticated while
+#7226 is open. The copy half of #8101, and the wrappers' mapper-device assertion, are carried by #8211.
