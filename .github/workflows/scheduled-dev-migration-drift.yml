@@ -7,9 +7,11 @@
 # would have surfaced the residual `_schema_migrations` state independent
 # of PR cadence.
 #
-# Severity is `::warning::` by design (matches the inline probe in
-# `tenant-integration.yml`). This workflow does not fail-loud — it surfaces
-# drift via annotations so operators can revert before drift compounds.
+# Severity is authoritative: this is the only drift surface that runs
+# independent of PR cadence, so it fails LOUD — `fail-on-rpc-body-drift`
+# (pre-existing, #5920) and `fail-on-ledger-drift` (#7964) both flip findings
+# to `::error::` + exit 1 so a red cron run names the drift rather than
+# annotating it quietly until the next push-to-main happens to trip on it.
 #
 # Security: only `secrets.DOPPLER_TOKEN_DEV_SCHEDULED` is referenced (mirrors
 # `tenant-integration.yml`'s pattern). No untrusted `github.event.*` inputs
@@ -59,3 +61,8 @@ jobs:
           # unrelated PR (#5920).
           sentry-dsn: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
           fail-on-rpc-body-drift: 'true'
+          # Ledger drift fails loud here too (#7964) — this cron is the sole
+          # detector that runs independent of tenant-integration traffic, so
+          # residual drift left by a CONTENDED run must red THIS surface, not
+          # wait for the next push-to-main to trip on it.
+          fail-on-ledger-drift: 'true'

@@ -1763,6 +1763,7 @@ github-auto-close
 github-cli
 github-environments
 github-issues
+github-merge
 github-oauth
 github-pages
 github-push-protection
@@ -2082,6 +2083,7 @@ kb-chat
 kb-concierge
 kb-domain-allowlist-guard
 kb-drift
+kb-index
 kb-index-driver
 kb-layout
 kb-pdf
