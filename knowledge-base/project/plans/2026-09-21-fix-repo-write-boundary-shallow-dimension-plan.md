@@ -9,6 +9,45 @@ lane: cross-domain
 type: fix
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21 (deepen-plan pass, run inline — no Task/Agent harness in this
+environment; all gates executed by the orchestrator, findings cited below).
+**Sections enhanced:** 5 (The Change §1 sketch, Research Insights measured-facts, Risks &
+Mitigations, Observability, Files Deliberately NOT Edited).
+
+### Key Improvements
+
+1. **Sketch corrected against its own precedent.** The original `_repo_boundary_dim_shallow` draft
+   carried `_repo_boundary_digest "$(cat -- "$f")"` — a `cat` failure inside `$()` yields `""` and
+   the digest still returns 0, manufacturing `present` on an unreadable file: the exact
+   "capture failure must degrade the DIMENSION, never manufacture a verdict" class
+   `_repo_boundary_dim_config`'s comment polices. The sketch now probes the digest tool up front
+   (sibling precedent) and takes `cat`'s status through the assignment.
+2. **Empirically-false claim corrected.** The plan asserted a *plain* `git fetch` can append graft
+   entries on an already-shallow repo. Fixture-verified false on git 2.55.0 (fetch fills history,
+   it does not sever it; fetching from a shallow remote *rejects* the ref absent `--update-shallow`).
+   The digest requirement stands — a depth-bounded fetch on an already-shallow repo is the
+   presence-same mutation — but every "plain fetch appends" justification is rewritten, including the
+   #7922 followthrough probe's adjudication (now clean, not conditional).
+3. **Fourth producer added.** `scripts/plugin-delivery-canary.sh:342` (`git -C "$root" fetch
+   --depth 1`, `$root` = live toplevel, suite registered at `test-all.sh:1815`) survived the first
+   census only because it was `head`-truncated; the untruncated re-run caught it. Scratch-repo fix +
+   AC9b + suite arm now in scope.
+4. **Observability probe defended against the Check-10 suite-shape detector** with a measured 9.0s
+   runtime and the runner-wiring coverage citation, instead of letting the `*.test.sh` command sit
+   as an unexamined regex hit.
+5. **Citation fixes:** `test-all.sh`'s lone `fetch` mention is prose at `:73`, not `:3053`.
+
+### New Considerations Discovered
+
+- `refs/replace/**` is already in the lib's not-inspected heredoc — the Non-Goals deferral list is
+  accurate, no new carve-out needed.
+- All three cited AGENTS rule IDs resolve (`wg-architecture-decision-is-a-plan-deliverable` is
+  migrated-but-active per `scripts/migrated-rule-ids.txt`); all cited issue numbers verified live
+  (#7924 OPEN, #7922 OPEN, #7795/#7910 CLOSED); all cited learnings/ADR files exist.
+- `git rev-parse --path-format` confirmed git ≥ 2.31 (RelNotes 2.31.0).
+
 ## Overview
 
 `scripts/test-all.sh` wraps the battery in a before/after repository-state boundary
@@ -69,14 +108,16 @@ single-branch does not carry it) and on any operator worktree that has not fetch
 fires only when the delivered commit is missing from the local object store — rarer, but exactly the
 case the canary exists to measure.
 
-**A fifth site adjudicated as a conditional producer, not fixed:** `scripts/followthroughs/
-ccla-representative-icla-7922.sh:307` (the #7922 probe) runs a **plain** fetch — no `--depth` —
-into the live repo. On a non-shallow repo it writes no `.git/shallow` (its `:112` comment already
-dropped `--depth=1` as buying nothing on a one-commit branch); on an **already-shallow** repo it can
-append graft entries — a mutation the new dimension is *right* to flag, since the probe's own
-comment (`:239`) documents that behavior. Its suite (`:2723`) is fully fixture-hermetic — bare origin
+**A fifth site adjudicated as a non-producer, not fixed:** `scripts/followthroughs/
+ccla-representative-icla-7922.sh:307` (the #7922 probe) runs a **plain** fetch — no `--depth`, plus
+`--no-write-fetch-head` — into the live repo. A plain fetch cannot create or append `.git/shallow`
+on either a non-shallow or an already-shallow repo (verified on the `mktemp` fixture above; its
+`:239` comment — "the ledger fetch below writes `.git/shallow`" — overstates: a residue from before
+its `:112` note dropped `--depth=1`). What it still writes is objects and
+the `refs/remotes/origin/cla-signatures` ref — both already in the not-inspected/adjudicated set —
+so the new dimension never flags it. Its suite (`:2723`) is fully fixture-hermetic — bare origin
 fixtures under `mktemp`, probe run with cwd inside the fixture — so the suite never touches the live
-common dir. Recorded as a residual, not edited.
+common dir. Adjudicated clean, not edited.
 
 **Out of scope, verified non-battery-reachable or non-live-repo:**
 
@@ -103,9 +144,15 @@ common dir. Recorded as a residual, not edited.
   `.git/shallow` in the common dir).
 - `.git/shallow` content is a newline-separated SHA list, appended in fetch order — order is state, so
   the content digest is over the raw bytes, never a sorted projection.
-- On an **already-shallow** repo, a plain `git fetch` of unconnected history can append graft entries —
-  the content hash is what catches deepen/graft mutations when presence alone is unchanged. This is why
-  the issue asks for "presence, and content hash if present".
+- `.git/shallow` mutation semantics, verified on `mktemp` fixtures (git 2.55.0): a **plain** `git
+  fetch` of an unconnected orphan branch writes NO shallow file on a non-shallow repo and appends NO
+  graft entry on an already-shallow one (fetch fills history, it does not sever it); fetching from a
+  shallow remote does not propagate either — git *rejects* the ref ("shallow roots are not allowed
+  to be updated") unless `--update-shallow` is passed. The file moves on `fetch
+  --depth/--deepen/--shallow-since/--shallow-exclude/--update-shallow` and on `fetch --unshallow`
+  (removes it). The content digest is what catches a *depth-bounded* fetch on an already-shallow
+  repo — presence alone is unchanged there. This is why the issue asks for "presence, and content
+  hash if present".
 - Manifest-enumeration assertion at `scripts/lib/repo-write-boundary.test.sh:149` compares against
   `config head refs worktree wt ` (sorted) — `shallow` sorts between `refs` and `worktree`.
 - `MIN_ASSERTIONS=57` floor at `repo-write-boundary.test.sh:1208`; conservation check
@@ -118,10 +165,11 @@ common dir. Recorded as a residual, not edited.
   visible history) is the honest addition.
 - The lib's own header comment says "the four dimensions" (`:128`) and `render_not_inspected` says "of
   the five dimensions" (`:692`) — literal counts that must move with the change.
-- `scripts/test-all.sh` itself runs **no** `git fetch` (the only match is prose at `:3053`); the
-  BEFORE/AFTER `_repo_state` calls are at `:1651` and `:2997`, classify at `:3001`, FATAL render at
-  `:3017`/`:3098-3104`. The function contract check at `:571-581` names six public functions — the new
-  dimension function is private (`_repo_boundary_dim_*`), so that list does not move.
+- `scripts/test-all.sh` itself runs **no** `git fetch` (grep returns only the `:73` prose comment
+  about linear-fetch suites); the BEFORE/AFTER `_repo_state` calls are at `:1651` and `:2997`,
+  classify at `:3001`, FATAL render at `:3017`/`:3098-3104`. The function contract check at
+  `:571-581` names six public functions — the new dimension function is private
+  (`_repo_boundary_dim_*`), so that list does not move.
 - No other file outside `scripts/lib/repo-write-boundary.test.sh` enumerates the dimension set
   (grepped `scripts/`, `.claude/hooks/`, `apps/`).
 
@@ -242,19 +290,25 @@ _repo_boundary_dim_shallow() {
   # carries no shallow file and would read "absent" while the shared repo is
   # shallow underneath it (#7924). --path-format=absolute because the bare form
   # returns a relative ".git" on a top-level checkout.
-  local common f
+  local common f raw
   common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
     || return 1
   [[ -n "$common" ]] || return 1
   f="$common/shallow"
-  # `-e`, not `-f`: an existing-but-unreadable/non-regular path is a capture
-  # failure (not-measured), not a legitimate "absent".
-  if [[ -e "$f" ]]; then
-    printf 'present\t' 
-    _repo_boundary_digest "$(cat -- "$f")" || return 1
-  else
-    printf 'absent\n'
-  fi
+  # Absent is a legitimate measured state — decide it BEFORE the probes so an
+  # absent file cannot be masked by a degraded tool.
+  [[ -e "$f" ]] || { printf 'absent\n'; return 0; }
+  # `_repo_boundary_dim_config` precedent: probe the digest tool up front — a
+  # missing sha256sum must degrade the DIMENSION to not-measured, never digest
+  # "" and call it a state.
+  _repo_boundary_digest probe >/dev/null 2>&1 || return 1
+  # The ASSIGNMENT carries cat's status: an existing-but-unreadable/non-regular
+  # path is a capture failure, not a digest of "". `_repo_boundary_digest
+  # "$(cat …)"` inline would swallow the failure — the substitution yields "" on
+  # cat's non-zero and digest still returns 0, manufacturing `present`.
+  raw="$(cat -- "$f")" || return 1
+  printf 'present\t'
+  _repo_boundary_digest "$raw" || return 1
 }
 ```
 
@@ -285,7 +339,7 @@ A dedicated block after the head/worktree loop, gated on `unmeasurable` like the
 |---|---|---|
 | `absent` → `present:<d>` | FATAL | ".git/shallow was CREATED — the whole repository, every worktree, is now shallow" |
 | `present:<d>` → `absent` | FATAL | ".git/shallow was REMOVED (the `git fetch --unshallow` shape)" |
-| `present:<d1>` → `present:<d2>` | FATAL | "graft set CHANGED — a fetch on an already-shallow repo appended boundary commits" |
+| `present:<d1>` → `present:<d2>` | FATAL | "graft set CHANGED — a depth-bounded fetch on an already-shallow repo moved the boundary" |
 
 **No `shared_store` softening.** Stated against ADR-207's own standard, which grants a softened cell
 only where a sibling *routinely* produces the shape: post-fix, **no routine producer of a shallow
@@ -359,7 +413,7 @@ New arms (numbering continues the suite's `--- N.` convention; exact numbers der
 8. **harness-honesty**: the created-arm asserts it *observed* a `FATAL\tshallow` line — an absence-
    only assertion passes on an empty verdict.
 
-Plus: arm-2 manifest enumeration updated to `config head refs shallow worktree wt `; the
+Plus: the existing manifest-enumeration arm (`:149`) updated to `config head refs shallow worktree wt `; the
 next-action iteration lists at `:461` and `:729` extended with `shallow` (`_want[shallow]` anchors on
 `unshallow`/`is-shallow-repository`); rendered-inspected anchor list gains the shallow prose string;
 `MIN_ASSERTIONS` raised by the executed-arm count derived at /work.
@@ -397,9 +451,8 @@ Kept out of `## Files to Edit` so a path extraction cannot read them as targets.
 - `apps/web-platform/server/inngest/functions/*.ts` `--depth=1` clones — production Inngest host,
   per-fire temp clones; unreachable by this boundary and untouched by the issue.
 - `scripts/followthroughs/ccla-representative-icla-7922.sh` — the #7922 probe's **plain** live-repo
-  fetch is deliberate and shallow-safe on a non-shallow repo; on an already-shallow one it can append
-  graft entries, which the new dimension *correctly* flags (residual recorded in Research Insights).
-  Its suite is fixture-hermetic.
+  fetch is shallow-safe on any repo state (a plain fetch cannot create or append `.git/shallow` —
+  fixture-verified; its own `:239` comment overstates). Its suite is fixture-hermetic.
 - `tests/scripts/test-git-data-birth-readiness-gate.sh` (`:1940` `git clone --depth 1 file://…`),
   `plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh` (`:48`), `scripts/dogfood/
   grok-gpu-bootstrap.sh` (`:221` — a provisioning clone into a fresh workspace, not the live repo),
@@ -542,6 +595,16 @@ discoverability_test:
   expected_output: "repo-write-boundary.test.sh:" and "0 failed"
 ```
 
+**Probe honesty (deepen-plan §4.7 false-hit argument, stated so the suite-shape proxy is not
+silently ignored).** Check 10's cap detector regex-flags `*.test.sh` commands as presumed-suites
+that outrun the 15s sandbox cap. Measured here: the suite completes in **9.0s wall** on this host
+(57 assertions, git 2.55.0 — `time bash scripts/lib/repo-write-boundary.test.sh`, run during
+deepen). The margin is thin, and it is the right command anyway: the signal being discovered is the
+boundary's own verdict path, and a `grep`-for-the-literal probe would verify a string, not the wired
+guard — the #7795 sibling plan reached the same conclusion and shipped the same command. The runner-
+level half of the chain (FATAL → `failed` → `exit 1`) is already pinned by the suite's existing
+sandboxed-`test-all.sh` arms (`repo-write-boundary.test.sh:~375-450`), so no new runner arm is added.
+
 ## Architecture Decision (ADR/C4)
 
 **ADR-207 is amended, not superseded.** `wg-architecture-decision-is-a-plan-deliverable` fires because
@@ -614,11 +677,13 @@ All criteria are pre-merge; this plan has no post-merge steps.
     knowledge-base/engineering/architecture/decisions/ADR-207-*.md` names the dimension and the
     not-softened row.
 14. Sweep AC (hr-write-boundary-sentinel-sweep-all-write-sites): re-run the **untruncated** census
-    `git grep -nE 'git[[:space:]][^|;&]*\b(fetch|clone|pull|repack)\b[^|;&]*--(depth|deepen|shallow-since|shallow-exclude|unshallow|update-shallow)'`
-    and adjudicate every hit — each remaining shallow-capable invocation on a battery-reachable path
-    must have its receiving repository inside a suite-owned `mktemp`/`mkdtemp`/`$SCRATCH` root, or be
-    named in this plan's adjudicated-not-edited list. A `| head`-truncated grep does not satisfy this
-    AC — that is how `plugin-delivery-canary.sh:342` was nearly missed at plan time.
+    `git grep -nE 'git[[:space:]][^|;&]*\b(fetch|clone|pull|repack)\b[^|;&]*--(depth|deepen|shallow-since|shallow-exclude|unshallow|update-shallow)' -- . ':(exclude)knowledge-base/project/plans/2026-09-21-fix-repo-write-boundary-shallow-dimension-plan.md' ':(exclude)knowledge-base/project/specs/feat-one-shot-7924-git-shallow-dimension/'`
+    (the exclusions are load-bearing: this plan and its tasks.md quote `--depth` invocations in
+    prose and would self-hit) and adjudicate every hit — each remaining shallow-capable invocation
+    on a battery-reachable path must have its receiving repository inside a suite-owned
+    `mktemp`/`mkdtemp`/`$SCRATCH` root, or be named in this plan's adjudicated-not-edited list. A
+    `| head`-truncated grep does not satisfy this AC — that is how `plugin-delivery-canary.sh:342`
+    was nearly missed at plan time.
 
 ## Test Scenarios
 
@@ -639,7 +704,8 @@ Every scenario is a `mutation → guard reddens` pair (ADR-180); `command → ou
 
 | Risk | Mitigation |
 |---|---|
-| Operator machines where the repo is already shallow: any suite fetch that appends graft entries now FATALs | self-announcing + `repo_boundary_next_action` names `git fetch --unshallow`; arguably correct — the mutation is real |
+| Operator machines where the repo is already shallow: a suite's depth-bounded fetch now moves the graft set → FATAL | self-announcing + `repo_boundary_next_action` names `git fetch --unshallow`; arguably correct — the mutation is real (a *plain* fetch cannot move the file — fixture-verified — so only shallow-capable invocations trip it) |
+| **Precedent diff (deepen-plan §4.4):** the new dim follows the `_repo_boundary_dim_config`/`_repo_boundary_dim_refs` sibling contract — stdout = the state value, rc 0 = measured, rc 1 = not-measured, digest tool probed up front, no tempfile/EXIT trap (ADR-129). Deviations from precedent, deliberate: (a) resolves `--git-common-dir` not `--git-dir` (the point of the change); (b) two-token state (`absent` / `present\t<digest>`) vs config's per-key list — a file whose *existence* is the signal, closer to a `refs` measured-empty case than to a key listing | the mutation matrix's degrade-collapse row pins the rc contract; the linked-worktree arm pins deviation (a) |
 | A sibling worktree running a pre-fix `ccla-add.sh` mid-battery false-FATALs a run | transient window, closes at merge; the FATAL is true (the run's history evidence was corrupted) |
 | `git rev-parse --git-common-dir` returns a relative path on some git version | `--path-format=absolute` (git ≥ 2.31); worktree support already forces ≥ 2.5 |
 | Scratch clone in `ccla-add.sh` needs `origin` URL resolution | `git remote get-url origin` with the existing honest `die` fallback; a missing remote is the same failure class the script already names |
@@ -649,7 +715,7 @@ Every scenario is a `mutation → guard reddens` pair (ADR-180); `command → ou
 
 | Approach | Verdict |
 |---|---|
-| Drop `--depth=1` and keep fetching into the live repo | **Rejected.** On an already-shallow repo a plain fetch of unconnected history can still append graft entries (content change → still a producer); and it keeps writing `refs/remotes/origin/cla-signatures` + objects into the shared store to read one file. The scratch clone removes *all* live-repo writes, not just the shallow one. |
+| Drop `--depth=1` and keep fetching into the live repo | **Rejected.** A plain fetch does not move `.git/shallow` (fixture-verified), so dropping depth would clear THIS dimension — but it keeps writing `refs/remotes/origin/cla-signatures` + objects + FETCH_HEAD into the shared store to read one file, and it drops the fetch-size bound the flag exists for. The scratch clone removes *all* live-repo writes, not just the shallow one. |
 | Sample `.git/shallow` via `--git-dir` | **Rejected** — the issue's core point: per-worktree path, misses the shared file. Pinned by the linked-worktree arm. |
 | Soften under `shared_store` like refs | **Rejected** — see §The Change 3 and the ADR-207 amendment; no routine producer exists post-sweep, and the harm lands on this run's evidence. |
 | Static battery authorship lint for shallow writers | **Cut** (Phase 0.6b) — no softened cell means nothing the classifier can't inspect; the runtime dimension is the guard. |
