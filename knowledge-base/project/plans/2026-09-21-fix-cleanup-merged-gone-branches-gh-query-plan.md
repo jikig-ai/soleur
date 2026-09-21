@@ -32,6 +32,29 @@ guard skips it. The result is that the reaper's main cohort is never reaped. Thi
 branch that is already an ancestor of main needs no API call, and a `[gone]` branch now gets
 its merge check. This is a one-line change. The guard stays the same.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21. This was a minimal deepen pass, as the caller asked: a one-line fix
+plus test rows, so there was no agent fan-out.
+**Gates run:** 4.6 User-Brand Impact (pass), 4.7 Observability (pass), 4.8 PAT sweep (no hits),
+4.11 Guard Contract (`lint-guard-contract.py` green; the assembly names the gh-query loop
+chokepoint, not its members), and 4.9/4.10/4.55/4.5 (did not trigger).
+
+### Key corrections
+
+1. **The sentinel sha is SHORT.** `_tip_sha=$(git rev-parse --short …)` is at
+   `worktree-manager.sh:~3134`. The draft assertion `sha=[0-9a-f]{40}` would never have
+   matched, and A14b would have stayed RED even after the fix. A14b now compares against the
+   branch's short tip, captured before the run.
+2. **`remote=no` is the expected value for the gone cohort.** The remote delete checks
+   `git ls-remote --exit-code --heads origin <b>` first (`:~3105`). An upstream that has already
+   been deleted is not deleted again, so the reap line reads `local=yes remote=no`, and no
+   `SOLEUR_WORKTREE_REAP_PARTIAL` is emitted.
+3. **Skips that happen before the guard.** The worktree cohort goes through the commit-age hold
+   (`(skip) … recent commit (<10min)`) and the uncommitted-changes hold before it reaches the
+   merge-evidence block. The A14 fixtures must be backdated and have clean worktrees, or A14d's
+   `no merge evidence` line is never printed.
+
 ## Research Insights
 
 **Premise Validation.** #8490 is OPEN (`gh issue view 8490`). Both cited sites exist on this
@@ -122,8 +145,14 @@ call shape (the same contract as the A9 stub). Run the reaper with
 Assertions:
 
 - **A14a**: `feat-a14-merged` is gone locally.
-- **A14b**: `$TMP/a14.log` has a line that matches
-  `^SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=[0-9a-f]{40} `.
+- **A14b**: `$TMP/a14.log` contains the exact line prefix
+  `SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=$A14_TIP local=yes remote=no`, where
+  `A14_TIP=$(fgit -C "$A14/clone" rev-parse --short feat-a14-merged)` is recorded **before** the
+  reaper runs. The reaper records `git rev-parse --short` (`worktree-manager.sh:~3134`), so this
+  is an abbreviated sha, not 40 hex characters. Comparing it with the tip captured before the
+  run proves that the `sha=` field can be used for recovery (`git branch <b> <sha>`), which a
+  shape regex does not. `remote=no` is expected, because the upstream was already deleted, so
+  `ls-remote --exit-code` fails and no remote delete is attempted.
 - **A14c**: `feat-a14-unmerged` still exists locally, its worktree directory still exists, and
   its remote-side state is unchanged (it has no remote ref to delete; checking that the local
   ref and the worktree are kept is enough).
@@ -262,7 +291,7 @@ to a local git reaper plus test rows.
 - [ ] Arm A14 exists in `plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh`
   with assertions A14a to A14e. A14a, A14b and A14e were observed RED against the unfixed script
   before the fix was applied.
-- [ ] A14b asserts `^SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=[0-9a-f]{40} `.
+- [ ] A14b asserts `SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=<pre-run short tip> local=yes remote=no` (short sha, compared with `rev-parse --short` captured before the run).
 - [ ] The `[gone]`-only skip is covered for both shapes: A10 (no worktree) and A14c/A14d (with a
   worktree, gh=0).
 - [ ] `MIN_ASSERTIONS` is raised to match, and the full suite exits 0.

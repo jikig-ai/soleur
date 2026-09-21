@@ -9,9 +9,11 @@ Plan: `knowledge-base/project/plans/2026-09-21-fix-cleanup-merged-gone-branches-
 
 ## 2. RED test
 
+- [ ] 2.0 Fixtures: backdated commits (`mk_squash_merged_branch` default age) and clean worktrees, otherwise the commit-age or dirty holds skip the branch before the merge-evidence block.
+
 - [ ] 2.1 Add arm A14 after A13 (before `S.`): one fixture, two backdated branches with worktrees, both upstreams deleted + `fetch --prune --no-tags` ([gone]).
 - [ ] 2.2 gh stub keyed on `--head`: `1` for `feat-a14-merged`, `0` otherwise; logs each head to `$TMP/a14-gh.log`; exit 64 on other call shapes.
-- [ ] 2.3 Assertions A14a (merged reaped), A14b (`^SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=[0-9a-f]{40} `), A14c (unmerged branch + worktree kept), A14d (`no merge evidence` skip line), A14e (both heads queried).
+- [ ] 2.3 Assertions A14a (merged reaped), A14b (`SOLEUR_WORKTREE_REAPED branch=feat-a14-merged sha=<short tip captured pre-run> local=yes remote=no` — the sha is `rev-parse --short`, not 40 hex), A14c (unmerged branch + worktree kept), A14d (`no merge evidence` skip line), A14e (both heads queried).
 - [ ] 2.4 Raise `MIN_ASSERTIONS` by the number of added assertions.
 - [ ] 2.5 Run the suite; confirm A14a/A14b/A14e RED against the unfixed script.
 
