@@ -16,11 +16,12 @@
 #      (transport, timeout, oversized or multi-line answer) is `probe_failed rc=<n>`, never
 #      a store-state verdict.
 #   3. the fence probe (#8101), refuse_if_fence_not_intact: the pre-receive fence the bootstrap
-#      plants is a real root:git 750 hooks directory holding a real, executable root:root 755
-#      pre-receive, the system core.hooksPath names it, and it sits on the accepted store
-#      device. It checks the fence's SHAPE, not which hook is installed.
-# Exit 0 means: access ok, store mounted on a plaintext device, not cut over, empty, fence
-# installed and wired.
+#      plants is a real root:git 750 hooks directory under a root-owned, non-writable parent,
+#      holding a real root:root 755 pre-receive the git user can run; the installed transport
+#      wrapper pins pushes to it and the system core.hooksPath names it; and it sits on the
+#      accepted store device. It checks the fence's SHAPE, not which hook is installed.
+# Exit 0 means: access ok, store mounted on a plaintext device, not cut over, empty, and a push
+# would run a root-owned pre-receive of the planted shape.
 #
 # WHAT IT NO LONGER DOES. The rsync / freeze / repoint / flag-flip / rollback / wipe body was
 # deleted (git history keeps it). Its freeze and reload called systemd units that do not
@@ -49,7 +50,7 @@
 # pattern in full, and never prints the value. This evidence is still not authentication.
 #
 # Exit codes: 0 clear; 1 internal error (die: the access gate's mktemp failed); 3 access gate;
-# 5 refusal (real mode, store probe); 78 xtrace refusal.
+# 5 refusal (real mode, store probe, fence probe); 78 xtrace refusal.
 set -euo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
@@ -351,35 +352,78 @@ refuse_if_store_not_empty() {
 }
 
 # The fence probe (#8101). git-data-bootstrap.sh plants the pre-receive fence (CAS lease fence,
-# freeze-sentinel denial, namespace check) and points the system core.hooksPath at it; a store
-# whose hooks are absent, drifted or elsewhere accepts every push with no warning. ONE remote
-# command reads every fact, in one ssh session, and exits with the first that fails:
+# freeze-sentinel denial, namespace check). A push reaches it through the transport wrapper, which
+# pins `core.hooksPath` on git's command line, and git runs the hook AS THE git USER. So the probe
+# reads what a push actually depends on, in ONE ssh session, and exits with the first failure, in
+# this order:
 #   10  the hooks dir is absent, or is a symlink            reason=hooks_dir_absent
-#   11  the hooks dir is not root:git 750                   reason=hooks_dir_owner
 #   12  pre-receive is absent, a symlink, not a regular
-#       file, or not executable (git would never run it)   reason=hook_absent
+#       file, or not executable                             reason=hook_absent
+#   16  an instrument failed (a stat)                       probe_failed rc=16
+#   11  the hooks dir is not root:git 750                   reason=hooks_dir_owner
 #   13  pre-receive is not root:root 755                    reason=hook_owner
-#   14  the system core.hooksPath does not name the SERVING
-#       hooks path (unset is git's exit 1)                  reason=hooks_path_mismatch
-#   15  the hooks dir lives on a different source           reason=hooks_wrong_source
-#   16  an instrument failed (stat, or git config above 1)  probe_failed rc=16
-#    5  findmnt -T could not resolve the hooks dir's source probe_failed rc=5
+#   19  the hooks dir's parent is not root-owned, or is
+#       group/other-writable (git could swap the dir)       reason=hooks_parent_writable
+#   17  the git user cannot read and execute pre-receive
+#       (group membership, an ACL, a denied traversal)      reason=hook_not_runnable_by_git
+#   16  git config exited above 1                           probe_failed rc=16
+#   14  the system core.hooksPath (includes resolved) does
+#       not name the SERVING hooks path; unset is git's 1   reason=hooks_path_mismatch
+#   18  the installed transport wrapper does not carry the
+#       command-line pin to the serving hooks path          reason=transport_pin_mismatch
+#    5  findmnt -T could not resolve a fence path's source  probe_failed rc=5
+#   15  the hooks dir or pre-receive is on another source   reason=hooks_wrong_source
 # Any other rc is gd_capture's own, reported probe_failed. SHAPE, NOT CONTENT: a planted
-# placeholder hook passes; the content comparison belongs to the rebuilt copy (#8211).
+# placeholder hook passes; the content comparison belongs to the rebuilt copy (#8211). The
+# answer is unauthenticated while #7226 is open, like every other store probe.
 # Arguments (the #8211 reuse on the fresh root): the root probed (default OLD_ROOT), the source
-# it must sit on (default STORE_SOURCE), and the hooks path core.hooksPath must name (default the
+# it must sit on (default STORE_SOURCE), and the hooks path a push is pinned to (default the
 # serving OLD_ROOT/hooks, which does not move when a fresh root is probed before the repoint).
+# A PASSED empty argument is refused, never defaulted: an empty FRESH_ROOT must not quietly
+# probe the serving store. Arguments are validated before anything is printed or dialed.
+TRANSPORT_WRAPPER="${TRANSPORT_WRAPPER:-/usr/local/bin/git-data-transport-wrapper.sh}"
 refuse_if_fence_not_intact() {
-  local root="${1:-$OLD_ROOT}" src="${2:-$STORE_SOURCE}" serving="${3:-$OLD_ROOT/hooks}"
-  local rc=0 reason="" qh qs qsp
-  step "fence probe: $root/hooks holds the pre-receive fence and core.hooksPath names $serving"
-  [[ "$src" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed
-  [[ "$root" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed
-  [[ "$serving" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed
+  local root="${1-$OLD_ROOT}" src="${2-$STORE_SOURCE}" serving="${3-$OLD_ROOT/hooks}"
+  local rc=0 reason="" cmd pin_hd pin_ex qh qs qsp qw qhd qex
+  local -a c
+  [[ "$root" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed "" arg_root
+  [[ "$src" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed "" arg_source
+  [[ "$serving" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed "" arg_serving
+  [[ "$TRANSPORT_WRAPPER" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed "" arg_wrapper
+  step "fence probe: $root/hooks holds the pre-receive fence, and a push would run it"
+  # The two lines of git-data-transport-wrapper.sh that decide which hooks a push runs. The
+  # suite's P2 row pins both against the wrapper itself.
+  pin_hd="HOOKS_DIR=\"\${GIT_DATA_HOOKS_DIR:-$serving}\""
+  pin_ex='exec git -c "core.hooksPath=${HOOKS_DIR}" "${verb#git-}" "$repo_real"'
   printf -v qh '%q' "$root/hooks"
   printf -v qs '%q' "$src"
   printf -v qsp '%q' "$serving"
-  gd_capture '^ok$' "h=$qh; p=\"\$h/pre-receive\"; src=$qs; sp=$qsp; [ -L \"\$h\" ] && exit 10; [ -d \"\$h\" ] || exit 10; [ -L \"\$p\" ] && exit 12; [ -f \"\$p\" ] && [ -x \"\$p\" ] || exit 12; oh=\$(stat -c '%U:%G %a' \"\$h\") || exit 16; op=\$(stat -c '%U:%G %a' \"\$p\") || exit 16; [ \"\$oh\" = \"root:git 750\" ] || exit 11; [ \"\$op\" = \"root:root 755\" ] || exit 13; v=\$(git config --system --get core.hooksPath); g=\$?; [ \"\$g\" -le 1 ] || exit 16; [ \"\$v\" = \"\$sp\" ] || exit 14; s=\$(findmnt -no SOURCE -T \"\$h\") || exit 5; [ \"\$s\" = \"\$src\" ] || exit 15; echo ok" || rc=$?
+  printf -v qw '%q' "$TRANSPORT_WRAPPER"
+  printf -v qhd '%q' "$pin_hd"
+  printf -v qex '%q' "$pin_ex"
+  c=(
+    "h=$qh; p=\"\$h/pre-receive\"; src=$qs; sp=$qsp; w=$qw"
+    '[ -L "$h" ] && exit 10'
+    '[ -d "$h" ] || exit 10'
+    '[ -L "$p" ] && exit 12'
+    '[ -f "$p" ] && [ -x "$p" ] || exit 12'
+    "oh=\$(stat -c '%U:%G %a' \"\$h\") || exit 16"
+    "op=\$(stat -c '%U:%G %a' \"\$p\") || exit 16"
+    '[ "$oh" = "root:git 750" ] || exit 11'
+    '[ "$op" = "root:root 755" ] || exit 13'
+    "pp=\$(stat -c '%U %a' \"\${h%/*}\") || exit 16"
+    'case "$pp" in "root "[0-7][0145][0145]|"root "[0-7][0-7][0145][0145]) ;; *) exit 19 ;; esac'
+    'runuser -u git -- test -r "$p" && runuser -u git -- test -x "$p" || exit 17'
+    'v=$(env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM git config --system --includes --get core.hooksPath); g=$?'
+    '[ "$g" -le 1 ] || exit 16'
+    '[ "$v" = "$sp" ] || exit 14'
+    "grep -qxF -- $qhd \"\$w\" && grep -qxF -- $qex \"\$w\" || exit 18"
+    's=$(findmnt -no SOURCE -T "$h") || exit 5; [ "$s" = "$src" ] || exit 15'
+    's=$(findmnt -no SOURCE -T "$p") || exit 5; [ "$s" = "$src" ] || exit 15'
+    'echo ok'
+  )
+  printf -v cmd '%s; ' "${c[@]}"
+  gd_capture '^ok$' "${cmd%; }" || rc=$?
   case "$rc" in
     0) ;;
     10) reason=hooks_dir_absent ;;
@@ -388,6 +432,9 @@ refuse_if_fence_not_intact() {
     13) reason=hook_owner ;;
     14) reason=hooks_path_mismatch ;;
     15) reason=hooks_wrong_source ;;
+    17) reason=hook_not_runnable_by_git ;;
+    18) reason=transport_pin_mismatch ;;
+    19) reason=hooks_parent_writable ;;
     *) _store_refuse fence-shape probe_failed "$rc" ;;
   esac
   [ -z "$reason" ] || _store_refuse fence-shape fence_not_intact "" "$reason"
@@ -406,7 +453,7 @@ main() {
   refuse_if_cut_over
   refuse_if_store_not_empty
   refuse_if_fence_not_intact
-  log "read-only proof clear: access ok, store mounted, not cut over, empty, fence installed and wired"
+  log "read-only proof clear: access ok, store mounted, not cut over, empty, fence in place for pushes"
   echo "::notice title=git-data-cutover store::verdict=clear"
 }
 
