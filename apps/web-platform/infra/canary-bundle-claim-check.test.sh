@@ -111,7 +111,7 @@ alloc_port() {
 await_http_ready() {
   local port="$1" path="${2:-/}"
   for _ in $(seq 1 20); do
-    if curl -fsS -m 1 "http://localhost:$port$path" >/dev/null 2>&1; then
+    if curl -fsS -m 1 --noproxy '*' "http://localhost:$port$path" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.2
@@ -482,13 +482,13 @@ run_test "F13" 1 "canary_layer3_no_jwt"
 # deliberately-wrong expectation (the SUT never exits 99) and require
 # TESTS_FAILED to move; counters are then restored so the floor stays at 14.
 # ============================================================================
-_cr=$TESTS_RUN; _cp=$TESTS_PASSED; _cf=$TESTS_FAILED
+_cr=$TESTS_RUN; _cp=$TESTS_PASSED; _cf=$TESTS_FAILED; _fl=$FAIL_LOG
 run_test "instrument self-test (deliberately-wrong expectation — MUST register FAIL)" 99 ""
 if [[ "$TESTS_RUN" -ne $((_cr + 1)) || "$TESTS_PASSED" -ne "$_cp" || "$TESTS_FAILED" -ne $((_cf + 1)) ]]; then
   echo "FATAL: the verdict machinery is not counting — every PASS/FAIL above is void." >&2
   exit 2
 fi
-TESTS_RUN=$_cr; TESTS_FAILED=$_cf
+TESTS_RUN=$_cr; TESTS_FAILED=$_cf; FAIL_LOG=$_fl
 
 # ============================================================================
 # Summary

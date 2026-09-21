@@ -104,6 +104,10 @@
 #                   git-data-root-key, inngest, registry-boot-guard, zot-log-shipper
 #   curl        2   canary-bundle-claim-check, git-data-runcmd-rehearsal
 #
+#   (zot-config-deadlines also invokes python3 unconditionally — render/extract/
+#    bogus-config synth — so a python3-less host REDs it loudly; the table counts
+#    only suites that gate the tool behind `command -v`.)
+#
 # Most of those self-skip locally when their tool is absent — loud exceptions like
 # git-data-rung2-rehearsal and git-data-root-key fail by design — and every CI-gated
 # skip fails closed under CI. Per the paragraph above, this runner prints PASS for

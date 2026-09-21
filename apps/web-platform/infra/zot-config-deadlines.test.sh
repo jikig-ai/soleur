@@ -50,8 +50,12 @@ under_ci() { [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; }
 # not a trust boundary — workflow-edit authority could do either — but the
 # bypass can no longer hide inside an env: block.)
 is_s4_child() {
-  local v="${SOLEUR_ZOT_S4_CHILD:-}"
-  [[ "$v" == "${TMPDIR:-/tmp}"/tmp.*/* && -f "$v" ]]
+  local v="${SOLEUR_ZOT_S4_CHILD:-}" d
+  # `*` matches `/` in [[ == ]] string tests, so the bare-dir glob alone would
+  # accept "${TMPDIR}/tmp.x/../../../etc/passwd" — `..` is rejected outright and
+  # the parent's LAST component must itself be tmp.*-shaped.
+  d="${v%/*}"
+  [[ "$v" != *..* && "$d" == "${TMPDIR:-/tmp}/"tmp.* && "${d##*/}" == tmp.* && -f "$v" ]]
 }
 # Scrub foreign-command output before embedding it in verdict text — the same
 # log-injection defense the canary suite applies to its probe stderr: C0/DEL
@@ -251,7 +255,9 @@ else
   # Exactly-one-match, not first-match: a stray second ghcr ref (e.g. in a
   # comment) would otherwise silently redirect acceptance to an image that
   # never deploys — the same doctrine the write_files extractor above enforces.
-  mapfile -t ZOT_IMAGE_REFS < <(grep -oE 'ghcr\.io/project-zot/zot-linux-amd64:[^"]+' "$REPO_ROOT/apps/web-platform/infra/zot-registry.tf")
+  ZOT_IMAGE_REFS=()
+  while IFS= read -r _ref; do ZOT_IMAGE_REFS+=("$_ref"); done \
+    < <(grep -oE 'ghcr\.io/project-zot/zot-linux-amd64:[^"]+' "$REPO_ROOT/apps/web-platform/infra/zot-registry.tf")
   ZOT_IMAGE="${ZOT_IMAGE_REFS[0]:-}"
   if [[ "${#ZOT_IMAGE_REFS[@]}" -ne 1 ]]; then
     fail "expected exactly one pinned zot image ref in zot-registry.tf, found ${#ZOT_IMAGE_REFS[@]} — acceptance cannot be tested against an unpinned or ambiguous digest"
@@ -289,7 +295,7 @@ else
       # the digest never saw the config, so "REJECTED" would be a false verdict.
       fail "docker run itself failed (rc=$RC — pull/exec/timeout), so the digest never adjudicated the config: $(tail -2 <<<"$OUT" | scrub_log_bytes | tr '\n' ' ')"
     else
-      fail "the pinned zot digest REJECTED the rendered config (rc=$RC): $(tail -2 <<<"$OUT" | tr '\n' ' ')"
+      fail "the pinned zot digest REJECTED the rendered config (rc=$RC): $(tail -2 <<<"$OUT" | scrub_log_bytes | tr '\n' ' ')"
     fi
 
     # NEGATIVE CONTROL. Without this, "zot accepted it" is unfalsifiable — a verify that
