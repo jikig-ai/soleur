@@ -1,86 +1,80 @@
 <overview>
-Skills have three structural components: YAML frontmatter (metadata), pure XML body structure (content organization), and progressive disclosure (file organization). This reference defines requirements and best practices for each component.
+Skills have three structural components: YAML frontmatter (metadata), a markdown-heading body (content organization), and progressive disclosure (file organization). This reference defines requirements and best practices for each component.
 </overview>
 
-<xml_structure_requirements>
+<body_structure_requirements>
 <critical_rule>
-**Remove ALL markdown headings (#, ##, ###) from skill body content.** Replace with semantic XML tags. Keep markdown formatting WITHIN content (bold, italic, lists, code blocks, links).
+**Markdown headings structure a skill body; XML tags are optional semantic wrappers inside a section and never replace headings.** Use `#` for the skill title, `##` for each major section, and `###` below that. Keep markdown formatting within content (bold, italic, lists, code blocks, links).
+
+Measured basis: 102/102 shipped Soleur `SKILL.md` bodies use `#` headings, and 4 of them also use XML wrappers inside a section. A body built only from top-level tags, with no headings, is the anti-pattern.
 </critical_rule>
 
-<required_tags>
-Every skill MUST have these three tags:
+<required_sections>
+Every skill body carries these, as headings:
 
-- **`<objective>`** - What the skill does and why it matters (1-3 paragraphs)
-- **`<quick_start>`** - Immediate, actionable guidance (minimal working example)
-- **`<success_criteria>`** or **`<when_successful>`** - How to know it worked
-</required_tags>
+- **`# <Skill Name>`** followed by what the skill does and why it matters (1-3 paragraphs)
+- **`## Quick start`** (or the first numbered phase) - immediate, actionable guidance
+- **A completion criterion** - a `## Success criteria` section, or an explicit exit condition closing each phase
+</required_sections>
 
-<conditional_tags>
+<conditional_sections>
 Add based on skill complexity and domain requirements:
 
-- **`<context>`** - Background/situational information
-- **`<workflow>` or `<process>`** - Step-by-step procedures
-- **`<advanced_features>`** - Deep-dive topics (progressive disclosure)
-- **`<validation>`** - How to verify outputs
-- **`<examples>`** - Multi-shot learning
-- **`<anti_patterns>`** - Common mistakes to avoid
-- **`<security_checklist>`** - Non-negotiable security patterns
-- **`<testing>`** - Testing workflows
-- **`<common_patterns>`** - Code examples and recipes
-- **`<reference_guides>` or `<detailed_references>`** - Links to reference files
+- **`## Context`** - Background/situational information
+- **`## Workflow`** or **`## Phase N: ...`** - Step-by-step procedures
+- **`## Advanced features`** - Deep-dive topics (progressive disclosure)
+- **`## Validation`** - How to verify outputs
+- **`## Examples`** - Multi-shot learning
+- **`## Anti-patterns`** or **`## Sharp Edges`** - Common mistakes to avoid
+- **`## Security checklist`** - Non-negotiable security patterns
+- **`## Testing`** - Testing workflows
+- **`## References`** - Links to reference files
 
-See [use-xml-tags.md](use-xml-tags.md) for detailed guidance on each tag.
-</conditional_tags>
+See [authoring-levers.md](authoring-levers.md) for co-location: everything about one concept (what it is, how it applies, where it breaks) lives in one section.
+</conditional_sections>
 
-<tag_selection_intelligence>
+<section_selection>
 **Simple skills** (single domain, straightforward):
 
-- Required tags only
+- Required sections only
 - Example: Text extraction, file format conversion
 
 **Medium skills** (multiple patterns, some complexity):
 
-- Required tags + workflow/examples as needed
+- Required sections + workflow/examples as needed
 - Example: Document processing with steps, API integration
 
 **Complex skills** (multiple domains, security, APIs):
 
-- Required tags + conditional tags as appropriate
+- Required sections + conditional sections as appropriate
 - Example: Payment processing, authentication systems, multi-step workflows
-</tag_selection_intelligence>
+</section_selection>
 
-<xml_nesting>
-Properly nest XML tags for hierarchical content:
+<optional_xml_wrappers>
+Inside a section, an XML tag can mark a discrete block the model must treat as one unit: an input/output example pair, a template to copy verbatim, a checklist. The heading still names the section; the tag only bounds the block:
 
-```xml
-<examples>
+```markdown
+## Examples
+
 <example number="1">
 <input>User input</input>
 <output>Expected output</output>
 </example>
-</examples>
 ```
 
-Always close tags:
+When you use a wrapper, close it, and nest it inside a heading rather than in place of one.
+</optional_xml_wrappers>
 
-```xml
-<objective>
-Content here
-</objective>
-```
+<section_naming_conventions>
+Use descriptive heading names:
 
-</xml_nesting>
+- `## Workflow` not `## Steps stuff`
+- `## Success criteria` not `## Done`
+- `## Anti-patterns` not `## Don't do`
 
-<tag_naming_conventions>
-Use descriptive, semantic names:
-
-- `<workflow>` not `<steps>`
-- `<success_criteria>` not `<done>`
-- `<anti_patterns>` not `<dont_do>`
-
-Be consistent within your skill. If you use `<workflow>`, don't also use `<process>` for the same purpose (unless they serve different roles).
-</tag_naming_conventions>
-</xml_structure_requirements>
+Be consistent within your skill. If you use `## Workflow`, don't also use `## Process` for the same purpose (unless they serve different roles).
+</section_naming_conventions>
+</body_structure_requirements>
 
 <yaml_requirements>
 <required_fields>
@@ -218,17 +212,18 @@ SKILL.md serves as an overview that points to detailed materials as needed. This
 <pattern name="high_level_guide">
 Quick start in SKILL.md, details in reference files:
 
-```markdown
+````markdown
 ---
 name: pdf-processing
 description: Extracts text and tables from PDF files, fills forms, and merges documents. Use when working with PDF files or when the user mentions PDFs, forms, or document extraction.
 ---
 
-<objective>
-Extract text and tables from PDF files, fill forms, and merge documents using Python libraries.
-</objective>
+# PDF Processing
 
-<quick_start>
+Extract text and tables from PDF files, fill forms, and merge documents using Python libraries.
+
+## Quick start
+
 Extract text with pdfplumber:
 
 ```python
@@ -237,14 +232,11 @@ with pdfplumber.open("file.pdf") as pdf:
     text = pdf.pages[0].extract_text()
 ```
 
-</quick_start>
+## Advanced features
 
-<advanced_features>
 **Form filling**: See [forms.md](forms.md)
 **API reference**: See [reference.md](reference.md)
-</advanced_features>
-
-```
+````
 
 Claude loads forms.md or reference.md only when needed.
 </pattern>
@@ -270,23 +262,23 @@ When user asks about revenue, Claude reads only finance.md. Other files stay on 
 <pattern name="conditional_details">
 Show basic content in SKILL.md, link to advanced in reference files:
 
-```xml
-<objective>
+```markdown
+# DOCX Processing
+
 Process DOCX files with creation and editing capabilities.
-</objective>
 
-<quick_start>
-<creating_documents>
+## Quick start
+
+### Creating documents
+
 Use docx-js for new documents. See [docx-js.md](docx-js.md).
-</creating_documents>
 
-<editing_documents>
-For simple edits, modify XML directly.
+### Editing documents
+
+For simple edits, modify the document XML directly.
 
 **For tracked changes**: See [redlining.md](redlining.md)
 **For OOXML details**: See [ooxml.md](ooxml.md)
-</editing_documents>
-</quick_start>
 ```
 
 Claude reads redlining.md or ooxml.md only when the user needs those features.
@@ -297,7 +289,7 @@ Claude reads redlining.md or ooxml.md only when the user needs those features.
 
 **Add table of contents to long files**: For reference files over 100 lines, include a table of contents at the top.
 
-**Use pure XML in reference files**: Reference files should also use pure XML structure (no markdown headings in body).
+**Structure reference files with headings too**: Reference files follow the same rule as `SKILL.md`: markdown headings for structure, XML wrappers optional inside a section. (Some older skill-creator references, this one included, still carry top-level tags as content labels; do not copy that shape into new files.)
 </critical_rules>
 </progressive_disclosure>
 
@@ -315,11 +307,11 @@ Typical skill structure:
 
 ```
 skill-name/
-├── SKILL.md (main entry point, pure XML structure)
+├── SKILL.md (main entry point, markdown headings)
 ├── references/ (optional, for progressive disclosure)
-│   ├── guide-1.md (pure XML structure)
-│   ├── guide-2.md (pure XML structure)
-│   └── examples.md (pure XML structure)
+│   ├── guide-1.md (markdown headings)
+│   ├── guide-2.md (markdown headings)
+│   └── examples.md (markdown headings)
 └── scripts/ (optional, for utility scripts)
     ├── validate.py
     └── process.py
@@ -329,11 +321,13 @@ skill-name/
 </file_organization>
 
 <anti_patterns>
-<pitfall name="markdown_headings_in_body">
-❌ Do NOT use markdown headings in skill body:
+<pitfall name="tag_only_body">
+✅ Structure the body with markdown headings; wrap a discrete block in a tag only inside a section:
 
 ```markdown
 # PDF Processing
+
+PDF processing with text extraction, form filling, and merging.
 
 ## Quick start
 Extract text...
@@ -342,7 +336,7 @@ Extract text...
 Form filling...
 ```
 
-✅ Use pure XML structure:
+❌ Anti-pattern: a tag-only body with no headings, where top-level tags stand in for sections:
 
 ```xml
 <objective>
@@ -352,10 +346,6 @@ PDF processing with text extraction, form filling, and merging.
 <quick_start>
 Extract text...
 </quick_start>
-
-<advanced_features>
-Form filling...
-</advanced_features>
 ```
 
 </pitfall>
@@ -385,8 +375,8 @@ Keep references one level deep from SKILL.md. Claude may only partially read nes
 Always use forward slashes: `scripts/helper.py` (not `scripts\helper.py`)
 </pitfall>
 
-<pitfall name="missing_required_tags">
-Every skill must have: `<objective>`, `<quick_start>`, and `<success_criteria>` (or `<when_successful>`).
+<pitfall name="missing_required_sections">
+Every skill needs a `#` title with its purpose, a `## Quick start` (or first phase), and a completion criterion (`## Success criteria` or a per-phase exit condition).
 </pitfall>
 </anti_patterns>
 
@@ -394,12 +384,12 @@ Every skill must have: `<objective>`, `<quick_start>`, and `<success_criteria>` 
 Before finalizing a skill, verify:
 
 - ✅ YAML frontmatter valid (name matches directory, description in third person)
-- ✅ No markdown headings in body (pure XML structure)
-- ✅ Required tags present: objective, quick_start, success_criteria
-- ✅ Conditional tags appropriate for complexity level
-- ✅ All XML tags properly closed
+- ✅ Body structured with markdown headings (XML tags, if any, only wrap blocks inside a section)
+- ✅ Required sections present: title + purpose, quick start, completion criterion
+- ✅ Conditional sections appropriate for complexity level
+- ✅ Any XML wrappers closed and nested inside a heading
 - ✅ Progressive disclosure applied (SKILL.md < 500 lines)
-- ✅ Reference files use pure XML structure
+- ✅ Reference files structured with markdown headings
 - ✅ File paths use forward slashes
 - ✅ Descriptive file names
 </validation_checklist>

@@ -1,5 +1,5 @@
 <overview>
-This reference covers patterns for complex workflows, validation loops, and feedback cycles in skill authoring. All patterns use pure XML structure.
+This reference covers patterns for complex workflows, validation loops, and feedback cycles in skill authoring. Skill bodies use markdown headings; the XML tags in these examples are optional wrappers inside a section.
 </overview>
 
 <complex_workflows>

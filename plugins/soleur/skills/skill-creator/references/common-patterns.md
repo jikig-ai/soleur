@@ -1,5 +1,5 @@
 <overview>
-This reference documents common patterns for skill authoring, including templates, examples, terminology consistency, and anti-patterns. All patterns use pure XML structure.
+This reference documents common patterns for skill authoring, including templates, examples, terminology consistency, and anti-patterns. Skill bodies are structured with markdown headings; the XML tags shown inside examples are optional wrappers around one block within a section.
 </overview>
 
 <template_pattern>
@@ -231,20 +231,8 @@ Claude must now research and compare all options before starting. This wastes to
 Common mistakes to avoid when authoring skills.
 </description>
 
-<pitfall name="markdown_headings_in_body">
-❌ **BAD**: Using markdown headings in skill body:
-
-```markdown
-# PDF Processing
-
-## Quick start
-Extract text with pdfplumber...
-
-## Advanced features
-Form filling requires additional setup...
-```
-
-✅ **GOOD**: Using pure XML structure:
+<pitfall name="tag_only_body">
+❌ **BAD**: A tag-only body with no headings, where top-level tags stand in for sections:
 
 ```xml
 <objective>
@@ -260,7 +248,21 @@ Form filling requires additional setup...
 </advanced_features>
 ```
 
-**Why it matters**: XML provides semantic meaning, reliable parsing, and token efficiency.
+✅ **GOOD**: Markdown headings structure the body:
+
+```markdown
+# PDF Processing
+
+PDF processing with text extraction, form filling, and merging capabilities.
+
+## Quick start
+Extract text with pdfplumber...
+
+## Advanced features
+Form filling requires additional setup...
+```
+
+**Why it matters**: Markdown headings structure a skill body; XML tags are optional semantic wrappers inside a section and never replace headings. Every shipped Soleur `SKILL.md` (102/102 measured) uses `#` headings, so a tag-only body is the odd one out for both readers and tooling.
 </pitfall>
 
 <pitfall name="vague_descriptions">
@@ -403,37 +405,34 @@ Review dependencies in: @ package.json (remove space after @ in actual usage)
 **Why it matters**: Without the space, these execute during skill load, causing errors or unwanted file reads.
 </pitfall>
 
-<pitfall name="missing_required_tags">
-❌ **BAD**: Missing required tags:
-```xml
-<quick_start>
+<pitfall name="missing_required_sections">
+❌ **BAD**: Missing required sections:
+```markdown
+## Quick start
 Use this tool for processing...
-</quick_start>
 ```
 
-✅ **GOOD**: All required tags present:
+✅ **GOOD**: All required sections present:
 
-```xml
-<objective>
+```markdown
+# Data Processing
+
 Process data files with validation and transformation.
-</objective>
 
-<quick_start>
+## Quick start
 Use this tool for processing...
-</quick_start>
 
-<success_criteria>
+## Success criteria
 - Input file successfully processed
 - Output file validates without errors
 - Transformation applied correctly
-</success_criteria>
 ```
 
-**Why it matters**: Every skill must have `<objective>`, `<quick_start>`, and `<success_criteria>` (or `<when_successful>`).
+**Why it matters**: Every skill needs a `#` title with its purpose, a `## Quick start` (or first phase), and a completion criterion.
 </pitfall>
 
-<pitfall name="hybrid_xml_markdown">
-❌ **BAD**: Mixing XML tags with markdown headings:
+<pitfall name="tags_replacing_some_headings">
+❌ **BAD**: A top-level tag standing in for one section while the rest use headings:
 ```markdown
 <objective>
 PDF processing capabilities
@@ -443,28 +442,24 @@ PDF processing capabilities
 
 Extract text with pdfplumber...
 
-## Advanced features
-
-Form filling...
-
 ```
 
-✅ **GOOD**: Pure XML throughout:
-```xml
-<objective>
-PDF processing capabilities
-</objective>
+✅ **GOOD**: Every section is a heading; a tag, if used, wraps one block inside a section:
+```markdown
+# PDF Processing
 
-<quick_start>
+PDF processing capabilities.
+
+## Quick start
+
 Extract text with pdfplumber...
-</quick_start>
 
-<advanced_features>
-Form filling...
-</advanced_features>
+<example>
+pdfplumber.open("file.pdf").pages[0].extract_text()
+</example>
 ```
 
-**Why it matters**: Consistency in structure. Either use pure XML or pure markdown (prefer XML).
+**Why it matters**: Headings carry the structure. A wrapper bounds a block the model must treat as one unit; it is never a section of its own.
 </pitfall>
 
 <pitfall name="unclosed_xml_tags">
