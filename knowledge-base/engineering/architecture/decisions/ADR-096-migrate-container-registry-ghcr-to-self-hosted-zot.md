@@ -340,7 +340,8 @@ host. Read the amendment before relying on any bullet below:
       `cloud-init-inngest.yml:337` hard-pins a `ghcr.io` ref with no zot path, no `/v2/` probe and
       no fallback, and whose pull is **fail-closed** (`:349`). It reports via
       `inngest-boot-phone-home.sh` to Better Stack, not the Sentry `stage:` schema, so every query
-      in the soak is structurally blind to it. **Task 5.3 revokes the PAT ⇒ its next fresh boot
+      in the soak is structurally blind to it (**superseded 2026-09-21 (#6500)**: the host now
+      reports on the Sentry `stage:` schema — see "Amendment 2026-09-21 (#6500)"). **Task 5.3 revokes the PAT ⇒ its next fresh boot
       401s ⇒ the host never comes up.** Unlike #6437 this residual is **machine-enforced, not
       merely disclosed**: the soak's blocker arm reads #6500's state via `gh` and refuses `exit 0`
       while it is OPEN. Closing #6500 is therefore an **authorization act** — see the pinned note
@@ -1111,6 +1112,9 @@ docker daemon config; authenticates before the pull; and reports `inngest_zot` /
   channel and was deliberately cut. Whoever authorizes 5.3–5.5 must therefore treat the soak's
   inngest-freshboot count as covering the **web** host only, and read this host's fallback rate
   from Better Stack separately. This is a live gap, not a resolved one.
+  > **Superseded 2026-09-21 (#6500):** the cut was a #7516 scope decision, not a design
+  > objection, and the next amendment routes these markers to Sentry. See
+  > "Amendment 2026-09-21 (#6500)" below.
 - **Retire the GHCR leg** — but "retained as break-glass" would be false, and an earlier draft
   of this amendment said exactly that. AP-016 **LAPSED 2026-07-30 (#7071)**: the interim read PAT
   is REVOKED, so the GHCR leg cannot authenticate and returns a guaranteed 401. It is retained as
@@ -1121,3 +1125,25 @@ docker daemon config; authenticates before the pull; and reports `inngest_zot` /
   has no refresh channel** (rotation requires an `inngest-host-replace`; ADR-135's signed
   config-refresh channel covers host scripts, not `user_data`). Restoring a GHCR pull leg remains
   open debt, per AP-016.
+
+## Amendment 2026-09-21 (#6500) — the inngest pull outcome reaches the Sentry `stage:` schema, by BAKE
+
+- **What changed.** `cloud-init-inngest.yml` now delivers a host-local `/usr/local/bin/soleur-boot-emit`
+  (the web emitter's event shape, `host_name:"soleur-inngest"`) and calls it from both zot-leg
+  outcome arms (`inngest_zot` info, `inngest_ghcr_fallback` warning), in the foreground with
+  `|| true`. The Better Stack phone-home is kept as a second, independently-credentialed channel.
+- **By bake, not Doppler** — the same reason as the 2026-08-13 amendment. The DSN is the existing
+  `var.sentry_dsn` root variable (already baked into web-1 and git-data), written to
+  `/etc/default/soleur-sentry-dsn` (0600) and read with `sed`, never sourced. Adding a name to
+  `soleur-inngest/prd` would make the boot fatal, because that project is checked by exact
+  name-set equality.
+- **The soak.** `zot-soak-6122.sh` gains a host-pinned denominator
+  (`stage:"inngest_zot" host_name:"soleur-inngest"`, FAIL on 0) and a syntax-anchored
+  corroboration that both call sites exist. `[freshboot]` stays bare.
+- **New coupling.** Rotating `SENTRY_DSN` in `prd_terraform` changes this host's `user_data`, so
+  the next `hcloud_server.inngest` apply force-replaces the sole scheduler. Web hosts avoid this
+  with `ignore_changes = [user_data]`, which this host deliberately lacks (ADR-100).
+- **What it does NOT do.** It does not close #6500 and does not authorize 5.3–5.5. It takes
+  effect only after an `inngest-host-replace` dispatch in an ADR-100 window, and a Sentry event
+  is forgeable with the public DSN, so the Better Stack marker must corroborate it before anyone
+  posts `RESULT: PASS`.
