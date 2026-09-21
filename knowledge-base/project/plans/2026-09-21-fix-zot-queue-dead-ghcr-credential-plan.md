@@ -1502,3 +1502,20 @@ designed to emit no personal identifier, which is the only personal-data-adjacen
 - The escrow cron's `doppler run` injects every soleur-registry secret into the escrow script's
   env, as the heartbeat's does. Keep the script free of env-overridable command names (the #7761
   class): use literal paths for `cryptsetup`, and the same literal PATH preamble as the heartbeat.
+
+## Addendum — 2026-09-21: statements above that review falsified
+
+Appended rather than edited in place, so the reasoning that produced them stays readable.
+
+- **Domain Review item 2** (`systemd-run --scope -p OOMScoreAdjust=1000`): `systemd-run --scope`
+  rejects `OOMScoreAdjust=` (an exec property, not a scope property), so the first cut of the
+  escrow script could never run a test. The shipped script writes `1000` to
+  `/proc/self/oom_score_adj` directly and records `indeterminate` if it cannot.
+- **Acceptance Criteria, "≤5-min fail-closed bound"**: true only once the mapper is open. While it
+  cannot open (wrong or missing key, detached volume), zot stays down with no bound. ADR-096's
+  amendment states this.
+- **Phase 1, "the verify-time `DOCKER_CONFIG` is an empty directory"**: the directory holds
+  `{"auths":{},"credHelpers":{"ghcr.io":""}}`. A bare `{"auths":{}}` lets the docker CLI
+  auto-detect a default credential store. ADR-087's amendment carries the reason.
+- **Escrow staleness**: the threshold is 26 h (93600 s), not 48 h, and `pending` (no result, uptime
+  < 2 h) is exempt from arm (B). The Observability block above was corrected to match.

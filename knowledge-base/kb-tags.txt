@@ -1284,6 +1284,7 @@ doc-drift
 docker
 docker-build
 docker-build-args
+docker-cli
 docker-prune
 dockerfile
 dockerignore
@@ -1434,6 +1435,7 @@ escape-rows
 escape-testing
 escapes
 escaping
+escrow
 eslint
 esm
 esm-hooks
@@ -3830,6 +3832,7 @@ structured-data
 stub
 stub-detection
 stub-fidelity
+stubs
 stuck-active
 stuck-detection
 stuck-watchdog
