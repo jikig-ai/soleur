@@ -291,14 +291,15 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
     and the GHCR pull succeeded first try — the dominant path, previously invisible). Triage it
     by its sibling: **with** `app_ghcr_fallback` = zot tried and failed → chase the pull;
     **without** = the probe missed → chase the probe (#6416 / #6288).
-- **The soak gate can now FAIL for three reasons, not one** (#6462). If you are here because
+- **The soak gate can now FAIL for four reasons, not one** (#6462, #6500). If you are here because
   `zot-soak-6122.sh` failed, read its message before assuming a fallback occurred:
 
   | Message | Means | Do |
   |---|---|---|
   | `FAIL: N fallback event(s)` | a host really was GHCR-served | this runbook — triage by signal, above |
   | `FAIL(no-freshboot-evidence)` | **zero fallbacks AND zero zot-served fresh boots** — the fleet is UNOBSERVED, not clean. `cloud-init.yml` is `ignore_changes`-pinned, so the beacon only ships on a rebuild | do NOT revert zot. Recreate a web host inside the window, or wait — the fleet recreates ~1.3×/day |
-  | `FAIL(blocked)` / `FAIL(blocker-closed-but-condition-unmet)` | the soak's criteria hold, but #6500 (the dedicated inngest host: GHCR-only, fail-closed, invisible to these queries) is still open — or was closed while the code still shows no zot path | do NOT revert zot, and do NOT close #6500 to clear it. Fix the inngest host |
+  | `FAIL(no-inngest-freshboot-evidence)` | zero fallbacks, but the dedicated `soleur-inngest` host reported no zot-served fresh boot on Sentry in the window. Its reporting only exists on a host BUILT from the #6500 template | do NOT revert zot. If no replace has run in the window: dispatch `apply-web-platform-infra.yml` with `apply_target=inngest-host-replace` in an ADR-100 window (check `INNGEST_CUTOVER_FLIP` first). If one did: read `scripts/betterstack-query.sh --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST` for the window before replacing again — `inngest_zot` plus `sentry-emit-FAILED` is a delivery fault (DSN or egress), not a missing boot |
+  | `FAIL(blocked)` / `FAIL(blocker-closed-but-condition-unmet)` | the soak's criteria hold, but #6500 (the dedicated inngest host's zot-primary pull + Sentry reporting — the pre-#7462 "GHCR-only, invisible to these queries" description is superseded) is still open — or was closed while the code lacks the zot path or the Sentry call sites | do NOT revert zot, and do NOT close #6500 to clear it. Close it as completed only after an operator verifies the replaced host (`RESULT: PASS`) |
 
   Only the first row is a zot problem. The other two are the gate refusing to authorize an
   irreversible PAT revoke on evidence it does not have — that is the gate working.

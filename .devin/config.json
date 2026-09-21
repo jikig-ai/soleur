@@ -21,7 +21,7 @@
           },
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/scripts/install-kb-merge-driver.sh\""
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/scripts/ensure-kb-index.sh\" --soft"
           }
         ]
       }
