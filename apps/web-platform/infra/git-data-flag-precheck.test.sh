@@ -7,6 +7,11 @@
 # read succeeded and the value is not exactly `true`, and the `prd` read token
 # (DOPPLER_TOKEN_PRD) is bound in no step other than the flag precheck.
 #
+# Host-key pin (#7226, plan D3): the same step reads GIT_DATA_SSH_HOST_KEY, validates the ED25519
+# shape, writes $RUNNER_TEMP/git-data.pin and prints only its SHA256 fingerprint. An absent,
+# invalid or unreadable pin refuses with verdict=git_data_host_key_unavailable reason=<word>. An
+# informational `TOFU_ARM present|absent` line reads the file GIT_AUTH_TS_PATH names (fixtures here).
+#
 # The script is driven through a PER-NAME Doppler shim that answers per project/config/secret
 # AND per --no-exit-on-missing-secret presence, mirroring the measured CLI v3.75.3 semantics
 # recorded in the script's header. The workflow is parsed as YAML (`on:` via the True-key lookup).
@@ -110,36 +115,60 @@ echo "Doppler Error: Could not find requested secret: $name" >&2; exit 1
 SHIM
 chmod +x "$BIN/doppler" || { printf 'FAIL SETUP: chmod shim\n' >&2; exit 1; }
 
+# Pin fixtures: a key generated at test time (never a real host key), its fingerprint as ssh-keygen
+# prints it, and two git-auth.ts fixtures (with and without the shared fallback constant).
+command -v ssh-keygen >/dev/null 2>&1 || { printf 'FAIL SETUP: ssh-keygen not found\n' >&2; exit 1; }
+ssh-keygen -q -t ed25519 -N '' -C pin-fixture -f "$T/pinkey" || { printf 'FAIL SETUP: ssh-keygen pin\n' >&2; exit 1; }
+PIN="$(cut -d' ' -f1,2 "$T/pinkey.pub")"
+PIN_FP="$(ssh-keygen -lf "$T/pinkey.pub" | awk '{print $2}')"
+case "$PIN_FP" in SHA256:*) : ;; *) printf 'FAIL SETUP: fixture fingerprint unreadable\n' >&2; exit 1 ;; esac
+ssh-keygen -q -t ecdsa -b 256 -N '' -f "$T/ecdsakey" || { printf 'FAIL SETUP: ssh-keygen ecdsa\n' >&2; exit 1; }
+ECDSA_PIN="$(cut -d' ' -f1,2 "$T/ecdsakey.pub")"
+# One base64 character short, and a regex-valid body that is still 68 characters (shape-only).
+PIN_SHORT="${PIN%?}"
+printf 'const TOFU_FALLBACK_OPTS = ["-o", "fixture"];\n' > "$T/git-auth-tofu.ts"
+printf 'export const PINNED_ONLY = true;\n' > "$T/git-auth-strict.ts"
+
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
 # unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
-# (the case's own TMPDIR, so a leaked tempfile is visible). A store also carries soleur/prd_terraform
-# (flag absent there) and other-project/prd, the two configs a mis-bound token would read.
+# (the case's own TMPDIR, so a leaked tempfile is visible) and RT (its RUNNER_TEMP). A store also
+# carries soleur/prd_terraform (flag absent there) and other-project/prd, the two configs a
+# mis-bound token would read. The pin stored in soleur/prd is CASE_PIN (default the valid fixture;
+# ABSENT stores none), and GIT_AUTH_TS_PATH defaults to the fixture carrying the fallback constant.
 run_case() {
   local name="$1" value="$2"; shift 2
-  local store="$T/store-$name"
+  local store="$T/store-$name" pin="${CASE_PIN-$PIN}"
   assert_fixture_dir "$store"
   rm -rf "$store"; mkdir -p "$store/soleur/prd" "$store/soleur/prd_terraform" "$store/other-project/prd" || { printf 'FAIL SETUP: store\n' >&2; exit 1; }
   [ "$value" = ABSENT ] || printf '%s' "$value" > "$store/soleur/prd/GIT_DATA_STORE_ENABLED"
-  CTMP="$T/tmp-$name"
+  [ "$pin" = ABSENT ] || printf '%s' "$pin" > "$store/soleur/prd/GIT_DATA_SSH_HOST_KEY"
+  CTMP="$T/tmp-$name"; RT="$T/rt-$name"
   assert_fixture_dir "$CTMP"
-  rm -rf "$CTMP"; mkdir -p "$CTMP" || { printf 'FAIL SETUP: case tmp\n' >&2; exit 1; }
+  assert_fixture_dir "$RT"
+  rm -rf "$CTMP" "$RT"; mkdir -p "$CTMP" "$RT" || { printf 'FAIL SETUP: case tmp\n' >&2; exit 1; }
   OUT="$T/$name.out"; DLOG="$T/$name.dlog"; : > "$DLOG"
   timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$CTMP" DOPPLER_STORE="$store" DOPPLER_LOG="$DLOG" \
+    RUNNER_TEMP="$RT" GIT_AUTH_TS_PATH="$T/git-auth-tofu.ts" \
     DOPPLER_TOKEN=fixture-prd-read "$@" bash "${CASE_SCRIPT:-$PRECHECK}" > "$OUT" 2>&1
   RC=$?
 }
 ARGV='doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd
 doppler secrets get DOPPLER_PROJECT --plain -p soleur -c prd
-doppler secrets get DOPPLER_CONFIG --plain -p soleur -c prd'
+doppler secrets get DOPPLER_CONFIG --plain -p soleur -c prd
+doppler secrets get GIT_DATA_SSH_HOST_KEY --plain --no-exit-on-missing-secret -p soleur -c prd'
 refusal() { # <verdict-detail> — the exact two-line output of a refusal
   printf '[git-data-flag-precheck] verdict=%s\n::error title=git-data-flag-precheck::verdict=%s' "$1" "$1"
 }
+TOFU_PRESENT='TOFU_ARM present
+::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set'
+# ok_out <flag-line> — the exact output of a clear run with the default fixtures.
+ok_out() { printf '%s\ngit_data_pin=present fp=%s\n%s' "$TOFU_PRESENT" "$PIN_FP" "$1"; }
 detail() { printf 'rc=%s out=[%s]' "$RC" "$(tr '\n' '|' < "$OUT" | sed 's/::/: :/g')"; }
 
 # ── cases (functions, so a mutant re-runs exactly the case its row names) ──────────────
 case_absent() {
   run_case absent ABSENT "$@"
-  [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "flag=unset" ]
+  [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(ok_out flag=unset)" ]
 }
 case_scope_error() {
   run_case scope false SHIM_SCOPE_ERROR=1
@@ -165,12 +194,12 @@ case_true() {
 }
 case_off() { # <label> <value>
   run_case "off$1" "$2"
-  [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "flag=off" ]
+  [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(ok_out flag=off)" ]
 }
 
-if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly flag=unset, exit 0"
+if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
 else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
-if [ "$(cat "$DLOG")" = "$ARGV" ]; then pass "P1: doppler is called exactly three times — the flag read, then DOPPLER_PROJECT and DOPPLER_CONFIG with the same -p soleur -c prd"
+if [ "$(cat "$DLOG")" = "$ARGV" ]; then pass "P1: doppler is called exactly four times — the flag read, DOPPLER_PROJECT, DOPPLER_CONFIG, then the pin read WITH --no-exit-on-missing-secret, all -p soleur -c prd"
 else fail "P1: the doppler argv differs" "$(tr '\n' '|' < "$DLOG")"; fi
 if [ -z "$(ls -A "$CTMP")" ]; then pass "P1: the stderr capture file is removed on exit (TMPDIR left empty)"
 else fail "P1: a tempfile survived the run" "$(ls -A "$CTMP" | tr '\n' ' ')"; fi
@@ -207,6 +236,54 @@ if case_off space 'true '; then pass "P5b: 'true ' (trailing space) is not true 
 else fail "P5b: 'true ' was not flag=off" "$(detail)"; fi
 if case_off canary 'off-CANARY-5d1e' && ! grep -q 'CANARY' "$OUT"; then pass "P6: the flag value itself is never printed"
 else fail "P6: the flag value was printed" "out=[$(tr '\n' '|' < "$OUT")]"; fi
+# ── host-key pin (#7226, plan D3) ─────────────────────────────────────────────────────
+case_pin_ok() { # the pin file holds exactly the key line; only its fingerprint is printed
+  run_case pin-ok false
+  [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(ok_out flag=off)" ] \
+    && [ "$(cat "$RT/git-data.pin" 2>/dev/null)" = "$PIN" ] && ! grep -qF "${PIN#* }" "$OUT"
+}
+case_pin_refused() { # <label> <reason> [VAR=value ...] — CASE_PIN set by the caller
+  local label="$1" reason="$2"; shift 2
+  run_case "pin-$label" false "$@"
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(printf '%s\n%s' "$TOFU_PRESENT" "$(refusal "git_data_host_key_unavailable reason=$reason")")" ] \
+    && [ ! -e "$RT/git-data.pin" ] && ! grep -q 'CANARY' "$OUT"
+}
+case_tofu() { # <label> <git-auth-path> <expected-line>
+  run_case "tofu-$1" false GIT_AUTH_TS_PATH="$2"
+  [ "$RC" = 0 ] && [ "$(head -1 "$OUT")" = "$3" ] && ! grep -q '::warning' "$OUT"
+}
+if case_pin_ok; then pass "K1: a valid ED25519 pin -> \$RUNNER_TEMP/git-data.pin holds exactly the key line; stdout carries its SHA256 fingerprint, never the key"
+else fail "K1: a valid pin was not written or was printed raw" "$(detail) pin=[$(head -c 120 "$RT/git-data.pin" 2>/dev/null)]"; fi
+if CASE_PIN=ABSENT case_pin_refused absent absent; then pass "K2: GIT_DATA_SSH_HOST_KEY absent (exit 0, empty WITH the flag) -> verdict=git_data_host_key_unavailable reason=absent, exit 5, no pin file"
+else fail "K2: an absent pin was not refused as reason=absent" "$(detail)"; fi
+if CASE_PIN=ABSENT case_pin_refused unreadable unreadable SHIM_IGNORE_FLAG=1; then pass "K3: a pin read that exits non-zero -> reason=unreadable (never absent, never flag_read_failed), stderr not printed"
+else fail "K3: a failed pin read was not reason=unreadable" "$(detail)"; fi
+_inv_n=0
+for spec in "ecdsa|$ECDSA_PIN" "short|$PIN_SHORT" "comment|$PIN pin@host-CANARY" "twolines|$PIN"$'\n'"$PIN" \
+            "lead-space| $PIN" "marker|@cert-authority $PIN" "rsa|ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ-CANARY" "cr|$PIN"$'\r'; do
+  _l="${spec%%|*}"
+  if CASE_PIN="${spec#*|}" case_pin_refused "invalid-$_l" invalid; then _inv_n=$((_inv_n + 1))
+  else fail "K4 ($_l): a malformed pin was not refused as reason=invalid" "$(detail)"; fi
+done
+if [ "$_inv_n" = 8 ]; then pass "K4: 8 malformed pins (ECDSA, truncated, trailing comment, two lines, leading space, marker, RSA, CR) -> reason=invalid, exit 5, no pin file, value never printed"
+else fail "K4: only $_inv_n of 8 malformed pins were refused as reason=invalid"; fi
+CASE_PIN="$PIN"$'\n' run_case pin-nl false
+if [ "$RC" = 0 ] && [ "$(cat "$RT/git-data.pin" 2>/dev/null)" = "$PIN" ]; then pass "K5 (must-PASS): the pin as --plain prints it with a trailing newline is accepted"
+else fail "K5: a pin with one trailing newline was refused" "$(detail)"; fi
+case_tofu_present() {
+  run_case tofu-present false GIT_AUTH_TS_PATH="$T/git-auth-tofu.ts"
+  [ "$RC" = 0 ] && [ "$(head -2 "$OUT")" = "$TOFU_PRESENT" ]
+}
+if case_tofu_present; then pass "K6: git-auth.ts carrying TOFU_FALLBACK_OPTS -> TOFU_ARM present plus a ::warning naming #5914"
+else fail "K6: the present fixture did not print TOFU_ARM present" "$(detail)"; fi
+if case_tofu absent "$T/git-auth-strict.ts" "TOFU_ARM absent"; then pass "K7: git-auth.ts without the fallback constant -> TOFU_ARM absent, no warning"
+else fail "K7: the strict fixture did not print TOFU_ARM absent" "$(detail)"; fi
+if case_tofu missing "$T/no-such-git-auth.ts" "TOFU_ARM unknown"; then pass "K8: an unreadable git-auth.ts -> TOFU_ARM unknown (never absent)"
+else fail "K8: an unreadable git-auth.ts was not TOFU_ARM unknown" "$(detail)"; fi
+run_case pin-no-rt false RUNNER_TEMP=
+if [ "$RC" = 5 ] && [ "$(tail -2 "$OUT")" = "$(refusal pin_write_failed)" ]; then pass "K9: RUNNER_TEMP unset -> verdict=pin_write_failed, exit 5"
+else fail "K9: an unset RUNNER_TEMP was not refused" "$(detail)"; fi
+
 run_case xtrace false
 : > "$DLOG"
 timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" DOPPLER_STORE="$T/store-xtrace" DOPPLER_LOG="$DLOG" DOPPLER_TOKEN=fixture-prd-read \
@@ -238,6 +315,11 @@ check("G1-step: the precheck step runs the script, with no if: and no continue-o
       str(p.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-flag-precheck.sh" and "if" not in p and not p.get("continue-on-error"), p)
 check("G1-env: the precheck step binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD}",
       p.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}"}, p.get("env"))
+cfg = [i for i, s in enumerate(steps) if s.get("id") == "ssh_config"]
+pin_users = [s.get("id") or s.get("name") for s in steps if "git-data.pin" in json.dumps(s)]
+check("G1-pin: the pin the precheck writes is read by the ssh_config step, which runs after the precheck and the bridge",
+      len(cfg) == 1 and len(pre) == 1 and len(bridge) == 1 and pre[0] < bridge[0] < cfg[0]
+      and "ssh_config" in pin_users and all(u in ("ssh_config", "Tear down cloudflared SSH bridge") for u in pin_users), (pre, bridge, cfg, pin_users))
 sites = [("step", s.get("id") or s.get("name")) for s in steps if "DOPPLER_TOKEN_PRD" in json.dumps(s)]
 job = (wf.get("jobs") or {}).get("cutover") or {}
 sites += [("job", k) for k, v in job.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
@@ -263,7 +345,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -ge 6 ] || fail "G1: only $_wf_n workflow verdicts were produced (expected 6) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -ge 7 ] || fail "G1: only $_wf_n workflow verdicts were produced (expected 7) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
 
 # ── mutation matrix (Guard 1) ─────────────────────────────────────────────────────────
 echo; echo "--- mutation matrix (each row must turn its named case RED)"
@@ -354,13 +436,34 @@ if mutate stderr-printed "$PRECHECK" 2 's#^    refuse "flag_read_failed reason=\
   CASE_SCRIPT="$MUTANT" mutant_red stderr-printed case_reason mprint auth_invalid 1 SHIM_ERR=auth
 fi
 
+# Row 9 — drop the pin shape check (an ECDSA key would then be written as the git-data pin).
+# shellcheck disable=SC2016
+if mutate pin-shape-unchecked "$PRECHECK" 2 's#^if ! \[\[ \$pin =~ \$PIN_RE \]\]; then$#if false; then#'; then
+  CASE_PIN="$ECDSA_PIN" CASE_SCRIPT="$MUTANT" mutant_red pin-shape-unchecked case_pin_refused m-ecdsa invalid
+fi
+# Row 10 — read a failed pin read as an absent pin.
+# shellcheck disable=SC2016
+if mutate pin-unreadable-as-absent "$PRECHECK" 2 's#^  refuse "git_data_host_key_unavailable reason=unreadable"$#  pin=""#'; then
+  CASE_PIN=ABSENT CASE_SCRIPT="$MUTANT" mutant_red pin-unreadable-as-absent case_pin_refused m-unreadable unreadable SHIM_IGNORE_FLAG=1
+fi
+# Row 11 — print the raw pin next to its fingerprint.
+# shellcheck disable=SC2016
+if mutate pin-printed "$PRECHECK" 2 's#^echo "git_data_pin=present fp=\$\{fp\}"$#echo "git_data_pin=present fp=${fp} key=${pin}"#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red pin-printed case_pin_ok
+fi
+# Row 12 — the TOFU_ARM probe never reports present.
+# shellcheck disable=SC2016
+if mutate tofu-arm-blind "$PRECHECK" 2 "s#^elif grep -qw 'TOFU_FALLBACK_OPTS' \"\\\$GIT_AUTH_TS\"; then\$#elif false; then#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red tofu-arm-blind case_tofu_present
+fi
+
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=8   # Guard 1 matrix rows
+MUTANT_FLOOR=12  # Guard 1 matrix rows 1-8, pin rows 9-12
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 20 + workflow rows 6 + mutants 8 x 2 = 42 (exact).
-FLOOR=42
+# Assertion FLOOR: script cases 20 + pin/TOFU_ARM cases 9 (K1-K9) + workflow rows 7 + mutants 12 x 2 = 60 (exact).
+FLOOR=60
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

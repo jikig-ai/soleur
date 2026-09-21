@@ -37,6 +37,22 @@
 #   any other value          -> flag=off                                         exit 0
 # `true` is compared exactly (no case folding, no trimming): the app enables the store only on
 # process.env.GIT_DATA_STORE_ENABLED === "true" (apps/web-platform/server/workspace-resolver.ts).
+#
+# GIT-DATA HOST-KEY PIN (#7226, plan D3). The same step, with the same `prd` token, reads
+# GIT_DATA_SSH_HOST_KEY (published by Terraform when git-data is born or replaced) with the same
+# --no-exit-on-missing-secret semantics, validates its shape, and writes it to
+# $RUNNER_TEMP/git-data.pin for the workflow's "Write git-data ssh_config" step. The raw value is
+# never printed: only its SHA256 fingerprint, computed after validation.
+#   the read exits non-zero  -> verdict=git_data_host_key_unavailable reason=unreadable   exit 5
+#   exit 0 + empty           -> verdict=git_data_host_key_unavailable reason=absent       exit 5
+#   not one ED25519 key line -> verdict=git_data_host_key_unavailable reason=invalid      exit 5
+#   RUNNER_TEMP unusable     -> verdict=pin_write_failed                                  exit 5
+#   valid                    -> git_data_pin=present fp=SHA256:<fingerprint>
+# Before the pin read it prints one informational line about the app's unpinned fallback arm:
+#   TOFU_ARM present|absent|unknown — whether the file GIT_AUTH_TS_PATH names (default: the
+#   checkout's apps/web-platform/server/git-auth.ts) still carries the shared TOFU_FALLBACK_OPTS
+#   constant. `present` also raises a ::warning: that arm must be deleted (#5914) before
+#   GIT_DATA_STORE_ENABLED is ever set.
 set -euo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
@@ -89,6 +105,50 @@ fi
 if [ "$flag" = true ]; then
   refuse flag_already_true
 fi
+
+# --- TOFU_ARM (informational) ---
+GIT_AUTH_TS="${GIT_AUTH_TS_PATH:-$(dirname "$0")/../server/git-auth.ts}"
+if [ ! -r "$GIT_AUTH_TS" ] || [ ! -f "$GIT_AUTH_TS" ]; then
+  echo "TOFU_ARM unknown"
+elif grep -qw 'TOFU_FALLBACK_OPTS' "$GIT_AUTH_TS"; then
+  echo "TOFU_ARM present"
+  echo "::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set"
+else
+  echo "TOFU_ARM absent"
+fi
+
+# --- git-data host-key pin ---
+# twin: write-known-hosts.sh (ED25519 arm), resolveGitDataHostKeyPin in git-data-replication.ts
+PIN_RE='^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$'
+pin_rc=0
+: > "$ERRF"
+pin="$(doppler secrets get GIT_DATA_SSH_HOST_KEY --plain --no-exit-on-missing-secret -p soleur -c prd 2>"$ERRF")" || pin_rc=$?
+if [ "$pin_rc" -ne 0 ]; then
+  refuse "git_data_host_key_unavailable reason=unreadable"
+fi
+if [ -z "$pin" ]; then
+  refuse "git_data_host_key_unavailable reason=absent"
+fi
+# $PIN_RE unquoted: a quoted right-hand side is a literal string match, not a regex.
+if ! [[ $pin =~ $PIN_RE ]]; then
+  refuse "git_data_host_key_unavailable reason=invalid"
+fi
+PIN_OUT="${RUNNER_TEMP:-}/git-data.pin"
+if [ -z "${RUNNER_TEMP:-}" ] || ! [[ $PIN_OUT =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
+  refuse pin_write_failed
+fi
+rm -f "$PIN_OUT" 2>/dev/null || true
+if ! printf '%s\n' "$pin" > "$PIN_OUT"; then
+  refuse pin_write_failed
+fi
+fp="$(ssh-keygen -lf "$PIN_OUT" 2>/dev/null | awk '{print $2}')" || fp=""
+case "$fp" in
+  SHA256:*) : ;;
+  *) rm -f "$PIN_OUT"; refuse "git_data_host_key_unavailable reason=invalid" ;;
+esac
+chmod 0444 "$PIN_OUT" || refuse pin_write_failed
+echo "git_data_pin=present fp=${fp}"
+
 if [ -z "$flag" ]; then
   echo "flag=unset"
 else

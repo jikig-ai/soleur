@@ -804,14 +804,24 @@ jobs:
 
       # LOAD-BEARING registration (explicit list, no glob — an unregistered suite is silent ZERO
       # coverage). BREADTH half of the dual-delivery invariant, complementing fresh-boot-parity
-      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 17 web-1-pinned SSH
+      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 18 web-1-pinned SSH
       # provisioners in server.tf and every artifact each delivers, asserting each has a fresh-boot
       # counterpart (bake + cloud-init) so a fresh cattle host cannot silently come up without it.
       # Before #7000, 10 of the 15 had no suite pinning that correspondence and 5 were named by no
       # suite at all. Also pins the web-1 host-scoping itself: a for_each fan-out fails here,
-      # because CI has one SSH route (web-1) and a bare -target hits every instance.
-      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 17 SSH provisioners)
+      # because CI has one SSH route (web-1) and a bare -target hits every instance. Also runs
+      # Guard 2 (#7226, ADR-237): every Terraform connection block in every .tf pins host_key,
+      # and a web-1 block pins it to local.web_1_ssh_host_key.
+      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 18 SSH provisioners, #7226 host_key)
         run: bash apps/web-platform/infra/web-host-provisioner-parity.test.sh
+
+      # (#7226 / #8125, ADR-237 Guard 3, HCL site) local.web_1_ssh_host_key, extracted verbatim
+      # from server.tf, evaluated with `terraform console` (no providers) against fixture pin
+      # files: 0/2 key lines, CR smuggling, a trailing comment, a leading space, a truncated or
+      # non-ECDSA key must ERROR, a valid file must yield the key, and the bash writer twin must
+      # agree on every fixture. Needs the setup-terraform step above.
+      - name: Run web-1 SSH host-key pin HCL tests (#7226 Guard 3)
+        run: bash apps/web-platform/infra/web-1-host-key-local.test.sh
 
       # The guard above is GREEN the day it lands, as every drift guard is; green says nothing
       # about whether it CAN go red. This battery breaks each invariant on a sandbox copy and

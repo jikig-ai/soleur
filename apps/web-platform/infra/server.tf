@@ -472,6 +472,58 @@ resource "hcloud_server" "web" {
   }
 }
 
+# ── web-1 SSH host-key pin (#7226 / #8125, ADR-237) ─────────────────────────────────────────
+# EVERY connection block that dials web-1 sets `host_key = local.web_1_ssh_host_key`, so
+# Terraform's Go SSH client refuses any key but web-1's committed ECDSA-P256 key instead of
+# accepting whatever the peer presents (Guard 2, web-host-provisioner-parity.test.sh).
+#
+# Why ECDSA-P256: Terraform writes host_key as a known_hosts line and never sets
+# HostKeyAlgorithms, and its vendored x/crypto prefers ECDSA over ED25519, so against Ubuntu's
+# default host keys it negotiates ECDSA. A pin of any other type is a "key mismatch".
+#
+# The selection is the HCL twin of the bash writer's "exactly one key line" rule: one() over
+# EVERY non-blank, non-`#` line errors on two or more and yields null on none, and regex()
+# errors on null or on anything that is not one anchored ECDSA-P256 key. So every plan that
+# reads the pin fails closed on a mis-shaped file (a `check` block would only warn, and a
+# precondition is skipped by -target plans that leave its resource out). CR bytes are dropped
+# first, as the writer does. web-1-host-key-local.test.sh drives this against fixture files.
+#
+# Re-capture (web-1 re-keyed or replaced, #6931): scripts/capture-web-1-host-key.sh + a PR.
+# Never drop host_key to "unblock" an apply -- see ADR-237 and the runbook's H4 triage.
+locals {
+  web_1_ssh_host_key = regex(
+    "^ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB[A-Za-z0-9+/]{86}=$", # twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh
+    one([for l in split("\n", replace(file("${path.module}/web-1-ssh-host-key.pub"), "\r", "")) : l if trimspace(l) != "" && !startswith(trimspace(l), "#")]),
+  )
+}
+
+# Merge-time proof that the Terraform path accepts the committed pin (ADR-237 D2). A read-only
+# no-op over the SAME connection as its siblings, re-run whenever the pin OR the Terraform
+# version changes: a Terraform bump can change x/crypto's host-key algorithm preference (plan
+# R4), and a wrong pin must fail THIS apply at merge time rather than weeks later inside an
+# unrelated PR's provisioner. var.terraform_version is fed from the workflow's
+# TERRAFORM_VERSION as TF_VAR_terraform_version (empty in operator-local applies).
+# Writes nothing on the host, so the provisioner-parity sweep has no destination to match.
+resource "terraform_data" "web_1_host_key_probe" {
+  triggers_replace = sha256("${local.web_1_ssh_host_key}|${var.terraform_version}")
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "true",
+    ]
+  }
+}
+
 # Deploy disk-monitor.sh and systemd timer to the existing server.
 # Cloud-init handles new servers; this provisioner handles the existing one
 # (ignore_changes on user_data means cloud-init changes do not apply to it).
@@ -488,6 +540,7 @@ resource "terraform_data" "disk_monitor_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -532,6 +585,7 @@ resource "terraform_data" "send_failed_alert_probe" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   lifecycle {
@@ -567,6 +621,7 @@ resource "terraform_data" "resource_monitor_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -611,6 +666,7 @@ resource "terraform_data" "container_restart_monitor_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -693,6 +749,7 @@ resource "terraform_data" "private_nic_guard_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -749,6 +806,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -820,6 +878,7 @@ resource "terraform_data" "inngest_consumer_probe_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -884,6 +943,7 @@ resource "terraform_data" "git_data_probe_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -959,6 +1019,7 @@ resource "terraform_data" "fail2ban_tuning" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   # Ensure fail2ban is installed before dropping the jail.d override. The
@@ -1045,6 +1106,7 @@ resource "terraform_data" "journald_persistent" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   # The drop-in dir does NOT exist by default on Ubuntu — systemd ships
@@ -1219,6 +1281,7 @@ resource "terraform_data" "cosign_trusted_root" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "remote-exec" {
@@ -1289,6 +1352,7 @@ resource "terraform_data" "registry_insecure_config" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "remote-exec" {
@@ -1453,6 +1517,7 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   # The two scripts are on-disk files → straight scp. hooks.json is NOT: it is a
@@ -1815,6 +1880,7 @@ resource "terraform_data" "docker_seccomp_config" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "remote-exec" {
@@ -1875,6 +1941,7 @@ resource "terraform_data" "apparmor_bwrap_profile" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -1904,6 +1971,7 @@ resource "terraform_data" "orphan_reaper_install" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   provisioner "file" {
@@ -1962,6 +2030,7 @@ resource "terraform_data" "cron_egress_firewall" {
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
   }
 
   # `file` (scp) does NOT create remote parents and /etc/soleur is not shipped
