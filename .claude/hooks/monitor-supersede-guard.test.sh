@@ -56,6 +56,11 @@ record() {  # record <session> <tool> <tool_input> <tool_response>
     '{session_id:$s, tool_name:$t, tool_input:$ti, tool_response:$tr}' | bash "$REC" >/dev/null 2>&1
 }
 complete_task() { printf '{"type":"queue-operation","content":"<task-notification><task-id>%s</task-id><status>completed</status></task-notification>"}\n' "$1" >> "$TRANSCRIPT"; }
+# The other terminal shapes, as measured over 400 session transcripts (#8420):
+# same `queue-operation` record, `content` a string of \n-separated tags. An
+# expiry carries NO <status> tag at all — only an <event> notice.
+expire_task() { printf '{"type":"queue-operation","content":"<task-notification>\\n<task-id>%s</task-id>\\n<event>[Monitor expired after %s with no events delivered. Re-arm if still needed.]</event>\\n</task-notification>"}\n' "$1" "${2:-30m}" >> "$TRANSCRIPT"; }
+fail_task()   { printf '{"type":"queue-operation","content":"<task-notification>\\n<task-id>%s</task-id>\\n<status>failed</status>\\n<summary>Monitor \\"CI poll\\" script failed (exit 1)</summary>\\n</task-notification>"}\n' "$1" >> "$TRANSCRIPT"; }
 
 reported() { printf '%s' "$1" | grep -q '"additionalContext"'; }
 blocked()  { printf '%s' "$1" | grep -q '"permissionDecision"'; }
@@ -300,11 +305,52 @@ TRANSCRIPT="$WORK/does-not-exist.jsonl"
 out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
 verdict "$rc" 'an unreadable transcript degrades to REPORTING (never silently drops)'
 
+# --- 31-35: every TERMINAL shape clears an arm, not only `completed` ---------
+# #8420 / #7961: a monitor also ends `failed`, or by harness expiry — an <event>
+# notice with no <status> tag (850 of them in 400 transcripts). Reading only
+# `completed` listed those dead arms as live and sent the agent to TaskStop ids
+# that answered `No task found`.
+fresh 31
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+expire_task T1
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'a prior monitor that EXPIRED (event notice, no status tag) is SILENT'
+
+fresh 32
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+fail_task T1
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'a prior monitor that FAILED is SILENT'
+
+fresh 33
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+printf '{"type":"queue-operation","content":"<task-notification>\\n<task-id>T1</task-id>\\n<event>[Monitor timed out — re-arm if needed.]</event>\\n</task-notification>"}\n' >> "$TRANSCRIPT"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'the legacy timed-out notice (#7961) is SILENT'
+
+# The expired arm is recorded FIRST, so a loop that stops at the first terminal
+# arm (a `break` where `continue` belongs) drops the live one behind it.
+fresh 34
+record s1 Monitor "$CI" '{"taskId":"TEXP"}'
+record s1 Monitor '{"command":"gh pr view 7753","description":"merge","timeout_ms":600000}' '{"taskId":"TLIVE"}'
+expire_task TEXP
+out=$(guard s1 "$CI2")
+rc=1; printf '%s' "$out" | grep -q 'TLIVE' && ! printf '%s' "$out" | grep -q 'TEXP' && rc=0
+verdict "$rc" 'one expired + one live on one target names exactly the live id'
+
+# Must-PASS non-canonical: the expiry notice's tail varies (window, event count);
+# the predicate keys on `expired after <digits>`, not on the "no events" wording.
+fresh 35
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+printf '{"type":"queue-operation","content":"<task-notification>\\n<task-id>T1</task-id>\\n<event>[Monitor expired after 20m with 3 events delivered.]</event>\\n</task-notification>"}\n' >> "$TRANSCRIPT"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'an expiry notice reading "after 20m with 3 events delivered" is SILENT'
+
 printf '\n'
 # Floor. `-lt` (not `-ne`) so the suite grows without churn AND so
 # scripts/guard-vacuity-floor.test.sh can recognise the shape at all: its sweep
 # matches -lt/-le/-ge only, and the previous -ne floor was invisible to it.
-MIN_CASES=30
+MIN_CASES=35
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

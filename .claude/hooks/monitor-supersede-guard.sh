@@ -29,8 +29,12 @@
 #      matched its own shell.
 #   3. The transcript. `transcript_path` is in the hook payload; a Monitor's
 #      PostToolUse response carries `toolUseResult.taskId`; and a task's end is
-#      recorded as a `<status>completed</status>` task-notification keyed to that
-#      id. THIS ONE WORKS, and is what the hook uses.
+#      recorded as a task-notification keyed to that id. The terminal set is
+#      `<status>completed</status>`, `<status>failed</status>`, an
+#      `<event>[Monitor expired after …]` notice (no status tag), and the legacy
+#      `<event>[Monitor timed out …]` (#7961). Reading `completed` alone listed
+#      every expired or failed arm as live (#8420). THIS ONE WORKS, and is what
+#      the hook uses.
 #
 # Route 3 has the same contamination trap as route 2 and it must be filtered
 # structurally: the transcript also contains the AGENT'S OWN command text, so a
@@ -50,7 +54,7 @@
 #   tool_name == Monitor
 #   AND a signature is extractable (lib/monitor-sig.sh; its misses are listed there)
 #   AND this session has arms on that signature
-#   AND those arms are neither stopped (exact, by task id) nor observed complete
+#   AND those arms are neither stopped (exact, by task id) nor observed terminal
 #
 # Hook stdin: JSON payload with session_id + tool_name + tool_input.
 # Hook stdout: JSON {hookSpecificOutput:{additionalContext}, systemMessage} when
@@ -130,14 +134,16 @@ CANDIDATES=$(printf '%s' "$ROWS" | jq -s -r --arg s "$SESSION" --arg sig "$SIG" 
   ] | .[] | "\(.ts)\t\(.task // "")\t\(.desc // "")"' 2>/dev/null) || exit 0
 [ -n "$CANDIDATES" ] || exit 0
 
-# ---- liveness: is this task OBSERVED complete? -----------------------------
-task_is_complete() {   # $1 = task id; rc 0 => observed complete
+# ---- liveness: is this task OBSERVED terminal? -----------------------------
+# killed/stopped are left out: measured, zero occurrences on a Monitor in 400
+# transcripts, and a TaskStop'd monitor is already cleared by the stop filter.
+task_is_terminal() {   # $1 = task id; rc 0 => observed terminal
   [ -n "${1:-}" ] || return 1
   [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ] || return 1
   # Count with -c and compare, rather than letting a quiet grep end the pipe.
   # Under `pipefail`, a producer still holding unwritten data when a quiet grep
   # exits early makes a SUCCESSFUL match report failure (#6992). Here that
-  # INVERTS liveness — a completed monitor reads as still running — and it
+  # INVERTS liveness — an ended monitor reads as still running — and it
   # surfaces only on a transcript big enough to still be writing, which no
   # fixture is. Verified on the real 8.9MB transcript after CI caught it
   # following a green local run.
@@ -149,7 +155,7 @@ task_is_complete() {   # $1 = task id; rc 0 => observed complete
       | jq -r 'select((.type? // "") != "assistant")
                | (.content // (.message.content | if type=="string" then . else ([.[]? | .text? // empty] | join(" ")) end) // "")
                | tostring' 2>/dev/null \
-      | grep -c '<status>completed</status>' || true)
+      | grep -cE '<status>(completed|failed)</status>|<event>\[Monitor (expired after [0-9]+|timed out)' || true)
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
   [ "$n" -gt 0 ]
 }
@@ -159,7 +165,7 @@ LIVE_LIST=""
 while IFS=$'\t' read -r a_ts a_task a_desc; do
   [ -n "${a_ts:-}" ] || continue
   case " $STOPPED " in *" $a_task "*) continue ;; esac
-  task_is_complete "$a_task" && continue
+  task_is_terminal "$a_task" && continue
   age=$(( NOW - a_ts ))
   LIVE_N=$(( LIVE_N + 1 ))
   LIVE_LIST="${LIVE_LIST}  - ${a_task:-(no task id)} — \"${a_desc}\" (armed ${age}s ago)"$'\n'
@@ -175,8 +181,7 @@ MSG="monitor-supersede: this session has ${LIVE_N} monitor(s) still watching ${S
 ${LIVE_LIST}Arming another means duplicate work on one target — for a poll loop, duplicate
 requests every interval; for a ws:// stream, a second subscription — and two
 reports of the same result. TaskStop the one(s) above you are replacing.
-(Liveness is read from the transcript: stopped and completed monitors are
-already excluded, so every task listed was still running when this was written.)"
+A `TaskStop` answering `No task found` means that row had already ended."
 
 jq -n --arg m "$MSG" '{
   hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: $m },
