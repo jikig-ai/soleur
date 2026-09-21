@@ -850,8 +850,8 @@ are Mechanical unless marked otherwise. The two Taste items are in `decision-cha
   (fail-closed), and the FAIL message names the remedy. It is Taste T1.
 - **An undelivered change bundle.** The replace delivers all of `main`'s `cloud-init-inngest.yml`. The job's plan
   summary is the review point.
-- **Dependency:** a non-empty `TF_VAR_sentry_dsn` at dispatch time. An empty one is surfaced by `rc=nodsn` and by the
-  denominator.
+- **Dependency:** a non-empty `TF_VAR_sentry_dsn` at dispatch time. An empty one is surfaced by the job's advisory
+  `::warning::` step (it does not block, per T2), by `rc=nodsn`, and by the denominator.
 
 ## Sharp Edges
 

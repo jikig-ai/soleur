@@ -1150,8 +1150,9 @@ docker daemon config; authenticates before the pull; and reports `inngest_zot` /
   would replace the scheduler. Rotate the DSN only together with those windows.
 - **Guards.** A second `lifecycle.precondition` on `hcloud_server.inngest` refuses a malformed DSN
   (a trailing newline makes the whole cloud-config unparseable, so the replacement would boot with
-  none of its configuration), and the `inngest-host-replace` job refuses an empty or unreadable
-  `SENTRY_DSN` before it plans.
+  none of its configuration). The `inngest-host-replace` job WARNS, and proceeds, on an empty or
+  unreadable `SENTRY_DSN` before it plans. It does not refuse, because that job is also the recovery
+  route after a failed `inngest-volume-recut`, and the boot does not need the DSN.
 - **Delivery hazard.** Every replace of this host inherits the `INNGEST_CUTOVER_FLIP` stranding
   hazard: check the flag first, per `runbooks/inngest-server.md` § "Inherited `done` after a host
   replace (#7228)".

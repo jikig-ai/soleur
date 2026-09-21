@@ -2031,24 +2031,30 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false -lockfile=readonly
 
-      - name: Assert SENTRY_DSN present (#6500)
+      - name: Warn if SENTRY_DSN is absent (#6500)
+        # Advisory, and it degrades open, like the #7228 strand warning above. This job is also
+        # the RECOVERY route after a failed inngest-volume-recut (see that job's RECOVERY lines),
+        # and the boot does not need the DSN (the precondition in inngest-host.tf admits ""), so
+        # a hard fail here would block restoring the sole scheduler over a missing observability
+        # value, or over a transient Doppler read. Decision T2 in #6500's decision-challenges.md.
+        continue-on-error: true
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # #6500: this host now bakes SENTRY_DSN, and its Sentry event is what zot-soak-6122.sh
-          # counts. An empty or unreadable value would spend a maintenance window on a replace that
-          # reports nothing. Fail closed on BOTH, before the plan; the shape is the precondition's
-          # job (inngest-host.tf). The value is never printed.
+          # counts. An empty or unreadable value means the replacement reports nothing to the
+          # soak. Say so BEFORE the plan, and proceed; the shape is the precondition's job
+          # (inngest-host.tf). The value is never printed.
           dsn_rc=0
           DSN=$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
           if [[ "$dsn_rc" -ne 0 ]]; then
-            echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}) — fail-closed. doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
-            exit 1
+            echo "::warning::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}); proceeding. If the value is really absent, this replacement will not count toward the zot soak (#6500). doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
+            exit 0
           fi
           if [[ -z "$DSN" ]]; then
-            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform — the replacement's soleur-boot-emit would phone home rc=nodsn and the soak's inngest_zot denominator would stay 0. Set it before replacing (#6500)."
-            exit 1
+            echo "::warning::SENTRY_DSN is empty in Doppler prd_terraform; proceeding. The replacement's soleur-boot-emit will phone home rc=nodsn and the soak's inngest_zot denominator will stay 0, so this replace will not count toward the zot soak (#6500)."
+            exit 0
           fi
           echo "SENTRY_DSN present and non-empty (value not printed)."
 
