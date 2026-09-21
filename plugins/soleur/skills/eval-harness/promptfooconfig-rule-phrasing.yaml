@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "B5 rule phrasing — prohibition vs positive-led vs none, in the live always-loaded corpus, on a generation surface (#8290, measurement-only)"
+
+# Model IDs are single-sourced. Run `bash scripts/gen-models.sh` to (re)generate
+# models.generated.json from the TS registry; no model literal is hardcoded here.
+# models.generated.json is a string list and cannot carry config, so the output cap is
+# set in the run environment: ANTHROPIC_MAX_TOKENS=300.
+providers: file://models.generated.json
+
+# Three arms become three grid columns. Each is a chat-format JS prompt: the LIVE
+# AGENTS.md + AGENTS.rules.md as the system message, the scenario as the user message.
+# The explicit `label:` is the arm identity the verdict reads — never file order.
+# The generator throws if a live target body drifts from the pinned fixture hash.
+prompts:
+  - id: file://prompts/rule-phrasing.cjs:prohibition
+    label: prohibition
+  - id: file://prompts/rule-phrasing.cjs:positive
+    label: positive
+  - id: file://prompts/rule-phrasing.cjs:none
+    label: none
+
+defaultTest:
+  assert:
+    # MEASUREMENT: always passes, records rule compliance (1.0 / 0.0) for the task's own
+    # rule (dispatch on vars.rule). The verdict is computed offline from the -o JSON by
+    # scripts/rule-phrasing-verdict.cjs, never from promptfoo's pass/fail.
+    - type: javascript
+      value: file://scripts/measure-rule-compliance.cjs
+
+# Opt-in/manual only (API spend; NOT CI-wired; measurement-only — NOT registered in
+# gated-skills.json). Run:
+#   ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o <out>.json
+#   node scripts/rule-phrasing-verdict.cjs <out>.json --repeat 3
+# Tasks: { vars: { rule, input } } per line, 6 per rule, 24 total.
+tests: file://tasks/rule-phrasing.jsonl

@@ -1,0 +1,115 @@
+{
+  "id": "E2",
+  "expect": "INVALID",
+  "note": "none arm scores the same as prohibition on every rule: V1 fails everywhere",
+  "k": {
+    "prohibition": {
+      "hr-never-git-stash-in-worktrees": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ],
+      "hr-never-run-commands-with-unbounded-output": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ],
+      "hr-never-write-to-claude-code-memory-claude": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ],
+      "wg-never-bump-version-files-in-feature": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ]
+    },
+    "positive": {
+      "hr-never-git-stash-in-worktrees": [
+        3,
+        3,
+        2,
+        3,
+        3,
+        3
+      ],
+      "hr-never-run-commands-with-unbounded-output": [
+        3,
+        3,
+        2,
+        3,
+        3,
+        3
+      ],
+      "hr-never-write-to-claude-code-memory-claude": [
+        3,
+        3,
+        2,
+        3,
+        3,
+        3
+      ],
+      "wg-never-bump-version-files-in-feature": [
+        3,
+        3,
+        2,
+        3,
+        3,
+        3
+      ]
+    },
+    "none": {
+      "hr-never-git-stash-in-worktrees": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ],
+      "hr-never-run-commands-with-unbounded-output": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ],
+      "hr-never-write-to-claude-code-memory-claude": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ],
+      "wg-never-bump-version-files-in-feature": [
+        1,
+        2,
+        1,
+        2,
+        1,
+        2
+      ]
+    }
+  },
+  "repeat": 3,
+  "models": [
+    "anthropic:messages:claude-opus-5",
+    "anthropic:messages:claude-sonnet-5",
+    "anthropic:messages:claude-haiku-4-5-20251001"
+  ]
+}

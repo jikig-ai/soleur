@@ -1,0 +1,10 @@
+{
+  "id": "E9",
+  "extends": "E0-clear-win.json",
+  "expect": "ABORTED",
+  "note": "one cell with 2 results where repeat = 3",
+  "mutate": {
+    "drop_one": true
+  },
+  "repeat": 3
+}

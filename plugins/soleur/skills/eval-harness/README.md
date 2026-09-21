@@ -154,6 +154,37 @@ defers only the irreducible set factor. Half-covering a multi-label surface with
 harness ships false confidence — defer it whole instead. See
 `knowledge-base/project/learnings/2026-06-29-multi-label-classifier-gateable-core-is-its-single-token-output-slice.md`.
 
+## Measurement-only target: `rule-phrasing` (B5, #8290)
+
+Measures whether rewriting four always-loaded `Never …` rule bodies positive-led changes
+**generated** compliance, in the real loaded context. It is **measurement-only**: not registered
+in [gated-skills.json](./gated-skills.json), and it gates no edit. Three arms × 3 models × 24 tasks ×
+`--repeat 3` = **648 calls**. Each call carries the live `AGENTS.md` + `AGENTS.rules.md` (~43 KB,
+about 12k system tokens), so a run is about **7.8M input tokens**. Output is capped with
+`ANTHROPIC_MAX_TOKENS=300` in the run environment, because `models.generated.json` cannot carry config.
+
+- **Arms.** [prompts/rule-phrasing.cjs](./prompts/rule-phrasing.cjs) is the **first `.cjs` chat-array
+  prompt** in this harness; every other target uses `prompts/*.txt`. It builds `prohibition` (the live
+  corpus), `positive` (the four bodies swapped for the rewrites in
+  [prompts/rule-phrasing-bodies.json](./prompts/rule-phrasing-bodies.json)) and `none` (the four bodies
+  and their four index pointers removed). It throws if a live body's sha256 differs from the fixture.
+- **Scoring.** [scripts/measure-rule-compliance.cjs](./scripts/measure-rule-compliance.cjs) scores only
+  command lines and fenced blocks, so a refusal that names the banned command in prose is compliant.
+- **Verdict.** [scripts/rule-phrasing-verdict.cjs](./scripts/rule-phrasing-verdict.cjs) reduces the
+  `-o` JSON to one token: `EXTEND`, `REJECT`, `REJECT-CEILING`, `INCONCLUSIVE`, `INVALID` or `ABORTED`.
+- **No-spend gates.** `npx promptfoo validate config -c promptfooconfig-rule-phrasing.yaml`, a
+  `node -e` render of the three arms, and `bash test/rule-phrasing.test.sh`.
+
+```bash
+cd plugins/soleur/skills/eval-harness
+npx promptfoo validate config -c promptfooconfig-rule-phrasing.yaml           # no API
+node -e 'const g=require("./prompts/rule-phrasing.cjs"); for (const a of g.ARMS) console.log(a, g.buildCorpus(a).length)'
+bash test/rule-phrasing.test.sh                                                # no API
+# SPENDS (648 calls):
+ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o /path/outside/repo/b5-eval-raw.json
+node scripts/rule-phrasing-verdict.cjs /path/outside/repo/b5-eval-raw.json --repeat 3
+```
+
 ## Files
 
 | Path | Role |
@@ -172,5 +203,11 @@ harness ships false confidence — defer it whole instead. See
 | [enums/go-routes.json](./enums/go-routes.json) · [enums/triage-levels.json](./enums/triage-levels.json) | closed label sets |
 | [prompts/](./prompts/go-skill.txt) | skill + baseline arm templates per target |
 | [tasks/go-routing.jsonl](./tasks/go-routing.jsonl) · [tasks/ticket-triage.jsonl](./tasks/ticket-triage.jsonl) | synthesized golden tasks |
+| [promptfooconfig-rule-phrasing.yaml](./promptfooconfig-rule-phrasing.yaml) | B5 rule-phrasing target config (measurement-only, 3 arms) |
+| [prompts/rule-phrasing.cjs](./prompts/rule-phrasing.cjs) · [prompts/rule-phrasing-bodies.json](./prompts/rule-phrasing-bodies.json) | chat-array arm generator (hash-locked) + the pinned prohibition/positive bodies |
+| [scripts/measure-rule-compliance.cjs](./scripts/measure-rule-compliance.cjs) | B5 MEASUREMENT assert (command-context observables per `vars.rule`) |
+| [scripts/rule-phrasing-verdict.cjs](./scripts/rule-phrasing-verdict.cjs) | pure `verdict(json)` + CLI: the pre-registered B5 verdict |
+| [tasks/rule-phrasing.jsonl](./tasks/rule-phrasing.jsonl) | 24 generation scenarios, 6 per rule |
+| [test/rule-phrasing.test.sh](./test/rule-phrasing.test.sh) | B5 battery: E0-E9 verdict fixtures, observable sample table, hash-lock |
 | [test/](./test/gen-models.test.sh) | deterministic `.test.sh` unit tests (no live LLM) |
 | [test/registry-completeness.test.sh](./test/registry-completeness.test.sh) | parity gate: `eval-gate:block` source markers ↔ `gated-skills.json` `block_id`s (DEDUP + set-equality + charset) |

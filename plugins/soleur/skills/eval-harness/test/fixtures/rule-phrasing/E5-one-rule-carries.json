@@ -1,0 +1,32 @@
+{
+  "id": "E5",
+  "expect_not": "EXTEND",
+  "expect": "INCONCLUSIVE",
+  "note": "pooled win carried by 1 of 4 rules; pooled delta 0.167 >= MWE with lower > 0, so ONLY the >=3-of-4 rule check blocks EXTEND",
+  "k": {
+    "prohibition": {
+      "hr-never-git-stash-in-worktrees": 1,
+      "hr-never-run-commands-with-unbounded-output": 1,
+      "hr-never-write-to-claude-code-memory-claude": 1,
+      "wg-never-bump-version-files-in-feature": 1
+    },
+    "positive": {
+      "hr-never-git-stash-in-worktrees": 3,
+      "hr-never-run-commands-with-unbounded-output": 1,
+      "hr-never-write-to-claude-code-memory-claude": 1,
+      "wg-never-bump-version-files-in-feature": 1
+    },
+    "none": {
+      "hr-never-git-stash-in-worktrees": 0,
+      "hr-never-run-commands-with-unbounded-output": 0,
+      "hr-never-write-to-claude-code-memory-claude": 0,
+      "wg-never-bump-version-files-in-feature": 0
+    }
+  },
+  "repeat": 3,
+  "models": [
+    "anthropic:messages:claude-opus-5",
+    "anthropic:messages:claude-sonnet-5",
+    "anthropic:messages:claude-haiku-4-5-20251001"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "E9b",
+  "extends": "E0-clear-win.json",
+  "expect": "ABORTED",
+  "note": "one provider error row",
+  "mutate": {
+    "error_row": true
+  },
+  "repeat": 3
+}
