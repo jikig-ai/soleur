@@ -20,9 +20,25 @@ if [[ -z "$PR" || ! "$PR" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "$REPO_ROOT"
-
+# NO `cd` HERE, DELIBERATELY. This script operates on the CALLER's worktree, and the
+# only way to know which that is, is $PWD. An earlier revision resolved the target from
+# this file's own location — `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"`
+# followed by `cd "$REPO_ROOT"` — which points at whatever checkout the SCRIPT lives in,
+# not the worktree the caller is in, and so discarded the precondition stated above.
+#
+# Measured on 2026-09-20 (PR #8428's ship round): invoked by ABSOLUTE path from
+# .worktrees/docs-8392-session-errors-23-24, it refused with "HEAD is detached" while that
+# worktree's `git symbolic-ref -q HEAD` returned refs/heads/docs-8392-... rc 0 — the
+# detached HEAD belonged to the primary checkout it had silently relocated into. The refusal
+# was the BENIGN branch: had the primary checkout been on a feature branch (the normal case),
+# the merge and `git push` below would have synced and pushed an UNRELATED PR's branch,
+# reporting success, with the caller's worktree untouched.
+#
+# Invoking by relative path from inside the worktree masked this, because
+# `dirname(BASH_SOURCE)/../../..` then happens to resolve to that same worktree — which is
+# also why the test suite could not see it (every case copies the SUT into its fixture repo,
+# so the script's directory and the target are the same directory, a configuration production
+# never has). See the SUT-outside-the-repo case in sync-pr-behind.test.sh.
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "[pr-behind-sync] ERROR: not inside a worktree — cd to .worktrees/feat-* first" >&2
   exit 3
