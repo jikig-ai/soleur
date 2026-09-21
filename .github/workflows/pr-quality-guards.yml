@@ -307,8 +307,13 @@ jobs:
             echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
+      # Checkout is UNCONDITIONAL because the CI-skip scan below runs even when the
+      # density check is opted out, and it needs the tree. fetch-depth: 0 because that
+      # scan reads every commit message in base..HEAD — a shallow clone would scan
+      # fewer commits and still report a pass.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        if: steps.opt_out.outputs.skip != 'true'
+        with:
+          fetch-depth: 0
       - name: Run density check
         if: steps.opt_out.outputs.skip != 'true'
         env:
@@ -316,6 +321,24 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/check-auto-commit-density.sh
+      # Folded in here rather than given its own job: this job already reads the
+      # branch's COMMIT MESSAGES, which is exactly the surface a CI-skip directive
+      # hides in, and scripts/pr-fanout-ledger.txt caps this workflow at 10 jobs
+      # (#8149's remedy — fold into an existing job as a step). Deliberately NOT
+      # gated on the opt_out label: that label authorises a claude-config change,
+      # and no reviewer decision makes it correct to ship a token that silently
+      # disables post-merge CI, the version bump and the whole deploy chain (#8405).
+      - name: Block CI-skip directives reaching the squash commit (#8405)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          # The PR's own base sha, not origin/main: main can advance mid-run and a
+          # moving base would change which commits are in scope.
+          bash scripts/lint-squash-ci-directives.sh --base "$BASE_SHA" --pr "$PR_NUMBER"
 
   client-pii-grep:
     name: Block userId/email in extra of direct client Sentry.capture* (#3703)
