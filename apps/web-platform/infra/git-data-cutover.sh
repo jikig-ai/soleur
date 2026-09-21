@@ -15,12 +15,19 @@
 #      A refusal exits 5 with a fixed verdict word. A read that could not be completed
 #      (transport, timeout, oversized or multi-line answer) is `probe_failed rc=<n>`, never
 #      a store-state verdict.
-# Exit 0 means: access ok, store mounted on a plaintext device, not cut over, empty.
+#   3. the fence probe (#8101), refuse_if_fence_not_intact: the pre-receive fence the bootstrap
+#      plants is a real root:git 750 hooks directory holding a real, executable root:root 755
+#      pre-receive, the system core.hooksPath names it, and it sits on the accepted store
+#      device. It checks the fence's SHAPE, not which hook is installed.
+# Exit 0 means: access ok, store mounted on a plaintext device, not cut over, empty, fence
+# installed and wired.
 #
 # WHAT IT NO LONGER DOES. The rsync / freeze / repoint / flag-flip / rollback / wipe body was
 # deleted (git history keeps it). Its freeze and reload called systemd units that do not
 # exist on either host, and a second run after a repoint could rsync a store onto itself.
-# The real modes are rebuilt on real mechanisms in #8211. Until then, a caller that still
+# The real modes are rebuilt on real mechanisms in #8211. The rebuilt copy must carry hooks in
+# both passes and re-run the fence probe against the fresh root, expecting the mapper, before
+# any flag flip (#8101, carried by #8211). Until then, a caller that still
 # asks for one (DRY_RUN other than 1, ROLLBACK or CONFIRM_WIPE other than 0) is refused with
 # `verdict=real_cutover_unreconciled` (exit 5) BEFORE any remote call. Defaults: DRY_RUN=1,
 # ROLLBACK=0, CONFIRM_WIPE=0 (unset or empty takes the default).
@@ -272,8 +279,8 @@ access_gate() {
 # ============================================================================
 # Store probes (D-5) — each fails closed with a fixed verdict word, exit 5
 # ============================================================================
-_store_emit() { # <probe> <verdict> [rc]
-  local detail="probe=$1 verdict=$2${3:+ rc=$3}"
+_store_emit() { # <probe> <verdict> [rc] [reason]
+  local detail="probe=$1 verdict=$2${3:+ rc=$3}${4:+ reason=$4}"
   log "STORE ${detail}"
   if [ "$2" = ok ]; then
     echo "::notice title=git-data-cutover store::probe=$1 verdict=ok"
@@ -284,7 +291,7 @@ _store_emit() { # <probe> <verdict> [rc]
     printf -- '- STORE %s\n' "$detail" >> "$GITHUB_STEP_SUMMARY" || true
   fi
 }
-_store_refuse() { # <probe> <verdict> [rc] — emit, stop
+_store_refuse() { # <probe> <verdict> [rc] [reason] — emit, stop
   _store_emit "$@"
   exit 5
 }
@@ -343,18 +350,63 @@ refuse_if_store_not_empty() {
   _store_emit store-empty ok
 }
 
+# The fence probe (#8101). git-data-bootstrap.sh plants the pre-receive fence (CAS lease fence,
+# freeze-sentinel denial, namespace check) and points the system core.hooksPath at it; a store
+# whose hooks are absent, drifted or elsewhere accepts every push with no warning. ONE remote
+# command reads every fact, in one ssh session, and exits with the first that fails:
+#   10  the hooks dir is absent, or is a symlink            reason=hooks_dir_absent
+#   11  the hooks dir is not root:git 750                   reason=hooks_dir_owner
+#   12  pre-receive is absent, a symlink, not a regular
+#       file, or not executable (git would never run it)   reason=hook_absent
+#   13  pre-receive is not root:root 755                    reason=hook_owner
+#   14  the system core.hooksPath does not name the SERVING
+#       hooks path (unset is git's exit 1)                  reason=hooks_path_mismatch
+#   15  the hooks dir lives on a different source           reason=hooks_wrong_source
+#   16  an instrument failed (stat, or git config above 1)  probe_failed rc=16
+#    5  findmnt -T could not resolve the hooks dir's source probe_failed rc=5
+# Any other rc is gd_capture's own, reported probe_failed. SHAPE, NOT CONTENT: a planted
+# placeholder hook passes; the content comparison belongs to the rebuilt copy (#8211).
+# Arguments (the #8211 reuse on the fresh root): the root probed (default OLD_ROOT), the source
+# it must sit on (default STORE_SOURCE), and the hooks path core.hooksPath must name (default the
+# serving OLD_ROOT/hooks, which does not move when a fresh root is probed before the repoint).
+refuse_if_fence_not_intact() {
+  local root="${1:-$OLD_ROOT}" src="${2:-$STORE_SOURCE}" serving="${3:-$OLD_ROOT/hooks}"
+  local rc=0 reason="" qh qs qsp
+  step "fence probe: $root/hooks holds the pre-receive fence and core.hooksPath names $serving"
+  [[ "$src" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed
+  [[ "$root" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed
+  [[ "$serving" =~ ^/[A-Za-z0-9/_.-]+$ ]] || _store_refuse fence-shape probe_failed
+  printf -v qh '%q' "$root/hooks"
+  printf -v qs '%q' "$src"
+  printf -v qsp '%q' "$serving"
+  gd_capture '^ok$' "h=$qh; p=\"\$h/pre-receive\"; src=$qs; sp=$qsp; [ -L \"\$h\" ] && exit 10; [ -d \"\$h\" ] || exit 10; [ -L \"\$p\" ] && exit 12; [ -f \"\$p\" ] && [ -x \"\$p\" ] || exit 12; oh=\$(stat -c '%U:%G %a' \"\$h\") || exit 16; op=\$(stat -c '%U:%G %a' \"\$p\") || exit 16; [ \"\$oh\" = \"root:git 750\" ] || exit 11; [ \"\$op\" = \"root:root 755\" ] || exit 13; v=\$(git config --system --get core.hooksPath); g=\$?; [ \"\$g\" -le 1 ] || exit 16; [ \"\$v\" = \"\$sp\" ] || exit 14; s=\$(findmnt -no SOURCE -T \"\$h\") || exit 5; [ \"\$s\" = \"\$src\" ] || exit 15; echo ok" || rc=$?
+  case "$rc" in
+    0) ;;
+    10) reason=hooks_dir_absent ;;
+    11) reason=hooks_dir_owner ;;
+    12) reason=hook_absent ;;
+    13) reason=hook_owner ;;
+    14) reason=hooks_path_mismatch ;;
+    15) reason=hooks_wrong_source ;;
+    *) _store_refuse fence-shape probe_failed "$rc" ;;
+  esac
+  [ -z "$reason" ] || _store_refuse fence-shape fence_not_intact "" "$reason"
+  _store_emit fence-shape ok
+}
+
 # ============================================================================
 # Main
 # ============================================================================
 main() {
   refuse_real_modes
   resolve_roster
-  log "starting git-data read-only proof (access gate, then three store probes; no host is changed)"
+  log "starting git-data read-only proof (access gate, three store probes, then the fence probe; no host is changed)"
   access_gate
   refuse_if_unmounted
   refuse_if_cut_over
   refuse_if_store_not_empty
-  log "read-only proof clear: access ok, store mounted, not cut over, empty"
+  refuse_if_fence_not_intact
+  log "read-only proof clear: access ok, store mounted, not cut over, empty, fence installed and wired"
   echo "::notice title=git-data-cutover store::verdict=clear"
 }
 

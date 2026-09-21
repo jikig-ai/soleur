@@ -167,10 +167,20 @@ case "$c" in
       exec)    exec bash -c "$c" ;;
     esac
     exit 0 ;;
+  "h="*)
+    case "${SHIM_FENCE:-ok}" in
+      ok)    printf 'ok\n' ;;
+      r255)  echo "ssh: connect to host 10.0.1.20 port 22: Connection timed out" >&2; exit 255 ;;
+      r*)    exit "${SHIM_FENCE#r}" ;;
+      line2) printf 'ok\nCANARY-FENCE-LINE-2\n' ;;
+      exec)  exec bash -c "$c" ;;
+    esac
+    exit 0 ;;
 esac
 exit "${SHIM_REMOTE_RC:-1}"
 SHIM
-# findmnt: reached ONLY by the count command when SHIM_COUNT=exec runs the remote bytes locally.
+# findmnt: reached ONLY by the count or fence command when SHIM_COUNT=exec / SHIM_FENCE=exec runs
+# the remote bytes locally.
 # `-T <path>` answers the source that path lives on: SHIM_FINDMNT_T (default the mount probe's
 # /dev/sdb), or `fail` for a findmnt that cannot resolve it.
 cat > "$BIN/findmnt" <<'SHIM'
@@ -469,18 +479,25 @@ ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 true
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -no SOURCE /mnt/git-data
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 d=/mnt/git-data/repositories; src=/dev/sdb; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; s=$(findmnt -no SOURCE -T "$d") || exit 5; [ "$s" = "$src" ] || exit 6; n=$(find -H "$d" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo "${#n}"
+ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 h=/mnt/git-data/hooks; p="$h/pre-receive"; src=/dev/sdb; sp=/mnt/git-data/hooks; [ -L "$h" ] && exit 10; [ -d "$h" ] || exit 10; [ -L "$p" ] && exit 12; [ -f "$p" ] && [ -x "$p" ] || exit 12; oh=$(stat -c '%U:%G %a' "$h") || exit 16; op=$(stat -c '%U:%G %a' "$p") || exit 16; [ "$oh" = "root:git 750" ] || exit 11; [ "$op" = "root:root 755" ] || exit 13; v=$(git config --system --get core.hooksPath); g=$?; [ "$g" -le 1 ] || exit 16; [ "$v" = "$sp" ] || exit 14; s=$(findmnt -no SOURCE -T "$h") || exit 5; [ "$s" = "$src" ] || exit 15; echo ok
 EXP
-run_case ac2 "${KEYED[@]}" GITHUB_STEP_SUMMARY="$T/ac2.summary"
-if [ "$RC" = 0 ] && has_store store-mounted ok && has_store store-not-cut-over ok && has_store store-empty ok \
+# case_ac2_timeline <run-name> — the recorded remote timeline equals the expected file exactly.
+case_ac2_timeline() {
+  run_case "$1" "${KEYED[@]}" GITHUB_STEP_SUMMARY="$T/$1.summary"
+  diff <(grep -E '^(ssh|doppler) ' "$TLF") "$T/ac2.expected" > "$T/$1.diff" 2>&1
+}
+case_ac2_timeline ac2
+_ac2_diff_rc=$?
+if [ "$RC" = 0 ] && has_store store-mounted ok && has_store store-not-cut-over ok && has_store store-empty ok && has_store fence-shape ok \
    && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"; then
-  pass "AC2: key present, plaintext device source, empty store -> exit 0 with all three store probes ok"
+  pass "AC2: key present, plaintext device source, empty store, fence intact -> exit 0 with all three store probes and the fence probe ok"
 else fail "AC2: the canonical read-only proof did not exit 0 clear" "$(ctx)"; fi
-if diff <(grep -E '^(ssh|doppler) ' "$TLF") "$T/ac2.expected" > "$T/ac2.diff" 2>&1; then
-  pass "AC2: diff of the recorded remote timeline against the expected file is empty (web, jump, auth, findmnt, count — nothing else)"
+if [ "$_ac2_diff_rc" = 0 ]; then
+  pass "AC2: diff of the recorded remote timeline against the expected file is empty (web, jump, auth, findmnt, count, fence — nothing else)"
 else fail "AC2: the remote timeline differs from the expected file" "$(tr '\n' '|' < "$T/ac2.diff" | cut -c1-500)"; fi
-if [ "$(grep '^timeout ' "$TLF" | paste -sd' ' -)" = "timeout 30 timeout 25 timeout 30 timeout 30 timeout 30" ] \
-   && [ "$(grep -c '^ssh-stdin /dev/null$' "$TLF")" = 5 ] && [ "$(grep -c '^ssh-stdin ' "$TLF")" = 5 ]; then
-  pass "AC2/G5: every remote call is bounded (30/25/30/30/30) with stdin /dev/null"
+if [ "$(grep '^timeout ' "$TLF" | paste -sd' ' -)" = "timeout 30 timeout 25 timeout 30 timeout 30 timeout 30 timeout 30" ] \
+   && [ "$(grep -c '^ssh-stdin /dev/null$' "$TLF")" = 6 ] && [ "$(grep -c '^ssh-stdin ' "$TLF")" = 6 ]; then
+  pass "AC2/G5: every remote call is bounded (30/25/30/30/30/30) with stdin /dev/null"
 else fail "AC2/G5: a remote call lost its bound or its /dev/null stdin" "$(tr '\n' '|' < "$TLF" | cut -c1-500)"; fi
 if [ "$(grep -E '^::' "$OUT")" = "::notice title=git-data-cutover access::role=web verdict=ok
 ::notice title=git-data-cutover access::role=git-data-jump verdict=ok
@@ -488,8 +505,9 @@ if [ "$(grep -E '^::' "$OUT")" = "::notice title=git-data-cutover access::role=w
 ::notice title=git-data-cutover store::probe=store-mounted verdict=ok
 ::notice title=git-data-cutover store::probe=store-not-cut-over verdict=ok
 ::notice title=git-data-cutover store::probe=store-empty verdict=ok
+::notice title=git-data-cutover store::probe=fence-shape verdict=ok
 ::notice title=git-data-cutover store::verdict=clear" ] && ! grep -q '/dev/sdb' "$OUT"; then
-  pass "AC2: exactly seven ::notice annotations of fixed words; the captured device name is never printed"
+  pass "AC2: exactly eight ::notice annotations of fixed words; the captured device name is never printed"
 else fail "AC2: annotation set differs, or the captured value was printed" "$(grep -E '^::|/dev/sdb' "$OUT" | tr '\n' '|' | sed 's/::/: :/g')"; fi
 
 # ── GUARD 2 — store probes fail closed ────────────────────────────────────────────────
@@ -514,7 +532,8 @@ case_probe_error() {
     && grep -qxF '[git-data-cutover] probe-stderr: find: cannot open directory: Permission denied' "$OUT"
 }
 # The mutating-verb census over every non-comment line (whole-line and ` # ` trailing comments
-# stripped). At least 50 lines must be scanned.
+# stripped). At least 50 lines must be scanned. Re-admitting rsync here is the #8211 rebuild, and
+# that copy must also carry hooks/ in both passes (#8101).
 case_verb_census() { # <script>
   local code n hits
   code="$(sed -E 's/^[[:space:]]*#.*$//; s/[[:space:]]+# .*$//' "$1" | grep -vE '^[[:space:]]*$')"
@@ -612,13 +631,119 @@ else fail "G2 census: a mutating verb or deleted function survives" "$CENSUS_DET
 case_main_order() { # <script>
   local main calls
   main="$(awk '/^main\(\) \{/{m=1; next} m && /^\}/{exit} m' "$1" | sed -E 's/^[[:space:]]*#.*$//' | grep -vE '^[[:space:]]*$')"
-  calls="$(printf '%s\n' "$main" | grep -oE '^[[:space:]]*(refuse_real_modes|resolve_roster|access_gate|refuse_if_unmounted|refuse_if_cut_over|refuse_if_store_not_empty)[[:space:]]*$' | tr -d ' ' | paste -sd, -)"
+  calls="$(printf '%s\n' "$main" | grep -oE '^[[:space:]]*(refuse_real_modes|resolve_roster|access_gate|refuse_if_unmounted|refuse_if_cut_over|refuse_if_store_not_empty|refuse_if_fence_not_intact)[[:space:]]*$' | tr -d ' ' | paste -sd, -)"
   ORDER_DETAIL="$calls"
-  [ "$calls" = "refuse_real_modes,resolve_roster,access_gate,refuse_if_unmounted,refuse_if_cut_over,refuse_if_store_not_empty" ] \
+  [ "$calls" = "refuse_real_modes,resolve_roster,access_gate,refuse_if_unmounted,refuse_if_cut_over,refuse_if_store_not_empty,refuse_if_fence_not_intact" ] \
     && [ "$(grep -cE '(\$\(|`|\||&&)[^#]*(access_gate|refuse_if_|refuse_real_modes)|(access_gate|refuse_if_[a-z_]+|refuse_real_modes)[[:space:]]*(\|\||&&|\|)' "$1" || true)" = 0 ]
 }
-if case_main_order "$SCRIPT"; then pass "H5: main() runs refuse_real_modes, resolve_roster, access_gate, then the three probes in order, each once, never wrapped"
+if case_main_order "$SCRIPT"; then pass "H5: main() runs refuse_real_modes, resolve_roster, access_gate, then the three store probes and the fence probe in order, each once, never wrapped"
 else fail "H5: main() order/shape is wrong" "calls=[$ORDER_DETAIL]"; fi
+
+# ── FENCE PROBE (#8101) — the pre-receive fence is installed, root-owned, wired, on the store ──
+# In every negative row the fence probe is the ONLY refusal: the three store probes read ok first.
+# case_fence <mode> <expected-line> — SHIM_FENCE=<mode>, exit 5, the exact STORE line.
+case_fence() {
+  run_case "f-$1" "${KEYED[@]}" SHIM_FENCE="$1"
+  [ "$RC" = 5 ] && has_store store-mounted ok && has_store store-not-cut-over ok && has_store store-empty ok \
+    && grep -qxF "[git-data-cutover] STORE probe=fence-shape verdict=$2" "$OUT" \
+    && ! grep -q 'verdict=clear' "$OUT"
+}
+run_case f-ok "${KEYED[@]}" SHIM_FENCE=ok
+if [ "$RC" = 0 ] && has_store fence-shape ok && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"; then
+  pass "F1: the fence answers ok -> fence-shape ok, verdict=clear, exit 0"
+else fail "F1: an intact fence did not clear" "$(ctx)"; fi
+for spec in "r10:hooks_dir_absent" "r11:hooks_dir_owner" "r12:hook_absent" "r13:hook_owner" "r14:hooks_path_mismatch" "r15:hooks_wrong_source"; do
+  _m="${spec%%:*}"; _r="${spec##*:}"
+  if case_fence "$_m" "fence_not_intact reason=$_r"; then pass "F ($_m): remote exit ${_m#r} -> fence_not_intact reason=$_r, exit 5, after all three store probes read ok"
+  else fail "F ($_m): expected fence_not_intact reason=$_r" "$(ctx)"; fi
+done
+for spec in "r5:5" "r16:16" "r255:255"; do
+  _m="${spec%%:*}"; _r="${spec##*:}"
+  if case_fence "$_m" "probe_failed rc=$_r" && ! grep -q 'fence_not_intact' "$OUT"; then
+    pass "F ($_m): remote exit $_r is probe_failed rc=$_r — an instrument or transport failure is never a store-state word"
+  else fail "F ($_m): expected probe_failed rc=$_r" "$(ctx)"; fi
+done
+if case_fence line2 "probe_failed rc=96" && ! grep -q 'CANARY-FENCE-LINE-2' "$OUT"; then
+  pass "F10: an answer with an injected second line is probe_failed rc=96 and the second line is never printed"
+else fail "F10: a multi-line fence answer was accepted or printed" "$(ctx)"; fi
+# The fence command EXECUTED against a synthesized tree (SHIM_FENCE=exec). The CI user cannot be
+# root:git, so every tree here stops at 10, 12 or 11 — before the git config read.
+_ftree() { # <name> — a fresh fixture root under $T with an empty repositories dir
+  assert_fixture_dir "$T/fence-$1"
+  rm -rf "$T/fence-$1"; mkdir -p "$T/fence-$1/repositories" || { printf 'FAIL SETUP: mkdir fence tree\n' >&2; exit 1; }
+  printf '%s' "$T/fence-$1"
+}
+case_fence_exec() { # <tree> <reason>
+  run_case "fx-$(basename "$1")" "${KEYED[@]}" SHIM_FENCE=exec OLD_ROOT="$1"
+  [ "$RC" = 5 ] && has_store store-empty ok && grep -qxF "[git-data-cutover] STORE probe=fence-shape verdict=fence_not_intact reason=$2" "$OUT"
+}
+_fr="$(_ftree nohooks)"; assert_fixture_dir "$_fr"
+if case_fence_exec "$_fr" hooks_dir_absent; then pass "F11: no hooks dir on the store -> reason=hooks_dir_absent"
+else fail "F11: a missing hooks dir was not hooks_dir_absent" "$(ctx)"; fi
+_fr="$(_ftree nohook)"; assert_fixture_dir "$_fr"; mkdir -p "$_fr/hooks"
+if case_fence_exec "$_fr" hook_absent; then pass "F12: a hooks dir with no pre-receive -> reason=hook_absent"
+else fail "F12: a missing pre-receive was not hook_absent" "$(ctx)"; fi
+_fr="$(_ftree noexec)"; assert_fixture_dir "$_fr"; mkdir -p "$_fr/hooks" && printf '#!/bin/sh\nexit 1\n' > "$_fr/hooks/pre-receive" && chmod 0644 "$_fr/hooks/pre-receive"
+case_fence_noexec() { case_fence_exec "$T/fence-noexec" hook_absent; }
+if case_fence_noexec; then pass "F12b: a regular but NON-executable (0644) pre-receive -> reason=hook_absent (git would never run it)"
+else fail "F12b: a non-executable pre-receive was not hook_absent" "$(ctx)"; fi
+_fr="$(_ftree symlink)"; assert_fixture_dir "$_fr"; mkdir -p "$T/fence-symlink-target" && ln -s "$T/fence-symlink-target" "$_fr/hooks"
+if case_fence_exec "$_fr" hooks_dir_absent; then pass "F13: a hooks path that is a symlink to a real dir -> reason=hooks_dir_absent"
+else fail "F13: a symlinked hooks dir was accepted" "$(ctx)"; fi
+_fr="$(_ftree owner)"; assert_fixture_dir "$_fr"; mkdir -p "$_fr/hooks" && printf '#!/bin/sh\nexit 1\n' > "$_fr/hooks/pre-receive" && chmod 0755 "$_fr/hooks/pre-receive"
+if case_fence_exec "$_fr" hooks_dir_owner; then pass "F14: hooks dir + executable pre-receive owned by the CI user, not root:git 750 -> reason=hooks_dir_owner"
+else fail "F14: a non-root-owned hooks dir was accepted" "$(ctx)"; fi
+# F15 — an earlier refusal stops the proof before the fence probe (green on the pre-probe script too).
+run_case f15 "${KEYED[@]}" SHIM_FINDMNT=rc1
+if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=1' "$OUT" && ! grep -q 'probe=fence-shape' "$OUT" \
+   && ! grep -qE '^ssh .* h=' "$TLF"; then
+  pass "F15: an unmounted store stops the proof before the fence probe is dialed"
+else fail "F15: the fence probe ran after a mount refusal" "$(ctx)"; fi
+# F16 — the probe's parameters (the #8211 reuse on FRESH_ROOT). The script ends in an
+# unconditional `main "$@"`, so the functions are EXTRACTED (header line through the closing brace)
+# and called in a child bash with every global they read set.
+case_fence_params() { # <script>
+  local f="$T/f16.$$.sh" fn body
+  : > "$f" || { printf 'FAIL SETUP: cannot write %s\n' "$f" >&2; exit 1; }
+  for fn in gd_capture _store_emit _store_refuse refuse_if_fence_not_intact; do
+    body="$(awk -v n="$fn" 'index($0, n "() {") == 1 { m = 1 } m { print } m && /^\}/ { exit }' "$1")"
+    [ -n "$body" ] || { F16_DETAIL="no $fn extracted"; return 1; }
+    printf '%s\n' "$body" >> "$f"
+  done
+  TLF="$T/f16.tl"; OUT="$T/f16.out"; : > "$TLF"
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$T" TL="$TLF" bash -c '
+    set -euo pipefail
+    log() { :; }; step() { :; }; _access_stderr() { :; }
+    CAPTURE_TMP=""; GD_CAPTURED=""; GIT_DATA_HOST=10.0.1.20; GIT_DATA_SSH="ssh -F /fixture/gd-ssh-config"
+    OLD_ROOT=/mnt/git-data; STORE_SOURCE=/dev/sdb
+    source "$1"
+    refuse_if_fence_not_intact /x/fresh /dev/mapper/git-data
+  ' _ "$f" > "$OUT" 2>&1
+  RC=$?
+  F16_DETAIL="rc=$RC tl=[$(grep -E '^ssh ' "$TLF" | cut -c1-300)]"
+  [ "$RC" = 0 ] && [ "$(grep -cE '^ssh ' "$TLF")" = 1 ] \
+    && grep -qE '^ssh .* 10\.0\.1\.20 h=/x/fresh/hooks; p="\$h/pre-receive"; src=/dev/mapper/git-data; sp=/mnt/git-data/hooks; ' "$TLF"
+}
+if case_fence_params "$SCRIPT"; then pass "F16: called with an explicit root and source, the probe checks /x/fresh/hooks against /dev/mapper/git-data while hooksPath stays the SERVING path"
+else fail "F16: the probe's parameters did not reach its remote command" "$F16_DETAIL"; fi
+# P1 — the probe's ownership literals equal git-data-bootstrap.sh's _own rows, each side anchored
+# on exactly one match so two empty extractions can never compare equal.
+case_fence_parity() { # <script>
+  local boot="$DIR/git-data-bootstrap.sh" code u bd bh sd sh
+  code="$(sed -E 's/^[[:space:]]*#.*$//' "$1")"
+  u="$(sed -nE 's/^GIT_USER="([a-z]+)"$/\1/p' "$boot")"
+  bd="$(sed -nE 's/^\$HOOKS_DIR (root:\$GIT_USER [0-7]+) .*$/\1/p' "$boot")"; bd="${bd//\$GIT_USER/$u}"
+  bh="$(sed -nE 's/^\$PRE_RECEIVE (root:root [0-7]+) .*$/\1/p' "$boot")"
+  sd="$(sed -nE 's/.*\\"\\\$oh\\" = \\"([^\\"]+)\\".*/\1/p' <<< "$code")"
+  sh="$(sed -nE 's/.*\\"\\\$op\\" = \\"([^\\"]+)\\".*/\1/p' <<< "$code")"
+  PARITY_DETAIL="user=[$u] boot=[$bd|$bh] script=[$sd|$sh]"
+  [ "$(grep -cE '^GIT_USER="[a-z]+"$' "$boot")" = 1 ] && [ "$(grep -cE '^\$HOOKS_DIR root:\$GIT_USER ' "$boot")" = 1 ] \
+    && [ "$(grep -cE '^\$PRE_RECEIVE ' "$boot")" = 1 ] \
+    && [ "$(grep -cF '\"\$oh\" = \"' <<< "$code")" = 1 ] && [ "$(grep -cF '\"\$op\" = \"' <<< "$code")" = 1 ] \
+    && [ -n "$bd" ] && [ -n "$bh" ] && [ "$sd" = "$bd" ] && [ "$sh" = "$bh" ]
+}
+if case_fence_parity "$SCRIPT"; then pass "P1: the fence probe's ownership literals equal git-data-bootstrap.sh's _own rows ($PARITY_DETAIL)"
+else fail "P1: the fence probe's ownership literals drifted from the bootstrap" "$PARITY_DETAIL"; fi
 
 # Doppler is never called by any case above (the shim logs every call).
 if ! grep -lq '^doppler ' "$T"/*.tl 2>/dev/null; then pass "D-3: no case invoked doppler — the script reads no secret store"
@@ -644,7 +769,7 @@ case_capture_census() { # <script>
     !skip' | grep -nE '"\$\{(inv|gdinv)\[@\]\}"|\$\{?GIT_DATA_SSH|\$\{?WEB_HOST_SSH' || true)"
   calls="$(printf '%s\n' "$code" | grep -cE '^[[:space:]]+gd_capture ' || true)"
   CAPTURE_DETAIL="calls=$calls outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
-  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 2 ]
+  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 3 ]
 }
 if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is probe_failed rc=96 and neither line is printed"
 else fail "S8a/G5: a multi-line captured value was accepted or printed" "$(ctx)"; fi
@@ -654,7 +779,7 @@ run_case g5big "${KEYED[@]}" SHIM_FINDMNT=big
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
   pass "G5: a 5005-byte answer that would match once truncated is refused (cap 4096), never printed"
 else fail "G5: an oversized answer was truncated into an accepted value, or printed" "$(ctx)"; fi
-if case_capture_census "$SCRIPT"; then pass "G5 census: exactly two gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
+if case_capture_census "$SCRIPT"; then pass "G5 census: exactly three gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
 else fail "G5 census: a raw capture or a stray invocation exists" "$CAPTURE_DETAIL"; fi
 
 # ── GUARD 7 — real modes are refused before any remote call ───────────────────────────
@@ -1195,10 +1320,54 @@ if mutate c7-teardown-keeps-config "$WF" 2 's#^            shred -u "\$RUNNER_TE
   if [ -s "$T/mut/teardown.sh" ]; then mutant_red c7-teardown-keeps-config case_teardown "$T/mut/teardown.sh"
   else fail "M-c7-teardown-keeps-config: no teardown body was extracted from the mutant" "$(head -c 300 "$T/mut/wf-c7d.tsv")"; fi
 fi
+# Fence (#8101) M1 — own dispatch: the probe is never called.
+if mutate f-m1-no-call "$SCRIPT" 1 '/^  refuse_if_fence_not_intact$/d'; then
+  mutant_red f-m1-no-call case_main_order "$MUTANT"
+fi
+# Fence M2 — the probe "passes" without reading anything.
+if mutate f-m2-no-read "$SCRIPT" 2 "s#^  gd_capture '\\^ok\\\$' .*\$#  GD_CAPTURED=ok#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red f-m2-no-read case_fence r10 "fence_not_intact reason=hooks_dir_absent"
+fi
+# Fence M3 — second member after a compliant first: drop the executable test on pre-receive.
+if mutate f-m3-no-exec-test "$SCRIPT" 2 's#\[ -f \\"\\\$p\\" \] && \[ -x \\"\\\$p\\" \] \|\| exit 12#[ -f \\"\\$p\\" ] || exit 12#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red f-m3-no-exec-test case_fence_noexec
+fi
+# Fence M4 — the ownership literal drifts from the bootstrap's.
+if mutate f-m4-mode-770 "$SCRIPT" 2 's#(\\"\\\$oh\\" = \\"root:git )750#\1770#'; then
+  mutant_red f-m4-mode-770 case_fence_parity "$MUTANT"
+fi
+# Fence M5 — a named refusal is swallowed.
+if mutate f-m5-swallow "$SCRIPT" 2 's#^  \[ -z "\$reason" \] \|\| _store_refuse fence-shape fence_not_intact "" "\$reason"$#  [ -z "$reason" ] || true#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red f-m5-swallow case_fence r10 "fence_not_intact reason=hooks_dir_absent"
+fi
+# Fence M7 — the store-source comparison is deleted. Only the timeline sees it: the canned r15 row
+# never runs the remote bytes.
+if mutate f-m7-no-source "$SCRIPT" 2 's#s=\\\$\(findmnt -no SOURCE -T \\"\\\$h\\"\) \|\| exit 5; \[ \\"\\\$s\\" = \\"\\\$src\\" \] \|\| exit 15; ##'; then
+  CASE_SCRIPT="$MUTANT" mutant_red f-m7-no-source case_ac2_timeline m7
+fi
+# Fence M8 — REORDER: the probe runs before the mount probe.
+if mutate f-m8-reorder "$SCRIPT" 2 '/^  refuse_if_fence_not_intact$/d; s#^  refuse_if_unmounted$#  refuse_if_fence_not_intact\n&#'; then
+  mutant_red f-m8-reorder case_main_order "$MUTANT"
+fi
+# Fence M10 — the hooksPath expectation derived from the probed root, not the serving path.
+if mutate f-m10-sp-from-root "$SCRIPT" 2 "s#^  printf -v qsp '%q' \"\\\$serving\"\$#  printf -v qsp '%q' \"\$root/hooks\"#"; then
+  mutant_red f-m10-sp-from-root case_fence_params "$MUTANT"
+fi
+# Fence M11 — an instrument failure (remote 16) rendered as a store-state reason.
+if mutate f-m11-16-as-reason "$SCRIPT" 1 's#^    15\) reason=hooks_wrong_source ;;$#    16) reason=hook_owner ;;\n&#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red f-m11-16-as-reason case_fence r16 "probe_failed rc=16"
+fi
+# Fence H-a (harness) — the shim's fence arm always answers ok: the negative rows must go RED, so
+# they are driven by the shim mode, not by the script's text.
+if mutate f-ha-shim-always-ok "$BIN/ssh" 2 's#^    case "\$\{SHIM_FENCE:-ok\}" in$#    case ok in#'; then
+  mkdir -p "$T/binha" && cp "$BIN"/* "$T/binha/" && cp "$MUTANT" "$T/binha/ssh" && chmod +x "$T/binha/ssh" \
+    || { printf 'FAIL SETUP: harness mutant bin\n' >&2; exit 1; }
+  BIN="$T/binha" mutant_red f-ha-shim-always-ok case_fence r10 "fence_not_intact reason=hooks_dir_absent"
+fi
 }
 
 # ── RUNTIME ARM — real OpenSSH (pinned ubuntu:24.04) ─────────────────────────────────
-RUNTIME_ROWS=17
+RUNTIME_ROWS=19
 _runtime_skip() {
   if [ "${CI:-}" = "true" ]; then
     fail "runtime arm: $1 — and CI=true, so this is a FAILURE: the runner must provide docker"
@@ -1217,7 +1386,7 @@ else
   cat > "$T/rt/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq openssh-server openssh-client netcat-openbsd iproute2 >/dev/null 2>&1 || { echo FIXTURE_APT_FAILED; exit 100; }
+apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq openssh-server openssh-client netcat-openbsd iproute2 git >/dev/null 2>&1 || { echo FIXTURE_APT_FAILED; exit 100; }
 mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh
 ssh-keygen -A >/dev/null 2>&1
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k && cp /tmp/k.pub /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
@@ -1283,6 +1452,14 @@ printf 'find %s\n' "$*" >> /out/remote.log
 exec /usr/bin/find "$@"
 F
 chmod 755 /usr/local/sbin/findmnt /usr/local/sbin/find
+# The pre-receive fence as git-data-bootstrap.sh plants it (#8101): a root:git 0750 hooks dir, a
+# root:root 0755 hook, and the system core.hooksPath naming it. Re-planted after every rm -rf.
+groupadd -f git
+plant_fence() {
+  mkdir -p /mnt/git-data/hooks && chown root:git /mnt/git-data/hooks && chmod 0750 /mnt/git-data/hooks
+  printf '#!/bin/sh\nexit 1\n' > /mnt/git-data/hooks/pre-receive && chown root:root /mnt/git-data/hooks/pre-receive && chmod 0755 /mnt/git-data/hooks/pre-receive
+  git config --system core.hooksPath /mnt/git-data/hooks
+}
 W1=$(sshd_on 10.0.1.10 22 -o AuthorizedKeysFile=/etc/ssh/ak-web)
 G1=$(sshd_on 10.0.1.20 22 -o AuthorizedKeysFile=/etc/ssh/ak-gd)
 sleep 1
@@ -1301,7 +1478,7 @@ drive2() { # label
   row "$1_web_accepted" "$(( $(accepted 10.0.1.10) - wb ))"; row "$1_gd_accepted" "$(( $(accepted 10.0.1.20) - gb ))"
   cp /out/remote.log "/out/$1.remote"
 }
-printf '/dev/sdb\n' > /fixture/findmnt.out; echo 0 > /fixture/findmnt.rc; rm -rf /mnt/git-data; mkdir -p /mnt/git-data/repositories
+printf '/dev/sdb\n' > /fixture/findmnt.out; echo 0 > /fixture/findmnt.rc; rm -rf /mnt/git-data; mkdir -p /mnt/git-data/repositories; plant_fence
 drive2 r5
 mkdir -p /mnt/git-data/repositories/ws-1.git
 drive2 r6
@@ -1309,6 +1486,13 @@ printf '/dev/mapper/git-data\n' > /fixture/findmnt.out; rm -rf /mnt/git-data
 drive2 r7
 printf '/dev/sdb\n' > /fixture/findmnt.out; install -m 600 /tmp/ci.pub /etc/ssh/ak-gd
 drive2 r8
+install -m 600 /tmp/gdroot.pub /etc/ssh/ak-gd; mkdir -p /mnt/git-data/repositories; plant_fence
+git config --system --unset core.hooksPath
+drive2 rf2
+git config --system core.hooksPath /mnt/git-data/hooks
+printf '/dev/nvme1n1\n' > /fixture/findmnt.out
+drive2 rfsrc
+printf '/dev/sdb\n' > /fixture/findmnt.out
 kill "$W1" "$G1" 2>/dev/null
 echo DRIVER_DONE
 DRV
@@ -1341,14 +1525,15 @@ DRV
       && pass "R4b (negative control): a non-SSH listener is jump failed — the banner rule can fail" || fail "R4b: a non-SSH listener was accepted as a banner, or was never reached" "$(_rctx r4)"
     { [ "$(_rv ip_ok)" = 1 ] && [ "$(_rv sshcfg_rc)" = 0 ]; } \
       && pass "R5-fixture: 10.0.1.10/10.0.1.20 bound in the container and the workflow's ssh_config writer ran (rc 0)" || fail "R5-fixture: address binding or the ssh_config writer failed" "ip=$(_rv ip_ok) sshcfg=$(_rv sshcfg_rc) $(tr '\n' '|' < "$T/rt/out/sshcfg.out" 2>/dev/null | sed 's/::/: :/g')"
-    { [ "$(_rv r5_rc)" = 0 ] && _acc r5 web ok && _acc r5 git-data-jump ok && _acc r5 git-data-auth ok && _sto r5 store-mounted ok && _sto r5 store-not-cut-over ok && _sto r5 store-empty ok; } \
-      && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config — access ok x3, store probes ok x3, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
+    { [ "$(_rv r5_rc)" = 0 ] && _acc r5 web ok && _acc r5 git-data-jump ok && _acc r5 git-data-auth ok && _sto r5 store-mounted ok && _sto r5 store-not-cut-over ok && _sto r5 store-empty ok && _sto r5 fence-shape ok; } \
+      && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config — access ok x3, store probes ok x3, fence ok on a real root:git 0750 tree, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
     [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -no SOURCE /mnt/git-data
 findmnt -no SOURCE -T /mnt/git-data/repositories
-find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf ." ] \
-      && pass "R5b: on git-data the commands observed are exactly the mount read, the findmnt -T source re-check and the count" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
-    { [ "$(_rv r5_web_accepted)" = 5 ] && [ "$(_rv r5_gd_accepted)" = 3 ]; } \
-      && pass "R5c: web-1 accepted 5 CI-key logins (web, jump, and the ProxyCommand hop of auth/findmnt/count); git-data accepted 3 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
+find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf .
+findmnt -no SOURCE -T /mnt/git-data/hooks" ] \
+      && pass "R5b: on git-data the commands observed are exactly the mount read, the findmnt -T source re-check, the count and the fence's findmnt -T" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
+    { [ "$(_rv r5_web_accepted)" = 6 ] && [ "$(_rv r5_gd_accepted)" = 4 ]; } \
+      && pass "R5c: web-1 accepted 6 CI-key logins (web, jump, and the ProxyCommand hop of auth/findmnt/count/fence); git-data accepted 4 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
     { [ "$(_rv r6_rc)" = 5 ] && _sto r6 store-empty store_not_empty; } \
       && pass "R6a: a real ws-1.git under /mnt/git-data/repositories -> store_not_empty, exit 5" || fail "R6a: a non-empty store passed" "rc=$(_rv r6_rc) $(_rctx r6)"
     grep -qxF "find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf ." "$T/rt/out/r6.remote" \
@@ -1357,6 +1542,10 @@ find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf .
       && pass "R7: a mapper source -> already_cut_over, exit 5" || fail "R7: a mapper source passed" "rc=$(_rv r7_rc) $(_rctx r7)"
     { [ "$(_rv r8_rc)" = 3 ] && grep -qE 'role=git-data-auth host=10\.0\.1\.20 verdict=failed rc=[0-9]+ reason=auth_refused$' "$T/rt/out/r8.out"; } \
       && pass "R8 (negative control): git-data authorizing only the CI key -> auth_refused — the git-data block offers ONLY the root key" || fail "R8: the git-data block authenticated with a key other than the root key" "rc=$(_rv r8_rc) $(_rctx r8)"
+    { [ "$(_rv rf2_rc)" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=fence-shape verdict=fence_not_intact reason=hooks_path_mismatch' "$T/rt/out/rf2.out"; } \
+      && pass "RF2: real git with core.hooksPath unset (git config exits 1) -> fence_not_intact reason=hooks_path_mismatch, exit 5" || fail "RF2: an unset hooksPath was not hooks_path_mismatch" "rc=$(_rv rf2_rc) $(_rctx rf2)"
+    { [ "$(_rv rfsrc_rc)" = 0 ] && _sto rfsrc fence-shape ok; } \
+      && pass "RFSRC (must-PASS, non-canonical): a consistent /dev/nvme1n1 source clears — the probe accepts any consistent /dev/ source" || fail "RFSRC: a consistent non-/dev/sdb source was refused" "rc=$(_rv rfsrc_rc) $(_rctx rfsrc)"
   elif grep -qx FIXTURE_APT_FAILED "$T/rt/stdout" || [ "$DRC" = 125 ]; then
     _runtime_skip "container did not reach the fixture (docker rc=$DRC): $(tail -2 "$T/rt/stdout" | tr '\n' ' ')"
   else
@@ -1368,19 +1557,20 @@ fi
 # ── FLOOR + LEDGER (ADR-193: reported with printf + exit, never through pass()/fail()) ─────
 # MUTANT_FLOOR = the matrix rows this suite owns: Guard 2 x4, Guard 5 x4, Guard 6 (cutover half) x1,
 # Guard 7 x3, C1 (transport vs store state) x1, C3 (count on the accepted source) x2, C7 (step
-# gating + executed teardown) x4 = 19. Guard 3's four rows moved with the census to
-# tests/scripts/test-git-data-root-token-census.sh.
-MUTANT_FLOOR=19
+# gating + executed teardown) x4, Fence (#8101: M1-M5, M7, M8, M10, M11, harness H-a) x10 = 29.
+# Guard 3's four rows moved with the census to tests/scripts/test-git-data-root-token-census.sh.
+MUTANT_FLOOR=29
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
 # Assertion FLOOR, restated after the #8189 review (the census moved out; C1/C3/C7 rows added).
-# Measured, by section: script unit rows 66 (access gate, AC2, Guard 2 incl. S4d/S7e/S7f/S7g,
-# Guard 5, Guard 7); bridge export set 6; workflow YAML 31 (incl. WF-gating); executed workflow
-# steps 18 (key fetch 8, ssh_config 6, secrets check 3, teardown 1); mutants 19 x 2 = 38; runtime 17.
-# Total 176 — exact, not a margin: removing an assertion on purpose costs one edit here.
-FLOOR=176
+# Measured, by section: script unit rows 85 (access gate, AC2, Guard 2 incl. S4d/S7e/S7f/S7g,
+# Guard 5, Guard 7 = 66, plus the #8101 fence probe F1, F2-F7, F8/F8b/F9, F10-F16 with F12b, P1 = 19);
+# bridge export set 6; workflow YAML 31 (incl. WF-gating); executed workflow steps 18 (key fetch 8,
+# ssh_config 6, secrets check 3, teardown 1); mutants 29 x 2 = 58; runtime 19 (incl. RF2, RFSRC).
+# Total 217 — exact, not a margin: removing an assertion on purpose costs one edit here.
+FLOOR=217
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
