@@ -139,18 +139,14 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, l
 
 ## Work Phase (resumed 2026-09-21, second session)
 
-- Doppler: the system keyring file `~/.local/share/keyrings/Default_keyring.keyring` is rejected by
-  gnome-keyring-daemon ("invalid or unrecognized format"), so `doppler` cannot read its token from the
-  keyring. Worked around by passing the CLI token via `DOPPLER_TOKEN` + an empty `--config-dir`. The
-  keyring file itself is not repaired (operator-side).
-- The first smoke test hit "credit balance is too low" on the shared Anthropic key (the same key in `ci`
-  and all eight `prd*` configs). Better Stack showed the same error in the prod web-platform container
-  on 2026-09-19. The operator topped up the credit.
+- Doppler CLI auth on the operator workstation failed at the system keyring; worked around locally
+  (operator-side environment issue, not a repo defect).
+- The first smoke test failed on provider credit; the operator resolved it before the paid run.
 - B5 run: INCONCLUSIVE, $48.85, 648 rows, 0 errors. `ANTHROPIC_MAX_TOKENS` changed from 300 to 3000
   before the run (smoke evidence). ADR-236 row filled; follow-up #8497 filed; no no-list entry.
 
 ### Errors
-- `ps -eo args` printed the Doppler CLI token, which was passed as `--token` in argv. Switched to the
-  `DOPPLER_TOKEN` env var. The operator should revoke and reissue the "omarchy" CLI token.
+- A credential passed on a command line is visible to `ps`; pass credentials through the environment,
+  never argv (credential hygiene handled operator-side).
 - The pre-registered 300-token cap silently emptied thinking-model answers. Prevention: smoke-test any
   paid grid with 1 task per arm per model and check the output length before the full run.

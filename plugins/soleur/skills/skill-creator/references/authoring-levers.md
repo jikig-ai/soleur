@@ -1,4 +1,4 @@
-<!-- Inspired by mattpocock/skills/skills/productivity/writing-for-agents/SKILL.md and mattpocock/skills/skills/productivity/writing-for-agents/SKILL-MECHANICS.md (MIT, Copyright (c) 2026 Matt Pocock). -->
+<!-- Inspired by mattpocock/skills/skills/productivity/writing-for-agents/SKILL.md, mattpocock/skills/skills/productivity/writing-for-agents/SKILL-MECHANICS.md and mattpocock/skills/.agents/invocation.md (MIT, Copyright (c) 2026 Matt Pocock). -->
 # Authoring Levers
 
 Four levers decide whether an agent runs a skill the same way twice. Reach for this file when

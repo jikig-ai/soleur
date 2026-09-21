@@ -6,7 +6,7 @@ Skills have three structural components: YAML frontmatter (metadata), a markdown
 <critical_rule>
 **Markdown headings structure a skill body; XML tags are optional semantic wrappers inside a section and never replace headings.** Use `#` for the skill title, `##` for each major section, and `###` below that. Keep markdown formatting within content (bold, italic, lists, code blocks, links).
 
-Measured basis: 102/102 shipped Soleur `SKILL.md` bodies use `#` headings, and 4 of them also use XML wrappers inside a section. A body built only from top-level tags, with no headings, is the anti-pattern.
+Measured basis (2026-09-21, fences excluded): 101 of 102 shipped Soleur `SKILL.md` bodies use markdown headings (96 carry a `#` title), and 23 also carry XML tag lines at column 0. A body built only from top-level tags, with no headings, is the anti-pattern.
 </critical_rule>
 
 <required_sections>
@@ -338,14 +338,15 @@ Form filling...
 
 ❌ Anti-pattern: a tag-only body with no headings, where top-level tags stand in for sections:
 
-```xml
-<objective>
-PDF processing with text extraction, form filling, and merging.
-</objective>
+```markdown
+## Objective
 
-<quick_start>
+PDF processing with text extraction, form filling, and merging.
+
+## Quick Start
+
 Extract text...
-</quick_start>
+
 ```
 
 </pitfall>

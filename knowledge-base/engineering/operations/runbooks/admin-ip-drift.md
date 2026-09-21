@@ -9,7 +9,8 @@ date: 2026-04-19
 **Issue:** #2681
 **Servers:** web-platform CX33 (`soleur-web-platform`, `135.181.45.178`)
 **Related runbook:** `ssh-fail2ban-unban.md` (for sshd-layer lockouts)
-**Automation:** `/soleur:admin-ip-refresh`
+**Automation:** the operator types `/soleur:admin-ip-refresh` (user-invoked since ADR-236; an agent
+runs the read-only Diagnosis steps below and hands the refresh to the operator).
 
 ## Symptom
 
@@ -96,7 +97,9 @@ through to `ssh-fail2ban-unban.md` (sshd-layer diagnosis).
 
 ## Recovery (Automated)
 
-Run `/soleur:admin-ip-refresh` and follow its prompts. The skill:
+**Operator types:** `/soleur:admin-ip-refresh`, then follows its prompts. An agent stops after
+Diagnosis Step 4 and hands this step to the operator; it does not run the skill's steps or the manual
+fallback itself (ADR-236 headless-refusal policy). The skill:
 
 1. Detects current egress IP with three-service fallback validation.
 2. Reads `ADMIN_IPS` from Doppler and diffs against the egress IP.
@@ -115,7 +118,9 @@ Run `/soleur:admin-ip-refresh` and follow its prompts. The skill:
 
 ## Recovery (Manual Fallback)
 
-If `/soleur:admin-ip-refresh` is unavailable:
+Operator-only. Use this when the operator cannot run `/soleur:admin-ip-refresh` (for example, the
+plugin is not installed on the machine). An agent that received a Skill-tool refusal does NOT treat
+that as "unavailable": it hands off instead of running these steps.
 
 ### Step R1 -- Add the current egress CIDR to Doppler `ADMIN_IPS`
 

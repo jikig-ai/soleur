@@ -18,12 +18,13 @@ If `CLAUDE_PLUGIN_ROOT` is not set or the path does not exist, try reading from 
 
 ## Step 2: Count Components
 
-Use the **Glob tool** to count components. Make all four calls in parallel in a single message:
+Use the **Glob tool** to count components. Make all five calls in parallel in a single message:
 
 1. **Count agents:** Use pattern `**/*.md` with path `${CLAUDE_PLUGIN_ROOT}/agents` -- count the returned file paths
 2. **Count commands:** Use pattern `*.md` with path `${CLAUDE_PLUGIN_ROOT}/commands` -- count the returned file paths
 3. **Count skills:** Use pattern `**/SKILL.md` with path `${CLAUDE_PLUGIN_ROOT}/skills` -- count the returned file paths (one SKILL.md per skill)
 4. **Count agent domains:** From the agent file paths in result 1, extract the unique top-level directory names (the first path segment after `agents/`) and count them
+5. **Find user-invoked skills:** Use the **Grep tool** with pattern `^disable-model-invocation: true` over `**/SKILL.md` under `${CLAUDE_PLUGIN_ROOT}/skills`, output mode `files_with_matches`. That set drives the `(type /soleur:<name>)` marker below. These skills' descriptions are absent from your skill listing, so Read each matched SKILL.md's `description:` to describe it.
 
 If `CLAUDE_PLUGIN_ROOT` is not set or those paths do not exist, fall back to `plugins/soleur/...` (monorepo checkout) or `~/.claude/plugins/*/soleur/...` (legacy installed path).
 
@@ -38,7 +39,8 @@ Detect the active harness before printing commands:
 - **Codex:** entry points are `$soleur:go`, `$soleur:sync`, and `$soleur:help`.
   Read [Codex compatibility instructions](../codex/INSTRUCTIONS.md) and resolve
   component paths from the installed plugin root. Render the Claude block below
-  with Codex skill mentions and skill-loading instructions substituted.
+  with Codex skill mentions and skill-loading instructions substituted. Omit the
+  `(type /soleur:<name>)` user-invoked marker: Codex ignores the key (ADR-236).
 
 Use the matching column in Step 3 below.
 
