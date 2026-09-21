@@ -1,6 +1,7 @@
 ---
 name: provision-hetzner
 description: "This skill should be used when provisioning Hetzner sub-projects and tokens for tenant infrastructure."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->

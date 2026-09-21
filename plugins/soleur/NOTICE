@@ -146,7 +146,8 @@ mattpocock/skills
     ../../.openhands/skills/ticket-triage/SKILL.md (intake pre-checks --
       the OpenHands mirror of the agent above; it carries the same derived
       prose and is listed because a Used-in list that omits one of three
-      mirrors understates the reach of the attribution) (#8289)
+      mirrors understates the reach of the attribution) (#8289),
+    skills/skill-creator/references/authoring-levers.md (#8290)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent
@@ -236,6 +237,25 @@ mattpocock/skills
     Soleur's own record, so attributing them would be a false
     attribution, and they are outside the plugin payload
     (.claude-plugin/marketplace.json sets source to ./plugins/soleur).
+
+    Bundle 4 (#8290, from skills/productivity/writing-for-agents/SKILL.md,
+    skills/productivity/writing-for-agents/SKILL-MECHANICS.md and
+    .agents/invocation.md at HEAD c55ee46073ed923f86ce59a5eb3b6d895095d1b7)
+    imports five authoring patterns as Soleur-authored prose in
+    skills/skill-creator/references/authoring-levers.md: leading words
+    (with the pair-every-prohibition-with-its-positive-target negation
+    rule); the two loads (context load vs cognitive load); co-location,
+    set against duplication and a single source of truth; completion-
+    criterion demand (clarity and demand as separate properties); and
+    the invocation axis (the "could the model reach for this on its own,
+    or must another skill reach it" test behind disable-model-invocation).
+    The examples, the ADR-236 necessary conditions, the per-harness
+    measurements, the headless-refusal policy and the four-site flip
+    checklist are Soleur's own. The file shares no 8-word shingle with
+    any of the three peer files. The disable-model-invocation and
+    user-invocable rows in skills/skill-creator/references/official-spec.md
+    are sourced from Anthropic's Claude Code documentation, not the peer,
+    and carry no credit.
 
   MIT License (upstream)
 

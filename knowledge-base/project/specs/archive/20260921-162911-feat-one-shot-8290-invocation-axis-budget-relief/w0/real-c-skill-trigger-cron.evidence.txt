@@ -1,0 +1,4 @@
+INIT model=claude-sonnet-5 claude_code=2.1.278
+TOOL_USE Skill {"skill": "soleur:trigger-cron"}
+TOOL_RESULT Launching skill: soleur:trigger-cron
+RESULT The `soleur:trigger-cron` skill launched, and its instructions loaded. As you asked, I didn't follow them or call any other tool, so no preflight ran and no cron event was fired.

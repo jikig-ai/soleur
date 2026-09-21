@@ -51,14 +51,15 @@ Create `templates/{template-name}.md` with:
 
 Find the workflow that produces this output. Add:
 
-```xml
-<process>
+```markdown
+## Process
+
 ...
 N. Read `templates/{template-name}.md`
 N+1. Copy template structure
 N+2. Fill each placeholder based on gathered context
 ...
-</process>
+
 ```
 
 ## Step 7: Test

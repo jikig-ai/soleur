@@ -1,0 +1,3 @@
+TOTAL_WITH_DESC=11
+TOTAL_NAME_ONLY=99
+WITH_DESC_NAMES=dataviz,update-config,keybindings-help,code-review,simplify,fewer-permission-prompts,loop,schedule,claude-api,workflow-authoring,run
