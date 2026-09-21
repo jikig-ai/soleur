@@ -14,6 +14,30 @@ lane: cross-domain
 
 # Workflow FSM: collapse the remaining designed compound sub-steps, triage review→ship, rule on the gate
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21. **Agents used:** architecture-strategist, test-design-reviewer, a sonnet citation/negative sweep (9/9 confirmed). This deepen pass ran after a 4-seat plan review (DHH, Kieran, code-simplicity, CTO) and a Step 4.5 advisor consult.
+
+### Key improvements
+
+1. **B is measured, not inferred.**
+   - 12 of the 17 `ship → compound` compounds are followed by ship's own `preflight` (Phase 5). That proves they ran inside ship.
+   - 15 of 17 start 42–182 s after the ship record. 2 are ambiguous.
+2. **The anchor test is real.**
+   - It is section-scoped and word-bounded, and it has a check-count guard.
+   - A file-wide match would have stayed green after deleting ship's Phase 2, because ship's Headless-Mode line 45 also names compound.
+3. **Test harness hardened.**
+   - The loop's key list is checked against the view, and each iteration gets its own fixture root.
+   - Case 38 now pins timestamp order alone, since case 14 also pins B. The floor moves to 38.
+4. **The ADR edit list is complete.**
+   - It now includes the "future gate (below)" clause and the `plan → ship` (7) annotation.
+   - The Alternatives-row contradiction between AC6 and Phase 3 is removed.
+   - The D re-open procedure lives in the D.2 issue, so it outlives the archived plan.
+
+### New considerations
+
+- Ship Phase 2 *does* sometimes call compound. D.2's defect is that its predicate is ambiguous, so agents apply it inconsistently, and not that the call never fires.
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this branch.)
 
 ## Overview
@@ -160,7 +184,12 @@ A therefore makes the ship-skip class **more** visible.
   - `ship/SKILL.md` §Headless Mode Detection says "Phase 2: auto-invoke `skill: soleur:compound --headless`".
   - §Phase 2 (Capture Learnings) says "Then use `skill: soleur:compound` … The compound flow will automatically consolidate and archive the artifacts", and "Auto-invoke `skill: soleur:compound --headless` without prompting".
   - `one-shot/SKILL.md` step 7 says "Ship handles compound re-check (Phase 2)".
-- **Log shape (17/17 rows):** compound is always the record **immediately after** ship. That matches a nested call, because ship is logged when invoked and compound is logged when ship's Phase 2 calls it.
+- **Log shape (17/17 rows):** compound is always the next node record after ship. That matches a nested call, because ship is logged when invoked and compound is logged when ship's Phase 2 calls it.
+  - **[Deepened 2026-09-21: nesting measured, not inferred.]** Architecture review asked whether these compounds ran *after* ship returned.
+  - **12 of 17** are followed by `preflight`, which is ship's own Phase 5. That places them inside ship, between its Phase 2 and Phase 5.
+  - **15 of 17** start 42–182 s after the ship record.
+  - **2 are ambiguous**: gaps of 1578 s and 4261 s, each ending the session.
+  - The command is in the Appendix ("B nesting").
   - Successors of that compound: session end 11, `postmerge` 4, `plan` 1, `brainstorm` 1.
   - After the collapse these become `ship → postmerge` (declared), `ship → plan` and `ship → brainstorm` (still undeclared, unchanged in kind).
 - **Ruling: declare `ship: ["compound"]`.**
@@ -191,6 +220,7 @@ Each row was classified on the node sequence after the collapse, by what the log
   - Ship Phase 2's first probe is `git log --oneline --since="1 week ago" -- knowledge-base/project/learnings/`. It is feature-agnostic.
   - On `origin/main` it was non-empty in **12 of 12** sampled weeks (2026-05-18 → 2026-09-21, minimum 6 learning commits per week). So in this repo it always reports "a recent learning exists".
   - Read literally, that skips the feature-scoped unarchived-artifact check that sits under "If no recent learning exists". This matches the 19 rows where ship passed Phase 2 without calling compound.
+  - **[Deepened]** It is not *always* skipped. B shows ship's Phase 2 did call compound at least 12 times. Whether it does depends on how the agent reads the ambiguous predicate, for example by applying the `*FEATURE*` glob. That inconsistency is the defect D.2 tracks, and it is not the same as "never fires".
   - The log cannot prove that link, because it has no branch field.
 
 ### D — gate ruling
@@ -277,7 +307,8 @@ and the log rotates, so that count could not be computed (CTO + DHH review).
     - the C triage table;
     - the uncommitted-learning design caveat;
     - the fix path (extract Phase 2 to `ship/references/`, add a branch-scoped probe that also sees uncommitted learnings, fixture-test it);
-    - the D re-open trigger it owns.
+    - the D re-open trigger it owns;
+    - the Appendix triage procedure, verbatim. The trigger's runner is then the issue's closing PR, not an archived plan (architecture review).
     This issue body is where the C evidence lives. The ADR keeps only the ruling.
   - Labels: `domain/engineering`, `type/bug`, `priority/p2-medium`. Milestone: `Post-MVP / Later` unless `knowledge-base/product/roadmap.md` names a closer phase.
   - Cite the issue number in the ADR edit (Phase 3).
@@ -293,10 +324,19 @@ and the log rotates, so that count could not be computed (CTO + DHH review).
      fails with a named message instead of a deep diff. (This is the brief's "pin both key sets in the parity block".
      The simplicity reviewer judged it redundant with deep-equal plus the exact-set pin. That is recorded as a
      User-Challenge in `decision-challenges.md`, and the brief's direction is kept.)
-   - **SKILL.md anchor test (P7, CTO review).** For every key of `DECLARED_SUB_STEPS` and every value V,
-     `plugins/soleur/skills/<key>/SKILL.md` contains the literal `skill: soleur:<V>`. Today the counts are
-     brainstorm 1, plan 1, postmerge 1, ship 4.
-     Open the test with a non-empty check so an emptied const cannot pass as zero iterations.
+   - **SKILL.md anchor test (P7, CTO review; tightened at deepen by test-design review).** For every key of
+     `DECLARED_SUB_STEPS` and every value V, match `/skill: soleur:<V>(?![\w-])/` so that `compound-capture` does not
+     match (`cq-assert-anchor-not-bare-token`). Scope the match to the section that owns the designed call, via a
+     test-local map:
+     - `plan` → `## Exit Gate`
+     - `postmerge` → `## Phase 6: Update Issue and Compound`
+     - `ship` → `## Phase 2: Capture Learnings`
+     - `brainstorm` → the whole file. Its one call sits under a heading inside a fenced template, so H2 scoping is unreliable there.
+     Scope = the text from that H2 to the next `^## `. A file-wide match is not enough for ship: it has 5
+     occurrences, including the Headless-Mode line 45, which would survive deleting Phase 2 entirely.
+     Assert the number of checks performed equals `Object.values(DECLARED_SUB_STEPS).flat().length` and is > 0,
+     so that `ship: []` or an emptied const cannot pass as zero iterations. A key missing from the section map
+     fails the test, so a new entry must name its anchor.
      If a later edit moves ship's Phase 2 call, the `ship` entry then fails loudly instead of collapsing silently.
 1.2 In `scripts/classify-workflow-transitions.test.sh`:
    - **Case 14 assertion flip.** Keep the input as it is: file order `compound`@15:09, `ship`@15:01.
@@ -312,14 +352,26 @@ and the log rotates, so that count could not be computed (CTO + DHH review).
      `review`". The fixture is unchanged.
    - **New cases 33–37** (`new_root` + `emit_to`, real view copied).
      Write 33–35 as ONE loop over `K:X` in `plan:work postmerge:work ship:postmerge`, one `pass`/`fail` per key
-     (DHH review):
+     (DHH review). **[Deepened, test-design review]:**
+     - Each iteration gets its own `new_root "sub33-$K"`.
+     - Assertions keep the trailing space (`"pairs=1 "`), so that `=1` cannot match `=10`.
+     - Before the loop, assert the loop's key list equals `jq -r '.sub_steps|keys[]'` of the real view minus
+       `brainstorm`, which case 17 covers. A future fifth key then fails instead of silently getting no case.
      - 33 `plan compound work` → `undeclared=0 pairs=1 substep=1`, no row (plan's exit gate).
      - 34 `postmerge compound work` → `undeclared=0 pairs=1 substep=1`, no row (postmerge's closing step).
      - 35 `ship compound postmerge` → `undeclared=0 pairs=1 substep=1`, no row (ship Phase 2).
      - 36 `plan compound ship` → row `plan -> ship`, with `substep=1 undeclared=1`. This is the exposure: before the change the only row was `plan -> compound`.
      - 37 `postmerge compound ship` → row `postmerge -> ship`, with `substep=1 undeclared=1`.
-   - Raise `MIN_CASES=32` to `MIN_CASES=37`, keeping the literal `SELFTEST_PASSES=1` contiguous
+   - **Case 38 (new, test-design review).** A pure timestamp-order case with no sub-step involved: `plan`@:09
+     filed before `brainstorm`@:01.
+     - Sorted, the pair is `brainstorm -> plan`, which is declared: `undeclared=0`.
+     - Unsorted, it would be the undeclared `plan -> brainstorm`.
+     This restores a single-property ts-order case, since case 14 now also pins B. Case 14's failure message
+     prints `pairs` and `substep`.
+   - Raise `MIN_CASES=32` to `MIN_CASES=38`, keeping the literal `SELFTEST_PASSES=1` contiguous
      (the guard-vacuity-floor shape).
+     Add a comment beside `MIN_CASES`: the 33–35 loop records ONE pass per key, unlike the one-pass loops in cases
+     26 and 29. Collapsing it to one pass would silently make the floor 36.
 1.3 Run both suites. **Expected RED:** the toEqual pin, the view key-set pin, and cases 33, 34, 35 and 36/37.
    The SKILL.md anchor test is GREEN from the start: the anchors already exist. Its RED is shown by its mutation row.
    Cases 36/37 are red because, without the collapse, the rows read `plan -> compound` / `postmerge -> compound`.
@@ -372,8 +424,13 @@ Quote the **deltas**. These edits go in ADR-229:
   - Put reason 1 ("false-denies ship's in-process Phase 2 compound") on the EXISTING Alternatives rows for the
     record-mode and blocking gate. Do not add a new row (simplicity review).
   Keep the first clause ("buildable on top of this without rework"), since it is still true.
-- **Verification:** the classifier suite count goes to the new floor (37). Add the
-  view-key-set test and the SKILL.md anchor test to the `workflow-fidelity.test.ts` list.
+- **Verification:** the classifier suite count goes to the new floor (38).
+  - Name the new coverage: case 14's flip, the 33–35 loop, the `plan → ship` / `postmerge → ship` exposure cases, and the ts-order case 38.
+  - Add the view-key-set test and the SKILL.md anchor test to the `workflow-fidelity.test.ts` list, and to the "three `DECLARED_SUB_STEPS` invariants" wording.
+- **Other ADR sentences the change falsifies (architecture review at deepen):**
+  - "a future gate (below) have a typed source", in the "No plugin runtime code calls" bullet. The bullet it points to becomes "no gate". Reword it to "…and so a gate, should D's re-open trigger fire, has a typed source".
+  - The adoption-baseline sentence "`plan → ship` occurs **7** times … laundered through `plan → deepen-plan → ship`". Annotate it: +3 more were laundered through the declared `compound → ship`, and the #8399 collapse exposes them.
+  - "Four back-edges" stays true, because the edge set is unchanged.
 - **Dissent 1:** apply edit (a) or (b) from "Operator Question" **only after the operator answers**.
   With no answer, make no edit here.
 
@@ -389,7 +446,7 @@ Quote the **deltas**. These edits go in ADR-229:
 - `plugins/soleur/lib/workflow-fidelity.ts`: the `DECLARED_SUB_STEPS` value and its doc comment.
 - `.claude/workflow-transitions.json`: the `sub_steps` mirror.
 - `plugins/soleur/test/workflow-fidelity.test.ts`: the exact-set pin, plus the view key-set pin in the parity block.
-- `scripts/classify-workflow-transitions.test.sh`: flip case 14's assertion, edit case 20's comment, add cases 33–37, set `MIN_CASES=37`.
+- `scripts/classify-workflow-transitions.test.sh`: flip case 14's assertion, edit case 20's comment, add cases 33–38, set `MIN_CASES=38`.
 - `knowledge-base/engineering/architecture/decisions/ADR-229-workflow-fsm-single-source-and-offline-classification.md`: the Phase 3 edits.
 
 ## Files to Create
@@ -432,7 +489,7 @@ None. The ruling is true the moment this PR merges.
 | Declare `review → ship` | The brief forbids it. It is the compound-skip class this instrument exists to surface |
 | Gate `Skill(ship)` on a preceding compound | False-denies ship's own Phase 2 compound, and is barred by ADR-070 and ADR-229 Alternatives |
 | Fix ship Phase 2's probe in this PR | `ship/SKILL.md` has 30 bytes of headroom, and the branch-scoped probe must also see uncommitted learnings or it re-runs compound. Deferred to the D.2 tracking issue |
-| Add a `--sessions` classifier mode for the triage | YAGNI. The ruling is "no gate", and its trigger uses the existing default output |
+| Add a `--sessions` classifier mode for the triage | YAGNI. The ruling is "no gate". Its re-open trigger is owned by the D.2 issue, whose body carries the Appendix procedure. The ADR cites the issue, not this plan, which gets archived |
 
 ## User-Brand Impact
 
@@ -490,7 +547,7 @@ in `scripts/classify-workflow-transitions.sh`. It is fed only by a hand mirror o
 | 3 | Add a **second** rule-legal entry after the compliant ones, e.g. `work: ["brainstorm"]` in both | RED (exact-set pin, the only test that says *which* entries exist) |
 | 4 | Guard dispatch: empty both const and view to `{}` | RED (exact-set pin; the non-empty preconditions in the invariant tests) |
 | 5 | Harness row: `new_root` copies a hard-coded view instead of the repo view | RED (cases 33–35 go red against a view lacking the entries) |
-| 6 | Delete the `skill: soleur:compound` call from `ship/SKILL.md` Phase 2, and edit nothing else | RED (SKILL.md anchor test). Before this PR, no test failed |
+| 6 | Delete the three `skill: soleur:compound` calls inside `ship/SKILL.md`'s `## Phase 2: Capture Learnings`, keeping the Headless-Mode line 45 | RED (the section-scoped anchor test). A file-wide match would stay GREEN, and before this PR no test failed |
 | 7 | Must-PASS non-canonical: the view has the same entries in a different **key order** | PASS for the const-side pins, since `toEqual` is key-order-insensitive. Byte order is a mirror convention, not the property |
 
 ### Guard 2 — collapse does not launder (classifier cases 33–37 + 14/18/20)
@@ -510,21 +567,23 @@ after the node filter. The cases quantify over all four keys (17 brainstorm; 33,
 | 2 | Drop `compound` unconditionally, i.e. ignore `$SUB` | RED (case 20: `review compound plan` must keep `compound -> plan`) |
 | 3 | Mirror only `plan` and `postmerge`, forgetting the second-added `ship` | RED (case 35) |
 | 4 | Guard dispatch: the view's `sub_steps` loses `plan` while the const keeps it | RED (case 36 now reads `plan -> compound`, not `plan -> ship`; case 33 reports a row. The parity deep-equal also goes red) |
-| 5 | Harness row: delete case 37 without lowering the floor | RED (`MIN_CASES=37` anti-vacuity floor) |
+| 5 | Harness row: delete case 37 without lowering the floor | RED (`MIN_CASES=38` anti-vacuity floor) |
+| 6 | Add a fifth `sub_steps` key to the view and const with no classifier case | RED (the loop's key-list check against the view) |
 
 ## Acceptance Criteria
 
 - [ ] AC1 `DECLARED_SUB_STEPS` deep-equals `{ brainstorm: ["compound"], plan: ["compound"], postmerge: ["compound"], ship: ["compound"] }`, and `DECLARED_TRANSITIONS` is byte-identical to `origin/main`. Check: `bun -e` deep-equal of `DECLARED_TRANSITIONS` imported from the working tree against the one parsed from `git show origin/main:plugins/soleur/lib/workflow-fidelity.ts`. The existing per-edge `toEqual` pins in `workflow-fidelity.test.ts` stay unchanged and green, and they are the mechanical check.
 - [ ] AC2 `.claude/workflow-transitions.json` `.sub_steps` equals the const. Check: `jq -c '.sub_steps' .claude/workflow-transitions.json` prints `{"brainstorm":["compound"],"plan":["compound"],"postmerge":["compound"],"ship":["compound"]}`. `.transitions` is unchanged.
 - [ ] AC3 `bun test plugins/soleur/test/workflow-fidelity.test.ts` is green. It includes the updated exact-set pin, a new test that pins the view's `sub_steps` and `transitions` key sets by name, and the SKILL.md anchor test over every `DECLARED_SUB_STEPS` entry.
-- [ ] AC4 `bash scripts/classify-workflow-transitions.test.sh` is green, with `MIN_CASES=37`. Cases 33–37 exist as specified. Case 14 keeps its `ship`/`compound` input and asserts `pairs=0 substep=1`, with no row.
+- [ ] AC4 `bash scripts/classify-workflow-transitions.test.sh` is green, with `MIN_CASES=38`. Cases 33–38 exist as specified. Case 14 keeps its `ship`/`compound` input and asserts `pairs=0 substep=1`, with no row.
 - [ ] AC5 On ONE frozen snapshot of the log (Phase 3), the base view and the new view give the same `read` and `dropped`. `pairs` falls by exactly the amount `substep` rises. The ADR quotes those snapshot deltas and labels them a snapshot. This is deterministic, because no concurrent session can move a frozen file.
 - [ ] AC6 ADR-229 carries:
   - the 2026-09-21 re-baseline with deltas and the exposure note;
   - the resolved dissent-2 sentence;
   - the D ruling ("no gate"), with the C triage, the falsified under-recording hypothesis, the re-open trigger (owned by the D.2 issue's closure) and the D.2 issue number;
-  - a new Alternatives row;
-  - the corrected Verification count.
+  - the false-deny reason added to the EXISTING gate Alternatives rows (no new row);
+  - the corrected Verification count and coverage list;
+  - the reworded "future gate (below)" clause and the `plan → ship` (7) annotation.
   Check: `grep -ci 'no gate' ADR-229-*.md` ≥ 1, and `grep -c '#<D.2 issue number>' ADR-229-*.md` ≥ 1.
   These are presence assertions only. An absence-grep on the old deferral sentence would false-fail if the amendment quotes it.
 - [ ] AC7 No `plugins/soleur/skills/*/SKILL.md` changes beyond those in `b1a41c34f`. Check: `git diff --name-only b1a41c34f..HEAD -- plugins/soleur/skills` is empty. `ship/SKILL.md` stays at 273970 bytes.
@@ -582,6 +641,21 @@ jq -n -R -r --argjson N '["brainstorm","plan","work","review","compound","ship",
 (`$N` with `index` is fine here because every node name is a whole-token array member. The
 substring hazard ADR-229 records applies to `index` on a **string**.)
 
+### Appendix — B nesting check (read-only)
+
+For each `ship` record whose next node record is `compound`, print the seconds between the two records and the next five raw skills:
+
+```bash
+jq -n -R -r '[inputs|fromjson?] | map(select((.skill|type)=="string" and (.session_id|type)=="string" and .session_id!="" and (.ts|type)=="string"))
+ | map(.skill|=ltrimstr("soleur:")) | group_by(.session_id) | map(sort_by(.ts)) | .[] | . as $s
+ | [range(0;length)] | map(select($s[.].skill=="ship")) | .[] as $i
+ | ($s[$i+1:] | map(select(.skill as $k | ["brainstorm","plan","work","review","compound","ship","postmerge"]|index($k)))) as $after
+ | select(($after|length)>0 and $after[0].skill=="compound")
+ | [$s[$i].ts, ((($after[0].ts|fromdate)-($s[$i].ts|fromdate))|tostring)+"s", ($s[$i+1:]|map(.skill)|.[0:5]|join(" "))] | @tsv' < "$LOG"
+```
+
+Result on 2026-09-21: 17 rows. 12 are followed by `preflight`. 15 have a gap of 42–182 s. 2 have gaps of 1578 s and 4261 s.
+
 ## Review & Consult Provenance
 
 - **Step 4.5 advisor (applied):** flip case 14's assertion instead of re-fixturing it.
@@ -594,3 +668,7 @@ substring hazard ADR-229 records applies to `index` on a **string**.)
   - DHH: cases 33–35 written as one loop; the ADR's D ruling kept compact, with evidence in the D.2 issue.
   - Simplicity: no new Alternatives row; Guard 2 row 4 made a real RED.
 - **Persisted as User-Challenges or Taste** (`knowledge-base/project/specs/feat-fsm-substeps-8399/decision-challenges.md`): decide or split dissent 1 (CTO/DHH); cut the view key-set pin (simplicity); cut the gate-required sections (DHH).
+- **Deepen pass (2026-09-21).**
+  - Agents: architecture-strategist, test-design-reviewer, and a sonnet verification sweep (9/9 citations confirmed).
+  - Applied from architecture review: B nesting measured (12/17 inside ship), the D.2 nuance, the ADR stale-sentence list, the procedure moved into the D.2 issue, and the AC6/Phase 3 Alternatives contradiction fixed.
+  - Applied from test-design review: section-scoped, word-bounded anchor test with a check-count guard; loop key-list check, per-iteration roots and trailing-space assertions; case 38; `MIN_CASES=38` with a comment.
