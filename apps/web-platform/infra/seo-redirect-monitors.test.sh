@@ -73,14 +73,20 @@ eq_case() { # <want> <got> <name>
 # READERS — verbatim from www-apex-canonicalizer.test.sh; keep the two copies identical.
 # ---------------------------------------------------------------------------------------
 
-# Strip `#` and `//` line comments while tracking string state, so a `#` inside a quoted
-# value and a `//` inside a URL both survive. Char-by-char rather than a regex.
+# Strip `#`, `//`, and `/* */` comments while tracking string state, so a `#` inside a quoted
+# value, a `//` inside a URL, and a `/*` inside a string all survive. Char-by-char rather than
+# a regex; `inblock` persists across records so multi-line block comments are stripped too —
+# without it a `/* rules { … } */`-wrapped declaration still parses live (#8364 review).
 strip_comments() { # <file>
   awk '
     {
       line = $0; out = ""; q = ""; i = 1; n = length(line)
       while (i <= n) {
         c = substr(line, i, 1)
+        if (inblock) {
+          if (c == "*" && substr(line, i + 1, 1) == "/") { inblock = 0; i += 2; continue }
+          i++; continue
+        }
         if (q != "") {
           if (c == "\\") { out = out c substr(line, i + 1, 1); i += 2; continue }
           if (c == q) { q = "" }
@@ -89,6 +95,7 @@ strip_comments() { # <file>
         if (c == "\"" || c == "'"'"'") { q = c; out = out c; i++; continue }
         if (c == "#") { break }
         if (c == "/" && substr(line, i + 1, 1) == "/") { break }
+        if (c == "/" && substr(line, i + 1, 1) == "*") { inblock = 1; i += 2; continue }
         out = out c; i++
       }
       print out
@@ -152,27 +159,32 @@ count_matches() { # <ere> <text>
 # `https://` prefix.
 # ---------------------------------------------------------------------------------------
 
-# (a) Literal `source_url = "…"` items in seo-bulk-redirects.tf. Quoted-literal
-# only: the dynamic block's `source_url = item.value.source` is a template
-# reference, not a member of the set.
-LITERAL_SOURCES="$(strip_comments "$REDIR_TF" | awk '
+# (a) Literal `source_url = "…"` items — SCOPED to cloudflare_list.legal_redirects,
+# not the whole file: seo-bulk-redirects.tf also carries the www_canonical list
+# whose source literal (`www.soleur.ai/…`) is not a member of the redirect set
+# this class samples (#8364 review — a file-wide scan let an unrelated list's
+# literal satisfy the membership check). Quoted-literal only: the dynamic
+# block's `source_url = item.value.source` is a template reference, not a
+# member of the set.
+LIST_BLOCK="$(hcl_block cloudflare_list legal_redirects "$REDIR_TF")"
+LITERAL_SOURCES="$(awk '
   match($0, /^[[:space:]]*source_url[[:space:]]*=[[:space:]]*"[^"]*"/) {
     v = substr($0, RSTART, RLENGTH)
     sub(/^.*=[[:space:]]*"/, "", v)
     sub(/"$/, "", v)
     print v
-  }')"
+  }' <<<"$LIST_BLOCK")"
 
-# (b) `*_redirect_pairs` map expansions in seo-bulk-redirects.tf. Each `"<key>" =
-# "<target>"` entry generates three source shapes (dir-slash, /index.html, bare)
-# because full_uri matching is exact. `blog_redirect_pairs` keys are blog
-# date-slugs → `soleur.ai/blog/<key>{,/,/index.html}`; any other *_redirect_pairs
-# local (e.g. a future tombstone map) uses the bare source-prefix form
-# `soleur.ai/<key>{,/,/index.html}`.
+# (b) `blog_redirect_pairs` map expansions in seo-bulk-redirects.tf — scoped to
+# the blog map specifically, not `*_redirect_pairs`: the sampled probe class is
+# "generated BLOG pair", and tombstone_redirect_pairs keys expand under a
+# different prefix (`soleur.ai/<key>` vs `soleur.ai/blog/<key>`), so a
+# conflated scan could satisfy membership with the wrong map (#8364 review).
+# Each `"<key>" = "<target>"` entry generates three source shapes (dir-slash,
+# /index.html, bare) because full_uri matching is exact.
 PAIR_SOURCES="$(strip_comments "$REDIR_TF" | awk '
-  /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*_redirect_pairs[[:space:]]*=[[:space:]]*\{/ {
+  /^[[:space:]]*blog_redirect_pairs[[:space:]]*=[[:space:]]*\{/ {
     inmap = 1
-    isblog = ($0 ~ /blog_redirect_pairs/) ? 1 : 0
     depth = 0
   }
   inmap {
@@ -182,15 +194,9 @@ PAIR_SOURCES="$(strip_comments "$REDIR_TF" | awk '
       k = $0
       sub(/^[[:space:]]*"/, "", k)
       sub(/"[[:space:]]*=.*$/, "", k)
-      if (isblog) {
-        print "soleur.ai/blog/" k "/"
-        print "soleur.ai/blog/" k "/index.html"
-        print "soleur.ai/blog/" k
-      } else {
-        print "soleur.ai/" k "/"
-        print "soleur.ai/" k "/index.html"
-        print "soleur.ai/" k
-      }
+      print "soleur.ai/blog/" k "/"
+      print "soleur.ai/blog/" k "/index.html"
+      print "soleur.ai/blog/" k
     }
     if (depth <= 0) inmap = 0
   }')"
@@ -346,11 +352,30 @@ for spec in \
   eq_case '0' "$(count_matches '(lifecycle[[:space:]]*\{|ignore_changes[[:space:]]*=)' "$MON")" \
     "$name has no lifecycle block / ignore_changes (ignored attributes stop converging)"
 
+  # Cadence pins (#8364 review): a monitor that still asserts [301] but checks
+  # once a day (check_frequency = 86400) or never verifies TLS is a
+  # technically-green probe that detects nothing in time. These match the
+  # declared values — a deliberate cadence change updates this pin.
+  eq_case '180' "$(attr check_frequency "$MON")" \
+    "$name checks every 180s (a slowed cadence is a delayed alarm)"
+  eq_case '10' "$(attr request_timeout "$MON")" \
+    "$name request_timeout is 10s"
+  eq_case '1200' "$(attr confirmation_period "$MON")" \
+    "$name confirmation_period is 1200s (the Pages-rebuild absorb window)"
+  eq_case '60' "$(attr recovery_period "$MON")" \
+    "$name recovery_period is 60s"
+  eq_case 'true' "$(attr verify_ssl "$MON")" \
+    "$name verifies TLS (a false here lets a broken cert read as up)"
+
   # THE MEMBERSHIP ROW. Strip the scheme and require the bare host/path to be a
   # member of this probe's OWN class set — a probe on an undeclared URL watches
   # nothing the redirect set owns, and a probe on another class's URL uncovers
   # the mechanism it was sampled for.
   probe_url="$(unquote "$(attr url "$MON")")"
+  scheme_rc=1
+  [[ "$probe_url" == https://* ]] && scheme_rc=0
+  verdict "$scheme_rc" "$name probes over https:// (found [${probe_url}])"
+
   bare="${probe_url#https://}"; bare="${bare#http://}"
   member_rc=1
   grep -qxF "$bare" <<<"$src_set" && member_rc=0
@@ -389,7 +414,7 @@ eq_case "$EXPECTED_NAMES" "$TARGETED_SEO" \
 # suite's own `fail` (a floor routed through `fail` runs through the machinery it
 # exists to witness). Bump deliberately when you add a case; do not derive it.
 printf '\n'
-EXPECTED_CASES=41 # 3 source-set vacuity + 1 name-set + 11x3 per-probe + 3 targets + 1 target-set
+EXPECTED_CASES=59 # 3 source-set vacuity + 1 name-set + 18x3 per-probe + 3 targets + 1 target-set
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d assertion cases executed, expected exactly %d — a case was deleted, skipped, or added without updating EXPECTED_CASES\n' \
     "$CASES" "$EXPECTED_CASES" >&2

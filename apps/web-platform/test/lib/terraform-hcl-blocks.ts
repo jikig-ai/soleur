@@ -10,9 +10,90 @@
 //   - `{`/`}` inside quoted strings are BALANCED (true for the host-set
 //     literals `{"a" "b"}` inside Cloudflare filter expressions).
 //   - Callers that must survive a commented-out `rules { }` block strip HCL
-//     comments BEFORE extracting (see stripHclComments in
-//     seo-config-rules.test.ts) — brace counting cannot see comments, and a
-//     stray `{` inside a comment desyncs the depth count.
+//     comments BEFORE extracting — stripHclComments is exported below for
+//     exactly this. Brace counting cannot see comments: a `/* rules { … } *\/`
+//     or `#`-commented rule otherwise still matches `rules\s*\{` and counts
+//     toward the pin (demonstrated mutant in seo-config-rules.test.ts), and
+//     a stray `{` inside a comment desyncs the depth count. EVERY consumer
+//     of these extractors must pass stripped text; only read raw source when
+//     the comment itself is the assertion target.
+
+/**
+ * Strip `#`, `//`, and `/* *\/` HCL comments while respecting double-quoted
+ * strings (backslash escapes included); newlines are preserved so line
+ * structure survives. Lifted from seo-config-rules.test.ts (#8364 review):
+ * the pin suites' assertions are all regexes over extracted text, so a
+ * commented-out `rules {}` block — or a `status_code = 301` inside a
+ * comment — must never satisfy them.
+ */
+export function stripHclComments(src: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inString) {
+      out += ch;
+      if (ch === "\\") {
+        // Preserve the escaped character verbatim; it cannot close the string.
+        if (i + 1 < src.length) {
+          out += src[i + 1];
+          i++;
+        }
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && src[i + 1] === "*") {
+      // Block comment: skip to the closing delimiter, preserving newlines so
+      // line structure is unchanged.
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] === "\n") out += "\n";
+        i++;
+      }
+      i++; // land on the '/' of the closer; loop's i++ steps past it
+      continue;
+    }
+    if (ch === "#" || (ch === "/" && src[i + 1] === "/")) {
+      while (i < src.length && src[i] !== "\n") i++;
+      out += "\n";
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Escape every regex metacharacter so an interpolated literal matches itself.
+ * Escaping only `.` leaves `\` unescaped, which lets the input alter the
+ * pattern's meaning rather than being matched verbatim (CodeQL
+ * js/incomplete-sanitization).
+ */
+export function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Read a quoted attribute value (`name = "..."`) from a block, decoding
+ * HCL's backslash escapes so a Cloudflare filter expression such as
+ * `"(http.host in {\"soleur.ai\"})"` is compared in its logical form.
+ * Returns the FIRST match — for `expression` that is the rule-level filter,
+ * which always precedes `action_parameters.target_url.expression`.
+ */
+export function quotedAttr(block: string, name: string): string | null {
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- name is escaped via escapeRegExp; attribute identifiers are test-controlled constants
+  const re = new RegExp(`\\b${escapeRegExp(name)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`);
+  const m = re.exec(block);
+  if (!m) return null;
+  return m[1].replace(/\\(.)/g, "$1");
+}
 
 /**
  * Extract the body of a `resource "cloudflare_ruleset" "<name>" { ... }` block

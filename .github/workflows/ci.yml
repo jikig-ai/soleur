@@ -968,9 +968,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # redirect-tombstones.test.ts enumerates `git log --diff-filter=RD
-          # <baseline>..HEAD` — a depth-1 clone has no baseline and the census
-          # fails closed ("zero events — the enumerator broke"). #8364.
+          # redirect-tombstones.test.ts enumerates ALL history (`git log
+          # --diff-filter=RD` + `git log -p -Gpermalink:`) and fails closed on
+          # a shallow clone via --is-shallow-repository — a depth-1 checkout
+          # reads as "nothing died". #8364.
           fetch-depth: 0
 
       - name: Setup Bun

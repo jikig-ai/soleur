@@ -129,6 +129,15 @@ locals {
     # Live-404 verified 2026-09-20.
     "pages/commands.html"    = "https://soleur.ai/"
     "pages/mcp-servers.html" = "https://soleur.ai/"
+    # tombstone: #1865 — the four legal pages served their PATH-DERIVED
+    # /pages/legal/<slug>/ family until 871fc0583 added
+    # `permalink: legal/<slug>/` (reslug-by-addition — no file moved). The
+    # explicit list items above cover only the /pages/legal/<slug>.html
+    # file-shape; the dir/index/bare family needs these.
+    "pages/legal/acceptable-use-policy" = "https://soleur.ai/legal/acceptable-use-policy/"
+    "pages/legal/gdpr-policy"           = "https://soleur.ai/legal/gdpr-policy/"
+    "pages/legal/privacy-policy"        = "https://soleur.ai/legal/privacy-policy/"
+    "pages/legal/terms-and-conditions"  = "https://soleur.ai/legal/terms-and-conditions/"
   }
 
   tombstone_redirect_items = flatten([

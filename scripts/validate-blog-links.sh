@@ -61,6 +61,13 @@ declare -A file_paths=()
 while IFS= read -r md_file; do
   rel="${md_file#"$BLOG_DIR"/}"
   slug="$(basename "$md_file" .md)"
+  # Two posts sharing a dated basename at different depths would collide on
+  # the slug key — last-write-wins would silently drop one file's frontmatter
+  # check and stale-key lookup (#8364 review). Fail loudly instead.
+  if [[ -n "${file_paths[$slug]:-}" && "${file_paths[$slug]}" != "$rel" ]]; then
+    fail "parity: basename collision — ${file_paths[$slug]} and $rel both map to slug '$slug'; rename one post"
+    continue
+  fi
   file_slugs+=("$slug")
   file_paths["$slug"]="$rel"
 done < <(find "$BLOG_DIR" -type f -name '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md' | sort)
@@ -97,14 +104,42 @@ done
 # the list resource. A dropped arm un-serves a whole URL shape per pair and a
 # deleted dynamic block un-serves every generated item — both invisible to
 # the key/value checks below.
+#
+# Read the tf COMMENT-STRIPPED: an arm or map hidden inside a #, //, or /* */
+# comment must not satisfy the check (#8364 review — raw greps let a
+# commented-out declaration stay green). Same char-by-char reader as the
+# infra suites' strip_comments.
+TF_STRIPPED="$(awk '
+  {
+    line = $0; out = ""; q = ""; i = 1; n = length(line)
+    while (i <= n) {
+      c = substr(line, i, 1)
+      if (inblock) {
+        if (c == "*" && substr(line, i + 1, 1) == "/") { inblock = 0; i += 2; continue }
+        i++; continue
+      }
+      if (q != "") {
+        if (c == "\\") { out = out c substr(line, i + 1, 1); i += 2; continue }
+        if (c == q) { q = "" }
+        out = out c; i++; continue
+      }
+      if (c == "\"" || c == "'"'"'") { q = c; out = out c; i++; continue }
+      if (c == "#") { break }
+      if (c == "/" && substr(line, i + 1, 1) == "/") { break }
+      if (c == "/" && substr(line, i + 1, 1) == "*") { inblock = 1; i += 2; continue }
+      out = out c; i++
+    }
+    print out
+  }
+' "$TF_FILE")"
 # shellcheck disable=SC2016  # ${date_slug} is literal tf text, not a bash var
 for arm in \
   'source = "soleur.ai/blog/${date_slug}/"' \
   'source = "soleur.ai/blog/${date_slug}/index.html"' \
   'source = "soleur.ai/blog/${date_slug}"'; do
-  grep -qF "$arm" "$TF_FILE" || fail "parity: blog_redirect_items missing expansion arm: $arm"
+  grep -qF "$arm" <<<"$TF_STRIPPED" || fail "parity: blog_redirect_items missing expansion arm: $arm"
 done
-grep -qE 'dynamic "item"' "$TF_FILE" || fail 'parity: cloudflare_list dynamic "item" block missing — generated redirects would vanish'
+grep -qE 'dynamic "item"' <<<"$TF_STRIPPED" || fail 'parity: cloudflare_list dynamic "item" block missing — generated redirects would vanish'
 
 # Map side: keys + values inside the blog_redirect_pairs block (region-scoped
 # extraction — a quoted-key grep elsewhere could see unrelated attributes).
@@ -113,7 +148,7 @@ while IFS=' ' read -r k v; do
   map_vals["$k"]="$v"
 done < <(awk '/blog_redirect_pairs[[:space:]]*=[[:space:]]*\{/{inmap=1; next}
              inmap && /^[[:space:]]*\}/{inmap=0}
-             inmap' "$TF_FILE" \
+             inmap' <<<"$TF_STRIPPED" \
          | sed -nE 's/^[[:space:]]*"([^"]+)"[[:space:]]*=[[:space:]]*"([^"]+)".*/\1 \2/p')
 
 # file -> map: every date-prefixed file has a redirect entry pointing at the

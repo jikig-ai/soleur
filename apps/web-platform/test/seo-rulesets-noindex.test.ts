@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   extractResourceBody,
   extractRuleBlocks,
+  stripHclComments,
 } from "./lib/terraform-hcl-blocks";
 
 // Source-text regression guard for the X-Robots-Tag noindex Transform Rules.
@@ -41,6 +42,19 @@ const TF_PATH = path.join(
 const RESOURCE_NAME = "seo_response_headers";
 
 /**
+ * The resource body extracted from COMMENT-STRIPPED source — a `rules {}`
+ * block (or whole resource) wrapped in `/* * /` or `#` comments must not
+ * satisfy these pins (#8364 review: raw extraction let a commented-out
+ * declaration stay green).
+ */
+function strippedBody(): string {
+  return extractResourceBody(
+    stripHclComments(readFileSync(TF_PATH, "utf-8")),
+    RESOURCE_NAME,
+  );
+}
+
+/**
  * Within a resource body, return the `rules { ... }` block whose body carries
  * the given `http.host eq "<host>"` literal. Throws if no matching rule is
  * found so a deleted-rule regression fails loudly rather than passing on an
@@ -67,8 +81,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
 
   // AC1 — both subdomain rules present in source.
   test("deploy.soleur.ai rewrite rule is present in seo_response_headers", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "deploy.soleur.ai");
     expect(rule).toContain(`action`);
     expect(rule).toContain(`"rewrite"`);
@@ -76,8 +89,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   });
 
   test("api.soleur.ai rewrite rule is present in seo_response_headers (dormant, retained — #3379)", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "api.soleur.ai");
     expect(rule).toContain(`"rewrite"`);
     expect(rule).toContain(`X-Robots-Tag`);
@@ -91,8 +103,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // app/robots.ts. app.soleur.ai is proxied (dns.tf cloudflare_record.app
   // proxied = true), so unlike api.soleur.ai this rule fires live.
   test("app.soleur.ai rewrite rule is present in seo_response_headers", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "app.soleur.ai");
     expect(rule).toContain(`action`);
     expect(rule).toContain(`"rewrite"`);
@@ -102,8 +113,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // AC2 — deploy. rule pins the EXACT live header value `noindex, nofollow`,
   // not just substring `noindex`, so dropping `nofollow` is caught.
   test("deploy.soleur.ai rule sets X-Robots-Tag to exactly 'noindex, nofollow'", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "deploy.soleur.ai");
     // The header value line inside this rule's action_parameters.headers block.
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
@@ -114,8 +124,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // `nofollow` (or otherwise mutates the value) must fail CI, same parity as
   // the deploy/api rules above.
   test("app.soleur.ai rule sets X-Robots-Tag to exactly 'noindex, nofollow'", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "app.soleur.ai");
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
     expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
@@ -128,8 +137,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
     // carry the same `noindex, nofollow` as deploy. A loose `noindex*` match
     // would let the retained rule be silently weakened to a no-snippet-only
     // `noindex` ahead of that flip.
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "api.soleur.ai");
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
     expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
@@ -138,8 +146,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // Every host rewrite rule must stay enabled — a silent `enabled = false` is
   // as bad as a deletion (the header stops firing live).
   test("all subdomain rewrite rules are enabled", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     for (const host of ["deploy.soleur.ai", "api.soleur.ai", "app.soleur.ai"]) {
       const rule = extractRuleBlockForHost(body, host);
       expect(rule, `${host} rule must be enabled`).toMatch(/enabled\s*=\s*true/);

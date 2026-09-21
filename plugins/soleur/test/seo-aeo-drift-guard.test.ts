@@ -24,6 +24,7 @@ import { tmpdir } from "os";
 import {
   allDeclaredSources,
   bulkRedirectPairs,
+  dynamicItemBlock,
   missingEdge301Flags,
 } from "./lib/bulk-redirect-pairs";
 
@@ -678,10 +679,28 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
       ),
       "local.redirect_items must concat both generated-item expansions — a dropped side un-serves that whole class",
     ).toBe(true);
+
+    // The dynamic "item" template is what every generated redirect is stamped
+    // from — pinning only the locals leaves a mutation inside its content {}
+    // block (301→302, dropped subdomains flag, rewired source) invisible to
+    // every assertion above (#8364 review). Pin the block's attributes.
+    const dyn = dynamicItemBlock(tf);
     expect(
-      /dynamic "item"[\s\S]*?for_each = local\.redirect_items/.test(tf),
-      'cloudflare_list.legal_redirects has no dynamic "item" over redirect_items — all generated redirects would vanish',
-    ).toBe(true);
+      dyn,
+      'dynamic "item" must iterate local.redirect_items',
+    ).toMatch(/for_each\s*=\s*local\.redirect_items/);
+    for (const pin of [
+      /source_url\s*=\s*item\.value\.source/,
+      /target_url\s*=\s*item\.value\.target/,
+      /status_code\s*=\s*301/,
+      /include_subdomains\s*=\s*"enabled"/,
+      /preserve_query_string\s*=\s*"enabled"/,
+    ]) {
+      expect(
+        pin.test(dyn),
+        `dynamic "item" content block lost ${pin.source} — every generated redirect inherits the mutation`,
+      ).toBe(true);
+    }
   });
 
   test("bulk-list freshness: every declared source is dead on disk and every target resolves to a built page (#8364)", () => {
@@ -720,6 +739,7 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
       if (!src.startsWith("soleur.ai")) continue; // non-apex host (www list)
       const srcPath = src.slice("soleur.ai".length);
       if (
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- rel derives from tf-declared redirect sources, repo-controlled constants
         builtCandidates(srcPath).some((rel) => existsSync(resolve(SITE, rel)))
       ) {
         shadowed.push(src);
@@ -732,6 +752,7 @@ describe("Guard 2 — zero meta-refresh stubs + bulk-redirect source parity (#33
       const targetPath = tm[1] ?? "/";
       if (
         !builtCandidates(targetPath).some((rel) =>
+          // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- rel derives from tf-declared redirect targets, repo-controlled constants
           existsSync(resolve(SITE, rel)),
         )
       ) {

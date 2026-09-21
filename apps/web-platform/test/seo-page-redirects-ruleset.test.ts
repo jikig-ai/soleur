@@ -4,6 +4,8 @@ import path from "node:path";
 import {
   extractResourceBody,
   extractRuleBlocks,
+  quotedAttr,
+  stripHclComments,
 } from "./lib/terraform-hcl-blocks";
 
 // Source-text pin for `cloudflare_ruleset.seo_page_redirects` — the zone-level
@@ -100,23 +102,18 @@ function decode(src: string): string {
   return src.replace(/\\(.)/g, "$1");
 }
 
-/**
- * Read a quoted attribute value (`name = "..."`) from a rules block, decoded.
- * Returns the FIRST match — for `expression` that is the rule-level filter,
- * which always precedes `action_parameters.target_url.expression`.
- */
-function quotedAttr(block: string, name: string): string | null {
-  const re = new RegExp(`\\b${name}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`);
-  const m = re.exec(block);
-  return m ? decode(m[1]) : null;
-}
-
 function tf(): string {
   return readFileSync(TF_PATH, "utf-8");
 }
 
+/**
+ * The ruleset body extracted from COMMENT-STRIPPED source — a `rules {}`
+ * block wrapped in `/* * /` or `#`-commented lines must not count toward the
+ * pin (#8364 review: raw-text extraction let a commented-out rule satisfy
+ * every assertion).
+ */
 function rulesetBody(): string {
-  return extractResourceBody(tf(), RESOURCE_NAME);
+  return extractResourceBody(stripHclComments(tf()), RESOURCE_NAME);
 }
 
 function ruleBlocks(): string[] {
@@ -196,6 +193,12 @@ function assertPinnedShape(resourceBody: string): void {
   expect(resourceBody, 'kind must be "zone"').toMatch(/kind\s*=\s*"zone"/);
   expect(resourceBody, 'phase must be "http_request_dynamic_redirect"').toMatch(
     /phase\s*=\s*"http_request_dynamic_redirect"/,
+  );
+  expect(resourceBody, "must bind the zone via var.cf_zone_id").toMatch(
+    /zone_id\s*=\s*var\.cf_zone_id/,
+  );
+  expect(resourceBody, "must use the rulesets provider alias").toMatch(
+    /provider\s*=\s*cloudflare\.rulesets/,
   );
   const blocks = extractRuleBlocks(resourceBody);
   expect(
@@ -342,6 +345,49 @@ describe("mutation battery — each edit must trip the pin", () => {
     test(label, () => {
       const mutated = reassemble(rulesetBody(), mutate(ruleBlocks()));
       expect(() => assertPinnedShape(mutated)).toThrow(failure);
+    });
+  }
+
+  // Raw-source arms: the block-level battery above cannot express mutations
+  // that land in the RAW tf (comments, the resource header itself). These run
+  // the full pipeline — strip → extract → pin — so a rule hidden inside a
+  // comment is proven dead.
+  const rawMutations: ReadonlyArray<{
+    label: string;
+    failure: RegExp;
+    mutate: (raw: string) => string;
+  }> = [
+    {
+      label: "wrapping the first page rule in a /* */ comment",
+      failure: /exactly 10 rules/,
+      mutate: (raw) => {
+        const i = raw.indexOf("  rules {");
+        const j = raw.indexOf("\n  }", i);
+        expect(i, "first rules block not found").toBeGreaterThan(-1);
+        expect(j, "first rules block close not found").toBeGreaterThan(i);
+        return `${raw.slice(0, i)}  /*\n${raw.slice(i, j + 4)}\n  */${raw.slice(j + 4)}`;
+      },
+    },
+    {
+      label: "commenting out the resource declaration with # lines",
+      failure: /not found/,
+      mutate: (raw) =>
+        raw.replace(
+          /^resource "cloudflare_ruleset" "seo_page_redirects" \{/m,
+          "# resource disabled\n# resource \"cloudflare_ruleset\" \"seo_page_redirects\" {",
+        ),
+    },
+  ];
+
+  for (const { label, failure, mutate } of rawMutations) {
+    test(label, () => {
+      const raw = mutate(tf());
+      expect(raw, `${label}: mutation did not land`).not.toBe(tf());
+      expect(() =>
+        assertPinnedShape(
+          extractResourceBody(stripHclComments(raw), RESOURCE_NAME),
+        ),
+      ).toThrow(failure);
     });
   }
 });

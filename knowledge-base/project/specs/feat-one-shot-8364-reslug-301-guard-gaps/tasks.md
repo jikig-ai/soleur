@@ -39,8 +39,9 @@ the same commit — a guard that has never gone red is not evidence.
 ## Phase 2 — Tombstone gate (G1 + G6)
 
 - [x] New `plugins/soleur/test/redirect-tombstones.test.ts` (bun:test):
-      - Baseline `TOMBSTONE_BASELINE = "35259f264…"`; `git cat-file -e`
-        preflight fails loudly (never skips).
+      - History anchor `HISTORY_ANCHOR = "35259f264…"` (named in review);
+        `git cat-file -e` + `--is-shallow-repository` preflight fails loudly
+        (never skips).
       - Enumerate `git log --diff-filter=RD -M --name-status
         <baseline>..HEAD -- plugins/soleur/docs/`; derive per-event URL
         sets per the plan's derivation rules (dated post → 6 shapes;

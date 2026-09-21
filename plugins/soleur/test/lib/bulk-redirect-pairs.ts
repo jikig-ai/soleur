@@ -13,35 +13,81 @@
  *   literal `item { value { redirect { ... } } }` inside a # comment, which a
  *   naive `split("item {")` treats as a phantom block spanning into the first
  *   real item. `source_url`/`target_url` also appear in comments.
- * - Each `item {` block carries exactly one `source_url` and one
- *   `target_url`; the first match inside a block wins.
+ * - Each `item {` block is BRACE-BOUNDED — its text ends at its own closing
+ *   brace. (An earlier version sliced to the next `item {` token, which let
+ *   the last literal item's block swallow the trailing `dynamic "item"`
+ *   template and inherit its edge-301 flags — a flag deleted from the real
+ *   item still read as present.)
  * - The generated blog/tombstone items live in `dynamic "item" { ... }`, which
- *   the `item {` splitter does not match — they are pinned separately by the
+ *   the `item {` matcher does not match — they are pinned separately by the
  *   shape-arm assertions (and by validate-blog-links.sh's parity check) and
  *   enumerated for guards via `extractLocalMap` + `expandPrefixShapes` below.
- * - No escaped `\"` inside a tf string precedes a `#`/`//` on the same line
- *   (none exist today; one would mis-toggle the quote state).
+ *   `dynamicItemBlock` extracts that block for attribute pins.
+ * - Escaped `\"` inside a tf string is skipped before it can mis-toggle the
+ *   quote state.
  * - Duplicate `source_url` keys THROW (#8364): `Map.set` last-wins would let a
  *   wrong duplicate ordered before the correct item mask it silently.
  */
 
-/** Strip `#` and `//` comments, respecting double-quoted strings per line. */
+/** Strip `#`, `//`, and `/* *\/` comments, respecting double-quoted strings
+ *  (backslash escapes included). Newlines are preserved so line structure —
+ *  and therefore line-anchored assertions downstream — is unchanged. */
 export function stripTfComments(tf: string): string {
-  return tf
-    .split("\n")
-    .map((line) => {
-      let inQuote = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"') inQuote = !inQuote;
-        if (!inQuote && ch === "#") return line.slice(0, i);
-        if (!inQuote && ch === "/" && line[i + 1] === "/") {
-          return line.slice(0, i);
-        }
+  let out = "";
+  let inString = false;
+  let inBlock = false;
+  for (let i = 0; i < tf.length; i++) {
+    const ch = tf[i];
+    if (inBlock) {
+      if (ch === "*" && tf[i + 1] === "/") {
+        inBlock = false;
+        i++;
+      } else if (ch === "\n") {
+        out += "\n";
       }
-      return line;
-    })
-    .join("\n");
+      continue;
+    }
+    if (inString) {
+      out += ch;
+      if (ch === "\\" && i + 1 < tf.length) {
+        out += tf[++i];
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && tf[i + 1] === "*") {
+      inBlock = true;
+      i++;
+      continue;
+    }
+    if (ch === "#" || (ch === "/" && tf[i + 1] === "/")) {
+      while (i < tf.length && tf[i] !== "\n") i++;
+      out += "\n";
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/** Slice the brace-balanced body following a matched opener. `openBrace`
+ *  must index the opening `{`; returns the content between it and its match. */
+function braceBody(src: string, openBrace: number): string {
+  let depth = 0;
+  for (let i = openBrace; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") {
+      depth--;
+      if (depth === 0) return src.slice(openBrace + 1, i);
+    }
+  }
+  throw new Error("unbalanced braces in tf source");
 }
 
 export type RedirectItem = {
@@ -63,23 +109,44 @@ export type RedirectItem = {
  */
 export function bulkRedirectPairs(tf: string): Map<string, RedirectItem> {
   const pairs = new Map<string, RedirectItem>();
-  const blocks = stripTfComments(tf).split(/\bitem\s*\{/).slice(1);
-  for (const [index, block] of blocks.entries()) {
+  const stripped = stripTfComments(tf);
+  const opener = /\bitem\s*\{/g;
+  let m: RegExpExecArray | null;
+  let index = 0;
+  while ((m = opener.exec(stripped)) !== null) {
+    const block = braceBody(stripped, m.index + m[0].length - 1);
+    opener.lastIndex = m.index + m[0].length + block.length;
+    index++;
     const src = block.match(/source_url\s*=\s*"([^"]+)"/)?.[1];
     const tgt = block.match(/target_url\s*=\s*"([^"]+)"/)?.[1];
     if (!src) continue;
     if (pairs.has(src)) {
       throw new Error(
-        `duplicate source_url "${src}" in redirect items #${pairs.get(src)!.blockIndex + 1} and #${index + 1} — last-wins masking would hide one (#8364)`,
+        `duplicate source_url "${src}" in redirect items #${pairs.get(src)!.blockIndex + 1} and #${index} — last-wins masking would hide one (#8364)`,
       );
     }
     pairs.set(src, {
       block,
-      blockIndex: index,
+      blockIndex: index - 1,
       target: tgt ?? "<missing target_url>",
     });
   }
   return pairs;
+}
+
+/**
+ * Extract the brace-bounded body of the `dynamic "item" { ... }` block — the
+ * template every generated list item is stamped from. The block's content
+ * carries the same load-bearing attributes as a literal item (source_url /
+ * target_url wiring, status_code, include_subdomains, preserve_query_string);
+ * pinning only the declarations leaves a `301 → 302` inside `content {}`
+ * invisible to every static guard (#8364 review).
+ */
+export function dynamicItemBlock(tf: string): string {
+  const stripped = stripTfComments(tf);
+  const m = /dynamic\s+"item"\s*\{/.exec(stripped);
+  if (!m) throw new Error('no dynamic "item" block found in tf source');
+  return braceBody(stripped, m.index + m[0].length - 1);
 }
 
 /**
@@ -95,6 +162,7 @@ export function extractLocalMap(
   localName: string,
 ): Map<string, string> {
   const stripped = stripTfComments(tf);
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- localName is a test-controlled constant (blog_redirect_pairs etc.), never user input
   const open = stripped.match(new RegExp(`\\b${localName}\\s*=\\s*\\{`));
   if (!open || open.index === undefined) {
     throw new Error(`local.${localName} map not found in tf source`);

@@ -19,11 +19,12 @@
 //   local.tombstone_redirect_pairs expansion + the seo_page_redirects zone
 //   ruleset's `http.request.uri.path eq "..."` literals.
 //
-// The baseline exists so the gate fails loudly — never vacuously — if history
-// is unavailable (shallow clone) or rewritten: cat-file -e throws. The census
-// itself runs over ALL history so the one-time seed audit (the five
-// tombstone_redirect_pairs seeds + two exemptions below) is continuously
-// re-verified, not frozen at author time.
+// The history anchor exists so the gate fails loudly — never vacuously — if
+// history is unavailable (shallow clone) or rewritten: cat-file -e plus a
+// --is-shallow-repository check throw. The census itself runs over ALL
+// history so the one-time seed audit (the five tombstone_redirect_pairs seeds
+// + two exemptions below) is continuously re-verified, not frozen at author
+// time.
 //
 // Mutation battery (synthetic repos via mkdtemp + git init — git *reports*
 // are input shapes, exercised per plan-sharp-edges #5):
@@ -43,6 +44,7 @@ import {
   allDeclaredSources,
   bulkRedirectPairs,
   extractLocalMap,
+  stripTfComments,
 } from "./lib/bulk-redirect-pairs";
 import {
   assertBaselineReachable,
@@ -56,10 +58,11 @@ import {
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const DOCS_PREFIX = "plugins/soleur/docs";
 
-// PR-B squash merge — the commit that established edge-redirect coverage and
-// deleted the meta-refresh machinery. Preflighted so a missing baseline fails
-// loudly rather than scoping the census to nothing.
-const TOMBSTONE_BASELINE = "35259f264";
+// History-integrity canary — the PR-B squash merge that deleted the
+// meta-refresh machinery. The census enumerates ALL history; this anchor is
+// preflighted (plus a shallow-repository check) so a clone missing history
+// fails loudly instead of reporting "nothing died".
+const HISTORY_ANCHOR = "35259f264";
 
 // Exemptions: paths whose events are allowed to carry no redirect, each with
 // an issue ref justifying "the URL set this file served is covered by
@@ -100,7 +103,7 @@ function declaredCoverage(): Set<string> {
     if (p) set.add(p);
   }
   const ruleset = extractResourceBody(
-    readFileSync(RULESETS_TF, "utf8"),
+    stripTfComments(readFileSync(RULESETS_TF, "utf8")),
     "cloudflare_ruleset",
     "seo_page_redirects",
   );
@@ -208,8 +211,8 @@ post body for ${slug}
 `;
 
 describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8364)", () => {
-  test("baseline commit is reachable — never a vacuous census", () => {
-    assertBaselineReachable(REPO_ROOT, TOMBSTONE_BASELINE);
+  test("history anchor is reachable and the clone is not shallow — never a vacuous census", () => {
+    assertBaselineReachable(REPO_ROOT, HISTORY_ANCHOR);
   });
 
   test("every deleted/renamed/reslugged docs URL is covered, live, or exempt", () => {
@@ -221,8 +224,8 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
       "git log --diff-filter=RD produced zero events — the enumerator broke",
     ).toBeGreaterThan(0);
     expect(
-      census.permalinkRemovals,
-      "git log -G'permalink:' produced zero removals — the enumerator broke",
+      census.permalinkEvents,
+      "git log -G'permalink:' produced zero events — the enumerator broke",
     ).toBeGreaterThan(0);
 
     const result = classifyCensus(
@@ -239,7 +242,7 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
     );
     expect(
       report,
-      `tombstone census failed (${census.fileEvents} file events, ${census.permalinkRemovals} permalink removals scanned):\n\n${report}`,
+      `tombstone census failed (${census.fileEvents} file events, ${census.permalinkEvents} permalink events scanned):\n\n${report}`,
     ).toBe("");
     // Non-vacuity on the positive side: the seed audit's covered set must be
     // non-trivial or the census is not exercising coverage at all.
@@ -250,8 +253,9 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
   });
 
   test("the seed tombstones exist in local.tombstone_redirect_pairs (live-404 verified 2026-09-20)", () => {
-    // baseline..HEAD cannot see pre-baseline events — the seed entries are the
-    // one-time audit's output, pinned here so they cannot silently regress.
+    // The census sees these URLs already (all history is enumerated); the
+    // pin is that the seed entries THEMSELVES cannot silently regress — a
+    // dropped map key must fail here, not just shift the coverage check.
     const pairs = extractLocalMap(
       readFileSync(TF, "utf8"),
       "tombstone_redirect_pairs",
@@ -427,7 +431,7 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
     expect(urls.some((u) => u.includes("new-page"))).toBe(false);
   });
 
-  test("mutation: restored permalink is live, not a need", () => {
+  test("mutation: restored permalink is live, but the window URL is honestly stranded", () => {
     const dir = synthRepo();
     writeDoc(dir, "pages/foo.md", "---\npermalink: foo/\n---\nbody\n");
     commitAll(dir, "add page");
@@ -442,10 +446,13 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
       liveUrlPaths(dir, DOCS_PREFIX),
       new Set(),
     );
-    // The removal event fired but the value was re-declared — live, not red.
-    expect(result.uncovered).toEqual([]);
-    expect(result.counts.live + result.counts.exempt + result.counts.covered)
-      .toBeGreaterThanOrEqual(0); // census ran
+    // /foo/ itself is live again (restored at HEAD) and must NOT be demanded.
+    // But /pages/foo/ — the path-derived URL the file served during the
+    // remove→restore window — is genuinely dead and IS demanded. The
+    // before-vs-after diff model reports this honestly.
+    const urls = result.uncovered.map((n) => n.url).sort();
+    expect(urls).toEqual(["/pages/foo", "/pages/foo/", "/pages/foo/index.html"]);
+    expect(urls.some((u) => u === "/foo" || u.startsWith("/foo/"))).toBe(false);
   });
 
   test("mutation: D under _data/ is out of scope", () => {
@@ -493,5 +500,101 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
       new Set([`${DOCS_PREFIX}/page-redirects.njk`]),
     );
     expect(exempted.underivableUnexempt).toEqual([]);
+  });
+
+  test("mutation: reslug-by-permalink-ADDITION strands the path-derived URL", () => {
+    // The defect the -G enumeration was blind to pre-review: a path-derived
+    // page gaining a permalink kills its old URL without any -permalink: line.
+    const dir = synthRepo();
+    writeDoc(dir, "pages/foo.md", "---\ntitle: foo\n---\nbody\n");
+    commitAll(dir, "add page (path-derived URL /foo/)");
+    writeDoc(
+      dir,
+      "pages/foo.md",
+      "---\ntitle: foo\npermalink: bar/\n---\nbody\n",
+    );
+    commitAll(dir, "reslug via permalink addition");
+
+    const result = classifyCensus(
+      collectNeeds(dir, DOCS_PREFIX),
+      new Set(),
+      liveUrlPaths(dir, DOCS_PREFIX),
+      new Set(),
+    );
+    const urls = result.uncovered.map((n) => n.url).sort();
+    expect(urls).toEqual(["/pages/foo", "/pages/foo/", "/pages/foo/index.html"]);
+    // The new permalink URL is live and must NOT be demanded.
+    expect(urls.some((u) => u.includes("bar"))).toBe(false);
+  });
+
+  test("mutation: nested dated post serves /blog/<slug>/ — fileSlug strips dir+date", () => {
+    const dir = synthRepo();
+    writeDoc(dir, "blog/sub/2026-01-01-x.md", DATED_POST("x", "2026-01-01"));
+    commitAll(dir, "add nested dated post");
+    rmSync(join(dir, DOCS_PREFIX, "blog/sub/2026-01-01-x.md"));
+    commitAll(dir, "delete nested post");
+
+    const result = classifyCensus(
+      collectNeeds(dir, DOCS_PREFIX),
+      new Set(),
+      liveUrlPaths(dir, DOCS_PREFIX),
+      new Set(),
+    );
+    const urls = result.uncovered.map((n) => n.url).sort();
+    // fileSlug semantics: /blog/x/ family + dated alias family. The WRONG
+    // derivation (/blog/sub/x/) must not appear — it was never served.
+    expect(urls).toEqual([
+      "/blog/2026-01-01-x",
+      "/blog/2026-01-01-x/",
+      "/blog/2026-01-01-x/index.html",
+      "/blog/x",
+      "/blog/x/",
+      "/blog/x/index.html",
+    ]);
+  });
+
+  test("mutation: rename OUT of the docs tree re-serves nothing", () => {
+    const dir = synthRepo();
+    writeDoc(dir, "pages/foo.md", "---\ntitle: foo\n---\nbody\n");
+    commitAll(dir, "add page");
+    mkdirSync(join(dir, "other"), { recursive: true });
+    sh(dir, "git", [
+      "mv",
+      `${DOCS_PREFIX}/pages/foo.md`,
+      "other/foo.md",
+    ]);
+    commitAll(dir, "move page out of docs");
+
+    const result = classifyCensus(
+      collectNeeds(dir, DOCS_PREFIX),
+      new Set(),
+      liveUrlPaths(dir, DOCS_PREFIX),
+      new Set(),
+    );
+    const urls = result.uncovered.map((n) => n.url).sort();
+    // The new path is outside the docs prefix — it emits nothing, so the
+    // whole /foo family is stranded.
+    expect(urls).toEqual(["/pages/foo", "/pages/foo/", "/pages/foo/index.html"]);
+  });
+
+  test("mutation: adding permalink: false strands the path-derived URL", () => {
+    const dir = synthRepo();
+    writeDoc(dir, "pages/foo.md", "---\ntitle: foo\n---\nbody\n");
+    commitAll(dir, "add page");
+    writeDoc(
+      dir,
+      "pages/foo.md",
+      "---\ntitle: foo\npermalink: false\n---\nbody\n",
+    );
+    commitAll(dir, "disable emission");
+
+    const result = classifyCensus(
+      collectNeeds(dir, DOCS_PREFIX),
+      new Set(),
+      liveUrlPaths(dir, DOCS_PREFIX),
+      new Set(),
+    );
+    const urls = result.uncovered.map((n) => n.url).sort();
+    expect(urls).toEqual(["/pages/foo", "/pages/foo/", "/pages/foo/index.html"]);
   });
 });
