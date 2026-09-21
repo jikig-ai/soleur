@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-21T09:43:44Z",
+  "generated_at": "2026-09-21T13:58:29Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1214,13 +1214,13 @@
     {
       "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
-      "hit_count": 177,
+      "hit_count": 180,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 177,
-      "prevented_errors": 177,
-      "last_hit": "2026-09-21T08:34:03Z",
+      "fire_count": 180,
+      "prevented_errors": 180,
+      "last_hit": "2026-09-21T13:32:14Z",
       "first_seen": "2026-05-12T07:00:34Z",
       "rule_text_prefix": ""
     },
@@ -1240,13 +1240,13 @@
     {
       "id": "wg-defer-only-after-inline-triage",
       "section": "Workflow Gates",
-      "hit_count": 204,
+      "hit_count": 205,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 204,
-      "prevented_errors": 204,
-      "last_hit": "2026-09-21T08:43:25Z",
+      "fire_count": 205,
+      "prevented_errors": 205,
+      "last_hit": "2026-09-21T11:12:11Z",
       "first_seen": "2026-09-11T09:35:31Z",
       "rule_text_prefix": ""
     },
@@ -1283,9 +1283,8 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 591,
       "monitor-supersede": 678,
-      "net-issue-flow": 680,
+      "net-issue-flow": 694,
       "post-dispatch-watch-gate": 5689,
       "guardrails-block-recursive-delete": 403,
       "kb-domain-allowlist-guard": 237,
@@ -1310,8 +1309,9 @@
       "guardrails-worktree-write-guard": 261,
       "context-reviewed-hook-self-fault": 1,
       "adr-033-inngest-cron-canonical": 35,
+      "skill-security-scan": 632,
       "net-issue-flow-undelivered-declaration": 1,
-      "pkill-self-match-guard-readonly": 11,
+      "pkill-self-match-guard-readonly": 12,
       "durable-reminder-prefer-inngest": 22,
       "prod-write-defer-doppler-prd-secrets": 6,
       "brand-hex-commit-gate": 6,
@@ -1330,9 +1330,9 @@
         "bypass_count": 10
       }
     ],
-    "gate_override_count": 151,
+    "gate_override_count": 152,
     "gate_timeout_warn_count": 45,
-    "gate_failopen_warn_count": 126,
+    "gate_failopen_warn_count": 130,
     "gate_body_attributed_count": 65,
     "gate_undelivered_declaration_count": 1,
     "gate_contradictory_declaration_count": 0,
