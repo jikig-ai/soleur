@@ -357,6 +357,11 @@ edge… The Inngest-FIRED crons' check-ins are posted by the code `api` serves."
 note's **headline** reason is network topology (the Inngest host has no Sentry path at all), and the
 attribution sentence is secondary.
 
+> **Amendment 2026-09-21 (#6500):** the quoted model note is superseded — the dedicated Inngest host
+> now carries a boot-time `soleur-boot-emit`, and `model.c4` has an `inngest -> sentry` edge for that
+> emitter alone. The conclusion here is unaffected: it rests on the Inngest Server never opening a
+> git workspace, which is still true.
+
 It is also not `webapp -> kb`: `webapp` is a **system**, while all nine existing inbound `kb` edges
 are container or component level. `webapp -> sentry` earns system altitude because it spans the
 dashboard *and* server configs; the cron→kb path is single-container and server-only. Getting the

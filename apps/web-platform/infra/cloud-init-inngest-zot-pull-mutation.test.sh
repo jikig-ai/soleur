@@ -348,6 +348,101 @@ assert old in s, "redact value-list line not found"
 open(p,"w").write(s.replace(old,"",1))
 '
 
+# =======================================================================================
+# #6500 Guard 1 rows: each pull-outcome ARM reports on the Sentry `stage:` schema.
+# Every row names the Guard 1b assertion it must red; a row that reds on something else is
+# MISROUTED, not killed.
+# =======================================================================================
+G1_ZOT='        soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true\n'
+G1_FB='        soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true\n'
+g1_replace() { # g1_replace <id> <expect> <old> <new> [target]
+  case_mutate "$1" "$2" "${5:-$SRC}" "
+import sys
+p=sys.argv[1]; s=open(p).read()
+old=$3; new=$4
+assert s.count(old)==1, 'anchor not found exactly once'
+open(p,'w').write(s.replace(old,new,1))
+"
+}
+g1_replace g1-row1-served-emit-deleted "G1b: the served arm emits inngest_zot exactly once" \
+  "'''$G1_ZOT'''" "''"
+g1_replace g1-row2-missed-emit-deleted "G1b: the missed arm emits inngest_ghcr_fallback exactly once" \
+  "'''$G1_FB'''" "''"
+g1_replace g1-row3a-served-not-guarded "G1b: the served arm emits inngest_zot exactly once" \
+  "'''$G1_ZOT'''" "'''        soleur-boot-emit inngest_zot info \"ep=\$ZOT_EP\"\n'''"
+g1_replace g1-row3b-missed-not-guarded "G1b: the missed arm emits inngest_ghcr_fallback exactly once" \
+  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_ghcr_fallback warning \"rc=\$zot_rc\"\n'''"
+# Row 4: relocate the served call into the missed arm — both calls then sit in one arm, which a
+# file-level count cannot see.
+case_mutate g1-row4-served-call-in-missed-arm "G1b: the served arm emits inngest_zot exactly once" "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+assert s.count(zot)==1 and s.count(fb)==1, "call sites not found"
+s=s.replace(zot,"",1).replace(fb,fb+zot,1)
+open(p,"w").write(s)
+'
+g1_replace g1-row5-served-emits-twice "G1b: the served arm emits inngest_zot exactly once" \
+  "'''$G1_ZOT'''" "'''$G1_ZOT$G1_ZOT'''"
+g1_replace g1-row6-stage-renamed "G1b: the served arm emits inngest_zot exactly once" \
+  "'''$G1_ZOT'''" "'''        soleur-boot-emit inngest_zot_ok info \"ep=\$ZOT_EP\" || true\n'''"
+g1_replace g1-row7-absolute-path "G1b: the served arm emits inngest_zot exactly once" \
+  "'''$G1_ZOT'''" "'''        /usr/local/bin/soleur-boot-emit inngest_zot info \"ep=\$ZOT_EP\" || true\n'''"
+g1_replace g1-row8-double-space "G1b: the served arm emits inngest_zot exactly once" \
+  "'''$G1_ZOT'''" "'''        soleur-boot-emit  inngest_zot info \"ep=\$ZOT_EP\" || true\n'''"
+g1_replace g1-row9-tf-key-dropped "G1b: inngest-host.tf threads sentry_dsn = var.sentry_dsn" \
+  "'''    sentry_dsn = var.sentry_dsn\n'''" "''" inngest-host.tf
+g1_replace g1-row11-dsn-file-world-readable "G1b: write_files delivers /etc/default/soleur-sentry-dsn 0600" \
+  "'''      SOLEUR_SENTRY_DSN='\${sentry_dsn}'\n    owner: root:root\n    permissions: '0600'\n'''" \
+  "'''      SOLEUR_SENTRY_DSN='\${sentry_dsn}'\n    owner: root:root\n    permissions: '0644'\n'''"
+g1_replace g1-row12-arm-anchor-drifted "G1b dispatch: the served (zot) arm was extracted" \
+  "'''      if [ \"\$zot_rc\" -eq 0 ]; then\n'''" "'''      if [ \"\$zot_rc\" = 0 ]; then\n'''"
+g1_replace g1-extra-backgrounded-emit "G1b: no soleur-boot-emit call is backgrounded" \
+  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_ghcr_fallback warning \"rc=\$zot_rc\" || true &\n'''"
+# Review P1-2: a nested if/else inside the SERVED arm must not be read as the arm split. Delete
+# the real fallback emit and plant one behind a nested `else` in the served arm.
+case_mutate g1-row14-nested-else-hijack "G1b: the missed arm emits inngest_ghcr_fallback exactly once" "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+assert s.count(zot)==1 and s.count(fb)==1, "call sites not found"
+plant=("        if [ -n \"$IREF\" ]; then :\n        else\n"
+       "          ZOT_LEG=\"$ZOT_LEG\"\n          ZOT_LEG=\"$ZOT_LEG\"\n"
+       "          soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n        fi\n")
+s=s.replace(fb,"",1).replace(zot,zot+plant,1)
+open(p,"w").write(s)
+'
+# Review P2-3: a call that can never run is not a call. Dead code behind `if false`, and dead code
+# inside a heredoc (data, not shell).
+case_mutate g1-row15-dead-if-false "G1b: the served arm emits inngest_zot exactly once" "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+assert s.count(zot)==1, "call site not found"
+s=s.replace(zot,"        if false; then\n  "+zot+"        fi\n",1)
+open(p,"w").write(s)
+'
+case_mutate g1-row16-dead-heredoc "G1b: the missed arm emits inngest_ghcr_fallback exactly once" "$SRC" '
+import sys
+p=sys.argv[1]; s=open(p).read()
+fb="        soleur-boot-emit inngest_ghcr_fallback warning \"rc=$zot_rc\" || true\n"
+assert s.count(fb)==1, "call site not found"
+s=s.replace(fb,"        : <<'"'"'OFF'"'"'\n"+fb+"        OFF\n",1)
+open(p,"w").write(s)
+'
+# Row 13 (harness): a mutator that changes nothing must ABORT the battery, never score a verdict.
+# Run in a subshell so the die() it triggers is observed rather than inherited.
+G1_PROBE_RC=0
+( case_mutate g1-row13-harness-probe "unused" "$SRC" 'import sys' ) >/dev/null 2>&1 || G1_PROBE_RC=$?
+TOTAL=$((TOTAL + 1))
+if [[ "$G1_PROBE_RC" -eq 2 ]]; then
+  PASS=$((PASS + 1)); echo "  KILLED:   g1-row13-harness-probe — an unlanded mutation ABORTS (rc=2)"
+else
+  FAIL=$((FAIL + 1)); echo "  SURVIVED: g1-row13-harness-probe — an unlanded mutation did not abort (rc=$G1_PROBE_RC)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$TOTAL mutants killed ==="
 if (( FAIL > 0 )); then
