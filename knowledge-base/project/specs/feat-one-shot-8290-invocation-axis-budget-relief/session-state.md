@@ -88,3 +88,23 @@ prose before shipping it. #8457 automates that for the first of the three.
   - A plan-time probe on Claude Code 2.1.278 showed three things: flagged plugin skills leave the listing, the Skill tool refuses them, and a headless slash still runs them.
   - W0 (TUI, Devin) runs FIRST, and a failure triggers the W0-STOP profile.
   - B5 is a pre-registered generation-surface A/B. An EXTEND lands in a follow-up PR.
+
+## Plan Phase
+- Plan file: knowledge-base/project/plans/2026-09-21-refactor-invocation-axis-budget-relief-plan.md
+- Status: complete (plan + 9-seat plan-review + deepen)
+- Post-plan collision re-probe (closes: 8290): only merged #8405 (cites, closes #8289) — clear.
+
+### Errors
+- deepen-plan Phase 4.7 observability gate fired (.ts/.cjs in Files-to-Edit); replaced prose with 5-field schema.
+- Three agent outputs corrected: trigger-cron wrongly marked flip-safe (bare-name grep refuted); stale 1800-word budget cited; one wrong learning filename.
+- Pre-commit hook regenerated knowledge-base/INDEX.md + KB tag files (outside plans/specs — hook-owned, expected).
+
+### Decisions
+- Flip 12 skills, not 16: flag-bootstrap is not a skill; trigger-cron, invoice, flag-list stay model-invocable (pinned by invocation-axis.test.ts with reasons).
+- B_ALWAYS delta measured 0 bytes (skill descriptions are a different budget); live headroom 1,080 B vs ADR-151's stale 1,453. Real saving 266 words / 1,733 B of description listing; cap 2561 -> 2295. New ADR (provisional 236) + ADR-151 addendum.
+- Upstream-bug preflight first (interactive CLI + Devin); if flagged skills hide from the user, drop the flip and ship `Ref #8290`.
+- B5 pre-registered A/B (4 "Never ..." rules, 10pt MWE, $60 cap); improvement -> separate PR for operator ack; no effect -> no-list entry; inconclusive -> ADR + issue only.
+- Repo-global ratchets as a mandatory staged step before first push; never scripts/test-all.sh; never close #8292.
+
+### Components Invoked
+soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, learnings-researcher, functional-discovery, claude-code-guide, cto/cpo/coo/clo, 9-seat plan-review panel, security-sentinel, git-history-analyzer, pattern-recognition-specialist.
