@@ -1,0 +1,172 @@
+[flag-create] plugins/soleur/docs/_data/skills.js:78:  "flag-create": "Workflow",
+[flag-create] plugins/soleur/skills/flag-bootstrap/SETUP.md:4:operator skills (`flag-create`, `flag-set-role`, `user-set-role`) work
+[flag-create] plugins/soleur/skills/flag-bootstrap/SETUP.md:105:bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-create/scripts/create.sh" _test_probe --dry-run
+[flag-create] plugins/soleur/skills/flag-delete/SKILL.md:3:description: "This skill should be used to delete a runtime feature flag end-to-end (the inverse of flag-create): removes it from Flagsmith, server.ts RUNTIME_FLAGS, .env.exam
+[flag-create] plugins/soleur/skills/flag-delete/SKILL.md:13:`flag-create`, the **Delete** verb of the flag CRUD set. Destructive: gated by a
+[flag-create] plugins/soleur/skills/flag-delete/SKILL.md:32:The flag CRUD set: `soleur:flag-create` (Create), `soleur:flag-set-role`
+[flag-create] plugins/soleur/skills/flag-delete/SKILL.md:124:- Inverse skill: `soleur:flag-create`. Sibling skills: `soleur:flag-list`, `soleur:flag-set-role`.
+[flag-create] plugins/soleur/skills/flag-delete/scripts/delete.sh:2:# Delete a runtime feature flag end-to-end — the exact inverse of flag-create.
+[flag-create] plugins/soleur/skills/flag-delete/scripts/delete.sh:12:# Contract: SKILL.md in the parent directory. Inverse of flag-create/scripts/create.sh.
+[flag-create] plugins/soleur/skills/flag-list/SKILL.md:26:- Creating a flag → `soleur:flag-create`.
+[flag-create] plugins/soleur/skills/flag-list/SKILL.md:32:The flag CRUD set: `soleur:flag-create` (Create), `soleur:flag-set-role`
+[flag-create] plugins/soleur/skills/flag-list/SKILL.md:94:- Sibling skills: `soleur:flag-create`, `soleur:flag-set-role`, `soleur:flag-delete`
+[flag-create] plugins/soleur/skills/flag-list/scripts/list.sh:7:# (flag-create=Create, flag-set-role=Update, flag-list=Read, flag-delete=Delete).
+[flag-create] plugins/soleur/skills/flag-list/scripts/list.sh:49:# --- constants (mirror flag-create/scripts/create.sh + flip.sh) -------------
+[flag-create] plugins/soleur/skills/flag-set-role/SKILL.md:27:- Creating a brand-new flag → use `soleur:flag-create`.
+[flag-create] plugins/soleur/skills/flag-set-role/SKILL.md:135:- Sibling skills (flag CRUD set): `soleur:flag-create` (Create), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`
+[flag-create] plugins/soleur/skills/skill-creator/references/skill-structure.md:161:first, the action second. Shipped evidence -- `flag-create`, `flag-delete`, `flag-list`,
+[flag-create] plugins/soleur/skills/user-set-role/SKILL.md:103:- Sibling skills: `soleur:flag-set-role`, `soleur:flag-create`
+[flag-create] plugins/soleur/test/devin-cloud-mode.test.ts:461:    "admin-ip-refresh", "cf-token-scope", "deploy", "flag-create",
+[flag-create] plugins/soleur/test/devin-cloud-mode.test.ts:894:  "skills/fix-issue", "skills/flag-create", "skills/flag-delete", "skills/flag-list",
+[flag-delete] plugins/soleur/docs/_data/skills.js:79:  "flag-delete": "Workflow",
+[flag-delete] plugins/soleur/skills/flag-create/SKILL.md:101:- Sibling skills (flag CRUD set): `soleur:flag-set-role` (Update), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`
+[flag-delete] plugins/soleur/skills/flag-list/SKILL.md:14:active flags before a promotion (`flag-set-role`) or a delete (`flag-delete`).
+[flag-delete] plugins/soleur/skills/flag-list/SKILL.md:28:- Removing a flag → `soleur:flag-delete`.
+[flag-delete] plugins/soleur/skills/flag-list/SKILL.md:34:`soleur:flag-delete` (Delete). Initial wiring is the `flag-bootstrap/SETUP.md`
+[flag-delete] plugins/soleur/skills/flag-list/SKILL.md:94:- Sibling skills: `soleur:flag-create`, `soleur:flag-set-role`, `soleur:flag-delete`
+[flag-delete] plugins/soleur/skills/flag-list/scripts/list.sh:7:# (flag-create=Create, flag-set-role=Update, flag-list=Read, flag-delete=Delete).
+[flag-delete] plugins/soleur/skills/flag-set-role/SKILL.md:135:- Sibling skills (flag CRUD set): `soleur:flag-create` (Create), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`
+[flag-delete] plugins/soleur/skills/flag-set-role/scripts/flip.sh:72:# Co-editor: soleur:flag-delete (scripts/delete.sh) removes an entry from this
+[flag-delete] plugins/soleur/skills/incident/test/redact-sentinel.test.sh:1248:      # classification table). Measured: `flag-delete/scripts/delete.sh` names `flip.sh` twice
+[flag-delete] plugins/soleur/skills/incident/test/redact-sentinel.test.sh:1267:      # re-flag `flag-delete`'s `FLIP_SH`, which is only ever read as content (a data root).
+[flag-delete] plugins/soleur/skills/skill-creator/references/skill-structure.md:161:first, the action second. Shipped evidence -- `flag-create`, `flag-delete`, `flag-list`,
+[flag-delete] plugins/soleur/test/components.test.ts:21:const SKILL_DESCRIPTION_WORD_BUDGET = 2561; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 19
+[flag-delete] plugins/soleur/test/devin-cloud-mode.test.ts:462:    "flag-delete", "flag-list", "flag-set-role", "incident", "operator-digest",
+[flag-delete] plugins/soleur/test/devin-cloud-mode.test.ts:894:  "skills/fix-issue", "skills/flag-create", "skills/flag-delete", "skills/flag-list",
+[flag-set-role] apps/web-platform/lib/feature-flags/server.ts:14:// INVARIANT (enforced by soleur:flag-set-role in PR #2): every FLAG_* env var
+[flag-set-role] plugins/soleur/docs/_data/skills.js:81:  "flag-set-role": "Workflow",
+[flag-set-role] plugins/soleur/skills/flag-bootstrap/SETUP.md:4:operator skills (`flag-create`, `flag-set-role`, `user-set-role`) work
+[flag-set-role] plugins/soleur/skills/flag-bootstrap/SETUP.md:103:bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" kb-chat-sidebar dev on --dry-run
+[flag-set-role] plugins/soleur/skills/flag-bootstrap/SETUP.md:118:2. The runtime skills (`flag-set-role`, etc.) need to mutate Flagsmith
+[flag-set-role] plugins/soleur/skills/flag-create/SKILL.md:25:- Toggling an existing flag → use `soleur:flag-set-role`.
+[flag-set-role] plugins/soleur/skills/flag-create/SKILL.md:41:with `soleur:flag-set-role <flag> <env> on --org <orgId>`.
+[flag-set-role] plugins/soleur/skills/flag-create/SKILL.md:72:   `soleur:flag-set-role`.
+[flag-set-role] plugins/soleur/skills/flag-create/SKILL.md:101:- Sibling skills (flag CRUD set): `soleur:flag-set-role` (Update), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`
+[flag-set-role] plugins/soleur/skills/flag-create/scripts/create.sh:93:  echo "feature '$NAME' already exists in Flagsmith — use flag-set-role to toggle" >&2; exit 1
+[flag-set-role] plugins/soleur/skills/flag-create/scripts/create.sh:177:  echo "  Next: scope it per-org with soleur:flag-set-role $NAME prd on --org <orgId>."
+[flag-set-role] plugins/soleur/skills/flag-delete/SKILL.md:3:description: "This skill should be used to delete a runtime feature flag end-to-end (the inverse of flag-create): removes it from Flagsmith, server.ts RUNTIME_FLAGS, .env.exam
+[flag-set-role] plugins/soleur/skills/flag-delete/SKILL.md:26:- Turning a flag off without removing it → `soleur:flag-set-role <flag> <env> off`.
+[flag-set-role] plugins/soleur/skills/flag-delete/SKILL.md:32:The flag CRUD set: `soleur:flag-create` (Create), `soleur:flag-set-role`
+[flag-set-role] plugins/soleur/skills/flag-delete/SKILL.md:71:   `flag-set-role` `FLAG_ENV_VARS` map (a stale entry lets `flag-set-role` try
+[flag-set-role] plugins/soleur/skills/flag-delete/SKILL.md:124:- Inverse skill: `soleur:flag-create`. Sibling skills: `soleur:flag-list`, `soleur:flag-set-role`.
+[flag-set-role] plugins/soleur/skills/flag-delete/scripts/delete.sh:7:#   4. flag-set-role/scripts/flip.sh FLAG_ENV_VARS map entry (the 5th site the
+[flag-set-role] plugins/soleur/skills/flag-delete/scripts/delete.sh:8:#      issue's 4-site framing misses — a stale entry lets flag-set-role try to
+[flag-set-role] plugins/soleur/skills/flag-list/SKILL.md:14:active flags before a promotion (`flag-set-role`) or a delete (`flag-delete`).
+[flag-set-role] plugins/soleur/skills/flag-list/SKILL.md:27:- Toggling a flag per role/org → `soleur:flag-set-role`.
+[flag-set-role] plugins/soleur/skills/flag-list/SKILL.md:32:The flag CRUD set: `soleur:flag-create` (Create), `soleur:flag-set-role`
+[flag-set-role] plugins/soleur/skills/flag-list/SKILL.md:67:   `flag-set-role`'s feature-state read shape).
+[flag-set-role] plugins/soleur/skills/flag-list/SKILL.md:94:- Sibling skills: `soleur:flag-create`, `soleur:flag-set-role`, `soleur:flag-delete`
+[flag-set-role] plugins/soleur/skills/flag-list/scripts/list.sh:7:# (flag-create=Create, flag-set-role=Update, flag-list=Read, flag-delete=Delete).
+[flag-set-role] plugins/soleur/skills/skill-creator/references/skill-structure.md:162:`flag-set-role`; `cron-list`, `cron-delete`; `legal-audit`, `legal-generate`; `operator-digest`,
+[flag-set-role] plugins/soleur/skills/user-set-role/SKILL.md:103:- Sibling skills: `soleur:flag-set-role`, `soleur:flag-create`
+[flag-set-role] plugins/soleur/test/devin-cloud-mode.test.ts:462:    "flag-delete", "flag-list", "flag-set-role", "incident", "operator-digest",
+[flag-set-role] plugins/soleur/test/devin-cloud-mode.test.ts:895:  "skills/flag-set-role", "skills/frontend-design", "skills/gdpr-gate", "skills/go",
+[cron-list] plugins/soleur/docs/_data/skills.js:109:  "cron-list": "Workflow",
+[cron-list] plugins/soleur/skills/cron-delete/SKILL.md:18:list/delete logic), `soleur:cron-list` (Read — list), **`cron-delete` (Delete —
+[cron-list] plugins/soleur/skills/cron-delete/SKILL.md:37:   operator to `soleur:cron-list` to see available schedules.
+[cron-list] plugins/soleur/skills/schedule/SKILL.md:732:> Also exposed as the first-class verb `soleur:cron-list` (Read), which runs these exact steps. The cron CRUD set: `soleur:schedule` (Create — this), `soleur:cron-list` (Read),
+[cron-list] plugins/soleur/skills/skill-creator/references/skill-structure.md:162:`flag-set-role`; `cron-list`, `cron-delete`; `legal-audit`, `legal-generate`; `operator-digest`,
+[cron-list] plugins/soleur/skills/trigger-cron/SKILL.md:26:The cron CRUD set: `soleur:schedule` (Create), `soleur:cron-list` (Read),
+[cron-list] plugins/soleur/test/components.test.ts:21:const SKILL_DESCRIPTION_WORD_BUDGET = 2561; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 19
+[cron-delete] plugins/soleur/docs/_data/skills.js:110:  "cron-delete": "Workflow",
+[cron-delete] plugins/soleur/skills/cron-list/SKILL.md:20:list/delete logic), **`cron-list` (Read — this)**, `soleur:cron-delete`
+[cron-delete] plugins/soleur/skills/schedule/SKILL.md:732:> Also exposed as the first-class verb `soleur:cron-list` (Read), which runs these exact steps. The cron CRUD set: `soleur:schedule` (Create — this), `soleur:cron-list` (Read),
+[cron-delete] plugins/soleur/skills/schedule/SKILL.md:771:> Also exposed as the first-class verb `soleur:cron-delete` (Delete), which runs these exact steps.
+[cron-delete] plugins/soleur/skills/skill-creator/references/skill-structure.md:162:`flag-set-role`; `cron-list`, `cron-delete`; `legal-audit`, `legal-generate`; `operator-digest`,
+[cron-delete] plugins/soleur/skills/trigger-cron/SKILL.md:27:`soleur:cron-delete` (Delete), **`soleur:trigger-cron` (Run-now — this)**.
+[cron-delete] plugins/soleur/test/components.test.ts:21:const SKILL_DESCRIPTION_WORD_BUDGET = 2561; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 19
+[provision-cloudflare] knowledge-base/engineering/operations/runbooks/tenant-provisioning.md:98:> **Skill:** `soleur:provision-cloudflare <slug> <zone-id> <account-id> [--dry-run]` — Terraform `cloudflare_api_token` with least-privilege permis
+[provision-cloudflare] plugins/soleur/docs/_data/skills.js:94:  "provision-cloudflare": "Workflow",
+[provision-cloudflare] plugins/soleur/skills/cf-token-scope/SKILL.md:157:- [provision-cloudflare](../provision-cloudflare/SKILL.md) — mints *tenant* tokens (a distinct function; requires `User API Tokens:Edit`, which no Soleur token holds).
+[provision-cloudflare] plugins/soleur/skills/cf-token-scope/references/widen-playbook.md:24:  that; see `soleur:provision-cloudflare` and ADR-130.
+[provision-cloudflare] plugins/soleur/skills/eval-harness/prompts/tool-selection-baseline.txt:10:legal-generate, provision-github, provision-cloudflare, provision-doppler, schedule.
+[provision-cloudflare] plugins/soleur/skills/provision-doppler/SKILL.md:54:- Next-step hint points to `provision-cloudflare`, which differs from runbook step order (Step 3 here → Step 2 there).
+[provision-cloudflare] plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh:201:  echo "Next step: soleur:provision-cloudflare ${SLUG} <zone-id> <account-id>"
+[provision-cloudflare] plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh:345:echo "Next step: soleur:provision-cloudflare ${SLUG} <zone-id> <account-id>"
+[provision-cloudflare] plugins/soleur/test/devin-cloud-mode.test.ts:463:    "postmerge", "provision-cloudflare", "provision-doppler",
+[provision-cloudflare] plugins/soleur/test/devin-cloud-mode.test.ts:899:  "skills/preflight", "skills/product-roadmap", "skills/provision-cloudflare",
+[provision-doppler] knowledge-base/engineering/operations/runbooks/tenant-provisioning.md:135:> **Skill:** `soleur:provision-doppler <slug> <org> <repo> [--dry-run]` — Terraform `doppler_project` + `doppler_config`, then OIDC service-accoun
+[provision-doppler] plugins/soleur/docs/_data/skills.js:95:  "provision-doppler": "Workflow",
+[provision-doppler] plugins/soleur/scripts/lib/operator-script.sh:96:# (provision-doppler.sh records the same reason at its own prologue). On a
+[provision-doppler] plugins/soleur/skills/eval-harness/prompts/tool-selection-baseline.txt:10:legal-generate, provision-github, provision-cloudflare, provision-doppler, schedule.
+[provision-doppler] plugins/soleur/test/devin-cloud-mode.test.ts:463:    "postmerge", "provision-cloudflare", "provision-doppler",
+[provision-doppler] plugins/soleur/test/devin-cloud-mode.test.ts:900:  "skills/provision-doppler", "skills/provision-github", "skills/provision-hetzner",
+[provision-github] knowledge-base/engineering/operations/runbooks/tenant-provisioning.md:169:> **Skill:** `soleur:provision-github <slug> <org> <reviewer> [--dry-run]` — Terraform `github_repository` + `github_repository_environment`, then
+[provision-github] knowledge-base/engineering/operations/runbooks/tenant-provisioning.md:319:> **Skill:** `soleur:provision-github` (same skill as Step 4) — creates the `production` Environment + required reviewers + deployment branch poli
+[provision-github] plugins/soleur/docs/_data/skills.js:96:  "provision-github": "Workflow",
+[provision-github] plugins/soleur/skills/eval-harness/prompts/tool-selection-baseline.txt:10:legal-generate, provision-github, provision-cloudflare, provision-doppler, schedule.
+[provision-github] plugins/soleur/skills/provision-hetzner/scripts/provision-hetzner.sh:156:  echo "Next step: soleur:provision-github ${SLUG} <org> <reviewer>"
+[provision-github] plugins/soleur/skills/provision-hetzner/scripts/provision-hetzner.sh:262:echo "Next step: soleur:provision-github ${SLUG} <org> <reviewer>"
+[provision-github] plugins/soleur/skills/provision-hetzner/test/fixture/provision-hetzner-dry-run.golden:24:Next step: soleur:provision-github fixture-tenant <org> <reviewer>
+[provision-github] plugins/soleur/test/devin-cloud-mode.test.ts:464:    "provision-github", "provision-hetzner", "qa", "reproduce-bug",
+[provision-github] plugins/soleur/test/devin-cloud-mode.test.ts:900:  "skills/provision-doppler", "skills/provision-github", "skills/provision-hetzner",
+[provision-hetzner] apps/web-platform/server/git-lock-marker-telemetry.ts:126:// provision-hetzner.sh) — the header of that file is the contract listing every marker:
+[provision-hetzner] apps/web-platform/server/git-lock-marker-telemetry.ts:136:// skills/*/scripts/*.sh and found the family unmirrored on provision-hetzner.sh.
+[provision-hetzner] apps/web-platform/test/git-lock-marker-telemetry.test.ts:75:    // collects from provision-hetzner.sh, plus one library-emitted marker — and the
+[provision-hetzner] knowledge-base/engineering/operations/runbooks/tenant-provisioning.md:59:> **Skill:** `soleur:provision-hetzner <slug> [--dry-run]` — guided Console flow + write-class smoke-test. No Terraform (Console-only).
+[provision-hetzner] plugins/soleur/docs/_data/skills.js:97:  "provision-hetzner": "Workflow",
+[provision-hetzner] plugins/soleur/scripts/lib/operator-script.sh:323:#              behind the same gate — see provision-hetzner.sh. This helper
+[provision-hetzner] plugins/soleur/scripts/lib/operator-script.sh:357:#   in provision-hetzner.sh is fail-closed but MUTE — EOF read into an empty ACK
+[provision-hetzner] plugins/soleur/scripts/lib/operator-script.sh:515:  # the consumer's — provision-hetzner.sh installs `cleanup`, the generated template
+[provision-hetzner] plugins/soleur/skills/incident/test/redact-sentinel.test.sh:1203:#   provision-hetzner.sh      — silent interactive prompt (`read -rs`)
+[provision-hetzner] plugins/soleur/skills/incident/test/redact-sentinel.test.sh:1209:  "skills/provision-hetzner/scripts/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/skills/operator-bootstrap/SKILL.md:87:  copy the shape from `provision-hetzner.sh`. `soleur_op_value` is for non-secret ladder values
+[provision-hetzner] plugins/soleur/skills/operator-bootstrap/SKILL.md:230:- `soleur:provision-hetzner` — the proving consumer; read its script for a real refactor onto the library.
+[provision-hetzner] plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh:188:  echo "Next step: soleur:provision-hetzner ${SLUG}"
+[provision-hetzner] plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh:241:echo "Next step: soleur:provision-hetzner ${SLUG}"
+[provision-hetzner] plugins/soleur/test/devin-cloud-mode.test.ts:464:    "provision-github", "provision-hetzner", "qa", "reproduce-bug",
+[provision-hetzner] plugins/soleur/test/devin-cloud-mode.test.ts:900:  "skills/provision-doppler", "skills/provision-github", "skills/provision-hetzner",
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:964:# provision-hetzner.sh behaviour
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:993:# provision-hetzner.sh would then create a real billable server fully unattended.
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1007:HETZNER_SRC="${PLUGIN_ROOT}/skills/provision-hetzner/scripts/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1009:  cp "$HETZNER_SRC" "$SB/run/consumer-mut/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1011:    "$SB/run/consumer-mut/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1012:  if [[ "$(md5_of "$SB/run/consumer-mut/provision-hetzner.sh")" == "$(md5_of "$HETZNER_SRC")" ]]; then
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1026:  cp "$HETZNER_SRC" "$SB/run/consumer-mut2/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1028:    "$SB/run/consumer-mut2/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1029:  if [[ "$(md5_of "$SB/run/consumer-mut2/provision-hetzner.sh")" == "$(md5_of "$HETZNER_SRC")" ]]; then
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1226:  cp "$HETZNER_SRC" "$SB/run/ack-mut/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1227:  perl -0777 -pi -e 's{^soleur_op_ack_or_die "Create the billable probe server[^\n]*\n}{}m' "$SB/run/ack-mut/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1228:  if [[ "$(md5_of "$SB/run/ack-mut/provision-hetzner.sh")" == "$(md5_of "$HETZNER_SRC")" ]]; then
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1236:  cp "$HETZNER_SRC" "$SB/run/ack-mut2/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1237:  perl -0777 -pi -e 's{^soleur_op_ack_or_die "Create the billable probe server[^\n]*\n}{# soleur_op_ack_or_die "Create the billable probe server" (commented out)\n}m' "$SB
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1238:  if [[ "$(md5_of "$SB/run/ack-mut2/provision-hetzner.sh")" != "$(md5_of "$HETZNER_SRC")" ]]; then
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1263:# template's stages and provision-hetzner.sh use): `read -rs`, `read -s`, `curl
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1824:HETZ_FIXTURE_KB="${PLUGIN_ROOT}/skills/provision-hetzner/test/fixture/knowledge-base"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1883:  mkdir -p "$SB/unatt/live"; cp "$HETZNER_SRC" "$SB/unatt/live/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1884:  assert_green gunatt_check "live consumer, fully unattended" "$SB/unatt/live/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1889:  printf '#!/usr/bin/env bash\nhcloud server create --name probe\n' > "$SB/unatt/probe/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1890:  assert_red gunatt_check "gunatt own-dispatch: a bare create is observed" "$SB/unatt/probe/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1895:  cp "$HETZNER_SRC" "$SB/unatt/condack/provision-hetzner.sh"
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1896:  perl -0777 -pi -e 's{^(soleur_op_ack_or_die "Create the billable probe server[^\n]*)\n}{if [[ -z "\$\{SOLEUR_BOOTSTRAP_ASSUME_YES:-\}" ]]; then\n  $1\nfi\n}m' "$SB/unatt
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1897:  if [[ "$(md5_of "$SB/unatt/condack/provision-hetzner.sh")" == "$(md5_of "$HETZNER_SRC")" ]]; then
+[provision-hetzner] plugins/soleur/test/operator-script.test.sh:1901:    assert_red gunatt_check "gunatt: a conditionally-skipped ack reaches the billable create" "$SB/unatt/condack/provision-hetzner.sh"
+[admin-ip-refresh] apps/web-platform/infra/server.tf:1029:# `connection reset by peer` here is admin-IP drift (fix: /soleur:admin-ip-refresh,
+[admin-ip-refresh] apps/web-platform/infra/server.tf:1387:# (fix: /soleur:admin-ip-refresh, runbook admin-ip-drift.md), NOT an sshd/handler
+[admin-ip-refresh] knowledge-base/engineering/operations/runbooks/admin-ip-drift.md:12:**Automation:** `/soleur:admin-ip-refresh`
+[admin-ip-refresh] knowledge-base/engineering/operations/runbooks/admin-ip-drift.md:99:Run `/soleur:admin-ip-refresh` and follow its prompts. The skill:
+[admin-ip-refresh] knowledge-base/engineering/operations/runbooks/admin-ip-drift.md:118:If `/soleur:admin-ip-refresh` is unavailable:
+[admin-ip-refresh] knowledge-base/engineering/operations/runbooks/admin-ip-drift.md:233:`/soleur:admin-ip-refresh` is designed to run pre-emptively. Operators
+[admin-ip-refresh] knowledge-base/engineering/operations/runbooks/vector-redeliver.md:146:2. **L3 — firewall.** Applies to the operator-local apply path only, **not** to this CI arm — CI reaches web-1 through the tunnel, not through `var.a
+[admin-ip-refresh] plugins/soleur/README.md:298:| `admin-ip-refresh` | Refresh the prod SSH allowlist (Doppler ADMIN_IPS) after operator IP rotation |
+[admin-ip-refresh] plugins/soleur/docs/_data/skills.js:72:  "admin-ip-refresh": "Workflow",
+[admin-ip-refresh] plugins/soleur/test/devin-cloud-mode.test.ts:461:    "admin-ip-refresh", "cf-token-scope", "deploy", "flag-create",
+[admin-ip-refresh] plugins/soleur/test/devin-cloud-mode.test.ts:888:  "devin/go", "devin/help", "devin/sync", "skills/admin-ip-refresh",
+[user-set-role] apps/web-platform/supabase/migrations/054_users_role_column.sql:4:-- and 'dev' (beta/internal testers). Soleur skill `user-set-role` is the
+[user-set-role] apps/web-platform/supabase/migrations/054_users_role_column.sql:49:      message = 'role column can only be updated by the service role (use soleur:user-set-role)';
+[user-set-role] plugins/soleur/docs/_data/skills.js:111:  "user-set-role": "Workflow",
+[user-set-role] plugins/soleur/skills/flag-bootstrap/SETUP.md:4:operator skills (`flag-create`, `flag-set-role`, `user-set-role`) work
+[user-set-role] plugins/soleur/skills/flag-bootstrap/SETUP.md:104:bash "${CLAUDE_PLUGIN_ROOT}/skills/user-set-role/scripts/set-role.sh" <your-email> dev --dry-run
+[user-set-role] plugins/soleur/skills/flag-create/SKILL.md:101:- Sibling skills (flag CRUD set): `soleur:flag-set-role` (Update), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`
+[user-set-role] plugins/soleur/skills/flag-set-role/SKILL.md:28:- Promoting a user to dev → use `soleur:user-set-role`.
+[user-set-role] plugins/soleur/skills/flag-set-role/SKILL.md:135:- Sibling skills (flag CRUD set): `soleur:flag-create` (Create), `soleur:flag-list` (Read), `soleur:flag-delete` (Delete), `soleur:user-set-role`
+[user-set-role] plugins/soleur/test/devin-cloud-mode.test.ts:465:    "test-browser", "trigger-cron", "user-set-role", "ux-audit",
+[user-set-role] plugins/soleur/test/devin-cloud-mode.test.ts:905:  "skills/triage", "skills/trigger-cron", "skills/user-set-role", "skills/ux-audit",
+[cf-token-scope] plugins/soleur/README.md:301:| `cf-token-scope` | Widen a Cloudflare API token's scope via Playwright, then run the ADR-130 retained-scope probe set |
+[cf-token-scope] plugins/soleur/skills/agent-browser/SKILL.md:495:(`qa`, `reproduce-bug`, `ux-audit`, `review` e2e, `cf-token-scope`) carry the
+[cf-token-scope] plugins/soleur/test/cf-token-scope.test.sh:2:# Test for cf-token-scope.sh — the deterministic three-layer fail-closed
+[cf-token-scope] plugins/soleur/test/cf-token-scope.test.sh:22:SUT="$TESTDIR/../skills/cf-token-scope/scripts/cf-token-scope.sh"
+[cf-token-scope] plugins/soleur/test/cf-token-scope.test.sh:31:WORK="$(mktemp -d -t cf-token-scope-test.XXXXXXXX)"
+[cf-token-scope] plugins/soleur/test/components.test.ts:21:const SKILL_DESCRIPTION_WORD_BUDGET = 2561; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 19
+[cf-token-scope] plugins/soleur/test/devin-cloud-mode.test.ts:461:    "admin-ip-refresh", "cf-token-scope", "deploy", "flag-create",
+[cf-token-scope] plugins/soleur/test/devin-cloud-mode.test.ts:890:  "skills/brainstorm", "skills/cf-token-scope", "skills/code-to-prd", "skills/community",

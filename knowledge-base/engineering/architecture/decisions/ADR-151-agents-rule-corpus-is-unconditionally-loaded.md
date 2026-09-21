@@ -396,3 +396,16 @@ extended for migrated rules by the body hash each registry row carries.
 The quarterly `cron-rule-prune` (`rule-prune.sh --propose-retirement`) is unaffected in practice: it
 skips rules whose `first_seen` is null (#3156), so it never nominates a never-fired rule; its dry-run
 against the 2026-09-14 metrics returns no candidates.
+
+## Addendum — 2026-09-21 (#8290): the invocation axis is not a B_ALWAYS lever
+
+The margin quoted in Consequences (42,547 B, 1,453 B to warn) is stale. Re-measured with
+`python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` → `[OK] B_ALWAYS=42920`, both
+before and after #8290's flip. Live headroom is **1,080 B** to warn (44,000) and **3,080 B** to reject
+(46,000).
+
+#8290 moved 12 operator skills to `disable-model-invocation: true`. The measured `B_ALWAYS` delta is
+**0 B**, by construction: `B_ALWAYS` sums `AGENTS.md` + `AGENTS.rules.md` only
+(`scripts/lint-agents-rule-budget.py`, `b_always = b_index + b_corpus`). Skill descriptions load
+through a different always-loaded budget, the harness skill listing, which ADR-236 governs (−266
+words / −1,733 B there). The shrink levers for `B_ALWAYS` remain trimming prose and migrating a rule.
