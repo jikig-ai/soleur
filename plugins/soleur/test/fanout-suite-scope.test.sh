@@ -147,7 +147,12 @@ run_arm() {
   # TEST_TIMING_LOG redirected per-arm, never inherited: skip_suite and the run-boundary bytes
   # probe append to whatever it names, so an inherited path puts this suite's sandbox rows into
   # the operator's real timing log -- the artifact a gate run's measurement is read from.
-  ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+  # CI is scrubbed for the same class of reason: an ambient CI=true (GitHub Actions exports
+  # it unconditionally) flips the runner's no-flag default from affected to full, so a
+  # lib-less "degraded" arm would silently measure the plain-full refusal — same rc=4, no
+  # 'affected selection' marker. The suite's contract is local-mode machinery; the arms
+  # must see the local default in both environments.
+  ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
             TEST_TIMING_LOG="$TMP/arm-timing-$label.tsv" \
             TC_PROC_ROOT="$SOLO_PROC_F" \
             "$@" timeout 120 bash "${ARM_SANDBOX:-$SANDBOX}" ${ARM_ARGV:-} 2>&1)
