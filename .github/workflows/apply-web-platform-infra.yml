@@ -47,13 +47,34 @@
 # is vulnerable to the empty-string bypass class flagged in
 # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
 #
-# Authorization model: the PR merge IS the human authorization
-# (`hr-menu-option-ack-not-prod-write-auth`). PR #4220 dropped the
-# `environment:` reviewer-click gate after measuring its real-world cost
-# (apply runs sitting in `waiting` for up to 13h, blocking sibling
-# applies via the concurrency group). The merge-time gate (CODEOWNERS
-# on `.github/workflows/` + branch protection on `main`) is the load-
-# bearing control; the env-reviewer click was duplicative.
+# Authorization model: the PR merge is the human authorization BY CONVENTION
+# (`hr-menu-option-ack-not-prod-write-auth`) — not by enforcement; see the
+# CORRECTED block below. PR #4220 dropped the `environment:` reviewer-click
+# gate after measuring its real-world cost (apply runs sitting in `waiting`
+# for up to 13h, blocking sibling applies via the concurrency group).
+#
+# CORRECTED 2026-09-20 (#8296): this block used to name "the merge-time gate
+# (CODEOWNERS on `.github/workflows/` + branch protection on `main`)" as the
+# load-bearing control. That claim was false FROM ITS INTRODUCTION: PR #4220
+# wrote it on 2026-05-21, five days after the status-check rulesets were
+# terraform-adopted (2026-05-16) with no review rule. What actually gates
+# `main`, measured: no branch protection (the protection endpoint 404s), and
+# three active rulesets carrying NO `pull_request` rule — "CI Required" and
+# "CLA Required" are `required_status_checks` (both DECLARED in this repo at
+# `infra/github/ruleset-ci-required.tf` / `ruleset-cla-required.tf`, ADR-032;
+# a `pull_request` rule would be added THERE, not in the UI), and "Force Push
+# Prevention" is `deletion` + `non_fast_forward` (hand-managed, not in IaC).
+# `.github/CODEOWNERS` is present, but with no rule requiring code-owner
+# review it assigns reviewers and blocks nothing. So status checks gate this
+# workflow; a human review does not. The residual, stated precisely rather
+# than as "nothing forbids a direct push": a `required_status_checks` rule
+# DOES reject a direct push of a commit that has not passed the checks, so
+# what reaches `main` without a PR is (i) a fast-forward push of a commit
+# already green on a side branch, (ii) an OrganizationAdmin / RepositoryRole 5
+# bypass actor, (iii) the CLA bot's `always` bypass on the CLA ruleset. Note
+# also that `deploy-script-tests` — the infra-validation job that runs the
+# LUKS alert drift guard — is NOT a required context, so a PR that reverts
+# that guard's subject with the guard red is mergeable (#6480, open).
 #
 # Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
 # commit message to skip auto-apply for that merge.
@@ -387,8 +408,12 @@ jobs:
   # Vector config + VRL fixture validation lives in its own workflow at
   # .github/workflows/validate-vector-config.yml (#4293 FR5) so it can trigger
   # on pull_request -- this workflow only triggers on push to main, which is
-  # the apply gate. Branch protection requires the validate workflow's check
-  # before merge.
+  # the apply gate. CORRECTED 2026-09-20 (#8296): NOTHING requires that
+  # validate check before merge. An earlier form of this comment said branch
+  # protection did; a first correction said the "CI Required" ruleset did;
+  # both were unmeasured. `validate-vector-config` is not among that
+  # ruleset's required contexts (`infra/github/ruleset-ci-required.tf`). It
+  # runs on every PR and its result is advisory. See the header block.
   apply:
     needs: preflight
     # Runs on push (auto-apply) and on the `manual-rerun` dispatch (the historical
@@ -463,10 +488,11 @@ jobs:
     # dispatch issued while a merge apply is in flight is now a 47-minute wait.
     timeout-minutes: 41
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
-    # reviewer click was duplicative friction on top of the PR-merge gate
-    # (CODEOWNERS review + branch protection on main), and was blocking
-    # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
-    # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
+    # reviewer click was duplicative friction on top of the PR-merge gate,
+    # and was blocking apply runs for up to 13h (#4204 on 2026-05-20). The
+    # merge is the human authorization BY CONVENTION, not by any enforced
+    # review — what actually gates `main` is measured once, in this file's
+    # header CORRECTED block (#8296); do not restate it here.
     # `apply-github-infra.yml` already omits the gate without incident.
     # The "broader secret surface" rationale below was the original
     # justification for diverging from apply-github-infra.yml; in
@@ -6515,7 +6541,7 @@ jobs:
     # did. `timeout-minutes` starts when the job begins EXECUTING; a job held in `waiting` for
     # the `environment:` approval below has not started, and a pending GitHub deployment
     # approval survives for up to 30 days — while already holding its concurrency group. This
-    # file's own header records the measurement (`:44-47`): PR #4220 dropped an `environment:`
+    # file's own header records the measurement (the "Authorization model" block): PR #4220 dropped an `environment:`
     # reviewer gate after apply runs sat in `waiting` up to 13h blocking sibling applies
     # through exactly this mechanism.
     #
