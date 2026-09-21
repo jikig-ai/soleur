@@ -4,6 +4,7 @@ role: proposed processor for Codex web-agent customer-content processing
 status_snapshot_date: 2026-09-20
 customer_content_status: blocked
 clo_disposition: pending
+user_owned_provider_path: documented-in-product; vendor-account-terms-apply
 ---
 
 # OpenAI — Codex vendor and DPA snapshot
@@ -42,6 +43,20 @@ Before customer repository content is enabled, record all of the following:
 Until those fields are evidenced, the only permitted use is synthetic or
 explicitly redacted internal qualification under the default-off
 `codex-engine` flag.
+
+## User-owned provider path
+
+The web app's `api-key` mode is user-owned: the request is sent under the
+connected user's OpenAI/Codex credential rather than a Soleur-managed OpenAI
+credential. The user's account agreement, retention settings, processing
+locations, administrator controls, and deletion terms govern OpenAI's copy.
+This does not approve the restricted Soleur-managed path or authorize a user
+to submit data they do not control. The product discloses the provider-account
+boundary and requires users to submit only data they are authorized to share.
+
+Soleur remains responsible for application-side processing of prompts,
+outputs, credentials, and audit records, and shared workspaces must not fall
+back to a managed credential when a user-owned binding is selected.
 
 ## Sources
 

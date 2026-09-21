@@ -6,6 +6,7 @@ customer_content_status: restricted-pending-retention-and-counsel-evidence
 latest_disposition_review: 2026-09-20
 register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33, PA-34]  # Art. 30(1) gap for the in-repo fleet + CI surface closed 2026-07-31 (#7100); the 2026-07-30 INCOMPLETE marker is retired. 2026-08-01 at review: PA-33's predicate widened repo-wide after a Jikigai-keyed egress in the sibling repo jikig-ai/operator-digest was found outside it; now PA-33 member (7), registered from committed source with asset-vs-deployed drift named as a residual. 2026-08-06 (#7331): PA-34 added, plus record P-1 in the separate knowledge-base/legal/article-30-2-register.md
 zero_retention_amendment: unsigned  # FIRED CONSEQUENCE 2026-08-06: an alpha tester's repository content egressed under the Jikigai key, so the 30-day retention window now attaches to a THIRD PARTY's data, not only the operator's. Session of 2026-08-06 expires ~2026-09-05.
+user_owned_provider_path: documented-in-product; vendor-account-terms-apply
 ---
 
 # Anthropic PBC — DPA snapshot
@@ -70,6 +71,23 @@ amendment via:
 
 Until signed: the dashboard surfaces a one-time banner to that effect
 (scope of Non-Goal #2, filed as a follow-up issue).
+
+## User-owned provider path
+
+The web app also supports a user-selected `api-key` authentication mode. In
+that mode the credential belongs to the user and the request is sent under the
+user's Anthropic account, not the Jikigai-managed `ANTHROPIC_API_KEY`. The
+user's Anthropic retention, transfer geography, account administrator, and
+deletion terms therefore govern the provider-side copy. This path does not
+convert the Jikigai-managed path into an approved customer-content surface and
+does not make third-party data lawful without the user's authority to submit
+it. The settings UI identifies the account ownership and warns users to submit
+only data they are authorized to share.
+
+Soleur remains responsible for its own application-side processing, including
+encrypted credential storage, run/audit records, access controls, and deletion
+handling. Shared workspaces must not silently fall back from a user-owned key
+to the restricted Jikigai-managed key.
 
 ## Activities in scope
 
