@@ -82,6 +82,13 @@ printf '{"from":"%s|%s"}\n' "\$(head -1 "\$R/$SRC")" "\$(tail -1 "\$R/$SRC")" > 
 STUB
   chmod +x "$wt/scripts/regenerate-c4-model.sh"
   _git "$wt" init -q -b main
+  # Identity in LOCAL config, not only on `_git`'s `-c`: the SUT's own merge runs in this
+  # repo and reads config, so without these it only had an identity where the developer's
+  # GLOBAL config supplied one. Same defect as resolve-regenerable-conflicts.test.sh, which
+  # failed 14 rows on a CI runner (#8384, run 35588718251); this suite was found by sweeping
+  # the PR's suites under HOME=$(mktemp -d) GIT_CONFIG_GLOBAL=/dev/null.
+  git -C "$wt" config user.email t@t
+  git -C "$wt" config user.name t
   _git "$wt" remote add origin "$up"
   _git "$wt" add -A >/dev/null; _git "$wt" commit -q -m base
   _git "$wt" push -q origin main

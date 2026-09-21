@@ -93,6 +93,14 @@ mkrepo() {  # <name> [ok|fail]
   #     green that way while never reaching the logic it exists to test.
   _write_regen_stub "$r" "${2:-ok}"
   _git "$r" init -q -b main
+  # Identity goes in the fixture repo's LOCAL config, not only on `_git`'s `-c`. The
+  # `-c` form covers the harness's own commits and nothing else: the SUT runs its own
+  # `git merge` inside this repo, which reads config, so it only had an identity where
+  # the developer's GLOBAL config supplied one. Every row passed locally and 14 failed
+  # on a CI runner with "Committer identity unknown" (#8384, run 35588718251).
+  # Reproduce: HOME=$(mktemp -d) GIT_CONFIG_GLOBAL=/dev/null bash <this file>.
+  git -C "$r" config user.email t@t
+  git -C "$r" config user.name t
   _git "$r" add -A >/dev/null; _git "$r" commit -q -m base
 
   _git "$r" checkout -q -b feature
