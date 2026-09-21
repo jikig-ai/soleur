@@ -6,8 +6,9 @@
  */
 
 import { Glob } from "bun";
-import { readFileSync, existsSync, readdirSync, lstatSync, realpathSync } from "fs";
+import { readFileSync, existsSync, readdirSync, lstatSync, realpathSync, mkdirSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { homedir } from "os";
 import {
   EXPECTED_SOLEUR_AGENT_COUNT,
   AGENTS_MANIFEST_PATH,
@@ -28,6 +29,32 @@ export type GrokEntryCommand = (typeof GROK_ENTRY_COMMANDS)[number];
 
 /** Floor for soleur plugin skills in `grok inspect` Plugins section. */
 export const MIN_SOLEUR_PLUGIN_SKILL_COUNT = 90;
+
+/**
+ * Grok skips project `.grok/commands/` (and project skills) in untrusted
+ * folders. CI checkouts are untrusted, so live `grok inspect --json` will not
+ * see the entry-command shims unless the repo root is in
+ * `~/.grok/trusted_folders.toml` (hooks.md — the same store `/hooks-trust`
+ * writes). Idempotent: an existing table for `repoRoot` is left untouched.
+ */
+export function ensureGrokFolderTrusted(repoRoot: string, grokHome = resolve(homedir(), ".grok")): string {
+  mkdirSync(grokHome, { recursive: true });
+  const file = resolve(grokHome, "trusted_folders.toml");
+  const key = `[folders."${repoRoot}"]`;
+  let existing = "";
+  try {
+    existing = readFileSync(file, "utf-8");
+  } catch {
+    existing = "";
+  }
+  if (existing.includes(key)) {
+    return file;
+  }
+  const prefix = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+  const block = `${prefix}${key}\ntrusted = true\ndecided_at = ${Math.floor(Date.now() / 1000)}\n`;
+  writeFileSync(file, `${existing}${block}`, { mode: 0o600 });
+  return file;
+}
 
 export interface GrokInspectParsed {
   soleurPluginListed: boolean;

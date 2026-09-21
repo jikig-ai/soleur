@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { join, resolve } from "path";
+import { tmpdir } from "os";
 import { $ } from "bun";
 import {
   parseGrokInspectOutput,
@@ -8,6 +9,7 @@ import {
   validateStaticArtifacts,
   validateGrokEntryCommandShims,
   validateGrokInspectJsonEntryCommands,
+  ensureGrokFolderTrusted,
   countSoleurSkillsOnDisk,
   MIN_SOLEUR_PLUGIN_SKILL_COUNT,
   GROK_ENTRY_COMMANDS,
@@ -139,6 +141,22 @@ describe("grok-inspect-contract JSON entry commands", () => {
   });
 });
 
+describe("ensureGrokFolderTrusted", () => {
+  test("writes a trusted_folders.toml table and is idempotent", () => {
+    const home = mkdtempSync(join(tmpdir(), "grok-trust-"));
+    try {
+      const file = ensureGrokFolderTrusted("/ci/checkout", home);
+      const first = readFileSync(file, "utf-8");
+      expect(first).toContain('[folders."/ci/checkout"]');
+      expect(first).toContain("trusted = true");
+      ensureGrokFolderTrusted("/ci/checkout", home);
+      expect(readFileSync(file, "utf-8")).toBe(first);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("grok-inspect-contract live inspect", () => {
   test("grok inspect satisfies contract when grok is on PATH", async () => {
     if (!grokOnPath()) {
@@ -146,6 +164,7 @@ describe("grok-inspect-contract live inspect", () => {
       return;
     }
 
+    ensureGrokFolderTrusted(REPO_ROOT);
     const result = await $`grok inspect`.cwd(REPO_ROOT).quiet().nothrow();
     expect(result.exitCode).toBe(0);
 
@@ -162,6 +181,7 @@ describe("grok-inspect-contract live inspect", () => {
       return;
     }
 
+    ensureGrokFolderTrusted(REPO_ROOT);
     const result = await $`grok inspect --json`.cwd(REPO_ROOT).quiet().nothrow();
     expect(result.exitCode).toBe(0);
     const json = JSON.parse(result.stdout.toString()) as GrokInspectJson;
