@@ -110,6 +110,10 @@ locals {
     git_transport_pubkey = var.git_transport_pubkey
     git_provision_pubkey = var.git_provision_pubkey
     git_remove_pubkey    = var.git_remove_pubkey
+    # (#7226, ADR-237) The SSH HOST key pair: the ssh_keys: block installs it, the boot proof
+    # fingerprints the public half. Identity-class divergence (variables.tf).
+    host_ssh_ed25519_private_key = var.host_ssh_ed25519_private_key
+    host_ssh_ed25519_public_key  = var.host_ssh_ed25519_public_key
     # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
     # by-id pattern). Known at plan time; the attachment is a separate resource.
     git_data_volume_id = var.git_data_volume_id

@@ -67,6 +67,32 @@ resource "tls_private_key" "git_remove" {
   algorithm = "ED25519"
 }
 
+# --- The git-data SSH HOST key (ED25519) — #7226 / #5914, ADR-237 -------------
+# NOT an authorization key like the three above: this is the key the HOST presents, so every
+# client (the app's git-data transport, the cutover workflow) can verify it is talking to
+# git-data and not to something standing in for it. Minted here, installed by cloud-config
+# `ssh_keys:` (module input below), proven at boot (the sshd_config stage fails the boot unless
+# sshd serves exactly this key), and published as doppler_secret.git_data_ssh_host_key.
+#
+# ROTATES WITH THE HOST: the git-data-host-replace job -replace's it and re-targets the secret,
+# the birth job targets both, and NO per-PR -target reaches either (Guard 4) — a routine apply
+# must never publish a pin the live host does not carry.
+#
+# EXPOSURE (ADR-237 residual, #8209): the private half sits in this root's state twice (here and
+# inside hcloud_server.git_data.user_data), and the Hetzner metadata endpoint serves user_data on
+# the host. A reader of either copy WITH a network position can impersonate git-data.
+resource "tls_private_key" "git_data_host_ssh" {
+  algorithm = "ED25519"
+}
+
+# (#7226) The pin's SHA256 fingerprint (public; the provider marks it non-sensitive). The birth
+# and replace jobs print it to their run summary after apply; git-data-pin-redeploy.yml points
+# the operator there to compare against the app's `git_data_pin=present fp=` startup line.
+output "git_data_ssh_host_key_fingerprint" {
+  description = "SHA256 fingerprint of the git-data SSH host key (the GIT_DATA_SSH_HOST_KEY pin)."
+  value       = tls_private_key.git_data_host_ssh.public_key_fingerprint_sha256
+}
+
 locals {
   # (#6982, W8) The host's stable private-net address, hoisted out of network.tf so
   # doppler_secret.git_data_ssh_host below can publish it WITHOUT referencing any
@@ -310,6 +336,31 @@ resource "doppler_secret" "git_data_ssh_host" {
   visibility = "masked"
 }
 
+# --- The git-data SSH host-key PIN → Doppler prd (#7226 / #5914, ADR-237) ---------------
+#
+# GIT_DATA_SSH_HOST_KEY is what the app's git-data transport (resolveGitDataHostKeyPin) and the
+# cutover workflow (git-data-flag-precheck.sh) verify git-data against. Same shape as
+# doppler_secret.git_data_ssh_host above, with two deliberate differences:
+#
+#   visibility = "unmasked" — it is a PUBLIC key; masking it would only hide the value an
+#     operator compares against the fingerprint the redeploy job and the startup line print.
+#   depends_on = [hcloud_server.git_data] — the pin is written only AFTER the host that carries
+#     the key exists, so a replace that fails before the server is created publishes nothing
+#     and the app keeps the pin of the host that is still running (plan R7). Unlike the
+#     ADDRESS secret above, co-landing with the server is exactly the property wanted here.
+#
+# NO ignore_changes: Terraform owns the value, and it MUST move on every replace. The
+# git_data_redeploy_after_{birth,replace} jobs then force a web release so the app loads it.
+resource "doppler_secret" "git_data_ssh_host_key" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "GIT_DATA_SSH_HOST_KEY"
+  value      = trimspace(tls_private_key.git_data_host_ssh.public_key_openssh)
+  visibility = "unmasked"
+
+  depends_on = [hcloud_server.git_data]
+}
+
 # --- The git-data host -------------------------------------------------------
 # (#7025, R7) THE RENDER MOVED TO ./modules/git-data-userdata.
 #
@@ -341,6 +392,9 @@ module "git_data_userdata" {
   git_transport_pubkey   = local.git_transport_pubkey
   git_provision_pubkey   = local.git_provision_pubkey
   git_remove_pubkey      = local.git_remove_pubkey
+  # (#7226) The HOST key. private_key_openssh, never private_key_pem (PKCS#8 for ED25519).
+  host_ssh_ed25519_private_key = tls_private_key.git_data_host_ssh.private_key_openssh
+  host_ssh_ed25519_public_key  = trimspace(tls_private_key.git_data_host_ssh.public_key_openssh)
 }
 
 # (#8189, ADR-220) The git-data root key, minted in its OWN root (git-data-root-key/) so the

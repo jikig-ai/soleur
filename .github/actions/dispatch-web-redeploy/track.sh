@@ -38,6 +38,11 @@ set -euo pipefail
 
 WORKFLOW="web-platform-release.yml"
 DEPLOY_JOB="deploy"
+# EVENT_ARM: web-platform-release has two halves per merge (ADR-217). The `push` arm
+# only cuts the release and never deploys; `deploy` runs on the `workflow_run` arm and
+# on a `workflow_dispatch` (this job's own dispatch). Only those two arms are polled, so
+# a push-arm run can never be read as the redeploy.
+EVENT_ARM='["workflow_dispatch","workflow_run"]'  # --event workflow_run | workflow_dispatch
 INTERVAL="${REDEPLOY_POLL_INTERVAL_S:-30}"
 TIMEOUT="${REDEPLOY_TIMEOUT_S:-4200}"
 
@@ -78,7 +83,9 @@ while :; do
   ids=""
   if raw="$(gh run list --workflow "$WORKFLOW" --limit 50 --json databaseId,status,conclusion,event 2>/dev/null)"; then
     ids="$(jq -r --argjson b "$baseline" \
-             '[.[]? | select((.databaseId | type) == "number" and .databaseId > $b) | .databaseId] | sort | .[]' \
+             --argjson arms "$EVENT_ARM" \
+             '[.[]? | select((.databaseId | type) == "number" and .databaseId > $b)
+                    | select(.event as $e | $arms | index($e)) | .databaseId] | sort | .[]' \
              <<<"$raw" 2>/dev/null || true)"
   else
     echo "::warning::dispatch-web-redeploy: 'gh run list' failed this tick; retrying."

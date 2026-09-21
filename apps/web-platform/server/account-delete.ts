@@ -227,7 +227,7 @@ export async function deleteAccount(
     const outcome = await removeGitDataRepo(userId);
     if (outcome.status !== "erased" && outcome.status !== "skipped") {
       gitDataErasurePending = true;
-      // The four non-terminal states mean genuinely different things and need different
+      // The five non-terminal states mean genuinely different things and need different
       // operator responses, so the discriminator rides a TAG, not only `extra`:
       //   refused      — the host looked and declined; the repo is probably still there.
       //   unauthorized — the REMOVE key was rejected. PERMANENT and fleet-wide until a
@@ -235,6 +235,9 @@ export async function deleteAccount(
       //   unconfigured — the remove key is missing while git-data is otherwise armed.
       //   unreachable  — no answer at all; the repo's state is unknown, which is not the
       //                  same as un-erased.
+      //   host_key_mismatch — ssh reached a host whose key does not match the pin (#7226).
+      //                  The repo is un-erased. Remedy: the web app holds a stale or wrong
+      //                  pin — redeploy; or the host was re-keyed outside the replace job.
       // Sentry does not index `extra`, so an alert rule cannot key on a value that lives
       // only there — which is why `outcome` moved out of it.
       reportSilentFallback(new Error(`git-data erasure ${outcome.status}`), {

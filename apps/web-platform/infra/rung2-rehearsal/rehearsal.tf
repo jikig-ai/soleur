@@ -31,6 +31,16 @@ resource "tls_private_key" "rehearsal" {
   algorithm = "ED25519"
 }
 
+# --- (#7226, ADR-237) The rehearsal's OWN SSH host key ---------------------------------
+# Production mints tls_private_key.git_data_host_ssh and cloud-init installs it as the host key;
+# the boot proof in the sshd_config stage then fails the boot unless sshd serves exactly that key.
+# The rehearsal must exercise the same install + proof, but with a key minted HERE: binding
+# production's key would put a second copy of the key every pinned consumer trusts on a
+# throwaway host. MAY DIVERGE (identity class) — see modules/git-data-userdata/variables.tf.
+resource "tls_private_key" "rehearsal_host_ssh" {
+  algorithm = "ED25519"
+}
+
 resource "hcloud_ssh_key" "rehearsal" {
   name       = local.rehearsal_host_name
   public_key = tls_private_key.rehearsal.public_key_openssh
@@ -161,6 +171,9 @@ module "git_data_userdata" {
   git_transport_pubkey    = trimspace(tls_private_key.rehearsal.public_key_openssh)
   git_provision_pubkey    = trimspace(tls_private_key.rehearsal.public_key_openssh)
   git_remove_pubkey       = trimspace(tls_private_key.rehearsal.public_key_openssh)
+  # (#7226) Identity, like the three above: which host key boots, never what boots.
+  host_ssh_ed25519_private_key = tls_private_key.rehearsal_host_ssh.private_key_openssh
+  host_ssh_ed25519_public_key  = trimspace(tls_private_key.rehearsal_host_ssh.public_key_openssh)
 
   # MUST MATCH PROD — these change WHAT the host does, not WHICH host it is.
   # The Doppler arch token and its checksum are NOT passed: the module derives both from the

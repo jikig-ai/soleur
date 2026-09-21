@@ -5,11 +5,12 @@
 # pre-dispatch baseline has a `deploy` job that concluded `success`. All decision logic
 # is in track.sh (tested by tests/scripts/test-dispatch-web-redeploy.sh with a `gh` stub).
 #
-# Caller contract (the git_data_redeploy job in apply-web-platform-infra.yml):
-#   permissions: { actions: write, contents: read }, no secrets, no environment,
-#   `if: github.ref == 'refs/heads/main'`, timeout-minutes: 75, a sparse checkout of
-#   .github/actions/dispatch-web-redeploy with persist-credentials: false, and OUTSIDE
-#   the apply concurrency group (it holds no infra lock).
+# Caller contract (the `redeploy` job in .github/workflows/git-data-pin-redeploy.yml, a
+#   workflow_run follower of apply-web-platform-infra.yml gated by source-run-gate.sh):
+#   permissions: { actions: write, contents: read }, no secrets, no environment, main only,
+#   timeout-minutes: 80, a sparse checkout of .github/actions/dispatch-web-redeploy with
+#   persist-credentials: false, and its OWN concurrency group — never the apply workflow's
+#   fleet-wide lock.
 #
 # Recovery on failure: re-run the job. Never replace git-data again for this.
 name: Dispatch web redeploy

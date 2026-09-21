@@ -1,0 +1,100 @@
+# git-data host-key pin redeploy (#7226 / #5914, ADR-237, plan D6 / Guard 7).
+#
+# A git-data birth (git_data_host_create) or replace (git_data_host_replace) in
+# apply-web-platform-infra.yml re-keys the host and re-publishes GIT_DATA_SSH_HOST_KEY to
+# Doppler prd. The running app loads prd only at deploy (ci-deploy.sh), so this workflow forces
+# one web-platform-release and waits until a newer release's `deploy` job succeeds.
+#
+# WHY A SEPARATE WORKFLOW (not a job in the apply workflow): apply-web-platform-infra.yml holds
+# the fleet-wide WORKFLOW-level concurrency group terraform-apply-web-platform-host for its whole
+# run. A job there polling a release for up to 75 minutes would keep that lock, queueing merge
+# applies (and a second pending run cancels the first pending one). Here the poll holds only
+# its own group.
+#
+# SECRET-FREE: github.token only (actions:write to dispatch and read runs). It never reads
+# Terraform state, so it cannot know the new pin; the source run's summary carries the
+# fingerprint, and this run's summary links to it.
+#
+# Recovery: re-run this workflow's failed job, or dispatch it with source_run_id. Never replace
+# git-data again to get a redeploy.
+name: git-data pin redeploy
+
+on:
+  workflow_run:
+    workflows: ["Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "apply-web-platform-infra run id whose birth/replace to redeploy for (empty = redeploy unconditionally)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: git-data-pin-redeploy
+  cancel-in-progress: false
+
+jobs:
+  redeploy:
+    # Birth and replace are dispatch-only targets, so only a dispatched apply run on main can
+    # carry a rotation. A manual recovery dispatch must itself run from main.
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'workflow_dispatch') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/dispatch-web-redeploy
+
+      - name: Gate on the source run's git-data birth/replace outcome
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch && -z "${SOURCE_RUN_ID}" ]]; then
+            echo "Manual dispatch with no source_run_id: redeploying unconditionally."
+            { echo "proceed=true"; echo "source_job=manual"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bash .github/actions/dispatch-web-redeploy/source-run-gate.sh
+
+      - name: Point at the source run's pin fingerprint
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.source_run_id }}
+          SOURCE_JOB: ${{ steps.gate.outputs.source_job }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            where="${REPO_URL}/actions/runs/${SOURCE_RUN_ID}"
+          else
+            where="the latest git-data-host-replace / git-data-host-create run of apply-web-platform-infra.yml"
+          fi
+          {
+            echo "### git-data host-key pin redeploy (source job: ${SOURCE_JOB})"
+            echo ""
+            echo "Compare with the fingerprint in the source run's summary (\`git-data host key fingerprint: SHA256:...\`): ${where}"
+            echo "After the deploy, Better Stack must show \`git_data_pin=present fp=\` with that same value."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch web-platform-release and wait for its deploy
+        if: steps.gate.outputs.proceed == 'true'
+        uses: ./.github/actions/dispatch-web-redeploy
+        with:
+          github-token: ${{ github.token }}
+          fingerprint: ""

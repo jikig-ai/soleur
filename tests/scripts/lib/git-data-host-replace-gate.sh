@@ -74,6 +74,21 @@
 # to the committed anchor named by GIT_DATA_ROOT_KEY_FINGERPRINT_FILE. Unset or empty reads
 # as a missing anchor and refuses. The allow-set above is unchanged.
 #
+# HOST-KEY PIN ARM (#7226, ADR-237, Guard 4). The replace also re-mints the git-data SSH host
+# key and re-publishes its pin: the job adds -replace='tls_private_key.git_data_host_ssh' and
+# -target='doppler_secret.git_data_ssh_host_key', so both addresses are in the allow-set and
+# the plan must show exactly:
+#   host_key_rotated == 1  the key is ["delete","create"], or ["create"] on the FIRST rotation
+#                          (-replace on an address absent from state plans a plain create)
+#   host_key_published == 1  the pin secret is create / update / replace
+#   host_key_bad == 0      no OTHER action on either address (a no-op key re-uses a key a rooted
+#                          host could have exfiltrated; a no-op secret leaves a stale pin)
+#
+# OUTPUT DISCIPLINE: this gate prints counters, verdicts and ADDRESSES only — never a
+# .change.before / .change.after value. A replace plan's before-values carry the OLD user_data
+# (which embeds the old host private key), and this output lands in a public Actions log.
+# tests/scripts/test-git-data-host-replace-gate.sh HK12 plants a sentinel to hold that.
+#
 # Usage:  source tests/scripts/lib/git-data-host-replace-gate.sh
 #         GIT_DATA_ROOT_KEY_FINGERPRINT_FILE=<path> git_data_host_replace_gate <plan-json-file>   # 0=PASS, 1=ABORT
 
@@ -100,7 +115,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm-gate
 
 git_data_host_replace_gate() {
   local plan_json="$1"
-  local counts oos gvd lvd lpt replaced nic patt latt fw
+  local counts oos gvd lvd lpt replaced nic patt latt fw hkr hkp hkb
 
   # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
   # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
@@ -123,8 +138,14 @@ git_data_host_replace_gate() {
         "hcloud_server_network.git_data",
         "hcloud_volume_attachment.git_data",
         "hcloud_volume_attachment.git_data_luks",
-        "hcloud_firewall_attachment.git_data"
+        "hcloud_firewall_attachment.git_data",
+        "tls_private_key.git_data_host_ssh",
+        "doppler_secret.git_data_ssh_host_key"
       ];
+      def hk_key: "tls_private_key.git_data_host_ssh";
+      def hk_pin: "doppler_secret.git_data_ssh_host_key";
+      def hk_key_ok: (.change.actions? == ["delete","create"]) or (.change.actions? == ["create"]);
+      def hk_pin_ok: .change.actions? as $a | [["create"],["update"],["delete","create"],["create","delete"]] | any(.[]; . == $a);
       $p[0] as $plan
       | {
           out_of_scope: (
@@ -189,6 +210,13 @@ git_data_host_replace_gate() {
               | select(.address == "hcloud_firewall_attachment.git_data")
               | select((.change.actions? == ["update"]) or (.change.actions? == ["create"])) ]
             | length
+          ),
+          host_key_rotated: ([ $plan.resource_changes[]? | select(.address == hk_key) | select(hk_key_ok) ] | length),
+          host_key_published: ([ $plan.resource_changes[]? | select(.address == hk_pin) | select(hk_pin_ok) ] | length),
+          host_key_bad: (
+            [ $plan.resource_changes[]?
+              | select((.address == hk_key and (hk_key_ok | not)) or (.address == hk_pin and (hk_pin_ok | not))) ]
+            | length
           )
         }
     ' 2>/dev/null); then
@@ -204,19 +232,22 @@ git_data_host_replace_gate() {
   patt=$(echo "$counts" | jq -r '.plaintext_attachment_recreated')
   latt=$(echo "$counts" | jq -r '.luks_attachment_recreated')
   fw=$(echo "$counts" | jq -r '.firewall_ok')
+  hkr=$(echo "$counts" | jq -r '.host_key_rotated')
+  hkp=$(echo "$counts" | jq -r '.host_key_published')
+  hkb=$(echo "$counts" | jq -r '.host_key_bad')
 
   # Every counter is a non-negative integer BEFORE any arithmetic compares one.
   # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
   # under bash coercion — so an uncomputed counter silently satisfies every threshold.
   # The shared helper names WHICH counter failed rather than reporting them all.
-  plan_gate_assert_numeric "git_data_host_replace_gate" "out_of_scope=${oos}" "git_data_volume_destroyed=${gvd}" "luks_volume_destroyed=${lvd}" "luks_passphrase_touched=${lpt}" "server_replaced=${replaced}" "nic_recreated=${nic}" "plaintext_attachment_recreated=${patt}" "luks_attachment_recreated=${latt}" "firewall_ok=${fw}" || return 1
+  plan_gate_assert_numeric "git_data_host_replace_gate" "out_of_scope=${oos}" "git_data_volume_destroyed=${gvd}" "luks_volume_destroyed=${lvd}" "luks_passphrase_touched=${lpt}" "server_replaced=${replaced}" "nic_recreated=${nic}" "plaintext_attachment_recreated=${patt}" "luks_attachment_recreated=${latt}" "firewall_ok=${fw}" "host_key_rotated=${hkr}" "host_key_published=${hkp}" "host_key_bad=${hkb}" || return 1
 
-  echo "out_of_scope=${oos} git_data_volume_destroyed=${gvd} luks_volume_destroyed=${lvd} luks_passphrase_touched=${lpt} server_replaced=${replaced} nic_recreated=${nic} plaintext_attachment_recreated=${patt} luks_attachment_recreated=${latt} firewall_ok=${fw}"
-  if [[ "$oos" -eq 0 && "$gvd" -eq 0 && "$lvd" -eq 0 && "$lpt" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$patt" -ge 1 && "$latt" -ge 1 && "$fw" -ge 1 ]]; then
+  echo "out_of_scope=${oos} git_data_volume_destroyed=${gvd} luks_volume_destroyed=${lvd} luks_passphrase_touched=${lpt} server_replaced=${replaced} nic_recreated=${nic} plaintext_attachment_recreated=${patt} luks_attachment_recreated=${latt} firewall_ok=${fw} host_key_rotated=${hkr} host_key_published=${hkp} host_key_bad=${hkb}"
+  if [[ "$oos" -eq 0 && "$gvd" -eq 0 && "$lvd" -eq 0 && "$lpt" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$patt" -ge 1 && "$latt" -ge 1 && "$fw" -ge 1 && "$hkr" -eq 1 && "$hkp" -eq 1 && "$hkb" -eq 0 ]]; then
     git_data_root_key_arm "$plan_json" "${GIT_DATA_ROOT_KEY_FINGERPRINT_FILE:-}" || return 1
-    echo "git_data_host_replace_gate: PASS — scoped git-data-host recreate permitted (server + 4 dependents; BOTH data volumes + LUKS passphrase preserved by omission; NIC + both store attachments + deny-all firewall re-attached)"
+    echo "git_data_host_replace_gate: PASS — scoped git-data-host recreate permitted (server + 4 dependents; BOTH data volumes + LUKS passphrase preserved by omission; NIC + both store attachments + deny-all firewall re-attached; SSH host key rotated and its pin re-published)"
     return 0
   fi
-  echo "git_data_host_replace_gate: ABORT — plan is NOT the exact scoped git-data-host recreate (out-of-scope change, a git-data/LUKS volume destroy/forget, a LUKS passphrase rotation, no server replace, stripped private NIC, an unmounted store [a volume-attachment not re-created], or a stripped firewall)"
+  echo "git_data_host_replace_gate: ABORT — plan is NOT the exact scoped git-data-host recreate (out-of-scope change, a git-data/LUKS volume destroy/forget, a LUKS passphrase rotation, no server replace, stripped private NIC, an unmounted store [a volume-attachment not re-created], a stripped firewall, or an SSH host key that was not rotated with the host / a pin that was not re-published)"
   return 1
 }

@@ -659,7 +659,11 @@ git_data_rung2_user_data_sha256() {
 # divergence is correct; inferring from it that the divergence is harmless is not. That
 # inference is closed by git_data_authorization_map_gate, a STATIC assertion over the
 # production root which needs no rehearsal to run — see the head of this file.
-GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_volume_id doppler_token doppler_config_name git_transport_pubkey git_provision_pubkey git_remove_pubkey"
+#
+# (#7226, ADR-237) host_ssh_ed25519_private_key / host_ssh_ed25519_public_key join as IDENTITY
+# divergences: the rehearsal mints its own SSH host key (it must never hold production's), and
+# what boots with it — the ssh_keys install and the boot proof — is template text the hash binds.
+GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_volume_id doppler_token doppler_config_name git_transport_pubkey git_provision_pubkey git_remove_pubkey host_ssh_ed25519_private_key host_ssh_ed25519_public_key"
 
 # ── GUARD 4 (#8043 NFR2): A VOIDED ATTESTATION CANNOT BE MADE TO LOOK FRESH ──────────
 #

@@ -188,9 +188,9 @@ entailed_four() {
     "$(rc_fw_attach '["create"]' '[9001]')"
 }
 
-# The other fifteen in-scope members, all as creates.
-rest_fifteen() {
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' \
+# The other seventeen in-scope members, all as creates.
+rest_members() {
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' \
     "$(rc_entry 'hcloud_volume.git_data' 'hcloud_volume' '["create"]')" \
     "$(rc_entry 'hcloud_volume.git_data_luks' 'hcloud_volume' '["create"]')" \
     "$(rc_firewall '["create"]')" \
@@ -205,17 +205,19 @@ rest_fifteen() {
     "$(rc_entry 'random_password.git_data_luks' 'random_password' '["create"]')" \
     "$(rc_entry 'doppler_secret.git_data_luks_key' 'doppler_secret' '["create"]')" \
     "$(rc_entry 'doppler_secret.git_data_ssh_host' 'doppler_secret' '["create"]')" \
-    "$(rc_entry 'doppler_secret.git_data_betterstack_logs_token' 'doppler_secret' '["create"]')"
+    "$(rc_entry 'doppler_secret.git_data_betterstack_logs_token' 'doppler_secret' '["create"]')" \
+    "$(rc_entry 'tls_private_key.git_data_host_ssh' 'tls_private_key' '["create"]')" \
+    "$(rc_entry 'doppler_secret.git_data_ssh_host_key' 'doppler_secret' '["create"]')"
 }
 
-# rest_fifteen_except <address> — the fifteen presence members minus one.
-# rest_fifteen_with <address> <actions-json> — the fifteen with ONE member's actions replaced.
+# rest_members_except <address> — the seventeen presence members minus one.
+# rest_members_with <address> <actions-json> — the seventeen with ONE member's actions replaced.
 #
 # ONE ENTRY PER ADDRESS IS AN INVARIANT OF THE INPUT FORMAT, and violating it silently
 # changes what the mutation battery measures. `terraform show -json` emits exactly one
 # `resource_changes` entry per address. An earlier revision of this suite built its
 # "a delete on X" fixtures by APPENDING a second entry for X alongside the `["create"]`
-# one already in rest_fifteen — a document terraform cannot produce. The gate's presence
+# one already in rest_members — a document terraform cannot produce. The gate's presence
 # arm then found the surviving create and passed, so neutering the passphrase arm let the
 # plan through and the battery reported SOLE-GUARD. On a realistic single-entry plan the
 # same mutation is caught by the presence arm: the arm is LAYERED. The battery was
@@ -226,8 +228,8 @@ rest_fifteen() {
 # (yielding a fixture identical to the happy one, so the ABORT assertion fails for the
 # wrong reason) or matches too much (yielding malformed JSON, so the gate aborts in the
 # PREAMBLE and the arm under test never runs — a pass that proves nothing).
-rest_fifteen_except() {
-  printf '[%s]' "$(rest_fifteen)" \
+rest_members_except() {
+  printf '[%s]' "$(rest_members)" \
     | jq -c --arg a "$1" '[.[] | select(.address != $a)]' \
     | sed 's/^\[//; s/\]$//'
 }
@@ -253,8 +255,8 @@ gate_presence_members() {
   printf '%s\n' "$out"
 }
 
-rest_fifteen_with() {
-  printf '[%s]' "$(rest_fifteen)" \
+rest_members_with() {
+  printf '[%s]' "$(rest_members)" \
     | jq -c --arg a "$1" --argjson acts "$2" \
         '[.[] | if .address == $a then .change.actions = $acts else . end]' \
     | sed 's/^\[//; s/\]$//'
@@ -265,7 +267,7 @@ happy_changes() {
   printf '[%s,%s,%s]' \
     "$(rc_gd_server '["create"]')" \
     "$(entailed_four)" \
-    "$(rest_fifteen)"
+    "$(rest_members)"
 }
 
 # A minimal plan: the server plus only the four entailed members. Everything the
@@ -290,7 +292,7 @@ printf '\n=== git-data-host-birth-gate ===\n\n'
 
 # ── The plans that must PASS ──────────────────────────────────────────────────────
 mk_plan "$TMP/happy.json" "$(happy_changes)"
-check "the full twenty-address scoped birth => PASS" 0 "PASS" "$TMP/happy.json"
+check "the full twenty-two-address scoped birth => PASS" 0 "PASS" "$TMP/happy.json"
 check "the PASS line names the host it authorized" 0 "hcloud_server.git_data" "$TMP/happy.json"
 
 # THE PARTIAL-BIRTH RESUME FIXTURE — the case v1 of this gate would have wedged forever.
@@ -304,7 +306,7 @@ check "the PASS line names the host it authorized" 0 "hcloud_server.git_data" "$
 #
 # So this fixture is not an edge case. It is the documented recovery path, and it MUST
 # pass.
-mk_plan "$TMP/partial-resume.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s]' \
+mk_plan "$TMP/partial-resume.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(rc_entry 'hcloud_server_network.git_data' 'hcloud_server_network' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
@@ -324,7 +326,9 @@ mk_plan "$TMP/partial-resume.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
   "$(rc_entry 'random_password.git_data_luks' 'random_password' '["no-op"]')" \
   "$(rc_entry 'doppler_secret.git_data_luks_key' 'doppler_secret' '["no-op"]')" \
   "$(rc_entry 'doppler_secret.git_data_ssh_host' 'doppler_secret' '["no-op"]')" \
-  "$(rc_entry 'doppler_secret.git_data_betterstack_logs_token' 'doppler_secret' '["no-op"]')")"
+  "$(rc_entry 'doppler_secret.git_data_betterstack_logs_token' 'doppler_secret' '["no-op"]')" \
+  "$(rc_entry 'tls_private_key.git_data_host_ssh' 'tls_private_key' '["no-op"]')" \
+  "$(rc_entry 'doppler_secret.git_data_ssh_host_key' 'doppler_secret' '["create"]')")"
 check "a PARTIAL-BIRTH RESUME (mixed create/no-op) => PASS" 0 "PASS" "$TMP/partial-resume.json"
 
 # The three shared-network members terraform pulls in transitively as no-ops. Refusing
@@ -337,7 +341,7 @@ check "a PARTIAL-BIRTH RESUME (mixed create/no-op) => PASS" 0 "PASS" "$TMP/parti
 mk_plan "$TMP/transitive-noop.json" "$(printf '[%s,%s,%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(rest_fifteen)" \
+  "$(rest_members)" \
   "$(rc_entry 'hcloud_ssh_key.default' 'hcloud_ssh_key' '["no-op"]')" \
   "$(rc_entry 'hcloud_network.private' 'hcloud_network' '["no-op"]')" \
   "$(rc_entry 'hcloud_network_subnet.private' 'hcloud_network_subnet' '["no-op"]')")"
@@ -349,7 +353,7 @@ check "transitive no-ops on shared network resources => PASS" 0 "PASS" "$TMP/tra
 mk_plan "$TMP/data-read.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(rest_fifteen)" \
+  "$(rest_members)" \
   "$(rc_entry 'data.hcloud_server_type.git_data' 'hcloud_server_type' '["read"]')")"
 check "a data-source read riding the birth => PASS" 0 "PASS" "$TMP/data-read.json"
 
@@ -360,7 +364,7 @@ check "zero host creates => ABORT" 1 "no host create" "$TMP/zero.json"
 mk_plan "$TMP/two.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(rc_entry 'hcloud_server.web["web-1"]' 'hcloud_server' '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)")"
+  "$(entailed_four)" "$(rest_members)")"
 check "two host creates => ABORT" 1 "expected exactly 1" "$TMP/two.json"
 
 # The 0-vs->1 messages must be DISTINCT. They send the operator to opposite diagnoses:
@@ -379,14 +383,14 @@ fi
 # hcloud_server.web["web-1"] is the singleton behind app.soleur.ai.
 mk_plan "$TMP/wrong-host.json" "$(printf '[%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-1"]' 'hcloud_server' '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)")"
+  "$(entailed_four)" "$(rest_members)")"
 check "a create of a DIFFERENT host => ABORT" 1 "IDENTITY MISMATCH" "$TMP/wrong-host.json"
 check "the identity ABORT names the wrongly-born host" 1 'hcloud_server.web["web-1"]' "$TMP/wrong-host.json"
 
 # ── REJECT: destroys ──────────────────────────────────────────────────────────────
 mk_plan "$TMP/replace.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["delete","create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)")"
+  "$(entailed_four)" "$(rest_members)")"
 # Needle is the ARM's phrasing, not the bare word "destroy" — the telemetry line printed
 # before every verdict contains `destroys=N`, so a bare needle is satisfied without any
 # arm firing. Measured: replacing this arm's message with prose containing no "destroy"
@@ -397,7 +401,7 @@ check "a REPLACE of the host => ABORT" 1 "destroy/forget action" "$TMP/replace.j
 # deleting it. Equally not a birth, so it counts.
 mk_plan "$TMP/forget.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen_with 'hcloud_volume.git_data' '["forget"]')")"
+  "$(entailed_four)" "$(rest_members_with 'hcloud_volume.git_data' '["forget"]')")"
 check "a FORGET (state-drop) anywhere => ABORT" 1 "DATA VOLUME" "$TMP/forget.json"
 
 # ── REJECT: a named volume destroy — issue AC2, both volumes ──────────────────────
@@ -406,13 +410,13 @@ check "a FORGET (state-drop) anywhere => ABORT" 1 "DATA VOLUME" "$TMP/forget.jso
 # about to be destroyed is the store holding every user's source code.
 mk_plan "$TMP/destroy-vol.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen_with 'hcloud_volume.git_data' '["delete"]')")"
+  "$(entailed_four)" "$(rest_members_with 'hcloud_volume.git_data' '["delete"]')")"
 check "destroying the DATA volume => ABORT naming it (AC2)" 1 "hcloud_volume.git_data" "$TMP/destroy-vol.json"
 check "the data-volume abort says DATA VOLUME" 1 "DATA VOLUME" "$TMP/destroy-vol.json"
 
 mk_plan "$TMP/destroy-luks-vol.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen_with 'hcloud_volume.git_data_luks' '["delete"]')")"
+  "$(entailed_four)" "$(rest_members_with 'hcloud_volume.git_data_luks' '["delete"]')")"
 check "destroying the LUKS volume => ABORT naming it (AC2)" 1 "hcloud_volume.git_data_luks" "$TMP/destroy-luks-vol.json"
 
 # ── REJECT: the firewall-content arm ──────────────────────────────────────────────
@@ -449,7 +453,9 @@ check "the firewall abort names the rule count it refused" 1 "1 inbound rule" "$
 mk_plan "$TMP/fw-born-with-rules.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' \
+  "$(printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' \
+    "$(rc_entry 'tls_private_key.git_data_host_ssh' 'tls_private_key' '["create"]')" \
+    "$(rc_entry 'doppler_secret.git_data_ssh_host_key' 'doppler_secret' '["create"]')" \
     "$(rc_entry 'hcloud_volume.git_data' 'hcloud_volume' '["create"]')" \
     "$(rc_entry 'hcloud_volume.git_data_luks' 'hcloud_volume' '["create"]')" \
     "$(rc_entry 'doppler_config.git_data_prd' 'doppler_config' '["create"]')" \
@@ -470,7 +476,7 @@ check "a firewall CREATED carrying inbound rules => ABORT" 1 "FIREWALL CONTENT:"
 # A volume RESIZE riding the birth is a mis-scope signal, not a birth.
 mk_plan "$TMP/vol-resize.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen_with 'hcloud_volume.git_data' '["update"]')")"
+  "$(entailed_four)" "$(rest_members_with 'hcloud_volume.git_data' '["update"]')")"
 check "a volume RESIZE riding the birth => ABORT" 1 "VOLUME UPDATE" "$TMP/vol-resize.json"
 check "the volume-update abort names the offending volume" 1 "hcloud_volume.git_data" "$TMP/vol-resize.json"
 
@@ -481,13 +487,13 @@ check "the volume-update abort names the offending volume" 1 "hcloud_volume.git_
 for verb in delete forget update; do
   mk_plan "$TMP/luks-pw-$verb.json" "$(printf '[%s,%s,%s]' \
     "$(rc_gd_server '["create"]')" \
-    "$(entailed_four)" "$(rest_fifteen_with 'random_password.git_data_luks' "[\"$verb\"]")")"
+    "$(entailed_four)" "$(rest_members_with 'random_password.git_data_luks' "[\"$verb\"]")")"
   check "a $verb on the LUKS PASSPHRASE => ABORT" 1 "LUKS PASSPHRASE" "$TMP/luks-pw-$verb.json"
 done
 
 mk_plan "$TMP/luks-secret-update.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen_with 'doppler_secret.git_data_luks_key' '["update"]')")"
+  "$(entailed_four)" "$(rest_members_with 'doppler_secret.git_data_luks_key' '["update"]')")"
 check "an UPDATE on the LUKS key SECRET => ABORT" 1 "LUKS PASSPHRASE" "$TMP/luks-secret-update.json"
 
 # ── REJECT: the ORPHANED PASSPHRASE MINT (found at review, measured PASS before the arm) ──
@@ -500,7 +506,7 @@ check "an UPDATE on the LUKS key SECRET => ABORT" 1 "LUKS PASSPHRASE" "$TMP/luks
 mk_plan "$TMP/orphan-mint.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_volume.git_data_luks" or .address == "hcloud_volume.git_data" then .change.actions = ["no-op"] else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_volume.git_data_luks" or .address == "hcloud_volume.git_data" then .change.actions = ["no-op"] else . end]' | sed 's/^\[//; s/\]$//')")"
 check "a passphrase CREATE while the LUKS volume is a no-op => ABORT" 1 "ORPHANED LUKS PASSPHRASE MINT" "$TMP/orphan-mint.json"
 
 # The CORRECT first birth has both as create — it must still PASS, or the arm has just
@@ -514,7 +520,7 @@ mk_plan "$TMP/fw-attach-missing.json" "$(printf '[%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server_network.git_data' 'hcloud_server_network' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
-  "$(rest_fifteen)")"
+  "$(rest_members)")"
 check "the firewall attachment OMITTED => ABORT" 1 "bound to exactly one server" "$TMP/fw-attach-missing.json"
 
 # A RE-BIRTH: the attachment survived the host's out-of-band destruction (its terraform ID
@@ -526,7 +532,7 @@ mk_plan "$TMP/fw-attach-rebirth.json" "$(printf '[%s,%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_fw_attach '["update"]' '[9001]')" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | .change.actions = ["no-op"]]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | .change.actions = ["no-op"]]' | sed 's/^\[//; s/\]$//')")"
 check "a RE-BIRTH where the attachment UPDATES [] -> one server => PASS" 0 "PASS" "$TMP/fw-attach-rebirth.json"
 
 # Fan-out: bound to more than one server.
@@ -536,7 +542,7 @@ mk_plan "$TMP/fw-attach-fanout.json" "$(printf '[%s,%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_fw_attach '["create"]' '[9001,9002]')" \
-  "$(rest_fifteen)")"
+  "$(rest_members)")"
 check "the firewall attachment bound to TWO servers => ABORT" 1 "bound to exactly one server" "$TMP/fw-attach-fanout.json"
 
 # Identity: bound to a firewall whose id is already KNOWN, i.e. some OTHER firewall than
@@ -549,7 +555,7 @@ mk_plan "$TMP/fw-wrong-identity.json" "$(printf '[%s,%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_fw_attach '["create"]' '[9001]' '"111"')" \
-  "$(rest_fifteen)")"
+  "$(rest_members)")"
 check "the attachment binding a DIFFERENT, already-known firewall => ABORT" 1 "FIREWALL IDENTITY" "$TMP/fw-wrong-identity.json"
 
 # The rule set not disclosed at plan time (a computed `dynamic "rule"` block). Counting an
@@ -558,7 +564,7 @@ check "the attachment binding a DIFFERENT, already-known firewall => ABORT" 1 "F
 mk_plan "$TMP/fw-rules-unknown.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"rule":null} | .change.after_unknown = {"rule":true} else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"rule":null} | .change.after_unknown = {"rule":true} else . end]' | sed 's/^\[//; s/\]$//')")"
 check "an UNDISCLOSED firewall rule set => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-rules-unknown.json"
 
 # THE SHAPE THE REAL PROVIDER EMITS (hcloud 1.63.0, captured from an offline `terraform plan`
@@ -571,7 +577,7 @@ check "an UNDISCLOSED firewall rule set => ABORT" 1 "FIREWALL CONTENT UNREADABLE
 mk_plan "$TMP/fw-real-provider-shape.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"apply_to":[],"labels":{"app":"soleur-web-platform"},"name":"soleur-git-data","rule":[]} | .change.after_unknown = {"apply_to":[],"id":true,"labels":{},"rule":[]} else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"apply_to":[],"labels":{"app":"soleur-web-platform"},"name":"soleur-git-data","rule":[]} | .change.after_unknown = {"apply_to":[],"id":true,"labels":{},"rule":[]} else . end]' | sed 's/^\[//; s/\]$//')")"
 check "the REAL provider shape (after.rule=[] + after_unknown.rule=[]) => PASS" 0 "PASS" "$TMP/fw-real-provider-shape.json"
 
 # The element-level unknown: one rule whose content is not disclosed. `after_unknown.rule`
@@ -582,7 +588,7 @@ check "the REAL provider shape (after.rule=[] + after_unknown.rule=[]) => PASS" 
 mk_plan "$TMP/fw-rule-element-unknown.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"rule":[{"direction":"in","port":null,"protocol":"tcp"}]} | .change.after_unknown = {"apply_to":[],"id":true,"rule":[{"port":true}]} else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"rule":[{"direction":"in","port":null,"protocol":"tcp"}]} | .change.after_unknown = {"apply_to":[],"id":true,"rule":[{"port":true}]} else . end]' | sed 's/^\[//; s/\]$//')")"
 check "a rule ELEMENT with an undisclosed field => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-rule-element-unknown.json"
 
 # `after.rule: null` is no shape the provider emits (create, update and no-op all serialise
@@ -590,14 +596,14 @@ check "a rule ELEMENT with an undisclosed field => ABORT" 1 "FIREWALL CONTENT UN
 mk_plan "$TMP/fw-rule-null.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after.rule = null else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after.rule = null else . end]' | sed 's/^\[//; s/\]$//')")"
 check "after.rule null rather than an array => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-rule-null.json"
 # No `after_unknown` at all is not a disclosure either: Terraform emits the object on every
 # create, update and no-op. A fixture that omits it (the old rc_entry shape) is refused.
 mk_plan "$TMP/fw-no-after-unknown.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then del(.change.after_unknown) else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then del(.change.after_unknown) else . end]' | sed 's/^\[//; s/\]$//')")"
 check "the firewall entry with no after_unknown key => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-no-after-unknown.json"
 
 # One FULLY-KNOWN rule (the provider mirrors a known element as `[{"destination_ips":[],
@@ -609,7 +615,7 @@ check "the firewall entry with no after_unknown key => ABORT" 1 "FIREWALL CONTEN
 mk_plan "$TMP/fw-one-known-rule.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"apply_to":[],"labels":{"app":"soleur-web-platform"},"name":"soleur-git-data","rule":[{"description":null,"destination_ips":[],"direction":"in","port":"22","protocol":"tcp","source_ips":["0.0.0.0/0"]}]} | .change.after_unknown = {"apply_to":[],"id":true,"labels":{},"rule":[{"destination_ips":[],"source_ips":[false]}]} else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"apply_to":[],"labels":{"app":"soleur-web-platform"},"name":"soleur-git-data","rule":[{"description":null,"destination_ips":[],"direction":"in","port":"22","protocol":"tcp","source_ips":["0.0.0.0/0"]}]} | .change.after_unknown = {"apply_to":[],"id":true,"labels":{},"rule":[{"destination_ips":[],"source_ips":[false]}]} else . end]' | sed 's/^\[//; s/\]$//')")"
 check "one FULLY-KNOWN rule (false leaves only) => readable, refused by the CONTENT arm" 1 "1 inbound rule" "$TMP/fw-one-known-rule.json"
 
 # ── THE REAL FIRST-BIRTH SHAPE OF THE ATTACHMENT AND THE SERVER ─────────────────────
@@ -638,23 +644,23 @@ entailed_three_real() {
     "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
     "$(rc_fw_attach_real)"
 }
-mk_plan_cfg "$TMP/real-first-birth.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")" "$(cfg_real)"
+mk_plan_cfg "$TMP/real-first-birth.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" "$(cfg_real)"
 check "the REAL first-birth shape (server_ids + firewall_ids unknown, config references own server) => PASS" 0 "PASS" "$TMP/real-first-birth.json"
 
 # Same unknown server_ids, but the HCL fans the attachment out to a second server. Only
 # the configuration can see this at plan time.
-mk_plan_cfg "$TMP/real-attach-fanout.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")" \
+mk_plan_cfg "$TMP/real-attach-fanout.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids.references = ["hcloud_server.git_data.id","hcloud_server.git_data","hcloud_server.web[\"web-1\"].id","hcloud_server.web"] else . end)')"
 check "unknown server_ids whose config references TWO servers => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-fanout.json"
 
 # Unknown server_ids with NO configuration block at all: the gate cannot see what the
 # attachment binds, so it must refuse rather than trust the unknown.
-mk_plan_nocfg "$TMP/real-attach-noconfig.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")"
+mk_plan_nocfg "$TMP/real-attach-noconfig.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")"
 check "unknown server_ids with no configuration to read => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-noconfig.json"
 
 # Unknown server_ids whose config is a LITERAL list (constant_value, no references): the
 # attachment is not bound to this plan's server by construction.
-mk_plan_cfg "$TMP/real-attach-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")" \
+mk_plan_cfg "$TMP/real-attach-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids = {"constant_value":[111]} else . end)')"
 check "unknown server_ids whose config is a literal list => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-literal.json"
 
@@ -662,14 +668,14 @@ check "unknown server_ids whose config is a literal list => ABORT" 1 "bound to e
 # — a host that already exists in this same root — is a known one-element list, so the
 # pre-fix length-only arm PASSED it while the deny-all firewall bound the WRONG host and
 # git-data booted naked. The configuration reference is required on both branches.
-mk_plan_cfg "$TMP/attach-known-other-server.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_four)" "$(rest_fifteen)")" \
+mk_plan_cfg "$TMP/attach-known-other-server.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_four)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids.references = ["hcloud_server.web.id","hcloud_server.web"] else . end)')"
 check "KNOWN one-element server_ids whose config references some OTHER host => ABORT" 1 "bound to exactly one server" "$TMP/attach-known-other-server.json"
-mk_plan_cfg "$TMP/attach-known-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_four)" "$(rest_fifteen)")" \
+mk_plan_cfg "$TMP/attach-known-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_four)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids = {"constant_value":[9001]} else . end)')"
 check "KNOWN one-element server_ids whose config is a literal list => ABORT" 1 "bound to exactly one server" "$TMP/attach-known-literal.json"
 # Reference ORDER is not load-bearing: the same two references reversed still pass.
-mk_plan_cfg "$TMP/real-first-birth-refs-reversed.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")" \
+mk_plan_cfg "$TMP/real-first-birth-refs-reversed.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids.references = ["hcloud_server.git_data","hcloud_server.git_data.id"] else . end)')"
 check "the REAL first-birth shape with the two references in the other order => PASS" 0 "PASS" "$TMP/real-first-birth-refs-reversed.json"
 
@@ -677,20 +683,20 @@ check "the REAL first-birth shape with the two references in the other order => 
 # firewall's own id plus a known permissive one collapses the whole set to unknown, so
 # `after.firewall_ids` is absent and the length-based arm alone reads it as empty. The
 # configuration discloses the expression.
-mk_plan_cfg "$TMP/real-server-inline-fw-unknown.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")" \
+mk_plan_cfg "$TMP/real-server-inline-fw-unknown.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_members)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_server.git_data" then .expressions.firewall_ids = {"references":["hcloud_firewall.git_data.id","hcloud_firewall.git_data"]} else . end)')"
 check "inline firewall_ids set in the HCL but unknown at plan time => ABORT" 1 "firewall_ids inline" "$TMP/real-server-inline-fw-unknown.json"
 
 # Inline firewall_ids on the server bypasses the attachment the gate inspects entirely.
 mk_plan "$TMP/server-inline-fw.json" "$(printf '[%s,%s,%s]' \
   '{"address":"hcloud_server.git_data","type":"hcloud_server","change":{"actions":["create"],"before":null,"after":{"firewall_ids":[111],"ssh_keys":["1111","4242"]}}}' \
-  "$(entailed_four)" "$(rest_fifteen)")"
+  "$(entailed_four)" "$(rest_members)")"
 check "inline firewall_ids on the server => ABORT" 1 "firewall_ids inline" "$TMP/server-inline-fw.json"
 
 # A future terraform verb on an out-of-scope address must be REFUSED, not classified inert.
 mk_plan "$TMP/novel-verb.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   "$(rc_entry 'hcloud_volume.workspaces' 'hcloud_volume' '["evict"]')")"
 check "a FUTURE terraform verb on an out-of-scope address => ABORT" 1 "out-of-scope" "$TMP/novel-verb.json"
 
@@ -703,7 +709,7 @@ check "a FUTURE terraform verb on an out-of-scope address => ABORT" 1 "out-of-sc
 # a guarantee.
 mk_plan "$TMP/reboot.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   "$(rc_update 'hcloud_server.web["web-1"]' 'hcloud_server' \
       '{"placement_group_id":1,"server_type":"cpx22"}' \
       '{"placement_group_id":2,"server_type":"cpx22"}')")"
@@ -713,7 +719,7 @@ check "a reboot-forcing update on a LIVE host => ABORT" 1 "reboot" "$TMP/reboot.
 # A blanket-ban implementation passes the abort check above and fails this one.
 mk_plan "$TMP/benign-update.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   "$(rc_update 'hcloud_server.web["web-1"]' 'hcloud_server' \
       '{"placement_group_id":1,"server_type":"cpx22","name":"old"}' \
       '{"placement_group_id":1,"server_type":"cpx22","name":"new"}')")"
@@ -727,7 +733,7 @@ fi
 # ── REJECT: out-of-scope ──────────────────────────────────────────────────────────
 mk_plan "$TMP/oos.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   "$(rc_update 'cloudflare_ruleset.seo_page_redirects' 'cloudflare_ruleset' \
       '{"rules":[{"a":1},{"b":2}]}' '{"rules":[{"a":1}]}')")"
 check "a cloudflare_ruleset change riding the birth => ABORT" 1 "out-of-scope" "$TMP/oos.json"
@@ -739,7 +745,7 @@ check "the out-of-scope ABORT names the offending address" 1 "seo_page_redirects
 # them is precisely the confusion the gate must not make.
 mk_plan "$TMP/substring.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   "$(rc_entry 'hcloud_volume.git_data_luks_backup' 'hcloud_volume' '["create"]')")"
 check "an address that SUBSTRING-matches an allow member => ABORT" 1 "out-of-scope" "$TMP/substring.json"
 check "the substring ABORT names the impostor address" 1 "git_data_luks_backup" "$TMP/substring.json"
@@ -753,7 +759,7 @@ check "the substring ABORT names the impostor address" 1 "git_data_luks_backup" 
 # fed-but-paused shape — a green dashboard measuring nothing.
 mk_plan "$TMP/heartbeat.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   "$(rc_entry 'betteruptime_heartbeat.git_data_prd' 'betteruptime_heartbeat' '["create"]')")"
 check "creating the git-data HEARTBEAT => ABORT" 1 "out-of-scope" "$TMP/heartbeat.json"
 
@@ -764,7 +770,7 @@ check "creating the git-data HEARTBEAT => ABORT" 1 "out-of-scope" "$TMP/heartbea
 # dispatch from root-SSHing production.
 mk_plan "$TMP/probe.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   "$(rc_entry 'terraform_data.git_data_probe_install' 'terraform_data' '["create"]')")"
 check "creating the web-1 SSH PROBE => ABORT" 1 "out-of-scope" "$TMP/probe.json"
 check "the probe ABORT names the address" 1 "git_data_probe_install" "$TMP/probe.json"
@@ -779,7 +785,7 @@ mk_plan "$TMP/no-nic.json" "$(printf '[%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_fw_attach '["create"]' '[9001]')" \
-  "$(rest_fifteen)")"
+  "$(rest_members)")"
 check "the server with NO private NIC => ABORT (#6416)" 1 "hcloud_server_network.git_data" "$TMP/no-nic.json"
 
 mk_plan "$TMP/no-fw-attach.json" "$(printf '[%s,%s,%s,%s,%s]' \
@@ -787,7 +793,7 @@ mk_plan "$TMP/no-fw-attach.json" "$(printf '[%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server_network.git_data' 'hcloud_server_network' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
-  "$(rest_fifteen)")"
+  "$(rest_members)")"
 check "the server with NO firewall attachment => ABORT (public exposure)" 1 "hcloud_firewall_attachment.git_data" "$TMP/no-fw-attach.json"
 check "the firewall-attachment abort explains the exposure" 1 "public" "$TMP/no-fw-attach.json"
 
@@ -796,7 +802,7 @@ mk_plan "$TMP/no-luks-attach.json" "$(printf '[%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server_network.git_data' 'hcloud_server_network' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_fw_attach '["create"]' '[9001]')" \
-  "$(rest_fifteen)")"
+  "$(rest_members)")"
 check "the server with NO LUKS volume attachment => ABORT" 1 "hcloud_volume_attachment.git_data_luks" "$TMP/no-luks-attach.json"
 
 # An entailed member that UPDATES instead of creating. A new server gets a new NIC by
@@ -808,10 +814,10 @@ mk_plan "$TMP/nic-updates.json" "$(printf '[%s,%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume_attachment.git_data' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume_attachment.git_data_luks' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_fw_attach '["create"]' '[9001]')" \
-  "$(rest_fifteen)")"
+  "$(rest_members)")"
 check "an entailed member that UPDATES instead of creating => ABORT" 1 "hcloud_server_network.git_data" "$TMP/nic-updates.json"
 
-# PRESENCE HALF — the other fifteen must APPEAR with actions in {create, no-op}. This
+# PRESENCE HALF — the other seventeen must APPEAR with actions in {create, no-op}. This
 # still catches a typo'd -target (an address absent from the closure fails presence) and
 # still satisfies AC4's intent, without poisoning the retry.
 mk_plan "$TMP/minimal.json" "$(minimal_changes)"
@@ -835,7 +841,7 @@ while IFS= read -r addr; do
   mk_plan "$TMP/no-presence-member.json" "$(printf '[%s,%s,%s]' \
     "$(rc_gd_server '["create"]')" \
     "$(entailed_four)" \
-    "$(rest_fifteen_except "$addr")")"
+    "$(rest_members_except "$addr")")"
   check "a birth omitting ${addr} => ABORT (AC4)" 1 "$addr" "$TMP/no-presence-member.json"
 done < <(gate_presence_members)
 
@@ -847,22 +853,22 @@ done < <(gate_presence_members)
 # this whole file exists to prevent: an address PERMITTED to change but not REQUIRED to
 # appear. Compared as sorted sets so an addition on either side is caught too.
 _gate_set="$(gate_presence_members | sort)"
-_fixture_set="$(printf '[%s]' "$(rest_fifteen)" | jq -r '.[].address' | sort)"
+_fixture_set="$(printf '[%s]' "$(rest_members)" | jq -r '.[].address' | sort)"
 _gate_n="$(printf '%s\n' "$_gate_set" | grep -c .)"
-if [[ "$_gate_set" == "$_fixture_set" && "$_gate_n" -ge 15 ]]; then
+if [[ "$_gate_set" == "$_fixture_set" && "$_gate_n" -ge 17 ]]; then
   pass "gate presence loop and fixture are the same set (${_gate_n} members)"
 else
   fail "gate presence loop has DRIFTED from the fixture — an address is asserted by only one of them" \
     "n/a" "$(diff <(printf '%s\n' "$_gate_set") <(printf '%s\n' "$_fixture_set") | head -6)"
 fi
 
-# Fixture self-check: rest_fifteen_except must actually REMOVE one member, else every
+# Fixture self-check: rest_members_except must actually REMOVE one member, else every
 # assertion in the loop above is vacuous — the same class of silent-no-op the jq rewrite
 # was chosen to avoid, so it is asserted rather than assumed.
-n_all=$(printf '[%s]' "$(rest_fifteen)" | jq 'length')
-n_less=$(printf '[%s]' "$(rest_fifteen_except 'doppler_secret.git_remove_ssh_private_key')" | jq 'length')
-if [[ "$n_all" -eq 15 && "$n_less" -eq 14 ]]; then
-  pass "fixture self-check: rest_fifteen is 15 members and _except removes exactly one"
+n_all=$(printf '[%s]' "$(rest_members)" | jq 'length')
+n_less=$(printf '[%s]' "$(rest_members_except 'doppler_secret.git_remove_ssh_private_key')" | jq 'length')
+if [[ "$n_all" -eq 17 && "$n_less" -eq 16 ]]; then
+  pass "fixture self-check: rest_members is 17 members and _except removes exactly one"
 else
   fail "fixture self-check failed — the AC4 omission cases would be vacuous" "n/a" "all=$n_all less=$n_less"
 fi
@@ -872,7 +878,7 @@ fi
 mk_plan "$TMP/presence-delete.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" \
+  "$(printf '[%s]' "$(rest_members)" \
      | jq -c '[.[] | if .address == "random_password.git_data_luks" then .change.actions = ["delete"] else . end]' \
      | sed 's/^\[//; s/\]$//')")"
 check "a presence member that DELETES => ABORT via a destroy-class arm" 1 "LUKS PASSPHRASE" "$TMP/presence-delete.json"
@@ -889,7 +895,7 @@ check "a presence member that DELETES => ABORT via a destroy-class arm" 1 "LUKS 
 # app.soleur.ai riding the birth.
 mk_plan "$TMP/empty-actions.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
-  "$(entailed_four)" "$(rest_fifteen)" \
+  "$(entailed_four)" "$(rest_members)" \
   '{"address":"hcloud_server.web[\"web-1\"]","type":"hcloud_server","change":{"actions":[],"before":{"id":9},"after":null}}')"
 check "an EMPTY actions array hiding a destroy => fail-closed ABORT" 1 "unclassifiable" "$TMP/empty-actions.json"
 
@@ -899,7 +905,7 @@ check "an EMPTY actions array hiding a destroy => fail-closed ABORT" 1 "unclassi
 mk_plan "$TMP/empty-actions-presence.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "doppler_secret.git_data_luks_key" then .change.actions = [] else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "doppler_secret.git_data_luks_key" then .change.actions = [] else . end]' | sed 's/^\[//; s/\]$//')")"
 check "an EMPTY actions array on a REQUIRED member => fail-closed ABORT" 1 "unclassifiable" "$TMP/empty-actions-presence.json"
 
 # A `no-op` firewall carrying inbound rules. This is the PARTIAL-BIRTH RESUME shape — the
@@ -908,7 +914,7 @@ check "an EMPTY actions array on a REQUIRED member => fail-closed ABORT" 1 "uncl
 mk_plan "$TMP/fw-noop-with-rules.json" "$(printf '[%s,%s,%s]' \
   "$(rc_gd_server '["create"]')" \
   "$(entailed_four)" \
-  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then (.change.actions = ["no-op"] | .change.after = {"rule":[{"direction":"in","port":"22","source_ips":["0.0.0.0/0"]}]}) else . end]' | sed 's/^\[//; s/\]$//')")"
+  "$(printf '[%s]' "$(rest_members)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then (.change.actions = ["no-op"] | .change.after = {"rule":[{"direction":"in","port":"22","source_ips":["0.0.0.0/0"]}]}) else . end]' | sed 's/^\[//; s/\]$//')")"
 check "a NO-OP firewall carrying inbound rules => ABORT" 1 "FIREWALL CONTENT:" "$TMP/fw-noop-with-rules.json"
 
 # ── REJECT: fail-closed input (delegated to the preamble) ─────────────────────────
@@ -1023,7 +1029,7 @@ mutate_layered() {
 # `["delete","create"]` on hcloud_server.git_data: `creates` is 1 (index("create") is
 # satisfied), identity matches, the firewall and passphrase arms see nothing, the address
 # is in the allow-set so out_of_scope is 0, all four entailed members create and all
-# fifteen presence members create. Every other arm is silent. Neuter the destroy arm and
+# seventeen presence members create. Every other arm is silent. Neuter the destroy arm and
 # the gate PASSES a plan that destroys the live store and rebuilds it empty — which is
 # precisely the difference between a birth and a replace that a count check cannot see.
 mutate_and_check "destroy guard" \
@@ -1072,7 +1078,7 @@ mutate_layered "firewall-content guard (update shape, behind presence)" \
 #
 # An earlier revision reported SOLE-GUARD — but only because its fixture APPENDED a second
 # `random_password.git_data_luks` entry alongside the `["create"]` one already in
-# rest_fifteen, a document terraform cannot emit. On a single-entry plan an `update` also
+# rest_members, a document terraform cannot emit. On a single-entry plan an `update` also
 # fails the presence arm (which demands actions ⊆ {create, no-op}), so the passphrase arm
 # is the backstop's message, not its refusal. It absolutely earns its place — "permanently
 # unopenable" versus "not present in the plan" is the difference between an operator
@@ -1184,6 +1190,42 @@ mutate_layered "named volume-destroy guard" \
 mutate_and_check "root-key arm call" \
   '/^  git_data_root_key_arm "\$plan_json" /d' "$TMP/rk-fp-mismatch.json"
 
+# ── (#7226, ADR-237) GUARD 4, BIRTH ARM: the birth publishes the pin of the key it installs ──
+# The key may be a no-op on a resumed dispatch (it was never on any host: the pin secret
+# depends_on the server, so nothing published it). The PIN SECRET, though, must be a CREATE:
+# it depends_on hcloud_server.git_data, so on a genuine birth it cannot already exist, and a
+# no-op there means a stale pin from some earlier host would survive the birth unrewritten.
+mk_plan "$TMP/hk-pin-noop.json" "$(printf '[%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" \
+  "$(rest_members_with 'doppler_secret.git_data_ssh_host_key' '["no-op"]')")"
+check "HKB1 a birth that creates the host key but leaves its pin secret a no-op (stale pin) => ABORT" 1 "does not CREATE doppler_secret.git_data_ssh_host_key" "$TMP/hk-pin-noop.json"
+mk_plan "$TMP/hk-pin-update.json" "$(printf '[%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" \
+  "$(rest_members_with 'doppler_secret.git_data_ssh_host_key' '["update"]')")"
+check "HKB2 a birth that UPDATES an existing host-key pin => ABORT" 1 "ABORT" "$TMP/hk-pin-update.json"
+mk_plan "$TMP/hk-key-noop.json" "$(printf '[%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" \
+  "$(rest_members_with 'tls_private_key.git_data_host_ssh' '["no-op"]')")"
+check "HKB3 resumed birth: host key already in state (no-op), pin created => PASS" 0 "PASS" "$TMP/hk-key-noop.json"
+mk_plan "$TMP/hk-second-tls.json" "$(printf '[%s,%s,%s,%s]' "$(rc_gd_server '["create"]')" "$(entailed_four)" "$(rest_members)" \
+  "$(rc_entry 'tls_private_key.git_data_host_ssh_2' 'tls_private_key' '["create"]')")"
+check "HKB4 a SECOND tls address created in a birth => ABORT (out of scope)" 1 "out-of-scope" "$TMP/hk-second-tls.json"
+cp "$TMP/hk-pin-noop.json" "$TMP/hk-pin-noop-mut.json"
+mutate_and_check "host-key pin CREATE arm" \
+  's/if \[\[ "\$host_key_created" -ne 0 && "\$host_key_pin_created" -ne 1 \]\]; then/if false; then/' "$TMP/hk-pin-noop-mut.json"
+
+# HKB5 THE GATE NEVER PRINTS PLAN VALUES: a sentinel planted in every before/after must not
+# reach the output on either verdict (this output lands in a public Actions log).
+_hkb_s="HKBSENTINEL$$VALUE"
+for _hkb_f in happy hk-pin-noop; do
+  jq -c --arg s "$_hkb_s" '.resource_changes |= map(.change.before = {"user_data":$s} | .change.after = ((.change.after // {}) + {"value":$s}))' \
+    "$TMP/${_hkb_f}.json" > "$TMP/${_hkb_f}-leak.json"
+done
+_hkb_out="$(git_data_host_birth_gate "$TMP/happy-leak.json" 2>&1)"; _hkb_rc1=$?
+_hkb_out2="$(git_data_host_birth_gate "$TMP/hk-pin-noop-leak.json" 2>&1)"; _hkb_rc2=$?
+if [[ "$_hkb_rc1" -eq 0 && "$_hkb_rc2" -eq 1 && "$_hkb_out$_hkb_out2" != *"$_hkb_s"* ]]; then
+  pass "HKB5 the gate prints no .change.before/.after value on PASS or ABORT"
+else
+  fail "HKB5 the gate leaked a plan value, or the fixtures did not grade as expected" "pass=${_hkb_rc1} abort=${_hkb_rc2}" "$(printf '%s\n%s' "$_hkb_out" "$_hkb_out2" | grep -F "$_hkb_s" | head -2)"
+fi
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -1201,11 +1243,11 @@ mutate_and_check "root-key arm call" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 123 ]]; then
+if [[ "$_ran" -lt 131 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 123. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 131. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 123)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 131)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
