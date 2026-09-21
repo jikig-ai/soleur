@@ -718,35 +718,35 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] AC1. `bash apps/web-platform/infra/git-data-cutover-access.test.sh` exits 0. Its final ledger
+- [x] AC1. `bash apps/web-platform/infra/git-data-cutover-access.test.sh` exits 0. Its final ledger
   line shows `0 failed`. `MUTANT_FLOOR` and `FLOOR` equal the recounted exact totals, and the comment
   above each shows per-section arithmetic that sums to the value.
-- [ ] AC2. Each of F2–F7 asserts the exact line
+- [x] AC2. Each of F2–F7 asserts the exact line
   `[git-data-cutover] STORE probe=fence-shape verdict=fence_not_intact reason=<word>` with exit 5. F8–F10
   assert `probe_failed`. Implementation: the rc→reason `case` in
   `git-data-cutover.sh:refuse_if_fence_not_intact`.
-- [ ] AC3. AC2's expected timeline ends with exactly one fence command line, after the count line.
+- [x] AC3. AC2's expected timeline ends with exactly one fence command line, after the count line.
   Its `timeout` string and `ssh-stdin` count grow by one. Runtime R5b and R5c are updated to the
   counts that include the one extra read. `case_main_order` expects seven calls in the stated order.
-- [ ] AC4. Parity row P1 passes. The probe literals equal the bootstrap `_own` rows for `$HOOKS_DIR`
+- [x] AC4. Parity row P1 passes. The probe literals equal the bootstrap `_own` rows for `$HOOKS_DIR`
   and `$PRE_RECEIVE`, with `$GIT_USER` resolved.
-- [ ] AC5. Mutation rows M1–M5, M7, M8, M10 and M11 each report RED. Harness row H-a reports RED.
+- [ ] AC5 (unit + mutation rows verified locally; the runtime arm needs docker, run by infra-validation in CI). Mutation rows M1–M5, M7, M8, M10 and M11 each report RED. Harness row H-a reports RED.
   The runtime clear run and `rfsrc` pass. If the runtime arm cannot reach its fixture, it reports
   the existing `_runtime_skip` and never a silent pass.
-- [ ] AC6. The G2 census still passes unchanged in its regex. This proves the probe added no
+- [x] AC6. The G2 census still passes unchanged in its regex. This proves the probe added no
   refused verb. It runs `case_verb_census` on the real script.
-- [ ] AC7. `git diff --name-only origin/main...HEAD` lists no file in the rung-2 bound set.
+- [x] AC7. `git diff --name-only origin/main...HEAD` lists no file in the rung-2 bound set.
   Check: `bash -c 'source tests/scripts/lib/git-data-birth-readiness-gate.sh; git_data_rung2_bound_files apps/web-platform/infra/cloud-init-git-data.yml'`
   has an empty intersection with the diff. Also, `git_data_rung2_user_data_sha256` still prints
   `a0b5f37b2fefcb095c1d5e4a559dfac047840db87bb087ffdab5c78d514a0517`.
-- [ ] AC8. The diff is a subset of Files to Edit, plus this plan, plus
+- [x] AC8. The diff is a subset of Files to Edit, plus this plan, plus
   `knowledge-base/project/specs/feat-one-shot-8101-git-data-hooks-rsync-mapper-assert/*`, plus any
   pipeline-generated `knowledge-base/INDEX.md` update.
-- [ ] AC9. The runbook's § Verdict map contains a `fence_not_intact` row naming all six reason words,
+- [x] AC9. The runbook's § Verdict map contains a `fence_not_intact` row naming all six reason words,
   and § Preconditions' #8101 bullet names #8211 and the rung-2 two-PR section.
   `lint-infra-no-human-steps.py --changed --base origin/main` passes.
 - [ ] AC10. The PR body says `Ref #8101` and does not say `Closes #8101`.
-- [ ] AC11. #8211's body carries the `Carried from #8101` checkbox section, and #8101 has a comment
+- [x] AC11. #8211's body carries the `Carried from #8101` checkbox section, and #8101 has a comment
   carrying D2's five reasons. Check: `gh issue view 8211 --json body --jq .body | grep -c 'Carried from #8101'` = 1
   and `gh issue view 8211 --json body --jq .body | grep -c 'FRESH_ROOT'` ≥ 1.
 
