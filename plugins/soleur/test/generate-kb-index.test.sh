@@ -502,6 +502,68 @@ do
 done
 
 # ---------------------------------------------------------------------------
+# TS10 — the index carries no count header, and --check is gone (#8377 / ADR-235)
+#
+# The derived count header existed so the retired merge driver could rebuild a
+# line the default text merge would otherwise fold cleanly and wrongly. With
+# INDEX.md untracked there is no merge to resolve, no driver, and no reader of
+# the count — ADR-235 retires the whole surface. Asserted as ABSENCE of the
+# literal the retired renderer emitted, not as presence of a replacement, so
+# re-introducing the header reddens this row.
+#
+# `--check` was a regeneration diff against the COMMITTED artifact. Untracked,
+# there is no committed artifact to diff against, so the flag now falls through
+# to the generator's unknown-argument arm (exit 2). Pinning the exit CODE and
+# the stream keeps the retirement from degrading into a silent accept.
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- TS10: no count header, --check retired ---"
+
+kb_ts10="$TMPDIR_BASE/kb-ts10"
+mkdir -p "$kb_ts10/engineering"
+printf -- '---\ntitle: "Header Probe"\n---\n\nbody\n' > "$kb_ts10/engineering/header-probe.md"
+KB_DIR="$kb_ts10" bash "$GEN_SCRIPT" >/dev/null 2>&1
+
+CASES=$((CASES + 1))
+if grep -qF '> Total files:' "$kb_ts10/INDEX.md"; then
+  echo "  FAIL: TS10: INDEX.md still carries the retired '> Total files:' header"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: TS10: no '> Total files:' header in the generated index"
+  PASS=$((PASS + 1))
+fi
+
+# The rows themselves must survive the header's removal — an index with neither
+# header nor rows would pass the assertion above vacuously.
+CASES=$((CASES + 1)); assert_indexed "$kb_ts10" "engineering/header-probe.md" "TS10: rows survive the header removal"
+
+# --check must be REFUSED, with the generator's own unknown-argument status.
+ts10_rc=0
+ts10_err="$(KB_DIR="$kb_ts10" bash "$GEN_SCRIPT" --check 2>&1 >/dev/null)" || ts10_rc=$?
+CASES=$((CASES + 1))
+if [[ "$ts10_rc" -eq 2 ]]; then
+  echo "  PASS: TS10: --check exits 2 (unknown argument)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: TS10: --check exited $ts10_rc, expected 2 — the retired flag is still accepted"
+  FAIL=$((FAIL + 1))
+fi
+CASES=$((CASES + 1)); assert_contains "$ts10_err" "unknown argument" "TS10: --check refusal names the unknown argument, on stderr"
+
+# --out is the surviving primitive: scripts/ensure-kb-index.sh regenerates
+# through it. Retiring --check must not take it along.
+ts10_out="$TMPDIR_BASE/ts10-out"
+CASES=$((CASES + 1))
+if KB_DIR="$kb_ts10" bash "$GEN_SCRIPT" --out "$ts10_out" >/dev/null 2>&1 \
+   && [[ -f "$ts10_out/INDEX.md" && -f "$ts10_out/kb-tags.txt" && -f "$ts10_out/kb-categories.txt" ]]; then
+  echo "  PASS: TS10: --out still writes all three artifacts off to the side"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: TS10: --out no longer produces the three artifacts"
+  FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
 # Anti-vacuity floor.
 #
 # Without this, deleting the whole TS7 block exits 0 with "ALL TESTS PASSED" —
@@ -516,7 +578,7 @@ done
 # floor that exists to notice the silence — the suite prints a total and exits 0.
 # A floor enforced through the suspect cannot witness the suspect.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=57
+MIN_ASSERTIONS=62
 total_assertions=$((PASS + FAIL))
 if [[ "$total_assertions" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

@@ -137,8 +137,12 @@ _is_gh_pr_create_line() {
 # Line-level predicate: same-line `gh api` + `check-runs` (the canonical
 # inline synthetic-posting shape, e.g.,
 # `gh api "repos/.../check-runs" \`). Both tokens required on the same
-# line — a naive `check-runs` substring would false-positive on header
-# comments like rule-metrics-aggregate.yml's "synthetic check-runs satisfy".
+# line — a naive `check-runs` substring would false-positive on any header
+# comment that merely NAMES the mechanism (prose such as "synthetic check-runs
+# satisfy ..."), which is why both tokens are required together. The workflow
+# that motivated this (rule-metrics-aggregate.yml) was deleted by #8377 and no
+# current workflow carries such a comment, so the guard has no live example —
+# it is kept because the false-positive class returns with the next one.
 _is_inline_check_runs_post_line() {
   [[ "$1" == *"gh api"* && "$1" == *"check-runs"* ]]
 }

@@ -160,7 +160,6 @@ runs:
         # titles instead of bare basenames) moves the other input silently.
         ALLOWED_PATHS=(
           "knowledge-base/project/weakness-digest.md"
-          "knowledge-base/project/rule-metrics.json"
         )
         for p in "${PATHS[@]}"; do
           allowed=false
@@ -231,8 +230,11 @@ runs:
         # here rather than argued from unreachability. Deleting this block
         # fabricates a pass over a reachable surface; parity test 8 enforces it.
         #
-        # Non-.md staged paths (rule-metrics.json) are filtered by the scanner
-        # itself — passing the full "${PATHS[@]}" is correct.
+        # Every ALLOWED_PATHS member is now .md (rule-metrics.json left the array with
+        # #8377, which untracked it — a bot PR can no longer stage it at all). Passing the
+        # full "${PATHS[@]}" stays correct: the scanner filters by extension itself, so the
+        # call does not depend on the array being .md-only and does not need revisiting if a
+        # non-.md path is added back.
         if ! command -v python3 >/dev/null 2>&1; then
           echo "::error::python3 not found — cannot run lint-credential-path-literals over the bot diff (#6882 earned green requires it)."
           exit 1

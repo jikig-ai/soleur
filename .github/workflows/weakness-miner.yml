@@ -1,9 +1,11 @@
 # Weekly read-only weakness-miner (#6037) — Self-Harness "weakness mining"
 # stage, detection-only. Clusters learnings added in the last 7 days into a
-# ranked recurring-failure-pattern digest and opens a PR (via the same
-# bot-pr-with-synthetic-checks path as rule-metrics-aggregate.yml — ADR-054's
-# safeCommitAndPr governs the Inngest write path, NOT this GHA action, so the
-# governing precedent here is rule-metrics-aggregate).
+# ranked recurring-failure-pattern digest and opens a PR via the
+# bot-pr-with-synthetic-checks composite action. (ADR-054's safeCommitAndPr governs the
+# Inngest write path, NOT this GHA action.) This workflow used to cite
+# rule-metrics-aggregate.yml as its governing precedent; #8377 deleted that workflow when
+# rule-metrics.json became an untracked cache, so this is now the only bot PR workflow of
+# its kind and the precedent it once pointed at no longer exists.
 #
 # ZERO MUTATION SURFACE: `add-paths` is the single digest path; the script
 # writes nowhere else. The digest only informs a human's /compound triage — it

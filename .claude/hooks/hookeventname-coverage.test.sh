@@ -97,10 +97,24 @@ else
   # the leading double-quote is part of the JSON string value and must be
   # stripped along with the variable. guardrails.sh appears under more than one
   # matcher and at least one entry is a .py — hence `sort -u` and no .sh filter.
+  #
+  # THREE SHAPES, not one. The original sed only stripped the prefix when the
+  # command STARTED with it, so it silently mis-derived the other two and handed
+  # the gates below a whole command line where a path belongs:
+  #   (1) `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`            — direct exec
+  #   (2) `bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh`             — interpreter prefix
+  #   (3) `bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh --flag`      — and trailing args
+  # An unmatched shape is NOT caught drift: it reads as "hook not tracked" for a
+  # hook that is tracked, which is a false RED, and the inverse (a genuinely
+  # untracked hook in an unmatched shape) would be missed the same way. #8377
+  # added the first (3)-shaped entry and is what surfaced this.
+  _hook_paths() {
+    sed -e 's|^bash  *||' -e 's|^"\$CLAUDE_PROJECT_DIR"/||' -e 's|  *-.*$||' -e 's|  *$||'
+  }
   reg_all="$(jq -r '.hooks | to_entries[] | .value[]? | .hooks[]? | .command' "$SETTINGS" 2>/dev/null \
-             | sed 's|^"\$CLAUDE_PROJECT_DIR"/||' | sort -u)"
+             | _hook_paths | sort -u)"
   reg_bash="$(jq -r '.hooks.PreToolUse[]? | select(.matcher=="Bash") | .hooks[]?.command' "$SETTINGS" 2>/dev/null \
-              | sed 's|^"\$CLAUDE_PROJECT_DIR"/||' | sort -u)"
+              | _hook_paths | sort -u)"
 
   n_all=$(printf '%s\n' "$reg_all" | grep -c . || true)
   n_bash=$(printf '%s\n' "$reg_bash" | grep -c . || true)
