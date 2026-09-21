@@ -21,6 +21,54 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spe
 > that way in edits and in the PR body, or this PR's own ship run will ask for a PIR for an
 > event that never happened. See Sharp Edges.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21. **Agents:** architecture-strategist, test-design-reviewer, a
+verify-the-negative sweep (standard tier), plus a live corpus measurement. Gates: 4.6 pass, 4.7 pass
+after one fix, 4.11 pass (`lint-guard-contract.py`: 3 entries). 4.5/4.55/4.8/4.9/4.10 not triggered.
+
+### Key improvements
+
+1. **The #8334 rule contradicted its own fixture.** `users didn't notice the deploy was blocked` has
+   exactly two words between cue and token, so a two-word window denied the line AC8 requires to
+   signal. The window is now **one word** (rule a), and a new mutation row (N9) pins it.
+2. **Four mutation rows were vacuous or unreachable as written, now rebuilt.**
+   - M2: the script's own `pipefail` hides the display-pipe bug; the row now mutates the errexit
+     capture instead.
+   - M4: the stderr assertion greps only `ship.phase7.`; it is widened to `[sync-pr-behind]`.
+   - M7: 25 status lines fit in the pipe buffer, so SIGPIPE never fires; the row now uses ≥ 100 KB.
+   - N4: the fixture's first token was stripped earlier; it now carries two live denied tokens.
+   - Also: T5 records the expired arm first, N2's fixture text is spelled out, and N1/N8 get
+     site-specific anchors.
+3. **ADR-179 decision 11 applied** (architecture). When the root comes from the environment, the
+   fence runs a `plugin.json` identity check before executing anything under it.
+4. **The script is snapshotted per poll** (`SYNC_SNAP`), so a `reset --hard` of the installed checkout
+   mid-poll cannot swap in a script with a different exit table.
+5. **Harness coverage corrected.** Grok substitutes the bare token (ADR-179 Arm 5), so it keeps
+   auto-sync. The real loss is Devin cloud and Codex. It is now named in User-Brand Impact, the
+   precondition message says how to fix it, and scenario 13b covers it.
+6. **New rows for untested properties:**
+   - M8: the standalone loop routes through `sync_step`.
+   - M9: a missing script is not treated as success.
+   - N10: the stderr disclosure note (the battery's `verdict()` discards stderr).
+   - The battery's `FIXTURES`/floors grow with the fixtures.
+7. **Observability `expected_output`** changed from the prose-shaped `exit codes` to the literal
+   `--step` (Phase 4.7: every token contained whitespace).
+
+### New considerations discovered
+
+- **Baseline:** 345 of 1989 plans fire the gate today. A rough regex puts at least one denial-shaped
+  token in 75 of them. Actual flips will be fewer, because a verdict moves only when every token in a
+  plan is denied.
+- **The fixture never contains the `[ship.phase7.sync_failed]` string.** It matches `kind=` substrings
+  and `Stopping the poll\.` (lines 627, 697, 711), so re-tagging the script's lines touches no
+  must-match row by tag.
+- **The local `awk` is gawk; there is no mawk on this host.** Ubuntu CI runners default to mawk, so CI
+  is the mawk check. Locally, also run the new awk under `gawk --posix`.
+- **No C4 or ADR change.** `model.c4` has no element for the script or the poll. ADR-179 governs the
+  anchor and ADR-229 the extraction. Decisions cited: ADR-179 (base decision + decision 11 +
+  amendment Arm 5), ADR-229, ADR-178 §5.
+
 ## Overview
 
 Four defects in Soleur's ship / postmerge / hook machinery, fixed in one PR because they share
@@ -215,8 +263,9 @@ One function, `sync_step`, owns one sync attempt, with the fence's semantics ver
 `kind=merge rc=1`, `kind=merge_refused rc=2`, `kind=fetch rc=1`, `kind=push rc=1`.
 
 Every tagged line goes to **stdout** as `[sync-pr-behind] kind=… rc=N — …` (one fixed tag, no
-`--tag`/`--prefix` flags: nothing outside the two SKILL.md fences and the fixture reads the old
-`[ship.phase7.sync_failed]` tag for these lines, and the fixture matches substrings, not prefixes).
+`--tag`/`--prefix` flags: the old `[ship.phase7.sync_failed]` tag occurs only in the two SKILL.md
+fences — 8 times each — and nowhere in the fixture, which matches `kind=…` substrings and
+`Stopping the poll\.` (verified by grep during deepen-plan)).
 
 **Strict mode is the script's, not the fence's.** The script runs under `set -euo pipefail`, which
 the fence never did. Every display pipe carries `|| true` or is rewritten as a capture:
@@ -254,12 +303,20 @@ At loop entry, beside the existing worktree precondition:
 
 ```bash
 # Bare ${CLAUDE_PLUGIN_ROOT}, never a `:-` default: ADR-179 records the default as the vector
-# (it resolves to a path the customer controls). The --help probe refuses an older script that
-# would silently ignore --step and run a full standalone sync.
-SYNC_SH="${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"
-if [[ "$sync_ok" -eq 1 ]] && ! { [[ -r "$SYNC_SH" ]] && bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; }; then
-  echo "[ship.phase7.precondition] sync-pr-behind.sh missing, unreadable or without --step at '$SYNC_SH' — BEHIND auto-sync disabled; the poll heartbeats, sync by hand"
-  sync_ok=0
+# (it resolves to a path the customer controls). When the root came from the environment rather
+# than the loader, ADR-179 decision 11 requires the plugin.json identity check first (a shape
+# check, not authentication). The --help probe refuses a copy that would ignore --step. The
+# snapshot freezes the script for this poll, as the pasted fence always was.
+SYNC_SH="${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"; SYNC_SNAP=""
+if [[ "$sync_ok" -eq 1 ]]; then
+  if grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null \
+     && [[ -r "$SYNC_SH" ]] && bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step' \
+     && SYNC_SNAP="$(mktemp)" && cp "$SYNC_SH" "$SYNC_SNAP"; then
+    :
+  else
+    echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH' (plugin root unset or not soleur, file missing, or no --step) — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT per your harness's INSTRUCTIONS.md, or sync by hand. The poll still heartbeats."
+    sync_ok=0
+  fi
 fi
 ```
 
@@ -269,7 +326,7 @@ The BEHIND arm becomes (≈ 18 lines instead of ≈ 60):
 if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
   behind_syncs=$((behind_syncs+1))
   echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
-  sync_rc=0; bash "$SYNC_SH" <number> --step || sync_rc=$?   # `|| rc=$?`: survives errexit (#8339)
+  sync_rc=0; bash "$SYNC_SNAP" <number> --step || sync_rc=$?   # `|| rc=$?`: survives errexit (#8339)
   case "$sync_rc" in
     0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
        s=$(gh pr view <number> --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
@@ -341,14 +398,14 @@ line it examines the text between the previous clause boundary (`. ; : ! ?` and 
 match start. A match is **denied** when either:
 
 - **(a) a cue governs it directly:** `not`, `no`, `never`, `without`, or a word ending in `n't`,
-  followed by at most two words before the match (`no outage`, `wasn't an outage`,
+  followed by at most **one** word before the match (`no outage`, `wasn't an outage`,
   `never went down`); or
 - **(b) a clause-level denial phrase precedes it** anywhere in the same clause: `not that`,
   `rather than`, `instead of` (the #8334 specimen, `not that the feature has stopped working`, is
   four words from its cue and is caught only by this rule).
 
 Word boundaries are spelled `(^|[^a-z])cue([^a-z]|$)` (mawk has no `\<`). A denied match is blanked
-with spaces of equal length; every other match on the line survives. The two-word window is what keeps
+with spaces of equal length; every other match on the line survives. The one-word window is what keeps
 `we had no alert when prod went down` and `users didn't notice the deploy was blocked` signalling —
 both are fixtures that must stay red-flag. Dash boundaries, the curly `n’t`, and a `not only`
 exclusion are **not** added up front; each is added only if the Phase 2 corpus run shows a hit it
@@ -394,13 +451,23 @@ The verdict only moves when **every** `OUTAGE_RE` occurrence in the corpus is de
 - **Scenario 10 (real git)** now also exercises the real script, with `CLAUDE_PLUGIN_ROOT` at the
   repo's plugin dir and CWD in the fixture worktree — the production shape #8458 fixed.
 - **Version skew is refused, not misread.** The pre-change script ignores `--step` and would run a
-  full standalone sync, exiting 0 on "no sync needed" — which the fence would print as `pushed`. The
-  `--help | grep -- --step` probe at loop entry disables auto-sync for such a copy (fixture row).
-- **Plugin installs.** Claude Code substitutes the bare `${CLAUDE_PLUGIN_ROOT}` in skill text, so the
-  pasted fence carries the absolute plugin path (ADR-179). Where it is not substituted and not
-  exported (a Grok/cloud shell), the precondition line fires once and the poll still heartbeats and
-  still exits on MERGED/required-check/DIRTY. Grok's `GROK_PLUGIN_ROOT` ordering is ADR-179's
-  amendment; this fence does not re-decide it.
+  full standalone sync, exiting 0 on "no sync needed" — which the fence would print as `pushed`. On a
+  loader-substituted install the fence text and the script come from the same root and cannot skew;
+  the probe matters when the root comes from the environment (Devin/Codex) and points at a
+  different install. Keep it — it is not dead code (fixture scenario 13).
+- **The script is frozen per poll.** The root is the INSTALLED plugin (locally, `marketplace.json`
+  points at the main checkout), which `cleanup-merged`'s `reset --hard` or a `git pull` can change
+  mid-poll. The fence copies the probed script to `SYNC_SNAP` at loop entry and runs the copy. A PR
+  that edits `sync-pr-behind.sh` therefore does not use its own copy in its own `/ship` poll — as was
+  already true of the pasted fence. Scenario 10 runs the worktree's copy and does not reproduce that
+  mismatch.
+- **Harness coverage.** Claude Code and Grok Build 1.0.34 both substitute the bare
+  `${CLAUDE_PLUGIN_ROOT}` before bash runs (ADR-179 amendment, Arm 5), so both keep auto-sync. **Devin
+  cloud** exec shells do not export it (`ship/SKILL.md` Cloud Mode note), nor do Codex/Devin CLI unless
+  the agent exported it per its `INSTRUCTIONS.md`: there the precondition line fires, auto-sync is off,
+  and the poll still heartbeats and still exits on MERGED/required-check/DIRTY. That is a regression
+  against today's self-contained fence on those harnesses, accepted over a `:-` fallback (ADR-179) and
+  named in User-Brand Impact. Fixture scenario 13b covers the unset case.
 
 ## User-Brand Impact
 
@@ -414,6 +481,10 @@ longer fires on a PR that fixed a real production event.
 controls. This PR adds no new write site — the push target is the caller's checked-out branch, as the
 inline fence pushes today — it inherits #8458's `$PWD` fix, and it uses the bare
 `${CLAUDE_PLUGIN_ROOT}` anchor ADR-179 requires.
+
+**Known regression:** on Devin cloud and Codex, where `${CLAUDE_PLUGIN_ROOT}` is neither substituted
+nor exported, Phase 7 BEHIND auto-sync becomes off-by-default (named precondition line; the poll
+still heartbeats and exits on MERGED). Today's inline fence synced there.
 
 **Brand-survival threshold:** aggregate pattern. Each failure mode is loud (a named stop line) or
 bounded (one missed PIR prompt), and the one silent-direction risk — the negation strip swallowing a
@@ -448,7 +519,7 @@ logs:
   retention: "session transcript lifetime; incident ledger per its rotation"
 discoverability_test:
   command: "bash plugins/soleur/scripts/sync-pr-behind.sh --help"
-  expected_output: "exit codes"
+  expected_output: "--step"
 ```
 
 ## Guard Contract
@@ -464,21 +535,23 @@ arm, (2) the merge-pr §5.2 fence's BEHIND arm, (3) the script's standalone loop
 (1) and (2) with `extract_block` and runs every sync scenario against both (`run_scenario_both`), so
 each scenario executes the script through each fence; (3) is covered by `sync-pr-behind.test.sh`. A
 static assertion over each extracted block requires zero non-comment, non-`echo` lines matching
-`(^|[;&|[:space:]])git (merge( |$)(origin|--abort|--no-edit)|push( |$))` — the DIRTY arm's
+`(^|[;&|([:space:]`])git (merge( |$)(origin|--abort|--no-edit)|push( |$))` — the DIRTY arm's
 `git merge-tree` and its `echo "Resolve locally: git merge origin/main"` do not match — and exactly
-one `bash "$SYNC_SH" 4387 --step` line (after the `<number>` substitution).
+one `bash "$SYNC_SNAP" 4387 --step` line (after the `<number>` substitution).
 
 **Mutation matrix:**
 
 | # | mutation (design-derived) | must go RED |
 |---|---|---|
 | M1 | second member: fix only merge-pr, leave ship's inline arm | static assertion on `:ship` (it quantifies over both blocks) |
-| M2 | in `sync_step`, test the display pipe (`if ! git merge … \| tail -5`) instead of the captured rc (the #8339 bug) | scenario 6 on both fences (`pushed` forbidden, abort sentinel required) |
+| M2 | in `sync_step`, replace `\|\| rc=$?` with a bare `out=$(git merge …); rc=$?` capture (the errexit shape #8339 named; the display-pipe shape is invisible under the script's own pipefail) | scenario 6 on both fences (errexit kills the script before `--abort`: abort sentinel required, `pushed` forbidden) |
 | M3 | fence maps exit 5 to the stop arm | scenario 8 (`behind_exhausted` with `fetch_failures=6/6` required) |
-| M4 | `sync_step` writes its `kind=` line to stderr | a stdout-only assertion on the `[sync-pr-behind]` line in every sync scenario |
-| M5 | `sync_step` returns 6 for a refused merge (the old conflation) | scenario 6b (`kind=merge_refused`, no abort sentinel) |
+| M4 | `sync_step` writes its `kind=` line to stderr | `assert_no_tag_on_stderr` widened to `ship\.phase7\.\|\[sync-pr-behind\]` (it greps only `ship\.phase7\.` today, and stderr is appended to the log before `assert_log`) |
+| M5 | `sync_step` returns 6 for a refused merge (the old conflation) | scenario 6b must match `sync-pr-behind.sh exited 10` (both exits reach the same stop arm); the `--step` refused case in `sync-pr-behind.test.sh` asserts rc == 10 |
 | M6 | drop the `--help \| grep -- --step` probe | new scenario 13: a stub script that ignores `--step` and exits 0 → `pushed` must never print, precondition line required |
-| M7 | drop `\|\| true` from the `git status --short \| head -20` display | new scenario 6i: 25 status lines on a refused merge → `kind=merge_refused` still printed, exit 10 |
+| M7 | drop `\|\| true` from the `git status --short \| head -20` display | new scenario 6i: the mock prints ≥ 100 KB (20000 lines) of status, so the writer outlives `head` and SIGPIPE is deterministic → `kind=merge_refused` still printed, exit 10 |
+| M8 | inline a `git merge origin` in the standalone loop instead of calling `sync_step` | static check in `sync-pr-behind.test.sh`: `git merge origin` occurs only inside `sync_step()` |
+| M9 | the `*)` arm treats a missing script as success | new scenario 13b: `CLAUDE_PLUGIN_ROOT` unset → precondition line, no `pushed`, poll still exits on MERGED |
 
 **Harness rows.**
 
@@ -494,7 +567,7 @@ fences, so hollowing either reds scenarios a token-list edit cannot satisfy.
 ### Guard 2 — the PIR negation strip
 
 **Property.** An `OUTAGE_RE` occurrence is removed from the haystack if and only if a cue governs it
-within two words or a denial phrase precedes it in the same clause; every other occurrence, including
+within one word or a denial phrase precedes it in the same clause; every other occurrence, including
 one on the same line, reaches the verdict greps, and every removal is disclosed on stderr.
 
 **Assembly.** The single strip `awk` in `ship-incident-pir-gate.sh`; `neg_strip()` is called at
@@ -507,13 +580,20 @@ one on the same line, reaches the verdict greps, and every removal is disclosed 
 | # | mutation | fixture that must flip |
 |---|---|---|
 | N1 | delete the `neg_strip` call at the fall-through | `negated-outage-only.md` signals (must not) |
-| N2 | drop the clause boundaries (window runs to line start) | `negation-in-prior-clause-real-report.md` stops signalling (must signal) |
+| N2 | drop the clause boundaries (window runs to line start) | `negation-in-prior-clause-real-report.md` (`we rolled back instead of patching; production went down`) stops signalling (must signal) |
 | N3 | line-scoped: blank the whole line when any match is denied | `negated-and-real-token-same-line.md` stops signalling |
-| N4 | second member: examine only the first match on a line | `two-tokens-second-denied.md` (first undenied match inside a code span is stripped earlier; the only live token is the second, denied one) signals (must not) |
-| N5 | widen rule (a) from two words to the whole clause | `no-alert-when-prod-went-down.md` stops signalling |
+| N4 | second member: examine only the first match on a line | `two-tokens-both-denied.md` (`there was no outage and we never went down`, a `production` token elsewhere) signals (must not) |
+| N5 | widen rule (a) from one word to the whole clause | `no-alert-when-prod-went-down.md` stops signalling |
+| N9 | widen rule (a) from one word to two | `didnt-notice-deploy-was-blocked.md` stops signalling |
+| N10 | delete the `PIR-OUTAGE-NEGATION-SUPPRESSED` echo | a stderr assertion on `negated-outage-only.md` (the battery's `verdict()` discards stderr, so this row captures it explicitly) |
 | N6 | delete rule (b) | `denial-specimen-8334.md` signals (must not) |
 | N7 | remove only the marker, not the whole sentinel line | `negated-outage-only.md` signals (the payload re-injects the token) |
 | N8 | call `neg_strip` only at the fall-through, not the re-admit | `actuality-line-only-token-denied.md` signals (must not) |
+
+N1 and N8 edit the same function name at two sites, so each row's content anchor names its site
+(the `ACTUALITY_RE` line vs the `{print}` line), not a bare `neg_strip(` count. Every new fixture
+joins the battery's `FIXTURES` table and the floors rise with them (`FIXTURE_MIN` 14 → ≥ 24, the row
+floor 12 → ≥ 22, `MIN_ASSERTIONS` accordingly), or the green-baseline control never checks them.
 
 **Harness rows.** H1: the battery's green-baseline control still runs first and aborts on red. Must-PASS
 non-canonical: `real-report-with-unrelated-negation.md` (a genuine past-tense report whose line also
@@ -542,7 +622,7 @@ per arm after the ledger's stop filter.
 | T2 | drop `failed` | 32: failed monitor is SILENT |
 | T3 | drop `timed out` | 33: legacy timed-out notice is SILENT |
 | T4 | predicate always true (over-correction into silence) | case 2 (a live second monitor is REPORTED) and 34 |
-| T5 | second member: one expired + one live on one target, loop stops after the first terminal arm | 34: exactly the live id is named, the expired id is absent |
+| T5 | second member: one expired + one live on one target, loop stops after the first terminal arm | 34 (expired arm recorded FIRST, so a `break` mutant drops the live one): exactly the live id is named, the expired id is absent |
 
 **Harness rows.** H1: a new `expire_task` helper writes the measured shape (`type: queue-operation`,
 `content` with `\n`-separated tags, no `<status>`); mutated to write `type: assistant`, case 31 must
@@ -602,8 +682,10 @@ Order is fixed by one dependency: Phase 4 needs #8458 on `main`. Phases 1–3 do
 2. GREEN (script): `sync_step`, strict argv, `--help`, `|| true` on display pipes, header comment
    carrying the moved Auto-sync prose; standalone loop calls `sync_step`.
 3. RED (fixture): harness (`set -a`, `export -f`, `CLAUDE_PLUGIN_ROOT`, `$MOCK_STATE/cwd` + ceiling),
-   mock strict-mode fixes, the static no-inline assertion, the git-argv-has-a-mock check, scenarios
-   6i and 13; move the removed inline tokens (`sync_out="$(GIT_TRACE=0 git merge …`,
+   mock strict-mode fixes, `assert_no_tag_on_stderr` widened to `[sync-pr-behind]`, the static
+   no-inline assertion, the git-argv-has-a-mock check, scenarios 6i (≥ 100 KB status), 13
+   (version skew) and 13b (root unset), the `plugin.json` identity check stubbed under the
+   fixture's `CLAUDE_PLUGIN_ROOT`; move the removed inline tokens (`sync_out="$(GIT_TRACE=0 git merge …`,
    `merge conflict, aborting sync`, `kind=merge_refused`, `kind=merge_in_progress`,
    `git push failed after merge`) from the mirror token list to a script-content check; add
    `--step` and `sync-pr-behind.sh exited` to the list; update must-match rows whose text now
@@ -654,7 +736,7 @@ Order is fixed by one dependency: Phase 4 needs #8458 on `main`. Phases 1–3 do
 - `plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md`
 - Fixtures under `plugins/soleur/test/fixtures/ship-incident-pir-gate/`: `negated-outage-only.md`,
   `negation-in-prior-clause-real-report.md`, `negated-and-real-token-same-line.md`,
-  `two-tokens-second-denied.md`, `no-alert-when-prod-went-down.md`,
+  `two-tokens-both-denied.md`, `no-alert-when-prod-went-down.md`,
   `didnt-notice-deploy-was-blocked.md`, `actuality-line-only-token-denied.md`,
   `real-report-with-unrelated-negation.md`, `denial-specimen-8334.md`, plus one fixture per cue kept
   after the Phase 2 measurement.
@@ -675,7 +757,7 @@ Glob check: every edited path exists (`git ls-files`); the new files' parent dir
 | Consolidate the whole poll loop into a script | Larger paste-contract change, not asked for; the required-check scan and DIRTY classification are loop logic with their own rows |
 | Extract postmerge Phase 3.7 instead of 3.6 | `ship/SKILL.md`'s merge→deploy protocol step 2 cites Phase 3.7's deploy-arm predicate for **every** merge — moving it behind the 3.7 trigger is the ADR-229 trap |
 | Line-scoped negation drop (the issue's first sketch) | Silences a real report beside an unrelated denial |
-| A 60-byte negation window | Catches `we had no alert when prod went down`; the two-word window plus clause-level phrases is narrower and still covers the specimen |
+| A 60-byte negation window | Catches `we had no alert when prod went down`; the one-word window plus clause-level phrases is narrower and still covers the specimen |
 | Include `killed`/`stopped` in the monitor terminal set | Zero Monitor occurrences in 400 transcripts; TaskStop is already covered by the ledger |
 | Raise the ceilings | Forbidden in the same diff by the lint, and concedes the ratchet's purpose (#8438) |
 
@@ -693,10 +775,10 @@ Glob check: every edited path exists (`git ls-files`); the new files' parent dir
 ## Acceptance Criteria
 
 - **AC1** The fixture's static assertion passes: each extracted Phase 7 block has zero non-comment,
-  non-`echo` lines matching the Guard 1 regex and exactly one `bash "$SYNC_SH" 4387 --step` line; the
+  non-`echo` lines matching the Guard 1 regex and exactly one `bash "$SYNC_SNAP" 4387 --step` line; the
   git-argv-has-a-mock check passes.
 - **AC2** `bash plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh` passes with every existing
-  scenario still run against both fences, plus scenarios 6i and 13.
+  scenario still run against both fences, plus scenarios 6i, 13 and 13b.
 - **AC3** `bash plugins/soleur/test/sync-pr-behind.test.sh` passes, including #8458's SUT-outside-repo
   case and the new `--step` cases; `bash plugins/soleur/scripts/sync-pr-behind.sh --help` exits 0 and
   prints `exit codes` and `--step`; `bash plugins/soleur/scripts/sync-pr-behind.sh 1 --bogus` exits 2.
@@ -710,15 +792,17 @@ Glob check: every edited path exists (`git ls-files`); the new files' parent dir
   id.
 - **AC7** The advisory text no longer contains `every task listed was still running`.
 - **AC8** `bun test plugins/soleur/test/ship-incident-pir-gate.test.ts` passes: `negated-outage-only`,
-  `denial-specimen-8334`, `two-tokens-second-denied` and `actuality-line-only-token-denied` → no
+  `denial-specimen-8334`, `two-tokens-both-denied` and `actuality-line-only-token-denied` → no
   signal; `negation-in-prior-clause-real-report`, `negated-and-real-token-same-line`,
   `no-alert-when-prod-went-down`, `didnt-notice-deploy-was-blocked` and
   `real-report-with-unrelated-negation` → signal; one fixture per kept cue; all existing verdicts
   unchanged.
-- **AC9** The corpus re-measurement is recorded in the gate's header: plans firing before/after, the
-  flipped list, per-cue hit counts, and zero flips on plans cited from
-  `knowledge-base/engineering/operations/post-mortems/`.
-- **AC10** `bash scripts/ship-incident-pir-gate-mutation.test.sh` passes with N1–N8 each reported as
+- **AC9** The corpus re-measurement is recorded in the gate's header: plans firing before/after
+  (baseline measured at deepen-plan: **345 of 1989** plans under `knowledge-base/project/plans/`
+  fire), the flipped list, per-cue hit counts, and the committed command that intersects the flipped
+  list with `grep -l` over `knowledge-base/engineering/operations/post-mortems/` — whose output is
+  empty.
+- **AC10** `bash scripts/ship-incident-pir-gate-mutation.test.sh` passes with N1–N10 each reported as
   flipping, none vacuous.
 - **AC11** Running the gate on `negated-outage-only.md` prints `PIR-OUTAGE-NEGATION-SUPPRESSED` on
   stderr and exits 1.
@@ -742,7 +826,7 @@ postmerge and hook machinery. Product/UX Gate: NONE (no UI-surface file in eithe
 | S1 | fence, BEHIND, clean merge + push | `auto-sync 1 pushed`, re-read state, MERGED |
 | S2 | fence, BEHIND, conflict | `[sync-pr-behind] kind=merge rc=1`, abort observed, stop line, no `pushed` |
 | S3 | fence, BEHIND, fetch fails 6× | `fetch_failures=6/6` in `behind_exhausted` |
-| S4 | fence, script missing | `[ship.phase7.precondition]` line, heartbeats, no sync |
+| S4 | fence, `CLAUDE_PLUGIN_ROOT` unset (Devin/Codex shape) | `[ship.phase7.precondition]` line, heartbeats, exits on MERGED, no sync (scenario 13b) |
 | S5 | fence, older script that ignores `--step` | precondition line, never `pushed` (scenario 13) |
 | S6 | fence under `set -e` host | S2 outcome, shell survives |
 | S7 | refused merge with 25 status lines | `kind=merge_refused`, exit 10 (scenario 6i) |
@@ -758,7 +842,7 @@ postmerge and hook machinery. Product/UX Gate: NONE (no UI-surface file in eithe
   Phase 4 waits on a Monitor and never copies its fix.
 - **Fixture harness change is the riskiest edit.** Mitigation: ceiling-bounded CWD, the argv-mock
   check, harness row H1, and running the `--step` cases against `SYNC_MOCKS` first.
-- **Negation false negatives.** Mitigation: two-word window, occurrence scoping, corpus-wide
+- **Negation false negatives.** Mitigation: one-word window, occurrence scoping, corpus-wide
   measurement, per-cue hit bar, stderr disclosure of every suppression.
 - **Shells where `${CLAUDE_PLUGIN_ROOT}` is neither substituted nor exported** lose auto-sync, loudly.
   Accepted over a `:-` fallback (ADR-179).
@@ -792,7 +876,7 @@ Panel: DHH, Kieran, code-simplicity, CTO (devex), plus the Step 4.5 advisor cons
 - **`kind=` lines carry git's rc** (Kieran P1).
 - **Guard 2 rows N4/N8 rebuilt** so each mutation can flip a verdict; **whole-line sentinel removal**
   so the payload cannot re-inject the token (Kieran P1).
-- **Negation window tightened** to two words + clause-level phrases; 60-byte cap, dash boundary,
+- **Negation window tightened** to two words (then to one at deepen-plan — see Enhancement Summary) + clause-level phrases; 60-byte cap, dash boundary,
   `not only` exclusion deferred to measurement (advisor, DHH, simplicity).
 - **Cut:** the hatch extraction (now a contingency with a fence-printed trigger — DHH, simplicity,
   CTO P3), `--tag`/`--prefix`, the six-arm `case` (now three), `killed`/`stopped`, the live-`HEAD`
