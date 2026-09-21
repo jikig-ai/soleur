@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=34
+EXPECTED_TESTS=54
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -694,6 +694,203 @@ t_h4_mutant_noop_is_detected() {
   fi
 }
 
+# ── Guard 4 — the frozen-rule live pin (#8451) ───────────────────────────────
+# The workflows whose trigger type is in the projection's `excluded` set are
+# outside BOTH projection sides, so every row above is blind to them by
+# construction. After #8451 two of them are also `ignore_changes = all` in
+# Terraform, so a UI edit plans "0 changes". The probe's frozen-rule pass pins
+# every rule TERRAFORM FREEZES (a `sentry_alert` block carrying
+# `legacy_trigger_conditions`, derived from the .tf) to the committed capture
+# entry of the same name, on every field that decides paging: enabled,
+# detectorIds, the full trigger {type, comparison} set, triggers.logicType,
+# config.frequency, environment and the canonicalised actionFilters. Every other
+# excluded-type live workflow is a census member: in the capture = Sentry's own
+# unmanaged default (not pinned), absent from it = UNMANAGED-FROZEN.
+#
+# Expected counts are DERIVED here, independently of the probe (a grep of the
+# .tf, not the probe's awk; capture minus the live projection). Never typed.
+FROZEN_N=$(( $(jq 'length' "$CAPTURE") - N ))
+FROZEN_NAMES_JSON=$(jq -c --slurpfile r "$REFERENCE" '[ .[].name | select(. as $n | $r[0] | has($n) | not) ]' "$CAPTURE")
+FROZEN_TF_N=$(cat "$REPO_ROOT"/apps/web-platform/infra/sentry/*.tf | grep -cE '^[[:space:]]*legacy_trigger_conditions[[:space:]]*=[[:space:]]*\[[[:space:]]*"')
+# _run_env <live-fixture> VAR=val… — `_run` with extra probe environment.
+_run_env() {
+  local fx="$1"; shift
+  _rc=0
+  _out=$(env SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture \
+         SENTRY_REFERENCE_FILE="$REFERENCE" \
+         SENTRY_FIXTURE_RULES="$fx" "$@" bash "$PROBE" 2>&1) || _rc=$?
+}
+
+t_g4_identity_pins_census() {
+  _run "$CAPTURE"
+  local want="frozen-rule pin: compared ${FROZEN_TF_N} of ${FROZEN_TF_N} Terraform-frozen rule(s) against the committed capture"
+  if [[ "$FROZEN_TF_N" -ge 2 && "$FROZEN_N" -gt "$FROZEN_TF_N" ]] && [[ "$_rc" -eq 0 ]] && grep -qF -- "$want" <<<"$_out" \
+     && grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -q 'FROZEN\|UNMANAGED-FROZEN' <<<"$_out"; then
+    _report "G4-6 a live fixture equal to the capture PASSES and the frozen pin compares the ${FROZEN_TF_N} Terraform-frozen rules (grep of the .tf), fewer than the ${FROZEN_N} excluded-type captured workflows" ok
+  else
+    _report "G4-6 identity passes the frozen pin" fail "FROZEN_TF_N=$FROZEN_TF_N FROZEN_N=$FROZEN_N rc=$_rc; want '$want'. Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_comparison_true() {
+  _drift_case g4cmptrue \
+    'map(if .name=="sandbox-startup-failure" then .triggers.conditions[0].comparison=true else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.triggerConditions" \
+    "G4-1 a frozen rule's trigger comparison replaced by 'true' is detected"
+}
+t_g4_threshold_changed() {
+  _drift_case g4threshold \
+    'map(if .name=="sandbox-startup-failure" then .triggers.conditions[0].comparison.value=50 else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.triggerConditions" \
+    "G4-1b a frozen rule re-thresholded in the UI (comparison.value 2 -> 50) is detected"
+}
+# SECOND MEMBER: the first frozen rule is correct, the second is not. A pass
+# that stops at the first excluded-type workflow (or only checks one) greens.
+t_g4_second_member_disabled() {
+  local f; f=$(_mutant g4disabled 'map(if .name=="sandbox-startup-failure" then .enabled=false else . end)')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "G4-3 second member disabled" fail "the mutation did not land ($f)"; return; fi
+  _run "$f"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "FROZEN DISABLED: 'sandbox-startup-failure'" <<<"$_out" \
+     && ! grep -q "'auth-per-user-loop'" <<<"$_out" && grep -q 'live fidelity FAILED' <<<"$_out"; then
+    _report "G4-3 auth-per-user-loop correct, then sandbox-startup-failure enabled=false: RED on the second member only" ok
+  else
+    _report "G4-3 second member disabled" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_no_email_action() {
+  _drift_case g4noemail \
+    'map(if .name=="auth-per-user-loop" then .actionFilters |= map(.actions = []) else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.actionFilters" \
+    "G4-4 a frozen rule stripped of its email action is detected (full actions comparison, not '>= 1 email')"
+}
+t_g4_detector_changed() {
+  _drift_case g4detector \
+    'map(if .name=="sandbox-startup-failure" then .detectorIds=["9999999"] else . end)' \
+    "FROZEN MONITOR UNBIND: 'sandbox-startup-failure'" \
+    "G4-5 a frozen rule re-bound to another detector is detected"
+}
+t_g4_unknown_frozen_rule() {
+  _drift_case g4unknown \
+    '. + [ (map(select(.name=="auth-per-user-loop"))[0] | .name="new-frozen-rule" | .id="999998") ]' \
+    "UNMANAGED-FROZEN: 'new-frozen-rule'" \
+    "G4-7 an excluded-type live workflow absent from the capture is UNMANAGED-FROZEN"
+}
+t_g4_compared_nothing() {
+  _drift_case g4none \
+    "map(select(.name | IN(${FROZEN_NAMES_JSON}[]) | not))" \
+    'frozen-rule pin compared nothing' \
+    "G4-2 zero excluded-type live workflows while the capture holds ${FROZEN_N}: RED ('compared nothing')"
+}
+# The capture is the anchor; an unreadable one must refuse, never skip the pin.
+t_g4_capture_unreadable_refuses() {
+  _rc=0
+  _out=$(SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture SENTRY_REFERENCE_FILE="$REFERENCE" \
+         SENTRY_FROZEN_CAPTURE_FILE="$TMPD/no-such-capture.json" \
+         SENTRY_FIXTURE_RULES="$CAPTURE" bash "$PROBE" 2>&1) || _rc=$?
+  if [[ "$_rc" -eq 1 ]] && grep -q 'frozen-rule capture not readable' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-8 an unreadable frozen-rule capture REFUSES (rc 1), never skips the pin" ok
+  else
+    _report "G4-8 unreadable capture refuses" fail "rc=$_rc (want 1). Output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
+# ── Guard 4 review rows (#8451 review) ───────────────────────────────────────
+t_g4_one_frozen_deleted() {
+  _drift_case g4del1 'map(select(.name != "sandbox-startup-failure"))' \
+    "FROZEN DELETED: 'sandbox-startup-failure'" \
+    "G4-9 ONE of the two Terraform-frozen rules deleted live (the other intact) is FROZEN DELETED, not a quiet census shrink"
+}
+t_g4_fallthrough_noone() {
+  _drift_case g4fallthrough \
+    'map(if .name=="auth-per-user-loop" then .actionFilters[0].actions[0].data.fallthroughType="NoOne" else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.actionFilters" \
+    "G4-10 a frozen rule's email fallthroughType ActiveMembers -> NoOne (still an email action, pages nobody) is detected"
+}
+t_g4_tag_filter_emptied() {
+  _drift_case g4tagempty \
+    'map(if .name=="sandbox-startup-failure" then .actionFilters[0].conditions=[] else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.actionFilters" \
+    "G4-11 a frozen rule's tag filter emptied (now pages on every event) is detected"
+}
+t_g4_frequency_changed() {
+  _drift_case g4freq \
+    'map(if .name=="auth-per-user-loop" then .config.frequency=1440 else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.frequency" \
+    "G4-12 a frozen rule's config.frequency changed (30 -> 1440) is detected"
+}
+t_g4_trigger_logictype_changed() {
+  _drift_case g4logic \
+    'map(if .name=="sandbox-startup-failure" then .triggers.logicType="none" else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.triggerLogicType" \
+    "G4-13 a frozen rule's triggers.logicType changed (all -> none, inverts the trigger) is detected"
+}
+# Sentry's own default workflow is excluded-type and IN the capture, but
+# Terraform does not manage it: pinning it filed a p1 over a vendor default.
+t_g4_vendor_default_not_pinned() {
+  local f; f=$(_mutant g4vendor 'map(if .name=="Send a notification for high priority issues" then .enabled=false else . end)')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "G4-14 vendor default not pinned" fail "the mutation did not land ($f)"; return; fi
+  _run "$f"
+  if [[ "$_rc" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -q 'FROZEN' <<<"$_out"; then
+    _report "G4-14 Sentry's default 'Send a notification for high priority issues' (566201, not Terraform-managed) disabled live PASSES: not pinned" ok
+  else
+    _report "G4-14 vendor default not pinned" fail "rc=$_rc (want 0). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_unknown_vendor_shaped() {
+  _drift_case g4unknown2 \
+    '. + [ (map(select(.name=="Send a notification for high priority issues"))[0] | .name="another-high-priority-copy" | .id="999997") ]' \
+    "UNMANAGED-FROZEN: 'another-high-priority-copy'" \
+    "G4-15 an unknown excluded-type workflow (high-priority trigger, not a frozen name, not in the capture) is UNMANAGED-FROZEN"
+}
+t_g4_zero_frozen_names_refuses() {
+  local d="$TMPD/tf-nofrozen"; mkdir -p "$d"
+  printf 'resource "sentry_alert" "x" {\n  name = "x"\n  trigger_conditions = []\n}\n' > "$d/a.tf"
+  _run_env "$CAPTURE" SENTRY_FROZEN_TF_DIR="$d"
+  if [[ "$_rc" -eq 1 ]] && grep -q 'derived ZERO frozen rule' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-16 a .tf set from which ZERO frozen names derive REFUSES (rc 1), never passes a pin that compared nothing" ok
+  else
+    _report "G4-16 zero frozen names refuses" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_frozen_name_without_capture_refuses() {
+  local d="$TMPD/tf-extra"; mkdir -p "$d"
+  cp "$REPO_ROOT"/apps/web-platform/infra/sentry/*.tf "$d/"
+  printf '\nresource "sentry_alert" "not_captured" {\n  name              = "frozen-but-not-captured"\n  trigger_conditions        = []\n  legacy_trigger_conditions = ["event_unique_user_frequency_count"]\n  lifecycle {\n    ignore_changes = all\n  }\n}\n' >> "$d/issue-alerts.tf"
+  _run_env "$CAPTURE" SENTRY_FROZEN_TF_DIR="$d"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "'frozen-but-not-captured'" <<<"$_out" && grep -q 'no entry in the committed capture' <<<"$_out" \
+     && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-17 a Terraform-frozen name with no capture entry REFUSES (the pin has no anchor for it)" ok
+  else
+    _report "G4-17 frozen name without capture refuses" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_environment_changed() {
+  _drift_case g4env \
+    'map(if .name=="auth-per-user-loop" then .environment="staging" else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.environment" \
+    "G4-19 a frozen rule bound to an environment (null -> staging, matches only that environment) is detected"
+}
+# M11: every trigger condition is compared, not [0]. A SYNTHESIZED capture gives
+# sandbox-startup-failure two excluded-type trigger conditions; the identity run
+# over it must PASS (so the RED below is caused by the second condition alone),
+# then conditions[1].comparison.value is moved in the live copy only.
+t_g4_second_trigger_condition() {
+  local cap2="$TMPD/capture-2trig.json" live2="$TMPD/live-2trig.json"
+  jq 'map(if .name=="sandbox-startup-failure" then .triggers.conditions += [{"type":"event_unique_user_frequency_count","comparison":{"value":9,"interval":"1d"}}] else . end)' "$CAPTURE" > "$cap2"
+  jq 'map(if .name=="sandbox-startup-failure" then .triggers.conditions[1].comparison.value=90 else . end)' "$cap2" > "$live2"
+  jq -e 'map(select(.name=="sandbox-startup-failure"))[0].triggers.conditions | length == 2 and .[1].comparison.value == 9' "$cap2" >/dev/null \
+    || { _report "G4-18 second trigger condition" fail "the synthesized two-trigger capture did not land"; return; }
+  cmp -s "$cap2" "$live2" && { _report "G4-18 second trigger condition" fail "the live mutation did not land"; return; }
+  _run_env "$cap2" SENTRY_FROZEN_CAPTURE_FILE="$cap2"
+  local rc_id=$_rc out_id="$_out"
+  _run_env "$live2" SENTRY_FROZEN_CAPTURE_FILE="$cap2"
+  if [[ "$rc_id" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$out_id" \
+     && [[ "$_rc" -eq 1 ]] && grep -qF -- "FROZEN DRIFT: 'sandbox-startup-failure'.triggerConditions" <<<"$_out"; then
+    _report "G4-18 a frozen rule with TWO trigger conditions: identity PASSES, moving only conditions[1] is FROZEN DRIFT (all conditions compared, not [0])" ok
+  else
+    _report "G4-18 second trigger condition" fail "identity rc=$rc_id (want 0); mutant rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+
 t_identity_passes
 t_live_api_shape
 t_deleted
@@ -728,6 +925,26 @@ t_live_empty_name_refused
 t_live_multi_trigger_null_logictype_refused
 t_frequency_drift
 t_h4_mutant_noop_is_detected
+t_g4_identity_pins_census
+t_g4_comparison_true
+t_g4_threshold_changed
+t_g4_second_member_disabled
+t_g4_no_email_action
+t_g4_detector_changed
+t_g4_unknown_frozen_rule
+t_g4_compared_nothing
+t_g4_capture_unreadable_refuses
+t_g4_one_frozen_deleted
+t_g4_fallthrough_noone
+t_g4_tag_filter_emptied
+t_g4_frequency_changed
+t_g4_trigger_logictype_changed
+t_g4_vendor_default_not_pinned
+t_g4_unknown_vendor_shaped
+t_g4_zero_frozen_names_refuses
+t_g4_frozen_name_without_capture_refuses
+t_g4_second_trigger_condition
+t_g4_environment_changed
 
 echo "=== $pass passed, $fail failed ==="
 

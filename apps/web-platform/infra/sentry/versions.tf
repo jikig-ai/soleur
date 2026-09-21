@@ -38,6 +38,9 @@
 # 32362320701 one minute earlier passed. This pin is stable-over-beta and worth
 # keeping, but it does NOT clear the 410 and this root still wedges on every
 # brownout window.
+# > **Superseded 2026-09-21 (#8451):** the family is REMOVED (persistent 410) and
+# > no resource reads it any more: the last two rules are frozen `sentry_alert`
+# > blocks. The root no longer wedges on it.
 # Read ADR-031 §Amendment 2026-08-19 (#7590) before acting on the paragraph
 # above.
 terraform {

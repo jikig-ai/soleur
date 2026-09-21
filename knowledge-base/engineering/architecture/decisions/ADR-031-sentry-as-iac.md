@@ -603,6 +603,12 @@ in #7650.
 **Amendment (2026-08-19, #7590) — the alert-rule API family is deprecated with brownouts,
 not removed; the audit is migrated per-endpoint and the orphan predicate is rebound.**
 
+> **Superseded 2026-09-21 (#8451):** "not removed" no longer holds. From 2026-09-18 every plan
+> took `410 {"detail":"This API no longer exists."}` on all three retry attempts, on every run —
+> a persistent 410, which is removal, where the brownout was intermittent. The body text is
+> identical in both states, so persistence across runs is what discriminates. See Amendment
+> 2026-09-21 (#8451) below. The rest of this amendment is dated history and stays as written.
+
 **What happened.** `Sentry Audit Gate` alternated green and red across consecutive runs on a
 byte-identical script. The alternation was read as flakiness for months. It is a deprecation
 **brownout**: Sentry deprecated the alert-rule API on 2026-05-14 and returns 410 for a short
@@ -761,6 +767,12 @@ Within that scope it no longer surfaces months later as an intermittent red.
 
 **Amendment (2026-09-04, #7650 Phase 2) — 27 of the 29 alert rules move to `sentry_alert`;
 `forget` enters the destroy gate's vocabulary; the AP-001 deviation shrinks 4 → 1.**
+
+> **Superseded 2026-09-21 (#8451):** the reading that the `event_unique_user_frequency_count`
+> rules are a hard blocker for `sentry_alert` held for a straight migration and no longer
+> governs. The write hazard (a provider write re-sends the trigger with `comparison: true`) is
+> confined to Create/Update, so the two rules are adopted with `legacy_trigger_conditions` and
+> `ignore_changes = all`. See Amendment 2026-09-21 (#8451) below.
 
 **The deferral in the amendment above executed, for 27 of 29.** The 2026-08-19 amendment
 recorded the alert-rule API family as deprecated-with-brownouts and named the `sentry_alert`
@@ -978,6 +990,57 @@ and reds the run (#7946 Guard 3). Rule 2 of `scripts/lint-followthrough-varq-ban
 retired name anywhere under `scripts/followthroughs/` (any file at any depth, comments included);
 Rule C of `scripts/lint-shell-trace-credential-refusal.py` reports a refusal predicate emptied by
 a rename; the personal value's revocation in Doppler `prd_terraform` is #8090.
+
+**Amendment (2026-09-21, #8451) — the legacy alert-rule API is removed; the last two rules are
+adopted as frozen `sentry_alert`; the brownout retry is deleted.** *Status: adopting until #7985.*
+
+**What happened.** Every `terraform plan` of this root since 2026-09-18 failed its refresh of
+`sentry_issue_alert.auth_per_user_loop` and `sentry_issue_alert.sandbox_startup_failure` with
+`Unable to read, got status 410: {"detail":"This API no longer exists."}`, on all three retry
+attempts, on every run (#8282, run 35333341158). `plan_pr` is a required check, so every
+Sentry-infra PR and `main` were red.
+
+**Decision.**
+
+- The two rules are adopted at `sentry_alert` addresses with `removed { lifecycle { destroy =
+  false } }` + `import {}` (workflow ids 566671 and 669246). Nothing is destroyed or recreated.
+  A cross-type `moved {}` is not available: provider v0.15.7 implements no `MoveState`.
+- The pinned provider cannot model `event_unique_user_frequency_count` (upstream issue 950, fixed
+  on main as `0deba79`, unreleased). The trigger is carried by type in
+  `legacy_trigger_conditions`, and each block carries `lifecycle { ignore_changes = all }`.
+  Terraform owns the rules' **existence** (address and destroy gate), not their content.
+- The write hazard is enforced, not assumed (AP-021):
+  - `ignore_changes = all` removes Update structurally;
+  - `scripts/sentry-issue-alert-create-tripwire.sh` refuses Create, Update and replace of any
+    `sentry_alert` whose after-state carries a legacy trigger type in the projection's
+    `excluded` set, at `plan_pr` and before apply;
+  - `scripts/sentry-alert-live-fidelity.sh` pins every excluded-type live workflow's enabled
+    state, detector, trigger comparison and email action against the committed capture,
+    post-apply and daily; the op-contract suite pins the frozen `.tf` literals to the same
+    capture.
+- The TF-side fidelity projection excludes a rule whose trigger type is in `excluded` in either
+  representation (native or legacy), mirroring the live side, so `alert-reference.json` stays at
+  30 keys.
+- **The adoption lands on a wedged root, so two gates are re-scoped (CTO ruling).** Main carried
+  changes merged while no plan could complete (at authoring time two blocks added since the last
+  applied commit `d8b5fa1fd`, plus drifted updates), and they ride in the adoption plan.
+  `scripts/sentry-adoption-plan-assert.sh` therefore asserts inertness at the ADOPTED rows (every
+  import row no-op, every forget a `sentry_issue_alert`) plus no delete or replace anywhere, and
+  lists the other creates/updates as backlog rather than refusing them (creates stay diff-matched by the create gate; legacy-trigger writes stay refused by the tripwire). It also checks each import's read-back name against the capture, since an import under `ignore_changes = all` always plans no-op. The apply job is `main`-only. The create
+  gate's diff window, at both sites, starts at the last APPLIED commit
+  (`scripts/sentry-last-applied-sha.sh`: the newest of the latest 50 completed push/dispatch runs on `main` whose `Terraform apply` STEP succeeded — not the job, which post-apply probes can red after the apply landed) instead of the
+  PR diff or `HEAD~1`, so a block merged during a wedge is still explained by a reviewed diff.
+- The brownout retry ladder at both plan sites is deleted: with zero `sentry_issue_alert`
+  resources it had no target. A plan failure carrying a 410 is reported on its only attempt,
+  naming the failing addresses, and says what persistence across runs would mean rather than
+  asserting a cause the job did not measure.
+
+**Exit.** #7985 carries the atomic exit checklist (provider bump, native conversion with a
+0-change plan, projection and reference to 32 keys, retiring the freeze, the live pin's excluded
+pass, and the `removed{}`/`import{}` pairs). Its follow-through probe passes only once the
+freeze is gone, not when a release ships. Rejected alternatives are recorded in
+`knowledge-base/project/plans/archive/20260921-114348-2026-09-21-fix-sentry-alert-410-removed-api-migration-plan.md`
+§"Alternative Approaches Considered".
 
 ## Consequences
 
