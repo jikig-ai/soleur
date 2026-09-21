@@ -61,11 +61,13 @@ HELPERS="$SCRIPT_DIR/test-helpers.sh"
 FIXTURE_ENV_LIB="$SCRIPT_DIR/lib/git-fixture-env.sh"
 RUNNER_SRC="$REPO_ROOT/scripts/test-all.sh"
 
-# The tripwire's abort code. Bound once rather than inlined, mirroring git-tripwire.test.sh:26.
-# It is also bound at test-helpers.sh:38 (the emitter), kb-index-merge-driver.test.sh:414 (T14),
-# and — most consequentially — scripts/test-all.sh:851, where the runner special-cases rc 97 as
-# [TRIPWIRE] rather than a failing assertion. Five further inline copies live under
-# plugins/soleur/skills/git-worktree/test/.
+# The tripwire's abort code. Bound once rather than inlined, mirroring git-tripwire.test.sh.
+# It is also bound in test-helpers.sh (the emitter) and — most consequentially — in
+# scripts/test-all.sh, which special-cases rc 97 as [TRIPWIRE] rather than a failing
+# assertion; grep those files for `97` at their TRIPWIRE anchors rather than by line number,
+# which has drifted before. Further inline copies live under
+# plugins/soleur/skills/git-worktree/test/. A sixth binding in kb-index-merge-driver.test.sh
+# went with that suite when #8377 retired the merge driver.
 readonly TRIPWIRE_RC=97
 
 # --- The scrub line, DERIVED from scripts/test-all.sh, never transcribed. ------------------------
