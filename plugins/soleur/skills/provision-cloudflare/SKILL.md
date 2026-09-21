@@ -1,6 +1,7 @@
 ---
 name: provision-cloudflare
 description: "This skill should be used when provisioning scoped Cloudflare API tokens for tenant deploys."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->

@@ -2137,8 +2137,8 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. The script is committed and +x, and
   //      the equivalent query was executed successfully during that PR's review.
   //   3. NO SUBSTITUTE — the dedicated inngest host (10.0.1.40) is deny-all-public and
-  //      not SSH-inspectable by policy, and its ONLY off-box channel is a direct-curl POST
-  //      to that warehouse. The property under test is "this host's boot markers reached
+  //      not SSH-inspectable by policy, and its ONLY off-box channel was (until #6500 added a
+  //      boot-time Sentry emit) a direct-curl POST to that warehouse. The property under test is "this host's boot markers reached
   //      that source", which is unverifiable from outside it. Also a warehouse query, not
   //      a host login, so the no-SSH requirement is satisfied.
   //

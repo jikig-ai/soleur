@@ -25,7 +25,8 @@ Per-org targeting uses a **per-feature segment** `<flag>-orgs` (ADR-043 §"Per-f
 ## When NOT to use
 
 - Creating a brand-new flag → use `soleur:flag-create`.
-- Promoting a user to dev → use `soleur:user-set-role`.
+- Promoting a user to dev → the operator types `soleur:user-set-role` (user-invoked, ADR-236:
+  the model cannot run it, so hand over the exact command, rendered per `formatSkillInvocation`).
 
 ## Arguments
 

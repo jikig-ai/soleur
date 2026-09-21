@@ -1,17 +1,24 @@
 ---
-title: "Execution reply — Convergence Corporate CLA (AWAITING OPERATOR SEND)"
+title: "Execution reply — Convergence Corporate CLA (SENT 2026-09-21)"
 date: 2026-09-20
 type: correspondence
 custodian: clo
-status: awaiting-operator-send
+status: sent
 counterparty: Convergence (Islamabad, Pakistan)
 inbound: support@convergence.pk → legal@jikigai.com
-related: [3210, 7846, 7922]
+sent_at: 2026-09-21
+sent_by: operator (legal@jikigai.com → signatory mailbox, cc role mailbox)
+related: [3210, 7846, 7922, 8433]
 ---
 
 # Execution reply to Convergence — prepared 2026-09-20
 
-**Status: AWAITING OPERATOR SEND.** Prepared in response to the counterparty's
+**Status: SENT 2026-09-21** — dispatched by the operator from
+<legal@jikigai.com> to the signatory mailbox (cc: the role mailbox), with the
+execution copy attached as a PDF rendered from the `.md` source
+(`/data/ccla/2026-09-20-convergence-ccla-execution-copy.pdf`, SHA-256 of the
+unsigned copy `75a2cacec5d77c67e8f7f6f0aa95977c922536757f69b8b90270b6ed101d1602`).
+Prepared in response to the counterparty's
 reply to the 2026-09-09 request
 (`knowledge-base/legal/drafts/2026-09-04-convergence-ccla-reply.md`).
 
@@ -31,6 +38,9 @@ cover email carrying those fields live **off-repo** on the encrypted volume at:
 
 - `/data/ccla/2026-09-20-convergence-ccla-execution-copy.md` — the instrument
   (agreement text verbatim + particulars + Schedule A + signature blocks)
+- `/data/ccla/2026-09-20-convergence-ccla-execution-copy.pdf` — the instrument
+  as sent (PDF rendered from the `.md` source; the register hashes the
+  executed instrument as returned, not this unsigned copy)
 - `/data/ccla/2026-09-20-convergence-reply-cover-email.md` — the cover email as
   addressed (To: the signatory mailbox; Cc: the role mailbox)
 

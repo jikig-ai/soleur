@@ -43,7 +43,8 @@ synthetic or explicitly redacted dogfooding under the identity-aware,
 default-off `codex-engine` runtime flag. Customer content remains blocked until
 both auth modes have:
 
-1. a reviewed vendor/DPA and transfer-geography record;
+1. a reviewed vendor/DPA and transfer-geography record in
+   `knowledge-base/legal/data-processing-agreements/openai.md`;
 2. verified retention and remote-erasure behavior (or an approved restriction
    to synthetic data); and
 3. a CLO disposition covering the auth-mode-specific billing and data-control

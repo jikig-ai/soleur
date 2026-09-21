@@ -20,9 +20,25 @@ if [[ -z "$PR" || ! "$PR" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "$REPO_ROOT"
-
+# NO `cd` HERE, DELIBERATELY. This script operates on the CALLER's worktree, and the
+# only way to know which that is, is $PWD. An earlier revision resolved the target from
+# this file's own location — `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"`
+# followed by `cd "$REPO_ROOT"` — which points at whatever checkout the SCRIPT lives in,
+# not the worktree the caller is in, and so discarded the precondition stated above.
+#
+# Measured on 2026-09-20 (PR #8428's ship round): invoked by ABSOLUTE path from
+# .worktrees/docs-8392-session-errors-23-24, it refused with "HEAD is detached" while that
+# worktree's `git symbolic-ref -q HEAD` returned refs/heads/docs-8392-... rc 0 — the
+# detached HEAD belonged to the primary checkout it had silently relocated into. The refusal
+# was the BENIGN branch: had the primary checkout been on a feature branch (the normal case),
+# the merge and `git push` below would have synced and pushed an UNRELATED PR's branch,
+# reporting success, with the caller's worktree untouched.
+#
+# Invoking by relative path from inside the worktree masked this, because
+# `dirname(BASH_SOURCE)/../../..` then happens to resolve to that same worktree — which is
+# also why the test suite could not see it (every case copies the SUT into its fixture repo,
+# so the script's directory and the target are the same directory, a configuration production
+# never has). See the SUT-outside-the-repo case in sync-pr-behind.test.sh.
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "[pr-behind-sync] ERROR: not inside a worktree — cd to .worktrees/feat-* first" >&2
   exit 3
@@ -72,22 +88,48 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
     exit 5
   fi
 
-  # GitHub DIRTY with a clean local merge-tree is the kb-index class: the
-  # server-side merge lacks the local driver. Key on merge-tree exit code;
-  # on failure its stdout carries the real conflicted paths (no merge is in
-  # progress, so `git diff --diff-filter=U` could only ever print nothing).
+  resolved_by_regen=0
+  # Key on merge-tree's exit code; on failure its stdout carries the real conflicted paths
+  # (no merge is in progress, so `git diff --diff-filter=U` could only ever print nothing).
   if ! mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
-    echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
-    printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
-    git merge --abort 2>/dev/null || true
-    exit 6
+    # REGENERABLE-ARTIFACT CONFLICT (ADR-235). One generated file is still committed --
+    # model.likec4.json, which the web-platform C4 viewer fetches from GitHub as a committed
+    # blob on the request path (app/api/kb/c4/project/route.ts; no build step) -- so it
+    # conflicts whenever two branches touch the .c4 sources. The
+    # resolver completes the merge and regenerates it from the MERGED sources, which is the
+    # only correct resolution (side-picking yields an artifact matching neither side).
+    #
+    # FAIL-CLOSED BY CONTRACT: it exits non-zero having touched nothing unless it committed
+    # the merge, so the fall-through below is exactly today's behaviour. It never pushes --
+    # the push and its rejection handling (exit 7) stay here.
+    # The resolver is a TOOL that ships beside this script, so it is located from this
+    # file's directory; the TARGET is still the caller's worktree ($PWD), which the resolver
+    # derives itself via `git rev-parse --show-toplevel`. Do not reintroduce $REPO_ROOT here:
+    # it was removed above (see "NO `cd` HERE") and an unset one makes this path
+    # "/plugins/...", so `-f` fails and every regenerable conflict silently degrades to
+    # "manual resolution required" -- the regen arm dead with no error.
+    resolver="$(dirname "${BASH_SOURCE[0]}")/resolve-regenerable-conflicts.sh"
+    if [[ -f "$resolver" ]] && bash "$resolver" origin/main; then
+      echo "[pr-behind-sync] regenerable conflict resolved — merge committed locally"
+      resolved_by_regen=1
+    else
+      echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
+      printf '%s\n' "$mt_out" | grep '^CONFLICT ' >&2 || true
+      git merge --abort 2>/dev/null || true
+      exit 6
+    fi
   fi
 
-  if ! git merge origin/main --no-edit 2>&1 | tail -8; then
-    echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
-    git diff --name-only --diff-filter=U >&2 || true
-    git merge --abort 2>/dev/null || true
-    exit 6
+  # Skip the merge when the resolver already committed one. `git merge` would report
+  # "Already up to date" and exit 0 here, so this guard is for the LOG rather than for
+  # correctness -- it keeps the output honest about which path produced the commit.
+  if [[ "$resolved_by_regen" -eq 0 ]]; then
+    if ! git merge origin/main --no-edit 2>&1 | tail -8; then
+      echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
+      git diff --name-only --diff-filter=U >&2 || true
+      git merge --abort 2>/dev/null || true
+      exit 6
+    fi
   fi
 
   if ! git push 2>&1 | tail -3; then

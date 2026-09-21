@@ -570,8 +570,10 @@ the queue rule is re-applied:
   required contexts (17 CI Required as of #6049 — was 16 — + 2 CLA Required:
   `cla-check`, `cla-evidence`) report on the `merge_group` temp ref incl.
   `CodeQL`, and it merges without stalling.
-- **Canary bot PR:** a `rule-metrics-aggregate.yml` bot PR flows through the
+- **Canary bot PR:** a `weakness-miner.yml` bot PR flows through the
   queue without stalling (CLA synthetics cover its CLA contexts).
+  (`rule-metrics-aggregate.yml` was the canary until #8377 retired it with the
+  committed aggregate -- ADR-235.)
 - **Stall probe live:** `merge-queue-stall-check.yml` has run ≥1 green cycle.
 - **Ruleset drift:** `scheduled-terraform-drift.yml` `infra/github` plan is clean
   (`plan → apply → plan` shows no `merge_queue` drift).

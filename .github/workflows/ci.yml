@@ -161,8 +161,10 @@ jobs:
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     # 2026-09-14 (#8149): the readme-counts, lint-conversations-update-callsites and
     # rule-metrics-shape jobs (each 0.2m measured over the same 10 runs, no `needs:`)
-    # were folded in as three steps — the job goes from 11 to 14 named steps; the
-    # 15m ceiling is unchanged and still >=3x the folded max. The three carry
+    # were folded in as three steps — the job went from 11 to 14 named steps. #8377
+    # then retired the rule-metrics-shape step with the committed aggregate (ADR-235),
+    # so the job is now 13 named steps; the 15m ceiling is unchanged and still >=3x
+    # the folded max. The two surviving folded steps carry
     # `if: ${{ !cancelled() }}` and the pre-existing eleven do not: they were
     # independent jobs and keep reporting after an earlier advisory lint reds,
     # which is what `gh run view --log-failed` shows the operator; the eleven
@@ -288,22 +290,6 @@ jobs:
       - name: "lint-conversations-update-callsites (R8, #8149)"
         if: ${{ !cancelled() }}
         run: bash scripts/lint-conversations-update-callsites.sh
-      - name: "rule-metrics-shape (validate rule-metrics.json, #8149)"
-        if: ${{ !cancelled() }}
-        env:
-          METRICS_FILE: knowledge-base/project/rule-metrics.json
-        run: |
-          if [[ ! -f "$METRICS_FILE" ]]; then
-            echo "No $METRICS_FILE yet — skipping shape check."
-            exit 0
-          fi
-          jq empty "$METRICS_FILE"
-          jq -e 'has("generated_at") and has("rules") and has("summary")' "$METRICS_FILE" >/dev/null
-          jq -e '.summary | has("total_rules_tagged") and has("rules_unused_over_8w") and has("rules_bypassed_over_baseline") and has("orphan_rule_ids")' "$METRICS_FILE" >/dev/null
-          # Per-rule fields (applied_count/warn_count/fire_count) added for
-          # #2866 are validated by scripts/rule-metrics-aggregate.test.sh —
-          # not enforced here because the committed artifact lags the
-          # aggregator until the first post-merge Sunday run.
       # #7002 actionlint hang guard. Asserts ONLY that the linter TERMINATES.
       #
       # actionlint pipes every `run:` body into shellcheck over a pipe. When a body exceeds
@@ -409,8 +395,11 @@ jobs:
   # Content-scoped, and its bot-PR synthetic green is SOUND-BY-UNREACHABILITY
   # rather than earned: SCAN_DIRS here is the single file
   # infra/github/soleur-marketplace-manifest.json, and the composite action's
-  # ALLOWED_PATHS is {weakness-digest.md, rule-metrics.json} — intersection
-  # EMPTY. Re-derived per ADR-139 rather than inherited from rule-body-lint. If
+  # ALLOWED_PATHS is {weakness-digest.md} — intersection EMPTY. (It held
+  # rule-metrics.json too until #8377 untracked that file; the intersection was
+  # empty before and after, but the premise is re-derived here rather than left
+  # naming a set that no longer exists.) Re-derived per ADR-139 rather than
+  # inherited from rule-body-lint. If
   # ALLOWED_PATHS ever gains an infra/github path, reproduce this gate in the
   # action's Phase-4 ceiling BEFORE that lands.
   marketplace-manifest-guard:
