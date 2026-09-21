@@ -1459,6 +1459,8 @@ For most features: tests + linting + following patterns is sufficient.
 
 ## Common Pitfalls to Avoid
 
+- **A sibling sweep is done when the SHAPE LISTS that drive the guards match, not when the guards match.** When a new guard joins an existing one (a `transitions` check beside a `sub_steps` check), diff the two enumerations beneath them — the fixture rows, the FATAL modes the message names, the shapes the suite drives — line for line. Parallel-looking guard bodies over unequal shape lists ship one side container-only. **Why:** #8382 — `transitions` asserted the container while `sub_steps` asserted members; the suite drove 5 shapes vs 2. See `knowledge-base/project/learnings/2026-09-21-a-conflict-starved-merge-ref-reads-as-ci-never-ran.md`.
+
 - **A claim about a platform's runtime semantics is a measurement you have not taken yet — take it
   BEFORE writing the directive, the comment, or the ADR sentence, and when copying a mechanism from a
   sibling, copy its whole block (the `with:` keys, the directives around it, the comment) and diff
