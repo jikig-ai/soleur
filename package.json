@@ -5,7 +5,7 @@
     "test": "bash scripts/test-all.sh",
     "docs:dev": "npx @11ty/eleventy --serve",
     "docs:build": "npx @11ty/eleventy",
-    "prepare": "bash scripts/install-kb-merge-driver.sh"
+    "prepare": "bash scripts/ensure-kb-index.sh --soft"
   },
   "devDependencies": {
     "@11ty/eleventy": "^3.1.5",

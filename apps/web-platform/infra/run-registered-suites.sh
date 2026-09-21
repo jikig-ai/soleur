@@ -29,11 +29,14 @@
 # picked up here automatically, and a suite that exists on disk but was never
 # registered is reported as unregistered rather than silently counted as covered.
 #
-# Serial execution is not viable — 70 suites take well over ten minutes end to
-# end. Parallelism is the difference between a gate people run and one they skip.
+# Serial execution is not viable — 126 derived suites (as-of measurement
+# 2026-09-21, the same vintage as the tooling table below; re-derive rather
+# than trusting) take well over ten minutes end to end. Parallelism is the
+# difference between a gate people run and one they skip.
 #
 # TOOLING DEPENDENCY, recorded here because this is the auto-glob site (#7068).
-# TWO registered suites need a real docker daemon:
+# FIVE registered suites consume docker — two as a whole-suite requirement, three
+# for a docker-dependent arm that declines cleanly when the daemon is absent:
 #   - cloud-init-plugin-seed.test.sh    builds a small busybox fixture image (~2-4s in CI)
 #   - git-data-runcmd-rehearsal.test.sh 8 `docker run --rm` invocations from 6 source sites
 #                                       (~48-61s in CI, the most expensive step in
@@ -41,12 +44,24 @@
 #                                       hand-maintained quantity that had drifted to "four"
 #                                       in the rehearsal itself; corrected together in #7565
 #                                       so the two files cannot disagree again.
+#   - git-data-cutover-access.test.sh   docker runtime arm (counted decline, rest of the
+#                                       suite still runs)
+#   - git-data-ownership.test.sh        docker runtime arm (same counted-decline shape)
+#   - zot-config-deadlines.test.sh      digest acceptance pair — `docker run` zot verify +
+#                                       negative control; the static relations and S4
+#                                       battery need no docker
 #
-# Both self-skip with exit 0 when docker is missing or unreachable. The skip is NOT visible
+# On a non-CI host all five exit 0 when docker is missing or unreachable — the
+# first two skip the suite outright; the other three print a SKIP verdict and
+# count the declined assertions (`SKIP runtime arm` / `=== Skipped:`). Under CI
+# four of the five fail closed on the same absence (the CI arm inside each gate);
+# only plugin-seed skips unconditionally, relying on the workflow assert step
+# ordered before it below. The skip is NOT visible
 # through this runner: the executor below captures each suite's output to a per-run log dir and
-# prints `PASS`, so a docker-less laptop reports PASS for both while neither asserts anything
-# — ~50-65s of coverage, silently absent. (An earlier version of this paragraph called it a
-# "visible SKIP", which was false in the one file where it mattered most.)
+# prints `PASS`, so a docker-less laptop reports PASS for all five — for the first two while
+# neither asserts anything (~50-65s of coverage, silently absent), and for the three partial
+# declines while their docker arms never adjudicate. (An earlier version of this paragraph
+# called it a "visible SKIP", which was false in the one file where it mattered most.)
 #
 # DIAGNOSTICS ON RED (#7376). Until 2026-08-10 the executor was
 # `bash "{}" >/dev/null 2>&1` and printed only `PASS`/`RED`, so a CI failure carried no
@@ -60,28 +75,47 @@
 #
 # That is deliberate for local DX, and it is why CI does NOT rely on the skip:
 # infra-validation.yml has a separate `docker info` assertion step that reds the job when the
-# daemon is absent, rather than letting either suite pass vacuously. That step must stay
-# ORDERED BEFORE both suites — today it precedes plugin-seed, and git-data-runcmd-rehearsal
-# is later in the same job, so both are covered. That ordering is the invariant; it is not
-# self-evident from either step. If you are debugging why a docker-dependent regression
-# reproduced in CI but not locally, this is the reason.
+# daemon is absent, rather than letting any suite pass vacuously. That step must stay
+# ORDERED BEFORE all five consumers — today it precedes plugin-seed, and
+# git-data-runcmd-rehearsal, git-data-cutover-access, git-data-ownership, and
+# zot-config-deadlines are all later in the same job, so all five are covered. That ordering
+# is the invariant; it is not self-evident from either step. If you are debugging why a
+# docker-dependent regression reproduced in CI but not locally, this is the reason.
 #
 # Docker is not the only external dependency, and an earlier version of this paragraph
 # claimed it was ("every other registered suite needs only what a stock checkout has").
-# Measured across the 86 derived suites (2026-07-30), by their own `command -v` preconditions:
+# Measured across the 126 derived suites (2026-09-21), by their own `command -v`
+# preconditions (one count per suite per tool):
 #
-#   docker      2   cloud-init-plugin-seed, git-data-runcmd-rehearsal
-#   terraform   5   cloud-init-inngest-bootstrap, git-data-emit,
-#                   git-data-render-strip-parity, git-data-runcmd-rehearsal, inngest
-#   python3     5   canary-bundle-claim-check, git-data-emit,
+#   docker      5   cloud-init-plugin-seed, git-data-cutover-access,
+#                   git-data-ownership, git-data-runcmd-rehearsal,
+#                   zot-config-deadlines (digest arm only — declines, not a whole-suite skip)
+#   terraform   9   cloud-init-inngest-bootstrap, generate-apex-rollback-pr, git-data-emit,
 #                   git-data-render-strip-parity, git-data-runcmd-rehearsal,
+#                   git-data-template-strip, inngest-boot-emitter, inngest,
+#                   registry-userdata-budget
+#   python3     7   canary-bundle-claim-check, git-data-emit,
+#                   git-data-render-strip-parity, git-data-root-key,
+#                   git-data-runcmd-rehearsal, git-data-rung2-rehearsal,
 #                   workspaces-luks-g4-mutation
 #   cloud-init  1   cloud-init-inngest-bootstrap
-#   jq          3
+#   jq          8   canary-bundle-claim-check, ci-deploy,
+#                   cosign-trusted-root-staleness, doppler-download-error-channel,
+#                   git-data-root-key, inngest, registry-boot-guard, zot-log-shipper
+#   curl        2   canary-bundle-claim-check, git-data-runcmd-rehearsal
 #
-# Every one of those self-skips with exit 0 when its tool is absent, and — per the paragraph
-# above — this runner prints PASS for a skip. So on a bare checkout a green run here can be
-# hiding a substantial share of the suite set. Re-derive this table rather than trusting it:
+#   (zot-config-deadlines also invokes python3 unconditionally — render/extract/
+#    bogus-config synth — so a python3-less host REDs it loudly; the table counts
+#    only suites that gate the tool behind `command -v`.)
+#
+# Most of those self-skip locally when their tool is absent — loud exceptions like
+# git-data-rung2-rehearsal and git-data-root-key fail by design — and every CI-gated
+# skip fails closed under CI. Per the paragraph above, this runner prints PASS for
+# a local skip, so on a bare checkout a green run here can be hiding a substantial
+# share of the suite set. The table is the curated precondition set: a raw
+# `command -v` sweep also lists in-container and opportunistic uses (dash,
+# ssh-keygen, timeout, nft, rsync) that are not host gates in the same sense.
+# Re-derive the table rather than trusting it:
 #   while read -r f; do grep -oE 'command -v [a-z0-9-]+' "$f"; done \
 #     < <(bash apps/web-platform/infra/run-registered-suites.sh --list \
 #         | sed -n 's|^  \(apps/.*\.test\.sh\)$|\1|p') | sort | uniq -c | sort -rn
