@@ -77,7 +77,8 @@ Bash fixture tests for guard scripts
 #   knowledge-base/project/weakness-digest.md  — a .md file, but knowledge-base/project/
 #                                                is excluded in .markdownlintignore, so
 #                                                the sweep never reads it.
-#   knowledge-base/project/rule-metrics.json   — not Markdown at all.
+#   (knowledge-base/project/rule-metrics.json was a second member and was "not Markdown at
+#   all"; #8377 untracked it and removed it from the array entirely.)
 #
 # Measured against the live producer: the swept set is 1,345 files and its
 # intersection with ALLOWED_PATHS is 0. A bot PR therefore cannot change a file
@@ -132,7 +133,12 @@ adr-ordinals
 # ⚠ FABRICATED-NOT-EARNED for bot PRs (#6049 auto-fabrication guard): this is a
 # CONTENT-scoped gate, but the bot composite action does NOT reproduce it in its
 # Phase-4 ceiling — so the synthetic green is unconditional. This is SOUND ONLY
-# because the action's ALLOWED_PATHS = {weakness-digest.md, rule-metrics.json}
+# because the action's ALLOWED_PATHS = {weakness-digest.md}
+# (#8377 removed knowledge-base/project/rule-metrics.json from that array when it
+# became an untracked cache. Every intersection below is unchanged: dropping a member
+# can only shrink an intersection, never grow one. The premises are restated from the
+# current array rather than carried, because a premise naming a set that no longer
+# exists reads as verified and is not.)
 # makes AGENTS.rules.md physically unreachable by every bot PR today,
 # so no bot can weaken a rule body under a fabricated green. The residual goes
 # LIVE the instant #6038's auto-proposer adds an AGENTS path to ALLOWED_PATHS —
@@ -163,8 +169,8 @@ tenant-integration-required
 # rule-body-lint above, not by exemption. This gate asks "does this PR's plan
 # destroy a Sentry resource without an acknowledgement?", which is a question
 # about the diff, so a fabricated green is only sound if no bot PR can produce a
-# destroying diff. It cannot: the action's ALLOWED_PATHS = {weakness-digest.md,
-# rule-metrics.json} makes apps/web-platform/infra/sentry/** physically
+# destroying diff. It cannot: the action's ALLOWED_PATHS = {weakness-digest.md}
+# makes apps/web-platform/infra/sentry/** physically
 # unreachable by every bot PR, and the action exits 1 on any path outside that
 # set. A full-root plan over a bot diff is therefore vacuously non-destroying,
 # and the synthetic green asserts something true.
@@ -223,8 +229,7 @@ credential-path-guard
 # inherited, per the ADR-139 instruction that the intersection test is per-gate:
 #
 #   SCAN_DIRS  = { infra/github/soleur-marketplace-manifest.json }  (one file)
-#   ALLOWED_PATHS = { knowledge-base/project/weakness-digest.md,
-#                     knowledge-base/project/rule-metrics.json }
+#   ALLOWED_PATHS = { knowledge-base/project/weakness-digest.md }
 #   ALLOWED_PATHS ∩ SCAN_DIRS = ∅
 #
 # So no bot PR can modify this gate's guarded surface, and its synthetic green
@@ -248,8 +253,7 @@ marketplace-manifest-guard
 #   1. Composite action (bot-pr-with-synthetic-checks/action.yml): CHECK_NAMES
 #      derives from THIS file, so the action will post a synthetic green for
 #      vendor-pin-required on its PRs. Sound by UNREACHABILITY only —
-#      ALLOWED_PATHS = {knowledge-base/project/weakness-digest.md,
-#      knowledge-base/project/rule-metrics.json} and the guarded surface is
+#      ALLOWED_PATHS = {knowledge-base/project/weakness-digest.md} and the guarded surface is
 #      plugins/soleur/skills/** → intersection ∅. If ALLOWED_PATHS ever gains
 #      a vendored-surface path, this synthetic becomes a fabricated binding
 #      result and the gate must be reproduced in the action's Phase-4
