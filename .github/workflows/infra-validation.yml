@@ -167,6 +167,10 @@ on:
       - ".github/workflows/registry-zot-inventory.yml"
       - ".github/workflows/registry-zot-inventory-dispatch.yml"
       - ".github/actions/cf-tunnel-registry-bridge/action.yml"
+      # (#8449 UC2) inngest-host-state-workflow-guard.test.sh executes the dispatch wrapper's
+      # run: block against the script's own exit-code header; neither file is under apps/*/infra/**.
+      - ".github/workflows/inngest-host-state.yml"
+      - "scripts/inngest-host-state.sh"
       - ".github/workflows/scheduled-supabase-advisor-scan.yml"
       - ".github/workflows/apply-sentry-infra.yml"
       - "scripts/supabase-advisor-scan.sh"
@@ -768,6 +772,12 @@ jobs:
       - name: Run registry zot-inventory workflow guard (#7278 #6425 guard + label/Bot boundary + fail-closed skip-docker-login)
         run: bash apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh
 
+      # (#8449 UC2) The one-tap inngest-host-state dispatch wrapper: inputs via env only, SHA
+      # pins, and the run: block EXECUTED per script exit code. Host output never reaches the
+      # public job log, step summary or an artifact.
+      - name: Run inngest-host-state workflow guard (#8449 UC2)
+        run: bash apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh
+
 
       - name: Run inngest config-refresh bundle packager guard (#6780 ADR-135 HARD-2 + fail-closed)
         run: bash apps/web-platform/infra/inngest-config-bundle-pack.test.sh
@@ -838,6 +848,11 @@ jobs:
       # and six mutation rows that each require this guard to red.
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
+
+      # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
+      # predicate, exact literals, unpaused, both -target lines, and its mutation rows.
+      - name: Run registry store-not-LUKS alert drift guard (#8408)
+        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity

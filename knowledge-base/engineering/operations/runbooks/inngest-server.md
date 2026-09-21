@@ -144,9 +144,28 @@ indistinguishable from a fixed host; #6425 cost 16 hours of false alarms to exac
 > rather than hourly and carries host identity **in the row**, so pinning is a filter rather
 > than a routing hope:
 >
+> **One tap, no laptop (#8449):** dispatch the read-only wrapper from the Actions UI (the GitHub
+> mobile app works) or from any shell:
+>
+> ```
+> gh workflow run inngest-host-state.yml                      # since=90m, error scan off
+> gh workflow run inngest-host-state.yml -f since=3h
+> gh run list -w inngest-host-state.yml -L 1                  # then: gh run view <id>
+> ```
+>
+> The run is **green only on rc 0**. Every other rc fails the run with
+> `::error::inngest-host-state rc=<n> — <meaning>`, and that includes rc 4 (the host is not
+> shipping), so a red run is the signal. The job summary shows the rc, its meaning, the
+> `VERDICT … SERVING=yes|no` line, and the full rc table. **It does not show the rest of the
+> output, and the error scan is off by default.** The repository is public, and the script's
+> output includes unscrubbed journald text, so the full read stays with the laptop route:
+>
 > ```
 > doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh
 > ```
+>
+> Both routes run the same script and give the same exit codes. The laptop route is the only one
+> that prints the probe-row fields, the STALE block and the recent-refusals scan.
 >
 > It prints the newest dedicated-host probe row **with its age**, a SERVING/NOT SERVING
 > verdict, and a scan of recent unit refusals. Note the pin is the conjunction

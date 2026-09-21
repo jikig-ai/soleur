@@ -1,0 +1,151 @@
+# One-tap, read-only state read of the DEDICATED inngest host (#8449 UC2).
+#
+# WHAT THIS IS. A workflow_dispatch wrapper around scripts/inngest-host-state.sh, so the read
+# that used to need a laptop with `doppler run` is one tap from a phone. The script reads the
+# host over journald -> vector -> Better Stack (the only channel that reaches this host — see
+# the script header for why /hooks/deploy-status structurally cannot). It changes nothing.
+#
+# ── THE REPOSITORY IS PUBLIC — HOST OUTPUT NEVER LEAVES THE RUNNER ─────────────
+# The script prints free-form journald messages (up to 8, 200 chars each) and the query tool's
+# stderr head. That is UNSCRUBBED host text. So `out.txt`:
+#   - is never written to the job log,
+#   - is never written to $GITHUB_STEP_SUMMARY,
+#   - is never uploaded as an artifact (a public repo's artifacts are readable by any account).
+# The log and summary carry ONLY the rc, its plain-language meaning, and the single VERDICT line,
+# extracted by an anchored grep of the script's own `  VERDICT        ` marker (whose content is
+# computed from fields, never free text). `include_errors` defaults to FALSE for the same reason:
+# the error scan is the free-text section, and it is never shown here anyway.
+#
+# ── INPUTS REACH `run:` THROUGH `env:` ONLY ────────────────────────────────────
+# `${{ inputs.* }}` inside a `run:` body is template-substituted into the script text before
+# bash sees it, i.e. a dispatcher-controlled string becomes code. Both inputs travel via env,
+# and `since` is regex-checked here (the script checks it too).
+#
+# ── EXIT BEHAVIOUR ─────────────────────────────────────────────────────────────
+# Green ONLY on rc 0. Every other rc — including 4, which the script's own header calls a
+# finding ("SILENCE IS NOT HEALTH") — emits `::error::` and fails the job: a red run is the
+# correct phone-visible signal. The rc table in the summary covers every code the script's
+# `Exit codes:` header lists; apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh
+# derives that set from the header and asserts identity, and executes this `run:` body per code.
+name: "Inngest host state (read-only)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Lookback window, <N>h, <N>m or <N>d. The probe timer is hourly, so under ~70m can render a healthy host silent.'
+        type: string
+        required: false
+        default: '90m'
+      include_errors:
+        description: 'Also run the recent unit-error scan. Its output is never shown here (public repo); it only affects whether the scan runs.'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inngest-host-state
+  cancel-in-progress: false
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Read dedicated inngest host state
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          SINCE: ${{ inputs.since }}
+          INCLUDE_ERRORS: ${{ inputs.include_errors }}
+        run: |
+          # Plain-language meaning per exit code. Derived from the `Exit codes:` header of
+          # scripts/inngest-host-state.sh — the guard suite asserts the two sets are identical.
+          meaning() {
+            case "$1" in
+              0) echo "host state printed — read SERVING=yes|no and the row's age below" ;;
+              2) echo "bad usage — nothing was queried (since must be <N>h, <N>m or <N>d)" ;;
+              3) echo "credentials not configured in this repo — nothing was queried" ;;
+              4) echo "the host is not shipping; silence is not health — the query ran and the window held no dedicated-host row" ;;
+              5) echo "no verdict — the newest row carried no identity/verdict fields; widen since and re-read" ;;
+              6) echo "the read failed; this says nothing about the host — fix the read path, never report it as an outage" ;;
+              78) echo "refused, tracing — nothing was queried (set -x with a live credential, #7797)" ;;
+              *) echo "an exit code the script's header does not document — treat the read as UNKNOWN" ;;
+            esac
+          }
+
+          # The window is validated BEFORE any query. A malformed value is never echoed back:
+          # it is dispatcher-controlled text and could carry a workflow command.
+          rc=0
+          if [[ "$SINCE" =~ ^[0-9]+[hmd]$ ]]; then
+            args=(--since "$SINCE")
+            [ "$INCLUDE_ERRORS" = true ] || args+=(--no-errors)
+            # `run:` is `bash -e`: without `|| rc=$?` a non-zero exit kills this step before
+            # the summary and the ::error:: line below are written.
+            bash scripts/inngest-host-state.sh "${args[@]}" > out.txt 2>&1 || rc=$?
+          else
+            rc=2
+          fi
+
+          # The ONLY thing read out of out.txt is the anchored VERDICT line. Everything else in
+          # it is unscrubbed host text and stays on the runner (public repo).
+          verdict=""
+          wrapper_fault=""
+          if [ -f out.txt ]; then
+            verdict="$(grep -m1 -E '^  VERDICT        (NOT )?SERVING   SERVING=(yes|no)' out.txt || true)"
+            verdict="${verdict//::/: :}"
+          elif [ "$rc" -eq 0 ]; then
+            wrapper_fault="out.txt is missing although the script exited 0 — nothing can be reported"
+          fi
+          if [ "$rc" -eq 0 ] && [ -z "$wrapper_fault" ] && [ -z "$verdict" ]; then
+            wrapper_fault="the script exited 0 but printed no VERDICT line — no verdict can be reported"
+          fi
+
+          {
+            echo "## Dedicated inngest host state"
+            echo
+            echo "**rc=${rc}** — $(meaning "$rc")"
+            echo
+            if [ -n "$wrapper_fault" ]; then
+              echo "**Wrapper fault:** ${wrapper_fault}"
+              echo
+            fi
+            if [ -n "$verdict" ]; then
+              echo '```'
+              printf '%s\n' "$verdict"
+              echo '```'
+            else
+              echo "_No VERDICT line was produced._"
+            fi
+            echo
+            echo "The full script output is deliberately not shown: this repository is public and"
+            echo "that output carries unscrubbed host log text. For the full read, run"
+            echo "\`doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh\` from a laptop."
+            echo
+            echo "| rc | meaning |"
+            echo "|---|---|"
+            for c in 0 2 3 4 5 6 78; do
+              printf '| %s | %s |\n' "$c" "$(meaning "$c")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$verdict" ]; then
+            printf '%s\n' "$verdict"
+          fi
+          if [ -n "$wrapper_fault" ]; then
+            echo "::error::inngest-host-state rc=${rc} — ${wrapper_fault}"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::inngest-host-state rc=${rc} — $(meaning "$rc")"
+            exit "$rc"
+          fi
+          echo "inngest-host-state rc=0 — $(meaning 0)"
