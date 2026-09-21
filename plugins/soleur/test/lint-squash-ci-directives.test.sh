@@ -118,7 +118,14 @@ else bad "control: a token-bearing fixture returned rc=$CTRL_RC — the accept p
 EXPECTED_ASSERTIONS=19
 MIN_ASSERTIONS=${EXPECTED_ASSERTIONS:-1}
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
-  printf 'ANTI-VACUITY: executed %s assertion(s), floor is %s — the battery shrank.\n' "$asserted" "$MIN_ASSERTIONS" >&2
+  # Phrasing is load-bearing, not style. guard-vacuity-floor.test.sh classifies a mutant by
+  # matching its stderr against a CASE-SENSITIVE vocabulary (`vacuit|vacuous|anti-vacuity|
+  # assertions ran|only [0-9]|...`). An uppercase `ANTI-VACUITY:` matches none of it, so the
+  # mutant falls through every branch to the final `CONSTRUCTION` — the floor fires correctly
+  # and is still scored as unconstructible debt. Measured: this suite pushed that ratchet
+  # 15 -> 16 until this line was lowercased to the house `FATAL: anti-vacuity:` form.
+  printf '\nFATAL: anti-vacuity: only %s assertion(s) executed, floor is %s. The battery ran but did not assert.\n' \
+    "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 
