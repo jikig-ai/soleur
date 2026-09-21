@@ -971,3 +971,43 @@ AFFECTED_SCRIPTS_REGISTRY_LUKS_LIVE_8386_PATHS=(
   "scripts/followthroughs/registry-luks-live-8386.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# plugins/soleur/test/lint-rejected-register.test.sh — mutation battery over the
+# rejected-register linter; its live arms run the SUT against the real
+# knowledge-base/project/rejected/ corpus, so the census's corpus-walk arm wants
+# the scope declared even though derivation reaches the SUT by name-stem.
+AFFECTED_PLUGINS_SOLEUR_TEST_LINT_REJECTED_REGISTER_TEST_SH_PATHS=(
+  "knowledge-base/project/rejected/"
+  "plugins/soleur/test/lint-rejected-register.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-rejected-register.sh"
+)
+
+# plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh — pins the
+# archive-kb.sh partial-run warning (#8416); the SUT path is composed at runtime
+# ("$ROOT/../scripts/archive-kb.sh"), which derivation cannot expand.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_ARCHIVE_KB_TEST_ARCHIVE_KB_PARTIAL_RUN_TEST_SH_PATHS=(
+  "plugins/soleur/skills/archive-kb/scripts/archive-kb.sh"
+  "plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/go-routing-table-parity.test.sh — three-way parity over the
+# go routing table; all three operands are "$ROOT/"-prefixed literals that
+# derivation cannot expand.
+AFFECTED_PLUGINS_SOLEUR_TEST_GO_ROUTING_TABLE_PARITY_TEST_SH_PATHS=(
+  "plugins/soleur/commands/go.md"
+  "plugins/soleur/lib/workflow-fidelity.ts"
+  "plugins/soleur/skills/eval-harness/enums/go-routes.json"
+  "plugins/soleur/test/go-routing-table-parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/ticket-triage-mirror-parity.test.sh — mirror parity between
+# the Claude agent and the OpenHands skill. skills/triage/SKILL.md is deliberately
+# NOT an edge — the suite's own header states it says nothing about that file.
+AFFECTED_PLUGINS_SOLEUR_TEST_TICKET_TRIAGE_MIRROR_PARITY_TEST_SH_PATHS=(
+  ".openhands/skills/ticket-triage/SKILL.md"
+  "plugins/soleur/agents/support/ticket-triage.md"
+  "plugins/soleur/test/ticket-triage-mirror-parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
