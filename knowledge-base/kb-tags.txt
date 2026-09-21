@@ -1393,6 +1393,7 @@ enable
 encrypted-key
 encryption
 encryption-ledger
+encryption-posture
 endpoint-swap
 endpoints
 enforcement
@@ -2297,6 +2298,7 @@ merge-pr
 merge-queue
 merge-ref
 merge-semantics
+merge-side-effects
 merge-strategy
 merge-tail
 merge-time-timebomb
@@ -2485,6 +2487,7 @@ notification-channel
 notification-migration
 notification-vs-verdict
 notifications
+notify-only
 npm
 npm-packaged-binary
 npx
