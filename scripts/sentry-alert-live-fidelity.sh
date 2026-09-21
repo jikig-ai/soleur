@@ -55,6 +55,8 @@
 #
 # Required env: SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_API_HOST.
 # SENTRY_REFERENCE_FILE overrides the reference path (the apply job sets it).
+# SENTRY_FROZEN_CAPTURE_FILE overrides the frozen-rule pin's anchor (default: the
+# committed 2026-09-09 live capture; empty reads as unset). See "FROZEN-RULE PIN".
 # Test injection (its own suite ONLY): SENTRY_FIXTURE_RULES — file path served
 # instead of the live GET.
 #
@@ -79,6 +81,7 @@ esac
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECTION="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 REFERENCE="${SENTRY_REFERENCE_FILE:-$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json}"
+FROZEN_CAPTURE="${SENTRY_FROZEN_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json}"
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
@@ -115,6 +118,7 @@ readonly SENTRY_ORG
 
 [[ -r "$PROJECTION" ]] || { echo "ERROR: projection module not readable at $PROJECTION" >&2; exit 1; }
 [[ -r "$REFERENCE" ]] || { echo "ERROR: reference not readable at $REFERENCE" >&2; exit 1; }
+[[ -r "$FROZEN_CAPTURE" ]] || { echo "ERROR: frozen-rule capture not readable at $FROZEN_CAPTURE. The frozen-rule pin has no anchor, so this probe cannot check the excluded-type rules. Refusing." >&2; exit 1; }
 
 # FIXTURE MODE IS ANNOUNCED, LOUDLY. The override exists for this script's own
 # suite, but "its own suite ONLY" was prose, not a mechanism: the PASS line was
@@ -332,6 +336,79 @@ while IFS= read -r name; do
   _finding "UNMANAGED: '$name' is live and in scope but declared nowhere in apps/web-platform/infra/sentry/ (absent from the reference projected from the plan). Adopt it as a sentry_alert or delete it in Sentry."
 done < <(jq -r 'keys[]' <<<"$live_proj")
 
+# ── FROZEN-RULE PIN (Guard 4, #8451) ────────────────────────────────────────
+# A workflow whose trigger type is in the projection's `excluded` set is outside
+# BOTH projection sides, so every check above is blind to it by construction.
+# Since #8451 the two `event_unique_user_frequency_count` rules are also
+# `ignore_changes = all` in Terraform: a UI edit plans "0 changes". This pass is
+# what still notices one of them being disabled, re-bound, re-thresholded or
+# stripped of its email action.
+#
+# A CENSUS, NOT A NAME LIST: every live workflow carrying an excluded trigger
+# type is checked against the committed capture entry of the SAME NAME
+# (enabled == true, detectorIds, trigger {type, comparison} set, >= 1 email
+# action). Expected values come from the capture, never from literals here. An
+# excluded-type workflow with no capture entry is UNMANAGED-FROZEN.
+#
+# THE EXCLUDED SET IS READ FROM THE MODULE, not restated: the module carries a
+# main expression, so `include` is refused ("library should only have function
+# definitions"), and the one-line `def excluded:` is lifted verbatim and
+# evaluated. A reshaped definition fails that extraction and REFUSES below —
+# never an empty set, which would make the census compare nothing silently.
+excluded_def=$(grep -m1 -E '^def excluded: \[.*\];[[:space:]]*$' "$PROJECTION" || true)
+set +e
+excluded_json=$(jq -n -c "${excluded_def} excluded" 2>"$jq_err")
+rc=$?
+set -e
+if [[ "$rc" -ne 0 || -z "$excluded_def" ]] \
+   || ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and . != "")' >/dev/null 2>&1 <<<"$excluded_json"; then
+  echo "ERROR: could not read the excluded trigger-type set from ${PROJECTION} (jq rc=$rc; expected one line 'def excluded: [\"…\", …];'): $(tr '\n' ' ' <"$jq_err" | cut -c1-200). The frozen-rule pin cannot select its census. Refusing." >&2
+  exit 1
+fi
+
+set +e
+frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson live "$live_json" \
+    --slurpfile cap "$FROZEN_CAPTURE" '
+  def excl_type: [ .triggers.conditions[]?.type ] as $t | any($ex[]; . as $e | $t | index($e));
+  # Key order is not data: the live API does not sort keys, and `tojson`
+  # preserves insertion order (F13 reds without this canonicalisation).
+  def canon: walk(if type == "object" then (to_entries | sort_by(.key) | from_entries) else . end);
+  def trig: [ .triggers.conditions[]? | {type, comparison} ] | canon | map(tojson) | sort;
+  def dets: (.detectorIds // []) | map(tostring) | sort;
+  if ($cap[0] | type) != "array" then error("frozen-rule capture is not a JSON array of workflows") else . end
+  | ($cap[0] | map(select(excl_type))) as $C
+  | ($live | map(select(excl_type))) as $L
+  | "COUNT \($L | length) \($C | length)",
+    ( $L | group_by(.name) | map(select(length > 1) | .[0].name)[]
+      | "FINDING FROZEN DUPLICATE: \(tojson) names more than one excluded-type live workflow; the pin cannot tell which one the capture describes." ),
+    ( $L[] as $w
+      | [ $C[] | select(.name == $w.name) ] as $m
+      | if ($w.name | type) != "string" or $w.name == "" then
+          "FINDING UNMANAGED-FROZEN: an excluded-type live workflow (id \($w.id | tojson)) has an empty or non-string name; the pin cannot match it to the capture."
+        elif ($m | length) == 0 then
+          "FINDING UNMANAGED-FROZEN: \($q)\($w.name)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type ] | join(","))) and has no entry in the committed capture, so neither projection side nor this pin checks it."
+        else $m[0] as $c
+          | (if $w.enabled != true then "FINDING FROZEN DISABLED: \($q)\($w.name)\($q) live enabled=\($w.enabled | tojson), captured \($c.enabled | tojson). Enablement is live state; an apply will NOT fix it." else empty end),
+            (if ($w | dets) != ($c | dets) then "FINDING FROZEN MONITOR UNBIND: \($q)\($w.name)\($q).detectorIds captured=\($c | dets | tojson) live=\($w | dets | tojson)." else empty end),
+            (if ($w | trig) != ($c | trig) then "FINDING FROZEN DRIFT: \($q)\($w.name)\($q).triggerConditions captured=\($c | trig | map(fromjson) | tojson) live=\($w | trig | map(fromjson) | tojson)." else empty end),
+            (if ([ $w.actionFilters[]?.actions[]? | select(.type == "email") ] | length) == 0 then "FINDING FROZEN NO EMAIL: \($q)\($w.name)\($q) carries no email action in any action filter (live action types: \([ $w.actionFilters[]?.actions[]?.type ] | tojson))." else empty end)
+        end )
+' 2>"$jq_err")
+rc=$?
+set -e
+if [[ "$rc" -ne 0 ]]; then
+  echo "ERROR: the frozen-rule pin did not evaluate (jq rc=$rc): $(tr '\n' ' ' <"$jq_err" | cut -c1-400). Cannot assert fidelity." >&2
+  exit 1
+fi
+read -r _ frozen_live frozen_cap < <(grep -m1 '^COUNT ' <<<"$frozen_report")
+echo "sentry_alert live fidelity: frozen-rule pin: compared ${frozen_live} excluded-type live workflow(s) against the committed capture (${frozen_cap} excluded-type entr(y/ies) captured)"
+while IFS= read -r line; do
+  [[ -n "$line" ]] && _finding "${line#FINDING }"
+done < <(grep '^FINDING ' <<<"$frozen_report" || true)
+if [[ "$frozen_live" -eq 0 && "$frozen_cap" -gt 0 ]]; then
+  _finding "FROZEN PIN EMPTY: the frozen-rule pin compared nothing: 0 excluded-type live workflows were returned while the capture holds ${frozen_cap}."
+fi
+
 if [[ "$findings" -eq 0 ]]; then
   # The verdict carries the mode. A grep for `PASS (all N` in a log must not be
   # satisfiable by a fixture run. `live fidelity FAILED` below is a CONTRACT with
@@ -345,6 +422,6 @@ if [[ "$findings" -eq 0 ]]; then
   exit 0
 fi
 
-echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE}." >&2
-echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare." >&2
+echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE} (frozen-rule pin anchor: ${FROZEN_CAPTURE})." >&2
+echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN * and UNMANAGED-FROZEN are excluded-type rules compared against the committed capture (Terraform ignores all changes to them, so an apply will not touch them either)." >&2
 exit 1
