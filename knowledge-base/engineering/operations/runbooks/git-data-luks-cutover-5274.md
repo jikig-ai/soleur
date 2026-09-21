@@ -2,7 +2,7 @@
 
 Runbook for the git-data LUKS cutover route. **Today the route is a reviewer-gated, read-only proof.**
 `git-data-cutover.yml` authenticates to root on the git-data host through the ADR-220 web-1 jump, reads
-three facts about the store, and exits. It moves no data, repoints no mount, flips no flag and wipes no
+three facts about the store and the shape of its pre-receive fence, and exits. It moves no data, repoints no mount, flips no flag and wipes no
 volume. The real cutover (copy, repoint, flag flip, rollback, old-volume decommission) was removed from
 `git-data-cutover.sh` because it called host mechanisms that do not exist; its rebuild is **#8211**.
 Rationale and residuals: ADR-220 › "Amendment log" › "2026-09-15 (#8189)".
@@ -21,6 +21,10 @@ The real cutover does not exist yet. It is blocked on all of:
 - **#7226** — pin git-data's SSH host key. Until then every store-probe answer is unauthenticated.
 - A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation immediately before the real
   cutover, so nothing planted during the read-only period survives into it (ADR-220 D6).
+- **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
+  assertion, carried in #8211 ("Carried from #8101"). The wrapper edit is hash-bound, so it follows
+  the [two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence). The
+  dry run's fence probe is in place.
 - The legal-activation dependencies on the roadmap row for #5274 (Article 30 PA-36, #8101, #8094).
 
 A dispatch that asks for a real mode refuses with `verdict=real_cutover_unreconciled` (exit 5) before
@@ -49,10 +53,20 @@ any remote call.
    `store_not_empty`, or `probe_failed rc=<n>` when a probe could not be answered. The store-empty probe
    re-checks, in the same remote command, that the store root is still the device the first probe read;
    a dangling symlink or a missing repositories directory is `probe_failed`, never a zero count.
+   Then the **fence probe** (#8101, exit 5). It checks what a push actually depends on:
+   - a real `root:git 750` hooks directory, under a root-owned parent nobody else can write;
+   - a real `root:root 755` `pre-receive` that the `git` user can read and execute;
+   - the installed transport wrapper pins pushes to that directory on git's command line, and the
+     system `core.hooksPath` (includes resolved) names it too;
+   - both sit on the store device the first probe accepted.
+
+   It reads `probe=fence-shape verdict=ok`, `verdict=fence_not_intact reason=<word>`, or
+   `probe_failed rc=<n>|reason=arg_<name>`. It checks the fence's shape, not which hook is installed.
 8. Teardown, always.
 
 Exit 0 means: root authenticated end to end, the plaintext store is mounted from a device that is not
-the LUKS mapper, and it holds zero repositories. While #7226 is open a compromised web-1 could forge
+the LUKS mapper, and it holds zero repositories, and a push would run a root-owned `pre-receive` of
+the planted shape from that store. While #7226 is open a compromised web-1 could forge
 that answer (ADR-220 D4).
 
 Read the annotations without a dashboard:
@@ -79,7 +93,7 @@ Each prod step needs explicit authorization for that step. A menu acknowledgemen
    the only way the key reaches the host.
 4. **Private-NIC readiness read** (below). It must read `up`.
 5. **Dry run.** Dispatch `git-data-cutover.yml` from `main` and approve. It must read
-   `role=git-data-auth verdict=ok`, clear all three store probes, and exit 0.
+   `role=git-data-auth verdict=ok`, clear all three store probes and the fence probe, and exit 0.
 
 ### Private-NIC readiness read (step 4)
 
@@ -138,6 +152,8 @@ curl -fsS -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN_
 | The store root is already the LUKS mapper | `verdict=already_cut_over` (exit 5) | Something repointed the mount outside the cutover. Open an incident. |
 | The store holds repositories | `verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. |
 | A probe could not be answered | `verdict=probe_failed rc=<n>` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96`: the answer did not match the expected pattern. Any `probe_failed` from the store-empty probe can also mean the store root changed device between probes, is a dangling symlink, or has no repositories directory. None of these is transient, and an empty store on its expected device produces none of them: do not re-dispatch in a loop; open an incident. No `rc`: the first probe left nothing for the second to compare; re-dispatch once. |
+| The pre-receive fence is not intact | `verdict=fence_not_intact reason=<word>` (exit 5) | **Incident first.** A root-owned path or mount changed on a host whose SSH key is still unpinned (#7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
+| The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_<name>` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
 | A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do; the real cutover is #8211. |
 
 L3 and L7 are different faults: L3 is reachability (NIC, sshd, host), L7 is authorization (the key).
