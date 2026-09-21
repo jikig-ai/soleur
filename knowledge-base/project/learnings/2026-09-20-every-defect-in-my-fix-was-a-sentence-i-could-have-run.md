@@ -196,6 +196,16 @@ that its comment and its code disagreed.
     pushed head is verified by CI, and the two affected suites are re-run by hand.
     **Prevention:** when a battery is in flight, queue the fix and apply it after the rc file
     lands — or accept the run is diagnostic only and say so.
+30. **I committed and PUSHED two files full of raw conflict markers.** The BEHIND auto-sync
+    conflicted on `model.likec4.json` and `rule-metrics.json`; my sync one-liner's
+    `git add -A knowledge-base/` staged the markers and the `if [ -n "$(git status --porcelain)" ]`
+    guard read "there are changes" as "the regeneration produced changes" — it cannot tell a
+    resolution from a conflict. Both files were invalid JSON on `origin`. Recovery: regenerate
+    each from its producer (`regenerate-c4-model.sh`, `rule-metrics-aggregate.sh`), then a
+    repo-wide marker sweep. **Prevention:** never `git add -A` after a merge — check
+    `git diff --name-only --diff-filter=U` FIRST and resolve each path by name; for a generated
+    artifact the resolution is always "re-run the producer", never "take a side". A staged
+    conflict marker is the one class where the commit succeeds and the artifact is broken.
 
 ## Related
 

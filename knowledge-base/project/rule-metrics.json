@@ -1,10 +1,6 @@
 {
   "schema": 1,
-<<<<<<< HEAD
-  "generated_at": "2026-09-20T18:55:57Z",
-=======
-  "generated_at": "2026-09-20T20:11:41Z",
->>>>>>> origin/main
+  "generated_at": "2026-09-21T06:41:43Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1103,19 +1099,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-<<<<<<< HEAD
-      "applied_count": 38,
+      "applied_count": 40,
       "warn_count": 0,
-      "fire_count": 38,
+      "fire_count": 40,
       "prevented_errors": 0,
-      "last_hit": "2026-09-20T16:48:12Z",
-=======
-      "applied_count": 39,
-      "warn_count": 0,
-      "fire_count": 39,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-20T19:56:49Z",
->>>>>>> origin/main
+      "last_hit": "2026-09-20T20:18:03Z",
       "first_seen": "2026-05-22T07:01:41Z",
       "rule_text_prefix": ""
     },
@@ -1163,11 +1151,11 @@
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 68,
+      "applied_count": 65,
       "warn_count": 0,
-      "fire_count": 68,
+      "fire_count": 65,
       "prevented_errors": 0,
-      "last_hit": "2026-09-20T18:49:30Z",
+      "last_hit": "2026-09-20T16:31:30Z",
       "first_seen": "2026-07-20T15:27:35Z",
       "rule_text_prefix": ""
     },
@@ -1176,19 +1164,11 @@
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
-<<<<<<< HEAD
-      "applied_count": 99,
-      "warn_count": 0,
-      "fire_count": 99,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-20T18:55:43Z",
-=======
       "applied_count": 101,
       "warn_count": 0,
       "fire_count": 101,
       "prevented_errors": 0,
       "last_hit": "2026-09-20T20:11:23Z",
->>>>>>> origin/main
       "first_seen": "2026-07-20T12:16:48Z",
       "rule_text_prefix": ""
     },
@@ -1221,26 +1201,26 @@
     {
       "id": "hr-monitor-not-run-in-background-for-polling",
       "section": "Hard Rules",
-      "hit_count": 142,
+      "hit_count": 143,
       "bypass_count": 16,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 158,
-      "prevented_errors": 126,
-      "last_hit": "2026-09-20T18:47:38Z",
+      "fire_count": 159,
+      "prevented_errors": 127,
+      "last_hit": "2026-09-20T21:58:31Z",
       "first_seen": "2026-05-29T12:10:09Z",
       "rule_text_prefix": ""
     },
     {
       "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
-      "hit_count": 173,
+      "hit_count": 176,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 173,
-      "prevented_errors": 173,
-      "last_hit": "2026-09-20T18:43:23Z",
+      "fire_count": 176,
+      "prevented_errors": 176,
+      "last_hit": "2026-09-21T02:34:26Z",
       "first_seen": "2026-05-12T07:00:34Z",
       "rule_text_prefix": ""
     },
@@ -1249,45 +1229,37 @@
       "section": "Workflow Gates",
       "hit_count": 156,
       "bypass_count": 0,
-<<<<<<< HEAD
-      "applied_count": 30,
+      "applied_count": 32,
       "warn_count": 0,
-      "fire_count": 186,
+      "fire_count": 188,
       "prevented_errors": 156,
-      "last_hit": "2026-09-20T16:48:22Z",
-=======
-      "applied_count": 31,
-      "warn_count": 0,
-      "fire_count": 187,
-      "prevented_errors": 156,
-      "last_hit": "2026-09-20T19:56:49Z",
->>>>>>> origin/main
+      "last_hit": "2026-09-20T20:18:03Z",
       "first_seen": "2026-05-21T21:08:12Z",
       "rule_text_prefix": ""
     },
     {
       "id": "wg-defer-only-after-inline-triage",
       "section": "Workflow Gates",
-      "hit_count": 191,
+      "hit_count": 196,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 191,
-      "prevented_errors": 191,
-      "last_hit": "2026-09-20T17:39:36Z",
+      "fire_count": 196,
+      "prevented_errors": 196,
+      "last_hit": "2026-09-21T02:35:34Z",
       "first_seen": "2026-09-11T09:35:31Z",
       "rule_text_prefix": ""
     },
     {
       "id": "hr-never-git-stash-in-worktrees",
       "section": "Hard Rules",
-      "hit_count": 538,
+      "hit_count": 539,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 538,
-      "prevented_errors": 538,
-      "last_hit": "2026-09-20T16:36:27Z",
+      "fire_count": 539,
+      "prevented_errors": 539,
+      "last_hit": "2026-09-20T23:07:32Z",
       "first_seen": "2026-04-18T14:46:41Z",
       "rule_text_prefix": ""
     },
@@ -1311,36 +1283,24 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-<<<<<<< HEAD
-      "skill-security-scan": 463,
+      "skill-security-scan": 454,
       "gdpr-gate-cron-binding": 0,
-      "monitor-supersede": 555,
-      "net-issue-flow": 666,
-      "post-dispatch-watch-gate": 5586,
-      "guardrails-block-recursive-delete": 397,
-      "kb-domain-allowlist-guard": 228,
-=======
-      "monitor-supersede": 572,
       "net-issue-flow": 674,
-      "post-dispatch-watch-gate": 5588,
+      "net-issue-flow-body-attributed": 65,
+      "monitor-supersede": 641,
+      "post-dispatch-watch-gate": 5599,
       "guardrails-block-recursive-delete": 397,
-      "kb-domain-allowlist-guard": 230,
->>>>>>> origin/main
-      "guardrails-require-milestone": 542,
+      "kb-domain-allowlist-guard": 237,
+      "guardrails-require-milestone": 543,
       "context-reviewed-gate": 13,
-      "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 15,
+      "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 13,
       "git-commit-secret-scan": 431,
-      "pre-ask-technical-fork-gate": 59,
+      "pre-ask-technical-fork-gate": 11,
       "net-issue-flow-timeout": 45,
       "guardrails-block-commit-on-main": 106,
-      "pre-merge-auto-close-scan": 129,
+      "pre-merge-auto-close-scan": 130,
       "net-issue-flow-mandated-filing--hr-never-git-stash-in-worktrees": 1,
-      "guardrails-block-delete-branch": 130,
-<<<<<<< HEAD
-      "net-issue-flow-body-attributed": 61,
-=======
-      "net-issue-flow-body-attributed": 64,
->>>>>>> origin/main
+      "guardrails-block-delete-branch": 133,
       "guardrails-block-rm-rf-worktrees": 23,
       "guardrails-block-conflict-markers": 3,
       "prod-write-defer-git-push-main": 6,
@@ -1351,21 +1311,12 @@
       "guardrails-worktree-write-guard": 261,
       "context-reviewed-hook-self-fault": 1,
       "adr-033-inngest-cron-canonical": 30,
-<<<<<<< HEAD
-=======
-      "skill-security-scan": 478,
->>>>>>> origin/main
       "net-issue-flow-undelivered-declaration": 1,
       "pkill-self-match-guard-readonly": 8,
       "durable-reminder-prefer-inngest": 22,
       "prod-write-defer-doppler-prd-secrets": 6,
       "brand-hex-commit-gate": 6,
       "encryption-posture-design-time-default": 1,
-<<<<<<< HEAD
-=======
-      "gdpr-gate-cron-binding": 0,
->>>>>>> origin/main
-      "hook-input-empty": 1,
       "gdpr-gate-staleness": 440,
       "hook-input-unparseable": 13
     },
@@ -1376,20 +1327,13 @@
       },
       {
         "rule": "wg-block-pr-ready-on-undeferred-operator-steps",
-        "bypass_count": 15
+        "bypass_count": 13
       }
     ],
-<<<<<<< HEAD
-    "gate_override_count": 151,
+    "gate_override_count": 149,
     "gate_timeout_warn_count": 45,
-    "gate_failopen_warn_count": 115,
-    "gate_body_attributed_count": 61,
-=======
-    "gate_override_count": 152,
-    "gate_timeout_warn_count": 45,
-    "gate_failopen_warn_count": 118,
-    "gate_body_attributed_count": 64,
->>>>>>> origin/main
+    "gate_failopen_warn_count": 124,
+    "gate_body_attributed_count": 65,
     "gate_undelivered_declaration_count": 1,
     "gate_contradictory_declaration_count": 0,
     "gate_unbalanced_fence_count": 0,
@@ -1399,9 +1343,8 @@
     "drops_rotation_fail_count": 0,
     "grep_rewrite_fault_count": 0,
     "grep_rewrite_fault_reasons": {},
-    "hook_input_fault_count": 14,
+    "hook_input_fault_count": 13,
     "hook_input_fault_reasons": {
-      "empty": 1,
       "unparseable": 13
     }
   }
