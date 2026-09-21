@@ -621,6 +621,7 @@ canusetool
 cap
 cap-coupling
 cap-rpc
+capability-gates
 capability-matrix
 capability-precedent
 capacity
@@ -1412,6 +1413,7 @@ env-i
 env-inheritance
 env-injection
 env-leak
+env-markers
 env-parsing
 env-var
 env-var-inert-without-code
@@ -4201,6 +4203,7 @@ ux-of-shipping
 ux-review
 ux-wireframes
 vacuity
+vacuity-floor
 vacuous-ac
 vacuous-assertion
 vacuous-assertions
