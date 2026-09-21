@@ -786,3 +786,39 @@ Two distinct fabricators now exist and their dispositions differ:
 
 The two-arm guard note lives in `scripts/required-checks.txt` beside the
 entry; this paragraph is the decision record.
+
+## Amendment — 2026-09-21 (#8450): a fourth variant — the in-job step gate
+
+The `e2e` required context gains a path gate of a different shape than the
+three always-run aggregators above (`sentry-destroy-required`,
+`tenant-integration-required`, `vendor-pin-required`). Those gate a *job
+behind a `needs:`-fed `if:`* with an always-run aggregator as the registered
+context. `e2e` instead keeps its single job as the registered context and
+gates *inside* it: a first `Classify e2e applicability` step
+(`scripts/ci-e2e-classify.sh`, allowlist `knowledge-base/**` + root `*.md`)
+emits `applicable`, and the heavy steps carry
+`if: steps.detect.outputs.applicable == 'true'`.
+
+**Why this variant and not the aggregator.** A separate `detect-changes` job
+plus `needs:` edge was designed first and rejected on review: a failed
+detector job would needs-skip `e2e`, and a skipped required check posts
+GREEN — fabricating the certification on exactly the outage it must not
+outlive (the fail-open this file's amendments keep closing). In-job
+detection has no `needs:` edge to break: classifier failure exits the step
+and reds the job — an honest red, never a fabricated skip. A job-level `if:`
+on `e2e` itself was considered and explicitly rejected for the same reason:
+it would green-skip with no verdict step.
+
+**The residual this variant accepts (recorded, not hidden).** A green-skip
+still occupies a runner slot for job setup + the Playwright container pull —
+measured ~1–2 min of the ~4.2 min job. The gate saves the two `npm ci`
+installs and the test run, not the slot acquisition. A future "optimize to
+job-level `if:`" must not land for the reason above.
+
+**Reopener (iii) bookkeeping.** The 2026-09-14 amendment names an org plan
+change (Free 20 → Team 60) as reopener (iii) for the merge queue. #8450 is
+that plan change's driver. This amendment does NOT flip the reopener — the
+queue still needs (a) or (b) — but the capacity factor it cited is expected
+to dissolve post-upgrade; a post-upgrade commit records the observed
+deploy-arm tail and re-evaluates (iii) against the new pool. The queue stays
+off until then; nothing here re-enables it.

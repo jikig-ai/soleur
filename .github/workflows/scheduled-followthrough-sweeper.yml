@@ -43,6 +43,10 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  # (#8450) the actions-queue-tail probe reads Actions run/job data via `gh api`
+  # — under an explicit permissions block an unlisted scope is `none`, which is
+  # a silent 403 for that probe.
+  actions: read
 
 jobs:
   sweep:
