@@ -1473,3 +1473,34 @@ on #8349. The reading stays takeable for roughly one to two weeks after day 7; a
 heaviest slice outgrows the host's page budget and the probe reports CANNOT ESTABLISH until the
 tracker is closed, which is expected. The status stays `adopting` until the day-7 reading is clean
 outside the explained set; this addendum flips nothing.
+
+## Addendum — 2026-09-20 (#8079) — `op=registry-probe` becomes three-valued, and the dark-host gate gains a second consumer
+
+**What changed.** `op=registry-probe` used to have two outcomes: a live `registry_empty=` reading on
+HTTP 200, or `exit 1` on any non-200. Since #8079 its non-200 branch routes through the same
+`inngest_execute_registry_gate` that op=execute step 2.0 consumes (`tests/scripts/lib/inngest-host-dark-gate.sh`,
+#8054), so the op now has THREE outcomes: the live reading (exit 0, `registry_empty=…`), a
+`HOST-STATE VERDICT: dark` (exit 0, NO `registry_empty=` line, a `::warning::` naming what was not
+measured), and a `REFUSED (<token>)` (exit 1) whose remedy is written for a standalone read-only
+diagnostic — never a mutating op, never SSH. The plan at
+`knowledge-base/project/plans/archive/20260920-221311-2026-09-20-fix-registry-probe-dark-gate-plan.md` is the design record
+(D1–D10 and its review round).
+
+**Why `dark` exits 0 here.** The op answers "is the dedicated registry empty"; a dark host answers
+that question from its own rows rather than from a live read, which is a verdict, not a failure to
+run. Non-zero is reserved for "could not measure". The confusion cost — a green run that measured no
+registry — is paid in the message: the notice omits the `registry_empty=` triple and the warning says
+so. The runbook's Window procedure 1(a) and pre-flight-hang item 3 read it that way.
+
+**What `dark` establishes post-cutover, precisely.** The cutover completed on 2026-09-15 (addendum
+above), so `dark` is reachable today only after `op=rollback` — which is `systemctl stop` on the same
+`boot_id`. The gate establishes "not serving as of the newest probe row, flag pre-arm on the
+heartbeat, no FSM transition since". It does NOT establish "nothing registered since boot": the
+server served ~70 registered functions on that boot before the stop, and those registrations persist
+in the durable backend. The op's messages were corrected to that scope in the #8426 review.
+
+**The duplication is accepted and ledgered.** The probe arm's plumbing is byte-parallel to 2.0's
+(prefix-normalised and pinned by the suite's plumbing-parity guard; `SOLEUR-DEBT` marker at the arm's
+head, trigger: a third consumer). The lib's header still names 2.0 as its consumer; the census in
+`apps/web-platform/infra/cutover-inngest-workflow.test.sh` pins the consumer set at exactly
+`{execute, registry-probe}` by occurrence count over every arm plus the whole file.

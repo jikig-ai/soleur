@@ -122,6 +122,15 @@ on:
       # apps/web-platform/infra/inngest-cutover-flip.sh, needs no entry — `apps/*/infra/**`
       # already covers it, so adding a terminal reason there does run the parity guard.)
       - ".github/workflows/cutover-inngest.yml"
+      # (#8079 review) Since ADR-150 the cutover body lives in scripts/cutover-inngest.sh, and the
+      # suite reads it as BODY_SH plus the dark-gate lib and the read classifier it renders the
+      # arms against. None of the three matched any glob above, so a PR editing ONLY the arm —
+      # the shape of every remedy edit — skipped the one suite that pins its plumbing parity,
+      # its admission literal and its 30-odd renders. Same class as the two comments above and
+      # as #8378 ("the gate that caught it was the one suite I had no reason to run").
+      - "scripts/cutover-inngest.sh"
+      - "tests/scripts/lib/inngest-host-dark-gate.sh"
+      - "scripts/lib/betterstack-read-classify.sh"
       # (#7674) inngest-dedicated-host-classify.test.sh asserts the dedicated-host arm OF
       # scheduled-inngest-health.yml -- the no-restart contract, the host isolation, and the
       # decode-before-match. Same reason as the entry above: without this path a PR editing only
