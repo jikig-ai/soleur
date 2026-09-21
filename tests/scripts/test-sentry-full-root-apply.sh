@@ -23,7 +23,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WORKFLOW="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
+# Override exists for mutation testing only: point it at a mutated COPY, never edit the
+# tracked workflow in place to prove a guard can go red.
+WORKFLOW="${SENTRY_APPLY_WORKFLOW_OVERRIDE:-$REPO_ROOT/.github/workflows/apply-sentry-infra.yml}"
 SCOPE_GUARD="$REPO_ROOT/tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
 FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-sentry.jq"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
@@ -478,8 +480,137 @@ PYEOF
     _report "T14 apply-job fidelity wiring" fail "$out"
   fi
 }
+# ── T15-T18 (#8451) — Guard 3: single-attempt 410 handler at both plan sites ──
+# Sentry REMOVED the legacy alert-rule API (a persistent 410, "This API no longer
+# exists"), and after #8451 no `sentry_issue_alert` resource remains, so the old
+# brownout retry ladder was unreachable and was deleted. Both plan sites now run
+# `terraform plan` ONCE; on a 410 the handler names the failing addresses and says
+# only what was measured. Each slice runs from the anchor comment to the next line
+# that is exactly `          set -e`.
+#
+# MUTATION MATRIX (plan §Guard 3), demonstrated against a mutated COPY via
+# SENTRY_APPLY_WORKFLOW_OVERRIDE:
+#   1 `exit $rc` -> `exit 0` at either site                 RED (T16, T18)
+#   2 delete one anchor, or add a third                     RED (T15)
+#   3 apply slice loses its `got status 410` branch         RED (T16, T18)
+#   4 add while/sleep/a second `terraform plan` to a slice  RED (T16)
+#   5 drop `rm -f /tmp/sentry-plan.out` from a slice        RED (T16)
+#   6 the real workflow, unmodified                         PASS
+G3_ANCHOR='          # sentry-plan-410-handler (#8451)'
+
+# Writes slice files slice1, slice2, ... into dir $2; prints the anchor count.
+_g3_slices() {
+  awk -v anchor="$G3_ANCHOR" -v dir="$2" '
+    $0 == anchor { n++; inside = 1; out = dir "/slice" n }
+    inside       { print > out }
+    inside && $0 == "          set -e" { inside = 0; close(out) }
+    END          { print n + 0 }
+  ' "$1"
+}
+
+t_g3_anchor_count() {
+  local d n; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  rm -rf "$d"
+  if [[ "$n" == "2" ]]; then
+    _report "T15 exactly 2 sentry-plan-410-handler anchors (plan_pr + apply)" ok
+  else
+    _report "T15 exactly 2 sentry-plan-410-handler anchors" fail "found $n"
+  fi
+}
+
+t_g3_slice_shape() {
+  local d n i f body bad=""; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  for (( i = 1; i <= n; i++ )); do
+    f="$d/slice$i"
+    if [[ "$(tail -n 1 "$f")" != "          set -e" ]]; then bad+=" slice$i:unterminated"; continue; fi
+    # Executable lines only: the comments legitimately say "terraform plan" and "retry".
+    body=$(grep -vE '^[[:space:]]*#' "$f" || true)
+    # Invocations only: the `::error::terraform plan failed` echoes name it too.
+    [[ "$(grep -cE '^[[:space:]]*terraform plan([^[:alnum:]_]|$)' <<<"$body" || true)" == "1" ]] || bad+=" slice$i:terraform-plan-count"
+    ! grep -qE '(^|[^[:alnum:]_])(while|until|sleep)([^[:alnum:]_]|$)|plan_backoff' <<<"$body" || bad+=" slice$i:loop-or-sleep"
+    grep -qxE '[[:space:]]*rm -f /tmp/sentry-plan\.out' <<<"$body" || bad+=" slice$i:no-rm-f"
+    grep -qE '(^|[[:space:]])exit \$rc$' <<<"$body" || bad+=" slice$i:no-exit-rc"
+    grep -qF 'got status 410' <<<"$body" || bad+=" slice$i:no-410-branch"
+    grep -qxE '[[:space:]]*set \+e' <<<"$body" || bad+=" slice$i:no-set+e"
+    # rm -f must come BEFORE the plan, or a failed tee leaves a stale 410 for the grep.
+    [[ "$(grep -nE 'rm -f /tmp/sentry-plan\.out|^[[:space:]]*terraform plan' <<<"$body" | head -n 1 || true)" == *"rm -f"* ]] || bad+=" slice$i:rm-after-plan"
+  done
+  rm -rf "$d"
+  if [[ "$n" -ge 1 && -z "$bad" ]]; then
+    _report "T16 each 410-handler slice: one terraform plan, no loop/sleep, rm -f before plan, set +e, a 410 branch, exit \$rc ($n slices)" ok
+  else
+    _report "T16 410-handler slice shape" fail "slices=$n;$bad"
+  fi
+}
+
+t_g3_no_ladder_residue() {
+  local hits
+  hits=$(grep -nE 'plan_backoff|brownout_only|SOLEUR_SENTRY_''BROWNOUT|retries for exactly this' "$WORKFLOW" || true)
+  if [[ -z "$hits" ]]; then
+    _report "T17 no brownout-ladder residue (plan_backoff / brownout_only / markers / 'retries for exactly this')" ok
+  else
+    _report "T17 brownout-ladder residue" fail "$hits"
+  fi
+}
+
+# Executes each slice for real, under the shell Actions uses, with `terraform`
+# stubbed. The fixture is synthesized in the shape of the #8451 run log.
+t_g3_handler_executes() {
+  local d n i f out rc bad=""; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  mkdir -p "$d/bin"
+  cat > "$d/bin/terraform" <<'STUB'
+#!/usr/bin/env bash
+case "$G3_MODE" in
+  ok)    echo "No changes."; exit 0 ;;
+  410)   printf 'Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n\n  with sentry_alert.synthetic_one,\n  on synthetic.tf line 1, in resource "sentry_alert" "synthetic_one":\n\nError: Unable to read, got status 410: {"detail":"This API no longer exists."}\n\n  with sentry_issue_alert.synthetic_two,\n  on synthetic.tf line 9, in resource "sentry_issue_alert" "synthetic_two":\n'; exit 1 ;;
+  mixed) printf 'Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n\n  with sentry_alert.synthetic_one,\n  on synthetic.tf line 1:\n\nError: Invalid reference\n\n  with sentry_cron_monitor.synthetic_three,\n  on synthetic.tf line 20:\n'; exit 1 ;;
+  boxed) printf '╷\n│ Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n│ \n│   with sentry_alert.synthetic_one,\n│   on synthetic.tf line 1:\n╵\n'; exit 1 ;;
+  other) printf 'Error: Invalid provider configuration\n\n  with sentry_cron_monitor.synthetic_three,\n'; exit 1 ;;
+esac
+STUB
+  chmod +x "$d/bin/terraform"
+  _g3_run() {  # $1 slice file, $2 mode -> sets out, rc
+    local script="$d/run.sh"
+    { echo 'set -uo pipefail'; sed -e 's/^          //' -e "s#/tmp/sentry-plan\.out#$d/plan.out#g" "$1"; echo 'echo G3_REACHED_END'; } > "$script"
+    rc=0
+    out=$(cd "$d" && G3_MODE="$2" PATH="$d/bin:$PATH" bash --noprofile --norc -eo pipefail "$script" 2>&1) || rc=$?
+  }
+  for (( i = 1; i <= n; i++ )); do
+    f="$d/slice$i"
+    _g3_run "$f" 410
+    [[ "$rc" == "1" ]] || bad+=" slice$i:410:rc=$rc"
+    grep -F '::error::' <<<"$out" | grep -F 'on its only attempt' | grep -F 'sentry_alert.synthetic_one' | grep -qF 'sentry_issue_alert.synthetic_two' || bad+=" slice$i:410:annotation"
+    _g3_run "$f" mixed
+    [[ "$rc" == "1" ]] || bad+=" slice$i:mixed:rc=$rc"
+    # Only the 410 stanza's address may be named as a 410.
+    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:mixed:annotation"
+    ! grep -F '::error::' <<<"$out" | grep -qF 'synthetic_three' || bad+=" slice$i:mixed:names-non-410"
+    _g3_run "$f" boxed
+    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:boxed:annotation"
+    _g3_run "$f" other
+    [[ "$rc" == "1" ]] || bad+=" slice$i:other:rc=$rc"
+    grep -qxF '::error::terraform plan failed (exit 1)' <<<"$out" || bad+=" slice$i:other:annotation"
+    ! grep -qF '410' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:other:claims-410"
+    _g3_run "$f" ok
+    [[ "$rc" == "0" ]] && grep -qxF 'G3_REACHED_END' <<<"$out" || bad+=" slice$i:ok:rc=$rc"
+  done
+  rm -rf "$d"
+  if [[ "$n" -ge 1 && -z "$bad" ]]; then
+    _report "T18 each 410-handler slice, executed with a stubbed terraform: 410 -> non-zero + names both addresses; mixed -> names only the 410 address; boxed diagnostics parse; other -> plain error; success -> falls through ($n slices)" ok
+  else
+    _report "T18 410-handler execution" fail "slices=$n;$bad"
+  fi
+}
+
 t_no_unbracketed_status_capture
 t_apply_job_fidelity_wiring
+t_g3_anchor_count
+t_g3_slice_shape
+t_g3_no_ladder_residue
+t_g3_handler_executes
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
