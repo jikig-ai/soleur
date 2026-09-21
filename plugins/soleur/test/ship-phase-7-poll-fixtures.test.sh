@@ -97,6 +97,9 @@ assert_fixture_dir "$PLUGIN_COPY"
 { cp -R "$REPO_ROOT/plugins/soleur/.claude-plugin" "$PLUGIN_COPY/" \
     && cp -R "$REPO_ROOT/plugins/soleur/scripts" "$PLUGIN_COPY/"; } \
   || { printf 'FATAL: could not copy the plugin root into %s\n' "$PLUGIN_COPY" >&2; exit 1; }
+# The default root carries NO regenerable-conflict resolver, so a DIRTY scenario reaches
+# the DIRTY exit exactly as before ADR-235. Scenario 4r supplies a stub resolver.
+rm -f "$PLUGIN_COPY/scripts/resolve-regenerable-conflicts.sh"
 
 # ---------------------------------------------------------------------------
 # Extract the Phase 7 bash block. Two anchors:
@@ -165,6 +168,16 @@ else
   # mirror without them (mutation row 5). `git merge --abort` is deliberately
   # NOT a token — the pre-fix mirror already carries it, so it discriminates
   # nothing.
+  #
+  # The last two tokens pin the ADR-235 regenerable-artifact arm. They are here
+  # because this list did NOT cover it and the omission was invisible: #8377
+  # added the arm to ship's block only, and merge-pr/SKILL.md's mirror-invariant
+  # line claims "a parity token list pins the arm's spelling — so a behavioural
+  # fix applied to one block reddens the suite until it lands in the other".
+  # Measured at that commit: ship carried 5 references, the mirror carried 0,
+  # and this suite was 191/191 GREEN. The claim was false for precisely the arm
+  # the PR had just added, which is worse than no claim — the next editor trusts
+  # it and skips the cross-grep the same line tells them to do anyway.
   for token in 'MAX_BEHIND_SYNCS=6' 'mergeStateStatus' 'bucket == "fail"' \
                '[ship.phase7.required_failed]' '[ship.phase7.dirty]' \
                '[ship.phase7.behind_exhausted]' '*DIRTY*' 'mapfile -t REQUIRED_CHECKS' \
@@ -175,7 +188,9 @@ else
                'fetch_failures=' 'PR="4387"' '[[ $PR =~ ^[0-9]+$ ]] ||' \
                'behind_pushes=$((behind_pushes+1))' '(( behind_pushes == 2 ))' \
                '11) behind_syncs=$((behind_syncs-1))' '[ship.phase7.behind_no_sync]' \
-               'trap '"'"'rm -f "$SYNC_SNAP"'"'"' EXIT' 'ADR-179 identity check'; do
+               'trap '"'"'rm -f "$SYNC_SNAP"'"'"' EXIT' 'ADR-179 identity check' \
+               'resolve-regenerable-conflicts.sh" origin/main' \
+               'regen resolved — merge committed locally'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
@@ -570,6 +585,48 @@ run_scenario_both "4b-dirty-locally-clean" "$SCEN4B" \
   "auto-sync 1(/6)? pushed" \
   "\[ship\.phase7\.dirty\]|ship\.phase7\.behind_exhausted|UNEXPECTED gh call"
 rm -f "$SCEN4B"
+
+# Scenario 4r — DIRTY with a real merge-tree conflict that the ADR-235 resolver
+# settles (a stub here: it exits 0, as the real one does after committing the
+# merge). The fence must NOT exit on DIRTY: it treats the state as BEHIND and
+# pushes through sync-pr-behind.sh --step, never with a push of its own (AC1).
+# ---------------------------------------------------------------------------
+REGEN_ROOT="$(mktemp -d)"
+assert_fixture_dir "$REGEN_ROOT"
+_TMP_OWNED+=("$REGEN_ROOT")
+cp -R "$PLUGIN_COPY/.claude-plugin" "$PLUGIN_COPY/scripts" "$REGEN_ROOT/"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$REGEN_ROOT/scripts/resolve-regenerable-conflicts.sh"
+SCEN4R="$(mktemp)"
+_TMP_OWNED+=("$SCEN4R")
+cat > "$SCEN4R" <<EOF
+${PRELUDE}
+git() {
+  case "\$1 \${2:-}" in
+    "merge-tree "*) return 1 ;;
+    *) _git_base "\$@" ;;
+  esac
+}
+gh() {
+  case "\$1 \$2" in
+    "pr view")
+      if [[ -e "\$MOCK_STATE/dirty_seen" ]]; then
+        echo "OPEN BLOCKED"
+      else
+        : > "\$MOCK_STATE/dirty_seen"
+        echo "OPEN DIRTY"
+      fi
+      ;;
+    "pr checks") : ;;
+    "api "*)     : ;;
+    *) _gh_unexpected "\$@" ;;
+  esac
+}
+EOF
+SCEN_ROOT="$REGEN_ROOT" run_scenario_both "4r-dirty-regen-resolved" "$SCEN4R" \
+  "\[ship\.phase7\.dirty\] regen resolved — merge committed locally
+auto-sync 1(/6)? pushed" \
+  "PR is DIRTY \(merge conflict\)|ship\.phase7\.behind_exhausted|UNEXPECTED gh call"
+rm -f "$SCEN4R"
 
 # Scenario 4c — DIRTY, but the fetch that classifies it fails. A fetch outage
 # is not a conflict: the arm must report kind=fetch and let the next tick

@@ -156,53 +156,34 @@ For each conflicted file, apply the appropriate resolution strategy:
 |-------------|----------|
 | `plugins/soleur/CHANGELOG.md` | Merge both sides -- see 3.2 |
 | `plugins/soleur/README.md` | Accept feature branch component counts |
-| Generated artifacts | See 3.2b. **The three knowledge-base artifacts are an EXCEPTION — never `--theirs` on them** |
+| Generated artifacts | See 3.2b. **The knowledge-base caches are untracked and cannot conflict — see the transition note** |
 | Everything else | Claude-assisted resolution -- see 3.3 |
 
-**Generated artifacts (3.2b).** A generated file has no authorial intent to preserve, so 3.3 does not apply to it: hand-picking hunks produces an artifact that matches neither side's source and that no generator would emit. Resolve by discarding both sides and regenerating from the merged source. Known members and their owning generators: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` → [regenerate-c4-model.sh](../../../../scripts/regenerate-c4-model.sh) (verify with [c4-model-freshness.test.sh](../../test/c4-model-freshness.test.sh), which is exactly the in-sync assertion), and `knowledge-base/project/rule-metrics.json` → [rule-metrics-aggregate.sh](../../../../scripts/rule-metrics-aggregate.sh). Lockfiles follow the same shape with a pinned toolchain — see [drain-prs/SKILL.md](../drain-prs/SKILL.md) §6(a).
+**Generated artifacts (3.2b).** A generated file has no authorial intent to preserve, so 3.3 does not apply to it: hand-picking hunks produces an artifact that matches neither side's source and that no generator would emit. Resolve by discarding both sides and regenerating from the merged source. The one known member is `knowledge-base/engineering/architecture/diagrams/model.likec4.json` → [regenerate-c4-model.sh](../../../../scripts/regenerate-c4-model.sh) (verify with [c4-model-freshness.test.sh](../../test/c4-model-freshness.test.sh), which is exactly the in-sync assertion). Every other generated artifact in this repo is an untracked cache and cannot reach a merge at all. Lockfiles follow the same shape with a pinned toolchain — see [drain-prs/SKILL.md](../drain-prs/SKILL.md) §6(a).
 
-**In the Soleur repository**, the three generated knowledge-base artifacts are members of 3.2b, and the generic 3.2b remedy is WRONG for them. (This paragraph's script paths exist only in that repo; a self-hosted install has no [merge-kb-index.sh](../../../../scripts/merge-kb-index.sh).) `knowledge-base/INDEX.md`, `knowledge-base/kb-tags.txt` and `knowledge-base/kb-categories.txt` are all emitted by [generate-kb-index.sh](../../../../scripts/generate-kb-index.sh), but "take `--theirs`, then re-run the owning generator" drops rows for these three: regenerating runs against **one side's** file set, which never contains the knowledge-base files the other side added. That is the exact silent row-drop #7935 records — it discarded an ADR index entry three separate times on PR #7896, caught only by an ad-hoc `grep -c` after each resolve.
+**In the Soleur repository the knowledge-base caches cannot conflict at all, because they are not committed** ([ADR-235](../../../../knowledge-base/engineering/architecture/decisions/ADR-235-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md)). `knowledge-base/INDEX.md`, `kb-tags.txt`, `kb-categories.txt` and `knowledge-base/project/rule-metrics.json` are gitignored: each is a pure function of the tree (or, for the metrics aggregate, of gitignored local data), so it is regenerated on demand instead of merged. If one of them appears in a conflict list, something has force-added it — that is the bug, not the conflict.
 
-`INDEX.md` is resolved instead by the `merge=kb-index` driver in the root `.gitattributes` ([merge-kb-index.sh](../../../../scripts/merge-kb-index.sh)); the two facet files use git's built-in `merge=union`. **If any of the three ever presents as conflicted, the remedy is to fix the driver's registration (`bash scripts/install-kb-merge-driver.sh`) and re-run the merge — never side-pick, and never hand-edit.**
+This replaces a merge driver that #7935 registered for `INDEX.md` and #8377 retired along with `.gitattributes`, its SessionStart installer and the resolution playbook that used to sit here. The driver worked locally and was **structurally unable** to run server-side, which is where the cost actually landed: GitHub's merge cannot run a driver from `git config`, so every `gh pr update-branch`, every "Update branch" button and every strict-up-to-date auto-merge resolved the index with the default text merge. 71 of 102 first-parent `main` commits in the week before the change touched `INDEX.md`, so open PRs paid the conflict on nearly every advance — PRs #8319 / #8321 / #8347 took 7 / 11 / 3 forced resyncs. An untracked file removes the mechanism rather than automating its resolution.
 
-**A SERVER-SIDE update cannot run the driver — when BOTH sides move `INDEX.md`'s header to the same VALUE, never clear a stale PR with `gh pr update-branch`.** `gh pr update-branch` (and the "Update branch" button) merges on GitHub's servers, where the root `.gitattributes` `merge=kb-index` routing is inert: a merge driver lives in local `git config` (registered by [install-kb-merge-driver.sh](../../../../scripts/install-kb-merge-driver.sh) via `git config --replace-all`), never in the tree — so the server resolves `INDEX.md` with the default text merge, which knows nothing about the derived `> Total files:` header. This is the fallback [ADR-210](../../../../knowledge-base/engineering/architecture/decisions/ADR-210-regenerating-merge-driver-for-committed-generated-artifacts.md) already documents (git gives *no signal at all* when `.gitattributes` names an unregistered driver), in the one environment where the installer can never be run. It is also the second instance of a documented class — [`update-branch` merges text but runs no generator](../../../../knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch-drifts-lockfiles-and-npm11-pin.md), recorded there against lockfiles and carried by `cq-before-pushing-package-json-changes`.
-
-Three outcomes, and the silent one needs BOTH halves:
-
-- **Both sides' regenerated header lands on the same value, AND their new rows sort to different slots** — git sees no conflicting change on the header and union-merges the bodies, so every row survives and only the derived count is short. MEASURED on #8186 (merge `ab10434d6`, remedied by `ebb692cda`): base `6548`, ours `6549`, theirs `6549`, merged `6549` — against an actual 6550, with the committed-vs-fresh diff exactly ONE line and both facet files byte-identical. Note the predicate is the header VALUE, not the number of files added: ours added 1 file and theirs 4, but [generate-kb-index.sh](../../../../scripts/generate-kb-index.sh) excludes `archive/`, so the counted delta was 1 on each side. A same-sized DELETE on both sides collides identically, in the opposite direction (header > body, an overcount, whose later local-merge sentinel blames a hand-edit and never names `update-branch`).
-- **Same value, but the new rows sort into the same slot** — the header merges silently and the BODY conflicts, so the path goes `DIRTY` anyway. Same-day learnings in the same directory are the usual trigger; one unchanged row between the two insertions is enough to avoid it, so which of these two outcomes you get is a second coin flip after the count.
-- **The two values differ** — the header itself conflicts, `DIRTY` again. A conflicted PR has no merge ref, so `pull_request` workflows never dispatch — and the absent checks read as a **false green**, not as pending: `gh pr checks` has reported "all settled, zero failures" on a PR whose CI had never run (see [2026-07-16 learning](../../../../knowledge-base/project/learnings/2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md) `## Session Errors`). Read `mergeStateStatus`, and assert the checks you expect are PRESENT.
-
-Note the failure shape: this corrupts the derived header and loses NO rows — the opposite of the silent row-drop 3.2b warns about above, and the reason a row-count-preserving check cannot catch it.
-
-**If only ONE side changed `INDEX.md` the server-side merge is correct** — it takes that side, *provided the other side added no counted knowledge-base file at all*. A side that added files without regenerating is a stale index, not an unchanged one. Arming auto-merge is not a way around any of this: under strict up-to-date the branch must still be brought up to date before it can merge, and every server-side route to that — the button, `gh pr update-branch`, or anything GitHub does on your behalf — runs the same driverless merge. Which one produced a given update is not recoverable after the fact: the commit is `author: <PR author> / committer: GitHub` in every case, and the timeline emits no event for it.
-
-The remedy is the ordinary local merge this section already describes — `git merge origin/main` in a worktree, where the driver runs — then push. Prove it rather than assuming: re-run `bash scripts/generate-kb-index.sh` and require `git diff --quiet knowledge-base/`; a NON-CONFLICTING index is not necessarily a FRESH one, and only the first of the three cases above is non-conflicting. Do not wait for CI to tell you — the freshness check reaches CI only through the `AC17` path described below, and lefthook's `generate-kb-index` job silently regenerates and re-stages on the next local commit that stages any `knowledge-base/*.md`, erasing the evidence before `AC17` ever sees it.
-
-**Do not go looking for conflict markers on these paths.** When a merge driver exits non-zero git marks the path `UU`, leaves ours content in place, and writes **no markers of its own** — so the file reads as cleanly merged and 3.3's first instruction ("read the file with conflict markers") leads straight to `git add` of a wrong index. The driver writes its own `<<<<<<< kb-index:` sentinel line precisely so that failure is visible and trips `guardrails:block-conflict-markers`.
-
-**Read the sentinel, then pick the remedy — they are not all registration.** The sentinel now names its own cause in parentheses, and the driver's stderr from the failing merge says the same thing.
-
-| What you see | What it means | Remedy |
-|---|---|---|
-| Sentinel says `both sides retitled …` or `added on both sides …` | A genuine human decision the driver refuses to make for you | Pick the title, re-run `bash scripts/generate-kb-index.sh`, `git add` |
-| Sentinel says `duplicate row …`, `rel … escapes`, `… ambiguous`, `round-trip validation failed` | An input that is not a canonical generated index — usually a hand-edited or previously line-merged file | Regenerate that side, then re-run the merge |
-| Sentinel says `render library …` | The driver is registered but its library is missing on this branch | Check out the full tree; `install-kb-merge-driver.sh` cannot fix a missing FILE |
-| Sentinel says `unhandled failure at line …` | A driver bug | File it with the sentinel text |
-| **No sentinel at all** | The driver did not COMPLETE | See below — this is the one case that is often registration |
-
-**No sentinel does NOT prove "unregistered".** It means the driver never reached its own error handling, and there are at least three ways: it is unregistered; it is registered but [merge-kb-index.sh](../../../../scripts/merge-kb-index.sh) is absent or unreadable on this branch (a partial cherry-pick or revert); or the command cannot execute. Discriminate before acting, because re-running the installer succeeds silently in two of the three:
+**TRANSITION — a branch opened before #8377 merged hits this exactly once.** Such a branch still tracks the four files, `main` has deleted them, and the next sync is therefore a **modify/delete** conflict rather than a content one. It is resolved by untracking them on that branch, with no regeneration and no side-picking:
 
 ```bash
-git config --get merge.kb-index.driver   # empty => unregistered; run the installer
-ls -l scripts/merge-kb-index.sh scripts/lib/kb-index-render.sh   # missing => a tree problem, not a config one
+git rm --cached knowledge-base/INDEX.md knowledge-base/kb-tags.txt \
+                knowledge-base/kb-categories.txt knowledge-base/project/rule-metrics.json
 ```
 
-**A `kb-tags.txt` / `kb-categories.txt` merge never conflicts and can still leave CI red** — red via the `AC17` case in `plugins/soleur/test/kb-index-merge-driver.test.sh`, which is `--check`'s only real-tree caller and reaches CI through `SUITE_GLOBS`; there is no step for it in `.github/workflows/` or `lefthook.yml`, so grepping those finds nothing.** Those two use git's built-in `merge=union`, whose output is not sorted the way the generator writes it, and nothing regenerates between a clean auto-committing merge and CI. If `generate-kb-index.sh --check` reds on a facet file after a merge, that is expected and the fix is one command:
+Then commit the merge as usual. Nothing on disk is lost — [ensure-kb-index.sh](../../../../scripts/ensure-kb-index.sh) regenerates the three index files on the next read, and [rule-prune.sh](../../../../scripts/rule-prune.sh) regenerates the aggregate before reading it. This is deliberately a documented one-liner rather than a sweep script: it runs once per affected branch, on a conflict whose owner is already resolving it, and a tool that force-pushes ~20 branches is a worse failure mode than ~20 blocking conflicts.
+
+**The one generated artifact that IS still committed is `model.likec4.json`**, because the web-platform C4 viewer (`app/api/kb/c4/project/route.ts`) fetches the committed blob from GitHub on the request path with no build step, so it has to exist as a committed blob. It stays a member of 3.2b, and on the sync path it is resolved automatically: [resolve-regenerable-conflicts.sh](../../scripts/resolve-regenerable-conflicts.sh) completes the merge and re-runs [regenerate-c4-model.sh](../../../../scripts/regenerate-c4-model.sh) against the **merged** tree, which is the step that makes regeneration correct where side-picking is not. It is called by `sync-pr-behind.sh`, `pre-merge-rebase.sh` and ship Phase 7; resolving by hand is the same operation:
 
 ```bash
-bash scripts/generate-kb-index.sh && git add knowledge-base/kb-tags.txt knowledge-base/kb-categories.txt
+git merge origin/main            # leaves model.likec4.json conflicted
+bash scripts/regenerate-c4-model.sh
+git add knowledge-base/engineering/architecture/diagrams/model.likec4.json
+git commit --no-edit
 ```
+
+The regeneration script validates on diagnostics and element count and exits non-zero on a fault, so a broken `.c4` source surfaces instead of committing an empty model.
 
 **For README.md (accept feature branch):**
 
@@ -456,9 +437,19 @@ while true; do
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$fetch_rc — fetch origin main failed while classifying DIRTY — retrying next tick"
     elif mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
       s="OPEN BEHIND"
+    elif [[ "$sync_ok" -eq 1 && -f "$SYNC_ROOT/scripts/resolve-regenerable-conflicts.sh" ]] \
+         && bash "$SYNC_ROOT/scripts/resolve-regenerable-conflicts.sh" origin/main; then
+      # ADR-235: the resolver merged and regenerated model.likec4.json from the MERGED
+      # sources and committed locally; it never pushes. Treat the state as BEHIND so the
+      # push goes through the one implementation below: sync_step's merge is then a no-op
+      # and HEAD is ahead of its upstream, so it pushes (or stops with kind=push).
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] regen resolved — merge committed locally; pushing via sync-pr-behind.sh"
+      s="OPEN BEHIND"
     else
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll"
+      echo "Conflicted paths (merge-tree; no merge is in progress, so --diff-filter=U is empty):"
       printf '%s\n' "$mt_out" | grep '^CONFLICT ' || true
+      echo "Resolve locally: git merge origin/main"
       break
     fi
   fi

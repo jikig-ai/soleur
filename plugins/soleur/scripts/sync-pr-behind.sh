@@ -228,9 +228,19 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
     fi
     rc=0; mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
-      tag merge "$rc" "merge conflict — manual resolution required (merge-tree). Next: git merge origin/main, resolve, commit, push, then re-run. Conflicted paths:"
-      printf '%s\n' "$mt_out" | grep '^CONFLICT ' || true
-      exit 6
+      # REGENERABLE-ARTIFACT CONFLICT (ADR-235): model.likec4.json is still committed, so
+      # it conflicts whenever two branches touch the .c4 sources. The resolver merges and
+      # regenerates it from the MERGED sources; it fails closed (touches nothing unless it
+      # committed) and never pushes. It ships beside this script; the target stays $PWD.
+      # After it commits, sync_step's merge is a no-op and HEAD != @{u}, so it pushes.
+      resolver="$(dirname "${BASH_SOURCE[0]}")/resolve-regenerable-conflicts.sh"
+      if [[ -f "$resolver" ]] && bash "$resolver" origin/main; then
+        tag regen_resolved 0 "regenerable conflict resolved — merge committed locally"
+      else
+        tag merge "$rc" "merge conflict — manual resolution required (merge-tree). Next: git merge origin/main, resolve, commit, push, then re-run. Conflicted paths:"
+        printf '%s\n' "$mt_out" | grep '^CONFLICT ' || true
+        exit 6
+      fi
     fi
   fi
 

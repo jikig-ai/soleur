@@ -2112,11 +2112,8 @@ green. `gh pr checks` then reports "all checks settled, zero failures" over zero
 **"No failures" and "the checks ran" are different claims**, and a conflicting PR silently
 produces the first without the second. Assert the checks you *expect* are **present**, not merely
 non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)" --jq '[.workflow_runs[].name]'`.
-The same ref is also why AC17 (`INDEX.md` `Total files`) can go red with a clean local regeneration: GitHub
-merges `refs/pull/N/merge` without the `kb-index` driver named in `.gitattributes`, so when main gained a KB
-file after your last sync the merge ref's count is one short while your head is self-consistent. Do not chase
-it on the branch head — `pre-merge-rebase.sh`'s `git merge origin/main` on `gh pr merge` runs the driver and
-pushes (#8137).
+(That ref also used to red AC17 on `INDEX.md`'s count, #8137 / #8370; #8377 untracked the file and
+retired both the driver and AC17.)
 
 **If `mergeable` is `MERGEABLE`:** Continue to Phase 7.
 
@@ -2126,6 +2123,15 @@ pushes (#8137).
 
    ```bash
    git merge origin/main --no-commit --no-ff
+   ```
+
+   **If the only conflicts are on generated artifacts, regenerate from the MERGED sources** — side-picking
+   yields an artifact matching neither. The abort is a precondition (the resolver needs a clean tree); it
+   fails closed on anything else.
+
+   ```bash
+   git merge --abort
+   bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh origin/main && git push
    ```
 
 2. Identify conflicted files:
@@ -2308,10 +2314,10 @@ while true; do
     fi
   fi
 
-  # DIRTY: GitHub computed a conflict. If `git merge-tree --write-tree` is
-  # clean (kb-index local-only driver), treat as BEHIND and fall through to
-  # auto-sync. Real conflicts still dirty-exit. Glob `*DIRTY*` (not
-  # `*" DIRTY"`) tolerates whitespace variants.
+  # DIRTY: GitHub computed a conflict. A clean local `git merge-tree --write-tree` means the
+  # server saw something local git does not; treat as BEHIND and fall through to auto-sync.
+  # An unclean one gets ONE regenerable-artifact attempt before the poll exits. Glob `*DIRTY*`
+  # (not `*" DIRTY"`) tolerates whitespace variants.
   if [[ "$s" == *DIRTY* ]]; then
     mt_out=""; fetch_rc=0
     git fetch origin main >/dev/null 2>&1 || fetch_rc=$?
@@ -2319,6 +2325,14 @@ while true; do
       # A fetch outage is not a conflict: report, retry next tick.
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$fetch_rc — fetch origin main failed while classifying DIRTY — retrying next tick"
     elif mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
+      s="OPEN BEHIND"
+    elif [[ "$sync_ok" -eq 1 && -f "$SYNC_ROOT/scripts/resolve-regenerable-conflicts.sh" ]] \
+         && bash "$SYNC_ROOT/scripts/resolve-regenerable-conflicts.sh" origin/main; then
+      # ADR-235: the resolver merged and regenerated model.likec4.json from the MERGED
+      # sources and committed locally; it never pushes. Treat the state as BEHIND so the
+      # push goes through the one implementation below: sync_step's merge is then a no-op
+      # and HEAD is ahead of its upstream, so it pushes (or stops with kind=push).
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] regen resolved — merge committed locally; pushing via sync-pr-behind.sh"
       s="OPEN BEHIND"
     else
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll"
@@ -2431,11 +2445,9 @@ Do NOT invert this into "ignore failures that look transient". The discriminator
 
 **Required-check failure exit.** Each tick the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection it exits, naming the failing check plus a pointer to `gh pr checks <number>` / `gh run view --log-failed` — replacing the silent heartbeat-to-timeout when a required check fails mid-poll while auto-merge waits for a transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo) the scan is a no-op and the CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
-**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally. The loop first runs `git fetch origin main` and `git merge-tree --write-tree origin/main HEAD` (exit code only). A clean merge-tree is the kb-index class — GitHub lacks the local merge driver — and the loop rewrites state to `OPEN BEHIND` and falls through to the existing auto-sync (counts against `MAX_BEHIND_SYNCS`). A non-zero merge-tree is a real conflict: the loop exits, prints merge-tree's `CONFLICT` lines (no merge is in progress, so `--diff-filter=U` would be empty), and prints a `git merge origin/main` recovery pointer. The admin-merge hatch stays BEHIND-only.
+**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally. The loop first runs `git fetch origin main` and `git merge-tree --write-tree origin/main HEAD` (exit code only). A clean merge-tree means the server saw a conflict local git does not, and the loop rewrites state to `OPEN BEHIND` and falls through to the existing auto-sync (counts against `MAX_BEHIND_SYNCS`). A non-zero merge-tree gets ONE attempt at [resolve-regenerable-conflicts.sh](../../scripts/resolve-regenerable-conflicts.sh): if every conflicted path is regenerable it merges, regenerates from the merged sources and commits, then the loop pushes and keeps polling. It fails closed, so real conflicts are unchanged — the loop exits, prints merge-tree's `CONFLICT` lines (no merge is in progress, so `--diff-filter=U` would be empty), and points at `git merge origin/main`. A rejected push after a regen means `main` moved; the loop exits, commit local. The admin-merge hatch stays BEHIND-only.
 
-- **A diff that regenerates `INDEX.md` goes stale on GitHub's merge ref the moment main lands another kb file — merge `origin/main` and re-run [scripts/generate-kb-index.sh](../../../../scripts/generate-kb-index.sh) immediately before pushing.** `actions/checkout` on `pull_request` checks out `refs/pull/N/merge`, where GitHub's driverless textual merge keeps both sides' entries but one side's `Total files:` header — the AC17 freshness check then fails on the merge ref while `--check` is green on your head. Same #8116 class, CI-check surface (#8370).
-
-- **A DIRTY that recurs on every landing is usually a file in YOUR diff that `main` rewrites every merge — name the file before resolving it a second time.** Intersect `git diff --name-only origin/main...HEAD` with the paths of `main`'s last 20 merges; a generated artifact with one producer per PR (`knowledge-base/project/rule-metrics.json`, compound's ADR-091 output — 20 of 20 recent merges touched it) conflicts on EVERY landing, and DIRTY is the one state the `--admin` hatch cannot cross. Take `main`'s copy so the PR stops diffing it; afterwards `main`'s churn makes the PR merely BEHIND, where the hatch applies once every required context is green on the current head (hold, do not re-sync — a sync restarts CI and re-opens the window). Two more measured facts: GitHub reports `CONFLICTING` while `git merge-tree --write-tree origin/main HEAD` is clean whenever both sides touched `knowledge-base/INDEX.md` — `.gitattributes` gives it the custom `kb-index` merge driver, which GitHub's server-side merge cannot run and local git can (reproduced: `git -c merge.kb-index.driver=false merge-tree …` conflicts on exactly that file), so such a DIRTY is cured by a local sync + push, which is what `pre-merge-rebase.sh` does when you run `gh pr merge`; and re-run `check-adr-ordinals.sh` after EVERY sync, not once at ship start. **Why:** #8301 — three DIRTY cycles (~4 h) on a regenerated aggregate before the cause was named, then an ADR-225 → ADR-229 renumber three syncs in. See `knowledge-base/project/learnings/2026-09-19-a-generated-artifact-in-my-diff-made-every-landing-on-main-a-conflict.md`.
+- **A DIRTY that recurs on every landing is a file in YOUR diff that `main` rewrites every merge — name it before resolving it twice, and ask whether it should be committed AT ALL.** Intersect `git diff --name-only origin/main...HEAD` with `main`'s last 20 merge paths. DIRTY is the one state the `--admin` hatch cannot cross, so a generated artifact with one producer per PR conflicts on every landing. The two files that motivated this (`INDEX.md`, `rule-metrics.json`) are untracked caches since #8377 / ADR-235 — the loop is closed at the source, because a file that is never committed cannot conflict. `model.likec4.json` is the one still committed, and `resolve-regenerable-conflicts.sh` above handles it. Also re-run `check-adr-ordinals.sh` after EVERY sync, not once at ship start. **Why:** #8301 — three DIRTY cycles (~4 h) before the cause was named, then an ADR-225 → ADR-229 renumber three syncs in. See `knowledge-base/project/learnings/2026-09-19-a-generated-artifact-in-my-diff-made-every-landing-on-main-a-conflict.md`.
 
 This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) which fires on certain Bash invocations during the ship flow (commit, push, merge). The hook handles the pre-merge case (branch is behind when auto-merge is FIRST queued); this loop handles the post-merge-queue case (branch becomes behind WHILE the queued auto-merge is waiting on CI). The two surfaces don't overlap — the hook fires on operator-triggered git/gh commands; the poll loop fires on a fixed 60-second cadence regardless of operator activity.
 
