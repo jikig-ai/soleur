@@ -96,11 +96,15 @@
 #       `inngest_ghcr_fallback` on a miss. It still has NO `/v2/` probe — it goes straight to
 #       `docker pull` — and its pull is still FAIL-CLOSED.
 #     Name-anchored: any :NNN here rots on its own fix.
-#     WHAT REMAINS UNCOVERED, and it is the whole residual now: it reports via
-#     inngest-boot-phone-home.sh to Better Stack, NOT the Sentry `stage:` schema — so every
-#     query in this file is still structurally blind to it. It now DOES emit
-#     inngest_ghcr_fallback; this file simply cannot see it. Read it separately with
-#     `betterstack-query.sh --grep inngest_ghcr_fallback`.
+#     WHAT REMAINED UNCOVERED until 2026-09-21, and was the whole residual: it reported via
+#     inngest-boot-phone-home.sh to Better Stack only, NOT the Sentry `stage:` schema, so every
+#     query in this file was structurally blind to it.
+#       NOW (#6500 close condition 2): it carries a host-local `soleur-boot-emit` and reports
+#       both outcomes on the Sentry `stage:` schema with `host_name:"soleur-inngest"`. The bare
+#       `[freshboot]` query therefore covers it, and the host-pinned INNGEST_ZOT denominator
+#       below FAILs unless this host reported at least one zot-served fresh boot in the window.
+#       The Better Stack marker is kept as a second, independently-credentialed channel; a
+#       Sentry event is forgeable with the public DSN, so it is evidence, not proof.
 #     Consequence, and #7462 SHARPENS rather than removes it: AP-016 lapsed 2026-07-30, so the
 #     PAT is ALREADY revoked and the GHCR leg already 401s. The host's boot therefore depends
 #     ENTIRELY on zot reachability plus a baked pull credential with no refresh channel. 5.3
@@ -338,6 +342,24 @@ if (( APP_ZOT == 0 )); then
   exit 1
 fi
 
+# ── The DEDICATED-HOST denominator (#6500). app_zot above is the WEB host's evidence; nothing
+# above proves the dedicated soleur-inngest host was observed. Same shape, same reasons: guard
+# the string before any arithmetic, hardcoded floor, no knob.
+# ⚠ HOST-PINNED, while `[freshboot]` stays bare. The colocated inngest block in cloud-init.yml is
+# gated by web_colocate_inngest, not deleted: a web host born with it on would emit inngest_zot
+# and satisfy a bare denominator while the dedicated host never reported — a false PASS on the
+# gate that authorizes the revoke. A filter on a DENOMINATOR can only fail closed (a wrong value
+# reads 0 and FAILs); the FAIL queries stay bare because a bare FAIL query can only add failures.
+INNGEST_ZOT=$(sentry_count 'stage:"inngest_zot" host_name:"soleur-inngest"')
+if [[ ! "$INNGEST_ZOT" =~ ^[0-9]+$ ]]; then
+  echo "TRANSIENT: Sentry query 'inngest_zot host_name:soleur-inngest' failed (window $START..$END) — retry next sweep." >&2
+  exit 2
+fi
+if (( INNGEST_ZOT == 0 )); then
+  echo "FAIL(no-inngest-freshboot-evidence): 0 fallbacks, but NO zot-served fresh boot of the dedicated soleur-inngest host since $START. That host is UNOBSERVED, not clean. A soleur-inngest fresh boot must happen inside [START, END] — an inngest-host-replace dispatch carrying the #6500 emitter, in an ADR-100 maintenance window."
+  exit 1
+fi
+
 # ⚠ This arm MUST keep `exit 1` (FAIL). Do NOT "fix" it to exit 2 (TRANSIENT) on the
 # reasoning that a thin sample just means "not enough deploys yet" — that is not the only
 # route here. In the Sentry-dark mode (#6437) ci-deploy.sh returns before every
@@ -463,18 +485,24 @@ _zot_reports_offbox() {
   grep -qE '^[[:space:]]*soleur-boot-emit ' "$1" \
     || grep -qE '^[[:space:]]*/usr/local/bin/inngest-boot-phone-home\.sh inngest_zot ' "$1"
 }
-if ! _zot_path_in_code "$INNGEST_CI" || ! _zot_reports_offbox "$INNGEST_CI"; then
+# #6500 close condition 2, in the same syntax-anchored form: BOTH outcome arms call the host's
+# soleur-boot-emit. Kept alongside the INNGEST_ZOT denominator above because they see different
+# things: the denominator proves a report happened in the window, and cannot see a later revert
+# of the call sites; this predicate reads the code as it is now.
+_zot_reports_sentry_stage() {
+  grep -qE '^[[:space:]]*soleur-boot-emit inngest_zot ' "$1" \
+    && grep -qE '^[[:space:]]*soleur-boot-emit inngest_ghcr_fallback ' "$1"
+}
+if ! _zot_path_in_code "$INNGEST_CI" || ! _zot_reports_offbox "$INNGEST_CI" || ! _zot_reports_sentry_stage "$INNGEST_CI"; then
   echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path and/or no off-box reporting of it — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
   exit 1
 fi
-# ⚠ AND THE CHANNEL STILL DOES NOT REACH THIS QUERY SET. The `[freshboot]` entry above is a
-# SENTRY query; the dedicated host emits `inngest_ghcr_fallback` to Better Stack ONLY. So a
-# clean `[freshboot]` count is evidence about the WEB host and says nothing about this one.
-# Whoever authorises 5.3–5.5 must read this host separately:
+# The channel now reaches this query set (#6500): the dedicated host emits inngest_zot /
+# inngest_ghcr_fallback on the Sentry `stage:` schema, and INNGEST_ZOT above requires one of its
+# own zot-served boots in the window. The Sentry event is forgeable with the public DSN, so
+# whoever authorises 5.3-5.5 still corroborates it on the independently-credentialed channel:
 #   doppler run -p soleur -c prd_terraform -- \
 #     scripts/betterstack-query.sh --since <window> --grep inngest_ghcr_fallback --grep inngest_zot
-# Narrowed, not closed: before #7462 this host had no zot path at all; now it has one whose
-# reporting the soak cannot see. Tracked with #6500 / ADR-096 Phase 5.
 
-echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), and #$BLOCKER is CLOSED — since $START. zot-primary soak holds. Safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
+echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER is CLOSED — since $START. zot-primary soak holds. Safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
 exit 0

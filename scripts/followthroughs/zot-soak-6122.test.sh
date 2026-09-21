@@ -94,19 +94,31 @@ STUB
 # so relocating the script relocates what it corroborates against. No test-only backdoor in the
 # gate itself — the gate has no override, and that is deliberate.
 run_soak() {
-  local counts_spec="$1" gh_state="$2" http_code="${3:-200}" fail_url_substr="${4:-}" inngest_fixed="${5:-no}" gh_reason="${6:-COMPLETED}"
-  local d out rc soak="$SOAK"
+  # `fixture_body` (7th arg, #6500): with inngest_fixed=body, the relocated cloud-init-inngest.yml
+  # is exactly this text, so a case can instantiate "one call site" or "calls only as comments",
+  # which the fixed yes/old fixtures cannot express. SOAK_UNDER_TEST lets a case run a MUTATED
+  # copy of the soak (the in-suite mutation rows below) through the same harness.
+  local counts_spec="$1" gh_state="$2" http_code="${3:-200}" fail_url_substr="${4:-}" inngest_fixed="${5:-no}" gh_reason="${6:-COMPLETED}" fixture_body="${7:-}"
+  local src="${SOAK_UNDER_TEST:-$SOAK}"
+  local d out rc soak="$src"
   d="$(mktemp -d)"
-  if [[ "$inngest_fixed" == "yes" ]]; then
+  if [[ "$inngest_fixed" == "body" ]]; then
     mkdir -p "$d/repo/scripts/followthroughs" "$d/repo/apps/web-platform/infra"
-    cp "$SOAK" "$d/repo/scripts/followthroughs/"
+    cp "$src" "$d/repo/scripts/followthroughs/$(basename "$SOAK")"
+    printf '%s\n' "$fixture_body" > "$d/repo/apps/web-platform/infra/cloud-init-inngest.yml"
+    soak="$d/repo/scripts/followthroughs/$(basename "$SOAK")"
+  elif [[ "$inngest_fixed" == "yes" ]]; then
+    mkdir -p "$d/repo/scripts/followthroughs" "$d/repo/apps/web-platform/infra"
+    cp "$src" "$d/repo/scripts/followthroughs/$(basename "$SOAK")"
     cat > "$d/repo/apps/web-platform/infra/cloud-init-inngest.yml" <<'FIXED'
 # Synthetic fixture: the dedicated inngest host AFTER #6500 is fixed — zot-primary with a
-# GHCR fallback, reporting on the Sentry stage: schema. Synthesized, never captured.
+# GHCR fallback, reporting on the Sentry stage: schema from BOTH outcome arms, in the exact
+# call-site form cloud-init-inngest.yml uses. Synthesized, never captured.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
       IREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.19"
     fi
-    soleur-boot-emit inngest_zot info
+    soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
+    soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true
 FIXED
     soak="$d/repo/scripts/followthroughs/$(basename "$SOAK")"
   elif [[ "$inngest_fixed" == "old" ]]; then
@@ -118,7 +130,7 @@ FIXED
     # deliberate: they name `zot` and `soleur-boot-emit`, so this fixture also re-proves the
     # syntax-anchoring rule (a comment can satisfy no `^\s*`-anchored alternative).
     mkdir -p "$d/repo/scripts/followthroughs" "$d/repo/apps/web-platform/infra"
-    cp "$SOAK" "$d/repo/scripts/followthroughs/"
+    cp "$src" "$d/repo/scripts/followthroughs/$(basename "$SOAK")"
     cat > "$d/repo/apps/web-platform/infra/cloud-init-inngest.yml" <<'OLD'
 # Synthetic fixture: the dedicated inngest host BEFORE #6500 — hard-pinned GHCR, no zot path.
 # TODO: add zot support here one day
@@ -151,7 +163,10 @@ Q_ZOTWEB='image%3A%22web%22'
 Q_ZOTING='image%3A%22inngest%22'
 
 # A "healthy fleet" baseline: no fallbacks, sample satisfied, denominator satisfied.
-HEALTHY="ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5"
+# `soleur-inngest` is FIRST (#6500): the stub matches keys as substrings in order, first match
+# wins, and only the host-pinned INNGEST_ZOT query carries that string. Without it every case that
+# passes the APP_ZOT arm would 500 on the new query and read TRANSIENT instead of its verdict.
+HEALTHY="soleur-inngest=1;ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5"
 
 echo "== AC7: the arms return the right exit codes =="
 
@@ -198,7 +213,7 @@ fi
 # 4b. The insufficient-sample arm. It carries 8 lines of "MUST keep exit 1 — do NOT 'fix' it to
 #     TRANSIENT" and had NO test: it is the ONLY detector for the #6437 Sentry-dark mode, so a
 #     well-meaning refactor to exit 2 would silently disarm it. One run_soak proves it.
-r="$(run_soak "ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "soleur-inngest=1;ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"FAIL(insufficient-sample)"* ]]; then
   pass "thin zot sample -> exit 1 FAIL(insufficient-sample) (the only #6437 detector)"
@@ -307,6 +322,94 @@ if [[ "$rc10" == "1" && "$out10" == *"blocker-closed-but-condition-unmet"* ]]; t
   pass "comments naming zot/soleur-boot-emit do NOT satisfy the corroboration grep"
 else
   fail "prose must not satisfy the corroboration grep; got rc=$rc10 out=$out10"
+fi
+
+echo "== #6500 Guard 6: the dedicated host's Sentry evidence, and its code, gate the PASS =="
+
+# Fixtures for the corroboration predicate. Each is a DIFFERENT partial state of the fix.
+F_BS_ONLY='    ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.37@sha256:0000"
+        /usr/local/bin/inngest-boot-phone-home.sh inngest_zot "bootstrap image served by zot ep=$ZOT_EP"'
+F_ZOT_ONLY="$F_BS_ONLY"'
+        soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true'
+F_COMMENTS="$F_BS_ONLY"'
+        # soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
+        # soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true'
+F_BOTH="$F_BS_ONLY"'
+        soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
+        soleur-boot-emit inngest_ghcr_fallback warning "rc=$zot_rc" || true'
+
+# g6 <label> <expected rc> <expected substring> <run_soak args...>: one row, one verdict. Returns 0
+# when the verdict matched, so the mutation rows below can reuse the same row as their oracle.
+g6_row() {
+  local want_rc="$1" want="$2"; shift 2
+  local r rc out
+  r="$(run_soak "$@")"; rc="${r%%|*}"; out="${r#*|}"
+  G6_LAST="rc=$rc out=${out:0:300}"
+  [[ "$rc" == "$want_rc" && "$out" == *"$want"* ]]
+}
+g6() {
+  local label="$1"; shift
+  if g6_row "$@"; then pass "G6 $label"; else fail "G6 $label; got $G6_LAST"; fi
+}
+# Row 1: today's pre-#6500 shape (Better Stack only) — CLOSED/COMPLETED must still not PASS.
+g6 "row 1: only the Better Stack inngest_zot call -> blocker-closed-but-condition-unmet" \
+  1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_BS_ONLY"
+g6 "row 2: soleur-boot-emit inngest_zot without inngest_ghcr_fallback -> condition unmet" \
+  1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_ZOT_ONLY"
+g6 "row 3: both calls present only as comments -> condition unmet" \
+  1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_COMMENTS"
+G6_NOEV="${HEALTHY/soleur-inngest=1/soleur-inngest=0}"
+g6 "row 4: the dedicated host reported no zot-served boot -> FAIL(no-inngest-freshboot-evidence)" \
+  1 "no-inngest-freshboot-evidence" "$G6_NOEV" CLOSED 200 "" body COMPLETED "$F_BOTH"
+g6 "row 5: the host-pinned query 500s -> exit 2 TRANSIENT, never 0" \
+  2 "'inngest_zot host_name:soleur-inngest' failed" "$HEALTHY" CLOSED 200 "soleur-inngest" body COMPLETED "$F_BOTH"
+# Row 8: a colocated WEB host reported inngest_zot, the dedicated host did not. Also the
+# discriminator for a dropped host_name filter: without it the query would match `inngest_zot=1`.
+G6_COLOC="soleur-inngest=0;inngest_zot=1;${HEALTHY#soleur-inngest=1;}"
+g6 "row 8: only a colocated web host reported inngest_zot -> FAIL(no-inngest-freshboot-evidence)" \
+  1 "no-inngest-freshboot-evidence" "$G6_COLOC" CLOSED 200 "" body COMPLETED "$F_BOTH"
+g6 "row 9 (must-PASS): both calls, #6500 CLOSED/COMPLETED, soleur-inngest=1 -> exit 0" \
+  0 "PASS" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_BOTH"
+
+# G1 row 10: the emitter's HOST_NAME literal and the soak's host_name filter are one value.
+EMIT_HOST="$(grep -oE "^[[:space:]]*HOST_NAME='[^']+'" "$HERE/../../apps/web-platform/infra/cloud-init-inngest.yml" | head -1 | sed -E "s/.*'([^']+)'/\1/" || true)"
+SOAK_HOST="$(grep -oE "host_name:\"[^\"]+\"" "$SOAK" | head -1 | sed -E 's/host_name:"([^"]+)"/\1/' || true)"
+if [[ -n "$EMIT_HOST" && "$EMIT_HOST" == "$SOAK_HOST" ]]; then
+  pass "G1 row 10: the emitter's HOST_NAME ($EMIT_HOST) is the soak denominator's host_name filter"
+else
+  fail "G1 row 10: emitter HOST_NAME '${EMIT_HOST:-<none>}' != soak host_name '${SOAK_HOST:-<none>}'"
+fi
+
+# Mutation rows 6-7 (+ the host_name filter): mutate a COPY of the soak, require the mutation to
+# have landed, then run the row that must go RED on it.
+g6_mutant() { # g6_mutant <label> <sed-script> <row args...>
+  local label="$1" script="$2"; shift 2
+  local m; m="$(mktemp)"
+  sed -e "$script" "$SOAK" > "$m"
+  if cmp -s "$SOAK" "$m"; then
+    fail "G6 $label — HARNESS ABORT: the mutation did not land"
+  elif SOAK_UNDER_TEST="$m" g6_row "$@"; then
+    fail "G6 $label — mutant SURVIVED"
+  else
+    pass "G6 $label — mutant killed"
+  fi
+  rm -f "$m"
+}
+g6_mutant "row 6: delete the INNGEST_ZOT arm" \
+  '/^INNGEST_ZOT=\$(sentry_count/,/^fi$/d; /^if (( INNGEST_ZOT == 0 )); then$/,/^fi$/d' \
+  1 "no-inngest-freshboot-evidence" "$G6_NOEV" CLOSED 200 "" body COMPLETED "$F_BOTH"
+g6_mutant "row 7: drop _zot_reports_sentry_stage from the corroboration if" \
+  's/ || ! _zot_reports_sentry_stage "\$INNGEST_CI"//' \
+  1 "blocker-closed-but-condition-unmet" "$HEALTHY" CLOSED 200 "" body COMPLETED "$F_BS_ONLY"
+g6_mutant "extra: drop the host_name filter from the denominator" \
+  's/stage:"inngest_zot" host_name:"soleur-inngest"/stage:"inngest_zot"/' \
+  1 "no-inngest-freshboot-evidence" "$G6_COLOC" CLOSED 200 "" body COMPLETED "$F_BOTH"
+# Harness row: run in a subshell so its deliberate FAIL does not count; the output is the witness.
+G6_PROBE="$(g6_mutant "probe" 's/THIS-STRING-IS-NOT-IN-THE-SOAK/x/' 0 "never" "$HEALTHY" CLOSED 2>&1)"
+if [[ "$G6_PROBE" == *"HARNESS ABORT"* ]]; then
+  pass "G6 harness: a mutation that matches nothing is reported as HARNESS ABORT, never scored"
+else
+  fail "G6 harness: an unlanded mutation was not reported as HARNESS ABORT; got: ${G6_PROBE:0:200}"
 fi
 
 if [[ "$fails" -gt 0 ]]; then
