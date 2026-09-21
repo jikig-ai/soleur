@@ -4,7 +4,7 @@ description: "This skill should be used when executing work plans efficiently wh
 ---
 
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
@@ -68,6 +68,8 @@ any reviewer saw them. The review's own conclusion was to delete one copy. A sho
 plus a pointer is both cheaper to review and structurally unable to drift.
 
 **A ROLE TEST BUILT FROM AN ABSENCE DOES NOT DISCRIMINATE, AND ITS FIXTURE WILL AGREE WITH IT.** When one artifact is rendered for two roles (a shared bootstrap, a shared workflow, a shared config), scope role-specific behaviour on a POSITIVE identity the role owns — and emit that identity as a field so the consumer can require it rather than infer it. Never scope on "the other role does not have X": you must then prove the negative, and the CI sandbox lacking X will pass the arm you labelled "the other role" while proving nothing about it. Fixture the role that HAS X, with every input present and only the identity differing. **Why:** #7695 gated a destructive-recut input on "is `/mnt/data` a mountpoint", commenting that the co-located web host has no `/mnt/data`; `cloud-init.yml` mounts the workspaces volume there, so the probe would have walked every user's repo tree hourly and shipped a store measurement from the wrong host into a gate whose clearance condition is `0`. See `knowledge-base/project/learnings/2026-09-02-i-built-a-host-discriminator-out-of-an-absence-and-fixtured-the-absence.md`.
+
+**A CARDINALITY PIN COUNTS THE CONTAINER, NEVER OCCURRENCES OF THE MEMBERS YOU EXPECT — and a `verbose`-gated line is a silent one under every redirect.** `grep -c '<known-a>|<known-b>' -eq 2` is satisfied by a list holding both known members AND a third you did not name; the property "exactly two directories are searched for a payload to execute" is the arity of the `for d in …; do` line itself, so count ITS words. Same session, second shape: a skip line gated on `verbose` (`[[ -t 1 ]]`) prints nothing under a test's redirect or `claude --bg`, so a HELD branch and an UNCONSIDERED one produce identical stdout and the diagnosis goes to the wrong block. Before reading a guard's logic, grep the SUT for `verbose`-gated lines on that path. **Why:** #8418 — `/srv/extra-plugins` appended to all three `go.md` fences stayed green under `-eq 2` over known spellings; A9's reaper printed nothing per-branch and cost a round on the wrong hypothesis. See `knowledge-base/project/learnings/2026-09-20-every-defect-in-my-fix-was-a-sentence-i-could-have-run.md`.
 
 **ASSERT THE VALUE THAT MUST NEVER APPEAR, AND PUT THE INSTRUMENT UPSTREAM OF EVERY ASSERTION.** When a change exists to guarantee a value never occurs, assert that negative directly over every arm and every field — a positive "is it the token I expect" is satisfied by the correct answer AND by any arm that never reaches the field. Give each suite an instrument self-test that drives its pass/fail helpers once each and refuses to continue unless both counters moved, and report assertion-count floors with `printf` + `exit 1`, never through the helper they backstop (ADR-193). **Why:** #7695 — 16 of 24 mutants survived a 250-assertion battery; three flipped `__UNREADABLE__` to the literal `0` that authorizes a destroy and stayed green, `if eval "$condition"` -> `if true` produced a byte-identical summary line, deleting the entire new block reported `232/232 passed, 0 failed` exit 0, and the sibling suite's floor called the very `fail()` one edit disarms. Same learning file.
 
@@ -769,13 +771,62 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    # 2b. Commit-on-main backstop (Soleur Cloud Mode, FR5): PreToolUse hooks do
    # not fire in cloud sessions, so the hook's block-commit-on-main arm is
    # absent there. Run the canonical check directly — a no-op locally where the
-   # hook already guards, load-bearing in cloud. If CLAUDE_PLUGIN_ROOT is unset
-   # (cloud exec shells), locate the script in the plugin cache instead.
+   # hook already guards, load-bearing in cloud.
+   #
+   # Resolve the plugin ROOT by IDENTITY and name the script relative to it,
+   # never by the script's own basename (#8402): a basename search accepts any
+   # directory under the cache holding a file with that name and then EXECUTES
+   # it. The identity preflight is a shape check, not authentication — a planted
+   # `{"name":"soleur"}` manifest passes it (ADR-179 A11).
    GUARD="${CLAUDE_PLUGIN_ROOT}/scripts/precommit-guard.sh"
-   [ -f "$GUARD" ] || GUARD="$(find /opt/.devin/plugins -name precommit-guard.sh 2>/dev/null | head -1)"
-   [ -n "$GUARD" ] && bash "$GUARD" "git commit -m \"feat(scope): description of this unit\""
+   # Arm 2, mirroring go.md's arm order. Grok Build addresses the plugin by GROK_PLUGIN_ROOT
+   # (lib/agent-registry.ts), and omitting it made this ladder fall through to `exit 1` on a
+   # Grok box with a perfectly good plugin root — turning a fail-open into a hard stop for the
+   # one harness that cannot satisfy arm 1.
+   [ -f "$GUARD" ] || GUARD="${GROK_PLUGIN_ROOT:-}/scripts/precommit-guard.sh"
+   if [ ! -f "$GUARD" ]; then
+     GUARD=""
+     for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do
+       [ -d "$d" ] || continue
+       MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
+         -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
+       [ -n "$MANIFEST" ] || continue
+       GUARD="${MANIFEST%/.claude-plugin/plugin.json}/scripts/precommit-guard.sh"
+       [ -f "$GUARD" ] && break
+       GUARD=""
+     done
+   fi
+   # BOTH arms must block, and before #8402 NEITHER did. The old form was
+   # `[ -n "$GUARD" ] && bash "$GUARD" …` followed by an UNCONDITIONAL
+   # `git commit` — no `&&`, no `|| exit`, no `if` — so an unresolved guard fell
+   # through to the commit, AND a guard that resolved and REFUSED fell through to
+   # the same commit. In a cloud session this is the only commit-on-main
+   # protection that exists, which made it the opposite of a backstop.
+   #
+   # stdout, not stderr: stderr is invisible under `claude --bg`, and a backstop
+   # that cannot resolve itself must say so where the operator will see it.
+   if [ -z "$GUARD" ]; then
+     # The block's own justification is "hooks do not fire in cloud". LOCALLY the PreToolUse
+     # hook is present and already blocks a commit to main, so a hard stop there would block a
+     # commit that previously succeeded without buying any protection. Refuse in cloud, warn
+     # locally — and say which, so the operator is not left guessing.
+     echo "SOLEUR_PRECOMMIT_GUARD_HALT reason=no-soleur-root-in-plugin-cache"
+     case "${SOLEUR_SESSION_CLASS:-unknown}" in
+       not-local*) exit 1 ;;
+       *) echo "[warn] proceeding: the PreToolUse hook guards commits on a local session" ;;
+     esac
+   else
+     # `else`, not a fall-through. The first draft ran this line unconditionally after the
+     # warn above, so on a LOCAL session with no resolvable guard it printed "proceeding" and
+     # then executed `bash ""` — `No such file or directory`, `|| exit 1` — and the commit was
+     # never reached. The comment said warn-and-proceed; the code halted. Found by DRY-RUNNING
+     # the block in both session classes rather than reading it (qa/SKILL.md, #8288 class).
+     bash "$GUARD" "git commit -m \"feat(scope): description of this unit\"" || exit 1
+   fi
 
-   # 3. Commit with conventional message
+   # 3. Commit with conventional message. Reachable through a guard that resolved AND
+   # passed, or — locally only, where the PreToolUse hook is the real gate — through the
+   # warned no-guard arm. In cloud the no-guard arm exits above and never gets here.
    git commit -m "feat(scope): description of this unit"
    ```
 
@@ -1407,6 +1458,8 @@ After Phase 4 handoff (one-shot only), the same agent continues executing one-sh
 For most features: tests + linting + following patterns is sufficient.
 
 ## Common Pitfalls to Avoid
+
+- **A sibling sweep is done when the SHAPE LISTS that drive the guards match, not when the guards match.** When a new guard joins an existing one (a `transitions` check beside a `sub_steps` check), diff the two enumerations beneath them — the fixture rows, the FATAL modes the message names, the shapes the suite drives — line for line. Parallel-looking guard bodies over unequal shape lists ship one side container-only. **Why:** #8382 — `transitions` asserted the container while `sub_steps` asserted members; the suite drove 5 shapes vs 2. See `knowledge-base/project/learnings/2026-09-21-a-conflict-starved-merge-ref-reads-as-ci-never-ran.md`.
 
 - **A claim about a platform's runtime semantics is a measurement you have not taken yet — take it
   BEFORE writing the directive, the comment, or the ADR sentence, and when copying a mechanism from a
