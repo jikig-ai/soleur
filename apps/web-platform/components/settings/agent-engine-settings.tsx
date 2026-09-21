@@ -118,6 +118,18 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 <option key={mode} value={mode}>{mode}</option>
               ))}
             </select>
+            {authMode === "api-key" && (
+              <p
+                className="mt-3 rounded-lg border border-amber-600/40 bg-amber-950/20 p-3 text-xs leading-5 text-amber-100"
+                role="note"
+                data-testid="user-provider-disclosure"
+              >
+                This uses your own provider account. Prompts, files, and outputs sent through this
+                engine are subject to that provider&apos;s retention, region, and account terms.
+                Soleur-managed provider access remains restricted. Only submit data you are
+                authorized to share with the provider.
+              </p>
+            )}
           </label>
         ) : null}
         {!isOwner && <p className="mt-4 text-xs text-soleur-text-secondary">Only workspace owners can change this setting.</p>}

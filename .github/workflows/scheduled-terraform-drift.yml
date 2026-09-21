@@ -1482,6 +1482,9 @@ jobs:
           ROUTE_LABELS=()
           if has_reason monitor-config-drift; then ROUTE_LABELS+=(--add-label "action-required" --add-label "priority/p1-high"); fi
           if has_reason unmanaged-live; then ROUTE_LABELS+=(--add-label "infra-drift" --add-label "priority/p2-medium"); fi
+          # #8296: a declared-armed Logs alert paused live is the same class as monitor-config-drift
+          # (a detector silently off), and since #8296 the wrong-volume alert can produce it.
+          if has_reason logs-alert-paused; then ROUTE_LABELS+=(--add-label "action-required" --add-label "priority/p1-high"); fi
           # A label failure alone is not a filer failure: warn and carry on, so the comment, the
           # escalate output and the email still land.
           add_route_labels() {
@@ -1571,7 +1574,7 @@ jobs:
               echo "2. For \`absent-live\`: disposition the heartbeat or monitor — build its feeder or delete the declaration (the #6548 build-vs-delete call)."
               echo "3. For \`unmanaged-live\`: adopt it or delete it. Adopt: run \`/soleur:one-shot\` on this issue to declare the object in \`apps/web-platform/infra\` with an \`import {}\` block, its resource and a \`-target=\` line in the per-merge apply (the #7884 pattern). Delete: only if the object is abandoned. Either path first re-reads the object by id through the Better Stack API and checks its URL/name against the marker; no delete runs on an id taken from this issue alone."
               echo "4. For \`monitor-config-drift\`: re-read the monitor by id through the API. A deliberate live change is made durable by editing the declaration in a PR; otherwise the next infra apply restores the declared value (runbook: knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md)."
-              echo "5. For \`logs-alert-paused\` / \`logs-alert-absent\`: read \`detail\` — a rejected template SQL is fixed by a .tf edit + merge (the apply re-arms the alert); an absent alert means the merge apply failed before creating it. Runbook: knowledge-base/engineering/operations/runbooks/monitor-send-failed-alert.md."
+              echo "5. For \`logs-alert-paused\` / \`logs-alert-absent\`: read \`detail\` — a rejected template SQL is fixed by a .tf edit + merge (the apply re-arms the alert); an absent alert means the merge apply failed before creating it. An EMPTY \`detail\` on a paused alert is the signature of a TERRAFORM-APPLIED pause, not a vendor auto-pause: since #8296 a var-driven \`paused\` is resolved from its declared default, so if the declaration reads armed and live reads paused, check for a Doppler override first — \`doppler secrets get INNGEST_LUKS_CUTOVER_COMPLETE -p soleur -c prd_terraform --plain\` (the apply reads it as TF_VAR_inngest_luks_cutover_complete and it silently wins over the .tf default). If it is set to false on purpose, that IS the finding: the override is undocumented and this report is the only thing that noticed. Runbook: knowledge-base/engineering/operations/runbooks/monitor-send-failed-alert.md."
               echo "6. Close this issue when every listed object reconciles; the reconcile re-opens it if a mismatch recurs."
               echo ""
               echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml) heartbeat-live-reconcile job._"
