@@ -2,7 +2,7 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **29 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (31 alert rules total)
+- **30 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (32 alert rules total)
   (#7650 Phase 2). The 27 are adopted from live Sentry and fully Terraform-owned:
   `ignore_changes = [environment]` only, real `trigger_conditions` and
   `action_filters`, read through the non-deprecated

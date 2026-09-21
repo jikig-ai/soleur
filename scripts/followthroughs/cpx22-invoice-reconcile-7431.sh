@@ -62,7 +62,8 @@
 # verdict-selection comment below.
 #
 # This probe follows the operator-confirmed shape already established by
-# `inngest-doublefire-reading-6617.sh`; it is not a new pattern. Two things are genuinely different
+# the now-retired #6617 doublefire probe (deleted with its tracker, 2026-09-19);
+# it is not a new pattern. Two things are genuinely different
 # and are argued where they occur: the author filter, and the last-verdict-wins selection.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
@@ -94,22 +95,27 @@ if ! printf '%s' "$issue_body" | grep -q 'script=scripts/followthroughs/cpx22-in
   exit 2
 fi
 
-# Author-filtered comment bodies. `authorAssociation` is on the payload already, so this costs
-# nothing. An unauthenticated read (missing/expired GH_TOKEN) returns nothing and must land in
-# TRANSIENT, never in "no verdict, therefore fine" — hence the rc check rather than `2>/dev/null`.
-err="$(mktemp)"; trap 'rm -f "$dir_err" "$err"' EXIT
-if ! body="$(gh issue view "$ISSUE" --json comments --jq '
-      .comments[]
-      | select(.authorAssociation == "OWNER"
-            or .authorAssociation == "MEMBER"
-            or .authorAssociation == "COLLABORATOR")
-      | .body' 2>"$err")"; then
-  echo "TRANSIENT: could not read comments on #${ISSUE} (rc from gh): $(head -c 400 "$err"). NOT evidence of absence."
+# TRUSTED-VERDICT FILTER — load-bearing, and NOT optional. `jikig-ai/soleur` is a PUBLIC
+# repo with issues open to the world, and this probe's exit code makes the sweeper act on
+# the tracker. An unfiltered `.comments[].body` accepts a verdict from ANY authenticated
+# GitHub user: one HTTP POST of `RESULT: PASS` was enough (#7448).
+#
+# The filter is `scripts/lib/trusted-verdict.sh`, NOT an inline `authorAssociation` select.
+# `authorAssociation` is computed against the READING token's visibility, so under the
+# sweeper's `GITHUB_TOKEN` a member whose org membership is PRIVATE renders as CONTRIBUTOR
+# and their verdict is dropped silently — see the lib's header and #6617. Re-inlining an
+# `authorAssociation` select here is blocked mechanically by scripts/lint-followthrough-varq-ban.sh.
+#
+# An unauthenticated read (missing/expired GH_TOKEN) must land in TRANSIENT, never in
+# "no verdict, therefore fine" — the lib returns 2 for that, and for a failed permission
+# read. It also drops fenced blocks, so a quoted template cannot arm the probe (control 3).
+# shellcheck source=../lib/trusted-verdict.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
+
+if ! body="$(trusted_verdict_bodies "$ISSUE")"; then
+  echo "TRANSIENT: could not read comments on #${ISSUE}, or could not resolve a commenter's repository permission. NOT evidence of absence."
   exit 2
 fi
-
-# Drop fenced blocks so a quoted template cannot arm the probe (control 3).
-body="$(printf '%s\n' "$body" | awk '/^[[:space:]]*```/ { f = !f; next } !f { print }')"
 
 # THE LAST MEMBER VERDICT WINS. Not "any FAIL outranks any PASS", which was the previous rule and
 # was wrong in both directions:

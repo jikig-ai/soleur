@@ -312,6 +312,8 @@ Map detected component names to file paths:
 
 If no components detected, skip to the decision menu.
 
+**If the learning is about what a word means** — the session settled, sharpened or disputed an internal term — the target is not a component definition: invoke `soleur:kb-glossary` and route it to `knowledge-base/project/glossary.md` as a pointer to the file that settles the term, then continue with any component insight that remains.
+
 #### 8.2 Select Target
 
 If one component detected: propose it as the routing target.

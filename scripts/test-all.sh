@@ -2190,6 +2190,15 @@ if want_scripts; then
   # original order). It also pins the accept-shape against the peers' `$`-anchored form, which
   # would reject the figure this issue requires the operator to state.
   run_suite "scripts/cpx22-invoice-reconcile-7431" bash scripts/followthroughs/cpx22-invoice-reconcile-7431.test.sh
+  # Per-probe exit-code harness for the #5733 strand probe. `scripts/followthroughs/` is covered
+  # by NO glob here (SUITE_GLOBS carries `scripts/lib/*.test.sh`, never this directory), so an
+  # unregistered harness runs in zero runners and reads as passing. Its assembly is the probe
+  # PLUS scripts/lib/trusted-verdict.sh: the lib's own matrix (auto-registered by the
+  # `scripts/lib/*.test.sh` glob) cannot see a probe that sources the lib and then ignores its
+  # result, and this suite cannot see a defect inside the lib — both halves are load-bearing.
+  # Its sharpest row is the #6617 regression: a verdict from an author with PRIVATE org
+  # membership must be honoured, which the `authorAssociation` mechanism it replaced could not do.
+  run_suite "scripts/concierge-strand-754ee124-5733" bash scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
   # Dedicated inngest host zot-primary boot readback (#7462/#7228). Two properties decide whether
   # this probe can be trusted to auto-close two P1 trackers, and both are pinned: PASS requires
   # `bootstrap-done` and not merely `inngest_zot`, because the pull half succeeding while nothing

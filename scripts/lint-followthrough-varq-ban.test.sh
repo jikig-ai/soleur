@@ -23,6 +23,16 @@
 #   R2-M7  two hits in ONE file                                      -> exit 1, BOTH lines cited (the read loop does not stop)
 #   R2-M8  a SUPERSTRING of the name (`MY_SENTRY_AUTH_TOKEN`)        -> exit 1 (the ban is on the substring, on purpose)
 #   R2-M9  the name in a NON-.sh file in a SUBDIRECTORY              -> exit 1 (any file, any depth)
+#   R4-M1  an inline `authorAssociation` FILTER in a probe           -> exit 1, cites file AT TRUE LINE
+#   R4-M2  must-PASS: the same shape inside a COMMENT                -> exit 0 (the anchor is the filter,
+#                                                                      not the bare word -- the rationale
+#                                                                      comment must stay writable)
+#   R4-M2e the `gh api .../comments` REST route                     -> exit 1 (route was invisible)
+#   R4-M2f extract-the-verdict-then-compare-later                    -> exit 1 (PASS need not adjoin)
+#   R4-M2g calls the lib once, then decides on a RAW read            -> exit 1 (presence != use)
+#   R4-M2h must-PASS: the lib-routed compliant shape                 -> exit 0 (widening counterweight)
+#   R4-M3  DISPATCH: guard COPY with the rule-4 grep deleted         -> exit 0 on the M1 fixture
+#   R4-M4  guard COPY with rule 4's file count forced to 0           -> exit 2, diagnostic names rule 4
 #   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
 #          name + a comment about "the sweeper's Sentry secret"
 #   R2-H3  must-PASS: an EMPTY sandbox dir                         -> exit 0 (pins the sandbox floor exemption)
@@ -553,6 +563,189 @@ fi
 grep -q 'specs/archive/.*feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md' "$REPO_ROOT/scripts/followthroughs/plugin-delivery-canary-7490.sh"
 check $? "R3-M18 plugin-delivery-canary-7490.sh cites the ARCHIVE path (the repoint landed where it should)" "R3-M18 the canary does not cite the archive path"
 
+# --- R4-M1: reads comments AND branches on a RESULT: verdict, without the lib -> exit 1 ---
+# The obligation, not the old one-spelling ban. This fixture is the shape that was LIVE in the
+# tree when the rule was written (inngest-zot-client-authz-6500.sh): an unfiltered
+# `.comments[].body` feeding a verdict grep, which the authorAssociation-anchored version of
+# this rule could not see at all.
+d=$(mkcase r4_m1)
+cat >"$d/probe-unfiltered-verdict.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# a comment line so the offender is NOT line 3
+bodies=$(gh issue view 1 --repo jikig-ai/soleur --json comments --jq '.comments[].body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M1 unfiltered comment read feeding a RESULT: verdict -> exit 1" "R4-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-unfiltered-verdict.sh:4:' <<<"$GUARD_OUT"; check $? "R4-M1 cites the offender at its comment-read line" "R4-M1 mis-cited the offender line: $GUARD_OUT"
+grep -q 'trusted_verdict_bodies' <<<"$GUARD_OUT"; check $? "R4-M1 diagnostic names the replacement helper" "R4-M1 diagnostic does not name trusted_verdict_bodies: $GUARD_OUT"
+
+# --- R4-M2 (must-PASS): the banned shape inside a COMMENT must not fire ---
+# The anchor is the code, not the word: every migrated probe's header explains WHY the lib is
+# mandatory, and those sentences quote the very constructs this rule matches
+# (cq-assert-anchor-not-bare-token). A bare-word rule would force the explanation out.
+d=$(mkcase r4_m2)
+cat >"$d/probe-comment-only.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# Do NOT write `--json comments --jq '.comments[].body'` and grep RESULT: PASS here --
+# authorAssociation is computed against the READING token's visibility (#6617).
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+bodies=$(trusted_verdict_bodies 1)
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R4-M2 must-PASS: the banned shape inside a comment does not fire" "R4-M2 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2b (must-PASS): reading comments WITHOUT a verdict branch is not a verdict read ---
+# Both conjuncts are load-bearing. anthropic-admin-key-6297.sh counts bot-authored marker
+# comments and inngest-watchdog-functions-query-6407.sh greps issue text for a technical failure
+# signature; neither lets a comment decide a tracker's fate, so demanding an author filter of
+# them would be reaching for a filter with nothing to filter.
+d=$(mkcase r4_m2b)
+cat >"$d/probe-marker-count.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+n=$(gh issue view 1 --json comments --jq '[.comments[] | select(.body | contains("MARKER"))] | length')
+[[ "$n" -gt 0 ]] && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R4-M2b must-PASS: a comment read with no RESULT: verdict branch does not fire" "R4-M2b expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2c: an inline authorAssociation filter is SUBSUMED, with no rule of its own ---
+d=$(mkcase r4_m2c)
+cat >"$d/probe-inline-filter.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+bodies=$(gh issue view 1 --json comments --jq '.comments[] | select(.authorAssociation == "OWNER") | .body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2c an inline authorAssociation filter still fires (the old ban is subsumed)" "R4-M2c expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2d: SOURCING the lib and then ignoring it must still fire (the wire, not the endpoint) ---
+# Anchoring on the filename rather than the CALL accepted exactly this: both endpoints present,
+# the wire between them reverted. Measured during review -- the realistic regression (revert the
+# read, leave the source line) passed the first version of this rule at rc 0.
+d=$(mkcase r4_m2d)
+cat >"$d/probe-sources-but-ignores.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+bodies=$(gh issue view 1 --json comments --jq '.comments[].body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2d sourcing the lib but reverting the read still fires" "R4-M2d expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2e: the REST comment route must be visible to the rule AND to its own floor ---
+# `gh api "repos/$R/issues/$N/comments" --jq '.[].body'` matched none of the three
+# `gh issue view` spellings, so such a probe was neither a violation NOR counted in
+# scanned_rule4 -- invisible to the rule and to the floor that exists to catch a blind rule.
+# LATENT, not live. Measured at ship time (#8389): no probe under scripts/followthroughs/ uses
+# the REST comments route today, and scanned_rule4 reads 5 both before and after the widening.
+# (The first draft of this comment claimed the corpus moved 3 -> 5; that was the FLOOR value
+# misread as the count, caught by re-running the pre-patch guard. A rule's own blind spot is
+# the last place to assert an unverified number.) Several probes already reach GitHub through
+# `gh api` for other reads, so this is the shape a future author walks into.
+d=$(mkcase r4_m2e)
+cat >"$d/probe-rest-route.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+bodies=$(gh api "repos/jikig-ai/soleur/issues/1234/comments" --jq '.[].body')
+grep -qE '^RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2e the gh api REST comment route fires (not just gh issue view)" "R4-M2e expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-rest-route.sh:3:' <<<"$GUARD_OUT"; check $? "R4-M2e cites the REST read at its TRUE line" "R4-M2e mis-cited the offender line: $GUARD_OUT"
+
+# --- R4-M2f: EXTRACTING the verdict and comparing later is still branching on it ---
+# VERDICT_BRANCH required PASS/FAIL adjacent to `RESULT:`, so splitting the two across a
+# pipeline decided a tracker's fate and passed. The obligation is about reading a verdict at
+# all, so the anchor is now `RESULT:` on an executable line. Over-detection is deliberate:
+# the remedy is "call the lib", which every legitimate comment-reading probe already does.
+d=$(mkcase r4_m2f)
+cat >"$d/probe-extract-then-compare.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+v="$(gh issue view 1234 --json comments --jq '.comments[].body' | grep -oE '^RESULT: [A-Z]+' | tail -1 | awk '{print $2}')"
+[[ "$v" == PASS ]] && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2f extract-then-compare still fires (PASS need not be adjacent to RESULT:)" "R4-M2f expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2g: CALLING the lib once does not license a raw read beside it ---
+# R4-M2d pins the `source`-line variant. This is the CALL-line variant, one level up: the
+# exemption was `(( via_lib == 0 )) || continue`, so a single occurrence of the call anywhere
+# in the file exempted it -- both endpoints pinned, the wire between them unpinned, which is
+# the exact shape this rule's header claims to have closed.
+d=$(mkcase r4_m2g)
+cat >"$d/probe-lib-present-raw-decide.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+_unused=$(trusted_verdict_bodies 9999)
+raw=$(gh issue view 1234 --json comments --jq '.comments[].body')
+grep -qE '^RESULT: PASS\b' <<<"$raw" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R4-M2g calling the lib once does not exempt a raw comment read beside it" "R4-M2g expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M2h (must-PASS): the COMPLIANT shape stays green ---
+# The three rows above widen the rule; this one is the counterweight that keeps the widening
+# from being "fires on everything". A compliant probe has NO raw comment read at all -- it
+# takes its bodies from the lib -- so `direct == 1` is itself the defect being detected.
+d=$(mkcase r4_m2h)
+cat >"$d/probe-compliant.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+bodies=$(trusted_verdict_bodies 1234) || exit 2
+last="$(grep -E '^RESULT: (PASS|FAIL)\b' <<<"$bodies" | tail -1)"
+[[ "$last" =~ ^RESULT:\ PASS ]] && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R4-M2h must-PASS: the lib-routed compliant shape stays green" "R4-M2h expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# --- R4-M3 DISPATCH: a guard COPY with rule 4's grep deleted must go GREEN on the M1 fixture ---
+d=$(mkcase r4_m3)
+cat >"$d/probe-unfiltered-verdict.sh" <<'EOF'
+#!/usr/bin/env bash
+bodies=$(gh issue view 1 --json comments --jq '.comments[].body')
+grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
+exit 1
+EOF
+R4_GUARD="$SANDBOX/guard-no-rule4.sh"
+sed '/# rule4-grep/d' "$GUARD" >"$R4_GUARD"
+if diff -q "$GUARD" "$R4_GUARD" >/dev/null; then
+  check 1 "" "R4-M3 DISPATCH: the rule4-grep marker is absent from the guard -- the mutation did not land and the row is vacuous"
+else
+  R4_OUT="$(bash "$R4_GUARD" "$d" 2>&1)"; R4_RC=$?
+  (( R4_RC == 0 )); check $? "R4-M3 DISPATCH: deleting the rule-4 grep makes the M1 fixture pass -- that grep IS the mechanism" "R4-M3 expected exit 0 from the gutted guard, got $R4_RC: $R4_OUT"
+fi
+
+# --- R4-M4: rule 4's OWN floor, on its OWN measure ---
+# The counter is comment-reading probes, not `find | wc -l`. The previous counter was
+# byte-identical to rule 2's, so rule 4's floor was true exactly when rule 2's was, rule 2's
+# exit 2 ran first, and this floor was unreachable for every input.
+R4F_GUARD="$SANDBOX/guard-rule4-zero.sh"
+sed 's|^  scanned_rule4=\$((scanned_rule4 + 1)).*# rule4-count$|  scanned_rule4=$((scanned_rule4 + 0))  # rule4-count|' "$GUARD" >"$R4F_GUARD"
+if diff -q "$GUARD" "$R4F_GUARD" >/dev/null; then
+  check 1 "" "R4-M4 the rule4-count marker is absent -- the mutation did not land and the row is vacuous"
+else
+  R4F_OUT="$(bash "$R4F_GUARD" 2>&1)"; R4F_RC=$?
+  (( R4F_RC == 2 )); check $? "R4-M4 rule 4's own floor breach -> exit 2" "R4-M4 expected exit 2, got $R4F_RC: $R4F_OUT"
+  grep -q 'rule 4 (trusted-verdict obligation)' <<<"$R4F_OUT"; check $? "R4-M4 the floor diagnostic names RULE 4 specifically" "R4-M4 diagnostic does not name rule 4: $R4F_OUT"
+fi
+
 # --- Accounting (ADR-193). Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it polices cannot report the fault that corrupted it. ---
 if (( passes + fails != asserted )); then
@@ -570,8 +763,8 @@ fi
 # verdict without dropping the count" is true of pass()/fail() and FALSE of check() itself:
 # `asserted` is incremented INSIDE check, so both backstops are dispatched through the one
 # helper they exist to police. Measured 2026-09-18: `check() { asserted=$((asserted+1)); pass "$2"; }`
-# -- a one-branch edit on the single call site of all 73 verdicts -- reported
-# `=== 73 passed, 0 failed (73 asserted, floor 73) === PASSED`, exit 0, byte-identical to the
+# -- a one-branch edit on the single call site of all 80 verdicts -- reported
+# `=== 80 passed, 0 failed (80 asserted, floor 80) === PASSED`, exit 0, byte-identical to the
 # honest run. So does `fail() { passes=$((passes+1)); ... }`. This block catches both.
 _p=$passes _f=$fails _a=$asserted _n=${#FAILURES[@]}
 if (( _n > 0 )); then _saved=("${FAILURES[@]}"); else _saved=(); fi
@@ -585,7 +778,7 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=73
+MIN_ASSERTIONS=80
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

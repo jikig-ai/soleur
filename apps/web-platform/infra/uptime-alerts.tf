@@ -39,7 +39,16 @@
 # apex" is not a weaker assertion there — it is an unwritable one. Better Stack's
 # `follow_redirects = false` is the only knob in the stack that can express it.
 # So betteruptime_monitor.soleur_www_redirect below is here on capability
-# grounds, not coverage grounds, and the amendment extends no further than that.
+# grounds, not coverage grounds.
+#
+# AMENDED AGAIN at #8364 (ADR-204 second amendment): the three
+# betteruptime_monitor.seo_redirect_* probes below are here on the SAME
+# capability grounds — only `follow_redirects = false` can assert an
+# intermediate 301, which Sentry structurally cannot grade. They are SAMPLED
+# coverage, not exhaustive: one probe per independent edge-redirect mechanism
+# (zone ruleset rule, explicit bulk-list item, generated dated-pair item), so a
+# post-apply edge failure on each class pages somebody. Source completeness of
+# the full redirect set remains the guards' job, not runtime monitoring's.
 #
 # Consequence a future reader must not get wrong: redirect-health is now a
 # SINGLE-VENDOR property. Apex reachability is watched by Sentry AND Better
@@ -297,6 +306,116 @@ resource "betteruptime_monitor" "soleur_www_redirect" {
   # ternary is null and this changes nothing; omitting the attribute instead
   # would silently exclude this monitor from escalation on a future
   # betterstack_paid_tier flip, unlike every sibling.
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
+# ── Sampled deep-URL 301 probes (#8364, ADR-204 second amendment) ──────────
+#
+# Three probes, one per INDEPENDENT edge-redirect mechanism, so a post-apply
+# edge failure on each class pages somebody — the gap the declaration-time
+# guards structurally cannot see (an emptied list, a lost rules{} block, a
+# token-scope loss or a dashboard edit all apply clean and drift-green):
+#
+#   seo_redirect_zone_ruleset  — cloudflare_ruleset.seo_page_redirects
+#                                (seo-rulesets.tf; a lost rules{} block)
+#   seo_redirect_bulk_item     — an explicit item of
+#                                cloudflare_list.legal_redirects
+#                                (seo-bulk-redirects.tf; list emptied / item dropped)
+#   seo_redirect_blog_pair     — a generated blog_redirect_pairs expansion item
+#                                (same list; for_each/local breakage end-to-end)
+#
+# SAMPLED, not exhaustive — the smallest set that separates the three failure
+# mechanisms. Per-URL monitoring of the full redirect set is rejected on
+# unresolved free-tier quota (see the quota note in this file's header) and
+# because source completeness is already the drift guards' job. Each probe URL
+# is a member of the declared redirect source set; the membership is pinned by
+# infra/seo-redirect-monitors.test.sh, which also forbids for_each/count/
+# lifecycle here (for_each would break the ADR-222 reconcile parser).
+#
+# Attributes are cloned verbatim from soleur_www_redirect, including
+# confirmation_period = 1200 — the Pages-rebuild absorb window applies to these
+# URLs for the same reason (a rebuild can transiently serve stale content past
+# the 900 s mark).
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/seo-redirect-alarm.md
+resource "betteruptime_monitor" "seo_redirect_zone_ruleset" {
+  monitor_type       = "expected_status_code"
+  url                = "https://soleur.ai/pages/agents.html"
+  pronounceable_name = "soleur pages agents redirect 301"
+
+  # Same load-bearing trio as soleur_www_redirect: grade the PRE-redirect
+  # response. follow_redirects = true would grade the target's 200; Better
+  # Stack refuses remember_cookies with a 3xx expectation (HTTP 422).
+  follow_redirects      = false
+  expected_status_codes = [301]
+  remember_cookies      = false
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 1200
+  recovery_period     = 60
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
+resource "betteruptime_monitor" "seo_redirect_bulk_item" {
+  monitor_type       = "expected_status_code"
+  url                = "https://soleur.ai/pages/legal/privacy-policy.html"
+  pronounceable_name = "soleur legal privacy redirect 301"
+
+  follow_redirects      = false
+  expected_status_codes = [301]
+  remember_cookies      = false
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 1200
+  recovery_period     = 60
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
+resource "betteruptime_monitor" "seo_redirect_blog_pair" {
+  monitor_type       = "expected_status_code"
+  url                = "https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/"
+  pronounceable_name = "soleur blog dated slug redirect 301"
+
+  follow_redirects      = false
+  expected_status_codes = [301]
+  remember_cookies      = false
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 1200
+  recovery_period     = 60
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
   policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
 
   verify_ssl = true

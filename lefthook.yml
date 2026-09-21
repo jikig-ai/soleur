@@ -420,6 +420,36 @@ pre-commit:
       priority: 11
       glob: "knowledge-base/marketing/distribution-content/*.md"
       run: bash scripts/lint-distribution-content.sh {staged_files}
+    # The no-list guard (#8289): every entry in the rejected-concepts record
+    # (knowledge-base/project/rejected/) must carry the fields concept matching depends on,
+    # must not claim a concept is unimplemented while carrying a key that is only true of a
+    # built feature, must not identify a requester, and must never name itself as grounds to
+    # close or label an issue. Single-star glob: entries are FLAT at depth 1, and gobwas `**`
+    # requires >=1 intermediate directory and would silently skip every one of them
+    # (2026-03-21-lefthook-gobwas-glob-double-star.md). Priority 12 so it runs after
+    # generate-kb-index (10) has re-staged the index.
+    #
+    # THIS IS ONE OF THREE DISPATCHES, not a chokepoint. See the pre-push mirror below and the
+    # CI step in .github/workflows/ci.yml (the `lint-bot-statuses` job), which runs --all over
+    # the WHOLE glob rather than the staged set. That CI job is ADVISORY — absent from
+    # scripts/required-checks.txt, so a PR merges with it red. All three dispatches are advisory;
+    # none of them blocks. Rationale and the promotion issue: the DISPATCH note at the top of
+    # scripts/lint-rejected-register.sh.
+    rejected-register-guard:
+      priority: 12
+      glob: "knowledge-base/project/rejected/*.md"
+      run: bash scripts/lint-rejected-register.sh {staged_files}
+    # The sibling surface, and the one that needs a gate MORE. knowledge-base/project/questionnaires/
+    # is the only directory here designed to ingest another person's words, and this repository is
+    # public with permanent history — the same ground on which the guard above rejects `requester`
+    # outright. The skill's own defences (the three-field allowlist, the preview, redact-sentinel.sh)
+    # stop at the skill: the `## Answers` section is filled in by hand afterwards, and the sentinel is
+    # secret-scoped, which the skill's own rationale records as insufficient for an identity.
+    # ADVISORY like its sibling; see the DISPATCH note in scripts/lint-rejected-register.sh.
+    questionnaire-identity-guard:
+      priority: 12
+      glob: "knowledge-base/project/questionnaires/*.md"
+      run: bash scripts/lint-questionnaire-identity.sh {staged_files}
 
 # pre-push mirror of the client-pii-grep signal-quality gate (#3703) so a bypass
 # is surfaced at push time even if the pre-commit hook was skipped (e.g. amended
@@ -442,3 +472,25 @@ pre-push:
       # {push_files} is the pre-push file set (the push range). Verified e2e
       # against lefthook 2.1.6 with a real `git push`.
       run: bash .github/scripts/check-client-pii-sentry.sh {push_files}
+    # pre-push mirror of the no-list guard (#8289), same shared script, same scope, for the
+    # same reason the client-pii-grep mirror above exists: `git commit --no-verify`, LEFTHOOK=0
+    # and a clone without lefthook installed all reach the repository without the pre-commit
+    # hook, so a bypass is surfaced at push time instead of at review time. (NOT a
+    # merge-resolution commit — lefthook keys `merge` on MERGE_HEAD and this entry carries no
+    # `skip: merge`, so the pre-commit arm does run on one. The uncovered merges are the clean
+    # one and the server-side one, and the server-side one this mirror cannot see either,
+    # because no push occurs.)
+    questionnaire-identity-guard:
+      priority: 6
+      glob: "knowledge-base/project/questionnaires/*.md"
+      # {push_files} for the same reason as every mirror here: {staged_files} resolves to empty in a
+      # pre-push hook and the gate would skip with "no files for inspection" — a vacuous gate.
+      run: bash scripts/lint-questionnaire-identity.sh {push_files}
+    rejected-register-guard:
+      priority: 6
+      # Flat depth-1 glob, same gobwas rationale as the pre-commit entry.
+      glob: "knowledge-base/project/rejected/*.md"
+      # {push_files}, NOT {staged_files}: in a pre-push hook lefthook resolves {staged_files}
+      # to empty (nothing is staged at push time) and the command skips with "no files for
+      # inspection" — a vacuous gate. Same correction as client-pii-grep above.
+      run: bash scripts/lint-rejected-register.sh {push_files}

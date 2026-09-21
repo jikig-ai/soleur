@@ -194,7 +194,7 @@ run_probe() { # <fixture-file> -> echoes exit code; combined output in $WORK/out
   [[ "${CASE_NO_LIB:-0}" == "1" ]] || cp "$PARSE_LIB_SRC" "$root/scripts/lib/"
 
   case "${CASE_LEDGER:-other}" in
-    available) printf '{"stores":[{"store":"hcloud_volume.registry","at_rest":{"live_verification":"available: observed boot, rows read store_luks=yes"}}]}\n' > "$root/scripts/encryption-posture-ledger.json" ;;
+    available) printf '{"stores":[{"store":"hcloud_volume.registry","at_rest":{"live_verification":"available"}}]}\n' > "$root/scripts/encryption-posture-ledger.json" ;;
     other)     printf '{"stores":[{"store":"hcloud_volume.registry","at_rest":{"live_verification":"unavailable: the emitter exists in code but has not been observed on a boot"}}]}\n' > "$root/scripts/encryption-posture-ledger.json" ;;
     malformed) printf '{"stores":[{"store": not-json\n' > "$root/scripts/encryption-posture-ledger.json" ;;
     absent)    : ;;

@@ -116,6 +116,7 @@ After verifying session errors are in the learning, determine if any error warra
 
 - If yes, produce a proposal in the same format as Phase 1.5 Deviation Analyst (rule text + enforcement tier) and feed it into Constitution Promotion alongside any deviation proposals.
 - If no (the error was a one-off or already covered by existing rules), skip.
+- If the error was two readings of one internal word rather than a missing rule, the fix is vocabulary: invoke `soleur:kb-glossary` and record the settled sense in `knowledge-base/project/glossary.md` as a pointer to the file that defines it.
 
 This ensures session errors don't just get documented — they feed back into the rules and definitions that govern future sessions. The goal is a closed loop: error happens → gets documented → workflow changes → error cannot recur.
 

@@ -230,6 +230,28 @@ jobs:
         run: python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # THE THIRD DISPATCH of the no-list guard (#8289). lefthook's pre-commit and pre-push
+      # entries see only the staged / pushed set; `git commit --no-verify` and a
+      # merge-resolution commit reach the repository through neither. So CI walks the WHOLE
+      # glob with --all, which discovers entries by walking
+      # knowledge-base/project/rejected/ rather than by reading a manifest — a manifest goes
+      # stale the first time somebody adds an entry without editing it. A walk that finds no
+      # entries exits 3 and does NOT report success: "nothing checked" is not "clean".
+      # ADVISORY, like the job it sits in: `lint-bot-statuses` is absent from
+      # scripts/required-checks.txt and from the ruleset, so a PR merges with this red. It is
+      # still the only arm that sees the WHOLE record, which is why it exists — but it reports,
+      # it does not block. The promotion path is #6883 / ADR-139 (extract into its own required
+      # context, re-deriving the unreachability argument per-gate — it is never inheritable), and
+      # the trap it avoids is the #6049 auto-fabrication guard. See the DISPATCH note in the script.
+      - name: "lint-bot-statuses — rejected-concepts record, full glob (#8289, advisory)"
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-rejected-register.sh --all
+
+      # Same advisory caveat as the step above, same reason. The whole-directory pass is the only arm
+      # that sees a questionnaire nobody staged.
+      - name: "lint-bot-statuses — questionnaire third-party identity, full glob (#8289, advisory)"
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-questionnaire-identity.sh --all
       # Supabase Management API deprecation + host-pin assembly guard.
       #
       # ENFORCEMENT LEVEL IS ADVISORY, NOT BLOCKING, exactly as stated for every other
@@ -934,6 +956,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # redirect-tombstones.test.ts enumerates ALL history (`git log
+          # --diff-filter=RD` + `git log -p -Gpermalink:`) and fails closed on
+          # a shallow clone via --is-shallow-repository — a depth-1 checkout
+          # reads as "nothing died". #8364.
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
