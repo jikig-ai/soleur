@@ -102,7 +102,13 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
     # FAIL-CLOSED BY CONTRACT: it exits non-zero having touched nothing unless it committed
     # the merge, so the fall-through below is exactly today's behaviour. It never pushes --
     # the push and its rejection handling (exit 7) stay here.
-    resolver="$REPO_ROOT/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+    # The resolver is a TOOL that ships beside this script, so it is located from this
+    # file's directory; the TARGET is still the caller's worktree ($PWD), which the resolver
+    # derives itself via `git rev-parse --show-toplevel`. Do not reintroduce $REPO_ROOT here:
+    # it was removed above (see "NO `cd` HERE") and an unset one makes this path
+    # "/plugins/...", so `-f` fails and every regenerable conflict silently degrades to
+    # "manual resolution required" -- the regen arm dead with no error.
+    resolver="$(dirname "${BASH_SOURCE[0]}")/resolve-regenerable-conflicts.sh"
     if [[ -f "$resolver" ]] && bash "$resolver" origin/main; then
       echo "[pr-behind-sync] regenerable conflict resolved — merge committed locally"
       resolved_by_regen=1
