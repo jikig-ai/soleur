@@ -54,12 +54,15 @@ the backlog clears, the *tail* is what hurts.
 ## Technical Requirements
 
 - **TR1** — Ruleset changes go through `infra/github/` Terraform (ADR-032) — never the UI.
-- **TR2** — Cron cadence targets: `scheduled-inngest-health` `*/15`→`*/30`,
-  `scheduled-prod-version-drift` `*/30`→hourly, `scheduled-zot-restart-loop` `*/30`→hourly,
-  `apply-inngest-rls` hourly→every 4h — each justified against the detection window named
-  in its file header; tighten less where the header argues otherwise.
-- **TR3** — Post-upgrade verification: sample `actions/runs?status=queued` p50 age before
-  and after; record both numbers in the PR body.
+- **TR2** — Cron cadence targets: `scheduled-prod-version-drift` `*/30`→hourly,
+  `scheduled-zot-restart-loop` `*/30`→hourly, `apply-inngest-rls` hourly→every 4h — each
+  justified against the detection window named in its file header; tighten less where the
+  header argues otherwise. `scheduled-inngest-health` stays `*/15` under that escape clause —
+  its header argues `*/15` because inngest-down is a brand-survival outage (#5542).
+- **TR3** — Post-upgrade verification: measure the deploy-arm tail — per-job
+  `started_at − created_at` on `web-platform-release.yml` runs (queued snapshots only see the
+  currently-queued set) plus merge→`workflow_run` registration lag, before and after; record
+  both in `measurements.md`.
 - **TR4** — No changes to `concurrency:` group membership except where a consolidated
   cron merges files.
 
@@ -70,4 +73,5 @@ the backlog clears, the *tail* is what hurts.
 - Sub-hourly cron count drops from 4 files to ≤2; documented lag per FR2.
 - At least one non-applicable PR class (e.g. `knowledge-base/**`-only diffs) skips
   heavyweight producers while all required contexts still report.
-- Queue p50 measured after merge is materially below the ~7 min / 30-min-tail baseline.
+- Deploy-arm queued p95 (per-job `started_at − created_at` on `web-platform-release.yml`
+  jobs, post-upgrade window) is <15 min vs the 30–75 min baseline.
