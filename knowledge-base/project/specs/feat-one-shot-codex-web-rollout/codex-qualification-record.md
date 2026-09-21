@@ -15,6 +15,7 @@ The archived 2026-09-14 record contains deterministic fixtures, not live provide
 - PR #8447 is MERGED at `7e8dfab4dfd9fa8dbf656260a67216c6487630a7`.
 - An initial 2026-09-21 probe returned HTTP 200 with `build_sha: 9768645adcd765a11603836399e8078fb8348065`; a later direct probe returned HTTP 200 with `build_sha: b53173a04e813ca11bb47b14ea4e89e129343064`, `supabase: connected`, and `sentry: configured`. The later value matches current `origin/main`, but it still does not prove that the Codex feature path is deployed or wired.
 - The Codex reviewed definition remains disabled for new and existing runs. Production calls to the adapter composition and Codex dispatch were not found at this baseline.
+- A post-rebase health probe on 2026-09-21 still returned HTTP 200 with build `b53173a04e813ca11bb47b14ea4e89e129343064`, `supabase: connected`, and `sentry: configured`; this is liveness evidence only. A fresh Flagsmith read confirmed `codex-engine` exists as feature `259236`, `default_enabled: false`, with no cohort override observed. No enablement mutation was attempted.
 
 ## Live-provider probes
 
