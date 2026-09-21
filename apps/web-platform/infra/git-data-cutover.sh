@@ -280,7 +280,7 @@ access_gate() {
 # ============================================================================
 # Store probes (D-5) — each fails closed with a fixed verdict word, exit 5
 # ============================================================================
-_store_emit() { # <probe> <verdict> [rc] [reason]
+_store_emit() { # <probe> <verdict> [rc] [reason] — pass "" for rc when a reason has no rc
   local detail="probe=$1 verdict=$2${3:+ rc=$3}${4:+ reason=$4}"
   log "STORE ${detail}"
   if [ "$2" = ok ]; then

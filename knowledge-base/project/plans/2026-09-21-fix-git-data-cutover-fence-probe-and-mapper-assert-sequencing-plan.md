@@ -704,7 +704,7 @@ failure_modes:
     detection: "remote exit 15 via findmnt -no SOURCE -T compared to the mount probe's accepted source; reason=hooks_wrong_source"
     alert_route: "layer 6 (workflow run log, ::error:: annotation) on the failed run"
   - mode: "an instrument on the host failed (stat error, git missing or config unreadable)"
-    detection: "remote exit 16 (per-instrument rc captured in-surface); rendered probe_failed rc=16, never a store-state reason"
+    detection: "remote exit 16 (the failing instrument is named only in the run log's probe-stderr lines, not by the rc); rendered probe_failed rc=16, never a store-state reason"
     alert_route: "layer 6 (workflow run log, ::error:: annotation) on the failed run"
   - mode: "the read could not be completed (transport, timeout, oversized or multi-line answer, findmnt failure)"
     detection: "gd_capture rc (95/96/97/124/141/255) or remote exit 5; rendered probe_failed rc=<n>, never a store-state verdict"
