@@ -6,6 +6,10 @@
 #            Implementations: scripts/sentry-issue-alert-create-tripwire.sh (A-ii)
 #                             scripts/sentry-create-gate.sh, now invoked in BOTH
 #                             workflow jobs (A-i)
+#   Guard 2  (#8451) no create/update/replace of a `sentry_alert` whose
+#            after-state carries a legacy trigger type the provider re-sends as
+#            `comparison: true`, zeroing the paging threshold.
+#            Implementation: scripts/sentry-issue-alert-create-tripwire.sh
 #   Guard B  the forget<->import bijection.
 #            Implementation: scripts/sentry-forget-import-bijection.sh
 #            Consumer:       scripts/sentry-adoption-plan-assert.sh (AC2/AC10)
@@ -33,7 +37,7 @@ BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=32
+EXPECTED_TESTS=37
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -72,6 +76,18 @@ _pairs() {
   done
   _plan "${rows[@]}"
 }
+
+# _lrow <name> <actions-json> <legacy-json|absent> [importing-id] -> a
+# sentry_alert row whose after-state carries `legacy_trigger_conditions`, the
+# field the v0.15.7 provider re-sends with `comparison: true` on any write.
+_lrow() {
+  local imp="" leg=""
+  [[ -n "${4:-}" ]] && imp=",\"importing\":{\"id\":\"$4\"}"
+  [[ "$3" != absent ]] && leg="\"legacy_trigger_conditions\":$3"
+  printf '{"type":"sentry_alert","address":"sentry_alert.%s","mode":"managed","change":{"actions":%s,"before":{},"after":{%s}%s}}' \
+    "$1" "$2" "$leg" "$imp"
+}
+LEGACY='["event_unique_user_frequency_count"]'
 
 _write() { local f="$TMPD/$1.json"; cat > "$f"; echo "$f"; }
 _rc() { local rc=0; "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
@@ -213,17 +229,20 @@ t_a6_zero_rows_red() {
   fi
 }
 
-# A7 — the two survivors must still be updatable. Without this row the tripwire
-# could be a blanket "no sentry_issue_alert row of any kind", which would red
-# every legitimate edit to the two rules the provider cannot express.
+# A7 — the sentry_issue_alert refusal keys on CREATE only. Since #8451 no
+# sentry_issue_alert remains (the last two were adopted as `sentry_alert`, and
+# their write hazard is Guard 2's, rows G2-*), so this row no longer protects an
+# editable survivor. It pins the selector's shape: without it the refusal could
+# be a blanket "no sentry_issue_alert row of any kind", which would also red the
+# `["forget"]` rows every adoption plan carries.
 t_a7_update_green() {
   local f; f=$(_plan "$(_row sentry_issue_alert auth_per_user_loop '["update"]')" \
                      "$(_row sentry_issue_alert sandbox_startup_failure '["no-op"]')" | _write a7)
   local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
   if [[ "$rc" -eq 0 ]]; then
-    _report "A7 an UPDATE on a surviving sentry_issue_alert passes (the two are still editable)" ok
+    _report "A7 an UPDATE on a sentry_issue_alert passes (the refusal is create-only)" ok
   else
-    _report "A7 an UPDATE on a surviving sentry_issue_alert passes" fail "rc=$rc want 0"
+    _report "A7 an UPDATE on a sentry_issue_alert passes (the refusal is create-only)" fail "rc=$rc want 0"
   fi
 }
 
@@ -727,6 +746,94 @@ t_c5_import_id_not_in_capture_red() {
   fi
 }
 
+# ════════════════════════════════════════════════════════════════════════════
+# Guard 2 (#8451) — no threshold-destroying write reaches apply
+# ════════════════════════════════════════════════════════════════════════════
+# Matrix row 2 (a zero-row plan) is A6: the same floor, the same script.
+# Every RED row anchors on the FINDING LINE (`sentry_alert.<name> actions=`),
+# never on a bare name: the static prose names both adopted rules on every
+# failure, so a bare-name grep is satisfied by the boilerplate.
+
+# G2-1 — an update on an adopted legacy-trigger rule. `ignore_changes = all`
+# plans no update today; this is the day someone narrows it.
+t_g2_1_legacy_update_red() {
+  local f; f=$(_plan "$(_lrow sandbox_startup_failure '["update"]' "$LEGACY")" | _write g2-1)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  local msg; msg=$(_err bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_alert\.sandbox_startup_failure actions=update' <<<"$msg" \
+     && grep -q 'comparison: true' <<<"$msg" && grep -q '#7985' <<<"$msg"; then
+    _report "G2-1 an UPDATE on a legacy-trigger sentry_alert REDs, names it, says why and the remedy" ok
+  else
+    _report "G2-1 an UPDATE on a legacy-trigger sentry_alert REDs" fail "rc=$rc (want 1); msg=$msg"
+  fi
+}
+
+# G2-3 — second member. A guard that inspects only the first sentry_alert row
+# (`first(...)`, `.[0]`) passes this plan: the compliant row comes first.
+t_g2_3_second_member_create_red() {
+  local f; f=$(_plan "$(_lrow some_native_rule '["no-op"]' '[]')" \
+                     "$(_lrow auth_per_user_loop '["create"]' "$LEGACY")" | _write g2-3)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  local msg; msg=$(_err bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_alert\.auth_per_user_loop actions=create' <<<"$msg" \
+     && ! grep -qE 'sentry_alert\.some_native_rule actions=' <<<"$msg"; then
+    _report "G2-3 a legacy CREATE behind a compliant no-op row REDs (census, not first row)" ok
+  else
+    _report "G2-3 a legacy create behind a compliant row REDs" fail "rc=$rc (want 1); msg=$msg"
+  fi
+}
+
+# G2-4 — a replace, in both orderings (create_before_destroy serialises
+# `["create","delete"]`). A `-replace`/taint or a label rename lands here.
+t_g2_4_legacy_replace_red() {
+  local a b; a=$(_plan "$(_lrow sandbox_startup_failure '["delete","create"]' "$LEGACY")" | _write g2-4a)
+  b=$(_plan "$(_lrow sandbox_startup_failure '["create","delete"]' "$LEGACY")" | _write g2-4b)
+  local rc_a rc_b; rc_a=$(_rc bash "$TRIPWIRE" "$a"); rc_b=$(_rc bash "$TRIPWIRE" "$b")
+  local ma mb; ma=$(_err bash "$TRIPWIRE" "$a"); mb=$(_err bash "$TRIPWIRE" "$b")
+  if [[ "$rc_a" -eq 1 && "$rc_b" -eq 1 ]] \
+     && grep -qE 'sentry_alert\.sandbox_startup_failure actions=delete,create' <<<"$ma" \
+     && grep -qE 'sentry_alert\.sandbox_startup_failure actions=create,delete' <<<"$mb"; then
+    _report "G2-4 a REPLACE on a legacy-trigger sentry_alert REDs in both orderings" ok
+  else
+    _report "G2-4 a replace on a legacy-trigger sentry_alert REDs" fail \
+      "delete,create rc=$rc_a create,delete rc=$rc_b (both want 1); msgs: $ma / $mb"
+  fi
+}
+
+# G2-5 — must-PASS. The adoption itself is an import no-op (a read), and after
+# the #7985 native conversion an update writes the true {interval,value}. A
+# guard stuck RED satisfies G2-1/3/4; this row is what it fails.
+t_g2_5_import_and_native_update_pass() {
+  local f; f=$(_plan "$(_lrow auth_per_user_loop '["no-op"]' "$LEGACY" acme/566671)" \
+                     "$(_lrow sandbox_startup_failure '["no-op"]' "$LEGACY" acme/669246)" \
+                     "$(_lrow converted_rule '["update"]' '[]')" \
+                     "$(_lrow other_native_rule '["update"]' absent)" | _write g2-5)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 0 ]]; then
+    _report "G2-5 an import no-op carrying legacy and a native-trigger UPDATE both PASS" ok
+  else
+    _report "G2-5 import no-op + native update pass" fail "rc=$rc want 0; msg=$(_err bash "$TRIPWIRE" "$f")"
+  fi
+}
+
+# G2-parity — the tripwire keeps ONE literal copy of the projection's `excluded`
+# set (the projection ends in a top-level expression, so it cannot be `include`d
+# as a jq module). A type added to one and not the other reds here.
+t_g2_excluded_parity() {
+  local proj="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq" p t
+  p=$(grep -F 'def excluded: [' "$proj" | head -1 | sed -E 's/^def excluded: (\[.*\]);.*$/\1/')
+  t=$(grep -F 'EXCLUDED_LEGACY_TYPES=' "$TRIPWIRE" | head -1 | sed -E "s/^EXCLUDED_LEGACY_TYPES='(\[.*\])'.*$/\1/")
+  local same
+  same=$(jq -n --argjson p "${p:-null}" --argjson t "${t:-null}" \
+    '($p|type) == "array" and ($p|length) > 0 and ($p|unique) == ($t|unique)' 2>/dev/null) || same=""
+  if [[ "$same" == "true" ]]; then
+    _report "G2-parity the tripwire's excluded set equals the projection's def excluded" ok
+  else
+    _report "G2-parity the tripwire's excluded set equals the projection's" fail \
+      "projection=${p:-<not found>} tripwire=${t:-<not found>}"
+  fi
+}
+
 t_a1_issue_alert_create_red
 t_a2_not_ack_reachable
 t_a3_unexplained_sentry_alert_create_red
@@ -738,6 +845,11 @@ t_a8_a9_invoked_in_both_jobs
 t_a10_runs_before_apply
 t_a11_guards_are_unconditional
 t_a_harness_three_unrelated_creates_pass
+t_g2_1_legacy_update_red
+t_g2_3_second_member_create_red
+t_g2_4_legacy_replace_red
+t_g2_5_import_and_native_update_pass
+t_g2_excluded_parity
 t_b1_missing_import_red
 t_b2_missing_forget_red
 t_b3_mismatched_membership_red

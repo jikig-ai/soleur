@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 # Guard A(ii) — no run ever CREATES a `sentry_issue_alert` again (#7650 Phase 2).
+# Guard 2 (#8451) — no run ever WRITES a `sentry_alert` whose after-state carries
+# a legacy trigger type the provider cannot express.
 #
 # Usage: sentry-issue-alert-create-tripwire.sh <plan.json>
-# Exit 0 = the plan creates no sentry_issue_alert.
-# Exit 1 = it creates one, or the plan could not be read as a plan document.
+# Exit 0 = the plan creates no sentry_issue_alert and writes no legacy-trigger
+#          sentry_alert.
+# Exit 1 = it does, or the plan could not be read as a plan document.
 #
 # ── WHY A SEPARATE, NARROW TRIPWIRE ────────────────────────────────────────
-# The repo owns exactly TWO `sentry_issue_alert` resources
-# (`auth_per_user_loop`, `sandbox_startup_failure`). Both stay behind for the
-# same reason: the provider cannot express their trigger
-# (`event_unique_user_frequency_count` is absent from `trigger_conditions` at
-# 0.15.7 — upstream jianyuan/terraform-provider-sentry issue 950, fixed on main
-# 2026-09-09 but not in any release, so still blocking; tracked at #7985).
-# A third, `git_data_boot_warning`, was never blocked by 950 and was migrated to
-# `sentry_alert` in Phase 3.4. Every other path through that resource type is a
-# mistake:
+# The repo owns ZERO `sentry_issue_alert` resources. The last two
+# (`auth_per_user_loop`, `sandbox_startup_failure`) were adopted as
+# `sentry_alert` in #8451 after Sentry returned HTTP 410 for the legacy
+# alert-rule API; `git_data_boot_warning` moved in Phase 3.4 and the other 27 in
+# #7650 Phase 2. Every path that creates one now is a mistake:
 #
 #   * a re-authored block after someone "restores" one of the 27, which would
 #     create a SECOND live rule paging on the same events; or
@@ -23,6 +22,27 @@
 #
 # Both bill, both double-page, and one of them is `byok-art-33-breach` — the
 # rule whose silence stops the GDPR Art. 33 72-hour clock from ever starting.
+#
+# ── GUARD 2: THE LEGACY-TRIGGER WRITE (#8451) ──────────────────────────────
+# The two adopted rules page on `event_unique_user_frequency_count`, which the
+# v0.15.7 provider cannot model (upstream jianyuan/terraform-provider-sentry
+# issue 950, fixed on main but in no release; tracked at #7985). Read keeps only
+# the TYPE string in `legacy_trigger_conditions`, dropping `{interval,value}`.
+# Write (`getTriggerConditions`, shared by Create and Update) re-sends every
+# legacy entry as `comparison: true`, so any create, update or replace would
+# replace "> N distinct users in <window>" with a boolean, and `terraform plan`
+# cannot show it because the threshold never existed in config.
+# `ignore_changes = all` means no Update is planned today; this refusal covers
+# the day someone narrows it, and every Create (a Sentry-UI delete dropping the
+# rule from state, a label rename under [ack-destroy], `-replace`/taint).
+# It keys on the LEGACY field, not the trigger type: after the #7985 native
+# conversion the provider writes the true threshold and an update is safe.
+# An import (`["no-op"]` + `importing`) is a read and is not refused.
+#
+# EXCLUDED_LEGACY_TYPES is the one literal copy of the projection's
+# `def excluded` (tests/scripts/lib/sentry-alert-projection.jq). The projection
+# cannot be `include`d as a jq module (it ends in a top-level expression), so
+# the suite asserts the two sets are equal instead (row G2-parity).
 #
 # ── WHY IT IS NOT REACHABLE FROM [ack-destroy] ─────────────────────────────
 # It is invoked BEFORE the ack is consulted, in both jobs, and it never reads
@@ -38,10 +58,13 @@
 # exact equality for `resource_creates` for the opposite and equally deliberate
 # reason — there, counting a replace as a create would fail an already-correct
 # acknowledged plan twice and train blanket-acking. Here there is no ack to
-# erode, so the wider selector is the right one.
+# erode, so the wider selector is the right one. Guard 2 uses the same wide
+# selector for the same reason, plus `update`.
 #
 # Behaviour is unit-tested by tests/scripts/test-sentry-alert-adoption-guards.sh.
 set -uo pipefail
+
+EXCLUDED_LEGACY_TYPES='["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue"]'
 
 PLAN="${1:?usage: sentry-issue-alert-create-tripwire.sh <plan.json>}"
 
@@ -77,13 +100,35 @@ creates=$(jq -r '
   exit 1
 }
 
-if [[ -z "$creates" ]]; then
-  echo "sentry_issue_alert create tripwire: PASS (no sentry_issue_alert create in $rows plan row(s))"
+legacy_writes=$(jq -r --argjson excluded "$EXCLUDED_LEGACY_TYPES" '
+  [ .resource_changes[]?
+    | select(.type == "sentry_alert")
+    | select((.change.actions // []) | (index("create") or index("update")))
+    | ((.change.after // {}).legacy_trigger_conditions // []) as $legacy
+    | select([ $legacy[] | select(. as $t | $excluded | index($t)) ] | length > 0)
+    | "\(.address) actions=\((.change.actions // []) | join(",")) legacy_trigger_conditions=\($legacy | join(","))" ]
+  | .[]
+' "$PLAN") || {
+  echo "::error::sentry_issue_alert create tripwire: could not evaluate the legacy-trigger check on '$PLAN'." >&2
+  exit 1
+}
+
+if [[ -z "$creates" && -z "$legacy_writes" ]]; then
+  echo "sentry_issue_alert create tripwire: PASS (no sentry_issue_alert create and no legacy-trigger sentry_alert write in $rows plan row(s))"
   exit 0
 fi
 
-count=$(grep -c '' <<<"$creates")
-echo "::error::sentry_issue_alert create tripwire: this plan CREATES ${count} sentry_issue_alert resource(s):" >&2
-sed 's/^/::error::  /' <<<"$creates" >&2
-echo "::error::Only two sentry_issue_alert resources may exist (auth_per_user_loop, sandbox_startup_failure); the other 29 are sentry_alert — 27 adopted in #7650 Phase 2, git_data_boot_warning in Phase 3.4, and ops_email_delivery_failure authored directly (#7989) (#7985). Note auth_per_user_loop is import-only while sandbox_startup_failure was apply-created, so 'it must have been imported' is NOT a safe assumption here. A create here means a duplicate live paging rule that bills and double-pages, or an adoption that failed and is being resolved by creating instead of importing. There is NO acknowledgement for this and [ack-destroy] does not reach it: investigate the divergence." >&2
+if [[ -n "$creates" ]]; then
+  count=$(grep -c '' <<<"$creates")
+  echo "::error::sentry_issue_alert create tripwire: this plan CREATES ${count} sentry_issue_alert resource(s):" >&2
+  while IFS= read -r line; do echo "::error::  $line" >&2; done <<<"$creates"
+  echo "::error::No sentry_issue_alert resource may exist: every rule in issue-alerts.tf is a sentry_alert, the last two (auth_per_user_loop, sandbox_startup_failure) adopted in #8451 after the legacy alert-rule API returned HTTP 410. A create here means a duplicate live paging rule that bills and double-pages, or an adoption that failed and is being resolved by creating instead of importing. There is NO acknowledgement for this and [ack-destroy] does not reach it: investigate the divergence." >&2
+fi
+
+if [[ -n "$legacy_writes" ]]; then
+  count=$(grep -c '' <<<"$legacy_writes")
+  echo "::error::sentry_issue_alert create tripwire: this plan WRITES ${count} sentry_alert resource(s) whose after-state carries a legacy trigger type:" >&2
+  while IFS= read -r line; do echo "::error::  $line" >&2; done <<<"$legacy_writes"
+  echo "::error::Provider v0.15.7 keeps only the type string of these triggers in legacy_trigger_conditions and re-sends each one with comparison: true on create and update, so applying this plan would replace the rule's paging threshold (N distinct users in a window) with a boolean. terraform plan cannot show that change. Import no-ops are allowed; a create, update or replace is not. The remedy is the #7985 native conversion (a provider release that models the trigger), not an edit to this rule's block. There is NO acknowledgement for this and [ack-destroy] does not reach it." >&2
+fi
 exit 1
