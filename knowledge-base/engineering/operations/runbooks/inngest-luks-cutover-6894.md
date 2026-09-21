@@ -156,19 +156,38 @@ there is no backfill, and no dispatch that can synthesise one.
    alias, `redis_active=active`, and `redis_keys` at least `k_freeze − e_freeze` (volatile keys may have
    expired; nothing else should have gone).
 
-2. **Arm the wrong-volume alert.** It ships paused, because before the cutover the plaintext alias is
-   the correct value and an armed rule would page continuously.
+2. **Arm the wrong-volume alert.** It SHIPPED paused, because before the cutover the plaintext alias
+   was the correct value and an armed rule would have paged continuously.
 
-   **There is no tfvars file in this root and no `-var-file` in any workflow** — every variable
-   reaches terraform through `doppler run --name-transformer tf-var`, which turns a Doppler name
-   into `TF_VAR_<lowercased>`. So arming is a Doppler write, then an ordinary apply:
+   **CORRECTED 2026-09-20 (#8296).** This step used to prescribe a Doppler write
+   (`doppler secrets set INNGEST_LUKS_CUTOVER_COMPLETE … true`) followed by
+   `gh workflow run apply-web-platform-infra.yml -f apply_target=main`. Both halves were wrong:
+   `main` is not a value the workflow's `apply_target` choice accepts (the dispatch is refused), and
+   the arming route is now the DECLARED DEFAULT — `var.inngest_luks_cutover_complete` defaults to
+   `true` in `apps/web-platform/infra/variables.tf` since #8296, and the merge of that change is the
+   apply that arms it (the two alert resources are in the push-triggered plan's `-target=`
+   allowlist, and `variables.tf` is under the workflow's `paths:` trigger).
+
+   **The Doppler secret is therefore an OVERRIDE, not the switch.** There is still no tfvars file in
+   this root and no `-var-file` in any workflow; every variable reaches terraform through
+   `doppler run --name-transformer tf-var`, so a secret named `INNGEST_LUKS_CUTOVER_COMPLETE` in
+   `soleur/prd_terraform` silently wins over the declared default. Do not set one to arm. If one is
+   set to `false` — for a sanctioned re-pause during a rollback to the plaintext backstop — the
+   drift reconciler will report `logs-alert-paused` twice daily BY DESIGN (it resolves the declared
+   default and cannot see the override); that report is the only record the override leaves.
+   Re-read it before concluding anything from a plan:
 
    ```
-   printf 'true' | doppler secrets set INNGEST_LUKS_CUTOVER_COMPLETE      -p soleur -c prd_terraform --no-interactive >/dev/null
-   gh workflow run apply-web-platform-infra.yml -f apply_target=main
+   doppler secrets get INNGEST_LUKS_CUTOVER_COMPLETE -p soleur -c prd_terraform --plain
    ```
 
-   (`>/dev/null` is not optional: `doppler secrets set` prints every remaining secret of the config.)
+   If the merge apply halted on unrelated drift, re-run it as the ordinary manual rerun with a
+   `reason` (that input is required):
+
+   ```
+   gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm inngest_luks_wrong_volume after #8296'
+   ```
+
    The two alert resources are already in that plan's `-target=` allowlist. From then on, any probe
    row reporting `/mnt/data` on a volume that is not the encrypted one pages — that is the detector
    for "the store quietly went back to plaintext".

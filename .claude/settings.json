@@ -46,7 +46,7 @@
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/install-kb-merge-driver.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/ensure-kb-index.sh --soft"
           }
         ]
       }

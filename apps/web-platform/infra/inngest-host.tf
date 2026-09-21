@@ -430,6 +430,15 @@ locals {
     # pre-Doppler fallback). Retrievable via the host metadata API — acceptable for an ingest-only
     # logs token on a deny-all host given the diagnosability it buys (weigh before widening use).
     betterstack_logs_token = var.betterstack_logs_token
+    # #6500: the Sentry DSN for the host-local soleur-boot-emit, so the bootstrap-pull outcome
+    # reaches the Sentry `stage:` schema zot-soak-6122.sh counts. This is the root variable
+    # web-1 and git-data already bake (TF_VAR_sentry_dsn from prd_terraform), NOT a Doppler
+    # key: soleur-inngest/prd is checked by exact name-set equality at boot, so adding a name
+    # there would make the boot fatal. An empty value makes the emitter phone home rc=nodsn,
+    # and the soak's host-pinned denominator then reads 0 and FAILs closed. Cost: rotating
+    # SENTRY_DSN changes this host's user_data, so the next hcloud_server.inngest apply
+    # force-replaces the sole scheduler (ADR-096, 2026-09-21 amendment).
+    sentry_dsn = var.sentry_dsn
   }), local.inngest_rationale_strip, "")
 
   # base64gzip of the stripped render — THE value Hetzner stores against its 32,768 B cap,
@@ -515,6 +524,16 @@ resource "hcloud_server" "inngest" {
     precondition {
       condition     = length(local.inngest_user_data_b64gz) <= 32768 && startswith(local.inngest_user_data_plain, "#cloud-config\n")
       error_message = "inngest user_data is ${length(local.inngest_user_data_b64gz)} B base64gzip'd against Hetzner's 32,768 B cap, or has lost its #cloud-config header. Refusing to plan: a -replace would DESTROY the host and then fail the create (this is exactly what happened 2026-09-08). Shed payload — prose is stripped for free by local.inngest_rationale_strip, so what remains is code."
+    }
+    # #6500: var.sentry_dsn is interpolated raw into a YAML block scalar. A trailing newline makes
+    # the whole cloud-config unparseable (measured with PyYAML), so the replacement boots with
+    # none of its write_files or runcmd — the sole scheduler dark. The web hosts' shape check
+    # (server.tf) lives on a resource the -target'ed replace prunes, so the guard must sit here.
+    # Empty stays legal so bare `terraform validate`/`terraform test` work; the inngest-host-replace
+    # job asserts non-empty before it plans.
+    precondition {
+      condition     = nonsensitive(var.sentry_dsn == "" || can(regex("^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$", var.sentry_dsn)))
+      error_message = "var.sentry_dsn (TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN) is not a well-formed Sentry DSN (https://<key>@<host>/<project>, no whitespace or trailing newline). Refusing to plan: it is baked into this host's cloud-config, and a malformed value makes the replacement boot with none of its configuration."
     }
   }
 

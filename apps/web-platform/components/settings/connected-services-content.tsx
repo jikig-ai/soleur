@@ -235,6 +235,16 @@ export function ConnectedServicesContent({ initialServices }: Props) {
           Manage API tokens for third-party services. Tokens are encrypted with
           AES-256-GCM and automatically available to your agent sessions.
         </p>
+        <p
+          className="mt-3 max-w-3xl rounded-lg border border-amber-600/40 bg-amber-950/20 p-3 text-xs leading-5 text-amber-100"
+          role="note"
+          data-testid="user-provider-disclosure"
+        >
+          These are your provider credentials. Requests use your provider account and are subject
+          to its retention, region, and account terms. Soleur-managed provider credentials are
+          restricted. Only connect an account you are authorized to use for the workspace data
+          you submit.
+        </p>
       </div>
 
       {CATEGORY_ORDER.map((category) => {

@@ -138,6 +138,16 @@ else
   # mirror without them (mutation row 5). `git merge --abort` is deliberately
   # NOT a token — the pre-fix mirror already carries it, so it discriminates
   # nothing.
+  #
+  # The last two tokens pin the ADR-235 regenerable-artifact arm. They are here
+  # because this list did NOT cover it and the omission was invisible: #8377
+  # added the arm to ship's block only, and merge-pr/SKILL.md's mirror-invariant
+  # line claims "a parity token list pins the arm's spelling — so a behavioural
+  # fix applied to one block reddens the suite until it lands in the other".
+  # Measured at that commit: ship carried 5 references, the mirror carried 0,
+  # and this suite was 191/191 GREEN. The claim was false for precisely the arm
+  # the PR had just added, which is worse than no claim — the next editor trusts
+  # it and skips the cross-grep the same line tells them to do anyway.
   for token in 'MAX_BEHIND_SYNCS=6' 'mergeStateStatus' 'bucket == "fail"' \
                '[ship.phase7.required_failed]' '[ship.phase7.dirty]' \
                '[ship.phase7.behind_exhausted]' '*DIRTY*' 'mapfile -t REQUIRED_CHECKS' \
@@ -145,7 +155,9 @@ else
                'sync_out="$(GIT_TRACE=0 git merge origin/main --no-edit 2>&1)" || sync_rc=$?' \
                'merge conflict, aborting sync' 'kind=merge_refused' \
                'kind=merge_in_progress' 'git push failed after merge' \
-               'fetch_failures='; do
+               'fetch_failures=' \
+               'resolve-regenerable-conflicts.sh origin/main' \
+               'regen resolved + pushed'; do
     if ! grep -qF "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
