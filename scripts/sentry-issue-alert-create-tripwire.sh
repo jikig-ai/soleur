@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Guard A(ii) — no run ever CREATES a `sentry_issue_alert` again (#7650 Phase 2).
-# Guard 2 (#8451) — no run ever WRITES a `sentry_alert` whose after-state carries
-# a legacy trigger type the provider cannot express.
+# Guard 2 (#8451) — no run ever WRITES a `sentry_alert` that carries a legacy
+# trigger the provider cannot express.
 #
 # Usage: sentry-issue-alert-create-tripwire.sh <plan.json>
 # Exit 0 = the plan creates no sentry_issue_alert and writes no legacy-trigger
@@ -39,10 +39,21 @@
 # conversion the provider writes the true threshold and an update is safe.
 # An import (`["no-op"]` + `importing`) is a read and is not refused.
 #
-# EXCLUDED_LEGACY_TYPES is the one literal copy of the projection's
-# `def excluded` (tests/scripts/lib/sentry-alert-projection.jq). The projection
-# cannot be `include`d as a jq module (it ends in a top-level expression), so
-# the suite asserts the two sets are equal instead (row G2-parity).
+# WHICH STATES IT READS, and why each (review of #8451):
+#   * `after`  — the write itself. ANY legacy entry, not only the three types the
+#     fidelity projection excludes: the provider re-sends EVERY legacy entry
+#     with `comparison: true`, so a type outside that set loses its parameters
+#     the same way.
+#   * `before` — the refreshed state. Narrowing `ignore_changes` AND deleting the
+#     `legacy_trigger_conditions` line plans an update whose `after` legacy is
+#     null while the live rule still carries the trigger: the write would strip
+#     the paging trigger outright. The refreshed `before` still shows it.
+#   * `after_unknown` — a legacy value computed at apply time cannot be judged
+#     at plan time, so it is refused rather than passed.
+# The #7985 conversion is not blocked by `before`: it bumps the provider first,
+# and a provider that models the trigger reads it into the NATIVE field, so the
+# refreshed `before` carries no legacy entry. If a future provider still reads
+# it as legacy, the conversion is not safe yet — which is this refusal's job.
 #
 # ── WHY IT IS NOT REACHABLE FROM [ack-destroy] ─────────────────────────────
 # It is invoked BEFORE the ack is consulted, in both jobs, and it never reads
@@ -53,8 +64,8 @@
 #
 # ── WHY index("create") AND NOT == ["create"] ──────────────────────────────
 # A `create_before_destroy` replace serialises as `["create","delete"]` (the
-# ordering is not fixed), and a replace of one of the two survivors is still a
-# live rule being torn down and rebuilt. `destroy-guard-filter-sentry.jq` uses
+# ordering is not fixed), and a replace of a live rule is still that rule
+# being torn down and rebuilt. `destroy-guard-filter-sentry.jq` uses
 # exact equality for `resource_creates` for the opposite and equally deliberate
 # reason — there, counting a replace as a create would fail an already-correct
 # acknowledged plan twice and train blanket-acking. Here there is no ack to
@@ -63,8 +74,6 @@
 #
 # Behaviour is unit-tested by tests/scripts/test-sentry-alert-adoption-guards.sh.
 set -uo pipefail
-
-EXCLUDED_LEGACY_TYPES='["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue"]'
 
 PLAN="${1:?usage: sentry-issue-alert-create-tripwire.sh <plan.json>}"
 
@@ -100,13 +109,16 @@ creates=$(jq -r '
   exit 1
 }
 
-legacy_writes=$(jq -r --argjson excluded "$EXCLUDED_LEGACY_TYPES" '
+legacy_writes=$(jq -r '
+  def legacy(x): (x // {}) | (.legacy_trigger_conditions // []) | if type == "array" then . else [tostring] end;
   [ .resource_changes[]?
     | select(.type == "sentry_alert")
     | select((.change.actions // []) | (index("create") or index("update")))
-    | ((.change.after // {}).legacy_trigger_conditions // []) as $legacy
-    | select([ $legacy[] | select(. as $t | $excluded | index($t)) ] | length > 0)
-    | "\(.address) actions=\((.change.actions // []) | join(",")) legacy_trigger_conditions=\($legacy | join(","))" ]
+    | legacy(.change.after) as $after
+    | legacy(.change.before) as $before
+    | ((.change.after_unknown // {}) | if type == "object" then (.legacy_trigger_conditions // false) else false end) as $unknown
+    | select(($after | length) > 0 or ($before | length) > 0 or ($unknown != false))
+    | "\(.address) actions=\((.change.actions // []) | join(",")) legacy_trigger_conditions after=[\($after | join(","))] before=[\($before | join(","))]\(if $unknown != false then " after=(unknown at plan time)" else "" end)" ]
   | .[]
 ' "$PLAN") || {
   echo "::error::sentry_issue_alert create tripwire: could not evaluate the legacy-trigger check on '$PLAN'." >&2
@@ -127,8 +139,8 @@ fi
 
 if [[ -n "$legacy_writes" ]]; then
   count=$(grep -c '' <<<"$legacy_writes")
-  echo "::error::sentry_issue_alert create tripwire: this plan WRITES ${count} sentry_alert resource(s) whose after-state carries a legacy trigger type:" >&2
+  echo "::error::sentry_issue_alert create tripwire: this plan WRITES ${count} sentry_alert resource(s) that carry a legacy trigger (before, after, or unknown at plan time):" >&2
   while IFS= read -r line; do echo "::error::  $line" >&2; done <<<"$legacy_writes"
-  echo "::error::Provider v0.15.7 keeps only the type string of these triggers in legacy_trigger_conditions and re-sends each one with comparison: true on create and update, so applying this plan would replace the rule's paging threshold (N distinct users in a window) with a boolean. terraform plan cannot show that change. Import no-ops are allowed; a create, update or replace is not. The remedy is the #7985 native conversion (a provider release that models the trigger), not an edit to this rule's block. There is NO acknowledgement for this and [ack-destroy] does not reach it." >&2
+  echo "::error::Provider v0.15.7 keeps only the type string of these triggers in legacy_trigger_conditions and re-sends each one with comparison: true on create and update, so applying this plan would replace the rule's paging threshold (N distinct users in a window) with a boolean, or strip the trigger if the write drops it. terraform plan cannot show that change. Import no-ops are allowed; a create, update or replace is not. The remedy is the #7985 native conversion (a provider release that models the trigger), not an edit to this rule's block. There is NO acknowledgement for this and [ack-destroy] does not reach it." >&2
 fi
 exit 1

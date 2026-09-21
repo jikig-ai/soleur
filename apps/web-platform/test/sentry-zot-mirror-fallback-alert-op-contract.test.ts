@@ -489,7 +489,10 @@ const CAPTURE = JSON.parse(
 ) as Array<{
   id: string;
   name: string;
+  enabled: boolean;
+  detectorIds: string[];
   config: { frequency: number };
+  triggers: { conditions: Array<{ type: string; comparison: { value: number; interval: string } }> };
   actionFilters: Array<{
     logicType: string;
     conditions: Array<{ type: string; comparison: { key: string; match: string; value: string } }>;
@@ -508,10 +511,17 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
       // Resolved lazily, inside each it(): a missing block must red THESE rows,
       // not abort collection of the whole file (which reports "no tests").
       let body = "";
+      // The body with every comment line removed: a commented-out HCL line
+      // must not satisfy an equality (review M18).
+      let code = "";
       let nameInTf = "";
       let entry: (typeof CAPTURE)[number] | undefined;
       beforeAll(() => {
         body = scopeResource(label);
+        code = body
+          .split("\n")
+          .filter((l) => !/^\s*#/.test(l))
+          .join("\n");
         const m = body.match(/^\s*name\s*=\s*"([^"]*)"/m);
         if (!m) throw new Error(`${label}: no name assignment`);
         nameInTf = m[1];
@@ -536,7 +546,7 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
       });
 
       it("frequency_minutes equals the capture", () => {
-        const m = body.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
+        const m = code.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
         expect(m, `${label}: no frequency_minutes`).not.toBeNull();
         expect(Number(m![1])).toBe(entry!.config.frequency);
       });
@@ -544,9 +554,9 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
       it("action filter (logic, tag conditions, email action) equals the capture", () => {
         expect(entry!.actionFilters).toHaveLength(1);
         const af = entry!.actionFilters[0];
-        expect(body).toMatch(new RegExp(`^\\s*logic_type\\s*=\\s*"${af.logicType}"`, "m"));
+        expect(code).toMatch(new RegExp(`^\\s*logic_type\\s*=\\s*"${af.logicType}"`, "m"));
         const tfTags = [
-          ...body.matchAll(
+          ...code.matchAll(
             /tagged_event\s*=\s*\{\s*key\s*=\s*"([^"]*)",\s*match\s*=\s*"([^"]*)",\s*value\s*=\s*"([^"]*)"\s*\}/g,
           ),
         ].map((m) => `${m[1]}|${m[2]}|${m[3]}`);
@@ -558,7 +568,7 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
         expect(af.conditions).toHaveLength(capTags.length);
         expect(tfTags.sort()).toEqual(capTags.sort());
         const tfEmail = [
-          ...body.matchAll(
+          ...code.matchAll(
             /email\s*=\s*\{\s*target_type\s*=\s*"([^"]*)",\s*fallthrough_type\s*=\s*"([^"]*)"\s*\}/g,
           ),
         ].map((m) => `${m[1]}|${m[2]}`);
@@ -568,6 +578,31 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
         expect(capEmail.length).toBeGreaterThan(0);
         expect(af.actions).toHaveLength(capEmail.length);
         expect(tfEmail).toEqual(capEmail);
+      });
+
+      it("enabled and the detector binding match the capture (review M15/M16)", () => {
+        expect(entry!.enabled).toBe(true);
+        expect(code).toMatch(/^\s*enabled\s*=\s*true\s*$/m);
+        // The capture binds the project issue-stream detector; the block must
+        // bind the data source that resolves to it, and nothing else.
+        expect(entry!.detectorIds).toHaveLength(1);
+        expect(code).toMatch(
+          /^\s*monitor_ids\s*=\s*\[data\.sentry_project_issue_stream_monitor\.web_platform\.id\]\s*$/m,
+        );
+      });
+
+      it("the recorded live threshold (the value #7985 must restore) equals the capture (review M17)", () => {
+        const trig = entry!.triggers.conditions.filter(
+          (c) => c.type === "event_unique_user_frequency_count",
+        );
+        expect(trig).toHaveLength(1);
+        const { value, interval } = trig[0].comparison;
+        const recorded = body.match(
+          /^#?\s*#\s*Live trigger: event_unique_user_frequency_count \{value = (\d+), interval = "([^"]+)"\}/m,
+        );
+        expect(recorded, `${label}: no '# Live trigger:' comment`).not.toBeNull();
+        expect(Number(recorded![1])).toBe(value);
+        expect(recorded![2]).toBe(interval);
       });
 
       it("is frozen: legacy trigger by type, ignore_changes = all, and the INERT warning", () => {

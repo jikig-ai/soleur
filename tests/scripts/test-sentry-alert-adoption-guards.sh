@@ -37,7 +37,7 @@ BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=46
+EXPECTED_TESTS=52
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -67,12 +67,14 @@ _plan() { # rows... -> a plan document on stdout
   printf '{"resource_changes":[%s]}' "$*"
 }
 
-# _pairs <n> -> N matched forget/import pairs, named p1..pN
+# _pairs <n> -> N matched forget/import pairs, named p1..pN. An import row's
+# after-state is the object read back from Sentry, so it carries that
+# workflow's name (the real plan shape; section 4 of the assert reads it).
 _pairs() {
   local n="$1" i rows=()
   for ((i = 1; i <= n; i++)); do
     rows+=("$(_row sentry_issue_alert "p$i" '["forget"]')")
-    rows+=("$(_row sentry_alert "p$i" '["no-op"]' "acme/10$i")")
+    rows+=("$(_row sentry_alert "p$i" '["no-op"]' "acme/10$i" | jq -c --arg n "p$i" '.change.after.name = $n')")
   done
   _plan "${rows[@]}"
 }
@@ -715,46 +717,86 @@ t_c2e_forget_of_non_legacy_type_red() {
 }
 
 # L — scripts/sentry-last-applied-sha.sh: the create gate's window starts at the
-# commit last APPLIED (the newest run whose `apply` JOB succeeded), not the
-# newest successful RUN — a kill-switch run concludes success with apply skipped.
+# commit last APPLIED — the newest main push/dispatch run whose `apply` job ran
+# its `Terraform apply` STEP to success. Not the run (a kill-switch run is green
+# with the apply skipped) and not the job (a post-apply probe can red the job
+# after the apply landed). The fake gh returns API-SHAPED JSON and applies the
+# script's own `--jq` filter with the real jq, so the event filter, the job-name
+# filter and the step-name filter are all exercised (review M1/M1b/M2/M3).
 LAST_APPLIED="$REPO_ROOT/scripts/sentry-last-applied-sha.sh"
 SHA_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 SHA_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+SHA_C=cccccccccccccccccccccccccccccccccccccccc
 _la_stub() { # $1=mode -> a PATH dir with a fake gh
   local d="$TMPD/la-$1"; mkdir -p "$d"
   cat > "$d/gh" <<'STUB'
 #!/usr/bin/env bash
-# Refuse anything but the two expected endpoints (exit 64 = unexpected request).
-case "$*" in
-  *"actions/workflows/apply-sentry-infra.yml/runs?branch=main&status=success"*)
+# Refuse anything but `gh api <expected path> --jq <expr>` (exit 64).
+[[ "$1" == api && "$3" == --jq && -n "${4:-}" ]] || { echo "unexpected gh call: $*" >&2; exit 64; }
+path="$2"; expr="$4"
+step='Terraform apply (cron + uptime monitors)'
+job() { # $1=job name $2=job conclusion $3=apply-step conclusion (or "none")
+  if [[ "$3" == none ]]; then printf '{"name":"%s","conclusion":"%s","steps":[]}' "$1" "$2"
+  else printf '{"name":"%s","conclusion":"%s","steps":[{"name":"Terraform init","conclusion":"success"},{"name":"%s","conclusion":"%s"}]}' "$1" "$2" "$step" "$3"; fi
+}
+case "$path" in
+  "repos/o/r/actions/workflows/apply-sentry-infra.yml/runs?branch=main&status=completed&per_page=50")
     [[ "$LA_MODE" == apierr ]] && exit 1
-    [[ "$LA_MODE" == none ]] && exit 0
-    printf '101 %s\n102 %s\n' "$SHA_A" "$SHA_B" ;;
-  *"actions/runs/101/jobs"*)
-    case "$LA_MODE" in first) echo success ;; *) echo skipped ;; esac ;;
-  *"actions/runs/102/jobs"*)
-    case "$LA_MODE" in skipfirst) echo success ;; *) echo failure ;; esac ;;
-  *) echo "unexpected gh call: $*" >&2; exit 64 ;;
+    if [[ "$LA_MODE" == none ]]; then json='{"workflow_runs":[]}'
+    else
+      # Run 100 is a pull_request run on the NEWEST slot whose own apply step
+      # "succeeded" — the event filter must pass over it.
+      json=$(printf '{"workflow_runs":[{"id":100,"head_sha":"%s","event":"pull_request"},{"id":101,"head_sha":"%s","event":"push"},{"id":102,"head_sha":"%s","event":"workflow_dispatch"}]}' "$SHA_C" "$SHA_A" "$SHA_B")
+    fi ;;
+  "repos/o/r/actions/runs/100/jobs?per_page=100")
+    json="{\"jobs\":[$(job apply success success)]}" ;;
+  "repos/o/r/actions/runs/101/jobs?per_page=100")
+    # A decoy job listed FIRST carrying the same step name, succeeded: the job
+    # filter must not credit it.
+    decoy=$(job plan_pr success success)
+    case "$LA_MODE" in
+      first)      json="{\"jobs\":[$decoy,$(job apply success success)]}" ;;
+      skipfirst)  json="{\"jobs\":[$decoy,$(job apply skipped none)]}" ;;
+      probefail)  json="{\"jobs\":[$decoy,$(job apply failure success)]}" ;;
+      applyfail)  json="{\"jobs\":[$decoy,$(job apply failure failure)]}" ;;
+      *)          json="{\"jobs\":[$decoy]}" ;;
+    esac ;;
+  "repos/o/r/actions/runs/102/jobs?per_page=100")
+    json="{\"jobs\":[$(job apply success success)]}" ;;
+  *) echo "unexpected gh path: $path" >&2; exit 64 ;;
 esac
+printf '%s' "$json" | jq -r "$expr"
 STUB
   chmod +x "$d/gh"; echo "$d"
 }
 _la_run() { # $1=mode -> LA_OUT, LA_RC
   local d; d=$(_la_stub "$1")
   LA_RC=0
-  LA_OUT=$(LA_MODE="$1" SHA_A="$SHA_A" SHA_B="$SHA_B" GITHUB_REPOSITORY=o/r PATH="$d:$PATH" bash "$LAST_APPLIED" 2>&1) || LA_RC=$?
+  LA_OUT=$(LA_MODE="$1" SHA_A="$SHA_A" SHA_B="$SHA_B" SHA_C="$SHA_C" GITHUB_REPOSITORY=o/r PATH="$d:$PATH" bash "$LAST_APPLIED" 2>&1) || LA_RC=$?
 }
 t_l1_newest_applied_run() {
   _la_run first
   if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_A" ]]; then
-    _report "L1 last-applied: the newest run whose apply job succeeded is returned" ok
+    _report "L1 last-applied: the newest push run whose apply STEP succeeded is returned (PR run and decoy job passed over)" ok
   else _report "L1 last-applied newest applied run" fail "rc=$LA_RC out=$LA_OUT"; fi
 }
 t_l2_skipped_apply_is_not_applied() {
   _la_run skipfirst
   if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_B" ]]; then
-    _report "L2 last-applied: a successful run whose apply job was SKIPPED is passed over" ok
+    _report "L2 last-applied: a run whose apply job was SKIPPED is passed over (the decoy job's success is not credited)" ok
   else _report "L2 last-applied skips a run with a skipped apply" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l6_post_apply_probe_failure_still_applied() {
+  _la_run probefail
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_A" ]]; then
+    _report "L6 last-applied: a job that FAILED after its apply step succeeded still counts as applied (the window does not stall)" ok
+  else _report "L6 last-applied counts a post-apply probe failure as applied" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l7_failed_apply_step_is_not_applied() {
+  _la_run applyfail
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_B" ]]; then
+    _report "L7 last-applied: a run whose apply STEP failed is passed over" ok
+  else _report "L7 last-applied skips a failed apply step" fail "rc=$LA_RC out=$LA_OUT"; fi
 }
 t_l3_api_error_fails_closed() {
   _la_run apierr
@@ -769,11 +811,25 @@ t_l4_nothing_applied_fails_closed() {
   else _report "L4 last-applied fails closed when nothing applied" fail "rc=$LA_RC out=$LA_OUT"; fi
 }
 t_l5_both_sites_use_the_window() {
-  local n; n=$(grep -c 'scripts/sentry-last-applied-sha.sh")' "$WF")
-  local stale; stale=$(grep -cE 'diff (HEAD~1 HEAD|"origin/\$\{BASE_REF\}\.\.\.HEAD") *\\$' "$WF")
-  if [[ "$n" -eq 2 && "$stale" -eq 0 ]]; then
-    _report "L5 both create-gate sites diff from the last applied commit (no HEAD~1 / PR-only window left)" ok
-  else _report "L5 both create-gate sites use the last-applied window" fail "helper calls=$n stale diffs=$stale"; fi
+  # Per SITE, not a file-wide count (review M8): the line immediately above each
+  # create-gate `-- 'apps/web-platform/infra/sentry/*.tf'` pathspec must be the
+  # diff FROM "$last_applied", and each site must carry the ancestry refusal.
+  local diffs; diffs=$(awk '/-- .apps\/web-platform\/infra\/sentry\/\*\.tf. > \/tmp\/sentry-(apply-)?tf\.diff/ { print prev } { prev = $0 }' "$WF")
+  local n_diff; n_diff=$(grep -c . <<<"$diffs")
+  local n_good; n_good=$(grep -cE '^[[:space:]]+git -C "\$\{GITHUB_WORKSPACE\}" diff "\$last_applied" HEAD \\$' <<<"$diffs")
+  local n_call; n_call=$(grep -cE '^[[:space:]]+last_applied=\$\(.*bash "\$\{GITHUB_WORKSPACE\}/scripts/sentry-last-applied-sha\.sh"\) \|\| exit 1$' "$WF")
+  local n_anc; n_anc=$(grep -cE 'merge-base --is-ancestor "\$last_applied" HEAD' "$WF")
+  if [[ "$n_diff" -eq 2 && "$n_good" -eq 2 && "$n_call" -eq 2 && "$n_anc" -eq 2 ]]; then
+    _report "L5 both create-gate sites diff FROM the last applied commit, behind the lookup and an ancestry refusal" ok
+  else _report "L5 both create-gate sites use the last-applied window" fail "diff sites=$n_diff last_applied diffs=$n_good lookups=$n_call ancestry=$n_anc"; fi
+}
+t_l8_step_name_is_the_workflows() {
+  # The helper keys on a step NAME; a rename in the workflow must red here, not
+  # silently refuse every create in production.
+  local step; step=$(sed -n 's/^APPLY_STEP="\(.*\)"$/\1/p' "$LAST_APPLIED")
+  if [[ -n "$step" ]] && grep -qxF "      - name: ${step}" "$WF"; then
+    _report "L8 the helper's APPLY_STEP names a real step in the workflow ('$step')" ok
+  else _report "L8 helper step name matches the workflow" fail "APPLY_STEP='$step' not found as a step name in $WF"; fi
 }
 
 # C3 — cardinality. The bijection holds for 26 pairs too; dropping a
@@ -850,6 +906,27 @@ t_c5_import_id_not_in_capture_red() {
   fi
 }
 
+# C7 — the imported object must BE the captured workflow of its id. Under
+# ignore_changes = all an import always plans no-op, so swapping two live ids
+# passes 3a, uniqueness and membership; only the read-back name tells.
+t_c7_swapped_import_ids_red() {
+  local cap="$TMPD/capture7.json"
+  printf '[{"id":"101","name":"p1"},{"id":"102","name":"p2"},{"id":"103","name":"p3"}]' > "$cap"
+  local swapped absent
+  swapped=$(_pairs 3 | jq -c '(.resource_changes[] | select(.address == "sentry_alert.p1") | .change.after.name) = "p2"
+                        | (.resource_changes[] | select(.address == "sentry_alert.p2") | .change.after.name) = "p1"' | _write c7)
+  absent=$(_pairs 3 | jq -c '(.resource_changes[] | select(.address == "sentry_alert.p3") | .change.after) = {}' | _write c7b)
+  local rc_s rc_a; rc_s=$(_rc bash "$ADOPT" "$swapped" 3 "$cap"); rc_a=$(_rc bash "$ADOPT" "$absent" 3 "$cap")
+  local ms ma; ms=$(_err bash "$ADOPT" "$swapped" 3 "$cap"); ma=$(_err bash "$ADOPT" "$absent" 3 "$cap")
+  if [[ "$rc_s" -eq 1 && "$rc_a" -eq 1 ]] \
+     && grep -q 'sentry_alert.p1 id=101 imported name=p2 capture name=p1' <<<"$ms" \
+     && grep -q 'sentry_alert.p3 id=103 imported name=<absent> capture name=p3' <<<"$ma"; then
+    _report "C7 an import whose read-back name is not the captured workflow's (swapped or unreadable) REDs" ok
+  else
+    _report "C7 swapped/unreadable import names RED" fail "rc_s=$rc_s rc_a=$rc_a; msgs: $ms / $ma"
+  fi
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # Guard 2 (#8451) — no threshold-destroying write reaches apply
 # ════════════════════════════════════════════════════════════════════════════
@@ -920,21 +997,54 @@ t_g2_5_import_and_native_update_pass() {
   fi
 }
 
-# G2-parity — the tripwire keeps ONE literal copy of the projection's `excluded`
-# set (the projection ends in a top-level expression, so it cannot be `include`d
-# as a jq module). A type added to one and not the other reds here.
-t_g2_excluded_parity() {
-  local proj="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq" p t
-  p=$(grep -F 'def excluded: [' "$proj" | head -1 | sed -E 's/^def excluded: (\[.*\]);.*$/\1/')
-  t=$(grep -F 'EXCLUDED_LEGACY_TYPES=' "$TRIPWIRE" | head -1 | sed -E "s/^EXCLUDED_LEGACY_TYPES='(\[.*\])'.*$/\1/")
-  local same
-  same=$(jq -n --argjson p "${p:-null}" --argjson t "${t:-null}" \
-    '($p|type) == "array" and ($p|length) > 0 and ($p|unique) == ($t|unique)' 2>/dev/null) || same=""
-  if [[ "$same" == "true" ]]; then
-    _report "G2-parity the tripwire's excluded set equals the projection's def excluded" ok
+# G2-6 — the refreshed BEFORE state (review of #8451). Narrowing ignore_changes
+# AND deleting the `legacy_trigger_conditions` line plans an update whose AFTER
+# carries no legacy entry while live still has the trigger: the write strips it.
+t_g2_6_before_legacy_update_red() {
+  local f; f=$(_plan "$(_lrow sandbox_startup_failure '["update"]' absent)" \
+    | jq -c --argjson L "$LEGACY" '.resource_changes[0].change.before = {legacy_trigger_conditions: $L}' | _write g2-6)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  local msg; msg=$(_err bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_alert\.sandbox_startup_failure actions=update legacy_trigger_conditions after=\[\] before=\[event_unique_user_frequency_count\]' <<<"$msg"; then
+    _report "G2-6 an UPDATE whose after drops the legacy trigger but whose refreshed before carries it REDs" ok
   else
-    _report "G2-parity the tripwire's excluded set equals the projection's" fail \
-      "projection=${p:-<not found>} tripwire=${t:-<not found>}"
+    _report "G2-6 an update stripping a live legacy trigger REDs" fail "rc=$rc (want 1); msg=$msg"
+  fi
+}
+
+# G2-7 — ANY legacy type, and every member of the list. The provider re-sends
+# every legacy entry, not only the fidelity projection's excluded types; and a
+# selector reading `$legacy[0]` must not miss the second element.
+t_g2_7_any_legacy_type_and_second_element_red() {
+  local a b
+  a=$(_plan "$(_lrow r_other '["update"]' '["issue_resolution_change"]')" | _write g2-7a)
+  b=$(_plan "$(_lrow r_two '["create"]' '["issue_resolution_change","event_unique_user_frequency_count"]')" | _write g2-7b)
+  local rc_a rc_b; rc_a=$(_rc bash "$TRIPWIRE" "$a"); rc_b=$(_rc bash "$TRIPWIRE" "$b")
+  local ma mb; ma=$(_err bash "$TRIPWIRE" "$a"); mb=$(_err bash "$TRIPWIRE" "$b")
+  if [[ "$rc_a" -eq 1 && "$rc_b" -eq 1 ]] \
+     && grep -qE 'sentry_alert\.r_other actions=update .*after=\[issue_resolution_change\]' <<<"$ma" \
+     && grep -qE 'sentry_alert\.r_two actions=create .*after=\[issue_resolution_change,event_unique_user_frequency_count\]' <<<"$mb"; then
+    _report "G2-7 a write carrying a non-excluded legacy type, or a two-element legacy list, REDs" ok
+  else
+    _report "G2-7 any legacy type / every element REDs" fail "rc_a=$rc_a rc_b=$rc_b; msgs: $ma / $mb"
+  fi
+}
+
+# G2-8 — an import that also UPDATES is a write, and a legacy value unknown at
+# plan time cannot be judged, so both are refused.
+t_g2_8_import_update_and_unknown_red() {
+  local a b
+  a=$(_plan "$(_lrow auth_per_user_loop '["update"]' "$LEGACY" acme/566671)" | _write g2-8a)
+  b=$(_plan "$(_lrow r_unknown '["create"]' absent)" \
+    | jq -c '.resource_changes[0].change.after_unknown = {legacy_trigger_conditions: true}' | _write g2-8b)
+  local rc_a rc_b; rc_a=$(_rc bash "$TRIPWIRE" "$a"); rc_b=$(_rc bash "$TRIPWIRE" "$b")
+  local ma mb; ma=$(_err bash "$TRIPWIRE" "$a"); mb=$(_err bash "$TRIPWIRE" "$b")
+  if [[ "$rc_a" -eq 1 && "$rc_b" -eq 1 ]] \
+     && grep -qE 'sentry_alert\.auth_per_user_loop actions=update' <<<"$ma" \
+     && grep -qE 'sentry_alert\.r_unknown actions=create .*unknown at plan time' <<<"$mb"; then
+    _report "G2-8 an import that UPDATES, and a legacy value unknown at plan time, both RED" ok
+  else
+    _report "G2-8 import+update and unknown legacy RED" fail "rc_a=$rc_a rc_b=$rc_b; msgs: $ma / $mb"
   fi
 }
 
@@ -953,7 +1063,9 @@ t_g2_1_legacy_update_red
 t_g2_3_second_member_create_red
 t_g2_4_legacy_replace_red
 t_g2_5_import_and_native_update_pass
-t_g2_excluded_parity
+t_g2_6_before_legacy_update_red
+t_g2_7_any_legacy_type_and_second_element_red
+t_g2_8_import_update_and_unknown_red
 t_b1_missing_import_red
 t_b2_missing_forget_red
 t_b3_mismatched_membership_red
@@ -975,8 +1087,12 @@ t_l2_skipped_apply_is_not_applied
 t_l3_api_error_fails_closed
 t_l4_nothing_applied_fails_closed
 t_l5_both_sites_use_the_window
+t_l6_post_apply_probe_failure_still_applied
+t_l7_failed_apply_step_is_not_applied
+t_l8_step_name_is_the_workflows
 t_c4_clean_adoption_green
 t_c5_import_id_not_in_capture_red
+t_c7_swapped_import_ids_red
 t_c6_duplicate_import_id_red
 t_d1_correct_binding_passes
 t_d2_wrong_binding_reds

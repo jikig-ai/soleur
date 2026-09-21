@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Print the commit whose Sentry state was last APPLIED to live Sentry: the head
-# SHA of the newest apply-sentry-infra.yml run on `main` whose `apply` JOB
-# concluded success (#8451 CTO ruling).
+# SHA of the newest apply-sentry-infra.yml run on `main` whose `apply` job ran
+# its `Terraform apply` STEP to success (#8451 CTO ruling + review).
 #
 # WHY. The create gate matches every planned create against a resource block
 # ADDED in a reviewed diff. Its diff used to be "this PR" (plan_pr) or
@@ -11,9 +11,23 @@
 # so the gate refuses the one plan that could unwedge the root. The window the
 # gate must cover is "since the last applied state", which is this SHA..HEAD.
 #
-# WHY THE JOB, NOT THE RUN. A run can conclude success with the apply job
-# SKIPPED (the `[skip-sentry-apply]` kill switch). Its head SHA was never
-# applied, and using it would shrink the window and refuse a legitimate create.
+# WHY THE STEP, NOT THE JOB OR THE RUN. Both proxies are wrong, in opposite
+# directions:
+#   - A run (and its job) can conclude SUCCESS with the apply SKIPPED (the
+#     `[skip-sentry-apply]` kill switch): that SHA was never applied.
+#   - A job can conclude FAILURE after `terraform apply` succeeded, because
+#     read-only checks run after it in the same job (BYOK liveness, AC17, the
+#     live-fidelity probe). That SHA WAS applied. Keying on the job would stall
+#     the window at an older commit and widen it with every merge — the create
+#     gate would slowly admit creates "explained" by old diffs (measured on
+#     main: runs 34532702665, 34491157462, 34149741385).
+# The step conclusion answers the question actually asked.
+#
+# SCOPE. Only runs on `main` with event push or workflow_dispatch are read; the
+# apply job itself refuses any other ref. A re-run of an OLDER run after a newer
+# one applied leaves live state at the older SHA while this reports the newer
+# one (the window is then narrower than truth, so the gate fails closed).
+# Re-running a non-latest apply run is out of contract for that reason.
 #
 # Fail-closed: exit 1 with an ::error:: when nothing qualifying is found or the
 # API cannot be read. The caller must also check the SHA is an ancestor of HEAD.
@@ -27,12 +41,15 @@ esac
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set (owner/repo)}"
 WF="apply-sentry-infra.yml"
+APPLY_JOB="apply"
+APPLY_STEP="Terraform apply (cron + uptime monitors)"
+PAGE=50
 
 rc=0
-runs=$(gh api "repos/${REPO}/actions/workflows/${WF}/runs?branch=main&status=success&per_page=50" \
-  --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | "\(.id) \(.head_sha)"') || rc=$?
+runs=$(gh api "repos/${REPO}/actions/workflows/${WF}/runs?branch=main&status=completed&per_page=${PAGE}" \
+  --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | "\(.id) \(.head_sha)"' </dev/null) || rc=$?
 if [[ "$rc" -ne 0 ]]; then
-  echo "::error::last-applied lookup: could not list ${WF} runs on main (gh exit ${rc}). The create gate cannot bound its window, so it refuses rather than guess." >&2
+  echo "::error::last-applied lookup: could not list ${WF} runs on main (gh exit ${rc}). This is a transport/API failure: re-running the job may clear it. The create gate cannot bound its window, so it refuses rather than guess." >&2
   exit 1
 fi
 
@@ -41,9 +58,9 @@ while read -r id sha; do
   concl=""
   rc=0
   concl=$(gh api "repos/${REPO}/actions/runs/${id}/jobs?per_page=100" \
-    --jq '[.jobs[] | select(.name == "apply") | .conclusion] | first // ""') || rc=$?
+    --jq "[.jobs[] | select(.name == \"${APPLY_JOB}\") | .steps[]? | select(.name == \"${APPLY_STEP}\") | .conclusion] | first // \"\"" </dev/null) || rc=$?
   if [[ "$rc" -ne 0 ]]; then
-    echo "::error::last-applied lookup: could not read the jobs of run ${id} (gh exit ${rc}); refusing to skip past it." >&2
+    echo "::error::last-applied lookup: could not read the jobs of run ${id} (gh exit ${rc}); refusing to skip past it. This is a transport/API failure: re-running the job may clear it." >&2
     exit 1
   fi
   if [[ "$concl" == "success" ]]; then
@@ -56,5 +73,5 @@ while read -r id sha; do
   fi
 done <<<"$runs"
 
-echo "::error::last-applied lookup: none of the newest successful ${WF} runs on main has an apply job that concluded success. The create gate cannot bound its window, so it refuses rather than guess." >&2
+echo "::error::last-applied lookup: none of the newest ${PAGE} completed push/dispatch ${WF} runs on main ran the '${APPLY_STEP}' step to success (a renamed step or job also produces this). The create gate cannot bound its window, so it refuses rather than guess." >&2
 exit 1

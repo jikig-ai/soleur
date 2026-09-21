@@ -126,9 +126,6 @@ concurrency:
 
 permissions:
   contents: read
-  # (#8451) the create gate's window starts at the last APPLIED commit, read from
-  # this workflow's own run history (scripts/sentry-last-applied-sha.sh).
-  actions: read
   # Read the PR's branch commit messages to detect a pre-staged [ack-destroy]
   # (see the destroy gate). Read-only. The DEFAULT for every job is read-only;
   # the `apply` job overrides this block with a job-scoped `issues: write` so its
@@ -229,6 +226,12 @@ jobs:
     if: github.event_name == 'pull_request' && needs.detect-changes.outputs.sentry == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Job-scoped: the create gate's window starts at the last APPLIED commit, read
+    # from this workflow's own run history (scripts/sentry-last-applied-sha.sh,
+    # #8451). A job-level block replaces the workflow default, so it is restated.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Refuse fork PRs (named, not a confusing secret error)
         env:
@@ -242,8 +245,9 @@ jobs:
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # Full history: the create gate diffs this PR against its base to
-          # decide whether a planned create is explained by an added block.
+          # Full history: the create gate diffs from the last APPLIED commit
+          # (scripts/sentry-last-applied-sha.sh) to decide whether a planned
+          # create is explained by an added block (#8451).
           fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
@@ -293,7 +297,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-          BASE_REF: ${{ github.base_ref }}
         run: |
           set -uo pipefail
           # `set +e` bracket: Actions runs a bare run: block as `bash -e {0}`, so errexit is
@@ -303,8 +306,8 @@ jobs:
           # green — it restores the annotation naming why. #7304.
           # sentry-plan-410-handler (#8451)
           set +e
-          # Read-only: no -out, so nothing here can be applied. The plan is
-          # FULL-ROOT (no -target=) — that is the contract this gate exists to
+          # Nothing here is applied (plan_pr has no apply step; the saved plan
+          # is only read by the gates below). The plan is FULL-ROOT (no -target=) — that is the contract this gate exists to
           # enforce, and AC3 pins that no -target= survives in this file.
           # One attempt, no retry: Sentry removed the legacy alert-rule API (persistent 410, #8451),
           # so a retry cannot clear it. `rm -f` first: a failed `tee` does not truncate, and the
@@ -314,8 +317,10 @@ jobs:
           rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             if grep -qF 'got status 410' /tmp/sentry-plan.out; then
-              # Addresses from the `with <addr>,` line of each Error: stanza that carries the 410.
-              addrs=$(awk '/^(│ )?Error: /{if(a!=""&&s)print a; a=""; s=0; e=1} e&&/got status 410/{s=1} e&&a==""&&/^(│)?[[:space:]]*with [^,]+,/{a=$0; sub(/^(│)?[[:space:]]*with /,"",a); sub(/,.*/,"",a)} END{if(a!=""&&s)print a}' /tmp/sentry-plan.out | sort -u | paste -sd ' ' -)
+              # Addresses from the `with <addr>,` line (the WHOLE line: address then a trailing
+              # comma) of each Error: stanza carrying the 410; a Warning: stanza ends the scope.
+              # `:`/`%` are stripped so vendor text cannot shape a workflow command.
+              addrs=$(awk '/^(│ )?Error: /{if(a!=""&&s)print a; a=""; s=0; e=1} /^(│ )?Warning: /{if(a!=""&&s)print a; a=""; s=0; e=0} e&&/got status 410/{s=1} e&&a==""&&/^(│)?[[:space:]]*with [^[:space:]]+,[[:space:]]*$/{a=$0; sub(/^(│)?[[:space:]]*with /,"",a); sub(/,[[:space:]]*$/,"",a); gsub(/[:%]/,"",a)} END{if(a!=""&&s)print a}' /tmp/sentry-plan.out | sort -u | paste -sd ' ' -)
               echo "::error::terraform plan failed (exit $rc) on its only attempt: Sentry returned HTTP 410 for ${addrs:-no address this handler could parse}. This job does not retry. A 410 that persists across runs means the endpoint was removed (as the legacy alert-rule API was, #8451): move the named resource off it. One that clears on a re-run was a brownout."
             else
               echo "::error::terraform plan failed (exit $rc)"
@@ -401,9 +406,15 @@ jobs:
             # Window = last APPLIED commit..HEAD, not origin/main...HEAD (#8451):
             # a block merged while the apply was wedged is created by this plan
             # and appears in no PR diff. Fail-closed on lookup or ancestry.
-            last_applied=$(GITHUB_REPOSITORY="$REPO" bash "${GITHUB_WORKSPACE}/scripts/sentry-last-applied-sha.sh") || exit 1
-            if ! git -C "${GITHUB_WORKSPACE}" merge-base --is-ancestor "$last_applied" HEAD; then
-              echo "::error::create gate: last applied commit ${last_applied} is not an ancestor of HEAD; refusing to bound the create window." >&2
+            last_applied=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-last-applied-sha.sh") || exit 1
+            anc_rc=0
+            git -C "${GITHUB_WORKSPACE}" merge-base --is-ancestor "$last_applied" HEAD || anc_rc=$?
+            if [[ "$anc_rc" -ne 0 ]]; then
+              if [[ "$anc_rc" -eq 1 ]]; then
+                echo "::error::create gate: last applied commit ${last_applied} is not an ancestor of this PR's merge ref (main has applied a newer commit since this check's merge ref was built). Update the PR branch against main and re-push; refusing to bound the create window." >&2
+              else
+                echo "::error::create gate: could not test ancestry of ${last_applied} (git exit ${anc_rc}; the commit may be absent from this checkout). Refusing to bound the create window." >&2
+              fi
               exit 1
             fi
             echo "create gate: window ${last_applied}..HEAD (last applied commit on main)"
@@ -641,8 +652,12 @@ jobs:
     # merge_group for the destroy gate. Without this guard, adding those triggers
     # would make the APPLY job reachable from a PR — applying prod Sentry infra
     # from an unreviewed branch. The PR path must be plan-only, always.
+    # (#8451 review) `github.ref` too: a workflow_dispatch from any other ref
+    # would apply that branch's unreviewed .tf to prod with that branch's own
+    # copies of every gate. Only main applies.
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
       && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -809,8 +824,10 @@ jobs:
           rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             if grep -qF 'got status 410' /tmp/sentry-plan.out; then
-              # Addresses from the `with <addr>,` line of each Error: stanza that carries the 410.
-              addrs=$(awk '/^(│ )?Error: /{if(a!=""&&s)print a; a=""; s=0; e=1} e&&/got status 410/{s=1} e&&a==""&&/^(│)?[[:space:]]*with [^,]+,/{a=$0; sub(/^(│)?[[:space:]]*with /,"",a); sub(/,.*/,"",a)} END{if(a!=""&&s)print a}' /tmp/sentry-plan.out | sort -u | paste -sd ' ' -)
+              # Addresses from the `with <addr>,` line (the WHOLE line: address then a trailing
+              # comma) of each Error: stanza carrying the 410; a Warning: stanza ends the scope.
+              # `:`/`%` are stripped so vendor text cannot shape a workflow command.
+              addrs=$(awk '/^(│ )?Error: /{if(a!=""&&s)print a; a=""; s=0; e=1} /^(│ )?Warning: /{if(a!=""&&s)print a; a=""; s=0; e=0} e&&/got status 410/{s=1} e&&a==""&&/^(│)?[[:space:]]*with [^[:space:]]+,[[:space:]]*$/{a=$0; sub(/^(│)?[[:space:]]*with /,"",a); sub(/,[[:space:]]*$/,"",a); gsub(/[:%]/,"",a)} END{if(a!=""&&s)print a}' /tmp/sentry-plan.out | sort -u | paste -sd ' ' -)
               echo "::error::terraform plan failed (exit $rc) on its only attempt: Sentry returned HTTP 410 for ${addrs:-no address this handler could parse}. This job does not retry. A 410 that persists across runs means the endpoint was removed (as the legacy alert-rule API was, #8451): move the named resource off it. One that clears on a re-run was a brownout."
             else
               echo "::error::terraform plan failed (exit $rc)"
@@ -881,7 +898,9 @@ jobs:
 
           # AC2/AC10 — the adoption is EXACTLY an adoption: 2 forgets, 2
           # matching imports (#8451, the last two `sentry_issue_alert` rules),
-          # every other managed row a no-op. Self-skipping on
+          # the adopted rows no-op, no delete/replace anywhere; the backlog
+          # merged while the root was wedged is listed, not refused (see the
+          # script's section 3). Self-skipping on
           # any plan with no adoption rows, so it is inert from the run after
           # this one onward. Historical bijection source; NOT the fidelity
           # reference — do not repoint this argument at alert-reference.json (#8050).
@@ -903,9 +922,15 @@ jobs:
           # merge since the last successful apply is what this apply creates.
           # Fail-closed on lookup or ancestry.
           if [[ "$resource_creates" -gt 0 ]]; then
-            last_applied=$(GH_TOKEN="$GH_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" bash "${GITHUB_WORKSPACE}/scripts/sentry-last-applied-sha.sh") || exit 1
-            if ! git -C "${GITHUB_WORKSPACE}" merge-base --is-ancestor "$last_applied" HEAD; then
-              echo "::error::apply create gate: last applied commit ${last_applied} is not an ancestor of HEAD. Refusing to apply ${resource_creates} create(s) against an unbounded window." >&2
+            last_applied=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-last-applied-sha.sh") || exit 1
+            anc_rc=0
+            git -C "${GITHUB_WORKSPACE}" merge-base --is-ancestor "$last_applied" HEAD || anc_rc=$?
+            if [[ "$anc_rc" -ne 0 ]]; then
+              if [[ "$anc_rc" -eq 1 ]]; then
+                echo "::error::apply create gate: last applied commit ${last_applied} is not an ancestor of HEAD (main was rewritten, or a newer commit applied from elsewhere). Refusing to apply ${resource_creates} create(s) against an unbounded window." >&2
+              else
+                echo "::error::apply create gate: could not test ancestry of ${last_applied} (git exit ${anc_rc}; the commit may be absent from this checkout). Refusing to apply ${resource_creates} create(s)." >&2
+              fi
               exit 1
             fi
             echo "apply create gate: window ${last_applied}..HEAD (last applied commit on main)"
@@ -1375,7 +1400,7 @@ jobs:
             printf -- '- Plan step: `%s` · Apply: `%s` · Post-apply probe: `%s`\n\n' "${PLAN_OUTCOME:-unknown}" "${APPLY_OUTCOME:-unknown}" "${FIDELITY_OUTCOME:-unknown}"
             printf '### First, establish whether the apply was partial\n\n'
             printf 'Read the outcomes line above, then the run log.\n\n'
-            printf -- '- Plan step `failure` with the apply `skipped`: the projection or a guard refused BEFORE apply. Nothing was written and live Sentry is untouched. A re-run cannot fix this class — the remedy is a follow-up PR; for a projection refusal the plan step'"'"'s `::error::` line names it (set the attribute explicitly in the block, or map the new kind in `tests/scripts/lib/sentry-alert-projection.jq` on both sides).\n'
+            printf -- '- Plan step `failure` with the apply `skipped`: a guard, the projection, or the plan itself refused BEFORE apply. Nothing was written and live Sentry is untouched. The plan step'"'"'s `::error::` line names which: a `last-applied lookup:` API failure, or a 410 that clears, is fixed by re-running the job; a guard or projection refusal is not, and the remedy is a follow-up PR. For a projection refusal the plan step'"'"'s `::error::` line names it (set the attribute explicitly in the block, or map the new kind in `tests/scripts/lib/sentry-alert-projection.jq` on both sides).\n'
             printf -- '- Failed BEFORE `Terraform apply` for any other reason: nothing was written. Live Sentry is untouched and the gates did their job. Fix the cause and re-run.\n'
             printf -- '- Apply `failure`: assume a partial write. Terraform state and live Sentry may now disagree per-resource.\n'
             printf -- '- Apply `success`, post-apply probe `failure`: the apply is COMPLETE (AC17 says whether state matches the .tf). The probe compared live Sentry against the reference projected from THIS plan, so its findings are live state Terraform does not own (DISABLED, MONITOR UNBIND, LOGICTYPE FLIP, UNMANAGED) or evidence the apply did not do what it reported — not a stale reference file.\n\n'

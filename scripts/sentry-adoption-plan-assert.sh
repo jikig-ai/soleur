@@ -4,9 +4,10 @@
 # (#7650 Phase 2; scoped to the adopted rows in #8451 — see section 3).
 #
 # Usage: sentry-adoption-plan-assert.sh <plan.json> [expected-pairs] [capture.json]
-#   expected-pairs  default 27 — the landed scope
+#   expected-pairs  REQUIRED — the landed scope, passed explicitly by the caller
 #   capture.json    optional; when given, every import id's numeric part must be
-#                   a workflow id present in the committed live capture
+#                   a workflow id present in the committed live capture, and the
+#                   imported object's name must be that capture entry's name
 # Exit 0 = not an adoption plan, or a well-formed one.
 # Exit 1 = an adoption plan that is not exactly an adoption.
 #
@@ -32,10 +33,10 @@
 # other. A later PR that adds a cron monitor legitimately plans a create, and a
 # permanent version of this assertion would red it. So the discriminator is the
 # presence of adoption rows: a plan with zero forgets and zero imports is not an
-# adoption and this exits 0 with an explicit message. #7826 removed the
-# import{}/removed{} blocks on 2026-09-06, so every plan now takes that branch and
-# this assertion is inert by construction rather than by being deleted. It is kept
-# deliberately: it is the thing that would fire if adoption rows ever reappeared.
+# adoption and this exits 0 with an explicit message. #7826 removed the Phase 2
+# import{}/removed{} blocks on 2026-09-06; #8451 re-added two pairs, so this
+# assertion is live on the plans that carry them and SKIPs on every plan after
+# they apply. The blocks themselves leave with #7985's conversion.
 #
 # ── WHY `expected` IS A NUMBER AND NOT DERIVED FROM CONFIG ─────────────────
 # It cannot be derived from the plan: post-adoption the config still declares 27
@@ -87,7 +88,7 @@ if [[ ! "$rows" =~ ^[0-9]+$ ]] || [[ "$rows" -eq 0 ]]; then
 fi
 
 if [[ "$n_forget" -eq 0 && "$n_import" -eq 0 ]]; then
-  echo "adoption plan assert: SKIP — this plan carries no forget and no import rows, so it is not an adoption plan. (Expected on every run after the adoption has applied, and permanently after #7826 removes the blocks.)"
+  echo "adoption plan assert: SKIP — this plan carries no forget and no import rows, so it is not an adoption plan. (Expected on every run after an adoption has applied.)"
   exit 0
 fi
 
@@ -118,10 +119,10 @@ if [[ "$n_forget" -ne "$EXPECTED" || "$n_import" -ne "$EXPECTED" ]]; then
   if [[ "$n_forget" -eq "$n_import" && "$n_forget" -lt "$EXPECTED" ]]; then
     echo "::error::adoption plan assert: ${n_forget} matched pair(s), expected ${EXPECTED} — this is the shape of a RESUMED PARTIAL APPLY, not a dropped block." >&2
     echo "::error::A pair that already applied leaves NO rows in a re-plan: its removed{} names an address no longer in state, and its import{} names an address already in state. So $(( EXPECTED - n_forget )) of the ${EXPECTED} pairs appear to have committed and ${n_forget} remain." >&2
-    echo "::error::VERIFY THAT before acting, because a dropped removed{}+import{} pair is arithmetically identical here. Run AC17: 'terraform state list' for this root should show $(( EXPECTED - n_forget )) sentry_alert. addresses and ${n_forget} sentry_issue_alert. addresses still to move. If it does, the adoption is genuinely mid-flight and the remaining ${n_forget} are what is left to apply — resuming needs the expected count at the call site lowered to ${n_forget} in a reviewed commit, NOT an edit made under time pressure. If state does not agree, a pair really was dropped: restore the block." >&2
+    echo "::error::VERIFY THAT before acting, because a dropped removed{}+import{} pair is arithmetically identical here. Run AC17 ('terraform state list' for this root) and check each adopted LABEL: an applied pair shows sentry_alert.<label> present and sentry_issue_alert.<label> absent; ${n_forget} label(s) should still show sentry_issue_alert.<label>. If it does, the adoption is genuinely mid-flight and the remaining ${n_forget} are what is left to apply — resuming needs the expected count at the call site lowered to ${n_forget} in a reviewed commit, NOT an edit made under time pressure. If state does not agree, a pair really was dropped: restore the block." >&2
   else
     echo "::error::adoption plan assert: expected ${EXPECTED} forget(s) and ${EXPECTED} import(s), got ${n_forget} and ${n_import}." >&2
-    echo "::error::The two counts differ, so this is not a resumed partial apply. A removed{}+import{} pair dropped together keeps the bijection intact while a live paging rule is silently left on the old address. If the scope genuinely changed, update the expected count at the call site." >&2
+    echo "::error::The two counts differ. Two shapes produce that: a pair whose FORGET committed while its IMPORT did not (state shows neither sentry_issue_alert.<label> nor sentry_alert.<label>; recovery is a reviewed PR deleting that label's removed{} block and setting the expected count to the remaining pairs), or a removed{}/import{} block dropped from config. Check AC17's 'terraform state list' per adopted label before choosing. If the scope genuinely changed, update the expected count at the call site." >&2
   fi
   rc=1
 fi
@@ -137,10 +138,16 @@ fi
 #       gate and does not reach this one;
 #   3d  every OTHER create/update is BACKLOG: allowed, and printed as a notice.
 # Why 3d exists: an adoption landing on a wedged root carries every change that
-# merged while no plan could complete. Those rows are delegated to the create
-# gate (diff-matched against the last successfully applied commit), the
-# alert-reference gate and the legacy-trigger tripwire, which all run on this
-# same plan before apply.
+# merged while no plan could complete. What covers those rows, precisely:
+# CREATES are diff-matched by the create gate (window: the last applied commit,
+# both jobs); any write to a legacy-trigger sentry_alert is refused by the
+# tripwire (both jobs); sentry_alert CONTENT is held to alert-reference.json by
+# the reference gate (plan_pr only) and to live by the post-apply fidelity
+# probe. Everything else (cron/uptime monitor updates) is covered by the
+# review of the PR that merged it — the same coverage every ordinary apply has.
+# 3a cannot see content drift on a frozen (ignore_changes = all) import: it
+# always plans no-op. Section 4's name check and the op-contract test pin which
+# object each import adopts; the live-fidelity frozen pin checks its content.
 violations=$(jq -r '
   [ .resource_changes[]?
     | select((.mode // "managed") == "managed")
@@ -183,13 +190,13 @@ fi
 n_backlog=0
 if [[ -n "$backlog" ]]; then
   n_backlog=$(grep -c '' <<<"$backlog")
-  echo "::notice::adoption plan assert: ${n_backlog} non-adoption backlog row(s), delegated to the create, reference and tripwire gates (not asserted inert here):"
+  echo "::notice::adoption plan assert: ${n_backlog} non-adoption backlog row(s), not asserted inert here (creates: create gate; legacy-trigger writes: tripwire; sentry_alert content: reference gate + post-apply probe; the rest: the reviewed PR that merged it):"
   while IFS= read -r line; do echo "::notice::  $line"; done <<<"$backlog"
 fi
 
-# ── 3b. Import ids are UNIQUE. ──────────────────────────────────────────────
+# ── 3e. Import ids are UNIQUE. ──────────────────────────────────────────────
 # The membership check below only catches ids that were NEVER live. The capture
-# holds all 30 live workflows, so an id copy-pasted from ANOTHER of the 30 —
+# holds every live workflow at capture time, so an id copy-pasted from ANOTHER —
 # the realistic generator or hand-edit error — passes it. Two addresses importing
 # the same workflow id means one live rule adopted twice and one adopted by
 # nobody.
@@ -207,7 +214,10 @@ elif [[ -n "$dup_ids" ]]; then
   rc=1
 fi
 
-# ── 4. Every import id resolves to a workflow that was live at capture time. ─
+# ── 4. Every import id resolves to a workflow that was live at capture time,
+#       and the object imported under it carries THAT workflow's name (#8451
+#       review: under ignore_changes = all an import always plans no-op, so a
+#       swapped pair of ids passes 3a, uniqueness and membership alike). ─────
 if [[ -n "$CAPTURE" ]]; then
   if [[ ! -r "$CAPTURE" ]]; then
     echo "::error::adoption plan assert: capture JSON not readable at '$CAPTURE'." >&2
@@ -229,6 +239,26 @@ if [[ -n "$CAPTURE" ]]; then
       echo "::error::adoption plan assert: import id(s) not present in the committed live capture:" >&2
       sed 's/^/::error::  /' <<<"$bad_ids" >&2
       echo "::error::Terraform would adopt a workflow id that did not exist when the capture was taken. Either the id is wrong (a typo adopts SOMEONE ELSE'S rule under this name) or the rule was created outside Terraform after the capture. Re-derive from the capture; do not hand-edit an id." >&2
+      rc=1
+    fi
+    bad_names=$(jq -r --slurpfile cap "$CAPTURE" '
+      ($cap[0] | map({key: (.id | tostring), value: .name}) | from_entries) as $name_of
+      | [ .resource_changes[]?
+          | select(.change.importing.id != null)
+          | (.change.importing.id | tostring | split("/") | last) as $wid
+          | select($name_of[$wid] != null)
+          | ((.change.after // {}).name) as $got
+          | select($got != $name_of[$wid])
+          | "\(.address) id=\($wid) imported name=\($got // "<absent>") capture name=\($name_of[$wid])" ]
+      | .[]
+    ' "$PLAN") || bad_names="JQFAIL"
+    if [[ "$bad_names" == "JQFAIL" ]]; then
+      echo "::error::adoption plan assert: could not cross-check imported names against '$CAPTURE'." >&2
+      rc=1
+    elif [[ -n "$bad_names" ]]; then
+      echo "::error::adoption plan assert: import row(s) whose imported object is not the captured workflow of that id:" >&2
+      while IFS= read -r line; do echo "::error::  $line" >&2; done <<<"$bad_names"
+      echo "::error::The id in import{} adopts whatever object Sentry holds under it; the name read back from that object does not match the committed capture. Swapped or stale ids adopt a different live rule at this address. Re-derive the id from the capture." >&2
       rc=1
     fi
   fi

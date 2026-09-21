@@ -569,6 +569,12 @@ case "$G3_MODE" in
   mixed) printf 'Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n\n  with sentry_alert.synthetic_one,\n  on synthetic.tf line 1:\n\nError: Invalid reference\n\n  with sentry_cron_monitor.synthetic_three,\n  on synthetic.tf line 20:\n'; exit 1 ;;
   boxed) printf '╷\n│ Error: Unable to read, got status 410: {"detail":"This API no longer exists."}\n│ \n│   with sentry_alert.synthetic_one,\n│   on synthetic.tf line 1:\n╵\n'; exit 1 ;;
   other) printf 'Error: Invalid provider configuration\n\n  with sentry_cron_monitor.synthetic_three,\n'; exit 1 ;;
+  # The provider's usual order: a generic summary, the `with` line, then the 410 in the detail.
+  detail) printf 'Error: Client Error\n\n  with sentry_alert.synthetic_one,\n  on synthetic.tf line 1:\n\nUnable to read, got status 410: {"detail":"This API no longer exists."}\n'; exit 1 ;;
+  # Vendor text shaped like a `with` line (and like a workflow command) must not be taken as an address.
+  spoof) printf 'Error: Unable to read, got status 410:\n  with ::warning::evil, more text\n\n  with sentry_alert.synthetic_one,\n'; exit 1 ;;
+  # A Warning: stanza after a 410 error must not have its `with` credited to the 410.
+  warn) printf 'Error: Unable to read, got status 410: {"detail":"x"}\n\n  on synthetic.tf line 1:\n\nWarning: Deprecated attribute\n\n  with sentry_cron_monitor.synthetic_four,\n'; exit 1 ;;
 esac
 STUB
   chmod +x "$d/bin/terraform"
@@ -594,6 +600,13 @@ STUB
     [[ "$rc" == "1" ]] || bad+=" slice$i:other:rc=$rc"
     grep -qxF '::error::terraform plan failed (exit 1)' <<<"$out" || bad+=" slice$i:other:annotation"
     ! grep -qF '410' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:other:claims-410"
+    _g3_run "$f" detail
+    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:detail:annotation"
+    _g3_run "$f" spoof
+    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:spoof:annotation"
+    ! grep -F '::error::' <<<"$out" | grep -qF 'warning' || bad+=" slice$i:spoof:vendor-text-as-address"
+    _g3_run "$f" warn
+    ! grep -F '::error::' <<<"$out" | grep -qF 'synthetic_four' || bad+=" slice$i:warn:credited-warning"
     _g3_run "$f" ok
     [[ "$rc" == "0" ]] && grep -qxF 'G3_REACHED_END' <<<"$out" || bad+=" slice$i:ok:rc=$rc"
   done
@@ -605,12 +618,49 @@ STUB
   fi
 }
 
+# T19 — the two handler slices are the SAME code. Each is exercised by T16/T18
+# separately, so without this they could drift apart and both still pass.
+t_g3_slices_identical() {
+  local d n; d=$(mktemp -d)  # lint-trap-ownership: ok — rm -rf inline below; no exit between alloc and cleanup (#6734, ADR-129)
+  n=$(_g3_slices "$WORKFLOW" "$d")
+  local same=0
+  if [[ "$n" == "2" ]] && diff -q <(grep -vE '^[[:space:]]*#' "$d/slice1") <(grep -vE '^[[:space:]]*#' "$d/slice2") >/dev/null; then same=1; fi
+  rm -rf "$d"
+  if [[ "$same" == "1" ]]; then
+    _report "T19 the plan_pr and apply 410-handler slices are identical code" ok
+  else
+    _report "T19 the two 410-handler slices are identical" fail "slices=$n differ (or not 2)"
+  fi
+}
+
+# T20 — only main applies (#8451 review): a workflow_dispatch from another ref
+# would apply that branch's unreviewed .tf with its own copies of the gates.
+t_apply_job_main_only() {
+  local region; region=$(awk '/^  apply:/{on=1} on && /^    steps:/{exit} on' "$WORKFLOW")
+  if grep -qE "^[[:space:]]+&& github\.ref == 'refs/heads/main'$" <<<"$region"; then
+    _report "T20 the apply job's if: requires github.ref == refs/heads/main" ok
+  else
+    _report "T20 apply job is main-only" fail "no github.ref == 'refs/heads/main' conjunct in the apply job's if:"
+  fi
+}
+
 t_no_unbracketed_status_capture
 t_apply_job_fidelity_wiring
 t_g3_anchor_count
 t_g3_slice_shape
 t_g3_no_ladder_residue
 t_g3_handler_executes
+t_g3_slices_identical
+t_apply_job_main_only
 
 echo "=== $pass passed, $fail failed ==="
+# Anti-vacuity floor: a deleted dispatch line must red the suite, not shrink it
+# (#8451 review — T15-T18 were deletable at exit 0). Reported directly, not
+# through _report, which it backstops.
+EXPECTED_TESTS=20
+ran=$((pass + fail))
+if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
+  printf '[FAIL] harness: ran %s test(s), expected %s\n' "$ran" "$EXPECTED_TESTS" >&2
+  exit 1
+fi
 [[ "$fail" -eq 0 ]]

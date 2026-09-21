@@ -27,8 +27,9 @@
 # repo's own state is checked FIRST, and a release alone reports FAIL "unblocked".
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
-#   0 = PASS       (issue-alerts.tf carries no legacy trigger and no
-#                   `ignore_changes = all`; sweeper closes #7985)
+#   0 = PASS       (both rules' blocks declare a native trigger, with no
+#                   legacy_trigger_conditions and no `ignore_changes = all`;
+#                   sweeper closes #7985)
 #   1 = FAIL       (not converted: either no fixed release yet, or one exists and
 #                   the conversion is owed; sweeper comments, leaves open)
 #   * = TRANSIENT  (GitHub API unreachable / rate-limited; retry next sweep)
@@ -64,14 +65,42 @@ api () { gh api "$@" 2>/dev/null; }
 
 # --- converted? (checked first: after the bump PINNED is stale, so the release
 # comparison below is no longer meaningful) -------------------------------------
-TF="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/apps/web-platform/infra/sentry/issue-alerts.tf"
-if [[ ! -r "$TF" ]]; then
-  echo "TRANSIENT: cannot read ${TF} (probe not run from a repository checkout)"
-  exit 2
+# Checked BY ADDRESS across every .tf in the root, not by grepping one file: a
+# frozen block moved to another file, or deleted outright, must not read as
+# "converted" (the sweeper would close #7985 with the freeze still standing, or
+# with a paging rule gone).
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/apps/web-platform/infra/sentry"
+shopt -s nullglob
+TF_FILES=("$ROOT_DIR"/*.tf)
+shopt -u nullglob
+if [[ ${#TF_FILES[@]} -eq 0 ]]; then
+  echo "FAIL: no .tf files under ${ROOT_DIR}; cannot judge the conversion (the Sentry root moved or the checkout is incomplete)."
+  exit 1
 fi
-if ! grep -qE '^[[:space:]]*legacy_trigger_conditions[[:space:]]*=' "$TF" \
-   && ! grep -qE '^[[:space:]]*ignore_changes[[:space:]]*=[[:space:]]*all\b' "$TF"; then
-  echo "PASS: converted — issue-alerts.tf carries no legacy_trigger_conditions and no ignore_changes = all."
+FROZEN=(auth_per_user_loop sandbox_startup_failure)
+block_of() { # $1=label -> that sentry_alert block's body across all .tf files
+  awk -v hdr="resource \"sentry_alert\" \"$1\" {" '
+    index($0, hdr) == 1 { on = 1 }
+    on { print }
+    on && /^}$/ { on = 0 }
+  ' "${TF_FILES[@]}"
+}
+missing=(); still_frozen=()
+for label in "${FROZEN[@]}"; do
+  body=$(block_of "$label")
+  if [[ -z "$body" ]]; then missing+=("$label"); continue; fi
+  if grep -qE '^[[:space:]]*legacy_trigger_conditions[[:space:]]*=' <<<"$body" \
+     || grep -qE '^[[:space:]]*ignore_changes[[:space:]]*=[[:space:]]*all([^[:alnum:]_]|$)' <<<"$body" \
+     || ! grep -qE 'event_unique_user_frequency_count[[:space:]]*=' <<<"$body"; then
+    still_frozen+=("$label")
+  fi
+done
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "FAIL: no resource \"sentry_alert\" block for ${missing[*]} in ${ROOT_DIR}/*.tf. That is not a conversion: the paging rule was deleted, renamed, or moved out of this root. Resolve before closing #7985."
+  exit 1
+fi
+if [[ ${#still_frozen[@]} -eq 0 ]]; then
+  echo "PASS: converted — both rules declare a native event_unique_user_frequency_count trigger, with no legacy_trigger_conditions and no ignore_changes = all."
   exit 0
 fi
 
@@ -101,7 +130,7 @@ for v in $NEWER; do
     exit 2
   fi
   if printf '%s' "$CMP" | grep -qi -e "^${FIX_SHA}" -e "$FIX_SUBJECT"; then
-    echo "FAIL: unblocked — provider v${v} contains ${FIX_SHA}; bump versions.tf, convert auth_per_user_loop and sandbox_startup_failure to native trigger_conditions, drop legacy_trigger_conditions and ignore_changes = all (the plan must show 0 changes). See #7985's exit checklist."
+    echo "FAIL: ACTION REQUIRED — unblocked: provider v${v} contains ${FIX_SHA}; bump versions.tf, convert auth_per_user_loop and sandbox_startup_failure to native trigger_conditions, drop legacy_trigger_conditions and ignore_changes = all (the plan must show 0 changes). See #7985's exit checklist."
     exit 1
   fi
 done
