@@ -169,8 +169,8 @@ wait_unlock() { for _ in $(seq 1 200); do [[ ! -d "$STUB_DB_DIR/lock.d" ]] && re
 # === Case: free acquire — marker observed, ACQUIRED banner, holder alive =====
 setup_case free
 rc=0; out=$(_acquire ti-main-run1 a 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED after [0-9]+ms'; then
-  ok "free acquire emits DEV_SUITE_MUTEX_ACQUIRED after <N>ms (rc=0)"
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+'; then
+  ok "free acquire emits DEV_SUITE_MUTEX_ACQUIRED wait_ms=<N> (rc=0)"
 else
   bad "free acquire: rc=$rc out=$out"
 fi
@@ -269,7 +269,7 @@ wait_lock || bad "first holder never took the stub lock (waitacq)"
 rc=0; out=$(WAIT_S=15 _acquire ti-pr-runD D 2>&1) || rc=$?
 if [[ "$rc" == "0" ]] \
   && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_WAITING' \
-  && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED after [0-9]+ms'; then
+  && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+'; then
   ok "second acquire waits then ACQUIRED after holder release"
 else
   bad "wait-then-acquire: rc=$rc out=$out"
