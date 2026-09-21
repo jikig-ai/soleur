@@ -592,6 +592,13 @@ preference rather than the load-bearing mitigation it used to be.
 The run summary prints the **new volume id**. Record it — any future recut needs it as the safety
 pin, and re-deriving it means going back to Step 1.
 
+The new host's first boot writes `/var/lib/zot/.soleur-luks-sentinel` inside the opened LUKS
+filesystem (#8408). zot will not start unless that file is present, which is how a reboot with the
+mapper still closed fails loudly instead of serving an empty store. The recut moves images at the
+registry level (`crane copy`), so the file is never copied. If a store is ever copied at the
+filesystem level (`rsync`, `cp -a`), **exclude `.soleur-luks-sentinel`**. A copy that carries it
+onto an unencrypted path would pass the gate.
+
 ---
 
 ## Related

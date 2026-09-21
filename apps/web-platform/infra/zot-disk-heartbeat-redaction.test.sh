@@ -262,6 +262,9 @@ for _m in findmnt lsblk cryptsetup blkid; do cp "$BIN/$_m" "$BIN/sbin/$_m"; done
 # the real /usr/bin would beat them -- so the seam has to replace the whole line.
 sed -i "s|^PATH=.*|PATH=\"$BIN:$BIN/sbin:\$PATH\"|" "$HB"
 sed -i "s|/dev/disk/by-id/|$TMP/by-id/|g" "$HB"
+# (#8408) the per-boot tmpfs state dir, re-rooted the same way (a render-time literal seam).
+sed -i "s|/run/soleur-registry/|$TMP/run-soleur-registry/|g" "$HB"
+mkdir -p "$TMP/run-soleur-registry"
 # Non-vacuity for BOTH seams: if either literal is renamed in the template these substitutions
 # silently no-op and the sbin-only / devid cases would pass against an unseamed script.
 PHASE=posture   # both seams belong to the #8386 property, not to the #7500 floor
@@ -295,6 +298,8 @@ assert "the SHIPPED template pins LC_ALL=C (the guards below are locale-defined 
   "grep -qF 'export LC_ALL=C' '$CI_YML'"
 assert "T1 by-id seam landed (the shipped reverse map now walks the fixture dir)" \
   "grep -qF '$TMP/by-id/scsi-0HC_Volume_' '$HB'"
+assert "T1 luks-open arm seam landed (the reader now reads the fixture dir)" \
+  "grep -qF '$TMP/run-soleur-registry/luks-open.arm' '$HB'"
 PHASE=redact
 
 # run_hb <fixture-content> [extra-env...] -> prints the emitted SOLEUR_ZOT_DISK row.
@@ -900,6 +905,29 @@ assert_field "P-M2-ten-digit-alias expected" store_expected_devid "$EXP_DEVID"
 assert_field "P-M2-ten-digit-alias luks"     store_luks           "yes"
 set_byid "$EXP_DEVID:sdb"
 
+# --- (#8408 (b)) luks_open_arm: which arm registry-luks-open.sh last took this boot ---------
+# The reopen script is fail-open on every arm; this trusted-head field is the only off-box
+# record of which one fired. Closed vocabulary; absent file = none; anything else = __UNREADABLE__.
+LOA="$TMP/run-soleur-registry/luks-open.arm"
+_loa_case() { # <label> <file-content|__ABSENT__> <expected>
+  rm -f "$LOA"
+  [ "$2" = __ABSENT__ ] || printf '%s\n' "$2" > "$LOA"
+  posture_case "P-loa-$1" \
+    HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+    HB_LSBLK_SUBJ="/dev/mapper/registry" HB_CRYPT_SUBJ="registry" \
+    HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+    HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+  assert_field "P-loa-$1 luks_open_arm" luks_open_arm "$3"
+}
+_loa_case absent __ABSENT__ none
+_loa_case opened opened opened
+_loa_case already already_open already_open
+_loa_case open-failed open_failed open_failed
+_loa_case garbage 'opened; rm -rf /' __UNREADABLE__
+rm -f "$LOA"
+assert "P-loa luks_open_arm precedes ' zot_last_err=' in the LINE= assembly" \
+  "grep -qE 'store_luks=[^ ]+ luks_open_arm=' <<<\"\$(grep -F 'LINE=\"SOLEUR_ZOT_DISK' '$RAW' | head -1 | sed 's/ zot_last_err=.*//')\""
+
 # --- Structural: the order pin, on the source text rather than one rendered row --------------
 _P_LINE="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1)"
 assert "P-s all five posture fields precede ' zot_last_err=' in the LINE= assembly" \
@@ -961,7 +989,7 @@ fi
 # ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
 # redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
 CASES_REDACT_MIN=39
-CASES_POSTURE_MIN=174
+CASES_POSTURE_MIN=201
 if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
     "$CASES_REDACT" "$CASES_REDACT_MIN" >&2

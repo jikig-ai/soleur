@@ -1425,6 +1425,13 @@ jobs:
       - name: Run zot HTTP-deadline config guard (#7555 — split-brain, gcDelay bound, digest acceptance)
         run: bash apps/web-platform/infra/zot-config-deadlines.test.sh
 
+      # Guard 4 (#8408 b). zot's start is gated on a sentinel inside the LUKS filesystem, bound
+      # with --mount (which refuses a missing source; -v would create it). The docker-gated half
+      # MEASURES start/restart failing after the source is deleted, with a -v negative control,
+      # on an image imported offline from the runner's /bin/true. Fails closed without a daemon.
+      - name: Run registry LUKS launch-gate guard (#8408 — sentinel bind, recovery arm, arm vocabulary)
+        run: bash apps/web-platform/infra/registry-luks-launch-gate.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 
