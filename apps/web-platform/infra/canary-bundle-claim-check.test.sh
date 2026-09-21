@@ -22,11 +22,13 @@ if [[ ! -x "$SCRIPT" ]]; then
 fi
 
 # Capability-absent on a dev host is a printed SKIP with exit 0, not a RED; under
-# CI the same absence is a runner-contract breach and must fail. Verbatim shape
-# from git-data-emit.test.sh's _skip.
+# CI the same absence is a runner-contract breach and must fail. Shape from
+# git-data-emit.test.sh's _skip, with the CI predicate widened to -n plus
+# GITHUB_ACTIONS (cloud-init-inngest-bootstrap's form): a runner exporting
+# CI=1/CI=TRUE or only GITHUB_ACTIONS must fail closed the same as CI=true.
 _skip() {
-  if [ "${CI:-}" = "true" ]; then
-    echo "$1 — and CI=true, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "$1 — and CI is set, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
     exit 1
   fi
   echo "$1" >&2
@@ -35,6 +37,7 @@ _skip() {
 
 command -v python3 >/dev/null 2>&1 || _skip "canary-bundle-claim-check: SKIP — python3 required for fixture HTTP server"
 command -v curl >/dev/null 2>&1 || _skip "canary-bundle-claim-check: SKIP — curl required for the fixture readiness probe"
+command -v jq >/dev/null 2>&1 || _skip "canary-bundle-claim-check: SKIP — jq required by the script under test (every JWT decode pipes through jq -er)"
 
 # Canonical anon-key payload: {iss:"supabase", role:"anon", ref:"aaaaaaaaaaaaaaaaaaaa"}
 # (20-char placeholder ref, passes all canonical claim checks). Pre-baked so each
@@ -92,16 +95,22 @@ cleanup_test() {
 }
 trap cleanup_test EXIT
 
-# Allocate a free port via the OS (no race window vs. random-range picking).
+# Allocate a free loopback port via the OS (no race window vs. random-range
+# picking). Loopback-only because the fixture tree is served without --bind on
+# the matching http.server — see start_server.
 alloc_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); p=s.getsockname()[1]; s.close(); print(p)'
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); p=s.getsockname()[1]; s.close(); print(p)'
 }
 
-# Start a python http.server in $FIXTURE_ROOT on $PORT. Wait for readiness with
-# a hard timeout (4s, 20 × 0.2s) — protects CI from a Python startup hang.
+# Start a python http.server in $FIXTURE_ROOT on $PORT, bound to loopback only —
+# the fixture tree must not be served on other interfaces. Wait for readiness:
+# ~4s on refused connections (20 × 0.2s), up to ~24s worst case when the port
+# black-holes and every curl -m 1 burns its full second — protects CI from a
+# Python startup hang. probe_loopback_http below mirrors this readiness loop;
+# keep the two in step.
 start_server() {
   PORT=$(alloc_port)
-  python3 -m http.server "$PORT" --directory "$FIXTURE_ROOT" >/dev/null 2>&1 &
+  python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$FIXTURE_ROOT" >/dev/null 2>&1 &
   HTTP_PID=$!
   for _ in $(seq 1 20); do
     if curl -fsS -m 1 "http://localhost:$PORT/" >/dev/null 2>&1; then
@@ -109,7 +118,7 @@ start_server() {
     fi
     sleep 0.2
   done
-  echo "FATAL: http.server did not start on port $PORT within 4s" >&2
+  echo "FATAL: http.server did not start on port $PORT within the readiness window" >&2
   return 1
 }
 
@@ -117,34 +126,44 @@ start_server() {
 # any F-row. A raw socket bind is NOT a substitute — measured on a host where
 # `socketserver.TCPServer` binds instantly but `python3 -m http.server` never
 # serves loopback within the readiness window, so only the real invocation is an
-# honest precondition for all 13 fixtures. The server's stderr is captured (not
-# discarded like start_server's) so the SKIP verdict carries why the capability
-# is absent.
+# honest precondition for all 14 fixtures (F1–F13 + F12-bis). The server's stderr
+# is captured (not discarded like start_server's) so the SKIP verdict carries why
+# the capability is absent.
 probe_loopback_http() {
-  local scratch port pid
-  scratch=$(mktemp -d /tmp/canary-probe.XXXXXX)
-  port=$(alloc_port)
-  python3 -m http.server "$port" --directory "$scratch" >"$scratch/server.log" 2>&1 &
-  pid=$!
+  # Drive the suite's HTTP_PID/FIXTURE_ROOT globals so the EXIT trap covers this
+  # window too — a signal mid-probe must not leak the server or the scratch dir.
+  cleanup_test
+  FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/canary-probe.XXXXXX") || { echo "FATAL: mktemp failed" >&2; exit 2; }
+  PORT=$(alloc_port)
+  # A sentinel file distinguishes "our server answers" from a foreign listener
+  # that squatted the port in the alloc/close/rebind window.
+  printf 'canary-probe\n' > "$FIXTURE_ROOT/probe-sentinel"
+  python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$FIXTURE_ROOT" >"$FIXTURE_ROOT/server.log" 2>&1 &
+  HTTP_PID=$!
   for _ in $(seq 1 20); do
-    if curl -fsS -m 1 "http://localhost:$port/" >/dev/null 2>&1; then
-      kill "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      rm -rf "$scratch"
+    if curl -fsS -m 1 "http://localhost:$PORT/probe-sentinel" >/dev/null 2>&1; then
+      cleanup_test
       return 0
     fi
     sleep 0.2
   done
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  kill "$HTTP_PID" 2>/dev/null || true
+  wait "$HTTP_PID" 2>/dev/null || true
+  HTTP_PID=""
   echo "http.server probe stderr (last 5 lines):" >&2
-  tail -5 "$scratch/server.log" >&2
-  rm -rf "$scratch"
+  # Scrubbed like the SUT's own stderr emission — a PATH-resolved python3 must
+  # not smuggle workflow-command bytes into CI logs via this diagnostic, so the
+  # lines are indented (no `::cmd::` at column 0) and C0/U+2028-stripped.
+  tail -5 "$FIXTURE_ROOT/server.log" \
+    | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/^/    /' \
+    | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' >&2
+  rm -rf "$FIXTURE_ROOT"
+  FIXTURE_ROOT=""
   return 1
 }
 
 if ! probe_loopback_http; then
-  _skip "canary-bundle-claim-check: SKIP — python3 http.server cannot bind+serve loopback on this host; the fixture mechanism every F-row depends on is absent (CI exercises the full suite)"
+  _skip "canary-bundle-claim-check: SKIP — python3 http.server cannot bind+serve loopback on this host; the fixture mechanism every F-row depends on is absent (on CI the runner provides it and the full suite runs)"
 fi
 
 # Build a minimal /login HTML body that references the given chunk paths. Each
@@ -195,7 +214,7 @@ run_test() {
   TESTS_RUN=$((TESTS_RUN + 1))
 
   local stderr_file
-  stderr_file=$(mktemp /tmp/canary-test-stderr.XXXXXX)
+  stderr_file=$(mktemp "${TMPDIR:-/tmp}/canary-test-stderr.XXXXXX")
 
   local actual_exit=0
   "$SCRIPT" "http://localhost:$PORT" 2>"$stderr_file" >/dev/null || actual_exit=$?
@@ -230,7 +249,7 @@ run_test() {
 # Per-test setup: fresh fixture root, restart server.
 new_fixture() {
   cleanup_test
-  FIXTURE_ROOT=$(mktemp -d /tmp/canary-test-fixtures.XXXXXX)
+  FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/canary-test-fixtures.XXXXXX") || { echo "FATAL: mktemp failed" >&2; exit 2; }
 }
 
 # ============================================================================
@@ -379,7 +398,7 @@ build_login_html "/_next/static/chunks/8237-xyz.js" > "$FIXTURE_ROOT/login/index
 stage_chunk "/_next/static/chunks/8237-xyz.js" "$JWT_LOG_INJECT"
 start_server || exit 2
 TESTS_RUN=$((TESTS_RUN + 1))
-stderr_file=$(mktemp /tmp/canary-test-stderr.XXXXXX)
+stderr_file=$(mktemp "${TMPDIR:-/tmp}/canary-test-stderr.XXXXXX")
 "$SCRIPT" "http://localhost:$PORT" 2>"$stderr_file" >/dev/null || true
 # Assertion: zero lines in stderr begin with "::notice::". The smuggled
 # annotation must have been stripped before stderr emission.
@@ -404,17 +423,23 @@ build_login_html "/_next/static/chunks/8237-xyz.js" > "$FIXTURE_ROOT/login/index
 stage_chunk "/_next/static/chunks/8237-xyz.js" "$JWT_LOG_INJECT_U2028"
 start_server || exit 2
 TESTS_RUN=$((TESTS_RUN + 1))
-stderr_file=$(mktemp /tmp/canary-test-stderr.XXXXXX)
+stderr_file=$(mktemp "${TMPDIR:-/tmp}/canary-test-stderr.XXXXXX")
 "$SCRIPT" "http://localhost:$PORT" 2>"$stderr_file" >/dev/null || true
 # U+2028 in stderr would be rendered as a line break by most consumers; assert
-# the byte sequence E2 80 A8 is absent.
-if grep -aP '\xe2\x80\xa8' "$stderr_file" >/dev/null 2>&1; then
+# the byte sequence E2 80 A8 is absent. rc>=2 is a grep error (e.g. no PCRE on
+# BSD grep) — a capability absence must read as a failure to measure, not a pass.
+grep -aP '\xe2\x80\xa8' "$stderr_file" >/dev/null 2>&1; grep_rc=$?
+if [[ "$grep_rc" -eq 0 ]]; then
   TESTS_FAILED=$((TESTS_FAILED + 1))
   FAIL_LOG="${FAIL_LOG}\n  FAIL  F12-bis — U+2028 byte sequence leaked into stderr"
   echo "  FAIL  F12-bis — U+2028 byte sequence leaked into stderr"
-else
+elif [[ "$grep_rc" -eq 1 ]]; then
   TESTS_PASSED=$((TESTS_PASSED + 1))
   echo "  PASS  F12-bis"
+else
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  FAIL_LOG="${FAIL_LOG}\n  FAIL  F12-bis — grep -aP rc=$grep_rc (no PCRE support?); the U+2028 assertion could not measure stderr"
+  echo "  FAIL  F12-bis — grep -aP rc=$grep_rc (no PCRE support?); the U+2028 assertion could not measure stderr"
 fi
 rm -f "$stderr_file"
 
@@ -443,6 +468,15 @@ run_test "F13" 1 "canary_layer3_no_jwt"
 # ============================================================================
 # Summary
 # ============================================================================
+# Conservation + floor — the probe gates capability, not reachability: a suite
+# that silently ran nothing (early exit, a dropped F-row) would read as a clean
+# 0/0 pass. 14 rows: F1–F13 plus F12-bis. The message carries the vacuity-floor
+# sentinel vocabulary (assertion floor / assertions ran): the meta-guard's
+# mutant oracle maps a bare `FATAL:` + rc=2 to CONSTRUCTION, not FIRES.
+if [[ "$TESTS_RUN" -lt 14 || "$TESTS_RUN" -ne $((TESTS_PASSED + TESTS_FAILED)) ]]; then
+  echo "FATAL: assertion floor/conservation — assertions ran=$TESTS_RUN of 14 required (passed=$TESTS_PASSED failed=$TESTS_FAILED); a dropped or uncounted row is a suite defect" >&2
+  exit 2
+fi
 echo ""
 echo "================================"
 echo "Tests run:    $TESTS_RUN"

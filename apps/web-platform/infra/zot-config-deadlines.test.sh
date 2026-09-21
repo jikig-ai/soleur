@@ -34,6 +34,9 @@ SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
 PASS=0
 FAIL=0
 SKIPPED=0
+# Pinned empty at init so an ambient DIGEST_RAN in the environment cannot inflate
+# EXPECTED_MIN below — it is set only inside the digest arm, after dispatch.
+DIGEST_RAN=""
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
@@ -66,10 +69,17 @@ MIN_DEADLINE_S=$(( (LARGEST_LAYER_BYTES + FLOOR_THROUGHPUT_BPS - 1) / FLOOR_THRO
 # ---------------------------------------------------------------------------
 # Render the bytes that reach the host, then extract /etc/zot/config.json from them.
 # CONFIG_JSON_OVERRIDE lets the mutation battery point this guard at a synthesized render
-# without re-running terraform; it is never set in CI.
+# without re-running terraform. Under CI it is honored only for this suite's own S4
+# children (SOLEUR_ZOT_S4_CHILD, set by synth_case below) — a bare env: line in the
+# workflow would otherwise substitute attacker-chosen bytes, skip the S4 battery, and
+# drop EXPECTED_MIN by 3: a vacuous green on substituted input.
 # ---------------------------------------------------------------------------
 CFG="$TMP/config.json"
 if [[ -n "${CONFIG_JSON_OVERRIDE:-}" ]]; then
+  if [[ -z "${SOLEUR_ZOT_S4_CHILD:-}" && ( -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ) ]]; then
+    fail "CONFIG_JSON_OVERRIDE is set under CI without the S4-child marker — refusing to adjudicate substituted bytes"
+    finish; exit $?
+  fi
   if [[ ! -r "$CONFIG_JSON_OVERRIDE" ]]; then
     fail "CONFIG_JSON_OVERRIDE set to an unreadable path: $CONFIG_JSON_OVERRIDE"
     finish; exit $?
@@ -83,7 +93,7 @@ else
     tail -5 "$TMP/budget.log" >&2
     finish; exit $?
   fi
-  python3 - "$RENDERED" "$CFG" <<'PY' || { echo "  FAIL: could not extract /etc/zot/config.json from the render"; exit 1; }
+  python3 - "$RENDERED" "$CFG" <<'PY' || { fail "could not extract /etc/zot/config.json from the render"; finish; exit $?; }
 import sys, yaml
 src, dst = sys.argv[1], sys.argv[2]
 doc = yaml.safe_load(open(src))
@@ -167,7 +177,11 @@ for pair in "readTimeout:$RT_RAW:$RT_S" "writeTimeout:$WT_RAW:$WT_S"; do
     continue
   fi
   if [[ -z "$secs" ]]; then
+    # Two relation slots consumed, two verdicts emitted — same rule as the absent
+    # branch above, or the assertion count drops below the floor and a measured
+    # FAIL collapses into the "could not measure" rc=2 class.
     fail "$name ('$raw') did not parse as a Go duration — an unparseable deadline is not a deadline"
+    fail "$name ('$raw') is unparseable, so neither its floor nor its ceiling relation can be evaluated"
     continue
   fi
   # --- floor: at or above the largest-layer budget ---
@@ -183,6 +197,11 @@ for pair in "readTimeout:$RT_RAW:$RT_S" "writeTimeout:$WT_RAW:$WT_S"; do
     else
       fail "$name ${raw} (${secs}s) is >= gcDelay ${GC_RAW} (${GC_S}s) — gc could reclaim staging for an upload still in flight"
     fi
+  else
+    # gcDelay did not parse (its own fail above), so this slot's relation cannot be
+    # evaluated — emit the verdict as a fail rather than dropping the slot, or the
+    # count falls below the floor and a measured FAIL reads as "could not measure".
+    fail "$name — gcDelay ('${GC_RAW:-<unset>}') is unparseable, so its ceiling relation cannot hold"
   fi
 done
 
@@ -191,21 +210,40 @@ done
 # gives that acceptance meaning — must REJECT an unknown key under HTTP.
 #
 # Declining is an explicit, printed verdict, never a silent pass (ADR-181).
+# DIGEST_ARM_ASSERTIONS binds the arm's assertion cost once — the decline count
+# (SKIPPED), the floor term (EXPECTED_MIN), and the decline ceiling below all
+# key on it and must move together.
 # ---------------------------------------------------------------------------
+DIGEST_ARM_ASSERTIONS=2
 if [[ "${SOLEUR_ZOT_GUARD_NO_DIGEST:-0}" == "1" ]]; then
-  echo "  DECLINED: digest acceptance half not run (SOLEUR_ZOT_GUARD_NO_DIGEST=1)."
-  echo "            The static relations above were checked; ACCEPTANCE BY ZOT WAS NOT OBTAINED."
+  if [[ -z "${SOLEUR_ZOT_S4_CHILD:-}" && ( -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ) ]]; then
+    # Only this suite's own S4 children may decline under CI. A bare env: line
+    # in the workflow would otherwise green the guard with acceptance never
+    # obtained — the runner is contracted to provide docker, so this is a
+    # runner defect, not an opt-out.
+    fail "SOLEUR_ZOT_GUARD_NO_DIGEST=1 declined the digest half under CI — the runner is contracted to provide docker"
+  else
+    echo "  DECLINED: digest acceptance half not run (SOLEUR_ZOT_GUARD_NO_DIGEST=1)."
+    echo "            The static relations above were checked; ACCEPTANCE BY ZOT WAS NOT OBTAINED."
+  fi
 else
-  ZOT_IMAGE="$(grep -oE 'ghcr\.io/project-zot/zot-linux-amd64:[^"]+' "$REPO_ROOT/apps/web-platform/infra/zot-registry.tf" | head -1)"
-  if [[ -z "$ZOT_IMAGE" ]]; then
-    fail "could not read the pinned zot image from zot-registry.tf — acceptance cannot be tested against an unpinned digest"
-  elif ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    if [[ "${CI:-}" == "true" || -n "${GITHUB_ACTIONS:-}" ]]; then
-      fail "docker is unavailable, so the pinned digest could not adjudicate the config. This guard FAILS CLOSED in CI: the deploy-script-tests runner is contracted to provide docker (the 'Assert docker is available' step precedes this suite), so a daemonless run is a runner defect — never a decline."
+  # Exactly-one-match, not first-match: a stray second ghcr ref (e.g. in a
+  # comment) would otherwise silently redirect acceptance to an image that
+  # never deploys — the same doctrine the write_files extractor above enforces.
+  mapfile -t ZOT_IMAGE_REFS < <(grep -oE 'ghcr\.io/project-zot/zot-linux-amd64:[^"]+' "$REPO_ROOT/apps/web-platform/infra/zot-registry.tf")
+  ZOT_IMAGE="${ZOT_IMAGE_REFS[0]:-}"
+  if [[ "${#ZOT_IMAGE_REFS[@]}" -ne 1 ]]; then
+    fail "expected exactly one pinned zot image ref in zot-registry.tf, found ${#ZOT_IMAGE_REFS[@]} — acceptance cannot be tested against an unpinned or ambiguous digest"
+  elif ! command -v docker >/dev/null 2>&1 || ! DOCKER_INFO_OUT="$(timeout 15 docker info 2>&1)"; then
+    if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+      fail "docker is unavailable, so the pinned digest could not adjudicate the config. This guard FAILS CLOSED in CI: the deploy-script-tests runner is contracted to provide docker (the 'Assert docker is available' step precedes this suite), so a daemonless run is a runner defect — never a decline.${DOCKER_INFO_OUT:+ docker info: $(tail -2 <<<"$DOCKER_INFO_OUT" | tr '\n' ' ')}"
     else
       echo "  SKIP: docker absent or daemon unreachable by this user — digest acceptance half declined"
+      if [[ -n "${DOCKER_INFO_OUT:-}" ]]; then
+        echo "        docker info: $(tail -2 <<<"$DOCKER_INFO_OUT" | tr '\n' ' ')"
+      fi
       echo "        The static relations above were checked; ACCEPTANCE BY ZOT WAS NOT OBTAINED."
-      SKIPPED=$((SKIPPED + 2))
+      SKIPPED=$((SKIPPED + DIGEST_ARM_ASSERTIONS))
     fi
   else
     DIGEST_RAN=1
@@ -216,6 +254,10 @@ else
     OUT="$(zot_verify "$CFG")"; RC=$?
     if [[ "$RC" -eq 0 ]] && grep -qF 'config file is valid' <<<"$OUT"; then
       pass "the pinned zot digest ACCEPTS the rendered config"
+    elif [[ "$RC" -eq 124 || "$RC" -eq 125 || "$RC" -eq 126 || "$RC" -eq 127 ]]; then
+      # rc 124/125/126/127 is timeout/docker-run itself failing (pull, exec) —
+      # the digest never saw the config, so "REJECTED" would be a false verdict.
+      fail "docker run itself failed (rc=$RC — pull/exec/timeout), so the digest never adjudicated the config: $(tail -2 <<<"$OUT" | tr '\n' ' ')"
     else
       fail "the pinned zot digest REJECTED the rendered config (rc=$RC): $(tail -2 <<<"$OUT" | tr '\n' ' ')"
     fi
@@ -231,6 +273,8 @@ PY
     BOUT="$(zot_verify "$TMP/bogus.json")"; BRC=$?
     if [[ "$BRC" -ne 0 ]] && grep -qF "'HTTP' has invalid keys: zzzboguskey" <<<"$BOUT"; then
       pass "negative control: the pinned digest REJECTS an unknown key under HTTP"
+    elif [[ "$BRC" -eq 124 || "$BRC" -eq 125 || "$BRC" -eq 126 || "$BRC" -eq 127 ]]; then
+      fail "negative control could not run — docker run failed (rc=$BRC — pull/exec/timeout), so the digest never saw the bogus config: $(tail -2 <<<"$BOUT" | tr '\n' ' ')"
     else
       fail "negative control FAILED (rc=$BRC): the digest did not reject 'zzzboguskey', so its acceptance of the real config proves nothing"
     fi
@@ -250,10 +294,12 @@ fi
 DEADLINE_KEYS=2
 RELATIONS_PER_KEY=2
 EXPECTED_MIN=$(( 1 + 1 + (DEADLINE_KEYS * RELATIONS_PER_KEY) ))
+# +3 for the S4 battery's three synth_case verdicts below — parent-only, keyed
+# identically to the battery's own guard (children set the override and skip it).
 [[ -z "${CONFIG_JSON_OVERRIDE:-}" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 3 ))
 # Keyed on the digest half having actually dispatched (DIGEST_RAN), not on the env var —
 # a capability decline leaves NO_DIGEST unset but runs neither digest assertion.
-[[ -n "${DIGEST_RAN:-}" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 2 ))
+[[ -n "$DIGEST_RAN" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + DIGEST_ARM_ASSERTIONS ))
 # ---------------------------------------------------------------------------
 # S4 — SYNTHESIZED ROWS. Every assertion above ran against ONE fixture (the real render), in which
 # both keys are present and 1800s sits far from both bounds — so `&&` was indistinguishable from
@@ -268,7 +314,7 @@ EXPECTED_MIN=$(( 1 + 1 + (DEADLINE_KEYS * RELATIONS_PER_KEY) ))
 synth_case() { # $1=label $2=python-mutation-file $3=expected rc $4=required marker
   local label="$1" mutf="$2" want="$3" marker="${4:-}" f="$TMP/synth.json" rc=0 out
   python3 "$mutf" "$CFG" "$f" 2>/dev/null || { fail "S4 $label — could not synthesize"; return; }
-  out="$(CONFIG_JSON_OVERRIDE="$f" SOLEUR_ZOT_GUARD_NO_DIGEST=1 bash "$SELF" 2>&1)" || rc=$?
+  out="$(CONFIG_JSON_OVERRIDE="$f" SOLEUR_ZOT_GUARD_NO_DIGEST=1 SOLEUR_ZOT_S4_CHILD=1 bash "$SELF" 2>&1)" || rc=$?
   if [[ "$rc" -ne "$want" ]]; then
     fail "S4 $label — got rc=$rc, want $want"
   elif [[ -n "$marker" ]] && ! grep -qF -- "$marker" <<<"$out"; then
@@ -321,10 +367,11 @@ fi
 # catch a total collapse, and under a neutered assertion machinery the count goes to 0.
 #
 # DECLINE CEILING. Exactly one capability-decline site exists (the digest half) and its
-# cost is fixed at the digest pair, so SKIPPED is 0 or 2 by construction — anything higher
-# means a second decline site snuck in and must not pass silently.
-if [[ "$SKIPPED" -gt 2 ]]; then
-  echo "  FATAL: decline ceiling — $SKIPPED assertions were declined, max 2 (the digest pair). A second decline site is not permitted." >&2
+# cost is fixed at the digest pair, so SKIPPED is 0 or DIGEST_ARM_ASSERTIONS by
+# construction — anything higher means a second decline site snuck in and must
+# not pass silently.
+if [[ "$SKIPPED" -gt "$DIGEST_ARM_ASSERTIONS" ]]; then
+  echo "  FATAL: decline ceiling — $SKIPPED assertions were declined, max $DIGEST_ARM_ASSERTIONS (the digest pair). A second decline site is not permitted." >&2
   exit 2
 fi
 

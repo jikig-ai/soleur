@@ -38,7 +38,7 @@ evidence-discarding-gate); skills discovered at `~/.claude/skills/` (`diagnose-c
 4. Zot `Skipped:` reporting prescribed as a separate `finish()` line — the `=== Results:`
    format stays verbatim (no consumer greps it, but minimal churn is the safer default).
 5. Line citations corrected: docker assert step is `:961-963` (not `:962`); `start_server`
-   call sites enumerated (:201-396, 13 sites).
+   call sites enumerated (:201-396, 14 sites — F1–F13 plus F12-bis).
 
 ### New Considerations Discovered
 
@@ -105,7 +105,8 @@ which is exactly the change scoped here. No stale premises found.
 **Cut List (Phase 0.6b).** Mechanisms considered and cut:
 
 - Shared capability-probe helper file (`infra/lib/` or similar) — cut: the repo convention
-  is self-contained suites that each inline their `_skip()` (3 existing copies); no shared
+  is self-contained suites that each inline their `_skip()` (2 existing infra copies:
+  git-data-emit, git-data-runcmd-rehearsal); no shared
   lib exists in `apps/web-platform/infra/` and ADR-178's shared primitives ship in the
   plugin, not here. A new shared file buys nothing a 10-line inline probe doesn't.
 - New CI assertion step for the http.server capability — cut: the `CI=true` arm inside the
@@ -124,7 +125,7 @@ which is exactly the change scoped here. No stale premises found.
 
 - `apps/web-platform/infra/canary-bundle-claim-check.test.sh` — suite under change;
   `start_server` (:92-104) is the failure site (4s / 20×0.2s curl window, exit 2 on
-  exhaustion); `command -v python3` precondition at :24-27; 13 `start_server || exit 2`
+  exhaustion); `command -v python3` precondition at :24-27; 14 `start_server || exit 2`
   call sites.
 - `apps/web-platform/infra/zot-config-deadlines.test.sh` — digest-half docker check at
   :198-199 (`fail` arm to convert); `SOLEUR_ZOT_GUARD_NO_DIGEST` decline at :191-194;
@@ -286,8 +287,8 @@ no shared helper.
    CLI emits no output at all, which is itself a datum worth printing).
    On failure: `_skip "canary-bundle-claim-check: SKIP — python3 http.server cannot
    bind+serve loopback on this host; the fixture mechanism every F-row depends on is absent
-   (CI exercises the full suite)"`.
-4. Leave all 13 `start_server || exit 2` sites (:201-396) unchanged: after a passing probe the
+   (on CI the runner provides it and the full suite runs)"`.
+4. Leave all 14 `start_server || exit 2` sites (:201-396) unchanged: after a passing probe the
    capability is established, so a mid-suite bind failure is a real flake/regression and
    stays `FATAL`.
 
@@ -365,7 +366,7 @@ re-derivation; keep the list's shape (suite names + measured cost).
   negative case for both suites.
 - **Every path to exit 0, enumerated** (learning 2026-08-13 — turning a red gate green arms
   whatever the red was silently gating). Canary: (a) precondition `_skip`, (b) probe `_skip`,
-  (c) all 13 fixtures pass — no bare `else`, no other exit-0 path exists; (a)+(b) fire only
+  (c) all 14 fixtures pass — no bare `else`, no other exit-0 path exists; (a)+(b) fire only
   before F1, so nothing downstream is newly reachable. Zot digest dispatch: (a) `NO_DIGEST=1`
   → DECLINED, (b) docker unreachable + non-CI → SKIP + `SKIPPED+=2`, (c) digest runs →
   normal pass/fail; the dispatch ends in the *run* arm, not a bare decline, so adding a case
@@ -497,7 +498,7 @@ exits 2.
 
 **Assembly.** One chokepoint: the `probe_loopback_http` call between the precondition block
 and F1 — every F-row's fixture flows through `start_server`, which is the identical mechanism
-the probe exercises, so a probe pass is a honest precondition for all 13 fixtures. Secondary
+the probe exercises, so a probe pass is a honest precondition for all 14 fixtures. Secondary
 members: the `command -v python3` and `command -v curl` precondition checks routing through
 the same `_skip` helper.
 
@@ -511,7 +512,7 @@ the same `_skip` helper.
 | 4 | `_skip`'s CI arm removed (always exit 0) | RED — `CI=true` + failing-curl stub must exit non-zero; scenario asserts it |
 | 5 | Capability established, then a second `start_server` call fails mid-suite | RED (exit 2) — fail-closed preserved after a compliant first probe; this is the "second member" row: the gate must not license later fixture failures |
 | 6 | Harness row — `_skip` prints `SKIP:` but exits non-zero | RED — the runner prints RED on any non-zero; scenario asserts exit 0 on the local skip arm |
-| 7 | Must-PASS — capable host, no mutations | PASS — all 13 fixtures run, `Tests run:`/`Tests failed: 0`, no `SKIP` line; verified by the PR's own `deploy-script-tests` run |
+| 7 | Must-PASS — capable host, no mutations | PASS — all 14 fixtures run, `Tests run:`/`Tests failed: 0`, no `SKIP` line; verified by the PR's own `deploy-script-tests` run |
 
 ### Guard 2 — zot digest-half capability decline (`zot-config-deadlines.test.sh`)
 
@@ -615,7 +616,7 @@ None — 68 open `code-review` issues queried; no body mentions
   it prints `<suite>: SKIP — python3 http.server cannot bind+serve loopback ...` and exits 0.
 - Given `CI=true` and a `curl` stub that always exits 7 on PATH, when the canary suite runs,
   then it exits 1 with the runner-contract message.
-- Given a capable host, when the canary suite runs, then all 13 fixtures report PASS and no
+- Given a capable host, when the canary suite runs, then all 14 fixtures report PASS and no
   `SKIP` line appears (covered by AC3/CI).
 - Given `docker info` fails (real on this host; stubbed elsewhere), when the zot suite runs,
   then it prints the SKIP decline, the static relations + 3 S4 rows still report, an `=== Skipped:`

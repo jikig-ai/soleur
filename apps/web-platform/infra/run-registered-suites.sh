@@ -29,8 +29,10 @@
 # picked up here automatically, and a suite that exists on disk but was never
 # registered is reported as unregistered rather than silently counted as covered.
 #
-# Serial execution is not viable — 70 suites take well over ten minutes end to
-# end. Parallelism is the difference between a gate people run and one they skip.
+# Serial execution is not viable — 126 derived suites (as-of measurement
+# 2026-09-21, the same vintage as the tooling table below; re-derive rather
+# than trusting) take well over ten minutes end to end. Parallelism is the
+# difference between a gate people run and one they skip.
 #
 # TOOLING DEPENDENCY, recorded here because this is the auto-glob site (#7068).
 # FIVE registered suites consume docker — two as a whole-suite requirement, three
@@ -49,9 +51,12 @@
 #                                       negative control; the static relations and S4
 #                                       battery need no docker
 #
-# All five exit 0 when docker is missing or unreachable — the first two skip the suite
-# outright; the other three print a SKIP verdict and count the declined assertions
-# (`SKIP runtime arm` / `=== Skipped:`). The skip is NOT visible
+# On a non-CI host all five exit 0 when docker is missing or unreachable — the
+# first two skip the suite outright; the other three print a SKIP verdict and
+# count the declined assertions (`SKIP runtime arm` / `=== Skipped:`). Under CI
+# four of the five fail closed on the same absence (the CI arm inside each gate);
+# only plugin-seed skips unconditionally, relying on the workflow assert step
+# ordered before it below. The skip is NOT visible
 # through this runner: the executor below captures each suite's output to a per-run log dir and
 # prints `PASS`, so a docker-less laptop reports PASS for all five — for the first two while
 # neither asserts anything (~50-65s of coverage, silently absent), and for the three partial
@@ -94,14 +99,19 @@
 #                   git-data-runcmd-rehearsal, git-data-rung2-rehearsal,
 #                   workspaces-luks-g4-mutation
 #   cloud-init  1   cloud-init-inngest-bootstrap
-#   jq          7   ci-deploy, cosign-trusted-root-staleness,
-#                   doppler-download-error-channel, git-data-root-key, inngest,
-#                   registry-boot-guard, zot-log-shipper
+#   jq          8   canary-bundle-claim-check, ci-deploy,
+#                   cosign-trusted-root-staleness, doppler-download-error-channel,
+#                   git-data-root-key, inngest, registry-boot-guard, zot-log-shipper
 #   curl        2   canary-bundle-claim-check, git-data-runcmd-rehearsal
 #
-# Every one of those self-skips with exit 0 when its tool is absent, and — per the paragraph
-# above — this runner prints PASS for a skip. So on a bare checkout a green run here can be
-# hiding a substantial share of the suite set. Re-derive this table rather than trusting it:
+# Most of those self-skip locally when their tool is absent — loud exceptions like
+# git-data-rung2-rehearsal and git-data-root-key fail by design — and every CI-gated
+# skip fails closed under CI. Per the paragraph above, this runner prints PASS for
+# a local skip, so on a bare checkout a green run here can be hiding a substantial
+# share of the suite set. The table is the curated precondition set: a raw
+# `command -v` sweep also lists in-container and opportunistic uses (dash,
+# ssh-keygen, timeout, nft, rsync) that are not host gates in the same sense.
+# Re-derive the table rather than trusting it:
 #   while read -r f; do grep -oE 'command -v [a-z0-9-]+' "$f"; done \
 #     < <(bash apps/web-platform/infra/run-registered-suites.sh --list \
 #         | sed -n 's|^  \(apps/.*\.test\.sh\)$|\1|p') | sort | uniq -c | sort -rn
