@@ -29,6 +29,20 @@
 # CURRENT tier, not when it changed, so a pre-upgrade sample is stale data.
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). This probe binds GH_TOKEN, and shell tracing echoes a
+# command AFTER expansion -- so under `bash -x` the credential reaches the
+# transcript at the moment it is bound, before it is used for anything. Refuse
+# to run traced while a credential is present, rather than trusting the caller
+# not to trace.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO="jikig-ai/soleur"
 WORKFLOW="web-platform-release.yml"
 DEPLOY_ARM_JOBS="migrate deploy live-verify"
