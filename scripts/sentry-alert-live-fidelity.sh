@@ -55,6 +55,10 @@
 #
 # Required env: SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_API_HOST.
 # SENTRY_REFERENCE_FILE overrides the reference path (the apply job sets it).
+# SENTRY_FROZEN_CAPTURE_FILE overrides the frozen-rule pin's anchor (default: the
+# committed 2026-09-09 live capture; empty reads as unset). See "FROZEN-RULE PIN".
+# SENTRY_FROZEN_TF_DIR overrides the directory whose *.tf the frozen-rule set is
+# derived from (default: apps/web-platform/infra/sentry; empty reads as unset).
 # Test injection (its own suite ONLY): SENTRY_FIXTURE_RULES — file path served
 # instead of the live GET.
 #
@@ -79,6 +83,8 @@ esac
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECTION="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 REFERENCE="${SENTRY_REFERENCE_FILE:-$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json}"
+FROZEN_CAPTURE="${SENTRY_FROZEN_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json}"
+FROZEN_TF_DIR="${SENTRY_FROZEN_TF_DIR:-$REPO_ROOT/apps/web-platform/infra/sentry}"
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
@@ -115,6 +121,7 @@ readonly SENTRY_ORG
 
 [[ -r "$PROJECTION" ]] || { echo "ERROR: projection module not readable at $PROJECTION" >&2; exit 1; }
 [[ -r "$REFERENCE" ]] || { echo "ERROR: reference not readable at $REFERENCE" >&2; exit 1; }
+[[ -r "$FROZEN_CAPTURE" ]] || { echo "ERROR: frozen-rule capture not readable at $FROZEN_CAPTURE. The frozen-rule pin has no anchor, so this probe cannot check the excluded-type rules. Refusing." >&2; exit 1; }
 
 # FIXTURE MODE IS ANNOUNCED, LOUDLY. The override exists for this script's own
 # suite, but "its own suite ONLY" was prose, not a mechanism: the PASS line was
@@ -161,8 +168,8 @@ fetch_rules() {
   esac
   # The NON-deprecated org workflows endpoint — the same one
   # assert-byok-rules-exist.sh migrated to in #7590. Deliberately not
-  # `projects/{org}/{proj}/rules/`: that family is under brownout and would make
-  # this probe red on Sentry's calendar rather than on drift.
+  # `projects/{org}/{proj}/rules/`: that family was under brownout and has since
+  # been removed outright (a persistent 410, #8451).
   #
   # Flag ORDER is load-bearing and pinned by the suite: `--disable` FIRST, then
   # `--noproxy '*'`, then `--proto '=https' -g`. The bearer header arrives on
@@ -332,6 +339,149 @@ while IFS= read -r name; do
   _finding "UNMANAGED: '$name' is live and in scope but declared nowhere in apps/web-platform/infra/sentry/ (absent from the reference projected from the plan). Adopt it as a sentry_alert or delete it in Sentry."
 done < <(jq -r 'keys[]' <<<"$live_proj")
 
+# ── FROZEN-RULE PIN (Guard 4, #8451) ────────────────────────────────────────
+# A workflow whose trigger type is in the projection's `excluded` set is outside
+# BOTH projection sides, so every check above is blind to it by construction.
+# The rules TERRAFORM FREEZES — `sentry_alert` blocks carrying
+# `legacy_trigger_conditions`, adopted under `ignore_changes = all` — are never
+# written by an apply, and a UI edit plans "0 changes". This pass is their ONLY
+# content check.
+#
+# TWO SETS, NEITHER A LITERAL:
+#   * FROZEN NAMES, derived from the `.tf` below. Each must have a capture entry
+#     (else REFUSE: no anchor) and a live workflow (else FROZEN DELETED), and is
+#     compared by name on every field that decides paging: enabled, detectorIds,
+#     the full trigger {type, comparison} set, triggers.logicType,
+#     config.frequency, environment, and actionFilters (logicType; conditions as
+#     {type, comparison}; actions as {type, config.targetType,
+#     data.fallthroughType}), all canonicalised and order-insensitive.
+#   * THE CENSUS: every other live workflow carrying an excluded trigger type.
+#     In the capture = a workflow Sentry created that Terraform does not manage
+#     (the org's "Send a notification for high priority issues" default): NOT a
+#     finding. Absent from the capture = UNMANAGED-FROZEN.
+#
+# THE EXCLUDED SET IS READ FROM THE MODULE, not restated: the module carries a
+# main expression, so `include` is refused ("library should only have function
+# definitions"), and the one-line `def excluded:` is lifted verbatim and
+# evaluated. A reshaped definition fails that extraction and REFUSES below —
+# never an empty set, which would make the census compare nothing silently.
+excluded_def=$(grep -m1 -E '^def excluded: \[.*\];[[:space:]]*$' "$PROJECTION" || true)
+set +e
+excluded_json=$(jq -n -c "${excluded_def} excluded" 2>"$jq_err")
+rc=$?
+set -e
+if [[ "$rc" -ne 0 || -z "$excluded_def" ]] \
+   || ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and . != "")' >/dev/null 2>&1 <<<"$excluded_json"; then
+  echo "ERROR: could not read the excluded trigger-type set from ${PROJECTION} (jq rc=$rc; expected one line 'def excluded: [\"…\", …];'): $(tr '\n' ' ' <"$jq_err" | cut -c1-200). The frozen-rule pin cannot select its census. Refusing." >&2
+  exit 1
+fi
+
+# FROZEN NAMES FROM THE `.tf`: the top-level `name` of every
+# `resource "sentry_alert"` block whose top-level `legacy_trigger_conditions` is
+# a NON-EMPTY list. Top-level = two-space indent inside a block that opens at
+# column 0 and closes at a column-0 `}` (terraform fmt's layout, which the
+# `terraform fmt -check` gate holds). Zero names is a derivation that broke — a
+# renamed attribute, a moved directory, a reformatted block — and REFUSES:
+# "compared 0 frozen rules" must never read as clean.
+tf_files=()
+if [[ -d "$FROZEN_TF_DIR" ]]; then
+  for f in "$FROZEN_TF_DIR"/*.tf; do [[ -r "$f" ]] && tf_files+=("$f"); done
+fi
+frozen_names_json='[]'
+if [[ ${#tf_files[@]} -gt 0 ]]; then
+  frozen_names_json=$(awk '
+    /^resource "sentry_alert" "[^"]*"[[:space:]]*\{[[:space:]]*$/ { inb = 1; nm = ""; leg = 0; next }
+    inb && /^\}/ { if (leg && nm != "") print nm; inb = 0; next }
+    inb && /^  name[[:space:]]*=[[:space:]]*"[^"]*"/ { v = $0; sub(/^  name[[:space:]]*=[[:space:]]*"/, "", v); sub(/".*$/, "", v); nm = v; next }
+    inb && /^  legacy_trigger_conditions[[:space:]]*=[[:space:]]*\[[[:space:]]*"/ { leg = 1; next }
+  ' "${tf_files[@]}" | jq -R -s -c 'split("\n") | map(select(. != "")) | unique')
+fi
+frozen_tf_n=$(jq 'length' <<<"$frozen_names_json")
+if [[ "$frozen_tf_n" -eq 0 ]]; then
+  echo "ERROR: derived ZERO frozen rules from ${FROZEN_TF_DIR}/*.tf (${#tf_files[@]} file(s) read; looked for resource \"sentry_alert\" blocks with a non-empty top-level legacy_trigger_conditions). The derivation broke, so the frozen-rule pin would compare nothing. Refusing." >&2
+  exit 1
+fi
+set +e
+missing_cap=$(jq -r --argjson fz "$frozen_names_json" --slurpfile cap "$FROZEN_CAPTURE" \
+  'if ($cap[0] | type) != "array" then error("frozen-rule capture is not a JSON array of workflows") else . end
+   | ($cap[0] | map(.name)) as $cn | $fz[] | select(. as $n | $cn | index($n) | not)' -n 2>"$jq_err")
+rc=$?
+set -e
+if [[ "$rc" -ne 0 ]]; then
+  echo "ERROR: the frozen-rule capture at ${FROZEN_CAPTURE} did not evaluate (jq rc=$rc): $(tr '\n' ' ' <"$jq_err" | cut -c1-300). Refusing." >&2
+  exit 1
+fi
+if [[ -n "$missing_cap" ]]; then
+  echo "ERROR: Terraform-frozen rule(s) with no entry in the committed capture at ${FROZEN_CAPTURE}: $(sed "s/.*/'&'/" <<<"$missing_cap" | tr '\n' ' ')- the frozen-rule pin has no anchor for them. Refusing." >&2
+  exit 1
+fi
+
+set +e
+frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson live "$live_json" \
+    --argjson fz "$frozen_names_json" --slurpfile cap "$FROZEN_CAPTURE" '
+  def excl_type: [ .triggers.conditions[]?.type ] as $t | any($ex[]; . as $e | $t | index($e));
+  # Key order is not data: the live API does not sort keys, and `tojson`
+  # preserves insertion order (F13 reds without this canonicalisation). Every
+  # list is compared as a multiset: canonical elements sorted by their JSON.
+  def canon: walk(if type == "object" then (to_entries | sort_by(.key) | from_entries) else . end);
+  def mset: map(canon) | sort_by(tojson);
+  def trig: [ .triggers.conditions[]? | {type, comparison} ] | mset;
+  def dets: (.detectorIds // []) | map(tostring) | sort;
+  def filt: [ .actionFilters[]?
+              | { logicType,
+                  conditions: ([ .conditions[]? | {type, comparison} ] | mset),
+                  actions: ([ .actions[]? | {type, targetType: (.config // {}).targetType,
+                                             fallthroughType: (.data // {}).fallthroughType} ] | mset) } ]
+            | mset;
+  def fields: { triggerConditions: trig, triggerLogicType: .triggers.logicType,
+                frequency: (.config // {}).frequency, environment: .environment,
+                actionFilters: filt };
+  $cap[0] as $CAP
+  | ($live | map(select(.name as $n | $fz | index($n)))) as $F
+  | ($live | map(select(excl_type and (.name as $n | $fz | index($n) | not)))) as $O
+  | "COUNT \([ $fz[] as $n | select(any($F[]; .name == $n)) ] | length) \($fz | length) \($O | map(select(.name as $n | any($CAP[]; .name == $n))) | length)",
+    ( $F | group_by(.name) | map(select(length > 1) | .[0].name)[]
+      | "FINDING FROZEN DUPLICATE: \($q)\(.)\($q) names more than one live workflow; the pin cannot tell which one the capture describes." ),
+    ( $fz[] as $n
+      | [ $F[] | select(.name == $n) ] as $ws
+      | [ $CAP[] | select(.name == $n) ][0] as $c
+      | if ($ws | length) == 0 then
+          "FINDING FROZEN DELETED: \($q)\($n)\($q) is frozen in Terraform (legacy_trigger_conditions, ignore_changes = all) and absent from live Sentry (captured id \($c.id | tojson))."
+        elif ($ws | length) > 1 then empty
+        else $ws[0] as $w
+          | (if $w.enabled != $c.enabled then
+               (if $w.enabled != true then "FINDING FROZEN DISABLED: \($q)\($n)\($q) live enabled=\($w.enabled | tojson), captured \($c.enabled | tojson)."
+                else "FINDING FROZEN DRIFT: \($q)\($n)\($q).enabled captured=\($c.enabled | tojson) live=\($w.enabled | tojson)." end)
+             else empty end),
+            (if ($w | dets) != ($c | dets) then "FINDING FROZEN MONITOR UNBIND: \($q)\($n)\($q).detectorIds captured=\($c | dets | tojson) live=\($w | dets | tojson)." else empty end),
+            ( ($c | fields) as $cf | ($w | fields) as $wf
+              | ($cf | keys_unsorted[]) as $k
+              | select($cf[$k] != $wf[$k])
+              | "FINDING FROZEN DRIFT: \($q)\($n)\($q).\($k) captured=\($cf[$k] | tojson) live=\($wf[$k] | tojson)." )
+        end ),
+    ( $O[] as $w
+      | if ($w.name | type) != "string" or $w.name == "" then
+          "FINDING UNMANAGED-FROZEN: an excluded-type live workflow (id \($w.id | tojson)) has an empty or non-string name; the pin cannot match it to the capture."
+        elif any($CAP[]; .name == $w.name) then empty
+        else
+          "FINDING UNMANAGED-FROZEN: \($q)\($w.name)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type ] | join(","))), is not frozen in Terraform and has no entry in the committed capture, so neither projection side nor this pin checks it."
+        end )
+' 2>"$jq_err")
+rc=$?
+set -e
+if [[ "$rc" -ne 0 ]]; then
+  echo "ERROR: the frozen-rule pin did not evaluate (jq rc=$rc): $(tr '\n' ' ' <"$jq_err" | cut -c1-400). Cannot assert fidelity." >&2
+  exit 1
+fi
+read -r _ frozen_live frozen_tf other_captured < <(grep -m1 '^COUNT ' <<<"$frozen_report")
+echo "sentry_alert live fidelity: frozen-rule pin: compared ${frozen_live} of ${frozen_tf} Terraform-frozen rule(s) against the committed capture (${other_captured} other excluded-type live workflow(s) are in the capture and not Terraform-managed: not pinned)"
+while IFS= read -r line; do
+  [[ -n "$line" ]] && _finding "${line#FINDING }"
+done < <(grep '^FINDING ' <<<"$frozen_report" || true)
+if [[ "$frozen_live" -eq 0 ]]; then
+  _finding "FROZEN PIN EMPTY: the frozen-rule pin compared nothing: none of the ${frozen_tf} Terraform-frozen rule(s) is live."
+fi
+
 if [[ "$findings" -eq 0 ]]; then
   # The verdict carries the mode. A grep for `PASS (all N` in a log must not be
   # satisfiable by a fixture run. `live fidelity FAILED` below is a CONTRACT with
@@ -345,6 +495,6 @@ if [[ "$findings" -eq 0 ]]; then
   exit 0
 fi
 
-echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE}." >&2
-echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare." >&2
+echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE} (frozen-rule pin anchor: ${FROZEN_CAPTURE})." >&2
+echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture." >&2
 exit 1
