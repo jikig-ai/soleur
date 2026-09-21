@@ -527,3 +527,28 @@ system `core.hooksPath` both name the directory, and it sits on the accepted sto
 D5 row for D1b is unchanged: D1b is judged on the access gate and the three store probes. Exit 0 of the
 dry run now also requires the fence probe. Like every store probe, its answer is unauthenticated while
 #7226 is open. The copy half of #8101, and the wrappers' mapper-device assertion, are carried by #8211.
+
+### 2026-09-21 (#7226, PR #8511): host keys are pinned (ADR-237)
+
+[ADR-237](./ADR-237-ssh-host-keys-are-pinned.md) pins web-1's host key on every CI path and git-data's
+on both cutover hops and in the app's git transport. Earlier entries are not rewritten; this entry
+records what changes in them.
+
+- **D4, first residual ("Unverified host keys (#7226)") — closed by ADR-237, effective at post-merge
+  step 4** of the runbook's host-key sequence: the strict dry run from `main` reads
+  `role=git-data-auth verdict=ok` with both hops pinned. Until then the residual stands as written.
+  The 2026-09-15 residual "Store-probe evidence is unauthenticated until #7226" closes at the same
+  step, as to web-1 standing in for git-data. A pinned key authenticates the host, not its answers:
+  a rooted git-data can still answer falsely, so `store_not_empty` and the bounded probes stay.
+- **D4, second residual ("Verdicts show liveness, not authenticity").** The host-key half of D2's
+  `accepted` precondition now points to ADR-237 reaching `accepted`. The other conditions in the
+  2026-09-15 D5 table (#8209, #8211) are unchanged.
+- **D6 — design change.** The fresh replace immediately before the real cutover (a #8211
+  precondition) now also **rotates git-data's SSH host key** and **redeploys the app**: the replace
+  job re-mints `tls_private_key.git_data_host_ssh`, republishes `GIT_DATA_SSH_HOST_KEY` to `prd`, and
+  its follow-on `git_data_redeploy_*` job forces a web release so the app loads the new pin. Nothing
+  planted during the read-only period survives into the cutover, now including the host key. The
+  replace is still required; ADR-237's post-merge step 3 is a separate, earlier replace, not this one.
+- **New constraint from ADR-237.** Setting `GIT_DATA_STORE_ENABLED` requires the pin present in `prd`
+  **and** #5914 closed (the app's unpinned fallback arm deleted). The runbook's precondition list
+  carries it.

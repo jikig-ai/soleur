@@ -501,6 +501,52 @@
           "expires_on": "2026-10-22"
         }
       }
+    },
+    {
+      "connection": "GitHub Actions runner -> web-1 sshd (bash callers of the CF tunnel SSH bridge, via cloudflared access tcp)",
+      "enforced_at": ".github/actions/cf-tunnel-ssh-bridge/action.yml step 'Decode CI SSH private key (TF_VAR + optional keyfile/WEB_HOST_SSH export)' (WEB_HOST_SSH: StrictHostKeyChecking=yes, HostKeyAlias=web-1, HostKeyAlgorithms=ecdsa-sha2-nistp256) + .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh; pin: apps/web-platform/infra/web-1-ssh-host-key.pub (ADR-237)",
+      "in_transit": {
+        "tls": "SSH-2 inside a Cloudflare-verified TLS tunnel (runner<->CF edge<->origin connector); web-1 authenticated by its committed ECDSA-P256 host key",
+        "cert_verification": "on",
+        "does_not_defend": "a compromised web-1 (it holds the real host key); a stolen CI SSH key plus a CF Access service token (that authenticates as CI, not as the host); a wrong committed pin is caught only by the pre-merge and merge-time probes, not by this connection",
+        "disclosed_as": "not-publicly-claimed"
+      }
+    },
+    {
+      "connection": "GitHub Actions runner / operator -> web-1 sshd (Terraform connection blocks through the same bridge)",
+      "enforced_at": "apps/web-platform/infra/server.tf locals web_1_ssh_host_key + host_key in every connection block (server.tf, ci-ssh-key.tf); terraform_data.web_1_host_key_probe re-runs on a pin or terraform_version change",
+      "in_transit": {
+        "tls": "SSH-2 (Terraform's Go crypto/ssh client), web-1 authenticated by its committed ECDSA-P256 host key",
+        "cert_verification": "on",
+        "does_not_defend": "a compromised web-1 (it holds the real host key); a stolen CI SSH key plus a CF Access service token; an operator-local apply that edits the pin file to whatever it observes",
+        "disclosed_as": "not-publicly-claimed"
+      }
+    },
+    {
+      "connection": "GitHub Actions runner -> git-data sshd (direct-tcpip through web-1, git-data-cutover.yml)",
+      "enforced_at": ".github/workflows/git-data-cutover.yml step 'Write git-data ssh_config' (Host 10.0.1.10 and Host 10.0.1.20: StrictHostKeyChecking yes, HostKeyAlias web-1 / git-data) + apps/web-platform/infra/git-data-flag-precheck.sh (GIT_DATA_SSH_HOST_KEY read, fails closed when absent)",
+      "in_transit": {
+        "tls": "SSH-2 end to end runner<->git-data (ED25519 host key, Terraform-minted and rotated on every replace), nested inside the pinned web-1 session",
+        "cert_verification": "on",
+        "does_not_defend": "a reader of main-root Terraform state (which holds the host private key, also embedded in git-data's user_data) who also holds a network position (#8209); a rooted git-data host answering falsely (a pinned key authenticates the host, not its answers)",
+        "disclosed_as": "not-publicly-claimed"
+      }
+    },
+    {
+      "connection": "web-1 app container -> git-data sshd (Hetzner private network, 10.0.1.20:22)",
+      "enforced_at": "apps/web-platform/server/git-auth.ts gitWithPrivateKeyAuth / sshWithPrivateKeyAuth (hostKeyPin); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin",
+      "in_transit": {
+        "tls": "SSH-2 over the Hetzner private network; git-data authenticated by its ED25519 host key (GIT_DATA_SSH_HOST_KEY) whenever a pin is published. Until the first key-rotating replace publishes it, the transitional unpinned fallback arm applies (see exception).",
+        "cert_verification": "off",
+        "does_not_defend": "until the exception closes, an impersonator of 10.0.1.20 on the private network during an Art. 17 erasure call (the only live call; the store holds no repository); after it closes, a reader of main-root Terraform state with a network position (#8209) and a rooted web-1 (it holds the transport, provision and remove keys)",
+        "disclosed_as": "not-publicly-claimed",
+        "exception": {
+          "justification": "Until the first git-data replace publishes GIT_DATA_SSH_HOST_KEY and git_data_redeploy loads it, the app keeps an unpinned fallback arm (TOFU_FALLBACK_OPTS in git-auth.ts), reachable only with no pin in the environment AND the store flag off; with the flag on a missing pin throws. The store holds no repository until the flag is first set, and deleting the arm is a precondition for that. Failing closed now would fail every production Art. 17 erasure.",
+          "tracking_issue": "#5914",
+          "reevaluate_when": "post-merge step 3 completes (startup line git_data_pin=present on the current deploy); the #5914 follow-up PR then deletes the arm and this row flips to cert_verification on",
+          "expires_on": "2026-12-20"
+        }
+      }
     }
   ]
 }
