@@ -18,18 +18,15 @@ import { discoverSkills, parseComponent, getComponentName } from "./helpers";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 
-// Exact-set pin. Members are DERIVED from frontmatter below; this literal only makes a 13th
-// flip a reviewed edit. A 13th flip moves four sites together: this pin, ACKS, ADR-236's
-// list, and SKILL_DESCRIPTION_WORD_BUDGET in components.test.ts (lowered by that skill's
-// description word count).
+// Exact-set pin. Members are DERIVED from frontmatter below; this literal only makes a new
+// flip a reviewed edit. Adding a user-invoked skill moves five sites together: this pin, ACKS,
+// ADR-236's list, go.md's operator-typed paragraph (asserted below), and
+// SKILL_DESCRIPTION_WORD_BUDGET in components.test.ts (lowered by that skill's description
+// word count). The bare-name form ("run the flag-delete skill") is not scanned (plan R5).
 const EXPECTED_USER_INVOKED = [
   "admin-ip-refresh",
   "cf-token-scope",
-  "cron-delete",
-  "cron-list",
-  "flag-create",
   "flag-delete",
-  "flag-set-role",
   "provision-cloudflare",
   "provision-doppler",
   "provision-github",
@@ -39,40 +36,34 @@ const EXPECTED_USER_INVOKED = [
 
 type AckReason = "doc-mention" | "operator-handoff";
 
-// One row per (file, skill) pair a model-read surface names a user-invoked skill at.
+// One row per (file, skill) pair a model-read surface names a user-invoked skill at, with the
+// number of LINES naming it there. The line count makes a NEW directive in an already-acked file
+// (the router most of all) a reviewed edit instead of a free one.
 // `doc-mention`: the line describes or cross-references, it does not direct invocation.
 // `operator-handoff`: the prose itself hands the command to a human to type.
 // Growing this table is a reviewed decision: the prose at the site must read as its reason.
-const ACKS: Record<string, AckReason> = {
-  "knowledge-base/engineering/operations/runbooks/admin-ip-drift.md|admin-ip-refresh": "operator-handoff",
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-cloudflare": "operator-handoff",
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-doppler": "operator-handoff",
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-github": "operator-handoff",
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-hetzner": "operator-handoff",
-  "knowledge-base/engineering/operations/runbooks/vector-redeliver.md|admin-ip-refresh": "doc-mention",
-  "plugins/soleur/commands/go.md|admin-ip-refresh": "operator-handoff",
-  "plugins/soleur/commands/go.md|cf-token-scope": "operator-handoff",
-  "plugins/soleur/commands/go.md|cron-delete": "operator-handoff",
-  "plugins/soleur/commands/go.md|cron-list": "operator-handoff",
-  "plugins/soleur/commands/go.md|flag-create": "operator-handoff",
-  "plugins/soleur/commands/go.md|flag-delete": "operator-handoff",
-  "plugins/soleur/commands/go.md|flag-set-role": "operator-handoff",
-  "plugins/soleur/commands/go.md|provision-cloudflare": "operator-handoff",
-  "plugins/soleur/commands/go.md|provision-doppler": "operator-handoff",
-  "plugins/soleur/commands/go.md|provision-github": "operator-handoff",
-  "plugins/soleur/commands/go.md|provision-hetzner": "operator-handoff",
-  "plugins/soleur/commands/go.md|user-set-role": "operator-handoff",
-  "plugins/soleur/skills/flag-bootstrap/SETUP.md|flag-create": "operator-handoff",
-  "plugins/soleur/skills/flag-bootstrap/SETUP.md|flag-set-role": "operator-handoff",
-  "plugins/soleur/skills/flag-bootstrap/SETUP.md|user-set-role": "operator-handoff",
-  "plugins/soleur/skills/flag-list/SKILL.md|flag-create": "operator-handoff",
-  "plugins/soleur/skills/flag-list/SKILL.md|flag-delete": "operator-handoff",
-  "plugins/soleur/skills/flag-list/SKILL.md|flag-set-role": "operator-handoff",
-  "plugins/soleur/skills/operator-bootstrap/SKILL.md|provision-hetzner": "doc-mention",
-  "plugins/soleur/skills/schedule/SKILL.md|cron-delete": "operator-handoff",
-  "plugins/soleur/skills/schedule/SKILL.md|cron-list": "operator-handoff",
-  "plugins/soleur/skills/trigger-cron/SKILL.md|cron-delete": "operator-handoff",
-  "plugins/soleur/skills/trigger-cron/SKILL.md|cron-list": "operator-handoff",
+const ACKS: Record<string, { reason: AckReason; lines: number }> = {
+  "knowledge-base/engineering/operations/runbooks/admin-ip-drift.md|admin-ip-refresh": { reason: "operator-handoff", lines: 5 },
+  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-cloudflare": { reason: "operator-handoff", lines: 1 },
+  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-doppler": { reason: "operator-handoff", lines: 1 },
+  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-github": { reason: "operator-handoff", lines: 2 },
+  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-hetzner": { reason: "operator-handoff", lines: 1 },
+  "knowledge-base/engineering/operations/runbooks/vector-redeliver.md|admin-ip-refresh": { reason: "doc-mention", lines: 1 },
+  "plugins/soleur/commands/go.md|admin-ip-refresh": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/commands/go.md|cf-token-scope": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/commands/go.md|flag-delete": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/commands/go.md|provision-cloudflare": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/commands/go.md|provision-doppler": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/commands/go.md|provision-github": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/commands/go.md|provision-hetzner": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/commands/go.md|user-set-role": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/skills/flag-bootstrap/SETUP.md|user-set-role": { reason: "operator-handoff", lines: 1 },
+  "plugins/soleur/skills/flag-create/SKILL.md|flag-delete": { reason: "doc-mention", lines: 1 },
+  "plugins/soleur/skills/flag-create/SKILL.md|user-set-role": { reason: "doc-mention", lines: 1 },
+  "plugins/soleur/skills/flag-list/SKILL.md|flag-delete": { reason: "operator-handoff", lines: 3 },
+  "plugins/soleur/skills/flag-set-role/SKILL.md|flag-delete": { reason: "doc-mention", lines: 1 },
+  "plugins/soleur/skills/flag-set-role/SKILL.md|user-set-role": { reason: "operator-handoff", lines: 2 },
+  "plugins/soleur/skills/operator-bootstrap/SKILL.md|provision-hetzner": { reason: "doc-mention", lines: 1 },
 };
 
 // The referrer population: what the model reads or is dispatched with. Every entry is a
@@ -84,6 +75,12 @@ const SCAN_GLOBS: { spec: string; min: number; why: string }[] = [
   // G1 — always loaded.
   { spec: "AGENTS.md", min: 1, why: "always-loaded index" },
   { spec: "AGENTS.rules.md", min: 1, why: "always-loaded rule corpus" },
+  // G1b — other always-loaded or model-read single files, named explicitly (never an apps/ glob).
+  { spec: "CLAUDE.md", min: 1, why: "root CLAUDE.md, always loaded" },
+  { spec: "plugins/soleur/CLAUDE.md", min: 1, why: "plugin CLAUDE.md" },
+  { spec: "plugins/soleur/AGENTS.md", min: 1, why: "plugin AGENTS.md" },
+  { spec: "apps/web-platform/server/auto-sync-trigger.ts", min: 1, why: "headless sync prompt" },
+  { spec: "apps/web-platform/server/prompt-injection-wrap.ts", min: 1, why: "web POSTAMBLE" },
   // G2 — what the plugin ships and the model reads.
   { spec: ":(glob)plugins/soleur/skills/**/*.md", min: 150, why: "skill bodies and references" },
   { spec: ":(glob)plugins/soleur/agents/**/*.md", min: 40, why: "agent prompts" },
@@ -106,6 +103,11 @@ const SCAN_GLOBS: { spec: string; min: number; why: string }[] = [
 const CONSERVATION_PATHSPECS = [
   "AGENTS.md",
   "AGENTS.rules.md",
+  "CLAUDE.md",
+  "plugins/soleur/CLAUDE.md",
+  "plugins/soleur/AGENTS.md",
+  "apps/web-platform/server/auto-sync-trigger.ts",
+  "apps/web-platform/server/prompt-injection-wrap.ts",
   ":(glob)plugins/soleur/skills/**/*.md",
   ":(glob)plugins/soleur/agents/**/*.md",
   ":(glob)plugins/soleur/commands/*.md",
@@ -122,8 +124,8 @@ const CONSERVATION_PATHSPECS = [
 // Deliberately outside the assembly (ADR-236):
 //  - commands/help.md: a human-read listing (ADR-226 §4); it marks user-invoked skills by rule.
 //  - ADRs, docs/, README.md: record or document, they do not instruct.
-//  - apps/web-platform/** outside server/inngest/: web user turns reach skills only through
-//    the POSTAMBLE constant in server/prompt-injection-wrap.ts. Migration 054's error text names
+//  - apps/web-platform/** outside server/inngest/ and the two named files above: web user turns
+//    reach skills only through the POSTAMBLE constant in server/prompt-injection-wrap.ts. Migration 054's error text names
 //    a user-invoked skill for a human; applied migrations are immutable.
 //  - scripts/**, plugins/soleur/scripts/**: human-facing output.
 const EXCLUDED_FILES = new Set(["plugins/soleur/commands/help.md"]);
@@ -142,6 +144,24 @@ const USER_INVOKED = discoverSkills()
   .map((p) => getComponentName(p, "skill"))
   .sort();
 
+// Claude Code reads the key loosely (it honours yes/on/1/"true" as well as boolean true), while
+// every guard here reads `=== true`. So any value other than a literal boolean `true` is refused:
+// a quoted or YAML-1.1 spelling would flip a skill the guards still count as model-invocable.
+// `false` is refused too; omit the key instead.
+function badInvocationKeys(): string[] {
+  const bad: string[] = [];
+  for (const p of discoverSkills()) {
+    const fm = parseComponent(p).frontmatter;
+    if ("disable-model-invocation" in fm && fm["disable-model-invocation"] !== true) bad.push(p);
+  }
+  return bad;
+}
+
+export function referrerRegex(names: string[]): RegExp {
+  const alt = names.join("|");
+  return new RegExp(`soleur:(${alt})(?![a-z0-9-])|skills/(${alt})/`, "g");
+}
+
 type Hit = { file: string; line: number; skill: string; form: string };
 
 function scan(): { examined: string[]; perGlob: Map<string, number>; hits: Hit[] } {
@@ -156,7 +176,7 @@ function scan(): { examined: string[]; perGlob: Map<string, number>; hits: Hit[]
   const hits: Hit[] = [];
   if (USER_INVOKED.length === 0) return { examined, perGlob, hits };
   const alt = USER_INVOKED.join("|");
-  const re = new RegExp(`soleur:(${alt})(?![a-z0-9-])|skills/(${alt})/`, "g");
+  const re = referrerRegex(USER_INVOKED);
   const flippedDir = new RegExp(`^plugins/soleur/skills/(${alt})/`);
   for (const file of examined) {
     if (EXCLUDED_FILES.has(file)) continue;
@@ -181,9 +201,29 @@ describe("Invocation axis (ADR-236)", () => {
   test("user-invoked skills are exactly the reviewed set (derived from frontmatter)", () => {
     expect(
       USER_INVOKED,
-      "The set of skills carrying `disable-model-invocation: true` changed. A 13th flip must also " +
-        "move ACKS, ADR-236's list and SKILL_DESCRIPTION_WORD_BUDGET in components.test.ts.",
+      "The set of skills carrying `disable-model-invocation: true` changed. A new flip must also " +
+        "move ACKS, ADR-236's list, go.md's operator-typed paragraph and SKILL_DESCRIPTION_WORD_BUDGET.",
     ).toEqual(EXPECTED_USER_INVOKED);
+  });
+
+  test("disable-model-invocation is absent or a literal boolean true on every skill", () => {
+    expect(badInvocationKeys(), "use `disable-model-invocation: true` or omit the key").toEqual([]);
+  });
+
+  test("EXCLUDED_FILES is exactly the reviewed set", () => {
+    expect([...EXCLUDED_FILES]).toEqual(["plugins/soleur/commands/help.md"]);
+  });
+
+  test("go.md's operator-typed paragraph names every user-invoked skill", () => {
+    const missing = USER_INVOKED.filter((s) => !hitKeys.has(`plugins/soleur/commands/go.md|${s}`));
+    expect(missing, "add the skill to go.md's Operator-typed tooling paragraph").toEqual([]);
+  });
+
+  test("referrer regex does not match a longer skill name sharing the prefix", () => {
+    const re = referrerRegex(["flag-delete"]);
+    expect("soleur:flag-delete-extra".match(re)).toBeNull();
+    expect("run soleur:flag-delete now".match(re)?.length).toBe(1);
+    expect("see skills/flag-delete/SKILL.md".match(re)?.length).toBe(1);
   });
 
   for (const g of SCAN_GLOBS) {
@@ -212,12 +252,21 @@ describe("Invocation axis (ADR-236)", () => {
   });
 
   test("no stale ack (every ack row still has a hit)", () => {
+    console.log(`invocation-axis: ${hits.length} hit line(s), ${hitKeys.size} (file, skill) pair(s)`);
     const stale = Object.keys(ACKS).filter((k) => !hitKeys.has(k));
     expect(stale, "ACKS rows with no remaining hit; delete them").toEqual([]);
   });
 
-  test("ack rows equal the distinct (file, skill) referrer pairs", () => {
-    console.log(`invocation-axis: ${hits.length} hit line(s), ${hitKeys.size} (file, skill) pair(s)`);
-    expect(Object.keys(ACKS).length).toBe(hitKeys.size);
+  test("each acked pair names the skill on exactly the reviewed number of lines", () => {
+    const lineSets = new Map<string, Set<number>>();
+    for (const h of hits) {
+      const k = `${h.file}|${h.skill}`;
+      if (!lineSets.has(k)) lineSets.set(k, new Set());
+      lineSets.get(k)!.add(h.line);
+    }
+    const drift = Object.entries(ACKS)
+      .filter(([k, v]) => (lineSets.get(k)?.size ?? 0) !== v.lines)
+      .map(([k, v]) => `  ${k}: ${lineSets.get(k)?.size ?? 0} line(s), acked ${v.lines}`);
+    expect(drift, `A reviewed site gained or lost a line naming the skill:\n${drift.join("\n")}`).toEqual([]);
   });
 });

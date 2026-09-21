@@ -1,7 +1,6 @@
 ---
 name: flag-create
 description: "This skill should be used to create a runtime feature flag end-to-end across Flagsmith, server.ts, .env.example, and Doppler."
-disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -23,7 +22,7 @@ adding a flag that the app needs to read.
 
 - Adding an env-only DCE flag (like `dev-signin`) — those don't go through
   Flagsmith; just hand-edit `ENV_FLAGS` in `server.ts` + `.env.example`.
-- Toggling an existing flag → tell the operator to type `soleur:flag-set-role`.
+- Toggling an existing flag → use `soleur:flag-set-role`.
 
 ## Arguments
 
@@ -39,7 +38,7 @@ It skips the server.ts / `.env.example` / Doppler mutations **and** the "already
 appears in server.ts" exit-1 precheck (which would otherwise fire precisely
 because the flag is already wired). Use it to back-fill the Flagsmith feature for
 a flag that shipped its code wiring in an earlier PR, before scoping it per-org
-with `soleur:flag-set-role <flag> <env> on --org <orgId>` (the operator types it).
+with `soleur:flag-set-role <flag> <env> on --org <orgId>`.
 
 ## Prerequisites
 

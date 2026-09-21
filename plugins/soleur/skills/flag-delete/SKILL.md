@@ -24,8 +24,7 @@ mutation.
 
 ## When NOT to use
 
-- Turning a flag off without removing it → tell the operator to type
-  `soleur:flag-set-role <flag> <env> off`.
+- Turning a flag off without removing it → `soleur:flag-set-role <flag> <env> off`.
 - Removing a build-time DCE flag (`dev-signin`) → hand-edit `ENV_FLAGS` in
   `server.ts` + `.env.example` (it has no Flagsmith feature).
 

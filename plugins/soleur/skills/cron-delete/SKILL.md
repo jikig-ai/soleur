@@ -1,7 +1,6 @@
 ---
 name: cron-delete
 description: "This skill should be used to delete a scheduled cron workflow by name — the first-class Delete verb that runs the delete step of soleur:schedule, with a confirm gate."
-disable-model-invocation: true
 ---
 
 # cron-delete
@@ -35,7 +34,7 @@ Execute the **``### `delete <name>` ``** section of
 [`plugins/soleur/skills/schedule/SKILL.md`](../schedule/SKILL.md):
 
 1. Verify `.github/workflows/scheduled-<name>.yml` exists; if not, point the
-   operator to type `soleur:cron-list` to see available schedules.
+   operator to `soleur:cron-list` to see available schedules.
 2. Confirm (unless `--yes`/`--confirm`).
 3. Remove the file.
 4. Report that the schedule stops once the deletion is merged to the default

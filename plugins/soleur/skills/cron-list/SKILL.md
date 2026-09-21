@@ -1,7 +1,6 @@
 ---
 name: cron-list
 description: "This skill should be used to list scheduled cron workflows (recurring vs one-time, --json supported) — the first-class Read verb that runs the list step of soleur:schedule."
-disable-model-invocation: true
 ---
 
 # cron-list

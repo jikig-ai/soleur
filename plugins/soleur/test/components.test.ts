@@ -18,7 +18,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 2295; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline), bumped +62 for #8289 (kb-glossary 28 + questionnaire-generate 34 words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline), lowered -266 for #8290 (12 skills moved to disable-model-invocation; counted words are model-visible only, ADR-236; 2561 -> 2295 measured through discoverSkills()/parseComponent())
+const SKILL_DESCRIPTION_WORD_BUDGET = 2389; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline), bumped +62 for #8289 (kb-glossary 28 + questionnaire-generate 34 words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline), lowered -172 for #8290 (8 skills moved to disable-model-invocation; flag-create, flag-set-role, cron-list and cron-delete stay model-invocable per review; counted words are model-visible only, ADR-236; 2561 -> 2389 measured through discoverSkills()/parseComponent())
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
@@ -1363,9 +1363,30 @@ describe("plugin slash-name uniqueness", () => {
     "flag-list":
       "a read-only drift audit the agent must pull itself, and the blast-radius step " +
       "flag-delete calls before deleting",
+    "flag-create":
+      "plans prescribe it as an agent acceptance step (wg-plan-prescribed-skills-must-run-inline); " +
+      "#5333 made it agent-invokable; a refusal leaves a RUNTIME_FLAGS entry with no Flagsmith/" +
+      "Doppler flag, and create.sh then blocks the operator's own run",
+    "flag-set-role":
+      "plans prescribe it as an agent acceptance step; flip.sh --confirmed exists for " +
+      "agent-driven use behind a typed-yes gate (#5333)",
+    "cron-list":
+      "read-only, pulled by the agent itself like flag-list; soleur:schedule runs the same " +
+      "steps in place, so a refusal only contradicts it",
+    "cron-delete":
+      "soleur:schedule runs the same delete step in place behind its confirm gate; a refusal " +
+      "contradicts schedule/SKILL.md",
   };
   test("MUST_STAY_INVOCABLE is exactly the reviewed set", () => {
-    expect(Object.keys(MUST_STAY_INVOCABLE).sort()).toEqual(["flag-list", "invoice", "trigger-cron"]);
+    expect(Object.keys(MUST_STAY_INVOCABLE).sort()).toEqual([
+      "cron-delete",
+      "cron-list",
+      "flag-create",
+      "flag-list",
+      "flag-set-role",
+      "invoice",
+      "trigger-cron",
+    ]);
   });
   for (const [name, reason] of Object.entries(MUST_STAY_INVOCABLE)) {
     test(`skills/${name}/ stays model-invocable (must-stay-invocable pin)`, () => {
