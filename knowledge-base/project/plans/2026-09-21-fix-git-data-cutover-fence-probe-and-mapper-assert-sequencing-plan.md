@@ -12,6 +12,47 @@ brand_survival_threshold: none
 
 # git-data cutover: the fence must survive the repoint, and the wrappers must know which disk they act on
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21. This follows the plan-review panel; its revisions are at the end of
+the file.
+
+**Agents:**
+
+- security-sentinel;
+- test-design-reviewer;
+- observability-coverage-reviewer;
+- a claims/attribution verifier. All seven claim groups confirmed: issue states, the #8189 deletion
+  commit `7fb9c5b39`, the suite anchors, the bootstrap lines, git's unset-key exit 1 (git 2.55.0),
+  and the rung-2 runbook heading.
+
+The halt gates all passed: 4.6 User-Brand, 4.7 Observability (the probe verb is allowlisted), 4.8
+PAT, and 4.11 Guard Contract (lint green). Gates 4.5, 4.55, 4.9 and 4.10 did not fire.
+
+### Key improvements
+
+1. **Test harness realism.**
+   - Two more exact-count rows were enumerated: `case_capture_census` 2→3 and the AC2 `::notice`
+     count 7→8.
+   - F15 was rewritten so M8 actually reds it.
+   - The F16 harness is now specified completely: header-inclusive awk, stubs, `set -u` globals,
+     and a child bash.
+   - Parity row P1 is anchored on both sides, so it cannot pass vacuously.
+2. **An honest probe label.** It is `probe=fence-shape`, not `fence`. A root attacker can plant a
+   `root:root 755` `exit 0` hook that passes every shape check. The content check is #8211's
+   `sha256sum` AC.
+3. **The deferral is enforced, not just recorded.** #8211's flag flip must refuse unless the fence
+   probe passes AND all three wrappers carry the executable mapper assertion. That closes the window
+   in which the flag could flip before the assertion lands.
+4. Input validation on `root` and `serving` before `%q`, and a layer-6 citation on every
+   `alert_route`.
+5. A discoverability probe that does not depend on the network or the GitHub rate limit.
+
+### New considerations
+
+- M10's use-site variant is caught only by the AC2 text diff, stated alongside M7.
+- `rc=16` gets its own no-SSH remedy line in the runbook.
+
 ## Overview
 
 Issue #8101 names two gaps that must close before the git-data store serves users.
@@ -182,7 +223,7 @@ comment "access gate plus three store probes" stays true, because the new probe 
 **D1 — The fence probe is a read-only probe with its own name and its own reason words.**
 `refuse_if_fence_not_intact` runs after `refuse_if_store_not_empty`. It needs `STORE_SOURCE`, which
 `refuse_if_unmounted` accepted, and it is ordered last so the three existing verdicts keep their
-meaning. It emits through `_store_emit`/`_store_refuse` as `probe=fence`. `_store_emit` gains an
+meaning. It emits through `_store_emit`/`_store_refuse` as `probe=fence-shape`. `_store_emit` gains an
 optional fourth argument, `reason`, formatted as `${4:+ reason=$4}` in the same way `_access_emit`
 already renders its reason.
 
@@ -341,8 +382,8 @@ proves the store probes all read `ok` first.
 
 | Row | Input | Expect |
 |---|---|---|
-| F1 | `SHIM_FENCE=ok` | exit 0, `has_store fence ok`, `verdict=clear` |
-| F2 | `r10` | exit 5, exact line `[git-data-cutover] STORE probe=fence verdict=fence_not_intact reason=hooks_dir_absent` |
+| F1 | `SHIM_FENCE=ok` | exit 0, `has_store fence-shape ok`, `verdict=clear` |
+| F2 | `r10` | exit 5, exact line `[git-data-cutover] STORE probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent` |
 | F3 | `r11` | exit 5, `reason=hooks_dir_owner` |
 | F4 | `r12` | exit 5, `reason=hook_absent` |
 | F5 | `r13` | exit 5, `reason=hook_owner` |
@@ -357,7 +398,7 @@ proves the store probes all read `ok` first.
 | F12b | `exec`, `hooks/` + a regular **non-executable (0644)** `pre-receive` | `reason=hook_absent` (this is the row that reds M3) |
 | F13 | `exec`, `hooks/` as a symlink to a real dir | `reason=hooks_dir_absent` |
 | F14 | `exec`, `hooks/` + an executable `pre-receive`, both owned by the CI user | `reason=hooks_dir_owner` |
-| F15 | `SHIM_FINDMNT=rc1` | the fence probe never runs (`! grep -q '^ssh .* h=' "$TLF"`) |
+| F15 | `SHIM_FINDMNT=rc1` | exact line `[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=1` AND `! grep -q 'probe=fence-shape' "$OUT"`. This form is RED under M8: the probe runs first and emits its own `probe_failed`. It is green on today's script, the one row where 1.7's "all RED" does not apply, and that is stated. |
 | F16 | the extracted function called as `refuse_if_fence_not_intact /x/fresh /dev/mapper/git-data` with `STORE_SOURCE=/dev/sdb` and the shim recording | the recorded remote command carries `h=/x/fresh/hooks`, `src=/dev/mapper/git-data` and `sp=/mnt/git-data/hooks` (the serving path, not `/x/fresh/hooks`) |
 
 F11–F14 drive the root and source onto the temp tree with the existing `OLD_ROOT` override plus
@@ -365,10 +406,21 @@ F11–F14 drive the root and source onto the temp tree with the existing `OLD_RO
 
 F15 covers ordering: an earlier refusal stops the proof before the fence probe.
 
-**F16's harness.** The script ends with an unconditional `main "$@"` under `set -euo pipefail`,
-so sourcing it runs the whole proof. Extract `gd_capture`, `_store_emit`, `_store_refuse` and
-`refuse_if_fence_not_intact` with the same awk block-extraction `case_main_order` uses for `main`,
-and source them into a small harness. Do **not** add a `BASH_SOURCE` guard to the script.
+**F16's harness** (deepen: the naive form does not work). The script ends with an unconditional
+`main "$@"` under `set -euo pipefail`, so sourcing it runs the whole proof. Do **not** add a
+`BASH_SOURCE` guard. Instead:
+
+- use a variant of `case_main_order`'s awk that prints from the `name() {` header line **through**
+  the closing `}` (the existing one skips the header, so its output cannot be sourced);
+- extract `gd_capture`, `_store_emit`, `_store_refuse` and `refuse_if_fence_not_intact`, and assert
+  that each extraction is non-empty;
+- stub `log`, `step` and `_access_stderr`. `log()`/`step()` are one-liners the block awk cannot
+  extract;
+- set every global the functions read under `set -u`: `CAPTURE_TMP=""`, `GD_CAPTURED=""`,
+  `GIT_DATA_HOST=10.0.1.20`, `GIT_DATA_SSH="$GD_INV"`, `OLD_ROOT=/mnt/git-data` (the `sp=` default
+  derives from it), `STORE_SOURCE=/dev/sdb`, plus `TL`, `TMPDIR=$T` and `PATH=$BIN:/usr/bin:/bin`
+  (the `timeout` shim logs to `TL`);
+- run it in a **child** `bash`, because `_store_refuse` exits 5.
 
 1.3 Update the existing rows whose shape changes with one more remote call (plan-review P1,
 enumerated against the suite):
@@ -383,13 +435,21 @@ enumerated against the suite):
 - **Runtime R5b:** `r5.remote` gains `findmnt -no SOURCE -T /mnt/git-data/hooks` (the fixture
   `findmnt` logs every call).
 - **Runtime R5c:** `r5_web_accepted` 5 → 6 and `r5_gd_accepted` 3 → 4.
+- **`case_capture_census`:** `[ "$calls" = 2 ]` → `3`. `gd_capture` gains a third call site.
+- **AC2 annotation row:** "exactly seven ::notice" lines → eight (`probe=fence-shape verdict=ok`).
 - **Every other exact-count or exact-timeline row:** grep the suite for `accepted`, `ssh-stdin`,
-  `timeout 30` and `.remote` before editing, and list any hit not named above in the PR.
+  `timeout 30`, `.remote`, `= 2 ]`, `^::notice` and `seven` before editing. List any hit not named
+  above in the PR.
 
-1.4 Parity row P1. Extract the two `_own` table rows for `$HOOKS_DIR` and `$PRE_RECEIVE` from
-`git-data-bootstrap.sh`, with `$GIT_USER` resolved from its `GIT_USER="git"` line. Assert that the
-probe's two literals in `git-data-cutover.sh` equal them. Read both by content anchor, not line
-number.
+1.4 Parity row P1, anchored so it cannot pass vacuously.
+
+- **Bootstrap side:** extract with `^\$HOOKS_DIR root:\$GIT_USER `, `^\$PRE_RECEIVE ` and
+  `^GIT_USER="[a-z]+"$`.
+- **Script side:** strip comments (`sed -E 's/^[[:space:]]*#.*$//'`), then anchor on the escaped
+  use-site forms `\$oh\" = \"` and `\$op\" = \"`. A bare `root:git 750` token also appears in the
+  comment block, so it would stay green under M4.
+- **Both sides:** require exactly one match each before comparing. Two empty extractions would
+  otherwise compare equal.
 
 1.5 Runtime container arm:
 
@@ -401,7 +461,7 @@ number.
 
 Call `plant_fence` wherever the setup builds `/mnt/git-data`, **including after the r5 setup's
 `rm -rf /mnt/git-data`**, which would otherwise wipe it. The existing clear run then reads
-`probe=fence verdict=ok`. Add these rows:
+`probe=fence-shape verdict=ok`. Add these rows:
 
 - `rf2`: `git config --system --unset core.hooksPath` → `reason=hooks_path_mismatch` (the
   real-host test of git's unset-key exit 1);
@@ -427,7 +487,9 @@ maps each remote exit code, in the same form as the store-empty probe's block. T
 
 - resolves `root="${1:-$OLD_ROOT}"`, `src="${2:-$STORE_SOURCE}"` and
   `serving="${3:-$OLD_ROOT/hooks}"` in its first lines, and reads no global after that;
-- fails closed on a `src` that does not match `^/dev/[A-Za-z0-9/_.-]+$`, with `probe_failed`;
+- fails closed on a `src` that does not match `^/dev/[A-Za-z0-9/_.-]+$`, and on a `root` or `serving`
+  that does not match `^/[A-Za-z0-9/_.-]+$`, with `probe_failed`. #8211 will pass `FRESH_ROOT`, so
+  both inputs are validated before they are quoted (deepen, security);
 - quotes each value with `printf -v … '%q'`;
 - makes one `gd_capture '^ok$' "<remote>"` call.
 
@@ -453,7 +515,7 @@ echo ok
 
 `$qh` is the `%q` of `$root/hooks`. The lines are joined with `;`, the same way the store-empty
 probe builds its command. The local `case "$rc"` maps 10–15 to the reason words and everything else
-to `probe_failed`. It emits `_store_emit fence ok` only on rc 0 with the captured `ok`.
+to `probe_failed`. It emits `_store_emit fence-shape ok` only on rc 0 with the captured `ok`.
 
 2.3 Add `refuse_if_fence_not_intact` as a plain statement, with no arguments, in `main()` after
 `refuse_if_store_not_empty`. Update the start and clear log lines: "access gate, three store
@@ -486,7 +548,9 @@ The **#8211 body section is the one full copy** of the carried work. Everything 
 - § Verdict map: add one row, `verdict=fence_not_intact reason=<word>` (exit 5), with the six words
   on one line each. Treat it as **post-boot drift on a root-owned path**: the bootstrap FATALs at
   boot on each of these facts. Remedy: `git-data-host-replace`, which re-runs the bootstrap. Add
-  `probe_failed rc=5|16` for the fence probe (an instrument could not answer).
+  `probe_failed rc=5|16` for the fence probe (an instrument could not answer). The rc=16 remedy
+  line: re-dispatch once; if it repeats, dispatch `git-data-host-replace`. An instrument failing on
+  a bootstrapped host is itself drift. There is no SSH step.
 - § Preconditions: rewrite the #8101 bullet as **one line**: "#8101 — fence readback landed; the
   hooks copy, post-copy readback and wrapper mapper assertion are carried in #8211 (see its
   'Carried from #8101' section)".
@@ -503,8 +567,10 @@ checkboxes, each with its implementation pointer:
   names).
 - After the copy: the `sha256sum` of `$OLD_ROOT/hooks/pre-receive` equals that of
   `$FRESH_ROOT/hooks/pre-receive`. The probe checks shape, not content.
-- After the repoint: the flag-flip step **refuses** unless the fence probe passes on `/mnt/git-data`
-  with the mapper expected.
+- After the repoint, as the **last** step before the flip: the flag-flip step **refuses** unless (a)
+  the fence probe passes on `/mnt/git-data` with the mapper expected, and (b) all three wrappers
+  carry the executable `findmnt -no SOURCE` / `/dev/mapper/git-data` assertion. (b) is checked on
+  comment-stripped code, never on a comment (deepen, security).
 - The unconditional wrapper mapper assertion, plus the `GIT_DATA_STORE_DEVICE` test seam, in the
   same payload PR as the batch's other wrapper edits.
 - Rollback flips `GIT_DATA_STORE_ENABLED=false` **before** it remounts plaintext.
@@ -582,7 +648,7 @@ either a named reason or `probe_failed`, never 0.
 | M5 | Map the 10–15 range to `ok` (swallow the refusal) | F2–F7 |
 | M7 | Delete the `findmnt -T` source comparison | the AC2 timeline text diff only. The canned `r15` row never runs the remote bytes, so it cannot see this. Stated here so no one counts F7 as coverage. |
 | M8 | **REORDER**: move the call before `refuse_if_unmounted` | `case_main_order`, and F15 (the probe must not run after a mount refusal) |
-| M10 | Compare hooksPath to `$root/hooks` instead of `serving` (the plan-review P0, as a mutation) | F16 (`sp=` no longer the serving path) |
+| M10 | Derive `sp=` from `$root/hooks` instead of `serving` (the plan-review P0, as a mutation) | F16 (`sp=` no longer the serving path). A use-site edit (`[ "$v" = "$h" ]`) is caught only by the AC2 timeline text diff. No row tests it behaviourally, because in `main()` the root always equals the serving path. |
 | M11 | Map remote 16 to a `fence_not_intact` reason (an instrument failure rendered as store state) | F8b |
 
 M6 and M9 were cut in plan review. The exact `reason=` assertions in F2–F7 already red a collapsed
@@ -614,7 +680,7 @@ probe's only exits are `_store_refuse` (exit 5) and fall-through. There is no `d
 
 ```yaml
 liveness_signal:
-  what: "the git-data-cutover.yml run's annotations — '::notice title=git-data-cutover store::probe=fence verdict=ok' on success, '::error title=git-data-cutover store::probe=fence verdict=fence_not_intact reason=<word>' or 'verdict=probe_failed rc=<n>' on refusal, plus the same line in GITHUB_STEP_SUMMARY"
+  what: "the git-data-cutover.yml run's annotations — '::notice title=git-data-cutover store::probe=fence-shape verdict=ok' on success, '::error title=git-data-cutover store::probe=fence-shape verdict=fence_not_intact reason=<word>' or 'verdict=probe_failed rc=<n>' on refusal, plus the same line in GITHUB_STEP_SUMMARY"
   cadence: "per reviewer-gated dispatch of git-data-cutover.yml (runbook post-merge step 5, and before any real cutover)"
   alert_target: "the dispatching operator: a refusal fails the job (exit 5), and GitHub notifies the dispatcher of a failed run"
   configured_in: "apps/web-platform/infra/git-data-cutover.sh (_store_emit) and .github/workflows/git-data-cutover.yml (the job's step)"
@@ -624,28 +690,28 @@ error_reporting:
 failure_modes:
   - mode: "fence directory or hook absent, replaced by a symlink, or not executable on the source store"
     detection: "remote exit 10/12 read in-surface on git-data by the probe's single ssh command; rendered as reason=hooks_dir_absent|hook_absent"
-    alert_route: "failed job + ::error annotation on the dispatcher's run"
+    alert_route: "layer 6 (workflow run log, ::error:: annotation) on the dispatcher's failed run"
   - mode: "fence ownership or mode drifted from the bootstrap's literals"
     detection: "remote exit 11/13 via stat -c '%U:%G %a' on git-data; reason=hooks_dir_owner|hook_owner"
-    alert_route: "failed job + ::error annotation"
+    alert_route: "layer 6 (workflow run log, ::error:: annotation) on the failed run"
   - mode: "system core.hooksPath unset or repointed"
     detection: "remote exit 14 via git config --system on git-data; reason=hooks_path_mismatch"
-    alert_route: "failed job + ::error annotation"
+    alert_route: "layer 6 (workflow run log, ::error:: annotation) on the failed run"
   - mode: "hooks directory lives on a different volume than the accepted store"
     detection: "remote exit 15 via findmnt -no SOURCE -T compared to the mount probe's accepted source; reason=hooks_wrong_source"
-    alert_route: "failed job + ::error annotation"
+    alert_route: "layer 6 (workflow run log, ::error:: annotation) on the failed run"
   - mode: "an instrument on the host failed (stat error, git missing or config unreadable)"
     detection: "remote exit 16 (per-instrument rc captured in-surface); rendered probe_failed rc=16, never a store-state reason"
-    alert_route: "failed job + ::error annotation"
+    alert_route: "layer 6 (workflow run log, ::error:: annotation) on the failed run"
   - mode: "the read could not be completed (transport, timeout, oversized or multi-line answer, findmnt failure)"
     detection: "gd_capture rc (95/96/97/124/141/255) or remote exit 5; rendered probe_failed rc=<n>, never a store-state verdict"
-    alert_route: "failed job + ::error annotation"
+    alert_route: "layer 6 (workflow run log, ::error:: annotation) on the failed run"
 logs:
   where: "the git-data-cutover.yml run log and its check-run annotations (GitHub Actions)"
   retention: "GitHub Actions default log retention for the repository (90 days)"
 discoverability_test:
-  command: "curl -s --max-time 10 'https://api.github.com/repos/jikig-ai/soleur/actions/workflows/git-data-cutover.yml/runs?per_page=1'"
-  expected_output: "workflow_runs"
+  command: "grep -o -m1 'probe=fence-shape' apps/web-platform/infra/git-data-cutover.sh"
+  expected_output: "probe=fence-shape"
 ```
 
 ## Acceptance Criteria
@@ -656,7 +722,7 @@ discoverability_test:
   line shows `0 failed`. `MUTANT_FLOOR` and `FLOOR` equal the recounted exact totals, and the comment
   above each shows per-section arithmetic that sums to the value.
 - [ ] AC2. Each of F2–F7 asserts the exact line
-  `[git-data-cutover] STORE probe=fence verdict=fence_not_intact reason=<word>` with exit 5. F8–F10
+  `[git-data-cutover] STORE probe=fence-shape verdict=fence_not_intact reason=<word>` with exit 5. F8–F10
   assert `probe_failed`. Implementation: the rc→reason `case` in
   `git-data-cutover.sh:refuse_if_fence_not_intact`.
 - [ ] AC3. AC2's expected timeline ends with exactly one fence command line, after the count line.
@@ -687,7 +753,7 @@ discoverability_test:
 ### Post-merge
 
 None required by this PR. The next reviewer-gated `git-data-cutover.yml` dry run (runbook
-§ Post-merge order step 5, an existing step) reads `probe=fence verdict=ok` against the live host.
+§ Post-merge order step 5, an existing step) reads `probe=fence-shape verdict=ok` against the live host.
 That run needs explicit per-step authorization and is not a new step this PR adds.
 
 ## Domain Review

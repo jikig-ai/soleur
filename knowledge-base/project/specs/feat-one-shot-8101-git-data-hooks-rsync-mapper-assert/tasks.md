@@ -14,12 +14,17 @@ Issue: #8101 (Ref, not Closes). Lane: single-domain.
 ## 2. RED (`apps/web-platform/infra/git-data-cutover-access.test.sh`)
 
 - 2.1 Add the `"h="*` ssh shim arm with the `SHIM_FENCE` modes (ok, r5, r10–r16, r255, line2, exec).
-- 2.2 Add rows F1–F16, including F8b and F12b. F16 uses awk-extracted functions in a harness.
+- 2.2 Add rows F1–F16, including F8b and F12b.
+  - F15 asserts the exact `old_store_unmounted rc=1` line and the absence of `probe=fence-shape`.
+  - F16 runs in a child bash on header-inclusive awk extractions, with stubs and `set -u` globals.
+  - P1 anchors on the escaped use-site forms and requires exactly one match per side.
 - 2.3 Update the shape rows:
   - 2.3.1 AC2: timeline, `timeout` string, ssh-stdin count.
   - 2.3.2 `case_main_order`: seven calls.
   - 2.3.3 Runtime R5b and R5c.
-  - 2.3.4 Grep the suite for any other exact-count row.
+  - 2.3.4 `case_capture_census`: `= 2 ]` → `= 3 ]`.
+- 2.3.5 AC2 `::notice` count: seven → eight.
+- 2.3.6 Grep the suite for any other exact-count row, including `= 2 ]`, `^::notice` and `seven`.
 - 2.4 Add parity row P1: the probe literals must equal the bootstrap `_own` rows.
 - 2.5 Runtime arm:
   - 2.5.1 Install the `git` package and add the `git` group.
@@ -34,7 +39,9 @@ Issue: #8101 (Ref, not Closes). Lane: single-domain.
 - 3.2 Add `refuse_if_fence_not_intact [root] [expected_source] [serving_hooks]`:
   - one `gd_capture '^ok$'` call;
   - remote bytes that begin `h=`;
-  - remote exits 10–16 mapped per the plan's D1 table.
+  - remote exits 10–16 mapped per the plan's D1 table;
+  - `root` and `serving` validated with `^/[A-Za-z0-9/_.-]+$`;
+  - emits `probe=fence-shape`.
 - 3.3 Call it as a plain statement in `main()` after the store-empty probe, and update the log lines.
 - 3.4 Update the header comment: the new item 3, "shape not content", and the #8211 carry sentence.
   Write it as plain prose with no backticked call.
@@ -50,7 +57,8 @@ Issue: #8101 (Ref, not Closes). Lane: single-domain.
   - 4.1.3 Add a `fence_not_intact` row to § Verdict map.
   - 4.1.4 Rewrite the #8101 bullet in § Preconditions as one line.
 - 4.2 Edit #8211's body additively: append the `## Carried from #8101 (acceptance criteria)`
-  checkbox section. Re-read the body to verify it appears once.
+  checkbox section. Re-read the body to verify it appears once. The flag-flip checkbox
+  must include the wrapper-assertion precondition.
 - 4.3 Comment on #8101: a link to the #8211 section, "blocked by #8211", and the re-evaluate trigger.
 - 4.4 Run `lint-infra-no-human-steps.py --changed --base origin/main`.
 
