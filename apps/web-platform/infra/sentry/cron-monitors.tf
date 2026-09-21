@@ -656,7 +656,8 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
 # GHA-fired (NOT Inngest — a self-hosted inngest cron cannot detect inngest being down;
 # that blind spot is the exact #5542 failure this watchdog closes; see the workflow's
 # gate-override header). checkin_margin_minutes = 15 == the `*/15` inter-fire gap BY
-# DESIGN (the zot_restart_loop_alarm precedent): margin == interval MAXIMIZES jitter
+# DESIGN (margin == interval — the design zot_restart_loop_alarm used before #8450
+# widened it to 2× on an hourly cadence): margin == interval MAXIMIZES jitter
 # tolerance (a run up to one interval late still checks in — no false page on GHA
 # `schedule:` jitter), while a genuinely dark alarm (every run skipped) still pages once
 # the window closes at the next expected fire. inngest-down is a brand-survival outage,
@@ -1036,7 +1037,8 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 }
 
 # #6291: GHA-fired via .github/workflows/scheduled-zot-restart-loop.yml (on.schedule
-# '*/30 * * * *'). Self-liveness for the standing zot restart-loop recurrence alarm — a MISSED
+# '0 * * * *' — hourly since #8450, relaxed from */30 for the org concurrency budget).
+# Self-liveness for the standing zot restart-loop recurrence alarm — a MISSED
 # check-in means the alarm went dark (workflow disabled / GHA outage), a ?status=error heartbeat
 # means the run's checker returned TRANSIENT (a persistent Better Stack probe fault). GREEN/FIRE/
 # PRODUCER-SILENT all check in ok:true (they are successful evaluations — a FIRE's surface is the
@@ -1044,23 +1046,21 @@ resource "sentry_cron_monitor" "cron_github_cidr_refresh" {
 # gate-override header: the alarm is a bash pipeline in I7's uncontained class, and the registry is
 # a separate host so an Inngest cron on the watched fleet would be a dark-alarm risk).
 #
-# checkin_margin_minutes = 30 is PINNED (not a cohort default) to absorb GHA `schedule:` jitter: a
+# checkin_margin_minutes = 120 is PINNED (not a cohort default) to absorb GHA `schedule:` jitter: a
 # tight margin on a jittery GHA cron false-paged scheduled-agent-native-audit on 2026-06-15 (the run
 # succeeded and filed #5318 at 09:09 UTC; only its heartbeat was late). This monitor posts a SINGLE
 # end-of-run heartbeat within ~1-2 min of the checker finishing (a small bash probe, not a claude-eval
-# spawn). margin (30) == the 30-min inter-fire gap BY DESIGN: this MAXIMIZES jitter tolerance (a run
-# up to 30 min late still checks in — no false page), and a genuinely dead alarm (every run skipped)
-# still pages once the margin window closes at the next expected fire (~30-60 min). A SHORTER margin
-# (< interval) would trade this jitter tolerance back for the 2026-06-15 false-page class — the wrong
-# trade for a trust-critical standing alarm. max_runtime_minutes = 10 mirrors the
-# GHA-fired small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG in the
-# workflow's sentry-heartbeat step (scheduled-zot-restart-loop).
+# spawn). margin (120) == 2× the hourly inter-fire gap BY DESIGN: measured delivery of the old */30
+# cadence gapped up to 243 min, so margin == interval would false-page on ordinary jitter, while a
+# genuinely dead alarm still pages within ~2h of a missed expected fire. max_runtime_minutes = 10
+# mirrors the GHA-fired small-cron cohort (scheduled_realtime_probe). Slug MUST match MONITOR_SLUG
+# in the workflow's sentry-heartbeat step (scheduled-zot-restart-loop).
 resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-zot-restart-loop"
-  schedule                = { crontab = "*/30 * * * *" }
-  checkin_margin_minutes  = 30
+  schedule                = { crontab = "0 * * * *" }
+  checkin_margin_minutes  = 120
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -1077,10 +1077,12 @@ resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
 # `name`, and the workflow's `monitor-slug` input must equal that derived slug.
 # scan-workflow.test.sh asserts the two agree.
 #
-# 03:37 UTC is deliberate: 20 minutes after the `17 * * * *` hourly Inngest-RLS
-# self-heal, which minimizes the window in which the advisor is legitimately
-# stale and the gate would have to fall back to its object-scoped carve-out.
-# A MISSED check-in is what covers a dead dispatch, so the margin is what makes
+# 03:37 UTC placement predates #8450: the Inngest-RLS self-heal relaxed from hourly
+# to `17 */4 * * *` (4-hourly, org concurrency budget), so the scan no longer runs
+# 20 minutes after every heal. What still bounds advisor staleness is the heal's
+# own interval — the cosmetic rls_disabled_in_public lint on a new Inngest table
+# clears within <=4h regardless of when this scan samples it. A MISSED check-in is
+# what covers a dead dispatch, so the margin is what makes
 # "Inngest never fired" visible rather than silent.
 resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
   organization            = var.sentry_org
@@ -1149,8 +1151,9 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 #
 # 360 exceeds the measured max gap (243) with headroom, and matches the jitter the checker's
 # own header cites (median 80-134 late, max 339). A truly dark alarm still pages within ~6h.
-# The workflow keeps */30: extra ticks cost nothing on a public repo and improve detection
-# latency whenever GitHub does deliver.
+# AMENDED by #8450: the workflow no longer keeps */30 — it relaxed to hourly for the org
+# concurrency budget, and this monitor's crontab moved with it. The margin rationale above is
+# unchanged: 360 still exceeds the worst delivered gap the tighter cadence ever produced.
 # (#7471) Liveness for the DAILY published-marketplace-manifest drift check
 # (.github/workflows/scheduled-marketplace-drift.yml, on.schedule "37 6 * * *").
 #
@@ -1190,7 +1193,7 @@ resource "sentry_cron_monitor" "scheduled_prod_version_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-prod-version-drift"
-  schedule                = { crontab = "*/30 * * * *" }
+  schedule                = { crontab = "0 * * * *" }
   checkin_margin_minutes  = 360
   max_runtime_minutes     = 10
   failure_issue_threshold = 1

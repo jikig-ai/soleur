@@ -218,13 +218,15 @@ flips only after its verdict is observed correct on this PR's own runs.
 ### Phase D — Verification + follow-through (post-merge, post-upgrade)
 
 - **D.1** New soak probe `scripts/followthroughs/actions-queue-tail-8450.sh`: measures
-  RUN-level `created_at → run_started_at` on `web-platform-release.yml` runs filtered
-  `--event workflow_run` — two traps avoided: per-job `started_at − created_at` on `migrate`/
-  `deploy` conflates `needs:`-chain upstream compute with queue wait (Kieran + strategist), and
-  every merge produces TWO runs (a `push`-arm run carrying only `release` contaminates the
-  sample unless filtered — the file's own text at `scheduled-prod-version-drift.yml:273-276`
-  names `--event workflow_run` load-bearing). Before writing the probe, pin `job.created_at`
-  semantics empirically on one queued run (`gh api repos/…/runs/<id>/jobs`). Exits 0 when
+  per-JOB `started_at − created_at` on the deploy-arm jobs (`migrate`, `deploy`) of
+  `web-platform-release.yml` runs filtered `--event workflow_run` (every merge produces TWO
+  runs — a `push`-arm run carrying only `release` contaminates the sample unless filtered).
+  **Work-phase correction (measured, `measurements.md` §timestamp-semantics):** the planned
+  RUN-level `created_at → run_started_at` metric is vacuous — `run_started_at` equals
+  `created_at` on every sampled run; and the feared `needs:`-chain conflation does not exist —
+  `job.created_at` is stamped at job instantiation (post-needs), so `started_at − created_at`
+  is pure queue wait. Caveat: on `status=queued` jobs the API pre-populates `started_at` with
+  `created_at`, so sample completed/in_progress jobs only. Exits 0 when
   deploy-arm p95 wait is <15 min across ≥5 workflow_run runs (fewer in-window is INSUFFICIENT
   evidence, exit non-zero — not a pass). Two preconditions before sampling:
   `gh api orgs/jikig-ai --jq .plan.name` must be `team` — else `SKIP-DECLARED` (exit 0, no alarm

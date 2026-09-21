@@ -1598,6 +1598,36 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history so the classifier's `origin/${GITHUB_BASE_REF}...HEAD`
+          # diff can resolve; a shallow clone would make every PR look
+          # unresolvable (which fails closed to applicable=true anyway).
+          fetch-depth: 0
+
+      # (#8450) In-job applicability probe — REPORT-ONLY for the first push of
+      # this change; the heavy steps below gain `if:` gating in the follow-up
+      # commit once this verdict is observed correct on this PR's own diff.
+      # Deliberately NOT a detect-changes output + `needs:` edge: a failed
+      # upstream job would needs-skip `e2e`, and a skipped required check posts
+      # GREEN — the fail-open shape this file warns about. A classify-step
+      # failure reds the job instead.
+      - name: Classify e2e applicability
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null)"; then
+              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash scripts/ci-e2e-classify.sh pull_request)"
+            else
+              APPLICABLE="$(bash scripts/ci-e2e-classify.sh --enum-failed)"
+            fi
+          else
+            APPLICABLE="$(bash scripts/ci-e2e-classify.sh "$EVENT_NAME" </dev/null)"
+          fi
+          echo "applicable=$APPLICABLE" >> "$GITHUB_OUTPUT"
+          echo "::notice::e2e applicable=$APPLICABLE (event=$EVENT_NAME)"
 
       # setup-bun and its `unzip` prerequisite are both gone (ADR-191): this job's only
       # bun usage was the two installs below. The image ships Node 24, so no

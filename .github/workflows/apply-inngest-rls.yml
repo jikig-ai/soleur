@@ -9,14 +9,16 @@
 # direct catalog/grant query (the authoritative gate; the advisor count is
 # corroborating only — advisor lints can be served stale right after a DDL change).
 #
-# SELF-HEAL: the hourly schedule re-applies the idempotent SQL (no-op when clean).
+# SELF-HEAL: the 4-hourly schedule re-applies the idempotent SQL (no-op when clean).
 # Inngest adds tables across versions. A new table does NOT re-open anon read access —
 # the ALTER DEFAULT PRIVILEGES revoke (see 0001 + ADR-030 I8) means a postgres-created
 # table is born with no anon/authenticated grant. What a new table DOES do is sit at
 # relrowsecurity=false until the next re-apply, so the cosmetic rls_disabled_in_public
-# advisor lint (CRITICAL email) recurs for up to one cron interval. Hourly (was daily,
-# 2026-07-01) shrinks that cosmetic window from <=24h to <=1h with ZERO human action and
-# zero new failure mode, instead of deferring to "file an issue". The CPO-rejected
+# advisor lint (CRITICAL email) recurs for up to one cron interval. 4-hourly (#8450,
+# relaxed from hourly — the org concurrency budget; was daily before 2026-07-01) bounds
+# that cosmetic window at <=4h with ZERO human action and zero new failure mode — the
+# lint is cosmetic only because the DEFAULT PRIVILEGES revoke already denies the grant.
+# The CPO-rejected
 # alternative — a ddl_command_end event trigger (window -> ~0) — was declined because it
 # fires inside Inngest's own CREATE TABLE txn (migration-abort risk) to remove a merely
 # cosmetic email; see ADR-030 changelog 2026-07-01. This MUST be an external GH-Actions
@@ -55,7 +57,7 @@ on:
       - 'apps/web-platform/infra/inngest-rls/0001_enable_rls_lockdown.sql'
       - '.github/workflows/apply-inngest-rls.yml'
   schedule:
-    - cron: '17 * * * *'   # hourly — self-healing re-apply (no-op when clean). Shrinks the cosmetic rls_disabled_in_public advisor-recurrence window on a new Inngest table from <=24h to <=1h. NOT the 15-min health watchdog cadence.
+    - cron: '17 */4 * * *'   # 4-hourly — self-healing re-apply (no-op when clean). Bounds the cosmetic rls_disabled_in_public advisor-recurrence window on a new Inngest table at <=4h (#8450, relaxed from hourly for the org concurrency budget). NOT the 15-min health watchdog cadence.
   workflow_dispatch:
     inputs:
       reason:
