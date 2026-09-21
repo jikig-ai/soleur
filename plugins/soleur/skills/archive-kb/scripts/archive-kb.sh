@@ -120,6 +120,45 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && ARTIFACTS+=("$line")
 done < <(discover_artifacts "$SLUG")
 
+# A PARTIAL run must not read as a complete one (#8416).
+#
+# `discover_artifacts` derives ONE slug per run, and a feature's plan and spec
+# routinely carry DIFFERENT slugs -- the plan is named for its topic, the spec
+# for its branch. The plan glob (`*${slug}*`) then matches nothing, the spec
+# probe matches, and the run prints `Archived 1 artifact(s)` and exits 0 with
+# the plan silently left behind. SKILL.md has documented that gap in prose since
+# it was first hit; it was hit again on #8325, which is the signal that prose was
+# not the fix (`wg-when-a-workflow-gap-causes-a-mistake-fix`).
+#
+# This deliberately adds NO new discovery: #7400 tracks retiring the spec/plan
+# discovery paths entirely, so widening them would build on a mechanism slated
+# for removal. It only makes the ASYMMETRY audible -- one class found, the other
+# silent -- which is the state a reader mistakes for completeness. The operand is
+# the classes DISCOVERED, never a count, because a count cannot distinguish "the
+# feature has no plan" from "the plan is named something else".
+_found_class() {
+  local want="$1" a
+  for a in "${ARTIFACTS[@]}"; do
+    [[ "$a" == knowledge-base/project/"${want}"/* ]] && return 0
+  done
+  return 1
+}
+if [[ ${#ARTIFACTS[@]} -gt 0 ]]; then
+  _have_plan=no; _have_spec=no
+  _found_class plans && _have_plan=yes
+  _found_class specs && _have_spec=yes
+  if [[ "$_have_plan" != "$_have_spec" ]]; then
+    if [[ "$_have_plan" == no ]]; then
+      _found="spec"; _missing="plan"; _hint="knowledge-base/project/plans/"
+    else
+      _found="plan"; _missing="spec"; _hint="knowledge-base/project/specs/feat-<slug>/"
+    fi
+    echo "WARNING: found a ${_found} for slug \"${SLUG}\" but NO ${_missing}." >&2
+    echo "         A feature's plan and spec often carry different slugs, so this run may be" >&2
+    echo "         incomplete. Check ${_hint} and re-run with the other slug if one exists." >&2
+  fi
+fi
+
 # --- No artifacts case ---
 
 if [[ ${#ARTIFACTS[@]} -eq 0 ]]; then
