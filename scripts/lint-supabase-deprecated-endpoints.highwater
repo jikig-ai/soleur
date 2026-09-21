@@ -1,4 +1,4 @@
-28  # Supabase Management API call sites this guard can still SEE.
+22  # Supabase Management API call sites this guard can still SEE.
     #
     # THIS IS A COVERAGE FLOOR, NOT AN OFFENDER CEILING, AND THE DIRECTION IS INVERTED
     # RELATIVE TO THIS REPO'S OTHER .highwater FILES. lint-diagnosis-claims.highwater and
@@ -83,3 +83,27 @@
     # (scripts/rotate-supabase-db-credential.sh: GET /v1/projects and
     # PATCH /v1/projects/$REF/database/password) without this ratchet moving;
     # the census had read 28 against 26 on main since, and this locks it in.
+    #
+    # 2026-09-19 (#6488): 28 -> 22. A DROP, so the header's own two-cause rule applies and
+    # cause 1 was ESTABLISHED before the number moved, not asserted after. Measured with the
+    # census itself against HEAD and the post-deletion tree (a detached worktree at HEAD, not
+    # a hand grep -- a first attempt by hand counted 3 and was wrong, because the script's
+    # extraction is not `grep -c` over stripped lines):
+    #
+    #     HEAD: census 28 over 34 files      working tree: census 22 over 30 files
+    #
+    # Four files left the union and six COUNTED sites went with them:
+    #   apps/web-platform/infra/inngest-rls/anon-probe.sh                2
+    #   .github/workflows/apply-inngest-rls-dev.yml                      3
+    #   scripts/followthroughs/inngest-rls-drop-6488.sh                  1
+    #   apps/web-platform/infra/inngest-rls/0002_..._lockdown.sql        0 counted (1 present,
+    #                                                                    ALLOWLISTED, so it
+    #                                                                    was never in SITES)
+    #   2 + 3 + 1 = 6, and 28 - 6 = 22 exactly. That reconciliation is the evidence; a drop
+    #   that did not reconcile would be cause 2 (the extractor gone blind) wearing cause 1's
+    #   clothes, which is the whole reason this header refuses a bare lowering.
+    #
+    # All four are artifacts this PR deliberately retires: the 14 dark-Inngest tables on
+    # soleur-dev were dropped (run 35471968669, tables_remaining=0), so the lockdown that
+    # defended them, its anon reachability probe, the transient drop workflow and the
+    # follow-through probe that watched for the drop all ceased to have a subject.
