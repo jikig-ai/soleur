@@ -3,16 +3,19 @@
 # Reads `public._schema_migrations` on dev-Supabase and cross-references
 # each row against `git ls-tree origin/main` for the corresponding file
 # under `apps/web-platform/supabase/migrations/`. Emits `::warning::`
-# annotations (NOT `::error::`) for any rows whose file is missing from
-# origin/main — these are dev-only migrations that drifted in from an
-# unmerged branch, the failure class that broke `Tenant integration
-# (dev-Supabase)` on 2026-05-21.
+# annotations (or `::error::` under the fail-on-* inputs) for any rows
+# whose file is missing from origin/main — these are dev-only migrations
+# that drifted in from an unmerged branch, the failure class that broke
+# `Tenant integration (dev-Supabase)` on 2026-05-21.
 #
 # Severity is `::warning::` by default — PR surfaces must not red on
 # pre-existing dev drift they did not cause. Authoritative surfaces
-# (push-to-main, scheduled) pass `fail-on-ledger-drift: 'true'` to flip
-# the same findings to `::error::` + exit 1 (#7964): residual drift on an
-# authoritative ref is a named failure, not an annotation nobody reads.
+# (push-to-main, main-ref workflow_dispatch, the scheduled cron) pass
+# `fail-on-ledger-drift: 'true'` to flip the same findings to `::error::`
+# + exit 1 (#7964): residual drift on an authoritative ref is a named
+# failure, not an annotation nobody reads. Under that flag the probe also
+# fails closed on "cannot measure" (psql/fetch failure) — a blind spot is
+# an error, not a green.
 # The apply-time gate in `apps/web-platform/scripts/run-migrations.sh`
 # (#4241 Phase 3.1) remains the enforcement layer; this probe is the
 # detection layer. The two complementary roles let local-iteration valves
@@ -95,18 +98,34 @@ runs:
         # ls-tree below would return empty for every filename and false-report
         # all rows as drift. Tolerate offline (|| true); a stale ref produces
         # a noisy ::warning:: list, not a silent green.
-        if ! git fetch --depth=1 origin main 2>/tmp/fetch.err; then
+        fetch_ok=1
+        if ! timeout 60 git fetch --depth=1 origin main 2>/tmp/fetch.err; then
+          fetch_ok=0
           echo "::warning::git fetch origin main failed (see /tmp/fetch.err); drift probe may produce false positives."
         fi
         # Wrap psql in `sh -c` so `$DATABASE_URL_POOLER` expands inside the
         # doppler-injected env of the child process. Expanding in the outer
         # composite-action shell (where set -u is active and DATABASE_URL_POOLER
         # is unbound) would abort the step before psql runs.
+        # Bounded: a connect/query stall here runs INSIDE the dev-suite mutex
+        # window and extends the hold for every waiter.
         if ! applied=$(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
-              sh -c 'psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -F "|" -c "SELECT filename, COALESCE(content_sha, '"'"''"'"') FROM public._schema_migrations ORDER BY filename;"'); then
-          echo "::warning::drift probe psql query failed; skipping drift check (visibility, not enforcement)."
+              sh -c 'PGCONNECT_TIMEOUT=10 timeout 120 psql "$DATABASE_URL_POOLER" -w --no-psqlrc -tAq --set ON_ERROR_STOP=1 -F "|" -c "SELECT filename, COALESCE(content_sha, '"'"''"'"') FROM public._schema_migrations ORDER BY filename;"'); then
           echo "drift-detected=false" >> "$GITHUB_OUTPUT"
+          if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
+            # Fail closed on "cannot measure": an unreachable dev DB reads as
+            # no-drift only if we let it — under the flag it is a named error.
+            echo "::error::drift probe psql query failed under fail-on-ledger-drift; cannot determine drift state."
+            exit 1
+          fi
+          echo "::warning::drift probe psql query failed; skipping drift check (visibility, not enforcement)."
           exit 0
+        fi
+        if [[ "$fetch_ok" != "1" && "$FAIL_ON_DRIFT" == "true" ]]; then
+          # ls-tree against a stale/absent origin/main would misreport every
+          # ledger row — cannot measure == fail closed under the flag.
+          echo "::error::git fetch origin main failed under fail-on-ledger-drift; refusing to evaluate drift against a stale ref."
+          exit 1
         fi
         # Filename shape whitelist — defense in depth. `_schema_migrations.filename`
         # is runner-controlled today, but a future migration could relax that;
@@ -213,8 +232,24 @@ runs:
         #   false (PR CI):     ::warning:: only, NO Sentry, exit 0
         MARKER_JSON="apps/web-platform/test/supabase-migrations/byok-rpc-markers.json"
         if [[ ! -f "$MARKER_JSON" ]]; then
-          echo "::warning::byok-rpc-markers.json not found ($MARKER_JSON); skipping RPC body-marker probe."
           echo "rpc-body-drift-detected=false" >> "$GITHUB_OUTPUT"
+          if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
+            echo "::error::byok-rpc-markers.json not found ($MARKER_JSON) under fail-on-rpc-body-drift; cannot measure drift."
+            exit 1
+          fi
+          echo "::warning::byok-rpc-markers.json not found ($MARKER_JSON); skipping RPC body-marker probe."
+          exit 0
+        fi
+        # A malformed/empty marker map yields zero keys -> zero checks -> a
+        # vacuous green. Under the fail-closed flag that is a measurement
+        # failure, not a pass.
+        if ! jq -e 'type == "object" and (keys | length) > 0' "$MARKER_JSON" >/dev/null 2>&1; then
+          echo "rpc-body-drift-detected=false" >> "$GITHUB_OUTPUT"
+          if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
+            echo "::error::byok-rpc-markers.json unreadable or empty under fail-on-rpc-body-drift; cannot measure drift."
+            exit 1
+          fi
+          echo "::warning::byok-rpc-markers.json unreadable or empty ($MARKER_JSON); skipping RPC body-marker probe."
           exit 0
         fi
 
@@ -266,7 +301,11 @@ runs:
           # the doppler-injected child env, per the ledger step's precedent.
           printf 'SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = %s AND p.proname = %s;\n' "'public'" "'$fn'" > /tmp/functiondef.sql
           if ! body=$(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
-                sh -c 'psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -f /tmp/functiondef.sql'); then
+                sh -c 'PGCONNECT_TIMEOUT=10 timeout 120 psql "$DATABASE_URL_POOLER" -w --no-psqlrc -tAq --set ON_ERROR_STOP=1 -f /tmp/functiondef.sql'); then
+            if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
+              echo "::error::byok RPC body probe: psql query for public.$fn failed under fail-on-rpc-body-drift; cannot determine drift state."
+              exit 1
+            fi
             echo "::warning::byok RPC body probe: psql query for public.$fn failed; skipping (visibility, not enforcement)."
             continue
           fi

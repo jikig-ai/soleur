@@ -2550,6 +2550,10 @@ if want_scripts; then
   # unregistered mutex suite is silent AND green while the banners it pins
   # decide whether a contended run proceeds visibly or silently.
   run_suite "tests/scripts/dev-suite-mutex" bash tests/scripts/test-dev-suite-mutex.sh
+  # The wiring gate is a separate suite for the same reason the D10 wiring
+  # gate is separate: the unit suite stubs psql and cannot see YAML — only
+  # this file asserts the workflow actually wires acquire/release/anchors.
+  run_suite "tests/scripts/dev-suite-mutex-wiring" bash tests/scripts/test-dev-suite-mutex-wiring.sh
   # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
   # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
   # under tests/scripts/ is auto-discovered, and an unregistered verdict suite

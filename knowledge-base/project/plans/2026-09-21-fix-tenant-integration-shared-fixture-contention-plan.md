@@ -188,17 +188,25 @@ Two mechanisms, each mapped to a property:
 `tenant-integration.yml` so the critical section — drift probe through the
 test step — is serialized across ALL refs at the Postgres layer, not at the
 GitHub-concurrency layer. Shape: a background `psql` opens an explicit
-transaction, takes `pg_advisory_xact_lock(hashtext('tenant_integration_dev_suite'))`,
-then `pg_sleep(<hold>)` keeps the transaction (and lock) alive; the acquire
+transaction, takes `pg_advisory_xact_lock(hashtextextended('tenant_integration_dev_suite', 0))`,
+then keeps the transaction (and lock) alive on a column of `pg_sleep(10)`
+statements — NOT one `pg_sleep(<hold>)`, because a parked backend never
+touches the client socket mid-statement and a killed holder would leave the
+lock granted until the sleep ended; chunked sleeps force a result write
+every ~10s so a dead client aborts the transaction at the next boundary.
+The acquire
 step polls the holder's stdout for a post-lock marker and prints
-`DEV_SUITE_MUTEX_ACQUIRED after <N>ms` or, past budget,
+`DEV_SUITE_MUTEX_ACQUIRED wait_ms=<N>` or, past budget,
 `DEV_SUITE_MUTEX_CONTENDED_PROCEEDING` with the holder's `application_name`
-resolved via `pg_locks` ⨝ `pg_stat_activity` (holder identity rides in
-`PGAPPNAME`, e.g. `ti-<ref_name>-run<run_id>`; strip CR/LF before echoing
-the resolved identity into the banner — it is DB-returned data flowing into
+resolved via `pg_locks` ⨝ `pg_stat_activity` (identity is re-asserted
+server-side via `SET LOCAL application_name` — Supavisor masks the
+startup-packet `PGAPPNAME` — e.g. `ti-<run_id>-<ref_name>`, run-id first
+because `application_name` truncates tail-first; charset-normalized before
+echoing — it is DB-returned data flowing into
 a GitHub annotation surface). Advisory semantics per
 ADR-133: on budget expiry the suite proceeds with the banner — never aborts;
-a dead holder releases at the kernel level (no stale-holder code). Release is
+a dead holder's lock releases when the next chunked result write hits the
+dead socket (~10-20s, no stale-holder code). Release is
 an `if: always()` step that kills the holder PID; job teardown is the
 backstop.
 
@@ -243,9 +251,10 @@ protects PR runs from each other).
   heartbeat/TTL machinery + a migration on the prd path). This is Task
   1.1's positive control, not an assumption.
 - **Budgets.** `timeout-minutes: 15` bounds the job; the lock-hold `pg_sleep`
-  is sized ~1.3x that (dies with the job regardless); the wait budget (~8 min)
-  is inside it, so a queued run still completes inside its own timeout in the
-  common case.
+  is sized ~1.3x that (dies with the job regardless); the wait budget is
+  inside it — shipped as `DEV_SUITE_MUTEX_WAIT_S=180` (not the ~8 min first
+  estimated here) so a full-budget wait still leaves ~8-10min for the 5-9min
+  section after pre-acquire setup.
 - **ADR-133 addendum caution applies:** its capacity verdict was measured on
   a different machine/resource; the transfer here is *method* (banner-first,
   measured wait) not conclusion.
@@ -300,8 +309,8 @@ failure_modes:
     detection: "fail-closed drift probe (::error:: + exit 1) on non-pull_request events"
     alert_route: "failed check naming the drifted file/function + revert pointer"
   - mode: "mutex holder dies mid-suite"
-    detection: "lock releases at kernel level; next run's acquire succeeds — no detection gap to close"
-    alert_route: "none needed (self-healing)"
+    detection: "lock releases at the next chunked pg_sleep result write to the dead socket (~10-20s); next run's acquire succeeds"
+    alert_route: "release emits DEV_SUITE_MUTEX_HOLDER_LOST if the section is still running"
 logs:
   where: "GitHub Actions job log (steps: acquire/release + drift probe)"
   retention: "GitHub default run-log retention"

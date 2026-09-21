@@ -349,12 +349,16 @@ jobs:
       # concurrency (#7986/#8048). The fail-CLOSED layer for authoritative
       # refs is the drift probes below, which turn residual drift into a named
       # ::error:: rather than letting an unserialized run proceed silently.
-      # A dead/cancelled holder releases the lock at the TCP-drop level — no
-      # heartbeat or TTL machinery.
+      # A dead/cancelled holder releases the lock at the next chunked
+      # pg_sleep result write (~10-20s — a single long pg_sleep would NOT
+      # notice the dead socket until it ended). No heartbeat or TTL
+      # machinery.
       - name: Acquire dev-suite mutex
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
-          DEV_SUITE_MUTEX_IDENTITY: ti-${{ github.ref_name }}-${{ github.run_id }}
+          # Run id FIRST: application_name truncates at 63 bytes tail-first —
+          # the run id is the discriminating component and must survive.
+          DEV_SUITE_MUTEX_IDENTITY: ti-${{ github.run_id }}-${{ github.ref_name }}
         run: |
           set -uo pipefail
           doppler run -p soleur -c dev_scheduled -- \
@@ -366,15 +370,16 @@ jobs:
       # origin/main OR whose content_sha drifts (caught by migration 054).
       # Severity follows the event: PR surfaces keep ::warning:: visibility
       # (a PR must not red on dev drift it did not cause); authoritative refs
-      # (push to main, workflow_dispatch) fail closed on ledger and RPC-body
-      # drift (#7964) — residual drift on main is a named error, not an
-      # annotation nobody reads.
+      # (push to main — the only push branch — and workflow_dispatch ON main)
+      # fail closed on ledger and RPC-body drift (#7964) — residual drift on
+      # main is a named error, not an annotation nobody reads. A dispatch on
+      # a feature branch stays warning-only: that ref is not authoritative.
       - name: Detect dev-vs-main migration drift
         uses: ./.github/actions/dev-migration-drift-probe
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
-          fail-on-rpc-body-drift: ${{ github.event_name != 'pull_request' }}
-          fail-on-ledger-drift: ${{ github.event_name != 'pull_request' }}
+          fail-on-rpc-body-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+          fail-on-ledger-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
 
       # Preflight: schema-vs-ledger consistency check (#4338). Logic
       # lives in apps/web-platform/scripts/preflight-schema-vs-ledger.sh
@@ -497,16 +502,32 @@ jobs:
             env TENANT_INTEGRATION_TEST=1 \
             npm run test:ci -- test/server/ --project unit --project repo-wide --reporter=verbose
 
+      # Post-section drift re-probe (#7964) — runs INSIDE the mutex window on
+      # every outcome (if: always()). The pre-apply probe is point-in-time:
+      # drift this run itself left — or that a CONTENDED sibling left while we
+      # held the lock — is otherwise invisible until the NEXT run, where it
+      # reds an innocent run and misattributes the cause. Re-probing at
+      # section end attributes drift to the run that plausibly produced it.
+      - name: Re-probe dev-vs-main migration drift (post-section)
+        if: always()
+        uses: ./.github/actions/dev-migration-drift-probe
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          fail-on-rpc-body-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+          fail-on-ledger-drift: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+
       # Release is local-only (kills this runner's holder psql — the pid file
       # lives under RUNNER_TEMP), so no Doppler env is needed and the step is
       # robust even if the Doppler install above failed. `if: always()` covers
       # failure paths; on job CANCELLATION the runner kills the holder's TCP
-      # connection and Postgres releases the xact-scoped lock at the kernel
-      # level — the release step cannot run then, and does not need to.
+      # connection and the holder's next chunked pg_sleep result write fails
+      # on the dead socket, aborting the transaction and releasing the
+      # xact-scoped lock (~10-20s) — the release step cannot run then, and
+      # does not need to.
       - name: Release dev-suite mutex
         if: always()
         env:
-          DEV_SUITE_MUTEX_IDENTITY: ti-${{ github.ref_name }}-${{ github.run_id }}
+          DEV_SUITE_MUTEX_IDENTITY: ti-${{ github.run_id }}-${{ github.ref_name }}
         run: |
           set -uo pipefail
           bash scripts/dev-suite-mutex.sh release

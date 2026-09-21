@@ -8,22 +8,28 @@
 # FUNCTION). A database-scoped advisory lock serializes that critical section
 # regardless of which ref or workflow run is the writer.
 #
-# Lock mechanics:
-#   - Preferred path: pg_advisory_xact_lock over DATABASE_URL_POOLER
-#     (transaction-mode pooler). A transaction-scoped lock survives pooler
-#     hand-off of the server connection because the pooler pins the connection
-#     for the life of the transaction; a dead holder's TCP drop releases the
-#     lock at the database/kernel level — no heartbeat or TTL machinery.
-#   - Fallback: session-scoped pg_advisory_lock over DATABASE_URL ONLY.
-#     NEVER pair a session-scoped lock with the pooler — transaction-mode
-#     pooling can hand a still-locked session to an unrelated renter. This
-#     path exists for operator/local use (no pooler URL); in CI the pooler
-#     URL is always injected. A DATABASE_URL that itself points at the
-#     transaction pooler (port 6543) is refused, not used.
+# Lock mechanics: ALWAYS pg_advisory_xact_lock (transaction-scoped) — over
+# DATABASE_URL_POOLER when set, else DATABASE_URL. Xact scope is the only
+# safe shape over a transaction-mode pooler: the pooler pins the backend for
+# the life of the transaction and the lock survives pooler hand-off. Xact
+# scope is equally correct on a direct connection, so there is deliberately
+# NO session-scoped arm: the session-lock-over-pooler leak class (a still-
+# locked session handed to an unrelated renter) is unexpressible here rather
+# than merely refused.
 #
-# The lock is held by a background `psql` parked in pg_sleep for the duration
-# of the critical section. SURVIVAL INVARIANT: the holder must outlive the
-# GitHub Actions step that spawned it — non-interactive bash does not SIGHUP
+# RELEASE LATENCY, load-bearing: a single pg_sleep(HOLD_S) parks the backend
+# in a WaitLatch that never touches the client socket — Postgres learns of
+# client death only at the NEXT socket I/O, so a killed psql would leave the
+# xact lock granted for the whole sleep remainder (up to ~19.5min — a zombie
+# hold, the very thing this design claims not to have). The holder instead
+# parks on a column of pg_sleep(10) statements: each statement boundary
+# writes a result row, and the first write to a dead socket fails (EPIPE/
+# RST), aborting the transaction and releasing the lock within ~10-20s. No
+# heartbeat machinery and no GUC dependency — works on every Postgres.
+#
+# The lock is held by a background `psql` parked on those chunked sleeps for
+# the duration of the critical section. SURVIVAL INVARIANT: the holder must
+# outlive the GitHub Actions step that spawned it — non-interactive bash does not SIGHUP
 # background children on exit and the runner does not reap orphans between
 # steps (observed live: holder survives the acquire→release boundary). If a
 # future runner ever reaps orphans between steps the run silently
@@ -40,18 +46,20 @@
 # Holder SQL pins statement_timeout/lock_timeout/idle_in_transaction_session_
 # timeout to 0 inside the transaction. Without the pins a role- or
 # database-level timeout (config this repo does not own) would cancel the
-# pg_sleep or the blocking lock call mid-hold — psql exits, the lock releases
-# at TCP drop, and the suite continues unserialized while believing it holds
-# the mutex.
+# pg_sleep or the blocking lock call mid-hold — psql exits, the next chunked
+# result write then EPIPEs on the dead socket and the transaction aborts,
+# releasing the lock — and the suite continues unserialized while believing
+# it holds the mutex.
 #
 # Failure policy is deliberate (see the plan):
 #   - lock wait budget exhausted -> DEV_SUITE_MUTEX_CONTENDED_PROCEEDING and
 #     exit 0 (fail-OPEN with a loud banner). A hard refusal would recreate the
 #     required-check queue starvation that killed repo-wide concurrency
 #     (#7986/#8048). The drift probes downstream are the fail-closed layer for
-#     authoritative refs. NOTE: a full-budget wait leaves only
-#     900s-WAIT_S-setup of job time for a section that runs 5-9min — a
-#     CONTENDED run may still die on `timeout-minutes`. The banner is the
+#     authoritative refs. NOTE: a full-budget wait (WAIT_S + up to ~30s of
+#     probe overshoot) after ~2-3min of pre-acquire setup leaves ~8-10min of
+#     the timeout-minutes:15 job for a section that runs 5-9min — a CONTENDED
+#     run is likely to finish but is not guaranteed to. The banner is the
 #     signal; completion is not guaranteed.
 #   - missing/unusable inputs -> DEV_SUITE_MUTEX_UNAVAILABLE + exit 0. The mutex
 #     is an orchestration primitive, not a hard gate; the suite must never be
@@ -60,7 +68,7 @@
 # Banner tokens (asserted by tests/scripts/test-dev-suite-mutex.sh and greppable
 # in run logs):
 #   DEV_SUITE_MUTEX_WAITING                 lock confirmed held; waiting
-#   DEV_SUITE_MUTEX_ACQUIRED wait_ms=<N>    lock held (mode=xact|session)
+#   DEV_SUITE_MUTEX_ACQUIRED wait_ms=<N>    lock held (always mode=xact)
 #   DEV_SUITE_MUTEX_CONTENDED_PROCEEDING    budget exhausted, proceeding anyway
 #   DEV_SUITE_MUTEX_RELEASED                release ran (idempotent)
 #   DEV_SUITE_MUTEX_HOLDER_LOST             holder pid already dead/recycled at
@@ -69,11 +77,13 @@
 #   DEV_SUITE_MUTEX_RELEASE_FAILED          holder survived TERM+KILL
 #   DEV_SUITE_MUTEX_UNAVAILABLE             primitive unusable, proceeding
 #   probe-only:
-#   DEV_SUITE_MUTEX_HELD_BY <app>           holder's application_name
-#                                           (transaction-mode Supavisor masks
-#                                           the client PGAPPNAME — holder shows
-#                                           as 'Supavisor', still proof of a
-#                                           holder)
+#   DEV_SUITE_MUTEX_HELD_BY <app>           holder's application_name. The
+#                                           holder re-asserts it server-side via
+#                                           SET LOCAL (transaction-mode
+#                                           Supavisor masks the startup-packet
+#                                           PGAPPNAME); if a 'Supavisor' value
+#                                           ever appears the mask won and the
+#                                           banner still proves a holder exists
 #   DEV_SUITE_MUTEX_FREE                    no holder
 #   DEV_SUITE_MUTEX_PROBE_UNAVAILABLE       could not ask (no URL/query failed)
 #   DEV_SUITE_MUTEX_HELD is the SQL-side marker the holder writes to holder.out
@@ -81,22 +91,29 @@
 #
 # Env:
 #   DATABASE_URL_POOLER          preferred connection (xact lock)
-#   DATABASE_URL                 fallback connection (session lock, direct only)
+#   DATABASE_URL                 fallback connection (same xact lock, direct)
 #   DEV_SUITE_MUTEX_IDENTITY     PGAPPNAME value — ref/run identity only, no
 #                                secrets. Put the run id FIRST: PGAPPNAME
 #                                truncates at 63 bytes, tail-first.
-#   DEV_SUITE_MUTEX_WAIT_S       wait budget before CONTENDED (default 240 —
-#                                sized against timeout-minutes:15; see the
-#                                workflow comment at the acquire step)
+#   DEV_SUITE_MUTEX_WAIT_S       wait budget before CONTENDED (default 180 —
+#                                sized so a full-budget wait still leaves
+#                                ~8-10min of the timeout-minutes:15 job for
+#                                a 5-9min section; raising it erodes that
+#                                margin, see the note above)
 #   DEV_SUITE_MUTEX_HOLD_S       holder's pg_sleep ceiling (default 1170 —
 #                                must EXCEED the job's timeout-minutes:15 so
 #                                the holder outlives any in-job cancellation;
 #                                raising the job timeout past ~19.5min requires
 #                                raising this in step)
 #   DEV_SUITE_MUTEX_STATE_DIR    per-run state dir (default RUNNER_TEMP/TMPDIR
-#                                + GITHUB_RUN_ID — per-run suffix keeps
-#                                concurrent jobs on shared/self-hosted runners
-#                                from tripping each other's stale-pid guard)
+#                                + GITHUB_RUN_ID, or local-<caller pid> when
+#                                run outside CI — the per-invoker suffix keeps
+#                                two concurrent local/agent sessions from
+#                                treating each other's live holder as stale).
+#                                Local caveat: `doppler run -- … acquire` and
+#                                a separate `… release` get different caller
+#                                pids — wrap both in ONE invocation or set
+#                                this var explicitly.
 #   DEV_SUITE_MUTEX_DISABLE      =1 disables the mutex (emergency valve;
 #                                UNAVAILABLE reason=disabled)
 #
@@ -109,26 +126,35 @@ set -uo pipefail
 
 MUTEX_NAME='tenant_integration_dev_suite'
 MARKER='DEV_SUITE_MUTEX_HELD'
-WAIT_S="${DEV_SUITE_MUTEX_WAIT_S:-240}"
+WAIT_S="${DEV_SUITE_MUTEX_WAIT_S:-180}"
 HOLD_S="${DEV_SUITE_MUTEX_HOLD_S:-1170}"
-STATE_DIR="${DEV_SUITE_MUTEX_STATE_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dev-suite-mutex-${GITHUB_RUN_ID:-local}}"
+# The local fallback discriminates on the CALLING shell's pid: sequential
+# acquire/release invocations from one session share it, while two concurrent
+# agent/operator sessions get distinct dirs — without it a second session's
+# acquire would "clean up" the first session's live holder.
+STATE_DIR="${DEV_SUITE_MUTEX_STATE_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dev-suite-mutex-${GITHUB_RUN_ID:-local-$PPID}}"
 PID_FILE="$STATE_DIR/holder.pid"
 SQL_FILE="$STATE_DIR/holder.sql"
 OUT_FILE="$STATE_DIR/holder.out"
 ERR_FILE="$STATE_DIR/holder.err"
 CONN_URL=""
-LOCK_MODE=""
 
-# Identity is stamped into PGAPPNAME; strip ASCII control bytes AND the
-# multi-byte UTF-8 separators (U+2028/2029/200B/FEFF/NEL — bash `tr` is
-# byte-oriented, so the second stage is sed on the byte sequences, same
-# pattern as tenant-integration.yml's env_safe strip) so a crafted value
-# cannot smuggle an annotation line into the run log.
+# Identity is stamped into PGAPPNAME AND a SET LOCAL application_name literal;
+# strip ASCII control bytes AND the multi-byte UTF-8 separators
+# (U+2028/2029/200B/FEFF/NEL — bash `tr` is byte-oriented, so the second stage
+# is sed on the byte sequences, same pattern as tenant-integration.yml's
+# env_safe strip) so a crafted value cannot smuggle an annotation line into
+# the run log. The final pass maps everything outside a banner/SQL-safe set
+# to '-' — no spaces (banner key=value fields stay parseable) and no single
+# quote (the SQL literal stays closed).
 IDENTITY=$(printf '%s' "${DEV_SUITE_MUTEX_IDENTITY:-ti-unknown}" \
   | LC_ALL=C tr -d '\000-\037\177' \
-  | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g')
-[[ "$WAIT_S" =~ ^[0-9]+$ ]] || WAIT_S=240
+  | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g' \
+  | LC_ALL=C tr -c 'A-Za-z0-9._/-' '-')
+[[ -n "$IDENTITY" ]] || IDENTITY='ti-unknown'
+[[ "$WAIT_S" =~ ^[0-9]+$ ]] || WAIT_S=180
 [[ "$HOLD_S" =~ ^[0-9]+$ ]] || HOLD_S=1170
+(( HOLD_S >= 1 )) || HOLD_S=1170  # 0 would emit no hold at all -> instant release
 
 usage() {
   cat <<'EOF'
@@ -139,16 +165,18 @@ Usage: dev-suite-mutex.sh acquire|release|probe
   probe     report the current holder's application_name, or DEV_SUITE_MUTEX_FREE
 
 Exit contract: acquire/release/probe ALWAYS exit 0 (fail-open) — the only
-non-zero exit is 2 for a usage error. rc is uninformative; grep the banners:
+non-zero exit is 2, for a usage error or a REFUSED DEV_SUITE_MUTEX_STATE_DIR
+(empty/relative/../-bearing; the guard exits 2 rather than write under CWD).
+rc is uninformative; grep the banners:
 
-  DEV_SUITE_MUTEX_WAITING / ACQUIRED wait_ms=<N> mode=xact|session /
+  DEV_SUITE_MUTEX_WAITING / ACQUIRED wait_ms=<N> /
   CONTENDED_PROCEEDING / RELEASED / HOLDER_LOST / RELEASE_FAILED /
   UNAVAILABLE / HELD_BY <app> / FREE / PROBE_UNAVAILABLE
 
-Env: DATABASE_URL_POOLER (xact lock, preferred), DATABASE_URL (session lock,
-fallback only — refused if it points at the transaction pooler port),
-DEV_SUITE_MUTEX_IDENTITY, DEV_SUITE_MUTEX_WAIT_S, DEV_SUITE_MUTEX_HOLD_S,
-DEV_SUITE_MUTEX_STATE_DIR, DEV_SUITE_MUTEX_DISABLE.
+Env: DATABASE_URL_POOLER (preferred), DATABASE_URL (direct fallback — the
+lock is transaction-scoped on BOTH paths, so a direct URL pointing at the
+pooler is still safe), DEV_SUITE_MUTEX_IDENTITY, DEV_SUITE_MUTEX_WAIT_S,
+DEV_SUITE_MUTEX_HOLD_S, DEV_SUITE_MUTEX_STATE_DIR, DEV_SUITE_MUTEX_DISABLE.
 EOF
 }
 
@@ -159,15 +187,15 @@ _now_ms() {
   printf '%s\n' "$v"
 }
 
-# resolve_conn — set CONN_URL/LOCK_MODE. Pooler => xact only; direct => session.
-# The coupling is structural: session mode is unreachable while the pooler is
-# set, so a session-scoped lock can never ride a transaction-mode pooler.
+# resolve_conn — set CONN_URL. Pooler preferred, direct fallback; the lock is
+# transaction-scoped on BOTH paths so there is no mode to resolve and no
+# session-over-pooler refusal to enforce.
 resolve_conn() {
   if [[ -n "${DATABASE_URL_POOLER:-}" ]]; then
-    CONN_URL="$DATABASE_URL_POOLER"; LOCK_MODE="xact"; return 0
+    CONN_URL="$DATABASE_URL_POOLER"; return 0
   fi
   if [[ -n "${DATABASE_URL:-}" ]]; then
-    CONN_URL="$DATABASE_URL"; LOCK_MODE="session"; return 0
+    CONN_URL="$DATABASE_URL"; return 0
   fi
   return 1
 }
@@ -218,28 +246,39 @@ write_holder_sql() {
   # The timeout pins are load-bearing: a role/database-level statement_timeout
   # would cancel pg_sleep mid-hold and release the lock silently; a
   # lock_timeout would cap the blocking acquire far below WAIT_S. SET LOCAL
-  # scopes the pins to this transaction (xact mode); plain SET for session
-  # mode. idle_in_transaction_session_timeout covers PG14+ idle-txn reapers.
-  if [[ "$LOCK_MODE" == "xact" ]]; then
-    cat >"$SQL_FILE" <<SQL
+  # scopes the pins to this transaction. idle_in_transaction_session_timeout
+  # covers PG14+ idle-txn reapers.
+  # SET LOCAL application_name is best-effort holder attribution: Supavisor
+  # masks the startup-packet PGAPPNAME, but this GUC is set server-side and
+  # surfaces in pg_stat_activity while the transaction pins the backend.
+  # IDENTITY is charset-normalized at the top of this script — it can never
+  # contain a single quote, so the literal stays closed.
+  # hashtextextended matches the repo's advisory-key precedent (migrations
+  # 029/093/116/133); the 64-bit key keeps the single-key objsubid=1 space
+  # free of foreign-lock collisions.
+  {
+    cat <<SQL
 BEGIN;
 SET LOCAL statement_timeout = 0;
 SET LOCAL lock_timeout = 0;
 SET LOCAL idle_in_transaction_session_timeout = 0;
-SELECT pg_advisory_xact_lock(hashtext('$MUTEX_NAME'));
+SET LOCAL application_name = '$IDENTITY';
+SELECT pg_advisory_xact_lock(hashtextextended('$MUTEX_NAME', 0));
 SELECT '$MARKER' AS marker;
-SELECT pg_sleep($HOLD_S);
-COMMIT;
 SQL
-  else
-    cat >"$SQL_FILE" <<SQL
-SET statement_timeout = 0;
-SET lock_timeout = 0;
-SELECT pg_advisory_lock(hashtext('$MUTEX_NAME'));
-SELECT '$MARKER' AS marker;
-SELECT pg_sleep($HOLD_S);
-SQL
-  fi
+    # NOT one pg_sleep($HOLD_S) — a parked backend never touches the client
+    # socket mid-statement, so a killed psql would leave the lock granted
+    # until the sleep ended (zombie hold, ~19.5min). Chunked statements make
+    # the backend write a result every ~10s; the first write to a dead
+    # socket fails and the transaction aborts — the lock actually releases.
+    local remaining=$HOLD_S chunk
+    while (( remaining > 0 )); do
+      chunk=$(( remaining > 10 ? 10 : remaining ))
+      printf 'SELECT pg_sleep(%s);\n' "$chunk"
+      remaining=$(( remaining - chunk ))
+    done
+    printf 'COMMIT;\n'
+  } >"$SQL_FILE"
 }
 
 # holder_identity — application_name(s) of sessions holding our advisory lock.
@@ -258,8 +297,8 @@ holder_identity() {
     JOIN pg_stat_activity a ON a.pid = l.pid
     WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
       AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-      AND l.classid = ((hashtext('$MUTEX_NAME')::bigint >> 32) & 4294967295)
-      AND l.objid   = (hashtext('$MUTEX_NAME')::bigint & 4294967295)
+      AND l.classid = ((hashtextextended('$MUTEX_NAME', 0) >> 32) & 4294967295)
+      AND l.objid   = (hashtextextended('$MUTEX_NAME', 0) & 4294967295)
   " 2>/dev/null) || return 1
   printf '%s' "$raw" | sanitize_field
 }
@@ -267,7 +306,11 @@ holder_identity() {
 emit_contended() {
   local holder
   holder=$(holder_identity "$CONN_URL" || true)
-  printf '::warning::DEV_SUITE_MUTEX_CONTENDED_PROCEEDING holder=%s budget=%ss next="bash scripts/dev-suite-mutex.sh probe" -- wait budget exhausted; proceeding unserialized\n' \
+  # holder= is application_name — SET LOCAL attribution restores the run
+  # identity on the pooler path, but if it ever reads 'Supavisor' (or the
+  # probe failed) the actionable attribution is the concurrent run, not
+  # `probe` again: point next= there directly.
+  printf '::warning::DEV_SUITE_MUTEX_CONTENDED_PROCEEDING holder=%s budget=%ss next="gh run list --workflow tenant-integration.yml (find the concurrent run)" -- wait budget exhausted; proceeding unserialized\n' \
     "${holder:-unknown}" "$WAIT_S"
 }
 
@@ -278,13 +321,6 @@ acquire() {
   fi
   if ! resolve_conn; then
     echo "::warning::DEV_SUITE_MUTEX_UNAVAILABLE reason=no_database_url -- proceeding unserialized (fail-open)"
-    return 0
-  fi
-  # Session mode is only safe on a direct connection — a session-scoped lock
-  # taken over a transaction-mode pooler (Supabase port 6543) can be handed to
-  # an unrelated renter while this run believes it holds the mutex.
-  if [[ "$LOCK_MODE" == "session" && "$CONN_URL" == *:6543/* ]]; then
-    echo "::warning::DEV_SUITE_MUTEX_UNAVAILABLE reason=direct_url_is_transaction_pooler -- refusing a session lock over a transaction-mode pooler; proceeding unserialized (fail-open)"
     return 0
   fi
   # A relative STATE_DIR would root every holder-file write below at the
@@ -332,6 +368,10 @@ acquire() {
 
   # Phase 2 — the lock reads free (or the probe failed): spawn the holder.
   # If we lost a grab race it blocks until grant; the same deadline applies.
+  # NOTE: advisory-lock grant order is not FIFO — under a free-boundary herd,
+  # K waiters each pin one backend on the blocking call and a loser may
+  # CONTENDED-retry repeatedly. Bounded by WAIT_S and the holder ceiling;
+  # accepted (Postgres gives no grant-fairness primitive to do better).
   write_holder_sql
   for f in "$PID_FILE" "$SQL_FILE" "$OUT_FILE" "$ERR_FILE"; do
     [[ -L "$f" ]] && rm -f "$f"
@@ -359,15 +399,27 @@ acquire() {
       rm -f "$PID_FILE"
       return 0
     fi
+    # Marker visibility depends on psql flushing each statement's output to
+    # holder.out before it reaches pg_sleep — live-verified (~750ms ACQUIRED);
+    # if a psql ever block-buffered, every acquire would degrade to
+    # CONTENDED_PROCEEDING, loudly but unserialized.
     if grep -qF "$MARKER" "$OUT_FILE" 2>/dev/null; then
       elapsed=$(( $(_now_ms) - start_ms ))
-      printf 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=%d mode=%s identity=%s\n' \
-        "$elapsed" "$LOCK_MODE" "$IDENTITY"
+      printf 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=%d identity=%s\n' \
+        "$elapsed" "$IDENTITY"
       return 0
     fi
     now=$(_now_ms)
     if (( now >= deadline_ms )); then
+      # Same bounded reap as release(): TERM, ~1s grace, KILL — a bare
+      # `wait` here could hang past the budget if the holder wedged in an
+      # uninterruptible socket state.
       kill "$pid" 2>/dev/null || true
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -9 "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       rm -f "$PID_FILE"
       emit_contended
@@ -391,14 +443,24 @@ acquire() {
 # on whatever now owns the pid (precedent: scripts/lib/test-contention.sh's
 # signal-only-what-we-own rule, adapted for a cross-step orphan).
 is_our_holder() {
-  local pid="$1" cmdline
-  [[ -r "/proc/$pid/cmdline" ]] || return 0  # cannot verify (non-Linux) — best-effort
-  cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
-  [[ "$cmdline" == *psql* && "$cmdline" == *"$SQL_FILE"* ]]
+  local pid="$1" cmdline=""
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+  else
+    # Non-Linux fallback (operator macOS runs): ps -o args works there.
+    cmdline=$(ps -p "$pid" -o args= 2>/dev/null || true)
+  fi
+  # Unverifiable is NOT ours: a pid we cannot inspect is never signalled —
+  # the holder self-terminates at the pg_sleep ceiling anyway. Fail-safe,
+  # never "best-effort" toward the kill.
+  [[ -n "$cmdline" && "$cmdline" == *psql* && "$cmdline" == *"$SQL_FILE"* ]]
 }
 
 release() {
   local pid="" pid_safe
+  # Same guard as the writing path: a relative STATE_DIR would root the
+  # reads/removes below at the caller's CWD.
+  assert_fixture_dir "$STATE_DIR"
   if [[ ! -f "$PID_FILE" ]]; then
     echo "DEV_SUITE_MUTEX_RELEASED (nothing held) identity=$IDENTITY"
     return 0
@@ -414,13 +476,14 @@ release() {
     kill -9 "$pid" 2>/dev/null || true
     rm -f "$PID_FILE" "$SQL_FILE" "$OUT_FILE" "$ERR_FILE"
     if kill -0 "$pid" 2>/dev/null; then
-      echo "::warning::DEV_SUITE_MUTEX_RELEASE_FAILED pid=$pid survived TERM+KILL -- the hold still ends at the pg_sleep ceiling or TCP drop"
+      echo "::warning::DEV_SUITE_MUTEX_RELEASE_FAILED pid=$pid survived TERM+KILL -- the hold still ends at the pg_sleep ceiling or the next result write to a dead socket"
     else
       echo "DEV_SUITE_MUTEX_RELEASED identity=$IDENTITY"
     fi
   elif [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     # Alive but not our psql — the pid was recycled; our holder already died
-    # and the lock released at TCP drop. Do NOT signal the current owner.
+    # and the lock released when its next result write hit the dead socket.
+    # Do NOT signal the current owner.
     rm -f "$PID_FILE" "$SQL_FILE" "$OUT_FILE" "$ERR_FILE"
     echo "::warning::DEV_SUITE_MUTEX_HOLDER_LOST pid=$pid_safe recycled -- holder died before release; the critical section may have run unserialized"
   else
