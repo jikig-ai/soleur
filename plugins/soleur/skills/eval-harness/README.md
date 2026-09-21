@@ -82,6 +82,14 @@ Opus cells, but outputs are single tokens so per-call cost is small (the first f
 under $1). This is why the harness is **opt-in and manual** and is NOT wired into per-PR CI. See the
 `<decision_gate>` in [SKILL.md](./SKILL.md) for the billing disclosure.
 
+Before any paid grid that asks for free-text generation, smoke it with
+`--filter-first-n 1 --repeat 1 --no-cache` and read each row's output length and `finishReason`.
+Opus 5 and Sonnet 5 think by default, so a small `ANTHROPIC_MAX_TOKENS` (300 measured) spends the whole
+budget on thinking and returns empty text, which a lexical scorer reads as compliant (#8290 needed
+3000). Estimate spend from a measured prompt size rather than from file bytes (the #8290 estimate ran
+39% low). promptfoo prints no progress when it isn't writing to a terminal, so poll
+`sqlite3 ~/.promptfoo/promptfoo.db "select count(*) from eval_results where eval_id like '<id>%'"`.
+
 ## First recorded delta (2026-06-15, `--repeat 3`, opus-4-8 / sonnet-4-6 / haiku-4-5)
 
 The baseline run that proved the rig pays off (point-in-time; model updates will shift these):

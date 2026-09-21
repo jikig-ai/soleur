@@ -1249,6 +1249,7 @@ directory-structure
 directory-traversal
 dirty
 dirty-vs-behind
+disable-model-invocation
 disambiguation
 disclosure
 disconnect
@@ -2042,6 +2043,7 @@ investigation
 investigation-first
 invisible-characters
 invite
+invocation-axis
 invocation-surface
 ios-safari
 ip-spoofing
@@ -2882,6 +2884,7 @@ pre-merge-rebase-hook
 pre-merge-verification
 pre-public
 pre-push-hook
+pre-registration
 pre-research
 pre-run-assertion
 precedent
