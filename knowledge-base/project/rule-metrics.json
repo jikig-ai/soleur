@@ -1,6 +1,10 @@
 {
   "schema": 1,
+<<<<<<< HEAD
   "generated_at": "2026-09-20T18:55:57Z",
+=======
+  "generated_at": "2026-09-20T20:11:41Z",
+>>>>>>> origin/main
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1099,11 +1103,19 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
+<<<<<<< HEAD
       "applied_count": 38,
       "warn_count": 0,
       "fire_count": 38,
       "prevented_errors": 0,
       "last_hit": "2026-09-20T16:48:12Z",
+=======
+      "applied_count": 39,
+      "warn_count": 0,
+      "fire_count": 39,
+      "prevented_errors": 0,
+      "last_hit": "2026-09-20T19:56:49Z",
+>>>>>>> origin/main
       "first_seen": "2026-05-22T07:01:41Z",
       "rule_text_prefix": ""
     },
@@ -1112,11 +1124,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 44,
+      "applied_count": 45,
       "warn_count": 0,
-      "fire_count": 44,
+      "fire_count": 45,
       "prevented_errors": 0,
-      "last_hit": "2026-09-20T06:08:41Z",
+      "last_hit": "2026-09-20T20:06:21Z",
       "first_seen": "2026-07-17T14:26:30Z",
       "rule_text_prefix": ""
     },
@@ -1164,11 +1176,19 @@
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
+<<<<<<< HEAD
       "applied_count": 99,
       "warn_count": 0,
       "fire_count": 99,
       "prevented_errors": 0,
       "last_hit": "2026-09-20T18:55:43Z",
+=======
+      "applied_count": 101,
+      "warn_count": 0,
+      "fire_count": 101,
+      "prevented_errors": 0,
+      "last_hit": "2026-09-20T20:11:23Z",
+>>>>>>> origin/main
       "first_seen": "2026-07-20T12:16:48Z",
       "rule_text_prefix": ""
     },
@@ -1229,11 +1249,19 @@
       "section": "Workflow Gates",
       "hit_count": 156,
       "bypass_count": 0,
+<<<<<<< HEAD
       "applied_count": 30,
       "warn_count": 0,
       "fire_count": 186,
       "prevented_errors": 156,
       "last_hit": "2026-09-20T16:48:22Z",
+=======
+      "applied_count": 31,
+      "warn_count": 0,
+      "fire_count": 187,
+      "prevented_errors": 156,
+      "last_hit": "2026-09-20T19:56:49Z",
+>>>>>>> origin/main
       "first_seen": "2026-05-21T21:08:12Z",
       "rule_text_prefix": ""
     },
@@ -1283,6 +1311,7 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
+<<<<<<< HEAD
       "skill-security-scan": 463,
       "gdpr-gate-cron-binding": 0,
       "monitor-supersede": 555,
@@ -1290,6 +1319,13 @@
       "post-dispatch-watch-gate": 5586,
       "guardrails-block-recursive-delete": 397,
       "kb-domain-allowlist-guard": 228,
+=======
+      "monitor-supersede": 572,
+      "net-issue-flow": 674,
+      "post-dispatch-watch-gate": 5588,
+      "guardrails-block-recursive-delete": 397,
+      "kb-domain-allowlist-guard": 230,
+>>>>>>> origin/main
       "guardrails-require-milestone": 542,
       "context-reviewed-gate": 13,
       "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 15,
@@ -1300,7 +1336,11 @@
       "pre-merge-auto-close-scan": 129,
       "net-issue-flow-mandated-filing--hr-never-git-stash-in-worktrees": 1,
       "guardrails-block-delete-branch": 130,
+<<<<<<< HEAD
       "net-issue-flow-body-attributed": 61,
+=======
+      "net-issue-flow-body-attributed": 64,
+>>>>>>> origin/main
       "guardrails-block-rm-rf-worktrees": 23,
       "guardrails-block-conflict-markers": 3,
       "prod-write-defer-git-push-main": 6,
@@ -1311,12 +1351,20 @@
       "guardrails-worktree-write-guard": 261,
       "context-reviewed-hook-self-fault": 1,
       "adr-033-inngest-cron-canonical": 30,
+<<<<<<< HEAD
+=======
+      "skill-security-scan": 478,
+>>>>>>> origin/main
       "net-issue-flow-undelivered-declaration": 1,
       "pkill-self-match-guard-readonly": 8,
       "durable-reminder-prefer-inngest": 22,
       "prod-write-defer-doppler-prd-secrets": 6,
       "brand-hex-commit-gate": 6,
       "encryption-posture-design-time-default": 1,
+<<<<<<< HEAD
+=======
+      "gdpr-gate-cron-binding": 0,
+>>>>>>> origin/main
       "hook-input-empty": 1,
       "gdpr-gate-staleness": 440,
       "hook-input-unparseable": 13
@@ -1331,10 +1379,17 @@
         "bypass_count": 15
       }
     ],
+<<<<<<< HEAD
     "gate_override_count": 151,
     "gate_timeout_warn_count": 45,
     "gate_failopen_warn_count": 115,
     "gate_body_attributed_count": 61,
+=======
+    "gate_override_count": 152,
+    "gate_timeout_warn_count": 45,
+    "gate_failopen_warn_count": 118,
+    "gate_body_attributed_count": 64,
+>>>>>>> origin/main
     "gate_undelivered_declaration_count": 1,
     "gate_contradictory_declaration_count": 0,
     "gate_unbalanced_fence_count": 0,

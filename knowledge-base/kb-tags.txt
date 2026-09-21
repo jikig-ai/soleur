@@ -699,6 +699,7 @@ ci-guard
 ci-guards
 ci-infrastructure
 ci-issues
+ci-paths
 ci-planning
 ci-ratchets
 ci-release
@@ -1080,6 +1081,7 @@ custom
 custom-domain
 custom-icon
 cutover
+cutover-inngest
 cve-2025-55130
 cwd
 cwd-envelope
@@ -1088,6 +1090,7 @@ cwe-22
 cwe-522
 cwe-59
 dag
+dark-gate
 dark-launch
 dash
 dashboard

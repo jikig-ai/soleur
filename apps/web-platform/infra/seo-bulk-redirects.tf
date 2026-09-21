@@ -1,8 +1,10 @@
 # Cloudflare Bulk Redirects — legacy /pages/legal/<slug>.html → clean /legal/<slug>/ 301s
-# (plus the orphaned blog reslug, the /articles/ stub reslug, and the blog
-# date-slug renames; item count = explicit items in the list below +
-# 3 shapes per pair generated from local.blog_redirect_pairs — don't pin a
-# hand-maintained numeral here, it is a guaranteed re-drift surface).
+# (plus the orphaned blog reslug, the /articles/ stub reslug, the blog
+# date-slug renames, and the reslug/deletion tombstones in
+# local.tombstone_redirect_pairs; item count = explicit items in the list below +
+# 3 shapes per pair generated from local.blog_redirect_pairs +
+# local.tombstone_redirect_pairs — don't pin a hand-maintained numeral here,
+# it is a guaranteed re-drift surface).
 #
 # Why a separate file / separate product (not more rules in seo-rulesets.tf):
 #   The 9 legacy legal-page redirects were DEFERRED in seo-rulesets.tf (see the
@@ -103,6 +105,52 @@ locals {
       { source = "soleur.ai/blog/${date_slug}", target = "https://soleur.ai/blog/${canonical}/" },
     ]
   ])
+
+  # Tombstone pairs (#8364): URLs that USED to serve a page and now have no
+  # live emitter — deleted/renamed posts, reslugged permalinks, retired pages.
+  # Unlike blog_redirect_pairs (whose keys MUST name a live dated post —
+  # validate-blog-links.sh fails on a stale key), these keys are host-less
+  # path prefixes of dead URLs. The redirect-tombstones.test.ts census derives
+  # this set from `git log --diff-filter=RD -M` over plugins/soleur/docs/ and
+  # reds on any uncovered event; its failure output prints the entry to paste.
+  # Each entry needs the same 3 shapes (exact full_uri match): dir, index.html,
+  # bare — including for file-shaped paths, where the two spurious shapes are
+  # simply never matched.
+  tombstone_redirect_pairs = {
+    # tombstone: #5215 — post published+unpublished 2026-06-12; both the
+    # canonical and dated-alias families died. Live-404 verified 2026-09-20.
+    "blog/ai-agents-cron-without-exfiltrating-secrets"            = "https://soleur.ai/blog/"
+    "blog/2026-06-12-ai-agents-cron-without-exfiltrating-secrets" = "https://soleur.ai/blog/"
+    # tombstone: #1851 — articles index reslugged pages/articles.html ->
+    # articles/ (file later deleted in #3328 PR-B). The /articles/ items cover
+    # only the post-reslug shape. Live-404 verified 2026-09-20.
+    "pages/articles.html" = "https://soleur.ai/blog/"
+    # tombstone: #118 — nav-restructure deletions ("redundant/empty" pages).
+    # Live-404 verified 2026-09-20.
+    "pages/commands.html"    = "https://soleur.ai/"
+    "pages/mcp-servers.html" = "https://soleur.ai/"
+    # tombstone: #1865 — the four legal pages served their PATH-DERIVED
+    # /pages/legal/<slug>/ family until 871fc0583 added
+    # `permalink: legal/<slug>/` (reslug-by-addition — no file moved). The
+    # explicit list items above cover only the /pages/legal/<slug>.html
+    # file-shape; the dir/index/bare family needs these.
+    "pages/legal/acceptable-use-policy" = "https://soleur.ai/legal/acceptable-use-policy/"
+    "pages/legal/gdpr-policy"           = "https://soleur.ai/legal/gdpr-policy/"
+    "pages/legal/privacy-policy"        = "https://soleur.ai/legal/privacy-policy/"
+    "pages/legal/terms-and-conditions"  = "https://soleur.ai/legal/terms-and-conditions/"
+  }
+
+  tombstone_redirect_items = flatten([
+    for prefix, target in local.tombstone_redirect_pairs : [
+      { source = "soleur.ai/${prefix}/", target = target },
+      { source = "soleur.ai/${prefix}/index.html", target = target },
+      { source = "soleur.ai/${prefix}", target = target },
+    ]
+  ])
+
+  # Single feed for the list's dynamic "item" block — the name no longer says
+  # "blog" because tombstone pairs are not blog URLs.
+  redirect_items = concat(local.blog_redirect_items, local.tombstone_redirect_items)
 }
 
 resource "cloudflare_list" "legal_redirects" {
@@ -110,7 +158,7 @@ resource "cloudflare_list" "legal_redirects" {
   account_id  = var.cf_account_id
   name        = "legal_redirects" # referenced by name from the ruleset's from_list
   kind        = "redirect"
-  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + /articles/ + blog reslug + blog date-slug -> canonical 301s. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
+  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + /articles/ + blog reslug + blog date-slug -> canonical 301s + tombstones for deleted/reslugged URLs (#8364). See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
 
   # Apex, host-less source_url (scheme-less sources match both http and https).
   # include_subdomains = "enabled" (v4 string enum, NOT a bool — provider
@@ -327,14 +375,17 @@ resource "cloudflare_list" "legal_redirects" {
     }
   }
 
-  # Blog date-slugs (#3328): /blog/YYYY-MM-DD-<slug>/ → /blog/<slug>/.
-  # Replaced the generated meta-refresh stubs (plugins/soleur/docs/_data/
-  # blogRedirects.js — deleted in #3328 PR-B) with deterministic edge 301s — same GSC
-  # crawled-not-indexed class the legal items above fix. Same flags as the
-  # explicit items: include_subdomains collapses the legacy www copies in one
-  # hop, preserve_query_string keeps ?utm_* attribution on the hop.
+  # Generated items (#3328, #8364): blog date-slugs /blog/YYYY-MM-DD-<slug>/ →
+  # /blog/<slug>/ plus the tombstone pairs — both expanded 3 shapes per entry
+  # in local.redirect_items. The date-slug arm replaced the generated
+  # meta-refresh stubs (plugins/soleur/docs/_data/blogRedirects.js — deleted
+  # in #3328 PR-B) with deterministic edge 301s — same GSC crawled-not-indexed
+  # class the legal items above fix; the tombstone arm covers URLs whose page
+  # is simply gone. Same flags as the explicit items: include_subdomains
+  # collapses the legacy www copies in one hop, preserve_query_string keeps
+  # ?utm_* attribution on the hop.
   dynamic "item" {
-    for_each = local.blog_redirect_items
+    for_each = local.redirect_items
     content {
       value {
         redirect {
