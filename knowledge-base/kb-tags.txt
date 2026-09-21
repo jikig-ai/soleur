@@ -1865,6 +1865,7 @@ hash-bound
 hash-cli
 hcl
 hcloud
+head_sha
 headed
 header-injection
 headless
@@ -4248,6 +4249,7 @@ verbose-gated
 verbs
 verdict
 verdict-cache
+verdict-ladder
 verdict-machinery
 verification
 verification-decay
