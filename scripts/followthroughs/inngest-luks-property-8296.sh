@@ -293,7 +293,10 @@ decide() {
       echo "CANNOT ESTABLISH: the $BACKSTOP_ROW row exists but its exception.expires_on is not a YYYY-MM-DD date."
       exit 3
     fi
-    if [[ "$NOW_DAY" > "$BACKSTOP_EXPIRES" ]]; then
+    # Epoch-second integers, not a lexicographic [[ ]] compare: both dates were validated above.
+    NOW_DAY_S=$(date -u -d "$NOW_DAY" +%s 2>/dev/null || echo 0)
+    EXPIRES_S=$(date -u -d "$BACKSTOP_EXPIRES" +%s 2>/dev/null || echo 0)
+    if (( NOW_DAY_S > EXPIRES_S && EXPIRES_S > 0 )); then
       marker "backstop_expired" "expires_on=$BACKSTOP_EXPIRES now=$NOW_DAY"
       echo "ACTION REQUIRED: the store is on the LUKS mapper and the ledger agrees, and the plaintext backstop $BACKSTOP_ROW is past its expires_on ($BACKSTOP_EXPIRES). destroy the backstop under #8285."
       exit 5
