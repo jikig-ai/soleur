@@ -1,4 +1,4 @@
-78  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+79  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
 # 79th entrant (2026-09-17, #8160): scripts/file-upstream-ask-8160.sh — its
 # mktemp -d output directory IS the deliverable (email/bug bodies the operator
 # sends after the run), so it must outlive the process by design; annotated
@@ -38,5 +38,3 @@
 # temp explicitly (filter failure, append failure, commit failure; success mv's
 # it away), so the residual leak is a hard kill, which no trap would survive
 # either.
-# 79 -> 78 (#8451): the brownout-retry suite (deleted with the ladder it tested) LEFT the population by
-# deletion (it tested the brownout retry ladder that #8451 removed).

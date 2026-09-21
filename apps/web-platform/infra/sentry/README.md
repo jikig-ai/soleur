@@ -94,7 +94,9 @@ Phase 2 adoption capture was taken and so was never in that migration's scope.
 Phase 3.4 (#7985) migrated it, which took this paragraph to 28 + 2. It now
 says 29 + 2 because #7989 ADDED a rule (`ops_email_delivery_failure`) rather than
 migrating one — the only entry here whose +1 is a new rule, not a type change.
-The two survivors are blocked on upstream 950, which is fixed but unreleased.
+(That was the count before #8451; #8442 then added `art17_erasure_incomplete`,
+and #8451 adopted the last two as frozen `sentry_alert`, so the root declares 32
+and 0. The current count is at the top of this file, pinned by T25.)
 Historical note, kept because this count has been wrong twice: this paragraph
 said **2** until 2026-09-06 (#7826) while line 5 of this same file
 

@@ -87,7 +87,8 @@
 # boilerplate, and the plan's own Cut List rejects markers that ship
 # pre-suppressed for exactly that reason.)
 #
-# `ignore_changes = [environment]` on every block: no block SETS `environment`
+# `ignore_changes = [environment]` on every block except the two frozen ones
+# (#8451, `ignore_changes = all`, see their banner): no block SETS `environment`
 # and all 27 are live-null, so this defends against an out-of-band UI edit
 # binding a rule to an environment, not against config drift. It is deliberately
 # the ONLY ignored attribute -- the wide `ignore_changes` the legacy blocks
@@ -1984,7 +1985,7 @@ resource "sentry_alert" "workspaces_luks_drift" {
 #      that signal, and app_ghcr_served is an increment on existing noise, not a new class.
 #   2. If it must be quieted before then, mute `zot-gate-degraded`'s group (safe: it groups on
 #      a stable reason literal) — NOT this one, and never the RULE.
-#   3. If THIS group must be quieted, split it into its own sentry_issue_alert resource so it
+#   3. If THIS group must be quieted, split it into its own sentry_alert resource so it
 #      can be tuned without touching ghcr-fallback. That is a real fix, not a mute. Since
 #      #6589 the split costs only the resource block — the apply plans the full root, so
 #      there is no `-target=` entry to add — plus the op-contract's alarm⇔soak parity (which
