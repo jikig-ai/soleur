@@ -108,7 +108,7 @@ jobs:
           # PRs, defeating the rate-budget purpose that is the reason for #5585.
           # Route-level isolation relies on the anchored lib/supabase/ clients +
           # DB RLS policies (migrations, anchored). See ADR-032 amendment.
-          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/)'; then
             printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
@@ -336,17 +336,45 @@ jobs:
           fi
           echo "Doppler config dev_scheduled carries no SUPABASE_ACCESS_TOKEN (verified)."
 
+      # Cross-ref advisory mutex on the shared dev-Supabase project (#7964).
+      # The per-ref concurrency group above serializes a ref against itself
+      # only; two DIFFERENT refs can still interleave DDL against the one dev
+      # project — the residual the concurrency comment names. This takes a
+      # pg_advisory_xact_lock through the transaction pooler, held for the
+      # whole dev-touching critical section below.
+      #
+      # Deliberately fail-OPEN on wait-budget exhaustion
+      # (DEV_SUITE_MUTEX_CONTENDED_PROCEEDING + rc 0): a hard refusal would
+      # recreate the required-check queue starvation that killed repo-wide
+      # concurrency (#7986/#8048). The fail-CLOSED layer for authoritative
+      # refs is the drift probes below, which turn residual drift into a named
+      # ::error:: rather than letting an unserialized run proceed silently.
+      # A dead/cancelled holder releases the lock at the TCP-drop level — no
+      # heartbeat or TTL machinery.
+      - name: Acquire dev-suite mutex
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          DEV_SUITE_MUTEX_IDENTITY: ti-${{ github.ref_name }}-${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/dev-suite-mutex.sh acquire
+
       # Drift probe (#4241) — composite action shared with scheduled cron at
       # `.github/workflows/scheduled-dev-migration-drift.yml`. Surfaces
       # `_schema_migrations` rows on dev whose file is missing from
       # origin/main OR whose content_sha drifts (caught by migration 054).
-      # Severity is `::warning::` by design: the apply-time gate in
-      # `apps/web-platform/scripts/run-migrations.sh` (#4241 Phase 3.1) is
-      # the enforcement layer, this probe is the visibility layer.
+      # Severity follows the event: PR surfaces keep ::warning:: visibility
+      # (a PR must not red on dev drift it did not cause); authoritative refs
+      # (push to main, workflow_dispatch) fail closed on ledger and RPC-body
+      # drift (#7964) — residual drift on main is a named error, not an
+      # annotation nobody reads.
       - name: Detect dev-vs-main migration drift
         uses: ./.github/actions/dev-migration-drift-probe
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          fail-on-rpc-body-drift: ${{ github.event_name != 'pull_request' }}
+          fail-on-ledger-drift: ${{ github.event_name != 'pull_request' }}
 
       # Preflight: schema-vs-ledger consistency check (#4338). Logic
       # lives in apps/web-platform/scripts/preflight-schema-vs-ledger.sh
@@ -468,6 +496,20 @@ jobs:
           doppler run -p soleur -c dev_scheduled -- \
             env TENANT_INTEGRATION_TEST=1 \
             npm run test:ci -- test/server/ --project unit --project repo-wide --reporter=verbose
+
+      # Release is local-only (kills this runner's holder psql — the pid file
+      # lives under RUNNER_TEMP), so no Doppler env is needed and the step is
+      # robust even if the Doppler install above failed. `if: always()` covers
+      # failure paths; on job CANCELLATION the runner kills the holder's TCP
+      # connection and Postgres releases the xact-scoped lock at the kernel
+      # level — the release step cannot run then, and does not need to.
+      - name: Release dev-suite mutex
+        if: always()
+        env:
+          DEV_SUITE_MUTEX_IDENTITY: ti-${{ github.ref_name }}-${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          bash scripts/dev-suite-mutex.sh release
 
   # Always-run aggregator gate (#5585). This job — NOT the heavy
   # `tenant-integration` job — is the required status check registered in the

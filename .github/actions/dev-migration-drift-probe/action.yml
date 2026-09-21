@@ -8,11 +8,16 @@
 # unmerged branch, the failure class that broke `Tenant integration
 # (dev-Supabase)` on 2026-05-21.
 #
-# Severity is `::warning::` by design. The apply-time gate in
-# `apps/web-platform/scripts/run-migrations.sh` (#4241 Phase 3.1) is the
-# enforcement layer; this probe is the visibility layer. The two
-# complementary roles let local-iteration valves (ALLOW_UNMERGED_DEV_APPLY=1)
-# remain usable without permanently silencing the drift class.
+# Severity is `::warning::` by default — PR surfaces must not red on
+# pre-existing dev drift they did not cause. Authoritative surfaces
+# (push-to-main, scheduled) pass `fail-on-ledger-drift: 'true'` to flip
+# the same findings to `::error::` + exit 1 (#7964): residual drift on an
+# authoritative ref is a named failure, not an annotation nobody reads.
+# The apply-time gate in `apps/web-platform/scripts/run-migrations.sh`
+# (#4241 Phase 3.1) remains the enforcement layer; this probe is the
+# detection layer. The two complementary roles let local-iteration valves
+# (ALLOW_UNMERGED_DEV_APPLY=1) remain usable without permanently silencing
+# the drift class.
 #
 # Coverage gaps documented in
 # `knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`:
@@ -54,6 +59,15 @@ inputs:
       exit 0 — mirrors the ledger probe's visibility-in-PR convention.'
     required: false
     default: 'false'
+  fail-on-ledger-drift:
+    description: >-
+      '"true" makes _schema_migrations ledger drift fail-loud (::error:: +
+      exit 1) — for authoritative surfaces (push-to-main, scheduled) where
+      residual drift is a named failure (#7964). "false" (default, PR CI)
+      surfaces ::warning:: only, exit 0 — a PR must not red on dev drift it
+      did not cause.'
+    required: false
+    default: 'false'
 
 outputs:
   drift-detected:
@@ -72,6 +86,7 @@ runs:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}
         DOPPLER_PROJECT: ${{ inputs.doppler-project }}
         DOPPLER_CONFIG: ${{ inputs.doppler-config }}
+        FAIL_ON_DRIFT: ${{ inputs.fail-on-ledger-drift }}
       run: |
         set -uo pipefail
         # Refresh origin/main locally so `git ls-tree` reflects merged state.
@@ -124,30 +139,41 @@ runs:
             content_drift+="$f (applied=$sha_applied main=$main_blob_sha)"$'\n'
           fi
         done <<<"$applied"
+        # Severity tracks fail-on-ledger-drift (#7964): authoritative surfaces
+        # (push-to-main, scheduled) fail closed — residual drift is a named
+        # error whose annotation names the drifted rows and points at the
+        # revert procedure. PR surfaces keep ::warning:: visibility.
+        sev="warning"
+        [[ "$FAIL_ON_DRIFT" == "true" ]] && sev="error"
         drift_seen="false"
         if [[ -n "$missing_drift" ]]; then
           drift_seen="true"
-          echo "::warning::dev-Supabase has _schema_migrations rows whose file is NOT on origin/main."
-          echo "::warning::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
-          echo "::warning::Missing-on-main:"
+          echo "::${sev}::dev-Supabase has _schema_migrations rows whose file is NOT on origin/main."
+          echo "::${sev}::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
+          echo "::${sev}::Missing-on-main:"
           while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            echo "::warning::  - $f"
+            echo "::${sev}::  - $f"
           done <<<"$missing_drift"
         fi
         if [[ -n "$content_drift" ]]; then
           drift_seen="true"
-          echo "::warning::dev-Supabase has _schema_migrations rows whose content drifts from origin/main (same filename, different blob)."
-          echo "::warning::Content drift:"
+          echo "::${sev}::dev-Supabase has _schema_migrations rows whose content drifts from origin/main (same filename, different blob)."
+          echo "::${sev}::Content drift:"
           while IFS= read -r entry; do
             [[ -z "$entry" ]] && continue
-            echo "::warning::  - $entry"
+            echo "::${sev}::  - $entry"
           done <<<"$content_drift"
         fi
         if [[ "$drift_seen" == "false" ]]; then
           echo "No dev-vs-main migration drift detected."
         fi
         echo "drift-detected=${drift_seen}" >> "$GITHUB_OUTPUT"
+        # Fail closed AFTER emitting every annotation so the run log names all
+        # drifted rows, not just the first.
+        if [[ "$FAIL_ON_DRIFT" == "true" && "$drift_seen" == "true" ]]; then
+          exit 1
+        fi
 
     # byok RPC live-body marker probe (#5920). Complements the ledger probe
     # above: that step catches _schema_migrations rows whose FILE drifts from
