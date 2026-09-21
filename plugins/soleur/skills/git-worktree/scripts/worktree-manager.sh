@@ -79,9 +79,32 @@ else
   # mode cleanup-merged actually runs in (see the note at the reap loop).
   echo "SOLEUR_WORKTREE_LEASE_LIB_MISSING path=$_SS_LIB reason=fail-closed-no-reap"
   echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
-  echo "[warn] cleanup-merged will REFUSE to reap any worktree (fail-closed): with no lease" >&2
-  echo "[warn] library there is no way to tell a live session from an abandoned one." >&2
-  echo "[warn] Restore it with: git checkout origin/main -- plugins/soleur/scripts/lib/session-state.sh" >&2
+  # Scope corrected for #8400. Before the branch-keyed lease guard this claim was true only
+  # for branches that still HAD a worktree: a merged branch whose worktree was already gone
+  # skipped the lease check entirely and was deleted locally and on the remote. The guard is
+  # now keyed on the branch, so with no lease library every stale branch — worktree or not —
+  # reads as held, and the sentence below is true by extension rather than by narrowing.
+  echo "[warn] cleanup-merged will REFUSE to reap any worktree **or delete any branch**" >&2
+  echo "[warn] (fail-closed): with no lease library there is no way to tell a live session" >&2
+  echo "[warn] from an abandoned one." >&2
+  # The remedy that shipped here — `git checkout origin/main -- plugins/…` — cannot work for
+  # a marketplace user, who has no Soleur checkout to restore from. Both torn-install states
+  # share one remedy, so name that instead of a path only a contributor can use.
+  #
+  # STDOUT, unlike the three [warn] lines above, and for the reason stated at the sentinel:
+  # stderr is invisible under `claude --bg`, which is the mode this runs in. The lines above
+  # describe the state, which the SOLEUR_WORKTREE_LEASE_LIB_MISSING sentinel already carries
+  # to stdout; these are the only ACTIONABLE ones, and putting the one thing the operator can
+  # do on the stream they cannot see is the same defect one register down.
+  #
+  # TWO commands on Claude Code, not one. `claude plugin update` compares the marketplace's
+  # recorded version, so without the `marketplace update` first it compares equal, reports
+  # success and delivers nothing — this repo's own getting-started page says so.
+  echo "[warn] Remedy (Claude Code, both commands — the second alone is a no-op):"
+  echo "[warn]   claude plugin marketplace update soleur-marketplace"
+  echo "[warn]   claude plugin update soleur@soleur-marketplace"
+  echo "[warn] Remedy (Devin): devin plugins update soleur"
+  echo "[warn] Then restart the session."
   acquire_lock() { return 0; }
   release_lock() { return 0; }
   acquire_lease() { return 0; }
@@ -101,6 +124,28 @@ else
   _register_lease_release_trap() { return 0; }
   headless_or_stderr() { echo "[$1] $2" >&2; }
 fi
+
+# Reap-capability token (#8400/#8401). `/soleur:go`'s session-start gate feature-detects this
+# literal before it dispatches `cleanup-merged`, so a plugin root whose reaper PREDATES the
+# branch-keyed guards below is refused BY NAME instead of run. That distinction matters
+# because the root that gate resolves may be a CACHED COPY of unknown age — fixing this file
+# in the repository does not fix the artifact a Devin plugin cache holds on disk.
+#
+# It names the CAPABILITY, never a version, and the consumer tests MEMBERSHIP in a
+# space-separated set (`case " $VAL " in *" branch-keyed-guards "*`). A `-v1` suffix would
+# re-import the version-sniff failure mode that the Alternatives table rejected; set
+# membership is additive forever.
+#
+# It ATTESTS a contract; it does not authenticate one. A planted root can declare this token
+# as trivially as it can declare `{"name":"soleur"}` in a manifest — ADR-179 A11 one level
+# down — which is why the consumer's wording is "attests", never "verifies" or "trusts".
+#
+# Deliberately OUTSIDE the `_SS_LIB_MISSING` if/else above: the capability is a property of
+# THIS FILE's guards, not of whether the lease library resolved at load. Assigned as a
+# literal so it is greppable statically, and echoed so it is observable at runtime — stdout,
+# not stderr, for the same reason as the markers above.
+SOLEUR_WORKTREE_REAP_CAPABILITY="branch-keyed-guards"
+echo "SOLEUR_WORKTREE_REAP_CAPABILITY=$SOLEUR_WORKTREE_REAP_CAPABILITY"
 
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
@@ -2862,10 +2907,38 @@ cleanup_merged_worktrees() {
       continue
     fi
 
-    # Skip if a sibling session holds an active lease on this worktree
+    # Skip if a sibling session holds an active lease on this branch
     # (hostname matches and within the lease window — PID liveness is NOT
     # required; requiring it is what reaped two live worktrees on 2026-08-06).
-    if [[ -n "$worktree_path" ]] && is_lease_active "$(basename "$worktree_path")"; then
+    #
+    # SOLEUR-GUARD-LEASE-START
+    # Keyed on the BRANCH's safe name, NOT on a worktree path. Every per-branch guard in
+    # this loop used to be gated on `-n "$worktree_path"`, so a branch merged into main
+    # whose worktree had already been removed short-circuited all five of them and still
+    # reached `git push origin --delete`, `git branch -D` and the post-loop
+    # `reset --hard HEAD` (#8400). `safe_branch` is what `create`/`create-for-feature`
+    # lease under, so it is the key a live session actually holds.
+    #
+    # The second key is NOT dead code kept for a hypothetical legacy layout.
+    # `switch_worktree`'s LEGACY-NESTED FALLBACK reassigns
+    # `worktree_path="$WORKTREE_DIR/$worktree_name"`, so `switch ci/foo` against
+    # `.worktrees/ci/foo` leases under the key `foo` while `_safe_worktree_name "ci/foo"`
+    # is `ci-foo`. Both are live producers and holding on EITHER is correct.
+    #
+    # Evaluated inside the `-n` guard because `basename ""` yields an empty key: harmless
+    # against today's `_lease_file` but not a contract it owes us.
+    #
+    # `if`, never `is_lease_active … && { …; continue; }` — `set -e` exempts a non-final
+    # member of an `&&` list, not the list itself, so a FALSE predicate would make the whole
+    # statement rc 1 and abort the function, taking the orphan-dir and tmp reapers with it.
+    local _lease_held=false
+    if is_lease_active "$safe_branch"; then
+      _lease_held=true
+    elif [[ -n "$worktree_path" ]] && is_lease_active "$(basename "$worktree_path")"; then
+      _lease_held=true
+    fi
+    if [[ "$_lease_held" == "true" ]]; then
+    # SOLEUR-GUARD-LEASE-END
       # Mode-accurate, and unconditional. Two reasons this is not `verbose`-gated
       # prose: `verbose` is `[[ -t 1 ]]`, so under `claude --bg` — the mode the
       # 2026-08-06 reaps ran in — it printed NOTHING; and when the lease library
@@ -2894,7 +2967,47 @@ cleanup_merged_worktrees() {
         local _now=$(date +%s)
         local _delta=$(( _now - last_commit_age ))
         if (( _delta < 0 || _delta < 600 )); then
-          [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - recent commit (<10min) or clock-skew${NC}"
+          # UNGATED, for the reason the worktree-less arm below states and this arm used to
+          # contradict: `verbose` is `[[ -t 1 ]]`, so under `claude --bg` — the mode
+          # cleanup-merged actually runs in — a gated line prints nothing and a held branch
+          # is indistinguishable from a branch the loop never considered. Measured while
+          # debugging this PR's own A9 fixture: the reaper emitted no per-branch output at
+          # all and the failure read as a broken merge-evidence block.
+          echo "(skip) $branch - recent commit (<10min) or clock-skew"
+          continue
+        fi
+      fi
+    else
+      # Worktree-less arm (#8400). NOT a symmetric analogue of the arm above, and the
+      # difference matters: that one measures OPERATOR ACTIVITY (a commit made in the
+      # worktree the operator is sitting in), this one measures COMMIT RECENCY OF A MERGED
+      # REF. For a squash-merged branch — the cohort `gh_merged_branches` exists for — the
+      # branch tip IS the last feature commit, frequently minutes old at merge time, so this
+      # arm holds essentially every freshly squash-merged branch for ten minutes on the first
+      # pass and reaps it on the next. That is cheap and fails in the safe direction. On the
+      # `git branch --merged main` cohort (tip is an old ancestor) it passes straight through.
+      #
+      # `local` on its own line, then the assignment: a bare `local x=$(cmd)` masks the
+      # command's status behind `local`'s own, and this read exits 128 for a ref that
+      # vanished between the `all_stale_branches` snapshot and here. Under `set -euo
+      # pipefail` with `cleanup_merged_worktrees` invoked BARE, an uncaught non-zero does
+      # not return — it exits the script, skipping `cleanup_orphan_worktree_dirs`,
+      # `cleanup_claude_tmp`, the runaway-process kill and the summary.
+      local last_branch_commit_age
+      last_branch_commit_age=$(git log -1 --format=%ct "refs/heads/$branch" 2>/dev/null || true)
+      if [[ -n "$last_branch_commit_age" ]]; then
+        local _now_b
+        _now_b=$(date +%s)
+        local _delta_b=$(( _now_b - last_branch_commit_age ))
+        # Inside an `if`, never as a bare statement: `(( expr ))` returns rc 1 when the
+        # expression evaluates to 0, which under `set -e` would abort the function. The
+        # existing arm above is safe for the same positional reason, not an intrinsic one.
+        # `< 600` alone: a future-dated commit yields a negative delta, which is already `< 600`.
+        if (( _delta_b < 600 )); then
+          # Distinct wording from the worktree arm so the two are tellable apart in a
+          # terminal, and UNGATED by `verbose`: `verbose` is `[[ -t 1 ]]`, so under
+          # `claude --bg` — the mode this actually runs in — a gated line prints nothing.
+          echo "(skip) $branch - branch ref committed <10min ago or clock-skew (no worktree)"
           continue
         fi
       fi
@@ -2910,6 +3023,44 @@ cleanup_merged_worktrees() {
         continue
       fi
     fi
+
+    # SOLEUR-GUARD-MERGEEVIDENCE-START
+    # Positive merge evidence, evaluated BEFORE the first write (#8400 review).
+    #
+    # `all_stale_branches` unions three sources and only two of them are evidence that the
+    # work is safe:
+    #   * `merged_branches`    — `git branch --merged main`, i.e. a true ancestor.
+    #   * `gh_merged_branches` — GitHub says the PR merged. A SQUASH merge puts the content on
+    #                            main under a NEW sha, so the branch is NOT an ancestor; this
+    #                            is the only evidence available for that cohort, and it is the
+    #                            cohort this repo produces for every PR.
+    #   * `gone_branches`      — the upstream was deleted. That is NOT the claim that the
+    #                            commits are on main, so on its own it licenses nothing.
+    #
+    # An earlier revision asked `git merge-base --is-ancestor` at the DELETE site and
+    # downgraded `-D` to `-d`. Measured, that was wrong twice over. (a) It is false for every
+    # squash-merged branch, so the dominant cohort stopped being reaped. (b) The remote delete
+    # runs FIRST and prunes `refs/remotes/origin/<branch>`, the upstream `-d` relies on — so
+    # `-d` then refused, leaving the remote ref deleted (PR closed), the worktree removed, the
+    # spec and plan archived, the local ref kept, and NO reap sentinel. That is a partial state
+    # downstream of the one irreversible write.
+    #
+    # `-d` is also the wrong instrument: it licenses on HEAD or on a possibly-stale
+    # remote-tracking ref, neither of which is "on main". So the answer is computed here and
+    # acted on here, and the delete below is unconditional `-D` once we own the decision.
+    local _merge_proven=no
+    if [[ $'\n'"$merged_branches"$'\n' == *$'\n'"$branch"$'\n'* ]]; then
+      _merge_proven=yes
+    elif [[ $'\n'"$gh_merged_branches"$'\n' == *$'\n'"$branch"$'\n'* ]]; then
+      _merge_proven=yes
+    fi
+    if [[ "$_merge_proven" != yes ]]; then
+      # `[gone]`-only: the remote vanished but nothing says the commits landed. Skip BEFORE any
+      # write, so no spec is archived, no worktree removed and no remote ref deleted.
+      echo "(skip) $branch - upstream is [gone] but no merge evidence; keeping branch and refs"
+      continue
+    fi
+    # SOLEUR-GUARD-MERGEEVIDENCE-END
 
     # Archive spec directory. Backward-compat for legacy pre-#2815 worktrees that
     # created specs at the bare root. New layout commits the spec inside the
@@ -2950,23 +3101,71 @@ cleanup_merged_worktrees() {
     fi
 
     # Delete remote branch if it still exists (prevents stale remote refs from accumulating)
+    local _remote_deleted=no
     if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
       if git push origin --delete "$branch" 2>/dev/null; then
+        _remote_deleted=yes
         [[ "$verbose" == "true" ]] && echo -e "${BLUE}Deleted remote branch: $branch${NC}"
       fi
     fi
 
-    # Delete local branch
-    if ! git branch -D "$branch" 2>/dev/null; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not delete branch $branch${NC}"
+    # Delete local branch.
+    #
+    # `git branch -D` is a FORCE delete, and `all_stale_branches` is not only merged
+    # branches: a `[gone]` upstream puts an UNMERGED branch in this list too (its remote was
+    # deleted, which is not the same claim as "its commits are on main"). Phase 2 of #8401
+    # newly exposes precisely that cohort — the Devin CLI plain-clone session, where nothing
+    # mints a lease at all — so the ancestry check is folded in here rather than deferred:
+    # the residual it closes is *merged-or-[gone], no lease, no commit in ten minutes* →
+    # remote delete (which closes the PR) then force-delete, the single worst outcome in
+    # this function.
+    #
+    # `--is-ancestor` exits 0 when $branch is reachable from main, 1 when it is not, and
+    # non-zero-other on a bad ref; only the 0 case licenses the force delete, so an
+    # unmeasurable answer fails closed with the rest.
+    # Capture the tip BEFORE deleting it. `git branch -D` prints `Deleted branch X (was <sha>)`
+    # on stdout and the old recovery pointer discarded it, then told the operator to run
+    # `git reflog | grep <branch>` — which after a worktree removal has NO match (the branch
+    # reflog goes with `-D`, the per-worktree HEAD reflog with the worktree), and in the
+    # non-worktree case returns MAIN's tip, so following it recreates the branch at the wrong
+    # commit. The sha belongs in the marker, where it is actually recoverable from.
+    local _tip_sha
+    _tip_sha=$(git rev-parse --short "refs/heads/$branch" 2>/dev/null || echo unknown)
+
+    # `-D`, and the merge evidence above is what licenses it. `-d` is NOT the safer choice
+    # here: it licenses on HEAD or on a remote-tracking ref, and by this point the remote
+    # delete has already pruned the upstream it would have consulted.
+    #
+    # The failure cause is MEASURED, never named. A hard-coded "not fully merged" was wrong for
+    # every `-D` failure (which never refuses for merge reasons) and hid the causes that
+    # actually occur — `cannot delete branch 'X' used by worktree at '…'` (a LIVE session) and
+    # `error: branch 'X' not found`. On a customer CLI the terminal is the only sink, so
+    # discarding git's own words costs the operator the one diagnostic they had (AP-021).
+    local _branch_err _branch_rc
+    _branch_err=$(git branch -D "$branch" 2>&1); _branch_rc=$?
+    if [[ "$_branch_rc" -ne 0 ]]; then
+      # The remote ref is already gone at this point, so say so rather than printing a line
+      # that reads as "nothing was lost".
+      echo "SOLEUR_WORKTREE_REAP_PARTIAL branch=$(_sanitize_marker_field "$branch") local=no remote=$_remote_deleted rc=$_branch_rc"
+      echo "(skip) $branch - local delete failed (remote=$_remote_deleted already deleted): $_branch_err"
+      continue
     fi
 
+    # The single destructive event in this function had no sentinel: `Deleted remote branch:`
+    # is `verbose`-gated, i.e. invisible under `claude --bg`, which is the mode this actually
+    # runs in. Unconditional, on stdout, with a recovery pointer on the summary below.
+    # `_sanitize_marker_field` like every sibling mirrored marker in this file: a branch name
+    # is contributor-authored and this marker egresses at happy-path volume.
+    echo "SOLEUR_WORKTREE_REAPED branch=$(_sanitize_marker_field "$branch") sha=$_tip_sha local=yes remote=$_remote_deleted"
     cleaned+=("$branch")
   done
 
   # Output summary
   if [[ ${#cleaned[@]} -gt 0 ]]; then
     echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
+    # A recovery pointer, once per run rather than once per branch. A deleted local ref is
+    # reflog-recoverable for the gc window; a deleted REMOTE ref also closed its PR.
+    echo "Recover a branch reaped in error with: git branch <branch> <sha>  (the sha= field of its SOLEUR_WORKTREE_REAPED line above)"
 
     # After cleanup, update main checkout so next worktree branches from latest
     # Skip entirely for bare repos -- there is no working tree to update
@@ -2988,20 +3187,72 @@ cleanup_merged_worktrees() {
       # Auto-sync stale on-disk files so the next session reads current versions
       sync_bare_files
     else
-      # Auto-reset stale index/working tree on main checkout.
-      # Direct commits to main are prohibited (hook-enforced), so staged or
-      # unstaged changes are always stale debris from index drift (e.g., fetch
-      # moved HEAD but index was never updated). Reset to HEAD before pulling.
+      # SOLEUR-GUARD-MAINRESET-START
+      # Establish the precondition BEFORE the destructive call, not after it (#8400).
+      #
+      # The reset below is guarded only by the dirty check, i.e. it fires PRECISELY in the
+      # destructive case, while the `main`/`master` test that would justify its premise —
+      # "direct commits to main are prohibited, so a dirty index here is stale debris" —
+      # used to run AFTER it. On a plain clone parked on a feature branch that premise is
+      # false and the reset discards the operator's uncommitted work.
+      #
+      # ONLY the CLEAN off-main case keeps the `checkout main` + `pull`, because skipping those
+      # too would remove the ordinary state of a plain-clone dogfooder (B8).
+      #
+      # An earlier revision said a dirty off-main tree "makes `git checkout main` refuse on its
+      # own, so the destructive step is the only one that needs the guard". MEASURED FALSE:
+      # checkout refuses only when the dirty paths would be OVERWRITTEN. When the modified file
+      # exists on both branches with identical committed content — the ordinary case, editing a
+      # file that also lives on main — checkout SUCCEEDS and carries the uncommitted edit onto
+      # `main`. The next session then sees dirty-on-main and `reset --hard` destroys it. So
+      # gating only the reset deferred the loss by one session instead of preventing it, and
+      # the ungated checkout manufactured the precondition. The tree state is therefore read
+      # once, above, and gates both.
+      #
+      # The reset is KEPT rather than deleted: once this gate establishes the checkout is on
+      # `main`, its premise is true, and deleting it would instead leave the subsequent
+      # `pull --ff-only` failing on the index drift it was added for. Reordering makes the
+      # premise true; it does not make the step gratuitous.
+      #
+      # `|| true` is required for the UNBORN-HEAD case (rc 128), not the detached one:
+      # measured, a detached HEAD prints the literal `HEAD` and exits 0. Under `set -euo
+      # pipefail` with `cleanup_merged_worktrees` invoked BARE, an uncaught non-zero here
+      # would exit the script, taking `cleanup_orphan_worktree_dirs`, `cleanup_claude_tmp`
+      # and the runaway-process kill with it.
+      local current_branch _tree_dirty=no
+      current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
       if ! git -C "$GIT_ROOT" diff --quiet HEAD 2>/dev/null || ! git -C "$GIT_ROOT" diff --cached --quiet 2>/dev/null; then
-        local stale_count
-        stale_count=$(git -C "$GIT_ROOT" diff --cached --stat HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo "0")
-        echo -e "${YELLOW}Resetting stale main checkout ($stale_count staged files)${NC}"
-        git -C "$GIT_ROOT" reset --hard HEAD >/dev/null 2>&1
+        _tree_dirty=yes
       fi
-      local current_branch
-      current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      if [[ -n "$current_branch" && ( "$current_branch" == "main" || "$current_branch" == "master" ) ]]; then
+        # Auto-reset stale index/working tree on main checkout.
+        # Direct commits to main are prohibited (hook-enforced), so staged or unstaged
+        # changes here are stale debris from index drift (e.g. fetch moved HEAD but the
+        # index was never updated). Reset to HEAD before pulling.
+        if [[ "$_tree_dirty" == yes ]]; then
+          local stale_count
+          stale_count=$(git -C "$GIT_ROOT" diff --cached --stat HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo "0")
+          echo -e "${YELLOW}Resetting stale main checkout ($stale_count staged files)${NC}"
+          git -C "$GIT_ROOT" reset --hard HEAD >/dev/null 2>&1
+        fi
+      else
+        # A plain human line on stdout, NOT a SOLEUR_* sentinel. A non-bare clone parked on
+        # a feature branch is the ORDINARY developer state, and this file's own doctrine
+        # reserves sentinels for anomalous ones — a sentinel here would page on the happy
+        # path and would owe a telemetry disposition it does not earn. stdout rather than
+        # stderr for the usual reason: stderr is invisible under `claude --bg`.
+        # Empty is an UNMEASURED state and is reported as such rather than named (AP-021).
+        echo "Skipped stale-index reset: checkout is on '${current_branch:-<unreadable>}', not main/master"
+      fi
+      # SOLEUR-GUARD-MAINRESET-END
       if [[ "$current_branch" != "main" && "$current_branch" != "master" ]]; then
-        git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
+        if [[ "$_tree_dirty" == yes ]]; then
+          # Do NOT switch branches under uncommitted work: checkout would carry it onto `main`,
+          # where the next run's reset would discard it. Leave the operator where they are.
+          echo "Skipped main checkout: uncommitted changes on '${current_branch:-HEAD}' (switching would carry them onto main)"
+        else
+          git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
+        fi
       fi
       local pull_output
       if pull_output=$(git -C "$GIT_ROOT" pull --no-tags --ff-only origin main 2>&1); then
