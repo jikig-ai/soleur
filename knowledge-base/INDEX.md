@@ -443,6 +443,7 @@
 - [A sampled SEO 301 redirect alarm fired](engineering/operations/runbooks/seo-redirect-alarm.md)
 - [Ship-Merge Trigger UX](engineering/operations/runbooks/ship-merge-trigger.md)
 - [skill security scan required check](engineering/operations/runbooks/skill-security-scan-required-check.md)
+- [A CI-skip directive reached the squash commit](engineering/operations/runbooks/squash-ci-directive-skip.md)
 - [ssh fail2ban unban](engineering/operations/runbooks/ssh-fail2ban-unban.md)
 - [stripe live activation](engineering/operations/runbooks/stripe-live-activation.md)
 - [stripe live legal checklist](engineering/operations/runbooks/stripe-live-legal-checklist.md)
