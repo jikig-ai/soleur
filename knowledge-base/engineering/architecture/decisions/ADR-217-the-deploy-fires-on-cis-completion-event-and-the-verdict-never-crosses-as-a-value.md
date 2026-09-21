@@ -382,6 +382,20 @@ form.
    gap #5806 flagged — so the misleading-announcement scenario becomes *easier*
    to hit silently, with only the 207-minute drift check behind it.
 
+> **Addendum (2026-09-21, #8492).** Consequence 7 is necessary but not sufficient.
+> Disambiguating by event picks the deploy ARM; it does not pick the MERGE. A
+> `workflow_run` run's `head_sha` is `main`'s tip when the run fired, not the commit
+> it deploys, so a `head_sha=<merge>` query misses the real arm when `main` moved
+> before the merge's CI completed (#8297) and returns the previous merge's arm when
+> that arm fired after `main` reached the merge (#8391). Which merge a deploy-arm run
+> delivered comes from the SHA its `resolve-target` job checked out
+> (`depth=1 origin <sha>` in that job's log, fallback `resolving deploy target for
+> <sha>`), and a later run whose SHA descends from the merge also delivers it.
+> `plugins/soleur/scripts/deploy-arm.sh` is the single place this is decided; ship
+> and postmerge call it rather than restating a selector. It depends on the
+> `actions/checkout` fetch line and on the workflow's echo, both pinned by static rows
+> in `plugins/soleur/test/deploy-arm.test.sh`.
+
 ## Alternatives Considered
 
 **Read the GitHub Release object for the SHA instead of the job conclusion.**
