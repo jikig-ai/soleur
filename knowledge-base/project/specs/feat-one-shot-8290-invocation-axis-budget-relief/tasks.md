@@ -6,7 +6,7 @@ lane: cross-domain (the spec has no valid lane, so the default fails closed).
 ## Phase 0 — Preconditions and the architecture-deciding probe (FIRST)
 
 - [ ] 0.1 Re-measure the budget (`2561/2561`), `B_ALWAYS` (`lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1`), and the claude/devin/codex versions. Record them in `b5-eval-results.md`.
-- [ ] 0.2 W0 probe plugin under `w0/probe8290/`:
+- [ ] 0.2 W0 probe plugin under `w0/probe8290/`. Record its sha256. Run each headless probe with `--disallowedTools Bash,Write,Edit`, run tmux under a `kill-session` trap, and require `gitleaks detect --no-git --source w0/` before committing:
   - [ ] a. headless slash runs
   - [ ] b. the Skill tool refuses
   - [ ] d. the tmux interactive TUI autocompletes and runs
@@ -29,7 +29,7 @@ lane: cross-domain (the spec has no valid lane, so the default fails closed).
   - `tool-selection-baseline.txt:10`
 - [ ] 1.4 One-time read of the exempt intra-family group (`flag-create:41,72`, `cron-delete:37`). Rewrite operative lines and record them in the PR body.
 - [ ] 1.5 Fill the ack table: one (file, skill) row per hit, each `doc-mention` or `operator-handoff`.
-- [ ] 1.6 Budget filter in `components.test.ts:150-170`. Ratchet `SKILL_DESCRIPTION_WORD_BUDGET` to the measured total and add the line-21 comment. Add keep-pins for trigger-cron, invoice and flag-list.
+- [ ] 1.6 Budget filter in `components.test.ts:150-170`. Ratchet `SKILL_DESCRIPTION_WORD_BUDGET` to the measured total and add the line-21 comment. Add keep-pins for trigger-cron, invoice and flag-list as their own `MUST_STAY_INVOCABLE` exact-set pin (not `ACKED_CROSS_ROOT_DUPES`).
 - [ ] 1.7 Real-plugin W0:
   - [ ] `/soleur:cron-list` runs
   - [ ] the Skill tool refuses cron-list
@@ -37,7 +37,11 @@ lane: cross-domain (the spec has no valid lane, so the default fails closed).
   - [ ] tmux TUI `/soleur:flag-cr`
   - [ ] W0-f after
 - [ ] 1.8 Drive the Guard 1 matrix (M1, M2, M5-M9, H2-H5) on a scratch copy and record each row.
-- [ ] 1.9 File a follow-up issue for the typed-yes TTY gap (`delete.sh:146` and siblings), with verified labels and milestone.
+- [ ] 1.9 File a follow-up issue for the pre-existing agent-bypass surface:
+  - `delete.sh:146`, `create.sh:116` and `set-role.sh:109`, which accept piped stdin;
+  - `flip.sh --confirmed`.
+
+  State that `[[ -t 0 ]]` is not the fix. The proposed control is a PreToolUse Bash hook keyed on a turn that began with `/soleur:<skill>`. Verify the labels and milestone.
 
 ## Phase 2 — skill-creator (B6)
 
@@ -67,17 +71,17 @@ lane: cross-domain (the spec has no valid lane, so the default fails closed).
   - `rule-phrasing-bodies.json` (pinned prohibition, sha256, positive; tags byte-identical)
   - `rule-phrasing.cjs` (chat-format, system = corpus, hash-lock)
   - `tasks/rule-phrasing.jsonl` (24 rows)
-  - `measure-rule-compliance.cjs`
-  - `rule-phrasing-verdict.cjs`
+  - `measure-rule-compliance.cjs` (house shape: `pass:true` plus `score`/`reason`, reason prefix `rule-(non)compliant`)
+  - `rule-phrasing-verdict.cjs` (pure `verdict()`, `require.main` guard, JSON on stdout, exit 1 fail-closed, exit 2 on bad arguments)
   - `promptfooconfig-rule-phrasing.yaml` (labelled arms)
-- [ ] 3.2 Battery `test/rule-phrasing.test.sh`: E0-E9, the sample table, and the house anti-vacuity sentinel verbatim. `git add`, then run it.
+- [ ] 3.2 Battery `test/rule-phrasing.test.sh`: E0-E9 and the sample table. It uses the house floor shape from `lint-rejected-register.test.sh:1110-1126`: a call-site counter, a single `MIN_ASSERTIONS=${EXPECTED_ASSERTIONS:-1}` assignment directly above the `if`, the verbatim `FATAL: anti-vacuity:` printf to stderr followed by `exit 1` (never through `fail()`), and a passes+fails==cases accounting check. `git add`, then run it.
 - [ ] 3.3 Pre-spend:
   - [ ] arm diffs (AC-E2)
   - [ ] `B_ALWAYS` fit with the positive bodies
   - [ ] `promptfoo validate config`
   - [ ] no registry marker outside eval-harness
   - [ ] `registry-completeness` green
-- [ ] 3.4 Cost estimate against the $60 cap (else `--repeat 2`). Run `ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval … --repeat 3 -o <spec-dir>/b5-eval-raw.json`.
+- [ ] 3.4 Cost estimate against the $60 cap (else `--repeat 2`). Run `ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval … --repeat 3 -o "${XDG_CACHE_HOME:-$HOME/.cache}/soleur-8290/b5-eval-raw.json"`. The raw grid stays outside the repo. Commit only `b5-eval-results.md`, and only after gitleaks passes.
 - [ ] 3.5 Run the verdict module and record everything in `b5-eval-results.md` (module sha256, truncation rates, tokens and cost).
 - [ ] 3.6 Branch on the verdict:
   - EXTEND → follow-up PR (bodies + `--write` + WORM acks, @deruelle review, no auto-merge) and an issue for the other 6.

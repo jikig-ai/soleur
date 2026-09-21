@@ -24,7 +24,7 @@ noted) and the alternative the operator may choose instead.
 ## DC-3 (Taste) — Ratchet `SKILL_DESCRIPTION_WORD_BUDGET` down vs keep slack
 
 - **Default applied:** lower the cap to the measured post-flip total (2561 − 266 = 2295 if nothing concurrent lands), which keeps the zero-headroom convention and banks the relief.
-- **Alternative:** keep 2561 and leave 299 words of headroom for future skills.
+- **Alternative:** keep 2561 and leave 266 words of headroom for future skills.
 
 ## DC-4 (User-Challenge) — Flip 12, not the 16 the issue lists
 

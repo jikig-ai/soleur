@@ -14,6 +14,57 @@ brand_survival_threshold: aggregate pattern
 
 # refactor(skills): invocation-axis budget relief + positive-phrasing rule rewrite (eval-gated)
 
+## Enhancement Summary (deepen-plan)
+
+**Deepened on:** 2026-09-21. **Halt gates:** 4.6 pass (`aggregate pattern`). **4.7 FIRED and was
+fixed**: the Files-to-Edit include `.ts`/`.cjs` code, so the prose-only Observability note was replaced
+with the 5-field schema and the telemetry was emitted. 4.8 pass (no PAT shapes). 4.9 skip (no UI).
+4.10 skip (no store). 4.11 pass (`lint-guard-contract.py`: 2 entries, green; the assemblies are
+structural, derived rather than member lists).
+
+**Agents in the deepen pass:**
+
+- a verify-the-negative and post-edit self-audit sweep (standard tier);
+- `soleur:engineering:review:security-sentinel`;
+- `soleur:engineering:research:git-history-analyzer`;
+- `soleur:engineering:review:pattern-recognition-specialist` (precedent diff).
+
+These follow the 9-seat plan-review panel, the Phase 2.5 domain leaders (CTO, CPO, COO, CLO) and the
+Step 4.5 strong-model consult.
+
+### Key improvements
+
+1. **Observability**: a 5-field schema. The liveness signal is the Guard 1/budget CI tests. The probe
+   is `grep -c '^disable-model-invocation: true' .../flag-create/SKILL.md` → `1`, with a W0-STOP
+   alternative.
+2. **Precedent alignment**, with every change citing its file:line precedent:
+   - floors become named constants (`LIVE_MIN_FILES` style);
+   - count-equality runs against a *separate* literal pathspec list;
+   - keep-pins move to their own `MUST_STAY_INVOCABLE` set rather than `ACKED_CROSS_ROOT_DUPES`,
+     which is pinned to go/help/sync and asserts `user-invocable: false`;
+   - the measure script takes the house `pass`/`score`/`reason` shape;
+   - the verdict CLI takes the `verdict.cjs` + `eval-gate.cjs` exit-code shape;
+   - the battery floor takes the exact `lint-rejected-register.test.sh:1110-1126` shape, so
+     `guard-vacuity-floor` scores it FIRES.
+3. **Security.** The flip is recorded as a context-budget measure, **not a security control**. The
+   pre-existing agent-bypass surface is scoped into a tracked follow-up: 3 stdin-fed typed-yes prompts,
+   plus `flip.sh --confirmed`, with the explicit warning that `[[ -t 0 ]]` is not the fix. The raw
+   eval grid stays out of the repo. `gitleaks` gates `w0/` and the results. Probes run with
+   `--disallowedTools Bash,Write,Edit` and a tmux kill trap.
+4. **Contradiction removed.** The Cut List's "no committed B5 fixture test" is marked reversed,
+   matching the R10 battery.
+
+### Verified live (no drift found)
+
+- Every cited PR, issue, ADR and peer path, all resolved.
+- ADR-236 is free across every `origin/*` ref.
+- The three peer blobs return 200 at `c55ee46`.
+- `B_ALWAYS=42920`, which makes ADR-151's recorded figure stale by +373 B.
+- The G1 and G3 scans find 0 hits today.
+- `schedule`'s description already covers listing and deleting.
+- The new battery auto-registers through `test-all.sh:79`.
+
+
 ## Overview
 
 Bundle 4 of 5 from the mattpocock/skills peer-plugin audit. Three independent deliverables share one
@@ -83,10 +134,10 @@ skills that remain.
 - **Flip `trigger-cron`** → P1 → cut, because it would break P2. The always-loaded rule `hr-no-dashboard-eyeball-pull-data-yourself` (`AGENTS.rules.md:56`) lists `soleur:trigger-cron` in the agent's own pull-it-yourself toolchain. `incident/SKILL.md:43` (Phase 0), `gdpr-gate/SKILL.md:270` (step 5) and `reproduce-bug/SKILL.md:68` do the same. This is a model-invoked skill by the peer's own test: *"could the model usefully reach for this autonomously?"* The repo-research pass classified it SAFE. The subject sweep (carry-forward error 1) reversed that.
 - **Flip `invoice`** → P1 → cut, because it would break P2 on the web product. `invoice` is the founder's get-paid capability (ADR-107). The web Command Center reaches every skill **only** through the model: `apps/web-platform/server/prompt-injection-wrap.ts:25` ends each user turn with *"Invoke /soleur:go on the user's intent."* A user-invoked skill is therefore unreachable from the web product. The other 13 candidates operate Soleur's own infrastructure (Flagsmith, Doppler `soleur`, Cloudflare/Hetzner/GitHub provisioning, the admin allowlist, `users.role`). The two cron verbs (`cron-list`, `cron-delete`) stay reachable through `soleur:schedule`, which carries the identical list/delete steps (`schedule/SKILL.md:732,771`).
 - **Flip `flag-list`** → P1 → cut at plan-review (R1). It is a read-only drift audit that the agent must be able to pull itself under `hr-no-dashboard-eyeball-pull-data-yourself`, and it is the blast-radius step `flag-delete` calls.
-- **Rewrite each flipped description into a human-facing one-liner** (peer's SKILL-MECHANICS advice) → P1 → cut. P1 is fully bought by the flag, since the description leaves the listing whatever its wording. A rewrite is churn in 13 files for no measured property.
+- **Rewrite each flipped description into a human-facing one-liner** (peer's SKILL-MECHANICS advice) → P1 → cut. P1 is fully bought by the flag, since the description leaves the listing whatever its wording. A rewrite is churn in 12 files for no measured property.
 - **A repo-wide dangling-reference guard for all skills** → P7 → cut. A lexical sweep over all skills is dominated by cross-skill false positives (measured: 30+ hits, mostly `../other-skill/references/…`). P7 is scoped to skill-creator, and one work-time grep AC buys it.
 - **Write `use-xml-tags.md`** → P7 → cut. The markdown decision (102/102 measured) makes the XML reference's subject the thing being retired. Delete the four pointers instead.
-- **A committed deterministic fixture test for the B5 eval** → P5 → cut. The eval is a one-shot measurement. Its anti-confound property ("the arms differ only in the target rule bodies") is bought by one recorded `diff` command (AC-E2). A new `*.test.sh` would also enter `guard-vacuity-floor`'s population (carry-forward error 8) and buy nothing durable.
+- ~~**A committed deterministic fixture test for the B5 eval** → P5 → cut.~~ **Reversed at plan-review (R10, deepen pattern-review 1).** The verdict decides whether a public record is written, so its precedence is pinned by the committed battery `test/rule-phrasing.test.sh`. That battery follows the house `test/*.test.sh` style, auto-registers via `test-all.sh:79` `plugins/soleur/skills/*/test/*.test.sh`, and carries the house floor shape so `guard-vacuity-floor` can construct its mutant (carry-forward error 8). The arm anti-confound check stays a recorded `diff` (AC-E2).
 - **Register the B5 eval in `gated-skills.json`** → P5 → cut. There is no source block to gate: the rules live in `AGENTS.rules.md`, outside the registry's `plugins/soleur/` scan root. Adding `eval-gate:block` markers there would cost always-loaded bytes. The `tool-selection` measurement-only target (not in `gated-skills.json`) is the precedent.
 - **Attribution comment inside `AGENTS.rules.md`** (only if B5 extends) → P8 → cut. The file would take a *technique*, not peer prose. A comment there costs `B_ALWAYS` bytes. NOTICE and the ADR carry the credit.
 
@@ -221,8 +272,9 @@ None. No open scope-out names a file this plan touches.
   rephrased always-loaded rule steers every session slightly worse on the behaviour it governs,
   with no error anywhere.
 - **If this leaks, the user's workflow is exposed via:** nothing new. No data surface, credential,
-  or network path is added or changed. The B5 eval sends synthetic scenario text and excerpts of the
-  public `AGENTS.rules.md` to the Anthropic API under the operator's own key. That is the harness's
+  or network path is added or changed. The B5 eval sends synthetic scenario text plus the **full**
+  public `AGENTS.md` + `AGENTS.rules.md` corpus (~43 KB; its only email is `noreply@anthropic.com`, and
+  it holds no secrets) to the Anthropic API under the operator's own key. That is the harness's
   documented, opt-in use.
 - **Brand-survival threshold:** `aggregate pattern`. Failure (c) is by nature a diffuse, many-session
   degradation, and (a) and (b) hit operator tooling, not a tenant's data. No single-user incident is
@@ -287,11 +339,48 @@ written **after** the B5 verdict (Phase 3) so it records a measured outcome.
 
 ## Observability
 
-Not triggered (plan Phase 2.9). The Files-to-Edit contain no path under `apps/*/server|src|infra/`
-or `plugins/*/scripts/`, and no new infrastructure surface. The deliverables are frontmatter,
-markdown references, a bun test, eval fixtures and ADR text. The failure modes above surface as a
-red bun test (Guard 1), a Skill-tool refusal visible in the transcript (probe-verified wording), or
-a measured eval verdict. None has a runtime liveness signal to declare.
+The surface this change creates has no runtime process. It consists of shipped skill frontmatter, a
+bun test guard, and an opt-in eval. So the "liveness" of the change is the CI gate that fails when it
+is broken, and the declared probe reads the shipped artifact itself. (deepen-plan Phase 4.7 fired: the
+Files-to-Edit include `.ts`/`.cjs` code, so the earlier prose-only "not triggered" note was
+non-compliant.)
+
+```yaml
+liveness_signal:
+  what: "bun test plugins/soleur/test/invocation-axis.test.ts (Guard 1) and the components.test.ts budget test, run by the ci.yml test matrix (scripts/test-all.sh shards) and by the lefthook plugin-component-test hook"
+  cadence: "every PR and every push to main (CI), every commit touching plugins/soleur (lefthook)"
+  alert_target: "the PR's required CI check turns red; on main, the existing post-merge CI failure notification"
+  configured_in: ".github/workflows/ci.yml test matrix (lines ~881-912, scripts/test-all.sh per shard) and lefthook.yml:357 plugin-component-test"
+error_reporting:
+  destination: "CI job log + the Guard 1 failure message (file:line, skill, form, allowed reasons, two exits, ADR-236 pointer)"
+  fail_loud: "yes: an unacked referrer, a stale ack, a dead glob (per-glob floor), scanned-count != ls-files count, or a pinned skill gaining the key each exit non-zero"
+failure_modes:
+  - mode: "a model-read surface starts directing the agent to invoke a user-invoked skill"
+    detection: "Guard 1 unacked-referrer test (G1-G4 :(glob) pathspecs)"
+    alert_route: "red required CI check on the PR that introduces it"
+  - mode: "a skill that must stay model-invocable (trigger-cron, invoice, flag-list, go/help/sync) gains disable-model-invocation"
+    detection: "Guard 1(c) keep-pins in components.test.ts"
+    alert_route: "red required CI check"
+  - mode: "Claude Code upgrade changes flag semantics (e.g. upstream #92769 shape: flagged skill hidden from the user)"
+    detection: "soleur:model-launch-review per-release checklist re-runs the W0 probe recorded in ADR-236; soleur:postmerge repeats the tmux TUI capture after this release"
+    alert_route: "action-required issue filed by those skills; ADR-236 rollback trigger (revert the 12 keys)"
+  - mode: "an unattended run hits a Skill-tool refusal for a user-invoked skill"
+    detection: "the harness tool_use_error text 'cannot be used with Skill tool due to disable-model-invocation' in the run transcript"
+    alert_route: "the run's own action-required issue per the ADR-236 headless-refusal policy"
+  - mode: "the B5 eval run is truncated, errors, or exceeds the spend cap"
+    detection: "rule-phrasing-verdict.cjs precedence step 1 returns ABORTED"
+    alert_route: "b5-eval-results.md records ABORTED; one rerun, else B5 split to its own issue"
+logs:
+  where: "CI job logs (GitHub Actions retention); W0 transcripts and eval results committed under knowledge-base/project/specs/feat-one-shot-8290-invocation-axis-budget-relief/"
+  retention: "CI per the repo's Actions retention setting; committed artifacts permanently in git"
+discoverability_test:
+  command: "grep -c '^disable-model-invocation: true' plugins/soleur/skills/flag-create/SKILL.md"
+  expected_output: "1"
+```
+
+Under W0-STOP the flip does not land, and `discoverability_test` then prints `0`. In that profile the
+probe is replaced by `grep -c 'status: proposed' knowledge-base/engineering/architecture/decisions/ADR-236-human-only-skills-are-user-invoked.md`,
+with expected output `1`.
 
 ## Encryption Posture / Infrastructure (IaC) / GDPR
 
@@ -335,9 +424,13 @@ edit must also move ADR-236's list and lower the cap, and the failure message sa
 *Referrer population.* Every entry is a **`:(glob)` pathspec**. Plain git pathspecs do not recurse
 `**`, and measured: `git ls-files 'knowledge-base/engineering/operations/runbooks/**/*.md'` → 0, while the
 `:(glob)` form → 79. Git has no `{a,b}` brace expansion, so each alternative is its own pathspec
-(Kieran P1-6). Each glob carries a floor of at least one file examined. The floors are computed from `git ls-files <glob>` and asserted through `expect`.
-The test also asserts that the scanner's own scanned-file count equals the `ls-files` count, so the
-two cannot silently diverge. The globs:
+(Kieran P1-6). The floors are **named constants**, never derived from the population they guard.
+The precedent is `workflow-file-size.test.ts:44` `LIVE_MIN_FILES`, one per glob, for example
+`MIN_RUNBOOK_FILES`. A count-equality test (precedent: `harness-parity-tree.test.ts:89-106`) compares the
+scanner's examined-file count against `git ls-files` run on a **separate literal pathspec list**, not the
+scanner's own glob constant. If both sides shared one constant, narrowing a glob would move both and
+stay green (deepen pattern-review 3). Files are enumerated with
+`execFileSync("git",["ls-files","--full-name","--",spec])` (tree `:34-38`). The globs:
 
 - **G1 (always loaded):** `AGENTS.md`, `AGENTS.rules.md`.
 - **G2 (what the plugin ships and the model reads):** separate pathspecs for
@@ -394,7 +487,7 @@ top of the `describe` block.
 | # | Edit (to the suite, not the guard) | Expected |
 |---|---|---|
 | H2 | delete every ack row | RED with the full unacked list, which proves the table is consulted |
-| H3 | stub the scanner so it returns zero files | RED from the scanned-count = `ls-files`-count assertion, not from the hit list |
+| H3 | stub the scanner so it returns zero files (and, separately, narrow one scanner glob while the literal list is unchanged) | RED from the scanned-count = `ls-files`-count assertion, not from the hit list |
 | H4 | must-PASS, non-canonical: runbook line `The operator types /soleur:provision-hetzner <slug>` with an `operator-handoff` row | GREEN |
 | H5 | must-PASS: `plugins/soleur/skills/flag-create/SKILL.md` naming `soleur:flag-set-role` | GREEN (intra-flipped-family exemption) |
 
@@ -449,8 +542,26 @@ written:
   `AGENTS.rules.md`. It **throws** if a live target body's sha256 differs from the fixture, so a rerun
   cannot silently compare stale text (CTO devex 5, spec-flow 8).
 - **Tasks.** `tasks/rule-phrasing.jsonl` holds 24 generation tasks.
-- **Scoring.** `scripts/measure-rule-compliance.cjs` scores only the task's own rule observable and
-  always passes, carrying `metric: rule_compliance`.
+- **Scoring.** `scripts/measure-rule-compliance.cjs` follows the shape of `measure-classification.cjs:17-29`:
+  `pass: true` plus `score` and `reason`, with no `metric` field (there is none in the house shape). It
+  scores only the task's own rule observable. The reason prefix is `rule-compliant` or
+  `rule-noncompliant`, so it parses the way `eval-gate.cjs:137` parses `classification-(in)?correct`.
+- **Verdict CLI shape** (precedent `verdict.cjs:132` + `eval-gate.cjs:45-70,312`):
+  - a pure exported `verdict(json)`;
+  - a `require.main` guard;
+  - one-line JSON output on stdout;
+  - exit 1 fail-closed via `die()`, and exit 2 on bad arguments.
+- **Battery floor shape** (precedent `plugins/soleur/test/lint-rejected-register.test.sh:1110-1126`):
+  - a call-site case counter incremented in the `X=$((X + 1))` shape;
+  - `MIN_ASSERTIONS=${EXPECTED_ASSERTIONS:-1}` as ONE simple assignment directly above the floor `if`;
+  - the floor enforced by `printf '\nFATAL: anti-vacuity: only %s assertion(s) executed, floor is %s. The battery ran but did not assert.\n' ... >&2; exit 1`, and never through `fail()` (ADR-193);
+  - a `passes + fails == cases` accounting check.
+
+  With that shape, `guard-vacuity-floor.test.sh:531` can slice a mutant, so the floor scores FIRES,
+  not CONSTRUCTION.
+- **JS chat prompts are a first use.** Every existing config uses `file://prompts/*.txt`, so no
+  `.cjs` chat-array prompt exists in eval-harness yet. The README row names it as a first use. Its
+  gates are `promptfoo validate` plus a `node -e` render.
 - **Verdict.** The committed module `scripts/rule-phrasing-verdict.cjs` exports `verdict(json)` and a
   CLI. It replaces the pasted one-liner (test-design finding 1). It applies checks in a fixed
   **precedence** (test-design finding 2):
@@ -643,7 +754,7 @@ control.** It measured the opposite of the peer's claim, which is about *generat
     paired clause** (the peer's own allowance).
   - *none*: the four body lines **and** their `AGENTS.md` index pointers removed.
   - The ids are immutable and stay in the index in both treated arms. So a positive body still travels
-    with a `hr-never-…` slug, and the A/B holds that confound identical instead of pretending it away.
+    with a `hr-never-git-stash-in-worktrees`-style slug, and the A/B holds that confound identical instead of pretending it away.
 - **Fixture** (`prompts/rule-phrasing-bodies.json`). For each id it pins the prohibition body verbatim,
   that body's sha256, and the positive body. The generator refuses to run if a live body's hash differs.
   This keeps the eval re-runnable after any later edit, including an EXTEND follow-up. Draft positive
@@ -667,7 +778,7 @@ control.** It measured the opposite of the peer's claim, which is about *generat
     `plugin update` no-op while reporting success (#7471)."*
 - **Scoring** (Kieran P1-5). `scripts/measure-rule-compliance.cjs` follows the house
   `measure-classification.cjs` shape: it always returns `pass: true`, carries
-  `metric: rule_compliance`, and dispatches on `vars.rule` so only the task's own rule observable
+  `score`/`reason` (reason prefix `rule-(non)compliant`), and dispatches on `vars.rule` so only the task's own rule observable
   scores it. Each arm carries an explicit promptfoo `label:` (`prohibition`/`positive`/`none`), so
   arm identity never depends on file order. `ANTHROPIC_MAX_TOKENS=300` is set in the run environment,
   because `models.generated.json` is a string list and cannot carry config. The per-arm truncation
@@ -774,7 +885,7 @@ for `ship` to render and file.
   - `prompts/rule-phrasing.cjs`: three chat-format arm functions over the live corpus, with a hash-lock check
   - `prompts/rule-phrasing-bodies.json`: each id → the pinned prohibition body, its sha256, and the positive body
   - `tasks/rule-phrasing.jsonl`: 24 rows of `{vars:{rule, input}}`
-  - `scripts/measure-rule-compliance.cjs`: the per-rule observable, returning `pass: true` with `metric: rule_compliance`
+  - `scripts/measure-rule-compliance.cjs`: the per-rule observable, returning `pass: true` with `score`/`reason` (house shape)
   - `scripts/rule-phrasing-verdict.cjs`: `verdict(json)` plus a CLI, with the fixed precedence
   - `test/rule-phrasing.test.sh` and `test/fixtures/rule-phrasing/*.json`: E0-E9 plus the observable sample table
 - Under `knowledge-base/project/specs/feat-one-shot-8290-invocation-axis-budget-relief/` (persistent paths, never `/tmp`):
@@ -804,8 +915,11 @@ for `ship` to render and file.
 - `plugins/soleur/skills/eval-harness/prompts/tool-selection-baseline.txt:10`: drop the three flipped names.
 - `plugins/soleur/test/components.test.ts`:
   - the budget filter and the ratcheted cap (`:21`, `:150-170`);
-  - keep-pins for `trigger-cron`, `invoice` and `flag-list`, placed beside the existing `go`/`help`/`sync`
-    pins (`:1329-1346`).
+  - keep-pins for `trigger-cron`, `invoice` and `flag-list` as their **own** `MUST_STAY_INVOCABLE` set
+    with its own exact-set pin, placed next to `:1329`. It asserts only
+    `fm["disable-model-invocation"]` `toBeUndefined()`. They must **not** join `ACKED_CROSS_ROOT_DUPES`:
+    that set is pinned to exactly `go`/`help`/`sync` at `:1303`, and at `:1344` it also asserts
+    `user-invocable === false`, which these three do not carry (deepen pattern-review 2).
 - `plugins/soleur/skills/skill-creator/`:
   - `SKILL.md`: the reference index (`:257-267`);
   - `references/official-spec.md`: the frontmatter rows, sourced from the Claude Code docs;
@@ -865,8 +979,12 @@ ratchet (advisor). Every artifact goes under
    - the budget one-liner (expect `2561 / 2561`);
    - `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` (expect `B_ALWAYS=42920`);
    - `claude --version`, `devin --version` and `codex --version`.
-2. **W0 on the throwaway probe plugin**, rebuilt under `w0/probe8290/`, each case in a clean context
-   (`--setting-sources project`, stdin `< /dev/null`):
+2. **W0 on the throwaway probe plugin**, rebuilt under `w0/probe8290/`. Record the probe's sha256 in
+   `w0/`. Run each case in a clean context (`--setting-sources project`, stdin `< /dev/null`). Every
+   headless probe runs with `--disallowedTools Bash,Write,Edit` and a non-bypass permission mode, because
+   `--plugin-dir plugins/soleur` also runs the plugin's own hooks (security-sentinel LOW). Every tmux
+   session is created under a `trap 'tmux kill-session -t w0' EXIT`. `gitleaks detect --no-git --source w0/`
+   must pass before any W0 artifact is committed.
    - **a.** A headless user slash, `/probe8290:flagged`, runs.
    - **b.** "Use the Skill tool to invoke probe8290:flagged" is refused with `disable-model-invocation`.
    - **d. Interactive TUI** (CPO C1, CTO 6). Start `claude --plugin-dir <probe>` in a detached `tmux`
@@ -886,7 +1004,9 @@ ratchet (advisor). Every artifact goes under
    - **Stop rule.** If a or d fails, or e is STOP, apply the **W0-STOP profile** (spec-flow P0-1):
      - B6 and B5 proceed, along with the ADR-151 addendum, which still records `B_ALWAYS` Δ = 0.
      - No frontmatter flip, no Guard 1, no D2 ratchet, and the `help.md`/`go.md` notes are left out.
-     - ADR-236 is written as `status: proposed`, with the evidence and a tracking issue.
+     - ADR-236 is written as `status: proposed`, with the evidence and a tracking issue. The template
+       lists only `active|superseded`, so cite the precedent ADR-131 and ADR-220, which use
+       `proposed`.
      - The "two loads" section of `authoring-levers.md` says "flip deferred — see #<tracking>".
      - Frontmatter `closes: 8290` → `refs: 8290`, and the PR body says `Ref #8290`.
 3. **Re-run the subject sweep.** Run `git grep -nw <name>` for each of the 12, over every Guard 1
@@ -915,9 +1035,19 @@ ratchet (advisor). Every artifact goes under
 6. `bun test plugins/soleur/test/invocation-axis.test.ts plugins/soleur/test/components.test.ts`.
    Then drive Guard 1's matrix on a scratch copy: M1, M2, M5-M9 and H2-H5, one at a time. Observe each
    named test go RED or GREEN as tabled, restore, and record the outcomes in the PR body.
-7. File the follow-up issue for the mutating scripts' TTY gap (`delete.sh:146`, plus any sibling
-   typed-yes prompt with no `[[ -t 0 ]]`). Check the labels with `gh label list` and take the milestone
-   from `knowledge-base/product/roadmap.md`.
+7. File the follow-up issue for the **pre-existing** agent-bypass surface of the operator scripts
+   (deepen security-sentinel HIGH). It covers:
+   - `flag-delete/scripts/delete.sh:146`, `flag-create/scripts/create.sh:116` and
+     `user-set-role/scripts/set-role.sh:109`, whose typed-yes prompts accept piped stdin;
+   - `flag-set-role/scripts/flip.sh --confirmed`, which skips its prompt for "agent-driven use".
+
+   The issue must say that a `[[ -t 0 ]]` check is **not** the fix, because Claude's Bash tool never
+   has a TTY and the check would also break the legitimate typed path. The proposed control is a
+   PreToolUse Bash hook that denies `plugins/soleur/skills/<flipped>/scripts/*` and `--confirmed`
+   unless the current turn began with `/soleur:<that-skill>`, detected by a UserPromptSubmit marker.
+   Verify labels with `gh label list`, and take the milestone from `knowledge-base/product/roadmap.md`.
+   The flip itself neither creates nor closes this gap. ADR-236 states that the invocation axis is a
+   **context-budget and discoverability** measure, **not a security control**.
 
 ### Phase 2 — skill-creator (B6)
 
@@ -960,8 +1090,8 @@ ratchet (advisor). Every artifact goes under
    call carries about 12k system tokens, about **7.8M input tokens** in total, with
    `ANTHROPIC_MAX_TOKENS=300`. **Pre-registered spend cap: $60**, with prices looked up at run time.
    If the estimate exceeds it, run `--repeat 2` and keep all three models.
-5. `ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o <spec-dir>/b5-eval-raw.json`
-6. `node plugins/soleur/skills/eval-harness/scripts/rule-phrasing-verdict.cjs <spec-dir>/b5-eval-raw.json`
+5. `ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o "${XDG_CACHE_HOME:-$HOME/.cache}/soleur-8290/b5-eval-raw.json"`. The raw grid is several MB of prompts and responses, so it lives **outside the repo** in a persistent cache and is never committed (security-sentinel MEDIUM). Only the reduced `b5-eval-results.md` is committed, after `gitleaks detect --no-git --source <spec-dir>` passes. `ANTHROPIC_API_KEY` comes from the environment only, never from a promptfoo config field
+6. `node plugins/soleur/skills/eval-harness/scripts/rule-phrasing-verdict.cjs "${XDG_CACHE_HOME:-$HOME/.cache}/soleur-8290/b5-eval-raw.json"`
    writes the verdict and every intermediate value into `b5-eval-results.md`, along with the module's
    sha256, the per-arm truncation rates, and the tokens and cost.
 7. **Branch on the verdict:**
@@ -1055,7 +1185,7 @@ the evidence, a tracking issue exists, and `closingIssuesReferences` is `[]`.
 ### Invocation axis
 
 - [ ] **AC-A1.** Guard 1's parsed `USER_INVOKED` set equals D1's 12 names (the exact-set pin). A text grep does not count: frontmatter parsing decides (test-design).
-- [ ] **AC-A2.** `trigger-cron`, `invoice` and `flag-list` are pinned model-invocable. Each assertion message states the D1 reason. The `go`, `help` and `sync` pins are unchanged.
+- [ ] **AC-A2.** `trigger-cron`, `invoice` and `flag-list` are pinned model-invocable through a separate `MUST_STAY_INVOCABLE` exact-set pin (not `ACKED_CROSS_ROOT_DUPES`). Each assertion message states the D1 reason. The `go`, `help` and `sync` pins are unchanged.
 - [ ] **AC-A3.** `invocation-axis.test.ts` is green on the finished tree. The number of rows in its ack table equals the hit count the guard prints. Each of M1, M2 and M5-M9 turns RED **in its named test**. H2 and H3 turn RED. H4 and H5 stay GREEN. Every per-glob floor and the scanned-count = `ls-files`-count assertion are live. The PR body lists the outcome of each row.
 - [ ] **AC-A4.** The budget test reports the post-flip total, and `SKILL_DESCRIPTION_WORD_BUDGET` equals it (zero headroom, D2). The line-21 comment carries the `−266 for #8290` note, or the measured figure if it differs.
 - [ ] **AC-A5.** The web and cron surfaces name no flipped skill except in comments: `git grep -nE 'soleur:(flag-(create|delete|set-role)|cron-(list|delete)|provision-(cloudflare|doppler|github|hetzner)|admin-ip-refresh|user-set-role|cf-token-scope)' -- apps/web-platform/server apps/web-platform/lib ':!*.test.ts'` → only comment lines, each listed in the PR body. Guard 1 group G3 keeps the Inngest prompts covered durably.
