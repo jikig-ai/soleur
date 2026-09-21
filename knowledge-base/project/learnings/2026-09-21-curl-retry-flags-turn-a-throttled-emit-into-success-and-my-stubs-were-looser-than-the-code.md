@@ -96,6 +96,53 @@ mutant on that axis invisible, and no mutation of the SUT can reach it.
     `inngest-host-replace`. **Prevention:** grep the workflow for the job's own refusal branch before
     prescribing a dispatch target.
 
+### Ship and post-merge (added after merge)
+
+13. **The review round reversed Taste decision T2 and left no record of it.** A review fix made the
+    `inngest-host-replace` SENTRY_DSN check a hard fail. The workflow names that dispatch as the
+    RECOVERY route after a failed `inngest-volume-recut` (its RECOVERY lines), so an empty DSN or a
+    transient Doppler read would have blocked restoring the sole scheduler. The plan's rejected-options
+    table and `decision-challenges.md` still said "no hard fail". Recovery: ship reverted it to an
+    advisory `::warning::` (109d55011) and updated ADR-096, the plan and T2. **Prevention:** before
+    a review fix changes a gate's failure mode, grep `decision-challenges.md` and the plan's
+    rejected-options table for that gate. If it matches, the fix is a decision reversal: record it
+    there, or do not make it.
+14. **Preflight Check 10 FAILed the plan's own probe.** `grep -cE 'inngest_(zot|ghcr_fallback) '`
+    carries a `|` that Check 10's shell-active reject cannot tell from a pipe. Recovery: two `-e`
+    patterns (87634fa3a), which gave `2` inside the bwrap sandbox. **Prevention:** routed to
+    `plan-sharp-edges.md`.
+15. **A pattern `kill` took down my own tool shell (exit 144).** `pgrep -f '<log basename>'`
+    matched the Bash wrapper whose command line contained that string. This repeats item 4.
+    **Prevention:** kill by the PGID recorded at launch (`ps -o pgid= <pid>`), never by a pattern
+    the killing command itself contains.
+16. **I launched the full battery before the gates that edit the tree, and relaunched it three
+    times.** Each fix found after launch (T2, the Check 10 probe, the advisor's finding) forced a
+    kill and relaunch, while the battery sat queued behind sibling locks. **Prevention:** in ship,
+    finish preflight, the PR-body gates and the advisor consult BEFORE launching `test-all.sh`.
+    They are cheap, and they are what edits the tree.
+17. **The 10-seat review missed a backtick pair inside a double-quoted echo** in
+    `zot-soak-6122.sh`, which ran `stage:` as a command. Ship's scoped advisor consult caught it.
+    Recovery: single quotes (5a3876d62). **Prevention:** shellcheck reports this only as SC2006
+    at `style` severity, so a `-S warning` run hides it. For changed scripts, grep
+    ``echo "[^"]*` `` or run shellcheck at full severity.
+18. **A local lint run without its baseline reported 201 "new" findings.** Recovery: re-ran with
+    `--baseline scripts/lint-shell-capture-exit.baseline.txt`, which gave 0 new. **Prevention:**
+    one-off. Run a lint the way its CI job does.
+19. **Main was red for reasons this PR did not cause, twice.** First a `lint-shell-capture-exit`
+    finding from #8475, fixed by #8513. Then tenant-integration fail-closed on pre-existing
+    dev-Supabase drift, filed as #8520. Both were found only by reading the failed log.
+    **Prevention:** before debugging a red check, look at the same workflow's last runs on `main`
+    (`gh run list --workflow <wf> --branch main`). A main-red check is inherited, and the fix is
+    to find or file its tracker.
+20. **`terraform validate` failed intermittently on the PR.** GitHub release downloads of the
+    Doppler and Cloudflare providers returned `504 Gateway Timeout`. The same tree passed on another
+    head and on main. **Prevention:** one-off transient. Identical-tree evidence settles it
+    faster than local reproduction.
+21. **The deploy arm read first was not this merge's.** `head_sha` said `ba4028689` while its
+    `resolve-target` checked out `267a498ff`, and `deploy` was skipped. This merge's real arm came 95
+    minutes later, behind runner saturation. **Prevention:** already in postmerge Phase 3.7.
+    It worked as written.
+
 ## Related
 
 - The web (`soleur-host-bootstrap.sh`) and git-data (`cloud-init-git-data.yml`) emitters use
