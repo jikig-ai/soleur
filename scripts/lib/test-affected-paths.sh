@@ -1011,3 +1011,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TICKET_TRIAGE_MIRROR_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/test/ticket-triage-mirror-parity.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+
+# tests/scripts/dev-suite-mutex-wiring — wiring assertion over the tenant-
+# integration mutex's four SUT files ($ROOT-prefixed literals defeat
+# derivation); declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_DEV_SUITE_MUTEX_WIRING_PATHS=(
+  ".github/actions/dev-migration-drift-probe/action.yml"
+  ".github/workflows/scheduled-dev-migration-drift.yml"
+  ".github/workflows/tenant-integration.yml"
+  "scripts/dev-suite-mutex.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-dev-suite-mutex-wiring.sh"
+)
