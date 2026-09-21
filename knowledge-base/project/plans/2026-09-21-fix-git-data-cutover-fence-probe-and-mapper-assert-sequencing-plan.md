@@ -589,6 +589,9 @@ named dependency.
 - `apps/web-platform/infra/git-data-cutover.sh`
 - `apps/web-platform/infra/git-data-cutover-access.test.sh`
 - `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`
+- Added by the review round (stale descriptions of the proof): `.github/workflows/git-data-cutover.yml`
+  (header comment only), `ADR-220` (a dated amendment), `model.c4` and the regenerated
+  `model.likec4.json`. None is in the rung-2 bound set.
 
 ## Files to Create
 
