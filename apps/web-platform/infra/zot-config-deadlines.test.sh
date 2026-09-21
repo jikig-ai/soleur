@@ -40,6 +40,26 @@ DIGEST_RAN=""
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
+under_ci() { [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; }
+# The S4-child credential is a per-run nonce FILE PATH minted by synth_case
+# into the parent's mktemp dir — not a flag. The path must sit inside a
+# mktemp-shaped dir (tmp.*) AND name a real file: a bare env: block can mint a
+# variable but cannot create a file, and the tmp.* shape blocks pointing at a
+# pre-existing one (e.g. /etc/passwd). Forging therefore takes a
+# review-conspicuous run: step planting a file, not a silent env: line. (Still
+# not a trust boundary — workflow-edit authority could do either — but the
+# bypass can no longer hide inside an env: block.)
+is_s4_child() {
+  local v="${SOLEUR_ZOT_S4_CHILD:-}"
+  [[ "$v" == "${TMPDIR:-/tmp}"/tmp.*/* && -f "$v" ]]
+}
+# Scrub foreign-command output before embedding it in verdict text — the same
+# log-injection defense the canary suite applies to its probe stderr: C0/DEL
+# strip plus U+2028/U+2029 removal, so no `::cmd::` bytes reach workflow logs.
+scrub_log_bytes() {
+  LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g' | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177'
+}
+
 finish() {
   if [[ "$SKIPPED" -gt 0 ]]; then
     echo "=== Skipped: $SKIPPED assertion(s) declined ==="
@@ -70,14 +90,15 @@ MIN_DEADLINE_S=$(( (LARGEST_LAYER_BYTES + FLOOR_THROUGHPUT_BPS - 1) / FLOOR_THRO
 # Render the bytes that reach the host, then extract /etc/zot/config.json from them.
 # CONFIG_JSON_OVERRIDE lets the mutation battery point this guard at a synthesized render
 # without re-running terraform. Under CI it is honored only for this suite's own S4
-# children (SOLEUR_ZOT_S4_CHILD, set by synth_case below) — a bare env: line in the
-# workflow would otherwise substitute attacker-chosen bytes, skip the S4 battery, and
-# drop EXPECTED_MIN by 3: a vacuous green on substituted input.
+# children (SOLEUR_ZOT_S4_CHILD, set by synth_case below to a per-run nonce file it
+# creates in this mktemp dir) — a bare env: line in the workflow would otherwise
+# substitute attacker-chosen bytes, skip the S4 battery, and drop EXPECTED_MIN by 3:
+# a vacuous green on substituted input.
 # ---------------------------------------------------------------------------
 CFG="$TMP/config.json"
 if [[ -n "${CONFIG_JSON_OVERRIDE:-}" ]]; then
-  if [[ -z "${SOLEUR_ZOT_S4_CHILD:-}" && ( -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ) ]]; then
-    fail "CONFIG_JSON_OVERRIDE is set under CI without the S4-child marker — refusing to adjudicate substituted bytes"
+  if ! is_s4_child && under_ci; then
+    fail "CONFIG_JSON_OVERRIDE is set under CI without the S4-child nonce — refusing to adjudicate substituted bytes"
     finish; exit $?
   fi
   if [[ ! -r "$CONFIG_JSON_OVERRIDE" ]]; then
@@ -90,7 +111,7 @@ else
   RENDERED="$TMP/rendered.yml"
   if ! bash "$HERE/registry-userdata-budget.sh" "$RENDERED" > "$TMP/budget.log" 2>&1; then
     fail "could not render the registry user_data (see below) — the guard cannot read the host bytes"
-    tail -5 "$TMP/budget.log" >&2
+    tail -5 "$TMP/budget.log" | scrub_log_bytes | LC_ALL=C sed 's/^/    /' >&2
     finish; exit $?
   fi
   python3 - "$RENDERED" "$CFG" <<'PY' || { fail "could not extract /etc/zot/config.json from the render"; finish; exit $?; }
@@ -216,7 +237,7 @@ done
 # ---------------------------------------------------------------------------
 DIGEST_ARM_ASSERTIONS=2
 if [[ "${SOLEUR_ZOT_GUARD_NO_DIGEST:-0}" == "1" ]]; then
-  if [[ -z "${SOLEUR_ZOT_S4_CHILD:-}" && ( -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ) ]]; then
+  if ! is_s4_child && under_ci; then
     # Only this suite's own S4 children may decline under CI. A bare env: line
     # in the workflow would otherwise green the guard with acceptance never
     # obtained — the runner is contracted to provide docker, so this is a
@@ -234,13 +255,22 @@ else
   ZOT_IMAGE="${ZOT_IMAGE_REFS[0]:-}"
   if [[ "${#ZOT_IMAGE_REFS[@]}" -ne 1 ]]; then
     fail "expected exactly one pinned zot image ref in zot-registry.tf, found ${#ZOT_IMAGE_REFS[@]} — acceptance cannot be tested against an unpinned or ambiguous digest"
-  elif ! command -v docker >/dev/null 2>&1 || ! DOCKER_INFO_OUT="$(timeout 15 docker info 2>&1)"; then
-    if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
-      fail "docker is unavailable, so the pinned digest could not adjudicate the config. This guard FAILS CLOSED in CI: the deploy-script-tests runner is contracted to provide docker (the 'Assert docker is available' step precedes this suite), so a daemonless run is a runner defect — never a decline.${DOCKER_INFO_OUT:+ docker info: $(tail -2 <<<"$DOCKER_INFO_OUT" | tr '\n' ' ')}"
+  elif ! command -v docker >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1 || ! DOCKER_INFO_OUT="$(timeout 15 docker info 2>&1)"; then
+    # Attribute the measured cause — a timeout-less host must not read as
+    # "docker absent" (AP-021: name only what was measured).
+    if ! command -v docker >/dev/null 2>&1; then
+      DOCKER_ABSENT_WHY="docker is not installed"
+    elif ! command -v timeout >/dev/null 2>&1; then
+      DOCKER_ABSENT_WHY="GNU timeout is not installed — required to bound the digest calls"
     else
-      echo "  SKIP: docker absent or daemon unreachable by this user — digest acceptance half declined"
+      DOCKER_ABSENT_WHY="docker daemon unreachable by this user"
+    fi
+    if under_ci; then
+      fail "$DOCKER_ABSENT_WHY, so the pinned digest could not adjudicate the config. This guard FAILS CLOSED in CI: the deploy-script-tests runner is contracted to provide docker (the 'Assert docker is available' step precedes this suite), so a daemonless run is a runner defect — never a decline.${DOCKER_INFO_OUT:+ docker info: $(tail -2 <<<"$DOCKER_INFO_OUT" | scrub_log_bytes | tr '\n' ' ')}"
+    else
+      echo "  SKIP: $DOCKER_ABSENT_WHY — digest acceptance half declined"
       if [[ -n "${DOCKER_INFO_OUT:-}" ]]; then
-        echo "        docker info: $(tail -2 <<<"$DOCKER_INFO_OUT" | tr '\n' ' ')"
+        echo "        docker info: $(tail -2 <<<"$DOCKER_INFO_OUT" | scrub_log_bytes | tr '\n' ' ')"
       fi
       echo "        The static relations above were checked; ACCEPTANCE BY ZOT WAS NOT OBTAINED."
       SKIPPED=$((SKIPPED + DIGEST_ARM_ASSERTIONS))
@@ -257,7 +287,7 @@ else
     elif [[ "$RC" -eq 124 || "$RC" -eq 125 || "$RC" -eq 126 || "$RC" -eq 127 ]]; then
       # rc 124/125/126/127 is timeout/docker-run itself failing (pull, exec) —
       # the digest never saw the config, so "REJECTED" would be a false verdict.
-      fail "docker run itself failed (rc=$RC — pull/exec/timeout), so the digest never adjudicated the config: $(tail -2 <<<"$OUT" | tr '\n' ' ')"
+      fail "docker run itself failed (rc=$RC — pull/exec/timeout), so the digest never adjudicated the config: $(tail -2 <<<"$OUT" | scrub_log_bytes | tr '\n' ' ')"
     else
       fail "the pinned zot digest REJECTED the rendered config (rc=$RC): $(tail -2 <<<"$OUT" | tr '\n' ' ')"
     fi
@@ -274,7 +304,7 @@ PY
     if [[ "$BRC" -ne 0 ]] && grep -qF "'HTTP' has invalid keys: zzzboguskey" <<<"$BOUT"; then
       pass "negative control: the pinned digest REJECTS an unknown key under HTTP"
     elif [[ "$BRC" -eq 124 || "$BRC" -eq 125 || "$BRC" -eq 126 || "$BRC" -eq 127 ]]; then
-      fail "negative control could not run — docker run failed (rc=$BRC — pull/exec/timeout), so the digest never saw the bogus config: $(tail -2 <<<"$BOUT" | tr '\n' ' ')"
+      fail "negative control could not run — docker run failed (rc=$BRC — pull/exec/timeout), so the digest never saw the bogus config: $(tail -2 <<<"$BOUT" | scrub_log_bytes | tr '\n' ' ')"
     else
       fail "negative control FAILED (rc=$BRC): the digest did not reject 'zzzboguskey', so its acceptance of the real config proves nothing"
     fi
@@ -312,9 +342,10 @@ EXPECTED_MIN=$(( 1 + 1 + (DEADLINE_KEYS * RELATIONS_PER_KEY) ))
 # for a reason unrelated to the conjunct under test — measured, the `&&` -> `||` mutation SURVIVED
 # an rc-only assertion because the missing key independently tripped the relation checks.
 synth_case() { # $1=label $2=python-mutation-file $3=expected rc $4=required marker
-  local label="$1" mutf="$2" want="$3" marker="${4:-}" f="$TMP/synth.json" rc=0 out
+  local label="$1" mutf="$2" want="$3" marker="${4:-}" f="$TMP/synth.json" rc=0 out nonce
   python3 "$mutf" "$CFG" "$f" 2>/dev/null || { fail "S4 $label — could not synthesize"; return; }
-  out="$(CONFIG_JSON_OVERRIDE="$f" SOLEUR_ZOT_GUARD_NO_DIGEST=1 SOLEUR_ZOT_S4_CHILD=1 bash "$SELF" 2>&1)" || rc=$?
+  nonce=$(mktemp "$TMP/s4nonce.XXXXXX") || { fail "S4 $label — could not mint the child nonce"; return; }
+  out="$(CONFIG_JSON_OVERRIDE="$f" SOLEUR_ZOT_GUARD_NO_DIGEST=1 SOLEUR_ZOT_S4_CHILD="$nonce" bash "$SELF" 2>&1)" || rc=$?
   if [[ "$rc" -ne "$want" ]]; then
     fail "S4 $label — got rc=$rc, want $want"
   elif [[ -n "$marker" ]] && ! grep -qF -- "$marker" <<<"$out"; then

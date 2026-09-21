@@ -11,8 +11,8 @@
 - No Task/Skill tool in subagent context: deepen-plan fan-out ran sequential-fallback inline; plan records `Reviewed-Coverage: sequential-fallback`.
 
 ### Decisions
-- Capability-absent off-CI → printed SKIP/decline + exit 0; under CI (`CI=true`) → hard fail (runner is contracted to provide the capability; `infra-validation.yml` already asserts `docker info`).
-- Canary suite: single up-front `probe_loopback_http()` exercising the real `python3 -m http.server` path (raw-socket bind false-greens on this host), verbatim `_skip()` idiom from `git-data-emit.test.sh`.
+- Capability-absent off-CI → printed SKIP/decline + exit 0; under CI (`-n CI || -n GITHUB_ACTIONS`, the widened predicate) → hard fail (runner is contracted to provide the capability; `infra-validation.yml` already asserts `docker info`).
+- Canary suite: single up-front `probe_loopback_http()` exercising the real `python3 -m http.server` path (raw-socket bind false-greens on this host), `_skip()` idiom from `git-data-emit.test.sh` widened to the `-n CI || -n GITHUB_ACTIONS` predicate (cloud-init-inngest-bootstrap's form).
 - Zot suite: partial-arm decline — docker probe gates only the digest half; `SKIPPED` counter (ceiling 2) printed via new `=== Skipped:` line; `EXPECTED_MIN` digest term re-keys on whether the half ran.
 - Runner edit is docs-only: `run-registered-suites.sh` header table re-derived; no workflow edits.
 

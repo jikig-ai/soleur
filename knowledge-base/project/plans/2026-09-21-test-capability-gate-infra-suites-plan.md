@@ -266,10 +266,11 @@ no shared helper.
    }
    ```
 
-   Callers embed the `SKIP` marker in the message (the convention's form); the
-   `GITHUB_ACTIONS` variant used by `cloud-init-inngest-bootstrap.test.sh` is an acceptable
-   alternative but `${CI:-} = true` is the dominant in-suite form and GitHub sets `CI=true`
-   unconditionally.
+   Callers embed the `SKIP` marker in the message (the convention's form). Implementation
+   note: the shipped helper uses the widened `-n "${CI:-}" || -n "${GITHUB_ACTIONS:-}"`
+   predicate (cloud-init-inngest-bootstrap's form) rather than the `= "true"` form above —
+   strictly safer (fails closed under `CI=1`/`CI=TRUE`/GHA-without-CI), at the cost of a
+   second predicate dialect in the corpus; convergence is a follow-up.
 2. Convert the existing `command -v python3` precondition (:24-27) from `FATAL`/exit 2 to
    `_skip "canary-bundle-claim-check: SKIP — python3 required for fixture HTTP server"`. Add
    the same check for `curl` (the suite's readiness probe depends on it). Keep
@@ -355,10 +356,14 @@ re-derivation; keep the list's shape (suite names + measured cost).
   *runner's* `^RED `/`^\[FAIL\]` output, unaffected. `zot-config-deadlines`'s S4
   `synth_case` children set `SOLEUR_ZOT_GUARD_NO_DIGEST=1` explicitly — they take the
   DECLINED arm and never probe docker (hermetic + faster; unchanged).
-- **Portability.** New code uses only `python3`, `curl`, `seq`, `sleep`, `mktemp`, `kill`,
-  `wait`, `rm` — all already used by these suites; no GNU-only flags, no `timeout` builtin
-  (absent on stock macOS). `curl -m 1` bounds each probe attempt; the 20-iteration loop
-  bounds the total at ~4s, matching the existing readiness window.
+- **Portability.** The canary additions use only `python3`, `curl`, `seq`, `sleep`,
+  `mktemp`, `kill`, `wait`, `rm` — all already used by the suite; no GNU-only flags and no
+  `timeout` builtin (absent on stock macOS). `curl -m 1` bounds each probe attempt; the
+  20-iteration loop bounds the total at ~4s, matching the existing readiness window.
+  The zot decline arm does use `timeout 15 docker info` — but `timeout` was already a
+  dependency of that suite's digest arm (`timeout 300 docker run`), and the arm now
+  probes `command -v timeout` so a timeout-less host declines honestly rather than
+  misreading rc=127 as docker-absent.
 - **Deterministic simulation seams** for the decline arms (no host mutation needed):
   a PATH-prepended stub `curl` (exit 7) forces the canary probe to fail; a PATH-prepended
   stub `docker` (exit 1 on `info`) forces the zot decline arm; `CI=true` in the environment
@@ -547,7 +552,7 @@ same decline accounting by construction.
   containing `SKIP`; zero F-rows execute.
 - [ ] AC2 — Same forced absence with `CI=true` in the environment: the suite exits non-zero
   and prints a line containing `the runner must provide this dependency`.
-- [ ] AC3 — The PR's own `deploy-script-tests` run executes all 13 canary fixtures green (the
+- [ ] AC3 — The PR's own `deploy-script-tests` run executes all 14 canary fixtures green (the
   `Run canary-bundle-claim-check.sh tests` step succeeds; no `SKIP` line in its log).
 - [ ] AC4 — On a host where `docker info` cannot reach the daemon (this dev host, or a
   PATH-prepended `docker` stub failing `info`), `bash
