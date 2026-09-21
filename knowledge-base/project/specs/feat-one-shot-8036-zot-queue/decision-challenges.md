@@ -37,8 +37,9 @@ If you want the comparison back, it is a single additional `case` token.
 
 ## Taste-2 — keep one new C4 edge instead of a new C4 node (DHH + code-simplicity vs the C4 completeness mandate)
 
-The web hosts' anonymous pull of the cosign verifier image from public ghcr.io was unmodelled.
-The plan models it as a new `hetzner -> sigstore` edge on the existing Sigstore node, rather than
-as a new external element. Reviewers preferred prose-only. The repo's C4 completeness mandate
-requires an unmodelled live external dependency to be modelled, and the edge is the smallest
-form that satisfies it.
+The web hosts' anonymous per-deploy pull of the cosign verifier image from public ghcr.io was
+unmodelled. The plan models it as a **second `hetzner -> ghcr` edge**, labelled LIVE anonymous
+pull, rather than as a new external element. Reviewers preferred prose-only. The repo's C4
+completeness mandate requires an unmodelled live external dependency to be modelled, and an
+edge is the smallest form. The deepen review put the edge on `ghcr`, not on `sigstore`, because
+the live dependency is ghcr.io's availability and its anonymous rate limit.

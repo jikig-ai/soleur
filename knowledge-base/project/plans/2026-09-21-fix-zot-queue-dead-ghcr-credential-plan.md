@@ -15,6 +15,50 @@ brand_survival_threshold: aggregate pattern
 
 # fix(infra): finish the zot queue
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21. **Review inputs:**
+
+- plan-review: DHH, Kieran, code-simplicity
+- the plan-time CTO and the scoped advisor
+- the deepen pass: security-sentinel, architecture-strategist, observability-coverage-reviewer,
+  test-design-reviewer
+
+Live measurements taken during deepen:
+
+- SOLEUR_ZOT_DISK over 2 h: 23/23 rows `store_luks=yes`, and still the PID-shaped
+  `store_probe_rc`
+- ci-deploy over 24 h: 9 `cosign_absent` and 9 `relogin_failed`, all on one host
+- registry memory: 3,814 MB total, zot ≈ 50 MB resident
+- user_data: 15,940 B stored, 16,828 B headroom
+
+Key improvements:
+
+1. **Phase 1 collapsed** to a `DOCKER_CONFIG` prefix plus a `{"auths":{}}` file plus
+   `env -u DOCKER_AUTH_CONFIG`. A `VERIFIED_REF` stdout-corruption P0 dissolved with it.
+2. **Sentinel gate** gains its NIC-guard recovery arm, which prevents a permanent outage on the
+   late-mount path. It also gains a shipped `zot_start_action` field and `luks_open_arm` field.
+3. **Escrow:**
+   - an OOM-safe KDF run (memory pre-check plus `OOMScoreAdjust`)
+   - `--only-secrets`
+   - cron minute 19, clear of the other jobs
+   - a backgrounded boot run after zot starts
+   - a 26 h stale threshold, and every value other than `ok` pages
+4. **Alert:**
+   - the direct-POST envelope anchor, against forgery on the shared source
+   - the `raw`/`message` column form
+   - per-arm ordering asserts
+   - a ≥2-row grace
+5. **UC2 workflow:** host text never reaches the public job summary.
+6. **Guard 1:** covers the nested `modules/git-data-userdata` template, 8 files in all.
+7. **`_bk_rc`** reset, so a healthy host reads `cs0.bk0` and not `cs0.bkna`.
+
+New considerations:
+
+- The merge fires **four** pipelines, not three, and P3 waits for the co-fired release.
+- The C4 edge moved to a second `hetzner -> ghcr` edge, the live anonymous dependency.
+- ADR-096 gains a fail-closed-launch amendment.
+
 ## Overview
 
 One branch (draft PR #8456) drains the zot/registry queue, in this order:
@@ -33,8 +77,8 @@ One branch (draft PR #8456) drains the zot/registry queue, in this order:
 5. **#8278 — re-check the premise and leave it blocked.** One comment. No code.
 6. **The sweep — file LAST, as ONE issue**, after a dedup search and a CONCUR gate.
 
-**Merging fires three production deliveries.** This is the single most important fact for
-whoever merges:
+**Merging fires four production pipelines.** This is the single most important fact for whoever
+merges. The count was corrected from three by the deepen review.
 
 - `ci-deploy.sh` is a `terraform_data.deploy_pipeline_fix` trigger file, so the auto-apply pushes
   it to the web hosts.
@@ -43,8 +87,15 @@ whoever merges:
   The result is a **registry host replace** that keeps the volume.
 - The new `logtail_exploration*` pair is applied through the `-target=` lines added to
   `apply-web-platform-infra.yml`.
+- `web-platform-release.yml` runs, because `ci-deploy.sh` is under `apps/web-platform/**`.
+  Preflight P3 **waits up to 2,100 s** for that co-fired release before it lets the replace
+  proceed. If the release outlasts the wait, the replace refuses, and it is re-fired through
+  the dispatcher's own `workflow_dispatch` (`reason=` and `tracker=8408`) once the release
+  completes. That re-fire is the ship post-merge step, not an operator action. The release's
+  own deploy may still run the **old** `ci-deploy.sh`, so evidence for 1a and 1b counts only
+  from deploys after the `deploy_pipeline_fix` apply concludes.
 
-The PR body states all three. Before merge it asserts "merged", never "deployed".
+The PR body states all four. Before merge it asserts "merged", never "deployed".
 
 ## Research Reconciliation — Brief vs. Codebase
 
@@ -146,8 +197,8 @@ The PR body states all three. Before merge it asserts "merged", never "deployed"
   changes 1a or 1c (DHH, simplicity). It is recorded as Taste in `decision-challenges.md`.
 - *`registry-probe-rc-8417.sh`* is cut in favour of ship's post-merge verification (DHH,
   simplicity).
-- *A new `sigstoreCosignImage` C4 node* becomes an edge to the existing `sigstore` node (DHH,
-  simplicity).
+- *A new `sigstoreCosignImage` C4 node* was cut (DHH, simplicity). The deepen review then moved
+  it to a second `hetzner -> ghcr` edge: the live dependency is ghcr.io, not Sigstore.
 - *The `position()` Python evaluator* is replaced by structural assertions plus recorded live
   probes (DHH).
 - *The escrow vocabulary* goes from nine tokens to five (DHH, simplicity). *The torn-write kill
@@ -289,8 +340,12 @@ Each phase is one commit. Never commit while the test battery is running.
 
 1. In `verify_image_signature()`, run the verify `docker run` with `DOCKER_CONFIG="$anon_dir"`
    prefixed to that one command.
-   - `anon_dir="$(mktemp -d)"` is an **empty** directory: no `config.json`, so no auths, no
-     `credsStore`, no `credHelpers`.
+   - `anon_dir="$(mktemp -d 2>/dev/null)" || anon_dir=""` (no bare capture). **Write
+     `{"auths":{}}` into it** rather than leaving it empty, because a missing `config.json` lets
+     the CLI fall back to legacy `~/.dockercfg` (security review). Prefix the run with
+     `env -u DOCKER_AUTH_CONFIG`, which newer CLIs honour regardless of `DOCKER_CONFIG`. `/tmp`
+     is `PrivateTmp=true` under `webhook.service` (`webhook.service:38`), so the path cannot be
+     attacker-influenced.
    - The docker **CLI** reads auths for the implicit `COSIGN_IMAGE` pull from its own
      `DOCKER_CONFIG`, so that pull becomes anonymous. That is P1.
    - `-v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro"` is a **host path** bind, resolved
@@ -298,12 +353,17 @@ Each phase is one commit. Never commit while the test battery is running.
      authenticates to zot, so P2 holds unchanged.
    - `rm -rf "$anon_dir"` on every exit arm of the function. The existing `rm -f "$err"` sites
      are the pattern.
-   - Fallback when `mktemp -d` fails: an unwritable `/tmp` under `webhook.service`'s sandbox is
-     possible. In that case use `anon_dir="$DEPLOY_DOCKER_CONFIG_DIR/anon-cosign"`, created
-     empty, **never** `$DOCKER_CONFIG` itself. Either way the dir must be verified to contain no
-     `config.json` before use (`[ ! -e "$anon_dir/config.json" ]`). If it does, skip the prefix
-     and log `IMAGE_VERIFY_PREP: anon_config=unavailable`. That is one hardcoded-token line, and
-     it fails open to today's behaviour.
+   - Fallback when `mktemp -d` fails (practically only on a full disk): `rm -rf` then
+     `mkdir -m 700` of `"$DEPLOY_DOCKER_CONFIG_DIR/anon-cosign"`, **recreated every deploy**, and
+     **never** `$DOCKER_CONFIG` itself. Then write the same `{"auths":{}}`.
+   - A **content check** runs before use: the dir is absolute, exists, and its `config.json` is
+     exactly `{"auths":{}}`. If any of that fails, skip the prefix and log
+     `IMAGE_VERIFY_PREP: anon_config=unavailable` through `logger` (never stdout), a logged
+     fail-open to today's behaviour.
+   - The failure is forced through a named seam, `SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1`, read
+     **only** by this function. `ci-deploy.sh` calls `mktemp` 21 times, so a `mktemp` stub would
+     break unrelated paths (test review).
+   - Guard `rm -rf` with `[ -n "$anon_dir" ]`.
 2. **Measured, and not a regression:** `ci-deploy.sh` runs `docker image prune -af` (the
    `docker image prune -af 200>&-` line) **before** `verify_image_signature`. The cosign image
    has no live container, so it is pruned and re-pulled on **every** deploy. It always has been,
@@ -315,16 +375,23 @@ Each phase is one commit. Never commit while the test battery is running.
 4. Tests, in `apps/web-platform/infra/ci-deploy.test.sh`, extending the docker mock's
    `run`/`verify` handler so it also records `DOCKER_CONFIG=<value> HAS_CONFIG_JSON=<0|1>` at
    verify time:
-   - **T-1a-1** (P1): the verify `docker run` sees a `DOCKER_CONFIG` that is not the deploy
-     config dir, with `HAS_CONFIG_JSON=0`.
+   - **T-1a-1** (P1): at verify time, the mock records that `DOCKER_CONFIG` is **non-empty,
+     absolute, an existing directory** other than the deploy config dir, that its `config.json`
+     equals `{"auths":{}}`, and that `DOCKER_AUTH_CONFIG` is unset. A `DOCKER_CONFIG=""`
+     regression must fail this case (test review).
    - **T-1a-2** (P2): the verify argv still carries `-v <deploy config.json>:/root/.docker/config.json:ro`.
      Extend `assert_bprime_cosign invocation` and do not replace its existing asserts.
    - **T-1a-3**, the P1 property rather than its spelling: arm a sentinel inline `ghcr.io` auths
-     entry (`canary-ghcr-auth-5d2b`) in the deploy config. The sentinel must never be readable
-     from the `DOCKER_CONFIG` directory the verify run saw.
+     entry (`canary-ghcr-auth-5d2b`) in the deploy config, and set `DOCKER_AUTH_CONFIG` to a
+     canary. The **mock** greps its own `DOCKER_CONFIG` directory **inside the mock, before the
+     `rm -rf`**. Neither canary may be visible.
    - **T-1a-4**: the anonymous dir is removed after both the verify-ok and the verify-fail arms.
-   - **T-1a-5**: the `mktemp` failure fallback yields an empty dir that is not
-     `$DOCKER_CONFIG`, and never a prefix pointing at the deploy config.
+   - **T-1a-5**: with `SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1`, the fallback dir is recreated, is
+     not `$DOCKER_CONFIG`, and holds `{"auths":{}}`. A pre-seeded fallback dir holding a real
+     `config.json` is wiped and recreated. When the content check fails, the case expects
+     `anon_config=unavailable` in the logger output and `VERIFIED_REF` unchanged.
+   - **T-1a-6**: `VERIFIED_REF` is exactly the repo digest. No new stdout reaches the capture.
+   - Raise `CI_DEPLOY_ASSERT_FLOOR` (305 today) by the number of new assertions in the same edit.
    - The existing WARN/ENFORCE cosign cases stay green unchanged.
 5. The ENFORCE decision stays out of scope. `IMAGE_VERIFY_MODE:-warn` is asserted unchanged by
    the existing test.
@@ -362,9 +429,14 @@ abort path.]
 3. Emit to journald only (`logger -t "$LOG_TAG"`). There is **no Sentry event**, for the same
    volume rationale as the prelude lines.
 4. Tests:
-   - **T-1b-1**: the fixture matrix is absent, unreadable (mode 000), unparseable JSON, inline
-     entry, `credsStore` set, `credHelpers["ghcr.io"]` set, and no `ghcr.io` key. Each case has
-     an exact expected token set.
+   - **T-1b-1**: the fixture matrix is absent, unreadable, unparseable JSON, inline entry,
+     `credsStore` set, `credHelpers["ghcr.io"]` set, and no `ghcr.io` key. Each case has an exact
+     expected token set.
+     - `HOME` is a temp directory.
+     - The root path comes through a test-only seam, `SOLEUR_GHCR_CONFIG_ROOT_PATH`, mirroring
+       `SOLEUR_GHCR_READ_FILE`.
+     - "Unreadable" is a **directory** at the config path, not a mode-000 file, so the result is
+       the same when the suite runs as root (test review).
    - **T-1b-2**, the leak canary: fixture auth `Y2FuYXJ5dXNlci03ZjNhOmNhbmFyeXRvay05YzFl`, which
      is base64 of a canary user and token. Neither that string nor its decoded parts appear in
      the captured logger output or on stderr.
@@ -423,16 +495,25 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
 3. The guard is a new `apps/web-platform/infra/templatefile-bare-dollar-guard.test.sh`. The
    assembly spans hosts. It needs:
    - (i) **dispatch**: derive the file set from `templatefile(` call sites in
-     `apps/web-platform/infra/*.tf`, never from a hand list.
+     `apps/web-platform/infra/**/*.tf`, resolving `${path.module}` against **each `.tf` file's own
+     directory**. `modules/git-data-userdata/main.tf` renders `cloud-init-git-data.yml` through
+     `${path.module}/../../`, which a top-level-only glob misses (test review, verified).
    - (ii) strip comment lines with the `registry_rationale_strip` regex (`^[ \t]*#…`).
    - (iii) fail on `\$\$[A-Za-z_(]`.
-   - (iv) a floor of `files_scanned >= 7` (today's measured count) **plus** set identity against
-     the derived list. The floor catches a derivation that silently shrinks, which identity
+   - (iv) a floor of `files_scanned >= 8` (today's measured count, including the git-data module)
+     **plus** set identity against the derived list. The floor uses the shape
+     `guard-vacuity-floor` recognises, not an ad-hoc `fail`. The floor catches a derivation that silently shrinks, which identity
      alone cannot see, because identity is measured against the same derivation.
    - (v) a **rendered-shape** assert for `store_probe_rc`: render the assignment line and execute
      it under both `_cs_rc=127 _bk_rc=na` and `_cs_rc=0 _bk_rc=0`. Expect `cs127.bkna` and
      `cs0.bk0` exactly, and both must match `^cs([0-9]+|na)\.bk([0-9]+|na)$`.
-   - Register it in the vacuity-floor rows in the same edit.
+   - Registration: add a `run: bash` step in `infra-validation.yml` `deploy-script-tests`, which
+     is what `run-registered-suites.sh` reads, and check it with `scripts/lint-orphan-test-suites.sh`.
+4a. **PATH hardening (security review).** Once the inherited PATH is actually appended, a command
+   absent from the literal directories would resolve through a PATH the Doppler config can set.
+   Add a guard case: every external command the heartbeat invokes resolves inside the literal
+   `/usr/local/sbin:…:/bin` list on the target image. The set is derived from the rendered
+   script's command words, not hand-listed, and it asserts the literal list resolves each one.
 4. **Delivery, stated in the PR:** this is a non-comment edit to `cloud-init-registry.yml`, so
    the merge fires `registry-host-replace-dispatch.yml` (preflight-gated).
    - It is **not** "deployed" until a post-merge SOLEUR_ZOT_DISK row on a **new** `boot_id`
@@ -457,7 +538,10 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
 2. The predicate uses `m = JSONExtractString(raw, 'message')`, the sibling's exact column form.
    Kieran confirmed there is no bare `msg` column. The **trusted head** is everything before
    ` zot_last_err=`. The alert fires on rows where
-   `position(m, 'SOLEUR_ZOT_DISK ') = 1` AND either:
+   `startsWith(raw, '{"message":"SOLEUR_ZOT_DISK ')`, which is the direct-POST envelope that
+   `zot_envelope_anchor` uses, so a web-host journald line quoting the marker cannot match
+   (security review). The row must also satisfy `position(m, 'SOLEUR_ZOT_DISK ') = 1`, AND
+   either:
    - (A) the head lacks `store_luks=yes ` (with the trailing space, and only counting a position
      before `position(m, ' zot_last_err=')`), OR
    - (B) the head carries `store_escrow=` AND does not carry `store_escrow=ok ` (both before the
@@ -495,7 +579,10 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
    SQL string parsed out of the `.tf` local: the `SOLEUR_ZOT_DISK ` anchor, the literal
    `'store_luks=yes '` with its trailing space, the ordering conjunct against `' zot_last_err='`,
    the arm-(B) presence and ok literals, `paused = false`, `query_period = 900`, `value = 1`,
-   and both `-target=` lines. The re-implemented `position()` evaluator was cut in plan review:
+   `operator = "higher_than"`, the envelope `startsWith` conjunct, and both `-target=` lines.
+   The ordering conjunct is asserted **per arm**: exactly one `' zot_last_err='` reference in
+   arm (A) and one in arm (B). Dropping it from one arm is visible even though the other arm
+   still carries it (test review). The re-implemented `position()` evaluator was cut in plan review:
    the live-probe controls exercise the real engine, and a port can drift from it.
 
 ### Phase 6 — #8408 (b): reboot-surviving launch gate (sentinel bind) + its recovery arm
@@ -505,8 +592,12 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
    exactly `/dev/mapper/registry`.
    - The file is `/var/lib/zot/.soleur-luks-sentinel`: zero bytes, root:root, mode 0444.
    - The sentinel lives **inside** the LUKS filesystem, so it is visible **only** through an
-     opened mapper. Its presence at `/var/lib/zot` is a binding proof by construction, not a
-     name check.
+     opened mapper. Its presence at `/var/lib/zot` is a binding proof **against the failure mode**
+     (a closed mapper). It is not proof against an adversary, or an `rsync -a` of the store to
+     the root disk, which would copy the sentinel along (security review). The recut runbook
+     gains one line: exclude `.soleur-luks-sentinel` from any store copy. A second bind of
+     `/dev/mapper/registry` was considered and is not adopted: a device-node bind proves the
+     mapper exists, which is the weaker name check #8408 rejected.
    - zot already tolerates root dotfiles (the CTO points to `.resize-result`).
    - On the preserved volume, the first boot after this change writes it.
 2. The zot `docker run` gains
@@ -521,14 +612,23 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
      guard sees the mount present and never touches zot, so the gate would become a
      **permanent** outage.
    - Add an arm: mount present **and** `docker inspect -f '{{.State.Running}}' zot` is not `true`
-     **and** the sentinel is present, then `docker start zot`. It logs one hardcoded-token line
-     (`[nic] SOLEUR_PRIVATE_NIC zot_not_running store_mounted=true action=start result=<ok|failed>`).
+     **and** the sentinel is present, then `docker start zot`.
+   - This arm and the existing remount-then-`docker restart` arm are **mutually exclusive on one
+     tick**: an `elif` on the same `mountpoint` branch (architecture review).
+   - The outcome rides the **POSTed** `SOLEUR_PRIVATE_NIC` `LINE` as a new field
+     `zot_start_action=<none|start_ok|start_failed>`, placed before ` zot_last_err=`. A stderr
+     echo would never leave the host: the registry runs no Vector, and only the direct POSTs ship
+     (observability review, verified).
    - The worst case of the gate is then **≤5 min of fail-closed downtime**, stated in the PR, and
      never a silent empty-store serve.
 4. Keep the first-boot `findmnt … || exit 1` gate. It is defence in depth.
 5. `registry-luks-open.sh` stays fail-open on its arms: device absent, not `crypto_LUKS`, and a
-   `luksOpen` failure falling through `mount … || true`. The **consumer** is now fail-closed. Add
-   one stderr line per arm, as hardcoded tokens, naming which arm fired.
+   `luksOpen` failure falling through `mount … || true`. The **consumer** is now fail-closed.
+   - Record which arm fired as one hardcoded token (`already_open|opened|dev_absent|not_luks|key_empty|open_failed`)
+     in `/run/soleur-registry/luks-open.arm`, which is tmpfs and per boot.
+   - The heartbeat reads it into the trusted head as `luks_open_arm=<token>`, or `none` when the
+     file is absent. Boot-journald stderr is not visible off-box, so the heartbeat is the only
+     channel that is.
 6. Suite: `apps/web-platform/infra/registry-luks-launch-gate.test.sh`.
    - **Static assertions**:
      - The zot `docker run` carries `--mount type=bind,source=/var/lib/zot/.soleur-luks-sentinel`
@@ -537,7 +637,12 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
      - The sentinel write is inside the `findmnt` conjunction and **precedes** the runcmd
        `docker run`.
      - The NIC-guard recovery arm exists, and it is keyed on `.State.Running` plus the sentinel.
-   - **Behavioural, docker-gated, fail-closed without a daemon.** It exits non-zero with
+   - **Behavioural NIC-guard arm**: execute the extracted NIC-guard block with stubbed
+     `mountpoint` and `docker`. It must call `docker start zot` **iff** the store is mounted, zot
+     is not running, and the sentinel is present, and it must never call it together with
+     `docker restart` on the same tick.
+   - **Behavioural, docker-gated, fail-closed without a daemon.** It uses an image already
+     present on the runner (no network pull), unique container names, and cleanup on `EXIT`. It exits non-zero with
      `NO-DOCKER`, the same way `zot-config-deadlines.test.sh` does. This is identical on main,
      not a defect, and CI has docker. The sequence:
      - create a container with `--mount type=bind` of a temp file, then stop it
@@ -549,10 +654,15 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
 ### Phase 7 — #8408 (c): daily escrow re-test surfaced on the heartbeat
 
 1. A new write_files script `/usr/local/bin/registry-luks-escrow.sh` runs from a new cron.d line
-   (`17 3 * * * root … doppler run --project soleur-registry --config prd -- /usr/local/bin/registry-luks-escrow.sh`,
-   the same wrapper form as the heartbeat). It also runs **once at the end of the runcmd LUKS
-   block** after the sentinel is written, so the field is populated from boot and never sits at
-   `none` for a day. Under `timeout 120` it does the following, in order:
+   (`19 3 * * * root … doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh`,
+   the same wrapper form as the heartbeat).
+   - Minute **19** avoids the NIC guard's `2-59/5` set and the heartbeat's `*/5`, because
+     concurrent `doppler run` jobs strain the host's ~1024 MB reserve (architecture review). The
+     suite asserts that no two cron.d minute sets on the host intersect with the escrow minute.
+   - It also runs **once at boot, in the background, after the runcmd `docker run -d --name zot`**
+     (never before it, so a slow KDF can never lengthen the pull path's downtime). The field is
+     therefore populated from boot and never sits at `none` for a day. The Guard 4 suite asserts
+     this ordering. Under `timeout 120` it does the following, in order:
    - Resolve `DEV` via `findmnt -no SOURCE /var/lib/zot` → `cryptsetup status` device (the same
      chain the heartbeat uses).
    - Header check: `cryptsetup luksUUID "$DEV"` is non-empty.
@@ -572,6 +682,12 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
      today (Kieran).
    - Write `/var/lib/soleur-registry/escrow.state` atomically: a temp file in the same directory,
      then `mv -f`, owner root:root, mode 0600. The file contains `result=<token> at=<epoch>`.
+   - An `EXIT` trap that has not yet written a result writes `indeterminate`, so a crash
+     mid-script is visible on the next heartbeat instead of ageing into `stale`.
+   - **Measured on 2026-09-21** (SOLEUR_ZOT_DISK, 23 rows over 2 h): `mem_total_mb=3814`,
+     `zot_memory_cap_mb=3072`, `zot_anon_mb` ≈ 50. zot's resident set is tiny compared with an
+     up-to-1 GiB argon2id slot, so the memory pre-check is expected to pass. A daily
+     `indeterminate` would be a real finding, not noise.
 2. The vocabulary is closed. DHH and simplicity collapsed it from nine tokens:
    - `ok`
    - `fail_passphrase`
@@ -579,20 +695,40 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
    - `fail_key_absent` (empty `REGISTRY_LUKS_KEY`: the **next reboot cannot reopen**)
    - `indeterminate` (a tool refusal, the memory pre-check, a timeout or OOM, or no mapper mount)
 
-   The three `fail_*` flavours stay distinct. Registry journald is **not** shipped off-box (only
-   the heartbeat POST is), so the remediation cue must ride the field itself. The state file
+   The three `fail_*` flavours stay distinct. The escrow script's own output is not shipped: the
+   host runs no Vector, and its off-box channels are three direct POSTs (heartbeat, NIC guard,
+   zot-log-shipper), none of which carries it. So the remediation cue must ride the field
+   itself. The state file
    never holds key material.
 3. The heartbeat reads the state file (a `timeout 5` cat, sanitised with the same
    `[A-Za-z0-9_.-]` guard as `STORE_PROBE_RC`) and emits `store_escrow=<token> store_escrow_age_s=<n>`
    **before** ` host=`, in the trusted head. Rules:
    - A missing file emits `none`.
-   - An age > 172,800 s emits `stale`.
+   - An age > 93,600 s (26 h: one daily run plus two hours' slack) emits `stale`. The
+     observability review showed a 48 h threshold hides a dead escrow job for two days.
    - A value outside the vocabulary emits `__UNREADABLE__`.
 
    The escrow never runs inside the heartbeat. The KDF would break the heartbeat's 5 s discipline.
-4. Literal paths plus the heartbeat's literal PATH preamble apply here. `doppler run` injects the
-   whole soleur-registry config into the environment, which is the #7761 class. No
-   env-overridable command name is allowed.
+4. Security hardening (security review):
+   - `--only-secrets REGISTRY_LUKS_KEY` narrows the injected environment to the one secret. The
+     precedent is the zot-log-shipper's cron line, the `--only-secrets narrows the injected`
+     comment in `cloud-init-registry.yml`. This closes the #7761 class (`LD_PRELOAD`/`BASH_ENV`
+     from the config store).
+   - The key is fed only through a `printf '%s' | …` pipe, never a here-string.
+   - A `set -x` refusal, as in `inngest-host-state.sh`.
+   - Literal paths plus the heartbeat's literal PATH preamble.
+   - The **boot** run uses the **same wrapper as the cron line**. It is launched in the
+     background (`nohup … &`) right after the runcmd `docker run -d --name zot`. Two failures
+     are ruled out:
+     - Running it inside the earlier `REGLUKSEOF` LUKS shell would delay zot's start (the
+       architecture review).
+     - Running it bare, without the wrapper, would record `fail_key_absent` and page until 03:19
+       (the security review).
+
+     The wrapper resolves both.
+   - **Test seam** (test review): literal paths bypass PATH stubs, so the suite extracts the
+     script and rewrites the literal paths and `/proc/meminfo` with `sed`, the same approach
+     the heartbeat suite already uses for its PATH line. There is no env-var override.
 5. Suite: extend `zot-disk-heartbeat-redaction.test.sh` for the field, and add a new
    `registry-luks-escrow.test.sh` modelled on `luks-monitor.test.sh`. `cryptsetup`, `blkid` and
    `systemd-run` are PATH-stubbed. It checks:
@@ -626,6 +762,16 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
    - `env:` `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` from `secrets.*`
    - Inputs pass through `env:` only, **never** `${{ inputs.* }}` inside `run:`. `since` is
      regex-checked `^[0-9]+[hmd]$` in the step. The script checks it too.
+1a. **The repository is PUBLIC** (security review). The script prints up to 8 free-form journald
+   messages (200 chars each), plus the query tool's stderr head. That is unscrubbed host text,
+   so **`out.txt` never goes to `$GITHUB_STEP_SUMMARY` or the job log**.
+   - `include_errors` defaults to **false**.
+   - The summary and log carry only the rc, its plain-language meaning, and the verdict line.
+     The verdict line is extracted by an anchored grep of the script's own verdict marker, and
+     the suite checks the marker against the script.
+   - The full output is not uploaded as an artifact either: a public repo's artifacts are
+     readable by anyone with a GitHub account.
+   - A guard case asserts that `out.txt` is never catted, echoed or uploaded.
 2. Run it as:
    `rc=0; bash scripts/inngest-host-state.sh --since "$SINCE" $( [ "$INCLUDE_ERRORS" = true ] || printf -- --no-errors ) > out.txt 2>&1 || rc=$?`.
    Actions `run:` is `bash -e`, so the `|| rc=$?` is required (Kieran). Write `out.txt` and a
@@ -638,13 +784,17 @@ The recommendation goes in the PR body under `## GHCR's fate (1c) — recommenda
    - 5: no verdict
    - 6: **the read failed; this says nothing about the host**
    - 78: refused, tracing
-3. Exit behaviour: exit 0 only on rc 0. **Any other rc exits non-zero**, including rc 4, which
+3. Exit behaviour: exit 0 only on rc 0. Every non-zero rc emits `::error::inngest-host-state rc=<n> — <meaning>`
+   before exiting, and a missing `out.txt` is itself non-zero. **Any other rc exits non-zero**, including rc 4, which
    the script's own header calls a finding ("SILENCE IS NOT HEALTH"). A red run is the correct
    phone-visible signal.
 4. Update `knowledge-base/engineering/operations/runbooks/inngest-server.md`, the "Reading host
    state without SSH" section, with the one-tap route. Keep the `doppler run` form as the laptop
    route.
-5. Suite: `apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh`, modelled on
+5. Suite: `apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh`. Beyond static
+   checks, it **executes** the extracted `run:` block with the script stubbed to return each exit
+   code, and asserts the job's exit and the summary text per code. The exit-code set it derives
+   has a floor of ≥7 plus set identity (test review). Otherwise it is modelled on
    `registry-zot-inventory-workflow-guard.test.sh`. No repo-wide lint covers SHA pins or
    `${{ inputs` in `run:`; `scripts/lint-workflows.sh` was checked. The suite covers:
    - no `${{ inputs` inside any `run:`
@@ -808,8 +958,11 @@ failure_modes:
     detection: SOLEUR_ZOT_DISK trusted head lacks store_luks=yes
     alert_route: registry_store_not_luks (Better Stack)
   - mode: mapper failed to open after a reboot
-    detection: zot fails to start (sentinel bind source missing) -> heartbeat ping_rc != 0 / zot_restarts climbing
-    alert_route: existing zot liveness alarm (heartbeat)
+    detection: >-
+      zot fails to start (sentinel bind source missing), so zot-liveness-heartbeat stops pinging.
+      Corroboration in SOLEUR_ZOT_DISK: state_status=exited|created and luks_open_arm=<arm>.
+      The NIC-guard recovery (<=5 min) always pages before it heals, and that is correct.
+    alert_route: betteruptime_heartbeat.registry_prd ("soleur-registry-prd", 60 s period + 30 s grace; measured live and unpaused)
   - mode: the passphrase no longer opens the header, the header is unreadable, or the key is absent from Doppler
     detection: store_escrow=fail_passphrase|fail_header|fail_key_absent in the trusted head
     alert_route: registry_store_not_luks arm (B) (Better Stack)
@@ -834,11 +987,25 @@ discoverability_test:
   - Per `_MACHINE_ID`, since `SOLEUR_FT_EARLIEST`:
     - **PASS (0)**: every host that emitted any `IMAGE_VERIFY` line has ≥1 `IMAGE_VERIFY: ok`
       and 0 `result=cosign_absent`, with ≥1 host observed.
-    - **FAIL (1)**: any host still emits `cosign_absent` after earliest.
+    - **FAIL (1)**: a host's **latest** `IMAGE_VERIFY*` line after earliest is still
+      `cosign_absent`. The observability review found that "any occurrence" would FAIL forever on
+      one ghcr.io blip. Each host is graded on its most recent verdict.
+    - A host whose latest verdict is preceded in the same deploy by `IMAGE_VERIFY_PREP: anon_config=unavailable`
+      grades **5**, with its own message: the fallback put the credentialed pull back.
+    - Evidence counts only from deploys that ran **after** the `deploy_pipeline_fix` apply
+      concluded. The co-fired release may still run the old script, so `earliest` is set from
+      that apply's completion time plus a margin (architecture review).
     - **5**: a host emits a *different* failure class. The verifier runs and says something about
       the image, which is a human decision.
     - **2/3**: the usual channel and evidence guards.
-  - It keys on the `SYSLOG_IDENTIFIER` field.
+  - It keys on the `SYSLOG_IDENTIFIER` field. The test rows cover:
+    - zero hosts, which never PASSes
+    - an `IMAGE_VERIFY: ok` under another identifier, which does not count
+    - the double-encoded `raw` fixture
+  - It is registered via `run_suite` in `scripts/test-all.sh`, because follow-through suites are
+    not picked up by the globs.
+  - **Measured on 2026-09-21** (24 h): 9 × `IMAGE_VERIFY_FAIL: result=cosign_absent` and 9 ×
+    `stage=relogin_failed`, all on one `_MACHINE_ID` (web-1). So PASS needs ≥1 host, never ≥2.
   - Directive on #8037:
     `<!-- soleur:followthrough script=scripts/followthroughs/cosign-verify-live-8037.sh earliest=<merge+1d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`
     plus the `follow-through` label. It needs no new sweeper secrets.
@@ -881,7 +1048,7 @@ in_transit:
     does_not_defend: >-
       a compromised Sigstore publisher or ghcr.io serving different bytes under the tag. It is
       defended instead by the @sha256 digest pin in COSIGN_IMAGE.
-    disclosed_as: model.c4 new edge hetzner -> sigstore (image distribution, not a verify call); ADR-087 amendment
+    disclosed_as: model.c4 second hetzner -> ghcr edge (LIVE anonymous verifier-image pull); ADR-087 amendment
   - connection: registry heartbeat -> Better Stack ingest (unchanged, gains two fields)
     tls: HTTPS
     cert_verification: on
@@ -894,6 +1061,35 @@ exception:
     reevaluate_when: the state file ever gains a field other than result= and at=
     expires_on: 2027-09-21
 ```
+
+## Downtime & Cutover
+
+- **Operation.** A volume-preserving `registry-host-replace`, fired by
+  `registry-host-replace-dispatch.yml` on the merge.
+- **Surface.** zot is the fleet's **only** image pull path. The host GHCR fallback is dead
+  (#7071). Running containers keep serving, and only new pulls are affected.
+- **Zero-downtime evaluation.** Not possible, and the reasons were measured, not assumed:
+  - the registry is a singleton with a fixed private IP (`10.0.1.30`)
+  - its volume attaches to one host at a time
+  - create-before-destroy therefore cannot hold both
+
+  Blue-green would need a second volume and a store copy. That is a recut-class operation
+  (ADR-169), far larger than this change.
+- **Bounded window.** Destroy, create, boot, LUKS open, then zot start: about 3–8 minutes. It
+  opens only after preflight P3 clears the co-fired release (up to 35 minutes of waiting, during
+  which nothing is down). Deploys inside the window fall to `_try_local_cache_reload`. The boot
+  escrow run is backgrounded **after** `docker run zot`, so it never lengthens the window.
+- **Expected page.** `registry_store_not_luks` needs ≥2 matching rows in 15 minutes. A single
+  pre-mount heartbeat tick on the new boot cannot page. `soleur-registry-prd` may page during
+  the window, which is existing behaviour for any replace.
+- **Verification.** A SOLEUR_ZOT_DISK row with a **new** `boot_id` and `store_luks=yes`,
+  `store_escrow=ok`, `store_probe_rc=cs0.bk0` and `luks_open_arm=` present, plus a green
+  `web_zot_consumer` probe.
+- **Rollback.** Revert the PR, which is another volume-preserving replace carrying the old
+  user_data. For a replace that fails to boot, re-dispatch `registry-host-replace`.
+- **Sign-off.** This is the delivery mechanism the repo already automates (ADR-190: "the merge
+  IS the intent to deliver"). The residual window is the one every registry user_data change
+  accepts. No new maintenance window is introduced.
 
 ## Infrastructure (IaC)
 
@@ -943,6 +1139,11 @@ as the sibling does. It works on the free tier because email is always on.
 - It is pulled on **every** deploy, because `docker image prune -af` runs before the verify.
   This makes public ghcr.io a per-deploy dependency. An ENFORCE flip must first decide whether
   to pin the verifier image locally.
+- The failure mode, stated: if the anonymous pull fails (a ghcr.io outage or rate limit), the
+  `docker run` fails with `Unable to find image` / `denied`, and it is classified
+  `cosign_absent`. Under WARN the deploy runs the digest unverified and Sentry receives
+  `cosign_verify_event`. Under ENFORCE the deploy would be blocked. That is why a local pin is
+  the ENFORCE precondition.
 - The mounted host config's purpose narrows to the `.sig` referrer fetch only.
 - Why: the implicit pull presented a revoked inline `ghcr.io` credential, and GHCR returns DENIED
   to a revoked credential where it serves a public image anonymously. That made verification dead
@@ -950,8 +1151,10 @@ as the sibling does. It works on the free tier because email is always on.
 - Add to `## Alternatives Considered`: "mint a new read credential", rejected by ADR-088 arm-b and
   hr-github-app-auth-not-pat, and "logout ghcr.io", deferred to #8036 1c.
 
-No new ADR. The sentinel launch gate is an implementation of ADR-096's existing LUKS decision
-(#6895 D2), not a new decision. It is recorded in the cloud-init comment and in the ledger's
+No new ADR. **Amend ADR-096** with one line: zot launch moves from fail-open (serve whatever
+`/var/lib/zot` holds) to **fail-closed on every container start** (the sentinel bind), with
+≤5-min self-heal through the NIC guard. That is an explicit availability-for-integrity trade on
+the sole pull path. The gate otherwise implements ADR-096's existing LUKS decision (#6895 D2). It is recorded in the cloud-init comment and in the ledger's
 `does_not_defend` wording after delivery.
 
 ### C4 views
@@ -966,19 +1169,22 @@ All three files were read (`model.c4`, `views.c4`, `spec.c4`). This is the enume
   - **Unmodelled:** the web hosts' live pull of the cosign **verifier image** from public
     `ghcr.io/sigstore/cosign`. This is exactly the #7282 lesson (a live public-ghcr dependency
     hiding behind the dead private node), repeated on the web hosts.
-  - **Revised after plan review.** DHH and simplicity objected to a new node. The external system
-    is Sigstore, which **is** already modelled, so the mandate is met with a new **edge**, not a
-    new element: `hetzner -> sigstore "Pulls the @sha256-pinned cosign VERIFIER IMAGE anonymously
-    from public ghcr.io/sigstore/cosign on every deploy (it is pruned before each verify) —
-    artifact distribution, NOT a verify-time call; the verify itself stays offline (ADR-087,
-    amended #8036)"`, with technology "Docker/HTTPS (anonymous, digest-pinned)".
-  - Rewrite the `// NOTE: the former hetzner -> sigstore verify edge was REMOVED` comment, so it
-    distinguishes the removed verify-call edge from this distribution edge.
-  - `views.c4`: `sigstore` appears in one view include line and `hetzner` in another. The edge
-    only renders where both endpoints are included, so the work phase decides which view should
-    show it. Its template is the `hetzner -> ghcr` edge's rendering: use the view that already
-    renders that edge. If `sigstore` is missing from that view, add it to the `include` line.
-    `c4-render.test.ts` proves the edge renders.
+  - **Revised twice.** Plan review rejected a new node. Deepen review (architecture) then showed
+    that a `hetzner -> sigstore` edge would repeat the #7282 mistake: the live dependency is
+    **ghcr.io's availability and its anonymous rate limit**, not Sigstore's. The edge would also
+    pull `sigstore` into the containers view and move the counts.
+  - **Final form:** a **second** `hetzner -> ghcr` edge (duplicate edges already exist, for
+    example `hetzner -> zotRegistry` twice):
+    `hetzner -> ghcr "LIVE (#8036): anonymous public pull of the @sha256-pinned cosign VERIFIER
+    IMAGE (ghcr.io/sigstore/cosign) on every deploy — pruned before each verify. Distinct from
+    the DEAD private-package edge: this one needs no credential and is a per-deploy dependency on
+    ghcr.io availability and anonymous rate limits (ADR-087 amendment)"`, with technology
+    "Docker/HTTPS (anonymous, digest-pinned)".
+  - Also amend the `ghcr` node description, which says "can serve none TO HOSTS", to scope that
+    claim to the private packages.
+  - No `sigstore` or view change.
+  - `views.c4`: unchanged. `ghcr` and `hetzner` are both already included wherever the existing
+    `hetzner -> ghcr` edge renders.
 - **Edge text.** `hetzner -> ghcr`: append that the cosign verifier pull no longer traverses this
   edge's credential (#8036). The edge stays DEAD, pending 1c.
 - **Containers and data stores touched.**
@@ -1003,10 +1209,12 @@ The ADR amendment and the C4 edits land in the same PR as Phase 1. There is no d
 character or `(`.
 
 **Assembly.** The chokepoint is `templatefile(` call sites in `apps/web-platform/infra/*.tf`.
-The file set is **derived** by grepping those call sites for their first argument, never
-hand-listed. Today that is 7 files: `cloud-init.yml`, `cloud-init-inngest.yml`,
-`cloud-init-registry.yml`, `cloud-init-grok-dogfood.yml`, `docker-daemon.json.tmpl`,
-`hooks.json.tmpl` and `soleur-doppler-token.tmpl`. The comment filter is the
+The file set is **derived** by grepping those call sites (`apps/web-platform/infra/**/*.tf`, with
+`${path.module}` resolved per file) for their first argument, never hand-listed. Today that is 8
+files: `cloud-init.yml`, `cloud-init-inngest.yml`, `cloud-init-registry.yml`,
+`cloud-init-grok-dogfood.yml`, `docker-daemon.json.tmpl`, `hooks.json.tmpl`,
+`soleur-doppler-token.tmpl`, and `cloud-init-git-data.yml` (the one rendered through
+`modules/git-data-userdata/main.tf`). The comment filter is the
 `registry_rationale_strip` regex.
 
 **Mutation matrix.**
@@ -1016,7 +1224,7 @@ hand-listed. Today that is 7 files: `cloud-init.yml`, `cloud-init-inngest.yml`,
 | 1 | Restore `cs$$_cs_rc` at the `STORE_PROBE_RC` site | RED |
 | 2 | Restore `$$PATH` at the heartbeat PATH line (a second member after a compliant first) | RED |
 | 3 | Add `x=$$((1+1))` to `cloud-init-inngest.yml` (a different file of the assembly, so the scan is not pinned to the registry file) | RED |
-| 4 | Add a new `templatefile("${path.module}/new.tmpl"…)` call site whose template contains `$$FOO` (dispatch: the derived count becomes 8) | RED |
+| 4 | Add a new `templatefile("${path.module}/new.tmpl"…)` call site in a **nested module** whose template contains `$$FOO` (dispatch: the derived count becomes 9) | RED |
 | 5 | Make the derivation return 0 files | RED (floor + set identity) |
 
 **Harness rows.**
@@ -1027,7 +1235,7 @@ hand-listed. Today that is 7 files: `cloud-init.yml`, `cloud-init-inngest.yml`,
 | H2 | Must-PASS: `tmp=/tmp/x.$$` followed by `.` (a legitimate PID use) | GREEN |
 | H3 | Must-PASS: a bare `$$FOO` on a comment line (stripped exactly as the render strips it) | GREEN |
 
-**Anchor.** The floor `>= 7` is paired with set identity against the list derived from the
+**Anchor.** The floor `>= 8` is paired with set identity against the list derived from the
 `.tf` call sites. Removing a file from the set needs a `.tf` edit that review sees.
 
 ### Guard 2 — cosign verifier image is never pulled with a credential
@@ -1036,9 +1244,11 @@ hand-listed. Today that is 7 files: `cloud-init.yml`, `cloud-init-inngest.yml`,
 config holding auths, a `credsStore` or `credHelpers`.
 
 **Assembly.** Every docker subcommand in `ci-deploy.sh` that names `$COSIGN_IMAGE`. Today that is
-exactly one: the verify `docker run`. The suite counts `$COSIGN_IMAGE` occurrences on docker
-command lines as set identity (=1), so a second pull or run site added later fails until it
-carries the prefix too.
+exactly one: the verify `docker run`. The suite **joins backslash-continued lines first** (the
+image sits on a continuation line), excludes the `readonly COSIGN_IMAGE=` declaration and
+comments, and counts the remaining references as set identity (=1). A second pull or run site
+added later fails until it carries the prefix too. The property also covers the logged fail-open
+(`anon_config=unavailable`) as the one sanctioned exception, which must be logged.
 
 **Mutation matrix.**
 
@@ -1174,15 +1384,18 @@ the state file (the one channel), and the heartbeat reader (the one consumer).
       numbers in the PR.
 - [ ] Phase 8: the workflow guard suite is green, with no `${{ inputs` inside `run:`. Every
       script exit code is in the summary table, and the run exits non-zero on any rc other than 0.
-- [ ] ADR-087 is amended. The `model.c4`/`views.c4` edits are in. `c4-count-parity.test.sh`,
+- [ ] ADR-087 (mechanism and failure mode) and ADR-096 (fail-closed launch trade) are amended.
+      The second `hetzner -> ghcr` edge and the `ghcr` description scope are in `model.c4`. `c4-count-parity.test.sh`,
       `c4-code-syntax.test.ts` and `c4-render.test.ts` are green.
 - [ ] The suite set was derived mechanically:
       `git grep -ln '<changed-path>' -- 'tests/**' 'scripts/**' 'apps/**' 'plugins/**' '.github/**'`
       for every changed path, unioned. All suites were run, and the list and results are in the
       PR.
 - [ ] Repo-global gates, run by hand:
-  - `fixture-relative-assert` 62/62 (or the new floor)
-  - `guard-vacuity-floor` 23/23 (or the new floor)
+  - `fixture-relative-assert`: compared **row by row** against its baseline, not as a count.
+    Regenerate it with `--write-baseline` in the same commit and review the diff (test review).
+  - `guard-vacuity-floor`: it discovers suites by their shape, so every new suite's floor uses
+    the recognised shape. It has no per-suite rows to add.
   - `lint-diagnosis-claims` 24/24
   - `lint-window-closure-assertion` 24/24
   - `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`
@@ -1191,7 +1404,7 @@ the state file (the one channel), and the heartbeat reader (the one consumer).
   - `python3 scripts/lint-guard-contract.py <this plan>` clean
 
   Any floor raised is raised in the same edit as its row.
-- [ ] The PR body names the three merge-time deliveries. It uses `Ref #8036 #8037 #8417 #8408
+- [ ] The PR body names the four merge-time pipelines. It uses `Ref #8036 #8037 #8417 #8408
       #8449 #8278`. It contains **no** closing keyword for any of them, not even in prose. It
       carries the 1c recommendation, the UC1 recommendation, the 1b closed-vocabulary deviation
       (no username or identity field), the ≤5-min fail-closed bound of the sentinel gate, and the
