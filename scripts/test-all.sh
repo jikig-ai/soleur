@@ -2169,6 +2169,9 @@ if want_scripts; then
   # load-bearing arms are SYSLOG_IDENTIFIER field isolation, latest-verdict grading, and
   # zero-hosts-never-PASS.
   run_suite "scripts/cosign-verify-live-8037" bash scripts/followthroughs/cosign-verify-live-8037.test.sh
+  # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
+  # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
+  run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
