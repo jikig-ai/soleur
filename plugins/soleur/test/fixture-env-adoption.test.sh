@@ -420,6 +420,12 @@ readonly DEFERRED=(
   # classified read. Neither touches a fixture. Kept as a listed entry rather than special-cased,
   # because the honest statement is "the classifier is fail-closed and this is what that costs".
   apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts
+  # Classifier boundary, #8101: the `git config --system` lines run only inside the runtime arm's
+  # disposable docker container, as root, against that container's /etc/gitconfig. There is no
+  # repository fixture, and the system config IS the subject: the fence probe must see a direct
+  # value, an [include] redirect and an unset. `git_fixture_env` sets GIT_CONFIG_NOSYSTEM, which
+  # would delete those rows. Listed rather than special-cased, like the entries above.
+  apps/web-platform/infra/git-data-cutover-access.test.sh
 )
 
 # --- report ----------------------------------------------------------------------------------------
