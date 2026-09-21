@@ -4,7 +4,7 @@ description: "This skill should be used when preparing a feature for production 
 ---
 
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
@@ -2081,40 +2081,20 @@ Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Rep
 
 ### Feature-Tweet Draft (pre-merge bundle)
 
-Generate any eligible feature-tweet draft NOW — after the semver/`app:*` labels
-are applied (eligibility reads the PR labels + title) — and **commit it to the
-feature branch** so it rides this PR into `main`, where `content-publisher.sh`
-reads from. This replaces the old post-merge generation, which wrote the draft
-into a worktree that `cleanup-merged` reaps before it ever reaches `main` (so
-the cron never saw it). The draft is **inert** (`status: draft`, empty
-`publish_date`) and never posts until the operator sets `publish_date` +
-`status: scheduled` — their post-deploy confirmation gate — so bundling it
-pre-merge does NOT weaken the "only tweet what actually deployed" property;
-`soleur:postmerge` Phase 3.8 still verifies deploy health and warns before the
-operator schedules.
+After the semver/`app:*` labels are applied, run the eligibility gate — **in this body, not
+behind the pointer.** The extraction under ADR-229 moved the whole step to the reference,
+including the one command that DECIDES it, which left the decision to agent judgement over
+the PR's labels and title and demoted a fail-closed check to a guess:
 
-1. **Eligibility (fail-closed):** `bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>`.
-   Ineligible (exit non-zero, `excluded: <reason>`) → **skip silently** (most PRs
-   land here: fixes, infra, non-product). Do not surface the exclusion.
-2. **Eligible →** invoke `skill: soleur:feature-tweet #<PR_NUMBER>` (writes +
-   displays the draft for approval per its §Output contract).
-3. **Commit + push the draft to the feature branch** so it lands on `main` with
-   the squash merge (stage ONLY the draft file — never `git add -A`):
+```bash
+bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>
+```
 
-   ```bash
-   git add knowledge-base/marketing/distribution-content/<draft-file>.md
-   git commit -m "content: feature-tweet draft for #<PR_NUMBER> (inert — operator schedules post-deploy)"
-   git push
-   ```
-
-   The draft is a NEW commit, so the Phase 6.4 Unpushed-Commits Gate re-checks
-   clean before merge. Headless mode: same — generate + commit + push; never
-   schedule (the inert draft + operator gate are the publish control).
-
-If `soleur:ship` is hand-rolled and this step is skipped, the draft never reaches
-`main`; `soleur:postmerge` Phase 3.8 detects the missing on-`main` draft and
-runs the standalone catch-up (which then needs its own follow-up commit to land
-on `main`).
+Non-zero (`excluded: <reason>`) → **skip silently** and go to Phase 6.5. Most PRs land here
+(fixes, infra, non-product); do not surface the exclusion. Exit 0 → read
+[references/feature-tweet-draft.md](./references/feature-tweet-draft.md) now and follow it to
+completion — the draft must be committed to the feature branch so it rides this PR into
+`main`. Only generate/commit lives behind the pointer; the gate does not.
 
 ## Phase 6.5: Verify PR Mergeability
 

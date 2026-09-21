@@ -243,3 +243,26 @@ Two things it does differently, both deliberate and both worth reading before a 
 
 The free-tier count is now two. A third still needs the same argument this one made: name the
 signal class, show no existing alert covers it, and probe the predicate live before writing it.
+
+## Amendment — 2026-09-20 (#8296): the reconciler resolves a var-driven `paused`
+
+The 2026-09-18 amendment above recorded that `reconcileLogsAlerts` "treats a non-literal-`false`
+declaration as intent". That sentence is no longer true and is superseded here rather than
+edited (dated records are append-only). Since #8296:
+
+- `parseLogsAlertBlocks` takes the same `InfraVariables` map the heartbeat and monitor arms have
+  taken since #7884, and `resolvePausedIntent` resolves a declared `paused` of the shape
+  `var.<name>` / `!var.<name>` against that variable's DECLARED DEFAULT. A declaration that
+  resolves to `paused = false` is armed, and a live pause on it is reported as `logs-alert-paused`
+  — Decision 5's original invariant, restored for this alert.
+- A declaration that does NOT resolve (unknown variable, non-boolean default, any other
+  expression shape) stays exempt and quiet. This is a deliberate polarity choice, documented on
+  the `pausedResolvesFalse` field: the monitor arm THROWS for a non-literal `paused`; this arm
+  does not, because a false page on an alert the operator paused on purpose is how a real page
+  gets muted later.
+- Resolution reads SOURCE defaults only. A Doppler `TF_VAR_*` override is invisible to it, so an
+  override that pauses an alert whose default arms it is reported as drift — intended; it is the
+  only detector a forgotten override has. The drift workflow's triage text names the check.
+
+The 2026-09-18 clause "It ships PAUSED" is falsified by PR-2 of #8296 (the ledger flip), which
+carries its own amendment; this one is scoped to the reconciler sentence, which PR-1 falsifies.

@@ -1229,6 +1229,7 @@ dev-server
 devdependencies
 developer-experience
 devin
+devin-cache
 devin-cloud
 dhh-rails-reviewer
 di-seam
@@ -1451,6 +1452,7 @@ evidence-first
 evidence-integration
 evidentiary-records
 exacerbation-rule
+exact-count
 exact-equality
 exact-match
 exactly-once
@@ -2268,6 +2270,7 @@ mcp-integration
 mcp-registration
 mcp-tools
 measure-dont-infer
+measured-claim
 measurement
 measurement-discipline
 measurement-gate
@@ -2286,6 +2289,7 @@ merge-conflict
 merge-conflicts
 merge-direction
 merge-driver
+merge-is-apply
 merge-livelock
 merge-pr
 merge-queue
@@ -2398,6 +2402,7 @@ multi_agent_review
 multimodal
 mutation-axes
 mutation-battery
+mutation-survivor
 mutation-test
 mutation-testing
 n1-validation-gate
@@ -3055,6 +3060,7 @@ ratcheted-guards
 ratchets
 rate-limit
 rate-limit-loop
+rate-limit-resume
 rate-limiting
 rate-limits
 rbac
@@ -3607,6 +3613,7 @@ sibling-mechanism
 sibling-migration
 sibling-pr
 sibling-race
+sibling-sweep
 sibling-worktree
 sidebar
 sidebar-persistence
@@ -3863,6 +3870,7 @@ supabase-numeric
 supabase-realtime
 supabase-rpc
 supabase-ssr
+superseded-in-place
 supply-chain
 supply-chain-security
 support
@@ -4087,6 +4095,7 @@ transcript
 transcript-judging
 transition
 transparency
+transport
 transport-confinement
 trap
 trap-cleanup
@@ -4238,6 +4247,7 @@ vendored-library
 vendored-upstream
 vendorsupabase
 verbatim
+verbose-gated
 verbs
 verdict
 verdict-cache
@@ -4419,6 +4429,7 @@ worktree-hygiene
 worktree-isolation
 worktree-manager
 worktree-race
+worktree-reaper
 worktree-wedge
 worktrees
 worm
