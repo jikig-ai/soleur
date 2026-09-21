@@ -168,4 +168,19 @@ describe("AgentEngineSettings", () => {
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ engineId: "claude-code", authMode: "api-key" }) }),
     ));
   });
+
+  it("discloses user-provider retention when api-key mode is selected", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        defaultEngineId: "claude-code",
+        defaultAuthMode: "managed",
+        engines: [{ id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true }],
+      }),
+    });
+    const { findByLabelText, findByTestId } = render(<AgentEngineSettings isOwner />);
+    const mode = await findByLabelText("Authentication mode");
+    fireEvent.change(mode, { target: { value: "api-key" } });
+    expect(await findByTestId("user-provider-disclosure")).toHaveTextContent("retention");
+  });
 });
