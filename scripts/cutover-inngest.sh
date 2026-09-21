@@ -3050,6 +3050,11 @@ case "$OP" in
     LK_STATE=$(confirm_luks_state "$LK_ISO")
     if [[ "$LK_STATE" == "$LK_EXPECT" ]]; then
       echo "::notice::op=$OP: FSM confirmed '$LK_EXPECT' via Better Stack (since $LK_ISO). The store is on $( [[ "$OP" == luks-cutover ]] && echo 'the ENCRYPTED volume' || echo 'the PLAINTEXT volume' ), proven byte-identical before the swap."
+      # The notice above is SHARED with luks-cutover; this line is rollback-only (#8296). A rollback
+      # makes no commit, so the record it falsifies must be reverted by hand.
+      if [[ "$OP" == luks-rollback ]]; then
+        echo "::notice::NEXT (not automatic): the record now claims encryption for a store on the plaintext volume. Revert scripts/encryption-posture-ledger.json (hcloud_volume.inngest_redis_luks back to plaintext-exception) and the PA-21/PA-22/PA-13 amendments in knowledge-base/legal/article-30-register.md, per runbook inngest-luks-cutover-6894.md section 5. The backstop hcloud_volume.inngest_redis is now the LIVE store: do NOT destroy it."
+      fi
     else
       case "$LK_STATE" in
         rolled-back)

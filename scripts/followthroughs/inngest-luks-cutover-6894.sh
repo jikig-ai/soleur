@@ -22,7 +22,9 @@
 # EXIT CONTRACT: 0 = the invariant holds; 1 = read succeeded, it does not yet; 2 = TRANSIENT;
 # 78 = refused under xtrace.
 #
-# RETIREMENT: when #6894's cutover tracker closes, delete this file with its staging sibling.
+# RETIREMENT: delete this file after #8295 (the cutover tracker it is enrolled on, closed 2026-09-20)
+# leaves the sweeper's 14-day closed lookback on 2026-10-04. Until then it is the only detector that
+# can REOPEN #8295 if the cutover regresses. It has no sibling.
 set -uo pipefail
 
 case "$-" in
@@ -122,7 +124,7 @@ if [[ "$DONE_N" -ge 1 && "$ON_MAPPER" -ge 1 ]]; then
     exit 1
   fi
   echo "PASS: the FSM completed and the host reports /mnt/data on the canonical mapper with a pinned volume alias (#6894 AC-35)."
-  echo "NEXT (not automatic): flip hcloud_volume.inngest_redis_luks to mechanism=luks in scripts/encryption-posture-ledger.json, and rewrite the hcloud_volume.inngest_redis row as a retained plaintext backstop (#8285)."
+  echo "NEXT (not automatic): the ledger flip landed in #8296. The one remaining step is #8285: destroy the retained plaintext backstop hcloud_volume.inngest_redis by 2026-10-22."
   exit 0
 fi
 echo "not yet: the cutover has not completed on this host, or the store is not yet reported on the canonical mapper"

@@ -112,7 +112,7 @@
 #                        literal `cp -a ` inside a `grep -cE` pattern that COUNTS copy sites in the
 #                        SUT; nothing is written. Left as a row rather than reworded, because
 #                        respelling a regex to dodge a detector is not a fix.
-#                     1  scripts/followthroughs/inngest-luks-cutover-6894.sh:120 -- also a FALSE
+#                     1  scripts/followthroughs/inngest-luks-cutover-6894.sh (the NEWEST_BAD test) -- a FALSE
 #                        POSITIVE: `[[ "$NEWEST_BAD" > "$NEWEST_DONE" ]]` is a LEXICOGRAPHIC
 #                        comparison inside `[[ ]]`, not a redirect. Same reasoning as above.
 #
