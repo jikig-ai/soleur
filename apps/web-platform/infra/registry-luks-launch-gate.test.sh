@@ -96,6 +96,7 @@ check "zot_start_action rides the POSTed SOLEUR_PRIVATE_NIC line, before zot_las
 # Call sites only: non-comment lines, `arm <token>` at statement start or after `{`/`;`. The
 # word "arm" in prose must not count, or the derivation measures comments.
 WRITTEN="$(sed -E '/^[[:blank:]]*#/d' "$CI_YML" | grep -oE '(^[[:blank:]]*|[{;][[:blank:]]*)arm [a-z_]+' | awk '{print $NF}' | sort -u)"
+# shellcheck disable=SC2034  # read inside check()'s eval'd condition string
 READ_SET="$(grep -E '^[[:blank:]]+already_open \| opened' "$CI_YML" | head -1 | sed -E 's/\).*//; s/[|]/ /g' | tr -s ' ' '\n' | grep . | sort -u)"
 check "the writer emits all six luks-open arms (derived: $(tr '\n' ' ' <<<"$WRITTEN"))" \
   "[ \"\$(grep -c . <<<\"\$WRITTEN\")\" -eq 6 ]"

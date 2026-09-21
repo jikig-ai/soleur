@@ -194,6 +194,7 @@ check "static: an EXIT trap writes indeterminate when no verdict was recorded (a
   "grep -qF \"trap '[ -n \\\"\\\$RESULT\\\" ] || write_state indeterminate' EXIT\" '$RAW'"
 
 # --- Delivery: the cron line, the boot call, and minute isolation --------------------------------
+# shellcheck disable=SC2034  # read inside check()'s eval'd condition string
 CRON_LINE="$(grep -E '^      19 3 \* \* \* root .*registry-luks-escrow\.sh$' "$CI_YML" || true)"
 check "the cron line runs daily at 03:19 under doppler run --only-secrets REGISTRY_LUKS_KEY" \
   "grep -qF 'doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY -- /usr/local/bin/registry-luks-escrow.sh' <<<\"\$CRON_LINE\""
