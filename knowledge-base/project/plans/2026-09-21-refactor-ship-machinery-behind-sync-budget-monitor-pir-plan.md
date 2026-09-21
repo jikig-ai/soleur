@@ -888,3 +888,14 @@ Panel: DHH, Kieran, code-simplicity, CTO (devex), plus the Step 4.5 advisor cons
 - **Not applied:** CTO P1's `find`-in-the-plugin-cache fallback chain (a `find` over a path the
   customer's machine controls reintroduces the ADR-179 vector); CTO P2's pasted `$PR_WT` (widens the
   paste contract; the `detached_head` line names the cause instead).
+
+## Addendum — 2026-09-21 (work phase)
+
+Changes from the plan text above, measured during implementation. The sections above are left as written.
+
+- **#8334 cues:** the corpus run (1989 plans, 345 → 333 firing, 12 flipped, none cited by a post-mortem) found zero hits for `never`, `without`, `n't` and `instead of`, so they were dropped with their fixtures under the gate's own bar. Kept: `no`, `not`, `not that`, `rather than`. Fixtures `two-tokens-both-denied`, `actuality-line-only-token-denied` and N2's were reworded to kept cues; N9 uses `cue-two-words-from-token-still-signals.md`. Floors equal the measured counts (`FIXTURE_MIN` 26, rows 22, `MIN_ASSERTIONS` 40). Counts and the regenerating commands live in `scripts/ship-incident-pir-gate.sh`'s header.
+- **#8383 tag:** the script keeps its existing `[pr-behind-sync]` tag (asserted by `pr-merge-poll.test.ts`), not `[sync-pr-behind]`.
+- **#8383 root read:** a bare `${CLAUDE_PLUGIN_ROOT}` aborted the whole poll under `set -u` when unset (fixture 13b). The fences read it once in a `set +u` subshell, which keeps the exact token the loader substitutes.
+- **Mutation rows M2 and M7 are equivalent:** bash suspends errexit inside a function called from an `||` list, and both callers run `sync_step || rc=$?`. Recorded in the script comment and fixture 6i.
+- **§C contingency applied:** the consolidation alone left ship at 3363 B of headroom (< 4396 B), so the settle-then-admin-merge procedure moved to `ship/references/settle-then-admin-merge.md`, with both fences printing `[ship.phase7.hatch_check]` at sync 2. Final headroom: ship 13646 B, postmerge 7522 B.
+- **Detached-worktree tension (Non-Goals):** fixed inline in ship Phase 7 rather than filed — the detached-worktree rule applies to post-merge Monitors; the pre-merge poll runs from the PR worktree.

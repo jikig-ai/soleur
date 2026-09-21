@@ -377,6 +377,58 @@ describe("ship Incident-PIR gate (#6813)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #8334 — the outage scan was negation-blind. On PR #8320 the ONLY outage-vocabulary hit in the
+// whole corpus was `not that the feature has stopped working`, a denial, and the gate asked for
+// a PIR. `neg_strip()` blanks an occurrence when a cue governs it within ONE word, or a
+// clause-level denial phrase precedes it in the same clause; every other occurrence survives.
+// Every denial fixture carries a production token elsewhere, so a no-signal verdict can only
+// come from the outage half being denied — never from a missing production conjunct.
+describe("negation-aware outage scan (#8334)", () => {
+  test.each([
+    // the only outage token is denied -> no signal
+    ["negated-outage-only.md", false],
+    ["denial-specimen-8334.md", false],
+    ["two-tokens-both-denied.md", false],
+    ["actuality-line-only-token-denied.md", false],
+    // one fixture per kept cue / phrase (`no` and `not that` are pinned above). `never`,
+    // `without`, `n't` and `instead of` were dropped at zero corpus hits (see the gate header).
+    ["negation-cue-not.md", false],
+    ["negation-cue-rather-than.md", false],
+    // a real report survives a denial that does not govern it -> signal
+    ["negation-in-prior-clause-real-report.md", true],
+    ["negated-and-real-token-same-line.md", true],
+    ["no-alert-when-prod-went-down.md", true],
+    ["didnt-notice-deploy-was-blocked.md", true],
+    ["cue-two-words-from-token-still-signals.md", true],
+    ["real-report-with-unrelated-negation.md", true],
+  ])("%s signals=%p", (fixture, want) => {
+    expect(signals(fixture as string)).toBe(want as boolean);
+  });
+
+  // AC11: a suppression is never silent. exit 1 alone is byte-identical to a clean no-signal.
+  test("a denied outage line is disclosed on stderr and the run exits 1", () => {
+    const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
+      input: require("fs").readFileSync(resolve(FIX, "negated-outage-only.md"), "utf8"),
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('ship-incident-pir-gate: PIR-OUTAGE-NEGATION-SUPPRESSED — "');
+    expect(res.stderr).toContain("There was no outage;");
+    expect(res.stdout.trim()).toBe("");
+  });
+
+  // The sentinel line is removed WHOLE, so a PR body that starts a line with the sentinel text
+  // could otherwise delete its own outage report from the haystack. The strip scrubs the marker
+  // out of input lines before anything else sees them.
+  test("input text carrying the sentinel marker cannot hide a real report", () => {
+    expect(
+      signalsText("__PIR_NEG_SUPPRESSED__ The billing API went down in production on 2026-09-01.\n"),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // `--pr` corpus construction (#7987).
 //
 // The corpus used to be assembled by PROSE in ship/SKILL.md: grep a plan path out

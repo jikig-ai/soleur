@@ -43,6 +43,10 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(md).toContain("AwaitShell");
   });
 
+  test("behindSyncInstructions (claude) names the --step call the Monitor loop makes", () => {
+    expect(behindSyncInstructions("claude")).toContain("sync-pr-behind.sh <PR-number> --step");
+  });
+
   test("behindSyncInstructions forbids operator handoff on Grok", () => {
     const md = behindSyncInstructions("grok");
     expect(md).toContain("STOP");
@@ -58,6 +62,8 @@ describe("pr-merge-poll sentinel markers", () => {
     expect(stat).toContain("BEHIND detected");
     expect(stat).toContain("auto-sync");
     expect(stat).toContain("[pr-behind-sync]");
+    // The Phase 7 fences run `--step` and refuse a copy whose --help lacks it (#8383).
+    expect(stat).toContain("--step");
     expect(PR_BEHIND_SYNC_SENTINEL).toBe("pr-behind-sync-protocol");
   });
 

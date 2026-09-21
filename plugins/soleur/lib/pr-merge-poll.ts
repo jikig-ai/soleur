@@ -75,7 +75,7 @@ export function behindSyncInstructions(harness: Harness): string {
     case "claude":
       return [
         "**BEHIND/DIRTY resync (Claude Code)**",
-        `- When mergeStateStatus is \`BEHIND\` or \`DIRTY\`, run ship Phase 7 auto-sync inside the Monitor loop, or \`${script} <PR-number>\` from the worktree (DIRTY auto-syncs only when locally clean).`,
+        `- When mergeStateStatus is \`BEHIND\` or \`DIRTY\`, the ship Phase 7 Monitor loop calls \`sync-pr-behind.sh <PR-number> --step\` once per attempt; outside that loop run \`${script} <PR-number>\` from the worktree (DIRTY auto-syncs only when locally clean).`,
         `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked.`,
       ].join("\n");
 

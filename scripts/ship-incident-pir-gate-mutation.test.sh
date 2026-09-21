@@ -74,14 +74,26 @@ real-outage-inside-paragraph-without-actuality-idiom.md:no
 bulleted-label-consumed-by-trigger.md:no
 actuality-occurred-inflection.md:yes
 actuality-outranks-conditional-clause.md:yes
-unbalanced-fence-does-not-swallow-the-tail.md:yes"
+unbalanced-fence-does-not-swallow-the-tail.md:yes
+negated-outage-only.md:no
+denial-specimen-8334.md:no
+two-tokens-both-denied.md:no
+actuality-line-only-token-denied.md:no
+negation-cue-not.md:no
+negation-cue-rather-than.md:no
+negation-in-prior-clause-real-report.md:yes
+negated-and-real-token-same-line.md:yes
+no-alert-when-prod-went-down.md:yes
+didnt-notice-deploy-was-blocked.md:yes
+real-report-with-unrelated-negation.md:yes
+cue-two-words-from-token-still-signals.md:yes"
 
 # --- the baseline TABLE is itself a claim -----------------------------------------------------
 # The table is hand-maintained, so the baseline block proves only that whatever it lists behaves.
 # Deleting entries used to shrink the guarded set with no signal at all. Assert its CARDINALITY
 # against the fixture set this class introduced, and that every named file exists — a count alone
 # cannot see a substitution.
-FIXTURE_MIN=14
+FIXTURE_MIN=26
 table_n=$(printf '%s\n' "$FIXTURES" | grep -c ':')
 if [ "$table_n" -lt "$FIXTURE_MIN" ]; then
   fail "baseline table lists $table_n fixtures, floor is $FIXTURE_MIN — entries were removed from the guarded set"
@@ -103,7 +115,7 @@ if [ "$baseline_bad" -ne 0 ]; then
   echo "FATAL: unmutated control is RED — aborting rather than scoring rows against it."
   exit 2
 fi
-pass "baseline: all 14 canonical fixtures match under the unmutated gate"
+pass "baseline: all $table_n canonical fixtures match under the unmutated gate"
 
 cat > "$WORK/mutate.py" <<'PYEOF'
 import sys
@@ -113,14 +125,14 @@ BLANK = "       /^[[:space:]]*$/                                 {skip=0}\n"
 HASH  = "       /^[[:space:]]*#+([[:space:]]|$)/                 {skip=0}\n"
 TRIG  = "       tolower($0) ~ /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)?[*_]*if this (lands|leaks)/ {skip=1; next}\n"
 LIST  = "       /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ {skip=0}\n"
-ACT   = "       tolower($0) ~ ACTUALITY_RE                       {skip=0; print; next}\n"
+ACT   = "       tolower($0) ~ ACTUALITY_RE                       {skip=0; print neg_strip($0); next}\n"
 DROP  = "       tolower($0) ~ DROP_RE    { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }\n"
 def one(t):
     assert s.count(t) == 1, "anchor not unique for " + mid
     return s.replace(t, "", 1)
 if   mid == "M1":                                    # delete the whole paragraph stage
-    i = s.index("  | awk -v ACTUALITY_RE="); j = s.index("{print}')\"; then\n", i)
-    s = s[:i] + "  )\"; then\n" + s[j + len("{print}')\"; then\n"):]
+    i = s.index("  | awk -v ACTUALITY_RE="); j = s.index("{print neg_strip($0)}')\"; then\n", i)
+    s = s[:i] + "  )\"; then\n" + s[j + len("{print neg_strip($0)}')\"; then\n"):]
 elif mid == "M2": s = one(ACT)
 elif mid == "M3": s = one(BLANK)
 elif mid == "M4":
@@ -144,15 +156,37 @@ elif mid == "M10":                                   # delete the fail-toward-PI
     # failed" rather than passing on an un-applied mutation.
     assert s.count("if ! haystack=\"$(emit_corpus \\") == 1
     s = s.replace("if ! haystack=\"$(emit_corpus \\", "haystack=\"$(emit_corpus \\", 1)
-    i = s.index("{print}')\"; then\n")
+    i = s.index("{print neg_strip($0)}')\"; then\n")
     j = s.index("fi\n", i) + len("fi\n")
-    s = s[:i] + "{print}')\"\n" + s[j:]
+    s = s[:i] + "{print neg_strip($0)}')\"\n" + s[j:]
 elif mid == "M12":                                   # revert the unbalanced-fence re-emit
     old = "\n         END{ if (f) for (i=1; i<=n; i++) print buf[i] }"
     assert s.count(old) == 1; s = s.replace(old, "", 1)
 elif mid == "M11":                                   # DROP_RE above the re-admit
     assert s.count(DROP) == 1 and s.count(ACT) == 1
     s = s.replace(DROP, "", 1).replace(ACT, DROP + ACT, 1)
+# --- Guard 2, the negation strip (#8334). Each literal is asserted unique before it is edited.
+elif mid.startswith("N"):
+    FALL = "{print neg_strip($0)}')\"; then\n"
+    def sub(old, new):
+        global s
+        assert s.count(old) == 1, "anchor not unique for " + mid
+        s = s.replace(old, new, 1)
+    if   mid == "N1": sub(FALL, "{print}')\"; then\n")                   # fall-through site only
+    elif mid == "N2": sub("           while (match(pre, /[.;:!?,]/)) pre = substr(pre, RSTART + 1)\n", "")
+    elif mid == "N3": sub("out = substr(out, 1, st - 1) sp substr(out, st + len)",
+                          "out = \"\"; for (i = 0; i < length(s); i++) out = out \" \"")
+    elif mid == "N4": sub("while (match(rest, OUTAGE_RE) && RLENGTH > 0)", "if (match(rest, OUTAGE_RE) && RLENGTH > 0)")
+    elif mid == "N5": sub("[^a-z]+([a-z]+[^a-z]+)?$'", "[^a-z].*$'")
+    elif mid == "N9": sub("[^a-z]+([a-z]+[^a-z]+)?$'", "[^a-z]+([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?$'")
+    elif mid == "N6": sub("if (pre ~ NEG_CUE_RE || pre ~ NEG_PHRASE_RE)", "if (pre ~ NEG_CUE_RE)")
+    elif mid == "N7": sub("      continue\n", "      _l=\"${_l#\"$NEG_SENTINEL\"}\"\n")   # strip the marker only
+    elif mid == "N8": sub("{skip=0; print neg_strip($0); next}", "{skip=0; print; next}")   # re-admit site only
+    elif mid == "N10":
+        i = s.index('      echo "ship-incident-pir-gate: PIR-OUTAGE-NEGATION-SUPPRESSED'); j = s.index("\n", i) + 1
+        s = s[:i] + s[j:]
+    else:
+        sys.exit("unknown mutation " + mid)
 else:
     sys.exit("unknown mutation " + mid)
 open(dst, "w").write(s)
@@ -218,7 +252,8 @@ run_row() {
 # shellcheck disable=SC2016  # the run_row anchors are literal ERE patterns, no expansion wanted
 run_row M1  'ACTUALITY_RE=\"\$ACTUALITY_RE\"' 0 "precedent-citation-inside-hypothetical-paragraph.md:yes" \
   "deleting the paragraph stage re-opens the reported bug"
-run_row M2  'ACTUALITY_RE +\{skip=0; print; next\}' 0 "real-outage-claimed-inside-hypothetical-paragraph.md:no,actuality-occurred-inflection.md:no" \
+# shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
+run_row M2  'ACTUALITY_RE +\{skip=0; print neg_strip\(\$0\); next\}' 0 "real-outage-claimed-inside-hypothetical-paragraph.md:no,actuality-occurred-inflection.md:no" \
   "deleting the re-admit silences a real claim inside the paragraph — both idiom inflections"
 run_row M3  '\^\[\[:space:\]\]\*\$/ +\{skip=0\}' 0 "real-outage-after-hypothetical-paragraph.md:no" \
   "deleting the blank-line boundary runs the window to EOF"
@@ -228,7 +263,8 @@ run_row M5  '#\+\(\[\[:space:\]\]\|\$\)' 0 "real-outage-after-heading-boundary.m
   "deleting the hash boundary swallows a claim after a real heading"
 run_row M6  '\[-\*\+\]\[\[:space:\]\]\+\|\[0-9\]\+\[\.\)\]' 1 "real-outage-in-sibling-bullet.md:no,real-outage-in-nested-sub-bullet.md:no" \
   "deleting the list boundary swallows both sibling and nested blocks"
-run_row M7  'ORDER%ACTUALITY_RE +\{skip=0; print; next\}%^ +skip +\{ if \(!noted' 0 "real-outage-claimed-inside-hypothetical-paragraph.md:no" \
+# shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
+run_row M7  'ORDER%ACTUALITY_RE +\{skip=0; print neg_strip\(\$0\); next\}%^ +skip +\{ if \(!noted' 0 "real-outage-claimed-inside-hypothetical-paragraph.md:no" \
   "moving the re-admit BELOW the skip sink disarms it — the one ordering measured load-bearing"
 # shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
 run_row M8  'tolower\(\$0\) ~ /\[\[:space:\]\]\*\(\[-\*\+\]' 1 "midsentence-conditional-does-not-open-a-paragraph.md:no" \
@@ -236,12 +272,43 @@ run_row M8  'tolower\(\$0\) ~ /\[\[:space:\]\]\*\(\[-\*\+\]' 1 "midsentence-cond
 run_row M9  'print \"\"; next' 0 "real-outage-after-fenced-block-abutting-paragraph.md:no" \
   "reverting the fence boundary merges the paragraph with what follows the fence"
 # shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
-run_row M11 'ORDER%ACTUALITY_RE +\{skip=0; print; next\}%tolower\(\$0\) ~ DROP_RE' 0 "actuality-outranks-conditional-clause.md:no" \
+run_row M11 'ORDER%ACTUALITY_RE +\{skip=0; print neg_strip\(\$0\); next\}%tolower\(\$0\) ~ DROP_RE' 0 "actuality-outranks-conditional-clause.md:no" \
   "moving DROP_RE above the re-admit restores the two-stage incoherence: one conditional clause silences a stated actuality"
 
 # shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
 run_row M12 'END\{ if \(f\)' 0 "unbalanced-fence-does-not-swallow-the-tail.md:no" \
   "reverting the unbalanced-fence re-emit silently swallows the document tail"
+
+# --- Guard 2: the negation strip (#8334). N1 and N8 edit the same call at two sites, so each
+# anchor names ITS site (the `{print ...}` fall-through vs the ACTUALITY_RE re-admit), never a
+# bare `neg_strip(` count, which either mutant would satisfy.
+# shellcheck disable=SC2016  # literal ERE anchors, no expansion wanted
+run_row N1  "^ +\{print neg_strip\(\\\$0\)\}'" 0 "negated-outage-only.md:yes,two-tokens-both-denied.md:yes,denial-specimen-8334.md:yes" \
+  "dropping neg_strip at the fall-through lets a denied token reach the verdict"
+# shellcheck disable=SC2016
+run_row N2  'match\(pre, /\[\.;:!\?,\]/\)' 0 "negation-in-prior-clause-real-report.md:no" \
+  "without clause boundaries a cue in the PRIOR clause silences a real report"
+# shellcheck disable=SC2016
+run_row N3  'substr\(out, st \+ len\)' 0 "negated-and-real-token-same-line.md:no" \
+  "line-scoped blanking takes the real token down with its denied neighbour"
+# shellcheck disable=SC2016
+run_row N4  'while \(match\(rest, OUTAGE_RE\)' 0 "two-tokens-both-denied.md:yes" \
+  "judging only the first occurrence lets the second denied token through"
+# shellcheck disable=SC2016
+run_row N5  'NEG_CUE_RE=.*\[\^a-z\]\.\*' 1 "no-alert-when-prod-went-down.md:no,real-report-with-unrelated-negation.md:no" \
+  "a clause-wide cue window swallows a real report whose cue governs another word"
+# shellcheck disable=SC2016
+run_row N9  '\)\?\(\[a-z\]\+\[\^a-z\]\+\)\?' 1 "cue-two-words-from-token-still-signals.md:no" \
+  "a two-word cue window swallows the two-words-away report the one-word window keeps"
+# shellcheck disable=SC2016
+run_row N6  'pre ~ NEG_PHRASE_RE' 0 "denial-specimen-8334.md:yes,negation-cue-rather-than.md:yes" \
+  "without rule (b) the #8334 specimen and the rather-than denial signal again"
+# shellcheck disable=SC2016
+run_row N7  '^ +continue$' 0 "negated-outage-only.md:yes" \
+  "stripping only the marker leaves the payload, which re-injects the denied token"
+# shellcheck disable=SC2016
+run_row N8  'ACTUALITY_RE +\{skip=0; print neg_strip' 0 "actuality-line-only-token-denied.md:yes" \
+  "dropping neg_strip at the re-admit lets a denied token on an actuality line through"
 
 # M10's observable is a pipeline failure, not a fixture verdict.
 rows=$((rows+1))
@@ -262,6 +329,31 @@ else
   fail "M10: mutation engine failed"
 fi
 
+# N10's observable is the stderr note, which verdict() discards — so it is captured here.
+rows=$((rows+1))
+if python3 "$WORK/mutate.py" N10 "$PRISTINE" "$WORK/N10.sh" 2>/dev/null && ! cmp -s "$PRISTINE" "$WORK/N10.sh"; then
+  n10_m=$(grep -c 'PIR-OUTAGE-NEGATION-SUPPRESSED — ' "$WORK/N10.sh" || true)
+  n10_p=$(grep -c 'PIR-OUTAGE-NEGATION-SUPPRESSED — ' "$PRISTINE" || true)
+  if [ "$n10_p" -ne 1 ] || [ "$n10_m" -ne 0 ]; then
+    fail "N10: anchor did not move (pristine $n10_p, mutant $n10_m)"
+  else
+    bash "$WORK/N10.sh" < "$FIX/negated-outage-only.md" >/dev/null 2>"$WORK/N10.err"
+    if grep -q 'PIR-OUTAGE-NEGATION-SUPPRESSED' "$WORK/N10.err"; then
+      fail "N10: deleting the echo still printed the note — the stderr assertion cannot see it"
+    else
+      pass "N10: deleting the echo makes a suppression silent (the note vanishes from stderr)"
+    fi
+  fi
+  bash "$PRISTINE" < "$FIX/negated-outage-only.md" >/dev/null 2>"$WORK/N10p.err"; n10_rc=$?
+  if [ "$n10_rc" -eq 1 ] && grep -q 'PIR-OUTAGE-NEGATION-SUPPRESSED — "' "$WORK/N10p.err"; then
+    pass "N10-control: the shipped gate exits 1 and names the suppressed line on stderr"
+  else
+    fail "N10-control: the shipped gate did not disclose the suppression (rc=$n10_rc)"
+  fi
+else
+  fail "N10: mutation engine failed or produced no change"
+fi
+
 # --- empty haystack: structurally clean now the pipeline terminates in awk -------------------
 for probe in "" $'\n\n' $'If this lands broken\n'; do
   if printf '%s' "$probe" | bash "$PRISTINE" >/dev/null 2>&1; then
@@ -274,8 +366,8 @@ done
 # --- dispatch + floor, emitted directly (never through the helper it backstops) --------------
 # A FLOOR, not an equality — the row count is developer-incremented, and this file argues exactly
 # that for MIN_ASSERTIONS two blocks down. An equality here would make every added row a failure.
-if [ "$rows" -ge 12 ]; then pass "dispatch: $rows mutation rows ran (floor 12)"
-else fail "dispatch: only $rows rows ran, floor is 12"; fi
+if [ "$rows" -ge 22 ]; then pass "dispatch: $rows mutation rows ran (floor 22)"
+else fail "dispatch: only $rows rows ran, floor is 22"; fi
 
 # This battery never writes to $ORIG (mutants go to $WORK), so the old `cmp $ORIG $PRISTINE`
 # assertion was unfailable by construction while still counting toward the floor. Assert the
@@ -291,7 +383,7 @@ fi
 # number is how a floor ends up one above what the suite can reach. Raise it in lockstep when
 # assertions are added; it is a floor, never an equality (an equality makes every new assertion
 # a spurious failure). Emitted directly, never through the helper it backstops.
-MIN_ASSERTIONS=25
+MIN_ASSERTIONS=40
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FATAL: only %d assertions ran, floor is %d — the battery is vacuous\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
