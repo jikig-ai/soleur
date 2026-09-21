@@ -224,7 +224,8 @@ SHIM
 cat > "$BIN/runuser" <<'SHIM'
 #!/usr/bin/env bash
 [ "${1:-}" = -u ] && [ "${2:-}" = git ] && [ "${3:-}" = -- ] || { echo "runuser-shim: unexpected argv: $*" >&2; exit 64; }
-[ -n "${SHIM_RUNUSER_RC:-}" ] && exit "$SHIM_RUNUSER_RC"
+[ "${SHIM_RUNUSER_BROKEN:-0}" = 1 ] && { echo "runuser: user git does not exist" >&2; exit 1; }
+[ -n "${SHIM_RUNUSER_RC:-}" ] && [ "${4:-}" != true ] && exit "$SHIM_RUNUSER_RC"
 shift 3; exec "$@"
 SHIM
 # doppler: the script must never call it. Logged and refused.
@@ -516,7 +517,7 @@ ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 true
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -no SOURCE /mnt/git-data
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 d=/mnt/git-data/repositories; src=/dev/sdb; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; s=$(findmnt -no SOURCE -T "$d") || exit 5; [ "$s" = "$src" ] || exit 6; n=$(find -H "$d" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo "${#n}"
-ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 h=/mnt/git-data/hooks; p="$h/pre-receive"; src=/dev/sdb; sp=/mnt/git-data/hooks; w=/usr/local/bin/git-data-transport-wrapper.sh; [ -L "$h" ] && exit 10; [ -d "$h" ] || exit 10; [ -L "$p" ] && exit 12; [ -f "$p" ] && [ -x "$p" ] || exit 12; oh=$(stat -c '%U:%G %a' "$h") || exit 16; op=$(stat -c '%U:%G %a' "$p") || exit 16; [ "$oh" = "root:git 750" ] || exit 11; [ "$op" = "root:root 755" ] || exit 13; pp=$(stat -c '%U %a' "${h%/*}") || exit 16; case "$pp" in "root "[0-7][0145][0145]|"root "[0-7][0-7][0145][0145]) ;; *) exit 19 ;; esac; runuser -u git -- test -r "$p" && runuser -u git -- test -x "$p" || exit 17; v=$(env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM git config --system --includes --get core.hooksPath); g=$?; [ "$g" -le 1 ] || exit 16; [ "$v" = "$sp" ] || exit 14; grep -qxF -- HOOKS_DIR=\"\$\{GIT_DATA_HOOKS_DIR:-/mnt/git-data/hooks\}\" "$w" && grep -qxF -- exec\ git\ -c\ \"core.hooksPath=\$\{HOOKS_DIR\}\"\ \"\$\{verb#git-\}\"\ \"\$repo_real\" "$w" || exit 18; s=$(findmnt -no SOURCE -T "$h") || exit 5; [ "$s" = "$src" ] || exit 15; s=$(findmnt -no SOURCE -T "$p") || exit 5; [ "$s" = "$src" ] || exit 15; echo ok
+ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 h=/mnt/git-data/hooks; p="$h/pre-receive"; src=/dev/sdb; sp=/mnt/git-data/hooks; w=/usr/local/bin/git-data-transport-wrapper.sh; [ -L "$h" ] && exit 10; [ -d "$h" ] || exit 10; [ -L "$p" ] && exit 12; [ -f "$p" ] && [ -x "$p" ] || exit 12; oh=$(stat -c '%U:%G %a' "$h") || exit 16; op=$(stat -c '%U:%G %a' "$p") || exit 16; [ "$oh" = "root:git 750" ] || exit 11; [ "$op" = "root:root 755" ] || exit 13; pp=$(stat -c '%U %a' "${h%/*}") || exit 16; case "$pp" in "root "[0-7][0145][0145]|"root "[0-7][0-7][0145][0145]) ;; *) exit 19 ;; esac; runuser -u git -- true || exit 16; runuser -u git -- test -r "$p" && runuser -u git -- test -x "$p" || exit 17; v=$(env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM git config --system --includes --get core.hooksPath); g=$?; [ "$g" -le 1 ] || exit 16; [ "$v" = "$sp" ] || exit 14; grep -qxF -- HOOKS_DIR=\"\$\{GIT_DATA_HOOKS_DIR:-/mnt/git-data/hooks\}\" "$w" && grep -qxF -- exec\ git\ -c\ \"core.hooksPath=\$\{HOOKS_DIR\}\"\ \"\$\{verb#git-\}\"\ \"\$repo_real\" "$w" || exit 18; s=$(findmnt -no SOURCE -T "$h") || exit 5; [ "$s" = "$src" ] || exit 15; s=$(findmnt -no SOURCE -T "$p") || exit 5; [ "$s" = "$src" ] || exit 15; echo ok
 EXP
 # case_ac2_timeline <run-name> — the recorded remote timeline equals the expected file exactly.
 case_ac2_timeline() {
@@ -772,6 +773,7 @@ for spec in "FX13|fence_not_intact reason=hook_owner|SHIM_STAT_P=root:git 755" \
             "FX19|fence_not_intact reason=hooks_parent_writable|SHIM_STAT_PARENT=root 775" \
             "FX19b|fence_not_intact reason=hooks_parent_writable|SHIM_STAT_PARENT=git 755" \
             "FX17|fence_not_intact reason=hook_not_runnable_by_git|SHIM_RUNUSER_RC=1" \
+            "FX16r|probe_failed rc=16|SHIM_RUNUSER_BROKEN=1" \
             "FX16g|probe_failed rc=16|SHIM_GIT_RC=2" \
             "FX14u|fence_not_intact reason=hooks_path_mismatch|SHIM_GIT_RC=1" \
             "FX14v|fence_not_intact reason=hooks_path_mismatch|SHIM_GIT_HP=/elsewhere/hooks" \
@@ -1513,8 +1515,12 @@ if mutate f-m11-16-as-reason "$SCRIPT" 1 's#^    15\) reason=hooks_wrong_source 
   CASE_SCRIPT="$MUTANT" mutant_red f-m11-16-as-reason case_fence r16 "probe_failed rc=16"
 fi
 # M13 — git's own permission check is dropped (root's -x stands in for the git user's).
-if mutate f-m13-no-git-exec "$SCRIPT" 1 '/^    '"'"'runuser -u git -- /d'; then
+if mutate f-m13-no-git-exec "$SCRIPT" 1 '/^    '"'"'runuser -u git -- test -r /d'; then
   CASE_SCRIPT="$MUTANT" mutant_red f-m13-no-git-exec case_fence_full "$_FFULL" "fence_not_intact reason=hook_not_runnable_by_git" SHIM_RUNUSER_RC=1
+fi
+# M13b — runuser's own failure reads as the git user being unable to run the hook.
+if mutate f-m13b-runuser-broken "$SCRIPT" 1 '/^    '"'"'runuser -u git -- true /d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red f-m13b-runuser-broken case_fence_full "$_FFULL" "probe_failed rc=16" SHIM_RUNUSER_BROKEN=1
 fi
 # M14 — the transport wrapper's pin is no longer read.
 if mutate f-m14-no-pin "$SCRIPT" 1 '/^    "grep -qxF -- \$qhd /d'; then
@@ -1762,22 +1768,22 @@ fi
 # ── FLOOR + LEDGER (ADR-193: reported with printf + exit, never through pass()/fail()) ─────
 # MUTANT_FLOOR = the matrix rows this suite owns: Guard 2 x4, Guard 5 x4, Guard 6 (cutover half) x1,
 # Guard 7 x3, C1 (transport vs store state) x1, C3 (count on the accepted source) x2, C7 (step
-# gating + executed teardown) x4, Fence (#8101: M1-M5, M4b, M7, M8, M10-M18, harness H-a) x18 = 37.
+# gating + executed teardown) x4, Fence (#8101: M1-M5, M4b, M7, M8, M10-M18, M13b, harness H-a) x19 = 38.
 # Guard 3's four rows moved with the census to tests/scripts/test-git-data-root-token-census.sh.
-MUTANT_FLOOR=37
+MUTANT_FLOOR=38
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
 # Assertion FLOOR, restated after the #8189 review (the census moved out; C1/C3/C7 rows added).
-# Measured, by section: script unit rows 113 (access gate, AC2, Guard 2 incl. S4d/S7e/S7f/S7g,
-# Guard 5, Guard 7 = 66, plus the #8101 fence probe = 47: canned F2-F7d 9 + annotation 1 + F8/F8b/F9 3
-# + F10 x3 3 + executed F11-F14 incl. F12b/F12c 6 + FX0 1 + FX rows 11 + FX18/FX18b 2 + F15 1 + FSRC 1
+# Measured, by section: script unit rows 114 (access gate, AC2, Guard 2 incl. S4d/S7e/S7f/S7g,
+# Guard 5, Guard 7 = 66, plus the #8101 fence probe = 48: canned F2-F7d 9 + annotation 1 + F8/F8b/F9 3
+# + F10 x3 3 + executed F11-F14 incl. F12b/F12c 6 + FX0 1 + FX rows 12 + FX18/FX18b 2 + F15 1 + FSRC 1
 # + F16 1 + F16b 6 + P1 1 + P2 1); bridge export set 6; workflow YAML 31 (incl. WF-gating); executed
-# workflow steps 18 (key fetch 8, ssh_config 6, secrets check 3, teardown 1); mutants 37 x 2 = 74;
+# workflow steps 18 (key fetch 8, ssh_config 6, secrets check 3, teardown 1); mutants 38 x 2 = 76;
 # runtime 22 (incl. RF2, RFSRC, RFINC, RF17, RF18).
-# Total 264 — exact, not a margin: removing an assertion on purpose costs one edit here.
-FLOOR=264
+# Total 267 — exact, not a margin: removing an assertion on purpose costs one edit here.
+FLOOR=267
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

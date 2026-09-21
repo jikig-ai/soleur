@@ -364,13 +364,15 @@ refuse_if_store_not_empty() {
 #   13  pre-receive is not root:root 755                    reason=hook_owner
 #   19  the hooks dir's parent is not root-owned, or is
 #       group/other-writable (git could swap the dir)       reason=hooks_parent_writable
+#   16  runuser cannot run anything as git at all          probe_failed rc=16
 #   17  the git user cannot read and execute pre-receive
 #       (group membership, an ACL, a denied traversal)      reason=hook_not_runnable_by_git
 #   16  git config exited above 1                           probe_failed rc=16
 #   14  the system core.hooksPath (includes resolved) does
 #       not name the SERVING hooks path; unset is git's 1   reason=hooks_path_mismatch
-#   18  the installed transport wrapper does not carry the
-#       command-line pin to the serving hooks path          reason=transport_pin_mismatch
+#   18  the installed transport wrapper is absent or does
+#       not carry the command-line pin to the serving hooks
+#       path                                                reason=transport_pin_mismatch
 #    5  findmnt -T could not resolve a fence path's source  probe_failed rc=5
 #   15  the hooks dir or pre-receive is on another source   reason=hooks_wrong_source
 # Any other rc is gd_capture's own, reported probe_failed. SHAPE, NOT CONTENT: a planted
@@ -413,6 +415,7 @@ refuse_if_fence_not_intact() {
     '[ "$op" = "root:root 755" ] || exit 13'
     "pp=\$(stat -c '%U %a' \"\${h%/*}\") || exit 16"
     'case "$pp" in "root "[0-7][0145][0145]|"root "[0-7][0-7][0145][0145]) ;; *) exit 19 ;; esac'
+    'runuser -u git -- true || exit 16'
     'runuser -u git -- test -r "$p" && runuser -u git -- test -x "$p" || exit 17'
     'v=$(env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM git config --system --includes --get core.hooksPath); g=$?'
     '[ "$g" -le 1 ] || exit 16'
