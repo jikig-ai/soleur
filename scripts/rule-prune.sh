@@ -65,7 +65,10 @@ METRICS="$ROOT/knowledge-base/project/rule-metrics.json"
 # that variable at a fixture they have already written, and regenerating over it would replace
 # the fixture with a scan of the real machine.
 if [[ -z "${RULE_METRICS_ROOT:-}" && -f "$SCRIPT_DIR/rule-metrics-aggregate.sh" ]]; then
+  # Owning trap at the allocation site (ADR-129): without it nothing removes the tempfile
+  # if the script dies between here and cleanup. Single owning trap, cleared after use.
   _agg_log="$(mktemp)"
+  trap 'rm -f "$_agg_log"' EXIT INT TERM
   _agg_rc=0
   bash "$SCRIPT_DIR/rule-metrics-aggregate.sh" >"$_agg_log" 2>&1 || _agg_rc=$?
   if [[ "$_agg_rc" -ne 0 ]]; then

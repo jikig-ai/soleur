@@ -249,6 +249,7 @@
 4	plugins/soleur/scripts/domain-model-drift.sh
 5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
+11	plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
@@ -317,6 +318,8 @@
 1	scripts/derive-app-domain-base.test.sh
 1	scripts/dogfood/grok-measure.sh
 1	scripts/domain-model-drift.test.sh
+3	scripts/ensure-kb-index.sh
+13	scripts/ensure-kb-index.test.sh
 1	scripts/expenses-verify-by-check.test.sh
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh

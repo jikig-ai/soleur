@@ -511,6 +511,26 @@ fi
 # is the whole point: the new branch is gated on that variable being unset, so a case that sets
 # it (every case above) cannot reach the code under test. Relocating is what keeps an unset
 # RULE_METRICS_ROOT from pointing at the real repo and running the real aggregator over it.
+# Owning trap for the relocation fixtures (ADR-129). The per-case `rm -rf "$root"` lines
+# throughout this file run only on the path that reaches them: the three cases below can
+# `_report ... fail` and `return` early, and a `set -e` abort or a signal skips cleanup
+# entirely, leaving a populated tree under $TMPDIR. One trap at file scope owns every
+# relocation root; the per-case removals stay as the happy-path fast free.
+_RELOCATED_ROOTS=()
+_cleanup_relocated_roots() {
+  local d
+  for d in "${_RELOCATED_ROOTS[@]:-}"; do
+    # Guard the expansion: an empty array under `set -u` yields "", and `rm -rf ""`
+    # is a no-op only by luck of the shell — never rely on that.
+    [[ -n "$d" && -d "$d" ]] && rm -rf -- "$d"
+  done
+  # An EXIT trap that falls off its end hands ITS last status to the shell, and the
+  # test above is false for every root the per-case `rm -rf` already freed — i.e. the
+  # normal path. Without this the suite exits 1 while printing "0 failed".
+  return 0
+}
+trap _cleanup_relocated_roots EXIT
+
 _setup_relocated() {
   local tmp; tmp=$(mktemp -d)
   mkdir -p "$tmp/scripts/lib" "$tmp/knowledge-base/project"
@@ -539,6 +559,7 @@ AGG
 # T-agg1: metrics absent, RULE_METRICS_ROOT unset -> the aggregator runs and the read succeeds.
 t_agg_runs_when_absent() {
   local root; root=$(_setup_relocated)
+  _RELOCATED_ROOTS+=("$root")   # parent scope: the helper runs in a command-substitution subshell
   _stub_aggregator_ok "$root"
   local rc=0
   PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" \
@@ -557,6 +578,7 @@ t_agg_runs_when_absent() {
 # aggregator's own rc, so the operator debugs the aggregator rather than the metrics file.
 t_agg_failure_removes_partial() {
   local root; root=$(_setup_relocated)
+  _RELOCATED_ROOTS+=("$root")   # parent scope: the helper runs in a command-substitution subshell
   cat > "$root/scripts/rule-metrics-aggregate.sh" <<'AGG'
 #!/usr/bin/env bash
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -585,6 +607,7 @@ AGG
 # fixture with a scan of the real machine, which is both wrong and slow.
 t_agg_skipped_when_root_set() {
   local root; root=$(_setup_relocated)
+  _RELOCATED_ROOTS+=("$root")   # parent scope: the helper runs in a command-substitution subshell
   _stub_aggregator_ok "$root"
   # Give it a valid file so the run has no reason to fail for other causes.
   local cutoff; cutoff=$(date -u -d "-70 days" +%Y-%m-%dT%H:%M:%SZ)

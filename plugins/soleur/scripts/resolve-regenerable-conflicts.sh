@@ -59,6 +59,13 @@ BASE=""
 na()   { echo "[regen-on-conflict] not applicable: $*" >&2; exit 1; }
 # bail <reason> — refuse AFTER the merge started; unwind first.
 bail() {
+  # ASSERT THE OPERAND AT THE SITE. `git -C "" merge --abort` retargets the write at the
+  # CALLER's repository, and $REPO_ROOT is command-substitution-derived. Every caller of
+  # bail() today runs after the non-empty check below, so this is defence in depth rather
+  # than a live bug — but "safe because of where it is called from" is not a property a
+  # static reader (or the fixture-dir-operand guard) can confirm, and a future early call
+  # would make it live. Asserting here costs one line.
+  [[ -n "$REPO_ROOT" ]] || { echo "[regen-on-conflict] $* (no repo root; nothing unwound)" >&2; exit 1; }
   git -C "$REPO_ROOT" merge --abort 2>/dev/null || true
   echo "[regen-on-conflict] $*" >&2
   exit 1
