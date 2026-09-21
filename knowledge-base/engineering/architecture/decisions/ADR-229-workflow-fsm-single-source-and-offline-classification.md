@@ -4,7 +4,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-09-19 (#8325) and 2026-09-21 (#8399).
 
 ## Context
 
@@ -60,7 +60,9 @@ directions — a view carrying an edge the const lacks is exactly as wrong as on
 missing an edge. The view has one consumer: the offline classifier (bash,
 decision 3). **[Amended 2026-09-19 (#8325): the view also carries `sub_steps`,
 mirroring `DECLARED_SUB_STEPS` under the same parity block; it still has one
-consumer.]** A `bun -e` read of the const from that script was weighed at
+consumer.]** **[Amended 2026-09-21 (#8399): `sub_steps` now carries `brainstorm`,
+`plan`, `postmerge` and `ship`, each anchored to the SKILL.md section that
+invokes `compound`; the view still has one consumer.]** A `bun -e` read of the const from that script was weighed at
 review (bun is present wherever the classifier runs) and not taken — see the
 Alternatives table — so the mirror stays.
 
@@ -117,8 +119,8 @@ the base, which closes the rename escape.
 
 | Alternative | Why not |
 |---|---|
-| Record-mode `PreToolUse(Skill)` gate | Output dead-ends in `non_corpus_counts`; the data it would record already exists in `.skill-invocations.jsonl` |
-| Blocking transition gate | ADR-070 permits deny-by-default only on re-fetching layers; `Skill` does not re-fetch, and at 16/98 phase coverage it would false-deny `/go` itself |
+| Record-mode `PreToolUse(Skill)` gate | Output dead-ends in `non_corpus_counts`; the data it would record already exists in `.skill-invocations.jsonl`. And (#8399) a "compound before ship" predicate is the wrong invariant: ship's own Phase 2 runs compound inside ship, so it would flag the designed path |
+| Blocking transition gate | ADR-070 permits deny-by-default only on re-fetching layers; `Skill` does not re-fetch, and at 16/98 phase coverage it would false-deny `/go` itself. A `PreToolUse(Skill ship)` gate on "compound ran first" would also false-deny ship's in-process Phase 2 compound (#8399) |
 | `mandatorySuccessors()` reads the canonical JSON | The plugin does not ship `.claude/`; returns `[]` on a customer install |
 | One function for both concepts | A back-edge in the successors collection renders as an instruction to re-enter that phase |
 | `transitions` key inside `phase-surface-map.json` | Forces FSM edges through the web bundle via that file's deep-equal parity test |
@@ -150,7 +152,9 @@ the base, which closes the rename escape.
   terminal-node graph correctly refuses to call declared). `plan → ship` occurs
   **7** times; a raw-adjacency walk saw 2, and review showed the other 5 were
   laundered through `plan → deepen-plan → ship`, which that walk classified as
-  two unclassified pairs and zero violations. `postmerge → work` — the edge
+  two unclassified pairs and zero violations. **[#8399: 3 more were laundered
+  through the declared `compound → ship` (`plan compound ship`); the sub-step
+  collapse exposes them — see the 2026-09-21 re-baseline below.]** `postmerge → work` — the edge
   rejected as redundant — occurs 7 times, recorded here rather than acted on.
 - **`postmerge → work` is declared (2026-09-19, #8325).** The seven sessions
   were read: five continue `postmerge → work → review → compound → ship →
@@ -174,7 +178,28 @@ the base, which closes the rename escape.
   i.e. exactly `substep`. `sessions` counts sessions forming at least one pair,
   so the 13 that were only `brainstorm compound` leave it. `ship → plan` (50),
   `postmerge → plan` (31), `review → ship` (51) and `plan → ship` (7) are
-  unchanged.
+  unchanged. **[Superseded for `plan → ship` and `postmerge → plan` by the
+  2026-09-21 re-baseline below (#8399).]**
+- **Re-baselined 2026-09-21 (#8399, after `plan`, `postmerge` and `ship` gained
+  the `compound` sub-step):** measured on ONE frozen copy of the log read by
+  both views (`CLASSIFY_REPO_ROOT`), so the delta is the diff alone. Before:
+  `undeclared=389 sessions=1278 pairs=4975 nonnode=4112 substep=130 read=10662
+  dropped=0`; after: `undeclared=316 sessions=1273 pairs=4913 nonnode=4112
+  substep=192 read=10662 dropped=0`. Deltas: `plan`+`postmerge` −52 undeclared /
+  −45 pairs / +45 substep; `ship` −21 / −17 / +17; combined −73 / −62 / +62 —
+  pairs fall by exactly the substep increase, the same identity as above.
+  Collapsed: `plan → compound` (31), `postmerge → compound` (14),
+  `ship → compound` (17) and the `compound → work` tails (13). **The collapse
+  EXPOSES rather than hides:** `compound → ship` is declared, so `X compound
+  ship` used to read as the benign `X → compound`; it now reads `X → ship`.
+  `plan → ship` 7 → 10 and `postmerge → ship` 2 → 5 (a second ship after
+  post-merge with no `work`). `ship → plan` 50 → 51 and `postmerge → plan`
+  33 → 34 shift through the collapse and stay undeclared by ruling (second-feature
+  starts). `review → ship` stays at 51 — it is not a collapse candidate (below).
+  No collapse can launder a review skip: `K compound X` becomes a declared pair
+  only when X is K's own declared successor, and none of those is `ship`; the one
+  entry that would hide a skip, `review: ["compound"]`, is forbidden by the
+  "value is not a declared successor" invariant.
 - There is no follow-through probe. One was written, could not PASS where the
   sweeper runs (Alternatives table), and as an operator-run script was a
   wrapper around `classify --summary` restating this section's numbers — the
@@ -199,7 +224,15 @@ the base, which closes the rename escape.
   ship-skip class the classifier exists to surface. `plan → compound` and
   `postmerge → compound` (11) have the same shape and were not added — the
   ruling named `brainstorm` only; recorded as a User-Challenge in the #8325
-  spec's `decision-challenges.md`.
+  spec's `decision-challenges.md`. **Resolved 2026-09-21 (#8399, dissent 2
+  discharged):** `plan` and `postmerge` are declared sub-step keys on their own
+  SKILL.md evidence — `plan/SKILL.md` §Exit Gate step 1 and
+  `postmerge/SKILL.md` §Phase 6 each run `skill: soleur:compound` by design. `ship`
+  is declared separately, on `ship/SKILL.md` §Phase 2 (Capture Learnings), which
+  auto-invokes compound inside ship, and on the log: all 17 `ship → compound`
+  rows have compound as the next node record, 12 are followed by ship's own
+  `preflight` (Phase 5), and 15 start 42–182 s after the ship record. None of
+  the three rests on symmetry with `brainstorm`.
 - **The committed aggregate is now a function of which worktrees exist at
   regeneration time.** `cleanup-merged` deletes sibling worktrees and their
   logs, so hits and `last_hit` for rules exercised only there regress on the
@@ -238,7 +271,11 @@ the base, which closes the rename escape.
   stand-in). Median per-run saving ≈ 58k × 73 ≈ **4.2M cache-READ tokens** —
   billed an order of magnitude below input rate, so price it before comparing
   against a run's billed total; the n = 17 k'_ac proxy independently implies
-  ≈ 2.7M. Kept on measured evidence (#8325 §3 closed). Three caveats, each of
+  ≈ 2.7M. Kept on measured evidence (#8325 §3 closed). **Floor adopted
+  2026-09-21 (#8399 dissent 1, operator ruling):** the keep decision is
+  re-stated only at `post >= 5`. Below that, a re-reading records "measured,
+  inconclusive at n=<N>" and does not restate "kept on measured evidence".
+  Re-read 2026-09-21: `post=12 median_k=55 p10_k=36` — kept. Three caveats, each of
   which a later reader must re-take rather than quote: the ~8-turn break-even
   is asserted rather than measured and is the cost side of this comparison;
   `k` is right-CENSORED, because a run still in flight when the script runs has
@@ -270,14 +307,30 @@ the base, which closes the rename escape.
   #8303 (heading-grammar normalisation) is the prerequisite for naming the
   sub-phases at all, not the tracker for capping them.
 - No plugin runtime code calls `declaredTransitions()` or
-  `isDeclaredTransition()`; they exist so the parity block and a future gate
-  (below) have a typed source. `brainstorm → one-shot` is declared but unobservable by the
+  `isDeclaredTransition()`; they exist so the parity block has a typed source,
+  and so a gate has one should the re-open trigger below fire. `brainstorm → one-shot` is declared but unobservable by the
   classifier, because `one-shot` is not a node and its records are removed
   before pairing.
 - A gate remains buildable on top of this without rework: the edge set is
-  declarative and the classifier already resolves state per session. Whether one
-  is warranted is deferred to the measurement this ADR makes possible, not to a
-  date.
+  declarative and the classifier already resolves state per session.
+  **Ruled 2026-09-21 (#8399): no gate.** (1) "Compound before ship" is the wrong
+  invariant — ship Phase 2 runs compound inside ship, so a `PreToolUse(Skill
+  ship)` gate would deny the designed path; only ship can enforce "compound ran
+  before the PR", and its Phase 2 is that check. (2) Both gate shapes are already
+  rejected in Alternatives, and the measurement adds no reason to reverse either.
+  (3) About one row a week recently, and a skipped compound costs an uncaptured
+  learning or an unarchived spec, both recoverable by a follow-up PR. The triage
+  of `review → ship` (51 rows, 49 sessions): 5 compound ran inside ship, 4
+  re-entry after an earlier compound, 4 compound later in the session, 38 with no
+  compound after review — 19 of those show `preflight`, so ship ran past Phase 2
+  without calling it. "A parent orchestrator ran compound and the log misses it"
+  is falsified for Claude Code: a subagent's Skill calls are logged under the
+  parent's `session_id`. The defect the 19 point at is ship Phase 2's repo-wide
+  learning probe (`--since="1 week ago"`, non-empty in 12 of 12 sampled weeks),
+  tracked with its fix path and the full triage in #8470. **Re-open trigger:**
+  when #8470 closes, re-run its triage on rows logged after the fix merged; if
+  full-pipeline rows with no compound anywhere after review (including inside
+  ship) still appear, the gate question re-opens on that evidence.
 
 ## Verification
 
@@ -287,17 +340,26 @@ the base, which closes the rename escape.
   derived-view parity in both directions for `transitions` **and `sub_steps`**,
   the three `DECLARED_SUB_STEPS` invariants (keys and values are nodes; a value
   is not a declared successor of its key), and budget-file keys equal to the
-  lifecycle set. Runs
+  lifecycle set. Since #8399 also: the exact four-key sub-step set, the view's
+  `sub_steps` and `transitions` key sets named outright, and a SKILL.md anchor
+  test — every entry's value is invoked (`skill: soleur:<V>`, not a
+  `compound-capture` prefix) inside the section that owns it, scoped per key,
+  with a check count equal to the entry count. Runs
   in the required `grok-fidelity` CI check (and as a pre-push gate under the
   Grok harness only).
-- `scripts/classify-workflow-transitions.test.sh` — 28 assertions including a
+- `scripts/classify-workflow-transitions.test.sh` — 39 assertions (the
+  `MIN_CASES` floor) including a
   present-but-unparseable log failing loudly, sub-skill hops not laundering the
   enclosing transition, rotated `.jsonl.gz` archives read, timestamp order
   over file order, and (#8325) the sub-step collapse: keyed on the previous
   KEPT node, after the non-node filter, per session, never on a session's
   first record, exposing rather than hiding `brainstorm → review` and the
   self-loop, and a view whose `sub_steps` is missing, `null` or `[]` failing
-  closed (rc 2).
+  closed (rc 2). Since #8399: case 14 keeps its input with a flipped verdict
+  (`ship compound` now collapses, and unsorted order would pair the declared
+  `compound → ship`), a loop over `plan`/`postmerge`/`ship` whose key list is
+  pinned to the real view, the `plan → ship` and `postmerge → ship` exposure
+  cases, and a pure timestamp-order case with no sub-step.
 - `scripts/measure-plan-sharp-edges-turns.test.sh` — 21 assertions over
   synthesized transcripts: turns are requestId groups in file order, the
   invocation may sit in any record of its turn, the catalogue is matched by
