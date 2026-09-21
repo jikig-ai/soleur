@@ -1835,6 +1835,7 @@ guard-review
 guard-test
 guard-testing
 guard-vacuity
+guard-vacuity-floor
 guard-window
 guarda
 guardrail
@@ -3998,6 +3999,7 @@ test-scope
 test-scripts
 test-seams
 test-sharding
+test-stubs
 test-tooling
 test-vacuity
 test-wiring
