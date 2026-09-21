@@ -319,7 +319,6 @@
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
 4	scripts/content-publisher.test.sh
-4	scripts/cutover-inngest.sh
 1	scripts/derive-app-domain-base.test.sh
 1	scripts/dogfood/grok-measure.sh
 1	scripts/domain-model-drift.test.sh
