@@ -1491,7 +1491,10 @@ n_salert=$( { grep -h -c '^resource "sentry_alert"' "$TF_DIR"/*.tf 2>/dev/null |
 readme="$TF_DIR/README.md"
 t25_ok=1
 # Non-vacuity: the derivation must actually find resources.
-if (( n_cron < 1 )) || (( n_alert < 1 )) || (( n_salert < 1 )); then
+# `n_alert` is NOT in the floor: since #8451 zero `sentry_issue_alert` is the
+# correct state (the legacy alert-rule API is removed). The prose check below
+# still pins it — a README still citing a sentry_issue_alert count reds.
+if (( n_cron < 1 )) || (( n_salert < 1 )); then
   fail "T25: derived 0 resources from $TF_DIR — the anchor broke, not the prose"
   t25_ok=0
 else
@@ -1501,8 +1504,12 @@ else
   if ! grep -q "\*\*${n_salert} \`sentry_alert\` rules\*\*" "$readme"; then
     fail "T25: README sentry_alert count disagrees with the tf root (${n_salert})"; t25_ok=0
   fi
-  if ! grep -q "\*\*${n_alert} \`sentry_issue_alert\` rules\*\*" "$readme"; then
-    fail "T25: README sentry_issue_alert count disagrees with the tf root (${n_alert})"; t25_ok=0
+  if (( n_alert > 0 )); then
+    if ! grep -q "\*\*${n_alert} \`sentry_issue_alert\` rules\*\*" "$readme"; then
+      fail "T25: README sentry_issue_alert count disagrees with the tf root (${n_alert})"; t25_ok=0
+    fi
+  elif grep -qE "\*\*[0-9]+ \`sentry_issue_alert\` rules\*\*" "$readme"; then
+    fail "T25: README still cites a sentry_issue_alert rule count; the tf root declares none"; t25_ok=0
   fi
   # The TOTAL is cited too, and it is the number a reader carries away. Pinning
   # only the two parts would let "29 alert rules" rot into 28 unnoticed.
