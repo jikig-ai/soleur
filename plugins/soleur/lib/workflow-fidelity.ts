@@ -194,14 +194,23 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
 
 /**
  * Node skills that another node's SKILL.md invokes as a designed SUB-STEP of
- * its own run, keyed by the invoking node. `brainstorm` runs `compound` to
- * capture learnings and then hands off to `plan`, so the invocation log
- * shows `brainstorm compound plan` for the designed handoff. The classifier
- * drops a record whose skill is a sub-step of the PREVIOUS KEPT node before
- * pairing, so that sequence pairs as `brainstorm -> plan`. This is NOT an
- * edge: `brainstorm -> compound` and `compound -> plan` stay undeclared, so
- * `review -> compound -> plan` (a ship skip) is still reported. Mirrored in
- * .claude/workflow-transitions.json under `sub_steps` (parity-pinned).
+ * its own run, keyed by the invoking node. Each entry names the section that
+ * makes the call (pinned by the anchor test in workflow-fidelity.test.ts):
+ *   - brainstorm: runs `compound` to capture learnings, then hands off to
+ *     `plan`, so the log shows `brainstorm compound plan` for the handoff.
+ *   - plan: §Exit Gate step 1 runs `compound` (direct invocation).
+ *   - postmerge: §Phase 6 (Update Issue and Compound) runs `compound`.
+ *   - ship: §Phase 2 (Capture Learnings) runs `compound` inside ship.
+ * The classifier drops a record whose skill is a sub-step of the PREVIOUS KEPT
+ * node before pairing, so `plan compound work` pairs as `plan -> work`. This is
+ * NOT an edge: `X -> compound` and `compound -> Y` stay undeclared, and because
+ * the collapse joins K to its NEXT node, `plan compound ship` surfaces as the
+ * review skip `plan -> ship` instead of hiding behind the declared
+ * `compound -> ship` (#8399). `review: ["compound"]` is the entry the rules
+ * below forbid: `compound` is a declared successor of `review`, so the collapse
+ * would turn `review compound work` into the declared `review -> work`.
+ * Mirrored in .claude/workflow-transitions.json under `sub_steps`
+ * (parity-pinned). See ADR-229 (amended 2026-09-21, #8399).
  *
  * To add an entry: the key and every value must be DECLARED_TRANSITIONS nodes
  * (a non-node is removed by the classifier's node filter first, so the entry
@@ -212,6 +221,9 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
  */
 export const DECLARED_SUB_STEPS: Readonly<Record<string, readonly string[]>> = {
   brainstorm: ["compound"],
+  plan: ["compound"],
+  postmerge: ["compound"],
+  ship: ["compound"],
 };
 
 /** Edges declared FROM `skill`. Unknown nodes declare nothing. */

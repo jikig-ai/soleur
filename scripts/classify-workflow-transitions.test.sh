@@ -243,19 +243,24 @@ fi
 
 # --- 14. pairs follow TIMESTAMP order, not file order --------------------------
 # MERGED is a cat across roots, and one session_id can write to two roots, so
-# arrival order is not chronological. File order here is compound, ship
-# (declared); timestamps make it ship, compound (undeclared). Removing the
-# sort_by(.t) flips the verdict, which is what pins it.
+# arrival order is not chronological. File order here is compound, ship; in ts
+# order it is ship, compound, and since ADR-229's #8399 amendment `compound` is a
+# designed sub-step of `ship` (ship Phase 2), so the sorted stream collapses to
+# pairs=0 substep=1. Unsorted file order would pair the declared compound -> ship
+# instead (pairs=1 substep=0), so the case still pins the sort. Case 38 pins ts
+# order alone, with no sub-step involved.
 ORD="$TMP_ROOT/order"; mkdir -p "$ORD/.claude"
 cp "$ROOT/.claude/workflow-transitions.json" "$ORD/.claude/"
 olog="$ORD/.claude/.skill-invocations.jsonl"
 printf '{"schema":1,"ts":"2026-09-18T15:09:00Z","skill":"soleur:compound","session_id":"sessO"}\n' > "$olog"
 printf '{"schema":1,"ts":"2026-09-18T15:01:00Z","skill":"soleur:ship","session_id":"sessO"}\n' >> "$olog"
-OOUT=$(CLASSIFY_REPO_ROOT="$ORD" bash "$SUT" 2>&1); ORC=$?
-if [[ "$ORC" -eq 0 && "$OOUT" == *"ship -> compound"* ]]; then
-  pass "out-of-order arrival is sorted by ts before pairing"
+OOUT=$(CLASSIFY_REPO_ROOT="$ORD" bash "$SUT" --summary 2>&1); ORC=$?
+OSUM=$(CLASSIFY_REPO_ROOT="$ORD" bash "$SUT" --summary 2>/dev/null)
+OROWS=$(CLASSIFY_REPO_ROOT="$ORD" bash "$SUT" 2>/dev/null)
+if [[ "$ORC" -eq 0 && "$OSUM" == *"pairs=0 "* && "$OSUM" == *"substep=1 "* && -z "$OROWS" && "$OOUT" == *"formed ZERO lifecycle pairs"* ]]; then
+  pass "out-of-order arrival is sorted by ts before pairing (ship compound collapses: pairs=0 substep=1)"
 else
-  fail "file order used instead of ts order — rc=$ORC out='$OOUT'"
+  fail "file order used instead of ts order — rc=$ORC summary='$OSUM' rows='$OROWS' out='$OOUT'"
 fi
 
 # --- 15. an EMPTY session_id is dropped, not pooled ----------------------------
@@ -352,7 +357,7 @@ else
   fail "trailing sub-step mis-paired — rc=$C19 out='$O19'"
 fi
 
-# --- 20. the sub-step is keyed on brainstorm, not on every predecessor -------
+# --- 20. the sub-step is keyed on the declared keys, never on `review` --------
 R20=$(new_root sub20)
 emit_to "$R20" 2026-09-18T18:30:00Z review   s20
 emit_to "$R20" 2026-09-18T18:31:00Z compound s20
@@ -362,7 +367,7 @@ S20=$(CLASSIFY_REPO_ROOT="$R20" bash "$SUT" --summary 2>/dev/null)
 if [[ "$C20" -eq 0 && "$O20" == *"compound -> plan"* && "$S20" == *"substep=0 "* ]]; then
   pass "review compound plan keeps compound -> plan as a row (substep=0): the ship skip is not laundered"
 else
-  fail "sub-step applied to a non-brainstorm predecessor — rc=$C20 out='$O20' summary='$S20'"
+  fail "sub-step applied to review, which is not a sub_steps key — rc=$C20 out='$O20' summary='$S20'"
 fi
 
 # --- 21. the lookup keys on the previous KEPT node ----------------------------
@@ -582,13 +587,86 @@ else
   fail "non-node sub_steps value misbehaved — rc=$C32 out='$O32'"
 fi
 
+# --- 33-38. plan / postmerge / ship sub-step collapse (#8399) ----------------
+# ADR-229's #8399 amendment adds `compound` as a designed sub-step of plan (Exit
+# Gate), postmerge (Phase 6) and ship (Phase 2). The loop covers every key except
+# brainstorm (cases 17-28); its key list is pinned to the real view first, so a
+# fifth key fails here instead of silently getting no case.
+LOOP_KEYS="plan postmerge ship"
+VIEW_KEYS=$(jq -r '.sub_steps | keys[] | select(. != "brainstorm")' "$ROOT/.claude/workflow-transitions.json" | sort | tr '\n' ' ')
+if [[ "$VIEW_KEYS" == "$LOOP_KEYS " ]]; then
+  pass "the 33-35 loop covers every non-brainstorm sub_steps key of the real view"
+else
+  fail "loop keys '$LOOP_KEYS' != view sub_steps keys '$VIEW_KEYS'"
+fi
+
+# --- 33-35. K compound X pairs as the declared K -> X, with no row -------------
+for kx in plan:work postmerge:work ship:postmerge; do
+  K=${kx%%:*}; X=${kx#*:}
+  R=$(new_root "sub33-$K")
+  emit_to "$R" 2026-09-18T23:00:00Z "$K"   "s33$K"
+  emit_to "$R" 2026-09-18T23:01:00Z compound "s33$K"
+  emit_to "$R" 2026-09-18T23:02:00Z "$X"   "s33$K"
+  O=$(CLASSIFY_REPO_ROOT="$R" bash "$SUT" --summary 2>&1); C=$?
+  ROWS=$(CLASSIFY_REPO_ROOT="$R" bash "$SUT" 2>/dev/null)
+  if [[ "$C" -eq 0 && "$O" == *"undeclared=0 "* && "$O" == *"pairs=1 "* && "$O" == *"substep=1 "* && -z "$ROWS" ]]; then
+    pass "$K compound $X pairs as $K -> $X (undeclared=0 pairs=1 substep=1), no row"
+  else
+    fail "$K compound $X not collapsed — rc=$C out='$O' rows='$ROWS'"
+  fi
+done
+
+# --- 36. the collapse EXPOSES plan -> ship, it does not hide it ---------------
+# Before #8399 this read as plan -> compound, and the declared compound -> ship
+# hid the review skip.
+R36=$(new_root sub36)
+emit_to "$R36" 2026-09-18T23:10:00Z plan     s36
+emit_to "$R36" 2026-09-18T23:11:00Z compound s36
+emit_to "$R36" 2026-09-18T23:12:00Z ship     s36
+O36=$(CLASSIFY_REPO_ROOT="$R36" bash "$SUT" 2>/dev/null); C36=$?
+S36=$(CLASSIFY_REPO_ROOT="$R36" bash "$SUT" --summary 2>/dev/null)
+if [[ "$C36" -eq 0 && "$O36" == *"plan -> ship"* && "$S36" == *"substep=1 "* && "$S36" == *"undeclared=1 "* ]]; then
+  pass "plan compound ship reports plan -> ship (substep=1 undeclared=1): the review skip is exposed"
+else
+  fail "plan compound ship not exposed — rc=$C36 out='$O36' summary='$S36'"
+fi
+
+# --- 37. same exposure for postmerge -> ship ----------------------------------
+R37=$(new_root sub37)
+emit_to "$R37" 2026-09-18T23:20:00Z postmerge s37
+emit_to "$R37" 2026-09-18T23:21:00Z compound  s37
+emit_to "$R37" 2026-09-18T23:22:00Z ship      s37
+O37=$(CLASSIFY_REPO_ROOT="$R37" bash "$SUT" 2>/dev/null); C37=$?
+S37=$(CLASSIFY_REPO_ROOT="$R37" bash "$SUT" --summary 2>/dev/null)
+if [[ "$C37" -eq 0 && "$O37" == *"postmerge -> ship"* && "$S37" == *"substep=1 "* && "$S37" == *"undeclared=1 "* ]]; then
+  pass "postmerge compound ship reports postmerge -> ship (substep=1 undeclared=1)"
+else
+  fail "postmerge compound ship not exposed — rc=$C37 out='$O37' summary='$S37'"
+fi
+
+# --- 38. timestamp order alone, no sub-step involved --------------------------
+# File order plan, brainstorm would pair the undeclared plan -> brainstorm; ts
+# order gives the declared brainstorm -> plan.
+R38=$(new_root sub38)
+emit_to "$R38" 2026-09-18T23:39:00Z plan       s38
+emit_to "$R38" 2026-09-18T23:31:00Z brainstorm s38
+S38=$(CLASSIFY_REPO_ROOT="$R38" bash "$SUT" --summary 2>/dev/null); C38=$?
+if [[ "$C38" -eq 0 && "$S38" == *"undeclared=0 "* && "$S38" == *"pairs=1 "* && "$S38" == *"substep=0 "* ]]; then
+  pass "plan@:39 filed before brainstorm@:31 pairs as brainstorm -> plan (undeclared=0)"
+else
+  fail "ts order not applied without a sub-step — rc=$C38 summary='$S38'"
+fi
+
+# MIN_CASES counts PASSES, not case numbers: the 33-35 loop records ONE pass per
+# key (3) and adds a key-list pin (1), so cases 1-38 yield 39. Collapsing the loop
+# to one pass would silently lower the real count to 37.
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
 # guard-vacuity-floor.test.sh slices the floor plus its CONTIGUOUS assignments into
 # a mutant, and a binding 130 lines up is unbound there (measured: CONSTRUCTION, not
 # FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=32
+MIN_CASES=39
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

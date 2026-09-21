@@ -870,6 +870,19 @@ describe("declared-transitions derived view parity", () => {
     }
   });
 
+  // Name both key sets outright (#8399): a missing mirror key then fails with a
+  // named message rather than inside a deep-equal diff.
+  test("the view's sub_steps and transitions key sets are the reviewed ones", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as {
+      transitions: Record<string, string[]>;
+      sub_steps: Record<string, string[]>;
+    };
+    expect(Object.keys(view.sub_steps).sort()).toEqual(["brainstorm", "plan", "postmerge", "ship"]);
+    expect(Object.keys(view.transitions).sort()).toEqual([
+      "brainstorm", "compound", "plan", "postmerge", "review", "ship", "work",
+    ]);
+  });
+
   // THE RATCHET'S NODE SET IS THIS SET. scripts/lint-skill-body-budget.py derives
   // "lifecycle skill" from the view's keys and destinations, and refuses a node
   // with no ceiling row and a row with no node. That is enforced in Python at
@@ -909,7 +922,52 @@ describe("DECLARED_SUB_STEPS invariants", () => {
   // deleting every real `plan -> compound` pair from the classifier. Adding a
   // sub-step is a semantic claim about a SKILL.md, so it must be made here.
   test("DECLARED_SUB_STEPS is exactly the reviewed set", () => {
-    expect(DECLARED_SUB_STEPS).toEqual({ brainstorm: ["compound"] });
+    expect(DECLARED_SUB_STEPS).toEqual({
+      brainstorm: ["compound"],
+      plan: ["compound"],
+      postmerge: ["compound"],
+      ship: ["compound"],
+    });
+  });
+
+  // A sub-step entry is a claim about a SKILL.md: the key's own run invokes the
+  // value. Pin that claim to the section that makes it, so moving or deleting
+  // the call fails here instead of silently collapsing real pairs (#8399).
+  // Section-scoped, not file-wide: ship names `skill: soleur:compound` in
+  // Headless Mode Detection too, which would survive deleting Phase 2.
+  // `brainstorm` is file-wide because its one call sits inside a fenced
+  // template, where H2 scoping is unreliable.
+  test("every sub-step is invoked by its key's SKILL.md in the section that owns it", () => {
+    const SECTION: Record<string, string | null> = {
+      brainstorm: null,
+      plan: "## Exit Gate",
+      postmerge: "## Phase 6: Update Issue and Compound",
+      ship: "## Phase 2: Capture Learnings",
+    };
+    let checks = 0;
+    for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
+      expect(node in SECTION, `sub_steps key ${node} has no SKILL.md anchor section in this test`).toBe(true);
+      const text = readFileSync(join(PLUGIN_ROOT, "skills", node, "SKILL.md"), "utf-8");
+      let scope = text;
+      const heading = SECTION[node];
+      if (heading !== null) {
+        const lines = text.split("\n");
+        const start = lines.findIndex((l) => l.startsWith(heading));
+        expect(start, `${node}/SKILL.md has no section starting "${heading}"`).toBeGreaterThanOrEqual(0);
+        const rest = lines.slice(start + 1);
+        const end = rest.findIndex((l) => l.startsWith("## "));
+        scope = (end === -1 ? rest : rest.slice(0, end)).join("\n");
+      }
+      for (const sub of subs) {
+        expect(
+          new RegExp(`skill: soleur:${sub}(?![\\w-])`).test(scope),
+          `${node}/SKILL.md ${heading ?? "(whole file)"} does not invoke \`skill: soleur:${sub}\``,
+        ).toBe(true);
+        checks++;
+      }
+    }
+    expect(checks).toBeGreaterThan(0);
+    expect(checks).toBe(Object.values(DECLARED_SUB_STEPS).flat().length);
   });
 
   // Same gap one level up: the edge set's members are each pinned by toEqual,
