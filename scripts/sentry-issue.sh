@@ -3,7 +3,8 @@
 #
 # Reads are GET-only and least-privilege. The issue/event endpoints require an
 # `event:read`-scoped token: SENTRY_API_TOKEN / SENTRY_AUTH_TOKEN 403 on
-# /issues/<id>/ (Discover/ingest scope only — see postmerge/SKILL.md). Use the
+# /issues/<id>/ (Discover/ingest scope only — see
+# postmerge/SKILL.md Phase 3.6 -> references/sentry-error-count-delta.md). Use the
 # dedicated read-only SENTRY_ISSUE_RO_TOKEN (scopes [event:read, org:read]); the
 # write-scoped SENTRY_ISSUE_RW_TOKEN is a GET-only fallback until the RO token is
 # minted (see runbook).
