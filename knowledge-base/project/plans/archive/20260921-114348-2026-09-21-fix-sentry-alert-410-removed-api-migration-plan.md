@@ -757,7 +757,7 @@ The ADR amendment lands in this PR.
   - the post-apply probe green, including Guard 4's frozen-rule pin.
 
   #8282 is then closed by the workflow's success step with the run URL. Verify with `gh issue view 8282 --json state,comments`.
-- [ ] Live re-read (read-only; same command as `knowledge-base/project/specs/feat-one-shot-8451-sentry-alert-410-migration/pre-merge-live-baseline.md`) of workflows 566671 and 669246 returns HTTP 200 with every compared field (enabled, detectorIds, frequency, trigger comparison, action filters and actions) equal to that baseline. An unchanged `dateUpdated` is additional evidence the apply wrote nothing.
+- [ ] Live re-read (read-only; same command as `knowledge-base/project/specs/archive/20260921-114348-feat-one-shot-8451-sentry-alert-410-migration/pre-merge-live-baseline.md`) of workflows 566671 and 669246 returns HTTP 200 with every compared field (enabled, detectorIds, frequency, trigger comparison, action filters and actions) equal to that baseline. An unchanged `dateUpdated` is additional evidence the apply wrote nothing.
 - [ ] **The backlog landed live:** a read-only GET of the org workflows shows exactly one named `art17-erasure-incomplete`, `enabled: true`, with its `feature=account-delete` / `op=git-data-bare-repo-erasure` filters and email action; and the cron monitor `scheduled-devin-docs-drift` exists.
 - [ ] **If a compared field differs from the baseline** (not merely `dateUpdated`, which Sentry can bump):
   - file a `priority/p1-high` `action-required` issue;

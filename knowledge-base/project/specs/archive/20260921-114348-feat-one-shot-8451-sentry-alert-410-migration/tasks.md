@@ -1,6 +1,6 @@
 # Tasks: fix(sentry) adopt the last two sentry_issue_alert rules as sentry_alert (#8451)
 
-Plan: `knowledge-base/project/plans/2026-09-21-fix-sentry-alert-410-removed-api-migration-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260921-114348-2026-09-21-fix-sentry-alert-410-removed-api-migration-plan.md`
 
 ## Phase 1: RED guards (write before the code under test)
 

@@ -1039,7 +1039,7 @@ Sentry-infra PR and `main` were red.
 0-change plan, projection and reference to 32 keys, retiring the freeze, the live pin's excluded
 pass, and the `removed{}`/`import{}` pairs). Its follow-through probe passes only once the
 freeze is gone, not when a release ships. Rejected alternatives are recorded in
-`knowledge-base/project/plans/2026-09-21-fix-sentry-alert-410-removed-api-migration-plan.md`
+`knowledge-base/project/plans/archive/20260921-114348-2026-09-21-fix-sentry-alert-410-removed-api-migration-plan.md`
 §"Alternative Approaches Considered".
 
 ## Consequences

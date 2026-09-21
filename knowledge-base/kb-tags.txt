@@ -67,6 +67,7 @@
 4017
 404
 404 in sitemap
+410
 42501
 42703
 4570
@@ -542,6 +543,7 @@ breadcrumb
 breadcrumbs
 bridge
 bridge-network
+brownout
 browser
 browser-automation
 browser-compatibility
@@ -1944,6 +1946,7 @@ idle-detection
 idor
 if-ladder
 if-none-match
+ignore-changes
 ignore_changes
 image-bake
 image-context
@@ -1953,6 +1956,7 @@ image-pin
 immutability
 immutable-infra
 implementation-patterns
+import-block
 import-boundary
 import-meta-url
 import-only-resources
@@ -2117,6 +2121,7 @@ ladder-collapse
 landing-page
 landscape-audit
 lane-inference
+last-applied-sha
 latent-defects
 launch-flags
 layer-3
@@ -3007,6 +3012,7 @@ provenance-note
 provenance-tracking
 provenance-vs-integrity
 provider-alias
+provider-pin
 providers
 provisioner
 provisioning
@@ -3160,6 +3166,7 @@ reliability
 remediation
 remediation-tooling
 remote-exec
+removed-block
 rename
 rename-guard
 render-scrub
@@ -4105,6 +4112,7 @@ triggers
 triggers_replace
 trim
 trip
+tripwire
 true
 truncation
 trust-binding
@@ -4345,6 +4353,7 @@ websocket not connected
 websocket-disconnect
 websocket-handler
 websockets
+wedged-root
 welcome-hook
 wg-block-pr-ready-on-undeferred-operator-steps
 why
