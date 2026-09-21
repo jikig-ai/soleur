@@ -248,7 +248,21 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   CONFLICT_FILES=$(git -C "$WORK_DIR" diff --name-only --diff-filter=U 2>/dev/null \
     | head -5 | tr '\n' ', ' | sed 's/,$//')
   git -C "$WORK_DIR" merge --abort 2>/dev/null || true
-  deny "BLOCKED: Merge of origin/main failed. Conflicting files: ${CONFLICT_FILES:-unknown}. Resolve conflicts manually before merging."
+  # REGENERABLE-ARTIFACT RETRY (ADR-235), mirroring .claude/hooks/pre-merge-rebase.sh. The ADR
+  # states "Any fourth path that merges origin/main without it is a defect" -- and this hook
+  # WAS that fourth path (#8384 review). After the abort, deliberately: the resolver requires
+  # a clean tree and no merge in progress. It exits non-zero having touched nothing unless it
+  # committed, so the deny below is unchanged for every non-regenerable conflict. Its stderr
+  # is captured, not discarded -- the refusal/failure discriminator lives there.
+  REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+  REGEN_ERR=""
+  if [[ -f "$REGEN_RESOLVER" ]] \
+     && REGEN_ERR="$( cd "$WORK_DIR" && bash "$REGEN_RESOLVER" origin/main 2>&1 >/dev/null )"; then
+    echo "[ok] regenerable conflict resolved — merge committed, continuing" >&2
+  else
+    [[ -n "$REGEN_ERR" ]] && echo "[info] regen-on-conflict declined: $REGEN_ERR" >&2
+    deny "BLOCKED: Merge of origin/main failed. Conflicting files: ${CONFLICT_FILES:-unknown}. Resolve conflicts manually before merging."
+  fi
 fi
 
 # Push the merged result
