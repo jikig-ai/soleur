@@ -106,7 +106,17 @@ sed -i 's|\${zot_push_user}|pushuser|g' "$HB"
 # volume alias. Without this line the T1 assertion below fails by construction, and every
 # posture case would run against a script whose LINE= still holds an unrendered ${...}.
 sed -i 's|\${registry_volume_id}|100000003|g' "$HB"
-assert "T1 render left no unrendered TF interpolation" "! grep -qE '\\\$\{[A-Za-z0-9_.]+\}' '$HB'"
+# (#8417) The TF-interpolation check runs on a copy where every ESCAPED `$$` is masked, and the
+# same five template-variable substitutions are applied. It used to run on the rendered copy and
+# match any `${word}` -- which was only sound while no shell expansion in the block was written
+# in the braced `$${word}` form. The #8417 fix writes `$${_cs_rc}`, which renders to a legitimate
+# SHELL `${_cs_rc}`; the only thing that can be an unrendered TERRAFORM interpolation is a
+# single-dollar `${` in the template source.
+TFCHK="$TMP/hb.tfcheck"
+apply_rationale_strip "$RAW" | sed -e 's|[$][$]|__ESCAPED_DD__|g' \
+  -e 's|\${betterstack_ingest_url}|x|g' -e 's|\${disk_heartbeat_url}|x|g' \
+  -e 's|\${zot_pull_user}|x|g' -e 's|\${zot_push_user}|x|g' -e 's|\${registry_volume_id}|x|g' > "$TFCHK"
+assert "T1 render left no unrendered TF interpolation" "[[ -s '$TFCHK' ]] && ! grep -qF '\${' '$TFCHK'"
 assert "T1 the COMMENT-STRIPPED heartbeat is still valid bash (the strip reaches inside heredocs)" \
   "bash -n '$HB'"
 chmod +x "$HB"
@@ -261,8 +271,26 @@ assert "T1 PATH seam landed (the stub dirs now win first resolution)" \
 # cases) keep working. The SHIPPED template must NOT: it prepends the trusted dirs so a `PATH`
 # secret in the config store cannot win first resolution as root. That property belongs to the
 # template, so it is asserted against the template here rather than against this rendered copy.
+#
+# (#8417) EVALUATED, not grepped. The assert this replaces pinned the SPELLING
+# `$${PATH:+:$$PATH}` -- and that spelling was the defect: Terraform renders `$${` to `${` but
+# leaves a bare `$$` verbatim, so bash expanded it to `:<PID>PATH` and the inherited PATH was
+# never appended at all. A grep of the spelling was green over the bug for its whole life. So
+# render the shipped line the way templatefile does, run it, and assert what PATH BECOMES.
+_SHIPPED_PATH_LINE="$(grep -E '^[[:blank:]]+PATH="/usr/local/sbin:' "$CI_YML" | head -1 | sed -E 's/^[[:blank:]]+//; s/[$][$][{]/${/g')"
+_TRUSTED='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+_EVAL_INHERIT="$(env -i /bin/bash --noprofile --norc -c "PATH=/inherited/dir; $_SHIPPED_PATH_LINE; printf '%s' \"\$PATH\"" 2>/dev/null)"
+_EVAL_UNSET="$(env -i /bin/bash --noprofile --norc -c "unset PATH; $_SHIPPED_PATH_LINE; printf '%s' \"\$PATH\"" 2>/dev/null)"
+assert "the SHIPPED PATH line was found in the template (non-empty extraction)" \
+  "[[ -n \"\$_SHIPPED_PATH_LINE\" ]]"
 assert "the SHIPPED template prepends trusted dirs (a PATH secret cannot win first resolution)" \
-  "grep -qF 'PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\$\${PATH:+:\$\$PATH}\"' '$CI_YML'"
+  "[[ \"\$_EVAL_INHERIT\" == \"\$_TRUSTED:\"* ]]"
+assert "(#8417) the SHIPPED template APPENDS the inherited PATH (evaluated: exact result)" \
+  "[[ \"\$_EVAL_INHERIT\" == \"\$_TRUSTED:/inherited/dir\" ]]"
+assert "(#8417) the evaluated PATH carries no PID-shaped token (a bare \$\$ renders as <pid>PATH)" \
+  "! grep -qE '[0-9]+PATH' <<<\"\$_EVAL_INHERIT\""
+assert "(#8417) with PATH unset the SHIPPED line yields exactly the trusted list (no stray colon)" \
+  "[[ \"\$_EVAL_UNSET\" == \"\$_TRUSTED\" ]]"
 assert "the SHIPPED template pins LC_ALL=C (the guards below are locale-defined character classes)" \
   "grep -qF 'export LC_ALL=C' '$CI_YML'"
 assert "T1 by-id seam landed (the shipped reverse map now walks the fixture dir)" \
@@ -933,7 +961,7 @@ fi
 # ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
 # redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
 CASES_REDACT_MIN=39
-CASES_POSTURE_MIN=170
+CASES_POSTURE_MIN=174
 if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
     "$CASES_REDACT" "$CASES_REDACT_MIN" >&2

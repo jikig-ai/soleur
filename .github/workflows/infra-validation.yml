@@ -1402,6 +1402,12 @@ jobs:
       - name: Run zot disk-heartbeat redaction tests (#7500 — per-line redact, tier gate, degrade-closed)
         run: bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
 
+      # Guard 1 (#8417). No templatefile()-rendered source carries a bare `$$<ident>` (Terraform
+      # passes it through verbatim and bash reads the PID). The file set is derived from the .tf
+      # call sites, nested modules included. Needs only bash + git + python3.
+      - name: Run templatefile bare-dollar guard (#8417 — derived template set, rendered store_probe_rc)
+        run: bash apps/web-platform/infra/templatefile-bare-dollar-guard.test.sh
+
       # Guard 3 (#8386). Every mount-source resolution in the repo (lsblk inverse walk + Hetzner
       # by-id reverse map) agrees on leaf-counting, namespace scoping and hit-counting. Registered
       # HERE, as a SINGLE-LINE `run:`: run-registered-suites.sh derives its list from the

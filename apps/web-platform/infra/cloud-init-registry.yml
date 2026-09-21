@@ -188,7 +188,7 @@ write_files:
       # of cryptsetup and blkid, every five minutes. The behavioural suite gets its seam at RENDER
       # time (zot-disk-heartbeat-redaction.test.sh substitutes this literal), never at runtime.
       # APPEND, never prepend and never absolute paths: that suite's PATH stubs must still win.
-      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin$${PATH:+:$$PATH}"
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin$${PATH:+:$${PATH}}"
       # LC_ALL=C for the same reason one line up: the guards below are character CLASSES, whose
       # membership is locale-defined, and `doppler run` injects LANG/LC_ALL from the config store
       # exactly as it injects PATH. betterstack-query.sh pins this and records why; the lesson was
@@ -782,10 +782,14 @@ write_files:
         _bk_rc=na
         case "$STORE_BACKING_DEV" in
           /dev/*)
+            # (#8417) Reset BEFORE the call, as _cs_rc is: the `|| _bk_rc=$?` below only writes on
+            # FAILURE, so without this a healthy LUKS host reported `bkna` -- the same token as
+            # "blkid never ran". bkna now means not-run and bk0 means ran-OK.
+            _bk_rc=0
             _bk_out="$(timeout 5 blkid -o value -s TYPE "$STORE_BACKING_DEV" 2>/dev/null)" || _bk_rc=$?
             ;;
         esac
-        STORE_PROBE_RC="cs$$_cs_rc.bk$$_bk_rc"
+        STORE_PROBE_RC="cs$${_cs_rc}.bk$${_bk_rc}"
         case "$STORE_PROBE_RC" in
           '' | *[!A-Za-z0-9_.-]*) STORE_PROBE_RC=__UNREADABLE__ ;;
         esac
