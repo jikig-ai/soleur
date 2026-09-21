@@ -119,7 +119,7 @@ description word count).
 | A router skill for operator tooling | Not needed: `soleur:help` already lists every skill for the human and marks user-invoked ones |
 | A separate operator plugin | Out of scope |
 | Keep the cap at 2561 and leave 266 words of headroom | Not chosen: it lets the listing regrow to today's size without a reviewed bump |
-| **Positive-phrasing rewrite of the always-loaded rule corpus** (peer's writing-for-agents) | B5_ROW_PENDING |
+| **Positive-phrasing rewrite of the always-loaded rule corpus** (peer's writing-for-agents) | Not adopted: measured **INCONCLUSIVE** (B5, 2026-09-21). Δ = +8.0 pts, 2·SE interval [+0.2, +15.8] against a 10-pt MWE, over 3 V1 rules × 3 models × 24 tasks × 3 repeats (648 calls, $48.85). Command: `ANTHROPIC_MAX_TOKENS=3000 npx promptfoo@0.123.1 eval -c promptfooconfig-rule-phrasing.yaml --repeat 3`. Verdict module `rule-phrasing-verdict.cjs` sha256 `18c2481ca32bab7176cbfcb737b3b4233c38436e116438e59a6db5828c9cbf28`. Rule bodies unchanged; no rejected-concepts entry, because an underpowered null is not a refusal. Record: `specs/feat-one-shot-8290-invocation-axis-budget-relief/b5-eval-results.md`; revisit: #8497 |
 
 ## Rollback triggers
 

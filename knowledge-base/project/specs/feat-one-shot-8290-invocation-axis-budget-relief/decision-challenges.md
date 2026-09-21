@@ -54,3 +54,14 @@ by the W0-f before/after listing probe on a 200k-window model.
 - **Raised by:** DHH and simplicity, who want a scan of groups 1-2 only, with no exact-set pin. Architecture, test-design and COO want more coverage (hooks, lib, Inngest prompts, runbooks, per-glob floors).
 - **Default applied:** the correctness side for coverage, and the simplification side for form. The bare-name durable scan is cut, reasons are down to two, and rows are trimmed.
 - **Alternative:** the minimal DHH form.
+
+## Outcome — 2026-09-21 (B5 run)
+
+- **DC-1 resolved by measurement: INCONCLUSIVE** (+8.0 pts, [+0.2, +15.8], MWE 10). The INCONCLUSIVE
+  branch applied: ADR-236's alternatives row and `b5-eval-results.md` carry the record, and the
+  `revisit_if` follow-up is #8497. **No rejected-concepts entry was written.** The operator can
+  still override toward an entry at review.
+- **DC-5 did not fire.** No entry exists, so the typed-concept confirmation is not needed for this PR.
+- **DC-7:** the run used `--repeat 3` and all three arms. It cost $48.85, inside the $60 cap. One
+  deviation was made before spending: `ANTHROPIC_MAX_TOKENS` went from 300 to 3000, because thinking
+  models returned empty text at 300 (evidence in `b5-eval-results.md`).

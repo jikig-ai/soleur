@@ -161,7 +161,10 @@ Measures whether rewriting four always-loaded `Never …` rule bodies positive-l
 in [gated-skills.json](./gated-skills.json), and it gates no edit. Three arms × 3 models × 24 tasks ×
 `--repeat 3` = **648 calls**. Each call carries the live `AGENTS.md` + `AGENTS.rules.md` (~43 KB,
 about 12k system tokens), so a run is about **7.8M input tokens**. Output is capped with
-`ANTHROPIC_MAX_TOKENS=300` in the run environment, because `models.generated.json` cannot carry config.
+`ANTHROPIC_MAX_TOKENS=3000` in the run environment, because `models.generated.json` cannot carry config.
+Opus 5 and Sonnet 5 think by default, and at the first-registered 300 their thinking used the whole
+budget and left no text, which scores as compliant by omission. The verdict records the truncation rate.
+The first run (2026-09-21, #8290) was INCONCLUSIVE: +8.0 pts, [+0.2, +15.8], $48.85. The revisit is #8497.
 
 - **Arms.** [prompts/rule-phrasing.cjs](./prompts/rule-phrasing.cjs) is the **first `.cjs` chat-array
   prompt** in this harness; every other target uses `prompts/*.txt`. It builds `prohibition` (the live
@@ -181,7 +184,7 @@ npx promptfoo validate config -c promptfooconfig-rule-phrasing.yaml           # 
 node -e 'const g=require("./prompts/rule-phrasing.cjs"); for (const a of g.ARMS) console.log(a, g.buildCorpus(a).length)'
 bash test/rule-phrasing.test.sh                                                # no API
 # SPENDS (648 calls):
-ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o /path/outside/repo/b5-eval-raw.json
+ANTHROPIC_MAX_TOKENS=3000 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o /path/outside/repo/b5-eval-raw.json
 node scripts/rule-phrasing-verdict.cjs /path/outside/repo/b5-eval-raw.json --repeat 3
 ```
 

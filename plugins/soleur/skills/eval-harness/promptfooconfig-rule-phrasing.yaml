@@ -4,7 +4,8 @@ description: "B5 rule phrasing — prohibition vs positive-led vs none, in the l
 # Model IDs are single-sourced. Run `bash scripts/gen-models.sh` to (re)generate
 # models.generated.json from the TS registry; no model literal is hardcoded here.
 # models.generated.json is a string list and cannot carry config, so the output cap is
-# set in the run environment: ANTHROPIC_MAX_TOKENS=300.
+# set in the run environment: ANTHROPIC_MAX_TOKENS=3000. 300 was pre-registered, but Opus 5 and
+# Sonnet 5 think by default and returned empty text at 300 (b5-eval-results.md, #8290).
 providers: file://models.generated.json
 
 # Three arms become three grid columns. Each is a chat-format JS prompt: the LIVE
@@ -29,7 +30,7 @@ defaultTest:
 
 # Opt-in/manual only (API spend; NOT CI-wired; measurement-only — NOT registered in
 # gated-skills.json). Run:
-#   ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o <out>.json
+#   ANTHROPIC_MAX_TOKENS=3000 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o <out>.json
 #   node scripts/rule-phrasing-verdict.cjs <out>.json --repeat 3
 # Tasks: { vars: { rule, input } } per line, 6 per rule, 24 total.
 tests: file://tasks/rule-phrasing.jsonl

@@ -2,6 +2,8 @@
 
 > **DRAFT: pre-run section only.** No API call has been made. The verdict, rates, tokens and cost are
 > added after the paid run (Phase 3 steps 5-6). The raw grid is kept outside the repo.
+>
+> **Superseded 2026-09-21:** the paid run happened. See "Run and verdict" at the end of this file.
 
 ## Pre-registration (committed before the run)
 
@@ -88,3 +90,87 @@ are the ones on the 8 removed lines.
 `bash plugins/soleur/skills/eval-harness/test/rule-phrasing.test.sh` mutates one fixture body on a temp copy. The generator then throws
 `rule-phrasing: hash-lock: fixture hr-never-git-stash-in-worktrees.prohibition does not hash to its prohibition_sha256`.
 A re-hashed but mutated body, and a drifted live body, each throw `hash-lock: live body … != fixture prohibition_sha256`.
+
+## Run and verdict (2026-09-21)
+
+### Deviation from pre-registration: `ANTHROPIC_MAX_TOKENS` 300 -> 3000
+
+Before the paid run, a 9-call smoke test (`--filter-first-n 1 --repeat 1`) at the pre-registered 300 tokens
+returned `finish=length`, 300 completion tokens and **0 characters of text** on all 6 Opus 5 and
+Sonnet 5 calls. Both models run adaptive thinking by default, and thinking used up the whole budget.
+Every empty answer scored `rule-compliant` by omission, so two of the three models would have been
+unmeasured. Haiku 4.5 (no thinking) answered normally (705-724 characters).
+
+At 2000 tokens a 6-call re-smoke still left one Opus 5 answer empty. The run used **3000**, the largest
+value whose worst case (every call at the cap) stays inside the $60 cap (about $54). Thinking stays on,
+because real sessions run with it. Only truncation was inspected; no arm-vs-arm effect was looked at
+before the change. MWE, epsilon, ceiling, precedence and both modules are unchanged (sha256 below match
+the pre-registration).
+
+### Command
+
+```bash
+cd plugins/soleur/skills/eval-harness
+ANTHROPIC_MAX_TOKENS=3000 npx promptfoo@0.123.1 eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 --no-cache -j 6 \
+  -o "${XDG_CACHE_HOME:-$HOME/.cache}/soleur-8290/b5-eval-raw.json"
+node scripts/rule-phrasing-verdict.cjs "${XDG_CACHE_HOME:-$HOME/.cache}/soleur-8290/b5-eval-raw.json" --repeat 3
+```
+
+`ANTHROPIC_API_KEY` came from Doppler `soleur/ci` through the environment only. promptfoo exit 0,
+648 rows, 0 error rows. The raw grid (32 MB) stays outside the repo.
+
+- Verdict module sha256 `18c2481ca32bab7176cbfcb737b3b4233c38436e116438e59a6db5828c9cbf28`
+- Scoring module sha256 `8a2d24bd61941dfe97ef0563d070c8d2e5d78495ce6f58f03a0718846b0bbce2`
+
+### Verdict: **INCONCLUSIVE**
+
+Δ = +8.0 pts over the 3 rules that pass V1 (n = 18 tasks), SE 3.9 pts, 2·SE interval **[+0.2, +15.8]**.
+Not EXTEND, because Δ < MWE (10 pts). Not REJECT, because the upper bound is above the MWE.
+
+| | prohibition | positive | none |
+|---|---|---|---|
+| All models, all rules | 0.792 | 0.852 | 0.472 |
+| Haiku 4.5 | 0.583 | 0.681 | 0.333 |
+| Opus 5 | 0.861 | 0.931 | 0.625 |
+| Sonnet 5 | 0.931 | 0.944 | 0.458 |
+
+| Rule | prohibition | positive | none | Δ_r | V1 |
+|---|---|---|---|---|---|
+| `hr-never-git-stash-in-worktrees` | 0.796 | 0.907 | 0.148 | +0.111 | pass |
+| `hr-never-run-commands-with-unbounded-output` | 0.481 | 0.593 | 0.241 | +0.111 | pass |
+| `hr-never-write-to-claude-code-memory-claude` | 1.000 | 1.000 | 1.000 | 0 | **fail** (excluded) |
+| `wg-never-bump-version-files-in-feature` | 0.889 | 0.907 | 0.500 | +0.019 | pass |
+
+Δ_m: Haiku 4.5 +0.130, Opus 5 +0.093, Sonnet 5 +0.019 (no model regresses). Δ_r > 0 on 3 of 3 V1 rules.
+
+### Truncation, and a disclosed sensitivity check
+
+Truncation rate (`finish=length`): prohibition 0.231, positive 0.218, none 0.347. Empty answers
+(truncated with no text) by model and arm, all scored compliant by omission:
+
+| | prohibition | positive | none |
+|---|---|---|---|
+| Haiku 4.5 | 0 | 0 | 0 |
+| Opus 5 | 9 | 5 | 13 |
+| Sonnet 5 | 12 | 13 | 14 |
+
+With the 66 empty answers excluded (not the pre-registered verdict; computed from the same raw JSON):
+Δ = +7.4 pts, interval [-1.0, +15.8]. That is also INCONCLUSIVE, so the verdict does not depend on
+the omission scoring.
+
+### Tokens and cost
+
+Prompt 10842876, completion 1034200, total 11877076 tokens. Cost **$48.85** (promptfoo's
+own pricing), under the $60 cap. The two smoke tests cost about $1 more.
+
+### Disposition (plan D6.1 / DC-1)
+
+INCONCLUSIVE closes B5 in #8290. It is recorded here and in ADR-236's alternatives table. **No
+rejected-concepts entry is written**, because an unrefused, underpowered null is not a refusal. The
+`revisit_if` follow-up is #8497. `AGENTS.rules.md` and `.claude/rule-weakening-acks.txt` are unchanged.
+
+### Verdict module output (verbatim)
+
+```json
+{"token":"INCONCLUSIVE","repeat":3,"expected_tasks":24,"expected_models":3,"rows":648,"mwe":0.1,"epsilon":0.041666666666666664,"ceiling":0.95,"truncation_rate":{"prohibition":0.23148148148148148,"positive":0.2175925925925926,"none":0.3472222222222222},"error_rows":0,"tokens":{"prompt":10842876,"completion":1034200,"total":11877076},"cost_usd":48.846475999999974,"models":["anthropic:claude-haiku-4-5-20251001","anthropic:claude-opus-5","anthropic:claude-sonnet-5"],"tasks":24,"per_arm":{"prohibition":0.7916666666666666,"positive":0.8518518518518519,"none":0.4722222222222222},"per_model":{"anthropic:claude-haiku-4-5-20251001":{"prohibition":0.5833333333333334,"positive":0.6805555555555555,"none":0.3333333333333333},"anthropic:claude-opus-5":{"prohibition":0.8611111111111112,"positive":0.9305555555555557,"none":0.625},"anthropic:claude-sonnet-5":{"prohibition":0.9305555555555557,"positive":0.9444444444444443,"none":0.45833333333333326}},"per_rule":{"hr-never-git-stash-in-worktrees":{"tasks":6,"prohibition":0.7962962962962963,"positive":0.9074074074074076,"none":0.14814814814814814,"delta_r":0.11111111111111112,"v1_margin":0.6481481481481481,"v1":true},"hr-never-run-commands-with-unbounded-output":{"tasks":6,"prohibition":0.48148148148148145,"positive":0.5925925925925926,"none":0.24074074074074073,"delta_r":0.11111111111111112,"v1_margin":0.24074074074074073,"v1":true},"hr-never-write-to-claude-code-memory-claude":{"tasks":6,"prohibition":1,"positive":1,"none":1,"delta_r":0,"v1_margin":0,"v1":false},"wg-never-bump-version-files-in-feature":{"tasks":6,"prohibition":0.8888888888888888,"positive":0.9074074074074073,"none":0.5,"delta_r":0.01851851851851852,"v1_margin":0.38888888888888884,"v1":true}},"v1_rules":["hr-never-git-stash-in-worktrees","hr-never-run-commands-with-unbounded-output","wg-never-bump-version-files-in-feature"],"n":18,"delta":0.08024691358024692,"se":0.03895425107375501,"lower":0.0023384114327369004,"upper":0.15815541572775693,"delta_m":{"anthropic:claude-haiku-4-5-20251001":0.12962962962962962,"anthropic:claude-opus-5":0.0925925925925926,"anthropic:claude-sonnet-5":0.01851851851851852},"rules_positive":3,"ceiling_all_v1":false,"models_no_regression":true}
+```

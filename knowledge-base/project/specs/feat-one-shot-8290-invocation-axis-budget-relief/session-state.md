@@ -136,3 +136,21 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, l
 3. Fill ADR-236's B5 row; run `bash scripts/check-adr-ordinals.sh` (236 was free on all origin refs).
 4. Phase 5 ratchet list (plan §Phase 5) after staging, before the FIRST push; never scripts/test-all.sh.
 5. soleur:review (9-seat panel) -> resolve findings -> soleur:qa -> soleur:compound -> soleur:ship (PR #8484, closes 8290 only; never close #8292; Phase 6 ordinal re-check).
+
+## Work Phase (resumed 2026-09-21, second session)
+
+- Doppler: the system keyring file `~/.local/share/keyrings/Default_keyring.keyring` is rejected by
+  gnome-keyring-daemon ("invalid or unrecognized format"), so `doppler` cannot read its token from the
+  keyring. Worked around by passing the CLI token via `DOPPLER_TOKEN` + an empty `--config-dir`. The
+  keyring file itself is not repaired (operator-side).
+- The first smoke test hit "credit balance is too low" on the shared Anthropic key (the same key in `ci`
+  and all eight `prd*` configs). Better Stack showed the same error in the prod web-platform container
+  on 2026-09-19. The operator topped up the credit.
+- B5 run: INCONCLUSIVE, $48.85, 648 rows, 0 errors. `ANTHROPIC_MAX_TOKENS` changed from 300 to 3000
+  before the run (smoke evidence). ADR-236 row filled; follow-up #8497 filed; no no-list entry.
+
+### Errors
+- `ps -eo args` printed the Doppler CLI token, which was passed as `--token` in argv. Switched to the
+  `DOPPLER_TOKEN` env var. The operator should revoke and reissue the "omarchy" CLI token.
+- The pre-registered 300-token cap silently emptied thinking-model answers. Prevention: smoke-test any
+  paid grid with 1 task per arm per model and check the output length before the full run.
