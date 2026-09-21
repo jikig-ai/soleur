@@ -1228,6 +1228,13 @@ jobs:
       - name: Run www-apex-canonicalizer mutation battery (#7640)
         run: bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
 
+      # (#8364) Three sampled seo_redirect_* probes watch one representative URL per
+      # edge-redirect mechanism (zone ruleset, bulk-list item, generated pair). This
+      # guard pins each probe's 301 expectation, no-follow semantics, armed channel,
+      # declared-source-set membership, and the apply workflow's -target wiring.
+      - name: Run seo-redirect-monitors drift-guard (#8364)
+        run: bash apps/web-platform/infra/seo-redirect-monitors.test.sh
+
       # (#7640, ADR-194 plan D5) The apex cutover is expressed as ONE Terraform resource
       # address so core's replace semantics supply the Delete->Create ordering Cloudflare
       # requires (81053 rejects an A and a CNAME coexisting at one name). This guard keeps
