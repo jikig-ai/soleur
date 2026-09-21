@@ -76,8 +76,11 @@ def normalise: canon
       | .actionFilters |= map(.conditions |= sort_by(tostring) | .actions |= sort_by(tostring))
       | .actionFilters |= sort_by(tostring)));
 
-# Trigger types the provider cannot express as `sentry_alert` (they stay
-# `sentry_issue_alert` and are outside the probe's live scope by this predicate).
+# Trigger types the provider cannot express as a native `sentry_alert` trigger.
+# A rule carrying one is outside the fidelity scope on BOTH sides by this one
+# definition: the live side's `in_scope` and the TF side's `tf_in_scope`. Such a
+# rule is either still a `sentry_issue_alert`, or an adopted `sentry_alert` whose
+# trigger the provider's Read carries only in `legacy_trigger_conditions` (#8451).
 def excluded: ["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue"];
 # Lifecycle triggers: the provider renders them `{}`; the live API renders their
 # `comparison` as `true`. Both mean "no parameters".
@@ -180,12 +183,44 @@ def tf_rule:
           } ]
     };
 
+# TF-side mirror of the live side's `in_scope` (#8451): a `sentry_alert` is out of
+# scope when ANY of its trigger types is in `excluded`, in EITHER representation —
+#   native: the key of a `trigger_conditions[]` element carrying a non-null value;
+#   legacy: a string in `legacy_trigger_conditions`.
+# On the TF side `legacy_trigger_conditions` comes from the provider's Read, i.e.
+# refreshed/imported STATE, not the `.tf` config: an adopted type-only rule under
+# `ignore_changes = all` carries its trigger there, with `trigger_conditions` `[]`
+# or `null`. Keying on the legacy field alone would break the symmetry the day a
+# provider bump makes Read populate the native field. `// []` here is membership
+# only; `tf_rule` still floors a non-array `trigger_conditions` on an IN-scope rule.
+def tf_trigger_types:
+  [ (.values.trigger_conditions // [])[] | to_entries[] | select(.value != null) | .key ]
+  + (.values.legacy_trigger_conditions // []);
+def tf_in_scope:
+  tf_trigger_types as $t
+  | (excluded | any(. as $e | $t | index($e))) | not;
+# An in-scope rule may not carry ANY legacy type: every legacy type in `excluded`
+# was dropped above, so what remains is unmapped — an error, never a rule that
+# silently projects with fewer triggers than Sentry evaluates.
+def tf_legacy_floor:
+  .address as $a
+  | .values.legacy_trigger_conditions as $l
+  | if ($l | type) != "array" and $l != null
+    then error("\($a): legacy_trigger_conditions is neither an array nor null (\($l | tojson))")
+    elif ($l // [] | length) > 0
+    then error("\($a): unmapped legacy trigger type(s) \($l | map(tostring) | join(",")) (excluded: \(excluded | join(","))); a legacy type outside `excluded` has no projection — map it on BOTH sides or add it to `excluded`")
+    else . end;
+
 def project_tf:
   ((.planned_values // .values) // error("not a terraform show -json plan or state document (no .planned_values and no .values)"))
   | .root_module
   | if ((.child_modules // []) | length) > 0
     then error("the root carries child_modules; the projection reads root_module.resources only and refuses a second injection site") else . end
   | [ (.resources // [])[] | select(.type == "sentry_alert") ]
+  # BEFORE `canon | map(tf_rule)`: an excluded adopted rule may render
+  # `trigger_conditions: null` with no `sensitive_values`, and `tf_rule`'s floors
+  # would refuse a rule that is out of scope anyway.
+  | map(select(tf_in_scope) | tf_legacy_floor)
   | canon
   | map(tf_rule)
   | (group_by(.name) | map(select(length > 1) | .[0].name)) as $dups

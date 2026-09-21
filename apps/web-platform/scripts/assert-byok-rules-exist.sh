@@ -50,10 +50,12 @@
 # auth-callback-no-code-burst were adopted as `sentry_alert` with their real
 # definitions and now carry `ignore_changes = [environment]` only, so Terraform
 # owns their filters exactly as it owns the EXPECTED_RULES four. Only
-# `auth-per-user-loop` still declares the v2 attributes empty under the wide
-# `ignore_changes`, and it is the only rule `configure-sentry-alerts.sh` still
-# writes. The distinction above is therefore NARROWER, not gone — the two sets
-# are still disjoint and the per-RESOURCE-BLOCK instruction still stands.
+# `auth-per-user-loop` is still outside that ownership: since #8451 it is a
+# `sentry_alert` frozen under `ignore_changes = all` (its trigger type is
+# unmodelable at the pinned provider, and any write would zero the threshold),
+# and it is the only rule `configure-sentry-alerts.sh` still writes. The
+# distinction above is therefore NARROWER, not gone — the two sets are still
+# disjoint and the per-RESOURCE-BLOCK instruction still stands.
 #
 # SCOPE — org-wide since #7590, previously project-scoped. The replacement
 # endpoint (below) is org-scoped and its payload carries no project binding, so
@@ -121,10 +123,29 @@ fetch_rules() {
   # `-fsS` is kept deliberately. The replacement carries no deprecation header,
   # so there is no brownout to absorb, and `-S` already prints curl's own
   # `(22) The requested URL returned error: <status>` on a genuine failure.
-  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai.sentry.io)}"
-  curl -fsS --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/?per_page=100"
+  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"
+  # TRANSPORT CONFINEMENT (#8451 touched this file, so it pays the
+  # lint-shell-trace-credential-refusal debt; same shape and literals as
+  # scripts/sentry-alert-live-fidelity.sh). Pins sit in the live branch only:
+  # fixture rows never reach them. Exact equality against LITERALS — a pin
+  # reading its expected value from the environment pins nothing (#7997).
+  unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+        HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+        OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
+  case "$SENTRY_API_HOST" in
+    "jikigai-eu.sentry.io") ;;
+    *) printf 'ERROR: refusing destination host %s (pinned: jikigai-eu.sentry.io)\n' "$(printf '%s' "${SENTRY_API_HOST//[[:cntrl:]]/}" | cut -b1-120)" >&2; exit 2 ;;
+  esac
+  case "$SENTRY_ORG" in
+    "jikigai-eu") ;;
+    *) printf 'ERROR: refusing org %s (pinned: jikigai-eu)\n' "$(printf '%s' "${SENTRY_ORG//[[:cntrl:]]/}" | cut -b1-120)" >&2; exit 2 ;;
+  esac
+  # `--disable` FIRST, then `--noproxy '*'`; the bearer arrives on stdin via
+  # `--header @-`, so the token is never in argv.
+  printf 'Authorization: Bearer %s\n' "$SENTRY_AUTH_TOKEN" |
+    curl --disable --noproxy '*' --proto '=https' -g -fsS --max-time 10 \
+      --header @- \
+      "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/?per_page=100"
 }
 
 rules_json="$(fetch_rules)"

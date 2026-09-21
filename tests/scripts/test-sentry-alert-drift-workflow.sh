@@ -10,8 +10,8 @@
 #
 # The step's shell is EXTRACTED FROM THE SHIPPED YAML and executed, never
 # restated here. A restatement passes forever after the workflow changes
-# underneath it — the failure mode test-sentry-brownout-retry.sh's header
-# records having shipped twice.
+# underneath it — the failure mode the (since deleted, #8451) brownout-retry
+# suite's header recorded having shipped twice.
 #
 # TWO ROWS WERE CUT AT REVIEW and the reason is worth keeping. `t_discriminates`
 # re-asserted `verdict == drift` and `verdict == unavailable`, which W2 and W3
