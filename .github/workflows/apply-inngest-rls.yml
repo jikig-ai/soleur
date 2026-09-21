@@ -51,7 +51,6 @@ on:
     # soleur-inngest-prd — the brand-survival-critical durable trigger layer. This
     # workflow applies 0001 and nothing else, so its trigger must name 0001 and
     # nothing else. Keep it that way: re-widening to '**' re-opens that blast radius.
-    # The dev counterpart is .github/workflows/apply-inngest-rls-dev.yml.
     paths:
       - 'apps/web-platform/infra/inngest-rls/0001_enable_rls_lockdown.sql'
       - '.github/workflows/apply-inngest-rls.yml'
