@@ -1042,23 +1042,52 @@ rm -rf "$r" "$r2" "$r3"
 # Minimum-cardinality vacuity guard. If the fixture builder or the seam silently
 # stopped producing cases, every row above would vanish and this suite would
 # exit 0 having asserted nothing.
-# --- #7795: the LIVE-REPO fetch must not auto-follow tags ------------------------------------
-# ANCHORED ON THE FETCH COMMAND, never on a bare `--no-tags` grep: the flag landing on any other
-# fetch in this file would satisfy a bare grep while this site kept writing refs/tags/** into the
-# operator's own repository. `$root` is `git rev-parse --show-toplevel`, i.e. the LIVE repo, and a
-# fetch without the flag auto-follows tags — which `scripts/lib/repo-write-boundary.sh` classifies
-# as a suite writing to the repository, correctly and FATALly on any checkout with no sibling
-# worktree. Both counts are asserted, so ADDING a second unflagged live-repo fetch reddens this
-# too; a one-sided "the good line exists" check could not see that. The flag pattern is
-# ORDER-INDEPENDENT: pinning `--no-tags --depth 1` in that sequence asserts SPELLING, and a
-# behaviour-preserving reorder would redden it (#7795 review).
+# --- #7795+#7924: the missing-sha materialize path writes NOTHING into the live repo -------
+# ANCHORED ON THE COMMAND SHAPE, never on a bare `--no-tags`/`--depth` grep: those flags
+# landing on a fetch pointed at the LIVE repo would satisfy a flag grep while the site kept
+# writing objects — and, because the fetch is depth-bounded, `.git/shallow` — into the
+# operator's common dir, the write the repo-write boundary's shallow dimension (#7924)
+# classifies FATAL. #7795's `--no-tags` only scoped the refs/tags/** half of that write. So
+# what is pinned here is WHERE the operands resolve: the fetch's `-C` operand must be a repo
+# derived from `$SCRATCH` (the canary's trap-cleaned mktemp root), never the
+# `git rev-parse --show-toplevel` result; the archive's `-C` operand must be whichever repo
+# holds the sha (`$archive_repo` — `$root` on the fast path, the scratch repo after the
+# fetch). The flag pattern is ORDER-INDEPENDENT: pinning `--no-tags --depth 1` in that
+# sequence asserts SPELLING, and a behaviour-preserving reorder would redden it (#7795
+# review).
 cases=$((cases + 1))
-_nt_all=$({ grep -cE 'git -C "\$root" fetch ' "$CANARY" || true; })
-_nt_ok=$({ grep -cE 'git -C "\$root" fetch( --[a-z-]+( [0-9]+)?)* --no-tags( --[a-z-]+( [0-9]+)?)* origin "\$sha"' "$CANARY" || true; })
-if [[ "$_nt_all" == "1" && "$_nt_ok" == "1" ]]; then
-  pass "the live-repo (\$root) fetch passes --no-tags, so a canary run cannot write refs/tags/**"
+_refrepo_decl=$({ grep -cE 'refrepo="\$SCRATCH/refrepo"' "$CANARY" || true; })
+_scratch_fetch=$({ grep -cE 'git -C "\$refrepo" fetch( --[a-z-]+( [0-9]+)?)* --no-tags( --[a-z-]+( [0-9]+)?)* origin "\$sha"' "$CANARY" || true; })
+if [[ "$_refrepo_decl" == "1" && "$_scratch_fetch" == "1" ]]; then
+  pass "the missing-sha fetch runs -C a \$SCRATCH-derived repo, keeping --no-tags"
 else
-  fail "live-repo fetch not --no-tags-scoped (live-repo fetch sites=$_nt_all, flagged=$_nt_ok; both must be 1)"
+  fail "missing-sha fetch is not scratch-scoped (refrepo-from-\$SCRATCH decls=$_refrepo_decl, scratch fetch sites=$_scratch_fetch; both must be 1)"
+fi
+
+# AC9b — the zero-side is the load-bearing half: no `git -C "$root" fetch` may remain, and
+# the archive must run -C the operand that is `$SCRATCH`-derived in the fallback. A
+# one-sided "the scratch fetch exists" check cannot see a live-repo fetch left behind.
+cases=$((cases + 1))
+_live_fetches=$({ grep -cE 'git -C "\$root" fetch' "$CANARY" || true; })
+_archive_sites=$({ grep -cE 'git -C "\$archive_repo" archive "\$sha" -- "\$PLUGIN_SUBDIR"' "$CANARY" || true; })
+_archive_scratch=$({ grep -cE 'archive_repo="\$refrepo"' "$CANARY" || true; })
+if [[ "$_live_fetches" == "0" && "$_archive_sites" == "1" && "$_archive_scratch" == "1" ]]; then
+  pass "no fetch targets \$root, and the archive's -C operand is \$SCRATCH-derived in the fallback"
+else
+  fail "live-repo materialize residue (live-repo fetch sites=$_live_fetches must be 0; archive sites=$_archive_sites and scratch archive source=$_archive_scratch must be 1)"
+fi
+
+# The live repo is still READ — and only read: the `cat-file -e` fast-path probe and the
+# `remote get-url origin` lookup the scratch remote is seeded from. Reads are not the
+# boundary's business, so pinning them guards the honest-failure contract (a missing
+# `origin` must still return 1 through `remote get-url`) rather than forbidding them.
+cases=$((cases + 1))
+_fastpath_probe=$({ grep -cE 'git -C "\$root" cat-file -e "\$\{sha\}\^\{commit\}"' "$CANARY" || true; })
+_origin_url_read=$({ grep -cE 'git -C "\$root" remote get-url origin' "$CANARY" || true; })
+if [[ "$_fastpath_probe" == "1" && "$_origin_url_read" == "1" ]]; then
+  pass "the live-repo reads stay: the cat-file fast-path and the origin URL seed"
+else
+  fail "live-repo read shape changed (cat-file probes=$_fastpath_probe, remote get-url sites=$_origin_url_read; both must be 1)"
 fi
 
 # ---------------------------------------------------------------------------

@@ -98,6 +98,19 @@ new_probe() { # new_probe <name> -> prints an absolute path
 # `--local` config is untouched here on purpose (see the arm-4 note above).
 pgit() { env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git "$@"; }
 
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# the verbatim body; see plugins/soleur/test/test-helpers.sh).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # A tag fixture that cannot CONTAIN the thing an arm looks for is not a test, so its failure is a
 # loud FIXTURE error rather than a phantom SUT one (arm 36 established this shape at its own
 # precondition check). Every new tag-writing arm routes through here.
@@ -143,11 +156,12 @@ else fail "lib is missing:$missing"; fi
 ck
 p=$(new_probe manifest) || { echo "FATAL: probe setup failed" >&2; exit 2; }
 man=$(cd "$p" && bash -c 'source "'"$LIB"'"; _repo_state >/dev/null; repo_boundary_manifest')
-# `wt` is the fifth dimension: the branches-checked-out-elsewhere set is a classification INPUT
-# (it decides refs FATAL vs REPORT), and a classification input outside the manifest is the exact
-# thing this design exists to prevent.
-if [[ "$(printf '%s\n' "$man" | awk '{print $1}' | sort | tr '\n' ' ')" == "config head refs worktree wt " ]]; then
-  pass "manifest enumerates head, worktree, config, refs, wt"
+# `wt` is a classification INPUT (it decides refs FATAL vs REPORT), and a classification input
+# outside the manifest is the exact thing this design exists to prevent. `shallow` is the #7924
+# dimension: `.git/shallow` lives in the COMMON dir, invisible to `git status`, and a depth-bounded
+# fetch into the live repo moved it under every suite until this row existed.
+if [[ "$(printf '%s\n' "$man" | awk '{print $1}' | sort | tr '\n' ' ')" == "config head refs shallow worktree wt " ]]; then
+  pass "manifest enumerates head, worktree, config, refs, shallow, wt"
 else
   fail "manifest dimensions wrong: $(printf '%s' "$man" | tr '\n' '|')"
 fi
@@ -332,7 +346,7 @@ fi
 ck
 ni=$(cd "$p" && bash -c 'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_not_inspected "$s"')
 miss=""
-for anchor in 'push to a remote' 'objects' 'hooks' 'vscode-merge-base' 'remote-tracking' 'reflog' 'did not start'; do
+for anchor in 'push to a remote' 'objects' 'hooks' 'vscode-merge-base' 'remote-tracking' 'reflog' 'did not start' 'info/grafts'; do
   grep -qi -- "$anchor" <<<"$ni" || miss="$miss [$anchor]"
 done
 if [[ -z "$miss" ]]; then pass "the not-inspected list names every class a reader would assume covered"
@@ -458,11 +472,11 @@ render=$(cd "$REPO_ROOT" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c '
   source "'"$LIB"'"
   b="$(_repo_state)"
   printf "INSPECTED\n%s\nNOTINSPECTED\n%s\nNEXT\n" "$(repo_boundary_render_inspected "$b")" "$(repo_boundary_render_not_inspected "$b")"
-  for d in head worktree config refs; do printf "%s: %s\n" "$d" "$(repo_boundary_next_action "$d")"; done')
+  for d in head worktree config refs shallow; do printf "%s: %s\n" "$d" "$(repo_boundary_next_action "$d")"; done')
 missing_anchor=""
-for a in 'HEAD' 'tree and index' 'local (shared) config' 'harm class' \
+for a in 'HEAD' 'tree and index' 'local (shared) config' 'harm class' 'shallow state' \
          'push to a remote' 'did not start' \
-         'git reflog' 'git config --local --unset' 'git show-ref'; do
+         'git reflog' 'git config --local --unset' 'git show-ref' 'unshallow'; do
   grep -qF -- "$a" <<<"$render" || missing_anchor="$missing_anchor [$a]"
 done
 if [[ -z "$missing_anchor" ]]; then
@@ -726,8 +740,8 @@ fi
 # every outcome).
 ck
 map_bad=""
-declare -A _want=( [head]='reflog' [worktree]='status' [config]='--unset' [refs]='show-ref' )
-for d in head worktree config refs; do
+declare -A _want=( [head]='reflog' [worktree]='status' [config]='--unset' [refs]='show-ref' [shallow]='unshallow' )
+for d in head worktree config refs shallow; do
   got=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action "$1"' _ "$d")
   grep -qF -- "${_want[$d]}" <<<"$got" || map_bad="$map_bad [$d wanted '${_want[$d]}' got '${got:0:40}']"
 done
@@ -1192,6 +1206,194 @@ else
   fail "annotated-tag partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
 fi
 
+# ==============================================================================================
+# ARMS 53-61: THE `shallow` DIMENSION (#7924). `.git/shallow` lives in the repository's COMMON dir
+# — shared by every linked worktree — and `git status` cannot see it, so a `--depth`/`--shallow`
+# operation into the live repo rewrote history availability under every sampled dimension. The
+# fixture writes below land inside probe repos under $TMP_ROOT, never the suite's own repo.
+# ==============================================================================================
+
+# The common dir for a probe, resolved the same way the dimension must resolve it — and asserted
+# as a DIRECTORY before any fixture write, so a pathological git reports a FIXTURE error (the
+# require_tag shape) instead of a phantom SUT pass.
+probe_common() { # probe_common <probe-dir> -> prints the absolute common dir
+  local d="${1:?probe dir required}" c
+  c="$(pgit -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    || { printf '[FATAL] fixture setup failed: --git-common-dir unresolvable in %s.\n' "$d" >&2; exit 1; }
+  [[ -d "$c" ]] \
+    || { printf '[FATAL] fixture setup failed: common dir %s is not a directory.\n' "$c" >&2; exit 1; }
+  printf '%s' "$c"
+}
+
+# --- 53. absent -> absent is a MEASURED clean state -------------------------------------------
+# `absent` is a verdict, not a fallback: the snapshot must CARRY the `shallow` body line so a
+# dimension that silently stopped emitting cannot launder through an empty delta.
+ck
+p=$(new_probe shallowstable) || exit 2
+state "$p"; before="$STATE_OUT"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^shallow'$'\t''absent$' <<<"$before" \
+   && grep -qE '^manifest'$'\t''shallow'$'\t''measured$' <<<"$before" \
+   && ! grep -qE '^(FATAL|REPORT|UNMEASURABLE)[[:space:]]+shallow' <<<"$verdict"; then
+  pass "no shallow file is a measured 'absent', and an unchanged one emits no verdict line"
+else
+  fail "absent-stable wrong: verdict='$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+fi
+
+# --- 54. absent -> present is FATAL and names CREATED (positive observation, count == 1) --------
+# An absence-only assertion passes on an empty verdict — the harness-honesty row. The arm asserts
+# the `FATAL\tshallow` line was OBSERVED, exactly once, naming the transition.
+ck
+p=$(new_probe shallowcreate) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_fat=$({ grep -cE '^FATAL[[:space:]]+shallow' <<<"$verdict" || true; })
+if [[ "$n_fat" == 1 ]] && grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict"; then
+  pass "a .git/shallow CREATED mid-window is FATAL and names the transition"
+else
+  fail "shallow create not FATAL (fatal_shallow=$n_fat): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 55. LINKED WORKTREE: the dimension reads the COMMON dir, not the per-worktree git dir ------
+# The arm that dies if the sampler ever resolves `--git-dir`: inside a linked worktree that path is
+# `.git/worktrees/<n>`, which never carries `shallow`. The state is taken INSIDE the linked
+# checkout; the file is written to the MAIN repo's common dir mid-window.
+ck
+p=$(new_probe shallowlinked) || exit 2
+git -C "$p" worktree add -q "$TMP_ROOT/shallowlinked-co" -b shallowlinked-br 2>/dev/null \
+  || { printf '[FATAL] fixture setup failed: could not add a linked worktree.\n' >&2; exit 1; }
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$TMP_ROOT/shallowlinked-co"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$TMP_ROOT/shallowlinked-co"; after="$STATE_OUT"
+verdict=$(cd "$TMP_ROOT/shallowlinked-co" && env REPO_BOUNDARY_SALT=fixed-test-salt \
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict"; then
+  pass "a shallow write to the shared common dir is seen from INSIDE a linked worktree"
+else
+  fail "linked-worktree resolution wrong (dimension may be reading --git-dir): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 56. present -> present, graft set CHANGED, is FATAL ----------------------------------------
+# A depth-bounded fetch on an ALREADY-shallow repo appends boundary SHAs — presence is unchanged,
+# so a presence-only dimension could never see it. The content digest is what this arm pins.
+ck
+p=$(new_probe shallowchange) || exit 2
+# Both SHAs are committed BEFORE the window: a commit inside it would move head/refs and the delta
+# would no longer isolate the graft file.
+pgit -C "$p" commit -q --allow-empty -m deepen
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+pgit -C "$p" rev-parse 'HEAD~1' > "$common/shallow"
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD >> "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+n_fat=$({ grep -cE '^FATAL' <<<"$verdict" || true; })
+if [[ "$n_fat" == 1 ]] && grep -qE '^FATAL[[:space:]]+shallow.*CHANGED' <<<"$verdict"; then
+  pass "a graft-set change on an already-shallow repo is FATAL (content, not just presence)"
+else
+  fail "graft change not FATAL (fatal_lines=$n_fat): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 57. present -> absent is FATAL (the `git fetch --unshallow` shape) -------------------------
+# Symmetric arm: an `absent->present`-only classifier is the asymmetric-arm mutation row.
+ck
+p=$(new_probe shallowremove) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; before="$STATE_OUT"
+rm -f "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+shallow.*REMOVED' <<<"$verdict"; then
+  pass "a .git/shallow REMOVED mid-window is FATAL (the --unshallow shape)"
+else
+  fail "shallow removal not FATAL: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 58. sibling worktrees present — STILL FATAL, no shared_store softening --------------------
+# The no-softening decision IS the contract: a shallow flip mid-window changes what `git log`
+# answers for every suite still to run, so the harm lands on THIS run's evidence — unlike a
+# sibling ref move there is no attribution gap to excuse a REPORT.
+ck
+p=$(sibling_probe shallowprop) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict" \
+   && ! grep -qE '^REPORT[[:space:]]+shallow' <<<"$verdict"; then
+  pass "sibling presence does NOT soften a shallow delta: still FATAL"
+else
+  fail "shallow softened by siblings: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 59. common dir unresolvable -> not-measured, UNMEASURABLE, never a manufactured absent -----
+# `absent` is a legitimate measured state; conflating it with capture failure manufactures a clean
+# baseline on a broken read. Fixture: a PATH shim whose `git` fails ONLY --git-common-dir.
+ck
+p=$(new_probe shallowdeg) || exit 2
+stubbin="$TMP_ROOT/shallowdeg-bin"; mkdir -p "$stubbin"
+real_git="$(PATH="${PATH/$stubbin:/}" command -v git)"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'for a in "$@"; do [[ "$a" == "--git-common-dir" ]] && exit 1; done' \
+  "exec $(printf '%q' "$real_git") \"\$@\"" > "$stubbin/git"
+chmod +x "$stubbin/git"
+state "$p"; before="$STATE_OUT"
+state "$p" "PATH=$stubbin:$PATH"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^manifest'$'\t''shallow'$'\t''not-measured$' <<<"$after" \
+   && grep -qE '^UNMEASURABLE[[:space:]]+shallow' <<<"$verdict" \
+   && ! grep -qE '^FATAL[[:space:]]+shallow' <<<"$verdict"; then
+  pass "an unresolvable common dir is not-measured -> UNMEASURABLE, not a manufactured absent"
+else
+  fail "degrade collapse: verdict='$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)' after-manifest='$(grep -E '^manifest.*shallow' <<<"$after" | tr '\n' '|')'"
+fi
+
+# --- 60. MUST-PASS: a shallow write in a DIFFERENT repo's common dir does not fire --------------
+# The dimension reads THIS snapshot repo's common dir — a shallow flip anywhere else on the
+# machine is not this run's delta.
+ck
+p=$(new_probe shallowhome) || exit 2
+other=$(new_probe shallowforeign) || exit 2
+other_common=$(probe_common "$other")
+assert_fixture_dir "$other_common"
+state "$p"; before="$STATE_OUT"
+pgit -C "$other" rev-parse HEAD > "$other_common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if ! grep -qE '^FATAL' <<<"$verdict"; then
+  pass "a shallow write in a foreign repo's common dir does not fire here"
+else
+  fail "foreign shallow write fired: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 61. The rendered claim names the shallow dimension's OWN surface ---------------------------
+# `_repo_boundary_dim_prose`'s default arm prints the bare token `shallow`; a FATAL whose rendered
+# claim names nothing the operator can find is the claim-outruns-content defect this lib exists to
+# close. Asserted on the RENDERED list (the runner's own path), not the function alone.
+ck
+p=$(new_probe shallowprose) || exit 2
+rendered=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c \
+  'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_inspected "$s"')
+if grep -qF '.git/shallow' <<<"$rendered"; then
+  pass "the inspected list renders the shallow dimension's real surface (.git/shallow)"
+else
+  fail "shallow prose missing from the rendered claim: '$(printf '%s' "$rendered" | tr '\n' '|' | cut -c1-200)'"
+fi
+
 # --- Accounting, WHOLE-SUITE checkpoint. The mid-file one above stops at arm 38.
 if [[ $((passes + fails)) -ne $asserted ]]; then
   printf '\n[FATAL] accounting (whole suite): passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
@@ -1205,7 +1407,7 @@ fi
 # an operator reads, misattributing a real classifier defect to suite tampering. Worse, the same
 # counter is the one a neutered `fail()` INFLATES, so the floor moved in the wrong direction
 # exactly when it mattered; the instrument self-test at the top of this file is what catches that.
-MIN_ASSERTIONS=57
+MIN_ASSERTIONS=66
 if [[ $((passes + fails)) -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only $((passes + fails)) assertion(s) EXECUTED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

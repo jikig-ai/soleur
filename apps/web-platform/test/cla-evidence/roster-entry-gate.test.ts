@@ -202,9 +202,9 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
   // has not asked for it — and this suite is in REPO_WIDE_SUITES, so it runs in
   // `test-webplat`, which has not. `git show` then exits 128 and reds the
   // required `test` check repo-wide, on every PR, for a reason unrelated to the
-  // PR. Fetch the one ref we need, shallowly, and let a genuine unavailability
-  // surface as an explicit refusal rather than as either a green run or a
-  // mystery 128.
+  // PR. Clone the one branch we need — shallowly, into a throwaway dir — and
+  // let a genuine unavailability surface as an explicit refusal rather than as
+  // either a green run or a mystery 128.
   const readRealLedger = (): { signedContributors: Array<{ id: number }> } => {
     const show = () =>
       execFileSync("git", ["show", "origin/cla-signatures:signatures/cla.json"], {
@@ -216,17 +216,34 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
     try {
       return JSON.parse(show());
     } catch {
-      // Missing locally. One shallow fetch of exactly this ref.
-      execFileSync(
-        "git",
-        // `--no-tags` is load-bearing: `git fetch` auto-follows tags, and the
-        // gate runner samples the repo's refs as a read-only boundary — a plain
-        // fetch wrote 157 tags and tripped "[FATAL] A SUITE WROTE TO THE LIVE
-        // REPOSITORY" on CI run 34123093118.
-        ["fetch", "--no-tags", "--depth=1", "origin", "+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures"],
-        { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: cleanGitEnv() },
-      );
-      return JSON.parse(show());
+      // Missing locally. Clone the ledger branch into a scratch dir instead of
+      // fetching into repoRoot. The fetch this replaces could not survive the
+      // repo-write boundary twice over: `git fetch` follows tags unless told
+      // not to (a plain fetch wrote 157 tags and tripped "[FATAL] A SUITE WROTE
+      // TO THE LIVE REPOSITORY" on CI run 34123093118), and `fetch --depth=1`
+      // creates `.git/shallow` in the repo's SHARED common dir — a create on
+      // the boundary's shallow dimension, FATAL in every regime. The scratch
+      // clone writes NOTHING into repoRoot — no ref, no objects, no
+      // `.git/shallow` — which is why it survives; the `--depth=1` bound is
+      // kept, moved into the throwaway clone. A failure of either spawn
+      // propagates as this function's refusal, never an empty ledger.
+      const remoteUrl = execFileSync("git", ["remote", "get-url", "origin"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: cleanGitEnv(),
+      }).trim();
+      const tmpCloneDir = mkdtempSync(join(tmpdir(), "roster-ledger-"));
+      try {
+        execFileSync(
+          "git",
+          ["clone", "--depth=1", "--no-tags", "--single-branch", "--branch", "cla-signatures", remoteUrl, tmpCloneDir],
+          { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: cleanGitEnv() },
+        );
+        return JSON.parse(readFileSync(join(tmpCloneDir, "signatures/cla.json"), "utf8"));
+      } finally {
+        rmSync(tmpCloneDir, { recursive: true, force: true });
+      }
     }
   };
 

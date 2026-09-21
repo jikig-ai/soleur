@@ -125,7 +125,7 @@ _repo_boundary_digest() { # _repo_boundary_digest <value>
   printf '%s' "${out:0:16}"
 }
 
-# --- the four dimensions ---------------------------------------------------------------------
+# --- the measured dimensions ------------------------------------------------------------------
 
 _repo_boundary_dim_head() {
   git rev-parse HEAD 2>/dev/null
@@ -219,10 +219,35 @@ _repo_boundary_dim_refs() {
   printf '%s' "$out" | LC_ALL=C sort
 }
 
+_repo_boundary_dim_shallow() {
+  # `.git/shallow` lives in the COMMON dir — shared by every worktree of the checkout — so it is
+  # resolved through `--git-common-dir`, NEVER `--git-dir`: on a linked worktree `--git-dir` is
+  # `.git/worktrees/<n>`, a per-worktree path that carries no shallow file and would read "absent"
+  # while the shared repo is shallow underneath it (#7924). `--path-format=absolute` because the
+  # bare form returns a relative `.git` on a top-level checkout.
+  local common f raw
+  common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [[ -n "$common" ]] || return 1
+  f="$common/shallow"
+  # `absent` is a legitimate measured state — decide it BEFORE the tool probes so an absent file
+  # cannot be masked by a degraded tool.
+  [[ -e "$f" ]] || { printf 'absent\n'; return 0; }
+  # `_repo_boundary_dim_config` precedent: probe the digest tool up front — a missing sha256sum
+  # must degrade the DIMENSION to not-measured, never digest "" and call it a state.
+  _repo_boundary_digest probe >/dev/null 2>&1 || return 1
+  # The ASSIGNMENT carries cat's status: an existing-but-unreadable/non-regular path is a capture
+  # failure, not a digest of "". `_repo_boundary_digest "$(cat …)"` inline would swallow the
+  # failure — the substitution yields "" on cat's non-zero and digest still returns 0,
+  # manufacturing `present`.
+  raw="$(cat -- "$f")" || return 1
+  printf 'present\t'
+  _repo_boundary_digest "$raw" || return 1
+}
+
 # --- the snapshot ------------------------------------------------------------------------------
 
 _repo_state() {
-  local head worktree config refs manifest="" body="" wt_list=""
+  local head worktree config refs shallow manifest="" body="" wt_list=""
   # HEAD is the liveness probe for the whole function. If it cannot be read there is no repository
   # to have a boundary around, and the caller must degrade to an honest NOTE.
   head="$(_repo_boundary_dim_head)" || { _REPO_BOUNDARY_MANIFEST=""; return 1; }
@@ -257,6 +282,17 @@ _repo_state() {
     manifest+=$'manifest\trefs\tnot-measured\n'
   fi
 
+  # `.git/shallow`: a single-token body line (`absent` / `present\t<digest>`), not a family — a
+  # file whose EXISTENCE is the signal. It lives in the common dir, so it is shared by every
+  # worktree, and `git status` cannot see it: a depth-bounded fetch into the live repo moved it
+  # under every sampled dimension until this row existed (#7924).
+  if shallow="$(_repo_boundary_dim_shallow)"; then
+    manifest+=$'manifest\tshallow\tmeasured\n'
+    body+="shallow"$'\t'"$shallow"$'\n'
+  else
+    manifest+=$'manifest\tshallow\tnot-measured\n'
+  fi
+
   # The set of branches checked out in OTHER worktrees, carried in the snapshot rather than
   # re-derived at classify time. Re-deriving it after the window closes lets an escape running
   # `git -C "" worktree add -b probe` register its own branch and thereby launder itself from
@@ -289,7 +325,7 @@ _repo_state() {
   _REPO_BOUNDARY_MANIFEST="$manifest"
   # The manifest is emitted INSIDE the snapshot as well as kept in the global: a before/after pair
   # taken across a lib swap must show the dimension set itself changing, not silently compare a
-  # four-dimension reading against a three-dimension one.
+  # wider reading against a narrower one.
   printf '%s' "$manifest"
   printf '%s' "$body"
 }
@@ -422,6 +458,31 @@ repo_boundary_classify() {
       printf 'FATAL\t%s\tthis dimension changed between the first suite and the end of the run\n' "$dim"
     fi
   done
+
+  # --- shallow: FATAL in EVERY regime, no shared_store softening --------------------------------
+  # `.git/shallow` is repository-global (the common dir), so a sibling COULD produce the delta —
+  # but post-#7924 no routine producer exists, and unlike a softened ref move the harm lands on
+  # THIS run's own evidence: a mid-window shallow flip changes what `git log` and friends answer
+  # for every suite still to run, in this worktree and every sibling. A REPORT would print-and-pass
+  # a corruption of the evidence base itself.
+  if [[ " $unmeasurable " != *" shallow "* ]]; then
+    local bshallow ashallow
+    bshallow="$({ grep "^shallow"$'\t' <<<"$before" || true; } | sed 's/^shallow\t//')"
+    ashallow="$({ grep "^shallow"$'\t' <<<"$after"  || true; } | sed 's/^shallow\t//')"
+    if [[ "$bshallow" != "$ashallow" ]]; then
+      case "$bshallow" in
+        absent)
+          printf 'FATAL\tshallow\t.git/shallow was CREATED — the whole repository, every worktree, is now shallow\n' ;;
+        *)
+          case "$ashallow" in
+            absent)
+              printf 'FATAL\tshallow\t.git/shallow was REMOVED (the `git fetch --unshallow` shape)\n' ;;
+            *)
+              printf 'FATAL\tshallow\tgraft set CHANGED — a depth-bounded fetch on an already-shallow repo moved the boundary\n' ;;
+          esac ;;
+      esac
+    fi
+  fi
 
   # --- config: per key, by harm ----------------------------------------------------------------
   if [[ " $unmeasurable " != *" config "* ]]; then
@@ -664,6 +725,7 @@ _repo_boundary_dim_prose() {
     worktree) printf "this worktree's tree and index" ;;
     config)   printf "local (shared) config, except branch.*.vscode-merge-base" ;;
     refs)     printf 'local heads and tags, by harm class' ;;
+    shallow)  printf 'repository shallow state (.git/shallow in the shared common dir)' ;;
     *)        printf '%s' "$1" ;;
   esac
 }
@@ -689,11 +751,12 @@ repo_boundary_render_inspected() { # repo_boundary_render_inspected [before [aft
 
 repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [before [after]]
   local dim status other
-  # MEASURED, so a reader does not go hunting: of the five dimensions, only `worktree` can
-  # realistically report not-measured. git parses packed-refs and config eagerly, so every ref-store
-  # or config corruption takes `git rev-parse HEAD` down first and the WHOLE snapshot degrades.
-  # `git status --porcelain` refreshing the index under `index.lock` contention is the one live
-  # per-dimension case.
+  # MEASURED, so a reader does not go hunting: the dimensions that can realistically report
+  # not-measured while HEAD still reads are `worktree` — `git status --porcelain` refreshing the
+  # index fails under `index.lock` contention, which parallel worktrees produce routinely — and
+  # `shallow`, whose file is a single pointable path that can be unreadable or whose common dir
+  # can fail to resolve. git parses packed-refs and config eagerly, so every ref-store or config
+  # corruption takes `git rev-parse HEAD` down first and the WHOLE snapshot degrades instead.
   #
   # A dimension not measured at EITHER boundary is named HERE rather than silently dropped, so a
   # partial reading is never presented as whole coverage. This is the union of the two
@@ -733,6 +796,8 @@ repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [bef
             dimension is `rev-parse HEAD`, a sha, so this is invisible AND it empties the
             own-branch comparison that drives two FATAL escalations
           - any A -> B -> A pair inside the window (a `git stash push` followed by `pop`)
+          - .git/objects/info/grafts (the deprecated grafts mechanism — a second invisible history
+            rewrite, still unsampled)
           - anything a suite's descendants do AFTER the end snapshot
           - any entry point other than runs of this runner
           - any suite this runner did not start
@@ -747,6 +812,7 @@ repo_boundary_next_action() {
     worktree) printf 'git status && git diff   # UNCOMMITTED work is what is at risk' ;;
     config)   printf 'git config --local --unset <the key named in the [config] line above>   # --local IS the SHARED file every worktree on this machine inherits' ;;
     refs)     printf 'git show-ref --heads --tags   # compare against git reflog <ref>; a DELETED ref is recoverable from the reflog until gc' ;;
+    shallow)  printf 'git rev-parse --is-shallow-repository; cat "$(git rev-parse --git-common-dir)/shallow"; git fetch --unshallow origin   # a suite ran a --depth/--shallow fetch into this repo' ;;
     *)        printf 'git status' ;;
   esac
 }
