@@ -108,3 +108,31 @@ prose before shipping it. #8457 automates that for the first of the three.
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, learnings-researcher, functional-discovery, claude-code-guide, cto/cpo/coo/clo, 9-seat plan-review panel, security-sentinel, git-history-analyzer, pattern-recognition-specialist.
+
+## Work Phase (soleur:work, 2026-09-21) — PAUSED at Phase 3 step 5 (paid B5 run)
+
+- Status: Phases 0, 1, 2 done and committed; Phase 3 offline build done; Phase 4 partly done. Nothing pushed.
+  - 5b6587e2a invocation axis: 12 flips, invocation-axis.test.ts (Guard 1, 29 ack rows), budget 2561 -> 2295, keep-pins, hand-off rewordings, go.md/help.md notes.
+  - cbef8b7ae skill-creator B6 (authoring-levers.md, markdown-heading census, NOTICE). AC-S2 allowlist: audit-skill.md:144 "Tag-only body" (the inverted anti-pattern).
+  - e57323bc8 W0 evidence (w0/) + ADR-151 addendum.
+  - 04af23e5b B5 offline eval (battery 58/58; promoted in guard-vacuity-floor, ledger 47).
+  - ADR-236 committed as a DRAFT: its "Positive-phrasing rewrite" alternatives row reads `B5_ROW_PENDING` and MUST be filled from the verdict before push.
+- W0 verdict: PASS (no W0-STOP). Claude Code 2.1.278 honours the key; Devin 3000.10.31 lists flagged skill `[user]`; Codex 0.155.1 ignores it (inert). W0-f: haiku 11 with-desc before and after, so ADR records "no observed listing benefit on 200k-window models".
+- Guard 1 mutation matrix: all rows as tabled (guard1-matrix.txt).
+- Follow-up filed: #8486 (agent-drivable operator scripts).
+- Pre-push ratchet runs so far (at 04af23e5b): `bun test plugins/soleur/` rc=0 (3205 pass / 0 fail); vitest repo-wide was still running (/var/tmp/ratchets-8290/vitest.rc).
+
+### Errors
+- Doppler CLI could not read its token: `failed to unlock correct collection '/org/freedesktop/secrets/aliases/default'` (system keyring locked), so ANTHROPIC_API_KEY was unavailable and the paid B5 run could not start. Operator chose to unlock the keyring and resume in a fresh session.
+- Plain `/soleur:<name>` in plugin skill prose is RED under harness-parity-tree (ADR-226). Hand-offs in plugins/soleur use canonical `soleur:<name>` + "the operator types"; runbooks (outside the census) keep the slash form.
+- lefthook's bun-test hook runs scripts/test-all.sh (operator-forbidden); every commit on this branch uses `LEFTHOOK_EXCLUDE=bun-test`.
+- A stream-json parser crashed after its raw file was deleted; re-ran the probe. Prevention: never delete the raw capture until the condensed evidence is verified.
+
+### Remaining (in order)
+1. Find ANTHROPIC_API_KEY in Doppler (`doppler me` first), then from plugins/soleur/skills/eval-harness:
+   `mkdir -p ~/.cache/soleur-8290 && ANTHROPIC_MAX_TOKENS=300 npx promptfoo eval -c promptfooconfig-rule-phrasing.yaml --repeat 3 -o ~/.cache/soleur-8290/b5-eval-raw.json`
+   then `node scripts/rule-phrasing-verdict.cjs ~/.cache/soleur-8290/b5-eval-raw.json --repeat 3`. Cap $60 (fallback --repeat 2 and pass --repeat 2 to the verdict).
+2. Write verdict + intermediates + module sha256 + tokens/cost into b5-eval-results.md (gitleaks first); branch per plan Phase 3 step 7 / D6 (REJECT/CEILING -> no-list entry gated on typed confirmation; INCONCLUSIVE -> ADR row + revisit_if issue, no entry; EXTEND -> separate follow-up PR for @deruelle; INVALID/ABORTED -> one rerun then split B5).
+3. Fill ADR-236's B5 row; run `bash scripts/check-adr-ordinals.sh` (236 was free on all origin refs).
+4. Phase 5 ratchet list (plan §Phase 5) after staging, before the FIRST push; never scripts/test-all.sh.
+5. soleur:review (9-seat panel) -> resolve findings -> soleur:qa -> soleur:compound -> soleur:ship (PR #8484, closes 8290 only; never close #8292; Phase 6 ordinal re-check).
