@@ -325,7 +325,7 @@ reasons, each checked on the tree:
    form ("once cut over") needs a host-side marker, and a marker is planted state, the same class of
    thing the assertion distrusts. An unconditional assertion makes the wrappers refuse on plaintext.
    #8211's rollback must therefore flip `GIT_DATA_STORE_ENABLED=false` **before** it remounts
-   plaintext at `/mnt/git-data`. Otherwise rollback becomes a fail-closed transport outage, not a
+   plaintext at `/mnt/git-data`. Otherwise rollback fails closed, with the transport refusing, rather than a
    silent plaintext serve. That is the correct direction, but it has to be designed, not discovered.
    The suites also need an expected-device seam (for example `GIT_DATA_STORE_DEVICE`, defaulting to
    `/dev/mapper/git-data`) beside `GIT_DATA_MOUNT_ROOT`, because a temp-root real mount never reports
