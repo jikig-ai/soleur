@@ -110,8 +110,23 @@ a `devin cloud drs` sandbox and a user-facing web-app session — plus the
 `non-plugin-source`, `malformed`, `conflicting-evidence`, `no-devin-env`). If
 `CLAUDE_PLUGIN_ROOT` is unset — measured: cloud exec shells export only
 `DEVIN_DIR` + `DEVIN_DISABLE_HISTEXPAND`, no `CLAUDE*`/`SOLEUR*` vars — resolve
-the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1` (the
-managed plugin cache; the lock file is `/opt/.devin/plugins/lock.json`).
+the plugin ROOT first, then name the script relative to it. Search the two
+managed plugin caches, `"$HOME/.local/share/devin/cli/plugins/cache"` and
+`/opt/.devin/plugins` (whose lock file is `/opt/.devin/plugins/lock.json`),
+skipping either unless `[ -d "$d" ]`, and select by IDENTITY:
+
+```sh
+MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' \
+  -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"
+ROOT="${MANIFEST%/.claude-plugin/plugin.json}"
+```
+
+One resolution serves both consumers — `$ROOT/scripts/cloud-detect.sh` and
+`$ROOT/scripts/precommit-guard.sh`. Selecting by the script's BASENAME instead
+would accept any directory under the cache that happens to hold a file with
+that name, and then execute it. The identity check is a shape check, not
+authentication: a planted `{"name":"soleur"}` manifest passes it (ADR-179 A11).
+It buys consistency with `/soleur:go`'s own resolver and defence-in-depth.
 
 The classifier is sentinel-based: the SessionStart hook writes
 `.devin/soleur-local-session` (`{host, ts, hook_source}`) on local sessions,

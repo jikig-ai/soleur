@@ -23,21 +23,56 @@ fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); checks=$((checks 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# The stub ASSERTS ITS ARGV. Without it, dropping --comments (which would return an empty comment
-# set and wedge the probe at awaiting_operator_verdict forever) stays green.
-cat > "$WORK/stub-gh" <<'STUB'
+# The stub is on PATH, not injected through a variable. It MOVED there on 2026-09-20, when the
+# probe was migrated onto scripts/lib/trusted-verdict.sh: the lib calls `gh` directly (a security
+# lib must not take an injectable binary path — that is an env-settable key on the thing it
+# authenticates), so an `INNGEST_AUTHZ_6500_GH_BIN` seam could no longer reach it. A PATH shim is
+# the stronger seam anyway, because it also intercepts the lib's own `gh api` permission call.
+#
+# It ASSERTS ITS ARGV and exits 64 on anything it was not built to answer. A stub that answers
+# regardless of the request puts the fixture seam ABOVE the code under test, so it cannot detect
+# the probe asking the wrong question — and dropping the `--repo` pin (which would resolve
+# permissions against the wrong repository) would stay green.
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 [[ "${STUB_RC:-0}" == "0" ]] || exit "${STUB_RC}"
 argv="$*"
-[[ "$argv" == *"--comments"* ]] || { echo "stub: gh call missing --comments (argv: $argv)" >&2; exit 64; }
+if [[ "${1:-}" == "api" ]]; then
+  # scripts/lib/trusted-verdict.sh resolving a commenter's effective permission.
+  ep="${2:-}"
+  case "$ep" in
+    repos/jikig-ai/soleur/collaborators/*/permission) : ;;
+    *) echo "stub: unexpected gh api endpoint: $ep" >&2; exit 64 ;;
+  esac
+  login="${ep#*/collaborators/}"; login="${login%/permission}"
+  perm="$(printf '%s\n' "${STUB_PERMS:-}" | awk -F'=' -v l="$login" '$1==l{print $2}')"
+  # Absent from $STUB_PERMS == GitHub's "not a user" 404: definitive, drop that author.
+  [[ -n "$perm" ]] || { printf 'gh: %s is not a user (HTTP 404)\n' "$login" >&2; exit 1; }
+  printf '%s\n' "$perm"; exit 0
+fi
+[[ "$argv" == *"--json comments"* ]] || { echo "stub: gh call missing --json comments (argv: $argv)" >&2; exit 64; }
 [[ "$argv" == *"--repo"* ]] || { echo "stub: gh call missing --repo pin (argv: $argv)" >&2; exit 64; }
-cat "${STUB_BODIES:-/dev/null}"
+# $STUB_BODIES is one verdict body per line; render it as the comments payload the lib reads,
+# attributed to $STUB_AUTHOR so the permission arm above decides whether it counts. The REAL
+# --jq expression is then applied to it: running the SUT's own expression (rather than a
+# canned output) is what keeps the lib's selection genuinely exercised instead of simulated.
+jqexpr=""; prev=""
+for a in "$@"; do [[ "$prev" == "--jq" ]] && jqexpr="$a"; prev="$a"; done
+[[ -n "$jqexpr" ]] || { echo "stub: gh call carried no --jq (argv: $argv)" >&2; exit 64; }
+jq -Rn --arg a "${STUB_AUTHOR:-operator}" \
+   '[inputs | {author:{login:$a}, body:.}] | {comments: .}' < "${STUB_BODIES:-/dev/null}" \
+  | jq -r "$jqexpr"
 STUB
-chmod +x "$WORK/stub-gh"
+chmod +x "$WORK/bin/gh"
+
+# Default: a trusted author, so the pre-existing rows keep asserting what they always asserted.
+export STUB_PERMS='operator=admin
+drive-by=none'
 
 run() {
-  OUT="$(GH_TOKEN=t INNGEST_AUTHZ_6500_GH_BIN="$WORK/stub-gh" STUB_BODIES="$1" STUB_RC="${STUB_RC:-0}" \
-        bash "$PROBE" 2>&1)"
+  OUT="$(GH_TOKEN=t PATH="$WORK/bin:$PATH" STUB_BODIES="$1" STUB_RC="${STUB_RC:-0}" \
+        STUB_AUTHOR="${STUB_AUTHOR:-operator}" bash "$PROBE" 2>&1)"
   RC=$?
 }
 
@@ -56,7 +91,7 @@ echo "== inngest-zot-client-authz-6500.sh exit-code harness =="
 
 # --- A1 no token -----------------------------------------------------------------------------------
 : > "$WORK/none.txt"
-OUT="$(INNGEST_AUTHZ_6500_GH_BIN="$WORK/stub-gh" STUB_BODIES="$WORK/none.txt" \
+OUT="$(PATH="$WORK/bin:$PATH" STUB_BODIES="$WORK/none.txt" \
       env -u GH_TOKEN bash "$PROBE" 2>&1)"; RC=$?
 expect "A1 GH_TOKEN unset -> TRANSIENT credentials_unprovisioned" 2 "reason=credentials_unprovisioned"
 
@@ -106,11 +141,31 @@ else
   pass "A8 probe avoids the banned \${VAR:?} form in code"
 fi
 
+# --- A10 FORGERY: an untrusted author cannot authorise the retirement ----------------------------------------
+# THE ROW THIS HARNESS DID NOT HAVE. Until 2026-09-20 this probe read `.comments[].body` with no
+# author filter at all, so a `RESULT: PASS` from any authenticated GitHub user on this PUBLIC repo
+# would have closed a tracker that authorises an ADR-096 Phase 5.3-5.5 supply-chain retirement.
+# Twelve green checks said nothing about it, because every fixture was implicitly the operator.
+printf 'RESULT: PASS\n' > "$WORK/forged.txt"
+STUB_AUTHOR=drive-by run "$WORK/forged.txt"
+expect "A10 a stranger's RESULT: PASS does NOT authorise (untrusted -> no verdict)" 2 "reason=awaiting_operator_verdict"
+
+# --- A11 the same verdict from a trusted author DOES authorise -------------------------------------------------
+# The must-PASS half. Without it, A10 is satisfied by a filter that rejects everyone — which is
+# indistinguishable from a working filter on the negative case, and is exactly how the lib's own
+# subshell-memo defect hid during development.
+STUB_AUTHOR=operator run "$WORK/forged.txt"
+expect "A11 a trusted author's RESULT: PASS still authorises" 0 ""
+
+# --- A12 a failed permission read is TRANSIENT, never an authorisation -----------------------------------------
+STUB_AUTHOR=ghost run "$WORK/forged.txt"
+expect "A12 an unresolvable author is dropped, not trusted" 2 "reason=awaiting_operator_verdict"
+
 # --- A9 anti-vacuity ----------------------------------------------------------------------------------------
-if [[ "$checks" -ne 11 ]]; then
-  fail "A9 anti-vacuity: expected 11 checks before this one, ran $checks"
+if [[ "$checks" -ne 14 ]]; then
+  fail "A9 anti-vacuity: expected 14 checks before this one, ran $checks"
 else
-  pass "A9 anti-vacuity: full inventory ran (11 checks + this one)"
+  pass "A9 anti-vacuity: full inventory ran (14 checks + this one)"
 fi
 
 echo

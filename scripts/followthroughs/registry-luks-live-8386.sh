@@ -638,7 +638,12 @@ try:
 except Exception:
     print("__UNREADABLE__")
 else:
-    print("available" if val.strip().startswith("available") else "other")
+    # EXACT, matching lint-encryption-posture.py's LIVE_VERIFICATION_RE and
+    # check_live_coverage_floor (both `== "available"`). A qualified `available: <evidence>`
+    # is schema-invalid, so a startswith() here could only ever admit a ledger the lint
+    # already rejects — the looser read bought nothing and let this file's own fixture
+    # drift into a state production cannot reach (#8423 review).
+    print("available" if val.strip() == "available" else "other")
 PY
 )" || LEDGER_STATE="__UNREADABLE__"
 case "$LEDGER_STATE" in

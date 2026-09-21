@@ -4,7 +4,7 @@ description: "This skill should be used when preparing a feature for production 
 ---
 
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
@@ -2081,40 +2081,20 @@ Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Rep
 
 ### Feature-Tweet Draft (pre-merge bundle)
 
-Generate any eligible feature-tweet draft NOW — after the semver/`app:*` labels
-are applied (eligibility reads the PR labels + title) — and **commit it to the
-feature branch** so it rides this PR into `main`, where `content-publisher.sh`
-reads from. This replaces the old post-merge generation, which wrote the draft
-into a worktree that `cleanup-merged` reaps before it ever reaches `main` (so
-the cron never saw it). The draft is **inert** (`status: draft`, empty
-`publish_date`) and never posts until the operator sets `publish_date` +
-`status: scheduled` — their post-deploy confirmation gate — so bundling it
-pre-merge does NOT weaken the "only tweet what actually deployed" property;
-`soleur:postmerge` Phase 3.8 still verifies deploy health and warns before the
-operator schedules.
+After the semver/`app:*` labels are applied, run the eligibility gate — **in this body, not
+behind the pointer.** The extraction under ADR-229 moved the whole step to the reference,
+including the one command that DECIDES it, which left the decision to agent judgement over
+the PR's labels and title and demoted a fail-closed check to a guess:
 
-1. **Eligibility (fail-closed):** `bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>`.
-   Ineligible (exit non-zero, `excluded: <reason>`) → **skip silently** (most PRs
-   land here: fixes, infra, non-product). Do not surface the exclusion.
-2. **Eligible →** invoke `skill: soleur:feature-tweet #<PR_NUMBER>` (writes +
-   displays the draft for approval per its §Output contract).
-3. **Commit + push the draft to the feature branch** so it lands on `main` with
-   the squash merge (stage ONLY the draft file — never `git add -A`):
+```bash
+bash scripts/lib/tweet-eligibility.sh <PR_NUMBER>
+```
 
-   ```bash
-   git add knowledge-base/marketing/distribution-content/<draft-file>.md
-   git commit -m "content: feature-tweet draft for #<PR_NUMBER> (inert — operator schedules post-deploy)"
-   git push
-   ```
-
-   The draft is a NEW commit, so the Phase 6.4 Unpushed-Commits Gate re-checks
-   clean before merge. Headless mode: same — generate + commit + push; never
-   schedule (the inert draft + operator gate are the publish control).
-
-If `soleur:ship` is hand-rolled and this step is skipped, the draft never reaches
-`main`; `soleur:postmerge` Phase 3.8 detects the missing on-`main` draft and
-runs the standalone catch-up (which then needs its own follow-up commit to land
-on `main`).
+Non-zero (`excluded: <reason>`) → **skip silently** and go to Phase 6.5. Most PRs land here
+(fixes, infra, non-product); do not surface the exclusion. Exit 0 → read
+[references/feature-tweet-draft.md](./references/feature-tweet-draft.md) now and follow it to
+completion — the draft must be committed to the feature branch so it rides this PR into
+`main`. Only generate/commit lives behind the pointer; the gate does not.
 
 ## Phase 6.5: Verify PR Mergeability
 
@@ -2833,7 +2813,9 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
   - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script reads member-authored comments and branches on the LAST verdict — do **not** inline a one-liner here, copy [cpx22-invoice-reconcile-7431.sh](../../../../scripts/followthroughs/cpx22-invoice-reconcile-7431.sh), which is the reference implementation. A `grep -q '^RESULT: (PASS|FAIL)'` in this section's `… && exit 0 || exit 1` idiom **exits 0 on an explicit FAIL** and closes the tracker on the operator's own rejection; that inversion shipped here once and is why this bullet points at code instead of prose. The operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
 
-     **The `authorAssociation` filter is mandatory, not stylistic.** This repo is PUBLIC with issues open, and a probe's exit code makes the sweeper close the tracker — so an unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user, and the sweeper's own PASS comment then disables the reopen guard that would have caught it. Three further requirements follow from the same fact: anchor with `\b` (`RESULT: PASSing on this for now` matched a bare `^RESULT: PASS`); never echo the matched line unredacted (the sweeper posts probe stdout back as a comment, which the next run re-reads as a verdict, latching the issue unclosable); and hardcode the tracker number rather than self-locating by searching issues for the probe's own filename (issue search matches COMMENT bodies as well as issue bodies, and taking the first hit is relevance-ordered, so the probe can be pointed at another issue while the sweeper closes this one). **Why:** #7448 — all four probes written against the earlier form were forgeable; see the reference implementation linked above.
+     **An author filter is mandatory, and it is [trusted-verdict.sh](../../../../scripts/lib/trusted-verdict.sh), never an inline `authorAssociation` select.** The repo is PUBLIC and a probe's exit code closes the tracker, so an unfiltered `.comments[].body` takes a verdict from anyone (#7448). `source` it, call `trusted_verdict_bodies <issue>`: bodies on rc 0, **rc 2 (TRANSIENT) when a comment or permission read fails**, so absence-of-evidence never reads as a pass.
+
+     **Never re-inline `authorAssociation`:** it is computed against the *reading token's* visibility, so under `GITHUB_TOKEN` a member with PRIVATE membership reads as `CONTRIBUTOR` and their verdict is dropped **silently** (#6617 — two months of nightly FAIL on a recorded verdict). [varq-ban](../../../../scripts/lint-followthrough-varq-ban.sh) rule 4 obliges the lib whenever a probe reads comments AND branches on `RESULT:`. Mechanism, its blind spots and the `\b`/no-echo/hardcoded-tracker rules: [followthrough-convention.md](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md).
   - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
   - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 

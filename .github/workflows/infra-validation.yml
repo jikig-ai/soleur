@@ -58,13 +58,12 @@ on:
       # workflow's poll budget; without this path the guard never fires on
       # client-side edits (deploy-script-tests job is ungated).
       - ".github/workflows/restart-inngest-server.yml"
-      # apply-inngest-rls-dev-workflow.test.sh asserts the PAIR of RLS apply
-      # workflows (path routing, project pinning, issue/concurrency identity).
-      # Without these paths, an edit to either workflow — including re-widening
-      # the prd `paths:` glob that used to auto-apply 0001 to Inngest prd — would
-      # never run the guard that catches it.
+      # apply-inngest-rls-workflow.test.sh asserts the prd RLS apply workflow
+      # (path routing, project pinning, identity preflight, gate semantics).
+      # Without this path, an edit to it — including re-widening the `paths:`
+      # glob that used to auto-apply 0001 to Inngest prd — would never run the
+      # guard that catches it.
       - ".github/workflows/apply-inngest-rls.yml"
-      - ".github/workflows/apply-inngest-rls-dev.yml"
       # (#7025) git-data-rung2-rehearsal.test.sh reads THREE workflows and asserts ~64
       # properties across them: the rehearsal route's dispatch contract, its errexit posture
       # (arm 13d), the behavioural capture-poll arms that EXECUTE the real step body, the
@@ -122,6 +121,15 @@ on:
       # apps/web-platform/infra/inngest-cutover-flip.sh, needs no entry — `apps/*/infra/**`
       # already covers it, so adding a terminal reason there does run the parity guard.)
       - ".github/workflows/cutover-inngest.yml"
+      # (#8079 review) Since ADR-150 the cutover body lives in scripts/cutover-inngest.sh, and the
+      # suite reads it as BODY_SH plus the dark-gate lib and the read classifier it renders the
+      # arms against. None of the three matched any glob above, so a PR editing ONLY the arm —
+      # the shape of every remedy edit — skipped the one suite that pins its plumbing parity,
+      # its admission literal and its 30-odd renders. Same class as the two comments above and
+      # as #8378 ("the gate that caught it was the one suite I had no reason to run").
+      - "scripts/cutover-inngest.sh"
+      - "tests/scripts/lib/inngest-host-dark-gate.sh"
+      - "scripts/lib/betterstack-read-classify.sh"
       # (#7674) inngest-dedicated-host-classify.test.sh asserts the dedicated-host arm OF
       # scheduled-inngest-health.yml -- the no-restart contract, the host isolation, and the
       # decode-before-match. Same reason as the entry above: without this path a PR editing only
@@ -1219,6 +1227,13 @@ jobs:
       - name: Run www-apex-canonicalizer mutation battery (#7640)
         run: bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
 
+      # (#8364) Three sampled seo_redirect_* probes watch one representative URL per
+      # edge-redirect mechanism (zone ruleset, bulk-list item, generated pair). This
+      # guard pins each probe's 301 expectation, no-follow semantics, armed channel,
+      # declared-source-set membership, and the apply workflow's -target wiring.
+      - name: Run seo-redirect-monitors drift-guard (#8364)
+        run: bash apps/web-platform/infra/seo-redirect-monitors.test.sh
+
       # (#7640, ADR-194 plan D5) The apex cutover is expressed as ONE Terraform resource
       # address so core's replace semantics supply the Delete->Create ordering Cloudflare
       # requires (81053 rejects an A and a CNAME coexisting at one name). This guard keeps
@@ -1514,8 +1529,8 @@ jobs:
       - name: Run inngest-rls lockdown SQL shape guards
         run: bash apps/web-platform/infra/inngest-rls/inngest-rls.test.sh
 
-      - name: Run apply-inngest-rls{,-dev}.yml workflow shape guards
-        run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
+      - name: Run apply-inngest-rls.yml workflow shape guards
+        run: bash apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh
 
       # (#3366) This step is the ONLY thing that makes the advisor-scan shape
       # guard run in CI: this workflow hand-enumerates every .test.sh and has no
@@ -1534,12 +1549,6 @@ jobs:
       - name: Run supabase-advisor scan-workflow mutation attestation
         run: bash apps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh
 
-      # Proves the step above's sequence-DDL guard still FAILS on the catastrophe it
-      # claims to catch. It is the only check standing between an unbound sequence loop
-      # and a schema-wide REVOKE on the app's co-tenanted tables, so its non-vacuity is
-      # itself worth a gate. Mutates a sandbox copy only — never the tracked SQL.
-      - name: Run inngest-rls sequence-guard mutation attestation
-        run: bash apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
 
       - name: Run git-data writer-side CAS fence tests
         run: bash apps/web-platform/infra/git-data-pre-receive.test.sh

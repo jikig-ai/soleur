@@ -3,8 +3,10 @@ name: triage
 description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use soleur:support:ticket-triage agent."
 ---
 
+<!-- Inspired by mattpocock/skills/skills/engineering/triage/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
+
 <!-- soleur-cloud-mode:start -->
-**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
 - First set the /model to Haiku
@@ -43,6 +45,30 @@ check prevents wasted planning when the daily run is hours away. See
 
 ### Step 1: Present Each Finding
 
+**Before presenting anything, run two read-only pre-checks on each finding.** A `todos/*.md` finding
+is an internally generated review note rather than a request from a user, which is exactly why it can
+legitimately restate something that is already built or something that has already been refused.
+Nothing about a finding is self-evidently new.
+
+1. **Already built?** Search the codebase for the behaviour the finding asks for **by domain concept
+   rather than by the finding's own wording**, and report where you looked. The procedure is
+   `plugins/soleur/skills/brainstorm/SKILL.md` `#### 1.1 Research (Context Gathering)` — cited,
+   never restated: a second copy of that sweep drifts from the first, and the drifted copy is the one
+   somebody follows. If the behaviour already exists this is a **redundancy finding** — name where
+   the implementation lives, and write nothing to the no-list.
+2. **Refused before?** Read the no-list at `knowledge-base/project/rejected/*.md`, matching on
+   concept and on each entry's `aliases` rather than on keywords, and skip any entry carrying
+   `superseded_by`. `README.md` is the convention document, not an entry.
+
+Both pre-checks **advise; neither acts.** A hit is escalated to the founder with the entry named, and
+an already-built finding outranks a no-list hit: if the capability exists, the entry is wrong and the
+entry is what gets corrected. An entry is also never the decision itself, only evidence that a refusal
+was RECORDED, so where it disagrees with a primary record — the issue's own closure, an ADR, a roadmap
+decision — the primary record wins and the entry is STALE. Order: running code, then the primary
+record, then the entry. An uncertain match **fails open** — name the candidate, say why it is
+uncertain, and leave the finding open. Report both results in the presentation block, including the
+search that found nothing: a negative carries only the scope that produced it.
+
 For each finding, present in this format:
 
 ```
@@ -66,11 +92,15 @@ Proposed Solution:
 
 Estimated Effort: [Small (< 2 hours) / Medium (2-8 hours) / Large (> 8 hours)]
 
+Already built: [the search you ran -> found at <path> | not found]
+Prior refusal: [<entry path> (matched alias: "<alias>") | no match]
+
 ---
 Do you want to add this to the todo list?
 1. yes - create todo file
-2. next - skip this item
+2. next - skip this item (the file stays)
 3. custom - modify before creating
+4. reject - record why, then remove the finding
 ```
 
 ### Step 2: Handle User Decision
@@ -169,7 +199,9 @@ Do you want to add this to the todo list?
 
 **When user says "next":**
 
-- **Delete the todo file** - Remove it from todos/ directory since it's not relevant
+- **Leave the todo file where it is.** Skipping is not a decision, and deleting on a skip destroys
+  the finding with no record of why — which is the opposite of what the no-list is for. `reject` is
+  the only branch that removes a finding.
 - Skip to the next item
 - Track skipped items for summary
 
@@ -178,7 +210,31 @@ Do you want to add this to the todo list?
 - Ask what to modify (priority, description, details)
 - Update the information
 - Present revised version
-- Ask again: yes/next/custom
+- Ask again: yes/next/custom/reject
+
+**When user says "reject":**
+
+This is the no-list's named write path, and **the only branch that removes a finding.**
+
+1. **Check the redundancy pre-check came back "not found."** If the behaviour is already built, stop:
+   that is a redundancy finding, and its record is the sentence naming where the implementation
+   lives. Writing a built capability into the no-list seeds every later duplicate check with a
+   refusal nobody made.
+2. **Test the reason for durability.** "Outside the product's boundary" is durable. "Nobody has time
+   this quarter" is a deferral, not a rejection — leave the finding in place and say so.
+3. **Draft the entry** at `knowledge-base/project/rejected/YYYY-MM-DD-<concept-slug>.md`, following
+   `knowledge-base/project/rejected/README.md`: every required field, the `why`/`public_note` split,
+   an `instead`, a `revisit_if` that can be observed rather than argued, and no field naming a
+   person. The write discipline is
+   `plugins/soleur/skills/kb-glossary/references/rejected-request-register.md`.
+4. **Machine gate, before the human gate:** run `bash scripts/lint-rejected-register.sh <path>` and
+   fix everything it names. There is no reason to ask the founder to confirm a malformed record.
+5. **Human gate:** ask for confirmation by having the founder **type the concept slug** — not `y`.
+   A single keystroke against a permanent refusal is a reflex; typing
+   `server-side-browser-automation` is a decision. Any other answer, including an empty one, aborts
+   and leaves both the finding and the directory untouched.
+6. **Write the entry, then delete the todo file,** in that order: if the write fails, the finding is
+   still there. Report both paths — the entry created and the finding removed.
 
 ### Step 3: Continue Until All Processed
 
@@ -193,24 +249,29 @@ After all items processed:
 ````markdown
 ## Triage Complete
 
-**Total Items:** [X] **Todos Approved (ready):** [Y] **Skipped:** [Z]
+**Total Items:** [X] **Todos Approved (ready):** [Y] **Skipped:** [Z] **Rejected (recorded):** [R]
 
 ### Approved Todos (Ready for Work):
 
 - `042-ready-p1-transaction-boundaries.md` - Transaction boundary issue
 - `043-ready-p2-cache-optimization.md` - Cache performance improvement ...
 
-### Skipped Items (Deleted):
+### Skipped Items (still in todos/):
 
-- Item #5: [reason] - Removed from todos/
-- Item #12: [reason] - Removed from todos/
+- Item #5: [reason] - left pending, returns in the next pass
+- Item #12: [reason] - left pending, returns in the next pass
+
+### Rejected (recorded on the no-list, finding removed):
+
+- Item #7: `knowledge-base/project/rejected/2026-04-02-<concept-slug>.md` - finding deleted after the entry was written
 
 ### Summary of Changes Made:
 
 During triage, the following status updates occurred:
 
 - **Pending -> Ready:** Filenames and frontmatter updated to reflect approved status
-- **Deleted:** Todo files for skipped findings removed from todos/ directory
+- **Skipped:** Todo files left in todos/ untouched — skipping removes nothing
+- **Rejected:** A no-list entry was written, and only then was the todo file removed
 - Each approved file now has `status: ready` in YAML frontmatter
 
 ### Next Steps:
@@ -276,8 +337,9 @@ Estimated Effort: Small (30 minutes)
 Do you want to add this to the todo list?
 
 1. yes - create todo file
-2. next - skip this item
+2. next - skip this item (the file stays)
 3. custom - modify before creating
+4. reject - record why, then remove the finding
 
 ```
 
@@ -292,9 +354,14 @@ Do you want to add this to the todo list?
 4. Confirm: "Approved: `{filename}` (Issue #{issue_id}) - Status: **ready**"
 
 **When "next" is selected:**
-1. Delete the todo file from todos/ directory
+1. Leave the todo file in todos/ -- `reject` is the only branch that removes a finding
 2. Skip to next item
-3. No file remains in the system
+3. The file stays pending and comes back in the next triage pass
+
+**When "reject" is selected:**
+1. Write the no-list entry, after `bash scripts/lint-rejected-register.sh <path>` passes
+2. Take the founder's confirmation as the typed concept slug, never as `y`
+3. Only then delete the todo file, and report the entry path alongside the removed filename
 
 ### Progress Tracking
 
@@ -313,7 +380,7 @@ Progress: 3/10 completed | Estimated time: ~2 minutes remaining
 ### Do Not Code During Triage
 
 - Present findings
-- Make yes/next/custom decisions
+- Make yes/next/custom/reject decisions
 - Update todo files (rename, frontmatter, work log)
 - Do NOT implement fixes or write code
 - Do NOT add detailed implementation details

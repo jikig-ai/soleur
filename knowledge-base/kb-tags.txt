@@ -699,6 +699,7 @@ ci-guard
 ci-guards
 ci-infrastructure
 ci-issues
+ci-paths
 ci-planning
 ci-ratchets
 ci-release
@@ -1080,6 +1081,7 @@ custom
 custom-domain
 custom-icon
 cutover
+cutover-inngest
 cve-2025-55130
 cwd
 cwd-envelope
@@ -1088,6 +1090,7 @@ cwe-22
 cwe-522
 cwe-59
 dag
+dark-gate
 dark-launch
 dash
 dashboard
@@ -1226,6 +1229,7 @@ dev-server
 devdependencies
 developer-experience
 devin
+devin-cache
 devin-cloud
 dhh-rails-reviewer
 di-seam
@@ -1448,6 +1452,7 @@ evidence-first
 evidence-integration
 evidentiary-records
 exacerbation-rule
+exact-count
 exact-equality
 exact-match
 exactly-once
@@ -2265,6 +2270,7 @@ mcp-integration
 mcp-registration
 mcp-tools
 measure-dont-infer
+measured-claim
 measurement
 measurement-discipline
 measurement-gate
@@ -2395,6 +2401,7 @@ multi_agent_review
 multimodal
 mutation-axes
 mutation-battery
+mutation-survivor
 mutation-test
 mutation-testing
 n1-validation-gate
@@ -2912,6 +2919,7 @@ primitive
 printf-newline-read
 prior-art
 prior-art-discovery
+prior-art-search
 prior-decision-recovery
 privacy
 private-documents
@@ -3167,6 +3175,7 @@ replan
 replay
 replay-safety
 repo-global-guards
+repo-global-ratchet
 repo-lints
 repo-readiness
 repo-readiness-gate
@@ -3858,6 +3867,7 @@ supabase-numeric
 supabase-realtime
 supabase-rpc
 supabase-ssr
+superseded-in-place
 supply-chain
 supply-chain-security
 support
@@ -4233,6 +4243,7 @@ vendored-library
 vendored-upstream
 vendorsupabase
 verbatim
+verbose-gated
 verbs
 verdict
 verdict-cache
@@ -4245,6 +4256,7 @@ verification-grep
 verification-grep-scope
 verification-habits
 verification-instruments
+verification-method
 verification-scope
 verification-shape
 verify
@@ -4413,6 +4425,7 @@ worktree-hygiene
 worktree-isolation
 worktree-manager
 worktree-race
+worktree-reaper
 worktree-wedge
 worktrees
 worm

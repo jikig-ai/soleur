@@ -163,10 +163,25 @@ MANIFEST_EOF
   # STUB, never the real manager: the real one reaches `git push origin --delete`,
   # `git branch -D` and `reset --hard HEAD` for merged branches with no worktree.
   if [ "$absent" != session-start ]; then
-    cat > "$dir/skills/git-worktree/scripts/worktree-manager.sh" <<'STUB_EOF'
+    # The stub carries the reap-capability token, because Step 0's dispatch now feature-detects
+    # it. Without this every session-start row resolving from the cache arm would refuse.
+    #
+    # `no-capability` is a PRESENT-but-token-less mode (R11's fixture), distinct from
+    # `session-start`, which omits the file entirely (R6c's). The two states have different
+    # markers and collapsing them would make R11 satisfiable by an absent file.
+    if [ "$absent" = no-capability ]; then
+      cat > "$dir/skills/git-worktree/scripts/worktree-manager.sh" <<'STUB_EOF'
 #!/usr/bin/env bash
 echo "STUB_WORKTREE_MANAGER argv=$*"
 STUB_EOF
+    else
+      cat > "$dir/skills/git-worktree/scripts/worktree-manager.sh" <<'STUB_EOF'
+#!/usr/bin/env bash
+SOLEUR_WORKTREE_REAP_CAPABILITY="branch-keyed-guards"
+echo "SOLEUR_WORKTREE_REAP_CAPABILITY=$SOLEUR_WORKTREE_REAP_CAPABILITY"
+echo "STUB_WORKTREE_MANAGER argv=$*"
+STUB_EOF
+    fi
     chmod +x "$dir/skills/git-worktree/scripts/worktree-manager.sh"
   fi
 }
@@ -180,6 +195,13 @@ mk_decoy_root() {
   cat > "$dir/.claude-plugin/plugin.json" <<MANIFEST_EOF
 { "name": "${name}", "description": "go-session-gates DECOY root" }
 MANIFEST_EOF
+  # The decoy reaper carries the capability token. NOTE, because an earlier comment here said
+  # the opposite: this is NOT load-bearing for R6b. R6b delivers its decoy through
+  # `delivered_fence`, i.e. `source=plugin-root-token`, and the capability gate is narrowed to
+  # `SRC = devin-cache` — so `REAP_CAP=not-applicable` and the check never evaluates on it.
+  # Measured. The token is planted anyway so a future row that DOES reach the decoy through the
+  # cache arm restates A11 (a planted root declares the token as easily as the manifest) rather
+  # than tripping over a fixture gap.
   local s
   for s in "$dir/scripts/cloud-detect.sh" \
            "$dir/skills/git-worktree/scripts/git-repo-readiness-diag.sh" \
@@ -190,6 +212,7 @@ MANIFEST_EOF
     # verdict on the one row that documents the preflight's limitation.
     cat > "$s" <<'DECOY_EOF'
 #!/usr/bin/env bash
+SOLEUR_WORKTREE_REAP_CAPABILITY="branch-keyed-guards"
 echo "DECOY_EXECUTED $0 $*"
 [ -n "${SOLEUR_DECOY_LOG:-}" ] && echo "DECOY_EXECUTED $0" >> "$SOLEUR_DECOY_LOG"
 exit 0
@@ -250,11 +273,20 @@ run_gate() {
   local fence="$1" ws="$2" home="$3"; shift 3
   : > "$DECOY_LOG"
   ( cd "$ws" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT -u CLAUDE_PROJECT_DIR \
-      "${DEVIN_UNSET[@]}" HOME="$home" "SOLEUR_DECOY_LOG=$DECOY_LOG" "$@" \
+      "${DEVIN_UNSET[@]}" HOME="$home" "SOLEUR_DECOY_LOG=$DECOY_LOG" \
+      "SOLEUR_DEVIN_CACHE_OPT=$OPT_CACHE_CONTAIN" "$@" \
       "$BASH_BIN" "$fence" 2>&1 ) || true
 }
 decoy_ran() { [ -s "$DECOY_LOG" ] && printf 'DECOY_EXECUTED' || printf 'none'; }
 
+# X1 containment. `run_gate` already overrides HOME, so the `$HOME` cache arm cannot reach a
+# developer's real cache — but `/opt/.devin/plugins` is ABSOLUTE and has no such lever. On a
+# host carrying a populated `/opt/.devin/plugins` with a `"name":"soleur"` manifest — i.e.
+# exactly a Devin CLI host, the audience #8401 exists for — R4, R6 and R6c would change
+# verdict with NO diff change. A MUST-PASS suite whose verdict is a property of the machine
+# is not a suite, so the fences read the arm through an override and every row pins it to a
+# path that does not exist.
+OPT_CACHE_CONTAIN="$TMP_ROOT/no-opt-devin-cache"
 SCRATCH_HOME="$TMP_ROOT/home"; mkdir -p "$SCRATCH_HOME"
 DECOY_LOG="$TMP_ROOT/decoy-ran.log"; : > "$DECOY_LOG"
 
@@ -335,16 +367,67 @@ check_r9() {
       pass "$label: ${GATE_NAMES[$i]} fence enables no set -e/-u/-o pipefail"
     fi
 
-    # The two Devin cache paths belong to Step 0.5 ALONE. Copying them into Step 0 would make
-    # the MUTATING gate newly reachable on a harness where it has always skipped.
+    # The two Devin cache paths now belong to ALL THREE gates (#8401, ADR-179 A16). This row
+    # was `cloud-detect >= 2, others == 0` — the confinement. It is inverted deliberately: the
+    # confinement existed because Step 0 dispatches `cleanup-merged`, and the capability gate
+    # below replaces it at the one `bash` call it was ever about. Restoring the old predicate
+    # is mutation row 6 and must go RED.
     local n_cache
     # OCCURRENCES, not matching lines: both cache paths sit on one `for d in ...` line, so a
     # line count reports 1 for a correct fence and the row would false-fail forever.
     n_cache="$(printf '%s\n' "$code" | grep -oE 'devin/cli/plugins/cache|/opt/\.devin/plugins' | grep -c . || true)"
-    ck; if [ "${GATE_NAMES[$i]}" = cloud-detect ]; then
-      if [ "$n_cache" -ge 2 ]; then pass "$label: Step 0.5 carries both Devin cache paths"; else fail "$label: Step 0.5 is missing a Devin cache path (found $n_cache)"; fi
+    # EXACTLY two, not `-ge 2`. A floor is satisfied by three, and the third member of this list
+    # is a new directory from which `go.md` SEARCHES FOR AND THEN EXECUTES a payload. Measured:
+    # adding one to all three fences left this suite at its baseline and devin-cloud-mode at
+    # 41/0 — R8's byte-identity only proves the three fences agree with EACH OTHER, so a
+    # three-fence edit is invisible to it, and the marker-block cardinality pin counts blocks,
+    # not paths. The resolution-source SET is the property; a floor cannot express it.
+    ck; if [ "$n_cache" -eq 2 ]; then
+      pass "$label: ${GATE_NAMES[$i]} carries exactly the two documented Devin cache paths"
     else
-      if [ "$n_cache" -eq 0 ]; then pass "$label: ${GATE_NAMES[$i]} carries no Devin cache path"; else fail "$label: ${GATE_NAMES[$i]} carries a Devin cache path ($n_cache)"; fi
+      fail "$label: ${GATE_NAMES[$i]} names $n_cache Devin cache path(s), want exactly 2 — a third is a new execute-from directory"
+    fi
+
+    # …and the SET, not just the count of KNOWN members. The row above counts occurrences of
+    # the two documented spellings, so a third directory with any OTHER name leaves it at 2 and
+    # passes — measured: appending `/srv/extra-plugins` to the `for d in` list in all three
+    # fences was green under the count row alone. The property is the arity of the search list
+    # itself, so count ITS members: `for d in <a> <b>; do`, two words between `in` and `;`.
+    local for_line n_arms
+    for_line="$(printf '%s\n' "$code" | grep -E '^[[:space:]]*for[[:space:]]+d[[:space:]]+in[[:space:]]' | head -1 || true)"
+    # `eval` is deliberate and safe on a fence this suite has already pinned byte-identical:
+    # the members are quoted shell words, and word-splitting them any other way would count
+    # `"$HOME/.local/share/devin/cli/plugins/cache"` as one word only by accident.
+    n_arms="$(printf '%s\n' "$for_line" | sed -E 's/^[[:space:]]*for[[:space:]]+d[[:space:]]+in[[:space:]]+//; s/;[[:space:]]*do[[:space:]]*$//' | tr -s '[:space:]' '\n' | grep -c . || true)"
+    ck; if [ "$n_arms" -eq 2 ]; then
+      pass "$label: ${GATE_NAMES[$i]} searches exactly 2 directories for a payload to execute"
+    else
+      fail "$label: ${GATE_NAMES[$i]} searches $n_arms directories, want exactly 2 (line: ${for_line:-<none>})"
+    fi
+
+    # THE SUITE'S OWN HOST-INDEPENDENCE LEVER, asserted rather than assumed. `$HOME` is
+    # overridden by `run_gate`, but `/opt/.devin/plugins` is ABSOLUTE and has no such lever —
+    # the fences read it through `${SOLEUR_DEVIN_CACHE_OPT:-…}` and every row pins that to a
+    # path which does not exist. Measured: replacing the parameter expansion with the bare
+    # literal in all three fences left this suite GREEN, because this host carries no
+    # `/opt/.devin/plugins`. On a Devin CLI host — the audience #8401 exists for — R4, R6 and
+    # R6c would silently change verdict with no diff change, which is the one thing this
+    # suite's own header says a MUST-PASS suite may not do.
+    ck; if printf '%s\n' "$code" | grep -qF '${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}'; then
+      pass "$label: ${GATE_NAMES[$i]} reads the /opt arm through the containment override"
+    else
+      fail "$label: ${GATE_NAMES[$i]} hard-codes /opt/.devin/plugins — this suite's verdict becomes a property of the host"
+    fi
+
+    # EXACTLY ONE RESOLVE line per gate (spec-flow A3). Moving the cache arms inside the
+    # resolver anchors moved the arm's own `echo` with them; nothing pinned the COUNT, and a
+    # `grep -F` presence check structurally cannot see a duplicate.
+    local n_resolve
+    n_resolve="$(printf '%s\n' "$code" | grep -c 'SOLEUR_PLUGIN_ROOT_RESOLVE' || true)"
+    ck; if [ "$n_resolve" -eq 1 ]; then
+      pass "$label: ${GATE_NAMES[$i]} emits exactly one RESOLVE line"
+    else
+      fail "$label: ${GATE_NAMES[$i]} emits $n_resolve RESOLVE lines, want exactly 1"
     fi
 
     # The marker must never carry the resolved path: keeps filesystem paths out of telemetry,
@@ -541,9 +624,17 @@ echo "R3e. a verified root whose CLASSIFIER is absent is reported distinctly"
 # SESSION_PROBE=absent had no row: mk_root's absent=session-start drops only worktree-manager.sh.
 CLASSLESS="$TMP_ROOT/root-no-classifier"; mk_root "$CLASSLESS" soleur cloud-detect
 ws="$(fresh_ws r3e)"
+# Dirtied for the same reason R11 dirties its copy: the restore is observable only against a
+# file that differs from `main`. This arm sets DO_RESTORE by the restore's own argument — the
+# `.mcp.json` refresh needs neither the classifier nor the reaper, so a torn install missing
+# `cloud-detect.sh` has no reason to lose it. (`git worktree list` is deliberately NOT hoisted
+# here: it is the documented companion of `cleanup-merged`, which did not run.)
+assert_fixture_dir "$ws"
+printf '{"fixture":"DIRTY"}\n' > "$ws/.mcp.json"
 out="$(run_gate "$(delivered_fence 2 "$CLASSLESS" noclass)" "$ws" "$SCRATCH_HOME")"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=classifier-absent" "R3e: names the ABSENT CLASSIFIER, not the absent manager"
 want_not_in "$out" "STUB_WORKTREE_MANAGER" "R3e: dispatches nothing without a session class"
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"main"}' "R3e: the .mcp.json restore still ran — a missing classifier takes only the dispatch"
 
 echo "R3c. session-class gate: a not-local verdict never reaches cleanup-merged"
 CLOUD_ROOT="$TMP_ROOT/root-cloud"; mk_root "$CLOUD_ROOT" soleur
@@ -591,6 +682,125 @@ ws="$(fresh_ws r5c)"
 out="$(run_gate "${FENCE_LITERAL[1]}" "$ws" "$CACHE_HOME")"
 want_in "$out" "gate=cloud-detect source=devin-cache verified=true" "R5c: Step 0.5 resolves from the Devin CLI cache"
 want_in "$out" "not-local:no-devin-env" "R5c: the real cloud-detect.sh ran from the cache root"
+
+echo "R5d. Step 0 (session-start) resolves from the Devin CLI cache and REACHES its dispatch"
+# The row #8401 exists for. Before this change the session-start fence had arms 1-2 only, so
+# a Devin cloud session with neither *_PLUGIN_ROOT exported emitted
+# `SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified` and every session-start gate
+# was silently dead on a whole harness class.
+#
+# It asserts the DISPATCH was reached, not merely that a root resolved: `${R1_EFFECT[2]}` is
+# `STUB_WORKTREE_MANAGER argv=cleanup-merged`. A row checking only the RESOLVE line would
+# pass against a fence that resolves and then dispatches nothing.
+ws="$(fresh_ws r5d)"
+out="$(run_gate "${FENCE_LITERAL[2]}" "$ws" "$CACHE_HOME")"
+want_in "$out" "gate=session-start source=devin-cache verified=true" "R5d: Step 0 resolves from the Devin CLI cache"
+want_in "$out" "${R1_EFFECT[2]}" "R5d: and REACHED its dispatch (the capability token is present in mk_root's stub)"
+
+echo "R5e. Step 0.0 (readiness) resolves from the Devin CLI cache"
+ws="$(fresh_ws r5e)"
+out="$(run_gate "${FENCE_LITERAL[0]}" "$ws" "$CACHE_HOME")"
+want_in "$out" "gate=readiness source=devin-cache verified=true" "R5e: Step 0.0 resolves from the Devin CLI cache"
+want_in "$out" "${R1_EFFECT[0]}" "R5e: and reached its own probe"
+
+echo "R10b. the capability check and the dispatch operate on the SAME path (no re-resolution)"
+# Guard 2 row 10, and it is STATIC because no behavioural row can see it. A `grep -q` that
+# re-resolves the root is check-A/execute-B across two independent `head -1` calls — the same
+# defect one level down from the one the gate closes, and both halves behave identically in a
+# fixture where the cache holds exactly one manifest.
+_ss_body="$(extract_fence "${GATE_ANCHORS[2]}" "$GO_MD")"
+_ss_code="$(code_lines "$_ss_body")"
+# Every `find` in the session-start fence must belong to the resolver, which is bounded by its
+# own anchors. Anything between `end resolver` and the dispatch would be a re-resolution.
+_after_resolver="$(printf '%s\n' "$_ss_body" | sed -n '/# --- end resolver ---/,$p')"
+_n_find="$(printf '%s\n' "$(code_lines "$_after_resolver")" | grep -c 'find ' || true)"
+ck; if [ "$_n_find" -eq 0 ]; then
+  pass "R10b: no second find between the resolver and the dispatch"
+else
+  fail "R10b: session-start re-resolves the root after the resolver ($_n_find find call(s)) — check-A/execute-B"
+fi
+# The grep operand and the bash operand must be the SAME ${ROOT}-derived string. Compared as
+# text rather than through a shared variable, because ADR-179's anchoring contract
+# (plugin-root-anchoring.test.ts P1/P8) requires the invocation operand to be the bare
+# ${ROOT}-anchored literal — so textual identity is both what that contract wants and a
+# stronger pin than a shared variable would be.
+_grep_operand="$(printf '%s\n' "$_ss_code" | grep -oE '"\$\{ROOT\}[^"]*worktree-manager\.sh"' | sort -u || true)"
+_n_operands="$(printf '%s\n' "$_grep_operand" | grep -c . || true)"
+ck; if [ "$_n_operands" -eq 1 ]; then
+  pass "R10b: the capability grep and the dispatch name one identical \${ROOT}-anchored operand"
+else
+  fail "R10b: session-start names $_n_operands distinct worktree-manager operands, want exactly 1"
+fi
+
+echo "R11. the reap-capability gate: a cache root whose reaper lacks the token"
+# THE row that makes the Phase 2 widening admissible. Without it the capability check is
+# decoration and the ADR-179 A16 amendment rests on nothing.
+NOCAP_HOME="$TMP_ROOT/home-nocap"
+NOCAP_ROOT="$NOCAP_HOME/.local/share/devin/cli/plugins/cache/soleur-nocap1"
+mk_root "$NOCAP_ROOT" soleur no-capability
+# LEDGER CLASSIFIER (plan B3). The fence executes TWO artifacts from the resolved root, and
+# the FIRST — `cloud-detect.sh` — decides whether the second runs, so "the gate covers the
+# dispatch DECISION CHAIN, not only the dispatched artifact" is a claim that needs a row.
+# `mk_root` copies the real classifier, whose stdout the fence consumes into a `$( )` and is
+# therefore invisible; this stub writes the shared decoy ledger instead, which `decoy_ran`
+# reads from the PARENT shell. Prints `local` so that, if it DOES run, the gate proceeds and
+# the failure shows up as a reaper dispatch too rather than as a silent no-op.
+cat > "$NOCAP_ROOT/scripts/cloud-detect.sh" <<'NOCAP_CLASSIFIER_EOF'
+#!/usr/bin/env bash
+printf 'CLASSIFIER_EXECUTED\n' >> "${SOLEUR_DECOY_LOG:-/dev/null}"
+echo local
+NOCAP_CLASSIFIER_EOF
+chmod +x "$NOCAP_ROOT/scripts/cloud-detect.sh"
+ws="$(fresh_ws r11)"
+# DIRTY the workspace copy first. FR8d has two halves and `want_not_in … STUB_WORKTREE_MANAGER`
+# only pins the negative one; an implementation that kills all three gates together satisfies
+# every row above. Restoring `.mcp.json` from `main` is observable only against a file that
+# DIFFERS from main, so plant one.
+assert_fixture_dir "$ws"
+printf '{"fixture":"DIRTY"}\n' > "$ws/.mcp.json"
+out="$(run_gate "${FENCE_LITERAL[2]}" "$ws" "$NOCAP_HOME")"
+want_eq "$(decoy_ran)" "none" "R11: the CLASSIFIER did not run either — the gate covers the decision chain, not just the dispatch (B3)"
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"main"}' "R11: the .mcp.json restore RAN on the refusal arm (positive half of FR8d)"
+want_in "$out" "gate=session-start source=devin-cache verified=true" "R11: the root itself still verifies"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified source=devin-cache" "R11: the dispatch is refused BY NAME, with its source"
+want_not_in "$out" "STUB_WORKTREE_MANAGER" "R11: the token-less reaper did NOT run"
+# POSITIVE rows, because `want_not_in … STUB_WORKTREE_MANAGER` passes for three different
+# implementations — one of which kills all three gates together, i.e. the defect #8401 exists
+# to fix. These pin that the refusal took ONLY the reaper with it.
+want_in "$out" "$ws" "R11: git worktree list still ran (its output names this workspace)"
+want_not_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified" "R11: it is not reported as an unresolved root"
+want_not_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=classifier-absent" "R11: nor as an absent classifier — the gate names the cause it measured"
+
+echo "R11b. the narrowing itself: a token-less reaper on the TOKEN arm must still dispatch"
+# THE PREMISE OF ADR-179 A16, and until now nothing instantiated it. The gate is
+# `[ "$VERIFIED" = true ] && [ "$SRC" = devin-cache ]`, narrowed because the arm-agnostic form
+# was measured to stop reaping for every long-lived worktree in this repository on a pre-merge
+# branch and every marketplace install between releases — their worktree-manager.sh predates
+# the capability token too. Dropping the `$SRC` conjunct was caught only INCIDENTALLY, by
+# R3f/R6c's ABSENT-file fixtures: the shape that matters — arm is NOT devin-cache, the manager
+# is PRESENT but carries no token — was built by nothing, because `mk_root` plants the token in
+# every mode except `no-capability` and `no-capability` was only ever paired with CACHE_HOME.
+NOCAP_TOKEN_ROOT="$TMP_ROOT/root-nocap-token"
+mk_root "$NOCAP_TOKEN_ROOT" soleur no-capability
+ws="$(fresh_ws r11b)"
+out="$(run_gate "$(delivered_fence 2 "$NOCAP_TOKEN_ROOT" nocaptok)" "$ws" "$SCRATCH_HOME")"
+want_in "$out" "gate=session-start source=plugin-root-token verified=true" "R11b: the token arm resolves as itself"
+want_in "$out" "${R1_EFFECT[2]}" "R11b: and STILL DISPATCHES — the capability gate is scoped to devin-cache, not fleet-wide"
+want_not_in "$out" "reason=reaper-capability-unverified" "R11b: the refusal does not fire on the token arm"
+
+echo "R11c. a cache directory that exists but carries no soleur manifest"
+# `SRC=devin-cache-nomatch` is emitted by all three fences and carries its OWN operator remedy
+# in go.md — distinct from `none`, whose remedy is "set CLAUDE_PLUGIN_ROOT". Deleting the arm
+# that produces it left the suite green: every row built either "no cache dir at all"
+# (SCRATCH_HOME) or "cache dir holding a matching manifest" (CACHE_HOME). A value a customer is
+# told to act on, produced by nothing under test.
+NOMATCH_HOME="$TMP_ROOT/home-nomatch"
+mk_root "$NOMATCH_HOME/.local/share/devin/cli/plugins/cache/some-other-plugin" not-soleur
+ws="$(fresh_ws r11c)"
+out="$(run_gate "${FENCE_LITERAL[2]}" "$ws" "$NOMATCH_HOME")"
+want_in "$out" "gate=session-start source=devin-cache-nomatch verified=false" "R11c: a searched-but-unmatched cache reports its own source"
+want_not_in "$out" "source=none" "R11c: and is NOT collapsed into 'no cache existed', whose remedy is different"
+want_not_in "$out" "STUB_WORKTREE_MANAGER" "R11c: nothing under that cache is executed"
 
 echo "R6/R6b/R6c. identity preflight and the payload-absent state"
 for i in "${!GATE_ANCHORS[@]}"; do
@@ -782,29 +992,64 @@ python3 - "$GO_MD" "$L2_BAD" <<'L2PY'
 import sys, pathlib
 src, dst = sys.argv[1], sys.argv[2]
 s = pathlib.Path(src).read_text()
+def sub(text, old, new, what):
+    # ASSERT the edit landed. A str.replace whose anchor has drifted is a SILENT no-op: the
+    # fixture is then byte-identical to a HEALTHY go.md, both composite deciders correctly
+    # score zero failures against it, and the self-test reports 'it decides nothing' -- which
+    # reads as a broken DECIDER when the real fault is a broken FIXTURE. Measured: #8401
+    # removed `[ -n "$ROOT" ] || SRC=none` from the resolver and break (b) stopped applying.
+    out = text.replace(old, new, 1)
+    if out == text:
+        raise SystemExit('FATAL: L2 fixture anchor drifted, ' + what + ' did not land')
+    return out
+
 # (a) make ONE fence's resolver differ -> R8 byte-identity must fail.
-s = s.replace('ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token',
-              'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token # L2-divergence', 1)
-# (b) introduce a banned form in fence CODE -> R9 must fail.
-s = s.replace('[ -n "$ROOT" ] || SRC=none',
-              'ROOT="${ROOT:-./plugins/soleur}"\n[ -n "$ROOT" ] || SRC=none', 1)
+s = sub(s, 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token',
+        'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token # L2-divergence', 'break (a)')
+# (b) introduce a banned form in fence CODE -> R9 must fail. Anchored on the RESOLVE echo,
+# which every fence carries and which no arm-ordering change removes.
+s = sub(s, 'echo "SOLEUR_PLUGIN_ROOT_RESOLVE',
+        'ROOT="${ROOT:-./plugins/soleur}"\necho "SOLEUR_PLUGIN_ROOT_RESOLVE', 'break (b)')
+# (c) DROP one cache arm in ONE fence -> R9's arity and occurrence rows must fail. Without
+# this, both of those rows could be replaced by `ck; pass` and the composite still scored a
+# failure from (a)/(b) -- a threshold of one makes every sub-row after the first free.
+s = sub(s, 'for d in "$HOME/.local/share/devin/cli/plugins/cache" "${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}"; do',
+        'for d in "$HOME/.local/share/devin/cli/plugins/cache"; do', 'break (c)')
+# (d) DUPLICATE the RESOLVE echo in one fence -> R9's exactly-one-RESOLVE row must fail.
+s = sub(s, 'echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"',
+        'echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"\n'
+        'echo "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${GATE} source=${SRC} verified=${VERIFIED}"',
+        'break (d)')
 pathlib.Path(dst).write_text(s)
 L2PY
-_l2_composite() {                  # _l2_composite <label> <fn>
-  local label="$1" fn="$2"
+# _l2_composite <label> <fn> <expected-failures>
+#
+# The threshold is an EXACT count, not `-ge 1`. A floor of one is satisfied by whichever
+# sub-row happens to fire first, which makes every other sub-row in the same decider free:
+# measured, replacing BOTH rows this PR adds to check_r9 with `ck; pass "$label: …"` left the
+# suite green, because break (b) still tripped the banned-form row. The broken fixture now
+# carries one break per sub-row class, and the count is what ties them together — a sub-row
+# that stops deciding lowers `df` and is reported by name rather than absorbed.
+_l2_composite() {                  # _l2_composite <label> <fn> <expected>
+  local label="$1" fn="$2" want="$3"
   local p0=$passes f0=$fails a0=$asserted l0
   l0=$(wc -l < "$VERDICT_LOG")
   "$fn" "$L2_BAD" "L2" >/dev/null 2>&1
   local df=$((fails - f0))
   passes=$p0; fails=$f0; asserted=$a0
   head -n "$l0" "$VERDICT_LOG" > "$TMP_ROOT/verdicts.l2" && mv "$TMP_ROOT/verdicts.l2" "$VERDICT_LOG"
-  if [ "$df" -lt 1 ]; then
-    printf 'FATAL: composite self-test %s scored 0 failures against a deliberately broken go.md — it decides nothing\n' "$label" >&2
+  if [ "$df" -ne "$want" ]; then
+    printf 'FATAL: composite self-test %s scored %s failures against a deliberately broken go.md, want exactly %s — a sub-row stopped deciding, or the fixture stopped breaking it\n' "$label" "$df" "$want" >&2
     _L2_FAILED=1
   fi
 }
-_l2_composite "check_r8" check_r8
-_l2_composite "check_r9" check_r9
+# Declared on the lines IMMEDIATELY above their `_l2_composite` calls, for the reason the
+# anti-vacuity floor below states: guard-vacuity-floor's mutant slices a predicate plus its
+# CONTIGUOUS simple assignments, and a threshold bound far above is unbound in that slice.
+L2_WANT_R8=1
+L2_WANT_R9=5
+_l2_composite "check_r8" check_r8 "$L2_WANT_R8"
+_l2_composite "check_r9" check_r9 "$L2_WANT_R9"
 [ "$_L2_FAILED" -eq 0 ] || { printf 'FATAL: the deciders are not load-bearing; every behavioural row above is unproven\n' >&2; exit 2; }
 ck; pass "L2: want_in/want_not_in/want_eq/check_r8/check_r9 each decide both ways"
 
@@ -836,9 +1081,12 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 155 is the H3-SKIPPED total; H3 running adds two more (157), so the floor holds on both paths.
+# 194 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (196), so the
+# floor holds on both paths. MEASURE IT WITH `SOLEUR_GO_GATES_SKIP_H3=1`, never from a local run
+# where the harness is present: #8418 raised it four times from local counts and CI reddened on
+# `194 < 196` — the same floor this comment already said to derive from the skipped path.
 # Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155.
-MIN_ASSERTIONS=155
+MIN_ASSERTIONS=194
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2

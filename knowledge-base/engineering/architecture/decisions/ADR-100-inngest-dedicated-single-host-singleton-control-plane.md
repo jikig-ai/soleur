@@ -1473,3 +1473,113 @@ on #8349. The reading stays takeable for roughly one to two weeks after day 7; a
 heaviest slice outgrows the host's page budget and the probe reports CANNOT ESTABLISH until the
 tracker is closed, which is expected. The status stays `adopting` until the day-7 reading is clean
 outside the explained set; this addendum flips nothing.
+
+## Addendum — 2026-09-19 (#6488, #6617) — the dark tables are gone, and the probe that could not see its own verdict
+
+Two follow-through trackers that had been reporting FAIL every night are retired here. They had
+opposite causes and only one of them was about the tables.
+
+### The drop (#6488)
+
+`INNGEST_CUTOVER_FLIP` reads `done` and the live `INNGEST_POSTGRES_URI` username is
+`postgres.pigsfuxruiopinouvjwy` — the dedicated project, not `mlwiodleouzwniehynfz`. The
+co-tenancy that `0002_dev_inngest_tables_lockdown.sql` existed to defend therefore ended, and its
+ADR-030 I8 "must not be retired while co-tenanted" condition was met by date.
+
+Three dispatches, each watched synchronously:
+
+| Run | Arm | Result |
+|---|---|---|
+| [35470553967](https://github.com/jikig-ai/soleur/actions/runs/35470553967) | `mode=dry-run` | `tables_present=14 posture_ok=14`; listing ILLEGIBLE (see below) |
+| [35471079218](https://github.com/jikig-ai/soleur/actions/runs/35471079218) | `mode=dry-run` | same counters, listing legible — the reading the drop was authorised on |
+| [35471968669](https://github.com/jikig-ai/soleur/actions/runs/35471968669) | `mode=drop` | `DROP executed (HTTP 201)`, `tables_remaining=0` |
+
+State immediately before the drop, from run 35471968669's own log — all 14 in `public`, every one
+`rls=true policies=0 anon_select=false`, and only two holding any rows at all:
+
+```
+relname                schema  reltuples  n_live_tup  rls   policies  anon_select
+apps                   public  -1         1           true  0         false
+goose_db_version       public  -1         6           true  0         false
+(the other twelve: n_live_tup 0, same posture)
+tables_present=14 posture_ok=14 | REPORTED-ONLY: dependents_outside=0 foreign_sessions=1 runs=0 events=0
+```
+
+`runs=0 events=0` — no scheduler state was discarded. `foreign_sessions=1` is the workflow's own
+`mgmt-api` backend sampling itself, which is why that counter reports and gates nothing.
+
+The statement, echoed immediately before its POST so the run log binds run → SQL without depending
+on a commit a squash merge will not preserve:
+
+```sql
+SET lock_timeout TO '10s'; DROP TABLE public.apps, public.event_batches, public.events, public.function_finishes, public.function_runs, public.functions, public.goose_db_version, public.history, public.migrations, public.queue_snapshot_chunks, public.spans, public.trace_runs, public.traces, public.worker_connections;
+```
+
+No `CASCADE` — `DROP TABLE` without it IS the exhaustive dependent check, enforced by Postgres. No
+`IF EXISTS` — a partial state had to fail rather than be papered over, which is what
+`tables_present == 14` exists to catch. Verified independently from a terminal after the run:
+`PASS: all 14 dark-Inngest tables are gone from soleur-dev`.
+
+**No committed probe survives to re-answer "are the 14 still gone".** `inngest-rls-drop-6488.sh`
+was deleted with the tracker it served, so a future reader wanting that answer issues an ad-hoc
+Management API `pg_class` count against `mlwiodleouzwniehynfz`. That is deliberate — a probe whose
+tracker is closed is cruft that reports into nothing — but it is recorded so nobody goes looking
+for a file that was removed on purpose.
+
+### The verdict that was recorded for two months and never seen (#6617)
+
+#6617's probe was not broken and the dedicated host was not dark. The operator posted
+`RESULT: PASS` on 2026-07-20. The probe filtered comments on
+`authorAssociation in (OWNER, MEMBER, COLLABORATOR)` — the anti-forgery control #7448 added for a
+public repo — and **`authorAssociation` is computed against the READING token's visibility**.
+Measured on the same comment, two tokens, within one hour:
+
+| Token | `authorAssociation` for `deruelle` | Old filter |
+|---|---|---|
+| operator PAT | `MEMBER` | honoured |
+| sweeper `GITHUB_TOKEN` | `CONTRIBUTOR` | **dropped** |
+
+The operator's `jikig-ai` membership is private, so under the sweeper's token the verdict silently
+vanished and the probe reported FAIL nightly against an issue that had already answered. The fix
+for a forgery hole was itself undetectably lossy.
+
+`scripts/lib/trusted-verdict.sh` resolves `GET /repos/{owner}/{repo}/collaborators/{login}/permission`
+instead — effective permission, independent of membership visibility — and honours `admin`,
+`maintain` or `write` only. It answered 200 under `GITHUB_TOKEN` (measured in sweeper run
+[35470503032](https://github.com/jikig-ai/soleur/actions/runs/35470503032), which prints
+`observed authorAssociation=CONTRIBUTOR` next to `would close with verdict=PASS` — the reading and
+its fix in one log), so the CODEOWNERS-derived fallback held in reserve was not needed.
+
+This addendum flips nothing. ADR-100 stays `adopting`; the `accepted` flip is #7230 and the day-7
+soak reading it depends on is the 2026-09-19 (#6178) addendum above.
+
+## Addendum — 2026-09-20 (#8079) — `op=registry-probe` becomes three-valued, and the dark-host gate gains a second consumer
+
+**What changed.** `op=registry-probe` used to have two outcomes: a live `registry_empty=` reading on
+HTTP 200, or `exit 1` on any non-200. Since #8079 its non-200 branch routes through the same
+`inngest_execute_registry_gate` that op=execute step 2.0 consumes (`tests/scripts/lib/inngest-host-dark-gate.sh`,
+#8054), so the op now has THREE outcomes: the live reading (exit 0, `registry_empty=…`), a
+`HOST-STATE VERDICT: dark` (exit 0, NO `registry_empty=` line, a `::warning::` naming what was not
+measured), and a `REFUSED (<token>)` (exit 1) whose remedy is written for a standalone read-only
+diagnostic — never a mutating op, never SSH. The plan at
+`knowledge-base/project/plans/archive/20260920-221311-2026-09-20-fix-registry-probe-dark-gate-plan.md` is the design record
+(D1–D10 and its review round).
+
+**Why `dark` exits 0 here.** The op answers "is the dedicated registry empty"; a dark host answers
+that question from its own rows rather than from a live read, which is a verdict, not a failure to
+run. Non-zero is reserved for "could not measure". The confusion cost — a green run that measured no
+registry — is paid in the message: the notice omits the `registry_empty=` triple and the warning says
+so. The runbook's Window procedure 1(a) and pre-flight-hang item 3 read it that way.
+
+**What `dark` establishes post-cutover, precisely.** The cutover completed on 2026-09-15 (addendum
+above), so `dark` is reachable today only after `op=rollback` — which is `systemctl stop` on the same
+`boot_id`. The gate establishes "not serving as of the newest probe row, flag pre-arm on the
+heartbeat, no FSM transition since". It does NOT establish "nothing registered since boot": the
+server served ~70 registered functions on that boot before the stop, and those registrations persist
+in the durable backend. The op's messages were corrected to that scope in the #8426 review.
+
+**The duplication is accepted and ledgered.** The probe arm's plumbing is byte-parallel to 2.0's
+(prefix-normalised and pinned by the suite's plumbing-parity guard; `SOLEUR-DEBT` marker at the arm's
+head, trigger: a third consumer). The lib's header still names 2.0 as its consumer; the census in
+`apps/web-platform/infra/cutover-inngest-workflow.test.sh` pins the consumer set at exactly
+`{execute, registry-probe}` by occurrence count over every arm plus the whole file.

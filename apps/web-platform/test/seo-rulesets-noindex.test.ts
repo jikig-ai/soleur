@@ -1,6 +1,11 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import {
+  extractResourceBody,
+  extractRuleBlocks,
+  stripHclComments,
+} from "./lib/terraform-hcl-blocks";
 
 // Source-text regression guard for the X-Robots-Tag noindex Transform Rules.
 //
@@ -37,71 +42,34 @@ const TF_PATH = path.join(
 const RESOURCE_NAME = "seo_response_headers";
 
 /**
- * Extract the body of a `resource "cloudflare_ruleset" "<name>" { ... }` block
- * by brace-counting from the resource declaration. Returns the substring
- * between the opening `{` and its matching `}` (exclusive). Throws if the
- * resource is absent so a deleted-resource regression fails loudly rather than
- * silently passing on an empty string.
+ * The resource body extracted from COMMENT-STRIPPED source — a `rules {}`
+ * block (or whole resource) wrapped in `/* * /` or `#` comments must not
+ * satisfy these pins (#8364 review: raw extraction let a commented-out
+ * declaration stay green).
  */
-function extractResourceBody(src: string, name: string): string {
-  const marker = `resource "cloudflare_ruleset" "${name}"`;
-  const start = src.indexOf(marker);
-  if (start === -1) {
-    throw new Error(`resource "cloudflare_ruleset" "${name}" not found in ${TF_PATH}`);
-  }
-  const openBrace = src.indexOf("{", start);
-  if (openBrace === -1) {
-    throw new Error(`opening brace for resource "${name}" not found`);
-  }
-  let depth = 0;
-  for (let i = openBrace; i < src.length; i++) {
-    const ch = src[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return src.slice(openBrace + 1, i);
-    }
-  }
-  throw new Error(`unbalanced braces in resource "${name}"`);
+function strippedBody(): string {
+  return extractResourceBody(
+    stripHclComments(readFileSync(TF_PATH, "utf-8")),
+    RESOURCE_NAME,
+  );
 }
 
 /**
- * Within a resource body, return the `rules { ... }` block whose body contains
- * the given host literal. Brace-counts each `rules {` so action_parameters /
- * headers nesting is captured in full. Throws if no matching rule is found.
+ * Within a resource body, return the `rules { ... }` block whose body carries
+ * the given `http.host eq "<host>"` literal. Throws if no matching rule is
+ * found so a deleted-rule regression fails loudly rather than passing on an
+ * empty string.
  */
 function extractRuleBlockForHost(resourceBody: string, host: string): string {
-  // Anchor on the `rules {` block opener specifically — NOT the bare word
-  // "rules", which also appears in `provider = cloudflare.rulesets`, in prose
-  // ("locks both rules into source"), and in the developers.cloudflare.com/rules/
-  // URL. Matching `rules\s*{` prevents a future comment with a stray `{` before
-  // the first real rules block from desyncing the brace count and binding the
-  // wrong rule.
-  const opener = /\brules\s*\{/g;
-  let m: RegExpExecArray | null;
-  while ((m = opener.exec(resourceBody)) !== null) {
-    const openBrace = resourceBody.indexOf("{", m.index);
-    let depth = 0;
-    let end = -1;
-    for (let i = openBrace; i < resourceBody.length; i++) {
-      const ch = resourceBody[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
-    if (end === -1) break;
-    const block = resourceBody.slice(openBrace + 1, end);
-    if (block.includes(`http.host eq \\"${host}\\"`)) {
-      return block;
-    }
-    opener.lastIndex = end + 1;
+  const match = extractRuleBlocks(resourceBody).find((block) =>
+    block.includes(`http.host eq \\"${host}\\"`),
+  );
+  if (!match) {
+    throw new Error(
+      `no rules block matching host "${host}" found in ${RESOURCE_NAME}`,
+    );
   }
-  throw new Error(`no rules block matching host "${host}" found in ${RESOURCE_NAME}`);
+  return match;
 }
 
 describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
@@ -113,8 +81,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
 
   // AC1 — both subdomain rules present in source.
   test("deploy.soleur.ai rewrite rule is present in seo_response_headers", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "deploy.soleur.ai");
     expect(rule).toContain(`action`);
     expect(rule).toContain(`"rewrite"`);
@@ -122,8 +89,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   });
 
   test("api.soleur.ai rewrite rule is present in seo_response_headers (dormant, retained — #3379)", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "api.soleur.ai");
     expect(rule).toContain(`"rewrite"`);
     expect(rule).toContain(`X-Robots-Tag`);
@@ -137,8 +103,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // app/robots.ts. app.soleur.ai is proxied (dns.tf cloudflare_record.app
   // proxied = true), so unlike api.soleur.ai this rule fires live.
   test("app.soleur.ai rewrite rule is present in seo_response_headers", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "app.soleur.ai");
     expect(rule).toContain(`action`);
     expect(rule).toContain(`"rewrite"`);
@@ -148,8 +113,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // AC2 — deploy. rule pins the EXACT live header value `noindex, nofollow`,
   // not just substring `noindex`, so dropping `nofollow` is caught.
   test("deploy.soleur.ai rule sets X-Robots-Tag to exactly 'noindex, nofollow'", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "deploy.soleur.ai");
     // The header value line inside this rule's action_parameters.headers block.
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
@@ -160,8 +124,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // `nofollow` (or otherwise mutates the value) must fail CI, same parity as
   // the deploy/api rules above.
   test("app.soleur.ai rule sets X-Robots-Tag to exactly 'noindex, nofollow'", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "app.soleur.ai");
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
     expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
@@ -174,8 +137,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
     // carry the same `noindex, nofollow` as deploy. A loose `noindex*` match
     // would let the retained rule be silently weakened to a no-snippet-only
     // `noindex` ahead of that flip.
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     const rule = extractRuleBlockForHost(body, "api.soleur.ai");
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
     expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
@@ -184,8 +146,7 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   // Every host rewrite rule must stay enabled — a silent `enabled = false` is
   // as bad as a deletion (the header stops firing live).
   test("all subdomain rewrite rules are enabled", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
-    const body = extractResourceBody(tf, RESOURCE_NAME);
+    const body = strippedBody();
     for (const host of ["deploy.soleur.ai", "api.soleur.ai", "app.soleur.ai"]) {
       const rule = extractRuleBlockForHost(body, host);
       expect(rule, `${host} rule must be enabled`).toMatch(/enabled\s*=\s*true/);
