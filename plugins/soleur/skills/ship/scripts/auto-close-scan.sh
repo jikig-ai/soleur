@@ -42,4 +42,19 @@ fi
 PATTERN='\b(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+(#[0-9]+|GH-[0-9]+)\b'
 
 grep -niE "$PATTERN" "$BODY_FILE" || true
+
+# Cross-line pass. GitHub treats a newline between the keyword and the reference
+# as whitespace, so a body wrapped as "...would auto-close" / "#8285, so..." closes
+# #8285, and a line-at-a-time grep cannot see it (#8514's squash-merge did exactly
+# this). Report the keyword's line number with both lines joined by a space.
+awk '
+  {
+    line = $0; low = tolower(line)
+    if (prev_kw && low ~ /^[[:space:]]*(#[0-9]+|gh-[0-9]+)([^[:alnum:]_]|$)/) {
+      print prev_nr ":" prev " " line
+    }
+    prev_kw = (low ~ /(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]*$/)
+    prev = line; prev_nr = NR
+  }
+' "$BODY_FILE" || true
 exit 0
