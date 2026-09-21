@@ -47,6 +47,29 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(behindSyncInstructions("claude")).toContain("sync-pr-behind.sh <PR-number> --step");
   });
 
+  test("standalone invocations use the installed plugin root, never a repo-relative path (ADR-179)", () => {
+    for (const h of ["grok", "claude", "devin"] as const) {
+      const md = behindSyncInstructions(h);
+      expect(md).toContain('bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"');
+      expect(md).not.toContain("bash plugins/soleur/scripts/sync-pr-behind.sh");
+    }
+    const ship = readFileSync(resolve(PLUGIN_ROOT, "skills/ship/SKILL.md"), "utf-8");
+    expect(ship).not.toContain("bash plugins/soleur/scripts/sync-pr-behind.sh");
+  });
+
+  test("Grok AwaitShell patterns wake on every tagged Phase 7 / sync line", () => {
+    const sync = behindSyncInstructions("grok");
+    const poll = pollInstructions("grok");
+    for (const md of [sync, poll]) {
+      expect(md).toContain("\\[pr-behind-sync\\] kind=");
+      expect(md).toContain("\\[ship\\.phase7\\.");
+    }
+    expect(poll).toContain("Merge poll timed out");
+    const ship = readFileSync(resolve(PLUGIN_ROOT, "skills/ship/SKILL.md"), "utf-8");
+    // The Phase 7 Grok line must name the fence's actual timeout text.
+    expect(ship).toMatch(/AwaitShell\*\* with a `pattern` matching poll output \([^\n]*`Merge poll timed out`[^\n]*`\\\[ship\\\.phase7\\\.`/);
+  });
+
   test("behindSyncInstructions forbids operator handoff on Grok", () => {
     const md = behindSyncInstructions("grok");
     expect(md).toContain("STOP");

@@ -7,7 +7,7 @@
 # unchanged (F1, F9 and F10 are the three that redden). So
 # "does each rule of this stage do anything?" is answered nowhere else.
 #
-# FIVE STRUCTURAL REQUIREMENTS, each closing a defect this repo has already paid for:
+# SIX STRUCTURAL REQUIREMENTS, each closing a defect this repo has already paid for:
 #
 #   1. GREEN BASELINE FIRST. The unmutated control runs before any row and must be GREEN; a red
 #      control ABORTS rather than scoring rows, because every row would "flip" vacuously.
@@ -25,6 +25,10 @@
 #   5. A POSITIVE CONTROL drives pass() and fail() once each and refuses to continue unless BOTH
 #      counters moved. An assertion-count floor cannot see a rewritten fail() that still counts,
 #      and the floor is emitted directly rather than through the helper it backstops.
+#
+#   6. A NEGATIVE CONTROL ROW (C0, #8474): a comment-only mutant whose checks name the BASELINE
+#      verdicts. Every other row asserts a flip; without one row that must NOT flip, a run_row that
+#      reported every mutant as a flip would be indistinguishable from a battery that kills them.
 #
 # RESTORE IS FROM A PRISTINE COPY, never `git checkout` — the fix under test may be uncommitted,
 # and `git checkout` would restore HEAD and score every later row against a file that no longer
@@ -86,14 +90,60 @@ negated-and-real-token-same-line.md:yes
 no-alert-when-prod-went-down.md:yes
 didnt-notice-deploy-was-blocked.md:yes
 real-report-with-unrelated-negation.md:yes
-cue-two-words-from-token-still-signals.md:yes"
+cue-two-words-from-token-still-signals.md:yes
+clean-cue-near-unscoped-outage.md:no
+boundary-bang.md:yes
+boundary-close-paren.md:yes
+boundary-colon.md:yes
+boundary-comma.md:yes
+boundary-conj-after.md:yes
+boundary-conj-and.md:yes
+boundary-conj-because.md:yes
+boundary-conj-before.md:yes
+boundary-conj-but.md:yes
+boundary-conj-so.md:yes
+boundary-conj-then.md:yes
+boundary-conj-when.md:yes
+boundary-conj-while.md:yes
+boundary-double-hyphen.md:yes
+boundary-em-dash.md:yes
+boundary-en-dash.md:yes
+boundary-open-paren.md:yes
+boundary-period.md:yes
+boundary-pipe.md:yes
+boundary-question.md:yes
+boundary-semicolon.md:yes
+boundary-spaced-hyphen.md:yes
+mf-juno-is-not-a-cue.md:yes
+mf-juno-outage-word-boundary.md:yes
+mf-no-colon-went-down.md:yes
+mf-no-comma-went-down.md:yes
+mf-no-hyphen-blame-post-mortem.md:yes
+mf-no-hyphen-notice-outage.md:yes
+mf-no-hyphen-outage-streak.md:yes
+mf-no-hyphen-warning-outage.md:yes
+mf-no-period-went-down.md:yes
+mf-no-then-adjective-outage.md:yes
+mf-not-hyphen-understood-outage.md:yes
+mf-not-that-beyond-word-window.md:yes
+mf-not-that-then-and-boundary.md:yes
+mf-not-that-then-but-boundary.md:yes
+mf-not-that-then-emdash-real-report.md:yes
+mf-not-then-verb-outage.md:yes
+mf-notifications-is-not-a-cue.md:yes
+mf-question-no-emdash-was-down.md:yes
+mf-rather-than-then-after-boundary.md:yes
+mf-rather-than-then-emdash-boundary.md:yes
+mf-rather-than-then-while-boundary.md:yes
+mf-status-no-emdash-outage.md:yes
+mf-table-cell-no-users-could-not.md:yes"
 
 # --- the baseline TABLE is itself a claim -----------------------------------------------------
 # The table is hand-maintained, so the baseline block proves only that whatever it lists behaves.
 # Deleting entries used to shrink the guarded set with no signal at all. Assert its CARDINALITY
 # against the fixture set this class introduced, and that every named file exists — a count alone
 # cannot see a substitution.
-FIXTURE_MIN=26
+FIXTURE_MIN=72
 table_n=$(printf '%s\n' "$FIXTURES" | grep -c ':')
 if [ "$table_n" -lt "$FIXTURE_MIN" ]; then
   fail "baseline table lists $table_n fixtures, floor is $FIXTURE_MIN — entries were removed from the guarded set"
@@ -166,19 +216,26 @@ elif mid == "M11":                                   # DROP_RE above the re-admi
     assert s.count(DROP) == 1 and s.count(ACT) == 1
     s = s.replace(DROP, "", 1).replace(ACT, DROP + ACT, 1)
 # --- Guard 2, the negation strip (#8334). Each literal is asserted unique before it is edited.
-elif mid.startswith("N"):
+elif mid.startswith("N") or mid == "C0":
     FALL = "{print neg_strip($0)}')\"; then\n"
     def sub(old, new):
         global s
         assert s.count(old) == 1, "anchor not unique for " + mid
         s = s.replace(old, new, 1)
     if   mid == "N1": sub(FALL, "{print}')\"; then\n")                   # fall-through site only
-    elif mid == "N2": sub("           while (match(pre, /[.;:!?,]/)) pre = substr(pre, RSTART + 1)\n", "")
-    elif mid == "N3": sub("out = substr(out, 1, st - 1) sp substr(out, st + len)",
-                          "out = \"\"; for (i = 0; i < length(s); i++) out = out \" \"")
-    elif mid == "N4": sub("while (match(rest, OUTAGE_RE) && RLENGTH > 0)", "if (match(rest, OUTAGE_RE) && RLENGTH > 0)")
-    elif mid == "N5": sub("[^a-z]+([a-z]+[^a-z]+)?$'", "[^a-z].*$'")
-    elif mid == "N9": sub("[^a-z]+([a-z]+[^a-z]+)?$'", "[^a-z]+([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?$'")
+    elif mid == "N2": sub("           while (match(pre, NEG_BOUND_RE)) pre = substr(pre, RSTART + RLENGTH)\n", "")
+    elif mid == "N3": sub("         return neg_cat(P, 1, k)\n",
+                          "         sp = \"\"; for (j = 0; j < length(s); j++) sp = sp \" \"; return sp\n")
+    elif mid == "N4": sub("           pos = st + len\n         }\n", "           pos = st + len\n           break\n         }\n")  # first token only
+    elif mid == "N5": sub("(not|no)[ \\t]+((a|an|the)[ \\t]+)?$'", "(not|no)[^a-z].*$'")      # clause-wide cue
+    elif mid == "N9": sub("((a|an|the)[ \\t]+)?$'", "([a-z]+[ \\t]+)?$'")                         # any word, not an article
+    elif mid == "N11": sub("(not|no)[ \\t]+((a|an|the)", "(not|no)[^a-z]+((a|an|the)")            # any separator, not whitespace
+    elif mid == "N12": sub("NEG_CUE_RE='(^|[^a-z])(not|no)", "NEG_CUE_RE='(not|no)")               # no leading word boundary
+    elif mid == "N13": sub("[^a-z]+([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?$'", "[^a-z].*$'")  # unlimited phrase window
+    elif mid == "N14": sub("|${NEG_EM_DASH}|", "|")                                                # em dash no longer a boundary
+    elif mid == "N15": sub("|--|${NEG_CONJ_RE}\"", "|--\"")                                         # no conjunction boundaries
+    elif mid == "N16": sub("         if (!hit) return s\n", "         if (!hit) { print NEG_SENTINEL s; return s }\n")  # unconditional sentinel
+    elif mid == "C0":  sub("NEG_SENTINEL='__PIR_NEG_SUPPRESSED__'\n", "# C0 no-op marker: a comment-only edit\nNEG_SENTINEL='__PIR_NEG_SUPPRESSED__'\n")
     elif mid == "N6": sub("if (pre ~ NEG_CUE_RE || pre ~ NEG_PHRASE_RE)", "if (pre ~ NEG_CUE_RE)")
     elif mid == "N7": sub("      continue\n", "      _l=\"${_l#\"$NEG_SENTINEL\"}\"\n")   # strip the marker only
     elif mid == "N8": sub("{skip=0; print neg_strip($0); next}", "{skip=0; print; next}")   # re-admit site only
@@ -286,20 +343,41 @@ run_row M12 'END\{ if \(f\)' 0 "unbalanced-fence-does-not-swallow-the-tail.md:no
 run_row N1  "^ +\{print neg_strip\(\\\$0\)\}'" 0 "negated-outage-only.md:yes,two-tokens-both-denied.md:yes,denial-specimen-8334.md:yes" \
   "dropping neg_strip at the fall-through lets a denied token reach the verdict"
 # shellcheck disable=SC2016
-run_row N2  'match\(pre, /\[\.;:!\?,\]/\)' 0 "negation-in-prior-clause-real-report.md:no" \
+run_row N2  'match\(pre, NEG_BOUND_RE\)' 0 "negation-in-prior-clause-real-report.md:no,boundary-period.md:no" \
   "without clause boundaries a cue in the PRIOR clause silences a real report"
 # shellcheck disable=SC2016
-run_row N3  'substr\(out, st \+ len\)' 0 "negated-and-real-token-same-line.md:no" \
+run_row N3  'return neg_cat\(P, 1, k\)' 0 "negated-and-real-token-same-line.md:no" \
   "line-scoped blanking takes the real token down with its denied neighbour"
 # shellcheck disable=SC2016
-run_row N4  'while \(match\(rest, OUTAGE_RE\)' 0 "two-tokens-both-denied.md:yes" \
+run_row N4  '^ +break$' 1 "two-tokens-both-denied.md:yes" \
   "judging only the first occurrence lets the second denied token through"
 # shellcheck disable=SC2016
-run_row N5  'NEG_CUE_RE=.*\[\^a-z\]\.\*' 1 "no-alert-when-prod-went-down.md:no,real-report-with-unrelated-negation.md:no" \
+run_row N5  'NEG_CUE_RE=.*\[\^a-z\]\.\*' 1 "cue-two-words-from-token-still-signals.md:no,mf-not-then-verb-outage.md:no" \
   "a clause-wide cue window swallows a real report whose cue governs another word"
+# --- one row per rule of the #8474 tightening; each reddens a BEHAVIOURAL fixture, not just its anchor.
 # shellcheck disable=SC2016
-run_row N9  '\)\?\(\[a-z\]\+\[\^a-z\]\+\)\?' 1 "cue-two-words-from-token-still-signals.md:no" \
-  "a two-word cue window swallows the two-words-away report the one-word window keeps"
+run_row N9  '\(\(a\|an\|the\)' 0 "mf-no-then-adjective-outage.md:no,mf-not-then-verb-outage.md:no" \
+  "letting ANY one word stand where the article goes denies \`no small outage\` and \`did not detect outage\`"
+# shellcheck disable=SC2016
+run_row N11 '\(not\|no\)\[\^a-z\]\+\(\(a' 1 "mf-no-hyphen-outage-streak.md:no" \
+  "a non-whitespace cue separator reads the hyphenated \`no-outage streak\` (an outage report) as a denial"
+# shellcheck disable=SC2016
+run_row N12 "NEG_CUE_RE='\(\^" 0 "mf-juno-outage-word-boundary.md:no" \
+  "without the leading word boundary \`Juno outage\` reads as \`no outage\`"
+# shellcheck disable=SC2016
+run_row N13 'NEG_PHRASE_RE=.*\[\^a-z\]\.\*\$' 1 "mf-not-that-beyond-word-window.md:no" \
+  "an unbounded phrase window denies a token four words past \`not that\`"
+# shellcheck disable=SC2016
+run_row N14 '\|\$\{NEG_EM_DASH\}\|' 0 "boundary-em-dash.md:no,mf-rather-than-then-emdash-boundary.md:no" \
+  "without the em-dash boundary a denial reaches across the dash into the report"
+# shellcheck disable=SC2016
+run_row N15 '\$\{NEG_CONJ_RE\}' 0 "mf-rather-than-then-after-boundary.md:no,mf-not-that-then-and-boundary.md:no,boundary-conj-because.md:no" \
+  "without conjunction boundaries \`rather than hotfix after prod went down\` is denied"
+# NEGATIVE CONTROL: a comment-only mutant. Every check names the BASELINE verdict, so this row
+# proves run_row reports a non-flip as a pass -- i.e. that the other rows' passes are flips it
+# measured, not whatever run_row prints for any mutant.
+run_row C0  'C0 no-op marker' 1 "negated-outage-only.md:no,mf-no-then-adjective-outage.md:yes,denial-specimen-8334.md:no,boundary-em-dash.md:yes" \
+  "a comment-only mutant leaves the verdict at baseline (negative control)"
 # shellcheck disable=SC2016
 run_row N6  'pre ~ NEG_PHRASE_RE' 0 "denial-specimen-8334.md:yes,negation-cue-rather-than.md:yes" \
   "without rule (b) the #8334 specimen and the rather-than denial signal again"
@@ -354,6 +432,31 @@ else
   fail "N10: mutation engine failed or produced no change"
 fi
 
+# N16 (unconditional sentinel) is invisible to verdict(): the sentinel line is dropped whole, so the
+# verdict never moves. Its observable is a SPURIOUS stderr note on a line that denied nothing.
+rows=$((rows+1))
+if python3 "$WORK/mutate.py" N16 "$PRISTINE" "$WORK/N16.sh" 2>/dev/null && ! cmp -s "$PRISTINE" "$WORK/N16.sh"; then
+  # one signalled run and one clean no-signal run, neither of which denies anything
+  for n16 in no-alert-when-prod-went-down.md clean-cue-near-unscoped-outage.md; do
+    bash "$WORK/N16.sh" < "$FIX/$n16" >/dev/null 2>"$WORK/N16.err"
+    if grep -q 'PIR-OUTAGE-NEGATION-SUPPRESSED' "$WORK/N16.err"; then
+      pass "N16/${n16%.md}: an unconditional sentinel prints the note on a run that denied nothing"
+    else
+      fail "N16/${n16%.md}: the unconditional-sentinel mutant left stderr clean — the absence assertion cannot see it"
+    fi
+  done
+else
+  fail "N16: mutation engine failed or produced no change"
+fi
+for n16 in no-alert-when-prod-went-down.md clean-cue-near-unscoped-outage.md; do
+  bash "$PRISTINE" < "$FIX/$n16" >/dev/null 2>"$WORK/N16p.err"
+  if grep -q 'PIR-OUTAGE-NEGATION-SUPPRESSED' "$WORK/N16p.err"; then
+    fail "N16-control: the shipped gate printed a negation note on $n16, which denies nothing"
+  else
+    pass "N16-control: no negation note on $n16 (nothing denied)"
+  fi
+done
+
 # --- empty haystack: structurally clean now the pipeline terminates in awk -------------------
 for probe in "" $'\n\n' $'If this lands broken\n'; do
   if printf '%s' "$probe" | bash "$PRISTINE" >/dev/null 2>&1; then
@@ -366,8 +469,8 @@ done
 # --- dispatch + floor, emitted directly (never through the helper it backstops) --------------
 # A FLOOR, not an equality — the row count is developer-incremented, and this file argues exactly
 # that for MIN_ASSERTIONS two blocks down. An equality here would make every added row a failure.
-if [ "$rows" -ge 22 ]; then pass "dispatch: $rows mutation rows ran (floor 22)"
-else fail "dispatch: only $rows rows ran, floor is 22"; fi
+if [ "$rows" -ge 29 ]; then pass "dispatch: $rows mutation rows ran (floor 29)"
+else fail "dispatch: only $rows rows ran, floor is 29"; fi
 
 # This battery never writes to $ORIG (mutants go to $WORK), so the old `cmp $ORIG $PRISTINE`
 # assertion was unfailable by construction while still counting toward the floor. Assert the
@@ -383,7 +486,7 @@ fi
 # number is how a floor ends up one above what the suite can reach. Raise it in lockstep when
 # assertions are added; it is a floor, never an equality (an equality makes every new assertion
 # a spurious failure). Emitted directly, never through the helper it backstops.
-MIN_ASSERTIONS=40
+MIN_ASSERTIONS=58
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FATAL: only %d assertions ran, floor is %d — the battery is vacuous\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

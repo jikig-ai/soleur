@@ -374,7 +374,7 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Grok Build)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **Shell** with adequate `block_until_ms` for short `gh` probes.",
-        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `Merge poll timed out`, `\\[ship\\.phase7\\.`, `\\[pr-behind-sync\\] kind=`, `postmerge verification complete`.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/ship` merge: poll release workflows, invoke `/postmerge <PR>`, then emit `<promise>DONE</promise>`.",
         "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",

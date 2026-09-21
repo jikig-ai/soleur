@@ -60,7 +60,9 @@ export function shouldResyncBeforePoll(mergeStateStatus: string): boolean {
  * (kb-index class); a real conflict exits 6 for manual resolution.
  */
 export function behindSyncInstructions(harness: Harness): string {
-  const script = "bash plugins/soleur/scripts/sync-pr-behind.sh";
+  // ADR-179: the installed plugin root, never a repo-relative path (a customer
+  // repo has no plugins/soleur/ tree).
+  const script = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"';
   switch (harness) {
     case "grok":
       return [
@@ -68,7 +70,8 @@ export function behindSyncInstructions(harness: Harness): string {
         `- When \`gh pr view --jq '.mergeStateStatus'\` returns \`BEHIND\` or \`DIRTY\`, **STOP** CI-only polling.`,
         `- From the PR worktree: \`${script} <PR-number>\` (fetch → merge origin/main → push).`,
         `- \`DIRTY\` auto-syncs only when the local merge is clean; a real conflict exits for manual resolution.`,
-        `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged|merge conflict\`.`,
+        `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged|merge conflict|\\[pr-behind-sync\\] kind=|\\[ship\\.phase7\\.\`.`,
+        `- Exit 11 (\`kind=noop\`) is GitHub state lag — re-poll, then re-run; exit 12 (\`kind=wrong_branch\`) means this worktree is not the PR's branch — cd to it. Any other \`kind=\` line names its next action.`,
         `- Re-poll after push; do NOT ask the operator to update the branch.`,
       ].join("\n");
 

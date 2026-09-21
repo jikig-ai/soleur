@@ -1,6 +1,6 @@
 # Settle-then-admin-merge escape hatch
 
-Loaded from [ship/SKILL.md](../SKILL.md) Phase 7 when the poll prints `[ship.phase7.hatch_check]` (2 consecutive BEHIND syncs) or `[ship.phase7.behind_exhausted]`. Moved verbatim from Phase 7 (#8419).
+Loaded from [ship/SKILL.md](../SKILL.md) Phase 7 and [merge-pr/SKILL.md](../../merge-pr/SKILL.md) §5.2 when their poll prints `[ship.phase7.hatch_check]` (the second BEHIND sync pushed) or `[ship.phase7.behind_exhausted]`. Moved verbatim from Phase 7 (#8419).
 
 **Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). **That cycle is ~35 minutes, not the ~8 this paragraph used to claim, so the livelock is close to structural rather than exceptional.** Measured 2026-09-08 over the five most recent completed `main` CI runs: `test-scripts` took 34/36/36/35/36 min while the next-longest job took 4 min (7 min once). Re-derive rather than trust it — the figure moved 27 -> 35 in a single day, and #7907 shards this job:
 
@@ -14,7 +14,7 @@ for id in $(gh run list --branch main --workflow CI --limit 5 --status completed
 done
 ```
 
-**Trigger it at 2 consecutive BEHIND syncs on a branch WHOSE OWN DIFF touches nothing but docs, skills and regenerable indexes — not at the 6-sync cap.** Keyed on your diff, not on the conflicts you happened to hit, because those are different sets and only one of them is checkable. A branch carrying real code plus a regenerated index can conflict *so far* only on the index and still have genuine semantic surface; the loop also never prints a conflict surface at sync 2, since the only sync that reaches 2 is a clean one (a conflicting `git merge origin/main` aborts and breaks on the first occurrence). So classify the branch, which you can do in one command:
+**Trigger it at 2 BEHIND syncs pushed on a branch WHOSE OWN DIFF touches nothing but docs, skills and regenerable indexes — not at the 6-sync cap.** Keyed on your diff, not on the conflicts you happened to hit, because those are different sets and only one of them is checkable. A branch carrying real code plus a regenerated index can conflict *so far* only on the index and still have genuine semantic surface; the loop also never prints a conflict surface at sync 2, since the only sync that reaches 2 is a clean one (a conflicting `git merge origin/main` aborts and breaks on the first occurrence). So classify the branch, which you can do in one command:
 
 ```bash
 git diff --name-only origin/main...HEAD | grep -vE \
@@ -22,7 +22,7 @@ git diff --name-only origin/main...HEAD | grep -vE \
   | grep -vE '^knowledge-base/(INDEX\.md|kb-(tags|categories)\.txt)$' || echo "hatch-eligible"
 ```
 
-The observation point for the count is the loop's own `auto-sync attempt 2/6` line; nothing else fires at sync 2.
+The observation point is the poll's `[ship.phase7.hatch_check] 2 BEHIND syncs pushed` line, printed once, when the second sync is actually pushed — an attempt that failed at fetch or was a no-op (`kind=noop`) does not count, so `auto-sync attempt 2/6` alone is not the trigger.
 
 **BEHIND only, and not DIRTY.** #7937 proposed "DIRTY/BEHIND"; that half is wrong twice over. The poll block's DIRTY arm `break`s on the first observation, so a second consecutive DIRTY sync is unobservable by the instrument this paragraph sits beside — only `behind_syncs` is counted. And `--admin` bypasses branch protection, never an actual conflict: GitHub's merge endpoint refuses a PR it has computed as unmergeable, so the hatch cannot execute on a DIRTY PR at all. DIRTY keeps its own exit and its own recovery path.
 

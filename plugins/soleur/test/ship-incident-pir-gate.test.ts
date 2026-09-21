@@ -379,12 +379,18 @@ describe("ship Incident-PIR gate (#6813)", () => {
 // ---------------------------------------------------------------------------
 // #8334 — the outage scan was negation-blind. On PR #8320 the ONLY outage-vocabulary hit in the
 // whole corpus was `not that the feature has stopped working`, a denial, and the gate asked for
-// a PIR. `neg_strip()` blanks an occurrence when a cue governs it within ONE word, or a
-// clause-level denial phrase precedes it in the same clause; every other occurrence survives.
+// a PIR. `neg_strip()` blanks an occurrence when `no`/`not` governs it directly (whitespace only,
+// at most one article between), or `not that`/`rather than` precedes it by at most three words —
+// in both cases with no clause boundary between. Every other occurrence survives.
+// #8474 — the first draft let a cue reach across a dash, a conjunction or an adjective, and so
+// suppressed real outage reports (fail-OPEN on a safety gate). The `mf-*` rows are those reports;
+// the `boundary-*` rows put the token exactly three words past `rather than` behind ONE boundary
+// each, so every boundary class is individually load-bearing.
 // Every denial fixture carries a production token elsewhere, so a no-signal verdict can only
 // come from the outage half being denied — never from a missing production conjunct.
+const NEGATION_TABLE_MIN = 58;
 describe("negation-aware outage scan (#8334)", () => {
-  test.each([
+  const NEGATION_TABLE: Array<[string, boolean]> = [
     // the only outage token is denied -> no signal
     ["negated-outage-only.md", false],
     ["denial-specimen-8334.md", false],
@@ -398,11 +404,68 @@ describe("negation-aware outage scan (#8334)", () => {
     ["negation-in-prior-clause-real-report.md", true],
     ["negated-and-real-token-same-line.md", true],
     ["no-alert-when-prod-went-down.md", true],
+    // No ACTIVE cue in this one: it guards the DROPPED `n't` cue — re-adding `n't` would deny it.
     ["didnt-notice-deploy-was-blocked.md", true],
     ["cue-two-words-from-token-still-signals.md", true],
     ["real-report-with-unrelated-negation.md", true],
-  ])("%s signals=%p", (fixture, want) => {
+    // a cue near an outage token with nothing denied and no production token -> clean no-signal
+    ["clean-cue-near-unscoped-outage.md", false],
+    // #8474 must-fire: real reports the first draft of the strip suppressed
+    ["mf-juno-is-not-a-cue.md", true],
+    ["mf-juno-outage-word-boundary.md", true],
+    ["mf-no-colon-went-down.md", true],
+    ["mf-no-comma-went-down.md", true],
+    ["mf-no-hyphen-blame-post-mortem.md", true],
+    ["mf-no-hyphen-notice-outage.md", true],
+    ["mf-no-hyphen-outage-streak.md", true],
+    ["mf-no-hyphen-warning-outage.md", true],
+    ["mf-no-period-went-down.md", true],
+    ["mf-no-then-adjective-outage.md", true],
+    ["mf-not-hyphen-understood-outage.md", true],
+    ["mf-not-that-beyond-word-window.md", true],
+    ["mf-not-that-then-and-boundary.md", true],
+    ["mf-not-that-then-but-boundary.md", true],
+    ["mf-not-that-then-emdash-real-report.md", true],
+    ["mf-not-then-verb-outage.md", true],
+    ["mf-notifications-is-not-a-cue.md", true],
+    ["mf-question-no-emdash-was-down.md", true],
+    ["mf-rather-than-then-after-boundary.md", true],
+    ["mf-rather-than-then-emdash-boundary.md", true],
+    ["mf-rather-than-then-while-boundary.md", true],
+    ["mf-status-no-emdash-outage.md", true],
+    ["mf-table-cell-no-users-could-not.md", true],
+    // #8474 one per clause-boundary class
+    ["boundary-bang.md", true],
+    ["boundary-close-paren.md", true],
+    ["boundary-colon.md", true],
+    ["boundary-comma.md", true],
+    ["boundary-conj-after.md", true],
+    ["boundary-conj-and.md", true],
+    ["boundary-conj-because.md", true],
+    ["boundary-conj-before.md", true],
+    ["boundary-conj-but.md", true],
+    ["boundary-conj-so.md", true],
+    ["boundary-conj-then.md", true],
+    ["boundary-conj-when.md", true],
+    ["boundary-conj-while.md", true],
+    ["boundary-double-hyphen.md", true],
+    ["boundary-em-dash.md", true],
+    ["boundary-en-dash.md", true],
+    ["boundary-open-paren.md", true],
+    ["boundary-period.md", true],
+    ["boundary-pipe.md", true],
+    ["boundary-question.md", true],
+    ["boundary-semicolon.md", true],
+    ["boundary-spaced-hyphen.md", true],
+  ];
+  test.each(NEGATION_TABLE)("%s signals=%p", (fixture, want) => {
     expect(signals(fixture as string)).toBe(want as boolean);
+  });
+
+  // The table is hand-maintained; a floor keeps a deletion from silently shrinking the guarded set
+  // (the mutation battery asserts the same of its own FIXTURES list).
+  test("the negation table has not shrunk", () => {
+    expect(NEGATION_TABLE.length).toBeGreaterThanOrEqual(NEGATION_TABLE_MIN);
   });
 
   // AC11: a suppression is never silent. exit 1 alone is byte-identical to a clean no-signal.
@@ -416,6 +479,57 @@ describe("negation-aware outage scan (#8334)", () => {
     expect(res.stderr).toContain('ship-incident-pir-gate: PIR-OUTAGE-NEGATION-SUPPRESSED — "');
     expect(res.stderr).toContain("There was no outage;");
     expect(res.stdout.trim()).toBe("");
+  });
+
+  // The converse (#8474): the note must be ABSENT when nothing was denied. An unconditional
+  // sentinel never moves the verdict (the sentinel line is dropped whole), so only stderr sees it.
+  // Both inputs put a cue and an outage token on the SAME line, so they reach the sentinel code.
+  test.each([
+    ["clean no-signal run", "clean-cue-near-unscoped-outage.md", 1],
+    ["signalled run", "no-alert-when-prod-went-down.md", 0],
+  ])("no negation note on a %s that denied nothing", (_label, fixture, rc) => {
+    const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
+      input: require("fs").readFileSync(resolve(FIX, fixture as string), "utf8"),
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(rc as number);
+    expect(res.stderr).not.toContain("PIR-OUTAGE-NEGATION-SUPPRESSED");
+  });
+
+  // #8474: the first draft re-scanned the whole line prefix per token — cubic, 46 s on a 38 KB
+  // dense line. The line below (58 KB, 2000 denied tokens, every one reaching the full judge
+  // because it carries a cue) runs in ~0.15 s now; the bound is ~30x that, so it trips on a
+  // complexity regression, not on a slow runner.
+  test("a dense cue-bearing line is judged in linear time", () => {
+    const line = "not an outage in production, ".repeat(2000) + "\n";
+    const t0 = Date.now();
+    const res = spawnSync("bash", [GATE], { input: line, encoding: "utf8", env: gitCleanEnv() });
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(res.status).toBe(1); // every token denied
+  });
+
+  // neg_strip's second fast path skips any line holding none of a list of literals, on the claim
+  // that every OUTAGE_RE alternative contains one. Drift fails toward the PIR (a token the list
+  // misses is never denied), but it would silently disable the strip for that token — pin it.
+  test("every OUTAGE_RE alternative contains one of the fast-path literals", () => {
+    const src: string = require("fs").readFileSync(GATE, "utf8");
+    const re = /^OUTAGE_RE='\((.*)\)'$/m.exec(src);
+    expect(re).not.toBeNull();
+    const alts: string[] = [];
+    let depth = 0, cur = "";
+    for (const ch of re![1]) {
+      if (ch === "(") depth++;
+      if (ch === ")") depth--;
+      if (ch === "|" && depth === 0) { alts.push(cur); cur = ""; } else cur += ch;
+    }
+    alts.push(cur);
+    const line = src.split("\n").find((l) => l.includes('index(l, "down")'));
+    expect(line).toBeDefined();
+    const hints = [...line!.matchAll(/index\(l, "([^"]+)"\)/g)].map((m) => m[1]);
+    expect(hints.length).toBeGreaterThan(5);
+    expect(alts.length).toBeGreaterThan(10);
+    expect(alts.filter((a) => !hints.some((h) => a.includes(h)))).toEqual([]);
   });
 
   // The sentinel line is removed WHOLE, so a PR body that starts a line with the sentinel text

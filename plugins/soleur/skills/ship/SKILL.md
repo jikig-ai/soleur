@@ -26,8 +26,8 @@ description: "This skill should be used when preparing a feature for production 
 2. **After merge — gate on the SERVED sha, not a run's conclusion:** wait for the **deploy arm** (`event=workflow_run` on the FULL 40-char merge sha; the push-arm `Web Platform Release` is build+publish only, and a short sha returns an EMPTY set that reads as drained, #8135) until its `deploy` **job** concludes — `success` → require `/health` `build_sha == merge sha` before ANY post-deploy action (cron trigger, marker read, live-verify); `skipped` → nothing deployed, go to step 3. Job *presence* discriminates nothing (the push arm lists `deploy` as `skipped`). Predicate + bash: `postmerge/SKILL.md` Phase 3.7; topology: Phase 7 "RETIRED by #5806 / ADR-217". Run post-merge from a detached `origin/main` worktree (`git fetch origin main && git -C "$(git rev-parse --git-common-dir)/.." worktree add --detach .worktrees/postmerge-<PR> origin/main`), never the feature worktree — `cleanup-merged` reaps it once its lease lapses (#8136). **Why:** #8276 — push arm green, a production cron fired against the previous build, 50 min polling for a marker it could not emit.
 3. Step 3.8: invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) **before** Step 4 cleanup.
 4. **FORBIDDEN:** Ending the session at merge, at a red release run you did not investigate, or with "want me to watch CI?"
-5. **Harness polling:** `plugins/soleur/lib/harness.ts` → `pollInstructions()` — Claude uses **Monitor tool**; Grok uses **AwaitShell** (`pattern` for `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `postmerge verification complete`) or blocking Shell with `block_until_ms`.
-6. **BEHIND stop-and-sync:** When `mergeStateStatus` is `BEHIND`, **stop** CI-only polling and resync before continuing. Grok/ad-hoc polls: `bash plugins/soleur/scripts/sync-pr-behind.sh <PR>` from the feature worktree (the Phase 7 Monitor loop runs the same script with `--step`). Canonical spec: `plugins/soleur/lib/pr-merge-poll.ts`.
+5. **Harness polling:** `plugins/soleur/lib/harness.ts` → `pollInstructions()` — Claude uses **Monitor tool**; Grok uses **AwaitShell** (`pattern` for `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `\[ship\.phase7\.`, `\[pr-behind-sync\] kind=`, `postmerge verification complete`) or blocking Shell with `block_until_ms`.
+6. **BEHIND stop-and-sync:** When `mergeStateStatus` is `BEHIND`, **stop** CI-only polling and resync before continuing. Grok/ad-hoc polls: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" <PR>` from the feature worktree (the Phase 7 Monitor loop runs the same script with `--step`). Canonical spec: `plugins/soleur/lib/pr-merge-poll.ts`.
 
 See `workflow-fidelity.ts` (`SHIP_MERGE_DEPLOY_SENTINEL`, `POST_MERGE_VERIFICATION_SKILLS`) and `wg-after-a-pr-merges-to-main-verify-all`.
 <!-- ship-merge-deploy-protocol:end -->
@@ -1255,7 +1255,7 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    self-hosted plugin install the scan is absent by construction and triggers 1 and 2 above are
    the only ways the PIR requirement fires.
 
-   The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing **paragraph** (a sentence in that paragraph that says the event already happened is re-admitted) before matching, and matches only PAST-TENSE outage vocabulary — the strip is PARAGRAPH-scoped, not line-scoped (#7801): the label opens a window running to the next blank line, heading, or new list item, so a plan that merely CITES a past closed incident as design precedent inside that paragraph no longer reads as an outage report (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning — with one named exception: a real outage phrased with no actuality idiom INSIDE the hypothetical paragraph is swallowed (#7801, pinned by `real-outage-inside-paragraph-without-actuality-idiom.md`). The gate prints a `PIR-STRIP-SUPPRESSED` note on stderr when that happens. It has no programmatic consumer — this block branches on the exit code alone — so it is a signal to the reader of the transcript, not a gate. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
+   The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing **paragraph** (a sentence in that paragraph that says the event already happened is re-admitted) before matching, and matches only PAST-TENSE outage vocabulary — the strip is PARAGRAPH-scoped, not line-scoped (#7801): the label opens a window running to the next blank line, heading, or new list item, so a plan that merely CITES a past closed incident as design precedent inside that paragraph no longer reads as an outage report (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning — with one named exception: a real outage phrased with no actuality idiom INSIDE the hypothetical paragraph is swallowed (#7801, pinned by `real-outage-inside-paragraph-without-actuality-idiom.md`). The gate prints a `PIR-STRIP-SUPPRESSED` note on stderr when that happens. If its stderr carries `PIR-OUTAGE-NEGATION-SUPPRESSED`, read the quoted line and confirm it is a genuine denial before accepting "no PIR". It has no programmatic consumer — this block branches on the exit code alone — so it is a signal to the reader of the transcript, not a gate. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
 
 **If triggered — require a PIR on the branch.** The script owns the file selector, the shape
 check and the exit codes (#7941 plan; it was an inline block here until then, and the block
@@ -2219,7 +2219,7 @@ After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now o
 **HARD GATE — harness-aware polling (see `ship-merge-deploy-protocol` above).**
 
 - **Claude Code:** Use the **Monitor tool**, NEVER Bash `run_in_background`. The Monitor tool streams each stdout line as a real-time notification (state-change visibility).
-- **Grok Build:** Use **AwaitShell** with a `pattern` matching poll output (`MERGED`, `CLOSED`, `completed success`, `TIMEOUT`), or **Shell** with `block_until_ms` ≥ loop duration. NEVER ask the operator to watch merge status.
+- **Grok Build:** Use **AwaitShell** with a `pattern` matching poll output (`MERGED`, `CLOSED`, `completed success`, `Merge poll timed out`, `TIMEOUT`, `\[ship\.phase7\.`, `\[pr-behind-sync\] kind=`), or **Shell** with `block_until_ms` ≥ loop duration. NEVER ask the operator to watch merge status.
 
 Bash `run_in_background` is forbidden on all harnesses — opaque until completion (#4512).
 
@@ -2234,7 +2234,9 @@ Use the **Monitor tool** with this shell loop (state-change + heartbeat, max `MA
 # extractor anchors on this fence + the variable-set fingerprint below.)
 # The BEHIND arm's merge/push lives in plugins/soleur/scripts/sync-pr-behind.sh
 # (sync_step, run via --step) — fix it THERE; this fence only dispatches on its exit.
-prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
+PR="<number>"  # bare digits: a pasted `#8474` would print a false "pushed" downstream
+[[ $PR =~ ^[0-9]+$ ]] || { echo "[ship.phase7.precondition] PR='$PR' is not a bare PR number — set PR to digits only (no #), then re-arm the poll"; exit 2; }
+prev=""; i=0; behind_syncs=0; behind_pushes=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 fetch_failures=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
 # Minutes to poll before giving up (one iteration = one `sleep 60`).
 # DERIVED, not chosen: over the last 12 CI runs on main a full run took
@@ -2265,12 +2267,16 @@ fi
 SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
 SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""
 if [[ "$sync_ok" -eq 1 ]]; then
-  if grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null \
-     && [[ -r "$SYNC_SH" ]] && bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step' \
-     && SYNC_SNAP="$(mktemp)" && cp "$SYNC_SH" "$SYNC_SNAP"; then
-    :
-  else
-    echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH' (plugin root unset or not soleur, file missing, or no --step) — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT per your harness's INSTRUCTIONS.md, or sync by hand. The poll still heartbeats."
+  why=""
+  if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset"
+  elif ! grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+    why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
+  elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
+  elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; then why="its --help has no --step (an older copy)"
+  elif ! { SYNC_SNAP="$(mktemp)" && trap 'rm -f "$SYNC_SNAP"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  fi
+  if [[ -n "$why" ]]; then
+    echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT per your harness's INSTRUCTIONS.md, or sync by hand."
     sync_ok=0
   fi
 fi
@@ -2289,11 +2295,11 @@ mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main'
   2>/dev/null || true)
 while true; do
   i=$((i+1))
-  s=$(gh pr view <number> --json state,mergeStateStatus \
+  s=$(gh pr view "$PR" --json state,mergeStateStatus \
       --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
     || s="fetch-error: $s"
   if [[ "$s" != "$prev" ]] || (( i % 3 == 1 )); then
-    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR <number> ${s}"
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR $PR ${s}"
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
@@ -2305,7 +2311,7 @@ while true; do
   # Same fail-open rationale as the once-fetch above: transient `gh pr
   # checks` 5xx → empty failure set → no-op for this tick.
   if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
-    mapfile -t failed_names < <(gh pr checks <number> --json name,bucket \
+    mapfile -t failed_names < <(gh pr checks "$PR" --json name,bucket \
       --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
     if (( ${#failed_names[@]} > 0 )); then
       required_failed=""
@@ -2316,7 +2322,7 @@ while true; do
       done
       if [[ -n "$required_failed" ]]; then
         echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_failed] check='${required_failed}' — exiting poll"
-        echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)"
+        echo "Inspect: gh pr checks $PR ; gh run view --log-failed (pick the failing workflow run)"
         break
       fi
     fi
@@ -2352,20 +2358,26 @@ while true; do
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
-    sync_rc=0; bash "$SYNC_SNAP" <number> --step || sync_rc=$?
+    sync_rc=0; bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?
     case "$sync_rc" in
       0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
-         (( behind_syncs == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs — if this diff is docs/skills/regenerable indexes only, read ship/references/settle-then-admin-merge.md; else keep polling"
+         behind_pushes=$((behind_pushes+1))
+         (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          # Re-fetch now: GitHub may already be CLEAN → MERGED after the sync.
-         s=$(gh pr view <number> --json state,mergeStateStatus \
+         s=$(gh pr view "$PR" --json state,mergeStateStatus \
              --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
            || s="fetch-error: $s"
          echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break ;;
+      11) behind_syncs=$((behind_syncs-1))  # no-op: GitHub state lag, not a sync — budget and hatch untouched
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] main already merged and pushed; mergeStateStatus lags — not counted, polling on" ;;
       5) fetch_failures=$((fetch_failures+1))
          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch — skipping this sync attempt" ;;
       *) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] sync-pr-behind.sh exited $sync_rc (see its line above). Stopping the poll."
          break ;;
     esac
+  elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 0 ]]; then
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_no_sync] PR $PR is BEHIND and auto-sync is disabled (precondition line above). From the PR worktree run:" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"' "$PR" "(root per your harness's INSTRUCTIONS.md), then re-arm the poll. Stopping the poll."
+    break
   elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
     # BEHIND cap exhausted: emit structured operator signal exactly once at
     # the inflection point (sync #${MAX_BEHIND_SYNCS}+1), then fall through
@@ -2375,7 +2387,7 @@ while true; do
     if (( fetch_failures == MAX_BEHIND_SYNCS )); then
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}). Every attempt failed at git fetch — a network/credential outage, not main moving. Check connectivity and credentials, then re-arm the poll."
     else
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — full procedure: ship/references/settle-then-admin-merge.md); else merge during a quieter window."
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — full procedure: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md); else merge during a quieter window."
     fi
     behind_warned=1
   fi
@@ -2386,7 +2398,6 @@ while true; do
   fi
   sleep 60
 done
-[[ -n "$SYNC_SNAP" ]] && rm -f "$SYNC_SNAP"
 # <!-- phase-7-poll-block:end -->
 ```
 
@@ -2400,13 +2411,13 @@ done
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
 
-**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt and stops on every other non-zero exit; the script's header carries the per-outcome rationale and `--help` prints the exit-code table. Fix sync behaviour there, never in this fence.
+**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop`: main already merged and pushed, GitHub's state lags) as uncounted and keeps polling, and stops on every other non-zero exit; `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On `[ship.phase7.sync_failed]`, do not hand a routine stop to the operator:** do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
 
 The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→BEHIND→BEHIND (every sync triggering a new commit on main) cannot spend the whole `MAX_POLL_MIN`-minute budget making no progress. After 6 syncs the loop emits a `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the diagnosis lands at the inflection point rather than at the timeout. At `fetch_failures=6/6` it names a network/credential failure instead of a fast-moving main.
 
 **ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` IS a required status check — [scripts/required-checks.txt](../../../../scripts/required-checks.txt) is the SSOT row, applied via [infra/github/ruleset-ci-required.tf](../../../../infra/github/ruleset-ci-required.tf) (#6049/#6050, 2026-07-05); read the current set with `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq '[.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]'` — and `main` enforces the strict up-to-date policy, so the collision is caught on the PR, not on `main`: the sync pushes a new head, the PR's `adr-ordinals` job re-runs red, and the required-check-failure exit below names it. The queued auto-merge does not fire and nothing lands red on `main` (an earlier revision of this paragraph said the opposite; #7941 corrected it — PR #5945's collision landed on `main` because the ruleset did not yet carry the check, which #6050 fixed two days later). What the loop does NOT do is renumber for you: whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push — that restarts the poll loop on a head that can go green. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
-**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 consecutive BEHIND syncs) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path.
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path.
 
 **Classify the failing STEP before exiting — a setup failure is not a red diff.** The exit below is correct to stop on a required-check failure, but the check NAME does not say whether your code failed or a tool download did. Before treating an exit as a diagnosis, read the failing step:
 
