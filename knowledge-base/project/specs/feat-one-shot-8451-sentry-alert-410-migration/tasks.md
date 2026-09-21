@@ -13,7 +13,7 @@ Plan: `knowledge-base/project/plans/2026-09-21-fix-sentry-alert-410-removed-api-
 ## Phase 2: Core implementation
 
 - [ ] 2.1 `tests/scripts/lib/sentry-alert-projection.jq`: TF-side exclusion (native OR legacy ∩ `excluded`) placed BEFORE `canon | map(tf_rule)`; a non-excluded legacy type raises `error(...)`; update the `excluded` comment.
-- [ ] 2.2 `scripts/sentry-issue-alert-create-tripwire.sh`: refuse `sentry_alert` create/update/replace whose after-legacy intersects `excluded` (single source or parity-pinned); reword the "exactly TWO" header and the `:88` message.
+- [ ] 2.2 `scripts/sentry-issue-alert-create-tripwire.sh`: refuse `sentry_alert` create/update/replace whose after-legacy intersects `excluded`. Keep ONE literal set: the projection jq cannot be `include`d because it ends in a top-level expression. Add a parity assertion against `def excluded` in the adoption-guards suite; reword the "exactly TWO" header and the `:88` message.
 - [ ] 2.3 `scripts/sentry-alert-live-fidelity.sh`: frozen-rule pin over every excluded-type live workflow against the phase34 capture.
 - [ ] 2.4 `apps/web-platform/infra/sentry/issue-alerts.tf`: two `removed{}` / `import{}` (566671, 669246) / `sentry_alert` triples with live-faithful values, `legacy_trigger_conditions`, `ignore_changes = all`, and INERT comments. The #6429 rationale goes directly above the sandbox resource header. Add the header supersession note. Run `terraform validate`.
 - [ ] 2.5 `.github/workflows/apply-sentry-infra.yml`:

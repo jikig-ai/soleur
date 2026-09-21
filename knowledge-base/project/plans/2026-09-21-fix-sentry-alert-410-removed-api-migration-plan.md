@@ -16,6 +16,44 @@ lane: cross-domain
 
 # fix(sentry): adopt the last two `sentry_issue_alert` rules as `sentry_alert` (410 "This API no longer exists")
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-21
+**Gates run:** 4.6 User-Brand Impact (pass), 4.7 Observability (fixed, see 1), 4.8 PAT-shaped
+(pass, 0 hits), 4.10 Encryption Posture (pass), 4.11 Guard Contract (`lint-guard-contract.py`:
+4 entries, green; assemblies are chokepoints, not member lists). 4.5, 4.55 and 4.9 do not
+trigger: no SSH or provisioner, no reboot/replace/lock class, no UI surface.
+
+### Key improvements
+
+1. **The Observability probe is executable and needs no credential.** `jikig-ai/soleur` is
+   PUBLIC (`gh repo view --json visibility`), so the `gh`-based probe with a
+   `credentials_required` waiver became an unauthenticated
+   `curl … /actions/workflows/apply-sentry-infra.yml/runs?branch=main&per_page=1 | jq …`.
+   Measured today it prints `failure`, the current red state. That proves the probe discriminates.
+2. **The tripwire's `excluded` source is corrected.** `tests/scripts/lib/sentry-alert-projection.jq`
+   ends in a top-level `if $side == … end`, so jq cannot `include` it as a module. The plan now
+   prescribes one literal plus a suite parity assertion.
+3. **The import + `ignore_changes` interaction is verified in Terraform source.** CI pins
+   `TERRAFORM_VERSION: "1.10.5"` (`apply-sentry-infra.yml:142`). In v1.10.5,
+   `node_resource_plan_instance.go:386` routes an importing instance through `plan()`, whose
+   `processIgnoreChanges(priorVal, …)` (`node_resource_abstract_instance.go:884`) compares
+   against the imported state. With `ignore_changes = all`, the import row plans as a no-op
+   whatever the config literals say. That is exactly why Guard 4's static half exists.
+
+### Citations re-verified live
+
+- Rule id `wg-when-deferring-a-capability-create-a` is active in AGENTS.md.
+- Labels `priority/p1-high`, `action-required`, `follow-through` and `ci/apply-sentry-infra`
+  exist.
+- #7826 is CLOSED by PR #7868 (the adoption-block retirement precedent).
+- Commits `a866e1f29` (#7988) and `72ebe67b7` (#7821) each carry `[ack-destroy]` in their bodies.
+- AP-021 is in `principles-register.md` and is enforced by `scripts/lint-diagnosis-claims.sh`.
+- The success-close step (`:1590`ff) closes **every** open `ci/apply-sentry-infra` issue, which
+  includes #8282.
+- Upstream releases: the latest is v0.15.7 (2026-09-02). `0deba79` sits on the provider's `main`
+  after v0.15.7, with `33584ae`, `d455248`, `b59481f` and others after it; none is released.
+
 ## Overview
 
 The spec has no valid `lane:`, so it defaulted to cross-domain (TR2 fail-closed).
@@ -316,9 +354,13 @@ Add one refusal next to the existing `sentry_issue_alert` create check. Refuse a
   / `["create","delete"]`);
 - `.change.after.legacy_trigger_conditions` shares a type with the projection's `excluded` set.
 
-Read that set from the same jq module rather than re-listing it, e.g.
-`jq -n -L tests/scripts/lib 'include "sentry-alert-projection"; excluded'` if the module is made
-includable. Otherwise keep a single literal and add a parity assertion in the suite. The message
+The projection file cannot be `include`d as a jq module as it stands: it ends in a top-level
+`if $side == … end` expression, and jq modules may contain only definitions (verified at deepen
+time). So the tripwire keeps **one literal** copy of the set, and
+`test-sentry-alert-adoption-guards.sh` asserts it equals
+`jq -n --arg side reference -f tests/scripts/lib/sentry-alert-projection.jq`'s `excluded`. The
+simplest way to read it: extract `def excluded: [...]` with a fixed-anchor `grep`, then compare
+sets with `jq`. A drift reds the suite. Do not split the projection into a module in this PR. The message
 names the address and says why: the provider would re-send the trigger with `comparison: true`
 and zero the paging threshold, and the remedy is #7985's native conversion. Import rows
 (`["no-op"]` + `importing`) are not refused.
@@ -532,9 +574,8 @@ logs:
   where: "GitHub Actions run logs for apply-sentry-infra.yml"
   retention: "GitHub default Actions log retention (90 days)"
 discoverability_test:
-  command: "gh run list --workflow apply-sentry-infra.yml --branch main --limit 1 --json conclusion --jq '.[0].conclusion'"
+  command: "curl -s --max-time 15 'https://api.github.com/repos/jikig-ai/soleur/actions/workflows/apply-sentry-infra.yml/runs?branch=main&per_page=1' | jq -r '.workflow_runs[0].conclusion'"
   expected_output: "success"
-  credentials_required: "gh read token for jikig-ai/soleur Actions — the property (main's Sentry plan is green) lives only in GitHub Actions run state; no unauthenticated endpoint exposes it"
 ```
 
 ## Encryption Posture
