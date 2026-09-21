@@ -145,6 +145,21 @@ suite for the files it opens and diff that list against the filter.
    non-event is a fabricated record. **Prevention:** the #6813 false-positive class; a diagnostic
    whose subject is outages will always trip a vocabulary gate, so state "no live event took place"
    in the body up front rather than after the gate names it.
+10. **I committed three times while the full battery was running**, which moved HEAD inside the
+   runner's read-only sampling window and produced `[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY`
+   naming whichever suite the run had reached. The runner's own text says it cannot attribute the
+   write to a suite. Recovery: read the FATAL as self-inflicted, not as a suite defect.
+   **Prevention:** already a documented sharp edge — land review fixes before the battery or after
+   it, or run it from a detached worktree at the SHA being certified. The pull to edit is strongest
+   exactly when the battery is long, which is when the window is widest.
+
+11. **The battery found a regression my file-based suite selection could not.**
+   `tests/scripts/test-inngest-volume-recut-gate.sh` reads `scripts/cutover-inngest.sh` — it was
+   selectable by a `git grep -l` over the changed files, and I ran only the `apps/web-platform/infra`
+   suites plus the named ratchets. **Prevention:** derive the suite set mechanically —
+   `git grep -ln '<changed-path>' -- 'tests/**' 'scripts/**' 'apps/**' 'plugins/**'` — rather than
+   from the directory the diff's biggest file lives in. Run that BEFORE the battery, so the battery
+   is confirmation rather than discovery.
 
 ## Tags
 
