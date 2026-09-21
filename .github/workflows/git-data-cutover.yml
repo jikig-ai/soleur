@@ -8,6 +8,9 @@
 #      (git-data-cutover.sh › access_gate);
 #   4. the store is mounted on a plaintext device, not already the LUKS mapper, and holds no
 #      repository (git-data-cutover.sh store probes).
+#   5. a push would run a root-owned pre-receive of the planted shape: ownership, the git
+#      user's access, the transport wrapper's pin and core.hooksPath, on the store device
+#      (git-data-cutover.sh › refuse_if_fence_not_intact, #8101; shape, not content).
 # The real cutover, rollback and wipe were deleted from the script: their freeze and reload
 # called systemd units that do not exist. They are rebuilt on real mechanisms in #8211.
 #

@@ -474,8 +474,11 @@ export function discoverMonitorsFromInfra(infraDir: string, vars: InfraVariables
   return declared;
 }
 /** (#8097) Every `logtail_exploration_alert` block in the root — the `logs_alert` arm's expected set. */
-export function discoverLogsAlertsFromInfra(infraDir: string): DiscoveredLogsAlert[] {
-  return discoverFromInfra(infraDir, "logtail_exploration_alert", parseLogsAlertBlocks);
+export function discoverLogsAlertsFromInfra(
+  infraDir: string,
+  vars: InfraVariables = resolveInfraVariables(infraDir),
+): DiscoveredLogsAlert[] {
+  return discoverFromInfra(infraDir, "logtail_exploration_alert", (t) => parseLogsAlertBlocks(t, vars));
 }
 
 /**
@@ -595,7 +598,7 @@ export async function runReconcile(
   }
   const hbDecl = discover(() => discoverHeartbeatsFromInfra(infraDir, vars), infraDir);
   const monDecl = discover(() => discoverMonitorsFromInfra(infraDir, vars), infraDir);
-  const alertDecl = discover(() => discoverLogsAlertsFromInfra(infraDir), infraDir);
+  const alertDecl = discover(() => discoverLogsAlertsFromInfra(infraDir, vars), infraDir);
   for (const d of [hbDecl, monDecl, alertDecl]) if (!d.ok) declMarkers.add(d.marker);
 
   // ── Arm 1: heartbeats (the original #6549 contract + #7884 unmanaged-live) ──
