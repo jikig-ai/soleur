@@ -25,7 +25,7 @@ Plan: `knowledge-base/project/plans/2026-09-21-feat-fsm-substeps-compound-skip-t
     - A key missing from the section map fails the test.
 - [x] 1.2 `scripts/classify-workflow-transitions.test.sh`
   - [x] 1.2.1 Case 14: keep the input and flip the assertion.
-    - `--summary` has `pairs=0 ` and `substep=1 `.
+    - `--summary` has `pairs=0` and `substep=1` (each with its trailing space).
     - No rows with `2>/dev/null`.
     - The `formed ZERO lifecycle pairs` warning is present.
   - [x] 1.2.2 Case 20: fix the comment ("keyed on the declared keys, never on `review`").
@@ -35,8 +35,8 @@ Plan: `knowledge-base/project/plans/2026-09-21-feat-fsm-substeps-compound-skip-t
     - The key list must equal the view's `sub_steps` keys minus `brainstorm`.
   - [x] 1.2.4 Case 36: `plan compound ship` gives the row `plan -> ship` with `substep=1`.
   - [x] 1.2.5 Case 37: `postmerge compound ship` gives the row `postmerge -> ship` with `substep=1`.
-  - [x] 1.2.6 Case 38: `plan`@:09 filed before `brainstorm`@:01 gives `undeclared=0` (pure ts order). Case 14's failure message prints `pairs` and `substep`.
-  - [x] 1.2.7 `MIN_CASES=38`, keeping `SELFTEST_PASSES=1` contiguous. Add a comment that the loop records one pass per key.
+  - [x] 1.2.6 Case 38: `plan`@:39 filed before `brainstorm`@:31 gives `undeclared=0` (pure ts order). Case 14's failure message prints `pairs` and `substep`.
+  - [x] 1.2.7 `MIN_CASES=39` (38 cases; the 33-35 loop records one pass per key plus a key-list pin), keeping `SELFTEST_PASSES=1` contiguous. Add a comment that the loop records one pass per key.
 - [x] 1.3 Run both suites. RED is expected on the pins, case 14, and cases 33–37. Case 38 and the anchor test are green from the start; each one's RED comes from its mutation row.
 
 ## Phase 2: GREEN — const, then mirror
@@ -56,7 +56,7 @@ Plan: `knowledge-base/project/plans/2026-09-21-feat-fsm-substeps-compound-skip-t
 - [x] 3.4 Replace the deferred-gate bullet with the compact D ruling (about 10 lines).
   - Include the D.2 issue number and the re-open trigger.
   - Add the false-deny reason to the existing gate Alternatives rows.
-- [x] 3.5 Verification: classifier floor 38, the coverage list, the key-set test, the anchor test.
+- [x] 3.5 Verification: classifier floor 39, the coverage list, the key-set test, the anchor test.
 - [x] 3.5.1 Reword "a future gate (below) have a typed source". Annotate the `plan → ship` (7) adoption sentence with the +3 laundered through `compound → ship`.
 - [x] 3.6 Dissent 1: operator adopted the floor (edit (a)), applied 2026-09-21.
 

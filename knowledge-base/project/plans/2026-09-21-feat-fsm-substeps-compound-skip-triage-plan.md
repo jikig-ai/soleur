@@ -316,59 +316,60 @@ and the log rotates, so that count could not be computed (CTO + DHH review).
 ### Phase 1 — RED: tests first
 
 1.1 In `plugins/soleur/test/workflow-fidelity.test.ts`:
-   - Change `DECLARED_SUB_STEPS is exactly the reviewed set` to
+
+- Change `DECLARED_SUB_STEPS is exactly the reviewed set` to
      `toEqual({ brainstorm: ["compound"], plan: ["compound"], postmerge: ["compound"], ship: ["compound"] })`.
-   - In the parity `describe`, add one test pinning the **view's** key sets by name:
+- In the parity `describe`, add one test pinning the **view's** key sets by name:
      `Object.keys(view.sub_steps).sort()` equals `["brainstorm","plan","postmerge","ship"]`, and
      `Object.keys(view.transitions).sort()` equals the seven nodes. A missing mirror key then
      fails with a named message instead of a deep diff. (This is the brief's "pin both key sets in the parity block".
      The simplicity reviewer judged it redundant with deep-equal plus the exact-set pin. That is recorded as a
      User-Challenge in `decision-challenges.md`, and the brief's direction is kept.)
-   - **SKILL.md anchor test (P7, CTO review; tightened at deepen by test-design review).** For every key of
+- **SKILL.md anchor test (P7, CTO review; tightened at deepen by test-design review).** For every key of
      `DECLARED_SUB_STEPS` and every value V, match `/skill: soleur:<V>(?![\w-])/` so that `compound-capture` does not
      match (`cq-assert-anchor-not-bare-token`). Scope the match to the section that owns the designed call, via a
      test-local map:
-     - `plan` → `## Exit Gate`
-     - `postmerge` → `## Phase 6: Update Issue and Compound`
-     - `ship` → `## Phase 2: Capture Learnings`
-     - `brainstorm` → the whole file. Its one call sits under a heading inside a fenced template, so H2 scoping is unreliable there.
-     Scope = the text from that H2 to the next `^## `. A file-wide match is not enough for ship: it has 5
+  - `plan` → `## Exit Gate`
+  - `postmerge` → `## Phase 6: Update Issue and Compound`
+  - `ship` → `## Phase 2: Capture Learnings`
+  - `brainstorm` → the whole file. Its one call sits under a heading inside a fenced template, so H2 scoping is unreliable there.
+     Scope = the text from that H2 to the next `^##`. A file-wide match is not enough for ship: it has 5
      occurrences, including the Headless-Mode line 45, which would survive deleting Phase 2 entirely.
      Assert the number of checks performed equals `Object.values(DECLARED_SUB_STEPS).flat().length` and is > 0,
      so that `ship: []` or an emptied const cannot pass as zero iterations. A key missing from the section map
      fails the test, so a new entry must name its anchor.
      If a later edit moves ship's Phase 2 call, the `ship` entry then fails loudly instead of collapsing silently.
 1.2 In `scripts/classify-workflow-transitions.test.sh`:
-   - **Case 14 assertion flip.** Keep the input as it is: file order `compound`@15:09, `ship`@15:01.
-     Change the expected result from the row `ship -> compound` to `--summary` containing `pairs=0 `
-     and `substep=1 `, with no row. Assert it the way cases 17 and 19 do (Kieran review):
-     - take `--summary` for the `pairs=0 ` and `substep=1 ` substrings;
-     - capture rows with `2>/dev/null`;
-     - assert the `formed ZERO lifecycle pairs` WARNING on the `2>&1` capture.
+- **Case 14 assertion flip.** Keep the input as it is: file order `compound`@15:09, `ship`@15:01.
+     Change the expected result from the row `ship -> compound` to `--summary` containing `pairs=0`
+     and `substep=1`, with no row. Assert it the way cases 17 and 19 do (Kieran review):
+  - take `--summary` for the `pairs=0` and `substep=1` substrings;
+  - capture rows with `2>/dev/null`;
+  - assert the `formed ZERO lifecycle pairs` WARNING on the `2>&1` capture.
      A bare `-z` check on the old `2>&1` capture would stay red forever, because the WARNING is in it.
      Rewrite the comment to cite ADR-229 (#8399 amendment). Say why the case still pins ts order:
      unsorted file order would pair the declared `compound -> ship` and give `pairs=1 substep=0`.
-   - **Case 20 comment.** Change "keyed on brainstorm" to "keyed on the declared keys, never on
+- **Case 20 comment.** Change "keyed on brainstorm" to "keyed on the declared keys, never on
      `review`". The fixture is unchanged.
-   - **New cases 33–37** (`new_root` + `emit_to`, real view copied).
+- **New cases 33–37** (`new_root` + `emit_to`, real view copied).
      Write 33–35 as ONE loop over `K:X` in `plan:work postmerge:work ship:postmerge`, one `pass`/`fail` per key
      (DHH review). **[Deepened, test-design review]:**
-     - Each iteration gets its own `new_root "sub33-$K"`.
-     - Assertions keep the trailing space (`"pairs=1 "`), so that `=1` cannot match `=10`.
-     - Before the loop, assert the loop's key list equals `jq -r '.sub_steps|keys[]'` of the real view minus
+  - Each iteration gets its own `new_root "sub33-$K"`.
+  - Assertions keep the trailing space (`"pairs=1 "`), so that `=1` cannot match `=10`.
+  - Before the loop, assert the loop's key list equals `jq -r '.sub_steps|keys[]'` of the real view minus
        `brainstorm`, which case 17 covers. A future fifth key then fails instead of silently getting no case.
-     - 33 `plan compound work` → `undeclared=0 pairs=1 substep=1`, no row (plan's exit gate).
-     - 34 `postmerge compound work` → `undeclared=0 pairs=1 substep=1`, no row (postmerge's closing step).
-     - 35 `ship compound postmerge` → `undeclared=0 pairs=1 substep=1`, no row (ship Phase 2).
-     - 36 `plan compound ship` → row `plan -> ship`, with `substep=1 undeclared=1`. This is the exposure: before the change the only row was `plan -> compound`.
-     - 37 `postmerge compound ship` → row `postmerge -> ship`, with `substep=1 undeclared=1`.
-   - **Case 38 (new, test-design review).** A pure timestamp-order case with no sub-step involved: `plan`@:09
+  - 33 `plan compound work` → `undeclared=0 pairs=1 substep=1`, no row (plan's exit gate).
+  - 34 `postmerge compound work` → `undeclared=0 pairs=1 substep=1`, no row (postmerge's closing step).
+  - 35 `ship compound postmerge` → `undeclared=0 pairs=1 substep=1`, no row (ship Phase 2).
+  - 36 `plan compound ship` → row `plan -> ship`, with `substep=1 undeclared=1`. This is the exposure: before the change the only row was `plan -> compound`.
+  - 37 `postmerge compound ship` → row `postmerge -> ship`, with `substep=1 undeclared=1`.
+- **Case 38 (new, test-design review).** A pure timestamp-order case with no sub-step involved: `plan`@:09
      filed before `brainstorm`@:01.
-     - Sorted, the pair is `brainstorm -> plan`, which is declared: `undeclared=0`.
-     - Unsorted, it would be the undeclared `plan -> brainstorm`.
+  - Sorted, the pair is `brainstorm -> plan`, which is declared: `undeclared=0`.
+  - Unsorted, it would be the undeclared `plan -> brainstorm`.
      This restores a single-property ts-order case, since case 14 now also pins B. Case 14's failure message
      prints `pairs` and `substep`.
-   - Raise `MIN_CASES=32` to `MIN_CASES=38`, keeping the literal `SELFTEST_PASSES=1` contiguous
+- Raise `MIN_CASES=32` to `MIN_CASES=38`, keeping the literal `SELFTEST_PASSES=1` contiguous
      (the guard-vacuity-floor shape).
      Add a comment beside `MIN_CASES`: the 33–35 loop records ONE pass per key, unlike the one-pass loops in cases
      26 and 29. Collapsing it to one pass would silently make the floor 36.
@@ -380,12 +381,13 @@ and the log rotates, so that count could not be computed (CTO + DHH review).
 ### Phase 2 — GREEN: const, then mirror
 
 2.1 `plugins/soleur/lib/workflow-fidelity.ts`:
-   - Set `DECLARED_SUB_STEPS` to the four entries.
-   - Rewrite the doc comment so it names each entry's SKILL.md anchor: brainstorm handoff,
+
+- Set `DECLARED_SUB_STEPS` to the four entries.
+- Rewrite the doc comment so it names each entry's SKILL.md anchor: brainstorm handoff,
      `plan/SKILL.md` §Exit Gate step 1, `postmerge/SKILL.md` closing step before Phase 7,
      `ship/SKILL.md` §Phase 2 (Capture Learnings).
-   - Name the one entry the rules forbid and why: `review` → `compound` is a declared successor.
-   - Keep the "To add an entry" paragraph verbatim.
+- Name the one entry the rules forbid and why: `review` → `compound` is a declared successor.
+- Keep the "To add an entry" paragraph verbatim.
 2.2 `.claude/workflow-transitions.json`: mirror `sub_steps` exactly in key order, with the same
    2-space `jq`-style formatting. Change the `_comment` only if it names brainstorm specifically
    (it does not today).
@@ -533,6 +535,7 @@ discoverability_test:
 **Assembly.** There is one chokepoint for the classifier: the view's `sub_steps`, read as `$SUB`
 in `scripts/classify-workflow-transitions.sh`. It is fed only by a hand mirror of
 `DECLARED_SUB_STEPS`. The guard therefore has three members that must agree:
+
 - the TS const, pinned by `toEqual`;
 - the view, pinned by the parity deep-equal, the new key-set test, and "names no sub-step absent from the const";
 - the entry rules, in the three invariant tests.
@@ -672,3 +675,12 @@ Result on 2026-09-21: 17 rows. 12 are followed by `preflight`. 15 have a gap of 
   - Agents: architecture-strategist, test-design-reviewer, and a sonnet verification sweep (9/9 citations confirmed).
   - Applied from architecture review: B nesting measured (12/17 inside ship), the D.2 nuance, the ADR stale-sentence list, the procedure moved into the D.2 issue, and the AC6/Phase 3 Alternatives contradiction fixed.
   - Applied from test-design review: section-scoped, word-bounded anchor test with a check-count guard; loop key-list check, per-iteration roots and trailing-space assertions; case 38; `MIN_CASES=38` with a comment.
+
+## Addendum — 2026-09-21 (work + review corrections)
+
+- `MIN_CASES` is **39**, not 38: 38 cases, and the 33-35 loop records one pass per key plus a key-list pin. The loop now iterates `LOOP_KEYS` itself, so the pin constrains the cases that run.
+- Case 38 uses `plan`@:39 filed before `brainstorm`@:31 (same property as the :09/:01 wording above).
+- C triage, re-derived by the executable procedure now in #8470: of the 38 class-D rows, **18** show `preflight` AFTER the ship record (19 counted preflight anywhere in the session, which does not prove ship ran past Phase 2) and **20** carry the no-plan/work-before-review flag. Class totals 5/4/4/38 reproduce.
+- Brainstorm's anchor is scoped to `### Phase 4: Handoff`; its call is not inside a fence (the hazard is the fenced `## Domain Assessments` earlier in the file).
+- Operator answered dissent 1: adopt the floor. The PR closes #8399.
+- ADR-229's re-open trigger no longer fires "when #8470 closes": the #8470 fix PR uses `Ref #8470`, and the issue closes after a re-run at ≥5 post-fix rows or six weeks.

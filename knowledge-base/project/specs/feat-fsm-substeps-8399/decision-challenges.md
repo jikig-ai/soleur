@@ -11,6 +11,7 @@ The plan follows the brief's stated direction in every case below; these are the
   - DHH: ship with `Ref #8399` and split dissent 1 into its own issue, so this PR does not wait on it.
 - **Why:** today's reading is `post=10 median_k=55`, so the rule and the floor agree and no verdict changes.
 - **Cost if the dissent is right:** #8399 stays open for one sentence of ADR text.
+- **Resolved 2026-09-21:** the operator was asked in-session and adopted the floor (edit (a)). Recorded in ADR-229 and on #8399; the PR closes #8399.
 
 ## 2. User-Challenge — the view key-set pin is redundant (code-simplicity plan review)
 

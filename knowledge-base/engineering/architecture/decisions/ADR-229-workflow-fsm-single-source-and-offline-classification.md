@@ -62,7 +62,8 @@ decision 3). **[Amended 2026-09-19 (#8325): the view also carries `sub_steps`,
 mirroring `DECLARED_SUB_STEPS` under the same parity block; it still has one
 consumer.]** **[Amended 2026-09-21 (#8399): `sub_steps` now carries `brainstorm`,
 `plan`, `postmerge` and `ship`, each anchored to the SKILL.md section that
-invokes `compound`; the view still has one consumer.]** A `bun -e` read of the const from that script was weighed at
+invokes `compound` (a textual anchor: it proves the call is named there, not
+that it is the only or an unconditional one); the view still has one consumer.]** A `bun -e` read of the const from that script was weighed at
 review (bun is present wherever the classifier runs) and not taken — see the
 Alternatives table — so the mirror stays.
 
@@ -178,7 +179,7 @@ the base, which closes the rename escape.
   i.e. exactly `substep`. `sessions` counts sessions forming at least one pair,
   so the 13 that were only `brainstorm compound` leave it. `ship → plan` (50),
   `postmerge → plan` (31), `review → ship` (51) and `plan → ship` (7) are
-  unchanged. **[Superseded for `plan → ship` and `postmerge → plan` by the
+  unchanged. **[Superseded for `plan → ship`, `ship → plan` and `postmerge → plan` by the
   2026-09-21 re-baseline below (#8399).]**
 - **Re-baselined 2026-09-21 (#8399, after `plan`, `postmerge` and `ship` gained
   the `compound` sub-step):** measured on ONE frozen copy of the log read by
@@ -189,7 +190,11 @@ the base, which closes the rename escape.
   −45 pairs / +45 substep; `ship` −21 / −17 / +17; combined −73 / −62 / +62 —
   pairs fall by exactly the substep increase, the same identity as above.
   Collapsed: `plan → compound` (31), `postmerge → compound` (14),
-  `ship → compound` (17) and the `compound → work` tails (13). **The collapse
+  `ship → compound` (17), the `compound → work` tails (13) and 9 other
+  `compound → X` tails (`→ postmerge` 5, `→ plan` 2, `→ review` 1,
+  `→ brainstorm` 1); the collapse adds 11 exposed pairs (the four named below
+  plus `postmerge → postmerge`, `postmerge → review`, `ship → brainstorm`,
+  +1 each): −84 + 11 = −73. **The collapse
   EXPOSES rather than hides:** `compound → ship` is declared, so `X compound
   ship` used to read as the benign `X → compound`; it now reads `X → ship`.
   `plan → ship` 7 → 10 and `postmerge → ship` 2 → 5 (a second ship after
@@ -312,7 +317,9 @@ the base, which closes the rename escape.
   classifier, because `one-shot` is not a node and its records are removed
   before pairing.
 - A gate remains buildable on top of this without rework: the edge set is
-  declarative and the classifier already resolves state per session.
+  declarative and the classifier already resolves state per session. Whether one
+  is warranted is deferred to the measurement this ADR makes possible, not to a
+  date. **[Ruled 2026-09-21 below.]**
   **Ruled 2026-09-21 (#8399): no gate.** (1) "Compound before ship" is the wrong
   invariant — ship Phase 2 runs compound inside ship, so a `PreToolUse(Skill
   ship)` gate would deny the designed path; only ship can enforce "compound ran
@@ -322,15 +329,24 @@ the base, which closes the rename escape.
   learning or an unarchived spec, both recoverable by a follow-up PR. The triage
   of `review → ship` (51 rows, 49 sessions): 5 compound ran inside ship, 4
   re-entry after an earlier compound, 4 compound later in the session, 38 with no
-  compound after review — 19 of those show `preflight`, so ship ran past Phase 2
+  compound after review — 18 of those show `preflight` after the ship record, so
+  ship ran past Phase 2
   without calling it. "A parent orchestrator ran compound and the log misses it"
   is falsified for Claude Code: a subagent's Skill calls are logged under the
   parent's `session_id`. The defect the 19 point at is ship Phase 2's repo-wide
   learning probe (`--since="1 week ago"`, non-empty in 12 of 12 sampled weeks),
   tracked with its fix path and the full triage in #8470. **Re-open trigger:**
-  when #8470 closes, re-run its triage on rows logged after the fix merged; if
-  full-pipeline rows with no compound anywhere after review (including inside
-  ship) still appear, the gate question re-opens on that evidence.
+  the PR fixing #8470 carries `Ref #8470`, never a closing keyword, and #8470
+  closes only after its triage procedure is re-run on rows logged after that
+  merge — once ≥5 full-pipeline `review → ship` rows exist, or six weeks after
+  the merge, whichever comes first (the same `n ≥ 5` floor as the extraction
+  reading above). Any class-D row in that run (no compound anywhere after review,
+  including inside ship) re-opens the gate question on that evidence. The option
+  the ruling actually chose over both gate shapes is a third one, not in the
+  Alternatives table: a branch-scoped check inside ship Phase 2 (#8470). Known
+  unmodelled designed call: ship Phase 1.5 can run `review` inside ship, which
+  neither the edge set nor `sub_steps` expresses, so `ship review compound
+  postmerge` reads `ship → review` plus `compound → postmerge`.
 
 ## Verification
 

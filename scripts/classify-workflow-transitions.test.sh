@@ -247,8 +247,9 @@ fi
 # order it is ship, compound, and since ADR-229's #8399 amendment `compound` is a
 # designed sub-step of `ship` (ship Phase 2), so the sorted stream collapses to
 # pairs=0 substep=1. Unsorted file order would pair the declared compound -> ship
-# instead (pairs=1 substep=0), so the case still pins the sort. Case 38 pins ts
-# order alone, with no sub-step involved.
+# instead (pairs=1 substep=0), so the case still pins the sort. It therefore
+# fails for EITHER a missing sort or a missing ship sub-step; case 38 pins ts
+# order alone, with no sub-step involved, so check 38 first.
 ORD="$TMP_ROOT/order"; mkdir -p "$ORD/.claude"
 cp "$ROOT/.claude/workflow-transitions.json" "$ORD/.claude/"
 olog="$ORD/.claude/.skill-invocations.jsonl"
@@ -592,8 +593,10 @@ fi
 # Gate), postmerge (Phase 6) and ship (Phase 2). The loop covers every key except
 # brainstorm (cases 17-28); its key list is pinned to the real view first, so a
 # fifth key fails here instead of silently getting no case.
+# The loop below iterates THIS list, so the pin constrains the cases actually run.
+declare -A NEXT=([plan]=work [postmerge]=work [ship]=postmerge)
 LOOP_KEYS="plan postmerge ship"
-VIEW_KEYS=$(jq -r '.sub_steps | keys[] | select(. != "brainstorm")' "$ROOT/.claude/workflow-transitions.json" | sort | tr '\n' ' ')
+VIEW_KEYS=$(jq -r '.sub_steps | keys[] | select(. != "brainstorm")' "$ROOT/.claude/workflow-transitions.json" | tr '\n' ' ')
 if [[ "$VIEW_KEYS" == "$LOOP_KEYS " ]]; then
   pass "the 33-35 loop covers every non-brainstorm sub_steps key of the real view"
 else
@@ -601,8 +604,8 @@ else
 fi
 
 # --- 33-35. K compound X pairs as the declared K -> X, with no row -------------
-for kx in plan:work postmerge:work ship:postmerge; do
-  K=${kx%%:*}; X=${kx#*:}
+for K in $LOOP_KEYS; do
+  X=${NEXT[$K]}
   R=$(new_root "sub33-$K")
   emit_to "$R" 2026-09-18T23:00:00Z "$K"   "s33$K"
   emit_to "$R" 2026-09-18T23:01:00Z compound "s33$K"
@@ -623,7 +626,7 @@ R36=$(new_root sub36)
 emit_to "$R36" 2026-09-18T23:10:00Z plan     s36
 emit_to "$R36" 2026-09-18T23:11:00Z compound s36
 emit_to "$R36" 2026-09-18T23:12:00Z ship     s36
-O36=$(CLASSIFY_REPO_ROOT="$R36" bash "$SUT" 2>/dev/null); C36=$?
+O36=$(CLASSIFY_REPO_ROOT="$R36" bash "$SUT" 2>&1); C36=$?
 S36=$(CLASSIFY_REPO_ROOT="$R36" bash "$SUT" --summary 2>/dev/null)
 if [[ "$C36" -eq 0 && "$O36" == *"plan -> ship"* && "$S36" == *"substep=1 "* && "$S36" == *"undeclared=1 "* ]]; then
   pass "plan compound ship reports plan -> ship (substep=1 undeclared=1): the review skip is exposed"
@@ -636,7 +639,7 @@ R37=$(new_root sub37)
 emit_to "$R37" 2026-09-18T23:20:00Z postmerge s37
 emit_to "$R37" 2026-09-18T23:21:00Z compound  s37
 emit_to "$R37" 2026-09-18T23:22:00Z ship      s37
-O37=$(CLASSIFY_REPO_ROOT="$R37" bash "$SUT" 2>/dev/null); C37=$?
+O37=$(CLASSIFY_REPO_ROOT="$R37" bash "$SUT" 2>&1); C37=$?
 S37=$(CLASSIFY_REPO_ROOT="$R37" bash "$SUT" --summary 2>/dev/null)
 if [[ "$C37" -eq 0 && "$O37" == *"postmerge -> ship"* && "$S37" == *"substep=1 "* && "$S37" == *"undeclared=1 "* ]]; then
   pass "postmerge compound ship reports postmerge -> ship (substep=1 undeclared=1)"

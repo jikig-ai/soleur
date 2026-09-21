@@ -198,12 +198,14 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
  * makes the call (pinned by the anchor test in workflow-fidelity.test.ts):
  *   - brainstorm: runs `compound` to capture learnings, then hands off to
  *     `plan`, so the log shows `brainstorm compound plan` for the handoff.
- *   - plan: §Exit Gate step 1 runs `compound` (direct invocation).
+ *   - plan: §Exit Gate step 1 runs `compound` (direct invocation only; in a
+ *     pipeline the gate is skipped and the entry is simply unused — sound
+ *     either way, since `plan -> work` is the only pair it can declare).
  *   - postmerge: §Phase 6 (Update Issue and Compound) runs `compound`.
  *   - ship: §Phase 2 (Capture Learnings) runs `compound` inside ship.
  * The classifier drops a record whose skill is a sub-step of the PREVIOUS KEPT
  * node before pairing, so `plan compound work` pairs as `plan -> work`. This is
- * NOT an edge: `X -> compound` and `compound -> Y` stay undeclared, and because
+ * NOT an edge: no `K -> compound` edge is declared for any key K, and because
  * the collapse joins K to its NEXT node, `plan compound ship` surfaces as the
  * review skip `plan -> ship` instead of hiding behind the declared
  * `compound -> ship` (#8399). `review: ["compound"]` is the entry the rules
