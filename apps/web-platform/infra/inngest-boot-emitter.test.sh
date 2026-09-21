@@ -480,6 +480,7 @@ EPH
     if "$fn" "$m"; then fail "$label — mutant SURVIVED"; else pass "$label — mutant killed"; fi
   }
   # Harness row: prove the landed-diff check itself fires (G1 row 13 shape, applied here too).
+  # shellcheck disable=SC2034 # read inside the eval string of the assert below
   HARNESS_PROBE="$(mutant_red "probe" 's/THIS-STRING-IS-NOT-IN-THE-BODY/x/' case_happy 2>&1; true)"
   assert "harness: a mutation that matches nothing is reported as HARNESS ABORT, never as a verdict" \
     "grep -qF 'HARNESS ABORT' <<<\"\$HARNESS_PROBE\""
