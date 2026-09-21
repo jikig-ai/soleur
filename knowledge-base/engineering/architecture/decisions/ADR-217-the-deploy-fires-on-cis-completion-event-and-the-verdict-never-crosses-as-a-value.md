@@ -393,8 +393,11 @@ form.
 > <sha>`), and a later run whose SHA descends from the merge also delivers it.
 > `plugins/soleur/scripts/deploy-arm.sh` is the single place this is decided; ship
 > and postmerge call it rather than restating a selector. It depends on the
-> `actions/checkout` fetch line and on the workflow's echo, both pinned by static rows
-> in `plugins/soleur/test/deploy-arm.test.sh`.
+> `actions/checkout` fetch line (`[command]… --depth=1 origin <sha>`, whose format the
+> checkout action owns; the live smoke in #8492 re-proved it) and falls back to the
+> workflow's own `resolving deploy target for` echo. Static rows in
+> `plugins/soleur/test/deploy-arm.test.sh` pin the checkout `ref:` pin and that echo
+> inside the `resolve-target` job.
 
 ## Alternatives Considered
 

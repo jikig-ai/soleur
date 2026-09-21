@@ -61,21 +61,30 @@ row() { # row <id> <want KILLED|SURVIVED> <old> <new> [count] [env...]
 }
 
 # Guard 1 — selection.
-row G1-1 KILLED 'done < <(sort -r "$fg")|||if [[ "${C_CLASS[n]}" == "exact" ]] && delivering "${C_DEPLOY[n]}"; then arm_line "$n"; return 0; fi' \
+row G1-1 KILLED 'done < <(LC_ALL=C sort -r "$fg")|||if [[ "${C_CLASS[n]}" == "exact" ]] && delivering "${C_DEPLOY[n]}"; then arm_line "$n"; return 0; fi' \
   'done < "$fg"|||C_CLASS[n]=exact; C_SHA[n]=$MERGE; C_DEPLOY[n]=success; arm_line "$n"; return 0' 1
 row G1-2 KILLED 'gh api --allow-escape-sequences ' 'gh api ' 1
 row G1-3 KILLED 'C_CLASS[i]="unresolved"; C_CAUSE[i]="log_read_failed"' 'C_CLASS[i]="reject"; C_CAUSE[i]="log_read_failed"' 1
 row G1-4 KILLED 'rc="$(ancestry "$MERGE" "$d")"' 'rc="$(ancestry "$d" "$MERGE")"' 1
-row G1-5 KILLED 'pending) blk_pending=1 ;;' 'pending) : ;;' 1
+row G1-5 KILLED 'pending) any_pending=1 ;;' 'pending) : ;;' 1
 row G1-6 KILLED '    (( C_CREATED[i] >= ci_started_e )) || continue
     delivering "${C_DEPLOY[i]}" && best="$i"' '    delivering "${C_DEPLOY[i]}" && (( best < 0 )) && best="$i"' 1
-row G1-7 KILLED 'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" {GT} "$lf" 2{GT}{GT}"$TMP/gh.err"; then' \
-  'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" 2{GT}{GT}"$TMP/gh.err" | grep -m1 -E "depth=1 origin|resolving deploy target" {GT} "$lf"; then' 1
+row G1-7 KILLED 'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" {GT} "$lf" 2{GT}"$TMP/gh.err"; then' \
+  'if gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$rt/logs" 2{GT}"$TMP/gh.err" | grep -m1 -E "depth=1 origin|resolving deploy target" {GT} "$lf"; then' 1
 row G1-8 KILLED '  fetch_default
   while IFS=' '  while IFS=' 1
 row G1-9 KILLED '[[ "$wc" == "failure" || "$wc" == "timed_out" ]] && { printf '"'"'blocked'"'"'; return 0; }' \
   '[[ "$wc" == "failure" || "$wc" == "timed_out" ]] && { printf '"'"'skipped'"'"'; return 0; }' 1
 row G1-10 KILLED '^(success|failure|blocked|pending)$' '^(success|failure|blocked|pending|superseded)$' 1
+
+row G1-11 KILLED '(( any_pending )) && { EV_LINE="ARM=none REASON=arm_pending"; EV_RC=4; return 0; }' ':' 1
+row G1-12 KILLED 'if [[ "$FETCH_OK" == 1 ]] && ! git cat-file' 'if false && ! git cat-file' 1
+row G1-13 KILLED "'^[0-9T:.Z-]+ resolving deploy target for" "'resolving deploy target for" 1
+row G1-14 KILLED '[[ "${C_CLASS[i]}" == "descendant" && "${C_DEPLOY[i]}" == "success" ]] && { best="$i"; break; }' ':' 1
+row G1-15 KILLED 'if [[ "$(job_field "$jf" deploy 6)" == "skipped" ]]; then printf '"'"'superseded'"'"'; else printf '"'"'success'"'"'; fi' 'printf '"'"'success'"'"'' 1
+row G1-16 KILLED '[[ "${C_CLASS[i]}" == "exact" ]] && (( C_CREATED[i] >= ci_started_e )) && best="$i"' '[[ "${C_CLASS[i]}" == "exact" ]] && best="$i"' 1
+row G1-17 KILLED '[[ "$WAIT" == 1 ]] && EV_RC=4' ':' 1
+row G1-18 KILLED 'if [[ "$rt_con" == "cancelled" || "$rt_con" == "skipped" ]]; then' 'if false; then' 1
 
 # Guard 2 — containment.
 row G2-1 KILLED '  fetch_default

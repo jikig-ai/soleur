@@ -118,6 +118,7 @@ esac
 STUB
 cat > "$WORK/bin/curl" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_FX/curl.calls"
 n=$(( $(cat "$STUB_FX/curl.seq" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_FX/curl.seq"
 f="$STUB_FX/health.$n"; [[ -f "$f" ]] || f="$STUB_FX/health"
 [[ -f "$f" ]] && cat "$f"
@@ -184,15 +185,15 @@ runs_add() { # runs_add <file> <id> <created> <status> <conclusion|null>
     '.workflow_runs += [{id:$id, path:".github/workflows/web-platform-release.yml", event:"workflow_run", created_at:$cr, status:$s, conclusion:$c}]' \
     "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
-jobs() { # jobs <runid> <name:status:conclusion:completed_epoch>...
+jobs() { # jobs <runid> <name:status:conclusion:completed_epoch[:webhook_step_conclusion]>...
   local id="$1"; shift
-  local spec arr="[]" n st c t jid
+  local spec arr="[]" n st c t sc jid
   jid=$((id * 10))
   for spec in "$@"; do
-    IFS=: read -r n st c t <<< "$spec"
+    IFS=: read -r n st c t sc <<< "$spec"
     jid=$((jid + 1))
-    arr="$(jq --arg n "$n" --argjson id "$jid" --arg s "$st" --arg c "$c" --arg t "$t" \
-      '. += [{name:$n, id:$id, status:$s, conclusion:(if $c == "-" then null else $c end), completed_at:(if $t == "-" then null else ($t|tonumber|todate) end)}]' <<< "$arr")"
+    arr="$(jq --arg n "$n" --argjson id "$jid" --arg s "$st" --arg c "$c" --arg t "$t" --arg sc "${sc:-}" \
+      '. += [{name:$n, id:$id, status:$s, conclusion:(if $c == "-" then null else $c end), completed_at:(if $t == "-" then null else ($t|tonumber|todate) end), steps:(if $sc == "" then [] else [{name:"Deploy via webhook", conclusion:$sc}] end)}]' <<< "$arr")"
   done
   jq -n --argjson j "$arr" '{total_count:($j|length), jobs:$j}' > "$STUB_FX/jobs.$id.json"
 }
@@ -376,7 +377,7 @@ expect "S20 fresh merge without CI is ci_pending" "ARM=none REASON=ci_pending" 4
 new_fx
 runs_add "$(WIN)" 1024 $((NOW - 2300)) completed failure
 jobs 1024 "resolve-target:completed:success:$((NOW - 2240))" "verify-doppler-secrets:completed:failure:$((NOW - 2200))" "deploy:completed:skipped:$((NOW - 2200))"
-printf 'x --depth=1 origin %s\n' "$M" > "$STUB_FX/log.10241"
+printf '2026-09-21T08:44:53Z [command]/usr/bin/git fetch --depth=1 origin %s\n' "$M" > "$STUB_FX/log.10241"
 find_in_clone "$M"
 expect "S21 blocked, not skipped" "ARM=1024 DEPLOYED_SHA=$M MATCH=exact DEPLOY=blocked CI=success" 0
 
@@ -447,6 +448,144 @@ cases=$((cases + 1))
 if [[ "$(grep -c '^deploy-arm: waiting' "$LAST_ERR" || true)" == 1 ]]; then pass "S31 one progress line"
 else fail "S31 progress lines: $(grep -c '^deploy-arm: waiting' "$LAST_ERR" || true)"; fi
 
+
+echo "== find: review additions"
+LOGL() { printf '2026-09-21T08:44:53Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --depth=1 origin %s\n' "$1"; }
+
+# P1 pending deploy: the exact arm's deploy is still running -> rc 4 with the arm line.
+new_fx
+runs_add "$(WIN)" 2001 $((NOW - 2300)) in_progress null
+jobs 2001 "resolve-target:completed:success:$((NOW - 2240))" "deploy:in_progress:-:-"
+LOGL "$M" > "$STUB_FX/log.20011"
+find_in_clone "$M"
+expect "pending deploy -> rc 4 arm line" "ARM=2001 DEPLOYED_SHA=$M MATCH=exact DEPLOY=pending CI=success" 4
+arm "$(WIN)" 2002 $((NOW - 1000)) "$D"
+find_in_clone "$M"
+expect "pending exact arm outranks a later delivered descendant" "ARM=2001 DEPLOYED_SHA=$M MATCH=exact DEPLOY=pending CI=success" 4
+
+# The merge's own arm is created AFTER a descendant's (D's CI finished first) and is
+# still resolving -> never settle on the descendant.
+new_fx
+arm "$(WIN)" 2003 $((NOW - 2300)) "$D"
+runs_add "$(WIN)" 2004 $((NOW - 1000)) queued null
+jobs 2004 "resolve-target:queued:-:-"
+find_in_clone "$M"
+expect "later pending candidate blocks a descendant verdict" "ARM=none REASON=arm_pending" 4
+
+# A fork-shaped arm (sha not on main, unknown locally after a good fetch) is rejected.
+new_fx
+FORK="$(printf '%040d' 3 | tr 0 b)"
+arm "$(WIN)" 2005 $((NOW - 2300)) "$FORK"
+arm "$(WIN)" 2006 $((NOW - 1000)) "$D"
+find_in_clone "$M"
+expect "fork sha rejected, later descendant selected" "ARM=2006 DEPLOYED_SHA=$D MATCH=descendant DEPLOY=success CI=success" 0
+# ... and with an unreachable origin it is could-not-measure.
+git -C "$CLONE" remote set-url origin "file://$S/nonexistent.git"
+find_in_clone "$M"
+expect "unknown sha without a fetch -> unresolved ancestry_128" "ARM=none REASON=unresolved CAUSE=ancestry_128" 3
+
+# A commit on another branch that a local clone happens to hold is rejected too.
+new_fx
+arm "$(WIN)" 2007 $((NOW - 2300)) "$X"
+arm "$(WIN)" 2008 $((NOW - 1000)) "$D"
+find_in_clone "$M"
+expect "off-main sha rejected" "ARM=2008 DEPLOYED_SHA=$D MATCH=descendant DEPLOY=success CI=success" 0
+
+# --wait timeout paths.
+new_fx
+ci in_progress null $((NOW - 300)) $((NOW - 300)) $((NOW - 100)) 1
+find_in_clone --wait 2 "$M"
+expect "--wait timeout while CI pending" "ARM=none REASON=timeout LAST=ci_pending" 3
+new_fx
+runs_add "$(WIN)" 2009 $((NOW - 2300)) in_progress null
+jobs 2009 "resolve-target:completed:success:$((NOW - 2240))" "deploy:in_progress:-:-"
+LOGL "$M" > "$STUB_FX/log.20091"
+find_in_clone --wait 2 "$M"
+expect "--wait timeout while deploy pending keeps the arm id" "ARM=none REASON=timeout LAST=deploy_pending ARM=2009" 3
+new_fx
+echo 1 > "$STUB_FX/ci.rc"
+find_in_clone --wait 2 "$M"
+expect "--wait polls through gh failures" "ARM=none REASON=timeout LAST=error CAUSE=gh_failed" 3
+
+# Fast path: newest exact arm first.
+new_fx
+arm "$(FG)" 2010 $((NOW - 2300)) "$M" failure
+arm "$(FG)" 2011 $((NOW - 2000)) "$M"
+cp "$(FG)" "$(WIN)"
+find_in_clone "$M"
+expect "fast path takes the newest exact arm" "ARM=2011 DEPLOYED_SHA=$M MATCH=exact DEPLOY=success CI=success" 0
+
+# CI absent, delivered by a descendant.
+new_fx 900; no_ci
+arm "$(WIN)" 2012 $((NOW - 800)) "$D"
+find_in_clone "$M"
+expect "CI=absent on a descendant verdict" "ARM=2012 DEPLOYED_SHA=$D MATCH=descendant DEPLOY=success CI=absent" 0
+
+# The queries carry the merge sha and the window's lower bound.
+new_fx
+arm "$(WIN)" 2013 $((NOW - 2300)) "$M"
+find_in_clone "$M"
+for q in "actions/workflows/ci.yml/runs?head_sha=$M&event=push" "actions/runs?head_sha=$M&event=workflow_run" \
+         "created=%3E%3D$(iso $((NOW - 3000)))&"; do
+  cases=$((cases + 1))
+  if grep -qF -- "$q" "$STUB_FX/calls"; then pass "query carries ${q:0:40}"; else fail "query missing: $q"; fi
+done
+
+# Post-CI grace: CI just completed, the merge's own arm not created yet.
+new_fx
+ci completed success $((NOW - 3000)) $((NOW - 3000)) $((NOW - 60)) 1
+arm "$(WIN)" 2014 $((NOW - 2300)) "$A"
+find_in_clone "$M"
+expect "arm not created yet after a fresh CI completion" "ARM=none REASON=arm_pending" 4
+
+# CI re-run: attempt 1's exact arm is stale; wait for attempt 2's.
+new_fx
+ci completed success $((NOW - 3000)) $((NOW - 1500)) $((NOW - 1450)) 2
+arm "$(WIN)" 2015 $((NOW - 2300)) "$M"
+find_in_clone "$M"
+expect "re-run: attempt-1 arm is never the answer" "ARM=none REASON=arm_pending" 4
+
+# A cancelled resolve-target is dropped, not a blocker.
+new_fx
+runs_add "$(WIN)" 2016 $((NOW - 2300)) completed cancelled
+jobs 2016 "resolve-target:completed:cancelled:$((NOW - 2290))"
+arm "$(WIN)" 2017 $((NOW - 1000)) "$D"
+find_in_clone "$M"
+expect "cancelled resolve-target dropped" "ARM=2017 DEPLOYED_SHA=$D MATCH=descendant DEPLOY=success CI=success" 0
+
+# A commit subject echoed in the log cannot supply the fallback key line.
+new_fx
+arm "$(WIN)" 2018 $((NOW - 2300)) -
+printf '2026-09-21T08:44:55Z HEAD is now at 1234567 resolving deploy target for %s\n2026-09-21T08:45:02Z resolving deploy target for %s\n' "$A" "$M" > "$STUB_FX/log.20181"
+find_in_clone "$M"
+expect "forged subject line ignored" "ARM=2018 DEPLOYED_SHA=$M MATCH=exact DEPLOY=success CI=success" 0
+
+# Descendants: a later successful deploy wins over an earlier failed one.
+new_fx
+arm "$(WIN)" 2019 $((NOW - 2300)) "$D" failure
+arm "$(WIN)" 2020 $((NOW - 1000)) "$D"
+find_in_clone "$M"
+expect "successful descendant preferred" "ARM=2020 DEPLOYED_SHA=$D MATCH=descendant DEPLOY=success CI=success" 0
+
+# deploy concluded success but the ordering guard skipped the webhook -> superseded.
+new_fx
+runs_add "$(WIN)" 2021 $((NOW - 2300)) completed success
+jobs 2021 "resolve-target:completed:success:$((NOW - 2240))" "deploy:completed:success:$((NOW - 2200)):skipped"
+LOGL "$M" > "$STUB_FX/log.20211"
+find_in_clone "$M"
+expect "ordering-guard skip is superseded, not success" "ARM=2021 DEPLOYED_SHA=$M MATCH=exact DEPLOY=superseded CI=success" 0
+
+# Gate-job outcomes behind a skipped deploy.
+for pair in "timed_out:blocked" "cancelled:superseded"; do
+  IFS=: read -r mc want <<< "$pair"
+  new_fx
+  runs_add "$(WIN)" 2022 $((NOW - 2300)) completed failure
+  jobs 2022 "resolve-target:completed:success:$((NOW - 2240))" "migrate:completed:$mc:$((NOW - 2200))" "deploy:completed:skipped:$((NOW - 2200))"
+  LOGL "$M" > "$STUB_FX/log.20221"
+  find_in_clone "$M"
+  expect "migrate $mc -> DEPLOY=$want" "ARM=2022 DEPLOYED_SHA=$M MATCH=exact DEPLOY=$want CI=success" 0
+done
+
 echo "== contains / served"
 new_fx
 UNKNOWN="$(printf '%040d' 7 | tr 0 a)"
@@ -474,16 +613,52 @@ printf '{"status":"ok","build_sha":"%s"}' "$D" > "$STUB_FX/health"
 run_sut "$CLONE" served "$M"
 expect "S23 descendant build" "CONTAINS BUILD_SHA=$D" 0
 
+
+new_fx
+run_sut "$CLONE" contains "${M:0:7}" "$D"
+expect "contains short merge sha" "ERROR CAUSE=bad_input" 2
+run_sut "$CLONE" contains "$M"
+expect "contains with one argument" "ERROR CAUSE=bad_input" 2
+run_sut "$CLONE" served "$M" http://example.test/health
+expect "served refuses a non-https url" "ERROR CAUSE=bad_input BUILD_SHA=-" 2
+new_fx
+: > "$STUB_FX/health.1"
+printf '{"build_sha":"%s"}' "$M" > "$STUB_FX/health.2"
+run_sut "$CLONE" served "$M" https://example.test/health
+expect "served retries an empty body" "CONTAINS BUILD_SHA=$M" 0
+cases=$((cases + 1))
+if grep -qF -- '--url https://example.test/health' "$STUB_FX/curl.calls"; then pass "served passes its url to curl"
+else fail "served url not passed: $(tr '\n' '|' < "$STUB_FX/curl.calls")"; fi
+new_fx
+printf '{"build_sha":"%s"}' "$A" > "$STUB_FX/health"
+run_sut "$CLONE" served "$M"
+expect "served NOT_CONTAINED" "NOT_CONTAINED BUILD_SHA=$A" 1
+
+# The verdict-owning helper must be able to REJECT (a neutered expect() would pass all).
+_p1=$passes; _f1=$fails; _c1=$cases
+expect "expect() control (EXPECTED to fail)" "CONTAINS BUILD_SHA=never" 0 >/dev/null
+if [[ $((fails - _f1)) -ne 1 || $((passes - _p1)) -ne 0 ]]; then
+  printf '[FATAL] expect() cannot reject: passes moved %d, fails moved %d\n' "$((passes - _p1))" "$((fails - _f1))"; exit 1
+fi
+passes=$_p1; fails=$_f1; cases=$_c1
+
 # ---------------------------------------------------------------------------
-# Static rows — scoped to the named files only.
+# Static rows — scoped to the named files only, comment lines stripped.
 # ---------------------------------------------------------------------------
 echo "== static"
-FORBID_RE='head_sha=[^&" ]*&event=workflow_run|event=workflow_run&head_sha=|expected `build_sha`|build_sha == merge sha'
+FORBID_RE='head_sha=[^ "]*&[^ "]*event=workflow_run|event=workflow_run&[^ "]*head_sha=|-f head_sha=.*event=workflow_run|gh run list[^`|]*--event workflow_run[^`|]*--commit|gh run list[^`|]*--commit[^`|]*--event workflow_run|expected `build_sha`|build_sha == merge sha|"\$BUILD_SHA" = "\$MERGE_SHA"'
 # Self-test the regex before trusting it.
 cases=$((cases + 1))
 if grep -qE "$FORBID_RE" <<< 'actions/runs?head_sha=${MERGE_SHA}&event=workflow_run' \
   && grep -qE "$FORBID_RE" <<< 'require `/health` `build_sha == merge sha` before' \
+  && grep -qE "$FORBID_RE" <<< 'runs?event=workflow_run&per_page=5&head_sha=X' \
+  && grep -qE "$FORBID_RE" <<< 'runs?head_sha=X&per_page=5&event=workflow_run' \
+  && grep -qE "$FORBID_RE" <<< 'gh api runs -f head_sha=X -f event=workflow_run' \
+  && grep -qE "$FORBID_RE" <<< 'gh run list --commit X --event workflow_run' \
+  && grep -qE "$FORBID_RE" <<< 'test "$BUILD_SHA" = "$MERGE_SHA"' \
   && ! grep -qE "$FORBID_RE" <<< 'ci.yml/runs?head_sha=X&event=push' \
+  && ! grep -qE "$FORBID_RE" <<< '`gh run list --commit <sha>` returns; filter by `--event push` / `--event workflow_run`' \
+  && ! grep -qE "$FORBID_RE" <<< 'never a `head_sha=` query; `event=workflow_run` is the deploy arm' \
   && ! grep -qE "$FORBID_RE" <<< 'bash plugins/soleur/scripts/deploy-arm.sh find --wait X'; then
   pass "forbidden-selector regex self-test"
 else fail "forbidden-selector regex self-test"; fi
@@ -491,24 +666,25 @@ else fail "forbidden-selector regex self-test"; fi
 for f in "$POSTMERGE" "$SHIP"; do
   b="${f#"$REPO_ROOT"/}"
   cases=$((cases + 1))
-  if [[ -s "$f" ]] && grep -q 'deploy-arm\.sh' "$f"; then pass "$b calls deploy-arm.sh"
+  if [[ -s "$f" ]] && grep -qE 'deploy-arm\.sh (find|served)' "$f"; then pass "$b calls deploy-arm.sh"
   else fail "$b does not call deploy-arm.sh (or is missing)"; fi
   cases=$((cases + 1))
   if [[ -s "$f" ]] && ! grep -nE "$FORBID_RE" "$f" >/dev/null; then pass "$b carries no head_sha arm selector / string build_sha check"
   else fail "$b still selects by head_sha or compares build_sha: $(grep -nE "$FORBID_RE" "$f" | cut -c1-160 | head -3 | tr '\n' '|')"; fi
 done
 cases=$((cases + 1))
-if [[ -s "$POSTMERGE" ]] && grep -E 'grep -qE' "$POSTMERGE" | grep -q 'deploy-arm'; then pass "postmerge 3.7 gate regex watches deploy-arm.sh"
+if [[ -s "$POSTMERGE" ]] && grep -qE "^gh pr diff <number> --name-only \| grep -qE '[^']*plugins/soleur/scripts/deploy-arm\\\\\.sh'" "$POSTMERGE"; then pass "postmerge 3.7 gate regex watches deploy-arm.sh"
 else fail "postmerge 3.7 gate regex does not include deploy-arm"; fi
 
 # The workflow lines the script keys on.
 cases=$((cases + 1))
 if [[ -s "$RELEASE_WF" ]]; then
-  _blk="$(awk '/^  resolve-target:/{f=1; print; next} f && /^  [a-z][a-z0-9-]*:/{exit} f' "$RELEASE_WF")"
-  _ref="$(grep -n 'ref: \${{ github.event.workflow_run.head_sha || github.sha }}' <<< "$_blk" | head -1 | cut -d: -f1)"
+  _blk="$(awk '/^  resolve-target:/{f=1; print; next} f && /^  [a-z][a-z0-9-]*:/{exit} f' "$RELEASE_WF" | grep -v '^[[:space:]]*#')"
+  _co="$(grep -n 'uses: actions/checkout@' <<< "$_blk" | head -1 | cut -d: -f1)"
+  _ref="$(grep -nE '^ +ref: \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$' <<< "$_blk" | head -1 | cut -d: -f1)"
   _res="$(grep -n 'id: resolve$' <<< "$_blk" | head -1 | cut -d: -f1)"
-  if [[ -n "$_blk" ]] && ! grep -qE '^    name:' <<< "$_blk" && [[ -n "$_ref" && -n "$_res" ]] && (( _ref < _res )) \
-     && grep -qF 'echo "resolving deploy target for $WR_HEAD_SHA"' "$RELEASE_WF"; then
+  if [[ -n "$_blk" ]] && ! grep -qE '^    name:' <<< "$_blk" && [[ -n "$_co" && -n "$_ref" && -n "$_res" ]] && (( _co < _ref && _ref < _res )) \
+     && grep -qE '^ +echo "resolving deploy target for \$WR_HEAD_SHA"$' <<< "$_blk"; then
     pass "resolve-target: no name override, pinned checkout before resolve, echo present"
   else
     fail "resolve-target keying lines drifted (block=${#_blk}B ref=$_ref resolve=$_res)"
@@ -518,7 +694,7 @@ else fail "web-platform-release.yml missing"; fi
 # ---------------------------------------------------------------------------
 # Accounting.
 # ---------------------------------------------------------------------------
-MIN_CASES=51
+MIN_CASES=79
 echo
 printf '%d passed, %d failed, %d cases\n' "$passes" "$fails" "$cases"
 if [[ $((passes + fails)) -ne "$cases" ]]; then

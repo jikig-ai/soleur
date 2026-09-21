@@ -113,22 +113,23 @@ curl -sf --max-time 10 "<production-url>/health" | jq .
 
 Use `/health` (the public, middleware-/CSP-bypassed health route returning `{"status":"ok","version","build_sha","supabase","sentry",...}`), NOT `/api/health` — the latter is an authenticated API route that 307-redirects an unauthenticated probe to `/login`, so `curl -sf` fails and `HEALTH_VERIFIED` is left `false` even when production is healthy. For this repo, `build_sha` is judged by `deploy-arm.sh` below.
 
-**This repo (`web-platform-release.yml` present):** identify the deploy and what production serves, with literal arguments (no command substitution):
+**This repo (`web-platform-release.yml` present):** identify the deploy and what production serves, with literal arguments (no command substitution) and the FULL 40-hex merge sha (a short one matches nothing, #8135). First wait for `find` — it polls about once a minute for up to 120 polls and prints one line; watch it with the harness poller (**Claude:** Monitor tool, matching `^ARM=`; **Grok:** AwaitShell), never Bash `run_in_background`. Only once that line has arrived with rc ≠ 4, run `served`:
 
 ```bash
-bash plugins/soleur/scripts/deploy-arm.sh find --wait <full-merge-sha>   # background; one completion
+bash plugins/soleur/scripts/deploy-arm.sh find --wait <full-merge-sha>
 bash plugins/soleur/scripts/deploy-arm.sh served <full-merge-sha>
 ```
 
+First matching row wins:
+
 | `find` | `served` | result |
 |---|---|---|
-| `DEPLOY=success` | `CONTAINS` | verified (`MATCH=descendant` → "delivered by `<DEPLOYED_SHA>`") |
-| `DEPLOY=success` | `NOT_CONTAINED` | not verified — deploy said success, production does not serve the merge; report prominently |
-| `DEPLOY=failure\|blocked` | any | not verified — real deploy failure; name the job |
-| `DEPLOY=skipped` | any | not deployed by design (`CI=failure` → CI red, Phase 2) |
-| `DEPLOY=superseded` or rc 3 `ARM=none` | `CONTAINS` | verified — a later deploy (or a manual redeploy) delivered it |
-| rc 3 `ARM=none` | `NOT_CONTAINED\|UNRESOLVED` | not verified — report `REASON`/`CAUSE` |
 | any | `UNRESOLVED` | could-not-measure, never a mismatch |
+| rc 2 (`REASON=error`) | any | could-not-measure; report `CAUSE` |
+| `DEPLOY=skipped` | any | not deployed by design (`CI=failure` → CI red, Phase 2) |
+| `DEPLOY=success\|superseded`, or rc 3 `ARM=none` (incl. `timeout`) | `CONTAINS` | verified — `MATCH=descendant`/`superseded`/`ARM=none` mean a later deploy (or a manual redeploy) delivered it |
+| `DEPLOY=failure\|blocked` | `CONTAINS` | verified via a later deploy; still report this merge's own failed deploy and name the job |
+| any other | `NOT_CONTAINED` | not verified — report the `find` line; if it said `DEPLOY=success`, production does not serve the merge (lagging host or rollback): report prominently |
 
 **If health check succeeds:** HTTP 200 alone is NOT success — `/health` returns 200 with `status: "ok"` whatever the database state, and only `.supabase` flips to `"error"`. Require `jq -e '.supabase == "connected"'` (and, here, the table above) before recording the response and setting `HEALTH_VERIFIED=true`. A 200 with `supabase: "error"` is a production database outage: set `HEALTH_VERIFIED=false`, report it prominently, and diagnose per §Production Debugging (2026-09-15 post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
 
@@ -332,7 +333,7 @@ selector that returned another merge's arm, or none, while the real arm had depl
 - `exact` + `success` → `GATE-VALIDATED`. `descendant` + `success` → `GATE-VALIDATED (via <DEPLOYED_SHA>, run <ARM>)`.
 - `DEPLOY=skipped` → `GATE-NOT-EXERCISED`: the arm clean-skipped (docs-only; `CI=failure` → `ci_not_green`) — the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-217). Neither a failure nor a validation; the watch stays open until a merge that deploys.
 - `DEPLOY=superseded|blocked` → `GATE-INDETERMINATE — <DEPLOY>` (lock-queue cancellation; a resolve/migrate/verify job failed).
-- rc 3 `ARM=none` → `GATE-INDETERMINATE — <REASON> <CAUSE>`: absence of evidence, never a pass. rc 4 → still pending; poll.
+- rc 2/3 `ARM=none` (incl. `timeout`, `error`) → `GATE-INDETERMINATE — <REASON> <CAUSE>`: absence of evidence, never a pass. rc 4 → still pending; poll.
 - `descendant` + `failure` → `GATE-SUSPECT`: list `git log --oneline <merge>..<DEPLOYED_SHA>` beside this PR's gate diff — the failure may be the later merge's, so do not recommend an immediate revert.
 - `exact` + `failure` with a canary/sandbox rollback reason AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
 - Release failed with a non-gate reason (build, migration, unrelated infra): ordinary deploy failure — investigate normally; do not assume the gate.
