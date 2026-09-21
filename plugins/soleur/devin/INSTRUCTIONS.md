@@ -310,7 +310,7 @@ and retain incomplete status instead of silently skipping it.
 ## Devin-specific considerations
 
 - **Skill invocation**: Devin exposes Soleur skills as slash commands (`/soleur:<skill>`). The `/soleur:go`, `/soleur:sync`, and `/soleur:help` commands are also slash commands.
-- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool
+- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool. `subagent_explore` has NO exec/git tool — review-panel agents that must run `git diff` or execute test suites spawn as `subagent_general` with an explicit report-only contract (no worktree writes; scratch in `mktemp -d`), or they reconstruct diffs by file comparison at degraded fidelity (#8471).
 - **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially
 - **MCP servers**: Devin supports the same MCP server format as Claude, so existing servers should work without modification
