@@ -546,6 +546,7 @@
 - [Data Processing Agreement (Customer-facing template)](legal/data-processing-agreement-template.md)
 - [anthropic](legal/data-processing-agreements/anthropic.md)
 - [flagsmith](legal/data-processing-agreements/flagsmith.md)
+- [openai](legal/data-processing-agreements/openai.md)
 - [Soleur BYOK Delegation Consent Arrangement (Versioned In-App Consent)](legal/delegation-consent-side-letter-template.md)
 - [Reply — Convergence Corporate CLA request (SENT 2026-09-09)](legal/drafts/2026-09-04-convergence-ccla-reply.md)
 - [Execution reply — Convergence Corporate CLA (AWAITING OPERATOR SEND)](legal/drafts/2026-09-20-convergence-ccla-execution.md)
