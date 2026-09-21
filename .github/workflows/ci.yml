@@ -1604,10 +1604,9 @@ jobs:
           # unresolvable (which fails closed to applicable=true anyway).
           fetch-depth: 0
 
-      # (#8450) In-job applicability probe — REPORT-ONLY for the first push of
-      # this change; the heavy steps below gain `if:` gating in the follow-up
-      # commit once this verdict is observed correct on this PR's own diff.
-      # Deliberately NOT a detect-changes output + `needs:` edge: a failed
+      # (#8450) In-job applicability probe — verdict observed correct on this
+      # PR's own diff (report-only push), so the heavy steps below are gated on
+      # it. Deliberately NOT a detect-changes output + `needs:` edge: a failed
       # upstream job would needs-skip `e2e`, and a skipped required check posts
       # GREEN — the fail-open shape this file warns about. A classify-step
       # failure reds the job instead.
@@ -1629,22 +1628,33 @@ jobs:
           echo "applicable=$APPLICABLE" >> "$GITHUB_OUTPUT"
           echo "::notice::e2e applicable=$APPLICABLE (event=$EVENT_NAME)"
 
+      # The verdict must be legible in the run itself — a required check that
+      # silently does nothing reads as a green with no story.
+      - name: Record e2e skip verdict
+        if: steps.detect.outputs.applicable == 'false'
+        run: |
+          echo "::notice::e2e skipped: no app-affecting paths"
+          echo "**e2e skipped: no app-affecting paths** — classifier allowlist is \`knowledge-base/**\` + root \`*.md\` only (#8450)." >> "$GITHUB_STEP_SUMMARY"
+
       # setup-bun and its `unzip` prerequisite are both gone (ADR-191): this job's only
       # bun usage was the two installs below. The image ships Node 24, so no
       # actions/setup-node either — that is deliberate and unchanged.
       - name: Install dependencies
+        if: steps.detect.outputs.applicable == 'true'
         run: npm ci --ignore-scripts
 
       - name: Install web-platform dependencies
+        if: steps.detect.outputs.applicable == 'true'
         run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
       - name: Run E2E tests
+        if: steps.detect.outputs.applicable == 'true'
         run: npx playwright test
         working-directory: apps/web-platform
 
       - name: Upload test results on failure
-        if: failure()
+        if: failure() && steps.detect.outputs.applicable == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report

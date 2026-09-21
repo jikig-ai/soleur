@@ -22,8 +22,8 @@
 
 - [x] C.0 RED: write `plugins/soleur/test/ci-e2e-skip-anchors.test.sh` per Guard 1 matrix — must fail before the classifier exists
 - [x] C.1 Commit 1 (push alone): `scripts/ci-e2e-classify.sh` + `e2e` classify step (`fetch-depth: 0`) + `::notice::` report — no gating; allowlist = `knowledge-base/**` + root `*.md` only (NOT `docs/**`)
-- [ ] C.1a Observation gate: verify this PR's CI reports `applicable=true`; a `false` blocks the flip
-- [ ] C.2 Commit 2 (separate push): heavy steps `if: steps.detect.outputs.applicable == 'true'` + skip-verdict step (`::notice::` + `$GITHUB_STEP_SUMMARY`)
+- [x] C.1a Observation gate: verify this PR's CI reports `applicable=true`; a `false` blocks the flip
+- [x] C.2 Commit 2 (separate push): heavy steps `if: steps.detect.outputs.applicable == 'true'` + skip-verdict step (`::notice::` + `$GITHUB_STEP_SUMMARY`)
 - [x] C.3 Anchor audit: enumerate app-affecting trees; record accepted gap set in `measurements.md`
 - [x] C.4 `scripts/pr-fanout-ledger.txt` — `consequence` text only; `paths` flag stays `no`
 - [x] C.5 Verify `scripts/required-checks.txt` + canonical JSON unchanged; parity test green
