@@ -588,25 +588,25 @@ STUB
     f="$d/slice$i"
     _g3_run "$f" 410
     [[ "$rc" == "1" ]] || bad+=" slice$i:410:rc=$rc"
-    grep -F '::error::' <<<"$out" | grep -F 'on its only attempt' | grep -F 'sentry_alert.synthetic_one' | grep -qF 'sentry_issue_alert.synthetic_two' || bad+=" slice$i:410:annotation"
+    grep -qF 'sentry_issue_alert.synthetic_two' <<<"$(grep -F '::error::' <<<"$out" | grep -F 'on its only attempt' | grep -F 'sentry_alert.synthetic_one' || true)" || bad+=" slice$i:410:annotation"
     _g3_run "$f" mixed
     [[ "$rc" == "1" ]] || bad+=" slice$i:mixed:rc=$rc"
     # Only the 410 stanza's address may be named as a 410.
-    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:mixed:annotation"
-    ! grep -F '::error::' <<<"$out" | grep -qF 'synthetic_three' || bad+=" slice$i:mixed:names-non-410"
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:mixed:annotation"
+    ! grep -qF 'synthetic_three' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:mixed:names-non-410"
     _g3_run "$f" boxed
-    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:boxed:annotation"
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:boxed:annotation"
     _g3_run "$f" other
     [[ "$rc" == "1" ]] || bad+=" slice$i:other:rc=$rc"
     grep -qxF '::error::terraform plan failed (exit 1)' <<<"$out" || bad+=" slice$i:other:annotation"
     ! grep -qF '410' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:other:claims-410"
     _g3_run "$f" detail
-    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:detail:annotation"
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:detail:annotation"
     _g3_run "$f" spoof
-    grep -F '::error::' <<<"$out" | grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' || bad+=" slice$i:spoof:annotation"
-    ! grep -F '::error::' <<<"$out" | grep -qF 'warning' || bad+=" slice$i:spoof:vendor-text-as-address"
+    grep -qF 'HTTP 410 for sentry_alert.synthetic_one.' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:spoof:annotation"
+    ! grep -qF 'warning' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:spoof:vendor-text-as-address"
     _g3_run "$f" warn
-    ! grep -F '::error::' <<<"$out" | grep -qF 'synthetic_four' || bad+=" slice$i:warn:credited-warning"
+    ! grep -qF 'synthetic_four' <<<"$(grep -F '::error::' <<<"$out" || true)" || bad+=" slice$i:warn:credited-warning"
     _g3_run "$f" ok
     [[ "$rc" == "0" ]] && grep -qxF 'G3_REACHED_END' <<<"$out" || bad+=" slice$i:ok:rc=$rc"
   done
