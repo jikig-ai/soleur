@@ -22,7 +22,7 @@ mattpocock/skills peer audit (Tier 1, bundle 4) surfaced this axis. Soleur used 
 
 ### Measured behaviour (W0, 2026-09-21)
 
-Transcripts are in `knowledge-base/project/specs/feat-one-shot-8290-invocation-axis-budget-relief/w0/`.
+Transcripts are in `knowledge-base/project/specs/archive/20260921-162911-feat-one-shot-8290-invocation-axis-budget-relief/w0/`.
 
 | Harness (version) | Probe | Result |
 |---|---|---|
@@ -136,7 +136,7 @@ grep `knowledge-base/project/plans/` for the skill: a skill plans prescribe as a
 | A router skill for operator tooling | Not needed: `soleur:help` already lists every skill for the human and marks user-invoked ones |
 | A separate operator plugin | Out of scope |
 | Keep the cap at 2561 and leave 172 words of headroom | Not chosen: it lets the listing regrow to today's size without a reviewed bump |
-| **Positive-phrasing rewrite of the always-loaded rule corpus** (peer's writing-for-agents) | Not adopted: **INCONCLUSIVE; instrument validity limited** (B5, 2026-09-21). Pre-registered Δ = +8.0 pts, 2·SE [+0.2, +15.8] against a 10-pt MWE (648 calls, $48.85; verdict module sha256 `18c2481c…bf28` at 1a5b79261). A post-verdict audit found scorer false positives: the unbounded-output rule re-scores to Δ_r ≈ +0.037 and the aggregate to ≈ +5.6 pts, and empty answers scored as compliant. The run is evidence neither for nor against the rewrite. Rule bodies unchanged; no rejected-concepts entry. Machinery archived (restore from `pull/8484/head`). Record: `specs/feat-one-shot-8290-invocation-axis-budget-relief/b5-eval-results.md`; revisit: #8497 |
+| **Positive-phrasing rewrite of the always-loaded rule corpus** (peer's writing-for-agents) | Not adopted: **INCONCLUSIVE; instrument validity limited** (B5, 2026-09-21). Pre-registered Δ = +8.0 pts, 2·SE [+0.2, +15.8] against a 10-pt MWE (648 calls, $48.85; verdict module sha256 `18c2481c…bf28` at 1a5b79261). A post-verdict audit found scorer false positives: the unbounded-output rule re-scores to Δ_r ≈ +0.037 and the aggregate to ≈ +5.6 pts, and empty answers scored as compliant. The run is evidence neither for nor against the rewrite. Rule bodies unchanged; no rejected-concepts entry. Machinery archived (restore from `pull/8484/head`). Record: `specs/archive/20260921-162911-feat-one-shot-8290-invocation-axis-budget-relief/b5-eval-results.md`; revisit: #8497 |
 | Keep all 12 flips and teach plan/work to hand the flag and cron steps to the operator | Rejected in review: it knowingly ships a conflict with `wg-plan-prescribed-skills-must-run-inline` and leaves flags silently off, while the rule fix is out of this PR's scope |
 | Un-flip only the flag pair | Rejected: the cron refusal text would still contradict `soleur:schedule`'s in-place steps, to save 56 words |
 | Also un-flip flag-delete | Rejected: an irreversible prd delete no feature-build plan needs; the rule's `pending-operator` clause covers cleanup plans |

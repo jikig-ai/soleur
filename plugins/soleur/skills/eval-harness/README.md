@@ -166,7 +166,7 @@ harness ships false confidence — defer it whole instead. See
 
 B5 measured positive-led vs prohibition-led phrasing of four always-loaded rules (648 calls,
 2026-09-21). The verdict was INCONCLUSIVE with limited instrument validity, and the machinery was
-archived rather than kept: see `knowledge-base/project/specs/feat-one-shot-8290-invocation-axis-budget-relief/b5-eval-results.md`
+archived rather than kept: see `knowledge-base/project/specs/archive/20260921-162911-feat-one-shot-8290-invocation-axis-budget-relief/b5-eval-results.md`
 for the record and the recovery command, and #8497 for the rerun conditions.
 
 ## Files
