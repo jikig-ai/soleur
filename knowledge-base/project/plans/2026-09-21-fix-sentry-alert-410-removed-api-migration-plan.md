@@ -541,6 +541,7 @@ None.
 
 - **If this lands broken, the user experiences:** a fleet-wide agent-sandbox startup outage (the #5873 P0 class) or an auth redirect loop with **no page to the founder**. The adoption could zero or boolean-ize `sandbox-startup-failure`'s ">2 distinct tenants / 1h" or `auth-per-user-loop`'s ">3 distinct users / 5m" threshold, or destroy the rule outright.
 - **If this leaks, the user's workflow is exposed via:** no new exposure vector. No new data leaves any boundary. Both rules' payloads stay pseudonymized (`userIdHash`) and the email fallthrough recipients are unchanged (IssueOwners → ActiveMembers).
+- **The first apply also carries the backlog** merged while the root was wedged (measured on this PR's `plan_pr`): it creates `art17_erasure_incomplete` (the GDPR Art. 17 erasure-incomplete page) and `scheduled_devin_docs_drift`, and updates the two git-data boot alerts. Those are reviewed changes from already-merged PRs; the post-merge ACs name them exactly so any other row is a stop.
 - **Brand-survival threshold:** `single-user incident`. This is inherited from the #7650 migration lineage (these are paging rules for user-facing outages). CPO sign-off was obtained at plan time (below), and `soleur:engineering:review:user-impact-reviewer` runs at review.
 
 ## Observability
@@ -552,29 +553,36 @@ liveness_signal:
   alert_target: "red required check on the PR; on main, the job's if-failure filer opens a ci/apply-sentry-infra p1 issue (the #8282 channel)"
   configured_in: ".github/workflows/apply-sentry-infra.yml"
 error_reporting:
-  destination: "GitHub Actions ::error:: annotations on the plan step, plus the ci/apply-sentry-infra issue filer on main"
-  fail_loud: "::error::terraform plan failed (exit N): Sentry answered 410 … endpoint removed — on the first attempt"
+  destination: "layer 6: GitHub Actions workflow run log ::error:: annotations on the plan step, plus the ci/apply-sentry-infra issue filer on main"
+  fail_loud: "::error::terraform plan failed (exit N) on its only attempt: Sentry returned HTTP 410 for <addresses> — on the first attempt"
 failure_modes:
   - mode: "a resource still reads a removed Sentry endpoint (410)"
-    detection: "plan step greps got status 410 on first failure and emits the removal ::error::; job red"
+    detection: "layer 6: workflow run log ::error:: from the plan step's single-attempt 410 handler, naming the addresses"
     alert_route: "PR check red / ci/apply-sentry-infra issue on main"
-  - mode: "adoption plan is not exactly 2 forgets + 2 imports with 0 add/change/destroy"
-    detection: "scripts/sentry-adoption-plan-assert.sh at plan_pr and at apply (expected 2)"
+  - mode: "adoption plan is not exactly 2 forgets + 2 imports, an import adopts a different object, or any row deletes/replaces"
+    detection: "layer 6: workflow run log ::error:: from scripts/sentry-adoption-plan-assert.sh at plan_pr and at apply (expected 2); backlog rows listed as ::notice::"
     alert_route: "job red before apply; nothing written"
-  - mode: "a threshold-rewriting write (create, update or replace) is planned for a legacy-trigger sentry_alert"
-    detection: "scripts/sentry-issue-alert-create-tripwire.sh refuses the plan at plan_pr and at apply, before terraform apply (Guard 2); Update is also structurally absent under ignore_changes = all"
+  - mode: "a threshold-rewriting write (create, update or replace) is planned for a sentry_alert carrying a legacy trigger"
+    detection: "layer 6: workflow run log ::error:: from scripts/sentry-issue-alert-create-tripwire.sh at plan_pr and at apply, before terraform apply (Guard 2); Update is also structurally absent under ignore_changes = all"
     alert_route: "PR check red / apply job red before any write; the ci/apply-sentry-infra issue filer on main"
-  - mode: "a frozen rule is disabled, re-thresholded, rebound or stripped of its action in the Sentry UI"
-    detection: "scripts/sentry-alert-live-fidelity.sh frozen-rule pin against the committed capture (Guard 4), post-apply and daily"
+  - mode: "a frozen rule is deleted, disabled, re-thresholded, rebound, re-filtered or has its action changed in the Sentry UI"
+    detection: "layer 6: workflow run log of the post-apply fidelity step and of scheduled-sentry-alert-drift.yml, from the scripts/sentry-alert-live-fidelity.sh frozen-rule pin against the committed capture (Guard 4)"
     alert_route: "post-apply probe failure / scheduled-sentry-alert-drift.yml filed issue"
   - mode: "TF and live fidelity projections disagree on rule scope"
-    detection: "scripts/sentry-alert-reference-gate.sh at plan_pr; post-apply live probe"
+    detection: "layer 6: workflow run log ::error:: from scripts/sentry-alert-reference-gate.sh at plan_pr; post-apply probe"
     alert_route: "PR check red / post-apply probe failure"
+  - mode: "the create gate cannot bound its window (last-applied lookup fails, no applied run in the page, or the SHA is not an ancestor)"
+    detection: "layer 6: workflow run log ::error:: from scripts/sentry-last-applied-sha.sh or the ancestry refusal, which names which"
+    alert_route: "PR check red / apply job red before any write; ci/apply-sentry-infra issue on main"
+  - mode: "#7985 is unblocked (a provider release contains 0deba79) but the frozen rules are not converted"
+    detection: "follow-through sweeper comment on #7985 carrying the probe's 'FAIL: ACTION REQUIRED — unblocked' line"
+    alert_route: "#7985 issue comment"
 logs:
-  where: "GitHub Actions run logs for apply-sentry-infra.yml"
+  where: "GitHub Actions run logs for apply-sentry-infra.yml and scheduled-sentry-alert-drift.yml"
   retention: "GitHub default Actions log retention (90 days)"
 discoverability_test:
-  command: "curl -s --max-time 15 'https://api.github.com/repos/jikig-ai/soleur/actions/workflows/apply-sentry-infra.yml/runs?branch=main&per_page=1' | jq -r '.workflow_runs[0].conclusion'"
+  # Meaningful after merge: main's plan has failed since 2026-09-18, so this prints `failure` until the adoption applies.
+  command: "curl -s --max-time 15 'https://api.github.com/repos/jikig-ai/soleur/actions/workflows/apply-sentry-infra.yml/runs?branch=main&event=push&status=completed&per_page=1' | jq -r '.workflow_runs[0].conclusion'"
   expected_output: "success"
 ```
 
@@ -743,24 +751,23 @@ The ADR amendment lands in this PR.
 
 - [ ] **Merge ordering.** No other PR touching `apps/web-platform/infra/sentry/**` merges until this PR's push run of `apply-sentry-infra.yml` concludes `success`. Until the adoption applies, any other Sentry PR's `plan_pr` plans the same 2 forgets and would demand an `[ack-destroy]` that is not its own (spec-flow #2).
 - [ ] The push run concludes `success`. Its apply log shows:
-  - 2 imports and 2 forgets;
-  - the adoption assert PASS at the apply site;
+  - 2 imports and 2 forgets, and the adoption assert PASS at the apply site;
+  - **exactly this backlog and nothing else** (the changes merged while the root was wedged, measured on this PR's `plan_pr`): creates `sentry_alert.art17_erasure_incomplete` and `sentry_cron_monitor.scheduled_devin_docs_drift`; updates `sentry_alert.git_data_boot_fatal` and `sentry_alert.git_data_boot_warning`. Any other create or update row in the apply's `::notice::` list is a stop: file a p1 and do not re-run;
   - AC17 reporting `32 sentry_alert and 0 sentry_issue_alert`;
-  - the post-apply probe green, including Guard 4's pass.
+  - the post-apply probe green, including Guard 4's frozen-rule pin.
 
   #8282 is then closed by the workflow's success step with the run URL. Verify with `gh issue view 8282 --json state,comments`.
-- [ ] Live re-read (read-only; same command as Research Insights) of workflows 566671 and 669246 returns HTTP 200, each with `dateUpdated` **equal** to the pre-merge values in the PR body. That is the evidence the apply wrote nothing to them.
-- [ ] **If `dateUpdated` moved, or a comparison is no longer the captured `{3,"5m"}` / `{2,"1h"}`:**
+- [ ] Live re-read (read-only; same command as `knowledge-base/project/specs/feat-one-shot-8451-sentry-alert-410-migration/pre-merge-live-baseline.md`) of workflows 566671 and 669246 returns HTTP 200 with every compared field (enabled, detectorIds, frequency, trigger comparison, action filters and actions) equal to that baseline. An unchanged `dateUpdated` is additional evidence the apply wrote nothing.
+- [ ] **The backlog landed live:** a read-only GET of the org workflows shows exactly one named `art17-erasure-incomplete`, `enabled: true`, with its `feature=account-delete` / `op=git-data-bare-repo-erasure` filters and email action; and the cron monitor `scheduled-devin-docs-drift` exists.
+- [ ] **If a compared field differs from the baseline** (not merely `dateUpdated`, which Sentry can bump):
   - file a `priority/p1-high` `action-required` issue;
-  - restore through `PUT /api/0/organizations/jikigai-eu/workflows/<id>/`, with the body built from the phase34 capture entry for that id. The agent runs this with the same token; it is a scripted write, not a dashboard step;
-  - re-read to confirm.
+  - restore through `PUT /api/0/organizations/jikigai-eu/workflows/<id>/` with the body built from the phase34 capture entry, printing the body for the issue before sending and comparing a GET-after-PUT against the capture with the same projection `scripts/sentry-alert-live-fidelity.sh` uses. The agent runs this with the same token; it is a scripted write, not a dashboard step. Terraform cannot restore it while frozen.
+- [ ] **If the apply fails part-way**, the rules keep paging from Sentry throughout; a forget and an import touch Terraform state only. A re-run reds on the adoption assert whenever a pair is left half-applied; it SKIPs (and applies the rest) when both pairs committed and only a backlog row failed. Recovery, per shape (run AC17's `terraform state list` and check each adopted label):
+  1. both addresses of a label absent from `sentry_issue_alert.*` and present at `sentry_alert.*` → that pair applied;
+  2. `k` pairs remain untouched → a reviewed PR sets both adoption-assert call sites to `k`, carrying `[ack-destroy]`;
+  3. a label's forget applied but its import did not (neither address in state) → a reviewed PR deletes that label's `removed{}` block and sets the expected count to the remaining pairs (0 means the assert SKIPs).
 
-  Terraform cannot restore it while frozen.
-- [ ] **If the apply fails part-way**, the rules keep paging from Sentry throughout. A forget touches Terraform state only. A re-run of the job **will red on the adoption assert** in every partial shape: `k == k < 2` takes the "resumed partial" branch; unequal counts (e.g. 0 forgets / 1 import after a forget applied without its import) take the "pair dropped" branch. Recovery:
-  1. Run AC17's `terraform state list` reading.
-  2. Open a reviewed follow-up PR that sets both adoption-assert call sites to the remaining count, carrying `[ack-destroy]` only if forget rows remain.
-
-  Do not use `workflow_dispatch`, do not revert, and do not restore state (arch P1-1, spec-flow #1).
+  Do not use `workflow_dispatch` from another ref (the apply job now refuses it), do not revert, and do not restore state (arch P1-1, spec-flow #1).
 - [ ] #7985's title and body carry the atomic exit checklist, and its probe change is merged. The orphan-suite lint issue is filed.
 
 ## Test Scenarios

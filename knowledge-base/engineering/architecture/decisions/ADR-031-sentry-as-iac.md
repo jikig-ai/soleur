@@ -1026,9 +1026,9 @@ Sentry-infra PR and `main` were red.
   applied commit `d8b5fa1fd`, plus drifted updates), and they ride in the adoption plan.
   `scripts/sentry-adoption-plan-assert.sh` therefore asserts inertness at the ADOPTED rows (every
   import row no-op, every forget a `sentry_issue_alert`) plus no delete or replace anywhere, and
-  prints the other creates/updates as delegated backlog rather than refusing them. The create
+  lists the other creates/updates as backlog rather than refusing them (creates stay diff-matched by the create gate; legacy-trigger writes stay refused by the tripwire). It also checks each import's read-back name against the capture, since an import under `ignore_changes = all` always plans no-op. The apply job is `main`-only. The create
   gate's diff window, at both sites, starts at the last APPLIED commit
-  (`scripts/sentry-last-applied-sha.sh`: the newest run whose `apply` job succeeded) instead of the
+  (`scripts/sentry-last-applied-sha.sh`: the newest of the latest 50 completed push/dispatch runs on `main` whose `Terraform apply` STEP succeeded — not the job, which post-apply probes can red after the apply landed) instead of the
   PR diff or `HEAD~1`, so a block merged during a wedge is still explained by a reviewed diff.
 - The brownout retry ladder at both plan sites is deleted: with zero `sentry_issue_alert`
   resources it had no target. A plan failure carrying a 410 is reported on its only attempt,
