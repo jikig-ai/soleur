@@ -3607,6 +3607,7 @@ sibling-mechanism
 sibling-migration
 sibling-pr
 sibling-race
+sibling-sweep
 sibling-worktree
 sidebar
 sidebar-persistence
