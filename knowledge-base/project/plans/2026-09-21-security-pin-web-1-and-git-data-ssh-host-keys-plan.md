@@ -1034,8 +1034,8 @@ On the devex panel: D6 now uses the baseline-`databaseId` pattern and a 75-minut
 
 ### Pre-merge (PR)
 
-- [ ] **AC1:** `bash tests/scripts/test-no-tofu-ssh.sh` exits 0, prints a scanned-file count > 0, and every allow-list entry hits its expected count (Guard 1).
-- [ ] **AC2:** the bridge's `WEB_HOST_SSH` contains:
+- [x] **AC1:** `bash tests/scripts/test-no-tofu-ssh.sh` exits 0, prints a scanned-file count > 0, and every allow-list entry hits its expected count (Guard 1).
+- [x] **AC2:** the bridge's `WEB_HOST_SSH` contains:
   - `StrictHostKeyChecking=yes`
   - `HostKeyAlias=web-1`
   - `HostKeyAlgorithms=ecdsa-sha2-nistp256`
@@ -1043,19 +1043,19 @@ On the devex panel: D6 now uses the baseline-`databaseId` pattern and a 75-minut
   - a `UserKnownHostsFile=` that is not `/dev/null`
 
   The bridge exports exactly `{CI_SSH_KEYFILE, WEB_HOST_SSH}`, and the `infra-validation.yml` assertion is green.
-- [ ] **AC3:** `git-data-cutover.yml`'s ssh_config contains no `accept-new` and no `/dev/null`, and both Host blocks carry `HostKeyAlias` and `StrictHostKeyChecking yes`. `git-data-cutover-access.test.sh` passes with rows for `host_key_mismatch reason=changed|unknown|alg`. `git-data-flag-precheck.test.sh` passes with rows for `git_data_host_key_unavailable reason=absent|invalid|unreadable` and `TOFU_ARM present|absent`.
-- [ ] **AC4:** Guard 2 passes: `host_key` count == `connection` count, and the count is ≥ 19, across `apps/web-platform/infra/**/*.tf`. The mutation test also passes.
-- [ ] **AC5:** `terraform validate` passes in `apps/web-platform/infra` and in `rung2-rehearsal`. The rendered git-data cloud-config parses as YAML and contains `ssh_keys.ed25519_private` / `ed25519_public` and `ssh_deletekeys: true`. `01-hardening.conf` has the `HostKey` line and the boot-proof block. Check this with the render test, not grep.
-- [ ] **AC6:** the replace and birth gate suites pass with the Guard 4 rows, including both first-rotation must-PASS variants and the local-backend `-replace` fixture. `terraform-target-parity.test.ts` passes. The per-PR list contains the probe and neither pin address.
-- [ ] **AC7:** `git-data-rung2-boot-evidence.env` is absent from the tree. The rung-2 suites pass with the new MAY-DIVERGE variables.
-- [ ] **AC8:** the Guard 5 vitest matrix passes. It covers `host_key_mismatch` classification, an invalid pin returning `unconfigured` (not `unreachable`), and `provisionGitDataRepo` passing the pin. `tsc --noEmit` is clean.
-- [ ] **AC9:** `web-1-ssh-host-key.pub` has exactly one ECDSA-P256 line that passes Guard 3, and its header fingerprint equals `ssh-keygen -lf` of that line. The PR body names the capture vantage point and the cross-check result.
-- [ ] **AC10:** the runbook's "#7226 — pin git-data's SSH host key…" bullet is replaced by a staged list: mechanism merged ✔, post-merge steps 1–5 as open items, and the flag-flip precondition "pin present in prd AND #5914 closed". The runbook also has the verdict rows, the expected-drift note, the emergency-replace gap and the re-capture section.
-- [ ] **AC11:** ADR-237 exists with status `adopting`, and its ordinal is free across all `origin/*` refs at merge time. The ADR-220 amendment (including the D6 design change) and the ADR-068 amendment exist. The C4 edge text is updated, and `c4-count-parity`, `c4-code-syntax` and `c4-render` pass.
-- [ ] **AC12:** the PA-36 §(g) item and the (g)(11) correction exist. The counsel-audit addendum exists. `python3 scripts/lint-encryption-posture.py --repo-sweep` passes with the four new connections.
-- [ ] **AC13:** `workflow-file-size.test.ts` passes, and so does the git-data user_data budget suite.
-- [ ] **AC14:** `bash tests/scripts/test-write-known-hosts.sh` passes. The `dispatch-web-redeploy` action's embedded shell passes `bash -c` syntax checks. Both `git_data_redeploy` jobs carry `permissions: {actions: write, contents: read}` and no `secrets.` reference. F1, F2, F4 and F5 are filed with labels that exist.
-- [ ] **AC16:** `tests/scripts/test-dispatch-web-redeploy.sh`, `web-1-host-key-local.test.sh`, the boot-proof rows (Guard 6), and a vitest for the startup line (both forms, `fp=SHA256:` format, warn level) all pass. `.github/CODEOWNERS` has the listed rows. The gate libraries print no `.change.before`/`.after`.
+- [x] **AC3:** `git-data-cutover.yml`'s ssh_config contains no `accept-new` and no `/dev/null` except the hardening `GlobalKnownHostsFile /dev/null` (amended in the work phase: that option removes a trust source, it adds none), and both Host blocks carry `HostKeyAlias` and `StrictHostKeyChecking yes`. `git-data-cutover-access.test.sh` passes with rows for `host_key_mismatch reason=changed|unknown|alg`. `git-data-flag-precheck.test.sh` passes with rows for `git_data_host_key_unavailable reason=absent|invalid|unreadable` and `TOFU_ARM present|absent`.
+- [x] **AC4:** Guard 2 passes: `host_key` count == `connection` count, and the count is ≥ 19, across `apps/web-platform/infra/**/*.tf`. The mutation test also passes.
+- [x] **AC5:** `terraform validate` passes in `apps/web-platform/infra` and in `rung2-rehearsal`. The rendered git-data cloud-config parses as YAML and contains `ssh_keys.ed25519_private` / `ed25519_public` and `ssh_deletekeys: true`. `01-hardening.conf` has the `HostKey` line and the boot-proof block. Check this with the render test, not grep.
+- [x] **AC6:** the replace and birth gate suites pass with the Guard 4 rows, including both first-rotation must-PASS variants and the local-backend `-replace` fixture. `terraform-target-parity.test.ts` passes. The per-PR list contains the probe and neither pin address.
+- [x] **AC7:** `git-data-rung2-boot-evidence.env` is absent from the tree. The rung-2 suites pass with the new MAY-DIVERGE variables.
+- [x] **AC8:** the Guard 5 vitest matrix passes. It covers `host_key_mismatch` classification, an invalid pin returning `unconfigured` (not `unreachable`), and `provisionGitDataRepo` passing the pin. `tsc --noEmit` is clean.
+- [x] **AC9:** `web-1-ssh-host-key.pub` has exactly one ECDSA-P256 line that passes Guard 3, and its header fingerprint equals `ssh-keygen -lf` of that line. The PR body names the capture vantage point and the cross-check result.
+- [x] **AC10:** the runbook's "#7226 — pin git-data's SSH host key…" bullet is replaced by a staged list: mechanism merged ✔, post-merge steps 1–5 as open items, and the flag-flip precondition "pin present in prd AND #5914 closed". The runbook also has the verdict rows, the expected-drift note, the emergency-replace gap and the re-capture section.
+- [x] **AC11:** ADR-237 exists with status `adopting`, and its ordinal is free across all `origin/*` refs at merge time. The ADR-220 amendment (including the D6 design change) and the ADR-068 amendment exist. The C4 edge text is updated, and `c4-count-parity`, `c4-code-syntax` and `c4-render` pass.
+- [x] **AC12:** the PA-36 §(g) item and the (g)(11) correction exist. The counsel-audit addendum exists. `python3 scripts/lint-encryption-posture.py --repo-sweep` passes with the four new connections.
+- [x] **AC13:** `workflow-file-size.test.ts` passes, and so does the git-data user_data budget suite.
+- [x] **AC14:** `bash tests/scripts/test-write-known-hosts.sh` passes. The `dispatch-web-redeploy` action's embedded shell passes `bash -c` syntax checks. The redeploy job (moved to `git-data-pin-redeploy.yml`, see the work-phase addendum) carries `permissions: {actions: write, contents: read}` and no `secrets.` reference. F1, F2 and F4 are filed as #8518 (F5 already shipped in #7772).
+- [x] **AC16:** `tests/scripts/test-dispatch-web-redeploy.sh`, `web-1-host-key-local.test.sh`, the boot-proof rows (Guard 6), and a vitest for the startup line (both forms, `fp=SHA256:` format, warn level) all pass. `.github/CODEOWNERS` has the listed rows. The gate libraries print no `.change.before`/`.after`.
 - [ ] **AC15:** after pushing, `workspaces-luks-verify.yml` dispatched with `--ref <branch>` ends `success`. This is the strict bash path through Cloudflare, and it is the second observation of web-1's pin.
 
 ### Post-merge (operator; each separately authorized; runbook Post-merge sequence)
@@ -1092,3 +1092,15 @@ On the devex panel: D6 now uses the baseline-`databaseId` pattern and a 75-minut
 - `accept-new` stays in exactly one place (`TOFU_FALLBACK_OPTS`, counted by Guard 1). #5914 removes it before any store-enable.
 - Do not edit `apps/web-platform/infra/sentry/**` in this PR. #8453 owns that surface.
 
+
+## Addendum — 2026-09-21: work-phase deviations (measured)
+
+- **No `LogLevel=ERROR` on any pinned ssh path** (bridge `WEB_HOST_SSH`, cutover ssh_config, app helpers). Measured in an ubuntu:24.04 container: OpenSSH 9.6 under `LogLevel=ERROR` suppresses "Unable to negotiate … no matching host key type found" and "channel N: open failed", which made `host_key_mismatch reason=alg` unobservable and broke the existing `forward_refused`/`connect_refused` rows. D3/D4 prescribed it; it is removed and a test asserts its absence in the app argv.
+- **D6 redeploy is a separate workflow, not two jobs in `apply-web-platform-infra.yml`.** Jobs inside that workflow sit in its workflow-level concurrency group and would hold the fleet apply lock for up to ~80 min. `.github/workflows/git-data-pin-redeploy.yml` triggers on the apply workflow's completion, gates on the birth/replace job conclusion (`source-run-gate.sh`) and has its own concurrency group. The Terraform-side fingerprint is printed by the birth/replace apply steps from a new non-sensitive output `git_data_ssh_host_key_fingerprint`; the redeploy summary links to that run.
+- **`track.sh` polls only the deploying arms** (`workflow_dispatch`, `workflow_run`) of `web-platform-release` — the `push` arm never deploys (ADR-217); required by `workflow-run-deploy-invariants.test.sh` G8.
+- **`TF_VAR_terraform_version` is workflow-level env** in all four workflows that plan the main root, pinned equal to `TERRAFORM_VERSION` by a parity test (job-level env cannot read `env.*`).
+- **`ssh_genkeytypes: []` dropped** — `cloud-init schema` rejects an empty list; `cc_ssh` generates nothing when `ssh_keys` is present (read in cloud-init 26.1 source).
+- **CRLF pin files are accepted** (D3's `replace(…, "\r", "")` wins over the Files-to-Create "CRLF must error" row); a CR inside a line is still rejected by both the HCL and the writer.
+- **F5 already shipped** in #7772 (`git-data-nftables.sh`); not filed. F1/F2/F4 consolidated into #8518. PA-1 (g)(14) and PA-2 (g)(18) corrected inline rather than via a follow-up issue.
+- **Code-owner review is not enforced** on `main` (no branch protection; rulesets are status checks + force-push only) — recorded in ADR-237; the CODEOWNERS rows are advisory.
+- **Phase 0 capture:** 2026-09-21T18:12:21Z from an `ADMIN_IPS` egress (82.67.29.121, added with operator ack; firewall applied as a targeted plan whose only change was that port-22 rule) directly against web-1's public :22. Fingerprint `SHA256:ARBTzhY4hCGXKwWZ2j9aOc4zZefBYgAxJncoVglvuok`; no prior operator known_hosts entry to cross-check.
