@@ -55,6 +55,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { gitFixtureEnv } from "./git-fixture-env";
 import { readdirSync, readFileSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
@@ -94,6 +95,12 @@ function git(repoDir: string, args: string[]): string {
   // the worst direction for a coverage census.
   return execFileSync("git", ["-c", "core.quotePath=false", ...args], {
     cwd: repoDir,
+    // env bound via gitFixtureEnv: an inherited GIT_DIR/GIT_WORK_TREE would
+    // redirect the census onto a different repository and read as a silent
+    // green — the exact failure class this guard exists to prevent. The
+    // fixture-oriented extras (identity, ceiling at dirname(repoDir)) are
+    // inert for read-only calls.
+    env: gitFixtureEnv(repoDir),
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],

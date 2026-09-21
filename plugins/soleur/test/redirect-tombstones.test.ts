@@ -46,6 +46,7 @@ import {
   extractLocalMap,
   stripTfComments,
 } from "./lib/bulk-redirect-pairs";
+import { gitFixtureEnv } from "./lib/git-fixture-env";
 import {
   assertBaselineReachable,
   classifyCensus,
@@ -172,7 +173,13 @@ afterAll(() => {
 });
 
 function sh(dir: string, cmd: string, args: string[]): string {
-  return execFileSync(cmd, args, { cwd: dir, encoding: "utf8" });
+  // Every call site is `git` against a fixture dir; gitFixtureEnv gives the
+  // fixture hermeticity (identity, discovery ceiling, global-config sweep).
+  return execFileSync(cmd, args, {
+    cwd: dir,
+    env: gitFixtureEnv(dir),
+    encoding: "utf8",
+  });
 }
 
 function commitAll(dir: string, msg: string): string {
