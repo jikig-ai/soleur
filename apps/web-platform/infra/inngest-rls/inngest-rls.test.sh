@@ -4,40 +4,46 @@
 # connection — these assert each SQL artifact's SHAPE so a future edit cannot
 # silently introduce a break-Inngest or re-expose change.
 #
-# PER-ARTIFACT PROFILES — READ THIS BEFORE ADDING AN ASSERTION.
-# There are two artifacts with DELIBERATELY INVERTED required shapes. They MUST
-# NOT share one assertion set:
+# ONE ARTIFACT, ONE PROFILE — READ THIS BEFORE ADDING AN ASSERTION.
 #
-#   0001_enable_rls_lockdown.sql       -> soleur-inngest-prd (pigsfuxruiopinouvjwy)
+#   0001_enable_rls_lockdown.sql -> soleur-inngest-prd (pigsfuxruiopinouvjwy)
 #     A DEDICATED, single-tenant Inngest project. Schema-wide revoke is correct
 #     there, and `ALTER DEFAULT PRIVILEGES` is REQUIRED (it is the durable
 #     recurrence fix for future Inngest-version tables).
 #
-#   0002_dev_inngest_tables_lockdown.sql -> soleur-dev (mlwiodleouzwniehynfz)
-#     A CO-TENANTED project: the dark Inngest backend shares `public` with the
-#     app's 52 tables. `ALTER DEFAULT PRIVILEGES` is FORBIDDEN here — it would
-#     revoke the default grants that every FUTURE dev app migration relies on,
-#     breaking the dev app. A schema-wide catalog loop is likewise FORBIDDEN:
-#     it would revoke anon/authenticated across those 52 app tables.
+# THIS FILE USED TO GUARD TWO ARTIFACTS WITH DELIBERATELY INVERTED SHAPES, and
+# the inversion is worth recording because it is the thing a future edit could
+# undo by accident. `0002_dev_inngest_tables_lockdown.sql` targeted soleur-dev,
+# a CO-TENANTED project where the dark Inngest backend shared `public` with the
+# app's 52 tables — so there, `ALTER DEFAULT PRIVILEGES` was FORBIDDEN (it would
+# have revoked the default grants every future dev app migration relies on) and
+# a schema-wide catalog loop was FORBIDDEN too (it would have revoked
+# anon/authenticated across those 52 app tables). Exactly the opposite of 0001.
 #
-# => If you "extend" this file by bolting 0002 onto 0001's assertions, 0002 will
-#    fail the `ALTER DEFAULT PRIVILEGES` required-check, and the tempting "fix"
-#    (adding that statement to 0002) is precisely the catastrophe these guards
-#    exist to prevent. Add to the correct profile instead.
+# That co-tenancy ended: the cutover moved Inngest to its own project, the 14
+# dark tables were dropped on 2026-09-19 (#6488, run 35471968669), and 0002 was
+# retired with them. Its profile and the two guards that existed only for it
+# (`check_no_schemawide_ddl_loop`, `check_sequence_ddl_is_allowlist_bound`) went
+# at the same time.
+#
+# => If a second artifact is ever added here, give it its OWN profile. Bolting it
+#    onto 0001's assertions is how the inversion above gets lost: a co-tenanted
+#    artifact would fail 0001's `ALTER DEFAULT PRIVILEGES` required-check, and the
+#    tempting "fix" — adding that statement to it — is precisely the catastrophe
+#    these guards exist to prevent.
 #
 # IMPORTANT: assertions about APPLIED CODE run against the artifact with `--`
 # line-comments STRIPPED ($CODE), because the break-glass comment legitimately
 # names `postgres`, `service_role`, `DISABLE ROW LEVEL SECURITY`, and re-`GRANT`
 # — a raw grep would false-match that prose (grep-over-script-body false-match
-# class). The few assertions that deliberately assert a COMMENT exists read
-# $RAW instead and say so at the call site.
+# class). There is no raw-text reader any more: the only assertions that read the
+# unstripped artifact belonged to the 0002 profile, retired 2026-09-19 with the
+# artifact itself (#6488), so `$RAW` and its two helpers went with them rather
+# than being left as an unused seam the next author would reach for.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$DIR/../../../.." && pwd)"
 SQL_0001="$DIR/0001_enable_rls_lockdown.sql"
-SQL_0002="$DIR/0002_dev_inngest_tables_lockdown.sql"
-DEV_WF="$REPO_ROOT/.github/workflows/apply-inngest-rls-dev.yml"
 
 # The 14 dark-Inngest tables on soleur-dev. Re-derived from the live catalog
 # 2026-07-15 (never from a migration grep — see the learning
@@ -52,8 +58,23 @@ pass=0; fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 
+# MINIMUM-CARDINALITY GUARD FOR ALLOW_14 — at top level, deliberately.
+#
+# It used to live inside profile_0002, which was the only profile that iterated the
+# array by name. But profile_0001's negative-noun loop consumes ALLOW_14 too
+# (`for nt in "${ALLOW_14[@]}" users conversations`), so when the 0002 profile was
+# deleted with its artifact (#6488), the array kept a live consumer and lost its only
+# cardinality check — it could then silently shrink and profile_0001 would report `ok`
+# over fewer names, which is the vacuity class the guard exists for, reintroduced BY the
+# cleanup. Hoisting it first was a prerequisite of that deletion, not a tidy-up after it.
+if [[ "${#ALLOW_14[@]}" -eq 14 ]]; then
+  ok "[allowlist] ALLOW_14 cardinality is 14 (guard against a vacuously-empty check)"
+else
+  bad "[allowlist] ALLOW_14 has ${#ALLOW_14[@]} entries, expected 14 — every loop over it would be vacuous"
+fi
+
 # --- profile state -----------------------------------------------------------
-RAW=""; CODE=""; LABEL=""
+CODE=""; LABEL=""
 
 load_profile() {
   LABEL="$(basename "$1")"
@@ -61,17 +82,14 @@ load_profile() {
     echo "FAIL: artifact not found at $1"
     exit 1
   fi
-  RAW="$(cat "$1")"
   CODE="$(sed -E 's/--.*$//' "$1")"
 }
 
 has_code()    { printf '%s' "$CODE" | grep -iqE "$1"; }
 absent_code() { ! printf '%s' "$CODE" | grep -iqE "$1"; }
-has_raw()     { printf '%s' "$RAW"  | grep -iqE "$1"; }
 # if/then/else helpers (not `A && B || C`, which runs C when B fails — SC2015).
 check_has()     { if has_code "$1";    then ok "[$LABEL] $2"; else bad "[$LABEL] $3"; fi; }
 check_absent()  { if absent_code "$1"; then ok "[$LABEL] $2"; else bad "[$LABEL] $3"; fi; }
-check_raw_has() { if has_raw "$1";     then ok "[$LABEL] $2"; else bad "[$LABEL] $3"; fi; }
 
 # Never revoke from postgres / service_role. Inspect every REVOKE statement's
 # role list (comments already stripped); the targets must be only anon/authenticated.
@@ -102,39 +120,6 @@ check_no_privileged_revoke() {
 # Legitimately NOT flagged: 0002's non-allowlisted REPORT reads relkind='r'/'p'
 # schema-wide but emits no DDL.
 #
-# ⚠️ BLIND SPOT, ENFORCED ELSEWHERE — DO NOT "fix" it here. The source disjunction
-# below lists relkind 'r'/'p' but NOT 'S', so a sequence loop that emits DDL is
-# invisible to THIS check. Do NOT add an `'s'` term to the disjunction: 0002's
-# sequence loop legitimately emits DDL over relkind='S', so a bare `'s'` term would
-# false-RED correct code, and the tempting "fix" is to delete the guard. The
-# sequence loop's actual invariant (bound to the allowlist, never schema-wide) is
-# asserted POSITIVELY by check_sequence_ddl_is_allowlist_bound below.
-#
-# ⚠️ awk RS=";" is load-bearing — do NOT "simplify" this to `tr ';' '\n'` piped
-# into `read -r`. That reads LINES, not fragments: the catalog source and the
-# EXECUTE sit on DIFFERENT lines, so the conjunction never matches and the guard
-# silently passes the catastrophe. (Caught by mutation-testing this very check on
-# 2026-07-15 — it was vacuous in exactly that way before this fix.)
-# Input is lowercased so the patterns need no case-insensitivity extension
-# (IGNORECASE is gawk-only; this must also work under mawk).
-check_no_schemawide_ddl_loop() {
-  local offenders
-  offenders="$(printf '%s' "$CODE" | tr '[:upper:]' '[:lower:]' | awk '
-    BEGIN { RS = ";" }
-    /execute/ &&
-    (/pg_tables/ || /pg_matviews/ ||
-     /relkind[ \t]*=[ \t]*.r./ || /relkind[ \t]*=[ \t]*.p./ ||
-     /relkind[ \t]*in[ \t]*\(/) {
-      gsub(/[ \t\n]+/, " ")
-      print "       offending schema-wide DDL fragment:" substr($0, 1, 150)
-    }')"
-  if [[ -z "$offenders" ]]; then
-    ok "[$LABEL] no schema-wide catalog loop drives DDL (allowlist-driven only)"
-  else
-    printf '%s\n' "$offenders"
-    bad "[$LABEL] FORBIDDEN: a schema-wide table-catalog scan emits DDL — would reach the app's 52 tables"
-  fi
-}
 
 # $CODE strips ONLY `--` line comments, so a `/* ... */` block is invisible to the
 # stripper and stays in $CODE — every `check_has` below would still find the tokens
@@ -150,56 +135,7 @@ check_no_block_comments() {
     "FORBIDDEN: /* */ block comment present — \$CODE strips only --, so every check_has here can pass against commented-out code. Use -- instead."
 }
 
-# The 14 names live in THREE places: apply-inngest-rls-dev.yml's ALLOW literal,
-# 0002's `allow` array, and ALLOW_14 here. profile_0002 asserts the SQL against
-# ALLOW_14; the WORKFLOW's copy — which drives the authoritative catalog gate and
-# the non-allowlisted report — was asserted by nothing, so it could drift silently
-# and the gate would police a different set than the migration locks down.
-check_workflow_allowlist_matches() {
-  local wf_names expected
-  if [[ ! -f "$DEV_WF" ]]; then
-    bad "[cross-file] dev workflow not found at $DEV_WF"
-    return
-  fi
-  wf_names="$(grep -oE '^[[:space:]]*ALLOW="ARRAY\[[^]]*\]"' "$DEV_WF" | head -1 |
-    grep -oE "'[a-z0-9_]+'" | tr -d "'" | sort | tr '\n' ' ')"
-  expected="$(printf '%s\n' "${ALLOW_14[@]}" | sort | tr '\n' ' ')"
-  if [[ -n "$wf_names" && "$wf_names" == "$expected" ]]; then
-    ok "[cross-file] apply-inngest-rls-dev.yml's ALLOW literal is EXACTLY the 14 (matches ALLOW_14)"
-  else
-    printf '       workflow: %s\n       expected: %s\n' "${wf_names:-<no ALLOW literal found>}" "$expected"
-    bad "[cross-file] apply-inngest-rls-dev.yml's ALLOW literal drifted from ALLOW_14 — the gate would police a different set than 0002 locks down"
-  fi
-}
 
-# The relkind='S' half of the invariant above (0002 ONLY — 0001's schema-wide
-# pg_sequences sweep is CORRECT on its dedicated project).
-#
-# 0002's sequence loop emits DDL over relkind='S' and is safe ONLY because of its
-# `AND tc.relname = t` join back to the allowlist loop variable. Deleting that one
-# line leaves the loop schema-wide over EVERY sequence in `public` — revoking
-# anon/authenticated USAGE on the APP's serial sequences and breaking dev inserts —
-# and check_no_schemawide_ddl_loop stays GREEN (proven by mutation 2026-07-15).
-#
-# Asserted POSITIVELY (the binding must be PRESENT) rather than by forbidding an
-# 'S' term: a negative formulation would false-RED the correct implementation.
-check_sequence_ddl_is_allowlist_bound() {
-  local unbound
-  unbound="$(printf '%s' "$CODE" | tr '[:upper:]' '[:lower:]' | awk '
-    BEGIN { RS = ";" }
-    /execute/ &&
-    (/relkind[ \t]*=[ \t]*.s./ || /pg_sequences/) &&
-    !/relname[ \t]*=/ && !/pg_get_serial_sequence/ {
-      gsub(/[ \t\n]+/, " ")
-      print "       unbound sequence-DDL fragment:" substr($0, 1, 150)
-    }')"
-  if [[ -z "$unbound" ]]; then
-    ok "[$LABEL] sequence-revoke DDL is bound to the allowlist (never a schema-wide sequence sweep)"
-  else
-    printf '%s\n' "$unbound"
-    bad "[$LABEL] FORBIDDEN: a sequence loop emits DDL without an allowlist join — would revoke the app's sequences"
-  fi
-}
 
 # =============================================================================
 # PROFILE: 0001 — soleur-inngest-prd (DEDICATED project; schema-wide is correct)
@@ -336,128 +272,9 @@ profile_0001() {
 # =============================================================================
 # PROFILE: 0002 — soleur-dev (CO-TENANTED; table-scoped ONLY)
 # =============================================================================
-profile_0002() {
-  load_profile "$SQL_0002"
-  echo
-  echo "profile: $LABEL  (target: soleur-dev — CO-TENANTED with 52 app tables; table-scoped ONLY)"
-
-  # --- Required: the lockdown itself ----------------------------------------
-  check_has 'ENABLE[[:space:]]+ROW[[:space:]]+LEVEL[[:space:]]+SECURITY' \
-    "enables RLS" "missing ENABLE ROW LEVEL SECURITY"
-
-  check_has 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+public' \
-    "revokes table grants" "missing per-table REVOKE"
-
-  check_has 'REVOKE[[:space:]]+ALL[[:space:]]+ON[[:space:]]+SEQUENCE' \
-    "revokes sequence grants" "missing sequence REVOKE"
-
-  # --- Required: the target set is the explicit 14-name allowlist ------------
-  local missing=() t
-  for t in "${ALLOW_14[@]}"; do
-    has_code "'${t}'" || missing+=("$t")
-  done
-  if [[ "${#missing[@]}" -eq 0 ]]; then
-    ok "[$LABEL] all 14 allowlisted table names present as literals"
-  else
-    bad "[$LABEL] allowlist incomplete — missing literal(s): ${missing[*]}"
-  fi
-
-  # Minimum-cardinality guard: a data-derived loop that silently iterates an
-  # EMPTY source would exit 0 with ZERO coverage and prove nothing.
-  if [[ "${#ALLOW_14[@]}" -eq 14 ]]; then
-    ok "[$LABEL] allowlist cardinality is 14 (guard against a vacuously-empty check)"
-  else
-    bad "[$LABEL] ALLOW_14 has ${#ALLOW_14[@]} entries, expected 14 — the allowlist check would be vacuous"
-  fi
-
-  # The revoke loop's source must BE the allowlist array, not a catalog scan.
-  check_has 'FOREACH[[:space:]]+[A-Za-z_]+[[:space:]]+IN[[:space:]]+ARRAY' \
-    "revoke loop iterates the allowlist array (FOREACH ... IN ARRAY)" \
-    "missing FOREACH ... IN ARRAY — the revoke source must be the allowlist, never a catalog scan"
-
-  # Sequences must be DERIVED from the allowlisted tables, not hard-coded.
-  check_has '(pg_depend|pg_get_serial_sequence)' \
-    "sequences derived via pg_depend/pg_get_serial_sequence" \
-    "missing sequence derivation — must not hard-code sequence names"
-  check_absent 'goose_db_version_id_seq' \
-    "no hard-coded goose_db_version_id_seq (goes stale on the next identity column)" \
-    "FORBIDDEN: hard-coded sequence name — derive from the allowlisted tables instead"
-
-  # Lock-acquisition + statement guards (mirror 0001; fail-fast is safe + retryable).
-  check_has 'SET[[:space:]]+lock_timeout' \
-    "SET lock_timeout present (fail-fast on contention)" "missing SET lock_timeout"
-  check_has 'SET[[:space:]]+statement_timeout' \
-    "SET statement_timeout present" "missing SET statement_timeout"
-
-  # Positive sentinel: refuse to run where Inngest's tables are absent.
-  if has_code 'to_regclass' \
-     && has_code 'goose_db_version' \
-     && has_code 'function_runs' \
-     && has_code 'RAISE[[:space:]]+EXCEPTION'; then
-    ok "[$LABEL] fail-closed Inngest-sentinel positive preflight present"
-  else
-    bad "[$LABEL] missing positive sentinel (to_regclass + RAISE EXCEPTION)"
-  fi
-
-  # Non-allowlisted RLS-disabled tables must be REPORTED, never aborted on: an
-  # allowlist-driven revoke structurally cannot touch them, so aborting protects
-  # nothing while disabling the re-assertion of the 14.
-  check_has 'RAISE[[:space:]]+(NOTICE|WARNING)' \
-    "reports non-allowlisted findings via RAISE NOTICE/WARNING (never aborts on them)" \
-    "missing RAISE NOTICE/WARNING — non-allowlisted tables must be reported, not aborted on"
-
-  # --- Documentation asserted on RAW (these assert a COMMENT exists) ---------
-  # Deliberate $RAW reads: the break-glass block and the ALTER DEFAULT PRIVILEGES
-  # rationale are PROSE. They cannot be asserted against comment-stripped $CODE.
-  check_raw_has 'BREAK-GLASS' \
-    "break-glass incident-response block documented (raw-file check: asserts a comment)" \
-    "missing BREAK-GLASS comment block"
-  check_raw_has 'ALTER[[:space:]]+DEFAULT[[:space:]]+PRIVILEGES' \
-    "documents WHY ALTER DEFAULT PRIVILEGES must never run here (raw-file check: asserts a comment)" \
-    "missing the ALTER DEFAULT PRIVILEGES rationale comment"
-
-  # --- FORBIDDEN: the co-tenancy divergences from 0001 ------------------------
-  # THE most important assertion in this file. On a co-tenanted project this
-  # would revoke the default grants every FUTURE dev app migration depends on.
-  # Note the deliberate pairing with the check_raw_has above: the token MUST
-  # appear in prose and MUST NOT appear in applied code. A raw-file grep would
-  # fail this correct implementation — which is why $CODE is comment-stripped.
-  check_absent 'ALTER[[:space:]]+DEFAULT[[:space:]]+PRIVILEGES' \
-    "no ALTER DEFAULT PRIVILEGES in applied code (would break every future dev app migration)" \
-    "FORBIDDEN: ALTER DEFAULT PRIVILEGES present — on a CO-TENANTED project this kills the dev app"
-
-  check_no_schemawide_ddl_loop
-  check_sequence_ddl_is_allowlist_bound
-
-  check_absent 'FORCE[[:space:]]+ROW[[:space:]]+LEVEL[[:space:]]+SECURITY' \
-    "no FORCE ROW LEVEL SECURITY (owner bypass keeps Inngest working)" \
-    "FORBIDDEN: FORCE ROW LEVEL SECURITY present — would lock Inngest out"
-
-  check_absent 'CREATE[[:space:]]+POLICY' \
-    "no CREATE POLICY (tables stay client-unreachable; owner bypasses non-forced RLS)" \
-    "FORBIDDEN: CREATE POLICY present — re-opens client access"
-
-  check_absent '(^|[^A-Za-z])GRANT[[:space:]]' \
-    "no GRANT statement in applied code" \
-    "FORBIDDEN: GRANT present in applied SQL"
-
-  # Matviews: Inngest ships none; explicitly out of scope for 0002 (0001 covers
-  # them for its own dedicated project, where a schema-wide sweep is safe).
-  check_absent 'pg_matviews' \
-    "no pg_matviews sweep (out of scope on a co-tenanted project — would reach app matviews)" \
-    "FORBIDDEN: pg_matviews sweep present — schema-wide on a co-tenanted project"
-
-  check_no_block_comments
-  check_no_privileged_revoke
-}
 
 echo "inngest-rls.test.sh — per-artifact static shape guards"
 profile_0001
-profile_0002
-
-echo
-echo "profile: cross-file (the 14 are triplicated — SQL, workflow, this file)"
-check_workflow_allowlist_matches
 
 echo "---"
 echo "passed=$pass failed=$fail"

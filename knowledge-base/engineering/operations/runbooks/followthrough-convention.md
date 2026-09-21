@@ -151,6 +151,68 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - Issue body content reaches the sweeper via `awk` on stdin (no shell interpolation). Directive values are passed to the verification script as environment values and command-line args, never via shell-evaluated strings.
 - The sweeper uses `gh` CLI for issue close/comment, not raw token interpolation.
 
+- **An operator-confirmed probe filters verdicts through `scripts/lib/trusted-verdict.sh`, never an
+  inline `authorAssociation` select.** `jikig-ai/soleur` is public with issues open, so an
+  unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user (#7448). The
+  filter that closed that hole introduced a quieter one: **`authorAssociation` is computed against
+  the READING token's visibility**, so a member whose org membership is PRIVATE renders as
+  `CONTRIBUTOR` under the sweeper's `GITHUB_TOKEN` and their verdict is dropped silently.
+
+  Measured 2026-09-19 on the same comment, two tokens, in the same hour:
+
+  | Token | `authorAssociation` for `deruelle` | Old filter's verdict |
+  |---|---|---|
+  | operator PAT | `MEMBER` | honoured |
+  | sweeper `GITHUB_TOKEN` | `CONTRIBUTOR` | **dropped** |
+
+  That is why #6617 reported FAIL every night for two months against an issue whose
+  `RESULT: PASS` had been recorded on 2026-07-20 (sweeper run 35470503032 prints the
+  `CONTRIBUTOR` reading next to `would close with verdict=PASS`, i.e. the reading AND the fix in
+  one log). `GET /repos/{owner}/{repo}/collaborators/{login}/permission` resolves EFFECTIVE
+  permission, does not depend on membership visibility, and answers 200 under `GITHUB_TOKEN`
+  (measured in that same run, so the CODEOWNERS fallback the plan held in reserve was not needed).
+  The lib honours `admin`/`maintain`/`write` only.
+
+  Two arms of it are easy to get wrong and both have fixtures: a permission read that FAILS
+  (403, network) is `TRANSIENT`, never "untrusted" — absence of evidence is not evidence; but an
+  HTTP **404** (`"<login> is not a user"`) is DEFINITIVE and drops just that author. `github-actions`
+  comments on nearly every tracker and answers 404, so collapsing the two makes every such thread
+  permanently unresolvable — the same permanent red, reached from the other side.
+
+  `scripts/lint-followthrough-varq-ban.sh` rule 4 enforces the POSITIVE OBLIGATION, not a ban on
+  one wrong spelling: a probe under `scripts/followthroughs/` that reads issue comments AND
+  branches on a `RESULT:` verdict must route that decision through the lib. An inline
+  `authorAssociation` select is subsumed — it reads comments, branches on a verdict and does not
+  call `trusted_verdict_bodies`, so it fires without needing a rule of its own.
+
+  The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
+  live probe read `.comments[].body` with **no author filter at all** — strictly worse than what
+  was banned, and invisible to it: the lint ran rc 0 over the verbatim #7448 forgery shape. A rule
+  green over the exact hole it advertises protection from is worse than the doc, because it
+  converts "we wrote this down" into "we gated it".
+
+  What the rule does and does not see. It reads comments through `gh issue view --json comments`,
+  `--comments`, `.comments[]` or the `gh api .../issues/N/comments` REST route; it treats any
+  `RESULT:` on an executable line as a verdict branch, so extracting the verdict and comparing it
+  later is still branching on it; and **calling the lib does not exempt a raw read beside it** —
+  a compliant probe has no direct comment read at all, because it takes its bodies from the lib.
+  It is comment-stripped, so a comment explaining any of this is still writable. Its own floor is
+  keyed on comment-reading probes by ANY route (direct or via the lib), so migrating a probe onto
+  the lib moves it within the corpus instead of out of it.
+
+  **Three further requirements follow from the same public-repo fact, and the lib does not cover
+  any of them — they are the consuming probe's job.** All three were measured on real probes (#7448):
+
+  1. **Anchor the verdict with `\b`.** A bare `^RESULT: PASS` matched `RESULT: PASSing on this for
+     now` — prose that is not a verdict, read as one.
+  2. **Never echo the matched line unredacted.** The sweeper posts a probe's stdout back as an
+     issue comment, and the next run re-reads that comment as input: a probe that echoes the
+     verdict it matched re-seeds it, latching the issue unclosable.
+  3. **Hardcode the tracker number; never self-locate by searching issues for the probe's own
+     filename.** GitHub's issue search matches COMMENT bodies as well as issue bodies and is
+     relevance-ordered, so taking the first hit can point the probe at one issue while the sweeper
+     closes another.
+
 ## Sharp edges for Better Stack log-content probes
 
 - **Discriminate on the journald SYSLOG_IDENTIFIER FIELD, never a bare payload substring, and model fixtures on the REAL escaped JSONEachRow shape.** The Vector source is shared: inngest ships GitHub-webhook logs (SYSLOG_IDENTIFIER=doppler etc.) that embed branch names, issue/PR bodies, and quoted marker strings — so any marker a human types into GitHub appears in *another* producer's rows, and a bare-substring probe self-contaminates (the tracker's own body quotes the marker → false-FAIL → sweeper re-seeds it). Isolate the field in both byte-forms: server `--grep 'SYSLOG_IDENTIFIER":"<tag>'` (LIKE, unescaped column) + client `grep -F 'SYSLOG_IDENTIFIER\":\"<tag>\"'` (escaped stdout). Fixtures must reproduce the escaped JSON `raw`, not bare syslog. **Run the live discoverability query at /work, not post-merge** — it is the only check that surfaces the escaping and the contamination before merge. See `knowledge-base/project/learnings/2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md` (#6475).
