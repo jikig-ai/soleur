@@ -59,7 +59,7 @@ portable, manual, and Grok-path override. `rc=4` now has two producers; the mess
 tripped.
 
 **6. The two GIT-HOOK invocations carry the hatch; the skill-prescribed gate runs deliberately do
-not.** *(Superseded in part, 2026-09-18, ADR-233/#8322: both hook invokers now call
+not.** *(Superseded in part, 2026-09-18, ADR-234/#8322: both hook invokers now call
 `test-all.sh --affected`, which is exempt from BOTH refusal arms by construction — the exemption is
 structural, not a grant, so neither hook carries `SOLEUR_ALLOW_FULL_GATE` anymore. What survives
 this decision is the discriminator it minted — "is a refusal actionable at this call site?" — and
