@@ -126,3 +126,15 @@ In all three, the fixture was built from the code's model of the world, not the 
     **Prevention:** `cq-assert-anchor-not-bare-token`.
 17. **The soleur skills vanished from the Skill list after a session restart.** Recovery: read
     each SKILL.md directly. **Prevention:** none needed; the skill's own Grok path covers it.
+18. **CI's `credential-path-guard` failed on a resolvable credential-file path in the plan**
+    (the Docker config under `$HOME`), a line present since the plan's first commit. Recovery:
+    rewrote it in the directory-only form (`~/.docker/`). **Prevention:** run
+    `python3 scripts/lint-credential-path-literals.py` over any plan or learning that names a
+    credential file. It is a repo-global lint, so no file-derived suite set selects it.
+19. **The new `cosign-verify-live-8037.test.sh` was committed `100644`**, and
+    `followthrough-exec-bit` requires every `scripts/followthroughs/*.sh` to be `100755`
+    (otherwise the sweeper silently skips it). The derived set missed it because that suite
+    references the directory, not the file's basename. Recovery: `git update-index --chmod=+x`.
+    **Prevention:** after adding any file under `scripts/followthroughs/`, run
+    `bash scripts/followthrough-exec-bit.test.sh`, and derive suites from each changed path's
+    directory as well as its basename.

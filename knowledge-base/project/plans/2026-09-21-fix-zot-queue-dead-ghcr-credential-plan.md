@@ -414,7 +414,7 @@ abort path.]
    The emitted line is a single line. It is wrapped here only for readability.
    - `deploy_cfg` is `$DOCKER_CONFIG/config.json`. It is the config the CLI presents, and the
      `effective=` token says so.
-   - `home_cfg` is `$HOME/.docker/config.json`, the pre-#6565 location.
+   - `home_cfg` is the Docker config in the deploy user's home (`~/.docker/`), the pre-#6565 location.
    - `root_cfg` is `/root/.docker/config.json`. It stays in: a measured `unreadable` from the
      deploy user is a direct answer to the "root-vs-deploy split" hypothesis in §6. It costs one
      token.
