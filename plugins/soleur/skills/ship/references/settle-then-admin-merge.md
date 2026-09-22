@@ -40,29 +40,40 @@ Two things this does not buy. Six syncs is **not** three hours: `MAX_POLL_MIN=60
 At that trigger or at the 6-sync cap, if this change has **zero conflict surface** (the classifier above printed `hatch-eligible`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
 
 1. **Stop auto-syncing.** At the 6-sync cap the loop has already capped itself. At the sync-2 trigger it has NOT — stop the Monitor task yourself before proceeding, or it keeps syncing underneath you and step 3's `git reset --hard` races its `git merge`/`git push` in the same worktree. Either way, do not hand-roll more `git merge origin/main` pushes (that is the livelock).
-2. **Confirm required checks are green on the CURRENT SHA** (in a Monitor loop — `--watch` and foreground `sleep` are not allowed — until the block below prints `ADMIN-MERGE-READY`. Do NOT wait on `gh pr checks --required` until nothing is `pending`: it lists only checks that EXIST, and the aggregate `test` context is created only after every shard finishes, so it is absent — not pending — while its shards still run. That exact loop admin-merged #8458 with 25 of 26 required contexts present and `test` about to fail (#8500).)
+2. **Confirm every required check is present and green on the CURRENT SHA with `admin-merge-ready.sh`** — the only permitted gate before any `--admin` merge (#8500). Run it in the Monitor tool with `persistent: true` (`--watch` and foreground `sleep` are not allowed). It polls for you, so do not write your own watch loop. Do NOT wait on `gh pr checks --required` until nothing is `pending`: it lists only checks that EXIST, and the aggregate `test` context is created only after every shard finishes, so it is absent — not pending — while its shards still run. That exact loop admin-merged #8458 with 25 of 26 required contexts present and `test` about to fail.
 
    ```bash
    SHA=$(gh pr view <N> --json headRefOid --jq .headRefOid)
-   REQ=$(gh api 'repos/{owner}/{repo}/rules/branches/main' --jq '[.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context] | .[]')
-   [[ -n "$REQ" ]] || { echo "NOT-READY: required set unreadable"; exit 1; }
-   RUNS=$(gh api --paginate "repos/{owner}/{repo}/commits/$SHA/check-runs?per_page=100" --jq '.check_runs[] | [.name, .status, (.conclusion // ""), .started_at] | @tsv')
-   bad=""
-   while IFS= read -r ctx; do
-     row=$(awk -F'\t' -v n="$ctx" '$1==n' <<<"$RUNS" | sort -t$'\t' -k4 | tail -1)   # newest run of that name
-     case "$(cut -f2,3 <<<"$row")" in
-       $'completed\tsuccess'|$'completed\tskipped'|$'completed\tneutral') ;;
-       '') bad+=" ABSENT:$ctx" ;;
-       *) bad+=" NOT-GREEN:$ctx" ;;
-     esac
-   done <<<"$REQ"
-   [[ -z "$bad" ]] && echo "ADMIN-MERGE-READY $SHA" || echo "NOT-READY:$bad"
+   bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA" --wait --timeout 3600
    ```
 
-   Then merge with `--match-head-commit "$SHA"`, so a push in between cannot slip past the check. The block reads check RUNS only; a required context reported as a legacy commit STATUS reads ABSENT here, which fails closed. A shared script for this is tracked in #8500. The property is the same one `gh pr checks <N>` cannot express alone: it must show every required context **present and green on the current SHA**, not merely absent from the `pending` and `fail` buckets: an empty rollup on a just-pushed head satisfies "nothing is failing" vacuously, and after a conflict-resolved sync merge (whose commit the `bun-test` pre-commit hook skips by configuration) that head's ONLY execution is this CI run (the canonical poll loop reads this via `gh pr checks --json name,bucket`; the required set is [scripts/required-checks.txt](../../../../../scripts/required-checks.txt) — the count is deliberately not written here). **`--admin` bypasses the ENTIRE `required_status_checks` rule — every `required_check` context as well as the up-to-date gate — so nothing server-side will stop a red, pending or absent merge; this step is the only check that exists.** Measured against `infra/github/ruleset-ci-required.tf`: `strict_required_status_checks_policy` and every `required_check` are sibling parameters of ONE rule, and `ci-required-ruleset-canonical-bypass-actors.json` grants OrganizationAdmin and RepositoryRole 5 `bypass_mode: "pull_request"`. Ruleset bypass is granted per rule, never per parameter. This paragraph previously claimed `--admin` bypassed "ONLY the up-to-date gate, NOT the checks"; that was false for this repo, and it was the sole thing standing between the hatch and an unverified merge.
+   Branch on the exit code alone: 0 → go to step 3; 4 → the head moved or the PR closed, so re-read `SHA` and restart this step; anything else → stop and report the ABSENT/PENDING/FAILED contexts it names, and never merge. A PR that edits `.github/workflows/` or `.github/actions/` always exits 1 (`UNTRUSTED-CI`): it has no agent admin-merge path, and the operator merges it by hand. How the script decides (the required set from every ruleset, the latest run by check-run id, app pinning) is documented once, in its header. The property is the same one `gh pr checks <N>` cannot express alone: it must show every required context **present and green on the current SHA**, not merely absent from the `pending` and `fail` buckets: an empty rollup on a just-pushed head satisfies "nothing is failing" vacuously, and after a conflict-resolved sync merge (whose commit the `bun-test` pre-commit hook skips by configuration) that head's ONLY execution is this CI run. **`--admin` bypasses the ENTIRE `required_status_checks` rule — every `required_check` context as well as the up-to-date gate — so nothing server-side will stop a red, pending or absent merge; this step is the only check that exists.** Measured against `infra/github/ruleset-ci-required.tf`: `strict_required_status_checks_policy` and every `required_check` are sibling parameters of ONE rule, and `ci-required-ruleset-canonical-bypass-actors.json` grants OrganizationAdmin and RepositoryRole 5 `bypass_mode: "pull_request"`. Ruleset bypass is granted per rule, never per parameter. This paragraph previously claimed `--admin` bypassed "ONLY the up-to-date gate, NOT the checks"; that was false for this repo, and it was the sole thing standing between the hatch and an unverified merge.
 3. **Sync local → origin** so the local ref is fast-forward with the pushed head: `git fetch origin && git reset --hard origin/<branch>` (this discards any uncommitted or un-pushed local work on the branch — confirm `git status` is clean first).
-4. **Admin-merge:** `gh pr merge <N> --squash --admin --match-head-commit "$SHA"`. This bypasses the whole `required_status_checks` rule, not just its "branch must be up to date with base" parameter — step 2 is what makes it safe, and step 2 is discipline, not enforcement.
-5. **Retry the transient race.** A busy `main` returns `Base branch was modified. Review and try the merge again.` between the check read and the merge call; loop with a short backoff until it lands, run inside a Monitor (a foreground `sleep` is blocked): `for i in $(seq 1 20); do gh pr merge <N> --squash --admin --match-head-commit "$SHA" && break; sleep 18; done`.
+4. **Admin-merge, re-checking before every attempt.** `--admin` bypasses the whole `required_status_checks` rule, not just its "branch must be up to date with base" parameter — step 2 is what makes it safe, and step 2 is discipline, not enforcement. Run this block inside a Monitor (a foreground `sleep` is blocked). A Monitor task does not inherit step 2's shell, so set `SHA` to the head you read in step 2, from a run that exited 0 — never from text that merely looks like a marker line. The script runs again immediately before every attempt, only GitHub's `Base branch was modified` race is retried, and success is read from the PR's state (`MERGED` at `$SHA`), never from the merge command's exit status, which cannot prove the PR landed at that commit:
+
+   ```bash
+   SHA=<the 40-hex head SHA that step 2 certified>
+   [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "ADMIN-MERGE ABORTED: SHA not set"; exit 1; }
+   landed() { [[ "$(gh pr view <N> --json state,headRefOid --jq '"\(.state) \(.headRefOid)"')" == "MERGED $SHA" ]]; }
+   for i in $(seq 1 20); do
+     landed && { echo "ADMIN-MERGED $SHA"; exit 0; }
+     bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA"; rc=$?
+     (( rc == 0 )) || { echo "ADMIN-MERGE ABORTED rc=$rc"; exit "$rc"; }
+     if err=$(gh pr merge <N> --squash --admin --match-head-commit "$SHA" 2>&1); then break; fi
+     if ! grep -q 'Base branch was modified' <<<"$err"; then
+       landed && { echo "ADMIN-MERGED $SHA"; exit 0; }
+       echo "ADMIN-MERGE ABORTED (gh pr merge failed; see stderr)"; printf '%s\n' "$err" >&2; exit 1
+     fi
+     sleep 18   # the backoff the pre-#8500 one-liner used for the same race
+   done
+   if state=$(gh pr view <N> --json state,headRefOid --jq '"\(.state) \(.headRefOid)"'); then
+     [[ "$state" == "MERGED $SHA" ]] && { echo "ADMIN-MERGED $SHA"; exit 0; }
+     echo "ADMIN-MERGE NOT LANDED"; exit 1
+   fi
+   echo "ADMIN-MERGE UNKNOWN: could not read the PR state; check it before retrying"; exit 1
+   ```
+
+5. **Decide from the block's exit code**, never by grepping its output (`gh` stderr can echo PR-author-controlled text). 0 means GitHub reports the PR MERGED at `$SHA`. 4 means the head moved or the PR closed: re-read the SHA and go back to step 2. Anything else: stop and report. `plugins/soleur/test/admin-merge-ready-wiring.test.sh` executes this block.
 
 Do **not** use this hatch for a change with real conflict surface — there, the up-to-date requirement is load-bearing and the correct move is to merge during a quieter window (or resolve the conflict and let CI re-verify).
 
