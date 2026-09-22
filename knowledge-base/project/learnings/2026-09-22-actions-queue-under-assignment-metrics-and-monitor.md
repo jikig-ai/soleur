@@ -100,7 +100,12 @@ recovery auto-closes.
 3. Check for `cancelling` runs (`always()` teardown can hold jobs open) and
    org Actions policy (org-owner token needed — operator UI check).
 4. Queue hygiene: cancel zombies (>24h) and superseded queued runs — newest
-   per group, dry-run first.
+   per group, dry-run first. **Deep zombies may not be cancellable**: the
+   2026-09-22 cleanup found three runs where the API read `status=queued` but
+   `/cancel` and `/force-cancel` both 409'd with "has not been queued yet" —
+   a pre-queued limbo (zero jobs ever materialized, `updated_at` ==
+   `created_at`). The only API lever is `DELETE /actions/runs/{id}` (removes
+   the run record entirely — destructive; get explicit authorization).
 5. If under-assignment persists >2h: GitHub Support ticket with the evidence
    bundle — `plan.name`, queued count, delivered jobs, median live age,
    window duration.
