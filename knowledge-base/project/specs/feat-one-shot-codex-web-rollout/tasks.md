@@ -7,7 +7,8 @@ encrypted per-user resolver; runtime composition selects the persisted auth mode
 composes the approved App Server launcher through stdio and lifecycle, and fails
 closed when managed authorization, transport configuration, or Codex egress
 evidence is absent; persisted Codex bindings now derive the auth mode without
-client input. Real handler dispatch, managed authorization, qualification, legal
+client input; neutral Codex events have a tested mapping to the existing WebSocket
+protocol. Real handler dispatch, managed authorization, qualification, legal
 disposition, and rollout remain open.
 
 - [ ] Record current production/Flagsmith/CI/release/deploy baseline and related issues.
