@@ -2756,7 +2756,12 @@ if want_webplat; then
   # Exempt under --enumerate for the same reason the refusal guards above are:
   # an enumerate pass starts no suite and resolves no binary, and the
   # shard-totality guard enumerates on legs that install no node deps at all.
-  if (( _ENUMERATE == 0 )); then
+  # Exempt under SANDBOX_RECORD for the identical reason: the coverage-notice
+  # suite's sandbox arms replace run_suite with a recorder, so no suite starts
+  # and no binary resolves — refusing there would make every arm measure this
+  # refusal instead of the gate under test (the CI test-scripts shard installs
+  # no app deps, so the refusal would fire unconditionally).
+  if (( _ENUMERATE == 0 )) && [[ -z "${SANDBOX_RECORD:-}" ]]; then
     # The arm's dependency set is vitest AND tsx (ccla-add + its followthroughs
     # companion exec tsx directly, per the comment above) — probing vitest alone
     # would let a partial install fail deep in exactly the way this guard exists

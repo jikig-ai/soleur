@@ -121,6 +121,23 @@ first-match — "the pin" is only meaningful when exactly one version exists.
 7. `session-state.md` still claimed "work not invoked" after implementation
    landed — review caught the stale doc. **Prevention:** update
    session-state.md in the same commit that changes the phase it describes.
+8. CI `test-scripts` went red with 69 failures in
+   `test-all-infra-coverage-notice` — our new `apps/web-platform/node_modules`
+   precondition `exit 2`d every recorder-mode sandbox arm (the shard installs
+   no app deps). Locally invisible because this worktree HAS the app install.
+   **Prevention:** any new fail-closed guard in `test-all.sh` must declare its
+   exemption for `SANDBOX_RECORD` arms — they record suites, start nothing,
+   and resolve no binary; an unconditional refusal makes every arm measure the
+   refusal instead of the gate under test. Verify new refusals by running the
+   coverage-notice suite with the guarded resource absent, not present.
+9. Edited `test-all.sh` while the ship battery was executing it — bash reads
+   scripts incrementally, so a mid-run edit can corrupt the in-flight run;
+   the battery had to be killed and relaunched on the final tree anyway (the
+   SUT itself changed). **Prevention:** never edit the file a running gate is
+   executing — kill, edit, commit, relaunch. Relatedly, a killed probe chain
+   raced an `mv` restore of `node_modules`, nesting a stray partial copy
+   inside it; **Prevention:** restore moved dependency dirs in a separate,
+   verified step rather than tail-chained onto the command being killed.
 
 ## Cross-References
 

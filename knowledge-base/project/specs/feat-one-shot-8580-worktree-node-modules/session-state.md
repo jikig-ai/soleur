@@ -18,7 +18,27 @@
   `worktree-manager-hook-deps.test.sh` 13/13, real-repo e2e sibling
   resolution proven (`1 file(s) clean`).
 
-## Review Phase (in progress)
+## Ship Phase (in progress)
+
+- Review: complete — trailer `f924150e42` (degraded 9/10 agents,
+  `performance-oracle` absent; threshold `none` → non-blocking). QA: skipped
+  per skill (T-rows covered by mutation suite; no browser/API surface).
+  Compound: learning written (`2026-09-22-verify-by-manifest-not-by-executing-the-candidate.md`).
+- Preflight: all checks PASS or path-gated SKIP; advisor consult verdict
+  "complete, no blockers". PR #8581 synced with `origin/main` (`8d5c10df2d`),
+  `semver:patch` label set.
+- CI on synced head: `test-bun` + `test-webplat (1/2)` = pre-existing #8586
+  drift (`scheduled-actions-queue-health`). `test-scripts (1/3)` had ONE real
+  regression from this branch: the new `apps/web-platform/node_modules`
+  precondition `exit 2`d the coverage-notice suite's recorder-mode sandbox
+  arms on dep-less shards (69 fails, locally invisible — this worktree HAS
+  the install). Fixed by exempting `SANDBOX_RECORD` arms (they start no
+  suite, resolve no binary — same justification as `_ENUMERATE`); verified
+  127/127 with `node_modules` absent.
+- Local full battery: relaunching on the final tree after the fix (a prior
+  run was killed — the SUT changed under it).
+
+## Review Phase (complete)
 
 - Classification: `code`, design-risk yes (new sibling-binary resolution
   mechanism). Design-validity pass: code-simplicity + architecture both
