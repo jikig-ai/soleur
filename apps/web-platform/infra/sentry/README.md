@@ -32,7 +32,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **58 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **59 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -149,7 +149,7 @@ named after the latter.
 
 This section previously read "the 8 `sentry_cron_monitor` resources do not
 exist in Sentry yet" and described the first apply creating them. True at
-authoring, actively misleading now: the root declares **58** of them, all live
+authoring, actively misleading now: the root declares **59** of them, all live
 once `apply-sentry-infra.yml` runs for the latest additions,
 and the audit's Class D machinery exists precisely *because* live monitors can
 outrun the `.tf` that declares them — a monitor Terraform never declared is
@@ -160,6 +160,15 @@ Re-derive rather than trusting the number:
 ```bash
 grep -c '^resource "sentry_cron_monitor"' apps/web-platform/infra/sentry/*.tf
 ```
+
+- Adding a monitor is a five-ledger update, not one edit — the tf resource,
+  the heartbeat (`monitor-slug:` or `SENTRY_MONITOR_SLUG`), the
+  `NON_INNGEST_MONITORS`/`SENTRY_MONITOR_SLUG` registration in
+  `function-registry-count.test.ts`, the count prose here and in
+  `sentry-monitors-audit.sh`, and the `github -> sentry` edge counts in
+  `knowledge-base/engineering/architecture/diagrams/model.c4` (parity-gated by
+  `plugins/soleur/test/c4-count-parity.test.sh`). Miss a ledger and a
+  different gate goes red post-merge (#8586).
 
 ## Audit
 

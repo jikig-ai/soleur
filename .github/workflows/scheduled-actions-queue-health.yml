@@ -118,7 +118,7 @@ jobs:
             --description "P1 — fix immediately" --color "B60205" 2>/dev/null || true
 
           ISSUE_TITLE="[ci/actions-queue-health] Runner under-assignment — deep queue with delivered concurrency below entitlement"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 1 \
             --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
 
           QR=$(printf '%s' "$METRICS" | jq -r '.queued_runs // "?"')
@@ -165,7 +165,7 @@ jobs:
           # Soft issue — NOT action-required: an API blip must not page, and a
           # persistent failure keeps updating this one issue. (#6374 convention.)
           ISSUE_TITLE="[ci/actions-queue-health] Queue-health probe unavailable (API/prereq failure)"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 1 \
             --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
@@ -187,9 +187,19 @@ jobs:
           set -euo pipefail
           # Self-closing on BOTH issue titles — an action-required issue that
           # outlives its cause trains the operator to ignore the label.
-          for n in $(gh issue list --repo "$GH_REPO" --state open \
+          # -L 50 is the explicit bound the #6793 probe gate requires; the
+          # reachable set is the ≤2 titles this file files. It also bounds the
+          # serial `gh issue close` calls to ≤50 (~1-2 min), inside the job's
+          # 5-min timeout — a larger bound could blow the budget while the
+          # always() heartbeat still posts ok. The notice keeps a real
+          # cap-hit audible; any remainder drains on subsequent sweeps.
+          matches="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
               --search 'in:title "[ci/actions-queue-health]"' \
-              --json number --jq '.[].number' 2>/dev/null || true); do
+              --json number --jq '.[].number' 2>/dev/null || true)"
+          if [ "$(printf '%s\n' "$matches" | grep -c .)" -ge 50 ]; then
+            echo "::notice::queue-health self-close enumeration hit the -L 50 cap; oldest matching issues stay open until the next sweep"
+          fi
+          for n in $matches; do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "Queue health restored (${VERDICT}) at $(date -u +'%Y-%m-%d %H:%M UTC'). Auto-closed by ${RUN_URL}" || true
           done
