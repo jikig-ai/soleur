@@ -548,7 +548,7 @@ failure_modes:
     detection: "merge-time web_1_host_key_probe apply fails with ::error:: on the apply job (layer 6: workflow run log); cutover annotates host_key_mismatch role=web; workspaces-luks-verify scheduled-failure issue"
     alert_route: "workspaces-luks-verify scheduled-failure issue; apply workflow failure notification"
   - mode: "git-data re-keyed but the app did not reload the pin (redeploy job failed)"
-    detection: "git_data_redeploy job fails with a pin-lag annotation; erasures emit erasure_outcome=host_key_mismatch; startup line fingerprint differs from the Terraform-printed one"
+    detection: "git-data-pin-redeploy.yml run fails with a pin-lag annotation and a notify-ops-email failure mail; erasures emit erasure_outcome=host_key_mismatch; startup line fingerprint differs from the Terraform-printed one"
     alert_route: "art17_erasure_incomplete Sentry alert; workflow failure"
   - mode: "app pin absent while the store is disabled (transitional)"
     detection: "startup line git_data_pin=absent; Sentry op=pin_absent_store_disabled once per process"
@@ -563,7 +563,7 @@ logs:
   where: "GitHub Actions run logs; Sentry; Better Stack (git-data boot emits, container stdout incl. the startup pin line)"
   retention: "Actions logs 90 days; Sentry and Better Stack per plan retention"
 discoverability_test:
-  command: "curl -s --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/workspaces-luks-verify.yml/runs?per_page=1 | jq -r '.workflow_runs[0].conclusion'"
+  command: "curl -s --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/workspaces-luks-verify.yml/runs?per_page=1"
   expected_output: "success"
 ```
 
