@@ -14,6 +14,38 @@ lane: cross-domain
 
 # docs: post-merge learnings from the ship-machinery refactor (PR #8474)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-22
+**Sections enhanced:** 4 (Research Reconciliation, Observability (new), Sharp Edges, Acceptance Criteria cross-check)
+**Research agents used:** git-history-analyzer (attribution), a verify-the-negative / self-audit sweep
+(standard tier), plus the Phase 4.5-4.11 gates run directly.
+
+### Key Improvements
+
+1. **Phase 4.7 fired and is now satisfied.** `plugins/soleur/skills/ship/SKILL.md` counts as a plugin
+   surface, not pure docs, so the plan now carries an `## Observability` block. Its probe
+   (`grep -c -e 're-test by consumer, not by conflict' plugins/soleur/skills/ship/SKILL.md`) passes
+   `plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh` (rc 0), contains no shell-active
+   character, and prints `0` today and `1` after the edit.
+2. **Every attribution was re-verified live.** #8384 added the test file (`9daf9f4683`). `3b1e46aa9`
+   merged #8488 and `5d65dad50` merged #8484. `kind=wrong_branch` first appears in #8474's review
+   commit `7d11be0f22`. #8500, #8502, #4856, #5840 and #8450 are all OPEN. The merge time is
+   23:48:20Z. The transcript holds exactly one `gh pr merge 8474`, and it is `--squash --auto`.
+3. **One citation corrected.** `e9c6ee9a4` is a PR-branch commit squashed into `97633e8e`, not an
+   ancestor of `main`. The learning must cite it as "`e9c6ee9a4` on the PR branch (squashed into
+   `97633e8e`)" so `git merge-base --is-ancestor` readers are not misled.
+4. **"Four syncs" was ambiguous and is now "four cancelled heads"** throughout.
+
+### New Considerations Discovered
+
+- Halt gates 4.5 (network), 4.55 (downtime), 4.8 (PAT), 4.9 (UI), 4.10 (encryption) and 4.11 (guard)
+  do not fire: no trigger tokens, no infra, no UI and no guard deliverable. 4.6 passes (threshold
+  `none` with a scope-out; no sensitive path).
+- No AGENTS.md rule IDs are cited, so there is no fabricated or retired ID risk.
+- AC6's fence extraction yields 16 lines today, and AC7's grep lists exactly the 6 suites, both
+  confirmed before implementation.
+
 ## Overview
 
 PR #8474 (merged 2026-09-21T23:48:20Z as `97633e8e`) closed its session with three things it had
@@ -46,7 +78,7 @@ happened, so the plan takes the evidence side.
 | "Breaking the loop took an admin-merge, which needs operator approval." | No admin-merge of #8474 happened. The agent offered one from cycle 5 onward (transcript: "The admin-merge option to break the livelock still needs your approval"), the operator never replied to it, and GitHub's queued auto-merge fired at 23:48:20Z, 5 s after the required `test` context concluded `success` on head `b93f5ad63` (23:48:15Z). The only `gh pr merge 8474` in the transcript is `--squash --auto`. | Record that the loop ended when a quiet window let one CI run finish, after ~8.5 h. The admin-merge was the available way out, and it was gated on operator approval because the diff carried code, so the hatch did not apply. |
 | "Two sibling PRs ... needed real merges." | Three hand-resolved merges: `3b1e46aa9` (#8488: `rule-metrics.json`, `plan-sharp-edges.md`), `7c8a60222` (#8384 / ADR-235: `sync-pr-behind.sh`, `ship/SKILL.md`, the Phase 7 fixture, `INDEX.md`, `kb-tags.txt`), `5d65dad50` (#8484: `plan-sharp-edges.md` append). | Name all three; the incident is the #8384 one. |
 | "Only the PR's own test file had been run." | After `7c8a60222` the agent ran the Phase 7 fixture (392/0) and **its own** `plugins/soleur/test/sync-pr-behind.test.sh` (29/0). Those are the suites of the conflicted files. The broken file, `plugins/soleur/scripts/sync-pr-behind.test.sh`, was **added by #8384 and merged cleanly**, so it was never in the conflict list (`git merge-tree --write-tree --name-only 3b1e46aa9 9daf9f468`). Both files share the basename `sync-pr-behind.test.sh`. | This is the sharper lesson for item 1: the conflict list is the wrong work-list. The consumer set is found with `git grep -l`, not from the conflicts. |
-| "The fix cost one extra CI cycle." | The defect was pushed at 19:24:08Z (`7c8a60222`). `test-scripts (3/3)` was **cancelled** on that head and the next three (`922808ff6`, `5d65dad50`, `94b940efb`) because each sync push cancels the in-flight PR run (`ci.yml` `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`). It first concluded `failure` on `1e198ac00` at 23:10:37Z: **3 h 46 min and four syncs after the push**. The aggregate `test` context reported `failure` on every one of those heads anyway, because it runs `if: always()` and counts a cancelled shard as not-success. | Record that the livelock hid the red for four cycles, and that a red `test` on a head whose shards were cancelled says nothing either way. The fix (`e9c6ee9a4`) itself took one more cycle. |
+| "The fix cost one extra CI cycle." | The defect was pushed at 19:24:08Z (`7c8a60222`). `test-scripts (3/3)` was **cancelled** on that head and the next three (`922808ff6`, `5d65dad50`, `94b940efb`) because each sync push cancels the in-flight PR run (`ci.yml` `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`). It first concluded `failure` on `1e198ac00` at 23:10:37Z: **3 h 46 min after the push, with the shard cancelled on four heads**. The aggregate `test` context reported `failure` on every one of those heads anyway, because it runs `if: always()` and counts a cancelled shard as not-success. | Record that the livelock hid the red across four cancelled heads, and that a red `test` on a head whose shards were cancelled says nothing either way. The fix (`e9c6ee9a4`) itself took one more cycle. |
 
 Held as stated: `e9c6ee9a4` is a 3-line change to `plugins/soleur/scripts/sync-pr-behind.test.sh`
 that answers the `headRefName` query with the fixture branch, uncounted; the stub prints
@@ -268,6 +300,37 @@ None. Checked the 71 open `code-review` issues against `plugins/soleur/skills/sh
 
 `threshold: none, reason: the diff is knowledge-base prose and two skill-instruction paragraphs; it touches no code path, schema, credential or user data.`
 
+## Observability
+
+The Files-to-Edit list includes `plugins/soleur/skills/ship/SKILL.md` and a ship reference, which
+count as plugin surfaces for deepen-plan Phase 4.7. The change is instruction prose read by an
+agent. It runs no process and emits no events, so its only observable state is whether the text is
+present in the files agents load.
+
+```yaml
+liveness_signal:
+  what: "the new DIRTY-exit bullet is present in the ship skill an agent loads at Phase 7"
+  cadence: "per ship run (the skill is read fresh each session)"
+  alert_target: "CI test-scripts shard (ship-phase-7-poll-fixtures, workflow-fidelity) and markdown-lint on the PR"
+  configured_in: "plugins/soleur/skills/ship/SKILL.md (DIRTY exit bullet list)"
+error_reporting:
+  destination: "GitHub Actions check runs on the PR (required `test` context)"
+  fail_loud: "a red test-scripts or test-bun shard naming the suite that reads the edited prose"
+failure_modes:
+  - mode: "the bullet is dropped or rewritten by a later sibling merge in ship/SKILL.md"
+    detection: "discoverability_test below returns 0 instead of 1"
+    alert_route: "the reviewer of the PR that drops it (diff shows the removed line)"
+  - mode: "the edit pushes ship/SKILL.md past its byte ceiling"
+    detection: "scripts/lint-skill-body-budget.py --base origin/main exits non-zero in CI"
+    alert_route: "PR author, via the failing check"
+logs:
+  where: "git history of plugins/soleur/skills/ship/SKILL.md and the PR's check-run logs"
+  retention: "git history is permanent; GitHub Actions logs 90 days"
+discoverability_test:
+  command: "grep -c -e 're-test by consumer, not by conflict' plugins/soleur/skills/ship/SKILL.md"
+  expected_output: "1"
+```
+
 ## Acceptance Criteria
 
 - [ ] AC1: the new learning exists at the Files-to-Create path, has YAML frontmatter with `title`,
@@ -321,6 +384,9 @@ workflow-skill prose only).
   "Why" paragraph.
 - "Four syncs" is ambiguous; the evidence is four cancelled heads (`7c8a60222` and the next three).
   Write "four heads".
+- `e9c6ee9a4` is not on `main`: PR #8474 was squash-merged, so the fix commit lives only on the PR
+  branch and is folded into `97633e8e`. Cite it that way. `git merge-base --is-ancestor e9c6ee9a4
+  origin/main` is false by construction.
 
 ## Plan Review Revisions
 
