@@ -105,6 +105,7 @@ describe("ROADMAP_REVIEW_PROMPT — anchor strings (regression-detection)", () =
     it.each([
       ["ISSUE CLOSURE SAFETY:", "close/reassign blast-radius bound"],
       ["ROADMAP.MD CONFLICT GUARD:", "human/agent edit collision"],
+      ["FOG AND SCOPE RULE:", "workshop-owned roadmap sections and blocked-is-not-stale (#8292)"],
       ["CLONE DEPTH RULE:", "stale `git log` misuse on --depth=1 clone"],
       ["STAGING RULE (#5091):", "scoped staging on the live Tier-1 auto-fix-PR path"],
       [

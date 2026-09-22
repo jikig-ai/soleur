@@ -496,3 +496,76 @@ describe("Sentry heartbeat step shape (#7834)", () => {
     expect(expr).toMatch(/&&\s*'ok'\s*\|\|\s*'error'/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GHA schedule cron ↔ monitor crontab parity (#8450).
+// The slug↔resource and step-shape guards above pin THAT a heartbeat monitor
+// exists — not that its expected cadence still matches the workflow's actual
+// schedule. A cadence trim that updates the workflow and forgets the paired
+// monitor leaves the monitor expecting the OLD cadence: check-ins arriving at
+// the new slower rate page as missed, or an over-wide expectation delays a
+// genuinely-dark alarm. For every workflow heartbeat slug whose monitor
+// declares a crontab schedule AND whose workflow has a `schedule:` block, the
+// monitor's crontab must be one of the workflow's own cron expressions.
+// ---------------------------------------------------------------------------
+
+function workflowCrons(file: string): string[] {
+  const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
+  return [...src.matchAll(/^\s*-?\s*cron:\s*['"]([^'"]+)['"]/gm)].map(
+    (m) => m[1],
+  );
+}
+
+function monitorCrontabBySlug(tf: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const re =
+    /^resource\s+"sentry_cron_monitor"\s+"[a-z0-9_]+"\s*\{([\s\S]*?)^\}/gm;
+  for (const m of tf.matchAll(re)) {
+    const name = m[1].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
+    const crontab = m[1].match(/crontab\s*=\s*"([^"]+)"/);
+    if (name && crontab) out.set(name[1], crontab[1]);
+  }
+  return out;
+}
+
+function heartbeatSlugFiles(): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const s of heartbeatSteps()) {
+    if (!s.monitorSlug) continue;
+    const files = out.get(s.monitorSlug) ?? [];
+    if (!files.includes(s.file)) files.push(s.file);
+    out.set(s.monitorSlug, files);
+  }
+  return out;
+}
+
+describe("GHA schedule cron ↔ monitor crontab parity (#8450)", () => {
+  it("every crontab-scheduled heartbeat monitor mirrors its workflow's cron", () => {
+    const tf = readFileSync(MONITORS_TF, "utf-8");
+    const crontabs = monitorCrontabBySlug(tf);
+    const checked: string[] = [];
+    const mismatched: string[] = [];
+    for (const [slug, files] of heartbeatSlugFiles()) {
+      const crontab = crontabs.get(slug);
+      if (!crontab) continue; // interval-type or undeclared monitors are out of scope
+      const crons = files.flatMap((f) => workflowCrons(f));
+      if (crons.length === 0) continue; // not a scheduled workflow — nothing to mirror
+      checked.push(slug);
+      if (!crons.includes(crontab)) {
+        mismatched.push(
+          `${slug}: monitor expects "${crontab}", workflow crons are ${JSON.stringify(crons)}`,
+        );
+      }
+    }
+    // Anti-vacuity: the cohort this guard exists for must actually be seen.
+    expect(checked.length).toBeGreaterThanOrEqual(3);
+    for (const slug of [
+      "scheduled-zot-restart-loop",
+      "scheduled-prod-version-drift",
+      "scheduled-inngest-health",
+    ]) {
+      expect(checked).toContain(slug);
+    }
+    expect(mismatched).toEqual([]);
+  });
+});

@@ -1014,10 +1014,24 @@ Sentry-infra PR and `main` were red.
   - `scripts/sentry-issue-alert-create-tripwire.sh` refuses Create, Update and replace of any
     `sentry_alert` whose after-state carries a legacy trigger type in the projection's
     `excluded` set, at `plan_pr` and before apply;
-  - `scripts/sentry-alert-live-fidelity.sh` pins every excluded-type live workflow's enabled
+  - `scripts/sentry-alert-live-fidelity.sh` pins every Terraform-FROZEN rule's enabled
     state, detector, trigger comparison and email action against the committed capture,
     post-apply and daily; the op-contract suite pins the frozen `.tf` literals to the same
-    capture.
+    capture. Every OTHER excluded-type live workflow must be a registered Sentry default,
+    matched by id AND name (a copy borrowing a default's name, or a name live twice, is a
+    finding); a registered default's content is deliberately not pinned, because Sentry edits
+    its own defaults.
+- **#8267 amendment (2026-09-22): Sentry-created defaults are registered, not captured.** Sentry
+  created "Send a notification when pull requests are ready" (workflow 1143693, `createdBy: null`)
+  on 2026-09-17, after the 2026-09-09 capture, with a `seer_activity_trigger` the pinned provider
+  cannot express (v0.15.7 reads it into `legacy_trigger_conditions` and writes `comparison: true`;
+  upstream `main` adds no support). It is not adopted into Terraform: AP-001 is deliberately not
+  applied to vendor-owned defaults. To register such a default, add its trigger type to
+  `def excluded` in `tests/scripts/lib/sentry-alert-projection.jq` and its `{id, name}` to
+  `apps/web-platform/infra/sentry/vendor-default-workflows.json`; the dated capture is never
+  appended to. Note for #7985: when the frozen rules convert to native triggers, the vendor-default
+  types (`new_high_priority_issue`, `existing_high_priority_issue`, `seer_activity_trigger`) must
+  stay in `excluded`, or both defaults become UNMANAGED.
 - The TF-side fidelity projection excludes a rule whose trigger type is in `excluded` in either
   representation (native or legacy), mirroring the live side, so `alert-reference.json` stays at
   30 keys.

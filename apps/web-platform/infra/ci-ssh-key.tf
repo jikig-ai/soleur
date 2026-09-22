@@ -69,10 +69,11 @@ resource "terraform_data" "root_authorized_keys" {
   triggers_replace = sha256(tls_private_key.ci_ssh.public_key_openssh)
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web["web-1"].ipv4_address
-    user  = "root"
-    agent = true
+    type     = "ssh"
+    host     = hcloud_server.web["web-1"].ipv4_address
+    user     = "root"
+    agent    = true
+    host_key = local.web_1_ssh_host_key
   }
 
   provisioner "remote-exec" {
