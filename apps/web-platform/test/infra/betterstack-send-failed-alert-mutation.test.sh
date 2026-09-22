@@ -191,9 +191,9 @@ s = s.replace(old, "      OR JSONExtractString(raw, '"'"'PRIORITY'"'"') = '"'"'2
 expect_red "G1 (AND PRIORITY → OR PRIORITY)" betterstack-logs-alerts.tf "predicate widened: OR in WHERE"
 
 MUT='
-old = "      AND startsWith("
+old = "      AND startsWith(JSONExtractString("
 assert s.count(old) == 1, "anchor"
-s = s.replace(old, "      AND NOT startsWith(")'
+s = s.replace(old, "      AND NOT startsWith(JSONExtractString(")'
 expect_red "G2 (NOT startsWith)" betterstack-logs-alerts.tf "predicate widened: NOT in WHERE"
 
 MUT='
@@ -235,12 +235,14 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# TWO explorations carry this line since #6894, and the guard reads the monitor_send_failed block
-# only — so the mutation must land in THAT block, which is the first occurrence in the file. The
-# count is asserted exactly (not `>= 1`): a third exploration would make "the first" ambiguous.
+# THREE explorations carry this line (#6894, and #8408's registry_store_not_luks), and the guard
+# reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
+# first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence
+# premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 2, "anchor"
+assert s.count(old) == 3, "anchor"
+assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"
 

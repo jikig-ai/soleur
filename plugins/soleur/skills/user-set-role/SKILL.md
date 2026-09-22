@@ -1,6 +1,7 @@
 ---
 name: user-set-role
 description: "This skill should be used to promote or demote a user's flag-targeting role across Supabase users.role and the Flagsmith identity trait."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->

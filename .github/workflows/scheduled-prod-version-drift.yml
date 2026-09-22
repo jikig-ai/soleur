@@ -35,14 +35,16 @@
 # check. This workflow keys on the OUTCOME ("prod is missing commits it should have") rather than
 # on one mechanism of becoming stale, so it also catches any future silent no-op path.
 #
-# SCHEDULE REALITY. `*/30` is a REQUEST, not a guarantee, and on this repo the gap between it and
-# delivery is large enough to matter when tuning anything here: 59 consecutive scheduled runs of
-# the `*/30` sibling measured min 61 / median 114 / max 243 minutes apart, and the `*/15` sibling
-# delivers the SAME ~11 runs/day. So end-to-end detection is typically the threshold
-# (`DRIFT_SUSTAINED_THRESHOLD_MIN` in scripts/prod-version-drift-check.sh) + up to one delivered
-# interval, not the threshold + 30 min the cron line implies, and tightening the cron would buy
-# nothing. This is also why the staleness clock reads an immutable commit timestamp instead of
-# counting ticks — tick-counting here would measure an interval that does not exist.
+# SCHEDULE REALITY. A `schedule:` cron is a REQUEST, not a guarantee, and on this repo the gap
+# between it and delivery is large enough to matter when tuning anything here: 59 consecutive
+# scheduled runs of a `*/30` sibling measured min 61 / median 114 / max 243 minutes apart, and a
+# `*/15` sibling delivers the SAME ~11 runs/day. So end-to-end detection is typically the
+# threshold (`DRIFT_SUSTAINED_THRESHOLD_MIN` in scripts/prod-version-drift-check.sh) + up to one
+# delivered interval, not the threshold + the cron's nominal interval, and tightening the cron
+# would buy nothing — the hourly cadence below (#8450) loses almost nothing against a threshold
+# that is already 225 min + delivered-interval dominated. This is also why the staleness clock
+# reads an immutable commit timestamp instead of counting ticks — tick-counting here would
+# measure an interval that does not exist.
 #
 # Security: the /health response is UNTRUSTED INPUT. A well-formed build_sha is validated to
 # 40-hex before use; on the malformed path the offending value is deliberately echoed back to the
@@ -62,7 +64,10 @@ name: "Scheduled: Production Version-Drift Alerter"
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    # Hourly (#8450): detection is DRIFT_SUSTAINED_THRESHOLD_MIN-dominated (225 min) and the
+    # delivered `*/30` cadence already medians ~114 min, so this relax adds ~0-60 min worst-case
+    # lag against a 225-min window. Paired monitor: sentry_cron_monitor.scheduled_prod_version_drift.
+    - cron: "0 * * * *"
   workflow_dispatch: {}
 
 permissions:

@@ -79,6 +79,8 @@ React to the final status from the Monitor output.
 gh run view <run-id> --log-failed 2>&1 | tail -50
 ```
 
+Ship refuses post-deploy actions on `CI=failure` too. Still run Phase 3's `find`: a `MATCH=descendant DEPLOY=success` line means production carries the merge via `<DEPLOYED_SHA>` — say so.
+
 Stop:
 
 ```text
@@ -109,9 +111,27 @@ If a production URL is available, verify the deployment:
 curl -sf --max-time 10 "<production-url>/health" | jq .
 ```
 
-Use `/health` (the public, middleware-/CSP-bypassed health route returning `{"status":"ok","version","build_sha","supabase","sentry",...}`), NOT `/api/health` — the latter is an authenticated API route that 307-redirects an unauthenticated probe to `/login`, so `curl -sf` fails and `HEALTH_VERIFIED` is left `false` even when production is healthy. The `build_sha` field also confirms the merge commit is the live build.
+Use `/health` (the public, middleware-/CSP-bypassed health route returning `{"status":"ok","version","build_sha","supabase","sentry",...}`), NOT `/api/health` — the latter is an authenticated API route that 307-redirects an unauthenticated probe to `/login`, so `curl -sf` fails and `HEALTH_VERIFIED` is left `false` even when production is healthy. For this repo, `build_sha` is judged by `deploy-arm.sh` below.
 
-**If health check succeeds:** HTTP 200 alone is NOT success — `/health` returns 200 with `status: "ok"` whatever the database state, and only `.supabase` flips to `"error"`. Require `jq -e '.supabase == "connected"'` (and the expected `build_sha`) before recording the response and setting `HEALTH_VERIFIED=true`. A 200 with `supabase: "error"` is a production database outage: set `HEALTH_VERIFIED=false`, report it prominently, and diagnose per §Production Debugging (2026-09-15 post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
+**This repo (`web-platform-release.yml` present):** identify the deploy and what production serves, with literal arguments (no command substitution) and the FULL 40-hex merge sha (a short one matches nothing, #8135). First wait for `find` — it polls about once a minute for up to 120 polls and prints one line; watch it with the harness poller (**Claude:** Monitor tool, matching `^ARM=`; **Grok:** AwaitShell), never Bash `run_in_background`. Only once that line has arrived with rc ≠ 4, run `served`:
+
+```bash
+bash plugins/soleur/scripts/deploy-arm.sh find --wait <full-merge-sha>
+bash plugins/soleur/scripts/deploy-arm.sh served <full-merge-sha>
+```
+
+First matching row wins:
+
+| `find` | `served` | result |
+|---|---|---|
+| any | `UNRESOLVED` | could-not-measure, never a mismatch |
+| rc 2 (`REASON=error`) | any | could-not-measure; report `CAUSE` |
+| `DEPLOY=skipped` | any | not deployed by design (`CI=failure` → CI red, Phase 2) |
+| `DEPLOY=success\|superseded`, or rc 3 `ARM=none` (incl. `timeout`) | `CONTAINS` | verified — `MATCH=descendant`/`superseded`/`ARM=none` mean a later deploy (or a manual redeploy) delivered it |
+| `DEPLOY=failure\|blocked` | `CONTAINS` | verified via a later deploy; still report this merge's own failed deploy and name the job |
+| any other | `NOT_CONTAINED` | not verified — report the `find` line; if it said `DEPLOY=success`, production does not serve the merge (lagging host or rollback): report prominently |
+
+**If health check succeeds:** HTTP 200 alone is NOT success — `/health` returns 200 with `status: "ok"` whatever the database state, and only `.supabase` flips to `"error"`. Require `jq -e '.supabase == "connected"'` (and, here, the table above) before recording the response and setting `HEALTH_VERIFIED=true`. A 200 with `supabase: "error"` is a production database outage: set `HEALTH_VERIFIED=false`, report it prominently, and diagnose per §Production Debugging (2026-09-15 post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
 
 **If health check fails or no URL configured:** set `HEALTH_VERIFIED=false`, warn, and proceed (not all PRs trigger deployments):
 
@@ -173,102 +193,9 @@ A merged-and-deployed fix can pass every gate above and still not work — the d
 
 **Run only when** the PR body or linked issue names a specific Sentry issue (a `*.sentry.io/issues/<id>` URL, a `SENTRY-<SHORTID>`, or a `Closes #N` whose issue references one). If no Sentry issue is identified, skip silently — there is no error to measure.
 
-**Prerequisites:** same `SENTRY_AUTH_TOKEN` resolution as Phase 3.5 for the aggregate Discover count. **The single-issue GET below, however, requires the write-scoped `SENTRY_ISSUE_RW_TOKEN`** — the `/organizations/<org>/issues/<id>/` endpoint returns `403` on the `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` resolved from Doppler `soleur/prd` (they carry Discover/ingest scope, not `event:read` on the issue resource). Using that token here makes the `curl -sfS` GET exit non-zero, leaving `ISSUE_JSON` empty → `ISSUE_STOPPED` stuck `false` → auto-resolve never fires. Resolve the RW token first; if it is absent, skip this phase (warn) since the GET cannot succeed without it.
+When a Sentry issue is identified, read [sentry-error-count-delta.md](./references/sentry-error-count-delta.md) now and run it; otherwise skip silently. It holds the prerequisites, the issue GET, the interpretation and the guarded auto-resolve PUT.
 
-> **Clarified 2026-09-08 (#7797) — `SENTRY_AUTH_TOKEN` names TWO different
-> tokens, and only one of them 403s here.** An earlier revision of this
-> block was "corrected" on the premise that the 403 claim above was false. That
-> correction was withdrawn: it generalised a measurement taken on the
-> `soleur/prd_terraform` token onto the `soleur/prd` token this phase actually
-> resolves. Both measured 2026-09-08 against
-> `GET /organizations/<org>/issues/<id>/`:
->
-> - `soleur/prd` `SENTRY_AUTH_TOKEN` (what the code below reads) → **403**. The
->   requirement above is correct and stays.
-> - `soleur/prd_terraform` `SENTRY_AUTH_TOKEN` (the #7797 leaked credential, a
->   personal token carrying org/project/team **admin**) → **200**.
->
-> They are two different tokens sharing one variable name — the post-mortem
-> records this explicitly. Do not treat a capability measured on one as evidence
-> about the other, and do not widen this GET to an admin-scoped token: the
-> least-privilege credential for it is `SENTRY_ISSUE_RO_TOKEN`
-> (`event:read`, `org:read`, Doppler `soleur/prd`), and [scripts/sentry-issue.sh](../../../../scripts/sentry-issue.sh)
-> already implements the RO → RW ladder for this same URL.
-
-```bash
-# ISSUE_ID = the Sentry issue short-id or numeric id from the PR/issue body
-# (a bare token: letters, digits, `-`, `_`). DEPLOY_TS = the merge commit's
-# committer date (Phase 1 recorded the merge SHA) — the reference point for
-# "did the error stop firing post-deploy?".
-DEPLOY_TS=$(git show -s --format=%cI "<merge-commit-sha-from-phase-1>")
-# The single-issue endpoint needs the write-scoped token: the soleur/prd
-# SENTRY_AUTH_TOKEN 403s here (re-measured 2026-09-08, #7797 — the *prd_terraform*
-# token of the same name returns 200, but it is a DIFFERENT credential and is not
-# what this line resolves). Reused by the auto-resolve PUT below, so resolve it
-# once. Absent -> skip phase. Least-privilege alternative if this is ever widened:
-# SENTRY_ISSUE_RO_TOKEN (event:read, org:read), never SENTRY_AUTH_TOKEN.
-SENTRY_RW_TOKEN=$(doppler secrets get SENTRY_ISSUE_RW_TOKEN -p soleur -c prd --plain 2>/dev/null || true)
-if [[ -z "$SENTRY_RW_TOKEN" ]]; then
-  echo "WARNING: SENTRY_ISSUE_RW_TOKEN not set — cannot read the issue (the prd SENTRY_AUTH_TOKEN 403s on /issues/<id>/). Skipping error-count delta + auto-resolve."
-fi
-# Query the issue; capture the response so the auto-resolve guard below can
-# read status + lastSeen without a second GET.
-ISSUE_JSON=$(curl -sfS -H "Authorization: Bearer ${SENTRY_RW_TOKEN}" \
-  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/")
-echo "$ISSUE_JSON" | jq '{shortId, status, count, lastSeen}'
-ISSUE_STATUS=$(echo "$ISSUE_JSON" | jq -r '.status')
-ISSUE_LASTSEEN=$(echo "$ISSUE_JSON" | jq -r '.lastSeen')
-# Mechanical stopped-firing signal — this boolean, NOT the prose below, gates
-# the auto-resolve PUT. True only when the issue is already resolved/ignored OR
-# lastSeen predates the deploy. Any parse failure leaves it false (fail-safe:
-# never auto-resolve on ambiguous data).
-ISSUE_STOPPED=false
-if [[ "$ISSUE_STATUS" == "resolved" || "$ISSUE_STATUS" == "ignored" ]]; then
-  ISSUE_STOPPED=true
-elif [[ -n "$ISSUE_LASTSEEN" && "$ISSUE_LASTSEEN" != "null" ]]; then
-  LASTSEEN_EPOCH=$(date -d "$ISSUE_LASTSEEN" +%s 2>/dev/null || echo 9999999999)
-  DEPLOY_EPOCH=$(date -d "$DEPLOY_TS" +%s 2>/dev/null || echo 0)
-  (( LASTSEEN_EPOCH < DEPLOY_EPOCH )) && ISSUE_STOPPED=true
-fi
-```
-
-Interpretation (all outcomes are **WARN-only — never a merge blocker**):
-
-- `lastSeen` is older than the deploy timestamp **or** `status` is `resolved`/`ignored` (`ISSUE_STOPPED=true`): "Sentry error-count delta: error appears to have stopped firing post-deploy." — the expected good outcome; report `STOPPED` (or `AUTO-RESOLVED` if the write below succeeds). **Auto-resolve runs in this branch only** (see below).
-- `lastSeen` is after the deploy timestamp (`ISSUE_STOPPED=false`): "WARNING: Sentry issue `<shortId>` is still firing after the deploy (lastSeen <ts>). The fix may be ineffective or the root cause may differ from the diagnosis — recommend re-opening for investigation rather than closing." Report `STILL-FIRING` and surface it prominently in the Phase 7 report. **Never auto-resolve in this branch.**
-- Sentry API unreachable / issue not found / non-200: warn and report `SKIPPED`.
-
-**Auto-resolve (expected-good-outcome branch only).** When the GET above shows the error has stopped firing (`lastSeen` older than the deploy **or** `status` already `resolved`/`ignored`) **and** the issue is not already `resolved`, PUT `status:"resolved"` so the historical issue leaves the active list automatically. This requires a dedicated write-scoped token — the `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` read tokens resolved from `soleur/prd` lack `event:write`/`event:admin` and return 403 on the write endpoint, so resolve a separate token and **skip (do NOT fall back to a read token)** when it is absent:
-
-```bash
-# SENTRY_RW_TOKEN was already resolved in Phase 3.6 above (the issue GET needs
-# it too). Reused here for the PUT.
-
-# Fire ONLY when the mechanical ISSUE_STOPPED signal is true (the still-firing
-# branch is structurally unreachable here, never prose-gated), a write token is
-# present, the issue is not already resolved, and ISSUE_ID is a bare token (the
-# regex blocks a crafted id with `/`/`?` from retargeting a different issue on
-# this state-mutating PUT). Body is discarded (-o /dev/null) — it returns the
-# full issue object, which can carry production event data; only the HTTP code
-# is load-bearing.
-if [[ -n "$SENTRY_RW_TOKEN" && "$ISSUE_STOPPED" == "true" && "$ISSUE_STATUS" != "resolved" \
-      && "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
-  RESOLVE_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
-    -H "Authorization: Bearer ${SENTRY_RW_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d '{"status":"resolved"}' \
-    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/")
-  if [[ "$RESOLVE_HTTP" == "200" ]]; then
-    echo "Sentry error-count delta: AUTO-RESOLVED issue ${ISSUE_ID}."
-  else
-    echo "WARNING: Sentry issue auto-resolve failed (${RESOLVE_HTTP}): verify SENTRY_ISSUE_RW_TOKEN has event:admin on ${SENTRY_ORG}; resolve manually in the UI."
-  fi
-fi
-```
-
-The PUT reuses the SAME `API_HOST`/`SENTRY_ORG` resolution as the GET above, so it inherits the env-correct `jikigai-eu` host from Doppler `prd`. On any non-200 (403 under-scoped, transient) it emits a WARN and continues — **never blocks**. Report vocabulary for this phase is `AUTO-RESOLVED` (write succeeded) / `STOPPED` (stopped firing, no token or already resolved) / `STILL-FIRING` / `SKIPPED`.
-
-**Why WARN-only, not a blocker:** a true pre/post delta needs the original error to actually re-fire in the brief post-merge window. Low-frequency bugs (daily-cron failures, rare-path exceptions) legitimately show zero events for hours after a correct fix, so a hard gate here would produce noisy false negatives that erode trust in the pipeline. The signal is a prompt to *look*, not a verdict. For high-frequency errors a continued-firing signal is strong evidence the fix missed; consider a `/loop` re-check 15–30 min out before marking the linked issue resolved.
+Report vocabulary for this phase (Phase 7 reads it): `AUTO-RESOLVED` (write succeeded) / `STOPPED` (stopped firing, no token or already resolved) / `STILL-FIRING` / `SKIPPED`. All outcomes are WARN-only, never a merge blocker.
 
 ## Phase 3.7: First-Deploy-After-Pipeline-Change Watch
 
@@ -280,7 +207,7 @@ Enforces `wg-dark-launch-deploy-gates`. A change to deploy-*gating* logic cannot
 # Did this PR change a gate that can roll back / block a deploy?
 gh pr diff <number> --name-only | grep -qE 'apps/web-platform/infra/ci-deploy\.sh|apps/web-platform/infra/ci-deploy-wrapper\.sh' && PIPELINE_GATE_CHANGE=1
 # Also treat changes to the gating phases of the ship/postmerge skills as pipeline-gate changes.
-gh pr diff <number> --name-only | grep -qE 'plugins/soleur/skills/(ship|postmerge)/SKILL\.md' && PIPELINE_GATE_CHANGE=1
+gh pr diff <number> --name-only | grep -qE 'plugins/soleur/skills/(ship|postmerge)/SKILL\.md|plugins/soleur/scripts/deploy-arm\.sh' && PIPELINE_GATE_CHANGE=1
 ```
 
 If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
@@ -294,85 +221,28 @@ If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
 | push arm | `on: push` to `main` | `release` only (build + publish) |
 | deploy arm | `on: workflow_run` (CI completed) | `resolve-target`, `migrate`, `verify-migrations`, `verify-doppler-secrets`, `deploy`, `live-verify`, `notify-gated`, `release-outcome` |
 
-`--limit 1` with no event filter lands on the push arm roughly half the time. There, `deploy` exists only as a `skipped` job (GitHub materialises `if:`-false jobs), the `reason=canary_*` grep below matches nothing, and the phase would classify `GATE-VALIDATED` against an **empty log** — a false green on exactly the question this phase exists to answer. **Chosen predicate in this file: `event=workflow_run` AND `head_sha=<this merge's full SHA>`** — the event picks the arm, the SHA picks the merge **while your merge is still `main`'s tip when your CI completes** (a `workflow_run` run's `head_sha` is the default-branch tip at trigger time; an empty result is the `absent` row below, not a missing arm) — plus a job-presence assertion so a wrong selection fails loudly instead of silently.
+`--limit 1` with no event filter lands on the push arm roughly half the time, where `deploy` exists only as a `skipped` job — a false green against an empty log. **Identify the deploy arm by what its `resolve-target` checks out, never by `head_sha`:** a `workflow_run` run's `head_sha` is `main`'s tip when it fired, so a `head_sha=<merge>` query misses your arm on a busy `main` (#8297) and returns the previous merge's arm (#8391). `deploy-arm.sh find` reads each candidate's checked-out SHA and accepts your merge or a descendant (#8492).
 
-**The FALSE-POSITIVE direction is the dangerous one, and the `absent` row misses it.** As
-`head_sha` is the default-branch tip at trigger time, an arm triggered by the PREVIOUS merge's CI
-is stamped with your merge. Both match the predicate; the API returns the older first — not yours,
-fully green. **Identify the arm by what it DEPLOYS:** `resolve-target` checks out that
-commit and logs it. `--allow-escape-sequences` is required or `gh api` exits 1 writing zero bytes —
-which reads as "no log":
+Reuse Phase 3's `find` line (run `bash plugins/soleur/scripts/deploy-arm.sh find <full-merge-sha>` if Phase 3 did not). Copy the digits after `ARM=` literally into the next call; `ARM=none` means there is no run — never pass `none` to `gh run view`. Rollback reason:
 
 ```bash
-RT=$(gh api --paginate "repos/{owner}/{repo}/actions/runs/${RELEASE_RUN_ID}/jobs" \
-  --jq '.jobs[]|select(.name=="resolve-target")|.id' | head -1)
-gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/${RT}/logs" \
-  | grep -oE 'depth=1 origin [0-9a-f]{40}' | head -1
+gh run view <ARM digits> --log 2>/dev/null | grep -oE 'reason=(canary_sandbox_failed|production_start_failed|canary_[a-z_]+)' | head -1
 ```
 
-Not your merge → discard and wait; yours cannot exist until YOUR CI ends. **Why:** #8391 —
-the query returned arm `35493486054` (`deploy` and `live-verify` both `success`) whose
-`resolve-target` had checked out the previous commit: that CI finished at `06:09:16Z`, the arm
-started `06:09:22Z`, the merge's own CI still ran, the real arm came 19 min later. Read as yours
-it reports the PR deployed while production serves the previous build — #8276 via its own remedy.
-
-**A green `live-verify` is not evidence it ran:** there it was `success` with the harness and every
+**A green `live-verify` is not evidence it ran:** it can be `success` with the harness and every
 substantive step `skipped` by its changed-file gate — read the step list. **Probe
-`app.soleur.ai/health`** (`web-platform-release.yml:1288`); the apex returns an EMPTY body at rc 0
-under `curl -sf … || echo ""` — could-not-measure, reported UNRESOLVED, never a mismatch.
+`app.soleur.ai/health`** (`web-platform-release.yml:1288`); the apex returns an EMPTY body —
+could-not-measure, reported UNRESOLVED, never a mismatch. **Why:** #8265, #8297, #8391 — each a
+selector that returned another merge's arm, or none, while the real arm had deployed.
 
-**Select by the merge SHA, never by recency.** An event filter alone still returns *whichever* merge's deploy arm fired last, and on a busy `main` that is routinely another PR's: the deploy arm lags its merge by the whole CI run, so for most of this phase's window the newest deploy-arm run belongs to the PREVIOUS merge. `--limit 1` read that way validates someone else's deploy. A `--limit N` window is not the fix either — measured nondeterministic for this lookup (`--limit 10` missed a run sitting at list index 6). Ask the API for the exact SHA first; fall back to time-adjacency plus the run's own `resolve-target` log and `/health` `build_sha` only when it returns nothing (the `absent` row). **Why:** #8265 — this query returned `267ff5807`'s run while #8242's merge (`e7e1c6748`) had not yet fired its own; only a by-hand SHA check stopped a false `GATE-VALIDATED`.
+**Interpretation** (by `MATCH` and `DEPLOY`):
 
-```bash
-# The DEPLOY-arm release run for THIS merge (#5806, ADR-217). event=workflow_run
-# picks the arm; head_sha picks the merge ONLY while this merge is main's tip at
-# CI completion — a workflow_run run's head_sha is the default-branch tip, not the
-# triggering commit (#8297). Empty -> the "absent" row below, never INDETERMINATE
-# on its own. No recency window to fall out of. MERGE_SHA is the FULL 40-char merge SHA from Phase 1 (a
-# short SHA matches zero runs, #8135). `gh --jq` does not forward --arg, so the
-# SHA is shape-validated before it is interpolated.
-MERGE_SHA="<full 40-char merge-commit sha from Phase 1>"
-[[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "MERGE_SHA must be the full 40-char sha" >&2; exit 1; }
-RELEASE_RUN_ID=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=${MERGE_SHA}&event=workflow_run&per_page=100" \
-  --jq '[.workflow_runs[] | select(.path == ".github/workflows/web-platform-release.yml") | .id][0] // empty')
-
-# FAIL LOUDLY, NEVER CLASSIFY AGAINST AN EMPTY LOG. If no deploy-arm run exists
-# yet, or the selected run carries no `deploy` job, this phase has no evidence —
-# say so rather than reporting a verdict.
-DEPLOY_JOB_STATE=absent
-if [[ -n "$RELEASE_RUN_ID" && "$RELEASE_RUN_ID" != "null" ]]; then
-  DEPLOY_JOB_STATE=$(gh run view "$RELEASE_RUN_ID" --json jobs \
-    --jq '[.jobs[] | select(.name == "deploy")] | .[0].conclusion // "absent"')
-fi
-
-if [[ "$DEPLOY_JOB_STATE" == "absent" ]]; then
-  echo "GATE-INDETERMINATE: no web-platform-release run with a deploy job found (run id: ${RELEASE_RUN_ID:-<none>})"
-elif [[ "$DEPLOY_JOB_STATE" == "skipped" ]]; then
-  # NOT a failure, and NOT a validation. Since #5806 the workflow_run trigger
-  # inherits NEITHER path gate (`on.push.paths` nor reusable-release.yml's
-  # `check_changed`), so the deploy arm fires on EVERY ci.yml completion on main
-  # — including docs-only merges, where resolve-target clean-skips and `deploy`
-  # concludes `skipped`. That is the designed behaviour, so it must not read as
-  # an ordinary deploy failure; but no deploy happened, so it cannot validate a
-  # gate either.
-  SKIP_REASON=$(gh run view "$RELEASE_RUN_ID" --json jobs \
-    --jq '[.jobs[] | select(.name == "resolve-target")] | .[0].conclusion // "unknown"')
-  echo "GATE-NOT-EXERCISED: the deploy arm ran and clean-skipped (resolve-target: ${SKIP_REASON}). Nothing was deployed for this merge, so a gate change is still unvalidated." 
-else
-  # REASON is written by ci-deploy.sh's final_write_state. A canary gate that
-  # rejected a HEALTHY host surfaces as one of these.
-  RUN_CONCLUSION=$(gh run view "$RELEASE_RUN_ID" --json conclusion --jq '.conclusion')
-  ROLLBACK_REASON=$(gh run view "$RELEASE_RUN_ID" --log 2>/dev/null \
-    | grep -oE 'reason=(canary_sandbox_failed|production_start_failed|canary_[a-z_]+)' | head -1)
-fi
-```
-
-**Interpretation:**
-
-- `DEPLOY_JOB_STATE` is **`skipped`**: the deploy arm fired and clean-skipped — normal for a docs-only merge, because the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-217). Report `GATE-NOT-EXERCISED`, **not** a failure and **not** `GATE-VALIDATED`. If this PR changed gating logic, the gate is still unvalidated and the watch stays open until a merge that actually deploys.
-- `DEPLOY_JOB_STATE` is **`absent`**: **do NOT report `GATE-VALIDATED`.** Either the deploy arm has not fired yet (CI on the merge SHA is still running — the `workflow_run` trigger fires on CI *completion*, so the deploy arm always lags the push arm), or you selected the wrong arm. Report `GATE-INDETERMINATE — deploy arm not observed`, name the run id you looked at, and re-check once the merge-commit CI run concludes. An empty grep is the absence of evidence, not evidence of a passing gate. **Or a sibling merged after you.** `head_sha` being the default-branch tip (see above) also means the SHA-keyed query returns NOTHING whenever `main` moved between your merge and your CI's completion, while the arm still deployed YOUR commit. Before settling on INDETERMINATE, identify the arm: `git fetch origin main -q` first (its `head_sha` is a tip you have usually not fetched, and an unfetched SHA makes `--is-ancestor` exit 128, which reads as "no"), then the deploy run whose `created_at` is within seconds of your merge-CI run's `updated_at`, whose `head_sha` is a descendant of your merge (`git merge-base --is-ancestor <merge> <head_sha>`), and — the identity check, not the proximity one — whose log names your SHA (`gh run view <run-id> --log | grep -c <merge-sha>` non-zero). If that arm exists, set `RELEASE_RUN_ID` to it, apply the rows above to its `deploy` job, and confirm with `/health` `build_sha`; report INDETERMINATE only when neither resolves it. **Why:** PR #8297 — `5997f3743` merged 9 min after `129fcd4d5`; the deploy arm fired 2 s after `129fcd4d5`'s CI concluded, reported `head_sha=5997f3743`, its `resolve-target` log named `129fcd4d5` 33 times, and production's `build_sha` was `129fcd4d5`.
-- Release **succeeded** (deploy job present and `success`): the changed gate passed on a real deploy — the dark-launch observation is satisfied. Report `GATE-VALIDATED`.
-- Release **failed with a canary/sandbox rollback reason** AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
+- `exact` + `success` → `GATE-VALIDATED`. `descendant` + `success` → `GATE-VALIDATED (via <DEPLOYED_SHA>, run <ARM>)`.
+- `DEPLOY=skipped` → `GATE-NOT-EXERCISED`: the arm clean-skipped (docs-only; `CI=failure` → `ci_not_green`) — the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-217). Neither a failure nor a validation; the watch stays open until a merge that deploys.
+- `DEPLOY=superseded|blocked` → `GATE-INDETERMINATE — <DEPLOY>` (lock-queue cancellation; a resolve/migrate/verify job failed).
+- rc 2/3 `ARM=none` (incl. `timeout`, `error`) → `GATE-INDETERMINATE — <REASON> <CAUSE>`: absence of evidence, never a pass. rc 4 → still pending; poll.
+- `descendant` + `failure` → `GATE-SUSPECT`: list `git log --oneline <merge>..<DEPLOYED_SHA>` beside this PR's gate diff — the failure may be the later merge's, so do not recommend an immediate revert.
+- `exact` + `failure` with a canary/sandbox rollback reason AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
 - Release failed with a non-gate reason (build, migration, unrelated infra): ordinary deploy failure — investigate normally; do not assume the gate.
 
 **Why a watch and not a pre-merge block:** the only faithful validation of a deploy gate is a real deploy, which by definition happens post-merge. The pre-merge half of the rule — ship the gate non-blocking first — lives in `wg-dark-launch-deploy-gates`; this phase is the safety net that catches a gate shipped blocking-first anyway, turning "every deploy silently rolls back" into a named, one-revert recovery. **Why:** #4932 — a canary bwrap probe validated only against an always-succeeding test mock failed on a healthy host and rolled back every web-platform deploy until reverted (#4941).

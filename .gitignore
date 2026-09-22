@@ -55,6 +55,10 @@ __pycache__/
 .env
 # The mktemp sibling a generated bootstrap.sh writes beside its .env (operator-bootstrap)
 .env.tmp.*
+# Generated bootstrap.sh run ledger — names-never-values local state written
+# beside the script in a TRACKED spec dir; committing it conflicts with every
+# branch that re-runs the bootstrap.
+bootstrap-runs.jsonl
 _site/
 _site_test/
 screenshot-gate-failures/

@@ -269,6 +269,8 @@ git commit -m "merge: resolve conflicts with origin/main"
 
 ```
 
+Before Phase 4 pushes, run every suite that references a script your branch changes, derived as in `work/SKILL.md` ("derive the list from CONSUMERS, not memory"): a sibling's new test merges cleanly, so the conflict list misses it (#8474).
+
 ## Phase 4: Push and PR
 
 Push the branch to remote:
@@ -356,7 +358,10 @@ Use the **Monitor tool** with the same state-machine loop as `soleur:ship` Phase
 
 ```bash
 # <!-- phase-7-poll-block:start --> mirror of ship/SKILL.md Phase 7
-prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
+# BEHIND merge/push: plugins/soleur/scripts/sync-pr-behind.sh --step (edit it there).
+PR="<number>"  # bare digits: a pasted `#8474` would print a false "pushed" downstream
+[[ $PR =~ ^[0-9]+$ ]] || { echo "[ship.phase7.precondition] PR='$PR' is not a bare PR number — set PR to digits only (no #), then re-arm the poll"; exit 2; }
+prev=""; i=0; behind_syncs=0; behind_pushes=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 fetch_failures=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
 # Minutes to poll before giving up (one iteration = one `sleep 60`).
 # DERIVED, not chosen: measured over the last 12 CI runs on main, a full
@@ -374,6 +379,25 @@ if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != true ]]; then
   echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled; the poll heartbeats, sync by hand from a worktree"
   sync_ok=0
 fi
+# Bare ${CLAUDE_PLUGIN_ROOT} + plugin.json identity + --step probe + per-poll snapshot
+# (see ship/SKILL.md Phase 7 for the rationale; ADR-179).
+# Read once in a `set +u` subshell: a nounset host shell must not die on an unset root.
+SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
+SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""
+if [[ "$sync_ok" -eq 1 ]]; then
+  why=""
+  if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset"
+  elif ! grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+    why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
+  elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
+  elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; then why="its --help has no --step (an older copy)"
+  elif ! { SYNC_SNAP="$(mktemp)" && trap 'rm -f "$SYNC_SNAP"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  fi
+  if [[ -n "$why" ]]; then
+    echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root> (Devin/Codex: see that harness's INSTRUCTIONS.md), or sync by hand."
+    sync_ok=0
+  fi
+fi
 # REQUIRED_CHECKS is fetched once, fail-open: empty array → no-op scan
 # (see ship/SKILL.md Phase 7 for the full rationale; do NOT harden).
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
@@ -381,17 +405,17 @@ mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main'
   2>/dev/null || true)
 while true; do
   i=$((i+1))
-  s=$(gh pr view <number> --json state,mergeStateStatus \
+  s=$(gh pr view "$PR" --json state,mergeStateStatus \
       --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
     || s="fetch-error: $s"
   if [[ "$s" != "$prev" ]] || (( i % 3 == 1 )); then
-    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR <number> ${s}"
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR $PR ${s}"
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
 
   if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
-    mapfile -t failed_names < <(gh pr checks <number> --json name,bucket \
+    mapfile -t failed_names < <(gh pr checks "$PR" --json name,bucket \
       --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
     if (( ${#failed_names[@]} > 0 )); then
       required_failed=""
@@ -415,17 +439,14 @@ while true; do
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$fetch_rc — fetch origin main failed while classifying DIRTY — retrying next tick"
     elif mt_out="$(git merge-tree --write-tree origin/main HEAD 2>&1)"; then
       s="OPEN BEHIND"
-    elif [[ -f plugins/soleur/scripts/resolve-regenerable-conflicts.sh ]] \
-         && bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh origin/main; then
-      # The resolver merged and regenerated model.likec4.json from the MERGED sources and
-      # committed locally; it never pushes, so the push is ours. Keep polling -- the new head
-      # clears CI like any other sync.
-      if git push >/dev/null 2>&1; then
-        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] regen resolved + pushed — polling" >&2
-        continue
-      fi
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] regen resolved but push rejected — main moved; exiting" >&2
-      break
+    elif [[ "$sync_ok" -eq 1 && -f "$SYNC_ROOT/scripts/resolve-regenerable-conflicts.sh" ]] \
+         && bash "$SYNC_ROOT/scripts/resolve-regenerable-conflicts.sh" origin/main; then
+      # ADR-235: the resolver merged and regenerated model.likec4.json from the MERGED
+      # sources and committed locally; it never pushes. Treat the state as BEHIND so the
+      # push goes through the one implementation below: sync_step's merge is then a no-op
+      # and HEAD is ahead of its upstream, so it pushes (or stops with kind=push).
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] regen resolved — merge committed locally; pushing via sync-pr-behind.sh"
+      s="OPEN BEHIND"
     else
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll"
       echo "Conflicted paths (merge-tree; no merge is in progress, so --diff-filter=U is empty):"
@@ -437,68 +458,32 @@ while true; do
 
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
-    # Capture rc BEFORE displaying through `tail` (`cmd | tail` returns tail's
-    # 0 — #8339); `|| sync_rc=$?` not a bare `x="$(cmd)"; rc=$?`, which dies
-    # under an errexit host shell. Not `set -o pipefail`: two skills copy this
-    # block. printf is a builtin (no ARG_MAX); GIT_TRACE* off so a traced
-    # remote URL cannot reach the display. Never touch an operation this arm
-    # did not start — an --abort there discards the operator's staged work.
-    git_dir="$(git rev-parse --git-dir 2>/dev/null)"
-    if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
-       || [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" \
-             || -f "$git_dir/CHERRY_PICK_HEAD" || -f "$git_dir/REVERT_HEAD" ]]; then
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_in_progress — a merge/rebase/cherry-pick/revert is in progress on $BRANCH; not touching it. If you did not start it (a previous poll may have died mid-sync), run git status, abort it, then re-arm the poll. Stopping the poll."
-      break
-    fi
-    if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=detached_head — HEAD is detached; git push would have no branch to update. Check out the PR branch first. Stopping the poll."
-      break
-    fi
-    sync_rc=0; sync_out="$(GIT_TRACE=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0 git fetch origin main 2>&1)" || sync_rc=$?
-    [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -2   # display only — never test this pipe
-    if (( sync_rc != 0 )); then
-      fetch_failures=$((fetch_failures+1))
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch rc=$sync_rc — fetch origin main failed — skipping this sync attempt"
-    else
-      sync_rc=0; sync_out="$(GIT_TRACE=0 git merge origin/main --no-edit 2>&1)" || sync_rc=$?
-      [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -5
-      if (( sync_rc != 0 )); then
-        # rc 1 = conflict. Any other rc with MERGE_HEAD present appeared during
-        # the fetch window (operator-started) — not ours to abort.
-        if (( sync_rc == 1 )) && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge rc=$sync_rc — git merge origin/main failed — merge conflict, aborting sync. Conflicted paths:"
-          git diff --name-only --diff-filter=U
-          # rerere.autoupdate can empty --diff-filter=U; the merge output cannot.
-          printf '%s\n' "$sync_out" | grep '^CONFLICT ' || true
-          git merge --abort 2>&1 || echo "git merge --abort failed (rc=$?)"
-          echo "Manual conflict resolution required on $BRANCH. Stopping the poll."
-        elif git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_in_progress rc=$sync_rc — MERGE_HEAD appeared during the sync (not started by this arm); not touching it. Stopping the poll."
-        else
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=merge_refused rc=$sync_rc — git merge origin/main failed — refused to start (nothing to abort; run git status to see which operation is in progress). Worktree state:"
-          git status --short | head -20
-          echo "Clear the worktree state on $BRANCH shown above, then re-run. Stopping the poll."
-        fi
-        break
-      fi
-      sync_rc=0; sync_out="$(GIT_TRACE=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0 git push 2>&1)" || sync_rc=$?
-      [[ -n "$sync_out" ]] && printf '%s\n' "$sync_out" | tail -2
-      if (( sync_rc != 0 )); then
-        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=push rc=$sync_rc — git push failed after merge — auto-sync incomplete; any local merge commit from this sync is retained, nothing was aborted. Stopping the poll."
-        break
-      fi
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs}/${MAX_BEHIND_SYNCS} pushed"
-      s=$(gh pr view <number> --json state,mergeStateStatus \
-          --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
-        || s="fetch-error: $s"
-      echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
-    fi
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
+    sync_rc=0; bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?   # errexit-safe (#8339)
+    case "$sync_rc" in
+      0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs}/${MAX_BEHIND_SYNCS} pushed"
+         behind_pushes=$((behind_pushes+1))
+         (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
+         s=$(gh pr view "$PR" --json state,mergeStateStatus \
+             --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
+           || s="fetch-error: $s"
+         echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break ;;
+      11) behind_syncs=$((behind_syncs-1))  # no-op: GitHub state lag, not a sync — budget and hatch untouched
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] main already merged and pushed; mergeStateStatus lags — not counted, polling on" ;;
+      5) fetch_failures=$((fetch_failures+1))
+         echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch — skipping this sync attempt" ;;
+      *) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] sync-pr-behind.sh exited $sync_rc (see its line above). Stopping the poll."
+         break ;;
+    esac
+  elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 0 ]]; then
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_no_sync] PR $PR is BEHIND and auto-sync is disabled (precondition line above). From the PR worktree run:" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"' "$PR" "after export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>; exit 8 after a kind=pushed line means the push landed. Then re-arm the poll. Stopping the poll."
+    break
   elif [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
     elapsed=$((i * 60))
     if (( fetch_failures == MAX_BEHIND_SYNCS )); then
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}). Every attempt failed at git fetch — a network/credential outage, not main moving. Check connectivity and credentials, then re-arm the poll."
     else
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window."
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — full procedure: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md); else merge during a quieter window."
     fi
     behind_warned=1
   fi
@@ -533,7 +518,7 @@ To rollback: git reset --hard <starting-sha> && git push --force-with-lease orig
 
 ```
 
-The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. At 2 consecutive BEHIND syncs whose only conflict surface is a regenerable index, or at the 6-sync `behind_exhausted` cap, see ship/SKILL.md Phase 7 "Auto-sync on BEHIND" for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only); the `"Auto-sync on BEHIND" below` reference inside the mirrored poll-block echo above points at that ship section, not a section in this file.
+The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](../ship/references/settle-then-admin-merge.md) for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only). On `[ship.phase7.required_failed]` or `[ship.phase7.dirty]`, follow ship/SKILL.md Phase 7's handling for a poll that exits on a required-check failure or a DIRTY state (`gh pr checks <N>` to inspect; `git merge origin/main` to resolve locally). On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.` (a `kind=fetch` one is informational — the poll continues), do the next action the `[pr-behind-sync] kind=…` line above it names (resolve and push, reconcile a concurrent push, or clear the worktree state), then re-invoke this §5.2 poll — a routine conflict is not an operator handoff. `[ship.phase7.sync_noop]` is GitHub state lag (uncounted; the poll continues); `[ship.phase7.behind_no_sync]` means auto-sync was disabled — run the printed command from the PR worktree, then re-arm the poll.
 
 ## Phase 6: Cleanup and Report
 
@@ -550,7 +535,7 @@ bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktre
 
 ```
 
-This detects `[gone]` branches (remote deleted after merge), removes worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
+This reaps branches proven merged (an ancestor of main, or a merged same-repo PR whose head contains the branch tip — the path a squash-merged, auto-deleted branch takes), removes their worktrees, deletes the local branches, and pulls latest main. A `[gone]` branch with no merge evidence is kept and reported so the next worktree branches from the current state.
 
 ### 6.3 End-of-run report
 

@@ -2163,6 +2163,15 @@ if want_scripts; then
   # would collapse most of its cases onto three integers — the suite therefore pins a branch
   # marker per case and DERIVES its distinct-marker floor from the shipped probe.
   run_suite "scripts/registry-luks-live-8386" bash scripts/followthroughs/registry-luks-live-8386.test.sh
+  # #8037 cosign verify-live probe. Registered explicitly (scripts/followthroughs/ matches no
+  # glob). Its exit code closes #8037 (0), alarms on a host whose LATEST verdict is still
+  # cosign_absent (1), or asks a human on a new failure class / anon_config=unavailable (5). The
+  # load-bearing arms are SYSLOG_IDENTIFIER field isolation, latest-verdict grading, and
+  # zero-hosts-never-PASS.
+  run_suite "scripts/cosign-verify-live-8037" bash scripts/followthroughs/cosign-verify-live-8037.test.sh
+  # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
+  # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
+  run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
@@ -2225,6 +2234,12 @@ if want_scripts; then
   # "the gate looked and the answer is no" (exit 2, NOT YET), keyed on the bracketed token of the
   # gate's verdict line. One arm per member of BOTH token sets, plus the never-0 invariant.
   run_suite "scripts/git-data-reboot-evidence-landed-8210" bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh
+  # #8450's close criterion (actions-queue-tail-8450.sh): PASS only on >=5
+  # post-upgrade workflow_run runs with p95 deploy-arm wait < 15 min — never on
+  # stale/empty/push-arm/queued-job samples, and never on an unmet precondition
+  # (exit 0 would auto-close the issue). Explicit run_suite —
+  # scripts/followthroughs/ is covered by no glob here.
+  run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
