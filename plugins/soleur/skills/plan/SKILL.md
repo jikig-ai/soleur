@@ -590,14 +590,10 @@ The set of mandatory leaders changes by lifecycle phase, and that is by design â
 
 This tiered model is intentional â€” re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
 
-**AI harness runtime boundary exception.** When a plan introduces or changes any AI
-harness provider's external-service runtime, launcher, egress allowlist, or
-credential-handling boundary, the CTO must be explicitly consulted on that technical
-contract before the work is classified as blocked. Per-user or per-workspace credentials
-entered through product settings are runtime inputs, not missing global deployment
-secrets; their absence blocks only the affected qualification or request, not
-implementation of the credential-selection and fail-closed path. CLO disposition remains
-a separate gate for customer-content processing.
+**AI harness boundary.** For any provider runtime, launcher, egress, or credential
+boundary, consult the CTO on the technical contract before blocking. Settings credentials
+are runtime inputs; absence blocks only qualification/request. CLO customer-content
+disposition remains separate.
 
 If the threshold resolves to `aggregate pattern`, no per-PR sign-off is added but the section must still be present.
 
