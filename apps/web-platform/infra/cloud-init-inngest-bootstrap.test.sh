@@ -1353,6 +1353,239 @@ GUARDD_ASSERTIONS=$(( TOTAL - GUARDD_BEFORE ))
 assert "GuardD anti-vacuity: the section ran its full inventory (expected 11, ran $GUARDD_ASSERTIONS)" \
   "(( GUARDD_ASSERTIONS == 11 ))"
 
+# =======================================================================================
+# NIC-G1 (#8539) — the private-NIC fallback is present, reloaded, and gates the zot login.
+# (The plan names this "Guard 1"; prefixed NIC-G1 here because this file already has a
+# Guard 1, #7462.)
+#
+# PROPERTY. Every rendered inngest user_data carries exactly one fallback `.network` file whose
+# [Match] excludes eth0 and non-virtio links, a `networkctl reload` item that runs BEFORE the NIC
+# wait, and exactly one NIC-wait call, carrying the templated `${inngest_private_ip}`, placed
+# immediately before the FIRST private-net use in runcmd.
+#
+# WHICH COPY EACH ROW READS. Order, presence and the derived set (rows 1-4, 6-9, 11) read the
+# RENDERED + STRIPPED user_data — the bytes that reach the host — produced by
+# inngest-userdata-budget.sh (terraform's own templatefile + local.inngest_rationale_strip).
+# Order is compared on PARSED runcmd LIST POSITIONS (yaml.safe_load), never line numbers: the zot
+# login sits inside a multi-line `- |` item. Row 5 (templated, not literal) is a property of the
+# SOURCE the render erases, so it reads cloud-init-inngest.yml raw, anchored on the call
+# CONSTRUCT. Row 10 reads inngest-host.tf raw, scoped to the cloud-init-inngest.yml templatefile
+# map (the budget render uses its own stub map and cannot see that binding).
+#
+# THE DERIVED "FIRST PRIVATE-NET USE". Private-net ACTIONS only: `docker login|pull`, or
+# curl/nc/ping naming a 10.0.1.x address other than the host's own 10.0.1.40; the NIC-wait call
+# line itself is excluded. Config WRITES that merely name the endpoint (the ZOT_EP daemon.json
+# write, the soleur-zot-read creds bake) are NOT uses. One narrowing beyond the plan's wording:
+# a `docker login|pull` whose target is an explicit PUBLIC hostname (`docker login ghcr.io`) is
+# not a private-net use — scored literally, the GHCR login two items above the call would be the
+# "first use" and the unchanged file would red. A variable target (`"$ZOT_EP"`, `"$IREF"`) is
+# scored as a use, conservatively. It is derived, not assumed to be the zot login, so a future
+# item that touches the private net earlier reds row 8.
+# =======================================================================================
+echo ""
+echo "--- NIC-G1 (#8539): private-NIC fallback, reload, and the wait before the first private-net use ---"
+NG1_BEFORE="$TOTAL"
+
+# Row 5 (raw source): the call construct carries the template var, never a literal. Anchored on
+# the runcmd list-item construct, so a comment naming the helper cannot satisfy it.
+NG1_RAW_CALLS=$(grep -cE '^[[:space:]]*-[[:space:]]+/usr/local/bin/soleur-inngest-nic-wait ' "$INNGEST_CI_YML" || true)
+NG1_RAW_TEMPLATED=$(grep -cE '^[[:space:]]*-[[:space:]]+/usr/local/bin/soleur-inngest-nic-wait \$\{inngest_private_ip\} \|\| true$' "$INNGEST_CI_YML" || true)
+assert "NIC-G1 row5: the one NIC-wait call site passes \${inngest_private_ip}, not a literal (calls $NG1_RAW_CALLS, templated $NG1_RAW_TEMPLATED)" \
+  "(( NG1_RAW_CALLS == 1 && NG1_RAW_TEMPLATED == 1 ))"
+NG1_RAW_LITERAL=$(grep -v '^[[:space:]]*#' "$INNGEST_CI_YML" | grep -c '10\.0\.1\.40' || true)
+assert "NIC-G1 row5: no CODE line of cloud-init-inngest.yml hardcodes 10.0.1.40 (found $NG1_RAW_LITERAL)" \
+  "(( NG1_RAW_LITERAL == 0 ))"
+
+# Row 10 (raw .tf): the templatefile map for cloud-init-inngest.yml binds the key to the single
+# definition, local.inngest_private_ip. Scoped to that map so the `locals` literal and every
+# other root's map cannot satisfy it.
+NG1_TF_MAP="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml"/ { f = 1 } f { print } f && /^[[:space:]]*\}\), local\.inngest_rationale_strip/ { exit }' "$SCRIPT_DIR/inngest-host.tf")"
+NG1_TF_MAP_LINES=$(printf '%s\n' "$NG1_TF_MAP" | grep -c . || true)
+NG1_TF_KEY=$(printf '%s\n' "$NG1_TF_MAP" | grep -cE '^[[:space:]]*inngest_private_ip[[:space:]]*=' || true)
+NG1_TF_BOUND=$(printf '%s\n' "$NG1_TF_MAP" | grep -cE '^[[:space:]]*inngest_private_ip[[:space:]]*=[[:space:]]*local\.inngest_private_ip[[:space:]]*$' || true)
+assert "NIC-G1 row10: the cloud-init-inngest.yml map binds inngest_private_ip = local.inngest_private_ip exactly once (map $NG1_TF_MAP_LINES lines, key $NG1_TF_KEY, bound $NG1_TF_BOUND)" \
+  "(( NG1_TF_MAP_LINES >= 20 && NG1_TF_KEY == 1 && NG1_TF_BOUND == 1 ))"
+
+NG1_RAW_ASSERTIONS=$(( TOTAL - NG1_BEFORE ))
+assert "NIC-G1 anti-vacuity (raw rows): the section ran its full inventory (expected 3, ran $NG1_RAW_ASSERTIONS)" \
+  "(( NG1_RAW_ASSERTIONS == 3 ))"
+
+# Rendered rows. Tool-gated on terraform (the render is terraform's own templatefile), so the
+# block is bracketed into COND_ASSERTIONS per the contract at the top of this file.
+_COND_BEFORE=$TOTAL
+if command -v terraform >/dev/null 2>&1; then
+  NG1_DIR="$(mktemp -d -t nicg1-XXXXXX)"
+  NG1_RENDER="$NG1_DIR/rendered.yml"
+  bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$NG1_RENDER" > "$NG1_DIR/budget.log" 2>&1 || true
+  NG1_RENDER_BYTES=$(wc -c < "$NG1_RENDER" 2>/dev/null | tr -cd '0-9' || true)
+  NG1_RENDER_BYTES=${NG1_RENDER_BYTES:-0}
+  assert "NIC-G1 dispatch: the stripped render was produced ($NG1_RENDER_BYTES B)" \
+    "(( NG1_RENDER_BYTES > 0 ))"
+  # The checker emits KEY=VALUE facts (shell-safe tokens only); every assertion below reads one.
+  cat > "$NG1_DIR/check.py" <<'PY'
+import re, sys, yaml
+EXPECTED_FALLBACK = (
+    "[Match]\nDriver=virtio_net\nName=!eth0\n\n[Link]\nRequiredForOnline=no\n\n"
+    "[Network]\nDHCP=ipv4\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n\n"
+    "[DHCPv4]\nUseMTU=yes\nUseDNS=no\nUseDomains=no\nUseHostname=no\nUseNTP=no\n"
+    "SendHostname=no\nRouteMetric=1024\n"
+)
+OWN_IP = "10.0.1.40"
+try:
+    d = yaml.safe_load(open(sys.argv[1])) or {}
+except Exception:
+    d = {}
+if not isinstance(d, dict):
+    d = {}
+rc = d.get("runcmd") or []
+wf = d.get("write_files") or []
+def text(x):
+    if isinstance(x, list):
+        return " ".join(str(y) for y in x)
+    return str(x)
+def code(t):
+    return [l for l in t.split("\n") if l.strip() and not l.lstrip().startswith("#")]
+items = [text(x) for x in rc]
+CALL = re.compile(r"(^|[\s;&|(])(/usr/local/bin/)?soleur-inngest-nic-wait(\s|$)")
+RELOAD = re.compile(r"^\s*networkctl\s+reload(\s|$)")
+DOCKER = re.compile(r"\bdocker\s+(login|pull)\b(.*)")
+PROBE = re.compile(r"(^|[\s;&|(])(curl|nc|ping)(\s|$)")
+ADDR = re.compile(r"(?<![0-9.])10\.0\.1\.[0-9]{1,3}(?![0-9])")
+PUBLIC = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*\.(io|com|org|net|dev)([/:].*)?$")
+def docker_target(rest):
+    for tok in rest.split():
+        if tok.startswith("-"):
+            continue
+        return tok.strip("\"'")
+    return ""
+calls, reloads, uses, config_writes = [], [], [], []
+scanned = 0
+for i, t in enumerate(items):
+    scanned += 1
+    is_use = False
+    for l in code(t):
+        if CALL.search(l):
+            calls.append((i, l.strip()))
+            continue
+        if RELOAD.search(l):
+            reloads.append(i)
+        m = DOCKER.search(l)
+        if m and not PUBLIC.match(docker_target(m.group(2))):
+            is_use = True
+        if PROBE.search(l) and any(a != OWN_IP for a in ADDR.findall(l)):
+            is_use = True
+    if is_use:
+        uses.append(i)
+    elif any(a != OWN_IP for a in ADDR.findall(t)):
+        config_writes.append(i)
+call_pos = calls[0][0] if calls else -1
+first_use = uses[0] if uses else -1
+out = {
+    "ITEMS": len(items),
+    "SCANNED": scanned,
+    "CALLS": len(calls),
+    "CALL_POS": call_pos,
+    "CALL_EXACT": int(len(calls) == 1 and calls[0][1] == "/usr/local/bin/soleur-inngest-nic-wait " + OWN_IP + " || true"),
+    "RELOADS": len(reloads),
+    "RELOAD_POS": reloads[0] if reloads else -1,
+    "USES": len(uses),
+    "FIRST_USE": first_use,
+    "USES_BEFORE_CALL": sum(1 for u in uses if call_pos < 0 or u < call_pos),
+    "FIRST_USE_IS_ZOT_LOGIN": int(first_use >= 0 and 'docker login "$ZOT_EP"' in items[first_use]),
+    "CONFIG_WRITES_BEFORE_CALL": sum(1 for c in config_writes if 0 <= call_pos and c < call_pos),
+}
+nets = [w for w in wf if isinstance(w, dict) and re.match(r"^/etc/systemd/network/[^/]+\.network$", str(w.get("path", "")))]
+out["NETWORK_FILES"] = len(nets)
+fb = nets[0] if len(nets) == 1 else {}
+base = str(fb.get("path", "")).rsplit("/", 1)[-1]
+out["FB_NAME_OK"] = int(base == "99-soleur-private-fallback.network" and base > "10-netplan-")
+out["FB_OWNER"] = str(fb.get("owner", "none")).replace(" ", "_") or "none"
+out["FB_MODE"] = str(fb.get("permissions", "none")) or "none"
+content = str(fb.get("content", ""))
+match, sect = [], None
+for l in content.split("\n"):
+    s = l.strip()
+    if s.startswith("[") and s.endswith("]"):
+        sect = s
+        continue
+    if sect == "[Match]" and s:
+        match.append(s)
+out["MATCH_OK"] = int(match == ["Driver=virtio_net", "Name=!eth0"])
+out["FB_BYTES_EQ"] = int(content == EXPECTED_FALLBACK)
+helpers = [w for w in wf if isinstance(w, dict) and w.get("path") == "/usr/local/bin/soleur-inngest-nic-wait"]
+out["HELPERS"] = len(helpers)
+hp = helpers[0] if len(helpers) == 1 else {}
+out["HELPER_OWNER"] = str(hp.get("owner", "none")).replace(" ", "_") or "none"
+out["HELPER_MODE"] = str(hp.get("permissions", "none")) or "none"
+for k, v in out.items():
+    print("%s=%s" % (k, v))
+PY
+  declare -A NG1=()
+  while IFS='=' read -r _k _v; do
+    if [[ "$_k" =~ ^[A-Z_]+$ ]]; then NG1[$_k]="$_v"; fi
+  done < <(python3 "$NG1_DIR/check.py" "$NG1_RENDER" 2>"$NG1_DIR/check.err" || true)
+  NG1_ITEMS=${NG1[ITEMS]:-0};           NG1_SCANNED=${NG1[SCANNED]:--1}
+  NG1_CALLS=${NG1[CALLS]:-0};           NG1_CALL_POS=${NG1[CALL_POS]:--1}
+  NG1_CALL_EXACT=${NG1[CALL_EXACT]:-0}
+  NG1_RELOADS=${NG1[RELOADS]:-0};       NG1_RELOAD_POS=${NG1[RELOAD_POS]:--1}
+  NG1_USES=${NG1[USES]:-0};             NG1_FIRST_USE_POS=${NG1[FIRST_USE]:--1}
+  NG1_USES_BEFORE_CALL=${NG1[USES_BEFORE_CALL]:--1}
+  NG1_FIRST_USE_IS_ZOT=${NG1[FIRST_USE_IS_ZOT_LOGIN]:-0}
+  NG1_CONFIG_WRITES=${NG1[CONFIG_WRITES_BEFORE_CALL]:-0}
+  NG1_NETWORK_FILES=${NG1[NETWORK_FILES]:-0}; NG1_FB_NAME_OK=${NG1[FB_NAME_OK]:-0}
+  NG1_FB_OWNER=${NG1[FB_OWNER]:-none};  NG1_FB_MODE=${NG1[FB_MODE]:-none}
+  NG1_MATCH_OK=${NG1[MATCH_OK]:-0};     NG1_FB_BYTES_EQ=${NG1[FB_BYTES_EQ]:-0}
+  NG1_HELPERS=${NG1[HELPERS]:-0}
+  NG1_HELPER_OWNER=${NG1[HELPER_OWNER]:-none}; NG1_HELPER_MODE=${NG1[HELPER_MODE]:-none}
+
+  # Row 9 / own dispatch: an empty runcmd is a broken instrument, never a clean result. Every
+  # item must have gone through the derived-set scan.
+  assert "NIC-G1 anti-vacuity: $NG1_ITEMS runcmd items checked, $NG1_SCANNED scanned (must be > 0 and equal)" \
+    "(( NG1_ITEMS > 0 && NG1_SCANNED == NG1_ITEMS ))"
+  # Row 4: exactly one NIC-wait call, and it is the exact rendered construct.
+  assert "NIC-G1 row4: runcmd carries exactly ONE NIC-wait call (found $NG1_CALLS)" \
+    "(( NG1_CALLS == 1 ))"
+  assert "NIC-G1 row4: the call renders as '/usr/local/bin/soleur-inngest-nic-wait 10.0.1.40 || true'" \
+    "(( NG1_CALL_EXACT == 1 ))"
+  # Row 3: presence of the reload (a delete, distinct from the reorder in row 2).
+  assert "NIC-G1 row3: runcmd carries exactly ONE networkctl reload item (found $NG1_RELOADS)" \
+    "(( NG1_RELOADS == 1 ))"
+  # Row 2: order of the reload against the call, by list position.
+  assert "NIC-G1 row2: networkctl reload (pos $NG1_RELOAD_POS) runs BEFORE the NIC-wait call (pos $NG1_CALL_POS)" \
+    "(( NG1_RELOAD_POS >= 0 && NG1_RELOAD_POS < NG1_CALL_POS ))"
+  # Row 1: placement, by list position. THE ORDER COMPARISON the battery's harness row neuters.
+  assert "NIC-G1 row1: the NIC-wait call (pos $NG1_CALL_POS) sits immediately before the first private-net use (pos $NG1_FIRST_USE_POS)" \
+    "(( NG1_CALL_POS >= 0 && NG1_CALL_POS + 1 == NG1_FIRST_USE_POS ))"
+  # Row 8: the derived set. No private-net ACTION may precede the call.
+  assert "NIC-G1 row8: no private-net action precedes the NIC-wait call ($NG1_USES uses derived, $NG1_USES_BEFORE_CALL before the call)" \
+    "(( NG1_USES > 0 && NG1_USES_BEFORE_CALL == 0 ))"
+  assert "NIC-G1 AC2: the first private-net use is the zot login (docker login \"\$ZOT_EP\")" \
+    "(( NG1_FIRST_USE_IS_ZOT == 1 ))"
+  # Must-PASS (ii), made non-vacuous: the endpoint-naming config writes DO precede the call and
+  # were scanned and NOT scored as uses. If this count drops to 0 the exclusion is untested.
+  assert "NIC-G1 must-PASS: >= 2 endpoint-naming config writes precede the call and are not uses (found $NG1_CONFIG_WRITES)" \
+    "(( NG1_CONFIG_WRITES >= 2 ))"
+  # Rows 6, 7, 11 and the write_files mode/owner asserts.
+  assert "NIC-G1 row7: exactly one networkd file in write_files, named 99-soleur-private-fallback.network (sorts after 10-netplan-*) (files $NG1_NETWORK_FILES)" \
+    "(( NG1_NETWORK_FILES == 1 && NG1_FB_NAME_OK == 1 ))"
+  assert "NIC-G1 row6: the fallback [Match] is exactly Driver=virtio_net + Name=!eth0" \
+    "(( NG1_MATCH_OK == 1 ))"
+  assert "NIC-G1 row11: the fallback content equals the Phase 2 block byte-for-byte" \
+    "(( NG1_FB_BYTES_EQ == 1 ))"
+  assert "NIC-G1 write_files: the fallback .network is root:root 0644 (got $NG1_FB_OWNER $NG1_FB_MODE)" \
+    "[[ \"\$NG1_FB_OWNER\" == 'root:root' && \"\$NG1_FB_MODE\" == '0644' ]]"
+  assert "NIC-G1 write_files: /usr/local/bin/soleur-inngest-nic-wait is delivered once, root:root 0755 (count $NG1_HELPERS, got $NG1_HELPER_OWNER $NG1_HELPER_MODE)" \
+    "(( NG1_HELPERS == 1 )) && [[ \"\$NG1_HELPER_OWNER\" == 'root:root' && \"\$NG1_HELPER_MODE\" == '0755' ]]"
+
+  NG1_RENDER_ASSERTIONS=$(( TOTAL - _COND_BEFORE ))
+  assert "NIC-G1 anti-vacuity (rendered rows): the section ran its full inventory (expected 15, ran $NG1_RENDER_ASSERTIONS)" \
+    "(( NG1_RENDER_ASSERTIONS == 15 ))"
+  rm -rf "$NG1_DIR"
+else
+  echo "  SKIP: terraform not installed (NIC-G1 rendered rows skipped — CI deploy-script-tests provides it via setup-terraform)"
+fi
+COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
+
 # ASSERTION-COUNT FLOOR (#7695). The five SECTION floors live INSIDE their sections, so deleting
 # a whole section deletes its own floor: a vacuity audit removed the entire Guard A block and this
 # suite reported `149/149 passed`, exit 0 -- and removed Guard A AND Guard D for `137/137 passed`.
@@ -1368,8 +1601,11 @@ assert "GuardD anti-vacuity: the section ran its full inventory (expected 11, ra
 # suites, two of them failing a flat floor for a reason that has nothing to do with the code.
 # Subtracting the measured conditional deltas makes the floor invariant WITHOUT hardcoding a
 # per-tool number for each arm, which would only relocate the same defect.
+# #8539: re-measured from a green run after NIC-G1 landed (134 unconditional before it, + its 4
+# raw-source asserts = 138; the rendered NIC-G1 rows are terraform-gated and counted in
+# COND_ASSERTIONS). The prior 123 had drifted 11 below the measured count.
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=123
+BOOTSTRAP_MIN_ASSERTIONS=138
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
