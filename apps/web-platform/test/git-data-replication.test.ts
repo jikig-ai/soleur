@@ -5,6 +5,9 @@
 // an unsafe workspace_id is rejected before any SSH.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+
+const TEST_PIN = makeEd25519Pin();
 
 const gitPush = vi.fn().mockResolvedValue(Buffer.from(""));
 const sshProvision = vi.fn().mockResolvedValue(Buffer.from(""));
@@ -56,6 +59,8 @@ beforeEach(() => {
   rpcMock.mockClear().mockResolvedValue({ data: true, error: null });
   vi.stubEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY", "transport-key");
   vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "provision-key");
+  // #7226: a valid generated pin, so the store-enabled paths resolve one (never a real key).
+  vi.stubEnv("GIT_DATA_SSH_HOST_KEY", TEST_PIN);
 });
 
 afterEach(() => {
@@ -289,6 +294,9 @@ describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)"
     // A partial birth or a half-applied rotation. Reporting `skipped` here would tell the
     // user their data is gone while a host that is actively provisioning repos keeps theirs.
     expect(outcome.status).toBe("unconfigured");
+    if (outcome.status !== "unconfigured") throw new Error("narrow");
+    // Fixed reason word, distinct from the pin faults (#7226): pin_invalid / pin_absent_store_enabled.
+    expect(outcome.detail).toMatch(/^remove_key_absent: /);
     expect(sshProvision).not.toHaveBeenCalled();
   });
 

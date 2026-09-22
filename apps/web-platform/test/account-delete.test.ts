@@ -61,6 +61,7 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 // ---------------------------------------------------------------------------
 
 import { deleteAccount } from "../server/account-delete";
+import type { GitDataErasureOutcome } from "../server/git-data-replication";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -320,6 +321,36 @@ describe("deleteAccount", () => {
     // this as done would be the same lie as reporting a refusal as done.
     expect(result.gitDataErasurePending).toBe(true);
   });
+
+  // (#7226 review) EVERY non-terminal outcome must be pending + reported under its own
+  // tag. The table is derived from the GitDataErasureOutcome union: the mapped type makes
+  // tsc demand one row per non-terminal status and `satisfies` forbids extras, so a new
+  // status added to the union without a row here is a type error, not a silent gap.
+  type PendingStatus = Exclude<GitDataErasureOutcome["status"], "erased" | "skipped">;
+  const PENDING_OUTCOMES = {
+    refused: { status: "refused", exitCode: 3, detail: "refusing" },
+    unauthorized: { status: "unauthorized", detail: "Permission denied (publickey)." },
+    unconfigured: { status: "unconfigured", detail: "pin_invalid: GIT_DATA_SSH_HOST_KEY is malformed" },
+    unreachable: { status: "unreachable", detail: "Connection refused" },
+    host_key_mismatch: { status: "host_key_mismatch", detail: "Host key verification failed." },
+  } satisfies { [S in PendingStatus]: Extract<GitDataErasureOutcome, { status: S }> };
+
+  test.each(Object.values(PENDING_OUTCOMES).map((o) => [o.status, o] as const))(
+    "non-terminal outcome %s: deletion succeeds, erasure PENDING, reported with erasure_outcome tag",
+    async (status, outcome) => {
+      setupSupabaseMocks();
+      mockRemoveGitDataRepo.mockResolvedValue(outcome);
+
+      const result = await deleteAccount("user-123", "test@example.com");
+
+      expect(result.success).toBe(true);
+      expect(result.gitDataErasurePending).toBe(true);
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ tags: expect.objectContaining({ erasure_outcome: status }) }),
+      );
+    },
+  );
 
   test("erasure succeeds: NOT pending, and no compliance report", async () => {
     setupSupabaseMocks();
