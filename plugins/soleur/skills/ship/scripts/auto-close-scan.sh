@@ -29,12 +29,9 @@
 # blockquotes, and prose all auto-close. PR #3185 was closed twice in three
 # days by the same trap (#3200 via title, #3402 via body checkbox).
 
-set -uo pipefail
+set -u
 
-# Locale-pin: `\b` word-boundary semantics shift across locales. GHA runners
-# default to C.UTF-8 which is fine, but pinning makes the scanner deterministic
-# everywhere it runs (local pre-creation scan in /ship, CI workflow, future
-# homedir invocations).
+# Locale-pin: `[[:alnum:]_]` and `tolower()` depend on the locale.
 export LC_ALL=C
 
 BODY_FILE="${1:?body file path required}"
@@ -53,9 +50,7 @@ REF='#[0-9]+|gh-[0-9]+'
 # One pass. GitHub treats ANY whitespace between keyword and reference as a
 # separator, newlines included: #8514's squash commit wrapped "...would
 # auto-close" / "#8285, so..." and closed #8285, which a line-at-a-time grep
-# cannot see. A keyword ending a line stays pending across blank lines until the
-# next non-blank line, which either starts with a reference (a split match) or
-# clears it. Input is read by redirect so a path like `a=b` is never taken for an
+# cannot see. Input is read by redirect so a path like `a=b` is never taken for an
 # awk assignment. Word boundaries are `[^[:alnum:]_]` classes (grep's `\b`), and
 # matching is on a lowercased copy while the ORIGINAL text is printed.
 awk -v kw="$KW" -v ref="$REF" '
@@ -67,13 +62,13 @@ awk -v kw="$KW" -v ref="$REF" '
   }
   {
     gsub(/\r/, "")
+    if ($0 ~ /^[[:space:]]*$/) next
     line = $0; low = tolower(line)
     if (pend_nr && low ~ head) {
       t = line; sub(/^[[:space:]]+/, "", t)
       print pend_nr ":" pend " " t
     }
     if (low ~ same) print NR ":" line
-    if (low ~ /^[[:space:]]*$/) next
     if (low ~ tail) { pend = line; sub(/[[:space:]]+$/, "", pend); pend_nr = NR }
     else pend_nr = 0
   }
