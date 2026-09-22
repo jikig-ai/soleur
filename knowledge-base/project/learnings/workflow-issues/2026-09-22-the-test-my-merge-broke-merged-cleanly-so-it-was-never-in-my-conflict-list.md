@@ -86,6 +86,32 @@ on CI. It is an accepted risk, not tracked separately.
 1. **Read a same-basename suite as "the" suite.** Two files are named `sync-pr-behind.test.sh`.
    **Prevention:** name test files by full path in every report.
 
+Errors from the session that wrote this learning (PR #8537):
+
+2. **Two claims inherited from the #8474 session's closing summary were wrong** — "an admin-merge
+   broke the loop" (queued auto-merge fired) and "a 60 to 70 minute CI cycle" (the runs that finished
+   took 36 and 31 minutes). Both went into the brief as premises; planning caught the first, review
+   the second. **Prevention:** already a rule in `plugins/soleur/skills/work/SKILL.md` ("A RESUME
+   BRIEF's 'measured' facts … are preconditions, not findings"); apply it when WRITING a brief from a
+   summary, not only when reading one — re-derive each number from the check-run API first.
+3. **Over-corrected while fixing #2:** wrote "`main` moved every 30 to 40 minutes"; the merge
+   intervals ranged from 14 to 124 minutes. Caught on read-back. **Prevention:** state only the
+   measured quantity, not a paraphrase of its cadence.
+4. **Planning flagged by the observability gate** because `ship/SKILL.md` is a plugin surface.
+   **Prevention:** already enforced by deepen-plan Phase 4.7.
+5. **A fix commit cited as if on `main`.** `e9c6ee9a4` lives only on the squashed PR branch.
+   **Prevention:** check `git merge-base --is-ancestor <sha> origin/main` before citing a SHA.
+6. **An acceptance check missed on spelling** (`skip: - merge` in prose, `skip: merge` in the AC).
+   **Prevention:** run the AC's literal command, as `work/SKILL.md` already requires.
+7. **One red suite from contention** (`redact-a11y-snapshot`, 69/0 re-run alone). **Prevention:**
+   already covered by the contention banners and the re-run-in-isolation rule.
+8. **Session started outside any repository** (`/home/jean`), so the readiness probe reported
+   not-ready while the repo existed at a different path. **Prevention:** start sessions from the repo
+   or a worktree.
+9. **Transcript searches returned nothing** at first: a plain regex over JSON-escaped text, and the
+   ugrep shim rejecting `xargs`-built arguments. **Prevention:** extract text with `jq` first, and use
+   `/usr/bin/grep` when piping through `xargs`.
+
 ## Related
 
 - #8474's own compound learning (review findings, not these post-merge events):
