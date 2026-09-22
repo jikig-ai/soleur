@@ -75,6 +75,19 @@ users:
     shell: /bin/sh
     lock_passwd: true
 
+# (#7226/#5914, ADR-237) THE HOST KEY IS TERRAFORM-MINTED, so every client can PIN it instead of
+# trusting whatever key the host presents first. cc_ssh deletes the image's host keys and installs
+# exactly this ED25519 pair. NO ssh_genkeytypes: with ssh_keys present cc_ssh.handle takes the
+# install branch and generates nothing (read in cloud-init 26.1, the pinned image's), and an empty
+# list fails `cloud-init schema` ("[] is too short"). The indent() width MUST equal the column of
+# the interpolation below (4), or the key's continuation lines leave the YAML block scalar. The
+# boot proof in the sshd_config stage is what guarantees sshd SERVES this key.
+ssh_deletekeys: true
+ssh_keys:
+  ed25519_private: |
+    ${indent(4, host_ssh_ed25519_private_key)}
+  ed25519_public: ${host_ssh_ed25519_public_key}
+
 write_files:
   # SSH hardening parity with the web host's minimal set.
   #
@@ -96,6 +109,7 @@ write_files:
       MaxStartups 10:30:60
       MaxSessions 4
       AuthorizedKeysFile .ssh/authorized_keys
+      HostKey /etc/ssh/ssh_host_ed25519_key
     owner: root:root
     permissions: '0644'
 
@@ -723,6 +737,25 @@ runcmd:
   # opens. `sshd -t` MUST-ABORT; the restart MUST-TOLERATE (a systemd hiccup must not brick
   # the store; sshd keeps its previous config and the warn emit shows it).
   - |
+    # (#7226/#5914, ADR-237) THE HOST-KEY BOOT PROOF. The ssh_keys block installs the
+    # Terraform-minted key and the drop-in names it, but HostKey lines ACCUMULATE across drop-ins
+    # (not first-match-wins), so "written" is not "served". Every pinned client refuses any other
+    # key, so a host serving a different or an extra key is unreachable by design: fail in this
+    # stage, where the boot is instrumented, so git_data_boot_verify turns the replace red BEFORE
+    # the redeploy job ships the pin. A function so the harness extracts it verbatim (Guard 6):
+    #   $1 = the sshd -T dump, $2 = the Terraform public key. Prints ONE word and returns
+    #   0 ok | 1 hostkey_count / hostkey_mismatch (FATAL) | 2 ssh_keygen_absent (could-not-measure).
+    # Defined ABOVE the STAGE= line so the stage's emit windows stay named sshd_config.
+    git_data_hostkey_proof() {
+      _hk_n=$(printf '%s\n' "$1" | grep -ci '^hostkey ') || true
+      if [ "$_hk_n" != 1 ]; then echo hostkey_count; return 1; fi
+      if ! command -v ssh-keygen >/dev/null 2>&1; then echo ssh_keygen_absent; return 2; fi
+      _hk_path=$(printf '%s\n' "$1" | grep -i '^hostkey ' | cut -d' ' -f2-)
+      _hk_want=$(printf '%s\n' "$2" | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2)
+      _hk_got=$(ssh-keygen -y -f "$_hk_path" 2>/dev/null | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2)
+      if [ -z "$_hk_want" ] || [ "$_hk_want" != "$_hk_got" ]; then echo hostkey_mismatch; return 1; fi
+      echo ok
+    }
     STAGE=sshd_config
     # (#7227) TRUNCATE AT EVERY STAGE BOUNDARY. The file is append-only across the boot and
     # `mount … || true` writes an error while the boot CONTINUES, so a later fatal would ship
@@ -832,6 +865,28 @@ runcmd:
       /usr/local/bin/git-data-emit "git-data sshd -T could not run" sshd_config_warn warning \
         "$_sshd_T_detail" "rc=$_sshd_T_rc" || true
       echo "[git-data] WARN: sshd -T unavailable (rc=$_sshd_T_rc) — effective config not measured; continuing." >&2
+    fi
+    # (#7226/#5914, ADR-237) THE HOST-KEY BOOT PROOF — git_data_hostkey_proof is defined at the
+    # top of this item. Fatal rides the ALREADY-ROUTED stage sshd_config with the verdict word as
+    # its detail (a new stage value would need a Sentry routing change); a missing ssh-keygen
+    # only WARNS (could-not-measure, the `sshd -t` rule). Runs only when `sshd -T` ran; the
+    # branch above already warns when it could not. Same guarded-detail discipline as above.
+    if [ "$_sshd_T_rc" -eq 0 ]; then
+      _hk_rc=0
+      _hk_verdict=$(git_data_hostkey_proof "$_sshd_T_raw" '${host_ssh_ed25519_public_key}') || _hk_rc=$?
+      _hk_detail=/run/git-data-sshd-hostkey.err
+      ( umask 077; printf 'sshd host-key proof: %s\n' "$_hk_verdict" > "$_hk_detail" ) 2>/dev/null || true
+      [ -s "$_hk_detail" ] || _hk_detail="sshd host-key proof: $_hk_verdict"
+      if [ "$_hk_rc" -eq 2 ]; then
+        /usr/local/bin/git-data-emit "git-data sshd host-key proof could not run" sshd_config_warn warning "$_hk_detail" || true
+      elif [ "$_hk_rc" -ne 0 ]; then
+        /usr/local/bin/git-data-emit "git-data sshd host-key proof FAILED" sshd_config fatal "$_hk_detail" || true
+        echo "[git-data] FATAL: sshd does not serve exactly the Terraform-minted host key ($_hk_verdict)." >&2
+        # The EXIT trap's own fatal ships $GIT_DATA_RUNCMD_DETAIL as its cause: give it the verdict
+        # word, or that second event reads "no stderr captured" for a failure whose cause is known.
+        ( printf 'sshd host-key proof: %s\n' "$_hk_verdict" >> "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
+        exit 1
+      fi
     fi
     # (#7227) THE RESTART WARNING GETS ITS OWN CAUSE; it shipped `detail=""`. It does NOT
     # reuse $_sshd_detail: reaching here means `sshd -t` PASSED, so that file is empty and

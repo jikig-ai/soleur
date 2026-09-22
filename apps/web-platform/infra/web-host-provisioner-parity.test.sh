@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Web-host provisioner DUAL-DELIVERY parity guard (#7000).
 #
-# WHAT THIS PINS. server.tf carries 17 `terraform_data` host provisioners whose SSH
+# WHAT THIS PINS. server.tf carries 18 `terraform_data` host provisioners whose SSH
 # `connection` is pinned to `hcloud_server.web["web-1"]`. That pinning is DELIBERATE and is
 # NOT a bug to be fixed by fanning them out over var.web_hosts:
 #
@@ -9,7 +9,7 @@
 #     cf-tunnel-ssh-bridge installs a single iptables NAT rule for it, and the tunnel
 #     connector is web-1-only by construction. web-2's public :22 is firewalled to
 #     var.admin_ips, which the non-static GH runner egress is not in.
-#   * All 17 are `-target=`ed by BARE address across two workflows (16 in
+#   * All 18 are `-target=`ed by BARE address across two workflows (17 in
 #     apply-web-platform-infra.yml, infra_config_handler_bootstrap in
 #     apply-deploy-pipeline-fix.yml), and a bare -target hits EVERY for_each instance — so a
 #     fan-out would make every merge dial web-2:22 and hang to the SSH timeout. There is no
@@ -17,7 +17,7 @@
 #   * ADR-114 ("Load-bearing constraint for any I2 implementation") ALREADY records this:
 #     "do NOT repoint the ... terraform_data.* connection { host } blocks ... every
 #     provisioner dies — and those are -targeted by the per-PR merge apply, so main wedges."
-#     (ADR-114's 2026-07-27 amendment says 15; the count in this file is 17 as of #8097.) This guard MECHANISES a
+#     (ADR-114's 2026-07-27 amendment says 15; the count in this file is 18 as of #7226, whose web_1_host_key_probe writes nothing.) This guard MECHANISES a
 #     constraint the architecture already carried in prose.
 #   * The plan's Phase 5 (2026-07-24-feat-web-active-active-cluster-iac-plan.md §5.3(c))
 #     REMOVES these provisioners once web-1 is cattle. It does not extend them.
@@ -37,7 +37,7 @@
 # (or changed in) the web-1 SSH path with no matching change on the fresh-boot path. Nothing
 # fails: web-1 gets it, CI is green, web-2 silently comes up WITHOUT it on its next rebuild.
 #
-#     EVERY absolute destination the 17 SSH provisioners WRITE has a fresh-boot counterpart
+#     EVERY absolute destination the 18 SSH provisioners WRITE has a fresh-boot counterpart
 #     that writes the SAME destination on a fresh cattle host.
 #
 # WHY DESTINATION-KEYED (this is the whole design). The first version of this guard keyed on
@@ -63,7 +63,7 @@
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
 # loudly rather than report a clean sweep of an empty set. The SWEEP-SIZE floors (FLOOR_RESOURCES
-# 17, FLOOR_DESTS 57, FLOOR_IDENTITY 5, FLOOR_SEEDED 40) are pinned at the EXACT baseline rather
+# 18, FLOOR_DESTS 57, FLOOR_IDENTITY 5, FLOOR_SEEDED 40) are pinned at the EXACT baseline rather
 # than baseline-minus-slack: any slack is a silent-erosion window, and removing a provisioner or a
 # delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
 # PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
@@ -230,7 +230,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
     if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
         ssh_resources[name] = body
 
-FLOOR_RESOURCES = 17
+FLOOR_RESOURCES = 18
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -249,7 +249,7 @@ if not fanned and not unpinned:
     ok(f"1: all {len(ssh_resources)} SSH provisioners are web-1-pinned and none is for_each'd")
 else:
     no(f"1: for_each'd={sorted(fanned)} not-web-1-pinned={sorted(unpinned)}. CI has ONE SSH "
-       "route (web-1) and all 17 are bare -target'ed, so a fan-out makes every merge-triggered "
+       "route (web-1) and all 18 are bare -target'ed, so a fan-out makes every merge-triggered "
        "apply dial a host it cannot reach and hang to the SSH timeout. See ADR-114's "
        "load-bearing constraint. If CI genuinely gained a route to web-2, the tunnel connector, "
        "the firewall and the -target lists must change FIRST, and this check with them.")
@@ -801,3 +801,217 @@ if probe_raw:
 print(f"=== web-host-provisioner-parity: {npass} passed, {nfail} failed ===")
 sys.exit(1 if nfail else 0)
 PYEOF
+main_rc=$?
+
+# ── GUARD 2 (#7226 / #8125, ADR-237): every Terraform SSH connection block pins the host key ──
+# PROPERTY. Every `connection {}` block (type "ssh", which is also Terraform's default) in any
+# `.tf` or `.tf.json` file of the repository sets EXACTLY ONE `host_key`, and that value is in
+# the ALLOW-SET below (today only `local.web_1_ssh_host_key`; git-data's pin joins it when a
+# connection block dials git-data). `null`, `""` and any other expression are outside the set.
+# A block whose host is hcloud_server.web["web-1"] (whitespace inside the reference is
+# normalised away before the match) must use `local.web_1_ssh_host_key` specifically. Without
+# host_key, Terraform's Go client accepts whatever key the peer presents on every provisioner
+# run, the same TOFU the bash bridge had (#7226).
+#
+# UNIVERSE. `git ls-files --cached --others --exclude-standard -- '*.tf' '*.tf.json'` at the
+# repository root (tracked files plus new files not yet added), so a connection block in ANY
+# Terraform root -- apps/*/infra, infra/github, a new root nobody listed -- is swept. The
+# §0-§5 parity program above reads the web-platform infra directory only; this one does not.
+#
+# PER BLOCK, not a comparison of totals: moving a host_key from one block into another keeps the
+# totals equal and must still go RED (one block has 0, the other 2). The walker strips comments
+# first, so tunnel.tf's prose mention of `connection { host }` is not a block. .tf.json files are
+# parsed as JSON and every `connection` object (or list of objects) at any depth is a block.
+#
+# Floors: at least 19 blocks (18 in server.tf incl. web_1_host_key_probe, 1 in ci-ssh-key.tf)
+# and at least 70 scanned files (79 tracked today). The local must be defined exactly once, from
+# the committed pin. SOLEUR_TF_REPO overrides the repository root for the mutation battery, which
+# builds a scratch repository whose apps/web-platform/infra IS the SOLEUR_INFRA_DIR sandbox.
+TF_REPO="${SOLEUR_TF_REPO:-$ROOT}"
+python3 - "$TF_REPO" "$INFRA" <<'G2EOF'
+import json, pathlib, re, subprocess, sys
+
+REPO = pathlib.Path(sys.argv[1]).resolve()
+INFRA = pathlib.Path(sys.argv[2]).resolve()
+ALLOWED_HOST_KEYS = {"local.web_1_ssh_host_key"}
+npass = nfail = 0
+def ok(m):
+    global npass; npass += 1; print(f"[ok] {m}")
+def no(m):
+    global nfail; nfail += 1; print(f"[FAIL] {m}", file=sys.stderr)
+
+# HCL comment stripping: `#`, `//` and `/* */` outside double-quoted strings. Newlines inside a
+# block comment are kept so reported line numbers stay true.
+def strip_hcl(text):
+    out = []; i = 0; n = len(text); in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == '\\' and i + 1 < n:
+                out.append(text[i + 1]); i += 2; continue
+            if c == '"': in_str = False
+            i += 1; continue
+        if c == '"':
+            in_str = True; out.append(c); i += 1; continue
+        if c == '#' or text.startswith('//', i):
+            while i < n and text[i] != '\n': i += 1
+            continue
+        if text.startswith('/*', i):
+            j = text.find('*/', i + 2); j = n if j < 0 else j + 2
+            out.append('\n' * text.count('\n', i, j)); i = j; continue
+        out.append(c); i += 1
+    return ''.join(out)
+
+def block_body(text, start):
+    """Body of the brace block whose `{` is at text[start-1]; string-aware."""
+    i = start; depth = 1; in_str = False
+    while i < len(text) and depth > 0:
+        c = text[i]
+        if in_str:
+            if c == '\\': i += 2; continue
+            if c == '"': in_str = False
+        elif c == '"': in_str = True
+        elif c == '{': depth += 1
+        elif c == '}': depth -= 1
+        i += 1
+    return text[start:i - 1]
+
+if INFRA != REPO / "apps/web-platform/infra":
+    no(f"G2: the analysed infra dir {INFRA} is not <repo>/apps/web-platform/infra under {REPO}; "
+       "Guard 2 would sweep a different server.tf than the parity program")
+ls = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others",
+                     "--exclude-standard", "--", "*.tf", "*.tf.json"],
+                    capture_output=True, text=True)
+if ls.returncode != 0:
+    no(f"G2: git ls-files failed under {REPO}: {ls.stderr.strip()}")
+files = sorted({REPO / p for p in ls.stdout.split("\0") if p and ".terraform/" not in p})
+FLOOR_FILES = 70
+if len(files) >= FLOOR_FILES:
+    ok(f"G2: scanned {len(files)} .tf/.tf.json files (floor {FLOOR_FILES})")
+else:
+    no(f"G2: scanned only {len(files)} .tf/.tf.json files (floor {FLOOR_FILES}) -- the walk is broken")
+
+def json_blocks(node, path):
+    """Every `connection` value in a .tf.json document, at any depth."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "connection":
+                for i, c in enumerate(v if isinstance(v, list) else [v]):
+                    yield (f"{path}.connection[{i}]", c)
+            else:
+                yield from json_blocks(v, f"{path}.{k}")
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from json_blocks(v, f"{path}[{i}]")
+
+blocks = []   # (file:line, body-or-dict)
+local_defs = []
+for f in files:
+    raw = f.read_text()
+    rel = f.relative_to(REPO)
+    if f.name.endswith(".tf.json"):
+        try:
+            doc = json.loads(raw)
+        except ValueError as e:
+            no(f"G2: {rel} is not valid JSON ({e}); its connection blocks cannot be checked")
+            continue
+        for loc, c in json_blocks(doc, ""):
+            blocks.append((f"{rel}:{loc}", c))
+        def defines_local(node):
+            if isinstance(node, dict):
+                return ("web_1_ssh_host_key" in node) or any(defines_local(v) for v in node.values())
+            if isinstance(node, list):
+                return any(defines_local(v) for v in node)
+            return False
+        if defines_local(doc):
+            local_defs.append((f"{rel}:json", ""))
+        continue
+    src = strip_hcl(raw)
+    for m in re.finditer(r'(?<![\w.])connection\s*\{', src):
+        line = src.count('\n', 0, m.start()) + 1
+        blocks.append((f"{rel}:{line}", block_body(src, m.end())))
+    for m in re.finditer(r'(?m)^\s*web_1_ssh_host_key\s*=', src):
+        line = src.count('\n', 0, m.start()) + 1
+        local_defs.append((f"{rel}:{line}", src[m.end():m.end() + 600]))
+
+def is_winrm(b):
+    if isinstance(b, dict):
+        return b.get("type") == "winrm"
+    return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
+
+ssh_blocks = [(loc, b) for loc, b in blocks if not is_winrm(b)]
+FLOOR_BLOCKS = 19
+if len(ssh_blocks) >= FLOOR_BLOCKS:
+    ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
+else:
+    no(f"G2: swept only {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS}). A block "
+       "was removed or the walker broke -- check which before editing this floor.")
+
+# host_key values, normalised: HCL `local.x` stays as written; a JSON "${local.x}" template is
+# unwrapped to the same expression; JSON null and "" become the HCL spellings `null` / `""`.
+def host_keys(b):
+    if isinstance(b, dict):
+        if "host_key" not in b:
+            return []
+        v = b["host_key"]
+        if v is None:
+            return ["null"]
+        if isinstance(v, str):
+            m = re.fullmatch(r'\$\{\s*(.*?)\s*\}', v)
+            return [m.group(1) if m else json.dumps(v)]
+        return [json.dumps(v)]
+    return re.findall(r'(?m)^\s*host_key\s*=\s*(.+?)\s*$', b)
+
+def dials_web_1(b):
+    text = json.dumps(b) if isinstance(b, dict) else b
+    return 'hcloud_server.web["web-1"]' in re.sub(r'\s+', '', text).replace('\\"', '"')
+
+bad_count, bad_value, bad_web1 = [], [], []
+for loc, b in ssh_blocks:
+    keys = host_keys(b)
+    if len(keys) != 1:
+        bad_count.append(f"{loc} (host_key x{len(keys)})")
+        continue
+    if keys[0] not in ALLOWED_HOST_KEYS:
+        bad_value.append(f"{loc} (host_key = {keys[0]})")
+    if dials_web_1(b) and keys[0] != "local.web_1_ssh_host_key":
+        bad_web1.append(f"{loc} (host_key = {keys[0]})")
+if not bad_count:
+    ok(f"G2: every one of the {len(ssh_blocks)} SSH connection blocks sets exactly one host_key")
+else:
+    no("G2: connection block without exactly one host_key: " + ", ".join(bad_count) + ". Every "
+       "Terraform SSH connection must pin the peer's host key (ADR-237); a web-1 block uses "
+       "`host_key = local.web_1_ssh_host_key`.")
+if not bad_value:
+    ok(f"G2: every host_key is in the allow-set {sorted(ALLOWED_HOST_KEYS)}")
+else:
+    no("G2: host_key outside the allow-set " + str(sorted(ALLOWED_HOST_KEYS)) + ": "
+       + ", ".join(bad_value) + ". null, \"\" or an ad-hoc expression disables or bypasses the pin; "
+       "add a new pin local to ALLOWED_HOST_KEYS (with review) instead.")
+if not bad_web1:
+    ok("G2: every web-1 connection block pins host_key to local.web_1_ssh_host_key")
+else:
+    no("G2: web-1 connection block pins host_key to something other than "
+       "local.web_1_ssh_host_key: " + ", ".join(bad_web1))
+
+# The local is the ONE place the committed pin enters Terraform: defined once, read from the
+# committed file, through one() (exactly one key line) and the anchored ECDSA-P256 regex().
+if len(local_defs) != 1:
+    no(f"G2: local.web_1_ssh_host_key must be defined exactly once, found {len(local_defs)}: "
+       + ", ".join(l for l, _ in local_defs))
+else:
+    loc, rhs = local_defs[0]
+    want = [r'^\s*regex\(', r'\^ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB\[A-Za-z0-9\+/\]\{86\}=\$',
+            r'\bone\(', r'file\("\$\{path\.module\}/web-1-ssh-host-key\.pub"\)']
+    missing = [w for w in want if not re.search(w, rhs)]
+    if not missing:
+        ok(f"G2: local.web_1_ssh_host_key ({loc}) is regex(ECDSA-P256, one(<committed pin lines>))")
+    else:
+        no(f"G2: local.web_1_ssh_host_key ({loc}) lost its shape; missing {missing}")
+
+print(f"=== web-host-provisioner-parity Guard 2: {npass} passed, {nfail} failed ===")
+sys.exit(1 if nfail else 0)
+G2EOF
+g2_rc=$?
+[[ "$main_rc" -eq 0 && "$g2_rc" -eq 0 ]]

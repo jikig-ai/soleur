@@ -32,13 +32,13 @@
 # Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge) — the same path apply-web-platform-infra
 # and git-data-cutover use. Creds are held here in GitHub secrets; nothing is held on the host.
 #
-# KNOWN RESIDUAL on that bridge, named rather than left silent (#7226): the composite connects with
-# `StrictHostKeyChecking=accept-new` AND `UserKnownHostsFile=/dev/null`, which is TOFU with no
-# persistence — web-1's host key is re-accepted unverified on every connection, so an adversary in
-# the CF-edge position could impersonate the host and return a forged PASSED verdict. Pre-existing
-# and shared with three other workflows (the two cutovers + apply-web-platform-infra), so pinning it
-# is not this workflow's change to make; #6808 raised the stakes only in FREQUENCY (daily vs manual)
-# by making this verdict load-bearing for a published Article 32 claim. NOT the same surface as
+# Host identity on that bridge (#7226, ADR-237): the composite verifies web-1 against the committed
+# ECDSA-P256 pin in apps/web-platform/infra/web-1-ssh-host-key.pub (strict host-key checking,
+# HostKeyAlias=web-1), so a CF-edge adversary without web-1's host private key can no longer return
+# a forged PASSED verdict. A pin mismatch fails this run closed — never loosen the bridge's options
+# to recover; re-capture the pin (runbook git-data-luks-cutover-5274.md, web-1 re-capture). Before
+# the pinned bridge merged, this verdict travelled over an unverified channel; see the counsel-audit
+# addendum in knowledge-base/legal/audits/2026-07-counsel-review-6588.md. NOT the same surface as
 # #5914 (git-auth.ts private-net git SSH).
 #
 # AP-002 (No SSH state mutation) carve-out, recorded rather than silent: the seed_workspace_count
@@ -260,6 +260,42 @@ jobs:
             echo "outcome_class=$1 outcome_reason=${2:-}"
           }
 
+          # (#7226, ADR-237) A web-1 HOST-KEY MISMATCH IS ITS OWN VERDICT, not a transport failure.
+          # WEB_HOST_SSH pins web-1's committed ECDSA key (StrictHostKeyChecking yes), so a host
+          # presenting any other key fails EVERY call with ssh's own rc 255 — which the rc-255 branch
+          # below would report as "SSH transport failure, re-dispatch", and no re-dispatch fixes a
+          # changed key. So each ssh call's stderr is captured to $ssh_err (the probe's is already in
+          # $probe_log) and classified here first: only on rc 255, and only on LINE-ANCHORED ssh text,
+          # so output from the remote side cannot pick the verdict. Class stays `unavailable` (the
+          # alarm's enum; nothing was proven about the volume) with reason web_1_host_key_mismatch,
+          # which the filed issue and the Sentry check-in carry. Remedy: runbook "Host-key mismatch
+          # (H4)" in knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md.
+          ssh_err="${RUNNER_TEMP:-/tmp}/wl-ssh-stderr.log"
+          # Raw ssh text is echoed for diagnosis inside a ::stop-commands:: span keyed on a per-run
+          # random token, stripped to printable ASCII and capped, so an embedded ::error:: or
+          # ::add-mask:: from the far side cannot become a workflow command.
+          show_ssh_stderr() {
+            [[ -s "$1" ]] || return 0
+            local tok
+            tok="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+            echo "::stop-commands::${tok}"
+            head -c 8192 "$1" | LC_ALL=C tr -cd '\12\40-\176' | sed 's/^/[ssh-stderr] /'
+            echo
+            echo "::${tok}::"
+          }
+          host_key_verdict() {
+            # $1 ssh rc, $2 captured stderr file. Returns 0 unless this IS a host-key failure, in
+            # which case it classifies and exits the step.
+            [[ "$1" -eq 255 ]] || return 0
+            if head -c 8192 "$2" 2>/dev/null | LC_ALL=C tr -cd '\12\40-\176' \
+                | grep -qE '^(Host key verification failed\.|@ +WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! +@|Unable to negotiate with .+: no matching host key type found.*)$'; then
+              echo "::error title=workspaces-luks-verify::verdict=host_key_mismatch role=web"
+              echo "::error::web-1 presented a host key other than its committed pin (apps/web-platform/infra/web-1-ssh-host-key.pub), or none of the pinned algorithm. NOT an at-rest finding, and NOT a transport blip: re-dispatching cannot fix it. Follow \"Host-key mismatch (H4)\" in knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md (wrong capture -> re-capture PR; otherwise breach-notice triage). Never re-enable TOFU."
+              emit_class unavailable web_1_host_key_mismatch
+              exit 255
+            fi
+          }
+
           # PROBE-INTEGRITY reasons: the probe refused to run, or could not read its own inputs.
           # Whichever rc carried it, the run proved NOTHING about the volume in either direction,
           # so it can never be an at-rest finding.
@@ -347,12 +383,18 @@ jobs:
           # `-l root` (sudo's env_reset would scrub HOME + the sourced .env). Boot token via 0600
           # stdin .env, shredded on a host-local EXIT trap — same discipline as the cutover.
           # shellcheck disable=SC2086
-          REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-verify.XXXXXX')"
+          REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-verify.XXXXXX' 2>"$ssh_err")"
+          ssh_rc=$?
+          show_ssh_stderr "$ssh_err"
+          host_key_verdict "$ssh_rc" "$ssh_err"
           [[ -n "$REMOTE_DIR" ]] || { echo "::error::failed to create the remote bundle dir on web-1"; emit_class unavailable remote_bundle_dir_failed; exit 1; }
           echo "REMOTE_DIR=$REMOTE_DIR" >> "$GITHUB_ENV"
           # shellcheck disable=SC2086
           tar czf - -C "$INFRA_DIR" luks-monitor.sh workspaces-luks-emit.sh \
-            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'"
+            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'" 2>"$ssh_err"
+          ssh_rc=$?
+          show_ssh_stderr "$ssh_err"
+          host_key_verdict "$ssh_rc" "$ssh_err"
           # WEB_HOST_SSH is guaranteed set past the guard above (no :-ssh fallback).
           # shellcheck disable=SC2086
           # ONE-TIME baseline seed (see the input's description). Digits-only validation happens
@@ -390,7 +432,11 @@ jobs:
             # the read, during exactly the incident that motivates re-seeding, let a downward
             # re-seed land. Capture the transport status separately and refuse to seed blind.
             # shellcheck disable=SC2086
-            if ! existing_raw="$(${WEB_HOST_SSH} "$WEB_HOST" "cat /var/lib/workspaces-luks/state 2>/dev/null || true")"; then
+            existing_raw="$(${WEB_HOST_SSH} "$WEB_HOST" "cat /var/lib/workspaces-luks/state 2>/dev/null || true" 2>"$ssh_err")"
+            ssh_rc=$?
+            show_ssh_stderr "$ssh_err"
+            host_key_verdict "$ssh_rc" "$ssh_err"
+            if [[ "$ssh_rc" -ne 0 ]]; then
               echo "::error::could not read the existing WORKSPACES_COUNT baseline from web-1 (SSH/transport fault). Refusing to seed blind — a seed written without reading the current baseline can silently lower it."
               emit_class unavailable seed_baseline_unreadable
               exit 1
@@ -409,7 +455,11 @@ jobs:
               exit 1
             fi
             # shellcheck disable=SC2086
-            ${WEB_HOST_SSH} "$WEB_HOST" "mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && printf 'WORKSPACES_COUNT=%s\n' '$SEED_WORKSPACE_COUNT' >> /var/lib/workspaces-luks/state" \
+            ${WEB_HOST_SSH} "$WEB_HOST" "mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && printf 'WORKSPACES_COUNT=%s\n' '$SEED_WORKSPACE_COUNT' >> /var/lib/workspaces-luks/state" 2>"$ssh_err"
+            ssh_rc=$?
+            show_ssh_stderr "$ssh_err"
+            host_key_verdict "$ssh_rc" "$ssh_err"
+            [[ "$ssh_rc" -eq 0 ]] \
               || { echo "::error::failed to seed the workspace-inventory baseline on web-1"; emit_class unavailable seed_write_failed; exit 1; }
             echo "::warning::SEEDED the workspace-inventory baseline to WORKSPACES_COUNT=$SEED_WORKSPACE_COUNT on this run. The comparison below is only meaningful because this value comes from an INDEPENDENT proof (a cutover run's own host-side inventory of \$STAGING/workspaces — never the host's current live count). Future cutovers persist it automatically."
           fi
@@ -475,6 +525,9 @@ jobs:
           # it available for EVERY rc (see is_probe_integrity above for the concrete bug this fixes).
           reason="$(sed -n 's/^\[luks-monitor\] FAIL (\([a-z_]*\)).*/\1/p' "$probe_log" | tail -1)"
 
+          # (#7226) Host identity FIRST: a pinned-key refusal also exits 255, and must not read as a
+          # transport blip. ssh's own stderr is in $probe_log (merged with the probe's output).
+          host_key_verdict "$probe_rc" "$probe_log"
           if [[ "$probe_rc" -eq 255 ]]; then
             echo "::error::SSH transport failure (rc=255) reaching web-1 over the CF Tunnel bridge. REACHABILITY failure, NOT an at-rest finding: nothing has been proven about the volume. Check the bridge step logs and re-dispatch."
             emit_class unavailable "${reason:-ssh_transport_failure}"

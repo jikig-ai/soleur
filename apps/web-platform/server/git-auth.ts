@@ -313,6 +313,70 @@ export async function gitWithInstallationAuth(
   }
 }
 
+// ---------------------------------------------------------------------------
+// git-data host-key trust (#7226 / #5914, ADR-237).
+//
+// Both git-data helpers below take a REQUIRED positional `hostKeyPin`. The pin is
+// Terraform-minted (`tls_private_key.git_data_host_ssh`), published to Doppler prd
+// as GIT_DATA_SSH_HOST_KEY by the birth/replace job, and shape-validated by
+// `resolveGitDataHostKeyPin()` (git-data-replication.ts) before it gets here.
+//
+//   - pin present: the per-call 0600 known_hosts holds exactly `git-data <pin>`,
+//     ssh looks the host up under the alias `git-data` (never the address), and
+//     every other trust source is cut: `-F /dev/null` (no user/system ssh_config)
+//     and GlobalKnownHostsFile=/dev/null. A changed key fails closed.
+//   - pin null: the transitional fallback below, reachable only while the store is
+//     disabled and before the first replace publishes the pin. #5914 deletes it,
+//     and that deletion is a hard precondition for ever setting
+//     GIT_DATA_STORE_ENABLED (see the cutover runbook).
+// ---------------------------------------------------------------------------
+
+// The ONE unpinned host-key option in this file. Guard 1
+// (tests/scripts/test-no-tofu-ssh.sh) allow-lists git-auth.ts at exactly one hit, so a
+// second copy anywhere in this file turns CI red. Do not inline it elsewhere.
+const TOFU_FALLBACK_OPTS: readonly string[] = ["-o", "StrictHostKeyChecking=accept-new"];
+
+const GIT_DATA_HOST_KEY_ALIAS = "git-data";
+
+const PINNED_HOST_KEY_OPTS: readonly string[] = [
+  "-F",
+  "/dev/null",
+  "-o",
+  "StrictHostKeyChecking=yes",
+  "-o",
+  `HostKeyAlias=${GIT_DATA_HOST_KEY_ALIAS}`,
+  "-o",
+  "HostKeyAlgorithms=ssh-ed25519",
+  "-o",
+  "UpdateHostKeys=no",
+  "-o",
+  "GlobalKnownHostsFile=/dev/null",
+  // No `LogLevel=ERROR`: OpenSSH 9.6 then suppresses "no matching host key type found",
+  // which makes the host_key_mismatch reason=alg classification unobservable.
+];
+
+/**
+ * The known_hosts body and the host-key ssh options for one git-data invocation.
+ * Throws on a pin carrying a line break: the resolver already refuses one, but this is
+ * the byte that becomes a known_hosts line, so a second line (e.g. a `@cert-authority *`
+ * entry) must be impossible here too, whatever the caller.
+ */
+function gitDataHostKeyTrust(hostKeyPin: string | null): {
+  knownHosts: string;
+  sshOpts: readonly string[];
+} {
+  if (hostKeyPin === null) return { knownHosts: "", sshOpts: TOFU_FALLBACK_OPTS };
+  if (/[\r\n]/.test(hostKeyPin) || hostKeyPin.trim() === "") {
+    throw new Error(
+      "git-data: refusing a malformed host-key pin (must be one `ssh-ed25519 <base64>` line)",
+    );
+  }
+  return {
+    knownHosts: `${GIT_DATA_HOST_KEY_ALIAS} ${hostKeyPin}\n`,
+    sshOpts: PINNED_HOST_KEY_OPTS,
+  };
+}
+
 /**
  * Run `git` with a private SSH key — the transport for the git-data bare store
  * over the private net (epic #5274 Phase 2, ADR-068 §1 amendment 2026-07-01).
@@ -327,23 +391,29 @@ export async function gitWithInstallationAuth(
  * Key handling mirrors the askpass discipline:
  *   - the key NEVER appears in argv — it is delivered via `GIT_SSH_COMMAND -i`
  *     pointing at a 0600 temp file, removed in `finally`;
- *   - `StrictHostKeyChecking=accept-new` + a per-invocation throwaway
- *     `UserKnownHostsFile` is the Phase-2 private-net trust floor (TOFU; the host
- *     may be replaced during fence iteration, so cross-invocation host-key pinning
- *     is deliberately NOT used — per-`workspace_id` mTLS is the Phase-3 control,
- *     ADR-068 §6). `BatchMode=yes` so a host-key/auth problem fails deterministically
- *     instead of hanging on a prompt.
+ *   - the git-data host key is PINNED whenever `hostKeyPin` is non-null (#7226,
+ *     ADR-237): the per-invocation 0600 known_hosts holds exactly `git-data <pin>`
+ *     and ssh verifies strictly under that alias. A host replace no longer defeats
+ *     pinning, because the replace job rotates the Terraform-minted key, republishes
+ *     the pin and redeploys this app. A `null` pin takes the transitional fallback
+ *     arm (see `TOFU_FALLBACK_OPTS`), which #5914 deletes before any store-enable.
+ *     `BatchMode=yes` so a host-key/auth problem fails deterministically instead of
+ *     hanging on a prompt.
  *
  * @param args  git subcommand + flags (helper resets are prepended automatically)
  * @param privateKey  the OpenSSH-format private key material (from Doppler)
+ * @param hostKeyPin  the git-data `ssh-ed25519 <base64>` pin from
+ *   `resolveGitDataHostKeyPin()`, or `null` for the transitional fallback
  * @param opts  cwd + timeout passthrough
  * @returns the stdout Buffer from the git invocation
  */
 export async function gitWithPrivateKeyAuth(
   args: string[],
   privateKey: string,
+  hostKeyPin: string | null,
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
+  const trust = gitDataHostKeyTrust(hostKeyPin);
   const dir = getAskpassDir();
   const keyPath = join(dir, `.git-transport-${randomUUID()}.key`);
   const knownHostsPath = join(dir, `.git-transport-${randomUUID()}.known_hosts`);
@@ -355,7 +425,7 @@ export async function gitWithPrivateKeyAuth(
     writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
       mode: 0o600,
     });
-    writeFileSync(knownHostsPath, "", { mode: 0o600 });
+    writeFileSync(knownHostsPath, trust.knownHosts, { mode: 0o600 });
 
     const sshCommand = [
       "ssh",
@@ -363,8 +433,7 @@ export async function gitWithPrivateKeyAuth(
       keyPath,
       "-o",
       "IdentitiesOnly=yes",
-      "-o",
-      "StrictHostKeyChecking=accept-new",
+      ...trust.sshOpts,
       "-o",
       `UserKnownHostsFile=${knownHostsPath}`,
       "-o",
@@ -415,15 +484,18 @@ export async function gitWithPrivateKeyAuth(
  * `remoteCommand` is passed as ONE opaque argv element.
  *
  * Key handling mirrors {@link gitWithPrivateKeyAuth}: the key NEVER appears in
- * argv (delivered via `-i` at a 0600 temp file, removed in `finally`);
- * `StrictHostKeyChecking=accept-new` + a per-invocation throwaway
- * `UserKnownHostsFile` is the Phase-2 private-net trust floor (TOFU); `BatchMode=yes`
- * so an auth/host-key problem fails deterministically instead of hanging.
+ * argv (delivered via `-i` at a 0600 temp file, removed in `finally`); the host key
+ * is pinned under the `git-data` alias whenever `hostKeyPin` is non-null (#7226 —
+ * the same trust arm as the git helper, so the two can never diverge);
+ * `BatchMode=yes` so an auth/host-key problem fails deterministically instead of
+ * hanging. Used by provisioning AND the Art. 17 erasure path (REMOVE key).
  *
  * @param host  the git-data host (private-net address, e.g. `10.0.1.20`)
  * @param remoteCommand  the single opaque argument delivered as `SSH_ORIGINAL_COMMAND`
  *   (the validated `workspace_id` — the forced command ignores the command word)
  * @param privateKey  the OpenSSH-format provision private key (from Doppler)
+ * @param hostKeyPin  the git-data `ssh-ed25519 <base64>` pin from
+ *   `resolveGitDataHostKeyPin()`, or `null` for the transitional fallback
  * @param opts  cwd + timeout passthrough
  * @returns the stdout Buffer from the ssh invocation
  */
@@ -431,8 +503,10 @@ export async function sshWithPrivateKeyAuth(
   host: string,
   remoteCommand: string,
   privateKey: string,
+  hostKeyPin: string | null,
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
+  const trust = gitDataHostKeyTrust(hostKeyPin);
   const dir = getAskpassDir();
   const keyPath = join(dir, `.git-provision-${randomUUID()}.key`);
   const knownHostsPath = join(dir, `.git-provision-${randomUUID()}.known_hosts`);
@@ -444,15 +518,14 @@ export async function sshWithPrivateKeyAuth(
     writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
       mode: 0o600,
     });
-    writeFileSync(knownHostsPath, "", { mode: 0o600 });
+    writeFileSync(knownHostsPath, trust.knownHosts, { mode: 0o600 });
 
     const sshArgs = [
       "-i",
       keyPath,
       "-o",
       "IdentitiesOnly=yes",
-      "-o",
-      "StrictHostKeyChecking=accept-new",
+      ...trust.sshOpts,
       "-o",
       `UserKnownHostsFile=${knownHostsPath}`,
       "-o",
