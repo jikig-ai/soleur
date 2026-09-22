@@ -145,6 +145,33 @@ describe("dispatchBoundEngineRun", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("fails closed before Codex dispatch when egress evidence is absent", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-codex-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "should-not-run" } as const };
+    }) };
+    const registry = createEngineRegistry([{
+      id: "codex",
+      version: "codex-v1",
+      transport: "remote",
+      enabledForNewRuns: true,
+      enabledForExistingRuns: true,
+      authModes: ["api-key"],
+      qualifications: [],
+    }]);
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-codex-1", binding: { engineId: "codex", authMode: "api-key" } }) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRunFromRegistry({
+        repository,
+        factories: { codex: () => adapter as never },
+        registry,
+        runId: "run-codex-1",
+        input: { text: "hi", attachmentIds: [] },
+        context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("engine_egress_evidence_required");
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
+
   it("applies reviewed qualification to an egress-selected engine before start", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-grok-qualified", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
