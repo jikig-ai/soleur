@@ -215,7 +215,7 @@ pre-commit:
       # the same unpinned-resolution defect class as #7927 (and the bare-`npx
       # tsc` prohibition in plugins/soleur/skills/work/SKILL.md). Fail fast
       # naming the deterministic recovery instead.
-      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck: node_modules/.bin/tsc missing -- run: npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && ./node_modules/.bin/tsc --noEmit
+      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && ./node_modules/.bin/tsc --noEmit
     conversations-update-callsites:
       priority: 5
       # Run target is the whole repo (not `{staged_files}`) because the
