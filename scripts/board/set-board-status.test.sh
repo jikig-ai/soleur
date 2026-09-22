@@ -136,6 +136,15 @@ assert_exit0() { # $1=label ; runs dispatch and asserts a 0 exit
 event pull_request '{"action":"closed","pull_request":{"node_id":"PR_3","state":"closed","draft":false,"merged":true,"body":"No issue linked here."}}'
 assert_exit0 "PR merged with no linked issue -> clean exit 0 (no-op)"
 
+# 12. recompute: an OPEN native blocked-by edge -> Blocked; a CLOSED one does not
+export MOCK_ISSUE_JSON='{"data":{"node":{"state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[{"state":"OPEN"}]},"timelineItems":{"nodes":[]}}}}'
+event issues '{"action":"reopened","issue":{"node_id":"I_12"}}'
+run_dispatch; assert_opt OPT_blocked "reopened with an open blocked-by edge -> Blocked"
+export MOCK_ISSUE_JSON='{"data":{"node":{"state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[{"state":"CLOSED"}]},"timelineItems":{"nodes":[]}}}}'
+event issues '{"action":"reopened","issue":{"node_id":"I_12"}}'
+run_dispatch; assert_opt OPT_backlog "reopened with only a closed blocker -> Backlog"
+unset MOCK_ISSUE_JSON
+
 echo "-----"
 echo "$PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

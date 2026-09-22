@@ -103,12 +103,13 @@ set_issue() {
 }
 
 # ---- Derive the correct OPEN-issue Status from current GitHub state ----
-# closed -> Done; blocked/pending label -> Blocked/Pending; open linked PR ->
+# closed -> Done; blocked/pending label or an OPEN native blocked-by edge ->
+# Blocked/Pending; open linked PR ->
 # In review (ready) / In progress (draft); ready|todo label -> Ready; else Backlog.
 recompute_issue() {
   local issue_id="$1"
   valid_node_id "$issue_id" || die "invalid node id: $issue_id"
-  local q='query($id:ID!){node(id:$id){... on Issue{state labels(first:50){nodes{name}} timelineItems(itemTypes:[CROSS_REFERENCED_EVENT],first:50){nodes{... on CrossReferencedEvent{source{... on PullRequest{state isDraft}}}}}}}}'
+  local q='query($id:ID!){node(id:$id){... on Issue{state labels(first:50){nodes{name}} blockedBy(first:50){nodes{state}} timelineItems(itemTypes:[CROSS_REFERENCED_EVENT],first:50){nodes{... on CrossReferencedEvent{source{... on PullRequest{state isDraft}}}}}}}}'
   local resp state labels pr_state
   resp=$(gql "$q" -f id="$issue_id")
   state=$(jq -r '.data.node.state // "OPEN"' <<<"$resp")
@@ -117,6 +118,10 @@ recompute_issue() {
   has() { printf '%s\n' "$labels" | grep -qx "$1"; }
   if has "blocked"; then set_issue "$issue_id" "$STATUS_BLOCKED"; return; fi
   if has "pending"; then set_issue "$issue_id" "$STATUS_PENDING"; return; fi
+  # Native GitHub dependencies (the product-roadmap frontier reads the same edge).
+  if jq -e '[.data.node.blockedBy.nodes[]? | select(.state == "OPEN")] | length > 0' <<<"$resp" >/dev/null; then
+    set_issue "$issue_id" "$STATUS_BLOCKED"; return
+  fi
   # Open linked PR (cross-reference) decides In review vs In progress.
   pr_state=$(jq -r '
     [.data.node.timelineItems.nodes[]? | .source? // empty | select(.state=="OPEN")]

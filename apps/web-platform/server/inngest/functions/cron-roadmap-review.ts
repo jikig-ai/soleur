@@ -159,6 +159,8 @@ ROADMAP.MD CONFLICT GUARD: BEFORE editing knowledge-base/product/roadmap.md, run
   gh pr list --state open --search 'roadmap.md in:files' --json number,title,headRefName
 If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post a comment on that PR with your suggested updates and skip the roadmap.md edit in your own PR.
 
+FOG AND SCOPE RULE: The \`## Not Yet Specified\` and \`## Out of Scope\` sections of roadmap.md are bullet lists maintained only by the product-roadmap workshop. Never file issues for, reorder, or delete their entries. An open issue with an open blockedBy edge is waiting, not stale: never close it or flag it for inactivity.
+
 ## Output
 
 After your analysis, create a new issue with:
