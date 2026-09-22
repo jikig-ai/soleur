@@ -50,6 +50,23 @@ command -v terraform >/dev/null 2>&1 || {
 TFDIR=$(mktemp -d -t gdbudget.XXXXXXXX)
 trap 'rm -rf "$TFDIR"' EXIT
 
+# (#7226, ADR-237) THE SSH HOST KEY PAIR is minted per render, never committed: a throwaway
+# ED25519 key generated here and deleted with $TFDIR. A REAL key rather than a stub string for
+# two reasons: its random base64 is what the host is really handed (a repetitive stub gzips
+# near-free and would overstate headroom), and the runcmd rehearsal installs it in the pinned
+# image so the sshd_config stage's host-key proof is exercised against a key that matches the
+# rendered pin. Without ssh-keygen the stub keeps the SHAPE and LENGTH only.
+if command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -q -t ed25519 -N "" -C "" -f "$TFDIR/hostkey" >/dev/null 2>&1; then
+  :
+else
+  # The armor label is assembled, not written whole, so no secret scanner reads this stub as a key.
+  _pk="OPENSSH PRIVATE""-KEY"; _pk="${_pk/-/ }"
+  { printf -- '-----BEGIN %s-----\n' "$_pk"
+    for _i in 1 2 3 4 5; do printf '%s\n' "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBST"; done
+    printf -- '-----END %s-----\n' "$_pk"; } > "$TFDIR/hostkey"
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBHOSTKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' > "$TFDIR/hostkey.pub"
+fi
+
 # templatefile()/base64gzip() are builtins, so an EMPTY scratch dir needs no providers, no
 # backend and no credentials — this never touches state. The expression lives in a
 # `locals` block because `terraform console` reads ONE expression per LINE and collapsing
@@ -79,6 +96,8 @@ locals {
     git_transport_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBTRANSPORTKEYAAAAAAAAAAAAAAAAAAAAA"
     git_provision_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBPROVISIONKEYAAAAAAAAAAAAAAAAAAAAA"
     git_remove_pubkey                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBREMOVEKEYAAAAAAAAAAAAAAAAAAAAAAAA"
+    host_ssh_ed25519_private_key     = file("${TFDIR}/hostkey")
+    host_ssh_ed25519_public_key      = trimspace(file("${TFDIR}/hostkey.pub"))
     git_data_volume_id               = "100000001"
     git_data_luks_volume_id          = "100000002"
     # Built by join() rather than written as one literal: a contiguous dp.<type>.<...>

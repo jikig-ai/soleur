@@ -59,6 +59,9 @@
 # committed 2026-09-09 live capture; empty reads as unset). See "FROZEN-RULE PIN".
 # SENTRY_FROZEN_TF_DIR overrides the directory whose *.tf the frozen-rule set is
 # derived from (default: apps/web-platform/infra/sentry; empty reads as unset).
+# SENTRY_VENDOR_DEFAULTS_FILE overrides the registry of Sentry-created default
+# workflows the census accepts (default: apps/web-platform/infra/sentry/
+# vendor-default-workflows.json; empty reads as unset). See "THE CENSUS".
 # Test injection (its own suite ONLY): SENTRY_FIXTURE_RULES — file path served
 # instead of the live GET.
 #
@@ -85,6 +88,7 @@ PROJECTION="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 REFERENCE="${SENTRY_REFERENCE_FILE:-$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json}"
 FROZEN_CAPTURE="${SENTRY_FROZEN_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json}"
 FROZEN_TF_DIR="${SENTRY_FROZEN_TF_DIR:-$REPO_ROOT/apps/web-platform/infra/sentry}"
+VENDOR_DEFAULTS="${SENTRY_VENDOR_DEFAULTS_FILE:-$REPO_ROOT/apps/web-platform/infra/sentry/vendor-default-workflows.json}"
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
@@ -336,7 +340,7 @@ done < <(jq -r 'keys[]' <<<"$ref_proj")
 while IFS= read -r name; do
   [[ -n "$name" ]] || continue
   jq -e --arg n "$name" 'has($n)' >/dev/null <<<"$ref_proj" && continue
-  _finding "UNMANAGED: '$name' is live and in scope but declared nowhere in apps/web-platform/infra/sentry/ (absent from the reference projected from the plan). Adopt it as a sentry_alert or delete it in Sentry."
+  _finding "UNMANAGED: '$name' is live and in scope but declared nowhere in apps/web-platform/infra/sentry/ (absent from the reference projected from the plan). Adopt it as a sentry_alert or delete it in Sentry. If Sentry created it (createdBy null) with a trigger type the provider cannot express, register it instead: add the type to `def excluded` in tests/scripts/lib/sentry-alert-projection.jq and {id, name} to apps/web-platform/infra/sentry/vendor-default-workflows.json (#8267)."
 done < <(jq -r 'keys[]' <<<"$live_proj")
 
 # ── FROZEN-RULE PIN (Guard 4, #8451) ────────────────────────────────────────
@@ -356,9 +360,18 @@ done < <(jq -r 'keys[]' <<<"$live_proj")
 #     {type, comparison}; actions as {type, config.targetType,
 #     data.fallthroughType}), all canonicalised and order-insensitive.
 #   * THE CENSUS: every other live workflow carrying an excluded trigger type.
-#     In the capture = a workflow Sentry created that Terraform does not manage
-#     (the org's "Send a notification for high priority issues" default): NOT a
-#     finding. Absent from the capture = UNMANAGED-FROZEN.
+#     KNOWN = its {id, name} pair is in the capture (the org's "Send a
+#     notification for high priority issues" default, captured 2026-09-09) or in
+#     the vendor-default registry (Sentry-created defaults that appeared after the
+#     capture, e.g. Seer's "Send a notification when pull requests are ready",
+#     #8267): NOT a finding. The capture is a dated snapshot and is never
+#     appended to; a later default goes in the registry.
+#     A known NAME under a different id, or a known name live twice, is a finding:
+#     matching by name alone would let any workflow borrow a default's name.
+#     This is an IDENTITY check only. A known default's CONTENT is deliberately
+#     not pinned (Sentry edits its own defaults; pinning one filed a P1 over a
+#     vendor change), so disabling or retargeting it is not detected here.
+#     Anything else = UNMANAGED-FROZEN.
 #
 # THE EXCLUDED SET IS READ FROM THE MODULE, not restated: the module carries a
 # main expression, so `include` is refused ("library should only have function
@@ -386,6 +399,15 @@ fi
 tf_files=()
 if [[ -d "$FROZEN_TF_DIR" ]]; then
   for f in "$FROZEN_TF_DIR"/*.tf; do [[ -r "$f" ]] && tf_files+=("$f"); done
+fi
+# The vendor-default registry: a JSON array of {id, name, …}, both non-empty
+# strings. Unreadable or mis-shaped REFUSES — an empty registry would silently
+# turn every registered default into an UNMANAGED-FROZEN page, and a
+# mis-shaped one could match nothing while reading as loaded.
+if ! jq -e 'type == "array" and all(.[]; (.id | type) == "string" and .id != "" and (.name | type) == "string" and .name != "")' \
+     "$VENDOR_DEFAULTS" >/dev/null 2>&1; then
+  echo "ERROR: the vendor-default registry at ${VENDOR_DEFAULTS} is unreadable or not an array of {id, name} string pairs. The census cannot tell a registered Sentry default from an unmanaged workflow. Refusing." >&2
+  exit 1
 fi
 frozen_names_json='[]'
 if [[ ${#tf_files[@]} -gt 0 ]]; then
@@ -418,7 +440,8 @@ fi
 
 set +e
 frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson live "$live_json" \
-    --argjson fz "$frozen_names_json" --slurpfile cap "$FROZEN_CAPTURE" '
+    --argjson fz "$frozen_names_json" --slurpfile cap "$FROZEN_CAPTURE" \
+    --slurpfile vd "$VENDOR_DEFAULTS" '
   def excl_type: [ .triggers.conditions[]?.type ] as $t | any($ex[]; . as $e | $t | index($e));
   # Key order is not data: the live API does not sort keys, and `tojson`
   # preserves insertion order (F13 reds without this canonicalisation). Every
@@ -437,9 +460,10 @@ frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson liv
                 frequency: (.config // {}).frequency, environment: .environment,
                 actionFilters: filt };
   $cap[0] as $CAP
+  | ([ ($CAP[] | {id: (.id | tostring), name}), ($vd[0][] | {id: (.id | tostring), name}) ]) as $KNOWN
   | ($live | map(select(.name as $n | $fz | index($n)))) as $F
   | ($live | map(select(excl_type and (.name as $n | $fz | index($n) | not)))) as $O
-  | "COUNT \([ $fz[] as $n | select(any($F[]; .name == $n)) ] | length) \($fz | length) \($O | map(select(.name as $n | any($CAP[]; .name == $n))) | length)",
+  | "COUNT \([ $fz[] as $n | select(any($F[]; .name == $n)) ] | length) \($fz | length) \($O | map(select((.id | tostring) as $i | .name as $n | any($KNOWN[]; .id == $i and .name == $n))) | length)",
     ( $F | group_by(.name) | map(select(length > 1) | .[0].name)[]
       | "FINDING FROZEN DUPLICATE: \($q)\(.)\($q) names more than one live workflow; the pin cannot tell which one the capture describes." ),
     ( $fz[] as $n
@@ -462,9 +486,13 @@ frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson liv
     ( $O[] as $w
       | if ($w.name | type) != "string" or $w.name == "" then
           "FINDING UNMANAGED-FROZEN: an excluded-type live workflow (id \($w.id | tojson)) has an empty or non-string name; the pin cannot match it to the capture."
-        elif any($CAP[]; .name == $w.name) then empty
+        elif ([ $O[] | select(.name == $w.name) ] | length) > 1 then
+          "FINDING UNMANAGED-FROZEN DUPLICATE: \($q)\($w.name)\($q) names more than one live excluded-type workflow (this one id \($w.id | tojson)); a registered default is matched by id AND name, so a copy borrowing its name is not accepted."
+        elif any($KNOWN[]; .id == ($w.id | tostring) and .name == $w.name) then empty
+        elif any($KNOWN[]; .name == $w.name) then
+          "FINDING UNMANAGED-FROZEN: \($q)\($w.name)\($q) (id \($w.id | tojson)) carries the name of a registered Sentry default under a DIFFERENT id, so it is not that default. GET it and compare with the registered id before trusting it."
         else
-          "FINDING UNMANAGED-FROZEN: \($q)\($w.name)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type ] | join(","))), is not frozen in Terraform and has no entry in the committed capture, so neither projection side nor this pin checks it."
+          "FINDING UNMANAGED-FROZEN: \($q)\($w.name)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type ] | join(","))), is not frozen in Terraform, and is in neither the committed capture nor apps/web-platform/infra/sentry/vendor-default-workflows.json, so neither projection side nor this pin checks it. If Sentry created it (createdBy null), register {id, name} in vendor-default-workflows.json."
         end )
 ' 2>"$jq_err")
 rc=$?
@@ -474,7 +502,7 @@ if [[ "$rc" -ne 0 ]]; then
   exit 1
 fi
 read -r _ frozen_live frozen_tf other_captured < <(grep -m1 '^COUNT ' <<<"$frozen_report")
-echo "sentry_alert live fidelity: frozen-rule pin: compared ${frozen_live} of ${frozen_tf} Terraform-frozen rule(s) against the committed capture (${other_captured} other excluded-type live workflow(s) are in the capture and not Terraform-managed: not pinned)"
+echo "sentry_alert live fidelity: frozen-rule pin: compared ${frozen_live} of ${frozen_tf} Terraform-frozen rule(s) against the committed capture (${other_captured} other excluded-type live workflow(s) are registered Sentry defaults, matched by id and name, content not pinned)"
 while IFS= read -r line; do
   [[ -n "$line" ]] && _finding "${line#FINDING }"
 done < <(grep '^FINDING ' <<<"$frozen_report" || true)

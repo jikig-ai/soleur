@@ -1,7 +1,8 @@
 # git-data cutover — a reviewer-gated, READ-ONLY proof (epic #5274 / ADR-068 / ADR-220).
 #
 # workflow_dispatch-only. What a run proves, in order, changing nothing on any host:
-#   1. the GIT_DATA_STORE_ENABLED flag read SUCCEEDS and the flag is not `true`
+#   1. the GIT_DATA_STORE_ENABLED flag read SUCCEEDS and the flag is not `true`, and git-data's
+#      host-key pin (GIT_DATA_SSH_HOST_KEY) is published and well-formed
 #      (git-data-flag-precheck.sh, fail-closed, in its own step);
 #   2. the git-data root read token is published;
 #   3. root on git-data accepts the Terraform-minted root key through the web-1 jump
@@ -21,6 +22,13 @@
 # (10.0.1.20) has no ingress of its own: an ssh_config written by this job reaches it THROUGH
 # web-1 as an `ssh -W` direct-tcpip channel, authenticating end to end with the root key, so no
 # key and no agent socket lands on web-1.
+#
+# Host keys (#7226, ADR-237). Every hop is pinned, never trusted on first use: the bridge's
+# WEB_HOST_SSH trusts only web-1's committed ECDSA key (apps/web-platform/infra/
+# web-1-ssh-host-key.pub), and this job's ssh_config trusts that key for the jump hop and
+# git-data's Terraform-minted ED25519 key (read by the flag precheck into $RUNNER_TEMP/git-data.pin)
+# for the git-data hop, both through the bridge's shared write-known-hosts.sh. A mismatch is
+# git-data-cutover.sh's verdict=host_key_mismatch reason=changed|unknown|alg.
 #
 # Credentials, each bound in exactly one step's env:
 #   - secrets.DOPPLER_TOKEN_PRD            `prd` read — the flag precheck step ONLY
@@ -94,8 +102,9 @@ jobs:
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
       # Before the bridge and before the key exists on this runner, so the `prd` read token
-      # never shares a process with host bytes or key bytes. Exit 5 on a read failure or a
-      # `true` flag stops the job here.
+      # never shares a process with host bytes or key bytes. Exit 5 on a read failure, a `true`
+      # flag, or an absent/invalid/unreadable git-data host-key pin stops the job here. It writes
+      # the validated pin to $RUNNER_TEMP/git-data.pin (public data; only its fingerprint is printed).
       - name: Flag precheck (fail-closed read of GIT_DATA_STORE_ENABLED)
         id: flag_precheck
         env:
@@ -178,22 +187,52 @@ jobs:
       # reads it as GIT_DATA_SSH="ssh -F <this file>".
       # Nested connect budgets: the web-1 hop (also the ProxyCommand's own connect) gets 10 s, so
       # a slow jump fails inside git-data's 20 s ConnectTimeout instead of consuming all of it.
+      # Host keys: one known_hosts file, written by the bridge's validated writer twice (web-1
+      # from the committed pin, git-data from the precheck's pin). Each block trusts only its own
+      # HostKeyAlias and algorithm. The ProxyCommand's inner `ssh -F <this file> ... 10.0.1.10`
+      # resolves to the 10.0.1.10 block, so the jump hop is pinned too.
+      # LogLevel INFO, not ERROR: OpenSSH 9.6 logs "Unable to negotiate ... no matching host key
+      # type found" and "channel N: open failed: ..." at INFO, so under ERROR the cutover's
+      # host_key_mismatch reason=alg and the jump's forward/connect reasons are unobservable
+      # (measured in git-data-cutover-access.test.sh's runtime arm). stderr is only printed on a
+      # failure, cleaned and inside a stop-commands span.
       - name: Write git-data ssh_config
         id: ssh_config
         run: |
           set -euo pipefail
           cfg="$RUNNER_TEMP/gd-ssh-config"
           key="$RUNNER_TEMP/gd-root-key"
+          kh="$RUNNER_TEMP/gd-known-hosts"
+          gd_pin="$RUNNER_TEMP/git-data.pin"
+          web_pin="$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub"
+          writer="$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh"
           if [[ -z "${CI_SSH_KEYFILE:-}" || ! -s "$CI_SSH_KEYFILE" || ! -s "$key" ]]; then
             echo "::error title=git-data-cutover ssh_config::verdict=ssh_config_key_absent"
             exit 1
           fi
-          for p in "$cfg" "$key" "$CI_SSH_KEYFILE"; do
+          if [[ ! -s "$gd_pin" ]]; then
+            echo "::error title=git-data-cutover ssh_config::verdict=git_data_host_key_unavailable reason=absent"
+            exit 1
+          fi
+          for p in "$cfg" "$key" "$CI_SSH_KEYFILE" "$kh"; do
             if ! [[ "$p" =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
               echo "::error title=git-data-cutover ssh_config::verdict=ssh_config_path_unsafe"
               exit 1
             fi
           done
+          rm -f "$kh"
+          if ! bash "$writer" web-1 "$web_pin" "$kh"; then
+            echo "::error title=git-data-cutover ssh_config::verdict=web_1_host_key_invalid"
+            exit 1
+          fi
+          if ! bash "$writer" git-data "$gd_pin" "$kh"; then
+            echo "::error title=git-data-cutover ssh_config::verdict=git_data_host_key_unavailable reason=invalid"
+            exit 1
+          fi
+          if [[ ! -s "$kh" ]]; then
+            echo "::error title=git-data-cutover ssh_config::verdict=known_hosts_empty"
+            exit 1
+          fi
           umask 077
           cat > "$cfg" <<EOF
           Host 10.0.1.10
@@ -202,14 +241,17 @@ jobs:
             IdentitiesOnly yes
             BatchMode yes
             ConnectTimeout 10
-            LogLevel ERROR
+            LogLevel INFO
             ForwardAgent no
             ClearAllForwardings yes
             PermitLocalCommand no
             ControlPath none
             UpdateHostKeys no
-            StrictHostKeyChecking accept-new
-            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ${kh}
+            GlobalKnownHostsFile /dev/null
+            HostKeyAlias web-1
+            HostKeyAlgorithms ecdsa-sha2-nistp256
 
           Host 10.0.1.20
             User root
@@ -218,14 +260,17 @@ jobs:
             IdentitiesOnly yes
             BatchMode yes
             ConnectTimeout 20
-            LogLevel ERROR
+            LogLevel INFO
             ForwardAgent no
             ClearAllForwardings yes
             PermitLocalCommand no
             ControlPath none
             UpdateHostKeys no
-            StrictHostKeyChecking accept-new
-            UserKnownHostsFile /dev/null
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ${kh}
+            GlobalKnownHostsFile /dev/null
+            HostKeyAlias git-data
+            HostKeyAlgorithms ssh-ed25519
           EOF
           echo "ssh_config written."
 
@@ -236,7 +281,8 @@ jobs:
         run: bash apps/web-platform/infra/git-data-cutover.sh
 
       # The bridge's caller-side teardown contract (see its action.yml header), plus the root
-      # key and the ssh_config (hygiene; the ephemeral VM is the control).
+      # key, the ssh_config, the known_hosts and the git-data pin (hygiene; the ephemeral VM is
+      # the control, and the last two hold public keys only).
       - name: Tear down cloudflared SSH bridge
         if: always()
         shell: bash
@@ -258,6 +304,13 @@ jobs:
           if [[ -f "$RUNNER_TEMP/gd-ssh-config" ]]; then
             shred -u "$RUNNER_TEMP/gd-ssh-config" 2>/dev/null || true
           fi
+          # Both are written 0444; shred needs write permission.
+          for f in "$RUNNER_TEMP/gd-known-hosts" "$RUNNER_TEMP/git-data.pin"; do
+            if [[ -f "$f" ]]; then
+              chmod u+w "$f" 2>/dev/null || true
+              shred -u "$f" 2>/dev/null || true
+            fi
+          done
           if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
       - name: Read-only proof summary

@@ -1906,7 +1906,7 @@
 "id": "3xixhx"
 },
 "120ais5": {
-"title": "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 17 terraform_data SSH provisioners — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access). The ssh. hop also carries git-data-cutover.yml's jump to the git-data store (ADR-220). ACCESS AND TUNNEL ARE SEPARABLE AND THIS EDGE DEPENDS ON BOTH — a distinction this model otherwise elides (there is no distinct Access node; it lives only in edge descriptions like this one). ADMISSION is decided by CF Access at the edge; TRANSPORT is the tunnel. They fail independently, and the Access failure is the one that looks healthy: cloudflared connects, the local 127.0.0.1:2222 listener opens, and `nc -z` succeeds, because the service-token handshake is refused only when a connection is actually proxied. 2026-07-28 CAUSE CLASS (#7095), a SECOND instance of the token-rotation shape recorded on the registry. edge above but on the ssh. route: the ci_ssh Access service token was rotated out-of-band during incident response, and since Cloudflare returns client_secret ONLY at create, both Terraform state and Doppler went stale invisibly while `terraform plan` stayed clean. Run 30650564509 built this bridge, DESTROYED terraform_data.{infra_config_handler_bootstrap,deploy_pipeline_fix}, and only then failed on `ssh: handshake failed: connection reset by peer` — leaving state emptier than reality and production undeployable for 3 days on a host whose cx33 type had 0/6 datacenter stock, i.e. unreplaceable. GATED SINCE #7133 (ADR-154): the shared cf-tunnel-ssh-bridge composite's FINAL step asserts Access still admits the credential and fails with a named reason (ci_ssh_access_denied / ci_ssh_liveness_unverifiable / ci_ssh_liveness_unavailable) BEFORE any caller's terraform runs. Repair path is the ci-ssh-token-replace dispatch arm, never a host replace.",
+"title": "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 18 terraform_data SSH provisioners (17 plus the read-only web_1_host_key_probe) — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access). The ssh. hop also carries git-data-cutover.yml's jump to the git-data store (ADR-220). HOST KEY PINNED (ADR-237, #7226/#8125): web-1's ECDSA-P256 host key is a committed, reviewed pin (apps/web-platform/infra/web-1-ssh-host-key.pub, captured outside Cloudflare) that the bridge writes into a strict known_hosts for its bash callers and that every Terraform connection block sets as host_key, so neither the CF edge nor anything else can stand in for web-1; a mismatch fails closed. ACCESS AND TUNNEL ARE SEPARABLE AND THIS EDGE DEPENDS ON BOTH — a distinction this model otherwise elides (there is no distinct Access node; it lives only in edge descriptions like this one). ADMISSION is decided by CF Access at the edge; TRANSPORT is the tunnel. They fail independently, and the Access failure is the one that looks healthy: cloudflared connects, the local 127.0.0.1:2222 listener opens, and `nc -z` succeeds, because the service-token handshake is refused only when a connection is actually proxied. 2026-07-28 CAUSE CLASS (#7095), a SECOND instance of the token-rotation shape recorded on the registry. edge above but on the ssh. route: the ci_ssh Access service token was rotated out-of-band during incident response, and since Cloudflare returns client_secret ONLY at create, both Terraform state and Doppler went stale invisibly while `terraform plan` stayed clean. Run 30650564509 built this bridge, DESTROYED terraform_data.{infra_config_handler_bootstrap,deploy_pipeline_fix}, and only then failed on `ssh: handshake failed: connection reset by peer` — leaving state emptier than reality and production undeployable for 3 days on a host whose cx33 type had 0/6 datacenter stock, i.e. unreplaceable. GATED SINCE #7133 (ADR-154): the shared cf-tunnel-ssh-bridge composite's FINAL step asserts Access still admits the credential and fails with a named reason (ci_ssh_access_denied / ci_ssh_liveness_unverifiable / ci_ssh_liveness_unavailable) BEFORE any caller's terraform runs. Repair path is the ci-ssh-token-replace dispatch arm, never a host replace.",
 "technology": "cloudflared access tcp/ssh (CF Access service token; admission liveness-gated in-bridge since #7133)",
 "source": {
 "model": "github"
@@ -2247,7 +2247,7 @@
 "id": "py812x"
 },
 "lt1ckq": {
-"title": "Transport LIVE; root authentication TARGET until ADR-220 D1b flips (the post-merge root-key apply, fingerprint PR and git-data replace deliver the key, then a dispatch from main reads role=git-data-auth verdict=ok). Reviewer-gated, READ-ONLY root SSH from git-data-cutover.yml (job `cutover`, environment web-platform-infra-apply, main only, serialized on git-data-state): through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22, literal target), authenticating end-to-end with the dedicated root key so no key or agent socket lands on web-1. The key is Terraform-minted in its own root (git-data-root-key), read at run time from the isolated Doppler project soleur-git-data-root, and reaches the host only through a create of hcloud_server.git_data checked against a committed fingerprint. After the access gate the run only reads the store (mounted, not cut over, empty) and the shape of its pre-receive fence, and exits; it copies, mounts, flips and wipes nothing. The real cutover is being rebuilt (#8211). Host keys unverified on both hops (#7226), so the store answers are unauthenticated (ADR-220 amendment log)",
+"title": "Transport LIVE; root authentication TARGET until ADR-220 D1b flips (the post-merge root-key apply, fingerprint PR and git-data replace deliver the key, then a dispatch from main reads role=git-data-auth verdict=ok). Reviewer-gated, READ-ONLY root SSH from git-data-cutover.yml (job `cutover`, environment web-platform-infra-apply, main only, serialized on git-data-state): through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22, literal target), authenticating end-to-end with the dedicated root key so no key or agent socket lands on web-1. The key is Terraform-minted in its own root (git-data-root-key), read at run time from the isolated Doppler project soleur-git-data-root, and reaches the host only through a create of hcloud_server.git_data checked against a committed fingerprint. After the access gate the run only reads the store (mounted, not cut over, empty) and the shape of its pre-receive fence, and exits; it copies, mounts, flips and wipes nothing. The real cutover is being rebuilt (#8211). Host keys PINNED on both hops (ADR-237; effective when the strict dry run after the first key-rotating git-data replace reads role=git-data-auth verdict=ok): web-1 by its committed ECDSA-P256 pin, git-data by its Terraform-minted ED25519 key, rotated on every replace and published as the TF-owned prd secret GIT_DATA_SSH_HOST_KEY, which the flag precheck reads with the prd token it already holds. web-1 can no longer impersonate git-data; a pinned key authenticates the host, not its answers (ADR-220 amendment log)",
 "technology": "SSH",
 "source": {
 "model": "github"
@@ -2455,7 +2455,7 @@
 "id": "1mlou2i"
 },
 "d60i3i": {
-"title": "The release-outcome operator email: an inline `curl` to the Resend API from the runner (NOT via webapp/api, which carry the statutory-triage edges), one of thirteen Resend emitters under .github/ (#7539 added the thirteenth: apply-web-platform-infra.yml's SSH-stage-skipped arm, which gives the ssh_token_gate green-skip a consumer — a green apply that delivered nothing is the failure mode that PR exists to close; #8189 added a fourteenth: apply-git-data-root-key.yml's notify-root-key-apply job, which emails on any non-success root-key apply; #8377 then removed one, taking the count back to thirteen — rule-metrics-aggregate.yml was deleted when rule-metrics.json became an untracked cache under ADR-235) and the only one that fires regardless of which job in the release graph failed — `deploy`'s inline email and `reusable-release.yml`'s `notify-ops-email` step are job-scoped, so they are structurally silent for a failure outside their own job (#7138)",
+"title": "The release-outcome operator email: an inline `curl` to the Resend API from the runner (NOT via webapp/api, which carry the statutory-triage edges), one of fourteen Resend emitters under .github/ (#7539 added the thirteenth: apply-web-platform-infra.yml's SSH-stage-skipped arm, which gives the ssh_token_gate green-skip a consumer — a green apply that delivered nothing is the failure mode that PR exists to close; #8189 added a fourteenth: apply-git-data-root-key.yml's notify-root-key-apply job, which emails on any non-success root-key apply; #8377 then removed one, taking the count back to thirteen — rule-metrics-aggregate.yml was deleted when rule-metrics.json became an untracked cache under ADR-235; #8511 then added one, taking it to fourteen: git-data-pin-redeploy.yml, which emails ops when the redeploy that loads a rotated git-data host-key pin fails) and the only one that fires regardless of which job in the release graph failed — `deploy`'s inline email and `reusable-release.yml`'s `notify-ops-email` step are job-scoped, so they are structurally silent for a failure outside their own job (#7138)",
 "technology": "HTTPS (Resend API, inline curl from the runner)",
 "source": {
 "model": "github"
@@ -2587,7 +2587,7 @@
 "id": "1swfyet"
 },
 "17nh4pu": {
-"title": "Bare repo data; worktrees local (TARGET state — the host is born but the store is empty until the LUKS cutover, #5274)",
+"title": "Bare repo data; worktrees local (TARGET state — the host is born but the store is empty until the LUKS cutover, #5274). Host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-237), loaded at deploy; a transitional unpinned fallback applies only while no pin is published and the store flag is off (#5914)",
 "technology": "git over private net",
 "source": {
 "model": "platform.engine.claude"
@@ -6645,7 +6645,7 @@
 "id": "vmg8ck",
 "source": "github",
 "target": "resend",
-"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nthirteen Resend emitters under .github/ ",
+"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nfourteen Resend emitters under .github/ ",
 "points": [
 [
 4883,
@@ -10593,7 +10593,7 @@
 "id": "vmg8ck",
 "source": "github",
 "target": "resend",
-"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nthirteen Resend emitters under .github/ ",
+"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nfourteen Resend emitters under .github/ ",
 "points": [
 [
 4279,
@@ -13355,7 +13355,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 7922,
+"x": 10410,
 "y": 3376,
 "width": 372,
 "height": 180,
@@ -13760,7 +13760,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 12287,
+"x": 12234,
 "y": 992,
 "width": 362,
 "height": 180,
@@ -14126,32 +14126,32 @@
 2347
 ],
 [
-2388,
+2387,
 2321
 ],
 [
-2023,
+2022,
 2204
 ],
 [
-1926,
+1925,
 2173
 ],
 [
-1912,
+1911,
 2141
 ],
 [
-1822,
+1821,
 2093
 ],
 [
-1169,
+1168,
 1749
 ],
 [
-738,
-1965
+737,
+1964
 ],
 [
 339,
@@ -14532,32 +14532,32 @@
 1663
 ],
 [
-1198,
-2057
+1197,
+2058
 ],
 [
-1081,
-2244
+1080,
+2239
 ],
 [
-1288,
+1278,
 2614
 ],
 [
-1339,
-2706
+1304,
+2663
 ],
 [
-1555,
-2888
+1550,
+2873
 ],
 [
-1694,
+1701,
 2999
 ]
 ],
 "labelBBox": {
-"x": 1211,
+"x": 1206,
 "y": 2332,
 "width": 94,
 "height": 39
@@ -14909,63 +14909,51 @@
 ],
 [
 6901,
-1196
+1197
 ],
 [
 6625,
 1232
 ],
 [
-6328,
-1271
+6319,
+1272
 ],
 [
-6257,
-1300
+6245,
+1299
 ],
 [
-5960,
+5940,
 1343
 ],
 [
-5848,
-1359
+5724,
+1373
 ],
 [
-5550,
-1344
+5643,
+1295
 ],
 [
 5453,
 1403
 ],
 [
-5346,
-1467
+5325,
+1475
 ],
 [
-5380,
-1544
-],
-[
-5292,
-1633
-],
-[
-5276,
-1649
-],
-[
-5260,
-1642
+5298,
+1524
 ],
 [
 5250,
 1663
 ],
 [
-5228,
-1706
+5234,
+1709
 ],
 [
 5219,
@@ -15042,15 +15030,15 @@
 1668
 ],
 [
-4685,
+4686,
 1655
 ],
 [
-4733,
+4734,
 1663
 ],
 [
-4904,
+4905,
 1691
 ],
 [
@@ -15160,7 +15148,7 @@
 1663
 ],
 [
-4623,
+4624,
 1690
 ],
 [
@@ -15168,7 +15156,7 @@
 1732
 ],
 [
-4923,
+4924,
 1773
 ],
 [
@@ -15272,19 +15260,19 @@
 878
 ],
 [
-4728,
+4729,
 857
 ],
 [
-4478,
+4479,
 860
 ],
 [
-3482,
+3485,
 910
 ],
 [
-2793,
+2795,
 944
 ],
 [
@@ -15840,19 +15828,19 @@
 878
 ],
 [
-4731,
+4732,
 885
 ],
 [
-4480,
+4482,
 860
 ],
 [
-3482,
+3485,
 910
 ],
 [
-2793,
+2795,
 944
 ],
 [
@@ -15983,31 +15971,31 @@
 "id": "34vvg9",
 "source": "platform.engine.claude",
 "target": "platform.infra.gitDataStore",
-"label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274)",
+"label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274). \nHost key pinned via \nGIT_DATA_SSH_HOST_KEY (ADR-237), loaded ",
 "points": [
 [
 1618,
-1089
+1090
 ],
 [
-2328,
+2315,
 1117
 ],
 [
-5165,
-1229
+5063,
+1226
 ],
 [
-5210,
+5152,
 1232
 ],
 [
-5298,
+5244,
 1239
 ],
 [
-6712,
-1380
+6709,
+1379
 ],
 [
 6798,
@@ -16027,10 +16015,10 @@
 ]
 ],
 "labelBBox": {
-"x": 6272,
-"y": 1249,
-"width": 263,
-"height": 72
+"x": 6252,
+"y": 1232,
+"width": 312,
+"height": 106
 },
 "parent": null,
 "relations": [
@@ -16165,22 +16153,22 @@
 ],
 [
 1988,
-1040
+1041
 ],
 [
-2932,
+2934,
 968
 ],
 [
-3722,
+3725,
 910
 ],
 [
-3747,
+3749,
 908
 ],
 [
-3811,
+3812,
 909
 ],
 [
@@ -16524,23 +16512,23 @@
 1066
 ],
 [
-1987,
+1988,
 1031
 ],
 [
-2931,
+2933,
 946
 ],
 [
-3722,
+3725,
 910
 ],
 [
-3944,
+3946,
 900
 ],
 [
-4000,
+4001,
 915
 ],
 [
@@ -16762,7 +16750,7 @@
 "id": "sd2896",
 "source": "github",
 "target": "platform.infra.tunnel",
-"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 17 terraform_data \nSSH provisioners — both ONLY through \nthis tunnel, via CF Access service ",
+"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 18 terraform_data \nSSH provisioners (17 plus the read-only \nweb_1_host_key_probe) — both ONLY ",
 "points": [
 [
 9929,
@@ -17337,23 +17325,23 @@
 878
 ],
 [
-5499,
-863
+5500,
+864
 ],
 [
-5142,
+5144,
 849
 ],
 [
-3722,
+3725,
 910
 ],
 [
-2938,
+2940,
 944
 ],
 [
-2005,
+2006,
 1029
 ],
 [
@@ -17729,24 +17717,24 @@
 "label": "Sends email to the operator address",
 "points": [
 [
-13001,
+12991,
 721
 ],
 [
-12888,
+12868,
 798
 ],
 [
-12724,
+12691,
 908
 ],
 [
-12608,
-986
+12566,
+987
 ]
 ],
 "labelBBox": {
-"x": 12890,
+"x": 12871,
 "y": 825,
 "width": 230,
 "height": 39
@@ -17795,32 +17783,20 @@
 330
 ],
 [
-12110,
-432
+11953,
+349
 ],
 [
-12067,
-557
+12229,
+785
 ],
 [
-12195,
-731
-],
-[
-12259,
-818
-],
-[
-12335,
-915
-],
-[
-12390,
-985
+12354,
+984
 ]
 ],
 "labelBBox": {
-"x": 12196,
+"x": 12192,
 "y": 576,
 "width": 260,
 "height": 106
@@ -17838,7 +17814,7 @@
 "id": "vmg8ck",
 "source": "github",
 "target": "resend",
-"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nthirteen Resend emitters under .github/ ",
+"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nfourteen Resend emitters under .github/ ",
 "points": [
 [
 10283,
@@ -17881,16 +17857,16 @@
 910
 ],
 [
-11666,
-955
+11646,
+954
 ],
 [
-12052,
-1015
+12008,
+1013
 ],
 [
-12277,
-1051
+12224,
+1049
 ]
 ],
 "labelBBox": {
@@ -17915,15 +17891,15 @@
 "label": "Inbound email webhook (svix-verified) → \nemail-triage ingress",
 "points": [
 [
-12501,
+12459,
 992
 ],
 [
-12544,
+12518,
 860
 ],
 [
-12600,
+12602,
 608
 ],
 [
@@ -17931,24 +17907,24 @@
 449
 ],
 [
-12365,
-296
+12357,
+289
 ],
 [
-12255,
+12242,
 358
 ],
 [
-12066,
+12042,
 330
 ],
 [
-11869,
-302
+11846,
+304
 ],
 [
-8678,
-353
+8676,
+352
 ],
 [
 8483,
@@ -17968,7 +17944,7 @@
 ]
 ],
 "labelBBox": {
-"x": 12553,
+"x": 12543,
 "y": 601,
 "width": 255,
 "height": 56
@@ -18327,44 +18303,44 @@
 1172
 ],
 [
-6299,
-1191
+6293,
+1192
 ],
 [
-4946,
-1151
+4894,
+1148
 ],
 [
-4774,
+4716,
 1232
 ],
 [
-4715,
+4657,
 1260
 ],
 [
-4732,
-1308
+4674,
+1307
 ],
 [
-4677,
+4619,
 1343
 ],
 [
-4556,
-1418
+4516,
+1409
 ],
 [
-4398,
-1458
+4384,
+1449
 ],
 [
 4277,
-1479
+1472
 ]
 ],
 "labelBBox": {
-"x": 4775,
+"x": 4717,
 "y": 1275,
 "width": 25,
 "height": 18
@@ -18429,24 +18405,36 @@
 975
 ],
 [
-4906,
-1080
+4911,
+1086
 ],
 [
 4793,
 1172
 ],
 [
-4771,
-1190
+4728,
+1220
 ],
 [
-4477,
-1325
+4696,
+1201
 ],
 [
-4277,
-1417
+4622,
+1232
+],
+[
+4499,
+1285
+],
+[
+4364,
+1353
+],
+[
+4261,
+1408
 ]
 ],
 "labelBBox": {
@@ -18623,44 +18611,44 @@
 1172
 ],
 [
-6253,
-1199
+6364,
+1186
 ],
 [
-5639,
-1137
+5476,
+1178
 ],
 [
-5421,
+5363,
 1232
 ],
 [
-5392,
-1245
+5256,
+1284
 ],
 [
-5033,
-1614
+5101,
+1559
 ],
 [
 5007,
 1633
 ],
 [
-4892,
-1716
+4894,
+1721
 ],
 [
-4750,
-1790
+4751,
+1795
 ],
 [
-4637,
-1844
+4636,
+1848
 ]
 ],
 "labelBBox": {
-"x": 5239,
+"x": 5194,
 "y": 1490,
 "width": 25,
 "height": 18
@@ -18861,64 +18849,64 @@
 979
 ],
 [
-5372,
-1095
+5373,
+1096
 ],
 [
 5268,
 1172
 ],
 [
-5137,
-1269
+5116,
+1283
 ],
 [
-5047,
-1150
+5012,
+1139
 ],
 [
-4907,
+4849,
 1232
 ],
 [
-4853,
-1264
+4794,
+1263
 ],
 [
-4872,
-1309
+4813,
+1307
 ],
 [
-4819,
+4761,
 1343
 ],
 [
-4720,
-1405
+4685,
+1394
 ],
 [
-4647,
-1321
+4627,
+1337
 ],
 [
 4563,
 1403
 ],
 [
-4447,
-1515
+4451,
+1518
 ],
 [
-4428,
-1714
+4430,
+1715
 ],
 [
-4428,
+4429,
 1833
 ]
 ],
 "labelBBox": {
-"x": 4908,
+"x": 4850,
 "y": 1232,
 "width": 248,
 "height": 106
@@ -19043,36 +19031,36 @@
 1403
 ],
 [
-4884,
-1281
+4862,
+1294
 ],
 [
-4991,
-1432
+4957,
+1423
 ],
 [
-5184,
+5126,
 1343
 ],
 [
-5250,
+5191,
 1312
 ],
 [
-5237,
+5179,
 1260
 ],
 [
-5304,
+5246,
 1232
 ],
 [
-5547,
-1130
+5501,
+1126
 ],
 [
-6227,
-1201
+6214,
+1202
 ],
 [
 6489,
@@ -19477,23 +19465,23 @@
 1593
 ],
 [
-1968,
+1967,
 1727
 ],
 [
-2014,
+2013,
 1989
 ],
 [
-2082,
+2081,
 2204
 ],
 [
-2134,
+2133,
 2370
 ],
 [
-2217,
+2216,
 2555
 ],
 [
@@ -19502,7 +19490,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2083,
+"x": 2082,
 "y": 2093,
 "width": 255,
 "height": 106
@@ -19688,24 +19676,24 @@
 1172
 ],
 [
-1174,
+1173,
 1358
 ],
 [
-786,
+783,
 1803
 ],
 [
-922,
+920,
 2204
 ],
 [
-1113,
+1112,
 2761
 ],
 [
-1515,
-2648
+1514,
+2647
 ],
 [
 2035,
@@ -19725,7 +19713,7 @@
 ]
 ],
 "labelBBox": {
-"x": 923,
+"x": 921,
 "y": 2110,
 "width": 227,
 "height": 72
@@ -19750,15 +19738,15 @@
 1592
 ],
 [
-1839,
+1838,
 1763
 ],
 [
-1730,
+1728,
 2145
 ],
 [
-1834,
+1833,
 2444
 ],
 [
@@ -19766,7 +19754,7 @@
 2664
 ],
 [
-2084,
+2083,
 2879
 ],
 [
@@ -19775,7 +19763,7 @@
 ]
 ],
 "labelBBox": {
-"x": 1835,
+"x": 1834,
 "y": 2323,
 "width": 238,
 "height": 56
@@ -19816,19 +19804,19 @@
 333
 ],
 [
-12245,
+12233,
 322
 ],
 [
-12352,
+12340,
 330
 ],
 [
-12661,
+12654,
 356
 ],
 [
-12732,
+12726,
 412
 ],
 [
@@ -19873,15 +19861,15 @@
 ],
 [
 13472,
-3361
+3367
 ],
 [
-9270,
-3446
+11441,
+3443
 ],
 [
-8304,
-3462
+10793,
+3460
 ]
 ],
 "labelBBox": {
@@ -19907,23 +19895,23 @@
 "points": [
 [
 2478,
-3109
+3105
 ],
 [
-3363,
-3165
+3601,
+3155
 ],
 [
-7021,
-3396
+9269,
+3406
 ],
 [
-7912,
-3452
+10400,
+3456
 ]
 ],
 "labelBBox": {
-"x": 5546,
+"x": 6939,
 "y": 3245,
 "width": 255,
 "height": 56
@@ -26119,7 +26107,7 @@
 "id": "vmg8ck",
 "source": "github",
 "target": "resend",
-"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nthirteen Resend emitters under .github/ ",
+"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nfourteen Resend emitters under .github/ ",
 "points": [
 [
 2453,
@@ -28616,7 +28604,7 @@
 "id": "vmg8ck",
 "source": "github",
 "target": "resend",
-"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nthirteen Resend emitters under .github/ ",
+"label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nfourteen Resend emitters under .github/ ",
 "points": [
 [
 599,
@@ -34629,7 +34617,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_webapp",
-"x": 3621,
+"x": 3658,
 "y": 0,
 "width": 320,
 "height": 180,
@@ -35433,7 +35421,7 @@
 "id": "sd2896",
 "source": "github",
 "target": "platform.infra.tunnel",
-"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 17 terraform_data \nSSH provisioners — both ONLY through \nthis tunnel, via CF Access service ",
+"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 18 terraform_data \nSSH provisioners (17 plus the read-only \nweb_1_host_key_probe) — both ONLY ",
 "points": [
 [
 2423,
@@ -35842,16 +35830,16 @@
 "label": "Auth and data",
 "points": [
 [
-3941,
-103
+3978,
+104
 ],
 [
-4336,
-138
+4366,
+141
 ],
 [
 5326,
-254
+261
 ],
 [
 5326,
@@ -35930,40 +35918,40 @@
 "label": "notifyInboxItem writes inbox_item + GET \n/api/inbox reads the merged feed (RLS \nOwner-scoped)",
 "points": [
 [
-3621,
-106
+3658,
+105
 ],
 [
-3383,
-129
+3417,
+128
 ],
 [
-2923,
-177
+2947,
+176
 ],
 [
-2534,
+2550,
 240
 ],
 [
-2295,
+2309,
 279
 ],
 [
-2240,
+2254,
 320
 ],
 [
-1999,
+2011,
 350
 ],
 [
-1964,
+1974,
 355
 ],
 [
-1875,
-346
+1877,
+345
 ],
 [
 1842,
@@ -35979,11 +35967,11 @@
 ],
 [
 1721,
-434
+433
 ]
 ],
 "labelBBox": {
-"x": 2535,
+"x": 2551,
 "y": 256,
 "width": 256,
 "height": 73
@@ -36004,24 +35992,24 @@
 "label": "GET /api/crm/* RLS-owner-scoped read \nroutes (board/funnel/detail); \ncrm_get_contact_detail logs each PII \nread to beta_contact_access_log (Art. \n5(2))",
 "points": [
 [
-3621,
-133
+3658,
+132
 ],
 [
-3299,
-217
+3330,
+216
 ],
 [
-2573,
-406
+2580,
+407
 ],
 [
 2238,
-494
+495
 ]
 ],
 "labelBBox": {
-"x": 3177,
+"x": 3201,
 "y": 240,
 "width": 251,
 "height": 106
@@ -36042,28 +36030,28 @@
 "label": "Sends events; serves functions",
 "points": [
 [
-3881,
+3920,
 180
 ],
 [
-4105,
-388
+4147,
+387
 ],
 [
-4599,
-911
+4650,
+910
 ],
 [
-4295,
+4344,
 1222
 ],
 [
-4187,
-1332
+4289,
+1278
 ],
 [
-1669,
-1249
+1595,
+1265
 ],
 [
 1518,
@@ -36083,7 +36071,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4355,
+"x": 4402,
 "y": 734,
 "width": 198,
 "height": 39
@@ -36104,28 +36092,28 @@
 "label": "Session/replay state",
 "points": [
 [
-3621,
-93
+3658,
+94
 ],
 [
-3288,
-100
+3322,
+101
 ],
 [
-2495,
-129
+2517,
+130
 ],
 [
-1840,
+1852,
 240
 ],
 [
-1638,
+1645,
 274
 ],
 [
-1578,
-268
+1583,
+266
 ],
 [
 1395,
@@ -36145,7 +36133,7 @@
 ]
 ],
 "labelBBox": {
-"x": 1841,
+"x": 1853,
 "y": 273,
 "width": 130,
 "height": 39
@@ -36362,7 +36350,7 @@
 "id": "m66yul",
 "source": "platform.engine",
 "target": "platform.infra.gitDataStore",
-"label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274)",
+"label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274). \nHost key pinned via \nGIT_DATA_SSH_HOST_KEY (ADR-237), loaded ",
 "points": [
 [
 3586,
@@ -36419,9 +36407,9 @@
 ],
 "labelBBox": {
 "x": 3797,
-"y": 1128,
-"width": 263,
-"height": 72
+"y": 1111,
+"width": 312,
+"height": 106
 },
 "parent": null,
 "relations": [
@@ -37163,28 +37151,28 @@
 1051
 ],
 [
-3065,
-1149
+3067,
+1151
 ],
 [
-4249,
-1033
+4276,
+1027
 ],
 [
-4391,
+4417,
 1111
 ],
 [
-4458,
+4480,
 1149
 ],
 [
-4506,
+4520,
 1222
 ],
 [
-4536,
-1283
+4545,
+1282
 ]
 ],
 "labelBBox": {
@@ -37421,32 +37409,32 @@
 1051
 ],
 [
-2658,
-1093
+2460,
+1073
 ],
 [
-3694,
-1003
+3936,
+1051
 ],
 [
-4088,
+4137,
 1111
 ],
 [
-4218,
+4256,
 1147
 ],
 [
-4351,
+4375,
 1224
 ],
 [
-4445,
+4459,
 1286
 ]
 ],
 "labelBBox": {
-"x": 4338,
+"x": 4364,
 "y": 1154,
 "width": 25,
 "height": 18
@@ -48550,7 +48538,7 @@
 "id": "sd2896",
 "source": "github",
 "target": "platform.infra.tunnel",
-"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 17 terraform_data \nSSH provisioners — both ONLY through \nthis tunnel, via CF Access service ",
+"label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 18 terraform_data \nSSH provisioners (17 plus the read-only \nweb_1_host_key_probe) — both ONLY ",
 "points": [
 [
 1011,
@@ -52238,36 +52226,36 @@
 "label": "Transport LIVE; root authentication \nTARGET until ADR-220 D1b flips (the \npost-merge root-key apply, fingerprint \nPR and git-data replace deliver the key, \nthen a dispatch from main reads ",
 "points": [
 [
-217,
+204,
 180
 ],
 [
-247,
+226,
 236
 ],
 [
-293,
+262,
 306
 ],
 [
-352,
+316,
 350
 ],
 [
-444,
-420
+415,
+432
 ],
 [
-567,
-459
+556,
+472
 ],
 [
 667,
-482
+491
 ]
 ],
 "labelBBox": {
-"x": 353,
+"x": 317,
 "y": 240,
 "width": 249,
 "height": 106
@@ -52285,42 +52273,42 @@
 "id": "m66yul",
 "source": "platform.engine",
 "target": "platform.infra.gitDataStore",
-"label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274)",
+"label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274). \nHost key pinned via \nGIT_DATA_SSH_HOST_KEY (ADR-237), loaded ",
 "points": [
 [
-623,
+600,
 180
 ],
 [
-626,
+591,
 232
 ],
 [
-636,
-298
+589,
+299
 ],
 [
-665,
+616,
 350
 ],
 [
-676,
-371
+629,
+375
 ],
 [
-690,
-389
+648,
+397
 ],
 [
-707,
-407
+669,
+416
 ]
 ],
 "labelBBox": {
-"x": 666,
-"y": 256,
-"width": 263,
-"height": 73
+"x": 617,
+"y": 240,
+"width": 312,
+"height": 106
 },
 "parent": null,
 "relations": [

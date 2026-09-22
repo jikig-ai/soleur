@@ -2229,7 +2229,17 @@ verify_image_signature() {
   # the .sig referrer fetch needs --allow-insecure-registry. When the pull fell back to
   # GHCR the digest is a ghcr.io ref and the flag stays off — image+auth+sig move
   # together. The zot auths entry was written into $GHCR_DOCKER_CONFIG by
-  # zot_gate_and_login, so the mounted :ro config already authenticates the fetch.
+  # zot_gate_and_login, so the mounted :ro config authenticates the fetch — PROVIDED cosign
+  # reads it. #8037: the pinned image runs as uid 65532 (home /home/nonroot) and sets neither
+  # HOME nor DOCKER_CONFIG, so the original `/root/.docker/config.json` mount was never read and
+  # every .sig fetch went out anonymous (zot 401 → `result=verify_failed`). And `docker login`
+  # writes the file 0600 as THIS user, so uid 65532 cannot read it at any path. Hence both:
+  # `--user` = the invoking uid:gid (the file's owner; the trusted root is 0644), and
+  # `-e DOCKER_CONFIG` naming the directory the config is mounted into — independent of the
+  # image's user and HOME. Both measured against the pinned image (details on #8037).
+  local cosign_cfg_dir="/cosign-docker"
+  local cosign_user
+  cosign_user="$(id -u):$(id -g)"
   local zot_insecure=""
   [[ -n "$ZOT_REGISTRY_URL" && "$repo_digest" == "${ZOT_REGISTRY_URL}/"* ]] && zot_insecure=1
   # #8036 1a: the docker CLI resolves the implicit `$COSIGN_IMAGE` pull's credentials from ITS OWN
@@ -2243,7 +2253,8 @@ verify_image_signature() {
   # stored ghcr.io token. A non-empty credHelpers map disables that detection, and an EMPTY helper
   # name for ghcr.io resolves to the (empty) file store.
   # The `-v "$GHCR_DOCKER_CONFIG:…:ro"` mount below is a HOST-path bind resolved independently of
-  # the CLI's DOCKER_CONFIG, so the in-container .sig fetch still authenticates (P2 unchanged).
+  # the CLI's DOCKER_CONFIG (the `-e DOCKER_CONFIG` is the CONTAINER's, not the CLI's), so the
+  # in-container .sig fetch still authenticates (P2 unchanged).
   # Degrades, LOGGED: if no verified anonymous config can be prepared, the CLI keeps its inherited
   # DOCKER_CONFIG (the deploy config, so the verifier-image pull can 401 into `cosign_absent` as
   # before #8036). The verify still runs, and WARN/ENFORCE semantics are unchanged.
@@ -2285,7 +2296,8 @@ verify_image_signature() {
   # would read as `cosign_absent`. Real pull errors still print. `200>&-` closes the FD-200 deploy
   # lock for this child (#5062): its implicit pull can hang like any other.
   if "${verify_env[@]}" docker run --rm --network host --quiet \
-       -v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro" \
+       --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
+       -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
        -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
        "$COSIGN_IMAGE" verify --offline \
        ${zot_insecure:+--allow-insecure-registry} \

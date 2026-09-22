@@ -80,8 +80,13 @@ def normalise: canon
 # A rule carrying one is outside the fidelity scope on BOTH sides by this one
 # definition: the live side's `in_scope` and the TF side's `tf_in_scope`. Such a
 # rule is either still a `sentry_issue_alert`, or an adopted `sentry_alert` whose
-# trigger the provider's Read carries only in `legacy_trigger_conditions` (#8451).
-def excluded: ["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue"];
+# trigger the provider's Read carries only in `legacy_trigger_conditions` (#8451),
+# or a default Sentry itself created that Terraform does not manage, which the
+# probe's census accepts only by id AND name (the captured high-priority default;
+# Seer's `seer_activity_trigger` pull-requests-ready default, registered in
+# apps/web-platform/infra/sentry/vendor-default-workflows.json, #8267). When #7985
+# converts the frozen rules, the vendor-default types must STAY in this set.
+def excluded: ["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue", "seer_activity_trigger"];
 # Lifecycle triggers: the provider renders them `{}`; the live API renders their
 # `comparison` as `true`. Both mean "no parameters".
 def lifecycle: ["first_seen_event", "reappeared_event", "regression_event", "issue_resolved_trigger"];

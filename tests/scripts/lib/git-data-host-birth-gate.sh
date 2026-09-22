@@ -26,9 +26,15 @@
 #   firewall_rules          == 0    the deny-all firewall stays deny-all
 #   luks_passphrase_touched == 0    no delete/forget/update on the passphrase pair
 #   reboot_updates          == 0    no live host power-cycled by the birth
-#   out_of_scope            == 0    nothing outside the twenty-address fan-out
+#   out_of_scope            == 0    nothing outside the twenty-two-address fan-out
 #   the three ENTAILED members each create exactly once
-#   the fifteen PRESENCE members each appear with actions ⊆ {create, no-op}
+#   the seventeen PRESENCE members each appear with actions ⊆ {create, no-op}
+#   host key created   =>  its pin doppler_secret.git_data_ssh_host_key is a CREATE (#7226)
+#   pin UPDATE         =>  only while hcloud_server.git_data is ["create"] (post-rotation retry)
+#
+# OUTPUT DISCIPLINE (#7226): this gate prints counters, verdicts and ADDRESSES only, never a
+# .change.before / .change.after value — a plan's values can carry user_data, which embeds the
+# git-data SSH host private key, and this output lands in a public Actions log.
 #
 # WHY THE REQUIREMENT ARM IS SPLIT BY ENTAILMENT. This is the most important contract in
 # the file, and getting it wrong breaks the gate in BOTH directions.
@@ -118,7 +124,9 @@ _GIT_DATA_BIRTH_ALLOW='def allow: [
       "random_password.git_data_luks",
       "doppler_secret.git_data_luks_key",
       "doppler_secret.git_data_ssh_host",
-      "doppler_secret.git_data_betterstack_logs_token"
+      "doppler_secret.git_data_betterstack_logs_token",
+      "tls_private_key.git_data_host_ssh",
+      "doppler_secret.git_data_ssh_host_key"
 ];'
 
 git_data_host_birth_gate() {
@@ -435,7 +443,7 @@ git_data_host_birth_gate() {
         | select(.change.actions | any(. != "no-op" and . != "read"))
         | select(IN(.address; allow[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
-    echo "git_data_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the twenty-address birth fan-out: ${offenders}. One authorization births one host and touches only that host's fan-out. Two addresses are refused here deliberately: betteruptime_heartbeat.git_data_prd (its feeder already shipped and is web-host-resident — creating a monitor this route cannot arm produces a green dashboard measuring nothing) and terraform_data.git_data_probe_install (it SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY, not at plan)."
+    echo "git_data_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the twenty-two-address birth fan-out: ${offenders}. One authorization births one host and touches only that host's fan-out. Two addresses are refused here deliberately: betteruptime_heartbeat.git_data_prd (its feeder already shipped and is web-host-resident — creating a monitor this route cannot arm produces a green dashboard measuring nothing) and terraform_data.git_data_probe_install (it SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY, not at plan)."
     return 1
   fi
 
@@ -465,7 +473,7 @@ git_data_host_birth_gate() {
 
   # ── REQUIREMENT ARM — PRESENCE HALF ────────────────────────────────────────────
   #
-  # The remaining fifteen must APPEAR in the plan with actions ⊆ {create, no-op}. This
+  # The remaining seventeen must APPEAR in the plan with actions ⊆ {create, no-op}. This
   # catches a typo'd -target (an address absent from the closure fails presence, and
   # nothing else in CI asserts that a -target string names a declared address) while
   # NOT poisoning the retry: on a resumed dispatch these legitimately re-plan as no-ops.
@@ -490,6 +498,30 @@ git_data_host_birth_gate() {
   #
   # `no-op` is accepted here and ONLY here. A destroy on one of these is caught above by
   # the destroy arm; an update on the passphrase pair or the firewall by their own arms.
+  #
+  # ONE EXCEPTION: doppler_secret.git_data_ssh_host_key may also be an `update` — see the
+  # (#7226) POST-ROTATION RETRY block just below, which owns the condition.
+  #
+  # (#7226, ADR-237) POST-ROTATION RETRY. The pin secret depends_on hcloud_server.git_data,
+  # so it CAN already exist on a birth: a REPLACE that rotated tls_private_key.git_data_host_ssh
+  # and then failed after destroying the old host but before creating the new one leaves
+  # state = new key, no server, pin = the OLD host's public key. The recovery route is this
+  # birth, and its plan is key `no-op`, server `create`, pin `update` (the pin's value tracks
+  # the key). Refusing that update would wedge the only automated recovery (the replace gate
+  # needs a server to delete). The update is accepted ONLY while this same plan creates
+  # hcloud_server.git_data — a pin rewritten with no host being born is not a birth.
+  # LAYERED: the `creates -ne 1` arm above already refuses every plan with no server
+  # create, so this arm owns the message, not the refusal (the suite proves it under a
+  # double mutation).
+  local host_key_pin_updated server_created_exact
+  host_key_pin_updated=$(jq '[.resource_changes[] | select(.address == "doppler_secret.git_data_ssh_host_key") | select(.change.actions == ["update"])] | length' < "$plan_json" 2>/dev/null)
+  server_created_exact=$(jq '[.resource_changes[] | select(.address == "hcloud_server.git_data") | select(.change.actions == ["create"])] | length' < "$plan_json" 2>/dev/null)
+  plan_gate_assert_numeric "git_data_host_birth_gate" "host_key_pin_updated=${host_key_pin_updated}" "server_created_exact=${server_created_exact}" || return 1
+  if [[ "$host_key_pin_updated" -ne 0 && "$server_created_exact" -ne 1 ]]; then
+    echo "git_data_host_birth_gate: ABORT — the plan UPDATES doppler_secret.git_data_ssh_host_key (GIT_DATA_SSH_HOST_KEY) while hcloud_server.git_data is not being created. A pin rewrite is permitted on a birth only as the post-rotation retry (new key in state, no host, old pin), where the host is born in the same plan; rewriting the pin with no host being born would repoint every pinned consumer at a key no host serves (ADR-237)."
+    return 1
+  fi
+
   for present_addr in \
     "hcloud_volume.git_data" \
     "hcloud_volume.git_data_luks" \
@@ -505,9 +537,11 @@ git_data_host_birth_gate() {
     "random_password.git_data_luks" \
     "doppler_secret.git_data_luks_key" \
     "doppler_secret.git_data_ssh_host" \
-    "doppler_secret.git_data_betterstack_logs_token"; do
+    "doppler_secret.git_data_betterstack_logs_token" \
+    "tls_private_key.git_data_host_ssh" \
+    "doppler_secret.git_data_ssh_host_key"; do
     present=$(jq --arg a "$present_addr" \
-      '[.resource_changes[] | select(.address == $a) | select((.change.actions | length) > 0 and (.change.actions | all(. == "create" or . == "no-op")))] | length' \
+      '[.resource_changes[] | select(.address == $a) | select((.change.actions | length) > 0 and ((.change.actions | all(. == "create" or . == "no-op")) or ($a == "doppler_secret.git_data_ssh_host_key" and .change.actions == ["update"])))] | length' \
       < "$plan_json" 2>/dev/null)
     plan_gate_assert_numeric "git_data_host_birth_gate" "present[${present_addr}]=${present}" || return 1
     if [[ "$present" -eq 0 ]]; then
@@ -515,6 +549,26 @@ git_data_host_birth_gate() {
       return 1
     fi
   done
+
+  # ── (#7226, ADR-237) A FRESH HOST KEY MUST BE PUBLISHED BY THE SAME BIRTH ──────────
+  # The presence loop above accepts a no-op for BOTH tls_private_key.git_data_host_ssh and
+  # doppler_secret.git_data_ssh_host_key: on a resumed dispatch or a RE-BIRTH (host destroyed
+  # outside Terraform) both legitimately exist, the key is the one the new host will install,
+  # and the pin already names it. After a failed rotation the pin exists with the OLD value
+  # and plans an `update` (see POST-ROTATION RETRY above) — the pin is NOT guaranteed absent
+  # on a birth even though it depends_on the server. What must never pass is a key CREATE without a pin CREATE:
+  # the new host would serve a key whose pin nobody published, and every pinned consumer
+  # would keep a stale pin. (A real plan cannot produce that shape — the pin's value is the
+  # key's public half, so a new key re-plans the pin — which is why the arm is cheap; it is
+  # here so a hand-edited -target list that drops the pin cannot pass as a birth.)
+  local host_key_created host_key_pin_created
+  host_key_created=$(jq '[.resource_changes[] | select(.address == "tls_private_key.git_data_host_ssh") | select(.change.actions == ["create"])] | length' < "$plan_json" 2>/dev/null)
+  host_key_pin_created=$(jq '[.resource_changes[] | select(.address == "doppler_secret.git_data_ssh_host_key") | select(.change.actions == ["create"])] | length' < "$plan_json" 2>/dev/null)
+  plan_gate_assert_numeric "git_data_host_birth_gate" "host_key_created=${host_key_created}" "host_key_pin_created=${host_key_pin_created}" || return 1
+  if [[ "$host_key_created" -ne 0 && "$host_key_pin_created" -ne 1 ]]; then
+    echo "git_data_host_birth_gate: ABORT — the birth creates tls_private_key.git_data_host_ssh but does not CREATE doppler_secret.git_data_ssh_host_key (GIT_DATA_SSH_HOST_KEY). The new host would serve a host key whose pin was never published, so every pinned consumer would refuse it or hold a stale pin (ADR-237)."
+    return 1
+  fi
 
   # ── FIREWALL ATTACHMENT — an OUTCOME assertion, not a verb assertion ────────────
   #

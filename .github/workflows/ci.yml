@@ -1587,23 +1587,79 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history on pull_request so the classifier's
+          # `origin/${GITHUB_BASE_REF}...HEAD` diff can resolve; a shallow
+          # clone would make every PR look unresolvable (which fails closed to
+          # applicable=true anyway). Other events never diff — depth 1.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+
+      # (#8450) In-job applicability classifier — verdict observed correct on
+      # this PR's own diff (report-only push), so the heavy steps below are
+      # gated on it. Deliberately NOT a detect-changes output + `needs:` edge:
+      # a failed upstream job would needs-skip `e2e`, and a skipped required
+      # check posts GREEN — the fail-open shape this file warns about. A
+      # classify-step failure reds the job instead.
+      - name: Classify e2e applicability
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Judge the diff by the BASE ref's classifier, not the PR's own
+            # copy — a PR must not be able to weaken the gate it is judged by
+            # (e.g. shipping a classifier that emits false for its own paths).
+            # A PR that legitimately widens the allowlist is judged by the old
+            # rules — conservative by construction. fetch-depth: 0 guarantees
+            # the base object exists; a base without the classifier (pre-merge
+            # main) or an unresolvable diff falls back to enum-failed = true.
+            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null)" \
+              && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>/dev/null; then
+              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request)"
+            else
+              echo "::warning::e2e classification fell back to enum-failed (diff unresolvable or classifier absent on base ref)"
+              APPLICABLE="$(bash scripts/ci-e2e-classify.sh --enum-failed)"
+            fi
+          else
+            APPLICABLE="$(bash scripts/ci-e2e-classify.sh "$EVENT_NAME" </dev/null)"
+          fi
+          # Empty/unknown verdict must red the job, not silently skip both the
+          # heavy steps AND the skip-verdict step.
+          case "$APPLICABLE" in
+            true|false) ;;
+            *) echo "::error::classifier emitted invalid verdict '$APPLICABLE'" >&2; exit 1 ;;
+          esac
+          echo "applicable=$APPLICABLE" >> "$GITHUB_OUTPUT"
+          echo "::notice::e2e applicable=$APPLICABLE (event=$EVENT_NAME)"
+
+      # The verdict must be legible in the run itself — a required check that
+      # silently does nothing reads as a green with no story.
+      - name: Record e2e skip verdict
+        if: steps.detect.outputs.applicable == 'false'
+        run: |
+          echo "::notice::e2e skipped: no app-affecting paths"
+          echo "**e2e skipped: no app-affecting paths** — classifier allowlist is \`knowledge-base/**\` + root \`*.md\` only (#8450)." >> "$GITHUB_STEP_SUMMARY"
 
       # setup-bun and its `unzip` prerequisite are both gone (ADR-191): this job's only
       # bun usage was the two installs below. The image ships Node 24, so no
       # actions/setup-node either — that is deliberate and unchanged.
       - name: Install dependencies
+        if: steps.detect.outputs.applicable == 'true'
         run: npm ci --ignore-scripts
 
       - name: Install web-platform dependencies
+        if: steps.detect.outputs.applicable == 'true'
         run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
       - name: Run E2E tests
+        if: steps.detect.outputs.applicable == 'true'
         run: npx playwright test
         working-directory: apps/web-platform
 
       - name: Upload test results on failure
-        if: failure()
+        if: failure() && steps.detect.outputs.applicable == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report

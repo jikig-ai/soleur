@@ -371,6 +371,9 @@ permissions:
 
 env:
   TERRAFORM_VERSION: "1.10.5"
+  # (#7226) MUST equal TERRAFORM_VERSION (terraform-target-parity pins it): a bump re-runs
+  # web_1_host_key_probe (x/crypto key order, R4). A job env cannot read env.*.
+  TF_VAR_terraform_version: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
   # cloudflared binary for the CF Tunnel SSH bridge (#4844) — the token-gated
   # SSH apply of the SSH-provisioned server.tf terraform_data set reaches the host over
@@ -1255,7 +1258,8 @@ jobs:
               -target=terraform_data.zot_consumer_probe_install \
               -target=terraform_data.git_data_probe_install \
               -target=terraform_data.inngest_consumer_probe_install \
-              -target=terraform_data.send_failed_alert_probe
+              -target=terraform_data.send_failed_alert_probe \
+              -target=terraform_data.web_1_host_key_probe
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
       # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the
@@ -4169,11 +4173,13 @@ jobs:
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.git_data' \
+              -replace='tls_private_key.git_data_host_ssh' \
               -target='hcloud_server.git_data' \
               -target='hcloud_server_network.git_data' \
               -target='hcloud_volume_attachment.git_data' \
               -target='hcloud_volume_attachment.git_data_luks' \
               -target='hcloud_firewall_attachment.git_data' \
+              -target='doppler_secret.git_data_ssh_host_key' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -4289,6 +4295,9 @@ jobs:
             fi
           done
           echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
+          # (#7226) The rotated pin, for git-data-pin-redeploy.yml's comparison.
+          fp=$(doppler run -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
+          if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
       - name: Poll for the git-data boot-completion signal (replace)
         id: poll
@@ -6010,6 +6019,8 @@ jobs:
               -target='doppler_secret.git_data_luks_key' \
               -target='doppler_secret.git_data_ssh_host' \
               -target='doppler_secret.git_data_betterstack_logs_token' \
+              -target='tls_private_key.git_data_host_ssh' \
+              -target='doppler_secret.git_data_ssh_host_key' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -6097,6 +6108,9 @@ jobs:
             exit 1
           fi
           echo "birth applied. A green apply is NOT a green boot — the boot-signal poll below is what decides whether this host actually came up."
+          # (#7226) The published pin, for git-data-pin-redeploy.yml's comparison.
+          fp=$(doppler run -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
+          if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
       # (#6982, R20) POLL FOR THE BOOT SIGNAL. This is ADR-149 checklist item 4's honest
       # discharge, and the step whose absence made the previous one a lie: until now the

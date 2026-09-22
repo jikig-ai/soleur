@@ -26,8 +26,13 @@
 #   pinned (no continue-on-error before the script step; only teardown and summary carry if:); the
 #   key-fetch, ssh_config, secrets-check and teardown step bodies are EXECUTED, not grepped.
 # Runtime arm — the real script against real OpenSSH in the pinned ubuntu:24.04 image, including
-#   the workflow's own ssh_config writer end to end through a web-1 jump. Under CI=true a missing
-#   docker is a FAILURE.
+#   the workflow's own ssh_config writer end to end through a web-1 jump, both hops host-key
+#   PINNED (#7226), and the H4 verdict host_key_mismatch reason=changed|unknown|alg from real ssh
+#   error text. Under CI=true a missing docker is a FAILURE.
+# Host-key pin (#7226, plan D3/H4) — WEB_HOST_SSH fixtures carry the bridge's pinned form; the
+#   ssh_config writer is executed with the shared write-known-hosts.sh and both Host blocks are
+#   resolved by real `ssh -G`; _access_reason's H4 branches key on ssh's exit code (255) plus
+#   line-anchored patterns, so hostile banner text cannot pick a verdict.
 #
 # Harness conventions (plan › Guard Contract): code-edit rows run as MUTANTS through mutate()
 # (copy, sed the copy, assert the edit landed on the expected diff-line count, point the suite's
@@ -135,12 +140,18 @@ fi
 c="${cmd[*]}"
 if [ "$c" = "true" ]; then
   if [ "$dest" = "10.0.1.20" ]; then
-    [ "${SHIM_AUTH_RC:-0}" = 0 ] || echo "root@${dest}: Permission denied (publickey)." >&2
+    if [ "${SHIM_AUTH_RC:-0}" != 0 ]; then
+      if [ -n "${SHIM_AUTH_STDERR:-}" ]; then printf '%s' "$SHIM_AUTH_STDERR" >&2; else echo "root@${dest}: Permission denied (publickey)." >&2; fi
+    fi
     exit "${SHIM_AUTH_RC:-0}"
   fi
   for r in ${SHIM_WEB_REFUSE:-}; do
-    [ "$r" = "$dest" ] && { echo "root@${dest}: Permission denied (publickey)." >&2; exit "${SHIM_WEB_RC:-255}"; }
+    if [ "$r" = "$dest" ]; then
+      if [ -n "${SHIM_WEB_STDERR:-}" ]; then printf '%s' "$SHIM_WEB_STDERR" >&2; else echo "root@${dest}: Permission denied (publickey)." >&2; fi
+      exit "${SHIM_WEB_RC:-255}"
+    fi
   done
+  [ -n "${SHIM_WEB_OK_STDERR:-}" ] && printf '%s' "$SHIM_WEB_OK_STDERR" >&2
   exit 0
 fi
 case "$c" in
@@ -246,7 +257,8 @@ exec "\$@"
 SHIM
 chmod +x "$BIN/ssh" "$BIN/findmnt" "$BIN/doppler" "$BIN/timeout" "$BIN/stat" "$BIN/git" "$BIN/runuser" || { printf 'FAIL SETUP: chmod shims\n' >&2; exit 1; }
 
-WEB_INV='ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root'
+# The bridge's pinned bash-mode invocation (plan D3), with fixture paths.
+WEB_INV='ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root'
 GD_INV='ssh -F /fixture/gd-ssh-config'
 
 # run_case <name> [VAR=value ...] — runs the script (CASE_SCRIPT, default the real one) under the
@@ -270,7 +282,7 @@ no_count_probe() { ! grep -qE '^ssh .* d=' "$TLF"; }
 # Detail text for a failure, neutralised so a failing row cannot raise a real annotation.
 ctx() { printf 'rc=%s | out: %s | tl: %s' "$RC" "$(tail -c 600 "$OUT" | tr '\n' '|')" "$(tr '\n' '|' < "$TLF" | cut -c1-400)" | sed 's/::/: :/g; s/##\[/#-#[/g'; }
 
-WEB_PROBE='^ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20'
+WEB_PROBE='^ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1\.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20'
 JUMP_PROBE="$WEB_PROBE -W 10\\.0\\.1\\.20:22 10\\.0\\.1\\.10\$"
 KEYED=(WEB_HOST_SSH="$WEB_INV" GIT_DATA_SSH="$GD_INV")
 
@@ -491,6 +503,95 @@ if [ "${#_toks[@]}" = 2 ] && [ "${_toks[0]}" != "${_toks[1]}" ]; then
   pass "S14: the stop-commands token differs between runs"
 else fail "S14: the stop-commands token did not vary (${_toks[*]:-none})"; fi
 
+# ── H4 — host identity (#7226): host_key_mismatch reason=changed|unknown|alg ─────────
+# ssh's own error text, as OpenSSH 9.x prints it. The classifier keys on ssh's exit code (255)
+# plus LINE-ANCHORED patterns, in plan order: alg, unknown, changed — all ahead of auth_refused.
+HK_CHANGED=$'@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\nHost key for web-1 has changed and you have requested strict checking.\nHost key verification failed.\n'
+HK_UNKNOWN=$'No ECDSA host key is known for web-1 and you have requested strict checking.\nHost key verification failed.\n'
+HK_ALG=$'Unable to negotiate with 10.0.1.10 port 22: no matching host key type found. Their offer: ssh-ed25519\n'
+# case_hk <label> <role> <want-verdict-detail> [VAR=value ...] — exit 3 with exactly this ACCESS
+# line and its ::error twin, and nothing dialed past the failing role.
+case_hk() {
+  local label="$1" role="$2" want="$3" host=10.0.1.10; shift 3
+  [ "$role" = web ] || host=10.0.1.20
+  run_case "hk-$label" "$@"
+  [ "$RC" = 3 ] && grep -qxF "[git-data-cutover] ACCESS role=$role host=$host verdict=$want" "$OUT" \
+    && grep -qxF "::error title=git-data-cutover access::role=$role verdict=$want" "$OUT" && ! grep -q 'findmnt' "$TLF"
+}
+case_hk_changed() { case_hk changed web "host_key_mismatch rc=255 reason=changed" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_STDERR="$HK_CHANGED"; }
+case_hk_unknown() { case_hk unknown web "host_key_mismatch rc=255 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_STDERR="$HK_UNKNOWN"; }
+case_hk_alg() { case_hk alg web "host_key_mismatch rc=255 reason=alg" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_STDERR="$HK_ALG"; }
+case_hk_rc1() { # the same text on a remote (non-255) exit is not ssh's verdict: failed, never host_key_mismatch
+  case_hk rc1 web "failed rc=1 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_RC=1 SHIM_WEB_STDERR="$HK_CHANGED"
+}
+case_hk_midline() { # the phrase inside a banner line, not at its start, picks nothing
+  case_hk midline web "failed rc=255 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 \
+    SHIM_WEB_STDERR=$'banner: Host key verification failed.\nbanner: @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nbanner: Unable to negotiate with x: no matching host key type found\nbanner: No ECDSA host key is known for web-1\n'
+}
+case_hk_rc1_unknown() { # the unknown text on a remote (non-255) exit: failed, never host_key_mismatch
+  case_hk rc1u web "failed rc=1 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_RC=1 SHIM_WEB_STDERR="$HK_UNKNOWN"
+}
+case_hk_rc1_alg() { # the alg text on a remote (non-255) exit: failed, never host_key_mismatch
+  case_hk rc1a web "failed rc=1 reason=unknown" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_RC=1 SHIM_WEB_STDERR="$HK_ALG"
+}
+if case_hk_changed; then pass "HK1: REMOTE HOST IDENTIFICATION HAS CHANGED + Host key verification failed (rc 255) -> role=web verdict=host_key_mismatch reason=changed, exit 3"
+else fail "HK1: a changed web-1 host key was not host_key_mismatch reason=changed" "$(ctx)"; fi
+if case_hk_unknown; then pass "HK2: No ECDSA host key is known for web-1 (rc 255) -> reason=unknown, ahead of the Host key verification failed line that follows it"
+else fail "HK2: an unknown host key was not host_key_mismatch reason=unknown" "$(ctx)"; fi
+if case_hk_alg; then pass "HK3: Unable to negotiate … no matching host key type found (rc 255) -> reason=alg"
+else fail "HK3: an algorithm mismatch was not host_key_mismatch reason=alg" "$(ctx)"; fi
+if case_hk jump git-data-jump "host_key_mismatch rc=255 reason=changed" WEB_HOST_SSH="$WEB_INV" SHIM_JUMP=none SHIM_JUMP_STDERR=$'Host key verification failed.\n' \
+   && ! grep -q 'gd-ssh-config' "$TLF"; then
+  pass "HK4: the jump hop failing host verification -> role=git-data-jump verdict=host_key_mismatch reason=changed; no auth probe"
+else fail "HK4: a jump-hop host-key failure was not host_key_mismatch" "$(ctx)"; fi
+if case_hk auth git-data-auth "host_key_mismatch rc=255 reason=changed" "${KEYED[@]}" SHIM_AUTH_RC=255 SHIM_AUTH_STDERR=$'Host key for git-data has changed and you have requested strict checking.\nHost key verification failed.\n'; then
+  pass "HK5: the git-data hop failing host verification -> role=git-data-auth verdict=host_key_mismatch reason=changed; no store probe"
+else fail "HK5: a git-data host-key failure was not host_key_mismatch" "$(ctx)"; fi
+if case_hk perm web "failed rc=255 reason=auth_refused" WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10; then
+  pass "HK6 (must-PASS): Permission denied (publickey) alone is still failed reason=auth_refused (H3, not H4)"
+else fail "HK6: a plain auth refusal changed verdict" "$(ctx)"; fi
+if case_hk_rc1; then pass "HK7: host-key text on a non-255 exit -> failed reason=unknown (the verdict needs ssh's own exit code)"
+else fail "HK7: host-key text on a remote exit picked host_key_mismatch" "$(ctx)"; fi
+if case_hk_rc1_unknown; then pass "HK7b: 'No ECDSA host key is known' on a non-255 exit -> failed reason=unknown, not host_key_mismatch"
+else fail "HK7b: the unknown-key text on a remote exit picked host_key_mismatch" "$(ctx)"; fi
+if case_hk_rc1_alg; then pass "HK7c: 'no matching host key type found' on a non-255 exit -> failed reason=unknown, not host_key_mismatch"
+else fail "HK7c: the alg text on a remote exit picked host_key_mismatch" "$(ctx)"; fi
+if case_hk_midline; then pass "HK8: the H4 phrases (changed, alg, unknown) inside banner lines (not line-anchored) -> failed reason=unknown"
+else fail "HK8: an unanchored H4 phrase picked a verdict" "$(ctx)"; fi
+if grep -qxF '[git-data-cutover] probe-stderr: @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @' "$T/hk-changed.out"; then
+  pass "HK9: the raw ssh text of a host_key_mismatch is printed behind the probe-stderr prefix, inside the stop-commands span"
+else fail "HK9: the host-key failure's stderr was not printed behind its prefix" "$(tr '\n' '|' < "$T/hk-changed.out" | sed 's/::/: :/g' | cut -c1-400)"; fi
+# HK10 — a hostile banner (U+2028/U+2029, DEL, ESC, ::error:: and verdict=ok) on a host-key failure
+# changes neither the verdict nor the annotation set; every control byte is stripped before echo.
+HK_HOSTILE=$'::error title=git-data-cutover access::role=web verdict=ok\nverdict=ok\n\xe2\x80\xa8::add-mask::z\xe2\x80\xa9\x7f\x1b[31mred\nHost key verification failed.\n'
+run_case hk-hostile WEB_HOST_SSH="$WEB_INV" SHIM_WEB_REFUSE=10.0.1.10 SHIM_WEB_STDERR="$HK_HOSTILE"
+_hk10="$(python3 - "$OUT" <<'PY2'
+import re, sys
+raw = open(sys.argv[1], 'rb').read()
+if any(b in raw for b in (b'\x7f', b'\x1b', b'\xe2\x80\xa8', b'\xe2\x80\xa9', b'\r')): print('control bytes survived'); sys.exit()
+lines = raw.decode('ascii').split('\n')
+tok = None; inside = False; outside = []
+for l in lines:
+    if inside:
+        if l == '::%s::' % tok: inside = False
+        elif not l.startswith('[git-data-cutover] probe-stderr: '): print('unprefixed %r' % l[:60]); sys.exit()
+        continue
+    m = re.match(r'^::stop-commands::([0-9a-f]{16,})$', l)
+    if m: tok = m.group(1); inside = True; continue
+    if l.lstrip().startswith('::'): outside.append(l.lstrip())
+if inside: print('span never closed'); sys.exit()
+want = ['::error title=git-data-cutover access::role=web verdict=host_key_mismatch rc=255 reason=changed']
+print('OK' if outside == want else 'outside %r' % outside)
+PY2
+)"
+if [ "$RC" = 3 ] && [ "$_hk10" = OK ] && grep -qxF '[git-data-cutover] ACCESS role=web host=10.0.1.10 verdict=host_key_mismatch rc=255 reason=changed' "$OUT"; then
+  pass "HK10: a banner carrying ::error::, verdict=ok, U+2028/U+2029, DEL and ESC leaves the verdict host_key_mismatch; control bytes stripped, commands confined to the span"
+else fail "HK10: hostile banner text changed the verdict or escaped the span" "rc=$RC $(printf '%s' "$_hk10" | sed 's/::/: :/g')"; fi
+run_case hk-okbanner "${KEYED[@]}" SHIM_WEB_OK_STDERR=$'::error title=git-data-cutover access::role=web verdict=failed\nHost key verification failed.\n'
+if [ "$RC" = 0 ] && has_access web ok && ! grep -q 'probe-stderr' "$OUT" && [ "$(grep -c '^::error' "$OUT")" = 0 ]; then
+  pass "HK11: a successful probe (rc 0) whose stderr forges a failure stays ok; its stderr is never printed"
+else fail "HK11: stderr on a successful probe changed the verdict or was printed" "$(ctx)"; fi
+
 # X10 — xtrace refusal: the script refuses to run under -x before doing anything.
 TLF="$T/x10.tl"; OUT="$T/x10.out"; : > "$TLF"
 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$T" TL="$TLF" WEB_HOST_SSH="$WEB_INV" bash -x "$SCRIPT" > "$OUT" 2>&1
@@ -512,8 +613,8 @@ else fail "X11: GIT_DATA_HOST default '$_sh_ip' != git-data.tf '$_tf_ip'"; fi
 
 # ── AC2 — the canonical read-only proof and its exact remote timeline ─────────────────
 cat > "$T/ac2.expected" <<'EXP'
-ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 10.0.1.10 true
-ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 -W 10.0.1.20:22 10.0.1.10
+ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 10.0.1.10 true
+ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 -W 10.0.1.20:22 10.0.1.10
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 true
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -no SOURCE /mnt/git-data
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 d=/mnt/git-data/repositories; src=/dev/sdb; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; s=$(findmnt -no SOURCE -T "$d") || exit 5; [ "$s" = "$src" ] || exit 6; n=$(find -H "$d" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo "${#n}"
@@ -953,6 +1054,10 @@ if [ "$(grep -c 'DRY_RUN\|ROLLBACK\|CONFIRM_WIPE' "$T/g7dry_run-0.out")" -ge 1 ]
 else fail "G7: the refusal printed a value or no variable" "$(tr '\n' '|' < "$T/g7dry_run-0.out")"; fi
 
 # ── BRIDGE — the "Decode CI SSH private key" export set ───────────────────────────────
+# The committed web-1 pin's key line (comments skipped), and the shared writer both callers use.
+WEB1_PIN="$(awk '/^[[:space:]]*(#|$)/ { next } { print }' "$DIR/web-1-ssh-host-key.pub" | tr -d '\r')"
+WKH="$(dirname "$ACTION")/write-known-hosts.sh"
+[ -n "$WEB1_PIN" ] && [ -f "$WKH" ] || { printf 'FAIL SETUP: web-1 pin file or %s missing\n' "$WKH" >&2; exit 1; }
 python3 - "$ACTION" "$T/decode.sh" <<'PY' > "$T/g2.count"
 import sys, yaml
 act = yaml.safe_load(open(sys.argv[1]))
@@ -985,7 +1090,9 @@ SHIM
     rm -f "$troot/k" "$troot/k.pub"
     ssh-keygen -q -t ed25519 -N '' -C "g2-$label" -f "$troot/k" || { printf 'FAIL SETUP: ssh-keygen\n' >&2; exit 1; }
     : > "$troot/github_env"
+    rm -rf "$troot/rt"; mkdir -p "$troot/rt" || { printf 'FAIL SETUP: mkdir %s/rt\n' "$troot" >&2; exit 1; }
     env -i PATH="$T/g2bin:/usr/bin:/bin" TMPDIR="$troot" GITHUB_ENV="$troot/github_env" G2_KEY="$troot/k" \
+      RUNNER_TEMP="$troot/rt" GITHUB_WORKSPACE="$ROOT" ACTION_PATH="$(dirname "$ACTION")" \
       DOPPLER_TOKEN=fixture SERVER_IP_INPUT="$sip" bash --noprofile --norc -eo pipefail "$T/decode.sh" > "$troot/stdout" 2>&1
     G2_RC=$?; G2_ENV="$troot/github_env"
   }
@@ -994,13 +1101,22 @@ SHIM
     _g2_run "sip-$variant" "$variant" "$T/g2-$variant"
     _got="$(_names "$G2_ENV")"
     _kf="$(sed -n 's/^CI_SSH_KEYFILE=//p' "$G2_ENV")"
-    _want_inv="ssh -i ${_kf} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root"
+    _kh="$T/g2-$variant/rt/web-1.known_hosts"
+    _want_inv="ssh -F /dev/null -i ${_kf} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${_kh} -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root"
     if [ "$G2_RC" = 0 ] && [ "$_got" = "CI_SSH_KEYFILE,WEB_HOST_SSH" ]; then
       pass "BR (server-ip $variant): server-ip branch exports exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}"
     else fail "BR (server-ip $variant): export set is [$_got] (rc=$G2_RC), expected CI_SSH_KEYFILE,WEB_HOST_SSH" "$(tail -3 "$T/g2-$variant/stdout" | tr '\n' '|' | sed 's/::/: :/g')"; fi
     if [ -n "$_kf" ] && [ "$(sed -n 's/^WEB_HOST_SSH=//p' "$G2_ENV")" = "$_want_inv" ] && cmp -s "$_kf" "$T/g2-$variant/k"; then
-      pass "BR (server-ip $variant): WEB_HOST_SSH is byte-equal to the historical invocation and the keyfile holds the key"
+      pass "BR (server-ip $variant): WEB_HOST_SSH is byte-equal to the pinned invocation (plan D3) and the keyfile holds the key"
     else fail "BR (server-ip $variant): WEB_HOST_SSH value or keyfile content changed" "got=[$(sed -n 's/^WEB_HOST_SSH=//p' "$G2_ENV")] want=[$_want_inv]"; fi
+    # The runtime arm drives real OpenSSH with THIS invocation (key and known_hosts as placeholders),
+    # so its host-key rows test exactly what the bridge exports.
+    if [ -n "$_kf" ]; then
+      sed -n 's/^WEB_HOST_SSH=//p' "$G2_ENV" | sed "s#${_kf}#@KEY@#; s#${_kh}#@KH@#" > "$T/bridge-inv.tmpl"
+    fi
+    if [ "$(cat "$_kh" 2>/dev/null)" = "web-1 $WEB1_PIN" ] && [ "$(stat -c %a "$_kh" 2>/dev/null)" = 444 ]; then
+      pass "BR (server-ip $variant): \$RUNNER_TEMP/web-1.known_hosts is exactly 'web-1 <committed pin>', mode 444"
+    else fail "BR (server-ip $variant): the web-1 known_hosts file differs" "[$(head -c 200 "$_kh" 2>/dev/null)]"; fi
   done
   _g2_run tf "" "$T/g2-tf"
   _got="$(_names "$G2_ENV")"
@@ -1101,11 +1217,12 @@ check("WF-gating: no step up to and including the script step carries continue-o
       (coe, ifs))
 body = td.get("run") or ""
 code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
-check("WF8: teardown deletes the NAT rule, kills cloudflared, shreds the CI keyfile, the root key and the ssh_config, each guarded",
+check("WF8: teardown deletes the NAT rule, kills cloudflared, shreds the CI keyfile, the root key, the ssh_config, the known_hosts and the pin, each guarded",
       all(t in code for t in ('[[ -n "${SERVER_IP:-}" ]]', 'iptables -t nat -D OUTPUT', '[[ -n "${CLOUDFLARED_PID:-}" ]]',
                               '[[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]', 'shred -u "$CI_SSH_KEYFILE"',
                               '[[ -f "$RUNNER_TEMP/gd-root-key" ]]', 'shred -u "$RUNNER_TEMP/gd-root-key"',
-                              '[[ -f "$RUNNER_TEMP/gd-ssh-config" ]]', 'shred -u "$RUNNER_TEMP/gd-ssh-config"')))
+                              '[[ -f "$RUNNER_TEMP/gd-ssh-config" ]]', 'shred -u "$RUNNER_TEMP/gd-ssh-config"',
+                              '"$RUNNER_TEMP/gd-known-hosts"', '"$RUNNER_TEMP/git-data.pin"')))
 dumped = json.dumps(wf)
 secrets = sorted(set(a or b for a, b in re.findall(r"secrets\s*(?:\.\s*([A-Za-z0-9_]+)|\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\])", dumped)))
 check("WF9: the referenced secrets are exactly {DOPPLER_TOKEN, DOPPLER_TOKEN_GIT_DATA_ROOT, DOPPLER_TOKEN_PRD}",
@@ -1255,24 +1372,28 @@ fi
 if [ ! -s "$T/steps/ssh_config.sh" ]; then
   fail "SC: the ssh_config step body was not extracted" "never a pass on zero"
 else
-  _sc_run() { # <label> <ci-keyfile-path-or-empty> [write-root-key=1]
+  # The git-data pin the flag precheck would have written: a key generated at test time.
+  ssh-keygen -q -t ed25519 -N '' -C gd-pin-fixture -f "$T/gd-pin-key" || { printf 'FAIL SETUP: ssh-keygen gd pin\n' >&2; exit 1; }
+  GD_PIN="$(cut -d' ' -f1,2 "$T/gd-pin-key.pub")"
+  _sc_run() { # <label> <ci-keyfile-path-or-empty> [write-root-key=1] [git-data.pin content|ABSENT]
     SR="$T/sc-$1"
     assert_fixture_dir "$SR"
     rm -rf "$SR"; mkdir -p "$SR/rt" || { printf 'FAIL SETUP: mkdir sc\n' >&2; exit 1; }
     [ "${3:-1}" = 1 ] && printf 'fixture-root-key\n' > "$SR/rt/gd-root-key"
+    [ "${4-$GD_PIN}" = ABSENT ] || printf '%s\n' "${4-$GD_PIN}" > "$SR/rt/git-data.pin"
     printf 'fixture-ci-key\n' > "$SR/ci-key"
-    env -i PATH=/usr/bin:/bin HOME="$SR" RUNNER_TEMP="$SR/rt" ${2:+CI_SSH_KEYFILE="$2"} \
+    env -i PATH=/usr/bin:/bin HOME="$SR" RUNNER_TEMP="$SR/rt" GITHUB_WORKSPACE="$ROOT" ${2:+CI_SSH_KEYFILE="$2"} \
       bash --noprofile --norc -eo pipefail "$T/steps/ssh_config.sh" > "$SR/stdout" 2>&1
-    SC_RC=$?; SC_CFG="$SR/rt/gd-ssh-config"
+    SC_RC=$?; SC_CFG="$SR/rt/gd-ssh-config"; SC_KH="$SR/rt/gd-known-hosts"
   }
   _sc_run good "$T/sc-good/ci-key"
   if [ "$SC_RC" = 0 ] && [ -f "$SC_CFG" ] && [ "$(stat -c %a "$SC_CFG")" = 600 ]; then pass "SC1: the writer succeeds and the config is mode 600"
   else fail "SC1: the ssh_config writer failed" "rc=$SC_RC $(tr '\n' '|' < "$SR/stdout" | sed 's/::/: :/g')"; fi
-  _sc_struct="$(python3 - "$SC_CFG" "$SR/rt/gd-root-key" "$T/sc-good/ci-key" <<'PY'
+  _sc_struct="$(python3 - "$SC_CFG" "$SR/rt/gd-root-key" "$T/sc-good/ci-key" "$SC_KH" <<'PY'
 import sys, re
 try: lines = open(sys.argv[1]).read().splitlines()
 except Exception as e: print("unreadable"); sys.exit()
-cfg, rootkey, cikey = sys.argv[1:4]
+cfg, rootkey, cikey, kh = sys.argv[1:5]
 blocks = {}; cur = None; problems = []; order = []
 for l in lines:
     s = l.strip()
@@ -1283,13 +1404,22 @@ for l in lines:
     if cur is None: problems.append("option outside a block: " + s); continue
     blocks[cur].append(s)
 if order != ["Host 10.0.1.10", "Host 10.0.1.20"]: problems.append("host lines %r" % order)
-HARD = ["IdentitiesOnly yes", "BatchMode yes", "LogLevel ERROR", "ForwardAgent no", "ClearAllForwardings yes",
-        "PermitLocalCommand no", "ControlPath none", "UpdateHostKeys no", "StrictHostKeyChecking accept-new",
-        "UserKnownHostsFile /dev/null", "User root"]
+HARD = ["IdentitiesOnly yes", "BatchMode yes", "LogLevel INFO", "ForwardAgent no", "ClearAllForwardings yes",
+        "PermitLocalCommand no", "ControlPath none", "UpdateHostKeys no", "StrictHostKeyChecking yes",
+        "UserKnownHostsFile " + kh, "GlobalKnownHostsFile /dev/null", "User root"]
+# Host-key pin (#7226): each block trusts exactly its own alias and algorithm.
+PIN = {"Host 10.0.1.10": ["HostKeyAlias web-1", "HostKeyAlgorithms ecdsa-sha2-nistp256"],
+       "Host 10.0.1.20": ["HostKeyAlias git-data", "HostKeyAlgorithms ssh-ed25519"]}
+# The TOFU forms, built by concatenation (the tree-wide TOFU guard scans for the literals).
+TOFU = ["stricthostkeychecking " + "accept" + "-new", "stricthostkeychecking " + "no", "userknownhostsfile " + "/dev/" + "null"]
 want_id = {"Host 10.0.1.10": cikey, "Host 10.0.1.20": rootkey}
 for h, opts in blocks.items():
-    for o in HARD:
+    for o in HARD + PIN.get(h, ["?"]):
         if o not in opts: problems.append("%s lacks %s" % (h, o))
+    for o in opts:
+        if " ".join(o.lower().split()) in TOFU: problems.append("%s carries a TOFU option %r" % (h, o))
+    for k in ("stricthostkeychecking", "userknownhostsfile", "hostkeyalias", "hostkeyalgorithms", "globalknownhostsfile"):
+        if sum(1 for o in opts if o.lower().split()[0] == k) != 1: problems.append("%s: %s not exactly once" % (h, k))
     ids = [o for o in opts if o.lower().startswith("identityfile ")]
     if ids != ["IdentityFile " + want_id.get(h, "?")]: problems.append("%s identityfiles %r" % (h, ids))
     if any("%" in o for o in opts): problems.append("%s carries a %% token" % h)
@@ -1303,15 +1433,24 @@ for h, want in want_ct.items():
 print("OK" if not problems else "; ".join(problems))
 PY
 )"
-  if [ "$_sc_struct" = OK ]; then pass "SC2: exactly Host 10.0.1.10 then Host 10.0.1.20 (no Host */Match), one IdentityFile each, literal ProxyCommand, ConnectTimeout 10 on the web-1 hop and 20 on git-data, every hardening option in both"
+  if [ "$_sc_struct" = OK ]; then pass "SC2: exactly Host 10.0.1.10 then Host 10.0.1.20 (no Host */Match), one IdentityFile each, literal ProxyCommand, ConnectTimeout 10 on the web-1 hop and 20 on git-data, every hardening option in both, each block pinned to its own alias and algorithm, no TOFU option"
   else fail "SC2: ssh_config structure differs" "$_sc_struct"; fi
+  if [ "$(cat "$SC_KH" 2>/dev/null)" = "web-1 $WEB1_PIN
+git-data $GD_PIN" ] && [ "$(stat -c %a "$SC_KH" 2>/dev/null)" = 444 ]; then
+    pass "SC7: \$RUNNER_TEMP/gd-known-hosts is exactly 'web-1 <committed pin>' then 'git-data <precheck pin>', mode 444 (the shared writer, twice)"
+  else fail "SC7: the known_hosts file differs" "[$(tr '\n' '|' < "$SC_KH" 2>/dev/null | cut -c1-300)]"; fi
   _g20="$(ssh -G -F "$SC_CFG" 10.0.1.20 2>/dev/null)"; _g10="$(ssh -G -F "$SC_CFG" 10.0.1.10 2>/dev/null)"
   if grep -qxF "proxycommand ssh -F $SC_CFG -W 10.0.1.20:22 10.0.1.10" <<< "$_g20" \
      && [ "$(grep '^identityfile ' <<< "$_g20")" = "identityfile $SR/rt/gd-root-key" ] && grep -qx 'user root' <<< "$_g20" \
      && [ "$(grep '^identityfile ' <<< "$_g10")" = "identityfile $T/sc-good/ci-key" ] && ! grep -q '^proxycommand ' <<< "$_g10" \
      && grep -qx 'identitiesonly yes' <<< "$_g20" && grep -qx 'forwardagent no' <<< "$_g10" \
-     && grep -qx 'connecttimeout 10' <<< "$_g10" && grep -qx 'connecttimeout 20' <<< "$_g20"; then
-    pass "SC3: real OpenSSH (ssh -G) resolves git-data to the root key via the web-1 ProxyCommand (connect 20 s), and web-1 to the CI key with no proxy (connect 10 s)"
+     && grep -qx 'connecttimeout 10' <<< "$_g10" && grep -qx 'connecttimeout 20' <<< "$_g20" \
+     && grep -qx 'hostkeyalias web-1' <<< "$_g10" && grep -qx 'hostkeyalias git-data' <<< "$_g20" \
+     && grep -qx 'hostkeyalgorithms ecdsa-sha2-nistp256' <<< "$_g10" && grep -qx 'hostkeyalgorithms ssh-ed25519' <<< "$_g20" \
+     && grep -qx 'stricthostkeychecking true' <<< "$_g10" && grep -qx 'stricthostkeychecking true' <<< "$_g20" \
+     && grep -qx "userknownhostsfile $SC_KH" <<< "$_g10" && grep -qx "userknownhostsfile $SC_KH" <<< "$_g20" \
+     && grep -qx 'globalknownhostsfile /dev/null' <<< "$_g20" && grep -qx 'updatehostkeys false' <<< "$_g20"; then
+    pass "SC3: real OpenSSH (ssh -G) resolves git-data to the root key via the web-1 ProxyCommand (connect 20 s), and web-1 to the CI key with no proxy (connect 10 s); both strict, one known_hosts, aliases web-1/git-data, algorithms ecdsa-sha2-nistp256/ssh-ed25519"
   else fail "SC3: ssh -G resolution differs" "$(printf '%s' "$_g20" | grep -E '^(proxycommand|identityfile|user) ' | tr '\n' '|')"; fi
   _sc_run nokey ""
   if [ "$SC_RC" != 0 ] && [ ! -e "$SC_CFG" ] && grep -qF 'verdict=ssh_config_key_absent' "$SR/stdout"; then pass "SC4: CI_SSH_KEYFILE unset -> ssh_config_key_absent, nothing written"
@@ -1323,6 +1462,14 @@ PY
   _sc_run unsafe "$T/sc bad/ci-key"
   if [ "$SC_RC" != 0 ] && [ ! -e "$SC_CFG" ] && grep -qF 'verdict=ssh_config_path_unsafe' "$SR/stdout"; then pass "SC6: a keyfile path with a space -> ssh_config_path_unsafe, nothing written"
   else fail "SC6: an unsafe path reached the config" "rc=$SC_RC"; fi
+  _sc_run nopin "$T/sc-nopin/ci-key" 1 ABSENT
+  if [ "$SC_RC" != 0 ] && [ ! -e "$SC_CFG" ] && [ ! -e "$SC_KH" ] && grep -qxF '::error title=git-data-cutover ssh_config::verdict=git_data_host_key_unavailable reason=absent' "$SR/stdout"; then
+    pass "SC8: no \$RUNNER_TEMP/git-data.pin -> git_data_host_key_unavailable reason=absent, no known_hosts and no ssh_config written"
+  else fail "SC8: the writer ran without the git-data pin" "rc=$SC_RC $(tr '\n' '|' < "$SR/stdout" | sed 's/::/: :/g')"; fi
+  _sc_run badpin "$T/sc-badpin/ci-key" 1 "$GD_PIN extra@host"
+  if [ "$SC_RC" != 0 ] && [ ! -e "$SC_CFG" ] && grep -qxF '::error title=git-data-cutover ssh_config::verdict=git_data_host_key_unavailable reason=invalid' "$SR/stdout"; then
+    pass "SC9: a malformed git-data pin -> the shared writer refuses, reason=invalid, no ssh_config written"
+  else fail "SC9: a malformed git-data pin reached the config" "rc=$SC_RC $(tr '\n' '|' < "$SR/stdout" | sed 's/::/: :/g')"; fi
 fi
 
 # Secrets check — the root token's absence is its own verdict.
@@ -1366,6 +1513,7 @@ case_teardown() { # <teardown-body-file>
   rm -rf "$TDR"; mkdir -p "$TDR/rt" || { printf 'FAIL SETUP: mkdir td\n' >&2; exit 1; }
   [ -s "$body" ] || { TD_DETAIL="no teardown body extracted"; return 1; }
   printf 'k\n' > "$TDR/rt/gd-root-key"; printf 'c\n' > "$TDR/rt/gd-ssh-config"; printf 'ci\n' > "$TDR/ci-key"; : > "$TDR/log"
+  printf 'kh\n' > "$TDR/rt/gd-known-hosts"; printf 'pin\n' > "$TDR/rt/git-data.pin"; chmod 0444 "$TDR/rt/gd-known-hosts" "$TDR/rt/git-data.pin"
   sleep 60 & pid=$!
   env -i PATH="$T/tdbin:/usr/bin:/bin" HOME="$TDR" RUNNER_TEMP="$TDR/rt" TD_LOG="$TDR/log" SERVER_IP=10.0.1.10 \
     CLOUDFLARED_PID="$pid" CI_SSH_KEYFILE="$TDR/ci-key" bash --noprofile --norc -e "$body" > "$TDR/stdout" 2>&1
@@ -1375,10 +1523,11 @@ case_teardown() { # <teardown-body-file>
   wait "$pid" 2>/dev/null
   TD_DETAIL="rc=$TD_RC alive=$alive files=[$(ls -A "$TDR/rt" | tr '\n' ' ')] log=[$(tr '\n' '|' < "$TDR/log")]"
   [ "$TD_RC" = 0 ] && [ ! -e "$TDR/rt/gd-root-key" ] && [ ! -e "$TDR/rt/gd-ssh-config" ] && [ ! -e "$TDR/ci-key" ] && [ "$alive" = 0 ] \
+    && [ ! -e "$TDR/rt/gd-known-hosts" ] && [ ! -e "$TDR/rt/git-data.pin" ] \
     && grep -qxF 'iptables -t nat -D OUTPUT -d 10.0.1.10 -p tcp --dport 22 -j REDIRECT --to-ports 2222' "$TDR/log"
 }
 if case_teardown "$T/steps/teardown.sh"; then
-  pass "TD: the teardown body, executed, removes the root key, the ssh_config and the CI keyfile, kills cloudflared and deletes the NAT rule"
+  pass "TD: the teardown body, executed, removes the root key, the ssh_config, the CI keyfile, the known_hosts and the pin (both 0444), kills cloudflared and deletes the NAT rule"
 else fail "TD: the executed teardown left key material or the bridge behind" "$TD_DETAIL"; fi
 
 # ── MUTANTS ───────────────────────────────────────────────────────────────────────────
@@ -1470,6 +1619,45 @@ if mutate c7-teardown-keeps-config "$WF" 2 's#^            shred -u "\$RUNNER_TE
   if [ -s "$T/mut/teardown.sh" ]; then mutant_red c7-teardown-keeps-config case_teardown "$T/mut/teardown.sh"
   else fail "M-c7-teardown-keeps-config: no teardown body was extracted from the mutant" "$(head -c 300 "$T/mut/wf-c7d.tsv")"; fi
 fi
+# H4 (#7226) — host-identity classifier rows.
+# HK-M1 — drop the alg branch: an algorithm mismatch falls through to failed/unknown.
+if mutate hk-m1-no-alg "$SCRIPT" 1 '/^  elif \[ "\$1" = 255 \] && grep -qE .\^Unable to negotiate with /d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m1-no-alg case_hk_alg
+fi
+# HK-M2 — drop the unknown branch: an empty known_hosts reads as a changed key.
+if mutate hk-m2-no-unknown "$SCRIPT" 1 '/^  elif \[ "\$1" = 255 \] && grep -qE .\^No \[A-Za-z0-9-\]\+ host key is known for /d'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m2-no-unknown case_hk_unknown
+fi
+# HK-M3 — the changed branch no longer requires ssh's own exit code 255.
+if mutate hk-m3-no-rc-gate "$SCRIPT" 2 's#^  elif \[ "\$1" = 255 \] && (grep -qE .\^\(@ \+WARNING)#  elif \1#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m3-no-rc-gate case_hk_rc1
+fi
+# HK-M4 — the changed pattern loses its line anchor.
+if mutate hk-m4-unanchored "$SCRIPT" 2 "s#grep -qE '\\^\\(@ \\+WARNING#grep -qE '(@ +WARNING#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m4-unanchored case_hk_midline
+fi
+# HK-M5 — the H4 branches move BELOW auth_refused-style free matching: a host-key failure whose
+# text also carries a Permission denied line must still be host_key_mismatch.
+if mutate hk-m5-perm-first "$SCRIPT" 1 's#^  if \[ "\$1" = 124 \]; then echo "failed timeout"$#&\n  elif grep -qF "Host key verification failed" <<< "$t"; then echo "failed auth_refused"#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m5-perm-first case_hk_changed
+fi
+# HK-M6 — the unknown pattern loses its line anchor: a banner line naming the phrase picks it.
+if mutate hk-m6-unknown-unanchored "$SCRIPT" 2 "s#grep -qE '\\^No \\[A-Za-z0-9-\\]#grep -qE 'No [A-Za-z0-9-]#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m6-unknown-unanchored case_hk_midline
+fi
+# HK-M7 — the unknown branch no longer requires ssh's own exit code 255.
+if mutate hk-m7-unknown-no-rc-gate "$SCRIPT" 2 's#^  elif \[ "\$1" = 255 \] && (grep -qE .\^No )#  elif \1#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m7-unknown-no-rc-gate case_hk_rc1_unknown
+fi
+# HK-M8 — the alg branch no longer requires ssh's own exit code 255.
+if mutate hk-m8-alg-no-rc-gate "$SCRIPT" 2 's#^  elif \[ "\$1" = 255 \] && (grep -qE .\^Unable to negotiate)#  elif \1#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m8-alg-no-rc-gate case_hk_rc1_alg
+fi
+# HK-M9 — the alg pattern loses its line anchor.
+if mutate hk-m9-alg-unanchored "$SCRIPT" 2 "s#grep -qE '\\^Unable to negotiate#grep -qE 'Unable to negotiate#"; then
+  CASE_SCRIPT="$MUTANT" mutant_red hk-m9-alg-unanchored case_hk_midline
+fi
+
 # Fence (#8101) mutants. M6 and M9 were cut in plan review; the rows below follow the review round.
 # M1 — own dispatch: the probe is never called.
 if mutate f-m1-no-call "$SCRIPT" 1 '/^  refuse_if_fence_not_intact$/d'; then
@@ -1554,7 +1742,7 @@ fi
 }
 
 # ── RUNTIME ARM — real OpenSSH (pinned ubuntu:24.04) ─────────────────────────────────
-RUNTIME_ROWS=22
+RUNTIME_ROWS=26
 _runtime_skip() {
   if [ "${CI:-}" = "true" ]; then
     fail "runtime arm: $1 — and CI=true, so this is a FAILURE: the runner must provide docker"
@@ -1571,6 +1759,11 @@ else
   cp "$SCRIPT" "$T/rt/git-data-cutover.sh" || { printf 'FAIL SETUP: cp script\n' >&2; exit 1; }
   cp "$DIR/git-data-transport-wrapper.sh" "$T/rt/wrapper.sh" || { printf 'FAIL SETUP: cp wrapper\n' >&2; exit 1; }
   if [ -s "$T/steps/ssh_config.sh" ]; then cp "$T/steps/ssh_config.sh" "$T/rt/sshcfg.sh"; else : > "$T/rt/sshcfg.sh"; fi
+  cp "$WKH" "$T/rt/wkh.sh" || { printf 'FAIL SETUP: cp write-known-hosts.sh\n' >&2; exit 1; }
+  # The bridge's exported WEB_HOST_SSH (captured by the BR rows); the plan-D3 literal if the
+  # decode step could not be run (the BR rows then already fail).
+  if grep -q '@KEY@' "$T/bridge-inv.tmpl" 2>/dev/null && grep -q '@KH@' "$T/bridge-inv.tmpl"; then cp "$T/bridge-inv.tmpl" "$T/rt/web-inv.tmpl"
+  else printf '%s\n' 'ssh -F /dev/null -i @KEY@ -o StrictHostKeyChecking=yes -o UserKnownHostsFile=@KH@ -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root' > "$T/rt/web-inv.tmpl"; fi
   cat > "$T/rt/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
@@ -1578,6 +1771,23 @@ apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq openssh-server open
 mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh
 ssh-keygen -A >/dev/null 2>&1
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k && cp /tmp/k.pub /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+# Host-key pins (#7226): every sshd here serves the container's own host keys. The web-1 pin is
+# its ECDSA key in the committed file's shape (a header comment, then the key line); the git-data
+# pin is its ED25519 key, as the flag precheck writes it. The workflow's writer runs from a
+# GITHUB_WORKSPACE-shaped tree, exactly as the ssh_config step calls it.
+mkdir -p /ws/.github/actions/cf-tunnel-ssh-bridge /ws/apps/web-platform/infra
+install -m 755 /work/wkh.sh /ws/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh
+{ echo '# fixture: container ECDSA host key'; cut -d' ' -f1,2 /etc/ssh/ssh_host_ecdsa_key.pub; } > /ws/apps/web-platform/infra/web-1-ssh-host-key.pub
+cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub > /tmp/gd.pin
+bash /work/wkh.sh web-1 /ws/apps/web-platform/infra/web-1-ssh-host-key.pub /tmp/web.kh >/dev/null || { echo FIXTURE_PIN_FAILED; exit 101; }
+ssh-keygen -q -t ecdsa -b 256 -N '' -f /tmp/other-ecdsa && ssh-keygen -q -t ed25519 -N '' -f /tmp/other-ed25519
+cut -d' ' -f1,2 /tmp/other-ecdsa.pub > /tmp/other-ecdsa.pin
+bash /work/wkh.sh web-1 /tmp/other-ecdsa.pin /tmp/web-wrong.kh >/dev/null || { echo FIXTURE_PIN_FAILED; exit 101; }
+: > /tmp/web-empty.kh
+cut -d' ' -f1,2 /tmp/other-ed25519.pub > /tmp/gd-wrong.pin
+# pinned_web <keyfile> <known_hosts> [ssh args...] — the bridge's exported bash-mode WEB_HOST_SSH
+# (the BR rows capture it from action.yml's decode step), with this fixture's key and known_hosts.
+pinned_web() { local k="$1" kh="$2" t; shift 2; t="$(cat /work/web-inv.tmpl)"; t="${t//@KEY@/$k}"; printf '%s%s' "${t//@KH@/$kh}" "${*:+ $*}"; }
 sshd_on() { # addr port extra-option...
   local a="$1" p="$2"; shift 2
   # stdout/stderr to /dev/null: a backgrounded child holding the $(...) pipe open makes the
@@ -1587,21 +1797,26 @@ sshd_on() { # addr port extra-option...
 }
 WEB_OK=$(sshd_on 127.0.0.1 2201)
 WEB_NOFWD=$(sshd_on 127.0.0.1 2202 -o AllowTcpForwarding=no)
+# Serves ONLY its ED25519 host key: a client pinned to ECDSA cannot negotiate (H4 reason=alg).
+WEB_EDONLY=$(sshd_on 127.0.0.1 2203 -o HostKey=/etc/ssh/ssh_host_ed25519_key)
 GD=$(sshd_on 127.0.0.2 22)
 sleep 1
 echo FIXTURE_OK
 row() { printf '%s=%s\n' "$1" "$2" >> /out/rows; }
-drive() { # label web-port
+drive() { # label web-port [known_hosts]
   local s e rc
   s=$(date +%s)
   env -i PATH=/usr/sbin:/usr/bin:/bin HOME=/root WEB_HOSTS=127.0.0.1 GIT_DATA_HOST=127.0.0.2 \
-    WEB_HOST_SSH="ssh -i /tmp/k -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -p $2 -l root" \
+    WEB_HOST_SSH="$(pinned_web /tmp/k "${3:-/tmp/web.kh}" -p "$2")" \
     bash /work/git-data-cutover.sh > "/out/$1.out" 2>&1
   rc=$?; e=$(date +%s)
   row "$1_rc" "$rc"; row "$1_elapsed" "$((e - s))"
 }
 drive r1 2201
 drive r2 2202
+drive rhkc 2201 /tmp/web-wrong.kh
+drive rhku 2201 /tmp/web-empty.kh
+drive rhka 2203
 kill "$GD"; wait "$GD" 2>/dev/null
 drive r3 2201
 ( while :; do printf 'HTTP/1.0 400 Bad Request\r\n\r\n' | nc -N -l 127.0.0.2 22 >/dev/null 2>&1; done ) >/dev/null 2>&1 &
@@ -1615,7 +1830,7 @@ done
 row r4_listening "$listening"
 sleep 1
 drive r4 2201
-kill "$WEB_OK" "$WEB_NOFWD" 2>/dev/null
+kill "$WEB_OK" "$WEB_NOFWD" "$WEB_EDONLY" 2>/dev/null
 
 # ── The workflow's own ssh_config, end to end: web-1 (10.0.1.10) authorizes ONLY the CI key,
 # git-data (10.0.1.20) ONLY the root key, and a root session's PATH (/usr/local/sbin first) finds a
@@ -1654,22 +1869,28 @@ W1=$(sshd_on 10.0.1.10 22 -o AuthorizedKeysFile=/etc/ssh/ak-web)
 G1=$(sshd_on 10.0.1.20 22 -o AuthorizedKeysFile=/etc/ssh/ak-gd)
 sleep 1
 install -m 600 /tmp/gdroot /rt/gd-root-key
-env -i PATH=/usr/bin:/bin HOME=/root RUNNER_TEMP=/rt CI_SSH_KEYFILE=/tmp/ci bash --noprofile --norc -eo pipefail /work/sshcfg.sh > /out/sshcfg.out 2>&1
+cp /tmp/gd.pin /rt/git-data.pin
+env -i PATH=/usr/bin:/bin HOME=/root RUNNER_TEMP=/rt GITHUB_WORKSPACE=/ws CI_SSH_KEYFILE=/tmp/ci bash --noprofile --norc -eo pipefail /work/sshcfg.sh > /out/sshcfg.out 2>&1
 row sshcfg_rc "$?"
+# The same writer run with a WRONG git-data pin (another ED25519 key) into a second RUNNER_TEMP.
+mkdir -p /rt2 && install -m 600 /tmp/gdroot /rt2/gd-root-key && cp /tmp/gd-wrong.pin /rt2/git-data.pin
+env -i PATH=/usr/bin:/bin HOME=/root RUNNER_TEMP=/rt2 GITHUB_WORKSPACE=/ws CI_SSH_KEYFILE=/tmp/ci bash --noprofile --norc -eo pipefail /work/sshcfg.sh > /out/sshcfg2.out 2>&1
+row sshcfg2_rc "$?"
 accepted() { grep -c 'Accepted publickey for root' "/tmp/sshd-$1-22.log" 2>/dev/null || true; }
-drive2() { # label
+drive2() { # label [runner-temp]
   local wb gb
   wb=$(accepted 10.0.1.10); gb=$(accepted 10.0.1.20)
   : > /out/remote.log
   env -i PATH=/usr/sbin:/usr/bin:/bin HOME=/root WEB_HOSTS=10.0.1.10 \
-    WEB_HOST_SSH="ssh -i /tmp/ci -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root" \
-    GIT_DATA_SSH="ssh -F /rt/gd-ssh-config" bash /work/git-data-cutover.sh > "/out/$1.out" 2>&1
+    WEB_HOST_SSH="$(pinned_web /tmp/ci /tmp/web.kh)" \
+    GIT_DATA_SSH="ssh -F ${2:-/rt}/gd-ssh-config" bash /work/git-data-cutover.sh > "/out/$1.out" 2>&1
   row "$1_rc" "$?"
   row "$1_web_accepted" "$(( $(accepted 10.0.1.10) - wb ))"; row "$1_gd_accepted" "$(( $(accepted 10.0.1.20) - gb ))"
   cp /out/remote.log "/out/$1.remote"
 }
 printf '/dev/sdb\n' > /fixture/findmnt.out; echo 0 > /fixture/findmnt.rc; rm -rf /mnt/git-data; mkdir -p /mnt/git-data/repositories; plant_fence
 drive2 r5
+drive2 rhkg /rt2
 mkdir -p /mnt/git-data/repositories/ws-1.git
 drive2 r6
 printf '/dev/mapper/git-data\n' > /fixture/findmnt.out; rm -rf /mnt/git-data
@@ -1705,6 +1926,7 @@ DRV
   _cname="gdc-access-$$-${RANDOM}"
   timeout -k 10 480 docker run --rm --cap-add NET_ADMIN --name "$_cname" -v "$T/rt/drive.sh:/work/drive.sh:ro" \
     -v "$T/rt/git-data-cutover.sh:/work/git-data-cutover.sh:ro" -v "$T/rt/sshcfg.sh:/work/sshcfg.sh:ro" -v "$T/rt/wrapper.sh:/work/wrapper.sh:ro" \
+    -v "$T/rt/wkh.sh:/work/wkh.sh:ro" -v "$T/rt/web-inv.tmpl:/work/web-inv.tmpl:ro" \
     -v "$T/rt/out:/out" "$UBUNTU_BASE" bash /work/drive.sh > "$T/rt/stdout" 2>&1
   DRC=$?
   docker rm -f "$_cname" >/dev/null 2>&1 || true
@@ -1713,24 +1935,37 @@ DRV
     _acc() { grep -qE "^\[git-data-cutover\] ACCESS role=$2 host=[^ ]+ verdict=$3( |$)" "$T/rt/out/$1.out"; }
     _sto() { grep -qE "^\[git-data-cutover\] STORE probe=$2 verdict=$3( |$)" "$T/rt/out/$1.out"; }
     _rctx() { tr '\n' '|' < "$T/rt/out/$1.out" | tail -c 500 | sed 's/::/: :/g'; }
+    # OpenSSH 9.6 logs "Unable to negotiate ..." and "channel N: open failed: ..." at INFO: an
+    # invocation carrying LogLevel=ERROR hides exactly the text these rows classify.
+    _ll_hint() { grep -q 'LogLevel=ERROR' "$T/rt/web-inv.tmpl" && printf ' (the bridge WEB_HOST_SSH carries -o LogLevel=ERROR, which suppresses this INFO-level ssh text)'; }
     { [ "$(_rv r1_rc)" = 3 ] && _acc r1 web ok; } && pass "R1a: real sshd — web ok and the run exits 3" || fail "R1a: real-sshd web probe/exit" "rc=$(_rv r1_rc) $(_rctx r1)"
     _acc r1 git-data-jump ok && pass "R1b: real sshd — ssh -W returns the target's SSH-2.0- banner (jump ok, no git-data credential)" || fail "R1b: real-sshd jump not ok" "$(_rctx r1)"
     _acc r1 git-data-auth git_data_root_key_absent && pass "R1c: real sshd — git-data-auth verdict=git_data_root_key_absent" || fail "R1c: real-sshd auth verdict" "$(_rctx r1)"
     _el="$(_rv r1_elapsed)"
     { [ -n "$_el" ] && [ "$_el" -lt 20 ]; } && pass "R1d: the canonical gate finished in ${_el}s (< 20s; the jump's own bound is 25s)" || fail "R1d: the gate took ${_el:-?}s (>= 20s)" "$(_rctx r1)"
     { [ "$(_rv r2_rc)" = 3 ] && grep -qE 'role=git-data-jump host=[^ ]+ verdict=failed rc=[0-9]+ reason=forward_refused$' "$T/rt/out/r2.out"; } \
-      && pass "R2a: AllowTcpForwarding no — jump failed reason=forward_refused, exit 3" || fail "R2a: forwarding-refused jump not failed/forward_refused" "$(_rctx r2)"
+      && pass "R2a: AllowTcpForwarding no — jump failed reason=forward_refused, exit 3" || fail "R2a: forwarding-refused jump not failed/forward_refused$(_ll_hint)" "$(_rctx r2)"
     grep -qxF '[git-data-cutover] probe-stderr: channel 0: open failed: administratively prohibited: open failed' "$T/rt/out/r2.out" \
-      && pass "R2b: the real refusal stderr matches the unit rows' fixture text" || fail "R2b: real refusal stderr differs from the fixture" "$(_rctx r2)"
+      && pass "R2b: the real refusal stderr matches the unit rows' fixture text" || fail "R2b: real refusal stderr differs from the fixture$(_ll_hint)" "$(_rctx r2)"
     { [ "$(_rv r3_rc)" = 3 ] && grep -qE 'role=git-data-jump host=[^ ]+ verdict=failed rc=[0-9]+ reason=connect_refused$' "$T/rt/out/r3.out"; } \
-      && pass "R3: git-data sshd stopped — jump failed reason=connect_refused" || fail "R3: stopped target not failed/connect_refused" "$(_rctx r3)"
+      && pass "R3: git-data sshd stopped — jump failed reason=connect_refused" || fail "R3: stopped target not failed/connect_refused$(_ll_hint)" "$(_rctx r3)"
     [ "$(_rv r4_listening)" = 1 ] && pass "R4a: the non-SSH listener was bound before the probe (R4b is not a refused connect)" || fail "R4a: the non-SSH listener never bound" "$(_rctx r4)"
     { [ "$(_rv r4_rc)" = 3 ] && _acc r4 git-data-jump failed && ! grep -q 'connect failed' "$T/rt/out/r4.out"; } \
       && pass "R4b (negative control): a non-SSH listener is jump failed — the banner rule can fail" || fail "R4b: a non-SSH listener was accepted as a banner, or was never reached" "$(_rctx r4)"
+    { [ "$(_rv rhkc_rc)" = 3 ] && grep -qE '^\[git-data-cutover\] ACCESS role=web host=127\.0\.0\.1 verdict=host_key_mismatch rc=255 reason=changed$' "$T/rt/out/rhkc.out"; } \
+      && pass "RHK1: real OpenSSH, web-1 pinned to ANOTHER ECDSA key -> role=web verdict=host_key_mismatch reason=changed, exit 3" || fail "RHK1: a wrong web-1 pin was not host_key_mismatch reason=changed" "rc=$(_rv rhkc_rc) $(_rctx rhkc)"
+    { [ "$(_rv rhku_rc)" = 3 ] && grep -qE '^\[git-data-cutover\] ACCESS role=web host=127\.0\.0\.1 verdict=host_key_mismatch rc=255 reason=unknown$' "$T/rt/out/rhku.out"; } \
+      && pass "RHK2: real OpenSSH, an EMPTY known_hosts -> reason=unknown (never trusted on first use)" || fail "RHK2: an empty known_hosts was not host_key_mismatch reason=unknown" "rc=$(_rv rhku_rc) $(_rctx rhku)"
+    { [ "$(_rv rhka_rc)" = 3 ] && grep -qE '^\[git-data-cutover\] ACCESS role=web host=127\.0\.0\.1 verdict=host_key_mismatch rc=255 reason=alg$' "$T/rt/out/rhka.out"; } \
+      && pass "RHK3: real OpenSSH, an sshd serving only ED25519 to a client pinned to ECDSA -> reason=alg" || fail "RHK3: an algorithm mismatch was not host_key_mismatch reason=alg$(_ll_hint)" "rc=$(_rv rhka_rc) $(_rctx rhka)"
+    { [ "$(_rv sshcfg2_rc)" = 0 ] && [ "$(_rv rhkg_rc)" = 3 ] && _acc rhkg web ok && _acc rhkg git-data-jump ok \
+      && grep -qE '^\[git-data-cutover\] ACCESS role=git-data-auth host=10\.0\.1\.20 verdict=host_key_mismatch rc=255 reason=changed$' "$T/rt/out/rhkg.out" \
+      && [ "$(_rv rhkg_gd_accepted)" = 0 ]; } \
+      && pass "RHK4: the workflow's ssh_config with a WRONG git-data pin -> web ok, jump ok, git-data-auth host_key_mismatch reason=changed, and git-data never saw the root key" || fail "RHK4: a wrong git-data pin was not refused at git-data-auth" "sshcfg2=$(_rv sshcfg2_rc) rc=$(_rv rhkg_rc) gd=$(_rv rhkg_gd_accepted) $(_rctx rhkg)"
     { [ "$(_rv ip_ok)" = 1 ] && [ "$(_rv sshcfg_rc)" = 0 ]; } \
       && pass "R5-fixture: 10.0.1.10/10.0.1.20 bound in the container and the workflow's ssh_config writer ran (rc 0)" || fail "R5-fixture: address binding or the ssh_config writer failed" "ip=$(_rv ip_ok) sshcfg=$(_rv sshcfg_rc) $(tr '\n' '|' < "$T/rt/out/sshcfg.out" 2>/dev/null | sed 's/::/: :/g')"
     { [ "$(_rv r5_rc)" = 0 ] && _acc r5 web ok && _acc r5 git-data-jump ok && _acc r5 git-data-auth ok && _sto r5 store-mounted ok && _sto r5 store-not-cut-over ok && _sto r5 store-empty ok && _sto r5 fence-shape ok; } \
-      && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config — access ok x3, store probes ok x3, fence ok on a real root:git 0750 tree, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
+      && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config, BOTH hops strictly pinned — access ok x3, store probes ok x3, fence ok on a real root:git 0750 tree, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
     [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -no SOURCE /mnt/git-data
 findmnt -no SOURCE -T /mnt/git-data/repositories
 find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf .
@@ -1757,6 +1992,9 @@ findmnt -no SOURCE -T /mnt/git-data/hooks/pre-receive" ] \
       && pass "RF17: a real git user that cannot traverse /mnt (root still can) -> reason=hook_not_runnable_by_git" || fail "RF17: a hook the git user cannot reach was accepted" "rc=$(_rv rf17_rc) $(_rctx rf17)"
     { [ "$(_rv rf18_rc)" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=fence-shape verdict=fence_not_intact reason=transport_pin_mismatch' "$T/rt/out/rf18.out"; } \
       && pass "RF18: the REAL transport wrapper, installed without its command-line pin -> reason=transport_pin_mismatch (R5a proves the unmodified wrapper satisfies the probe)" || fail "RF18: a wrapper without its pin was accepted" "rc=$(_rv rf18_rc) $(_rctx rf18)"
+  elif grep -qx FIXTURE_PIN_FAILED "$T/rt/stdout"; then
+    fail "runtime arm: the fixture host-key pins could not be written by write-known-hosts.sh" "$(tail -5 "$T/rt/stdout" | tr '\n' ' ' | sed 's/::/: :/g')"
+    SKIPPED=$((SKIPPED + RUNTIME_ROWS - 1))
   elif grep -qx FIXTURE_APT_FAILED "$T/rt/stdout" || [ "$DRC" = 125 ]; then
     _runtime_skip "container did not reach the fixture (docker rc=$DRC): $(tail -2 "$T/rt/stdout" | tr '\n' ' ')"
   else
@@ -1768,22 +2006,27 @@ fi
 # ── FLOOR + LEDGER (ADR-193: reported with printf + exit, never through pass()/fail()) ─────
 # MUTANT_FLOOR = the matrix rows this suite owns: Guard 2 x4, Guard 5 x4, Guard 6 (cutover half) x1,
 # Guard 7 x3, C1 (transport vs store state) x1, C3 (count on the accepted source) x2, C7 (step
-# gating + executed teardown) x4, Fence (#8101: M1-M5, M4b, M7, M8, M10-M18, M13b, harness H-a) x19 = 38.
+# gating + executed teardown) x4, Fence (#8101: M1-M5, M4b, M7, M8, M10-M18, M13b, harness H-a) x19,
+# H4 host identity (#7226: HK-M1..HK-M5) x5, H4 review rows (anchor + exit-255 on the No/Unable
+# branches) x4 = 47.
 # Guard 3's four rows moved with the census to tests/scripts/test-git-data-root-token-census.sh.
-MUTANT_FLOOR=38
+MUTANT_FLOOR=47
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
-# Assertion FLOOR, restated after the #8189 review (the census moved out; C1/C3/C7 rows added).
-# Measured, by section: script unit rows 114 (access gate, AC2, Guard 2 incl. S4d/S7e/S7f/S7g,
+# Assertion FLOOR, restated after the #8189 review (the census moved out; C1/C3/C7 rows added) and
+# the #7226 host-key pin (H4 rows HK1-HK11, pinned bridge/ssh_config rows, RHK1-RHK4).
+# Measured, by section: script unit rows 125 (access gate, AC2, Guard 2 incl. S4d/S7e/S7f/S7g,
 # Guard 5, Guard 7 = 66, plus the #8101 fence probe = 48: canned F2-F7d 9 + annotation 1 + F8/F8b/F9 3
 # + F10 x3 3 + executed F11-F14 incl. F12b/F12c 6 + FX0 1 + FX rows 12 + FX18/FX18b 2 + F15 1 + FSRC 1
-# + F16 1 + F16b 6 + P1 1 + P2 1); bridge export set 6; workflow YAML 31 (incl. WF-gating); executed
-# workflow steps 18 (key fetch 8, ssh_config 6, secrets check 3, teardown 1); mutants 38 x 2 = 76;
-# runtime 22 (incl. RF2, RFSRC, RFINC, RF17, RF18).
-# Total 267 — exact, not a margin: removing an assertion on purpose costs one edit here.
-FLOOR=267
+# + F16 1 + F16b 6 + P1 1 + P2 1, plus H4 HK1-HK11 = 11); bridge export set 8 (incl. the web-1
+# known_hosts x2); workflow YAML 31 (incl. WF-gating); executed workflow steps 21 (key fetch 8,
+# ssh_config 9 incl. SC7-SC9, secrets check 3, teardown 1); mutants 43 x 2 = 86;
+# runtime 26 (incl. RF2, RFSRC, RFINC, RF17, RF18, RHK1-RHK4).
+# Review round (#7226): HK7b/HK7c + the hostile-banner mid-line row, and 4 new mutants (x2) = +10.
+# Total 307 — exact, not a margin: removing an assertion on purpose costs one edit here.
+FLOOR=307
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
