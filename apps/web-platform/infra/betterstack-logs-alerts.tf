@@ -286,3 +286,136 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #8408 (a): the registry store is not on LUKS, or its escrow is not proven ───────────────────
+#
+# WHAT IT DETECTS. The registry host's */5 SOLEUR_ZOT_DISK heartbeat (a direct POST to this same
+# source — zot-registry.tf's `betterstack_logs_ingest_url` is s2457081, which IS
+# local.vector_prd_source_id) carries two store fields in its TRUSTED HEAD, everything before
+# ` zot_last_err=` (the free-text tail, emitted last; scripts/lib/zot-telemetry-parse.sh cuts there):
+#   (A) `store_luks=yes ` absent from the head — the store is off the LUKS mapper after a replace,
+#       a reboot, or a boot that took the wrong arm. zot is then serving from plaintext.
+#   (B) `store_escrow=<token>` present in the head with any value other than `ok` — the daily
+#       re-test says the next reboot may not be able to reopen the store (fail_passphrase,
+#       fail_header, fail_key_absent), or the re-test itself stopped measuring (stale, none,
+#       indeterminate, __UNREADABLE__). "Anything but ok" is deliberate: a fail-only arm leaves a
+#       dead escrow job silent, which is exactly how it would rot. The one other quiet token is
+#       `pending`: the heartbeat writes it only while no result exists yet AND uptime < 2 h (the
+#       first-boot run is deferred 15 min); after 2 h an absent result reads `none`, which pages.
+#
+# WHY IT SHIPS UNPAUSED AT MERGE. Every live row today carries `store_luks=yes ` (measured below),
+# and rows that predate the escrow field carry no `store_escrow=` at all, so arm (B) cannot fire on
+# them. The rule is quiet from the moment it exists.
+#
+# HEAD-SCOPING. Each arm compares a position against ` zot_last_err=` exactly once, so tail text
+# (zot's own log line, attacker-influenced) can neither satisfy nor suppress either arm:
+#   (A) a `store_luks=yes ` that first appears in the tail is past the cut, so the row still fires;
+#   (B) the FIRST `store_escrow=` in the row is the head field (the emitter writes it before
+#       ` host=`), and the row is quiet only if a `store_escrow=ok ` starts at that same position.
+#   The envelope conjunct is the direct-POST shape `zot_envelope_anchor` uses: a Vector-shipped
+#   journald row that merely QUOTES the marker starts `{"PRIORITY":…` and cannot match.
+#
+# LIVE-PROBED 2026-09-21 against the ClickHouse table (hot remote() UNION ALL s3Cluster archive),
+# 24h window, the predicate below verbatim:
+#   envelope rows (startsWith only)                              -> 288 (24h x 12/h: every heartbeat)
+#   (i)   as written                                             -> 0   (quiet on the live fleet)
+#   (ii)  'store_luks=yes ' -> 'store_luks=nope '                -> 288 (positive control: arm A is live)
+#   (iii) arm-B presence 'store_escrow=' -> 'store_luks='        -> 288 (arm B is live SQL, not dead syntax)
+#   (iv)  (iii) plus 'store_escrow=ok ' -> 'store_luks=yes ', arm A forced false
+#                                                                -> 0   (arm B's ok-negation suppresses)
+#   (v)   2026-09-21, hot table only (remote(), 24h), AFTER the `pending` conjunct was added:
+#         envelope 119, as written 0, arm-A positive control 119, rows carrying store_escrow= 0.
+#         So arm B is not yet exercisable live: no delivered heartbeat carries the field until the
+#         next registry replace. (iii)/(iv) above are its evidence that the SQL is live.
+#
+# NO BOOT GRACE FOR ARM A. On the last registry replace boot (b3ec6c3b) 342 of 342 heartbeat rows
+# read `store_luks=yes ` and none read `absent`: the mapper is open before the first heartbeat, so
+# arm A needs no uptime exemption. `value = 1` still absorbs one transient row.
+#
+# PAGING SEMANTICS. The alert is a per-bucket threshold, and the bucket (`aggregation_interval`,
+# omitted here as in every sibling) is snapped by the API to query_period: measured 2026-09-21 on
+# the two live siblings, 300 -> 300 and 5400 -> 5400. So one 900 s bucket holds up to three
+# heartbeats, and `higher_than 1` pages on >= 2 matching rows in it: a single transient row
+# during a replace (one pre-mount tick on the new boot) does not page, a persistent condition does.
+locals {
+  registry_store_not_luks_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND startsWith(raw, '{"message":"SOLEUR_ZOT_DISK ')
+      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_ZOT_DISK ') = 1
+      AND (
+        NOT (position(JSONExtractString(raw, 'message'), 'store_luks=yes ') > 0
+          AND position(JSONExtractString(raw, 'message'), 'store_luks=yes ') < position(JSONExtractString(raw, 'message'), ' zot_last_err='))
+        OR (position(JSONExtractString(raw, 'message'), 'store_escrow=') > 0
+          AND position(JSONExtractString(raw, 'message'), 'store_escrow=') < position(JSONExtractString(raw, 'message'), ' zot_last_err=')
+          AND position(JSONExtractString(raw, 'message'), 'store_escrow=ok ') != position(JSONExtractString(raw, 'message'), 'store_escrow=')
+          AND position(JSONExtractString(raw, 'message'), 'store_escrow=pending ') != position(JSONExtractString(raw, 'message'), 'store_escrow='))
+      )
+    GROUP BY time
+  SQL
+
+  registry_store_not_luks_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md"
+}
+
+resource "logtail_exploration" "registry_store_not_luks" {
+  name      = "soleur-registry-store-not-luks-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.registry_store_not_luks_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "registry_store_not_luks" {
+  exploration_id = logtail_exploration.registry_store_not_luks.id
+  name           = "soleur-registry-store-not-luks-prd"
+
+  # The heartbeat is */5, so a 900 s window covers three emissions; see PAGING SEMANTICS above
+  # for why value = 1 means ">= 2 matching rows". recovery_period covers two windows, so one good
+  # bucket does not close an incident the next would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 1
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 1800
+  # A count query with no rows returns NO bucket, which must read as healthy (0) so an open
+  # incident can observe recovery. Silence is NOT this rule's job: zot not running is
+  # betteruptime_heartbeat.registry_prd's (zot-registry.tf), and SOLEUR_ZOT_DISK itself going dark
+  # is scheduled-zot-restart-loop.yml's (scripts/zot-restart-loop-alarm.sh, its SILENT and
+  # INGEST_DARK verdicts).
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The registry host's SOLEUR_ZOT_DISK heartbeat says its zot store is NOT on the LUKS mapper (store_luks is not yes), or the daily escrow re-test is not ok (store_escrow is fail_*, stale, none or indeterminate). Runbook: ${local.registry_store_not_luks_runbook_url}"
+  metadata = {
+    runbook = local.registry_store_not_luks_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

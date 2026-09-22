@@ -327,3 +327,47 @@ exists.
 | Wrong-volume alert | `apps/web-platform/infra/betterstack-logs-alerts.tf` (ships paused; armed post-cutover) |
 | Runbook | `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` |
 | Backstop retirement | #8285 (expires 2026-10-22) |
+
+## Amendment — 2026-09-21 (#8296): the cutover ran, and apparatus scope item 8 named the wrong row
+
+Appended, not edited. Nothing above is changed.
+
+### The cutover was observed
+
+The additive cutover described in the 2026-09-18 amendment ran on 2026-09-20. The terminal
+`SOLEUR_INNGEST_LUKS_CUTOVER` row landed at 15:29:10Z (`reason=cutover-complete`, `flag=done`,
+`phase=swapped`, `exit_code=0`, `k_freeze=1366`, `e_freeze=1355`). The first post-cutover
+`SOLEUR_INNGEST_SERVER_PROBE` row from `host_role=dedicated`, at 15:36:40Z, reads
+`data_mount_src=/dev/mapper/inngest-redis`, `data_mount_devid=scsi-0HC_Volume_106903269`,
+`redis_active`, 1437 keys. The store now lives on `hcloud_volume.inngest_redis_luks`.
+`hcloud_volume.inngest_redis` is attached and intact as the plaintext rollback backstop, retired
+under #8285 (expires 2026-10-22).
+
+The record followed the detector, not the other way round. PR-1 of #8296 armed
+`logtail_exploration_alert.inngest_luks_wrong_volume` on the push apply of `b53173a04`
+(run 35605929787), and the alert read back `paused=false` at 2026-09-21T14:18:56Z. Only after
+that did PR-2 flip the ledger.
+
+### Correction: apparatus scope item 8
+
+Item 8 of "Apparatus scope for the code-only PR" says to flip `hcloud_volume.inngest_redis`'s
+`mechanism` to `luks` and add a backstop exception row for the old volume. That is the opposite of
+what the 2026-09-18 amendment requires, and it would have recorded the plaintext backstop as
+encrypted. The additive route never encrypts `hcloud_volume.inngest_redis`; it copies the store onto
+a second volume. So the row that flips is **`hcloud_volume.inngest_redis_luks`**, and
+`hcloud_volume.inngest_redis` keeps `mechanism: plaintext-exception` and is rewritten as the
+retained backstop, with its `expires_on` unmoved. PR-2 of #8296 did exactly that. Read item 8
+through this correction.
+
+### What this amendment does NOT change
+
+The decision, and the status. The ledger row keeps `live_verification` at `unavailable:`: the probe
+row proves which device backs `/mnt/data`, not that it is crypto_LUKS.
+
+Two earlier lines of this ADR now read through this amendment. The Status paragraph's "Supersedes the
+`plaintext-exception` for `hcloud_volume.inngest_redis`" is wrong for the same reason as item 8:
+that row keeps its exception as the backstop, and it is the sibling row whose exception went away.
+The "Where it lives" row's "(ships paused; armed post-cutover)" is still true as history: the alert
+did ship paused and was armed after the cutover (ADR-218, 2026-09-21 amendment). One known gap in
+that detector is open: a probe pipeline that goes silent reads as healthy (`treat_as_zero`), tracked
+in #8516.
