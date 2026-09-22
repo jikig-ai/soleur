@@ -61,7 +61,21 @@ FORMATS = {
     "pretty_nohash": lambda o, txt: json.dumps(nohash(o), indent=2, ensure_ascii=False) + "\n",
     "sorted_nohash": lambda o, txt: json.dumps(nohash(o), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
     "flat_nohash": lambda o, txt: json.dumps(nohash(o), indent=0, ensure_ascii=False) + "\n",
+    # The REAL shipped module, via its CLI (plugins/soleur/lib/c4-canonical-cli.mjs).
+    "canonical": lambda o, txt: real_canonical(txt),
 }
+
+CANON_CLI = os.path.join(REPO, "plugins/soleur/lib/c4-canonical-cli.mjs")
+
+def real_canonical(txt):
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        f.write(txt)
+        path = f.name
+    try:
+        r = sh("node", CANON_CLI, path)
+        return r.stdout
+    finally:
+        os.unlink(path)
 
 def nohash(o):
     o = json.loads(json.dumps(o))
@@ -106,7 +120,11 @@ for gap in GAPS:
             else:
                 try:
                     want = json.loads(rm)
-                    ok = json.loads(out) == (nohash(want) if "nohash" in name else want)
+                    got = json.loads(out)
+                    if name == "canonical":
+                        ok = got == json.loads(real_canonical(rm))
+                    else:
+                        ok = got == (nohash(want) if "nohash" in name else want)
                 except json.JSONDecodeError:
                     ok = False
                 row[name] = "CLEAN_CORRECT" if ok else "CLEAN_WRONG"

@@ -207,11 +207,14 @@ The key is kept because the `ViewWithHash` type declares it.
 - Real concurrent pairs whose `.c4` sources merge cleanly: 0/152 merge today, 107/152 in the
   canonical format.
 - No merge is clean but wrong: every clean merge equals a fresh render of the merged sources.
-- Pretty-printing alone, without blanking the hash, fixes only 4/105.
-- The remaining conflicts are true overlaps: both sides moved the same Graphviz coordinates in a
-  shared view (`containers`, `index`), or set the same relation's title differently. No text
-  format can merge those correctly, so they still route through
-  `resolve-regenerable-conflicts.sh`. `RESOLVABLE_PATHS` is unchanged.
+- Pretty-printing alone, without blanking the hash, fixes only 7/152.
+- The 45 remaining conflicts still route through `resolve-regenerable-conflicts.sh`, and
+  `RESOLVABLE_PATHS` is unchanged:
+  - 43 are true overlaps. Both sides moved the same Graphviz coordinates in a shared view
+    (`containers`, `index`), or set the same relation's title differently. No text format can
+    merge those correctly.
+  - 2 are adjacency conflicts: no value differs on both sides, but the edits sit on neighbouring
+    lines.
 
 **Three writers, one module.**
 

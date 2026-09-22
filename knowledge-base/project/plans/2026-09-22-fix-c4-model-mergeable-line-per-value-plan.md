@@ -370,7 +370,7 @@ covered by `c4-likec4-version-pin.test.ts`, which now includes the plugin consta
 | 3 | `regenerate-c4-model.sh` publishes `$TMP/model.likec4.json` AND the committed artifact is regenerated raw in the same diff | The freshness `--check` row (the byte cmp alone stays green) |
 | 4 | `generate-c4-from-components.ts` skips canonicalize | The `c4-from-components.test.sh` end-to-end `--check` row |
 | 5 | `canonicalizeC4Model` blanks only the FIRST view's hash | The bun "every view blank" row (≥ 2 views) |
-| 6 | The plugin `LIKEC4_VERSION` bumped to 1.50.1 alone | The `c4-likec4-version-pin.test.ts` row |
+| 6 | The plugin `LIKEC4_VERSION` bumped to 1.50.1 alone | The `c4-from-components.test.ts` drift guard (at work time, the plugin constant turned out to be pinned there already, against `regenerate-c4-model.sh`, so the version-pin test needed no edit) |
 
 **Harness rows.**
 
