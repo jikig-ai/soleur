@@ -2240,6 +2240,12 @@ if want_scripts; then
   # (exit 0 would auto-close the issue). Explicit run_suite —
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
+  # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
+  # logic behind scheduled-actions-queue-health.yml — live queue depth +
+  # delivered-vs-entitled concurrency + median live queued age ->
+  # HEALTHY/SATURATED/UNDER_ASSIGNED/UNKNOWN. Explicit run_suite —
+  # scripts/*.test.sh is covered by no glob here.
+  run_suite "scripts/actions-queue-health" bash scripts/actions-queue-health.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
