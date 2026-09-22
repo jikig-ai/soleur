@@ -1329,6 +1329,13 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // class as every git-data sibling above.
   "doppler_secret.git_data_ssh_host",
   "doppler_secret.git_data_betterstack_logs_token",
+  // (#7226, ADR-237) The git-data SSH HOST key and its published pin (GIT_DATA_SSH_HOST_KEY).
+  // They rotate WITH the host: the replace job -replace's the key and -targets the pin, the
+  // birth job -targets both. A per-PR -target on either would publish a pin the live host does
+  // not carry (plan R1), so both are exclusions and Guard 4 below asserts neither is on the
+  // per-PR list.
+  "tls_private_key.git_data_host_ssh",
+  "doppler_secret.git_data_ssh_host_key",
   // #6588 (ADR-119) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's `workspaces-luks-cutover` dispatch
   // apply, NOT the #5566 per-PR-CI class. Same class as hcloud_volume.workspaces +
@@ -1980,8 +1987,12 @@ const GIT_DATA_REPLACE_TARGETS = [
   "hcloud_volume_attachment.git_data",
   "hcloud_volume_attachment.git_data_luks",
   "hcloud_firewall_attachment.git_data",
+  // (#7226, ADR-237) The pin is re-published by the replace that rotates the key.
+  "doppler_secret.git_data_ssh_host_key",
 ];
-const GIT_DATA_REPLACE_REPLACE = "hcloud_server.git_data";
+// (#7226, ADR-237) The replace rotates the SSH host key in LOCKSTEP with the host: dropping the
+// key's -replace re-uses a key a rooted host could have exfiltrated (ADR-220 D6).
+const GIT_DATA_REPLACE_REPLACES = ["hcloud_server.git_data", "tls_private_key.git_data_host_ssh"];
 // The two data volumes preserved by OMISSION — asserted ABSENT from the -target set.
 const GIT_DATA_PRESERVED_VOLUMES = [
   "hcloud_volume.git_data",
@@ -2000,17 +2011,17 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
     replaceAddrs = extractReplaceAddrs(gitDataJobBlock);
   });
 
-  test("the git_data_host_replace job -targets EXACTLY the 5 git-data-replace resources", () => {
+  test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources (5 + the host-key pin)", () => {
     expect([...gitDataTargets].sort()).toEqual(
       [...GIT_DATA_REPLACE_TARGETS].sort(),
     );
   });
 
-  test("the -replace address is EXACTLY the git-data server", () => {
-    expect(replaceAddrs).toEqual([GIT_DATA_REPLACE_REPLACE]);
+  test("the -replace addresses are EXACTLY the git-data server and its SSH host key (lockstep, #7226)", () => {
+    expect([...replaceAddrs].sort()).toEqual([...GIT_DATA_REPLACE_REPLACES].sort());
   });
 
-  test("the target set EXACTLY equals the gate's 5-member allow-set (job↔gate parity)", () => {
+  test("the -target ∪ -replace set EXACTLY equals the gate's allow-set (job↔gate parity)", () => {
     // The load-bearing invariant: the workflow's -target lines must correspond 1:1 to the sourced
     // gate's allow-set. Extract the allow[] array from the gate lib and compare.
     const gateSrc = readFileSync(
@@ -2022,7 +2033,9 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
     const allowMembers = [...allowBlock![1].matchAll(/"([^"]+)"/g)].map(
       (m) => m[1],
     );
-    expect([...allowMembers].sort()).toEqual([...gitDataTargets].sort());
+    expect([...allowMembers].sort()).toEqual(
+      [...new Set([...gitDataTargets, ...replaceAddrs])].sort(),
+    );
   });
 
   test("NEITHER data volume is in the -target set (preserved by omission)", () => {
@@ -2034,7 +2047,7 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
   });
 
   test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
-    for (const t of gitDataTargets) {
+    for (const t of [...gitDataTargets, ...replaceAddrs]) {
       const base = t.replace(/\[.*$/, "");
       expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
     }
@@ -2062,6 +2075,188 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
     for (const addr of GIT_DATA_REPLACE_TARGETS) {
       expect(MOVED_OPERATOR_CONSUMED.has(addr)).toBe(false);
     }
+  });
+});
+
+// ─── (#7226, ADR-237) host-key pinning: the per-PR list, the probe, the redeploy jobs ────
+//
+// Guard 4 row 6: neither git-data pin address may ride the per-PR apply — a routine merge
+// would publish a pin the live host does not carry (plan R1). The merge-time web-1 probe
+// (terraform_data.web_1_host_key_probe) MUST ride it, with the pinned Terraform version fed in,
+// because a Terraform bump can change x/crypto's host-key algorithm order (plan R4) and the
+// probe's trigger folds the version in. And each git-data birth/replace is followed by a
+// secret-free job that forces a web release so the app loads the rotated pin (plan D6).
+const GIT_DATA_PIN_ADDRS = ["tls_private_key.git_data_host_ssh", "doppler_secret.git_data_ssh_host_key"];
+const PIN_REDEPLOY_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/git-data-pin-redeploy.yml");
+// Every workflow that plans/applies the MAIN root (apps/web-platform/infra). Each must feed
+// TF_VAR_terraform_version equal to its own TERRAFORM_VERSION, or web_1_host_key_probe's trigger
+// differs per workflow and the drift job reports a phantom probe replacement.
+const MAIN_ROOT_TF_WORKFLOWS = [
+  "apply-web-platform-infra.yml",
+  "apply-deploy-pipeline-fix.yml",
+  "scheduled-terraform-drift.yml",
+  "infra-validation.yml",
+];
+
+describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const applyJob = extractJobBlock(wf, "apply");
+  const sshApply = extractStep(applyJob, /Terraform apply \(SSH-provisioned resources, over the bridge\)/) ?? "";
+
+  test("the per-PR SSH apply step resolves and targets the web-1 host-key probe", () => {
+    expect(sshApply.length).toBeGreaterThan(0);
+    expect(extractAllTargets(sshApply).has("terraform_data.web_1_host_key_probe")).toBe(true);
+  });
+
+  test("Guard 4 row 6: neither pin address is on ANY per-merge -target list", () => {
+    const perMerge = extractAllTargets(stripDispatchJobs(wf));
+    for (const a of GIT_DATA_PIN_ADDRS) expect(perMerge.has(a)).toBe(false);
+    expect(perMerge.has("terraform_data.web_1_host_key_probe")).toBe(true);
+    // Every OTHER main-root planner too (apply-deploy-pipeline-fix applies per merge; the
+    // drift / validation plans must never grow a -target on a pin address either).
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const t = extractAllTargets(stripDispatchJobs(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")));
+      for (const a of GIT_DATA_PIN_ADDRS) expect([f, a, t.has(a)]).toEqual([f, a, false]);
+    }
+  });
+
+  test("the birth job -targets both pin addresses; the replace job -replace's the key and -targets the pin", () => {
+    const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
+    for (const a of GIT_DATA_PIN_ADDRS) expect(birth.has(a)).toBe(true);
+    const replaceJob = extractJobBlock(wf, "git_data_host_replace");
+    expect(extractReplaceAddrs(replaceJob)).toContain("tls_private_key.git_data_host_ssh");
+    expect(extractAllTargets(replaceJob).has("doppler_secret.git_data_ssh_host_key")).toBe(true);
+  });
+
+  for (const job of ["git_data_host_create", "git_data_host_replace"]) {
+    test(`${job}: prints ONLY a regex-validated SHA256 fingerprint to the summary after apply`, () => {
+      const block = stripComments(extractJobBlock(wf, job));
+      expect(block).toContain("terraform output -raw git_data_ssh_host_key_fingerprint");
+      expect(block).toMatch(/\[\[ "\$fp" =~ \^SHA256:\[A-Za-z0-9\+\/\]\{43\}\$ \]\]; then echo "git-data host key fingerprint: \$fp" >> "\$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: \$fp"; else/);
+    });
+  }
+
+  test("the apply workflow carries NO redeploy job (the poll would hold the fleet-wide apply lock)", () => {
+    const jobs = Object.keys((parseYaml(wf) as { jobs: Record<string, unknown> }).jobs);
+    expect(jobs.filter((j) => /redeploy/.test(j))).toEqual([]);
+    expect(stripComments(wf)).not.toContain("dispatch-web-redeploy");
+  });
+
+  test("every main-root Terraform workflow feeds TF_VAR_terraform_version == its TERRAFORM_VERSION", () => {
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const doc = parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")) as {
+        env?: Record<string, unknown>;
+        jobs?: Record<string, { env?: Record<string, unknown>; steps?: Array<{ name?: string; env?: Record<string, unknown> }> }>;
+      };
+      const env = doc.env ?? {};
+      expect(typeof env.TERRAFORM_VERSION).toBe("string");
+      expect([f, env.TF_VAR_terraform_version]).toEqual([f, env.TERRAFORM_VERSION]);
+      // A job- or step-level env: override of either key to another value would split the
+      // probe trigger per job. Undefined (inherit) is the only other accepted value.
+      for (const [jn, job] of Object.entries(doc.jobs ?? {})) {
+        const scopes: Array<[string, Record<string, unknown> | undefined]> = [[`${f}:${jn}`, job?.env]];
+        for (const [i, st] of (job?.steps ?? []).entries()) scopes.push([`${f}:${jn}:step${i}(${st?.name ?? ""})`, st?.env]);
+        for (const [where, e] of scopes) {
+          for (const k of ["TF_VAR_terraform_version", "TERRAFORM_VERSION"]) {
+            if (e && k in e) expect([where, k, e[k]]).toEqual([where, k, env.TERRAFORM_VERSION]);
+          }
+        }
+      }
+    }
+  });
+
+  test("the main-root workflow census is complete (a new planner cannot skip the variable)", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    // Every spelling of "this workflow runs Terraform in the main root": an INFRA_DIR env, a
+    // static matrix entry, a literal working-directory, or `terraform -chdir=`. Sub-roots
+    // (apps/web-platform/infra/<sub>) do not match: each pattern ends at the root.
+    const MAIN_ROOT_FORMS = [
+      /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /^\s*-\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /working-directory:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /-chdir=["']?apps\/web-platform\/infra(?![\w\/-])/,
+    ];
+    const found = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        const plans = /terraform\s+(-chdir=\S+\s+)?(plan|apply)\b/.test(t);
+        return plans && MAIN_ROOT_FORMS.some((re) => re.test(t));
+      })
+      .sort();
+    // Exact: infra-validation.yml is the one planner the census cannot see (its matrix is
+    // computed at runtime from a changed-files job), so it is listed by hand; every other
+    // entry must be found, and nothing else may be.
+    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
+    expect(found.length).toBe(3);
+  });
+
+  describe("git-data-pin-redeploy.yml", () => {
+    const src = readFileSync(PIN_REDEPLOY_WORKFLOW, "utf8");
+    const d = parseYaml(src) as Record<string, any>;
+    const on = d.on ?? d[true as unknown as string];
+    const job = d.jobs?.redeploy ?? {};
+
+    test("fires on completion of the apply workflow, by its exact name, plus a recovery dispatch", () => {
+      const applyName = (parseYaml(wf) as { name: string }).name;
+      expect(on.workflow_run.workflows).toEqual([applyName]);
+      expect(on.workflow_run.types).toEqual(["completed"]);
+      expect(on.workflow_dispatch.inputs.source_run_id.required).toBe(false);
+    });
+
+    test("runs for dispatched apply runs from ANY branch, in its own JOB-level lock", () => {
+      const cond = String(job.if ?? "");
+      // A replace dispatched from a non-main branch rotates the live key too.
+      expect(cond).not.toContain("head_branch");
+      expect(cond).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
+      expect(cond).toContain("github.ref == 'refs/heads/main'");
+      // Job-level so a skipped follower run (every ordinary merge apply) never enters the
+      // group and cannot cancel a pending redeploy.
+      expect(d.concurrency).toBeUndefined();
+      expect(job.concurrency).toEqual({ group: "git-data-pin-redeploy", "cancel-in-progress": false });
+      expect(stripComments(src)).not.toContain("terraform-apply-web-platform-host");
+    });
+
+    test("least privilege: actions:write + contents:read, only RESEND_API_KEY on the failure email, no environment, 80 min", () => {
+      expect(job.permissions).toEqual({ actions: "write", contents: "read" });
+      expect(job.environment).toBeUndefined();
+      expect([...stripComments(src).matchAll(/secrets\.[A-Za-z0-9_]+/g)].map((m) => m[0])).toEqual(["secrets.RESEND_API_KEY"]);
+      expect(Number(job["timeout-minutes"])).toBe(80);
+    });
+
+    test("sparse credential-less checkout, the source-run gate, the tracker gated on it, a failure email", () => {
+      const steps = (job.steps as Array<Record<string, any>>) ?? [];
+      const co = steps.findIndex((s) => String(s.uses ?? "").startsWith("actions/checkout@"));
+      const gate = steps.findIndex((s) => String(s.run ?? "").includes("dispatch-web-redeploy/source-run-gate.sh"));
+      const act = steps.findIndex((s) => String(s.run ?? "").trim() === "bash .github/actions/dispatch-web-redeploy/track.sh");
+      const mail = steps.findIndex((s) => s.uses === "./.github/actions/notify-ops-email");
+      expect(co).toBe(0);
+      expect(steps[co].with["persist-credentials"]).toBe(false);
+      expect(String(steps[co].with["sparse-checkout"]).trim().split(/\s+/).sort()).toEqual([
+        ".github/actions/dispatch-web-redeploy",
+        ".github/actions/notify-ops-email",
+      ]);
+      expect(gate).toBeGreaterThan(co);
+      expect(act).toBeGreaterThan(gate);
+      expect(steps[gate].id).toBe("gate");
+      expect(steps[act].if).toBe("steps.gate.outputs.proceed == 'true'");
+      expect(steps[act].env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" });
+      expect(steps.some((s) => String(s.uses ?? "").includes("dispatch-web-redeploy"))).toBe(false);
+      // The failure email: last step, failure() only, the one secret bound here and nowhere else.
+      expect(mail).toBe(steps.length - 1);
+      expect(String(steps[mail].if).replace(/\s+/g, "")).toBe("${{failure()}}");
+      expect(steps[mail].with["resend-api-key"]).toBe("${{ secrets.RESEND_API_KEY }}");
+      expect(String(steps[mail].with.subject)).toContain("git-data pin NOT loaded by the app");
+      expect(String(steps[mail].with.body)).toContain("gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=");
+      // The gate names the two jobs by their exact apply-workflow ids.
+      const g = readFileSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"), "utf8");
+      const jobs = (parseYaml(wf) as { jobs: Record<string, unknown> }).jobs;
+      for (const j of ["git_data_host_create", "git_data_host_replace"]) {
+        expect(g).toContain(`"${j}"`);
+        expect(jobs[j]).toBeDefined();
+        expect((jobs[j] as { name?: string }).name).toBeUndefined(); // gh reports the id as the name
+      }
+    });
   });
 });
 
@@ -3290,6 +3485,10 @@ const GIT_DATA_BIRTH_TARGET_BASES = [
   // post-Doppler emits (boot-completion, gc faults). Omit it and the queryable copy of the
   // boot signal never ships, which is what the follow-through probe reads.
   "doppler_secret.git_data_betterstack_logs_token",
+  // (#7226, ADR-237) The Terraform-minted SSH host key cloud-init installs, and its pin in prd.
+  // PRESENCE members (create-or-no-op), not entailed: neither references the server's id.
+  "tls_private_key.git_data_host_ssh",
+  "doppler_secret.git_data_ssh_host_key",
 ];
 
 // Asserted ABSENT from the -target set. Both are refused by the gate's out-of-scope arm

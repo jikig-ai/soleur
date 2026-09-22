@@ -3049,6 +3049,12 @@ if want_scripts; then
   # "the gate looked and the answer is no" (exit 2, NOT YET), keyed on the bracketed token of the
   # gate's verdict line. One arm per member of BOTH token sets, plus the never-0 invariant.
   run_suite "scripts/git-data-reboot-evidence-landed-8210" bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh
+  # #8450's close criterion (actions-queue-tail-8450.sh): PASS only on >=5
+  # post-upgrade workflow_run runs with p95 deploy-arm wait < 15 min — never on
+  # stale/empty/push-arm/queued-job samples, and never on an unmet precondition
+  # (exit 0 would auto-close the issue). Explicit run_suite —
+  # scripts/followthroughs/ is covered by no glob here.
+  run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -3155,6 +3161,13 @@ if want_scripts; then
   # unregistered — and therefore silent AND green — suite would leave that decision unproven
   # on every PR.
   run_suite "tests/scripts/git-data-rung2-evidence-capture" bash tests/scripts/test-git-data-rung2-evidence-capture.sh
+  # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
+  # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
+  # host-key option anywhere in the tree), its mutation harness, and Guard 7 (the
+  # git-data-pin-redeploy.yml tracker that loads a rotated git-data pin into the app).
+  run_suite "tests/scripts/no-tofu-ssh" bash tests/scripts/test-no-tofu-ssh.sh
+  run_suite "tests/scripts/no-tofu-ssh-mutation" bash tests/scripts/test-no-tofu-ssh-mutation.sh
+  run_suite "tests/scripts/dispatch-web-redeploy" bash tests/scripts/test-dispatch-web-redeploy.sh
   # Supabase advisor RLS gate (#3366). Registered HERE for the same reason as the
   # line above: nothing auto-discovers tests/scripts/. This is the harness that
   # proves the gate cannot silently pass (a 401 must not parse to a clean 0);
@@ -3211,6 +3224,12 @@ if want_scripts; then
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
+  # #7226 / ADR-237 Guard 3 (bash site): the SSH host-key pin writer shared by the CI bridge and
+  # git-data-cutover.yml. tests/scripts/ is not globbed, so this line is its only registration.
+  run_suite "tests/scripts/write-known-hosts" bash tests/scripts/test-write-known-hosts.sh
+  # #7226: the web-1 pin capture script (refuses under CI; stubbed keyscan). scripts/*.test.sh is
+  # not globbed, so this line is its only registration.
+  run_suite "scripts/capture-web-1-host-key" bash scripts/capture-web-1-host-key.test.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
   # tests/commands/ is registered by these explicit lines ONLY — there is no glob here, and

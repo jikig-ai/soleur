@@ -234,6 +234,24 @@ for _pin in git_data_server_type sentry_dsn betterstack_ingest_url; do
   esac
 done
 
+# (#7226, ADR-237) THE SSH HOST KEY IS AN IDENTITY DIVERGENCE, AND THE REHEARSAL MINTS ITS OWN.
+# The pair names WHICH host identity boots, never WHAT boots, so it sits on the allowlist; and
+# the rehearsal must bind a key minted in ITS root — never production's, which would put a second
+# copy of the key every pinned consumer trusts on a throwaway host. Both halves from ONE key.
+for _hk in host_ssh_ed25519_private_key host_ssh_ed25519_public_key; do
+  case " $GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST " in
+    *" $_hk "*) cases=$((cases + 1)); pass "${_hk} is a declarable (identity) divergence" ;;
+    *) cases=$((cases + 1)); fail "${_hk} is missing from the divergence allowlist — every rehearsal diverges on it by construction" ;;
+  esac
+done
+if printf '%s\n' "$_module_block" | grep -qE '^[[:space:]]+host_ssh_ed25519_private_key[[:space:]]*=[[:space:]]*tls_private_key\.rehearsal_host_ssh\.private_key_openssh[[:space:]]*$' \
+   && printf '%s\n' "$_module_block" | grep -qE '^[[:space:]]+host_ssh_ed25519_public_key[[:space:]]*=[[:space:]]*trimspace\(tls_private_key\.rehearsal_host_ssh\.public_key_openssh\)[[:space:]]*$' \
+   && grep -qE '^resource "tls_private_key" "rehearsal_host_ssh"' "$REH_CODE"; then
+  cases=$((cases + 1)); pass "the rehearsal mints its own SSH host key and binds both halves from it"
+else
+  cases=$((cases + 1)); fail "the rehearsal does not bind a host key minted in its own root (tls_private_key.rehearsal_host_ssh, private_key_openssh + trimspace(public_key_openssh))"
+fi
+
 # VARS WHOSE VALUE-PARITY IS PROVEN BELOW, accumulated BY THE PASSING ARM rather than
 # declared. 7c compares the two roots' module bindings as TEXT, and two separate Terraform
 # roots cannot reach a shared value by the same expression — the rehearsal reads `var.X`
@@ -395,7 +413,7 @@ _module_binds() {  # $1 = .tf containing a `module "git_data_userdata"` block ->
           line=$0
           gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
           if (line == "") next
-          if (d == 0 && line ~ /^[a-z_]+[[:space:]]*=/) {
+          if (d == 0 && line ~ /^[a-z0-9_]+[[:space:]]*=/) {
             if (k != "") print k "=" e
             k=line; sub(/[[:space:]]*=.*$/, "", k)
             e=line; sub(/^[^=]*=[[:space:]]*/, "", e)
@@ -609,9 +627,14 @@ fi
 # The new input is NOT a declarable divergence: prod and rehearsal deliberately ship to the SAME
 # Better Stack source, exactly as sentry_dsn and betterstack_ingest_url already do, and neither of
 # those is on the divergence allowlist either. See the parity arms below.
-_mod_var_expected="betterstack_ingest_url,betterstack_logs_token,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,sentry_dsn"
+# 12 -> 14 (#7226, ADR-237): host_ssh_ed25519_private_key / host_ssh_ed25519_public_key, the
+# Terraform-minted SSH HOST key cloud-init installs. Reviewed as MAY DIVERGE (identity class):
+# they name WHICH host identity boots, never WHAT boots, and each root mints its own key — a
+# rehearsal holding production's host private key would be a second copy of the key every
+# pinned consumer trusts. Both are therefore on the divergence allowlist below.
+_mod_var_expected="betterstack_ingest_url,betterstack_logs_token,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,host_ssh_ed25519_private_key,host_ssh_ed25519_public_key,sentry_dsn"
 if [[ "$_mod_var_names" == "$_mod_var_expected" ]]; then
-  cases=$((cases + 1)); pass "the module's input surface is exactly the pinned 12 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
+  cases=$((cases + 1)); pass "the module's input surface is exactly the pinned 14 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
 else
   cases=$((cases + 1)); fail "the module's input surface drifted from the pinned set" \
     "expected=${_mod_var_expected} actual=${_mod_var_names}"

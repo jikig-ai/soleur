@@ -40,11 +40,13 @@ name: "Scheduled: Zot Restart-Loop Recurrence Alarm"
 
 on:
   schedule:
-    # 30-min cadence. Detection is WINDOW-bound, not poll-bound: the checker reads a 3h WINDOW
-    # against the reporter's 5-min emit (~36 events/boot >> CLIMB_N=3), so a loop is caught
-    # regardless of which tick sees it. 30 (over 20) keeps the Sentry self-liveness margin tolerant
-    # of GHA schedule: jitter (checkin_margin_minutes=30 in cron-monitors.tf).
-    - cron: '*/30 * * * *'
+    # Hourly cadence (#8450, relaxed from */30 for the org concurrency budget). Detection is
+    # WINDOW-bound, not poll-bound: the checker reads a 3h WINDOW against the reporter's 5-min
+    # emit (~36 events/boot >> CLIMB_N=3), so a loop is caught regardless of which tick sees it —
+    # and measured delivery of the old */30 cadence already gapped up to 243 min. The paired
+    # Sentry self-liveness margin moved 30 → 120 in cron-monitors.tf to bound a genuinely dark
+    # alarm at ~2h while absorbing delivered-interval jitter.
+    - cron: '0 * * * *'
   workflow_dispatch: {}
 
 concurrency:

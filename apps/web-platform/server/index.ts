@@ -29,6 +29,7 @@ import { installCrashHandlers } from "./crash-handlers";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
 import { assertSingleReplicaInvariant } from "./single-replica-assertion";
 import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
+import { logGitDataHostKeyPinAtStartup } from "./git-data-replication";
 import {
   buildHealthResponse,
   buildInternalMetricsResponse,
@@ -74,6 +75,9 @@ app.prepare().then(() => {
   // at boot instead of only when a live request hits an empty /workspaces.
   verifyWorkspacesMountOnce();
   emitTeamWorkspaceInviteBootBreadcrumb();
+  // #7226 — one warn-level line (git_data_pin=present fp=SHA256:… | absent | invalid):
+  // the positive evidence that this release loaded the git-data host-key pin. Never throws.
+  logGitDataHostKeyPinAtStartup();
 
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);

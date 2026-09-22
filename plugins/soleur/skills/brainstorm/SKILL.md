@@ -525,7 +525,7 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
    gh issue create --title "feat: <Feature Title>" --milestone "Post-MVP / Later" --body "..."
    ```
 
-   After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies: `gh issue edit <number> --milestone '<phase>'`.
+   After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies: `gh issue edit <number> --milestone '<phase>'`. If a blocking issue is known, add the edge the roadmap frontier reads: `gh issue edit <number> --add-blocked-by <blocker>`.
 
    Include in the issue body:
    - Summary of what's being built (from brainstorm)

@@ -20,7 +20,7 @@
 # apps/web-platform/server/c4-render.ts. Only a non-empty model is published,
 # so a broken .c4 source can never clobber the good committed artifact.
 #
-# --out PATH  Write the validated model to PATH instead of the tracked artifact.
+# --out PATH  Write the validated, canonicalized model to PATH instead of the tracked artifact.
 #             Used by plugins/soleur/test/c4-model-freshness.test.sh to render to
 #             a temp path with identical logic, then byte-diff against the
 #             committed artifact. Default: the tracked model.likec4.json.
@@ -104,6 +104,17 @@ if ! jq -e '(.elements | length) > 0' "$TMP/model.likec4.json" >/dev/null 2>&1; 
   exit 1
 fi
 
+# Canonicalize AFTER both gates (never instead of them): one JSON value per
+# line with every view `hash` blanked, so git can merge two regenerations whose
+# edits touch different values (ADR-235, #8542). Node serializes, never jq —
+# jq reformats numbers. The web app (c4-render.ts) and the plugin
+# (generate-c4-from-components.ts) emit these same bytes through the same
+# module, so no writer reformats another's file.
+if ! node "$REPO_ROOT/plugins/soleur/lib/c4-canonical-cli.mjs" "$TMP/model.likec4.json" >"$TMP/canonical.json"; then
+  echo "ERROR: could not canonicalize the rendered model — refusing to overwrite $OUT" >&2
+  exit 1
+fi
+
 # Publish only on success, atomically: copy into the destination directory then
 # rename. An intra-filesystem rename is atomic, so a crash mid-write can never
 # leave a truncated model.likec4.json on the tracked path (a bare `cp` onto $OUT
@@ -112,7 +123,7 @@ fi
 OUT_DIR="$(dirname "$OUT")"
 mkdir -p "$OUT_DIR"
 PUBLISH_TMP="$(mktemp "$OUT_DIR/.model.likec4.json.XXXXXX")"
-cp "$TMP/model.likec4.json" "$PUBLISH_TMP"
+cp "$TMP/canonical.json" "$PUBLISH_TMP"
 mv -f "$PUBLISH_TMP" "$OUT"
 PUBLISH_TMP=""  # renamed onto $OUT — nothing left for the trap to clean
 echo "Regenerated $OUT ($(jq '.elements | length' "$OUT") elements, $(jq '.relations | length' "$OUT") relations, $(jq '.views | length' "$OUT") views)"

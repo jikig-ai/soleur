@@ -377,7 +377,8 @@ host. Read the amendment before relying on any bullet below:
     the issue body; #6122 carries neither, and no issue references `zot-soak-6122.sh`, so the sweeper
     never invokes it. (It was additionally committed mode 100644 — a latent second defect, fixed in
     #6435 and now class-guarded by `scripts/followthrough-exec-bit.test.sh`.) This is deliberate: the
-    cutover has not happened (`registry:"zot"` = 0 events/30d) and the soak's `START` is an unpinned
+    cutover had not happened when this was written, 2026-07-15 (it happened 2026-07-17; see "Amendment 2026-09-22
+    (#6122)"), `registry:"zot"` = 0 events/30d then, and the soak's `START` was an unpinned
     placeholder, so enrolling early would emit a daily TRANSIENT that never converges. **Enrolling the
     soak — label + directive + a pinned `START` — is a precondition of Phase 5 that 5.3 must not
     proceed without.** Until then the gate's verdict is not merely insufficient; it is absent.
@@ -1182,3 +1183,41 @@ This otherwise implements the LUKS decision above (#6895 D2); no topology change
 **Status: CODE-DECLARED.** The template reaches the registry host only on a replace (ForceNew
 `user_data`). Until the next replace boots it, none of this amendment has run on a host; the
 first boot's `luks_open_arm=` and `store_escrow=` rows are the evidence that it has.
+
+## Amendment 2026-09-22 (#6122) — the cutover happened on 2026-07-17 and was never recorded; the backfilled soak FAILs
+
+**The cutover happened.** Sentry's earliest zot-served web pull
+(`feature:supply-chain op:image-pull registry:"zot" image:"web"`) is **2026-07-17T19:51:49Z**, and
+nothing earlier is in the 90-day retention. Since then there have been 392 such pulls. Nobody
+recorded the flip: the revert runbook had no cutover UTC, `zot-soak-6122.sh` kept
+`START=<POST_CUTOVER_UTC>`, and this ADR's status passage still read "the cutover has not
+happened". GHCR then stopped working around 2026-07-29 (PAT revoked out-of-band, minter
+disabled; #7071), so zot has been the sole pull path since then, without the soak that was meant
+to authorize that state.
+
+**What changed.** `START` is pinned to **2026-07-17T19:45:00Z**, a few minutes before the first
+zot pull. A test in `zot-soak-6122.test.sh` fails on any default later than
+2026-07-17T19:51:49Z. The cutover record lives in `runbooks/zot-registry-revert.md` § "Cutover
+record (#6122)".
+
+**Backfilled verdict: FAIL, six fallbacks.** Run over the pinned window on 2026-09-22:
+
+- 2026-07-17, two `zot-gate-degraded` (flip day);
+- 2026-07-26 and 07-27, three `app_ghcr_served` (web fresh boots served by GHCR);
+- 2026-09-22 07:01:49Z, one `inngest_ghcr_fallback` (#8539, NIC race on an inngest replace).
+
+The window was otherwise clean for eight weeks, 2026-07-27 to 2026-09-22.
+
+**This does not authorize 5.3–5.5, and no one may move `START` later to make it pass.**
+A late `START` is the false-PASS route the script header names. Two further facts bear on any
+future verdict:
+
+- **The web fresh-boot path via zot has never been observed.** `stage:"app_zot"` has 0 events,
+  because no web host has been freshly booted since 2026-07-27. Only rolling deploys have been
+  served by zot.
+- **#8539 is open.** A fresh inngest boot can lose its private-NIC race, and with GHCR dead
+  that strands the scheduler.
+
+Re-arming the soak with a new window after the causes are fixed is an operator decision
+recorded on #6122. It is not a parameter change. **The soak is not enrolled** in the sweeper:
+with this `START`, its verdict is fixed at FAIL, so a daily run adds no information.
