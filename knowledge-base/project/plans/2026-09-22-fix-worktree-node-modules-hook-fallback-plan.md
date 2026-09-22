@@ -468,39 +468,39 @@ site per version (CLI, engine), one `BIN` assignment site, one exec site.
 
 ## Acceptance Criteria
 
-- [ ] AC1: In a linked worktree with no `node_modules` where a sibling
+- [x] AC1: In a linked worktree with no `node_modules` where a sibling
   worktree carries `node_modules/.bin/markdownlint` at the exact pinned CLI
   and engine versions, `bash scripts/markdown-lint.sh <staged .md>` lints
   successfully and prints the `using pinned binary from <path>` notice.
-- [ ] AC2: A sibling candidate whose CLI `--version` differs from
+- [x] AC2: A sibling candidate whose CLI `--version` differs from
   `package.json`'s pin is skipped; if no other candidate qualifies, the script
   dies exit 2 naming the checked candidates and `npm ci --ignore-scripts` — it
   never executes a version-mismatched binary.
-- [ ] AC3: A sibling candidate whose engine package version differs from
+- [x] AC3: A sibling candidate whose engine package version differs from
   `package-lock.json`'s `markdownlint` entry is skipped (engine check reads
   the candidate's own node_modules, nearest-scope first).
-- [ ] AC4: When the local `node_modules/.bin/markdownlint` exists, behavior is
+- [x] AC4: When the local `node_modules/.bin/markdownlint` exists, behavior is
   byte-identical to today — including dying on a version-mismatched LOCAL
   install rather than detouring to a sibling.
-- [ ] AC5: No `npx`, PATH-search, or network resolution is introduced; the
+- [x] AC5: No `npx`, PATH-search, or network resolution is introduced; the
   script performs no writes outside the worktree.
-- [ ] AC6: `git worktree list --porcelain` parsing tolerates the `bare`
+- [x] AC6: `git worktree list --porcelain` parsing tolerates the `bare`
   attribute block (primary checkout is still a valid candidate when it carries
   the binary) and prunable/stale paths (`-x` filters them).
-- [ ] AC7: Resolution behaves correctly under lefthook-exported `GIT_DIR` and
+- [x] AC7: Resolution behaves correctly under lefthook-exported `GIT_DIR` and
   `GIT_INDEX_FILE` (locked by a test row exporting both).
-- [ ] AC8: `install_deps()` output after a create prints a per-binary status
+- [x] AC8: `install_deps()` output after a create prints a per-binary status
   line for `node_modules/.bin/markdownlint` — `✓` when present, a warning
   naming `npm ci --ignore-scripts --prefix <wt>` when absent — in both the
   install-succeeded and install-skipped/failed shapes.
-- [ ] AC9: `bash scripts/test-all.sh` in a worktree missing
+- [x] AC9: `bash scripts/test-all.sh` in a worktree missing
   `apps/web-platform/node_modules` fails the webplat arm fast, naming
   `npm ci --ignore-scripts --prefix apps/web-platform`, instead of dying deep
   with `vitest: not found`.
-- [ ] AC10: New mutation rows land in `scripts/markdown-lint.test.sh` and the
+- [x] AC10: New mutation rows land in `scripts/markdown-lint.test.sh` and the
   suite stays green, including the CONTROL row proving the unmutated sandbox
   still sweeps ≥ `MIN_SWEPT_FILES`.
-- [ ] AC11: `lefthook.yml`'s markdown-lint comment, `git-worktree/SKILL.md`,
+- [x] AC11: `lefthook.yml`'s markdown-lint comment, `git-worktree/SKILL.md`,
   and `ADR-009` are updated to describe the sibling-resolution contract; the
   lefthook `run:` line is unchanged.
 

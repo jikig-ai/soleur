@@ -35,7 +35,10 @@ set -euo pipefail
 #   2  usage error — TEST_GROUP took an unsupported value (predates the above), OR the
 #      relevance-predicate data file is missing, OR scripts/lib/repo-write-boundary.sh is missing
 #      or stale (added #7652 — a gate whose boundary is undefined refuses rather than running at
-#      reduced meaning). Both are "this runner cannot run", not a
+#      reduced meaning), OR apps/web-platform/node_modules is absent while the webplat group is
+#      selected (#8580 — the arm's suites all resolve binaries out of the app's install, so the
+#      group cannot run at all; the refusal names the `npm ci` remediation). All are "this
+#      runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
 #   4  REFUSED before anything ran. TWO producers, both overridden by SOLEUR_ALLOW_FULL_GATE=1:
@@ -2724,6 +2727,43 @@ fi
 # land in the gated project and be silently declined. That guard runs in the
 # repo-wide project, so it is never gated by the thing it guards.
 if want_webplat; then
+  # --- Precondition: apps/web-platform deps present (#2398 arm of #8580) -----
+  #
+  # Every suite in this arm resolves a binary out of the app's install — the
+  # vitest projects via `npm run test:ci`, and ccla-add plus its followthroughs
+  # companion via `apps/web-platform/node_modules/.bin/tsx` (see the registration
+  # comments below). With the app's node_modules absent, the arm does not fail
+  # here — it fails DEEP, well inside the suite, as `vitest: not found` (#2398's
+  # exact report), after the suite's own setup has already run. So the check
+  # runs FIRST, at arm entry, and names the deterministic recovery.
+  #
+  # Three alternatives considered and rejected:
+  #   * skip_suite — this runner is a gate; a declined webplat arm reports
+  #     green-shaped output over coverage it never obtained (the ADR-181
+  #     vacuity class). An unmet precondition is a REFUSAL, not a decline.
+  #   * a sibling worktree's vitest — vitest.config.ts imports resolve
+  #     against THIS checkout's tree, never the sibling's node_modules, so a
+  #     borrowed binary still dies on config imports. Only an install in this
+  #     worktree satisfies the arm.
+  #   * a conditional registration — this file's run_suite sites are parsed
+  #     STATICALLY for the shard-totality reference (see the markdown-lint
+  #     registration comment in the scripts arm); gating one on install state
+  #     counts it in the reference and assigns it to no leg.
+  #
+  # rc 2, the "this runner cannot run" class (missing prerequisite), not 4 —
+  # 4 means "refused before anything ran", and under TEST_GROUP=all the
+  # earlier groups HAVE already run by the time control reaches this block.
+  # Exempt under --enumerate for the same reason the refusal guards above are:
+  # an enumerate pass starts no suite and resolves no binary, and the
+  # shard-totality guard enumerates on legs that install no node deps at all.
+  if (( _ENUMERATE == 0 )) && [[ ! -x apps/web-platform/node_modules/.bin/vitest ]]; then
+    echo "ERROR: refusing the webplat arm — apps/web-platform/node_modules is absent." >&2
+    echo "       Every suite in this group resolves a binary from the app's install" >&2
+    echo "       and would fail deep. Install the deps, then re-run:" >&2
+    echo "           npm ci --ignore-scripts --prefix apps/web-platform" >&2
+    exit 2
+  fi
+
   # `component` runs ALWAYS, alongside repo-wide. #7498 evaluated gating it and
   # declined on measurement: at ~80 s it is a ~39 s expected saving, "statistically
   # the same quantity this PR already declined for the union predicate", and taking

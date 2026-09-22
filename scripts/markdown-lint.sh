@@ -49,15 +49,16 @@ INVOCATION_CWD="$PWD"
 cd "$REPO_ROOT" || die "cannot enter repository root $REPO_ROOT"
 [[ -f "$CONFIG" ]] || die "missing $CONFIG"
 [[ -f "$IGNORE" ]] || die "missing $IGNORE"
-[[ -x "$BIN" ]] || die "markdownlint is not installed at $BIN -- run: npm install --ignore-scripts. This script will NOT fall back to npx: an unpinned binary is the defect #7927 exists to close."
 
+# The pins are computed BEFORE the binary is located: both come from tracked
+# files that exist in every worktree whether or not node_modules was ever
+# installed, and a sibling-worktree binary (the else arm below) is acceptable
+# only when it matches BOTH.
 PINNED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["devDependencies"]["markdownlint-cli"])' "$MANIFEST")"
 [[ -n "$PINNED" ]] || die "package.json declares no markdownlint-cli pin"
 case "$PINNED" in
   *'^'*|*'~'*|*'*'*|*'x'*) die "the markdownlint-cli pin '$PINNED' is a RANGE. It must be exact, or the verdict drifts under unchanged files -- see WHY 1 above." ;;
 esac
-INSTALLED="$("$BIN" --version 2>/dev/null | tail -1 | tr -d '[:space:]')"
-[[ "$INSTALLED" == "$PINNED" ]] || die "installed markdownlint-cli is $INSTALLED but package.json pins $PINNED -- run: npm install --ignore-scripts"
 
 # THE CLI VERSION IS NOT THE THING THAT DECIDES VERDICTS. markdownlint-cli declares its
 # rules engine as `"markdownlint": "~0.41.1"` -- a RANGE. Asserting only the CLI leaves
@@ -73,12 +74,111 @@ for k, v in lock["packages"].items():
         print(v.get("version","")); break
 ' "$REPO_ROOT/package-lock.json")"
 [[ -n "$ENGINE_PIN" ]] || die "package-lock.json declares no markdownlint rules-engine version -- the pin cannot be verified, and an unverifiable pin is the defect this script exists to close"
-ENGINE_INSTALLED="$(python3 -c '
+
+if [[ -x "$BIN" ]]; then
+  INSTALLED="$("$BIN" --version 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  [[ "$INSTALLED" == "$PINNED" ]] || die "installed markdownlint-cli is $INSTALLED but package.json pins $PINNED -- run: npm install --ignore-scripts"
+  ENGINE_INSTALLED="$(python3 -c '
 import json,sys
 print(json.load(open(sys.argv[1]))["version"])
 ' "$REPO_ROOT/node_modules/markdownlint/package.json" 2>/dev/null)"
-[[ -n "$ENGINE_INSTALLED" ]] || die "the markdownlint rules engine is not installed -- run: npm install --ignore-scripts"
-[[ "$ENGINE_INSTALLED" == "$ENGINE_PIN" ]] || die "installed markdownlint rules engine is $ENGINE_INSTALLED but package-lock.json pins $ENGINE_PIN. The CLI version matching is NOT sufficient: the CLI depends on the engine by RANGE (~), so this is the version that actually decides verdicts -- run: npm ci --ignore-scripts"
+  [[ -n "$ENGINE_INSTALLED" ]] || die "the markdownlint rules engine is not installed -- run: npm install --ignore-scripts"
+  [[ "$ENGINE_INSTALLED" == "$ENGINE_PIN" ]] || die "installed markdownlint rules engine is $ENGINE_INSTALLED but package-lock.json pins $ENGINE_PIN. The CLI version matching is NOT sufficient: the CLI depends on the engine by RANGE (~), so this is the version that actually decides verdicts -- run: npm ci --ignore-scripts"
+else
+  # NO LOCAL BINARY. This worktree was created without node_modules -- a
+  # harness-managed .claude/worktrees/agent-* seat, a `git worktree add
+  # --detach` seat, a manual add, or an install that warned and continued
+  # (#8580). The lefthook shim lives in the shared git dir, so the hook fires in
+  # EVERY linked worktree. The fallback resolves a SIBLING checkout's binary,
+  # read-only, and only after it passes the same version predicates a local
+  # binary must -- a wrong-version sibling is skipped, never executed. No npx,
+  # no PATH search, no network: an unpinned binary is the defect #7927 exists
+  # to close.
+  #
+  # Candidates, in trust order:
+  #   1. the primary checkout -- dirname of `git rev-parse --git-common-dir`,
+  #      the operator-owned install and the smallest trust surface;
+  #   2. every `worktree <path>` line from `git worktree list --porcelain`,
+  #      realpath-deduped, LC_ALL=C-sorted for determinism, $REPO_ROOT itself
+  #      dropped.
+  #
+  # Porcelain output is CAPTURED into a variable, rc-checked, then iterated --
+  # never `| grep -q` and never an early-break `while read` fed by the pipe:
+  # grep -q closes the pipe on first match, git takes SIGPIPE, and pipefail
+  # promotes 141 to failure precisely when the needle is present (the
+  # _porcelain_has_line precedent in worktree-manager.sh). `bare`-attributed
+  # blocks are NOT filtered: the primary checkout reports `bare` here and still
+  # carries node_modules. A `worktree` path containing a newline splits its
+  # record across two lines; the truncated candidate fails -x and is skipped --
+  # acceptable degradation, no unquoting needed. Zero `worktree` lines is an
+  # anomalous registry (any valid repo emits at least its own); the candidate
+  # set is then empty and the die path below fires.
+  declare -a CANDIDATES=()
+  declare -A SEEN=()
+  REPO_ROOT_REAL="$(realpath -m -- "$REPO_ROOT")"
+  add_candidate() { # <worktree-path>
+    local p="$1" rp
+    [[ -n "$p" ]] || return 0
+    rp="$(realpath -m -- "$p" 2>/dev/null || printf '%s' "$p")"
+    [[ "$rp" == "$REPO_ROOT_REAL" ]] && return 0
+    [[ -n "${SEEN[$rp]:-}" ]] && return 0
+    SEEN["$rp"]=1
+    CANDIDATES+=("$p")
+  }
+  primary_gitdir=""
+  if primary_gitdir="$(git rev-parse --git-common-dir 2>/dev/null)"; then
+    [[ "$primary_gitdir" == /* ]] || primary_gitdir="$REPO_ROOT/$primary_gitdir"
+    add_candidate "$(dirname "$primary_gitdir")"
+  fi
+  wt_listing=""
+  if wt_listing="$(git worktree list --porcelain 2>/dev/null)"; then
+    while IFS= read -r wt; do
+      add_candidate "$wt"
+    done < <(printf '%s\n' "$wt_listing" | sed -n 's/^worktree //p' | LC_ALL=C sort -u)
+  fi
+
+  # A candidate is accepted iff its binary is executable, its --version equals
+  # PINNED, AND its rules-engine version equals ENGINE_PIN -- the engine probed
+  # nearest-scope-first (markdownlint-cli's nested node_modules before the
+  # hoisted top-level one), matching node's own resolution order.
+  # require.resolve cannot locate the engine's package.json -- its `exports`
+  # field rejects the subpath -- so this is a filesystem probe. node_modules is
+  # structurally dirname(dirname(.bin/<name>)) -- no readlink -- so a shimmed
+  # .bin entry still resolves correctly. Every probe is `||`-guarded: a nonzero
+  # candidate rc skips the candidate, it never aborts under set -euo pipefail.
+  engine_version_for() { # <path-to-.bin-binary>
+    local nm; nm="$(dirname "$(dirname "$1")")"
+    local p
+    for p in "$nm/markdownlint-cli/node_modules/markdownlint/package.json" \
+             "$nm/markdownlint/package.json"; do
+      [[ -f "$p" ]] || continue
+      python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$p" 2>/dev/null && return 0
+    done
+    return 1
+  }
+  resolved=""
+  for wt in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+    cand="$wt/node_modules/.bin/markdownlint"
+    [[ -x "$cand" ]] || continue
+    cand_ver="$("$cand" --version 2>/dev/null | tail -1 | tr -d '[:space:]' || true)"
+    [[ "$cand_ver" == "$PINNED" ]] || continue
+    cand_engine="$(engine_version_for "$cand" || true)"
+    [[ "$cand_engine" == "$ENGINE_PIN" ]] || continue
+    resolved="$cand"
+    break
+  done
+  if [[ -n "$resolved" ]]; then
+    BIN="$resolved"
+    printf 'markdown-lint: using pinned binary from %s (this worktree has no node_modules)\n' "$BIN" >&2
+  else
+    printf 'markdown-lint: markdownlint is not installed at %s\n' "$BIN" >&2
+    printf 'markdown-lint: %s sibling candidate(s) checked, none compliant:\n' "${#CANDIDATES[@]}" >&2
+    for wt in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+      printf 'markdown-lint:   %s\n' "$wt" >&2
+    done
+    die "run: npm ci --ignore-scripts (or npm install --ignore-scripts). This script will NOT fall back to npx: an unpinned binary is the defect #7927 exists to close."
+  fi
+fi
 
 # --- Scope derivation --------------------------------------------------------------
 #

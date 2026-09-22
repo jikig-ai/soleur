@@ -42,10 +42,28 @@ printf '  (instrument OK -- both counters moved; counters reset)\n'
 
 die() { printf 'FATAL: %s\n' "$*" >&2; exit 2; }
 
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# the verbatim body; see plugins/soleur/test/test-helpers.sh).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # --- Sandbox -----------------------------------------------------------------------
 SANDBOX="$(mktemp -d "$TMPDIR/mdlint-sut.XXXXXXXX")" || die "mktemp failed"
 PRISTINE="$(mktemp -d "$TMPDIR/mdlint-pristine.XXXXXXXX")" || die "mktemp failed"
-cleanup() { rm -rf "$SANDBOX" "$PRISTINE"; }
+# Linked sandbox worktrees for the T-rows live OUTSIDE the sandbox tree (fixture
+# writes there must not touch the swept corpus) but under TMPDIR so cleanup is
+# one rm -rf. A sandbox's `git worktree list` sees only sandbox worktrees, so
+# these rows never touch the real repo's worktree topology.
+WT_TMP="$(mktemp -d "$TMPDIR/mdlint-wt.XXXXXXXX")" || die "mktemp failed"
+cleanup() { rm -rf "$SANDBOX" "$PRISTINE" "$WT_TMP"; }
 trap cleanup EXIT INT TERM HUP
 
 # DERIVED from the SUT, never restated. A hand-kept copy is the stale-snapshot class
@@ -139,6 +157,43 @@ restore() {
 
 run_sut() { ( cd "$SANDBOX" && bash scripts/markdown-lint.sh "$@" 2>&1 ); }
 run_sut_rc() { ( cd "$SANDBOX" && bash scripts/markdown-lint.sh "$@" >/dev/null 2>&1 ); }
+# T-rows run the copy of the SUT committed inside a LINKED sandbox worktree:
+# REPO_ROOT resolves from BASH_SOURCE, so invoking <dir>/scripts/markdown-lint.sh
+# exercises that worktree's own tree and its own (absent) node_modules.
+run_sut_in()    { local d="$1"; shift; ( cd "$d" && bash scripts/markdown-lint.sh "$@" 2>&1 ); }
+run_sut_in_rc() { local d="$1"; shift; ( cd "$d" && bash scripts/markdown-lint.sh "$@" >/dev/null 2>&1 ); }
+# Detached-HEAD worktree of $SANDBOX, outside its tree. The sandbox COMMITS its
+# node_modules symlink, so the linked worktree materializes it too -- every
+# "no local bin" row rm's (unlinks, no trailing slash) that symlink first.
+add_linked_worktree() { # <dir>
+  git -C "$SANDBOX" worktree add --detach "$1" >/dev/null 2>&1 \
+    || die "linked worktree add failed: $1"
+}
+# Synthesized stub binary (cq-test-fixtures-synthesized-only): a #!/bin/sh script
+# echoing <ver> on --version and exiting 0 otherwise -- so a GREEN row proves the
+# stub was EXECUTED as the linter, not merely version-checked. It lives under
+# <sib>/node_modules/.bin/, never under scripts/, so the M7 call_sites sweep
+# cannot see it (this file is also a named M7a exclusion).
+make_stub_bin() { # <worktree-dir> <cli-version>
+  mkdir -p "$1/node_modules/.bin" || die "stub .bin mkdir failed"
+  printf '#!/bin/sh\nif [ "${1:-}" = "--version" ]; then echo "%s"; fi\nexit 0\n' "$2" \
+    > "$1/node_modules/.bin/markdownlint" || die "stub write failed"
+  chmod +x "$1/node_modules/.bin/markdownlint" || die "stub chmod failed"
+}
+# Synthesized rules-engine package.json, planted at the nested scope
+# (markdownlint-cli's own node_modules) or the hoisted one -- the two probe
+# points node resolves, in that order.
+plant_engine() { # <worktree-dir> <version> <nested|hoisted>
+  local t
+  case "$3" in
+    nested)  t="$1/node_modules/markdownlint-cli/node_modules/markdownlint/package.json" ;;
+    hoisted) t="$1/node_modules/markdownlint/package.json" ;;
+    *) die "plant_engine: unknown scope '$3'" ;;
+  esac
+  assert_fixture_dir "$t"
+  mkdir -p "$(dirname "$t")" || die "engine fixture mkdir failed"
+  printf '{"version":"%s"}\n' "$2" > "$t" || die "engine fixture write failed"
+}
 
 # --- CONTROL: the unmutated sandbox must be GREEN ----------------------------------
 # A red baseline voids every row below -- each would then be scoring the baseline.
@@ -726,6 +781,157 @@ else
 fi
 restore
 
+# --- T1..T6: sibling-worktree binary resolution (#8580) ---------------------------
+# A linked worktree created outside worktree-manager.sh carries no node_modules,
+# but the shared-git-dir lefthook shim still runs this gate there. The fallback
+# resolves a SIBLING checkout's binary read-only, and only after it passes the
+# same CLI+engine version predicates the local path must. The pins are derived
+# from the sandbox's own manifest/lockfile -- never restated.
+printf 'T-rows sibling-worktree binary resolution\n'
+SB_PIN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["devDependencies"]["markdownlint-cli"])' "$SANDBOX/package.json")"
+SB_ENGINE_PIN="$(python3 -c '
+import json,sys
+lock=json.load(open(sys.argv[1]))
+for k, v in lock["packages"].items():
+    if k == "node_modules/markdownlint" or k.endswith("/node_modules/markdownlint"):
+        print(v.get("version","")); break
+' "$SANDBOX/package-lock.json")"
+[[ -n "$SB_PIN" && -n "$SB_ENGINE_PIN" ]] \
+  || die "could not derive the sandbox pins; every T-row below would score the wrong precondition"
+
+# T1: no local bin; the PRIMARY checkout still carries the real install -> the
+# fast path (dirname of the common git dir) resolves it.
+printf 'T1 sibling resolution via the primary checkout\n'
+RUN="$WT_TMP/run-t1"
+add_linked_worktree "$RUN"
+rm -f "$RUN/node_modules"
+out="$(run_sut_in "$RUN" "docs/docs/doc-0.md")"; rc=$?
+if (( rc == 0 )) && grep -qF "using pinned binary from $SANDBOX" <<<"$out"; then
+  pass "T1 -- a node_modules-less linked worktree resolves the primary checkout's pinned binary"
+else
+  fail "T1 -- expected GREEN via the primary checkout; rc=$rc out=$(head -c 300 <<<"$out")"
+fi
+rm -rf "$RUN"
+restore
+
+# T1b: the primary ALSO lacks a binary; a second linked worktree carries a
+# synthesized compliant stub -> the porcelain-enumeration arm resolves it.
+printf 'T1b sibling resolution via the porcelain enumeration arm\n'
+RUN="$WT_TMP/run-t1b"; SIB="$WT_TMP/sib-t1b"
+add_linked_worktree "$RUN"
+add_linked_worktree "$SIB"
+rm -f "$RUN/node_modules"
+rm -f "$SIB/node_modules"
+rm -f "$SANDBOX/node_modules"
+make_stub_bin "$SIB" "$SB_PIN"
+plant_engine "$SIB" "$SB_ENGINE_PIN" hoisted
+out="$(run_sut_in "$RUN" "docs/docs/doc-0.md")"; rc=$?
+if (( rc == 0 )) && grep -qF "using pinned binary from $SIB" <<<"$out"; then
+  pass "T1b -- the porcelain enumeration arm resolves a compliant sibling when the primary has none"
+else
+  fail "T1b -- expected GREEN via $SIB; rc=$rc out=$(head -c 300 <<<"$out")"
+fi
+rm -rf "$RUN" "$SIB"
+restore
+
+# T2: the only sibling binary reports a CLI version that differs from the pin ->
+# refusal; the die names the checked candidates and the deterministic recovery.
+printf 'T2 wrong-version sibling is refused\n'
+RUN="$WT_TMP/run-t2"; SIB="$WT_TMP/sib-t2"
+add_linked_worktree "$RUN"
+add_linked_worktree "$SIB"
+rm -f "$RUN/node_modules"
+rm -f "$SIB/node_modules"
+rm -f "$SANDBOX/node_modules"
+make_stub_bin "$SIB" "99.99.99"
+plant_engine "$SIB" "$SB_ENGINE_PIN" hoisted
+out="$(run_sut_in "$RUN" "docs/docs/doc-0.md")"; rc=$?
+if (( rc != 0 )) && grep -qF "$SIB" <<<"$out" && grep -q 'npm ci --ignore-scripts' <<<"$out"; then
+  pass "T2 -- a sibling whose CLI version differs from the pin is refused, candidates enumerated"
+else
+  fail "T2 -- expected a candidate-enumerating refusal; rc=$rc out=$(head -c 300 <<<"$out")"
+fi
+rm -rf "$RUN" "$SIB"
+restore
+
+# T3: correct CLI stub; the NESTED engine scope carries the wrong version while
+# the hoisted scope carries the right one -> refusal. Node resolves
+# nearest-scope-first, so a hoisted-first probe would wrongly accept.
+printf 'T3 wrong-version NESTED engine beats the right hoisted one\n'
+RUN="$WT_TMP/run-t3"; SIB="$WT_TMP/sib-t3"
+add_linked_worktree "$RUN"
+add_linked_worktree "$SIB"
+rm -f "$RUN/node_modules"
+rm -f "$SIB/node_modules"
+rm -f "$SANDBOX/node_modules"
+make_stub_bin "$SIB" "$SB_PIN"
+plant_engine "$SIB" "$SB_ENGINE_PIN" hoisted
+plant_engine "$SIB" "0.0.0-wrong" nested
+out="$(run_sut_in "$RUN" "docs/docs/doc-0.md")"; rc=$?
+if (( rc != 0 )) && grep -qF "$SIB" <<<"$out"; then
+  pass "T3 -- the nearest-scope engine probe wins over the hoisted one (node resolution order)"
+else
+  fail "T3 -- expected a refusal via the nested engine scope; rc=$rc out=$(head -c 300 <<<"$out")"
+fi
+rm -rf "$RUN" "$SIB"
+restore
+
+# T4: a version-mismatched LOCAL binary must die WITHOUT consulting siblings --
+# the primary keeps its real, compliant install, so a detour would be green and
+# this row would report it. Regression-locks the #7927 contract for installed
+# trees: half-installed local state fails, never silently detours.
+printf 'T4 a wrong-version LOCAL binary dies; no sibling detour\n'
+RUN="$WT_TMP/run-t4"
+add_linked_worktree "$RUN"
+rm -f "$RUN/node_modules"
+make_stub_bin "$RUN" "99.99.99"
+out="$(run_sut_in "$RUN" "docs/docs/doc-0.md")"; rc=$?
+if (( rc != 0 )) && grep -q 'but package.json pins' <<<"$out"; then
+  pass "T4 -- a version-mismatched LOCAL binary dies; the sibling path is never consulted"
+else
+  fail "T4 -- expected the local version-pin refusal; rc=$rc out=$(head -c 300 <<<"$out")"
+fi
+rm -rf "$RUN"
+restore
+
+# T5: nothing qualifies anywhere AND PATH carries a fake markdownlint -> still a
+# refusal. Proves no PATH/package-runner resolution crept in beside the sibling
+# enumeration.
+printf 'T5 no PATH/package-runner fallback\n'
+RUN="$WT_TMP/run-t5"
+add_linked_worktree "$RUN"
+rm -f "$RUN/node_modules"
+rm -f "$SANDBOX/node_modules"
+FAKEBIN="$WT_TMP/fakebin-t5"
+mkdir -p "$FAKEBIN"
+printf '#!/bin/sh\necho FAKE-INVOKED\nexit 0\n' > "$FAKEBIN/markdownlint"
+chmod +x "$FAKEBIN/markdownlint"
+out="$(cd "$RUN" && PATH="$FAKEBIN:$PATH" bash scripts/markdown-lint.sh docs/docs/doc-0.md 2>&1)"; rc=$?
+if (( rc != 0 )) && ! grep -q 'FAKE-INVOKED' <<<"$out"; then
+  pass "T5 -- a PATH-visible markdownlint is never used; the die path still fires"
+else
+  fail "T5 -- expected a refusal with no PATH resolution; rc=$rc out=$(head -c 300 <<<"$out")"
+fi
+rm -rf "$RUN" "$FAKEBIN"
+restore
+
+# T6: T1 under the lefthook hook environment -- GIT_DIR and GIT_INDEX_FILE
+# exported and pointing at the LINKED worktree's gitdir (lefthook.yml:360-367).
+printf 'T6 sibling resolution under lefthook-exported GIT_DIR/GIT_INDEX_FILE\n'
+RUN="$WT_TMP/run-t6"
+add_linked_worktree "$RUN"
+rm -f "$RUN/node_modules"
+gd="$(git -C "$RUN" rev-parse --absolute-git-dir)" || die "could not resolve the linked gitdir"
+out="$(cd "$RUN" && export GIT_DIR="$gd" GIT_INDEX_FILE="$gd/index" \
+        && bash scripts/markdown-lint.sh docs/docs/doc-0.md 2>&1)"; rc=$?
+if (( rc == 0 )) && grep -qF "using pinned binary from $SANDBOX" <<<"$out"; then
+  pass "T6 -- resolution holds under the lefthook hook environment (GIT_DIR/GIT_INDEX_FILE)"
+else
+  fail "T6 -- expected GREEN via the primary under exported git env; rc=$rc out=$(head -c 300 <<<"$out")"
+fi
+rm -rf "$RUN"
+restore
+
 # --- Anti-vacuity floor -----------------------------------------------------------
 # Reported with printf + exit, NEVER through fail(): a floor that calls the helper it
 # backstops is disarmed by the same edit that disarms the helper (ADR-193).
@@ -736,7 +942,7 @@ printf '\n=== markdown-lint.test.sh: %s passed, %s failed (%s cases) ===\n' "$pa
 # statement in between stops that walk, the mutant dies on `set -u` with the threshold
 # unbound, and a fully compliant floor is reported as a construction failure rather
 # than as covered. Measured: this floor joined that uncovered set until the printf moved.
-MIN_CASES=32
+MIN_CASES=39
 if (( cases < MIN_CASES )); then
   printf 'ERROR: only %s cases ran, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$cases" "$MIN_CASES" >&2
   exit 1

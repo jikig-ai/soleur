@@ -34,12 +34,19 @@ pre-commit:
       # with ZERO arguments on every commit, the script exits 2 on its usage guard, and
       # EVERY commit in the repository is blocked. Do not remove it.
       #
-      # The script needs root deps present (node_modules/.bin/markdownlint, plus
-      # python3). It refuses to fall back to an unpinned runner by design, so someone
-      # who has never run `npm install` cannot commit a Markdown file until they do --
-      # a real change from the previous behaviour, which needed nothing local. The
-      # script's own error names the fix, and worktrees get deps from
-      # worktree-manager.sh, so this bites a fresh clone rather than normal use.
+      # The script needs root deps present (the pinned lint binary under
+      # node_modules, plus python3). It refuses to fall back to an unpinned
+      # runner by design, so someone who has never run `npm install` cannot
+      # commit a Markdown file until they do -- a real change from the previous
+      # behaviour, which needed nothing local.
+      #
+      # For a worktree whose own install is absent, the consumption point
+      # (#8580) resolves a sibling checkout's binary instead: the script probes
+      # the primary checkout, then every `git worktree list` path, and accepts
+      # one only when its self-reported CLI and engine versions equal THIS
+      # checkout's pins. When no candidate qualifies it dies naming
+      # `npm ci --ignore-scripts` -- the #7927 no-fallback contract is
+      # unchanged; only where the pinned binary may live was widened.
       priority: 4
       glob: "*.md"
       run: bash scripts/markdown-lint.sh {staged_files}
