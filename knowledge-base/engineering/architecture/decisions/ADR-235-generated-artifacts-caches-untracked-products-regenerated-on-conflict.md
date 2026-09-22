@@ -172,3 +172,88 @@ the next tracked change picks it up.
   source as unreachable by any fixture and kept deliberately).
 - `plugins/soleur/scripts/sync-pr-behind.test.sh` — the caller's two outcomes.
 - `git check-ignore` over the five cache paths exits 0 and prints all five.
+
+## Amendment — 2026-09-22 (#8542): the product is committed in a mergeable format
+
+The classification above stands: `model.likec4.json` is a product and stays committed. What
+changes is its **on-disk format**, and with it how often regenerate-on-conflict is needed at all.
+
+**The "conflicts are rare" rationale in *Alternatives rejected* is superseded by measurement.**
+In the 7 days before 2026-09-22, 27 of 121 commits on `main` changed the artifact, all alongside a
+`.c4` source. Because likec4 exports one ~1.1 MB line, every pair of those PRs conflicted on
+GitHub, whose server-side merge cannot run the resolver: 0 of 152 real concurrent pairs replayed
+from `main` merged cleanly.
+
+**Decision.** Every writer publishes one canonical format, produced by
+`plugins/soleur/lib/c4-canonical.mjs`:
+
+- one JSON value per line, no indentation (`JSON.stringify(model, null, 1)` with leading spaces
+  stripped), and a trailing newline;
+- every `views[*].hash` set to `""`.
+
+Blanking the hash is what makes the format mergeable. That hash is an `objectHash` of the
+pre-layout view. It changes on almost every model edit, and it was the only JSON value both sides
+of most pairs changed. Nothing reads it:
+
+- not `@likec4/diagram`;
+- not `LikeC4Model.create` (pinned by `apps/web-platform/test/c4-canonical-mirror.test.ts`);
+- not this repo;
+- not the likec4 CLI, whose export is byte-identical with a blank-hash artifact in its workspace.
+
+The key is kept because the `ViewWithHash` type declares it.
+
+**Measured** (replay harness and results: `knowledge-base/project/specs/feat-c4-model-mergeable/replay/`):
+
+- Real concurrent pairs whose `.c4` sources merge cleanly: 0/152 merge today, 107/152 in the
+  canonical format.
+- No merge is clean but wrong: every clean merge equals a fresh render of the merged sources.
+- Pretty-printing alone, without blanking the hash, fixes only 4/105.
+- The remaining conflicts are true overlaps: both sides moved the same Graphviz coordinates in a
+  shared view (`containers`, `index`), or set the same relation's title differently. No text
+  format can merge those correctly, so they still route through
+  `resolve-regenerable-conflicts.sh`. `RESOLVABLE_PATHS` is unchanged.
+
+**Three writers, one module.**
+
+| Writer | Where it runs | Reaches the module via |
+|---|---|---|
+| `scripts/regenerate-c4-model.sh` (lefthook, resolver) | this repo | `node plugins/soleur/lib/c4-canonical-cli.mjs` |
+| `apps/web-platform/server/c4-render.ts` (diagram editor) | the app; commits to customer repos | `apps/web-platform/lib/c4-canonical.mjs`, a byte-identical mirror |
+| `plugins/soleur/scripts/generate-c4-from-components.ts` (`soleur:sync`) | customer repos, from the installed plugin | direct import |
+
+- **Why a mirror.** No single path is reachable by all three writers. The app's Docker build
+  context is `apps/web-platform` only, and a plugin install has no `apps/`. Byte identity is
+  asserted by both the bun and the vitest suite, so a PR touching either copy runs the check.
+- **Where canonicalization runs.** Each writer canonicalizes only after its existing validation
+  gates, and a canonicalize failure never publishes.
+- **What guards the committed format.** `c4-model-freshness.test.sh` also asserts it with
+  `--check`. The byte comparison alone cannot see a PR that drops the step and regenerates raw in
+  the same diff.
+
+**Scope limits, accepted:**
+
+- **Customer repos have no resolver.** `resolve-regenerable-conflicts.sh` calls
+  `scripts/regenerate-c4-model.sh`, which exists only in this repo. A customer's residual true
+  overlaps stay conflicted until one of their writers re-renders.
+- **Rollout.** The app, the plugin and the regenerated artifact ship from one merge. A self-hosted
+  CLI running an older plugin still writes the raw one-line format, and each switch between
+  writers rewrites the whole file until that CLI upgrades. Upgrading is the remedy. No migration
+  runs, because every writer already rewrites the whole file, so old files convert on their next
+  write.
+- **Size headroom.** The canonical artifact is 1,210,508 B, 28.9% of `MAX_C4_BYTES`, against
+  1,133,281 B raw. Room to grow drops from 3.70x to 3.46x.
+- **`.gitattributes`.** The root `.gitattributes` returns with a single line,
+  `linguist-generated=true` for the artifact, so GitHub collapses it in PR diffs.
+  `plugins/soleur/test/c4-canonical.test.ts` fails if a `binary`, `-diff`, `-merge` or `merge=`
+  attribute joins it. The resolver's comment explains why a `binary` attribute would turn
+  regeneration into keeping one side.
+
+**Alternatives rejected here:**
+
+| Alternative | Why |
+|---|---|
+| Untrack the artifact and generate it at build/deploy | The viewer fetches the committed blob from GitHub per request, and the app commits it into customer repos. A render-on-read path is a product change of its own. |
+| Split per view or per section | Measured no gain over one file once the hash is blanked. The same shared views overlap either way. |
+| A bot that resyncs PRs that go DIRTY | Treats the symptom. The resolver already covers the residual. |
+| Indent 2 or sorted keys | Identical merge outcomes (measured), at +59% bytes for indent 2. |
+| A layout-free artifact, with the browser laying out views | Would remove the residual too, but it changes rendering. Deferred as #8541. |

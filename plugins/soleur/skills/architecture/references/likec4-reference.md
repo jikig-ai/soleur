@@ -113,4 +113,9 @@ npx -y likec4@latest validate .                 # parse + check references
 npx -y likec4@latest export json -o out.json .  # element/relation/view counts
 ```
 
+Never write raw `export json` output onto the committed `model.likec4.json`. Every writer
+publishes the canonical one-value-per-line format with blank view hashes, which is what lets git
+merge two regenerations (ADR-235, #8542). Regenerate with `bash scripts/regenerate-c4-model.sh`,
+or canonicalize with `node <plugin-root>/lib/c4-canonical-cli.mjs out.json > model.likec4.json`.
+
 Full docs: <https://likec4.dev/>.
