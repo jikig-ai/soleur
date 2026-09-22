@@ -25,6 +25,7 @@ const fsMock = vi.hoisted(() => ({
 vi.mock("node:fs/promises", () => fsMock);
 
 import { renderC4Model } from "@/server/c4-render";
+import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 
 type FakeChild = EventEmitter & {
   stderr: EventEmitter;
@@ -60,7 +61,7 @@ const TMP_DIR = "/tmp/c4-render-abc123";
 // A non-empty, valid layouted model (the success fixture).
 const VALID_MODEL = JSON.stringify({
   elements: { founder: { id: "founder" }, platform: { id: "platform" } },
-  views: { index: {} },
+  views: { index: { hash: "6v56Y9lvx4UMwclrRQ4gL_jWujZQPMIQbDx8qnXD68w" }, context: {} },
 });
 // likec4 exits 0 but emits this when spec.c4 is missing (the bug class).
 const EMPTY_MODEL = JSON.stringify({ elements: {}, views: {} });
@@ -124,9 +125,18 @@ describe("renderC4Model", () => {
     const p = renderC4Model(WS);
     const res = await p;
     expect(res.ok).toBe(true);
-    // The validated bytes are RETURNED verbatim (byte-identical to the read), so
-    // the writer commits exactly what likec4 produced — never re-stringified.
-    if (res.ok) expect(res.json).toBe(VALID_MODEL);
+    // The validated bytes are RETURNED in the canonical on-disk format (one
+    // value per line, view hashes blanked — #8542), byte-identical to what the
+    // repo and plugin writers emit through the same module, so the app never
+    // reformats a file another writer produced.
+    if (res.ok) {
+      expect(res.json).toBe(canonicalizeC4Model(VALID_MODEL));
+      // Pinned literal, independent of the module under test.
+      expect(res.json).toBe(
+        '{\n"elements": {\n"founder": {\n"id": "founder"\n},\n"platform": {\n"id": "platform"\n}\n},\n' +
+          '"views": {\n"index": {\n"hash": ""\n},\n"context": {}\n}\n}\n',
+      );
+    }
     // #4976: the tracked model.likec4.json is never published onto — the render
     // produces only a process-temp artifact. No copy/rename/write onto any path.
     expect(fsMock.copyFile).not.toHaveBeenCalled();
@@ -151,6 +161,22 @@ describe("renderC4Model", () => {
     expect(Object.prototype.hasOwnProperty.call(res, "json")).toBe(false);
     expect(fsMock.copyFile).not.toHaveBeenCalled();
     expect(fsMock.rename).not.toHaveBeenCalled();
+  });
+
+  it("maps a canonicalize failure to io_error and returns no json", async () => {
+    // V8 parses deep nesting iteratively but stringifies recursively, so a
+    // model that passes the elements gate can still fail to canonicalize.
+    const child = makeChild();
+    const deep = "[".repeat(20000) + "]".repeat(20000);
+    fsMock.readFile.mockResolvedValue(`{"elements":{"a":{"id":"a","x":${deep}}},"views":{}}`);
+    spawnThenEmit(child, () => child.emit("close", 0, null));
+    const res = await renderC4Model(WS);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toBe("io_error");
+      expect(res.detail).toContain("canonicalize failed");
+    }
+    expect(Object.prototype.hasOwnProperty.call(res, "json")).toBe(false);
   });
 
   it("treats an empty-elements export (exit 0) as empty_model and does NOT copy", async () => {

@@ -22,6 +22,7 @@ tier_classification: "Tier 1 (material) per `knowledge-base/legal/tc-version-bum
 brand_survival_threshold: single-user incident
 accepted_residual: "The re-scoped LUKS clause ships while a full un-wiped plaintext copy of every workspace remains on the superseded pre-cutover volume `hcloud_volume.workspaces` (`format = \"ext4\"`, `apps/web-platform/infra/server.tf`), retained attached-unmounted as the ADR-119 rollback backstop. Users are not told. CLO block B1 recommended an accompanying retained-plaintext disclosure sentence; the operator reaffirmed the UC-3 hold on 2026-07-24 and B1 was OVERRIDDEN. Tracking issue: #6808 (escalated by this PR to priority/p1-high + type/security). Ledgered internally as `plaintext-exception` (`tracking_issue: \"#6897\"`, `expires_on: 2026-10-22` — an INTERNAL commitment, never published) and named in the Article 30 register PA-1(g) and PA-2(g)."
 re_evaluation_triggers: "(1) **#6808 clears** — `WORKSPACES_LUKS_HEARTBEAT_URL` wired, the ADR-119 soak clock starts, and the Phase-5 plaintext wipe of `hcloud_volume.workspaces` completes: at that point the accepted residual is cured by reality and this audit's disposition upgrades from SIGNED-OFF-WITH-RESIDUAL to unqualified. (2) **First arms-length data subject** — if #3723 (or any other path) onboards a non-Soleur user while #6808 is open, the bounding fact that carries this residual (zero arms-length data subjects) is gone: the residual becomes p0, the hold MUST be re-raised, and the published wording must be qualified before onboarding, not after. (3) **Any regression of the LUKS mount** — `workspaces-luks-verify` reporting anything other than `device_type=crypto_LUKS` on `/dev/mapper/workspaces`, or an escrow/header failure, falsifies the one Article 32 claim this PR retains and makes the retained clause itself an over-claim (the #6812 silent-revert failure mode is documented on this exact surface). (4) **Any future edit that would add the held disclosure sentence** — the Path-2 wording preserved in the plan §3b must be reviewed against the then-current infrastructure before publication, and must anchor on **Art. 12(1) + 5(1)(a)**, not Art. 13(3). (5) Standard inherited triggers: an EEA-out transfer, a regulated-industry data subject, or any change of Hetzner locative away from `hel1` only."
+addendum_2026_09_21: "Conditioned on the merge of PR #8511 — #7226 channel residual recorded; a host-key failure counts as unavailable, not re-evaluation trigger (3). Disposition unchanged. See the Addendum (2026-09-21, #7226) at the end."
 ---
 
 # Counsel review audit — #6588 (Article 32 TOM retraction + LUKS re-scope)
@@ -1005,3 +1006,43 @@ operator retains an optional veto. **External** counsel re-review remains reserv
 frontmatter re-evaluation triggers — unchanged, live, and now joined by the claim-decay trigger
 in §A3.4. All output in this PR and in this audit remains **draft material requiring professional
 legal review**.
+
+---
+
+# Addendum (2026-09-21, #7226) — host authentication of the `workspaces-luks-verify` channel
+
+> **Conditioned on the merge of PR #8511**, which pins web-1's SSH host key on the Cloudflare
+> Tunnel SSH bridge (ADR-237). If PR #8511 closes unmerged, this addendum is void and the #7226
+> residual below stands unmitigated. **This addendum does not alter this audit's disposition.**
+> `§Amendment No. 3` remains the controlling section; §A3.6 (SIGNED-OFF WITH ACCEPTED RESIDUAL,
+> gate DISCHARGED) and the frontmatter re-evaluation triggers stand unamended.
+
+**The evidence channel, before and after.** Before AC15 (the strict pre-merge dispatch of
+`workspaces-luks-verify.yml` on the PR #8511 branch) and, for runs on `main`, before PR #8511
+merged (post-merge step 1), every `workspaces-luks-verify` verdict, including the §A3.1 E-1
+discharge run 30749271370 and every scheduled run since, travelled over a bridge that did not
+verify web-1's host key (the #7226 residual). A party at the Cloudflare-edge position could have
+returned a forged PASSED verdict. Nothing indicates that it did. E-1 stays discharged: this residual
+is recorded, not treated as retroactively invalidating those runs. From that point on, the runner
+checks web-1 against the committed ECDSA-P256 pin under strict host-key checking, so a passing
+verdict is host-authenticated.
+
+**A host-key failure counts as "unavailable", not as trigger (3).** A pin mismatch fails the run
+closed before any volume fact is read. Inside the probe step, the workflow's `host_key_verdict`
+check runs on every ssh call before the generic rc-255 arm and classes a host-key refusal as
+`unavailable` with its own reason `web_1_host_key_mismatch`; any other rc-255 failure is
+`unavailable` with reason `ssh_transport_failure`. A failure before the probe step emits no class
+and alarms under the fail-closed "could not verify the volume in either direction" default.
+Neither case is the `drift` class that fires re-evaluation trigger (3): no LUKS regression has
+been observed. Such a run is also not a successful run, so it counts against the §A3.4 trailing
+30-day claim-decay window exactly as any other failed run does.
+
+**Escalation (H4).** If the mismatch is explained by a wrong pin capture or a legitimate web-1
+re-key (#6931), the remedy is a re-capture PR, never a loosened bridge. If that capture is still
+unresolved after **21 days**, escalate to the CLO. That leaves room inside the 30-day window to
+re-tense or withdraw the published clause (Amendment No. 2, Door 2) before it decays. A mismatch
+that neither cause explains is a possible impersonation of web-1. Route it at once to
+breach-notice triage (`knowledge-base/legal/recommended-tools.md#breach-notice-triage`); the
+72-hour notification clock runs from awareness. The operational steps are in
+`knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`, "Host-key mismatch
+(H4)".

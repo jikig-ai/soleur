@@ -1289,6 +1289,10 @@ Rotations against a populated store stay gated on #7226 (host-key pinning), per 
 > window and does not expire, and the root key persists across replaces. Rotation cutovers still need no
 > replace for access. The real cutover route itself is being rebuilt under #8211, and the first real
 > cutover needs a fresh replace plus a `GIT_DATA_LUKS_KEY` rotation. See ADR-220, "Amendment log".
+>
+> **Amended 2026-09-21 (#7226, PR #8511):** host-key pinning is decided in
+> [ADR-237](./ADR-237-ssh-host-keys-are-pinned.md); this gate is discharged when ADR-237 reaches
+> `accepted` (its post-merge step 4), and every git-data replace now also rotates the host key.
 
 **Correction — 2026-09-15 (#6680).** The "Inngest-dispatches-GHA" claim in the 2026-07-02 Phase 3 GA
 amendment, item (b), is false for the git-data cutover: `git-data-cutover.yml` is dispatched by hand

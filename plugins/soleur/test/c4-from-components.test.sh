@@ -86,6 +86,11 @@ assert_contains "$PROSE_OUT" "elements=3" "AC2 red arm: degraded is NOT an empty
 # --- Phase 1.5: the viewer needs more than three .c4 files ------------------
 assert_file_exists "$OK_ROOT/$GEN" "emits generated-components.c4"
 assert_file_exists "$OK_ROOT/$DIAGRAMS/model.likec4.json" "emits model.likec4.json (viewer returns MODEL_NOT_BUILT without it)"
+# The plugin is one of THREE writers of this file (with the repo regenerator and
+# the web app's c4-render.ts). All three must publish the canonical format
+# (#8542) or each reformats the others' file in the customer's repo.
+CANON_CHECK="$(node "$REPO_ROOT/plugins/soleur/lib/c4-canonical-cli.mjs" --check "$OK_ROOT/$DIAGRAMS/model.likec4.json" 2>&1 || true)"
+assert_eq "canonical" "$CANON_CHECK" "published model.likec4.json is in the canonical line-per-value format"
 assert_file_exists "$OK_ROOT/$DIAGRAMS/c4-model.md" "emits the c4-model.md view page"
 
 VIEW_PAGE_BODY="$(cat "$OK_ROOT/$DIAGRAMS/c4-model.md")"

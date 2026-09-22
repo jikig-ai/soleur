@@ -28,6 +28,7 @@
 // `apps/web-platform`, or it names a repo-root helper (GIT_ROOT, repoRoot, …).
 export const REPO_WIDE_SUITES: readonly string[] = [
   "test/agent-runner-system-prompt.test.ts",
+  "test/c4-canonical-mirror.test.ts",
   "test/c4-diagram-path-scope.test.ts",
   "test/c4-likec4-version-pin.test.ts",
   "test/c4-project-route.test.ts",
