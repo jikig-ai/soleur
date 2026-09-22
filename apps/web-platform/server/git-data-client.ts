@@ -40,7 +40,11 @@ import { gitWithPrivateKeyAuth } from "@/server/git-auth";
 // authorizeGitDataAccess), so the ESM cycle resolves via live bindings and never
 // touches a partially-initialized export at module-eval time (intentional; keeps
 // a SINGLE URL builder + a SINGLE authz authority, no drift).
-import { assertSafeWorkspaceId, gitDataRemoteUrl } from "@/server/git-data-replication";
+import {
+  assertSafeWorkspaceId,
+  gitDataRemoteUrl,
+  resolveGitDataHostKeyPin,
+} from "@/server/git-data-replication";
 import { assertSafeWorktreeId } from "@/server/worktree-write-lease";
 
 /**
@@ -223,6 +227,10 @@ export async function fetchFromGitData(params: {
   // workspaceId)`): a clone whose local `git-data` remote pointed at a DIFFERENT
   // workspace could otherwise pull tenant-B objects while authz passed for tenant-A.
   const remoteUrl = gitDataRemoteUrl(workspaceId);
+  // (#7226) Guard before the transport: with the store enabled an absent or malformed
+  // pin throws here, into the caller's existing failure report (ensure-workspace-repo's
+  // fail-soft overlay), and nothing is fetched unpinned.
+  const hostKeyPin = resolveGitDataHostKeyPin();
 
   // Map this user's OWN namespace into REMOTE-TRACKING refs (`refs/remotes/git-data/*`),
   // NOT local `refs/heads/*` (3.D, CTO ruling). A `+…:refs/heads/*` force-fetch would
@@ -244,6 +252,7 @@ export async function fetchFromGitData(params: {
       `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
     ],
     transportKey,
+    hostKeyPin,
     { cwd: workspacePath, timeout: 60_000 },
   );
 }

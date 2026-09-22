@@ -25,6 +25,9 @@ permissions:
 
 env:
   TERRAFORM_VERSION: "1.10.5"
+  # (#7226) MUST equal TERRAFORM_VERSION (terraform-target-parity pins it); feeds
+  # web_1_host_key_probe's trigger in apps/web-platform/infra.
+  TF_VAR_terraform_version: "1.10.5"
 
 jobs:
   drift-check:

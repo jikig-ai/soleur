@@ -279,7 +279,23 @@ lines = open(tpl_p).read().split("\n")
 line_leading = []   # (lineno, varnames) for interpolations at the start of a line
 for i, ln in enumerate(lines, 1):
     if re.match(r'^[ \t]*\$\{', ln):
-        line_leading.append((i, re.findall(r'\b([a-z_]+)\b', ln)))
+        # [a-z0-9_]: a digit-bearing name (host_ssh_ed25519_private_key) must not vanish from
+        # the scan — it did under [a-z_], leaving only the `indent` token (#7226).
+        line_leading.append((i, re.findall(r'\b([a-z0-9_]+)\b', ln)))
+
+# (#7226, ADR-237) VALUES AUDITED BY SHAPE, not by file. The SSH host private key is not a
+# file() payload, so its bytes are unknown here — but its SHAPE is fixed: an OpenSSH armored
+# key (tls_private_key.*.private_key_openssh; the module's own validation refuses anything else)
+# whose lines are the two armor lines or base64 [A-Za-z0-9+/=]. None of those can begin with `#`,
+# so the template strip cannot reach it. Each entry must be bound from var.<same name> in the
+# render module; a freshly generated key is checked below when ssh-keygen exists.
+SHAPE_AUDITED = {
+    "host_ssh_ed25519_private_key": re.compile(
+        r'(-----(BEGIN|END) OPENSSH PRIVATE KEY-----|[A-Za-z0-9+/=]*)'),
+}
+for _n in SHAPE_AUDITED:
+    if not re.search(r'^\s*' + _n + r'\s*=\s*var\.' + _n + r'\s*$', tf, re.M):
+        sys.exit(f"{_n} is shape-audited but main.tf does not bind it from var.{_n}")
 
 if not line_leading:
     sys.exit("no line-leading interpolation sites found — the template shape changed and "
@@ -287,6 +303,21 @@ if not line_leading:
 
 problems = []
 for lineno, names in line_leading:
+    shaped = [n for n in names if n in SHAPE_AUDITED]
+    if shaped:
+        import shutil, subprocess, tempfile
+        if shutil.which("ssh-keygen"):
+            with tempfile.TemporaryDirectory() as _d:
+                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "",
+                                "-f", os.path.join(_d, "k")], check=True)
+                sample = open(os.path.join(_d, "k")).read()
+            for var in shaped:
+                bad = [l for l in sample.split("\n")
+                       if not SHAPE_AUDITED[var].fullmatch(l) or TEMPLATE_STRIP.fullmatch(l + "\n")]
+                if bad:
+                    problems.append(f"line {lineno}: a generated {var} carries a line outside "
+                                    f"its audited shape or reachable by the strip: {bad[0]!r}")
+        continue
     hit = [n for n in names if n in bindings]
     if not hit:
         problems.append(f"line {lineno}: line-leading interpolation references no known "

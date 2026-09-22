@@ -3,7 +3,7 @@ title: Revert the zot pull-site flip to GHCR-primary
 issue: "#6122"
 adr: ADR-096
 severity: P1 (deploy/boot path)
-last_reviewed: 2026-07-30
+last_reviewed: 2026-09-22
 ---
 
 # Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-096)
@@ -50,6 +50,31 @@ but not sufficient to authorize 5.3–5.5", and that the ADR stays *Adopting*; #
 #6500 are both still OPEN, and the `zot-soak-6122` follow-through explicitly refuses to
 exit 0 while #6500 is open. The credential was lost, not retired — which is worse, because
 nothing that gates the retirement was satisfied.
+
+## Cutover record (#6122)
+
+The cutover was not recorded when it happened. It was reconstructed on 2026-09-22 from Sentry
+(90-day retention):
+
+| Fact | Value | Evidence |
+|---|---|---|
+| First zot-served web pull | **2026-07-17T19:51:49Z** | earliest `feature:supply-chain op:image-pull registry:"zot" image:"web"` event; none earlier in retention |
+| Soak window start (`START` in `zot-soak-6122.sh`) | **2026-07-17T19:45:00Z** | pinned a few minutes BEFORE the first zot pull, never after |
+| Flag that performs the flip | `ZOT_REGISTRY_URL` in Doppler `soleur/prd` | managed as `doppler_secret` in `zot-registry.tf` since #6120 (2026-07-07) |
+| GHCR became unusable | around 2026-07-29 | PAT revoked out-of-band, minter disabled (see the banner above; #7071) |
+
+**Backfilled soak verdict, 2026-09-22: FAIL.** Run over `START`..now, the soak found six fallback
+events. None can be dropped by moving `START` later: that is the documented false-PASS route.
+
+| When (UTC) | Signal | Context |
+|---|---|---|
+| 2026-07-17 19:52:12, 20:11:39 | `zot-gate-degraded` ×2 | flip day, within 20 min of the first zot pull |
+| 2026-07-26 16:51:40, 07-27 07:49:55, 07-27 11:05:35 | `app_ghcr_served` ×3 | web fresh boots served by GHCR, before GHCR died |
+| 2026-09-22 07:01:49 | `inngest_ghcr_fallback` ×1 | inngest host booted before its private NIC was usable (#8539) |
+
+Between 2026-07-27 11:05Z and 2026-09-22 07:01Z there were zero fallbacks. There have also been
+**no web fresh boots since 2026-07-27**, so `stage:"app_zot"` has 0 events: a zot-served web
+fresh boot has never been observed, only zot-served rolling deploys (392 pulls in 90 days).
 
 ## What to do instead when zot is unreachable
 

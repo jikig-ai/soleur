@@ -37,10 +37,45 @@
 #   any other value          -> flag=off                                         exit 0
 # `true` is compared exactly (no case folding, no trimming): the app enables the store only on
 # process.env.GIT_DATA_STORE_ENABLED === "true" (apps/web-platform/server/workspace-resolver.ts).
+#
+# GIT-DATA HOST-KEY PIN (#7226, plan D3). The same step, with the same `prd` token, reads
+# GIT_DATA_SSH_HOST_KEY (published by Terraform when git-data is born or replaced) with the same
+# --no-exit-on-missing-secret semantics, validates its shape, and writes it to
+# $RUNNER_TEMP/git-data.pin for the workflow's "Write git-data ssh_config" step. The raw value is
+# never printed: only its SHA256 fingerprint, computed after validation.
+#   the read exits non-zero  -> verdict=git_data_host_key_unavailable reason=<word> rc=<n> exit 5
+#        <word>: the same classification as the flag read (auth_invalid | forbidden |
+#        config_not_found | network | unknown), through the same read_secret / reason_of
+#   exit 0 + empty           -> verdict=git_data_host_key_unavailable reason=absent       exit 5
+#   not one ED25519 key line -> verdict=git_data_host_key_unavailable reason=invalid      exit 5
+#   RUNNER_TEMP unusable     -> verdict=pin_write_failed                                  exit 5
+#   valid                    -> git_data_pin=present fp=SHA256:<fingerprint>
+# Before the pin read it prints one informational line about the app's unpinned fallback arm:
+#   TOFU_ARM present|absent|unknown — whether the file GIT_AUTH_TS_PATH names (default: the
+#   checkout's apps/web-platform/server/git-auth.ts) still carries the trust-on-first-use ssh
+#   option itself (the accept-new value of the host-key-checking option, matched case-insensitively). The
+#   probe keys on the BEHAVIOUR, not on a constant's name: renaming the constant must not flip it
+#   to absent. The needle is built by concatenation so this file is not itself a hit for
+#   tests/scripts/test-no-tofu-ssh.sh. `present` also raises a ::warning: that arm must be
+#   deleted (#5914) before GIT_DATA_STORE_ENABLED is ever set.
 set -euo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
+
+# Canonical copy of plugins/soleur/test/test-helpers.sh's guard (the fixture-dir-operand-assert
+# suite pins every tracked copy byte-identical). Guards the one write below whose operand comes
+# from the environment ($RUNNER_TEMP).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 refuse() { # <verdict-detail>
   echo "[git-data-flag-precheck] verdict=$1"
@@ -65,22 +100,24 @@ reason_of() {
   fi
 }
 
-# read_secret <NAME> [extra-flag] -> sets VAL; refuses on a non-zero exit.
+# read_secret <NAME> <failure-verdict> [extra-flag] -> sets VAL; on a non-zero exit refuses with
+# "<failure-verdict> reason=<word> rc=<n>", so every read in this file classifies its failure the
+# same way.
 VAL=""
 read_secret() {
   local rc=0
   : > "$ERRF"
-  VAL="$(doppler secrets get "$1" --plain ${2:+"$2"} -p soleur -c prd 2>"$ERRF")" || rc=$?
+  VAL="$(doppler secrets get "$1" --plain ${3:+"$3"} -p soleur -c prd 2>"$ERRF")" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    refuse "flag_read_failed reason=$(reason_of "$ERRF") rc=${rc}"
+    refuse "$2 reason=$(reason_of "$ERRF") rc=${rc}"
   fi
 }
 
-read_secret GIT_DATA_STORE_ENABLED --no-exit-on-missing-secret
+read_secret GIT_DATA_STORE_ENABLED flag_read_failed --no-exit-on-missing-secret
 flag="$VAL"
-read_secret DOPPLER_PROJECT
+read_secret DOPPLER_PROJECT flag_read_failed
 project="$VAL"
-read_secret DOPPLER_CONFIG
+read_secret DOPPLER_CONFIG flag_read_failed
 config="$VAL"
 if [ "$project" != soleur ] || [ "$config" != prd ]; then
   refuse "flag_read_failed reason=scope_mismatch"
@@ -89,6 +126,51 @@ fi
 if [ "$flag" = true ]; then
   refuse flag_already_true
 fi
+
+# --- TOFU_ARM (informational) ---
+GIT_AUTH_TS="${GIT_AUTH_TS_PATH:-$(dirname "$0")/../server/git-auth.ts}"
+if [ ! -r "$GIT_AUTH_TS" ] || [ ! -f "$GIT_AUTH_TS" ]; then
+  echo "TOFU_ARM unknown"
+elif grep -qiF "StrictHostKeyChecking=accept-""new" "$GIT_AUTH_TS"; then
+  echo "TOFU_ARM present"
+  echo "::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set"
+else
+  echo "TOFU_ARM absent"
+fi
+
+# --- git-data host-key pin ---
+# twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh (ED25519 arm);
+# apps/web-platform/server/git-data-replication.ts (resolveGitDataHostKeyPin);
+# apps/web-platform/infra/modules/git-data-userdata/variables.tf (host_ssh_ed25519_public_key)
+PIN_RE='^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$'
+read_secret GIT_DATA_SSH_HOST_KEY git_data_host_key_unavailable --no-exit-on-missing-secret
+pin="$VAL"
+if [ -z "$pin" ]; then
+  refuse "git_data_host_key_unavailable reason=absent"
+fi
+# $PIN_RE unquoted: a quoted right-hand side is a literal string match, not a regex.
+if ! [[ $pin =~ $PIN_RE ]]; then
+  refuse "git_data_host_key_unavailable reason=invalid"
+fi
+PIN_OUT="${RUNNER_TEMP:-}/git-data.pin"
+if [ -z "${RUNNER_TEMP:-}" ] || ! [[ $PIN_OUT =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
+  refuse pin_write_failed
+fi
+# The regex above already refuses a relative or dot-dot path; the canonical guard is the
+# statement plugins/soleur/test/fixture-relative-assert.test.sh can SEE on the write's operand.
+assert_fixture_dir "$PIN_OUT"
+rm -f "$PIN_OUT" 2>/dev/null || true
+if ! printf '%s\n' "$pin" > "$PIN_OUT"; then
+  refuse pin_write_failed
+fi
+fp="$(ssh-keygen -lf "$PIN_OUT" 2>/dev/null | awk '{print $2}')" || fp=""
+case "$fp" in
+  SHA256:*) : ;;
+  *) rm -f "$PIN_OUT"; refuse "git_data_host_key_unavailable reason=invalid" ;;
+esac
+chmod 0444 "$PIN_OUT" || refuse pin_write_failed
+echo "git_data_pin=present fp=${fp}"
+
 if [ -z "$flag" ]; then
   echo "flag=unset"
 else

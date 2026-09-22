@@ -519,6 +519,18 @@ variable "ci_ssh_private_key" {
   sensitive   = true
 }
 
+# (#7226, ADR-237) The Terraform CLI version running the apply, mirrored from each workflow's
+# TERRAFORM_VERSION (parity-pinned by terraform-target-parity.test.ts) and passed as
+# TF_VAR_terraform_version. Its only consumer is terraform_data.web_1_host_key_probe's trigger:
+# a Terraform bump can change the Go SSH client's host-key algorithm preference, so it must
+# re-prove web-1's pin. An operator-local apply must export the same value, or it re-triggers
+# the probe (the default is empty).
+variable "terraform_version" {
+  description = "Terraform CLI version of the applying workflow (re-triggers web_1_host_key_probe on a bump). Empty locally."
+  type        = string
+  default     = ""
+}
+
 variable "cf_access_client_secret" {
   description = "CF Access service-token client secret for the deploy webhook endpoint"
   type        = string

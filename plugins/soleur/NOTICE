@@ -147,7 +147,9 @@ mattpocock/skills
       the OpenHands mirror of the agent above; it carries the same derived
       prose and is listed because a Used-in list that omits one of three
       mirrors understates the reach of the attribution) (#8289),
-    skills/skill-creator/references/authoring-levers.md (#8290)
+    skills/skill-creator/references/authoring-levers.md (#8290),
+    skills/product-roadmap/SKILL.md (#8292: Where Work Lives, the
+      next frontier, workshop step 1.6)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent
@@ -256,6 +258,24 @@ mattpocock/skills
     user-invocable rows in skills/skill-creator/references/official-spec.md
     are sourced from Anthropic's Claude Code documentation, not the peer,
     and carry no credit.
+
+    Bundle 5 (#8292, from skills/engineering/wayfinder/SKILL.md at the
+    same HEAD) imports these mechanics into skills/product-roadmap/
+    SKILL.md: the Not Yet Specified fog section with its
+    state-the-question-not-answer-it test, the no-pre-slicing rule, and
+    graduation that clears the fog entry so the work lives only as its
+    issue; out-of-scope-as-closed-issue that never graduates (a changed
+    mind is a fresh issue, not a resumption), kept out of the decisions
+    record; and native blocking edges wired in a second pass once every
+    issue exists, read by an open, unblocked, unassigned frontier (the
+    frontier treats an assignee as a claim). Deliberately NOT imported:
+    the map issue with child decision tickets and wayfinder:* labels, the
+    four ticket types, the claim act itself (self-assigning before work),
+    one-ticket-per-session, and sub-issue hierarchy (Soleur's phase
+    milestones already carry it). The imported SKILL.md prose shares no
+    8-word shingle with the peer file outside the quoted graduation-test
+    sentence. The two roadmap.md section intros and the fog note in
+    skills/plan/SKILL.md share none at all and carry no comment.
 
   MIT License (upstream)
 
