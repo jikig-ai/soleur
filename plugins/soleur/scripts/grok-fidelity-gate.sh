@@ -32,6 +32,9 @@ cd "$PLUGIN_ROOT"
 echo "==> sync-grok-agent-compat --check"
 bun run scripts/sync-grok-agent-compat.ts --check
 
+echo "==> trust checkout for grok inspect (.grok/commands is skipped in untrusted folders)"
+bun -e 'import { ensureGrokFolderTrusted, REPO_ROOT } from "./lib/grok-inspect-contract.ts"; ensureGrokFolderTrusted(REPO_ROOT);'
+
 echo "==> grok inspect contract + golden-path + lifecycle fidelity eval"
 # Scrub the inherited git-location family before starting a test runner (#7833). This is an
 # entry point outside lefthook.yml and scripts/hooks/, so Guard 2 does not see it; the
