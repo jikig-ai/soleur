@@ -114,7 +114,7 @@ counted run, canonical-ISO cutoff validation, and a `DEPLOY_ARM_JOBS` ↔
 
 ## Post-upgrade (pending)
 
-`UPGRADE_NOT_BEFORE`: **TBD** — set to the `gh api orgs/jikig-ai --jq
+`UPGRADE_NOT_BEFORE`: `2026-09-22T10:19:56Z` — set to the `gh api orgs/jikig-ai --jq
 .plan.name` == `team` verification timestamp (operator-upgrade-steps.md Step 2).
 
 Soak probe: `scripts/followthroughs/actions-queue-tail-8450.sh` — pass =
