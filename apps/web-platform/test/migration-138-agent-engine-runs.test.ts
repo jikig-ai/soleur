@@ -63,6 +63,10 @@ describe("migration 138: agent engine live runs", () => {
     );
   });
 
+  it("persists the reviewed adapter version for the selected engine", () => {
+    expect(code).toMatch(/CASE COALESCE\(s\.default_engine_id, 'claude-code'\)[\s\S]*WHEN 'codex' THEN 'codex-v1'[\s\S]*WHEN 'claude-code' THEN 'claude-code-v1'[\s\S]*ELSE 'registry-pending'/);
+  });
+
   it("does not use transactional-incompatible concurrent indexes", () => {
     expect(code).not.toMatch(/CONCURRENTLY/i);
   });

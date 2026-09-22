@@ -106,4 +106,15 @@ describe("/api/keys — oauth_token operator gate", () => {
     expect(h.upsert).toHaveBeenCalledTimes(1);
     expect(h.rpc).not.toHaveBeenCalled();
   });
+
+  it("stores an OpenAI API key through the same authenticated settings path", async () => {
+    h.user = { id: NON_OP };
+    const res = await POST(req({ key: "sk-openai-test", provider: "openai" }));
+    expect(res.status).toBe(200);
+    expect(h.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: NON_OP, provider: "openai" }),
+      expect.anything(),
+    );
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
 });
