@@ -321,6 +321,10 @@ classify_body() { # <file> -> empty | html | bytes
 # reads git too.
 materialize_reference() { # <sha> -> prints the plugin subdir on success
   local sha="$1" dest="$SCRATCH/reference" root
+  # The SHA is a fetch refspec and a `git archive` operand below — pin its shape
+  # before it reaches either, so a malformed CANARY_DELIVERED_SHA or a misresolved
+  # install pin cannot smuggle an option or a refspec past the flag position.
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
   command -v git >/dev/null 2>&1 || return 1
   root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
   [[ -n "$root" ]] || return 1
@@ -353,8 +357,12 @@ materialize_reference() { # <sha> -> prints the plugin subdir on success
     git init -q "$refrepo" || return 1
     remote_url="$(git -C "$root" remote get-url origin 2>/dev/null)" || return 1
     [[ -n "$remote_url" ]] || return 1
-    git -C "$refrepo" remote add origin "$remote_url" || return 1
-    git -C "$refrepo" fetch --no-tags --depth 1 origin "$sha" >/dev/null 2>&1 || return 1
+    # The SHA is fetched DIRECTLY by URL, with no `remote add`: a credential-bearing
+    # origin URL would otherwise persist in the scratch repo's .git/config. Fetching
+    # an arbitrary SHA this way needs the server to allow reachable-SHA fetches
+    # (uploadpack.allowReachableSHA1InWant / allowTipSHA1InWant, which GitHub
+    # enables); `clone --branch` cannot address an arbitrary commit.
+    git -C "$refrepo" fetch --no-tags --depth 1 -- "$remote_url" "$sha" >/dev/null 2>&1 || return 1
     archive_repo="$refrepo"
   fi
 

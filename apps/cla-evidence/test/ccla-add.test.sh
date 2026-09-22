@@ -48,9 +48,12 @@ trap 'rm -rf "$WORK"' EXIT
 # one of two suites that share a dependency leaves the other armed.
 #
 # One shallow CLONE of exactly this branch into a scratch repo under $WORK,
-# then copy the ledger out — never a fetch into the live checkout. A genuine
-# unavailability still ABORTS — "could not read the reference set" must never
-# degrade to an empty ledger, which would pass every account.
+# then extract the ledger blob with `git show` — the committed bytes, not the
+# checked-out file, so the clone's core.autocrlf/smudge configuration and any
+# post-checkout hook cannot shape the reference set. Never a fetch into the
+# live checkout. A genuine unavailability still ABORTS — "could not read the
+# reference set" must never degrade to an empty ledger, which would pass every
+# account.
 if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null; then
   # A `git fetch --depth=1` into this checkout would write `.git/shallow` into
   # the repo's COMMON dir — shared by every linked worktree — which the
@@ -66,8 +69,9 @@ if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>
          echo "         \`origin\` has no URL to clone it from." >&2
          exit 2; }
   git clone -q --depth=1 --no-tags --single-branch --branch cla-signatures \
-    "$_ledger_url" "$WORK/ledger-clone" 2>/dev/null \
-    && cp "$WORK/ledger-clone/signatures/cla.json" "$WORK/ledger.json" 2>/dev/null \
+    -- "$_ledger_url" "$WORK/ledger-clone" 2>/dev/null \
+    && git -C "$WORK/ledger-clone" show HEAD:signatures/cla.json \
+       > "$WORK/ledger.json" 2>/dev/null \
     || { echo "harness: could not read the ICLA ledger at origin/cla-signatures, even after a" >&2
          echo "         shallow clone. That branch is maintained by the upstream CLA action;" >&2
          echo "         without it the reference set is unavailable and no verdict is possible." >&2
@@ -1065,7 +1069,7 @@ echo "Total: $passes passed, $fails failed"
 # assertion could be deleted and the run stayed green and silent — the floor
 # only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
 # FIRE, never that they are tight, so nothing else catches the slack.
-MIN_ASSERTIONS=118
+MIN_ASSERTIONS=125
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

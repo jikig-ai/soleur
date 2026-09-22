@@ -10,7 +10,7 @@
 # the check and RENDER the claim from what was actually measured, never from a literal list.
 #
 # So the properties under test here are not "does it hash things". They are:
-#   (a) each dimension actually SEES its own write class (config, refs, HEAD, worktree);
+#   (a) each dimension actually SEES its own write class (config, refs, HEAD, worktree, shallow);
 #   (b) the carve-outs remove ONLY tooling churn, and specifically do NOT remove `branch.*.remote`
 #       / `.merge`, which `git push -u` and `checkout -b --track` write and which are therefore the
 #       one config trace a `git -C "" checkout -b` escape leaves behind;
@@ -152,7 +152,7 @@ done
 if [[ -z "$missing" ]]; then pass "every named function is defined"
 else fail "lib is missing:$missing"; fi
 
-# --- 2. The manifest names all four dimensions -------------------------------------------
+# --- 2. The manifest names every dimension -----------------------------------------------
 ck
 p=$(new_probe manifest) || { echo "FATAL: probe setup failed" >&2; exit 2; }
 man=$(cd "$p" && bash -c 'source "'"$LIB"'"; _repo_state >/dev/null; repo_boundary_manifest')
@@ -734,8 +734,8 @@ else
 fi
 
 # --- 37. EXTRACTOR UNIQUENESS: the next-action MAPPING, per dimension ---------------------------
-# Arm 25 concatenates all four next-actions into one blob and greps substrings, so the MAPPING is
-# unasserted — permuting the four strings across the four dimensions was fully green. The defect
+# Arm 25 concatenates every next-action into one blob and greps substrings, so the MAPPING is
+# unasserted — permuting the strings across the dimensions was fully green. The defect
 # this function exists to fix is precisely a wrong mapping (the old text offered `git reflog` for
 # every outcome).
 ck
@@ -752,8 +752,8 @@ else
 fi
 
 # --- 38. The runner's declared function contract equals what it actually CALLS ----------------
-# This set lived in three places in three different spellings: seven names in the runner's
-# `declare -F` loop, six in this suite's arm 1, and a four-alternative regex in arm 24. Deleting a
+# This set lived in three places in three different spellings: six names in the runner's
+# `declare -F` loop, five in this suite's arm 1, and a four-alternative regex in arm 24. Deleting a
 # function the runner calls but arm 1 omits left arm 1 green while the gate exited 2 with no arm
 # naming why. Derived from the runner's own call sites so there is one source of truth.
 ck
@@ -1272,9 +1272,7 @@ assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixtu
 state "$TMP_ROOT/shallowlinked-co"; before="$STATE_OUT"
 pgit -C "$p" rev-parse HEAD > "$common/shallow"
 state "$TMP_ROOT/shallowlinked-co"; after="$STATE_OUT"
-verdict=$(cd "$TMP_ROOT/shallowlinked-co" && env REPO_BOUNDARY_SALT=fixed-test-salt \
-  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash -c \
-  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+verdict=$(classify_in "$TMP_ROOT/shallowlinked-co" "$before" "$after")
 if grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict"; then
   pass "a shallow write to the shared common dir is seen from INSIDE a linked worktree"
 else
@@ -1282,8 +1280,10 @@ else
 fi
 
 # --- 56. present -> present, graft set CHANGED, is FATAL ----------------------------------------
-# A depth-bounded fetch on an ALREADY-shallow repo appends boundary SHAs — presence is unchanged,
-# so a presence-only dimension could never see it. The content digest is what this arm pins.
+# A depth-bounded fetch on an ALREADY-shallow repo REPLACES the boundary SHA set — presence and
+# line count are unchanged, so a presence-only or `wc -l`/`stat`-keyed dimension could never see
+# it. The write is a same-cardinality swap (one SHA overwritten by another), not an append:
+# the content digest is what this arm pins.
 ck
 p=$(new_probe shallowchange) || exit 2
 # Both SHAs are committed BEFORE the window: a commit inside it would move head/refs and the delta
@@ -1293,7 +1293,7 @@ common=$(probe_common "$p")
 assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
 pgit -C "$p" rev-parse 'HEAD~1' > "$common/shallow"
 state "$p"; before="$STATE_OUT"
-pgit -C "$p" rev-parse HEAD >> "$common/shallow"
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
 state "$p"; after="$STATE_OUT"
 verdict=$(classify_in "$p" "$before" "$after")
 n_fat=$({ grep -cE '^FATAL' <<<"$verdict" || true; })
@@ -1332,6 +1332,13 @@ state "$p"; before="$STATE_OUT"
 pgit -C "$p" rev-parse HEAD > "$common/shallow"
 state "$p"; after="$STATE_OUT"
 verdict=$(classify_in "$p" "$before" "$after")
+# The premise must be witnessed, not assumed: if the `wt` family failed to capture the sibling
+# this arm would be exercising the no-sibling path while claiming the softened regime.
+if ! grep -qE '^wt'$'\t' <<<"$before"; then
+  printf '[FATAL] fixture setup failed: the sibling worktree never reached the before-snapshot.\n' >&2
+  printf '        This arm cannot measure no-softening under siblings without it.\n' >&2
+  exit 1
+fi
 if grep -qE '^FATAL[[:space:]]+shallow.*CREATED' <<<"$verdict" \
    && ! grep -qE '^REPORT[[:space:]]+shallow' <<<"$verdict"; then
   pass "sibling presence does NOT soften a shallow delta: still FATAL"
@@ -1345,7 +1352,7 @@ fi
 ck
 p=$(new_probe shallowdeg) || exit 2
 stubbin="$TMP_ROOT/shallowdeg-bin"; mkdir -p "$stubbin"
-real_git="$(PATH="${PATH/$stubbin:/}" command -v git)"
+real_git="$(command -v git)"
 printf '%s\n' '#!/usr/bin/env bash' \
   'for a in "$@"; do [[ "$a" == "--git-common-dir" ]] && exit 1; done' \
   "exec $(printf '%q' "$real_git") \"\$@\"" > "$stubbin/git"
@@ -1368,9 +1375,18 @@ ck
 p=$(new_probe shallowhome) || exit 2
 other=$(new_probe shallowforeign) || exit 2
 other_common=$(probe_common "$other")
-assert_fixture_dir "$other_common"
+assert_fixture_dir "$other_common"  # git-resolved path; scanner cannot prove it fixture-rooted
 state "$p"; before="$STATE_OUT"
 pgit -C "$other" rev-parse HEAD > "$other_common/shallow"
+# The positive half of the vacuity pair: a must-PASS arm that never verifies its fixture write
+# landed is green under ANY dimension regression — including "reads nothing". Witness the write
+# through the dimension's own read of the OTHER repo before asserting silence here.
+state "$other"; ostate="$STATE_OUT"
+if ! grep -qE '^shallow'$'\t''present'$'\t' <<<"$ostate"; then
+  printf '[FATAL] fixture setup failed: the foreign-repo shallow write never measured present.\n' >&2
+  printf '        This arm cannot distinguish "correctly scoped" from "scoped to nothing".\n' >&2
+  exit 1
+fi
 state "$p"; after="$STATE_OUT"
 verdict=$(classify_in "$p" "$before" "$after")
 if ! grep -qE '^FATAL' <<<"$verdict"; then
@@ -1394,6 +1410,142 @@ else
   fail "shallow prose missing from the rendered claim: '$(printf '%s' "$rendered" | tr '\n' '|' | cut -c1-200)'"
 fi
 
+# --- 62. present -> present, STABLE, is clean -----------------------------------------------------
+# The must-PASS half of the grafts property: every arm until now either started absent or changed
+# the file, so a mutant that FATALs on ANY `present` endpoint — or that hashes nothing and always
+# reports the same digest — is green under 53-61. A stable measured file must produce NO verdict.
+ck
+p=$(new_probe shallowstable) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+pgit -C "$p" rev-parse HEAD > "$common/shallow"
+state "$p"; before="$STATE_OUT"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if ! grep -qE '^(FATAL|REPORT)[[:space:]]+shallow' <<<"$verdict"; then
+  pass "an unchanged .git/shallow produces no verdict (present->present is clean)"
+else
+  fail "stable shallow flagged: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 63. A non-regular node at the path is MEASURED, and the snapshot does not block --------------
+# The `-e && cat` shape had two failure modes a FIFO exposes at once: `cat` on a FIFO with no
+# writer blocks FOREVER (the after-snapshot would hang the whole battery), and a return-1 probe
+# would launder the node into `not-measured` — UNMEASURABLE, non-blocking — for what git itself
+# reads as "not shallow". The `unreadable` state exists so the node is measured and the
+# transition stays FATAL. `timeout` bounds the read: a regression to `cat` hangs for 15s, not the
+# suite's lifetime.
+ck
+p=$(new_probe shallowfifo) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+mkfifo "$common/shallow"
+# The bounded read is scoped to the DIMENSION, not `_repo_state`: git itself
+# opens .git/shallow the first time it parses a commit, so `git status` in the
+# snapshot would block on a FIFO no matter what the dimension does — no
+# dimension can promise a hang-free snapshot in the presence of one. What the
+# dimension must promise is that it adds NO block of its own: it never opens a
+# non-regular node, so it returns `unreadable` immediately.
+dim=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt \
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null timeout 15 bash -c \
+  'source "'"$LIB"'"; _repo_boundary_dim_shallow' </dev/null)
+rc=$?
+if [[ $rc -eq 124 ]]; then
+  fail "the shallow dimension BLOCKED on a FIFO at .git/shallow (a return-to-cat regression)"
+elif [[ "$dim" != "unreadable" ]]; then
+  fail "a FIFO at .git/shallow measured '$dim' instead of the unreadable state"
+else
+  # Classify a fabricated after-snapshot carrying the measured state — the
+  # real snapshot cannot be taken while the FIFO sits at the path (see above).
+  # classify's own live reads (symbolic-ref, remote, ref resolution) parse no
+  # commits, so they do not touch the node.
+  after="$(printf '%s\n' "$before" | sed 's/^shallow\tabsent$/shallow\tunreadable/')"
+  verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null timeout 15 bash -c \
+    'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+  if grep -qE '^FATAL[[:space:]]+shallow' <<<"$verdict"; then
+    pass "a non-regular node at .git/shallow is measured 'unreadable' and transitions FATAL without blocking"
+  else
+    fail "non-regular node did not classify FATAL: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+  fi
+fi
+
+# --- 64. A dangling symlink is an existing node, not absence --------------------------------------
+# `[[ -e ]]` follows links, so a symlink to nothing tests FALSE and the sampler reports `absent` —
+# the file-check family then sees "nothing there" where a node exists, and a
+# dangling->present swap reads as an ordinary CREATED instead of node-replacement. `-L` catches
+# the dangling case; a non-readable/non-regular symlink target is `unreadable` either way.
+ck
+p=$(new_probe shallowdangling) || exit 2
+common=$(probe_common "$p")
+assert_fixture_dir "$common"  # git-resolved path; scanner cannot prove it fixture-rooted
+state "$p"; before="$STATE_OUT"
+ln -s "$common/does-not-exist" "$common/shallow"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -q $'^shallow\tunreadable$' <<<"$after" \
+   && grep -qE '^FATAL[[:space:]]+shallow' <<<"$verdict"; then
+  pass "a dangling symlink at .git/shallow measures 'unreadable' (node exists), FATAL"
+else
+  fail "dangling symlink conflated with absence: '$(printf '%s' "$after" | grep '^shallow' | cut -c1-120)'"
+fi
+
+# --- 65. The shallow remedy is TRANSITION-AWARE ---------------------------------------------------
+# `git fetch --unshallow` on a complete repository exits 128 ("does not make sense") — prescribing
+# it for a REMOVED verdict hands the operator a command that cannot run exactly when the state is
+# worst (a file deleted WITHOUT --unshallow leaves missing objects). The classifier's detail
+# carries the transition keyword; next_action dispatches on it.
+ck
+removed_next=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action shallow "$1"' _ \
+  '.git/shallow was REMOVED — the `git fetch --unshallow` shape, or the file was deleted outright')
+created_next=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action shallow "$1"' _ \
+  '.git/shallow was CREATED — the whole repository, every worktree, is now shallow')
+changed_next=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action shallow "$1"' _ \
+  'graft set CHANGED — a depth-bounded fetch on an already-shallow repo moved the boundary')
+# The REMOVED diagnostic itself names "--unshallow" in prose ("rather than via
+# --unshallow"), so the negative arm asserts the ABSENCE OF A FETCH COMMAND,
+# not the absence of the word.
+if ! grep -q 'git fetch' <<<"$removed_next" \
+   && grep -q 'fetch --unshallow' <<<"$created_next" && grep -q 'fetch --unshallow' <<<"$changed_next" \
+   && grep -qF 'is-shallow-repository' <<<"$removed_next"; then
+  pass "shallow next-action dispatches on the transition (diagnose on REMOVED, --unshallow on CREATED/CHANGED)"
+else
+  fail "shallow remedy is transition-blind or backwards: removed='$removed_next' created='$created_next'"
+fi
+
+# --- 66. An after-ONLY manifest dimension is UNMEASURABLE, once ----------------------------------
+# The pairing loop used to iterate the BEFORE manifest only: a dimension that existed in `after`
+# but not `before` fell through to the family comparators with an empty before-value, and for
+# `shallow` that empty-vs-present diff fabricated a `REMOVED`-shaped FATAL against a row the
+# older snapshot never promised to measure. The union walk must emit UNMEASURABLE — exactly once,
+# not once per pass.
+ck
+p=$(new_probe afteronly) || exit 2
+before=$'manifest\thead\tmeasured\nhead\tabc123\nmanifest\tworktree\tmeasured\nworktree\tdeadbeef'
+after=$'manifest\thead\tmeasured\nhead\tabc123\nmanifest\tworktree\tmeasured\nworktree\tdeadbeef\nmanifest\tshallow\tmeasured\nshallow\tabsent'
+verdict=$(classify_in "$p" "$before" "$after")
+n_unm=$({ grep -cE '^UNMEASURABLE[[:space:]]+shallow' <<<"$verdict" || true; })
+if [[ "$n_unm" == 1 ]] && ! grep -qE '^FATAL' <<<"$verdict"; then
+  pass "an after-only dimension renders UNMEASURABLE exactly once (no fabricated transition)"
+else
+  fail "after-only dimension misclassified: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 67. The rendered claim names the `wt` classification input -----------------------------------
+# `wt` rides the manifest (the sibling set decides refs FATAL vs REPORT) but had no `dim_prose`
+# arm — its rendered name was the bare token `wt`, unexplained, in the operator-facing list.
+ck
+p=$(new_probe wtprose) || exit 2
+rendered=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c \
+  'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_inspected "$s"')
+if grep -qF 'sibling worktrees' <<<"$rendered"; then
+  pass "the inspected list renders the wt input in words, not the bare token"
+else
+  fail "wt prose missing from the rendered claim: '$(printf '%s' "$rendered" | tr '\n' '|' | cut -c1-200)'"
+fi
+
 # --- Accounting, WHOLE-SUITE checkpoint. The mid-file one above stops at arm 38.
 if [[ $((passes + fails)) -ne $asserted ]]; then
   printf '\n[FATAL] accounting (whole suite): passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
@@ -1407,7 +1559,7 @@ fi
 # an operator reads, misattributing a real classifier defect to suite tampering. Worse, the same
 # counter is the one a neutered `fail()` INFLATES, so the floor moved in the wrong direction
 # exactly when it mattered; the instrument self-test at the top of this file is what catches that.
-MIN_ASSERTIONS=66
+MIN_ASSERTIONS=72
 if [[ $((passes + fails)) -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only $((passes + fails)) assertion(s) EXECUTED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

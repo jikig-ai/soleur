@@ -1057,11 +1057,37 @@ rm -rf "$r" "$r2" "$r3"
 # review).
 cases=$((cases + 1))
 _refrepo_decl=$({ grep -cE 'refrepo="\$SCRATCH/refrepo"' "$CANARY" || true; })
-_scratch_fetch=$({ grep -cE 'git -C "\$refrepo" fetch( --[a-z-]+( [0-9]+)?)* --no-tags( --[a-z-]+( [0-9]+)?)* origin "\$sha"' "$CANARY" || true; })
+_scratch_fetch=$({ grep -cE 'git -C "\$refrepo" fetch( --[a-z-]+( [0-9]+)?)* --no-tags( --[a-z-]+( [0-9]+)?)* -- "\$remote_url" "\$sha"' "$CANARY" || true; })
 if [[ "$_refrepo_decl" == "1" && "$_scratch_fetch" == "1" ]]; then
   pass "the missing-sha fetch runs -C a \$SCRATCH-derived repo, keeping --no-tags"
 else
   fail "missing-sha fetch is not scratch-scoped (refrepo-from-\$SCRATCH decls=$_refrepo_decl, scratch fetch sites=$_scratch_fetch; both must be 1)"
+fi
+
+# The fetch names the URL DIRECTLY — no `remote add`. A credential-bearing origin
+# URL written into `$refrepo/.git/config` would outlive the fetch inside a
+# trap-cleaned dir whose removal is not a secret-hygiene story: the directory is
+# cleaned for space, and "cleaned eventually" is not "never persisted". Pinning
+# the ABSENCE is the load-bearing half — a reverted `remote add` still fetches
+# fine, so only a zero-count catches it.
+cases=$((cases + 1))
+_remote_adds=$({ grep -cE 'git -C "\$refrepo" remote add' "$CANARY" || true; })
+if [[ "$_remote_adds" == "0" ]]; then
+  pass "no remote add persists the origin URL into the scratch repo's config"
+else
+  fail "credential-bearing URL persisted into scratch .git/config via remote add (sites=$_remote_adds must be 0)"
+fi
+
+# The SHA reaches two operand positions — the fetch refspec and the archive
+# operand. A `=~ ^[0-9a-f]{40}$` gate at the function's top is what keeps a
+# malformed CANARY_DELIVERED_SHA from smuggling an option or a refspec past the
+# flag position.
+cases=$((cases + 1))
+_sha_gate=$({ grep -cE '\[\[ "\$sha" =~ \^\[0-9a-f\]\{40\}\$ \]\]' "$CANARY" || true; })
+if [[ "$_sha_gate" == "1" ]]; then
+  pass "the delivered SHA is validated as 40-hex before it reaches fetch/archive"
+else
+  fail "SHA shape validation missing (sites=$_sha_gate must be 1)"
 fi
 
 # AC9b — the zero-side is the load-bearing half: no `git -C "$root" fetch` may remain, and
@@ -1100,8 +1126,8 @@ fi
 # exits 0. A floor enforced through the suspect cannot witness the suspect. Report
 # and exit DIRECTLY. Proven by scripts/guard-vacuity-floor.test.sh, which neuters
 # `fail` and asserts the floor still exits non-zero.
-if [[ "$cases" -lt 122 ]]; then
-  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 122.\n' "$cases" >&2
+if [[ "$cases" -lt 126 ]]; then
+  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 126.\n' "$cases" >&2
   printf 'Either assertions were deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
   printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
   exit 1

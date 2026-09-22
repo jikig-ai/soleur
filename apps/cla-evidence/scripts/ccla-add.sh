@@ -334,18 +334,21 @@ if [[ -z "$LEDGER_FILE" ]]; then
   # Recover the ledger rather than telling the operator to. `hr-never-label-any-step-as-manual-without`
   # applies to a one-line `git clone` as much as to anything larger: the script
   # knows the exact branch, so making the operator fetch it by hand is an
-  # invented step. The sibling consumers (validate-roster.ts,
-  # roster-entry-gate.test.ts, the shell harness) each recover it without
-  # operator intervention; this was the last one that did not.
+  # invented step. The sibling consumers do NOT share this recovery —
+  # validate-roster.ts fails on a missing ledger and names the path the operator
+  # must pass — so the clone fallback below is this script's own obligation.
   if ! git show "origin/cla-signatures:signatures/cla.json" > "$LEDGER_FILE" 2>/dev/null; then
-    # The fallback CLONES the orphan branch into a scratch repository and copies
-    # the ledger out. The mechanism it replaced fetched the ref into the
-    # CALLER'S repository at --depth=1 — which writes .git/shallow into the
-    # repo's COMMON dir, shared by every linked worktree, and is FATAL under
-    # the repo-write boundary's shallow dimension (#7924). The scratch clone is
-    # STRONGER than the old --no-tags rationale ever was: it writes NOTHING
-    # into the caller's repo at all — no ref, no objects, no FETCH_HEAD, no
-    # .git/shallow — while --depth=1 still bounds the throwaway clone's size.
+    # The fallback CLONES the orphan branch into a scratch repository and
+    # extracts the ledger blob with `git show` — the committed bytes, not the
+    # checked-out file, so the clone's core.autocrlf/smudge configuration and
+    # any post-checkout hook cannot shape what the gate reads. The mechanism it
+    # replaced fetched the ref into the CALLER'S repository at --depth=1 —
+    # which writes .git/shallow into the repo's COMMON dir, shared by every
+    # linked worktree, and is FATAL under the repo-write boundary's shallow
+    # dimension (#7924). The scratch clone is STRONGER than the old --no-tags
+    # rationale ever was: it writes NOTHING into the caller's repo at all — no
+    # ref, no objects, no FETCH_HEAD, no .git/shallow — while --depth=1 still
+    # bounds the throwaway clone's size.
     _ledger_url="$(git remote get-url origin 2>/dev/null)" \
       || die "could not read origin/cla-signatures:signatures/cla.json, and remote \`origin\` is not configured — there is nothing to clone it from. That branch is maintained by the upstream CLA action; without it the ICLA signature ledger is unavailable and contribution-triggered entry cannot be evaluated" 2
     [[ -n "$_ledger_url" ]] \
@@ -354,8 +357,9 @@ if [[ -z "$LEDGER_FILE" ]]; then
       || die "could not allocate a scratch directory for the cla-signatures clone" 2
     TMP_DIRS+=("$_ledger_scratch")
     if ! git clone -q --depth=1 --no-tags --single-branch --branch cla-signatures \
-           "$_ledger_url" "$_ledger_scratch/repo" 2>/dev/null \
-       || ! cp "$_ledger_scratch/repo/signatures/cla.json" "$LEDGER_FILE" 2>/dev/null; then
+           -- "$_ledger_url" "$_ledger_scratch/repo" 2>/dev/null \
+       || ! git -C "$_ledger_scratch/repo" show HEAD:signatures/cla.json \
+           > "$LEDGER_FILE" 2>/dev/null; then
       die "could not read origin/cla-signatures:signatures/cla.json, even after a shallow clone into a scratch repository. That branch is maintained by the upstream CLA action; without it the ICLA signature ledger is unavailable and contribution-triggered entry cannot be evaluated" 2
     fi
   fi

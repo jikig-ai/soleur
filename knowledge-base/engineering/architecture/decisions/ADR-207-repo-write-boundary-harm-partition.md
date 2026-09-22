@@ -4,7 +4,7 @@ status: accepted
 date: 2026-09-07
 tags: [test-runner, repo-write-boundary, guard-design, attribution, worktrees, git-refs]
 related_adrs: [ADR-166, ADR-181, ADR-183, ADR-193]
-related_issues: [7553, 7652, 7702, 7795]
+related_issues: [7553, 7652, 7702, 7795, 7924]
 ---
 
 # ADR-207: the repo-write boundary partitions by ATTRIBUTION, not severity
@@ -137,20 +137,24 @@ propagated.
 
 **What was NOT softened, and stays FATAL in every regime:** `HEAD`; the working tree; this
 worktree's own branch; any tag **move**; any tag **deletion**; any tag creation on a checkout
-with no sibling (every CI runner, i.e. the path that gates merges); and any tag creation whose
-short name could shadow a ref git resolves ahead of it.
+with no sibling (every CI runner, i.e. the path that gates merges); any tag creation whose
+short name could shadow a ref git resolves ahead of it; and — added by #7924 — every measured
+`shallow` transition.
 
 Added by #7924: **`shallow`** — the `.git/shallow` state in the repository's **common dir**
-(created, removed, or graft-set changed). It is the first sampled dimension whose target lives in
-the common dir rather than this checkout — it is resolved through
-`git rev-parse --path-format=absolute --git-common-dir`, because `--git-dir` on a linked worktree
-is `.git/worktrees/<n>`, a per-worktree path that never carries the file. Two reasons, each
-sufficient, keep it out of the ledger: **(a)** the admission test is "a sibling *routinely*
-produces it", and after #7924 moved the four battery-reachable producers into scratch repos no
-routine producer of a shallow delta exists — a softened cell would buy nothing; **(b)** unlike a
-softened ref move, the harm lands on THIS run's own evidence: a mid-window shallow flip changes
-what `git log` and friends answer for every suite still to run, in this worktree and every
-sibling. A `REPORT` would print-and-pass a corruption of the evidence base itself.
+(created, removed, or graft-set changed; a non-regular or unreadable node at the path is the
+measured `unreadable` state and transitions FATAL the same way). It is the first dimension to
+resolve its target path via `git rev-parse --path-format=absolute --git-common-dir` — necessary
+because `--git-dir` on a linked worktree is `.git/worktrees/<n>`, a per-worktree path that never
+carries the file. (It is NOT the first dimension to read common-dir state — `config` reads the
+shared local config and `refs` reads the shared ref store; an earlier revision of this sentence
+claimed otherwise.) Two reasons, each sufficient, keep it out of the ledger: **(a)** the
+admission test is "a sibling *routinely* produces it", and after #7924 moved the four
+battery-reachable producers into scratch repos no routine producer of a shallow delta exists — a
+softened cell would buy nothing; **(b)** unlike a softened ref move, the harm lands on THIS run's
+own evidence: a mid-window shallow flip changes what `git log` and friends answer for every
+suite still to run, in this worktree and every sibling. A `REPORT` would print-and-pass a
+corruption of the evidence base itself.
 
 ### 4. The collision guard, and why a CREATION can reach move-grade harm
 

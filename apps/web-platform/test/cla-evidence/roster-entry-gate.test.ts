@@ -237,10 +237,19 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
       try {
         execFileSync(
           "git",
-          ["clone", "--depth=1", "--no-tags", "--single-branch", "--branch", "cla-signatures", remoteUrl, tmpCloneDir],
+          ["clone", "--depth=1", "--no-tags", "--single-branch", "--branch", "cla-signatures", "--", remoteUrl, tmpCloneDir],
           { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: cleanGitEnv() },
         );
-        return JSON.parse(readFileSync(join(tmpCloneDir, "signatures/cla.json"), "utf8"));
+        // The committed blob, not the checked-out file: `git show` is immune to
+        // the clone's core.autocrlf/smudge configuration and any post-checkout
+        // hook — the reference set must be exactly what the branch serves.
+        const blob = execFileSync("git", ["-C", tmpCloneDir, "show", "HEAD:signatures/cla.json"], {
+          cwd: repoRoot,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: cleanGitEnv(),
+        });
+        return JSON.parse(blob);
       } finally {
         rmSync(tmpCloneDir, { recursive: true, force: true });
       }

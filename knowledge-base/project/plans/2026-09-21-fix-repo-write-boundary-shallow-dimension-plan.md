@@ -749,8 +749,48 @@ suite arms and the ADR amendment rather than a separate review seat.
 - `--git-common-dir` is relative on a top-level checkout — `--path-format=absolute` is load-bearing,
   not tidiness.
 - `[[ -f ]]` vs `[[ -e ]]`: a non-regular or unreadable `shallow` path must degrade to not-measured,
-  never read as `absent` — `absent` is a verdict, not a fallback.
+  never read as `absent` — `absent` is a verdict, not a fallback. **Superseded at review, see the
+  addendum below:** not-measured renders UNMEASURABLE — a non-blocking row — for a node git itself
+  treats as a real availability change. The shipped answer is a third measured state, `unreadable`.
 - The scratch clone keeps `--depth=1` **inside** the clone — an assertion anchored on "no `--depth`
   token in the file" would be both unachievable and wrong; grade the command's destination operand.
 - `ccla-add.sh`'s EXIT trap must keep returning 0 — the new `TMP_DIRS` cleanup slot must not turn the
   documented exit codes (2/3/4) into a bare 1.
+
+## Review amendments (as-built, post-panel)
+
+The 9-seat review panel (PR #8510) found the following against the shape prescribed above; the
+implementation was amended before merge rather than annotating around it.
+
+- **The `unreadable` measured state replaces `not-measured` for an existing-but-unreadable node.**
+  The sketch above (`[[ -e ]]` + `cat`) had three measured failure modes: `cat` on a FIFO blocks
+  forever; `-e` follows links so a dangling symlink reads as `absent` (a real node laundered into
+  "nothing there"); and returning 1 for an existing non-regular node renders UNMEASURABLE — a
+  non-blocking row — even though git itself reads an unreadable shallow file as *not shallow*, a
+  real availability change. The sampler now requires `-f && -r` for `present`, emits `unreadable`
+  for `[[ -e || -L ]]`, and reserves `return 1` for common-dir/digest-tool failure. `cat --` was
+  dropped for `cat` (the `--` is a GNUism BSD `cat` rejects).
+- **`repo_boundary_next_action` takes the transition detail as `$2`.** The prescribed single string
+  ran `git fetch --unshallow` for every transition — but on a REMOVED verdict the repo is already
+  complete and `--unshallow` exits 128 ("does not make sense"), so the remedy could not execute in
+  exactly the state it was for. REMOVED/non-regular transitions now prescribe diagnosis
+  (`is-shallow-repository`, `ls -l`, `worktree list`, `fsck`); CREATED/CHANGED keep `--unshallow`.
+- **Manifest pairing is the union of both snapshots.** The loop iterated the before manifest only;
+  a dimension present in `after` but not `before` fell through to the shallow comparator with an
+  empty before-value and fabricated a FATAL. After-only dimensions now emit UNMEASURABLE — once.
+- **Producers extract the committed blob, not the checkout.** `cp` of a checked-out `cla.json`
+  inherited the clone's `core.autocrlf`/smudge filters and any post-checkout hook; all ledger
+  consumers now `git show HEAD:signatures/cla.json`. The canary fetches the SHA **directly by
+  URL** — a `remote add` would persist a credential-bearing URL into the scratch repo's
+  `.git/config` — and validates `DELIVERED_SHA` as `^[0-9a-f]{40}$` before it reaches the fetch
+  refspec or the `git archive` operand. `--` separators precede URL/path operands.
+- **The runner's recovery block is gated to head/worktree FATALs** — the ref-surgery recipe is
+  irrelevant to a shallow verdict and its `next:` line now carries the real remedy.
+- **Suite additions beyond the plan's arm list:** stable `present→present` must-PASS (the plan's
+  arms were all-delta — a "present always FATALs" mutant survived them), same-cardinality graft
+  swap (the append-only arm passed a `wc -l`-keyed mutant), FIFO and dangling-symlink fixtures,
+  the after-only-manifest union arm, the `wt` prose arm, and the foreign-repo arm's positive
+  write-witness. Floors: `repo-write-boundary` 66→72, `ccla-add` 118→125, canary 122→126.
+- **Doc corrections folded in:** the ADR's "first common-dir dimension" claim (false — `config`
+  and `refs` already read shared state) and the `ccla-representative-icla-7922.sh` claim that its
+  plain fetch writes `.git/shallow` (it carries no depth flag) were both corrected.

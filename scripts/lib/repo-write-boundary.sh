@@ -229,19 +229,35 @@ _repo_boundary_dim_shallow() {
   common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
   [[ -n "$common" ]] || return 1
   f="$common/shallow"
-  # `absent` is a legitimate measured state — decide it BEFORE the tool probes so an absent file
-  # cannot be masked by a degraded tool.
-  [[ -e "$f" ]] || { printf 'absent\n'; return 0; }
-  # `_repo_boundary_dim_config` precedent: probe the digest tool up front — a missing sha256sum
-  # must degrade the DIMENSION to not-measured, never digest "" and call it a state.
-  _repo_boundary_digest probe >/dev/null 2>&1 || return 1
-  # The ASSIGNMENT carries cat's status: an existing-but-unreadable/non-regular path is a capture
-  # failure, not a digest of "". `_repo_boundary_digest "$(cat …)"` inline would swallow the
-  # failure — the substitution yields "" on cat's non-zero and digest still returns 0,
-  # manufacturing `present`.
-  raw="$(cat -- "$f")" || return 1
-  printf 'present\t'
-  _repo_boundary_digest "$raw" || return 1
+  # THREE measured states, not two. `absent` is a verdict; so is `unreadable` — a node that
+  # exists but is not a readable regular file: a directory, a chmod-0 file, a FIFO (which would
+  # block `cat` — and git's own fopen — forever), a socket, or a dangling symlink (caught by `-L`,
+  # which `-e` alone misses). Emitting it as a MEASURED state keeps every transition FATAL. The
+  # alternatives are both holes: reading it as `absent` misses the write entirely, and degrading
+  # to not-measured launders it into the non-blocking UNMEASURABLE class — when `chmod 000` on an
+  # already-shallow repo makes git treat the repo as non-shallow (fopen fails), i.e. the
+  # history-availability change is real. Only a TRULY missing node reads `absent`.
+  if [[ -f "$f" && -r "$f" ]]; then
+    # `_repo_boundary_dim_config` precedent: probe the digest tool up front — a missing sha256sum
+    # must degrade the DIMENSION to not-measured, never digest "" and call it a state.
+    _repo_boundary_digest probe >/dev/null 2>&1 || return 1
+    # The ASSIGNMENT carries cat's status: a read failure is a capture failure, not a digest of
+    # "". `_repo_boundary_digest "$(cat …)"` inline would swallow it — the substitution yields ""
+    # on cat's non-zero and digest still returns 0, manufacturing `present`. A regular file is
+    # finite, so `cat` terminates — the FIFO-hang class is the `-f` gate's, above. No `cat --`:
+    # BSD `cat` rejects the separator and `$f` is always absolute, so it cannot parse as a flag.
+    raw="$(cat "$f")" || return 1
+    local dig
+    # Digest FIRST, then print: emitting `present\t` before the digest's status is known leaves a
+    # half-line on the failure path — harmless today (`_repo_state` discards on rc != 0), but the
+    # sibling dims all emit complete-or-nothing.
+    dig="$(_repo_boundary_digest "$raw")" || return 1
+    printf 'present\t%s' "$dig"
+  elif [[ -e "$f" || -L "$f" ]]; then
+    printf 'unreadable\n'
+  else
+    printf 'absent\n'
+  fi
 }
 
 # --- the snapshot ------------------------------------------------------------------------------
@@ -282,10 +298,11 @@ _repo_state() {
     manifest+=$'manifest\trefs\tnot-measured\n'
   fi
 
-  # `.git/shallow`: a single-token body line (`absent` / `present\t<digest>`), not a family — a
-  # file whose EXISTENCE is the signal. It lives in the common dir, so it is shared by every
-  # worktree, and `git status` cannot see it: a depth-bounded fetch into the live repo moved it
-  # under every sampled dimension until this row existed (#7924).
+  # `.git/shallow`: a single-token body line (`absent` / `unreadable` / `present\t<digest>`), not
+  # a family — a file whose EXISTENCE is the signal. It lives in the common dir, so it is shared
+  # by every worktree, and `git status` cannot see it: a depth-bounded fetch into the live repo
+  # moved it under every sampled dimension until this row existed (#7924). `unreadable` is a
+  # measured state, not a capture failure — see the dimension's own comment.
   if shallow="$(_repo_boundary_dim_shallow)"; then
     manifest+=$'manifest\tshallow\tmeasured\n'
     body+="shallow"$'\t'"$shallow"$'\n'
@@ -426,6 +443,12 @@ repo_boundary_classify() {
   local bman aman dim bstat astat
   bman="$(repo_boundary_manifest "$before")"
   aman="$(repo_boundary_manifest "$after")"
+  # The pairing must see the UNION of both manifests. Iterating `bman` alone leaves a dimension
+  # that exists only in the AFTER snapshot unpaired — its empty before-value then falls through
+  # to the classifier and prints a fabricated transition (`""` vs `absent` reads as "REMOVED").
+  # Reachable across a lib swap: a stored before-snapshot predating a dimension, or a lib file
+  # replaced mid-run. #7924 added the first new dimension since this loop was written, which is
+  # why the one-directional version survived until now.
   local unmeasurable=""
   while IFS=$'\t' read -r dim bstat; do
     [[ -n "$dim" ]] || continue
@@ -436,6 +459,15 @@ repo_boundary_classify() {
         "$dim" "${bstat:-absent}" "${astat:-absent}"
     fi
   done <<<"$bman"
+  while IFS=$'\t' read -r dim astat; do
+    [[ -n "$dim" ]] || continue
+    bstat="$(printf '%s\n' "$bman" | awk -F'\t' -v d="$dim" '$1==d {print $2}')"
+    if [[ -z "$bstat" ]]; then
+      unmeasurable="$unmeasurable $dim"
+      printf 'UNMEASURABLE\t%s\tcaptured at one boundary (%s) and not the other (%s); this run is not evidence about it\n' \
+        "$dim" "absent" "${astat:-absent}"
+    fi
+  done <<<"$aman"
 
   local default_branch elsewhere own_branch own_short
   default_branch="$(_repo_boundary_default_branch)"
@@ -470,13 +502,32 @@ repo_boundary_classify() {
     bshallow="$({ grep "^shallow"$'\t' <<<"$before" || true; } | sed 's/^shallow\t//')"
     ashallow="$({ grep "^shallow"$'\t' <<<"$after"  || true; } | sed 's/^shallow\t//')"
     if [[ "$bshallow" != "$ashallow" ]]; then
+      # The detail string carries a transition keyword — `repo_boundary_next_action` dispatches
+      # the remedy on it. An `unreadable` endpoint means a NODE exists at the shallow path that
+      # git cannot read (directory, FIFO, chmod-0): git itself reads that as "not shallow" (the
+      # fopen fails), so the availability change is real even though no file was created or
+      # removed.
       case "$bshallow" in
         absent)
-          printf 'FATAL\tshallow\t.git/shallow was CREATED — the whole repository, every worktree, is now shallow\n' ;;
+          case "$ashallow" in
+            unreadable)
+              printf 'FATAL\tshallow\ta node appeared at .git/shallow that is not a readable file\n' ;;
+            *)
+              printf 'FATAL\tshallow\t.git/shallow was CREATED — the whole repository, every worktree, is now shallow\n' ;;
+          esac ;;
+        unreadable)
+          case "$ashallow" in
+            absent)
+              printf 'FATAL\tshallow\tthe non-file node at .git/shallow was REMOVED\n' ;;
+            *)
+              printf 'FATAL\tshallow\tCHANGED — the node at .git/shallow became a readable file; the graft state is measurable where it was not\n' ;;
+          esac ;;
         *)
           case "$ashallow" in
             absent)
-              printf 'FATAL\tshallow\t.git/shallow was REMOVED (the `git fetch --unshallow` shape)\n' ;;
+              printf 'FATAL\tshallow\t.git/shallow was REMOVED — the `git fetch --unshallow` shape, or the file was deleted outright\n' ;;
+            unreadable)
+              printf 'FATAL\tshallow\t.git/shallow became unreadable or non-regular — git now reads the repo as NOT shallow\n' ;;
             *)
               printf 'FATAL\tshallow\tgraft set CHANGED — a depth-bounded fetch on an already-shallow repo moved the boundary\n' ;;
           esac ;;
@@ -726,6 +777,7 @@ _repo_boundary_dim_prose() {
     config)   printf "local (shared) config, except branch.*.vscode-merge-base" ;;
     refs)     printf 'local heads and tags, by harm class' ;;
     shallow)  printf 'repository shallow state (.git/shallow in the shared common dir)' ;;
+    wt)       printf 'branches checked out in sibling worktrees at snapshot time (a classification input, not a diffed surface)' ;;
     *)        printf '%s' "$1" ;;
   esac
 }
@@ -754,9 +806,11 @@ repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [bef
   # MEASURED, so a reader does not go hunting: the dimensions that can realistically report
   # not-measured while HEAD still reads are `worktree` — `git status --porcelain` refreshing the
   # index fails under `index.lock` contention, which parallel worktrees produce routinely — and
-  # `shallow`, whose file is a single pointable path that can be unreadable or whose common dir
-  # can fail to resolve. git parses packed-refs and config eagerly, so every ref-store or config
-  # corruption takes `git rev-parse HEAD` down first and the WHOLE snapshot degrades instead.
+  # `shallow`, whose common dir can fail to resolve or whose digest tool can be absent (a
+  # non-regular or unreadable node at the path is NOT not-measured — it is the measured
+  # `unreadable` state, which transitions FATAL). git parses packed-refs and config eagerly, so
+  # every ref-store or config corruption takes `git rev-parse HEAD` down first and the WHOLE
+  # snapshot degrades instead.
   #
   # A dimension not measured at EITHER boundary is named HERE rather than silently dropped, so a
   # partial reading is never presented as whole coverage. This is the union of the two
@@ -798,6 +852,12 @@ repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [bef
           - any A -> B -> A pair inside the window (a `git stash push` followed by `pop`)
           - .git/objects/info/grafts (the deprecated grafts mechanism — a second invisible history
             rewrite, still unsampled)
+          - .git/objects/info/alternates (the object-store borrow — a third history-availability
+            surface in the same family, also still unsampled; the grafts line's #8515 is the
+            same defect class one mechanism over)
+          - pseudo-refs outside refs/heads and refs/tags: FETCH_HEAD, ORIG_HEAD, MERGE_HEAD,
+            CHERRY_PICK_HEAD — a plain `git fetch` writes FETCH_HEAD with no dimension seeing it
+            (the objects-with-no-ref-change entry above is the containing class)
           - anything a suite's descendants do AFTER the end snapshot
           - any entry point other than runs of this runner
           - any suite this runner did not start
@@ -806,13 +866,28 @@ EOF
 
 # Per-dimension next action. The old text offered `git reflog` and `git log origin/main..main` for
 # every outcome — HEAD/worktree instructions that say nothing at all about a config flip.
+# $2 is the FATAL line's detail field, where a dimension's remedy depends on the transition —
+# today only `shallow`: `git fetch --unshallow` on a complete repository exits 128 ("does not
+# make sense"), so prescribing it for a REMOVED verdict hands the operator a command that cannot
+# run exactly when the state is worst (a file deleted WITHOUT --unshallow leaves missing objects).
 repo_boundary_next_action() {
   case "$1" in
     head)     printf 'git reflog -25   # the commit that moved HEAD is reachable there' ;;
     worktree) printf 'git status && git diff   # UNCOMMITTED work is what is at risk' ;;
     config)   printf 'git config --local --unset <the key named in the [config] line above>   # --local IS the SHARED file every worktree on this machine inherits' ;;
     refs)     printf 'git show-ref --heads --tags   # compare against git reflog <ref>; a DELETED ref is recoverable from the reflog until gc' ;;
-    shallow)  printf 'git rev-parse --is-shallow-repository; cat "$(git rev-parse --git-common-dir)/shallow"; git fetch --unshallow origin   # a suite ran a --depth/--shallow fetch into this repo' ;;
+    shallow)
+      case "${2-}" in
+        *REMOVED*|*non-file*|*non-regular*|*'not a readable'*)
+          # The after-state is not a readable shallow file: nothing is there (the repo is
+          # already complete — re-running --unshallow cannot help), or a non-file node is the
+          # blocker. Diagnose; do not re-run the producer. The file lives in the SHARED common
+          # dir, so the writer is not necessarily a suite of this run — a sibling worktree or
+          # an operator command produces the identical delta.
+          printf 'git rev-parse --is-shallow-repository; ls -l "$(git rev-parse --path-format=absolute --git-common-dir)/shallow"; git worktree list   # if the file was deleted outright rather than via --unshallow, objects may be missing — `git fsck` verifies; the writer search is bounded by the worktree list and `stat` on the path' ;;
+        *)
+          printf 'git fetch --unshallow origin   # restores full history (`origin` is the conventional remote name — substitute yours); the file is in the SHARED common dir, so a sibling worktree or operator command can also be the writer — `git worktree list` bounds the search' ;;
+      esac ;;
     *)        printf 'git status' ;;
   esac
 }
