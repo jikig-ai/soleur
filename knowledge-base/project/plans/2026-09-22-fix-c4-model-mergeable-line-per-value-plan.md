@@ -283,8 +283,8 @@ now crosses the cap, and its diagram goes stale on the next edit with only a Sen
 (`feature: c4-rerender`, `op: commit-json`) as the signal. Scoped out: raising the served cap is a
 product decision, and the detection path exists. Recorded in the ADR-235 amendment.
 
-**Brand-survival threshold:** single-user incident. CPO reviewed at brainstorm and accepts the
-one-time reformat with a changelog line.
+- **Brand-survival threshold:** single-user incident. CPO reviewed at brainstorm and accepts the
+  one-time reformat with a changelog line.
 
 ## Observability
 
