@@ -44,19 +44,19 @@ bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadma
 bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next --frontier
 ```
 
-The live phase is the lowest open `Phase N` milestone that still has open issues. Its **frontier** is its open issues with no open blocker (see **Blocking Edges**) and no assignee. `next` names the lowest-numbered frontier issue and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `soleur:go #N` (rendered as the active harness's operator-typed form per `formatSkillInvocation` before printing); an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly. An empty frontier stays on that phase and says how many issues are waiting on another issue and how many have someone on them; it never moves on to the next phase. `--frontier` prints a summary line first, then one `CODEABLE|#N|title` or `OPERATOR|#N|title` line per frontier issue. Relay the output. **Never** invoke `soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
+The live phase is the open `Phase N` milestone with the smallest N that still has open issues. Its **frontier** is its open issues with no open blocker (see **Blocking Edges**) and no assignee. `next` names the lowest-numbered frontier issue and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `soleur:go #N` (rendered as the active harness's operator-typed form per `formatSkillInvocation` before printing); an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly. An empty frontier stays on that phase and says how many issues are waiting on another issue and how many have someone on them; it never moves on to the next phase. `--frontier` prints a summary line first, then one `CODEABLE|#N|title` or `OPERATOR|#N|title` line per frontier issue. Relay the output. **Never** invoke `soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
 
-**Arguments.** Strip `--headless` first, then pass the remaining tokens after `next` to the script verbatim. On exit 64, relay the usage line. On exit 2, relay stderr and stop: exit 2 means the data could not be trusted (a `gh` older than 2.94.0, a failed fetch), never "nothing to do". Never rebuild the frontier yourself with `gh`, and never retry with other flags.
+**Arguments.** Strip `--headless` first, then pass the remaining tokens after `next` to the script verbatim; the script rejects any token other than `--frontier` with exit 64. On exit 64, relay the usage line. On exit 2, relay stderr and stop: exit 2 means the data could not be trusted (a `gh` older than 2.94.0, a failed fetch), never "nothing to do". The stderr already names the fix (upgrade `gh`, or the `gh` error to resolve); add nothing else. Never rebuild the frontier yourself with `gh`, and never retry with other flags.
 
 ## Where Work Lives on the Roadmap
 
 <!-- Inspired by mattpocock/skills/skills/engineering/wayfinder/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
 
-Every piece of in-scope work the founder knows about sits in exactly one of four places. Decide in this order:
+Every piece of work the founder knows about belongs in exactly one of four places. Decide in this order:
 
-1. Ruled out? It goes to **Out of Scope**.
+1. The founder ruled it out? It goes to **Out of Scope**.
 2. You cannot yet state the question it answers? It goes to **Not Yet Specified**.
-3. Otherwise, file an issue: in the `Phase N` milestone if it is being built now, else in `Post-MVP / Later`. Being blocked never keeps sharp work in the fog: file it and add the blocking edge. If the blocker has no issue yet, file the blocker first. If the blocker is itself fog, keep a prose "blocked by" note until the blocker gets an issue.
+3. Otherwise, file an issue: in the `Phase N` milestone if it belongs to the current phase's scope (blocked or not), else in `Post-MVP / Later`. Being blocked never keeps sharp work in the fog: file it and add the blocking edge. If the blocker is sharp but has no issue yet, file the blocker first. If the blocker is itself fog, give it a Not Yet Specified bullet and write `Blocked by: <that bullet's text>` in the issue body. `next` cannot see a prose block, so sharpen that blocker into an issue before the blocked issue reaches the frontier.
 
 | Place | What it means | How it is recorded |
 |-------|---------------|--------------------|
@@ -65,20 +65,20 @@ Every piece of in-scope work the founder knows about sits in exactly one of four
 | Not Yet Specified | We know we will need something here; we cannot yet say what question it answers. | A bullet in `## Not Yet Specified`; no issue. |
 | Out of Scope | We decided no. | Issue closed as `not planned`, plus a bullet in `## Out of Scope`. |
 
-Work in none of these places was forgotten. An open issue with no milestone is **unsorted**: known, but not yet placed.
+Work that is in none of these places and has no issue was forgotten. An open issue with no milestone is not forgotten: it is **unsorted**, known but not yet placed.
 
 ### Not Yet Specified
 
-The test is whether you can **state the question precisely now**, not whether you can answer it now. In plain words: can you write an issue title naming one deliverable, plus a done-when line, today? ("Improve onboarding" fails: it names no deliverable.)
+The test is whether you can **state the question precisely now**, not whether you can answer it now. In plain words: can you write an issue title naming one deliverable, plus a done-when line, today? ("Improve onboarding" fails: it names no deliverable.) If the founder wants to file a title that fails the test, ask for the one deliverable and the done-when line; never file the failing title.
 
 - Sharp but blocked: file the issue anyway and add the edge. Blocked is not fog.
 - Not yet sharp: add a bullet, as loose or as full as the view allows. Do not pre-slice fog into row-sized pieces; one entry may later become several issues, or none.
-- To graduate an entry once its question is sharp: file the issue with `--milestone` (and `--blocked-by` when the blocker is known), add the phase or Post-MVP row, and delete the bullet so the work lives only as the issue.
-- An empty section reads `*Nothing recorded yet. The roadmap workshop adds entries.*`
+- To graduate an entry once its question is sharp: file the issue with `gh issue create --milestone "<milestone title>"`, wire any blocker afterwards (see **Blocking Edges**), add a phase row (a Post-MVP row only if it is a highlight), and delete the bullet so the work lives only as the issue.
+- The empty-state line `*Nothing recorded yet. The roadmap workshop adds entries.*` stands only while a section has no entries: delete it with the first entry, restore it when the last one goes.
 
 ### Out of Scope
 
-Scope, not sharpness, puts work here: it sits outside the Strategic Themes. For an existing issue, close it and add one bullet:
+Scope, not sharpness, puts work here: the founder rules it out, usually because it sits outside the Strategic Themes. For an existing issue, close it and add one bullet:
 
 ```bash
 gh issue close <N> --reason "not planned" --comment "Out of scope: <reason>"
@@ -86,7 +86,7 @@ gh issue close <N> --reason "not planned" --comment "Out of scope: <reason>"
 
 `- [#<N> <title>](<url>) — <reason>`
 
-A Not Yet Specified entry being ruled out has no issue: delete its bullet, and file-then-close an issue only if the founder wants the "no" on record. Out-of-scope work never graduates. If the founder changes their mind later, open a new issue rather than reopening the old one. Out-of-scope lines stay out of the decisions record: no `### Architecture Decision` subsection, ADR, or Domain Review Summary row.
+A Not Yet Specified entry being ruled out has no issue: delete its bullet, then ask whether the founder wants the "no" on record. If yes, file an issue, close it as above, and add its Out of Scope bullet. Out-of-scope work never graduates. If the founder changes their mind later, open a new issue and delete the old line; never reopen the old issue. Out-of-scope lines stay out of the decisions record: no `### Architecture Decision` subsection in roadmap.md, no ADR, and no Domain Review Summary row.
 
 ### Blocking Edges
 
@@ -96,7 +96,7 @@ Blocking between roadmap issues uses GitHub's native "blocked by" relationship, 
 gh issue edit <N> --add-blocked-by <M>   # undo with --remove-blocked-by <M>
 ```
 
-Use dependencies, not sub-issues: the phase milestones already give hierarchy, and blocking is about order. Requires `gh` >= 2.94.0. A prose "blocked by #M" may keep the human reason, but the edge is what the frontier reads.
+Use dependencies, not sub-issues: the phase milestones already give hierarchy, and blocking is about order. Requires `gh` >= 2.94.0: check `gh --version`, and if it is older, stop and tell the founder to upgrade; never fall back to prose-only blocking. A prose "blocked by #M" may keep the human reason, but the edge is what the frontier reads.
 
 ## Roadmap Context
 
@@ -108,7 +108,7 @@ Use dependencies, not sub-issues: the phase milestones already give hierarchy, a
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining content. When `HEADLESS_MODE=true`, skip all AskUserQuestion prompts and use KB-derived defaults. If insufficient KB context exists to derive defaults, generate a minimal single-phase roadmap with all open issues and flag that manual review is needed.
 
-In headless mode, skip step 1.6 and keep existing Not Yet Specified and Out of Scope entries unchanged: never graduate an entry, never close an issue as out of scope, and never add a blocking edge. Report the number of Not Yet Specified entries, the number of Out of Scope lines, which of those issues are no longer closed as not planned, and the count of open issues with no milestone (a count only, never triaged in bulk).
+In headless mode, step 1.6 is read-only: run only its lookups (the Out of Scope state checks and the unsorted count), ask nothing, and keep existing Not Yet Specified and Out of Scope entries unchanged: never graduate an entry, never close an issue as out of scope, and never add a blocking edge. Report the number of Not Yet Specified entries, the number of Out of Scope lines, which of those issues are no longer closed as not planned, and the count of open issues with no milestone (a count only, never triaged in bulk).
 
 ## Phase 0: Setup
 
@@ -182,15 +182,15 @@ For each phase, present the CPO's proposed measurable exit criteria. Ask to adju
 
 Before moving to Domain Review, the CPO presents any gaps identified during pre-analysis that were not addressed in the workshop: missing onboarding flows, infrastructure requirements, integration dependencies, legal prerequisites, UX considerations. The founder decides which gaps to address now and which to defer.
 
+In headless mode for all workshop topics: use CPO-derived defaults from the pre-analysis.
+
 ### 1.6 Fog and Scope Walk
 
-Walk the three places the steps above do not touch (rules: **Where Work Lives on the Roadmap**):
+Walk the three places the steps above do not touch (rules: **Where Work Lives on the Roadmap**). In headless mode this step is read-only; see **Headless Mode**.
 
-1. **Not Yet Specified.** Gaps from 1.5 that the founder cannot yet phrase as a precise question become entries. For each existing entry, ask: graduate it, keep it, or rule it out.
-2. **Out of Scope.** For each line, run `gh issue view <N> --json state,stateReason`. Anything other than `state` `CLOSED` with `stateReason` `NOT_PLANNED` goes back to the founder via AskUserQuestion: close it again as not planned, move it to Post-MVP, or move it to a phase.
-3. **Unsorted.** Show the count of open issues with no milestone (`gh issue list --state open --search "no:milestone" --limit 1000 --json number --jq length`) and the five oldest (`gh issue list --state open --search "no:milestone sort:created-asc" --limit 5 --json number,title`). For each of the five, ask the founder to place it (a phase, Post-MVP, or Out of Scope) or leave it unsorted.
-
-In headless mode for all workshop topics: use CPO-derived defaults from the pre-analysis.
+1. **Not Yet Specified.** Gaps from the 1.5 Gap Check that the founder cannot yet phrase as a precise question become entries. For each existing entry, ask: graduate it, keep it, or rule it out.
+2. **Out of Scope.** For each line, run `gh issue view <N> --json state,stateReason`. Anything other than `state` `CLOSED` with `stateReason` `NOT_PLANNED` goes back to the founder via AskUserQuestion, with three options: keep it out (if the issue is open, `gh issue close <N> --reason "not planned"`; if it is closed another way, `gh issue reopen <N>` first); it shipped (delete the line); or bring it back (open a new issue in Post-MVP or a phase, and delete the line).
+3. **Unsorted.** Show the count of open issues with no milestone (`gh issue list --state open --search "no:milestone" --limit 1000 --json number --jq length`) and the five oldest (`gh issue list --state open --search "no:milestone sort:created-asc" --limit 5 --json number,title`). Ask about each of the five in turn: place it with `gh issue edit <N> --milestone "<milestone title>"`, rule it out (see **Out of Scope**), or leave it unsorted. The rest stay unsorted; say how many.
 
 ## Phase 1.5: Domain Review Gate
 
@@ -254,7 +254,7 @@ depends_on:
 ---
 ```
 
-**Required sections:** Strategic Themes, Phases (each with a feature table linking issues via `#N` and exit criteria gates), then `## Not Yet Specified` and `## Out of Scope` after Post-MVP / Later. Write those two as bullet lists, never tables: the roadmap-review cron flags any table row without an issue, and a Not Yet Specified entry has none. Open them with one sentence saying that work in none of the four places (see **Where Work Lives on the Roadmap**) was forgotten, and give an empty section the empty-state line. Include a `Generated: YYYY-MM-DD` footer listing source artifacts.
+**Required sections:** Strategic Themes, Phases (each with a feature table linking issues via `#N` and exit criteria gates), then `## Not Yet Specified` and `## Out of Scope` after Post-MVP / Later. Write those two as bullet lists, never tables: the roadmap-review cron flags any table row without an issue, and a Not Yet Specified entry has none. Open `## Not Yet Specified` (only) with one sentence naming the four places (see **Where Work Lives on the Roadmap**) and saying that work in none of them, with no issue, was forgotten. Give each section the empty-state line while it has no entries. Include a `Generated: YYYY-MM-DD` footer listing source artifacts.
 
 If updating an existing roadmap, merge workshop decisions into the existing structure. Preserve content the user did not explicitly change.
 
@@ -290,7 +290,7 @@ Only include `-f due_on="YYYY-MM-DDT00:00:00Z"` if the user provided timeline es
 
 Assign issues to their phase milestones. Use `-F` (not `-f`) for numeric milestone values in `gh api`.
 
-Then record the dependencies the workshop surfaced as blocking edges (see **Blocking Edges**), and show the founder `next --frontier`.
+Unless headless, record the dependencies the workshop surfaced as blocking edges (see **Blocking Edges**), then show the founder `next --frontier`.
 
 ## Phase 4: Handoff
 

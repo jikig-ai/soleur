@@ -453,7 +453,7 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 
 ## Not Yet Specified
 
-Known work lives in one of four places: a phase row, Post-MVP / Later, Not Yet Specified, or Out of Scope. Anything in none of them was forgotten, not deferred, and an open issue with no milestone is still unsorted.
+Known work lives in one of four places: a phase row, Post-MVP / Later, Not Yet Specified, or Out of Scope. Work in none of them, with no issue, was forgotten. An open issue with no milestone is not forgotten; it is unsorted until placed.
 
 In scope and coming, but not yet sharp enough to file as an issue. Each entry moves into a phase or Post-MVP row once its question is clear. Rules live in the product-roadmap skill.
 
