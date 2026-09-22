@@ -271,7 +271,7 @@ main() {
         echo "roadmap-frontier: Phase $phase — $ready ready to start, $held"
         jq -r "$ISSUE_JQ_DEFS"'
           (.frontier[]   | "\(classify)|#\(.number)|\(clean)"),
-          (.blocked[]    | "WAITING|#\(.number)|\(clean)|\([.blockedBy.nodes[] | select(.state == "OPEN") | "#\(.number)"] | join(","))"),
+          (.blocked[]    | "WAITING|#\(.number)|\(clean)|\([.blockedBy.nodes[] | select(.state == "OPEN") | "\(.repository.nameWithOwner // "")#\(.number)"] | join(","))"),
           (.unverified[] | "UNVERIFIED|#\(.number)|\(clean)"),
           (.claimed[]    | "CLAIMED|#\(.number)|\(clean)")' <<< "$filtered" || return 2
         return 0

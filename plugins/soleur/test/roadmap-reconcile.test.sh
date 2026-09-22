@@ -358,7 +358,7 @@ assert_eq "0" "$RC" "next --frontier exits 0"
 assert_eq "roadmap-frontier: Phase 4 — 2 ready to start, 1 waiting on another issue, 1 with someone on it
 OPERATOR|#1447|recruit founders
 CODEABLE|#1450|usage tracking
-WAITING|#1441|pricing page|#1440
+WAITING|#1441|pricing page|o/r#1440
 CLAIMED|#1443|interview loop" "$OUT" "--frontier prints summary, ready issues, then held-back issues"
 assert_eq "$NEXT_NUM" "$(sed -n 2p <<< "$OUT" | cut -d'|' -f2)" "next names the first --frontier item"
 
@@ -375,6 +375,11 @@ assert_eq "roadmap-frontier: Phase 4 — 3 ready to start, 0 waiting on another 
 OPERATOR|#1460|publish case study
 CODEABLE|#1461|fix login
 CODEABLE|#1462|refactor resolver" "$OUT" "domain/marketing overrides type/feature; type/bug and type/refactor are codeable"
+
+echo "TS13c2: a blocker in another repository is named with its repository"
+X="$(mkfix issues-xrepo '[{"number":1445,"title":"sso","labels":[],"assignees":[],"blockedBy":{"nodes":[{"number":6,"state":"OPEN","repository":{"nameWithOwner":"other/repo"}}],"totalCount":1}}]')"
+FAKE_ISSUES="$X" FAKE_GH_ISSUES=ok run_main next --frontier
+assert_eq "WAITING|#1445|sso|other/repo#6" "$(sed -n 2p <<< "$OUT")" "cross-repo blocker keeps its repository"
 
 echo "TS13d: blockers that cannot be read are reported, not counted as waiting"
 FAKE_ISSUES="$ISSUES_UNVER" FAKE_GH_ISSUES=ok run_main next --frontier
@@ -399,7 +404,7 @@ assert_not_contains "$OUT" "no open issues" "never reads as finished"
 assert_not_contains "$OUT" "Phase 5" "never falls through to the next phase"
 FAKE_ISSUES="$ISSUES_HELD" FAKE_GH_ISSUES=ok run_main next --frontier
 assert_eq "roadmap-frontier: Phase 4 — 0 ready to start, 1 waiting on another issue, 1 with someone on it
-WAITING|#1441|pricing page|#1440
+WAITING|#1441|pricing page|o/r#1440
 CLAIMED|#1443|interview loop" "$OUT" "empty --frontier still lists what is waiting and on what"
 
 echo "TS14b: no live phase -> each mode prints its own prefix"
@@ -506,7 +511,7 @@ echo ""
 echo "=== roadmap-reconcile: $PASS passed, $FAIL failed ==="
 # Anti-vacuity: every assertion above must have run and recorded a verdict. Reported
 # with printf + exit, never through pass()/fail(), which it backstops.
-MIN_ASSERTIONS=108
+MIN_ASSERTIONS=109
 if [[ $((PASS + FAIL)) -lt $MIN_ASSERTIONS ]]; then
   printf 'FATAL: only %s assertions recorded, expected at least %s — an assertion or the verdict helpers stopped running.\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS"
   exit 1
