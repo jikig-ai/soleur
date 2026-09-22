@@ -97,27 +97,30 @@ reconcile_counts() {
   done <<< "$rows"
 }
 
+# jq helpers shared by every line this module prints about an issue. `clean`
+# makes a title safe to print as the last field of a `|`-separated line: issue
+# titles are attacker-authorable on a public repo, and a newline in one could
+# otherwise forge a whole extra `CODEABLE|#N|…` line. `classify` is the single
+# CODEABLE-vs-OPERATOR rule, used by both `next` and `next --frontier`.
+ISSUE_JQ_DEFS="
+  def clean: (.title // \"\") | gsub(\"[[:cntrl:]\\u2028\\u2029]\"; \" \") | gsub(\"[|]\"; \"/\");
+  def classify: if any(.labels[]?.name; IN($OPERATOR_DOMAIN_LABELS)) then \"OPERATOR\"
+                elif any(.labels[]?.name; IN($CODEABLE_LABELS)) then \"CODEABLE\"
+                else \"OPERATOR\" end;
+"
+
 # pick_next_action OPEN_ISSUES_JSON_FILE: lowest-numbered open issue first
 # (deterministic tie-break), classified CODEABLE vs OPERATOR by label; explicit
-# NONE when the set is empty (never silent).
+# NONE when the set is empty (never silent). One jq pass.
 pick_next_action() {
-  local issues_file="$1" first num title codeable
-  first="$(jq -c 'sort_by(.number) | (first // empty)' "$issues_file")"
-  if [[ -z "$first" || "$first" == "null" ]]; then
+  local line
+  line="$(jq -r "$ISSUE_JQ_DEFS"'
+    sort_by(.number) | (first // empty) | "\(classify)|#\(.number)|\(clean)"' "$1")" || return 2
+  if [[ -z "$line" ]]; then
     echo "NONE|no actionable next item"
     return 0
   fi
-  num="$(printf '%s' "$first" | jq -r '.number')"
-  title="$(printf '%s' "$first" | jq -r '.title')"
-  codeable="$(printf '%s' "$first" | jq -r \
-    "if any(.labels[]?.name; IN($OPERATOR_DOMAIN_LABELS)) then \"no\"
-     elif any(.labels[]?.name; IN($CODEABLE_LABELS)) then \"yes\"
-     else \"no\" end")"
-  if [[ "$codeable" == "yes" ]]; then
-    printf 'CODEABLE|#%s|%s\n' "$num" "$title"
-  else
-    printf 'OPERATOR|#%s|%s\n' "$num" "$title"
-  fi
+  printf '%s\n' "$line"
 }
 
 # pick_phase MILESTONES_JSON_FILE: the lowest-numbered OPEN `Phase N` milestone
@@ -134,23 +137,33 @@ pick_phase() {
 
 # filter_frontier OPEN_ISSUES_JSON_FILE: split a phase's open issues into the
 # frontier (no open blocker, no assignee; sorted by number) and the held-back
-# counts. Fails closed: a blocker counts as resolved only when its node reads
-# CLOSED, and an issue whose blocker count exceeds the nodes returned (a blocker
-# the token cannot read, or a truncated page) is held back. Returns 2, naming the
-# field, when the issue data lacks blockedBy or assignees (in jq a missing field
-# would otherwise read as unblocked). ONE jq pass: callers may pass a FIFO.
+# sets. Fails closed: a blocker counts as resolved only when its node reads
+# CLOSED. An issue with an OPEN blocker is `blocked`; one whose blockers could
+# not all be read (count above the nodes returned — a blocker in a repo the
+# token cannot see, or a truncated page — or a node whose state is neither OPEN
+# nor CLOSED) is `unverified`, held back but reported separately so "could not
+# check" never reads as "waiting". Blockers in any repository count. Returns 2,
+# naming the field, when number is not a number, blockedBy not an object or
+# assignees not an array (a missing or null field would otherwise read as
+# unblocked and unclaimed, and a string number could carry a forged line).
+# ONE jq pass: callers may pass a FIFO.
 filter_frontier() {
   local out
   out="$(jq -c '
-    def held: ((.blockedBy.totalCount // 0) > ((.blockedBy.nodes // []) | length))
-              or any((.blockedBy.nodes // [])[]; .state != "CLOSED");
+    def nodes: (.blockedBy.nodes // []);
+    def blocked: any(nodes[]; .state == "OPEN");
+    def held: ((.blockedBy.totalCount // 0) > (nodes | length)) or any(nodes[]; .state != "CLOSED");
     def claimed: ((.assignees // []) | length) > 0;
-    ([ .[] | (["assignees", "blockedBy"] - keys)[] ] | unique) as $missing
+    ([ .[] | ((if (.number | type) == "number" then empty else "number" end),
+              (if (.blockedBy | type) == "object" then empty else "blockedBy" end),
+              (if (.assignees | type) == "array" then empty else "assignees" end)) ]
+     | unique) as $missing
     | if ($missing | length) > 0 then {missing: $missing}
-      else { frontier: ([ .[] | select((held | not) and (claimed | not)) ] | sort_by(.number)),
-             blocked: ([ .[] | select(held) ] | length),
-             claimed: ([ .[] | select((held | not) and claimed) ] | length) }
-      end' "$1")"
+      else { frontier:   ([ .[] | select((held | not) and (claimed | not)) ] | sort_by(.number)),
+             blocked:    ([ .[] | select(blocked) ] | sort_by(.number)),
+             unverified: ([ .[] | select(held and (blocked | not)) ] | sort_by(.number)),
+             claimed:    ([ .[] | select((held | not) and claimed) ] | sort_by(.number)) }
+      end' "$1")" || return 2
   if [[ "$(jq -r 'has("missing")' <<< "$out")" == "true" ]]; then
     echo "roadmap-reconcile: ERROR — issue data lacks field(s): $(jq -r '.missing | join(", ")' <<< "$out") (needs gh >= 2.94.0)." >&2
     return 2
@@ -164,14 +177,26 @@ _milestones_json() {
     --jq '[ .[] | {title, state, open_issues, closed_issues} ]'
 }
 
-_next_usage() {
+_usage() {
   echo "usage: roadmap-reconcile.sh [validate|next [--frontier]]" >&2
+}
+
+# Held-back counts in the founder's words (DC-6), from filter_frontier output.
+_held_text() {
+  jq -r '"\(.blocked | length) waiting on another issue"
+    + (if (.unverified | length) > 0 then ", \(.unverified | length) whose blockers could not be read" else "" end)
+    + ", \(.claimed | length) with someone on it"' <<< "$1"
 }
 
 main() {
   local mode="${1:-validate}"
+  [[ $# -gt 0 ]] && shift
   case "$mode" in
     validate)
+      if [[ $# -gt 0 ]]; then
+        _usage
+        return 64
+      fi
       local ms verdicts
       if ! ms="$(_milestones_json 2>/dev/null)"; then
         echo "roadmap-reconcile: ERROR — could not fetch GitHub milestones (gh auth?)." >&2
@@ -192,28 +217,38 @@ main() {
     next)
       # Advisory, read-only: the next action for the live phase, chosen from its
       # frontier (open, no open blocker, no assignee). `--frontier` lists it all.
-      local frontier_mode=0
-      shift
+      # Exit contract: 0 = answer printed; 2 = the data could not be trusted
+      # (fetch failure, old gh, unparseable data) — never "nothing to do";
+      # 64 = usage.
+      local frontier_mode=0 pfx=roadmap-next
       if [[ $# -eq 1 && "$1" == "--frontier" ]]; then
         frontier_mode=1
+        pfx=roadmap-frontier
       elif [[ $# -gt 0 ]]; then
-        _next_usage
+        _usage
         return 64
       fi
-      local ms sel phase mstitle errf issues filtered rc ready held action num title
-      if ! ms="$(_milestones_json 2>/dev/null)"; then
-        echo "roadmap-reconcile: ERROR — could not fetch GitHub milestones (gh auth?)." >&2
+      local errf ms sel phase mstitle issues filtered frontier held ready action num title
+      errf="$(mktemp)" || return 2
+      _RR_TMP="$errf"
+      if ! ms="$(_milestones_json 2>"$errf")"; then
+        echo "roadmap-next: ERROR — could not fetch GitHub milestones:" >&2
+        cat "$errf" >&2
+        rm -f "$errf"
         return 2
       fi
-      sel="$(pick_phase <(printf '%s' "$ms"))"
+      if ! sel="$(pick_phase <(printf '%s' "$ms"))"; then
+        echo "roadmap-next: ERROR — could not parse the milestone list." >&2
+        rm -f "$errf"
+        return 2
+      fi
       if [[ -z "$sel" ]]; then
-        echo "roadmap-next: all phases complete — no open Phase milestone has open issues."
+        rm -f "$errf"
+        echo "$pfx: all phases complete — no open Phase milestone has open issues."
         return 0
       fi
       phase="${sel%%|*}"
       mstitle="${sel#*|}"
-      errf="$(mktemp)"
-      _RR_TMP="$errf"
       if ! issues="$(gh issue list --milestone "$mstitle" --state open --limit 1000 \
           --json number,title,labels,assignees,blockedBy 2>"$errf")"; then
         if grep -q 'Unknown JSON field' "$errf"; then
@@ -226,23 +261,36 @@ main() {
         return 2
       fi
       rm -f "$errf"
-      rc=0
-      filtered="$(filter_frontier <(printf '%s' "$issues"))" || rc=$?
-      [[ "$rc" -eq 0 ]] || return 2
-      ready="$(jq -r '.frontier | length' <<< "$filtered")"
-      held="$(jq -r '"\(.blocked) waiting on another issue, \(.claimed) with someone on it"' <<< "$filtered")"
+      filtered="$(filter_frontier <(printf '%s' "$issues"))" || return 2
+      held="$(_held_text "$filtered")" || return 2
       if [[ "$frontier_mode" -eq 1 ]]; then
+        # Line 1 is always the `roadmap-frontier:` summary; then one line per
+        # ready issue, then one per held-back issue. Every issue line is
+        # KIND|#N|title[|detail] with the title cleaned of `|` and control chars.
+        ready="$(jq -r '.frontier | length' <<< "$filtered")" || return 2
         echo "roadmap-frontier: Phase $phase — $ready ready to start, $held"
-        jq -r "
-          .frontier[]
-          | (if any(.labels[]?.name; IN($OPERATOR_DOMAIN_LABELS)) then \"OPERATOR\"
-             elif any(.labels[]?.name; IN($CODEABLE_LABELS)) then \"CODEABLE\"
-             else \"OPERATOR\" end) + \"|#\\(.number)|\\(.title)\"" <<< "$filtered"
+        jq -r "$ISSUE_JQ_DEFS"'
+          (.frontier[]   | "\(classify)|#\(.number)|\(clean)"),
+          (.blocked[]    | "WAITING|#\(.number)|\(clean)|\([.blockedBy.nodes[] | select(.state == "OPEN") | "#\(.number)"] | join(","))"),
+          (.unverified[] | "UNVERIFIED|#\(.number)|\(clean)"),
+          (.claimed[]    | "CLAIMED|#\(.number)|\(clean)")' <<< "$filtered" || return 2
         return 0
       fi
-      action="$(pick_next_action <(jq -c '.frontier' <<< "$filtered"))"
-      num="$(printf '%s' "$action" | cut -d'|' -f2)"
-      title="$(printf '%s' "$action" | cut -d'|' -f3)"
+      frontier="$(jq -c '.frontier' <<< "$filtered")" || return 2
+      action="$(pick_next_action <(printf '%s' "$frontier"))" || return 2
+      num="${action#*|}"
+      num="${num%%|*}"
+      title="${action#*|*|}"
+      case "${action%%|*}" in
+        CODEABLE|OPERATOR)
+          # Defence in depth: filter_frontier already refuses a non-numeric
+          # .number, so this is unreachable on data that passed it.
+          if [[ ! "$num" =~ ^#[0-9]+$ ]]; then
+            echo "roadmap-next: ERROR — unexpected issue line: $action" >&2
+            return 2
+          fi
+          ;;
+      esac
       case "${action%%|*}" in
         CODEABLE)
           echo "roadmap-next: Phase $phase — next codeable item ($held):"
@@ -256,20 +304,21 @@ main() {
           ;;
         *)
           echo "roadmap-next: Phase $phase ($mstitle) — nothing ready to start: $held."
-          echo "  Unblock or unassign an issue, or see: roadmap-reconcile.sh next --frontier"
+          echo "  See which issues are waiting, and on what: roadmap-reconcile.sh next --frontier"
           ;;
       esac
       return 0
       ;;
     *)
-      _next_usage
+      _usage
       return 64
       ;;
   esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  # Owns `next`'s stderr capture file if the script dies between mktemp and rm.
+  # Owns `next`'s stderr capture file if the script dies between mktemp and rm
+  # (measured: bash runs this trap on SIGTERM too).
   _RR_TMP=""
   trap '[[ -z "${_RR_TMP:-}" ]] || rm -f "$_RR_TMP"' EXIT
   main "$@"
