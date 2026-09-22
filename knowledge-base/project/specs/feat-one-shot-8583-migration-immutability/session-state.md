@@ -35,7 +35,9 @@ are the gates' own, recorded in the plan's "Deepen-Plan Pass" section.
 - `soleur:deepen-plan` (sequential fallback — halt gates 4.4–4.11 evaluated inline)
 
 ## Work Phase
-- Status: pending — `soleur:work` on the plan file.
+- Status: complete — guard + suite + workflow wiring implemented; 10/10 matrix rows green;
+  FK-lint regression, orphan lint, fixture baselines, workflow lints, vacuity floor all green.
+  Residual follow-up issue for the unmerged-apply self-mutation arm still to be filed at ship time.
 
 ## Review Phase
 - Status: pending.
