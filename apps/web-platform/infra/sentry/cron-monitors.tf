@@ -28,9 +28,10 @@
 # `checkin_margin_minutes` is sized per-substrate. Hourly Inngest-fired
 # monitors (`scheduled_oauth_probe`, `scheduled_github_app_drift_guard`) use a
 # 30-min margin — Inngest fires deterministically with ≤2-min jitter, so 30 is
-# honest. #8450 re-added two hourly GHA-fired monitors
-# (`scheduled_prod_version_drift`, `zot_restart_loop_alarm`) with larger
-# margins (360/120) sized for GHA schedule-delivery jitter, not Inngest's.
+# honest. #8450 returned two GHA-fired monitors
+# (`scheduled_prod_version_drift`, `zot_restart_loop_alarm`) to hourly cadence
+# with larger margins (360/120) sized for GHA schedule-delivery jitter, not
+# Inngest's.
 # Daily/weekly monitors use 30-240 min as their observed jitter dictates.
 # The TR9 substrate-migration sequence completed the move off GHA hourly cron
 # for the Inngest-fired cohort: PR-1 #3985 (daily-triage), PR-2 #4062

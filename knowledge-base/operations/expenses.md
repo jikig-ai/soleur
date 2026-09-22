@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-16
+last_updated: 2026-09-22
 ---
 
 # Expenses

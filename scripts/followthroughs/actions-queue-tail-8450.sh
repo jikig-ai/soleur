@@ -24,8 +24,9 @@
 # load-conditioned check.
 #
 # Exit semantics (sweep-followthroughs.sh contract):
-#   0 = PASS              (>=5 in-window runs AND p95 wait < 15 min;
-#                          sweeper closes #8450)
+#   0 = PASS              (>=5 in-window runs each with >=1 core deploy job
+#                          (migrate/deploy/live-verify) measured, AND pooled
+#                          p95 wait < 15 min; sweeper closes #8450)
 #   1 = FAIL              (p95 >= 15 min; sweeper comments, leaves open)
 #   2 = NOT YET           (explicit non-team plan visible; clock
 #                          unset/unparseable; <5 usable in-window runs;
@@ -79,8 +80,20 @@ WORKFLOW="web-platform-release.yml"
 EVENT_ARM="workflow_run"
 # Sampled deploy-arm jobs (workflow_run arm). resolve-target is the FIRST job
 # of the arm — its created_at ~= run creation, so its delta also captures
-# head-of-pipeline queue wait, which dominates under a saturated pool.
+# head-of-pipeline queue wait, which dominates under a saturated pool. The
+# other arm jobs (verify-migrations, verify-doppler-secrets, notify-gated,
+# release-outcome) are excluded: verify-* waits are subsumed by the deploy
+# job's own post-needs instantiation wait, and the tail jobs add no signal.
+# Fragility, recorded: the jobs API returns display names — adding a `name:`
+# display override to a sampled job drops it from the sample (safe direction:
+# INSUFFICIENT forever, never a fabricated PASS). Guard 2 pins this literal
+# against the workflow's job keys.
 DEPLOY_ARM_JOBS="resolve-target migrate deploy live-verify"
+# A run counts toward MIN_RUNS only when at least one CORE deploy job
+# produced a wait — on docs-only pushes the deploy chain is if:-skipped and
+# only resolve-target ran, so resolve-target-only samples would otherwise
+# satisfy MIN_RUNS without a single deploy job starting (review, #8472).
+CORE_DEPLOY_JOBS="migrate deploy live-verify"
 MIN_RUNS=5
 P95_BUDGET_S=900
 
@@ -99,6 +112,14 @@ if [ -z "$CUTOFF" ]; then
   echo "NOT YET: no cutoff clock — UPGRADE_NOT_BEFORE/SOLEUR_FT_EARLIEST unset." >&2
   exit 2
 fi
+# `earliest=` is issue-body data — any member can edit it, and GNU `date -d`
+# accepts natural-language single tokens (`now`, `today`, `@epoch`) that would
+# silently widen the soak window toward a PASS. bootstrap.sh enforces exactly
+# this regex at write time; the probe must not trust it at read (review #8472).
+if [[ ! "$CUTOFF" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  echo "NOT YET: cutoff '$CUTOFF' is not canonical ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)." >&2
+  exit 2
+fi
 CUTOFF_EPOCH="$(iso_epoch "$CUTOFF" || true)"
 if [ -z "${CUTOFF_EPOCH:-}" ]; then
   echo "NOT YET: cutoff '$CUTOFF' is not a parseable ISO timestamp." >&2
@@ -112,7 +133,9 @@ CUTOFF="$(date -u -d "@$CUTOFF_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
 
 # Precondition: the probe only means something on the 60-job pool. See the
 # header note — an UNREADABLE plan (repo-scoped token) proceeds; only an
-# explicitly readable non-team value gates.
+# explicitly readable non-team value gates. Acceptable asymmetry for a
+# one-shot probe: a future non-team tier (e.g. enterprise) would loop NOT YET
+# forever — fail-safe, surfaced to the operator on every sweep.
 PLAN="$(gh api orgs/jikig-ai --jq '.plan.name // "unreadable"' 2>/dev/null)" || {
   echo "CANNOT ESTABLISH: gh api orgs/jikig-ai failed" >&2; exit 3; }
 case "$PLAN" in
@@ -145,17 +168,30 @@ while IFS= read -r id; do
   [ -n "$id" ] || continue
   JOBS="$(gh api --paginate "repos/$REPO/actions/runs/$id/jobs" 2>/dev/null)" || {
     echo "CANNOT ESTABLISH: gh api jobs for run $id failed" >&2; exit 3; }
-  # Queued jobs pre-populate started_at == created_at (wait=0 fake sample) and
-  # never-started jobs have null started_at — exclude both. Negative deltas
-  # (clock skew between created_at and started_at stamps) are dropped, not
-  # averaged in.
+  # Sample only jobs that genuinely ran: queued jobs pre-populate
+  # started_at == created_at (wait=0 fake sample), never-started jobs have
+  # null started_at, and skipped/cancelled jobs also report
+  # started_at == created_at — each contributing a fake 0s wait that dilutes
+  # the pooled p95 toward 0 (review, #8472). Negative deltas (clock skew
+  # between created_at and started_at stamps) are dropped, not averaged in.
   W="$(printf '%s' "$JOBS" | jq -r --arg names "$DEPLOY_ARM_JOBS" '
     [.jobs[] | select(.name as $n | ($names | split(" ") | index($n)) != null)
-     | select(.status == "completed" or .status == "in_progress")
+     | select(.status != "queued")
+     | select(.status == "in_progress" or .conclusion == "success")
      | select(.started_at != null and .created_at != null)
-     | ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601))]
-    | map(select(. >= 0)) | .[]' 2>/dev/null)"
-  [ -n "$W" ] && { WAITS="$WAITS$W"$'\n'; N_RUNS=$((N_RUNS + 1)); }
+     | ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601)) as $w
+     | select($w >= 0) | "\(.name)\t\($w)"]
+    | .[]' 2>/dev/null)" || {
+    echo "CANNOT ESTABLISH: could not parse jobs payload for run $id" >&2; exit 3; }
+  if [ -n "$W" ]; then
+    core_hit=0
+    while IFS=$'\t' read -r jname jwait; do
+      [ -n "$jwait" ] || continue
+      WAITS="${WAITS}${jwait}"$'\n'
+      case " $CORE_DEPLOY_JOBS " in *" $jname "*) core_hit=1 ;; esac
+    done <<< "$W"
+    [ "$core_hit" -eq 1 ] && N_RUNS=$((N_RUNS + 1))
+  fi
 done <<EOF
 $IDS
 EOF
@@ -165,7 +201,7 @@ EOF
 QUEUED_NOW="$(gh api "repos/$REPO/actions/runs?status=queued&per_page=1" --jq '.total_count // 0' 2>/dev/null || echo "unknown")"
 
 if [ "$N_RUNS" -lt "$MIN_RUNS" ]; then
-  echo "INSUFFICIENT: $N_RUNS usable deploy-arm runs postdate $CUTOFF (need >=$MIN_RUNS). Soak continues next sweep. (queued now: $QUEUED_NOW)" >&2
+  echo "INSUFFICIENT: $N_RUNS post-$CUTOFF runs carried a core deploy-arm job wait (need >=$MIN_RUNS). Soak continues next sweep. (queued now: $QUEUED_NOW)" >&2
   exit 2
 fi
 

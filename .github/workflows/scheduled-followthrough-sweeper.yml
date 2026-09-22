@@ -2,7 +2,8 @@
 # `<!-- soleur:followthrough script=... earliest=... secrets=... -->`
 # directive in each open issue body and runs the referenced script with
 # only the secrets it declared. Closes with PASS comment on exit 0,
-# comments FAIL on exit 1, comments TRANSIENT on any other exit.
+# comments FAIL on exit 1; exit 2 = NOT YET, 3 = CANNOT ESTABLISH,
+# 5 = ACTION REQUIRED, any other = TRANSIENT (all leave open + comment).
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 #

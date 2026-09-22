@@ -1594,12 +1594,12 @@ jobs:
           # applicable=true anyway). Other events never diff — depth 1.
           fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
 
-      # (#8450) In-job applicability probe — verdict observed correct on this
-      # PR's own diff (report-only push), so the heavy steps below are gated on
-      # it. Deliberately NOT a detect-changes output + `needs:` edge: a failed
-      # upstream job would needs-skip `e2e`, and a skipped required check posts
-      # GREEN — the fail-open shape this file warns about. A classify-step
-      # failure reds the job instead.
+      # (#8450) In-job applicability classifier — verdict observed correct on
+      # this PR's own diff (report-only push), so the heavy steps below are
+      # gated on it. Deliberately NOT a detect-changes output + `needs:` edge:
+      # a failed upstream job would needs-skip `e2e`, and a skipped required
+      # check posts GREEN — the fail-open shape this file warns about. A
+      # classify-step failure reds the job instead.
       - name: Classify e2e applicability
         id: detect
         env:
@@ -1607,9 +1607,18 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null)"; then
-              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash scripts/ci-e2e-classify.sh pull_request)"
+            # Judge the diff by the BASE ref's classifier, not the PR's own
+            # copy — a PR must not be able to weaken the gate it is judged by
+            # (e.g. shipping a classifier that emits false for its own paths).
+            # A PR that legitimately widens the allowlist is judged by the old
+            # rules — conservative by construction. fetch-depth: 0 guarantees
+            # the base object exists; a base without the classifier (pre-merge
+            # main) or an unresolvable diff falls back to enum-failed = true.
+            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null)" \
+              && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>/dev/null; then
+              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request)"
             else
+              echo "::warning::e2e classification fell back to enum-failed (diff unresolvable or classifier absent on base ref)"
               APPLICABLE="$(bash scripts/ci-e2e-classify.sh --enum-failed)"
             fi
           else

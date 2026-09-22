@@ -105,7 +105,12 @@ have closed #8450 without a single measurement. The probe prints
 `SKIP-DECLARED` but exits **2** (sweeper verdict "NOT YET": comment, leave
 open, retry next sweep). Exit 2 also covers the unarmed-clock and
 insufficient-runs (<5 in-window) verdicts. Guard 2
-(`actions-queue-tail-8450.test.sh`, 8 rows) pins the corrected polarity.
+(`actions-queue-tail-8450.test.sh`) pins the corrected polarity; review
+(#8472) then hardened it further — `--paginate` argv policing via the stub's
+call log, boundary fixtures (4-run floor, `created_at == cutoff`, p95==900),
+skipped/cancelled-conclusion exclusion, a core-deploy-job requirement per
+counted run, canonical-ISO cutoff validation, and a `DEPLOY_ARM_JOBS` ↔
+`web-platform-release.yml` job-key parity pin.
 
 ## Post-upgrade (pending)
 

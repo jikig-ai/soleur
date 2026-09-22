@@ -15,10 +15,10 @@ requires_cpo_signoff: true
 ## Overview
 
 The org's `free` plan caps concurrent GitHub Actions jobs at 20 while a single PR head
-dispatches ~18 runs and `CI` alone is 25 jobs — deploy-critical jobs wait 30–75 min at the
+dispatches ~18 runs and `CI` alone is 22 jobs — deploy-critical jobs wait 30–75 min at the
 tail even though the pool clears ~250 runs/hr. This plan raises the ceiling via a GitHub
-Team upgrade (operator billing step) and ships parallel code trims: three sub-hourly cron
-cadence relaxations with paired Sentry-monitor updates, and a fail-closed path gate on the
+Team upgrade (operator billing step) and ships parallel code trims: three fast-cadence cron
+relaxations with paired Sentry-monitor updates, and a fail-closed path gate on the
 `e2e` producer inside `ci.yml` so provably-unaffected diffs stop holding a runner slot for the
 full suite duration (a green-skip still pays job setup + Playwright container pull, ~1–2 min of
 the ~4.2 min run — the residual is stated honestly, and a future "optimization" to job-level
@@ -38,7 +38,7 @@ ships with its deploy arm unverified for up to ~75 min.
 
 | Spec claim | Reality on `origin/main` (2026-09-21) | Plan response |
 |---|---|---|
-| Four sub-hourly crons, ~216 runs/day | Confirmed *requested* cadence; delivered cadence is lower under `schedule:` jitter (`scheduled-prod-version-drift.yml` header measures `*/30` delivering at median ~114 min). | Savings stated honestly as *requested* ~216/day → ~150/day (96 inngest-health kept + 24 + 24 + 6); the capacity recovery is smaller than nominal. |
+| Four fast-cadence crons, ~216 runs/day | Confirmed *requested* cadence (three sub-hourly + one hourly); delivered cadence is lower under `schedule:` jitter (`scheduled-prod-version-drift.yml` header measures `*/30` delivering at median ~114 min). | Savings stated honestly as *requested* ~216/day → ~150/day (96 inngest-health kept + 24 + 24 + 6); the capacity recovery is smaller than nominal. |
 | `scheduled-inngest-health` `*/15`→`*/30` | Its header (`scheduled-inngest-health.yml:35`) argues `*/15` **because** inngest-down is a brand-survival outage (#5542, 3.5h silent crash-loop) — the same incident class this plan's `single-user incident` threshold covers. CTO + CPO both flag it. | **Kept at `*/15`.** TR2's own escape clause ("tighten less where the header argues otherwise") fires. Sub-hourly file count drops 4→1 (≤2 AC holds). |
 | `knowledge-base/**`-only diffs skip heavyweight producers | `knowledge-base/**` is arguably the *worst* skip class: `adr-ordinals`, `markdown-lint`, `gitleaks scan`, `tc-document-sha-guard` verify content living in `knowledge-base/` — skipping them fabricates greens for exactly the gates those diffs exercise. | Filter target is the code-execution producer `e2e` with a **fail-closed allowlist** of provably-safe paths; content gates are untouched. |
 | Path filters "where required contexts still report" | Established thrice (#5585 `tenant-integration-required`, #6589 `sentry-destroy-required`, #8203 `vendor-pin-required`): always-run required context over a path-gated producer; detection failure reds, never green-skips. `dorny/paths-filter` was evaluated and rejected (supply chain). | Reuse the doctrine in its simplest form: `e2e`'s own first step runs the classifier — no `needs:` edge, no `outputs:` forwarding; classifier failure reds the job, `pull_request`-only skip on an all-allowlisted diff, context always posts. |
@@ -219,7 +219,8 @@ flips only after its verdict is observed correct on this PR's own runs.
 ### Phase D — Verification + follow-through (post-merge, post-upgrade)
 
 - **D.1** New soak probe `scripts/followthroughs/actions-queue-tail-8450.sh`: measures
-  per-JOB `started_at − created_at` on the deploy-arm jobs (`migrate`, `deploy`) of
+  per-JOB `started_at − created_at` on the deploy-arm jobs (`resolve-target`, `migrate`,
+  `deploy`, `live-verify`) of
   `web-platform-release.yml` runs filtered `--event workflow_run` (every merge produces TWO
   runs — a `push`-arm run carrying only `release` contaminates the sample unless filtered).
   **Work-phase correction (measured, `measurements.md` §timestamp-semantics):** the planned
@@ -230,8 +231,9 @@ flips only after its verdict is observed correct on this PR's own runs.
   `created_at`, so sample completed/in_progress jobs only. Exits 0 when
   deploy-arm p95 wait is <15 min across ≥5 workflow_run runs (fewer in-window is INSUFFICIENT
   evidence, exit non-zero — not a pass). Two preconditions before sampling:
-  `gh api orgs/jikig-ai --jq .plan.name` must be `team` — else `SKIP-DECLARED` (exit 0, no alarm
-  fatigue while AC-TEAM is pending); and runs must postdate `UPGRADE_NOT_BEFORE` (ISO ts, env
+  `gh api orgs/jikig-ai --jq .plan.name` must be `team` — else `SKIP-DECLARED` (exit 2,
+  NOT YET — corrected from the originally-planned exit 0, which would have auto-closed
+  #8450 on an unmet precondition); and runs must postdate `UPGRADE_NOT_BEFORE` (ISO ts, env
   var populated from the upgrade-verification timestamp in `measurements.md` — `plan.name`
   returns the CURRENT tier, not when it changed). Credential gap (concrete, not "confirm
   wiring"): `scheduled-followthrough-sweeper.yml` declares `contents: read + issues: write` —
@@ -260,7 +262,7 @@ flips only after its verdict is observed correct on this PR's own runs.
 
 | Option | Verdict |
 |---|---|
-| Thin the whole cron fleet | ~4% of load; kept to the three defensible sub-hourly files; inngest-health stays `*/15`. |
+| Thin the whole cron fleet | ~4% of load; kept to the three defensible fast-cadence files; inngest-health stays `*/15`. |
 | `paths:`/`paths-ignore:` on required producers | Prohibited by precedent — required context pends forever (ADR-032 escape-hatch; `infra-validation.yml:408-425`). |
 | Self-hosted runner | Deferred — public-repo fork-PR execution policy unsettled (#3723). |
 | Larger hosted runners (Team-only SKU) | Middle rung between plan ceiling and self-hosted; not needed now — listed for re-evaluation if 60 jobs still tails. |
@@ -317,7 +319,7 @@ inngest-health kept at `*/15`, TR3 revised to measure the deploy-arm tail.)
 
 ```yaml
 liveness_signal:
-  what: "Sentry cron monitors on the three trimmed workflows + followthrough probe verdict"
+  what: "Sentry cron monitors on the two monitored trimmed workflows + followthrough probe verdict"
   cadence: "per-run check-ins; probe evaluated daily by scheduled-followthrough-sweeper"
   alert_target: "Sentry issue (missed check-in) / GitHub issue (probe fail) "
   configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf; scripts/followthroughs/actions-queue-tail-8450.sh"
@@ -485,7 +487,7 @@ None — queried 68 open `code-review`-labeled issues against every path in File
 - **AC-PROBE** Probe + paired harness exist; `bash
   scripts/followthroughs/actions-queue-tail-8450.test.sh` drives the Guard 2 fixture matrix
   (empty window → red, pre-upgrade-timestamp samples → red, free-plan precondition →
-  SKIP-DECLARED exit 0, passing dataset → PASS); `bash -n` parses both scripts.
+  SKIP-DECLARED exit 2, passing dataset → PASS); `bash -n` parses both scripts.
 - **AC-REF** The PR body says `Ref #8450` (not `Closes`) — the issue resolves on post-upgrade
   verification, not at merge.
 

@@ -13,7 +13,7 @@ created: 2026-09-21
 ## Problem Statement
 
 The org's `free` plan caps concurrent GitHub Actions jobs at 20. A single PR head
-dispatches ~18 runs (25 jobs in `CI` alone) and can saturate the entire budget, producing
+dispatches ~18 runs (22 declared jobs in `CI` alone) and can saturate the entire budget, producing
 tail latency on deploy-critical jobs (`migrate` queued 30+ min; merge-commit `CI` queued
 40+ min; deploy arm unregistered ~75 min post-merge). Pool throughput is ~250 runs/hr —
 the backlog clears, the *tail* is what hurts.
@@ -23,8 +23,8 @@ the backlog clears, the *tail* is what hurts.
 - **G1** — Raise the concurrent-job ceiling 20→60 via GitHub Team ($4/user/mo, 1 seat).
   Billing authorization is operator-only; this spec tracks the prerequisite step and the
   recurring-expense record.
-- **G2** — Reduce sub-hourly cron cadence where each workflow's documented detection
-  window tolerates it (~216 runs/day across 4 files).
+- **G2** — Reduce fast-cadence cron load where each workflow's documented detection
+  window tolerates it (~216 runs/day across 4 files: three sub-hourly + one hourly).
 - **G3** — Stop non-applicable PR classes from dispatching heavyweight required-check
   producers, without ever leaving a required context unreported.
 
