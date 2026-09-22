@@ -17,6 +17,12 @@
 #   extract_phase_counts          stdin: roadmap md  -> "N|open|closed" per Phase row
 #   reconcile_counts ROADMAP MS   files: roadmap, milestones-json -> verdict lines
 #   pick_next_action ISSUES       file: open-issues-json -> CODEABLE|OPERATOR|NONE line
+#   pick_phase MS                 file: milestones-json -> "N|title" of the live phase, or empty
+#   filter_frontier ISSUES        file: open-issues-json -> {frontier,blocked,claimed}
+#
+# pick_phase depends on milestones being titled `Phase N: ...`. The frontier is a
+# phase's open issues with no open blocker (GitHub-native "blocked by" edges) and
+# no assignee; it needs `gh` >= 2.94.0, the first release exposing `blockedBy`.
 #
 # Milestone↔phase is NOT 1:1 (the Phase-N milestone also holds internal-tooling
 # issues not on roadmap rows); reconcile keys strictly off the Current-State
@@ -114,10 +120,52 @@ pick_next_action() {
   fi
 }
 
+# pick_phase MILESTONES_JSON_FILE: the lowest-numbered OPEN `Phase N` milestone
+# that still has open issues, as "N|title"; empty when none. Read from live
+# milestones, not the roadmap's Current State cells: a phase row may carry no
+# frozen count, and skipping it picked the phase after it.
+pick_phase() {
+  jq -r '
+    [ .[] | select(.state == "open" and (.open_issues // 0) > 0)
+          | select(.title | test("^Phase [0-9]+[:( ]"))
+          | {n: (.title | capture("^Phase (?<n>[0-9]+)").n | tonumber), title} ]
+    | sort_by(.n) | (first // empty) | "\(.n)|\(.title)"' "$1"
+}
+
+# filter_frontier OPEN_ISSUES_JSON_FILE: split a phase's open issues into the
+# frontier (no open blocker, no assignee; sorted by number) and the held-back
+# counts. Fails closed: a blocker counts as resolved only when its node reads
+# CLOSED, and an issue whose blocker count exceeds the nodes returned (a blocker
+# the token cannot read, or a truncated page) is held back. Returns 2, naming the
+# field, when the issue data lacks blockedBy or assignees (in jq a missing field
+# would otherwise read as unblocked). ONE jq pass: callers may pass a FIFO.
+filter_frontier() {
+  local out
+  out="$(jq -c '
+    def held: ((.blockedBy.totalCount // 0) > ((.blockedBy.nodes // []) | length))
+              or any((.blockedBy.nodes // [])[]; .state != "CLOSED");
+    def claimed: ((.assignees // []) | length) > 0;
+    ([ .[] | (["assignees", "blockedBy"] - keys)[] ] | unique) as $missing
+    | if ($missing | length) > 0 then {missing: $missing}
+      else { frontier: ([ .[] | select((held | not) and (claimed | not)) ] | sort_by(.number)),
+             blocked: ([ .[] | select(held) ] | length),
+             claimed: ([ .[] | select((held | not) and claimed) ] | length) }
+      end' "$1")"
+  if [[ "$(jq -r 'has("missing")' <<< "$out")" == "true" ]]; then
+    echo "roadmap-reconcile: ERROR — issue data lacks field(s): $(jq -r '.missing | join(", ")' <<< "$out") (needs gh >= 2.94.0)." >&2
+    return 2
+  fi
+  printf '%s\n' "$out"
+}
+
 # --- CLI entrypoint (only when executed directly, never when sourced) ---
 _milestones_json() {
   gh api 'repos/{owner}/{repo}/milestones?state=all&per_page=100' \
-    --jq '[ .[] | {title, open_issues, closed_issues} ]'
+    --jq '[ .[] | {title, state, open_issues, closed_issues} ]'
+}
+
+_next_usage() {
+  echo "usage: roadmap-reconcile.sh [validate|next [--frontier]]" >&2
 }
 
 main() {
@@ -142,54 +190,87 @@ main() {
       return 1
       ;;
     next)
-      # Advisory, read-only: report the next action for the first incomplete phase.
-      local ms rows phase mstitle issues action num title
+      # Advisory, read-only: the next action for the live phase, chosen from its
+      # frontier (open, no open blocker, no assignee). `--frontier` lists it all.
+      local frontier_mode=0
+      shift
+      if [[ $# -eq 1 && "$1" == "--frontier" ]]; then
+        frontier_mode=1
+      elif [[ $# -gt 0 ]]; then
+        _next_usage
+        return 64
+      fi
+      local ms sel phase mstitle errf issues filtered rc ready held action num title
       if ! ms="$(_milestones_json 2>/dev/null)"; then
         echo "roadmap-reconcile: ERROR — could not fetch GitHub milestones (gh auth?)." >&2
         return 2
       fi
-      rows="$(extract_phase_counts < "$ROADMAP_FILE" | sort -t'|' -k1,1n)"
-      phase="$(printf '%s\n' "$rows" | awk -F'|' '$2 > 0 { print $1; exit }')"
-      if [[ -z "$phase" ]]; then
-        echo "roadmap-next: all phases complete — no pending phase."
+      sel="$(pick_phase <(printf '%s' "$ms"))"
+      if [[ -z "$sel" ]]; then
+        echo "roadmap-next: all phases complete — no open Phase milestone has open issues."
         return 0
       fi
-      mstitle="$(jq -r --arg n "$phase" \
-        '[ .[] | select(.title | test("^Phase " + $n + "[:( ]")) ] | first | .title // empty' \
-        <<< "$ms")"
-      if [[ -z "$mstitle" ]]; then
-        echo "roadmap-next: Phase $phase has no GitHub milestone — run validate to reconcile." >&2
-        return 1
+      phase="${sel%%|*}"
+      mstitle="${sel#*|}"
+      errf="$(mktemp)"
+      _RR_TMP="$errf"
+      if ! issues="$(gh issue list --milestone "$mstitle" --state open --limit 1000 \
+          --json number,title,labels,assignees,blockedBy 2>"$errf")"; then
+        if grep -q 'Unknown JSON field' "$errf"; then
+          echo "roadmap-next: ERROR — reading blocking edges requires gh >= 2.94.0 (upgrade: https://github.com/cli/cli#installation)." >&2
+        else
+          echo "roadmap-next: ERROR — could not list open issues for $mstitle:" >&2
+          cat "$errf" >&2
+        fi
+        rm -f "$errf"
+        return 2
       fi
-      issues="$(gh issue list --milestone "$mstitle" --state open \
-        --json number,title,labels 2>/dev/null)" || issues='[]'
-      action="$(pick_next_action <(printf '%s' "$issues"))"
+      rm -f "$errf"
+      rc=0
+      filtered="$(filter_frontier <(printf '%s' "$issues"))" || rc=$?
+      [[ "$rc" -eq 0 ]] || return 2
+      ready="$(jq -r '.frontier | length' <<< "$filtered")"
+      held="$(jq -r '"\(.blocked) waiting on another issue, \(.claimed) with someone on it"' <<< "$filtered")"
+      if [[ "$frontier_mode" -eq 1 ]]; then
+        echo "roadmap-frontier: Phase $phase — $ready ready to start, $held"
+        jq -r "
+          .frontier[]
+          | (if any(.labels[]?.name; IN($OPERATOR_DOMAIN_LABELS)) then \"OPERATOR\"
+             elif any(.labels[]?.name; IN($CODEABLE_LABELS)) then \"CODEABLE\"
+             else \"OPERATOR\" end) + \"|#\\(.number)|\\(.title)\"" <<< "$filtered"
+        return 0
+      fi
+      action="$(pick_next_action <(jq -c '.frontier' <<< "$filtered"))"
       num="$(printf '%s' "$action" | cut -d'|' -f2)"
       title="$(printf '%s' "$action" | cut -d'|' -f3)"
       case "${action%%|*}" in
         CODEABLE)
-          echo "roadmap-next: Phase $phase — next codeable item:"
+          echo "roadmap-next: Phase $phase — next codeable item ($held):"
           echo "  $num $title"
           echo "  Build it: /soleur:go $num"
           ;;
         OPERATOR)
-          echo "roadmap-next: Phase $phase — next item is operator-driven (not codeable):"
+          echo "roadmap-next: Phase $phase — next item is operator-driven, not codeable ($held):"
           echo "  $num $title"
           echo "  This needs you (recruitment / interviews / ops), not an agent build."
           ;;
         *)
-          echo "roadmap-next: Phase $phase milestone ($mstitle) has no open issues — no actionable next item."
+          echo "roadmap-next: Phase $phase ($mstitle) — nothing ready to start: $held."
+          echo "  Unblock or unassign an issue, or see: roadmap-reconcile.sh next --frontier"
           ;;
       esac
       return 0
       ;;
     *)
-      echo "usage: roadmap-reconcile.sh [validate|next]" >&2
+      _next_usage
       return 64
       ;;
   esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # Owns `next`'s stderr capture file if the script dies between mktemp and rm.
+  _RR_TMP=""
+  trap '[[ -z "${_RR_TMP:-}" ]] || rm -f "$_RR_TMP"' EXIT
   main "$@"
 fi
