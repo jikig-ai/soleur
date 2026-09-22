@@ -1000,7 +1000,7 @@ only in a variable's comment.
 
 **It schedules no apply.** Merging fires the per-PR `terraform apply`, but its `-target` set does not include `hcloud_server.registry` or anything depending on it, so that apply cannot reach this host. The untargeted 12h drift plan will now report the pending replace with a `server_type` diff as well as `user_data`, and never applies it. The real replace stays behind the guarded, menu-acked `registry-host-replace` / `registry-luks-recut` dispatch.
 
-It also does not make the replace *safe*. The live volume is still plaintext ext4, so a fresh host boots into `cloud-init-registry.yml`'s `refusing-non-luks-device` FATAL and comes up dark. That is #6929's recut. The repin improves the odds the Hetzner CREATE call succeeds; that is one step, not authorization.
+It also does not make the replace *safe*. The live volume is still plaintext ext4, so a fresh host boots into `cloud-init-registry.yml`'s `refusing-non-luks-device` FATAL and comes up dark. *[Superseded 2026-08-10: the recut fired (run 31437037877); current posture is the ledger's `hcloud_volume.registry` row.]* That is #6929's recut. The repin improves the odds the Hetzner CREATE call succeeds; that is one step, not authorization.
 
 **Q1 — whether `server_type` is ForceNew or an in-place resize — is deliberately unmeasured.** The repo contradicts itself (this ADR vs `variables.tf` and the destroy-guard's `reboot_updates` counter), and a `terraform plan` would be confounded by the already-pending replace: it returns `["delete","create"]` regardless, which would have manufactured a false "ForceNew confirmed" into an ADR a future one-way recreate would cite. Routed to #7287.
 
@@ -1183,6 +1183,8 @@ This otherwise implements the LUKS decision above (#6895 D2); no topology change
 **Status: CODE-DECLARED.** The template reaches the registry host only on a replace (ForceNew
 `user_data`). Until the next replace boots it, none of this amendment has run on a host; the
 first boot's `luks_open_arm=` and `store_escrow=` rows are the evidence that it has.
+**Delivered 2026-09-22** on boot 5639cc07 (registry-host-replace run 35672138112):
+`store_probe_rc=cs0.bk0`, `store_luks=yes`, and `store_escrow=ok` first observed at 00:50:02Z (#8408).
 
 ## Amendment 2026-09-22 (#6122) — the cutover happened on 2026-07-17 and was never recorded; the backfilled soak FAILs
 

@@ -193,13 +193,17 @@ anything, and firing it without the number means destroying the only copy of the
 
 **What it cannot do.** It cannot reclaim, restart, or change host config. No zot user holds
 `delete` (measured), and every write-shaped remedy needs a cloud-init-written config change, i.e. a
-host replace — which is the unfired-recut fatal (#7287) this runbook exists inside. So the inventory is not an
+host replace — which, until the recut first fired on 2026-08-10 (run 31437037877), was the unfired-recut fatal
+(#7287, closed 2026-08-12) this runbook was written inside. So the inventory is not an
 alternative to the recut; it is the measurement you must have **before** deciding the recut is the
 right destroy. See [ADR-172](../../architecture/decisions/ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md).
 
 ---
 
 ## Before the FIRST-EVER fire: cold-vehicle re-verification (REQUIRED)
+
+*First fired 2026-08-10 ([run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877)); this
+section is now the checklist for a future recut.*
 
 This dispatch shipped with **zero live executions**. Its guard *logic* is well covered by tests,
 but its *live* surfaces have never run against production. Since #7277 those surfaces are: two
@@ -360,26 +364,36 @@ gate, because it gets read as evidence.
 
 ---
 
-## Do NOT use `registry-host-replace` for this
+## `registry-host-replace` cannot perform a recut (it is the boot-problem lever)
 
-`registry-host-replace` **keeps** the storage volume. The volume is currently unencrypted, and the
-new boot code refuses to mount an unencrypted volume — by design, so it can never silently wipe
-your data. The result is that the registry **goes dark** and stays dark.
+`registry-host-replace` **keeps** the storage volume, so it cannot re-encrypt or empty the store.
+Only `registry-luks-recut` replaces the volume: it supplies all three `-replace` targets itself, as
+one atomic apply. A hand-rolled `terraform apply -replace` that misses the volume is likewise a host
+replace, not a recut.
 
-The same happens if a hand-rolled `terraform apply -replace` misses the volume.
+The boot code refuses any volume that is neither blank nor LUKS — by design, so it can never
+silently wipe your data. A replaced host reopens a LUKS volume (the reuse arm), which makes
+[`registry-host-replace`](registry-host-replace-dispatch.md) the right tool for an ordinary boot
+problem.
 
-`registry-luks-recut` exists so that cannot happen: it supplies all three `-replace` targets itself,
-as one atomic apply.
+**Before dispatching it, read the newest heartbeat row** (the query in
+[`registry_store_not_luks` fired: triage](#registry_store_not_luks-fired-triage)). Proceed only if
+that row is under an hour old and reads `store_luks=yes` **and** `store_escrow=ok` (or `pending` on
+a boot under 2 h old). Any other value — including `fail_key_absent`, `indeterminate`, `stale` or
+`none` — or no row in the last hour means stop and use the triage table: a replace alone does not
+fix those, and some of its arms end in a replace only after the key is restored.
 
-> **After a successful recut this reverses.** The volume is then encrypted, so
-> `registry-host-replace` becomes the *correct* tool for an ordinary boot problem. The warning above
-> applies only while the volume is still unencrypted.
->
-> **Until then, `registry-host-replace` is blocked too** (verified 2026-08-04,
-> [run 30926215332](https://github.com/jikig-ai/soleur/actions/runs/30926215332)): the #6929 LUKS
-> resources are declared but absent from Terraform state, so a replace pulls them in and its
-> destroy-guard aborts with `out_of_scope=2`. **Both** levers are currently unavailable — see
-> #7278 for the missing in-place restart lever, which is usually what you actually wanted.
+> **History (dated).** Until the first recut (2026-08-10,
+> [run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877): the
+> `registry_luks_recut` job succeeded, and the `registry_store_restore` leg failed on a doppler-token
+> defect fixed by PR #7430, commit `4aef468c80`) the volume was plaintext ext4, so a replaced host
+> refused it and the registry went dark. From 2026-08-04
+> ([run 30926215332](https://github.com/jikig-ai/soleur/actions/runs/30926215332)) to that recut,
+> `registry-host-replace` was blocked too: the #6929 LUKS resources were declared but absent from
+> Terraform state, so a replace pulled them in and its destroy-guard aborted with `out_of_scope=2`.
+> Both levers were unavailable in that window — see #7278 for the missing in-place restart lever.
+> Current posture lives in one place: the `hcloud_volume.registry` row of
+> `scripts/encryption-posture-ledger.json`.
 
 ---
 
@@ -451,8 +465,8 @@ and they need different fixes:
   its exit code in the table below, then **re-run that job** (the engine is resumable).
 
 - **It refused the volume.** Recoverable — *after a successful recut* the volume is encrypted, so
-  `registry-host-replace` is the right tool for this. (It is **not** available before one: while
-  the volume is still plaintext, that dispatch aborts `out_of_scope=2` — see the callout above.)
+  `registry-host-replace` is the right tool for this. (It was **not** available before the first
+  recut on 2026-08-10: that dispatch aborted `out_of_scope=2` — see the dated history above.)
 - **The disk was never attached in time** (`reason=device-absent`). This one **never self-heals**;
   it needs a full recut.
 
@@ -704,7 +718,8 @@ So a recut buys a clean slate and does not address why the disk filled. The reve
 alternative — growing `var.registry_volume_size` — is blocked today by a circularity rather than
 by physics: the filesystem only grows via `resize2fs` on the next immutable redeploy, a redeploy
 replaces the host, and a replaced host meets a still-plaintext ext4 volume and hits the `blkid`
-FATAL refuse. zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
+FATAL refuse. *[Annotated 2026-09-22, #8535: this circularity was broken by the recut of 2026-08-10
+(run 31437037877); current posture is the ledger's `hcloud_volume.registry` row.]* zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
 existing ingress either. Breaking that circularity is what the recut actually buys. Record the
 post-recut fill rate before concluding the incident is closed.
 
@@ -712,7 +727,9 @@ post-recut fill rate before concluding the incident is closed.
   the split before relying on it.** What shipped is the **read-only inventory lever**
   (`.github/workflows/registry-zot-inventory.yml`, see
   [Before ANY destructive step](#before-any-destructive-step-try-the-read-only-inventory-lever-first))
-  — dispatch it before any destroy. What did **not** ship, and is BLOCKED ON A PROVISIONING EVENT,
+  — dispatch it before any destroy. *[Annotated 2026-09-22, #8535: the provisioning event below was
+  the recut, which fired 2026-08-10; the write-shaped actions still did not ship.]* What did **not**
+  ship, and is BLOCKED ON A PROVISIONING EVENT,
   is every write-shaped action: `restart`, `push-config` and `reclaim`. Do not read "the lever
   exists" as "the host is now reachable" — the earlier revision of this bullet said *"try it first
   once it exists"* about a **restart** lever, and that lever is not what arrived. #7287 declares
