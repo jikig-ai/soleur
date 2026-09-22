@@ -80,3 +80,11 @@ to recommend. It also listed replacing `git-data-pin-redeploy.yml` in this PR.
 - **What it costs to keep them:** a few knowledge-base files in PR1's diff. They are not
   hash-bound, so they change nothing about the rehearsal.
 - **To accept:** say so on the PR, and the two fold-ins move into their own PR before ship.
+
+---
+
+## Operator rulings (2026-09-22)
+
+- **DC-1:** accepted — LUKS from boot (ADR-238).
+- **DC-2:** accepted — split into PR1/PR2, and hold the #8511 rung-2 re-rehearsal until PR1 merges so one rehearsal covers both.
+- **DC-3:** not ruled; the fold-ins stay in PR1 as the brief directed.
