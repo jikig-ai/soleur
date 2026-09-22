@@ -10,6 +10,12 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+# Review comments for an older commit are stale after the next push. Collapse
+# superseded review runs per PR while leaving each PR independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   preflight:
     runs-on: ubuntu-latest
@@ -89,4 +95,3 @@ jobs:
           path: /tmp/api-spend/api-spend-${{ github.run_id }}.json
           retention-days: 90
           if-no-files-found: ignore
-

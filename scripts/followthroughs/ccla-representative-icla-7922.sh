@@ -235,12 +235,14 @@ EPOCH_ISO="${EPOCH_LINE#* }"
 #
 # That is what `-S` claims, and it is exactly what a shallow or grafted history
 # breaks: the graft boundary makes the oldest reachable commit look like the
-# introducing one. A `--is-shallow-repository` test would NOT do: the ledger
-# fetch below writes `.git/shallow` into the shared common dir, so an operator's
-# checkout is routinely already flagged shallow on a machine where the
-# derivation demonstrably works. This measures the property directly, and
-# catches strictly more (a `--depth=50` boundary, a `git replace` graft, a
-# filtered history, a squash rewrite).
+# introducing one. A `--is-shallow-repository` test would NOT do: the flag is a
+# proxy for the property, not the property — the ledger fetch below carries no
+# depth flag so it never writes `.git/shallow`, a checkout shallow for an
+# unrelated reason can still hold the notice commit's parent and derive
+# correctly, and a `git replace` graft breaks the derivation with the flag
+# unset. This measures the property directly, and catches strictly more (a
+# `--depth=50` boundary, a `git replace` graft, a filtered history, a squash
+# rewrite).
 EPOCH_PARENT=""
 EPOCH_PARENT="$(git rev-parse --verify --quiet "${EPOCH_SHA}^" 2>/dev/null)" || EPOCH_PARENT=""
 [[ -n "$EPOCH_PARENT" ]] \

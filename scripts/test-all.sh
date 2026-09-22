@@ -3072,6 +3072,12 @@ if want_scripts; then
   # (exit 0 would auto-close the issue). Explicit run_suite —
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
+  # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
+  # logic behind scheduled-actions-queue-health.yml — live queue depth +
+  # delivered-vs-entitled concurrency + median live queued age ->
+  # HEALTHY/SATURATED/UNDER_ASSIGNED/UNKNOWN. Explicit run_suite —
+  # scripts/*.test.sh is covered by no glob here.
+  run_suite "scripts/actions-queue-health" bash scripts/actions-queue-health.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -3926,7 +3932,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         echo "        WHAT CHANGED:" >&2
         printf '%s\n' "$_repo_fatal" | while IFS=$'\t' read -r _sev _dim _detail; do
           echo "          [$_dim] $_detail" >&2
-          echo "                 next: $(repo_boundary_next_action "$_dim")" >&2
+          echo "                 next: $(repo_boundary_next_action "$_dim" "$_detail")" >&2
         done
         echo "" >&2
         _rb_head_before="$(printf '%s\n' "$_repo_state_before" | sed -n 's/^head\t//p')"
@@ -3936,12 +3942,18 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
           echo "        HEAD after : ${_rb_head_after}" >&2
           echo "        (good-sha is the BEFORE value; bad-sha is the AFTER value.)" >&2
         fi
-        echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
-        echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
-        echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2
-        echo "          3. restore the checkout, then remove the fixture's files" >&2
-        echo "        A suite whose fixture cd fails, or whose git -C operand is empty, runs git in" >&2
-        echo "        the caller CWD (#7553/#7652)." >&2
+        # The recovery recipe is HEAD/worktree surgery — a config, refs, or shallow FATAL has no
+        # good-sha/bad-sha and nothing to restore, so printing the steps there would send the
+        # operator through irrelevant ref surgery. The per-dimension `next:` line above carries
+        # each of those dimensions' own remedy.
+        if printf '%s\n' "$_repo_fatal" | grep -qE '^FATAL[[:space:]]+(head|worktree)'; then
+          echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
+          echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
+          echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2
+          echo "          3. restore the checkout, then remove the fixture's files" >&2
+          echo "        A suite whose fixture cd fails, or whose git -C operand is empty, runs git in" >&2
+          echo "        the caller CWD (#7553/#7652)." >&2
+        fi
       fi
 
       if [[ -n "$_repo_report" ]]; then
