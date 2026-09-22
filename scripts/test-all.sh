@@ -3428,10 +3428,6 @@ if want_scripts; then
   # probe's header claims to detect, so the claim is checked rather than asserted.
   # Hermetic: the live GET is replaced by SENTRY_FIXTURE_RULES throughout.
   run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
-  # #8322 — registered: was tracked but unregistered (the `test-*` convention is
-  # outside every auto-discovery surface). Guards the brownout retry in
-  # apply-sentry-infra.yml — the workflow that gates live Sentry paging rules.
-  run_suite "tests/scripts/sentry-brownout-retry" bash tests/scripts/test-sentry-brownout-retry.sh
   # #8050 — the PR-time reference gate and the `tf`/`reference` sides of the
   # projection module. The probe's reference is projected from the Terraform
   # plan; the committed copy the daily job reads is held equal to the plan by

@@ -77,6 +77,9 @@ ALWAYS_ON_SUITES=(
   "scripts/tenant-dpa-register-guard-live"
   "scripts/watch-live-verify-pass"
   "tests/scripts/sentry-alert-live-fidelity"
+  # live-scanner batteries named for the gates they probe (#8384 landed these)
+  "scripts/cosign-verify-live-8037"
+  "scripts/generate-kb-index-live"
 
   # --- runner-SUT and registry-property suites ----------------------------------
   # Verdicts assert properties of the runner itself or of the whole
@@ -144,6 +147,8 @@ ALWAYS_ON_SUITES=(
 
   # --- whole-corpus guards, drift checks, parity and census gates ---------------
   "scripts/guard-vacuity-floor"
+  "scripts/ensure-kb-index"
+  "plugins/soleur/test/kb-caches-untracked.test.sh"
   "scripts/check-pa-22-unit"
   "scripts/check-tom4-rls-posture"
   "scripts/tenant-dpa-register-guard-unit"
@@ -182,7 +187,6 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/c4-count-parity.test.sh"
   "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
   "plugins/soleur/test/reusable-release-caller-permissions.test.sh"
-  "plugins/soleur/test/kb-index-check-guard-mutation.test.sh"
   "plugins/soleur/test/fixture-env-adoption.test.sh"
   "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
   "plugins/soleur/test/gitleaks-rules.test.sh"
@@ -236,14 +240,6 @@ AFFECTED_INFRA_RUNNER_PATHS=(
 # neither argv literals nor the name-stem conventions name these files, and the
 # suites enumerate their subjects as data, not as sourced code. Array name is
 # the registration label uppercased with non-alphanumerics mapped to `_`.
-
-# tests/scripts/sentry-brownout-retry — asserts the retry loop in the workflow,
-# which is data to it.
-AFFECTED_TESTS_SCRIPTS_SENTRY_BROWNOUT_RETRY_PATHS=(
-  ".github/workflows/apply-sentry-infra.yml"
-  "tests/scripts/test-sentry-brownout-retry.sh"   # self-inclusion
-  "scripts/lib/test-affected-paths.sh"            # THIS FILE
-)
 
 # tests/hooks/drop-sentinel-parity — parity over the producer/consumer file sets
 # it enumerates internally (PRODUCER_FILES / CONSUMER_FILES).

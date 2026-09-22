@@ -267,26 +267,26 @@ fi
 # --- Row e: receipts carry real classes — spot-check the census anchors ---------
 cases=$((cases + 1))
 _cls_lockfile=$(awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="scripts/lint-dual-lockfile"{print $3}' <<<"$_print_out" | head -1)
-_cls_sentry=$(awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/scripts/sentry-brownout-retry"{print $3}' <<<"$_print_out" | head -1)
+_cls_mutex=$(awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/scripts/dev-suite-mutex-wiring"{print $3}' <<<"$_print_out" | head -1)
 _cls_unittest=$(awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/scripts/lint-rule-ids"{print $3}' <<<"$_print_out" | head -1)
-if [[ "$_cls_lockfile" == "always_on" && "$_cls_sentry" == "edge:declared" && "$_cls_unittest" == edge:* ]]; then
-  pass "e: lint-dual-lockfile=always_on, sentry=edge:declared, unittest-mod=${_cls_unittest}"
+if [[ "$_cls_lockfile" == "always_on" && "$_cls_mutex" == "edge:declared" && "$_cls_unittest" == edge:* ]]; then
+  pass "e: lint-dual-lockfile=always_on, mutex-wiring=edge:declared, unittest-mod=${_cls_unittest}"
 else
-  fail "e: lockfile='${_cls_lockfile:-<none>}' sentry='${_cls_sentry:-<none>}' unittest='${_cls_unittest:-<none>}'"
+  fail "e: lockfile='${_cls_lockfile:-<none>}' mutex-wiring='${_cls_mutex:-<none>}' unittest='${_cls_unittest:-<none>}'"
 fi
 
 # --- Row f: affected run declines untouched suites, keeps always-on -------------
-# Force a diff touching only the sentry brownout workflow: its declared-edge
+# Force a diff touching only the tenant-integration workflow: its declared-edge
 # suite must be selected; an unrelated edge suite must not; an always-on lint
 # must still run.
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
-  'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
+  'SANDBOX_DIFF_NAMES=.github/workflows/tenant-integration.yml' \
   -- --affected
 _rc=$ARM_RC
 _ran=$(ran_count)
 if [[ "$_rc" == "0" ]] \
-  && grep -qF $'RAN\ttests/scripts/sentry-brownout-retry' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\ttests/scripts/dev-suite-mutex-wiring' <<<"$ARM_RECORD" \
   && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
   && ! grep -qF $'RAN\ttests/scripts/registry-gate-mutation-battery' <<<"$ARM_RECORD" \
   && grep -qF 'not-affected' <<<"$ARM_OUT" \
