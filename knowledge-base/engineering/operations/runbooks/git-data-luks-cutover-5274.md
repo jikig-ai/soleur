@@ -577,7 +577,7 @@ ECDSA-P256 is required because Terraform's SSH client negotiates it (ADR-237). R
 web-1's key has legitimately changed (a web-1 rebuild once #6931 lands) or the committed capture was
 wrong (H4 cause (a)).
 
-1. From a machine whose egress IP is in `ADMIN_IPS` (run `soleur:admin-ip-refresh` first if it is not),
+1. From a machine whose egress IP is in `ADMIN_IPS` (if it is not, type `/soleur:admin-ip-refresh` in Claude Code first),
    run `scripts/capture-web-1-host-key.sh <web-1 public IPv4>`. It scans web-1's public port 22
    directly, outside Cloudflare, prints the fingerprint, cross-checks it against your own known_hosts
    entry for that IP if one exists, and writes the pin file with its header. It refuses to run in CI,

@@ -115,6 +115,9 @@ STUB
 if [[ "$1 $2" != "pr view" ]]; then
   echo "STUB-MISS: unexpected gh invocation: $*" >&2; exit 64
 fi
+# The standalone loop first checks the PR's head branch (kind=wrong_branch, exit 12).
+# Answer it with the fixture branch; it is not a state read, so it is not counted.
+for a in "$@"; do [[ "$a" == "headRefName" ]] && { echo "feature"; exit 0; }; done
 for a in "$@"; do [[ "$a" == "state,mergeStateStatus" ]] && found=1; done
 if [[ -z "${found:-}" ]]; then
   echo "STUB-MISS: gh pr view without the expected --json fields: $*" >&2; exit 64

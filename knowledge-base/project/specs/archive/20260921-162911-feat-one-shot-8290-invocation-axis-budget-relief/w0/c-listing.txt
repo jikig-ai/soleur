@@ -1,0 +1,3 @@
+Looking at the available skills list, there is one skill whose name starts with "probe8290":
+
+- **probe8290:open** — "This skill should be used when the probe needs the OPEN sentinel. Probe description OPEN-DESC-4419."

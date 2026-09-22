@@ -1,5 +1,5 @@
 <overview>
-This reference covers patterns for complex workflows, validation loops, and feedback cycles in skill authoring. All patterns use pure XML structure.
+This reference covers patterns for complex workflows, validation loops, and feedback cycles in skill authoring. Skill bodies use markdown headings; the XML tags in these examples are optional wrappers inside a section.
 </overview>
 
 <complex_workflows>
@@ -9,12 +9,13 @@ Break complex operations into clear, sequential steps. For particularly complex 
 
 <pdf_forms_example>
 
-```xml
-<objective>
-Fill PDF forms with validated data from JSON field mappings.
-</objective>
+```markdown
+## Objective
 
-<workflow>
+Fill PDF forms with validated data from JSON field mappings.
+
+## Workflow
+
 Copy this checklist and check off items as you complete them:
 
 ```
@@ -87,12 +88,13 @@ Run validator → fix errors → repeat. This pattern greatly improves output qu
 
 <document_editing_example>
 
-```xml
-<objective>
-Edit OOXML documents with XML validation at each step.
-</objective>
+```markdown
+## Objective
 
-<editing_process>
+Edit OOXML documents with XML validation at each step.
+
+## Editing Process
+
 <step_1>
 Make your edits to `word/document.xml`
 </step_1>
@@ -119,11 +121,11 @@ Rebuild: `python ooxml/scripts/pack.py unpacked_dir/ output.docx`
 <step_6>
 Test the output document
 </step_6>
-</editing_process>
 
-<validation>
+## Validation
+
 Never skip validation. Catching errors early prevents corrupted output files.
-</validation>
+
 ```
 
 </document_editing_example>
@@ -146,13 +148,15 @@ Workflow: analyze → **create plan file** → **validate plan** → execute →
 
 <batch_update_example>
 
-```xml
-<objective>
-Apply batch updates to spreadsheet with plan validation.
-</objective>
+```markdown
+## Objective
 
-<workflow>
-<plan_phase>
+Apply batch updates to spreadsheet with plan validation.
+
+## Workflow
+
+### Plan Phase
+
 <step_1>
 Analyze the spreadsheet and requirements
 </step_1>
@@ -160,9 +164,9 @@ Analyze the spreadsheet and requirements
 <step_2>
 Create `changes.json` with all planned updates
 </step_2>
-</plan_phase>
 
-<validation_phase>
+### Validation Phase
+
 <step_3>
 Validate the plan: `python scripts/validate_changes.py changes.json`
 </step_3>
@@ -177,9 +181,9 @@ If validation fails:
 <step_5>
 Only proceed when validation passes
 </step_5>
-</validation_phase>
 
-<execution_phase>
+### Execution Phase
+
 <step_6>
 Apply changes: `python scripts/apply_changes.py changes.json`
 </step_6>
@@ -187,14 +191,13 @@ Apply changes: `python scripts/apply_changes.py changes.json`
 <step_7>
 Verify output
 </step_7>
-</execution_phase>
-</workflow>
 
-<success_criteria>
+## Success Criteria
+
 - Plan validation passes with zero errors
 - All changes applied successfully
 - Output verification confirms expected results
-</success_criteria>
+
 ```
 
 </batch_update_example>
@@ -229,12 +232,13 @@ Guide Claude through decision points with clear branching logic.
 
 <document_modification_example>
 
-```xml
-<objective>
-Modify DOCX files using appropriate method based on task type.
-</objective>
+```markdown
+## Objective
 
-<workflow>
+Modify DOCX files using appropriate method based on task type.
+
+## Workflow
+
 <decision_point_1>
 Determine the modification type:
 
@@ -242,33 +246,33 @@ Determine the modification type:
 **Editing existing content?** → Follow "Editing workflow"
 </decision_point_1>
 
-<creation_workflow>
+### Creation Workflow
+
 <objective>Build documents from scratch</objective>
 
-<steps>
+#### Steps
+
 1. Use docx-js library
 2. Build document from scratch
 3. Export to .docx format
-</steps>
-</creation_workflow>
 
-<editing_workflow>
+### Editing Workflow
+
 <objective>Modify existing documents</objective>
 
-<steps>
+#### Steps
+
 1. Unpack existing document
 2. Modify XML directly
 3. Validate after each change
 4. Repack when complete
-</steps>
-</editing_workflow>
-</workflow>
 
-<success_criteria>
+## Success Criteria
+
 - Correct workflow chosen based on task type
 - All steps in chosen workflow completed
 - Output file validated and verified
-</success_criteria>
+
 ```
 
 </document_modification_example>
@@ -326,8 +330,9 @@ Showing valid options eliminates guesswork.
 
 <implementation_pattern>
 
-```xml
-<validation>
+```markdown
+## Validation
+
 After making changes, validate immediately:
 
 ```bash
@@ -342,7 +347,6 @@ If validation fails, fix errors before continuing. Validation errors include:
 - **Invalid value**: "Invalid status 'pending_review'. Valid statuses: active, paused, archived"
 
 Only proceed when validation passes with zero errors.
-</validation>
 
 ```
 </implementation_pattern>
@@ -362,12 +366,13 @@ Many workflows benefit from iteration: generate → validate → refine → vali
 </principle>
 
 <implementation_example>
-```xml
-<objective>
-Generate reports with iterative quality improvement.
-</objective>
+```markdown
+## Objective
 
-<workflow>
+Generate reports with iterative quality improvement.
+
+## Workflow
+
 <iteration_1>
 **Generate initial draft**
 
@@ -401,13 +406,13 @@ Ensure all quality criteria met.
 
 Export to final format and deliver.
 </iteration_5>
-</workflow>
 
-<success_criteria>
+## Success Criteria
+
 - Final validation passes with zero errors
 - All quality criteria met
 - Report ready for delivery
-</success_criteria>
+
 ```
 
 </implementation_example>
@@ -429,8 +434,9 @@ For long workflows, add checkpoints where Claude can pause and verify progress b
 
 <implementation_example>
 
-```xml
-<workflow>
+```markdown
+## Workflow
+
 <phase_1>
 **Data collection** (Steps 1-3)
 
@@ -460,15 +466,15 @@ Only continue if checkpoint passes.
 
 Proceed to delivery only if checkpoint passes.
 </phase_3>
-</workflow>
 
-<checkpoint_validation>
+## Checkpoint Validation
+
 At each checkpoint:
 1. Run validation script
 2. Review output for correctness
 3. Verify no errors or warnings
 4. Only proceed when validation passes
-</checkpoint_validation>
+
 ```
 
 </implementation_example>
@@ -489,15 +495,17 @@ Design workflows with clear error recovery paths. Claude should know what to do 
 
 <implementation_example>
 
-```xml
-<workflow>
-<normal_path>
+```markdown
+## Workflow
+
+### Normal Path
+
 1. Process input file
 2. Validate output
 3. Save results
-</normal_path>
 
-<error_recovery>
+### Error Recovery
+
 **If validation fails in step 2:**
 - Review validation errors
 - Check if input file is corrupted → Return to step 1 with different input
@@ -509,15 +517,14 @@ Design workflows with clear error recovery paths. Claude should know what to do 
 - Check file permissions
 - Check file path validity
 - Retry save with corrected conditions
-</error_recovery>
 
-<escalation>
+### Escalation
+
 **If error persists after 3 attempts:**
 - Document the error with full context
 - Save partial results if available
 - Report issue to user with diagnostic information
-</escalation>
-</workflow>
+
 ```
 
 </implementation_example>

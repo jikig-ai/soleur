@@ -257,6 +257,7 @@ For detailed guidance on skill authoring, see:
 - [official-spec.md](./references/official-spec.md) - Anthropic's official skill specification
 - [best-practices.md](./references/best-practices.md) - Skill authoring best practices
 - [core-principles.md](./references/core-principles.md) - Core principles for skill design
+- [authoring-levers.md](./references/authoring-levers.md) - Leading words, the two loads and the invocation choice, co-location, criterion demand
 - [skill-structure.md](./references/skill-structure.md) - Skill structure and organization
 - [recommended-structure.md](./references/recommended-structure.md) - Recommended file structure
 - [common-patterns.md](./references/common-patterns.md) - Common skill patterns (template, workflow, conditional)

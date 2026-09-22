@@ -1,6 +1,7 @@
 ---
 name: admin-ip-refresh
 description: "This skill should be used to refresh the prod SSH allowlist (Doppler ADMIN_IPS) after operator IP rotation. Detects drift, mutates Doppler with explicit ack."
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->

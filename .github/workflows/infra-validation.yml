@@ -167,6 +167,10 @@ on:
       - ".github/workflows/registry-zot-inventory.yml"
       - ".github/workflows/registry-zot-inventory-dispatch.yml"
       - ".github/actions/cf-tunnel-registry-bridge/action.yml"
+      # (#8449 UC2) inngest-host-state-workflow-guard.test.sh executes the dispatch wrapper's
+      # run: block against the script's own exit-code header; neither file is under apps/*/infra/**.
+      - ".github/workflows/inngest-host-state.yml"
+      - "scripts/inngest-host-state.sh"
       - ".github/workflows/scheduled-supabase-advisor-scan.yml"
       - ".github/workflows/apply-sentry-infra.yml"
       - "scripts/supabase-advisor-scan.sh"
@@ -771,6 +775,12 @@ jobs:
       - name: Run registry zot-inventory workflow guard (#7278 #6425 guard + label/Bot boundary + fail-closed skip-docker-login)
         run: bash apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh
 
+      # (#8449 UC2) The one-tap inngest-host-state dispatch wrapper: inputs via env only, SHA
+      # pins, and the run: block EXECUTED per script exit code. Host output never reaches the
+      # public job log, step summary or an artifact.
+      - name: Run inngest-host-state workflow guard (#8449 UC2)
+        run: bash apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh
+
 
       - name: Run inngest config-refresh bundle packager guard (#6780 ADR-135 HARD-2 + fail-closed)
         run: bash apps/web-platform/infra/inngest-config-bundle-pack.test.sh
@@ -851,6 +861,11 @@ jobs:
       # and six mutation rows that each require this guard to red.
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
+
+      # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
+      # predicate, exact literals, unpaused, both -target lines, and its mutation rows.
+      - name: Run registry store-not-LUKS alert drift guard (#8408)
+        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
@@ -1415,6 +1430,12 @@ jobs:
       - name: Run zot disk-heartbeat redaction tests (#7500 — per-line redact, tier gate, degrade-closed)
         run: bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
 
+      # Guard 1 (#8417). No templatefile()-rendered source carries a bare `$$<ident>` (Terraform
+      # passes it through verbatim and bash reads the PID). The file set is derived from the .tf
+      # call sites, nested modules included. Needs only bash + git + python3.
+      - name: Run templatefile bare-dollar guard (#8417 — derived template set, rendered store_probe_rc)
+        run: bash apps/web-platform/infra/templatefile-bare-dollar-guard.test.sh
+
       # Guard 3 (#8386). Every mount-source resolution in the repo (lsblk inverse walk + Hetzner
       # by-id reverse map) agrees on leaf-counting, namespace scoping and hit-counting. Registered
       # HERE, as a SINGLE-LINE `run:`: run-registered-suites.sh derives its list from the
@@ -1431,6 +1452,19 @@ jobs:
       # a host with no SSH, so plan-time validation cannot see it.
       - name: Run zot HTTP-deadline config guard (#7555 — split-brain, gcDelay bound, digest acceptance)
         run: bash apps/web-platform/infra/zot-config-deadlines.test.sh
+
+      # Guard 4 (#8408 b). zot's start is gated on a sentinel inside the LUKS filesystem, bound
+      # with --mount (which refuses a missing source; -v would create it). The docker-gated half
+      # MEASURES start/restart failing after the source is deleted, with a -v negative control,
+      # on an image imported offline from the runner's /bin/true. Fails closed without a daemon.
+      - name: Run registry LUKS launch-gate guard (#8408 — sentinel bind, recovery arm, arm vocabulary)
+        run: bash apps/web-platform/infra/registry-luks-launch-gate.test.sh
+
+      # Guard 5 (#8408 c). The daily escrow re-test: every result token reachable from one stubbed
+      # condition, the memory pre-check, atomic state writes, and a key canary over the state
+      # file, stdout, stderr and every argv. Needs only bash + coreutils.
+      - name: Run registry LUKS escrow re-test guard (#8408 — vocabulary, memory pre-check, key canary)
+        run: bash apps/web-platform/infra/registry-luks-escrow.test.sh
 
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
