@@ -74,6 +74,37 @@ cycle. Updating the branch only helps if the branch can stay current long enough
 otherwise it just burns CI and resets the clock. Detect the loop (≥2 `BEHIND` cycles without
 convergence) and switch to settle-then-admin-merge rather than nudging forever.
 
+This applies only to a hatch-eligible diff (condition (b) above). For a diff that carries code, the
+admin-merge is the operator's call, not the agent's; see §Recurrence: PR #8474.
+
+## Recurrence: PR #8474, 2026-09-21
+
+**Scale.** #8474 was marked ready at 14:02Z and merged at 23:48:20Z (`97633e8e`). Ten `origin/main`
+merges went into the branch after review (15:14Z to 23:17Z), about eight of them forced by BEHIND or
+DIRTY during the merge poll. Measured from the check-run API, the two CI runs that finished took 36
+and 31 minutes, and `main` usually moved before a run could finish; cancelled runs lingered up to 99 minutes
+under a saturated runner queue (#8450). The 2026-06-02 case above had an ~8-minute cycle.
+
+**What differed from 2026-06-02.** The diff carried code, so the settle-then-admin-merge hatch was
+not eligible (`plugins/soleur/skills/ship/references/settle-then-admin-merge.md`), and an admin-merge
+was the operator's decision, not the agent's. The agent offered it from cycle 5 onward and kept
+syncing. No approval came. The loop ended without one: a run finished inside a quiet window, the
+required `test` context concluded `success` on `b93f5ad63` at 23:48:15Z, and the queued auto-merge
+fired 5 s later.
+
+**A new failure the livelock caused.** Each sync push cancels the in-flight PR run (`ci.yml`
+`cancel-in-progress` for `pull_request`). The `test-scripts (3/3)` shard was cancelled on four heads
+(`7c8a60222` and the next three), so a real red test went unobserved from 19:24Z to 23:10Z, 3 h 46 min
+(`workflow-issues/2026-09-22-the-test-my-merge-broke-merged-cleanly-so-it-was-never-in-my-conflict-list.md`).
+Reading rule: a cancelled shard is unobserved, neither passed nor failed. The aggregate `test` context
+runs `if: always()` and reads `failure` on such a head whatever the code does, so read the shard
+conclusions, not the aggregate.
+
+**The separate admin-merge.** Earlier the same day, #8458 was admin-merged while the
+ruleset-required `test` context did not yet exist. That is recorded in
+`knowledge-base/engineering/operations/post-mortems/admin-merge-required-check-absent-postmortem.md`
+and tracked by open issue #8500; it is referenced here, not re-fixed.
+
 ## Session Errors
 
 1. **`Edit` rejected — "File has not been read yet"** (dns.tf viewed via shell `sed`, not the
