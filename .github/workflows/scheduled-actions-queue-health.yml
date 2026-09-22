@@ -187,7 +187,7 @@ jobs:
           set -euo pipefail
           # Self-closing on BOTH issue titles — an action-required issue that
           # outlives its cause trains the operator to ignore the label.
-          for n in $(gh issue list --repo "$GH_REPO" --state open \
+          for n in $(gh issue list --repo "$GH_REPO" --state open -L 50 \
               --search 'in:title "[ci/actions-queue-health]"' \
               --json number --jq '.[].number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \

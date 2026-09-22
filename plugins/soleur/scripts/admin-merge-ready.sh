@@ -59,6 +59,24 @@
 #   (d) Classic branch protection is not read; this repo has none (`branches/main/protection`
 #       is 404) and its required checks live in rulesets (infra/github/*.tf).
 #
+# --green-sha <prior-sha> (was-green carryover).
+#   For a PR that is BEHIND after a green head: the operator authorizes --admin, the branch is
+#   updated (gh pr update-branch or equivalent), and the NEW head's checks have not settled.
+#   The certification is carried from <prior-sha> to <sha> only when the move between them is
+#   provably contentless:
+#     * <sha> is a 2-parent commit with .commit.verification.verified == true. Only GitHub can
+#       produce such a commit (update-branch / merge-upstream / web merge); a server-side merge
+#       cannot smuggle authored edits -- it fails on conflict instead of producing one.
+#     * parents[0] == <prior-sha>: the first parent is the head that was green.
+#     * compare(parents[1]...<base>) is ahead|identical: the second parent is an ancestor-or-
+#       equal of the base tip, so every byte the merge added came from <base>.
+#   Any failure of those three is not-ready (reason=green-carryover-*), NOT an error: the
+#   caller falls back to waiting for the new head's own checks. When the proof holds, the
+#   required-check gate runs against <prior-sha>'s check runs (which still exist -- check runs
+#   are keyed to the commit, not the branch) and the merge itself still uses
+#   --match-head-commit <sha>. UNTRUSTED-CI still refuses first: a workflow-editing PR cannot
+#   self-certify on ANY sha.
+#
 # EXIT CODES (the contract every caller branches on).
 #   0  ready      every required context present and green on this head -> merge with
 #                 --match-head-commit <sha>
@@ -86,10 +104,14 @@ readonly MARKER="SOLEUR_ADMIN_MERGE_READY"
 usage() {
   cat <<'EOF'
 usage: admin-merge-ready.sh <PR> <head-sha> [--base BRANCH] [--wait [--timeout SEC]]
+       admin-merge-ready.sh <PR> <head-sha> --green-sha <prior-sha> [--base BRANCH]
        admin-merge-ready.sh --help
 
 Exits 0 only when every context required by the base branch's rulesets is PRESENT on
 <head-sha> and its latest check run concluded success|skipped|neutral.
+With --green-sha the gate runs against <prior-sha> instead: valid only when <head-sha>
+is GitHub's own verified 2-parent merge of <prior-sha> and an ancestor-or-equal of the
+base tip (was-green carryover; see the header).
 
 exit 0 ready | 1 not-ready|timeout | 2 usage error | 3 gh/jq/API/ruleset error | 4 stale (head moved / PR not open)
 
@@ -122,7 +144,7 @@ PR_OUT="$PR"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || usage_error "head-sha must be a full 40-hex SHA"
 SHA_OUT="$SHA"
 shift 2
-WAIT=0; TIMEOUT=3600; WANT_BASE="main"
+WAIT=0; TIMEOUT=3600; WANT_BASE="main"; GREEN_SHA=""
 while (( $# > 0 )); do
   case "$1" in
     --wait) WAIT=1; shift ;;
@@ -132,9 +154,14 @@ while (( $# > 0 )); do
     --base)
       if ! [[ "${2-}" =~ ^[A-Za-z0-9._/-]+$ ]]; then usage_error "--base must be a branch name"; fi
       WANT_BASE="$2"; shift 2 ;;
+    --green-sha)
+      if ! [[ "${2-}" =~ ^[0-9a-f]{40}$ ]]; then usage_error "--green-sha must be a full 40-hex SHA"; fi
+      GREEN_SHA="$2"; shift 2 ;;
     *) usage_error "unknown argument" ;;
   esac
 done
+[[ -z "$GREEN_SHA" || "$GREEN_SHA" != "$SHA" ]] \
+  || usage_error "--green-sha equals <head-sha> -- plain invocation already covers it"
 POLL_SECONDS="${ADMIN_MERGE_READY_POLL_SECONDS:-60}"
 [[ "$POLL_SECONDS" =~ ^[0-9]+$ ]] || usage_error "ADMIN_MERGE_READY_POLL_SECONDS must be ^[0-9]+\$"
 
@@ -188,10 +215,45 @@ check_once() {
     REASON="untrusted-ci"; return 1
   fi
 
+  # --green-sha carryover: prove <sha> is GitHub's own contentless merge of the certified
+  # <green-sha> and the base branch, then grade <green-sha>'s check runs. Verified merges are
+  # server-side only (GitHub signs them; a server merge fails on conflict rather than
+  # absorbing edits), so verified+2-parents+parents[0]==green+parents[1] an ancestor-or-equal
+  # of <base> means the delta is exactly base content.
+  CHECK_SHA="$SHA"
+  if [[ -n "$GREEN_SHA" ]]; then
+    gh api "repos/{owner}/{repo}/commits/$SHA" > "$WORK/head.json" \
+      || { fail3 "reading head commit failed" api-error; return; }
+    local carry
+    carry=$(jq -r --arg green "$GREEN_SHA" '
+      (.commit.verification.verified // false) as $v
+      | (.parents // []) as $p
+      | if ($p | length) != 2 then "carryover-not-merge"
+        elif $p[0].sha != $green then "carryover-first-parent"
+        elif $v != true then "carryover-unverified"
+        else "ok " + $p[1].sha end' "$WORK/head.json" 2>/dev/null) \
+      || { fail3 "unparseable head commit" api-error; return; }
+    if [[ "$carry" != ok\ * ]]; then
+      MSG="GREEN-CARRYOVER refused: head $SHA is not a verified GitHub merge of $GREEN_SHA ($carry)"
+      REASON="$carry"; return 1
+    fi
+    local p1="${carry#ok }" cstatus
+    gh api "repos/{owner}/{repo}/compare/$p1...$BASE" > "$WORK/compare.json" \
+      || { fail3 "compare of merged parent against $BASE failed" api-error; return; }
+    cstatus=$(jq -r '.status // ""' "$WORK/compare.json" 2>/dev/null) \
+      || { fail3 "unparseable compare response" api-error; return; }
+    if [[ "$cstatus" != "ahead" && "$cstatus" != "identical" ]]; then
+      MSG="GREEN-CARRYOVER refused: merged parent $p1 is not an ancestor-or-equal of $BASE (status=$cstatus)"
+      REASON="carryover-not-base"; return 1
+    fi
+    CHECK_SHA="$GREEN_SHA"
+    MSG="GREEN-CARRYOVER: head $SHA is a verified merge of $GREEN_SHA and $BASE@$p1; grading $GREEN_SHA's required contexts"
+  fi
+
   enc=$(jq -rn --arg b "$BASE" '$b|@uri')
   gh api --paginate --slurp "repos/{owner}/{repo}/rules/branches/$enc" > "$WORK/rules.json" \
     || { fail3 "reading the ruleset required set failed" api-error; return; }
-  gh api --paginate --slurp "repos/{owner}/{repo}/commits/$SHA/check-runs?per_page=100&filter=all" > "$WORK/runs.json" \
+  gh api --paginate --slurp "repos/{owner}/{repo}/commits/$CHECK_SHA/check-runs?per_page=100&filter=all" > "$WORK/runs.json" \
     || { fail3 "reading check runs failed" api-error; return; }
   jq -e 'type == "array" and all(.[]; type == "array")' "$WORK/rules.json" >/dev/null 2>&1 \
     || { fail3 "unparseable ruleset response" api-error; return; }
@@ -199,7 +261,7 @@ check_once() {
     || { fail3 "unparseable check-runs response" api-error; return; }
 
   local out
-  out=$(jq -c --slurpfile rules "$WORK/rules.json" --arg sha "$SHA" '
+  out=$(jq -c --slurpfile rules "$WORK/rules.json" --arg sha "$CHECK_SHA" '
     ["deletion","non_fast_forward","creation","update","required_linear_history",
      "required_signatures","required_status_checks"] as $known
     | ($rules[0] | add // []) as $all
