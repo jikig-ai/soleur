@@ -269,6 +269,8 @@ git commit -m "merge: resolve conflicts with origin/main"
 
 ```
 
+Before Phase 4 pushes, run every suite that references a script your branch changes, derived as in `work/SKILL.md` ("derive the list from CONSUMERS, not memory"): a sibling's new test merges cleanly, so the conflict list misses it (#8474).
+
 ## Phase 4: Push and PR
 
 Push the branch to remote:
