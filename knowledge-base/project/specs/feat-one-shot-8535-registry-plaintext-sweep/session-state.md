@@ -17,3 +17,4 @@
 
 ### Components Invoked
 - soleur:plan, soleur:plan-review, soleur:deepen-plan; learnings-researcher, dhh/kieran/simplicity reviewers, cto.
+- Work: the blocker script gained the #7797 xtrace refusal (inert unless `-x` with GH_TOKEN set). CI runs lint-shell-trace-credential-refusal with `--changed`, which bypasses the baseline for any touched file, so the in-place correction owed it. Its baseline entry was removed (ratchet down). AC7 "no logic change" holds for the probe decision path.

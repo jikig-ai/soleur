@@ -45,6 +45,14 @@
 # aborts with status 1, which this contract reads as FAIL, so an unprovisioned token would post a
 # daily false-FAIL. The `[[ -z "${VAR:-}" ]]` form below is the compliant one.
 set -uo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 # ANCHORED ON #7287 (the recut EXECUTION), not on #6929 (the recut VEHICLE).
 #
