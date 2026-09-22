@@ -2843,8 +2843,8 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
  * registry-luks-recut dispatch (#6929) — the sanctioned guest-side-LUKS recut.
  *
  * The load-bearing property is the ATOMIC 3-WAY `-replace`. Replacing the host alone preserves
- * the still-plaintext store volume, so cloud-init hits the `blkid` else->FATAL arm and DARKS the
- * registry; replacing the volume alone leaves the old host mounting a device that no longer
+ * the store volume (a host replace, not a recut; before the 2026-08-10 recut that meant the
+ * plaintext volume hit the `blkid` else->FATAL arm and darked the registry); replacing the volume alone leaves the old host mounting a device that no longer
  * exists. They move together or not at all.
  */
 describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {

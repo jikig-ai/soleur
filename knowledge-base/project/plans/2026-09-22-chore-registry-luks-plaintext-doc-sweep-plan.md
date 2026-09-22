@@ -78,6 +78,7 @@ Premise validation: #8535 OPEN. #7287 CLOSED 2026-08-12. #7340 CLOSED. #6929 CLO
 - Plan sharp-edges applied: a diff-scope AC lists pipeline-written files (AC9). A correction plan needs provenance for *added* claims, not only absence greps (AC9). An infra diff answers "does merging this alone mutate production" (Sharp Edges). `discoverability_test.command` stays free of shell metacharacters.
 
 **Scoped advisor consult (plan Step 4.5).** Two changes, both applied:
+
 - (1) The render `cmp` is not proof on its own. That became AC4(a), the comment-stripped diff.
 - (2) The inverted host-replace advice must be conditional and must explain the failed restore leg. That became D4's added paragraph.
 
@@ -94,6 +95,7 @@ Premise validation: #8535 OPEN. #7287 CLOSED 2026-08-12. #7340 CLOSED. #6929 CLO
 - P5: No behaviour changes. That covers rendered `user_data`, gate predicates, probe exit contract, and workflow size under the gate.
 
 **Cut list.** Nothing proposed by the ask was cut. The issue names no new mechanism, only corrections. Considered and not adopted:
+
 - Re-anchoring the blocker probe on `store_luks`. That is P2-adjacent, and #7377 owns it.
 - A new lint to forbid "still-plaintext" prose. Nothing in P1–P5 needs a standing guard. The existing encryption-posture lint and the AC greps cover this change.
 
@@ -236,28 +238,28 @@ No `exception` block: the mechanism is not `plaintext-exception`, and nothing se
 
 ## Acceptance Criteria
 
-- [ ] **AC1** (stale-claim sweep; the issue's two greps, widened): run `grep -niE 'plaintext|unencrypted|never been fired|recut is UNFIRED|unfired|#7287 tracks firing|#7287.*is open|zero live executions|blocked today|PROVISIONING EVENT|darks? (the|THE) REGISTRY'` over files 1–7 and 10. Each remaining hit must fall in one of these classes:
+- [x] **AC1** (stale-claim sweep; the issue's two greps, widened): run `grep -niE 'plaintext|unencrypted|never been fired|recut is UNFIRED|unfired|#7287 tracks firing|#7287.*is open|zero live executions|blocked today|PROVISIONING EVENT|darks? (the|THE) REGISTRY'` over files 1–7 and 10. Each remaining hit must fall in one of these classes:
   - (a) dated or past-tense history, including the `History (dated)` block and the annotated addendum;
   - (b) a conditional or refuse-arm description: the `not_luks` triage row, the sentinel "unencrypted path would pass the gate" sentence, `zot-registry.tf`'s `blkid` discriminator note, and the gate library's PRESERVE-STORE comments;
   - (c) the two retained quotes in the blocker script;
   - (d) a non-registry volume: inngest AOF, workspaces, git-data.
 
   The work phase commits the post-edit hit list, with one class per line, to `knowledge-base/project/specs/feat-one-shot-8535-registry-plaintext-sweep/ac1-hits.txt`. Review diffs the live grep against it, so an unclassified new hit fails.
-- [ ] **AC2**: `grep -nE 'still-plaintext|still plaintext|currently unencrypted'` over files 1–7 and 10 returns only the one addendum sentence in file 1. The next line must be followed by the `[Annotated 2026-09-22, #8535` marker.
-- [ ] **AC3**: `wc -c .github/workflows/apply-web-platform-infra.yml` is below 490,000, and `workflow-file-size.test.ts` passes. Record the figure in the PR body.
-- [ ] **AC4** (operator constraint, pre-merge): the `zot-registry.tf` edit cannot change the rendered `user_data`. Check it in three steps:
+- [x] **AC2**: `grep -nE 'still-plaintext|still plaintext|currently unencrypted'` over files 1–7 and 10 returns only the one addendum sentence in file 1. The next line must be followed by the `[Annotated 2026-09-22, #8535` marker.
+- [x] **AC3**: `wc -c .github/workflows/apply-web-platform-infra.yml` is below 490,000, and `workflow-file-size.test.ts` passes. Record the figure in the PR body.
+- [x] **AC4** (operator constraint, pre-merge): the `zot-registry.tf` edit cannot change the rendered `user_data`. Check it in three steps:
   - (a) This is the load-bearing check. Run `B=$(git merge-base origin/main HEAD); diff <(git show "$B":apps/web-platform/infra/zot-registry.tf | grep -vE '^[[:space:]]*#') <(grep -vE '^[[:space:]]*#' apps/web-platform/infra/zot-registry.tf)`. It must print nothing and exit 0. HCL discards `#` comments at parse, so identical non-comment lines mean an identical config.
   - (b) This is the operator's requested check, weak on its own. Render with `registry-userdata-budget.sh` before and after the edit; `cmp` must exit 0. Record one line in the PR body. The script reads only the strip regex and the `zot_image_amd64` pin from `zot-registry.tf` and never parses the edited lines. It proves the template and the strip are untouched.
   - (c) CI's `terraform fmt` stays green.
-- [ ] **AC5**: the `nfr-register.md` NFR-027 row reads `Container Registry (zot) store volume | Implemented | LUKS (cryptsetup)`.
+- [x] **AC5**: the `nfr-register.md` NFR-027 row reads `Container Registry (zot) store volume | Implemented | LUKS (cryptsetup)`.
   - Its evidence names `hcloud_volume.registry`, `/dev/mapper/registry`, `live_verification: available`, the escrow re-test and launch gate on boot `5639cc07`, and `not-publicly-claimed`.
   - Each fact agrees with the refreshed ledger row, `jq '.stores[] | select(.store=="hcloud_volume.registry")' scripts/encryption-posture-ledger.json`.
   - The System-Level Status line reads "4 of 5".
-- [ ] **AC6**: the ledger row no longer contains `reaches the host only on the next replace`, `not PREVENTED until the gate is live`, or `cannot be decoded until the next registry-host replace`.
-  - The edit is exact-string only, with no `jq` rewrite. `git diff --numstat scripts/encryption-posture-ledger.json` must read `3	3`, covering `does_not_defend`, `evidence` and `retrieved_on`.
+- [x] **AC6**: the ledger row no longer contains `reaches the host only on the next replace`, `not PREVENTED until the gate is live`, or `cannot be decoded until the next registry-host replace`.
+  - The edit is exact-string only, with no `jq` rewrite. `git diff --numstat scripts/encryption-posture-ledger.json` must read `3 insertions, 3 deletions`, covering `does_not_defend`, `evidence` and `retrieved_on`.
   - `python3 scripts/lint-encryption-posture.py --repo-sweep` prints `PASS`.
-- [ ] **AC7**: the blocker script behaves exactly as before. `bash -n` passes. The diff touches only `#` lines and the one PASS `echo` string; `DEP_ISSUE`, the `gh` calls and the exit codes are unchanged.
-- [ ] **AC8**: the gate library diff touches comments only, and `bash tests/scripts/test-registry-luks-recut-gate.sh` passes (baseline 37/37). `terraform-target-parity.test.ts` passes after its doc-comment edit.
+- [x] **AC7**: the blocker script behaves exactly as before. `bash -n` passes. The diff touches only `#` lines and the one PASS `echo` string; `DEP_ISSUE`, the `gh` calls and the exit codes are unchanged.
+- [x] **AC8**: the gate library diff touches comments only, and `bash tests/scripts/test-registry-luks-recut-gate.sh` passes (baseline 37/37). `terraform-target-parity.test.ts` passes after its doc-comment edit.
 - [ ] **AC9**: every new dated fact carries its run id, issue number or PR number inline. That is the source of truth for it: run ids from `gh run view <id> --json jobs`, boot and escrow facts from #8408's 2026-09-22T06:56:58Z comment, `available` from PR #8423, and the restore-leg fix from PR #7430 (`4aef468c80`). The diff scope is the 10 listed files, plus the pipeline-written artifacts: this plan, `specs/feat-one-shot-8535-registry-plaintext-sweep/{tasks,session-state,ac1-hits}.*`, and any regenerated `knowledge-base/INDEX.md`. CI (markdownlint via lefthook, the encryption-posture lint, `test`) is green.
 
 ## Test Scenarios
@@ -293,4 +295,4 @@ Panel: DHH, Kieran, code-simplicity and CTO (devex). All findings were applied a
 - D6: emitted text states mechanism, not posture. The `::error::` wording the plan proposed was false in the refuse-arm case where a recut is the remedy.
 - D7: the heading is renamed and a pre-dispatch check is added.
 
-Neither drops scope the operator requested, and both correct text the issue already scoped in. Applied: recut timestamp corrected to the job's completion time; AC4(a) diffs against the merge-base, not a moving `origin/main`; the missed file-1 sites (first-fire section, addendum "blocked today", "PROVISIONING EVENT"); AC1 made falsifiable with a committed classified hit list; the escrow time aligned to the observed 00:50:02Z; the false "alias withheld" claim fixed; an exact-string ledger edit with a `3	3` numstat. Cut: the self-imposed byte target, the sha256s, the AC for `terraform fmt`/markdownlint that CI already runs, and the Observability, Encryption Posture and Test Scenarios filler.
+Neither drops scope the operator requested, and both correct text the issue already scoped in. Applied: recut timestamp corrected to the job's completion time; AC4(a) diffs against the merge-base, not a moving `origin/main`; the missed file-1 sites (first-fire section, addendum "blocked today", "PROVISIONING EVENT"); AC1 made falsifiable with a committed classified hit list; the escrow time aligned to the observed 00:50:02Z; the false "alias withheld" claim fixed; an exact-string ledger edit with a `3 insertions, 3 deletions` numstat. Cut: the self-imposed byte target, the sha256s, the AC for `terraform fmt`/markdownlint that CI already runs, and the Observability, Encryption Posture and Test Scenarios filler.

@@ -2,9 +2,10 @@
 #
 # WHAT THIS IS. The registry host has no in-place execution lever of any kind: every
 # write-shaped remediation for the live disk-exhaustion incident (#7247) needs a config
-# change delivered by cloud-init, which needs a host REPLACE, which today opens
-# /dev/mapper/registry against a still-plaintext ext4 volume (the LUKS recut is UNFIRED — #7287). This workflow is
-# the entire set of useful work on the near side of that deadlock: it MEASURES, read-only,
+# change delivered by cloud-init, which needs a host REPLACE, which until the 2026-08-10 recut
+# (run 31437037877) opened /dev/mapper/registry against the then-plaintext ext4 volume (#7287,
+# closed). This workflow was the useful work on the near side of that deadlock, and it stays the
+# read-only measurement lever: it MEASURES, read-only,
 # over the already-live and already-CF-Access-gated `registry.<app_domain_base>` ingress, how
 # many of the ~59 GB the store reports are actually referenced by a manifest.
 #
@@ -19,7 +20,7 @@
 # `fs_size_gb` is the TOTAL. So `fs_size_gb * pcent/100` overstates used bytes by ext4's
 # ~5 % reserve — about 2.95 GB on a 59 GB filesystem. A `delta_gb` under ~3 GB is NOT
 # distinguishable from zero. `df --output=used` is not in the marker and adding it would be a
-# cloud-init change, i.e. the host-replace deadlock again.
+# cloud-init change, i.e. a host replace (a deadlock until the 2026-08-10 recut).
 #
 # ── TRIGGER SHAPE (#6425) ───────────────────────────────────────────────────
 # `workflow_dispatch` is the real entry point. The `push` trigger scoped to this file exists
@@ -40,8 +41,9 @@
 # ── ZERO TERRAFORM (AC6) ────────────────────────────────────────────────────
 # This workflow touches no `.tf` file, mints no Doppler secret and mints no CF Access token.
 # That is an acceptance criterion, not an incidental property: `hcloud_server.registry`
-# already carries a PENDING REPLACE in state, so any new resource with no scoped apply path
-# would have to ride an untargeted apply and carry that replace into the unfired-recut fatal (#7287).
+# carried a PENDING REPLACE in state at authoring (pre-recut), so any new resource with no scoped
+# apply path would have had to ride an untargeted apply and carry that replace into the
+# then-unfired-recut fatal (#7287, closed; the recut fired 2026-08-10).
 name: Registry zot disk inventory (read-only)
 
 on:
