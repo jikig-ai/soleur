@@ -1,7 +1,7 @@
 ---
 vendor: OpenAI
 role: proposed processor for Codex web-agent customer-content processing
-status_snapshot_date: 2026-09-21
+status_snapshot_date: 2026-09-22
 customer_content_status: blocked
 clo_disposition: pending
 user_owned_provider_path: documented-in-product; vendor-account-terms-apply
@@ -33,6 +33,13 @@ OpenAI's [API data controls](https://platform.openai.com/docs/models/default-usa
 For Enterprise accounts, [workspace administrators control Codex access and permissions](https://help.openai.com/en/articles/8411955), and [managed-account administrators may access, export, retain, and delete account data](https://help.openai.com/en/articles/20001067-data-access-for-your-managed-chatgpt-account). These public capabilities do not establish the controls or retention policy of the account currently signed in on this machine. The [OpenAI Services Agreement](https://openai.com/policies/services-agreement/) states that the customer retains input rights and owns output as between the parties, subject to applicable law; the actual applicable agreement must be confirmed.
 
 The mode-specific decision request and evidence checklist are in `knowledge-base/project/specs/feat-one-shot-codex-web-rollout/clo-decision-packet.md`. Its status is **pending CLO disposition**, not approval.
+
+On 2026-09-22, the managed-mode synthetic CLI smoke completed successfully,
+but it did not identify the account plan, workspace owner, agreement, region,
+retention settings, or administrator controls. No `OPENAI_API_KEY` secret was
+present in production Doppler, and no API request was attempted. This confirms
+that the evidence gap is account-specific and that customer-content processing
+must remain blocked.
 
 ## Required CLO disposition
 
@@ -77,3 +84,5 @@ back to a managed credential when a user-owned binding is selected.
 - <https://platform.openai.com/docs/models/default-usage-policies-by-endpoint>
 - <https://help.openai.com/en/articles/9039756>
 - <https://help.openai.com/en/articles/20001275/>
+- <https://help.openai.com/en/articles/20001067-data-access-for-your-managed-chatgpt-account>
+- <https://help.openai.com/en/articles/20001418>
