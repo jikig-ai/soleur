@@ -466,10 +466,13 @@ else
   fail "sampled job(s) missing from web-platform-release.yml:$parity_missing"
 fi
 
-# Anti-vacuity floor: deleting every assertion must not exit 0.
+# Anti-vacuity floor: deleting every assertion must not exit 0. Reports
+# directly and exits (ADR-193): a floor routed through fail() is disarmed
+# by the same neutered machinery it exists to catch.
 total=$((passes + fails))
 if [ "$total" -lt 25 ]; then
-  fail "assertion floor: $total assertions ran, want >=25"
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=25" >&2
+  exit 1
 fi
 
 echo

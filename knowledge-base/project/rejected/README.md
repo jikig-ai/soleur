@@ -155,6 +155,11 @@ reads**. They hold real refusals, but of *mechanisms* — the queue that lost, t
 not chosen — and a mechanism refusal filed as a concept reads as a far wider no than anyone decided.
 Nothing has been imported from them, and nothing should be.
 
+The `## Out of Scope` section of `knowledge-base/product/roadmap.md` is a second sibling. It lists
+work ruled out of *this roadmap*, each line backed by an issue closed as not planned (rules in the
+product-roadmap skill). It is scoped to the roadmap and is never imported here; a refused concept
+that is likely to be proposed again gets its own entry in this directory as well.
+
 Two candidates that look like obvious first entries are deliberately not here:
 
 - **The Telegram bridge.** The roadmap records it as *"Removed in April 2026 — will redesign as
