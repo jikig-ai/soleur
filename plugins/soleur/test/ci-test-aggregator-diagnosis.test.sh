@@ -129,9 +129,9 @@ echo "  instrument self-test: pass() and fail() both move"
 
 # ── Execution harness ────────────────────────────────────────────────────────
 # Executes an extracted body under the shell GitHub Actions actually uses.
-# $6 is the 4th leg (web-platform-build, #8136); it defaults to success so the
-# three-shard rows keep stating their FULL triple while the build rows below
-# name the 4th value explicitly.
+# $6 is the 4th leg (web-platform-build, #8136); $7 the 5th (test-scripts-heavy, #8006).
+# Both default to success so the three-shard rows keep stating their FULL triple while
+# the build and heavy rows below name their own values explicitly.
 run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] [$7=scripts-heavy] ; sets OUT/RC
   OUT="$SANDBOX/out.$RANDOM.$RANDOM"
   ( WEBPLAT_RESULT="$2" BUN_RESULT="$3" SCRIPTS_RESULT="$4" EVENT_NAME="$5" \
@@ -225,6 +225,10 @@ run_body "$BODY" success success success push success skipped
 if [ "$RC" -eq 1 ] && grep -qF -- "test-scripts-heavy: SKIPPED" "$OUT"; then pass; else
   fail "R1i a skipped test-scripts-heavy reads as success — the same fail-open R1g pins on the build leg (rc=$RC)"
 fi
+# R1j re-runs the FAILURE fixture: reading $OUT here without this call asserts the
+# matrix needle against R1i's SKIPPED output — a stale-file read that fails for the
+# wrong reason no matter what the failure arm says.
+run_body "$BODY" success success success push success failure
 if grep -qF -- "matrix" "$OUT"; then pass; else
   fail "R1j the test-scripts-heavy failure message does not say 'matrix' — the failure arm special-cases only test-scripts, but this job is a matrix rollup too (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
 fi
@@ -379,7 +383,7 @@ fi
 # Every row above executes the extracted `run:` body against env vars the HARNESS
 # supplies. That proves the classifier is right and says NOTHING about whether
 # the workflow feeds it the right values, or whether the `test` job still watches
-# all three shards. Both are one-line edits with no local symptom.
+# all four leg jobs. Both are one-line edits with no local symptom.
 _ciy="$REPO_ROOT/.github/workflows/ci.yml"
 _wiring=$(python3 - "$_ciy" <<'PYW'
 import sys, yaml
