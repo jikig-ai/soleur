@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329,SC2015,SC2016  # row/mutation functions are dispatched indirectly; A && B || C is the assertion idiom; literals are single-quoted on purpose
-# Guards 2 and 3 of #8500 (plan: knowledge-base/project/plans/2026-09-22-feat-admin-merge-ready-script-plan.md).
+# Guards 2 and 3 of #8500 (plan: knowledge-base/project/plans/archive/20260922-120349-2026-09-22-feat-admin-merge-ready-script-plan.md).
 #
 # Guard 2 -- the wiring lint. The population is DERIVED: every text file under plugins/soleur/
 # (test directories and *.test.* excluded), walked with `find` under the root argument, so a new
