@@ -44,6 +44,7 @@ type AckReason = "doc-mention" | "operator-handoff";
 // Growing this table is a reviewed decision: the prose at the site must read as its reason.
 const ACKS: Record<string, { reason: AckReason; lines: number }> = {
   "knowledge-base/engineering/operations/runbooks/admin-ip-drift.md|admin-ip-refresh": { reason: "operator-handoff", lines: 5 },
+  "knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md|admin-ip-refresh": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-cloudflare": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-doppler": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-github": { reason: "operator-handoff", lines: 2 },

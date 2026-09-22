@@ -44,10 +44,16 @@
 # carries the root key and the literal ProxyCommand through web-1. There are no `ssh`
 # fallbacks: an unset invocation fails closed instead of dialing a bare `ssh`.
 #
-# CAPTURED VALUES (P8). Host-chosen bytes are unauthenticated while host keys are unverified
-# (#7226): a compromised web-1 could answer "mounted, empty". gd_capture therefore bounds
-# every remote read (30 s, 4096 bytes), accepts a value only when it matches an anchored
-# pattern in full, and never prints the value. This evidence is still not authentication.
+# HOST KEYS (#7226, ADR-237). Both hops are pinned: the bridge's WEB_HOST_SSH trusts only web-1's
+# committed ECDSA key, and the workflow's ssh_config trusts web-1's key for the jump and
+# git-data's Terraform-minted ED25519 key for the git-data hop, each under a fixed HostKeyAlias.
+# A host-key failure is its own verdict, host_key_mismatch, with a reason word (see
+# _access_reason, plan H4).
+#
+# CAPTURED VALUES (P8). gd_capture bounds every remote read (30 s, 4096 bytes), accepts a value
+# only when it matches an anchored pattern in full, and never prints the value. A pinned host
+# key authenticates the host, not the answer's truth: a compromised web-1 or git-data can still
+# answer "mounted, empty", so the bounds stay.
 #
 # Exit codes: 0 clear; 1 internal error (die: the access gate's mktemp failed); 3 access gate;
 # 5 refusal (real mode, store probe, fence probe); 78 xtrace refusal.
@@ -186,11 +192,17 @@ gd_capture() {
 #   git-data-auth  root login over GIT_DATA_SSH; unset -> git_data_root_key_absent (#8189).
 # Non-ok exits 3 from THIS body. Keep the call a plain statement: inside $(...) or a
 # pipeline its `exit 3` would only leave a subshell and the store probes would run anyway.
-# Probe bytes are chosen by the edge or web-1 while host keys are unverified (#7226), and the
-# runner parses workflow commands on stdout AND stderr. So every probe writes to a file, the
-# -W line is only compared, and a failed probe's stderr is printed capped, printable-ASCII,
-# behind a fixed prefix, inside a ::stop-commands:: span keyed on a per-run random token.
-# A failure's reason= is a fixed word chosen by grep over that file, never probe bytes.
+# ssh error output is HOSTILE: a compromised web-1 (or the edge) controls the jump hop's banner
+# and error text, and the runner parses workflow commands on stdout AND stderr. So:
+#   - every probe writes to a file, and the -W line is only compared;
+#   - the verdict comes from ssh's exit code plus LINE-ANCHORED patterns over the cleaned text
+#     (_access_reason), never from a free substring such as a `verdict=` in that text;
+#   - before anything is echoed, every byte outside printable ASCII is stripped (_access_clean):
+#     control characters, DEL (\x7f), and multi-byte sequences such as U+2028 / U+2029;
+#   - a failed probe's cleaned stderr is printed capped, behind a fixed prefix, inside a
+#     ::stop-commands:: span keyed on a per-run random token, so an embedded ::error:: or
+#     ::add-mask:: cannot become a workflow command.
+# A failure's verdict and reason= are fixed words, never probe bytes.
 # ssh keeps the FIRST value of a repeated -o, so the appended options can add, never override.
 _access_emit() { # <role> <host> <verdict> [rc] [reason]
   local detail="role=$1 host=$2 verdict=$3${4:+ rc=$4}${5:+ reason=$5}"
@@ -204,17 +216,34 @@ _access_emit() { # <role> <host> <verdict> [rc] [reason]
     printf -- '- ACCESS %s\n' "$detail" >> "$GITHUB_STEP_SUMMARY" || true
   fi
 }
-_access_reason() { # <rc> <captured-stderr-file>
-  if [ "$1" = 124 ]; then echo timeout
-  elif grep -qF 'administratively prohibited' "$2"; then echo forward_refused
-  elif grep -qF 'Connection refused' "$2"; then echo connect_refused
-  elif grep -qF 'No route to host' "$2"; then echo no_route
-  elif grep -qF 'Permission denied' "$2"; then echo auth_refused
-  else echo unknown
+_access_clean() { # <captured-stderr-file> — capped, printable ASCII and newlines only
+  head -c 8192 "$1" | LC_ALL=C tr -cd '\12\40-\176'
+}
+# <rc> <captured-stderr-file> -> "<verdict> <reason>". H4 (host identity, #7226) first, in plan
+# order and only on ssh's own exit code 255, all ahead of Permission denied (H3):
+#   alg      the host offers no key of the pinned algorithm
+#   unknown  no pin for the alias (a typo'd HostKeyAlias or an empty known_hosts: a config bug)
+#   changed  the host presented a key other than the pin
+# Remedy (runbook H4): a wrong web-1 capture -> re-capture PR; git-data re-keyed outside the
+# replace job -> replace dispatch; neither -> breach-notice triage. Never re-enable TOFU.
+_access_reason() {
+  local t
+  t="$(_access_clean "$2")"
+  if [ "$1" = 124 ]; then echo "failed timeout"
+  elif [ "$1" = 255 ] && grep -qE '^Unable to negotiate with .+: no matching host key type found' <<< "$t"; then echo "host_key_mismatch alg"
+  elif [ "$1" = 255 ] && grep -qE '^No [A-Za-z0-9-]+ host key is known for ' <<< "$t"; then echo "host_key_mismatch unknown"
+  elif [ "$1" = 255 ] && grep -qE '^(@ +WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! +@|Host key verification failed\.)$' <<< "$t"; then echo "host_key_mismatch changed"
+  elif grep -qE '^channel [0-9]+: open failed: administratively prohibited' <<< "$t"; then echo "failed forward_refused"
+  elif grep -qE '^(ssh: connect to host [^ ]+ port [0-9]+|channel [0-9]+: open failed: connect failed): Connection refused$' <<< "$t"; then echo "failed connect_refused"
+  elif grep -qE '^(ssh: connect to host [^ ]+ port [0-9]+|channel [0-9]+: open failed: connect failed): No route to host$' <<< "$t"; then echo "failed no_route"
+  elif grep -qE '^[^ ]+: Permission denied \(' <<< "$t"; then echo "failed auth_refused"
+  else echo "failed unknown"
   fi
 }
 _access_fail() { # <role> <host> <rc> <captured-stderr-file> — emit, dump, stop
-  _access_emit "$1" "$2" failed "$3" "$(_access_reason "$3" "$4")"
+  local vr
+  vr="$(_access_reason "$3" "$4")"
+  _access_emit "$1" "$2" "${vr%% *}" "$3" "${vr#* }"
   _access_stderr "$4"
   exit 3
 }
@@ -223,7 +252,7 @@ _access_stderr() { # <captured-stderr-file>
   local tok l
   tok="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   echo "::stop-commands::${tok}"
-  head -c 8192 "$1" | LC_ALL=C tr -cd '\12\40-\176' | while IFS= read -r l || [ -n "$l" ]; do
+  _access_clean "$1" | while IFS= read -r l || [ -n "$l" ]; do
     printf '[git-data-cutover] probe-stderr: %s\n' "$l"
   done
   echo "::${tok}::"
