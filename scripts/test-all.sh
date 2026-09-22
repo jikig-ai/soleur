@@ -2163,6 +2163,15 @@ if want_scripts; then
   # would collapse most of its cases onto three integers — the suite therefore pins a branch
   # marker per case and DERIVES its distinct-marker floor from the shipped probe.
   run_suite "scripts/registry-luks-live-8386" bash scripts/followthroughs/registry-luks-live-8386.test.sh
+  # #8037 cosign verify-live probe. Registered explicitly (scripts/followthroughs/ matches no
+  # glob). Its exit code closes #8037 (0), alarms on a host whose LATEST verdict is still
+  # cosign_absent (1), or asks a human on a new failure class / anon_config=unavailable (5). The
+  # load-bearing arms are SYSLOG_IDENTIFIER field isolation, latest-verdict grading, and
+  # zero-hosts-never-PASS.
+  run_suite "scripts/cosign-verify-live-8037" bash scripts/followthroughs/cosign-verify-live-8037.test.sh
+  # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
+  # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
+  run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
@@ -2365,6 +2374,24 @@ if want_scripts; then
   # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
   run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
   run_suite "scripts/measure-plan-sharp-edges-turns" bash scripts/measure-plan-sharp-edges-turns.test.sh
+  # #8377 / ADR-235 — the regen-if-stale gate in front of the now-untracked KB index.
+  # `scripts/*.test.sh` is not covered by SUITE_GLOBS (which reaches plugins/, .claude/hooks/,
+  # apps/ and scripts/lib/ but never the bare scripts/ directory), so this explicit line is
+  # the suite's ONLY registration. Without it it runs nowhere and gates nothing.
+  run_suite "scripts/ensure-kb-index" bash scripts/ensure-kb-index.test.sh
+  # THE GENERATOR AGAINST THE REAL TREE. `generate-kb-index.sh --check` used to do two jobs:
+  # assert the committed index was fresh (moot once untracked) AND execute the generator over
+  # the real ~9,500-file knowledge-base/ in the required `test-scripts` context. #8377 retired
+  # the flag as if it did one job, and every surviving caller is `--soft` (WARN + exit 0), so a
+  # regression that only manifests on real corpus content -- a frontmatter shape, a filename,
+  # a collation edge -- would have been green in CI and reached the operator as "no prior art"
+  # (#8384 review). Writes to a scratch dir, never the tree: this runner's boundary check
+  # treats any repo write as a FATAL. Measured 3 s. Positive floors, not `-s`: a generator that
+  # emitted a header and nothing else would pass an emptiness check. It is a FILE, not an
+  # inline `bash -c '...'`: `--enumerate-commands` encodes each registration as one TSV row and
+  # refuses an argv element containing a NEWLINE, so a multi-line inline body reds
+  # battery-tag-authorship.test.sh ("refusing to classify against an empty root set").
+  run_suite "scripts/generate-kb-index-live" bash scripts/generate-kb-index-live.test.sh
   run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
@@ -2545,6 +2572,15 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #7964 — the cross-ref dev-Supabase advisory mutex. Registered HERE for the
+  # same reason: nothing under tests/scripts/ is auto-discovered, and an
+  # unregistered mutex suite is silent AND green while the banners it pins
+  # decide whether a contended run proceeds visibly or silently.
+  run_suite "tests/scripts/dev-suite-mutex" bash tests/scripts/test-dev-suite-mutex.sh
+  # The wiring gate is a separate suite for the same reason the D10 wiring
+  # gate is separate: the unit suite stubs psql and cannot see YAML — only
+  # this file asserts the workflow actually wires acquire/release/anchors.
+  run_suite "tests/scripts/dev-suite-mutex-wiring" bash tests/scripts/test-dev-suite-mutex-wiring.sh
   # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
   # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
   # under tests/scripts/ is auto-discovered, and an unregistered verdict suite

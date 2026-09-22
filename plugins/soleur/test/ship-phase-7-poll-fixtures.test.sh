@@ -27,7 +27,16 @@
 #   10. real git (no mock, ship block): conflict aborts cleanly; pre-staged resolution
 #       survives; push rejection retains the merge commit; rebase-in-progress and
 #       detached HEAD are refused
-#   11. not inside a worktree → BEHIND auto-sync disabled, poll heartbeats
+#   11. not inside a worktree → BEHIND auto-sync disabled; BEHIND is a named stop
+#   13/13b/13c. plugin root with an old script / unset / plugin.json not soleur →
+#       precondition line naming the failed check, then [ship.phase7.behind_no_sync]
+#   14. PR set to `#4387` → refused before the poll (exit 2)
+#   15. fetch fails then a push → the hatch counts pushes, so it does not fire
+#   16. sync no-op (exit 11) → sync_noop line, not counted, never "pushed"
+#
+# Every row also asserts: no git call fell through to the mock catch-all, and no
+# temp file (the per-poll snapshot) outlived the block. CLAUDE_PLUGIN_ROOT is a
+# temp COPY of the plugin root, never the live checkout.
 #
 # Every scenario except 0 and 10 runs against BOTH the canonical block and the
 # merge-pr mirror (`:ship` / `:merge-pr` label suffixes). Every scenario also
@@ -70,6 +79,27 @@ set +e
 PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+
+# fail() positive control: a counter that cannot move makes every row vacuous.
+# Reported via printf+exit, never through pass/fail (the machinery under test).
+_fail0=$FAIL
+fail "positive control (expected, unwound)" >/dev/null
+if [[ "$FAIL" -ne $((_fail0 + 1)) ]]; then printf 'FATAL: fail() did not increment FAIL\n' >&2; exit 1; fi
+FAIL=$_fail0
+
+# CLAUDE_PLUGIN_ROOT for every scenario is a TEMP COPY of the plugin's identity file
+# and scripts/, never the live checkout: the block runs `cp`/`rm` against paths under
+# that root, and a mutant that aliases SYNC_SNAP to SYNC_SH would otherwise delete the
+# real sync-pr-behind.sh from the working tree.
+PLUGIN_COPY="$(mktemp -d)"
+_TMP_OWNED+=("$PLUGIN_COPY")
+assert_fixture_dir "$PLUGIN_COPY"
+{ cp -R "$REPO_ROOT/plugins/soleur/.claude-plugin" "$PLUGIN_COPY/" \
+    && cp -R "$REPO_ROOT/plugins/soleur/scripts" "$PLUGIN_COPY/"; } \
+  || { printf 'FATAL: could not copy the plugin root into %s\n' "$PLUGIN_COPY" >&2; exit 1; }
+# The default root carries NO regenerable-conflict resolver, so a DIRTY scenario reaches
+# the DIRTY exit exactly as before ADR-235. Scenario 4r supplies a stub resolver.
+rm -f "$PLUGIN_COPY/scripts/resolve-regenerable-conflicts.sh"
 
 # ---------------------------------------------------------------------------
 # Extract the Phase 7 bash block. Two anchors:
@@ -138,15 +168,30 @@ else
   # mirror without them (mutation row 5). `git merge --abort` is deliberately
   # NOT a token — the pre-fix mirror already carries it, so it discriminates
   # nothing.
+  #
+  # The last two tokens pin the ADR-235 regenerable-artifact arm. They are here
+  # because this list did NOT cover it and the omission was invisible: #8377
+  # added the arm to ship's block only, and merge-pr/SKILL.md's mirror-invariant
+  # line claims "a parity token list pins the arm's spelling — so a behavioural
+  # fix applied to one block reddens the suite until it lands in the other".
+  # Measured at that commit: ship carried 5 references, the mirror carried 0,
+  # and this suite was 191/191 GREEN. The claim was false for precisely the arm
+  # the PR had just added, which is worse than no claim — the next editor trusts
+  # it and skips the cross-grep the same line tells them to do anyway.
   for token in 'MAX_BEHIND_SYNCS=6' 'mergeStateStatus' 'bucket == "fail"' \
                '[ship.phase7.required_failed]' '[ship.phase7.dirty]' \
                '[ship.phase7.behind_exhausted]' '*DIRTY*' 'mapfile -t REQUIRED_CHECKS' \
                'is-inside-work-tree' \
-               'sync_out="$(GIT_TRACE=0 git merge origin/main --no-edit 2>&1)" || sync_rc=$?' \
-               'merge conflict, aborting sync' 'kind=merge_refused' \
-               'kind=merge_in_progress' 'git push failed after merge' \
-               'fetch_failures='; do
-    if ! grep -qF "$token" "$MIRROR_FILE"; then
+               'bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?' \
+               'sync-pr-behind.sh exited $sync_rc' '--help 2>/dev/null | grep -q -- '"'"'--step'"'"'' \
+               'SYNC_ROOT="$(set +u; printf '"'"'%s'"'"' "${CLAUDE_PLUGIN_ROOT}")"' \
+               'fetch_failures=' 'PR="4387"' '[[ $PR =~ ^[0-9]+$ ]] ||' \
+               'behind_pushes=$((behind_pushes+1))' '(( behind_pushes == 2 ))' \
+               '11) behind_syncs=$((behind_syncs-1))' '[ship.phase7.behind_no_sync]' \
+               'trap '"'"'rm -f "$SYNC_SNAP"'"'"' EXIT' 'ADR-179 identity check' \
+               'resolve-regenerable-conflicts.sh" origin/main' \
+               'regen resolved — merge committed locally'; do
+    if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
   done
@@ -191,12 +236,25 @@ assert_log() {
   fi
 }
 
+# assert_log self-check: a pattern ABSENT from the log must FAIL, and a forbidden
+# pattern PRESENT must FAIL. Driven with output suppressed, then unwound.
+_selfcheck_log="$(mktemp)"
+_TMP_OWNED+=("$_selfcheck_log")
+echo "only this line" > "$_selfcheck_log"
+_fail0=$FAIL; _pass0=$PASS
+assert_log "selfcheck" "$_selfcheck_log" "pattern-that-is-not-there" "only this" >/dev/null
+if [[ "$FAIL" -ne $((_fail0 + 2)) ]]; then
+  printf 'FATAL: assert_log did not FAIL a known miss and a present forbidden pattern (FAIL moved %s, want 2)\n' "$((FAIL - _fail0))" >&2; exit 1
+fi
+FAIL=$_fail0; PASS=$_pass0
+rm -f "$_selfcheck_log"
+
 # The Monitor tool streams STDOUT only (stderr lands in the output file and
 # raises no notification), so every tagged exit line must be on stdout.
 assert_no_tag_on_stderr() {
   local label="$1" errfile="$2"
-  if grep -q 'ship\.phase7\.' "$errfile"; then
-    fail "[$label] tagged line on stderr (Monitor streams stdout only): $(grep 'ship\.phase7\.' "$errfile" | head -1 | cut -c1-120)"
+  if grep -qE 'ship\.phase7\.|\[pr-behind-sync\] kind=' "$errfile"; then
+    fail "[$label] tagged line on stderr (Monitor streams stdout only): $(grep -E 'ship\.phase7\.|\[pr-behind-sync\] kind=' "$errfile" | head -1 | cut -c1-120)"
   else
     pass "[$label] no tagged line on stderr"
   fi
@@ -235,35 +293,66 @@ run_scenario() {
   _TMP_OWNED+=("$MOCK_STATE")
   export MOCK_STATE
 
+  mkdir -p "$MOCK_STATE/cwd" "$MOCK_STATE/tmp"
+
   (
     set +o pipefail
     [[ "${SCENARIO_SET_E:-0}" == 1 ]] && set -e
+    # The BEHIND arm runs `bash "$SYNC_SNAP" --step`, a CHILD process: it sees the
+    # mocks only through `export -f` and the MOCK_* knobs only through `set -a`.
+    # If an export is ever dropped the child's real git runs from a directory
+    # under a git ceiling, finds no repository, and exits 3 — a red row, never a
+    # push to the live repo.
+    cd "$MOCK_STATE/cwd" || exit 97
+    export GIT_CEILING_DIRECTORIES="$MOCK_STATE"
+    # The block's per-poll snapshot lands here; its EXIT trap must remove it.
+    export TMPDIR="$MOCK_STATE/tmp"
+    case "${SCEN_ROOT:-}" in
+      unset) unset CLAUDE_PLUGIN_ROOT ;;
+      "")    export CLAUDE_PLUGIN_ROOT="$PLUGIN_COPY" ;;
+      *)     export CLAUDE_PLUGIN_ROOT="$SCEN_ROOT" ;;
+    esac
     sleep() { return 0; }
     date() { echo "00:00:00"; }
-    git() {
-      case "$1 ${2:-}" in
-        # `rev-parse -q --verify MERGE_HEAD` (the #8339 precondition) must
-        # answer "no merge in progress" (rc 1); `--is-inside-work-tree` must
-        # print `true` (the block compares the OUTPUT); `--git-dir` points at
-        # the per-row state dir so sequencer files can be modelled.
-        "rev-parse -q") return 1 ;;
-        "rev-parse --is-inside-work-tree") echo true ;;
-        "rev-parse --git-dir") echo "$MOCK_STATE" ;;
-        "rev-parse "*) echo "test-branch" ;;
-        *) return 0 ;;
-      esac
-    }
+    eval "$GIT_BASE_MOCK"
+    git() { _git_base "$@"; }
+    set -a
     # shellcheck disable=SC1090
     source "$mocks_file"
+    set +a
+    export -f git gh _git_base
+    declare -F _gh_unexpected >/dev/null && export -f _gh_unexpected
     # shellcheck disable=SC1090
     source "$block"
   ) > "$logfile" 2> "$errfile"
   local rc=$?
   assert_no_tag_on_stderr "$label" "$errfile"
+  # Any git call no mock arm answered (the child's too — many run under 2>/dev/null,
+  # so the record is a FILE, not a line) is a call this row never modelled.
+  if [[ -s "$MOCK_STATE/unexpected_git" ]]; then
+    sed 's/^/MOCK: unexpected git /' "$MOCK_STATE/unexpected_git" >> "$logfile"
+  fi
   # Match over both streams (the block's non-tagged lines may legitimately use
   # stderr), with the exit status recorded for the dump.
   { echo "[scenario exit rc=$rc]"; cat "$errfile"; } >> "$logfile"
   assert_log "$label" "$logfile" "$must_match" "$must_not_match"
+  if grep -q 'MOCK: unexpected git' "$logfile"; then
+    fail "[$label] unmodelled git call: $(grep -m1 'MOCK: unexpected git' "$logfile" | cut -c1-120)"
+  else
+    pass "[$label] every git call hit a mock arm"
+  fi
+  if [[ -n "$(ls -A "$MOCK_STATE/tmp")" ]]; then
+    fail "[$label] temp file left behind by the block (snapshot trap): $(ls -A "$MOCK_STATE/tmp" | head -3 | tr '\n' ' ')"
+  else
+    pass "[$label] no temp file left behind"
+  fi
+  # ONCE (newline list, optional): each pattern must occur on exactly one line.
+  local pat n
+  while IFS= read -r pat; do
+    [[ -z "$pat" ]] && continue
+    n="$(grep -cE "$pat" "$logfile" || true)"
+    if [[ "$n" -eq 1 ]]; then pass "[$label] exactly once: $pat"; else fail "[$label] want exactly 1 line matching '$pat', got $n"; fi
+  done <<< "${ONCE:-}"
   rm -rf "$MOCK_STATE"
   rm -f "$logfile" "$errfile"
 }
@@ -274,6 +363,39 @@ run_scenario_both() {
   run_scenario "$1:ship"     "$2" "$3" "$4" "$BLOCK_FILE"
   run_scenario "$1:merge-pr" "$2" "$3" "$4" "$MIRROR_FILE"
 }
+
+# The shared git mock. Scenario mocks define `git()` with their own arms and fall
+# through to `_git_base "$@"`. Keyed exactly as dispatched: "$1 ${2:-}". HEAD and
+# @{u} are modelled as counters so the script's no-op check (merge moved nothing AND
+# nothing unpushed, exit 11) sees a real merge move HEAD and a real push move @{u}.
+# The catch-all records the call in $MOCK_STATE/unexpected_git; run_scenario fails
+# every row that leaves one behind.
+GIT_BASE_MOCK="$(cat <<'EOF'
+_git_base() {
+  case "$1 ${2:-}" in
+    "rev-parse -q") [[ -e "$MOCK_STATE/MERGE_HEAD" ]] ;;
+    "rev-parse --is-inside-work-tree") echo true ;;
+    "rev-parse --git-dir") echo "$MOCK_STATE" ;;
+    "rev-parse --abbrev-ref") echo "test-branch" ;;
+    "rev-parse HEAD") echo "sha-$(cat "$MOCK_STATE/merges" 2>/dev/null || echo 0)" ;;
+    "rev-parse @{u}") echo "sha-$(cat "$MOCK_STATE/upstream" 2>/dev/null || echo 0)" ;;
+    "symbolic-ref -q") [[ ! -e "$MOCK_STATE/detached" ]] ;;
+    "fetch origin"|"fetch --no-tags") return 0 ;;
+    "merge-tree --write-tree") return 0 ;;
+    "merge origin/main")
+      echo $(( $(cat "$MOCK_STATE/merges" 2>/dev/null || echo 0) + 1 )) > "$MOCK_STATE/merges"
+      echo "Merge made by the 'ort' strategy." ;;
+    "merge --abort") echo "MOCK: git merge --abort observed"; rm -f "$MOCK_STATE/MERGE_HEAD" ;;
+    "diff --name-only") [[ -e "$MOCK_STATE/MERGE_HEAD" ]] && echo "foo.md" ;;
+    "status --short") echo " M f" ;;
+    "push ")
+      cp "$MOCK_STATE/merges" "$MOCK_STATE/upstream" 2>/dev/null || true
+      : > "$MOCK_STATE/pushed" ;;
+    *) echo "$*" >> "$MOCK_STATE/unexpected_git"; echo "MOCK: unexpected git $*" >&2; return 0 ;;
+  esac
+}
+EOF
+)"
 
 # Shared mock prelude: every scenario installs a default fall-through arm
 # for `gh` calls the scenario did not handle, so future SKILL.md edits that
@@ -384,13 +506,15 @@ gh() {
   esac
 }
 EOF
-run_scenario "3-behind-saturation:ship" "$SCEN3" \
+ONCE='ship\.phase7\.hatch_check' run_scenario "3-behind-saturation:ship" "$SCEN3" \
   "\[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
+\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
 moving faster than this PR" \
   "ship.phase7.(required_failed|dirty)|Every attempt failed at git fetch|UNEXPECTED gh call"
-run_scenario "3-behind-saturation:merge-pr" "$SCEN3" \
+ONCE='ship\.phase7\.hatch_check' run_scenario "3-behind-saturation:merge-pr" "$SCEN3" \
   "auto-sync 6/6 pushed
+\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
 \[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
 moving faster than this PR" \
@@ -407,12 +531,8 @@ cat > "$SCEN4" <<EOF
 ${PRELUDE}
 git() {
   case "\$1 \${2:-}" in
-    "rev-parse -q") return 1 ;;
-    "rev-parse --is-inside-work-tree") echo true ;;
-    "rev-parse --git-dir") echo "\$MOCK_STATE" ;;
-    "rev-parse "*) echo "test-branch" ;;
     "merge-tree "*) return 1 ;;
-    *) return 0 ;;
+    *) _git_base "\$@" ;;
   esac
 }
 gh() {
@@ -466,6 +586,48 @@ run_scenario_both "4b-dirty-locally-clean" "$SCEN4B" \
   "\[ship\.phase7\.dirty\]|ship\.phase7\.behind_exhausted|UNEXPECTED gh call"
 rm -f "$SCEN4B"
 
+# Scenario 4r — DIRTY with a real merge-tree conflict that the ADR-235 resolver
+# settles (a stub here: it exits 0, as the real one does after committing the
+# merge). The fence must NOT exit on DIRTY: it treats the state as BEHIND and
+# pushes through sync-pr-behind.sh --step, never with a push of its own (AC1).
+# ---------------------------------------------------------------------------
+REGEN_ROOT="$(mktemp -d)"
+assert_fixture_dir "$REGEN_ROOT"
+_TMP_OWNED+=("$REGEN_ROOT")
+cp -R "$PLUGIN_COPY/.claude-plugin" "$PLUGIN_COPY/scripts" "$REGEN_ROOT/"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$REGEN_ROOT/scripts/resolve-regenerable-conflicts.sh"
+SCEN4R="$(mktemp)"
+_TMP_OWNED+=("$SCEN4R")
+cat > "$SCEN4R" <<EOF
+${PRELUDE}
+git() {
+  case "\$1 \${2:-}" in
+    "merge-tree "*) return 1 ;;
+    *) _git_base "\$@" ;;
+  esac
+}
+gh() {
+  case "\$1 \$2" in
+    "pr view")
+      if [[ -e "\$MOCK_STATE/dirty_seen" ]]; then
+        echo "OPEN BLOCKED"
+      else
+        : > "\$MOCK_STATE/dirty_seen"
+        echo "OPEN DIRTY"
+      fi
+      ;;
+    "pr checks") : ;;
+    "api "*)     : ;;
+    *) _gh_unexpected "\$@" ;;
+  esac
+}
+EOF
+SCEN_ROOT="$REGEN_ROOT" run_scenario_both "4r-dirty-regen-resolved" "$SCEN4R" \
+  "\[ship\.phase7\.dirty\] regen resolved — merge committed locally
+auto-sync 1(/6)? pushed" \
+  "PR is DIRTY \(merge conflict\)|ship\.phase7\.behind_exhausted|UNEXPECTED gh call"
+rm -f "$SCEN4R"
+
 # Scenario 4c — DIRTY, but the fetch that classifies it fails. A fetch outage
 # is not a conflict: the arm must report kind=fetch and let the next tick
 # retry, never print the DIRTY exit over an empty merge-tree output.
@@ -476,12 +638,8 @@ cat > "$SCEN4C" <<EOF
 ${PRELUDE}
 git() {
   case "\$1 \${2:-}" in
-    "rev-parse -q") return 1 ;;
-    "rev-parse --is-inside-work-tree") echo true ;;
-    "rev-parse --git-dir") echo "\$MOCK_STATE" ;;
-    "rev-parse "*) echo "test-branch" ;;
     "fetch "*) echo "fatal: unable to access 'origin'"; return 1 ;;
-    *) return 0 ;;
+    *) _git_base "\$@" ;;
   esac
 }
 gh() {
@@ -536,16 +694,16 @@ rm -f "$SCEN5"
 # Shared BEHIND sync-arm mock for scenarios 6*/7/8/9 (#8339).
 #
 # Knobs (plain variables in the mocks file): MOCK_FETCH_RC, MOCK_MERGE
-# (ok|conflict|refused|inprogress128), MOCK_PUSH_RC, MOCK_ABORT_RC,
+# (ok|noop|conflict|refused|inprogress128), MOCK_PUSH_RC, MOCK_ABORT_RC,
 # MOCK_FETCH_STARTS_MERGE (the fetch window creates MERGE_HEAD — an operator
 # started a merge while the arm was fetching). State crosses `$( … )` via
 # files: $MOCK_STATE/MERGE_HEAD (created by a conflicting merge, removed by
 # --abort), $MOCK_STATE/pushed (created by a successful push; `gh` flips to
 # MERGED once it exists), $MOCK_STATE/detached (symbolic-ref fails),
-# $MOCK_STATE/rebase-merge (a sequencer directory under --git-dir). The
-# `"rev-parse -q"` case MUST precede the `"rev-parse "*` glob, or
-# `rev-parse -q --verify MERGE_HEAD` answers "test-branch" rc 0 and the
-# merge_in_progress precondition fires on tick 1. The --abort sentinel is on
+# $MOCK_STATE/rebase-merge (a sequencer directory under --git-dir). Arms not
+# overridden here fall through to _git_base (GIT_BASE_MOCK above), which models
+# HEAD/@{u} as counters. MOCK_MERGE=noop leaves HEAD where it is (exit 11);
+# MOCK_FETCH_FAIL_ONCE fails only the first fetch. The --abort sentinel is on
 # STDOUT: under inherited pipefail (harness row H1) the pre-fix block DOES
 # reach its `--abort 2>/dev/null`, and a stderr sentinel would have been
 # invisible there.
@@ -553,18 +711,17 @@ rm -f "$SCEN5"
 SYNC_MOCKS="${PRELUDE}$(cat <<'EOF'
 git() {
   case "$1 ${2:-}" in
-    "rev-parse -q") [[ -e "$MOCK_STATE/MERGE_HEAD" ]] ;;
-    "rev-parse --is-inside-work-tree") echo true ;;
-    "rev-parse --git-dir") echo "$MOCK_STATE" ;;
-    "rev-parse "*) echo "test-branch" ;;
-    "symbolic-ref "*) [[ ! -e "$MOCK_STATE/detached" ]] ;;
-    "fetch origin")
+    "fetch origin"|"fetch --no-tags")
+      if (( ${MOCK_FETCH_FAIL_ONCE:-0} )) && [[ ! -e "$MOCK_STATE/fetch_failed_once" ]]; then
+        : > "$MOCK_STATE/fetch_failed_once"; echo "fatal: unable to access 'origin'"; return 1
+      fi
       if (( ${MOCK_FETCH_RC:-0} )); then echo "fatal: unable to access 'origin'"; fi
       if (( ${MOCK_FETCH_STARTS_MERGE:-0} )); then : > "$MOCK_STATE/MERGE_HEAD"; fi
       return "${MOCK_FETCH_RC:-0}" ;;
     "merge origin/main")
       case "${MOCK_MERGE:-ok}" in
-        ok) echo "Merge made by the 'ort' strategy." ;;
+        ok) _git_base "$@" ;;
+        noop) echo "Already up to date." ;;
         conflict)
           echo "CONFLICT (content): Merge conflict in foo.md"
           echo "Automatic merge failed; fix conflicts and then commit the result."
@@ -581,16 +738,18 @@ git() {
       echo "MOCK: git merge --abort observed"
       if (( ${MOCK_ABORT_RC:-0} )); then echo "fatal: mock abort failure"; return "${MOCK_ABORT_RC}"; fi
       rm -f "$MOCK_STATE/MERGE_HEAD" ;;
-    "diff --name-only") [[ -e "$MOCK_STATE/MERGE_HEAD" ]] && echo "foo.md" ;;
-    "status --short") echo " M f" ;;
+    "status --short")
+      echo " M f"
+      if (( ${MOCK_STATUS_LINES:-0} )); then
+        n=0; while (( n < MOCK_STATUS_LINES )); do echo "?? untracked-padding-file-$n.txt"; n=$((n+1)); done
+      fi ;;
     "push ")
       if (( ${MOCK_PUSH_RC:-0} )); then
         echo "error: failed to push some refs to 'origin'"
-      else
-        : > "$MOCK_STATE/pushed"
+        return "${MOCK_PUSH_RC}"
       fi
-      return "${MOCK_PUSH_RC:-0}" ;;
-    *) return 0 ;;
+      _git_base "$@" ;;
+    *) _git_base "$@" ;;
   esac
 }
 gh() {
@@ -624,7 +783,8 @@ run_scenario_both "6-merge-conflict-in-sync" "$SCEN6" \
   "MOCK: git merge --abort observed
 git merge origin/main failed — merge conflict, aborting sync\. Conflicted paths:
 ^foo\.md$
-Manual conflict resolution required on test-branch\. Stopping the poll\.
+Manual conflict resolution required on test-branch\.
+sync-pr-behind\.sh exited 6 \(see its line above\)\. Stopping the poll\.
 kind=merge rc=1" \
   "$STOP_FORBID"
 
@@ -642,7 +802,8 @@ EOF
 run_scenario_both "6b-merge-refused" "$SCEN6B" \
   "kind=merge_refused rc=2
 refused to start \(nothing to abort
-^ M f$" \
+^ M f$
+sync-pr-behind\.sh exited 10 \(see its line above\)" \
   "$STOP_FORBID|MOCK: git merge --abort observed|Manual conflict resolution required"
 rm -f "$SCEN6B"
 
@@ -694,7 +855,8 @@ EOF
 run_scenario_both "6e-abort-fails" "$SCEN6E" \
   "MOCK: git merge --abort observed
 git merge --abort failed \(rc=1\)
-Manual conflict resolution required on test-branch\. Stopping the poll\." \
+Manual conflict resolution required on test-branch\.
+sync-pr-behind\.sh exited 6 \(see its line above\)\. Stopping the poll\." \
   "$STOP_FORBID"
 rm -f "$SCEN6E"
 
@@ -708,7 +870,8 @@ rm -f "$SCEN6E"
 # ---------------------------------------------------------------------------
 SCENARIO_SET_E=1 run_scenario_both "6f-conflict-under-errexit" "$SCEN6" \
   "MOCK: git merge --abort observed
-Manual conflict resolution required on test-branch\. Stopping the poll\.
+Manual conflict resolution required on test-branch\.
+sync-pr-behind\.sh exited 6 \(see its line above\)\. Stopping the poll\.
 kind=merge rc=1
 \[scenario exit rc=0\]" \
   "$STOP_FORBID"
@@ -740,7 +903,7 @@ mkdir -p "\$MOCK_STATE/rebase-merge"
 ${SYNC_MOCKS}
 EOF
 run_scenario_both "6h-rebase-in-progress" "$SCEN6H" \
-  "kind=merge_in_progress — a merge/rebase/cherry-pick/revert is in progress on test-branch" \
+  "kind=merge_in_progress rc=9 — a merge/rebase/cherry-pick/revert is in progress on test-branch" \
   "$STOP_FORBID|Merge made by|MOCK: git merge --abort observed|kind=merge rc=|kind=merge_refused"
 rm -f "$SCEN6H"
 
@@ -803,10 +966,219 @@ run_scenario "9-success-path:merge-pr" "$SCEN9" \
 rm -f "$SCEN9"
 
 # ---------------------------------------------------------------------------
+# Scenario 6i — merge refused with a ≥100 KB worktree status (#8383). The
+# script runs under `set -euo pipefail`; `git status --short | head -20` then
+# outlives head and takes SIGPIPE (141), which — without its `|| true` — would
+# kill the script before it reports. 20000 lines make the SIGPIPE deterministic
+# (a 25-line status fits in the pipe buffer and never trips it). Measured: the
+# `|| true` is NOT load-bearing today (errexit is suspended inside sync_step,
+# which both callers run under `||`); this row pins exit 10 over a huge status
+# and would catch a future bare `sync_step` call.
+# ---------------------------------------------------------------------------
+SCEN6I="$(mktemp)"
+_TMP_OWNED+=("$SCEN6I")
+cat > "$SCEN6I" <<EOF
+MOCK_MERGE=refused
+MOCK_STATUS_LINES=20000
+${SYNC_MOCKS}
+EOF
+run_scenario_both "6i-refused-huge-status" "$SCEN6I" \
+  "kind=merge_refused rc=2
+Clear the worktree state on test-branch shown above
+sync-pr-behind\.sh exited 10 \(see its line above\)" \
+  "$STOP_FORBID|MOCK: git merge --abort observed"
+rm -f "$SCEN6I"
+
+# ---------------------------------------------------------------------------
+# Scenario 13 — version skew: the plugin root carries an OLDER sync script that
+# ignores --step (it would run a full standalone sync and exit 0 on "no sync
+# needed", which the arm would print as `pushed`). The --help probe must refuse
+# it at loop entry; BEHIND auto-sync is disabled, and the first BEHIND tick is a
+# named stop (behind_no_sync) carrying the manual command, not 60 min of heartbeats.
+# ---------------------------------------------------------------------------
+SKEW_ROOT="$(mktemp -d)"
+assert_fixture_dir "$SKEW_ROOT"
+_TMP_OWNED+=("$SKEW_ROOT")
+mkdir -p "$SKEW_ROOT/.claude-plugin" "$SKEW_ROOT/scripts"
+printf '{ "name": "soleur" }\n' > "$SKEW_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho "usage: sync-pr-behind.sh <pr-number> [--max-attempts N]"\nexit 0\n' \
+  > "$SKEW_ROOT/scripts/sync-pr-behind.sh"
+SCEN13="$(mktemp)"
+_TMP_OWNED+=("$SCEN13")
+cat > "$SCEN13" <<EOF
+${SYNC_MOCKS}
+EOF
+SCEN_ROOT="$SKEW_ROOT" run_scenario_both "13-version-skew" "$SCEN13" \
+  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '[^']*': its --help has no --step
+\[1/60\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND and auto-sync is disabled
+sync-pr-behind\.sh\"? 4387 .*re-arm the poll\. Stopping the poll\.
+\[scenario exit rc=0\]" \
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|Merge poll timed out|\[2/60\]|UNEXPECTED gh call"
+rm -f "$SCEN13"
+
+# ---------------------------------------------------------------------------
+# Scenario 13b — CLAUDE_PLUGIN_ROOT unset (the Devin-cloud / Codex shape: the
+# token is neither substituted nor exported). A missing script must not read as
+# success: precondition line naming the unset root, no sync, and the BEHIND tick is
+# the named behind_no_sync stop.
+# ---------------------------------------------------------------------------
+SCEN13B="$(mktemp)"
+_TMP_OWNED+=("$SCEN13B")
+cat > "$SCEN13B" <<EOF
+${PRELUDE}
+gh() {
+  case "\$1 \$2" in
+    "pr view")
+      if (( i >= 3 )); then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
+    "pr checks") : ;;
+    "api "*)     : ;;
+    *) _gh_unexpected "\$@" ;;
+  esac
+}
+EOF
+SCEN_ROOT='unset' run_scenario_both "13b-plugin-root-unset" "$SCEN13B" \
+  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '/scripts/sync-pr-behind\.sh': CLAUDE_PLUGIN_ROOT is unset
+\[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN13B"
+
+# ---------------------------------------------------------------------------
+# Scenario 13c — a root whose plugin.json names another plugin ("evil") but whose
+# scripts/ holds a VALID --step script (ADR-179 decision 11): the identity check
+# alone must refuse it. Precondition line names that check; no sync runs.
+# ---------------------------------------------------------------------------
+EVIL_ROOT="$(mktemp -d)"
+assert_fixture_dir "$EVIL_ROOT"
+_TMP_OWNED+=("$EVIL_ROOT")
+mkdir -p "$EVIL_ROOT/.claude-plugin" "$EVIL_ROOT/scripts"
+printf '{ "name": "evil" }\n' > "$EVIL_ROOT/.claude-plugin/plugin.json"
+cp "$PLUGIN_COPY/scripts/sync-pr-behind.sh" "$EVIL_ROOT/scripts/sync-pr-behind.sh"
+SCEN13C="$(mktemp)"
+_TMP_OWNED+=("$SCEN13C")
+cat > "$SCEN13C" <<EOF
+${SYNC_MOCKS}
+EOF
+SCEN_ROOT="$EVIL_ROOT" run_scenario_both "13c-plugin-json-not-soleur" "$SCEN13C" \
+  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '[^']*': .*does not name soleur \(ADR-179 identity check\)
+\[ship\.phase7\.behind_no_sync\]" \
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|UNEXPECTED gh call"
+rm -f "$SCEN13C"
+
+# ---------------------------------------------------------------------------
+# Scenario 14 — a pasted `#4387` (or any non-digit PR) is refused before the poll
+# starts: unvalidated, `bash "$SYNC_SNAP" #4387 --step || sync_rc=$?` comments out
+# the rc capture and the arm prints a false "pushed".
+# ---------------------------------------------------------------------------
+HASH_BLOCK="$(mktemp)"
+_TMP_OWNED+=("$HASH_BLOCK")
+sed 's/^PR="4387"/PR="#4387"/' "$BLOCK_FILE" > "$HASH_BLOCK"
+HASH_MIRROR="$(mktemp)"
+_TMP_OWNED+=("$HASH_MIRROR")
+sed 's/^PR="4387"/PR="#4387"/' "$MIRROR_FILE" > "$HASH_MIRROR"
+SCEN14="$(mktemp)"
+_TMP_OWNED+=("$SCEN14")
+cat > "$SCEN14" <<EOF
+${SYNC_MOCKS}
+EOF
+for pair in "ship:$HASH_BLOCK" "merge-pr:$HASH_MIRROR"; do
+  if grep -q '^PR="#4387"' "${pair#*:}"; then
+    run_scenario "14-pr-not-digits:${pair%%:*}" "$SCEN14" \
+      "\[ship\.phase7\.precondition\] PR='#4387' is not a bare PR number
+\[scenario exit rc=2\]" \
+      "BEHIND detected|auto-sync|PR #4387 |UNEXPECTED gh call" "${pair#*:}"
+  else
+    fail "[14-pr-not-digits:${pair%%:*}] could not build the #4387 variant (no ^PR=\"4387\" line in the block)"
+  fi
+done
+rm -f "$SCEN14" "$HASH_BLOCK" "$HASH_MIRROR"
+
+# ---------------------------------------------------------------------------
+# Scenario 15 — the hatch counts PUSHES, not attempts: attempt 1 fails at fetch,
+# attempt 2 pushes and the PR merges. The old `behind_syncs == 2` fired the hatch
+# here with one sync ever pushed.
+# ---------------------------------------------------------------------------
+SCEN15="$(mktemp)"
+_TMP_OWNED+=("$SCEN15")
+cat > "$SCEN15" <<EOF
+MOCK_FETCH_FAIL_ONCE=1
+${SYNC_MOCKS}
+EOF
+run_scenario_both "15-hatch-counts-pushes" "$SCEN15" \
+  "kind=fetch rc=1
+auto-sync 2(/6)? pushed
+\[scenario exit rc=0\]" \
+  "ship\.phase7\.hatch_check|ship\.phase7\.behind_exhausted|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN15"
+
+# ---------------------------------------------------------------------------
+# Scenario 16 — the sync is a no-op (origin/main already merged and pushed;
+# GitHub's BEHIND lags): the arm prints sync_noop, never "pushed", and a no-op is
+# not counted — the budget never exhausts and the hatch never fires.
+# ---------------------------------------------------------------------------
+SCEN16="$(mktemp)"
+_TMP_OWNED+=("$SCEN16")
+cat > "$SCEN16" <<EOF
+MOCK_MERGE=noop
+${SYNC_MOCKS}
+EOF
+run_scenario_both "16-sync-noop" "$SCEN16" \
+  "kind=noop rc=11
+\[1/60\] \[ship\.phase7\.sync_noop\] main already merged and pushed
+\[60/60\] \[ship\.phase7\.sync_noop\]
+Merge poll timed out" \
+  "auto-sync [0-9/]+ pushed|ship\.phase7\.(hatch_check|behind_exhausted|sync_failed)|auto-sync attempt 2/|UNEXPECTED gh call"
+rm -f "$SCEN16"
+
+# ---------------------------------------------------------------------------
+# AC1 — one BEHIND implementation (#8383). Neither fence may carry a merge/push
+# of its own; each runs the script exactly once per attempt. Comment and echo
+# lines are excluded, so the DIRTY arm's `git merge-tree` and its
+# (and `-C <dir>` / `-c <k=v>` are stripped first, so they cannot hide a push)
+# `echo "Resolve locally: git merge origin/main"` do not count.
+# ---------------------------------------------------------------------------
+for pair in "ship:$BLOCK_FILE" "merge-pr:$MIRROR_FILE"; do
+  lbl="${pair%%:*}"; f="${pair#*:}"
+  # Global options first: `git -C "$PWD" push` / `git -c k=v merge origin/main` are
+  # still an inline merge/push.
+  inline="$(grep -vE '^[[:space:]]*(#|echo )' "$f" \
+    | sed -E "s/git( +-[Cc] +(\"[^\"]*\"|'[^']*'|[^ ]+))+/git/g" \
+    | grep -nE '(^|[;&|([:space:]`])git (merge( |$)(origin|--abort|--no-edit)|push( |$))' || true)"
+  calls="$(grep -cF 'bash "$SYNC_SNAP" "$PR" --step' "$f" || true)"
+  if [[ -z "$inline" && "$calls" -eq 1 ]]; then
+    pass "[$lbl] no inline git merge/push; exactly one sync-pr-behind.sh --step call"
+  else
+    fail "[$lbl] inline merge/push: ${inline:-none}; --step calls: $calls (want 1)"
+  fi
+done
+
+# Every `git <sub> <arg>` the script's sync_step() makes must have an arm in
+# GIT_BASE_MOCK or SYNC_MOCKS — the catch-all fails the row at run time, and this
+# static check names the missing arm up front. `tag`/`echo` message lines name git
+# commands as next actions and are excluded. Keyed exactly as the mock dispatches:
+# "$1 ${2:-}", matched against a quoted exact key or a `"<sub> "*` glob.
+SYNC_SCRIPT="$REPO_ROOT/plugins/soleur/scripts/sync-pr-behind.sh"
+keys="$(awk '/^sync_step\(\) \{/{f=1} f&&/^\}/{exit} f' "$SYNC_SCRIPT" \
+  | grep -vE '^[[:space:]]*(#|echo |tag )' \
+  | grep -oE '(^|[^a-z-])git [a-z-]+( [^ ;|)"&>]+)?' \
+  | sed -E "s/^[^g]*git //; s/ [0-9].*\$//; s/'//g" | sort -u)"
+nkeys=0; missing=""
+while IFS= read -r k; do
+  [[ -z "$k" ]] && continue
+  nkeys=$((nkeys+1))
+  sub="${k%% *}"; arg=""; [[ "$k" == *" "* ]] && arg="${k#* }"
+  if grep -qE "\"$sub $arg\"[|)]" <<<"$GIT_BASE_MOCK$SYNC_MOCKS" || grep -qF "\"$sub \"*)" <<<"$GIT_BASE_MOCK$SYNC_MOCKS"; then :; else missing+="[$sub $arg] "; fi
+done <<<"$keys"
+if [[ "$nkeys" -ge 10 && -z "$missing" ]]; then
+  pass "every git call in sync_step() ($nkeys) has a mock arm"
+else
+  fail "sync_step() git calls without a mock arm: ${missing:-none} (calls found: $nkeys, want >= 10)"
+fi
+
+# ---------------------------------------------------------------------------
 # Scenario 11 — not inside a worktree (`--is-inside-work-tree` prints
 # `false`, rc 0 — a bare repo): the precondition disables the BEHIND arm and
-# says so; the poll heartbeats to timeout instead of running git merge in a
-# bare repo.
+# says so, and the first BEHIND tick is the named behind_no_sync stop instead of
+# running git merge in a bare repo (or heartbeating for 60 min).
 # ---------------------------------------------------------------------------
 SCEN11="$(mktemp)"
 _TMP_OWNED+=("$SCEN11")
@@ -815,9 +1187,7 @@ ${PRELUDE}
 git() {
   case "\$1 \${2:-}" in
     "rev-parse --is-inside-work-tree") echo false ;;
-    "rev-parse -q") return 1 ;;
-    "rev-parse "*) echo "test-branch" ;;
-    *) return 0 ;;
+    *) _git_base "\$@" ;;
   esac
 }
 gh() {
@@ -831,8 +1201,8 @@ gh() {
 EOF
 run_scenario_both "11-not-a-worktree" "$SCEN11" \
   "\[ship\.phase7\.precondition\] not inside a worktree — BEHIND auto-sync disabled
-Merge poll timed out" \
-  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|ship\.phase7\.behind_exhausted|UNEXPECTED gh call"
+\[1/60\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|ship\.phase7\.behind_exhausted|Merge poll timed out|UNEXPECTED gh call"
 rm -f "$SCEN11"
 
 # ---------------------------------------------------------------------------
@@ -868,6 +1238,7 @@ _TMP_OWNED+=("$SCEN10_ERR")
 (
   set +o pipefail
   git_fixture_env "$SCEN10_TMP" || exit 2
+  export CLAUDE_PLUGIN_ROOT="$PLUGIN_COPY"
   tmp="$SCEN10_TMP"
   assert_fixture_dir "$tmp"
   git init -q --bare -b main "$tmp/origin" || exit 2
@@ -986,7 +1357,7 @@ POST-C: head=merge-commit
 POST-C: merge_head_rc=1" \
     'auto-sync [0-9/]+ pushed|Manual conflict resolution required|UNEXPECTED gh call'
   scen10_row D "PRE-D: rebase=in-progress
-kind=merge_in_progress — a merge/rebase/cherry-pick/revert is in progress on HEAD
+kind=merge_in_progress rc=9 — a merge/rebase/cherry-pick/revert is in progress on HEAD
 POST-D: rebase=in-progress
 POST-D: unmerged=f" \
     'Manual conflict resolution required|kind=merge_refused|auto-sync [0-9/]+ pushed|Merge made by|UNEXPECTED gh call'
@@ -1048,7 +1419,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=191
+MIN_VERDICTS=380
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

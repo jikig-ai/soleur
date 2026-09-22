@@ -1,6 +1,7 @@
 ---
 name: cf-token-scope
 description: This skill should be used to widen an existing Cloudflare API token's scope via Playwright dashboard automation, then run the ADR-130 retained-scope probe set verifying the target scope was added and none was dropped.
+disable-model-invocation: true
 ---
 
 <!-- soleur-cloud-mode:start -->

@@ -102,7 +102,7 @@ See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch
   ```
 
   The `lockfile-sync` CI gate pins **npm@11**; regenerating `package-lock.json` with local npm produces a divergent shape and fails the gate. On a lockfile **merge conflict**, resolve by regenerating (`git checkout --ours -- <lockfiles>` then re-run), not by hand-picking hunks.
-- **(b) Generated-file conflicts** (e.g. `knowledge-base/project/rule-metrics.json`). Regenerate from current `main` via the owning aggregate script (`rule-metrics-aggregate.sh`) after `git merge origin/main`; do NOT hand-merge conflict markers in a generated artifact.
+- **(b) Generated-file conflicts.** Since #8377 / ADR-235 exactly one generated artifact is still committed: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (the KB index trio and `rule-metrics.json` are untracked caches and cannot conflict). Resolve it with `bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh origin/main`, which completes the merge and regenerates from the MERGED sources; do NOT hand-merge conflict markers in a generated artifact, and do NOT side-pick (`--ours`/`--theirs` each yield an artifact matching neither side's sources).
 - **(c) Stale bot PR (especially crons).** Rebase first (`gh pr update-branch`) to re-validate against current `main` — an old green predates current gates. Then check for a hallucinated substrate API (`tsc --noEmit`) and missing registration locations per **ADR-033 §Registration checklist** (the canonical list of every gated location for a new `cron-*` function). Mirror the structurally-closest live twin signature-for-signature rather than the PR's prose.
 
 ### 7. Cleanup + report

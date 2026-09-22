@@ -1614,6 +1614,58 @@ refetch_ghcr_and_relogin() {
   dt=""; printf relogin_failed; return 1
 }
 
+# _ghcr_cfg_probe <label> <path>: append four CLOSED-VOCABULARY tokens describing one docker
+# config file to _GHCR_CFG_MARKER (#8036 1b). Form B, the `_login_kw` discipline: every value is a
+# hardcoded token chosen from a `jq -e` EXIT STATUS whose output goes to /dev/null, so no config
+# content (auth, username, helper name) ever reaches a variable, printf or logger — journald ships
+# UNSCRUBBED to Better Stack. Every probe is `rc=0; … || rc=$?`: an unreadable file or unparseable
+# JSON maps to a token, never to a `set -e` abort. jq absent ⇒ every token is `na`.
+#   <label>_cfg         absent | unreadable | unparseable | present | na
+#   <label>_ghcr_auth   inline | none | na     (.auths["ghcr.io"].auth, a non-empty string)
+#   <label>_creds_store set | none | na        (.credsStore)
+#   <label>_ghcr_helper set | none | na        (.credHelpers["ghcr.io"])
+_GHCR_CFG_MARKER=""
+_ghcr_cfg_probe() {
+  local label="$1" path="$2" cfg="na" auth="na" store="na" helper="na" rc=0
+  if command -v jq >/dev/null 2>&1; then
+    # An ANCESTOR directory the caller cannot SEARCH makes `-e` false for a file that exists: the
+    # deploy user probing /root/.docker/config.json (root's home is 0700, the GRANDPARENT) would
+    # read `absent`, which is the wrong answer to exactly the root-vs-deploy question this marker
+    # exists for. So walk every ancestor, root first, and stop at the first one that is a
+    # directory the caller cannot search (a missing ancestor is a genuine `absent`).
+    local anc="" part blocked=0
+    local -a parts=()
+    IFS=/ read -r -a parts <<<"${path%/*}"
+    for part in "${parts[@]}"; do
+      [[ -n "$part" ]] || continue
+      anc="$anc/$part"
+      [[ -d "$anc" ]] || break
+      if [[ ! -x "$anc" ]]; then blocked=1; break; fi
+    done
+    if [[ "$blocked" == "1" ]]; then
+      cfg="unreadable"
+    elif [[ ! -e "$path" && ! -L "$path" ]]; then
+      cfg="absent"
+    elif [[ ! -f "$path" || ! -r "$path" ]]; then
+      cfg="unreadable"
+    else
+      rc=0; jq -e 'type == "object"' "$path" >/dev/null 2>&1 || rc=$?
+      if [[ "$rc" -ne 0 ]]; then
+        cfg="unparseable"
+      else
+        cfg="present"
+        rc=0; jq -e '.auths["ghcr.io"].auth | select(type == "string" and length > 0)' "$path" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -eq 0 ]]; then auth="inline"; else auth="none"; fi
+        rc=0; jq -e '.credsStore | select(type == "string" and length > 0)' "$path" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -eq 0 ]]; then store="set"; else store="none"; fi
+        rc=0; jq -e '.credHelpers["ghcr.io"] | select(type == "string" and length > 0)' "$path" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -eq 0 ]]; then helper="set"; else helper="none"; fi
+      fi
+    fi
+  fi
+  _GHCR_CFG_MARKER="${_GHCR_CFG_MARKER} ${label}_cfg=${cfg} ${label}_ghcr_auth=${auth} ${label}_creds_store=${store} ${label}_ghcr_helper=${helper}"
+}
+
 # ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
 # need INTO this script's OWN env, then authenticate the host docker daemon to the
 # now-PRIVATE GHCR packages (#6005). Runs BEFORE the first `docker pull` — the
@@ -1753,6 +1805,19 @@ ghcr_prelude_and_login() {
   # The mounted $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier
   # reuses; the token local goes out of scope when the function returns.
   ghcr_token=""
+  # #8036 1b: ONE journald line describing the three docker configs a GHCR credential could come
+  # from, after both login attempts. `effective=deploy_cfg` names the one the CLI presents
+  # ($DOCKER_CONFIG). home_cfg is the pre-#6565 location; root_cfg answers the root-vs-deploy split
+  # (a measured `unreadable` from the deploy user is itself the answer). Closed vocabulary only —
+  # never the username (GHCR_READ_USER is a personal login and this sink is unscrubbed). journald
+  # only, no Sentry: same volume rationale as the PRELUDE lines. SOLEUR_GHCR_CONFIG_ROOT_PATH is a
+  # TEST-ONLY override (mirrors SOLEUR_GHCR_READ_FILE).
+  _GHCR_CFG_MARKER=""
+  _ghcr_cfg_probe deploy "$GHCR_DOCKER_CONFIG"
+  _ghcr_cfg_probe home "${HOME:-}/.docker/config.json"
+  _ghcr_cfg_probe root "${SOLEUR_GHCR_CONFIG_ROOT_PATH:-/root/.docker/config.json}"
+  logger -t "$LOG_TAG" "SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg${_GHCR_CFG_MARKER}"
+  _GHCR_CFG_MARKER=""
 }
 
 # zot_gate_and_login: dark-launch gate for the self-hosted zot registry (#6122/ADR-096).
@@ -2116,6 +2181,15 @@ pull_image_with_fallback() {
   return 1
 }
 
+# _cosign_anon_cleanup <dir>: remove verify_image_signature's anonymous docker config dir (#8036 1a)
+# on every exit arm. Refuses an empty or relative path, and the deploy config dir itself, so a
+# mis-set anon_dir can never delete the credential the .sig fetch and every pull depend on.
+_cosign_anon_cleanup() {
+  local d="${1:-}"
+  [[ -n "$d" && "$d" == /* && "$d" != "$DOCKER_CONFIG" && "$d" != "$DEPLOY_DOCKER_CONFIG_DIR" ]] || return 0
+  rm -rf "$d" 2>/dev/null || true
+}
+
 # verify_image_signature <image:tag> — resolves the just-pulled image to its
 # immutable repo@sha256 digest and cosign-verifies the signature (offline,
 # identity-pinned) via the SHA-pinned cosign container. Echoes on stdout the ref
@@ -2158,7 +2232,59 @@ verify_image_signature() {
   # zot_gate_and_login, so the mounted :ro config already authenticates the fetch.
   local zot_insecure=""
   [[ -n "$ZOT_REGISTRY_URL" && "$repo_digest" == "${ZOT_REGISTRY_URL}/"* ]] && zot_insecure=1
-  if docker run --rm --network host \
+  # #8036 1a: the docker CLI resolves the implicit `$COSIGN_IMAGE` pull's credentials from ITS OWN
+  # DOCKER_CONFIG. Pointed at the deploy config, a dead ghcr.io inline auth there turned the pull of
+  # a PUBLIC image into a 401 (`cosign_absent` on every deploy). The CLI therefore gets a fresh
+  # config that holds no credential (never a missing file, which lets the CLI fall back to legacy
+  # ~/.dockercfg) and `env -u DOCKER_AUTH_CONFIG`, so the verifier-image pull is anonymous. The
+  # config is `{"auths":{},"credHelpers":{"ghcr.io":""}}`, not bare `{"auths":{}}`: a config the
+  # CLI sees as holding NO auth at all gets a DEFAULT credential store auto-detected
+  # (docker-credential-pass/secretservice, if either is on PATH), which could hand the pull a
+  # stored ghcr.io token. A non-empty credHelpers map disables that detection, and an EMPTY helper
+  # name for ghcr.io resolves to the (empty) file store.
+  # The `-v "$GHCR_DOCKER_CONFIG:…:ro"` mount below is a HOST-path bind resolved independently of
+  # the CLI's DOCKER_CONFIG, so the in-container .sig fetch still authenticates (P2 unchanged).
+  # Degrades, LOGGED: if no verified anonymous config can be prepared, the CLI keeps its inherited
+  # DOCKER_CONFIG (the deploy config, so the verifier-image pull can 401 into `cosign_absent` as
+  # before #8036). The verify still runs, and WARN/ENFORCE semantics are unchanged.
+  # Every line here goes to logger or /dev/null — this function runs inside VERIFIED_REF="$(…)".
+  local anon_dir="" anon_ok=0 anon_rc=0 anon_body=""
+  local -r COSIGN_ANON_CONFIG='{"auths":{},"credHelpers":{"ghcr.io":""}}'
+  local -a verify_env=(env -u DOCKER_AUTH_CONFIG)
+  # SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL is a TEST-ONLY seam read by this function alone (a `mktemp`
+  # stub would break the ~20 unrelated mktemp sites): 1 = the primary `mktemp -d` fails (exercises
+  # the fallback dir); all = the fallback fails too (exercises the logged fail-open).
+  if [[ -z "${SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL:-}" ]]; then
+    anon_dir="$(mktemp -d 2>/dev/null)" || anon_dir=""
+  fi
+  if [[ -n "$anon_dir" ]]; then
+    printf '%s' "$COSIGN_ANON_CONFIG" > "$anon_dir/config.json" 2>/dev/null || true
+  elif [[ "${SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL:-}" != "all" ]]; then
+    # Fallback (practically only a full /tmp): a dedicated subdir, recreated every deploy so no
+    # stale content survives, and NEVER $DOCKER_CONFIG itself.
+    anon_dir="$DEPLOY_DOCKER_CONFIG_DIR/anon-cosign"
+    _cosign_anon_cleanup "$anon_dir"
+    if mkdir -m 700 "$anon_dir" 2>/dev/null; then
+      printf '%s' "$COSIGN_ANON_CONFIG" > "$anon_dir/config.json" 2>/dev/null || true
+    fi
+  fi
+  # Content check before use: absolute, a real directory (not a symlink), not the deploy config
+  # dir, and its config.json is EXACTLY the anonymous config.
+  if [[ "$anon_dir" == /* && -d "$anon_dir" && ! -L "$anon_dir" \
+        && "$anon_dir" != "$DOCKER_CONFIG" && "$anon_dir" != "$DEPLOY_DOCKER_CONFIG_DIR" ]]; then
+    anon_rc=0; anon_body="$(cat "$anon_dir/config.json" 2>/dev/null)" || anon_rc=$?
+    [[ "$anon_rc" -eq 0 && "$anon_body" == "$COSIGN_ANON_CONFIG" ]] && anon_ok=1
+  fi
+  if [[ "$anon_ok" == "1" ]]; then
+    verify_env+=("DOCKER_CONFIG=$anon_dir")
+  else
+    logger -t "$LOG_TAG" "IMAGE_VERIFY_PREP: anon_config=unavailable (verifier-image pull uses the deploy docker config)"
+  fi
+  # --quiet: the implicit pull prints "Unable to find image … locally" to stderr on every cold
+  # host, and the classifier below reads stderr, so an unrelated verify failure on a first pull
+  # would read as `cosign_absent`. Real pull errors still print. `200>&-` closes the FD-200 deploy
+  # lock for this child (#5062): its implicit pull can hang like any other.
+  if "${verify_env[@]}" docker run --rm --network host --quiet \
        -v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro" \
        -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
        "$COSIGN_IMAGE" verify --offline \
@@ -2166,10 +2292,11 @@ verify_image_signature() {
        --trusted-root=/etc/cosign/trusted_root.json \
        --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
        --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
-       "$repo_digest" >/dev/null 2>"$err"; then
+       "$repo_digest" >/dev/null 2>"$err" 200>&-; then
     logger -t "$LOG_TAG" "IMAGE_VERIFY: ok ref=$repo_digest"
     printf '%s' "$repo_digest" # run the VERIFIED digest (TOCTOU-safe)
     rm -f "$err" 2>/dev/null || true
+    _cosign_anon_cleanup "$anon_dir"
     return 0
   fi
   # Classify the failure for the discriminating Sentry event (telemetry only —
@@ -2184,6 +2311,7 @@ verify_image_signature() {
   cosign_verify_event "$result" "$repo_digest" "$tail"
   printf '%s' "$repo_digest" # WARN: run the verified digest anyway (immutability holds)
   rm -f "$err" 2>/dev/null || true
+  _cosign_anon_cleanup "$anon_dir"
   [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
   return 0
 }

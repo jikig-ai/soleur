@@ -108,7 +108,7 @@ claude-settings	.claude/hooks/pencil-collapse-guard.sh	PostToolUse	mcp__pencil__
 claude-settings	.claude/hooks/session-rules-loader.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 claude-settings	.claude/hooks/memory-backstop.sh	SessionStart	startup|resume|clear|compact	n/a	matcher-dead + no-claude-ancestor	requires a `claude` process ancestor (discover_claude_pid) — fires-then-exits under Devin, so no .devin binding (dispatch-true but functionally void)
 claude-settings	.claude/hooks/supabase-loopback-warn.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
-claude-settings	scripts/install-kb-merge-driver.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
+claude-settings	scripts/ensure-kb-index.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 #
 # --- plugins/soleur/hooks/hooks.json -----------------------------------------
 soleur-plugin	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	^(Bash|exec)$	covered-by-plugin	#8155 merged; exec bound directly	runtime trace 2026-09-17 (AC12/AC13): deny+allow arms PASS on Devin local exec — EC§9

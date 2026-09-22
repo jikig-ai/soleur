@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.278
+▝▜██████▀  Haiku 4.5 · Claude Max
+  ▝▝ ▝▝    /tmp/claude-1000/w0tui.qLzV
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /probe8290:flagged            (probe8290) This skill should be used when the probe needs the FLAGGED sentinel. Probe description FLAGGED-DESC-7731.
+  /probe8290:open               (probe8290) This skill should be used when the probe needs the OPEN sentinel. Probe description OPEN-DESC-4419.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /probe8290:fla
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

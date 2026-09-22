@@ -59,6 +59,8 @@ Tasks:
 2. Check which have corresponding agent tools
    - Search for agent tool definitions
    - Map user actions to agent capabilities
+   - A Soleur skill whose SKILL.md frontmatter sets `disable-model-invocation: true` is user-invoked
+     (ADR-236): the Skill tool refuses it, so count it as a human-only capability, not an agent tool
 3. Score: "Agent can do X out of Y user actions"
 
 Format:
@@ -147,7 +149,8 @@ Tasks:
    - Read
    - Update
    - Delete
-3. Score per entity and overall
+3. Score per entity and overall. A user-invoked skill (frontmatter `disable-model-invocation: true`,
+   ADR-236) is not an agent tool for any operation it performs.
 
 Format:
 ## CRUD Completeness Audit
