@@ -75,3 +75,10 @@ function remains the template.
   `RENDER_TIMEOUT_MS=25s` + a concurrency gate (default 2, env
   `C4_RENDER_CONCURRENCY`). `maxDuration=60` on the PUT route is a forward-compat
   platform hint; the in-code timeout is the real bound under the custom server.
+
+## Amendment — 2026-09-22 (#8542)
+
+`renderC4Model` no longer returns the CLI's bytes verbatim. After the elements gate, it returns
+them in the canonical format from `lib/c4-canonical.mjs`: one value per line, with view hashes
+blanked. It does this so the app and the repo/plugin writers emit identical files (ADR-235
+amendment of the same date). A canonicalize failure maps to `io_error`, and nothing is committed.
