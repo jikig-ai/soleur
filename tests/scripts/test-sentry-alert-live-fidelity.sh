@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=54
+EXPECTED_TESTS=55
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -148,7 +148,7 @@ t_live_api_shape() {
     )
   ' "$CAPTURE" > "$shaped" 2>/dev/null
 
-  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 31' "$shaped" >/dev/null 2>&1; then
+  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 32' "$shaped" >/dev/null 2>&1; then
     _report "F13 an API-shaped payload (server fields + unsorted keys) still PASSES" fail \
       "the shaped fixture was not built — this row proves nothing"
     return
@@ -308,7 +308,8 @@ t_empty_reference_refuses() {
 t_survivors_out_of_scope() {
   _run "$CAPTURE"
   local names_ok=1
-  # 31 live workflows, 28 in scope: the vendor default plus the two carrying
+  # 32 live workflows, 28 in scope: the two vendor defaults (high-priority issues;
+  # Seer's pull-requests-ready, #8267) plus the two carrying
   # `event_unique_user_frequency_count` are excluded by the predicate, not by a
   # name list. Assert the COUNT and that neither survivor is named in a finding.
   grep -q 'comparing 28 declared rule' <<<"$_out" || names_ok=0
@@ -841,6 +842,25 @@ t_g4_unknown_vendor_shaped() {
     "UNMANAGED-FROZEN: 'another-high-priority-copy'" \
     "G4-15 an unknown excluded-type workflow (high-priority trigger, not a frozen name, not in the capture) is UNMANAGED-FROZEN"
 }
+# #8267: Sentry created the Seer default on 2026-09-17 with no Terraform
+# counterpart, and the provider cannot express `seer_activity_trigger` natively
+# (v0.15.7 routes it to legacy_trigger_conditions and writes comparison=true).
+# Registering it means BOTH halves: the excluded type AND the capture entry. With
+# the capture entry dropped, the census must still name it.
+t_g4_seer_default_needs_capture_entry() {
+  local cap="$TMPD/capture-minus-seer.json"
+  jq 'map(select(.name != "Send a notification when pull requests are ready"))' "$CAPTURE" > "$cap"
+  if [[ "$(jq length "$cap")" -ne "$(( $(jq length "$CAPTURE") - 1 ))" ]]; then
+    _report "G4-20 Seer default needs its capture entry" fail "the capture mutation did not land"; return
+  fi
+  _run_env "$CAPTURE" SENTRY_FROZEN_CAPTURE_FILE="$cap"
+  if [[ "$_rc" -ne 0 ]] && grep -qF -- "UNMANAGED-FROZEN: 'Send a notification when pull requests are ready'" <<<"$_out" \
+     && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-20 the Seer default (seer_activity_trigger) absent from the capture is UNMANAGED-FROZEN, never a silent pass" ok
+  else
+    _report "G4-20 Seer default needs its capture entry" fail "rc=$_rc (want non-zero). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
 t_g4_zero_frozen_names_refuses() {
   local d="$TMPD/tf-nofrozen"; mkdir -p "$d"
   printf 'resource "sentry_alert" "x" {\n  name = "x"\n  trigger_conditions = []\n}\n' > "$d/a.tf"
@@ -941,6 +961,7 @@ t_g4_frequency_changed
 t_g4_trigger_logictype_changed
 t_g4_vendor_default_not_pinned
 t_g4_unknown_vendor_shaped
+t_g4_seer_default_needs_capture_entry
 t_g4_zero_frozen_names_refuses
 t_g4_frozen_name_without_capture_refuses
 t_g4_second_trigger_condition

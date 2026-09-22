@@ -1984,5 +1984,47 @@
       ],
       "logicType": "all"
     }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetType": "issue_owners",
+              "targetIdentifier": null
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [],
+        "logicType": "any-short"
+      }
+    ],
+    "config": {
+      "frequency": 0
+    },
+    "detectorIds": [
+      "2039969"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "1143693",
+    "name": "Send a notification when pull requests are ready",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": [
+            "pr_ready_for_review"
+          ],
+          "type": "seer_activity_trigger"
+        }
+      ],
+      "logicType": "any-short"
+    }
   }
 ]
