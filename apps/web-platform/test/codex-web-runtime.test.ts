@@ -39,4 +39,12 @@ describe("Codex Web runtime composition", () => {
     });
     expect(factories.codex).toBeTypeOf("function");
   });
+
+  it("fails closed when neither a transport nor approved launcher is configured", () => {
+    expect(() => createCodexWebEngineFactories({
+      userId: "user-1",
+      authMode: "api-key",
+      apiKeyProvider: provider,
+    })).toThrowError(expect.objectContaining({ code: "codex_transport_unconfigured" }));
+  });
 });
