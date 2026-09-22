@@ -1048,6 +1048,16 @@ jobs:
       - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
         run: bash apps/web-platform/infra/nic-wait-gate.test.sh
 
+      # LOAD-BEARING registration (explicit, no glob). Behavioural, not grep-only: it renders
+      # cloud-init-inngest.yml through terraform templatefile + local.inngest_rationale_strip
+      # (inngest-userdata-budget.sh; this job sets up terraform), extracts soleur-inngest-nic-wait
+      # and the 99-soleur-private-fallback.network file from the RENDERED write_files, and
+      # EXECUTES the helper against stub `ip`/`networkctl`/emitters: fail-open, exactly one
+      # private_nic_* event per channel, byte-identical <=120-char detail, plus the Guard 2
+      # mutation battery (#8539).
+      - name: Run inngest private-NIC wait guard (#8539 late-attached NIC, one event, fail-open)
+        run: bash apps/web-platform/infra/inngest-nic-wait.test.sh
+
       - name: Run /workspaces LUKS drift observability guard (#6604 emit tags/DSN + daily probe + gate)
         run: bash apps/web-platform/infra/luks-monitor.test.sh
 
