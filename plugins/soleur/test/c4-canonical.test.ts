@@ -8,8 +8,10 @@
 // c4-render.ts, the plugin's generate-c4-from-components.ts) must emit exactly
 // these bytes, or each rewrites the others' file on every save.
 //
-// Every `git` spawn below passes gitCleanEnv(): a hook-exported GIT_DIR beats
-// cwd and `git -C` (plugin AGENTS.md §Test Fixture Conventions).
+// Every `git` spawn below passes a constructed env: a hook-exported GIT_DIR beats
+// cwd and `git -C` (plugin AGENTS.md §Test Fixture Conventions). merge-file runs
+// in a temp fixture dir, so it takes gitFixtureEnv(); the read-only calls against
+// the repo take gitCleanEnv().
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -17,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { canonicalizeC4Model } from "../lib/c4-canonical.mjs";
 import { gitCleanEnv } from "./lib/git-clean-env";
+import { gitFixtureEnv } from "./lib/git-fixture-env";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const CLI = join(REPO_ROOT, "plugins/soleur/lib/c4-canonical-cli.mjs");
@@ -68,7 +71,7 @@ function mergeFile(ours: string, base: string, theirs: string): { out: string; c
     writeFileSync(o, ours);
     writeFileSync(b, base);
     writeFileSync(t, theirs);
-    const r = spawnSync("git", ["merge-file", "-p", o, b, t], { encoding: "utf8", env: gitCleanEnv() });
+    const r = spawnSync("git", ["merge-file", "-p", o, b, t], { encoding: "utf8", env: gitFixtureEnv(d) });
     if (r.status === null || r.status < 0) throw new Error(`git merge-file failed to run: ${r.error}`);
     return { out: r.stdout, conflicted: r.status !== 0 };
   });
