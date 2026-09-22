@@ -84,6 +84,14 @@ Three verification lessons from the review:
 20. **Draft PRs get no `pull_request` CI runs,** which read as "CI green". **Prevention:** mark ready to get the real test gate, and check the specific required context, not the visible check count.
 21. **A process check matched process names and missed a running test job.** **Prevention:** resolve ownership through `/proc/<pid>/cwd` (`proc.sh list_runs`), never by name.
 
+## Addendum — 2026-09-22, ship tail (#8538)
+
+22. **Two repo-global guards reddened on this PR after review, and the selected suites never ran them.** `repo-wide-containment` wanted `c4-canonical-mirror.test.ts` in `REPO_WIDE_SUITES` because it reads `plugins/`. `fixture-env-adoption` classifies `git merge-file` as mutating, so it wanted `gitFixtureEnv(d)`. Neither guard references a changed file. The local `TEST_GROUP=webplat` shard and lefthook's bun battery caught them, not CI. Recovery: a follow-up commit before merge. **Prevention:** a new test that reads outside its app, or spawns a git verb, moves a repo-wide counter. Run `repo-wide-containment` and `fixture-env-adoption` whenever a diff adds a test file.
+23. **A BEHIND auto-sync pushed a new head and restarted a 90-minute CI run while nothing was failing.** Recovery: I stopped the watch mid-sync, discarded the unpushed merge, and waited for green on the existing head instead. The operator had pre-approved an admin merge, which does not need the branch up to date. **Prevention:** once an admin merge is authorised, stop syncing on BEHIND. Wait for the required set to go green on the head it is already running on.
+24. **A required aggregate went red because the operator cancelled a job that never got a runner.** The run's annotation read "canceled by \<operator\>". Recovery: the operator chose to re-run it. **Prevention:** read the failed job's annotations before classifying a required-check failure. A cancelled dependency is a decision to surface, not a code failure.
+25. **The merged PR's worktree was reaped by another session's `cleanup-merged` while a post-merge Monitor was running from it.** The watch then read empty results, not errors. Recovery: I relaunched the watch from `/var/tmp` with an explicit `-R owner/repo`. **Prevention:** start every post-merge watch outside the feature worktree, as ship's merge→deploy protocol says. An empty `gh` result from a watch is suspect until the cwd is confirmed alive.
+26. **The post-merge `Tenant integration` run failed on dev migration drift** (`139_openai_api_key_provider.sql`, from open PR #8507). The PR's own run had passed minutes earlier. **Prevention:** when a post-merge failure names a file the PR never touched, attribute it by searching open PRs before reporting it as this merge's.
+
 ## Tags
 
 category: workflow-issues

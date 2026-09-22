@@ -27,7 +27,7 @@ underlying changes don't actually collide:
 
 ## Measurements (2026-09-22, origin/main 69b08a4ee)
 
-Replay harness: `knowledge-base/project/specs/feat-c4-model-mergeable/replay/`. For each pair
+Replay harness: `knowledge-base/project/specs/archive/20260922-133038-feat-c4-model-mergeable/replay/`. For each pair
 (A, B) of main commits touching `.c4` sources at gaps 1-5: base = A^, side A = A, side B =
 B's source diff re-applied onto A^. Each side is rendered with `likec4@1.50.0`, the artifact is
 3-way merged with `git merge-file`, and a clean result is compared against a fresh render of
