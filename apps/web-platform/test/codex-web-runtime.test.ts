@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCodexWebEngineFactories } from "@/server/codex-web-runtime";
+import { createCodexWebEngineFactories, createCodexWebEngineFactoriesForBinding } from "@/server/codex-web-runtime";
 
 const transport = {} as never;
 const provider = {
@@ -46,5 +46,29 @@ describe("Codex Web runtime composition", () => {
       authMode: "api-key",
       apiKeyProvider: provider,
     })).toThrowError(expect.objectContaining({ code: "codex_transport_unconfigured" }));
+  });
+
+  it("derives auth mode from the persisted Codex binding", () => {
+    const factories = createCodexWebEngineFactoriesForBinding({
+      userId: "user-1",
+      binding: { engineId: "codex", authMode: "api-key" },
+      transport,
+      apiKeyProvider: provider,
+    });
+    expect(factories.codex).toBeTypeOf("function");
+  });
+
+  it("rejects non-Codex or invalid persisted bindings", () => {
+    expect(() => createCodexWebEngineFactoriesForBinding({
+      userId: "user-1",
+      binding: { engineId: "claude-code", authMode: "managed" },
+      transport,
+      managedProvider: { ...provider, mode: "managed" },
+    })).toThrowError(expect.objectContaining({ code: "codex_binding_mismatch" }));
+    expect(() => createCodexWebEngineFactoriesForBinding({
+      userId: "user-1",
+      binding: { engineId: "codex", authMode: "unknown" },
+      transport,
+    })).toThrowError(expect.objectContaining({ code: "codex_auth_mode_invalid" }));
   });
 });

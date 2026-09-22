@@ -6,7 +6,7 @@ import type { CodexAppServerStdioLauncher } from "./codex-app-server-stdio";
 import { createCodexWebTransport } from "./codex-web-transport";
 import type { EngineObservability } from "./agent-engine-observability";
 
-interface CodexWebRuntimeOptions {
+export interface CodexWebRuntimeOptions {
   userId: string;
   authMode: CodexAuthMode;
   transport?: CodexCodeAdapterTransport;
@@ -20,6 +20,11 @@ interface CodexWebRuntimeOptions {
   /** Test/runtime override for the encrypted Web-settings API-key provider. */
   apiKeyProvider?: CodexAuthProvider;
   additionalFactories?: Readonly<Record<string, EngineAdapterFactory>>;
+}
+
+export interface CodexWebBinding {
+  engineId: string;
+  authMode: string;
 }
 
 /** Select exactly the persisted auth mode; never fall back between credential modes. */
@@ -55,5 +60,23 @@ export function createCodexWebEngineFactories(options: CodexWebRuntimeOptions): 
     additionalFactories: options.additionalFactories,
     codexTransport: transport,
     codexAuth: auth,
+  });
+}
+
+/** Build the Codex runtime from persisted binding metadata without accepting a client-selected mode. */
+export function createCodexWebEngineFactoriesForBinding(
+  options: Omit<CodexWebRuntimeOptions, "authMode"> & { binding: CodexWebBinding },
+): Partial<Record<string, EngineAdapterFactory>> {
+  if (options.binding.engineId !== "codex") {
+    throw Object.assign(new Error("persisted binding is not Codex"), { code: "codex_binding_mismatch" });
+  }
+  if (options.binding.authMode !== "api-key" && options.binding.authMode !== "managed") {
+    throw Object.assign(new Error("persisted Codex auth mode is invalid"), { code: "codex_auth_mode_invalid" });
+  }
+  const authMode = options.binding.authMode;
+  const { binding, ...runtime } = options;
+  return createCodexWebEngineFactories({
+    ...runtime,
+    authMode,
   });
 }
