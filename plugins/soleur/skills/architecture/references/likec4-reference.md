@@ -110,12 +110,19 @@ includes.
 
 ```bash
 npx -y likec4@latest validate .                 # parse + check references
-npx -y likec4@latest export json -o out.json .  # element/relation/view counts
+npx -y likec4@latest export json -o "$(mktemp)" .  # element/relation/view counts
 ```
 
-Never write raw `export json` output onto the committed `model.likec4.json`. Every writer
-publishes the canonical one-value-per-line format with blank view hashes, which is what lets git
-merge two regenerations (ADR-235, #8542). Regenerate with `bash scripts/regenerate-c4-model.sh`,
-or canonicalize with `node <plugin-root>/lib/c4-canonical-cli.mjs out.json > model.likec4.json`.
+Export to a temp path, as above, never into the diagrams directory. Never write raw `export json`
+output onto the committed `model.likec4.json`. Every writer publishes the canonical
+one-value-per-line format with blank view hashes, which is what lets git merge two regenerations
+(ADR-235, #8542):
+
+- In the Soleur repo, run `bash scripts/regenerate-c4-model.sh`.
+- In any other repo, run `soleur:sync` (its C4 producer canonicalizes), or canonicalize by hand
+  through a temp file so a failure never truncates the artifact:
+  `node <plugin-root>/lib/c4-canonical-cli.mjs "$raw" > "$tmp" && mv "$tmp" model.likec4.json`.
+- To check a committed file, run `node <plugin-root>/lib/c4-canonical-cli.mjs --check model.likec4.json`.
+  It prints `canonical` (exit 0) or `not-canonical` (exit 1).
 
 Full docs: <https://likec4.dev/>.

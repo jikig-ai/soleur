@@ -122,7 +122,7 @@ for gap in GAPS:
                     want = json.loads(rm)
                     got = json.loads(out)
                     if name == "canonical":
-                        ok = got == json.loads(real_canonical(rm))
+                        ok = out == real_canonical(rm)  # byte-exact
                     else:
                         ok = got == (nohash(want) if "nohash" in name else want)
                 except json.JSONDecodeError:

@@ -20,7 +20,7 @@
 # apps/web-platform/server/c4-render.ts. Only a non-empty model is published,
 # so a broken .c4 source can never clobber the good committed artifact.
 #
-# --out PATH  Write the validated model to PATH instead of the tracked artifact.
+# --out PATH  Write the validated, canonicalized model to PATH instead of the tracked artifact.
 #             Used by plugins/soleur/test/c4-model-freshness.test.sh to render to
 #             a temp path with identical logic, then byte-diff against the
 #             committed artifact. Default: the tracked model.likec4.json.

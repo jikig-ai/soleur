@@ -277,6 +277,12 @@ canonicalizer throws, or if a reader rejects the new layout.
 derived from the customer's own `.c4` sources (CLO: no legal surface). The risk is integrity:
 writer divergence would churn full-file rewrites in the customer's git history.
 
+**Near the size cap** (added at review): the canonical format is about 6-7% larger, and the
+4 MiB caps apply to canonical bytes. A customer model whose raw export was roughly 3.75-4.0 MB
+now crosses the cap, and its diagram goes stale on the next edit with only a Sentry event
+(`feature: c4-rerender`, `op: commit-json`) as the signal. Scoped out: raising the served cap is a
+product decision, and the detection path exists. Recorded in the ADR-235 amendment.
+
 **Brand-survival threshold:** single-user incident. CPO reviewed at brainstorm and accepts the
 one-time reformat with a changelog line.
 

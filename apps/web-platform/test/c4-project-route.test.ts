@@ -63,6 +63,7 @@ vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 import { GET } from "@/app/api/kb/c4/project/route";
 import { GitHubApiError } from "@/server/github-api";
 import { C4_DIAGRAMS_DIR } from "@/lib/c4-constants";
+import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 
 const OWNER = "jikig-ai";
 const REPO = "soleur";
@@ -301,11 +302,17 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
       expect.anything(),
       expect.objectContaining({ feature: "c4-project-read", op: "model-parse-failed" }),
     );
+    // The reported error must not carry the SyntaxError's quote of the model text.
+    const call = mocks.mockReportSilentFallback.mock.calls.find(
+      (c: unknown[]) => (c[1] as { op?: string })?.op === "model-parse-failed",
+    )!;
+    expect((call[0] as Error).message).toBe("model.likec4.json parse failed");
+    expect(JSON.stringify(call)).not.toContain("<<<<<<<");
   });
 
   it("AC7c: the canonical line-per-value format (#8542) is served like the one-line form", async () => {
     const dump = { views: { index: { id: "index", hash: "" } }, elements: { a: { id: "a" } } };
-    const canonical = JSON.stringify(dump, null, 1).replace(/^ +/gm, "") + "\n";
+    const canonical = canonicalizeC4Model(JSON.stringify(dump));
     setupGitHub({ "model.c4": "model {}", "model.likec4.json": canonical });
     const res = await callGET();
     expect(res.status).toBe(200);

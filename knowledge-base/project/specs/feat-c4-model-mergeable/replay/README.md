@@ -1,7 +1,10 @@
 # C4 artifact mergeability replay (2026-09-22, origin/main 69b08a4ee)
 
 `replay.py` takes the 30 most recent `main` commits touching `.c4` sources and pairs each commit
-A with the commit `gap` positions after it (B), for gaps 1-6, 8 and 10 (152 pairs). For each pair:
+A with the commit `gap` positions after it (B), for gaps 1-6, 8 and 10. That is 201 candidate
+pairs, of which 152 were kept. A candidate is skipped when B's source diff does not re-apply
+cleanly onto A's parent, when either side leaves the sources unchanged, or when a side fails to
+render. For each kept pair:
 
 - base = A's parent;
 - side A = A's sources;
@@ -9,7 +12,9 @@ A with the commit `gap` positions after it (B), for gaps 1-6, 8 and 10 (152 pair
 
 Each side is rendered with `likec4@1.50.0`, and the artifact is 3-way merged with
 `git merge-file`. A clean merge is compared against a fresh render of the merged sources, so
-"clean" is only counted when it is also correct.
+"clean" is only counted when it is also correct. `replay.py` compares the two as JSON values.
+During review, a byte-exact re-run of the `canonical` arm checked 108 of the 152 pairs: all 74
+clean merges were byte-identical to a fresh render, and 34 conflicted.
 
 | Format | Clean + correct | Conflict | Clean but WRONG |
 |---|---|---|---|
@@ -20,7 +25,8 @@ Each side is rendered with `likec4@1.50.0`, and the artifact is 3-way merged wit
 
 No pair's `.c4` sources conflicted, so every row above is a pair whose sources merge cleanly.
 
-**The 45 residual conflicts** (`residual-conflicts-2026-09-22.txt`) are the positive control:
+**The 45 residual conflicts** (`residual-conflicts-2026-09-22.txt`, each row labelled
+`TRUE-OVERLAP` or `ADJACENCY`) are the positive control:
 
 - **43 true overlaps.** Both sides set the same leaf to different values: Graphviz coordinates in
   a shared view (mostly `views.containers` or `views.index`), or the same relation's title. No

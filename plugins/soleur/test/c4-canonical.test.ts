@@ -26,13 +26,27 @@ const ARTIFACT = "knowledge-base/engineering/architecture/diagrams/model.likec4.
 
 // A raw likec4-shaped export: one line, non-alphabetical key order, two views
 // with non-empty hashes, one view with no hash key at all, and a non-view
-// `hash` that must survive.
+// `hash` that must survive. Values carry the shapes a real layouted export has:
+// out-of-order arrays whose order is meaningful, floats, an exponent, non-ASCII
+// text, an escaped newline, and a U+2028 followed by spaces (which a /^ +/gm
+// strip would eat, because ^ matches after U+2028 under the m flag).
 const RAW = JSON.stringify({
   projectId: "default",
-  elements: { b: { id: "b", title: "B" }, a: { id: "a", title: "A" } },
+  elements: {
+    b: { id: "b", title: "B — backend", description: { txt: "line one\nline two" } },
+    a: { id: "a", title: "A", description: { txt: "pasted\u2028   text" } },
+  },
   relations: { r1: { source: "a", target: "b", title: "uses" } },
   views: {
-    index: { id: "index", hash: "6v56Y9lvx4UMwclrRQ4gL_jWujZQPMIQbDx8qnXD68w", nodes: [{ id: "a", x: 1, y: 2 }] },
+    index: {
+      id: "index",
+      hash: "6v56Y9lvx4UMwclrRQ4gL_jWujZQPMIQbDx8qnXD68w",
+      nodes: [
+        { id: "b", x: 12.345, y: 1e21 },
+        { id: "a", x: 1, y: -2.5 },
+      ],
+      edges: [{ id: "e1", points: [[3, 4], [1, 2]] }],
+    },
     context: { id: "context", hash: "enjPCp_0DCUhTkngHCSw18BHR3S8EP80rilGMTPdK2Q", nodes: [] },
     bare: { id: "bare", nodes: [] },
   },
@@ -101,6 +115,10 @@ describe("canonicalizeC4Model", () => {
     expect(canonicalizeC4Model(out)).toBe(out);
   });
 
+  test("preserves spaces after a U+2028 inside a string value", () => {
+    expect(parsed.elements.a.description.txt).toBe("pasted\u2028   text");
+  });
+
   test("rejects non-JSON and non-object input", () => {
     expect(() => canonicalizeC4Model("{not json")).toThrow();
     expect(() => canonicalizeC4Model("[1,2]")).toThrow();
@@ -128,6 +146,23 @@ describe("CLI (run under node, as the repo writer runs it)", () => {
       expect([ok.status, ok.stdout.trim()]).toEqual([0, "canonical"]);
       const bad = node([CLI, "--check", raw]);
       expect([bad.status, bad.stdout.trim()]).toEqual([1, "not-canonical"]);
+    }));
+
+  // Each negative differs from canonical on ONE axis, so a --check that ignores
+  // whitespace, trims, or only looks at hashes cannot pass all of them.
+  test.each([
+    ["hashes blank but one line", (c: string) => JSON.stringify(JSON.parse(c))],
+    ["missing the trailing newline", (c: string) => c.slice(0, -1)],
+    ["indented with two spaces", (c: string) => JSON.stringify(JSON.parse(c), null, 2) + "\n"],
+    ["an extra trailing newline", (c: string) => c + "\n"],
+  ])("--check rejects input that is %s", (_label, perturb) =>
+    withTmp((d) => {
+      const canon = canonicalizeC4Model(RAW);
+      const f = join(d, "near.json");
+      writeFileSync(f, perturb(canon));
+      expect(readFileSync(f, "utf8")).not.toBe(canon);
+      const r = node([CLI, "--check", f]);
+      expect([r.status, r.stdout.trim()]).toEqual([1, "not-canonical"]);
     }));
 
   test("an unreadable or invalid input exits 2 with nothing on stdout", () =>
@@ -172,6 +207,38 @@ describe("mergeability (git merge-file over synthetic base/A/B)", () => {
 });
 
 describe("repo wiring", () => {
+  // Census, not a hand-kept list: every tracked source file that runs
+  // `likec4 export json` can produce model.likec4.json, so each one must route
+  // its output through the canonical module. A new writer that does not fails
+  // here instead of silently reformatting the file in customer repos.
+  test("every file that runs `likec4 export json` routes through c4-canonical", () => {
+    const r = spawnSync(
+      "git",
+      ["grep", "-l", "-E", "export[\"', ]+json", "--", "*.sh", "*.ts", "*.mjs", "*.js", ":!**/test/**", ":!**/*.test.*"],
+      { cwd: REPO_ROOT, encoding: "utf8", env: gitCleanEnv() },
+    );
+    expect([0, 1]).toContain(r.status);
+    // Comment-stripped, and anchored on an INVOCATION (an argv array or a shell
+    // `export json -o`), so prose that merely names the command is not a writer.
+    const code = (f: string) =>
+      readFileSync(join(REPO_ROOT, f), "utf8")
+        .split("\n")
+        .filter((l) => !/^\s*(\/\/|#|\*)/.test(l))
+        .join("\n");
+    const INVOKES = /["']export["'],\s*["']json["']|\bexport json -o\b/;
+    const writers = r.stdout.trim().split("\n").filter(Boolean).filter((f) => INVOKES.test(code(f)));
+    // Floor: the three known writers. An empty census would pass vacuously.
+    expect(writers.sort()).toEqual(
+      expect.arrayContaining([
+        "apps/web-platform/server/c4-render.ts",
+        "plugins/soleur/scripts/generate-c4-from-components.ts",
+        "scripts/regenerate-c4-model.sh",
+      ]),
+    );
+    const unrouted = writers.filter((f) => !/c4-canonical/.test(code(f)));
+    expect(unrouted).toEqual([]);
+  });
+
   test("the apps copy is a byte-identical mirror of the plugin module", () => {
     expect(resolve(MIRROR_SRC)).not.toBe(resolve(MIRROR_DST));
     expect(readFileSync(MIRROR_DST, "utf8")).toBe(readFileSync(MIRROR_SRC, "utf8"));

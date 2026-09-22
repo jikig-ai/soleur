@@ -22,3 +22,17 @@ every row passes on it.
 
 Axes not mutated: the likec4 renderer itself, and the CLI's argument parsing beyond the rows
 listed in `c4-canonical.test.ts`.
+
+## Round 2: guards added during review (2026-09-22)
+
+Each guard the review fixes added was mutated back out on the working tree, from pristine copies
+with a landing check and a byte-identical restore. All six went RED on the intended row.
+
+| Row | Mutation | Result | The failing row |
+|---|---|---|---|
+| n1 | Canonical strip reverted to `/^ +/gm` (both copies) | RED | `preserves spaces after a U+2028 inside a string value` and the round-trip row |
+| n2 | `--check` compares whitespace-insensitively | RED | the single-axis `--check rejects input that is …` rows |
+| n3 | `regenerate-c4-model.sh` stops referencing the canonical CLI | RED | the writer census |
+| n4 | A new tracked script runs `likec4 export json -o model.likec4.json` | RED | the writer census (population growth) |
+| n5 | `c4-render.ts` try/catch around canonicalize removed | RED | `maps a canonicalize failure to io_error and returns no json` (the deep-nesting fixture) |
+| n6 | The project route reports the raw `SyntaxError` again | RED | AC7b (fixed message, no model text in the report) |

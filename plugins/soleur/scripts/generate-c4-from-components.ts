@@ -370,7 +370,7 @@ export function runProducer(root: string): { code: number; marker: string } {
       effective = {
         status: "failed",
         reason: "canonicalize-failed",
-        detail: String((err as Error)?.message ?? err),
+        detail: String((err as Error)?.message ?? err).slice(0, 512),
       };
     }
   }

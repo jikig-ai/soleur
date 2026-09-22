@@ -1,4 +1,6 @@
-// GENERATED MIRROR: edit plugins/soleur/lib/c4-canonical.mjs, then cp to apps/web-platform/lib/
+// Source of truth: plugins/soleur/lib/c4-canonical.mjs. Byte-identical, parity-tested copy:
+// apps/web-platform/lib/c4-canonical.mjs. Edit the plugin copy, then
+//   cp plugins/soleur/lib/c4-canonical.mjs apps/web-platform/lib/c4-canonical.mjs
 //
 // Canonical on-disk format of the compiled LikeC4 model (model.likec4.json),
 // shared by all three writers so they emit byte-identical files (ADR-235):
@@ -36,7 +38,9 @@ export function canonicalizeC4Model(json) {
       }
     }
   }
-  // A JSON string can never contain a raw newline, so every line break comes
-  // from the indentation and stripping leading spaces cannot touch a value.
-  return JSON.stringify(model, null, 1).replace(/^ +/gm, "") + "\n";
+  // Strip only the indentation that FOLLOWS a "\n". A JSON string can never
+  // contain a raw "\n" (stringify escapes it), so every "\n" is structural. Do
+  // NOT use /^ +/gm: with the m flag, ^ also matches after U+2028/U+2029, which
+  // JSON.stringify leaves raw inside strings, so it would eat spaces in a value.
+  return JSON.stringify(model, null, 1).replace(/\n +/g, "\n") + "\n";
 }

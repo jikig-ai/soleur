@@ -180,9 +180,10 @@ changes is its **on-disk format**, and with it how often regenerate-on-conflict 
 
 **The "conflicts are rare" rationale in *Alternatives rejected* is superseded by measurement.**
 In the 7 days before 2026-09-22, 27 of 121 commits on `main` changed the artifact, all alongside a
-`.c4` source. Because likec4 exports one ~1.1 MB line, every pair of those PRs conflicted on
-GitHub, whose server-side merge cannot run the resolver: 0 of 152 real concurrent pairs replayed
-from `main` merged cleanly.
+`.c4` source. Because likec4 exports one ~1.1 MB line, any two such PRs conflict on GitHub, whose
+server-side merge cannot run the resolver. That is a second, separate sample: of 152 pairs of
+real `.c4` commits replayed from `main` (the last 30 such commits, paired at gaps 1-10), 0 merged
+cleanly in the old format.
 
 **Decision.** Every writer publishes one canonical format, produced by
 `plugins/soleur/lib/c4-canonical.mjs`:
@@ -206,7 +207,11 @@ The key is kept because the `ViewWithHash` type declares it.
 
 - Real concurrent pairs whose `.c4` sources merge cleanly: 0/152 merge today, 107/152 in the
   canonical format.
-- No merge is clean but wrong: every clean merge equals a fresh render of the merged sources.
+- No merge in the replay was clean but wrong: each of the 107 clean merges equals a fresh render
+  of the merged sources. This is a measurement, not a guarantee. In this repo, `ci.yml` runs on
+  `merge_group`, so `c4-model-freshness.test.sh` re-renders the merged tree before it lands, and
+  `main-health-monitor.yml` re-checks `main`. Customer repos have neither, so a clean merge there
+  that is not a faithful render stays until the next writer runs.
 - Pretty-printing alone, without blanking the hash, fixes only 7/152.
 - The 45 remaining conflicts still route through `resolve-regenerable-conflicts.sh`, and
   `RESOLVABLE_PATHS` is unchanged:
@@ -216,7 +221,9 @@ The key is kept because the `ViewWithHash` type declares it.
   - 2 are adjacency conflicts: no value differs on both sides, but the edits sit on neighbouring
     lines.
 
-**Three writers, one module.**
+**Three writers, one module.** Each canonicalizes only after its own validation gates, and each
+maps a canonicalize failure to its existing failure contract without publishing: the script exits
+1, `renderC4Model` returns `io_error`, and the `soleur:sync` producer reports `failed`.
 
 | Writer | Where it runs | Reaches the module via |
 |---|---|---|
@@ -238,13 +245,19 @@ The key is kept because the `ViewWithHash` type declares it.
 - **Customer repos have no resolver.** `resolve-regenerable-conflicts.sh` calls
   `scripts/regenerate-c4-model.sh`, which exists only in this repo. A customer's residual true
   overlaps stay conflicted until one of their writers re-renders.
-- **Rollout.** The app, the plugin and the regenerated artifact ship from one merge. A self-hosted
-  CLI running an older plugin still writes the raw one-line format, and each switch between
-  writers rewrites the whole file until that CLI upgrades. Upgrading is the remedy. No migration
+- **Rollout.** The app and the regenerated artifact ship from one merge. The plugin reaches
+  self-hosted customers on their next plugin update; until then an older plugin still writes the
+  raw one-line format, and each switch between writers rewrites the whole file. Upgrading is the remedy. No migration
   runs, because every writer already rewrites the whole file, so old files convert on their next
   write.
 - **Size headroom.** The canonical artifact is 1,210,508 B, 28.9% of `MAX_C4_BYTES`, against
-  1,133,281 B raw. Room to grow drops from 3.70x to 3.46x.
+  1,133,281 B raw. Room to grow drops from 3.70x to 3.46x. The caps are unchanged and apply to the
+  canonical bytes, so a customer model whose raw export was roughly 3.75-4.0 MB (growth depends
+  on the model's shape) now crosses the 4 MiB cap: the editor's re-render is skipped with a Sentry
+  event (`feature: c4-rerender`, `op: commit-json`, "regenerated model too large to commit") and
+  the diagram stays on the last committed version, and the viewers return 413 for a file written
+  over the cap by another writer. Raising the served cap is a product decision this change does
+  not make.
 - **`.gitattributes`.** The root `.gitattributes` returns with a single line,
   `linguist-generated=true` for the artifact, so GitHub collapses it in PR diffs.
   `plugins/soleur/test/c4-canonical.test.ts` fails if a `binary`, `-diff`, `-merge` or `merge=`

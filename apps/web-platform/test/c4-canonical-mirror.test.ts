@@ -20,7 +20,10 @@ const SOURCE = path.resolve(APP, "../../plugins/soleur/lib/c4-canonical.mjs");
 describe("c4-canonical mirror", () => {
   it("is byte-identical to the plugin source of truth", () => {
     expect(SOURCE).not.toBe(MIRROR);
-    expect(readFileSync(MIRROR, "utf8")).toBe(readFileSync(SOURCE, "utf8"));
+    expect(
+      readFileSync(MIRROR, "utf8"),
+      "mirror drifted — run: cp plugins/soleur/lib/c4-canonical.mjs apps/web-platform/lib/c4-canonical.mjs",
+    ).toBe(readFileSync(SOURCE, "utf8"));
   });
 });
 
