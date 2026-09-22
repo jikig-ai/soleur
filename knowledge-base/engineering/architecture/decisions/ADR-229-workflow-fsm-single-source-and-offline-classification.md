@@ -4,7 +4,7 @@
 
 ## Status
 
-Accepted. Amended 2026-09-19 (#8325) and 2026-09-21 (#8399).
+Accepted. Amended 2026-09-19 (#8325), 2026-09-21 (#8399) and 2026-09-22 (#8470).
 
 ## Context
 
@@ -341,7 +341,16 @@ the base, which closes the rename escape.
   merge — once ≥5 full-pipeline `review → ship` rows exist, or six weeks after
   the merge, whichever comes first (the same `n ≥ 5` floor as the extraction
   reading above). Any class-D row in that run (no compound anywhere after review,
-  including inside ship) re-opens the gate question on that evidence. The option
+  including inside ship) re-opens the gate question on that evidence.
+  **[Amended 2026-09-22 (#8470): the fix is the PR that adds
+  `plugins/soleur/test/ship-learning-probe.test.ts` (#8567). The re-measure's
+  `SINCE` is that file's first first-parent commit on `main`:
+  `git log --first-parent --diff-filter=A --reverse --format=%cI origin/main -- plugins/soleur/test/ship-learning-probe.test.ts | head -1`
+  — `--first-parent` so a merge-commit landing reports the merge, not the earlier
+  branch commit (which would admit pre-fix rows); `--reverse | head -1` survives a
+  later delete and re-add. The trigger itself changes in one respect: an
+  interactive **Skip** at ship Phase 2 also produces a class-D row, so a class-D
+  row re-opens the gate question only after its session is checked for a Skip.]** The option
   the ruling actually chose over both gate shapes is a third one, not in the
   Alternatives table: a branch-scoped check inside ship Phase 2 (#8470). Known
   unmodelled designed call: ship Phase 1.5 can run `review` inside ship, which
@@ -403,3 +412,7 @@ the base, which closes the rename escape.
   committed key; a free-text `timestamp` is dropped before it can become `last_hit`.
 - `plugins/soleur/test/components.test.ts` — every `references/*.md` is named
   from its skill (the extraction cannot orphan its target).
+- `plugins/soleur/test/ship-learning-probe.test.ts` — since #8470, executes the
+  one fenced block in ship's `## Phase 2: Capture Learnings` against eleven
+  fixture repositories and pins its `BRANCH_LEARNING=present|absent` verdict
+  (RED on the pre-fix repo-wide `--since="1 week ago"` probe).
