@@ -23,7 +23,7 @@ git fetch -q origin main && files="$(git diff --name-only origin/main...HEAD)" &
   && echo "hatch-eligible" || echo "NOT eligible — stay on the normal path"
 ```
 
-It fails closed: a failed fetch or diff, or an empty diff, prints `NOT eligible`. On a `NOT eligible` diff, an admin-merge is a merge-authority decision that only the operator makes, never the agent; stay on the normal path meanwhile (#8474 ran about eight syncs this way; see `knowledge-base/project/learnings/2026-06-02-auto-merge-livelock-fast-moving-main.md` §Recurrence).
+It fails closed: a failed fetch or diff, or an empty diff, prints `NOT eligible`. On a `NOT eligible` diff, an admin-merge is a merge-authority decision that only the operator makes, never the agent, and if the operator authorizes one, steps 2 to 5 still apply verbatim; stay on the normal path meanwhile (#8474 ran about eight syncs this way; see `knowledge-base/project/learnings/2026-06-02-auto-merge-livelock-fast-moving-main.md` §Recurrence).
 
 The observation point is the poll's `[ship.phase7.hatch_check] 2 BEHIND syncs pushed` line, printed once, when the second sync is actually pushed — an attempt that failed at fetch or was a no-op (`kind=noop`) does not count, so `auto-sync attempt 2/6` alone is not the trigger.
 

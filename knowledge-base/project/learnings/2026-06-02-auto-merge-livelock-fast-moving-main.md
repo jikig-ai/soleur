@@ -70,13 +70,16 @@ cycle. Updating the branch only helps if the branch can stay current long enough
 otherwise it just burns CI and resets the clock. Detect the loop (≥2 `BEHIND` cycles without
 convergence) and switch to settle-then-admin-merge rather than nudging forever.
 
+This applies only to a hatch-eligible diff (condition (b) above). For a diff that carries code, the
+admin-merge is the operator's call, not the agent's; see §Recurrence: PR #8474.
+
 ## Recurrence: PR #8474, 2026-09-21
 
 **Scale.** #8474 was marked ready at 14:02Z and merged at 23:48:20Z (`97633e8e`). Ten `origin/main`
 merges went into the branch after review (15:14Z to 23:17Z), about eight of them forced by BEHIND or
-DIRTY during the merge poll. A CI run took 60 to 70 minutes under a saturated runner queue (#8450
-measures the ceiling: one PR's 67 queued jobs against the org's 20-job budget). The 2026-06-02 case
-above had an ~8-minute cycle.
+DIRTY during the merge poll. Measured from the check-run API, the two CI runs that finished took 36
+and 31 minutes, and `main` usually moved before a run could finish; cancelled runs lingered up to 99 minutes
+under a saturated runner queue (#8450). The 2026-06-02 case above had an ~8-minute cycle.
 
 **What differed from 2026-06-02.** The diff carried code, so the settle-then-admin-merge hatch was
 not eligible (`plugins/soleur/skills/ship/references/settle-then-admin-merge.md`), and an admin-merge
@@ -91,10 +94,7 @@ fired 5 s later.
 (`workflow-issues/2026-09-22-the-test-my-merge-broke-merged-cleanly-so-it-was-never-in-my-conflict-list.md`).
 Reading rule: a cancelled shard is unobserved, neither passed nor failed. The aggregate `test` context
 runs `if: always()` and reads `failure` on such a head whatever the code does, so read the shard
-conclusions, not the aggregate. This is consistent with
-`2026-08-02-the-retraction-pr-was-itself-over-claiming-and-its-counsel-signoff-certified-a-diff-that-no-longer-existed.md`
-("a cancelled CI job is not automatically suspicious"): a cancel is neither evidence of a defect nor
-evidence of its absence.
+conclusions, not the aggregate.
 
 **The separate admin-merge.** Earlier the same day, #8458 was admin-merged while the
 ruleset-required `test` context did not yet exist. That is recorded in

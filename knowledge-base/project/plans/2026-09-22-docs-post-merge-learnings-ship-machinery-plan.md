@@ -160,7 +160,7 @@ bounded `jq` extraction to a scratch file, never dumped.
 
 ### Deliverable 1 — new learning (brief items 1 and 2)
 
-**Path:** `knowledge-base/project/learnings/workflow-issues/<write-date>-the-test-my-merge-broke-merged-cleanly-so-it-was-never-in-my-conflict-list.md`
+**Path:** `knowledge-base/project/learnings/workflow-issues/2026-09-22-the-test-my-merge-broke-merged-cleanly-so-it-was-never-in-my-conflict-list.md`
 (the date prefix is the day the file is written, not this plan's date; the slug is fixed).
 
 Frontmatter follows the sibling `workflow-issues/` shape (`title`, `date`, `category`, `tags`,
@@ -271,7 +271,7 @@ b. `plugins/soleur/skills/ship/references/settle-then-admin-merge.md`, one sente
 
 ## Files to Create
 
-- `knowledge-base/project/learnings/workflow-issues/<write-date>-the-test-my-merge-broke-merged-cleanly-so-it-was-never-in-my-conflict-list.md`
+- `knowledge-base/project/learnings/workflow-issues/2026-09-22-the-test-my-merge-broke-merged-cleanly-so-it-was-never-in-my-conflict-list.md`
 
 ## Open Code-Review Overlap
 
@@ -410,4 +410,21 @@ Files-to-Edit). No P0. Applied as Mechanical:
 - Issue #8500 (open): shared admin-merge-ready script. Issue #8502 (open): decision-challenge digest.
 - Post-mortem: `knowledge-base/engineering/operations/post-mortems/admin-merge-required-check-absent-postmortem.md`.
 - Issues #4856, #5840 (merge queue), #8450 (runner concurrency ceiling).
-- Source transcript: `/home/jean/.claude/projects/-home-jean/e958a93c-1fef-450c-bc95-c77d578459b7.jsonl` (read bounded with `jq`).
+- Source: the #8474 session transcript (local, not committed; read bounded with `jq`).
+
+## Review Revisions (post-implementation)
+
+A 5-agent review (no P1) changed four things relative to the deliverables above:
+
+- The CI-time figure "60 to 70 minutes" was inherited from the session summary and was wrong.
+  Measured from the check-run API, the two runs that finished took 36 and 31 minutes. The addendum
+  now states the measured values.
+- The ship bullet no longer carries its own `git grep` recipe; it points at the existing
+  `work/SKILL.md` consumer derivation, and the same one-line pointer is added to ship Phase 6.5
+  (the numbered hand-resolution steps) and `merge-pr/SKILL.md` §3.4. AC5 and AC7 are superseded:
+  `ship/SKILL.md` gains 3 lines, and `merge-pr/SKILL.md` is a fifth changed file.
+- The livelock Corollary gains a scope line (hatch-eligible diffs only), and the admin-merge
+  sentence says steps 2 to 5 still apply when the operator authorizes one.
+- The learning's "two of the six were run" now accounts for the `plugin-component-test` hook, which
+  most likely ran the three `.ts` consumers; the one suite nothing ran was the one that broke.
+- AC8: `knowledge-base/project/` is markdownlint-ignored, so only the plugin files are linted.
