@@ -161,6 +161,13 @@ Re-derive rather than trusting the number:
 grep -c '^resource "sentry_cron_monitor"' apps/web-platform/infra/sentry/*.tf
 ```
 
+- Adding a monitor is a four-ledger update, not one edit — the tf resource,
+  the heartbeat (`monitor-slug:` or `SENTRY_MONITOR_SLUG`), the
+  `NON_INNGEST_MONITORS`/`SENTRY_MONITOR_SLUG` registration in
+  `function-registry-count.test.ts`, and the count prose here and in
+  `sentry-monitors-audit.sh`. Miss a ledger and a different gate goes red
+  post-merge (#8586).
+
 ## Audit
 
 The audit answers "is the alert routing healthy?", and nothing in this

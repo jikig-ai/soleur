@@ -33,3 +33,6 @@ None. Note: #8587 is CLOSED (manually, no PR) despite the arguments describing i
 - Pre-existing scope-outs filed: #8593 (gate window), #8594 (review-reminder.yml live duplicate-filing, 32>30), #8595 (NON_INNGEST_MONITORS stale-entry guard). Wontfix: baseline header stats, comment-or-create dedupe, `|| true` sweep semantics, stale T25 comment, CRON_MONITOR_MONTHLY_USD.
 - Pr-introduced P3s fixed inline: `-L 200` cap-hit `::notice` + bound-justification comment (workflow close sweep), addendum date extension (sentry-monitors-audit.sh). `-L 1` EXISTENCE_DRILL trade acknowledged — advisory, retained per plan/#8587 directive.
 - Post-fix verification: components.test.ts 1377 pass, run-body-syntax 901 clean, errexit-capture 81 workflows clean, actions-queue-health.test.sh 25/25, errexit-capture suite 38/38.
+
+## QA Phase
+- Status: skipped per qa/SKILL.md Step 1 — plan `## Test Scenarios` is Given/When/Then prose with no `Browser:`/`API verify:`/`Cleanup:` steps (manual/integration-level QA contract; covered by the unit suites). Step 2.6 structural-UI gate N/A (no dashboard/layout paths in diff).
