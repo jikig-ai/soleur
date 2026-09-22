@@ -6,6 +6,10 @@ argument-hint: "[what you want to do]"
 # plugin commands AND plugin skills into one slash menu, so without this the name
 # renders twice. `user-invocable: false` leaves the menu row to the command while
 # keeping this skill model-invocable — Skill(soleur:go) must keep working.
+# Grok 1.0.40 validates plugin commands/ but does not register them as slash
+# commands. Do not flip this flag to expose the go row there — that re-duplicates
+# Claude Code. The Grok slash row is `.grok/commands/go.md` (symlink onto
+# commands/go.md).
 user-invocable: false
 ---
 
