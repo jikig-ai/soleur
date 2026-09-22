@@ -17,8 +17,8 @@ Branch: `feat-one-shot-sentry-fidelity-p3-cleanups` · Draft PR: #8576 · Does N
 - [ ] 1.5 Add `_gained_live()` helper: capture with `{"type":"seer_activity_trigger","comparison":["pr_ready_for_review"]}` appended to the named rule's `triggers.conditions`; assert the edit landed (`jq -e`). (`cq-test-fixtures-synthesized-only`)
 - [ ] 1.6 Row **G4-25**: one managed rule gained → rc 1, `MANAGED RULE GAINED EXCLUDED TRIGGER: 'byok-art-33-breach'`, NOT `DELETED or RENAMED: 'byok-art-33-breach'`, NOT `UNMANAGED-FROZEN: 'byok-art-33-breach'`, count line contains `(${DEFAULTS_N} other excluded-type`. (AC1)
 - [ ] 1.7 Row **G4-26**: two managed rules gained → both names reported. (AC2, matrix row 3)
-- [ ] 1.8 Row **G4-27**: healthy managed rule + a same-name excluded-type COPY (different id) → `UNMANAGED-FROZEN`, never GAINED. (AC3, matrix row 4)
-- [ ] 1.9 Row **G4-28**: reference with `byok-art-33-breach` removed + live gained → `UNMANAGED-FROZEN: 'byok-art-33-breach'`. (AC4, matrix row 5)
+- [ ] 1.8 Row **G4-27**: healthy managed rule + a same-name excluded-type COPY (different id) → assert the anchor `UNMANAGED-FROZEN: 'byok-art-33-breach'` and the ABSENCE of the GAINED marker. Do NOT assert the message tail: the `$KNOWN` narrowing moves this case from the "under a DIFFERENT id" arm to the generic arm (plan E3). (AC3, matrix row 4)
+- [ ] 1.9 Row **G4-28**: reference with `byok-art-33-breach` removed + live gained → rc 1 and `UNMANAGED-FROZEN: 'byok-art-33-breach'`. Baseline today is rc 0 / PASS (plan E2), so this row is RED before task 2.3. (AC4, matrix row 5)
 - [ ] 1.10 Register the 4 rows in the runner list; `EXPECTED_TESTS=63`.
 - [ ] 1.11 Run the suite: G4-25/26/28 RED, G4-27 green, all 59 pre-existing rows green. (AC12)
 

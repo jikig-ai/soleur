@@ -15,6 +15,31 @@ detail_level: MORE
 
 # fix(sentry): live-fidelity probe P3 cleanups
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-22 · **Sections enhanced:** Research Reconciliation, Proposed Solution (a),
+Observability, Guard Contract, Acceptance Criteria, plus a new "Deepen-Pass Evidence" section.
+
+1. **A second defect found and folded in.** The census does not merely miss the gained rule; it
+   *accepts* it. `$KNOWN` is built from every capture entry, so a managed rule that leaves scope is
+   counted as a "registered Sentry default" and a rule dropped from Terraform while live passes
+   silently with rc=0 (evidence E1/E2). The `$KNOWN` narrowing and row G4-28 are the response.
+2. **The remedy wording was corrected against the provider's real behaviour.** "An apply would
+   silently strip it" is only one of two outcomes; the create tripwire refuses the write once a
+   refresh surfaces the legacy trigger, so the finding says "an apply is NOT a repair" and names both.
+3. **AC3's assertion was narrowed to an anchor**, because the `$KNOWN` narrowing legitimately changes
+   the tail of that message (E3).
+4. **Every count, shape and citation in the plan is now measured** (E4-E6, E9), and the two
+   consumers of the probe's output were checked for class parsing (E7).
+
+### New considerations discovered
+
+- The suite's 28 is a fixture constant; production declares 30 native rules plus 2 frozen. A reader
+  who conflates them would mis-size the derivations in (b).
+- The marker must avoid the substrings `DELETED`, `UNMANAGED`, `FROZEN`, because existing rows grep
+  those negatively.
+- No sibling precedent exists for this finding class (E8), so the chain ORDER is the review surface.
+
 Four leftovers from the 2026-09 Sentry alert-API migration review, shipped as one small PR (draft #8576).
 **This PR does not close #7985.** #7985 is the parent for the frozen rules and stays BLOCKED until the
 provider release. This PR does not touch the two frozen rules (`auth_per_user_loop` 566671,
@@ -227,8 +252,15 @@ logs:
   retention: "GitHub Actions default log retention (90 days)"
 discoverability_test:
   command: "grep -o -m1 'MANAGED RULE GAINED EXCLUDED TRIGGER' scripts/sentry-alert-live-fidelity.sh"
-  expected_output: "MANAGED RULE GAINED EXCLUDED TRIGGER"
+  expected_output: "MANAGED RULE GAINED EXCLUDED TRIGGER" or "GAINED"
 ```
+
+The probe itself needs a Sentry token, so the local, credential-free signal is that the classifier
+is present in the shipped script. `grep` is on preflight Check 10's `PROBE_VERB_ALLOWLIST`
+(`plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh:64`), and the command returns in
+milliseconds, well inside the 15-second cap. The end-to-end behaviour is proved by rows G4-25
+through G4-28 in `tests/scripts/test-sentry-alert-live-fidelity.sh`, which run without credentials
+in fixture mode.
 
 ## Guard Contract
 
@@ -279,8 +311,8 @@ review of the projection file, which this PR does not touch beyond a comment.
 
 - [ ] **AC1 (a).** With the capture plus `{"type":"seer_activity_trigger","comparison":["pr_ready_for_review"]}` appended to `byok-art-33-breach`'s triggers, the probe exits 1 and prints `MANAGED RULE GAINED EXCLUDED TRIGGER: 'byok-art-33-breach'`; it prints neither `DELETED or RENAMED: 'byok-art-33-breach'` nor `UNMANAGED-FROZEN: 'byok-art-33-breach'`, and the count line reads `(${DEFAULTS_N} other excluded-type` (derived, = 1 today). Location: `scripts/sentry-alert-live-fidelity.sh` per-rule loop and frozen-pin jq. Row G4-25.
 - [ ] **AC2 (a).** Two managed rules gained are both reported (G4-26).
-- [ ] **AC3 (a).** A same-name excluded-type copy of an intact managed rule is still `UNMANAGED-FROZEN` (G4-27).
-- [ ] **AC4 (a).** A reference missing `byok-art-33-breach`, plus live gained, gives `UNMANAGED-FROZEN: 'byok-art-33-breach'` (G4-28; exercises the `$KNOWN` narrowing).
+- [ ] **AC3 (a).** A same-name excluded-type copy of an intact managed rule is still `UNMANAGED-FROZEN` (G4-27). Assert on the anchor `UNMANAGED-FROZEN: 'byok-art-33-breach'` plus the absence of the GAINED marker, NOT on the rest of that line: the `$KNOWN` narrowing moves this case from the "carries the name of a registered Sentry default under a DIFFERENT id" arm to the generic arm, so the tail of the message legitimately changes (measured below).
+- [ ] **AC4 (a).** A reference missing `byok-art-33-breach`, plus live gained, gives `UNMANAGED-FROZEN: 'byok-art-33-breach'` and rc=1 (G4-28; exercises the `$KNOWN` narrowing). Today this fixture PASSes with rc=0, having compared nothing for that workflow — measured below.
 - [ ] **AC5 (a, P2).** Every pre-existing row passes unchanged, in particular F1, F12, G4-6, G4-14, G4-15, and G4-20 through G4-24. `git diff origin/main -- tests/scripts/lib/sentry-alert-projection.jq` shows only added `#` comment lines: the `def excluded:` line and the `def in_scope` / `def tf_in_scope` bodies are byte-identical.
 - [ ] **AC6 (a).** The drift workflow has a bullet naming `MANAGED RULE GAINED EXCLUDED TRIGGER`, and the probe's final summary line names the class.
 - [ ] **AC7 (b).** `grep -nE 'length == 31|comparing 28' tests/scripts/test-sentry-alert-live-fidelity.sh` returns nothing. The derivation floor (`N == CAPTURE_N - EXCL_CAPTURE_N`) is present and exits 1 on mismatch.
@@ -289,6 +321,82 @@ review of the projection file, which this PR does not touch beyond a comment.
 - [ ] **AC10.** `bash tests/scripts/test-sentry-alert-live-fidelity.sh` gives `63 passed, 0 failed`, with `EXPECTED_TESTS=63`.
 - [ ] **AC11.** No `.tf` file changes (`git diff --name-only origin/main | grep -c '\.tf$'` gives 0), so `plan_pr` has no resource changes.
 - [ ] **AC12 (TDD order).** G4-25 through G4-28 are written first and observed RED against the unmodified probe: G4-25 red on the marker, G4-26 red, G4-27 already green (a regression guard), G4-28 red. Then the probe change turns them green.
+
+## Deepen-Pass Evidence (2026-09-22)
+
+Every claim below was produced by running the command against this branch. Nothing here is cited from
+memory. All probe runs are fixture-mode (`SENTRY_FIXTURE_RULES`), with the reference derived from the
+committed capture through the live and reference sides of the module.
+
+**E1 — the misclassification, reproduced.** Capture + `seer_activity_trigger` on `byok-art-33-breach`:
+
+```text
+sentry_alert live fidelity: comparing 28 declared rule(s) against 27 live in-scope rule(s)
+  DELETED or RENAMED: 'byok-art-33-breach' … An apply can recreate a deleted rule …
+sentry_alert live fidelity: frozen-rule pin: compared 2 of 2 … (2 other excluded-type live workflow(s)
+are registered Sentry defaults, matched by id and name, content not pinned)
+ERROR: sentry_alert live fidelity FAILED — 1 divergence(s)
+```
+
+Two defects in one run: the wrong remedy, and a census that counts the managed rule as a second
+"registered Sentry default" (the true number is 1).
+
+**E2 — the `$KNOWN`-whole-capture defect, isolated.** Same live fixture, with `byok-art-33-breach`
+deleted from the reference (the shape of a rule removed from Terraform while still live):
+
+```text
+sentry_alert live fidelity: comparing 27 declared rule(s) against 27 live in-scope rule(s)
+sentry_alert live fidelity: frozen-rule pin: … (2 other excluded-type live workflow(s) are registered …)
+sentry_alert live fidelity: PASS (FIXTURE — not live) (all 27 in-scope rules match …)   rc=0
+```
+
+A live, excluded-type, unowned workflow produces a clean PASS today, because `$KNOWN` is built from
+every capture entry rather than from the capture's excluded-type, non-frozen entries. This is what
+row G4-28 pins and what "Proposed Solution" step 3 fixes.
+
+**E3 — the same-name-copy case (G4-27), baseline.** Capture plus a `byok-art-33-breach` copy under id
+`999900` carrying only `seer_activity_trigger`: today `UNMANAGED-FROZEN: 'byok-art-33-breach' (id
+"999900") carries the name of a registered Sentry default under a DIFFERENT id …`, rc=1, and the count
+line reads `1 other excluded-type`. After the narrowing the same case falls to the generic
+`UNMANAGED-FROZEN` arm, so AC3 asserts the anchor only.
+
+**E4 — the counts, derived.** `jq length` on the capture is 31; the derived reference holds 28;
+capture workflows carrying an excluded type are 3 (566201 high-priority default, 566671
+`auth-per-user-loop`, 669246 `sandbox-startup-failure`). `31 − 3 = 28` confirms the floor in
+"(b) Derived counts". The production reference (`alert-reference.json`) holds 30, and 32
+`resource "sentry_alert"` blocks exist in `issue-alerts.tf` (30 native + 2 frozen), so the suite's
+28 is a fixture constant, exactly as the suite header states.
+
+**E5 — `comparison` shapes, measured.** In the capture, trigger `comparison` is `boolean` for
+`first_seen_event`, `reappeared_event`, `regression_event`, `new_high_priority_issue`,
+`existing_high_priority_issue`, and `object` for `event_frequency_count` and
+`event_unique_user_frequency_count`. Action-filter `comparison` is `object` for `tagged_event` only.
+The array shape comes from Seer (`["pr_ready_for_review"]`), which the suite's `_seer_live` helper
+already builds. So the union is `boolean | unknown[] | object`, and the two narrowing sites are the
+`tagged_event` map and the `event_unique_user_frequency_count` threshold read.
+
+**E6 — citations verified live.** `#7985` OPEN, `#8050` CLOSED, `#8267` CLOSED, `#8451` CLOSED,
+`#8545` MERGED, `#8576` OPEN (`gh issue view` / `gh pr view`). Rule ids `hr-type-widening-cross-consumer-grep`,
+`cq-test-fixtures-synthesized-only`, `cq-assert-anchor-not-bare-token`, `hr-observability-as-plan-quality-gate`
+and `hr-weigh-every-decision-against-target-user-impact` are all active in `AGENTS.md`. Both cited
+learning files exist under `knowledge-base/project/learnings/`.
+
+**E7 — no consumer parses finding classes.** `scheduled-sentry-alert-drift.yml` branches only on
+`grep -q 'live fidelity FAILED'` (its `verdict` step); the "How to read them" bullets are prose for
+the issue body. `tests/scripts/test-sentry-alert-drift-workflow.sh` W7 pins the same `FAILED` literal.
+A new marker therefore cannot change the filer's control flow, only its guidance text.
+
+**E8 — precedent diff.** No sibling precedent exists for "a managed resource left the comparison scope
+because live gained an unmanageable attribute": the pattern is novel in this repo. The closest
+neighbours are the `UNMANAGED-FROZEN` chain (same jq program) and the census/registry identity check
+(#8545), and the new arm is written in their shape: one `elif` in the same chain, the same
+`FINDING <CLASS>: '<name>' (id <id>) …` line format, and the same `_finding` emitter. Reviewers should
+scrutinize the ordering of the chain, which is where the behaviour is decided.
+
+**E9 — baselines.** `bash tests/scripts/test-sentry-alert-live-fidelity.sh` → `59 passed, 0 failed`
+(2m40s wall). `vitest run test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` → 25 passed
+(0.8s). `apps/web-platform/tsconfig.json` is `strict` and includes `**/*.ts`, so the widened type is
+type-checked by `web-platform-typecheck`.
 
 ## Test Scenarios
 
