@@ -133,7 +133,9 @@ echo ""
 # "...would auto-close" / "#8285, so..." closed #8285 on the squash-merge of #8514.
 # A line-at-a-time grep cannot see it.
 echo "TS10: cross-line — 'auto-close' at end of line, '#8285' at start of next, matches"
-TMP_XL=$(mktemp)
+SCRATCH=$(mktemp -d)
+trap 'rm -rf "$SCRATCH"' EXIT
+TMP_XL="$SCRATCH/cross-line.txt"
 printf 'Corrects Guard 3: a probe that can exit 0 would auto-close\n#8285, so the probe is notify-only.\n' > "$TMP_XL"
 OUT=$(run_scan "$TMP_XL")
 assert_eq "1" "$(count_lines "$OUT")" "cross-line keyword + #N produces exactly 1 match"
@@ -142,15 +144,13 @@ assert_contains "$OUT" "#8285" "cross-line match text carries the issue referenc
 printf 'Fixes\n   GH-42 in the parser.\n' > "$TMP_XL"
 OUT=$(run_scan "$TMP_XL")
 assert_eq "1" "$(count_lines "$OUT")" "cross-line GH-N form with leading indent matches"
-rm -f "$TMP_XL"
 echo ""
 
 # --- TS11: cross-line negative — keyword ends a line, the next line is not a reference ---
 echo "TS11: cross-line negative — 'close' at end of line followed by prose does not match"
-TMP_XN=$(mktemp)
+TMP_XN="$SCRATCH/cross-line-negative.txt"
 printf 'the sweeper will close\nthe tracker when the probe passes, see #8285 above.\nprefix-disclose\n#12 is a heading.\n' > "$TMP_XN"
 OUT=$(run_scan "$TMP_XN")
-rm -f "$TMP_XN"
 assert_eq "0" "$(count_lines "$OUT")" "keyword at line end followed by non-reference line produces no match"
 echo ""
 
