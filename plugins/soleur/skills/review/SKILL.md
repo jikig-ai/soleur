@@ -1595,6 +1595,7 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
   back ITS start-of-run state and silently reverts your concurrent edits. **Why:** #7810 — the same
   two fixes were re-applied three times before the cause was found, and one reviewer's restores
   overwrote the other reviewer's file. Round 3 used isolated worktrees and the problem vanished.
+- **`isolation: "worktree"` needs the SESSION cwd to be a git repo — when it is not, pre-create the worktree.** Spawned from a non-repo cwd (e.g. `$HOME`), the Agent tool refuses: "Cannot create agent worktree: not in a git repository". Run `git -C <repo> worktree add --detach /var/tmp/<name> <sha>`, name that path in the prompt as the agent's ONLY writable tree, and remove it afterwards. The same shape works for a fix batch: one detached worktree per agent, each returning `git diff > /var/tmp/<name>.patch`, applied by the lead from one known SHA. **Why:** #8474. See `knowledge-base/project/learnings/2026-09-21-every-gate-this-pr-added-failed-open-on-the-input-it-could-not-measure.md`.
 - **When a finding lands in a heuristic that has produced a fresh bypass in two consecutive rounds,
   DELETE the heuristic rather than patch it** — deletion is a legitimate response to a review
   finding. **Why:** #7810 — an inline-`case` guard and a guard-window widening absorbed 11 of 28 P1s

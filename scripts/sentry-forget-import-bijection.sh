@@ -142,5 +142,5 @@ if [[ -n "$only_import" ]]; then
   echo "::error::IMPORTED BUT NOT FORGOTTEN — these addresses are adopted while the old address stays in state, so the same live rule is managed twice:" >&2
   sed 's/^/::error::  sentry_alert./' <<<"$only_import" >&2
 fi
-echo "::error::Restore the missing removed{}/import{} block. Each of the 27 rules needs BOTH: the removed{} drops the sentry_issue_alert address out of state without touching Sentry, and the import{} adopts the same live rule at its sentry_alert address. One without the other either orphans a live paging rule or plans a create that collides with it." >&2
+echo "::error::Restore the missing removed{}/import{} block. Each adopted rule needs BOTH: the removed{} drops the sentry_issue_alert address out of state without touching Sentry, and the import{} adopts the same live rule at its sentry_alert address. One without the other either orphans a live paging rule or plans a create that collides with it." >&2
 exit 1

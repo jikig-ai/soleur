@@ -130,7 +130,7 @@
 3	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-11	apps/web-platform/infra/ci-deploy.sh
+13	apps/web-platform/infra/ci-deploy.sh
 3	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
