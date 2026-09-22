@@ -233,7 +233,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows
 - Complex commands should follow a four-phase pattern: Setup, Analyze, Review, Write
-- Scheduled workflows using claude-code-action should defer CI gating to GitHub's built-in required checks (`gh pr checks --required`) rather than reimplementing check status queries in jq -- GitHub already maintains the authoritative definition of "required checks"
+- Scheduled workflows using claude-code-action should not reimplement `statusCheckRollup` filtering in jq, and must not treat `gh pr checks --required` as a sufficient CI gate either: it lists only checks that already exist, so a required check not yet created is invisible to it (#8458). A normal merge is gated server-side by the ruleset; any `--admin` merge must first get exit 0 from `plugins/soleur/scripts/admin-merge-ready.sh` (#8500)
 - Scheduled workflows that select one item per run should use label-based deduplication (apply a failure label on error, remove to re-queue) to prevent retrying without human intervention
 - New scheduled workflows should start with `workflow_dispatch` trigger only, adding cron after the pipeline is validated end-to-end -- premature cron on unverified pipelines wastes Actions minutes and generates noise
 - For user approval flows, present items one at a time with Accept, Skip, and Edit options
