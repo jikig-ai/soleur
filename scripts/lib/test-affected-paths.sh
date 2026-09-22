@@ -1042,3 +1042,13 @@ AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-dispatch-web-redeploy.sh"
 )
+
+# plugins/soleur/test/admin-merge-ready-wiring.test.sh — corpus walk is SCOPED
+# to plugins/soleur/ (any file there gaining `gh pr merge --admin` must carry
+# the ready-gate), plus its SUT script and the skills that must reference it.
+AFFECTED_PLUGINS_SOLEUR_TEST_ADMIN_MERGE_READY_WIRING_TEST_SH_PATHS=(
+  "plugins/soleur/"
+  "plugins/soleur/scripts/admin-merge-ready.sh"
+  "plugins/soleur/test/admin-merge-ready-wiring.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
