@@ -40,7 +40,7 @@
 # An import (`["no-op"]` + `importing`) is a read and is not refused.
 #
 # WHICH STATES IT READS, and why each (review of #8451):
-#   * `after`  — the write itself. ANY legacy entry, not only the three types the
+#   * `after`  — the write itself. ANY legacy entry, not only the types the
 #     fidelity projection excludes: the provider re-sends EVERY legacy entry
 #     with `comparison: true`, so a type outside that set loses its parameters
 #     the same way.

@@ -262,10 +262,13 @@ else
 fi
 
 # Anti-vacuity floor: deleting every assertion invocation must not exit 0
-# ("0 passed, 0 failed" is not a green suite).
+# ("0 passed, 0 failed" is not a green suite). Reports directly and exits
+# (ADR-193): a floor routed through fail()/FAIL++ is disarmed by the same
+# neutered machinery it exists to catch.
 total=$((PASS + FAIL))
 if [ "$total" -lt 40 ]; then
-  FAIL=$((FAIL + 1)); echo "FAIL assertion floor: $total assertions ran, want >=40"
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=40" >&2
+  exit 1
 fi
 
 echo

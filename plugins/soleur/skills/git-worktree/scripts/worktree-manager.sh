@@ -2720,7 +2720,8 @@ cleanup_orphan_worktree_dirs() {
   return 0
 }
 
-# Clean up worktrees for merged branches (detects [gone] and merged-to-main)
+# Clean up worktrees for merged branches (candidates: [gone], merged-to-main, gh-merged;
+# only ancestry or a commit-pinned merged PR licenses a reap — see SOLEUR-GUARD-MERGEEVIDENCE)
 cleanup_merged_worktrees() {
   # Serialize concurrent cleanup-merged invocations across sibling sessions.
   # 5s is the operator-perception threshold; longer waits in headless mode
@@ -2780,10 +2781,12 @@ cleanup_merged_worktrees() {
   fi
   release_lock fetch-prune
 
-  # Find stale branches using three complementary detection methods:
-  # 1. [gone] tracking: remote branch was deleted (e.g., GitHub auto-delete after PR merge)
-  # 2. Merged to main: branch is fully merged but remote still exists (e.g., auto-delete disabled)
-  # 3. GH-merged: squash-merged branches in the GitHub auto-delete propagation window
+  # Candidates come from three sources; only 2 and 3 are MERGE EVIDENCE (see
+  # SOLEUR-GUARD-MERGEEVIDENCE below):
+  # 1. [gone] tracking: remote branch was deleted. Nominates a candidate only.
+  # 2. Merged to main: the branch is an ancestor of main (--merged main).
+  # 3. GH-merged: the worktree branch's tip is contained in the head of a merged same-repo
+  #    PR — the only evidence for a squash merge, before and after the remote auto-delete.
   local gone_branches
   gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1 || true)
 
@@ -2795,21 +2798,49 @@ cleanup_merged_worktrees() {
     | grep -v -E '^(main|master)$' \
     || true)
 
-  # Squash-merged branches produce a new commit on main with a different SHA, so
-  # they appear in neither [gone] nor --merged main during the auto-delete propagation
-  # window. Query GitHub directly as the authoritative source of truth.
+  # Squash-merged branches produce a new commit on main with a different SHA, so they
+  # are never in --merged main, and once the remote is auto-deleted they are [gone] —
+  # which is NOT merge evidence. GitHub is the only evidence for that cohort, so every
+  # worktree branch not already proven merged by ancestry is asked about (#8490).
+  #
+  # The evidence is pinned to the COMMIT, not the branch NAME: `--head <name>` alone
+  # matches any merged PR that ever used the name (a reused name, a fork's `patch-1`),
+  # and would license `git branch -D` over local commits made after the merge — which a
+  # `[gone]` branch cannot push anywhere. A branch counts only when its local tip is
+  # contained in the head of a merged SAME-REPO PR. A tip that moved past the merged head,
+  # or whose merged head is not present locally, fails closed (kept).
   local gh_merged_branches=""
-  local _wt_branch
+  local _wt_branch _tip _heads _h _gh_rc _pinned
   while IFS= read -r _line; do
     if [[ "$_line" == "branch refs/heads/"* ]]; then
       _wt_branch="${_line#branch refs/heads/}"
       [[ "$_wt_branch" == "main" || "$_wt_branch" == "master" ]] && continue
       # Same pipefail/SIGPIPE hazard as _porcelain_has_line: `grep -q` closing
       # the pipe early makes printf's next write fail. Match in-shell instead.
-      if [[ $'\n'"$gone_branches"$'\n'"$merged_branches"$'\n' == *$'\n'"$_wt_branch"$'\n'* ]]; then continue; fi
-      local _merged_count
-      _merged_count=$(gh pr list --head "$_wt_branch" --state merged --limit 1 --json number --jq 'length' 2>/dev/null || echo "0")
-      [[ "$_merged_count" == "1" ]] && gh_merged_branches+="${_wt_branch}"$'\n'
+      # Skip only branches that ALREADY carry ancestry evidence (`merged_branches`).
+      if [[ $'\n'"$merged_branches"$'\n' == *$'\n'"$_wt_branch"$'\n'* ]]; then continue; fi
+      _tip=$(git rev-parse --verify -q "refs/heads/${_wt_branch}^{commit}" 2>/dev/null) || continue
+      _gh_rc=0
+      _heads=$(gh pr list --head "$_wt_branch" --state merged --limit 20 \
+        --json headRefOid,isCrossRepository \
+        --jq '.[] | select(.isCrossRepository == false) | .headRefOid' 2>/dev/null) || _gh_rc=$?
+      if [[ "$_gh_rc" -ne 0 ]]; then
+        # A failed query is NOT "not merged": say so on stdout (no tty under `claude --bg`),
+        # so "reaped nothing because gh is down" is distinguishable from "nothing merged".
+        echo "SOLEUR_CLEANUP_GH_QUERY_FAILED branch=$(_sanitize_marker_field "$_wt_branch") rc=$_gh_rc"
+        continue
+      fi
+      [[ -z "$_heads" ]] && continue
+      _pinned=no
+      while IFS= read -r _h; do
+        [[ "$_h" =~ ^[0-9a-f]{40}$ ]] || continue
+        if git merge-base --is-ancestor "$_tip" "$_h" 2>/dev/null; then _pinned=yes; break; fi
+      done <<< "$_heads"
+      if [[ "$_pinned" == yes ]]; then
+        gh_merged_branches+="${_wt_branch}"$'\n'
+      else
+        echo "(skip) $_wt_branch - a merged PR uses this name but the local tip ${_tip:0:12} is not in any merged head; keeping"
+      fi
     fi
   done < <(git worktree list --porcelain 2>/dev/null)
 
@@ -2894,7 +2925,9 @@ cleanup_merged_worktrees() {
     safe_branch=$(_safe_worktree_name "$branch")
     # Skip if active worktree
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
+      # Unconditional, like the other hold lines: `verbose` is a tty test, so a gated line is
+      # silent under `claude --bg` and a held branch reads as an unconsidered one.
+      echo "(skip) $branch - currently active; keeping"
       continue
     fi
 
@@ -2981,7 +3014,10 @@ cleanup_merged_worktrees() {
       # Worktree-less arm (#8400). NOT a symmetric analogue of the arm above, and the
       # difference matters: that one measures OPERATOR ACTIVITY (a commit made in the
       # worktree the operator is sitting in), this one measures COMMIT RECENCY OF A MERGED
-      # REF. For a squash-merged branch — the cohort `gh_merged_branches` exists for — the
+      # REF. (Note: `gh_merged_branches` is built only from branches that still have a
+      # worktree, so today this arm sees the ancestry cohort; the squash-merged reasoning
+      # below applies if the gh query is ever widened to worktree-less branches.)
+      # For a squash-merged branch — the cohort `gh_merged_branches` exists for — the
       # branch tip IS the last feature commit, frequently minutes old at merge time, so this
       # arm holds essentially every freshly squash-merged branch for ten minutes on the first
       # pass and reaps it on the next. That is cheap and fails in the safe direction. On the
@@ -3111,18 +3147,9 @@ cleanup_merged_worktrees() {
 
     # Delete local branch.
     #
-    # `git branch -D` is a FORCE delete, and `all_stale_branches` is not only merged
-    # branches: a `[gone]` upstream puts an UNMERGED branch in this list too (its remote was
-    # deleted, which is not the same claim as "its commits are on main"). Phase 2 of #8401
-    # newly exposes precisely that cohort — the Devin CLI plain-clone session, where nothing
-    # mints a lease at all — so the ancestry check is folded in here rather than deferred:
-    # the residual it closes is *merged-or-[gone], no lease, no commit in ten minutes* →
-    # remote delete (which closes the PR) then force-delete, the single worst outcome in
-    # this function.
-    #
-    # `--is-ancestor` exits 0 when $branch is reachable from main, 1 when it is not, and
-    # non-zero-other on a bad ref; only the 0 case licenses the force delete, so an
-    # unmeasurable answer fails closed with the rest.
+    # `git branch -D` is a FORCE delete. It is reached only after SOLEUR-GUARD-MERGEEVIDENCE
+    # (above) established positive merge evidence — ancestry, or a merged same-repo PR whose
+    # head contains this tip — so a `[gone]`-only branch never gets here.
     # Capture the tip BEFORE deleting it. `git branch -D` prints `Deleted branch X (was <sha>)`
     # on stdout and the old recovery pointer discarded it, then told the operator to run
     # `git reflog | grep <branch>` — which after a worktree removal has NO match (the branch
@@ -3657,7 +3684,9 @@ Commands:
                                       (if name omitted, uses current worktree)
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
-                                      (detects [gone] + merged-to-main branches,
+                                      (reaps branches proven merged: ancestor
+                                      of main, or a merged PR containing the
+                                      tip; [gone] alone is kept;
                                       deletes stale remote branches, removes
                                       orphan directories, cleans Claude tmp
                                       files, kills runaway procs)
