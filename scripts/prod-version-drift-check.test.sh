@@ -1266,15 +1266,17 @@ run_part_b() {
 
   # B10 -- schedule/monitor coherence. A job timeout above the tick interval, combined with
   # cancel-in-progress: false, would queue every subsequent tick behind a wedged run.
-  assert_eq "B10 schedule is every 30 minutes" "*/30 * * * *" "${X_CRON:-}"
+  # Cadence is hourly since #8450 (runner-concurrency trim, paired with the monitor's
+  # 360-min margin); the pin moves with the schedule, not the other way round.
+  assert_eq "B10 schedule is hourly" "0 * * * *" "${X_CRON:-}"
   assert_eq "B10b workflow_dispatch is available (needed to exercise the alert path)" "1" "${X_HAS_DISPATCH:-0}"
   assert_eq "B10c overlapping ticks serialize rather than cancel" "False" "${X_CONCURRENCY_CANCEL:-<unset>}"
   assert_eq "B10d permissions: issues: write" "write" "${X_PERM_ISSUES:-<unset>}"
   assert_eq "B10e permissions: contents: read" "read" "${X_PERM_CONTENTS:-<unset>}"
-  if [[ "${X_JOB_TIMEOUT:-999}" =~ ^[0-9]+$ ]] && [[ "${X_JOB_TIMEOUT}" -le 30 ]]; then
-    pass "B10f job timeout (${X_JOB_TIMEOUT}m) <= the 30m tick interval"
+  if [[ "${X_JOB_TIMEOUT:-999}" =~ ^[0-9]+$ ]] && [[ "${X_JOB_TIMEOUT}" -le 60 ]]; then
+    pass "B10f job timeout (${X_JOB_TIMEOUT}m) <= the 60m tick interval"
   else
-    fail "B10f job timeout <= tick interval" "<= 30" "${X_JOB_TIMEOUT:-<unset>}"
+    fail "B10f job timeout <= tick interval" "<= 60" "${X_JOB_TIMEOUT:-<unset>}"
   fi
 
   # B11 -- closure. Both were entirely unpinned: Part B read only `if:` and `uses.with`.

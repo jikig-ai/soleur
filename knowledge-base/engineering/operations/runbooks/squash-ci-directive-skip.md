@@ -91,7 +91,7 @@ what the merge should have done. Two consequences to expect:
 
 1. The arm builds `main`'s **tip**, not your merge commit. The correct health assertion becomes
    "the live `build_sha` is a *descendant* of my merge", not equality with it — so
-   `postmerge` Phase 3's `build_sha == merge sha` check does not apply and must not be forced.
+   `postmerge` Phase 3 already judges it that way (`deploy-arm.sh served` → `CONTAINS` for a descendant).
 2. No GitHub Release is retroactively attributed to the skipped merge. The next release tag covers
    the change; the version number simply skips it.
 

@@ -47,7 +47,7 @@
 #
 # Format: <workflow><TAB><jobs><TAB><paths><TAB><cancel><TAB><consequence>   (comment lines: leading-# only)
 # workflow	jobs	paths	cancel	consequence
-ci.yml	22	no	yes	required contexts per scripts/required-checks.txt (ADR-032 ABI) plus their needs; advisory lints ride in lint-bot-statuses
+ci.yml	22	no	yes	required contexts per scripts/required-checks.txt (ADR-032 ABI) plus their needs; advisory lints ride in lint-bot-statuses; e2e's heavy steps are gated by an in-job step-level if: on steps.detect.outputs.applicable (#8450) — invisible to this ledger's trigger-level paths enumeration, so paths stays no by construction
 pr-quality-guards.yml	10	no	yes	required contexts markdown-lint + Bash fixture tests for guard scripts (ADR-032 ABI)
 secret-scan.yml	6	no	yes	required contexts gitleaks scan / lint fixture content / allowlist-diff / rename-guard / waiver discipline (ADR-032 ABI); the weekly schedule arm keys on main HEAD's SHA and so shares the push-arm group — a same-SHA rerun of the push run can drop a pending weekly scan (no heartbeat on this workflow)
 apply-sentry-infra.yml	5	no	no	required context sentry-destroy-required, always-run aggregator over a path-gated plan (#6589, ADR-032 ABI); no cancel: terraform plan holds a backend state lock
