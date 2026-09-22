@@ -476,8 +476,20 @@ else
   fail "G6 harness: an unlanded mutation was not reported as HARNESS ABORT; got: ${G6_PROBE:0:200}"
 fi
 
+# #6122: the pinned default START must stay a timestamp no later than the first observed
+# zot-served web pull (2026-07-17T19:51:49Z). A later default is the false-PASS route the soak
+# header warns about: it drops flip-day fallbacks from the window. Read from the code line, not
+# a comment, and compared as a string (ISO-8601 at one precision orders lexically).
+PINNED_START="$(sed -nE 's/^START="\$\{ZOT_SOAK_START:-([^}]*)\}"$/\1/p' "$SOAK")"
+if [[ "$PINNED_START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] \
+   && [[ ! "$PINNED_START" > "2026-07-17T19:51:49" ]]; then
+  pass "#6122: default START is pinned ($PINNED_START) and not after the first zot-served pull"
+else
+  fail "#6122: default START must be a timestamp <= 2026-07-17T19:51:49; got '${PINNED_START:-<unparsed>}'"
+fi
+
 # Assertion floor: a deleted row must red. Literal adjacent to its `if` (guard-vacuity-floor).
-SOAK_MIN_PASSES=29
+SOAK_MIN_PASSES=30
 if [[ "$passes" -lt $SOAK_MIN_PASSES ]]; then
   printf 'FATAL: only %s passing assertions ran, expected at least %s — a row was deleted\n' "$passes" "$SOAK_MIN_PASSES" >&2
   exit 1
