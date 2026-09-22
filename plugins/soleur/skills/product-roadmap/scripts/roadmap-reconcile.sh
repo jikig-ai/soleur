@@ -127,6 +127,8 @@ pick_next_action() {
 # that still has open issues, as "N|title"; empty when none. Read from live
 # milestones, not the roadmap's Current State cells: a phase row may carry no
 # frozen count, and skipping it picked the phase after it.
+# Known edge: the REST open_issues count includes open pull requests, so a
+# phase whose only open items are PRs is still picked (its frontier is empty).
 pick_phase() {
   jq -r '
     [ .[] | select(.state == "open" and (.open_issues // 0) > 0)

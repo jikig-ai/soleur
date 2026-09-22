@@ -148,8 +148,8 @@ mattpocock/skills
       prose and is listed because a Used-in list that omits one of three
       mirrors understates the reach of the attribution) (#8289),
     skills/skill-creator/references/authoring-levers.md (#8290),
-    skills/product-roadmap/SKILL.md (Where Work Lives, the next
-      frontier, workshop step 1.6) (#8292)
+    skills/product-roadmap/SKILL.md (#8292: Where Work Lives, the
+      next frontier, workshop step 1.6)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent
