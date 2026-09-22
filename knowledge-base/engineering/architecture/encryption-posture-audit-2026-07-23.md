@@ -91,7 +91,7 @@ The machine-readable ledger was **already correct** and needed no change —
 `scripts/encryption-posture-ledger.json` carries `hcloud_volume.registry` with
 `at_rest.mechanism: "luks"`, so Layer A has been enforcing the accurate posture. Only this
 prose row lagged. Note the ledger still records
-`live_verification: unavailable:no zot-host at-rest posture probe yet` — the recut is
+`live_verification: unavailable:no zot-host at-rest posture probe yet` *[Superseded 2026-09-21 by PR #8423: the row reads `available`.]* — the recut is
 evidenced by the apply run, not by a standing posture probe, so the host-dimension
 limitation described in the method note above still applies to this row.
 
