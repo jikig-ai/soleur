@@ -96,6 +96,28 @@ trap 'rm -rf "$WORK"' EXIT
 git -C "$REPO_ROOT" ls-files '*.test.sh' | LC_ALL=C sort -u > "$WORK/tracked"
 tracked_n=$(wc -l < "$WORK/tracked" | tr -d ' ')
 
+# The full index, once. The declared-edge and relevance arms below membership-test
+# every declared path element; doing that as a per-element `git ls-files
+# --error-unmatch` exec costs ~0.1-0.3s × ~600 elements per invocation — measured
+# as the dominant term in the mutation battery's per-row spend (#8322 CI: the
+# test-scripts shard hit its 60m ceiling). One ls-files + an in-memory string
+# scan answers the same question at ~µs per element.
+#
+# SEMANTIC PARITY with --error-unmatch on a single arg: the pathspec matches when
+# the path is an index member OR a directory prefix under which index entries
+# live — arrays here carry both shapes (`apps/web-platform/` and
+# `plugins/soleur` style bare dirs), so the helper checks both. The one residual
+# difference is glob metacharacters in the declared path itself (pathspec vs
+# [[ == ]] pattern semantics), which these arrays never carry.
+_TRACKED_SET=$'\n'"$(git -C "$REPO_ROOT" ls-files)"$'\n'
+_tracked_member() {
+  [[ "$1" == "." ]] && { [[ "$_TRACKED_SET" != $'\n'$'\n' ]]; return; }
+  [[ "$_TRACKED_SET" == *$'\n'"$1"$'\n'* ]] && return 0
+  local d="${1%/}"
+  d="${d%/.}"
+  [[ "$_TRACKED_SET" == *$'\n'"$d/"* ]]
+}
+
 # PRODUCER FLOOR. A zero-check alone cannot see the failure that matters most here: narrowing
 # the producer back to one directory leaves it enumerating 70 real files, passes every
 # per-surface zero-check, finds no orphans among them, and prints `orphan test suites: none`
@@ -715,10 +737,11 @@ else
       fails=$((fails + 1))
     fi
 
-    # Each declared path must still exist in the tree. `git -C` because this linter is invocable
-    # from any cwd (lefthook runs it from the repo root; a developer may not).
+    # Each declared path must still exist in the tree. `_tracked_member` reads the
+    # whole-index set captured at the top (see _TRACKED_SET) rather than a
+    # per-element `git ls-files --error-unmatch` exec.
     for p in "${rel_elems[@]}"; do
-      if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+      if ! _tracked_member "$p"; then
         echo "ERROR: ${arr_name} declares '${p}', which is not a tracked file -- the predicate can never match it, so its suite is declined locally forever." >&2
         fails=$((fails + 1))
       fi
@@ -969,7 +992,7 @@ else
           echo "ERROR: ${aff_arr} declares directory prefix '${p}', which does not exist -- a dead edge can never match a diff." >&2
           fails=$((fails + 1))
         }
-      elif ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+      elif ! _tracked_member "$p"; then
         echo "ERROR: ${aff_arr} declares '${p}', which is not a tracked file -- a dead edge can never match a diff." >&2
         fails=$((fails + 1))
       fi

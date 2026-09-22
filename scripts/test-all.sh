@@ -1763,6 +1763,19 @@ _affected_derive() {
       _affected_add_edge "$_dir/lib/$_stem"
       _affected_add_edge "scripts/$_stem"
     fi
+    # Print-mode early-out: the receipt needs only the CLASS, and once any
+    # non-self edge exists the class is edge:derived no matter what the
+    # closure would add — the closure's only decision-relevant output is the
+    # self-only/unclassified distinction. Skipping it here removes the whole
+    # file-scan cost for suites whose argv/stem already prove reachability.
+    # Execution mode keeps the full closure: selection needs the edge set.
+    if (( _PRINT_AFFECTED == 1 )); then
+      local _e _ns=0
+      for _e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do
+        [[ "$_e" == "$_suite_file" ]] || { _ns=1; break; }
+      done
+      if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
+    fi
     # Closure, bounded: follow source/import edges one level at a time.
     local -a _queue=("$_suite_file") _seen=("$_suite_file")
     local _depth=0
@@ -1826,10 +1839,14 @@ _affected_classify() {
     # Union, not shadow: buffer the declared/consumed edges, derive the suite's
     # reachable set, then re-add the declared entries so the edge set is
     # declared ∪ derived. A suite that gains a dependency tomorrow selects on
-    # it even though its array predates the dependency.
-    local _decl=( ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} ) _e
-    _affected_derive "$_label" "$@"
-    for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_edge "$_e"; done
+    # it even though its array predates the dependency. In print mode the union
+    # is skipped: the receipt carries only the class, and _AC_EDGES is read
+    # nowhere on that path — the derive is the walk's entire cost.
+    if (( _PRINT_AFFECTED == 0 )); then
+      local _decl=( ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} ) _e
+      _affected_derive "$_label" "$@"
+      for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_edge "$_e"; done
+    fi
     return 0
   fi
   _affected_derive "$_label" "$@"
