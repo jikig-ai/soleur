@@ -4,7 +4,7 @@
 #
 # The ONLY permitted answer to "may this PR be admin-merged?" (#8500).
 #
-# WHY THIS EXISTS. `gh pr merge --admin` bypasses the WHOLE `required_status_checks` ruleset
+# WHY THIS EXISTS. An `--admin` merge bypasses the WHOLE `required_status_checks` ruleset
 # rule (every required context, not just the up-to-date gate), so nothing server-side stops a
 # red, pending or ABSENT merge. #8458 and #8439 were admin-merged that way. The obvious agent
 # loop -- `gh pr checks --required` until nothing is pending -- lists only checks that EXIST: the

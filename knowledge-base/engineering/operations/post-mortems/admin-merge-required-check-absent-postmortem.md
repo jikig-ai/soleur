@@ -132,5 +132,5 @@ The agent reported a count (25) as a verdict without comparing it to the ruleset
 
 | Issue | Action | Status |
 |---|---|---|
-| #8500 | A shared `admin-merge-ready` script that every skill must call before `gh pr merge --admin`, plus a mutation row for the N−1 shape. | open |
+| #8500 | A shared `admin-merge-ready` script that every skill must call before `gh pr merge --admin`, plus a mutation row for the N−1 shape. | fixed by #8547 |
 | #8370 | Fix the kb-index AC17 freshness failure that left `main`'s `test` red. | open |

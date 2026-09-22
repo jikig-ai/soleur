@@ -351,6 +351,8 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    **The merge → deploy wait is owned by ship — never hand-roll it and never ask the operator.** Do NOT skip invoking `soleur:ship`, do NOT issue `gh pr merge` yourself, and do NOT end the turn at MERGED. Ship Phase 7 polls merge + release workflows; Step 3.8 invokes `soleur:postmerge` before cleanup.
 
+   **An admin merge the operator explicitly authorizes is still not hand-rolled.** It goes through [settle-then-admin-merge.md](../ship/references/settle-then-admin-merge.md) step 2, which runs `plugins/soleur/scripts/admin-merge-ready.sh`, and its merge block, which pins the head SHA. Never gate it on a `gh pr checks --required` watch: that view cannot see a required check that has not been created yet, which is how #8458 merged with its `test` check absent (#8500).
+
    **Harness polling:** Claude → **Monitor tool** (NEVER Bash `run_in_background`). Grok → **AwaitShell** with `pattern` matching terminal poll output, or Shell with adequate `block_until_ms`. Canonical: `plugins/soleur/lib/harness.ts` → `pollInstructions()`.
 
    > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2329,SC2015,SC2016  # row/mutation functions are dispatched indirectly; A && B || why is the assertion idiom
 # Suite for plugins/soleur/scripts/admin-merge-ready.sh (#8500) -- Guard 1 of the plan's Guard
 # Contract (knowledge-base/project/plans/2026-09-22-feat-admin-merge-ready-script-plan.md).
 #
