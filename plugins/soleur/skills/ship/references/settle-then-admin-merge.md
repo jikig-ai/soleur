@@ -47,26 +47,33 @@ At that trigger or at the 6-sync cap, if this change has **zero conflict surface
    bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA" --wait --timeout 3600
    ```
 
-   Exit 0 (`verdict=ready`) → go to step 3. Exit 1 with `verdict=stale` → the head moved or the PR closed: re-read `SHA` and restart this step. Any other non-zero exit → stop and report the ABSENT/PENDING/FAILED contexts it names; never merge. How it decides (the required set from every ruleset, the latest run by check-run id, app pinning, the untrusted-CI refusal) is documented once, in the script's header. The property is the same one `gh pr checks <N>` cannot express alone: it must show every required context **present and green on the current SHA**, not merely absent from the `pending` and `fail` buckets: an empty rollup on a just-pushed head satisfies "nothing is failing" vacuously, and after a conflict-resolved sync merge (whose commit the `bun-test` pre-commit hook skips by configuration) that head's ONLY execution is this CI run. **`--admin` bypasses the ENTIRE `required_status_checks` rule — every `required_check` context as well as the up-to-date gate — so nothing server-side will stop a red, pending or absent merge; this step is the only check that exists.** Measured against `infra/github/ruleset-ci-required.tf`: `strict_required_status_checks_policy` and every `required_check` are sibling parameters of ONE rule, and `ci-required-ruleset-canonical-bypass-actors.json` grants OrganizationAdmin and RepositoryRole 5 `bypass_mode: "pull_request"`. Ruleset bypass is granted per rule, never per parameter. This paragraph previously claimed `--admin` bypassed "ONLY the up-to-date gate, NOT the checks"; that was false for this repo, and it was the sole thing standing between the hatch and an unverified merge.
+   Branch on the exit code alone: 0 → go to step 3; 4 → the head moved or the PR closed, so re-read `SHA` and restart this step; anything else → stop and report the ABSENT/PENDING/FAILED contexts it names, and never merge. A PR that edits `.github/workflows/` or `.github/actions/` always exits 1 (`UNTRUSTED-CI`): it has no agent admin-merge path, and the operator merges it by hand. How the script decides (the required set from every ruleset, the latest run by check-run id, app pinning) is documented once, in its header. The property is the same one `gh pr checks <N>` cannot express alone: it must show every required context **present and green on the current SHA**, not merely absent from the `pending` and `fail` buckets: an empty rollup on a just-pushed head satisfies "nothing is failing" vacuously, and after a conflict-resolved sync merge (whose commit the `bun-test` pre-commit hook skips by configuration) that head's ONLY execution is this CI run. **`--admin` bypasses the ENTIRE `required_status_checks` rule — every `required_check` context as well as the up-to-date gate — so nothing server-side will stop a red, pending or absent merge; this step is the only check that exists.** Measured against `infra/github/ruleset-ci-required.tf`: `strict_required_status_checks_policy` and every `required_check` are sibling parameters of ONE rule, and `ci-required-ruleset-canonical-bypass-actors.json` grants OrganizationAdmin and RepositoryRole 5 `bypass_mode: "pull_request"`. Ruleset bypass is granted per rule, never per parameter. This paragraph previously claimed `--admin` bypassed "ONLY the up-to-date gate, NOT the checks"; that was false for this repo, and it was the sole thing standing between the hatch and an unverified merge.
 3. **Sync local → origin** so the local ref is fast-forward with the pushed head: `git fetch origin && git reset --hard origin/<branch>` (this discards any uncommitted or un-pushed local work on the branch — confirm `git status` is clean first).
-4. **Admin-merge, re-checking before every attempt.** `--admin` bypasses the whole `required_status_checks` rule, not just its "branch must be up to date with base" parameter — step 2 is what makes it safe, and step 2 is discipline, not enforcement. Run this block inside a Monitor (a foreground `sleep` is blocked). A Monitor task does not inherit step 2's shell, so set `SHA` from the `sha=` field of step 2's `verdict=ready` marker line. The script runs again immediately before every attempt, only GitHub's `Base branch was modified` race is retried, and success is read from the PR's state afterwards, because with a merge queue a merge call can exit 0 having only enqueued:
+4. **Admin-merge, re-checking before every attempt.** `--admin` bypasses the whole `required_status_checks` rule, not just its "branch must be up to date with base" parameter — step 2 is what makes it safe, and step 2 is discipline, not enforcement. Run this block inside a Monitor (a foreground `sleep` is blocked). A Monitor task does not inherit step 2's shell, so set `SHA` to the head you read in step 2, from a run that exited 0 — never from text that merely looks like a marker line. The script runs again immediately before every attempt, only GitHub's `Base branch was modified` race is retried, and success is read from the PR's state (`MERGED` at `$SHA`), never from the merge command's exit status, which cannot prove the PR landed at that commit:
 
    ```bash
-   SHA=<the sha= value from step 2's SOLEUR_ADMIN_MERGE_READY verdict=ready line>
+   SHA=<the 40-hex head SHA that step 2 certified>
    [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "ADMIN-MERGE ABORTED: SHA not set"; exit 1; }
-   merged=0
+   landed() { [[ "$(gh pr view <N> --json state,headRefOid --jq '"\(.state) \(.headRefOid)"')" == "MERGED $SHA" ]]; }
    for i in $(seq 1 20); do
+     landed && { echo "ADMIN-MERGED $SHA"; exit 0; }
      bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA"; rc=$?
-     (( rc == 0 )) || { echo "ADMIN-MERGE ABORTED rc=$rc (verdict=stale: re-read SHA, restart step 2; otherwise stop)"; break; }
-     if err=$(gh pr merge <N> --squash --admin --match-head-commit "$SHA" 2>&1); then merged=1; break; fi
-     grep -q 'Base branch was modified' <<<"$err" || { echo "ADMIN-MERGE ABORTED (gh pr merge failed; see stderr)"; printf '%s\n' "$err" >&2; break; }
+     (( rc == 0 )) || { echo "ADMIN-MERGE ABORTED rc=$rc"; exit "$rc"; }
+     if err=$(gh pr merge <N> --squash --admin --match-head-commit "$SHA" 2>&1); then break; fi
+     if ! grep -q 'Base branch was modified' <<<"$err"; then
+       landed && { echo "ADMIN-MERGED $SHA"; exit 0; }
+       echo "ADMIN-MERGE ABORTED (gh pr merge failed; see stderr)"; printf '%s\n' "$err" >&2; exit 1
+     fi
      sleep 18   # the backoff the pre-#8500 one-liner used for the same race
    done
-   state=$(gh pr view <N> --json state,headRefOid --jq '"\(.state) \(.headRefOid)"' 2>/dev/null)
-   if (( merged == 1 )) && [[ "$state" == "MERGED $SHA" ]]; then echo "ADMIN-MERGED $SHA"; else echo "ADMIN-MERGE NOT LANDED"; exit 1; fi
+   if state=$(gh pr view <N> --json state,headRefOid --jq '"\(.state) \(.headRefOid)"'); then
+     [[ "$state" == "MERGED $SHA" ]] && { echo "ADMIN-MERGED $SHA"; exit 0; }
+     echo "ADMIN-MERGE NOT LANDED"; exit 1
+   fi
+   echo "ADMIN-MERGE UNKNOWN: could not read the PR state; check it before retrying"; exit 1
    ```
 
-5. **Decide from the block's exit code**, never by grepping its output (`gh` stderr can echo PR-author-controlled text). Exit 0 means GitHub reports the PR MERGED at `$SHA`. Exit 1 after `verdict=stale` → re-read the SHA and go back to step 2; any other exit 1 → stop and report. `plugins/soleur/test/admin-merge-ready-wiring.test.sh` executes this block.
+5. **Decide from the block's exit code**, never by grepping its output (`gh` stderr can echo PR-author-controlled text). 0 means GitHub reports the PR MERGED at `$SHA`. 4 means the head moved or the PR closed: re-read the SHA and go back to step 2. Anything else: stop and report. `plugins/soleur/test/admin-merge-ready-wiring.test.sh` executes this block.
 
 Do **not** use this hatch for a change with real conflict surface — there, the up-to-date requirement is load-bearing and the correct move is to merge during a quieter window (or resolve the conflict and let CI re-verify).
 

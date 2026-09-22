@@ -26,7 +26,7 @@ The operator authorized a `soleur:one-shot` session to admin-merge PR #8458 "onc
 
 ## Status
 
-unresolved but ended — the merge cannot be undone without a revert, and `main`'s `test` was already red for an unrelated reason (below). The gap that allowed the merge is closed in the hatch prose by PR #8474; the shared enforcing script is tracked in #8500.
+unresolved but ended — the merge cannot be undone without a revert, and `main`'s `test` was already red for an unrelated reason (below). The gap that allowed the merge is closed in the hatch prose by PR #8474; the shared enforcing script, `plugins/soleur/scripts/admin-merge-ready.sh`, lands with #8547 (for #8500).
 
 ## Symptom
 
@@ -69,6 +69,8 @@ system — an agent-authored watch loop.
 ## Resolution
 
 PR #8474 rewrote step 2 of the settle-then-admin-merge procedure (`plugins/soleur/skills/ship/references/settle-then-admin-merge.md`). It reads the required set from the ruleset API, takes the newest check run per context on the head SHA, and prints `ADMIN-MERGE-READY` only when every one is present and success/skipped/neutral. Merges pin `--match-head-commit`.
+
+PR #8547 (for #8500) replaced that inline block with `plugins/soleur/scripts/admin-merge-ready.sh`, a tested script that ship, merge-pr, one-shot and drain-prs all route an `--admin` merge through; the reference's merge block re-runs it before every attempt.
 
 ## Recovery verification
 
@@ -132,5 +134,5 @@ The agent reported a count (25) as a verdict without comparing it to the ruleset
 
 | Issue | Action | Status |
 |---|---|---|
-| #8500 | A shared `admin-merge-ready` script that every skill must call before `gh pr merge --admin`, plus a mutation row for the N−1 shape. | fixed by #8547 |
+| #8500 | A shared `admin-merge-ready` script that every skill must call before `gh pr merge --admin`, plus a mutation row for the N−1 shape. | addressed by #8547 |
 | #8370 | Fix the kb-index AC17 freshness failure that left `main`'s `test` red. | open |

@@ -5,6 +5,7 @@
       {
         "id": 106661534703,
         "name": "sync",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:59:03Z",
@@ -18,6 +19,7 @@
       {
         "id": 106661533984,
         "name": "delete-unmerged-bot-branch",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "skipped",
         "started_at": "2026-09-22T07:53:14Z",
@@ -31,6 +33,7 @@
       {
         "id": 106659898431,
         "name": "test",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:52:57Z",
@@ -44,6 +47,7 @@
       {
         "id": 106651827792,
         "name": "critical-css-gate",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "skipped",
         "started_at": "2026-09-22T07:17:23Z",
@@ -57,6 +61,7 @@
       {
         "id": 106650341306,
         "name": "plan_pr",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "skipped",
         "started_at": "2026-09-22T07:11:49Z",
@@ -70,6 +75,7 @@
       {
         "id": 106650340468,
         "name": "sentry-destroy-required",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:23:26Z",
@@ -83,6 +89,7 @@
       {
         "id": 106649734796,
         "name": "apply",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "skipped",
         "started_at": "2026-09-22T07:09:29Z",
@@ -96,6 +103,7 @@
       {
         "id": 106648960817,
         "name": "sandbox-canary-capture-gate",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:40:05Z",
@@ -109,6 +117,7 @@
       {
         "id": 106648960742,
         "name": "shard-totality-mutations",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:27:37Z",
@@ -122,6 +131,7 @@
       {
         "id": 106648960741,
         "name": "lint-bot-statuses",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:42:33Z",
@@ -135,6 +145,7 @@
       {
         "id": 106648960728,
         "name": "service-role-allowlist-gate",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:40:45Z",
@@ -148,6 +159,7 @@
       {
         "id": 106648960696,
         "name": "adr-ordinals",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:26:32Z",
@@ -161,6 +173,7 @@
       {
         "id": 106648960670,
         "name": "web-platform-build",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:33:43Z",
@@ -174,6 +187,7 @@
       {
         "id": 106648960652,
         "name": "lockfile-sync",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:40:10Z",
@@ -187,6 +201,7 @@
       {
         "id": 106648960643,
         "name": "rule-body-lint",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:14:11Z",
@@ -200,6 +215,7 @@
       {
         "id": 106648960621,
         "name": "plugin-root-propagation-gate",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:23:19Z",
@@ -213,6 +229,7 @@
       {
         "id": 106648960604,
         "name": "test-scripts (2/3)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:28:20Z",
@@ -226,6 +243,7 @@
       {
         "id": 106648960576,
         "name": "lint-webplat",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:27:00Z",
@@ -239,6 +257,7 @@
       {
         "id": 106648960533,
         "name": "credential-path-guard",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:27:37Z",
@@ -252,6 +271,7 @@
       {
         "id": 106648960528,
         "name": "test-bun",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:15:24Z",
@@ -265,6 +285,7 @@
       {
         "id": 106648960516,
         "name": "grok-fidelity",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:28:57Z",
@@ -278,6 +299,7 @@
       {
         "id": 106648960500,
         "name": "test-webplat (2/2)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:39:51Z",
@@ -291,6 +313,7 @@
       {
         "id": 106648960487,
         "name": "e2e",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:28:25Z",
@@ -304,6 +327,7 @@
       {
         "id": 106648960476,
         "name": "test-scripts (3/3)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:28:20Z",
@@ -317,6 +341,7 @@
       {
         "id": 106648960463,
         "name": "test-webplat (1/2)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:17:49Z",
@@ -330,6 +355,7 @@
       {
         "id": 106648960443,
         "name": "detect-changes",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:17:08Z",
@@ -343,6 +369,7 @@
       {
         "id": 106648960402,
         "name": "marketplace-manifest-guard",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:20:56Z",
@@ -356,6 +383,7 @@
       {
         "id": 106648960396,
         "name": "test-scripts (1/3)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:17:51Z",
@@ -369,6 +397,7 @@
       {
         "id": 106648960357,
         "name": "tc-document-sha-guard",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:18:54Z",
@@ -382,6 +411,7 @@
       {
         "id": 106648960179,
         "name": "encryption-posture",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:13:30Z",
@@ -395,6 +425,7 @@
       {
         "id": 106648863377,
         "name": "CodeQL",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:09Z",
@@ -408,6 +439,7 @@
       {
         "id": 106648739297,
         "name": "tenant-integration",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "skipped",
         "started_at": "2026-09-22T07:05:42Z",
@@ -421,6 +453,7 @@
       {
         "id": 106648738446,
         "name": "tenant-integration-required",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:14:59Z",
@@ -434,6 +467,7 @@
       {
         "id": 106648627713,
         "name": "vendor-pin-required",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:14:52Z",
@@ -447,6 +481,7 @@
       {
         "id": 106648626479,
         "name": "verify-upstream-blobs",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "skipped",
         "started_at": "2026-09-22T07:05:18Z",
@@ -460,6 +495,7 @@
       {
         "id": 106647956906,
         "name": "preflight",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:09:25Z",
@@ -473,6 +509,7 @@
       {
         "id": 106647956799,
         "name": "detect-changes",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:11:31Z",
@@ -486,6 +523,7 @@
       {
         "id": 106647856709,
         "name": "smoke (allowlist-positive)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:13:19Z",
@@ -499,6 +537,7 @@
       {
         "id": 106647856692,
         "name": "smoke (linter-positive)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:18:36Z",
@@ -512,6 +551,7 @@
       {
         "id": 106647856659,
         "name": "smoke (rename-guard-label-override)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:16:56Z",
@@ -525,6 +565,7 @@
       {
         "id": 106647856632,
         "name": "smoke (allowlist-negative)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:10:57Z",
@@ -538,6 +579,7 @@
       {
         "id": 106647856627,
         "name": "smoke (colocated-lib-test-allowlist)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:17:35Z",
@@ -551,6 +593,7 @@
       {
         "id": 106647856562,
         "name": "smoke (linter-waiver)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:00Z",
@@ -564,6 +607,7 @@
       {
         "id": 106647856554,
         "name": "smoke (rename-guard-trailer-override)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:12:04Z",
@@ -577,6 +621,7 @@
       {
         "id": 106647856553,
         "name": "smoke (rename-laundering)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:13:04Z",
@@ -590,6 +635,7 @@
       {
         "id": 106647856528,
         "name": "smoke (allowlist-diff-fires)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:07:46Z",
@@ -603,6 +649,7 @@
       {
         "id": 106647856526,
         "name": "smoke (rename-guard-fires)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:10:56Z",
@@ -616,6 +663,7 @@
       {
         "id": 106647856441,
         "name": "rename-guard (allowlist destinations)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:04Z",
@@ -629,6 +677,7 @@
       {
         "id": 106647856437,
         "name": "allowlist-diff (.gitleaks.toml paths surface)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:09Z",
@@ -642,6 +691,7 @@
       {
         "id": 106647856426,
         "name": "lint fixture content",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:51Z",
@@ -655,6 +705,7 @@
       {
         "id": 106647856410,
         "name": "gitleaks scan",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:08Z",
@@ -668,6 +719,7 @@
       {
         "id": 106647856249,
         "name": "waiver discipline (issue:#NNN trailer)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:04:57Z",
@@ -681,6 +733,7 @@
       {
         "id": 106647840254,
         "name": "Block PRs dominated by auto-commit headlines",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:10:28Z",
@@ -694,6 +747,7 @@
       {
         "id": 106647840129,
         "name": "Sibling-set sweep completeness (#5269)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:04:40Z",
@@ -707,6 +761,7 @@
       {
         "id": 106647840109,
         "name": "Block PR body citing files not in diff",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:09:22Z",
@@ -720,6 +775,7 @@
       {
         "id": 106647840101,
         "name": "Block destructive .claude/settings.json edits",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:16Z",
@@ -733,6 +789,7 @@
       {
         "id": 106647840094,
         "name": "Bash fixture tests for guard scripts",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:09:16Z",
@@ -746,6 +803,7 @@
       {
         "id": 106647840035,
         "name": "Block Linear CDN URLs in PR diff (#3635)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:11:49Z",
@@ -759,6 +817,7 @@
       {
         "id": 106647839943,
         "name": "markdown-lint",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:52Z",
@@ -772,6 +831,7 @@
       {
         "id": 106647839940,
         "name": "Block userId/email in extra of direct client Sentry.capture* (#3703)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:37Z",
@@ -785,6 +845,7 @@
       {
         "id": 106647839936,
         "name": "Block direct userId emissions in apps/web-platform (#3698)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:53Z",
@@ -798,6 +859,7 @@
       {
         "id": 106647839744,
         "name": "Block .claude/worktrees/ entries in diff",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:25Z",
@@ -811,6 +873,7 @@
       {
         "id": 106647830985,
         "name": "skill-security-scan PR gate",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:43Z",
@@ -824,6 +887,7 @@
       {
         "id": 106647830922,
         "name": "dependency-review",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:04:24Z",
@@ -837,6 +901,7 @@
       {
         "id": 106647830132,
         "name": "scan",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:02Z",
@@ -850,6 +915,7 @@
       {
         "id": 106647829984,
         "name": "L1 import-boundary gate",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:04:28Z",
@@ -863,6 +929,7 @@
       {
         "id": 106647829981,
         "name": "detect-changes",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:02Z",
@@ -876,6 +943,7 @@
       {
         "id": 106647829950,
         "name": "enforce",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:48Z",
@@ -889,6 +957,7 @@
       {
         "id": 106647829822,
         "name": "detect-changes",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:25Z",
@@ -902,6 +971,7 @@
       {
         "id": 106647826508,
         "name": "cla-evidence",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:07:41Z",
@@ -915,6 +985,7 @@
       {
         "id": 106647825217,
         "name": "cla-check",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:21Z",
@@ -928,6 +999,7 @@
       {
         "id": 106647825194,
         "name": "Analyze (python)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:23Z",
@@ -941,6 +1013,7 @@
       {
         "id": 106647824639,
         "name": "Analyze (ruby)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:47Z",
@@ -954,6 +1027,7 @@
       {
         "id": 106647824386,
         "name": "Analyze (javascript-typescript)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:32Z",
@@ -967,6 +1041,7 @@
       {
         "id": 106647824248,
         "name": "Analyze (javascript-typescript)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:18Z",
@@ -980,6 +1055,7 @@
       {
         "id": 106647824202,
         "name": "Analyze (python)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:06:24Z",
@@ -993,6 +1069,7 @@
       {
         "id": 106647824059,
         "name": "Analyze (actions)",
+        "head_sha": "319c22bffa4c1785da52dd9af9471a9d8eef1310",
         "status": "completed",
         "conclusion": "success",
         "started_at": "2026-09-22T07:05:13Z",

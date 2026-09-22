@@ -119,6 +119,14 @@
           }
         ]
       }
+    },
+    {
+      "type": "deletion",
+      "ruleset_id": 13044280
+    },
+    {
+      "type": "non_fast_forward",
+      "ruleset_id": 13044280
     }
   ]
 ]
