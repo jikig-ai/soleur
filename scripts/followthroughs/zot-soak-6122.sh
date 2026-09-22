@@ -198,16 +198,21 @@ if [[ ! "$MIN_SAMPLE" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-# Absolute window start — PIN THIS to just after the cutover flip (the same UTC the
-# operator records in the revert runbook). Placeholder until pinned; the earliest= gate in
-# the issue directive still defers the first real check to >=7 days after cutover.
-START="${ZOT_SOAK_START:-<POST_CUTOVER_UTC>}"
+# Absolute window start, pinned to the cutover (#6122). The cutover was never recorded when it
+# happened. It was reconstructed on 2026-09-22 from Sentry: the first zot-served web pull
+# (`feature:supply-chain op:image-pull registry:"zot" image:"web"`) is
+# 2026-07-17T19:51:49Z, and no earlier one exists in the 90-day retention. START sits a few
+# minutes BEFORE that event, never after it. A late START is the false-PASS route described
+# below, and this one keeps both flip-day `zot-gate-degraded` events (19:52:12Z, 20:11:39Z)
+# inside the window. The cutover UTC is recorded in the revert runbook. ZOT_SOAK_START
+# overrides it for tests and manual runs only; the sweeper's `env -i` cannot forward it.
+START="${ZOT_SOAK_START:-2026-07-17T19:45:00}"
 END=$(date -u +%Y-%m-%dT%H:%M:%S)
 
-# Own the unpinned-START case rather than delegating it to Sentry's date parser. Until START
-# is pinned it holds the literal placeholder above; today's fail-safety rests on Sentry 400ing
-# that string — an unverified vendor behaviour this gate must not bet an irreversible
-# retirement on.
+# Own the malformed-START case rather than delegating it to Sentry's date parser. START was a
+# literal placeholder until #6122 pinned it, and an override can still be anything. Relying on
+# Sentry to 400 a bad string is an unverified vendor behaviour this gate must not bet an
+# irreversible retirement on.
 #
 # NOTE: this proves START is a TIMESTAMP, not that it is the RIGHT one. Nothing here asserts
 # START <= cutover_utc, and a START pinned LATE is a false-PASS route: it excludes flip-day
