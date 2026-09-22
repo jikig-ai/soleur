@@ -42,7 +42,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 When `HEADLESS_MODE=true`:
 
-- Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag, no user prompt)
+- Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag, no user prompt) when the Phase 2 probe prints `BRANCH_LEARNING=absent`
 - Phase 4: if test files are missing, continue without writing (CI gate catches this)
 - Phase 6: auto-accept generated PR title/body without user confirmation
 - Phase 7: if CI is flaky or unrelated check fails, abort pipeline (do not ask whether to proceed)
@@ -254,17 +254,22 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 ## Phase 2: Capture Learnings
 
-Check if soleur:compound was run for this feature. Use the feature name extracted in Phase 1:
+Did **this branch** add a learning? Ask the branch, not the calendar: a repo-wide `--since` window is non-empty in essentially every week here, so it never said "compound has not run" (#8470). Run this block as written:
 
 ```bash
-git log --oneline --since="1 week ago" -- knowledge-base/project/learnings/
+{ git status --porcelain -- ':/knowledge-base/project/learnings/' | grep -E '^(\?\?|A)'
+  git fetch -q origin main 2>/dev/null && {
+    git log --diff-filter=A --format=%h origin/main..HEAD -- ':/knowledge-base/project/learnings/'
+    git log --format=%s origin/main..HEAD | grep -E '^(compound|learning): '
+  } 2>/dev/null
+} | grep -q . && echo "BRANCH_LEARNING=present" || echo "BRANCH_LEARNING=absent"
 ```
 
-Also use the Glob tool to search `knowledge-base/project/learnings/**/*FEATURE*` (replacing FEATURE with the actual name).
+It counts a learning compound wrote but has not committed yet, counts an ADDED file or a branch commit whose subject starts `compound:` or `learning:` (compound's own commit prefixes; editing an old learning in any other commit is not capturing one), and trusts the committed arms only after a successful fetch — a stale `origin/main` would widen the range to main's own learnings (Phase 1.5's fetch rule). Every doubt resolves toward running compound. Pinned by `plugins/soleur/test/ship-learning-probe.test.ts`.
 
-**If no recent learning exists:** Check for unarchived KB artifacts before offering a choice.
+**`BRANCH_LEARNING=present`:** compound already ran for this branch — continue to Phase 3.
 
-Search for unarchived artifacts matching the feature name (excluding `archive/` paths) using the Glob tool:
+**`BRANCH_LEARNING=absent`:** compound has not run for this branch, so it runs now unless the interactive Skip below applies. First check for unarchived KB artifacts matching the feature name extracted in Phase 1 (excluding `archive/` paths) using the Glob tool:
 
 - Brainstorms: `knowledge-base/project/brainstorms/*FEATURE*`
 - Plans: `knowledge-base/project/plans/*FEATURE*`
@@ -2964,7 +2969,7 @@ The practical consequence: **compound is the last point at which archival can ha
 
 - **Always set a semver label.** Every PR that touches `plugins/soleur/` must have a `semver:patch`, `semver:minor`, or `semver:major` label. CI uses this label to bump the version at merge time.
 - **Never add a `version` key to a plugin manifest.** None of the three carries one — `plugins/soleur/.claude-plugin/plugin.json`, this repo's local-dev `.claude-plugin/marketplace.json` (`plugins[0]`; its *top-level* `version` is the manifest-format version and stays), and the published distribution manifest in `jikig-ai/soleur-marketplace`. The reason is functional: `plugin update` compares **version strings**, and with no key the CLI records the plugin's **commit SHA** as its version, so the string changes with every commit and the update is detected. A constant version never changes, so the comparison always comes back equal and the update short-circuits — reporting success while delivering nothing (#7471). Measurement record: `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` **§1.9** (the controlled experiment establishing the comparator), plus §1.0 and §2B. Adding a key back to any of the three silently reverts the fix for every new install. Release versions live in git tags via GitHub Releases; a release publishes nothing to any manifest.
-- **Ask before running soleur:compound.** The user may have already documented learnings.
+- **Phase 2's probe decides whether compound runs.** Ask only on its interactive no-artifacts path.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **A resume prompt's gate list must cite commands verified to RESOLVE** (`wg-end-of-work-emit-resume-prompt`). Before writing `<suite> -> N/0` into a handoff, re-run the command or at minimum `git ls-files | grep -E '<name>'` it — a remembered path is not a measured one. **Why:** #6730's RESUME.md reported two suites green whose paths did not exist (wrong extension, wrong directory), so the resuming session's first two gate commands both died on "No such file or directory".
 - **Confirm the PR title and body** with the user before creating it (skip in headless mode).
