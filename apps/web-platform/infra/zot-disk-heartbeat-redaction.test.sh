@@ -106,7 +106,17 @@ sed -i 's|\${zot_push_user}|pushuser|g' "$HB"
 # volume alias. Without this line the T1 assertion below fails by construction, and every
 # posture case would run against a script whose LINE= still holds an unrendered ${...}.
 sed -i 's|\${registry_volume_id}|100000003|g' "$HB"
-assert "T1 render left no unrendered TF interpolation" "! grep -qE '\\\$\{[A-Za-z0-9_.]+\}' '$HB'"
+# (#8417) The TF-interpolation check runs on a copy where every ESCAPED `$$` is masked, and the
+# same five template-variable substitutions are applied. It used to run on the rendered copy and
+# match any `${word}` -- which was only sound while no shell expansion in the block was written
+# in the braced `$${word}` form. The #8417 fix writes `$${_cs_rc}`, which renders to a legitimate
+# SHELL `${_cs_rc}`; the only thing that can be an unrendered TERRAFORM interpolation is a
+# single-dollar `${` in the template source.
+TFCHK="$TMP/hb.tfcheck"
+apply_rationale_strip "$RAW" | sed -e 's|[$][$]|__ESCAPED_DD__|g' \
+  -e 's|\${betterstack_ingest_url}|x|g' -e 's|\${disk_heartbeat_url}|x|g' \
+  -e 's|\${zot_pull_user}|x|g' -e 's|\${zot_push_user}|x|g' -e 's|\${registry_volume_id}|x|g' > "$TFCHK"
+assert "T1 render left no unrendered TF interpolation" "[[ -s '$TFCHK' ]] && ! grep -qF '\${' '$TFCHK'"
 assert "T1 the COMMENT-STRIPPED heartbeat is still valid bash (the strip reaches inside heredocs)" \
   "bash -n '$HB'"
 chmod +x "$HB"
@@ -245,28 +255,59 @@ for _m in findmnt lsblk cryptsetup blkid; do cp "$BIN/$_m" "$BIN/sbin/$_m"; done
 # and blkid, every five minutes. So the script ships two LITERALS and the seams live HERE, in the
 # same render step that already substitutes the template variables above. Applied after the
 # bash -n / no-unrendered-interpolation assertions, because neither literal is TF interpolation.
-# The PATH assignment is substituted WHOLE, not by its sbin suffix. The shipped form PREPENDS
-# the trusted dirs and only appends the inherited value ($${PATH:+:$$PATH}), which is the point
-# of the #8386 review fix: a `PATH` secret in the config store can no longer win first
-# resolution. That also means the harness can no longer inject stubs THROUGH the environment --
-# the real /usr/bin would beat them -- so the seam has to replace the whole line.
+# The PATH assignment is substituted WHOLE. The shipped form is a LITERAL trusted list that
+# inherits nothing (#8417 review): a `PATH` secret in the config store can neither win first
+# resolution nor be searched at all. That also means the harness cannot inject stubs THROUGH the
+# environment, so the seam has to replace the whole line.
 sed -i "s|^PATH=.*|PATH=\"$BIN:$BIN/sbin:\$PATH\"|" "$HB"
 sed -i "s|/dev/disk/by-id/|$TMP/by-id/|g" "$HB"
+# (#8408) the per-boot tmpfs state dir, re-rooted the same way (a render-time literal seam).
+sed -i "s|/run/soleur-registry/|$TMP/run-soleur-registry/|g" "$HB"
+mkdir -p "$TMP/run-soleur-registry"
+# (#8408 (c)) the escrow state dir, re-rooted the same way.
+sed -i "s|/var/lib/soleur-registry/|$TMP/var-lib-soleur-registry/|g" "$HB"
+mkdir -p "$TMP/var-lib-soleur-registry"
+# (#8408 (c)) /proc/uptime, which decides `pending`. Default: a long-running host (27.8 h).
+sed -i "s|/proc/uptime|$TMP/uptime|g" "$HB"
+printf '99999.50 12345.00\n' > "$TMP/uptime"
 # Non-vacuity for BOTH seams: if either literal is renamed in the template these substitutions
 # silently no-op and the sbin-only / devid cases would pass against an unseamed script.
 PHASE=posture   # both seams belong to the #8386 property, not to the #7500 floor
 assert "T1 PATH seam landed (the stub dirs now win first resolution)" \
   "grep -qF 'PATH=\"$BIN:$BIN/sbin:\$PATH\"' '$HB'"
+assert "T1 uptime seam landed (the pending arm now reads the fixture)" "grep -qF '$TMP/uptime' '$HB'"
 # The RENDERED copy deliberately still inherits, so per-case `PATH=` overrides (the no-jq tier-4
-# cases) keep working. The SHIPPED template must NOT: it prepends the trusted dirs so a `PATH`
-# secret in the config store cannot win first resolution as root. That property belongs to the
+# cases) keep working. The SHIPPED template must NOT: it is the literal trusted list, so a `PATH`
+# secret in the config store changes nothing about what root runs. That property belongs to the
 # template, so it is asserted against the template here rather than against this rendered copy.
-assert "the SHIPPED template prepends trusted dirs (a PATH secret cannot win first resolution)" \
-  "grep -qF 'PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\$\${PATH:+:\$\$PATH}\"' '$CI_YML'"
+#
+# (#8417) EVALUATED, not grepped. The assert this replaces pinned the SPELLING
+# `$${PATH:+:$$PATH}` -- and that spelling was the defect: Terraform renders `$${` to `${` but
+# leaves a bare `$$` verbatim, so bash expanded it to `:<PID>PATH` and the inherited PATH was
+# never appended at all. A grep of the spelling was green over the bug for its whole life. So
+# render the shipped line the way templatefile does, run it, and assert what PATH BECOMES. The
+# review then dropped the append entirely: the evaluated PATH must equal the trusted list EXACTLY,
+# whatever was inherited. Taken from the HEARTBEAT block ($RAW), not the first match in the file.
+_SHIPPED_PATH_LINE="$(grep -E '^[[:blank:]]*PATH=' "$RAW" | sed -E 's/^[[:blank:]]+//; s/[$][$][{]/${/g')"
+_TRUSTED='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+_EVAL_INHERIT="$(env -i /bin/bash --noprofile --norc -c "PATH=/inherited/dir; $_SHIPPED_PATH_LINE; printf '%s' \"\$PATH\"" 2>/dev/null)"
+_EVAL_UNSET="$(env -i /bin/bash --noprofile --norc -c "unset PATH; $_SHIPPED_PATH_LINE; printf '%s' \"\$PATH\"" 2>/dev/null)"
+assert "the heartbeat has exactly ONE PATH assignment (non-empty, single-line extraction)" \
+  "[[ -n \"\$_SHIPPED_PATH_LINE\" ]] && [[ \"\$(grep -c . <<<\"\$_SHIPPED_PATH_LINE\")\" -eq 1 ]]"
+assert "the SHIPPED PATH line is a literal: no expansion of any kind (\$ absent)" \
+  "! grep -qF '\$' <<<\"\$_SHIPPED_PATH_LINE\""
+assert "(#8417 review) with PATH inherited, the evaluated PATH is EXACTLY the trusted list" \
+  "[[ \"\$_EVAL_INHERIT\" == \"\$_TRUSTED\" ]]"
+assert "(#8417) the evaluated PATH carries no PID-shaped token (a bare \$\$ renders as <pid>PATH)" \
+  "! grep -qE '[0-9]+PATH' <<<\"\$_EVAL_INHERIT\""
+assert "(#8417) with PATH unset the SHIPPED line yields exactly the trusted list (no stray colon)" \
+  "[[ \"\$_EVAL_UNSET\" == \"\$_TRUSTED\" ]]"
 assert "the SHIPPED template pins LC_ALL=C (the guards below are locale-defined character classes)" \
   "grep -qF 'export LC_ALL=C' '$CI_YML'"
 assert "T1 by-id seam landed (the shipped reverse map now walks the fixture dir)" \
   "grep -qF '$TMP/by-id/scsi-0HC_Volume_' '$HB'"
+assert "T1 luks-open arm seam landed (the reader now reads the fixture dir)" \
+  "grep -qF '$TMP/run-soleur-registry/luks-open.arm' '$HB'"
 PHASE=redact
 
 # run_hb <fixture-content> [extra-env...] -> prints the emitted SOLEUR_ZOT_DISK row.
@@ -872,6 +913,91 @@ assert_field "P-M2-ten-digit-alias expected" store_expected_devid "$EXP_DEVID"
 assert_field "P-M2-ten-digit-alias luks"     store_luks           "yes"
 set_byid "$EXP_DEVID:sdb"
 
+# --- (#8408 (b)) luks_open_arm: which arm registry-luks-open.sh last took this boot ---------
+# The reopen script is fail-open on every arm; this trusted-head field is the only off-box
+# record of which one fired. Closed vocabulary; absent file = none; anything else = __UNREADABLE__.
+LOA="$TMP/run-soleur-registry/luks-open.arm"
+_loa_case() { # <label> <file-content|__ABSENT__> <expected>
+  rm -f "$LOA"
+  [ "$2" = __ABSENT__ ] || printf '%s\n' "$2" > "$LOA"
+  posture_case "P-loa-$1" \
+    HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+    HB_LSBLK_SUBJ="/dev/mapper/registry" HB_CRYPT_SUBJ="registry" \
+    HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+    HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+  assert_field "P-loa-$1 luks_open_arm" luks_open_arm "$3"
+}
+_loa_case absent __ABSENT__ none
+_loa_case opened opened opened
+_loa_case already already_open already_open
+_loa_case open-failed open_failed open_failed
+_loa_case garbage 'opened; rm -rf /' __UNREADABLE__
+rm -f "$LOA"
+assert "P-loa luks_open_arm precedes ' zot_last_err=' in the LINE= assembly" \
+  "grep -qE 'store_luks=[^ ]+ luks_open_arm=' <<<\"\$(grep -F 'LINE=\"SOLEUR_ZOT_DISK' '$RAW' | head -1 | sed 's/ zot_last_err=.*//')\""
+
+# --- (#8408 (c)) store_escrow: the daily escrow re-test's verdict, READ (never run) here ---------
+ESC="$TMP/var-lib-soleur-registry/escrow.state"
+_esc_case() { # <label> <file-content|__ABSENT__> <expected-token> <expected-age: exact|pos>
+  rm -f "$ESC"
+  [ "$2" = __ABSENT__ ] || printf '%s\n' "$2" > "$ESC"
+  posture_case "P-esc-$1" \
+    HB_FINDMNT_OUT="/dev/mapper/registry" HB_FINDMNT_RC=0 \
+    HB_LSBLK_SUBJ="/dev/mapper/registry" HB_CRYPT_SUBJ="registry" \
+    HB_LSBLK_OUT="$LSBLK_MAPPER" HB_CRYPT_OUT="$CRYPT_LUKS" HB_CRYPT_RC=0 \
+    HB_BLKID_MAP="/dev/sdb=crypto_LUKS"
+  assert_field "P-esc-$1 store_escrow" store_escrow "$3"
+  if [ "$4" = pos ]; then
+    assert "P-esc-$1 store_escrow_age_s is a non-negative integer" \
+      "[[ \"\$(_field_value store_escrow_age_s)\" =~ ^[0-9]+\$ ]]"
+  else
+    assert_field "P-esc-$1 store_escrow_age_s" store_escrow_age_s "$4"
+  fi
+}
+_now="$(date +%s)"
+_esc_case absent __ABSENT__ none -1
+_esc_case fresh-ok "result=ok at=$((_now - 60))" ok pos
+_esc_case fail-pass "result=fail_passphrase at=$((_now - 60))" fail_passphrase pos
+_esc_case fail-header "result=fail_header at=$((_now - 60))" fail_header pos
+_esc_case fail-key "result=fail_key_absent at=$((_now - 60))" fail_key_absent pos
+_esc_case indet "result=indeterminate at=$((_now - 60))" indeterminate pos
+# 26 h plus one minute: a dead escrow job must surface as stale within a day, not hide as ok.
+_esc_case stale-ok "result=ok at=$((_now - 93660))" stale pos
+_esc_case three-days "result=ok at=$((_now - 259200))" stale pos
+_esc_case offvocab "result=okay at=$((_now - 60))" __UNREADABLE__ pos
+_esc_case bad-epoch "result=ok at=yesterday" __UNREADABLE__ -1
+_esc_case future "result=ok at=$((_now + 3600))" ok -1
+# The threshold is `-gt 93600`: 25 h is still ok, 26 h + 1 s is stale (clock drift only ages it).
+_esc_case 25h "result=ok at=$((_now - 90000))" ok pos
+_esc_case 26h-plus-1 "result=ok at=$((_now - 93601))" stale pos
+_esc_case indet-old "result=indeterminate at=$((_now - 259200))" stale pos
+# A fail_* token keeps its remediation cue however old it is: `stale` never masks a failure.
+_esc_case fail-pass-old "result=fail_passphrase at=$((_now - 259200))" fail_passphrase pos
+_esc_case fail-key-old "result=fail_key_absent at=$((_now - 259200))" fail_key_absent pos
+# 10#: a leading zero is decimal, and `08`/`09` (invalid octal) must not abort the whole row.
+_esc_case leading-zero "result=ok at=0$((_now - 60))" ok pos
+_esc_case octal-invalid "result=ok at=09" stale pos
+# Length bound: 13+ digits is not an epoch this reader will do arithmetic on.
+_esc_case long-epoch "result=ok at=1234567890123" __UNREADABLE__ -1
+# `pending`: no state file yet on a freshly booted instance, only before 2 h of uptime.
+printf '100.25 50.00\n' > "$TMP/uptime"
+_esc_case pending-fresh-boot __ABSENT__ pending -1
+printf '7199.99 50.00\n' > "$TMP/uptime"
+_esc_case pending-boundary-7199 __ABSENT__ pending -1
+printf '7200.00 50.00\n' > "$TMP/uptime"
+_esc_case none-at-7200 __ABSENT__ none -1
+printf '100.25 50.00\n' > "$TMP/uptime"
+_esc_case present-on-fresh-boot "result=fail_header at=$((_now - 60))" fail_header pos
+rm -f "$TMP/uptime"
+_esc_case uptime-unreadable-absent __ABSENT__ none -1
+printf '99999.50 12345.00\n' > "$TMP/uptime"
+rm -f "$ESC"
+_ESC_LINE_HEAD="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1 | sed 's/ zot_last_err=.*//')"
+assert "P-esc store_escrow and store_escrow_age_s precede ' zot_last_err=' in the LINE= assembly" \
+  "grep -qE 'store_escrow=[^ ]+ store_escrow_age_s=[^ ]+ host=' <<<\"\$_ESC_LINE_HEAD\""
+assert "P-esc the heartbeat never RUNS the escrow (no luksOpen / test-passphrase in its body)" \
+  "! grep -qE 'luksOpen|test-passphrase' '$HB'"
+
 # --- Structural: the order pin, on the source text rather than one rendered row --------------
 _P_LINE="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1)"
 assert "P-s all five posture fields precede ' zot_last_err=' in the LINE= assembly" \
@@ -933,7 +1059,7 @@ fi
 # ONE FLOOR PER PROPERTY. A single total would let every posture case be deleted while the
 # redaction cases alone still cleared it, which is the vacuity these floors exist to refuse.
 CASES_REDACT_MIN=39
-CASES_POSTURE_MIN=170
+CASES_POSTURE_MIN=348
 if [[ "$CASES_REDACT" -lt "$CASES_REDACT_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7500 redaction): only %s cases ran (expected >= %s).\n' \
     "$CASES_REDACT" "$CASES_REDACT_MIN" >&2
