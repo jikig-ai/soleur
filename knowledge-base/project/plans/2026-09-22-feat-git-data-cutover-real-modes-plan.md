@@ -15,6 +15,40 @@ lane: cross-domain
 
 # git-data cutover: rebuild the real modes on real mechanisms
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-22
+**Research and review agents used:** repo-research-analyst, learnings-researcher, cto (three
+rulings), clo, cpo, spec-flow-analyzer (twice), a scoped advisor consult, dhh-rails-reviewer,
+kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist, security-sentinel,
+data-integrity-guardian, deployment-verification-agent, observability-coverage-reviewer,
+test-design-reviewer, user-impact-reviewer.
+
+### Key improvements
+
+1. **The mechanism changed**, from a runtime rsync plus repoint to a LUKS-only render delivered by
+   the next ordinary replace (ADR-238). This removes two defects the literal design carried: the
+   repoint did not survive a replace, and a fixed mapper assertion on a plaintext host would have
+   refused every Art. 17 erasure.
+2. **The erasure path fails closed.** A positive `store-verified` marker, bound to the mapper's
+   filesystem UUID, is written only after every boot check passes. The probe runs the real erasure
+   path as `git`, with `env -i` outside `runuser` (security P0).
+3. **Every new FATAL pages.** Each goes out as `stage=bootstrap`, which is already in
+   `git_data_boot_fatal`, so `issue-alerts.tf` needs no edit.
+4. **The boot checks can be tested without root**, using an extracted-block seam and stubs, and
+   the Guard rows that would have been vacuous now go RED.
+5. **Deployment gap found.** When the replace's boot poll fails, the pin publishes but the pin
+   redeploy is skipped with no email. Recovery is an unconditional redeploy dispatch.
+
+### New considerations discovered
+
+- `noload` can hide journal-only directory entries. A volume that `dumpe2fs -h` reports as needing
+  recovery is treated as `plaintext_unverified`.
+- Doppler can inject the test seams into `git-data-gc.service`. The unit strips them with `env -u`.
+- `AcceptEnv` accumulates across sshd drop-ins. The boot `sshd -T` stage now enforces the set.
+- A boot-FATAL window shows users the erasure-pending notice. The runbook sweeps the refused ids
+  after the forward fix.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -304,9 +338,11 @@ Nothing later can run until the steps before it pass (spec-flow P1-5).
    - The marker lives in `/etc`, so it survives a reboot. The bootstrap does not re-run on reboot,
      and nothing mounts the plaintext volume after boot, so the verification stays true.
 5. **Erasure probe.** Run
-   `runuser -u git -- env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=boot-probe-0 /usr/local/bin/git-data-remove.sh`.
+   `env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=boot-probe-0 runuser -u git -- /usr/local/bin/git-data-remove.sh`.
    - It must exit 0, and its captured stderr must contain `not present (no-op)`.
-   - `env -i` keeps `GIT_DATA_LUKS_KEY` and every seam out of the `git` process (Kieran P1-4).
+   - `env -i` comes BEFORE `runuser`. `runuser -u` without `-l` keeps its caller's environment, so
+     `runuser … env -i` would briefly run a `git`-uid process that still holds `GIT_DATA_LUKS_KEY`
+     in `/proc/<pid>/environ` (security P0; Kieran P1-4).
    - `boot-probe-0` passes the remove script's id validation. Its 0-byte lock dotfile is invisible
      to gc (`*.git` only) and to the served-repo count. Both are test rows.
 6. **Emit `boot_complete`** with `yes`/`no` values only. The readers grep `"<field>":"yes"`
@@ -314,8 +350,11 @@ Nothing later can run until the steps before it pass (spec-flow P1-5).
    unchecked (Kieran P1-2, architecture P1).
    - New terminal booleans: `fence_on_mapper` and `erasure_probe`.
    - `plaintext_empty` reads `yes` when the volume is empty or absent. It is reached only on pass.
-   - Informational fields: `plaintext_volume=present|absent` and `served_repos=<n>`. `served_repos`
-     surfaces unexpected content on the adopted LUKS volume before PR2 (architecture P2-3).
+   - Informational fields: `plaintext_volume=present|absent` and `served_repos=<n>`.
+   - A non-zero `served_repos` is FATAL `luks_residue count=<n>`, not informational. It is counted in
+     step 2, before the probe writes its lock dotfile, with the same exclusions as the plaintext
+     count. Unknown content on an adopted volume blocks the host rather than being served
+     (data-integrity P1).
 
 All `boot_complete` readers are updated in the same edit. Kieran P1-3 listed them:
 
@@ -451,6 +490,11 @@ The real modes refuse with these verdicts: `precondition_8209_open`,
 - `apps/web-platform/infra/git-data-provision.sh`, `git-data-remove.sh`,
   `git-data-transport-wrapper.sh`, `git-data-gc.sh`: the store assertion and marker; stale comments.
 - `apps/web-platform/infra/git-data.tf`: `automount = false` on `hcloud_volume_attachment.git_data`.
+- `apps/web-platform/infra/git-data-gc.service`: add `env -u` for the four seams in `ExecStart`.
+- `apps/web-platform/infra/cloud-init-git-data.yml`, `sshd -T` stage: enforce `acceptenv` and
+  `permituserenvironment`; add `no-user-rc` to the `authorized_keys` options.
+- `apps/web-platform/test/git-data-replication.test.ts`: a unit row pinning that exit 1 maps to
+  `refused`. Test only; no app-code change in PR1.
 - The suites: `git-data-provision.test.sh`, `git-data-remove.test.sh`,
   `git-data-transport-wrapper.test.sh`, the gc coverage, `git-data-luks-reopen.test.sh`,
   `git-data-emit.test.sh`, and the bootstrap/runcmd render suites. Enumerate them with
@@ -514,6 +558,40 @@ The real modes refuse with these verdicts: `precondition_8209_open`,
   plan shows a replace of `hcloud_volume_attachment.git_data`, drop the edit and record the reason.
   Do not ship an attachment replace in PR1.
 
+
+## Downtime & Cutover
+
+- **What goes offline.** `hcloud_server.git_data` is destroyed and recreated by the ADR-237 step-3
+  `git_data_host_replace`. That replace is already required to publish the pin, so PR1 adds no
+  extra replace. The git-data host is offline for the replace job's duration, usually a few
+  minutes.
+- **What that affects.** With `GIT_DATA_STORE_ENABLED` off, no web request reaches git-data:
+  provision, replicate and fetch all return early. The only live consumer is the Art. 17 erasure
+  behind Settings → Delete Account. Each deletion in the window waits up to the 30 s `execFile`
+  timeout, and logs an erasure event. The deletion itself completes, and no repository exists to be
+  left behind.
+- **Zero-downtime path evaluated and rejected.** ADR-220 "Considered options: zero-downtime key
+  delivery" already evaluated blue-green for this host and rejected it:
+  - both volumes attach to one server;
+  - `10.0.1.20` is fixed in every consumer;
+  - a second host needs a new address, volume moves and a consumer repoint.
+
+  A few-minute outage of a surface no user request depends on while the flag is off is the smaller
+  risk. An in-place change is barred by `hr-prod-host-config-change-immutable-redeploy`.
+- **The maintenance window is bounded.** It lasts from the replace dispatch to the fresh host's
+  `boot_complete`, read from Better Stack. The replace job's boot-signal poll already bounds it and
+  reds the job if the host does not come up. The operator authorizes the step-3 replace explicitly,
+  as ADR-237's post-merge sequence requires.
+- **What each stage verifies, and how to roll back.**
+  - **Before:** the recorded pre-replace reads.
+  - **After:** `boot_complete` with every terminal boolean `yes`.
+  - **On failure:** the recovery paths under Proposed Solution. The store marker is not written,
+    so erasures refuse but never mis-report; the forward fix is PR, then rehearsal, then evidence,
+    then replace. There is no revert to a pre-PR1 tag.
+- **The flag flip (PR2) causes no host downtime.** Its same-version redeploy of the web container is
+  a drained, canary-validated swap through the existing `/hooks/deploy` path, in the `web-1-swap`
+  mutex.
+
 ## Alternative Approaches Considered
 
 | Option | Why not |
@@ -560,14 +638,17 @@ failure_modes:
     detection: "bootstrap FATAL stage (git-data-emit fatal); on later boots the reopen unit's luks_reopen fatal"
     alert_route: "git-data boot fatal Sentry rule to operator email"
   - mode: "plaintext volume cannot be verified or holds repositories at the serving change"
-    detection: "FATAL stage plaintext_unverified or plaintext_residue count=<n>; the store marker is never written so every store-acting script refuses"
-    alert_route: "git-data boot fatal Sentry rule to operator email"
+    detection: "bootstrap log 'FATAL: plaintext_unverified reason=<word>' or 'FATAL: plaintext_residue count=<n>', emitted as stage=bootstrap fatal; the store marker is never written, so every store-acting script refuses"
+    alert_route: "git_data_boot_fatal Sentry rule (stage=bootstrap) to operator email"
   - mode: "the erasure path refuses on a correctly booted host"
-    detection: "boot_complete erasure_probe=no, before any user deletion; the replace job's boot poll reds"
-    alert_route: "git-data boot-stage Sentry rule to operator email; failed replace job"
+    detection: "bootstrap log 'FATAL: erasure_probe=no' (emitted as stage=bootstrap fatal) plus boot_complete erasure_probe=no; the replace job's boot poll reds"
+    alert_route: "git_data_boot_fatal Sentry rule (stage=bootstrap, already in its list) to operator email; failed replace job"
   - mode: "the fence landed under the mountpoint instead of on the mapper"
-    detection: "boot_complete fence_on_mapper=no"
-    alert_route: "git-data boot-stage Sentry rule to operator email; failed replace job; rung-2 HOLD"
+    detection: "bootstrap log 'FATAL: fence_on_mapper=no' (stage=bootstrap fatal) plus boot_complete fence_on_mapper=no"
+    alert_route: "git_data_boot_fatal Sentry rule (stage=bootstrap) to operator email; failed replace job; rung-2 HOLD"
+  - mode: "the adopted LUKS volume already holds repository content"
+    detection: "bootstrap log 'FATAL: luks_residue count=<n>' (stage=bootstrap fatal); no store marker"
+    alert_route: "git_data_boot_fatal Sentry rule (stage=bootstrap) to operator email"
 
 logs:
   where: "Better Stack git-data source (boot events posted by git-data-emit); Sentry issues; the rung-2 rehearsal run log and evidence artifact"
@@ -754,7 +835,7 @@ release a production replace or a rung-2 evidence PASS.
 | 4 | A new boolean is emitted but left out of `GIT_DATA_BOOT_TERMINAL` or the capture's required set | RED |
 | 5 | The marker is written before step 2 (an order row) | RED (the marker is absent when step 2 FATALs) |
 | 6 | The reboot arm accepts `target=/mnt/git-data-luks` | RED |
-| 7 | The probe runs without `env -i` | RED (a fixture env variable must not be visible to the stub) |
+| 7 | The probe runs without `env -i`, or with `env -i` inside `runuser` instead of before it | RED (a fixture `GIT_DATA_LUKS_KEY` must not be visible to the stub; a static row asserts `env -i` precedes `runuser`) |
 
 **Harness rows.**
 
@@ -924,6 +1005,117 @@ runs (`git-data-flag-precheck.sh` reads the pin before the store probes are reac
 and the #8511 compound pass into a separate PR. The operator asked for both to be folded into this
 one.
 
+## Deepen-Plan Revisions (2026-09-22)
+
+Each item below is binding on `/work`. It extends Proposed Solution, Guard Contract and Test
+Scenarios.
+
+### Security
+
+- **Probe order (P0).** `env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=boot-probe-0 runuser -u git -- /usr/local/bin/git-data-remove.sh`.
+  A static row asserts that `env -i` precedes `runuser` (applied above).
+- **The sshd environment is enforced at boot, not only linted.** The existing `sshd -T` stage in
+  `cloud-init-git-data.yml` (~L836) FATALs unless:
+  - the `acceptenv` values are a subset of {`LANG`, `LC_*`};
+  - `permituserenvironment` is `no`.
+
+  The census stays as a lint. `authorized_keys` options gain `no-user-rc`.
+- **The gc unit strips the seams.** `git-data-gc.service` `ExecStart` wraps the call in
+  `env -u GIT_DATA_STORE_DEVICE -u GIT_DATA_STORE_VERIFIED -u GIT_DATA_MOUNT_ROOT -u GIT_DATA_REPO_ROOT`.
+  Doppler `prd_git_data` could otherwise inject them. A census row checks this.
+- **Marker directory.** `install -d -m0755 -o root -g root /etc/git-data`, then an atomic write
+  (temp file plus `mv`). A census row asserts the bootstrap is the only writer under
+  `/etc/git-data`.
+- **Temporary plaintext mount.**
+  - Mount at `$(mktemp -d)/mnt`, so the 0700 parent still protects it once the volume's own root
+    mode takes over.
+  - Use `-o ro,noload,nosuid,nodev,noexec`.
+  - A trap unmounts it on every exit. A failed `umount` is FATAL `plaintext_unverified
+    reason=umount`.
+
+### Data integrity
+
+- **`luks_residue` is FATAL** (applied above).
+- **Journal state.** If `dumpe2fs -h` on the plaintext device shows `needs_recovery`, the result is
+  `plaintext_unverified reason=journal`, and nothing is counted.
+- **The marker is bound to one volume.** It holds the mapper's filesystem UUID. Every store-acting
+  script compares it with `findmnt -n -o UUID --mountpoint "$MOUNT_ROOT"`, so a mapper reopened on a
+  different volume refuses.
+- **`erased` means unlinked, not physically destroyed.** Deleted blocks stay readable to a holder
+  of the LUKS key until the key or the volume is rotated (D6, PR2). ADR-238 and the PA-36 addendum
+  say so.
+- **Deferred to PR2** (it touches app code): `removeGitDataRepo` should require a positive stderr
+  sentinel (`erased bare repo` or `not present (no-op)`) as well as exit 0. PR1 adds the
+  `git-data-remove.test.sh` contract row asserting both strings stay exact.
+
+### Observability
+
+- **Every new failure pages.** Each is emitted through `log "FATAL: <reason> …"`, which is
+  `stage=bootstrap`, a value already in `git_data_boot_fatal`, so `issue-alerts.tf` is not edited.
+  The failures are `plaintext_unverified`, `plaintext_residue`, `luks_residue`, `fence_on_mapper=no`
+  and `erasure_probe=no`. A test row asserts the emitted stage is `bootstrap`.
+- **gc** refuses with `exit 1`, so `git-data-gc-failure.service` fires its OnFailure emit. A test
+  row covers this.
+- **Reopen target.** Because `git-data-luks-reopen.sh` narrows to `/mnt/git-data`, any other target
+  `die`s and pages as the existing `luks_reopen` stage.
+- **Deferred to PR2** (unreachable while the flag is off): an app-side mirror for provision and
+  transport refusals.
+
+### Deployment (recovery)
+
+- The pin is published by Terraform inside the apply (`git-data.tf:356`). The boot poll runs after
+  it, so a failed poll leaves the pin published.
+- `source-run-gate.sh` then skips the pin redeploy without failing, so no email is sent. After any
+  failed step-3 replace, the runbook dispatches
+  `gh workflow run git-data-pin-redeploy.yml --ref main`, with no `source_run_id`, because passing
+  one re-reads the failure and skips again.
+- Every recovery path starts with a Sentry or Better Stack read, never with a replace.
+
+### User impact
+
+- During a boot-FATAL window, a user who deletes their account sees the existing erasure-pending
+  notice (`?erasure=pending`, `account-delete.ts:229`), not a clean success.
+  - After the forward fix, the runbook sweeps the refused workspace ids from Sentry
+    `op:git-data-bare-repo-erasure` and re-drives each erasure. Refusals only happen while the store
+    is empty, so each resolves as `not present`.
+  - The runbook records each id on the Art. 17 record.
+- The store refusal uses the wrappers' `reject` (exit 1): never 0, never 255. The remove suite
+  asserts that exit code, and an app-side unit row asserts `removeGitDataRepo` maps exit 1 to
+  `refused`. This is an existing mapping; the row only pins it.
+- What a user sees when replication is refused with the flag on is PR2's User-Brand Impact, not
+  PR1's.
+
+### Test design
+
+These fixes make Guard 2 drivable without root.
+
+- **Extraction.** Put sentinel comments around bootstrap steps 2 to 5 and extract them as one unit
+  with a line floor, following the `_reopen_unit` precedent in `git-data-luks-reopen.test.sh`. A
+  static row checks there is exactly one marker writer, placed after every `plaintext_*` and
+  `luks_residue` FATAL.
+- **Stubs.**
+  - `mount` logs its argv (asserting `ro,noload,nosuid,nodev,noexec`) and copies a fixture tree
+    into its target.
+  - The real `findmnt` drives row 1: a no-op mount must read as `plaintext_unverified`.
+  - A by-id seam points at a temp symlink for the positive control.
+- **Seams.** The bootstrap honours `GIT_DATA_STORE_VERIFIED` and `GIT_DATA_STORE_DEVICE`, so a
+  non-root run cannot pass "marker absent" through EACCES. There is also a positive control: the
+  marker is present on the all-pass path.
+- **The `runuser` stub** strips `-u git --` and preserves the environment exactly. The remove-script
+  path is a seam, and a census row asserts its default stays `/usr/local/bin/git-data-remove.sh`.
+- **Contract row in `git-data-remove.test.sh`:** `env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=boot-probe-0`
+  gives exit 0 and exactly `not present (no-op)`.
+- **Guard 1 row 6** derives its look-alikes from the real SOURCE (`"${src%?}"`, `"${src}-old"`),
+  never a hand-typed `/dev/mapper/git-data-old`.
+- **Guard 1 row 9** keeps `mountpoint` on the curated PATH, and anchors on the script's own `findmnt`
+  refusal text.
+- **Guard 2 row 4** derives the required set from the bootstrap's `boot_complete` arguments, and
+  checks it against both `GIT_DATA_BOOT_TERMINAL` and the capture's required set.
+- **Guard 2's harness row** asserts the capture's verdict text, not its exit code, unless `/work`
+  confirms the exit code differs between PASS and FAIL.
+- **btrfs.** Always set the seam from `findmnt --mountpoint "$(stat -c %m "$root")"`. btrfs prints a
+  `[/subvol]` suffix.
+
 ## Test Scenarios
 
 - **Script suites** (provision, remove, transport, gc):
@@ -969,7 +1161,8 @@ Two issues without that label are handled as follows:
   prefix or glob.
 - Mount the plaintext volume `ro,noload`. Plain `ro` can replay the journal. Verify the source, not
   only the count.
-- Run the erasure probe under `runuser -u git -- env -i …`. The bootstrap's environment holds
+- Run the erasure probe as `env -i PATH=… SSH_ORIGINAL_COMMAND=… runuser -u git -- …`, with `env -i`
+  outside `runuser`. `runuser` keeps its caller's environment, and the bootstrap's environment holds
   `GIT_DATA_LUKS_KEY`.
 - After the step-3 replace, today's dry run reads `already_cut_over` (exit 5). That is expected; do
   not fix it in PR1.

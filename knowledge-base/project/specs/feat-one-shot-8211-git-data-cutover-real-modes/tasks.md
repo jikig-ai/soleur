@@ -67,6 +67,33 @@ Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-
 - 4.7 A compound pass on PR #8511's ship-phase errors: fixes not re-checked against earlier CI
   failures; the shallow repo at 12:48 (#7924, PR #8510); the deploy-arm `head_sha` (`deploy-arm.sh`).
 
+## 4b. Deepen-plan revisions (binding; see the plan's "Deepen-Plan Revisions")
+
+- 4b.1 The probe runs as `env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=boot-probe-0 runuser -u git -- …`,
+  with `env -i` BEFORE `runuser`. Add the static order row.
+- 4b.2 Make `luks_residue` (`served_repos>0`) FATAL. `needs_recovery` counts as
+  `plaintext_unverified reason=journal`.
+- 4b.3 The marker holds the mapper's filesystem UUID, and the scripts compare it with
+  `findmnt -n -o UUID`. Create the directory with `install -d`, write the marker atomically, and
+  make the bootstrap its only writer.
+- 4b.4 The temporary mount goes under `$(mktemp -d)/mnt` with `ro,noload,nosuid,nodev,noexec`. A
+  trap unmounts it, and a failed `umount` is FATAL.
+- 4b.5 Every new failure goes through `log "FATAL: …"` (`stage=bootstrap`). gc refuses with exit 1.
+- 4b.6 The `sshd -T` stage enforces `acceptenv` and `permituserenvironment`. Add `no-user-rc`, and
+  `env -u` the seams in `git-data-gc.service`.
+- 4b.7 Test harness:
+  - 4b.7.1 the extraction seam, and the stubs for `mount`, `umount` and `runuser`;
+  - 4b.7.2 the bootstrap seams, the remove contract row, and look-alikes derived from the real
+    SOURCE;
+  - 4b.7.3 the required set derived from `boot_complete`;
+  - 4b.7.4 a `git-data-replication.test.ts` row: exit 1 maps to `refused`.
+- 4b.8 Runbook:
+  - 4b.8.1 the unconditional pin-redeploy dispatch after a failed step-3 replace;
+  - 4b.8.2 recovery starts with a Sentry or Better Stack read;
+  - 4b.8.3 the refused-id sweep and re-drive after the forward fix.
+- 4b.9 ADR-238 and the PA-36 addendum say that `erased` means unlinked (blocks stay readable to a
+  holder of the LUKS key until rotation).
+
 ## 5. Verification and ship
 
 - 5.1 Run the full affected battery, then `scripts/test-all.sh`.
