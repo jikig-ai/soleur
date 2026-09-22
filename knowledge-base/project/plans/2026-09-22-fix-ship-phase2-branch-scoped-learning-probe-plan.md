@@ -14,6 +14,29 @@ lane: cross-domain
 
 # fix(ship): Phase 2 learning probe is branch-scoped (Ref #8470)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-22 · **Sections enhanced:** 7 · **Agents:** plan-review panel (DHH,
+Kieran, code-simplicity, CTO), advisor consult, test-design-reviewer, architecture-strategist,
+learnings-researcher.
+
+### Key Improvements
+
+1. The probe's committed arms run only after a successful fetch (a stale `origin/main` had
+   re-created the defect), and pathspecs are root-anchored (`:/`) so a subdirectory cwd works.
+2. A `compound:`/`learning:` commit-subject arm stops one-shot from running compound twice when
+   compound only updated or archived.
+3. The regression suite pins behaviour over 11 fixture rows with a real local bare remote, a
+   hermetic `bash --noprofile --norc`, and an any-fence-kind exactly-one-block rule.
+4. ADR-229 amendment keyed on the test file's first first-parent commit on `main`, written as an
+   explicit trigger change (interactive Skip), in this PR.
+
+### New Considerations Discovered
+
+- Ship Phase 1.5 already forbids `|| true` on the fetch; the first draft violated it.
+- Two other ship lines (Headless Mode Detection, Important Rules) contradicted a conditional Phase 2.
+- Deepen-plan Phase 4.7 covers `plugins/*/skills/*.md`, so the Observability block is required.
+
 ## Overview
 
 Ship Phase 2 decides whether compound already ran for the feature by asking git for any learning
@@ -63,7 +86,7 @@ at 262718 B after PR #8474 (see Reconciliation).
 
 **Cut List (Phase 0.6b).**
 - Extract Phase 2 to `references/` + load directive (issue fix-path step 1) → bought "fits the byte
-  ceiling" → already satisfied inline (11282 B headroom, +792 B delta). Cut.
+  ceiling" → already satisfied inline (11282 B headroom, ~+1050 B delta). Cut.
 - `knowledge-base/project/learnings/**/*FEATURE*` Glob → bought nothing P1/P2 need; it reintroduces
   the repo-wide-in-time false positive. Cut.
 - Follow-through sweeper enrollment for the six-week re-measure → ADR-229 Alternatives rejects it
@@ -94,7 +117,7 @@ via `archive-kb.sh` on `feat-*`).
 - `2026-06-11-digest-launch-quality-fallback-content-and-fence-parse.md` — fence extraction must be
   exact; the test counts fences of ANY language tag and asserts exactly one in the section.
 - `2026-04-06-rule-audit-budget-baseline-drift.md` — re-measure `wc -c` at work time; the plan
-  states the delta (+792 B), not an absolute.
+  states the delta (~+1050 B), not an absolute.
 - `2026-04-11-stale-main-and-playwright-first-workflow-gaps.md` — fetch before reading
   `origin/main`; the block trusts its committed arm only after a successful fetch (plan-review revision).
 
@@ -107,7 +130,7 @@ row 1 fail on the current SKILL.md); `cq-assert-anchor-not-bare-token`; `cq-cite
 
 | Issue / brief claim | Reality (measured 2026-09-22) | Plan response |
 |---|---|---|
-| "ship/SKILL.md is at its 274000-byte ceiling; extract Phase 2 to `references/` to free bytes" (#8470 fix path step 1) | `wc -c` = **262718** B; ceiling 274000 → 11282 B headroom (PR #8474 freed it). `lint-skill-body-budget.py --base origin/main` → OK. The drafted Phase 2 replacement measures **+792 B** (1609 → 2401). | Keep Phase 2 **inline**. Extraction would add a load directive, a reachability-guard dependency and a second file for a 2.4 KB section, and it would move the probe block away from the section the anchor test scopes. Ceiling untouched. |
+| "ship/SKILL.md is at its 274000-byte ceiling; extract Phase 2 to `references/` to free bytes" (#8470 fix path step 1) | `wc -c` = **262718** B; ceiling 274000 → 11282 B headroom (PR #8474 freed it). `lint-skill-body-budget.py --base origin/main` → OK. The drafted Phase 2 replacement measures **+981 B** (1609 → 2590), ~+1050 B with the §A.2 lines. | Keep Phase 2 **inline**. Extraction would add a load directive, a reachability-guard dependency and a second file for a 2.4 KB section, and it would move the probe block away from the section the anchor test scopes. Ceiling untouched. |
 | "The probe must also count an uncommitted learning" (#8470 design caveat) | Confirmed necessary: compound writes the file before its commit. | `git status --porcelain … \| grep -E '^(\?\?\|A)'` arm in the same block. |
 | Phase 2 also globs `knowledge-base/project/learnings/**/*FEATURE*` | That glob is repo-wide in TIME: any older learning whose filename contains the feature slug (e.g. `ship`, `plan`) satisfies it — a second instance of the same defect class. | **Cut** — the branch-scoped probe covers the property. |
 | "Keep the `skill: soleur:compound` literal in the Phase 2 section" | Pinned by `plugins/soleur/test/workflow-fidelity.test.ts` → "every sub-step is invoked by its key's SKILL.md in the section that owns it" (`SECTION.ship = "## Phase 2: Capture Learnings"`). | The rewrite keeps all three existing compound calls inside the section. |
@@ -119,8 +142,8 @@ row 1 fail on the current SKILL.md); `cq-assert-anchor-not-bare-token`; `cq-cite
 ### A. New `## Phase 2: Capture Learnings` body (inline, `plugins/soleur/skills/ship/SKILL.md`)
 
 Replace the section from its heading up to (not including) `## Phase 3: Verify Documentation`
-with the text below (drafted and measured: 1609 → **2401 B, +792 B**; ship stays ~263.5 KB of a
-274000 B ceiling). The heading line and every `skill: soleur:compound` call are preserved.
+with the text below (drafted and measured: 1609 → **2590 B, +981 B**; with the two one-line
+edits in §A.2 ship stays ~263.8 KB of a 274000 B ceiling). The heading line and every `skill: soleur:compound` call are preserved.
 
 ````markdown
 ## Phase 2: Capture Learnings
@@ -129,12 +152,14 @@ Did **this branch** add a learning? Ask the branch, not the calendar: a repo-wid
 
 ```bash
 { git status --porcelain -- ':/knowledge-base/project/learnings/' | grep -E '^(\?\?|A)'
-  git fetch -q origin main 2>/dev/null &&
-    git log --diff-filter=A --format=%h origin/main..HEAD -- ':/knowledge-base/project/learnings/' 2>/dev/null
+  git fetch -q origin main 2>/dev/null && {
+    git log --diff-filter=A --format=%h origin/main..HEAD -- ':/knowledge-base/project/learnings/'
+    git log --format=%s origin/main..HEAD | grep -E '^(compound|learning): '
+  } 2>/dev/null
 } | grep -q . && echo "BRANCH_LEARNING=present" || echo "BRANCH_LEARNING=absent"
 ```
 
-It counts a learning compound wrote but has not committed yet, counts only ADDED files (editing or renaming an old learning is not capturing one), and trusts the committed arm only after a successful fetch — a stale `origin/main` would widen the range to main's own learnings (Phase 1.5's fetch rule). Every doubt resolves toward running compound. Pinned by `plugins/soleur/test/ship-learning-probe.test.ts`.
+It counts a learning compound wrote but has not committed yet, counts an ADDED file or a branch commit whose subject starts `compound:` or `learning:` (compound's own commit prefixes; editing an old learning in any other commit is not capturing one), and trusts the committed arms only after a successful fetch — a stale `origin/main` would widen the range to main's own learnings (Phase 1.5's fetch rule). Every doubt resolves toward running compound. Pinned by `plugins/soleur/test/ship-learning-probe.test.ts`.
 
 **`BRANCH_LEARNING=present`:** compound already ran for this branch — continue to Phase 3.
 
@@ -153,6 +178,23 @@ The "unchanged" spans are copied byte-for-byte from the current section; only th
 paragraph, the `learnings/**/*FEATURE*` Glob line and the "If no recent learning exists" lead-in
 change. The full drafted text is reproduced at work time from the current section plus this diff.
 
+**Why a commit-subject arm (deepen-plan, architecture review).** `soleur:one-shot` runs
+`skill: soleur:compound` BEFORE ship (its steps 6-7), and compound sometimes only UPDATES an
+existing learning (`learning: update <topic>`, compound/SKILL.md "Managing Learnings") or only
+archives artifacts (`compound: consolidate and archive feat-<slug> artifacts`,
+compound-capture/SKILL.md). With the added-file arm alone that session reads `absent`, the artifacts
+are already archived, and headless ship runs compound a second time. Compound's own commit prefixes
+close that gap; a hand-written `learning:` commit is still a captured learning.
+
+### A.2 Two one-line consistency edits elsewhere in `plugins/soleur/skills/ship/SKILL.md`
+
+- `## Headless Mode Detection` bullet `- Phase 2: auto-invoke \`skill: soleur:compound --headless\` (forward flag, no user prompt)`
+  → append ` when the Phase 2 probe prints \`BRANCH_LEARNING=absent\``. Otherwise it reads as
+  unconditional and contradicts the `present` → Phase 3 branch.
+- `## Important Rules` line `- **Ask before running soleur:compound.** The user may have already documented learnings.`
+  → `- **Phase 2's probe decides whether compound runs.** Ask only on its interactive no-artifacts path.`
+  (the old line already contradicted the unarchived-artifacts path, which never asks).
+
 **Probe semantics (each row RUN in a throwaway fixture with a local bare `origin`, 2026-09-22):**
 
 | # | Fixture state | Probe prints | Old `--since` form |
@@ -165,9 +207,14 @@ change. The full drafted text is reproduced at work time from the current sectio
 | 6 | no `origin` remote | `absent` | — |
 | 7 | fetch fails and local `origin/main` is stale (older than the branch point); branch merged local `main` carrying a learning | `absent` | hashes |
 | 8 | row 2 run from a subdirectory of the repo | `present` | — |
+| 9 | branch has a staged (`A `) new learning | `present` | — |
+| 10 | branch commit `learning: update <topic>` modifies an existing learning | `present` | hashes |
+| 11 | fetch fails, branch has a COMMITTED new learning (no-crash + accepted miss) | `absent` | — |
 
+Row 6 is a no-crash check (it cannot distinguish a fetch-gated from an ungated log; row 7 does).
 Accepted misses, all in the safe direction (compound re-runs): a learning staged with
-`git add -N` (` A`), a renamed learning, a repo whose default branch is not `main` or has no
+`git add -N` (` A`), a renamed learning committed under another prefix, a committed learning when
+the fetch fails (row 11), a repo whose default branch is not `main` or has no
 `origin` (the rest of ship already hardcodes `origin/main`). A shallow clone with no merge-base can
 over-count (LOW; not built for).
 
@@ -179,19 +226,30 @@ bun:test, modelled on `ship-pr-title-guard.test.ts` (reading SKILL.md) and
 1. **Section extraction:** read `plugins/soleur/skills/ship/SKILL.md`; slice from the line starting
    `## Phase 2: Capture Learnings` to the next line starting `## ` (the scoping
    `workflow-fidelity.test.ts` uses). Assert the heading was found — a miss is a failure, not a skip.
-2. **Exactly one fenced block of ANY language tag in the section** (count every line starting with
-   three backticks, divide by two). Failure message: "ship Phase 2 must contain exactly one fenced
+   While scanning, skip heading detection INSIDE a fence (a `## ` comment line in the probe must
+   not end the slice early).
+2. **Exactly one fenced block of ANY kind in the section:** count lines matching
+   `/^\s*(`{3,}|~{3,})/` (indented, tilde and four-backtick fences all count) and assert the count
+   is exactly **2**, not "even". The extractor uses the same regex, and the extracted block must
+   contain `BRANCH_LEARNING=` (H1 guard). Failure message: "ship Phase 2 must contain exactly one fenced
    block — the learning probe the agent runs. A second block can re-introduce a repo-wide probe the
    behavioural rows never execute (#8470). Put other snippets in another phase."
 3. **Backstop text ban:** no fenced line in the section matches `/--(since|after|until|before)\b/`.
    Behaviour rows already catch these inside the one block; the ban exists for a block the test
    does not execute.
-4. **Behaviour rows 1-8** (table above), one `test()` each. Each builds `origin.git` with
-   `git init --bare` and a work repo with `origin` pointing at it (row 6 removes the remote; row 7
-   points it at a nonexistent path after `update-ref`-ing a stale `refs/remotes/origin/main`), all
-   through `gitFixture(dir)` / `gitFixtureEnv(dir)` from `plugins/soleur/test/lib/git-fixture-env.ts`.
-   Run `spawnSync("bash", ["-c", block], { cwd, env: gitFixtureEnv(dir) })` and assert
-   `stdout.trim()` **toBe** the expected token line and `status === 0`.
+4. **Behaviour rows 1-11** (table above), one `test()` each. Each builds `origin.git` with
+   `git init -q -b main --bare` and a work repo with `git init -q -b main` (pin the branch: the
+   fixture env blanks `init.defaultBranch`), `git remote add origin ../origin.git` (not a hand-set
+   `remote.origin.url`, or `git fetch origin main` updates only `FETCH_HEAD`), and
+   `git push origin HEAD:refs/heads/main`. Row 6 removes the remote; rows 7 and 11 use
+   `git remote set-url origin <nonexistent>` (row 7 after `update-ref`-ing a stale
+   `refs/remotes/origin/main`). All git goes through `gitFixture(dir)` / `gitFixtureEnv(dir)` from
+   `plugins/soleur/test/lib/git-fixture-env.ts`. Run
+   `spawnSync("bash", ["--noprofile", "--norc", "-c", block], { cwd, env })` where `env` is
+   `gitFixtureEnv(dir)` with `BASH_ENV`, `ENV`, `SHELLOPTS` and `BASHOPTS` deleted (the helper
+   sweeps only `GIT_*`; `BASH_ENV` executes a file on every non-interactive bash and an exported
+   `pipefail` changes the pipeline's status). Assert `stdout.trim()` **toBe** the expected token line
+   and `status === 0`.
 5. Temp dirs via `mkdtempSync(join(tmpdir(), "ship-learning-probe-"))`, removed in `afterAll`;
    export `TMPDIR=/var/tmp` locally.
 
@@ -200,14 +258,18 @@ bun:test, modelled on `ship-pr-title-guard.test.ts` (reading SKILL.md) and
 File: `knowledge-base/engineering/architecture/decisions/ADR-229-workflow-fsm-single-source-and-offline-classification.md`.
 
 - `## Status`: → `Amended 2026-09-19 (#8325), 2026-09-21 (#8399) and 2026-09-22 (#8470).`
-- One sentence appended to the #8399 ruling bullet, after the **Re-open trigger** sentences:
-  **Armed 2026-09-22 (#8470):** the fix is the PR that adds
-  `plugins/soleur/test/ship-learning-probe.test.ts` (#8567); the re-measure's `SINCE` is that
-  file's first commit on `main`,
-  `git log --diff-filter=A --format=%cI origin/main -- plugins/soleur/test/ship-learning-probe.test.ts`
-  (robust to the draft PR being replaced), and an interactive **Skip** at ship Phase 2 also reads
-  as class D, so a class-D row re-opens the gate question only after its session is checked for a
-  Skip.
+- One inline amendment appended to the #8399 ruling bullet, after the **Re-open trigger**
+  sentences, in the ADR's existing `**[Amended …]**` style (architecture review — it CHANGES the
+  trigger, so it must say so rather than read as a record):
+  **[Amended 2026-09-22 (#8470): the fix is the PR that adds
+  `plugins/soleur/test/ship-learning-probe.test.ts` (#8567). The re-measure's `SINCE` is that
+  file's first first-parent commit on `main`:
+  `git log --first-parent --diff-filter=A --reverse --format=%cI origin/main -- plugins/soleur/test/ship-learning-probe.test.ts | head -1`
+  — `--first-parent` so a merge-commit landing reports the merge, not the earlier branch commit
+  (which would admit pre-fix rows); `--reverse | head -1` survives a later delete and re-add. The
+  trigger itself changes in one respect: an interactive **Skip** at ship Phase 2 also produces a
+  class-D row, so a class-D row re-opens the gate question only after its session is checked for a
+  Skip.]**
 - `## Verification`: one bullet naming `plugins/soleur/test/ship-learning-probe.test.ts`.
 
 **Decision — amend in this PR, not post-merge.** (1) The only merge-dependent value is the merge
@@ -233,7 +295,7 @@ operator-attestation override citing that Alternatives row.
 
 ## Files to Edit
 
-- `plugins/soleur/skills/ship/SKILL.md` — `## Phase 2: Capture Learnings` body only (§A).
+- `plugins/soleur/skills/ship/SKILL.md` — `## Phase 2: Capture Learnings` body (§A), plus one clause in the `## Headless Mode Detection` Phase 2 bullet and one `## Important Rules` line (§A.2).
 - `knowledge-base/engineering/architecture/decisions/ADR-229-workflow-fsm-single-source-and-offline-classification.md` — Status line, one sentence in the #8399 ruling bullet, one `## Verification` bullet (§C).
 
 `plugins/soleur/test/workflow-fidelity.test.ts` is NOT edited: its comment "(ship Phase 2 has
@@ -245,7 +307,7 @@ three)" stays true (the draft keeps three compound calls).
 
 ## Non-Goals
 
-- Moving Phase 2 prose to `references/` or `scripts/` (not needed: +792 B within 11282 B headroom).
+- Moving Phase 2 prose to `references/` or `scripts/` (not needed: ~+1050 B within 11282 B headroom).
 - Raising any ceiling in `plugins/soleur/test/skill-body-budget.json`.
 - Changing the unarchived-artifact check or its placement (it still runs only on `absent`).
 - Resolving a non-`main` default branch (ship hardcodes `origin/main` throughout).
@@ -269,8 +331,9 @@ three)" stays true (the draft keeps three compound calls).
 ### Guard 1 — ship Phase 2 branch-scoped learning probe test
 
 **Property.** Ship Phase 2's probe prints `BRANCH_LEARNING=present` if and only if the current
-branch adds a file under `knowledge-base/project/learnings/` — as an uncommitted add, or in a
-commit in `origin/main..HEAD` read after a successful fetch — and `absent` otherwise.
+branch captured a learning — an uncommitted or staged add under `knowledge-base/project/learnings/`,
+or, read after a successful fetch, a commit in `origin/main..HEAD` that adds such a file or whose
+subject starts `compound:`/`learning:` — and `absent` otherwise.
 
 **Assembly.** One chokepoint: the only fenced block inside the slice of
 `plugins/soleur/skills/ship/SKILL.md` from the line starting `## Phase 2: Capture Learnings` to the
@@ -284,13 +347,15 @@ SKILL.md, restored with `git checkout -- plugins/soleur/skills/ship/SKILL.md`):
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | The pre-fix SKILL.md (old `--since="1 week ago"` block) | RED (rows 1-8 get hashes or empty, not the token; text ban) |
+| 1 | The pre-fix SKILL.md (old `--since="1 week ago"` block) | RED (rows get hashes or empty, not the token; text ban) |
 | 2 | Drop the `git status --porcelain` arm | RED (rows 2, 8) |
 | 3 | Drop `--diff-filter=A` | RED (row 4) |
 | 4 | Un-gate the log from the fetch (`git fetch … \|\| true;` then the log) | RED (row 7) |
 | 5 | Drop the `:/` pathspec magic | RED (row 8) |
-| 6 | Append a second fence (tagged `sh` or untagged) holding a repo-wide probe after the compliant block | RED (exactly-one-fence) |
+| 6 | Append a second fence (tagged `sh`, untagged, `~~~`, or indented under a list item) holding a repo-wide probe after the compliant block | RED (exactly-one-fence) |
 | 7 | Rename the heading (dispatch: the slice resolves to nothing) | RED (heading-found assertion) |
+| 8 | Drop `\|A` from the porcelain pattern | RED (row 9) |
+| 9 | Drop the commit-subject arm | RED (row 10) |
 
 **Harness rows:**
 
@@ -306,10 +371,41 @@ it also edits an ADR a reviewer reads. Accepted for a skill-prose guard.
 
 ## Observability
 
-Not triggered (plan Phase 2.9): Files-to-Edit are skill prose, an ADR and a test — nothing under
-`apps/*/server|src|infra/` or `plugins/*/scripts/`, and no new infrastructure surface. The probe's
-own output line (`BRANCH_LEARNING=present|absent`) is the in-session signal; the longitudinal
-signal is the existing `.claude/.skill-invocations.jsonl` triage in #8470, re-run per §D.
+Plan Phase 2.9's path list does not name `plugins/*/skills/`, but deepen-plan Phase 4.7 exempts
+only `.md` files OUTSIDE `plugins/*/skills/`, so this change is in scope and declares the block.
+The surface is agent-executed skill prose on the operator's own machine (observability layer 7):
+there is no server, cron or network sink.
+
+```yaml
+liveness_signal:
+  what: the probe's one output line, BRANCH_LEARNING=present or BRANCH_LEARNING=absent, printed in the ship session transcript
+  cadence: once per ship run, at Phase 2
+  alert_target: none; the operator-visible session output is the surface, and the longitudinal read is the #8470 triage
+  configured_in: plugins/soleur/skills/ship/SKILL.md, section Phase 2 Capture Learnings
+error_reporting:
+  destination: stderr of the ship session; git errors inside the probe are deliberately swallowed and resolve to absent
+  fail_loud: false by design; every failure path routes to running compound, the recoverable direction, and the suite pins each path (rows 6 and 7)
+failure_modes:
+  - mode: probe regresses to a repo-wide or date-window form
+    detection: plugins/soleur/test/ship-learning-probe.test.ts rows 1-11 and the fenced range-flag ban, in the bun test shard of CI
+    alert_route: red required CI check on the PR
+  - mode: compound skipped on a branch with no learning, in real sessions
+    detection: the #8470 triage procedure over .claude/.skill-invocations.jsonl, class D rows with SINCE at the fix merge
+    alert_route: the post-merge comment on #8470 carries the re-run rule and date; ADR-229 records it
+  - mode: compound re-run after it already captured (false absent)
+    detection: a duplicate-learning prompt in the session; accepted, safe-direction cost
+    alert_route: none required
+logs:
+  where: the skill invocation log .claude/.skill-invocations.jsonl (local, gitignored) and the session transcript
+  retention: local, rotated by the existing log-rotation hook
+discoverability_test:
+  command: grep -o -m1 -e BRANCH_LEARNING=absent plugins/soleur/skills/ship/SKILL.md
+  expected_output: "BRANCH_LEARNING=absent"
+```
+
+Verified against the drafted section (2026-09-22): the command prints exactly
+`BRANCH_LEARNING=absent`; its first token `grep` is on Check 10's allowlist; it carries no
+`| ; & < > $` or backtick and finishes in milliseconds.
 
 ## Architecture Decision (ADR/C4)
 
@@ -369,6 +465,24 @@ operator-requested scope, so nothing is persisted to `decision-challenges.md`.
   (DHH, simplicity) — superseded by the fetch-gating fix; drop the fenced text ban (simplicity) —
   kept only as a backstop for a block the suite does not execute.
 
+## Deepen-Plan Revisions (2026-09-22)
+
+Agents: test-design-reviewer, architecture-strategist; halts 4.6/4.7/4.8/4.9/4.10/4.11 run.
+
+- **Observability (Phase 4.7 halt):** Phase 4.7 exempts `.md` only OUTSIDE `plugins/*/skills/`, so
+  the plan's earlier "not triggered" was wrong; the 5-field block is now declared with a verified
+  Check 10-compatible probe.
+- **Double compound in one-shot (architecture):** added the `compound:`/`learning:` commit-subject
+  arm (rows 10), since one-shot runs compound before ship and compound may only update or archive.
+- **SINCE key (architecture):** `--first-parent --reverse | head -1`; the ADR text now uses the
+  `**[Amended …]**` style and states the Skip exemption as a trigger change.
+- **Consistency (architecture):** §A.2 fixes the Headless Mode Detection bullet and the Important
+  Rules line that contradicted Phase 2.
+- **Fence counting, branch pinning, shell hermeticity, rows 9/11, slice robustness (test-design).**
+- **Not taken:** a copy-based mutation harness with a path env var (test-design) — the battery is a
+  one-time, single-worktree run; the reviewers earlier cut that seam as permanent machinery for a
+  one-off exercise.
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits
@@ -389,14 +503,15 @@ operator-requested scope, so nothing is persisted to `decision-challenges.md`.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `bun test plugins/soleur/test/ship-learning-probe.test.ts` passes: rows 1-8, the
+- [ ] AC1 — `bun test plugins/soleur/test/ship-learning-probe.test.ts` passes: rows 1-11, the
   exactly-one-fence check and the fenced range-flag ban, against the edited SKILL.md.
 - [ ] AC2 — the same suite is RED against the pre-fix SKILL.md (written first, per
-  `cq-write-failing-tests-before`) and against mutations 2-7; H2 is GREEN. Outcomes recorded in the
+  `cq-write-failing-tests-before`) and against mutations 2-9; H2 is GREEN. Outcomes recorded in the
   PR body as a table.
 - [ ] AC3 — the `learnings/**/*FEATURE*` Glob instruction is gone from Phase 2:
   `awk '/^## Phase 2: Capture Learnings/{p=1;next} /^## /{p=0} p' plugins/soleur/skills/ship/SKILL.md | grep -c 'learnings/\*\*/\*FEATURE\*'` prints `0`.
 - [ ] AC4 — `bun test plugins/soleur/test/workflow-fidelity.test.ts` green.
+- [ ] AC4b — §A.2 applied: `grep -c 'when the Phase 2 probe prints' plugins/soleur/skills/ship/SKILL.md` prints `1`, and `grep -c 'Ask before running soleur:compound' plugins/soleur/skills/ship/SKILL.md` prints `0`.
 - [ ] AC5 — `python3 scripts/lint-skill-body-budget.py --base origin/main` → OK, and
   `git diff --quiet origin/main -- plugins/soleur/test/skill-body-budget.json` exits 0.
 - [ ] AC6 — ADR-229's Status line names `2026-09-22 (#8470)`; the #8399 ruling bullet carries the
@@ -417,7 +532,7 @@ operator-requested scope, so nothing is persisted to `decision-challenges.md`.
 
 ## Test Scenarios
 
-1. Fixture rows 1-8 (table in §A): exact token line, exit 0.
+1. Fixture rows 1-11 (table in §A): exact token line, exit 0.
 2. Pre-fix SKILL.md → suite RED (the #8470 regression).
-3. Mutations 2-7 → RED; H2 → GREEN.
+3. Mutations 2-9 → RED; H2 → GREEN.
 4. `workflow-fidelity.test.ts` sub-step anchor — still green.
