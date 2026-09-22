@@ -184,6 +184,7 @@ locals {
     zot_pull_user          = "zot-pull"
     zot_pull_token         = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"
     web_host_private_ips   = "10.0.1.10,10.0.1.11"
+    inngest_private_ip     = "10.0.1.40"
     betterstack_logs_token = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"
     sentry_dsn             = "https://STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB@o0000000000000000.ingest.us.sentry.io/0000000000000000000000000000000000000000000000000000000000000000000000"
   }
