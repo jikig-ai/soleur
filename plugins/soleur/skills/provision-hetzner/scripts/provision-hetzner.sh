@@ -153,7 +153,7 @@ if $DRY_RUN; then
   echo "  Delete sub-project via Console: Projects → tenant-${SLUG}-prd → Delete"
   echo "  Revoke the API token: Security → API Tokens → Revoke"
   echo ""
-  echo "Next step: soleur:provision-github ${SLUG} <org> <reviewer>"
+  echo "Next step: type /soleur:provision-github ${SLUG} <org> <reviewer> yourself (user-invoked; Soleur cannot run it, ADR-236)"
   exit 0
 fi
 
@@ -259,4 +259,4 @@ soleur_op_stage_end 2 "write-class smoke test (billable)" ok 0
 echo ""
 echo "Smoke-test passed: token has write scope for sub-project 'tenant-${SLUG}-prd'."
 echo ""
-echo "Next step: soleur:provision-github ${SLUG} <org> <reviewer>"
+echo "Next step: type /soleur:provision-github ${SLUG} <org> <reviewer> yourself (user-invoked; Soleur cannot run it, ADR-236)"
