@@ -89,6 +89,17 @@ directive rather than trusting the probe to keep PASSing.
 13. **`lint-shell-trace-credential-refusal.py --changed` scanned 0 files before the commit** — it
     reads committed diffs, so an uncommitted edit reads as a clean pass. **Prevention:** commit
     before running any `--changed` lint, and treat "0 scanned" as not-run.
+14. **The squash-merge shut the backstop tracker by accident.** *(Post-merge, 2026-09-21.)* A branch
+    commit body wrapped at 100 columns put the keyword `auto-close` at the end of one line and the
+    tracker's `#N` at the start of the next. GitHub treats the newline as whitespace, so merging
+    `7f7d9c3d9` shut the one issue this PR exists to keep open, and with it the new probe's only
+    delivery channel. AC-39b had scanned the PR body only. Ship's commit-message scan did run, but
+    `auto-close-scan.sh` greps one line at a time. Recovery: reopened within minutes, with a
+    comment. **Prevention:** #8523 adds a cross-line pass to the scanner, with the real text as a
+    test. Until it merges, do not wrap a sentence so that a closing keyword ends a line in a commit
+    body that names an issue you intend to keep open.
+15. **A stray `git checkout origin/main --` detached the merged branch's worktree.** It was harmless
+    after merge (post-merge work runs from `origin/main` anyway). One-off.
 
 ## Tags
 category: workflow-patterns
