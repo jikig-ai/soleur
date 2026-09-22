@@ -118,7 +118,7 @@ hb_status() {
     $REGISTRY_HB_STATUS_CMD "$HB_ID"
     return
   fi
-  curl -fsS --max-time 15 \
+  curl --disable --noproxy '*' -fsS --max-time 15 \
     -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN}" -H 'Accept: application/json' \
     "https://uptime.betterstack.com/api/v2/heartbeats/${HB_ID}" 2>/dev/null \
     | jq -r '.data.attributes.status // empty' 2>/dev/null
