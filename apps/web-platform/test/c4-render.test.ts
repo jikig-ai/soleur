@@ -25,6 +25,7 @@ const fsMock = vi.hoisted(() => ({
 vi.mock("node:fs/promises", () => fsMock);
 
 import { renderC4Model } from "@/server/c4-render";
+import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 
 type FakeChild = EventEmitter & {
   stderr: EventEmitter;
@@ -60,7 +61,7 @@ const TMP_DIR = "/tmp/c4-render-abc123";
 // A non-empty, valid layouted model (the success fixture).
 const VALID_MODEL = JSON.stringify({
   elements: { founder: { id: "founder" }, platform: { id: "platform" } },
-  views: { index: {} },
+  views: { index: { hash: "6v56Y9lvx4UMwclrRQ4gL_jWujZQPMIQbDx8qnXD68w" }, context: {} },
 });
 // likec4 exits 0 but emits this when spec.c4 is missing (the bug class).
 const EMPTY_MODEL = JSON.stringify({ elements: {}, views: {} });
@@ -124,9 +125,15 @@ describe("renderC4Model", () => {
     const p = renderC4Model(WS);
     const res = await p;
     expect(res.ok).toBe(true);
-    // The validated bytes are RETURNED verbatim (byte-identical to the read), so
-    // the writer commits exactly what likec4 produced — never re-stringified.
-    if (res.ok) expect(res.json).toBe(VALID_MODEL);
+    // The validated bytes are RETURNED in the canonical on-disk format (one
+    // value per line, view hashes blanked — #8542), byte-identical to what the
+    // repo and plugin writers emit through the same module, so the app never
+    // reformats a file another writer produced.
+    if (res.ok) {
+      expect(res.json).toBe(canonicalizeC4Model(VALID_MODEL));
+      expect(res.json).not.toBe(VALID_MODEL);
+      expect(JSON.parse(res.json).views.index.hash).toBe("");
+    }
     // #4976: the tracked model.likec4.json is never published onto — the render
     // produces only a process-temp artifact. No copy/rename/write onto any path.
     expect(fsMock.copyFile).not.toHaveBeenCalled();

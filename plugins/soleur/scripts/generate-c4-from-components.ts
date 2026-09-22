@@ -28,6 +28,7 @@ import { join } from "node:path";
 
 import {
   type C4MarkerCounts,
+  type RenderVerdict,
   LIKEC4_VERSION,
   assessRender,
   buildEdges,
@@ -40,6 +41,7 @@ import {
   generateViewsC4,
   loadComponentDir,
 } from "../lib/c4-from-components";
+import { canonicalizeC4Model } from "../lib/c4-canonical.mjs";
 
 const COMPONENTS_DIR = "knowledge-base/project/components";
 const DIAGRAMS_DIR = "knowledge-base/engineering/architecture/diagrams";
@@ -350,10 +352,28 @@ export function runProducer(root: string): { code: number; marker: string } {
   // version computed `skipped` and never passed it to assessRender — so declining to
   // update an operator's hand-corrected diagram reported `status=ok`, and the E2E
   // asserted only `skipped=1`, never the status, so that arm passed on `ok`.
-  const effective =
+  let effective: RenderVerdict =
     skipped > 0 && verdict.status === "ok"
       ? { status: "degraded" as const, reason: "skipped-write-target", detail: undefined }
       : verdict;
+
+  // Canonicalize the staged render AFTER the gate (never instead of it). This
+  // producer is one of three writers of model.likec4.json — with the repo
+  // regenerator and the web app's c4-render.ts — and all three must publish the
+  // same bytes (one value per line, view hashes blanked; ADR-235, #8542) or
+  // each reformats the others' file in the customer's repo. A failure here is
+  // `failed`: raw bytes must never replace the committed artifact.
+  if (effective.status !== "failed") {
+    try {
+      writeFileSync(stagedJson, canonicalizeC4Model(readFileSync(stagedJson, "utf8")));
+    } catch (err) {
+      effective = {
+        status: "failed",
+        reason: "canonicalize-failed",
+        detail: String((err as Error)?.message ?? err),
+      };
+    }
+  }
 
   // Publish only on a verdict that is not `failed`. A degraded render (0 relationships)
   // is still a correct model of a link-free corpus and SHOULD be published; a failed

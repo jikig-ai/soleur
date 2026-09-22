@@ -204,6 +204,26 @@ describe("GET /api/shared/[token]/c4 — public token-scoped diagram data", () =
     expect(res.status).toBe(413);
   });
 
+  it("a model that is not valid JSON (e.g. left-over merge markers) is a handled 500 mirrored to Sentry", async () => {
+    // #8542 made the artifact line-mergeable, so a botched merge can commit
+    // conflict markers into it. The public viewer must degrade to a handled
+    // error, never an unhandled throw.
+    const dirAbs = path.join(kbRoot, DIAGRAMS_DIR);
+    fs.mkdirSync(dirAbs, { recursive: true });
+    fs.writeFileSync(
+      path.join(dirAbs, "model.likec4.json"),
+      '{\n"views": {\n<<<<<<< ours\n"a": {}\n=======\n"b": {}\n>>>>>>> theirs\n}\n}\n',
+    );
+    shareRow = { document_path: DOC_PATH, revoked: false };
+    const res = await callGET();
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe("Failed to load diagram");
+    expect(mocks.mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "shared-c4", op: "serve" }),
+    );
+  });
+
   it("rate-limits before any filesystem work", async () => {
     mocks.mockIsAllowed.mockReturnValue(false);
     const openSpy = vi.spyOn(fs.promises, "open");

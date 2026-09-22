@@ -287,6 +287,33 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
     );
   });
 
+  it("AC7b: a committed model that is not valid JSON (e.g. left-over merge markers) → handled 502 + parse op", async () => {
+    // #8542 made the artifact line-mergeable, so a hand-botched merge can now
+    // commit conflict markers into it. The viewer must degrade to a handled
+    // error with its own Sentry op, never an unhandled crash.
+    const botched = '{\n"views": {\n<<<<<<< ours\n"a": {}\n=======\n"b": {}\n>>>>>>> theirs\n}\n}\n';
+    setupGitHub({ "model.c4": "model {}", "model.likec4.json": botched });
+    const res = await callGET();
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toContain("corrupt");
+    expect(mocks.mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "c4-project-read", op: "model-parse-failed" }),
+    );
+  });
+
+  it("AC7c: the canonical line-per-value format (#8542) is served like the one-line form", async () => {
+    const dump = { views: { index: { id: "index", hash: "" } }, elements: { a: { id: "a" } } };
+    const canonical = JSON.stringify(dump, null, 1).replace(/^ +/gm, "") + "\n";
+    setupGitHub({ "model.c4": "model {}", "model.likec4.json": canonical });
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.dump).toEqual(dump);
+    expect(body.viewIds).toEqual(["index"]);
+  });
+
   it("AC8: the op slug is pinned in the route source so the Sentry filter can match it", async () => {
     const fs = await import("node:fs");
     const url = await import("node:url");

@@ -67,4 +67,18 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# Format gate, independent of the byte cmp above: a PR that drops the
+# canonicalize step AND regenerates in the same diff leaves fresh == committed
+# (both raw), so the cmp alone stays green while every future pair of .c4 PRs
+# goes back to conflicting on GitHub (#8542).
+CANON_OUT="$(node "$REPO_ROOT/plugins/soleur/lib/c4-canonical-cli.mjs" --check "$COMMITTED" 2>&1 || true)"
+if [[ "$CANON_OUT" == "canonical" ]]; then
+  echo "  PASS: committed model.likec4.json is in the canonical line-per-value format"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: committed model.likec4.json is not canonical (got: $CANON_OUT)." >&2
+  echo "        Every writer must publish through plugins/soleur/lib/c4-canonical.mjs; run: bash scripts/regenerate-c4-model.sh" >&2
+  FAIL=$((FAIL + 1))
+fi
+
 print_results
