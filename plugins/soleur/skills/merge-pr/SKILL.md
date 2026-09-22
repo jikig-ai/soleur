@@ -535,7 +535,7 @@ bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktre
 
 ```
 
-This detects `[gone]` branches (remote deleted after merge), removes worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
+This reaps branches proven merged (an ancestor of main, or a merged same-repo PR whose head contains the branch tip — the path a squash-merged, auto-deleted branch takes), removes their worktrees, deletes the local branches, and pulls latest main. A `[gone]` branch with no merge evidence is kept and reported so the next worktree branches from the current state.
 
 ### 6.3 End-of-run report
 
