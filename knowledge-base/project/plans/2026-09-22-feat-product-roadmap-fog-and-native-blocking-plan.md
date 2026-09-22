@@ -12,6 +12,35 @@ domain: product
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-22. **Halt gates:** 4.6 User-Brand Impact PASS (threshold `none`, scope-out
+present, no sensitive path); 4.7 Observability PASS (all five fields; `discoverability_test.command`
+passes `probe-verb-gate.sh` rc=0 and Check 10's shell-active regex at `preflight/SKILL.md:1123`;
+`expected_output` is the literal `"2"`); 4.8 PAT PASS (no match); 4.9 UI, 4.10 Encryption, 4.11 Guard
+not triggered. No AGENTS rule IDs are cited.
+**Agents:** a verify-the-negative + self-audit pass (all eight absence claims confirmed; ten cited
+issue/PR states confirmed), `soleur:engineering:review:test-design-reviewer`,
+`soleur:engineering:prompt-engineer`.
+
+### Key improvements
+1. **Fake-`gh` harness made trustworthy** (test-design): argument dispatch with a hard fail on
+   unexpected calls, a call log asserted by TS13/TS14/TS16, the `--jq` projection applied inside the
+   fake so a forgotten `state` field is caught, and three leak guards against the real `gh`.
+2. **Tests that could not fail were fixed:** TS17 now runs `main validate` through the fake; TS16's
+   `next --bogus` asserts no fetch happened; TS7 covers `main`'s temp file via a `TMPDIR` sandbox; the
+   30-issue truncation is now asserted (`--limit 1000` in the logged call).
+3. **Skill prose routing made followable** (prompt-engineer): one decision order for where work goes,
+   argument pass-through that strips `--headless` and relays exit codes, ruling out a fog entry that
+   has no issue, `stateReason` in the Out-of-Scope check, a precise headless report, a stronger
+   graduation gloss, and a plan note that also keeps implementation unknowns in the plan.
+4. Stale line-count restatement corrected (self-audit).
+
+### New considerations discovered
+- `next --headless` would reach the script and exit 64 unless Dispatch strips the flag first.
+- An issue closed as `completed` is not out of scope; the 1.6 check reads `stateReason`, not only `state`.
+- The dry run gains nine probe cases (Phase 4).
+
 ## Overview
 
 Bundle 5 of 5 from the mattpocock/skills peer-plugin audit. The roadmap records only scheduled work,
@@ -222,7 +251,7 @@ directly at the pinned SHA.
 |---|---|---|
 | "blocking in Soleur is prose (`blocked by #N`) that `product-roadmap` Phase 0.6 verifies" | product-roadmap has no Phase 0.6; that check is `plan/SKILL.md` Phase 0.6 item 1 | No product-roadmap text cites a Phase 0.6. The plan note sits in `plan/SKILL.md`. |
 | "`plan` Phase 0.7 bans TODO/TBD/N/A/placeholder" | Phase 0.7 bans them in skeleton stub prose (`:254-256`); plan-wide bans are Phase 2.6 / 2.9 / 2.11 / 2.12 via `deepen-plan` | The note sits beside the Phase 0.7 sentence and says "the token bans", covering both. |
-| "Fix-Size: 160 lines / 3 files" | Composing a frontier with `next` requires touching `roadmap-reconcile.sh` and its test (two defects plus the frontier itself live there) | Estimate restated: about 95 prose lines across the 3 named files + NOTICE, plus about 70 script lines and about 90 test lines. Called out in the PR body. |
+| "Fix-Size: 160 lines / 3 files" | Composing a frontier with `next` requires touching `roadmap-reconcile.sh` and its test (two defects plus the frontier itself live there) | Estimate restated: about 71 prose lines across the 3 named files + NOTICE, plus about 55 script lines and about 110 test lines. Called out in the PR body. |
 | Audit Tier 1 entry "landed via PR #8284" | PR #8284 is OPEN; main's competitive-intelligence.md has no mattpocock entry | No shipped file links or quotes that entry. NOTICE's existing pinned SHA is the provenance anchor. |
 | "`product-roadmap next` already picks exactly one next issue deterministically" | It picks deterministically, from the wrong phase (Phase 5 instead of Phase 4) and from the 30 most recent issues only | Fold both fixes into this PR as their own commit with a named acceptance check (CPO and CTO both concur; see Domain Review). |
 | "Native blocking edges ... plus a frontier query" (verify API) | Available: REST `dependencies/blocked_by`, GraphQL `blockedBy`, `gh issue edit --add-blocked-by`, `gh issue list --json blockedBy` (gh >= 2.94.0) | Adopt the native relationship. Filter client-side (the `is:blocked` search qualifier is not honored). |
@@ -255,8 +284,10 @@ the CPO's count). This is the mechanism for the CPO gate; the sections alone wou
 ### D2 — The graduation test is the peer's, glossed in plain words
 
 The rule stays the issue's wording ("can you state the question precisely now — not can you answer it
-now"). The CPO's plain-language gloss ("can you write the issue title today?") is added beside it,
-because a non-technical founder applies that more reliably. The gloss never replaces the rule.
+now"). A plain-language gloss is added beside it, because a non-technical founder applies that more
+reliably: the CPO proposed "can you write the issue title today?", and deepen tightened it to "can you
+write an issue title naming one deliverable, plus a done-when line, today?" because a vague title
+("Improve onboarding") passes the first form. The gloss never replaces the rule.
 
 ### D3 — Fog and scope are bullet lists, never tables
 
@@ -306,8 +337,12 @@ knowledge-base/ carries the comment ... attributing them would be a false attrib
 ### D8 — Headless mode writes nothing new
 
 The workshop's existing Headless Mode section already skips prompts and uses KB-derived defaults; one
-sentence is added to it: in headless mode, never graduate a Not-Yet-Specified entry, close an issue
-as out of scope, or add a blocking edge (these are founder decisions); report counts only.
+sentence is added to it: "In headless mode, skip step 1.6 and keep existing Not Yet Specified and
+Out of Scope entries unchanged; never file, close or edit issues or blocking edges for them. Report
+the number of Not Yet Specified entries, the number of Out of Scope lines, which of those issues are
+no longer closed as not planned, and the count of open issues with no milestone (a count only, never
+triaged in bulk)." Headless mode still writes roadmap.md and milestones as it does today; the rule
+covers only the new mechanics.
 
 ## Files to Edit
 
@@ -316,8 +351,10 @@ as out of scope, or add a blocking edge (these are founder decisions); report co
    - Sub-commands table, `next` row: "report the next action for the first incomplete phase, chosen
      from its frontier; `next --frontier` lists the whole frontier."
    - `### Sub-command: next`: the code block shows both `... roadmap-reconcile.sh next` and
-     `... roadmap-reconcile.sh next --frontier`, and the dispatch sentence says the remaining arguments
-     after `next` are passed through to the script. The paragraph states, once: the phase is the lowest
+     `... roadmap-reconcile.sh next --frontier`. The Dispatch paragraph gains: "Strip `--headless`
+     first. Pass the remaining tokens after `next` to the script verbatim. On exit 64, relay the usage
+     line. On exit 2, relay stderr and stop: never rebuild the frontier yourself with `gh`, and never
+     try other flags." The paragraph states, once: the phase is the lowest
      open `Phase N` milestone with open issues; the **frontier** is its open issues with no open blocker
      and no assignee; `next` names the lowest-numbered frontier issue; `--frontier` prints a summary line
      first, then every frontier issue; exit 2 means the data could not be trusted (old `gh`, fetch
@@ -326,19 +363,28 @@ as out of scope, or add a blocking edge (these are founder decisions); report co
      Context`, carrying the attribution comment as its first line:
      `<!-- Inspired by mattpocock/skills/skills/engineering/wayfinder/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->`
      Content, in this order:
+     - A decision order, stated before the table: "(1) Ruled out? Out of Scope. (2) Cannot state the
+       question? Not Yet Specified. (3) Otherwise file an issue: `Phase N` milestone if it is being
+       built now, else Post-MVP / Later. Being blocked never keeps sharp work in fog: file it and add
+       the edge; if the blocker has no issue yet, file the blocker first (or, if the blocker is itself
+       fog, keep a prose 'blocked by' note until it gets an issue)."
      - The four-places table (D1): phase row = "we are building this in this phase" (open issue,
        `Phase N` milestone); Post-MVP / Later = "we know exactly what to build; we chose not to build it
        yet" (open issue in that milestone; the table lists highlights only); Not Yet Specified = "we know
        we will need something here; we cannot yet say what question it answers" (no issue); Out of Scope
        = "we decided no" (issue closed `not planned`). Then one line: work in none of these places was
        forgotten; an open issue with no milestone is unsorted.
-     - `### Not Yet Specified`: the test (D2), with the gloss "can you write the issue title today?";
+     - `### Not Yet Specified`: the test (D2), with the gloss "can you write an issue title naming one
+       deliverable, plus a done-when line, today?" ("Improve onboarding" fails it); the literal empty
+       state `_None recorded._`;
        file an issue when the question is sharp even if blocked (and add the edge); do not pre-slice fog
        into row-sized pieces (one entry may become several issues, or none); graduation = file the issue
        with `--milestone` (and `--blocked-by` when known), add the row, delete the entry.
      - `### Out of Scope`: scope, not sharpness, puts work here (beyond the Strategic Themes); close with
        `gh issue close <N> --reason "not planned" --comment "Out of scope: <reason>"` and add
-       `- [#<N> <title>](<url>) — <reason>`; it never graduates (a redrawn theme means a new issue); it
+       `- [#<N> <title>](<url>) — <reason>`; a Not-Yet-Specified entry being ruled out has no issue, so
+       delete it, and file-then-close an issue only when the founder wants the no on record; it never
+       graduates (a redrawn theme means a new issue); it
        stays out of the decisions record (no `### Architecture Decision` subsection, ADR or Domain
        Review Summary row).
      - `### Blocking Edges`: `gh issue edit <N> --add-blocked-by <M>` / `--remove-blocked-by <M>`, wired
@@ -347,8 +393,9 @@ as out of scope, or add a blocking edge (these are founder decisions); report co
        a prose "blocked by #M" may keep the human reason, but the edge is what the frontier reads.
    - Phase 1: new `### 1.6 Fog and Scope Walk` after 1.5 Gap Check: gaps the founder cannot yet phrase
      become Not-Yet-Specified entries; each existing entry → graduate / keep / rule out; each
-     Out-of-Scope line → confirm the issue is still closed
-     (`gh issue view <N> --json state --jq .state`) and put a reopened one back to the founder.
+     Out-of-Scope line → `gh issue view <N> --json state,stateReason`; anything other than
+     `CLOSED` / `NOT_PLANNED` goes back to the founder via AskUserQuestion: re-close as not planned,
+     move to Post-MVP, or move to a phase.
    - Phase 2 Generate, **Required sections**: add `## Not Yet Specified` and `## Out of Scope` as
      bullet lists (D3), written with an explicit empty-state line when empty.
    - Phase 3: one sentence after 3.2: record dependencies surfaced in the workshop as blocking edges
@@ -363,7 +410,7 @@ as out of scope, or add a blocking edge (these are founder decisions); report co
    - New `filter_frontier ISSUES_JSON_FILE` → one JSON object
      `{frontier:[...sorted by number], blocked:<n>, claimed:<n>}` (D5). `blocked` counts every issue held
      back by a blocker, assigned or not; `claimed` counts unblocked issues with an assignee. Returns 2
-     when the field check fails. **One jq invocation**: callers pass FIFOs (`<(printf ...)`), which a
+     when the field check fails (the message names the missing field). **One jq invocation**: callers pass FIFOs (`<(printf ...)`), which a
      second read would find empty (the trap the comment at `roadmap-reconcile.sh:66-68` records).
    - `pick_next_action`: unchanged (it receives the frontier array).
    - `main next`: parse an optional `--frontier` (any other extra argument → usage, exit 64); phase
@@ -379,8 +426,19 @@ as out of scope, or add a blocking edge (these are founder decisions); report co
    - jq variables go through standalone `jq --arg` / `--argjson`, never `gh --jq` with `--arg`.
 3. **`plugins/soleur/test/roadmap-reconcile.test.sh`** (about +90 lines) — scenarios TS8-TS17 below;
    TS7 (zero writes) extended to call `pick_phase` and `filter_frontier`. `main` is exercised through a
-   **fake `gh`** script written to a temp dir placed first on `PATH` (it prints fixture JSON per
-   subcommand, or exits 1 with a chosen stderr), so rendering and exit codes are tested hermetically.
+   **fake `gh`** script written to a temp dir, so rendering and exit codes are tested hermetically.
+   Harness contract (test-design review):
+   - Dispatch on `"$1 $2"`: `api …milestones…` → apply the caller's `--jq` expression to a RAW
+     milestones fixture with real `jq` (so a projection that forgets `state` is caught);
+     `issue list` → the issues fixture chosen by `FAKE_GH_ISSUES=ok|oldgh|neterr|nofield`; anything
+     else → exit 97 with `FAKE_GH_UNEXPECTED $*`. Every argument list is appended to
+     `$FAKE_DIR/calls`.
+   - Leak guards: assert the fake is executable; pass `PATH="$FAKE_DIR:$PATH"`, `GH_TOKEN=`,
+     `GH_CONFIG_DIR="$FAKE_DIR/cfg"` and `ROADMAP_FILE=<fixture>` as per-call prefixes (never
+     exported); run from a temp directory (the default `ROADMAP_FILE` is relative); assert `calls` is
+     non-empty after every end-to-end run.
+   - Fixtures follow the shape captured live in Phase 0.1 with numbers changed, and list issues out of
+     numeric order so the sort is tested.
 4. **`knowledge-base/product/roadmap.md`** (about +16 lines) — two sections after `### Post-MVP / Later`
    and before `## Pricing`, each preceded by the file's `---` separator:
    - `## Not Yet Specified` — one Soleur-authored sentence ("In scope and coming, but not yet sharp
@@ -393,11 +451,11 @@ as out of scope, or add a blocking edge (these are founder decisions); report co
      happens if Phase 4 validation fails) and was explicit that writing them is a founder decision; the
      workshop's 1.6 walk raises them.
 5. **`plugins/soleur/skills/plan/SKILL.md`** (+2 lines, **must stay under 120,000 bytes**; 700 bytes
-   of headroom) — after the Phase 0.7 "Stub no conditional section" paragraph, this text (about 210
+   of headroom) — after the Phase 0.7 "Stub no conditional section" paragraph, this text (about 300
    bytes; no attribution comment, D7):
 
    ```markdown
-   **Fog belongs in the roadmap.** A question you cannot yet state precisely goes under `## Not Yet Specified` in `knowledge-base/product/roadmap.md` (`soleur:product-roadmap`), never into a plan `TBD`.
+   **Fog belongs in the roadmap.** In-scope product work you cannot yet state as a precise question goes to `## Not Yet Specified` in `knowledge-base/product/roadmap.md` via `soleur:product-roadmap`, never into a plan `TBD`; plan does not edit roadmap.md. Implementation unknowns stay in the plan.
    ```
 6. **`plugins/soleur/NOTICE`** (about +8 lines, matching the Bundle 1-4 paragraph shape) — in the mattpocock/skills entry: append
    `skills/product-roadmap/SKILL.md (#8292)` to `Used in:`; add a "Bundle 5 (#8292, from
@@ -482,7 +540,11 @@ snapshot on both sides, so no live drift can flip it).
    running any), and list every sentence it could not follow or found ambiguous. Every reported
    sentence is rewritten before commit; the PR body lists the count of flagged sentences and how each
    was resolved. Also ask it to classify one sharp-but-blocked question (expected: file an issue plus
-   an edge, not fog).
+   an edge, not fog). Additional probe cases (prompt-engineer): `next --headless` and `next --foo`;
+   an exit 2 (does the agent fall back to querying `gh` itself? it must not); an empty frontier (does
+   it move to the next phase? it must not); a fog entry the founder rules out; a blocker that is itself
+   fog; an Out-of-Scope issue closed as `completed`; the vague-title trap "Improve onboarding";
+   headless mode with a reopened Out-of-Scope issue. Run the dry run on the model the skill runs under.
 2. **Shingle check** (backs D7's no-peer-prose claim and the NOTICE sentence): fetch the peer file to
    `$SCRATCH/wayfinder.md` with
    `gh api 'repos/mattpocock/skills/contents/skills/engineering/wayfinder/SKILL.md?ref=c55ee46073ed923f86ce59a5eb3b6d895095d1b7' --jq .content | base64 -d`,
@@ -520,22 +582,30 @@ All hermetic (synthesized JSON, sourced module), added to `plugins/soleur/test/r
 - **TS11 assigned** — unblocked, one assignee → not in frontier, `claimed == 1`.
 - **TS11b blocked and assigned** — counts toward `blocked`, not `claimed`.
 - **TS12 unreadable blocker** — `nodes: []`, `totalCount: 1` → held back.
+- **TS12b partial page** — `totalCount: 2` with one `CLOSED` node → held back.
+- **TS12c null state** — a blocker node with `state: null` or no `state` key → held back.
 - **TS13 end-to-end via fake `gh`** — mixed fixture (one blocked, one claimed, two ready): `next` names
   the lower ready issue and prints `(1 blocked, 1 claimed)`; `next --frontier` prints the summary line
   `2 ready, 1 blocked, 1 claimed` and its first item line carries the same `#N`. The fixture roadmap's
-  Phase 4 row has no count cell and Phase 4 still wins over Phase 5 (the live defect, tested through
-  `main`).
+  Phase 4 row has no count cell and the milestones fixture has a ready Phase 5; `calls` shows exactly
+  one `issue list`, carrying `--milestone Phase 4: Validate + Scale`, `--limit 1000` and `blockedBy`
+  (the live defect and the 30-issue truncation, both tested through `main`).
 - **TS14 empty frontier via fake `gh`** — all blocked/claimed → the NONE line names the phase and both
   counts; output never contains "no open issues" and names no issue from another phase.
 - **TS15 old gh via fake `gh`** — fake exits 1 with `Unknown JSON field: "blockedBy"` on stderr → exit 2
   and output contains `requires gh >= 2.94.0`.
 - **TS15b fetch failure** — fake exits 1 with other stderr → exit 2, no "requires gh" text.
-- **TS15c missing field** — fake returns issues without `blockedBy` → exit 2 (defensive check).
-- **TS16 usage** — `bash "$MODULE" bogus` and `bash "$MODULE" next --bogus` both exit 64; stderr
-  contains `next [--frontier]`.
-- **TS17 validate unchanged** — `reconcile_counts` on the existing fixture gives the same verdicts
-  with milestone JSON that now carries `state`.
-- **TS7 extended** — zero file writes after calling `pick_phase` and `filter_frontier`.
+- **TS15c missing field** — fake returns issues without `blockedBy` → exit 2 and the message names
+  `blockedBy`; the same fixture with the field present exits 0 (positive control); a separate case
+  omits `assignees`.
+- **TS16 usage** — `next --bogus` under the fake exits 64, stderr contains `next [--frontier]`, and
+  `calls` is empty (arguments parsed before any fetch). (`bogus` alone already exits 64 today and is
+  not counted as new coverage.)
+- **TS17 validate unchanged** — `main validate` through the fake (projection applied) prints the same
+  verdicts as `reconcile_counts` on the pre-change projection of the same raw fixture.
+- **TS7 extended** — zero file writes after `pick_phase`, `filter_frontier`, and `main next` run with
+  `TMPDIR` set to a sandbox directory that must be empty afterwards (covers `main`'s stderr temp
+  file, which must be removed on every path).
 
 Live, read-only (Phase 1 step 3, informational only): `next` names a Phase 4 issue and
 `next --frontier` lists it first.
@@ -611,7 +681,7 @@ guard over a property of the repository).
 - **"Unassigned" filters nothing today** (0 of 118 Phase 4 issues are assigned). Kept because the
   frontier definition needs it the moment a second contributor claims work.
 - **`plan/SKILL.md` has 700 bytes of headroom** and the ceiling is read from the merge base; the note
-  must stay about 210 bytes. If a sibling PR lands first and eats the headroom, shorten the note, do not
+  must stay about 300 bytes. If a sibling PR lands first and eats the headroom, shorten the note, do not
   touch the ceiling.
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the
   threshold fails `deepen-plan` Phase 4.6.
@@ -654,7 +724,7 @@ AC8). Two suggestions declined as Non-Goals (frontier ranking; `validate` out-of
   line, and each of TS8-TS17 appears as an `echo "TS…` block in the suite.
 - **AC2** — `grep -c '^## Where Work Lives on the Roadmap' plugins/soleur/skills/product-roadmap/SKILL.md`
   prints 1; the section contains the strings `Not Yet Specified`, `Out of Scope`, `--add-blocked-by`,
-  `not planned`, `next --frontier`, `state the question precisely`, and `write the issue title today`.
+  `not planned`, `next --frontier`, `state the question precisely`, `done-when`, and `stateReason`.
 - **AC3** — `grep -c 'Inspired by mattpocock/skills/skills/engineering/wayfinder/SKILL.md' plugins/soleur/skills/product-roadmap/SKILL.md`
   prints 1, and the same grep over `knowledge-base/product/roadmap.md` and
   `plugins/soleur/skills/plan/SKILL.md` prints 0 (D7).
@@ -702,7 +772,8 @@ snapshot on both sides).
   passes remaining arguments (CTO M2); a ready `bun -e` command for the shingle check (CTO L2).
 - SKILL prose cut from about +75 to about +45 lines, each rule stated once; step 3.3 folded into
   Blocking Edges; the headless rule put in the existing Headless Mode section (DHH, simplicity).
-- Plan note shortened to about 210 bytes (DHH); NOTICE paragraph kept to the Bundle 1-4 shape.
+- Plan note shortened (DHH), then re-widened to about 300 bytes at deepen (prompt-engineer: say that
+  implementation unknowns stay in the plan and plan does not edit roadmap.md); NOTICE paragraph kept to the Bundle 1-4 shape.
 - The plain-language gloss added to AC2 (CPO 7).
 
 **Kept against a reviewer:** the constrained dry run (DHH asked to cut it; the operator's brief
