@@ -15,7 +15,9 @@
 #   7  add NNN beyond max-on-main                           -> rc 0
 #   8  modify an on-main *.down.sql                         -> rc 0 (exempt)
 #   9  bogus --base                                          -> rc 2 (fail closed)
-#   10 wiring: tenant-integration.yml references the guard    -> else suite RED
+#   10 wiring: tenant-integration.yml INVOKES the guard (.sh path +
+#      --from-pr-diff; the bare anchor name alone does not satisfy)
+#   11 anti-self-neuter: step runs the base-ref copy via git show
 #
 # Run: bash apps/web-platform/scripts/lint-migration-immutability.test.sh
 
@@ -157,13 +159,14 @@ echo "T6: stubbed oracle — ls-tree returns empty -> clean BUT checked=0 is vis
 # from a real check.
 STUB="$tmp/gitstub"
 mkdir -p "$STUB"
-cat > "$STUB/git" <<'SH'
+REAL_GIT="$(command -v git)"
+cat > "$STUB/git" <<SH
 #!/usr/bin/env bash
-for arg in "$@"; do
-  if [[ "$arg" == "ls-tree" ]]; then exit 0; fi
+for arg in "\$@"; do
+  if [[ "\$arg" == "ls-tree" ]]; then exit 0; fi
 done
 # forward everything else to the real git
-exec /usr/bin/git "$@"
+exec "$REAL_GIT" "\$@"
 SH
 chmod +x "$STUB/git"
 set +e
@@ -218,12 +221,31 @@ else
 fi
 
 # ----------------------------------------------------------------------
-echo "T10: wiring — tenant-integration.yml names the guard script"
+echo "T10: wiring — tenant-integration.yml invokes the guard"
 # ----------------------------------------------------------------------
-if grep -q 'lint-migration-immutability' "$REPO_ROOT/.github/workflows/tenant-integration.yml"; then
-  pass "workflow wiring present"
+# Must match the INVOCATION, not the bare name: the anchor alternation
+# contains 'lint-migration-immutability' (no extension) too, so a grep
+# for the bare name stays green even if the run step is deleted (plan
+# Property 3). The `.sh`-suffixed path literal appears only in the
+# step's GUARD_PATH assignment; `--from-pr-diff` only on its run lines.
+WF="$REPO_ROOT/.github/workflows/tenant-integration.yml"
+if grep -q 'lint-migration-immutability\.sh' "$WF" && grep -q -- '--from-pr-diff' "$WF"; then
+  pass "workflow invokes the guard via --from-pr-diff"
 else
-  fail "tenant-integration.yml does not reference lint-migration-immutability — guard is detached"
+  fail "tenant-integration.yml does not invoke lint-migration-immutability.sh — guard is detached"
+fi
+
+# ----------------------------------------------------------------------
+echo "T11: anti-self-neuter — the step executes the base-ref copy when it exists"
+# ----------------------------------------------------------------------
+# A PR that weakens this script AND mutates an on-main migration must not
+# pass because the step ran the PR's own (neutered) copy. The workflow
+# extracts the base-ref copy via `git show` and falls back to the
+# checkout copy only for the guard's introduction window.
+if grep -q 'git show "origin/' "$WF" && grep -q 'GUARD_PATH="apps/web-platform/scripts/lint-migration-immutability\.sh"' "$WF"; then
+  pass "step runs the base-ref copy via git show"
+else
+  fail "step does not extract the base-ref guard copy — self-neuter bypass is open"
 fi
 
 echo ""

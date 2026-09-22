@@ -126,7 +126,22 @@ jobs:
         # outputs.tenant written even when this step reds.
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: bash apps/web-platform/scripts/lint-migration-immutability.sh --from-pr-diff
+        run: |
+          set -uo pipefail
+          base_ref="${BASE_REF:-main}"
+          base_ref="${base_ref#refs/heads/}"
+          GUARD_PATH="apps/web-platform/scripts/lint-migration-immutability.sh"
+          GUARD_COPY="$RUNNER_TEMP/migration-immutability-guard.sh"
+          # Anti-self-neuter: when the script already exists on the base
+          # ref, run THAT copy — a PR must not weaken the guard that
+          # judges it (ci.yml's ci-e2e-classify.sh precedent). Fallback
+          # to the checkout copy covers the guard's own introduction PR
+          # and any PR before its first merge.
+          if git show "origin/${base_ref}:$GUARD_PATH" > "$GUARD_COPY" 2>/dev/null && [[ -s "$GUARD_COPY" ]]; then
+            bash "$GUARD_COPY" --from-pr-diff --repo "$GITHUB_WORKSPACE"
+          else
+            bash "$GUARD_PATH" --from-pr-diff
+          fi
 
   tenant-integration:
     needs: detect-changes

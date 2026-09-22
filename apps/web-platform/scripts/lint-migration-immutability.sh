@@ -101,8 +101,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$FROM_PR_DIFF" == "1" ]]; then
-  REPO="$REPO_ROOT"
-  BASE="origin/${BASE_REF:-main}"
+  # --repo lets CI invoke a copy of this script extracted elsewhere (the
+  # workflow runs the BASE-ref copy via `git show` so a PR cannot weaken
+  # the guard that judges it) while still operating on the checkout.
+  [[ -z "$REPO" ]] && REPO="$REPO_ROOT"
+  base_ref="${BASE_REF:-main}"
+  base_ref="${base_ref#refs/heads/}"
+  BASE="origin/$base_ref"
   HEAD="HEAD"
   # Best-effort refresh so a stale local origin/main cannot false-green
   # (CI always fetches fresh; this covers local runs).
@@ -132,7 +137,13 @@ fi
 
 # ---------- enumerate the diff ----------
 # --no-renames: see header — rename detection would hide the source path.
-if ! CHANGED=$(git -C "$REPO" diff --no-renames --name-only "$BASE...$HEAD" -- 'apps/web-platform/supabase/migrations/*.sql' 2>/dev/null); then
+# -z: NUL-delimited output so paths containing spaces or non-ASCII bytes
+# are not C-quoted (a quoted literal would not match an ls-tree pathspec
+# and would silently classify as "new"). Kept in a temp file because a
+# bash variable cannot hold NUL bytes.
+DIFF_FILE="$(mktemp)"
+trap 'rm -f "$DIFF_FILE"' EXIT
+if ! git -C "$REPO" diff --no-renames --name-only -z "$BASE...$HEAD" -- 'apps/web-platform/supabase/migrations/*.sql' > "$DIFF_FILE" 2>/dev/null; then
   echo "::error::lint-migration-immutability: git diff $BASE...$HEAD failed; failing closed." >&2
   exit 2
 fi
@@ -143,7 +154,7 @@ skipped_new=0
 exempt_down=0
 violations=0
 
-while IFS= read -r rel; do
+while IFS= read -r -d '' rel; do
   [[ -z "$rel" ]] && continue
   touched=$((touched + 1))
 
@@ -151,7 +162,12 @@ while IFS= read -r rel; do
     *.down.sql) exempt_down=$((exempt_down + 1)); continue ;;
   esac
 
-  base_ent=$(git -C "$REPO" ls-tree "$BASE" -- "$rel" 2>/dev/null || true)
+  if ! base_ent=$(git -C "$REPO" ls-tree "$BASE" -- "$rel" 2>/dev/null); then
+    # rc != 0 is an oracle failure, not "absent" (absent is rc 0 + empty)
+    # — degrading it to skipped-new would be a silent false-green.
+    echo "::error::lint-migration-immutability: ls-tree failed for '$rel' at $BASE; failing closed." >&2
+    exit 2
+  fi
   if [[ -z "$base_ent" ]]; then
     # Not on the base ref — free to iterate regardless of number.
     skipped_new=$((skipped_new + 1))
@@ -159,7 +175,10 @@ while IFS= read -r rel; do
   fi
 
   checked=$((checked + 1))
-  head_ent=$(git -C "$REPO" ls-tree "$HEAD" -- "$rel" 2>/dev/null || true)
+  if ! head_ent=$(git -C "$REPO" ls-tree "$HEAD" -- "$rel" 2>/dev/null); then
+    echo "::error::lint-migration-immutability: ls-tree failed for '$rel' at $HEAD; failing closed." >&2
+    exit 2
+  fi
   # ls-tree line: "<mode> <type> <sha>\t<path>". Compare mode+sha (the
   # first two whitespace fields and the sha) — dropping the path column
   # keeps the comparison identity-shaped on both sides.
@@ -173,7 +192,7 @@ while IFS= read -r rel; do
     echo "::error::$rel: on-main migration file mutated (mode/blob differs vs $BASE) — on-main migration files are immutable; land the change as a new NNN_*.sql (#8583)" >&2
     violations=$((violations + 1))
   fi
-done <<<"$CHANGED"
+done < "$DIFF_FILE"
 
 if [[ "$violations" -gt 0 ]]; then
   echo "" >&2
