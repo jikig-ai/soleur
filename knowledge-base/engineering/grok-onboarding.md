@@ -1,6 +1,6 @@
 ---
 title: Grok Build onboarding for Soleur contributors
-last_updated: 2026-09-11
+last_updated: 2026-09-21
 tags:
   - grok
   - harness
@@ -33,11 +33,11 @@ Project plugin config lives in `.grok/config.toml` (merged #6314). Supported pro
 |--------|-------------|------------|
 | Entry command | `/soleur:go <intent>` | `/go <intent>` |
 | Sync | `/soleur:sync` | `/sync` |
-| Help | `/soleur:help` | `/help` |
+| Help | `/soleur:help` | `/local:help` (Grok builtin keeps `/help`) |
 | Workflow skills | Skill tool: `soleur:<skill>` | Slash `/<skill>` names the skill — **Read** `plugins/soleur/skills/<name>/SKILL.md` **in this process** (Grok has no nested Skill tool) |
 | Agents | Task tool (`subagent_type`) | `spawn_subagent` |
 
-**Do not** tell Grok users to run `/soleur:go` — that is the Claude-qualified form. Grok exposes plugin commands by their frontmatter `name` (`go`, `sync`, `help`).
+**Do not** tell Grok users to run `/soleur:go` — that is the Claude-qualified form. Grok 1.0.40 validates plugin `commands/` but does not register those files as slash commands, and `skills/{go,help,sync}` stay `user-invocable: false` so Claude Code's `/` menu is not duplicated. The Grok slash rows are `.grok/commands/{go,help,sync}.md` (symlinks onto `plugins/soleur/commands/*.md`). `/go` and `/sync` are the bare names; Soleur help is `/local:help` because Grok's builtin keeps `/help`.
 
 ## Routing fidelity
 
@@ -59,7 +59,7 @@ Refuse xAI CLI prompts that offer to "improve the product and model" (or similar
 grok inspect | grep -E 'soleur|Agents \(|skills'
 ```
 
-After Phase E (#6324), **68** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills and the three commands (`/go`, `/sync`, `/help`) load via the in-repo plugin.
+After Phase E (#6324), **68** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills load via the in-repo plugin. The three entry commands (`/go`, `/sync`, `/local:help`) load from `.grok/commands/`. `grok inspect --json` must show a `userInvocable: true` row whose path is `.grok/commands/go.md`.
 
 ### Subagents
 
