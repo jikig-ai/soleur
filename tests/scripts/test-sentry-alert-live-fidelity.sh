@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=55
+EXPECTED_TESTS=59
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -148,7 +148,7 @@ t_live_api_shape() {
     )
   ' "$CAPTURE" > "$shaped" 2>/dev/null
 
-  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 32' "$shaped" >/dev/null 2>&1; then
+  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 31' "$shaped" >/dev/null 2>&1; then
     _report "F13 an API-shaped payload (server fields + unsorted keys) still PASSES" fail \
       "the shaped fixture was not built — this row proves nothing"
     return
@@ -308,8 +308,7 @@ t_empty_reference_refuses() {
 t_survivors_out_of_scope() {
   _run "$CAPTURE"
   local names_ok=1
-  # 32 live workflows, 28 in scope: the two vendor defaults (high-priority issues;
-  # Seer's pull-requests-ready, #8267) plus the two carrying
+  # 31 live workflows, 28 in scope: the vendor default plus the two carrying
   # `event_unique_user_frequency_count` are excluded by the predicate, not by a
   # name list. Assert the COUNT and that neither survivor is named in a finding.
   grep -q 'comparing 28 declared rule' <<<"$_out" || names_ok=0
@@ -842,23 +841,79 @@ t_g4_unknown_vendor_shaped() {
     "UNMANAGED-FROZEN: 'another-high-priority-copy'" \
     "G4-15 an unknown excluded-type workflow (high-priority trigger, not a frozen name, not in the capture) is UNMANAGED-FROZEN"
 }
-# #8267: Sentry created the Seer default on 2026-09-17 with no Terraform
-# counterpart, and the provider cannot express `seer_activity_trigger` natively
-# (v0.15.7 routes it to legacy_trigger_conditions and writes comparison=true).
-# Registering it means BOTH halves: the excluded type AND the capture entry. With
-# the capture entry dropped, the census must still name it.
-t_g4_seer_default_needs_capture_entry() {
-  local cap="$TMPD/capture-minus-seer.json"
-  jq 'map(select(.name != "Send a notification when pull requests are ready"))' "$CAPTURE" > "$cap"
-  if [[ "$(jq length "$cap")" -ne "$(( $(jq length "$CAPTURE") - 1 ))" ]]; then
-    _report "G4-20 Seer default needs its capture entry" fail "the capture mutation did not land"; return
-  fi
-  _run_env "$CAPTURE" SENTRY_FROZEN_CAPTURE_FILE="$cap"
-  if [[ "$_rc" -ne 0 ]] && grep -qF -- "UNMANAGED-FROZEN: 'Send a notification when pull requests are ready'" <<<"$_out" \
-     && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
-    _report "G4-20 the Seer default (seer_activity_trigger) absent from the capture is UNMANAGED-FROZEN, never a silent pass" ok
+# #8267: Sentry created the Seer default on 2026-09-17, after the 2026-09-09
+# capture, with a trigger type the provider cannot express (v0.15.7 reads it into
+# legacy_trigger_conditions and writes comparison=true). It is registered in
+# vendor-default-workflows.json, never appended to the dated capture. The live
+# fixture below is the capture plus that workflow, built from the registry's own
+# {id, name} so the rows track the file they test.
+REGISTRY="$REPO_ROOT/apps/web-platform/infra/sentry/vendor-default-workflows.json"
+SEER_NAME="Send a notification when pull requests are ready"
+_seer_live() { # $1=out $2=id override (default: the registered id)
+  local id="${2:-$(jq -r --arg n "$SEER_NAME" '.[] | select(.name == $n) | .id' "$REGISTRY")}"
+  jq --arg n "$SEER_NAME" --arg i "$id" \
+    '. + [ (map(select(.name=="Send a notification for high priority issues"))[0]
+           | .name=$n | .id=$i
+           | .triggers.conditions=[{"type":"seer_activity_trigger","comparison":["pr_ready_for_review"]}]) ]' \
+    "$CAPTURE" > "$1"
+}
+# Both halves, one row each direction: registered (type excluded + {id, name} in
+# the registry) PASSES; the same live payload with an EMPTY registry is
+# UNMANAGED-FROZEN, not plain UNMANAGED (so the type half is what took it out of
+# scope). Dropping the type from `def excluded` makes the first run UNMANAGED.
+t_g4_seer_default_registered() {
+  local live="$TMPD/live-seer.json" empty="$TMPD/registry-empty.json"
+  _seer_live "$live"; printf '[]\n' > "$empty"
+  jq -e --arg n "$SEER_NAME" 'map(select(.name == $n)) | length == 1' "$live" >/dev/null \
+    || { _report "G4-20 Seer default registered" fail "the live fixture did not land"; return; }
+  _run_env "$live"
+  local rc_reg=$_rc out_reg="$_out"
+  _run_env "$live" SENTRY_VENDOR_DEFAULTS_FILE="$empty"
+  if [[ "$rc_reg" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$out_reg" && ! grep -q 'UNMANAGED' <<<"$out_reg" \
+     && [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN: '$SEER_NAME'" <<<"$_out" \
+     && ! grep -qF -- "UNMANAGED: '$SEER_NAME'" <<<"$_out"; then
+    _report "G4-20 the registered Seer default PASSES; with an empty registry it is UNMANAGED-FROZEN (out of scope by type, unknown by registry)" ok
   else
-    _report "G4-20 Seer default needs its capture entry" fail "rc=$_rc (want non-zero). Output: $(head -c 400 <<<"$_out")"
+    _report "G4-20 Seer default registered" fail "registered rc=$rc_reg (want 0); empty-registry rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+# A workflow borrowing a registered default's NAME under another id is not that
+# default: matching by name alone was an evasion (#8545 review).
+t_g4_seer_name_other_id() {
+  local live="$TMPD/live-seer-otherid.json"; _seer_live "$live" 999111
+  _run_env "$live"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN: '$SEER_NAME' (id \"999111\") carries the name of a registered Sentry default under a DIFFERENT id" <<<"$_out"; then
+    _report "G4-21 a registered default's name under a different id is UNMANAGED-FROZEN (identity is id AND name)" ok
+  else
+    _report "G4-21 name under another id" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_seer_duplicate_name() {
+  local live="$TMPD/live-seer-dup.json" dup="$TMPD/live-seer-dup2.json"
+  _seer_live "$live"
+  jq --arg n "$SEER_NAME" '. + [ (map(select(.name == $n))[0] | .id = "999112") ]' "$live" > "$dup"
+  _run_env "$dup"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN DUPLICATE: '$SEER_NAME' names more than one" <<<"$_out"; then
+    _report "G4-22 a registered default's name live twice is UNMANAGED-FROZEN DUPLICATE, even when one copy has the registered id" ok
+  else
+    _report "G4-22 duplicate registered name" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+# The capture half of KNOWN is id-matched too: the high-priority default under a
+# new id is no longer accepted by name.
+t_g4_capture_default_other_id() {
+  _drift_case g4hpid \
+    'map(if .name=="Send a notification for high priority issues" then .id="999113" else . end)' \
+    "UNMANAGED-FROZEN: 'Send a notification for high priority issues' (id \"999113\") carries the name of a registered Sentry default under a DIFFERENT id" \
+    "G4-23 the captured high-priority default under a different id is UNMANAGED-FROZEN"
+}
+t_g4_registry_malformed_refuses() {
+  local bad="$TMPD/registry-bad.json"; printf '[{"name":"x"}]\n' > "$bad"
+  _run_env "$CAPTURE" SENTRY_VENDOR_DEFAULTS_FILE="$bad"
+  if [[ "$_rc" -eq 1 ]] && grep -q 'vendor-default registry' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-24 a registry entry without a string id REFUSES (rc 1), never a silent census" ok
+  else
+    _report "G4-24 malformed registry refuses" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
   fi
 }
 t_g4_zero_frozen_names_refuses() {
@@ -961,7 +1016,11 @@ t_g4_frequency_changed
 t_g4_trigger_logictype_changed
 t_g4_vendor_default_not_pinned
 t_g4_unknown_vendor_shaped
-t_g4_seer_default_needs_capture_entry
+t_g4_seer_default_registered
+t_g4_seer_name_other_id
+t_g4_seer_duplicate_name
+t_g4_capture_default_other_id
+t_g4_registry_malformed_refuses
 t_g4_zero_frozen_names_refuses
 t_g4_frozen_name_without_capture_refuses
 t_g4_second_trigger_condition
