@@ -1,5 +1,6 @@
 import { composeReviewedEngineFactories } from "./agent-engine-adapter-composition";
-import type { CodexAuthMode, CodexAuthProvider, CodexCodeAdapterTransport } from "./codex-code-adapter";
+import type { CodexAuthMode, CodexAuthProvider, CodexCodeAdapterTransport, CodexAuthBoundary } from "./codex-code-adapter";
+import type { EngineAdapter } from "./agent-engine-contract";
 import type { EngineAdapterFactory } from "./agent-engine-adapter-factory";
 import { createCodexApiKeyProviderForUser } from "./codex-credential-provider";
 import type { CodexAppServerStdioLauncher } from "./codex-app-server-stdio";
@@ -20,6 +21,7 @@ export interface CodexWebRuntimeOptions {
   /** Test/runtime override for the encrypted Web-settings API-key provider. */
   apiKeyProvider?: CodexAuthProvider;
   additionalFactories?: Readonly<Record<string, EngineAdapterFactory>>;
+  createCodex?: (transport: CodexCodeAdapterTransport, auth: CodexAuthBoundary) => EngineAdapter;
 }
 
 export interface CodexWebBinding {
@@ -60,6 +62,7 @@ export function createCodexWebEngineFactories(options: CodexWebRuntimeOptions): 
     additionalFactories: options.additionalFactories,
     codexTransport: transport,
     codexAuth: auth,
+    createCodex: options.createCodex,
   });
 }
 
