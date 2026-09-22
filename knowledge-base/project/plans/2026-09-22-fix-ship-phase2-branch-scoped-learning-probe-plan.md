@@ -503,25 +503,25 @@ Agents: test-design-reviewer, architecture-strategist; halts 4.6/4.7/4.8/4.9/4.1
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `bun test plugins/soleur/test/ship-learning-probe.test.ts` passes: rows 1-11, the
+- [x] AC1 — `bun test plugins/soleur/test/ship-learning-probe.test.ts` passes: rows 1-11, the
   exactly-one-fence check and the fenced range-flag ban, against the edited SKILL.md.
-- [ ] AC2 — the same suite is RED against the pre-fix SKILL.md (written first, per
+- [x] AC2 — the same suite is RED against the pre-fix SKILL.md (written first, per
   `cq-write-failing-tests-before`) and against mutations 2-9; H2 is GREEN. Outcomes recorded in the
   PR body as a table.
-- [ ] AC3 — the `learnings/**/*FEATURE*` Glob instruction is gone from Phase 2:
+- [x] AC3 — the `learnings/**/*FEATURE*` Glob instruction is gone from Phase 2:
   `awk '/^## Phase 2: Capture Learnings/{p=1;next} /^## /{p=0} p' plugins/soleur/skills/ship/SKILL.md | grep -c 'learnings/\*\*/\*FEATURE\*'` prints `0`.
-- [ ] AC4 — `bun test plugins/soleur/test/workflow-fidelity.test.ts` green.
-- [ ] AC4b — §A.2 applied: `grep -c 'when the Phase 2 probe prints' plugins/soleur/skills/ship/SKILL.md` prints `1`, and `grep -c 'Ask before running soleur:compound' plugins/soleur/skills/ship/SKILL.md` prints `0`.
-- [ ] AC5 — `python3 scripts/lint-skill-body-budget.py --base origin/main` → OK, and
+- [x] AC4 — `bun test plugins/soleur/test/workflow-fidelity.test.ts` green.
+- [x] AC4b — §A.2 applied: `grep -c 'when the Phase 2 probe prints' plugins/soleur/skills/ship/SKILL.md` prints `1`, and `grep -c 'Ask before running soleur:compound' plugins/soleur/skills/ship/SKILL.md` prints `0`.
+- [x] AC5 — `python3 scripts/lint-skill-body-budget.py --base origin/main` → OK, and
   `git diff --quiet origin/main -- plugins/soleur/test/skill-body-budget.json` exits 0.
-- [ ] AC6 — ADR-229's Status line names `2026-09-22 (#8470)`; the #8399 ruling bullet carries the
+- [x] AC6 — ADR-229's Status line names `2026-09-22 (#8470)`; the #8399 ruling bullet carries the
   "Armed 2026-09-22 (#8470)" sentence with the `git log --diff-filter=A` key and the Skip clause;
   `## Verification` names `ship-learning-probe.test.ts`.
-- [ ] AC7 — `bash plugins/soleur/test/c4-count-parity.test.sh` and
+- [x] AC7 — `bash plugins/soleur/test/c4-count-parity.test.sh` and
   `bash plugins/soleur/test/fixture-env-adoption.test.sh` green.
 - [ ] AC8 — the PR body contains `Ref #8470` and
   `gh pr view 8567 --json title,body -q '.title+" "+.body' | grep -ciE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #8470'` prints `0`.
-- [ ] AC9 — `git diff origin/main -- plugins/ | grep -c SOLEUR_RULE_APPLIED` prints `0`, and
+- [x] AC9 — `git diff origin/main -- plugins/ | grep -c SOLEUR_RULE_APPLIED` prints `0`, and
   `git diff --name-only origin/main` lists no `rule-metrics.json`.
 
 ### Post-merge (pipeline, not operator)
