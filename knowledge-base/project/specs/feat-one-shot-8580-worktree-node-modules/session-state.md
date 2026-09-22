@@ -35,8 +35,15 @@
   the install). Fixed by exempting `SANDBOX_RECORD` arms (they start no
   suite, resolve no binary — same justification as `_ENUMERATE`); verified
   127/127 with `node_modules` absent.
-- Local full battery: relaunching on the final tree after the fix (a prior
-  run was killed — the SUT changed under it).
+- Local full battery: 484/496 (7 failed, 5 relevance-skips). Failures:
+  `fixture-env-adoption` was OURS (new suite counted in the unconverted
+  ratchet — fixed via `git_fixture_env`, `a2cd6e9772`, 13/13 + 26/26 green);
+  `fixture-relative-assert`, `sentry-monitors-audit`, `c4-count-parity` are
+  the #8578/#8586 `scheduled-actions-queue-health` drift (pre-existing,
+  tracked); `go-session-gates` H3 needs a claude-CLI headless harness
+  (environmental, diff-independent); `plugins/soleur` is the group aggregate.
+- Merge: required `test` aggregate is red on the pre-existing shard failures
+  → blocked until #8588 (#8586 fix) lands on main, then sync + merge.
 
 ## Review Phase (complete)
 
