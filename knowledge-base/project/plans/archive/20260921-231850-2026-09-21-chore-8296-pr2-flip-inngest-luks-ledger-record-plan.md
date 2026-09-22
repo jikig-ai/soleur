@@ -480,7 +480,7 @@ The parent's `### PR-2 — the record` ACs apply unchanged **except where re-bas
 - [ ] **AC-29c** `bash scripts/lint-orphan-test-suites.sh` and
   `bash scripts/lint-followthrough-varq-ban.sh` exit 0, and `scripts/test-all.sh` carries the
   `run_suite "scripts/inngest-luks-property-8296"` line.
-- [ ] **AC-30 (post-merge, revised)** `gh issue view 8285 --json body,labels` shows:
+- [x] **AC-30 (post-merge, revised)** `gh issue view 8285 --json body,labels` shows:
   - the `follow-through` label;
   - the directive from Post-merge step 1, at column 0 and unfenced;
   - the "Do NOT close this issue before" line and the retirement line.
@@ -526,7 +526,7 @@ The parent's `### PR-2 — the record` ACs apply unchanged **except where re-bas
   (`knowledge-base/INDEX.md`, `knowledge-base/kb-tags.txt`,
   `specs/feat-one-shot-8296-pr2-ledger-flip/session-state.md`, a learning from compound). Any
   other path is a scope question for review, not something to tick silently.
-- [ ] **AC-P8 (post-merge)** `gh issue close 8296` runs only after all of these hold:
+- [x] **AC-P8 (post-merge)** `gh issue close 8296` runs only after all of these hold:
   - this PR has merged;
   - AC-29d printed `agree`;
   - AC-30 has been read back;
