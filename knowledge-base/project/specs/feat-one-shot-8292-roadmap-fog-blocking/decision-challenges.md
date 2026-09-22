@@ -63,3 +63,21 @@ issue asks the frontier to compose with it.
 `pick_phase` fixes a pre-existing defect that no #8292 property requires. **Plan default:** keep it
 in this PR as its own commit (CPO, CTO and DHH concurred: without it the new frontier renders the
 wrong phase on day one).
+
+---
+
+## Operator resolution — 2026-09-22
+
+Resolved by the operator in-session (AskUserQuestion), so no `action-required` issue is owed for
+this file:
+
+- **DC-1 accepted:** workshop step 1.6 walks the unsorted (no-milestone) issues — count plus the
+  oldest few — and asks the founder to place or rule out each.
+- **DC-2 accepted:** empty state is `_Nothing recorded yet. The roadmap workshop adds entries._`
+- **DC-3 accepted:** one sentence in roadmap.md above the two new sections states the four-places rule.
+- **DC-4 accepted:** Post-MVP row reads "filed as an issue; chosen for later".
+- **DC-5 accepted:** Out of Scope intro adds "changed your mind? open a new issue".
+- **DC-6 accepted:** `next` output and headings use "ready to start" / "waiting on #M" /
+  "someone is on it"; the rules keep frontier / blocked / claimed.
+- **DC-7:** not raised with the operator; plan default stands (lowest-number pick).
+- **DC-8:** operator chose to keep the phase-selection + truncation fix in this PR as its own commit.

@@ -785,3 +785,16 @@ roadmap.md and the plan note rests on it, and bundles 2-4 ran the same check).
 four-places rule stated in roadmap.md itself; Post-MVP wording; "changed your mind?" line; plain
 words in `next` output) and the earlier CPO frontier-ranking suggestion; simplicity's suggestion to
 split `pick_phase` into its own PR.
+
+## Operator Decisions (2026-09-22, supersede plan defaults)
+
+The operator resolved `specs/feat-one-shot-8292-roadmap-fog-blocking/decision-challenges.md` in-session.
+Where these conflict with any earlier section of this plan, **these win**:
+
+1. DC-1: add the unsorted-issues walk to workshop step 1.6 (count + oldest few; place or rule out each; skipped in headless, which reports the count).
+2. DC-2: empty-state text everywhere is `_Nothing recorded yet. The roadmap workshop adds entries._` (replaces `_None recorded._`, including in tests/ACs).
+3. DC-3: roadmap.md carries one sentence above the two new sections: work in none of the four places was forgotten.
+4. DC-4: Post-MVP row in the four-places table: "filed as an issue; chosen for later".
+5. DC-5: Out of Scope intro adds "changed your mind? open a new issue".
+6. DC-6: founder-facing `next` / `next --frontier` output and headings say "ready to start", "waiting on #M", "someone is on it"; rules/prose keep frontier/blocked/claimed. Existing CODEABLE / OPERATOR tokens stay (machine-read).
+7. DC-8: phase-selection + truncation fix stays in this PR, own commit.
