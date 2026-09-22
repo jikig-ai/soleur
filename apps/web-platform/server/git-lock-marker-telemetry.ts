@@ -117,7 +117,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // MIRRORED-NOT-PAGED (#8287): the SOLEUR_BOOTSTRAP_* family.
 //
@@ -226,6 +226,12 @@ const MARKER_RE =
 // asking "where did my branch go?" can answer it from Better Stack instead of from a
 // reflog they have to know to look at. The fail-closed refusals that PREVENT a reap
 // page through their own markers; this one records that a reap happened.
+//
+// MIRRORED-NOT-PAGED (#8490): SOLEUR_CLEANUP_GH_QUERY_FAILED. cleanup-merged could not ask
+// GitHub whether a worktree branch's PR merged. GitHub is the ONLY merge evidence for a
+// squash-merged, auto-deleted ([gone]) branch, so a gh outage makes cleanup reap nothing —
+// the #8490 symptom — and without this marker that is indistinguishable from "nothing was
+// merged". Fail-CLOSED (the branch is kept), so it is not a wedge and must not page.
 //
 // PAGED (#8400 review): SOLEUR_WORKTREE_REAP_PARTIAL. The local delete failed AFTER the remote
 // ref was already deleted — the PR is closed and the branch is only half reaped. Unlike a normal
