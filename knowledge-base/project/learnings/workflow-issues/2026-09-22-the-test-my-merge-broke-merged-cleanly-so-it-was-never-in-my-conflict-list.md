@@ -75,7 +75,7 @@ merge-time case of the sweep class in
 `knowledge-base/project/learnings/2026-06-03-dispatcher-factory-new-import-sweep-all-exercising-test-files.md`,
 and the ship-time twin of the plan rule in `plugins/soleur/skills/plan/references/plan-sharp-edges.md`
 ("enumerate its consumers as everything that EXECUTES these bytes", #8028). Ship's Phase 6.5
-hand-resolution steps and Phase 7 DIRTY exit now point at it.
+hand-resolution steps, its Phase 7 DIRTY exit and merge-pr §3.4 now point at it.
 
 **What that pointer does not cover.** A clean, automatic BEHIND sync can pull in a sibling's new
 consumer the same way, with no hand resolution, and no step re-tests after it. That path still relies
