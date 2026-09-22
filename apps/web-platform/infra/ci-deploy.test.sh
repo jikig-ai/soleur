@@ -1845,11 +1845,11 @@ assert_bprime_cosign_invocation() {
   rm -f "$argsfile"
   [[ -n "$args" ]] || ok=0
   printf '%s' "$args" | grep -qF -- '--network host' || ok=0
-  printf '%s' "$args" | grep -qE -- '-v [^ ]+:/root/\.docker/config\.json:ro' || ok=0
   # T-1a-2 (#8036 P2): the :ro mount is the DEPLOY config specifically — the anonymous CLI config
   # the verifier-image pull now uses must never replace the credential the in-container .sig
-  # fetch authenticates with.
-  printf '%s' "$args" | grep -qF -- "-v $DEPLOY_DOCKER_CONFIG_DIR/config.json:/root/.docker/config.json:ro" || ok=0
+  # fetch authenticates with. (#8037: mounted where DOCKER_CONFIG points, never /root/.docker —
+  # see T-8037-1 below for why.)
+  printf '%s' "$args" | grep -qF -- "-v $DEPLOY_DOCKER_CONFIG_DIR/config.json:/cosign-docker/config.json:ro" || ok=0
   printf '%s' "$args" | grep -qE -- '-v [^ ]+:/etc/cosign/trusted_root\.json:ro' || ok=0
   printf '%s' "$args" | grep -qF -- '--offline' || ok=0
   printf '%s' "$args" | grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' || ok=0
@@ -1862,6 +1862,44 @@ assert_bprime_cosign_invocation() {
   fi
 }
 assert_bprime_cosign_invocation
+
+# T-8037-1: the in-container .sig fetch must actually READ the mounted credential. The pinned
+# cosign image runs as uid 65532 (home /home/nonroot) with no HOME/DOCKER_CONFIG set, so a mount
+# at /root/.docker/config.json is never consulted (measured: a bogus credsStore there is ignored,
+# the same file at /home/nonroot/.docker is read), and the fetch goes out anonymous — zot 401,
+# `result=verify_failed` on the first post-#8456 deploy. And `docker login` writes the file 0600
+# as the deploy user, so uid 65532 cannot read it even at the right path (measured: `permission
+# denied`). The property, asserted on the ARGV rather than one spelling of it:
+#   (a) the container runs as the invoking uid:gid — the owner of the 0600 file;
+#   (b) DOCKER_CONFIG is set, exactly once, and a :ro mount of the deploy config lands at
+#       "$DOCKER_CONFIG/config.json" — derived from the argv, so the two cannot drift apart;
+#   (c) nothing is mounted under /root/.docker, and there is exactly one --user (a second one
+#       would supersede the first).
+assert_cosign_reads_mounted_config() {
+  TOTAL=$((TOTAL + 1))
+  local argsfile args dc n_user n_dc ok=1 why=""
+  argsfile=$(mktemp)
+  ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
+  rm -f "$argsfile"
+  [[ -n "$args" ]] || { ok=0; why="no verify argv captured"; }
+  n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )--user( |=)' || true; } | wc -l | tr -d ' ')
+  [[ "$n_user" == "1" ]] || { ok=0; why="$why; --user count=$n_user"; }
+  [[ " $args " == *" --user $(id -u):$(id -g) "* ]] || { ok=0; why="$why; --user is not the invoking uid:gid"; }
+  n_dc=$( { printf '%s' "$args" | grep -oE -- '-e DOCKER_CONFIG=' || true; } | wc -l | tr -d ' ')
+  [[ "$n_dc" == "1" ]] || { ok=0; why="$why; -e DOCKER_CONFIG count=$n_dc"; }
+  dc=$(printf '%s' "$args" | sed -n 's/.*-e DOCKER_CONFIG=\([^ ]*\).*/\1/p')
+  [[ "$dc" == /* ]] || { ok=0; why="$why; DOCKER_CONFIG not absolute ($dc)"; }
+  [[ " $args " == *" -v $DEPLOY_DOCKER_CONFIG_DIR/config.json:$dc/config.json:ro "* ]] \
+    || { ok=0; why="$why; deploy config not mounted at \$DOCKER_CONFIG/config.json"; }
+  [[ "$args" != *"/root/.docker"* ]] || { ok=0; why="$why; a /root/.docker mount survives"; }
+  if [[ "$ok" == "1" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: T-8037-1 cosign runs as the config owner and DOCKER_CONFIG points at the mounted deploy config (#8037)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-8037-1 cosign would not read the mounted credential:${why}"; echo "        args: $args"
+  fi
+}
+assert_cosign_reads_mounted_config
 
 # --- #8036 1a: the cosign VERIFIER-IMAGE pull is anonymous -------------------------------------
 # The docker CLI resolves the implicit `$COSIGN_IMAGE` pull's credentials from its own
@@ -5233,8 +5271,13 @@ DOCKERCFG_ASSIGN_LINES="$(printf '%s\n' "$DOCKERCFG_CODE" | grep -E '^[[:space:]
 # line (-x) so nothing can ride along on it. It is an argv word handed to `env` for that single
 # child, never a shell assignment, so it cannot re-point this script's runtime DOCKER_CONFIG
 # (T-1a-1/T-1a-4 pin that the deploy config dir is untouched by it).
+# #8037: the second exclusion is the verify `docker run`'s CONTAINER-side `-e DOCKER_CONFIG=…`,
+# also matched as a whole line. It sets the variable inside the cosign container only (so cosign
+# reads the mounted deploy config); it is an argv word to `docker run`, never a shell assignment
+# here. T-8037-1 pins its value against the mount target.
 dc_assign_count="$(printf '%s\n' "$DOCKERCFG_CODE" \
   | grep -vxE '[[:space:]]*verify_env\+=\("DOCKER_CONFIG=\$anon_dir"\)' \
+  | grep -vxE '[[:space:]]*--user "\$cosign_user" -e "DOCKER_CONFIG=\$cosign_cfg_dir" \\' \
   | grep -cE '(^|[^A-Za-z0-9_])DOCKER_CONFIG=' || true)"
 if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' \
    && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE '/home/deploy' \
@@ -7541,7 +7584,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # iterates zero times, a helper that returns before counting) still ends "N/N passed". Pinned to the
 # exact count at the time of writing; raise it when rows are added. Deliberately a bare printf +
 # exit 1 — NOT a counted assertion through a helper that could itself be the thing that broke.
-CI_DEPLOY_ASSERT_FLOOR=329
+CI_DEPLOY_ASSERT_FLOOR=330
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

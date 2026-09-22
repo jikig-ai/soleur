@@ -253,3 +253,43 @@ verdict preceded by that line as action-required, so the fail-open cannot pass s
 **Status: CODE-DECLARED.** Merging applies `ci-deploy.sh` to the web host through the
 `deploy_pipeline_fix` auto-apply; the amendment is LIVE only once a post-apply deploy logs
 `IMAGE_VERIFY: ok`. The #8037 follow-through probe grades exactly that, per host.
+
+## Amendment 2026-09-22 (#8037) — the verifier must be able to READ its mounted config
+
+**What the record above got wrong.** The Decision's `-v <host-docker-config.json>:/root/.docker/config.json:ro`
+mount, and the 2026-09-21 amendment's statement that "the `.sig` referrer fetch inside the container
+still authenticates" because of it, were never true for the pinned image. They are kept as written.
+This amendment corrects them, and it does not replace them.
+
+**Measured 2026-09-22.**
+
+- **The mount path was never read.** `ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a…` runs as uid
+  65532 (`nonroot`, home `/home/nonroot` in the image's `/etc/passwd`). It sets neither `HOME` nor
+  `DOCKER_CONFIG`, so cosign reads `/home/nonroot/.docker/config.json`. A config naming a nonexistent
+  `credsStore: bogus` is ignored when mounted at `/root/.docker/config.json`. The same file is read,
+  failing on `docker-credential-bogus`, when mounted at `/home/nonroot/.docker/config.json`.
+- **The file is unreadable to that uid anyway.** `docker login` writes the deploy config `0600`, as
+  the `deploy` user. Mounted at the right path, uid 65532 gets `open …: permission denied`.
+- **Live consequence.** Once 1a let cosign start (#8456), the first deploy reported
+  `IMAGE_VERIFY_FAIL: result=verify_failed … .sig: unexpected status code 401 Unauthorized` from zot.
+  The `.sig` fetch had always gone out anonymous. That is the "has never succeeded" of #8037.
+
+**Decision.** The verify `docker run` now passes `--user "$(id -u):$(id -g)"`, the owner of the `0600`
+config (the trusted root is `0644`). It also passes `-e DOCKER_CONFIG=/cosign-docker`, with the deploy
+config mounted `:ro` at `/cosign-docker/config.json`. The container's config location is therefore
+explicit, and it no longer depends on the image's user or `HOME`. An offline `cosign verify` under
+exactly these flags, with no `/etc/passwd` entry for the uid and so `HOME=/`, starts, reads the config,
+queries the registry and returns a verdict, with no filesystem errors. Design B′'s topology (host
+network, offline trusted root, ephemeral verifier) is unchanged.
+
+**Guards.** `ci-deploy.test.sh` T-8037-1 asserts the property on the captured argv:
+
+- exactly one `--user`, and it is the invoking uid:gid
+- exactly one `-e DOCKER_CONFIG`, whose value is where the deploy config is mounted
+- nothing mounted under `/root/.docker`
+
+The EROFS relocation guard excludes the container-side `-e` as a whole line, so it cannot mask a real
+re-point of the script's own `DOCKER_CONFIG`.
+
+**Status: CODE-DECLARED.** It is LIVE once a post-apply deploy logs `IMAGE_VERIFY: ok`. The #8037
+follow-through probe grades that per host.
