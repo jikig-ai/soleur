@@ -23,9 +23,9 @@ The archived 2026-09-14 record contains deterministic fixtures, not live provide
 | Mode | Probe | Observed result | Qualification scope |
 |---|---|---|---|
 | Managed ChatGPT | 2026-09-21, local Codex CLI v0.155.1, ephemeral read-only session in an empty `/tmp` directory, with `--ignore-user-config --skip-git-repo-check`. Prompt requested an exact synthetic sentinel and no tools/files. | CLI reported `Logged in using ChatGPT`; request exited 0 and returned `SOLEUR_CODEX_SYNTHETIC_OK`; 2,371 tokens were reported. | Basic ChatGPT account access and text response only. Account plan/owner is unknown. It does **not** qualify the web app, API transport, event/usage mapping, lifecycle, attachments, or erasure. |
-| API key | Read-only production Doppler presence probe for `OPENAI_API_KEY`. | Secret not found. No provider request attempted. | Live API-key mode blocked pending a suitable credential and account identification. |
+| API key | Read-only production Doppler presence probe for `OPENAI_API_KEY`. | No global secret was found and no provider request was attempted. Web settings are the intended per-user/workspace credential source. | Product implementation is not blocked by the absent global secret; live API-key qualification remains pending until an authorized test workspace supplies a credential through settings. |
 
-The first CLI attempt failed because the sandbox could not initialize the in-process App Server on a read-only filesystem. The same bounded request succeeded after an approved unsandboxed invocation. No customer content was included in either attempt.
+The first CLI attempt failed because the sandbox could not initialize the in-process App Server on a read-only filesystem. The same bounded request succeeded after an approved unsandboxed invocation. No customer content was included in either attempt. The App Server launcher contract is a CTO-owned technical runtime decision; it is not a reason to require a global customer credential.
 
 ## Required end-to-end matrix
 
