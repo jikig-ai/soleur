@@ -1104,7 +1104,7 @@ done < "$class_c_out"
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 #
-# Addendum 2026-09-17: the tf root now declares
+# Addendum 2026-09-17 (extended 2026-09-22): the tf root now declares
 # 59 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
 # one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, and
 # the #8450 scheduled-actions-queue-health probe a third.

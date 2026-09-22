@@ -187,9 +187,16 @@ jobs:
           set -euo pipefail
           # Self-closing on BOTH issue titles — an action-required issue that
           # outlives its cause trains the operator to ignore the label.
-          for n in $(gh issue list --repo "$GH_REPO" --state open -L 200 \
+          # -L 200 is the explicit bound the #6793 probe gate requires; the
+          # reachable set is the ≤2 titles this file files, so the cap is a
+          # formal bound, not load. The notice keeps a real cap-hit audible.
+          matches="$(gh issue list --repo "$GH_REPO" --state open -L 200 \
               --search 'in:title "[ci/actions-queue-health]"' \
-              --json number --jq '.[].number' 2>/dev/null || true); do
+              --json number --jq '.[].number' 2>/dev/null || true)"
+          if [ "$(printf '%s\n' "$matches" | grep -c .)" -ge 200 ]; then
+            echo "::notice::queue-health self-close enumeration hit the -L 200 cap; oldest matching issues stay open until the next sweep"
+          fi
+          for n in $matches; do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "Queue health restored (${VERDICT}) at $(date -u +'%Y-%m-%d %H:%M UTC'). Auto-closed by ${RUN_URL}" || true
           done
