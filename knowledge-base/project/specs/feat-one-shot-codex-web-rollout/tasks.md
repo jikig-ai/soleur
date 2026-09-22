@@ -6,8 +6,9 @@ Progress: OpenAI API-key credentials now use authenticated Web settings and an
 encrypted per-user resolver; runtime composition selects the persisted auth mode,
 composes the approved App Server launcher through stdio and lifecycle, and fails
 closed when managed authorization, transport configuration, or Codex egress
-evidence is absent. Real handler dispatch, managed authorization, qualification,
-legal disposition, and rollout remain open.
+evidence is absent; persisted Codex bindings now derive the auth mode without
+client input. Real handler dispatch, managed authorization, qualification, legal
+disposition, and rollout remain open.
 
 - [ ] Record current production/Flagsmith/CI/release/deploy baseline and related issues.
 - [ ] Add failing real-path conversation and routine tests, including credential mode, immutable binding, events, approvals, cancellation, reconciliation, attachments, usage, failure and no fallback.
