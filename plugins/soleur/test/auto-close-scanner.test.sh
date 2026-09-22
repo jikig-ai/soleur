@@ -128,30 +128,63 @@ rm -f "$TMP_NEG"
 assert_eq "1" "$(count_lines "$OUT")" "negated 'Does not close #5463' produces exactly 1 match"
 echo ""
 
-# --- TS10: cross-line — keyword ends one line, #N starts the next (the #8514 trap) ---
-# GitHub treats the newline as whitespace: a commit body wrapped at 100 columns as
-# "...would auto-close" / "#8285, so..." closed #8285 on the squash-merge of #8514.
-# A line-at-a-time grep cannot see it.
-echo "TS10: cross-line — 'auto-close' at end of line, '#8285' at start of next, matches"
+# --- TS10–TS13: split matches (the #8514 trap) ---
+# GitHub treats the newline between keyword and reference as whitespace: a commit
+# body wrapped as "...would auto-close" / "#8285, so..." closed #8285 on the
+# squash-merge of #8514. One scratch dir; the trap also runs the helper's own
+# sandbox cleanup, which a bare `trap ... EXIT` here would otherwise replace.
 SCRATCH=$(mktemp -d)
-trap 'rm -rf "$SCRATCH"' EXIT
-TMP_XL="$SCRATCH/cross-line.txt"
-printf 'Corrects Guard 3: a probe that can exit 0 would auto-close\n#8285, so the probe is notify-only.\n' > "$TMP_XL"
-OUT=$(run_scan "$TMP_XL")
-assert_eq "1" "$(count_lines "$OUT")" "cross-line keyword + #N produces exactly 1 match"
-assert_contains "$OUT" "1:" "cross-line match is reported at the keyword's line number"
-assert_contains "$OUT" "#8285" "cross-line match text carries the issue reference"
-printf 'Fixes\n   GH-42 in the parser.\n' > "$TMP_XL"
-OUT=$(run_scan "$TMP_XL")
-assert_eq "1" "$(count_lines "$OUT")" "cross-line GH-N form with leading indent matches"
+trap 'rm -rf "$SCRATCH"; declare -F _soleur_sb_cleanup >/dev/null && _soleur_sb_cleanup' EXIT
+F="$SCRATCH/in.txt"
+scan_str() { printf '%b' "$1" > "$F"; run_scan "$F"; }
+
+echo "TS10: the #8514 text, keyword on line 3 — exact record at the KEYWORD's line"
+OUT=$(scan_str 'Summary.\n\nCorrects Guard 3: a probe that can exit 0 would auto-close\n#8285, so the probe is notify-only.\n')
+assert_eq "3:Corrects Guard 3: a probe that can exit 0 would auto-close #8285, so the probe is notify-only." "$OUT" \
+  "split match: one record, keyword line number, both lines joined by one space"
 echo ""
 
-# --- TS11: cross-line negative — keyword ends a line, the next line is not a reference ---
-echo "TS11: cross-line negative — 'close' at end of line followed by prose does not match"
-TMP_XN="$SCRATCH/cross-line-negative.txt"
-printf 'the sweeper will close\nthe tracker when the probe passes, see #8285 above.\nprefix-disclose\n#12 is a heading.\n' > "$TMP_XN"
-OUT=$(run_scan "$TMP_XN")
-assert_eq "0" "$(count_lines "$OUT")" "keyword at line end followed by non-reference line produces no match"
+echo "TS10b: every keyword, split across lines, #N and indented GH-N"
+for kw in close closes closed fix fixes fixed resolve resolves resolved; do
+  OUT=$(scan_str "will ${kw}\n#99 x\n")
+  assert_eq "1:will ${kw} #99 x" "$OUT" "split '${kw}' / '#99' produces exactly its record"
+  OUT=$(scan_str "WILL ${kw^^}\n   GH-42 in the parser.\n")
+  assert_eq "1:WILL ${kw^^} GH-42 in the parser." "$OUT" "split upper-case '${kw}' / indented GH-42"
+done
 echo ""
 
-print_results
+echo "TS11: whitespace shapes GitHub still closes on"
+OUT=$(scan_str 'would close   \n#12 x\n')
+assert_eq "1:would close #12 x" "$OUT" "trailing spaces after the keyword"
+OUT=$(scan_str 'would close\r\n#12 x\r\n')
+assert_eq "1:would close #12 x" "$OUT" "CRLF input: matched, and no CR in the record"
+OUT=$(scan_str 'Closes #7 now\r\n')
+assert_eq "1:Closes #7 now" "$OUT" "CRLF same-line input: no CR in the record"
+OUT=$(scan_str 'would close\n\n  \n#12 x\n')
+assert_eq "1:would close #12 x" "$OUT" "blank and whitespace-only lines between keyword and reference"
+OUT=$(scan_str 'would close\n#12')
+assert_eq "1:would close #12" "$OUT" "last line without a trailing newline"
+echo ""
+
+echo "TS12: split negatives, one shape each"
+for neg in 'the sweeper will close\nthe tracker, see #8285 above.\n' \
+           'prefix-disclose\n#12 is a heading.\n' \
+           'close_\n#12 x\n' \
+           'my_close\n#12 x\n' \
+           'close\n#12abc\n' \
+           'close\n# Heading\n' \
+           'close\nGH-x\n' \
+           'Fixes the parser and\n#12 x\n' \
+           'will close\nsome prose\n#12 x\n'; do
+  OUT=$(scan_str "$neg")
+  assert_eq "0" "$(count_lines "$OUT")" "no match: $(printf '%s' "$neg" | head -c 40)"
+done
+echo ""
+
+echo "TS13: records come out in ascending line order, same-line and split interleaved"
+OUT=$(scan_str 'Fixes #1 and would close\n#2 later\nfixes\n\n#3\nCloses #4\n')
+EXPECTED=$'1:Fixes #1 and would close\n1:Fixes #1 and would close #2 later\n3:fixes #3\n6:Closes #4'
+assert_eq "$EXPECTED" "$OUT" "same-line + split records, ascending, both kept for line 1"
+echo ""
+
+print_results 58

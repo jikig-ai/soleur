@@ -1732,10 +1732,11 @@ Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. T
 
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
-Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Two traps to know:
+Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Three traps to know:
 
 - **Markdown-blind:** matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
 - **Negation-blind + commit-message surface:** GitHub's parser ignores negation, so `Does not close #N` still closes #N. And on a **squash merge** (this repo's default) the squash commit is built from the **branch commit messages**, which the parser reads on merge — so a keyword in a commit body auto-closes even when the PR body is clean. That gap closed #5463 twice (a negated body in #5519, then a negated commit message `Does not close #5463` in #5564). ALWAYS scan commit messages, not just the PR body.
+- **Line-wrap-blind:** a newline is whitespace to the parser, so a keyword ending one line and `#N` starting the next non-blank line still closes #N — #8514's squash commit closed its own backstop tracker this way. The scanner reports it at the keyword's line with both lines joined by a space, so that text is not in the file: fix it by rewording line N (drop the keyword or put a word between it and the reference), never by rewrapping, which any later reflow undoes.
 
 Write the proposed `PR_TITLE`, `PR_BODY`, and the branch commit messages (`git log origin/main..HEAD --format=%B`) to temp files, then run the shared scanner:
 
