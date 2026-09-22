@@ -147,7 +147,8 @@ mattpocock/skills
       the OpenHands mirror of the agent above; it carries the same derived
       prose and is listed because a Used-in list that omits one of three
       mirrors understates the reach of the attribution) (#8289),
-    skills/skill-creator/references/authoring-levers.md (#8290)
+    skills/skill-creator/references/authoring-levers.md (#8290),
+    skills/product-roadmap/SKILL.md (#8292)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent
@@ -256,6 +257,19 @@ mattpocock/skills
     user-invocable rows in skills/skill-creator/references/official-spec.md
     are sourced from Anthropic's Claude Code documentation, not the peer,
     and carry no credit.
+
+    Bundle 5 (#8292, from skills/engineering/wayfinder/SKILL.md at the
+    same HEAD) imports three mechanics into skills/product-roadmap/
+    SKILL.md: the Not Yet Specified fog section with its
+    state-the-question-not-answer-it test and the no-pre-slicing rule;
+    out-of-scope-as-closed-issue, kept out of the decisions record; and
+    native blocking edges with an open, unblocked, unclaimed frontier.
+    Deliberately NOT imported: the map issue with child decision tickets
+    and wayfinder:* labels, the four ticket types, claim-by-self-
+    assignment, one-ticket-per-session, and sub-issue hierarchy (Soleur's
+    phase milestones already carry it). The two roadmap.md section intros
+    and the fog note in skills/plan/SKILL.md take no peer prose and
+    carry no comment.
 
   MIT License (upstream)
 

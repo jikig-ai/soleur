@@ -255,6 +255,8 @@ Step 4 — after research — and the conditional sections are gate-triggered. A
 section the finished plan legitimately skips trips `deepen-plan`'s halt gates. For the same reason,
 placeholder prose must avoid the literal tokens `TODO`, `TBD`, `N/A` and `placeholder`.
 
+**Fog belongs in the roadmap.** In-scope product work you cannot yet state as a precise question goes to `## Not Yet Specified` in `knowledge-base/product/roadmap.md` via `soleur:product-roadmap`, never into a plan `TBD`; plan does not edit roadmap.md. Implementation unknowns stay in the plan.
+
 **Sanitize the Overview.** Write a restatement in this skill's own voice, never a verbatim paste of
 the issue body. [lint-infra-no-human-steps.py](../../../../scripts/lint-infra-no-human-steps.py)
 scans this directory and `.claude/hooks/iac-plan-write-guard.sh` gates the Write itself; both reject

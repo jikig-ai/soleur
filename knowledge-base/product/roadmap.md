@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-06
+last_updated: 2026-09-22
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -448,6 +448,24 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 | CP5 | Multi-player identity & RBAC for Soleur operators (operator identity, per-seat scopes, audit trail) | P3 | Strategic (up-market trigger) | [#4670](https://github.com/jikig-ai/soleur/issues/4670) | Not started |
 
 **Defend, don't chase:** Soleur already matches or beats Viktor on two of its four pillars — git-committed compounding memory (auditable/portable vs vendor-locked) and Doppler/OIDC credential vaulting. These are differentiators to surface in messaging, not gaps to close.
+
+---
+
+## Not Yet Specified
+
+Known work lives in one of four places: a phase row, Post-MVP / Later, Not Yet Specified, or Out of Scope. Anything in none of them was forgotten, not deferred, and an open issue with no milestone is still unsorted.
+
+In scope and coming, but not yet sharp enough to file as an issue. Each entry moves into a phase or Post-MVP row once its question is clear. Rules live in the product-roadmap skill.
+
+*Nothing recorded yet. The roadmap workshop adds entries.*
+
+---
+
+## Out of Scope
+
+Work ruled out of this roadmap. Each line links an issue closed as not planned and says why. Changed your mind? Open a new issue rather than reopening the old one.
+
+*Nothing recorded yet. The roadmap workshop adds entries.*
 
 ---
 
