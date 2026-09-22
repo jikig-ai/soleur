@@ -16,6 +16,50 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 # fix(infra): converge the inngest host's late-attached private NIC before the zot pull
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-22
+**Sections enhanced:** Phase 2, Phase 3, Phase 5, Observability, Encryption Posture, Guard
+Contract, Test Scenarios, ADR/C4, Downtime & Cutover (new), Network-Outage Deep-Dive (new)
+**Agents used:**
+- `soleur:engineering:review:architecture-strategist`
+- `soleur:engineering:review:security-sentinel`
+- `soleur:engineering:review:observability-coverage-reviewer`
+- `soleur:engineering:review:test-design-reviewer`
+- a verify-the-negative grep pass (general-purpose)
+
+Plan-review ran earlier with DHH, Kieran, code-simplicity, CTO and a strong-model consult.
+
+### Key Improvements
+
+1. **MTU fidelity.** `UseMTU=yes` was added. systemd 255 defaults `[DHCPv4] UseMTU=` to false, so
+   the fallback would have left MTU 1500 on Hetzner's 1450 private net. `UseNTP=no`,
+   `SendHostname=no` and `[Link] RequiredForOnline=no` were also added.
+2. **The timeout event now discriminates every hypothesis.** `links=` lists every non-eth0
+   link with driver and address state, instead of virtio-only links. A non-virtio NIC can no
+   longer read as "the attach never landed".
+3. **`egress=` field.** It surfaces a route hijack by the private DHCP. That keeps
+   `UseRoutes` on, which the 10.0.0.0/16 route needs.
+4. **One capped detail string for both channels.** The helper caps it at 120 chars and sends the
+   same bytes to Better Stack and Sentry, so the two cannot diverge.
+5. **ADR amendment scope made explicit.** It admits a second primitive to Decision §2, notes that
+   the blockers do not bind it, and supersedes part of the "ship inngest too" row. Context 1 is
+   corrected in place, and ADR-114 §4 is marked contested.
+6. **Tests.** Order is compared on parsed runcmd positions, not lines. New mutation rows cover
+   the `inngest-host.tf` binding, a two-link `by=`, the helper-side cap, and the separators. A
+   must-PASS that contradicted the byte-equality check, and an unfailable token-vs-construct row,
+   were both removed.
+
+### New Considerations Discovered
+
+- The scheduled drift check files an issue and email for a pending inngest replace
+  (`scheduled-terraform-drift.yml`). So "ride-along" delivery (decision challenge T5) has a
+  standing noise cost.
+- The existing consumers (`zot-soak-6122.sh`, `inngest-zot-boot-7462.sh`) match stages exactly.
+  New `private_nic_*` rows change no verdict (verified).
+- Security's suggestion to scope the `:8288/:8289` nftables accept to an interface is recorded,
+  not adopted (T6).
+
 ## Overview
 
 A replace of the dedicated Inngest host can boot before its private network attachment is
@@ -272,6 +316,19 @@ Network-outage checklist order (L3 → L7). Every layer is verified from an arti
    `private_nic_ok` followed by `zot-login-FAILED` on the same boot. That pair is
    distinguishable, and this plan does not claim to fix it.
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+| Layer | Status | Artifact |
+| --- | --- | --- |
+| L3 firewall allow-list | verified, excluded | `inngest-host.tf:606-614` (Hetzner firewall filters the public iface only); nftables `input`-only chain (`inngest-host.tf:416-419`); the same rules on nine good boots plus the 07:14Z retry |
+| L3 DNS / routing | verified: the source host lacked its private address | IP literal target, so no DNS; zot saw no request; the new event's `links=` field makes the guest side observable next time |
+| L7 TLS / proxy | not applicable | plain HTTP private-net registry (ADR-096) |
+| L7 application (zot) | verified, excluded | `ping_rc=0`, other clients served in the window, the retry served in 2 s |
+
+No service-layer hypothesis is proposed. The operator-egress-IP check in the checklist targets
+SSH-to-host outages and does not apply: nothing here uses SSH, and the failing hop was host to
+registry on the private subnet.
+
 ## Options Evaluated
 
 | Option | Closes the race? | Cost | Verdict |
@@ -312,15 +369,21 @@ Add one `write_files` entry to `cloud-init-inngest.yml`:
   Driver=virtio_net
   Name=!eth0
 
+  [Link]
+  RequiredForOnline=no
+
   [Network]
   DHCP=ipv4
   LinkLocalAddressing=no
   IPv6AcceptRA=no
 
   [DHCPv4]
+  UseMTU=yes
   UseDNS=no
   UseDomains=no
   UseHostname=no
+  UseNTP=no
+  SendHostname=no
   RouteMetric=1024
   ```
 
@@ -329,6 +392,25 @@ Add one `write_files` entry to `cloud-init-inngest.yml`:
   cloud-init-rendered `10-netplan-*` file for the private NIC wins, so the good case is untouched.
   DHCP is what cloud-init's Hetzner datasource itself renders for a private network, so the
   address, routes and MTU come from the same source. The `[DHCPv4]` block is the CTO R2 guard.
+- **Deepen additions, with sources (`man systemd.network`, systemd 255):**
+  - `UseMTU=yes`: the `[DHCPv4]` `UseMTU=` default is "false", while netplan's DHCP rendering
+    uses the server's MTU. Without it, the fallback would leave 1500 on Hetzner's 1450 private
+    net and could stall large transfers such as the zot pull. This also keeps the ADR's "same
+    source as cloud-init" claim true (architecture review).
+  - `UseNTP=no` ("When true (the default), the NTP servers received from the DHCP server will be
+    used") and `SendHostname=no`: the private DHCP must not steer the clock or learn the hostname
+    (security review).
+  - `[Link] RequiredForOnline=no`: a fallback link that never configures on a later reboot must
+    not hold `network-online.target`, which the inngest units order on.
+  - `UseRoutes=` stays at its default ("true … added to the routing table with a metric of
+    1024"). The private DHCP's classless routes are how 10.0.0.0/16 reaches the host, and
+    disabling them would break the pull. The residual (a hostile private DHCP pushing split-
+    default routes) is out of this plan's threat model, since the gateway is Hetzner-controlled.
+    It is made observable instead by the `egress=` event field (Phase 3).
+  - The match stays `Driver=virtio_net` + `Name=!eth0`. The security review suggested narrowing
+    to `enp*` names. That would bind to a naming scheme the plan has only observed (`enp7s0`) and
+    risk missing a differently-named NIC, which is the exact failure being fixed. Recorded as
+    decision challenge T6.
 - The rationale lives in YAML comments ABOVE the entry (stripped for free), never inside
   `content:`.
 - CLI/semantics verified at plan time (`man systemd.network`, `man networkctl`, systemd man
@@ -393,15 +475,35 @@ Add one `write_files` entry to `cloud-init-inngest.yml`:
        COMMON shape of a healed race, and it must not be silent (ADR-115; Kieran P1-4). Otherwise
        the level is info. `by=` on EVERY ok boot is also the production check of P4: an ordinary
        boot must read a `10-netplan-*` basename.
-     - `private_nic_timeout` (warning): never present. `links=`: each non-eth0 virtio link name,
-       `:`, and its networkd SETUP state (e.g. `enp7s0:unmanaged`), or `links=none` when no such
-       link exists in the guest. That field alone separates "the attach never reached the guest"
-       (`none`) from "the link is there and the fallback did not take it" (`<if>:unmanaged`, or
-       `:failed`, or `:configuring`). No metadata-service read is needed for that, so none is
-       made (plan-review cut).
+     - `private_nic_timeout` (warning): never present. `links=`: EVERY link except `lo`, `eth0`,
+       `docker*`, `veth*` and `br-*`, not just virtio ones (observability review). Each entry is
+       `<if>:<networkd SETUP>:<driver>:<v4|nov4>`, e.g. `enp7s0:unmanaged:virtio_net:nov4`, and
+       `links=none` means no such link exists. That field alone separates:
+       - `none`: the attach never reached the guest;
+       - `<if>:unmanaged:virtio_net`: the fallback did not take the link;
+       - `<if>:*:<non-virtio>`: the driver assumption is wrong;
+       - `<if>:configured:…:v4`: the link has a different address, i.e. drift.
+       No metadata-service read is needed, so none is made (plan-review cut).
+     - `private_nic_ok` additionally carries `egress=<dev>`, the device from
+       `ip route get 1.1.1.1`. It is warning level when that device is not `eth0`, which makes a
+       route hijack by the private DHCP visible (security review).
      - `private_nic_probe_fault` (warning): no measurement possible.
      - Every arm carries `waited_s=` and `boot=` (first 8 chars of
        `/proc/sys/kernel/random/boot_id`), a join key toward #6711's concern.
+     - **Detail string format (deepen):** `boot=<8>.waited_s=<n>.by=<b>.egress=<d>` or
+       `boot=<8>.waited_s=<n>.links=<e1>--<e2>`. Fields are joined by `.` and link entries by `--`.
+       Each value is sanitized to `A-Za-z0-9:_-` minus the separators, so the string splits
+       unambiguously. The HELPER caps the string at 120 chars itself (dropping trailing link
+       entries and appending `--cut`), then passes the byte-identical string to BOTH channels.
+       This matters because `inngest-boot-phone-home.sh` does not cut and `soleur-boot-emit`
+       does, so without the helper-side cap the two channels would disagree (security review).
+     - `waited_s` is the loop counter × 2, never `date`, so stubbed sleeps count correctly.
+     - `by=`: take the `Network File:` line of `networkctl status <if>` for the interface that
+       holds the address. systemd 255 prints `n/a` for an unmanaged link, which maps to
+       `by=none`. Test fixtures must be RECORDED from real systemd ≥255 `networkctl status` /
+       `networkctl list` output (or copied from systemd's own test data), including netplan's
+       `/run/systemd/network/10-netplan-*.network` paths, not written from memory (test-design
+       review).
 2. `runcmd`: add `- networkctl reload || true` **immediately after the first runcmd item** (the
    Better Stack token staging at :531-534). The reload is what makes networkd see a file that
    `write_files` created after networkd started. It must run as early as possible so a link that
@@ -446,14 +548,31 @@ Add one `write_files` entry to `cloud-init-inngest.yml`:
    reboot-for-inngest. Status of the converge claim: **adopting**. It is proven by the first boot
    that emits `private_nic_ok by=99-soleur-private-fallback`, and until then it is a mechanism-level argument
    (see Risks). Keep Status's "registry only" line for the REBOOT primitive, and state that this
-   primitive is separate.
+   primitive is separate. **Scope the amendment explicitly (architecture review), or the ADR
+   contradicts itself:**
+   - Decision §2 ("one primitive: a guarded reboot") now admits a second primitive, a static
+     networkd fallback, for the inngest host.
+   - Both normative blockers bind reboot and replace only, so neither applies to this primitive.
+   - The §Alternatives row "Ship git-data + inngest too" is partly superseded, for inngest by a
+     different primitive.
+   - Decision §3 ("emit on every run") is met once per boot on inngest, because there is no cron.
+
+   Also correct Context point 1's "would force-replace the host" **in place**, with a
+   "Corrected 2026-09-22 (#8539)" note (the #8210 precedent). Add ADR-114 to `related_adrs`.
+   Keep the amendment to about 15-20 lines and link this plan for the evidence.
+   **ADR-114:** add a one-line "Contested 2026-09-22: see ADR-115 amendment (#8539)" note under
+   its §4 "converging state" claim, so an accepted ADR does not keep asserting what #6400
+   disproved. The web-host remedy is not made here; #6438 tracks it.
 2. **`network.tf:9-13`** comment: correct "an inline `network {}` block … WOULD force-replace the
    host" to what v1.63.0 does (in-place attach, and still a post-boot hot attach whenever public
    net is enabled). Comment-only; no plan diff.
 3. **C4**: `knowledge-base/engineering/architecture/diagrams/model.c4:729` (`inngest -> sentry`)
    enumerates the boot stages it carries (`inngest_zot / inngest_ghcr_fallback`). Add the
-   private-NIC boot outcome as the family name `private_nic_*`, not a list of arms. Check the Better Stack phone-home edge's stage list the same way. No new
-   element or relationship (see Architecture Decision).
+   private-NIC boot outcome as the family name `private_nic_*`, not a list of arms. Anchor the
+   edit on the searchable token `inngest_ghcr_fallback`, not on the line number (the model's own
+   comment at :726-727 asks for token anchors). No `model.c4` edge lists Better Stack boot
+   stages (`SOLEUR_INNGEST_BOOT_STAGE` does not appear in it), so no Better Stack edge changes.
+   No new element or relationship (see Architecture Decision).
 4. **Runbook** `knowledge-base/engineering/operations/runbooks/inngest-server.md`: a short "Reading
    the private-NIC boot event" subsection under the host-replace material. It covers the four
    stages, the SSH-free Better Stack query, and what each arm means for the next step (`timeout`
@@ -470,6 +589,46 @@ apply's `-target` list prunes `hcloud_server.inngest`, so merging alone changes 
 The `inngest-userdata-budget.sh` CI gate is what weighs the payload on the merge path (the
 `lifecycle.precondition` only fires on the replace plan).
 
+## Downtime & Cutover
+
+**Offline-inducing operation.** The `user_data` edit force-replaces `hcloud_server.inngest`
+(ADR-100: no `ignore_changes=[user_data]`). This is the sole Inngest scheduler, so every cron and
+background job pauses from destroy until the replacement boots and `op=resume` is approved.
+Measured in the last two replaces: about 15 minutes when the boot wins, and about 59 minutes on
+2026-09-22 when it lost this race.
+
+**Zero-downtime path evaluated first.**
+
+- **Blue-green is not available.** ADR-100 makes the scheduler a singleton; two live schedulers
+  would double-fire crons.
+- **No in-place redelivery channel reaches this change.** ADR-136's config-refresh bundle
+  delivers host-executed scripts. The fix here is FIRST-BOOT behaviour, which only a fresh boot
+  executes.
+- **The fix does not need to reach the running host at all.** The current host (booted 07:14Z
+  2026-09-22) already holds 10.0.1.40 (`net-health nic=[10.0.1.40,]`). The code only matters at
+  the NEXT replace.
+- **So the zero-downtime default is "ride-along".** Merge now, and let the new `user_data` go out
+  with the next replace that is needed anyway (a pin bump, a volume recut, a credential rotation).
+  The running scheduler sees no outage. Cost: until then, every plan that includes
+  `hcloud_server.inngest` shows a pending replace. `scheduled-terraform-drift.yml` treats that
+  plan exit 2 as drift: it files a GitHub issue and email on each run, though it reports Sentry
+  `ok` (`:103`, `:1130-1241`, `:1260`, verify-the-negative pass). The fix is also unverified in
+  production until that boot.
+
+**Chosen path: a dedicated post-merge replace, per the operator's stated direction.** The
+orchestrator runs `inngest-host-replace` after merge, followed by the human-approved `op=resume`.
+- **Why accept the downtime:** it clears the pending-replace drift, and it verifies P4
+  (`by=10-netplan-*`) on a controlled boot rather than on whatever boot comes next.
+- **Bounded window:** one replace window (≈15 min expected; the new wait adds at most 150 s, and
+  only when the NIC is late).
+- **Sign-off:** the human `op=resume` approval.
+- **Per-stage verification:** PM1's query.
+- **Rollback:** revert the commit and replace again. The previous `user_data` is byte-identical
+  to `origin/main` at `ec68b3ec42`.
+
+Recorded as a decision challenge (`decision-challenges.md` T5), because the ride-along path
+avoids the outage entirely. Choosing between them is the orchestrator's call, not this plan's.
+
 ## Files to Edit
 
 - `apps/web-platform/infra/cloud-init-inngest.yml`: two write_files entries, two runcmd items,
@@ -483,7 +642,9 @@ The `inngest-userdata-budget.sh` CI gate is what weighs the payload on the merge
 - `plugins/soleur/test/cloud-init-user-data-size.test.ts`: var map / budget only if needed.
 - `.github/workflows/infra-validation.yml`: register the new suite.
 - `knowledge-base/engineering/architecture/decisions/ADR-115-dedicated-host-private-nic-boot-convergence.md`:
-  amendment + alternatives rows + frontmatter.
+  amendment + alternatives rows + frontmatter + in-place Context-1 correction.
+- `knowledge-base/engineering/architecture/decisions/ADR-114-one-tunnel-many-connectors-ingress-must-be-origin-relative.md`:
+  one-line "Contested" note under §4 (architecture review).
 - `knowledge-base/engineering/architecture/diagrams/model.c4`: edge description(s).
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md`: boot-event subsection.
 
@@ -520,8 +681,8 @@ shape as 2026-09-22 (~59 min). A wrong route on the private link could also make
 private-net traffic (zot, web-host SDK callbacks) flap.
 
 **If this leaks, the user's data / workflow / money is exposed via:** no new exposure vector. The
-helper reads only the host's own addresses and the link-local metadata endpoint, writes no
-secret, and adds no credential to user_data. Event fields are link names, IP-free states and
+helper reads only the host's own addresses, links and routes. It writes no secret and adds no
+credential to user_data. Event fields are link names, IP-free states and
 counters. The only address in an event is the expected private IP.
 
 **Brand-survival threshold:** aggregate pattern
@@ -555,13 +716,13 @@ failure_modes:
     detection: private_nic_probe_fault
     alert_route: Sentry warning; followed by the pull outcome markers
   - mode: helper crashed or never ran
-    detection: absence of any private_nic_* marker on a boot that shows zot-login-* markers (both come from the same phone-home)
-    alert_route: runbook query (absence is read against the zot-login marker of the same boot)
+    detection: absence of any private_nic_* marker within ±15 min of the same host's pre-zot-pull marker. zot-login-* is not a valid reference, because the empty-creds path emits zot-creds-EMPTY instead, and no pre-existing marker carries boot=
+    alert_route: runbook query only. Nothing pages on this absence, and the runbook says so
 logs:
   where: Better Stack source 2457081 (SOLEUR_INNGEST_BOOT_STAGE rows) and Sentry (stage tag); on-box /var/log/cloud-init-output.log is a post-mortem breadcrumb only
   retention: Better Stack hot window plus s3 archive (queried by betterstack-query.sh); Sentry project retention
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 72h --grep private_nic_ --limit 5
+  command: bash scripts/betterstack-query.sh --since 30d --grep private_nic_ --limit 5
   expected_output: "private_nic_"
   credentials_required: "Better Stack ClickHouse read connection (BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD in Doppler soleur/prd_terraform) — a boot marker from a deny-all, no-SSH host exists only in the Logs warehouse; no unauthenticated endpoint exposes it"
 ```
@@ -615,13 +776,23 @@ in_transit:
   - connection: inngest host -> zot 10.0.1.30:5000 (unchanged; plain HTTP on the private net, ADR-096)
     tls: none (pre-existing, unchanged by this plan)
     cert_verification: off
-    does_not_defend: an on-path attacker inside the private network. Image integrity is carried by the pinned sha256 digest, not the transport
+    does_not_defend: an on-path attacker inside the private network, including disclosure of the zot pull credential (docker login sends it over plain HTTP) to an on-path or mis-routed peer. Image integrity is carried by the pinned sha256 digest, not the transport
     disclosed_as: ADR-096 insecure-registry allowlist entry; model.c4 zot edges
+  - connection: inngest host fallback link -> Hetzner private-network DHCP (new only in the fallback case; the good case already DHCPs through cloud-init's own file)
+    tls: none — DHCPv4 is unauthenticated by protocol
+    cert_verification: off
+    does_not_defend: a hostile DHCP responder on the private L2 steering address, routes or MTU. DNS, domains, hostname and NTP are refused by the [DHCPv4] keys, and route steering is surfaced by the egress= event field
+    disclosed_as: ADR-115 amendment (#8539); this plan
 exception:
   - store: /etc/systemd/network/99-soleur-private-fallback.network
     justification: a static match rule with no secret or identifier; encrypting it buys nothing
     tracking_issue: "#6438"
     reevaluate_when: the file ever gains a runtime-derived value (MAC, address, token)
+    expires_on: 2027-09-22
+  - connection: inngest host fallback link -> Hetzner private-network DHCP
+    justification: DHCP has no authenticated variant on Hetzner private networks; this is the same exchange cloud-init's own rendering performs on every good boot
+    tracking_issue: "#6438"
+    reevaluate_when: Hetzner offers static private-network config in metadata that could replace DHCP, or the fallback ever fires on a link other than the private NIC
     expires_on: 2027-09-22
   - connection: inngest host -> zot (pre-existing)
     justification: pre-existing ADR-096 posture, unchanged; digest-pinned pulls
@@ -647,15 +818,15 @@ Read all three model files before editing (`model.c4`, `views.c4`, `spec.c4`; 82
 The enumeration checked:
 
 - external actors: none new (no human sends or receives data on this path);
-- external systems: Hetzner (the metadata read and the private network) and Sentry / Better Stack
+- external systems: Hetzner (the private network and its DHCP) and Sentry / Better Stack
   (the event sinks) are already modelled;
 - containers/stores: the inngest node and zot registry are already modelled; the fallback file is
   host configuration, not a store;
 - access relationships: unchanged.
 
-The owed edits are **description-level**: `model.c4:729` `inngest -> sentry` enumerates the boot
-stages it carries and gains the four `private_nic_*` stages, and the phone-home edge to Better
-Stack gets the same check. Run `apps/web-platform/test/c4-code-syntax.test.ts`,
+The owed edit is **description-level**: the `inngest -> sentry` edge (anchor token
+`inngest_ghcr_fallback`) enumerates the boot stages it carries and gains the `private_nic_*`
+family. No Better Stack edge lists boot stages, so none changes. Run `apps/web-platform/test/c4-code-syntax.test.ts`,
 `apps/web-platform/test/c4-render.test.ts`, and `bash plugins/soleur/test/c4-count-parity.test.sh`
 (none of the edited descriptions carry a count, and the parity run proves it).
 
@@ -686,9 +857,11 @@ Config WRITES that merely name the endpoint (`ZOT_EP='…'` at :1141 writing `da
 creds bake at :1202) are not uses. Without these exclusions the unchanged file fails, which is
 a plan-review P0 (Kieran P0-2, DHH #1). Those two writes are must-PASS rows.
 **Which copy each row reads (Kieran P1-3):** the order, presence and derived-set rows (1-4, 6-9)
-read the RENDERED + stripped user_data. Rows 5 (literal vs `${inngest_private_ip}`) and 10 (a
-comment naming the token) are properties of the SOURCE file, which a render erases, so they read
-`cloud-init-inngest.yml` raw, the way `cloud-init-inngest-bootstrap.test.sh` already does via
+read the RENDERED + stripped user_data. Row 5 (literal vs `${inngest_private_ip}`) is a property
+of the SOURCE file, which a render erases, so it reads `cloud-init-inngest.yml` raw. Row 10 reads
+`inngest-host.tf` raw. The old token-vs-construct row was dropped as unfailable: the strip removes
+comments from the render, and the raw copy has no placement check for a comment to fool
+(test-design review). Row 5 reads the file raw the way `cloud-init-inngest-bootstrap.test.sh` already does via
 `INNGEST_CI_YML`. It is not assumed to be the zot login, so a future item
 that touches the private net earlier also reds.
 
@@ -705,15 +878,19 @@ that touches the private net earlier also reds.
 | 7 | Rename the file to `05-soleur-private-fallback.network` (sorts before netplan) | precedence |
 | 8 | Insert a new runcmd item that curls `10.0.1.30` before the NIC-wait call | derived set |
 | 9 | Render an empty runcmd (guard's own dispatch) | vacuity: "0 items checked" must fail |
-| 10 | Add a YAML comment line naming `soleur-inngest-nic-wait` before the zot login and move the real call after it | token-vs-construct |
+| 10 | Change the `inngest-host.tf` binding to `inngest_private_ip = local.registry_private_ip` (read raw, a regex over the var map) | binding (test-design review: the render uses a stub map and cannot see this) |
+| 11 | Delete `UseMTU=yes` from the fallback content | byte-equality (scenario 12) |
 
 **Harness rows.** Suite edit that must RED: make the order comparison compare a line number to
 itself. The battery's baseline check must catch that the guard no longer reds on row 1. Must-PASS
 inputs that are not the canonical file: (i) the canonical file with two unrelated runcmd items
-reordered ahead of the call and blank lines inserted; (ii) the fallback content with its
-`[DHCPv4]` keys reordered; (iii) the unchanged config writes that name the endpoint before the call
-(`ZOT_EP='…'` at :1141 and the creds bake at :1202). None of them is a private-net ACTION. All
-three must stay green.
+reordered ahead of the call and blank lines inserted; (ii) the unchanged config writes that name the endpoint before the call
+(`ZOT_EP='…'` at :1141 and the creds bake at :1202). None of them is a private-net ACTION. Both
+must stay green. (A reordered-keys must-PASS was dropped: it contradicted the byte-equality
+check in scenario 12, which is the only check that catches a dropped `UseMTU=`/`UseDNS=`/
+`RouteMetric=` key.) **Order is compared on parsed runcmd LIST POSITIONS** (`yaml.safe_load`),
+never line numbers, because the zot login sits inside a multi-line `- |` item. The harness row
+becomes "compare a list position to itself".
 
 **Anchor.** No stored hash or count is compared. The guard derives everything from the rendered
 template on each run, so nothing outside the commit needs to move.
@@ -722,13 +899,13 @@ template on each run, so nothing outside the commit needs to move.
 
 **Property.** For every probe and link state, the helper exits 0. It never calls
 reboot/poweroff/shutdown and never writes network config. It emits exactly one `private_nic_*`
-event on each channel, and emits `ready`/`late` only when the exact expected address (word-bounded)
-is present.
+event on each channel, with a byte-identical detail string of ≤120 chars, and emits
+`private_nic_ok` only when the exact expected address (word-bounded) is present.
 
 **Assembly.** The chokepoint is the helper body **as extracted from the rendered user_data**, not
 the source YAML. It runs under a stub `PATH` covering every external it calls (`ip`, `grep`
-(real), `networkctl`, `systemctl`, `curl`, `sleep`, `soleur-boot-emit`,
-`inngest-boot-phone-home.sh`). Every stub logs its argv, so "never calls X" is checked against the
+(real), `networkctl`, `sleep`, `soleur-boot-emit`, `inngest-boot-phone-home.sh`), with a
+test-root seam covering `/proc` AND `/sys` reads. Every stub logs its argv, so "never calls X" is checked against the
 full call log, not a single binary.
 
 **Mutation matrix:**
@@ -736,15 +913,20 @@ full call log, not a single binary.
 | # | Mutation | Must RED on |
 | --- | --- | --- |
 | 1 | Timeout arm `exit 0` → `exit 1` | exit-code-0-everywhere scenario |
-| 2 | `grep -qwF` → `grep -qF` | expected `10.0.1.4` vs host `10.0.1.40` must not be ready |
+| 2 | `grep -qwF` → `grep -qF` | expected `10.0.1.4` vs host `10.0.1.40` must not be ok |
 | 3 | Poll cap 75 → 750 | sleep-count ceiling in the never-present scenario |
 | 4 | Remove the break-on-found | "present at poll 3" asserts exactly 3 sleeps |
-| 5 | Keep the ready emit and add a second emit in the late arm | exactly-one-event per channel |
+| 5 | Emit inside the poll loop and again after it | exactly-one-event per channel |
 | 6 | Insert `reboot` (or `networkctl reconfigure`) in the timeout arm | forbidden-call log check |
 | 7 | Remove the empty-argument guard | empty arg must yield probe_fault, never ok |
 | 8 | Emit a fixed `by=` instead of the Network File basename | scenarios 1, 3 and 3b (three different basenames) |
 | 9 | Treat a failing `ip` (rc≠0) as "absent" | ip-fails scenario must be probe_fault |
 | 10 | Suite runs zero scenarios (own dispatch) | declared-scenario-count equality |
+| 11 | Join fields with a space instead of `.` | charset/parse check (scenario 13) |
+| 12 | Join link entries with `,` | charset/parse check (scenario 13) |
+| 13 | Take `by=` from the FIRST non-eth0 link instead of the one holding the address | two-link scenario (14) |
+| 14 | Drop the helper-side 120-char cap | long-links scenario (13): the two channels' strings differ |
+| 15 | Filter `links=` to virtio only | non-virtio scenario (15) |
 
 **Harness rows.** Suite edit that must RED: a `soleur-boot-emit` stub that records nothing (the
 exactly-one-event assertion must then fail, not pass on 0 = 0). Must-PASS non-canonical inputs:
@@ -858,6 +1040,16 @@ Run by `inngest-nic-wait.test.sh` against the helper extracted from the rendered
     reads; the reload is its own runcmd item).
     The emitted detail is ≤120 chars and uses only `A-Za-z0-9=.:_-`, with `boot=` first.
 12. The `.network` content extracted from the render equals the Phase 2 block byte-for-byte.
+13. Never present, five links with long names (e.g. `enp7s0f1np0`) → the detail is ≤120 chars,
+    ends `--cut`, starts `boot=`, splits cleanly on `.`/`--`, and is byte-identical in both stubs'
+    argv.
+14. Two non-eth0 links, with the address on the SECOND link and different Network Files →
+    `by=` names the second link's file.
+15. Never present, one link with driver `e1000` → `links=<if>:unmanaged:e1000:nov4`, never
+    `links=none`.
+16. Address present, `ip route get 1.1.1.1` reports `dev enp7s0` → `egress=enp7s0`, level
+    warning.
+17. Found after exactly 3 stubbed sleeps → `waited_s=6` (loop counter × 2, not `date`).
 
 ## Risks and Sharp Edges
 

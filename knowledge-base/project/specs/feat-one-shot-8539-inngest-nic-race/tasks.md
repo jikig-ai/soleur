@@ -25,7 +25,9 @@ lane: cross-domain
 - 2.2 Replace the code-line `10.0.1.40` in the `net-health` diag (`cloud-init-inngest.yml:~1673`)
   with `${inngest_private_ip}`, keeping `%%{http_code}` intact.
 - 2.3 Add the `write_files` entry `/etc/systemd/network/99-soleur-private-fallback.network`
-  (root:root 0644) with exactly the plan's Phase 2 content. Put rationale in YAML comments above
+  (root:root 0644) with exactly the plan's Phase 2 content. The deepened content includes
+  `[Link] RequiredForOnline=no`, plus `UseMTU=yes`, `UseNTP=no` and `SendHostname=no` in
+  `[DHCPv4]`. Put rationale in YAML comments above
   the entry, never inside `content:`.
 - 2.4 Add the `write_files` entry `/usr/local/bin/soleur-inngest-nic-wait` (0755):
   - brace-free POSIX sh, no `%{`, no `# `-prefixed code lines;
@@ -33,9 +35,15 @@ lane: cross-domain
   - probe resolution for `ip`/`grep`;
   - a 75×2 s POSIX-counter poll with `grep -qwF`;
   - three arms (`private_nic_ok` / `private_nic_timeout` / `private_nic_probe_fault`);
-  - one detail string (`boot=` first, `.`-joined, ≤120 chars, charset `A-Za-z0-9=.:_-`) sent to
+  - one detail string (`boot=` first, fields `.`-joined, link entries `--`-joined, capped at 120
+    chars BY THE HELPER with a `--cut` suffix, charset `A-Za-z0-9=.:_-`), sent byte-identical to
     both `inngest-boot-phone-home.sh` and `soleur-boot-emit`;
-  - `by=<Network File basename>`, warning level when it is the fallback's.
+  - `by=<Network File basename>` of the link holding the address (`n/a` maps to `none`), at
+    warning level when it is the fallback's;
+  - `egress=<dev>` from `ip route get 1.1.1.1`, at warning level when it is not eth0;
+  - on timeout, `links=`: every link except lo/eth0/docker*/veth*/br-*, each entry
+    `<if>:<setup>:<driver>:<v4|nov4>`;
+  - `waited_s` = loop counter × 2.
 - 2.5 runcmd: add `- networkctl reload || true` immediately after the first runcmd item (the
   token staging).
 - 2.6 runcmd: add `- /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true` as the
@@ -48,14 +56,18 @@ lane: cross-domain
 - 3.1 Create `apps/web-platform/infra/inngest-nic-wait.test.sh`:
   - render via terraform `templatefile` + `local.inngest_rationale_strip`;
   - extract the helper and the `.network` file from the rendered write_files;
-  - run Test Scenarios 1-11 (incl. 3b/3c) under a stub PATH;
+  - run Test Scenarios 1-17 (incl. 3b/3c) under a stub PATH, with a test-root seam for `/proc` and
+    `/sys`, and `networkctl` fixtures RECORDED from real systemd ≥255 output;
   - run Guard 2's mutation rows plus the harness rows;
   - run `shellcheck -s sh` on the helper.
-- 3.2 Extend `cloud-init-inngest-bootstrap.test.sh` with Guard 1's asserts. Order, presence and
-  derived-set rows run on the render. Rows 5 and 10 run on the raw source. Add the write_files
+- 3.2 Extend `cloud-init-inngest-bootstrap.test.sh` with Guard 1's asserts:
+  - order is compared on parsed runcmd LIST POSITIONS (`yaml.safe_load`);
+  - the derived set matches private-net ACTIONS only;
+  - row 5 reads `cloud-init-inngest.yml` raw;
+  - row 10 reads the `inngest-host.tf` binding raw. Add the write_files
   mode/owner asserts.
-- 3.3 Extend `cloud-init-inngest-zot-pull-mutation.test.sh` with Guard 1's mutation rows and the
-  three must-PASS inputs (incl. the :1141 / :1202 config writes).
+- 3.3 Extend `cloud-init-inngest-zot-pull-mutation.test.sh` with Guard 1's mutation rows 1-11 and
+  the two must-PASS inputs (reordered unrelated items; the :1141 / :1202 config writes).
 - 3.4 Register the new suite in `.github/workflows/infra-validation.yml`, then run
   `bash scripts/lint-orphan-test-suites.sh`.
 - 3.5 Re-run `inngest-userdata-budget.sh` (stored must stay < 32,768 B) and the size test.
@@ -63,12 +75,22 @@ lane: cross-domain
 
 ## 4. Architecture record and docs
 
-- 4.1 Add the ADR-115 amendment (2026-09-22, #8539), about 15-20 lines, linking the plan. Add the
-  three §Alternatives rows and `8539` in `amended_by`. Keep the reboot grant registry-only.
-- 4.2 In `model.c4`, edit the `inngest -> sentry` edge description to add the `private_nic_*`
-  family. Run the C4 syntax/render tests and `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- 4.3 In `runbooks/inngest-server.md`, add a "Reading the private-NIC boot event" subsection. Its
-  query must equal the plan's `discoverability_test.command`.
+- 4.1 Add the ADR-115 amendment (2026-09-22, #8539), about 15-20 lines, linking the plan. It must:
+  - admit a second primitive to Decision §2;
+  - state that the blockers bind reboot and replace only;
+  - partly supersede the "ship inngest too" row;
+  - note that §3 is met per boot on inngest;
+  - correct Context 1 in place;
+  - add ADR-114 to `related_adrs`, three §Alternatives rows and `8539` in `amended_by`;
+  - keep the reboot grant registry-only.
+
+  Also add a one-line "Contested" note under ADR-114 §4.
+- 4.2 In `model.c4`, edit the `inngest -> sentry` edge description (anchor token
+  `inngest_ghcr_fallback`) to add the `private_nic_*` family. No Better Stack edge changes. Run the C4 syntax/render tests and `bash plugins/soleur/test/c4-count-parity.test.sh`.
+- 4.3 In `runbooks/inngest-server.md`, add a "Reading the private-NIC boot event" subsection:
+  - its query must equal the plan's `discoverability_test.command` (`--since 30d`);
+  - interpret each of `by=`, `egress=` and `links=` states;
+  - say absence is detected against `pre-zot-pull` ±15 min by query only; nothing pages.
 
 ## 5. Ship notes
 
@@ -78,4 +100,4 @@ lane: cross-domain
 - 5.2 Issue references: `Closes #8539`; `Ref #6438`, `Ref #6500`, `Ref #6122`, `Ref #8562`. No
   closing keyword in any form next to 6500, 6122 or 6438.
 - 5.3 Render `specs/feat-one-shot-8539-inngest-nic-race/decision-challenges.md` (taste findings
-  T1-T4) into the PR body.
+  T1-T6, incl. T5 dedicated-replace vs ride-along) into the PR body.
