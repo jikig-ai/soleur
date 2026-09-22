@@ -590,7 +590,7 @@ The set of mandatory leaders changes by lifecycle phase, and that is by design â
 
 This tiered model is intentional â€” re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
 
-**AI harness:** CTO review comes before blocking runtime/launcher/egress/credential work; settings credentials are runtime inputs; CLO disposition is separate.
+**AI harness:** CTO review comes before blocking launcher/egress/credential work; settings credentials are runtime inputs; CLO disposition is separate.
 
 If the threshold resolves to `aggregate pattern`, no per-PR sign-off is added but the section must still be present.
 
