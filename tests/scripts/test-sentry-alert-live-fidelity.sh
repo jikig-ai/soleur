@@ -908,7 +908,8 @@ t_g4_capture_default_other_id() {
     "G4-23 the captured high-priority default under a different id is UNMANAGED-FROZEN"
 }
 t_g4_registry_malformed_refuses() {
-  local bad="$TMPD/registry-bad.json"; printf '[{"name":"x"}]\n' > "$bad"
+  local bad="$TMPD/registry-bad.json"
+  printf '[{"name":"x"}]\n' > "$bad"
   _run_env "$CAPTURE" SENTRY_VENDOR_DEFAULTS_FILE="$bad"
   if [[ "$_rc" -eq 1 ]] && grep -q 'vendor-default registry' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
     _report "G4-24 a registry entry without a string id REFUSES (rc 1), never a silent census" ok
