@@ -103,6 +103,61 @@ available to the pipeline if a heavier review pass is wanted before `soleur:work
 None blocking. `scripts/markdown-lint.sh` reports `knowledge-base/project/` is inside
 `.markdownlintignore` — the plan file is exempt by scope, not by pass.
 
+## Work Phase
+- Status: complete (implementation + suite arms + docs landed; review next).
+
+### What shipped
+
+- `scripts/lib/test-contention.sh`: ticket machinery (`_tc_queue_dir`,
+  `_tc_alloc_lock`/`_tc_alloc_unlock`, `_tc_ticket_sweep`, `_tc_ticket_mint`,
+  `_tc_queue_is_head`, `_tc_queue_position`, `_tc_queue_wait`), `tc_acquire`
+  restructured between `LOCK_WAITING` and `acquire_lock`, heartbeat extended
+  with `overrun_s`/`position=`/`LOCK_WAIT_OVERRUN`. New knobs:
+  `TC_QUEUE_TIMEOUT` (default `TC_LOCK_TIMEOUT`), `TC_QUEUE_POLL_S` (5).
+  New tokens: `LOCK_QUEUED`, `LOCK_QUEUE_DEGRADED reason=`, `LOCK_QUEUE_TIMEOUT`,
+  `queue_timeout=1` on the contended tail. `test-all.sh`/`session-state.sh`
+  untouched.
+- `scripts/test-contention.test.sh`: Phase 3b (T1–T12), `MIN_CASES` 128→150;
+  157/157 green.
+- `plugins/soleur/test/fixture-relative-assert.baseline.txt`: +1 row
+  (`4 scripts/lib/test-contention.sh`) — the queue's `$LOCK_DIR`-rooted runtime
+  writes are scanner-unresolvable residue; regenerated per protocol.
+- `plugins/soleur/skills/work/SKILL.md`: heartbeat line shape + `position=`/
+  `LOCK_WAIT_OVERRUN`, queue bound corrected to 7200 s, stall-vs-queue triage
+  tokens.
+- ADR-133: dated addendum (ticket order, `flock -n`-only probing per #7697,
+  `TC_QUEUE_TIMEOUT`, corrected `_RUN_START_EPOCH` arithmetic, mixed-version
+  caveat, sweep).
+
+### Session errors / findings worth keeping
+
+1. **`exec {fd}>>file 2>/dev/null` silences the calling shell's stderr
+   permanently.** `exec` with only redirections applies ALL of them to the
+   shell — the trailing `2>/dev/null` redirected the process's stderr, so every
+   later `>&2` banner vanished while rc stayed 0. Fixed with brace-group
+   scoping (`{ exec {fd}>>file; } 2>/dev/null`). The same idiom
+   (`eval "exec ${fd}>&-" 2>/dev/null`) exists in `session-state.sh`'s
+   `release_lock` and `_acquire_lock_impl` failure arm — latent bug, out of
+   scope, candidate for a follow-up issue.
+2. **fd inheritance holds tickets past owner death.** A `kill -9`'d waiter
+   mid-`acquire_lock` leaves its `flock -w` child holding the ticket fd until
+   the child's `-w` resolves (bounded by `timeout_s`); same for a trailing
+   `sleep`. Documented in the lib's constraint block; the heartbeat subshell
+   now closes its inherited ticket fd on entry. Test arms kill only waiters
+   past the acquire call or in the queue stage.
+3. **`flock -n` probes on ticket paths** — the suite's `await_held`/`flock -w0`
+   probe idiom reused; `%08d` serials require `10#` in arithmetic compares
+   (leading-zero octal error).
+
+### Verification
+
+- `bash scripts/test-contention.test.sh` — 157/157
+- `bash scripts/test-all-capacity-signal.test.sh` — 80/80
+- `bash scripts/lib/repo-write-boundary.test.sh` — 72/72
+- `bash plugins/soleur/test/fanout-suite-scope.test.sh` — 36/36
+- `bash plugins/soleur/test/fixture-relative-assert.test.sh` — 62/62 (post-regen)
+- `bash plugins/soleur/test/fixture-env-adoption.test.sh` — 26/26
+
 ## Next step
 
-`soleur:work knowledge-base/project/plans/2026-09-22-fix-tc-lock-timeout-fifo-queue-plan.md`
+`soleur:review` on PR #8596, then `soleur:qa`, `soleur:compound`, `soleur:ship`.

@@ -74,6 +74,24 @@ TC_LOCK_TIMEOUT="${TC_LOCK_TIMEOUT:-3600}"
 # LONGER, so the heartbeat ships with it rather than after it.
 TC_WAIT_HEARTBEAT_S="${TC_WAIT_HEARTBEAT_S:-60}"
 
+# FIFO ticket queue in front of the advisory lock (#8579).
+#
+# WHY: `flock -w` has no application-level queue. Every waiter ran the same
+# independent bounded wait, so a holder outlasting TC_LOCK_TIMEOUT released ALL
+# waiters at once — the six-concurrent-runs pileup moved, it did not leave
+# (8,070 s measured 2026-09-22). Tickets under $LOCK_DIR/<name>.queue.d make
+# only the queue head attempt the bounded acquire, so an overrun releases one
+# run at a time, in mint order.
+#
+# TC_QUEUE_TIMEOUT bounds only the ticket wait and defaults to the lock
+# budget: worst case stays today's shape (bounded wait -> contended proceed,
+# never abort), spaced by arrival rather than synchronized. A non-head waiter
+# past it proceeds contended with queue_timeout=1.
+TC_QUEUE_TIMEOUT="${TC_QUEUE_TIMEOUT:-$TC_LOCK_TIMEOUT}"
+# Head-check cadence: two flock -n probes plus a readdir — deliberately cheap,
+# not the ~6 s /proc walk the holder-naming draft cost (ADR-133).
+TC_QUEUE_POLL_S="${TC_QUEUE_POLL_S:-5}"
+
 # Wall-clock ceiling above which a test-all.sh run is treated as no longer
 # having a consumer (#7869).
 #
@@ -917,13 +935,28 @@ _tc_ms_since() {
 # work each beat did: 14 beats reported `waited=840s` across a 941 s wait (~11%
 # low), and the self-terminate a comment called "the fix" for orphan lifetime
 # overshot to ~4000 s on a 3600 s budget.
+# Args: interval_s, overrun_s, budget_s, name, [queue_dir ticket_serial].
+# overrun_s is the LOCK budget: once waited >= it the beat's token switches to
+# LOCK_WAIT_OVERRUN — the detected-long-hold signal (#8579). budget_s bounds
+# the heartbeat's own lifetime (queue wait + lock wait). When a ticket is held
+# the beat reports position=N, recomputed each beat from the ticket files —
+# advisory instrumentation, never a control input (the queue's own loop is).
 _tc_wait_heartbeat() {
-  local interval="${1:-60}" budget="${2:-0}" name="${3:-}"
+  local interval="${1:-60}" overrun_s="${2:-3600}" budget="${3:-0}" name="${4:-}"
+  local qdir="${5:-}" serial="${6:-}"
+  # Drop the caller's ticket fd: this subshell outlives a killed waiter, and an
+  # orphaned heartbeat holding the ticket would keep a dead run's queue slot
+  # locked until its own bound fired. Suite children deliberately DO inherit it
+  # (they keep the main lock alive the same way); the heartbeat is not a suite.
+  if [[ -n "${_TC_TICKET_FD:-}" ]]; then
+    { eval "exec ${_TC_TICKET_FD}>&-"; } 2>/dev/null || true
+  fi
   [[ "$interval" =~ ^[0-9]+$ ]] || interval=60
+  [[ "$overrun_s" =~ ^[0-9]+$ ]] || overrun_s=3600
   [[ "$budget"   =~ ^[0-9]+$ ]] || budget=0
   (( interval > 0 )) || return 0
 
-  local t0="${EPOCHSECONDS:-0}" waited=0 _hb_sleep=""
+  local t0="${EPOCHSECONDS:-0}" waited=0 _hb_sleep="" token pos
   # Kill the sleep child too. Without this every tc_acquire — including the
   # uncontended ones, which spawn and immediately stop the heartbeat — leaked one
   # `sleep <interval>` visible to anyone running ps to diagnose contention.
@@ -934,8 +967,193 @@ _tc_wait_heartbeat() {
     _hb_sleep=""
     waited=$(( "${EPOCHSECONDS:-0}" - t0 ))
     (( budget > 0 && waited >= budget )) && return 0
-    printf '[contention] BANNER LOCK_WAIT_HEARTBEAT: queued, not hung — %s waited=%ss of %ss. Run `bash scripts/test-all.sh --capacity` in another shell to see which worktrees are running.\n' \
-      "${name:-<unnamed>}" "$waited" "$budget" >&2
+    token="LOCK_WAIT_HEARTBEAT"
+    (( waited >= overrun_s )) && token="LOCK_WAIT_OVERRUN"
+    pos=""
+    if [[ -n "$qdir" && -n "$serial" ]]; then
+      pos=" position=$(_tc_queue_position "$qdir" "$serial" 2>/dev/null || echo '?')"
+    fi
+    printf '[contention] BANNER %s: queued, not hung — %s waited=%ss of %ss%s. Run `bash scripts/test-all.sh --capacity` in another shell to see which worktrees are running.\n' \
+      "$token" "${name:-<unnamed>}" "$waited" "$budget" "$pos" >&2
+  done
+}
+
+# ---------------------------------------------------------------------------
+# FIFO ticket queue (#8579)
+#
+# `flock -w` has no application-level queue: every waiter ran the same bounded
+# wait, so a holder outlasting TC_LOCK_TIMEOUT released ALL waiters at once —
+# the pileup ADR-133 exists to kill, recurring above a higher waterline. The
+# queue adds flock-anchored tickets in $LOCK_DIR/<name>.queue.d so only the
+# queue head makes the bounded acquire_lock call; a holder's overrun now
+# releases queued runs one at a time, in mint order.
+#
+#   <name>.queue.d/.alloc      serializes mint/scan/head-check (~ms holds)
+#   <name>.queue.d/00000007    a ticket: flock -x held by its owner's shell
+#
+# Constraints the code below is built around:
+#   - NO `flock -w` anywhere. #7697 measured a waiter parked 4.6 days in
+#     locks_lock_inode_wait (masked-SIGALRM hypothesis); every wait here is a
+#     `flock -n` probe or a counted-retry loop on `.alloc`.
+#   - Ticket fd stays open for the process lifetime (`_TC_TICKET_FD`), exactly
+#     like _SESSION_LOCK_FDS — closing it on tc_acquire's return would re-create
+#     the simultaneous-release defect one level down. The kernel releases on
+#     death; there is no reaper and none is needed (AC5b-measured).
+#   - Mint (create + flock) and head-check (scan + probe) both run inside the
+#     `.alloc` critical section — a created-but-unlocked ticket is the only real
+#     race, and the critical section closes it.
+#   - Every failure arm degrades to the pre-queue direct-acquire path; the queue
+#     can never wedge a run.
+#   - The ticket fd is inheritable (deliberately — suite children keep the main
+#     lock alive the same way). The cost: a SIGKILLed waiter mid-acquire_lock
+#     leaves an orphaned `flock -w` child holding the ticket until ITS wait
+#     resolves (bounded by timeout_s, same as _SESSION_LOCK_FDS today). The
+#     heartbeat subshell is the exception — it closes its copy on entry so a
+#     dead run's diagnostics cannot hold its queue slot.
+# ---------------------------------------------------------------------------
+
+_TC_TICKET_FD=""
+_TC_TICKET_SERIAL=""
+
+# Resolve the ticket-queue dir for lock <name>, creating it. rc 1 when the
+# session-state layer is stubbed or the state root is unresolvable (the
+# capacity suite injects a session-state stub defining only acquire_lock) —
+# the caller then degrades to today's direct-acquire path.
+_tc_queue_dir() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || return 1
+  declare -F _session_state_init_dirs >/dev/null 2>&1 || return 1
+  _session_state_init_dirs 2>/dev/null || true
+  [[ -n "${LOCK_DIR:-}" ]] || return 1
+  local qdir="$LOCK_DIR/$name.queue.d"
+  mkdir -p "$qdir" 2>/dev/null || return 1
+  printf '%s\n' "$qdir"
+}
+
+# Acquire the `.alloc` critical section via flock -n in a counted retry loop —
+# ~2.5 s of headroom against a hold measured in milliseconds. On rc 0 the fd
+# is in _TC_ALLOC_FD; on rc 1 the caller treats the queue as unavailable.
+_TC_ALLOC_FD=""
+_tc_alloc_lock() {
+  local qdir="$1" i
+  _TC_ALLOC_FD=""
+  for (( i = 0; i < 50; i++ )); do
+    # The brace group matters: `exec {fd}>>file 2>/dev/null` redirects the
+    # CALLING SHELL's stderr permanently — exec with only redirections applies
+    # them to the shell, so the "harmless" dev/null silences every later >&2
+    # line (every LOCK_* banner) for the rest of the process.
+    { exec {_TC_ALLOC_FD}>>"$qdir/.alloc"; } 2>/dev/null || return 1
+    if flock -n -x "$_TC_ALLOC_FD" 2>/dev/null; then return 0; fi
+    { eval "exec ${_TC_ALLOC_FD}>&-"; } 2>/dev/null || true
+    _TC_ALLOC_FD=""
+    sleep 0.05
+  done
+  return 1
+}
+
+_tc_alloc_unlock() {
+  [[ -n "$_TC_ALLOC_FD" ]] || return 0
+  { eval "exec ${_TC_ALLOC_FD}>&-"; } 2>/dev/null || true
+  _TC_ALLOC_FD=""
+}
+
+# Remove tickets that are BOTH unlocked and older than the runtime ceiling.
+# Runs inside .alloc only. Locked tickets are never swept, so max+1 numbering
+# can never regress below a live ticket; an unlocked file's owner is already
+# gone (flock is fd-bound — AC5b).
+_tc_ticket_sweep() {
+  local qdir="$1" f base mt now="${EPOCHSECONDS:-0}"
+  for f in "$qdir"/*; do
+    [[ -e "$f" ]] || continue
+    base="${f##*/}"
+    [[ "$base" =~ ^[0-9]+$ ]] || continue
+    if flock -n -x "$f" -c true 2>/dev/null; then
+      mt="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+      if (( now - mt > ${TC_RUNTIME_CEILING_S:-14400} )); then
+        rm -f "$f" 2>/dev/null || true
+      fi
+    fi
+  done
+}
+
+# Mint a ticket for this run: under .alloc, serial = 1 + max(numeric entries),
+# create the file, flock -x it BEFORE releasing .alloc (never observable as
+# created-but-unlocked), record `pid worktree epoch` as diagnostics. Sets
+# _TC_TICKET_FD + _TC_TICKET_SERIAL. rc 1 on any failure — caller degrades.
+_tc_ticket_mint() {
+  local qdir="$1" f base max=0 tfile
+  _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""
+  _tc_alloc_lock "$qdir" || return 1
+
+  _tc_ticket_sweep "$qdir"
+
+  for f in "$qdir"/*; do
+    [[ -e "$f" ]] || continue
+    base="${f##*/}"
+    [[ "$base" =~ ^[0-9]+$ ]] || continue
+    (( 10#$base > max )) && max=$((10#$base))
+  done
+  _TC_TICKET_SERIAL=$((max + 1))
+  tfile="$(printf '%s/%08d' "$qdir" "$_TC_TICKET_SERIAL")"
+  if ! : > "$tfile" 2>/dev/null; then
+    _tc_alloc_unlock; return 1
+  fi
+  if ! { exec {_TC_TICKET_FD}>>"$tfile"; } 2>/dev/null \
+     || ! flock -n -x "$_TC_TICKET_FD" 2>/dev/null; then
+    if [[ -n "$_TC_TICKET_FD" ]]; then
+      { eval "exec ${_TC_TICKET_FD}>&-"; } 2>/dev/null || true
+    fi
+    _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""
+    _tc_alloc_unlock; return 1
+  fi
+  printf '%s %s %s\n' "$$" "${PWD##*/}" "${EPOCHSECONDS:-0}" >>"$tfile" 2>/dev/null || true
+  _tc_alloc_unlock
+  return 0
+}
+
+# Is <serial> the queue head? Under .alloc, probe every strictly-earlier
+# numeric entry with flock -n; head iff none is held. An .alloc failure reads
+# as not-head — the wait loop's TC_QUEUE_TIMEOUT bounds that case, so the
+# queue still cannot wedge a run.
+_tc_queue_is_head() {
+  local qdir="$1" serial="$2" f base head=0
+  _tc_alloc_lock "$qdir" || return 1
+  for f in "$qdir"/*; do
+    [[ -e "$f" ]] || continue
+    base="${f##*/}"
+    [[ "$base" =~ ^[0-9]+$ ]] || continue
+    (( 10#$base < 10#$serial )) || continue
+    if ! flock -n -x "$f" -c true 2>/dev/null; then head=1; break; fi
+  done
+  _tc_alloc_unlock
+  return $head
+}
+
+# Advisory position for the heartbeat: 1 + the count of strictly-earlier
+# tickets still held. No .alloc — a stale reading changes a log line, never a
+# decision.
+_tc_queue_position() {
+  local qdir="$1" serial="$2" f base n=1
+  for f in "$qdir"/*; do
+    [[ -e "$f" ]] || continue
+    base="${f##*/}"
+    [[ "$base" =~ ^[0-9]+$ ]] || continue
+    (( 10#$base < 10#$serial )) || continue
+    flock -n -x "$f" -c true 2>/dev/null || n=$((n + 1))
+  done
+  printf '%s\n' "$n"
+}
+
+# Poll the head-check every TC_QUEUE_POLL_S until head (rc 0) or budget (rc 1).
+# A bounded wait that still ends in proceed — never an abort.
+_tc_queue_wait() {
+  local qdir="$1" serial="$2" budget="${3:-$TC_QUEUE_TIMEOUT}"
+  local t0="${EPOCHSECONDS:-0}" waited=0
+  while :; do
+    if _tc_queue_is_head "$qdir" "$serial"; then return 0; fi
+    waited=$(( ${EPOCHSECONDS:-0} - t0 ))
+    (( budget > 0 && waited >= budget )) && return 1
+    sleep "${TC_QUEUE_POLL_S:-5}"
   done
 }
 
@@ -1014,12 +1232,30 @@ tc_acquire() {
   # cannot inflate the number it formats.
   local t0="${EPOCHREALTIME:-}" t1 waited
 
-  # The heartbeat brackets ONLY the blocking call. `|| true` on both the kill
-  # and the wait: the job may already have exited, and a non-zero from either is
-  # not a reason to abort the one function whose contract is that it cannot
-  # abort (ADR-133 Decision 3).
+  # --- FIFO ticket queue (#8579) -------------------------------------------
+  # Mint a ticket BEFORE waiting so only the queue head makes the bounded
+  # acquire_lock call. Degradation is always to the pre-queue path — never an
+  # abort and never a wedge (every wait here is flock -n or a counted retry).
+  local _qdir="" _qt_serial="" _qt_timeout=0
+  if _qdir="$(_tc_queue_dir "$name" 2>/dev/null)" && [[ -n "$_qdir" ]]; then
+    if _tc_ticket_mint "$_qdir"; then
+      _qt_serial="$_TC_TICKET_SERIAL"
+      echo "[contention] LOCK_QUEUED: '$name' holds ticket ${_qt_serial} — earlier queued runs release first." >&2
+    else
+      echo "[contention] LOCK_QUEUE_DEGRADED reason=mint_failed — direct bounded acquire; queue not engaged." >&2
+    fi
+  else
+    echo "[contention] LOCK_QUEUE_DEGRADED reason=no_state_root — direct bounded acquire; queue not engaged." >&2
+  fi
+
+  # The heartbeat brackets the WHOLE wait — queue stage plus lock stage — so
+  # its self-terminate bound is TC_QUEUE_TIMEOUT + timeout_s when a ticket is
+  # held and just timeout_s on the degraded path. The overrun_s argument keeps
+  # the LOCK_WAIT_OVERRUN token pinned to the lock budget, not the sum.
+  local _hb_budget="$timeout_s"
+  [[ -n "$_qt_serial" ]] && _hb_budget=$(( ${TC_QUEUE_TIMEOUT:-$timeout_s} + timeout_s ))
   local _hb_pid=""
-  _tc_wait_heartbeat "${TC_WAIT_HEARTBEAT_S:-60}" "$timeout_s" "$name" & _hb_pid=$!
+  _tc_wait_heartbeat "${TC_WAIT_HEARTBEAT_S:-60}" "$timeout_s" "$_hb_budget" "$name" "$_qdir" "$_qt_serial" & _hb_pid=$!
   # SIGNAL ONLY A JOB WE STILL OWN. If the heartbeat exited early (a
   # TC_WAIT_HEARTBEAT_S=0, the documented way to disable it, or a failed sleep)
   # bash reaps the child and the pid returns to the kernel — so a bare kill up to
@@ -1036,7 +1272,17 @@ tc_acquire() {
     _hb_pid=""
   }
 
-  if acquire_lock "$name" "$timeout_s"; then
+  # Queue stage: only the head ticket makes the bounded acquire below. A
+  # non-head past TC_QUEUE_TIMEOUT still proceeds contended — never aborts —
+  # but an overrun holder now releases runs ONE at a time instead of firing
+  # every waiter's timer at the same instant.
+  if [[ -n "$_qt_serial" ]] \
+     && ! _tc_queue_wait "$_qdir" "$_qt_serial" "${TC_QUEUE_TIMEOUT:-$timeout_s}"; then
+    _qt_timeout=1
+    echo "[contention] LOCK_QUEUE_TIMEOUT: '$name' — earlier tickets still held after ${TC_QUEUE_TIMEOUT:-$timeout_s}s; proceeding without further queueing." >&2
+  fi
+
+  if (( _qt_timeout == 0 )) && acquire_lock "$name" "$timeout_s"; then
     t1="${EPOCHREALTIME:-}"
     _tc_stop_heartbeat
     waited="$(_tc_ms_since "$t0" "$t1")"
@@ -1069,7 +1315,12 @@ tc_acquire() {
   # against the budget it was given. The previous text asserted `still held
   # after <timeout>s` unconditionally, which was false whenever acquire_lock
   # returned without waiting — the case the flock precheck above now removes.
-  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' — gave up after $waited of ${timeout_s}s; siblings_now=$sibs_now (re-sampled after the wait, not the preamble's reading); proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
+  # queue_timeout=1 marks the arm where the TICKET wait expired while this run
+  # was still behind earlier tickets (#8579); work/SKILL.md's triage grep keys
+  # on LOCK_CONTENDED, so the proceed token stays canonical.
+  local _qt_suffix=""
+  (( _qt_timeout == 1 )) && _qt_suffix=" queue_timeout=1;"
+  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' — gave up after $waited of ${timeout_s}s; siblings_now=$sibs_now (re-sampled after the wait, not the preamble's reading);${_qt_suffix} proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
   return 0
 }
 
