@@ -57,15 +57,15 @@ legal-doc-cross-document-gate.yml	1	no	yes	required context enforce (#4384, ADR-
 skill-security-scan-pr-trailer.yml	1	no	yes	required context skill-security-scan PR gate (#3542 R15, ADR-032 ABI)
 cla.yml	1	no	no	CLA Required ruleset context cla-check (pull_request_target); no cancel: privileged trigger, keep its run shape untouched
 cla-evidence.yml	1	no	no	CLA Required ruleset context cla-evidence (pull_request_target); no cancel: privileged trigger, same as cla.yml
-constraint-gates.yml	1	no	no	ADR-071 L1 import-boundary dogfood; always-run by template design (promotable to required without a paths deadlock); body parity-locked to the constraint-scaffold template; no cancel: the template carries no concurrency block and the parity test pins it
+constraint-gates.yml	1	no	yes	ADR-071 L1 import-boundary dogfood; always-run by template design (promotable to required without a paths deadlock); cancel superseded PR runs per ref
 pr-auto-close-scanner.yml	1	no	yes	auto-close (#3407) keyword scan must see every commit message because the squash commit is built from them
-claude-code-review.yml	2	no	no	disabled on GitHub's side since 2026-02-12 (state not in the tree); kept because it is Art. 30 register PA-33 member (6); re-enable or delete only with a dated register correction; no cancel: disabled, nothing runs
+claude-code-review.yml	2	no	yes	disabled on GitHub's side since 2026-02-12 (state not in the tree); kept because it is Art. 30 register PA-33 member (6); re-enable or delete only with a dated register correction; superseded review runs cancel per PR
 fix-constraints-stage-a.yml	1	yes	no	ADR-074 stage-A recovery, path-filtered to the target app; no cancel: cancel-in-progress is true but the group is per head SHA (one paid agent dispatch per SHA), so a superseded push never cancels it
 fix-constraints-stage-b.yml	1	no	no	ADR-074 stage-B, chained off stage-a via workflow_run with no branch filter so it fires once per PR push of the target app (#8149 review); no cancel: group is per workflow_run head SHA with cancel-in-progress false, one dispatch per stage-a run
-gdpr-gate-self-test.yml	3	yes	no	gdpr-gate fixture self-test, path-filtered to the skill; no cancel: no concurrency block yet, next rollout candidate
+gdpr-gate-self-test.yml	3	yes	yes	gdpr-gate fixture self-test, path-filtered to the skill; superseded PR runs cancel per ref while scheduled and manual runs complete
 infra-validation.yml	9	yes	no	terraform validate/fmt/plan over infra roots, path-filtered; no cancel: plan holds a backend state lock
 rls-authz-fuzz.yml	1	yes	yes	RLS fuzz, path-filtered to migrations/policies; cancels per ref already
-sentry-audit-gate.yml	1	yes	no	Sentry IaC audit, path-filtered to apps/web-platform/infra/sentry; no cancel: no concurrency block yet, next rollout candidate
-skill-security-scan-corpus.yml	1	yes	no	corpus scan, path-filtered to the scanner's rules/scripts; no cancel: no concurrency block yet, next rollout candidate
-validate-vector-config.yml	1	yes	no	vector.toml validation, path-filtered to the vector config; no cancel: no concurrency block yet, next rollout candidate
+sentry-audit-gate.yml	1	yes	yes	Sentry IaC audit, path-filtered to apps/web-platform/infra/sentry; superseded PR runs cancel per ref
+skill-security-scan-corpus.yml	1	yes	yes	corpus scan, path-filtered to the scanner's rules/scripts; superseded PR runs cancel per ref
+validate-vector-config.yml	1	yes	yes	vector.toml validation, path-filtered to the vector config; superseded PR runs cancel per ref
 vendor-pin-verify.yml	3	no	no	required context vendor-pin-required, always-run aggregator over the path-gated upstream-blob verification (#8203, ADR-032 ABI); no cancel: job-level per-ref group on verify-upstream-blobs with cancel-in-progress:false; detect-changes + aggregator deliberately outside the group

@@ -27,12 +27,6 @@ permissions:
   pull-requests: write
   statuses: write
 
-# A PR can generate both pull_request_target and issue_comment deliveries while
-# a contributor signs the CLA. Keep only the newest delivery for that PR.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.sha }}
-  cancel-in-progress: true
-
 jobs:
   cla-check:
     if: |
