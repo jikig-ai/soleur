@@ -301,8 +301,8 @@ assert_eq "$ss_s" "$mhm_s" "(5g) secret-scan.yml SHA256 == main-health-monitor S
 # both test-scripts jobs; a bump that edits only the first copy stays green
 # under 5b-5g while the heavy leg runs a different binary.
 for f in "$SECRET_SCAN_YML" "$CI_YML" "$ACTION_YML" "$MHM_YML"; do
-  _nv="$(extract_versions_all "$f" | grep -c .)"
-  _ns="$(extract_shas_all "$f" | grep -c .)"
+  _nv="$(extract_versions_all "$f" | grep -c . || true)"
+  _ns="$(extract_shas_all "$f" | grep -c . || true)"
   assert_eq "1" "$_nv" "(5g2) ${f##*/} declares exactly one distinct gitleaks version"
   assert_eq "1" "$_ns" "(5g3) ${f##*/} declares exactly one distinct gitleaks SHA256"
 done

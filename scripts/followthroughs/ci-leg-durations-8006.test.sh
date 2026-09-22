@@ -31,12 +31,16 @@ set -uo pipefail
 
 PROBE="$(cd "$(dirname "$0")" && pwd)/ci-leg-durations-8006.sh"
 PASS=0; FAIL=0
+FIXTURE_DIRS=()
+cleanup_fixtures() { rm -rf "${FIXTURE_DIRS[@]:-}"; }
+trap cleanup_fixtures EXIT
 
 ok()   { PASS=$((PASS+1)); echo "ok   $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL $1"; }
 
 new_fixture() {
   FIXTURE_DIR="$(mktemp -d)"
+  FIXTURE_DIRS+=("$FIXTURE_DIR")
   : > "$FIXTURE_DIR/calls.log"
   cat > "$FIXTURE_DIR/gh" <<'STUB'
 #!/usr/bin/env bash
