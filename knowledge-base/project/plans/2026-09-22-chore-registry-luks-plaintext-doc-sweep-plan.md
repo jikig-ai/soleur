@@ -244,7 +244,7 @@ No `exception` block: the mechanism is not `plaintext-exception`, and nothing se
   - (c) the two retained quotes in the blocker script;
   - (d) a non-registry volume: inngest AOF, workspaces, git-data.
 
-  The work phase commits the post-edit hit list, with one class per line, to `knowledge-base/project/specs/feat-one-shot-8535-registry-plaintext-sweep/ac1-hits.txt`. Review diffs the live grep against it, so an unclassified new hit fails.
+  The work phase records the post-edit hit count per class in the PR body, so a reviewer re-running the grep can see whether a hit is unclassified. (Amended at review: an earlier draft committed a `file:line` hit list as an artifact; that is the coordinate-citation shape `cq-cite-content-anchor-not-line-number` warns against, nothing reads it, and the next edit invalidates it.)
 - [x] **AC2**: `grep -nE 'still-plaintext|still plaintext|currently unencrypted'` over files 1–7 and 10 returns only the one addendum sentence in file 1. The next line must be followed by the `[Annotated 2026-09-22, #8535` marker.
 - [x] **AC3**: `wc -c .github/workflows/apply-web-platform-infra.yml` is below 490,000, and `workflow-file-size.test.ts` passes. Record the figure in the PR body.
 - [x] **AC4** (operator constraint, pre-merge): the `zot-registry.tf` edit cannot change the rendered `user_data`. Check it in three steps:
@@ -260,7 +260,7 @@ No `exception` block: the mechanism is not `plaintext-exception`, and nothing se
   - `python3 scripts/lint-encryption-posture.py --repo-sweep` prints `PASS`.
 - [x] **AC7**: the blocker script behaves exactly as before. `bash -n` passes. The diff touches only `#` lines and the one PASS `echo` string; `DEP_ISSUE`, the `gh` calls and the exit codes are unchanged.
 - [x] **AC8**: the gate library diff touches comments only, and `bash tests/scripts/test-registry-luks-recut-gate.sh` passes (baseline 37/37). `terraform-target-parity.test.ts` passes after its doc-comment edit.
-- [ ] **AC9**: every new dated fact carries its run id, issue number or PR number inline. That is the source of truth for it: run ids from `gh run view <id> --json jobs`, boot and escrow facts from #8408's 2026-09-22T06:56:58Z comment, `available` from PR #8423, and the restore-leg fix from PR #7430 (`4aef468c80`). The diff scope is the 10 listed files, plus the pipeline-written artifacts: this plan, `specs/feat-one-shot-8535-registry-plaintext-sweep/{tasks,session-state,ac1-hits}.*`, and any regenerated `knowledge-base/INDEX.md`. CI (markdownlint via lefthook, the encryption-posture lint, `test`) is green.
+- [ ] **AC9**: every new dated fact carries its run id, issue number or PR number inline. That is the source of truth for it: run ids from `gh run view <id> --json jobs`, boot and escrow facts from #8408's 2026-09-22T06:56:58Z comment, `available` from PR #8423, and the restore-leg fix from PR #7430 (`4aef468c80`). The diff scope is the 10 listed files, plus the pipeline-written artifacts: this plan, `specs/feat-one-shot-8535-registry-plaintext-sweep/{tasks,session-state}.md`, and any regenerated `knowledge-base/INDEX.md`. CI (markdownlint via lefthook, the encryption-posture lint, `test`) is green.
 
 ## Test Scenarios
 

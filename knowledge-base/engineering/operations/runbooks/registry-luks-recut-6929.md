@@ -377,9 +377,11 @@ silently wipe your data. A replaced host reopens a LUKS volume (the reuse arm), 
 problem.
 
 **Before dispatching it, read the newest heartbeat row** (the query in
-[`registry_store_not_luks` fired: triage](#registry_store_not_luks-fired-triage)). If `store_luks`
-is not `yes` (the `luks_open_arm=` field says why), or `store_escrow=` reads `fail_passphrase` or
-`fail_header`, stop: a replace cannot fix that, and the triage table below names the lever.
+[`registry_store_not_luks` fired: triage](#registry_store_not_luks-fired-triage)). Proceed only if
+that row is under an hour old and reads `store_luks=yes` **and** `store_escrow=ok` (or `pending` on
+a boot under 2 h old). Any other value — including `fail_key_absent`, `indeterminate`, `stale` or
+`none` — or no row in the last hour means stop and use the triage table: a replace alone does not
+fix those, and some of its arms end in a replace only after the key is restored.
 
 > **History (dated).** Until the first recut (2026-08-10,
 > [run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877): the
@@ -390,10 +392,8 @@ is not `yes` (the `luks_open_arm=` field says why), or `store_escrow=` reads `fa
 > `registry-host-replace` was blocked too: the #6929 LUKS resources were declared but absent from
 > Terraform state, so a replace pulled them in and its destroy-guard aborted with `out_of_scope=2`.
 > Both levers were unavailable in that window — see #7278 for the missing in-place restart lever.
-> Since the recut, host replaces have kept the LUKS store and come back healthy: runs
-> [35489418603](https://github.com/jikig-ai/soleur/actions/runs/35489418603) (2026-09-20) and
-> [35672138112](https://github.com/jikig-ai/soleur/actions/runs/35672138112) (2026-09-22), each
-> reading `store_luks=yes` on the new boot.
+> Current posture lives in one place: the `hcloud_volume.registry` row of
+> `scripts/encryption-posture-ledger.json`.
 
 ---
 
@@ -718,8 +718,8 @@ So a recut buys a clean slate and does not address why the disk filled. The reve
 alternative — growing `var.registry_volume_size` — is blocked today by a circularity rather than
 by physics: the filesystem only grows via `resize2fs` on the next immutable redeploy, a redeploy
 replaces the host, and a replaced host meets a still-plaintext ext4 volume and hits the `blkid`
-FATAL refuse. *[Annotated 2026-09-22, #8535: the circularity is broken — the recut fired 2026-08-10
-(run 31437037877) and the volume is LUKS, so a replace now reopens it.]* zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
+FATAL refuse. *[Annotated 2026-09-22, #8535: this circularity was broken by the recut of 2026-08-10
+(run 31437037877); current posture is the ledger's `hcloud_volume.registry` row.]* zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
 existing ingress either. Breaking that circularity is what the recut actually buys. Record the
 post-recut fill rate before concluding the incident is closed.
 

@@ -347,14 +347,9 @@ Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026
 THE SANCTIONED VEHICLE FOR THE GUEST-SIDE-LUKS RECUT, and the removal of a live footgun.
 The 2026-07-24 change made hcloud_volume.registry a RAW device: cloud-init discriminates on
 `blkid TYPE` — "" (fresh) -> luksFormat; crypto_LUKS -> reuse; ANY OTHER TYPE -> FATAL.
-The live volume was PLAINTEXT ext4 (that third arm) until this job's first fire on 2026-08-10
-(run 31437037877); it is crypto_LUKS now (the reuse arm).
-
-So `registry-host-replace` cannot perform a recut: it PRESERVES the volume. Before 2026-08-10 the
-preserved device was plaintext, so the replaced host refused it and darked the registry; today it
-reopens the LUKS volume, which makes host-replace the right lever for an ordinary boot problem and
-still the wrong one for a recut. Forgetting the `-replace` on the volume is likewise not a recut.
-This job performs the recut as ONE
+`registry-host-replace` cannot perform a recut: it PRESERVES the volume. Forgetting the
+`-replace` on the volume is likewise not a recut. (History, including the pre-2026-08-10 plaintext
+FATAL: the header of `tests/scripts/lib/registry-luks-recut-gate.sh`.) This job performs the recut as ONE
 ATOMIC APPLY, `-replace`ing the volume + its attachment + the server TOGETHER, so a fresh raw
 volume meets the empty arm and gets luksFormatted; zot then re-fills from GHCR.
 

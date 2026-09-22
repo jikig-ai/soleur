@@ -34,6 +34,7 @@
 #   0 = PASS       the anchor issue is CLOSED — the recut has landed; re-evaluate the action set
 #   2 = TRANSIENT  the anchor is still open, OR gh could not be authenticated / could not answer
 #   1 = FAIL       *** NEVER EMITTED ***  — an open dependency is a not-yet, never a regression.
+#  78 = REFUSED    xtrace on with GH_TOKEN set (#7797); the sweeper reads it as TRANSIENT.
 #
 # `secrets=GH_TOKEN` IS MANDATORY IN THE DIRECTIVE. The sweeper runs probes under `env -i` with
 # PATH + HOME + the directive-declared secrets ONLY. On a CI runner `gh` authenticates from

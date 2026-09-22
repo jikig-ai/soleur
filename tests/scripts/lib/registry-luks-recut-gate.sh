@@ -11,14 +11,12 @@
 # ── WHY THIS GATE EXISTS (the footgun it removes) ──────────────────────────────────────────
 # The 2026-07-24 guest-side-LUKS change made hcloud_volume.registry a RAW device: cloud-init
 # now discriminates on `blkid TYPE` with three arms — "" (fresh) -> luksFormat; crypto_LUKS ->
-# reuse; ANY OTHER TYPE -> `refusing-non-luks-device … exit 1`. The live volume was PLAINTEXT
-# ext4 (that third arm) until the first recut on 2026-08-10 (run 31437037877); it is crypto_LUKS
-# now (the reuse arm).
+# reuse; ANY OTHER TYPE -> `refusing-non-luks-device … exit 1`. Until the first recut on
+# 2026-08-10 (run 31437037877) the live volume sat in that third arm, so a replaced host FATALed
+# and darked the registry. Current posture: the ledger's `hcloud_volume.registry` row.
 #
-# `registry-host-replace` therefore cannot perform a recut: that path PRESERVES the volume
-# (store_destroyed==0). Before 2026-08-10 the preserved device was plaintext, so the replaced host
-# FATALed and darked the registry; today it reopens the LUKS volume, which is a host replace, not
-# a recut. Forgetting the `-replace` on the volume is likewise not a recut. This gate is the
+# `registry-host-replace` cannot perform a recut: that path PRESERVES the volume
+# (store_destroyed==0). Forgetting the `-replace` on the volume is likewise not a recut. This gate is the
 # sanctioned vehicle for a recut: it admits ONLY a
 # plan that replaces the volume, its attachment and the server TOGETHER, so a fresh raw volume
 # meets the `blkid` empty arm and gets luksFormatted.

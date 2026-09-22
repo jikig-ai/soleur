@@ -3,11 +3,13 @@
 Plan: `knowledge-base/project/plans/2026-09-22-chore-registry-luks-plaintext-doc-sweep-plan.md`
 
 ## 1. Setup / baselines
+
 - 1.1 Render `registry-userdata-budget.sh <scratch>/before.yml` on the pre-edit tree (AC4(b)).
 - 1.2 Record `wc -c .github/workflows/apply-web-platform-infra.yml` (baseline 482,443 B).
 - 1.3 Record `git merge-base origin/main HEAD` for AC4(a).
 
 ## 2. Core edits (exact-string edits only; no bulk sed, no jq rewrite)
+
 - 2.1 Ledger row `hcloud_volume.registry`: `does_not_defend`, `evidence`, `retrieved_on` (D2). Check `numstat` is `3 3` and the lint passes (AC6).
 - 2.2 NFR-027 row plus the "4 of 5" status line, copied from the refreshed ledger row (AC5).
 - 2.3 Recut runbook (file 1):
@@ -25,8 +27,9 @@ Plan: `knowledge-base/project/plans/2026-09-22-chore-registry-luks-plaintext-doc
 - 2.10 `terraform-target-parity.test.ts` doc comment (file 10).
 
 ## 3. Verification
+
 - 3.1 AC4(a): the comment-stripped diff against the merge-base is empty. AC4(b): render `after.yml` and `cmp` it.
-- 3.2 AC1: run the grep, then write the classified hit list to `specs/feat-one-shot-8535-registry-plaintext-sweep/ac1-hits.txt`. Then run AC2.
+- 3.2 AC1: run the grep, classify every hit, and record the per-class counts in the PR body. Then run AC2.
 - 3.3 AC3: `wc -c` < 490,000, and `bun test plugins/soleur/test/workflow-file-size.test.ts` passes.
 - 3.4 AC8: `bash tests/scripts/test-registry-luks-recut-gate.sh`, then `bun test plugins/soleur/test/terraform-target-parity.test.ts`.
 - 3.5 `bash -n scripts/followthroughs/registry-luks-blocker-6929.sh`, then `npx markdownlint` on the edited `.md` files.

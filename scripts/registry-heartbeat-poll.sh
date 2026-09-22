@@ -181,9 +181,9 @@ cat >&2 <<EOF
 ::error::registry-heartbeat-poll: heartbeat ${HB_ID} never reached 'up' within ${DEADLINE_S}s of the residual window closing. The store volume is already destroyed, so there is no rollback — the registry is DARK and GHCR fallback is serving pulls. Two causes, and they need DIFFERENT remedies:
 
   (1) blkid-arm FATAL — cloud-init found a device that is neither empty nor crypto_LUKS and
-      refused it ("refusing-non-luks-device"). The volume is now crypto_LUKS, so a boot flake
-      here is recoverable with 'registry-host-replace' — the do-not-use warning on that dispatch
-      applies ONLY to a still-PLAINTEXT volume.
+      refused it ("refusing-non-luks-device"). 'registry-host-replace' keeps the volume, so it
+      cannot recut: if the device is not crypto_LUKS, follow the registry_store_not_luks triage
+      in runbooks/registry-luks-recut-6929.md.
 
   (2) reason=device-absent — the attachment landed after the server, cloud-init's 60s device
       wait logged "refusing to luksFormat/mount a missing device" and CONTINUED, consuming the

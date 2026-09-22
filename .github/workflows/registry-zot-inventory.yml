@@ -20,7 +20,7 @@
 # `fs_size_gb` is the TOTAL. So `fs_size_gb * pcent/100` overstates used bytes by ext4's
 # ~5 % reserve — about 2.95 GB on a 59 GB filesystem. A `delta_gb` under ~3 GB is NOT
 # distinguishable from zero. `df --output=used` is not in the marker and adding it would be a
-# cloud-init change, i.e. a host replace (a deadlock until the 2026-08-10 recut).
+# cloud-init change, i.e. a host replace.
 #
 # ── TRIGGER SHAPE (#6425) ───────────────────────────────────────────────────
 # `workflow_dispatch` is the real entry point. The `push` trigger scoped to this file exists
