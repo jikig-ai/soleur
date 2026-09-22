@@ -116,6 +116,12 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(registry)[0]?.wedged).toBe(false);
   });
 
+  test("mirrors SOLEUR_CLEANUP_GH_QUERY_FAILED without paging (#8490: fail-closed, branch kept)", () => {
+    const ghDown = "SOLEUR_CLEANUP_GH_QUERY_FAILED branch=feat-x rc=1";
+    expect(extractGitLockMarkers(ghDown).length).toBe(1);
+    expect(extractGitLockMarkers(ghDown)[0]?.wedged).toBe(false);
+  });
+
   test("matches the #5934 config-target-masked family and classifies it as wedged", () => {
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED_REMEDY)[0]?.wedged).toBe(true);
