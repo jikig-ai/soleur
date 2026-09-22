@@ -1028,8 +1028,10 @@ checks web-1 against the committed ECDSA-P256 pin under strict host-key checking
 verdict is host-authenticated.
 
 **A host-key failure counts as "unavailable", not as trigger (3).** A pin mismatch fails the run
-closed before any volume fact is read. The workflow classes an SSH transport failure as
-`unavailable` (reason `ssh_transport_failure`). A failure before the probe step emits no class
+closed before any volume fact is read. Inside the probe step, the workflow's `host_key_verdict`
+check runs on every ssh call before the generic rc-255 arm and classes a host-key refusal as
+`unavailable` with its own reason `web_1_host_key_mismatch`; any other rc-255 failure is
+`unavailable` with reason `ssh_transport_failure`. A failure before the probe step emits no class
 and alarms under the fail-closed "could not verify the volume in either direction" default.
 Neither case is the `drift` class that fires re-evaluation trigger (3): no LUKS regression has
 been observed. Such a run is also not a successful run, so it counts against the §A3.4 trailing
