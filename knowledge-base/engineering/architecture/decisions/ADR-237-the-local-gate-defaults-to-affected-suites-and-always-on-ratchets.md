@@ -6,7 +6,7 @@ amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 ---
 
-# ADR-235: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
+# ADR-237: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
 
 ## Context
 
