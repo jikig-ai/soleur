@@ -55,6 +55,14 @@ TEST_DIR=$(mktemp -d)
 assert_fixture_dir "$TEST_DIR"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
+# Fixture-env builder (sourced via test-helpers.sh): ceiling + identity +
+# config hermeticity for every git spawn below. The fixture-env-adoption
+# ratchet counts plugins/soleur/test suites that mutate git without it.
+git_fixture_env "$TEST_DIR" || {
+  printf 'FATAL: git_fixture_env refused to build an environment for %s\n' "$TEST_DIR" >&2
+  exit 2
+}
+
 # Keep lease/lock state inside the sandbox: session-state.sh anchors to the
 # git-common-dir by default (the fixture's own .git here — already contained),
 # and the explicit override is the sanctioned test surface for it.
