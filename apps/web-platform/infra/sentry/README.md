@@ -161,12 +161,14 @@ Re-derive rather than trusting the number:
 grep -c '^resource "sentry_cron_monitor"' apps/web-platform/infra/sentry/*.tf
 ```
 
-- Adding a monitor is a four-ledger update, not one edit — the tf resource,
+- Adding a monitor is a five-ledger update, not one edit — the tf resource,
   the heartbeat (`monitor-slug:` or `SENTRY_MONITOR_SLUG`), the
   `NON_INNGEST_MONITORS`/`SENTRY_MONITOR_SLUG` registration in
-  `function-registry-count.test.ts`, and the count prose here and in
-  `sentry-monitors-audit.sh`. Miss a ledger and a different gate goes red
-  post-merge (#8586).
+  `function-registry-count.test.ts`, the count prose here and in
+  `sentry-monitors-audit.sh`, and the `github -> sentry` edge counts in
+  `knowledge-base/engineering/architecture/diagrams/model.c4` (parity-gated by
+  `plugins/soleur/test/c4-count-parity.test.sh`). Miss a ledger and a
+  different gate goes red post-merge (#8586).
 
 ## Audit
 
