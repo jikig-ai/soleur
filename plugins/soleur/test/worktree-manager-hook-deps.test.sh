@@ -112,7 +112,8 @@ assert_eq "0" "$RC_A" "create exits 0 on a lockfile-less repo (warn-and-continue
 assert_contains "$ERR_A" "no recognized lockfile" \
   "install really was skipped — the arm's premise, not just any warning"
 assert_contains "$ERR_A" "hook dep" "stderr carries the hook-dep status line"
-assert_contains "$ERR_A" "missing" "the status is the missing-binary warning"
+assert_contains "$ERR_A" "hook dep missing: $HOOK_BIN" \
+  "the warning names the exact missing binary (a HOOK_REQUIRED_BINS drift still fails here)"
 assert_contains "$ERR_A" "npm ci --ignore-scripts" "the warning names the recovery command"
 assert_contains "$ERR_A" "--prefix" "the warning names which tree to install into"
 assert_eq "false" "$([[ "$OUT_A" == *"hook dep"* ]] && echo true || echo false)" \

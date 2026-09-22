@@ -4,9 +4,31 @@
 
 - Plan file: knowledge-base/project/plans/2026-09-22-fix-worktree-node-modules-hook-fallback-plan.md
 - Status: plan written; deepen-plan inline pass COMPLETE (Enhancement Summary +
-  Deepen-Plan Revisions R1–R7 added; tasks.md carries the corrections). Stopped
-  at deepen-plan per user constraint — `work` not invoked, no product files
-  touched.
+  Deepen-Plan Revisions R1–R7 added; tasks.md carries the corrections).
+
+## Work Phase
+
+- Status: IMPLEMENTED (Tier B fan-out, three file-disjoint groups) — committed
+  `9092b83e71`, pushed, PR #8581 marked ready.
+- Product files touched: `scripts/markdown-lint.sh`, `scripts/test-all.sh`,
+  `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`,
+  `lefthook.yml`, `scripts/hooks/pre-push` + tests and docs (tasks.md has the
+  checklist; all rows [x]).
+- Verification before review: `markdown-lint.test.sh` 39/39,
+  `worktree-manager-hook-deps.test.sh` 13/13, real-repo e2e sibling
+  resolution proven (`1 file(s) clean`).
+
+## Review Phase (in progress)
+
+- Classification: `code`, design-risk yes (new sibling-binary resolution
+  mechanism). Design-validity pass: code-simplicity + architecture both
+  returned DESIGN SOUND. Full panel returned; findings are being fixed
+  inline — see the diff for: manifest-read candidate verification (no
+  exec-before-verify), shared `engine_version_for` (nearest-scope-first on
+  both arms), distinct-version lockfile pin (fail-closed on ambiguity),
+  `--path-format=absolute` git-common-dir, GIT_* scrub, absolute `--prefix`
+  recovery commands, `npx tsc`/`npx vitest` pinned to local `.bin`, T7/T8
+  never-executed + symlink-escape rows.
 
 ### Errors
 

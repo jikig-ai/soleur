@@ -2756,12 +2756,22 @@ if want_webplat; then
   # Exempt under --enumerate for the same reason the refusal guards above are:
   # an enumerate pass starts no suite and resolves no binary, and the
   # shard-totality guard enumerates on legs that install no node deps at all.
-  if (( _ENUMERATE == 0 )) && [[ ! -x apps/web-platform/node_modules/.bin/vitest ]]; then
-    echo "ERROR: refusing the webplat arm — apps/web-platform/node_modules is absent." >&2
-    echo "       Every suite in this group resolves a binary from the app's install" >&2
-    echo "       and would fail deep. Install the deps, then re-run:" >&2
-    echo "           npm ci --ignore-scripts --prefix apps/web-platform" >&2
-    exit 2
+  if (( _ENUMERATE == 0 )); then
+    # The arm's dependency set is vitest AND tsx (ccla-add + its followthroughs
+    # companion exec tsx directly, per the comment above) — probing vitest alone
+    # would let a partial install fail deep in exactly the way this guard exists
+    # to prevent.
+    _missing_webplat_bins=()
+    for _b in vitest tsx; do
+      [[ -x "apps/web-platform/node_modules/.bin/$_b" ]] || _missing_webplat_bins+=("$_b")
+    done
+    if (( ${#_missing_webplat_bins[@]} > 0 )); then
+      echo "ERROR: refusing the webplat arm — apps/web-platform/node_modules is absent or incomplete." >&2
+      echo "       Missing bin(s): ${_missing_webplat_bins[*]}. Every suite in this group resolves" >&2
+      echo "       a binary from the app's install and would fail deep. Install the deps, then re-run:" >&2
+      echo "           npm ci --ignore-scripts --prefix apps/web-platform" >&2
+      exit 2
+    fi
   fi
 
   # `component` runs ALWAYS, alongside repo-wide. #7498 evaluated gating it and

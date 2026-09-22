@@ -34,19 +34,21 @@ pre-commit:
       # with ZERO arguments on every commit, the script exits 2 on its usage guard, and
       # EVERY commit in the repository is blocked. Do not remove it.
       #
-      # The script needs root deps present (the pinned lint binary under
-      # node_modules, plus python3). It refuses to fall back to an unpinned
-      # runner by design, so someone who has never run `npm install` cannot
-      # commit a Markdown file until they do -- a real change from the previous
+      # The script needs a pin-verified lint binary resolvable -- this
+      # worktree's own node_modules, or a compliant sibling's (#8580). It
+      # refuses to fall back to an unpinned runner by design, so someone who
+      # has never run `npm install` in ANY linked checkout cannot commit a
+      # Markdown file until they do -- a real change from the previous
       # behaviour, which needed nothing local.
       #
       # For a worktree whose own install is absent, the consumption point
       # (#8580) resolves a sibling checkout's binary instead: the script probes
       # the primary checkout, then every `git worktree list` path, and accepts
-      # one only when its self-reported CLI and engine versions equal THIS
-      # checkout's pins. When no candidate qualifies it dies naming
-      # `npm ci --ignore-scripts` -- the #7927 no-fallback contract is
-      # unchanged; only where the pinned binary may live was widened.
+      # one only when the candidate's package MANIFESTS report CLI and engine
+      # versions equal to THIS checkout's pins -- verified by file reads, so an
+      # unchecked sibling binary never executes. When no candidate qualifies it
+      # dies naming `npm ci --ignore-scripts` -- the #7927 no-fallback contract
+      # is unchanged; only where the pinned binary may live was widened.
       priority: 4
       glob: "*.md"
       run: bash scripts/markdown-lint.sh {staged_files}
@@ -208,7 +210,12 @@ pre-commit:
       glob:
         - "apps/web-platform/*.{ts,tsx}"
         - "apps/web-platform/**/*.{ts,tsx}"
-      run: cd apps/web-platform && npx tsc --noEmit
+      # Pinned binary only -- `npx tsc` resolves apps/web-platform's install
+      # when present but falls back to fetching LATEST typescript when absent,
+      # the same unpinned-resolution defect class as #7927 (and the bare-`npx
+      # tsc` prohibition in plugins/soleur/skills/work/SKILL.md). Fail fast
+      # naming the deterministic recovery instead.
+      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck: node_modules/.bin/tsc missing -- run: npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && ./node_modules/.bin/tsc --noEmit
     conversations-update-callsites:
       priority: 5
       # Run target is the whole repo (not `{staged_files}`) because the

@@ -331,10 +331,11 @@ A worktree created without an install step (raw `git worktree add`, a
 harness-created agent worktree, or a `create` whose dep install warned and
 continued) carries no `node_modules`. Since #8580 the pre-commit lint hook
 resolves its pinned binary from a sibling checkout's `node_modules`
-automatically — accepted only when the binary's self-reported versions equal
-this checkout's pins — so docs commits work without any install. Everything
-else (vitest, tsx-driven suites, `npm run` scripts) still needs the real
-install inside the worktree:
+automatically — accepted only when the sibling's package manifests report
+CLI+engine versions equal to this checkout's pins (verified by file reads, so
+an unchecked binary never runs) — so docs commits work without any install.
+Everything else (vitest, tsx-driven suites, `npm run` scripts) still needs
+the real install inside the worktree — run both from the worktree root:
 
 ```bash
 npm ci --ignore-scripts

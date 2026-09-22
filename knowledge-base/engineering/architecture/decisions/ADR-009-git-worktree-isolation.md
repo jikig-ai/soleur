@@ -47,19 +47,22 @@ Enforced for agent-facing guidance by `plugins/soleur/test/scratch-path-collisio
 That guard scans `skills/*/SKILL.md` only; scratch paths an agent improvises at runtime are
 outside its reach and remain a known gap.
 
-### Amendment (2026-09-22) — a hook may READ a sibling worktree's untracked binaries, version-pinned
+### Amendment (2026-09-22) — a hook may READ a sibling worktree's untracked binaries, verdict-relevant versions pinned
 
 The isolation this record claims is of **files under version control**, and `node_modules`
 is untracked on every checkout — so reading inside a sibling's `node_modules` does not cross
 the tracked-file boundary the rest of this ADR protects. Accordingly: a worktree-local hook
 script (today `scripts/markdown-lint.sh`, reached through the shared `.git/hooks/pre-commit`
 lefthook shim that every linked worktree runs) MAY resolve — execute, never write — a pinned
-binary inside a **sibling worktree's** untracked `node_modules` (#8580). Two gates keep the
-read honest: the candidate is accepted only when the binary's self-reported CLI and engine
-versions equal the *consuming* checkout's `package.json`/`package-lock.json` pins (never the
-sibling's), and when no candidate qualifies the script dies naming `npm ci
---ignore-scripts` — no PATH search, no `npx`, no network, preserving #7927's no-fallback
-contract. Where the 2026-07-15 amendment widened the boundary to shared `/tmp` scratch, this
-one widens it to a sibling's *directory*; tracked-file isolation is unchanged — a worktree
-still cannot observe another's uncommitted tracked state, and the resolver writes nothing
-outside its own tree.
+binary inside a **sibling worktree's** untracked `node_modules` (#8580). The read is honest:
+the candidate is accepted only when its package *manifests* report CLI and engine versions
+equal to the *consuming* checkout's `package.json`/`package-lock.json` pins (never the
+sibling's), and verification is file-reads only — an unchecked sibling binary is never
+executed, and the `.bin` entry must resolve inside the candidate's own `node_modules`. The
+checks pin the verdict-relevant versions (the CLI, and the `markdownlint` engine the CLI
+ranges over), not every transitive dep. When no candidate qualifies the script dies naming
+`npm ci --ignore-scripts` — no PATH search, no `npx`, no network, preserving #7927's
+no-fallback contract. Where the 2026-07-15 amendment widened the boundary to shared `/tmp`
+scratch, this one widens it to a sibling's *directory*; tracked-file isolation is unchanged —
+a worktree still cannot observe another's uncommitted tracked state, and the resolver writes
+nothing outside its own tree.

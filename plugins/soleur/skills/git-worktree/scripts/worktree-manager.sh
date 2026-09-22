@@ -1772,7 +1772,7 @@ install_deps() {
     if [[ -x "$worktree_path/node_modules/.bin/$hb" ]]; then
       echo -e "  ${GREEN}✓ hook dep present: $hb${NC}"
     else
-      echo -e "  ${YELLOW}Warning: hook dep missing: $hb -- run: npm ci --ignore-scripts --prefix $worktree_path${NC}" >&2
+      echo -e "  ${YELLOW}Warning: hook dep missing: $hb -- run: npm ci --ignore-scripts --prefix $worktree_path (lockfile-less repo: npm install --ignore-scripts --prefix $worktree_path)${NC}" >&2
     fi
   done
 }
