@@ -1873,8 +1873,9 @@ assert_bprime_cosign_invocation
 #   (a) the container runs as the invoking uid:gid — the owner of the 0600 file;
 #   (b) DOCKER_CONFIG is set, exactly once, and a :ro mount of the deploy config lands at
 #       "$DOCKER_CONFIG/config.json" — derived from the argv, so the two cannot drift apart;
-#   (c) nothing is mounted under /root/.docker, and there is exactly one --user (a second one
-#       would supersede the first).
+#   (c) nothing is mounted under /root/.docker, there is exactly one user flag in EITHER form
+#       (-u / --user; a second would supersede the first), exactly one DOCKER_CONFIG env in any
+#       form (-e / --env / --env=), and no --env-file (which could re-point it invisibly).
 assert_cosign_reads_mounted_config() {
   TOTAL=$((TOTAL + 1))
   local argsfile args dc n_user n_dc ok=1 why=""
@@ -1883,16 +1884,17 @@ assert_cosign_reads_mounted_config() {
   args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
   rm -f "$argsfile"
   [[ -n "$args" ]] || { ok=0; why="no verify argv captured"; }
-  n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )--user( |=)' || true; } | wc -l | tr -d ' ')
+  n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )(-u|--user)( |=)' || true; } | wc -l | tr -d ' ')
   [[ "$n_user" == "1" ]] || { ok=0; why="$why; --user count=$n_user"; }
   [[ " $args " == *" --user $(id -u):$(id -g) "* ]] || { ok=0; why="$why; --user is not the invoking uid:gid"; }
-  n_dc=$( { printf '%s' "$args" | grep -oE -- '-e DOCKER_CONFIG=' || true; } | wc -l | tr -d ' ')
+  n_dc=$( { printf '%s' "$args" | grep -oE -- '(^| )(-e|--env)( |=)DOCKER_CONFIG=' || true; } | wc -l | tr -d ' ')
   [[ "$n_dc" == "1" ]] || { ok=0; why="$why; -e DOCKER_CONFIG count=$n_dc"; }
   dc=$(printf '%s' "$args" | sed -n 's/.*-e DOCKER_CONFIG=\([^ ]*\).*/\1/p')
   [[ "$dc" == /* ]] || { ok=0; why="$why; DOCKER_CONFIG not absolute ($dc)"; }
   [[ " $args " == *" -v $DEPLOY_DOCKER_CONFIG_DIR/config.json:$dc/config.json:ro "* ]] \
     || { ok=0; why="$why; deploy config not mounted at \$DOCKER_CONFIG/config.json"; }
   [[ "$args" != *"/root/.docker"* ]] || { ok=0; why="$why; a /root/.docker mount survives"; }
+  [[ " $args " != *" --env-file"* ]] || { ok=0; why="$why; an --env-file could re-point DOCKER_CONFIG unseen"; }
   if [[ "$ok" == "1" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: T-8037-1 cosign runs as the config owner and DOCKER_CONFIG points at the mounted deploy config (#8037)"
   else

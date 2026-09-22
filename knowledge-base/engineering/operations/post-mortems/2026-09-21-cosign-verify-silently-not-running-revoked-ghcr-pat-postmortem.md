@@ -91,6 +91,13 @@ mounted read-only into the container, so the `.sig` referrer fetch still authent
 isolated config cannot be prepared, `IMAGE_VERIFY_PREP: anon_config=unavailable` is logged, and
 the #8037 probe grades that deploy as action-required.
 
+> **Corrected 2026-09-22 (#8037):** the sentence "the `.sig` referrer fetch still authenticates"
+> above was false when written. The pinned cosign image runs as uid 65532 and never read the
+> `/root/.docker/config.json` mount; the 0600 deploy config was unreadable to that uid anyway. The
+> first post-#8456 deploy therefore logged `result=verify_failed` (zot `401` on the `.sig` fetch).
+> The fix, passing `--user` as the config owner plus `-e DOCKER_CONFIG` at the mount, and the
+> measurements are in ADR-087's 2026-09-22 amendment.
+
 ## Recovery verification
 
 Not yet recovered. Recovery is the #8037 follow-through probe exiting 0: every host that emitted

@@ -284,8 +284,8 @@ network, offline trusted root, ephemeral verifier) is unchanged.
 
 **Guards.** `ci-deploy.test.sh` T-8037-1 asserts the property on the captured argv:
 
-- exactly one `--user`, and it is the invoking uid:gid
-- exactly one `-e DOCKER_CONFIG`, whose value is where the deploy config is mounted
+- exactly one user flag (`-u` or `--user`), and it is the invoking uid:gid
+- exactly one `DOCKER_CONFIG` env in any form (`-e`, `--env`, `--env=`), whose value is where the deploy config is mounted, and no `--env-file`
 - nothing mounted under `/root/.docker`
 
 The EROFS relocation guard excludes the container-side `-e` as a whole line, so it cannot mask a real
