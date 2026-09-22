@@ -46,6 +46,13 @@ assert() {
   else FAIL=$((FAIL + 1)); echo "  FAIL: $desc"; echo "        condition: $cond"; fi
 }
 
+# INSTRUMENT SELF-TEST: assert() must move each counter once.
+assert "self-test pass arm" "true" >/dev/null; assert "self-test fail arm" "false" >/dev/null
+if (( PASS != 1 || FAIL != 1 )); then
+  printf '[FATAL] instrument self-test: assert() did not record one pass and one fail\n' >&2; exit 2
+fi
+PASS=0; FAIL=0
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -139,9 +146,20 @@ echo "mount $*" >> "$STUB_TRACE"
 exit 0
 EOS
 
+# `docker inspect` is a READ (#8408 (b): the sentinel-gate recovery arm asks whether zot is
+# running). It answers STUB_ZOT_RUNNING and is traced like every other call, so "zero mutation"
+# below is asserted over the MUTATING subcommands, not over any mention of docker.
+# STUB_DOCKER_START_RC lets a case fail `docker start` alone, leaving `docker restart` healthy.
 cat > "$BIN/docker" <<'EOS'
 #!/usr/bin/env bash
 echo "docker $*" >> "$STUB_TRACE"
+case "$1" in
+  inspect) [[ "$*" == *".State.Running"*" zot" ]] || { echo "docker stub: unexpected inspect: $*" >&2; exit 64; }
+           # STUB_ZOT_ABSENT: no such container -> empty output, rc 1 (docker's own shape).
+           [[ -n "${STUB_ZOT_ABSENT:-}" ]] && { echo "Error: No such object: zot" >&2; exit 1; }
+           printf '%s %s\n' "${STUB_ZOT_RUNNING:-true}" "${STUB_ZOT_RESTARTING:-false}"; exit 0 ;;
+  start)   exit "${STUB_DOCKER_START_RC:-${STUB_DOCKER_RC:-0}}" ;;
+esac
 exit "${STUB_DOCKER_RC:-0}"
 EOS
 
@@ -230,6 +248,12 @@ run_guard() {
     run_path="$nobin"
   fi
   if [[ -n "${STUB_RO_COUNTER:-}" ]]; then chmod 500 "$root/var/lib/soleur"; fi
+  # The LUKS-filesystem sentinel (#8408 (b)), re-rooted like every other FS read.
+  if [[ -n "${STUB_SENTINEL:-}" ]]; then mkdir -p "$root/var/lib/zot"; : > "$root/var/lib/zot/.soleur-luks-sentinel"; fi
+  # A SYMLINKED sentinel (a bind source docker would follow off the LUKS volume) to a real file.
+  if [[ -n "${STUB_SENTINEL_LINK:-}" ]]; then
+    mkdir -p "$root/var/lib/zot"; : > "$root/elsewhere"; ln -sf "$root/elsewhere" "$root/var/lib/zot/.soleur-luks-sentinel"
+  fi
 
   # `timeout` is load-bearing BECAUSE sleep is stubbed: that turns a lost wait-bound
   # (`for i in $(seq 1 30)` -> `while true`) from "slow" into an infinite TIGHT SPIN, which would
@@ -258,7 +282,8 @@ assert "T1 nic_ok=true" "[[ \"\$(field nic_ok)\" == true ]]"
 assert "T1 converged_by=already" "[[ \"\$(field converged_by)\" == already ]]"
 assert "T1 NO reboot" "! grep -q reboot <<<\"\$TRACE\""
 assert "T1 NO mount -a (zero mutation)" "! grep -q '^mount' <<<\"\$TRACE\""
-assert "T1 NO docker restart (zero mutation)" "! grep -q docker <<<\"\$TRACE\""
+assert "T1 NO mutating docker call (zero mutation; inspect is a read)" "! grep -qE '^docker (restart|start|stop|rm|run|kill)' <<<\"\$TRACE\""
+assert "T1 zot_start_action=none (zot running, nothing to recover)" "[[ \"\$(field zot_start_action)\" == none ]]"
 assert "T1 zot_store_mounted=true" "[[ \"\$(field zot_store_mounted)\" == true ]]"
 
 # --- BEHAVIORAL: T2 H1 imds unreachable => NO reboot (no corroboration) -------------------
@@ -326,6 +351,59 @@ export STUB_MOUNT_HEALS=1 STUB_DOCKER_RC=1
 run_guard true 0 1 99999 0 false
 assert "T7c zot_store_mounted=false when the restart fails" "[[ \"\$(field zot_store_mounted)\" == false ]]"
 unset STUB_MOUNT_HEALS STUB_DOCKER_RC
+
+# --- BEHAVIORAL: T12 the sentinel-gate RECOVERY arm (#8408 (b)) ----------------------------
+# zot's start requires /var/lib/zot/.soleur-luks-sentinel (a --mount bind), and docker does not
+# retry a start that failed at daemon boot. On the late-mount path the store is mounted by the
+# time this guard runs, so the arm must start zot IFF: mounted AND not running AND sentinel
+# present. It must never fire together with the remount arm's `docker restart` on one tick.
+echo "--- behavioral: T12 store mounted, zot not running, sentinel present => docker start zot ---"
+export STUB_ZOT_RUNNING=false STUB_SENTINEL=1
+run_guard true 0 1 99999 0 true
+assert "T12 started zot" "grep -qx 'docker start zot' <<<\"\$TRACE\""
+assert "T12 did NOT also restart zot (the two arms are exclusive on one tick)" "! grep -q 'docker restart' <<<\"\$TRACE\""
+assert "T12 zot_start_action=start_ok" "[[ \"\$(field zot_start_action)\" == start_ok ]]"
+assert "T12 zot_start_action rides the TRUSTED head (before zot_last_err=)" \
+  "[[ \"\${EMIT%% zot_last_err=*}\" == *' zot_start_action=start_ok '* ]]"
+echo "--- behavioral: T12b zot already running => no start ---"
+export STUB_ZOT_RUNNING=true
+run_guard true 0 1 99999 0 true
+assert "T12b did NOT start a running zot" "! grep -q 'docker start' <<<\"\$TRACE\""
+assert "T12b zot_start_action=none" "[[ \"\$(field zot_start_action)\" == none ]]"
+echo "--- behavioral: T12c zot not running, sentinel ABSENT => no start (the store is not LUKS) ---"
+export STUB_ZOT_RUNNING=false; unset STUB_SENTINEL
+run_guard true 0 1 99999 0 true
+assert "T12c did NOT start zot without the sentinel" "! grep -q 'docker start' <<<\"\$TRACE\""
+assert "T12c zot_start_action=none" "[[ \"\$(field zot_start_action)\" == none ]]"
+echo "--- behavioral: T12d docker start FAILS => start_failed, never start_ok ---"
+export STUB_ZOT_RUNNING=false STUB_SENTINEL=1 STUB_DOCKER_START_RC=1
+run_guard true 0 1 99999 0 true
+assert "T12d zot_start_action=start_failed" "[[ \"\$(field zot_start_action)\" == start_failed ]]"
+unset STUB_DOCKER_START_RC
+echo "--- behavioral: T12e store UNMOUNTED and heals, zot not running => restart only, no start ---"
+export STUB_MOUNT_HEALS=1
+run_guard true 0 1 99999 0 false
+assert "T12e restarted zot through the remount arm" "grep -q 'docker restart zot' <<<\"\$TRACE\""
+assert "T12e did NOT also start zot on the same tick" "! grep -q 'docker start' <<<\"\$TRACE\""
+assert "T12e zot_start_action=none (the remount arm owns this tick)" "[[ \"\$(field zot_start_action)\" == none ]]"
+unset STUB_MOUNT_HEALS STUB_ZOT_RUNNING STUB_SENTINEL
+echo "--- behavioral: T12f zot RESTARTING (docker's own policy is retrying) => no start ---"
+export STUB_ZOT_RUNNING=false STUB_ZOT_RESTARTING=true STUB_SENTINEL=1
+run_guard true 0 1 99999 0 true
+assert "T12f did NOT start a zot docker is already restarting" "! grep -q 'docker start' <<<\"\$TRACE\""
+assert "T12f zot_start_action=none" "[[ \"\$(field zot_start_action)\" == none ]]"
+unset STUB_ZOT_RESTARTING
+echo "--- behavioral: T12g no zot container at all (inspect rc 1, empty) => no start ---"
+export STUB_ZOT_ABSENT=1
+run_guard true 0 1 99999 0 true
+assert "T12g did NOT start a container that does not exist" "! grep -q 'docker start' <<<\"\$TRACE\""
+assert "T12g zot_start_action=none" "[[ \"\$(field zot_start_action)\" == none ]]"
+unset STUB_ZOT_ABSENT STUB_SENTINEL
+echo "--- behavioral: T12h the sentinel is a SYMLINK to a real file => no start ---"
+export STUB_ZOT_RUNNING=false STUB_SENTINEL_LINK=1
+run_guard true 0 1 99999 0 true
+assert "T12h did NOT start zot through a symlinked sentinel" "! grep -q 'docker start' <<<\"\$TRACE\""
+unset STUB_ZOT_RUNNING STUB_SENTINEL_LINK
 
 # --- BEHAVIORAL: T8 the `ip` probe is UNRESOLVABLE => zero evidence, NO reboot ------------
 # The cron-PATH class: `ip`/`reboot` live in /usr/sbin, off cron's default PATH, while curl (in
@@ -502,4 +580,10 @@ assert "the bare IP literal is defined exactly once in live HCL (the local; comm
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="
+# ANTI-VACUITY FLOOR: printf + exit, never through assert() (ADR-193).
+MIN_ASSERTIONS=112
+if (( PASS + FAIL < MIN_ASSERTIONS )); then
+  printf '[FATAL] only %d assertions ran, below the floor of %d.\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

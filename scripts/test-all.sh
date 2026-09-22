@@ -2163,6 +2163,12 @@ if want_scripts; then
   # would collapse most of its cases onto three integers — the suite therefore pins a branch
   # marker per case and DERIVES its distinct-marker floor from the shipped probe.
   run_suite "scripts/registry-luks-live-8386" bash scripts/followthroughs/registry-luks-live-8386.test.sh
+  # #8037 cosign verify-live probe. Registered explicitly (scripts/followthroughs/ matches no
+  # glob). Its exit code closes #8037 (0), alarms on a host whose LATEST verdict is still
+  # cosign_absent (1), or asks a human on a new failure class / anon_config=unavailable (5). The
+  # load-bearing arms are SYSLOG_IDENTIFIER field isolation, latest-verdict grading, and
+  # zero-hosts-never-PASS.
+  run_suite "scripts/cosign-verify-live-8037" bash scripts/followthroughs/cosign-verify-live-8037.test.sh
   # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
   # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
   run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
