@@ -15,6 +15,25 @@ lane: cross-domain
 
 # Registry store volume: correct stale "plaintext / recut unfired" claims and add the NFR at-rest row
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-22. This was a proportionate pass for a correction sweep: halts, attribution checks and mechanical verify passes, without the full 40-agent fan-out. The operator scoped this as "not a feature", and plan-review already ran a 4-agent panel.
+
+1. **Halt gates.**
+   - 4.6 User-Brand Impact: pass. The threshold is `none`, with a scope-out line for the sensitive `apps/*/infra/` and `.github/workflows/` paths.
+   - 4.7 Observability: restored the full 5-field block, which the plan-review cut had reduced below the schema. The failure-mode detection now uses AC4(a) instead of the push apply, which cannot observe registry resources.
+   - 4.10 Encryption Posture: restored the `at_rest` fields. Triggered by the `.tf` edit.
+   - 4.8 PAT: no match. 4.9 UI: no UI surface. 4.11 Guard: no guard deliverable. 4.5 and 4.55: not triggered, because the `.tf` edit is comment-only and no resource is replaced.
+2. **Attribution verified on `origin/main`.**
+   - The restore-leg fix is PR #7430 (`4aef468c80`, 2026-08-10T23:27:34Z), now cited instead of "#7287's closing comment".
+   - PR #8423 is `1817308001`. PR #8456 is `69b08a4ee5`, and it touches `cloud-init-registry.yml`, the ledger and the recut runbook.
+   - All cited rule ids are active in AGENTS.md.
+3. **The pre-dispatch check in D7 is grounded in the runbook's existing triage schema.** Arm A is `store_luks` plus `luks_open_arm=`. Arm B is `store_escrow=`, whose values `fail_passphrase` and `fail_header` were verified in the triage tables. That avoids inventing field values.
+4. **Verify-the-negative pass.** Checked the plan's negative claims:
+   - "no test pins the edited strings": confirmed by `git grep`.
+   - "no file links to the old anchor": confirmed once the plan itself is excluded.
+   - "push apply cannot touch the registry": confirmed by the `OPERATOR_APPLIED_EXCLUSIONS` block and the registry `-target`s living only inside `registry-*` dispatch jobs.
+
 ## Overview
 
 The zot registry's store volume (`hcloud_volume.registry`) has been guest-side LUKS since the recut on
@@ -85,14 +104,14 @@ Premise validation: #8535 OPEN. #7287 CLOSED 2026-08-12. #7340 CLOSED. #6929 CLO
 - **D3. The blocker probe's logic is untouched.** Operator constraint: item 2 is corrected in place, not annotated. That applies to its prose and its `echo` text. Swapping its issue-state proxy onto the live `store_luks` signal is #7377's open checkbox and is out of scope here. The header says so, so a reader does not mistake the proxy for the measurement.
 - **D4 (superseded in part by D7). The recut/host-replace distinction stays.** It is still true: a host replace preserves the volume, so it cannot *perform a recut*. What changes is the reason given, the callout ("this reverses", now "this has reversed"), and the lapsed "both levers are unavailable" note. That note becomes dated history. The replacement wording follows D6/D7 (mechanism in the decision section, a pre-dispatch check, dated history in one block).
 - **D6. Emitted text and dispatch-visible labels carry mechanism, not posture** (CTO review). The `apply_target` dropdown, the `::error::` line and the runbook's decision section state what stays true whatever the volume's state: a host replace *keeps* the volume, so it cannot re-encrypt or empty the store; a recut replaces it. They do not assert "the volume is LUKS". That would be false again the moment the refuse arm fires (`not_luks` / `fail_header` route to a recut), and every state change would need this sweep again. Current posture lives in one place, the ledger row, and the NFR row copies it. Dated history (the 2026-08-10 recut, the failed restore leg, "both levers unavailable 2026-08-04 → 2026-08-10") goes into one dated block in the runbook, linked once from the decision section.
-- **D7. The runbook's decision heading is renamed** (CTO review). `## Do NOT use registry-host-replace for this` becomes `## registry-host-replace cannot perform a recut (it is the boot-problem lever)`. Headings are what gets read first during an outage. No file links to the old anchor (`git grep -n 'do-not-use-registry'` returns 0 hits). The section links to `registry-host-replace-dispatch.md`. It also gains one **pre-dispatch** check: read the newest `SOLEUR_ZOT_DISK` row; if `store_escrow=fail_passphrase` or `fail_header`, or `luks_open_arm=not_luks`, stop and use the triage table below (its `fail_passphrase` row already forbids a host restart or replace). This supersedes D4's post-replace-only wording.
+- **D7. The runbook's decision heading is renamed** (CTO review). `## Do NOT use registry-host-replace for this` becomes `## registry-host-replace cannot perform a recut (it is the boot-problem lever)`. Headings are what gets read first during an outage. No file links to the old anchor (`git grep -n -i 'do-not-use-registry' -- ':!knowledge-base/project/plans'` returns 0 hits). The section links to `registry-host-replace-dispatch.md`. It also gains one **pre-dispatch** check: read the newest `SOLEUR_ZOT_DISK` row (the query the triage section already gives); if `store_luks` is not `yes` (Arm A, `luks_open_arm=` names why) or `store_escrow=` is `fail_passphrase`/`fail_header` (Arm B), stop and use the `registry_store_not_luks` triage table (its `fail_passphrase` row already forbids a host restart or replace). This supersedes D4's post-replace-only wording.
 - **D5. Byte budget.** `apply-web-platform-infra.yml` is 482,443 B; the edits are rewordings of similar length. The gate is `plugins/soleur/test/workflow-file-size.test.ts` (490,000 B); re-measure with `wc -c` and record the figure in the PR body.
 
 ## Files to Edit
 
 1. `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md`
    - `## Do NOT use registry-host-replace for this`: replace "The volume is currently unencrypted, and the new boot code refuses to mount an unencrypted volume — by design, so it can never silently wipe your data. The result is that the registry **goes dark** and stays dark." with: host-replace keeps the volume, so it cannot recut. The volume has been LUKS since the recut of 2026-08-10 (run 31437037877), so a replace takes the boot code's reuse arm. The boot code **still** refuses any volume that is neither blank nor LUKS, by design, so it can never silently wipe data (keep that statement verbatim in substance). Before the recut that refusal is what darked the registry.
-   - Callout: "After a successful recut this reverses" becomes "This reversed on 2026-08-10". Cite the green post-recut replaces 35489418603 (2026-09-20) and 35672138112 (2026-09-22), store preserved, `store_luks=yes` on the new boot. "applies only while the volume is still unencrypted" becomes past tense. The "**Until then, `registry-host-replace` is blocked too** (verified 2026-08-04 …)" paragraph is re-labelled as history (2026-08-04 → 2026-08-10), keeping its run link. The #7278 pointer stays. Per D6/D7: rename the heading, state mechanism, add the pre-dispatch check and the `registry-host-replace-dispatch.md` link, and move the dated material (the 2026-08-04 blocked-lever note, the 2026-08-10 recut run and its failed `registry_store_restore` leg, a doppler-token defect fixed 2026-08-10T23:27Z per #7287's closing comment) into one `> **History (dated)**` block.
+   - Callout: "After a successful recut this reverses" becomes "This reversed on 2026-08-10". Cite the green post-recut replaces 35489418603 (2026-09-20) and 35672138112 (2026-09-22), store preserved, `store_luks=yes` on the new boot. "applies only while the volume is still unencrypted" becomes past tense. The "**Until then, `registry-host-replace` is blocked too** (verified 2026-08-04 …)" paragraph is re-labelled as history (2026-08-04 → 2026-08-10), keeping its run link. The #7278 pointer stays. Per D6/D7: rename the heading, state mechanism, add the pre-dispatch check and the `registry-host-replace-dispatch.md` link, and move the dated material (the 2026-08-04 blocked-lever note, the 2026-08-10 recut run and its failed `registry_store_restore` leg, a doppler-token defect fixed by PR #7430, merged 2026-08-10T23:27:34Z (commit `4aef468c80`)) into one `> **History (dated)**` block.
    - `## If it stops` → "It refused the volume": "(It is **not** available before one: while the volume is still plaintext, that dispatch aborts `out_of_scope=2`)" becomes past tense: it was not available before the first recut.
    - Inventory section: "which is the unfired-recut fatal (#7287) this runbook exists inside" becomes past tense, dated.
    - `## Addendum — 2026-08-06`: **annotate only**. Append after "…hits the `blkid` FATAL refuse." an inline `*[Annotated 2026-09-22, #8535: the circularity is broken — the recut fired 2026-08-10 and the volume is LUKS, so a replace now reopens it.]*`. The sentence itself is not rewritten.
@@ -168,9 +187,30 @@ None (plan and tasks artifacts only).
 
 ## Observability
 
-No new runtime path, signal or alert. The change is prose, comments and emitted text. The existing registry signals are `SOLEUR_ZOT_DISK` `store_luks` / `store_escrow` and the `registry_store_not_luks` alert, and they are unchanged. The plan quality gate still needs a probe:
+The change adds no runtime path. This block names the existing registry signals that the corrected text now describes, and the probe that guards this diff. Deepen-plan Phase 4.7 requires the full 5-field schema because the diff touches `apps/web-platform/infra/`.
 
 ```yaml
+liveness_signal:
+  what: SOLEUR_ZOT_DISK heartbeat rows carrying store_luks=yes and store_escrow=ok (existing; unchanged by this PR)
+  cadence: every 5 min (heartbeat); daily escrow re-test
+  alert_target: Better Stack alert registry_store_not_luks (pages the operator)
+  configured_in: apps/web-platform/infra/cloud-init-registry.yml (emitter, anchor "store_luks=yes means") + the registry_store_not_luks logtail alert delivered by PR #8456
+error_reporting:
+  destination: Better Stack logs + the registry_store_not_luks alert; the edited registry-luks-recut ::error:: lines surface in the GitHub Actions log of a destroy-guard abort
+  fail_loud: "::error::registry-luks-recut destroy-guard ABORTED" (prefix unchanged by this PR)
+failure_modes:
+  - mode: the comment-only zot-registry.tf edit alters the rendered user_data, so the next registry-* dispatch replaces the host with different config
+    detection: AC4(a) comment-stripped diff against the merge-base (pre-merge, deterministic)
+    alert_route: blocks the PR at work/review time
+  - mode: the ledger prose edit breaks the schema or a lint check
+    detection: lint-encryption-posture.py --repo-sweep in CI (required test aggregate)
+    alert_route: red required check on the PR
+  - mode: the workflow grows past the 490,000 B gate
+    detection: plugins/soleur/test/workflow-file-size.test.ts in the test aggregate
+    alert_route: red required check on the PR
+logs:
+  where: Better Stack (SOLEUR_ZOT_DISK source); GitHub Actions run logs
+  retention: Better Stack plan retention; Actions logs 90 days
 discoverability_test:
   command: python3 scripts/lint-encryption-posture.py --repo-sweep
   expected_output: "PASS"
@@ -178,7 +218,21 @@ discoverability_test:
 
 ## Encryption Posture
 
-This plan introduces no store and no connection. The posture of the existing `hcloud_volume.registry` is the ledger row (`scripts/encryption-posture-ledger.json`, `mechanism: luks`, `live_verification: available`). D2 refreshes only that row's prose, and `lint-encryption-posture.py` validates it. The plan does not restate it here, because a second copy could drift from the first.
+This plan introduces no store and no connection. The block below mirrors the ledger row `hcloud_volume.registry` after D2. The ledger is the authority. If the two ever disagree, the ledger wins, and `lint-encryption-posture.py` validates only the ledger.
+
+```yaml
+at_rest:
+  - store: hcloud_volume.registry
+    mechanism: luks
+    evidence: implied by device_binding (hcloud_volume.registry -> hcloud_volume_attachment.registry -> mapper registry); apparatus apps/web-platform/infra/cloud-init-registry.yml anchors "cryptsetup luksFormat --batch-mode --type luks2" and "cryptsetup luksOpen --key-file - \"$DEV\" registry"; key random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf)
+    defends_against: a seized/RMA'd or snapshot-imaged Hetzner block volume; OCI blobs and cosign signatures are unreadable without the Doppler-held passphrase
+    does_not_defend: a leaked credential (Doppler token or passphrase), an app-layer read on the unlocked live registry host, or exfiltration through a compromised zot process
+    disclosed_as: not-publicly-claimed
+    live_verification: available
+in_transit: []   # no new connection
+```
+
+No `exception` block: the mechanism is not `plaintext-exception`, and nothing sets `cert_verification: off`.
 
 ## Acceptance Criteria
 
@@ -204,7 +258,7 @@ This plan introduces no store and no connection. The posture of the existing `hc
   - `python3 scripts/lint-encryption-posture.py --repo-sweep` prints `PASS`.
 - [ ] **AC7**: the blocker script behaves exactly as before. `bash -n` passes. The diff touches only `#` lines and the one PASS `echo` string; `DEP_ISSUE`, the `gh` calls and the exit codes are unchanged.
 - [ ] **AC8**: the gate library diff touches comments only, and `bash tests/scripts/test-registry-luks-recut-gate.sh` passes (baseline 37/37). `terraform-target-parity.test.ts` passes after its doc-comment edit.
-- [ ] **AC9**: every new dated fact carries its run id, issue number or PR number inline. That is the source of truth for it: run ids from `gh run view <id> --json jobs`, boot and escrow facts from #8408's 2026-09-22T06:56:58Z comment, `available` from PR #8423, and the restore-leg fix from #7287's closing comment. The diff scope is the 10 listed files, plus the pipeline-written artifacts: this plan, `specs/feat-one-shot-8535-registry-plaintext-sweep/{tasks,session-state,ac1-hits}.*`, and any regenerated `knowledge-base/INDEX.md`. CI (markdownlint via lefthook, the encryption-posture lint, `test`) is green.
+- [ ] **AC9**: every new dated fact carries its run id, issue number or PR number inline. That is the source of truth for it: run ids from `gh run view <id> --json jobs`, boot and escrow facts from #8408's 2026-09-22T06:56:58Z comment, `available` from PR #8423, and the restore-leg fix from PR #7430 (`4aef468c80`). The diff scope is the 10 listed files, plus the pipeline-written artifacts: this plan, `specs/feat-one-shot-8535-registry-plaintext-sweep/{tasks,session-state,ac1-hits}.*`, and any regenerated `knowledge-base/INDEX.md`. CI (markdownlint via lefthook, the encryption-posture lint, `test`) is green.
 
 ## Test Scenarios
 

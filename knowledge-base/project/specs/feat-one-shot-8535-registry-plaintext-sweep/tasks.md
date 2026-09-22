@@ -12,8 +12,8 @@ Plan: `knowledge-base/project/plans/2026-09-22-chore-registry-luks-plaintext-doc
 - 2.2 NFR-027 row plus the "4 of 5" status line, copied from the refreshed ledger row (AC5).
 - 2.3 Recut runbook (file 1):
   - 2.3.1 Rename the heading and rewrite the decision section to state mechanism.
-  - 2.3.2 Add the pre-dispatch check and the host-replace-dispatch link.
-  - 2.3.3 Add a `History (dated)` block.
+  - 2.3.2 Add the pre-dispatch check and the `registry-host-replace-dispatch.md` link. The check reads the newest `SOLEUR_ZOT_DISK` row. If `store_luks` is not `yes` (Arm A), or `store_escrow` is `fail_passphrase` or `fail_header` (Arm B), go to the `registry_store_not_luks` triage table.
+  - 2.3.3 Add a `History (dated)` block. It covers the recut in run 31437037877 and its failed restore leg, fixed by PR #7430 (`4aef468c80`).
   - 2.3.4 Correct the "If it stops" bullet, the inventory-section sentence and the first-fire note.
   - 2.3.5 Annotate the addendum paragraph and the #7278 bullet (D6, D7).
 - 2.4 Blocker script (file 2): correct the header comments and the PASS `echo` in place. The logic stays unchanged (AC7).
