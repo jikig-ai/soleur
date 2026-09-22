@@ -199,6 +199,10 @@ ALWAYS_ON_SUITES=(
   ".claude/hooks/kb-domain-allowlist-guard.test.sh"
   ".claude/hooks/incident-sandbox-coverage.test.sh"
   "plugins/soleur/test/fixture-cd-containment.test.sh"
+  # tests/scripts/no-tofu-ssh — Guard 1 (#7226/ADR-237) walks `git ls-files` over
+  # the whole tracked tree; any file anywhere can introduce a TOFU violation, so
+  # no path edge can express its selection.
+  "tests/scripts/no-tofu-ssh"
   "blog-link-validation"
 
   # --- the never-gated web-platform arm -----------------------------------------
@@ -1018,4 +1022,23 @@ AFFECTED_TESTS_SCRIPTS_DEV_SUITE_MUTEX_WIRING_PATHS=(
   "scripts/dev-suite-mutex.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-dev-suite-mutex-wiring.sh"
+)
+
+# tests/scripts/no-tofu-ssh-mutation — mutation harness for the no-tofu-ssh
+# guard (#7226/ADR-237); its SUT is the guard file itself plus its own harness,
+# the same shape as orphan-process-reaper-mutations above.
+AFFECTED_TESTS_SCRIPTS_NO_TOFU_SSH_MUTATION_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-no-tofu-ssh.sh"
+  "tests/scripts/test-no-tofu-ssh-mutation.sh"
+)
+
+# tests/scripts/dispatch-web-redeploy — Guard 7 (#7226/ADR-237) exercises the
+# track.sh action and the redeploy job it serves; declared from the repo paths
+# its suite file names.
+AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
+  ".github/actions/dispatch-web-redeploy/"
+  ".github/workflows/git-data-pin-redeploy.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-dispatch-web-redeploy.sh"
 )
