@@ -71,6 +71,13 @@ mkdir -p "$COPY" "$EMPTY"
 
 git -C "$SRC" ls-files -z --cached --others --exclude-standard -- . ':(exclude)knowledge-base/**' \
   | (cd "$SRC" && tar --null --ignore-failed-read -T - -cf - 2>/dev/null) | tar -C "$COPY" -xf -
+# Every git call from here on targets the scratch trees under $WORK. `git_fixture_env` exports the
+# ceiling (the parent of $WORK), a synthesized identity and config hermeticity into THIS shell, so
+# neither `git init` can walk up into an enclosing repository.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "${SRC}/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { echo "FATAL: could not source the fixture git environment" >&2; exit 2; }
+git_fixture_env "$WORK" || { echo "FATAL: git_fixture_env refused the fixture root $WORK" >&2; exit 2; }
 git -C "$COPY" init -q
 git -C "$COPY" add -A >/dev/null 2>&1
 git -C "$EMPTY" init -q

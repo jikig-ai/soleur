@@ -222,6 +222,13 @@ PRISTINE_REPO="$(mktemp -d -t provparity-pristine.XXXXXXXX)" || exit 2
 SANDBOX="$TF_REPO/apps/web-platform/infra"
 PRISTINE="$PRISTINE_REPO/apps/web-platform/infra"
 mkdir -p "$SANDBOX" "$PRISTINE" || exit 2
+# `git_fixture_env` exports the ceiling (the parent of $TF_REPO, which also holds the sibling
+# PRISTINE_REPO), a synthesized identity and config hermeticity into THIS shell, so the scratch
+# repository's `git init` and the guard's `git ls-files` inside it cannot reach an enclosing repo.
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$ROOT/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { echo "FATAL: could not source the fixture git environment" >&2; exit 2; }
+git_fixture_env "$TF_REPO" || { echo "FATAL: git_fixture_env refused the fixture root $TF_REPO" >&2; exit 2; }
 git -C "$TF_REPO" init -q || exit 2
 OUT="$(mktemp -t provparity-out.XXXXXXXX)" || exit 2
 trap 'rm -rf "$TF_REPO" "$PRISTINE_REPO" "$OUT" "$MAIN_PROG" "$G2_PROG"' EXIT INT TERM HUP

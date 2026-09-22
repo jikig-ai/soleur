@@ -33,7 +33,12 @@ assert_fixture_dir() {
   esac
 }
 # Outside Actions (a local run) the outputs go to a throwaway file, never a relative path.
-out="${GITHUB_OUTPUT:-$(mktemp)}"
+# The throwaway file is owned by this script, so this script's EXIT trap removes it.
+out="${GITHUB_OUTPUT:-}"
+if [[ -z "$out" ]]; then
+  out="$(mktemp)"
+  trap 'rm -f "$out"' EXIT
+fi
 _emit() {
   assert_fixture_dir "$out"
   printf '%s\n' "$@" >> "$out"
