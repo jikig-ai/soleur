@@ -74,7 +74,7 @@ be a second, driftable copy of the suite registry.
 - `TEST_GROUP` values are now `all`, `webplat`, `bun`, `scripts`,
   `scripts-heavy`, `infra`. Every consumer that derives group count,
   group-name shape, or shard scope was enumerated in the plan
-  (`knowledge-base/project/plans/2026-09-22-feat-ci-test-shard-speedup-plan.md`)
+  (`knowledge-base/project/plans/archive/20260923-182911-2026-09-22-feat-ci-test-shard-speedup-plan.md`)
   — the taxonomy is load-bearing in ~10 surfaces beyond the runner and
   workflow.
 - `SCRIPTS_SHARD` is now scoped to `scripts` AND `scripts-heavy`; unrelated
