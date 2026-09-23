@@ -16,6 +16,38 @@ lane: cross-domain
 
 # fix: a fresh web-host boot is dark — the zot-primary image path never activates
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23 (after a 4-agent plan review — see `## Plan Review Revisions`).
+**Deepen agents:** security-sentinel, architecture-strategist, observability-coverage-reviewer,
+test-design-reviewer, spec-flow-analyzer, plus a mechanical verify-the-negative / attribution
+pass (15 negative claims, 10 attributions, 19 issue numbers — no contradictions).
+
+### Key improvements
+
+1. **Integrity:** only digest-pinned refs are rewritten to plain-HTTP zot; a tag ref fails loud
+   (`cause=unpinned`) instead of pulling an unverifiable root-executed payload.
+2. **Diagnosis in one event:** the fatal detail's fixed fields are state-derived —
+   `nic=<outcome>:<s>`, `zot=[login,n,cause]`, `ghcr=[login,pull]` — with a redacted tail last;
+   tails are pattern-redacted and `/run` files are 0600.
+3. **Harness realism:** stateful docker stub (pull fails without a prior login), zero-residual
+   path rewrite, truncation at `STAGE=extract` with a sentinel, counter-bounded NIC wait under
+   `timeout 20`, Guard 3 floor replaced by a known-positive injection and a pinned-commit
+   baseline of 11 (the old "≥1 below the anchor" could never pass).
+4. **Closure ownership:** a follow-through probe (`web-fresh-boot-zot-8651.sh`) closes #8651 on
+   observed evidence even if the session ends; Phase 6 now covers reject/dark-again/failed-apply/
+   inconclusive branches.
+5. **Architecture record:** C4 has three false statements to fix, not one; ADR-096's
+   "everywhere else reads Doppler at boot" is replaced; ADR-114 and ADR-123 get cross-references.
+
+### New considerations discovered
+
+- The `deploy-script-tests` job that hosts the new suite is advisory, not required.
+- The trail's image-origin read must filter server-side over 14 days; the default 1-hour,
+  100-event read can drop an early `app_zot`.
+- AC15 asserts `zot_login=ok` and only records `ghcr_login` — a restored GHCR credential must not
+  fail a correct zot boot.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -282,44 +314,61 @@ web template's byte budget:
    first private-net use. The two non-ready outcomes emit `private_nic_timeout` /
    `private_nic_probe_fault` through the existing baked-DSN `_emit`, so the existing host-generic
    `web_private_nic_boot_gate` alert pages on them. The ready outcome emits nothing of its own
-   (no extra pre-pull emit, no throttle latency on the healthy path); its `nic_w=<s>` rides the
+   (no extra pre-pull emit, no throttle latency on the healthy path); its `nic=ready:<s>` rides the
    `app_zot` detail and the fatal detail, so every outcome is still observable.
 3. **Log in to zot** from the baked credential (bounded retries), recording the outcome.
    The GHCR login runs inside `( set +e … ) || true`, so variables set there never reach the pull
    loop: each login's outcome (and the NIC wait's `W`) is persisted to a `/run/soleur-*-login`
    (resp. `/run/soleur-nic-w`) file, or the zot login and NIC wait run outside the subshell,
    `||`-guarded against the item's `set -e`. The sketch below is written that way.
-4. **Resolve `REF` to zot unconditionally** when the baked endpoint is non-empty. No probe.
+4. **Resolve `REF` to zot** for every **digest-pinned** image ref — no probe, no Doppler. A
+   tag-only ref (`var.image_name` defaults to `:latest`, and the break-glass local create
+   accepts it) is NOT rewritten: over plain HTTP a tag carries no integrity, so it stays on the
+   GHCR ref and fails loud (`cause=unpinned` in the detail) rather than pulling an unverified
+   payload that the root-executed bootstrap then trusts. Every dispatch path pins `@sha256`
+   (`host-image-coherence-preflight.sh`), so the delivery path is unaffected.
 5. **Pull** with bounded, timeout-wrapped zot attempts. Flip to the GHCR ref only when the
    baked GHCR login succeeded (that flip keeps its `app_ghcr_fallback` warning and the
    ADR-096 5.3 tripwire comment). Otherwise fail with a detail that names both legs in the
-   inngest host's `oci-pull-ALL-LEGS-FAILED` shape, so one Sentry search reads both hosts.
-   `_emit` truncates the detail at 200 chars (`head -c 200`), so **fixed-length fields come
-   first and variable tails last**: `ghcr=[login=fail,not-attempted] nic_w=<s>
-   zot=[login=<ok|fail>] pull_err: <zot pull tail, capped so the whole detail is ≤200>`, and on a
-   failed zot login the login tail replaces the pull tail (a login tail is what separates a
-   rotated token from zot-down from no-route). The GHCR login's error text is no longer written
-   into the detail file (the GHCR outcome is the fixed `login=fail` field). The literal
-   `pull_err:` is kept (pinned by `soleur-host-bootstrap-observability.test.sh` AC18).
+   inngest host's per-leg `oci-pull-ALL-LEGS-FAILED` wording (`zot=[…] ghcr=[…]`, `login=`,
+   `not-attempted`) — the two travel on different channels (Sentry here, Better Stack there),
+   so the parity is of wording for a human reading both, not a shared search. `_emit` truncates
+   at 200 chars, so **fixed, state-derived fields come first and the free-text tail last**:
+   `nic=<ready|timeout|probe_fault>:<s> zot=[login=<ok|fail>,n=<attempts>,cause=<auth|unreach|manifest|timeout|unpinned|other>] ghcr=[login=<ok|fail>,pull=<ok|fail|not-attempted>] pull_err: <tail>`.
+   `cause` is classified from the login/pull logs by a small `case` over their text
+   (`unauthorized|denied` → auth; `manifest unknown|not found` → manifest;
+   `no route|unreachable|refused|i/o timeout` → unreach; rc 124 → timeout), so the competing
+   causes are distinguishable without the tail. Every tail is redacted by pattern before it is
+   written (`sed -E 's/[A-Za-z0-9]{40,}/REDACTED/g'` — the pull token is 40 alnum; never pass the
+   token value to `sed`, which would put it on an argv). The GHCR login's raw error text is no
+   longer written. The literal `pull_err:` is kept (pinned by
+   `soleur-host-bootstrap-observability.test.sh` AC18). `/run/soleur-*` detail and log files are
+   created under `( umask 077; … )`.
 6. **Report success loudly and attributably:** before the `app_zot` emit (unchanged
-   stage/message/call form), write `zot_login=ok ghcr_login=<ok|fail> nic_w=<s>` to the
+   stage/message/call form), write `zot_login=ok ghcr_login=<ok|fail> nic=<outcome>:<s>` to the
    existing `/run/soleur-stage-detail` file `_emit` already reads, then clear it (no `_emit`
    signature change). `_emit` gains a `host_name` tag. The replace job's boot trail gains the
    `app image served` message **and prints the newest image-origin event for the host outside
    its 8-event slice** (a healthy boot's `app_zot` is early and would otherwise fall off the
    printed list); a `--image-origin <host_name>` query-only mode of the same script prints that
    one line locally (the Observability discoverability command — one copy of the Sentry
-   filtering logic, not two).
+   filtering logic, not two). That mode filters **server-side** on the org events endpoint
+   (`stage:app_zot` / `stage:app_ghcr_served` / `stage:app_ghcr_fallback` plus `host_name:<h>`,
+   `statsPeriod=14d` — the query shape this plan measured working against `jikigai-eu`), and
+   prints `TRANSIENT:` (exit 2) on a non-200, a missing token, or a full page, never a bare miss.
 7. **Delete** the Doppler GHCR re-fetch arms (dead by construction, twice over) to pay for the
    additions; keep the baked GHCR login itself (#8036 1d owns its retirement).
 8. **Colocated-inngest block** (rendered only when `web_colocate_inngest`): source `ZURL` from
    `${registry_endpoint}` instead of Doppler, so no tokenless zot read survives in the file.
 9. **Delete `_emit`'s Doppler DSN fallback** (and the `. /etc/default/webhook-deploy` line
-   that only serves it). It runs only when the baked DSN is empty, and every host-creating
-   dispatch refuses an empty `SENTRY_DSN` (`apply-web-platform-infra.yml` step "Extract backend
-   credentials + assert SENTRY_DSN non-empty (ADR-128 R1)", three sites). After this, **no
-   `doppler` invocation remains in runcmd above the terminal block's exporting source** — the
-   whole #6985 class is gone from this file rather than patched site by site.
+   that only serves it). The load-bearing reason is that **it can never run**: before
+   `STAGE=doppler_dl` the CLI is not installed; after it, the subshell's bare `.` never exports
+   `DOPPLER_TOKEN` (#6985); and `trap - EXIT` disarms `on_err` before the host-script handoff, so
+   no `_emit` runs after the terminal block's `set -a`. Secondary: both jobs that create
+   `hcloud_server.web` (`web_host_create`, `web_host_replace`) assert a non-empty `SENTRY_DSN`
+   (ADR-128 R1), and the merge-triggered apply HALTs on any host create; only the break-glass
+   local apply is unenforced. After this, **no `doppler` invocation remains in runcmd above the
+   terminal block's exporting source** — the #6985 class is gone from this file, not patched.
 
 Nothing under `/opt/soleur/host-scripts` (i.e. `soleur-host-bootstrap.sh` and siblings)
 changes: the replace job's coherence preflight pins web-1's **running** image and compares its
@@ -337,20 +386,21 @@ ZEP='${registry_endpoint}'
 # never "absent"); empty-address guard (grep -qwF -- "" matches every line).
 #   -> on timeout/probe fault only: _emit "soleur-cloud-init boot stage"
 #      private_nic_{timeout,probe_fault} warning (detail via /run/soleur-stage-detail); W kept
-#      for the later detail as nic_w=$W
+#      for the later detail as nic=<outcome>:$W (persisted to /run so it survives subshells)
 # zot login (fail-open, bounded, OUTSIDE the GHCR subshell or persisted to /run):
 #   printf '%s' '${zot_pull_token}' | timeout 60 docker login "$ZEP" -u '${zot_pull_user}' \
 #     --password-stdin >/run/soleur-zot-login.log 2>&1 && ZL=ok || ZL=fail
 # GHCR login: baked creds only, inside the existing ( set +e … ) subshell -> writes
 #   /run/soleur-ghcr-login (ok|fail); no Doppler fallback, no re-fetch, no error text in the
 #   stage-detail file
-REF="$ZEP/$(printf '%s' "$IMAGE_REF" | sed 's#^ghcr.io/##')"   # ${registry_endpoint} is a compile-time constant
+case "$IMAGE_REF" in *@sha256:*) REF="$ZEP/$(printf '%s' "$IMAGE_REF" | sed 's#^ghcr.io/##')" ;;
+  *) REF="$IMAGE_REF" ;; esac   # tag refs never go to plain-HTTP zot (no integrity); detail says so
 # pull loop — keep the `until docker pull "$REF"` anchor the seed-login test keys on; bound
 #   each attempt inside the loop body or via a wrapper that preserves that anchor (update the
 #   test's pull_ln anchor in the same edit if the form must change). zot attempts bounded; flip
 #   to IMAGE_REF only if /run/soleur-ghcr-login says ok (emit app_ghcr_fallback); else write the
 #   fixed-fields-first detail and exit 1 (on_err -> stage=pull fatal)
-# success: printf 'zot_login=%s ghcr_login=%s nic_w=%s' … > /run/soleur-stage-detail, then the
+# success: printf 'zot_login=%s ghcr_login=%s nic=%s' … > /run/soleur-stage-detail, then the
 #   UNCHANGED `if [ "$REF" = "$IMAGE_REF" ]; then _emit … app_ghcr_served …; else _emit …
 #   app_zot info; fi` line, THEN `: > /run/soleur-stage-detail` (the clear moves after the emit)
 ```
@@ -379,10 +429,14 @@ discovered against a test, not after.
   locally, required in CI), extract runcmd item 1 (`STAGE=runcmd_early`: `_emit`, `on_err`,
   `trap on_err EXIT`, `HOST_ID`, `export HOME`) **joined with** the host-script extraction item —
   the seed item cannot run alone — rewrite its hard-coded `/run/…` and `/etc/default/…` paths
-  into a sandbox root with a sed whose application is asserted (count the rewritten occurrences),
-  and stop execution at `STAGE=extract` (or stub `docker create`/`docker cp` to produce a seed
-  whose hash matches the rendered `host_scripts_content_hash`, so the success path does not reach
-  a real `soleur-host-bootstrap.sh`). EXECUTE it with stubs on `PATH`: `docker` (records argv; `login`/`pull` outcomes per registry driven by env),
+  into a sandbox root, then assert **zero residual** `(^|[^[:alnum:]_])/(run|etc/default)/`
+  occurrences in the rewritten text (a rewrite count passes with one path missed), and truncate
+  execution at `STAGE=extract`, asserting a sentinel placed after the cut never prints (no
+  hash re-implementation). EXECUTE it with stubs on `PATH`: `docker` (records argv;
+  **stateful** — a `pull` from registry R fails with an `unauthorized` error unless a successful
+  `login R` was recorded earlier in the same run; per-registry outcomes otherwise driven by env;
+  on a failing login it echoes its stdin to stderr so the redaction assertion has something to
+  catch),
   `ip` (argv-validating, converging-after-N variant — copy the `make_ip` /
   `make_ip_converging` shapes from `nic-wait-gate.test.sh`), recording no-op `sleep` (records
   argv; `docker info` stubbed to succeed at once so its `sleep 2` loop records nothing, and the
@@ -394,9 +448,13 @@ discovered against a test, not after.
   sandbox copy per case; confirm each mutation landed; HARNESS failures exit 2 — the
   `cloud-init-inngest-zot-pull-mutation.test.sh` contract), plus one cross-template parity
   assertion: the web fatal detail and the inngest `oci-pull-ALL-LEGS-FAILED` marker both use the
-  `zot=[` / `ghcr=[` shape. One new test file, not two.
+  per-leg wording (`zot=[`, `ghcr=[`, `login=`, `not-attempted`), comment lines stripped before
+  matching. One new test file, not two.
 - 0.4 Register it in `.github/workflows/infra-validation.yml` next to the
-  `nic-wait-gate.test.sh` step.
+  `nic-wait-gate.test.sh` step — that step is in the `deploy-script-tests` job, which already
+  runs `hashicorp/setup-terraform` (pinned `5e8dbf3c…`, v4.0.0), so the render leg has terraform.
+  The suite SKIPs the render only when `CI` is unset; under `CI=true` a missing terraform is a
+  FAIL, so the behavioural half can never go silently vacuous in CI.
 
 ### Phase 1 — Terraform wiring
 
@@ -442,6 +500,15 @@ discovered against a test, not after.
   would stay green after an `app_zot` rename because the GHCR messages share the prefix) plus an
   assertion that the QUERY literal is a prefix of it, and add one assertion that no
   literal extracted from QUERY contains a regex metacharacter (`MSG_RE` is built from them).
+- 3.5 Follow-through enrollment (the closure owner, Phase 6.5): create
+  `scripts/followthroughs/web-fresh-boot-zot-8651.sh` — exit 0 when `fresh-host-boot-trail.sh
+  --image-origin soleur-web-2` prints an `app_zot` line with `zot_login=ok` newer than the merge
+  commit's time and no `stage=pull` seed fatal for `soleur-web-2` after it; exit 1 while not yet;
+  exit 2 (`TRANSIENT:`) on any read failure. At ship time add the tracker directive
+  `<!-- soleur:followthrough script=scripts/followthroughs/web-fresh-boot-zot-8651.sh earliest=<merge date> secrets=SENTRY_ACTIONS_RO_TOKEN -->`
+  and the `follow-through` label to #8651 (the secret is already wired in
+  `scheduled-followthrough-sweeper.yml`). The sweeper closes #8651 as completed on PASS — the
+  observed-evidence condition the zot soak's `WEB_BLOCKER` arm requires.
 - 3.3 The trail already prints each listed event's `detail`, but only the newest 8 events
   (`| .[0:8][]`), so a healthy boot's early `app_zot` falls off. Add one line, outside the
   slice, printing the newest `app image served` event for `EXPECT_HOST` (stage, host, time,
@@ -460,7 +527,7 @@ discovered against a test, not after.
 - 4.2 `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` pins the
   `_emit` tag string `'"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}'`
   including the closing brace. Append `host_name` **after** `detail` and loosen that pin to an
-  open prefix (ADR-147: "add tags, never rename"); the emit call-form pins (`"app_zot" info`
+  open prefix (ADR-147: "add tags; never rename the message"); the emit call-form pins (`"app_zot" info`
   etc.) stay unchanged.
 - 4.2b `plugins/soleur/test/cloud-init-user-data-size.test.ts` AC1c pins the whole
   `…else _emit "app image served by zot" "app_zot" info; fi` line — keep that line
@@ -478,13 +545,27 @@ discovered against a test, not after.
 ### Phase 5 — Architecture record
 
 - 5.1 ADR-096: new section "Amendment 2026-09-23 (#8651) — the web cold-boot pull site is
-  migrated, by BAKE" (see `## Architecture Decision (ADR/C4)`).
-- 5.2 `model.c4`: rewrite the fresh-boot clause of the `hetzner -> zotRegistry` edge
-  description; run `apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts`, and
+  migrated, by BAKE" (see `## Architecture Decision (ADR/C4)`), which also **replaces** the
+  2026-08-13 sentence "Everywhere else in the fleet, zot config is read from Doppler at boot"
+  (now true of the deploy path only).
+- 5.1b ADR-114 (2026-07-19 amendment, item 2 names `soleur-wait-nic` as the web first-boot NIC
+  gate) and ADR-123 (web-host private NIC: self-report, no self-converge): one cross-reference
+  each — the pre-pull wait follows ADR-123's detect/emit/no-reboot rule, deliberately skips the
+  #8539 networkd fallback, emits nothing on ready (unlike `private_nic_ok` / `private_nic_ready`),
+  and on web-1 can precede `soleur-wait-nic`'s own event; ADR-123's "GHCR fallback keeps it
+  serving" line is marked stale.
+- 5.2 `model.c4`: rewrite (a) the `hetzner` element's "At first boot a fresh host pulls the web
+  app image from GHCR" clause, (b) the `hetzner -> zotRegistry` edge's fresh-boot clause and its
+  "SOLE … no second registry" claim (true of the deploy path only), and (c) the `ghcr` system's
+  "THE HOST-SIDE CODE PATH IS DELETED" (deploy path only; the fresh-boot GHCR leg stays under
+  #8036 1d). Commit the regenerated `model.likec4.json` (lefthook regenerates it). Run
+  `apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts`, and
   `plugins/soleur/test/c4-count-parity.test.sh`.
 - 5.3 `scripts/encryption-posture-ledger.json`, row `web hosts -> zot registry
-  (10.0.1.30:5000)`: extend `does_not_defend` with the credential (Basic over plain HTTP) and run
-  `python3 scripts/lint-encryption-posture.py`. Do not move `expires_on`.
+  (10.0.1.30:5000)`: extend `does_not_defend` with the credential (Basic over plain HTTP; the
+  same `random_password.zot_pull` instance the inngest host carries; read-only per
+  `cloud-init-registry.yml` accessControl `"users": ["${zot_pull_user}"], "actions": ["read"]`)
+  and run `python3 scripts/lint-encryption-posture.py`. Do not move `expires_on`.
 
 ### Phase 6 — Delivery and verification (post-merge; merging changes no host)
 
@@ -495,14 +576,27 @@ discovered against a test, not after.
   web-1's running, zot-served digest), arm a watch on the run
   (`hr-dispatch-async-must-arm-watch`), and route the `web-platform-infra-apply` environment
   approval to the operator — the reviewer gate is the authorization, not a checklist item.
-- 6.3 Read the job's boot trail (step "Surface fresh-host Sentry breadcrumb trail"): pass =
-  the image-origin line shows `app_zot` with `ghcr_login=fail` and a `nic_w=` value in its
-  detail, the verdict is `fresh_boot_ready`, and there is no `soleur-hostscript-seed failed`
-  event for the host. A `private_nic_timeout` is not fatal but is recorded in the #8651 closing
-  comment. Reproduce the origin line locally with the discoverability command.
+- 6.2b If the apply fails after destroying the old web-2, follow the job's own printed
+  recovery (re-dispatch `web-host-replace`, or `web-host-create`); #8651 stays open.
+- 6.3 Read the job's boot trail (step "Surface fresh-host Sentry breadcrumb trail"): **pass** =
+  the image-origin line shows `app_zot` with `zot_login=ok` (and records `ghcr_login=`, which is
+  `fail` while AP-016 holds — the operator's "GHCR failing, non-fatal" evidence; recorded, not
+  asserted, so a restored GHCR credential cannot fail a correct zot boot), the verdict is
+  `fresh_boot_ready`, and there is no `soleur-hostscript-seed failed` event for the host. An
+  `app_ghcr_fallback`/`app_ghcr_served` event is a FAIL. A `private_nic_timeout` (it pages
+  `web_private_nic_boot_gate` — expect the email) on an otherwise green boot still counts as done
+  and is noted in the closing comment (`nic=timeout:150`). **Inconclusive** (keep #8651 open,
+  re-run `--image-origin`): `fresh_boot_ready` with no image-origin line, a "Sentry query
+  FAILED" line, or "readiness unconfirmed".
+- 6.3b **Dark again:** leave #8651 open, comment the fatal detail and run URL, map the failing
+  field (`nic=`, `zot=[…cause=…]`) to the Observability failure modes, fix in a new PR, then
+  re-dispatch. Never re-dispatch unchanged — runcmd is once-per-instance and the result repeats.
 - 6.4 Only then close #8651 as **completed** with the run URL and the event ids. `web-2` stays
-  out of service per the operator constraint (this replace is a verification host, not a
-  promotion). Close #6985 alongside it if its acceptance items are all met (see AC).
+  out of service per the operator constraint (nothing in `web_host_replace` touches DNS, the LB
+  or the tunnel; the release fan-out still deploys to 10.0.1.11, which routes no traffic).
+  Close #6985 alongside it if its acceptance items are all met (see AC).
+- 6.5 **Ownership if the session ends before 6.2–6.4 complete:** the PR enrolls #8651 in the
+  follow-through sweeper (Phase 3.5) so an automated probe, not session memory, closes it.
 
 ## Files to Edit
 
@@ -516,17 +610,23 @@ discovered against a test, not after.
 - `.github/workflows/infra-validation.yml`
 - `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md`
 - `knowledge-base/engineering/architecture/diagrams/model.c4`
+- `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (regenerated)
+- `knowledge-base/engineering/architecture/decisions/ADR-114-one-tunnel-many-connectors-ingress-must-be-origin-relative.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-123-web-host-private-nic-self-report-no-self-converge.md`
 - `scripts/encryption-posture-ledger.json`
+- `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` (tag-string pin → open prefix)
 
 ## Files to Create
 
 - `apps/web-platform/infra/cloud-init-web-zot-seed.test.sh` — the render-and-execute harness
   plus its mutation section (Guards 1–3).
+- `scripts/followthroughs/web-fresh-boot-zot-8651.sh` — the #8651 closure probe (Phase 3.5).
+- `scripts/followthroughs/web-fresh-boot-zot-8651.test.sh` — its fixture test (AC13b).
 
 Explicitly **not** edited: `apps/web-platform/infra/soleur-host-bootstrap.sh` (coherence
 preflight — see Proposed Solution), `scripts/followthroughs/zot-soak-6122.sh` (its #8651 arm is
-kept verbatim), `apps/web-platform/infra/sentry/issue-alerts.tf` (existing rules already route
-the stages this plan emits).
+kept verbatim), `apps/web-platform/infra/sentry/issue-alerts.tf` (no new rule: the dark-boot
+detector is the dispatching job — see Observability; the NIC stages are already routed).
 
 ## Open Code-Review Overlap
 
@@ -549,9 +649,11 @@ Amend **ADR-096** (no new ordinal) with "Amendment 2026-09-23 (#8651) — the we
 site is migrated, by BAKE":
 
 - The web host now bakes `zot_pull_user`/`zot_pull_token` and uses the compile-time
-  `local.registry_endpoint`, like the dedicated host. Web fresh boots are zot-first
-  unconditionally; there is no runtime kill switch (the dark-safe empty-endpoint arm is
-  unreachable in this root, as the inngest amendment already says of its own).
+  `local.registry_endpoint`, like the dedicated host. Web fresh boots are zot-first for every
+  digest-pinned ref; a tag-only ref is never sent to plain-HTTP zot (no integrity) and fails
+  loud instead. There is no runtime kill switch.
+- **Replaces** the 2026-08-13 sentence "Everywhere else in the fleet, zot config is read from
+  Doppler at boot": after this change that is true of the deploy path (`ci-deploy.sh`) only.
 - **Correction:** the 2026-08-13 amendment's "Doppler answers EMPTY at the boot instant" was the
   #6985 tokenless source observed from outside; measured evidence (0 `app_zot` in 90 days).
   The bake stands on removing a network dependency from cold boot, not on that premise.
@@ -559,9 +661,13 @@ site is migrated, by BAKE":
   it cannot currently succeed (AP-016). This is not "break-glass": web fresh boot now depends
   entirely on zot reachability — the same consequence the inngest amendment states, now
   fleet-wide for fresh boots. Its retirement remains #8036 1d / ADR-096 5.3.
-- (Operational notes — the pre-pull NIC wait, the 150 s bound's inngest provenance, and the
-  `random_password.zot_pull` rotation consequence — live in `server.tf` beside the template-map
-  entries, not in the ADR.)
+- Cross-references (one line each, Phase 5.1b): **ADR-114** (its 2026-07-19 amendment names
+  `soleur-wait-nic` as the web first-boot NIC gate; a pre-pull wait now precedes it on every web
+  host) and **ADR-123** (the pre-pull wait follows its detect/emit/no-self-converge rule, skips
+  the #8539 networkd fallback, emits nothing on ready; its "GHCR fallback keeps it serving" line
+  is marked stale).
+- (Operational notes — the 150 s bound's inngest provenance and the `random_password.zot_pull`
+  rotation consequence — live in `server.tf` beside the template-map entries.)
 
 ### C4 views
 
@@ -569,11 +675,17 @@ All three model files were read for this assessment (`model.c4`, `views.c4`, `sp
 Elements involved, all already modeled: actor/system `hetzner` (web hosts, container
 cluster), `zotRegistry` (self-hosted zot, 10.0.1.30:5000), `ghcr` (write-only for private
 packages since #8036 1c), `doppler`, `sentry`. No new actor, system, container or data store;
-no access-relationship change. **One edge description becomes false and is edited:**
-`hetzner -> zotRegistry` "… at boot/deploy — dark-launch gated (attempts zot only when
-configured + /v2/-reachable + login ok) …" → fresh boot: baked endpoint + baked pull
-credential, zot-first unconditionally after a bounded private-NIC wait; deploy path unchanged.
-No derived cardinality in edge prose changes; `c4-count-parity.test.sh` is run to prove it.
+no access-relationship change. `doppler -> hetzner` stays accurate (it describes only the
+terminal block's env download). **Three descriptions become false and are edited** (deepen-plan
+architecture review found the last two): (1) the `hetzner -> zotRegistry` edge's "at boot/deploy
+— dark-launch gated (attempts zot only when configured + /v2/-reachable + login ok)" → fresh
+boot: baked endpoint + baked pull credential, zot-first for digest-pinned refs after a bounded
+private-NIC wait; its "SOLE … no second registry" claim scoped to the deploy path; (2) the
+`hetzner` element's "At first boot a fresh host pulls the web app image from GHCR"; (3) the
+`ghcr` system's "THE HOST-SIDE CODE PATH IS DELETED", scoped to the deploy path (the fresh-boot
+GHCR leg stays, attempted only after a successful login, under #8036 1d). `model.likec4.json` is
+regenerated. No derived cardinality in edge prose changes; `c4-count-parity.test.sh` is run to
+prove it.
 
 ### Sequencing
 
@@ -617,38 +729,59 @@ traffic). Blast radius: web-2 only.
 
 None — no new vendor resource.
 
+## Downtime & Cutover
+
+- **Offline-inducing operation:** the Phase 6 delivery is a `-/+` replace of `hcloud_server.web["web-2"]`.
+  The merge itself changes no host (`ignore_changes = [user_data, …]`).
+- **Surface affected:** none that serves users. `web-1` is the sole live origin and is refused by
+  the replace job by name; `web-2` is already dark (left dark as #8651 evidence) and stays out of
+  service after the replace. There is no traffic to drain.
+- **Zero-downtime path:** this *is* the blue-green half — the new template is proven on a
+  non-serving host before any serving host is ever rebuilt from it. A future replace of `web-1`
+  (not in scope) must be preceded by a green web-2 boot from this template and follow ADR-068's
+  cutover (weight, A record, connector moved atomically); that is recorded here, not scheduled.
+- **Per-stage verification / rollback:** stage = boot trail verdict (`fresh_boot_ready` + the
+  image-origin line). A dark boot costs nothing user-visible; rollback is "leave web-2 dark and
+  fix forward", identical to the state before this plan.
+
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "Per fresh web-host boot: message 'app image served by zot' stage app_zot (detail zot_login=ok ghcr_login=<ok|fail> nic_w=N), then fresh_boot_ready; on a non-converged NIC additionally 'soleur-cloud-init boot stage' stage private_nic_timeout|private_nic_probe_fault. All carry host_name. The replace job's boot trail prints the newest image-origin event for the host."
+  what: "Per fresh web-host boot: message 'app image served by zot' stage app_zot (detail 'zot_login=ok ghcr_login=<ok|fail> nic=<ready|timeout|probe_fault>:<s>'), then fresh_boot_ready; on a non-converged NIC additionally 'soleur-cloud-init boot stage' stage private_nic_timeout|private_nic_probe_fault. All carry host_name. The ready NIC outcome deliberately emits no event of its own (its value rides the app_zot detail). The dispatching job's boot trail prints the newest image-origin event for the host outside its 8-event slice."
   cadence: "per fresh web-host boot (runcmd is once-per-instance)"
-  alert_target: "The dispatching job's boot-trail step (web-host-create / web-host-replace) turns red on a stage=pull fatal — web_terminal_boot_fatal does not page a lone seed fatal (#6982 strict >1); Sentry email via web_private_nic_boot_gate (private_nic_timeout, private_nic_probe_fault) and zot_mirror_fallback_rate (app_ghcr_fallback, app_ghcr_served)"
-  configured_in: "apps/web-platform/infra/sentry/issue-alerts.tf (existing rules); emitters in apps/web-platform/infra/cloud-init.yml _emit"
+  alert_target: "Layer 6 — workflow run log ::error:: from fresh-host-boot-trail.sh in the dispatching job (web_host_create / web_host_replace), fed by the baked-DSN Sentry event; Sentry monitor web_private_nic_boot_gate (private_nic_timeout, private_nic_probe_fault); Sentry monitor zot_mirror_fallback_rate (app_ghcr_fallback, app_ghcr_served)"
+  configured_in: "apps/web-platform/infra/scripts/fresh-host-boot-trail.sh; apps/web-platform/infra/sentry/issue-alerts.tf (existing rules); emitters in apps/web-platform/infra/cloud-init.yml _emit"
 
 error_reporting:
   destination: "Sentry project web-platform via the baked var.sentry_dsn (fires before Doppler/docker)"
-  fail_loud: "'soleur-hostscript-seed failed' stage=pull with detail 'ghcr=[login=fail,not-attempted] nic_w=N zot=[login=…] pull_err: …' (≤200 chars); the web-host-create/replace job's boot-trail step turns red with that detail"
+  fail_loud: "'soleur-hostscript-seed failed' stage=pull, detail 'nic=<…>:<s> zot=[login=…,n=…,cause=…] ghcr=[login=…,pull=…] pull_err: <redacted tail>' (≤200 chars, fixed fields first); the dispatching job's boot-trail step emits ::error:: 'booted DARK at stage pull: <detail>'"
 
 failure_modes:
   - mode: "zot login fails (bad/rotated baked token, zot auth down)"
-    detection: "fatal detail zot=[login=fail] plus the login tail on stage=pull"
-    alert_route: "dispatching job's boot-trail step red"
-  - mode: "zot pull fails (unreachable, manifest/blob unknown after GC)"
-    detection: "fatal detail zot=[login=ok] pull_err: <registry tail>"
-    alert_route: "dispatching job's boot-trail step red"
-  - mode: "private NIC never converges within 150 s"
-    detection: "private_nic_timeout warning (boot continues; zot leg then fails and names itself)"
-    alert_route: "web_private_nic_boot_gate"
+    detection: "fatal detail zot=[login=fail,…,cause=auth] (login tail, redacted)"
+    alert_route: "layer 6: workflow run log ::error:: from fresh-host-boot-trail.sh in the dispatching job"
+  - mode: "zot unreachable (no route, refused, i/o timeout, NIC absent)"
+    detection: "fatal detail zot=[…,cause=unreach|timeout] with nic=<outcome>:<s> in the same event"
+    alert_route: "layer 6: workflow run log ::error:: from fresh-host-boot-trail.sh in the dispatching job"
+  - mode: "pinned digest absent from zot (GC, unmirrored release)"
+    detection: "fatal detail zot=[login=ok,…,cause=manifest]"
+    alert_route: "layer 6: workflow run log ::error:: from fresh-host-boot-trail.sh in the dispatching job"
+  - mode: "tag-only image ref (break-glass create with :latest)"
+    detection: "fatal detail zot=[…,cause=unpinned] ghcr=[login=fail,…]"
+    alert_route: "layer 6: workflow run log ::error:: (break-glass local apply: the operator's own terminal)"
+  - mode: "private NIC never converges within 75x2 s"
+    detection: "private_nic_timeout warning (boot continues; a failing zot leg then names cause=unreach)"
+    alert_route: "Sentry monitor web_private_nic_boot_gate"
   - mode: "ip probe cannot run"
     detection: "private_nic_probe_fault warning"
-    alert_route: "web_private_nic_boot_gate"
+    alert_route: "Sentry monitor web_private_nic_boot_gate"
   - mode: "GHCR served the boot (only possible if a valid GHCR credential is restored)"
     detection: "app_ghcr_fallback / app_ghcr_served warning"
-    alert_route: "zot_mirror_fallback_rate"
+    alert_route: "Sentry monitor zot_mirror_fallback_rate"
 
 logs:
-  where: "Sentry events (tags stage, host_name, host_id, image_ref, detail); on-host /run/soleur-pull.log and /run/soleur-zot-login.log (tmpfs, diagnostic only — never required)"
+  where: "Sentry events (tags stage, host_name, host_id, image_ref, detail); on-host /run/soleur-pull.log and /run/soleur-zot-login.log (tmpfs, mode 0600, diagnostic only — never required)"
   retention: "Sentry 90 days; /run until reboot"
 
 discoverability_test:
@@ -656,6 +789,15 @@ discoverability_test:
   expected_output: "app_zot"
   credentials_required: "Sentry read token as SENTRY_ACTIONS_RO_TOKEN (GitHub secret; locally Doppler soleur/prd SENTRY_AUTH_TOKEN) — a fresh boot's image origin is recorded only in Sentry events; no unauthenticated endpoint exposes it"
 ```
+
+**Why no new Sentry rule for the seed fatal.** `web_terminal_boot_fatal`'s `value = 1` is a
+strict `>1` (#6982 note) and the seed fatal is its own message group, so Sentry alone does not
+page a single dark web boot. The detector is the dispatching job: every web fresh boot is born by
+`web_host_create` or `web_host_replace` (the merge-triggered apply HALTs on host creates), and
+`fresh-host-boot-trail.sh` turns the job red on the fatal. Its two exit-0 paths are both still
+loud: a failed job is already red, and an unbound read token on a successful apply emits an
+`::error::` annotation ("the read was the point of the step"). The only unwatched path is the
+break-glass local apply, where the operator is the reader.
 
 ## Encryption Posture
 
@@ -668,12 +810,19 @@ at_rest:
     does_not_defend: "anyone with root on the host, Hetzner project API access, or a process that can reach the metadata endpoint can read a read-only zot pull credential (strictly weaker than the doppler_token already present)"
     disclosed_as: not-publicly-claimed
     live_verification: "unavailable:no metadata-API exposure probe; posture inherited from the existing ghcr_read_token/doppler_token bake"
+  - store: "/root/.docker/config.json on each web host (docker login writes base64 zot-pull:<token>, 0600) and /var/lib/cloud/instance/scripts/runcmd (0700) — both already hold the GHCR credential today"
+    mechanism: plaintext-exception
+    evidence: "apps/web-platform/infra/cloud-init.yml seed item docker login; same class as the deploy path's zot login and the ghcr_read_token bake"
+    defends_against: "non-root local users (file modes)"
+    does_not_defend: "root on the host, a disk snapshot of the boot volume, or any process running as root"
+    disclosed_as: not-publicly-claimed
+    live_verification: "unavailable:no host-side file-mode probe without SSH"
 in_transit:
   - connection: "web host (fresh boot) -> zot registry 10.0.1.30:5000"
     enforced_at: "apps/web-platform/infra/cloud-init.yml daemon.json insecure-registries [\"${registry_endpoint}\"] + the seed-block docker login/pull"
     tls: "none (plain HTTP on the Hetzner private network, by design)"
     cert_verification: off
-    does_not_defend: "a passive on-net attacker on 10.0.1.0/24 can read image bytes AND the zot pull credential (HTTP Basic); integrity of the payload comes from the @sha256 digest pin, not TLS"
+    does_not_defend: "a passive on-net attacker on 10.0.1.0/24 can read image bytes AND the zot pull credential (HTTP Basic; read-only per cloud-init-registry.yml accessControl, shared with the inngest host via random_password.zot_pull); payload integrity comes from the @sha256 digest pin, not TLS — which is why a tag-only ref is never rewritten to zot"
     disclosed_as: not-publicly-claimed
 exception:
   justification: "the existing ledgered private-network-only zot link (row 'web hosts -> zot registry'), extended from the deploy path to fresh boot; payload integrity via digest pin"
@@ -686,10 +835,12 @@ exception:
 
 ### Guard 1 — web seed pull resolves zot-first without Doppler, and a zot failure names itself
 
-**Property.** On a fresh web boot with a non-empty baked endpoint, the first `docker pull` of
-the app image targets the zot ref, no `doppler` process is spawned between the start of the
-host-script extraction item and that pull, and any exit of the item at `STAGE=pull` leaves a
-detail naming the zot leg's login and pull outcome.
+**Property.** On a fresh web boot with a digest-pinned image ref, the first `docker pull` of
+the app image targets the zot ref (a tag ref never does), the zot login precedes it and follows
+the daemon's `insecure-registries` write, no `doppler` process is spawned in the joined items,
+the pull token reaches `docker login` only via `--password-stdin` and appears in no recorded
+Sentry body or `/run` file, and any exit at `STAGE=pull` leaves a ≤200-char detail whose fixed
+fields name the NIC outcome, the zot leg's login/attempts/cause and the GHCR leg's outcome.
 
 **Assembly.** The single chokepoint is the host-script extraction runcmd item of the RENDERED
 `cloud-init.yml` (terraform `templatefile` render, not the raw template), executed under stubs.
@@ -708,8 +859,12 @@ when `web_colocate_inngest`) is covered by the census in Guard 3 and AC7, not by
 | 3 | Guard's own dispatch: the extractor matches no item (anchor renamed) | RED ("0 items executed" is a failure, not a pass) |
 | 4 | Second member after a compliant first: a later line in the same item reassigns `REF="$IMAGE_REF"` before the loop | RED |
 | 5 | Pull loop flips to GHCR regardless of the GHCR login outcome | RED (with GHCR login stub failing, a GHCR pull is attempted) |
+| 6 | Rewrite a tag-only ref (`…:latest`) to zot | RED (tag refs must stay off plain-HTTP zot) |
 | 7 | Fatal detail written without the zot leg (only `ghcr_login_fail …`) | RED |
-| 8 | REORDER: move the zot login after the pull loop (login still present) | RED (first pull runs unauthenticated; stub zot rejects unauthenticated pulls) |
+| 8 | REORDER: move the zot login after the pull loop (login still present) | RED (first pull runs unauthenticated; the stateful stub rejects it) |
+| 9 | Write the raw login/pull tail without the redaction `sed` | RED (the stub echoes the fake 40-char token to stderr; it appears in a POST body) |
+| 10 | Pass the token on argv (`docker login -p '${zot_pull_token}'` or via `sh -c`/`env`) | RED (static: `${zot_pull_token}` appears exactly once, in `printf '%s' '${zot_pull_token}' \| … docker login … --password-stdin`) |
+| 11 | Put the free-text tail before the fixed fields | RED (a 160-char stub error truncates `ghcr=[` out of the 200-char detail) |
 
 **Harness rows.**
 
@@ -721,15 +876,18 @@ when `web_colocate_inngest`) is covered by the census in Guard 3 and AC7, not by
 - H3 (must-PASS): zot login fails, zot pull fails, GHCR login fails → item exits non-zero AND
   the test PASSES because the detail names both legs (a guard that rejects every failure path
   would red here).
+- H4 (suite edit): make the docker stub stateless (pull succeeds without a prior login) → row 8
+  must RED through a separate assertion on login-before-pull order, not only through the stub.
 
 **Anchor.** Not a stored-value comparison.
 
 ### Guard 2 — pre-pull private-NIC wait is bounded, fail-open, and every non-ready outcome pages
 
-**Property.** Before the first private-net use in the seed item, the host waits at most 150 s
-for its own private address, never aborts the item, emits exactly one routed warning
+**Property.** Before the first private-net use in the seed item, the host waits for its own
+private address for at most 75 polls × 2 s — a **counter** bound, never a clock (`$SECONDS`/`date`
+under a no-op `sleep` stub would spin for real time) — never aborts the item, emits exactly one routed warning
 (`private_nic_timeout` or `private_nic_probe_fault`) on a non-ready outcome and none on the
-ready outcome, and records `nic_w=<s>` in the detail of whichever terminal event the item emits.
+ready outcome, and records `nic=<outcome>:<s>` in the detail of whichever terminal event the item emits.
 
 **Assembly.** The inline wait in the rendered seed item (single site) plus the routing contract
 in `sentry/issue-alerts.tf` `web_private_nic_boot_gate` (both warning stages must be in its
@@ -746,25 +904,31 @@ case is a member.
 | 4 | Second event after a compliant first: emit `private_nic_timeout` AND `private_nic_probe_fault` | RED (exactly one) |
 | 5 | Rename the timeout stage to `private_nic_wait_timeout` | RED (not in `web_private_nic_boot_gate`) |
 | 6 | REORDER: move the wait after the zot login | RED (the login stub records being called before the address appeared) |
+| 7 | Replace the counter with a deadline loop on `$SECONDS` | RED (harness runs the item under `timeout 20`; a timeout exits 2, never a pass) |
 
 **Harness rows.**
 
 - H1 (suite edit): make the `ip` stub ignore argv → the argv-validation row must RED
   (an argv-blind stub is the #6415 hole).
 - H2 (must-PASS): address appears on the 10th poll → PASS, no `private_nic_*` emit, `app_zot`
-  detail contains `nic_w=20`.
+  detail contains `nic=ready:20`.
+- H3 (must-PASS, non-canonical): render `private_ip=10.0.1.77`, stub `ip` reports it → PASS (the
+  check keys on the rendered address, not a literal).
 
 **Anchor.** Not a stored-value comparison.
 
-### Guard 3 — no Doppler invocation above the terminal block's exporting source
+### Guard 3 — no Doppler invocation (and no shell tracing) above the terminal block's exporting source
 
-**Property.** No `doppler` invocation exists in `cloud-init.yml` runcmd before the terminal
-block's `set -a; . /etc/default/webhook-deploy; set +a`, so no call site can run tokenless.
+**Property.** No `doppler` invocation — direct (`doppler secrets|run|configure`) or through a
+baked Doppler helper (`soleur-doppler-download`) — exists in `cloud-init.yml` runcmd before the
+terminal block's single `set -a; . /etc/default/webhook-deploy; set +a`, and no shell tracing
+(`set -x`, `set -o xtrace`, `sh -x`) exists anywhere in the file (tracing would print the baked
+tokens into `cloud-init-output.log`).
 
-**Assembly.** A census over the non-comment lines of `cloud-init.yml` between `runcmd:` and that
-anchor line, matching the call form (`doppler` followed by a subcommand — `secrets`, `run`,
-`configure`), not layout. Covers every item in that span, including the colocated-inngest item.
-The anchor itself is a member: if it is missing, the census has no end and must fail.
+**Assembly.** A census over the non-comment lines of `cloud-init.yml` between `runcmd:` and the
+anchor, matching the call forms above, not layout. The anchor must occur **exactly once** (a
+duplicated anchor in item 1 would silently move the census end). Covers every item in that span,
+including the colocated-inngest item.
 
 **Mutation matrix:**
 
@@ -772,16 +936,24 @@ The anchor itself is a member: if it is missing, the census has no end and must 
 |---|---|---|
 | 1 | Restore `_emit`'s `doppler secrets get SENTRY_DSN` fallback | RED |
 | 2 | Add a `doppler secrets get X` line in the seed item after a compliant file | RED |
-| 3 | Guard's own dispatch: rename/remove the terminal `set -a; . /etc/default/webhook-deploy` anchor | RED (census span undefined is a failure, not 0) |
+| 3 | Guard's own dispatch: remove the terminal anchor | RED (undefined census span is a failure, not 0) |
 | 4 | Second member: a clean seed item plus a Doppler `ZURL=` read in the colocated-inngest item | RED |
+| 5 | Duplicate the anchor into runcmd item 1 | RED (anchor count ≠ 1) |
+| 6 | Move `soleur-doppler-download` above the anchor | RED |
+| 7 | Add `set -x` to the seed item | RED |
 
 **Harness rows.**
 
-- H1 (suite edit): census regex changed to match nothing → the floor assertion (the same census
-  run over the region *after* the anchor finds ≥1, proving the regex can match) must RED.
-- H2 (must-PASS): a comment line mentioning `doppler secrets get` above the anchor → PASS.
+- H1 (known-positive, replaces a below-anchor floor that can never be met — the terminal block
+  calls only `soleur-doppler-download`): inject `doppler secrets get X` just above the anchor in
+  a sandbox copy → census = 1.
+- H2 (baseline): the census over `git show 3aaaede525:apps/web-platform/infra/cloud-init.yml`
+  (the branch point — a fixed commit, so the row stays valid after this PR merges) = **11**
+  (measured at plan time) — proves the regex matches the real historic call forms.
+- H3 (must-PASS): a comment line mentioning `doppler secrets get` above the anchor → PASS.
 
-**Anchor.** Not a stored-value comparison.
+**Anchor.** H2's 11 is a stored count, but it is computed from `origin/main`'s pre-change file,
+at a pinned commit this PR cannot edit; it is a regex-reach check, not an integrity claim.
 
 ### Guard 4 — boot-trail QUERY ↔ emit lockstep includes the image-origin message
 
@@ -851,6 +1023,11 @@ break the replace preflight (see Proposed Solution).
   with `allow_unmirrored_reason`. Phase 6.2 therefore dispatches with the default pin (no
   `image_tag` override); if the pull still fails, the fatal names `pull_err: … manifest unknown`
   instead of a GHCR 401.
+- **Tag-only refs now fail instead of pulling.** A break-glass local create with `:latest`
+  boots dark (`cause=unpinned`) rather than pulling an unverifiable payload over plain HTTP.
+  Today that path is dark anyway (GHCR is dead); the change makes the reason explicit.
+- **The new suite's job is advisory.** `deploy-script-tests` is not a required check; a red run
+  does not block merge mechanically, so `soleur:ship` must read it (AC preamble).
 - **Emit latency.** Each `_emit` is `curl --connect-timeout 5 -m 8 --retry 1`; the NIC event
   adds one emit before the pull, so a throttling Sentry adds up to ~17-31 s to a boot (the #6500
   measurement for this flag set). Accepted: the alternative is an unobserved wait.
@@ -884,30 +1061,46 @@ Panel: DHH, Kieran, code-simplicity (eng), CTO (named devex lens). Applied (mech
 
 ### Pre-merge (CI-verifiable)
 
-- [ ] AC1 — `cloud-init-web-zot-seed.test.sh` executes the **rendered** seed item under stubs
-  and asserts: first `docker pull` argv is `<registry_endpoint>/jikig-ai/soleur-web-platform@sha256:…`
-  (digest carried unchanged); the `doppler` stub's spawn log is empty for the whole item; the zot
-  `docker login` precedes the first pull; `/run/soleur-image-ref` holds the zot ref on success.
-  (Guard 1; `apps/web-platform/infra/cloud-init-web-zot-seed.test.sh`.)
+`cloud-init-web-zot-seed.test.sh` runs in the `deploy-script-tests` job, which is **advisory**
+(not in `ruleset-ci-required.tf`), so AC1–AC5 mean "green in that job on the final PR head",
+checked by `soleur:ship` like any other job, not "a required check".
+
+- [ ] AC1 — `cloud-init-web-zot-seed.test.sh` executes the **rendered** runcmd item 1 + seed item
+  under stubs and asserts: first `docker pull` argv is
+  `<registry_endpoint>/jikig-ai/soleur-web-platform@sha256:…` (digest carried unchanged); a
+  tag-only render (`image_name=…:latest`) never pulls from the endpoint; the `doppler` stub's
+  spawn log is empty; `/etc/docker/daemon.json`'s `insecure-registries` write precedes the zot
+  `docker login`, which precedes the first pull; `${zot_pull_token}` appears exactly once in the
+  rendered file, in the `printf '%s' … | … docker login … --password-stdin` form;
+  `/run/soleur-image-ref` holds the zot ref on success; a sentinel after `STAGE=extract` never
+  prints. (Guard 1.)
 - [ ] AC2 — Same suite, failure arms: zot pull failing (stub error text 160 chars) + GHCR login
-  failing → item exits non-zero, **no** GHCR `docker pull` is attempted, and the Sentry POST
-  body recorded by the `curl` stub carries message `soleur-hostscript-seed failed`,
-  `stage":"pull"`, a detail of **≤200 chars** containing both `ghcr=[login=fail,not-attempted]`
-  and `zot=[`, and `host_name":"soleur-web-2"` (render with `host_name="soleur-web-2"`). GHCR login succeeding → GHCR flip attempted and
+  failing → item exits non-zero, **no** GHCR `docker pull` is attempted, and the Sentry POST body
+  recorded by the `curl` stub carries message `soleur-hostscript-seed failed`, `stage":"pull"`,
+  `host_name":"soleur-web-2"` (render with `host_name="soleur-web-2"`), and a detail of **≤200
+  chars** beginning with the fixed fields `nic=`, `zot=[login=`, `cause=`, `ghcr=[login=fail,pull=not-attempted]`.
+  With the login stub failing and echoing the fake 40-char token to stderr, the token appears in
+  no POST body and no `/run` file. `cause` is `auth` / `unreach` / `manifest` / `timeout` for the
+  four corresponding stub errors. GHCR login succeeding → GHCR flip attempted and
   `app_ghcr_fallback` emitted exactly once.
-- [ ] AC3 — NIC wait: address present → no `private_nic_*` emit, 0 sleeps, `nic_w=0` in the
-  `app_zot` detail; converging on poll 10 → `nic_w=20`; never present → one `private_nic_timeout`
-  after exactly 75 recorded 2 s sleeps and the item **continues**; `ip` failing every call → one
-  `private_nic_probe_fault`; empty `private_ip` render → `private_nic_probe_fault`. (Guard 2.)
-- [ ] AC4 — The census of `doppler` invocations in `cloud-init.yml` runcmd above the terminal
-  block's `set -a; . /etc/default/webhook-deploy; set +a` is **0**, and the same census below
-  the anchor is ≥ 1 (the regex can match). Measured at plan time on `origin/main`: **11** such
-  sites above the anchor (`_emit` DSN ×2, GHCR Doppler ×4, zot login ×3, seed `ZURL=`,
-  colocated-inngest `ZURL=`) — exactly the set this plan deletes or bakes. (Guard 3.)
+- [ ] AC3 — NIC wait: address present → no `private_nic_*` emit, 0 `sleep 2` records,
+  `nic=ready:0` in the `app_zot` detail; converging on poll 10 → `nic=ready:20`; never present → one
+  `private_nic_timeout` after exactly 75 recorded `sleep 2` calls, the item **continues**, and the
+  detail carries `nic=timeout:150`; `ip` failing every call → one `private_nic_probe_fault`;
+  empty `private_ip` render → `private_nic_probe_fault`; the whole item runs under `timeout 20`.
+  (Guard 2.)
+- [ ] AC4 — The census of Doppler invocations (`doppler secrets|run|configure`,
+  `soleur-doppler-download`) in `cloud-init.yml` runcmd above the terminal block's
+  `set -a; . /etc/default/webhook-deploy; set +a` is **0**; that anchor occurs exactly once; the
+  known-positive injection counts 1; the same census over
+  `git show 3aaaede525:apps/web-platform/infra/cloud-init.yml` counts **11** (`_emit` DSN ×2,
+  GHCR Doppler ×4, zot login ×3, seed `ZURL=`, colocated-inngest `ZURL=` — exactly the set this
+  plan deletes or bakes); no `set -x` / `set -o xtrace` / `sh -x` in the file. (Guard 3.)
 - [ ] AC5 — The mutation section of `cloud-init-web-zot-seed.test.sh` drives every Guard 1–3
   mutation row RED and every must-PASS harness row green; each case confirms its mutation
   landed; harness failures exit 2. The cross-template parity assertion (web fatal detail and
-  inngest `oci-pull-ALL-LEGS-FAILED` both use `zot=[` / `ghcr=[`) passes.
+  inngest `oci-pull-ALL-LEGS-FAILED` share the per-leg wording, comments stripped) passes. Under
+  `CI=true` with terraform absent the suite FAILs rather than skipping its render leg.
 - [ ] AC6 — `git grep -nE '^[^#]*doppler secrets get (ZOT_|GHCR_)' apps/web-platform/infra/cloud-init.yml`
   prints nothing, and `git grep -nE '^[^#]*ghcr_login_ok_refetch' apps/web-platform/infra/cloud-init.yml`
   prints nothing (the `^[^#]*` anchor keeps a comment that documents the removal from
@@ -915,32 +1108,39 @@ Panel: DHH, Kieran, code-simplicity (eng), CTO (named devex lens). Applied (mech
 - [ ] AC7 — `git grep -nE '^[^#]*ZURL=.*doppler' apps/web-platform/infra/cloud-init.yml`
   prints nothing (both the seed site and the colocated-inngest site are baked).
 - [ ] AC8 — `fresh-host-boot-trail.sh` `QUERY=` contains `message:"app image served"`;
-  `soleur-host-bootstrap-observability.test.sh` AC8 passes both directions and rejects a
-  metacharacter-bearing literal (Guard 4); with a fixture event list of 12 events whose oldest is
-  `app_zot`, the trail's output still contains an `app_zot` line (the out-of-slice origin line),
-  and `--image-origin` with no token prints `TRANSIENT:` and exits 2.
+  `soleur-host-bootstrap-observability.test.sh` AC8 passes both directions (reverse pair is the
+  full `app image served by zot`) and rejects a metacharacter-bearing literal (Guard 4); with a
+  fixture event list of 12 events whose oldest is `app_zot`, the trail's output still contains an
+  `app_zot` line (the out-of-slice origin line); `--image-origin` with no token, a non-200, or a
+  full page prints `TRANSIENT:` and exits 2.
 - [ ] AC9 — `plugins/soleur/test/cloud-init-user-data-size.test.ts` passes in CI; if
   `WEB_GZIP_BUDGET` moved, the diff shows the CI-measured render and the rationale comment in the
-  file's established shape.
-- [ ] AC10 — `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts`,
-  `cloud-init-ghcr-seed-login.test.sh` (with §1A re-scoped), `cloud-init-inngest-bootstrap.test.sh`
-  (AC7 render with the two new map vars), `nic-wait-gate.test.sh`, the C4 tests
-  (`c4-code-syntax.test.ts`, `c4-render.test.ts`, `plugins/soleur/test/c4-count-parity.test.sh`),
+  file's established shape; the PR body records the post-change headroom.
+- [ ] AC10 — `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` (tag
+  pin loosened to an open prefix, `host_name` after `detail`), `cloud-init-ghcr-seed-login.test.sh`
+  (checks 1/1b and §1A retired with absence assertions), `soleur-host-bootstrap-observability.test.sh`
+  (AC19(2) retired, AC18 green), `cloud-init-inngest-bootstrap.test.sh` (AC7 render with the two
+  new map vars), `nic-wait-gate.test.sh`, the C4 tests (`c4-code-syntax.test.ts`,
+  `c4-render.test.ts`, `plugins/soleur/test/c4-count-parity.test.sh`),
   `.github/scripts/validate-infra-templates.sh`, and `python3 scripts/lint-encryption-posture.py`
   all pass.
-- [ ] AC11 — `git diff --name-only origin/main...HEAD` contains no path under
-  `apps/web-platform/infra/` that is listed in `local.host_script_files` (so
-  `host_scripts_content_hash` is unchanged and the replace job's coherence preflight still
-  accepts web-1's running image).
+- [ ] AC11 — `git diff --name-only origin/main...HEAD` contains no path listed in
+  `local.host_script_files` (so `host_scripts_content_hash` is unchanged and the replace job's
+  coherence preflight still accepts web-1's running image).
 - [ ] AC12 — Deterministic: `resource "hcloud_server" "web"`'s `lifecycle { ignore_changes = [...] }`
   in `server.tf` still lists `user_data` (asserted by the new seed test reading `server.tf`, so the
   property is about the diff, not about live state). Corroborating, not gating: the PR's
   infra-validation `terraform plan` shows no `user_data`-driven change to any `hcloud_server.web`
   instance (unrelated live drift can appear there and is out of this AC's scope).
-- [ ] AC13 — ADR-096 carries "Amendment 2026-09-23 (#8651)" with the correction of the
-  "Doppler answers EMPTY" premise; `grep -c 'dark-launch gated (attempts zot only when configured + /v2/-reachable + login ok)'
-  knowledge-base/engineering/architecture/diagrams/model.c4` returns 0 (1 at plan time) and the
-  edge describes the baked, zot-first fresh boot.
+- [ ] AC13 — ADR-096 carries "Amendment 2026-09-23 (#8651)" (premise correction + replaced
+  "Everywhere else in the fleet…" sentence); ADR-114 and ADR-123 carry their cross-references;
+  `grep -c 'dark-launch gated (attempts zot only when configured + /v2/-reachable + login ok)'
+  knowledge-base/engineering/architecture/diagrams/model.c4` returns 0 (1 at plan time), and the
+  `hetzner` element, the `hetzner -> zotRegistry` edge and the `ghcr` system scope their
+  "deleted/SOLE" claims to the deploy path; `model.likec4.json` is regenerated in the same commit.
+- [ ] AC13b — `scripts/followthroughs/web-fresh-boot-zot-8651.sh` exits 2 with `TRANSIENT:` when
+  `SENTRY_ACTIONS_RO_TOKEN` is unset, and exits 1 against a stubbed image-origin output with no
+  `app_zot` line newer than a given `earliest` (a small fixture test beside it).
 - [ ] AC14a — The PR body's first line answers "merging this alone mutates production: no" with
   the `ignore_changes = [user_data, …]` reason.
 - [ ] AC14 — PR body uses `Ref #8651`, `Ref #6985`, `Ref #6500`, `Ref #6122`, `Ref #6438`,
@@ -951,20 +1151,22 @@ Panel: DHH, Kieran, code-simplicity (eng), CTO (named devex lens). Applied (mech
 
 ### Post-merge (delivery — the only proof)
 
-- [ ] AC15 — `web-host-replace` of `web-2` (`confirm=REPLACE-web-2`) completes with the
-  "Surface fresh-host Sentry breadcrumb trail" step GREEN, and its trail shows, for
-  `host_name=soleur-web-2` after the run anchor: an `app_zot` event whose detail contains
-  `ghcr_login=fail` and `nic_w=`, and `fresh_boot_ready`. No `soleur-hostscript-seed failed`
-  event.
-- [ ] AC16 — The replace job's step summary contains the image-origin line for
-  `soleur-web-2` showing `app_zot` with `ghcr_login=fail` in its detail, timestamped after the
-  run anchor; the same line is reproducible locally with `fresh-host-boot-trail.sh
-  --image-origin soleur-web-2` (token injected from Doppler, never printed).
-- [ ] AC17 — #8651 is closed as **completed** only after AC15–AC16, with the run URL and event
-  ids in the closing comment; `web-2` remains out of service. #6985 is closed as completed in the
-  same step if its acceptance list is met (token scope, regression assertion, `:latest` scoped
-  out with its guard, live verification); otherwise it gets a comment listing what remains.
-  #6500, #6122, #6438 each get a `Ref` comment with the run URL; none is closed.
+- [ ] AC15 — `web-host-replace` of `web-2` (`confirm=REPLACE-web-2`, no `image_tag` override)
+  completes with the "Surface fresh-host Sentry breadcrumb trail" step GREEN, and its trail shows,
+  for `host_name=soleur-web-2` after the run anchor: an `app_zot` event whose detail contains
+  `zot_login=ok` and a `nic=` field (its `ghcr_login=` value is recorded — `fail` while AP-016
+  holds), and `fresh_boot_ready`. No `soleur-hostscript-seed failed` event and no
+  `app_ghcr_fallback`/`app_ghcr_served` event for that host.
+- [ ] AC16 — The replace job's step summary contains the image-origin line for `soleur-web-2`
+  showing `app_zot`, timestamped after the run anchor; the same line is reproducible locally with
+  `fresh-host-boot-trail.sh --image-origin soleur-web-2` (token injected from Doppler, never
+  printed) within its 14-day window.
+- [ ] AC17 — #8651 is closed as **completed** only after AC15–AC16 — by the session with the run
+  URL and event ids, or by the follow-through sweeper on its probe's PASS; `web-2` remains out of
+  service. #6985 is closed as completed in the same step if its acceptance list is met (token
+  scope, regression assertion, `:latest` handled — tag refs never go to zot, live verification);
+  otherwise it gets a comment listing what remains. #6500, #6122, #6438 each get a `Ref` comment
+  with the run URL; none is closed.
 
 ## Domain Review
 
@@ -990,15 +1192,19 @@ No Product/UX surface (no UI file in Files to Edit/Create); Product gate: NONE.
 ## Test Scenarios
 
 1. Happy path: NIC ready at t=0, zot login ok, zot pull ok, GHCR login fails → `app_zot`
-   (detail `zot_login=ok ghcr_login=fail nic_w=0`), image ref file = zot ref, item exits 0.
-2. Late NIC: address appears at poll 10 → no NIC emit, then as (1) with `nic_w=20`.
+   (detail `zot_login=ok ghcr_login=fail nic=ready:0`), image ref file = zot ref, item exits 0.
+2. Late NIC: address appears at poll 10 → no NIC emit, then as (1) with `nic=ready:20`.
 3. NIC never converges → `private_nic_timeout`, zot login/pull fail (network unreachable stub)
-   → fatal `stage=pull`, detail names `zot=[login=fail,…] ghcr=[login=fail,not-attempted]`.
+   → fatal `stage=pull`, detail names `nic=timeout:150 zot=[login=fail,…,cause=unreach] ghcr=[login=fail,pull=not-attempted]`.
 4. zot manifest unknown (GC'd pin) → fatal detail carries the registry's `manifest unknown`
    tail within the 200-char cap.
 5. GHCR credential restored (login stub ok) + zot down → flip after the bounded zot attempts,
    `app_ghcr_fallback` once, then `app_ghcr_served`.
 6. Colocated-inngest render (`web_colocate_inngest=true`) → Guard 3's census is still 0.
+6b. Tag-only render (`image_name=ghcr.io/jikig-ai/soleur-web-platform:latest`) → no pull from the
+   endpoint; fatal detail `cause=unpinned`.
+6c. Cause classification: stub errors `unauthorized`, `manifest unknown`, `connect: no route to
+   host`, and a `timeout` rc 124 → `cause=auth|manifest|unreach|timeout` respectively.
 7. Template render: the rendered YAML is valid (AC7 leg of `cloud-init-inngest-bootstrap.test.sh`)
    and contains no unescaped `${` shell expansion that terraform would have consumed.
 
