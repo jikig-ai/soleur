@@ -228,7 +228,7 @@ describe("assessRender — three gates", () => {
   });
 
   it("does not false-fail on a workspace path containing the ANCHORED marker words", () => {
-    // regenerate-c4-model.sh anchors two of its three alternations for exactly
+    // render-c4-model.sh anchors two of its three alternations for exactly
     // this reason: likec4 echoes `workspace: /abs/path`, so `^Invalid ` and the
     // indented `Line N:` form cannot match a repo path mid-line.
     const diagnostics = "workspace: /home/u/Invalid Line 3: dir/repo\n";
@@ -237,7 +237,7 @@ describe("assessRender — three gates", () => {
 
   it("DOES trip on `Could not resolve` anywhere on the line — faithful to the shell", () => {
     // Deliberately unanchored upstream ("`Could not resolve` is a distinctive
-    // likec4 phrase", regenerate-c4-model.sh:92). A checkout path containing that
+    // likec4 phrase", render-c4-model.sh's DIAG_RE comment). A checkout path containing that
     // exact phrase would false-FAIL. That residual risk is inherited on purpose:
     // AC5 requires mirroring the shell gate, and diverging here would make the
     // producer and the script disagree about what a source fault is.
@@ -337,12 +337,12 @@ describe("generateC4", () => {
 // ---------------------------------------------------------------------------
 
 describe("drift guards", () => {
-  const regenScript = readFileSync(join(REPO_ROOT, "scripts/regenerate-c4-model.sh"), "utf8");
+  const regenScript = readFileSync(join(REPO_ROOT, "plugins/soleur/scripts/render-c4-model.sh"), "utf8");
 
   // AC4. Both-gates validation (diagnostic stream AND element count) is only safe
   // while the pin holds — likec4's diagnostic WORDING is version-specific, which is
   // exactly why c4-render.ts refuses to gate on it.
-  it("pins likec4 to the same version as regenerate-c4-model.sh", () => {
+  it("pins likec4 to the same version as render-c4-model.sh", () => {
     const m = regenScript.match(/^LIKEC4_VERSION="([^"]+)"/m);
     expect(m).not.toBeNull();
     expect(LIKEC4_VERSION).toBe(m![1]);
@@ -360,7 +360,7 @@ describe("drift guards", () => {
   // across a probe corpus rather than string equality — the shell uses POSIX
   // `[[:space:]]` and JS uses `\s`, so a literal comparison would be a false
   // signal in both directions.
-  it("matches regenerate-c4-model.sh's DIAG_RE on an identical probe corpus", () => {
+  it("matches render-c4-model.sh's DIAG_RE on an identical probe corpus", () => {
     const m = regenScript.match(/^DIAG_RE='([^']+)'/m);
     expect(m).not.toBeNull();
     const shellEquivalent = new RegExp(m![1].replace(/\[\[:space:\]\]/g, "\\s"), "m");
@@ -388,7 +388,7 @@ describe("drift guards", () => {
   it("contains no instruction to mirror c4-render.ts's stderr handling", () => {
     const src = readFileSync(join(REPO_ROOT, "plugins/soleur/lib/c4-from-components.ts"), "utf8");
     expect(src).not.toMatch(/mirror\s+c4-render/i);
-    expect(src).toMatch(/regenerate-c4-model\.sh/);
+    expect(src).toMatch(/render-c4-model\.sh/);
   });
 });
 

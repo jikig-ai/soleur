@@ -235,7 +235,7 @@ export function runProducer(root: string): { code: number; marker: string } {
   // On this repo the same path replaced a 755,747-byte artifact carrying operator-
   // positioned `manualLayouts` geometry.
   //
-  // `scripts/regenerate-c4-model.sh:75-118` renders to a temp dir for exactly this
+  // `render-c4-model.sh` (beside this file) renders to a temp dir for exactly this
   // reason and states it: "On error we never publish, so a broken .c4 can never
   // clobber the good committed artifact." There is a post-mortem in this repo for
   // that clobber having already happened once. The previous version of this file
