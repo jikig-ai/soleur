@@ -32,7 +32,7 @@ provider "github" {
   owner = "jikig-ai"
   token = var.github_plan_actions_credential != "" && var.github_infra_app_private_key == "" ? var.github_plan_actions_credential : null
 
-  # (#8209, ADR-239) Three auth modes, selected by which variables are non-empty:
+  # (#8209, ADR-241) Three auth modes, selected by which variables are non-empty:
   # INFRA (github_infra_app_private_key set) is the Tier-B `soleur-infra` App and the
   # mode every apply runs in after the operator sequence; TOKEN
   # (github_plan_actions_credential set, no infra key) is the PR plan job's own

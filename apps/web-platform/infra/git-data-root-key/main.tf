@@ -15,7 +15,7 @@
 #   - Every key-bearing resource carries prevent_destroy. A rotation is a reviewed PR that lifts it.
 terraform {
   backend "s3" {
-    # (#8209, ADR-239 D7) PARTIAL BACKEND — the bucket is supplied at init time as
+    # (#8209, ADR-241 D7) PARTIAL BACKEND — the bucket is supplied at init time as
     # `-backend-config=bucket=$BUCKET`, NOT pinned here.
     #
     # WHY. A distinct KEY inside a SHARED bucket is not isolation. Measured (M7):
@@ -93,7 +93,7 @@ provider "github" {
   owner = "jikig-ai"
   token = var.github_plan_actions_credential != "" && var.github_infra_app_private_key == "" ? var.github_plan_actions_credential : null
 
-  # (#8209, ADR-239) Three auth modes, selected by which variables are non-empty:
+  # (#8209, ADR-241) Three auth modes, selected by which variables are non-empty:
   # INFRA (github_infra_app_private_key set) is the Tier-B `soleur-infra` App and the
   # mode every apply runs in after the operator sequence; TOKEN
   # (github_plan_actions_credential set, no infra key) is the PR plan job's own

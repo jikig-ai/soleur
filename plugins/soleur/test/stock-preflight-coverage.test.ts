@@ -262,7 +262,7 @@ function jobUses(job: Job): string[] {
   return (job.steps ?? []).map((s) => String((s as { uses?: string }).uses ?? ""));
 }
 
-// (#8209, ADR-239) THE PROPERTY, RESTATED — "the job OBTAINS a Hetzner token", not "the job
+// (#8209, ADR-241) THE PROPERTY, RESTATED — "the job OBTAINS a Hetzner token", not "the job
 // performs this particular read".
 //
 // The property this guards is unchanged and still the one that matters: the stock preflight

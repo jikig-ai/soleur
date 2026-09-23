@@ -1,16 +1,16 @@
 ---
-title: "ADR-239: Terraform credentials are tiered; Tier B is delivered only through main-only environment secrets"
+title: "ADR-241: Terraform credentials are tiered; Tier B is delivered only through main-only environment secrets"
 status: proposed
 date: 2026-09-22
 issue: 8209
 supersedes: []
 amends:
   - ADR-220
-  - ADR-168
+  - ADR-169
 tags: [credentials, terraform, doppler, github-environments, r2, secrets, security]
 ---
 
-# ADR-239: Terraform credentials are tiered; Tier B is delivered only through main-only environment secrets
+# ADR-241: Terraform credentials are tiered; Tier B is delivered only through main-only environment secrets
 
 ## Status
 
@@ -164,11 +164,11 @@ replacement first.
   name**, deliberately, so it can never shadow the Tier-B value.
 - **Removals.** Tier A loses `DOPPLER_TOKEN_TF`, `HCLOUD_TOKEN` and `CF_API_TOKEN_R2` outright.
 - **The App key.** `GITHUB_APP_PRIVATE_KEY` is inherited from `prd`, so it cannot be deleted from
-  `prd_terraform`. It gets a **sentinel override**, `EVICTED_SEE_ADR_238`, which shadows the
+  `prd_terraform`. It gets a **sentinel override**, `EVICTED_SEE_ADR_241`, which shadows the
   inherited runtime key for the Tier-A token. A sentinel rather than an empty value, because Doppler
   may treat an empty branch-config value as "inherit"; a non-empty non-PEM value can be mistaken for
   neither inheritance nor a usable key. Both legacy App-token fallbacks refuse it with
-  `verdict=legacy_app_key_evicted`. `EVICTED_SEE_ADR_238` is the literal byte string as it already
+  `verdict=legacy_app_key_evicted`. `EVICTED_SEE_ADR_241` is the literal byte string as it already
   appears in `apps/web-platform/infra/variables.tf`, in `main.tf`'s auth-mode comment and in the
   runbook's eviction step; its ordinal is one below this ADR's and that is **not** to be "corrected"
   in place, because the post-eviction check (AC12) compares a sha256 of that exact string. If the

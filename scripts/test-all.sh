@@ -2270,7 +2270,7 @@ if want_scripts; then
   # `test-scripts` feeds the aggregate `test` job (ci.yml), which IS in the CI Required ruleset,
   # whereas the `lint-bot-statuses` job the other repo linters live in is advisory by design.
   run_suite "scripts/zot-mirror-diagnosis" bash scripts/zot-mirror-diagnosis.test.sh
-  # (#8209, ADR-239) The tiered credential loader. It EXTRACTS the `run:` body out of
+  # (#8209, ADR-241) The tiered credential loader. It EXTRACTS the `run:` body out of
   # .github/actions/infra-credentials/action.yml with PyYAML and EXECUTES it under the
   # runner's own shell against a fail-closed `doppler` stub — a grep over that YAML pins
   # its spelling and can say nothing about what any arm DECIDES. Explicit run_suite:

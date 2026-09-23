@@ -36,7 +36,7 @@ resource "doppler_secret" "git_data_root_ssh_private_key" {
   }
 }
 
-# --- #8209 / ADR-239: FORGET the repo-secret custody path --------------------
+# --- #8209 / ADR-241: FORGET the repo-secret custody path --------------------
 #
 # ADR-220 D4 already recorded this pair as a residual: `DOPPLER_TOKEN_GIT_DATA_ROOT` is
 # a REPO secret, so every workflow on every branch of this public repository can name

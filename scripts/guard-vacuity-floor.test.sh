@@ -282,7 +282,7 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # floor that backstops them, and it carries a pass+fail conservation check beside it. This
 # promotion SHRINKS the ledger 48 -> 47, which is the outcome the failure message asks for.
 # `.github/actions/infra-credentials/infra-credentials.test.sh` added by #8209 — the executable
-# test for the tiered Terraform credential loader (ADR-239). It lives under `.github/actions/`,
+# test for the tiered Terraform credential loader (ADR-241). It lives under `.github/actions/`,
 # a directory in NEITHER scope, so without this line it lands in UNCLASSIFIED and reddens the
 # closure arm by name, which is exactly what it did. Promoted rather than deferred, and the
 # ratchet deliberately not raised. It meets the covered bar on all three grounds: the floor is

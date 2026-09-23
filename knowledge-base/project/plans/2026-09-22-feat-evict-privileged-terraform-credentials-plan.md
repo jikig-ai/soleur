@@ -34,7 +34,7 @@ including the isolated `soleur-git-data-root`), `CF_API_TOKEN_R2` (account-wide 
 
 This plan does three things:
 
-1. It records the decision in a new ADR (**ADR-239, provisional ordinal**). Credentials are split
+1. It records the decision in a new ADR (**ADR-241, provisional ordinal**). Credentials are split
    into two tiers. **Tier A** holds whatever a branch workflow can reach, and it keeps only
    credentials whose disclosure is bounded. **Tier B** holds write and root-equivalent credentials.
    It is delivered only as **GitHub environment secrets** on environments whose deployment-branch
@@ -58,7 +58,7 @@ the operator runbook, **and** the residual issue filed in this plan (R1).
 | Issue claim | Measured reality (2026-09-22) | Plan response |
 |---|---|---|
 | "`prd_terraform` holds `GITHUB_APP_PRIVATE_KEY`" | True, and more. `prd_terraform` is a **branch config of `prd`** (`doppler configs -p soleur`: `prd_terraform root=false env=prd`). It *overrides* the key with a **distinct private key of the same soleur-ai App** (sha256 prefixes of the two values differ; a JWT signed with the `prd_terraform` key authenticates as `slug=soleur-ai`). The App has **3 installations, 2 of them outside `jikig-ai`**. | The Terraform copy is a separate, revocable App key. Terraform moves to a dedicated infra App and the soleur-ai Terraform key is deleted in the App settings (operator, last). The runtime key in `prd` is out of this PR's reach; it becomes residual **R1**. |
-| "Evict these four credentials from any config a branch workflow can name" | `DOPPLER_TOKEN_TF`, `CF_API_TOKEN_R2` and `HCLOUD_TOKEN` exist **only** in `prd_terraform` (not in `prd`), so deleting them there evicts them. `GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY` are also in `prd`, which `prd_terraform` inherits. | Three are evicted by deletion. For the App key, `prd_terraform` gets a sentinel override (`EVICTED_SEE_ADR_238`), and R1 tracks the `prd` copy. |
+| "Evict these four credentials from any config a branch workflow can name" | `DOPPLER_TOKEN_TF`, `CF_API_TOKEN_R2` and `HCLOUD_TOKEN` exist **only** in `prd_terraform` (not in `prd`), so deleting them there evicts them. `GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY` are also in `prd`, which `prd_terraform` inherits. | Three are evicted by deletion. For the App key, `prd_terraform` gets a sentinel override (`EVICTED_SEE_ADR_241`), and R1 tracks the `prd` copy. |
 | "The PR plan job needs these credentials" (implicit in "changes every plan/apply workflow") | Measured locally with Terraform 1.10.5 against the web-platform root: `terraform plan -refresh=false` succeeds with a **placeholder** `doppler_token_tf`, a **placeholder** `cf_api_token_r2`, a GitHub **token** (no App) and a real Hetzner token. The root's only data sources are `hcloud_server_type` ×2 and `hcloud_ssh_keys`. A full-refresh plan reads `15 to add, 3 to change, 6 to destroy`. The `-refresh=false` plan reads `14/3/6`. The **only** difference is one drifted address (`github_repository_environment_deployment_policy.web_platform_infra_apply_main`), which is live drift and the drift job's concern. | The PR plan (Tier A) runs `-refresh=false`, with a **read-only** Hetzner token, placeholders for the Doppler and R2 providers, and the workflow's own `GITHUB_TOKEN` for the GitHub provider. |
 | "The Terraform App cannot write environment secrets — 403" | `gh api /orgs/jikig-ai/installations`: soleur-ai has `administration:write` and `secrets:write` but **no `environments` permission**, which is consistent with the 403 on `environments/<env>/secrets/public-key`. | A dedicated infra App gets `environments:write`. Until it is live, Tier-B environment secrets are seeded by the operator. A follow-up issue moves them to IaC. |
 | "The `prd_terraform` R2 backend keys read the git-data root-key state" | True. Listing `soleur-terraform-state` with those keys returns all 7 state objects, including `web-platform/git-data-root-key/terraform.tfstate`. `ListBuckets` returns `AccessDenied`, so the keys are **bucket-scoped** (they are not account-wide). | Move that one state object into a new bucket. A **bucket-scoped** R2 token for that bucket is held only in Tier B. The Tier-A keys cannot reach a bucket they are not scoped to. |
@@ -212,7 +212,7 @@ the operator runbook, **and** the residual issue filed in this plan (R1).
   <env> -R <repo>` (the body is read from stdin when it is not a TTY) are cited from vendor
   references. The work phase re-verifies both with `--help` before the runbook is committed.
 
-## Decision (ADR-239 content)
+## Decision (ADR-241 content)
 
 - **D1. Two tiers.**
   - **Tier A** is branch-reachable: repo secrets and every Doppler config a repo-secret token
@@ -248,7 +248,7 @@ the operator runbook, **and** the residual issue filed in this plan (R1).
   - It gains `HCLOUD_TOKEN_READONLY`, a Hetzner Read-permission token. It is a **different name**,
     so it can never shadow the Tier-B value.
   - It loses `DOPPLER_TOKEN_TF`, `HCLOUD_TOKEN` and `CF_API_TOKEN_R2`.
-  - It gets a **sentinel override** for `GITHUB_APP_PRIVATE_KEY` (`EVICTED_SEE_ADR_238`), which
+  - It gets a **sentinel override** for `GITHUB_APP_PRIVATE_KEY` (`EVICTED_SEE_ADR_241`), which
     shadows the inherited `prd` runtime key for the Tier-A token. A sentinel is used instead of an
     empty value because the CTO review flagged that Doppler might treat an empty branch-config
     value as "inherit". A non-empty non-PEM value cannot be mistaken for either inheritance or a
@@ -436,7 +436,7 @@ the operator runbook, **and** the residual issue filed in this plan (R1).
    from `terraform state list` rather than typing it, assert it with AC2c's script row, keep both
    `-target` lines, add both to the destroy-guard forget rows (item 7b), and record the `prd` key
    hashes in the ledger before O0 (O0's U1 limb). After O10 the legacy variable resolves to the
-   `EVICTED_SEE_ADR_238` sentinel, so a recreate would write a non-PEM sentinel into `prd` — a
+   `EVICTED_SEE_ADR_241` sentinel, so a recreate would write a non-PEM sentinel into `prd` — a
    destroy here is not merely a delete, it is a delete that a naive re-apply "fixes" by writing
    garbage over the runtime key. This was measured in the plan
    phase on a scratch copy with TF 1.10.5. A `removed` block is planned ("will no longer be managed
@@ -544,7 +544,7 @@ the ADR-231 byte budget stays flat.
      has no `environment:` deliberately, so that a `workflow_dispatch` runs the **selected ref**
      and the branch it polices supplies its own gate. Giving it `infra-privileged` changes that:
      a non-`main` dispatch is refused by the branch policy. **That is a behaviour change, not a
-     side effect** — record it in the job header, in ADR-239 D2 and in the runbook. It is the
+     side effect** — record it in the job header, in ADR-241 D2 and in the runbook. It is the
      right trade (the job's own header already says the no-environment shape "does NOT hold
      against a deliberate actor with repository write access"), but it must be a stated decision,
      and it is why O4b rehearses this path from `main` before O10;
@@ -642,16 +642,16 @@ the ADR-231 byte budget stays flat.
 
 ### Phase 5 — ADR, C4, runbook, compliance docs
 
-1. `soleur:architecture` → **ADR-239** "Terraform credentials are tiered; Tier B is delivered only
+1. `soleur:architecture` → **ADR-241** "Terraform credentials are tiered; Tier B is delivered only
    through main-only environment secrets". It holds D1–D9, with statuses:
    - D1–D8: `adopting` until the runbook's O-final verification;
    - D2 `accepted` gated on R1;
    - an Alternatives table (see below).
 
    The ordinal is **provisional**. The #8211 session may claim 238. On a renumber, sweep
-   `grep -rn 'ADR-239' knowledge-base/project/{plans,specs}/feat-one-shot-8209-evict-prd-terraform-secrets* knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`.
+   `grep -rn 'ADR-241' knowledge-base/project/{plans,specs}/feat-one-shot-8209-evict-prd-terraform-secrets* knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`.
 2. **Amend ADR-220's Amendment log.** Add an entry "2026-09-22 (#8209)" covering:
-   - the D2 custody-goal status (nominal → bounded by ADR-239, with R1 still open);
+   - the D2 custody-goal status (nominal → bounded by ADR-241, with R1 still open);
    - D4's "Repo-secret reach" residual, now discharged for the Terraform credentials, the read
      token and the state object;
    - the D5 table row "D2–D3" updated to name R1.
@@ -661,7 +661,7 @@ the ADR-231 byte budget stays flat.
    in full, then:
    - amend `github -> doppler` (model.c4:610) and add one edge, `github -> doppler` "Tier-B
      Terraform credentials: `soleur-infra-privileged` read through a main-only environment secret
-     (ADR-239)";
+     (ADR-241)";
    - amend `github -> soleurMarketplace` (model.c4:556): the identity changes from the soleur-ai
      App to the infra App once it is provisioned;
    - amend `github -> gitDataStore` (model.c4:655): `DOPPLER_TOKEN_GIT_DATA_ROOT` is an environment
@@ -688,7 +688,7 @@ the ADR-231 byte budget stays flat.
    breach):
    - **`article-30-register.md`, PA-12 §(g) (the GitHub-infra row):** fix TOM items (1), (2) and
      (3) in the cell, with `Superseded` markers. Use the conditional wording: "On completion of
-     runbook O10/O13 (#8209, ADR-239), the Terraform credential is a dedicated infra App key in
+     runbook O10/O13 (#8209, ADR-241), the Terraform credential is a dedicated infra App key in
      `soleur-infra-privileged/prd`, delivered only to environments whose deployment-branch policy
      admits `main` only; until then it remains in `prd_terraform`." Cite code by name, never by
      line number.
@@ -756,7 +756,7 @@ the ADR-231 byte budget stays flat.
 | O6 | Move `DOPPLER_TOKEN_WRITE` to Tier B | `v="$(doppler configs tokens create gha-prd-terraform-write -p soleur -c prd_terraform --access read/write --plain)"; printf '%s' "$v" \| gh secret set DOPPLER_TOKEN_WRITE --env infra-privileged -R $R; unset v` | environment secret listed; the next push apply's `Verify DOPPLER_TOKEN_WRITE present` step passes | `gh secret delete DOPPLER_TOKEN_WRITE --env infra-privileged -R $R` |
 | O7 | Move `DOPPLER_TOKEN_GIT_DATA_ROOT` to its environment | `v="$(doppler configs tokens create gha-git-data-root-read -p soleur-git-data-root -c prd --access read --plain)"; printf '%s' "$v" \| gh secret set DOPPLER_TOKEN_GIT_DATA_ROOT --env web-platform-infra-apply -R $R; unset v` | a `git-data-cutover.yml` dry run from `main` reads `role=git-data-auth` as before | `gh secret delete DOPPLER_TOKEN_GIT_DATA_ROOT --env web-platform-infra-apply -R $R` |
 | O8 | Migrate the git-data root-key state, and in the same dispatch apply the 2 custody forgets. Mint a bucket-scoped R2 token for `soleur-terraform-state-privileged`. Disable `apply-git-data-root-key.yml` behind a `trap` that re-enables it on any exit. Copy the object server-side (the runbook's `--aws-sigv4` `x-amz-copy-source` helper, which prints no key). **Then** set `GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID`/`…_SECRET_ACCESS_KEY` together; the loader treats the pair as all-or-none and refuses a half-set pair. Then set the repo variable `GIT_DATA_ROOT_STATE_MIGRATED=1` (`gh variable set`), after which the loader refuses the legacy bucket. Re-enable the workflow and dispatch it from `main` | runbook §State migration | Compared in-process, printing only `equal`: `sha256`, `lineage` and `serial` of source and destination. With the Tier-A pair, `GET` on the new object → `403`. The dispatch plans **exactly 2 forgets** (`github_actions_secret.doppler_token_git_data_root`, `doppler_service_token.git_data_root_read`) under arm `8209_custody_forget`, applies them and reads `git_data_root_state=privileged` | before the dispatch: unset the pair and the variable, and the legacy bucket works. After the dispatch the old object is stale: the rollback only goes forward (fix the new bucket's credentials). A forget changes only state, so no import is needed |
-| O10 | Evict from Tier A **(irreversible)**. Preconditions: O1b, O3, O4, O5, O5b and O8 all done | `for k in DOPPLER_TOKEN_TF HCLOUD_TOKEN CF_API_TOKEN_R2; do doppler secrets delete "$k" -p soleur -c prd_terraform --yes; done`; `printf '%s' EVICTED_SEE_ADR_238 \| doppler secrets set GITHUB_APP_PRIVATE_KEY -p soleur -c prd_terraform --silent` | the three names are absent; `[ "$(printf '%s' "$(doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd_terraform --plain)" \| sha256sum)" = "$(printf '%s' EVICTED_SEE_ADR_238 \| sha256sum)" ] && echo equal`; a PR touching `apps/web-platform/infra/` is green; push apply, drift, board sync and the pin bump are green | re-set the three from Tier B (O2 pattern); `doppler secrets delete GITHUB_APP_PRIVATE_KEY -p soleur -c prd_terraform` drops the override |
+| O10 | Evict from Tier A **(irreversible)**. Preconditions: O1b, O3, O4, O5, O5b and O8 all done | `for k in DOPPLER_TOKEN_TF HCLOUD_TOKEN CF_API_TOKEN_R2; do doppler secrets delete "$k" -p soleur -c prd_terraform --yes; done`; `printf '%s' EVICTED_SEE_ADR_241 \| doppler secrets set GITHUB_APP_PRIVATE_KEY -p soleur -c prd_terraform --silent` | the three names are absent; `[ "$(printf '%s' "$(doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd_terraform --plain)" \| sha256sum)" = "$(printf '%s' EVICTED_SEE_ADR_241 \| sha256sum)" ] && echo equal`; a PR touching `apps/web-platform/infra/` is green; push apply, drift, board sync and the pin bump are green | re-set the three from Tier B (O2 pattern); `doppler secrets delete GITHUB_APP_PRIVATE_KEY -p soleur -c prd_terraform` drops the override |
 | O11 | Delete the old repo secrets and revoke the old tokens **(irreversible)**. Preconditions: O6, O7 and O8 | **First resolve each slug back to its name (U4).** A slug is opaque and the ledger is the only thing that binds it to a token; a wrong slug on the `soleur-git-data-root` line revokes the token the **running** git-data host uses to reach its root key. For each project/config pair, print the full name↔slug table and require an exact name match before revoking: `doppler configs tokens -p soleur-git-data-root -c prd --json \| jq -r '.[]\|"\(.name)\t\(.slug)"'` — the slug to revoke **must** be the row whose `name` the ledger recorded (the old `gha-git-data-root-read`, **not** the O7 mint of the same name, which is why O7's mint is listed first in the ledger with its creation timestamp, and not the git-data **host** boot token). Abort if the table shows two rows with the ledger's name, or none. Repeat for `-p soleur -c prd_terraform`. Then: `gh secret delete DOPPLER_TOKEN_GIT_DATA_ROOT -R $R`; `gh secret delete DOPPLER_TOKEN_WRITE -R $R`; `doppler configs tokens revoke <confirmed slug> -p soleur-git-data-root -c prd`; `doppler configs tokens revoke <confirmed slug> -p soleur -c prd_terraform` | `gh api repos/$R/actions/secrets --jq '[.secrets[].name]'` lacks both; the cutover dry run and the push apply are still green. **Plus the git store's own health (U4), which the CI dry run does not test** — the dry run carries its own credential and proves nothing about the running store. Read it from the observability layer and from the store's own endpoint, with no operator shell on the host: (a) the git-data heartbeat and its dedicated Better Stack log source (#7772) are still reporting, queried read-only with the established idiom `doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$BETTERSTACK_API_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://uptime.betterstack.com/api/v2/heartbeats'`; (b) `gh workflow run scheduled-terraform-drift.yml -R $R --ref main` — its `heartbeat-live-reconcile` job reads Better Stack's live heartbeats and is the existing instrument for a host going dark; (c) a `git ls-remote` against one repository through the store's normal endpoint returns refs. Run all three within minutes of the revoke, while a rollback is still cheap | mint again and re-set (this re-opens the reach; last resort). If the **host's** token was revoked by mistake, mint a replacement of the same name into the same project/config and redeliver it to the host before its next restart — the host keeps running on its cached environment until then, and that window is the whole rollback budget |
 | O12 | Delete the git-data root-key object from `soleur-terraform-state` **(irreversible)** | runbook §State migration, delete step | a Tier-A listing no longer shows the key | none |
 | O12b | **U3, the host-read service tokens. A read-only gate on O13's `DOPPLER_TOKEN_TF` revocation — no action, and O13 does not start until it passes.** Terraform, running as `DOPPLER_TOKEN_TF` (a workplace **personal** token), created the Doppler service tokens the production hosts read their own configuration with: `doppler_service_token.git_data` (`git-data-luks-boot`, `git-data-luks.tf:161`), `doppler_service_token.ghcr_minter` (`ghcr-minter-write` on `soleur/prd`, `ghcr-minter-doppler-token.tf:45`) and `doppler_service_token.registry` (the zot boot token, `zot-registry.tf:299`). The question O13 must not assume the answer to: **does revoking the creating personal token invalidate the service tokens it created?** | (1) Enumerate the creator-bound set from state, not from memory: `terraform state list \| grep '^doppler_service_token\.'` in each root, and record every name in the ledger. (2) Settle the vendor behaviour **on the vendor side**, not by inference: Doppler's service-token documentation on token lifecycle and ownership, plus a written confirmation from Doppler support quoting the token names, filed in the runbook §Rotation as the citation for this step. A service token is a distinct object with its own slug and its own config scope, so the expected answer is that it survives; **an expected answer is not a confirmed one, and this step is what turns one into the other.** (3) A live negative control, which is decisive on its own: mint a throwaway `read` service token with a **second, disposable** personal token, revoke that personal token, then read a secret with the service token. A `200` proves no cascade; a `401` proves there is one and **O13's `DOPPLER_TOKEN_TF` revocation must not run** until every host token above has been re-minted by a surviving identity | n/a — nothing is changed |
@@ -818,7 +818,7 @@ the ADR-231 byte budget stays flat.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-239-terraform-credentials-are-tiered-main-only-environment-secrets.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md`
 - `.github/actions/infra-credentials/action.yml`, `.github/actions/infra-credentials/infra-credentials.test.sh`
 - `apps/web-platform/infra/infra-privileged-environment.tf`
 - `apps/web-platform/infra/github-infra-app-manifest.json`, `apps/web-platform/infra/github-board-app-manifest.json`
@@ -849,7 +849,7 @@ suite registration of two unrelated batteries. This plan registers its own suite
   gone, the web app cannot mint an installation token: **every connected user's GitHub connection
   stops working, every inbound webhook is rejected, and no repository operation succeeds** until
   the operator pastes a key back by hand. `ignore_changes = [value]` does not protect against a
-  delete, and O10's `EVICTED_SEE_ADR_238` sentinel makes it worse, because after O10 the legacy
+  delete, and O10's `EVICTED_SEE_ADR_241` sentinel makes it worse, because after O10 the legacy
   variable resolves to a non-PEM sentinel, so a recreate would write the sentinel into `prd`.
   Guarded by: the `removed`-address proof in Phase 2 item 5, AC18, the destroy-guard forget rows
   (Phase 2 item 8), and O0's `prd` key-hash and token-mint check.
@@ -958,10 +958,10 @@ review time. CPO sign-off is required before `soleur:work` begins (see Domain Re
   row, parsing each root's `backend "s3"` block).
 - [ ] **AC8.** The `apply-git-data-root-key.yml` allowlist test admits exactly the 2-address forget
   and rejects a 3-address forget or a delete (fixture rows).
-- [ ] **AC9.** ADR-239 exists with D1–D9, the statuses and the Alternatives. The ADR-220 amendment
+- [ ] **AC9.** ADR-241 exists with D1–D9, the statuses and the Alternatives. The ADR-220 amendment
   entry exists. The C4 tests and `c4-count-parity` pass. The runbook contains the Operator
   Sequence verbatim and the consumer inventory.
-- [ ] **AC10.** The R1 and R6 issues are filed and linked from ADR-239 and from the PR body. The PR
+- [ ] **AC10.** The R1 and R6 issues are filed and linked from ADR-241 and from the PR body. The PR
   body says `Ref #8209` (not `Closes`), carries the Operator Sequence and states the order
   constraints.
 - [ ] **AC10b.** `knowledge-base/legal/audits/2026-09-8209-prior-exposure-assessment.md` exists,
@@ -977,7 +977,7 @@ review time. CPO sign-off is required before `soleur:work` begins (see Domain Re
 
 - [ ] **AC12.** `doppler secrets -p soleur -c prd_terraform --only-names` contains none of
   `DOPPLER_TOKEN_TF`, `HCLOUD_TOKEN`, `CF_API_TOKEN_R2`. `GITHUB_APP_PRIVATE_KEY` there hashes
-  equal to the `EVICTED_SEE_ADR_238` sentinel.
+  equal to the `EVICTED_SEE_ADR_241` sentinel.
 - [ ] **AC13.** `gh api repos/jikig-ai/soleur/actions/secrets` lacks `DOPPLER_TOKEN_GIT_DATA_ROOT`
   and `DOPPLER_TOKEN_WRITE`. The listed environments hold them.
 - [ ] **AC14.** A Tier-A `AWS_*` `GET` of the git-data root-key state object returns 403 or 404 in
@@ -1138,7 +1138,7 @@ All of these are folded into Phase 5 item 5 and AC10b/AC17.
    risk, not as a deferred cutover precondition.
 2. O13 rotation is **required**. AC16 has probes for each old credential, and #8209 does not close
    until they pass.
-3. ADR-239 keeps D2 `proposed` until R1 (and R7) close, and the PR body says so.
+3. ADR-241 keeps D2 `proposed` until R1 (and R7) close, and the PR body says so.
 4. The "lands broken" bullet is reworded as indirect user impact during an incident.
 
 **Brainstorm-recommended specialists:** none (no brainstorm).
@@ -1240,7 +1240,7 @@ discoverability_test:
 
 ### ADR
 
-New **ADR-239** (provisional ordinal): "Terraform credentials are tiered; Tier B is delivered only
+New **ADR-241** (provisional ordinal): "Terraform credentials are tiered; Tier B is delivered only
 through main-only environment secrets". It holds D1–D9. **Amend ADR-220** in its Amendment log: the
 D2 custody-goal status, the D4 "Repo-secret reach" residual and the D5 status row. Both are Phase 5
 tasks in this PR.
@@ -1265,8 +1265,8 @@ No new container. `c4-count-parity` runs because edge prose may carry counts.
 
 ### Sequencing
 
-ADR-239 D1–D8 are `adopting` until AC12–AC16 pass. D2 is `accepted` only after R1 closes. ADR-220's
-D2–D3 row names ADR-239 and R1.
+ADR-241 D1–D8 are `adopting` until AC12–AC16 pass. D2 is `accepted` only after R1 closes. ADR-220's
+D2–D3 row names ADR-241 and R1.
 
 ## Encryption Posture
 
@@ -1277,21 +1277,21 @@ at_rest:
     evidence: "https://developers.cloudflare.com/r2/reference/data-security/"
     defends_against: "disclosure from provider media"
     does_not_defend: "any holder of a key that reads the bucket — that is why the key is bucket-scoped and Tier-B only; plaintext private_key_openssh remains inside the object"
-    disclosed_as: "ADR-239 D7; ADR-220 amendment"
+    disclosed_as: "ADR-241 D7; ADR-220 amendment"
     live_verification: "AC14 (Tier-A key 403, Tier-B key 200)"
   - store: "Doppler project soleur-infra-privileged"
     mechanism: "Doppler-managed encryption at rest (vendor attestation, Doppler security page)"
     evidence: "https://www.doppler.com/security"
     defends_against: "disclosure from provider storage"
     does_not_defend: "any holder of DOPPLER_TOKEN_INFRA_PRIVILEGED or a workplace personal token (DOPPLER_TOKEN_TF itself reads it)"
-    disclosed_as: "ADR-239 D3"
+    disclosed_as: "ADR-241 D3"
     live_verification: "O3 verify lists environment-secret names only"
 in_transit:
   - connection: "GitHub Actions runner -> Doppler API, R2 S3 endpoint, Hetzner API, GitHub API"
     tls: "TLS 1.2+ (vendor endpoints are HTTPS-only)"
     cert_verification: on
     does_not_defend: "a compromised runner or a main-branch code change that exfiltrates in-job"
-    disclosed_as: "ADR-239 D2 (boundary is main-branch integrity)"
+    disclosed_as: "ADR-241 D2 (boundary is main-branch integrity)"
 ```
 
 ## Guard Contract
@@ -1472,7 +1472,7 @@ boot-trail poll and the post-apply token sync), never from a hand-kept list.
   until the next restart, which may be a host replace during an unrelated incident.
 - **`git_data_host_replace` deliberately declares no `environment:`.** Giving it one to carry a
   Tier-B secret also subjects it to a `main` deployment-branch policy, which is a real behaviour
-  change to an incident-recovery path. Decide it explicitly (ADR-239 D2), and rehearse the path
+  change to an incident-recovery path. Decide it explicitly (ADR-241 D2), and rehearse the path
   from `main` before O10 removes the legacy fallback that is currently masking it.
 - **A CI dry run of a cutover proves nothing about a host's own credential.** CI carries its own
   token. Any check that a revocation did not break a host has to read something the *host*
@@ -1493,7 +1493,7 @@ boot-trail poll and the post-apply token sync), never from a hand-kept list.
   the `main` policy. That window is harmless only because no secret exists before O3. O0's
   four-environment hard gate is therefore a precondition of O3 and O7, not a courtesy check.
 - The #8211 session is likely to edit the ADR-220 amendment log and `model.c4` (the `gitDataStore`
-  edge) and may claim ADR-239. Before ship, rebase onto `origin/main` and resolve conflicts in those
+  edge) and may claim ADR-241. Before ship, rebase onto `origin/main` and resolve conflicts in those
   files **additively**: each session appends its own dated amendment entry. Re-verify the ADR
   ordinal (ship's ADR-Ordinal Collision Gate).
 - GitHub secret names are case-insensitive, and `GITHUB_*` names are reserved for Actions secrets.
@@ -1560,5 +1560,5 @@ boot-trail poll and the post-apply token sync), never from a hand-kept list.
   environment secret; between O3 and O10 the legacy fallback hides this. Mitigation: census rows
   8 and 9 (AC2b) at PR time, the `plan_only` arm (Guard 5), and O4b's dry-run dispatch of both
   paths from `main` **before** O10 (AC22). Accepted consequence: giving that job an environment
-  means a non-`main` dispatch is refused, which is recorded as a decision in ADR-239 D2, in the
+  means a non-`main` dispatch is refused, which is recorded as a decision in ADR-241 D2, in the
   job header and in the runbook.

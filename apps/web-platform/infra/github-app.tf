@@ -37,7 +37,7 @@
 # webhook secret — rotation is operator-explicit via `terraform apply
 # -replace=...`. Mirrors the policy from inngest.tf:97-104.
 
-# --- #8209 / ADR-239: FORGET the two App-identity mirrors --------------------
+# --- #8209 / ADR-241: FORGET the two App-identity mirrors --------------------
 #
 # READ THIS BEFORE TOUCHING EITHER BLOCK BELOW. The two resources these replace pinned
 # `config = "prd"`, which means they were NOT a Terraform bookkeeping copy of the App

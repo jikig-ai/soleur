@@ -2758,11 +2758,11 @@ describe("betteruptime_team_member.ops is a per-merge -targeted managed resource
 //     Terraform pins reviewers.users, but nothing else fails RED pre-merge if a
 //     future edit empties it — this test is that guard. ────────────────────────
 describe("github_repository_environment declares a non-empty reviewers.users (DP-11 F8)", () => {
-  // (#8209, ADR-239 D2) THE PROPERTY WIDENED, not weakened.
+  // (#8209, ADR-241 D2) THE PROPERTY WIDENED, not weakened.
   //
   // This guard was written when every environment in this root was a cutover GATE whose
   // protection WAS the reviewer, so "reviewers.users is non-empty" and "this environment
-  // is protected" were the same sentence. ADR-239 introduces a second, deliberately
+  // is protected" were the same sentence. ADR-241 introduces a second, deliberately
   // reviewer-less class: `infra-privileged` serves the UNATTENDED Tier-B jobs
   // (apply-on-merge, the scheduled drift check), which a reviewer gate would block by
   // design. Adding a reviewer to satisfy the old spelling would have broken the thing
@@ -2954,7 +2954,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
           `and that gate is not intact. Needs all three: exactly one deployment policy whose branch_pattern is ` +
           `"main" (saw ${JSON.stringify([...(policyPatterns.get(env.name) ?? [])])}), ` +
           `custom_branch_policies = true (saw ${custom}), protected_branches = false (saw ${notProtected}). ` +
-          `Otherwise any branch can deploy to it and read its secrets (DP-11 F8; #8209 ADR-239 D2).`,
+          `Otherwise any branch can deploy to it and read its secrets (DP-11 F8; #8209 ADR-241 D2).`,
       ).toBe(true);
     }
 
@@ -3119,7 +3119,7 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
   });
 
   test("declares no environment that auto-approves from any branch (DP-11 F8)", () => {
-    // (#8209, ADR-239 D2) THE PROPERTY, RESTATED — this test used to assert `environment:`
+    // (#8209, ADR-241 D2) THE PROPERTY, RESTATED — this test used to assert `environment:`
     // was ABSENT, and its own title gave the reason: "a zero-reviewer environment
     // auto-approves". That reason is the real property, and absence was only one way to
     // satisfy it. This job now declares `infra-privileged`, which has no reviewer but IS
@@ -4098,7 +4098,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // The limitation ships stated rather than implied, here and in the step's own ::error::
     // and the runbook.
     //
-    // (#8209, ADR-239 D2) UPDATED. This job used to carry no `environment:` and therefore no
+    // (#8209, ADR-241 D2) UPDATED. This job used to carry no `environment:` and therefore no
     // deployment_branch_policy, so a workflow_dispatch ran the SELECTED REF's scripts and the
     // gate was supplied by the branch it polices. The "fleet-wide policy call" this comment
     // deferred has now been made: the five replace-class targets carry

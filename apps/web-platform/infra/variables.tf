@@ -652,13 +652,13 @@ variable "github_app_id" {
 }
 
 variable "github_app_private_key" {
-  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded. LEGACY MODE ONLY since #8209; after operator step O10 this resolves to the non-PEM `EVICTED_SEE_ADR_238` sentinel."
+  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded. LEGACY MODE ONLY since #8209; after operator step O10 this resolves to the non-PEM `EVICTED_SEE_ADR_241` sentinel."
   type        = string
   sensitive   = true
   default     = ""
 }
 
-# --- #8209 / ADR-239: the Tier-A and Tier-B GitHub identities -----------------
+# --- #8209 / ADR-241: the Tier-A and Tier-B GitHub identities -----------------
 #
 # Every variable below defaults to "" so this file can merge BEFORE the operator has
 # provisioned anything (ADR-065). The provider's mode selector in main.tf reads the

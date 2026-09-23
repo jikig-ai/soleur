@@ -32,7 +32,7 @@ variable "github_app_private_key" {
   default = ""
 }
 
-# --- #8209 / ADR-239: the Tier-A and Tier-B GitHub identities -----------------
+# --- #8209 / ADR-241: the Tier-A and Tier-B GitHub identities -----------------
 #
 # All four default to "" so this root can merge BEFORE the operator has provisioned
 # anything (ADR-065). main.tf reads the empty string as "not supplied", which is what

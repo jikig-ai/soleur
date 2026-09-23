@@ -172,6 +172,17 @@ jobs:
             echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform. One-shot download at App creation; cannot be re-downloaded — recover from password manager or App admin UI."
             exit 1
           }
+          # The #8209 eviction sentinel, refused BY NAME. After operator step O10 this config holds
+          # `EVICTED_SEE_ADR_241` under this name instead of a key -- the eviction is an OVERRIDE,
+          # because the value is inherited from `prd` and cannot be deleted out of a branch config,
+          # so the read above SUCCEEDS and returns a non-empty string. `openssl rsa -check` further
+          # down does reject it, but as "not a valid RSA PEM" -- which reads as a CORRUPTED key, and
+          # the remedy that suggests is to paste a fresh key into prd_terraform, undoing the eviction
+          # on a config every branch can read. Rationale: ADR-241 D5; census row G4e keeps it here.
+          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there; see knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+            exit 1
+          fi
           if [[ -z "$APP_ID" || -z "$PEM" ]]; then
             echo "::error::GitHub App credentials are empty in Doppler prd_terraform."
             exit 1

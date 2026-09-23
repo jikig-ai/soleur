@@ -31,7 +31,7 @@ resource "cloudflare_zero_trust_access_service_token" "deploy" {
 
 Then apply:
 
-> **#8209 / ADR-239 — the single-loader form in this runbook is the PRE-cutover one.** After the
+> **#8209 / ADR-241 — the single-loader form in this runbook is the PRE-cutover one.** After the
 > Tier-B cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the
 > inner `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
 > rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform

@@ -2057,7 +2057,7 @@ jobs:
       - name: Generate CI SSH key
         run: ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
 
-      # (#8209, ADR-239 D4) TIER A. This job runs on `pull_request`, so it is reachable
+      # (#8209, ADR-241 D4) TIER A. This job runs on `pull_request`, so it is reachable
       # from ANY branch of this public repository and must therefore hold nothing whose
       # disclosure is unbounded. It gets bounded substitutes instead, and the plan below
       # runs `-refresh=false` so it never needs the real ones.
@@ -2170,7 +2170,7 @@ jobs:
           # are new abort conditions on a body that has never run under them, which is a
           # different change from repairing errexit. #7304.
           set +e
-          # (#8209, ADR-239 D4) `--preserve-env=<names>` is NAMED, not bare. The named
+          # (#8209, ADR-241 D4) `--preserve-env=<names>` is NAMED, not bare. The named
           # form keeps exactly the four Tier-A substitutes the step above exported and
           # lets Doppler supply everything else, which is what makes this PR's own CI
           # exercise the Tier-A path in BOTH states -- without it, the before state

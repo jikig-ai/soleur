@@ -276,7 +276,7 @@ resource "github_repository_environment" "workspaces_luks_cutover" {
     users = [54279]
   }
 
-  # (#8209, ADR-239 D2) ADDED. Measured 2026-09-22 via `gh api repos/.../environments`:
+  # (#8209, ADR-241 D2) ADDED. Measured 2026-09-22 via `gh api repos/.../environments`:
   # this environment's `deployment_branch_policy` was NULL, so a run on ANY branch that
   # cleared the reviewer click could deploy to it. A reviewer gate is a gate on the
   # HUMAN, not on the CODE: the approver sees a run name, not the diff of the branch

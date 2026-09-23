@@ -37,7 +37,7 @@
 #
 # autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
 
-# --- #8209 / ADR-239: FORGET the repo-secret write path ----------------------
+# --- #8209 / ADR-241: FORGET the repo-secret write path ----------------------
 #
 # `DOPPLER_TOKEN_WRITE` is a REPO secret with read/write on `soleur/prd_terraform`, so
 # any workflow on any branch of this public repository can name it. That is a WRITE into

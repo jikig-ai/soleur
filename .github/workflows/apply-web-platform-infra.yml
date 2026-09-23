@@ -145,7 +145,6 @@ on:
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §confirm and the gate model
-      # (#8209) plan_only only ever SKIPS steps; the gates above stay unconditional.
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §plan_only
       plan_only:
         description: "[web-host-replace, git-data-host-replace] Rehearsal: credentials, init, plan and the path's own gate, then STOP before any apply, -replace, SSH or host contact. Operator step O4b."
@@ -4155,7 +4154,7 @@ jobs:
             exit 1
           fi
           if [[ "$rc" -ne 0 ]]; then
-            echo "::error::git-data-host-replace is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message in the step log names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created. NOTE ON THIS PATH SPECIFICALLY: until #8209/ADR-239 this job had no environment:, so a workflow_dispatch ran the SELECTED REF and this gate was supplied by the branch it polices. It now carries environment: infra-privileged, whose deployment-branch policy admits main ONLY, so a NON-main dispatch of this recovery path is refused before the job starts and the gate that runs is always main's. It still does NOT hold against a deliberate actor - the reachable set is narrowed from anyone with repository write to anyone who can land a commit on main, which is narrower and is not nothing."
+            echo "::error::git-data-host-replace is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message in the step log names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created. NOTE ON THIS PATH SPECIFICALLY: until #8209/ADR-241 this job had no environment:, so a workflow_dispatch ran the SELECTED REF and this gate was supplied by the branch it polices. It now carries environment: infra-privileged, whose deployment-branch policy admits main ONLY, so a NON-main dispatch of this recovery path is refused before the job starts and the gate that runs is always main's. It still does NOT hold against a deliberate actor - the reachable set is narrowed from anyone with repository write to anyone who can land a commit on main, which is narrower and is not nothing."
             exit 1
           fi
 
@@ -4362,10 +4361,7 @@ jobs:
         # birth job and driven by tests/scripts/test-git-data-boot-signal-poll.sh. The
         # `Dispatch summary` below turns an apply/poll outcome pair that never produced a
         # verdict (including an empty outcome from a renamed step id) red.
-        # MERGED, not a second `if:` key. Belt-and-braces: with the apply skipped
-        # `steps.apply.outcome` is 'skipped' and neither arm matches, but relying on that
-        # would leave the guard implicit and an edit to the apply's own condition would
-        # silently re-arm this step (#8209).
+        # MERGED, not a second `if:` key (#8209; runbook §plan_only).
         if: ${{ !cancelled() && inputs.plan_only != true && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
@@ -6943,6 +6939,11 @@ jobs:
             echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
           PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
             echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
+          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
+          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there."
+            exit 1
+          fi
           if [[ -z "$APP_ID" || -z "$PEM" ]]; then
             echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
           printf '::add-mask::%s\n' "$APP_ID"

@@ -386,12 +386,12 @@ The authenticated hop is written by a workflow step into a fixed-path `ssh_confi
     a branch supplies that branch's own anchor. Against a repository-write actor the replace path's
     anchor is not outside reach (#8093).
 
-    > **Superseded 2026-09-22 (#8209, ADR-239 D2):** `git_data_host_replace` now carries
+    > **Superseded 2026-09-22 (#8209, ADR-241 D2):** `git_data_host_replace` now carries
     > `environment: infra-privileged`, whose deployment-branch policy admits `main` only, so a
     > replace dispatched from a branch is refused before the job starts and can no longer supply
     > its own anchor. The reachable set narrows from "anyone with repository write" to "anyone who
     > can land a commit on `main`". The residual named above is not closed by that -- it is
-    > narrowed -- and the remaining reach is tracked as ADR-239's residual R1.
+    > narrowed -- and the remaining reach is tracked as ADR-241's residual R1.
 - **Token delivery: the fallback is taken.** Doppler service-account identities need the Team or
   Enterprise plan, and the workplace is on the Developer plan. The fallback's three guards, as delivered:
   1. A reference census allows `DOPPLER_TOKEN_GIT_DATA_ROOT` under `.github/` only in the `cutover` job of
@@ -561,24 +561,24 @@ records what changes in them.
   **and** #5914 closed (the app's unpinned fallback arm deleted). The runbook's precondition list
   carries it.
 
-### 2026-09-22 (#8209): the custody goal gets a boundary — ADR-239's credential tiers
+### 2026-09-22 (#8209): the custody goal gets a boundary — ADR-241's credential tiers
 
-[ADR-239](./ADR-239-terraform-credentials-are-tiered-main-only-environment-secrets.md) decides the
+[ADR-241](./ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md) decides the
 eviction this ADR deferred. Earlier entries are not rewritten; this entry records what changes in
 them.
 
-- **D2, "The custody goal is nominal today" — now carried by ADR-239's Tier-B boundary, not yet
+- **D2, "The custody goal is nominal today" — now carried by ADR-241's Tier-B boundary, not yet
   discharged.** That clause said the separate root "does not protect against a repo-secret holder"
-  and named #8209 as the decision that would. ADR-239 D1–D2 is that decision: credentials are split
+  and named #8209 as the decision that would. ADR-241 D1–D2 is that decision: credentials are split
   into a branch-reachable Tier A and a main-only Tier B, and a Tier-B credential is delivered only as
   a GitHub environment secret on an environment whose deployment-branch policy admits `main` only.
   `web-platform-infra-apply`, the environment this ADR's D2 already reuses, is one of the four Tier-B
-  environments, and ADR-239's census asserts its `main` policy from the Terraform sources on every
+  environments, and ADR-241's census asserts its `main` policy from the Terraform sources on every
   PR. What does **not** change: an environment is still a human gate, not the boundary — the
-  *branch policy* is the boundary, and ADR-239 D2 is explicit that it holds whether or not reviewers
+  *branch policy* is the boundary, and ADR-241 D2 is explicit that it holds whether or not reviewers
   are configured.
 - **D4, "Repo-secret reach (#8209)" — addressed, not closed.** That residual named two paths to the
-  root key: the repo secret and the R2 state object. ADR-239 D7 moves both. The repo secret
+  root key: the repo secret and the R2 state object. ADR-241 D7 moves both. The repo secret
   `DOPPLER_TOKEN_GIT_DATA_ROOT` becomes an **environment secret on `web-platform-infra-apply` under
   the same name** at operator step O7 of the #8209 runbook, so `git-data-cutover.yml` needs no edit
   (its `cutover` job already declares that environment, and an environment secret overrides a
@@ -589,7 +589,7 @@ them.
   the root-key state in the shared bucket because `CF_API_TOKEN_R2` is account-wide and no credential
   can mint a bucket-scoped token (ADR-130). The token is still operator-minted; what changed is the
   measurement that the `prd_terraform` `AWS_*` keys are **bucket-scoped**, so a bucket they are not
-  scoped to is genuinely out of reach. **This residual is not closed until ADR-239's residual R1
+  scoped to is genuinely out of reach. **This residual is not closed until ADR-241's residual R1
   closes.** R1 is the soleur-ai *runtime* key in Doppler `prd`, readable by `DOPPLER_TOKEN_PRD` and
   by every `prd_*` branch-config repo-secret token; the App holds `administration:write` on
   `jikig-ai/soleur`, so a holder can rewrite the very deployment-branch policy the new boundary rests
@@ -601,13 +601,13 @@ them.
 
   | Decision | Status | Flips to `accepted` when |
   |---|---|---|
-  | D2–D3 credential and lifetime | `proposed` | #7226 (ADR-237 reaching `accepted`, per the 2026-09-21 entry) and #8211 land, **and** the #8209 limb is satisfied — which is not the merge of #8209's PR but ADR-239's own D2 reaching `accepted`, i.e. ADR-239 residual **R1** closed and **R7** closed at the runbook's state-key step. Merging #8209 alone leaves the boundary nominal against a `prd` repo-secret holder, which is the same gap this row was opened for. |
+  | D2–D3 credential and lifetime | `proposed` | #7226 (ADR-237 reaching `accepted`, per the 2026-09-21 entry) and #8211 land, **and** the #8209 limb is satisfied — which is not the merge of #8209's PR but ADR-241's own D2 reaching `accepted`, i.e. ADR-241 residual **R1** closed and **R7** closed at the runbook's state-key step. Merging #8209 alone leaves the boundary nominal against a `prd` repo-secret holder, which is the same gap this row was opened for. |
 
   The D1a, D1b and D4 rows are unchanged.
 - **No change to the root's additive-only contract.** #8209 adds exactly one typed allowlist arm,
   `8209_custody_forget`, admitting a forget of exactly the two custody addresses
   (`github_actions_secret.doppler_token_git_data_root`, `doppler_service_token.git_data_root_read`)
-  and nothing else. It is one-shot: ADR-239's residual R6 deletes it once that forget has landed.
+  and nothing else. It is one-shot: ADR-241's residual R6 deletes it once that forget has landed.
   That is the D3 rule as written — any change is a reviewed PR with a typed arm — not an exception to
   it.
 - **The backend becomes partial.** `git-data-root-key/main.tf` drops its literal `bucket`, so

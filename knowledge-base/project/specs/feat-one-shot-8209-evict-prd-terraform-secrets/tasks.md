@@ -13,7 +13,7 @@ Constraints:
 
 ## Phase 0: Preconditions
 
-- [ ] 0.1 Re-run the ADR-ordinal probe across every `origin/*` ref (plan chose ADR-239 because
+- [ ] 0.1 Re-run the ADR-ordinal probe across every `origin/*` ref (plan chose ADR-241 because
   ADR-238 is claimed on `feat-8322-affected-test-gate`).
 - [ ] 0.2 Re-verify these CLI forms with `--help`:
   - `doppler configs tokens create … --plain`;
@@ -92,7 +92,7 @@ Constraints:
   the typo-guard and the environment gate stay unconditional. Emit `plan_only=1` plus the loader
   `source=` as a `::notice::`. Executed fixture rows per Guard 5.
 - [ ] 4.1c Record the `git_data_host_replace` environment decision (a `main`-only policy now
-  refuses a non-`main` dispatch) in the job header, ADR-239 D2 and the runbook. It is a decision,
+  refuses a non-`main` dispatch) in the job header, ADR-241 D2 and the runbook. It is a decision,
   not a side effect.
 - [ ] 4.2 Make the `apply-sentry-infra.yml` apply job Tier B.
 - [ ] 4.3 `infra-validation.yml` plan job: `-refresh=false`, the placeholders, `github.token`, the
@@ -109,7 +109,7 @@ Constraints:
 
 ## Phase 5: ADR, C4, runbook, legal, follow-ups
 
-- [ ] 5.1 Write ADR-239 via `soleur:architecture`, and add the ADR-220 amendment entry (dated
+- [ ] 5.1 Write ADR-241 via `soleur:architecture`, and add the ADR-220 amendment entry (dated
   2026-09-22, #8209).
 - [ ] 5.2 C4: read all three `.c4` files and amend the edges at model.c4:556, :610, :655 and the
   tfstate edge. Run the c4 syntax, render and count-parity tests.

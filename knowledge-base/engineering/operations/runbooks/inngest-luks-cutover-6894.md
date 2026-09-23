@@ -171,7 +171,7 @@ there is no backfill, and no dispatch that can synthesise one.
    **The Doppler secret is therefore an OVERRIDE, not the switch.** There is still no tfvars file in
    this root and no `-var-file` in any workflow; every variable reaches terraform through
    `doppler run --name-transformer tf-var`, so a secret named `INNGEST_LUKS_CUTOVER_COMPLETE` in
-   `soleur/prd_terraform` silently wins over the declared default. (**#8209 / ADR-239:** that path
+   `soleur/prd_terraform` silently wins over the declared default. (**#8209 / ADR-241:** that path
    is the PRE-cutover one. After the Tier-B cutover the loader is nested — an outer
    `soleur-infra-privileged` pass and an inner `prd_terraform` pass carrying `--preserve-env`, so
    the outer values win and a `prd_terraform` override no longer reaches a privileged run. Canonical

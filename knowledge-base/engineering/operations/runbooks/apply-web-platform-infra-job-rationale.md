@@ -614,7 +614,7 @@ always distinct -- a token typed for a birth cannot authorize a destroy.
 - `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
   and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
   is the human authorization on those paths.
-- Since #8209 / ADR-239 D2 every OTHER target carries `environment: infra-privileged`.
+- Since #8209 / ADR-241 D2 every OTHER target carries `environment: infra-privileged`.
   That environment has no reviewer -- it serves unattended jobs -- but its
   deployment-branch policy admits `main` only, so a dispatch from any other ref is refused
   before the job starts.
@@ -653,3 +653,42 @@ Operator step **O4b** dispatches both paths this way from `main` before the evic
 removes the legacy credential fallback. Without it, a recovery path that fails closed is
 first discovered during the incident it exists to fix. See
 `infra-credential-tiers-8209.md`.
+
+## legacy-app-key-evicted
+
+Why the App-token mint refuses `EVICTED_SEE_ADR_241` by name, rather than letting
+`openssl rsa -check` reject it a few lines later.
+
+After operator step O10 (#8209), Doppler `soleur/prd_terraform` holds the literal string
+`EVICTED_SEE_ADR_241` under `GITHUB_APP_PRIVATE_KEY` instead of a key. The eviction has to be an
+**override** rather than a delete, because the value is inherited from the `prd` config and a
+branch config cannot delete an inherited name — so the `doppler secrets get` **succeeds** and
+returns a non-empty string, which every check around it was written to treat as a key.
+
+`openssl rsa -check` does reject it, so the name check is not the difference between working and
+broken. It is the difference between an operator reading
+
+    verdict=legacy_app_key_evicted … is the #8209 eviction sentinel, not a key. Do NOT re-set it there.
+
+and reading `GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM`. The second one means "the
+key is corrupted", and the remedy it suggests is to paste a fresh key into `prd_terraform` — which
+**undoes the eviction**, on a config every branch of this public repository can read. A message
+that invites the operator to reverse the fix is worse than no message.
+
+Four consumers read this name and all four carry the refusal:
+`.github/actions/mint-soleur-ai-app-token/action.yml`, `apply-github-infra.yml`,
+`board-status-sync.yml`, and this workflow. ADR-241 D5, the plan and the #8209 runbook all promised
+`verdict=legacy_app_key_evicted`; nothing implemented it until review round 3. Census row **G4e**
+is what keeps a fifth consumer from being added without it.
+
+### plan_only, belt-and-braces on the post-apply steps
+
+Each `inputs.plan_only != true` guard is **merged into the step's existing `if:` expression**, never
+added as a second `if:` key — YAML keeps only the last duplicate key and the parser says nothing, so
+a second key silently discards whichever guard it shadows. That happened twice while writing this
+change and both guards were dead until it was caught.
+
+The guards on the post-apply steps (the failure notification, the drift probe) are belt-and-braces:
+with the apply skipped, `steps.apply.outcome` is `'skipped'` and neither arm of those conditions
+matches anyway. Relying on that would leave the guard implicit, and an edit to the apply step's own
+condition would silently re-arm a step that must not run in a rehearsal.

@@ -1,6 +1,6 @@
 name: "Infra credentials (tiered)"
 description: >-
-  #8209 / ADR-239. Loads the Tier-B privileged credential set from the
+  #8209 / ADR-241. Loads the Tier-B privileged credential set from the
   soleur-infra-privileged Doppler project and exports it as TF_VAR_* plus the plain
   names, falling back to the legacy prd_terraform path while the operator sequence is
   still in flight. Replaces the bare DopplerHQ/cli-action step in every Tier-B job.

@@ -40,7 +40,7 @@ const EXPECTED_TF_SECRETS = [
   "GITHUB_APP_WEBHOOK_SECRET",
 ];
 
-// (#8209, ADR-239) The two App-IDENTITY names are no longer Terraform-MANAGED. Their
+// (#8209, ADR-241) The two App-IDENTITY names are no longer Terraform-MANAGED. Their
 // `doppler_secret` resources pinned `config = "prd"`, so web-platform state held a copy
 // of the App's live private key -- and the Tier-A `prd_terraform` R2 backend keys read
 // that state object. They were replaced with `removed` blocks.
@@ -315,7 +315,7 @@ describe("github-app-manifest.json symbol parity", () => {
 
     // POPULATION GROWTH. This test walks a HARDCODED list, so a `doppler_secret` ADDED to
     // github-app.tf is invisible to it — and a new `config = "prd"` secret is exactly the
-    // ADR-239 defect class, because it writes a live value into the web-platform state
+    // ADR-241 defect class, because it writes a live value into the web-platform state
     // object that the Tier-A prd_terraform R2 keys can read. The file next door says "Do
     // not add one" in prose with nothing behind it. This is the thing behind it.
     const declaredSecretNames = [
@@ -327,7 +327,7 @@ describe("github-app-manifest.json symbol parity", () => {
     // Set EQUALITY against the MANAGED subset — not `toContain`, and not against the full
     // expected list (the forgotten two are deliberately no longer named here). Equality
     // is what makes growth visible: a `doppler_secret` APPENDED to this file is the
-    // ADR-239 defect class, because a `config = "prd"` secret writes a live credential
+    // ADR-241 defect class, because a `config = "prd"` secret writes a live credential
     // into the web-platform state object that the Tier-A prd_terraform R2 keys can read.
     // `infra-privileged-environment.tf` says "Do not add one" in prose; this is the part
     // that can fail. (Deliberately the same shape as EXPECTED_PERMISSION_KEYS below,

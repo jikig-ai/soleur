@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# (#8209 Guard 1/2/4, ADR-239) The Tier-B privileged-credential census.
+# (#8209 Guard 1/2/4, ADR-241) The Tier-B privileged-credential census.
 #
 # PROPERTY. A credential that writes infrastructure, reads another tier's secrets, or reaches a
 # third-party installation is reachable ONLY from `main`. The boundary is a GitHub environment
-# secret on an environment whose deployment-branch policy is `main` only (ADR-239 D2), so the
+# secret on an environment whose deployment-branch policy is `main` only (ADR-241 D2), so the
 # property decomposes into four things a static census can settle on every PR:
 #
 #   Guard 1  every job that can hold a Tier-B credential declares an `environment:`, every arm of
@@ -15,7 +15,7 @@
 #            credentials come from `TF_STATE_AWS_*` first).
 #   Guard 2  every `doppler run` reachable from a Tier-B job carries `--preserve-env`, so a value
 #            the loader exported is never replaced by a same-named value from a Tier-A-writable
-#            Doppler config (ADR-239 D6). `DOPPLER_TOKEN_WRITE` has read/write on `prd_terraform`
+#            Doppler config (ADR-241 D6). `DOPPLER_TOKEN_WRITE` has read/write on `prd_terraform`
 #            until operator step O11, so until then a branch actor can still plant a value there;
 #            `--preserve-env` makes a planted value inert BY CONSTRUCTION rather than by trusting
 #            that nobody plants one.
@@ -115,7 +115,7 @@ trap '_rc=$?; rm -rf "$T"; if [ "$_rc" -eq 0 ] && [ -z "$_REACHED_VERDICT" ]; th
 assert_fixture_dir "$T"
 mkdir -p "$T/mut" || { printf 'FAIL SETUP: mkdir %s/mut\n' "$T" >&2; exit 1; }
 
-printf '\n=== infra-privileged tier census (Guards 1, 2 and 4; #8209, ADR-239) ===\n\n'
+printf '\n=== infra-privileged tier census (Guards 1, 2 and 4; #8209, ADR-241) ===\n\n'
 
 cat > "$T/ipt.py" <<'PY'
 import sys, os, re, json, yaml, subprocess
@@ -254,6 +254,36 @@ if CHECK_GIT:
     tracked = [l for l in r.stdout.split() if l]
 seen = {os.path.realpath(p) for p in files}
 missing = [t for t in tracked if os.path.realpath(os.path.join(REPO, t)) not in seen]
+# The read, and the refusal. Both are matched in COMMAND POSITION via cmd_sites, so neither
+# is satisfiable by a comment, a heredoc body or an `echo` argument.
+APP_PEM_READ = re.compile(r"doppler\s+secrets\s+get\s+(GITHUB_APP_PRIVATE_KEY)\b")
+# Anchored on the `if`, not on the `[[`: cmd_sites tests what precedes the MATCH START for a
+# command boundary, and a bare `[[` is preceded by `if ` -- which is a keyword, not a boundary
+# token, so the match was rejected at all four live sites. Starting at `if` puts the match at
+# line start, where the boundary is unambiguous.
+SENTINEL_TEST = re.compile(r'if\s+\[\[\s*"\$PEM"\s*==\s*EVICTED_SEE_ADR_241\s*\]\]')
+
+def step_bodies(doc):
+    """Every `run:` body in a workflow OR a composite action.
+
+    Composite actions keep their steps under `runs.steps`, not `jobs.*.steps` -- the job
+    model above iterates `doc["jobs"]` and therefore contributes ZERO steps for them, so a
+    row built on that model would silently exempt `.github/actions/**`. One of the four
+    sites this row exists for is a composite action.
+    """
+    if not isinstance(doc, dict):
+        return
+    for j in (doc.get("jobs") or {}).values():
+        if isinstance(j, dict):
+            for st in (j.get("steps") or []):
+                if isinstance(st, dict) and st.get("run"):
+                    yield str(st["run"])
+    runs = doc.get("runs")
+    if isinstance(runs, dict):
+        for st in (runs.get("steps") or []):
+            if isinstance(st, dict) and st.get("run"):
+                yield str(st["run"])
+
 check("G1a: the census scanned the workflow/composite-action set (%d files scanned, %d tracked)"
       % (len(files), len(tracked)), len(files) >= 1 and not missing,
       "files=%d tracked=%d missing=%s" % (len(files), len(tracked), missing[:5]))
@@ -446,7 +476,7 @@ PRD_TF = re.compile(r"(?:-c|--config)[= ]+prd_terraform\b")
 DOPPLER_SECRETS_GET = re.compile(r"doppler\s+secrets\s+get\s+([A-Za-z_][A-Za-z0-9_]*)")
 ac3 = []
 # THE ONE SANCTIONED READ: a Tier-A job may read `HCLOUD_TOKEN` as the SECOND arm of a
-# `HCLOUD_TOKEN_READONLY`-first read in the SAME step (ADR-239 D4). That is the before-state
+# `HCLOUD_TOKEN_READONLY`-first read in the SAME step (ADR-241 D4). That is the before-state
 # fallback -- `workspaces-luks-cutover::cutover` only READS a Hetzner volume id, so it takes
 # the read-permission token, and the fallback keeps it working until the operator mints one at
 # step O5. It disappears with the name at O10.
@@ -478,7 +508,19 @@ for rel, (doc, text) in sorted(docs.items()):
                     # matches the read-only occurrence and the two indices come back EQUAL
                     # -- the ordering test then reads "not earlier" and the allowance never
                     # applies. Same bare-token trap this file's own header warns about.
-                    i_ro = _first(body, ro)
+                    # COMMAND POSITION for the read-only read, not a raw scan. `_first` is
+                    # a bare `re.search` over the whole step body, so it saw comments,
+                    # heredoc bodies and `echo` arguments -- and a single comment line
+                    #
+                    #   # NOTE: the read-only path would be `doppler secrets get
+                    #   # HCLOUD_TOKEN_READONLY --plain`,
+                    #
+                    # above a bare privileged read made that read LEGAL. The allowance is
+                    # 1-of-1 on the live tree, so laundering it costs one comment and
+                    # removes the row's only teeth.
+                    ro_re = re.compile(r"doppler\s+secrets\s+get\s+" + re.escape(ro) + r"\b")
+                    ro_pos = [_l for _l, _mm in cmd_sites(body, ro_re)]
+                    i_ro = _first(body, ro) if ro_pos else -1
                     i_priv = _first(body, name)
                     if i_ro != -1 and i_priv != -1 and i_ro < i_priv:
                         continue
@@ -500,9 +542,37 @@ check("G1h: every job applying against a `%s`-backed root declares a Tier-B envi
 # Does the LOADER alias the Tier-B state pair onto the plain backend names? This is what
 # licenses the `${AWS_ACCESS_KEY_ID:-...}` form below. Read from the loader action, so the
 # licence disappears the moment the alias does.
-_loader_text = docs.get(LOADER_REL, (None, ""))[1]
-loader_aliases = ("TF_STATE_AWS_ACCESS_KEY_ID" in _loader_text
-                  and "AWS_ACCESS_KEY_ID<<" in _loader_text)
+# Read in COMMAND POSITION, not as raw substrings. Two bare `in` tests over the whole text
+# of action.yml were satisfiable by a single COMMENT line naming both tokens: replacing the
+# two real alias `printf`s with `:` and leaving a comment behind kept `loader_aliases` True,
+# G1i green, and 21 of the 22 live extract steps depending on an alias that no longer
+# existed. That is the worst shape a composition check can take -- it licenses an exemption
+# somewhere else, so the damage is not local to the line that is wrong.
+_loader_doc, _loader_text = docs.get(LOADER_REL, ({}, ""))
+_loader_runs = "\n".join(step_bodies(_loader_doc))
+ALIAS_EXPORT = re.compile(r"printf\s+'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)<<")
+_alias_hits = {m.group(1) for _l, m in cmd_sites(_loader_runs, ALIAS_EXPORT)}
+# Second clause: the aliased value must be SOURCED from the Tier-B name. The alias is
+# `printf 'AWS_ACCESS_KEY_ID<<...' "$adelim" "$tf_id"`, and `$tf_id` is filled by a jq read
+# of `.TF_STATE_AWS_ACCESS_KEY_ID` -- which is a jq FILTER, not a command, so cmd_sites
+# correctly does not see it. Match it in the shell source with comments stripped instead:
+# an alias that exports the plain names from something OTHER than the Tier-B pair is the R7
+# defect, and would satisfy the first clause alone.
+_loader_code = "\n".join(
+    ln for ln in _loader_runs.split("\n") if not ln.lstrip().startswith("#")
+)
+loader_aliases = (
+    _alias_hits == {"ACCESS_KEY_ID", "SECRET_ACCESS_KEY"}
+    and "TF_STATE_AWS_ACCESS_KEY_ID" in _loader_code
+    and "TF_STATE_AWS_SECRET_ACCESS_KEY" in _loader_code
+)
+# And the licence is worth its own verdict rather than only a silent input to G1i: when it
+# is False, every `${AWS_ACCESS_KEY_ID:-...}` site below loses its exemption at once, and a
+# reader needs to know that happened HERE rather than inferring it from 22 downstream rows.
+check("G1i-pre: the loader exports BOTH backend aliases in command position, so the "
+      "`${AWS_ACCESS_KEY_ID:-<legacy>}` form the extract steps use is genuinely backed "
+      "[aliases found: %s]" % (sorted(_alias_hits) or "none"),
+      loader_aliases, "alias_hits=%s" % sorted(_alias_hits))
 
 EXTRACT = re.compile(r"extract\s+(r2\s+)?backend\s+credentials", re.I)
 bad_extract, n_extract = [], 0
@@ -515,7 +585,7 @@ for j in tierb:
         n_extract += 1
         # Either Tier-B backend pair counts: `TF_STATE_AWS_*` for the shared
         # `soleur-terraform-state` roots, `GIT_DATA_ROOT_STATE_AWS_*` for the root-key root, whose
-        # state moved to `soleur-terraform-state-privileged` (ADR-239 D3/D7). Both are loader
+        # state moved to `soleur-terraform-state-privileged` (ADR-241 D3/D7). Both are loader
         # exports; what the row forbids is reading the `prd_terraform` pair FIRST.
         # A THIRD accepted form, and it is the one the implementation actually uses:
         # `${AWS_ACCESS_KEY_ID:-<legacy read>}`, where the plain name is supplied by the
@@ -703,9 +773,50 @@ else:
           "gate — CI holds no state credential at PR time. Pass IPT_STATE_LIST to check it.", True,
           "not checked in CI by design")
 
+# ── G4e: the eviction sentinel is refused BY NAME, everywhere the key is read ────────
+#
+# After operator step O10, Doppler `prd_terraform` holds the literal `EVICTED_SEE_ADR_241`
+# under GITHUB_APP_PRIVATE_KEY instead of a key. The eviction HAS to be an override rather
+# than a delete -- the value is inherited from `prd`, and a branch config cannot delete an
+# inherited name -- so `doppler secrets get` SUCCEEDS and returns a non-empty string, which
+# every check around it was written to treat as a key.
+#
+# `openssl rsa -check` rejects it downstream, so this row is not the difference between
+# working and broken. It is the difference between an operator reading
+# `verdict=legacy_app_key_evicted` and reading "not a valid RSA PEM" -- and the remedy that
+# second message suggests is to paste a fresh key into `prd_terraform`, which UNDOES the
+# eviction, on a config every branch of this public repository can read.
+#
+# ADR-241 D5, the plan and the #8209 runbook all promised this verdict. Nothing implemented
+# it. This row is what keeps a fifth consumer from being added without it.
+app_key_sites, app_key_missing = [], []
+for rel, (doc, text) in sorted(docs.items()):
+    for stepbody in step_bodies(doc):
+        if not any(True for _l, _m in cmd_sites(stepbody, APP_PEM_READ)):
+            continue
+        app_key_sites.append(rel)
+        # Command position, not raw text: the sentinel name appears in COMMENTS at three of
+        # these sites (the rationale pointer), so a raw `in` test passes on a site whose
+        # refusal was deleted and whose comment was left behind -- which is the single most
+        # likely way this regresses.
+        has_guard = any(True for _l, _m in cmd_sites(stepbody, SENTINEL_TEST))
+        has_verdict = "verdict=legacy_app_key_evicted" in stepbody
+        if not (has_guard and has_verdict):
+            app_key_missing.append("%s guard=%s verdict=%s" % (rel, has_guard, has_verdict))
+check("G4e: every step that reads GITHUB_APP_PRIVATE_KEY from Doppler refuses the "
+      "EVICTED_SEE_ADR_241 sentinel by name and emits verdict=legacy_app_key_evicted "
+      "[%d reading steps]" % len(app_key_sites),
+      # The floor is on the LIVE tree only. The mutation fixtures below are synthetic
+      # workflow trees that contain none of these consumers, and a floor of 4 applied to
+      # them would make every mutant red for a reason unrelated to what it mutates -- which
+      # reads as coverage and is the opposite of it. On a synthetic tree the row asserts the
+      # implication only: any site that DOES read the key carries the refusal.
+      (len(app_key_sites) >= (4 if CHECK_GIT else 0)) and not app_key_missing,
+      "sites=%d live=%s missing=%s" % (len(app_key_sites), CHECK_GIT, app_key_missing[:5]))
+
 print("\n".join(out))
 PY
-CENSUS_ROWS=16
+CENSUS_ROWS=17
 
 # census_rows <tsv> <err> — reports every row of one census run through pass()/fail().
 census_rows() {
@@ -715,7 +826,14 @@ census_rows() {
     n=$((n + 1))
     if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
   done < "$1"
-  [ "$n" -ge "$CENSUS_ROWS" ] || fail "G0: only $n census verdicts were produced (expected $CENSUS_ROWS) — the census crashed" "$(head -c 300 "$2")"
+  # printf + exit, NEVER through fail(): this floor exists to catch a census that crashed
+  # part-way, and fail() is one of the two helpers such a failure (or a launder) disarms.
+  # ADR-193, and this file's own header says so 700 lines up.
+  if [ "$n" -lt "$CENSUS_ROWS" ]; then
+    printf 'G0 FLOOR: only %s census verdicts were produced, expected %s — the census crashed part-way and every row it never reached is silently absent.\n%s\n' \
+      "$n" "$CENSUS_ROWS" "$(head -c 300 "$2")" >&2
+    exit 1
+  fi
 }
 
 # wf_row <tsv> <name-prefix> — 1 only when the named row is PRESENT and not ok. An ABSENT row (the
@@ -778,7 +896,20 @@ runs:
   using: composite
   steps:
     - shell: bash
-      run: echo loader
+      run: |
+        set -euo pipefail
+        # The fixture loader must actually ALIAS, because G1i's `${AWS_ACCESS_KEY_ID:-...}`
+        # exemption is LICENSED by `loader_aliases` reading this file. With `run: echo loader`
+        # here, that licence was False in the control and in every mutant -- so the branch 21
+        # of the 22 live extract steps depend on was never exercised in either direction, and
+        # the two mutation rows below (which delete the alias) had nothing to delete.
+        tf_id="$(printf '%s' "$payload" | jq -r '.TF_STATE_AWS_ACCESS_KEY_ID // ""')"
+        tf_secret="$(printf '%s' "$payload" | jq -r '.TF_STATE_AWS_SECRET_ACCESS_KEY // ""')"
+        adelim="SOLEUR_EOF_$(openssl rand -hex 12)"
+        {
+          printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$adelim" "$tf_id" "$adelim"
+          printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$adelim" "$tf_secret" "$adelim"
+        } >> "$GITHUB_ENV"
 EOF
 
 cat > "$FIX/tree/.github/workflows/tierb-apply.yml" <<'EOF'
@@ -867,6 +998,31 @@ jobs:
         run: |
           set -euo pipefail
           doppler run -p soleur -c prd_terraform -- terraform plan -refresh=false
+EOF
+
+# A compliant App-key consumer for G4e. Tier A on purpose: board-status-sync is
+# fork-triggerable and stays Tier A by design (ADR-241 D5), so the row must hold on a job
+# that is NOT Tier B -- a row that only ever sees Tier-B jobs would exempt the one consumer
+# most exposed to an attacker.
+cat > "$FIX/tree/.github/workflows/appkey.yml" <<'EOF'
+name: fixture app key consumer
+on: pull_request
+jobs:
+  mint:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mint
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur -c prd_terraform)
+          # Rationale: the #8209 eviction sentinel.
+          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+            echo "::error::verdict=legacy_app_key_evicted the key was evicted; do not re-set it."
+            exit 1
+          fi
+          echo "$PEM" > /dev/null
 EOF
 
 cat > "$FIX/tree/scripts/tierb-helper.sh" <<'EOF'
@@ -1172,6 +1328,69 @@ if mutate g1-9-environment-outside-set "$MUTDIR/tree/.github/workflows/tierb-app
   mutant_red g1-9-environment-outside-set wf_row "$T/mut/g1-9.tsv" "G1c:"
 fi
 
+# ── G1g: the read-only-first allowance must not be launderable by a comment ──────────
+# The allowance is 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
+# that satisfies it cheaply removes the row's only teeth. `_first` is a raw scan, so a single
+# comment NAMING the read-only read above a bare privileged read used to make that read legal
+# -- and "mention the safe form in a comment" is what a reader does when a lint complains.
+MUTDIR="$(fixcopy g1-g1)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-g1-comment-laundered "$MUTDIR/tree/.github/workflows/tiera.yml" 2 \
+     '$a\          # the read-only path is `doppler secrets get HCLOUD_TOKEN_READONLY --plain`\n          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-g1.tsv" ""
+  mutant_red g1-g1-comment-laundered wf_row "$T/mut/g1-g1.tsv" "G1g:"
+fi
+# CONTROL for the allowance's POSITIVE branch: a genuine read-only-first read in the same
+# step must still be ACCEPTED, or the fix above would be "delete the allowance" wearing a
+# mutation row's clothes.
+MUTDIR="$(fixcopy g1-g2)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-g2-genuine-ro-first "$MUTDIR/tree/.github/workflows/tiera.yml" 2 \
+     '$a\          RO=$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)\n          HCLOUD_TOKEN=${RO:-$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)}'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-g2.tsv" ""
+  if wf_row "$T/mut/g1-g2.tsv" "G1g:"; then
+    pass "M-g1-g2-genuine-ro-first: a real read-only-first read is still ALLOWED (the allowance was not simply deleted)"
+  else
+    fail "M-g1-g2-genuine-ro-first: the allowance no longer accepts a genuine read-only-first read" "$(grep G1g "$T/mut/g1-g2.tsv" | cut -c1-200)"
+  fi
+fi
+
+# ── G1i-pre: the alias LICENCE, in both directions ───────────────────────────────────
+# Row i1 — replace the two real alias exports with a COMMENT naming both tokens. A raw
+# substring test over action.yml's text reads True here, licenses the
+# `${AWS_ACCESS_KEY_ID:-...}` exemption at every extract step, and the loader exports
+# nothing. This is the mutant that measured GREEN before the command-position fix.
+MUTDIR="$(fixcopy g1-i1)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-i1-alias-commented "$MUTDIR/tree/.github/actions/infra-credentials/action.yml" 4 \
+     's/^(\s*)printf .AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)<<.*$/\1# AWS_\2<< via TF_STATE_AWS_ACCESS_KEY_ID/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-i1.tsv" ""
+  mutant_red g1-i1-alias-commented wf_row "$T/mut/g1-i1.tsv" "G1i-pre:"
+fi
+# Row i2 — keep both exports, but source them from somewhere that is NOT the Tier-B pair.
+# The first clause alone is satisfied; this is the R7 defect with the appearance of the fix.
+MUTDIR="$(fixcopy g1-i2)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-i2-alias-wrong-source "$MUTDIR/tree/.github/actions/infra-credentials/action.yml" 4 \
+     's/TF_STATE_AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)/LEGACY_AWS_\1/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-i2.tsv" ""
+  mutant_red g1-i2-alias-wrong-source wf_row "$T/mut/g1-i2.tsv" "G1i-pre:"
+fi
+
+# ── Guard 4 row e ────────────────────────────────────────────────────────────────────
+# Row e1 — DELETE the sentinel guard, leave the rationale comment behind. This is the
+# realistic regression: someone removes the `if`, the comment above it survives the edit,
+# and a raw-text census reads the sentinel name out of the COMMENT and stays green.
+MUTDIR="$(fixcopy g4-e1)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-e1-guard-deleted "$MUTDIR/tree/.github/workflows/appkey.yml" 1 '/^          if \[\[ "\$PEM" == EVICTED_SEE_ADR_241 \]\]; then$/d'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-e1.tsv" ""
+  mutant_red g4-e1-guard-deleted wf_row "$T/mut/g4-e1.tsv" "G4e:"
+fi
+# Row e2 — keep the guard, drop the VERDICT word from the message. The job still fails
+# closed, so nothing breaks; the operator just gets a message they cannot grep for, which is
+# the whole reason this refusal exists rather than relying on `openssl rsa -check`.
+MUTDIR="$(fixcopy g4-e2)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-e2-verdict-dropped "$MUTDIR/tree/.github/workflows/appkey.yml" 2 's/verdict=legacy_app_key_evicted the key/the key/'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-e2.tsv" ""
+  mutant_red g4-e2-verdict-dropped wf_row "$T/mut/g4-e2.tsv" "G4e:"
+fi
+
 # ── Guard 2 ──────────────────────────────────────────────────────────────────────────
 # Row 1 — remove --preserve-env from the tf-var `doppler run` in the Tier-B apply job.
 MUTDIR="$(fixcopy g2-1)"; assert_fixture_dir "$MUTDIR"
@@ -1254,14 +1473,14 @@ fi
 }
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
-MUTANT_FLOOR=17
+MUTANT_FLOOR=23
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
 # Assertion FLOOR: live census 16 + harness 7 + mutants 17 x 2 = 57 (exact).
 _ran=$((passes + fails))
-FLOOR=57
+FLOOR=71
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

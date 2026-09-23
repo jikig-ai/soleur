@@ -53,6 +53,27 @@ runs:
           echo "::error::GITHUB_APP_ID not found in Doppler ${DOPPLER_CONFIG}."; exit 1; }
         PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
           echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler ${DOPPLER_CONFIG}."; exit 1; }
+        # THE EVICTION SENTINEL, refused BY NAME (#8209, ADR-241 D5).
+        #
+        # After operator step O10, `prd_terraform` holds `EVICTED_SEE_ADR_241` under this name
+        # instead of a key -- the eviction is an OVERRIDE, because the value is inherited from
+        # `prd` and cannot be deleted out of a branch config. So the read below SUCCEEDS and
+        # returns a non-empty string, which every check here was written to treat as a key.
+        #
+        # `openssl rsa -check` further down does reject it, so this is not the difference
+        # between working and broken -- it is the difference between an operator reading
+        # "verdict=legacy_app_key_evicted" and reading "not a valid RSA PEM". The second one
+        # means "the key is corrupted", and the remedy it suggests is to paste a fresh key into
+        # `prd_terraform` -- which UNDOES the eviction this PR exists to perform, on a config
+        # every branch can read. A message that invites the operator to reverse the fix is worse
+        # than no message.
+        #
+        # The three ADR/runbook/plan sites that promise this verdict had nothing behind them
+        # until now; census row G4e is what keeps that from recurring.
+        if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+          echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler ${DOPPLER_CONFIG} is the #8209 eviction sentinel, not a key. Do NOT re-set it there. This consumer must mint from a Tier-B source; see knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+          exit 1
+        fi
         if [[ -z "$APP_ID" || -z "$PEM" ]]; then
           echo "::error::GitHub App credentials empty in Doppler ${DOPPLER_CONFIG}."; exit 1; fi
         printf '::add-mask::%s\n' "$APP_ID"

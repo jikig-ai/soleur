@@ -98,7 +98,7 @@ provider "logtail" {
 # long-lived PAT. See AGENTS.rules.md hr-github-app-auth-not-pat.
 # autonomy-considered: reuse-applied (App credentials already in prd_terraform).
 #
-# (#8209, ADR-239) THREE AUTH MODES, selected by which variables are non-empty. The
+# (#8209, ADR-241) THREE AUTH MODES, selected by which variables are non-empty. The
 # selector is the CONFIGURATION, not a `tier` variable: Terraform cannot tell a plan
 # from an apply, so a mode is chosen by what credentials the caller supplied.
 #
@@ -110,7 +110,7 @@ provider "logtail" {
 #            a `-refresh=false` plan needs nothing more (probe M8).
 #   legacy — neither set. The soleur-ai App key from `prd_terraform`. This is the BEFORE
 #            state and it keeps every consumer working until the operator finishes; after
-#            operator step O10 that key resolves to the non-PEM `EVICTED_SEE_ADR_238`
+#            operator step O10 that key resolves to the non-PEM `EVICTED_SEE_ADR_241`
 #            sentinel, so only a run that should have used another mode ever reads it.
 #
 # The `for_each` is the exact COMPLEMENT of the `token` condition, so exactly one of

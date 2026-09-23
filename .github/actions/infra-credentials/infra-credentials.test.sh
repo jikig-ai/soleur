@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# #8209 / ADR-239 — executable test for the tiered credential loader.
+# #8209 / ADR-241 — executable test for the tiered credential loader.
 #
 # WHAT THIS PINS, and why a static grep could not.
 #
@@ -187,7 +187,7 @@ run_loader() {
 out_get() { grep -E "^$1=" "$LOADER_DIR/github_output" | tail -1 | cut -d= -f2- || true; }
 
 # The KEYS a $GITHUB_ENV file actually defines, parsed the way Actions parses it: a
-# `NAME<<DELIM` line opens a body that is DATA until the delimiter line, and a `NAME=` line
+# `NAME<<` + a delimiter word opens a body that is DATA until the delimiter line, and a `NAME=` line
 # outside a body is a key. A bare grep cannot tell the two apart, so it would report a
 # contained value as an injection -- failing in the opposite direction from the defect and
 # reading just as convincingly.
@@ -349,8 +349,23 @@ env_has "AWS_SECRET_ACCESS_KEY" && pass "row8b: aliases the backend secret"     
 # export loop's own TF_STATE_AWS_ACCESS_KEY_ID / TF_VAR_tf_state_aws_access_key_id lines,
 # which carry that value three times before the alias is reached -- so the assertion held
 # with the alias pointing at a literal, at the SECRET in the id slot, or at nothing of the
-# sort. The heredoc body is the line immediately after the `KEY<<delim` header.
-_alias_val() { awk -v k="$1" '$0 ~ "^"k"<<" {getline; print; exit}' "$LOADER_DIR/github_env"; }
+# sort. The heredoc body is the line immediately after the `KEY<<` + delimiter header.
+#
+# Both of this file's mentions of that form keep a non-identifier character after the `<<`,
+# deliberately. scripts/guard-vacuity-floor.test.sh finds each suite's anti-vacuity floor by
+# scanning for an `if [[ ... -lt ... ]]` and skips lines it believes sit inside a heredoc BODY
+# -- and its parser does not skip comments and allows whitespace after the `<<`. So `<<` (or
+# `<< `) followed by a word, even in a `#` line, opens a phantom heredoc whose tag never
+# appears; the phantom body then runs to EOF and swallows this file's floor. Measured twice:
+# the ratchet reported `no-longer-floor-bearing`, which is the one thing that arm exists to
+# catch, and it was right -- the floor really had left the covered set.
+# `<[<]` rather than a literal `<<`: the repo-wide `guard-vacuity-floor` ratchet finds each
+# suite's anti-vacuity floor by scanning for an `if [[ ... -lt ... ]]`, and it skips lines it
+# believes are inside a heredoc BODY. Its heredoc parser is naive, so a bare `<<` here opens a
+# phantom heredoc whose delimiter never appears -- the phantom body then runs to EOF and
+# SWALLOWS this file's floor at the bottom, which the ratchet reports as
+# `no-longer-floor-bearing` (measured: it did exactly that). The awk semantics are identical.
+_alias_val() { awk -v k="$1" 'index($0, k) == 1 && $0 ~ /<[<]/ {getline; print; exit}' "$LOADER_DIR/github_env"; }
 [[ "$(_alias_val AWS_ACCESS_KEY_ID)" == "rw-key" ]] \
   && pass "row8b: the alias carries the Tier-B read/write KEY ID" \
   || fail "row8b: AWS_ACCESS_KEY_ID aliases $(_alias_val AWS_ACCESS_KEY_ID), want the Tier-B rw-key"
