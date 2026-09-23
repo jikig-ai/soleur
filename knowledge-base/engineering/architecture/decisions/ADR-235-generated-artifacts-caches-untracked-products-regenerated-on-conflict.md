@@ -204,7 +204,7 @@ of most pairs changed. Nothing reads it:
 
 The key is kept because the `ViewWithHash` type declares it.
 
-**Measured** (replay harness and results: `knowledge-base/project/specs/feat-c4-model-mergeable/replay/`):
+**Measured** (replay harness and results: `knowledge-base/project/specs/archive/20260922-133038-feat-c4-model-mergeable/replay/`):
 
 - Real concurrent pairs whose `.c4` sources merge cleanly: 0/152 merge today, 107/152 in the
   canonical format.

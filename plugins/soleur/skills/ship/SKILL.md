@@ -42,7 +42,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 When `HEADLESS_MODE=true`:
 
-- Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag, no user prompt)
+- Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag, no user prompt) when the Phase 2 probe prints `BRANCH_LEARNING=absent`
 - Phase 4: if test files are missing, continue without writing (CI gate catches this)
 - Phase 6: auto-accept generated PR title/body without user confirmation
 - Phase 7: if CI is flaky or unrelated check fails, abort pipeline (do not ask whether to proceed)
@@ -254,17 +254,30 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 ## Phase 2: Capture Learnings
 
-Check if soleur:compound was run for this feature. Use the feature name extracted in Phase 1:
+Did **this branch** capture a learning? Ask the branch, not the calendar: a repo-wide `--since` window is non-empty in essentially every week here, so it never said "compound has not run" (#8470). Run this block as written, from the feature worktree root (on a harness whose tool envelope carries no cwd, prefix each `git` with `-C <worktree-abs-path>` — `devin/INSTRUCTIONS.md` §Paths):
 
 ```bash
-git log --oneline --since="1 week ago" -- knowledge-base/project/learnings/
+if [ -n "$(
+  { git status --porcelain -uall -- ':/knowledge-base/project/learnings/' | grep -E '^(\?\?|A.) .*\.md"?$'
+    git fetch -q origin main 2>/dev/null && {
+      git log --diff-filter=A --format=%h refs/remotes/origin/main..HEAD -- ':/knowledge-base/project/learnings/'
+      git log --format=%s refs/remotes/origin/main..HEAD | grep -E '^(compound|learning): '
+    }
+  } 2>/dev/null
+)" ]; then echo "BRANCH_LEARNING=present"; else echo "BRANCH_LEARNING=absent"; fi
 ```
 
-Also use the Glob tool to search `knowledge-base/project/learnings/**/*FEATURE*` (replacing FEATURE with the actual name).
+It counts a `.md` learning compound wrote but has not committed yet (`-uall` so a brand-new category directory is listed file by file), counts an ADDED file or a branch commit whose subject starts `compound:` or `learning:` — the prefixes compound and compound-capture commit under, including the runs that only update or archive, which is what stops one-shot running compound twice (compound's `constitution:` and `skill:` commits are deliberately not learning captures) — and trusts the committed arms only after a successful fetch, because a stale `origin/main` would widen the range to main's own learnings (Phase 1.5's fetch rule). Three deliberate spellings: `refs/remotes/origin/main` (a *tag* named `origin/main` outranks the remote-tracking ref), `..` not `...` (a merge base would re-admit main's learnings), and a captured string tested with `-n` rather than `| grep -q .` (that pipeline reports FAILURE on a SUCCESSFUL match under `set -o pipefail`, the shape `.claude/hooks/grep-q-pipe-guard.test.sh` bans). Every doubt resolves toward running compound. The block, and the two dispatch lines below it, are pinned by `plugins/soleur/test/ship-learning-probe.test.ts`.
 
-**If no recent learning exists:** Check for unarchived KB artifacts before offering a choice.
+The token says whether a learning LANDED, not who wrote it: a hand-committed learning also reads `present`, so the unarchived-artifact check below runs on BOTH verdicts.
 
-Search for unarchived artifacts matching the feature name (excluding `archive/` paths) using the Glob tool:
+**`BRANCH_LEARNING=present`:** a learning landed on this branch. Run the artifact check below; with no unarchived artifacts, continue to Phase 3.
+
+**`BRANCH_LEARNING=absent`:** no learning landed on this branch, so compound runs unless the interactive Skip below applies.
+
+Any other output — an error, an empty line, two tokens — is treated as `absent`. Do NOT re-derive the check by hand.
+
+Check for unarchived KB artifacts matching the feature name extracted in Phase 1 (excluding `archive/` paths) using the Glob tool:
 
 - Brainstorms: `knowledge-base/project/brainstorms/*FEATURE*`
 - Plans: `knowledge-base/project/plans/*FEATURE*`
@@ -272,9 +285,11 @@ Search for unarchived artifacts matching the feature name (excluding `archive/` 
 
 **If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that compound must run to consolidate and archive them before shipping. Then use `skill: soleur:compound` (or `skill: soleur:compound --headless` if `HEADLESS_MODE=true`). The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
 
-**If no unarchived artifacts exist:**
+**If no unarchived artifacts exist AND the probe printed `BRANCH_LEARNING=present`:** continue to Phase 3.
 
-**Headless mode:** Auto-invoke `skill: soleur:compound --headless` without prompting.
+**If no unarchived artifacts exist AND the probe printed `BRANCH_LEARNING=absent`:**
+
+**Headless mode:** Auto-invoke `skill: soleur:compound --headless` without prompting. Compound de-duplicates against learnings already on this branch, so a second run on a fetch-failed `absent` costs a check, not a duplicate file.
 
 **Interactive mode:** Offer the standard choice:
 
@@ -453,7 +468,7 @@ contended after three hours; the one-script loop launched cleanly on its first `
 - **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops `gh pr merge --auto`. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible and neither blocks. So the accurate statement is that an infra regression can reach `main` past a red-but-non-required check — not that it reaches production unobserved. Promoting `infra-validate-required` into the required set is the real fix; tracked as #6480.
 - **`TEST_GROUP=all` is not, by itself, a full battery on a local run.** `_diff_touches` in [scripts/test-all.sh](../../../../scripts/test-all.sh) short-circuits to "relevant" only under `CI` or `SOLEUR_TEST_FORCE_ALL=1`, neither of which holds here — so a local `TEST_GROUP=all` still DECLINES the two heavy mutation batteries and the nested infra runner when the diff does not touch their paths (ADR-181). A healthy local run therefore reads `N-k/N`, not `N/N`. If you need the declined suites to actually execute, set `SOLEUR_TEST_FORCE_ALL=1`; and note `SOLEUR_INCIDENT_SKIP=1` drops the infra set entirely while leaving this pin satisfied.
 
-**`TEST_GROUP=all` is pinned, and that pin is load-bearing.** Sharding this run for speed would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding* the command rather than deleting it. Read the pin honestly, though: `TEST_GROUP` selects the shard, and `_infra_in_diff` decides whether the infra runner executes at all — so the group pin is necessary and not sufficient, and the epilogue NOTE is what tells you which happened.
+**`TEST_GROUP=all` is pinned, and that pin is load-bearing.** Sharding this run for speed would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding* the command rather than deleting it. `TEST_GROUP=affected` exists for LOCAL ITERATION (work Phase 2 §9) — it is the runner's scoped mode (declines counted, `[skip] (affected)` lines, epilogue scope note), and it is NOT a substitute for this checkpoint: substituting it would read a scoped run as the ship gate, which is the exact misreading its own epilogue warns against. Read the pin honestly, though: `TEST_GROUP` selects the shard, and `_infra_in_diff` decides whether the infra runner executes at all — so the group pin is necessary and not sufficient, and the epilogue NOTE is what tells you which happened.
 
 **A reaped run is UNRESOLVED — never ship on it, and rc=4 is not a reap.** The outcome space is four-way, not three: `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); **`rc=4` is REFUSED — nothing ran at all**, for either of two reasons and both overridden by `SOLEUR_ALLOW_FULL_GATE=1`: `SOLEUR_SUBAGENT=1` was set, or a sibling full-gate run was already in flight (#7553); and no marker with no rc file is a harness reap. The rc=4 case exits in under a second with no `[FAIL]` lines, which makes it the easiest to misread as a reap. Note that ship reached from a spawned agent (a drain fan-out delegating to one-shot) does **not** inherit `SOLEUR_SUBAGENT` — the harness does not set it, so that path trips rc=4 only via the sibling condition, or not at all. Check for the rc file before concluding anything. With only one full run left in the pipeline there is no second chance downstream, and "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
 
@@ -490,7 +505,7 @@ Create a TodoWrite checklist summarizing the state:
 Ship Checklist for [branch name]:
 
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
-- [x/skip] Learnings captured (soleur:compound)
+- [x/skip] Learnings captured (soleur:compound — `skip` only on the Phase 2 probe's interactive no-artifacts path)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
 - [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
 - [ ] No removable probe in the tree (Phase 5.4 gate, ADR-230)
@@ -2415,7 +2430,7 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→
 
 **ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` IS a required status check — [scripts/required-checks.txt](../../../../scripts/required-checks.txt) is the SSOT row, applied via [infra/github/ruleset-ci-required.tf](../../../../infra/github/ruleset-ci-required.tf) (#6049/#6050, 2026-07-05); read the current set with `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq '[.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]'` — and `main` enforces the strict up-to-date policy, so the collision is caught on the PR, not on `main`: the sync pushes a new head, the PR's `adr-ordinals` job re-runs red, and the required-check-failure exit below names it. The queued auto-merge does not fire and nothing lands red on `main` (an earlier revision of this paragraph said the opposite; #7941 corrected it — PR #5945's collision landed on `main` because the ruleset did not yet carry the check, which #6050 fixed two days later). What the loop does NOT do is renumber for you: whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push — that restarts the poll loop on a head that can go green. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
-**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path. Any `--admin` merge, whether through this hatch or authorized by the operator, requires `plugins/soleur/scripts/admin-merge-ready.sh <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500).
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path. Any `--admin` merge, whether through this hatch or authorized by the operator, requires `plugins/soleur/scripts/admin-merge-ready.sh <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). An operator-authorized merge on a BEHIND PR whose prior head was green is NOT limited to zero-conflict-surface diffs — the authorization replaces the classifier — but it still goes through the gate via `--green-sha <prior-green-sha>` (the reference's "was-green carryover" section), and UNTRUSTED-CI / DIRTY still refuse.
 
 **Classify the failing STEP before exiting — a setup failure is not a red diff.** The exit below is correct to stop on a required-check failure, but the check NAME does not say whether your code failed or a tool download did. Before treating an exit as a diagnosis, read the failing step:
 
@@ -2965,7 +2980,7 @@ The practical consequence: **compound is the last point at which archival can ha
 
 - **Always set a semver label.** Every PR that touches `plugins/soleur/` must have a `semver:patch`, `semver:minor`, or `semver:major` label. CI uses this label to bump the version at merge time.
 - **Never add a `version` key to a plugin manifest.** None of the three carries one — `plugins/soleur/.claude-plugin/plugin.json`, this repo's local-dev `.claude-plugin/marketplace.json` (`plugins[0]`; its *top-level* `version` is the manifest-format version and stays), and the published distribution manifest in `jikig-ai/soleur-marketplace`. The reason is functional: `plugin update` compares **version strings**, and with no key the CLI records the plugin's **commit SHA** as its version, so the string changes with every commit and the update is detected. A constant version never changes, so the comparison always comes back equal and the update short-circuits — reporting success while delivering nothing (#7471). Measurement record: `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` **§1.9** (the controlled experiment establishing the comparator), plus §1.0 and §2B. Adding a key back to any of the three silently reverts the fix for every new install. Release versions live in git tags via GitHub Releases; a release publishes nothing to any manifest.
-- **Ask before running soleur:compound.** The user may have already documented learnings.
+- **Phase 2's probe decides whether compound runs.** Ask only on its interactive no-artifacts path.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **A resume prompt's gate list must cite commands verified to RESOLVE** (`wg-end-of-work-emit-resume-prompt`). Before writing `<suite> -> N/0` into a handoff, re-run the command or at minimum `git ls-files | grep -E '<name>'` it — a remembered path is not a measured one. **Why:** #6730's RESUME.md reported two suites green whose paths did not exist (wrong extension, wrong directory), so the resuming session's first two gate commands both died on "No such file or directory".
 - **Confirm the PR title and body** with the user before creating it (skip in headless mode).

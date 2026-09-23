@@ -170,6 +170,7 @@
 1	apps/web-platform/infra/inngest-inventory.test.sh
 11	apps/web-platform/infra/inngest-luks-cutover.sh
 1	apps/web-platform/infra/inngest-luks-cutover.test.sh
+7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
 1	apps/web-platform/infra/inngest.test.sh
@@ -388,6 +389,7 @@
 2	scripts/sweep-followthroughs.sh
 93	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
+1	scripts/test-all-affected.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh
 3	scripts/test-all-killed-classification.test.sh
