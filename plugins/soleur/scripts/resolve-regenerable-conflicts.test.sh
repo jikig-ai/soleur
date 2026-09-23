@@ -107,6 +107,7 @@ _write_renderer() {
     case "$mode" in
       ok|extra-mod|extra-new) _emit_ok_body "plugin" ;;
       ok-alt) _emit_ok_body "alt-plugin" ;;
+      slow) _emit_ok_body "plugin"; printf 'touch "$R.started"; sleep 3\n' ;;
       fail) printf 'echo "Invalid model.c4"; echo "    Line 3: boom (stub diagnostic)"; echo "ERROR: stub renderer refused" >&2; exit 9\n' ;;
       noop) printf 'exit 0\n' ;;
       *) echo "[FATAL] unknown renderer mode $mode" >&2; exit 2 ;;
@@ -189,7 +190,8 @@ P_XNEW="$(mkplugin xnew extra-new)"
 P_LONELY="$(mkplugin lonely none)"
 P_NOID="$(mkplugin noid ok not-soleur)"
 P_ALT="$(mkplugin alt ok-alt)"
-for _p in "$P_ALT" "$P_OK" "$P_FAIL" "$P_NOOP" "$P_XMOD" "$P_XNEW" "$P_LONELY" "$P_NOID"; do
+P_SLOW="$(mkplugin slow slow)"
+for _p in "$P_SLOW" "$P_ALT" "$P_OK" "$P_FAIL" "$P_NOOP" "$P_XMOD" "$P_XNEW" "$P_LONELY" "$P_NOID"; do
   [[ -f "$_p/scripts/resolve-regenerable-conflicts.sh" ]] || { echo "[FATAL] sandbox plugin not built: $_p" >&2; exit 2; }
 done
 
@@ -379,7 +381,7 @@ for spec in \
   if [[ "$(tree_fp "$r")" == "$fp_before" ]]; then
     pass "$name -> tree byte-identical to entry"
   else
-    fail "$name -> the tree CHANGED; fail-closed means nothing is touched: $(sut_out "$res")"
+    fail "$name -> the tree CHANGED (rc=$(sut_rc "$res")); fail-closed means nothing is touched: $(sut_out "$res")"
   fi
 done
 
@@ -762,10 +764,69 @@ grep -q 'Line 3: boom' <<<"$(sut_out "$res")" \
   && pass "AC6: the bail message carries the renderer's diagnostic text, not only the argv" \
   || fail "AC6: the diagnostic was swallowed: $(sut_out "$res")"
 
+# ── A SIGNAL MID-REGEN UNWINDS AND STOPS (P4) ──────────────────────────────────────────────
+# The INT/TERM/HUP trap aborted the merge and then RETURNED, so the script carried on from the
+# interrupted line. With ONE resolvable member that is harmless by luck (the aborted path is
+# restored and the later commit fails). With two it is not: the loop moves on, `rm -f`s the
+# second path -- now a clean tracked file, the merge having been aborted -- and the next
+# `merge --abort` has no merge to abort, so the file stays deleted. Two members via the test
+# seam, the slow one first, so the signal lands with the second still ahead. The trap must
+# unwind AND exit.
+r="$(mkrepo sigterm)"; assert_fixture_dir "$r"
+setup_row3 "$r"
+printf '%s\tbash\t%s\t--root\t%s\n%s\tbash\t%s\t--root\t%s\n' \
+  "$MODEL" "$P_SLOW/scripts/render-c4-model.sh" "$r" \
+  "knowledge-base/engineering/architecture/diagrams/second.json" "$P_OK/scripts/render-c4-model.sh" "$r" \
+  > "${r}.override.tsv"
+fp_before="$(tree_fp "$r")"
+rm -f "$r.started"
+( cd "$r" && exec env -u CLAUDE_PLUGIN_ROOT bash "$P_SLOW/scripts/resolve-regenerable-conflicts.sh" --test-resolvable "${r}.override.tsv" main ) \
+  > "$SANDBOX/sigterm.out" 2>&1 &
+_sig_pid=$!
+for _i in $(seq 1 100); do [[ -e "$r.started" ]] && break; sleep 0.1; done
+_sig_started=0; [[ -e "$r.started" ]] && _sig_started=1
+kill -TERM "$_sig_pid" 2>/dev/null
+_sig_rc=0; wait "$_sig_pid" || _sig_rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_sig_started" -eq 1 && "$_sig_rc" -ne 0 && "$(tree_fp "$r")" == "$fp_before" ]]; then
+  pass "SIGTERM during the render: non-zero, tree byte-identical (the trap unwinds and exits)"
+else
+  fail "SIGTERM during the render: started=$_sig_started rc=$_sig_rc status=[$(_git "$r" status --porcelain | tr '\n' ' ')] — $(cat "$SANDBOX/sigterm.out")"
+fi
+
+# ── AC9: NO DOCUMENTED INVOCATION IS REPO-RELATIVE ─────────────────────────────────────────
+# A skill or hook that tells an agent to run `bash plugins/soleur/scripts/<x>.sh` runs the MERGED
+# tree's copy in this repo and a missing file in a self-hosted one -- the very gap this change
+# closes, one layer up. Every shipped instruction goes through ${CLAUDE_PLUGIN_ROOT}. Scoped to
+# what an agent executes (skills, commands, agents, hooks); ADRs, plans and learnings quote the
+# old form as history and are not instructions.
+_REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+_AC9_RE='bash[[:space:]]+\.?/?plugins/soleur/scripts/(resolve-regenerable-conflicts|render-c4-model)\.sh'
+_ac9_rc=0
+_ac9="$(git -C "$_REPO" grep -nE "$_AC9_RE" \
+  -- plugins/soleur/skills plugins/soleur/commands plugins/soleur/agents .claude/hooks .openhands \
+  ':!*.test.sh' ':!*.test.ts' 2>&1)" || _ac9_rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_ac9_rc" -eq 1 && -z "$_ac9" ]]; then
+  pass "AC9: no skill, command, agent or hook invokes the resolver or renderer by a repo-relative path"
+elif [[ "$_ac9_rc" -eq 0 ]]; then
+  fail "AC9: repo-relative invocation(s) remain — use \"\${CLAUDE_PLUGIN_ROOT}/scripts/…\": $(tr '\n' ' ' <<<"$_ac9")"
+else
+  fail "AC9: git grep could not run (rc=$_ac9_rc) — the sweep measured nothing: $_ac9"
+fi
+# The instrument, driven once: the same pattern must SEE a planted repo-relative line, or the
+# row above is a pattern that matches nothing.
+CASES_RUN=$((CASES_RUN + 1))
+if grep -qE "$_AC9_RE" <<<'   bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh origin/main'; then
+  pass "AC9 control: the sweep pattern matches a repo-relative invocation"
+else
+  fail "AC9 control: the sweep pattern cannot match the form it forbids"
+fi
+
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=70
+_min_cases=73
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

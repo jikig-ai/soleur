@@ -254,9 +254,31 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   # a clean tree and no merge in progress. It exits non-zero having touched nothing unless it
   # committed, so the deny below is unchanged for every non-regenerable conflict. Its stderr
   # is captured, not discarded -- the refusal/failure discriminator lives there.
-  REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+  # >>> regen-resolver-lookup (byte-identical in .claude/ and .openhands/ pre-merge-rebase.sh;
+  #     .claude/hooks/pre-merge-rebase-regen-lookup.test.sh compares the two)
+  # The resolver comes from the PLUGIN first (#8542 follow-up, ADR-235 amendment). A self-hosted
+  # repo has no plugins/soleur/ of ours, so a $WORK_DIR-only lookup found nothing there and the
+  # merge was denied; and a copy inside $WORK_DIR is the tree being MERGED, whose sibling
+  # render-c4-model.sh the resolver would then execute. So ${CLAUDE_PLUGIN_ROOT} (bare, no `:-`
+  # default -- ADR-179 A12) wins when it names soleur. That name check is DEFENCE-IN-DEPTH, not a
+  # boundary (ADR-179 A11: this repo's own tracked plugin.json names soleur, so a shadowing copy
+  # passes it). The in-repo copy stays as the fallback for this repository's own sessions, where
+  # the project hook runs without CLAUDE_PLUGIN_ROOT. Absolutized here because the call below
+  # runs from inside $WORK_DIR.
+  REGEN_RESOLVER=""
+  _regen_root=""
+  if [[ -n "${CLAUDE_PLUGIN_ROOT+set}" && -n "${CLAUDE_PLUGIN_ROOT}" ]]; then
+    _regen_root="$(cd "${CLAUDE_PLUGIN_ROOT}" 2>/dev/null && pwd -P)" || _regen_root=""
+  fi
+  if [[ -n "$_regen_root" && -f "$_regen_root/scripts/resolve-regenerable-conflicts.sh" ]] \
+     && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$_regen_root/.claude-plugin/plugin.json" 2>/dev/null; then
+    REGEN_RESOLVER="$_regen_root/scripts/resolve-regenerable-conflicts.sh"
+  elif [[ -f "$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh" ]]; then
+    REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+  fi
+  # <<< regen-resolver-lookup
   REGEN_ERR=""
-  if [[ -f "$REGEN_RESOLVER" ]] \
+  if [[ -n "$REGEN_RESOLVER" ]] \
      && REGEN_ERR="$( cd "$WORK_DIR" && bash "$REGEN_RESOLVER" origin/main 2>&1 >/dev/null )"; then
     echo "[ok] regenerable conflict resolved — merge committed, continuing" >&2
   else

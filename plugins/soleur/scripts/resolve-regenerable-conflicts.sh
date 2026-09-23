@@ -298,7 +298,11 @@ fi
 # A regen is a 10-60s network operation (npx likec4) running while MERGE_HEAD is live. Without
 # this, a SIGINT or a killed session leaves the worktree mid-merge carrying conflict markers --
 # a third state the two-outcome contract does not admit.
-trap 'git merge --abort 2>/dev/null || true' INT TERM HUP
+# The trap must EXIT, not only abort. A trap that returns resumes the interrupted line: the loop
+# then `rm -f`s the next resolvable path -- a clean tracked file once the merge is aborted -- and
+# the following `merge --abort` has no merge to undo, so that file stays deleted. Harmless by
+# luck with one member; measured with two (resolve-regenerable-conflicts.test.sh, SIGTERM row).
+trap 'git merge --abort 2>/dev/null || true; echo "[regen-on-conflict] interrupted — merge aborted, nothing committed; re-run when ready" >&2; exit 1' INT TERM HUP
 
 for i in "${!conflicted[@]}"; do
   p="${conflicted[$i]}"

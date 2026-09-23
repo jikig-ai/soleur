@@ -260,7 +260,7 @@ Incremental edits to the consolidated model. Each is a focused patch to the
 `.c4` files (no Mermaid). After any patch, run `render` (see below) to
 **validate** the source. You do NOT need to hand-regenerate `model.likec4.json`:
 the `c4-model-regenerate` pre-commit hook re-renders and re-stages it from the
-edited `.c4` sources on commit (run the repo-root `regenerate-c4-model.sh` —
+edited `.c4` sources on commit (run the plugin's `render-c4-model.sh` —
 see `render` below — only when committing outside that hook).
 
 - **add-container `<id>`** / **add-component `<id>`** — add an element inside the
@@ -290,8 +290,8 @@ or for an **ad-hoc/out-of-hook** regen:
 
 ```bash
 # Canonical regen (pinned, off-tree-validated, idempotent) — same primitive the
-# pre-commit hook runs:
-bash scripts/regenerate-c4-model.sh
+# pre-commit hook and the merge resolver run; renders the current repository:
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"
 
 # Or validate only (line-numbered diagnostics) without rewriting the artifact:
 cd knowledge-base/engineering/architecture/diagrams
@@ -303,7 +303,7 @@ The pinned `1.50.0` is load-bearing: it MUST match `apps/web-platform/Dockerfile
 - `package.json` (`@likec4/core` / `@likec4/diagram`), guarded by
 `c4-likec4-version-pin.test.ts`. Never pin to a floating tag (the unpinned
 `likec4` / a moving release) — a CLI/client schema skew silently corrupts the
-rendered diagram. `regenerate-c4-model.sh` renders
+rendered diagram. `render-c4-model.sh` renders
 off-tree and refuses to publish an empty/invalid model, so a broken `.c4` can
 never clobber the good committed artifact.
 
