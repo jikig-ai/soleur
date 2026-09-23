@@ -106,6 +106,7 @@ _write_renderer() {
     printf 'R="$2"\n'
     case "$mode" in
       ok|extra-mod|extra-new) _emit_ok_body "plugin" ;;
+      ok-alt) _emit_ok_body "alt-plugin" ;;
       fail) printf 'echo "Invalid model.c4"; echo "    Line 3: boom (stub diagnostic)"; echo "ERROR: stub renderer refused" >&2; exit 9\n' ;;
       noop) printf 'exit 0\n' ;;
       *) echo "[FATAL] unknown renderer mode $mode" >&2; exit 2 ;;
@@ -187,7 +188,8 @@ P_XMOD="$(mkplugin xmod extra-mod)"
 P_XNEW="$(mkplugin xnew extra-new)"
 P_LONELY="$(mkplugin lonely none)"
 P_NOID="$(mkplugin noid ok not-soleur)"
-for _p in "$P_OK" "$P_FAIL" "$P_NOOP" "$P_XMOD" "$P_XNEW" "$P_LONELY" "$P_NOID"; do
+P_ALT="$(mkplugin alt ok-alt)"
+for _p in "$P_ALT" "$P_OK" "$P_FAIL" "$P_NOOP" "$P_XMOD" "$P_XNEW" "$P_LONELY" "$P_NOID"; do
   [[ -f "$_p/scripts/resolve-regenerable-conflicts.sh" ]] || { echo "[FATAL] sandbox plugin not built: $_p" >&2; exit 2; }
 done
 
@@ -659,6 +661,19 @@ else
   fail "CLAUDE_PLUGIN_ROOT fallback: rc=$_c_rc — $_c_out"
 fi
 
+# ORDER IS THE CONTROL: with BOTH sources present, the sibling wins. An inherited variable is
+# the weaker provenance (ADR-179), so a valid-looking CLAUDE_PLUGIN_ROOT must not displace the
+# renderer that shipped with this resolver.
+r="$(mkrepo cprorder)"
+_o_rc=0
+_o_out="$(cd "$r" && CLAUDE_PLUGIN_ROOT="$P_ALT" bash "$P_OK/scripts/resolve-regenerable-conflicts.sh" main 2>&1)" || _o_rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_o_rc" -eq 0 && "$(cat "$r/$MODEL")" == *'"by":"plugin"'* && "$_o_out" == *"root=${P_OK} rc=0"* ]]; then
+  pass "a sibling renderer wins over CLAUDE_PLUGIN_ROOT when both resolve"
+else
+  fail "CLAUDE_PLUGIN_ROOT displaced the sibling: rc=$_o_rc artifact=$(cat "$r/$MODEL") — $_o_out"
+fi
+
 # Neither source: refuse BEFORE touching anything, and say what to run instead.
 r="$(mkrepo noroot)"
 fp_before="$(tree_fp "$r")"
@@ -750,7 +765,7 @@ grep -q 'Line 3: boom' <<<"$(sut_out "$res")" \
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=69
+_min_cases=70
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
