@@ -75,6 +75,11 @@ fi
 # Stub values match the SHAPE git-data.tf passes; arch/sha256 are the amd64 branch of
 # local.git_data_arch (cpx22 default). Stub LENGTHS are what matter for a size check, and
 # the real pubkeys/ids/token are all shorter than or equal to these.
+#
+# (#8211) GIT_DATA_BUDGET_VOLUME_ID is a TEST SEAM for the plaintext volume id, and it uses `-`
+# rather than `:-` so an EXPLICITLY EMPTY value is honoured: the render has two branches now
+# (a plaintext volume attached, and none), and the empty one is the state the host reaches once
+# the volume is detached. Both must fit under the cap, so both must be measurable.
 cat > "$TFDIR/main.tf" <<EOF
 locals {
   git_data_rationale_strip          = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"
@@ -98,7 +103,7 @@ locals {
     git_remove_pubkey                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBREMOVEKEYAAAAAAAAAAAAAAAAAAAAAAAA"
     host_ssh_ed25519_private_key     = file("${TFDIR}/hostkey")
     host_ssh_ed25519_public_key      = trimspace(file("${TFDIR}/hostkey.pub"))
-    git_data_volume_id               = "100000001"
+    git_data_volume_id               = "${GIT_DATA_BUDGET_VOLUME_ID-100000001}"
     git_data_luks_volume_id          = "100000002"
     # Built by join() rather than written as one literal: a contiguous dp.<type>.<...>
     # string is a real Doppler-service-token SHAPE, and GitHub Push Protection blocks the
