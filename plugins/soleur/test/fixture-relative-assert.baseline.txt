@@ -338,7 +338,7 @@
 1	scripts/generate-article-30-register.sh
 6	scripts/generate-kb-index.sh
 1	scripts/grok-fidelity-bootstrap.sh
-18	scripts/guard-vacuity-floor.test.sh
+6	scripts/guard-vacuity-floor.test.sh
 12	scripts/infra-config-red-alert.test.sh
 1	scripts/kb-staleness-metric.sh
 8	scripts/learning-retrieval-bench.sh
