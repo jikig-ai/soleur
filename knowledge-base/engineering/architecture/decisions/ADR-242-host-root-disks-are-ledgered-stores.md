@@ -88,7 +88,8 @@ metadata endpoint serving `user_data` to root. It is not the disk.
 - At merge the sweep reports 26 stores (18 from `*.tf` plus 8 catalogued), with no slack.
 - Adding a key to the `var.web_hosts` default fails the gate until the ledger is updated: a new
   host is a new root disk. Flipping a count gate (`enable_grok_dogfood`) does NOT: Layer A reads
-  committed code, and the gate is flipped by a dispatch input. What Layer A guarantees for a
+  committed code, and the gate is flipped by an operator-local `TF_VAR_enable_grok_dogfood` at
+  apply time (runbook `grok-build-hetzner-dogfood.md`). What Layer A guarantees for a
   gated block is that its row exists, admits it covers an unknown set, and names the gate that
   reopens it.
 - The multiplicity resolver reads the committed `default` literal. The sweep reads only tracked

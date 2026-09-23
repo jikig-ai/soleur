@@ -44,6 +44,24 @@ disk held on its creation date:
 - the Inngest state then co-located on web-1, as far as it sat on the root disk, including the
   `/var/lib/inngest` directory (PA-13 (f); the state is shared with PA-14, PA-21, PA-22, PA-27 and PA-31);
 - the root-disk credentials of the time (Doppler service tokens and baked monitor configuration).
+  Among them is the web app's `prd` Doppler service token, which fetches `SUPABASE_SERVICE_ROLE_KEY`
+  (read and write access to the production database, with Row-Level Security bypassed) and
+  `BYOK_ENCRYPTION_KEY` (which decrypts the users' stored third-party API keys). For as long as the
+  token captured in an image is valid, the image reaches the whole production database and every
+  stored BYOK key.
+- **Added 2026-09-23, measured from read-only Doppler token metadata and the GitHub run history:**
+  - **The `prd` token in the images is dead.** It is web-1's first-boot token, from
+    `/etc/default/webhook-deploy`, and it was revoked on 2026-07-30 (`apps/web-platform/infra/server.tf`,
+    the rationale comment for the soleur-doppler-token file). The current `prd` token,
+    `terraform-prd-20260730`, was minted after the last image. The path the images gave to
+    `SUPABASE_SERVICE_ROLE_KEY` and `BYOK_ENCRYPTION_KEY` is therefore closed.
+  - **Image `411798619` very likely holds a live credential that fetches a key.** The
+    `prd_workspaces_luks` token `workspaces-luks-boot` was created on 2026-07-18 and is still live.
+    Cutover runs installed it into `/etc/default/luks-monitor` on 2026-07-20 and at 09:33Z on
+    2026-07-23. `411798619` was taken at 15:34Z on 2026-07-23, so it very likely holds that token,
+    which fetches `WORKSPACES_LUKS_KEY`. This is inferred from install and image times, not measured
+    inside the image. Rotation is tracked at #8632 and is operator-gated. Deleting `411798619` does
+    not revoke that token.
 
 Source of the image facts: a read-only Hetzner API listing, `GET /v1/images?type=snapshot`,
 on 2026-09-23.
@@ -52,20 +70,21 @@ on 2026-09-23.
 
 | Image id | Name | Created | Size | Disposition | Hard expiry |
 |---|---|---|---|---|---|
-| `398857857` | `inngest-cutover-pre-20260618T093102Z` | 2026-06-18 | 23.0 GB | `delete-now`, superseded by `411798619` and not a rollback path | 2026-10-06 |
-| `406654994` | `inngest-cutover-pre-20260709T180819Z` | 2026-07-09 | 26.9 GB | `delete-now`, superseded by `411798619` and not a rollback path | 2026-10-06 |
-| `407991378` | `inngest-cutover-pre-20260713T095907Z` | 2026-07-13 | 8.9 GB | `delete-now`, superseded by `411798619` and not a rollback path | 2026-10-06 |
+| `398857857` | `inngest-cutover-pre-20260618T093102Z` | 2026-06-18 | 23.0 GB | `delete-now`, superseded by `411798619` and not a rollback path; determination: ADR-100 "## Addendum — 2026-09-23 (#8532) — only one of the four `inngest-cutover-pre-*` images is rollback substrate" | 2026-10-06 |
+| `406654994` | `inngest-cutover-pre-20260709T180819Z` | 2026-07-09 | 26.9 GB | `delete-now`, superseded by `411798619` and not a rollback path; determination: ADR-100 "## Addendum — 2026-09-23 (#8532) — only one of the four `inngest-cutover-pre-*` images is rollback substrate" | 2026-10-06 |
+| `407991378` | `inngest-cutover-pre-20260713T095907Z` | 2026-07-13 | 8.9 GB | `delete-now`, superseded by `411798619` and not a rollback path; determination: ADR-100 "## Addendum — 2026-09-23 (#8532) — only one of the four `inngest-cutover-pre-*` images is rollback substrate" | 2026-10-06 |
 | `411798619` | `inngest-cutover-pre-20260723T153403Z` | 2026-07-23 | 23.8 GB | `retained-until` the two UNEXPLAINED groups in the #6178 day-7 soak reading (2026-09-22T20:38Z) are attributed and a SOAK CLEAN reading lands, then released in ADR-100's verb order, before #6178 closes | 2026-10-06 (the soak probe's `horizon_passed` date) |
 
 **Hard expiry means deletion is due on that date whatever the soak says.** Retention past it
 requires an Article 30 amendment dated before it that records a new purpose and a new date.
 Silence does not extend it.
 
-**Release order.** ADR-100's addendum lists all four images under one release step that follows
-a clean day-7 reading. Before the three `delete-now` rows are executed, the PR that executes
-them must record the engineering determination that those three are outside the #6178 rollback
-substrate. That determination goes in ADR-100 or in #6178, and its link goes in the row. The
-#6178 spec pins only `411798619`
+**Release order.** ADR-100's 2026-09-19 addendum listed all four images under one release step
+that follows a clean day-7 reading. The engineering determination that splits the set is ADR-100's
+"## Addendum — 2026-09-23 (#8532) — only one of the four `inngest-cutover-pre-*` images is
+rollback substrate". It finds that the older three are outside the #6178 rollback substrate,
+because no runbook, workflow or rollback arm restores from them, and each of the three
+`delete-now` rows above cites it. The #6178 spec pins only `411798619`
 (`knowledge-base/project/specs/feat-one-shot-6178-verify-window-decouple/tasks.md`).
 **[2026-09-23 (#8532): the determination is recorded.** It is in ADR-100, `## Addendum — 2026-09-23
 (#8532) — only one of the four inngest-cutover-pre-* images is rollback substrate`. The listing
@@ -94,7 +113,8 @@ Rules for filling a row:
   not verification.
 - For `411798619` only, also cite the #6178 comment carrying the SOAK CLEAN reading that released
   it, or state that the hard expiry was reached without one.
-- For the three `delete-now` rows, also cite the engineering determination required above.
+- For the three `delete-now` rows, the determination is the ADR-100 2026-09-23 addendum cited in
+  the disposition table; record the ADR-100 commit it was read at.
 
 ## Lawful basis for destruction
 
@@ -116,12 +136,18 @@ and why the three older images are not held as its substitutes.
 
 ## What deletion does not do
 
-- **It does not revoke any credential.** Whether the Doppler tokens and other credentials held on
-  the root disk at each image's date have since been rotated is not established by this record. A
-  credential still valid today stays valid after the image is deleted.
-- **It does not reach the rest of the class.** The live persistent journals on the root disks of
-  web-1, web-2 and the registry host (bounded by capacity, not by time), Better Stack (90 days) and
-  Sentry (90 days) are untouched. See register PA-8 (f).
+- **It does not revoke any credential.** This record makes no statement about whether the Doppler
+  tokens and other credentials held on the root disk at each image's date have since been rotated.
+  A credential still valid today stays valid after the image is deleted.
+  *(Added 2026-09-23:* the `prd` token in the images is revoked; the `prd_workspaces_luks` token
+  very likely in `411798619` is live, and its rotation is tracked at #8632. See "What the images hold".)
+- **It does not reach the rest of the class.** Deleting the images leaves the following untouched
+  (see register PA-8 (f)):
+  - the live persistent journals on the root disks of web-1, web-2, the registry host and the
+    Inngest host, which are bounded by capacity, not by time (the git-data host's journal is not
+    measured);
+  - Better Stack (90 days);
+  - Sentry (90 days).
 
 ## Completion checklist
 

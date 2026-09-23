@@ -31,7 +31,7 @@ Nothing here edits `apps/web-platform/infra/`.
 - [x] 1.3 Close #8527: run the disclosure check on `luks` rows, positive direction (`check_luks_disclosure`: anchor line, anchor text removed, denial wins over claim).
 - [x] 1.4 Supersede (dated, append-only) the now-false honesty note on the `hcloud_volume.registry` row.
 - [x] 1.5 Cases plus mutation rows MB-17..MB-21 (plan numbering) and MB-22 on the floor's FAIL branch: MB-1 and MB-17 share a verdict with the now-exact floor, so each is proven by "floor deleted alone still FAILs" plus "both deleted flips to PASS".
-- [x] 1.6 Raise `MIN_CASES` to the new count (30 -> 77).
+- [x] 1.6 Raise `MIN_CASES` to the new count (30 -> 77; later derived from the ledger, 179 at review).
 
 ## Phase 2 — PR-2: host root disks
 

@@ -1506,6 +1506,23 @@ def check_luks_disclosure(
     # MUTATION-TARGET: MB-20 end
 
 
+def check_provider_backups(tf_files: list[Path], cache: dict[Path, str], fails: list[str]) -> None:
+    """`backups = true` on an hcloud_server makes Hetzner keep backup images of
+    its unencrypted root disk: a derivative store that no ledger row names and
+    no erasure path reaches (#8625). Refused until the ledger records it."""
+    # MUTATION-TARGET: MB-33 start (provider backups are an unledgered store)
+    for f in tf_files:
+        text = _cached_read(f, cache)
+        for t, n, block in extract_resource_blocks(text, f.name.endswith(".tf.json")):
+            if t == "hcloud_server" and re.search(r"(?m)^\s*backups\s*=\s*true\b", block):
+                fails.append(
+                    f"FAIL: hcloud_server.{n} enables provider backups, a derivative "
+                    "store of its unencrypted root disk with no ledger row -> ledger "
+                    "the backup images (retention, Art. 17 reach) before enabling them"
+                )
+    # MUTATION-TARGET: MB-33 end
+
+
 def check_class_conformance(ledger: dict, fails: list[str]) -> None:
     """A row at a store-class address carries that class's kind and one of its
     mechanisms. Without this, `store_classes.<type>.mechanisms` is decoration:
@@ -1839,6 +1856,7 @@ def run_sweep(
     check_store_id_accounted(ledger, tf_inventory, fails)
     check_instance_multiplicity(ledger, tf_files, cache, fails)
     check_class_conformance(ledger, fails)
+    check_provider_backups(tf_files, cache, fails)
     check_live_coverage_floor(ledger, fails)
 
     luks_rows = [r for r in ledger["stores"] if r["at_rest"]["mechanism"] == "luks"]

@@ -1779,6 +1779,21 @@ run_case_reports "P2-MULT a two-gate for_each fails closed" 1 \
   "which this check cannot resolve" \
   --repo-sweep --repo-root "$REPO_P2_ML2" --ledger "$LEDGER_P2_ML_BAD" --today "$TODAY"
 
+# Provider backups on a host are a derivative store no row names (MB-33).
+REPO_BACKUPS="$TMPDIR_TEST/backups"
+printf 'resource "hcloud_server" "h" {\n  backups = true\n}\n' | write_file "$REPO_BACKUPS/apps/x/infra/h.tf"
+LEDGER_BACKUPS="$TMPDIR_TEST/backups.json"
+{
+  echo '{ "schema_version": 1,'
+  echo '  "store_classes": { "hcloud_server": { "kind": "host-root-disk", "mechanisms": ["plaintext-exception"] } },'
+  echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+  mk_exc_row "hcloud_server.h" "" "$REEVAL_DEF" | sed 's/"kind": "guest-luks-volume"/"kind": "host-root-disk"/'
+  echo '  ], "connections": [] }'
+} | write_file "$LEDGER_BACKUPS"
+run_case_reports "P2-BACKUPS an hcloud_server with backups = true -> FAIL" 1 \
+  "hcloud_server.h enables provider backups" \
+  --repo-sweep --repo-root "$REPO_BACKUPS" --ledger "$LEDGER_BACKUPS" --today "$TODAY"
+run_mutation "MB-33" "MB-33" "$REPO_BACKUPS" "$LEDGER_BACKUPS"
 run_mutation "MB-20/planned" "MB-20" "$TMPDIR_TEST/p1-luks-planned" "$TMPDIR_TEST/p1-luks-planned.json"
 run_mutation "MB-31/connection" "MB-31" "$REPO_CONN" "$LEDGER_CONN_GONE"
 run_mutation "MB-31/provider" "MB-31" "$REPO_P1" "$LEDGER_PROV_GONE"
@@ -2215,7 +2230,7 @@ fi
 # the fixed case count plus the cases DERIVED from the committed ledger (one per
 # catalogued id, one per web_hosts row), so retiring a store changes both sides
 # together. Reported via printf + exit, never through the verdict helpers.
-MIN_STATIC=169
+MIN_STATIC=171
 WEBHOST_N="$(grep -c . "$TMPDIR_TEST/real-webhost-needles" || true)"
 MIN_CASES=$((MIN_STATIC + REAL_N + WEBHOST_N))
 echo
