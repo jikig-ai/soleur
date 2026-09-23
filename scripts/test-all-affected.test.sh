@@ -168,6 +168,28 @@ s = re.sub(r'^tc_preamble$', (
     'fi'
 ), s, count=1, flags=re.M)
 
+# 4. Corpus trim. The arms under test exercise SELECTION — a handful of named
+#    labels — so the ~300-registration stream is fixture, not subject. The
+#    filter sits inside run_suite BEFORE _shard_selects ticks the ordinal, so
+#    a trimmed label leaves the enumerate stream AND the dispatch walk
+#    identically and every ordinal map stays aligned (skip_suite declines keep
+#    ticking on both sides the same way). ~2-3 min of per-arm classification
+#    collapses to seconds; real-corpus evidence stays in rows d/e/r, which run
+#    the unmodified runner. Keep-list = every label an arm asserts on.
+old = 'run_suite() {\n  local label="$1"; shift\n'
+assert s.count(old) == 1, f"expected exactly one run_suite head, found {s.count(old)}"
+s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labels the arms assert reach
+  # the chokepoint — enumerate and dispatch skip the rest identically.
+  case "$label" in
+    tests/scripts/dev-suite-mutex-wiring|scripts/lint-dual-lockfile|\\
+    tests/scripts/registry-gate-mutation-battery|\\
+    apps/web-platform/infra/run-registered-suites.sh|\\
+    tests/commands/sync-domain-model|\\
+    plugins/soleur/test/c4-model-freshness.test.sh) : ;;
+    *) return 0 ;;
+  esac
+''', 1)
+
 open(path, 'w').write(s)
 print("sandbox built")
 PY
@@ -196,6 +218,7 @@ run_arm() {
   ARM_RC=$rc
   ARM_OUT="$(cat "$out_f")"
   ARM_RECORD="$(cat "$rec_f")"
+  ARM_SB="$sb"
   return 0
 }
 
@@ -204,13 +227,17 @@ run_arm() {
 # records and turns every ran-count assert fail-open.
 ran_count() { awk -F'\t' '$1=="RAN"' <<<"$ARM_RECORD" | wc -l | tr -d ' '; }
 
-# Runnable-registration count on the real stream, for "everything ran" asserts.
-RUNNABLE_N=""
+# Runnable-registration count for "everything ran" asserts. $1 = runner path —
+# the REAL runner for row d's real-corpus receipt count, the trimmed SANDBOX
+# copy for the arms (whose "everything" is the keep-list stream). Memoized per
+# path: every sandbox build carries the same trim, so the count is stable.
+RUNNABLE_N="" RUNNABLE_N_FOR=""
 runnable_n() {
-  if [[ -z "$RUNNABLE_N" ]]; then
+  if [[ "$RUNNABLE_N_FOR" != "$1" ]]; then
     RUNNABLE_N=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
-      SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --enumerate-commands 2>/dev/null \
+      SOLEUR_DISABLE_SESSION_STATE=1 bash "$1" --enumerate-commands 2>/dev/null \
       | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')
+    RUNNABLE_N_FOR="$1"
   fi
   printf '%s\n' "$RUNNABLE_N"
 }
@@ -258,10 +285,10 @@ rc=0
 _print_out=$(cd "$REPO_ROOT" && env $ENV_SCRUB \
   SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --affected --print-affected-set 2>/dev/null) || rc=$?
 _receipts=$(awk -F'\t' '$1=="AFFECTED_CLASS"' <<<"$_print_out" | wc -l | tr -d ' ')
-if [[ "$rc" == "0" ]] && (( _receipts == $(runnable_n) )); then
-  pass "d: print-affected-set emits ${_receipts} receipts (== $(runnable_n) runnable)"
+if [[ "$rc" == "0" ]] && (( _receipts == $(runnable_n "$RUNNER") )); then
+  pass "d: print-affected-set emits ${_receipts} receipts (== $(runnable_n "$RUNNER") runnable)"
 else
-  fail "d: print rc=$rc receipts=${_receipts} runnable=$(runnable_n)"
+  fail "d: print rc=$rc receipts=${_receipts} runnable=$(runnable_n "$RUNNER")"
 fi
 
 # --- Row e: receipts carry real classes — spot-check the census anchors ---------
@@ -303,11 +330,11 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
   -- --full
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran >= $(runnable_n) )) \
+if [[ "$_rc" == "0" ]] && (( _ran >= $(runnable_n "$ARM_SB") )) \
   && grep -qF 'MODE=full' <<<"$ARM_OUT"; then
   pass "g: --full runs all ${_ran} registrations regardless of diff"
 else
-  fail "g: --full rc=$_rc ran=${_ran} runnable=$(runnable_n)"
+  fail "g: --full rc=$_rc ran=${_ran} runnable=$(runnable_n "$ARM_SB")"
 fi
 
 # --- Row h: undecidable-diff arm degrades to full --------------------------------
@@ -317,7 +344,7 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
 _decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
-if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n "$ARM_SB") )) \
   && grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
   && grep -qF 'undecidable-diff' <<<"$ARM_OUT"; then
   pass "h: undecidable-diff degrades to full with the fallback banner"
@@ -332,7 +359,7 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
 _decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
-if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n "$ARM_SB") )) \
   && grep -qF 'undecidable-diff' <<<"$ARM_OUT"; then
   pass "i: head-diff failure degrades to full"
 else
@@ -346,7 +373,7 @@ SANDBOX_LIB=no-lib run_arm \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
 _decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
-if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n "$ARM_SB") )) \
   && grep -qF 'index-missing' <<<"$ARM_OUT"; then
   pass "j: missing lib degrades to full (index-missing), never narrows"
 else
@@ -360,7 +387,7 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
 _decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
-if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n) )) \
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n "$ARM_SB") )) \
   && grep -qF 'runner-changed' <<<"$ARM_OUT"; then
   pass "k: a diff touching the runner degrades to full (runner-changed)"
 else
@@ -474,11 +501,11 @@ SANDBOX_LIB=with-lib run_arm \
   'SOLEUR_TEST_FORCE_ALL=1' \
   -- --affected
 _rc=$ARM_RC; _ran=$(ran_count)
-if [[ "$_rc" == "0" ]] && (( _ran >= $(runnable_n) )) \
+if [[ "$_rc" == "0" ]] && (( _ran >= $(runnable_n "$ARM_SB") )) \
   && grep -qF 'reason=force-all' <<<"$ARM_OUT"; then
   pass "p: FORCE_ALL under affected degrades to full, announced"
 else
-  fail "p: FORCE_ALL+affected rc=$_rc ran=${_ran} runnable=$(runnable_n)"
+  fail "p: FORCE_ALL+affected rc=$_rc ran=${_ran} runnable=$(runnable_n "$ARM_SB")"
 fi
 
 # --- Row q: epilogue carries not-affected accounting + the --full lever ------------
@@ -550,7 +577,7 @@ rc=0
 ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
 _ran=$(ran_count)
 if [[ "$rc" == "0" ]] && ! grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
-  && (( _ran > 0 && _ran < $(runnable_n) )); then
+  && (( _ran > 0 && _ran < $(runnable_n "$_sbn") )); then
   pass "s1: sharded affected keeps the map aligned — only the leg runs (ran=${_ran})"
 else
   fail "s1: sharded affected rc=$rc ran=${_ran} divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
@@ -571,7 +598,7 @@ _ran=$(ran_count)
 # Parent keeps the carrier; env -u on the child is now the ONLY thing keeping
 # its stream unsharded. Aligned map => leg only, no divergence.
 if [[ "$rc" == "0" ]] && ! grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
-  && (( _ran > 0 && _ran < $(runnable_n) )); then
+  && (( _ran > 0 && _ran < $(runnable_n "$_sbn") )); then
   pass "s2: env -u alone keeps the sharded enumerate aligned (ran=${_ran})"
 else
   fail "s2: nounset arm rc=$rc ran=${_ran} divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
@@ -602,10 +629,10 @@ rc=0
 ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
 _ran=$(ran_count)
 if grep -qF 'AFFECTED_DIVERGENT' <<<"$ARM_OUT" \
-  && (( _ran == $(runnable_n) )); then
+  && (( _ran == $(runnable_n "$_sbn") )); then
   pass "t: ordinal divergence drops the selection map; every suite runs (ran=${_ran})"
 else
-  fail "t: divergent map ran=${_ran} runnable=$(runnable_n) divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
+  fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn") divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
 fi
 
 # --- Row u: self-only derivation demotes to unclassified and RUNS -----------------
