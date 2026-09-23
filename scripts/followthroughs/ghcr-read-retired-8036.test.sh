@@ -62,7 +62,13 @@ argv="$*"
 [[ "$argv" == *"--grep SOLEUR_DEPLOY_GHCR_CONFIG"* ]] || { echo "stub: missing --grep SOLEUR_DEPLOY_GHCR_CONFIG (argv: $argv)" >&2; exit 64; }
 [[ "$argv" == *"--grep relogin_failed"* ]] || { echo "stub: missing --grep relogin_failed (argv: $argv)" >&2; exit 64; }
 [[ "$argv" == *"--grep IMAGE_VERIFY"* ]] || { echo "stub: missing --grep IMAGE_VERIFY (argv: $argv)" >&2; exit 64; }
-[[ "$argv" == *"--limit "* ]] || { echo "stub: missing --limit (argv: $argv)" >&2; exit 64; }
+[[ "$argv" == *"--limit ${STUB_WANT_LIMIT:-5000}"* ]] || { echo "stub: wrong/missing --limit (argv: $argv)" >&2; exit 64; }
+# NEGATIVE PINS over the whole vector. The four checks above are membership tests, and a prefix or
+# membership pin structurally cannot express "nothing downstream undoes this". `--no-archive`
+# collapses betterstack-query.sh to the hot window (~40 min); leg 2 then asserts "zero
+# relogin_failed since earliest" over 40 minutes of a multi-day window and exits 0 on a host that
+# emitted them all week. Refuse it stub-side so the regression reds here rather than in production.
+[[ "$argv" != *"--no-archive"* ]] || { echo "stub: --no-archive truncates to the hot window; leg 2 grades an absence over the FULL window (argv: $argv)" >&2; exit 64; }
 cat "${STUB_ROWS:-/dev/null}"
 STUB
 chmod +x "$WORK/stub-query"
@@ -82,6 +88,12 @@ row() {
 marker() {
   printf 'SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=%s deploy_cfg=present deploy_ghcr_auth=%s deploy_creds_store=none deploy_ghcr_helper=none home_cfg=present home_ghcr_auth=%s home_creds_store=none home_ghcr_helper=none root_cfg=unreadable root_ghcr_auth=na root_creds_store=na root_ghcr_helper=na' \
     "$1" "$2" "${3:-inline}"
+}
+# marker_full <swept> <deploy_cfg> <deploy_auth> <deploy_store> <deploy_helper> — drives the three
+# tokens leg 1 now grades. `marker` stays the two-arg shorthand for the common present/none case.
+marker_full() {
+  printf 'SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=%s deploy_cfg=%s deploy_ghcr_auth=%s deploy_creds_store=%s deploy_ghcr_helper=%s home_cfg=present home_ghcr_auth=inline home_creds_store=none home_ghcr_helper=none root_cfg=present root_ghcr_auth=inline root_creds_store=none root_ghcr_helper=none' \
+    "$1" "$2" "$3" "$4" "$5"
 }
 # The pre-1c marker: identical EXCEPT that it carries no `swept=` token at all.
 marker_pre1c() {
@@ -103,6 +115,13 @@ run_case() {
     fail "$desc -- rc=$rc want=$want_rc :: $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
   elif [[ -n "$want_sub" ]] && ! grep -qF -- "$want_sub" <<<"$OUT"; then
     fail "$desc -- rc ok but missing '$want_sub' :: $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
+  elif grep -qF -- "$HA" <<<"$OUT" || grep -qF -- "$HB" <<<"$OUT"; then
+    # AC-N2. This stdout is posted VERBATIM into a PUBLIC issue comment by sweep-followthroughs.sh.
+    # Machine ids are capped at 12 hex chars; a full 32-hex id reaching the sink is a leak. The
+    # fixtures make this free to check — $HA/$HB are the full ids.
+    fail "$desc -- AC-N2: a full 32-hex _MACHINE_ID reached stdout"
+  elif grep -qE 'canary-helper|creds_store=[a-z-]*helper|STUB_STDERR_SENTINEL' <<<"$OUT"; then
+    fail "$desc -- AC-N2: a credential-helper name or query-tool stderr reached stdout"
   else
     pass "$desc (exit=$rc)"
   fi
@@ -155,22 +174,77 @@ run_case "G3 row 4a: the query tool exits non-zero -> TRANSIENT, never a verdict
 printf '%s\n' 'not json at all' > "$(fx undecodable)"
 run_case "G3 row 4b: rows that do not decode as the journald envelope -> CANNOT ESTABLISH" 3 "CANNOT ESTABLISH:" "$(fx undecodable)"
 
-# The `raw` column is a JSON-ENCODED STRING. A row whose `raw` is already an OBJECT is a query
-# shape change, not evidence — this asserts the double-encoding is genuinely required.
-jq -cn --arg mid "$HA" --arg ts "$T1" --arg msg "$(marker yes none)" \
-  '{dt:"2026-09-02 10:00:00.000000", raw:{SYSLOG_IDENTIFIER:"ci-deploy", _MACHINE_ID:$mid, __REALTIME_TIMESTAMP:$ts, message:$msg}}' \
-  > "$(fx singleenc)"
-run_case "a singly-encoded raw still decodes (jq passes the object through) -> PASS" 0 "PASS:" "$(fx singleenc)"
+# The `raw` column is a JSON-ENCODED STRING, but a row whose `raw` is already an OBJECT is
+# DEGRADED GRACEFULLY rather than refused: `fromjson? // null` on a non-string falls through to
+# the value itself. This row pins that tolerance deliberately. (It does NOT assert a refusal —
+# an earlier comment here claimed it did, while the case asserted a PASS.) The verify row is
+# present so the case grades the DECODE path and not leg 3.
+{ jq -cn --arg mid "$HA" --arg ts "$T1" --arg msg "$(marker yes none)" \
+    '{dt:"2026-09-02 10:00:00.000000", raw:{SYSLOG_IDENTIFIER:"ci-deploy", _MACHINE_ID:$mid, __REALTIME_TIMESTAMP:$ts, message:$msg}}'
+  row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx singleenc)"
+run_case "a singly-encoded raw is tolerated, not refused (jq passes the object through) -> PASS" 0 "PASS:" "$(fx singleenc)"
 
 # ── LEG 3 — verify_failed is ACTION REQUIRED, not FAIL: the GHCR read path IS retired on that
 #    host, so closing it as a retirement failure would name a cause the probe did not measure.
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail verify_failed)"; } > "$(fx leg3)"
 run_case "leg 3: latest verdict result=verify_failed -> ACTION REQUIRED (5), not FAIL" 5 "ACTION REQUIRED:" "$(fx leg3)"
 
-# Another failure class is NOT leg 3's business — only verify_failed is, because that is the class
-# a clipped zot auths entry produces. A `cosign_absent` host still passes here (it is #8037's).
+# INVERTED 2026-09-23 (#8600 review). This row used to assert that a non-`verify_failed` class
+# "is not leg 3's business" and still PASSES, deferring it to #8037. That was wrong twice over:
+# #8037 is CLOSED (so its sweeper only evaluates inside a closed-set lookback, as this probe's own
+# header records), and `cosign_absent` is the literal this work's evidence records firing 89/89 —
+# so the deferral closed #8036 over the very condition the retirement exists to end. Leg 3 is now
+# a closed ALLOWLIST (`ok` | `reused_local_reload`), so every other class is ACTION REQUIRED.
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; } > "$(fx leg3b)"
-run_case "leg 3: a NON-verify_failed verdict class does not trip this probe -> PASS" 0 "PASS:" "$(fx leg3b)"
+run_case "leg 3: result=cosign_absent is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3b)"
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail wrong_identity)"; } > "$(fx leg3d)"
+run_case "leg 3: result=wrong_identity is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3d)"
+# A host that ran the new script but emitted NO verify verdict is ACTION REQUIRED with its own
+# sentence — a pure-absence PASS is the grading this probe's header rejects for legs 1 and 2, and
+# leg 3 was the one leg still doing it.
+{ row "$HA" "$T1" "$(marker yes none)"; } > "$(fx leg3e)"
+run_case "leg 3: markers but no IMAGE_VERIFY verdict at all is ACTION REQUIRED (5), never PASS" 5 "ACTION REQUIRED:" "$(fx leg3e)"
+
+# ── LEG 2, THE LATCH (regression row for #8600 review). `earliest` is deliberately set to the
+#    apply's completion PLUS A MARGIN, because the co-fired release may still run the OLD script —
+#    so the window is EXPECTED to contain pre-1c relogin rows. Counting every row since `earliest`
+#    pinned leg 2 to fail forever on a host that then retired cleanly: no later deploy could ever
+#    clear it, and #8036 could never close. Only rows NEWER than the host's latest marker count.
+{ row "$HA" "$T1" "$RELOGIN_MSG"; row "$HA" "$T2" "$(marker yes none)"; row "$HA" "$T3" "$VERIFY_OK"; } > "$(fx latch)"
+run_case "leg 2: a relogin_failed BEFORE the host's latest marker is pre-1c residue -> PASS" 0 "PASS:" "$(fx latch)"
+
+# The other side of the same rule: a relogin AFTER the latest marker is the new script logging in,
+# which is the regression leg 2 exists to catch. Without this row the fix above would be a way to
+# make leg 2 unconditionally green.
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$RELOGIN_MSG"; row "$HA" "$T3" "$VERIFY_OK"; } > "$(fx latch2)"
+run_case "leg 2: a relogin_failed AFTER the latest marker is a live regression -> FAIL" 1 "FAIL:" "$(fx latch2)"
+
+# ── LEG 1, THE HELPER CARRIER. docker resolves ghcr.io through `credHelpers["ghcr.io"]` with or
+#    without an auths entry, so `deploy_ghcr_auth=none deploy_ghcr_helper=set` is still a host
+#    presenting a credential. Leg 1 graded only the auths token and passed this.
+{ row "$HA" "$T1" "$(marker_full yes present none none set)"; row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx helper)"
+run_case "leg 1: deploy_ghcr_helper=set is still a live credential -> FAIL" 1 "FAIL:" "$(fx helper)"
+
+# ── LEG 1, THE FRESH HOST. A ForceNew/recut host has no deploy docker config until its first
+#    successful zot login writes one. A file that is not there presents no credential, so this is
+#    CLEAN — grading it FAIL made #8036 unclosable on exactly the host class ADR-169 produces.
+{ row "$HA" "$T1" "$(marker_full na_absent absent na na na)"; row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx freshhost)"
+run_case "leg 1: swept=na_absent (no deploy config yet) is CLEAN -> PASS" 0 "PASS:" "$(fx freshhost)"
+
+# ...but a sweep that could not RUN is not the same state and must still refuse.
+{ row "$HA" "$T1" "$(marker_full na_readonly present inline none none)"; row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx rocfg)"
+run_case "leg 1: swept=na_readonly (sweep could not run) fails CLOSED -> FAIL" 1 "FAIL:" "$(fx rocfg)"
+
+# ...and a sweep that ran but could not VERIFY its own post-state must refuse too, or `swept=`
+# goes back to meaning "a removal was attempted".
+{ row "$HA" "$T1" "$(marker_full failed present inline none none)"; row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx sfail)"
+run_case "leg 1: swept=failed (post-state still dirty) -> FAIL" 1 "FAIL:" "$(fx sfail)"
+
+# ── SATURATION. The query keeps the NEWEST rows, so a saturated read has dropped the OLDEST —
+#    exactly where a surviving pre-1c relogin sits. Leg 2 grades an ABSENCE, and an absence over a
+#    truncated window is not evidence.
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx sat)"
+run_case "a result set saturated at the limit is TRANSIENT, never a verdict" 2 "TRANSIENT:" "$(fx sat)" SOLEUR_FT_LIMIT=2 STUB_WANT_LIMIT=2
 
 # A later `ok` must clear an earlier verify_failed — leg 3 grades the LATEST verdict, or one blip
 # would FAIL the tracker forever.
@@ -224,7 +298,10 @@ run_case "rows exist but no ci-deploy marker -> TRANSIENT (2), never PASS" 2 "TR
 # it, and a constant declared further up would be unbound in that slice and die under `set -u`,
 # scoring as a construction failure instead of as the floor firing.
 printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
-MIN_CHECKS=18
+# Sits EXACTLY on the suite's count, raised in the same edit that settled it — the sibling
+# CI_DEPLOY_ASSERT_FLOOR pays the same price. A floor one below the count is not headroom, it is
+# how many assertions can be deleted before the one guard that detects truncation notices.
+MIN_CHECKS=28
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1

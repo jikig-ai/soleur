@@ -159,6 +159,36 @@ and its matching `ZOT_GATE_DEGRADED: reason=<measured>` journald line names the 
 The re-pointed rows assert **both** — a row asserting only `image_pull_failed` would pass against
 a version that reports a credential problem as a bare registry outage.
 
+> **CORRECTION 2026-09-23 (#8600 review) — AS FIRST WRITTEN, THIS DISPOSITION WAS FALSE, AND THE
+> REPAYMENT DID NOT EXIST.** The claim above was that interpolating `ZOT_GATE_STATUS` into
+> `pull_failure_event`'s second argument made the cause reachable. It did not. That argument is
+> `detail_raw`, and the function used it for **one thing only** — feeding the three classifiers
+> (`_pull_result_is_auth_denied`, the `manifest unknown` regex, `_pull_result_is_transient`) —
+> and then discarded it. The journald line emitted `ref`, `result` and `recovery_stage` and no
+> detail; the Sentry payload carried `tags: {feature, op, pull_result, host_id, recovery_stage}`
+> and `extra: {ref}` and no detail field. The status therefore reached **no sink at all**, and a
+> `grep` of the emitter would have shown that at any point while this paragraph was being written.
+> This is the "correct fix, false rationale" class, applied to a compensating control — the worst
+> place for it, because the control is what licensed accepting the loss.
+>
+> Three further errors in the same paragraph, all now fixed in code:
+>
+> 1. **`ZOT_GATE_DEGRADED` did not always fire.** On the `no doppler binary / no DOPPLER_TOKEN`
+>    arm with a non-empty `ZOT_REGISTRY_URL`, `zot_gate_and_login` returned `dark` and emitted
+>    **nothing** — a now-terminal state with no cause on any layer. It emits on every dark return.
+> 2. **One reason for two remediations.** `doppler_unavailable` and `doppler_token_missing` both
+>    collapsed into `no_credential_source`, so "the image lost the doppler binary" and "the host's
+>    token is gone" became indistinguishable without SSH. Split into `no_doppler_binary` /
+>    `no_doppler_token`.
+> 3. **The classifier is an undeclared contract.** Because the status is interpolated into the
+>    string those three predicates read, a future value containing `timeout` would silently
+>    retag every zot-dark failure as `pull_result=network`. Noted at the enum's definition site.
+>
+> **What the repayment actually is now:** `pull_failure_event` emits `zot_gate_status` as a
+> journald field *and* a Sentry tag, so the join is available from Sentry alone. `T-1c-20`
+> asserts every terminal pull failure carries a named status, with the failure count as the
+> denominator so "zero untagged" cannot be satisfied by a run that never failed.
+
 ### DC-W7 — declined, carried forward: `cosign-verify-live-8037.sh` is not deleted here
 
 Plan review proposed deleting it and executing its overdue `# RETIREMENT:` clause, since #8037 is

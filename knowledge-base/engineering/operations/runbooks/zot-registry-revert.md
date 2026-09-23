@@ -1,9 +1,9 @@
 ---
-title: Revert the zot pull-site flip to GHCR-primary
+title: Revert the zot pull-site flip to GHCR-primary (RETRACTED — no host-side GHCR read path exists)
 issue: "#6122"
 adr: ADR-096
 severity: P1 (deploy/boot path)
-last_reviewed: 2026-09-22
+last_reviewed: 2026-09-23
 ---
 
 # Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-096)
@@ -25,10 +25,18 @@ last_reviewed: 2026-09-22
 > only a personal one.
 >
 > **If zot is down, the failure is a zot/registry-host problem and must be fixed as one.**
-> See "What to do instead" below. This document is kept, rather than deleted, because the
-> revert becomes correct again the moment a working non-personal GHCR pull credential or a
-> second mirror exists — and because a reader who remembers this procedure needs to find
-> the retraction, not a 404.
+> See "What to do instead" below. This document is kept, rather than deleted, because a
+> reader who remembers this procedure needs to find the retraction, not a 404.
+>
+> **Amendment 2026-09-23 (#8036 1c) — A CREDENTIAL IS NO LONGER ENOUGH TO RE-ARM THIS.**
+> The paragraph above used to say the revert "becomes correct again the moment a working
+> non-personal GHCR pull credential or a second mirror exists". That is now false, and
+> dangerously so: 1c **deleted the host-side GHCR read path from `ci-deploy.sh`** — the
+> prelude login, the re-fetch/relogin helper, and the GHCR leg of the pull. There is no
+> code left for a credential to authenticate. Restoring this procedure needs a **code
+> change** (restoring a host-side pull path) *and* a credential, in that order. Minting a
+> PAT and running the steps below would take production from "zot degraded" to "no pull
+> path at all", with the deploy failing terminally at `image_pull_failed`.
 
 The Phase-3 pull-site migration is **dark-launch gated**: every pull site (ci-deploy.sh
 rolling deploy, soleur-host-bootstrap.sh + cloud-init.yml fresh boot) prefers the
@@ -271,10 +279,16 @@ is the zot host, not the alarm.
 > destination. It short-circuits pulls to GHCR, and GHCR can no longer serve them, so
 > running this during a zot outage converts a degraded pull path into no pull path.
 >
-> It remains valid for one thing: **deliberately standing the zot pull path down** when
-> GHCR has been given a working pull credential again (see ADR-096's amendment for the
-> testable condition). Confirm that first — `docker pull` a private tag with the host's
-> GHCR credential and see it succeed — then use this.
+> **Since #8036 1c it is not valid for anything.** This section previously blessed one use
+> — standing the zot pull path down once GHCR had a working credential — gated on an
+> on-host `docker pull` check. Both halves are gone: there is no host-side GHCR read code
+> for a credential to use, and the confirmation step required a shell on the host, which
+> no repo tool provides and which `hr-no-ssh-fallback-in-runbooks` forbids as a runbook
+> step. (1c also sweeps the deploy docker config's `ghcr.io` entry on every deploy, so the
+> credential that check wanted to exercise is removed as a matter of course.)
+>
+> Do not run the commands below. They are retained only so the mechanism is documented for
+> whoever restores a host-side pull path.
 
 Removing `ZOT_REGISTRY_URL` from Doppler `prd` makes `zot_gate_and_login` /
 the cloud-init + bootstrap gates short-circuit to GHCR on the **next** pull:
@@ -288,11 +302,23 @@ doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/de
 Effect, with no further action:
 
 - **Rolling deploys** (`ci-deploy.sh`): the next `deploy` webhook resolves `ZOT_REGISTRY_URL`
-  empty → `ZOT_ACTIVE=0` → the unchanged private-GHCR pull. No fallback attempt, no probe.
-- **Fresh boots** (cloud-init/bootstrap): the seed/app/inngest blocks resolve the URL empty →
-  pull straight from GHCR (`/run/soleur-image-ref` = the GHCR ref).
+  empty → `ZOT_ACTIVE=0`, which **since #8036 1c is TERMINAL**. There is no GHCR leg to fall
+  through to. The only remaining tier is `_try_local_cache_reload`, and it applies **only** to a
+  same-version `web` redeploy; an inngest deploy and every new-version deploy go straight to
+  `image_pull_failed` (the OLD container stays live — downtime-safe, but nothing ships).
+- **Fresh boots** (cloud-init/bootstrap): still resolve the URL empty → pull straight from GHCR
+  (`/run/soleur-image-ref` = the GHCR ref). 1c did **not** touch the fresh-boot path — that is
+  1d scope — so this bullet is still accurate, and it is now the ONLY one that is. The boot
+  path's GHCR login uses the same PAT that has been revoked since 2026-07-29, so it fails too;
+  it simply fails on a different code path.
 - **Already-running containers** are untouched (the flip only affects *pulls*, and revert
   changes nothing about a container already running).
+
+**The sweep is one-way and reverting the code does not undo it.** Since #8036 1c every deploy
+removes any `ghcr.io` entry from the deploy docker config. Reverting the PR restores the code but
+not the credential: the pre-1c prelude would re-run `docker login ghcr.io` with a PAT revoked
+since 2026-07-29, a failed login writes no `auths` entry, and `GHCR_MINTER_DISABLED=true` means no
+replacement can be minted. Plan on that being gone for good.
 
 Re-arm later by re-adding the secret (the Terraform `doppler_secret.zot_registry_url` will
 re-create it on the next operator apply, or set it manually):

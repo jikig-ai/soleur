@@ -80,9 +80,22 @@ OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT INT TERM
 
 # --since 90m matches the instrument soak's own regex (^([0-9]+)([hmd])$); --grep is repeatable
 # and OR-combined, so this sees BOTH the ZOT_GATE and the PRELUDE halves.
-if ! bash "$QUERY" --since 90m --grep ZOT_GATE --grep PRELUDE > "$OUT" 2>&1; then
-  echo "TRANSIENT: betterstack-query.sh failed:" >&2
-  tail -5 "$OUT" >&2
+# STDERR IS DISCARDED, NOT CAPTURED. betterstack-query.sh runs curl with
+# `-u "$BETTERSTACK_QUERY_USERNAME:$BETTERSTACK_QUERY_PASSWORD"`, so on a rotated or expired
+# credential the ClickHouse 4xx BODY goes to stdout and curl's own error text to stderr — and
+# ClickHouse auth errors name the user. sweep-followthroughs.sh runs this probe as
+# `out=$(... 2>&1)` and posts that verbatim via `gh issue comment`, where the Actions secret
+# masker does NOT apply. Merging stderr into $OUT and then tailing it to the operator put
+# credential-shaped text one failed query away from a PUBLIC comment.
+_q_rc=0
+bash "$QUERY" --since 90m --grep ZOT_GATE --grep PRELUDE > "$OUT" 2>/dev/null || _q_rc=$?
+if [[ "$_q_rc" -ne 0 ]]; then
+  echo "TRANSIENT: betterstack-query.sh failed (exit=$_q_rc)." >&2
+  # A fixed-vocabulary line only: never a tail of the response, for the reason above. The rc is
+  # captured from the query itself -- reading `$?` inside `if ! cmd; then` would report the
+  # NEGATION, not the query's status.
+  echo "           Response body withheld: the credential is bound in that process and this" >&2
+  echo "           text reaches a public issue comment." >&2
   exit 2
 fi
 
@@ -123,6 +136,17 @@ while IFS= read -r line; do
   mid="$(printf '%s' "$line" | grep -oE '_MACHINE_ID[^0-9a-f]{1,8}[0-9a-f]{32}' | grep -oE '[0-9a-f]{32}' | head -1)"
   [[ -z "$mid" ]] && continue
 
+  # FIELD-ISOLATE BEFORE CLASSIFYING. The Better Stack source is shared with the inngest webhook
+  # logs, which quote GitHub issue and PR bodies VERBATIM. The classifiers below substring-match
+  # the whole record, so a webhook row echoing a PR that merely QUOTES `ZOT_GATE: active … docker
+  # login … ok` would be counted as a real OK line for whatever machine id that row carries —
+  # manufacturing coverage toward the HOSTS_TOTAL>=2 PASS and masking a genuinely silent host.
+  # (This file's own comment block contains that literal, so the PR editing it is a live example.)
+  # Require the journald SYSLOG_IDENTIFIER to be ci-deploy, the same isolation
+  # ghcr-read-retired-8036.sh applies for the same reason.
+  # See knowledge-base/project/learnings/2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md
+  printf '%s' "$line" | grep -qE '"?SYSLOG_IDENTIFIER\\?"?[^A-Za-z0-9_]{1,8}ci-deploy' || continue
+
   is_ok=0 is_erofs=0
   # OK: an authenticated login. Anchor on the outcome phrase, not a bare "ok".
   if printf '%s' "$line" | grep -qE 'ZOT_GATE: active .* docker login .* ok'; then
@@ -150,7 +174,8 @@ HOSTS_TOTAL="${#HOST_SEEN[@]}"
 # FAIL takes precedence: any host still emitting a cred_store/erofs FAILED line means unrepaired.
 FAILED_HOSTS=""
 for mid in "${!HOST_EROFS[@]}"; do
-  [[ "${HOST_EROFS[$mid]:-0}" -gt 0 ]] && FAILED_HOSTS="${FAILED_HOSTS} ${mid}(${HOST_EROFS[$mid]})"
+  # 12 hex, never the full 32: this stdout is posted verbatim into a PUBLIC issue comment.
+  [[ "${HOST_EROFS[$mid]:-0}" -gt 0 ]] && FAILED_HOSTS="${FAILED_HOSTS} ${mid:0:12}(${HOST_EROFS[$mid]})"
 done
 if [[ -n "$FAILED_HOSTS" ]]; then
   echo "FAIL: docker login still fails class=cred_store (observed${FAIL_KWS:- kw=<none>}) on host(s):${FAILED_HOSTS}." >&2
@@ -170,7 +195,7 @@ fi
 
 SILENT_HOSTS=""
 for mid in "${!HOST_SEEN[@]}"; do
-  [[ "${HOST_OK[$mid]:-0}" -lt 1 ]] && SILENT_HOSTS="${SILENT_HOSTS} ${mid}"
+  [[ "${HOST_OK[$mid]:-0}" -lt 1 ]] && SILENT_HOSTS="${SILENT_HOSTS} ${mid:0:12}"
 done
 if [[ -n "$SILENT_HOSTS" ]]; then
   echo "TRANSIENT: host(s)${SILENT_HOSTS} emitted a login-outcome line but no positive OK line" >&2
@@ -182,6 +207,6 @@ echo "PASS: ${HOSTS_TOTAL} distinct hosts each emitted >=1 authenticated 'docker
      "line and ZERO class=cred_store/kw=erofs failures in the last 90m — the EROFS credential-"\
      "persist bug is repaired fleet-wide (per-host, not fleet-global). Close #6565."
 for mid in "${!HOST_SEEN[@]}"; do
-  echo "  host ${mid}: ok=${HOST_OK[$mid]:-0} erofs_failed=${HOST_EROFS[$mid]:-0}"
+  echo "  host ${mid:0:12}: ok=${HOST_OK[$mid]:-0} erofs_failed=${HOST_EROFS[$mid]:-0}"
 done
 exit 0

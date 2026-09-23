@@ -189,7 +189,14 @@ managed registry. Then:
    > the unchanged `image_pull_failed` terminal state), retry exactly once. This contract
    > retires with the GHCR pull path at Phase 5.
    >
-   > **Transient-retry co-tenant (#6525).** The same `_ghcr_pull_or_recover` gate also
+   > **RETIRED 2026-09-23 (#8036 item 1c).** It did retire, at 5.3a rather than Phase 5.
+   > `_ghcr_pull_or_recover` no longer exists: the auth-denial recovery leg is deleted along with
+   > the credential re-fetch it depended on, and what remains is
+   > `_pull_with_transient_retry <ref> <perr>` — the transient co-tenant described immediately
+   > below, which survives because it is registry-agnostic and now serves zot.
+   >
+   > **Transient-retry co-tenant (#6525).** The same gate — renamed
+   > `_pull_with_transient_retry` by #8036 1c, which removed its auth leg — also
    > absorbs a **transient/network** first-attempt pull failure (timeout, connection reset,
    > EOF, no-such-host, registry 5xx) with a bounded capped backoff
    > (`PULL_TRANSIENT_RETRY_SLEEPS`, default 2 retries, ≤6 s/leg), emitting
@@ -413,7 +420,17 @@ host. Read the amendment before relying on any bullet below:
     fallback **branches** — three of them across two files, not one: the `ZOT_ACTIVE` branch in
     `ci-deploy.sh` (emits `registry:"ghcr-fallback"`), plus the two fresh-boot branches in
     `cloud-init.yml` (emitting `app_ghcr_fallback` and `inngest_ghcr_fallback`) — darkening those
-    three signals.
+    three signals. Anchored on emit names, not line numbers: this enumeration is the claim 5.3
+    acts on, and a line-number citation into `cloud-init.yml` rots on the next insertion above it
+    (#6447 is that failure in the wild). `zot-gate-degraded`
+    survives 5.3 (gate-emitted). **Do NOT retire the alarm at 5.3 — narrow its `filters_v2` to the
+    surviving signal(s);** retiring it blinds `zot-gate-degraded`. Two post-cutover boot-gating
+    shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
+    **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
+    clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
+    fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
+    pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
+    re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
 
     > **Amendment 2026-09-23 (#8036 item 1c): 5.3 SPLITS INTO 5.3a AND 5.3b, AND 5.3a IS DONE.**
     >
@@ -454,17 +471,8 @@ host. Read the amendment before relying on any bullet below:
     > presenting a revoked credential twice per deploy indefinitely (89 occurrences/week,
     > measured), and — measured on 2026-09-22 — that presentation is what made GHCR refuse the
     > PUBLIC cosign verifier image, so `IMAGE_VERIFY` reported `cosign_absent` 89 times out of 89.
-    > Waiting preserves a dead code path at the cost of a live signature-verification outage. Anchored on emit names, not line numbers: this enumeration is the claim 5.3
-    acts on, and a line-number citation into `cloud-init.yml` rots on the next insertion above it
-    (#6447 is that failure in the wild). `zot-gate-degraded`
-    survives 5.3 (gate-emitted). **Do NOT retire the alarm at 5.3 — narrow its `filters_v2` to the
-    surviving signal(s);** retiring it blinds `zot-gate-degraded`. Two post-cutover boot-gating
-    shapes the degraded signal must remain loud for: a **missing** copy (crane-copy failure) AND a
-    **present-but-unsigned** copy (cosign-sign succeeded-copy-then-failed-sign) — the latter is NOT a
-    clean miss, since the pull side would pull the present zot copy and *bypass* the atomic GHCR
-    fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
-    pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
-    re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
+    > Waiting preserves a dead code path at the cost of a live signature-verification outage.
+
 - **Instant revert:** ~~unset `ZOT_REGISTRY_URL` in Doppler `prd` → all sites revert to GHCR-primary
   with no deploy, no SSH (`zot-registry-revert.md`).~~
   **RETRACTED 2026-07-30 (see the amendment below).** The flag flip still works mechanically; what

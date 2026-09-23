@@ -6,6 +6,27 @@ date: 2026-07-04
 
 # ADR-087: Cosign deploy-verify: host-net ephemeral verifier over private GHCR (no container-allowlist widening)
 
+> **Note (2026-07-06, #6122):** the deploy-time cosign verifier topology decided here is
+> **unaffected** and stays active. Only the *credential-provisioning* arm (how the host authenticates
+> the private pull + `.sig` fetch, ADR-088 D1) is changing: ADR-088's App-token minter was proven
+> infeasible (GHCR refuses App tokens), so #6122 migrates the registry off GHCR to self-hosted zot.
+> When that lands, "GHCR" in this ADR becomes the zot endpoint and the mounted docker-config carries
+> the zot OIDC bearer instead of a GHCR PAT — the `--network host` + pinned-trusted-root + offline
+> verify shape is identical.
+>
+> **Superseded in part, 2026-09-23 (#8036 item 1c):** that landing is now done for the deploy
+> path. The host-side GHCR read path is deleted, so the mounted docker-config carries the zot
+> credential and nothing else; any `ghcr.io` entry is swept out of the deploy config on every
+> deploy. The original note is kept verbatim above rather than reworded, because it is the dated
+> record of what credential KIND this ADR expected in the verifier mount — a detail the
+> superseding text does not carry.
+>
+> A measured consequence worth recording here, since it is this ADR's own failure mode:
+> presenting a REVOKED credential is worse than presenting none. GHCR refuses an *authenticated*
+> request bearing a revoked token where it would serve the same bytes anonymously, which is why
+> the **public** Sigstore verifier-image pull returned `denied` and `IMAGE_VERIFY` reported
+> `result=cosign_absent` 89 times out of 89 in the 7 days to 2026-09-22.
+
 ## Context
 
 `apps/web-platform/infra/ci-deploy.sh` cosign-verifies the app image signature on

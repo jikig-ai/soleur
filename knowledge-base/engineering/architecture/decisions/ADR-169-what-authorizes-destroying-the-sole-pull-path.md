@@ -253,7 +253,13 @@ the removal is not a regression on what this gate asserts. What changes is the r
    > with its runtime cardinality floor (5 → 4, in the same edit — moving one without the other
    > is the defect that floor exists to catch). #7295, which tracked this residual, closes with
    > that PR. The semantic split this paragraph declined to invert is untouched: `local-cache`
-   > still means what it meant, and it is now the ONLY tier between a zot miss and
+   > still means what it meant, and it is now the only tier between a zot miss and
+   > `image_pull_failed` — **but it is a NARROW tier, and the window arithmetic must not budget
+   > it as general coverage.** `_try_local_cache_reload` opens `[[ "$image_kind" == "web" ]] ||
+   > return 1` and reuses the ALREADY-RUNNING image, so it rescues only a **same-version `web`
+   > redeploy**. It does not apply to the inngest deploy site (`pull_image_with_fallback
+   > inngest`) and it does not apply to any new-version deploy — which is every ordinary
+   > release. For those paths a zot miss has **zero** tiers and goes straight to
    > `image_pull_failed`.
 4. **`registry-region-migrate` is an unguarded bypass to the same creates** (#6946): no confirm
    token, no id-pin, no live posture probe, no D10. An operator whose recut aborts can fire it

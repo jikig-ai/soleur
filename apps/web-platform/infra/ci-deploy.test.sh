@@ -448,7 +448,10 @@ if [[ "${1:-}" == "login" ]]; then
     _prev="$_a"
   done
   _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
-  [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
+  # RECORD THE REGISTRY, not only the user. The user alone cannot answer "did this deploy log in
+  # to ghcr.io?", which is the single property #8036 1c exists to guarantee. Recorded as
+  # `LOGIN:<registry>\tuser=<user>` so a row can anchor on `^LOGIN:ghcr\.io\t` exactly.
+  [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\tuser=%s\n' "$_lreg" "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
   # #6497: fail the ZOT login with a caller-supplied stderr so a test can exercise each
   # login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
   # perturb the GHCR legs the #6400/#6090 tests assert on.
@@ -508,15 +511,33 @@ if [[ "${1:-}" == "logout" ]]; then
     printf 'Not logged in to %s\n' "$_oreg"
     exit 0
   fi
-  # Match the real CLI: a logout against a registry with no entry is a no-op that still exits 0
-  # and does NOT rewrite the file. Without this arm the mock would touch mtime on a clean config
-  # and T-1c-2's idempotence half could not distinguish "declined" from "rewrote identically".
-  if ! jq -e --arg r "$_oreg" '(.auths[$r] // .credHelpers[$r]) != null' "$_ocfg" >/dev/null 2>&1; then
+  # MODEL THE REAL VERB, NOT THE OUTCOME WE WANT. docker/cli `runLogout` decides `loggedIn` from
+  # ConfigFile().AuthConfigs[reg] ALONE, then calls GetCredentialsStore(reg).Erase(reg):
+  #   * no auths[reg]                      -> "Not logged in", exit 0, file untouched
+  #   * auths[reg], no helper for reg      -> fileStore.Erase deletes auths[reg] ONLY
+  #   * auths[reg] + credHelpers[reg]
+  #     OR auths[reg] + global credsStore  -> nativeStore.Erase shells out to the HELPER; the
+  #                                           config MAP IS NEVER MUTATED, so auths[reg] AND the
+  #                                           helper key both survive. Exit 0 either way.
+  # Measured on docker 29.7.2 (2026-09-23) across all four configs. The previous mock ran
+  # `del(.auths[$r]) | del(.credHelpers[$r])` unconditionally — strictly MORE than the verb does —
+  # so T-1c-2 graded the fixture instead of the sweep, and a helper-shaped host that the real verb
+  # cannot clean read green. That is the defect class this branch's own learning file is named
+  # after, so the mock is now the pessimistic model and `sweep_stale_registry_auth`'s jq rewrite
+  # is what has to do the work.
+  if ! jq -e --arg r "$_oreg" '(.auths[$r]) != null' "$_ocfg" >/dev/null 2>&1; then
     printf 'Not logged in to %s\n' "$_oreg"
     exit 0
   fi
+  if jq -e --arg r "$_oreg" \
+       '((.credHelpers[$r] | type == "string" and length > 0)
+         or (.credsStore   | type == "string" and length > 0))' "$_ocfg" >/dev/null 2>&1; then
+    # Helper-backed: the secret is erased out-of-band; config.json is left byte-identical.
+    printf 'Removing login credentials for %s\n' "$_oreg"
+    exit 0
+  fi
   _otmp="$(mktemp)"
-  if jq --arg r "$_oreg" 'del(.auths[$r]) | del(.credHelpers[$r])' "$_ocfg" > "$_otmp" 2>/dev/null; then
+  if jq --arg r "$_oreg" 'del(.auths[$r])' "$_ocfg" > "$_otmp" 2>/dev/null; then
     cat "$_otmp" > "$_ocfg"
     rm -f "$_otmp"
     printf 'Removing login credentials for %s\n' "$_oreg"
@@ -2927,11 +2948,11 @@ _assert_doppler_pull_terminal() {
   rm -rf "$sd"
 }
 _assert_doppler_pull_terminal \
-  "missing doppler binary -> image_pull_failed, cause named no_credential_source (#8036 1c)" \
-  "export MOCK_DOPPLER_MISSING=1" no_credential_source
+  "missing doppler binary -> image_pull_failed, cause named no_doppler_binary (#8036 1c)" \
+  "export MOCK_DOPPLER_MISSING=1" no_doppler_binary
 _assert_doppler_pull_terminal \
-  "unset DOPPLER_TOKEN -> image_pull_failed, cause named no_credential_source (#8036 1c)" \
-  "export MOCK_DOPPLER_TOKEN_UNSET=1" no_credential_source
+  "unset DOPPLER_TOKEN -> image_pull_failed, cause named no_doppler_token (#8036 1c)" \
+  "export MOCK_DOPPLER_TOKEN_UNSET=1" no_doppler_token
 _assert_doppler_pull_terminal \
   "doppler fetch failure -> image_pull_failed, cause named cred_read_failed (#8036 1c)" \
   "export MOCK_DOPPLER_FAIL=1" cred_read_failed
@@ -7482,22 +7503,31 @@ assert_ghcr_cfg_row() {
   rm -rf "$d"
 }
 # `swept=` per row, and each value is a measured consequence of the fixture rather than a label:
-#   absent / unreadable  → na   the sweep declines (no regular writable file at $GHCR_DOCKER_CONFIG)
-#   unparseable          → no   the file is there but the jq predicate cannot find a ghcr.io key
-#   inline / all         → yes  a ghcr.io auths key was present and `docker logout` removed it
-#   credsstore / noghcr  → no   an auths object with no ghcr.io key — nothing to remove
-#   credhelper           → no   DELIBERATE: the sweep predicate mirrors the marker's `.auths` read,
-#                               so a credHelpers-only indirection is REPORTED (`*_ghcr_helper=set`)
-#                               and not swept. Clearing it is 1d scope along with root's config;
-#                               `docker logout` would clear it, but only once the auths predicate
-#                               fires, and widening the predicate would decouple `swept=yes` from
-#                               "the key the marker grades is gone".
-assert_ghcr_cfg_row absent      "$(_gcfg_expect na absent na na na)"
-assert_ghcr_cfg_row unreadable  "$(_gcfg_expect na unreadable na na na)"
+#   absent               -> na_absent    no file at $GHCR_DOCKER_CONFIG; nothing to sweep
+#   unreadable           -> na_notfile   the fixture makes config.json a DIRECTORY, so it exists
+#                                        but is not a regular file
+#   unparseable          -> no           the file is there but carries no ghcr.io carrier
+#   inline / all         -> yes          an auths["ghcr.io"] key was present and was removed
+#   credhelper           -> yes          a credHelpers["ghcr.io"] indirection was present and was
+#                                        removed. REVERSED 2026-09-23 (#8600 review): this row
+#                                        used to expect `no`, encoding a deliberate decision to
+#                                        report-but-not-sweep the indirection. That decision was
+#                                        wrong -- docker resolves ghcr.io through the helper with
+#                                        or without an auths entry, so a reported-but-unswept
+#                                        helper is a live credential, and leg 1 of the close probe
+#                                        graded only `deploy_ghcr_auth`, so such a host passed.
+#   credsstore / noghcr  -> no           a global credsStore is NOT deleted (it is also how the
+#                                        zot entry is stored); with no ghcr.io auths key there is
+#                                        nothing for docker to resolve through it.
+assert_ghcr_cfg_row absent      "$(_gcfg_expect na_absent absent na na na)"
+assert_ghcr_cfg_row unreadable  "$(_gcfg_expect na_notfile unreadable na na na)"
 assert_ghcr_cfg_row unparseable "$(_gcfg_expect no unparseable na na na)"
 assert_ghcr_cfg_row inline      "$(_gcfg_expect_split yes present none none none present inline none none)"
 assert_ghcr_cfg_row credsstore  "$(_gcfg_expect no present none set none)"
-assert_ghcr_cfg_row credhelper  "$(_gcfg_expect no present none none set)"
+# credhelper also PINS THE DEPLOY-ONLY SCOPE: deploy loses the indirection while home and
+# root keep `*_ghcr_helper=set`. Those two are unreachable from webhook.service
+# (ProtectHome=read-only, /home absent from ReadWritePaths) and are 1d scope.
+assert_ghcr_cfg_row credhelper  "$(_gcfg_expect_split yes present none none none present none none set)"
 assert_ghcr_cfg_row noghcr      "$(_gcfg_expect no present none none none)"
 # As root, DAC override makes the parent searchable, so the file genuinely reads `present`.
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -7609,8 +7639,8 @@ assert_ghcr_cfg_one_line_absent_cfg() {
   _gcfg_place "$d" absent
   run_ghcr_cfg_capture "$d" ""
   n="$(_gcfg_lines "$d/logger.txt" | grep -c . || true)"
-  if [[ "$n" == "1" ]] && _gcfg_lines "$d/logger.txt" | grep -qF ' swept=na '; then
-    PASS=$((PASS + 1)); echo "  PASS: T-1b-3 exactly one SOLEUR_DEPLOY_GHCR_CONFIG line on the sweep-declined path, carrying swept=na (#8036 1c)"
+  if [[ "$n" == "1" ]] && _gcfg_lines "$d/logger.txt" | grep -qE ' swept=na_[a-z]+ '; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1b-3 exactly one SOLEUR_DEPLOY_GHCR_CONFIG line on the sweep-declined path, carrying a swept=na_* refusal token (#8036 1c)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-3 sweep-declined path: $n marker line(s); marker: $(_gcfg_lines "$d/logger.txt")"
   fi
@@ -7638,7 +7668,10 @@ fi
 rm -f "$MOCK_SLEEP_CAP_MARKER"
 
 # ---------------------------------------------------------------------------------------------
-# #7103 R1 — `no_credential_source` is EXECUTED, not grepped.
+# #7103 R1 — the no-credential reason is EXECUTED, not grepped. SPLIT 2026-09-23 (#8036 1c):
+# `no_credential_source` became `no_doppler_binary` / `no_doppler_token`, because post-1c the
+# pull dies before resolve_env_file writes its distinguishing stage token, so this beacon is the
+# only thing that can separate the two remediations without an SSH session.
 #
 # This arm had ZERO coverage anywhere in the repo: `grep -rn no_credential_source` found it only
 # in ci-deploy.sh itself. It is the arm the 2026-08-01 incident actually took, and the only one
@@ -7652,7 +7685,7 @@ rm -f "$MOCK_SLEEP_CAP_MARKER"
 # and nothing is posted. A grep of the function body cannot tell those two worlds apart; running
 # it with SENTRY_* unset can, and that is what the first arm below pins.
 # ---------------------------------------------------------------------------------------------
-echo "--- #7103 R1: no_credential_source emits on a credential-independent channel ---"
+echo "--- #7103 R1: the no-credential reason emits on a credential-independent channel ---"
 ZGD_TMP="$(mktemp -d)" || exit 2
 {
   awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT"
@@ -7666,7 +7699,7 @@ logger() { printf '%s\n' "$*" >> "$ZGD_TMP/logger.calls"; }
 curl()   { printf 'CURL %s\n' "$*" >> "$ZGD_TMP/curl.calls"; return 0; }
 # shellcheck source=/dev/null
 . "$ZGD_TMP/fn.sh"
-zot_gate_degraded_event no_credential_source
+zot_gate_degraded_event no_doppler_token
 HARNESS
 
 # Arm 1 — the incident state: no credential file, so no SENTRY_* in the environment.
@@ -7675,7 +7708,7 @@ HARNESS
     ZGD_TMP="$ZGD_TMP" bash "$ZGD_TMP/harness.sh" ) >/dev/null 2>&1
 
 TOTAL=$((TOTAL + 1))
-if grep -q 'ZOT_GATE_DEGRADED: reason=no_credential_source' "$ZGD_TMP/logger.calls"; then
+if grep -q 'ZOT_GATE_DEGRADED: reason=no_doppler_token' "$ZGD_TMP/logger.calls"; then
   PASS=$((PASS + 1)); echo "  PASS: the journald marker fires with SENTRY_* absent (the credential-independent carrier)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: no ZOT_GATE_DEGRADED marker on the credential-absent path — this arm has no surviving signal"
@@ -7702,10 +7735,10 @@ else
 fi
 
 TOTAL=$((TOTAL + 1))
-if grep -q 'reason=no_credential_source (zot not in use' "$ZGD_TMP/logger.calls"; then
+if grep -q 'reason=no_doppler_token (zot not in use' "$ZGD_TMP/logger.calls"; then
   PASS=$((PASS + 1)); echo "  PASS: the marker's parenthetical is reason-accurate (not 'configured but inactive')"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the marker still describes no_credential_source as 'configured but inactive', its exact inverse"
+  FAIL=$((FAIL + 1)); echo "  FAIL: the marker still describes no_doppler_token as 'configured but inactive', its exact inverse"
 fi
 rm -rf "$ZGD_TMP"
 
@@ -7739,12 +7772,29 @@ _1c_count() {
 # _1c_lines <extended-regexp> <file>...: the matching lines themselves, empty when none.
 _1c_lines() { local re="$1"; shift; grep -hE -- "$re" "$@" 2>/dev/null || true; }
 
+# _1c_src_count <extended-regexp>: like _1c_count, but over the SUT with comment lines stripped.
+# Every residual-zero assertion below greps the script's SOURCE, and `ci-deploy.sh` documents the
+# very constructs it forbids — the §1c header names the deleted call sites verbatim. Grepping the
+# raw file makes a routine comment edit red the guard on a tree where nothing regressed, and the
+# cheapest repair under time pressure is to loosen the regex, which is how this guard class has
+# already died three times on one branch (cq-assert-anchor-not-bare-token). Applied at the HELPER
+# so it covers the class, not the two call sites that happened to be noticed.
+_1c_src_count() {
+  local re="$1"
+  local n
+  n="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE -- "$re" || true)"
+  printf '%s' "${n:-0}"
+}
+
 # T-1c-1 (residual-zero, static). Measured baseline on origin/main's script: 2 / 1 / 1 — so this
 # row is driven to zero by the deletion, not satisfied by a grep that was already empty.
 TOTAL=$((TOTAL + 1))
-_1C_LOGIN=$(_1c_count '_docker_login_capture ghcr\.io' "$DEPLOY_SCRIPT")
-_1C_REFETCH=$(_1c_count '^refetch_ghcr_and_relogin\(\) \{' "$DEPLOY_SCRIPT")
-_1C_FALLBACK=$(_1c_count 'registry_pull_event ghcr-fallback' "$DEPLOY_SCRIPT")
+_1C_LOGIN=$(_1c_src_count '_docker_login_capture ghcr\.io')
+_1C_REFETCH=$(_1c_src_count '^refetch_ghcr_and_relogin\(\) \{')
+# Widened from the full call form to the bare spelling: the call-form anchor could not see the
+# unreachable `$reg == "ghcr-fallback"` arm that survived in registry_pull_event, nor a future
+# re-introduction under any other call shape.
+_1C_FALLBACK=$(_1c_src_count 'ghcr-fallback')
 if [[ "$_1C_LOGIN" -eq 0 && "$_1C_REFETCH" -eq 0 && "$_1C_FALLBACK" -eq 0 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: T-1c-1 ci-deploy.sh presents no ghcr.io credential: 0 _docker_login_capture ghcr.io sites, 0 refetch_ghcr_and_relogin defs, 0 registry_pull_event ghcr-fallback sites (#8036 1c)"
 else
@@ -7754,12 +7804,15 @@ unset _1C_LOGIN _1C_REFETCH _1C_FALLBACK
 
 # run_1c <workdir> [extra]: one deploy with every 1c observation channel pinned inside $workdir —
 # the deploy + home config slots, the journald sink, the docker-pull targets, the `doppler secrets
-# get` order, the state file and the merged stdout/stderr. Zot is DARK unless <extra> arms it.
+# get` order, the state file and the merged stdout/stderr. Zot is LIVE by default --
+# `create_base_mocks` sets MOCK_ZOT_CONFIGURED=1 unless MOCK_ZOT_DARK is set, so a dark arm needs
+# an explicit `export MOCK_ZOT_DARK=1` in <extra>. (This line used to say the opposite, which is
+# how a zot-dark row could be written that silently ran the happy path and proved nothing.)
 run_1c() {
   local d="$1" extra="${2:-}" rc=0
   assert_fixture_dir "$d"
   mkdir -p "$d/deploy-cfg" "$d/home/.docker" "$d/root"
-  : > "$d/logger.txt"; : > "$d/pulls.txt"; : > "$d/doppler.txt"; : > "$d/logouts.txt"
+  : > "$d/logger.txt"; : > "$d/pulls.txt"; : > "$d/doppler.txt"; : > "$d/logouts.txt"; : > "$d/logins.txt"
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
@@ -7775,6 +7828,7 @@ run_1c() {
     export MOCK_PULL_ARGS_FILE="$d/pulls.txt"
     export MOCK_DOPPLER_GET_LOG="$d/doppler.txt"
     export MOCK_LOGOUT_ARGS_FILE="$d/logouts.txt"
+    export MOCK_LOGIN_ARGS_FILE="$d/logins.txt"
     eval "$extra"
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
@@ -7879,7 +7933,7 @@ rm -rf "$T1C8"; unset T1C8 _1c8_mode _1c8_owner
 TOTAL=$((TOTAL + 1))
 T1C9="$(mktemp -d)"
 cp "$DEPLOY_SCRIPT" "$T1C9/ci-deploy.pristine.sh"
-sed 's/^\([[:space:]]*\)DOCKER_CONFIG="\$(dirname "\$f")" docker logout ghcr\.io.*$/\1: # MUTANT: sweep neutered/' \
+sed 's/^sweep_stale_registry_auth() {$/&\n  SWEPT_STATE=mutant; return 0  # MUTANT: sweep neutered/' \
   "$DEPLOY_SCRIPT" > "$T1C9/ci-deploy.sh"
 if cmp -s "$T1C9/ci-deploy.sh" "$T1C9/ci-deploy.pristine.sh"; then
   FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-9 the sweep mutation did NOT land — the anchor drifted, so this harness row measured the unmutated script and proves nothing"
@@ -7904,6 +7958,87 @@ else
 fi
 rm -rf "$T1C9"; unset T1C9
 
+# ── T-1c-17 (#8600 review) — THE CENTRAL DELETION, GUARDED AT RUNTIME. Everything else about the
+#    prelude login was pinned statically: T-1c-1 greps ONE call form (`_docker_login_capture
+#    ghcr.io`) in the source. A re-added prelude login spelled any other way — `docker login
+#    ghcr.io -u "$u" --password-stdin`, or sourcing the baked /etc/default credential instead of
+#    GHCR_READ_TOKEN — kept all sixteen T-1c rows and the whole 336-case suite green while the
+#    fleet presented the revoked PAT to GHCR on every deploy. That is the exact outage this work
+#    exists to end, so it gets an observable: the login mock now records the registry, and this
+#    row asserts ZERO ghcr.io logins with a DENOMINATOR (the zot login must be there), so the
+#    zero cannot be satisfied by a deploy that logged in nowhere at all.
+TOTAL=$((TOTAL + 1))
+T1C17="$(mktemp -d)"
+_1c_place "$T1C17"
+run_1c "$T1C17" ""
+_1c17_ghcr=$(_1c_count '^LOGIN:ghcr\.io\b' "$T1C17/logins.txt")
+_1c17_zot=$(_1c_count '^LOGIN:10\.0\.1\.30:5000\b' "$T1C17/logins.txt")
+if [[ "$_1c17_ghcr" -eq 0 && "$_1c17_zot" -ge 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-17 a deploy performs ZERO ghcr.io logins and at least one zot login (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-17 login registries (ghcr.io=$_1c17_ghcr want 0, zot=$_1c17_zot want >=1)"
+fi
+rm -rf "$T1C17"; unset T1C17 _1c17_ghcr _1c17_zot
+
+# ── T-1c-18 — the same property on the ZOT-DARK arm, where a re-added GHCR login would be most
+#    tempting (it is the arm that now has no registry at all). The denominator flips: with zot
+#    dark there is no zot login either, so the assertion is "no login to ANY registry", which is
+#    what a terminal dark gate means.
+TOTAL=$((TOTAL + 1))
+T1C18="$(mktemp -d)"
+_1c_place "$T1C18"
+run_1c "$T1C18" "export MOCK_ZOT_DARK=1" || true
+_1c18_ghcr=$(_1c_count '^LOGIN:ghcr\.io\b' "$T1C18/logins.txt")
+if [[ "$_1c18_ghcr" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-18 a zot-dark deploy still performs ZERO ghcr.io logins (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-18 zot-dark deploy logged in to ghcr.io $_1c18_ghcr time(s)"
+fi
+rm -rf "$T1C18"; unset T1C18 _1c18_ghcr
+
+# ── T-1c-19 — NO EMITTED OPERATOR-FACING STRING MAY CLAIM A GHCR PATH. Five live logger/Sentry
+#    strings survived the deletion saying the deploy "fell through to the GHCR path" / was
+#    "using GHCR", including the exact ZOT_GATE_DEGRADED line the new pull_failure_event detail
+#    points at. An operator paged by a terminal zot failure read "using GHCR" and chased a
+#    credential with no consumer. Asserted over what was EMITTED, not over the source, so a
+#    comment can never satisfy it.
+TOTAL=$((TOTAL + 1))
+T1C19="$(mktemp -d)"
+_1c_place "$T1C19"
+run_1c "$T1C19" "export MOCK_ZOT_DARK=1" || true
+_1c19_bad=$(_1c_count 'GHCR path|using GHCR|both registries|BOTH registries' "$T1C19/logger.txt")
+_1c19_n=$(grep -c . "$T1C19/logger.txt" 2>/dev/null || true)
+if [[ "$_1c19_bad" -eq 0 && "${_1c19_n:-0}" -ge 5 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-19 no emitted line claims a GHCR path or a second registry, over $_1c19_n emitted line(s) (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-19 emitted GHCR-path claims=$_1c19_bad (want 0) over $_1c19_n line(s) (want >=5 as denominator)"
+fi
+rm -rf "$T1C19"; unset T1C19 _1c19_bad _1c19_n
+
+# ── T-1c-20 — the terminal dark arm NAMES ITS CAUSE on a sink. pull_failure_event used its
+#    detail argument only as classifier input and then discarded it, so interpolating
+#    ZOT_GATE_STATUS into that string repaid nothing: the journald line omitted it and the Sentry
+#    payload had no detail field. An operator could not get from `image_pull_failed` to WHY zot
+#    was unavailable without an SSH session (hr-no-ssh-fallback-in-runbooks).
+TOTAL=$((TOTAL + 1))
+T1C20="$(mktemp -d)"; T1C20B="$(mktemp -d)"
+# Both terminal arms: the gate went DARK (no registry was ever contacted) and the gate was ACTIVE
+# but the pull failed. Each carries a different ZOT_GATE_STATUS, and both must name it.
+_1c_place "$T1C20"
+run_1c "$T1C20" "export MOCK_ZOT_DARK=1" || true
+_1c_place "$T1C20B"
+run_1c "$T1C20B" "export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1" || true
+_1c20_fails=$(_1c_count 'IMAGE_PULL_FAIL: ref=' "$T1C20/logger.txt" "$T1C20B/logger.txt")
+_1c20_tagged=$(_1c_count 'IMAGE_PULL_FAIL: ref=.*zot_gate_status=[a-z_]+' "$T1C20/logger.txt" "$T1C20B/logger.txt")
+_1c20_unknown=$(_1c_count 'IMAGE_PULL_FAIL: ref=.*zot_gate_status=unknown' "$T1C20/logger.txt" "$T1C20B/logger.txt")
+# The denominator matters: "0 untagged failures" is also true of a run that never failed at all.
+if [[ "$_1c20_fails" -ge 1 && "$_1c20_tagged" -eq "$_1c20_fails" && "$_1c20_unknown" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-20 all $_1c20_fails terminal pull failure(s) carry a named zot_gate_status on journald (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-20 IMAGE_PULL_FAIL lines=$_1c20_fails tagged=$_1c20_tagged unknown=$_1c20_unknown (want fails>=1, tagged==fails, unknown=0)"
+fi
+rm -rf "$T1C20" "$T1C20B"; unset T1C20 T1C20B _1c20_fails _1c20_tagged _1c20_unknown
+
 # T-1c-16 / AC-N1: the always-failing Doppler GHCR reads leave the critical path. Asserted as a
 # CALL COUNT over the existing process mock, never as wall-clock — a stopwatch assertion measures
 # the machine, not the change. Baseline on origin/main: up to 3 + 3 reads, 5 s apart, every deploy.
@@ -7913,11 +8048,17 @@ _1c_place "$T1C16"
 run_1c "$T1C16" ""
 _1c16_u=$(_1c_count '^GHCR_READ_USER$'  "$T1C16/doppler.txt")
 _1c16_t=$(_1c_count '^GHCR_READ_TOKEN$' "$T1C16/doppler.txt")
-_1c16_s=$(_1c_count '^SENTRY_(INGEST_DOMAIN|PROJECT_ID|PUBLIC_KEY)$' "$T1C16/doppler.txt")
-if [[ "$_1c16_u" -eq 0 && "$_1c16_t" -eq 0 && "$_1c16_s" -eq 3 ]]; then
+# One floor PER SECRET, never a union count: `-eq 3` over the union is satisfied by three reads
+# of ONE name (_doppler_get_or_report retries up to 3x on an empty read), so a prefetch that lost
+# two of its three secrets passed while the host was Sentry-dark at verify time.
+_1c16_sd=$(_1c_count '^SENTRY_INGEST_DOMAIN$' "$T1C16/doppler.txt")
+_1c16_sp=$(_1c_count '^SENTRY_PROJECT_ID$'    "$T1C16/doppler.txt")
+_1c16_sk=$(_1c_count '^SENTRY_PUBLIC_KEY$'    "$T1C16/doppler.txt")
+if [[ "$_1c16_u" -eq 0 && "$_1c16_t" -eq 0 \
+      && "$_1c16_sd" -ge 1 && "$_1c16_sp" -ge 1 && "$_1c16_sk" -ge 1 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: T-1c-16 zero doppler reads of GHCR_READ_USER/GHCR_READ_TOKEN, and all three SENTRY_* prefetches survive (#8036 1c / AC-N1)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-16 doppler read counts (GHCR_READ_USER=$_1c16_u GHCR_READ_TOKEN=$_1c16_t SENTRY_*=$_1c16_s, want 0/0/3)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-16 doppler read counts (GHCR_READ_USER=$_1c16_u GHCR_READ_TOKEN=$_1c16_t SENTRY_INGEST_DOMAIN=$_1c16_sd SENTRY_PROJECT_ID=$_1c16_sp SENTRY_PUBLIC_KEY=$_1c16_sk, want 0/0/>=1 each)"
 fi
 rm -rf "$T1C16"; unset T1C16 _1c16_u _1c16_t _1c16_s
 
@@ -7929,8 +8070,10 @@ TOTAL=$((TOTAL + 1))
 T1C5="$(mktemp -d)"
 _1c_place "$T1C5"
 run_1c "$T1C5" "export MOCK_ZOT_CONFIGURED=1"
-_1c5_sentry="$(grep -nE '^SENTRY_INGEST_DOMAIN$' "$T1C5/doppler.txt" | head -1 | cut -d: -f1)"
-_1c5_zot="$(grep -nE '^ZOT_REGISTRY_URL$' "$T1C5/doppler.txt" | head -1 | cut -d: -f1)"
+# `|| true` INSIDE the substitution: a no-match grep exits 1, which under `set -e` would abort the
+# whole suite rather than leave the variable empty for the `-n` guard below to report.
+_1c5_sentry="$(grep -nE '^SENTRY_INGEST_DOMAIN$' "$T1C5/doppler.txt" | head -1 | cut -d: -f1 || true)"
+_1c5_zot="$(grep -nE '^ZOT_REGISTRY_URL$' "$T1C5/doppler.txt" | head -1 | cut -d: -f1 || true)"
 if [[ -n "$_1c5_sentry" && -n "$_1c5_zot" && "$_1c5_sentry" -lt "$_1c5_zot" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: T-1c-5 the SENTRY_* prefetch still runs and precedes the zot gate's first Doppler read (#8036 1c / #7095)"
 else
@@ -8038,15 +8181,22 @@ T1C13="$(mktemp -d)"
 _1c_place "$T1C13"
 echo 1 > "$T1C13/zot-transient"
 run_1c "$T1C13" "export MOCK_ZOT_CONFIGURED=1 PULL_TRANSIENT_RETRY_SLEEPS='0 0' MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE='$T1C13/zot-transient'"
+# DENOMINATOR FIRST. `_1c13_bad` is a filtered count, so it is 0 both when every emitter names the
+# zot ref AND when the selector matches nothing at all -- a later rename of the breadcrumb would
+# green this row while printing "every pull-path emitter names the zot ref" over an empty set.
+# The sibling T-1c-14 floors the same class; this row did not. Floor is >=1, the MEASURED count
+# for this fixture (one `IMAGE_PULL: zot pull failed` breadcrumb on the transient-recovered arm) --
+# not a guessed round number, which is the other half of how anti-vacuity floors go wrong.
+_1c13_emitters=$(_1c_lines 'transient_recovered|pull_result|IMAGE_PULL:' "$T1C13/logger.txt" "$T1C13/out.txt" | grep -c . || true)
 _1c13_bad=$(_1c_lines 'transient_recovered|pull_result|IMAGE_PULL:' "$T1C13/logger.txt" "$T1C13/out.txt" | grep -cE 'ghcr\.io/jikig-ai' || true)
 _1c13_ghcrpull=$(_1c_count '^PULL:ghcr\.io/' "$T1C13/pulls.txt")
 _1c13_zotpull=$(_1c_count '^PULL:10\.0\.1\.30:5000/' "$T1C13/pulls.txt")
-if [[ "$_1c13_bad" -eq 0 && "$_1c13_ghcrpull" -eq 0 && "$_1c13_zotpull" -eq 2 ]]; then
+if [[ "$_1c13_bad" -eq 0 && "$_1c13_ghcrpull" -eq 0 && "$_1c13_zotpull" -eq 2 && "$_1c13_emitters" -ge 1 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: T-1c-13 on the zot arm every pull and every pull-path emitter names the zot ref, none names a ghcr.io ref (#8036 1c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-13 (emitters_naming_ghcr=$_1c13_bad ghcr_pulls=$_1c13_ghcrpull zot_pulls=$_1c13_zotpull want 0/0/2)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-13 (emitters_naming_ghcr=$_1c13_bad ghcr_pulls=$_1c13_ghcrpull zot_pulls=$_1c13_zotpull emitters_seen=$_1c13_emitters want 0/0/2/>=1)"
 fi
-rm -rf "$T1C13"; unset T1C13 _1c13_bad _1c13_ghcrpull _1c13_zotpull
+rm -rf "$T1C13"; unset T1C13 _1c13_bad _1c13_ghcrpull _1c13_zotpull _1c13_emitters
 
 # T-1c-11: `_try_local_cache_reload` becomes the ONLY tier between a zot miss and image_pull_failed.
 # Not edited by this PR — this row pins that the deletion of the GHCR leg above it did not make it
@@ -8107,7 +8257,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # rows can be deleted before the one guard that detects truncation notices. The net is +6
 # over a churn of ~38 rows: 15 T-1c-* added, several GHCR-only rows deleted (§1A, #6400
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
-CI_DEPLOY_ASSERT_FLOOR=336
+CI_DEPLOY_ASSERT_FLOOR=340
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

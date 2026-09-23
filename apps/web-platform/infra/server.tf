@@ -360,6 +360,20 @@ resource "hcloud_server" "web" {
     # first-boot instant (an empty answer skipped docker login → anonymous private pull → 401
     # → abort at stage=pull). Scoped read:packages PAT; user_data already carries the strictly
     # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
+    #
+    # #8036 1c (2026-09-23) — WHY THIS BAKE SURVIVES A RETIREMENT. 1c deleted the host-side GHCR
+    # READ path from ci-deploy.sh: the prelude `docker login ghcr.io`, the Doppler
+    # re-fetch/relogin helper, and the GHCR leg of the pull. The rolling-deploy consumer this
+    # bake was originally built for is therefore GONE — a deploy reads no GHCR credential at all.
+    # What still consumes it is cloud-init.yml's OWN fresh-boot `ghcr_login`, which runs as root
+    # before any deploy and is 1d scope, not 1c. So the variable is deliberately still wired.
+    # (The rationale lives here rather than beside the consumer because cloud-init.yml is
+    # byte-budgeted — its rendered user_data is gzip-capped by the Hetzner limit and is NOT
+    # comment-stripped at render time, unlike the git-data and registry templates.)
+    #
+    # NOTE the credential itself has been revoked since 2026-07-29 and cannot be re-minted
+    # (`GHCR_MINTER_DISABLED=true`), so the boot login fails too — it simply fails on a path 1c
+    # did not touch. Retiring it is 1d; see variables.tf `ghcr_read_token` for the consumer list.
     ghcr_read_user  = var.ghcr_read_user
     ghcr_read_token = var.ghcr_read_token
 

@@ -81,9 +81,22 @@ OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT INT TERM
 # OR-combined, so this sees BOTH the ZOT_GATE and the PRELUDE halves. (The plan's first
 # draft used a bare `--since 60`, which fails that regex and silently degrades to
 # WHERE dt >= '60' — the probe did not run at all. Verified parsing before shipping.)
-if ! bash "$QUERY" --since 90m --grep ZOT_GATE --grep PRELUDE > "$OUT" 2>&1; then
-  echo "TRANSIENT: betterstack-query.sh failed:" >&2
-  tail -5 "$OUT" >&2
+# STDERR IS DISCARDED, NOT CAPTURED. betterstack-query.sh runs curl with
+# `-u "$BETTERSTACK_QUERY_USERNAME:$BETTERSTACK_QUERY_PASSWORD"`, so on a rotated or expired
+# credential the ClickHouse 4xx BODY goes to stdout and curl's own error text to stderr — and
+# ClickHouse auth errors name the user. sweep-followthroughs.sh runs this probe as
+# `out=$(... 2>&1)` and posts that verbatim via `gh issue comment`, where the Actions secret
+# masker does NOT apply. Merging stderr into $OUT and then tailing it to the operator put
+# credential-shaped text one failed query away from a PUBLIC comment.
+_q_rc=0
+bash "$QUERY" --since 90m --grep ZOT_GATE --grep PRELUDE > "$OUT" 2>/dev/null || _q_rc=$?
+if [[ "$_q_rc" -ne 0 ]]; then
+  echo "TRANSIENT: betterstack-query.sh failed (exit=$_q_rc)." >&2
+  # A fixed-vocabulary line only: never a tail of the response, for the reason above. The rc is
+  # captured from the query itself -- reading `$?` inside `if ! cmd; then` would report the
+  # NEGATION, not the query's status.
+  echo "           Response body withheld: the credential is bound in that process and this" >&2
+  echo "           text reaches a public issue comment." >&2
   exit 2
 fi
 

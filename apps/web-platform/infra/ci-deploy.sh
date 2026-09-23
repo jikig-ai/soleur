@@ -190,7 +190,7 @@ readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosig
 # Self-hosted zot registry (#6122/ADR-096). The pull path prefers zot ONLY when it is
 # confirmed-configured-and-live (see zot_gate_and_login) — a strict dark-launch: until
 # the operator provisions (1.8) + backfills (1.9) zot, ZOT_REGISTRY_URL is absent in
-# Doppler prd, ZOT_ACTIVE stays 0, and every pull takes the UNCHANGED private-GHCR path
+# Doppler prd, ZOT_ACTIVE stays 0 — and since #8036 1c that is terminal, not a fall-through
 # (wg-dark-launch-deploy-gates). zot serves plain HTTP on the private net (cosign digest-
 # pinning is the integrity guard, not TLS — Phase-0 spike), so cosign verify of a
 # zot-pulled digest needs --allow-insecure-registry (Edge B). ZOT_REGISTRY_URL is fetched
@@ -700,7 +700,12 @@ pull_failure_event() {
   elif _pull_result_is_transient "$detail_raw"; then pull_result="network"   # #6525: shared predicate (was a narrower inline regex); precedence stays auth → manifest → transient. Tag value `network` UNCHANGED (Sentry grouping / zot_mirror_fallback_rate key on it). Widens the `network` set vs pre-#6525 — see the recovery gate + reclassification-safety check.
   else pull_result="pull_failed"
   fi
-  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none}"
+  # `zot_gate_status` is EMITTED, not merely used to classify. The detail string is consumed by
+  # the three classifiers above and then discarded — it reaches no sink — so interpolating the
+  # gate status into it repaid nothing. An operator opening this event needs to get from
+  # "image pull failed" to WHY zot was not available without an SSH session; this tag plus the
+  # matching ZOT_GATE_DEGRADED line is that path (hr-no-ssh-fallback-in-runbooks).
+  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none} zot_gate_status=${ZOT_GATE_STATUS:-unknown}"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     # #6396: tag host_id so a deploy-path pull failure is host-attributable from Sentry alone
@@ -708,9 +713,11 @@ pull_failure_event() {
     # readonly HOST_ID global (:137-157) is empty-safe; jq emits an empty-string tag if unset.
     # #6400: recovery_stage tag surfaces the recovery branch on an auth-denied miss.
     payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" --arg h "${HOST_ID:-}" --arg rs "$recovery_stage" \
+      --arg gs "${ZOT_GATE_STATUS:-unknown}" \
       '{message: ("image pull failed (" + $r + ") " + $ref),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h, recovery_stage: $rs},
+        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h,
+               recovery_stage: $rs, zot_gate_status: $gs},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
     curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
@@ -748,14 +755,15 @@ pull_auth_recovery_event() {
 }
 
 # registry_pull_event <registry> <image_kind> <tag>: success breadcrumb recording
-# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback, local-cache};
-# image_kind ∈ {web, inngest}. The soak gate (scripts/followthroughs/zot-soak-6122.sh)
-# counts registry=ghcr-fallback events per image — a healthy post-cutover fleet emits
-# ONLY registry=zot, so ghcr-fallback is level=warning (the watched signal) and zot is
-# level=info. local-cache (#6512) is the last-resort same-version reload rescue — BOTH
-# registries failed to serve an already-running image — so it too is level=warning, watched
-# by the DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak: local-cache is not
-# a GHCR-served event). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
+# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, local-cache}; image_kind ∈
+# {web, inngest}. `ghcr-fallback` was a third value until #8036 1c deleted its only emit site;
+# it is not accepted here any more, and zot-soak-6122.sh's matching FAIL_QUERIES entry went with
+# it. Do NOT reintroduce the spelling without an alarm condition to match — it would emit at
+# level=warning into a rule that no longer has a filter for it, i.e. silently.
+# local-cache (#6512) is the last-resort same-version reload rescue — since 1c that means the
+# SOLE registry failed to serve an already-running image, a strictly worse condition than the
+# two-registry outage this comment used to describe — so it is level=warning, watched by the
+# DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
 # pre-activation period emits nothing, so the flip stays a strict no-op until zot is
 # live. Fail-open, same Sentry store transport as pull_failure_event.
 registry_pull_event() {
@@ -765,7 +773,7 @@ registry_pull_event() {
     local payload
     payload="$(jq -n --arg reg "$registry" --arg img "$image_kind" --arg t "$tag" \
       '{message: ("image pulled from " + $reg + " (" + $img + ":" + $t + ")"),
-        level: (if ($reg == "ghcr-fallback" or $reg == "local-cache") then "warning" else "info" end),
+        level: (if $reg == "local-cache" then "warning" else "info" end),
         platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: $reg, image: $img},
         extra: {tag: $t}}' 2>/dev/null)" || return 0
@@ -1467,17 +1475,23 @@ _doppler_get_or_report() {
 }
 
 # zot_gate_degraded_event <reason> [login_class] [login_http] [login_hatch]: WARNING beacon for when zot is CONFIGURED
-# (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it — the fleet
-# silently reverts to the GHCR path on the frequent rolling-deploy path WITHOUT a
-# registry=ghcr-fallback pull event (the pull path never attempts zot, so pull_image_with_
-# fallback takes its dark branch). Without this, a post-cutover zot pull-cred degradation
-# (host up + heartbeat green, but pull login failing) is journald-only and the fallback-rate
-# alarm is blind (hr-no-ssh-fallback-in-runbooks). Silent during dark-launch for every reason
+# (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it. Since #8036 1c this
+# is NOT a silent revert to a second registry — there is no second registry, so the deploy fails
+# terminally at `image_pull_failed` unless the same-version local-cache rescue applies. This
+# beacon is therefore the ONLY carrier of WHY, and `pull_failure_event` tags the same status so
+# the two can be joined from Sentry alone (hr-no-ssh-fallback-in-runbooks). It is emitted on
+# EVERY dark return, including the no-Doppler arm, so a terminal state never lacks a cause. Silent during dark-launch for every reason
 # that presupposes a configured registry — those fire only when ZOT_REGISTRY_URL is set.
 # reason ∈ {probe_unreachable, creds_absent, login_failed, cred_read_failed,
-#           no_credential_source}.
+#           no_doppler_binary, no_doppler_token}.
+# A NEW reason MUST NOT contain any token `_pull_result_is_transient` or
+# `_pull_result_is_auth_denied` match on (`timeout`, `connection reset`, `unauthorized`, …):
+# the status is interpolated into pull_failure_event's detail string, which those predicates
+# classify, so e.g. a `probe_timeout` value would silently retag every zot-dark deploy failure
+# as pull_result=network and move it into a different Sentry grouping.
 #
-# #7103 R1 half (b) — `no_credential_source` is the ONE reason that deliberately fires with
+# #7103 R1 half (b) — the no-credential reasons (`no_doppler_binary` / `no_doppler_token`,
+# one reason until #8036 1c split them) are the ONLY ones that deliberately fire with
 # ZOT_REGISTRY_URL UNSET. That combination is precisely the dark fall-through: no credential to
 # read a registry URL with, so the gate goes dark and the pull drops to a GHCR path whose read
 # PAT is documented-revoked. Treating it as "nothing to report because nothing was configured"
@@ -1492,7 +1506,7 @@ _doppler_get_or_report() {
 # cloud-init writes exactly three keys into webhook-deploy (DOPPLER_TOKEN, DOPPLER_CONFIG_DIR,
 # DOPPLER_ENABLE_VERSION_CHECK). The Sentry components are delivered by
 # soleur-doppler-token.tmpl into /etc/default/soleur-doppler-token — the SAME file whose absence
-# raises `no_credential_source` — and ci-deploy.sh only exports them when that file is readable.
+# raises a no-credential reason — and ci-deploy.sh only exports them when that file is readable.
 # So on the `cred_file=absent|unreadable` path the guard below is false and NO event is posted:
 # the beacon was silent in precisely the incident it was written to report.
 #
@@ -1510,10 +1524,10 @@ _doppler_get_or_report() {
 # Fail-open, same Sentry store transport as pull_failure_event — best-effort, never the only one.
 zot_gate_degraded_event() {
   local reason="$1" login_class="${2:-}" login_http="${3:-}" login_hatch="${4:-}"
-  # Reason-accurate: `(configured but inactive)` is the exact inverse of `no_credential_source`,
+  # Reason-accurate: `(configured but inactive)` is the exact inverse of a no-credential reason,
   # whose whole trigger is ZOT_REGISTRY_URL being UNSET. The enum already says which state this
   # is; the parenthetical said the opposite for one of them and added nothing for the rest.
-  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (zot not in use for this deploy — GHCR path)"
+  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (zot not in use for this deploy — there is no GHCR fallback since #8036 1c: this deploy fails unless the same-version local-cache rescue applies)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     # #6497: login_class + login_http make `login_failed` DIAGNOSABLE — it was one
@@ -1542,7 +1556,7 @@ zot_gate_degraded_event() {
     # never be filed under a zot-gate issue — the exact host/subsystem attribution error #6497
     # itself suffers from. GHCR is journald-only TODAY, by the Sentry-volume decision.
     payload="$(jq -n --arg r "$reason" --arg h "${HOST_ID:-}" --arg lc "$login_class" --arg lh "$login_http" --arg hx "$login_hatch" \
-      '{message: ("zot gate degraded (" + $r + ") — configured but inactive, using GHCR"),
+      '{message: ("zot gate degraded (" + $r + ") — zot is the SOLE pull path; this deploy fails unless the same-version local-cache rescue applies"),
         level: "warning", platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r, host_id: $h, login_class: $lc, login_http: $lh, login_registry: "zot"},
         extra: {login_hatch: $hx}}' 2>/dev/null)" || return 0
@@ -1714,24 +1728,68 @@ sweep_stale_registry_auth() {
   # jq is a HARD dependency of the close criterion, and its absence must fail CLOSED, not quietly
   # pass: with no jq the sweep no-ops AND `_ghcr_cfg_probe` emits `*_ghcr_auth=na`, so the probe's
   # `deploy_ghcr_auth=none` requirement refuses the host rather than grading it clean.
-  command -v jq >/dev/null 2>&1 || { SWEPT_STATE=na; return 0; }
-  # Refuse a symlink: `docker logout` would rewrite the LINK's target under a path we did not
-  # vet, and the marker's own probe is already symlink-aware — the two must agree.
-  [[ -f "$f" && ! -L "$f" && -w "$f" ]] || { SWEPT_STATE=na; return 0; }
-  # The predicate mirrors `_ghcr_cfg_probe`'s read, only BROADER (it fires on any non-null
-  # `.auths["ghcr.io"]`, where the probe requires a non-empty `.auth` string). Broader in this
-  # direction is safe and deliberate: it keeps `deploy_ghcr_auth=none` implying "the key is gone"
-  # after a sweep. A bare `.auths["ghcr.io"]` would be FALSY on an explicit JSON null and skip it,
-  # hence the `select(. != null)`.
-  if jq -e '.auths["ghcr.io"] | select(. != null)' "$f" >/dev/null 2>&1; then
-    DOCKER_CONFIG="$(dirname "$f")" docker logout ghcr.io >/dev/null 2>&1 || true
-    SWEPT_STATE=yes                               # a sweep was ATTEMPTED this deploy.
-    # Not "succeeded": the `|| true` above swallows a failed logout on purpose (a telemetry
-    # action must not abort a deploy). `swept=yes` alone therefore proves only that the key
-    # was there and removal was tried — which is exactly why the close-criterion probe grades
-    # a CONJUNCTION, requiring `deploy_ghcr_auth=none` from the probe that runs AFTER this.
-  else
+  command -v jq >/dev/null 2>&1 || { SWEPT_STATE=na_nojq; return 0; }
+  # Refuse a symlink: a rewrite would follow the LINK to a target under a path we did not vet,
+  # and the marker's own probe is already symlink-aware — the two must agree.
+  if   [[ ! -e "$f" && ! -L "$f" ]]; then SWEPT_STATE=na_absent;   return 0
+  elif [[ -L "$f" ]];               then SWEPT_STATE=na_symlink;  return 0
+  elif [[ ! -f "$f" ]];             then SWEPT_STATE=na_notfile;  return 0
+  elif [[ ! -w "$f" ]];             then SWEPT_STATE=na_readonly; return 0
+  fi
+
+  # THREE INDEPENDENT CARRIERS OF A ghcr.io CREDENTIAL, and `docker logout` clears NONE of them
+  # from the FILE:
+  #   .auths["ghcr.io"]        an inline base64 PAT
+  #   .credHelpers["ghcr.io"]  a per-registry helper indirection
+  #   .credsStore              a GLOBAL helper. docker consults it for ghcr.io even with no auths
+  #                            entry — and it is ALSO where the zot entry is stored, so it is
+  #                            never deleted here; only the ghcr.io secret inside it is erased.
+  #
+  # MEASURED 2026-09-23 (docker 29.7.2, throwaway DOCKER_CONFIG, no network), four configs:
+  #   inline auths only            -> rc 0, auths["ghcr.io"] REMOVED               (swept)
+  #   auths + credHelpers[ghcr.io] -> rc 0, same "Removing login credentials" line,
+  #                                   file BYTE-IDENTICAL                          (NOT swept)
+  #   auths + credsStore           -> rc 0, same line, file BYTE-IDENTICAL         (NOT swept)
+  #   credHelpers only, no auths   -> rc 0, nothing to remove                      (n/a)
+  # An earlier revision of this function asserted the opposite — that logout "additionally clears
+  # a credHelpers indirection that a del(.auths…) would leave behind". That is inverted: jq clears
+  # it in all four cases and the verb clears it in one. docker/cli decides `loggedIn` from
+  # AuthConfigs[reg] and then calls store.Erase(reg), which asks the HELPER to drop its secret and
+  # leaves the config map untouched.
+  #
+  # So both are used, for the halves only each can do: the VERB asks the helper to erase the
+  # stored secret (jq cannot), then JQ rewrites the file (the verb cannot). The post-state is then
+  # re-read, because a telemetry token that reports an unverified attempt is how `swept=yes` came
+  # to be emitted over a live revoked PAT.
+  local _dirty=1
+  jq -e '((.auths? // {}) | has("ghcr.io")) or ((.credHelpers? // {}) | has("ghcr.io"))' \
+    "$f" >/dev/null 2>&1 || _dirty=0
+  if [[ "$_dirty" == "0" ]]; then
     SWEPT_STATE=no                                # already clean: no write, mtime unchanged
+    return 0
+  fi
+
+  DOCKER_CONFIG="$(dirname "$f")" docker logout ghcr.io >/dev/null 2>&1 || true
+
+  local _tmp
+  _tmp="$(mktemp "${f}.sweep.XXXXXX" 2>/dev/null)" || { SWEPT_STATE=failed; return 0; }
+  if jq 'if has("auths")       then .auths       |= del(.["ghcr.io"]) else . end
+       | if has("credHelpers") then .credHelpers |= del(.["ghcr.io"]) else . end' \
+       "$f" > "$_tmp" 2>/dev/null; then
+    # mktemp already created it 0600; match the original so a deliberate mode survives the sweep.
+    chmod --reference="$f" "$_tmp" 2>/dev/null || chmod 600 "$_tmp" 2>/dev/null || true
+    mv -f "$_tmp" "$f" 2>/dev/null || { rm -f "$_tmp"; SWEPT_STATE=failed; return 0; }
+  else
+    rm -f "$_tmp"; SWEPT_STATE=failed; return 0
+  fi
+
+  # VERIFY, then report. `yes` now means "re-read and the file carries neither carrier", not
+  # "a removal was attempted".
+  if jq -e '(((.auths? // {}) | has("ghcr.io")) or ((.credHelpers? // {}) | has("ghcr.io"))) | not' \
+      "$f" >/dev/null 2>&1; then
+    SWEPT_STATE=yes
+  else
+    SWEPT_STATE=failed
   fi
   return 0
 }
@@ -1765,7 +1823,8 @@ emit_registry_config_marker() {
 # zot_gate_and_login: dark-launch gate for the self-hosted zot registry (#6122/ADR-096).
 # Sets ZOT_ACTIVE=1 ONLY when zot is confirmed-configured-and-live: ZOT_REGISTRY_URL
 # present in Doppler prd AND a fast /v2/ probe answers AND the pull cred logs in. Any
-# miss leaves ZOT_ACTIVE=0 → every pull falls straight through to the UNCHANGED GHCR path
+# miss leaves ZOT_ACTIVE=0, which since #8036 1c is TERMINAL for the deploy: there is no GHCR
+# leg left to fall through to, so the only remaining tier is the same-version local-cache rescue
 # (wg-dark-launch-deploy-gates), so this is a strict no-op until the operator provisions
 # (1.8) + backfills (1.9) zot. The zot `docker login` writes a second auths entry into
 # the SAME $GHCR_DOCKER_CONFIG the cosign verifier mounts :ro — so Edge B (insecure .sig
@@ -1798,8 +1857,17 @@ zot_gate_and_login() {
   # about EMPTY, not about zot: without it the next empty secret re-enters the same silent
   # fall-through under a different name.
   if ! command -v doppler >/dev/null 2>&1 || [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+    # TWO CAUSES, TWO REASONS, TWO REMEDIATIONS. Until #8036 1c both collapsed into
+    # `no_credential_source`, which was survivable then because the deploy still went to GHCR and
+    # `resolve_env_file` wrote a distinguishing `doppler_unavailable` / `doppler_token_missing`
+    # into the state file. Post-1c the pull dies first, those two stage tokens are unreachable,
+    # and this beacon is the only carrier — so collapsing them would mean "the host image lost
+    # the doppler binary" and "the host's Doppler token is gone/revoked" are indistinguishable
+    # from Sentry and Better Stack, and telling them apart would need an SSH session.
+    local _nocred_reason="no_doppler_token"
+    command -v doppler >/dev/null 2>&1 || _nocred_reason="no_doppler_binary"
     if [[ -z "$ZOT_REGISTRY_URL" ]]; then
-      logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset and no Doppler credential to read one with — GHCR path (dark, pre-provisioning)"
+      logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset and no Doppler credential to read one with — no pull path (dark, pre-provisioning)"
       # #7103 R1 half (b) — FAIL LOUDLY instead of falling through silently to a registry known
       # to be dead. This was the ONLY gate arm with no degraded event: cred_read_failed,
       # probe_unreachable, creds_absent and login_failed all emit one, and this arm — the one the
@@ -1815,7 +1883,15 @@ zot_gate_and_login() {
       # terminal abort is #7103 B1 and is deliberately out of scope: a new abort path here would
       # break the #6090 baked-credential cold-boot route, i.e. it would turn a silent degradation
       # into a boot outage on the one host that has no replacement path.
-      zot_gate_degraded_event no_credential_source
+      zot_gate_degraded_event "$_nocred_reason"
+    else
+      # ZOT_REGISTRY_URL IS set but there is no credential to log in with. Before #8036 1c this
+      # arm returned silently because the deploy simply took the GHCR path; post-1c it is
+      # TERMINAL, and a terminal state with no cause on any layer is the exact failure mode
+      # zot_gate_degraded_event exists to prevent. Emitting here is what makes
+      # `ZOT_GATE_STATUS=dark` joinable to a reason from Sentry alone.
+      logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL is set but there is no Doppler credential to authenticate with — no pull path (${_nocred_reason})"
+      zot_gate_degraded_event "$_nocred_reason"
     fi
     return 0
   fi
@@ -1845,7 +1921,7 @@ zot_gate_and_login() {
     ZOT_GATE_STATUS="probe_unreachable"
     # MEASURED-BY: $code, the /v2/ http_code captured two lines up. curl emits 000 on connect
     # failure, so "unreachable" is the reading of a measurement, not a guess about one.
-    logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — GHCR path (zot unreachable)"
+    logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — no pull path (zot unreachable)"
     zot_gate_degraded_event probe_unreachable
     return 0
   fi
@@ -1859,7 +1935,7 @@ zot_gate_and_login() {
   _doppler_get_or_report ZOT_PULL_TOKEN ztoken || zt_ok=0
   if [[ "$zu_ok" == "0" || "$zt_ok" == "0" ]]; then
     ZOT_GATE_STATUS="cred_read_failed"
-    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — doppler read FAILED (user_ok=$zu_ok token_ok=$zt_ok) — GHCR path (see the per-secret SOLEUR_DEPLOY_CRED_FAIL markers for rc/empty/err)"
+    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — doppler read FAILED (user_ok=$zu_ok token_ok=$zt_ok) — no pull path (see the per-secret SOLEUR_DEPLOY_CRED_FAIL markers for rc/empty/err)"
     ztoken=""
     zot_gate_degraded_event creds_absent
     return 0
@@ -1886,7 +1962,7 @@ zot_gate_and_login() {
     # dark; it can never abort the deploy.
     zhatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
     LOGIN_ERR=""
-    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED class=$zclass http=${zhttp:-none} ${zhatch:-} — GHCR path (fallback)"
+    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED class=$zclass http=${zhttp:-none} ${zhatch:-} — no pull path (zot login failed)"
     zot_gate_degraded_event login_failed "$zclass" "$zhttp" "${zhatch:-}"
   fi
   LOGIN_ERR=""
@@ -1976,22 +2052,27 @@ _pull_with_transient_retry() {
   done
 }
 
-# pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC
-# GHCR fallback (#6122/ADR-096). image_kind ∈ {web, inngest} (beacon tag only). On
-# success it reassigns the GLOBAL IMAGE to the registry-qualified repo actually pulled,
-# so verify_image_signature + every downstream docker create/run follow the SAME
-# registry — image ref + docker auth + cosign .sig target move together. Emits a
-# registry_pull_event breadcrumb (zot on success, ghcr-fallback when zot was attempted
-# but failed); pull_failure_event on total failure. Returns 1 only when BOTH registries
-# fail (caller aborts, OLD container stays live — downtime-safe). FD-200 advisory lock
+# pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG from zot — the SOLE registry since
+# #8036 1c deleted the host-side GHCR read path (#6122/ADR-096). The name is kept because the
+# function DOES still have a fallback, just not a registry one: `_try_local_cache_reload`.
+# image_kind ∈ {web, inngest} (beacon tag only). On success it reassigns the GLOBAL IMAGE to the
+# registry-qualified repo actually pulled, so verify_image_signature + every downstream docker
+# create/run follow the SAME registry — image ref + docker auth + cosign .sig target move
+# together. Emits a registry_pull_event breadcrumb (`zot` on success, `local-cache` on a rescue;
+# `ghcr-fallback` has had no emit site since 1c); pull_failure_event on total failure.
+#
+# RETURN CONTRACT, POST-1c: returns 1 when the single registry fails AND the local-cache rescue
+# does not apply. The rescue is NARROW — same-version `web` only — so for the inngest site and
+# for every new-version deploy there is no tier at all between a zot miss and image_pull_failed. It is NOT "both registries failed" any more — a zot miss is terminal for every
+# inngest deploy and for every new-version web deploy, because the rescue is same-version `web`
+# only. The caller aborts and the OLD container stays live (downtime-safe). FD-200 advisory lock
 # is closed for the pull children (#5062).
 # _try_local_cache_reload <image_kind>: last-resort rescue for a same-version `web` reload
 # (#6512). The item-4 seccomp redeploy targets v<running_version> — the image the container is
 # ALREADY running — the EXACT immutable @sha256 bits already live in production (cosign-checked at
 # its original deploy; even under WARN-mode fail-open the reused bits are strictly no worse than what
-# is already executing), always present in the host's local docker store. When BOTH registries fail
-# to serve that image (zot GC'd the
-# several-releases-old tag from its 5-v* keep-set, then the GHCR fallback leg also failed), the
+# is already executing), always present in the host's local docker store. When zot fails to serve
+# that image (it GC'd the several-releases-old tag from its 5-v* keep-set, say), the
 # reload needs NO new bits — the registry round-trip is the single point of failure. Reuse the
 # RUNNING container's image ID as VERIFIED_REF, skipping re-verify (identical @sha256 bits) with an
 # EXPLICIT cosign-reuse breadcrumb (cosign_verify_event reused_local_reload) — this is a deliberate
@@ -2030,15 +2111,23 @@ _try_local_cache_reload() {
   [[ "$_reload_match" == "1" ]] || return 1
   registry_pull_event "local-cache" "$image_kind" "$TAG"
   cosign_verify_event "reused_local_reload" "$running_img_id" \
-    "both registries down; reusing the already-verified running image for a same-version seccomp reload (#6512)"
+    "zot did not serve; reusing the already-verified running image for a same-version seccomp reload (#6512)"
   LOCAL_CACHE_VERIFIED_REF="$running_img_id"
   return 0
 }
 
 pull_image_with_fallback() {
   local image_kind="$1" perr
-  perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
   if [[ "$ZOT_ACTIVE" == "1" ]]; then
+    # ALLOCATED ONLY ON THE ARM THAT WRITES IT. `_pull_with_transient_retry` is the sole writer of
+    # $perr and the sole setter of RECOVERY_STAGE, and the ZOT_ACTIVE=0 arm below never calls it —
+    # so before #8036 1c's review this mktemp ran on the dark path too, creating and removing a
+    # file nothing wrote, and passing a RECOVERY_STAGE nothing could set. Worse, this file's own
+    # `_docker_login_capture` header documents why this idiom is unsafe: the `|| echo
+    # /tmp/ci-deploy-pull.err` fallback is a WORLD-READABLE FIXED PATH for registry stderr, and a
+    # bare `mktemp` is an abort vector under `set -e` when /tmp is full. Keeping it off the arm
+    # that does not need it removes both from the terminal path.
+    perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
     local zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}"
     # #8036 1c: the zot pull now runs THROUGH the bounded transient-retry helper. Pre-1c it was a
     # bare `docker pull` with no retry at all, and the retry lived inside the GHCR fallback leg
@@ -2105,7 +2194,6 @@ pull_image_with_fallback() {
   # arm it fell through to could not authenticate with a credential revoked on 2026-07-29. 1c
   # makes the outcome honest instead of arriving via a 401 two registries later.
   if _try_local_cache_reload "$image_kind"; then
-    rm -f "$perr" 2>/dev/null || true
     return 0
   fi
   # NAME THE CAUSE THE GATE MEASURED, never just "there was no registry". Pre-1c a doppler-less
@@ -2114,11 +2202,10 @@ pull_image_with_fallback() {
   # `doppler_token_missing`, `doppler_fetch_failed`). Post-1c the pull is the first thing that
   # cannot proceed, so that specificity would be LOST unless it is carried here — the operator
   # would get a bare `image_pull_failed` for a credential problem. `ZOT_GATE_STATUS` is set by
-  # zot_gate_and_login to exactly the condition it measured (dark | no_credential_source-era
+  # zot_gate_and_login to exactly the condition it measured (dark | no-credential-reason-era
   # `dark` | cred_read_failed | probe_unreachable | login_failed), and its matching
   # ZOT_GATE_DEGRADED journald line carries the same reason, so the two agree by construction.
-  pull_failure_event "${IMAGE}:${TAG}" "no registry: zot gate status=${ZOT_GATE_STATUS:-unknown} (ZOT_ACTIVE=0) and no local-cache candidate. Since #8036 1c there is no GHCR fallback to attempt — see the ZOT_GATE_DEGRADED line for the measured reason." "${RECOVERY_STAGE:-}"
-  rm -f "$perr" 2>/dev/null || true
+  pull_failure_event "${IMAGE}:${TAG}" "no registry: zot gate status=${ZOT_GATE_STATUS:-unknown} (ZOT_ACTIVE=0) and no local-cache candidate. Since #8036 1c there is no GHCR fallback to attempt — see the ZOT_GATE_DEGRADED line for the measured reason." ""
   return 1
 }
 
@@ -3091,7 +3178,8 @@ prefetch_deploy_secrets
 sweep_stale_registry_auth
 emit_registry_config_marker
 # #6122/ADR-096: evaluate the zot dark-launch gate (probe + pull login) once, covering
-# BOTH pull sites. Sets ZOT_ACTIVE; strict no-op (GHCR path) until zot is provisioned.
+# BOTH pull sites. Sets ZOT_ACTIVE. NOT a strict no-op any more: since #8036 1c a gate miss is
+# terminal for the rolling deploy (local-cache rescue aside), because the GHCR leg is deleted.
 zot_gate_and_login
 
 # Component-specific deploy logic
@@ -3112,7 +3200,8 @@ case "$COMPONENT" in
     # a disk-full host is the same orphan class.
     docker image prune -af 200>&-
     # #6005/#6122: the pull is against a PRIVATE package (M2 SPOF). pull_image_with_fallback
-    # tries zot-primary (when ZOT_ACTIVE) with an atomic GHCR fallback, reassigns IMAGE to
+    # tries zot-primary (when ZOT_ACTIVE), then the local-cache rescue; there is no GHCR
+    # fallback since #8036 1c. Reassigns IMAGE to
     # the registry that served it (so verify + run follow the same registry), and emits a
     # loud no-SSH beacon on total failure — keeps the OLD container live (downtime-safe).
     if ! pull_image_with_fallback web; then
@@ -3698,7 +3787,8 @@ case "$COMPONENT" in
     echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
     # #6005/#6122: soleur-inngest-bootstrap is ALSO a PRIVATE package. zot_gate_and_login
     # (run before the case) already evaluated the gate + logged in; pull_image_with_fallback
-    # tries zot-primary with an atomic GHCR fallback, reassigns IMAGE to the served
+    # tries zot-primary, then the local-cache rescue; there is no GHCR fallback since #8036
+    # 1c. Reassigns IMAGE to the served
     # registry (downstream create/inspect follow it), and emits a loud no-SSH beacon on
     # total failure.
     if ! pull_image_with_fallback inngest; then

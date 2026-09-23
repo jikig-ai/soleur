@@ -215,15 +215,31 @@ if [[ "$ROWS_TOTAL" -eq 0 ]]; then
   exit 2
 fi
 
+# SATURATION. `betterstack-query.sh` takes the NEWEST rows (inner ORDER BY dt DESC), so a result
+# set that hit the limit has dropped the OLDEST rows — exactly where a surviving pre-1c
+# `stage=relogin_failed` sits. Leg 2 grades an ABSENCE, and an absence measured over a truncated
+# window is not evidence of anything: a lowered SOLEUR_FT_LIMIT, a widened `earliest`, or a noisy
+# fleet would silently turn "89 relogin rows exist" into "zero" and close #8036 on it. The probe
+# this one was adapted from is safe without this check only because its legs are
+# latest-verdict-shaped; that reasoning does not carry to an absence leg.
+if [[ "$ROWS_TOTAL" -ge "$LIMIT" ]]; then
+  echo "TRANSIENT: result set saturated at ${ROWS_TOTAL}/${LIMIT} rows. The query keeps the NEWEST" >&2
+  echo "           rows, so the oldest since $EARLIEST were dropped — and leg 2 grades an absence" >&2
+  echo "           over that whole window. Raise SOLEUR_FT_LIMIT or narrow the window; a verdict" >&2
+  echo "           from a truncated read would not be evidence." >&2
+  exit 2
+fi
+
 # One TSV line per decoded record:
 #   <decoded 0|1> <sid 0|1> <mid> <ts_us> <kind> <swept> <deploy_auth> <verify_class>
+#   <deploy_cfg> <deploy_creds_store> <deploy_ghcr_helper>
 # kind: marker | relogin | verify | other
 PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
   (fromjson? // null) as $row
   | if ($row | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-"
     else
       (($row.raw // null) | if type == "string" then (fromjson? // null) else . end) as $r
-      | if ($r | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-"
+      | if ($r | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-\t-\t-\t-"
         else
           (($r.message // $r.MESSAGE // "") | tostring) as $m
           | (if ($r.SYSLOG_IDENTIFIER // "") == "ci-deploy" then "1" else "0" end) as $sid
@@ -234,17 +250,21 @@ PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
                    | (strptime("%Y-%m-%d %H:%M:%SZ") | mktime) * 1000000)? // 0) as $ts
           | if ($m | test("(^| )" + $mt + " ")) then
               [ "1", $sid, $mid, ($ts|tostring), "marker",
-                (($m | capture(" swept=(?<v>[a-z]+)").v) // "-"),
-                (($m | capture(" deploy_ghcr_auth=(?<v>[a-z]+)").v) // "-"),
-                "-" ]
+                (($m | capture(" swept=(?<v>[a-z_]+)").v) // "-"),
+                (($m | capture(" deploy_ghcr_auth=(?<v>[a-z_]+)").v) // "-"),
+                "-",
+                (($m | capture(" deploy_cfg=(?<v>[a-z_]+)").v) // "-"),
+                (($m | capture(" deploy_creds_store=(?<v>[a-z_]+)").v) // "-"),
+                (($m | capture(" deploy_ghcr_helper=(?<v>[a-z_]+)").v) // "-") ]
             elif ($m | test("stage=relogin_failed")) then
-              [ "1", $sid, $mid, ($ts|tostring), "relogin", "-", "-", "-" ]
+              [ "1", $sid, $mid, ($ts|tostring), "relogin", "-", "-", "-", "-", "-", "-" ]
             elif ($m | test("^IMAGE_VERIFY: ok( |$)")) then
-              [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-", "ok" ]
+              [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-", "ok", "-", "-", "-" ]
             elif ($m | test("^IMAGE_VERIFY_FAIL: result=[a-z_]+")) then
               [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-",
-                ($m | capture("^IMAGE_VERIFY_FAIL: result=(?<c>[a-z_]+)").c) ]
-            else [ "1", $sid, $mid, ($ts|tostring), "other", "-", "-", "-" ] end
+                ($m | capture("^IMAGE_VERIFY_FAIL: result=(?<c>[a-z_]+)").c),
+                "-", "-", "-" ]
+            else [ "1", $sid, $mid, ($ts|tostring), "other", "-", "-", "-", "-", "-", "-" ] end
           | join("\t")
         end
     end
@@ -260,8 +280,8 @@ fi
 
 RELEVANT="$(printf '%s\n' "$PARSED" | awk -F'\t' -v e="$EARLIEST_US" \
   '$1 == "1" && $2 == "1" && ($5 == "marker" || $5 == "relogin" || $5 == "verify") && ($4 + 0) >= (e + 0)')"
-MARKERS_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 8 && $3 == "-" && $5 == "marker" { n++ } END { print n + 0 }')"
-MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 8 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
+MARKERS_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 == "-" && $5 == "marker" { n++ } END { print n + 0 }')"
+MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
 
 if [[ "$MARKERS_WITH_MID" -eq 0 && "$MARKERS_NO_MID" -gt 0 ]]; then
   echo "CANNOT ESTABLISH: ${MARKERS_NO_MID} ci-deploy ${MARKER_LITERAL} line(s) since $EARLIEST carry no" >&2
@@ -274,16 +294,40 @@ fi
 # says so — so relogin rows are counted against the host but cannot create one, and a relogin-only
 # host surfaces as the UNGRADED count reported below rather than silently vanishing.
 # Output: <mid> <swept> <deploy_auth> <n_relogin> <latest_verify_class> <n_marker>
-HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 8 && $3 != "-"' | sort -t$'\t' -k3,3 -k4,4n | awk -F'\t' '
+# Per-host fold in timestamp order. A host is a group iff it emitted at least one MARKER: a host
+# that emitted only a relogin row has not demonstrated it ran the new script, and leg 1 is what
+# says so — so relogin rows are counted against the host but cannot create one, and a relogin-only
+# host surfaces as the UNGRADED count reported below rather than silently vanishing.
+#
+# RELOGIN ROWS ARE COUNTED ONLY IF THEY ARE NEWER THAN THE HOST'S LATEST MARKER. Counting every
+# row since `earliest` latches the tracker shut forever: `earliest` is deliberately set to the
+# apply's completion PLUS A MARGIN because the co-fired release may still run the OLD script, so
+# the window is EXPECTED to contain pre-1c rows. One of them under the old rule pinned leg 2 to
+# fail on a host that then retired cleanly and deployed a hundred times. The post-marker window is
+# the property actually wanted: "the script that emits `swept=` does not log in to ghcr.io".
+# `nrel_all` is carried alongside so the report can still say rows were seen and ignored.
+# Output: <mid> <swept> <deploy_auth> <n_relogin_post_marker> <latest_verify> <n_marker>
+#         <deploy_cfg> <deploy_creds_store> <deploy_ghcr_helper> <n_relogin_all>
+HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | sort -t$'\t' -k3,3 -k4,4n | awk -F'\t' '
   {
     mid = $3; kind = $5
-    if (kind == "marker") { seen[mid] = 1; swept[mid] = $6; dauth[mid] = $7; nmark[mid]++ }
-    else if (kind == "relogin") { nrel[mid]++ }
-    else if (kind == "verify") { lver[mid] = $8 }
+    if (kind == "marker") {
+      seen[mid] = 1; swept[mid] = $6; dauth[mid] = $7; nmark[mid]++
+      dcfg[mid] = $9; dstore[mid] = $10; dhelper[mid] = $11
+      if (($4 + 0) > (mts[mid] + 0)) mts[mid] = $4 + 0
+    } else if (kind == "relogin") {
+      rel[mid] = rel[mid] " " ($4 + 0); nrelall[mid]++
+    } else if (kind == "verify") { lver[mid] = $8 }
   }
   END {
-    for (m in seen)
-      printf "%s\t%s\t%s\t%d\t%s\t%d\n", m, swept[m], dauth[m], nrel[m], (lver[m] == "" ? "-" : lver[m]), nmark[m]
+    for (m in seen) {
+      n = 0; c = split(rel[m], a, " ")
+      for (i = 1; i <= c; i++) if (a[i] != "" && (a[i] + 0) > (mts[m] + 0)) n++
+      printf "%s\t%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\t%d\n", m, swept[m], dauth[m], n,
+        (lver[m] == "" ? "-" : lver[m]), nmark[m],
+        (dcfg[m] == "" ? "-" : dcfg[m]), (dstore[m] == "" ? "-" : dstore[m]),
+        (dhelper[m] == "" ? "-" : dhelper[m]), nrelall[m]
+    }
   }' | sort)"
 
 HOSTS_TOTAL="$(printf '%s\n' "$HOSTS" | awk 'NF { n++ } END { print n + 0 }')"
@@ -294,7 +338,7 @@ HOSTS_TOTAL="$(printf '%s\n' "$HOSTS" | awk 'NF { n++ } END { print n + 0 }')"
 # since `earliest` is positive evidence that the PRE-1c prelude is still running there; reporting
 # that as TRANSIENT ("no deploy has run yet") would name a cause the probe measured the opposite
 # of. It is a FAIL with its own sentence.
-RELOGIN_ONLY="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 8 && $3 != "-"' | awk -F'\t' '
+RELOGIN_ONLY="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | awk -F'\t' '
   { if ($5 == "marker") mark[$3] = 1; if ($5 == "relogin") rel[$3] = 1 }
   END { for (m in rel) if (!(m in mark)) n++; print n + 0 }')"
 
@@ -307,24 +351,58 @@ fi
 
 n_fail=0; n_action=0; n_pass=0
 REPORT=""
-while IFS=$'\t' read -r mid swept dauth nrel lver nmark; do
+while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrelall; do
   [[ -n "$mid" ]] || continue
   short="${mid:0:12}"
-  leg1=fail; leg2=fail; leg3=pass
-  # `swept` is "-" when the token is ABSENT from the line — i.e. the pre-1c script. `na` is a
-  # PRESENT token meaning "jq was missing so the sweep could not run", and it fails leg 1 with the
-  # rest: the marker's own tokens then read `deploy_ghcr_auth=na`, not `none`.
-  [[ "$swept" != "-" && "$dauth" == "none" ]] && leg1=pass
+  leg1=fail; leg2=fail; leg3=fail
+  # LEG 1 — the host runs the new script AND presents no ghcr.io credential from the deploy config.
+  # `swept` is "-" when the token is ABSENT, i.e. the pre-1c script: that is the version
+  # discriminator and it can never pass. Otherwise the value says what the sweep DID:
+  #   yes        re-read and verified clean
+  #   no         nothing to sweep
+  #   na_absent  no deploy config exists yet (a ForceNew/recut host, or one whose zot login has
+  #              not yet written one). A file that is not there presents no credential, so this
+  #              is CLEAN — grading it FAIL made #8036 unclosable on any host recut, which is the
+  #              exact host class ADR-169 produces.
+  #   na_nojq / na_symlink / na_notfile / na_readonly / failed
+  #              the sweep could not run or could not verify. Refuse; do not grade clean.
+  # BOTH carriers are graded, not just the inline PAT: docker resolves ghcr.io through
+  # `credHelpers["ghcr.io"]` with or without an auths entry, so a host reporting
+  # `deploy_ghcr_auth=none deploy_ghcr_helper=set` is still presenting a credential.
+  case "$swept" in
+    yes|no)
+      if [[ "$dauth" == "none" && "$dhelper" == "none" ]]; then leg1=pass; fi ;;
+    na_absent) leg1=pass ;;
+    *) : ;;
+  esac
+  # LEG 2 — no relogin AFTER the host's latest marker (see the fold above).
   [[ "$nrel" -eq 0 ]] && leg2=pass
-  [[ "$lver" == "verify_failed" ]] && leg3=fail
+  # LEG 3 — the LATEST verify verdict is a good one. Graded as a closed allowlist, never as
+  # "is it the one bad literal": `verify_image_signature` emits unsigned / wrong_identity /
+  # rekor_unreachable / cosign_absent before falling back to verify_failed, and `cosign_absent`
+  # is the literal this work's own evidence records firing 89/89. Under IMAGE_VERIFY_MODE=warn
+  # the deploy proceeds, so every one of those was closing the tracker over a broken verify.
+  # A host with markers but NO verify verdict is ACTION REQUIRED with its own sentence, never a
+  # pass — but never a FAIL either, so it cannot latch the tracker shut.
+  case "$lver" in ok|reused_local_reload) leg3=pass ;; *) leg3=fail ;; esac
   if [[ "$leg1" == "pass" && "$leg2" == "pass" && "$leg3" == "pass" ]]; then
     grade="ok"; n_pass=$((n_pass + 1))
   elif [[ "$leg1" != "pass" || "$leg2" != "pass" ]]; then
     grade="FAIL"; n_fail=$((n_fail + 1))
+  elif [[ "$lver" == "-" ]]; then
+    grade="ACTION REQUIRED (host ran the new script but emitted no IMAGE_VERIFY verdict)"
+    n_action=$((n_action + 1))
   else
-    grade="ACTION REQUIRED (latest IMAGE_VERIFY is result=verify_failed)"; n_action=$((n_action + 1))
+    grade="ACTION REQUIRED (latest IMAGE_VERIFY is result=${lver})"; n_action=$((n_action + 1))
   fi
-  REPORT="${REPORT}  host ${short}: grade=${grade} swept=${swept} deploy_ghcr_auth=${dauth} relogin_failed=${nrel} latest_verify=${lver} markers=${nmark}"$'\n'
+  REPORT="${REPORT}  host ${short}: grade=${grade} swept=${swept} deploy_cfg=${dcfg} deploy_ghcr_auth=${dauth} deploy_creds_store=${dstore} deploy_ghcr_helper=${dhelper} relogin_failed_post_marker=${nrel} relogin_failed_in_window=${nrelall} latest_verify=${lver} markers=${nmark}"$'\n'
+  # A GLOBAL credsStore is not deleted by the sweep (it is also where the zot entry lives), so
+  # config alone cannot prove the helper no longer holds a ghcr.io secret — `docker logout`'s
+  # erase is what does that, and it is not observable from here. Say so rather than let the
+  # host pass silently on a guarantee this probe did not measure.
+  if [[ "$dstore" == "set" ]]; then
+    REPORT="${REPORT}    note: deploy_creds_store=set — leg 1 verified the config carries no ghcr.io carrier, but a global credential helper is configured and this probe cannot read what it stores."$'\n'
+  fi
 done <<<"$HOSTS"
 
 if [[ "$RELOGIN_ONLY" -gt 0 ]]; then
@@ -334,9 +412,19 @@ fi
 if [[ "$n_fail" -gt 0 || "$RELOGIN_ONLY" -gt 0 ]]; then
   echo "FAIL: ${n_fail} of ${HOSTS_TOTAL} graded host(s), plus ${RELOGIN_ONLY} ungraded host(s), do not satisfy"
   echo "      the retirement conjunction since"
-  echo "      ${EARLIEST}. Leg 1 needs the latest ${MARKER_LITERAL} line to carry a 'swept=' token AND"
-  echo "      'deploy_ghcr_auth=none'; leg 2 needs zero '${RELOGIN_LITERAL}'. A missing 'swept=' means the"
-  echo "      host is still running the pre-1c script, NOT that the sweep failed. Leave #8036 open."
+  echo "      ${EARLIEST}. Leg 1 needs the latest ${MARKER_LITERAL} line to carry a 'swept=' token,"
+  echo "      'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'; leg 2 needs zero"
+  echo "      '${RELOGIN_LITERAL}' AFTER that host's latest marker."
+  echo "      READ THE swept= VALUE BEFORE ASSIGNING A CAUSE -- they are different remediations:"
+  echo "        swept absent (-)  the host is still running the PRE-1c script. Nothing is broken;"
+  echo "                          it has not been redeployed yet."
+  echo "        swept=failed      the sweep ran and the config is STILL dirty. Investigate."
+  echo "        swept=na_nojq     jq is missing on the host, so the sweep could not run."
+  echo "        swept=na_symlink  the deploy docker config is a symlink; refused, not vetted."
+  echo "        swept=na_notfile  the path exists but is not a regular file."
+  echo "        swept=na_readonly the config is not writable by the deploy user."
+  echo "        (swept=na_absent is NOT a failure -- no config means no credential to present.)"
+  echo "      Leave #8036 open."
   printf '%s' "$REPORT"
   echo "Read the rows with:"
   echo "  doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since '${SINCE_SQL}' --grep ${MARKER_LITERAL} --grep relogin_failed | jq -r '.raw | fromjson | select(.SYSLOG_IDENTIFIER == \"ci-deploy\") | .message'"

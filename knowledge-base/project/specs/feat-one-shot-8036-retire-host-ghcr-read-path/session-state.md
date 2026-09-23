@@ -55,3 +55,45 @@ seats) · `soleur:engineering:review:dhh-rails-reviewer` ·
 `soleur:engineering:review:kieran-rails-reviewer` ·
 `soleur:engineering:review:code-simplicity-reviewer` · `lint-guard-contract.py` ·
 `lint-infra-no-human-steps.py` · `markdownlint-cli2`
+
+## Review round — PR #8600, 10-seat panel (2026-09-23)
+
+**Every seat returned BLOCKING.** Class: the GHCR *code* was deleted while its *claims*
+stayed live. Full findings and dispositions in `tasks.md` Phase 7.
+
+Four findings the lead reproduced independently rather than taking on report:
+
+- **`docker logout` does not sweep a helper-backed config** (3 seats). Measured on docker
+  29.7.2, throwaway `DOCKER_CONFIG`, no network, four config shapes. With
+  `credHelpers["ghcr.io"]` or a global `credsStore`, the verb exits 0 with the same
+  "Removing login credentials" line and leaves the file byte-identical. `swept=yes` was
+  therefore being emitted over a live revoked PAT, and leg 1 could never go green.
+- **`ZOT_GATE_STATUS` reached no sink** (1 seat). `pull_failure_event`'s second argument is
+  classifier input only; the journald line omitted it and the Sentry payload had no detail
+  field. The repayment recorded in DC-W6 did not exist as written.
+- **The leg-2 latch** (1 seat). One pre-1c relogin row inside a window the design
+  deliberately opens to them pinned the tracker shut forever.
+- **AC-F8's ref guard could not see `pull_failure_event`** (1 seat): `IMAGE_PULL:` is not a
+  substring of `IMAGE_PULL_FAIL:`, and zero rows asserted that record anywhere.
+
+**One panel claim corrected by measurement.** The structural seat reported the deleted
+#6400 probe would red the sweeper workflow indefinitely. It does not: #6400 closed 63 days
+ago, the open-set query is `--state open` and the closed-set query is
+`closed:>=now-CLOSED_LOOKBACK_DAYS` (14), so it is selected by neither. `fail()` is also an
+stderr print, not the run's `exit 1`. Striking the directive is ship-time hygiene, not a
+blocker. Recorded because acting on the reported severity would have been wasted work.
+
+**Two branch bugs the gates caught, not the panel.** `production's` — an unescaped
+apostrophe inside a single-quoted `printf` — made the private-NIC alarm step unparseable as
+bash, so it could not execute at all; and two `grep | head | cut` captures could abort the
+suite under `set -e`. Both were introduced by this PR before the review round.
+
+### Components Invoked (review round)
+
+`soleur:review` · 10-seat panel: `security-sentinel` · `architecture-strategist` ·
+`code-quality-analyst` · `pattern-recognition-specialist` · `code-simplicity-reviewer` ·
+`test-design-reviewer` · `observability-coverage-reviewer` · `data-integrity-guardian` ·
+`agent-native-reviewer` · structural-enumeration seat (guard-shaped diff) ·
+`lint-workflow-run-body-syntax.py` · `lint-shell-capture-exit.py` ·
+`lint-credential-path-literals.py` · `lint-window-closure-assertion.py` · `shellcheck` ·
+`markdownlint-cli2`

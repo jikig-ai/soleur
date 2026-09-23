@@ -354,27 +354,34 @@ effective deploy config and the legacy home config. The sweep removes the key fr
 config only — see the scope correction above for why the home one is structurally unreachable
 from `webhook.service`, and why grading on it would keep #8036 open forever:
 
-```bash
-# Registry-native and key-scoped: `docker logout <reg>` removes exactly that registry's entry and
-# leaves the co-resident zot entry alone. Sets SWEPT_STATE for the marker; never aborts the deploy.
-SWEPT_STATE=na
-sweep_stale_registry_auth() {
-  local f="$GHCR_DOCKER_CONFIG"                   # $DOCKER_CONFIG/config.json on /mnt/data — a real ReadWritePath.
-  command -v jq >/dev/null 2>&1 || { SWEPT_STATE=na; return 0; }
-  # Refuse a symlink: docker would rewrite the LINK and leave the target's credential in place.
-  # The marker's own probe is already symlink-aware; the sweep must agree with it.
-  [[ -f "$f" && ! -L "$f" && -w "$f" ]] || { SWEPT_STATE=na; return 0; }
-  # Predicate MUST match emit_registry_config_marker's, or `deploy_ghcr_auth=none` stops implying
-  # "the key is gone" (a bare `.auths["ghcr.io"]` is falsy on an explicit null and would skip it).
-  if jq -e '.auths["ghcr.io"] | select(. != null)' "$f" >/dev/null 2>&1; then
-    DOCKER_CONFIG="$(dirname "$f")" docker logout ghcr.io >/dev/null 2>&1 || true
-    SWEPT_STATE=yes                               # a sweep was performed this deploy
-  else
-    SWEPT_STATE=no                                # already clean: no write, mtime unchanged
-  fi
-  return 0
-}
-```
+> **This plan carried a verbatim copy of `sweep_stale_registry_auth` here. It has been deleted
+> rather than updated (2026-09-23, #8600 review).** Two reasons. First, the copy had already
+> DRIFTED from the shipped function inside this one PR — it said `SWEPT_STATE=yes # a sweep was
+> performed`, while the code says *attempted*, and it claimed `docker logout` "would rewrite the
+> LINK and leave the target's credential in place", the opposite of the code's reasoning. Second
+> and decisively, the design it documented was **wrong**: see the amendment below.
+>
+> The implementation is the single source. Read it at `apps/web-platform/infra/ci-deploy.sh` ›
+> `sweep_stale_registry_auth`.
+
+> **Amendment 2026-09-23 (#8600 review) — `docker logout` ALONE DOES NOT SWEEP.** The design
+> above chose the registry's own removal verb over a `jq` rewrite, and argued it "additionally
+> clears a `credHelpers` indirection that a `del(.auths…)` would leave behind". That is inverted,
+> and it was falsified by running it (docker 29.7.2, throwaway `DOCKER_CONFIG`, no network):
+>
+> | deploy `config.json` | `docker logout ghcr.io` | file after |
+> |---|---|---|
+> | inline `auths` only | rc 0, "Removing login credentials" | entry removed |
+> | `auths` + `credHelpers["ghcr.io"]` | rc 0, same message | **byte-identical** |
+> | `auths` + `credsStore` | rc 0, same message | **byte-identical** |
+> | `credHelpers` only, no `auths` | guard never fires | untouched |
+>
+> docker/cli decides `loggedIn` from `AuthConfigs[reg]` and then calls `store.Erase(reg)`, which
+> asks the HELPER to drop its secret and never mutates the config map. So on any host carrying a
+> helper the sweep emitted `swept=yes` every deploy while the revoked PAT stayed live, GHCR kept
+> refusing the *public* cosign verifier image, and leg 1 of the close probe could never go green.
+> The shipped function now does both halves — the verb for the helper-held secret, a `jq` rewrite
+> for the file — and re-reads the post-state before reporting `swept=yes`.
 
 **Why `docker logout` and not a hand-rolled `jq` rewrite** (plan review, both simplification seats):
 it is the registry's own removal verb, it is already this repo's idempotent-teardown idiom in five
@@ -785,8 +792,8 @@ error_reporting:
 
 failure_modes:
   - mode:        "The sweep deletes or corrupts the zot auths entry that shares the deploy docker config"
-    detection:   "IMAGE_VERIFY_FAIL: result=verify_failed in journald, graded per host by scripts/followthroughs/cosign-verify-live-8037.sh (latest-verdict-per-_MACHINE_ID)"
-    alert_route: "the follow-through sweeper comments on #8037's tracker; Sentry cosign_verify_event carries the same verdict"
+    detection:   "IMAGE_VERIFY_FAIL: result=<class> in journald, graded per host as leg 3 of scripts/followthroughs/ghcr-read-retired-8036.sh (latest-verdict-per-_MACHINE_ID, closed allowlist ok|reused_local_reload)"
+    alert_route: "the follow-through sweeper comments on #8036 (exit 5 = ACTION REQUIRED). NOT #8037: that tracker is CLOSED, so its sweeper only evaluates inside a closed-set lookback and cannot carry this leg. There is no Sentry rule for cosign verdicts (grep issue-alerts.tf: zero hits), which is why the leg is carried by the probe."
   - mode:        "zot is unreachable or unconfigured, and there is no longer a second registry"
     detection:   "registry=zot-gate-degraded Sentry event (zot_gate_degraded_event) and, on a total miss, op:image-pull pull_result:* via pull_failure_event"
     alert_route: "sentry_alert.zot_mirror_fallback_rate, narrowed to its four surviving conditions in this PR; zot-gate-degraded is its highest-volume signal"
@@ -828,7 +835,7 @@ at_rest:
     does_not_defend:  "anything on a running, unlocked host: a compromised deploy user, a root shell, a container escape, or the :ro bind-mount this file already has into the ephemeral cosign verifier. This change REDUCES that surface by removing a revoked ghcr.io credential from the file."
     disclosed_as:     "not-publicly-claimed"
     live_verification: "available — the post-sweep state is read off-box from the SOLEUR_DEPLOY_GHCR_CONFIG marker (deploy_ghcr_auth=none), never by SSH"
-  - store:            "${HOME}/.docker/config.json on each web host (the pre-#6565 fossil location)"
+  - store:            "the deploy user's home docker config dir (~/.docker/) on each web host — the pre-#6565 fossil location"
     mechanism:        "luks"
     evidence:         "implied by device_binding — /home is on the encrypted root; written by no live code path since the #6565 DOCKER_CONFIG relocation"
     defends_against:  "the same disk-at-rest cases as above"
@@ -1270,7 +1277,7 @@ accurate); its `GHCR_READ_USER` assertions (they target `cloud-init.yml`, not `c
 ### Functional Requirements
 
 - [x] **AC-F1** `apps/web-platform/infra/ci-deploy.sh` contains **zero** `_docker_login_capture ghcr.io` call sites and no `refetch_ghcr_and_relogin` definition. Measured baseline on this branch: **2** and **1** respectively (plus **1** `registry_pull_event ghcr-fallback` site and **9** `GHCR_DOCKER_CONFIG` references), so the guard is proven by driving those to zero, not by a grep that was already zero. *(impl: `ci-deploy.sh` › `prefetch_deploy_secrets()` / `sweep_stale_registry_auth()` / `emit_registry_config_marker()`; test: `T-1c-1`)*
-- [x] **AC-F2** A deploy over `$GHCR_DOCKER_CONFIG` carrying an inline `ghcr.io` auth leaves no `ghcr.io` key, and leaves the co-resident zot auths entry **equal as a JSON value** (`jq -S '.auths'` compare). *(Deploy config only — `${HOME}/.docker/config.json` is unreachable under `ProtectHome=read-only`; see the scope correction in `## Technical Approach`.)* *(test: `T-1c-2`)*
+- [x] **AC-F2** A deploy over `$GHCR_DOCKER_CONFIG` carrying an inline `ghcr.io` auth leaves no `ghcr.io` key, and leaves the co-resident zot auths entry **equal as a JSON value** (`jq -S '.auths'` compare). *(Deploy config only — the home docker config under `~/.docker/` is unreachable under `ProtectHome=read-only`; see the scope correction in `## Technical Approach`.)* *(test: `T-1c-2`)*
 - [x] **AC-F3** A second deploy over already-clean configs performs no write (mtime unchanged). *(test: `T-1c-2`, which absorbed the former `T-1c-3`)*
 - [x] **AC-F4** The `SOLEUR_DEPLOY_GHCR_CONFIG` marker reads `deploy_ghcr_auth=none` after the sweep and carries a `swept=yes\|no\|na` token distinguishing "arrived clean" from "arrived dirty and was swept". *(impl: `ci-deploy.sh` › `_ghcr_cfg_probe()` + the marker emit; test: `T-1c-4`)*
 - [x] **AC-F5** The `SENTRY_INGEST_DOMAIN` / `SENTRY_PROJECT_ID` / `SENTRY_PUBLIC_KEY` prefetch still runs and still precedes `zot_gate_and_login`. *(impl: `ci-deploy.sh` › `prefetch_deploy_secrets()`; test: `T-1c-5`)*
@@ -1413,9 +1420,16 @@ accurate); its `GHCR_READ_USER` assertions (they target `cloud-init.yml`, not `c
 
 **Rollback.** Revert the PR. `terraform_data.deploy_pipeline_fix` re-fires on the restored content hash
 and pushes the previous `ci-deploy.sh` to every host; the Sentry rule's fifth condition returns on the
-next infra apply. Nothing is destroyed and no state migration is involved — the swept `ghcr.io` auths
-entries are a revoked credential and are not worth restoring, and a revert plus a boot would re-create
-root's copy anyway. The only irreversible act is the config-key deletion, which is the point.
+next infra apply. No state migration is involved, but **the sweep is one-way and the revert does not undo it** — an
+earlier draft of this paragraph said "nothing is destroyed" one sentence before naming the
+irreversible act, which is the kind of self-contradiction a 3am reader resolves in the wrong
+direction. Concretely: the swept `ghcr.io` entries do NOT come back. A restored pre-1c prelude
+re-runs `docker login ghcr.io` with a PAT revoked since 2026-07-29, and a failed login writes no
+`auths` entry; `cloud-init.yml`'s boot `ghcr_login` fails identically on the same credential, so a
+revert-plus-boot does not re-create root's copy either. `GHCR_MINTER_DISABLED=true` means no
+replacement can be minted. That is acceptable — the entry is a revoked credential and is not worth
+restoring — but it must be stated as the one-way step it is, and it is now also stated in
+`zot-registry-revert.md`, which is where someone would actually look.
 
 ## Documentation Plan
 

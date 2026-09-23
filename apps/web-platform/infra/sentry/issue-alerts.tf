@@ -1428,10 +1428,20 @@ resource "sentry_alert" "kb_sync_silent_failure" {
 # of dying image_pull_failed, and emits `registry_pull_event local-cache` at level=warning.
 #
 # This is a SEPARATE alert from zot_mirror_fallback_rate on purpose (do NOT fold local-cache into
-# that rule): `ghcr-fallback` means "zot missed but GHCR served" and is the single no-SSH page
-# gating the IRREVERSIBLE ADR-096 §5.5 GHCR-PAT retirement — a `local-cache` event means NEITHER
-# registry served, a categorically different (and worse) condition. Overloading the retirement gate
-# with it would corrupt that gate's meaning. A dedicated rule keeps the two signals decoupled.
+# that rule). AMENDED 2026-09-23 (#8036 item 1c) — the original rationale here read:
+# "`ghcr-fallback` means 'zot missed but GHCR served' and is the single no-SSH page gating the
+# IRREVERSIBLE ADR-096 §5.5 GHCR-PAT retirement — a `local-cache` event means NEITHER registry
+# served". Both halves are now void, and this block sat 500 lines from the
+# zot_mirror_fallback_rate block that voids them, stating the opposite position in the same file:
+#   * `ghcr-fallback` has NO emit site since 1c deleted the host-side GHCR read path, so it gates
+#     nothing and its condition was removed from zot_mirror_fallback_rate in this same change.
+#   * a `local-cache` event no longer means "neither of two registries served". It means the SOLE
+#     registry did not serve — a single-point condition that is strictly WORSE than the
+#     two-registry outage this paragraph described, and the correct reading when triaging a page.
+# The rules stay decoupled for a different and still-good reason: local-cache is a SUCCESS-with-
+# degradation (the deploy shipped by reusing verified local bits), while the zot rule watches
+# gate/pull degradation that now ends in image_pull_failed. Folding them would merge a "shipped
+# anyway" signal with a "nothing shipped" signal.
 #
 # value=0 pages on ANY local-cache reuse (mirrors zot_mirror_fallback_rate's #6285 value=0 posture):
 # the reload succeeded THIS time by reusing the local image, but both registries failing to serve an
