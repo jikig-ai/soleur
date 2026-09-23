@@ -13,6 +13,48 @@ requires_cpo_signoff: false
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23 (after a 4-agent plan review and a CTO devex pass)
+
+**Sections enhanced:** Proposed Solution (all phases), Alternatives, Architecture Decision,
+Observability, Guard Contract, Acceptance Criteria, Test Scenarios, Deferrals, Risks.
+
+**Deepen agents:** security-sentinel, architecture-strategist, spec-flow-analyzer,
+test-design-reviewer, observability-coverage-reviewer, plus live git probes (git 2.55, bare
+`file://` fixtures) and the halt gates 4.6, 4.7, 4.8 and 4.11, all of which passed.
+
+### Key improvements
+
+1. **The main-side ownership check had a P0 false green, and it is closed.** Three reviewers found it
+   independently. Every branch carries main's migrations, so a merged `131_x` "owned" the orphan
+   `128_x`, which never merged, from every branch. Branches now own only files that are **absent from
+   main**. A row whose name appears in main's history is never in-flight, and neither is a branch that
+   is already merged.
+2. **Ownership git work moved into a throwaway bare repo** with a single full-history blobless fetch.
+   The v2 in-workspace fetch had four problems: it turned the checkout into a partial clone, made it
+   shallow again, made `--unshallow` exit 128, and left stale refs between the two probes.
+3. **Delete-after-apply (A4) is covered.** A4 checks the PR branch's own history in the throwaway
+   repo. A 30-day freshness rule, with a blocking `stale` verdict, stops abandoned branches from
+   hiding orphans forever.
+4. **Fail-closed output no longer looks like drift.** It prints `ledger-classify: UNCLASSIFIED (rows= rc=)`
+   first. Exit-2 messages say "not caused by this PR" and separate transient failures from config
+   ones.
+5. **AC10b, a read-only pre-merge dispatch**, exercises the Phase 4 classifier. Without it the
+   classifier would first run on main. The P4 anchor now states honestly what the base-ref copy does
+   and does not stop.
+
+### New considerations discovered
+
+- **#8606 (filed): the existing #4241 unmerged gate in `run-migrations.sh` does nothing in CI.** Its
+  `ls-tree` pathspec is cwd-relative under `working-directory: apps/web-platform`, which was verified
+  locally. The new guard uses `:(top,literal)` pathspecs everywhere, and harness row 11 pins it.
+- **The classifier runs on the normal path, not a rare one.** Dev nearly always carries rows from open
+  PRs, so AC8 budgets it: 6–10 s plus about 3 s, measured.
+- **The ADR-061 amendment must say "ownerless rows count as main's".** It also marks ADR-061's rejected
+  "blocking orphan probe" alternative as superseded in part. Without that, the amendment contradicts
+  ADR-061's own ownership rule.
+
 ## Overview
 
 The tenant-integration heavy job applies each pull request's not-yet-merged migration files to the
@@ -77,16 +119,18 @@ Checked 2026-09-23:
 - **P1**: A PR whose unmerged migration `F` was ledgered on dev at blob `B1` cannot pass
   `tenant-integration-required` while its `F` is at blob `B2 ≠ B1`, and it fails *before* its tests
   run against the stale schema.
-- **P2**: A PR that renamed or renumbered an unmerged migration after CI applied it cannot pass while
-  the old-name ledger row still carries that file's blob or slug. After merge, that row would be an
-  orphan.
+- **P2**: A PR that renamed, renumbered or deleted an unmerged migration after CI applied it cannot
+  pass while an unowned old-name ledger row still carries that file's blob or slug, or a blob the PR
+  branch's history carried. After merge, that row would be an orphan. Deepen-plan added the
+  delete-after-apply arm (A4).
 - **P3** *(cut at plan review)*: a post-apply assertion that every unmerged file is ledgered at its
   blob. It only guards a same-filename write by another ref *between* the pre-check and the apply, and
   both run inside the dev-suite mutex. The window exists only when that mutex fails open under
   contention. It is left as a named residual under #8049.
 - **P4**: A PR cannot weaken the guard that judges it (base-ref copy; a deleted guard fails closed).
-- **P5**: A main push (or the scheduled probe) is not failed by a ledger row that a **live `origin`
-  branch** owns (in-flight; with `delete_branch_on_merge`, live ≈ unmerged).
+- **P5**: A main push (or the scheduled probe) is not failed by a ledger row that a **fresh, unmerged,
+  live `origin` branch** holds, through a file that is not on main. Ownerless, stale (more than 30
+  days), main-history and unclassifiable rows still fail closed.
   True orphans and all content drift still fail closed on authoritative refs.
 - **P6**: Every drift or guard failure message names its repair path, including content drift,
   which today names none.
@@ -237,253 +281,315 @@ fact, each blocking every merge:
 One new script, `apps/web-platform/scripts/dev-ledger-parity.sh`, with two subcommands that share one
 ownership primitive:
 
-- `check` is the PR-side, per-ref ledger-parity guard, covering arms 1 and 2. It runs once, before
+- `check`: the PR-side, per-ref ledger-parity guard (arms 1 and 2). The workflow runs it once, before
   apply, as a **base-ref copy**.
-- `classify-missing` is the authoritative-side ownership classification, covering arm 3. The drift
-  probe runs it from the checkout, and on every authoritative surface that checkout *is* main.
+- `classify-missing`: the authoritative-side ownership classification (arm 3). The drift probe runs it
+  from the checkout under `fail-on-ledger-drift`.
 
-Both follow ADR-061. Both use git only: no `gh`, no new token permissions, and no GitHub API dependency
-on the authoritative gate. The script's only database access is one fixed `SELECT`. Its only writes are
-git refs under `refs/ledger-owners/*` in the CI workspace, made by the ownership fetch. Nothing writes
-to dev or prd.
+Both follow ADR-061. They use git only: no `gh`, no new token permissions, and no GitHub API dependency
+on the authoritative gate.
+
+Scope of side effects:
+
+- **Database:** the only access is one fixed `SELECT`.
+- **Git:** all ownership and history work happens in a **throwaway bare repo** under a `mktemp -d`,
+  which is removed on exit. The job's checkout is never mutated: no `promisor` config, no new shallow
+  entries, no leftover refs (deepen-plan: architecture and test-design reviewers, verified on
+  git 2.55).
+- **dev / prd:** nothing writes to either.
 
 ### Phase 0 — RED first (cq-write-failing-tests-before)
 
-Write `apps/web-platform/scripts/dev-ledger-parity.test.sh` before the script exists. It must hold both
-guards' mutation matrices, the must-PASS rows, the harness rows (see Guard Contract), and the workflow
-and action wiring asserts. Run it: every row must fail at the harness level. A result of "0 passed,
-0 failed" with exit 0 does not count as a pass.
+Write `apps/web-platform/scripts/dev-ledger-parity.test.sh` before the script exists. It holds both
+guards' matrices, the must-PASS rows, the harness rows, and the workflow and action wiring asserts.
+Run it with the script absent: every row must fail at the harness level. "0 passed, 0 failed" with
+exit 0 does not count.
 
-Fixtures are synthesized only (`cq-test-fixtures-synthesized-only`):
+Harness rules (test-design review):
 
-- a **bare `origin` repo** holding `main` (with real history, including one migration renamed on main)
-  plus feature branches, cloned into a work repo;
-- a fake `psql` on `PATH` (precedent: `run-migrations-schema-probe.test.sh` `make_temp_tree`) that
-  prints scripted `filename|sha` rows, prints nothing, or exits non-zero.
+- The suite runs a **copy** of the guard (`GUARD=${DLP_GUARD:-<tracked path>}`); mutation rows edit the
+  copy, never the tracked file.
+- A control run of the unmutated guard must pass.
+- Only `rc=1` counts as a caught violation, and `rc=2` counts only where a row expects it.
+- `EXPECTED_CASES` sits on the line directly above its `if`.
 
-Every fixture `git` call runs with `GIT_DIR`/`GIT_INDEX_FILE` scrubbed. Plugin AGENTS.md §Test Fixture
-Conventions explains why: this is the linked-worktree hazard.
+Fixtures, synthesized only (`cq-test-fixtures-synthesized-only`):
 
-### Phase 1 — the ownership primitive (shared, lazy)
+- a **bare `origin`** reached through a `file://` URL (a plain-path clone ignores `--depth`), with
+  `uploadpack.allowFilter=true` to match GitHub;
+- `main` history that includes one migration renamed on main;
+- feature branches, **including the PR's own head branch pushed to origin**, since in CI the PR head
+  is a live branch;
+- a work clone;
+- a fake `psql` on `PATH` that logs each invocation's argv NUL-delimited and returns scripted rows,
+  empty output, or a non-zero exit;
+- every fixture `git` call runs with `GIT_DIR`/`GIT_INDEX_FILE` scrubbed.
 
-`branch_owners` runs only when at least one candidate row needs it. The no-candidate path makes zero
-remote calls.
+### Phase 1 — the ownership primitive (shared)
 
-1. **One fetch by refspec.** Run it under a 60 s timeout:
-   `git -C "$REPO" fetch --no-tags --depth=1 --filter=blob:none origin '+refs/heads/*:refs/ledger-owners/*'`.
-   - Using a refspec instead of `ls-remote` followed by a fetch by OID removes the force-push race
-     between the two calls.
-   - `ls-tree` needs trees, never blobs. At implementation, verify that `--filter` works on a
-     non-promisor workspace clone (git may need `-c remote.origin.promisor=true`). If it does not,
-     fall back to a plain `--depth=1` and record the measured wall time in the PR.
-   - A failed fetch exits 2.
-2. **Enumerate owners.** Use `git -C "$REPO" for-each-ref refs/ledger-owners/`, excluding the base
-   branch and `gh-readonly-queue/*`.
-3. **Map each head.** Per head, run `git -C "$REPO" ls-tree <ref> -- ':(top)apps/web-platform/supabase/migrations/'`
-   and keep forward `.sql` entries only, never `*.down.sql`. This gives `branch → {name → blob}`.
-4. **Find the owners of row `R`**, whose ledger `content_sha` is `S`. Try each tier in order and stop at
-   the first that matches:
-   1. branches that hold `R` **by exact name**;
-   2. branches that hold a file whose **blob is `S`**;
-   3. branches that hold a file whose **slug** matches `slug(R)`, where `slug(x)` strips the leading
-      `^[0-9]+_`.
+`owners_repo` builds the throwaway repo once per invocation, and only when some candidate row needs
+it:
+
+1. `OWN=$(mktemp -d)`, `trap 'rm -rf "$OWN"' EXIT`, then `git init -q --bare "$OWN"`.
+2. Run **one** fetch, with **full history and no blobs**, under `timeout 120` resolved through the
+   repo's `timeout`→`gtimeout` precedent:
+
+   ```text
+   git -C "$OWN" \
+     -c http.extraheader="$(git -C "$REPO" config --get http.https://github.com/.extraheader || true)" \
+     fetch -q --no-tags --filter=blob:none "$(git -C "$REPO" remote get-url origin)" \
+     '+refs/heads/*:refs/owners/*'
+   ```
+
+   - Reusing the checkout's `extraheader` keeps auth working if the repo is ever private. It is empty
+     and harmless on the public repo and in `file://` fixtures.
+   - A "filtering not recognized" warning is **not** a failure.
+   - A non-zero exit gives exit 2, `transient` class.
+   - Full history (no `--depth`) makes the main-history test and the PR-history test below correct.
+     `--depth` combined with a later deepen is the exact trap the reviewers reproduced.
+   - Measured cost 2026-09-23 against the real `origin` (architecture review): 6–10 s / 32 MB for
+     main's blobless history, plus about 3 s for the heads.
+3. `BASE_OWN=refs/owners/<base branch>`. The owner set is every `refs/owners/*` **except** the base
+   branch and `gh-readonly-queue/*`, and except any head that is an ancestor of `BASE_OWN`
+   (`git merge-base --is-ancestor`), because that head is already merged.
+4. **Per-head map, excluding main's files.** A head owns only forward `.sql` files in its tree
+   (`git -C "$OWN" ls-tree <ref> -- ':(top,literal)apps/web-platform/supabase/migrations/'`) that are
+   **absent from `BASE_OWN`'s tree**.
+   - This closes the P0 that three reviewers found independently: every branch carries main's
+     migrations, so without the exclusion a merged `131_x` "owned" the never-merged orphan `128_x`
+     from every branch.
+   - `*.down.sql` is never owned.
+5. **Freshness.** A head whose `%(committerdate:unix)` is more than **30 days** old does not own
+   anything. Rows it would own get the verdict `stale`, which is blocking and names the branch and its
+   age (observability and security reviews).
+6. **Tiers.** The owners of row `R` (ledger sha `S`) are found in order: exact name, then blob `S`,
+   then `slug(R)`, where `slug(x)` strips `^[0-9]+_`.
+7. **Main history.** `R` never belongs to anyone if its filename appears in `BASE_OWN`'s history
+   (`git -C "$OWN" log -1 --format=%H "$BASE_OWN" -- ':(top,literal)<path>'` is non-empty). This is
+   the stale-fork case.
+
+All regexes run under `LC_ALL=C`. Before any annotation:
+
+- branch names must match `^[A-Za-z0-9._/-]+$`, or they print as `<unprintable-branch>`;
+- filenames pass the runner's shape whitelist;
+- SHAs match `^[0-9a-f]{40}$`, and anything else, including uppercase or short, counts as absent.
 
 ### Phase 2 — `dev-ledger-parity.sh check` (PR side)
 
 ```text
-dev-ledger-parity.sh check --base <ref> --repo <dir>
-dev-ledger-parity.sh classify-missing --base <ref> --repo <dir>   # stdin: "<file>|<content_sha>" lines
-dev-ledger-parity.sh --help                                        # documents the summary line
+dev-ledger-parity.sh check --base <ref> --repo <dir> [--head-branch <name>]
+dev-ledger-parity.sh classify-missing --base-branch <name> --repo <dir>   # stdin: "<file>|<sha>" lines
+dev-ledger-parity.sh --help        # documents the "ledger-parity:" and "ledger-classify:" summary formats
 Exit: 0 clean/classified | 1 violation(s), each named via ::error:: | 2 cannot measure
 ```
 
-The shape follows `lint-migration-immutability.sh`: the `need_value` parser, the `_assert_repo_root`
-check on `--repo` (required, because the base copy runs from `$RUNNER_TEMP`), the exit triad, and a
-summary line. **Every** git call is `git -C "$REPO" …` with a `:(top)`-anchored pathspec. The
-runner's cwd-relative bug (#8606) must not be reproduced.
+Conventions:
 
-- **Population `U`.** Glob `$REPO/apps/web-platform/supabase/migrations/*.sql` from the working tree,
-  the same glob as the runner, and drop `*.down.sql`.
-  - A name failing `*[!a-zA-Z0-9._-]*` means exit 2.
-  - For each file, run `git -C "$REPO" ls-tree <base> -- ':(top)<path>'`. A non-zero rc means exit 2.
-    Empty output means the file is unmerged, so it goes into `U`.
-  - `blob(F)` is `git -C "$REPO" hash-object <path>`, identical to the runner's `content_sha`. A
-    non-zero rc means exit 2.
-  - Also build `M`, the forward names on `<base>`, and `T`, the forward names in the tree.
-- **Ledger `L`.** Run this every time, even when `U = ∅`, so the pooler path and the floor are
-  exercised on every run.
-  - `DB="${DATABASE_URL_POOLER:-${DATABASE_URL:-}}"`. If it is empty, exit 2.
-  - Query with `PGCONNECT_TIMEOUT=10 timeout 60 psql "$DB" -w --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "$LEDGER_SQL"`.
-    `LEDGER_SQL` is the readonly constant
-    `SELECT filename || '|' || COALESCE(content_sha, '') FROM public._schema_migrations ORDER BY filename`.
-  - A non-zero rc means exit 2. **Zero rows means exit 2**, because dev has 260+ rows, so an empty
-    result means the guard's own dispatch failed (wrong database or a broken query).
-  - Ledger names failing the shape whitelist are skipped with a `::warning::` and never echoed raw.
-  - A `content_sha` that does not match `^[0-9a-f]{40}$` counts as absent.
-- **A1.** For each `F ∈ U` that has a ledger row, an empty sha is a violation (an unmerged row cannot
-  be verified), and `sha ≠ blob(F)` is a violation.
-- **A2.** The candidates are ledger rows `G ∉ M ∪ T` with `sha(G) == blob(F)` or
-  `slug(G) == slug(F)` for some `F ∈ U`.
-  - When there are candidates, compute `branch_owners`.
-  - A candidate that some live branch holds **by exact name** belongs to that branch. Skip it with a
-    `::notice::` that names the branch.
-  - Every other candidate is a violation.
-- **Output.** One `::error::` block per violation, then:
-  `ledger-parity: RED|clean (unmerged=… ledgered-match=… pending=… merged-skipped=… ledger-rows=… a2-candidates=… violations=…)`.
-  When `U = ∅`, also print `::notice::ledger-parity: 0 unmerged migrations in this tree — nothing to compare`.
-  **Every exit-2 message** ends with `— infrastructure/measurement failure, not caused by this PR; re-run the job`.
-- **Sanitization.** Everything echoed into an annotation passes a check first:
-  - filenames pass the shape whitelist;
-  - SHAs match `^[0-9a-f]{40}$`;
-  - branch names match `^[A-Za-z0-9._/-]+$`, otherwise they print as `<unprintable-branch>`.
+- `need_value` parser; `--repo` is required, followed by `_assert_repo_root`.
+- Every git call on the checkout is `git -C "$REPO" … ':(top,literal)<path>'`. The runner's
+  cwd-relative bug (#8606) must not be reproduced.
+- **Exit-2 messages come in two classes:**
+  - `transient` (fetch timeout, psql connect failure): the message ends
+    `— not caused by this PR; re-run the job`;
+  - `config` (no DB URL, zero ledger rows, base unresolvable, `--repo` invalid): the message ends
+    `— not caused by this PR; check the Doppler dev_scheduled config / workflow wiring; a re-run will not help`.
+
+Steps:
+
+- **Population `U`.**
+  - Glob `$REPO/apps/web-platform/supabase/migrations/*.sql` and drop `*.down.sql`.
+  - A name failing `*[!a-zA-Z0-9._-]*` gives exit 2.
+  - A file is unmerged when `git -C "$REPO" ls-tree <base> -- ':(top,literal)<path>'` succeeds with
+    empty output. A non-zero exit there gives exit 2.
+  - `blob(F) = git -C "$REPO" hash-object <path>`.
+  - `M` holds the forward names on `<base>`, and `T` holds the forward names in the tree.
+- **Ledger `L`.** Read it on **every** run, including `U = ∅`, so the pooler path and the floor are
+  exercised each time:
+  - `DB="${DATABASE_URL_POOLER:-${DATABASE_URL:-}}"`; empty gives exit 2 (`config`);
+  - query with
+    `PGCONNECT_TIMEOUT=10 timeout 60 psql "$DB" -w --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "$LEDGER_SQL"`,
+    where `readonly LEDGER_SQL="SELECT filename || '|' || COALESCE(content_sha, '') FROM public._schema_migrations ORDER BY filename"`;
+  - a non-zero exit gives exit 2 (`transient`);
+  - **zero rows gives exit 2** (`config`), because a wrong database or broken query must not pass
+    silently.
+- **A1.** For each `F ∈ U` that has a ledger row, it is a violation if:
+  - the sha is empty or not valid (its own message, `the ledger row carries no verifiable content_sha`);
+  - or the sha is not `blob(F)`.
+- **Candidates `C`.** Ledger rows `G ∉ M ∪ T`. When `C` is non-empty, build `owners_repo`. Then, for
+  each `G ∈ C`:
+  - held **by exact name** by a fresh owner head (not ancestor-merged, not stale) other than
+    `--head-branch`: skip it with a `::notice::` that names the branch (that PR's in-flight row);
+  - otherwise, **A2**, a violation when `sha(G) == blob(F)` or `slug(G) == slug(F)` for some `F ∈ U`
+    (this PR renamed it after apply, even across a force-push);
+  - otherwise, **A4**, a violation when `--head-branch` is given and `sha(G)` is one of the blob IDs in
+    `git -C "$OWN" log --raw --no-abbrev --format= "$BASE_OWN..refs/owners/<head-branch>" -- ':(top,literal)apps/web-platform/supabase/migrations/'`.
+    The PR once carried that exact body and then deleted it, or renamed and re-slugged it (spec-flow
+    review P0-2). A force-pushed history that dropped the commit is a named residual.
+  - Any other row in `C` is not this PR's: no output.
+- **Output.**
+  - One `::error::` block per violation;
+  - then `ledger-parity: RED|clean (unmerged=… ledgered-match=… pending=… ledger-rows=… candidates=… skipped-owned=… violations=…)`;
+  - when `U = ∅`, also `::notice::ledger-parity: 0 unmerged migrations in this tree — nothing to compare`.
 
 **Remediation texts (P6):**
 
-- **A1:**
-
-  > `<F>`: dev applied this unmerged migration at blob `<applied>`, but this tree has `<head>`. The
-  > runner never re-applies a ledgered filename, so this PR's tests ran against the OLD body, and
-  > main's drift probe fails after merge (#8521). Fix it without a database write: restore the applied
-  > body (`git show <applied> > <path>`; `git log --all --find-object=<applied>` finds the commit),
-  > then put the change in a NEW migration numbered after it. A migration applied to dev is as
-  > immutable as a merged one (#8583). If the blob is not on your side, another branch applied a
-  > same-named file: renumber yours.
-
-- **A2:**
-
-  > `<G>` is ledgered on dev but is not on `<base>`, not in this tree, and not held by any live
-  > branch. It matches this PR's `<F>` by `<blob|slug>`, so `<F>` looks renamed after CI applied it.
-  > After merge `<G>` is an orphan. Fix: rename `<F>` back to `<G>` if that name is free on main. If
-  > the match is a coincidence of slug, re-slug or renumber yours. Otherwise revert the dev apply of
-  > `<G>` per the learning (gap 2) and re-run.
+- **A1:** `<F>`: dev applied this unmerged migration at blob `<applied>`, but this tree has `<head>`.
+  - Why it matters: the runner never re-applies a ledgered filename. This PR's tests therefore ran
+    against the OLD body, and main's drift probe will fail after merge (#8521).
+  - Fix without a database write:
+    - restore the applied body with `git show <applied> > <path>`;
+    - if the object is not local, use
+      `gh api repos/$GITHUB_REPOSITORY/git/blobs/<applied> --jq .content | base64 -d > <path>`;
+    - then put the change in a NEW migration numbered after it.
+  - A migration applied to dev is as immutable as a merged one (#8583).
+  - If `git log --all --find-object=<applied>` finds nothing on your side, another branch applied a
+    same-named file: renumber yours.
+  - If you cannot recover the body and hold no dev credentials, ask a dev operator to reconcile per
+    the learning's §Content drift (#8605 tracks self-service).
+- **A2 / A4:** `<G>` is ledgered on dev but is not on `<base>`, not in this tree, and not held by any
+  other live branch. It matches this PR's `<F>` by `<blob|slug|history>`, so `<F>` was renamed or
+  removed after CI applied it, and after merge `<G>` becomes an orphan. Fix:
+  - rename `<F>` back to `<G>` if that name is free on main;
+  - otherwise, have `<G>` reverted on dev per the learning (gap 2), then re-run.
+  - For a **slug-only** match with no history match, add: "if `<G>` is unrelated to your change,
+    re-slug yours."
 
 ### Phase 3 — wire `check` into `.github/workflows/tenant-integration.yml`
 
-1. **`detect-changes` classifies the guard's base-ref state** in a new pure-git step. This job already
-   has `fetch-depth: 0`, which is exactly the history the deleted-on-base arm needs. The heavy job's
-   `fetch-depth: 2` would make `git log -1 origin/main -- <path>` return nothing and fail open (the
-   Kieran and simplicity review finding).
-   - The step emits `outputs.ledger_guard: base | introduction | deleted`, using #8597's three arms
-     evaluated on full history.
-   - It runs after `filter`, so `outputs.tenant` is still written.
-2. **Heavy job: `Resolve dev-ledger-parity guard (base-ref copy)`.** Place it **after**
-   `Lint migration FK preconditions`, so it cannot disturb that lint's `origin/main...HEAD` diff, and
-   before `Acquire dev-suite mutex`. It is pure git and needs no secrets.
-   - `base`: run `git fetch --no-tags --depth=1 origin "$base_ref"`, then
-     `git show "origin/$base_ref:<path>" > "$RUNNER_TEMP/dev-ledger-parity.sh"`. A non-empty file is
-     required, otherwise exit 1.
-   - `introduction`: copy the checkout's copy.
-   - `deleted`: print `::error::` and exit 1.
-   - The value comes in as `LEDGER_GUARD: ${{ needs.detect-changes.outputs.ledger_guard }}` via `env:`
-     and is quoted.
-3. **`Assert unmerged migrations match the dev ledger`.** Place it after
-   `Detect dev-vs-main migration drift`, which has just refreshed `origin/main`, and before
-   `Preflight schema-vs-ledger consistency check`, inside the mutex window. Run:
-   `doppler run -p soleur -c dev_scheduled -- bash "$RUNNER_TEMP/dev-ledger-parity.sh" check --base "origin/$base_ref" --repo "$GITHUB_WORKSPACE"`.
-   It must run **before** apply. When A1 fires, the runner skips the stale file, and any later
-   migration that depends on the new body fails inside `Apply migrations to dev` with an unrelated
-   error. The guard's message has to come first.
+1. **`detect-changes`: new step `Resolve dev-ledger-parity guard state`.**
+   - This job already has `fetch-depth: 0`, the full history the deleted-on-base arm needs. On the
+     heavy job's `fetch-depth: 2`, `git log -1` falls back to `introduction`, which fails open
+     (Kieran and simplicity reviews).
+   - It uses #8597's three arms with `base_ref="${BASE_REF:-main}"`, stripped of `refs/heads/`.
+   - It emits `outputs.ledger_guard: base | introduction | deleted`, or `n/a` on `merge_group`.
+   - The step **never exits non-zero**: it only emits. A failure here would fail the always-run
+     aggregator and stall the merge queue.
+   - It runs after `filter` for every event.
+2. **Heavy job: `Resolve dev-ledger-parity guard (base-ref copy)`.**
+   - Placement: **after** `Lint migration FK preconditions` and before `Acquire dev-suite mutex`.
+   - Input: `LEDGER_GUARD: ${{ needs.detect-changes.outputs.ledger_guard }}` via `env:`.
+   - `case "$LEDGER_GUARD" in`:
+     - `base)`: run `git fetch --no-tags --depth=1 origin "$base_ref"`, then
+       `git show "origin/$base_ref:<path>" > "$RUNNER_TEMP/dev-ledger-parity.sh"`. The file must be
+       non-empty, otherwise exit 1.
+     - `introduction)`: copy the checkout copy.
+     - `deleted)`: `::error::` naming the fix, "retire the guard by removing the script **and** its
+       workflow steps together in one PR", then exit 1.
+     - `*)`: `::error::unknown ledger_guard state`, then exit 1. This covers the empty output an
+       earlier `detect-changes` failure leaves.
+3. **`Assert unmerged migrations match the dev ledger`.**
+   - Placement: after `Detect dev-vs-main migration drift`, before
+     `Preflight schema-vs-ledger consistency check`, inside the mutex window.
+   - Command:
+     `doppler run -p soleur -c dev_scheduled -- bash "$RUNNER_TEMP/dev-ledger-parity.sh" check --base "origin/$base_ref" --repo "$GITHUB_WORKSPACE" --head-branch "$HEAD_BRANCH"`.
+   - `HEAD_BRANCH: ${{ github.head_ref }}` via `env:`, and it is empty on push and dispatch.
+   - It runs before apply because of how A1 plays out: the runner skips the stale file, so a later
+     dependent migration fails **inside** apply with an unrelated error, and the guard's message must
+     come first.
 4. **Anchor.** Append `|apps/web-platform/scripts/dev-ledger-parity` to the `detect-changes`
    alternation.
-5. **Comment.** Add a comment block covering the property, why the guard fails instead of re-applying,
-   ADR-061, and #8521. No `github.event.*` goes into a `run:` block.
-
-The step runs on every heavy-job event. On `push` and on a main dispatch, `U = ∅` gives the notice,
-the zero-row floor still applies, and the step is clean. On a feature-branch `workflow_dispatch` it is
-live.
+5. **Comment block.** Cover the property, why the job fails instead of re-applying, ADR-061 and #8521.
+   No `github.event.*` appears in `run:`. `github.head_ref` goes through `env:` only.
 
 ### Phase 4 — authoritative-side classification (arm 3)
 
-Changes to `.github/actions/dev-migration-drift-probe/action.yml`, step `probe`:
+`.github/actions/dev-migration-drift-probe/action.yml`, step `probe`:
 
-- Keep `missing_drift` for display unchanged. Collect a **separate** `missing_pairs+="$f|$sha_applied"$'\n'`
-  list for the classifier (Kieran P2). This keeps SHAs out of the Missing-on-main display, and the line
-  count is taken on `missing_pairs`.
-- **Only when `FAIL_ON_DRIFT == true` and `missing_pairs` is non-empty**, run
-  `bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing --base origin/main --repo "$GITHUB_WORKSPACE" <<<"$missing_pairs"`
-  from the checkout. PR-mode runs never reach this.
-- Classification of each row:
-  - **Merged-history exclusion (Kieran P1).** If the row's filename appears anywhere in `origin/main`
-    history, it is an orphan and can never be in-flight. Test this with
-    `git -C "$REPO" log -1 --format=%H origin/main -- ':(top)<path>'`, after making history available
-    with `git fetch --no-tags --filter=blob:none --unshallow origin main`. Fall back to a plain
-    `--unshallow` if the filter is refused. Any failure exits 2. This fetch happens only on this rare
-    path. It closes the gap where a stale fork still holding a filename that main later renamed or
-    deleted would excuse a real orphan.
-  - Otherwise, the owners come from `branch_owners`.
-  - Output is one line per input: `in-flight<TAB><file><TAB><branch><TAB><exact|blob|slug>`, or
-    `orphan<TAB><file>`.
-- In-flight rows print `::warning::  - <F> (in-flight: held by live branch <b> via <exact|blob|slug> — clears when it merges or the branch is deleted)`.
-  Orphans keep the existing `::error::` Missing-on-main block.
-- **Fail-closed.** If the classifier exits non-zero, or its output line count differs from the input,
-  every missing row stays `::error::`, plus
-  `::error::cannot classify missing-on-main rows (git remote failure — not evidence of drift); failing closed`.
-- `drift-detected` keeps meaning "any row reported". The exit decision uses orphans plus content drift.
-- No workflow edit or permission change is needed. `scheduled-dev-migration-drift.yml` uses the same
-  action, and the checkout credentials cover `fetch` on this public repo.
+- **Pre-existing log-injection fix (security review).** The `skipping suspicious _schema_migrations row: $f`
+  warning echoes a raw, PR-writable ledger name. It becomes a count-only line.
+- **Collect pairs separately.** Keep `missing_drift` for display unchanged, and collect
+  `missing_pairs+="$f|$sha_applied"$'\n'` separately for the classifier.
+- **Call the classifier** only when `FAIL_ON_DRIFT == true` and `missing_pairs` is non-empty:
+  `bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing --base-branch main --repo "$GITHUB_WORKSPACE" <<<"$missing_pairs"`
+  from the checkout.
+  - PR-mode runs never reach this, because `fail-on` is `false` on `pull_request` (tenant-integration.yml's `Detect dev-vs-main migration drift` step).
+  - A scheduled dispatch on a non-main ref runs that ref's copy. Dispatch requires repo write, the
+    same trust as pushing a branch.
+  - This is the **normal** case, not a rare path. Dev nearly always carries open PRs' rows, so it
+    runs twice per push and once per scheduled run, and AC8 budgets it.
+- **`classify-missing` re-validates its stdin.** It checks the filename whitelist and
+  `^[0-9a-f]{40}$`, and any bad input line gives exit 2. It then emits one line per input line, in
+  input order: `in-flight<TAB><file><TAB><branch><TAB><exact|blob|slug>`, `stale<TAB><file><TAB><branch><TAB><age-days>`,
+  or `orphan<TAB><file>`. It ends with the stderr summary `ledger-classify: in-flight=N stale=M orphan=K`.
+- **The action checks the classifier's output.** Line *i* must name file *i*. A count match alone is
+  not enough (security review).
+- **Mapping verdicts to annotations:**
+  - in-flight becomes `::warning::  - <F> (in-flight: unmerged on live branch <b> via <tier> — merging clears it; deleting the branch unmerged turns main red)`;
+  - stale becomes `::error::  - <F> (stale: only owner <b> has had no commit for <n> days — push to it, or have the dev apply reverted and delete the branch; #8605)`;
+  - orphan keeps the existing Missing-on-main `::error::` block, with one added line: `no live branch owns these rows — a dev reconcile is required (learning gap 2; #8605)`.
+- **Fail-closed (observability review).**
+  - When the classifier exits non-zero, or the per-line check fails, **first** print
+    `::error::ledger-classify: UNCLASSIFIED (rows=<n> rc=<rc>) — could not classify missing-on-main rows; not evidence of drift; failing closed`.
+  - Then list those rows under an `Unclassified:` heading, not under `Missing-on-main:`.
+- **Exit decision.** Exit 1 on any orphan, stale, unclassified or content-drift row. `drift-detected`
+  keeps meaning "any row reported".
+- No workflow or permission change is needed.
 
 ### Phase 5 — repair paths named (P6) + records
 
 - **`action.yml` content-drift block.** Add:
   `::${sev}::Repair: knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md §Content drift — class each row A (comment/whitespace-only → rewrite content_sha), B (file idempotent AND safe against later redefinitions → re-apply main's file, then content_sha), C (targeted SQL against the LATEST main definition of each object). Pre-merge prevention: apps/web-platform/scripts/dev-ledger-parity.sh check (#8521).`
-- **`action.yml` missing block.** Add one line naming renamed-after-apply rows: a ledger-only delete,
-  done only after verifying that the renamed file on main owns every object (gap 2).
-- **Learning `2026-05-21-…md`.** Add a new section, `## Content drift (same filename, different blob)`.
-  It records the A/B/C procedure distilled from #8520's 2026-09-21 comments:
+- **Learning `2026-05-21-…md`.** Add a new `## Content drift (same filename, different blob)` section
+  with the A/B/C procedure distilled from #8520's 2026-09-21 comments:
   - triage read-only first;
-  - judge each row against the latest main definition, not against the drifted file;
-  - use one transaction per row;
-  - worked ordering example: 094 before 117.
+  - judge each row against the latest main definition;
+  - run one transaction per row;
+  - worked example: apply 094 before 117.
 - **ADR-061 amendment.** See Architecture Decision.
 
 ## Alternative Approaches Considered
 
 | Approach | Verdict |
 |---|---|
-| Re-apply the edited unmerged file (issue option 1a) | Rejected. Idempotent files leave old-body residue silently (#8520: the 075 `FOR ALL` policy, the 122 index). Non-idempotent files fail later, and less clearly. |
-| Ephemeral per-PR DB / Supabase branching (issue option 2) | Rejected (ADR-023, ADR-061). Per-ref checks achieve P1, P2 and P5 at near-zero cost. |
-| Ownership via `gh pr list --json files` (first draft) | Superseded. It caps at 100 files per PR, needs `pull-requests: read`, and a GitHub API outage would red the authoritative gate. Branch-head ownership needs only git. |
-| Downgrade Missing-on-main to `::warning::` on authoritative refs unconditionally (advisor option a) | Rejected. Orphans from abandoned or renamed branches would go silent again, which is how the 8 orphan rows of 2026-09-21 accumulated. |
-| Slug-only A2 match as a plain `::warning::` (CTO, advisor) | Refined instead. Slug candidates owned by exact name on another live branch are skipped as a notice. Unowned ones still block, because they are the renamed-and-edited rows (064→067, 128→131), half of the 2026-09-21 orphans. The message offers "re-slug yours" for coincidental collisions. |
-| Post-apply second check (P3) | Cut at plan review. Its window exists only when the mutex fails open. #8049 is the residual. |
-| A single post-apply check instead of pre (DHH) | Rejected. A1 makes the runner skip the stale file, so a later dependent migration fails *inside* apply with an unrelated error, and the guard's message never prints. |
-| Content-sha check inside `run-migrations.sh` (CTO) | Cut. That script is PR-controlled and also the prd apply path. Its existing `run-migrations-unmerged-gate.test.ts` psql stub returns empty for non-count SELECTs, and the logic would be duplicated. |
-| Extract the three-arm base-ref resolution into a composite action (DHH) | Not taken. The state decision moves into `detect-changes` (full history), leaving about 6 lines in the heavy job. Refactoring #8597's step would also break its wiring asserts (T10/T11) for no property gain. |
-| `--ledger-file` offline mode, `BEGIN READ ONLY` wrapper, pinned `LEDGER_PARITY_BASE` (first draft) | Cut at plan review. They satisfy no property: the fixed SELECT is read-only by construction, and with one invocation there is nothing to keep in step. |
-| CI auto-delete of rename orphans / dispatchable dev-reconcile workflow | Deferred to #8605 (CI writing to the shared ledger). The CTO's argument for pulling a minimal version in is recorded in `decision-challenges.md`. |
-| Ledger `applied_by_ref` column | Cut. A schema change landing on prd, for a property branch heads already give. |
+| Re-apply the edited unmerged file (issue option 1a) | Rejected. Idempotent files leave old-body residue silently (#8520: the 075 `FOR ALL` policy, the 122 index). Non-idempotent files fail later and less clearly. |
+| Ephemeral per-PR DB / Supabase branching (issue option 2) | Rejected (ADR-023, ADR-061). Per-ref checks reach P1, P2 and P5 at near-zero cost. |
+| Ownership via `gh pr list --json files` (first draft) | Superseded. The files list is capped at 100 per PR, it needs `pull-requests: read`, and a GitHub API outage would red the authoritative gate. |
+| Ownership fetch into the workspace (`refs/ledger-owners/*`, `--depth=1`, `--unshallow`) (v2) | Superseded at deepen-plan. `--filter` converts the checkout to a partial clone, and `--depth=1` re-shallows it. `--unshallow` on a complete repo exits 128, stale refs survive between probes, and fetch order can cut main's history. A throwaway bare repo with one full blobless fetch avoids all of it. |
+| Downgrade Missing-on-main to `::warning::` unconditionally (advisor option a) | Rejected. Orphans from abandoned or renamed branches would go silent again. |
+| Unbounded branch-lifetime ownership | Rejected at deepen-plan (security, observability). 95 branches versus 51 open PRs means "live" is not "unmerged". Owners need a commit in the last 30 days, and otherwise the verdict is `stale`, which blocks. |
+| Post-apply second check (P3) | Cut at plan review. Its window exists only while the mutex fails open, and #8049 tracks that residual. |
+| A single post-apply check instead of pre (DHH) | Rejected. A1 makes the runner skip the stale file, so a dependent migration fails inside apply before any post check could run. |
+| Content-sha check inside `run-migrations.sh` (CTO) | Cut. That script is PR-controlled and is also the prd apply path. Its test stub would break, and the logic would be duplicated. |
+| Composite-action extraction of the three-arm resolution / a list-driven `detect-changes` guard step (DHH, architecture) | Not taken now. The state logic lives once, in `detect-changes`, and the list generalization is recorded in `decision-challenges.md`. |
+| `--ledger-file` mode, `BEGIN READ ONLY` wrapper, pinned `LEDGER_PARITY_BASE` (v1) | Cut at plan review. They buy no property. |
+| CI auto-delete of rename orphans / a dispatchable dev-reconcile workflow | Deferred to #8605. The CTO's argument for bringing it into scope is in `decision-challenges.md`. |
+| Ledger `applied_by_ref` column | Cut. It is a schema change on prd, for a property that branch heads already give. |
 
 ## Files to Create
 
 - `apps/web-platform/scripts/dev-ledger-parity.sh`
-- `apps/web-platform/scripts/dev-ledger-parity.test.sh`. `scripts/test-all.sh` discovers it
-  automatically through the `SUITE_GLOBS` entry `'apps/web-platform/scripts/*.test.sh'`.
+- `apps/web-platform/scripts/dev-ledger-parity.test.sh` (auto-discovered via `scripts/test-all.sh`
+  `SUITE_GLOBS` `'apps/web-platform/scripts/*.test.sh'`)
 
 ## Files to Edit
 
 - `.github/workflows/tenant-integration.yml`:
-  - `detect-changes`: the `ledger_guard` output step and the anchor;
+  - `detect-changes`: the `ledger_guard` step and output, and the anchor;
   - heavy job: the resolve step and the check step.
-- `.github/actions/dev-migration-drift-probe/action.yml`: `missing_pairs`, the `classify-missing` call
-  (fail-on only), and the repair-path lines.
+- `.github/actions/dev-migration-drift-probe/action.yml`:
+  - the count-only suspicious-row line;
+  - `missing_pairs`;
+  - the classifier call and verdict mapping;
+  - the fail-closed `UNCLASSIFIED` arm;
+  - the repair-path lines.
 - `knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`:
-  the §Content drift section.
+  §Content drift.
 - `knowledge-base/engineering/architecture/decisions/ADR-061-per-ref-behavioural-schema-gate-over-shared-dev.md`:
   the amendment.
 
 Not edited, by decision:
 
-- `apps/web-platform/scripts/run-migrations.sh` (its cwd bug is #8606);
+- `apps/web-platform/scripts/run-migrations.sh` (#8606 tracks its cwd bug);
 - `apps/web-platform/scripts/lint-migration-immutability.sh`;
 - `.github/workflows/scheduled-dev-migration-drift.yml`.
 
 ## Open Code-Review Overlap
 
-One open scope-out touches a file named in this plan's research: #3364, a postgres-role ownership guard
-in `run-migrations.sh`.
+One open scope-out touches a file named in this plan's research: #3364, a postgres-role ownership
+guard in `run-migrations.sh`.
 
-**Acknowledge.** This plan deliberately does not edit `run-migrations.sh`, because it is the prd apply
-path. #3364 is an unrelated concern and stays open.
+**Acknowledge.** This plan does not edit `run-migrations.sh`, because it is the prd apply path. #3364
+stays open.
 
 No open code-review issue names `tenant-integration.yml`, the drift-probe action, the learning, or
 ADR-061.
@@ -496,19 +602,25 @@ ADR-061.
 (`knowledge-base/engineering/architecture/decisions/ADR-061-per-ref-behavioural-schema-gate-over-shared-dev.md`)
 via `soleur:architecture`, adding `## Amendment 2026-09-23 (#8520, #8521): ledger gates are per-ref too`:
 
-1. **The authoritative ledger probe blocks only on unowned rows.** This covers push-to-main, main
-   dispatch and the scheduled run.
-   - A row a live `origin` branch holds (by exact name, blob, or slug) is an in-flight `::warning::`,
-     unless its filename appears in main's history.
-   - The blob and slug tiers are load-bearing. With exact-name matching alone, a rename orphan still
-     owned by an open PR would red main for that PR's whole lifetime.
-   - The amendment records that #7964 §M2 re-introduced the rejected alternative "blocking orphan
-     probe on push:main", and cites the confirming runs 35732801080 and 35736906203.
+1. **Ownership on the authoritative probe.** This covers push-to-main, main dispatch and the scheduled
+   probe. A missing-on-main row that a fresh, unmerged `origin` branch holds, by exact name, or by
+   blob or slug among files **not on main**, is an in-flight `::warning::`. **An ownerless row counts
+   as main's**, because no other ref can fix it, so it blocks. So does a row whose only owner is
+   stale (older than 30 days), and a row whose filename is in main's history.
+   - This reconciles with ADR-061's "current ref owns it" rule.
+   - It records that the rejected alternative "Blocking orphan-migration-drift probe on push:main" is
+     **superseded in part**: the alternative was right about in-flight rows and wrong about ownerless
+     ones.
+   - It cites #7964 §M2 and runs 35732801080 and 35736906203.
+   - The blob and slug tiers are load-bearing. Exact-name matching alone would red main for the whole
+     lifetime of a PR that renamed its migration.
 2. **Policy: a migration applied to shared dev is immutable, merged or not.** Changes ship as a new
    file.
    - **Accepted cost:** fix-up migrations become permanent on prd, and the migration count grows.
-   - Automatic re-apply joins Rejected alternatives, because it leaves silent residue (#8520 C rows).
-   - `dev-ledger-parity.sh check` is the per-ref "owning PR fails" half of this.
+   - Automatic re-apply joins Rejected alternatives, because it leaves silent residue.
+   - `dev-ledger-parity.sh check` is the per-ref half of this that makes the owning PR fail.
+   - Also added to Rejected alternatives: the ephemeral DB (trigger fired, re-evaluated, still
+     rejected).
 
 The ADR keeps its number, so there is no ordinal collision risk.
 
@@ -516,20 +628,19 @@ The ADR keeps its number, so there is no ordinal collision risk.
 
 **No C4 impact.** Checked against all three files (`model.c4`, `views.c4`, `spec.c4`):
 
-- **External human actors:** none added. `contributor` already models PR authors, including PR-head
-  code running under `pull_request` isolation.
+- **External human actors:** none added. `contributor` already models PR authors and PR-head
+  isolation.
 - **External systems:** `github` and `doppler` are already modeled. The only new calls are git
-  `fetch` from Actions to GitHub, which stay inside `github`.
-- **Data stores:** `platform.infra.supabase` is the prd store. The shared dev project and the CI edge
-  to it are not modeled today. This plan adds no new edge class: the heavy job already reads and
-  writes dev, and the new query is one SELECT on the same connection.
+  fetches inside `github`.
+- **Data stores:** `platform.infra.supabase` is prd. The shared dev project and its CI edge are
+  unmodeled today and unchanged in kind: one extra SELECT on an existing connection.
 - **Access relationships:** none change.
 
-`plugins/soleur/test/c4-count-parity.test.sh` ran on 2026-09-23 and reported `ALL TESTS PASSED`.
+`plugins/soleur/test/c4-count-parity.test.sh` reported `ALL TESTS PASSED` on 2026-09-23.
 
 ### Sequencing
 
-The ADR amendment ships in this PR. The status stays Accepted.
+The ADR amendment ships in this PR. Its status stays Accepted.
 
 ## User-Brand Impact
 
@@ -538,13 +649,13 @@ The ADR amendment ships in this PR. The status stays Accepted.
   - Broken toward false-red: migration PRs, or main via Phase 4, cannot merge, which delays
     user-facing fixes.
   - Broken toward false-green: dev keeps a stale or residue schema, and main reds after merge. This is
-    the #8520 class, which included a dev policy that let workspace members modify others' shared
+    the #8520 class, which included a dev policy that let workspace members modify each other's shared
     conversations.
   - prd is unaffected: it applies only main's files, in order.
 - **If this leaks, the user's data is exposed via:** no user-data vector.
   - Dev holds synthetic data only (`hr-dev-prd-distinct-supabase-projects`).
   - The guard reads filenames and hashes.
-  - The classifier reads public branch heads over the job's existing read-only checkout credentials.
+  - The classifier reads public branch heads with the job's existing read-only checkout credentials.
 - **Brand-survival threshold:** `none`
 - `threshold: none, reason: no touched path matches preflight SENSITIVE_PATH_RE (tenant-integration.yml, .github/actions/**, apps/web-platform/scripts/** and knowledge-base/** checked 2026-09-23) and no step reaches prd or user data.`
 
@@ -552,227 +663,259 @@ The ADR amendment ships in this PR. The status stays Accepted.
 
 ```yaml
 liveness_signal:
-  what: "ledger-parity: clean|RED (unmerged=… ledger-rows=… …) summary line printed by dev-ledger-parity.sh check in every tenant-integration heavy-job run; on authoritative runs the drift probe prints 'in-flight:' warnings or 'No dev-vs-main migration drift detected.'"
+  what: "'ledger-parity: clean|RED (…)' from dev-ledger-parity.sh check in every tenant-integration heavy-job run; 'ledger-classify: in-flight=N stale=M orphan=K' from the probe on every authoritative run that sees missing rows"
   cadence: "per heavy-job run (every migration-touching PR push, every push to main) + every 6 h via scheduled-dev-migration-drift.yml (dispatched by cron-dev-migration-drift)"
-  alert_target: "required check tenant-integration-required (red PR / red main commit); scheduled probe failure = failed workflow run, with dispatch liveness on the existing cron watchdog"
-  configured_in: ".github/workflows/tenant-integration.yml (detect-changes ledger_guard step; heavy-job steps 'Resolve dev-ledger-parity guard (base-ref copy)' and 'Assert unmerged migrations match the dev ledger'); .github/actions/dev-migration-drift-probe/action.yml (step probe)"
+  alert_target: "layer 6 — required check tenant-integration-required (red PR / red main commit). The scheduled run's failure has no dedicated reader; an orphan/stale row it finds also reds main's required check on the next push, which is the effective alert."
+  configured_in: ".github/workflows/tenant-integration.yml (detect-changes 'Resolve dev-ledger-parity guard state'; heavy job 'Resolve dev-ledger-parity guard (base-ref copy)' and 'Assert unmerged migrations match the dev ledger'); .github/actions/dev-migration-drift-probe/action.yml (step probe)"
 error_reporting:
-  destination: "GitHub Actions ::error:: annotations + required-check status; no Sentry (dev-only CI surface; the probe's Sentry path stays scoped to rpc-body drift on the scheduled surface, unchanged)"
-  fail_loud: "'ledger-parity: RED (…)' plus one ::error:: per violation naming file, applied blob, head blob and repair path; exit 2 prints an ::error:: ending '— infrastructure/measurement failure, not caused by this PR; re-run the job'; classifier failure prints '::error::cannot classify missing-on-main rows (git remote failure — not evidence of drift); failing closed'"
+  destination: "layer 6 — GitHub Actions ::error:: annotations + required-check status; no Sentry (dev-only CI surface; the probe's Sentry path stays scoped to rpc-body drift, unchanged)"
+  fail_loud: "'ledger-parity: RED (…)' plus one ::error:: per violation naming file, blobs and repair path; exit 2 ends '— not caused by this PR; re-run the job' (transient) or '— … a re-run will not help' (config); classifier failure prints '::error::ledger-classify: UNCLASSIFIED (rows=<n> rc=<rc>) …' first"
 failure_modes:
   - mode: "PR edits an unmerged migration after CI applied it (A1)"
-    detection: "check step exits 1 before apply and before any test"
-    alert_route: "PR's tenant-integration-required red; annotation names the restore-plus-new-file remedy"
-  - mode: "PR renames or renumbers an applied unmerged migration and leaves the old name unowned (A2)"
-    detection: "check step exits 1"
-    alert_route: "PR check red; annotation names rename-back / re-slug / gap-2 revert"
-  - mode: "ledger unreadable, no DB URL, zero rows, base unresolvable, owner fetch failed"
-    detection: "check exits 2 (fail closed)"
-    alert_route: "PR check red with 'not caused by this PR; re-run' annotation"
-  - mode: "PR edits the guard, or the guard is deleted on base"
-    detection: "resolve step runs the base-ref copy; detect-changes (full history) reports 'deleted' and the resolve step exits 1"
-    alert_route: "PR check red with deleted-guard annotation"
-  - mode: "live branch's in-flight row on dev during a push to main or a scheduled run (arm 3)"
-    detection: "classify-missing → in-flight → ::warning:: naming the branch; main stays green"
+    detection: "layer 6 — workflow run log (::error:: from the check step, before apply and tests)"
+    alert_route: "PR's tenant-integration-required red"
+  - mode: "PR renames, re-slugs or deletes an applied unmerged migration (A2/A4)"
+    detection: "layer 6 — workflow run log (::error:: from the check step)"
+    alert_route: "PR check red"
+  - mode: "ledger unreadable, no DB URL, zero rows, base unresolvable, owner fetch timeout"
+    detection: "layer 6 — workflow run log (::error:: exit-2 message classed transient or config)"
+    alert_route: "PR check red; message says not caused by this PR"
+  - mode: "guard deleted on base, or unknown ledger_guard state"
+    detection: "layer 6 — workflow run log (::error:: from the resolve step)"
+    alert_route: "PR check red"
+  - mode: "live, fresh branch's in-flight row during a push to main or a scheduled run (arm 3)"
+    detection: "layer 6 — workflow run log (::warning:: naming the branch + 'ledger-classify:' summary)"
     alert_route: "annotation only, by design (ADR-061)"
-  - mode: "true orphan (branch deleted, renamed-away row unowned, or filename in main history)"
-    detection: "classify-missing → orphan → existing ::error:: Missing-on-main, exit 1"
-    alert_route: "main tenant-integration-required and scheduled probe red"
-  - mode: "git remote failure during classification"
-    detection: "classifier exits 2, or the line count mismatches → every missing row stays ::error:: with an annotation naming the outage"
+  - mode: "stale owner (> 30 days) or ownerless orphan or name in main history"
+    detection: "layer 6 — workflow run log (::error:: stale/Missing-on-main, exit 1)"
+    alert_route: "main tenant-integration-required red; scheduled probe red"
+  - mode: "classifier failure (git remote, timeout, script abort)"
+    detection: "layer 6 — workflow run log ('ledger-classify: UNCLASSIFIED (rows= rc=)' printed first, rows listed as Unclassified)"
     alert_route: "main check red (fail closed); message says not evidence of drift"
 logs:
   where: "GitHub Actions run logs for tenant-integration.yml and scheduled-dev-migration-drift.yml (gh run view <id> --log)"
   retention: "GitHub Actions log retention (repo default, 90 days)"
 discoverability_test:
   command: "bash apps/web-platform/scripts/dev-ledger-parity.sh --help"
-  expected_output: "ledger-parity:"
+  expected_output: "ledger-parity: or ledger-classify:"
 ```
 
-`--help` prints the exit triad and the literal format of the `ledger-parity:` summary line, which is
-the string an operator greps for in the run log. It needs no database and no network, and finishes
-well inside preflight Check 10's 15 s cap.
+`--help` prints the exit triad and the literal formats of both summary lines, which are the strings
+an operator greps for in a run log. It needs no database and no network. It proves only that the
+script and its vocabulary exist. That the script is **wired** in is proven by AC3's wiring asserts.
 
 ## Guard Contract
 
 ### Guard 1 — unmerged-migration ledger parity (`dev-ledger-parity.sh check` + its workflow step)
 
 **Property.** For every forward migration in the checkout that is absent from the base tree, the dev
-ledger either lacks it or records exactly this tree's blob. No ledger row that is absent from the base
-tree, from this tree, and from every live branch (by exact name) carries one of those files' blob or
-slug.
+ledger either lacks it or records exactly this tree's blob. In addition, no ledger row that is on
+neither main nor this tree, and that no other fresh live branch holds by exact name, may match one of
+this PR's files by blob or slug, or match a blob this PR's branch history carried.
 
 **Assembly.** There is one chokepoint on each side.
 
-- **Population:** the working-tree glob `apps/web-platform/supabase/migrations/*.sql`, minus
-  `*.down.sql`. "Unmerged" means a `git -C $REPO ls-tree <base> -- ':(top)<path>'` result that is
-  empty and has rc 0. The blob is `git -C $REPO hash-object`, which is the same function the runner
-  uses for `content_sha`.
-- **Ledger:** a single `SELECT … FROM public._schema_migrations` read.
-- **Ownership:** the single `branch_owners` primitive, shared with Guard 2.
-- **State:** one `detect-changes` output, `ledger_guard`.
-- **Wiring:** exactly one invocation site in `tenant-integration.yml`. It sits after
-  `Detect dev-vs-main migration drift`, before `Apply migrations to dev`, and inside the mutex window.
-  It executes `$RUNNER_TEMP/dev-ledger-parity.sh`, which the single resolve step produces. A second
-  invocation site, or a checkout-path invocation, is a defect.
+- **Population.** The working-tree glob `apps/web-platform/supabase/migrations/*.sql`, minus
+  `*.down.sql`. A file is unmerged when `git -C $REPO ls-tree <base> -- ':(top,literal)<path>'` returns
+  empty output with rc 0. Its blob is `git -C $REPO hash-object`, the same function the runner uses.
+- **Ledger.** One `SELECT … FROM public._schema_migrations` read.
+- **Ownership and history.** One `owners_repo` build, shared with Guard 2.
+- **State.** One `detect-changes` output, `ledger_guard`.
+- **Wiring.** Exactly one invocation site: after `Detect dev-vs-main migration drift`, before
+  `Apply migrations to dev`, and inside the mutex window. It executes
+  `$RUNNER_TEMP/dev-ledger-parity.sh`, produced by the single resolve step.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Ledger row `F` with `content_sha ≠ blob(F)`, and `F` unmerged | RED exit 1, names `F` and both SHAs |
-| 2 | Two unmerged files: `F1` ledgered at its blob (compliant), `F2` mismatched | RED exit 1, names `F2` only (second member) |
-| 3 | Ledger row `G` not on base, not in the tree, and on no live branch, with `content_sha == blob(F)` | RED exit 1 (A2 blob) |
-| 4 | As row 3, but a different blob and `slug(G) == slug(F)` | RED exit 1 (A2 slug) |
-| 5 | Ledger row `F` with an empty `content_sha` | RED exit 1 |
-| 6 | Stub `psql` exits 2 | exit 2 |
-| 7 | Stub `psql` returns 0 rows | exit 2 (own-dispatch floor) |
-| 8 | Neither `DATABASE_URL_POOLER` nor `DATABASE_URL` is set | exit 2 (not 1) |
-| 9 | `--base` does not resolve, or `--repo` is missing or lacks the migrations dir | exit 2 |
-| 10 | An A2 candidate exists and the `origin` URL points at a missing path | exit 2 |
-| 11 | Run with cwd = `$REPO/apps/web-platform` (row-1 fixture) | still RED exit 1: no cwd-relative pathspec (#8606 class) |
-| 12 | Workflow: the check step moves AFTER `Apply migrations to dev`, or after `Release dev-suite mutex` (reorder) | wiring assert RED |
+| 1 | Ledger row `F` whose `content_sha ≠ blob(F)`, with `F` unmerged | RED exit 1, names `F` and both SHAs |
+| 2 | Two unmerged files: `F1` ledgered at its own blob, `F2` mismatched | RED exit 1, names `F2` only (second member) |
+| 3 | Ledger `G` not on base, not in tree, and not on any branch, with `content_sha == blob(F)`; PR head branch pushed to origin | RED exit 1 (A2 blob) |
+| 3b | As row 3, but another fresh branch holds `G` only by **blob or slug**, not by name | RED exit 1 (Guard 1 accepts exact-name ownership only) |
+| 4 | Ledger `G` with a different blob and `slug(G) == slug(F)` | RED exit 1 (A2 slug) |
+| 4b | The PR branch's history once held `G@S`, the tree no longer has it, and the ledger has `G\|S` | RED exit 1 (A4) |
+| 5 | Ledger row `F` with an empty `content_sha` | RED exit 1, with the empty-sha message (no bare `git show` with an empty SHA) |
+| 5b | Ledger row `F` whose `content_sha` is uppercase or short | RED exit 1 (treated as absent) |
+| 6 | Stub `psql` exits 2 | exit 2 `transient` |
+| 7 | Stub `psql` returns 0 rows, with `U` non-empty, and again with `U = ∅` | exit 2 `config` in both cases (order row: no early return before the floor) |
+| 8 | No `DATABASE_URL_POOLER` and no `DATABASE_URL` | exit 2 `config` (not 1) |
+| 9 | `--base` does not resolve | exit 2 |
+| 9b | `--repo` is missing or lacks the migrations dir | exit 2 |
+| 10 | A candidate exists and the origin URL points at a missing path | exit 2 `transient` |
+| 11 | Run with cwd `$REPO/apps/web-platform` on the row-1 fixture | still RED exit 1 (#8606 class) |
+| 12 | Workflow: the check step moved after `Apply migrations to dev`, or after `Release dev-suite mutex` | wiring assert RED (step names anchored `^      - name: <exact>$`, count 1) |
 | 13 | Workflow: the invocation uses the checkout path instead of `$RUNNER_TEMP/dev-ledger-parity.sh` | wiring assert RED |
-| 14 | Workflow: the resolve step loses its `deleted` → `exit 1` arm, or `detect-changes` loses `fetch-depth: 0` | wiring assert RED |
-| 15 | Fixture: shallow (`--depth=1`) clone where the guard was deleted on base, run through the `ledger_guard` classifier logic | reports `deleted` only when computed on full history; the suite asserts that the classifier runs in `detect-changes` |
+| 14 | Workflow: the resolve step loses its `deleted)` or `*)` → `exit 1` arm | wiring assert RED |
+| 15 | Workflow: the `ledger_guard` step leaves `detect-changes`, or `detect-changes` loses `fetch-depth: 0` | wiring assert RED |
 
-**Must-PASS rows** (non-canonical inputs the contract permits):
+**Must-PASS rows:**
 
-- (a) unmerged `F` ledgered at its blob → 0;
+- (a) unmerged `F`, ledgered at its blob → 0;
 - (b) unmerged `F` with no row → 0, `pending=1`;
-- (c) a *merged* file whose ledger blob differs → 0 (this is another ref's pre-existing drift);
-- (d) an unmerged `F.down.sql` with no row → 0;
-- (e) an unrelated orphan `Z` (different slug, different blob) → 0, with **no** remote call (the
-  fixture's origin URL is poisoned);
-- (f) a slug candidate held by exact name on another live branch → 0, with a `::notice::` naming it;
-- (g) tree == base → 0, with the `::notice::` and the floor still enforced.
+- (c) a *merged* file with a differing ledger blob → 0;
+- (d) unmerged `F.down.sql` with no row → 0;
+- (e) an unrelated orphan `Z` (different slug and blob, never in PR history) → 0;
+- (f) a slug candidate held **by exact name** on another fresh branch → 0, with a `::notice::`;
+- (g) tree == base → 0, with the notice and the floor still enforced;
+- (h) a merged `G` with `slug(G) == slug(F)` → 0 (`∈ M` exclusion);
+- (i) both DB URLs set → the pooler is used;
+- (j) only `DATABASE_URL` set → that is used.
 
 **Harness rows:**
 
-- (H1) guard body → `exit 0`: the suite goes RED;
-- (H2) guard body → `exit 1`: the suite goes RED;
-- (H3) delete a case block: `CASES < EXPECTED_CASES` goes RED (the floor is adjacent to its `if`);
-- (H4) script absent: RED, not "0 passed, 0 failed".
+- (H1) guard body replaced by `exit 0` → suite RED;
+- (H2) guard body replaced by `exit 1` → suite RED;
+- (H3) a case block deleted → floor RED;
+- (H4) script absent → RED, not "0 passed, 0 failed";
+- (H5) psql argv capture: exactly one call, exactly one `-c`, no `-f`/`--file`, the SQL byte-equal to
+  `LEDGER_SQL`, and a grep that the script source contains exactly one `psql` invocation (AC7).
 
-**Anchor.** The compared value, the ledger `content_sha`, lives outside the commit. It is on dev, and
-only the runner writes it, at apply time. The judging code comes from the base ref via `git show`, and
-the `deleted` decision comes from full history. One PR diff cannot move both the guard and the verdict.
+**Anchor, stated honestly (security review).** The base-ref copy stops a diff that edits the **script
+alone**. It does not stop two things:
 
-Residual: `pull_request` runs the PR's own workflow file, so a PR can delete the step. That deletion
-is visible in review and self-triggers the heavy suite via the anchor. It is the same residual #8597
-accepted.
+- `pull_request` runs the PR's own workflow file, so the PR controls the `ledger_guard` and resolve
+  steps;
+- PR code holds dev write credentials (migrations and tests run under `dev_scheduled`), so a PR can
+  rewrite `_schema_migrations`.
+
+Both are visible in review, and both are covered by the anchor that self-triggers the suite and by
+the post-merge probe on main, which the PR does not control. It is the same trust boundary #8597
+accepted. The deleted-guard decision comes from full history, so a shallow checkout cannot flip it.
 
 ### Guard 2 — in-flight ownership classification (`dev-ledger-parity.sh classify-missing` + probe wiring)
 
-**Property.** Under `fail-on-ledger-drift`, a missing-on-main ledger row is downgraded to a warning
-iff both hold:
+**Property.** Under `fail-on-ledger-drift`, a missing-on-main ledger row is downgraded to a warning if
+and only if all three hold:
 
 - its filename never appeared in main's history;
-- a live `origin` branch head holds it by exact name, by identical blob, or by identical slug.
+- a live `origin` branch holds it;
+- that branch is not merged into main and has had a commit within 30 days. "Holds" means by exact
+  name, or by an identical blob or slug among the branch's files that are **not on main**.
 
 Every other missing row, every content-drift row, and every row that cannot be classified stays a
 blocking error.
 
-**Assembly.** A single chokepoint:
+**Assembly.**
 
-- The `probe` step's `missing_pairs` list goes to the classifier's stdin, which returns a per-line
-  verdict.
-- The exit decision reads only the `orphan` lines plus the unchanged `content_drift`.
-- Ownership comes from `branch_owners`. Main-history exclusion comes from one unshallow of
-  `origin/main`.
-- Both consumers of the action flow through that step: tenant-integration (×2) and the scheduled run.
+- **Chokepoint:** the `probe` step's `missing_pairs` goes to the classifier's stdin, and the classifier
+  returns an ordered verdict per line.
+- **Exit decision:** reads only the `orphan`, `stale` and `unclassified` verdicts plus the unchanged
+  `content_drift`.
+- **Ownership:** one `owners_repo` build per invocation, fresh each time, so nothing carries over
+  between the pre-section and post-section probes.
+- **Consumers:** both consumers of the action flow through the step: tenant-integration (twice) and
+  the scheduled probe.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Row held by no live branch head (branch deleted) | `orphan` → probe `::error::`, exit 1 |
-| 2 | Two rows: first in-flight, second owned by nobody | second `orphan` (second member) |
+| 1 | The row is on no live branch head, because the branch was deleted | `orphan` → probe `::error::`, exit 1 |
+| 2 | Two rows: the first in-flight, the second owned by nobody | the second is `orphan` (second member) |
 | 3 | **Stale fork:** main renamed `128_x→131_x`, and a live branch forked earlier still holds `128_x` | `orphan` (main-history exclusion) |
-| 4 | `origin` URL broken (fetch fails) | exit 2 → probe keeps all rows `::error::` + outage annotation |
-| 5 | Classifier emits fewer lines than its input (stubbed) | probe line-count check → all `::error::` |
-| 6 | The only same-slug match is a `.down.sql` in a head | `orphan` (down files own nothing) |
-| 7 | Content-drift row whose file sits on a live branch | still `::error::` (classification is missing-class only) |
-| 8 | Row's only holder is a `gh-readonly-queue/*` ref | `orphan` |
-| 9 | Missing-on-main display, after the change | lists filenames only, with no `|sha` suffix |
+| 3b | **Never-merged rename:** `128_x` was never on main, main has `131_x` with the same blob and slug, and every branch holds `131_x` | `orphan` (branches own only files absent from main) |
+| 3c | Rows 3 and 1 in both input orders, in one invocation | the stale fork is `orphan` in both orders |
+| 4 | Origin URL broken (fetch fails) | exit 2 → probe prints `UNCLASSIFIED (rows= rc=2)` first, rows listed under `Unclassified:`, exit 1 |
+| 5 | The classifier emits lines in the wrong order, or fewer lines than input (stub) | the per-line check fails → `UNCLASSIFIED`, exit 1 |
+| 6 | The only same-slug match is a `.down.sql` | `orphan` |
+| 7 | A content-drift row whose file sits on a live branch | still `::error::` (only the missing class is classified) |
+| 8 | The only holder is a `gh-readonly-queue/*` ref, or a head that is an ancestor of main | `orphan` |
+| 9 | The only holder's last commit is 31 days old | `stale` → `::error::` naming the branch and its age, exit 1 |
+| 10 | The branch is deleted between two classifier calls in the same workspace | first call `in-flight`, second `orphan` (no stale owner state) |
+| 11 | Bad stdin line (bad name or bad sha) | exit 2 |
+| 12 | Display after the change | Missing-on-main lists filenames only, with no `\|sha` |
+
+Rows 4, 5, 7, 9 and 12 run the **extracted `probe` block** with stubbed `psql`/`doppler` and
+`GITHUB_OUTPUT`. A grep of `action.yml` cannot see a logic change.
 
 **Must-PASS rows:**
 
-- exact-name owner → `in-flight … exact`;
-- renamed with an equal blob → `in-flight … blob`;
-- renamed and edited, with an equal slug → `in-flight … slug`;
-- empty input → exit 0, with **no** remote call.
+- an exact-name owner → `in-flight … exact`;
+- a renamed file with an equal blob (not on main) → `in-flight … blob`;
+- a renamed and edited file with an equal slug (not on main) → `in-flight … slug`;
+- empty input → exit 0 with **no** remote call (origin URL poisoned);
+- no filter support (the fixture origin has `uploadpack.allowFilter` unset) → same verdicts and rc.
 
 **Harness rows:**
 
-- (H1) classifier body → `exit 0` with no output: the suite goes RED;
-- (H2) the classifier prints `in-flight` for everything: rows 1–3 go RED;
-- (H3) the `CASES` floor sits adjacent to its `if`.
+- (H1) classifier body replaced by `exit 0` with no output → RED;
+- (H2) classifier prints `in-flight` for everything → rows 1–3b RED;
+- (H3) the `CASES` floor stays adjacent to its `if`.
 
-**Anchor.** Ownership evidence is `origin`'s live refs plus main's history, both outside this commit.
-Laundering a true orphan requires pushing a branch to `origin`, which needs repo write, and that
-branch's PR is blocked by its own Guard 1 (A1/A2) until the orphan is resolved.
+**Anchor.** The ownership evidence is `origin`'s live refs, their commit dates and main's history, all
+outside this commit. Turning a true orphan into a warning takes a push to `origin` (repo write, bots
+included) of a branch that is fresh, unmerged, and holds a file not on main. The deception expires
+30 days after the branch's last commit. The threat model is "repo writers and bots only".
 
 ## Acceptance Criteria
 
 ### Functional Requirements
 
-- [ ] **AC1**: The Guard 1 matrix rows 1–11 and must-PASS rows (a)–(g) hold. Implementation:
+- [ ] **AC1**: Guard 1 rows 1–11 plus 3b/4b/5b/9b hold, and must-PASS rows (a)–(j) hold, in
   `apps/web-platform/scripts/dev-ledger-parity.sh` `check`. Verified by
   `bash apps/web-platform/scripts/dev-ledger-parity.test.sh`.
-- [ ] **AC2**: The Guard 2 matrix and its must-PASS rows hold. Implementation: `classify-missing`,
-  plus `.github/actions/dev-migration-drift-probe/action.yml` step `probe`. That step makes the
-  fail-on-only call, splits `missing_pairs` from the display, applies the line-count fail-closed
-  check, and exits on orphans plus content drift.
-- [ ] **AC3**: `tenant-integration.yml` satisfies the Guard 1 wiring rows 12–14:
-  - `detect-changes` emits `ledger_guard` and keeps `fetch-depth: 0`;
-  - the resolve step sits after `Lint migration FK preconditions` and before `Acquire dev-suite mutex`;
-  - the single check step sits between `Detect dev-vs-main migration drift` and `Apply migrations to dev`,
-    and runs `$RUNNER_TEMP/dev-ledger-parity.sh check`.
+- [ ] **AC2**: Guard 2 rows 1–12 and its must-PASS rows hold, in `classify-missing` plus
+  `.github/actions/dev-migration-drift-probe/action.yml` step `probe`. The probe logic rows run
+  against the extracted block.
+- [ ] **AC3**: Guard 1 wiring rows 12–15 hold, asserted by exact anchored step names and relative
+  order:
+  - the `ledger_guard` step lives in `detect-changes`, which keeps `fetch-depth: 0`;
+  - the resolve step sits after `Lint migration FK preconditions` and before
+    `Acquire dev-suite mutex`, with `deleted)` and `*)` exit arms;
+  - one check step sits between `Detect dev-vs-main migration drift` and `Apply migrations to dev`,
+    running `$RUNNER_TEMP/dev-ledger-parity.sh check`.
+- [ ] **AC4**: The `detect-changes` alternation contains the token
+  `apps/web-platform/scripts/dev-ledger-parity`.
+- [ ] **AC5**: `action.yml` has:
+  - the `Repair:` line naming `§Content drift` and `dev-ledger-parity.sh check`;
+  - the `no live branch owns these rows` line;
+  - the `UNCLASSIFIED` arm;
+  - the count-only suspicious-row line, with no `$f` in that annotation.
 
-  The suite asserts all of this by step name and relative order.
-- [ ] **AC4**: The `detect-changes` alternation contains the token `apps/web-platform/scripts/dev-ledger-parity`.
-  This is a wiring assert on the anchor token itself.
-- [ ] **AC5**: The drift probe's content-drift block prints a `Repair:` line that names
-  `§Content drift` and `dev-ledger-parity.sh check`. The missing block names renamed-after-apply rows.
-  The suite asserts this by grepping `action.yml`.
-- [ ] **AC6**: The learning contains `## Content drift (same filename, different blob)`, and ADR-061
-  contains `## Amendment 2026-09-23` with both points.
+  The suite asserts all four.
+- [ ] **AC6**: The learning has `## Content drift (same filename, different blob)`, and ADR-061 has
+  `## Amendment 2026-09-23` with both points and the "superseded in part" note on its Rejected
+  alternative.
 - [ ] **AC7**: Scope stays narrow.
   - `git diff origin/main...HEAD --name-only` touches no `apps/web-platform/supabase/migrations/**`,
-    no `run-migrations.sh`, and no `lint-migration-immutability.sh`.
+    no `run-migrations.sh` and no `lint-migration-immutability.sh`.
   - No workflow gains a `permissions:` key.
-  - The suite asserts that the script's only SQL is the literal
-    `SELECT filename || '|' || COALESCE(content_sha, '') FROM public._schema_migrations ORDER BY filename`.
-    It does this by capturing the fake-psql argv and comparing it byte-for-byte (P7).
+  - Harness row H5 holds: one `psql` call site, and the SQL is byte-equal to the literal.
+  - The suite asserts that the checkout's `.git/config` and `.git/shallow` are unchanged after both
+    subcommands run.
 
 ### Non-Functional Requirements
 
-- [ ] **AC8**: No-candidate runs make zero remote calls (must-PASS (e) poisons the origin URL). The
-  PR body records the measured wall time of `branch_owners` against the real `origin`, which must stay
-  under 60 s.
-- [ ] **AC9**: The following all pass:
-  - `shellcheck` is clean on the new script and suite;
-  - `bash scripts/lint-orphan-test-suites.sh`, `bash scripts/lint-workflow-step-env-refs.test.sh`,
-    `bash scripts/lint-workflow-errexit-capture.test.sh` and
-    `bash apps/web-platform/scripts/lint-migration-immutability.test.sh` stay green.
+- [ ] **AC8**: No-candidate runs make zero remote calls (must-PASS (e) and the Guard 2 empty-input row
+  use a poisoned origin). The PR body records the measured wall time of one `owners_repo` build
+  against the real `origin`, run twice per push inside the mutex window. Each build must stay under
+  30 s, and the scheduled job must stay under its `timeout-minutes: 5`.
+- [ ] **AC9**: These pass or stay green:
+  - `shellcheck` on the new script and suite;
+  - `bash scripts/lint-orphan-test-suites.sh`;
+  - `bash scripts/lint-workflow-step-env-refs.test.sh`;
+  - `bash scripts/lint-workflow-errexit-capture.test.sh`;
+  - `bash apps/web-platform/scripts/lint-migration-immutability.test.sh`.
 
 ### Quality Gates
 
-- [ ] **AC10**: This PR's own heavy job runs, because the workflow is anchored.
-  - In the `introduction` state, it prints `ledger-parity: clean` with `unmerged=0` and
-    `ledger-rows=<N>`, where N > 0.
-  - This is the one live proof of the pooler query path.
-- [ ] **AC11 (post-merge smoke check, not a correctness gate)**: Read the first `push` run of
-  tenant-integration on main after merge with
-  `gh run view <id> --log | grep -e 'ledger-parity:' -e 'in-flight:' -e 'No dev-vs-main migration drift detected.'`.
-  - It must show that the new step executed.
-  - Any red in that run must be attributed, by its own annotation, to an orphan or content-drift row,
-    never to a row held by a live branch.
-  - The run's conclusion depends on dev state that other refs write, so it is **not** asserted
-    (`cq-ac-must-not-depend-on-concurrent-sessions`). The deterministic properties are AC1 and AC2.
-- [ ] **AC12**: The PR body carries `Closes #8520` and `Closes #8521`, cites the 2026-09-22 run
-  evidence for the #8520 close, and references #8606 as a finding filed during planning.
+- [ ] **AC10**: This PR's own heavy job runs (the change is anchored) in the `introduction` state and
+  prints `ledger-parity: clean` with `unmerged=0` and `ledger-rows=<N>`, where N > 0.
+- [ ] **AC10b (pre-merge, read-only)**: `gh workflow run scheduled-dev-migration-drift.yml --ref feat-one-shot-8521-dev-ledger-content-drift`
+  runs this branch's action and script with `fail-on-ledger-drift: 'true'`. Its log shows either
+  `ledger-classify:` (rows were missing) or `No dev-vs-main migration drift detected.`, and no
+  `UNCLASSIFIED`. The wall time is recorded (architecture review: this is the only pre-merge
+  exercise of Phase 4).
+- [ ] **AC11 (post-merge smoke, not a correctness gate)**: the first `push` run on main is read with
+  `gh run view <id> --log | grep -e 'ledger-parity:' -e 'ledger-classify:' -e 'No dev-vs-main migration drift detected.'`.
+  - For each `in-flight … <branch>` line, confirm that
+    `git diff --name-only origin/main...origin/<branch> -- apps/web-platform/supabase/migrations/`
+    lists that file. This catches wrongly hidden orphans, not just false reds.
+  - The run's conclusion depends on dev state that other refs write, so it is not asserted
+    (`cq-ac-must-not-depend-on-concurrent-sessions`).
+- [ ] **AC12**: The PR body carries `Closes #8520` and `Closes #8521`, the 2026-09-22 run evidence,
+  the AC8 and AC10b timings, and #8606.
 
 ## Domain Review
 
@@ -782,82 +925,86 @@ branch's PR is blocked by its own Guard 1 (A1/A2) until the orphan is resolved.
 
 **Status:** reviewed
 
-**Assessment.** The CTO agrees with the layering: a read-only guard, run as a base-ref copy (the #8597
-pattern), with ADR-061 per-ref ownership on main. The CTO also agrees with rejecting auto re-apply and
-a per-PR DB.
-
-Folded in from the first pass:
-
-- remedy text that states the PR's tests ran against the old body;
-- the anchor addition;
-- classifier fixtures;
-- a named outage message.
+**Assessment.** The CTO agrees with the layering: a read-only guard running as the base-ref copy,
+with ADR-061 per-ref ownership on main. The CTO also agrees with rejecting both automatic re-apply
+and a per-PR database.
 
 Folded in from the plan-review devex pass:
 
-- exit-2 messages that say "not caused by this PR; re-run";
+- exit-2 wording that says "not caused by this PR";
 - A2 "re-slug yours";
-- accepted immutability cost recorded in the ADR.
+- the accepted immutability cost, recorded in the ADR.
 
-Not folded in:
+Folded in from the deepen pass:
 
-- **"The 26 drifted rows keep main red":** those rows were already reconciled on 2026-09-21.
-- **`run-migrations.sh` content check:** see Alternatives.
-- **Pulling a minimal dev-reconcile workflow into scope, and a push-time git-only warning:** these are
-  scope additions, persisted to `knowledge-base/project/specs/feat-one-shot-8521-dev-ledger-content-drift/decision-challenges.md`.
+- throwaway-repo ownership (architecture);
+- the ownership exclusion for files absent from main, found as a P0 by security, spec-flow and
+  test-design;
+- the 30-day freshness rule plus the `stale` verdict (security, observability);
+- A4, the PR-history check (spec-flow);
+- the `UNCLASSIFIED` labelling (observability);
+- AC10b, the pre-merge exercise of the classifier (architecture);
+- the honest P4 anchor (security).
 
-**Product/UX Gate:** not applicable. There is no UI surface, and no Files-to-Create/Edit path matches
-the UI-surface terms. No other domain is implicated: this is repo CI over a dev-only database.
+Taste and User-Challenge items went to
+`knowledge-base/project/specs/feat-one-shot-8521-dev-ledger-content-drift/decision-challenges.md`:
+
+- the dev-reconcile workflow;
+- a push-time warning;
+- the 30-day threshold value;
+- generalizing the guard list.
+
+**Product/UX Gate:** not applicable. There is no UI surface. No other domain is implicated.
 
 ## Test Scenarios
 
-All scenarios live in the single suite `apps/web-platform/scripts/dev-ledger-parity.test.sh`: the
+All scenarios live in one suite, `apps/web-platform/scripts/dev-ledger-parity.test.sh`. It covers the
 Guard Contract rows plus these arcs:
 
-1. **Edit-after-apply.** The ledger holds `140_x|B1`, and the branch has edited `140_x` to `B2`.
-   `check` exits 1 with the A1 text, which includes `git show B1`.
-2. **Remedy.** Restore `140_x@B1` and add `141_y`. `check` exits 0 with `pending=1`.
-3. **Rename.** The ledger holds `140_x|B1`, and the tree holds `141_x@B1`. With no live branch
-   holding `140_x`, `check` exits 1 (A2 blob). With a fixture branch `feat-other` holding `140_x`, it
-   exits 0 with a notice.
-4. **In-flight.** The probe's pairs are `139_z|S`, and a live branch holds `139_z@S`. The result is a
-   warning with exit 0. After the branch is deleted from the bare origin, the result is an error with
-   exit 1.
-5. **Stale fork.** Main renamed `128_x→131_x`. The ledger holds `128_x`, and an old branch still holds
-   `128_x`. The row is an orphan and the result is an error.
+1. **Edit-after-apply.** The ledger holds `140_x|B1` and the branch now has `140_x@B2`. `check` exits
+   1 with A1, whose message includes `git show B1` and the `gh api` fallback.
+2. **Remedy.** `140_x` is restored to `B1` and `141_y` is added. `check` exits 0 with `pending=1`.
+3. **Rename.** The ledger holds `140_x|B1` and the tree holds `141_x@B1`.
+   - With `feat` (the PR head) pushed, `check` exits 1 (A2 blob).
+   - With `feat-other` holding `140_x` by name, `check` exits 0 with a notice.
+4. **Delete-after-apply.** The PR branch history carried `140_x@B1`, and the tree no longer has it.
+   `check` exits 1 (A4).
+5. **In-flight.** Pairs `139_z|S`, and a fresh live branch holds `139_z@S`, which is not on main. The
+   classifier warns and exits 0. After the branch is deleted on origin, it reports an error and exits
+   1, run in the same workspace.
+6. **Stale fork and never-merged rename.** Guard 2 rows 3, 3b and 3c.
 
 ## Deferrals
 
-- **#8605** (filed during planning; labels `deferred-scope-out`, `meta/machinery`; milestone
-  Post-MVP / Later). Two related gaps:
-  - dev rows from closed, unmerged PRs whose branches were never deleted stay in-flight indefinitely;
-  - there is no dispatchable dev-reconcile path for discarding an applied version.
-
-  The CTO argues the re-evaluation trigger fires almost at once (26 edit-after-apply rows across about
-  260 files). That challenge is recorded in `decision-challenges.md`.
-- **#8606** (filed during planning; labels `type/bug`, `meta/machinery`): the #4241 unmerged gate in
-  `run-migrations.sh` does nothing under `working-directory: apps/web-platform`. This is a pre-existing
-  issue, and the prd path is unaffected.
-- **#8049** stays open and separate. It absorbs the P3 residual: a same-filename write between check
-  and apply while the mutex fails open.
+- **#8605** (filed during planning; labels `deferred-scope-out`, `meta/machinery`; milestone Post-MVP
+  / Later). It tracks the missing self-service dev-reconcile path for discarding an applied version
+  or clearing an orphan. The stale-branch arm it originally tracked is now partly closed by the
+  30-day `stale` verdict. The CTO's view that the trigger fires almost at once is recorded in
+  `decision-challenges.md`.
+- **#8606** (filed during planning; labels `type/bug`, `meta/machinery`). The #4241 unmerged gate in
+  `run-migrations.sh` does nothing under `working-directory: apps/web-platform`. This is pre-existing,
+  and prd is unaffected.
+- **#8049** stays open and separate. It absorbs the P3 residual (a same-filename write between check
+  and apply while the mutex fails open) and the merge-queue residual (a same-named apply after this
+  PR's last green run).
 
 ## Risks & Sharp Edges
 
-- **Head-fetch cost inside the mutex.** The fetch is lazy, and it runs only when an A2 candidate or a
-  missing row exists. `--filter=blob:none` support on the CI clone is verified at implementation.
-  AC8 pins the time budget, with a 60 s timeout.
-- **`--unshallow` cost on the classifier path.** It runs only under fail-on, and only when rows are
-  missing. A blobless unshallow of main is bounded by commit and tree count. Record the measured time
-  in the PR.
-- **Friction from "applied means immutable".** An author iterating after the first CI apply must add
-  files. The A1 message states that cost, and the ADR records it as accepted. #8605 tracks the
-  convenience path.
-- **Slug collisions.** An unowned slug match blocks a PR that did nothing wrong. The message offers
-  "re-slug yours", and matches owned by exact name are skipped.
-- **Wiring asserts are keyed on step names and relative order**, not line numbers
-  (`cq-cite-content-anchor-not-line-number`). They assert the full anchor token
-  (`cq-assert-anchor-not-bare-token`). The suite's header states that renaming a step breaks it, by
-  design.
+- **Ownership cost is on the normal path.** It runs twice per push inside the mutex window and once
+  per scheduled run. The measured cost is 6–10 s plus about 3 s. AC8 caps a build at 30 s, and the
+  fetch timeout is 120 s, which exits 2 as `transient`.
+- **The 30-day freshness rule can red main because of one abandoned PR's applied migration.** That is
+  intended: the row is an orphan in the making. The error names the branch and gives both fixes. The
+  threshold value is Taste and is recorded for operator review.
+- **"Applied means immutable" adds friction.** The A1 message states the cost, and the ADR accepts
+  it. #8605 tracks the self-service reconcile path.
+- **Slug collisions** with an unrelated, unowned row block a PR that did nothing wrong. The message
+  offers "re-slug yours" when the match is slug-only.
+- **Wiring asserts** key on anchored exact step names and relative order, never line numbers
+  (`cq-cite-content-anchor-not-line-number`). They assert whole tokens
+  (`cq-assert-anchor-not-bare-token`). `Re-probe dev-vs-main migration drift (post-section)` contains
+  the text of `Detect dev-vs-main migration drift`, so the step-name greps must be anchored.
+- **Test fixtures** use `file://` URLs, with and without `uploadpack.allowFilter`.
 - **User-Brand Impact.** A plan whose `## User-Brand Impact` section is empty, contains only
   `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. This one is
   filled.
@@ -865,13 +1012,10 @@ Guard Contract rows plus these arcs:
 ## References
 
 - **Issues:** #8520, #8521, #8583 (closed by #8597), #8049, #7964, #8475, #8507, #3364, #8605, #8606
-- **Runs:**
-  - 35732801080 and 35736906203: in-flight 139;
-  - 35743332992, 35744360560 and 35747451585: 138 content drift;
-  - green streak from `ade3dff1b` (run 35789724725).
+- **Runs:** 35732801080 and 35736906203 (in-flight 139); 35743332992, 35744360560 and 35747451585
+  (138 content drift); the green streak from `ade3dff1b` (run 35789724725)
 - **ADRs:** ADR-061, ADR-023
-- **Learnings:**
-  - `2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`
-  - `2026-09-23-a-pr-must-not-control-the-guard-that-judges-it.md`
-  - `2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md`
+- **Learnings:** `2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`,
+  `2026-09-23-a-pr-must-not-control-the-guard-that-judges-it.md`,
+  `2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md`
 - **Prior plan whose §M2 premise this corrects:** `2026-09-21-fix-tenant-integration-shared-fixture-contention-plan.md`

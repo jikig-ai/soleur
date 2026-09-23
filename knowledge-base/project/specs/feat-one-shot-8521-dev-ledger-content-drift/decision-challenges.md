@@ -38,3 +38,26 @@ database, by flagging when an unmerged migration differs from the author's own `
 
 **Why not applied:** it is a new surface (a ship-skill or hook check), outside CI. The authoritative
 guard stays in CI either way.
+
+## DC-3 (Taste): the 30-day freshness threshold for branch ownership
+
+**Source:** deepen-plan security and observability reviews. Observability suggested 14 days; the plan
+picks 30.
+
+**What the plan decided:** a branch with no commit in 30 days stops owning rows, so its applied
+migrations get the blocking `stale` verdict on main. The error names the branch. A shorter threshold
+catches abandoned branches sooner but reds main more often for slow PRs. A longer one lets orphans
+hide for longer.
+
+**Why surfaced:** it is a policy value, not a technical correctness question.
+
+## DC-4 (Taste): generalize the `detect-changes` guard-state step into a list
+
+**Source:** DHH plan review and the deepen-plan architecture review.
+
+**Challenge:** the base / introduction / deleted three-arm logic now exists twice. One copy is #8597's
+inline step. The other is this plan's `ledger_guard` step, which is fed by a single path. A
+list-driven step (or a composite action) would make the next guard a one-line addition.
+
+**Why not applied:** refactoring #8597's step breaks its wiring asserts (T10/T11) and gains no
+property for this PR.
