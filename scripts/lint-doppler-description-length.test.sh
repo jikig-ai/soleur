@@ -215,8 +215,16 @@ d=$(fx h5)
 printf 'resource "doppler_project" "p" {\n  name = <<EOT\n}\nFOO=bar\nresource "x" "y" {\nEOT\n  description = %s\n}\n' "$(lit "$(x 256)")" > "$d/a.tf"
 cases=$((cases + 1)); row "H5 heredoc body is not structure" 1 "doppler_project.p description is 256 bytes" "$d/a.tf"
 d=$(fx h5b)
-printf '/*\n}\nFOO=bar\n*/\nresource "doppler_project" "p" {\n  description = %s\n}\n' "$(lit "$(x 256)")" > "$d/a.tf"
-cases=$((cases + 1)); row "H5b block-comment body is not structure" 1 "doppler_project.p description is 256 bytes" "$d/a.tf"
+printf '/*\n}\nFOO=bar\n*/\nresource "doppler_project" "p" {\n  description = "ok"\n}\n' > "$d/a.tf"
+cases=$((cases + 1)); row "H5b block-comment body is not structure" 0 "1 description(s) measured" "$d/a.tf"
+
+# H7 — a column-0 comment inside a doppler block is skipped, not read as a header.
+d=$(fx h7); printf 'resource "doppler_project" "p" {\n  name = "n"\n# note at column 0\n  description = %s\n}\n' "$(lit "$(x 256)")" > "$d/a.tf"
+cases=$((cases + 1)); row "H7 column-0 comment inside a doppler block" 1 "doppler_project.p description is 256 bytes" "$d/a.tf"
+
+# H8 — any indentation is a description: a deeper-indented one is measured too.
+d=$(fx h8); printf 'resource "doppler_project" "p" {\n    description = %s\n}\n' "$(lit "$(x 256)")" > "$d/a.tf"
+cases=$((cases + 1)); row "H8 deeper-indented description is measured" 1 "doppler_project.p description is 256 bytes" "$d/a.tf"
 
 # H6 — control characters in a resource name are stripped before printing, so a
 # crafted name cannot start a CI log line with a workflow command.
@@ -240,7 +248,7 @@ if [[ $((PASS + FAIL)) -ne "$cases" ]]; then
   printf 'FATAL: conservation — PASS+FAIL=%d but %d rows ran\n' "$((PASS + FAIL))" "$cases"
   exit 1
 fi
-MIN_CASES=34
+MIN_CASES=36
 if (( cases < MIN_CASES )); then
   printf '[FATAL] assertion floor: only %d assertions ran (floor %d)\n' "$cases" "$MIN_CASES"
   exit 1
