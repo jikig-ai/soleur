@@ -55,6 +55,26 @@ SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 # The resolver's staging dir lives under XDG_CACHE_HOME; keep it inside the sandbox.
 export XDG_CACHE_HOME="$SANDBOX/xdg-cache"
+# The shared fixture env: a prefix sweep of every inherited GIT_* (so a hook-exported GIT_DIR cannot
+# aim these writes at the caller's repo), a discovery ceiling, hermetic config and a pinned
+# identity. Load-bearing here beyond hygiene: scripts/test-all.sh arms core.hooksPath through
+# GIT_CONFIG_* for the whole run, and without the sweep no fixture hook would run in CI.
+# shellcheck source=../test/lib/git-fixture-env.sh
+source "$SCRIPT_DIR/../test/lib/git-fixture-env.sh"
+git_fixture_env "$SANDBOX" || { printf '[FATAL] git_fixture_env refused %s\n' "$SANDBOX" >&2; exit 1; }
+
+# Control: a fixture repo's own .git/hooks must RUN. Several rows (a commit hook that rewrites the
+# merge, a signal sent from inside git commit) pass vacuously when hooks are silently disabled —
+# which an inherited `core.hooksPath` in GIT_CONFIG_* does, and outranks the fixture's local config.
+_hk="$SANDBOX/hook-control"; assert_fixture_dir "$_hk"
+git init -q "$_hk" && mkdir -p "$_hk/.git/hooks"
+printf '#!/bin/sh
+: > "%s/hook.ran"
+' "$SANDBOX" > "$_hk/.git/hooks/pre-commit"; chmod +x "$_hk/.git/hooks/pre-commit"
+git -C "$_hk" -c user.email=t@t -c user.name=t commit -q --allow-empty -m control >/dev/null 2>&1
+CASES_RUN=$((CASES_RUN + 1))
+[[ -e "$SANDBOX/hook.ran" ]] && pass "control: a fixture repo's pre-commit hook runs" \
+  || fail "control: fixture hooks do NOT run (an inherited core.hooksPath?) — every hook row below would pass vacuously"
 
 DIAG="knowledge-base/engineering/architecture/diagrams"
 MODEL="$DIAG/model.likec4.json"
@@ -736,7 +756,7 @@ done
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=139
+_min_cases=140
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
