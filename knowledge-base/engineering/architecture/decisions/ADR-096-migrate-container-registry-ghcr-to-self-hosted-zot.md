@@ -1375,5 +1375,6 @@ strands fresh boots of hosts created before the rotation. This is the same as in
 
 It also narrows one soak signal, recorded for the operator rather than changed here. With GHCR
 dead, a fresh-boot zot miss now emits only the `stage=pull` fatal, not `app_ghcr_fallback`.
-`zot-soak-6122.sh`'s `FAIL_QUERIES` does not count that fatal (see this branch's
-`decision-challenges.md`).
+`zot-soak-6122.sh`'s `FAIL_QUERIES` does not count that fatal (DC-3 in
+`knowledge-base/project/specs/archive/20260924-005225-feat-one-shot-8651-web-host-zot-primary-boot/decision-challenges.md`;
+tracked on #6122).
