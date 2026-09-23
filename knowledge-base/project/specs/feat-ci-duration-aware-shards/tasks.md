@@ -28,18 +28,18 @@ Locate all constructs by content anchor, not line number — line numbers were v
 - [x] 2.1 `scripts/regenerate-shard-manifest.py` (stdlib only): `--run <id>` (default: latest green `ci.yml` run on `main`), `--write` flag (without it: print predicted per-leg totals + diff). Downloads `suite-timings-scripts-[0-9]*` artifacts via `gh run download --name` — NOT `suite-timings-scripts-*` (matches `-heavy-`, whose labels aren't registered under `want_scripts` → ⊆ lint red). TSV parse: field1=label, field2=ms; drop `__run_boundary_*` labels, `skip=*` rows, FAIL/KILLED/TRIPWIRE verdicts; dup label across legs → warn + max.
 - [x] 2.2 Sticky-LPT: sort desc by ms (ties → label asc); least-loaded leg wins, but keep incumbent leg when its projected load ≤ min-load + ε (ε = 5% of mean). N read from ci.yml `test-scripts` matrix (single source). Deterministic output: `label<TAB>leg` sorted by label, `#`-comment header carrying `n`, `generated-from-run`, `generated-at`, generator version, regen command.
 - [x] 2.3 Generate v1 manifest from run `35840517639` artifacts (local copies in `/tmp/timings`); commit `scripts/suite-shard-legs.tsv`. Expect each leg ≈450s.
-- [ ] 2.4 Generator unit test `plugins/soleur/test/regenerate-shard-manifest.test.sh` (or `.py`-invoking harness matching sibling conventions): deterministic output, sticky preference bounds churn, dup-label warn, boundary/verdict exclusions, n-from-ci.yml.
+- [x] 2.4 Generator unit test `plugins/soleur/test/regenerate-shard-manifest.test.sh` (or `.py`-invoking harness matching sibling conventions): deterministic output, sticky preference bounds churn, dup-label warn, boundary/verdict exclusions, n-from-ci.yml.
 
 ## Phase 3 — Guards
 
 - [x] 3.1 New lint suite `plugins/soleur/test/scripts-shard-manifest.test.sh`, registered in test-all.sh (literal `run_suite` label — the totality reference extractor requires literal labels): TSV well-formed; header `n` == ci.yml light-matrix leg count; legs ∈ [1..n]; no dup labels; labels ⊆ registered scripts labels (strict — error names the regen command); every leg has ≥1 pin; provenance fields present. Satisfy guard-vacuity-floor obligations (ADR-193): case counter, conservation check, literal floor, instrument self-test.
-- [ ] 3.2 `plugins/soleur/test/scripts-shard-totality-mutations.sh`:
+- [x] 3.2 `plugins/soleur/test/scripts-shard-totality-mutations.sh`:
   - ROW7 re-anchor as multi-line block (post-change call sites are byte-identical — keep the skip_suite-specific following lines in the anchor).
   - ROW1/ROW4: wrap `guard_rc` invocation with `export SOLEUR_SHARD_MANIFEST=off`, unset immediately after (leak → later rows silently measure positional).
   - Six new rows: M1 absent-label→GREEN (fallback); M2 phantom-row→GREEN (inert); M3 empty-table→GREEN (all-hash totality); M4 two untabled labels land on distinct legs — bespoke enumerate check, verify the pair's cksum residues differ first; M5 drop `"$label"` arg → exit 2 → RED; M6 mutate a `skip_suite` label → union mismatch → RED.
   - Fixture manifests in `$WORK`, absolute paths via env seam (cq-test-fixtures-synthesized-only).
   - `MIN_ROWS` (:455 area) → ≥21, re-derived per the file's itemized-floor discipline.
-- [ ] 3.3 `plugins/soleur/test/scripts-shard-totality.test.sh`: verify unchanged-green (mechanism-agnostic); altK k/2,k/3 rows exercise positional mode, k/5 exercises manifest mode — no edits expected unless enumerate output format changes.
+- [x] 3.3 `plugins/soleur/test/scripts-shard-totality.test.sh`: verify unchanged-green (mechanism-agnostic); altK k/2,k/3 rows exercise positional mode, k/5 exercises manifest mode — no edits expected unless enumerate output format changes.
 
 ## Phase 4 — Docs
 
@@ -50,6 +50,6 @@ Locate all constructs by content anchor, not line number — line numbers were v
 
 ## Phase 5 — Verify + ship
 
-- [ ] 5.1 Targeted suites green: shard-totality, shard-manifest lint, totality-mutations battery (control + all rows), enumerate-toolchain, aggregator-diagnosis, ship-battery-owed, fullsuite-merge-gate, required-checks-parity, lint-orphan-test-suites, generator unit test. shellcheck/shfmt on touched .sh.
-- [ ] 5.2 Push `feat-ci-duration-aware-shards`; CI green: all `test-scripts*` legs pass, worst light leg ≈9min (vs 13m50s), `test` aggregator green. Record leg timings + manifest source run in PR body.
+- [x] 5.1 Targeted suites green: shard-totality, shard-manifest lint, totality-mutations battery (control + all rows), enumerate-toolchain, aggregator-diagnosis, ship-battery-owed, fullsuite-merge-gate, required-checks-parity, lint-orphan-test-suites, generator unit test. shellcheck/shfmt on touched .sh.
+- [x] 5.2 Push `feat-ci-duration-aware-shards`; CI green: all `test-scripts*` legs pass, worst light leg ≈9min (vs 13m50s), `test` aggregator green. Record leg timings + manifest source run in PR body.
 - [ ] 5.3 Post-merge: regen manifest from first green main run if timings shifted; probe continues per its own cadence.
