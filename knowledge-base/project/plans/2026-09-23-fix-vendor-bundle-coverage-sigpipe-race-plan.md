@@ -67,9 +67,10 @@ The race mechanism is more specific than "grep -q exits early", and it explains 
 is rare locally and still real:
 
 1. **Upstream grep writes in 4096-byte chunks.** Pipe `st_blksize` is 4096. A reader that takes
-   one `read()` sees exactly 4096 bytes: 20/20 runs of
-   `grep … lefthook.yml | { dd bs=65536 count=1 | wc -c; …; }` printed `4096`. The 4303-byte
-   output is therefore two writes: 4096 bytes, then 207 bytes.
+   one `read()` usually sees 4096 bytes: 20/20 runs of
+   `grep … lefthook.yml | { dd bs=65536 count=1 | wc -c; …; }` printed `4096` at plan time, and a
+   review re-run printed `4096, 4303, 4096` (the reader occasionally gets both writes at once). The
+   4303-byte output is two writes: 4096 bytes, then 207 bytes.
 2. **Every TS4 needle sits inside the first chunk.** Byte offsets of the first match in the
    producer output: gdpr-gate `references/` 3402, gdpr-gate `NOTICE` 3529, legal-generate
    `references/` 3580, legal-generate `NOTICE` 3643. All are below 4096.
@@ -128,7 +129,7 @@ into a deterministic RED under the old shape, and the regression check cannot pa
 ### Cut List (Phase 0.6b)
 
 - Repo-wide sweep of sibling `| grep -q` sites → P1–P4 are file-scoped → already tracked by #7005 (sweep), #6601 (design call), #7432 (linter). Not done here, and no new issue is filed (operator scope decision).
-- Enrolling this file in `.claude/hooks/grep-q-pipe-guard.test.sh`'s named-file list. That goes against the guard's own "growth happens by adding a named file" rule, so the reason is recorded here: **enrollment is not a one-line change.** The guard's `PATTERN` (`\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q`) also matches the `| grep` inside a logical `||`. It would false-flag TS6's `grep -qF … || grep -qF …` (line ~164, reads files, no pipe) and the converted TS4 `run:` predicate, so the file would fail on day one. Making it pass needs one of three edits, and each touches a second file or misuses the marker: narrow the shared pattern for every enrolled file, apply the `sigpipe-demo: intentional` marker to non-demo lines, or rewrite TS6. The operator's "this file only" scope rules out all three. The narrowed pattern this plan uses for AC2, `(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q`, is the input #7432 (the grep -q linter) needs before any `.test.sh` with `||` chains can be enrolled. The residual is Guard Contract row M5.
+- Enrolling this file in `.claude/hooks/grep-q-pipe-guard.test.sh`'s named-file list. That goes against the guard's own "growth happens by adding a named file" rule, so the reason is recorded here: **enrollment is not a one-line change.** The guard's `PATTERN` (`\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q`) also matches the `| grep` inside a logical `||`. It would false-flag TS6's `grep -qF … || grep -qF …` (the TS6 enrollment check, reads files, no pipe) and the converted TS4 `run:` predicate, so the file would fail on day one. Making it pass needs one of three edits, and each touches a second file or misuses the marker: narrow the shared pattern for every enrolled file, apply the `sigpipe-demo: intentional` marker to non-demo lines, or rewrite TS6. The operator's "this file only" scope rules out all three. The narrowed pattern this plan uses for AC2, `(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q`, is the input #7432 (the grep -q linter) needs before any `.test.sh` with `||` chains can be enrolled. The residual is Guard Contract row M5.
 - `grep -c … || true` + `-gt 0` alternative form → buys nothing over the herestring for P1. The herestring is the repo convention the brief names (#7240).
 - A shipped "old shape fails on this fixture" positive control → it would put the forbidden shape into the file. The size floor plus the work-time mutation run (M1) establish non-vacuity without shipping it.
 
@@ -153,7 +154,8 @@ None. `gh issue list --label code-review --state open` (75 issues) searched for
 
 ## Implementation
 
-Test-only, single file. The changes, in file order:
+Test-only, single file. The changes, in file order. **This is the pre-review shape; where it
+differs from the shipped file, `## Review Amendments` below is authoritative.**
 
 1. **Add the helper** after the four `assert_file_exists` lines, before TS1:
 
@@ -167,20 +169,22 @@ Test-only, single file. The changes, in file order:
    }
    ```
 
-   `|| true` is required because, under `set -e`, a no-match (rc 1) inside the command
-   substitution would abort the suite. It also swallows rc 2 (unreadable file), which is
-   fail-closed: empty items, predicate false, FAIL line. The `run:`-line scoping contract (P2)
+   `|| true` is defensive: every current call site is an `if` condition or the left of `||`,
+   where `set -e` is off, so it only protects a future caller outside those contexts. Swallowing
+   rc 2 was fail-closed only for the positive rows; for the negative decoy row it read an
+   unreadable file as "not covered". Review therefore added an explicit rc-2 guard (see
+   `## Review Amendments`). The `run:`-line scoping contract (P2)
    stays documented in the existing TS4 comment block, which is not duplicated here.
 
-2. **TS3 (line ~73), consistency conversion:**
+2. **TS3 (the `incident` membership check), consistency conversion:**
    `if grep -qx "incident" <<<"$(printf '%s\n' "${NONCONFORMING[@]:-}")"; then`
 
-3. **TS4 lefthook predicates (lines ~91, ~99):**
+3. **TS4 lefthook predicates (the NOTICE and `references/` glob checks):**
    `if glob_item_contains "$LEFTHOOK" "$prefix/NOTICE"; then` and
    `if glob_item_contains "$LEFTHOOK" "$prefix/references/"; then`. Keep the existing comment
    block above them.
 
-4. **TS4 `run:` predicate (lines ~115-116), consistency conversion:**
+4. **TS4 `run:` predicate (the `run_lines` check), consistency conversion:**
 
    ```bash
    if grep -qF "NOTICE_FILE=\"$prefix/NOTICE\"" <<<"$run_lines" \
@@ -234,15 +238,15 @@ Test-only, single file. The changes, in file order:
 
 ## Acceptance Criteria
 
-- [x] **AC1**: `bash plugins/soleur/test/vendor-bundle-coverage.test.sh` exits 0 and prints `Passed: 23` / `Failed: 0`. The file's last line (`tail -n 1`) is `print_results 23`.
-- [x] **AC2**: No executable line of the file pipes into `grep -q…`. The check is `[ -z "$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' plugins/soleur/test/vendor-bundle-coverage.test.sh | grep -vE '^[0-9]+:[[:space:]]*#')" ]`, which exits 0. Comment lines are excluded because the helper's comment names the forbidden shape. The `(^|[^|])` prefix is load-bearing: the drift guard's bare `PATTERN` also matches the `| grep` inside a logical `|| grep -qF`, which would false-flag TS6 (line ~164) and the converted `run:` predicate. Non-vacuity was measured on the pre-fix file: the check hits exactly lines 73, 91, 99, 115 and 116, and not 164.
+- [x] **AC1**: `bash plugins/soleur/test/vendor-bundle-coverage.test.sh` exits 0 and prints `Passed: 31` / `Failed: 0`. The file's last line (`tail -n 1`) is `print_results 31` (23 before the review amendments).
+- [x] **AC2**: No executable line of the file pipes into `grep -q…`. The check is `[ -z "$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' plugins/soleur/test/vendor-bundle-coverage.test.sh | grep -vE '^[0-9]+:[[:space:]]*#')" ]`, which exits 0. Comment lines are excluded because the helper's comment names the forbidden shape. The `(^|[^|])` prefix is load-bearing: the drift guard's bare `PATTERN` also matches the `| grep` inside a logical `|| grep -qF`, which would false-flag the TS6 enrollment check and the converted `run:` predicate. Non-vacuity was measured on the pre-fix file: the check hits exactly lines 73, 91, 99, 115 and 116, and not 164.
 - [x] **AC3**: Both TS4 lefthook predicates route through the helper (P4). `grep -cE '^[[:space:]]*if glob_item_contains "\$LEFTHOOK" "\$prefix/(NOTICE|references/)"; then$' plugins/soleur/test/vendor-bundle-coverage.test.sh` → `2`.
 - [x] **AC4 (mutations, run once at /work, not shipped; results recorded in the PR body):** Apply each edit to the helper or suite, run the suite, confirm the stated outcome, then restore.
   - **M1**: helper body becomes `grep -E '^[[:space:]]+-[[:space:]]' "$1" | grep -qF -- "$2"`. Expect exit 1 with the TS7 "needle on line 1" row FAILing.
   - **M2**: helper body becomes `grep -qF -- "$2" "$1"` (item scoping dropped). Expect the TS7 decoy row to FAIL.
   - **H1**: the `awk` line-1 needle becomes a filler path. Expect the "needle on line 1" row to FAIL.
   - **H2**: the needle moves to the last line of `big` instead of line 1. Expect the row to stay PASS.
-  - **Measured at /work** (`env -i PATH=/usr/bin:/bin bash --noprofile --norc`, real grep): M1 RED 5/5 (`Passed: 22 / Failed: 1`, needle row); M2 decoy row RED; M3 needle row RED at 643 bytes; M4 (decoy row deleted) floor tripped at 22 < 23; H1 needle row RED; H2 GREEN 23/0; M5 (line ~99 re-inlined as a pipe) GREEN 23/0, the documented residual that AC2 catches. Fixed suite GREEN 10/10, 5 of them with SIGPIPE ignored as on CI.
+  - **Measured at /work** (`env -i PATH=/usr/bin:/bin bash --noprofile --norc`, real grep): M1 RED 5/5 (`Passed: 22 / Failed: 1`, needle row); M2 decoy row RED; M3 needle row RED at 643 bytes; M4 (decoy row deleted) floor tripped at 22 < 23; H1 needle row RED; H2 GREEN 23/0; M5 (the `references/` call site re-inlined as a pipe) GREEN 23/0, the documented residual that AC2 catches. Fixed suite GREEN 10/10, 5 of them with SIGPIPE ignored as on CI.
 - [ ] **AC5**: The PR body contains `Ref #7005` and neither `Closes #7005` nor `Fixes #7005`.
 - [ ] **AC6**: The diff touches only `plugins/soleur/test/vendor-bundle-coverage.test.sh`, plus the pipeline's own artifacts: `knowledge-base/project/plans/2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md`, `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/**`, and any generated `knowledge-base/INDEX.md`.
 
@@ -261,23 +265,53 @@ Test-only, single file. The changes, in file order:
 | M1 | Helper body reverted to `grep -E … "$1" \| grep -qF -- "$2"` | TS7 "needle on line 1" row RED. Measured 30/30 (plan) and 20/20 (plan-review, incl. SIGPIPE ignored), and deterministic because output exceeds pipe capacity plus one read |
 | M2 | Item scoping dropped (`grep -qF -- "$2" "$1"`) | TS7 decoy row RED |
 | M3 | Fixture filler loop shrunk (6000 → 10 lines) | TS7 "needle on line 1" row RED via the folded size floor (measured 643 bytes) |
-| M4 | Either TS7 row, or the whole block, deleted (guard's own dispatch) | `print_results 23` floor trips (22 or 21 ran < 23), exit 1 |
-| M5 | A TS4 call site re-inlines the pipe while the first stays compliant (e.g. line ~99 reverted, helper intact) | **Not reddened by TS7**, which tests the helper, not call sites. Caught only by AC2/AC3 at /work and review. AC2 also misses `grep --quiet`, `grep PATTERN -q` and a trailing-`\|` line continuation. Known residual: the class-wide lock is #7432 (linter) / #7005 (sweep), and enrollment is blocked by the guard's `\|\|` false positive (see Cut List) |
+| M4 | Any TS7/TS8 row, or a whole block, deleted (guard's own dispatch) | `print_results 31` floor trips (fewer than 31 ran), exit 1. Measured at review: 30 < 31 |
+| M5 | A TS4 call site re-inlines the pipe while the first stays compliant (e.g. the `references/` call site reverted, helper intact) | **Superseded at review: TS8 now reddens it** (pipe scan + call-site row, measured for `\| grep -F -q` and a `--quiet` trailing-pipe continuation). Original text: **Not reddened by TS7**, which tests the helper, not call sites. Caught only by AC2/AC3 at /work and review. AC2 also misses `grep --quiet`, `grep PATTERN -q` and a trailing-`\|` line continuation. Known residual: the class-wide lock is #7432 (linter) / #7005 (sweep), and enrollment is blocked by the guard's `\|\|` false positive (see Cut List) |
 
 **Harness rows.**
 
 | # | Edit to the SUITE or its input | Expected |
 |---|---|---|
 | H1 | `big` built without the needle (must-FAIL input) | "needle on line 1" row RED, which proves it is not constant-true. Executed at /work (AC4) |
-| H2 | Must-PASS non-canonical input: needle on the LAST line of `big` | Row stays GREEN. The contract permits any position. Executed at /work (AC4) |
+| H2 | Must-PASS non-canonical input: needle on the LAST line of `big` | The lookup row stays GREEN (the contract permits any position). **Since review, the separate after-needle size row goes RED on purpose**: a needle-last fixture no longer exercises the race, so it must not pass as the regression fixture |
 
 **Anchor.** Not applicable. The guard compares no stored value, hash or count against the thing it protects. The `print_results` floor is a developer-incremented anti-vacuity count, and M4 exercises it.
 
 ## Test Scenarios
 
 - Suite green on the real `lefthook.yml` (AC1). TS4 still PASSes for gdpr-gate and legal-generate on both the NOTICE and `references/` rows.
-- TS7 rows as in the Guard Contract. M1, M2, H1 and H2 run once at /work (AC4) and are not shipped as code.
+- TS7/TS8 rows as in the Guard Contract and `## Review Amendments`. M1-M5, H1 and H2 were run at /work and again at review (the review battery is recorded under `## Review Amendments`); the mutation drivers are not shipped as code.
 - Negative sanity, unchanged behaviour: TS6 still reports `incident` as correctly unenrolled.
+
+## Review Amendments (2026-09-23)
+
+A 10-seat review (`soleur:review`) found that the guard pinned proxies rather than the property:
+file size instead of the output left after the needle, review-time greps (AC2/AC3) instead of
+shipped rows, and a negative decoy row with no positive control. All findings were fixed inline
+in `plugins/soleur/test/vendor-bundle-coverage.test.sh`:
+
+- `glob_item_contains` returns **2** for a missing or unreadable file (`[[ -f && -r ]]` guard),
+  so a negative assertion can never read "unreadable" as "not covered".
+- TS7 measures the list-item bytes the producer still writes **after** the needle's line and
+  floors that at 262144, as its own row. File size alone was satisfied by de-listing the filler
+  or moving the needle last, which silently disarmed M1.
+- The decoy now carries the needle on a `run:` line **and** a commented-out glob, plus a real
+  list item as a positive control, plus a row pinning that the decoy mentions the needle twice.
+- New rows: the helper's rc-2 path, and **TS8**: a pipe scanner over this file's executable lines
+  (with its own scanner control) plus exact-line call-site rows for both TS4 lefthook predicates.
+  AC2/AC3 are now shipped rows.
+- An `assert_eq` instrument self-test (`_selftest`, ADR-193 shape) runs before any row.
+- The pre-source EXIT trap is `rm -rf "${fixture_dir:-}" || :`, so a failing first command can
+  never skip test-helpers' composed sandbox cleanup. The fixture dir goes through `assert_fixture_dir`.
+- Floor: `print_results 31`, derived from a green run.
+
+Review battery (sandbox copy, `env -i PATH=/usr/bin:/bin`, control GREEN 31/0, each mutation
+confirmed landed with `cmp`): M1 (pipe restored in the helper), M2 (item scoping dropped), M2b
+(`cat` instead of the list-item filter), an unanchored producer regex, M5 in two spellings, a
+de-listed filler, needle-last, decoy deleted, decoy needle replaced, decoy path wrong, H1, a
+deleted row, a blinded scanner, a removed rc-2 guard, and `assert_eq` forced to always pass: all
+RED. The uncovered axis is a neutered `print_results` in the shared helper, which only an
+out-of-process check can see.
 
 ## Domain Review
 
