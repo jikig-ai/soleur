@@ -4,13 +4,13 @@
 # carries a monthly spend limit, so an eval grid cannot drain the org balance production
 # draws on. Records and the mint procedure:
 # knowledge-base/engineering/operations/runbooks/anthropic-console-workspace-key.md.
-# Decision: ADR-243.
+# Decision: ADR-244.
 #
 # What Terraform does NOT check: that this key differs from the production key. That is
 # proven against LIVE Doppler by apps/web-platform/scripts/anthropic-key-distinctness.sh,
 # across every prd* config. Comparing here would need the production key declared as a
 # variable in this root, which writes it into the plan file on the runner and makes every
-# apply depend on prd_terraform inheriting it (against #8209 and #8614). ADR-243 records
+# apply depend on prd_terraform inheriting it (against #8209 and #8614). ADR-244 records
 # the ruling. `var.anthropic_api_key_ci` only has its shape validated (variables.tf).
 #
 # These are the only Terraform writers of the two slots. Neither ignores `value`, so a hand

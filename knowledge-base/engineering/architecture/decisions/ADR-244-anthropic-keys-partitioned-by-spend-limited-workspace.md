@@ -1,11 +1,11 @@
 ---
-title: "ADR-243: Anthropic keys are partitioned by blast radius into spend-limited Console workspaces"
+title: "ADR-244: Anthropic keys are partitioned by blast radius into spend-limited Console workspaces"
 status: active
 date: 2026-09-23
 issue: 8505
 ---
 
-# ADR-243: Anthropic keys are partitioned by blast radius into spend-limited Console workspaces
+# ADR-244: Anthropic keys are partitioned by blast radius into spend-limited Console workspaces
 
 ## Context
 

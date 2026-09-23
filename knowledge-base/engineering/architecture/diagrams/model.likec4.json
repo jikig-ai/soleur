@@ -177,7 +177,7 @@
 "external"
 ],
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "title": "Anthropic API",
 "kind": "system",
@@ -1862,7 +1862,7 @@
 "id": "1jcoidm"
 },
 "18oyepm": {
-"title": "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-243)",
+"title": "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244)",
 "technology": "HTTPS",
 "source": {
 "model": "github"
@@ -1873,7 +1873,7 @@
 "id": "18oyepm"
 },
 "1a83eau": {
-"title": "promptfoo eval grids on the soleur-ci-eval workspace key (Doppler ci; ADR-243)",
+"title": "promptfoo eval grids on the soleur-ci-eval workspace key (Doppler ci; ADR-244)",
 "technology": "HTTPS",
 "source": {
 "model": "platform.plugin.evalharness"
@@ -3830,7 +3830,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -6484,7 +6484,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-243)",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-244)",
 "points": [
 [
 4458,
@@ -8420,7 +8420,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -9708,7 +9708,7 @@
 "id": "fpaekm",
 "source": "platform.plugin",
 "target": "anthropic",
-"label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-243)",
+"label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-244)",
 "points": [
 [
 2580,
@@ -10095,7 +10095,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-243)",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-244)",
 "points": [
 [
 3835,
@@ -13806,7 +13806,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -17044,7 +17044,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-243)",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-244)",
 "points": [
 [
 5079,
@@ -21846,7 +21846,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -22649,7 +22649,7 @@
 "id": "1dih22u",
 "source": "platform.plugin.evalharness",
 "target": "anthropic",
-"label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-243)",
+"label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-244)",
 "points": [
 [
 6558,
@@ -25598,7 +25598,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -25663,7 +25663,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-243)",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-244)",
 "points": [
 [
 556,
@@ -25954,7 +25954,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -26554,7 +26554,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-243)",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-244)",
 "points": [
 [
 2335,
@@ -32234,7 +32234,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -33880,7 +33880,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -39502,7 +39502,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -47479,7 +47479,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-244, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -47541,7 +47541,7 @@
 "id": "1dih22u",
 "source": "platform.plugin.evalharness",
 "target": "anthropic",
-"label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-243)",
+"label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-244)",
 "points": [
 [
 178,

@@ -8,7 +8,7 @@ last_verified: 2026-09-23
 # Anthropic Console workspace key
 
 How a spend-limited Anthropic key is minted for one consumer class, and how it reaches its
-consumers. Decision: [ADR-243](../../architecture/decisions/ADR-243-anthropic-keys-partitioned-by-spend-limited-workspace.md).
+consumers. Decision: [ADR-244](../../architecture/decisions/ADR-244-anthropic-keys-partitioned-by-spend-limited-workspace.md).
 The Console is the only route: the Admin API cannot set a workspace spend limit, and there is no
 Anthropic Terraform provider. This page is the single source for the workspace's identifiers.
 
@@ -33,7 +33,7 @@ before the org mismatch was caught. It holds nothing and bills nothing.
 **Consumers of the repo secret**: `ci.yml`, `claude-code-review.yml`,
 `fix-constraints-stage-a.yml`, `scheduled-machinery-drain.yml` (dispatched by the production
 `cron-machinery-drain`), `test-pretooluse-hooks.yml`. Only the ones running
-`.github/actions/anthropic-preflight` soft-skip when the cap binds; see ADR-243.
+`.github/actions/anthropic-preflight` soft-skip when the cap binds; see ADR-244.
 
 ## Mint
 
@@ -95,7 +95,7 @@ bash apps/web-platform/scripts/anthropic-key-distinctness.sh   # must print DIST
 ```
 
 Terraform checks only the key's `sk-ant-` shape; distinctness from the production key is this
-script's job (ADR-243). A hand edit of Doppler `ci` or of the repo secret is drift; the next apply
+script's job (ADR-244). A hand edit of Doppler `ci` or of the repo secret is drift; the next apply
 reverts it. Both resources carry `prevent_destroy`: removing or renaming one needs a `moved {}` or
 `removed { lifecycle { destroy = false } }` block, or it deletes the CI key.
 
