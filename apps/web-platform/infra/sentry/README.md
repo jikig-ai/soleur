@@ -2,7 +2,7 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **32 `sentry_alert` rules** (32 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451. 30 are
+- **33 `sentry_alert` rules** (33 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505. 31 are
   fully Terraform-owned: `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint.
@@ -96,7 +96,8 @@ says 29 + 2 because #7989 ADDED a rule (`ops_email_delivery_failure`) rather tha
 migrating one — the only entry here whose +1 is a new rule, not a type change.
 (That was the count before #8451; #8442 then added `art17_erasure_incomplete`,
 and #8451 adopted the last two as frozen `sentry_alert`, so the root declares 32
-and 0. The current count is at the top of this file, pinned by T25.)
+and 0. #8505 then added `anthropic_credit_exhausted`, a new rule, taking it to 33. The current count
+is at the top of this file, pinned by T25.)
 Historical note, kept because this count has been wrong twice: this paragraph
 said **2** until 2026-09-06 (#7826) while line 5 of this same file
 

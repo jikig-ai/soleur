@@ -519,13 +519,18 @@ When the operator `ANTHROPIC_API_KEY` cannot do work, EVERY claude-eval cron
 no-ops at once. Before #5674 this was silent (green monitors, `status=completed`
 rows). Now two signals surface it:
 
-**Primary — the hourly canary `cron-anthropic-credit-probe`** (Sentry monitor
-`scheduled-anthropic-credit-probe`). It sends a 1-token ping on the operator key
-each hour and pages on the CLASSIFIED failure:
+**Primary — the hourly canary `cron-anthropic-credit-probe`** sends a 1-token ping
+on the operator key each hour. Since #8505 the page is the Sentry issue alert
+`anthropic-credit-exhausted` (`sentry_alert.anthropic_credit_exhausted`), which
+emails the operator; the probe's cron monitor turns RED too but is muted and routes
+to no workflow (#8630), so do not rely on it to page.
 
-- `op=anthropic-credit-exhausted` + monitor RED → **operator Anthropic credit is
-  zero.** Top up the balance at `console.anthropic.com → Billing`. The fleet
-  self-recovers on the next scheduled fire once credit is restored (no restart).
+- Sentry issue "Anthropic credit balance is too low — operator key exhausted"
+  (`feature=anthropic-credit`, `op=anthropic-credit-exhausted`, `source=cron:<name>`
+  or `source=email-triage`) → **operator Anthropic credit is zero.** Top up the
+  balance in the Console (Plans & Billing) of the org that owns the production key.
+  The fleet self-recovers on the next scheduled fire once credit is restored (no
+  restart). The alert re-pages at most once a day while exhaustion persists.
 - `op=anthropic-key-invalid` + monitor RED → **the operator key is invalid /
   revoked.** Rotate `ANTHROPIC_API_KEY` in Doppler (`prd`) and redeploy.
 - A transient (`429`/`500`/`529 overloaded`/network) does NOT page as
