@@ -81,3 +81,17 @@ Deepen-plan note on T-7: `g4_class2_body_ok` (`operator-script.test.sh`, the cla
 allows only `$prompt_text`/`$reply` expansions and `[[ -n/-z "$reply" ]]` tests in the ack body; a
 plain assignment `SOLEUR_OP_ACKED=tty-ack` is not an expansion, so T-7 is likely compatible, but the
 work phase must run Guard 4 after the edit to confirm.
+
+## Deepen-plan resolutions (2026-09-23)
+
+- **T-7 applied, not left to the operator.** `security-sentinel` independently raised the same
+  point as a security finding (a constant `tty-ack` would record approval for any future caller that
+  never acked). The plan now derives the value from `SOLEUR_OP_ACKED`, set by the ack; the helper
+  returns 4 without it (plan Phase 2.11).
+- **T-1 reinforced.** `security-sentinel` found that the hook sees only the leftmost match, so the
+  "dry-run, then write" chain the skills now teach would pass even with segment scoping. The plan
+  now evaluates every call (Phase 4.2a) and disables the read-only escape under a PTY wrapper or
+  `yes |` (Phase 4.2).
+- **T-2 reinforced.** The security review added more shapes to Guard 3 (variable path, `cd` to the
+  skill dir, heredoc piped to `bash`, newline tail, the `Monitor` tool), so the invocation-shape
+  battery grows rather than shrinks.

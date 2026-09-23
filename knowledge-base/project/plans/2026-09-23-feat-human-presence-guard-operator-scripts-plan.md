@@ -18,7 +18,7 @@ requires_cpo_signoff: true
 ## Enhancement Summary
 
 **Deepened on:** 2026-09-23 (headless, lean fan-out under the session's API rate budget)
-**Agents used:** `soleur:engineering:review:security-sentinel`,
+**Agents used:** `soleur:engineering:review:security-sentinel` (8 findings, all applied),
 `soleur:engineering:review:user-impact-reviewer`, one verify-the-negative Explore pass; plan-review
 already ran `architecture-strategist` and `code-simplicity-reviewer`. Gates run mechanically: 4.6
 (User-Brand Impact), 4.7 (Observability; `probe-verb-gate.sh` accepts the discoverability command),
@@ -39,6 +39,14 @@ exhaustive "run every agent" fan-out of Phase 5 was not run.
    new files), audit-sentry's control flow (inventory completes before the first PUT), the LIA edit
    (one bullet; Article 30 register unchanged), audit-sentry's missing `SCRIPT_DIR`, and `go.md`'s
    stale "Skill-tool-invokable directly" text.
+
+5. Defer-rule hardening (security-sentinel): every call in a command is evaluated, not only the
+   leftmost; no read-only escape under a PTY wrapper or `yes |`; unique-basename matching; the
+   reader escape is cancelled on pipe-to-shell; the rule fails closed on its own error; `Monitor`
+   registration (Phase 4.2–4.2d, Guard 3 M8–M12, H3–H4).
+6. Script-side hardening (security-sentinel): argv parsers can no longer swallow `--dry-run` as an
+   option value; consumers clear the library's inherited marker and functions before sourcing; the
+   WORM `tty-ack` value now requires the ack's in-process state (2.1, 2.1a, 2.11).
 
 ### New considerations discovered
 
@@ -87,7 +95,7 @@ Concretely:
 | FR1: gate the four scripts on `soleur_op_ack_or_die` | The four scripts do not source `operator-script.sh` today. Sourcing it adds them to the library's DISCOVERED consumer population in `plugins/soleur/test/operator-script.test.sh` (`g3_sourcing_scripts`, rooted at `plugins/soleur`), so Guards 3, 4, 5′ and 9 (`gack_check`) start scanning them. Guard 9's `DESTRUCTIVE_RE` matches the Doppler secret-write verb at `create.sh` (two writes ~100 lines after the prompt) and inside `flip.sh`'s `doppler_mirror()` — both fail its "ack within 15 comment-stripped lines above" window. | Phase 3 amends Guard 9: a consumer whose write sites are not window-covered must be registered in the behavioral arm table (Guard 2 below), which proves the same property by execution. Unregistered → RED. `DESTRUCTIVE_RE` widens to the Doppler delete verb, curl mutating methods and `audit_flag_flip_rpc` so the census sees these consumers' writes at all. |
 | FR1: "requires a real TTY" | `soleur_op_input_required` prints to **stdout**, calls `soleur_op_run_halt` (a ledger line in `bootstrap-runs.jsonl` beside the main script — gitignored, `.gitignore:61`) and exits 64; `soleur_op_aborted` exits **1** and prints "Nothing was created." The four scripts exit **0** on an operator "no" today. The library also sets `umask 077` at source time. | Exit-code contract change (abort 0 → 1) lands in each script header and SKILL.md exit table. `umask 077` is checked against every file each script writes (Phase 2 task). |
 | TR1: refused "before any network call" | Every script fetches `FLAGSMITH_MANAGEMENT_API_KEY` / the prd `SUPABASE_SERVICE_ROLE_KEY` from Doppler and GETs live state **before** today's prompt (the preview needs it). | An early precheck `[[ -t 0 ]] \|\| soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack` runs right after argv parsing when not in a read-only mode — before `command -v` checks, Doppler reads and curl. A no-TTY write run never pulls the prod write key into the process. The ack after the preview stays (it is what a person answers). |
-| FR6: "the WORM audit row records `approval_method=tty-ack`" | `public.flag_flip_audit` (migration `071_flag_flip_audit.sql`) has no such column; `audit_flag_flip(text,text,text,text,bool,bool,text)` has no such parameter. The table is WORM (UPDATE trigger raises). The audit DB target is Doppler `soleur/dev`. | Migration 140 (provisional) adds `approval_method text NULL CHECK (approval_method IS NULL OR approval_method IN ('tty-ack'))` and replaces the RPC with an 8-arg version whose last parameter defaults to NULL. The shared helper sends `p_approval_method: "tty-ack"` in every body. |
+| FR6: "the WORM audit row records `approval_method=tty-ack`" | `public.flag_flip_audit` (migration `071_flag_flip_audit.sql`) has no such column; `audit_flag_flip(text,text,text,text,bool,bool,text)` has no such parameter. The table is WORM (UPDATE trigger raises). The audit DB target is Doppler `soleur/dev`. | Migration 140 (provisional) adds `approval_method text NULL CHECK (approval_method IS NULL OR approval_method IN ('tty-ack'))` and replaces the RPC with an 8-arg version whose last parameter defaults to NULL. The shared helper sends `p_approval_method: "tty-ack"` only after the ack set `SOLEUR_OP_ACKED` in the same process, else returns 4 (Phase 2.11). |
 | FR7: derive the guard set as "scripts that mutate production" | A write-verb census (curl `-X POST/PUT/PATCH/DELETE`, Doppler `secrets set/delete/upload`, `gh secret/variable set`, `hcloud server create`, `terraform apply`, `audit_flag_flip_rpc`) over tracked non-test `*.sh` returns **49** files; ~14 run locally with no workflow invoking them, and **none of those 14 has any prompt** (e.g. `gdpr-override.sh`, `rotate-supabase-db-credential.sh`, `trigger.sh`). Several are agent-runnable by design (`trigger-cron`, `community`). | The #8486 class is a gate that claims human presence but does not prove it. The derived guard set is therefore (a) every script with a raw typed-yes prompt or confirm-skip flag (Guard 1 census) plus (b) every script that calls the ack (Guard 2 population). `audit-sentry-extra-text-references.sh --apply` joins (b) by decision (below). The ungated-writer census is recorded in the ADR as a residual and tracked in #8661, not guarded in step 1. |
 | D7 / brainstorm: "Claude Code, Grok, Codex and local Devin all refuse, because a tool subprocess has no TTY" | Measured here for Claude Code only: the Bash tool reports `stdin=notty stdout=notty`. Codex's unified exec and Devin's shell sessions can be PTY-backed; if an agent can allocate a PTY and write `yes\n` to it, the ack is satisfiable in that harness exactly like `script -qc`. Not measured. | Phase 5 measures `[[ -t 0 ]]` under each locally installed harness (`codex`, `grok`, `devin` are on PATH) and records measured/unmeasured per row in the ADR. A harness that can allocate a PTY is recorded as "speed bump only", not "refuses". |
 | ADR-236 K1 row: flag-set-role "stays model-invocable … `flip.sh --confirmed` exists for agent-driven use" | True today; false after this plan. The same rationale is pinned as a string in `plugins/soleur/test/components.test.ts` (`MUST_STAY_INVOCABLE`). | ADR-236 amended in this PR; `components.test.ts` reason strings updated. Both skills stay model-invocable: the agent still loads them, runs `--dry-run`, and prints the command. |
@@ -288,7 +296,17 @@ Then, for each of `delete.sh`, `create.sh`, `set-role.sh`, `flip.sh`:
 
 - 2.1 `source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"` **below** the xtrace refusal
   (Guard 5′ requires the refusal above the `source` line) and next to the existing
-  `audit-flag-flip.sh` source.
+  `audit-flag-flip.sh` source. Immediately before the `source` line: `unset _SOLEUR_OPERATOR_SCRIPT_LOADED
+  SOLEUR_OP_ACKED; unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted`. The
+  library's double-source guard trusts an inherited `_SOLEUR_OPERATOR_SCRIPT_LOADED=1`; with an
+  exported `BASH_FUNC_soleur_op_ack_or_die%%` it would return early and leave a no-op ack in place
+  (security finding 5). `BASH_ENV` can do the same and cannot be cleared from inside the script —
+  recorded in the ADR as hijack-class.
+- 2.1a Argv hardening so the hook's read-only escape and the script's own parse cannot disagree
+  (security finding 2): every option that takes a value (`flip.sh --target/--org/--control-org`,
+  `create.sh --description`) rejects a value beginning with `--` (exit 2); `flip.sh` rejects
+  `--control-org` without `--org`; `set-role.sh` rejects more than three arguments and a third
+  argument other than `--dry-run` (exit 2). These run in argv parsing, before the precheck.
 - 2.2 Early precheck immediately after argv parsing, before `command -v` checks and any Doppler or
   curl call: `if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required
   "destructive-write-ack(no-skip-variable-by-design)" ack; fi`. Every non-dry-run arm is gated,
@@ -313,7 +331,7 @@ Then, for each of `delete.sh`, `create.sh`, `set-role.sh`, `flip.sh`:
   overwrites of existing files, none via tmp+`mv`, none creating a new file. `umask` applies only to
   file creation, so modes are unchanged. Keep one test assertion (mode of each written file is
   unchanged after a pty `yes` run) so a future tmp+`mv` refactor cannot silently land 0600.
-- 2.7 WORM: no call-site change — the helper supplies `tty-ack` (2.11).
+- 2.7 WORM: no call-site change — the helper supplies `tty-ack` only when the ack has set `SOLEUR_OP_ACKED` (2.11).
 
 For `audit-sentry-extra-text-references.sh`:
 
@@ -321,8 +339,11 @@ For `audit-sentry-extra-text-references.sh`:
   script defines no `SCRIPT_DIR` today; add `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &&
   pwd)"` and source `"$SCRIPT_DIR/../../../plugins/soleur/scripts/lib/operator-script.sh"`. Its
   `-h|--help)` arm already exits 0 during argv parsing, before the precheck.
-- 2.9 After argv parsing: `if (( APPLY )); then [[ -t 0 ]] || soleur_op_input_required
-  "destructive-write-ack(no-skip-variable-by-design)" ack; fi`.
+- 2.9 After argv parsing and before the credential/region resolution block: `if (( APPLY )); then
+  [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack;
+  fi`. For this script P1 holds as "before any **network** call", not "before any credential
+  fetch": the Sentry token arrives in the caller's environment (`doppler run … --`), so the agent
+  already holds it when the precheck runs (security finding 7; recorded in the ADR).
 - 2.10 After the inventory is printed and before the first PUT: `if (( APPLY && total_matches > 0 ));
   then soleur_op_ack_or_die "Rewrite ${total_matches} Sentry references in production now? Type
   'yes': "; fi`. Read the script's control flow at implementation time to confirm the inventory
@@ -331,10 +352,15 @@ For `audit-sentry-extra-text-references.sh`:
 
 `plugins/soleur/scripts/audit-flag-flip.sh`:
 
-- 2.11 The helper always sends `p_approval_method: "tty-ack"` (a literal in the `jq -nc` body; no
-  new positional argument). Only the four guarded scripts call it, each after the ack; the migration's
-  CHECK constrains the column; a caller that bypasses the helper records NULL. (Plan review,
-  simplicity finding 1, mechanical — applied.)
+- 2.11 **Revised at deepen time (security finding 6, converging with architecture taste T-7):**
+  `soleur_op_ack_or_die` sets the plain, non-exported shell variable `SOLEUR_OP_ACKED=tty-ack` after
+  a `yes` (an assignment, which `g4_class2_body_ok` does not forbid — re-run Guard 4 to confirm), and
+  the library `unset`s it at load. The helper sends `p_approval_method: "tty-ack"` only when
+  `${SOLEUR_OP_ACKED:-}` is `tty-ack`, and otherwise returns 4 with "FATAL: audit append before the
+  ack" — so the WORM value means "the ack returned in this process", and an audit append placed
+  before the ack fails closed before any write. No new positional argument. This supersedes the
+  plan-review version (helper sends a constant literal), which would record `tty-ack` for any future
+  caller that never acked.
 
 ### Phase 3 — Guard 9 amendment (`operator-script.test.sh`)
 
@@ -366,12 +392,38 @@ For `audit-sentry-extra-text-references.sh`:
 - 4.2 Two escapes, both segment-scoped:
   - Reader escape: the matched segment's first word is a reader verb (`cat`, `less`, `head`, `tail`,
     `grep`, `rg`, `git`, `wc`, `ls`, `stat`, `file`, `diff`, `sed -n`, `shellcheck`, `bash -n`) →
-    allow. The list lives beside the rule; a new reader is an ALLOW-side false positive
-    (fail-closed direction).
+    allow — **cancelled** when the command pipes into `sh`, `bash`, `zsh`, `script` or `expect`
+    (`cat <<EOF | bash` runs the heredoc).
   - Read-only-mode escape against the captured tail (`BASH_REMATCH`), not the whole command. Flag
-    scripts: `--dry-run` or `--help`/`-h` in the tail escapes. audit-sentry: the rule matches only
-    when `--apply` is in the tail. provision-hetzner: no escape.
+    scripts: `--dry-run` in the tail escapes (no `-h`/`--help` escape: none of the four flag scripts
+    implements help, so it would only ever mislabel a write). audit-sentry: the call counts as a
+    write only when `--apply` is in the tail. provision-hetzner: no escape. **No read-only escape at
+    all when the command contains a PTY wrapper (`script`, `unbuffer`, `expect`, `pty.spawn`) or a
+    `yes |` pipe** — a dry run never needs a TTY, and the PTY route is the case this rule exists for
+    (deepen-plan, security finding 2).
   The existing three rules keep whole-command matching; that pre-existing escape is #8662.
+- 4.2a **Every call, not the first (security finding 1).** A single `[[ =~ ]]` sees only the
+  leftmost match, so `bash …/flip.sh f prd on --dry-run && yes | script -qc "bash …/flip.sh f prd on"`
+  — the dry-run-then-write order the skills now teach — would be allowed. Loop: match, record the
+  verdict for that call, cut the command after the match, match again; defer if ANY call is in write
+  mode. Tail terminators are `;`, `&`, `|`, `)`, newline, both quote characters, `#`, backtick and
+  `$(` (a newline-separated `echo --dry-run` must not escape).
+- 4.2b **Path shapes (security finding 4).** Match the unique basenames `flip.sh`, `set-role.sh`,
+  `provision-hetzner.sh`, `audit-sentry-extra-text-references.sh` anywhere in the command when
+  preceded by `/`, whitespace, a quote or a command boundary (so `inngest-cutover-flip.sh` does not
+  match — `-` precedes `flip.sh`), which covers `S=…; bash $S/flip.sh` and `cd …/flag-set-role &&
+  bash scripts/flip.sh`. The generic basenames `create.sh`/`delete.sh` keep the dir-qualified suffix
+  plus the `cd …/flag-{create,delete}[/scripts] && …` alternation.
+- 4.2c **Fail closed on the hook's own failure (security finding 3).** Claude Code runs the command
+  when a hook exits non-zero (other than 2) or times out. Before the ERE, a fixed-string prefilter
+  (`[[ $CMD == *flip.sh* || $CMD == *set-role.sh* || … ]]`) skips the rule for the common case; after
+  a prefilter hit, copy the captures immediately (`local -a m=("${BASH_REMATCH[@]}")`, read as
+  `${m[n]:-}` under `set -u`), evaluate the rule inside a function whose failure calls
+  `deny_self_fault`, and arm an `EXIT` trap that prints the deny envelope if no decision was printed.
+- 4.2d **Register for `Monitor` too.** `.claude/settings.json` registers `prod-write-defer-gate.sh`
+  for `Bash` only; a `Monitor` matcher already exists (for `monitor-supersede-guard.sh`). Add the
+  defer gate to the `Monitor` matcher, after confirming the Monitor tool's hook payload carries the
+  command where `hook_parse_input` reads it (if it does not, record the gap in the ADR instead).
 - 4.3 Header: document the new rule and why it skips the two-week dry-run expansion gate: after this
   PR no legitimate agent invocation of these scripts exists in write mode (the script refuses it at
   exit 64), so a false-positive defer costs nothing a correct run would have produced.
@@ -390,9 +442,13 @@ For `audit-sentry-extra-text-references.sh`:
   stdin=notty'`). Only a person can type the `!` prefix, so in a headless run this row is recorded
   UNMEASURED and the SKILL.md keeps "use your own terminal". Budget disclosure: ≤ 6 model calls
   total.
-- 5.2 Any harness that can obtain a PTY is recorded in the ADR as "TTY ack is a speed bump in this
-  harness (agent can answer the prompt)", not "refuses". Unrunnable harnesses are recorded as
-  UNMEASURED, never as covered.
+- 5.1a Also probe `( : </dev/tty ) 2>/dev/null && echo devtty=reachable || echo devtty=unreachable`
+  in each harness (security finding 8): a subprocess that inherits the controlling terminal can run
+  `… </dev/tty`, and the prompt then competes with the harness UI for the operator's keystrokes.
+  Claude Code measured 2026-09-23: `devtty=unreachable`.
+- 5.2 Any harness that can obtain a PTY, or reach `/dev/tty`, is recorded in the ADR as "TTY ack is a
+  speed bump in this harness", not "refuses". Unrunnable harnesses are recorded as UNMEASURED, never
+  as covered.
 
 ### Phase 6 — ADR, ADR-236 amendment, C4
 
@@ -456,10 +512,13 @@ See `## Architecture Decision (ADR/C4)`.
   8-arg `DEFAULT NULL` one exists makes every 7-key call ambiguous ("function … is not unique") and
   every flag write exit 4 (plan review, architecture finding 2, mechanical — applied). The migration
   test asserts this order in the `.down.sql` and that only the last parameter has a default.
-  **Rollback order (user-impact finding 2):** the helper change (always sending
+  **Rollback order (user-impact finding 2):** the helper change (sending
   `p_approval_method`) must be reverted, and that revert must reach the operator's installed plugin
   copy, BEFORE `.down.sql` runs — otherwise every new-helper call hits a function that no longer
   accepts the key and exits 4 before any write. The `.down.sql` header and the ADR state this order.
+- 8.1b Up order: `DROP FUNCTION public.audit_flag_flip(text,text,text,text,bool,bool,text)`, then
+  a plain `CREATE FUNCTION` for the 8-arg signature — never `CREATE OR REPLACE` (it cannot change a
+  signature and would leave both overloads). The migration test asserts both.
 - 8.1a Precedent (deepen-plan 4.4): `137_byok_cap_breach_audit_row.sql` is the same shape — inside
   `BEGIN; … COMMIT;`, `ALTER TABLE <audit table> ADD COLUMN …`, `DROP FUNCTION IF EXISTS <old
   signature>`, `CREATE FUNCTION … SECURITY DEFINER SET search_path = public, pg_temp`, then
@@ -502,7 +561,9 @@ See `## Architecture Decision (ADR/C4)`.
 - `plugins/soleur/test/flag-detach-shared.test.sh`, `plugins/soleur/test/flag-org-scoping-pr2.test.sh`
   (drive writes through `script -qec` with `yes` on the pty instead of `--confirmed`; add one
   `--confirmed` → exit 2 case)
-- `plugins/soleur/test/audit-flag-flip.test.sh` (body carries `p_approval_method: "tty-ack"`)
+- `plugins/soleur/test/audit-flag-flip.test.sh` (with `SOLEUR_OP_ACKED=tty-ack` the body carries `p_approval_method: "tty-ack"`; unset → return 4, no curl call)
+- `plugins/soleur/scripts/lib/operator-script.sh` (`soleur_op_ack_or_die` sets `SOLEUR_OP_ACKED=tty-ack` after `yes`; `unset SOLEUR_OP_ACKED` at load)
+- `.claude/settings.json` (register the defer gate for the `Monitor` matcher, Phase 4.2d)
 - `plugins/soleur/test/components.test.ts`
 - `.claude/hooks/prod-write-defer-gate.sh`, `.claude/hooks/prod-write-defer-gate.test.sh`,
   `.claude/hooks/README.md`
@@ -606,7 +667,8 @@ the real worktree is unchanged after the run.
 | M2 | Delete `soleur_op_ack_or_die` from `gate_or_confirm` in `flip.sh` (precheck kept) | RED (pty+`no` run shows mutating calls) |
 | M3 | Move the ack in `delete.sh` from before the WORM append to after the first Flagsmith DELETE (REORDER row: the ack still runs, but after a write) | RED (pty+`no` run logs one mutating call before exit 1) |
 | M4 | Second member after a compliant first: add an ack-calling script under `apps/web-platform/scripts/` with no arm-table row | RED (set identity) |
-| M5 | Precondition holds, property fails: `set-role.sh` keeps both checks but adds `ACK=${SOLEUR_ACK:-}` / `[[ -n $ACK ]] && skip` before them | RED (no-TTY run with `SOLEUR_ACK=yes` in env reaches mutating calls; the arm table sets every `SOLEUR_*`/`*_ACK*` env var the script mentions) |
+| M5 | Precondition holds, property fails: `set-role.sh` keeps both checks but adds `ACK=${SOLEUR_ACK:-}` / `[[ -n $ACK ]] && skip` before them | RED (no-TTY run with `SOLEUR_ACK=yes` in env reaches mutating calls; the arm table sets every `SOLEUR_*`/`_SOLEUR_*`/`*_ACK*` env var the script or library mentions, plus an exported `BASH_FUNC_soleur_op_ack_or_die%%` no-op and `_SOLEUR_OPERATOR_SCRIPT_LOADED=1`) |
+| M5b | Move a flag script's WORM audit append above its ack (REORDER row for the approval value) | RED (pty+`no` run exits 4 at the helper, not 1; the helper refuses an append without `SOLEUR_OP_ACKED`) |
 | M6 | Own dispatch: arm table empty | RED ("0 arms run") |
 | M7 | Change one ack prompt string so no arm reaches it (e.g. put it on an arm the table lacks) | RED (coverage anchor: prompt never observed) |
 
@@ -647,10 +709,19 @@ bash <path> <argv>`, `bash -c '… bash <path> <argv>'`, `script -qec "bash <pat
 | M5 | audit-sentry rule loses its `--apply` requirement (defers default inventory) | RED (readonly row must ALLOW) |
 | M6 | Own dispatch: arm table unreadable | RED (the test fails closed, it does not report 0 cases) |
 | M7 | Restrict the ERE to interpreter-prefixed forms only (the first draft's shape) | RED on `script -qec "…/flip.sh f prd on"` and on bare `…/flip.sh f prd on` (must DEFER) |
+| M8 | Second call after a compliant first: evaluate only the leftmost match (revert 4.2a) | RED on `bash …/flip.sh f prd on --dry-run && yes \| script -qc "bash …/flip.sh f prd on"` (must DEFER) |
+| M9 | Drop newline from the tail terminators | RED on `…/flip.sh f prd on` + newline + `echo --dry-run` (must DEFER) |
+| M10 | Keep the read-only escape when a PTY wrapper is present (revert the 4.2 PTY clause) | RED on `script -qc "bash …/set-role.sh u prd x --dry-run"` (must DEFER) |
+| M11 | Remove the pipe-to-shell cancellation of the reader escape | RED on `cat <<EOF \| bash` whose body calls `…/flip.sh f prd on` (must DEFER) |
+| M12 | Inject a failure into the rule's evaluation function (e.g. `false` after the prefilter) | RED unless the verdict is DENY (fail closed, 4.2c) |
 
 **Harness rows.** H1 (suite edit): assert on `{}` instead of the defer envelope → pristine tree goes
 RED. H2 (must-PASS): `cat plugins/soleur/skills/flag-set-role/scripts/flip.sh`, `git log --
-…/flip.sh` and `grep -n ack …/delete.sh` → ALLOW (reader escape).
+…/flip.sh`, `grep -n ack …/delete.sh` and `bash apps/web-platform/infra/inngest-cutover-flip.sh`
+→ ALLOW. H3 (escape/parser agreement, security finding 2): every ALLOW row for a flag script is
+also run through Guard 2's harness on a pty answered `yes`; it must make zero mutating calls. An
+escape the hook grants must be a mode the script itself treats as read-only. H4: a 1 MB command
+string (heredoc body) is decided within the hook's timeout.
 
 **Anchor.** The ERE and the arm table live in different files (`.claude/hooks/` vs
 `plugins/soleur/test/fixtures/`); the grep-derived population is the third leg, owned by neither.
@@ -705,7 +776,10 @@ hijacked-agent resistance needs credential custody." Status `accepted` for step 
   row); the Flagsmith and Supabase dashboards via shared browser cookies; a blind FIDO2 touch
   (step 2); the ungated local prod-writer census (#8661); a defer-rule path miss for a basename-only
   invocation whose `cd` happened in an earlier Bash call; the existing rules' whole-command read-only
-  escape (#8662). Full closure: agents on a separate OS user.
+  escape (#8662); an exported `BASH_ENV` or `BASH_FUNC_*` environment (hijack-class; the consumers
+  clear the library's marker and functions before sourcing, but `BASH_ENV` runs before the script);
+  for `audit-sentry`, the agent already holds the Sentry token from the caller's environment when the
+  precheck runs. Full closure: agents on a separate OS user.
 - **Coverage notes (plan review, architecture findings 7–8):** every refused agent attempt appends a
   `run_halt` line to `bootstrap-runs.jsonl` beside the script (the plugin install directory for the
   skills, `apps/web-platform/scripts/` for audit-sentry) — a ledger designed for ADR-228 generated
@@ -857,9 +931,11 @@ review (TR5).
 - [ ] AC4 — Each `readonly` row exits 0 without a TTY with zero mutating stub calls.
 - [ ] AC5 — Pty `no` → exit 1, zero mutating calls; pty `yes` → ≥ 1 mutating call and the audit body
       carries `"p_approval_method":"tty-ack"` (flag scripts). Every ack prompt string is observed.
-- [ ] AC6 — Guard 3: every arm-table row × eight invocation shapes (including `script -qec "…"`,
-      `yes | script -qc …`, bare path and `cd … && ./<basename>`) gives DEFER (write) / ALLOW
-      (readonly); `bash …/delete.sh f; echo --dry-run` DEFERs; `cat …/flip.sh` ALLOWs.
+- [ ] AC6 — Guard 3: every arm-table row × every invocation shape (including `script -qec "…"`,
+      `yes | script -qc …`, bare path, `$S/flip.sh`, `cd …/flag-set-role && bash scripts/flip.sh`,
+      `cat <<EOF | bash`, and a dry-run call chained before a write call) gives DEFER (write) /
+      ALLOW (readonly); `bash …/delete.sh f; echo --dry-run` and the newline-tail form DEFER;
+      `cat …/flip.sh` and `bash …/inngest-cutover-flip.sh` ALLOW; rows M8–M12 and H3–H4 pass.
 - [ ] AC7 — Guard 9 amended; `bash plugins/soleur/test/operator-script.test.sh` green, including
       Guard 4 rows M1–M5 and H1–H2.
 - [ ] AC8 — `git grep -nF -- '--confirmed' -- 'plugins/soleur/skills/*' '.claude/*' 'plugins/soleur/commands/*'`
@@ -935,7 +1011,7 @@ strong-model consult on the riskiest phase, Guard 4) and
 Applied (mechanical): defer ERE catches bare-path, PTY-wrapper and `cd && ./` shapes, with a reader
 escape (Phase 4.1–4.2, Guard 3 M7, AC6); down-migration order (8.1); deploy ordering answered (8.2);
 Guard 1 exclusions aligned with Guard 2 and measured before the registry freezes; helper sends a
-`tty-ack` literal instead of a new positional argument (2.11); Guard 4's hand-kept site count
+`tty-ack` value instead of a new positional argument (2.11; revised at deepen time to require the ack's `SOLEUR_OP_ACKED` state); Guard 4's hand-kept site count
 replaced by a fixture row. Pre-existing whole-command escape filed as #8662.
 
 Surfaced, not applied (taste): T-1 … T-9 in

@@ -38,11 +38,19 @@ lane: cross-domain
     8-arg RPC with `p_approval_method DEFAULT NULL`; `SECURITY DEFINER SET search_path = public,
     pg_temp`; REVOKE/GRANT). Down order: drop the 8-arg function, recreate the 7-arg one, drop the
     column.
-  - [ ] 2.1.2 `plugins/soleur/scripts/audit-flag-flip.sh` sends `p_approval_method: "tty-ack"`;
-    update `audit-flag-flip.test.sh`.
+  - [ ] 2.1.2 `operator-script.sh`: `soleur_op_ack_or_die` sets non-exported
+    `SOLEUR_OP_ACKED=tty-ack` after `yes`; `unset SOLEUR_OP_ACKED` at load; re-run Guard 4
+    (`g4_class2_body_ok`). `audit-flag-flip.sh` sends `p_approval_method: "tty-ack"` only when it is
+    set, else returns 4; update `audit-flag-flip.test.sh`. Migration up order: drop 7-arg, plain
+    `CREATE FUNCTION` 8-arg.
   - [ ] 2.1.3 Guard 9 amendment in `operator-script.test.sh` (arm-table fallback; widened regex).
 - [ ] 2.2 Flag scripts (`delete.sh`, `create.sh`, `set-role.sh`, `flip.sh`)
-  - [ ] 2.2.1 Source the library below the xtrace refusal.
+  - [ ] 2.2.1 Source the library below the xtrace refusal, preceded by `unset
+    _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED; unset -f soleur_op_ack_or_die
+    soleur_op_input_required soleur_op_aborted`.
+  - [ ] 2.2.1a Argv hardening: value-taking options reject values starting with `--`; `flip.sh`
+    rejects `--control-org` without `--org`; `set-role.sh` rejects >3 args or a 3rd arg other than
+    `--dry-run` (all exit 2).
   - [ ] 2.2.2 Early no-TTY precheck right after argv parsing (write mode only).
   - [ ] 2.2.3 Replace typed-yes with `soleur_op_ack_or_die` (distinct prompt per site).
   - [ ] 2.2.4 `flip.sh`: single `gate_or_confirm`; remove `--confirmed`, reject it with exit 2 and an
@@ -54,11 +62,15 @@ lane: cross-domain
   inventory and before the first PUT (skip on zero matches).
 - [ ] 2.4 Migrate `flag-detach-shared.test.sh` and `flag-org-scoping-pr2.test.sh` from `--confirmed`
   to pty-driven `yes`; add a `--confirmed` → exit 2 case.
-- [ ] 2.5 Defer-gate rule `prod-write-defer-operator-ack-script`: path suffix matched in any token
-  position (bare path, interpreter, `script -qec`/`unbuffer`/`expect` wrappers, `cd … && ./x.sh`),
-  reader-verb escape, segment-scoped read-only escape; header and `.claude/hooks/README.md` notes.
-- [ ] 2.6 Per-harness `[[ -t 0 ]]` measurement (Claude Code measured; codex/grok/devin, ≤ 6 model
-  calls; unrunnable → UNMEASURED).
+- [ ] 2.5 Defer-gate rule `prod-write-defer-operator-ack-script`: unique basenames matched anywhere
+  (dir-qualified for `create.sh`/`delete.sh`), every call evaluated (defer if any is a write), tail
+  terminators incl. newline/quotes/`#`/backtick/`$(`; reader escape cancelled on pipe-to-shell;
+  `--dry-run`-only escape, none under a PTY wrapper or `yes |`; fixed-string prefilter, copied
+  captures, fail-closed function + EXIT trap; register for `Monitor` in `.claude/settings.json`;
+  README "Starter manifest" → 4 entries.
+- [ ] 2.6 Per-harness `[[ -t 0 ]]` and `/dev/tty` reachability measurement (Claude Code measured:
+  `stdin=notty`, `devtty=unreachable`; codex/grok/devin ≤ 6 model calls; `!` prefix and unrunnable
+  harnesses → UNMEASURED).
 - [ ] 2.7 ADR-245 (per-harness table, residual risks, step-2 design, `tty-ack` meaning, census and
   tracking issue); amend ADR-236.
 - [ ] 2.8 C4: add `flagsmith` element and edges in `model.c4`; include in the `context` view.
