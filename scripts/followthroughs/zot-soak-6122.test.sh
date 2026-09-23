@@ -93,8 +93,15 @@ STUB
 # resolution, so it cannot observe a GH_REPO hijack directly — argv is the witness that the
 # soak does not depend on that resolution at all.
 printf '%s\n' "$*" >> "$STUB_GH_ARGV"
-if [[ "$STUB_GH_STATE" == "__UNREADABLE__" ]]; then exit 1; fi
-printf '{"state":"%s","stateReason":"%s"}\n' "$STUB_GH_STATE" "$STUB_GH_REASON"
+# PER-ISSUE ANSWERS (#8651). The soak now consults TWO blockers, and a stub that answers the
+# same state for both cannot drive one arm while holding the other settled. Default the web
+# blocker to the inngest one so every pre-existing row keeps its exact meaning.
+_state="$STUB_GH_STATE"; _reason="$STUB_GH_REASON"
+case " $* " in
+  *" 8651 "*) [[ -n "${STUB_GH_STATE_WEB:-}" ]] && { _state="$STUB_GH_STATE_WEB"; _reason="${STUB_GH_REASON_WEB:-}"; } ;;
+esac
+if [[ "$_state" == "__UNREADABLE__" ]]; then exit 1; fi
+printf '{"state":"%s","stateReason":"%s"}\n' "$_state" "$_reason"
 STUB
   chmod 0755 "$dir/curl" "$dir/gh"
 }
@@ -112,6 +119,9 @@ run_soak() {
   # which the fixed yes/old fixtures cannot express. SOAK_UNDER_TEST lets a case run a MUTATED
   # copy of the soak (the in-suite mutation rows below) through the same harness.
   local counts_spec="$1" gh_state="$2" http_code="${3:-200}" fail_url_substr="${4:-}" inngest_fixed="${5:-no}" gh_reason="${6:-COMPLETED}" fixture_body="${7:-}"
+  # `web_state`/`web_reason` (8th/9th, #8651): the SECOND blocker arm. Both default to the
+  # inngest blocker's values, so every row written before #8651 keeps its exact meaning.
+  local web_state="${8:-}" web_reason="${9:-}"
   local src="${SOAK_UNDER_TEST:-$SOAK}"
   local d out rc soak="$src"
   d="$(mktemp -d)"
@@ -166,6 +176,7 @@ OLD
   : > "$GH_ARGV_SINK"; : > "$URL_SINK"; : > "$UNMATCHED_SINK"
   out="$(PATH="$d:$PATH" SENTRY_ACTIONS_RO_TOKEN=stub GH_TOKEN=stub \
         STUB_GH_STATE="$gh_state" STUB_GH_REASON="$gh_reason" STUB_GH_ARGV="$GH_ARGV_SINK" \
+        STUB_GH_STATE_WEB="$web_state" STUB_GH_REASON_WEB="$web_reason" \
         STUB_URL_LOG="$URL_SINK" STUB_UNMATCHED="$UNMATCHED_SINK" \
         ZOT_SOAK_START="${SOAK_START_OVERRIDE:-2026-07-01T00:00:00}" bash "$soak" 2>&1)"; rc=$?
   rm -rf "$d"
@@ -213,6 +224,55 @@ if [[ "$rc" == "0" && "$out" == PASS* ]]; then
   pass "criteria hold + #6500 CLOSED -> exit 0 PASS"
 else
   fail "healthy+closed must exit 0 PASS; got rc=$rc out=$out"
+fi
+
+# ── #8651: the WEB-HOST blocker arm. Four rows, because a blocker owes both directions:
+#    it must be able to REFUSE (3a/3b/3c) and to be SATISFIED (3d). An arm that only ever
+#    refuses is indistinguishable from one wired shut, and the PASS row above cannot tell
+#    them apart — with the stub defaulting the web state to the inngest one, row 3 would stay
+#    green even if this arm hard-failed on OPEN only.
+
+# 3a. The inngest blocker is settled but a fresh WEB boot is dark: exit 1, and the message must
+#     name the WEB arm, not the inngest one (they fail for different reasons and the operator
+#     needs to know which host is unfixed).
+r="$(run_soak "$HEALTHY" CLOSED 200 "" yes COMPLETED "" OPEN)"
+rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" == "1" && "$out" == *"FAIL(blocked-web)"* ]]; then
+  pass "#8651 3a: #6500 settled + #8651 OPEN -> exit 1 FAIL(blocked-web)"
+else
+  fail "#8651 3a: web-blocker-open must exit 1 with FAIL(blocked-web); got rc=$rc out=$out"
+fi
+
+# 3b. CLOSED is not consent on this arm either. A not-planned close is the realistic path,
+#     because autonomous triage operates over this backlog.
+r="$(run_soak "$HEALTHY" CLOSED 200 "" yes COMPLETED "" CLOSED NOT_PLANNED)"
+rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" == "1" && "$out" == *"web-blocker-closed-not-completed"* ]]; then
+  pass "#8651 3b: #8651 CLOSED as NOT_PLANNED -> exit 1 (closure reason is not consent)"
+else
+  fail "#8651 3b: not-planned close must exit 1 web-blocker-closed-not-completed; got rc=$rc out=$out"
+fi
+
+# 3c. Fail SAFE on an unreadable web state: TRANSIENT (2), never 0. "Could not measure" must
+#     never read as "the measurement is false" on the arm guarding an irreversible act.
+r="$(run_soak "$HEALTHY" CLOSED 200 "" yes COMPLETED "" __UNREADABLE__)"
+rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" == "2" && "$out" == *"cannot read #8651 state"* ]]; then
+  pass "#8651 3c: unreadable web-blocker state -> exit 2 TRANSIENT (fails safe)"
+else
+  fail "#8651 3c: unreadable web state must exit 2 TRANSIENT; got rc=$rc out=$out"
+fi
+
+# 3d. POSITIVE CONTROL — the arm must be SATISFIABLE. Both blockers CLOSED as COMPLETED, stated
+#     explicitly rather than inherited from the default, so this row still means something if
+#     the stub's defaulting ever changes. Without it, an arm wired to refuse unconditionally
+#     would pass 3a-3c and nothing would notice.
+r="$(run_soak "$HEALTHY" CLOSED 200 "" yes COMPLETED "" CLOSED COMPLETED)"
+rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" == "0" && "$out" == PASS* ]]; then
+  pass "#8651 3d: both blockers CLOSED as COMPLETED -> exit 0 PASS (arm is satisfiable)"
+else
+  fail "#8651 3d: both-closed must exit 0 PASS; got rc=$rc out=$out"
 fi
 
 # 4. A real fallback still FAILs, and the per-signal breakdown still prints (the arm the
@@ -514,7 +574,8 @@ fi
 # Assertion floor: a deleted row must red. Literal adjacent to its `if` (guard-vacuity-floor).
 # Raised 30 -> 32 in the SAME edit that added the two rows above (a floor left below the count it
 # measures is slack, and slack in a floor is how many rows can be deleted before it notices).
-SOAK_MIN_PASSES=32
+# Raised 32 -> 36 in the SAME edit that added the four #8651 web-blocker rows (3a-3d).
+SOAK_MIN_PASSES=36
 if [[ "$passes" -lt $SOAK_MIN_PASSES ]]; then
   printf 'FATAL: only %s passing assertions ran, expected at least %s — a row was deleted\n' "$passes" "$SOAK_MIN_PASSES" >&2
   exit 1
