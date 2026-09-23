@@ -250,7 +250,14 @@ def project_tf:
 # remedy is "re-run the apply", which is wrong for exactly this case. Instead,
 # scripts/sentry-alert-live-fidelity.sh classifies a MANAGED name found out of
 # scope as `MANAGED RULE GAINED EXCLUDED TRIGGER` and says an apply is not a
-# repair. Changing either predicate here means changing both.
+# repair — on the DAILY job; on the apply job the reference is projected from the
+# plan, where a refreshed legacy trigger has already taken the rule out of
+# `tf_in_scope`, so the same live state lands on the census's generic arm instead.
+# FOUR sites spell this predicate, not two: `in_scope` and `tf_in_scope` here, plus
+# `def excl_type` and `$INSCOPE` in scripts/sentry-alert-live-fidelity.sh. Only the
+# SET (`def excluded`) is shared — both the probe and its suite lift that one line
+# verbatim and refuse if the lift fails. Changing any of these predicates means
+# changing all four.
 def in_scope:
   [ .triggers.conditions[]?.type ] as $t
   | (excluded | any(. as $e | $t | index($e))) | not;

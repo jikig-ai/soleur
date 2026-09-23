@@ -50,7 +50,7 @@ provider release. This PR does not touch the two frozen rules (`auth_per_user_lo
 
 | # | Item | Files |
 |---|---|---|
-| a | A Terraform-managed native `sentry_alert` that gains an excluded trigger Sentry-side (e.g. Seer adding `seer_activity_trigger`) is misreported as `DELETED or RENAMED`, with an "an apply can recreate" remedy. That remedy is wrong. The census half also misfiles it by counting the rule as a "registered Sentry default". Add a distinct finding class. | `scripts/sentry-alert-live-fidelity.sh`, `tests/scripts/lib/sentry-alert-projection.jq` (comment only), `.github/workflows/scheduled-sentry-alert-drift.yml` (remedy bullet), `tests/scripts/test-sentry-alert-live-fidelity.sh` (new rows) |
+| a | A Terraform-managed native `sentry_alert` that gains an excluded trigger Sentry-side (Sentry CAN add one to an existing workflow; #8267 is the adjacent case, where Seer CREATED a workflow carrying one) is misreported as `DELETED or RENAMED`, with an "an apply can recreate" remedy. That remedy is wrong. The census half also misfiles it by counting the rule as a "registered Sentry default". Add a distinct finding class. | `scripts/sentry-alert-live-fidelity.sh`, `tests/scripts/lib/sentry-alert-projection.jq` (comment only), `.github/workflows/scheduled-sentry-alert-drift.yml` (remedy bullet), `tests/scripts/test-sentry-alert-live-fidelity.sh` (new rows) |
 | b | The fidelity suite hardcodes `length == 31` (F13) and `comparing 28` (F12). Derive both from the capture. | `tests/scripts/test-sentry-alert-live-fidelity.sh` |
 | c | The one-shot generator's own `EXCLUDE` set predates `seer_activity_trigger`. Add a comment saying it is frozen to the 2026-09-04 capture. | `knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-generate-alert-blocks.py` |
 | d | The op-contract test's type cast declares `comparison` as an object only, but real entries also hold booleans and arrays. Widen the type and narrow it at the two use sites. | `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` |
@@ -241,8 +241,14 @@ error_reporting:
   destination: "GitHub Actions job log + the ci/sentry-alert-drift issue body (probe stdout verbatim)"
   fail_loud: "the line 'sentry_alert live fidelity FAILED' plus a 'MANAGED RULE GAINED EXCLUDED TRIGGER:' finding line; a projection/transport failure exits 1 without the FAILED line and reds the job (verdict=unavailable)"
 failure_modes:
-  - mode: "a managed rule gains an excluded trigger Sentry-side"
+  - mode: "a managed rule gains an excluded trigger Sentry-side (daily job)"
     detection: "probe emits MANAGED RULE GAINED EXCLUDED TRIGGER (new); drift workflow files the issue"
+    alert_route: "ci/sentry-alert-drift GitHub issue"
+  - mode: "the same failure on the APPLY job"
+    detection: "the apply job projects its reference from the plan, where a refreshed legacy trigger drops the rule from tf_in_scope, so its name is absent from $refnames and the census reports UNMANAGED-FROZEN instead of GAINED (the probe's else-arm names this and tells the operator to grep issue-alerts.tf first)"
+    alert_route: "apply-sentry-infra.yml run log + the ci/apply-sentry-infra issue"
+  - mode: "a declared rule whose only live bearer is Terraform-frozen"
+    detection: "probe emits UNRECONCILED HAND-OFF (the per-rule loop deferred it and the census cannot classify it); before the ledger this printed a clean PASS at rc=0"
     alert_route: "ci/sentry-alert-drift GitHub issue"
   - mode: "the new branch misclassifies a vendor default or frozen rule"
     detection: "existing G4-6/G4-14/G4-20..G4-23 rows in tests/scripts/test-sentry-alert-live-fidelity.sh red in CI (scripts/test-all.sh run_suite)"
@@ -252,7 +258,7 @@ logs:
   retention: "GitHub Actions default log retention (90 days)"
 discoverability_test:
   command: "grep -o -m1 'MANAGED RULE GAINED EXCLUDED TRIGGER' scripts/sentry-alert-live-fidelity.sh"
-  expected_output: "MANAGED RULE GAINED EXCLUDED TRIGGER" or "GAINED"
+  expected_output: "MANAGED RULE GAINED EXCLUDED TRIGGER"
 ```
 
 The probe itself needs a Sentry token, so the local, credential-free signal is that the classifier
@@ -282,7 +288,11 @@ The excluded set reaches both through the one-line `def excluded` lifted from th
 the loop implicitly, through `project_live`'s `in_scope`. The reference keys reach the pin only through
 the new `--argjson refnames`.
 
-**Mutation matrix:**
+**Mutation matrix.** Rows 1-5 and 8 are EXPECTED outcomes; rows 6 and 7 were measured 2026-09-23, and the
+review audit then measured the rest and found five further survivors on axes no row edited (the elif ORDER,
+the census tally, the id TYPE, and the suite's own dispatch). Rows G4-29..G4-32 and the `_report` self-test
+close them; the audit's own sandbox logs are the evidence.
+
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -292,7 +302,7 @@ the new `--argjson refnames`.
 | 4 | Drop the "not in `$INSCOPE`" condition | RED: G4-27 (a same-name excluded copy of a healthy managed rule must stay `UNMANAGED-FROZEN`, not GAINED) |
 | 5 | Revert the `$KNOWN` narrowing (KNOWN = whole capture) | RED: G4-28 (managed name removed from the reference, live gained, must be `UNMANAGED-FROZEN`, not silent) |
 | 6 | Revert the `$KNOWN` narrowing AND count GAINED members in `COUNT` | RED: G4-25 (count assert) + G4-28. **Measured 2026-09-23: KILLED, reds G4-25 and G4-28.** |
-| 7 | `COUNT` third field includes GAINED members | Predicted RED via G4-25. **Measured 2026-09-23: SURVIVED — EQUIVALENT under the narrowed `$KNOWN`.** A managed rule's capture entry is not excluded-type, so it is never in `$KNOWN` and the tally is identical either way. The subtraction is retained as the second half of one property: row 5 (narrowing reverted alone) keeps the count correct only because of it, and row 6 (both reverted) reds. Recorded at the `COUNT` line in the probe. |
+| 7 | `COUNT` third field includes GAINED members | Predicted RED via G4-25. **Measured 2026-09-23: SURVIVED — and re-classified after the review audit as a MISSING CASE, not equivalent.** A managed rule's capture entry is not excluded-type, so it is never in `$KNOWN` and the tally is identical either way. The discriminator is a name carried by BOTH `alert-reference.json` and `vendor-default-workflows.json`: the tally then reads 1 against a correct 0 (the registry half of `$KNOWN` is untouched by the narrowing). Killed by row G4-29, added after the audit; G4-28 now also asserts the tally, which kills the two sibling mutants (drop `is_in($KNOWN)`; replace the expression with `|$O| - |$GAINED|`). |
 | 8 | GAINED arm matches on name alone and ignores `excl_type` (the dispatch) | RED: F1/G4-6 identity (every managed rule would be GAINED) |
 
 **Harness rows.**

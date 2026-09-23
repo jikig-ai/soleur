@@ -628,7 +628,10 @@ describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 
         // Narrow through the guard, asserted: the frozen rules' threshold trigger
         // carries {value, interval}; anything else must red rather than destructure
         // two `undefined`s into a passing comparison.
-        expect(isFrequency(trig[0].comparison)).toBe(true);
+        // Throw-only here: it narrows for TypeScript AND carries the label. The tag
+        // site above keeps an up-front `.every()` expect as well, because there the
+        // assertion is over the WHOLE filtered set before any mapping — a different
+        // property from "this one element has the right shape".
         if (!isFrequency(trig[0].comparison)) throw new Error(`${label}: threshold comparison is not {value, interval}`);
         const { value, interval } = trig[0].comparison;
         const recorded = body.match(
