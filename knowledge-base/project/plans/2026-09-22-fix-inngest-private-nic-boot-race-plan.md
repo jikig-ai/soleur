@@ -1054,7 +1054,18 @@ Run by `inngest-nic-wait.test.sh` against the helper extracted from the rendered
 6. `networkctl` missing from PATH, address present → `private_nic_ok … by=nonetworkctl`; address
    absent → `private_nic_timeout links=nonetworkctl`.
 7. `ip` missing from PATH → `private_nic_probe_fault`, 0 sleeps.
-8. `ip` present but always rc 1 → `private_nic_probe_fault` (not timeout).
+8. `ip` present but rc 1 on EVERY probe → `private_nic_probe_fault` (not timeout), after the full
+   75-iteration budget. *(Corrected at review: the implementation faulted on the FIRST non-zero
+   rc, which ended the wait at 4 s and let the zot login run NIC-less — #8539 again. One failing
+   call cannot be told from a transient one, so the fault arm now fires only if the instrument
+   NEVER worked, which is the `probe_ran` shape this plan specifies at Phase 3.)*
+8b. `ip` fails on the first two probes then recovers, address appears at probe 4 →
+   `private_nic_ok waited_s=6`, NOT a probe fault. The fixture that the single-rc `ip` stub could
+   not express before review; the stub now takes a per-call rc sequence.
+8c. `ip` fails, RECOVERS, and the address is still absent → `private_nic_timeout`, not
+   `private_nic_probe_fault`. This is the case that makes `probe_ran` load-bearing: without it
+   the two are indistinguishable, and mislabelling a real timeout as "could not measure" sends
+   the operator to an instrument problem while the NIC is the problem.
 9. Empty argument → `private_nic_probe_fault`, never ok.
 10. Expected `10.0.1.4` while the host holds only `10.0.1.40` → not ok (word-bounded match).
 11. Every scenario: exactly one event per channel, exit 0, and no reboot/poweroff/shutdown/
