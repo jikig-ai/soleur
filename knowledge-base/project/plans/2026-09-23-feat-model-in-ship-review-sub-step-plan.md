@@ -17,6 +17,46 @@ lane: cross-domain
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No spec directory
 existed for this branch; the one-shot pipeline entered at plan.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23, after a 4-seat plan review (DHH, Kieran, code-simplicity, and CTO
+on the devex lens).
+
+**Halt gates:** 4.6, 4.7, 4.8 and 4.11 pass. 4.9, 4.10 and 4.55 do not fire. The probe
+`jq -c .sub_steps.ship .claude/workflow-transitions.json` prints `["compound"]` before the change.
+
+**Agents:** a bounded, change-proportionate fan-out:
+
+- `soleur:engineering:review:architecture-strategist`;
+- `soleur:engineering:review:test-design-reviewer`, grade B 7.9/10, which re-ran cases 39–41
+  against the real classifier with both views;
+- `soleur:engineering:research:git-history-analyzer`, with 7 of 8 attribution claims confirmed.
+  The eighth (#8302 vs PR #8301 as ADR-229's origin) was in the brief, not the plan;
+- a verify-the-negative and self-audit sweep at the `standard` tier. All 6 negative claims were
+  confirmed, and there are no stale references to cut items.
+
+### Key improvements
+
+1. **The `ship → ship` cost is now measured, not guessed.** All five newly exposed sessions were
+   read. Two come from review's own §6 Exit Gate (`compound` then `ship`), and three go review →
+   ship directly. One review starts 42 h after its ship. The nested-calls note, cut at plan
+   review as "no delta", is restored.
+2. **The anchor test no longer checks itself.** The set equality is asserted before the loop, the
+   loop runs over `DECLARED_SUB_STEPS`, and the lower bound does not come from `ANCHORS`.
+3. **Case 40 compares its row output exactly and has a RED mutation (C1).** Mutation row 1 is
+   anchored, so it removes only the Phase 5.5 call.
+4. **The ADR amendment follows the #8325/#8399 precedents:**
+   - supersede brackets on the two 2026-09-21 sentences this change falsifies;
+   - an Alternatives row for the rejected `ship → review` edge;
+   - "(PR #8627)" as the citation form;
+   - a "Since #8627" Verification clause;
+   - the classifier's `review → ship` delta named, so no one reads 48 as progress against 51.
+
+### New considerations discovered
+
+- The C4 L3 block does have skill→agent and skill→store edges. The "no C4 impact" reasoning is
+  corrected accordingly, and the conclusion stands.
+
 ## Overview
 
 ADR-229 lists one designed call it does not model: `soleur:ship` can invoke `soleur:review`
@@ -102,7 +142,7 @@ This PR does NOT touch:
 | Time-window heuristic in the classifier (collapse `review` only if ≤N s after `ship`) | Separate an in-ship review from a standalone review run after a headless abort | The log has start records only, with no end-of-skill record. N would be a new tuning surface. The measured cost it would avoid is 3 `review → ship` rows plus 5 self-loops |
 | Declare `ship → review` as a transition edge | P1 (half) | It fails P1, because the `compound → postmerge` tail stays. It also gets the meaning wrong: ship CALLS review and does not hand off to it. And a mandatory-successor reader would read the edge as "go to review after ship" |
 | Edit the #8470 triage procedure to also collapse `review` behind `ship` | P4 | The triage is the re-measure's frozen instrument, and it deliberately does not collapse behind `ship` so that class A stays visible. One ADR sentence buys P4 with no change to the instrument |
-| C4 `ship -> review` edge | P4 | C4 L3 models orchestrator step edges (`oneshot -> X`, `go -> X`) only. None of the four existing designed sub-step calls (`brainstorm/plan/postmerge/ship -> compound`) has an edge. See the ADR/C4 section |
+| C4 `ship -> review` edge | P4 | C4 L3 has no skill→skill sub-invocation edge; none of the four existing designed sub-step calls (`brainstorm/plan/postmerge/ship -> compound`) is drawn. See the ADR/C4 section |
 | Edit `ship/SKILL.md` | P5 | All three calls already exist. The file is 267,185 B against a 274,000 B ceiling |
 | New per-key `substep` output field | P1 visibility | `substep=` plus the undeclared-row list already show the delta |
 | General completeness invariant: every `skill: soleur:<node>` in a node's SKILL.md ⊆ `sub_steps[k] ∪ successors[k]` (advisor suggestion) | Catch the NEXT unmodelled call mechanically | Measured, and it false-positives today. `review/SKILL.md` names `skill: soleur:compound` then `skill: soleur:ship` as a handoff sequence, which is the declared `review → compound → ship`, not a direct `review → ship` call. `compound/SKILL.md` names itself 4×. A textual mention is not an edge, so the invariant needs an allowlist, and an allowlist makes it a second hand-maintained set beside the exact-set pin. Also outside the brief's scope. Not taken |
@@ -252,12 +292,20 @@ name no entry. Neither needs an edit.
      H2 line.
    - Keep the regex `skill: soleur:${sub}(?![\w-])`, the per-heading `start >= 0` assertion and
      the `checks > 0` guard.
-   - **Coverage is one set equality.** The sorted `node:sub` pairs of `ANCHORS` must `toEqual` the
-     sorted `node:sub` pairs of `DECLARED_SUB_STEPS`, and every heading list must be non-empty.
-     This one assertion replaces separate "missing" and "stale" checks.
-   - `checks` equals the computed heading total across `ANCHORS`. **Do not add a literal `6`.**
-     Both review panels cut it: `ANCHORS` sits in the same diff as the literal, so the literal
-     proves consistency, not integrity.
+   - **Coverage is one set equality, asserted BEFORE the loop.** The sorted `node:sub` pairs of
+     `ANCHORS` must `toEqual` the sorted `node:sub` pairs of `DECLARED_SUB_STEPS`. This one
+     assertion replaces separate "missing" and "stale" checks. Asserting it first matters: an
+     unanchored entry then fails with a readable diff, not a `TypeError` on `undefined`.
+   - **Loop over `DECLARED_SUB_STEPS`, not over `ANCHORS`** (deepen, test-design P1). A total
+     summed from the same map the loop walks checks itself. For each entry:
+     - look up `ANCHORS[node]?.[sub] ?? []`;
+     - assert it is non-empty with a named message ("`ship:review` has no anchor headings");
+     - run one section-scoped check per heading.
+
+     Then assert `checks >= Object.values(DECLARED_SUB_STEPS).flat().length`, a lower bound that
+     does not come from `ANCHORS`.
+   - **Do not add a literal `6`.** Both review panels cut it: `ANCHORS` sits in the same diff as
+     the literal, so the literal proves consistency, not integrity.
    - **Extend the LIMITS comment with two new textual limits.** (i) Phase 1.5 holds two review
      call sites, so the anchor cannot see one of them being deleted. (ii) The Phase 5.5 H2 scope
      runs about 1,145 lines (to `## Phase 6.4`), so any later `skill: soleur:review` mention
@@ -272,12 +320,19 @@ name no entry. Neither needs an edit.
    real classifier:
    - **39.** `ship review compound postmerge`: expect `undeclared=0 pairs=1 substep=2` and no
      row. This is ADR-229's own example and proves P1.
-   - **40.** `work review ship`: expect exactly one row, `review -> ship`, with
-     `undeclared=1 pairs=2 substep=0`. This is P3, the control: the collapse is keyed on the
-     previous KEPT node being `ship`. It is GREEN before and after the change.
-   - **41.** `ship review work`: expect `undeclared=0 pairs=1 substep=1` and no row. This pins
-     the accepted cost: `ship review work` reads as the declared `ship → work`, and 0 rows were
-     measured.
+   - **40.** `work review ship`: expect `undeclared=1 pairs=2 substep=0`, and the row output
+     must EQUAL exactly one row (`[[ "$ROWS" == $'  s40\treview -> ship' ]]`; the real format is
+     two spaces, the session id, a tab, then the pair). Do not use a substring match: cases 36
+     and 37 use `*"plan -> ship"*`, which still passes when an extra row appears. This is P3,
+     the control: the collapse is keyed on the previous KEPT node being `ship`. It is GREEN
+     before and after the change. Its RED mutation is Guard 1 classifier row C1.
+   - **41.** `ship review work`: expect `undeclared=0 pairs=1 substep=1` and no row. Its pass
+     message names it as the accepted false-negative ("accepted cost: ship review work reads as
+     declared ship -> work"). A future time-window heuristic will then break it deliberately,
+     not as an apparent regression. 0 rows were measured.
+   - Cases 39 and 41 keep `-z "$ROWS"`. Match `--summary` fields as `*"substep=2 "*` with the
+     trailing space. Never compare the whole summary line, which would break every case
+     whenever a field is added.
    - **Cut at plan review:**
      - `ship review ship`: case 22 already pins that a self-loop the collapse exposes is
        reported, and the reduce's membership test does not change.
@@ -332,28 +387,49 @@ Write the cost list ONCE, in the re-baseline bullet (step 3). Every other edit p
      §Value measurement procedure, and the identity `Δpairs = −Δsubstep`;
    - one evidence clause: of the N `ship → review` rows collapsed, how many start ≤300 s after
      ship, and how many follow ship's own `preflight`;
-   - **the accepted cost, stated once.** Dropping a `review` after a kept `ship` also erases that
-     review's outgoing edges:
-     - `ship review work` reads as the declared `ship → work` (0 rows measured);
-     - the headless abort-then-retry shape reads as the undeclared self-loop `ship → ship`,
-       which is still reported;
-     - the log has start records only, so a long-gap review after ship cannot be told from
-       ship's own review.
+   - **the accepted cost, stated once and measured, not guessed.** Any `review` after a kept
+     `ship` is dropped, whatever caused it, and that also erases the review's own outgoing edges:
+     - `ship review work` reads as the declared `ship → work` (0 rows measured).
+     - A ship run again after a review reads as the undeclared self-loop `ship → ship`, which
+       is still reported. At planning time there were +5 such rows (the deepen pass read all
+       five sessions):
+       - **2** are review's own §6 Exit Gate (`review/SKILL.md`: `skill: soleur:compound`,
+         then `skill: soleur:ship`), shaped `ship review … compound ship`.
+       - **3** go review → ship directly.
+     - The log has start records only, so a review long after ship cannot be told from ship's
+       own review. In one of the five sessions the review starts 42 h after the ship.
 
-     No pair INTO `ship` changes: `plan → ship`, `postmerge → ship` and `brainstorm → ship` are
-     unchanged.
-   - **one sentence on #8470.** The classifier now collapses `ship review`. The #8470 triage
-     deliberately does not; it keeps its own inline collapse and is unchanged. The two
-     instruments therefore differ on `ship … review ship` shapes.
+     This is a real delta of this PR: before it, those rows read `ship → review` plus declared
+     tails. No pair INTO `ship` changes: `plan → ship`, `postmerge → ship` and `brainstorm → ship`
+     are unchanged.
+   - **two sentences on #8470.** First: the classifier's own `review → ship` count falls by the
+     measured amount (−3 at planning time, all shaped `ship … review ship`), so the #8399 ruling's
+     51 is comparable only with the #8470 triage's count, never with a post-#8627 classifier
+     run. Second: the triage deliberately does not collapse `review` behind `ship`; it keeps its
+     own inline collapse and is unchanged.
 4. **The "unmodelled designed call" sentence.** Keep it and append: **[Modelled 2026-09-23 (#8627):
    declared as a `ship` sub-step; see the 2026-09-23 re-baseline.]** Do not edit the text of the
    2026-09-22 (#8470) bracket.
+   - **Supersede brackets.** Follow the #8325 precedent. Put a short `[#8627: …; see the
+     2026-09-23 re-baseline]` bracket on the two 2026-09-21 sentences this change falsifies:
+     - "`review → ship` stays at 51 — it is not a collapse candidate";
+     - "No collapse can launder a review skip", whose argument covers `compound` only. The new
+       argument is "no pair INTO `ship` changes".
+   - **Alternatives table.** Add one row: "Declare `ship → review` as an edge (#8627): the
+     `compound → X` tail survives, and any review after ship becomes legal-if-taken."
+   - **Citation form.** #8325, #8399 and #8470 are issues, while #8627 is a PR. Write
+     "(PR #8627)" in the Status line and in every bracket, so a reader who runs
+     `gh issue view 8627` is not misled.
 5. **Verification section.**
    - workflow-fidelity bullet: rewrite the anchor clause to "…a SKILL.md anchor test, per entry
      (the `ANCHORS` map), one check per heading, with a check count equal to the heading total".
      It currently says "scoped per key, with a check count equal to the entry count", which
      becomes false.
-   - classifier bullet: change `39 assertions (the MIN_CASES floor)` to the new measured floor.
+   - classifier bullet: change `39 assertions (the MIN_CASES floor)` to the new measured floor,
+     and add one clause in the #8399 style: "Since #8627: `ship review compound postmerge`
+     collapses, `work review ship` stays reported (the control), and `ship review work` reads as
+     declared (the accepted cost)."
+   - Status line uses "(PR #8627)".
 6. `bash scripts/check-adr-ordinals.sh`. No new ordinal is claimed, but the brief requires this
    after every sync with main.
 
@@ -421,10 +497,11 @@ from grepping for the feature's name:
   `review` already exist in `model.c4` (the `ship = component "ship skill"` and
   `review = component "review skill"` blocks). The classifier and the view are repo tooling,
   which C4 does not model. The same was true for ADR-229's three earlier amendments.
-- **(d) Relationships:** the C4 L3 relationship block ("C4 L3 (Component — Soleur Plugin)")
-  models orchestrator step edges only: `go -> X`, `oneshot -> plan/work/review/compound/ship`.
-  The four existing designed sub-step calls (`brainstorm/plan/postmerge/ship -> compound`) have
-  NO C4 edge. Adding `ship -> review` alone would make the view inconsistent. If C4 ever models
+- **(d) Relationships:** the C4 L3 relationship block ("C4 L3 (Component — Soleur Plugin)") has
+  orchestrator step edges (`go -> X`, `oneshot -> plan/work/review/compound/ship`) and
+  skill→agent or skill→store calls (`brainstorm -> cto`, `plan -> cto`, `review -> archstrat`,
+  `compound -> evalharness`). It has no skill→skill sub-invocation edge: the four existing
+  designed sub-step calls (`brainstorm/plan/postmerge/ship -> compound`) are undrawn. Adding `ship -> review` alone would make the view inconsistent. If C4 ever models
   sub-step calls, all five should be added together; that is not in this PR's scope.
 - `plugins/soleur/test/c4-count-parity.test.sh` was **green** at planning time (rc=0,
   `ALL TESTS PASSED`). Phase 4 re-runs it.
@@ -511,13 +588,14 @@ It is fed only by the hand mirror of `DECLARED_SUB_STEPS`. The members that must
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the `skill: soleur:review` call under `### Code Review Completion Gate` (Phase 5.5), keeping both Phase 1.5 calls | RED (the Phase 5.5 heading check) |
+| 1 | Delete ONLY the `skill: soleur:review` call under `### Code Review Completion Gate` (Phase 5.5), keeping both Phase 1.5 calls. Anchor the edit on the line containing "No code review was run before ship", because a file-wide `s/skill: soleur:review//` removes all three sites. Then assert `grep -c 'skill: soleur:review'` fell by exactly 1 | RED (the Phase 5.5 heading check) |
 | 2 | Delete BOTH Phase 1.5 `skill: soleur:review` calls, keeping Phase 5.5 | RED (the Phase 1.5 heading check) |
 | 3 | Second member after a compliant first: add `brainstorm: ["compound", "review"]` to const and view | RED (exact-set pin, and the ANCHORS set equality) |
 | 4 | Rule-legal hidden entry: add `ship: ["compound", "review", "plan"]` to both | RED (exact-set pin, and the ANCHORS set equality) |
 | 5 | Own dispatch: `ANCHORS.ship.review = []` | RED (the non-empty heading-list check) |
 | 6 | Own dispatch: remove the `ship` key from `ANCHORS` | RED (the ANCHORS set equality) |
 | 7 | View only: `sub_steps.ship = ["compound"]` while the const keeps `review` | RED (parity deep-equal; classifier case 39) |
+| C1 | Classifier: drop ANY record whose skill is in ANY `sub_steps` list, regardless of the previous kept node (a scratch copy of the script, never committed) | RED (case 40: `review` is dropped, `work -> ship` is declared, and the expected row disappears. Case 20 covers the same mutant for `compound`; case 40 covers it for `review`) |
 
 **Harness rows:**
 
@@ -544,21 +622,31 @@ and `MIN_CASES` counts them.
 - [ ] `DECLARED_SUB_STEPS.ship` deep-equals `["compound", "review"]` in
       `plugins/soleur/lib/workflow-fidelity.ts`. `jq -c .sub_steps.ship .claude/workflow-transitions.json`
       prints `["compound","review"]`.
-- [ ] `bun test plugins/soleur/test/workflow-fidelity.test.ts` passes. The anchor test asserts:
-      the `ANCHORS` pair set equals the `DECLARED_SUB_STEPS` pair set, every heading list is
-      non-empty, `checks` equals the computed heading total, and `ship : review` is anchored to
-      `## Phase 1.5: Review Evidence Gate` AND `## Phase 5.5: Pre-Ship Review Gates`.
+- [ ] `bun test plugins/soleur/test/workflow-fidelity.test.ts` passes. The anchor test:
+      - asserts, before its loop, that the `ANCHORS` pair set equals the `DECLARED_SUB_STEPS`
+        pair set;
+      - loops over `DECLARED_SUB_STEPS` and asserts each entry has a non-empty heading list;
+      - asserts `checks >= Object.values(DECLARED_SUB_STEPS).flat().length`;
+      - anchors `ship : review` to `## Phase 1.5: Review Evidence Gate` AND
+        `## Phase 5.5: Pre-Ship Review Gates`.
 - [ ] `bash scripts/classify-workflow-transitions.test.sh` prints `<N> passed, 0 failed`. N
       equals `MIN_CASES`, measured and not assumed (planned value 42). Cases 39–41 each assert
       exact row text and exact `undeclared=/pairs=/substep=` values.
-- [ ] Guard 1 mutation rows 1 and 2 (deleting either call site) are each applied at work time
-      and each goes RED. The PR body records them.
+- [ ] Guard 1 mutation rows 1 and 2 (deleting either call site) and classifier row C1 are each
+      applied at work time on a scratch copy, and each goes RED. Row 1's edit must be anchored,
+      and `grep -c 'skill: soleur:review'` must fall by exactly 1. The PR body records all
+      three.
 - [ ] ADR-229 carries four changes:
       - the Status line names `2026-09-23 (#8627)`;
       - Decision 1 has the #8627 bracket;
       - Consequences has the single 2026-09-23 re-baseline bullet, placed after the 2026-09-21
-        one, with deltas from a work-time frozen-copy run, the identity `Δpairs = −Δsubstep`,
-        the cost stated once, and the #8470 instrument sentence;
+        one. It carries:
+        - the deltas from a work-time frozen-copy run and the identity `Δpairs = −Δsubstep`;
+        - the cost stated once, including the measured split of the `ship → ship` causes;
+        - the two #8470 sentences, one of them giving the classifier's `review → ship` delta;
+      - supersede brackets on the two 2026-09-21 sentences this change falsifies;
+      - an Alternatives row for declaring a `ship → review` edge;
+      - "(PR #8627)" as the citation form;
       - the Verification anchor clause and floor number are rewritten.
 - [ ] The Modelled bracket sits beside the unmodelled sentence. The phrase wraps across lines in
       the ADR, so check it on the joined text:
@@ -672,9 +760,12 @@ terms.
     - Both panels fired on the literal `6`, so it is deleted per the prefer-delete rule.
     - Cases `ship review ship` and `plan ship review …` are cut (case 22 and case 36 cover them).
     - Guard 2 is folded into a one-paragraph note, because the classifier is not in the diff.
-    - H2–H4 and the Guard 2 spot-checks are cut.
+    - The original harness rows H2 (the file-wide weakening) and H4 (the reworded call) are cut,
+      and so are the Guard 2 spot-checks. The suffix must-PASS row was renumbered H2.
     - The ADR cost is written once, in one re-baseline bullet placed after the 2026-09-21 one.
-    - The nested-calls note is cut (no delta).
+    - The nested-calls note was cut (no delta) at plan review, then RESTORED at deepen. Reading the
+      5 new `ship → ship` sessions showed that review's own exit gate produces 2 of them, so it is
+      a delta after all.
     - The Verification case list is cut.
   - **Taste, persisted headless** to `knowledge-base/project/specs/feat-one-shot-adr229-in-ship-review-call/decision-challenges.md`:
     - CTO devex #2: a read-only one-liner plus a disposition for a #8470 confounder. The
