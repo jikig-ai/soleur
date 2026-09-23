@@ -611,7 +611,7 @@ fi
 # prints, so a name that appears in ANY pin finding counts as classified.
 for _ho in ${handed_off[@]+"${handed_off[@]}"}; do
   grep -qF -- "'${_ho}'" <<<"$frozen_report" && continue
-  _finding "UNRECONCILED HAND-OFF: '$(_safe "$_ho")' is declared in the Sentry root, some live workflow bears that name, and NOTHING compared the declaration — the per-rule loop deferred it (the live bearer is out of the comparison scope) and the frozen-rule pin never named it (its live bearer is Terraform-frozen, or it left the census another way). The reference's entry for this rule is unverified. A well-formed Terraform projection cannot declare a frozen name (tf_legacy_floor in tests/scripts/lib/sentry-alert-projection.jq refuses it), so on the daily job this means the committed reference is STALE relative to apps/web-platform/infra/sentry/*.tf: regenerate alert-reference.json per that directory's README and touch NOTHING in Sentry."
+  _finding "UNRECONCILED HAND-OFF: '$(_safe "$_ho")' is declared in the Sentry root and some live workflow bears that name, but NOTHING compared the declaration: the per-rule loop deferred it to the frozen-rule pin, and the pin never named it. The reference entry for this rule is UNVERIFIED by this run. A well-formed Terraform projection cannot declare a frozen name (tf_legacy_floor in tests/scripts/lib/sentry-alert-projection.jq refuses it), so on the daily job compare the committed reference against apps/web-platform/infra/sentry/*.tf and regenerate alert-reference.json per that directory README if they disagree. Touch NOTHING in Sentry."
 done
 
 if [[ "$findings" -eq 0 ]]; then
