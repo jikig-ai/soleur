@@ -1622,6 +1622,16 @@ jobs:
       - name: Run git-data bare-repo erasure (Art. 17) tests
         run: bash apps/web-platform/infra/git-data-remove.test.sh
 
+      # (#8211, ADR-239) Guard 1: only a verified, mapper-served store is acted on. The
+      # population is DERIVED from the file() bindings in modules/git-data-userdata/main.tf —
+      # the same set the rung-2 birth gate hashes — so a FIFTH store-acting payload added to
+      # the render later cannot slip past four per-script suites. Also carries git-data-gc.sh's
+      # runtime C1 rows (no other suite executes gc), the sshd client-environment lint and the
+      # gc.service `env -u` seam strip. Guard 1's mutation rows 1-9 are self-tests that mutate
+      # a temporary copy and must RED.
+      - name: Run git-data store-device census (Guard 1, #8211)
+        run: bash apps/web-platform/infra/git-data-store-device-census.test.sh
+
       # (#8043 F7/F9, Guard 3) The git account cannot rewrite its own authorization map or the
       # hook it is fenced by. Static arm over the bootstrap's last-writer literals; runtime arm
       # applies them in the pinned image and proves sshd accepts the map (with a negative
@@ -1637,6 +1647,15 @@ jobs:
       # a runtime arm that drives the script and the OnFailure reporter against stubs.
       - name: Run git-data LUKS boot-reopen guards (Guard 1, #8210)
         run: bash apps/web-platform/infra/git-data-luks-reopen.test.sh
+
+      # (#8211, ADR-239) Guard 2: an instance proves its layout before any store action is
+      # allowed. The bootstrap's store-verification steps are extracted from their sentinel
+      # comments and driven WITHOUT ROOT against stub mount/umount/dumpe2fs/findmnt/runuser
+      # binaries, so a CI runner adjudicates the plaintext-volume check, the luks_residue count,
+      # the fence-on-mapper read, the store marker and the erasure probe for real. Guard 2's
+      # mutation rows 1, 2, 3, 5 and 7 are self-tests that must RED.
+      - name: Run git-data bootstrap store-verification guards (Guard 2, #8211)
+        run: bash apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh
 
       # (#6680, ADR-220) git-data-cutover's read-only proof: the access gate precedes every store
       # probe, the store probes fail closed (a failed read is probe_failed, never a store state),

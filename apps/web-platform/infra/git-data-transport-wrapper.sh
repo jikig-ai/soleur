@@ -79,6 +79,14 @@ esac
 #     `stat -c %m` names the mount the root sits on, which must be the store's own. ---
 command -v mountpoint >/dev/null 2>&1 || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
 mountpoint -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing transport on an unmounted store (fail-closed)"
+# --- (#8211, ADR-239, same as git-data-remove.sh) REFUSE UNLESS THE STORE IS THE VERIFIED
+#     MAPPER: SOURCE equals the mapper, the marker holds this filesystem's UUID. ---
+STORE_DEVICE="${GIT_DATA_STORE_DEVICE:-/dev/mapper/git-data}"
+STORE_VERIFIED="${GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified}"
+command -v findmnt >/dev/null 2>&1 || reject "cannot verify the store device: findmnt unavailable (fail-closed)"
+[ "$(findmnt -n -o SOURCE --mountpoint "$MOUNT_ROOT" 2>/dev/null)" = "$STORE_DEVICE" ] || reject "store at $MOUNT_ROOT is not served by $STORE_DEVICE (fail-closed)"
+store_uuid="$(findmnt -n -o UUID --mountpoint "$MOUNT_ROOT" 2>/dev/null)" || store_uuid=""
+[ -n "$store_uuid" ] && [ -s "$STORE_VERIFIED" ] && [ "$(head -n 1 "$STORE_VERIFIED")" = "$store_uuid" ] || reject "store not verified: $STORE_VERIFIED absent or not bound to this volume (fail-closed)"
 # --- (#8043 review) HONOUR THE CUTOVER FREEZE, same seam as provision/remove and the
 #     pre-receive fence. The fence already denies receive-pack while the sentinel exists,
 #     but the fence is reached through core.hooksPath, and the one window where that path

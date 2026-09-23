@@ -601,7 +601,11 @@ HOST_SQL="
          JSONExtractString(raw,'hooks_path')    AS hooks_path,
          JSONExtractString(raw,'provision')     AS provision,
          JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+         JSONExtractString(raw,'fence_on_mapper') AS fence_on_mapper,
+         JSONExtractString(raw,'erasure_probe') AS erasure_probe,
+         JSONExtractString(raw,'plaintext_empty') AS plaintext_empty,
          JSONExtractString(raw,'action')        AS action,
+         JSONExtractString(raw,'target')        AS target,
          JSONExtractString(raw,'restarts')      AS restarts
   FROM ${_bs_source}
   WHERE ${_BS_SCOPE}
@@ -953,13 +957,16 @@ _require_answer "$fatal_out" "unbounded fatal"
 # server-side (Better Stack through _BS_WHEN, Sentry through --start/--end), and rows outside
 # the window are ignored rather than counted.
 #
-#   0 PASS       a stage:luks_reopen_ok row with action=reopened in EITHER channel, and no
-#                level:fatal in EITHER.
-#   1 FAIL       any post-reset fatal, OR a luks_reopen_ok row whose action is not `reopened`.
+#   0 PASS       a Better Stack stage:luks_reopen_ok row with action=reopened AND
+#                target=/mnt/git-data, and no level:fatal in EITHER channel.
+#   1 FAIL       any post-reset fatal, OR a luks_reopen_ok row whose action is not `reopened`,
+#                OR (#8211) a reopened row whose target is anything but /mnt/git-data.
 #                `noop` or `mounted` after a hard reset means the mapper survived a power cycle,
 #                which it cannot — so the probe or the host is lying, and that is not a pass.
 #   2 TRANSIENT  an EMPTY post-`since` set while the source-liveness anchor answers: an ingest
 #                miss must not burn a paid host (the emitter's Better Stack POST has no --retry).
+#                Also (#8211) a reopen seen ONLY in Sentry: sentry-issue.sh projects `action`,
+#                not `target`, so that row cannot show WHERE the mapper was mounted.
 #
 # BOTH channels are read because either alone is a single point of failure: Better Stack can
 # drop an ingest (#7855), and the Sentry row is level:info on an unrouted stage, which the
@@ -1020,19 +1027,40 @@ if [[ -n "$REBOOT_SINCE" ]]; then
     exit 1
   fi
 
-  if [[ "$_bs_reopened" -eq 0 && "$_sentry_reopened" -eq 0 ]]; then
-    echo "TRANSIENT (reboot arm): no stage:luks_reopen_ok row in EITHER channel after"
-    echo "${REBOOT_SINCE}, while the source-liveness anchor answered. An ingest miss is not a"
-    echo "failed reopen — the emitter's Better Stack POST carries no retry — so this run declines"
-    echo "to read silence as a defect."
+  # (#8211) THE TARGET, not only the action. The reopen mounts whatever fstab names, so a
+  # reopened row proves the re-attach only when it reopened the SERVING root. Every reopened
+  # row must carry exactly `"target":"/mnt/git-data"` (the closing quote makes it equality, so
+  # /mnt/git-data-luks does not match); a row with another target, or none, FAILs.
+  _bs_bad_target="$(grep '"action":"reopened"' <<<"$_bs_reopen" | grep -v '"target":"/mnt/git-data"' || true)"
+  if [[ -n "$_bs_bad_target" ]]; then
+    echo "FAIL (reboot arm): a stage:luks_reopen_ok action=reopened row arrived after the reset, but"
+    echo "its target is not /mnt/git-data. The store is served from /mnt/git-data, so a reopen"
+    echo "anywhere else (or one that names no target) does not prove the serving root came back."
+    printf '%s\n' "$_bs_bad_target" | head -3
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 1
+  fi
+
+  if [[ "$_bs_reopened" -eq 0 ]]; then
+    if [[ "$_sentry_reopened" -eq 1 ]]; then
+      echo "TRANSIENT (reboot arm): Sentry carries a stage:luks_reopen_ok action=reopened row after"
+      echo "${REBOOT_SINCE}, but Better Stack does not, and the Sentry read projects no target."
+      echo "Where the mapper was mounted is unread, so this run declines to pass on it."
+    else
+      echo "TRANSIENT (reboot arm): no stage:luks_reopen_ok row in EITHER channel after"
+      echo "${REBOOT_SINCE}, while the source-liveness anchor answered. An ingest miss is not a"
+      echo "failed reopen — the emitter's Better Stack POST carries no retry — so this run declines"
+      echo "to read silence as a defect."
+    fi
     echo
     echo "NO EVIDENCE APPENDED."
     exit 2
   fi
 
-  _channel=both
-  [[ "$_bs_reopened" -eq 1 && "$_sentry_reopened" -eq 0 ]] && _channel=betterstack
-  [[ "$_bs_reopened" -eq 0 && "$_sentry_reopened" -eq 1 ]] && _channel=sentry
+  # Better Stack carried the target-checked reopen; Sentry corroborates or it does not.
+  _channel=betterstack
+  [[ "$_sentry_reopened" -eq 1 ]] && _channel=both
   _restarts="$(grep -o '"restarts":"[0-9]*"' <<<"$_bs_reopen" | head -1 | grep -o '[0-9]*' || true)"
   # OUT is bound by command substitution, so an empty one appends to the CWD rather than to the
   # evidence file — and this branch is the only writer of the reboot key. Guarded with an
@@ -1056,7 +1084,7 @@ if [[ -n "$REBOOT_SINCE" ]]; then
     printf 'RUNG2_REBOOT_REOPEN_CHANNEL=%s\n' "$_channel"
     printf 'RUNG2_REBOOT_REOPEN_RESTARTS=%s\n' "${_restarts:-unknown}"
   } >> "$OUT"
-  echo "PASS (reboot arm): ${HOST_NAME} reopened /dev/mapper/git-data unattended after the reset at"
+  echo "PASS (reboot arm): ${HOST_NAME} reopened /dev/mapper/git-data at /mnt/git-data unattended after the reset at"
   echo "${REBOOT_SINCE} (channel ${_channel}, restarts ${_restarts:-unknown}); no fatal in either channel."
   echo "Appended RUNG2_REBOOT_REOPEN to ${OUT}."
   exit 0
@@ -1108,10 +1136,15 @@ _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
 # (systemctl is-enabled + Result=success on git-data-luks-reopen.service), so this arm CAN fire
 # against real telemetry — see the PASS wording below, which says so.
 #
+# (#8211) fence_on_mapper, erasure_probe and plaintext_empty join it, each MEASURED by the
+# bootstrap (the fence's findmnt SOURCE, a real erasure run as `git`, the read-only plaintext
+# count). The informational plaintext_volume and served_repos are not terminal: a non-zero
+# served_repos is already a bootstrap FATAL (luks_residue), which the fatal arm above reads.
+#
 # THE TERMINAL ROSTER IS DECLARED ONCE, HERE. The FALSE-assertion alternation and the presence
 # loop both derive from it, and git-data-emit.test.sh's consumer-roster guard reads THIS line
 # (anchored on `_TERMINAL=`), so a name added here without a producer change REDs that suite.
-_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit"
+_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty"
 _alt="${_TERMINAL// /|}"
 if grep -qE "\"(${_alt})\":\"no\"" <<<"$_bc_rows"; then
   echo "FAIL: ${HOST_NAME} reported boot_complete with a FALSE assertion — it reached its final stage with an invariant unmet, which is the dark boot the interlock exists to catch."
@@ -1214,7 +1247,7 @@ if [[ -z "$DIVERGENCE" ]]; then
 fi
 
 if [[ "$VERIFY_ONLY" -eq 1 ]]; then
-  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with all five assertions positive, and no fatal. NO evidence file written."
+  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with every terminal assertion (${_TERMINAL}) positive, and no fatal. NO evidence file written."
   exit 0
 fi
 
@@ -1309,7 +1342,7 @@ assert_fixture_dir "$OUT"
 # literals, so the `"…":"no"` arm can never fire against real telemetry. The real
 # predicate is the one below. The overstatement mattered because it landed in the file a
 # human reads at the second of the two intentional gates — the compensating control.
-echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: four of boot_complete's five terminal booleans (luks_mounted, repo_root, hooks_path, provision) are hardcoded literals in git-data-bootstrap.sh, so for those this attests that the final stage was REACHED and that nothing reported a fatal. luks_reopen_unit is MEASURED (#8210: systemctl is-enabled + Result=success on git-data-luks-reopen.service), so its 'no' would have failed this run."
+echo "PASS: ${HOST_NAME} reported stage:boot_complete with ${_TERMINAL} all yes and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: where git-data-bootstrap.sh emits a boolean as a literal, this attests only that the final stage was REACHED and that nothing reported a fatal. luks_reopen_unit (#8210), fence_on_mapper, erasure_probe and plaintext_empty (#8211) are MEASURED, so a 'no' on any of them would have failed this run."
 echo "Evidence written to ${OUT} (user_data sha256 ${TEMPLATE_SHA})."
 echo
 echo "This file is NOT committed by this script and must NOT be committed by a workflow."

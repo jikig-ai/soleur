@@ -702,13 +702,16 @@ fi
 # still aggregate each -- that is the direction in which silence becomes a wrong
 # SKIP.
 GATE_PREMISE="$(grep -F 'test-webplat + test-bun + test-scripts' "$REPO_ROOT/plugins/soleur/skills/ship/scripts/battery-owed.sh")"
-GATE_SHARDS="$(printf '%s\n' "$GATE_PREMISE" | grep -oE '(test-webplat|test-bun|test-scripts|web-platform-build)' | sort -u)"
+# LONGEST-FIRST: `test-scripts` is a strict prefix of `test-scripts-heavy`, so an
+# alternation naming the shorter first silently collapses the heavy job into the
+# light one and the T13 loop below never checks it.
+GATE_SHARDS="$(printf '%s\n' "$GATE_PREMISE" | grep -oE '(test-webplat|test-bun|test-scripts-heavy|test-scripts|web-platform-build)' | sort -u)"
 AGG_LIST="$(awk '/^  test:/{f=1} f&&/^    needs:/{print; exit}' "$CI_YML" \
   | sed -E 's/^[[:space:]]*needs:[[:space:]]*\[//; s/\][[:space:]]*$//' | tr ',' '\n' \
   | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep .)"
 _gate_n="$(printf '%s\n' "$GATE_SHARDS" | grep -c .)"
-if [[ "$_gate_n" -ge 4 ]]; then
-  assert_eq "ok" "ok" "T13 the gate's premise names $_gate_n shard(s) (>=4)"
+if [[ "$_gate_n" -ge 5 ]]; then
+  assert_eq "ok" "ok" "T13 the gate's premise names $_gate_n shard(s) (>=5)"
 else
   assert_eq "derived $_gate_n" "ok" "T13 premise extraction found $_gate_n shards — rows below vacuous"
 fi

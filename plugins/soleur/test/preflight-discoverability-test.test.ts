@@ -2395,13 +2395,17 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // discoverability_test declares credentials_required for the Better Stack Logs warehouse
   // read. The marker is emitted by a deny-all, no-SSH host and exists only in that warehouse;
   // no unauthenticated endpoint exposes it. Genuine declaration.
+  // #8211 (2026-09-23): +1 for the git-data boot_complete probe — the plan's
+  // discoverability_test declares credentials_required for the Better Stack ClickHouse
+  // read (Doppler soleur/prd_terraform). boot_complete is emitted by a host on the private
+  // network and lands only in Better Stack Logs and Sentry, so there is no unauthenticated
+  // substitute to read it from. Genuine declaration.
   // #8611 (2026-09-23): +1 for `2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md` (archived under plans/archive/).
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
   // probe (`scripts/probe-inngest-524-count.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
   // NO SUBSTITUTE: the property is the count of inngest-server `invalid status code: 524`
   // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
-  // If a sibling PR lands its own increment first, renumber at merge (the all-members class).
-  const BASELINE_DECLARED_PROBES = 20;
+  const BASELINE_DECLARED_PROBES = 21;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
