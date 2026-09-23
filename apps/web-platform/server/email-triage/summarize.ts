@@ -127,8 +127,9 @@ export async function summarizeEmail(input: {
   } catch (err) {
     // #8505: this is the only SDK caller of the operator key, so it is the second
     // credit-marker chokepoint. Report, then rethrow unchanged so the caller's
-    // retries stay intact. The SDK message carries the vendor text; only the
-    // constant marker leaves this module (TR3).
+    // retries stay intact (each retry reports again; the alert groups them into one
+    // issue and pages at most daily). The SDK message carries the vendor text; only
+    // the constant marker leaves this module (TR3).
     if (err instanceof APIError && isAnthropicCreditExhausted(err.message)) {
       reportAnthropicCreditExhausted({ source: "email-triage", status: err.status });
     }

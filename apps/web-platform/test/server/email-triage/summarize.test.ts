@@ -23,12 +23,13 @@ vi.mock("@/server/observability", () => ({
 }));
 
 import { APIError, BadRequestError } from "@anthropic-ai/sdk";
+import { ANTHROPIC_CREDIT_EXHAUSTED_OP } from "@/server/anthropic-credit";
 import { summarizeEmail } from "@/server/email-triage/summarize";
 
 const input = { subject: "Invoice", sender: "billing@example.test", bodyText: "Hello" };
 const creditReports = () =>
   reportSilentFallbackSpy.mock.calls.filter(
-    ([, ctx]) => (ctx as { op?: string }).op === "anthropic-credit-exhausted",
+    ([, ctx]) => (ctx as { op?: string }).op === ANTHROPIC_CREDIT_EXHAUSTED_OP,
   );
 
 beforeEach(() => {
@@ -60,9 +61,17 @@ describe("summarizeEmail — credit exhaustion (#8505)", () => {
 
     const reports = creditReports();
     expect(reports).toHaveLength(1);
-    const [errArg, ctx] = reports[0] as [unknown, { tags: Record<string, string> }];
+    const [errArg, ctx] = reports[0] as [
+      unknown,
+      { tags: Record<string, string>; extra: Record<string, unknown> },
+    ];
     expect(errArg).toBeNull();
     expect(ctx.tags.source).toBe("email-triage");
+    expect(ctx.extra.status).toBe(400);
+    // TR3: neither the vendor text nor any email content leaves this module.
+    const serialized = JSON.stringify(reports[0]);
+    expect(serialized).not.toContain("credit balance is too low to access");
+    expect(serialized).not.toContain("billing@example.test");
   });
 
   it("does not report on a non-credit 400, and still rethrows", async () => {

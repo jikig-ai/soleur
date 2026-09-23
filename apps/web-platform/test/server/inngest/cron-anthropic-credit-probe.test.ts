@@ -78,6 +78,16 @@ describe("cron-anthropic-credit-probe — canary classification (AC5)", () => {
     ).toBe("cron-anthropic-credit-probe");
   });
 
+  it("reads the transport's creditExhausted flag, not only the (truncated) excerpt", async () => {
+    // The excerpt is redaction-formatted and cut to 600 chars; the transport classifies
+    // from the FULL body. A credit 400 whose excerpt lost the text must still be red,
+    // not re-thrown into a retry that reports the marker a second time.
+    postAnthropicMessageSpy.mockRejectedValue(new AnthropicApiError(400, "…truncated…", true));
+    const result = await cronAnthropicCreditProbeHandler({ step: makeStep() as never, logger });
+    expect(result.ok).toBe(false);
+    expect(lastHeartbeatOk()).toBe(false);
+  });
+
   it("401 / auth → pages (op=anthropic-key-invalid) + monitor red", async () => {
     postAnthropicMessageSpy.mockRejectedValue(
       new AnthropicApiError(401, "invalid x-api-key"),
@@ -89,6 +99,8 @@ describe("cron-anthropic-credit-probe — canary classification (AC5)", () => {
       ([, ctx]) => (ctx as { op?: string }).op === "anthropic-key-invalid",
     );
     expect(page).toBeDefined();
+    // Message path (err = null): an Error here loses feature/op to the pino mirror (#8629).
+    expect((page as unknown[])[0]).toBeNull();
   });
 
   it("529 overloaded (transient) → RE-THROWS (Inngest retry) — NO page, NO red heartbeat", async () => {

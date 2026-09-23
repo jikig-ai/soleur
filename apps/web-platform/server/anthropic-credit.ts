@@ -1,11 +1,15 @@
 // #8505 — the named operator-credit-exhaustion marker.
 //
-// Every production path that calls Anthropic with the OPERATOR key reports credit
-// exhaustion here, under one Sentry marker that `sentry_alert.anthropic_credit_exhausted`
-// (infra/sentry/issue-alerts.tf) routes to the operator. Two chokepoints call it:
-// `postAnthropicMessage` in inngest/functions/_cron-shared.ts (the credit-probe
-// canary, compound-promote, weekly-release-digest) and `summarizeEmail` in
-// email-triage/summarize.ts (the only SDK caller of the operator key).
+// Two chokepoints report operator-key credit exhaustion here, under one Sentry marker
+// that `sentry_alert.anthropic_credit_exhausted` (infra/sentry/issue-alerts.tf) routes
+// to the operator: `postAnthropicMessage` in inngest/functions/_cron-shared.ts (the
+// hourly credit-probe canary, compound-promote, weekly-release-digest) and
+// `summarizeEmail` in email-triage/summarize.ts (the only SDK caller of the operator key).
+//
+// NOT covered: the claude-eval crons that spawn the Claude CLI on the operator key
+// (_cron-claude-eval-substrate.ts, classified by `classifyEvalFatal`). Exhaustion is a
+// property of the whole org balance, so the hourly canary on the same key reports it
+// within the hour; per-path coverage is not what this marker promises.
 //
 // MESSAGE PATH ON PURPOSE — do not switch this to `reportSilentFallback(new Error(…))`
 // "for a stack trace". On the Error path, `reportSilentFallback` logs first, the pino
@@ -13,7 +17,7 @@
 // `feature=pino-mirror`, and @sentry/core's `checkOrSetAlreadyCaught` then drops the
 // second, tagged capture, so the event arrives with no `feature`/`op` and the alert
 // never matches it. With `err = null` the call goes through `captureMessage`, and the
-// pino hook has no Error to capture. The fleet-wide defect is tracked separately.
+// pino hook has no Error to capture. The fleet-wide defect is tracked in #8629.
 //
 // The user's own BYOK traffic never reaches here: a user's exhausted credit is not
 // operator exhaustion and must not page as such.

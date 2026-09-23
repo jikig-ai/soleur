@@ -82,6 +82,10 @@ import {
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
 import type { Octokit } from "@octokit/core";
+import {
+  ANTHROPIC_CREDIT_EXHAUSTED_FEATURE,
+  ANTHROPIC_CREDIT_EXHAUSTED_OP,
+} from "@/server/anthropic-credit";
 
 function octokitReturning(issues: Array<{ updated_at: string; created_at?: string; state?: string }>) {
   const request = vi.fn().mockResolvedValue({ data: issues });
@@ -1111,7 +1115,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
       '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}';
     const creditReports = () =>
       reportSilentFallbackSpy.mock.calls.filter(
-        ([, ctx]) => (ctx as { op?: string }).op === "anthropic-credit-exhausted",
+        ([, ctx]) => (ctx as { op?: string }).op === ANTHROPIC_CREDIT_EXHAUSTED_OP,
       );
 
     beforeEach(() => reportSilentFallbackSpy.mockClear());
@@ -1127,13 +1131,38 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
       }).catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(AnthropicApiError);
+      // Classified once, from the full body, for the probe to read.
+      expect((err as AnthropicApiError).creditExhausted).toBe(true);
       const reports = creditReports();
       expect(reports).toHaveLength(1);
-      const [errArg, ctx] = reports[0] as [unknown, { feature: string; tags: Record<string, string> }];
+      const [errArg, ctx] = reports[0] as [
+        unknown,
+        { feature: string; tags: Record<string, string>; extra: Record<string, unknown> },
+      ];
       // Message path (err = null) — the Error path loses its tags to the pino mirror.
       expect(errArg).toBeNull();
-      expect(ctx.feature).toBe("anthropic-credit");
+      expect(ctx.feature).toBe(ANTHROPIC_CREDIT_EXHAUSTED_FEATURE);
       expect(ctx.tags.source).toBe("cron:cron-anthropic-credit-probe");
+      expect(ctx.extra.status).toBe(400);
+      // Only the constant marker leaves the transport, never the vendor body.
+      expect(JSON.stringify(reports[0])).not.toContain("credit balance is too low to access");
+    });
+
+    it("does NOT report a 2xx whose content happens to contain the credit text", async () => {
+      fetchSpy.mockResolvedValue(
+        okResponse({
+          content: [{ type: "text", text: "PR: alert when your credit balance is too low" }],
+          stop_reason: "end_turn",
+        }),
+      );
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "summarize" }],
+        markerSource: "cron-weekly-release-digest",
+      });
+      expect(creditReports()).toHaveLength(0);
     });
 
     it("falls back to source=cron:unknown when no markerSource is threaded", async () => {
@@ -1157,14 +1186,15 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
       [400, '{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits."}}'],
     ])("does NOT report on status %i with a non-credit body", async (status, body) => {
       fetchSpy.mockResolvedValue(new Response(body, { status }));
-      await postAnthropicMessage({
+      const err = await postAnthropicMessage({
         apiKey: "sk-ant-" + "synthetic-key",
         model: ANY_MODEL,
         maxTokens: 1,
         messages: [{ role: "user", content: "ping" }],
         markerSource: "cron-compound-promote",
-      }).catch(() => undefined);
+      }).catch((e: unknown) => e);
       expect(creditReports()).toHaveLength(0);
+      expect((err as AnthropicApiError).creditExhausted).toBe(false);
     });
 
     it("does NOT report on a network failure (redacted rethrow path)", async () => {

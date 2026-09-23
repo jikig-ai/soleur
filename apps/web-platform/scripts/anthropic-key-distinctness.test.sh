@@ -34,6 +34,7 @@ cat > "$BIN/doppler" <<'FAKE'
 #!/usr/bin/env bash
 # configs:  doppler configs -p soleur --json
 # secrets:  doppler secrets get ANTHROPIC_API_KEY -p soleur -c <cfg> --plain
+printf '%s\n' "$*" >> "$FIX/calls"
 if [[ "$*" == "configs -p soleur --json" ]]; then
   [[ -f "$FIX/configs.fail" ]] && { echo "Doppler Error: network" >&2; exit 1; }
   cat "$FIX/configs.json"; exit 0
@@ -88,6 +89,17 @@ run_case() {
 
 echo "anthropic-key-distinctness.sh"
 
+# run_case self-test: a deliberately wrong expected rc MUST count as a FAIL, or every
+# row below that asserts only an exit code asserts nothing. Counters are unwound after.
+new_fixture ci prd
+setval ci "$CI_VAL"; setval prd "$PRD_VAL"
+_p=$PASS; _f=$FAIL
+run_case "self-test: wrong expected rc" 1 >/dev/null
+if [[ "$FAIL" != $((_f + 1)) || "$PASS" != "$_p" ]]; then
+  printf '[FATAL] run_case does not fail on an rc mismatch\n' >&2; exit 1
+fi
+PASS=$_p; FAIL=$_f
+
 # Must-PASS: every config distinct, plus a prd_* branch with no key at all.
 new_fixture dev ci prd prd_terraform prd_x cli
 setval ci "$CI_VAL"; setval prd "$PRD_VAL"; setval prd_terraform "$PRD_VAL"; setval dev "$CI_VAL"
@@ -137,17 +149,35 @@ new_fixture ci prd
 setval ci "$CI_VAL"; setval prd "$PRD_VAL"; : > "$FIX/configs.fail"
 run_case "doppler configs failure -> exit 2" 2
 
-# Name boundary: `prdx` and `ci_extra` are not in scope.
-new_fixture ci prd prdx ci_extra
-setval ci "$CI_VAL"; setval prd "$PRD_VAL"; setval prdx "$CI_VAL"; setval ci_extra "$PRD_VAL"
-run_case "prdx / ci_extra are outside the ^prd(\$|_) / ^ci\$ scope" 0 "DISTINCT"
+# Name boundary: `prdx` and `cix` are outside ^prd($|_) / ^ci($|_).
+new_fixture ci prd prdx cix
+setval ci "$CI_VAL"; setval prd "$PRD_VAL"; setval prdx "$CI_VAL"; setval cix "$PRD_VAL"
+run_case "prdx / cix are outside the ^prd(\$|_) / ^ci(\$|_) scope" 0 "DISTINCT"
 
-# Refuses xtrace before touching anything.
+# A ci_* branch is in scope: it equal to a prd key is a failure; ABSENT is allowed.
+new_fixture ci ci_eval ci_empty prd
+setval ci "$CI_VAL"; setval ci_eval "$PRD_VAL"; setval prd "$PRD_VAL"
+run_case "ci_* branch equal to prd -> exit 1" 1 "ci_empty ABSENT"
+
+# A failed read of the root ci config is "could not measure", not "ci holds no key".
+new_fixture ci prd
+setval prd "$PRD_VAL"; : > "$FIX/val.ci.error"
+run_case "ci read error -> exit 2" 2 "ci ERROR"
+
+# A malformed config list must not truncate the population and then pass.
+new_fixture ci prd
+printf '[{"name":"ci"},{"name":"prd"},"not-an-object",{"name":"prd_late"}]' > "$FIX/configs.json"
+setval ci "$CI_VAL"; setval prd "$PRD_VAL"; setval prd_late "$CI_VAL"
+run_case "malformed config list -> exit 2, never DISTINCT" 2
+
+# Refuses xtrace before touching anything: rc 78 AND no doppler call made.
+new_fixture ci prd
+setval ci "$CI_VAL"; setval prd "$PRD_VAL"
 rc=0; PATH="$BIN:$PATH" bash -x "$SCRIPT" > "$ROOT/out" 2> "$ROOT/err" || rc=$?
-if [[ "$rc" == 78 ]]; then pass "refuses to run under bash -x (rc 78)"; else fail "xtrace refusal: rc=$rc want 78"; fi
+if [[ "$rc" == 78 && ! -s "$FIX/calls" ]]; then pass "refuses to run under bash -x (rc 78, no doppler call)"; else fail "xtrace refusal: rc=$rc want 78, calls=$(wc -l < "$FIX/calls" 2>/dev/null || echo 0)"; fi
 
 TOTAL=$((PASS + FAIL))
 printf '=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-# Anti-vacuity floor: 14 assertions today. Report outside the helpers.
-if (( TOTAL < 14 )); then printf '[FATAL] only %d assertions ran (floor 14)\n' "$TOTAL" >&2; exit 1; fi
+# Anti-vacuity floor: 17 assertions today. Report outside the helpers.
+if (( TOTAL < 17 )); then printf '[FATAL] only %d assertions ran (floor 17)\n' "$TOTAL" >&2; exit 1; fi
 (( FAIL == 0 ))

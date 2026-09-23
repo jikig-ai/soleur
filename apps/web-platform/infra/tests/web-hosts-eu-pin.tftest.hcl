@@ -112,8 +112,7 @@ variables {
   resend_api_key                  = "dummy"
   resend_receiving_api_key        = "dummy"
   supabase_access_token           = "dummy"
-  anthropic_api_key_ci            = "sk-ant-test-ci-dummy" # #8505: distinct from the prd value below
-  anthropic_api_key               = "sk-ant-test-prd-dummy"
+  anthropic_api_key_ci            = "sk-ant-test-ci-dummy" # #8505: must satisfy the sk-ant- validation
   webhook_deploy_secret           = "dummy"
   # command=plan evaluates file(var.ssh_key_path) (hcloud_ssh_key.default). The
   # default ~/.ssh/id_ed25519.pub does not exist in CI, so point at a committed
@@ -155,4 +154,13 @@ run "reject_mixed_eu_and_non_eu" {
     }
   }
   expect_failures = [var.web_hosts]
+}
+
+# #8505: the CI key's shape is validated before any resource is planned.
+run "reject_non_sk_ant_ci_key" {
+  command = plan
+  variables {
+    anthropic_api_key_ci = "not-an-anthropic-key"
+  }
+  expect_failures = [var.anthropic_api_key_ci]
 }

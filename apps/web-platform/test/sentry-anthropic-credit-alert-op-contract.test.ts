@@ -18,8 +18,18 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 
+// Comment lines are STRIPPED before any match, so a commented-out filter, trigger or
+// action cannot satisfy the assertion that it is live.
+const stripComments = (s: string) =>
+  s
+    .split("\n")
+    .filter((l) => !/^\s*(#|\/\/)/.test(l))
+    .join("\n");
+
 function ruleBlock(): string {
-  const m = tf.match(/resource\s+"sentry_alert"\s+"anthropic_credit_exhausted"\s*\{[\s\S]*?\n\}/);
+  const m = stripComments(tf).match(
+    /resource\s+"sentry_alert"\s+"anthropic_credit_exhausted"\s*\{[\s\S]*?\n\}/,
+  );
   if (!m) throw new Error("fixture: anthropic_credit_exhausted resource block not found");
   return m[0];
 }
@@ -62,6 +72,13 @@ describe("anthropic_credit_exhausted — emitter/rule contract (#8505)", () => {
     expect(block).toMatch(/\{\s*first_seen_event\s*=\s*\{\}\s*\}/);
     expect(block).toMatch(/\{\s*event_frequency_count\s*=\s*\{\s*interval\s*=\s*"1h"\s*,\s*value\s*=\s*0\s*\}\s*\}/);
     expect(block).toMatch(/^\s*enabled\s*=\s*true/m);
+  });
+
+  it("uses a frequency_minutes no other rule uses (Sentry dedups identical rules at POST)", () => {
+    const own = ruleBlock().match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
+    if (!own) throw new Error("fixture: frequency_minutes not found in the rule");
+    const all = [...stripComments(tf).matchAll(/^\s*frequency_minutes\s*=\s*(\d+)/gm)].map((x) => x[1]);
+    expect(all.filter((v) => v === own[1])).toHaveLength(1);
   });
 
   it("is attached to the web-platform issue stream", () => {

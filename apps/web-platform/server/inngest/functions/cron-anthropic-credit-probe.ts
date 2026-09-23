@@ -96,7 +96,7 @@ export async function cronAnthropicCreditProbeHandler({
       } catch (err) {
         if (err instanceof AnthropicApiError) {
           const body = err.bodyExcerpt ?? "";
-          if (ANTHROPIC_CREDIT_EXHAUSTED_RE.test(body)) {
+          if (err.creditExhausted || ANTHROPIC_CREDIT_EXHAUSTED_RE.test(body)) {
             // No report here (#8505): postAnthropicMessage already emitted the named
             // marker (feature=anthropic-credit, source=cron:cron-anthropic-credit-probe)
             // that sentry_alert.anthropic_credit_exhausted routes. A second report
@@ -108,8 +108,10 @@ export async function cronAnthropicCreditProbeHandler({
             };
           }
           if (err.status === 401 || ANTHROPIC_AUTH_FAILURE_RE.test(body)) {
+            // Message path (err = null), not an Error: the Error path loses its
+            // feature/op tags to the pino mirror's pre-capture (#8505, #8629).
             reportSilentFallback(
-              new Error("Anthropic API authentication failure (invalid/revoked operator key)"),
+              null,
               {
                 feature: CRON_NAME,
                 op: "anthropic-key-invalid",

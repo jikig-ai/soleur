@@ -11,15 +11,21 @@ esac
 # production Anthropic key (#8505, AC1). Never prints a value: each config is
 # reported as `<config> <sha256[:12]>`, `<config> ABSENT` or `<config> ERROR`.
 #
-# Scope is DERIVED from `doppler configs`, never hard-coded: `ci` plus every
-# config matching ^prd($|_). A prd_* branch added later is compared automatically.
+# Scope is DERIVED from `doppler configs`, never hard-coded: every config matching
+# ^ci($|_) on the CI side and every config matching ^prd($|_) on the production side.
+# A ci_* or prd_* branch added later is compared automatically. The root `ci` config
+# must hold a key; a ci_* branch may be ABSENT.
 #
-# Exit 0  DISTINCT: ci holds a key, and it differs from every prd* key.
-# Exit 1  ci is ABSENT, or ci equals at least one prd* key.
-# Exit 2  could not measure: config enumeration failed, a read failed, no prd*
-#         config was enumerated, or no prd* config holds a key. Never a pass.
+# Exit 0  DISTINCT: ci holds a key, and no ci* key equals any prd* key.
+# Exit 1  ci is ABSENT, or some ci* key equals some prd* key.
+# Exit 2  could not measure: config enumeration or parsing failed, a read failed,
+#         no ci/prd* config was enumerated, or no prd* config holds a key. Never a pass.
 #
-# Usage (needs Doppler read on soleur/ci and soleur/prd*):
+# Not covered, by construction: keys outside Doppler project `soleur`, other secret
+# names, and the GitHub repo secret (write-only; Terraform writes it from the same
+# source as Doppler `ci`).
+#
+# Usage (needs Doppler read on soleur/ci* and soleur/prd*):
 #   bash apps/web-platform/scripts/anthropic-key-distinctness.sh
 
 readonly PROJECT="soleur"
@@ -57,24 +63,37 @@ if ! configs_json="$(doppler configs -p "$PROJECT" --json 2>/dev/null)"; then
   printf 'ERROR could not enumerate Doppler configs for %s\n' "$PROJECT"
   exit 2
 fi
-if ! mapfile -t prd_configs < <(jq -r '.[].name' <<<"$configs_json" | grep -E '^prd($|_)' | LC_ALL=C sort); then
+# jq runs as its own command (not inside a process substitution) so a parse error
+# reaches the exit status instead of truncating the list silently.
+names=""
+if ! names="$(jq -er '.[] | .name | strings' <<<"$configs_json")"; then
   printf 'ERROR could not parse the Doppler config list\n'
   exit 2
 fi
+mapfile -t prd_configs < <(grep -E '^prd($|_)' <<<"$names" | LC_ALL=C sort)
+mapfile -t ci_configs < <(grep -E '^ci($|_)' <<<"$names" | LC_ALL=C sort)
 if (( ${#prd_configs[@]} == 0 )); then
   printf 'ERROR no prd* config enumerated — nothing to compare against\n'
   exit 2
 fi
-
-read_key ci
-ci_state="$READ_STATE"
-ci_fp="$READ_FP"
-case "$ci_state" in
-  PRESENT) printf 'ci %s\n' "$ci_fp" ;;
-  *) printf 'ci %s\n' "$ci_state" ;;
-esac
+if [[ "${ci_configs[0]:-}" != ci ]]; then
+  printf 'ERROR the root ci config was not enumerated\n'
+  exit 2
+fi
 
 errors=0
+declare -A ci_fps=()
+root_ci_state=""
+for cfg in "${ci_configs[@]}"; do
+  read_key "$cfg"
+  [[ "$cfg" == ci ]] && root_ci_state="$READ_STATE"
+  case "$READ_STATE" in
+    PRESENT) printf '%s %s\n' "$cfg" "$READ_FP"; ci_fps["$READ_FP"]="$cfg" ;;
+    ABSENT) printf '%s ABSENT\n' "$cfg" ;;
+    *) printf '%s ERROR\n' "$cfg"; errors=$((errors + 1)) ;;
+  esac
+done
+
 equal=0
 compared=0
 for cfg in "${prd_configs[@]}"; do
@@ -83,14 +102,13 @@ for cfg in "${prd_configs[@]}"; do
     PRESENT)
       printf '%s %s\n' "$cfg" "$READ_FP"
       compared=$((compared + 1))
-      [[ "$ci_state" == PRESENT && "$READ_FP" == "$ci_fp" ]] && equal=$((equal + 1))
+      [[ -n "${ci_fps[$READ_FP]:-}" ]] && equal=$((equal + 1))
       ;;
     ABSENT) printf '%s ABSENT\n' "$cfg" ;;
     *) printf '%s ERROR\n' "$cfg"; errors=$((errors + 1)) ;;
   esac
 done
 
-[[ "$ci_state" == ERROR ]] && errors=$((errors + 1))
 if (( errors > 0 )); then
   printf 'ERROR %d read(s) failed — the comparison is incomplete\n' "$errors"
   exit 2
@@ -99,12 +117,12 @@ if (( compared == 0 )); then
   printf 'ERROR no prd* config holds %s — nothing was compared\n' "$KEY"
   exit 2
 fi
-if [[ "$ci_state" != PRESENT ]]; then
+if [[ "$root_ci_state" != PRESENT ]]; then
   printf 'SAME-OR-MISSING ci holds no %s\n' "$KEY"
   exit 1
 fi
 if (( equal > 0 )); then
-  printf 'SAME-OR-MISSING ci equals %d prd* config(s)\n' "$equal"
+  printf 'SAME-OR-MISSING a ci* key equals %d prd* config(s)\n' "$equal"
   exit 1
 fi
 printf 'DISTINCT\n'

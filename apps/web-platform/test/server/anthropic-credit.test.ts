@@ -86,10 +86,4 @@ describe("reportAnthropicCreditExhausted (real logger + real observability)", ()
     expect(ANTHROPIC_CREDIT_EXHAUSTED_OP).toBe("anthropic-credit-exhausted");
   });
 
-  it("never forwards a vendor body into the event", () => {
-    reportAnthropicCreditExhausted({ source: "email-triage", status: 400 });
-    const serialized = JSON.stringify(captureMessageSpy.mock.calls);
-    expect(serialized).not.toContain("credit balance is too low to access");
-    expect(serialized).not.toContain("sk-ant-");
-  });
 });

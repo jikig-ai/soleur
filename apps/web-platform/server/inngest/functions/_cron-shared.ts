@@ -564,11 +564,18 @@ export async function postDiscordWebhook(args: {
 export class AnthropicApiError extends Error {
   readonly status: number;
   readonly bodyExcerpt?: string;
-  constructor(status: number, bodyExcerpt?: string) {
+  /**
+   * #8505: classified ONCE by the transport from the FULL raw body, so the
+   * credit probe and the credit marker cannot disagree (the excerpt is
+   * redaction-formatted and cut to 600 chars).
+   */
+  readonly creditExhausted: boolean;
+  constructor(status: number, bodyExcerpt?: string, creditExhausted = false) {
     super(`Anthropic API ${status}${bodyExcerpt ? `: ${bodyExcerpt}` : ""}`);
     this.name = "AnthropicApiError";
     this.status = status;
     this.bodyExcerpt = bodyExcerpt;
+    this.creditExhausted = creditExhausted;
   }
 }
 
@@ -633,7 +640,8 @@ export async function postAnthropicMessage(args: {
     // #8505: the named, routed credit-exhaustion marker for every HTTP-transport
     // cron on the operator key. Reported here (not at each call site) so the
     // canary, compound-promote and weekly-release-digest cannot drift apart.
-    if (isAnthropicCreditExhausted(rawBody)) {
+    const creditExhausted = isAnthropicCreditExhausted(rawBody);
+    if (creditExhausted) {
       reportAnthropicCreditExhausted({
         source: `cron:${args.markerSource ?? "unknown"}`,
         status: resp.status,
@@ -642,6 +650,7 @@ export async function postAnthropicMessage(args: {
     throw new AnthropicApiError(
       resp.status,
       formatTailForSentry(rawBody)?.slice(0, 600),
+      creditExhausted,
     );
   }
 

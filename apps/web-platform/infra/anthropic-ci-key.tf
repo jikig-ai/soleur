@@ -1,16 +1,22 @@
 # #8505 — the CI/eval Anthropic key, distributed by Terraform.
 #
-# CI and manual evals bill a key minted in the `soleur-ci-eval` Console workspace
-# (wrkspc_01GCfbuC9cVBXiWkkEfnyi4D, org d8d6285b…), which carries a $100/month spend
-# limit, so an eval grid can never drain the org balance production draws on. The
-# key is minted in the Console (the Admin API cannot set a workspace spend limit and
-# there is no Anthropic Terraform provider); the procedure and its records live in
+# CI and manual evals bill a key minted in the `soleur-ci-eval` Console workspace, which
+# carries a monthly spend limit, so an eval grid cannot drain the org balance production
+# draws on. Records and the mint procedure:
 # knowledge-base/engineering/operations/runbooks/anthropic-console-workspace-key.md.
-# ADR-243 records the partition decision.
+# Decision: ADR-243.
 #
-# Both writers below are the ONLY Terraform writers of these two slots. Neither
-# carries `ignore_changes`, so a hand edit of Doppler `ci` or of the repo secret is
-# drift that the next apply reverts.
+# What Terraform does NOT check: that this key differs from the production key. That is
+# proven against LIVE Doppler by apps/web-platform/scripts/anthropic-key-distinctness.sh,
+# across every prd* config. Comparing here would need the production key declared as a
+# variable in this root, which writes it into the plan file on the runner and makes every
+# apply depend on prd_terraform inheriting it (against #8209 and #8614). ADR-243 records
+# the ruling. `var.anthropic_api_key_ci` only has its shape validated (variables.tf).
+#
+# These are the only Terraform writers of the two slots. Neither ignores `value`, so a hand
+# edit is drift the next apply reverts. `prevent_destroy` because removing or renaming a
+# resource without a `moved {}` / `removed { lifecycle { destroy = false } }` block DELETES
+# the CI key, and CI Claude steps then soft-skip quietly rather than fail.
 
 resource "doppler_secret" "ci_anthropic_api_key" {
   project    = "soleur"
@@ -20,26 +26,18 @@ resource "doppler_secret" "ci_anthropic_api_key" {
   visibility = "masked"
 
   lifecycle {
-    # The one property this file exists for: CI never holds the production key.
-    # The production value is read ONLY here — a precondition is not persisted to
-    # state. The message is static on purpose: an error_message that references a
-    # sensitive variable makes `terraform plan` hard-error instead of reporting.
-    precondition {
-      condition     = var.anthropic_api_key_ci != var.anthropic_api_key && startswith(var.anthropic_api_key_ci, "sk-ant-")
-      error_message = "anthropic_api_key_ci must be an sk-ant- key distinct from the production anthropic_api_key (#8505)."
-    }
+    prevent_destroy = true
   }
 }
 
+# `value`, not the `plaintext_value` its siblings use: 6.12.1 marks `plaintext_value`
+# deprecated in favour of `value`. Both write the same secret.
 resource "github_actions_secret" "anthropic_api_key" {
   repository  = "soleur"
   secret_name = "ANTHROPIC_API_KEY"
   value       = var.anthropic_api_key_ci
 
   lifecycle {
-    precondition {
-      condition     = var.anthropic_api_key_ci != var.anthropic_api_key && startswith(var.anthropic_api_key_ci, "sk-ant-")
-      error_message = "anthropic_api_key_ci must be an sk-ant- key distinct from the production anthropic_api_key (#8505)."
-    }
+    prevent_destroy = true
   }
 }
