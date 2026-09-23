@@ -176,7 +176,6 @@ setval ci "$CI_VAL"; setval prd "$PRD_VAL"
 rc=0; PATH="$BIN:$PATH" bash -x "$SCRIPT" > "$ROOT/out" 2> "$ROOT/err" || rc=$?
 if [[ "$rc" == 78 && ! -s "$FIX/calls" ]]; then pass "refuses to run under bash -x (rc 78, no doppler call)"; else fail "xtrace refusal: rc=$rc want 78, calls=$(wc -l < "$FIX/calls" 2>/dev/null || echo 0)"; fi
 
-TOTAL=$((PASS + FAIL))
 printf '=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Anti-vacuity floor: 17 assertions today. Report outside the helpers.
 if (( PASS + FAIL < 17 )); then
