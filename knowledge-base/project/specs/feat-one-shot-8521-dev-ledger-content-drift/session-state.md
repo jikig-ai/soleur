@@ -21,3 +21,11 @@
 - Skills: soleur:plan, soleur:plan-review, soleur:deepen-plan
 - Agents: repo-research-analyst, learnings-researcher, functional-discovery, cto (x2), general-purpose advisor, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, security-sentinel, architecture-strategist, spec-flow-analyzer, test-design-reviewer, observability-coverage-reviewer
 - Filed: #8605 (deferred self-service dev discard), #8606 (run-migrations.sh unmerged-check cwd bug)
+
+## Work Phase
+- Status: complete (Phases 0-5; AC1-AC9 verified locally)
+- Suite: `dev-ledger-parity.test.sh` 65/65; mutation battery 20/20 killed (14 guard operands, 6 action.yml operands), control green, tracked files restored byte-identical. One survivor (A3 identity check) was a fixture defect (here-string trailing empty line), fixed and re-killed.
+- AC8 timing (real origin, 95 heads, this box at load ~66): owner build 26.9 s / 17.2 s. Plan's unloaded estimate 9-13 s.
+- Local `TEST_GROUP=scripts` gate REFUSED (rc=4, two sibling full-gate runs). Substitute: 3 consumer suites + 49 census-shaped test-all rows. Results: 47 green; `lint-diagnosis-claims` red on a real ADR-166 wording defect in this diff (fixed); `orphan-process-reaper-mutations` hit a 300 s local cap under load (untouched by this diff; CI's required `test` context is authoritative).
+- Ratchets moved by the new files and fixed at the code: guard-vacuity-floor (suite PROMOTED), fixture-relative-assert + fixture-dir-operand-assert (canonical assert_fixture_dir), lint-shell-capture-exit.
+- GDPR gate: skipped (no diff path matches the canonical regex).

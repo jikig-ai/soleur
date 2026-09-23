@@ -852,32 +852,32 @@ included) of a branch that is fresh, unmerged, and holds a file not on main. The
 
 ### Functional Requirements
 
-- [ ] **AC1**: Guard 1 rows 1–11 plus 3b/4b/5b/9b hold, and must-PASS rows (a)–(j) hold, in
+- [x] **AC1**: Guard 1 rows 1–11 plus 3b/4b/5b/9b hold, and must-PASS rows (a)–(j) hold, in
   `apps/web-platform/scripts/dev-ledger-parity.sh` `check`. Verified by
   `bash apps/web-platform/scripts/dev-ledger-parity.test.sh`.
-- [ ] **AC2**: Guard 2 rows 1–12 and its must-PASS rows hold, in `classify-missing` plus
+- [x] **AC2**: Guard 2 rows 1–12 and its must-PASS rows hold, in `classify-missing` plus
   `.github/actions/dev-migration-drift-probe/action.yml` step `probe`. The probe logic rows run
   against the extracted block.
-- [ ] **AC3**: Guard 1 wiring rows 12–15 hold, asserted by exact anchored step names and relative
+- [x] **AC3**: Guard 1 wiring rows 12–15 hold, asserted by exact anchored step names and relative
   order:
   - the `ledger_guard` step lives in `detect-changes`, which keeps `fetch-depth: 0`;
   - the resolve step sits after `Lint migration FK preconditions` and before
     `Acquire dev-suite mutex`, with `deleted)` and `*)` exit arms;
   - one check step sits between `Detect dev-vs-main migration drift` and `Apply migrations to dev`,
     running `$RUNNER_TEMP/dev-ledger-parity.sh check`.
-- [ ] **AC4**: The `detect-changes` alternation contains the token
+- [x] **AC4**: The `detect-changes` alternation contains the token
   `apps/web-platform/scripts/dev-ledger-parity`.
-- [ ] **AC5**: `action.yml` has:
+- [x] **AC5**: `action.yml` has:
   - the `Repair:` line naming `§Content drift` and `dev-ledger-parity.sh check`;
   - the `no live branch owns these rows` line;
   - the `UNCLASSIFIED` arm;
   - the count-only suspicious-row line, with no `$f` in that annotation.
 
   The suite asserts all four.
-- [ ] **AC6**: The learning has `## Content drift (same filename, different blob)`, and ADR-061 has
+- [x] **AC6**: The learning has `## Content drift (same filename, different blob)`, and ADR-061 has
   `## Amendment 2026-09-23` with both points and the "superseded in part" note on its Rejected
   alternative.
-- [ ] **AC7**: Scope stays narrow.
+- [x] **AC7**: Scope stays narrow.
   - `git diff origin/main...HEAD --name-only` touches no `apps/web-platform/supabase/migrations/**`,
     no `run-migrations.sh` and no `lint-migration-immutability.sh`.
   - No workflow gains a `permissions:` key.
@@ -887,11 +887,11 @@ included) of a branch that is fresh, unmerged, and holds a file not on main. The
 
 ### Non-Functional Requirements
 
-- [ ] **AC8**: No-candidate runs make zero remote calls (must-PASS (e) and the Guard 2 empty-input row
+- [x] **AC8**: No-candidate runs make zero remote calls (must-PASS (e) and the Guard 2 empty-input row
   use a poisoned origin). The PR body records the measured wall time of one `owners_repo` build
   against the real `origin`, run twice per push inside the mutex window. Each build must stay under
   30 s, and the scheduled job must stay under its `timeout-minutes: 5`.
-- [ ] **AC9**: These pass or stay green:
+- [x] **AC9**: These pass or stay green:
   - `shellcheck` on the new script and suite;
   - `bash scripts/lint-orphan-test-suites.sh`;
   - `bash scripts/lint-workflow-step-env-refs.test.sh`;
