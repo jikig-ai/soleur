@@ -370,7 +370,7 @@ BARE="$tmp/origin.git"
 git init -q --bare "$BARE"
 git -C "$FIX" remote add origin "$BARE"
 git -C "$FIX" push -q origin main
-git -C "$FIX" fetch -q origin
+git -C "$FIX" fetch -q --no-tags origin
 reset_feat
 printf 'ALTER TABLE public.fixture_b ADD COLUMN remote_test int;\n' >> "$FIX/apps/web-platform/supabase/migrations/002_b.sql"
 git -C "$FIX" commit -qam 'mutate 002 on feat (from-pr-diff arm)'
