@@ -105,6 +105,16 @@ T="$(mktemp -d "${TMPDIR}/gdcensus.XXXXXX")" || { printf 'FAIL SETUP: mktemp -d 
 assert_fixture_dir "$T"
 trap 'rm -rf "$T"' EXIT
 
+# (#7849) Arm F builds a real bare repo to drive gc, so this suite spawns a MUTATING git and
+# owes the shared fixture-env builder. An inherited GIT_DIR retargets `git init` at the
+# caller's real repository and cwd does not win that fight, so a raw environment here would
+# act on the operator's checkout while reading exactly like a sandbox.
+_GFE_LIB="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/test/lib" 2>/dev/null && pwd -P)/git-fixture-env.sh"
+[ -f "$_GFE_LIB" ] && [ -r "$_GFE_LIB" ] \
+  || { printf 'FAIL SETUP: fixture-env helper missing or unreadable at %s\n' "$_GFE_LIB" >&2; exit 1; }
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$_GFE_LIB"
+
 printf '\n=== git-data-store-device census (Guard 1) ===\n\n'
 
 # Comment-stripped corpus: a whole-line `#` comment becomes an empty line, so prose quoting a
@@ -346,6 +356,9 @@ gc_refused() { # gc_refused <row> <rc> <anchor>
   else fail "$1: ORDER — gc maintained repos before (or despite) the store refusal"; fi
 }
 GCROOT="$T/gcrepos"; mkdir -p "$GCROOT"
+# Return checked: git_fixture_env exports NOTHING when it refuses, so an unchecked call would
+# build the fixture under the caller's own environment while reading like protection.
+git_fixture_env "$GCROOT" || { printf 'FAIL SETUP: git_fixture_env refused %s\n' "$GCROOT" >&2; exit 1; }
 git init --bare -q "$GCROOT/ws-gc.git" && git --git-dir="$GCROOT/ws-gc.git" symbolic-ref HEAD refs/heads/main
 # F1 MUST-PASS: the seam is the temp root's own --mountpoint SOURCE, the marker its UUID.
 rm -f "$T/cursor"

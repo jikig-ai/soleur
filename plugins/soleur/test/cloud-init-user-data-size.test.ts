@@ -164,13 +164,31 @@ const WEB_GZIP_FLOOR = 10_000;
 // the template strip landed, so they measured a payload no host receives.
 //
 // TWO DIFFERENT NUMBERS, deliberately. terraform's own base64gzip of the real render is
-// 12,588 B (git-data-userdata-budget.sh, the authoritative gate). THIS model computes
-// 6,040 B, because it approximates variable-length values from SECRET_LENGTHS rather than
+// the authoritative gate (git-data-userdata-budget.sh). THIS model computes a smaller
+// figure, because it approximates variable-length values from SECRET_LENGTHS rather than
 // substituting real secrets — the same systematic gap the registry arm carries. So the
-// bracket is set against the MODEL's output, not against the artifact's: 9,000 keeps a
-// ~1.5x re-inlining tripwire, 3,000 is non-vacuity (a model that stopped substituting
-// content, or a strip that ate the payload, gzips to near-nothing and reds here).
-const GIT_DATA_BUDGET = 9_000;
+// bracket is set against the MODEL's output, not against the artifact's, and 3,000 is
+// non-vacuity (a model that stopped substituting content, or a strip that ate the payload,
+// gzips to near-nothing and reds here).
+//
+// (#8211) RE-BASELINED 9,000 -> 10,500, and the paragraph above corrected. It said the model
+// computes 6,040 B and that 9,000 kept a "~1.5x re-inlining tripwire". Both were stale:
+// measured 2026-09-23, origin/main computes 8,784 B, so the tripwire had eroded to 216 B —
+// 2.4% — by organic growth that no PR re-baselined. A tripwire nobody re-measures stops being
+// one, and the next PR to add a line would have paid for everyone's drift.
+//
+// This PR's git-data boot verification (the plaintext read-only check, the residue counts, the
+// fence-on-mapper assertion, the store marker and the erasure self-probe) adds 312 B, to
+// 9,096 B. It is inline-mandatory: the checks gate whether the host may serve its store at
+// all, so they run in the bootstrap before anything else, and no baked helper can cover a
+// check whose whole job is to run at boot. Baking-instead-of-inline is therefore unavailable
+// here, and the sanctioned path is a modest re-baseline (the #6090 §1A precedent above).
+//
+// 10,500 restores a real tripwire: ~1.4 KB of headroom over the measured 9,096, so a
+// re-inlined KB-scale blob — the failure mode this guards — still reds. Re-measure BOTH
+// numbers when this next moves; quoting a figure without re-deriving it is what produced the
+// stale paragraph above.
+const GIT_DATA_BUDGET = 10_500;
 const GIT_DATA_FLOOR = 3_000;
 // (#7278) registry base64gzip'd budget. THE REGISTRY HAD NO ARM HERE AT ALL until #7278, and
 // that absence is the whole finding: `hcloud_server.registry` has rendered

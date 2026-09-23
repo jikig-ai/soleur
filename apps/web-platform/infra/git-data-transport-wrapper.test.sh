@@ -61,6 +61,16 @@ ERR="$(mktemp "${TMPDIR:-/tmp}/gdxport-err.XXXXXX")"
 FM_REAL="$(command -v findmnt)" || { echo "FAIL SETUP: findmnt(8) not on PATH" >&2; exit 1; }
 SEAMS="$(mktemp -d "${TMPDIR}/gdxport-seams.XXXXXX")"
 trap 'rm -f "$ERR"; rm -rf "$SEAMS"' EXIT
+
+# (#7849) The C1 rows build real bare repos, so this suite spawns a MUTATING git and owes the
+# shared fixture-env builder. An inherited GIT_DIR retargets `git init` at the caller's real
+# repository — cwd does not win that fight — so a raw environment here would act on the
+# operator's checkout while reading exactly like a sandbox.
+_GFE_LIB="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/test/lib" 2>/dev/null && pwd -P)/git-fixture-env.sh"
+[ -f "$_GFE_LIB" ] && [ -r "$_GFE_LIB" ] \
+  || { printf 'FAIL SETUP: fixture-env helper missing or unreadable at %s\n' "$_GFE_LIB" >&2; exit 1; }
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$_GFE_LIB"
 MNT0="$(stat -c %m "$SEAMS")"
 STORE_SRC="$(findmnt -n -o SOURCE --mountpoint "$MNT0")" || STORE_SRC=""
 STORE_UUID="$(findmnt -n -o UUID --mountpoint "$MNT0")" || STORE_UUID=""
@@ -240,7 +250,13 @@ rm -rf "$root"
 # ── (#8211, ADR-239) C1 — transport only on a verified, mapper-served store (Guard 1) ─────
 # Run WITHOUT the dry-run hook, so "accepted" means git really exec'd. Refusal is `reject`
 # (exit 1) and the ORDER assertion is that git never ran: no ref advertisement on stdout.
-fixture_bare() { git init --bare -q "$1" && git --git-dir="$1" symbolic-ref HEAD refs/heads/main; }
+# Return checked: git_fixture_env exports NOTHING when it refuses, so an unchecked call would
+# build the fixture under the caller's own environment while reading like protection. The
+# operand is the PARENT: "$1" is the bare repo git init is about to create.
+fixture_bare() {
+  git_fixture_env "$(dirname "$1")" || { printf 'FAIL SETUP: git_fixture_env refused %s\n' "$(dirname "$1")" >&2; exit 1; }
+  git init --bare -q "$1" && git --git-dir="$1" symbolic-ref HEAD refs/heads/main
+}
 c1_refused() { # c1_refused <row> <rc> <anchor>
   if [ "$2" = "1" ]; then pass; else fail "$1: expected exit 1 (reject), got $2 ($(head -c 200 "$ERR"))"; fi
   if grep -qF "$3" "$ERR"; then pass; else fail "$1: refusal does not carry '$3' ($(head -c 200 "$ERR"))"; fi
