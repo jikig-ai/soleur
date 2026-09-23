@@ -307,6 +307,7 @@
 2	plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh
 5	plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh
 8	plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh
+2	scripts/actions-queue-health.test.sh
 1	scripts/audit-bot-codeql-coverage.sh
 1	scripts/check-cloudflare-token-drift.sh
 1	scripts/check-cloudflare-token-drift.test.sh
