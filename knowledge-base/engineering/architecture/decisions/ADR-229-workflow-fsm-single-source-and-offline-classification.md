@@ -344,13 +344,29 @@ the base, which closes the rename escape.
   including inside ship) re-opens the gate question on that evidence.
   **[Amended 2026-09-22 (#8470): the fix is the PR that adds
   `plugins/soleur/test/ship-learning-probe.test.ts` (#8567). The re-measure's
-  `SINCE` is that file's first first-parent commit on `main`:
-  `git log --first-parent --diff-filter=A --reverse --format=%cI origin/main -- plugins/soleur/test/ship-learning-probe.test.ts | head -1`
-  — `--first-parent` so a merge-commit landing reports the merge, not the earlier
-  branch commit (which would admit pre-fix rows); `--reverse | head -1` survives a
-  later delete and re-add. The trigger itself changes in one respect: an
-  interactive **Skip** at ship Phase 2 also produces a class-D row, so a class-D
-  row re-opens the gate question only after its session is checked for a Skip.]** The option
+  `SINCE` is that PR's merge instant, read as UTC from the one clock that records
+  it: `gh pr view 8567 --json mergedAt -q .mergedAt`. It is compared LEXICALLY
+  against `.ts` in the invocation log, which is always `…Z`, so the value must be
+  `Z`-suffixed — do NOT derive it from `git log --format=%cI`, which renders the
+  COMMITTER's local offset (`2026-09-22T12:18:55+02:00` for a merge whose
+  `mergedAt` is `10:18:55Z`); a lexical compare then shifts the cutoff by that
+  offset, dropping post-fix rows on a positive offset and admitting pre-fix rows
+  on a negative one. Three preconditions, each fail-CLOSED, because the #8470
+  procedure treats an empty `SINCE` as "no filter" and would otherwise re-measure
+  the whole pre-fix corpus and re-open this gate on the very rows that opened it:
+  (i) refuse to run when `SINCE` is empty or does not end in `Z`; (ii) refuse when
+  the log yields zero rows — the log is gitignored and machine-local
+  (`.claude/.skill-invocations.jsonl` in the MAIN checkout, absent from every
+  worktree), and zero rows renders as "no class D, all clear"; (iii) select whole
+  SESSIONS whose first row is `>= SINCE`, never individual rows — a row-level
+  filter truncates a session that straddles the cutoff and reclassifies a
+  compound-before-`SINCE` session from class B to class D, manufacturing the one
+  signal that re-opens the gate. Two confounders to check per surviving class-D
+  row before counting it: an interactive **Skip** at ship Phase 2 now also
+  produces a class-D row (the old probe could never reach that prompt), and a
+  session whose checkout predates the fix ran the OLD probe while logging a
+  post-`SINCE` timestamp — verify with
+  `git merge-base --is-ancestor <fix-sha> <session-branch-head>`.]** The option
   the ruling actually chose over both gate shapes is a third one, not in the
   Alternatives table: a branch-scoped check inside ship Phase 2 (#8470). Known
   unmodelled designed call: ship Phase 1.5 can run `review` inside ship, which

@@ -254,22 +254,30 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 ## Phase 2: Capture Learnings
 
-Did **this branch** add a learning? Ask the branch, not the calendar: a repo-wide `--since` window is non-empty in essentially every week here, so it never said "compound has not run" (#8470). Run this block as written:
+Did **this branch** capture a learning? Ask the branch, not the calendar: a repo-wide `--since` window is non-empty in essentially every week here, so it never said "compound has not run" (#8470). Run this block as written, from the feature worktree root (on a harness whose tool envelope carries no cwd, prefix each `git` with `-C <worktree-abs-path>` — `devin/INSTRUCTIONS.md` §Paths):
 
 ```bash
-{ git status --porcelain -- ':/knowledge-base/project/learnings/' | grep -E '^(\?\?|A)'
-  git fetch -q origin main 2>/dev/null && {
-    git log --diff-filter=A --format=%h origin/main..HEAD -- ':/knowledge-base/project/learnings/'
-    git log --format=%s origin/main..HEAD | grep -E '^(compound|learning): '
+if [ -n "$(
+  { git status --porcelain -uall -- ':/knowledge-base/project/learnings/' | grep -E '^(\?\?|A.) .*\.md"?$'
+    git fetch -q origin main 2>/dev/null && {
+      git log --diff-filter=A --format=%h refs/remotes/origin/main..HEAD -- ':/knowledge-base/project/learnings/'
+      git log --format=%s refs/remotes/origin/main..HEAD | grep -E '^(compound|learning): '
+    }
   } 2>/dev/null
-} | grep -q . && echo "BRANCH_LEARNING=present" || echo "BRANCH_LEARNING=absent"
+)" ]; then echo "BRANCH_LEARNING=present"; else echo "BRANCH_LEARNING=absent"; fi
 ```
 
-It counts a learning compound wrote but has not committed yet, counts an ADDED file or a branch commit whose subject starts `compound:` or `learning:` (compound's own commit prefixes; editing an old learning in any other commit is not capturing one), and trusts the committed arms only after a successful fetch — a stale `origin/main` would widen the range to main's own learnings (Phase 1.5's fetch rule). Every doubt resolves toward running compound. Pinned by `plugins/soleur/test/ship-learning-probe.test.ts`.
+It counts a `.md` learning compound wrote but has not committed yet (`-uall` so a brand-new category directory is listed file by file), counts an ADDED file or a branch commit whose subject starts `compound:` or `learning:` — the prefixes compound and compound-capture commit under, including the runs that only update or archive, which is what stops one-shot running compound twice (compound's `constitution:` and `skill:` commits are deliberately not learning captures) — and trusts the committed arms only after a successful fetch, because a stale `origin/main` would widen the range to main's own learnings (Phase 1.5's fetch rule). Three deliberate spellings: `refs/remotes/origin/main` (a *tag* named `origin/main` outranks the remote-tracking ref), `..` not `...` (a merge base would re-admit main's learnings), and a captured string tested with `-n` rather than `| grep -q .` (that pipeline reports FAILURE on a SUCCESSFUL match under `set -o pipefail`, the shape `.claude/hooks/grep-q-pipe-guard.test.sh` bans). Every doubt resolves toward running compound. The block, and the two dispatch lines below it, are pinned by `plugins/soleur/test/ship-learning-probe.test.ts`.
 
-**`BRANCH_LEARNING=present`:** compound already ran for this branch — continue to Phase 3.
+The token says whether a learning LANDED, not who wrote it: a hand-committed learning also reads `present`, so the unarchived-artifact check below runs on BOTH verdicts.
 
-**`BRANCH_LEARNING=absent`:** compound has not run for this branch, so it runs now unless the interactive Skip below applies. First check for unarchived KB artifacts matching the feature name extracted in Phase 1 (excluding `archive/` paths) using the Glob tool:
+**`BRANCH_LEARNING=present`:** a learning landed on this branch. Run the artifact check below; with no unarchived artifacts, continue to Phase 3.
+
+**`BRANCH_LEARNING=absent`:** no learning landed on this branch, so compound runs unless the interactive Skip below applies.
+
+Any other output — an error, an empty line, two tokens — is treated as `absent`. Do NOT re-derive the check by hand.
+
+Check for unarchived KB artifacts matching the feature name extracted in Phase 1 (excluding `archive/` paths) using the Glob tool:
 
 - Brainstorms: `knowledge-base/project/brainstorms/*FEATURE*`
 - Plans: `knowledge-base/project/plans/*FEATURE*`
@@ -277,9 +285,11 @@ It counts a learning compound wrote but has not committed yet, counts an ADDED f
 
 **If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that compound must run to consolidate and archive them before shipping. Then use `skill: soleur:compound` (or `skill: soleur:compound --headless` if `HEADLESS_MODE=true`). The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
 
-**If no unarchived artifacts exist:**
+**If no unarchived artifacts exist AND the probe printed `BRANCH_LEARNING=present`:** continue to Phase 3.
 
-**Headless mode:** Auto-invoke `skill: soleur:compound --headless` without prompting.
+**If no unarchived artifacts exist AND the probe printed `BRANCH_LEARNING=absent`:**
+
+**Headless mode:** Auto-invoke `skill: soleur:compound --headless` without prompting. Compound de-duplicates against learnings already on this branch, so a second run on a fetch-failed `absent` costs a check, not a duplicate file.
 
 **Interactive mode:** Offer the standard choice:
 
@@ -495,7 +505,7 @@ Create a TodoWrite checklist summarizing the state:
 Ship Checklist for [branch name]:
 
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
-- [x/skip] Learnings captured (soleur:compound)
+- [x/skip] Learnings captured (soleur:compound — `skip` only on the Phase 2 probe's interactive no-artifacts path)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
 - [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
 - [ ] No removable probe in the tree (Phase 5.4 gate, ADR-230)
