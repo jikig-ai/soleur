@@ -2,7 +2,7 @@
 feature: c4-model-mergeable
 lane: cross-domain
 brand_survival_threshold: single-user incident
-brainstorm: knowledge-base/project/brainstorms/2026-09-22-c4-model-mergeable-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20260922-133038-2026-09-22-c4-model-mergeable-brainstorm.md
 draft_pr: 8538
 issue: 8542
 deferred: 8541
