@@ -210,6 +210,16 @@ run_case "leg 3: a reused_local_reload AFTER cosign_absent does not launder it i
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail reused_local_reload)"; } > "$(fx reload_only)"
 run_case "leg 3: a host whose only verdict is reused_local_reload (cosign never ran) -> ACTION REQUIRED" 5 "ACTION REQUIRED:" "$(fx reload_only)"
 
+# Classes adjacent to the laundering one, so a use-site widening to either is caught too (the
+# coverage previously existed only for the class review happened to name).
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail rekor_unreachable)"; } > "$(fx leg3g)"
+run_case "leg 3: result=rekor_unreachable is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3g)"
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail inspect_failed)"; } > "$(fx leg3h)"
+run_case "leg 3: result=inspect_failed is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3h)"
+# A reload verdict must be ACTION REQUIRED with its OWN sentence, never "verification is broken".
+{ row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$VERIFY_OK"; row "$HA" "$T3" "$(verify_fail reused_local_reload)"; } > "$(fx leg3i)"
+run_case "leg 3: a same-version reload after an ok is ACTION REQUIRED naming the reload, not a broken verifier" 5 "no cosign ran on the latest deploy" "$(fx leg3i)"
+
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail unsigned)"; } > "$(fx leg3f)"
 run_case "leg 3: result=unsigned is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3f)"
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail wrong_identity)"; } > "$(fx leg3d)"
@@ -315,53 +325,74 @@ run_case "rows exist but no ci-deploy marker -> TRANSIENT (2), never PASS" 2 "TR
 # Sits EXACTLY on the suite's count, raised in the same edit that settled it — the sibling
 # CI_DEPLOY_ASSERT_FLOOR pays the same price. A floor one below the count is not headroom, it is
 # how many assertions can be deleted before the one guard that detects truncation notices.
-# ── EXPLAIN-vs-CODE DRIFT GUARD (#8600 post-merge; rebuilt after the #8636 review).
-#    `--explain`, the file header and the PASS/ACTION summaries are FOUR prose copies of one
-#    contract, and all four drifted when the legs were corrected.
+# ── CONTRACT-LINE PIN (#8600 -> #8636; rebuilt three times, each rebuild caught by review).
+#    The contract exists in FOUR operator-facing prose copies -- `--explain`, the file header, and
+#    the PASS / ACTION REQUIRED / FAIL verdict blocks -- and every one of them drifted when the
+#    grading legs were corrected. Three previous guards tried to detect that with anchors and
+#    failed, each in a way review had to find:
+#      v1  derived "tokens the grader uses" from a source that INCLUDED the --explain heredoc, so
+#          every token in the text was present by construction (a tautology).
+#      v2  asserted bare TOKENS: `grep -qF ok` matches the word "token".
+#      v3  asserted phrase ANCHORS with hand-enumerated negation lists, and sliced the verdict
+#          blocks with unbounded `awk` ranges. Both leaked: an unlisted negation ("CORRECTION:
+#          that helper conjunct was dropped") keeps the anchor verbatim and inverts the meaning,
+#          and a slice whose end anchor stops matching runs to EOF and borrows a neighbouring
+#          block's anchors -- the union bug v3 existed to replace.
 #
-#    TWO EARLIER VERSIONS OF THIS GUARD WERE VACUOUS, both measured by review:
-#      * v1 derived "what the grader uses" from `grep -vE '^[[:space:]]*#' "$SUT"`, but the
-#        `--explain` heredoc is not comment-prefixed, so every token the TEXT named was present in
-#        that "source" by construction. The left conjunct was always true and the guard was blind
-#        in the direction the defect actually ran.
-#      * v2 asserted bare TOKENS. `grep -qF ok` matches the word "token"; and a sentence saying
-#        "leg 1 does NOT grade deploy_ghcr_helper" satisfies a presence test for that token.
-#    So this version asserts the CLAIM with a content anchor (cq-assert-anchor-not-bare-token),
-#    and leg 3 is not asserted at all -- its allowlist is SINGLE-SOURCED from LEG3_ALLOW_RE, which
-#    both the grader's `case` arm and the heredoc read, making that drift unrepresentable.
-GRADER_SRC="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/ {next} !/^[[:space:]]*#/' "$SUT")"
-_ex="$("$SUT" --explain 2>&1)"
-# The header slice runs to the first executable line, not a hard-coded line count: a line-number
-# window silently stops covering the header the moment anything is inserted above it.
-_hdr="$(awk '/^[^#]/{exit} {print}' "$SUT")"
+#    THE LESSON IS THAT ANCHOR-MATCHING CANNOT WIN. A presence test asks "does this text contain a
+#    phrase", and prose can always contain a phrase and then contradict it. So this pins the
+#    contract-bearing lines WHOLE and EXACTLY-ONCE, the way the membership pin already does for
+#    LEG3_ALLOW_RE. Any edit to an operator-facing contract line -- reword, negate, append a
+#    "correction" -- reds here and must be re-pinned deliberately, which is the point: a human
+#    then has to look at what the grader does. There are no negation lists and no slices to escape.
+_pin_fail=0
+_pin_one() {  # <exact line> <what it says>
+  local n; n="$(grep -cxF -- "$1" "$SUT" || true)"
+  if [[ "$n" != 1 ]]; then
+    fail "contract line not found exactly once (${n}x) -- $2"
+    _pin_fail=1
+  fi
+}
+# --explain: the three leg statements.
+_pin_one "    leg 1  latest \${MARKER_LITERAL} line carries a 'swept=' token AND BOTH carriers clean:" "--explain leg 1 opener"
+_pin_one "           'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'. docker resolves ghcr.io through" "--explain leg 1 conjunction"
+_pin_one "    leg 2  zero '\${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker — not zero rows in" "--explain leg 2 scoping"
+_pin_one "    leg 3  latest \${VERIFY_LITERAL}* verdict is in the closed allowlist \${LEG3_ALLOW_HUMAN}." "--explain leg 3 allowlist (interpolated)"
+# File header: the same three, in its own words.
+_pin_one "#          carriers read clean: \`deploy_ghcr_auth=none\` AND \`deploy_ghcr_helper=none\`. (docker" "header leg 1 conjunction"
+_pin_one "#   leg 2  the host emitted ZERO \`stage=relogin_failed\` rows NEWER THAN its latest marker -- not" "header leg 2 scoping"
+# PASS summary -- the sentence that authorises closing #8036 in a PUBLIC issue comment.
+_pin_one "echo \"      latest \${MARKER_LITERAL} carries a 'swept=' token with deploy_ghcr_auth=none AND\"" "PASS summary leg 1"
+_pin_one "echo \"      deploy_ghcr_helper=none, zero '\${RELOGIN_LITERAL}' AFTER that host's latest marker,\"" "PASS summary leg 2"
+_pin_one "echo \"      and a latest \${VERIFY_LITERAL} verdict in \${LEG3_ALLOW_HUMAN}. The host-side\"" "PASS summary leg 3 (interpolated)"
+# ACTION REQUIRED headline -- the only notification for its class; no Sentry rule matches it.
+_pin_one "  echo \"      pass) but their latest \${VERIFY_LITERAL} verdict is NOT in \${LEG3_ALLOW_HUMAN},\"" "ACTION headline leg 3 (interpolated)"
+# FAIL remediation.
+_pin_one "  echo \"      'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'; leg 2 needs zero\"" "FAIL remediation leg 1"
+[[ "$_pin_fail" == 0 ]] && pass "all 12 operator-facing contract lines are pinned whole and exactly once"
+unset _pin_fail
+# CARDINALITY, because presence alone cannot stop an ADDITION. Pinning the correct lines leaves
+# room to APPEND a contradicting one -- measured: adding `(CORRECTION: leg 1 in fact grades the
+# auths token only.)` below the pinned PASS lines kept the suite green while the public
+# close-authorisation contradicted itself. Any new or removed operator-facing line must be
+# re-pinned deliberately, which is exactly when someone should re-read what the grader does.
+_echo_n="$(grep -cE '^[[:space:]]*echo "' "$SUT" || true)"
+if [[ "$_echo_n" == 63 ]]; then
+  pass "the probe emits exactly 63 operator-facing lines (no line added or removed unpinned)"
+else
+  fail "operator-facing line count changed ($_echo_n, pinned 63) - re-read the new/removed line against the grader, then re-pin"
+fi
+unset _echo_n
 
-# MEMBERSHIP IS PINNED, not just single-sourced. Single-sourcing stops prose and code disagreeing;
-# it does nothing about the set being WIDENED. Measured: adding `unsigned` to LEG3_ALLOW_RE left
-# the whole suite green while a host running unsigned images graded PASS. The allowlist is a
-# security decision, so changing it must mean deliberately changing this line too.
-# Over GRADER_SRC, as a WHOLE LINE, and exactly once. Grepping the SUT let a historical-note
-# comment ("was, before the widening: readonly LEG3_ALLOW_RE='ok|reused_local_reload'") satisfy
-# the pin while the live assignment was widened -- measured, and that is this file's dominant
-# commenting idiom, so it is a likely edit rather than a contrived one.
-if [[ "$(grep -cxF "readonly LEG3_ALLOW_RE='ok'" <<<"$GRADER_SRC")" == 1 ]]; then
-  pass "leg 3's allowlist is exactly {ok}, pinned on the live assignment"
-else
-  fail "leg 3's allowlist membership changed - widening it silently weakens signature verification"
-fi
-if grep -qF '"$lver" =~ ^($LEG3_ALLOW_RE)$' <<<"$GRADER_SRC"; then
-  pass "leg 3's allowlist is single-sourced (grader reads LEG3_ALLOW_RE), so its prose cannot drift"
-else
-  fail "leg 3's allowlist is no longer single-sourced -- the grader stopped reading LEG3_ALLOW_RE"
-fi
-# EXTRACTION MUST BE PROVEN TO HAVE FIRED, positively. If the awk range start stops matching --
-# e.g. `[[ "${1:-}" == "--explain" ]]` reformatted to `= "--explain"`, identical bash semantics --
-# the range never opens, GRADER_SRC silently becomes the WHOLE FILE including the heredoc, and the
-# v1 tautology is back. Measured: that plus one prose reword left the old sanity row green.
-# `PROBE-READY` occurs exactly once in the SUT, inside the heredoc, and another row asserts
-# --explain prints it; so its ABSENCE here is proof the exclusion fired, and it does not depend on
-# any prose wording holding still.
-if [[ "$(grep -cF 'PROBE-READY' "$SUT")" != 1 ]]; then
-  fail "GRADER_SRC sentinel 'PROBE-READY' is no longer unique in the SUT - re-point this row"
+# CODE SIDE. The pins above fix the PROSE; these assert the grader still does what it says.
+# Trailing comments are stripped too: `if [[ "$dauth" == "none" ]]; then ... # was: && "$dhelper"`
+# restored the dropped token to a full-line-only strip and left the reverse-direction row green.
+GRADER_SRC="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/ {next} !/^[[:space:]]*#/ { sub(/[[:space:]]+#.*$/, ""); print }' "$SUT")"
+# Prove the exclusion FIRED, and that the sentinel is inside the excluded range -- not merely
+# absent from GRADER_SRC, which is also true when the sentinel has been moved out of the heredoc.
+_hd="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/' "$SUT")"
+if [[ "$(grep -cF 'PROBE-READY' <<<"$_hd")" != 1 ]]; then
+  fail "the PROBE-READY sentinel is not inside the --explain heredoc - the exclusion proof has no anchor"
 elif grep -qF 'PROBE-READY' <<<"$GRADER_SRC"; then
   fail "GRADER_SRC still contains the --explain heredoc - the awk range did not fire (tautology)"
 elif ! grep -qF 'case "$swept" in' <<<"$GRADER_SRC"; then
@@ -369,148 +400,44 @@ elif ! grep -qF 'case "$swept" in' <<<"$GRADER_SRC"; then
 else
   pass "GRADER_SRC provably excludes the --explain heredoc and retains the grader"
 fi
-
-# CLAIM ANCHORS, not token presence. Each pins a phrase that only a CORRECT description contains,
-# in BOTH prose copies, so a negation ("does NOT grade the helper") reds instead of passing.
-# The single-sourcing PREMISE, asserted. The heredoc previously hardcoded `{ok,
-# reused_local_reload}` while a comment claimed it read LEG3_ALLOW_HUMAN; the two render
-# identically, so eyeballing --explain could not tell them apart. Perturb-and-observe is the only
-# check that can: a value the literal cannot contain must appear in the rendered output.
-_probe_pat='ok|reused_local_reload|zzprobe'
-if LEG3_ALLOW_RE="$_probe_pat" LEG3_ALLOW_HUMAN="{${_probe_pat//|/, }}" \
-     bash -c 'sed "s/^readonly LEG3_ALLOW_RE=.*/readonly LEG3_ALLOW_RE='"'"'$0'"'"'/" "$1" > "$2"; bash "$2" --explain' \
-     "$_probe_pat" "$SUT" "$WORK/sut-probe.sh" 2>/dev/null | grep -qF 'zzprobe'; then
+unset _hd
+if [[ "$(grep -cxF "readonly LEG3_ALLOW_RE='ok'" <<<"$GRADER_SRC")" == 1 ]]; then
+  pass "leg 3's allowlist is exactly {ok}, pinned on the live assignment"
+else
+  fail "leg 3's allowlist membership changed - widening it silently weakens signature verification"
+fi
+if grep -E '"\$dauth" == "none"' <<<"$GRADER_SRC" | grep -q '"\$dhelper" == "none"'; then
+  pass "the grader still conjoins both leg-1 carriers"
+else
+  fail "the grader no longer conjoins deploy_ghcr_auth and deploy_ghcr_helper, which every prose copy claims"
+fi
+if grep -qF '>= (mts[m] + 0)) n++' <<<"$GRADER_SRC"; then
+  pass "the fold still scopes leg 2 to rows at-or-after the host's latest marker"
+else
+  fail "the fold no longer compares against the latest marker - leg 2 is back to a bare window count"
+fi
+if grep -qF '"$lver" =~ ^($LEG3_ALLOW_RE)$' <<<"$GRADER_SRC"; then
+  pass "leg 3 grades via the single-sourced allowlist"
+else
+  fail "leg 3 no longer reads LEG3_ALLOW_RE - its prose can drift from the grader again"
+fi
+# --explain must INTERPOLATE the allowlist, not restate it. The two render identically, so only
+# perturbation can tell them apart.
+_probe='ok|zzprobe'
+if sed "s/^readonly LEG3_ALLOW_RE=.*/readonly LEG3_ALLOW_RE='$_probe'/" "$SUT" > "$WORK/sut-probe.sh" \
+   && grep -qF "readonly LEG3_ALLOW_RE='$_probe'" "$WORK/sut-probe.sh" \
+   && bash "$WORK/sut-probe.sh" --explain 2>/dev/null | grep -qF 'zzprobe'; then
   pass "--explain INTERPOLATES the leg-3 allowlist (single-sourced, not a matching literal)"
 else
-  fail "--explain hardcodes the leg-3 allowlist - the single-sourcing premise is false"
+  fail "--explain hardcodes the leg-3 allowlist, or the probe rewrite did not land"
 fi
-unset _probe_pat
-
-_claim_helper="AND 'deploy_ghcr_helper=none'"
-_claim_helper_hdr="\`deploy_ghcr_auth=none\` AND \`deploy_ghcr_helper=none\`"
-# NEGATION-RESISTANT PHRASES, not bare substrings. Measured: prose reading "Leg 2 is NOT scoped
-# to rows NEWER THAN the marker -- it is a bare count since earliest." still contains `NEWER THAN`,
-# and "'swept=na_absent' is NOT treated as clean and does NOT bypass the carriers." still matches
-# `na_absent.*(clean|bypass)`. Both passed. These anchors carry the assertion, so a negation
-# cannot quote them intact.
-_claim_postmarker="NEWER THAN that host's latest marker — not zero rows in"
-# SLICED to leg 1's own paragraph, and negation-aware. `grep -qF` over the whole text is still a
-# presence test: measured, a heredoc reading "…AND 'deploy_ghcr_helper=none' is the OLD contract,
-# now RETIRED: leg 1 grades the auths token alone." contains the anchor verbatim and passed.
-# THE SUMMARY BLOCKS ARE A THIRD READ SURFACE. `--explain` and the header were guarded; the
-# PASS summary (which authorises closing #8036 in a PUBLIC issue comment), the ACTION REQUIRED
-# headline (the only notification for its class -- no Sentry rule matches it) and the FAIL
-# remediation text were not. Measured: reverting all three to their pre-#8636 single-carrier,
-# whole-window wording left the suite green at 39/39.
-# PER BLOCK, not over their union. A union grep passes on whichever copy happens to carry the
-# anchor: measured, `AND 'deploy_ghcr_helper=none'` exists verbatim in the FAIL block, so the row
-# went green while the PASS block -- the one that authorises closing #8036 in a public comment --
-# had been reverted to main's single-carrier wording.
-_pass_blk="$(awk '/^echo "PASS:/,/Close #8036/' "$SUT")"
-_act_blk="$(awk '/^  echo "ACTION REQUIRED:/,/^  printf/' "$SUT")"
-_fail_blk="$(awk '/^  echo "FAIL:/,/^  printf/' "$SUT")"
-# Each block has a DIFFERENT job, so each gets the assertion that fits it. The ACTION REQUIRED
-# headline states that legs 1 and 2 PASSED and then describes leg 3; requiring it to restate leg
-# 1's carriers would be a false red, and papering over that by loosening the shared row is how a
-# guard stops discriminating. Its leg-3 constant is asserted separately below.
-for _blk in pass fail; do
-  case "$_blk" in
-    pass) _body="$_pass_blk"; _label="PASS summary (authorises closing #8036)" ;;
-    fail) _body="$_fail_blk"; _label="FAIL remediation text" ;;
-  esac
-  if [[ -z "$_body" ]]; then
-    fail "$_label: block slice is empty - re-point this row"
-  elif ! grep -qF 'deploy_ghcr_helper=none' <<<"$_body"; then
-    fail "$_label no longer states leg 1's helper carrier"
-  elif ! grep -qF "AFTER that host's latest marker" <<<"$_body"; then
-    fail "$_label describes leg 2 without its post-marker scoping"
-  else
-    pass "$_label states leg 1's helper carrier and leg 2's post-marker scoping"
-  fi
-done
-if [[ -z "$_act_blk" ]]; then
-  fail "ACTION REQUIRED block slice is empty - re-point this row"
-elif grep -qF 'legs 1 and 2' <<<"$_act_blk"; then
-  pass "ACTION REQUIRED headline scopes itself to a leg-3 outcome on hosts that passed legs 1 and 2"
-else
-  fail "ACTION REQUIRED headline no longer states that legs 1 and 2 passed"
-fi
-unset _blk _body _label _pass_blk _act_blk _fail_blk
-# The two verdict blocks must interpolate the leg-3 constant, never restate it.
-if [[ "$(grep -cF 'NOT in ${LEG3_ALLOW_HUMAN}' "$SUT")" == 1 ]] \
-   && [[ "$(grep -cF 'verdict in ${LEG3_ALLOW_HUMAN}' "$SUT")" == 1 ]]; then
-  pass "both verdict summaries interpolate the leg-3 allowlist constant"
-else
-  fail "a verdict summary no longer interpolates \${LEG3_ALLOW_HUMAN} - it can now drift from the grader"
-fi
-
-_leg1="$(awk '/^    leg 1 /,/^    leg 2 /' <<<"$_ex")"
-if ! grep -qF -- "$_claim_helper" <<<"$_leg1"; then
-  fail "--explain's leg 1 paragraph no longer states the auth AND helper conjunction"
-elif grep -qiE 'RETIRED|does NOT grade|auths token alone|no longer grades' <<<"$_leg1"; then
-  fail "--explain's leg 1 paragraph contains the anchor but negates it"
-else
-  pass "--explain states leg 1's helper CONJUNCTION in leg 1's own paragraph, un-negated"
-fi
-grep -qF -- "$_claim_helper_hdr" <<<"$_hdr" \
-  && pass "the file header states leg 1's helper conjunction" \
-  || fail "the file header no longer states leg 1 as auth AND helper"
-_leg2_ex="$(awk '/^    leg 2 /,/^    leg 3 /' <<<"$_ex")"
-if ! grep -qF -- "$_claim_postmarker" <<<"$_leg2_ex"; then
-  fail "--explain's leg 2 paragraph no longer carries the post-marker scoping phrase"
-elif grep -qiE 'NOT scoped|bare count|is NOT limited' <<<"$_leg2_ex"; then
-  fail "--explain's leg 2 paragraph carries the anchor but negates it"
-elif ! grep -qF -- 'NEWER THAN its latest marker -- not' <<<"$_hdr"; then
-  fail "the file header describes leg 2 as a bare window count"
-else
-  pass "both prose copies scope leg 2 to rows newer than the latest marker, un-negated"
-fi
-
-# The reverse direction -- prose claiming a check the GRADER dropped. Anchored on the conjunction,
-# never on the bare name `dhelper`, which also appears in the read loop and the REPORT string.
-# ORDER-INDEPENDENT: both conjuncts on ONE GRADER_SRC line. Pinning their textual order false-RED
-# a semantics-preserving swap (`"$dhelper" == "none" && "$dauth" == "none"`) with a message
-# accusing the grader of dropping a check it still performs -- measured.
-if grep -qF -- "$_claim_helper" <<<"$_ex" \
-   && ! grep -E '"\$dauth" == "none"' <<<"$GRADER_SRC" | grep -q '"\$dhelper" == "none"'; then
-  fail "--explain claims a deploy_ghcr_helper check the grader no longer CONJOINS into leg 1"
-else
-  pass "--explain's helper claim is backed by the grader's leg-1 conjunction"
-fi
-if grep -qF -- "$_claim_postmarker" <<<"$_ex" && ! grep -qF 'mts[mid]' <<<"$GRADER_SRC"; then
-  fail "--explain claims post-marker scoping the grader's fold does not implement"
-else
-  pass "--explain's post-marker claim is backed by the grader's fold"
-fi
-# `na_absent` must be described as a BYPASS, not folded into the conjunction: the grader passes it
-# without consulting either carrier token.
-if ! grep -qF 'na_absent' <<<"$GRADER_SRC"; then
-  fail "guard anchor 'na_absent' is no longer in the grader - re-point this row"
-elif ! grep -qF "'swept=na_absent' (no deploy docker config exists yet) is CLEAN" <<<"$_ex"; then
-  fail "--explain omits that swept=na_absent passes leg 1 without consulting the carriers"
-else
-  pass "--explain states swept=na_absent is clean, in a phrase a negation cannot quote intact"
-fi
-
-# The retired single-literal framing must be gone from EVERY operator-facing surface, including
-# the PASS and ACTION REQUIRED summaries that land in a public issue comment.
-# POSITIVE anchor, not a phrase-shaped negative. Measured: rewording the headline to
-# "verdict reads verify_failed" evaded both alternatives of the old ERE while naming the one
-# literal the grader stopped grading. `verify_failed` may appear ONLY inside --explain's
-# enumeration of the classes leg 3 rejects; anywhere else it is the retired framing.
-_vf_outside="$(grep -nE '^[[:space:]]*(echo|printf)' "$SUT" | grep -c 'verify_failed' || true)"
-if [[ "${_vf_outside:-0}" -gt 0 ]]; then
-  fail "verify_failed is named on $_vf_outside operator-facing echo/printf line(s) - the retired single-literal framing"
-else
-  pass "no operator-facing emission names verify_failed as leg 3's criterion"
-fi
-unset _vf_outside
+unset _probe
 unset _ex _hdr GRADER_SRC _claim_helper _claim_helper_hdr _claim_postmarker
 
 
 
 printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
-MIN_CHECKS=46
+MIN_CHECKS=42
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1

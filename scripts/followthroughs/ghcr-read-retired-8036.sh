@@ -304,7 +304,7 @@ PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
               | if test("^[0-9a-f]{32}$") then . else "-" end) as $mid
           | ((($r.__REALTIME_TIMESTAMP // "") | tostring | tonumber?)
               // ((($row.dt // "") | tostring)[0:19] + "Z"
-                   | (strptime("%Y-%m-%d %H:%M:%SZ") | mktime) * 1000000)? // 0) as $ts
+                   | (strptime("%Y-%m-%d %H:%M:%SZ") | mktime) * 1000000)? // -1) as $ts
           | if ($m | test("(^| )" + $mt + " ")) then
               [ "1", $sid, $mid, ($ts|tostring), "marker",
                 (($m | capture(" swept=(?<v>[a-z_]+)").v) // "-"),
@@ -337,7 +337,34 @@ fi
 
 RELEVANT="$(printf '%s\n' "$PARSED" | awk -F'\t' -v e="$EARLIEST_US" \
   '$1 == "1" && $2 == "1" && ($5 == "marker" || $5 == "relogin" || $5 == "verify") && ($4 + 0) >= (e + 0)')"
+# ROWS THE GRADER CANNOT ATTRIBUTE OR CLOCK ARE REFUSED, NEVER DROPPED. Legs 2 and 3 grade an
+# ABSENCE, and a row silently deleted for lacking a machine id or a timestamp is the same
+# truncation the saturation guard already refuses on -- it just fails OPEN instead of loud.
+# Measured (#8636 review): a `stage=relogin_failed` row with no `_MACHINE_ID` produced
+# `PASS ... relogin_failed_in_window=0`, and so did one with no usable timestamp; a pre-1c dirty
+# marker with no machine id was invisible too, because MARKERS_NO_MID was only consulted when
+# MARKERS_WITH_MID was zero -- one good marker hid every unattributable one.
+UNCLOCKED="$(printf '%s\n' "$PARSED" | awk -F'\t' 'NF >= 11 && $1 == "1" && $2 == "1" && ($4 + 0) < 0 { n++ } END { print n + 0 }')"
+if [[ "$UNCLOCKED" -gt 0 ]]; then
+  echo "CANNOT ESTABLISH: ${UNCLOCKED} ci-deploy row(s) carry no usable timestamp (neither" >&2
+  echo "                  __REALTIME_TIMESTAMP nor a parseable dt). Legs 2 and 3 grade an absence" >&2
+  echo "                  over a time window, which a row with no clock cannot be placed in." >&2
+  exit 3
+fi
+RELOGIN_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 == "-" && $5 == "relogin" { n++ } END { print n + 0 }')"
+if [[ "$RELOGIN_NO_MID" -gt 0 ]]; then
+  echo "CANNOT ESTABLISH: ${RELOGIN_NO_MID} ${RELOGIN_LITERAL} row(s) since $EARLIEST carry no usable" >&2
+  echo "                  _MACHINE_ID, so they cannot be attributed to a host. Leg 2 grades their" >&2
+  echo "                  ABSENCE, so dropping them would report zero while rows were seen." >&2
+  exit 3
+fi
 MARKERS_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 == "-" && $5 == "marker" { n++ } END { print n + 0 }')"
+if [[ "$MARKERS_NO_MID" -gt 0 ]]; then
+  echo "CANNOT ESTABLISH: ${MARKERS_NO_MID} ci-deploy ${MARKER_LITERAL} line(s) since $EARLIEST carry" >&2
+  echo "                  no usable _MACHINE_ID. One attributable marker must not make an" >&2
+  echo "                  unattributable one invisible - leg 1 is per host." >&2
+  exit 3
+fi
 MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
 
 if [[ "$MARKERS_WITH_MID" -eq 0 && "$MARKERS_NO_MID" -gt 0 ]]; then
@@ -379,7 +406,13 @@ HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | sort -
   END {
     for (m in seen) {
       n = 0; c = split(rel[m], a, " ")
-      for (i = 1; i <= c; i++) if (a[i] != "" && (a[i] + 0) > (mts[m] + 0)) n++
+      # `>=`, NOT `>`. The `dt` fallback truncates to whole seconds (`[0:19]`), so a relogin
+      # emitted 0.9 s AFTER the latest marker compares EQUAL and went uncounted -- measured, the
+      # report printed `relogin_failed_post_marker=0 relogin_failed_in_window=1` on the same line
+      # as the close authorisation. A tie is an UNKNOWN ordering, and on a leg that grades an
+      # absence an unknown must count AGAINST the pass. This does not weaken the latch fix: a
+      # pre-1c relogin sits strictly BEFORE the marker and is still excluded.
+      for (i = 1; i <= c; i++) if (a[i] != "" && (a[i] + 0) >= (mts[m] + 0)) n++
       printf "%s\t%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\t%d\n", m, swept[m], dauth[m], n,
         (lver[m] == "" ? "-" : lver[m]), nmark[m],
         (dcfg[m] == "" ? "-" : dcfg[m]), (dstore[m] == "" ? "-" : dstore[m]),
@@ -429,7 +462,10 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrel
   case "$swept" in
     yes|no)
       if [[ "$dauth" == "none" && "$dhelper" == "none" ]]; then leg1=pass; fi ;;
-    na_absent) leg1=pass ;;
+    # The bypass asserts the invariant it is justified by: "no config exists, so the carrier
+    # tokens read `na` and are not consulted". A marker claiming `na_absent` while reporting a
+    # PRESENT config disagrees with itself; closing a tracker over that is not warranted.
+    na_absent) [[ "$dcfg" == "absent" ]] && leg1=pass ;;
     *) : ;;
   esac
   # LEG 2 — no relogin AFTER the host's latest marker (see the fold above).
@@ -451,6 +487,14 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrel
     grade="FAIL"; n_fail=$((n_fail + 1))
   elif [[ "$lver" == "-" ]]; then
     grade="ACTION REQUIRED (host ran the new script but emitted no IMAGE_VERIFY verdict)"
+    n_action=$((n_action + 1))
+  elif [[ "$lver" == "reused_local_reload" ]]; then
+    # ITS OWN SENTENCE. This is not a broken verifier: `_try_local_cache_reload` emits it where
+    # zot did not serve and cosign was deliberately SKIPPED for a same-version reload. It must not
+    # PASS (it asserts nothing about verification), but calling it "signature verification is
+    # broken" misdiagnoses a designed path and, because the #5955 seccomp redeploy targets
+    # v<running_version> by construction, it is routine rather than exceptional.
+    grade="ACTION REQUIRED (no cosign ran on the latest deploy - same-version local-cache reload)"
     n_action=$((n_action + 1))
   else
     grade="ACTION REQUIRED (latest IMAGE_VERIFY is result=${lver})"; n_action=$((n_action + 1))
@@ -476,7 +520,8 @@ if [[ "$n_fail" -gt 0 || "$RELOGIN_ONLY" -gt 0 ]]; then
   echo "      'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'; leg 2 needs zero"
   echo "      '${RELOGIN_LITERAL}' AFTER that host's latest marker."
   echo "      READ THE swept= VALUE BEFORE ASSIGNING A CAUSE -- they are different remediations:"
-  echo "        swept absent (-)  the host is still running the PRE-1c script. Nothing is broken;"
+  echo "        swept=na          the sweep never set a state (the initial value). Treat as a probe bug.
+        swept absent (-)  the host is still running the PRE-1c script. Nothing is broken;"
   echo "                          it has not been redeployed yet."
   echo "        swept=failed      the sweep ran and the config is STILL dirty. Investigate."
   echo "        swept=na_nojq     jq is missing on the host, so the sweep could not run."
