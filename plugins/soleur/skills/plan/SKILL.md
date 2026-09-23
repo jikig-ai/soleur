@@ -590,6 +590,8 @@ The set of mandatory leaders changes by lifecycle phase, and that is by design â
 
 This tiered model is intentional â€” re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
 
+**AI harness:** CTO review comes before blocking launcher/egress/credential work; settings credentials are runtime inputs; CLO disposition is separate.
+
 If the threshold resolves to `aggregate pattern`, no per-PR sign-off is added but the section must still be present.
 
 If the threshold resolves to `none` AND the diff touches a sensitive path (canonical regex defined in `plugins/soleur/skills/preflight/SKILL.md` Check 6 Step 6.1), the section MUST contain a `threshold: none, reason: <one-sentence non-empty reason>` scope-out bullet. Without it, preflight will FAIL at ship time.

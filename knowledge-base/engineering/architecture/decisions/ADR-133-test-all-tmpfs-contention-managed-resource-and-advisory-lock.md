@@ -532,3 +532,65 @@ sound reading of how long a healthy run can be executing under contention and a 
 it would curtail live work. 14400 s is ~2.5x that reading; because `_RUN_START_EPOCH` is
 stamped before `tc_acquire`, up to 3600 s of queueing is charged against it, leaving ~10800 s
 of execution budget (~1.87x). It sits ~11.5x below the 46 h orphan.
+
+## Addendum — 2026-09-23 (#8579): waiters release in ticket order, not on a shared expiry
+
+Decision 3 is **extended, not reversed**: the lock is still advisory, every wait
+path still proceeds-with-banner and never aborts, and every lock still releases
+through the kernel on the last fd close. What changed is the *release shape*.
+
+`flock -w` has no application-level queue. Each waiter ran the same independent
+bounded wait, so a holder outlasting `TC_LOCK_TIMEOUT` expired every waiter's
+timer at roughly the same instant and released them **together** — the pileup
+this ADR exists to kill, recurring above the higher waterline the 2026-08-19
+addendum set (a sibling hold of **8,070 s** was measured the day this was
+filed). Raising the budget again was considered and rejected for the reason
+recorded there: any finite budget below the runtime ceiling has a synchronized
+expiry. The defect was never the number; it was that every waiter shared one.
+
+**What shipped.** `tc_acquire` now mints a flock-anchored **ticket** under
+`$LOCK_DIR/<name>.queue.d/` before waiting: serial `max+1` minted under a
+short-lived `.alloc` lock, ticket held `flock -x` for the *run's* lifetime
+(mirroring `_SESSION_LOCK_FDS`), and only the queue head makes the bounded
+`acquire_lock` call. An overrun therefore releases one run at a time, in mint
+order, instead of firing every waiter at once. Non-head waiters poll with
+`flock -n` probes every `TC_QUEUE_POLL_S` (5 s) — one probe per earlier ticket
+plus a readdir, against the ~6 s-per-beat `/proc` walk measured as the
+anti-pattern. A waiter
+whose **queue** patience (`TC_QUEUE_TIMEOUT`, default `TC_LOCK_TIMEOUT`)
+expires still proceeds contended — `LOCK_QUEUE_TIMEOUT` plus the canonical
+`LOCK_CONTENDED_PROCEEDING` line carrying `queue_timeout=1` — and the wait
+heartbeat reports `position=N` and switches its token to `LOCK_WAIT_OVERRUN`
+once the wait outlasts the lock budget (the detected-long-hold signal #8579
+named as a candidate).
+
+**No new `flock -w` exists in the queue path — deliberately.** #7697 (OPEN)
+measured a waiter parked 4.6 days in `locks_lock_inode_wait`, the
+masked-SIGALRM hypothesis making `-w` unreliable as a timeout. Every new wait
+is a `flock -n` probe or a counted-retry loop on `.alloc`; the only blocking
+`flock -w` in the repo's lock path remains `_acquire_lock_impl`'s. The
+heartbeat subshell closes its inherited copy of the ticket fd on entry so a
+dead run's diagnostic cannot hold its queue slot; suite children still inherit
+it, exactly as they inherit the main lock today.
+
+**Corrected ceiling arithmetic.** The 2026-09-06 addendum said "up to 3600 s of
+queueing is charged against `_RUN_START_EPOCH`." With the ticket stage the
+worst-case pre-run wait is `TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT` — **7200 s** at
+defaults — so the execution budget inside the 14,400 s ceiling is ~7200 s
+(~1.25x the uncontended baseline), not ~10,800 s. A run whose queue wait eats
+deep into that budget exits 3 (UNRESOLVED) with only partial coverage — and at
+a `TC_QUEUE_TIMEOUT` raised past ~10,800 s, having run nothing; that is the
+honest serialization cost, and it is why `TC_QUEUE_TIMEOUT` exists rather than
+queueing being unbounded.
+
+**Mixed-version caveat.** A worktree running pre-queue code ignores tickets and
+contends exactly as before; a new-code holder's ticket does not block it.
+Degradation is to status quo, never worse — and a stubbed session-state layer
+(the capacity suite's shape) takes a named `LOCK_QUEUE_DEGRADED` line and the
+pre-queue direct-acquire path.
+
+**Ticket sweep.** Mint sweeps ticket files that are *both* unlocked and older
+than `TC_RUNTIME_CEILING_S`, inside the same `.alloc` hold. Locked tickets are
+never swept, so `max+1` numbering cannot regress below a live ticket, and a
+dead waiter's unlocked file is the only thing removed — the same kernel-release
+argument the AC5b arm measures for the main lock, applied one level down.

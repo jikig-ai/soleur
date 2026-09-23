@@ -52,4 +52,3 @@ The script:
 - R2 backend has no state locking. Single operator at N=2. Coordinate manually if parallel applies ever become possible.
 - OIDC trust binding cannot be fully verified locally. Test via deploy workflow (runbook Step 9) after all provisioning.
 - The Doppler API for service accounts (`POST /v3/workplace/service_accounts`) has no CLI equivalent and no TF resource.
-- Next-step hint points to `provision-cloudflare`, which differs from runbook step order (Step 3 here → Step 2 there).

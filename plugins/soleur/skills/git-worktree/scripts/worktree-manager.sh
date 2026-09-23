@@ -1751,6 +1751,30 @@ install_deps() {
       echo "  $app_install_output" >&2
     fi
   done
+
+  # --- Hook-required binary enumeration ---
+  # The pre-commit hooks resolve their pinned binaries from the worktree's OWN
+  # node_modules/.bin (lefthook.yml's `markdown-lint` hook is the source of
+  # truth for this list; #8580). Every install failure arm above warns and
+  # CONTINUES, so a worktree can be reported "created" while the binaries its
+  # hooks need were never installed — the first docs commit then hard-fails.
+  # This runs unconditionally so it covers both the install path and the
+  # node_modules-already-present skip path, converting silent warn-and-continue
+  # into a visible per-binary diagnosis at the moment of creation.
+  #
+  # Bare names in the array; the .bin path is composed via $hb. This file is in
+  # the M7a single-invoker scan set (it greps every .sh under plugins/ for the
+  # literal token the composed path would spell), so that literal must never
+  # appear here — including in output text, which names $hb instead.
+  local -a HOOK_REQUIRED_BINS=("markdownlint")
+  local hb
+  for hb in "${HOOK_REQUIRED_BINS[@]}"; do
+    if [[ -x "$worktree_path/node_modules/.bin/$hb" ]]; then
+      echo -e "  ${GREEN}✓ hook dep present: $hb${NC}"
+    else
+      echo -e "  ${YELLOW}Warning: hook dep missing: $hb -- run: npm ci --ignore-scripts --prefix $worktree_path (lockfile-less repo: npm install --ignore-scripts --prefix $worktree_path)${NC}" >&2
+    fi
+  done
 }
 
 # Auto-heal a stale, EMPTY orphan branch left behind by a prior aborted

@@ -824,3 +824,47 @@ queue still needs (a) or (b) — but the capacity factor it cited is expected
 to dissolve post-upgrade; a post-upgrade commit records the observed
 deploy-arm tail and re-evaluates (iii) against the new pool. The queue stays
 off until then; nothing here re-enables it.
+
+## Amendment — 2026-09-22 (#8450, post-upgrade): reopener (iii) satisfied — capacity factor dissolved
+
+The organisation plan change the 2026-09-14 amendment named as reopener
+(iii) has occurred: `gh api orgs/jikig-ai --jq .plan.name` returns `team`,
+verified 2026-09-22T10:19:56Z (`UPGRADE_NOT_BEFORE`, recorded as `earliest=`
+on #8450's enrolled followthrough directive and in
+`knowledge-base/project/specs/feat-8450-ci-concurrency/measurements.md` via
+the ledger PR). The concurrent-job pool is now documented at 60 hosted
+jobs, up from the Free plan's 20 that made capacity a binding factor.
+
+**Observed post-upgrade data.** The upgrade did not translate into runner
+assignment immediately. In the ~90 minutes following, the org ran
+~8–10 hosted jobs against a 200+ deep run queue — far under the new 60-job
+ceiling — consistent with scheduler-side under-assignment or entitlement
+propagation lag, not with the plan number itself (no org-policy restriction
+could be verified; the Actions policy API needs org-admin scope the CI
+token lacks). ~94 superseded queued runs were cancelled as hygiene; the
+queue drained to ~26–30 runs with 12–14 executing within ~80 minutes of
+the flip. Deploy-arm tail measurement is in progress: the
+`actions-queue-tail-8450` probe (enrolled on #8450 with
+`earliest=UPGRADE_NOT_BEFORE`) requires ≥5 post-upgrade `workflow_run`
+deploy-arm samples; the first five post-upgrade runs carried no usable core
+deploy-job wait because `resolve-target` (#8494) correctly skipped
+`migrate`/`deploy`/`live-verify` on diffs with no deployable surface — the
+probe excludes resolve-target-only samples by design, so the p95 fills as
+real deploys land.
+
+**Re-evaluation of (iii).** Satisfied: the named plan change happened and
+the capacity factor — "the organisation is on the GitHub Free plan (20
+concurrent hosted jobs)" — no longer holds. Two qualifications accompany
+the flip rather than dissolve it. First, the observed under-assignment is a
+reminder that 60 is an entitlement, not a guarantee: a merge queue's 3×
+run fan-out per merged PR would still bind whenever scheduler assignment
+lags, so `check_response_timeout_minutes` must still be re-derived above
+the measured start-spread before any future enablement, per the 2026-09-14
+note. Second, (iii) removes only the capacity objection — (a)
+`codeql-action#1537` native `merge_group` status reporting or (b) a
+deliberate operator decision to make CodeQL advisory remains necessary,
+and neither has occurred.
+
+**The queue stays off.** #5840 remains the tracker. This amendment changes
+only the bookkeeping: (iii) is now a closed precondition behind (a) or (b),
+not an open blocker.

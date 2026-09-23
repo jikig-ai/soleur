@@ -190,6 +190,12 @@ const NON_INNGEST_MONITORS = new Set([
   // close; productization of the watch substrate is #8253's design problem. Same
   // class as scheduled-marketplace-drift.
   "scheduled-devin-docs-drift",
+  // #8450: GHA-fired (scheduled-actions-queue-health.yml, on.schedule '*/30') — the
+  // Actions runner under-assignment probe. It MUST be external to the product: its
+  // subject is GitHub's hosted-runner scheduler, so it has no cron-*.ts counterpart
+  // and declares no SENTRY_MONITOR_SLUG; its final sentry-heartbeat step pings the
+  // check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
+  "scheduled-actions-queue-health",
 ]);
 
 describe("Inngest function registry — drift guards", () => {

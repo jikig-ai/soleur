@@ -234,7 +234,7 @@ while :; do
     # the fix that does not need revisiting per-state.
     if [[ "$automerge" == "false" && "$state" == "OPEN" \
           && "$fail" -eq 0 && "$cancel" -eq 0 ]]; then
-      printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge (mergeState=%s).\n' "$PR" "$mergestate"; exit 0
+      printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge (mergeState=%s). Before any --admin merge, admin-merge-ready.sh <PR> <sha> must exit 0 — this line reads only checks that exist.\n' "$PR" "$mergestate"; exit 0
     fi
   fi
 
