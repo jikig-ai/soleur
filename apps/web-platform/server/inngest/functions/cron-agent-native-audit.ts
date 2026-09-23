@@ -27,7 +27,7 @@
 //     outer turns is the per-skill envelope.
 //   - --allowedTools adds Task (for sub-agent dispatch); drops WebSearch
 //     and WebFetch (audit is purely codebase-introspection).
-//   - --model claude-opus-5 (was sonnet-4-6) — the principle scoring is
+//   - --model claude-opus-5-5 (was sonnet-4-6) — the principle scoring is
 //     opus-class reasoning, mirroring scheduled-bug-fixer's escalation.
 //   - Cadence: monthly 15th 09:00 UTC (was weekly Monday).
 //   - Skip-window: 30 days (was 6) — monthly cadence + stable findings
@@ -94,7 +94,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //
 // HISTORICAL GHA contract (scheduled-agent-native-audit.yml, removed by the
 // TR9 Inngest migration — this file is now authoritative, there is no mirror):
-//   --model claude-opus-5
+//   --model claude-opus-5-5
 //   --max-turns 50
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task
 const CLAUDE_CODE_FLAGS = [

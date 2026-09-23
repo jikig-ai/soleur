@@ -189,7 +189,14 @@ managed registry. Then:
    > the unchanged `image_pull_failed` terminal state), retry exactly once. This contract
    > retires with the GHCR pull path at Phase 5.
    >
-   > **Transient-retry co-tenant (#6525).** The same `_ghcr_pull_or_recover` gate also
+   > **RETIRED 2026-09-23 (#8036 item 1c).** It did retire, at 5.3a rather than Phase 5.
+   > `_ghcr_pull_or_recover` no longer exists: the auth-denial recovery leg is deleted along with
+   > the credential re-fetch it depended on, and what remains is
+   > `_pull_with_transient_retry <ref> <perr>` — the transient co-tenant described immediately
+   > below, which survives because it is registry-agnostic and now serves zot.
+   >
+   > **Transient-retry co-tenant (#6525).** The same gate — renamed
+   > `_pull_with_transient_retry` by #8036 1c, which removed its auth leg — also
    > absorbs a **transient/network** first-attempt pull failure (timeout, connection reset,
    > EOF, no-such-host, registry 5xx) with a bounded capped backoff
    > (`PULL_TRANSIENT_RETRY_SLEEPS`, default 2 retries, ≤6 s/leg), emitting
@@ -424,6 +431,48 @@ host. Read the amendment before relying on any bullet below:
     fallback, then hard-fail signature verify. During soak `ZOT_ACTIVE=0`, so both are latent and the
     pre-flip zot-entry-gate/soak-gate catch them; the mirror step's cosign-failure path emits a
     re-sign-specific remediation (a bare `crane copy` backfill does not re-sign).
+
+    > **Amendment 2026-09-23 (#8036 item 1c): 5.3 SPLITS INTO 5.3a AND 5.3b, AND 5.3a IS DONE.**
+    >
+    > - **5.3a — the `ci-deploy.sh` rolling-deploy branch. DELIVERED 2026-09-23.** The
+    >   `ZOT_ACTIVE` GHCR fallback branch, the `ZOT_ACTIVE=0` GHCR tail, the prelude
+    >   `docker login ghcr.io`, its Doppler re-fetch/relogin helper and the auth-denied leg of the
+    >   pull helper are all deleted; the deploy config's revoked `ghcr.io` entry is swept on every
+    >   deploy. `registry:"ghcr-fallback"` has no emit site. The alarm was NARROWED to its other
+    >   four conditions, exactly as the paragraph below instructs, and `zot-soak-6122.sh`'s
+    >   matching `FAIL_QUERIES` entry and cardinality floor moved with it.
+    > - **5.3b — the two `cloud-init.yml` fresh-boot branches, and the GHCR push + egress allow.
+    >   NOT DONE.** Untouched by 1c and still gated by this task's conditions. `app_ghcr_fallback`
+    >   and `inngest_ghcr_fallback` still emit; CI still dual-pushes, which ADR-169's restore path
+    >   depends on.
+    >
+    > **THE SOAK'S VERDICT IS A RECORDED FAIL ON LIVE OPERANDS, AND 5.3a PROCEEDED ANYWAY — on a
+    > narrower ground than "the gate passed", which it did not.** An earlier framing of this
+    > amendment said the soak was stuck on a dark operand; that is wrong and worth correcting in
+    > place rather than quietly. The soak's FAIL is real and its other operands are live. What
+    > authorizes 5.3a is not a passing gate but a measured property of the ONE branch being
+    > deleted: it has **no reachable success arm**. `registry_pull_event ghcr-fallback` fires only
+    > after a *successful* GHCR pull, and the credential that pull needs has been revoked since
+    > 2026-07-29 (`GET api.github.com/user` → 401; token mint → DENIED), with
+    > `GHCR_MINTER_DISABLED=true` so no replacement can be minted. Control: the same registry
+    > served the *public* Sigstore verifier image at HTTP 200 anonymously on the same day it
+    > answered DENIED to the authenticated request — so the denial is the credential, not the
+    > registry. Deleting a branch that cannot succeed removes no capability, which is why this is
+    > a PARTIAL 5.3 rather than a waiver of the gate. 5.3b, which WOULD remove capability
+    > (stopping the GHCR push breaks ADR-169's restore), remains blocked by the soak.
+    >
+    > **The soak is not enrolled in the sweeper** (see the 2026-09-22 amendment): with the current
+    > `START` its verdict is fixed at FAIL, so a daily run adds no information. The
+    > `FAIL_QUERIES`/floor edit that rode 5.3a is therefore source hygiene plus the op-contract
+    > test's correctness, not a live alarm repair. Said plainly so nobody reads the edit as
+    > evidence the soak now passes.
+    >
+    > **Alternative considered and rejected: wait for the soak.** It would leave the fleet
+    > presenting a revoked credential twice per deploy indefinitely (89 occurrences/week,
+    > measured), and — measured on 2026-09-22 — that presentation is what made GHCR refuse the
+    > PUBLIC cosign verifier image, so `IMAGE_VERIFY` reported `cosign_absent` 89 times out of 89.
+    > Waiting preserves a dead code path at the cost of a live signature-verification outage.
+
 - **Instant revert:** ~~unset `ZOT_REGISTRY_URL` in Doppler `prd` → all sites revert to GHCR-primary
   with no deploy, no SSH (`zot-registry-revert.md`).~~
   **RETRACTED 2026-07-30 (see the amendment below).** The flag flip still works mechanically; what
@@ -460,8 +509,9 @@ list + the terraform-target-parity SSH set (condition #1 the other way).
 - **Negative / residual:** a new dedicated host to run + patch (~€4/mo); a boot-path dependency
   (mitigated above); a plain-HTTP-on-private-net registry (integrity via cosign digest-pinning,
   not TLS); local-fs (single-datacenter) durability until an R2/snapshot revisit (NG3).
-- **Retirement (post-soak):** remove the pull-site GHCR fallback branch (5.3), stop GHCR push +
-  egress allow (5.3), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
+- **Retirement (post-soak):** remove the pull-site GHCR fallback branch (5.3a — **done
+  2026-09-23, #8036 1c**, on the narrower no-reachable-success-arm ground recorded in the task
+  5.3 amendment; not a soak pass), stop GHCR push + egress allow (5.3b, still gated), retire `cron-ghcr-token-minter.ts` + `ghcr-*-credential.tf` + the
   `GHCR_MINTER_DISABLED` gate (5.4), then rotate + revoke the exposed classic PAT (5.5).
 - **Host sizing + region (factual, #6288):** `cax11`(planned, arm64)→`cx23`(live nbg1, provisioned
   during an Ampere+cx stock outage, #6122)→**`cx33`(4 vCPU / 8 GB, `hel1`, #6288)**→`cx23`(4 GB, #6497/#6463, 2026-07-16, after telemetry showed the 8 GB was never needed)→**`cpx22`(2 vCPU / 4 GB, #7309, 2026-08-06 — stock volatility; see the amendment at the end of this ADR)**. The 4 GB cx23

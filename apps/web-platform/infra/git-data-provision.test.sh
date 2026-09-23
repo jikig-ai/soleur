@@ -13,6 +13,24 @@
 # Registered as a step in .github/workflows/infra-validation.yml.
 
 set -uo pipefail
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+# Refuses an empty, relative, root or synthetic-fs fixture dir (byte-identical copy; the
+# fixture-dir-operand-assert suite pins every tracked copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+# The C1 rows below clean up through this rather than a bare `rm -rf "$root"`, so the P1b
+# fixture-relative ratchet has a guard correlated with the operand and the new rows add no
+# grandfathered residue to its baseline.
+drop_fixture() { assert_fixture_dir "$1"; rm -rf "$1"; }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WRAPPER="${DIR}/git-data-provision.sh"
@@ -29,11 +47,45 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 # The unmounted row overrides the third argument. Stderr is kept so the refusal TEXT can be
 # pinned rather than "non-zero", which a charset reject also produces.
 ERR="$(mktemp "${TMPDIR:-/tmp}/gdprov-err.XXXXXX")"
-trap 'rm -f "$ERR"' EXIT
+# (#8211, ADR-239) C1 store seams, derived from the real temp root — see the remove suite's
+# runner for the derivation and the UUID-less-filesystem stub (identical block).
+FM_REAL="$(command -v findmnt)" || { echo "FAIL SETUP: findmnt(8) not on PATH" >&2; exit 1; }
+SEAMS="$(mktemp -d "${TMPDIR}/gdprov-seams.XXXXXX")"
+trap 'rm -f "$ERR"; rm -rf "$SEAMS"' EXIT
+MNT0="$(stat -c %m "$SEAMS")"
+STORE_SRC="$(findmnt -n -o SOURCE --mountpoint "$MNT0")" || STORE_SRC=""
+STORE_UUID="$(findmnt -n -o UUID --mountpoint "$MNT0")" || STORE_UUID=""
+[ -n "$STORE_SRC" ] || { echo "FAIL SETUP: findmnt prints no SOURCE for $MNT0" >&2; exit 1; }
+mkdir -p "$SEAMS/fm"; : > "$SEAMS/uuids"
+if [ -z "$STORE_UUID" ]; then
+  STORE_UUID="0b1d0000-8211-4000-8000-000000000001"
+  printf '%s %s\n' "$MNT0" "$STORE_UUID" >> "$SEAMS/uuids"
+  echo "NOTE: $MNT0 ($STORE_SRC) has no filesystem UUID — findmnt UUID stub in use for it"
+fi
+printf '/proc %s\n' "$STORE_UUID" >> "$SEAMS/uuids"
+cat > "$SEAMS/fm/findmnt" <<STUB
+#!/usr/bin/env bash
+if [ "\$#" = 5 ] && [ "\$1 \$2 \$3 \$4" = "-n -o UUID --mountpoint" ]; then
+  while read -r m u; do [ "\$m" = "\$5" ] && { printf '%s\n' "\$u"; exit 0; }; done < "$SEAMS/uuids"
+fi
+exec "$FM_REAL" "\$@"
+STUB
+chmod +x "$SEAMS/fm/findmnt"
+printf '%s\n' "$STORE_UUID" > "$SEAMS/marker"
+SPATH="$SEAMS/fm:$PATH"
+dev_for() { findmnt -n -o SOURCE --mountpoint "$1" 2>/dev/null || true; }
 run_provision() {
   local root="$1" id="$2" mnt="${3:-}"
   [ -n "$mnt" ] || mnt="$(stat -c %m "$root")"
-  env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$mnt" \
+  env -i PATH="$SPATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$mnt" \
+    GIT_DATA_STORE_DEVICE="$(dev_for "$mnt")" GIT_DATA_STORE_VERIFIED="$SEAMS/marker" \
+    SSH_ORIGINAL_COMMAND="$id" bash "$WRAPPER" >/dev/null 2>"$ERR"
+  echo $?
+}
+run_provision_c1() {
+  local root="$1" id="$2" dev="$3" marker="$4" path="${5:-$SPATH}"
+  env -i PATH="$path" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+    GIT_DATA_STORE_DEVICE="$dev" GIT_DATA_STORE_VERIFIED="$marker" \
     SSH_ORIGINAL_COMMAND="$id" bash "$WRAPPER" >/dev/null 2>"$ERR"
   echo $?
 }
@@ -103,6 +155,7 @@ for tool in bash readlink dirname flock git grep; do
   src="$(command -v "$tool")" && ln -s "$src" "${curated}/${tool}"
 done
 env -i PATH="$curated" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+  GIT_DATA_STORE_DEVICE="$STORE_SRC" GIT_DATA_STORE_VERIFIED="$SEAMS/marker" \
   SSH_ORIGINAL_COMMAND="ws-noinst" bash "$WRAPPER" >/dev/null 2>"$ERR"; rc=$?
 if [ "$rc" != "0" ]; then pass; else fail "T6 mountpoint absent: expected fail-closed (non-zero), got 0"; fi
 # Anchored on the wrapper's OWN text — bash's "mountpoint: command not found" also contains
@@ -133,7 +186,8 @@ rm -rf "$root"
 #     suite's T12 for the seam and the pinned default). ---
 root=$(fresh_root)
 : > "${root}/.frozen"
-rc=$(env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+rc=$(env -i PATH="$SPATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+  GIT_DATA_STORE_DEVICE="$STORE_SRC" GIT_DATA_STORE_VERIFIED="$SEAMS/marker" \
   GIT_DATA_CUTOVER_FREEZE="${root}/.frozen" SSH_ORIGINAL_COMMAND="ws-frozen" bash "$WRAPPER" >/dev/null 2>"$ERR"; echo $?)
 if [ "$rc" != "0" ]; then pass; else fail "T9 cutover freeze: expected refusal (non-zero), got 0"; fi
 if grep -q 'frozen for cutover' "$ERR" && [ ! -e "${root}/ws-frozen.git" ]; then pass; else fail "T9 cutover freeze: refusal does not name the freeze, or a repo was written ($(head -c 200 "$ERR"))"; fi
@@ -149,14 +203,59 @@ rc=$(run_provision "$root" "ws-lock")
 if [ "$rc" != "0" ]; then pass; else fail "T10 lock symlink: expected refusal (non-zero), got 0"; fi
 if grep -q 'lock path is a symlink' "$ERR" && [ "$(cat "$victim")" = "keep" ]; then pass; else fail "T10 lock symlink: refusal does not name it, or the target was truncated ($(head -c 200 "$ERR"))"; fi
 rm -rf "$root" "$victim"
+# ── (#8211, ADR-239) C1 — only a verified, mapper-served store is provisioned (Guard 1) ────
+# Refusal is `reject` (exit 1). The ORDER assertion is that nothing was written: a check moved
+# below `git init --bare` would still exit 1, having already created the repo.
+c1_refused() { # c1_refused <row> <rc> <anchor> <root> <id>
+  if [ "$2" = "1" ]; then pass; else fail "$1: expected exit 1 (reject), got $2 ($(head -c 200 "$ERR"))"; fi
+  if grep -qF "$3" "$ERR"; then pass; else fail "$1: refusal does not carry '$3' ($(head -c 200 "$ERR"))"; fi
+  if [ ! -e "${4}/${5}.git" ]; then pass; else fail "$1: ORDER — the repo was initialized before (or despite) the store refusal"; fi
+}
+# C1a MUST-PASS: seam = the temp root's own --mountpoint SOURCE, marker = its UUID.
+root=$(fresh_root)
+rc=$(run_provision_c1 "$root" "ws-c1" "$STORE_SRC" "$SEAMS/marker")
+if [ "$rc" = "0" ]; then pass; else fail "C1a must-PASS: expected 0 with the store verified, got $rc ($(head -c 200 "$ERR"))"; fi
+if [ -f "${root}/ws-c1.git/HEAD" ]; then pass; else fail "C1a must-PASS: the bare repo was not initialized"; fi
+drop_fixture "$root"
+# C1b mismatch (the production default device does not serve the temp root).
+root=$(fresh_root)
+rc=$(run_provision_c1 "$root" "ws-c1" "/dev/mapper/git-data" "$SEAMS/marker")
+c1_refused "C1b device mismatch" "$rc" "is not served by /dev/mapper/git-data" "$root" "ws-c1"
+drop_fixture "$root"
+# C1c prefix look-alikes derived from the real SOURCE.
+for look in "${STORE_SRC%?}" "${STORE_SRC}-old"; do
+  root=$(fresh_root)
+  rc=$(run_provision_c1 "$root" "ws-c1" "$look" "$SEAMS/marker")
+  c1_refused "C1c look-alike '$look'" "$rc" "is not served by $look" "$root" "ws-c1"
+  drop_fixture "$root"
+done
+# C1d marker absent; C1e marker for another volume.
+root=$(fresh_root)
+rc=$(run_provision_c1 "$root" "ws-c1" "$STORE_SRC" "$SEAMS/no-such-marker")
+c1_refused "C1d marker absent" "$rc" "store not verified" "$root" "ws-c1"
+printf '%s\n' "ffffffff-8211-4000-8000-00000000dead" > "$SEAMS/marker-other"
+rc=$(run_provision_c1 "$root" "ws-c1" "$STORE_SRC" "$SEAMS/marker-other")
+c1_refused "C1e marker UUID mismatch" "$rc" "store not verified" "$root" "ws-c1"
+drop_fixture "$root"
+# C1f findmnt(8) absent from a curated PATH that keeps mountpoint(1).
+root=$(fresh_root)
+curated="$(mktemp -d "${TMPDIR}/gdprov-path.XXXXXX")"
+for tool in bash readlink dirname flock git grep stat head mountpoint; do
+  src="$(command -v "$tool")" && ln -s "$src" "${curated}/${tool}"
+done
+rc=$(run_provision_c1 "$root" "ws-c1" "$STORE_SRC" "$SEAMS/marker" "$curated")
+c1_refused "C1f findmnt absent" "$rc" "findmnt unavailable" "$root" "ws-c1"
+drop_fixture "$root"; drop_fixture "$curated"
+
 rm -f "$ERR"
 
 # --- Minimum-cardinality guard (mirrors the fence test). 12 -> 24 with the four mount
 #     rows (T5 3, T6 3, T7 2, T8 2), re-derived: T1 2, T2 2, T3 8, T4 2 = 14 before.
-#     24 -> 30 at review: T7 +1 (message pin), T9 3, T10 2. ---
+#     24 -> 30 at review: T7 +1 (message pin), T9 3, T10 2. 30 -> 50 with the C1 store rows
+#     (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20. ---
 total=$((passes + fails))
-if [ "$total" -lt 30 ]; then
-  echo "FAIL: ran only ${total} assertions (<30) — suite did not execute fully" >&2
+if [ "$total" -lt 50 ]; then
+  echo "FAIL: ran only ${total} assertions (<50) — suite did not execute fully" >&2
   exit 1
 fi
 
