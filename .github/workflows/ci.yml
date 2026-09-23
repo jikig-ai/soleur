@@ -357,28 +357,15 @@ jobs:
   # LUKS — never name similarity), and every plaintext/cert-off exception carries a
   # live tracking issue + unexpired expires_on.
   #
-  # BLOCKING since #6907, through the required `test` aggregator below: this job is a
-  # leg of `test`'s needs:, so a red sweep reds `test` and a PR cannot merge. It
-  # soaked as a standalone advisory context first (#6901; ADR-117 measure-then-arm):
-  # 248 of 249 `main` push runs green, 2026-09-08 to 2026-09-23, the one miss a run
-  # in which the job never started.
+  # BLOCKING since #6907 through `test`'s needs: (rationale, soak evidence and the
+  # bot-PR unreachability argument: ADR-140 addendum of 2026-09-23).
   #
-  # WHY THE AGGREGATOR AND NOT ITS OWN RULESET CONTEXT. #6907 prescribed a five-site
-  # coupling (required-checks.txt, the ruleset .tf, the canonical parity JSON, the
-  # bot action, MB-10). Joining `test`'s needs: buys the same blocking property with
-  # no ruleset apply and no new context name — the #8136 web-platform-build
-  # precedent. Recorded in the ADR-140 addendum of 2026-09-23 (#6907).
-  #
-  # Bot PRs: `test` is one of the checks bot-pr-with-synthetic-checks FABRICATES, so
-  # on a bot PR this sweep's green is fabricated too. That is sound by
-  # unreachability only while the action's ALLOWED_PATHS (weakness-digest.md) stays
-  # disjoint from the sweep's scan surface (the ledger, *.tf, and every file a
-  # ledger row cites as evidence). Re-derive that intersection before widening
-  # ALLOWED_PATHS.
-  #
-  # MUST NOT carry a job-level `continue-on-error` or `if:` — either lets a red or
-  # unrun sweep read as success through needs.encryption-posture.result.
-  # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh W3 asserts both.
+  # The job must be able to conclude `failure` on a red sweep. A job-level
+  # `continue-on-error`, a step-level `if:` or `continue-on-error`, or any change to
+  # the step's run line (`|| true`, `--today`, `--repo-root`, `--check-templates`)
+  # fails OPEN: needs.encryption-posture.result reads success over a red or unrun
+  # sweep. A job-level `if:` fails CLOSED (the leg reads skipped and `test` reds) but
+  # wedges every PR it skips. ci-test-aggregator-diagnosis.test.sh W3 pins all of it.
   #
   # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
   encryption-posture:
@@ -1430,13 +1417,10 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    # encryption-posture joined in #6907: until then it was a standalone advisory
-    # context and a PR could merge with the ledger sweep red. Same one-line-per-site
-    # edit as web-platform-build; no ruleset change.
     needs: [test-webplat, test-bun, test-scripts, web-platform-build, encryption-posture]
     if: always()
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads four `needs.*.result` strings (measured
+    # Bounds a HUNG job (#7902). This job only reads five `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
@@ -1494,7 +1478,7 @@ jobs:
           # under the shell Actions uses (`bash --noprofile --norc -eo pipefail`).
           fail=0
           # Single colon-delimited list, iterated twice: once to classify each leg,
-          # once (inner) to read that leg's siblings. Adding a 4th shard is still a
+          # once (inner) to read that leg's siblings. Adding a leg is still a
           # one-line edit here, plus needs: + env:.
           entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" )
           for entry in "${entries[@]}"; do

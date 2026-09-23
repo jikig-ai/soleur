@@ -396,8 +396,11 @@ want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RES
 bad = []
 for var, shard in want.items():
     v = str(env.get(var, ""))
-    if ("needs.%s.result" % shard) not in v:
-        bad.append("%s should read needs.%s.result, reads %r" % (var, shard, v))
+    # EXACT match, not a substring: `${{ needs.x.result && 'success' }}` and
+    # `${{ contains(needs.x.result, 'y') && 'failure' || 'success' }}` both
+    # contain the substring and both always resolve to success (#6907 review).
+    if "".join(v.split()) != "${{needs.%s.result}}" % shard:
+        bad.append("%s should be exactly ${{ needs.%s.result }}, reads %r" % (var, shard, v))
     if shard not in needs:
         bad.append("the test job does not need %s, so %s resolves to empty" % (shard, var))
 print("; ".join(bad))
@@ -423,13 +426,13 @@ if [ "$_nshards" -eq 5 ]; then pass; else
   fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 5 (three test-* shards + web-platform-build #8136 + encryption-posture #6907) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
 fi
 
-# W3 — the ARMED leg must be able to conclude failure (#6907 MB-10). A job-level
-# `continue-on-error: true` makes a failing step conclude the JOB as success, so
-# needs.encryption-posture.result reads success and `test` goes green over a red
-# sweep. A job-level `if:` can skip it (R1i catches the skip only if the job is
-# skipped; an `if:` that evaluates true on PRs but false on merge_group would
-# arm half the paths). Both are one-line edits with no local symptom, so the
-# job's own shape is asserted here, and so is the sweep command it runs.
+# W3 — the ARMED leg must be able to conclude failure (#6907 MB-10). Fail-OPEN
+# shapes: a job-level `continue-on-error`, a step-level `if:` or
+# `continue-on-error`, or a run line other than the bare sweep (`|| true`,
+# `--today`, `--repo-root`, `--check-templates`, an `echo` prefix) — each lets
+# needs.encryption-posture.result read success over a red or unrun sweep. A
+# job-level `if:` fails CLOSED (the leg reads skipped; R1i) but wedges the paths
+# it skips, so it is refused too.
 _posture=$(python3 - "$_ciy" <<'PYP'
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
@@ -440,10 +443,25 @@ bad = []
 if job.get("continue-on-error") not in (None, False):
     bad.append("job-level continue-on-error=%r lets a red sweep conclude success" % job.get("continue-on-error"))
 if "if" in job:
-    bad.append("job-level if: %r can skip the armed gate" % job.get("if"))
-runs = [st.get("run", "") for st in job.get("steps") or []]
-if not any("lint-encryption-posture.py --repo-sweep" in r for r in runs):
-    bad.append("no step runs lint-encryption-posture.py --repo-sweep")
+    bad.append("job-level if: %r fails closed and wedges every PR it skips" % job.get("if"))
+if "EP_TODAY" in (job.get("env") or {}):
+    bad.append("job env sets EP_TODAY, which moves the expiry clock")
+SWEEP = "python3 scripts/lint-encryption-posture.py --repo-sweep"
+sweeps = [st for st in job.get("steps") or [] if "lint-encryption-posture.py" in str(st.get("run", ""))]
+if len(sweeps) != 1:
+    bad.append("expected exactly one sweep step, found %d" % len(sweeps))
+for st in sweeps:
+    # The run line must be EXACTLY the sweep: `|| true`, an `echo` prefix,
+    # `--repo-root /tmp` (reads no ledger), `--check-templates` (the sweep
+    # never runs) and `--today 2000-01-01` (hides an expired exception) all
+    # contain the substring an earlier revision matched on (#6907 review).
+    if str(st.get("run", "")).strip() != SWEEP:
+        bad.append("sweep step run is %r, must be exactly %r" % (st.get("run"), SWEEP))
+    for key in ("if", "shell", "working-directory"):
+        if key in st:
+            bad.append("sweep step sets %s: %r" % (key, st.get(key)))
+    if "EP_TODAY" in (st.get("env") or {}):
+        bad.append("sweep step env sets EP_TODAY")
 for st in job.get("steps") or []:
     if st.get("continue-on-error") not in (None, False):
         bad.append("step %r sets continue-on-error" % st.get("name"))
@@ -452,6 +470,51 @@ PYP
 )
 if [ -z "$_posture" ]; then pass; else
   fail "W3 the encryption-posture leg cannot red the aggregator: $_posture"
+fi
+
+# W4 — the AGGREGATOR itself must be able to go red. Removing `if: always()`
+# makes `test` SKIPPED when any leg fails, and GitHub counts a skipped required
+# check as passing — the fail-open this PR exists to close, one job up. A
+# `continue-on-error` or an `if:` on the job or its aggregate step does the same.
+_aggr=$(python3 - "$_ciy" <<'PYA'
+import sys, yaml
+# Reject DUPLICATE mapping keys anywhere in ci.yml. PyYAML keeps the LAST
+# value, so `continue-on-error: true` followed by `continue-on-error: false`
+# reads clean to every row above while a parser that keeps the FIRST value
+# would disarm the gate. A duplicate key is never intended in a workflow.
+class StrictLoader(yaml.SafeLoader):
+    pass
+def _no_dups(loader, node, deep=False):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                None, None, "duplicate key %r" % (key,), key_node.start_mark)
+        seen.add(key)
+    return loader.construct_mapping(node, deep=deep)
+StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dups)
+bad = []
+try:
+    job = yaml.load(open(sys.argv[1]), Loader=StrictLoader)["jobs"]["test"]
+except yaml.YAMLError as exc:
+    print("ci.yml does not parse strictly: %s" % str(exc).replace("\n", " "))
+    raise SystemExit
+
+if str(job.get("if", "")).strip() != "always()":
+    bad.append("test job if is %r, must be exactly always()" % job.get("if"))
+if job.get("continue-on-error") not in (None, False):
+    bad.append("test job sets continue-on-error")
+for st in job.get("steps") or []:
+    if st.get("name") == "Aggregate shard results":
+        for key in ("if", "continue-on-error"):
+            if key in st and st.get(key) is not False:
+                bad.append("aggregate step sets %s: %r" % (key, st.get(key)))
+print("; ".join(bad))
+PYA
+)
+if [ -z "$_aggr" ]; then pass; else
+  fail "W4 the test aggregator cannot go red: $_aggr"
 fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
@@ -475,8 +538,9 @@ TOTAL=$((passes + fails))
 #   E3 out-of-enum result) = 29
 # + 2 fourth leg (R1f red, R1g skipped), #8136 — added then without raising
 #   this floor, which left it 2 below the measured 31
-# + 2 fifth leg (R1h red, R1i skipped) + 1 armed-leg shape (W3), #6907 = 34
-MIN_ROWS=34
+# + 2 fifth leg (R1h red, R1i skipped) + 1 armed-leg shape (W3)
+# + 1 aggregator can go red (W4), #6907 = 35
+MIN_ROWS=35
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
