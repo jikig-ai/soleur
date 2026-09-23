@@ -55,9 +55,9 @@ Nothing here edits `apps/web-platform/infra/`.
 
 ## Phase 4 — PR-4: the web-host root-disk images (operator-gated)
 
-- [ ] 4.1 Determine which of the four images the #6178 rollback still needs; record the finding.
-- [ ] 4.2 Ledger row for the images as a provider-side derivative store.
-- [ ] 4.3 Article 30 retention statement plus the Art. 17 reachability note; this discharges PA-36's standing commitment.
+- [x] 4.1 Determine which of the four images the #6178 rollback still needs; record the finding. Only `411798619` (ADR-100 addendum 2026-09-23); the day-7 soak was NOT CLEAN. The listing is complete: 4 snapshots, 0 backups.
+- [x] 4.2 Ledger row for the images as a provider-side derivative store (`hetzner.web1_inngest_cutover_snapshots`, catalogued, records PA-8/PA-13).
+- [x] 4.3 Article 30 retention statement plus the Art. 17 reachability note (PA-8 §(f), PA-13 §(f)); PA-36 §(f) is marked partly discharged (its data is not in these images). Art. 5(2) template committed as `pending`.
 - [ ] 4.4 Propose deletion with the exact command and stop. Deletion runs only on the operator's per-command authorization, with an Art. 5(2) record written at the time.
 
 ## Phase 5 — close-out

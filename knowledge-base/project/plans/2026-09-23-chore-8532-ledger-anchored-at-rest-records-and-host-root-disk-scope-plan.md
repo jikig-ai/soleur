@@ -359,7 +359,7 @@ discoverability_test:
 - [ ] **AC-3a** Every carrier clause in a record surface names a live `stores[].store` and its `at rest:` token equals that row's mechanism; each resolves uniquely **within its PA section**. Not once per file — measured, the register states one store's posture under up to three activities.
 - [ ] **AC-3b** The five CLO register amendments are present, each with a dated `**[YYYY-MM-DD AMENDMENT (#N): …]**` marker.
 - [ ] **AC-3c** `bash plugins/soleur/test/c4-model-freshness.test.sh` passes with the regenerated JSON committed.
-- [ ] **AC-4a** The four image ids are ledgered as a provider-side derivative store with a retention statement and an Art. 17 reachability note covering the whole class (images, the live journals on five hosts, Better Stack, Sentry).
+- [ ] **AC-4a** The four image ids are ledgered as a provider-side derivative store with a retention statement and an Art. 17 reachability note covering the whole class (images, the live journals on ~~five~~ three hosts — web-1, web-2, registry; the inngest and git-data hosts set no persistent journal (measured 2026-09-23, CLO) — Better Stack, Sentry).
 - [ ] **AC-4c** Each image carries a disposition: `delete-now` or `retained-until: <condition>`, with the retention expiry recorded. A PR that deletes nothing and states nothing does not satisfy this.
 - [ ] **AC-4b** No image is deleted without the operator's per-command authorization and an Art. 5(2) record written at the time.
 - [ ] **AC-G** No PR in this stack edits `apps/web-platform/infra/**`: `git diff --name-only origin/main...HEAD | grep -c '^apps/web-platform/infra/'` is 0.

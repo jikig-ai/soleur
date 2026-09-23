@@ -93,7 +93,8 @@
     "betterstack.logs",
     "r2.terraform_state_backend",
     "redis.session_store",
-    "git_data.baked_credentials_on_host"
+    "git_data.baked_credentials_on_host",
+    "hetzner.web1_inngest_cutover_snapshots"
   ],
   "stores": [
     {
@@ -633,6 +634,28 @@
           "tracking_issue": "#8620",
           "reevaluate_when": "when local.grok_dogfood_enabled first turns on (var.enable_grok_dogfood = true): the birth is the rebuild window, so decide the root-disk posture before the first apply",
           "expires_on": "2027-02-05"
+        }
+      }
+    },
+    {
+      "store": "hetzner.web1_inngest_cutover_snapshots",
+      "kind": "host-root-disk",
+      "records": [
+        "knowledge-base/legal/article-30-register.md#Processing Activity 8",
+        "knowledge-base/legal/article-30-register.md#Processing Activity 13"
+      ],
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "Hetzner snapshot images of server 123931471 (web-1), not declared in Terraform. Read-only GET /v1/images?type=snapshot on 2026-09-23 (HCLOUD_TOKEN from prd_terraform): 398857857 inngest-cutover-pre-20260618T093102Z (2026-06-18, 23.0 GB), 406654994 inngest-cutover-pre-20260709T180819Z (2026-07-09, 26.9 GB), 407991378 inngest-cutover-pre-20260713T095907Z (2026-07-13, 8.9 GB), 411798619 inngest-cutover-pre-20260723T153403Z (2026-07-23, 23.8 GB). All carry labels purpose=inngest-cutover-pre, and none is delete-protected. Release order: ADR-100, the addendum naming the four inngest-cutover-pre-* images. The same ids are pinned in scripts/followthroughs/inngest-soak-6178.sh (SNAPSHOTS).",
+        "defends_against": "nothing: each image is a full copy of web-1's unencrypted root disk as it stood before an Inngest cutover",
+        "does_not_defend": "anyone with read access to the Hetzner project, or to Hetzner's snapshot storage, reads the root disk as it was: the persistent journal (the app container's stdout and stderr, the class #8617 found carrying outbound recipient addresses), the Inngest SQLite and Redis state co-located on web-1 before the cutover, and the root-disk credentials of the time. Art. 17: no erasure path reaches these images. The same holds for the rest of the class: the live persistent journals on web-1, web-2 and the registry host (capped by size, never by time), and Better Stack and Sentry (90 days each).",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no probe reads the images on a schedule; existence was measured once, 2026-09-23, by the read-only API call cited in evidence",
+        "exception": {
+          "justification": "411798619 is the #6178 rollback substrate, the latest pre-cutover state. ADR-100 releases all four only after a clean day-7 soak reading, and the day-7 reading (#6178, 2026-09-22T20:38Z) was SOAK NOT CLEAN with 2 UNEXPLAINED groups. The older three are superseded by 411798619 and are proposed delete-now. Deleting any image is a production mutation that runs only on the operator's per-command authorization (#8532 PR-4b), recorded in the Art. 5(2) template committed before the act.",
+          "tracking_issue": "#6178",
+          "reevaluate_when": "the #6178 UNEXPLAINED groups are attributed and a SOAK CLEAN reading lands, or 2026-10-06 (the soak probe's horizon), whichever comes first. At that point each image is deleted under per-command authorization, or its retention is re-justified here",
+          "expires_on": "2026-10-06"
         }
       }
     }

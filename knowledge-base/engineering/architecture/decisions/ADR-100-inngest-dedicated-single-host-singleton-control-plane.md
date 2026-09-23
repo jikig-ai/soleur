@@ -1583,3 +1583,29 @@ in the durable backend. The op's messages were corrected to that scope in the #8
 head, trigger: a third consumer). The lib's header still names 2.0 as its consumer; the census in
 `apps/web-platform/infra/cutover-inngest-workflow.test.sh` pins the consumer set at exactly
 `{execute, registry-probe}` by occurrence count over every arm plus the whole file.
+
+## Addendum — 2026-09-23 (#8532) — only one of the four `inngest-cutover-pre-*` images is rollback substrate
+
+The 2026-09-19 addendum releases the four `inngest-cutover-pre-*` images as one step, after a
+clean day-7 soak reading. The day-7 reading (#6178, 2026-09-22T20:38Z) was **SOAK NOT CLEAN**,
+with two UNEXPLAINED groups, so that step has not run. This addendum splits the set; it does not
+change the order for the image the rollback depends on.
+
+**Determination.** A read-only `GET /v1/images?type=snapshot` on 2026-09-23 lists exactly four
+snapshots in the project, all created from server 123931471 (web-1). The project has no
+`type=backup` images. `411798619` (2026-07-23) is the latest pre-cutover state of web-1's root
+disk, and the only one the #6178 spec pins ("do NOT delete Hetzner image 411798619"). The older
+three, `398857857` (06-18), `406654994` (07-09) and `407991378` (07-13), each capture an earlier
+state that `411798619` supersedes. No runbook, workflow or rollback arm in the repo restores
+from them: `scripts/followthroughs/inngest-soak-6178.sh` names all four only as the release set.
+They are therefore **outside the rollback substrate**. Retaining them buys no recovery, and it
+keeps three extra unencrypted copies of web-1's root disk (ledger row
+`hetzner.web1_inngest_cutover_snapshots`).
+
+**Consequence.** The older three are disposed `delete-now`. `411798619` stays `retained-until`
+the UNEXPLAINED groups are attributed and a SOAK CLEAN reading lands, and it is released in this
+ADR's verb order, before #6178 closes. All four carry a hard expiry of 2026-10-06, the probe's
+`horizon_passed`. Every deletion is a production mutation that runs only on the operator's
+per-command authorization (#8532 PR-4b). Each is recorded at the moment it runs in
+`knowledge-base/legal/audits/2026-09-23-art-5-2-web1-snapshot-destruction-record.md`, whose
+rows cite this addendum.
