@@ -27,8 +27,8 @@ git can merge two regenerations whenever the underlying edits don't collide:
 All **three** writers emit these bytes through one shared module. The residual conflicts are
 real layout overlaps, and those keep regenerate-on-conflict.
 
-Brainstorm: `knowledge-base/project/brainstorms/2026-09-22-c4-model-mergeable-brainstorm.md`.
-Spec: `knowledge-base/project/specs/feat-c4-model-mergeable/spec.md`.
+Brainstorm: `knowledge-base/project/brainstorms/archive/20260922-133038-2026-09-22-c4-model-mergeable-brainstorm.md`.
+Spec: `knowledge-base/project/specs/archive/20260922-133038-feat-c4-model-mergeable/spec.md`.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -66,7 +66,7 @@ ADR-235 re-checked, and the classification holds: the viewer lists and fetches t
   free of shell metacharacters (preflight Check 10 rejects `|;&<>$`), and `--check` is that
   probe.
 
-**Measurements.** Replay harness at `knowledge-base/project/specs/feat-c4-model-mergeable/replay/`,
+**Measurements.** Replay harness at `knowledge-base/project/specs/archive/20260922-133038-feat-c4-model-mergeable/replay/`,
 run against real pairs of main commits touching `.c4` at gaps 1-10 (152 pairs):
 
 - raw (today): 0/152 clean.
@@ -257,7 +257,7 @@ the regenerated artifact all ship from the same commit.
 - `knowledge-base/engineering/architecture/decisions/ADR-235-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-050-likec4-runtime-rerender-via-out-of-process-cli.md`
 - skill prose from the Phase 4.3 sweep (grep-selected)
-- `knowledge-base/project/specs/feat-c4-model-mergeable/replay/replay.py` and results
+- `knowledge-base/project/specs/archive/20260922-133038-feat-c4-model-mergeable/replay/replay.py` and results
 
 ## Open Code-Review Overlap
 

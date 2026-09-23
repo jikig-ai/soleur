@@ -233,7 +233,7 @@ mattpocock/skills
     server/README.md above: it shares no 8-word shingle with any peer
     file, and it carries no credit because the emitter strips the first
     line of the template, which is where the attribution comment lives.
-    Nothing under knowledge-base/ carries the comment at all --
+    No Bundle 3 record under knowledge-base/ carries the comment --
     knowledge-base/project/glossary.md and
     knowledge-base/project/rejected/ are Soleur's own vocabulary and
     Soleur's own record, so attributing them would be a false
