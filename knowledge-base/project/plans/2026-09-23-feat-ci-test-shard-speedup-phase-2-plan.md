@@ -13,6 +13,53 @@ requires_cpo_signoff: true
 
 # ci: test-shard speedup phase 2
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23 (inline deepen-plan pass — gates 4.4–4.11
+executed in-process; sub-agent fan-out unavailable in this context, noted
+in Domain Review)
+**Sections enhanced:** Proposed Solution A/D, Dependencies & Risks,
+Acceptance Criteria, tasks.md
+
+### Gate Results
+
+- 4.6 User-Brand Impact: PASS (`single-user incident`, phase-1 carry-forward)
+- 4.7 Observability: PASS (5 fields; probe `bash scripts/test-all.sh
+  --enumerate scripts` → literal `SUITE_REGISTRATION`, <15s, no SSH)
+- 4.8 PAT-shaped variables: PASS (no hits)
+- 4.9 UI wireframe: skip (no UI-surface files)
+- 4.10 Encryption posture: skip (no store/connection triggers)
+- 4.11 Guard Contract: PASS (`lint-guard-contract.py` green — 4 guard
+  entries; assemblies read as structural: chokepoint/call-site
+  enumerations, not member lists)
+- 4.5 network-outage / 4.55 downtime-cutover: no triggers
+
+### Key Improvements
+
+1. Corrected `#8450` state: CLOSED (Team-plan upgrade, ~60-job ceiling) —
+   K=6's +1 leg sits far inside it; plan no longer cites it as open work.
+2. Fixed row-index ordering: M7–M9 insert BEFORE MUSTPASS (indices 21–23,
+   MUSTPASS becomes 24) so the non-canonical must-pass row stays last;
+   documented the full call-site index map (ROW1=1 … MUSTPASS=24).
+3. Named `hfrow()` explicitly — `frow` binds `SOLEUR_SHARD_MANIFEST`
+   internally, so heavy fixtures need the heavy-override sibling or they
+   would be parsed as the light table.
+4. Recorded `fixture-relative-assert` baseline as count-pinned (10 + 2
+   per file) — new `$WORK` paths shift counts; same-commit baseline update.
+5. Precedent-diff on the `&`/`wait` fan-out: per-pid `wait` matches repo
+   shape but bounded fan-out + per-pid rc collection is novel — flagged
+   for reviewer scrutiny of the collect block.
+
+### New Considerations Discovered
+
+- The env-prefixed `SOLEUR_SHARD_MANIFEST=off row "ROW1"`/`"ROW4"` call
+  sites: the `next_row` gate must wrap the whole env-prefixed call.
+- The M-fixture materialization block must stay unconditional (cheap;
+  M4's bespoke row depends on `manifest-empty.tsv` existing).
+- `admin-merge-ready` consumers match check-runs by ruleset context, not
+  job name — the `shard-totality-mutations (1-12)` display rename is
+  verified harmless (no test asserts the bare name).
+
 ## Overview
 
 Phase 2 of #8006's CI wall-clock work. Phase 1 shipped the heavy carve-out
@@ -149,8 +196,10 @@ job in the run. After phase 1 the wall is ~10 min, dominated by:
 - *Splitting `registry-gate-mutation-battery` internally* → its own global
   floor contracts (MIN_SUITES-class) make internal row-splitting a heavier
   change than the whole rest of this plan; deferred, see Non-Goals.
-- *K>6* → diminishing returns (~6.5m/leg at K=6 already meets P2) plus
-  org-level runner-pool pressure already tracked by #8450.
+- *K>6* → diminishing returns (~6.5m/leg at K=6 already meets P2); the
+  org ceiling is settled either way — #8450 CLOSED COMPLETED
+  (Team-plan upgrade landed 2026-09-22, ~60 hosted-job ceiling, +1 leg
+  well inside it).
 
 ### Value-Proposition Measurement (Phase 0.6c)
 
@@ -248,9 +297,9 @@ artifacts. No external API or unfamiliar territory is touched.
 
 - `#8006` (open, tracking) — this plan is its phase-2 arm; issue stays open
   for the leg-duration soak probe.
-- `#8450` (open) — org 20-job concurrency ceiling; K=6 adds one leg —
-  pressure acknowledged, decision already made to raise the ceiling
-  (2026-09-21 brainstorm).
+- `#8450` (closed, COMPLETED) — org concurrency ceiling resolved by the
+  Team-plan upgrade (verified `plan.name=team` 2026-09-22, ~60 hosted
+  jobs); K=6's +1 leg is well inside the raised ceiling.
 - `#8329` (open PR) — affected-test gate; edits `scripts/test-all.sh` +
   `scripts/test-all-affected.test.sh` — rebase ordering risk.
 - `#7942`, `#8659` (open code-review) — see Open Code-Review Overlap.
@@ -266,11 +315,17 @@ already serial in an isolated `mktemp` WORK dir, so index-splitting is
 clean. Details:
 
 - **Row indexing.** A `next_row` helper increments a `DECLARED` counter at
-  every row call site — `row` calls, `frow` calls, and the bespoke blocks
+  every row call site — `row` calls (including the env-prefixed
+  `SOLEUR_SHARD_MANIFEST=off row "ROW1"`/`"ROW4"` sites — the gate wraps
+  the whole call, prefix included), `frow` calls, and the bespoke blocks
   (ROW6 tautology, M4) — and returns whether that index is inside the
   selected range. Out-of-range call sites increment `DECLARED` but execute
-  nothing. Row index = call-site order in the file (ROW1=1 … MUSTPASS=21;
-  24 after D's M7–M9).
+  nothing. Row index = call-site order in the file. Current order:
+  ROW1=1, ROW2=2, ROW3=3, ROW4=4, ROW5=5, ROW5B=6, ROW5C=7, ROW5D=8,
+  ROW7=9, ROW8=10, HARNESS=11, ROW6-bespoke=12, ROW9=13, ROW10=14,
+  M1=15, M2=16, M3=17, M4-bespoke=18, M5=19, M6=20, MUSTPASS=21. D's
+  M7–M9 insert BEFORE MUSTPASS (M7=21, M8=22, M9=23; MUSTPASS becomes
+  index 24) so the non-canonical-input must-pass row stays last.
 - **CONTROL + instrument self-test run on every leg.** A half-battery
   without a green unmutated control is void the same way the whole battery
   is; the control is one guard invocation and stays unconditionally first.
@@ -281,17 +336,22 @@ clean. Details:
   checkout mid-restore.
 - **Floor semantics (load-bearing).** Replace `MIN_ROWS=21` with three
   counters asserted at exit: `DECLARED == DECLARED_TOTAL` (constant, 21→24
-  with D's rows — updated in the same edit that adds a row), `EXECUTED ==
-  IN_RANGE` (no in-range row silently skipped), `IN_RANGE >= 1`. The floor
-  counts TOTAL DECLARED rows, never executed rows — per the task brief, a
-  per-half executed floor would false-positive on each half.
+  with D's rows — updated in the same edit that adds a row; the battery's
+  own `15 positional/ci rows + M1..M4 (4) + M5 + M6 = 21` comment becomes
+  `+ M7..M9 = 24`), `EXECUTED == IN_RANGE` (no in-range row silently
+  skipped), `IN_RANGE >= 1`. The floor counts TOTAL DECLARED rows, never
+  executed rows — per the task brief, a per-half executed floor would
+  false-positive on each half.
 - **ci.yml** adds `strategy: { fail-fast: false, matrix: { rows: [...] } }`
   and `run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
   --rows "${{ matrix.rows }}"`. Job name unchanged → no aggregator,
   ruleset, required-checks, or synthetic-checks edits. `timeout-minutes`
   stays 30 (hang cap, not an estimate — the comment block is updated to
   say so). The `21 rows × ~12 leg-enumerations` comment updates to the new
-  row count + split.
+  row count + split. **Commit-boundary rule:** the flag validator refuses
+  `B > DECLARED_TOTAL`, so if the split lands before D's M7–M9 the ranges
+  are `1-11`/`12-21` and bump to `1-12`/`13-24` in the same commit that
+  adds the rows (tasks.md carries this).
 
 ### Change B — `test-scripts` K=6
 
@@ -391,10 +451,20 @@ same provenance keys + `label<TAB>leg`).
   `--enumerate scripts-heavy` set, legs in range, no duplicates, every leg
   pinned, rows ≥ 1 (explicitly NOT the ≥100 light floor; the registered
   count is ~3 and the suite must say so).
-- Battery M7–M9 (new `frow` rows, indices 22–24): heavy minus-one → GREEN
-  (untabled heavy label hash-falls-back to exactly one leg), heavy
-  phantom → GREEN (inert), heavy empty → GREEN (all-hash total). Bound via
-  `SOLEUR_SHARD_MANIFEST_HEAVY` so the light committed table is untouched.
+- Battery M7–M9 (new `hfrow` rows inserted before MUSTPASS → indices
+  21–23, MUSTPASS becomes 24): heavy minus-one → GREEN (untabled heavy
+  label hash-falls-back to exactly one leg), heavy phantom → GREEN
+  (inert), heavy empty → GREEN (all-hash total). `hfrow()` is `frow`'s
+  heavy sibling — identical verdict logic but binding
+  `SOLEUR_SHARD_MANIFEST_HEAVY` (`frow` binds `SOLEUR_SHARD_MANIFEST`
+  internally, so a heavy fixture through `frow` would be read as the
+  LIGHT table — wrong group). The guard's `guard_rc` invocation runs both
+  group passes in one call: heavy rows exercise the heavy fixture while
+  the light pass keeps the committed table.
+  Note the fixture-block restructure: the M-fixture materialization
+  (minus-one/phantom/empty files) stays unconditional — it is cheap and
+  M4's guard needs it — while each `frow` and the bespoke M4 block is
+  `next_row`-gated; same shape for the heavy fixture files.
 - Honest scope: at 3 suites/3 legs the assignment is already a bijection —
   expected wall-clock gain ≈ 0. What D buys is P4: insertion-stability for
   the group most likely to grow, one mechanism instead of two, and a loud
@@ -609,7 +679,10 @@ literals it mirrors.
   `scripts/lint-orphan-test-suites.sh`, plus
   `scripts/test-all-affected.test.sh` (A3 shape untouched) and
   `plugins/soleur/test/regenerate-shard-manifest.test.sh` (heavy arm
-  fixtures added).
+  fixtures added). `fixture-relative-assert.baseline.txt` pins per-file
+  site COUNTS (`10` for the battery, `2` for the guard) — new `$WORK`-
+  relative fixture/output paths in either file shift the count and the
+  baseline updates in the same commit; do not add flagged sites casually.
 - [ ] AC12: `actionlint .github/workflows/ci.yml` clean. (Plan/tasks live
   under `knowledge-base/project/` — out of markdownlint scope by design,
   `.markdownlintignore` #7927; no lint claim is made for them.)
@@ -671,9 +744,15 @@ literals it mirrors.
 - **Parallel-enumerate contention:** ~10 concurrent `bash test-all.sh
   --enumerate` children on a 2-vCPU runner — bounded, lock-free by design;
   the risk is output interleave, closed by file-per-child + serial verdicts.
-- **K=6 pool pressure:** +1 leg against the org ceiling — #8450's own
-  decision (GitHub Team upgrade) covers it; leg-count increase is the
-  cheap direction either way.
+  **Precedent-diff (Phase 4.4):** per-pid `wait "$pid"` is the repo shape
+  (`scripts/content-publisher.test.sh:202,218`; `scripts/dev-suite-mutex.sh:381`
+  backgrounds a child), but no sibling carries a bounded `&`/`wait` fan-out
+  with per-pid rc collection over a child set — the pattern is novel here,
+  so reviewers should scrutinize the collect block specifically: every pid
+  waited exactly once, rc captured before the next `wait`, verdicts emitted
+  serially after all waits complete.
+- **K=6 pool pressure:** minimal — #8450 closed with the Team-plan
+  upgrade (20→~60 hosted jobs); +1 leg is far inside the new ceiling.
 - **Manifest drift windows:** between ci.yml edit and manifest regen the
   lint n-pin reds — the regen is in the same commit, so the window does
   not exist at review time.
@@ -690,7 +769,8 @@ literals it mirrors.
 - Promoting `shard-totality-mutations` into the required-checks ruleset —
   tracked separately per its own ci.yml comment (ruleset + canonical-JSON
   + synthetic-fabrication surface).
-- Runner-pool/org-concurrency ceiling — #8450 (separate decided track).
+- Runner-pool/org-concurrency ceiling — #8450 (closed; Team upgrade
+  landed).
 - Intra-leg suite parallelism — #8231.
 - plugins/soleur/test `*.mutation.sh` gating — #7942.
 - `test-all-affected` local-gate rework — #8329 (sibling PR).
