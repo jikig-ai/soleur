@@ -139,9 +139,10 @@ on:
       # the authorization:
       #   * workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
       #     that job is the sole human authorization (DP-11 F8).
-      #   * registry-luks-recut (#6929) — that job has NO `environment:` (like all four
-      #     host-replace/migrate jobs); its authorization is the menu-ack dispatch itself
-      #     (hr-menu-option-ack-not-prod-write-auth), and this token only guards a mis-dispatch.
+      #   * registry-luks-recut (#6929) — still NOT reviewer-gated: its authorization is the
+      #     menu-ack dispatch itself (hr-menu-option-ack-not-prod-write-auth) and this token
+      #     only guards a mis-dispatch. Since #8209 it DOES carry `environment: infra-privileged`
+      #     — no reviewer, but main-only, so a non-`main` dispatch is refused first.
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §confirm and the gate model
@@ -152,7 +153,7 @@ on:
         default: false
         type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, workspaces-luks-recut, inngest-volume-recut. Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, workspaces-luks-recut, inngest-volume-recut, vector-redeliver. Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -4361,7 +4362,6 @@ jobs:
         # birth job and driven by tests/scripts/test-git-data-boot-signal-poll.sh. The
         # `Dispatch summary` below turns an apply/poll outcome pair that never produced a
         # verdict (including an empty outcome from a renamed step id) red.
-        # MERGED, not a second `if:` key (#8209; runbook §plan_only).
         if: ${{ !cancelled() && inputs.plan_only != true && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
@@ -5639,7 +5639,7 @@ jobs:
 
       # ADR-128 R2/R3/R4/R5 — the SAME extracted reader web_host_create runs.
       - name: Surface fresh-host Sentry breadcrumb trail (best-effort — R2/R3/R4/R5)
-        # MERGED, not a second `if:` key (#8209; see the runbook's plan_only section).
+        # MERGED, not a 2nd `if:` key (#8209).
         if: always() && inputs.plan_only != true
         env:
           JOB_STATUS: ${{ job.status }}

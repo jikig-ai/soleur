@@ -196,11 +196,23 @@ run ≥1 green cycle. When all pass, flip the ADR-032 amendment status
 
 ## Phase 0 -- Doppler setup (one-time, App-auth)
 
-The provider authenticates as the `soleur-ai` GitHub App (id `3261325`,
-org-wide installation `122213433` on `jikig-ai`) per
-AGENTS.rules.md `hr-github-app-auth-not-pat`. App credentials are already
-mirrored from `prd` to `prd_terraform` by the `apps/web-platform/infra/`
-root's `doppler_secret` resources (PR #4150), so no fresh mint is needed.
+The provider authenticates as a GitHub App per AGENTS.rules.md
+`hr-github-app-auth-not-pat`. **Which** App is selected by which variables are
+non-empty (#8209, ADR-241 D5): the dedicated `soleur-infra` App when
+`GITHUB_INFRA_APP_PRIVATE_KEY` is set, the PR plan job's own read-only
+`GITHUB_TOKEN` when only that is available, and otherwise the legacy
+`soleur-ai` App (id `3261325`, org-wide installation `122213433` on `jikig-ai`).
+
+The sentence here previously said the App credentials "are already mirrored from
+`prd` to `prd_terraform` … so no fresh mint is needed". That mirroring is the
+thing #8209 **removes**: the two `doppler_secret` resources are now `removed`
+blocks (forget, not destroy), and after operator step O10 `prd_terraform`
+resolves `GITHUB_APP_PRIVATE_KEY` to the non-PEM `EVICTED_SEE_ADR_241` sentinel,
+which every consumer refuses with `verdict=legacy_app_key_evicted`. Reading the
+old sentence after O10 would send someone to re-create exactly the branch-readable
+copy this work exists to delete. The Tier-B key is delivered as a GitHub
+environment secret on `infra-privileged`; see
+knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.
 
 Verify Doppler has both secrets:
 
