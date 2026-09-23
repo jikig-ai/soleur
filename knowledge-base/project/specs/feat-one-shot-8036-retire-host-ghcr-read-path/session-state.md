@@ -1,6 +1,7 @@
 # Session State
 
 ## Plan Phase
+
 - Plan file: knowledge-base/project/plans/2026-09-23-fix-retire-host-ghcr-read-path-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
@@ -11,7 +12,9 @@
   `#N in:body --state open` both empty for each. No collision.
 
 ### Errors
+
 None that blocked. Three recovered in-session (recorded by the planner):
+
 - A pre-tool guard refused a scripted append (flagged Doppler CLI string in prose); the retry
   silently dropped `## Scoped Advisor Consult` while two later sections still cited its evidence.
   Caught by section-count discipline.
@@ -22,6 +25,7 @@ None that blocked. Three recovered in-session (recorded by the planner):
   MD038 errors ~600 columns from the real cause.
 
 ### Decisions
+
 - **The operator's stated scope was wrong in one respect, and the plan says so.** The ruling names
   sweeping "the home docker config". `ci-deploy.sh` runs under `webhook.service` with
   `ProtectHome=read-only` and `/home` absent from `ReadWritePaths`, so that sweep is structurally
@@ -42,6 +46,7 @@ None that blocked. Three recovered in-session (recorded by the planner):
   `cosign-verify-live-8037.sh`. Both recorded in `decision-challenges.md` for `ship` to surface.
 
 ### Components Invoked
+
 `soleur:plan` · `soleur:plan-review` · `soleur:deepen-plan` ·
 `soleur:engineering:research:repo-research-analyst` ·
 `soleur:engineering:research:learnings-researcher` · `Explore` ·
