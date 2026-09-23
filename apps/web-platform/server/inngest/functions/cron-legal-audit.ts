@@ -22,7 +22,7 @@
 // is added in the same PR (apps/web-platform/infra/sentry/cron-monitors.tf).
 //
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
-//   - --model claude-opus-5 — legal-audit skill
+//   - --model claude-opus-5-5 — legal-audit skill
 //     uses opus for cross-document consistency reasoning.
 //   - --max-turns 60 (was 40) — multi-document audit fans out across
 //     jurisdictions (US, EU/GDPR, UK).
@@ -98,7 +98,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //
 // HISTORICAL GHA contract (scheduled-legal-audit.yml, removed by the TR9
 // Inngest migration — this file is now authoritative, there is no mirror):
-//   --model claude-opus-5
+//   --model claude-opus-5-5
 //   --max-turns 60
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task
 const CLAUDE_CODE_FLAGS = [

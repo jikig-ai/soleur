@@ -501,7 +501,7 @@ Agent tests cost API tokens. Strategies to manage:
 ```typescript
 // Use smaller models for basic tests
 const testConfig = {
-  model: process.env.CI ? "claude-haiku-4-5" : "claude-opus-5",
+  model: process.env.CI ? "claude-haiku-4-5" : "claude-opus-5-5",
   maxTokens: 500,  // Limit output length
 };
 

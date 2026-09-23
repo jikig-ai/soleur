@@ -19,10 +19,11 @@ const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 // Current model landscape (2026-09). The auditor flags anything NOT in this set
 // that lives in a config-class path. Source of truth: claude-api skill table +
 // https://platform.claude.com/docs/en/about-claude/models/overview.md.
-// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch — it is now a
-// source id (still served, but superseded in-tier by `claude-fable-5-1`).
+// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch, and
+// `claude-opus-5` at the Opus 5.5 launch (2026-09-22) — both are now source ids
+// (still served, but superseded in-tier by `claude-fable-5-1` / `claude-opus-5-5`).
 const CURRENT_IDS = [
-  "claude-opus-5",
+  "claude-opus-5-5",
   "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
   "claude-fable-5-1",
@@ -178,7 +179,9 @@ describe("model-launch-review auto-fix safety (AC5, AC6)", () => {
       join(root, "apps/web-platform/server/inngest/functions/cron-fake-audit.ts"),
       "utf8",
     );
-    expect(config).toContain("claude-opus-5");
+    // Quoted: a bare `claude-opus-5` would pass by prefix against `claude-opus-5-5`
+    // AND against an un-migrated `claude-opus-5`.
+    expect(config).toContain('"claude-opus-5-5"');
     expect(config).not.toContain("claude-opus-4-7");
     // excluded classes untouched
     const fixture = readFileSync(
@@ -250,6 +253,26 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("every superseded id is still a source pair mapping to its OWN tier's current id", () => {
+    // The table-driven tests quantify over the pairs that EXIST, so deleting a
+    // pair leaves them green. Pin the superseded set explicitly (grow it at each
+    // launch): a removed pair means real stale ids stop being auto-fixed.
+    const SUPERSEDED: Record<string, string> = {
+      "claude-opus-5": "claude-opus-5-5",
+      "claude-opus-4-8": "claude-opus-5-5",
+      "claude-opus-4-7": "claude-opus-5-5",
+      "claude-opus-4-6": "claude-opus-5-5",
+      "claude-sonnet-4-6": "claude-sonnet-5",
+      "claude-sonnet-4-5": "claude-sonnet-5",
+      "claude-fable-5": "claude-fable-5-1",
+    };
+    const table = new Map(parseAutofixPairs());
+    for (const [from, to] of Object.entries(SUPERSEDED)) {
+      expect(table.get(from), `superseded '${from}' must map to '${to}'`).toBe(to);
+      expect(CURRENT_IDS).toContain(to);
+    }
+  });
+
   test("AUTOFIX_PAIRS is single-hop and every target is a current id", () => {
     const pairs = parseAutofixPairs();
     const sources = new Set(pairs.map(([from]) => from));
@@ -273,7 +296,12 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "mlr-chain-"));
     const copy = join(sandbox, "audit-models.sh");
     const src = readFileSync(AUDIT_SH, "utf8").replace(
-      '"claude-opus-4-7=claude-opus-5"',
+      '"claude-opus-4-7=claude-opus-5-5"',
+      '"claude-opus-4-7=claude-opus-4-8"',
+    );
+    // Landing check: a replace() whose needle drifted (a retargeted pair) is a
+    // silent no-op, and the unmutated table then exits 0 — not the guard failing.
+    expect(src, "chained pair must have been injected").toContain(
       '"claude-opus-4-7=claude-opus-4-8"',
     );
     writeFileSync(copy, src);
@@ -396,7 +424,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     expect(run(["--detect"], root).status, "EOL id must be seen").toBe(10);
     expect(run(["--fix"], root).status).toBe(0);
     expect(readFileSync(join(dir, "cron.env"), "utf8")).toBe(
-      `MODEL=claude-opus-5`,
+      `MODEL=claude-opus-5-5`,
     );
     expect(run(["--detect"], root).status).toBe(0);
 
@@ -409,7 +437,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     // protecting. Three independent mutations of the sed — dropping the
     // boundary, dropping the backreference, and skewing the boundary charset
     // away from selection's — each left the suite 17/17 green while corrupting
-    // real source (`claude-opus-4-7-20260101` -> `claude-opus-5-20260101`,
+    // real source (`claude-opus-4-7-20260101` -> `claude-opus-5-5-20260101`,
     // `claude-fable-5-1` -> `claude-fable-5-1-1`, and an eaten closing quote
     // that makes the file stop parsing). One fixture reds all three.
     const root = mkdtempSync(join(tmpdir(), "mlr-sed-anchor-"));
@@ -428,7 +456,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     // model and must not be silently re-pointed; the current fable id must not
     // grow a second `-1`; the quoting must survive intact.
     expect(readFileSync(file, "utf8")).toBe(
-      `export const STALE = "claude-opus-5";\n` +
+      `export const STALE = "claude-opus-5-5";\n` +
         `export const DATED = "claude-opus-4-7-20260101";\n` +
         `export const CURRENT = "claude-fable-5-1";\n`,
     );
@@ -620,9 +648,9 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
     writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
     expect(run(["--fix"], root).status).toBe(0);
-    // Per-tier map: opus → opus-5, sonnet → sonnet-5 (not a single global target).
-    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-5");
-    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toContain("claude-sonnet-5");
+    // Per-tier map: opus → opus-5-5, sonnet → sonnet-5 (not a single global target).
+    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toBe(`export const M = "claude-opus-5-5";\n`);
+    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toBe(`export const M = "claude-sonnet-5";\n`);
     rmSync(root, { recursive: true, force: true });
   });
 });
