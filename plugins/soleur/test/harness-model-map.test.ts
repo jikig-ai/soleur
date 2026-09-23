@@ -60,14 +60,15 @@ describe("harness-model-map (ADR-110)", () => {
     expect(resolveModelTier("inherit", "claude")).toBe("inherit");
   });
 
-  test("grok fixture map uses live CLI spawn slugs (grok models 1.0.29: grok-4.6, grok-4.5)", () => {
-    // cheap is grok-4.5 — the only non-default slug `grok models` lists.
-    // grok-build-0.1 is an xAI API SKU (docs.x.ai Text API) but is NOT a
-    // Grok Build CLI spawn slug as of 1.0.29; do not pin it here.
+  test("grok fixture map uses live CLI spawn slugs", () => {
+    // cheap is grok-4.5 — the lowest cached-input rate among the slugs
+    // `grok models` lists (grok-4.7-build-fast bills 2x). grok-build-0.1 is an
+    // xAI API SKU (docs.x.ai Text API), NOT a Grok Build CLI spawn slug; do not
+    // pin it here. Evidence: ADR-110 addendum 2026-09-23.
     expect(resolveModelTier("cheap", "grok")).toBe("grok-4.5");
-    expect(resolveModelTier("standard", "grok")).toBe("grok-4.6");
-    expect(resolveModelTier("strong", "grok")).toBe("grok-4.6");
-    expect(resolveModelTier("advisor", "grok")).toBe("grok-4.6");
+    expect(resolveModelTier("standard", "grok")).toBe("grok-4.7");
+    expect(resolveModelTier("strong", "grok")).toBe("grok-4.7");
+    expect(resolveModelTier("advisor", "grok")).toBe("grok-4.7");
     expect(resolveModelTier("inherit", "grok")).toBe("inherit");
     expect(TIER_MAPS.grok.cheap).not.toBe("grok-build-0.1");
   });
@@ -133,14 +134,14 @@ describe("harness-model-map (ADR-110)", () => {
   test("resolveAdvisorTier is fable on Claude and strong-map on Grok; fallback is strong", () => {
     expect(resolveAdvisorTier("claude")).toBe("fable");
     expect(resolveAdvisorFallback("claude")).toBe("opus");
-    expect(resolveAdvisorTier("grok")).toBe("grok-4.6");
-    expect(resolveAdvisorFallback("grok")).toBe("grok-4.6");
+    expect(resolveAdvisorTier("grok")).toBe("grok-4.7");
+    expect(resolveAdvisorFallback("grok")).toBe("grok-4.7");
   });
 
   test("TIER_MAPS is the exported fixture (one file to bump per vendor generation)", () => {
     expect(TIER_MAPS.claude.cheap).toBe("haiku");
     expect(TIER_MAPS.claude.standard).toBe("sonnet");
-    expect(TIER_MAPS.grok.standard).toBe("grok-4.6");
+    expect(TIER_MAPS.grok.standard).toBe("grok-4.7");
   });
 });
 
