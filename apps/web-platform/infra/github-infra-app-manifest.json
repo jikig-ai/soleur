@@ -1,0 +1,19 @@
+{
+  "name": "Soleur Infra",
+  "url": "https://soleur.ai",
+  "description": "Terraform's Tier-B GitHub identity (#8209, ADR-239). It manages the CI policy substrate, the deployment environments and the Actions secrets of the jikig-ai org's own repositories. It has no runtime surface, no active webhook and no end-user installation.",
+  "public": false,
+  "redirect_url": "https://${app_domain}/internal/github-app-init",
+  "hook_attributes": {
+    "url": "https://${app_domain}/api/webhooks/github",
+    "active": false
+  },
+  "default_permissions": {
+    "administration": "write",
+    "contents": "write",
+    "environments": "write",
+    "metadata": "read",
+    "secrets": "write"
+  },
+  "default_events": []
+}

@@ -131,6 +131,12 @@ Do **not** widen the allow-set and do **not** add an ack trailer to a merge comm
 
 > Do not go looking for that pointer in this arm's own step log — it is not there. The `OPERATOR_APPLIED_EXCLUSIONS` / ADR-096 remediation text lives in the **push-apply** preflight halt (`apply-web-platform-infra.yml:660`, `:667`), a different job. This arm's refusal prints only the gate's own message and a pointer back to this runbook, which is why the route is written out here:
 
+> **#8209 / ADR-239 — the single-loader form below is the PRE-cutover one.** After the Tier-B
+> cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the inner
+> `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
+> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> invocation.
+
 ```bash
 cd apps/web-platform/infra && \
   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan

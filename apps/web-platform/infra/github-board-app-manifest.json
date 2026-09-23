@@ -1,0 +1,18 @@
+{
+  "name": "Soleur Board",
+  "url": "https://soleur.ai",
+  "description": "Least-privilege identity for the board-status-sync workflow (#8209, ADR-239). It moves cards on the jikig-ai Project v2 board \"Soleur Kanban\". It reads issues and pull requests and writes nothing but project item fields.",
+  "public": false,
+  "redirect_url": "https://${app_domain}/internal/github-app-init",
+  "hook_attributes": {
+    "url": "https://${app_domain}/api/webhooks/github",
+    "active": false
+  },
+  "default_permissions": {
+    "issues": "read",
+    "metadata": "read",
+    "organization_projects": "write",
+    "pull_requests": "read"
+  },
+  "default_events": []
+}

@@ -31,6 +31,12 @@ resource "cloudflare_zero_trust_access_service_token" "deploy" {
 
 Then apply:
 
+> **#8209 / ADR-239 — the single-loader form in this runbook is the PRE-cutover one.** After the
+> Tier-B cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the
+> inner `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
+> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> invocation. This note covers every occurrence below.
+
 ```bash
 cd apps/web-platform/infra
 doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform apply

@@ -648,6 +648,12 @@ Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_
 
 **⚠ The ONLY supported rotation path is the `terraform taint` flow below.** Do NOT rotate via the Doppler UI — every `doppler_secret` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs. The provider skips the value read-back when `ignore_changes` is set; you'd get silent dashboard ↔ tfstate divergence. If you've accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<key>` to force TF to re-converge.
 
+> **#8209 / ADR-239 — the single-loader form in this runbook is the PRE-cutover one.** After the
+> Tier-B cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the
+> inner `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
+> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> invocation. This note covers every occurrence in this file.
+
 1. Identify which key to rotate. Replace `<KEY>` with `inngest_signing_key_prd` (or `_dev`, or `inngest_event_key_{prd,dev}`).
 2. Taint the random_id so the next apply regenerates it:
 
