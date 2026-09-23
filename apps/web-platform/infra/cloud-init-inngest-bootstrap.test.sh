@@ -1445,6 +1445,7 @@ assert "NIC-G1 anti-vacuity (raw rows): the section ran its full inventory (expe
 _COND_BEFORE=$TOTAL
 if command -v terraform >/dev/null 2>&1; then
   NG1_DIR="$(mktemp -d -t nicg1-XXXXXX)"
+  trap 'rm -rf "$NG1_DIR"' EXIT
   NG1_RENDER="$NG1_DIR/rendered.yml"
   bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$NG1_RENDER" > "$NG1_DIR/budget.log" 2>&1 || true
   NG1_RENDER_BYTES=$(wc -c < "$NG1_RENDER" 2>/dev/null | tr -cd '0-9' || true)
