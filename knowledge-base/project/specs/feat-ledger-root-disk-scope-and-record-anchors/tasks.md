@@ -35,13 +35,13 @@ Nothing here edits `apps/web-platform/infra/`.
 
 ## Phase 2 — PR-2: host root disks
 
-- [ ] 2.1 Add `host-root-disk` to both kind enums; move `hcloud_server` from `non_store_types` into `store_classes`.
-- [ ] 2.2 Edit `hcloud_volume.workspaces` too: it is `for_each` over both web hosts, so PR-2 reds its own CI without it. (The `reason` per `non_store_types` entry is CUT — it crashes the partition check.)
-- [ ] 2.3 Write the six rows. Each exception states its own justification, tracker, rebuild-window trigger and review date.
-- [ ] 2.4 Rename `git_data.baked_credentials_on_host`, narrowed to the two live Doppler-fallback sites.
-- [ ] 2.5 `check_instance_multiplicity` plus MB-14, with a two-instance fixture whose second member is the offender.
-- [ ] 2.6 Amend the four `luks` rows' `does_not_defend` to name where each passphrase lives.
-- [ ] 2.7 Schema update; ADR for the scope change; amend ADR-140 to record that the seed was mechanical.
+- [x] 2.1 Add `host-root-disk` to both kind enums; move `hcloud_server` from `non_store_types` into `store_classes`.
+- [x] 2.2 Edit `hcloud_volume.workspaces` too: it is `for_each` over both web hosts, so PR-2 reds its own CI without it. (The `reason` per `non_store_types` entry is CUT — it crashes the partition check.)
+- [x] 2.3 Write the six rows (tracker #8620; expiries staggered 2026-11-13 .. 2027-02-05). Each exception states its own justification, tracker, rebuild-window trigger and review date.
+- [x] 2.4 ~~Rename~~ Narrow `git_data.baked_credentials_on_host` by dated addendum to the metadata-endpoint threat and the two live Doppler-fallback sites (`git-data-gc-failure.service`, `git-data-luks-reopen-failure.service`). The id is KEPT: five earlier plans cite it, and the host row now carries the root-disk copies.
+- [x] 2.5 `check_instance_multiplicity` plus MB-14 (and MB-23 orphan rows, MB-24 fail-closed shapes, MB-25 singletons), with a two-instance fixture whose second member is the offender.
+- [x] 2.6 Amend the ~~four~~ five `luks` rows' `does_not_defend` to name where each passphrase lives.
+- [x] 2.7 Schema update (plus a script/schema parity test and unknown-row-key rejection); ADR-242 (ordinal provisional); ADR-140 amended.
 
 ## Phase 3 — PR-3: record anchors (#8532)
 

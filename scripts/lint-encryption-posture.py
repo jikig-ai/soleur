@@ -75,8 +75,17 @@ STORE_KIND_ENUM = {
     "provider-db",
     "log-sink",
     "secret-store",
+    "host-root-disk",
 }
-STORE_CLASS_KIND_ENUM = {"guest-luks-volume", "provider-bucket", "provider-db"}
+STORE_CLASS_KIND_ENUM = {
+    "guest-luks-volume",
+    "provider-bucket",
+    "provider-db",
+    "host-root-disk",
+}
+# The validator never reads the schema file; the test suite pins these three
+# sets equal to the schema's so the two cannot drift silently.
+STORE_KEYS = {"store", "kind", "device_binding", "at_rest", "multiplicity"}
 CERT_VERIFICATION_VALUES = {"on", "off"}
 
 TRACKING_ISSUE_RE = re.compile(r"^#[0-9]+$")
@@ -98,6 +107,10 @@ DENY_DOES_NOT_DEFEND = {"", "none", "n/a", "na", "not applicable"}
 STALE_ATTESTATION_DAYS = 365
 
 RESOURCE_RE = re.compile(r'resource\s+"([A-Za-z0-9_]+)"\s+"([A-Za-z0-9_]+)"\s*\{')
+MODULE_RE = re.compile(r'^module\s+"([A-Za-z0-9_-]+)"\s*\{', re.MULTILINE)
+MODULE_SOURCE_RE = re.compile(r'^\s*source\s*=\s*"(\.\.?/[^"]+)"', re.MULTILINE)
+META_ARG_RE = re.compile(r"^\s*(for_each|count)\s*=\s*(.+?)\s*$")
+MAP_KEY_RE = re.compile(r'^\s*"?([A-Za-z0-9_.-]+)"?\s*=')
 
 
 # --- Generic .tf / infra-file parsing helpers --------------------------------
@@ -518,6 +531,15 @@ def check_store_id_accounted(
     seen: set[str] = set()
     for row in ledger["stores"]:
         sid = row["store"]
+        parsed = parse_address(sid)
+        # MUTATION-TARGET: MB-23 start (store-class address must be a real block)
+        if parsed and parsed[0] in store_classes and sid not in tf_store_addrs:
+            fails.append(
+                f"FAIL: stores[] row {sid} names a store_classes type but no "
+                "*.tf block declares it -> delete the ghost row (a catalogue "
+                "entry cannot stand in for a Terraform block)"
+            )
+        # MUTATION-TARGET: MB-23 end
         # MUTATION-TARGET: MB-21 start (row accounted + unique)
         if sid in seen:
             fails.append(
@@ -533,6 +555,187 @@ def check_store_id_accounted(
             )
         # MUTATION-TARGET: MB-21 end
         seen.add(sid)
+
+
+def _brace_end(text: str, open_idx: int) -> int:
+    """Index of the '}' closing the '{' at open_idx (or len(text)-1)."""
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return len(text) - 1
+
+
+def _strip_hcl_comment(line: str) -> str:
+    return re.split(r"\s(?:#|//)", " " + line, maxsplit=1)[0][1:]
+
+
+def block_meta_args(block: str) -> dict[str, str]:
+    """Top-level `for_each` / `count` of a resource block (depth 1 only, so a
+    nested `labels = { count = ... }` or a dynamic block is not read)."""
+    out: dict[str, str] = {}
+    depth = 0
+    for raw in block.splitlines():
+        line = _strip_hcl_comment(raw)
+        if depth == 1:
+            m = META_ARG_RE.match(line)
+            if m:
+                out[m.group(1)] = m.group(2)
+        depth += line.count("{") - line.count("}")
+    return out
+
+
+def resolve_var_map_keys(tf_file: Path, var_name: str, cache: dict[Path, str]) -> list[str] | None:
+    """Top-level keys of `variable "<var_name>" { default = { ... } }` declared in
+    the same Terraform root (directory) as tf_file, or None when there is no
+    such literal. A tfvars file in that root may override the default, so its
+    presence makes the literal unauthoritative -> None (fail closed)."""
+    root = tf_file.parent
+    if any(root.glob("*.tfvars")) or any(root.glob("*.tfvars.json")):
+        return None
+    var_re = re.compile(r'variable\s+"' + re.escape(var_name) + r'"\s*\{')
+    for f in sorted(root.glob("*.tf")):
+        text = cache.get(f)
+        if text is None:
+            text = read_text(f)
+            cache[f] = text
+        m = var_re.search(text)
+        if not m:
+            continue
+        body = text[m.end() - 1 : _brace_end(text, m.end() - 1) + 1]
+        d = re.search(r"^\s*default\s*=\s*\{", body, re.MULTILINE)
+        if not d:
+            return None
+        inner = body[d.end() : _brace_end(body, d.end() - 1)]
+        keys: list[str] = []
+        depth = 0
+        for raw in inner.splitlines():
+            line = _strip_hcl_comment(raw)
+            if depth == 0:
+                km = MAP_KEY_RE.match(line)
+                if km:
+                    keys.append(km.group(1))
+            depth += line.count("{") - line.count("}")
+        return keys
+    return None
+
+
+def module_calls_by_dir(tf_files: list[Path], cache: dict[Path, str]) -> dict[Path, list[str]]:
+    """Resolved module source directory -> the module call names sourcing it."""
+    out: dict[Path, list[str]] = {}
+    for f in tf_files:
+        text = cache.get(f)
+        if text is None:
+            text = read_text(f)
+            cache[f] = text
+        for m in MODULE_RE.finditer(text):
+            body = text[m.end() - 1 : _brace_end(text, m.end() - 1) + 1]
+            src = MODULE_SOURCE_RE.search(body)
+            if src:
+                d = (f.parent / src.group(1)).resolve()
+                out.setdefault(d, []).append(m.group(1))
+    return out
+
+
+def _names_token(token: str, text: str) -> bool:
+    return re.search(r"(?<![\w.])" + re.escape(token) + r"(?!\w)", text) is not None
+
+
+def check_instance_multiplicity(
+    ledger: dict, tf_files: list[Path], cache: dict[Path, str], fails: list[str]
+) -> None:
+    """#8532 PR-2, Guard 2: a row keyed on a for_each/count block states which
+    instances it covers, so one row cannot stand for several devices whose
+    posture differs. A resolvable `for_each = var.<map>` is compared against the
+    variable's default literal; every other multiplicity shape fails CLOSED
+    unless the row names its gate, because a resolver that silently does not
+    apply is the defect this check exists to close."""
+    store_classes = ledger["store_classes"]
+    index: dict[str, tuple[Path, str]] = {}
+    for f in tf_files:
+        text = cache.get(f)
+        if text is None:
+            text = read_text(f)
+            cache[f] = text
+        for t, n, block in extract_resource_blocks(text):
+            index.setdefault(f"{t}.{n}", (f, block))
+    modules = module_calls_by_dir(tf_files, cache)
+    for row in ledger["stores"]:
+        sid = row["store"]
+        hit = index.get(sid)
+        parsed = parse_address(sid)
+        if hit is None or not parsed or parsed[0] not in store_classes:
+            continue
+        f, block = hit
+        meta = block_meta_args(block)
+        mods = modules.get(f.parent.resolve(), [])
+        mult = row.get("multiplicity")
+        if not meta and not mods:
+            # MUTATION-TARGET: MB-25 start (a singleton must not declare instances)
+            if mult is not None:
+                fails.append(
+                    f"FAIL: {sid} declares multiplicity but its block is a "
+                    "singleton -> delete the stale multiplicity"
+                )
+            # MUTATION-TARGET: MB-25 end
+            continue
+        fe = meta.get("for_each", "")
+        var_m = re.fullmatch(r"var\.([A-Za-z_][A-Za-z0-9_]*)", fe)
+        keys = None
+        if var_m and "count" not in meta and not mods:
+            keys = resolve_var_map_keys(f, var_m.group(1), cache)
+        if keys is not None:
+            # MUTATION-TARGET: MB-14 start (for_each over a var map: instances compared)
+            want = ", ".join(sorted(keys))
+            if mult is None:
+                fails.append(
+                    f"FAIL: {sid} is for_each = {fe} but declares no multiplicity "
+                    f"-> add multiplicity.instances [{want}], and split the row "
+                    "if their posture differs"
+                )
+            elif sorted(mult["instances"]) != sorted(keys):
+                have = ", ".join(sorted(mult["instances"]))
+                fails.append(
+                    f"FAIL: {sid} covers instances [{have}] but {fe} declares "
+                    f"[{want}] -> ledger every instance (a new key is a new device)"
+                )
+            # MUTATION-TARGET: MB-14 end
+            continue
+        if mods:
+            desc = "instantiated by " + ", ".join(f"module.{m}" for m in mods)
+            haystack = " ".join(f"module.{m}" for m in mods)
+        elif "count" in meta:
+            desc = f"count = {meta['count']}"
+            haystack = meta["count"]
+        else:
+            desc = f"for_each = {fe}"
+            haystack = fe
+        # MUTATION-TARGET: MB-24 start (unresolvable multiplicity fails closed)
+        if mult is None or "gated_by" not in mult:
+            fails.append(
+                f"FAIL: {sid} is {desc}, which this check cannot resolve -> "
+                "declare multiplicity.instances and multiplicity.gated_by, and "
+                "name the gate in exception.reevaluate_when"
+            )
+        elif not _names_token(mult["gated_by"], haystack):
+            fails.append(
+                f"FAIL: {sid} multiplicity.gated_by {mult['gated_by']} does not "
+                f"occur in its expression ({desc}) -> name the variable, local "
+                "or module call that decides how many instances exist"
+            )
+        elif not _names_token(
+            mult["gated_by"],
+            ((row["at_rest"].get("exception") or {}).get("reevaluate_when") or ""),
+        ):
+            fails.append(
+                f"FAIL: {sid} exception.reevaluate_when must name "
+                f"{mult['gated_by']} -> the gate flipping is what reopens this row"
+            )
+        # MUTATION-TARGET: MB-24 end
 
 
 def check_live_coverage_floor(ledger: dict, fails: list[str]) -> None:
@@ -896,6 +1099,22 @@ def _validate_store(s: dict, i: int) -> list[str]:
     for f in ("store", "kind", "at_rest"):
         if f not in s:
             errs.append(f"{prefix} missing '{f}'")
+    unexpected = sorted(set(s) - STORE_KEYS)
+    if unexpected:
+        errs.append(f"{prefix} has unexpected key(s) {unexpected}")
+    if "multiplicity" in s:
+        mu = s["multiplicity"]
+        if (
+            not isinstance(mu, dict)
+            or set(mu) - {"instances", "gated_by"}
+            or not isinstance(mu.get("instances"), list)
+            or not all(isinstance(x, str) for x in mu["instances"])
+            or ("gated_by" in mu and not isinstance(mu["gated_by"], str))
+        ):
+            errs.append(
+                f"{prefix}.multiplicity must be {{instances: [string], "
+                "gated_by?: string}"
+            )
     if "kind" in s and s["kind"] not in STORE_KIND_ENUM:
         errs.append(f"{prefix}.kind invalid: {s.get('kind')!r}")
     if "at_rest" in s and isinstance(s["at_rest"], dict):
@@ -1052,6 +1271,7 @@ def run_sweep(
     check_positive_work_floor(ledger, tf_store_count, fails)
     check_non_iac_identity(ledger, fails)
     check_store_id_accounted(ledger, tf_inventory, fails)
+    check_instance_multiplicity(ledger, tf_files, cache, fails)
     check_live_coverage_floor(ledger, fails)
 
     for row in ledger["stores"]:

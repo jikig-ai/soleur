@@ -1022,6 +1022,251 @@ run_mutation "MB-21/duplicate" "MB-21" "$REPO_P1" "$LEDGER_P1_DUP"
 run_mutation "MB-21/non-store-type" "MB-21" "$REPO_P1_NST" "$LEDGER_P1_NST"
 
 # ===========================================================================
+# #8532 PR-2 — instance multiplicity (Guard 2), orphan rows, kind parity.
+# One ledger row is keyed on <type>.<name>, but a `for_each`/`count` block is
+# several devices. hcloud_volume.workspaces is for_each over var.web_hosts
+# while workspaces_luks is a singleton, so web-2 has no encrypted volume and
+# the ledger said nothing. Shapes:
+#   for_each = var.<map> with a resolvable default literal -> instances compared
+#   count, any other for_each, a module-instantiated block  -> fail CLOSED unless
+#     the row declares instances + gated_by, gated_by occurs in the expression,
+#     and the exception's reevaluate_when names it
+#   singleton                                              -> must NOT declare
+# ===========================================================================
+
+# mk_exc_row <store> <multiplicity-json-or-empty> <reevaluate_when>
+mk_exc_row() {
+  local store="$1" mult="$2" reeval="$3"
+  local mline=""
+  [[ -n "$mult" ]] && mline="\"multiplicity\": $mult,"
+  cat <<EOF
+    {
+      "store": "$store",
+      "kind": "guest-luks-volume",
+      $mline
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "fixture: no LUKS apparatus for this volume",
+        "defends_against": "nothing at the volume layer",
+        "does_not_defend": "a seized or RMA'd disk; a raw volume snapshot",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no probe in this fixture",
+        "exception": {
+          "justification": "fixture exception exercising the multiplicity check",
+          "tracking_issue": "#1",
+          "reevaluate_when": "$reeval",
+          "expires_on": "2099-01-01"
+        }
+      }
+    }
+EOF
+}
+
+# mk_mult_repo <dir> <web_hosts-default-body> — a TF root with a for_each
+# volume over var.web_hosts, a singleton volume, and a count-gated volume.
+mk_mult_repo() {
+  local d="$1" body="$2"
+  write_file "$d/apps/web-platform/infra/variables.tf" <<EOF
+variable "web_hosts" {
+  description = "fixture"
+  type = map(object({
+    location = string
+  }))
+  default = {
+$body
+  }
+}
+EOF
+  write_file "$d/apps/web-platform/infra/server.tf" <<'EOF'
+resource "hcloud_volume" "workspaces" {
+  for_each = var.web_hosts # one per host
+  name     = "soleur-${each.key}-data"
+}
+
+resource "hcloud_volume" "solo" {
+  name = "soleur-solo"
+  labels = {
+    count = "not-a-meta-argument"
+  }
+}
+
+locals {
+  extra_enabled = var.enable_extra
+}
+
+resource "hcloud_volume" "extra" {
+  count = local.extra_enabled ? 1 : 0
+  name  = "soleur-extra"
+}
+EOF
+}
+
+TWO_HOSTS='    "web-1" = { location = "hel1" }
+    "web-2" = {
+      location = "hel1"
+    }'
+
+# mk_mult_ledger <out> <workspaces-mult> <solo-mult> <extra-mult> <extra-reeval>
+mk_mult_ledger() {
+  local out="$1"
+  {
+    echo '{ "schema_version": 1,'
+    echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+    echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+    mk_exc_row "hcloud_volume.workspaces" "$2" "$REEVAL_DEF"
+    echo '    ,'
+    mk_exc_row "hcloud_volume.solo" "$3" "$REEVAL_DEF"
+    echo '    ,'
+    mk_exc_row "hcloud_volume.extra" "$4" "$5"
+    echo '  ], "connections": [] }'
+  } | write_file "$out"
+}
+
+REEVAL_DEF="when the fixture volume is next re-provisioned"
+WS_OK='{ "instances": ["web-1", "web-2"] }'
+EXTRA_OK='{ "instances": [], "gated_by": "local.extra_enabled" }'
+EXTRA_REEVAL='when local.extra_enabled first turns on (var.enable_extra)'
+
+REPO_P2="$TMPDIR_TEST/p2-mult"
+mk_mult_repo "$REPO_P2" "$TWO_HOSTS"
+LEDGER_P2_OK="$TMPDIR_TEST/p2-ok.json"
+mk_mult_ledger "$LEDGER_P2_OK" "$WS_OK" "" "$EXTRA_OK" "$EXTRA_REEVAL"
+run_case_reports "P2-MULT must-PASS: for_each instances match, singleton undeclared, count gated" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_OK" --today "$TODAY"
+
+# Guard 2 matrix #1: a third key added to the map, row unchanged.
+REPO_P2_ADD="$TMPDIR_TEST/p2-add"
+mk_mult_repo "$REPO_P2_ADD" "$TWO_HOSTS
+    \"web-3\" = { location = \"hel1\" }"
+run_case_reports "P2-MULT a key added to the for_each map, row unchanged -> FAIL" 1 \
+  "hcloud_volume.workspaces covers instances [web-1, web-2] but var.web_hosts declares [web-1, web-2, web-3]" \
+  --repo-sweep --repo-root "$REPO_P2_ADD" --ledger "$LEDGER_P2_OK" --today "$TODAY"
+
+# Guard 2 matrix #3, with the SECOND member the offender.
+LEDGER_P2_SECOND="$TMPDIR_TEST/p2-second.json"
+mk_mult_ledger "$LEDGER_P2_SECOND" '{ "instances": ["web-1", "web-9"] }' "" "$EXTRA_OK" "$EXTRA_REEVAL"
+run_case_reports "P2-MULT declared instances disagree in the second member -> FAIL" 1 \
+  "covers instances [web-1, web-9] but var.web_hosts declares [web-1, web-2]" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_SECOND" --today "$TODAY"
+
+# Guard 2 matrix #2: multiplicity deleted from the for_each row.
+LEDGER_P2_NOMULT="$TMPDIR_TEST/p2-nomult.json"
+mk_mult_ledger "$LEDGER_P2_NOMULT" "" "" "$EXTRA_OK" "$EXTRA_REEVAL"
+run_case_reports "P2-MULT for_each row with no multiplicity -> FAIL" 1 \
+  "hcloud_volume.workspaces is for_each = var.web_hosts but declares no multiplicity" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_NOMULT" --today "$TODAY"
+
+LEDGER_P2_SOLO="$TMPDIR_TEST/p2-solo.json"
+mk_mult_ledger "$LEDGER_P2_SOLO" "$WS_OK" '{ "instances": ["a"] }' "$EXTRA_OK" "$EXTRA_REEVAL"
+run_case_reports "P2-MULT singleton block declaring multiplicity -> FAIL" 1 \
+  "hcloud_volume.solo declares multiplicity but its block is a singleton" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_SOLO" --today "$TODAY"
+
+LEDGER_P2_CNT_NONE="$TMPDIR_TEST/p2-cnt-none.json"
+mk_mult_ledger "$LEDGER_P2_CNT_NONE" "$WS_OK" "" "" "$EXTRA_REEVAL"
+run_case_reports "P2-MULT count-gated row with no multiplicity -> FAIL closed" 1 \
+  "hcloud_volume.extra is count = local.extra_enabled ? 1 : 0, which this check cannot resolve" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_CNT_NONE" --today "$TODAY"
+
+LEDGER_P2_CNT_GATE="$TMPDIR_TEST/p2-cnt-gate.json"
+mk_mult_ledger "$LEDGER_P2_CNT_GATE" "$WS_OK" "" '{ "instances": [], "gated_by": "var.something_else" }' "$EXTRA_REEVAL"
+run_case_reports "P2-MULT gated_by absent from the count expression -> FAIL" 1 \
+  "gated_by var.something_else does not occur in its expression" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_CNT_GATE" --today "$TODAY"
+
+LEDGER_P2_CNT_REEVAL="$TMPDIR_TEST/p2-cnt-reeval.json"
+mk_mult_ledger "$LEDGER_P2_CNT_REEVAL" "$WS_OK" "" "$EXTRA_OK" "at the next quarterly review"
+run_case_reports "P2-MULT reevaluate_when does not name the gate -> FAIL" 1 \
+  "exception.reevaluate_when must name local.extra_enabled" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_CNT_REEVAL" --today "$TODAY"
+
+# A store-class block inside a module source directory is instantiated once
+# per module call: fail closed unless gated on the module call itself.
+REPO_P2_MOD="$TMPDIR_TEST/p2-mod"
+write_file "$REPO_P2_MOD/apps/web-platform/infra/main.tf" <<'EOF'
+module "vols" {
+  source = "./modules/vols"
+}
+EOF
+write_file "$REPO_P2_MOD/apps/web-platform/infra/modules/vols/main.tf" <<'EOF'
+resource "hcloud_volume" "inner" {
+  name = "soleur-inner"
+}
+EOF
+mk_mod_ledger() {
+  {
+    echo '{ "schema_version": 1,'
+    echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+    echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+    mk_exc_row "hcloud_volume.inner" "$2" "$3"
+    echo '  ], "connections": [] }'
+  } | write_file "$1"
+}
+LEDGER_P2_MOD_BAD="$TMPDIR_TEST/p2-mod-bad.json"
+mk_mod_ledger "$LEDGER_P2_MOD_BAD" "" "$REEVAL_DEF"
+run_case_reports "P2-MULT module-instantiated block with no multiplicity -> FAIL closed" 1 \
+  "hcloud_volume.inner is instantiated by module.vols" \
+  --repo-sweep --repo-root "$REPO_P2_MOD" --ledger "$LEDGER_P2_MOD_BAD" --today "$TODAY"
+LEDGER_P2_MOD_OK="$TMPDIR_TEST/p2-mod-ok.json"
+mk_mod_ledger "$LEDGER_P2_MOD_OK" '{ "instances": ["vols"], "gated_by": "module.vols" }' "when module.vols gains a count or for_each"
+run_case_reports "P2-MULT must-PASS: module-instantiated block gated on its module call" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P2_MOD" --ledger "$LEDGER_P2_MOD_OK" --today "$TODAY"
+
+# 4b: a row whose address parses to a store-class type must be a real block,
+# even when it is also catalogued (a catalogue entry cannot launder a ghost).
+LEDGER_P2_GHOST="$TMPDIR_TEST/p2-ghost.json"
+{
+  echo '{ "schema_version": 1,'
+  echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+  echo '  "non_store_types": [], "non_iac_stores": ["hcloud_volume.ghost"], "stores": ['
+  mk_exc_row "hcloud_volume.ghost" "" "$REEVAL_DEF"
+  echo '  ], "connections": [] }'
+} | write_file "$LEDGER_P2_GHOST"
+run_case_reports "P2-ORPHAN catalogued row at a store-class address with no *.tf block -> FAIL" 1 \
+  "stores[] row hcloud_volume.ghost names a store_classes type but no *.tf block declares it" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_P2_GHOST" --today "$TODAY"
+
+# Schema parity: the validator never reads the schema file, so the two can
+# drift silently. Every kind enum and the store property set must agree.
+if python3 - "$SUT" "$SCRIPT_DIR/encryption-posture-ledger.schema.json" <<'PYEOF'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lep", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+s = json.load(open(sys.argv[2]))
+store = s["definitions"]["store"]
+checks = {
+    "STORE_KIND_ENUM": (set(m.STORE_KIND_ENUM), set(store["properties"]["kind"]["enum"])),
+    "STORE_CLASS_KIND_ENUM": (set(m.STORE_CLASS_KIND_ENUM),
+        set(s["properties"]["store_classes"]["additionalProperties"]["properties"]["kind"]["enum"])),
+    "STORE_KEYS": (set(m.STORE_KEYS), set(store["properties"])),
+}
+bad = [f"{k}: script={sorted(a)} schema={sorted(b)}" for k, (a, b) in checks.items() if a != b]
+if "host-root-disk" not in m.STORE_CLASS_KIND_ENUM:
+    bad.append("host-root-disk missing from STORE_CLASS_KIND_ENUM")
+print("\n".join(bad)); sys.exit(1 if bad else 0)
+PYEOF
+then pass "P2-SCHEMA script enums and store keys equal the schema's (incl. host-root-disk)"
+else fail "P2-SCHEMA script enums and store keys equal the schema's (incl. host-root-disk)" "see diff above"
+fi
+
+LEDGER_P2_TYPO="$TMPDIR_TEST/p2-typo.json"
+sed 's/"multiplicity": {/"multiplicty": {/' "$LEDGER_P2_OK" > "$LEDGER_P2_TYPO.tmp"
+write_file "$LEDGER_P2_TYPO" < "$LEDGER_P2_TYPO.tmp"
+run_case_reports "P2-SCHEMA a misspelled row key is rejected, never ignored" 1 \
+  "unexpected key(s) ['multiplicty']" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_TYPO" --today "$TODAY"
+
+run_mutation "MB-14/add-key" "MB-14" "$REPO_P2_ADD" "$LEDGER_P2_OK"
+run_mutation "MB-14/second-member" "MB-14" "$REPO_P2" "$LEDGER_P2_SECOND"
+run_mutation "MB-14/no-multiplicity" "MB-14" "$REPO_P2" "$LEDGER_P2_NOMULT"
+run_mutation "MB-23" "MB-23" "$REPO_P1" "$LEDGER_P2_GHOST"
+run_mutation "MB-24/count" "MB-24" "$REPO_P2" "$LEDGER_P2_CNT_NONE"
+run_mutation "MB-24/gate" "MB-24" "$REPO_P2" "$LEDGER_P2_CNT_GATE"
+run_mutation "MB-24/reeval" "MB-24" "$REPO_P2" "$LEDGER_P2_CNT_REEVAL"
+run_mutation "MB-24/module" "MB-24" "$REPO_P2_MOD" "$LEDGER_P2_MOD_BAD"
+run_mutation "MB-25" "MB-25" "$REPO_P2" "$LEDGER_P2_SOLO"
+
+# ===========================================================================
 # Live-coverage floor (#6902 / ADR-141): an OPTIONAL top-level
 # `live_coverage_floor` integer. When >= 1, the ledger must retain at least
 # that many stores whose at_rest.live_verification == "available" — the one
@@ -1296,6 +1541,35 @@ while IFS= read -r rid; do
     "non_iac_stores entry $rid names no stores[] row" \
     --repo-sweep --repo-root "$REPO_TRUE_ROOT" --ledger "$rl"
 done <<<"$REAL_IDS"
+# AC-2c / Guard 2 matrix #4 against a COPY of the real tree: the committed
+# ledger must PASS on the faithful copy (so the needle rows below are not read
+# off an already-red tree), then fail on one added web host and on one new,
+# unledgered hcloud_server block.
+REAL_COPY="$TMPDIR_TEST/real-copy"
+mkdir -p "$REAL_COPY"
+( cd "$REPO_TRUE_ROOT" && git ls-files -z -- ':(glob)apps/*/infra/**' ':(glob)infra/**' ':(glob)docs/legal/**' \
+    | xargs -0 -I{} cp --parents {} "$REAL_COPY/" )
+REAL_TODAY="2026-09-23"
+run_case_reports "AC-2c baseline: the committed ledger PASSES on a faithful copy of the tree" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
+python3 - "$REAL_COPY/apps/web-platform/infra/variables.tf" <<'PYEOF2'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '"web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }'
+assert s.count(old) == 1, "web_hosts default literal moved; update this fixture"
+open(p, "w").write(s.replace(old, old + '\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12" }'))
+PYEOF2
+run_case_reports "AC-2c a web host added to var.web_hosts without a ledger edit -> FAIL" 1 \
+  "hcloud_server.web covers instances [web-1, web-2] but var.web_hosts declares [web-1, web-2, web-3]" \
+  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
+run_case_reports "AC-2b the same edit also reds hcloud_volume.workspaces" 1 \
+  "hcloud_volume.workspaces covers instances [web-1, web-2] but var.web_hosts declares [web-1, web-2, web-3]" \
+  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
+printf '\nresource "hcloud_server" "web_extra" {\n  name = "soleur-extra"\n}\n' \
+  >> "$REAL_COPY/apps/web-platform/infra/grok-dogfood.tf"
+run_case_reports "Guard 2 #4: a new hcloud_server block with no row -> FAIL unledgered" 1 \
+  "unledgered store hcloud_server.web_extra" \
+  --repo-sweep --repo-root "$REAL_COPY" --ledger "$REAL_LEDGER" --today "$REAL_TODAY"
 if [[ "$REAL_N" -lt 7 ]]; then
   printf 'GUARD FAIL: AC-1a loop covered %s catalogued ids, expected >= 7\n' "$REAL_N" >&2
   exit 2
@@ -1311,7 +1585,7 @@ fi
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=77
+MIN_CASES=103
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
