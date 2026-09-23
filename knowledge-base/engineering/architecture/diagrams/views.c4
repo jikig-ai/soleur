@@ -83,6 +83,8 @@ views {
       platform.plugin.oneshot, platform.plugin.architecture,
       platform.plugin.cto, platform.plugin.cmo, platform.plugin.cpo,
       platform.plugin.archstrat, platform.plugin.evalharness,
+      // #8505: the eval harness bills the spend-limited ci-eval key; both endpoints listed so the edge renders (#7332).
+      anthropic,
       platform.plugin.constraintscaffold,
       // #7980: both endpoints of the three guard edges (claude/hooks -> snapshotGuard ->
       // playwrightMcp) must be listed or the edges do not render (#7332).

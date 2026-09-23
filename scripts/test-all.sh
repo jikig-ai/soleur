@@ -2350,6 +2350,15 @@ if want_scripts; then
   # isolation against webhook contamination, and withholding the free-text bwrap_err from the
   # public issue comment. Mutation-proved at authoring (5/5 killed).
   run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
+  # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
+  # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
+  # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
+  # #8036's closure. Load-bearing arms: the grade is a CONJUNCTION, never the pure absence the
+  # operator's criterion literally stated (a host that never deploys emits no relogin_failed
+  # either); the `swept=` token is the version discriminator rather than `deploy_ghcr_auth=none`,
+  # which a freshly provisioned PRE-1c host also reads; `na` fails closed; and a row from a
+  # non-ci-deploy producer quoting this very tracker's body is field-isolated out.
+  run_suite "scripts/ghcr-read-retired-8036" bash scripts/followthroughs/ghcr-read-retired-8036.test.sh
   # #8097: exit-code harness for the SEND_FAILED-alert readback follow-through. Registered
   # explicitly (orphan-suite class above). Its exit code is the closure of #8097 (0 closes; 3 =
   # instrument did not answer / web-1 dark; 5 = a named cause for a human; 1 is NEVER emitted

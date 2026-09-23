@@ -749,7 +749,27 @@ else
   no "AC19: server.tf web-host templatefile map must pass ghcr_read_user + ghcr_read_token (coupled to the cloud-init bake)"
 fi
 
-# ── AC20 (#6090): the app-pull GHCR login (ci-deploy ghcr_prelude_and_login) is baked too ──
+# ── AC20 (#6090), NARROWED BY #8036 1c (2026-09-23) ──
+#
+# CLAUSES (1) AND (2) — the cloud-init BAKE and its 0600 mode — STAY, and stay asserted exactly
+# as before: cloud-init's own fresh-boot `ghcr_login` still reads that file, and retiring THAT is
+# 1d, out of scope here.
+#
+# CLAUSES (3), (4) AND THE ci-deploy HALF OF (5) ARE DELETED. They asserted that
+# `ci-deploy.sh`'s GHCR prelude sources the baked file, hardens its Doppler fallback for
+# GHCR_READ_USER/GHCR_READ_TOKEN, and unsets the token afterwards. #8036 1c deleted the
+# host-side GHCR read path outright: `ci-deploy.sh` reads neither the baked file nor either
+# secret, so there is nothing left to source, harden or unset. Their extraction
+# (`CD_PRELUDE_FN="$(awk '/^ghcr_prelude_and_login.../' "$CD")"`) would yield an EMPTY STRING and
+# every `-ge 1` count over it would report 0 — a loud failure rather than a vacuous pass, which
+# is why they are removed rather than left to rot, but removed either way.
+#
+# The property clause (4) protected — a Doppler read must be bounded and observable rather than
+# hand-rolled — is NOT lost: `_doppler_get_observed`'s bounded-timeout construct and its 45s
+# default are still asserted below, now against the SENTRY_* prefetch that still uses them.
+#
+# What follows is the original AC20 preamble, kept for the incident context it carries.
+# ── AC20 (#6090): the app-pull GHCR login is baked too ──
 # The seed-pull fix (AC19) got the host to webhook_bound, but the recreate still RED'd at
 # ok_peer_fanout_degraded: ci-deploy's ghcr_prelude_and_login did a bare `doppler secrets get`
 # for the app pull + cosign verify, empty on the cold host → docker login skipped → anonymous
@@ -770,11 +790,16 @@ if grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CD" 2>/dev/null || grep 
 else
   no "AC20: /etc/default/soleur-ghcr-read must be chmod 600"
 fi
-# (3) ci-deploy ghcr_prelude_and_login PREFERS the baked file before Doppler
-if grep -qF '/etc/default/soleur-ghcr-read' "$CD"; then
-  ok "AC20: ci-deploy ghcr_prelude_and_login sources the baked /etc/default/soleur-ghcr-read"
+# (3) DELETED by #8036 1c — and replaced by its INVERSE, which is the assertion that would catch
+# the retirement being undone. ci-deploy.sh must NOT read the baked GHCR cred file at all.
+# NON-COMMENT LINES ONLY. A whole-file `grep -qF` fails on `ci-deploy.sh`'s own comment
+# explaining the #6090 bake's history — prose satisfying (here, falsifying) a bare-token anchor,
+# which is the same `cq-assert-anchor-not-bare-token` class clause (4) below documents at length.
+# The property is about what the script READS, so only executable lines can bear on it.
+if ! grep -vE '^[[:space:]]*#' "$CD" | grep -qF '/etc/default/soleur-ghcr-read'; then
+  ok "AC20: ci-deploy reads no baked GHCR credential — the host-side read path is retired (#8036 1c)"
 else
-  no "AC20: ci-deploy ghcr_prelude_and_login must prefer the baked /etc/default/soleur-ghcr-read"
+  no "AC20: ci-deploy must NOT reference /etc/default/soleur-ghcr-read since #8036 1c; the deploy path reads no GHCR credential"
 fi
 # (4) the Doppler fallback in ci-deploy is HARDENED (bounded timeout + retry) for both GHCR creds
 #
@@ -803,24 +828,41 @@ fi
 #       by default; an empty read does not). So a call site that silently dropped the argument
 #       would keep matching a looser "calls the helper" grep while losing the whole behaviour.
 CD_GET_FN="$(awk '/^_doppler_get_observed\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
-CD_PRELUDE_FN="$(awk '/^ghcr_prelude_and_login\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
+# #8036 1c: the prelude was SPLIT into three named functions; the Doppler reads live in
+# `prefetch_deploy_secrets`. Extracted by its own name rather than the retired one — an awk range
+# over a function that no longer exists yields an empty string, and every count over it then
+# reads 0, which is a failure naming the wrong cause.
+CD_PREFETCH_FN="$(awk '/^prefetch_deploy_secrets\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
 # `^[[:space:]]*[^#[:space:]][^#]*` = the line's first non-blank character is not `#`, and no `#`
 # precedes the match — i.e. this cannot be satisfied by a comment that merely quotes the call.
 AC20_TMO_USE=$(printf '%s\n' "$CD_GET_FN" | grep -cE '^[[:space:]]*[^#[:space:]][^#]*timeout "\$DOPPLER_GET_TIMEOUT" doppler secrets get ' || true)
 AC20_TMO_DEF=$(grep -cE '^readonly DOPPLER_GET_TIMEOUT="\$\{DOPPLER_GET_TIMEOUT:-45\}"' "$CD" || true)
-AC20_RETRY_U=$(printf '%s\n' "$CD_PRELUDE_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+GHCR_READ_USER[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+1([[:space:]]|$)' || true)
-AC20_RETRY_T=$(printf '%s\n' "$CD_PRELUDE_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+GHCR_READ_TOKEN[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+1([[:space:]]|$)' || true)
-if [[ "$AC20_TMO_USE" -ge 1 && "$AC20_TMO_DEF" -ge 1 && "$AC20_RETRY_U" -ge 1 && "$AC20_RETRY_T" -ge 1 ]]; then
-  ok "AC20: ci-deploy doppler fallback hardened — bounded timeout (default 45) in _doppler_get_observed + empty-retry helper for GHCR_READ_USER and GHCR_READ_TOKEN"
+# #8036 1c: the two GHCR empty-retry counts are replaced by the SENTRY_* reads, which are what
+# `prefetch_deploy_secrets` still fetches. All THREE are required, not one: a single-secret
+# assertion passes against a loop that lost two of its members. The positional shape is kept —
+# the 5th argument is the empty-retry flag, and these three pass 0 deliberately (an rc=0 empty
+# read is the server answering cleanly with nothing, which a retry cannot fix, and they have a
+# baked fallback), so the pin is on the ARITY and the helper, not on the flag's value.
+AC20_SENTRY_N=$(printf '%s\n' "$CD_PREFETCH_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+"\$k"[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+([[:space:]]|$)' || true)
+AC20_SENTRY_LOOP=$(printf '%s\n' "$CD_PREFETCH_FN" | grep -cE '^[[:space:]]*for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do' || true)
+# The INVERSE half, and the one that catches the retirement being undone: no GHCR secret may be
+# read anywhere in ci-deploy.sh, in any function.
+AC20_NO_GHCR=$(grep -cE '_doppler_get_or_report[[:space:]]+GHCR_READ_(USER|TOKEN)' "$CD" || true)
+if [[ "$AC20_TMO_USE" -ge 1 && "$AC20_TMO_DEF" -ge 1 && "$AC20_SENTRY_N" -ge 1 && "$AC20_SENTRY_LOOP" -ge 1 && "$AC20_NO_GHCR" -eq 0 ]]; then
+  ok "AC20: ci-deploy doppler reads hardened — bounded timeout (default 45) in _doppler_get_observed, all three SENTRY_* via the observing helper, and ZERO GHCR_READ_* reads (#8036 1c)"
 else
-  no "AC20: ci-deploy ghcr_prelude_and_login must harden the doppler fallback — a bounded per-attempt timeout with a 45s default, and BOTH GHCR creds read via the retrying helper with the empty-retry argument enabled (timeout_in_fn=$AC20_TMO_USE timeout_default_45=$AC20_TMO_DEF user_empty_retry=$AC20_RETRY_U token_empty_retry=$AC20_RETRY_T)"
+  no "AC20: ci-deploy must harden its doppler reads — a bounded per-attempt timeout with a 45s default, the three SENTRY_* secrets read via _doppler_get_or_report, and no GHCR_READ_* read at all (timeout_in_fn=$AC20_TMO_USE timeout_default_45=$AC20_TMO_DEF sentry_helper=$AC20_SENTRY_N sentry_loop=$AC20_SENTRY_LOOP ghcr_reads=$AC20_NO_GHCR)"
 fi
 # (5) token hygiene: baked file is deploy-owned + ci-deploy unsets the token from its env/children
-if grep -qE 'chown deploy:deploy /etc/default/soleur-ghcr-read' "$CI" \
-   && grep -qE 'unset GHCR_READ_TOKEN' "$CD"; then
-  ok "AC20: baked file is chown deploy:deploy + ci-deploy unsets GHCR_READ_TOKEN (token not in child env)"
+# #8036 1c: the ci-deploy half ("unsets GHCR_READ_TOKEN after sourcing") is gone with the source
+# — there is nothing to unset because nothing is read. The cloud-init ownership half stays, and
+# the replacement for the deleted half is stronger than it was: the token must not appear in
+# ci-deploy.sh's runtime at all, which an `unset` after a read never guaranteed.
+AC20_CD_TOKEN=$(grep -vE '^[[:space:]]*#' "$CD" | grep -cE 'GHCR_READ_TOKEN' || true)
+if grep -qE 'chown deploy:deploy /etc/default/soleur-ghcr-read' "$CI" && [[ "$AC20_CD_TOKEN" -eq 0 ]]; then
+  ok "AC20: baked file is chown deploy:deploy, and GHCR_READ_TOKEN appears in no executable line of ci-deploy (#8036 1c)"
 else
-  no "AC20: /etc/default/soleur-ghcr-read must be chown deploy:deploy AND ci-deploy must unset GHCR_READ_TOKEN after sourcing"
+  no "AC20: /etc/default/soleur-ghcr-read must be chown deploy:deploy AND ci-deploy must carry no executable GHCR_READ_TOKEN reference (found $AC20_CD_TOKEN)"
 fi
 
 # ── AC21 (#6090): soleur-host-bootstrap's ghcr_login is baked too (3rd/final GHCR site) ──
