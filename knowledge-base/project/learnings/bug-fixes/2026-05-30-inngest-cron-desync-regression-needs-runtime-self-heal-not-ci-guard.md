@@ -29,6 +29,11 @@ This was a **regression** of the 2026-05-27 community-monitor incident
 `auth-callback-no-code-burst` line in the Sentry emails was a red-herring
 alert-routing artifact (same as the prior incident).
 
+> **Corrected 2026-09-23 (#4781):** this rule really fired. All four `auth-*` rules had
+> empty trigger conditions and tag filters from 2026-05-17 to 2026-06-02 07:32Z and
+> matched every issue in the project. See
+> `bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
+
 ## Why the prior remediation was insufficient
 
 The prior fix (issue #4533, closed COMPLETED 2026-05-27, PR #4531) shipped **only**

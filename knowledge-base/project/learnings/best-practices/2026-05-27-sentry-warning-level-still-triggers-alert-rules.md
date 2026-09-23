@@ -25,6 +25,13 @@ After PR #4487 downgraded the OAuth `access_denied` callback emission from `repo
 
 Downgrading from error to warning changed the Sentry dashboard classification but did NOT stop events from being counted by alert rules.
 
+> **Corrected 2026-09-23 (#4781):** the two named rules really fired. All four `auth-*` rules had
+> empty trigger conditions and tag filters from 2026-05-17 to 2026-06-02 07:32Z and
+> matched every issue in the project. See
+> `bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
+> Neither rule's intended `op` matches `callback_provider_error`; only `auth-per-user-loop`
+> (`feature=auth`) does. "Level does not gate alert rules" stays true.
+
 ## Solution
 
 Split the provider-error emission path in `apps/web-platform/app/(auth)/callback/route.ts`:

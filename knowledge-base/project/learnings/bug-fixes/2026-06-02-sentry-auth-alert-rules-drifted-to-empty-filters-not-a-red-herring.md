@@ -111,3 +111,37 @@ now report non-empty conditions+filters. Recurrence guard tracked in **#4781**.
   populate it is skipped or fails, the resource silently keeps its empty
   placeholder. Any "import-only + ignore_changes" design needs a positive audit
   assertion (non-empty filters) or it can drift to a catch-all without any signal.
+
+## Closing note — Corrected 2026-09-23 (#4781)
+
+> **Corrected 2026-09-23 (#4781): the recurrence guard exists, and #4781 is closed.**
+>
+> - **Guard.** The three burst rules are Terraform-owned `sentry_alert` blocks with
+>   real `trigger_conditions` and `action_filters` (`ignore_changes = [environment]`,
+>   #7650). `auth-per-user-loop` is a Terraform-frozen `sentry_alert`
+>   (`legacy_trigger_conditions`, `ignore_changes = all`, #8453). All four are
+>   compared field-for-field against live Sentry by
+>   `scripts/sentry-alert-live-fidelity.sh`: daily (`scheduled-sentry-alert-drift.yml`)
+>   and after every apply. Emptied triggers or tag filters on a burst rule print
+>   `DRIFT`; on the frozen rule they print `FROZEN DRIFT` and
+>   `FROZEN RULE LEFT SCOPE`. Pinned by suite row F35 in
+>   `tests/scripts/test-sentry-alert-live-fidelity.sh`.
+> - **Limits.** For `auth-per-user-loop` the guard only detects: an apply never
+>   writes it, and the repair is a PUT from its entry in the committed capture.
+>   Restoring it to a native, apply-repaired rule waits on #7985.
+>   `configure-sentry-alerts.sh` cannot repair anything: the legacy `rules/` API
+>   returns 410.
+> - **The drift window.** Live `dateCreated` 2026-05-17 and `dateUpdated` 2026-06-02
+>   07:32Z: between those dates every auth rule matched every issue, so every
+>   "triggered by auth-*" email in that window really came from the named rule.
+> - **How to check today.** Run the `workflows/` read in the 2026-08-19 note above,
+>   or run the probe itself (read-only; Doppler `prd` `SENTRY_IAC_AUTH_TOKEN` exported
+>   as `SENTRY_AUTH_TOKEN`).
+> - **Corrected in the same change:**
+>   `bug-fixes/2026-05-27-sentry-cron-community-monitor-missed-checkin.md`,
+>   `bug-fixes/2026-05-30-inngest-cron-desync-regression-needs-runtime-self-heal-not-ci-guard.md`,
+>   `bug-fixes/2026-06-01-best-effort-cron-monitor-liveness-not-success-and-offhost-visible-warn.md`,
+>   `best-practices/2026-05-29-uptime-monitor-fuse-must-tolerate-self-inflicted-deploy-windows.md`,
+>   `best-practices/2026-05-27-sentry-warning-level-still-triggers-alert-rules.md`,
+>   `2026-05-29-warn-level-debounce-for-recovered-fallback-sentry-floods.md`, and the
+>   runbooks `cloud-scheduled-tasks.md` and `oauth-probe-failure.md`.
