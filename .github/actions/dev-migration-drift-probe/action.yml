@@ -32,9 +32,13 @@
 # (#8521), and the repair procedure is the learning's §Content drift.
 #
 # Under fail-on-ledger-drift, missing-on-main rows are classified by
-# `dev-ledger-parity.sh classify-missing` (ADR-061 amendment 2026-09-23,
-# #8520): a row a fresh, unmerged live branch holds is that PR's in-flight
-# row (warning); ownerless, stale-owner and unclassifiable rows still fail.
+# `dev-ledger-parity.sh classify-missing` (ADR-061 amendments 2026-09-23,
+# #8520, #8605): a row a fresh, unmerged live branch holds is that PR's
+# in-flight row (warning); a row whose every fresh holder's latest pull
+# request closed at the branch tip is closed-grace (warning) for 24 h, then
+# closed (blocking); ownerless, stale-owner and unclassifiable rows still
+# fail. The classifier reads pull-request state with the caller's
+# `github-token` (pull-requests: read), passed to that one call only.
 #
 # Replaces inline drift-probe step in `tenant-integration.yml`. Designed
 # to be invoked from any workflow that needs dev-vs-main drift visibility
@@ -78,6 +82,13 @@ inputs:
       did not cause.'
     required: false
     default: 'false'
+  github-token:
+    description: >-
+      Token for the classifier's pull-request state lookups (the caller's
+      github.token; the job needs pull-requests: read). Exported as GH_TOKEN on
+      the classify-missing call only. Unused when fail-on-ledger-drift is false.
+    required: false
+    default: ''
 
 outputs:
   drift-detected:
@@ -98,6 +109,7 @@ runs:
         DOPPLER_CONFIG: ${{ inputs.doppler-config }}
         FAIL_ON_DRIFT: ${{ inputs.fail-on-ledger-drift }}
         SENTRY_DSN: ${{ inputs.sentry-dsn }}
+        CLASSIFIER_GH_TOKEN: ${{ inputs.github-token }}
       run: |
         set -uo pipefail
         # Refresh origin/main locally so `git ls-tree` reflects merged state.
@@ -204,13 +216,17 @@ runs:
         inflight_lines=""
         stale_lines=""
         merged_lines=""
+        closed_grace_lines=""
+        closed_lines=""
         unclassified=""
         if [[ "$FAIL_ON_DRIFT" == "true" && -n "$missing_pairs" ]]; then
           cls_err=$(mktemp)
           cls_rc=0
           # Bounded: this runs inside the dev-suite mutex window on push, and a
           # hang must land on the UNCLASSIFIED arm, not on the job timeout.
-          cls_out=$(timeout -k 5 90 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing \
+          # GH_TOKEN is scoped to this one call: the classifier's pull-request
+          # state lookups are the only GitHub API use in this action.
+          cls_out=$(GH_TOKEN="$CLASSIFIER_GH_TOKEN" timeout -k 5 90 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing \
             --base-branch main --repo "$GITHUB_WORKSPACE" <<<"$missing_pairs" 2>"$cls_err") || cls_rc=$?
           cls_summary=$(grep -m1 '^ledger-classify: ' "$cls_err" || true)
           mapfile -t want_files < <(printf '%s' "$missing_drift" | sed '/^$/d')
@@ -226,11 +242,12 @@ runs:
           fi
           branch_re='^[A-Za-z0-9._/<>-]+$'
           STALE_DAYS_LABEL=30
+          CLOSED_GRACE_H_LABEL=24
           orphans=""
           if [[ "$cls_ok" == "true" ]]; then
             for i in "${!want_files[@]}"; do
-              v="" vf="" vb="" vx=""
-              IFS=$'\t' read -r v vf vb vx <<<"${got_lines[$i]}"
+              v="" vf="" vb="" vx="" vh=""
+              IFS=$'\t' read -r v vf vb vx vh <<<"${got_lines[$i]}"
               if [[ "$vf" != "${want_files[$i]}" ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) names another file"; break; fi
               case "$v" in
                 in-flight)
@@ -242,7 +259,16 @@ runs:
                   fi ;;
                 stale)
                   if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^([0-9]+|future-dated|undated)$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; break; fi
-                  stale_lines+="  - $vf (stale: owner $vb has no commit dated within the last $STALE_DAYS_LABEL days (age: $vx) — push to it, or have the dev apply reverted and delete the branch; #8605)"$'\n' ;;
+                  stale_lines+="  - $vf (stale: owner $vb has no commit dated within the last $STALE_DAYS_LABEL days (age: $vx) — push to it, or discard its dev rows with gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<its PR> (a dry run first) and delete the branch)"$'\n' ;;
+                closed-grace|closed)
+                  # PR number and hours are integers the classifier measured; the
+                  # branch is its sanitized label. Nothing else reaches the line.
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^[0-9]+$ || ! "$vh" =~ ^[0-9]+$ ]]; then cls_ok="false"; cls_reason="line=$((i + 1)) malformed"; break; fi
+                  if [[ "$v" == "closed-grace" ]]; then
+                    closed_grace_lines+="  - $vf (owner branch $vb has no open pull request; #$vx closed $vh h ago — the close-time dev-ledger-reconcile run normally discards this row; blocking after $CLOSED_GRACE_H_LABEL h. Preview: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=$vx)"$'\n'
+                  else
+                    closed_lines+="  - $vf (owner branch $vb has no open pull request; #$vx closed $vh h ago — check its action-required issue, or preview the discard: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=$vx; if the dry run lists rows, re-run with -f execute=true)"$'\n'
+                  fi ;;
                 merged)
                   merged_lines+="  - $vf (now on origin/main: it merged after this probe fetched main; the next run sees it)"$'\n' ;;
                 orphan)
@@ -256,6 +282,8 @@ runs:
             inflight_lines=""
             stale_lines=""
             merged_lines=""
+            closed_grace_lines=""
+            closed_lines=""
             orphans=""
             unclassified="$missing_drift"
             drift_seen="true"
@@ -289,6 +317,14 @@ runs:
             echo "::warning::$l"
           done <<<"$merged_lines"
         fi
+        if [[ -n "$closed_grace_lines" ]]; then
+          drift_seen="true"
+          echo "::warning::dev-Supabase has _schema_migrations rows whose fresh owner branches' latest pull request closed at the branch tip less than $CLOSED_GRACE_H_LABEL h ago (closed-grace; #8605):"
+          while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            echo "::warning::$l"
+          done <<<"$closed_grace_lines"
+        fi
         if [[ -n "$stale_lines" ]]; then
           drift_seen="true"
           echo "::error::dev-Supabase has _schema_migrations rows whose only owner branch is stale (no commit for more than 30 days):"
@@ -297,12 +333,21 @@ runs:
             echo "::error::$l"
           done <<<"$stale_lines"
         fi
+        if [[ -n "$closed_lines" ]]; then
+          drift_seen="true"
+          echo "::error::dev-Supabase has _schema_migrations rows whose fresh owner branches' latest pull request closed at the branch tip $CLOSED_GRACE_H_LABEL h or more ago (closed; #8605):"
+          while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            echo "::error::$l"
+          done <<<"$closed_lines"
+        fi
         if [[ -n "$orphans" ]]; then
           drift_seen="true"
           echo "::${sev}::dev-Supabase has _schema_migrations rows whose file is NOT on origin/main."
           echo "::${sev}::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
           if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
-            echo "::${sev}::no fresh live branch owns these rows, or their filename is in origin/main's history — a dev reconcile is required (learning gap 2; #8605)"
+            echo "::${sev}::no fresh live branch owns these rows, or their filename is in origin/main's history — a dev reconcile is required (learning gap 2)"
+            echo "::${sev}::if a pull request applied a row and its branch was deleted: gh pr list --state closed --search <file>, then preview the discard: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<N>"
           fi
           echo "::${sev}::Missing-on-main:"
           while IFS= read -r f; do
@@ -331,6 +376,7 @@ runs:
           ledger_classes=""
           [[ -n "$orphans" ]] && ledger_classes+=" orphan"
           [[ -n "$stale_lines" ]] && ledger_classes+=" stale"
+          [[ -n "$closed_lines" ]] && ledger_classes+=" closed"
           [[ -n "$unclassified" ]] && ledger_classes+=" unclassified"
           [[ -n "$content_drift" ]] && ledger_classes+=" content-drift"
           if [[ -n "$ledger_classes" ]]; then
@@ -350,9 +396,10 @@ runs:
           fi
         fi
         # Fail closed AFTER emitting every annotation so the run log names all
-        # drifted rows, not just the first. In-flight and merged rows alone never fail.
+        # drifted rows, not just the first. In-flight, merged and closed-grace rows
+        # alone never fail.
         if [[ "$FAIL_ON_DRIFT" == "true" ]] \
-          && [[ -n "$orphans" || -n "$stale_lines" || -n "$unclassified" || -n "$content_drift" ]]; then
+          && [[ -n "$orphans" || -n "$stale_lines" || -n "$closed_lines" || -n "$unclassified" || -n "$content_drift" ]]; then
           exit 1
         fi
 

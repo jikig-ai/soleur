@@ -30,8 +30,11 @@ concurrency:
   group: scheduled-dev-migration-drift
   cancel-in-progress: false
 
+# pull-requests: read — the ledger classifier reads each fresh owner branch's
+# pull-request state (closed-grace/closed, #8605); public repo, read-only.
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   drift:
@@ -54,6 +57,7 @@ jobs:
         uses: ./.github/actions/dev-migration-drift-probe
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          github-token: ${{ github.token }}
           # Scheduled surface is the SOLE authority for byok RPC body-marker
           # drift: ::error:: + Sentry event + fail-loud (exit 1). PR CI
           # (tenant-integration.yml) forwards neither → ::warning::-only, so a

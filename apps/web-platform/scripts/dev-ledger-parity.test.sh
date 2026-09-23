@@ -3,7 +3,7 @@
 # Tests for dev-ledger-parity.sh (#8521 edited/renamed-after-apply, #8520 the
 # in-flight arm of the authoritative drift probe).
 #
-# Two guards, one script (plan: 2026-09-23-fix-pr-ci-unmerged-migration-ledger-parity-plan.md,
+# Two guards, one script (plan: archive/20260923-224929-2026-09-23-fix-pr-ci-unmerged-migration-ledger-parity-plan.md,
 # §Guard Contract — row numbers below are that table's):
 #
 #   Guard 1  `check`            PR-side per-ref ledger parity (A1 edited, A2 renamed,
@@ -11,10 +11,22 @@
 #   Guard 2  `classify-missing` main-side ownership of missing-on-main ledger rows
 #                                (in-flight / stale / orphan) + the drift-probe action.
 #
+# #8605 adds (plan 2026-09-23-fix-dev-ledger-closed-unmerged-reconcile-and-migration-gate-cwd-plan.md,
+# §Guard Contract Guards 2-4; G2-*/G3-*/G4-* case ids are that table's row ids):
+#
+#   Guard 2b PR-state-aware classify-missing (closed-grace / closed, commit-bound,
+#            fail-closed) + the probe's closed arms and the token wiring.
+#   Guard 3  dev-ledger-reconcile.sh, the one writer (a copy, $DLR_WRITER overrides
+#            the source), against a separate writer clone, a fake dev-suite mutex,
+#            and a fake psql in writer mode (-f payloads logged at call time).
+#   Guard 4  .github/workflows/dev-ledger-reconcile.yml wiring + its extracted
+#            reconcile step run with a stub writer.
+#
 # Everything is SYNTHESIZED (cq-test-fixtures-synthesized-only): a bare `origin`
 # reached through a file:// URL with uploadpack.allowFilter=true (as GitHub), a
 # main history that renames one migration, feature branches pushed to origin, a
-# work clone, and a fake `psql` / `doppler` on PATH. The suite runs a COPY of
+# work clone, and a fake `psql` / `doppler` / `curl` / `gh` on PATH (the fake gh is routed,
+# sequenced and logged, and never falls through to a real gh). The suite runs a COPY of
 # the guard ($DLP_GUARD overrides the source) so mutation rows never touch the
 # tracked file.
 #
@@ -31,11 +43,16 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 GUARD_SRC="${DLP_GUARD:-$SCRIPT_DIR/dev-ledger-parity.sh}"
+WRITER_SRC="${DLR_WRITER:-$SCRIPT_DIR/dev-ledger-reconcile.sh}"
 WF="$REPO_ROOT/.github/workflows/tenant-integration.yml"
 ACTION="$REPO_ROOT/.github/actions/dev-migration-drift-probe/action.yml"
 
 if [[ ! -f "$GUARD_SRC" ]]; then
   printf 'FATAL: guard not found at %s — the suite refuses to report 0 passed, 0 failed\n' "$GUARD_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$WRITER_SRC" ]]; then
+  printf 'FATAL: writer not found at %s — the suite refuses to report 0 passed, 0 failed\n' "$WRITER_SRC" >&2
   exit 1
 fi
 
@@ -99,6 +116,42 @@ cat > "$BIN/psql" <<'SH'
 if [[ -n "${DLP_PSQL_LOG:-}" ]]; then
   { printf 'CALL\0'; for a in "$@"; do printf '%s\0' "$a"; done; } >> "$DLP_PSQL_LOG"
 fi
+# Writer-mode contract (dev-ledger-reconcile.sh, DLR_PSQL_WRITER_MODE=1): every call is
+# either the writer's ledger SELECT via -c or ONE -f unit. Any other shape is a breach
+# (logged, exit 97). A -f unit's CONTENTS are copied into DLR_PSQL_PAYLOAD at call time:
+# the writer's EXIT trap deletes the file, so the log is the only place a row can read it.
+sql="" file="" prev="" nc=0 nf=0
+for a in "$@"; do
+  if [[ "$prev" == "-c" ]]; then sql="$a"; nc=$((nc + 1)); fi
+  if [[ "$prev" == "-f" ]]; then file="$a"; nf=$((nf + 1)); fi
+  prev="$a"
+done
+if [[ -n "${DLR_CALL_LOG:-}" ]]; then
+  if [[ "$nf" -gt 0 ]]; then printf 'psql -f gh_token=%s\n' "${GH_TOKEN+set}" >> "$DLR_CALL_LOG"
+  else printf 'psql -c\n' >> "$DLR_CALL_LOG"; fi
+fi
+if [[ "${DLR_PSQL_WRITER_MODE:-}" == "1" ]]; then
+  shape=breach
+  if [[ "$nc" == "1" && "$nf" == "0" && "$sql" == "${DLR_WANT_SQL:-}" ]]; then shape=select; fi
+  if [[ "$nf" == "1" && "$nc" == "0" && -f "$file" ]]; then shape=unit; fi
+  if [[ "$shape" == "breach" ]]; then
+    printf 'breach:' >> "${DLR_PSQL_BREACH:-/dev/null}"; printf ' %s' "$@" >> "${DLR_PSQL_BREACH:-/dev/null}"
+    printf '\n' >> "${DLR_PSQL_BREACH:-/dev/null}"
+    exit 97
+  fi
+  if [[ "$shape" == "unit" ]]; then
+    { printf '=== unit argv:'; printf ' %s' "$@"; printf '\n'; cat "$file"; printf '\n=== end unit\n'; } >> "${DLR_PSQL_PAYLOAD:-/dev/null}"
+    printf '%s' "${DLR_FAKE_UNIT_OUT:-}"
+    # DLR_FAKE_UNIT_FAIL_AT=<text>: report an error at the unit line carrying <text>, as psql -f does.
+    if [[ -n "${DLR_FAKE_UNIT_FAIL_AT:-}" ]]; then
+      at=$(grep -nF -m1 -- "$DLR_FAKE_UNIT_FAIL_AT" "$file" | cut -d: -f1)
+      printf 'psql:%s:%s: ERROR:  42P01: relation "fixture" does not exist\n' "$file" "${at:-0}" >&2
+    fi
+    exit "${DLR_FAKE_UNIT_RC:-0}"
+  fi
+  if [[ -n "${DLR_FAKE_LEDGER:-}" && -f "$DLR_FAKE_LEDGER" ]]; then cat "$DLR_FAKE_LEDGER"; fi
+  exit 0
+fi
 if [[ -n "${DLP_PSQL_EXPECT_SQL:-}" ]]; then
   prev=""; sql=""
   for a in "$@"; do [[ "$prev" == "-c" ]] && sql="$a"; prev="$a"; done
@@ -126,9 +179,105 @@ cat > "$BIN/curl" <<'SH'
 if [[ -n "${DLP_CURL_LOG:-}" ]]; then printf '%s\n' "$*" >> "$DLP_CURL_LOG"; fi
 printf '200'
 SH
-chmod +x "$BIN/psql" "$BIN/doppler" "$BIN/curl"
+cat > "$BIN/gh" <<'SH'
+#!/usr/bin/env bash
+# Fake gh: ROUTED, SEQUENCED and LOGGED to the same ordered call log as the fake psql
+# and the fake mutex. It never falls through to a real gh: an unrecognised call is
+# logged as UNROUTED and exits 99.
+#   pulls?head=<owner>:<branch>  answer keyed by branch: $DLR_GH_FIX/head/<branch>.json, else []
+#   pulls/<N>                    sequenced per call: $DLR_GH_FIX/pull/<N>.<k>.json, else <N>.json
+#   git/blobs/<id>               raw bytes of <id> from $DLR_GH_BLOB_REPO (DLR_GH_BLOB_CORRUPT=1 appends a byte)
+# DLR_GH_MODE: 403 | 5xx | nonjson — every REST call answers with that failure instead.
+log="${DLR_CALL_LOG:-/dev/null}"
+fix="${DLR_GH_FIX:-/nonexistent}"
+[[ "${1:-}" == "api" ]] || { printf 'gh UNROUTED %s\n' "$*" >> "$log"; exit 99; }
+shift
+path="" head="" raw=0 inc=0 method=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -X) method="$2"; shift 2 ;;
+    -i) inc=1; shift ;;
+    -H) [[ "$2" == *application/vnd.github.raw* ]] && raw=1; shift 2 ;;
+    -f|-F) case "$2" in head=*) head="${2#head=}" ;; esac; shift 2 ;;
+    -*) printf 'gh UNROUTED flag %s\n' "$1" >> "$log"; exit 99 ;;
+    *) path="$1"; shift ;;
+  esac
+done
+# Never call respond on the right of a pipe: its `exit` would end only that subshell.
+respond() {  # respond <status> <body-file|-> ; -i prints the status line and headers first
+  local st="$1" f="$2"
+  if [[ "$inc" == "1" ]]; then printf 'HTTP/2.0 %s Fixture\r\nContent-Type: application/json\r\n\r\n' "$st"; fi
+  if [[ "$f" == "-" ]]; then cat; else cat "$f"; fi
+  if [[ "$st" -ge 400 ]]; then exit 1; fi
+  exit 0
+}
+fail_mode() {
+  case "${DLR_GH_MODE:-}" in
+    403) respond 403 - <<<'{"message":"Forbidden"}' ;;
+    5xx) respond 502 - <<<'{"message":"Bad Gateway"}' ;;
+    nonjson) respond 200 - <<<'<html>not json</html>' ;;
+  esac
+}
+case "$path" in
+  repos/fixture-owner/fixture-repo/pulls)
+    printf 'gh pulls?head=%s\n' "$head" >> "$log"
+    if [[ "$method" != "GET" ]]; then printf 'gh POST-SHAPE pulls\n' >> "$log"; exit 98; fi
+    fail_mode
+    b="${head#fixture-owner:}"
+    f="$fix/head/${b//\//__}.json"
+    if [[ -n "${DLR_GH_IGNORE_HEAD:-}" ]]; then f=$(find "$fix/head" -name '*.json' 2>/dev/null | LC_ALL=C sort | tail -n 1); fi
+    if [[ -n "$f" && -f "$f" ]]; then respond 200 "$f"; fi
+    respond 200 - <<<'[]' ;;
+  repos/fixture-owner/fixture-repo/pulls/*)
+    n="${path##*/}"
+    printf 'gh pulls/%s\n' "$n" >> "$log"
+    fail_mode
+    cf="$fix/pull/$n.count"
+    k=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "$k" > "$cf"
+    f="$fix/pull/$n.$k.json"
+    [[ -f "$f" ]] || f="$fix/pull/$n.json"
+    if [[ -f "$f" ]]; then respond 200 "$f"; fi
+    respond 404 - <<<'{"message":"Not Found"}' ;;
+  repos/fixture-owner/fixture-repo/git/blobs/*)
+    id="${path##*/}"
+    printf 'gh blobs/%s\n' "$id" >> "$log"
+    [[ "$raw" == "1" ]] || { printf 'gh NOT-RAW blobs\n' >> "$log"; exit 98; }
+    git -C "${DLR_GH_BLOB_REPO:?}" cat-file blob "$id" || exit 1
+    if [[ "${DLR_GH_BLOB_CORRUPT:-}" == "1" ]]; then printf 'x'; fi
+    exit 0 ;;
+esac
+printf 'gh UNROUTED %s\n' "$path" >> "$log"
+exit 99
+SH
+chmod +x "$BIN/psql" "$BIN/doppler" "$BIN/curl" "$BIN/gh"
 WANT_SQL="SELECT filename || '|' || COALESCE(content_sha, '') FROM public._schema_migrations ORDER BY filename"
 export PATH="$BIN:$PATH"
+
+# No case may reach a real gh or GitHub: an isolated config dir, a token that is not
+# one, an unresolvable host, and the fixture repository name the fake gh routes on.
+GHFIX="$tmp/ghfix"
+CALLLOG="$tmp/calls.log"
+mkdir -p "$tmp/gh-config" "$GHFIX/head" "$GHFIX/pull"
+: > "$CALLLOG"
+export GITHUB_REPOSITORY=fixture-owner/fixture-repo GH_CONFIG_DIR="$tmp/gh-config" GH_TOKEN=invalid GH_HOST=fixture.invalid
+export DLR_GH_FIX="$GHFIX" DLR_CALL_LOG="$CALLLOG" DLR_GH_BLOB_REPO="$tmp/origin.git" DLP_GH_RETRY_S=0
+unset GITHUB_TOKEN DLR_GH_MODE DLR_GH_BLOB_CORRUPT DLR_GH_IGNORE_HEAD
+gh_reset() {
+  rm -rf "$GHFIX"
+  mkdir -p "$GHFIX/head" "$GHFIX/pull"
+  : > "$CALLLOG"
+  unset DLR_GH_MODE DLR_GH_BLOB_CORRUPT DLR_GH_IGNORE_HEAD
+}
+gh_head_json() { printf '%s' "$2" > "$GHFIX/head/${1//\//__}.json"; }   # <branch> <json>
+# pr_obj <number> <open|closed> <closed_at-epoch|""> <head-sha> [merged] — one pulls entry.
+pr_obj() {
+  jq -nc --argjson n "$1" --arg st "$2" --arg ca "$3" --arg sha "$4" --arg m "${5:-}" \
+    '{number:$n, state:$st, closed_at:(if $ca == "" then null else ($ca | tonumber | todate) end),
+      merged_at:(if $m == "" then null else ($ca | tonumber | todate) end),
+      head:{sha:$sha, ref:"fixture", repo:{full_name:"fixture-owner/fixture-repo"}}, user:{login:"fixture-author"}}'
+}
+calls_of() { grep -cxF -- "$1" "$CALLLOG" || true; }   # exact-line count in the ordered call log
 
 blob_of() { printf '%s\n' "$1" | git hash-object --stdin; }
 
@@ -869,7 +1018,7 @@ STATE1=$(git_state)
 echo "G2-1: row on no live branch -> orphan"
 CASES=$((CASES + 1))
 run_classify "199_gone.sql|$(blob_of GONE)"$'\n'
-if [[ "$rc" == "0" && "$out" == "orphan${T}199_gone.sql" ]] && grep -qF 'ledger-classify: in-flight=0 stale=0 merged=0 orphan=1' <<<"$err"; then
+if [[ "$rc" == "0" && "$out" == "orphan${T}199_gone.sql" ]] && grep -qxF 'ledger-classify: in-flight=0 stale=0 merged=0 orphan=1 closed-grace=0 closed=0' <<<"$err"; then
   pass "ownerless row is an orphan, summary on stderr"
 else
   fail "expected orphan; got rc=$rc out=[$out] err=[$err]"
@@ -1166,6 +1315,280 @@ else
   fail "cache reuse wrong: first=[$o1] second=[$o2]"
 fi
 
+echo "== Guard 2b: closed-PR ownership (PR-state lookup, commit-bound, fail-closed) =="
+
+tip_of() { git -C "$ORIGIN" rev-parse "refs/heads/$1"; }
+hours_ago() { printf '%s' "$(( $(date +%s) - $1 * 3600 - 60 ))"; }
+# field <n> — the n-th tab field of $out (1-based).
+field() { cut -f "$1" <<<"$out"; }
+
+# ----------------------------------------------------------------------
+branch cl-tip main "" 210_cl.sql="CL"
+gh_reset
+gh_head_json cl-tip "[$(pr_obj 7001 closed "$(hours_ago 30)" "$(tip_of cl-tip)")]"
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+cl_out=$out; cl_err=$err; cl_rc=$rc; cl_calls=$(calls_of "gh pulls?head=fixture-owner:cl-tip")
+
+echo "G2-M1: every fresh holder's latest PR closed at the branch tip 30 h ago -> closed"
+CASES=$((CASES + 1))
+out=$cl_out
+if [[ "$cl_rc" == "0" && "$(field 1)" == "closed" && "$(field 2)" == "210_cl.sql" && "$(field 3)" == "cl-tip" && "$(field 4)" == "7001" ]]; then
+  pass "a closed-at-tip holder does not keep the row in-flight"
+else
+  fail "expected closed/210_cl.sql/cl-tip/7001; got rc=$cl_rc out=[$cl_out] err=[$cl_err]"
+fi
+
+echo "G2-M16: the hours field is measured from closed_at (30 h ago -> 29..31)"
+CASES=$((CASES + 1))
+h=$(field 5)
+if [[ "$h" =~ ^[0-9]+$ ]] && (( h >= 29 && h <= 31 )); then
+  pass "hours since close = $h"
+else
+  fail "expected hours 29..31; got [$h] out=[$cl_out]"
+fi
+
+echo "G2-M11: the summary line gains closed-grace/closed at the END"
+CASES=$((CASES + 1))
+if grep -qxF 'ledger-classify: in-flight=0 stale=0 merged=0 orphan=0 closed-grace=0 closed=1' <<<"$cl_err"; then
+  pass "summary fields appended, existing fields unmoved"
+else
+  fail "expected the six-field summary ending closed-grace=0 closed=1; got err=[$cl_err]"
+fi
+
+echo "G2-M6: a fresh holder is looked up by branch (head=<owner>:<branch>), once"
+CASES=$((CASES + 1))
+if [[ "$cl_calls" == "1" ]]; then
+  pass "the lookup ran for the fresh holder"
+else
+  fail "expected one 'gh pulls?head=fixture-owner:cl-tip' call; got $cl_calls; log=[$(cat "$CALLLOG")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-M2: the PR-state lookup answers 5xx twice -> rc 2 after exactly two calls, no verdicts"
+CASES=$((CASES + 1))
+gh_reset
+export DLR_GH_MODE=5xx
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+n=$(calls_of "gh pulls?head=fixture-owner:cl-tip")
+unset DLR_GH_MODE
+if [[ "$rc" == "2" && -z "$out" && "$n" == "2" ]] && grep -qF 'cannot measure (transient)' <<<"$err"; then
+  pass "one retry, then fail closed (UNCLASSIFIED in the probe)"
+else
+  fail "expected rc=2 after 2 calls; got rc=$rc calls=$n out=[$out] err=[$err]"
+fi
+
+echo "G2-M14: 403 -> rc 2 'cannot measure (config)' naming 403, exactly one call (no retry)"
+CASES=$((CASES + 1))
+gh_reset
+export DLR_GH_MODE=403
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+n=$(calls_of "gh pulls?head=fixture-owner:cl-tip")
+unset DLR_GH_MODE
+if [[ "$rc" == "2" && -z "$out" && "$n" == "1" ]] && grep -qF 'cannot measure (config)' <<<"$err" && grep -qF 'HTTP 403' <<<"$err"; then
+  pass "a scope/permission refusal is config, and a re-run is not attempted"
+else
+  fail "expected rc=2 config 403 after 1 call; got rc=$rc calls=$n err=[$err]"
+fi
+
+echo "G2-nonjson: a 200 whose body is not JSON -> rc 2 transient, no verdicts"
+CASES=$((CASES + 1))
+gh_reset
+export DLR_GH_MODE=nonjson
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+unset DLR_GH_MODE
+if [[ "$rc" == "2" && -z "$out" ]] && grep -qF 'cannot measure (transient)' <<<"$err" && ! grep -qF 'not json' <<<"$err"; then
+  pass "an unparseable body fails closed and is never echoed"
+else
+  fail "expected rc=2 transient; got rc=$rc out=[$out] err=[$err]"
+fi
+
+echo "G2-repo: GITHUB_REPOSITORY unset while a fresh holder exists -> rc 2 config, zero gh calls"
+CASES=$((CASES + 1))
+gh_reset
+unset GITHUB_REPOSITORY
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+export GITHUB_REPOSITORY=fixture-owner/fixture-repo
+if [[ "$rc" == "2" && -z "$out" && ! -s "$CALLLOG" ]] && grep -qF 'cannot measure (config)' <<<"$err"; then
+  pass "no repository, no lookup, no verdict"
+else
+  fail "expected rc=2 config with no call; got rc=$rc out=[$out] err=[$err] log=[$(cat "$CALLLOG")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-M4a: closed 23 h ago -> closed-grace (a warning)"
+CASES=$((CASES + 1))
+gh_reset
+gh_head_json cl-tip "[$(pr_obj 7002 closed "$(hours_ago 23)" "$(tip_of cl-tip)")]"
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+if [[ "$rc" == "0" && "$(field 1)" == "closed-grace" && "$(field 4)" == "7002" && "$(field 5)" == "23" ]] \
+  && grep -qxF 'ledger-classify: in-flight=0 stale=0 merged=0 orphan=0 closed-grace=1 closed=0' <<<"$err"; then
+  pass "inside the 24 h grace the row is closed-grace"
+else
+  fail "expected closed-grace 7002 23; got rc=$rc out=[$out] err=[$err]"
+fi
+
+echo "G2-M4b: closed 24 h ago -> closed (blocking)"
+CASES=$((CASES + 1))
+gh_reset
+gh_head_json cl-tip "[$(pr_obj 7003 closed "$(hours_ago 24)" "$(tip_of cl-tip)")]"
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+if [[ "$rc" == "0" && "$(field 1)" == "closed" && "$(field 5)" == "24" ]]; then
+  pass "the grace boundary is CLOSED_GRACE_H=24 whole hours"
+else
+  fail "expected closed at 24 h; got rc=$rc out=[$out]"
+fi
+
+echo "G2-merged: the only PR MERGED at the tip (squash) 30 h ago -> closed, same neutral line"
+CASES=$((CASES + 1))
+gh_reset
+gh_head_json cl-tip "[$(pr_obj 7004 closed "$(hours_ago 30)" "$(tip_of cl-tip)" merged)]"
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+if [[ "$rc" == "0" && "$(field 1)" == "closed" && "$(field 4)" == "7004" ]] && [[ "$(awk -F'\t' '{print NF}' <<<"$out")" == "5" ]]; then
+  pass "a merged-at-tip PR does not own the row either"
+else
+  fail "expected closed 7004; got rc=$rc out=[$out]"
+fi
+
+echo "G2-M9: the branch was pushed AFTER its PR closed (PR head != tip) -> in-flight"
+CASES=$((CASES + 1))
+git -C "$SEED" switch -q -C cl-push main
+put "$SEED" 217_push.sql "PUSH-1"
+git -C "$SEED" add -A && git -C "$SEED" commit -qm 'cl-push 1'
+old_head=$(git -C "$SEED" rev-parse HEAD)
+put "$SEED" 218_other.sql "PUSH-2"
+git -C "$SEED" add -A && git -C "$SEED" commit -qm 'cl-push 2'
+git -C "$SEED" push -q -f origin HEAD:refs/heads/cl-push
+git -C "$SEED" switch -q main
+gh_reset
+gh_head_json cl-push "[$(pr_obj 7005 closed "$(hours_ago 30)" "$old_head")]"
+run_classify "217_push.sql|$(blob_of PUSH-1)"$'\n'
+git -C "$SEED" push -q origin --delete cl-push
+if [[ "$rc" == "0" && "$out" == "in-flight${T}217_push.sql${T}cl-push${T}exact" ]]; then
+  pass "PR-state evidence is bound to the commit, not the branch name"
+else
+  fail "expected in-flight via cl-push; got rc=$rc out=[$out] err=[$err]"
+fi
+
+echo "G2-M12: two closed PRs at the tip, OLDER first in the array -> the newer one is picked"
+CASES=$((CASES + 1))
+gh_reset
+gh_head_json cl-tip "[$(pr_obj 7006 closed "$(hours_ago 40)" "$(tip_of cl-tip)"),$(pr_obj 7007 closed "$(hours_ago 30)" "$(tip_of cl-tip)")]"
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+if [[ "$rc" == "0" && "$(field 1)" == "closed" && "$(field 4)" == "7007" ]]; then
+  pass "reduced by greatest closed_at, never array order"
+else
+  fail "expected #7007; got rc=$rc out=[$out]"
+fi
+
+echo "G2-M13: [closed-at-tip, open] -> in-flight (an open PR anywhere in the list wins)"
+CASES=$((CASES + 1))
+gh_reset
+gh_head_json cl-tip "[$(pr_obj 7008 closed "$(hours_ago 30)" "$(tip_of cl-tip)"),$(pr_obj 7009 open "" "$(tip_of cl-tip)")]"
+run_classify "210_cl.sql|$(blob_of CL)"$'\n'
+if [[ "$rc" == "0" && "$out" == "in-flight${T}210_cl.sql${T}cl-tip${T}exact" ]]; then
+  pass "an open PR keeps the row in-flight whatever its position"
+else
+  fail "expected in-flight; got rc=$rc out=[$out]"
+fi
+
+echo "G2-M10: two rows owned by one branch -> one lookup for that branch (memo survives the per-row subshell)"
+CASES=$((CASES + 1))
+branch cl-two main "" 215_r1.sql="R1" 216_r2.sql="R2"
+gh_reset
+run_classify "215_r1.sql|$(blob_of R1)"$'\n'"216_r2.sql|$(blob_of R2)"$'\n'
+n=$(calls_of "gh pulls?head=fixture-owner:cl-two")
+git -C "$SEED" push -q origin --delete cl-two
+if [[ "$rc" == "0" && "$n" == "1" && "$out" == "in-flight${T}215_r1.sql${T}cl-two${T}exact"$'\n'"in-flight${T}216_r2.sql${T}cl-two${T}exact" ]]; then
+  pass "memoised per branch and tip"
+else
+  fail "expected 1 call and two in-flight; got calls=$n rc=$rc out=[$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-M3a: holders a (closed at tip) + b (open) -> in-flight via b (second member checked)"
+CASES=$((CASES + 1))
+branch cla-a main "" 211_two.sql="TWO"
+branch cla-b main "" 211_two.sql="TWO"
+gh_reset
+gh_head_json cla-a "[$(pr_obj 7010 closed "$(hours_ago 30)" "$(tip_of cla-a)")]"
+gh_head_json cla-b "[$(pr_obj 7011 open "" "$(tip_of cla-b)")]"
+run_classify "211_two.sql|$(blob_of TWO)"$'\n'
+git -C "$SEED" push -q origin --delete cla-a cla-b
+if [[ "$rc" == "0" && "$out" == "in-flight${T}211_two.sql${T}cla-b${T}exact" ]]; then
+  pass "a live second holder keeps the row in-flight"
+else
+  fail "expected in-flight via cla-b; got rc=$rc out=[$out]"
+fi
+
+echo "G2-M3b: holders a (open) + b (closed at tip) -> in-flight via a"
+CASES=$((CASES + 1))
+branch clb-a main "" 212_two.sql="TWOB"
+branch clb-b main "" 212_two.sql="TWOB"
+gh_reset
+gh_head_json clb-a "[$(pr_obj 7012 open "" "$(tip_of clb-a)")]"
+gh_head_json clb-b "[$(pr_obj 7013 closed "$(hours_ago 30)" "$(tip_of clb-b)")]"
+run_classify "212_two.sql|$(blob_of TWOB)"$'\n'
+git -C "$SEED" push -q origin --delete clb-a clb-b
+if [[ "$rc" == "0" && "$out" == "in-flight${T}212_two.sql${T}clb-a${T}exact" ]]; then
+  pass "both orders"
+else
+  fail "expected in-flight via clb-a; got rc=$rc out=[$out]"
+fi
+
+echo "G2-M5: exact-name holder closed + slug holder open -> in-flight via the slug holder"
+CASES=$((CASES + 1))
+branch clx-exact main "" 213_ex.sql="EX-A"
+branch clx-slug main "" 214_ex.sql="EX-B"
+gh_reset
+gh_head_json clx-exact "[$(pr_obj 7014 closed "$(hours_ago 30)" "$(tip_of clx-exact)")]"
+run_classify "213_ex.sql|$(blob_of EX-A)"$'\n'
+git -C "$SEED" push -q origin --delete clx-exact clx-slug
+if [[ "$rc" == "0" && "$out" == "in-flight${T}213_ex.sql${T}clx-slug${T}slug" ]]; then
+  pass "a closed exact holder does not end the walk; every fresh tier is tried"
+else
+  fail "expected in-flight via clx-slug slug; got rc=$rc out=[$out]"
+fi
+
+echo "G2-M15: a fresh closed-at-tip holder + a stale holder -> closed (decided before the stale tiers)"
+CASES=$((CASES + 1))
+branch clf main "" 160_old.sql="OLD"
+gh_reset
+gh_head_json clf "[$(pr_obj 7015 closed "$(hours_ago 30)" "$(tip_of clf)")]"
+run_classify "160_old.sql|$(blob_of OLD)"$'\n'
+git -C "$SEED" push -q origin --delete clf
+if [[ "$rc" == "0" && "$(field 1)" == "closed" && "$(field 3)" == "clf" && "$(field 4)" == "7015" ]]; then
+  pass "a remembered closed hit beats a stale holder"
+else
+  fail "expected closed via clf; got rc=$rc out=[$out]"
+fi
+
+echo "G2-lazy: no fresh holder (orphan + stale-only rows) -> the fake gh's call log stays empty"
+CASES=$((CASES + 1))
+gh_reset
+run_classify "199_gone.sql|$(blob_of GONE)"$'\n'"160_old.sql|$(blob_of OLD)"$'\n'
+if [[ "$rc" == "0" && ! -s "$CALLLOG" && "$out" == "orphan${T}199_gone.sql"$'\n'"stale${T}160_old.sql${T}old-branch${T}31" ]]; then
+  pass "zero API calls when nothing could be in-flight"
+else
+  fail "expected no gh call; got rc=$rc out=[$out] log=[$(cat "$CALLLOG")]"
+fi
+
+echo "G2-nopsql: classify-missing makes zero psql calls (runtime)"
+CASES=$((CASES + 1))
+gh_reset
+PL="$tmp/classify-psql.log"
+: > "$PL"
+set +e
+printf '%s\n' "210_cl.sql|$(blob_of CL)" | DLP_PSQL_LOG="$PL" bash "$GUARD" classify-missing --base-branch main --repo "$WORK" >/dev/null 2>&1
+rc=$?
+set -e
+if [[ "$rc" == "0" && ! -s "$PL" ]] && ! grep -q '^psql' "$CALLLOG"; then
+  pass "the classifier never touches the database"
+else
+  fail "expected zero psql calls; rc=$rc log=[$(tr '\0' ' ' < "$PL")]"
+fi
+git -C "$SEED" push -q origin --delete cl-tip
+gh_reset
+
 echo "== Guard 2: harness =="
 
 mutate_fn() {  # $1=out $2=function-opening line (exact) $3=inserted statement
@@ -1233,6 +1656,7 @@ run_probe() {
   set +e
   out=$(cd "$PW" && DOPPLER_TOKEN=x DOPPLER_PROJECT=soleur DOPPLER_CONFIG=dev_scheduled \
     FAIL_ON_DRIFT="$1" GITHUB_OUTPUT="$tmp/gho" GITHUB_WORKSPACE="$PW" \
+    CLASSIFIER_GH_TOKEN="${PROBE_GH_TOKEN:-fixture-probe-token}" \
     DATABASE_URL_POOLER="postgres://p" DLP_FAKE_LEDGER="$LEDGER" \
     bash --noprofile --norc -eo pipefail "$PROBE" 2>&1)
   rc=$?
@@ -1251,7 +1675,7 @@ ledger "150_inflight.sql|$(blob_of IF)"
 run_probe true
 if [[ "$rc" == "0" ]] && has "::warning::  - 150_inflight.sql (in-flight: unmerged on live branch inflight-a via exact" \
   && ! printf '%s\n' "$out" | grep -q '^::error::' \
-  && has "ledger-classify: in-flight=1 stale=0 merged=0 orphan=0" && ! has "Missing-on-main:" \
+  && grep -qxF "ledger-classify: in-flight=1 stale=0 merged=0 orphan=0 closed-grace=0 closed=0" <<<"$out" && ! has "Missing-on-main:" \
   && grep -qx 'drift-detected=true' "$tmp/gho"; then
   pass "an open PR's applied row no longer reds main (ADR-061 per-ref)"
 else
@@ -1472,11 +1896,94 @@ echo "G2-P-bound: the classifier call is bounded, and the stale threshold agrees
 CASES=$((CASES + 1))
 g_days=$(sed -n 's/^readonly STALE_DAYS=\([0-9][0-9]*\)$/\1/p' "$GUARD")
 a_days=$(sed -n 's/^[[:space:]]*STALE_DAYS_LABEL=\([0-9][0-9]*\)$/\1/p' "$PROBE")
-if grep -qF 'cls_out=$(timeout -k 5 90 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing' "$PROBE" \
-  && [[ -n "$g_days" && "$g_days" == "$a_days" ]]; then
-  pass "timeout wrapper present; STALE_DAYS=$g_days in both"
+g_grace=$(sed -n 's/^readonly CLOSED_GRACE_H=\([0-9][0-9]*\)$/\1/p' "$GUARD")
+a_grace=$(sed -n 's/^[[:space:]]*CLOSED_GRACE_H_LABEL=\([0-9][0-9]*\)$/\1/p' "$PROBE")
+if grep -qF 'cls_out=$(GH_TOKEN="$CLASSIFIER_GH_TOKEN" timeout -k 5 90 bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing' "$PROBE" \
+  && [[ -n "$g_days" && "$g_days" == "$a_days" && -n "$g_grace" && "$g_grace" == "$a_grace" ]]; then
+  pass "timeout wrapper present; STALE_DAYS=$g_days and CLOSED_GRACE_H=$g_grace in both"
 else
-  fail "unbounded classifier call or threshold drift: guard=$g_days action=$a_days"
+  fail "unbounded classifier call or threshold drift: guard=$g_days/$g_grace action=$a_days/$a_grace"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-grace: a closed-grace verdict under fail-on -> ::warning:: naming the PR, exit 0"
+CASES=$((CASES + 1))
+with_stub_classifier 'mapfile -t l; printf "closed-grace\t%s\tcl-branch\t7001\t5\n" "${l[0]%%|*}"'
+ledger "199_gone.sql|$(blob_of GONE)"
+run_probe true
+restore_classifier
+if [[ "$rc" == "0" ]] && grep -qE '^::warning::  - 199_gone\.sql \(owner branch cl-branch has no open pull request; #7001 closed 5 h ago' <<<"$out" \
+  && ! grep -q '^::error::' <<<"$out" && ! has "Missing-on-main:"; then
+  pass "inside the grace a closed PR's row warns, never reds main"
+else
+  fail "expected rc=0 closed-grace warning; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-M7: a closed verdict under fail-on -> ::error:: block with the dry-run command, exit 1, Sentry class 'closed'"
+CASES=$((CASES + 1))
+CURLLOG="$tmp/curl.log"
+: > "$CURLLOG"
+with_stub_classifier 'mapfile -t l; printf "closed\t%s\tcl-branch\t7001\t30\n" "${l[0]%%|*}"'
+ledger "199_gone.sql|$(blob_of GONE)"
+export DLP_CURL_LOG="$CURLLOG" SENTRY_DSN="https://pubkey@sentry.fixture.invalid/12345"
+run_probe true
+unset DLP_CURL_LOG SENTRY_DSN
+restore_classifier
+n_closed=$(grep -c '"ledger_class":"closed"' "$CURLLOG" || true)
+if [[ "$rc" == "1" && "$n_closed" == "1" ]] \
+  && grep -qxF '::error::  - 199_gone.sql (owner branch cl-branch has no open pull request; #7001 closed 30 h ago — check its action-required issue, or preview the discard: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=7001; if the dry run lists rows, re-run with -f execute=true)' <<<"$out" \
+  && ! has "Missing-on-main:"; then
+  pass "a closed-owner row blocks after the grace, with the safe command first"
+else
+  fail "expected rc=1 closed block + one Sentry 'closed' event; got rc=$rc sentry=$n_closed out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-closed-bad: a closed line with a non-numeric PR or hours -> UNCLASSIFIED (each)"
+CASES=$((CASES + 1))
+ledger "199_gone.sql|$(blob_of GONE)"
+with_stub_classifier 'mapfile -t l; printf "closed\t%s\tcl-branch\t70x1\t30\n" "${l[0]%%|*}"'
+run_probe true; o1=$out; r1=$rc
+with_stub_classifier 'mapfile -t l; printf "closed-grace\t%s\tcl-branch\t7001\tsoon\n" "${l[0]%%|*}"'
+run_probe true; o2=$out; r2=$rc
+with_stub_classifier 'mapfile -t l; printf "closed\t%s\tbad;branch\t7001\t30\n" "${l[0]%%|*}"'
+run_probe true; o3=$out; r3=$rc
+restore_classifier
+if [[ "$r1$r2$r3" == "111" ]] && grep -qF "UNCLASSIFIED (rows=1 line=1 malformed)" <<<"$o1" \
+  && grep -qF "UNCLASSIFIED (rows=1 line=1 malformed)" <<<"$o2" && grep -qF "UNCLASSIFIED (rows=1 line=1 malformed)" <<<"$o3"; then
+  pass "every closed field is validated before it reaches an annotation"
+else
+  fail "expected three malformed UNCLASSIFIED; got [$r1] $o1 || [$r2] $o2 || [$r3] $o3"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-hints: the orphan block carries the deleted-branch lookup hint; the stale line names the reconcile workflow"
+CASES=$((CASES + 1))
+ledger "199_gone.sql|$(blob_of GONE)"
+run_probe true; o1=$out
+ledger "160_old.sql|$(blob_of OLD)"
+run_probe true; o2=$out
+if grep -qF 'gh pr list --state closed --search <file>, then preview the discard: gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<N>' <<<"$o1" \
+  && grep -qF 'gh workflow run dev-ledger-reconcile.yml --ref main -f pr=<its PR>' <<<"$o2" && ! grep -qF '#8605' <<<"$o1$o2"; then
+  pass "each blocking class names its repair command"
+else
+  fail "hints missing: orphan=[$o1] stale=[$o2]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G2-P-token: the github-token input reaches the classifier as GH_TOKEN"
+CASES=$((CASES + 1))
+TOKF="$tmp/probe-token.txt"
+: > "$TOKF"
+with_stub_classifier "cat >/dev/null; printf '%s' \"\${GH_TOKEN-unset}\" > '$TOKF'; exit 2"
+ledger "199_gone.sql|$(blob_of GONE)"
+PROBE_GH_TOKEN="tok-for-classifier" run_probe true
+restore_classifier
+if [[ "$(cat "$TOKF")" == "tok-for-classifier" ]]; then
+  pass "token passed on the classifier call"
+else
+  fail "classifier saw GH_TOKEN=[$(cat "$TOKF")]"
 fi
 
 echo "== Wiring: tenant-integration.yml and action.yml =="
@@ -1615,6 +2122,87 @@ echo "W-15: detect-changes loses fetch-depth: 0 -> wiring RED"
 CASES=$((CASES + 1))
 wf_mutant 's = s.replace("fetch-depth: 0", "fetch-depth: 2", 1)'
 if [[ -n "$(wf_static "$tmp/wf-mut.yml")" ]]; then pass "shallow detect-changes detected"; else fail "fetch-depth change went unseen"; fi
+
+# probe_wiring <tenant-integration.yml> <scheduled-dev-migration-drift.yml> — one line per
+# probe call site that does not hand the classifier its PR-state token, or whose job cannot
+# read pull requests (G2-M8). Read from the parsed YAML, never from comment text.
+SCHED="$REPO_ROOT/.github/workflows/scheduled-dev-migration-drift.yml"
+probe_wiring() {
+  python3 - "$1" "$2" <<'PY'
+import sys, yaml
+bad, sites = [], 0
+for path in sys.argv[1:3]:
+    doc = yaml.safe_load(open(path))
+    top = doc.get("permissions") or {}
+    for jname, job in (doc.get("jobs") or {}).items():
+        perms = job.get("permissions", top) or {}
+        for st in job.get("steps") or []:
+            if st.get("uses") != "./.github/actions/dev-migration-drift-probe":
+                continue
+            sites += 1
+            where = f"{path.rsplit('/', 1)[-1]}:{jname}:{st.get('name')}"
+            if (st.get("with") or {}).get("github-token") != "${{ github.token }}":
+                bad.append(f"{where} does not pass the github-token input")
+            if not isinstance(perms, dict) or perms.get("pull-requests") not in ("read", "write"):
+                bad.append(f"{where} runs in a job without pull-requests: read")
+if sites != 3:
+    bad.append(f"expected 3 probe call sites, parsed {sites}")
+print("\n".join(bad))
+PY
+}
+file_mutant() {  # $1 = source file, $2 = out file, $3 = python snippet transforming `s`
+  python3 - "$1" "$2" "$3" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+exec(sys.argv[3])
+open(sys.argv[2], "w").write(s)
+PY
+  if cmp -s "$1" "$2"; then printf 'FATAL: mutation of %s did not land\n' "$1" >&2; exit 1; fi
+}
+
+# ----------------------------------------------------------------------
+echo "W-T0: all three probe call sites pass github-token and run with pull-requests: read (G2-M8)"
+CASES=$((CASES + 1))
+pw_out=$(probe_wiring "$WF" "$SCHED")
+if [[ -z "$pw_out" ]]; then pass "token and scope wired at every call site"; else fail "probe wiring broken: $pw_out"; fi
+
+# ----------------------------------------------------------------------
+echo "W-T1: the post-section re-probe stops passing github-token -> RED"
+CASES=$((CASES + 1))
+file_mutant "$WF" "$tmp/wf-tok.yml" '
+t = "          github-token: ${{ github.token }}\n"
+assert s.count(t) == 2
+i = s.rindex(t)
+s = s[:i] + s[i + len(t):]
+'
+if [[ -n "$(probe_wiring "$tmp/wf-tok.yml" "$SCHED")" ]]; then pass "a dropped token is seen"; else fail "a probe call without the token went unseen"; fi
+
+# ----------------------------------------------------------------------
+echo "W-T2: the heavy job drops pull-requests: read -> RED"
+CASES=$((CASES + 1))
+file_mutant "$WF" "$tmp/wf-perm.yml" '
+t = "      pull-requests: read\n"
+assert s.count(t) == 1
+s = s.replace(t, "", 1)
+'
+if [[ -n "$(probe_wiring "$tmp/wf-perm.yml" "$SCHED")" ]]; then pass "a dropped scope is seen"; else fail "a job without pull-requests: read went unseen"; fi
+
+# ----------------------------------------------------------------------
+echo "W-T3: the scheduled probe loses its token, or its pull-requests: read -> RED (each)"
+CASES=$((CASES + 1))
+file_mutant "$SCHED" "$tmp/sched-tok.yml" '
+t = "          github-token: ${{ github.token }}\n"
+assert s.count(t) == 1
+s = s.replace(t, "", 1)
+'
+r1=$(probe_wiring "$WF" "$tmp/sched-tok.yml")
+file_mutant "$SCHED" "$tmp/sched-perm.yml" '
+t = "  pull-requests: read\n"
+assert s.count(t) == 1
+s = s.replace(t, "", 1)
+'
+r2=$(probe_wiring "$WF" "$tmp/sched-perm.yml")
+if [[ -n "$r1" && -n "$r2" ]]; then pass "the cron's wiring is pinned too"; else fail "scheduled mutants went unseen: [$r1] [$r2]"; fi
 
 # ---- behavioural: the extracted check step, state step and filter, run for real ----
 extract_step() {  # $1 = job, $2 = step name or id:<id>, $3 = out file
@@ -1797,6 +2385,1116 @@ else
   fail "expected --help to print both formats; got rc=$rc out=$out"
 fi
 
+echo "== Guard 3: dev-ledger-reconcile.sh (the one writer) =="
+
+# The writer runs as a COPY beside a guard copy (it sources the guard from its own
+# directory, or $DLR_GUARD), against a SEPARATE writer clone of the fixture origin —
+# never $WORK, whose feat_case runs `git add -A`. DLP_OWNERS_CACHE is unset for every
+# run, so each invocation builds and removes its own owner repo.
+WBIN="$tmp/wbin"
+WREPO="$tmp/writer-repo"
+WRT="$tmp/writer-rt"
+WLEDGER="$tmp/writer-ledger.txt"
+PAYLOAD="$tmp/writer-payload.log"
+BREACH="$tmp/writer-breach.log"
+mkdir -p "$WBIN" "$WRT"
+assert_fixture_dir "$WBIN"
+cp "$WRITER_SRC" "$WBIN/dev-ledger-reconcile.sh"
+cp "$GUARD" "$WBIN/dev-ledger-parity.sh"
+git clone -q --no-tags "$ORIGIN_URL" "$WREPO" 2>/dev/null
+assert_fixture_dir "$WREPO"
+mkdir -p "$WREPO/scripts"
+# Fake dev-suite mutex: logs to the ordered call log; the banner is scriptable.
+cat > "$WREPO/scripts/dev-suite-mutex.sh" <<'SH'
+#!/usr/bin/env bash
+log="${DLR_CALL_LOG:-/dev/null}"
+case "${1:-}" in
+  acquire)
+    st=none; [[ -n "${DEV_SUITE_MUTEX_STATE_DIR:-}" && -d "${DEV_SUITE_MUTEX_STATE_DIR}" ]] && st=dir
+    printf 'mutex acquire\n' >> "$log"
+    printf 'mutex env wait=%s state=%s identity=%s\n' "${DEV_SUITE_MUTEX_WAIT_S:-}" "$st" "${DEV_SUITE_MUTEX_IDENTITY:-}" >> "$log"
+    printf '%s\n' "${DLR_FAKE_MUTEX_BANNER:-DEV_SUITE_MUTEX_ACQUIRED wait_ms=1}" ;;
+  release)
+    printf 'mutex release\n' >> "$log"
+    printf 'DEV_SUITE_MUTEX_RELEASED\n' ;;
+esac
+exit 0
+SH
+W_SQL="SELECT filename || '|' || COALESCE(content_sha, '') || '|' || COALESCE(to_char(applied_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS'), '') FROM public._schema_migrations ORDER BY filename"
+ts() { printf '202609%014d' "$1"; }   # a 20-digit applied_at (YYYYMMDDHH24MISSUS), ordered by $1
+W_BASE="001_a.sql|$(blob_of A)|20260101000000000001
+002_b.sql|$(blob_of B)|20260101000000000002
+130_y.sql|$(blob_of Y)|20260101000000000003
+131_x.sql|$(blob_of X)|20260101000000000004"
+wledger() { { printf '%s\n' "$W_BASE"; [[ $# -gt 0 ]] && printf '%s\n' "$@"; true; } > "$WLEDGER"; }
+wledger_raw() { printf '%s\n' "$@" > "$WLEDGER"; }
+
+# pr_start <branch> / pr_commit <msg> <name=content|-name>... / pr_publish <N> <branch> [keep|delete]
+pr_start() { git -C "$SEED" switch -q -C "$1" main; }
+pr_commit() {
+  local msg="$1" kv; shift
+  for kv in "$@"; do
+    if [[ "$kv" == -* ]]; then git -C "$SEED" rm -q "$SEED/$MDIR/${kv#-}"; else put "$SEED" "${kv%%=*}" "${kv#*=}"; fi
+  done
+  git -C "$SEED" add -A
+  git -C "$SEED" commit -q --allow-empty -m "$msg"
+}
+pr_publish() {
+  git -C "$SEED" push -q -f origin "HEAD:refs/pull/$1/head"
+  if [[ "${3:-keep}" == "keep" ]]; then git -C "$SEED" push -q -f origin "HEAD:refs/heads/$2"; fi
+  git -C "$SEED" switch -q main
+}
+# pr_json <N> <k|""> <open|closed> <head-ref> [author-login] [head-repo|null] [head-sha]
+pr_json() {
+  local n="$1" k="$2" st="$3" ref="$4" login="${5:-fixture-author}" repo="${6:-fixture-owner/fixture-repo}" sha="${7:-}" f
+  [[ -n "$sha" ]] || sha=$(git -C "$ORIGIN" rev-parse "refs/pull/$n/head")
+  f="$GHFIX/pull/$n.json"
+  [[ -n "$k" ]] && f="$GHFIX/pull/$n.$k.json"
+  jq -nc --argjson n "$n" --arg st "$st" --arg sha "$sha" --arg ref "$ref" --arg login "$login" --arg repo "$repo" \
+    '{number:$n, state:$st, head:{sha:$sha, ref:$ref, repo:(if $repo == "null" then null else {full_name:$repo} end)}, user:{login:$login}}' > "$f"
+}
+blob_file() { git hash-object --stdin <<<"$1"; }   # the blob `put` writes for content $1
+
+# run_writer <args...> — sets out, rc; logs: $CALLLOG (ordered), $PAYLOAD (-f units), $BREACH.
+run_writer() {
+  : > "$CALLLOG"; : > "$PAYLOAD"; : > "$BREACH"
+  rm -rf "$WRT"
+  mkdir -p "$WRT"
+  set +e
+  out=$(cd "$WREPO" && env -u DLP_OWNERS_CACHE DOPPLER_ENVIRONMENT="${W_ENV-dev}" RUNNER_TEMP="$WRT" TMPDIR="$WRT" \
+    DATABASE_URL_POOLER="postgres://pooler.fixture.invalid/db" DATABASE_URL="" \
+    DLR_PSQL_WRITER_MODE=1 DLR_WANT_SQL="$W_SQL" DLR_PSQL_PAYLOAD="$PAYLOAD" DLR_PSQL_BREACH="$BREACH" \
+    DLR_FAKE_LEDGER="$WLEDGER" DLR_GUARD="${W_GUARD:-$WBIN/dev-ledger-parity.sh}" \
+    bash "${W_WRITER:-$WBIN/dev-ledger-reconcile.sh}" --repo "$WREPO" --base-branch main "$@" 2>&1)
+  rc=$?
+  set -e
+}
+n_log() { grep -c -- "$1" "$CALLLOG" || true; }            # regex count in the call log
+first_line() { grep -n -m1 -- "$1" "$CALLLOG" | cut -d: -f1 || true; }
+last_line() { grep -n -- "$1" "$CALLLOG" | tail -n 1 | cut -d: -f1 || true; }
+units() { grep -c '^psql -f' "$CALLLOG" || true; }
+zero_writes() { [[ "$(units)" == "0" && ! -s "$PAYLOAD" && ! -s "$BREACH" ]]; }
+one_unit() { [[ "$(units)" == "1" && ! -s "$BREACH" ]] && [[ "$(grep -c '^=== unit argv:' "$PAYLOAD" || true)" == "1" ]]; }
+cas_of() { printf "DELETE FROM public._schema_migrations WHERE filename = '%s' AND content_sha = '%s';" "$1" "$2"; }
+payload_line() { grep -nF -m1 -- "$1" "$PAYLOAD" | cut -d: -f1 || true; }
+
+# ----------------------------------------------------------------------
+echo "G3-H1: instrument self-test — a -f unit's contents reach the payload log verbatim"
+CASES=$((CASES + 1))
+: > "$PAYLOAD"; : > "$BREACH"
+printf 'SELECT 1; -- known fixture unit\n' > "$tmp/known-unit.sql"
+set +e
+DLR_PSQL_WRITER_MODE=1 DLR_PSQL_PAYLOAD="$PAYLOAD" DLR_PSQL_BREACH="$BREACH" DLR_CALL_LOG=/dev/null DLR_WANT_SQL="$W_SQL" \
+  psql "postgres://x" -w --no-psqlrc --single-transaction -f "$tmp/known-unit.sql" >/dev/null 2>&1
+h1rc=$?
+set -e
+if [[ "$h1rc" == "0" ]] && grep -qxF 'SELECT 1; -- known fixture unit' "$PAYLOAD" && [[ ! -s "$BREACH" ]]; then
+  pass "the payload log can see what every write row asserts"
+else
+  fail "fake psql did not record the -f payload: rc=$h1rc payload=[$(cat "$PAYLOAD")]"
+fi
+
+echo "G3-H3: writer-mode contract self-test — any call but the SELECT or one -f unit is a breach"
+CASES=$((CASES + 1))
+: > "$BREACH"
+set +e
+DLR_PSQL_WRITER_MODE=1 DLR_PSQL_PAYLOAD=/dev/null DLR_PSQL_BREACH="$BREACH" DLR_CALL_LOG=/dev/null DLR_WANT_SQL="$W_SQL" \
+  psql "postgres://x" -w -c "DELETE FROM public._schema_migrations" >/dev/null 2>&1
+h3rc=$?
+set -e
+if [[ "$h3rc" == "97" ]] && grep -q '^breach:' "$BREACH"; then
+  pass "an off-contract call is refused and recorded"
+else
+  fail "fake psql accepted an off-contract call: rc=$h3rc breach=[$(cat "$BREACH")]"
+fi
+
+# ---------- PR 501: two applied rows, each with its .down.sql (closed, branch kept) ----------
+pr_start w501
+pr_commit 'w501' 301_wa.sql="WA" 301_wa.down.sql="DROP TABLE IF EXISTS wa;" 302_wb.sql="WB" 302_wb.down.sql="DROP TABLE IF EXISTS wb;"
+pr_publish 501 w501
+WA=$(blob_file WA); WB=$(blob_file WB)
+WA_D=$(blob_file "DROP TABLE IF EXISTS wa;"); WB_D=$(blob_file "DROP TABLE IF EXISTS wb;")
+gh_reset; pr_json 501 "" closed w501
+wledger "301_wa.sql|$WA|$(ts 10)" "302_wb.sql|$WB|$(ts 20)"
+
+# ----------------------------------------------------------------------
+echo "G3-help: --help answers first, before every refusal (DOPPLER_ENVIRONMENT=prd, no --pr)"
+CASES=$((CASES + 1))
+W_ENV=prd run_writer --help
+if [[ "$rc" == "0" ]] && has "ledger-discard: dry-run" && has "--execute" && [[ ! -s "$CALLLOG" ]]; then
+  pass "--help is the discoverability hook"
+else
+  fail "expected rc=0 usage; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-dry (AC6): the default dry run lists rows in execution order, makes zero writes and no mutex call"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501
+run_writer --pr 501
+want="would-discard 302_wb.sql $WB down=$WB_D"$'\n'"would-discard 301_wa.sql $WA down=$WA_D"
+got=$(grep -E '^would-discard ' <<<"$out" || true)
+if [[ "$rc" == "0" && "$got" == "$want" ]] && grep -qxF 'ledger-discard: dry-run (pr=501 eligible=2 down=2 ledger-only=0 later-rows=0)' <<<"$out" \
+  && zero_writes && [[ "$(n_log '^mutex ')" == "0" && "$(n_log '^psql -c$')" == "1" ]]; then
+  pass "a preview never writes and never takes the mutex"
+else
+  fail "dry run wrong: rc=$rc got=[$got] out=$out log=[$(cat "$CALLLOG")]"
+fi
+
+# ----------------------------------------------------------------------
+gh_reset; pr_json 501 "" closed w501
+run_writer --pr 501 --execute
+x_out=$out; x_rc=$rc; x_log=$(cat "$CALLLOG"); x_units=$(units)
+cp "$PAYLOAD" "$tmp/x-payload.log"
+
+echo "G3-M4: two eligible rows -> exactly ONE -f call whose payload holds both CAS blocks"
+CASES=$((CASES + 1))
+if [[ "$x_rc" == "0" && "$x_units" == "1" ]] && one_unit && grep -qF "$(cas_of 301_wa.sql "$WA")" "$PAYLOAD" && grep -qF "$(cas_of 302_wb.sql "$WB")" "$PAYLOAD"; then
+  pass "one transaction for the whole PR"
+else
+  fail "expected one unit with both rows; got rc=$x_rc units=$x_units out=$x_out payload=[$(cat "$PAYLOAD")]"
+fi
+
+echo "G3-M19: every CAS names filename AND content_sha and raises unless one row; argv is single-transaction, ON_ERROR_STOP"
+CASES=$((CASES + 1))
+n_cas=$(grep -c "DELETE FROM public._schema_migrations WHERE filename = '[^']*' AND content_sha = '[0-9a-f]\{40\}';" "$PAYLOAD" || true)
+n_raise=$(grep -c "IF n <> 1 THEN" "$PAYLOAD" || true)
+n_rowcount=$(grep -c "GET DIAGNOSTICS n = ROW_COUNT;" "$PAYLOAD" || true)
+argv_line=$(grep -m1 '^=== unit argv:' "$PAYLOAD" || true)
+if [[ "$n_cas" == "2" && "$n_raise" == "2" && "$n_rowcount" == "2" ]] && grep -qF -- ' --single-transaction ' <<<"$argv_line " \
+  && grep -qE -- ' (-v|--set) ON_ERROR_STOP=1( |$)' <<<"$argv_line" && ! grep -qF 'DELETE FROM public._schema_migrations WHERE filename' <<<"$(grep -v 'AND content_sha' "$PAYLOAD")"; then
+  pass "compare-and-set on both columns, one row or the whole unit rolls back"
+else
+  fail "CAS shape wrong: cas=$n_cas raise=$n_raise rowcount=$n_rowcount argv=[$argv_line]"
+fi
+
+echo "G3-order (AC6): timeouts first, then rows by applied_at DESC, each CAS before its down body"
+CASES=$((CASES + 1))
+l_lock=$(payload_line "SET LOCAL lock_timeout = '30s';")
+l_stmt=$(payload_line "SET LOCAL statement_timeout = '120s';")
+l_cb=$(payload_line "$(cas_of 302_wb.sql "$WB")"); l_db=$(payload_line "DROP TABLE IF EXISTS wb;")
+l_ca=$(payload_line "$(cas_of 301_wa.sql "$WA")"); l_da=$(payload_line "DROP TABLE IF EXISTS wa;")
+if [[ -n "$l_lock" && -n "$l_stmt" && -n "$l_cb" && -n "$l_db" && -n "$l_ca" && -n "$l_da" ]] \
+  && (( l_lock < l_cb && l_stmt < l_cb && l_cb < l_db && l_db < l_ca && l_ca < l_da )); then
+  pass "302 (applied later) then 301, CAS then down"
+else
+  fail "unit order wrong: lock=$l_lock stmt=$l_stmt cas-b=$l_cb down-b=$l_db cas-a=$l_ca down-a=$l_da"
+fi
+
+echo "G3-M5: the mutex is acquired BEFORE the ledger is read"
+CASES=$((CASES + 1))
+CALLS_SAVED="$tmp/x-calls.log"; printf '%s\n' "$x_log" > "$CALLS_SAVED"
+la=$(grep -n -m1 '^mutex acquire$' "$CALLS_SAVED" | cut -d: -f1 || true)
+ls_=$(grep -n -m1 '^psql -c$' "$CALLS_SAVED" | cut -d: -f1 || true)
+if [[ -n "$la" && -n "$ls_" ]] && (( la < ls_ )); then
+  pass "the rows are read inside the mutex"
+else
+  fail "acquire=$la select=$ls_ log=[$x_log]"
+fi
+
+echo "G3-M23: the -f unit sits between acquire and release; release comes last"
+CASES=$((CASES + 1))
+lf=$(grep -n -m1 '^psql -f' "$CALLS_SAVED" | cut -d: -f1 || true)
+lr=$(grep -n '^mutex release$' "$CALLS_SAVED" | tail -n 1 | cut -d: -f1 || true)
+if [[ -n "$la" && -n "$lf" && -n "$lr" ]] && (( la < lf && lf < lr )) && [[ "$(grep -c '^mutex release$' "$CALLS_SAVED" || true)" == "1" ]]; then
+  pass "the write is serialized"
+else
+  fail "acquire=$la unit=$lf release=$lr log=[$x_log]"
+fi
+
+echo "G3-mutex-env: own state dir, a 600 s wait, and a reconcile identity"
+CASES=$((CASES + 1))
+if grep -qxF 'mutex env wait=600 state=dir identity=reconcile-local-pr501' "$CALLS_SAVED" \
+  || grep -qE '^mutex env wait=600 state=dir identity=reconcile-[0-9]+-pr501$' "$CALLS_SAVED"; then
+  pass "the writer outwaits a tenant-integration critical section"
+else
+  fail "mutex env wrong: [$(grep '^mutex env' "$CALLS_SAVED" || true)]"
+fi
+
+echo "G3-token: the unit runs with GH_TOKEN unset (PR-authored SQL never sees the GitHub token)"
+CASES=$((CASES + 1))
+if grep -qxF 'psql -f gh_token=' "$CALLS_SAVED"; then
+  pass "GH_TOKEN is removed from the psql environment"
+else
+  fail "psql -f saw GH_TOKEN: [$(grep '^psql -f' "$CALLS_SAVED" || true)]"
+fi
+
+echo "G3-exec-summary: executed summary, one notice per row, psql output fenced by stop-commands"
+CASES=$((CASES + 1))
+if grep -qxF 'ledger-discard: executed (pr=501 eligible=2 discarded=2 down=2 ledger-only=0)' <<<"$x_out" \
+  && grep -qxF "::notice::ledger-discard: discarded 302_wb.sql (applied blob $WB, down $WB_D) for PR #501" <<<"$x_out" \
+  && grep -qxF "::notice::ledger-discard: discarded 301_wa.sql (applied blob $WA, down $WA_D) for PR #501" <<<"$x_out" \
+  && grep -qE '^::stop-commands::[0-9a-f]{32}$' <<<"$x_out"; then
+  pass "a durable, parseable record of what was discarded"
+else
+  fail "summary wrong: $x_out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M20: two rows where the LOWER filename was applied LATER -> it comes first"
+CASES=$((CASES + 1))
+pr_start w502
+pr_commit 'w502' 303_wc.sql="WC" 303_wc.down.sql="DROP TABLE IF EXISTS wc;" 304_wd.sql="WD" 304_wd.down.sql="DROP TABLE IF EXISTS wd;"
+pr_publish 502 w502
+gh_reset; pr_json 502 "" closed w502
+wledger "303_wc.sql|$(blob_file WC)|$(ts 40)" "304_wd.sql|$(blob_file WD)|$(ts 30)"
+run_writer --pr 502 --execute
+l_c=$(payload_line "$(cas_of 303_wc.sql "$(blob_file WC)")"); l_d=$(payload_line "$(cas_of 304_wd.sql "$(blob_file WD)")")
+if [[ "$rc" == "0" && -n "$l_c" && -n "$l_d" ]] && (( l_c < l_d )); then
+  pass "applied_at DESC decides, filename only breaks ties"
+else
+  fail "expected 303 before 304; got rc=$rc c=$l_c d=$l_d out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M1: a name that is in main's history is never this PR's, while an eligible sibling IS written"
+CASES=$((CASES + 1))
+pr_start w503
+pr_commit 'w503' 128_x.sql="X503" 128_x.down.sql="DROP TABLE IF EXISTS x503;" 305_we.sql="WE" 305_we.down.sql="DROP TABLE IF EXISTS we;"
+pr_publish 503 w503
+gh_reset; pr_json 503 "" closed w503
+wledger "128_x.sql|$(blob_file X503)|$(ts 50)" "305_we.sql|$(blob_file WE)|$(ts 51)"
+run_writer --pr 503 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -qF "$(cas_of 305_we.sql "$(blob_file WE)")" "$PAYLOAD" \
+  && ! grep -qF "filename = '128_x.sql'" "$PAYLOAD" && ! grep -qF 'x503' "$PAYLOAD"; then
+  pass "base history owns 128_x.sql; the sibling is discarded"
+else
+  fail "expected only 305_we in the unit; got rc=$rc out=$out payload=[$(cat "$PAYLOAD")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M2: a same-named row at a blob this PR never carried is not this PR's, while a sibling IS written"
+CASES=$((CASES + 1))
+pr_start w504
+pr_commit 'w504' 306_wf.sql="WF-mine" 306_wf.down.sql="DROP TABLE IF EXISTS wf;" 307_wg.sql="WG" 307_wg.down.sql="DROP TABLE IF EXISTS wg;"
+pr_publish 504 w504
+gh_reset; pr_json 504 "" closed w504
+wledger "306_wf.sql|$(blob_file WF-other)|$(ts 60)" "307_wg.sql|$(blob_file WG)|$(ts 61)"
+run_writer --pr 504 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -qF "$(cas_of 307_wg.sql "$(blob_file WG)")" "$PAYLOAD" \
+  && ! grep -qF "filename = '306_wf.sql'" "$PAYLOAD"; then
+  pass "(F, B) must be in the PR's history, not just F"
+else
+  fail "expected only 307_wg; got rc=$rc out=$out payload=[$(cat "$PAYLOAD")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M3: three eligible rows, the LAST in execution order has a CONCURRENTLY down -> rc 1, zero writes; control writes one unit"
+CASES=$((CASES + 1))
+pr_start w505
+pr_commit 'w505' 308_h1.sql="H1" 308_h1.down.sql="DROP INDEX CONCURRENTLY IF EXISTS h1_idx;" 309_h2.sql="H2" 309_h2.down.sql="DROP TABLE IF EXISTS h2;" \
+  310_h3.sql="H3" 310_h3.down.sql="DROP TABLE IF EXISTS h3;"
+pr_publish 505 w505
+pr_start w506
+pr_commit 'w506' 311_i1.sql="I1" 311_i1.down.sql="DROP INDEX IF EXISTS i1_idx;" 312_i2.sql="I2" 312_i2.down.sql="DROP TABLE IF EXISTS i2;" \
+  313_i3.sql="I3" 313_i3.down.sql="DROP TABLE IF EXISTS i3;"
+pr_publish 506 w506
+gh_reset; pr_json 505 "" closed w505; pr_json 506 "" closed w506
+wledger "308_h1.sql|$(blob_file H1)|$(ts 70)" "309_h2.sql|$(blob_file H2)|$(ts 71)" "310_h3.sql|$(blob_file H3)|$(ts 72)"
+run_writer --pr 505 --execute
+r_bad=$rc; o_bad=$out; zw_bad=no; zero_writes && zw_bad=yes
+wledger "311_i1.sql|$(blob_file I1)|$(ts 70)" "312_i2.sql|$(blob_file I2)|$(ts 71)" "313_i3.sql|$(blob_file I3)|$(ts 72)"
+run_writer --pr 506 --execute
+if [[ "$r_bad" == "1" && "$zw_bad" == "yes" && "$rc" == "0" ]] && one_unit && grep -qF '308_h1.sql' <<<"$o_bad" && grep -qF 'reason=non-transactional' <<<"$o_bad"; then
+  pass "every refusal is decided before the first write"
+else
+  fail "expected refused (zero writes) then one unit; got bad=$r_bad zw=$zw_bad [$o_bad] control=$rc [$out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M6: DOPPLER_ENVIRONMENT=prd -> rc 2, the env message, zero psql calls"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501
+wledger "301_wa.sql|$WA|$(ts 10)" "302_wb.sql|$WB|$(ts 20)"
+W_ENV=prd run_writer --pr 501 --execute
+if [[ "$rc" == "2" && "$(n_log '^psql')" == "0" && "$(n_log '^mutex')" == "0" ]] && has "DOPPLER_ENVIRONMENT"; then
+  pass "never writes outside dev"
+else
+  fail "expected rc=2 env refusal with no psql; got rc=$rc out=$out log=[$(cat "$CALLLOG")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M7a: the mutex banner is CONTENDED_PROCEEDING -> rc 2 naming it, zero writes, a release call"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501
+DLR_FAKE_MUTEX_BANNER="DEV_SUITE_MUTEX_CONTENDED_PROCEEDING wait_ms=600000" run_writer --pr 501 --execute
+if [[ "$rc" == "2" ]] && zero_writes && [[ "$(n_log '^psql')" == "0" && "$(n_log '^mutex release$')" == "1" ]] && has "DEV_SUITE_MUTEX_CONTENDED_PROCEEDING"; then
+  pass "a fail-open mutex banner is not a lock"
+else
+  fail "expected rc=2 + release; got rc=$rc out=$out log=[$(cat "$CALLLOG")]"
+fi
+
+echo "G3-M7b: the mutex banner is UNAVAILABLE -> rc 2 naming it"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501
+DLR_FAKE_MUTEX_BANNER="DEV_SUITE_MUTEX_UNAVAILABLE reason=no_url" run_writer --pr 501 --execute
+if [[ "$rc" == "2" ]] && zero_writes && has "DEV_SUITE_MUTEX_UNAVAILABLE"; then
+  pass "an unusable mutex is not a lock either"
+else
+  fail "expected rc=2 naming UNAVAILABLE; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M8a: the author edited ONLY F.down.sql after apply -> the NEWER down body is used"
+CASES=$((CASES + 1))
+pr_start w507
+pr_commit 'w507 c1' 314_wj.sql="WJ" 314_wj.down.sql="-- jdown v1 older"
+pr_commit 'w507 c2' 314_wj.down.sql="-- jdown v2 newer"
+pr_publish 507 w507
+gh_reset; pr_json 507 "" closed w507
+wledger "314_wj.sql|$(blob_file WJ)|$(ts 75)"
+run_writer --pr 507 --execute
+if [[ "$rc" == "0" ]] && grep -qxF -- '-- jdown v2 newer' "$PAYLOAD" && ! grep -qF 'jdown v1' "$PAYLOAD"; then
+  pass "the pairing follows the last commit that still carried F at B"
+else
+  fail "expected the v2 down; got rc=$rc out=$out payload=[$(cat "$PAYLOAD")]"
+fi
+
+echo "G3-M8b: the author edited F AND F.down.sql after apply -> the OLDER down body is used"
+CASES=$((CASES + 1))
+pr_start w508
+pr_commit 'w508 c1' 315_wk.sql="WK1" 315_wk.down.sql="-- kdown v1 older"
+pr_commit 'w508 c2' 315_wk.sql="WK2" 315_wk.down.sql="-- kdown v2 newer"
+pr_publish 508 w508
+gh_reset; pr_json 508 "" closed w508
+wledger "315_wk.sql|$(blob_file WK1)|$(ts 76)"
+run_writer --pr 508 --execute
+if [[ "$rc" == "0" ]] && grep -qxF -- '-- kdown v1 older' "$PAYLOAD" && ! grep -qF 'kdown v2' "$PAYLOAD"; then
+  pass "the down paired with the APPLIED body, not the latest one"
+else
+  fail "expected the v1 down; got rc=$rc out=$out payload=[$(cat "$PAYLOAD")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M9: a down blob whose bytes do not hash to its id -> rc 2, zero psql calls"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501
+wledger "301_wa.sql|$WA|$(ts 10)" "302_wb.sql|$WB|$(ts 20)"
+export DLR_GH_BLOB_CORRUPT=1
+run_writer --pr 501 --execute
+unset DLR_GH_BLOB_CORRUPT
+if [[ "$rc" == "2" && "$(n_log '^psql')" == "0" ]] && zero_writes; then
+  pass "a body is verified against its id before it can reach psql"
+else
+  fail "expected rc=2 with no psql; got rc=$rc out=$out log=[$(cat "$CALLLOG")]"
+fi
+
+# ---------- PR 509: a CASCADE down ----------
+pr_start w509
+pr_commit 'w509' 316_wl.sql="WL" 316_wl.down.sql="DROP TABLE IF EXISTS wl CASCADE;"
+pr_publish 509 w509
+WL=$(blob_file WL)
+
+echo "G3-M10a: a CASCADE down while a later FOREIGN row exists -> rc 1, zero writes, the later row listed"
+CASES=$((CASES + 1))
+gh_reset; pr_json 509 "" closed w509
+wledger "316_wl.sql|$WL|$(ts 80)" "399_foreign.sql|$(blob_file FOREIGN)|$(ts 81)"
+run_writer --pr 509 --execute
+m10a_rc=$rc; m10a_log=$(cat "$CALLLOG"); m10a_left=$(find "$WRT" -mindepth 1 -maxdepth 1 | head -n 5)
+if [[ "$rc" == "1" ]] && zero_writes && grep -qxF "later-row 399_foreign.sql $(ts 81)" <<<"$out" && grep -qF 'reason=later-row' <<<"$out"; then
+  pass "a CASCADE cannot reach a later row's objects"
+else
+  fail "expected rc=1 later-row refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-M14: a refused run after acquire still releases the mutex AND removes its temp dirs (composed EXIT trap)"
+CASES=$((CASES + 1))
+if [[ "$m10a_rc" == "1" && -z "$m10a_left" ]] && [[ "$(grep -c '^mutex release$' <<<"$m10a_log" || true)" == "1" ]]; then
+  pass "the writer's trap releases, then the guard's cleanup and its own temp removal run"
+else
+  fail "trap composition broken: rc=$m10a_rc leftover=[$m10a_left] log=[$m10a_log]"
+fi
+
+echo "G3-M10b: the same CASCADE down with NO later row -> written (no over-refusal)"
+CASES=$((CASES + 1))
+gh_reset; pr_json 509 "" closed w509
+wledger "316_wl.sql|$WL|$(ts 80)"
+run_writer --pr 509 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -qxF 'DROP TABLE IF EXISTS wl CASCADE;' "$PAYLOAD"; then
+  pass "later-row safety fires only when a later row exists"
+else
+  fail "expected written; got rc=$rc out=$out"
+fi
+
+echo "G3-M10c: the same body + a later row + --allow-later-rows -> written"
+CASES=$((CASES + 1))
+gh_reset; pr_json 509 "" closed w509
+wledger "316_wl.sql|$WL|$(ts 80)" "399_foreign.sql|$(blob_file FOREIGN)|$(ts 81)"
+run_writer --pr 509 --execute --allow-later-rows
+if [[ "$rc" == "0" ]] && one_unit && grep -qxF 'DROP TABLE IF EXISTS wl CASCADE;' "$PAYLOAD"; then
+  pass "the human override after a dry run is honoured"
+else
+  fail "expected written with the override; got rc=$rc out=$out"
+fi
+
+echo "G3-M10d: a CREATE OR REPLACE FUNCTION down while a later MAIN row exists -> rc 1"
+CASES=$((CASES + 1))
+pr_start w510
+pr_commit 'w510' 317_wm.sql="WM" 317_wm.down.sql='CREATE OR REPLACE FUNCTION public.wm() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;'
+pr_publish 510 w510
+gh_reset; pr_json 510 "" closed w510
+wledger_raw "001_a.sql|$(blob_of A)|20260101000000000001" "002_b.sql|$(blob_of B)|20260101000000000002" \
+  "130_y.sql|$(blob_of Y)|$(ts 91)" "131_x.sql|$(blob_of X)|20260101000000000004" "317_wm.sql|$(blob_file WM)|$(ts 90)"
+run_writer --pr 510 --execute
+if [[ "$rc" == "1" ]] && zero_writes && grep -qxF "later-row 130_y.sql $(ts 91)" <<<"$out"; then
+  pass "a redefinition cannot silently revert main's later definition"
+else
+  fail "expected rc=1; got rc=$rc out=$out"
+fi
+
+echo "G3-M11: two later rows, the first the PR's own and the second foreign -> rc 1"
+CASES=$((CASES + 1))
+pr_start w511
+pr_commit 'w511' 318_wn.sql="WN" 318_wn.down.sql="DROP TABLE IF EXISTS wn CASCADE;" 319_wo.sql="WO" 319_wo.down.sql="DROP TABLE IF EXISTS wo;"
+pr_publish 511 w511
+gh_reset; pr_json 511 "" closed w511
+wledger "318_wn.sql|$(blob_file WN)|$(ts 100)" "319_wo.sql|$(blob_file WO)|$(ts 101)" "398_foreign2.sql|$(blob_file F2)|$(ts 102)"
+run_writer --pr 511 --execute
+if [[ "$rc" == "1" ]] && zero_writes && grep -qxF "later-row 398_foreign2.sql $(ts 102)" <<<"$out" && ! grep -qF 'later-row 319_wo.sql' <<<"$out"; then
+  pass "every later row is checked, the PR's own excluded"
+else
+  fail "expected rc=1 naming 398_foreign2 only; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M15a: a down wrapped in BEGIN; ... COMMIT; -> written with the wrapper stripped"
+CASES=$((CASES + 1))
+pr_start w512
+pr_commit 'w512' 320_wp.sql="WP" 320_wp.down.sql=$'-- header\nBEGIN;\nDROP TABLE IF EXISTS wp;\nCOMMIT;'
+pr_publish 512 w512
+gh_reset; pr_json 512 "" closed w512
+wledger "320_wp.sql|$(blob_file WP)|$(ts 110)"
+run_writer --pr 512 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -qxF 'DROP TABLE IF EXISTS wp;' "$PAYLOAD" && ! grep -qixE '[[:space:]]*(BEGIN|COMMIT);[[:space:]]*' "$PAYLOAD"; then
+  pass "a single wrapping transaction is self-service"
+else
+  fail "expected written without the wrapper; got rc=$rc out=$out payload=[$(cat "$PAYLOAD")]"
+fi
+
+echo "G3-M15b: a mid-body COMMIT; -> rc 1, zero writes"
+CASES=$((CASES + 1))
+pr_start w513
+pr_commit 'w513' 321_wq.sql="WQ" 321_wq.down.sql=$'DROP TABLE IF EXISTS wq1;\nCOMMIT;\nDROP TABLE IF EXISTS wq2;'
+pr_publish 513 w513
+gh_reset; pr_json 513 "" closed w513
+wledger "321_wq.sql|$(blob_file WQ)|$(ts 111)"
+run_writer --pr 513 --execute
+if [[ "$rc" == "1" ]] && zero_writes && grep -qF 'reason=transaction-control' <<<"$out"; then
+  pass "only a WRAPPING pair is normalized"
+else
+  fail "expected rc=1 transaction-control; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M16: --require-closed re-reads the PR AFTER acquire; closed->open -> skipped, zero writes"
+CASES=$((CASES + 1))
+pr_start w514
+pr_commit 'w514' 322_ws2.sql="WS2" 322_ws2.down.sql="DROP TABLE IF EXISTS ws2;"
+pr_publish 514 w514
+gh_reset; pr_json 514 1 closed w514; pr_json 514 2 open w514
+wledger "322_ws2.sql|$(blob_file WS2)|$(ts 112)"
+run_writer --pr 514 --execute --require-closed
+la=$(first_line '^mutex acquire$'); lp=$(last_line '^gh pulls/514$')
+if [[ "$rc" == "0" ]] && zero_writes && grep -qxF 'ledger-discard: skipped (pr=514 reopened)' <<<"$out" \
+  && [[ "$(n_log '^gh pulls/514$')" == "2" && -n "$la" && -n "$lp" ]] && (( la < lp )); then
+  pass "a reopen that wins the race stops the close-time discard"
+else
+  fail "expected skipped with the re-read after acquire; got rc=$rc out=$out log=[$(cat "$CALLLOG")]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M17: a down body with a psql meta-command (\\!) -> rc 1, ZERO psql calls, no shell ran"
+CASES=$((CASES + 1))
+SENT="$tmp/sentinel-515"
+rm -f "$SENT"
+pr_start w515
+pr_commit 'w515' 323_wr.sql="WR" 323_wr.down.sql="\\! touch $SENT"
+pr_publish 515 w515
+gh_reset; pr_json 515 "" closed w515
+wledger "323_wr.sql|$(blob_file WR)|$(ts 113)"
+run_writer --pr 515 --execute
+if [[ "$rc" == "1" && "$(n_log '^psql')" == "0" && ! -e "$SENT" ]] && grep -qF 'reason=backslash' <<<"$out"; then
+  pass "PR text never reaches a shell"
+else
+  fail "expected rc=1 with no psql call; got rc=$rc sentinel=$([[ -e "$SENT" ]] && echo present || echo absent) out=$out"
+fi
+
+echo "G3-M18: a down restoring a plpgsql function (BEGIN/END inside \$\$) -> written"
+CASES=$((CASES + 1))
+pr_start w516
+pr_commit 'w516' 324_wfn.sql="WFN" 324_wfn.down.sql=$'CREATE OR REPLACE FUNCTION public.wfn() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n  PERFORM 1;\nEND;\n$$;'
+pr_publish 516 w516
+gh_reset; pr_json 516 "" closed w516
+wledger "324_wfn.sql|$(blob_file WFN)|$(ts 114)"
+run_writer --pr 516 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -qxF '  PERFORM 1;' "$PAYLOAD"; then
+  pass "refusals match the stripped view, not raw text"
+else
+  fail "expected written; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M21: an OPEN PR's rows are written only for its author (bob refused, alice written)"
+CASES=$((CASES + 1))
+pr_start w517
+pr_commit 'w517' 325_wt.sql="WT" 325_wt.down.sql="DROP TABLE IF EXISTS wt;"
+pr_publish 517 w517
+gh_reset; pr_json 517 "" open w517 alice
+wledger "325_wt.sql|$(blob_file WT)|$(ts 115)"
+run_writer --pr 517 --execute --actor bob
+r_bob=$rc; o_bob=$out; zw_bob=no; zero_writes && zw_bob=yes
+gh_reset; pr_json 517 "" open w517 alice
+run_writer --pr 517 --execute --actor alice
+if [[ "$r_bob" == "1" && "$zw_bob" == "yes" && "$rc" == "0" ]] && one_unit && grep -qF 'reason=open-author' <<<"$o_bob"; then
+  pass "only the author can discard an open PR's rows"
+else
+  fail "expected bob refused, alice written; got bob=$r_bob zw=$zw_bob [$o_bob] alice=$rc [$out]"
+fi
+
+echo "G3-M22: an OPEN PR's eligible row with no .down.sql -> rc 1 even for the author"
+CASES=$((CASES + 1))
+pr_start w518
+pr_commit 'w518' 326_wu.sql="WU"
+pr_publish 518 w518
+gh_reset; pr_json 518 "" open w518 alice
+wledger "326_wu.sql|$(blob_file WU)|$(ts 116)"
+run_writer --pr 518 --execute --actor alice
+if [[ "$rc" == "1" ]] && zero_writes && grep -qF 'reason=open-ledger-only' <<<"$out"; then
+  pass "no discard-then-re-apply residue on an open PR"
+else
+  fail "expected rc=1 open-ledger-only; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-deleted: a closed PR whose branch was DELETED (only refs/pull/N/head) is reconcilable"
+CASES=$((CASES + 1))
+pr_start w519
+pr_commit 'w519' 327_wv.sql="WV" 327_wv.down.sql="DROP TABLE IF EXISTS wv;"
+pr_publish 519 w519 delete
+gh_reset; pr_json 519 "" closed w519
+wledger "327_wv.sql|$(blob_file WV)|$(ts 117)"
+run_writer --pr 519 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -qF "$(cas_of 327_wv.sql "$(blob_file WV)")" "$PAYLOAD"; then
+  pass "refs/pull/N/head survives branch deletion"
+else
+  fail "expected written; got rc=$rc out=$out"
+fi
+
+echo "G3-ledger-only: a closed PR's row with no .down.sql -> CAS only, residue ::warning::, ledger-only=1"
+CASES=$((CASES + 1))
+pr_start w520
+pr_commit 'w520' 328_ww2.sql="WW2"
+pr_publish 520 w520
+gh_reset; pr_json 520 "" closed w520
+wledger "328_ww2.sql|$(blob_file WW2)|$(ts 118)"
+run_writer --pr 520 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -qF "$(cas_of 328_ww2.sql "$(blob_file WW2)")" "$PAYLOAD" \
+  && grep -qxF "::warning::ledger-discard: 328_ww2.sql has no .down.sql paired with applied blob $(blob_file WW2); objects its body created stay on dev" <<<"$out" \
+  && grep -qxF 'ledger-discard: executed (pr=520 eligible=1 discarded=1 down=0 ledger-only=1)' <<<"$out"; then
+  pass "the operator's direction: discard the row, disclose the residue"
+else
+  fail "expected a ledger-only discard with the residue warning; got rc=$rc out=$out"
+fi
+
+echo "G3-nothing: a PR whose history carries no migration -> nothing to do, no mutex, no psql"
+CASES=$((CASES + 1))
+git -C "$SEED" switch -q -C w521 main
+printf 'docs\n' > "$SEED/README-521.md"
+git -C "$SEED" add -A && git -C "$SEED" commit -qm 'w521 docs only'
+pr_publish 521 w521
+gh_reset; pr_json 521 "" closed w521
+run_writer --pr 521 --execute
+if [[ "$rc" == "0" && "$(n_log '^mutex')" == "0" && "$(n_log '^psql')" == "0" ]] && grep -qxF 'ledger-discard: nothing to do (pr=521)' <<<"$out"; then
+  pass "a git-only early exit before any database contact"
+else
+  fail "expected nothing to do; got rc=$rc out=$out log=[$(cat "$CALLLOG")]"
+fi
+
+echo "G3-fork: a fork PR, or a null head.repo -> rc 1 (fork PRs never applied to dev)"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501 fixture-author someone/fork
+wledger "301_wa.sql|$WA|$(ts 10)" "302_wb.sql|$WB|$(ts 20)"
+run_writer --pr 501 --execute; r1=$rc; o1=$out
+gh_reset; pr_json 501 "" closed w501 fixture-author null
+run_writer --pr 501 --execute; r2=$rc
+if [[ "$r1$r2" == "11" && "$(n_log '^psql')" == "0" ]] && grep -qF 'reason=fork' <<<"$o1" && has 'reason=fork'; then
+  pass "fork heads are refused before git or the database"
+else
+  fail "expected rc=1 twice; got $r1/$r2 [$o1] [$out]"
+fi
+
+echo "G3-headsha: the API head.sha differs from refs/pull/N/head -> rc 2 (a push landed between reads)"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501 fixture-author "" "$(git -C "$ORIGIN" rev-parse refs/heads/main)"
+run_writer --pr 501 --execute
+if [[ "$rc" == "2" && "$(n_log '^psql')" == "0" ]] && zero_writes; then
+  pass "facts from two reads must agree"
+else
+  fail "expected rc=2; got rc=$rc out=$out"
+fi
+
+# ---------- PR 523: independent vs inherited holders ----------
+pr_start w523
+pr_commit 'w523' 329_wx.sql="WX" 329_wx.down.sql="DROP TABLE IF EXISTS wx;"
+pr_publish 523 w523
+
+echo "G3-indep: another fresh branch that added F at B independently -> not this PR's row (eligible=0)"
+CASES=$((CASES + 1))
+branch w523-indep main "" 329_wx.sql="WX"
+gh_reset; pr_json 523 "" closed w523
+wledger "329_wx.sql|$(blob_file WX)|$(ts 120)"
+run_writer --pr 523 --execute
+git -C "$SEED" push -q origin --delete w523-indep
+if [[ "$rc" == "0" ]] && zero_writes && grep -qxF 'ledger-discard: nothing to do (pr=523)' <<<"$out"; then
+  pass "an independent holder owns the row"
+else
+  fail "expected nothing to do; got rc=$rc out=$out"
+fi
+
+echo "G3-stacked: a branch STACKED on the PR (inherited F) does not protect F; it is named"
+CASES=$((CASES + 1))
+git -C "$SEED" switch -q -C w523-stack "$(git -C "$ORIGIN" rev-parse refs/pull/523/head)"
+put "$SEED" 330_child.sql "CHILD523"
+git -C "$SEED" add -A && git -C "$SEED" commit -qm 'stacked child'
+git -C "$SEED" push -q -f origin HEAD:refs/heads/w523-stack
+git -C "$SEED" switch -q main
+gh_reset; pr_json 523 "" closed w523
+run_writer --pr 523 --execute
+git -C "$SEED" push -q origin --delete w523-stack
+if [[ "$rc" == "0" ]] && one_unit && grep -qxF 'stacked w523-stack 329_wx.sql' <<<"$out"; then
+  pass "an inherited holder is not an owner; its next CI run re-applies F"
+else
+  fail "expected written + stacked line; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-timeout: a lock timeout inside the unit (SQLSTATE 55P03) -> rc 2"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501
+wledger "301_wa.sql|$WA|$(ts 10)" "302_wb.sql|$WB|$(ts 20)"
+DLR_FAKE_UNIT_RC=3 DLR_FAKE_UNIT_OUT=$'psql:/x/unit.sql:5: ERROR:  55P03: canceling statement due to lock timeout\n' run_writer --pr 501 --execute
+if [[ "$rc" == "2" ]] && has "timed out" && ! grep -q '^::notice::ledger-discard: discarded' <<<"$out"; then
+  pass "a timeout is cannot-measure, nothing claimed as discarded"
+else
+  fail "expected rc=2 on a lock timeout; got rc=$rc out=$out"
+fi
+
+echo "G3-unitfail: a failing statement -> rc 1 naming the row's file; PR-authored output stays fenced"
+CASES=$((CASES + 1))
+gh_reset; pr_json 501 "" closed w501
+DLR_FAKE_UNIT_RC=3 DLR_FAKE_UNIT_FAIL_AT="DROP TABLE IF EXISTS wa;" DLR_FAKE_UNIT_OUT=$'NOTICE:  00000: ::error::pwned-by-sql\n' run_writer --pr 501 --execute
+if [[ "$rc" == "1" ]] && grep -qE '^::error::ledger-discard: the unit failed at 301_wa\.sql ' <<<"$out" && ! grep -qE '^::error::pwned' <<<"$out" \
+  && grep -qE '^    NOTICE:  00000: ::error::pwned-by-sql$' <<<"$out" && ! grep -q '^::notice::ledger-discard: discarded' <<<"$out"; then
+  pass "the failure is named from the writer's own text; psql output is indented inside stop-commands"
+else
+  fail "expected rc=1 with fenced psql output; got rc=$rc out=$out"
+fi
+
+echo "G3-early-reopen: --require-closed on a PR that is already open -> skipped before the mutex"
+CASES=$((CASES + 1))
+gh_reset; pr_json 514 "" open w514
+run_writer --pr 514 --execute --require-closed
+if [[ "$rc" == "0" && "$(n_log '^mutex')" == "0" ]] && zero_writes && grep -qxF 'ledger-discard: skipped (pr=514 reopened)' <<<"$out"; then
+  pass "a close event that raced a reopen is a no-op, not a refusal"
+else
+  fail "expected skipped; got rc=$rc out=$out"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-M12: the guard's only psql call site is the fixed -c \"\$LEDGER_SQL\" read (no write path in the guard)"
+CASES=$((CASES + 1))
+g_sites=$(grep -E '^[^#]*\bpsql\b' "$GUARD_SRC" | grep -vE '^\s*#|command -v psql|psql not found|psql rc=|psql stderr|\(psql' || true)
+if [[ "$(grep -c . <<<"$g_sites" || true)" == "1" ]] && grep -qF -- '-c "$LEDGER_SQL"' <<<"$g_sites" && ! grep -qE -- '(^|[[:space:]])(-f|--file)([[:space:]]|=)' <<<"$g_sites"; then
+  pass "the guard stays read-only"
+else
+  fail "guard psql call sites: [$g_sites]"
+fi
+
+echo "G3-M13a: sourcing the guard (from inside a function) with DLP_AS_LIBRARY=1 prints nothing, does not exit, and leaves its arrays global"
+CASES=$((CASES + 1))
+set +e
+lib_out=$(bash -c 'load() { DLP_AS_LIBRARY=1; source "$1"; }; load "$1"; echo "after-source"; declare -p OWN_ON_BASE OWN_EVER >/dev/null 2>&1 && echo arrays-global' _ "$GUARD" 2>&1)
+lib_rc=$?
+set -e
+if [[ "$lib_rc" == "0" && "$lib_out" == "after-source"$'\n'"arrays-global" ]]; then
+  pass "library mode runs no dispatch"
+else
+  fail "library mode leaked: rc=$lib_rc out=[$lib_out]"
+fi
+
+echo "G3-M13b: executing the guard with DLP_AS_LIBRARY=1 -> rc 2 and the error line"
+CASES=$((CASES + 1))
+set +e
+lib_out=$(DLP_AS_LIBRARY=1 bash "$GUARD" classify-missing --base-branch main --repo "$WORK" </dev/null 2>&1)
+lib_rc=$?
+set -e
+if [[ "$lib_rc" == "2" ]] && grep -qxF '::error::dev-ledger-parity: DLP_AS_LIBRARY is set on a direct run' <<<"$lib_out"; then
+  pass "a misconfigured direct run is loud"
+else
+  fail "expected rc=2 + error; got rc=$lib_rc out=[$lib_out]"
+fi
+
+# ----------------------------------------------------------------------
+echo "G3-refusal-sets: the stripped-view refusal step over every .down.sql on main matches the pinned sets"
+CASES=$((CASES + 1))
+DOWN_DIR="$REPO_ROOT/$MDIR"
+mapfile -t DOWNS < <(find "$DOWN_DIR" -maxdepth 1 -name '*.down.sql' | LC_ALL=C sort)
+set +e
+scan=$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "${DOWNS[@]}" 2>&1)
+scan_rc=$?
+set -e
+set_of() { awk -F'\t' -v c="$1" '{ n = split($2, a, ","); for (i = 1; i <= n; i++) if (a[i] == c) print $1 }' <<<"$scan" | LC_ALL=C sort | tr '\n' ' '; }
+got_txn=$(set_of transaction-control); got_nontx=$(set_of non-transactional); got_later=$(set_of later-row-sensitive)
+got_bs=$(set_of backslash); got_unp=$(set_of unparseable)
+# The pinned sets (the stored value of this guard). Measured 2026-09-23 over 95 files:
+# every top-level BEGIN;/COMMIT; on main is ONE wrapping pair, which the writer
+# normalizes away, so no file is transaction-control; 132_drop_unused_indexes.down.sql
+# mentions CONCURRENTLY only in a comment, so no file is non-transactional; the
+# later-row-sensitive set is every CASCADE / CREATE OR REPLACE / policy / grant /
+# ALTER FUNCTION down. A change here must be a reviewed diff of these literals.
+PIN_TXN=""
+PIN_NONTX=""
+PIN_LATER=$(tr '\n' ' ' <<'LIST'
+051_action_class_widening_and_action_sends.down.sql
+053_organizations_and_workspace_members.down.sql
+058_workspace_member_attestations.down.sql
+059_workspace_keyed_rls_sweep.down.sql
+060_current_organization_jwt_hook.down.sql
+061_byok_audit_workspace_id_rpcs.down.sql
+062_workspace_member_removals_and_remove_rpc_update.down.sql
+063_post_workspace_rpc_repair.down.sql
+064_anonymise_scope_grants_workspace_id_and_member_actions_grant.down.sql
+064_byok_delegations.down.sql
+065_art17_cascade_deadlock_repair.down.sql
+066_audit_byok_use_art17_carveout.down.sql
+068_attachments_workspace_shared.down.sql
+068_jti_deny_rls_predicate_and_revoke_rpc.down.sql
+069_jti_deny_grant_restore.down.sql
+071_ux_audit_artifacts_bucket.down.sql
+072_workspace_member_actions_workspace_id_set_null.down.sql
+075_conversation_visibility.down.sql
+075_transfer_workspace_ownership.down.sql
+076_invitation_invitee_identity_check.down.sql
+076_workspace_activity.down.sql
+077_kb_files_metadata.down.sql
+079_workspace_repo_ownership_schema.down.sql
+081_anonymise_null_workspace_installation.down.sql
+083_byok_delegation_consent_gate.down.sql
+084_byok_delegation_withdrawals.down.sql
+085_revoke_workspace_invitation.down.sql
+087_worm_bypass_privilege_independence.down.sql
+088_worm_bypass_non_erasure_rpcs.down.sql
+089_template_auto_revoke_carveout.down.sql
+090_fix_accept_invitation_attestation_overwrite.down.sql
+091_rename_organization_and_default_names.down.sql
+092_transfer_ownership_caller_override.down.sql
+093_acquire_slot_workspace_id.down.sql
+094_member_rpc_caller_override_and_byok_cap_update.down.sql
+098_workspace_logos.down.sql
+110_workspace_repo_error_and_comember_reconcile.down.sql
+111_email_triage_items_workspace_shared.down.sql
+112_drop_legacy_users_repo_columns.down.sql
+113_set_repo_status_writes_workspace_repo_error.down.sql
+114_disk_io_top_wal_statements.down.sql
+120_routine_run_progress.down.sql
+121_byok_cap_trip_from_found.down.sql
+126_beta_crm.down.sql
+127_beta_crm_access_log.down.sql
+128_revoke_definer_rpc_residual_grants.down.sql
+129_rls_write_check_workspace_member.down.sql
+130_authorize_template_grant_ownership_guard.down.sql
+133_heartbeat_threshold_backoff.down.sql
+137_byok_cap_breach_audit_row.down.sql
+LIST
+)
+if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \
+  && "$got_txn" == "$PIN_TXN" && "$got_nontx" == "$PIN_NONTX" && "$got_later" == "$PIN_LATER" && -z "$got_bs" && -z "$got_unp" ]]; then
+  pass "refusal sets over ${#DOWNS[@]} down files unchanged"
+else
+  fail "refusal sets drifted (update the pinned literal in review): rc=$scan_rc files=${#DOWNS[@]}
+    txn=[$got_txn]
+    nontx=[$got_nontx]
+    later=[$got_later]
+    backslash=[$got_bs] unparseable=[$got_unp]"
+fi
+
+echo "== Guard 4: .github/workflows/dev-ledger-reconcile.yml wiring =="
+
+RW="$REPO_ROOT/.github/workflows/dev-ledger-reconcile.yml"
+# rw_static <workflow> <check> — one line per broken property of that check, read from
+# the PARSED YAML (a comment can never satisfy or trip a check). Any check on a file
+# with zero jobs or zero steps reports "0 steps parsed".
+rw_static() {
+  python3 - "$1" "$2" <<'PY'
+import re, sys, yaml
+try:
+    doc = yaml.safe_load(open(sys.argv[1])) or {}
+except Exception as e:
+    print(f"unparseable: {type(e).__name__}"); sys.exit(0)
+check, bad = sys.argv[2], []
+jobs = doc.get("jobs") or {}
+steps = [(jn, st) for jn, j in jobs.items() for st in ((j or {}).get("steps") or [])]
+if not jobs or not steps:
+    print("0 steps parsed"); sys.exit(0)
+def strings(node):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from strings(k); yield from strings(v)
+    elif isinstance(node, list):
+        for v in node: yield from strings(v)
+    elif isinstance(node, str):
+        yield node
+runs = [st.get("run", "") for _, st in steps if "run" in st]
+job = jobs.get("reconcile") or {}
+if check == "checkout":
+    cos = [st for _, st in steps if str(st.get("uses", "")).startswith("actions/checkout@")]
+    if not cos: bad.append("no checkout step")
+    for st in cos:
+        w = st.get("with") or {}
+        if "ref" in w: bad.append("a checkout step carries a ref: key")
+        if w.get("persist-credentials") is not False: bad.append("checkout persists credentials")
+elif check == "secrets":
+    for s in strings(doc):
+        for name in re.findall(r"secrets\.([A-Za-z0-9_]+)", s):
+            if name != "DOPPLER_TOKEN_DEV_SCHEDULED": bad.append(f"secret {name} referenced")
+        if re.search(r"DOPPLER_TOKEN_PRD", s): bad.append("a prd Doppler token is named")
+    for r in runs:
+        for m in re.finditer(r"doppler\b[^\n]*?(?:\s-c|\s--config)[\s=]+([A-Za-z0-9_]+)", r):
+            if m.group(1) != "dev_scheduled": bad.append(f"doppler config {m.group(1)}")
+        if re.search(r"(?:\s-c|--config)[\s=]+prd", r): bad.append("-c prd in a run body")
+elif check == "ifclause":
+    cond = " ".join(str(job.get("if", "")).split())
+    for want in ("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+                 "github.event_name == 'pull_request_target'",
+                 "github.event.pull_request.merged == false",
+                 "github.event.pull_request.head.repo.full_name == github.repository"):
+        if want not in cond: bad.append(f"job if lacks: {want}")
+elif check == "injection":
+    for r in runs:
+        if "${{" in r: bad.append("an expression is interpolated into a run: body")
+elif check == "issueif":
+    iss = [st for _, st in steps if st.get("id") == "issue"]
+    if len(iss) != 1: bad.append(f"expected one step id: issue, got {len(iss)}")
+    else:
+        cond = " ".join(str(iss[0].get("if", "")).split())
+        for want in ("always()", "github.event_name == 'pull_request_target'", "job.status == 'failure'",
+                     "steps.reconcile.outcome != 'success'"):
+            if want not in cond: bad.append(f"issue step if lacks: {want}")
+elif check == "triggers":
+    on = doc.get("on", doc.get(True)) or {}
+    wd = (on.get("workflow_dispatch") or {}).get("inputs") or {}
+    if (wd.get("pr") or {}).get("required") is not True: bad.append("input pr is not required")
+    for k in ("execute", "allow_later_rows"):
+        i = wd.get(k) or {}
+        if i.get("type") != "boolean" or i.get("default") is not False: bad.append(f"input {k} is not a boolean defaulting to false")
+    prt = on.get("pull_request_target") or {}
+    if prt.get("types") != ["closed"] or prt.get("branches") != ["main"]: bad.append("pull_request_target is not types [closed] on main")
+    if set(on) - {"workflow_dispatch", "pull_request_target"}: bad.append(f"extra triggers {sorted(set(on))}")
+    if doc.get("permissions") != {"contents": "read"}: bad.append("top-level permissions are not contents: read")
+    if job.get("permissions") != {"contents": "read", "pull-requests": "read", "issues": "write"}: bad.append("job permissions drifted")
+    if "concurrency" in doc or "concurrency" in job: bad.append("a concurrency group appeared")
+    for _, st in steps:
+        if "continue-on-error" in st: bad.append("a continue-on-error step appeared")
+else:
+    bad.append(f"unknown check {check}")
+print("\n".join(bad))
+PY
+}
+rw_mutant() { file_mutant "$RW" "$tmp/rw-mut.yml" "$1"; }
+
+# ----------------------------------------------------------------------
+echo "G4-0: the real workflow satisfies every static check (checkout, secrets, if, injection, issue if, triggers)"
+CASES=$((CASES + 1))
+rw_all=""
+for c in checkout secrets ifclause injection issueif triggers; do rw_all+=$(rw_static "$RW" "$c"); done
+if [[ -z "$rw_all" ]]; then pass "wiring intact"; else fail "reconcile workflow wiring broken: $rw_all"; fi
+
+echo "G4-M1: the checkout gains a ref: key -> RED"
+CASES=$((CASES + 1))
+rw_mutant '
+t = "          persist-credentials: false\n"
+assert s.count(t) == 1
+s = s.replace(t, t + "          ref: ${{ github.event.pull_request.head.sha }}\n", 1)
+'
+if [[ -n "$(rw_static "$tmp/rw-mut.yml" checkout)" ]]; then pass "a PR-head checkout is seen"; else fail "a ref: on checkout went unseen"; fi
+
+echo "G4-M2: a prd Doppler token or -c prd appears -> RED (each)"
+CASES=$((CASES + 1))
+rw_mutant '
+t = "secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}"
+assert s.count(t) >= 1
+s = s.replace(t, "secrets.DOPPLER_TOKEN_PRD }}", 1)
+'
+r1=$(rw_static "$tmp/rw-mut.yml" secrets)
+rw_mutant '
+t = "doppler run -p soleur -c dev_scheduled --"
+assert s.count(t) == 1
+s = s.replace(t, "doppler run -p soleur -c prd --", 1)
+'
+r2=$(rw_static "$tmp/rw-mut.yml" secrets)
+if [[ -n "$r1" && -n "$r2" ]]; then pass "the secret scope is dev only"; else fail "prd scope went unseen: [$r1] [$r2]"; fi
+
+echo "G4-M3: the fork clause is dropped from the job if: -> RED"
+CASES=$((CASES + 1))
+rw_mutant '
+t = " && github.event.pull_request.head.repo.full_name == github.repository"
+assert s.count(t) == 1
+s = s.replace(t, "", 1)
+'
+if [[ -n "$(rw_static "$tmp/rw-mut.yml" ifclause)" ]]; then pass "fork PRs stay excluded"; else fail "the fork clause drop went unseen"; fi
+
+echo "G4-M4: the dispatch clause loses github.ref == refs/heads/main -> RED"
+CASES=$((CASES + 1))
+rw_mutant '
+t = " && github.ref == '"'"'refs/heads/main'"'"'"
+assert s.count(t) == 1
+s = s.replace(t, "", 1)
+'
+if [[ -n "$(rw_static "$tmp/rw-mut.yml" ifclause)" ]]; then pass "dispatch runs only main's copy"; else fail "a dispatch off main went unseen"; fi
+
+echo "G4-M5: \${{ inputs.* }} or \${{ github.event.* }} inside a run: body -> RED (each)"
+CASES=$((CASES + 1))
+rw_mutant '
+t = "          set -uo pipefail\n"
+assert s.count(t) >= 1
+s = s.replace(t, t + "          echo \"pr=${{ inputs.pr }}\"\n", 1)
+'
+r1=$(rw_static "$tmp/rw-mut.yml" injection)
+rw_mutant '
+t = "          set -uo pipefail\n"
+assert s.count(t) >= 1
+i = s.rindex(t)
+s = s[:i] + t + "          echo \"${{ github.event.pull_request.title }}\"\n" + s[i + len(t):]
+'
+r2=$(rw_static "$tmp/rw-mut.yml" injection)
+if [[ -n "$r1" && -n "$r2" ]]; then pass "PR/input text reaches run: bodies only via env"; else fail "interpolation went unseen: [$r1] [$r2]"; fi
+
+echo "G4-M7: the issue step's if: narrows to the reconcile outcome only -> RED"
+CASES=$((CASES + 1))
+rw_mutant '
+t = "job.status == '"'"'failure'"'"' || "
+assert s.count(t) == 1
+s = s.replace(t, "", 1)
+'
+if [[ -n "$(rw_static "$tmp/rw-mut.yml" issueif)" ]]; then pass "a failure before the reconcile step still files the issue"; else fail "the narrowed issue if: went unseen"; fi
+
+echo "G4-trig: triggers, input defaults, permissions; a dispatch input defaulting to execute -> RED"
+CASES=$((CASES + 1))
+rw_mutant '
+import re
+m = re.search(r"(      execute:\n(?:        .*\n)*?        default: )false\n", s)
+assert m
+s = s[:m.start()] + m.group(1) + "true\n" + s[m.end():]
+'
+if [[ -n "$(rw_static "$tmp/rw-mut.yml" triggers)" ]]; then pass "a dispatch never defaults to a write"; else fail "execute defaulting to true went unseen"; fi
+
+echo "G4-H1: a workflow that parses to zero steps -> every check reports '0 steps parsed'"
+CASES=$((CASES + 1))
+printf 'name: x\non: {workflow_dispatch: {}}\njobs: {}\n' > "$tmp/rw-empty.yml"
+h_all=""
+for c in checkout secrets ifclause injection issueif triggers; do h_all+="$(rw_static "$tmp/rw-empty.yml" "$c")|"; done
+if [[ "$h_all" == "0 steps parsed|0 steps parsed|0 steps parsed|0 steps parsed|0 steps parsed|0 steps parsed|" ]]; then
+  pass "an empty parse is never a clean bill"
+else
+  fail "empty parse passed a check: [$h_all]"
+fi
+
+echo "G4-p1: a comment mentioning ref: or -c prd does not trip any check (must-PASS)"
+CASES=$((CASES + 1))
+rw_mutant '
+t = "jobs:\n"
+assert s.count(t) == 1
+s = s.replace(t, "# ref: refs/pull/1/head -- doppler run -c prd -- secrets.DOPPLER_TOKEN_PRD\n" + t, 1)
+'
+p_all=""
+for c in checkout secrets ifclause injection issueif triggers; do p_all+=$(rw_static "$tmp/rw-mut.yml" "$c"); done
+if [[ -z "$p_all" ]]; then pass "comments are not wiring"; else fail "a comment tripped a check: $p_all"; fi
+
+# ---- the reconcile step, extracted and run with a stub writer that records its argv ----
+RSTEP="$tmp/rw-reconcile-step.sh"
+python3 - "$RW" "$RSTEP" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+got = [s for s in doc["jobs"]["reconcile"]["steps"] if s.get("id") == "reconcile"]
+assert len(got) == 1, "expected exactly one step with id: reconcile"
+open(sys.argv[2], "w").write(got[0]["run"])
+PY
+if [[ ! -s "$RSTEP" ]]; then printf 'FATAL: reconcile step extraction is empty\n' >&2; exit 1; fi
+RWS="$tmp/rw-workspace"
+mkdir -p "$RWS/apps/web-platform/scripts" "$tmp/rw-rt"
+ARGVF="$tmp/rw-argv.txt"
+cat > "$RWS/apps/web-platform/scripts/dev-ledger-reconcile.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${RW_ARGV_FILE:?}"
+printf '%s' "${RW_STUB_OUT:-ledger-discard: nothing to do (pr=7)
+}"
+exit "${RW_STUB_RC:-0}"
+SH
+# run_rstep <event> <execute> <allow_later_rows> [pr] — composite-free `run:` = bash -e.
+run_rstep() {
+  : > "$ARGVF"; : > "$tmp/rw-gho"; : > "$tmp/rw-summary"
+  set +e
+  out=$(cd "$RWS" && EVENT_NAME="$1" EXECUTE="$2" ALLOW_LATER_ROWS="$3" PR="${4:-7}" ACTOR="fixture-actor" \
+    DOPPLER_TOKEN=x GH_TOKEN=x RUNNER_TEMP="$tmp/rw-rt" GITHUB_WORKSPACE="$RWS" GITHUB_OUTPUT="$tmp/rw-gho" \
+    GITHUB_STEP_SUMMARY="$tmp/rw-summary" RW_ARGV_FILE="$ARGVF" bash --noprofile --norc -eo pipefail "$RSTEP" 2>&1)
+  rc=$?
+  set -e
+}
+argv_has() { grep -qxF -- "$1" "$ARGVF"; }
+
+echo "G4-M6a: the close path runs --execute --require-closed, never --allow-later-rows (even if the env says so)"
+CASES=$((CASES + 1))
+run_rstep pull_request_target true true
+if [[ "$rc" == "0" ]] && argv_has --execute && argv_has --require-closed && ! argv_has --allow-later-rows && ! argv_has --actor \
+  && argv_has --pr && argv_has 7 && argv_has --base-branch && argv_has main && argv_has "$RWS"; then
+  pass "the unattended path is fixed"
+else
+  fail "close-path argv wrong: rc=$rc argv=[$(tr '\n' ' ' < "$ARGVF")] out=$out"
+fi
+
+echo "G4-M6b: dispatch defaults -> a dry run (no --execute); the actor is passed"
+CASES=$((CASES + 1))
+run_rstep workflow_dispatch false false
+d_argv=$(tr '\n' ' ' < "$ARGVF")
+run_rstep workflow_dispatch true true
+x_argv=$(tr '\n' ' ' < "$ARGVF")
+if [[ "$d_argv" != *"--execute"* && "$d_argv" != *"--require-closed"* && "$d_argv" == *"--actor fixture-actor"* \
+  && "$x_argv" == *"--execute"* && "$x_argv" == *"--allow-later-rows"* ]]; then
+  pass "a write is always an explicit dispatch choice"
+else
+  fail "dispatch argv wrong: defaults=[$d_argv] explicit=[$x_argv]"
+fi
+
+echo "G4-pr: a non-numeric PR value never reaches the writer"
+CASES=$((CASES + 1))
+run_rstep workflow_dispatch false false '7; rm -rf /'
+if [[ "$rc" != "0" && ! -s "$ARGVF" ]]; then pass "the PR number is validated in the step"; else fail "unvalidated PR reached the writer: rc=$rc argv=[$(cat "$ARGVF")]"; fi
+
+echo "G4-out: step outputs are parsed from the writer's summary; only validated writer lines reach the job summary"
+CASES=$((CASES + 1))
+RW_STUB_OUT=$'would-discard 301_wa.sql 0123456789abcdef0123456789abcdef01234567 down=none\n::stop-commands::0123456789abcdef0123456789abcdef\n    NOTICE: pwned\n::0123456789abcdef0123456789abcdef::\nnot a writer line ::error::junk\nledger-discard: dry-run (pr=7 eligible=2 down=1 ledger-only=1 later-rows=0)\n' \
+  RW_STUB_RC=0 run_rstep workflow_dispatch false false
+g_rc=$(sed -n 's/^rc=//p' "$tmp/rw-gho"); g_el=$(sed -n 's/^eligible=//p' "$tmp/rw-gho"); g_lo=$(sed -n 's/^ledger_only=//p' "$tmp/rw-gho")
+if [[ "$rc" == "0" && "$g_rc" == "0" && "$g_el" == "2" && "$g_lo" == "1" ]] \
+  && grep -qxF 'ledger-discard: dry-run (pr=7 eligible=2 down=1 ledger-only=1 later-rows=0)' "$tmp/rw-summary" \
+  && grep -qxF 'would-discard 301_wa.sql 0123456789abcdef0123456789abcdef01234567 down=none' "$tmp/rw-summary" \
+  && ! grep -qF 'pwned' "$tmp/rw-summary" && ! grep -qF 'junk' "$tmp/rw-summary"; then
+  pass "outputs and summary come from validated writer lines only"
+else
+  fail "outputs/summary wrong: rc=$rc out=[$g_rc/$g_el/$g_lo] summary=[$(cat "$tmp/rw-summary")] log=$out"
+fi
+
+echo "G4-fail: a writer rc of 1 fails the step, and rc=1 reaches the outputs"
+CASES=$((CASES + 1))
+RW_STUB_OUT=$'ledger-discard: refused (pr=7 eligible=1 down=1 ledger-only=0 later-rows=1 reason=later-row)\n' RW_STUB_RC=1 \
+  run_rstep pull_request_target true false
+g_rc=$(sed -n 's/^rc=//p' "$tmp/rw-gho"); g_ref=$(sed -n 's/^refusal=//p' "$tmp/rw-gho")
+if [[ "$rc" != "0" && "$g_rc" == "1" && "$g_ref" == "later-row" ]]; then
+  pass "a refusal is a red step with its reason exported"
+else
+  fail "expected a failed step with rc=1 reason later-row; got rc=$rc outputs=[$(cat "$tmp/rw-gho")]"
+fi
+
 # ----------------------------------------------------------------------
 # Vacuity floor: reported via printf + exit, never through fail(). The bound
 # sits directly above its `if` so guard-vacuity-floor's mutant slice carries it.
@@ -1811,7 +3509,7 @@ else
 fi
 
 echo ""
-EXPECTED_CASES=100
+EXPECTED_CASES=194
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
