@@ -2433,7 +2433,7 @@
 "id": "1ntz2fr"
 },
 "huxeov": {
-"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot / inngest_ghcr_fallback, host_name soleur-inngest) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
+"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot / inngest_ghcr_fallback, host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
 "technology": "HTTPS (Sentry store API, X-Sentry-Auth sentry_version=7)",
 "source": {
 "model": "platform.infra.inngest"
@@ -18787,15 +18787,15 @@
 1113
 ],
 [
-7628,
-1152
+7627,
+1153
 ],
 [
-7935,
+7934,
 1232
 ],
 [
-8064,
+8063,
 1266
 ],
 [
@@ -18857,35 +18857,35 @@
 1633
 ],
 [
-6936,
+6935,
 1701
 ],
 [
-7660,
-1589
+7656,
+1590
 ],
 [
-7932,
+7927,
 1663
 ],
 [
-8031,
+8026,
 1689
 ],
 [
-8036,
+8031,
 1745
 ],
 [
-8134,
+8129,
 1773
 ],
 [
-8572,
+8570,
 1900
 ],
 [
-8714,
+8711,
 1734
 ],
 [
@@ -18906,7 +18906,7 @@
 ]
 ],
 "labelBBox": {
-"x": 8135,
+"x": 8130,
 "y": 1662,
 "width": 278,
 "height": 107
@@ -18943,23 +18943,23 @@
 1633
 ],
 [
-7653,
+7652,
 1694
 ],
 [
-8221,
+8217,
 1625
 ],
 [
-8440,
+8435,
 1663
 ],
 [
-8596,
+8593,
 1690
 ],
 [
-8625,
+8623,
 1736
 ],
 [
@@ -19313,23 +19313,23 @@
 1232
 ],
 [
-8025,
-1377
+8024,
+1376
 ],
 [
-7839,
-1613
+7835,
+1612
 ],
 [
-8048,
+8043,
 1773
 ],
 [
-8175,
-1870
+8171,
+1872
 ],
 [
-8613,
+8611,
 1786
 ],
 [
@@ -19350,7 +19350,7 @@
 ]
 ],
 "labelBBox": {
-"x": 7951,
+"x": 7947,
 "y": 1447,
 "width": 237,
 "height": 106
@@ -19368,7 +19368,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) POSTed to the \nSentry store API by the host-local \nsoleur-boot-emit with the baked ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) and the \nprivate-NIC boot outcome (stage family \nprivate_nic_*, #8539) POSTed to the ",
 "points": [
 [
 6558,
@@ -19403,15 +19403,15 @@
 1692
 ],
 [
-7186,
+7187,
 1745
 ],
 [
-7242,
+7243,
 1773
 ],
 [
-7393,
+7394,
 1850
 ],
 [
@@ -19436,9 +19436,9 @@
 ]
 ],
 "labelBBox": {
-"x": 7243,
+"x": 7244,
 "y": 1662,
-"width": 266,
+"width": 261,
 "height": 107
 },
 "parent": null,
@@ -19457,11 +19457,11 @@
 "label": "Boot-stage fatals and stage markers from \na BAKED DSN, with NO Doppler fallback — \nso the channel still works when Doppler \nis itself the broken stage, which on \nthis host is the most likely one. This ",
 "points": [
 [
-7368,
+7369,
 1597
 ],
 [
-7391,
+7392,
 1610
 ],
 [
@@ -19473,36 +19473,36 @@
 1633
 ],
 [
-7481,
-1651
+7479,
+1650
 ],
 [
-7499,
+7496,
 1638
 ],
 [
-7537,
+7532,
 1663
 ],
 [
-7591,
-1698
+7585,
+1699
 ],
 [
-7572,
+7567,
 1745
 ],
 [
-7629,
+7624,
 1773
 ],
 [
-7855,
-1886
+7851,
+1887
 ],
 [
-8523,
-1763
+8522,
+1762
 ],
 [
 8765,
@@ -19522,7 +19522,7 @@
 ]
 ],
 "labelBBox": {
-"x": 7630,
+"x": 7625,
 "y": 1662,
 "width": 274,
 "height": 107
@@ -35141,7 +35141,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 4263,
+"x": 4258,
 "y": 1723,
 "width": 388,
 "height": 180,
@@ -35928,7 +35928,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__ghcr",
-"x": 2916,
+"x": 2914,
 "y": 1723,
 "width": 356,
 "height": 180,
@@ -35967,7 +35967,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sentry",
-"x": 3535,
+"x": 3530,
 "y": 1723,
 "width": 325,
 "height": 180,
@@ -36143,39 +36143,39 @@
 1744
 ],
 [
-2792,
-1726
+2791,
+1725
 ],
 [
-2861,
+2859,
 1712
 ],
 [
-2969,
+2966,
 1692
 ],
 [
-3277,
+3273,
 1734
 ],
 [
-3350,
+3345,
 1652
 ],
 [
-3383,
+3378,
 1616
 ],
 [
-3384,
+3379,
 1578
 ],
 [
-3350,
+3345,
 1542
 ],
 [
-3263,
+3258,
 1450
 ],
 [
@@ -36295,23 +36295,23 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-4476,
+4471,
 1723
 ],
 [
-4484,
+4479,
 1663
 ],
 [
-4481,
+4476,
 1588
 ],
 [
-4434,
+4429,
 1542
 ],
 [
-4352,
+4348,
 1463
 ],
 [
@@ -36422,22 +36422,22 @@
 ],
 [
 5326,
-1566
+1568
 ],
 [
-4965,
+4962,
 1583
 ],
 [
-4573,
+4568,
 1652
 ],
 [
-4065,
-1742
+4061,
+1741
 ],
 [
-2767,
+2766,
 1683
 ],
 [
@@ -36721,47 +36721,47 @@
 966
 ],
 [
-4014,
+4015,
 981
 ],
 [
-5133,
-1060
+5135,
+1061
 ],
 [
 4807,
 1482
 ],
 [
-4742,
-1566
+4741,
+1567
 ],
 [
-4671,
+4668,
 1495
 ],
 [
-4576,
+4571,
 1542
 ],
 [
-4504,
+4499,
 1577
 ],
 [
-4509,
+4504,
 1625
 ],
 [
-4433,
+4428,
 1652
 ],
 [
-4205,
+4200,
 1734
 ],
 [
-2494,
+2493,
 1698
 ],
 [
@@ -37898,40 +37898,40 @@
 1482
 ],
 [
-2854,
-1552
+2853,
+1551
 ],
 [
-3333,
-1421
+3329,
+1422
 ],
 [
-3445,
+3440,
 1542
 ],
 [
-3478,
+3473,
 1578
 ],
 [
-3472,
+3467,
 1611
 ],
 [
-3445,
+3440,
 1652
 ],
 [
-3408,
-1710
+3404,
+1709
 ],
 [
-3345,
-1747
+3342,
+1746
 ],
 [
-3282,
-1770
+3280,
+1769
 ]
 ],
 "labelBBox": {
@@ -38070,27 +38070,27 @@
 1482
 ],
 [
-4006,
-1551
+4005,
+1550
 ],
 [
-4439,
-1432
+4435,
+1433
 ],
 [
-4539,
+4534,
 1542
 ],
 [
-4582,
+4577,
 1589
 ],
 [
-4560,
-1657
+4555,
+1658
 ],
 [
-4528,
+4523,
 1714
 ]
 ],
@@ -38169,38 +38169,38 @@
 ],
 [
 3093,
-1545
+1544
 ],
 [
-4232,
+4228,
 1431
 ],
 [
-4339,
+4334,
 1542
 ],
 [
-4373,
+4368,
 1577
 ],
 [
-4369,
+4364,
 1614
 ],
 [
-4339,
+4334,
 1652
 ],
 [
-4310,
+4305,
 1690
 ],
 [
-4050,
+4045,
 1745
 ],
 [
-3870,
+3865,
 1780
 ]
 ],
@@ -38468,11 +38468,11 @@
 1723
 ],
 [
-2843,
+2842,
 1739
 ],
 [
-2906,
+2904,
 1756
 ]
 ],
@@ -38514,56 +38514,56 @@
 1482
 ],
 [
-1829,
-1554
+1828,
+1553
 ],
 [
-2661,
+2657,
 1416
 ],
 [
-2955,
+2950,
 1542
 ],
 [
-3020,
+3015,
 1570
 ],
 [
-3005,
+3000,
 1624
 ],
 [
-3069,
+3064,
 1652
 ],
 [
-3241,
+3236,
 1729
 ],
 [
-3729,
+3724,
 1689
 ],
 [
-3916,
+3911,
 1712
 ],
 [
-4028,
+4023,
 1727
 ],
 [
-4152,
+4147,
 1749
 ],
 [
-4252,
+4247,
 1769
 ]
 ],
 "labelBBox": {
-"x": 3070,
+"x": 3065,
 "y": 1542,
 "width": 278,
 "height": 106
@@ -38581,7 +38581,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) POSTed to the \nSentry store API by the host-local \nsoleur-boot-emit with the baked ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) and the \nprivate-NIC boot outcome (stage family \nprivate_nic_*, #8539) POSTed to the ",
 "points": [
 [
 1463,
@@ -38604,8 +38604,8 @@
 1536
 ],
 [
-2363,
-1436
+2362,
+1437
 ],
 [
 2572,
@@ -38616,7 +38616,7 @@
 1571
 ],
 [
-2607,
+2608,
 1623
 ],
 [
@@ -38628,30 +38628,30 @@
 1721
 ],
 [
-3181,
-1687
+3180,
+1686
 ],
 [
-3327,
+3325,
 1712
 ],
 [
-3393,
+3389,
 1724
 ],
 [
-3463,
-1742
+3459,
+1741
 ],
 [
-3526,
-1759
+3520,
+1758
 ]
 ],
 "labelBBox": {
 "x": 2665,
 "y": 1542,
-"width": 266,
+"width": 261,
 "height": 106
 },
 "parent": null,
@@ -38822,32 +38822,32 @@
 1482
 ],
 [
-2395,
+2394,
 1566
 ],
 [
-3448,
+3444,
 1450
 ],
 [
-3851,
+3846,
 1542
 ],
 [
-4008,
+4003,
 1578
 ],
 [
-4175,
+4170,
 1655
 ],
 [
-4293,
+4288,
 1718
 ]
 ],
 "labelBBox": {
-"x": 4158,
+"x": 4153,
 "y": 1542,
 "width": 247,
 "height": 106
@@ -38884,32 +38884,32 @@
 1482
 ],
 [
-2291,
+2290,
 1546
 ],
 [
-3089,
+3085,
 1431
 ],
 [
-3376,
+3371,
 1542
 ],
 [
-3470,
+3465,
 1578
 ],
 [
-3556,
+3551,
 1653
 ],
 [
-3615,
+3610,
 1715
 ]
 ],
 "labelBBox": {
-"x": 3549,
+"x": 3544,
 "y": 1542,
 "width": 274,
 "height": 106
@@ -51418,19 +51418,19 @@
 "label": "Mints packages:read installation token \nevery 20 min (ADR-088)",
 "points": [
 [
-1870,
+1869,
 506
 ],
 [
 1522,
-516
+517
 ],
 [
-752,
+753,
 551
 ],
 [
-509,
+510,
 650
 ],
 [
@@ -51438,16 +51438,16 @@
 689
 ],
 [
-327,
+328,
 763
 ],
 [
-265,
+266,
 824
 ]
 ],
 "labelBBox": {
-"x": 510,
+"x": 511,
 "y": 675,
 "width": 241,
 "height": 56
@@ -51519,26 +51519,26 @@
 "points": [
 [
 1869,
-511
+512
 ],
 [
-1598,
-529
+1599,
+530
 ],
 [
-1088,
-572
+1090,
+573
 ],
 [
-925,
+927,
 650
 ],
 [
-842,
+844,
 690
 ],
 [
-768,
+769,
 763
 ],
 [
@@ -51547,7 +51547,7 @@
 ]
 ],
 "labelBBox": {
-"x": 926,
+"x": 928,
 "y": 650,
 "width": 281,
 "height": 106
@@ -51569,35 +51569,35 @@
 "points": [
 [
 1870,
-509
+510
 ],
 [
-1724,
-522
+1725,
+523
 ],
 [
-1515,
-557
+1518,
+558
 ],
 [
-1358,
+1362,
 650
 ],
 [
-1287,
-692
+1290,
+693
 ],
 [
-1227,
+1229,
 764
 ],
 [
-1185,
+1187,
 822
 ]
 ],
 "labelBBox": {
-"x": 1359,
+"x": 1363,
 "y": 650,
 "width": 278,
 "height": 106
@@ -51615,41 +51615,41 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) POSTed to the \nSentry store API by the host-local \nsoleur-boot-emit with the baked ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot / inngest_ghcr_fallback, \nhost_name soleur-inngest) and the \nprivate-NIC boot outcome (stage family \nprivate_nic_*, #8539) POSTed to the ",
 "points": [
 [
 1870,
-568
+571
 ],
 [
-1826,
-590
+1828,
+592
 ],
 [
-1783,
-617
+1787,
+619
 ],
 [
-1748,
+1753,
 650
 ],
 [
-1697,
+1702,
 698
 ],
 [
-1658,
+1661,
 766
 ],
 [
-1632,
+1634,
 822
 ]
 ],
 "labelBBox": {
-"x": 1749,
+"x": 1754,
 "y": 650,
-"width": 266,
+"width": 261,
 "height": 106
 },
 "parent": null,

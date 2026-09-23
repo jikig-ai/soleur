@@ -1700,10 +1700,24 @@ resource "sentry_alert" "stale_bot_pr" {
 # bucket nobody reads is not observability — it is the silence the gate was built to end.
 #
 # Fires rarely by construction: runcmd is once-per-instance, so at most one event per fresh
-# connector-host boot. Any occurrence means either the NIC never converged within 60 s
-# (private_nic_timeout) or the probe could not measure at all (private_nic_probe_fault) — both
-# worth a look, neither an emergency, since cloudflared dials its origin per connection and
-# self-heals when the attach lands.
+# host boot. Any occurrence means either the NIC never converged within that host's bound
+# (private_nic_timeout) or the probe could not measure at all (private_nic_probe_fault).
+#
+# HOST-GENERIC since #8539 — DO NOT re-scope this to web-1. This rule filters on `stage` and
+# NEVER on host, and every host bakes the same var.sentry_dsn, so it matches BOTH emitters:
+# soleur-wait-nic on web-1 (#6441, 60 s bound) and soleur-inngest-nic-wait on the dedicated
+# inngest host (#8539, 150 s bound). That is deliberate and it is the earliest automated warning
+# either host produces — there is no alert keyed on oci-pull-ALL-LEGS-FAILED, so on inngest this
+# is the ONLY page before the scheduler goes dark.
+#
+# The severity note this block used to carry ("neither an emergency, since cloudflared dials its
+# origin per connection and self-heals when the attach lands") was true of web-1 ONLY and is
+# FALSE for inngest, where a non-converged NIC means the zot pull fails and the sole scheduler
+# does not come up. Judge severity by the event's host_name tag, not by this rule's name.
+#
+# The rule's `name` still reads "web-host-…", which now misattributes an inngest page. Renaming
+# it is an in-place Sentry update that would drift from the committed alert-reference.json until
+# an apply runs, so it is deliberately NOT done in this PR; tracked on #8539.
 resource "sentry_alert" "web_private_nic_boot_gate" {
   organization      = var.sentry_org
   name              = "web-host-private-nic-boot-gate"
