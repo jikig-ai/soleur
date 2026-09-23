@@ -422,7 +422,7 @@ F_H=plugins/soleur/commands/help.md
 Check each anchor with its own `grep -F` (line counts merge anchors that share a line). Run the
 checks outside `set -e`.
 
-- [ ] **AC1 (B4).**
+- [x] **AC1 (B4).**
   - In the §1.2 body, `awk '/^#### 1\.2 Collaborative Dialogue/{f=1;next} /^### Phase 2:/{f=0} f' "$F_B"`,
     each of these anchors matches at least once: `**one at a time**`,
     `**Ask in dependency order.**`, `**Look facts up; do not ask them.**`, `**Headless:**`,
@@ -430,7 +430,7 @@ checks outside `set -e`.
   - `grep -F -c 'explicitly parked' "$F_T"` ≥ 1.
   - `grep -F -c 'Continue until the idea is clear' "$F_B"` = 0, and the same count on `"$F_T"`
     = 0.
-- [ ] **AC2 (B10).** In the Phase 1.5 body,
+- [x] **AC2 (B10).** In the Phase 1.5 body,
   `awk '/^## Phase 1\.5: Deviation Analyst/{f=1;next} /^## Phase 1\.6/{f=0} f' "$F_C"`,
   each of these anchors matches at least once:
   - `3.6. **Null-guardrail check.**`
@@ -452,9 +452,9 @@ checks outside `set -e`.
   `awk '/^### Constitution Promotion/{f=1;next} /^### Route Learning/{f=0} f' "$F_C"`, contains
   both `none (null guardrail)` and `step-3.6 findings`. The `### Error-to-Workflow Feedback` body
   contains `step 3.6`.
-- [ ] **AC3 (B10 lint shape).** `bash scripts/markdown-lint.sh "$F_C"` reports the file clean.
+- [x] **AC3 (B10 lint shape).** `bash scripts/markdown-lint.sh "$F_C"` reports the file clean.
   This catches the indented-bullet MD007/MD032 shape.
-- [ ] **AC4 (B12b).**
+- [x] **AC4 (B12b).**
   - `grep -c 'HOW THE SKILLS FIT TOGETHER:' "$F_H"` = 3.
   - The three map extracts are byte-identical and at least 5 lines long. This command exits 0:
 
@@ -466,7 +466,7 @@ checks outside `set -e`.
   - `grep -F -c 'operator-*' "$F_H"` is unchanged from `origin/main` (6). The map adds no
     `operator-*` token.
   - `grep -F -c 'map verbatim' "$F_H"` = 1 (the Codex render note).
-- [ ] **AC5 (scope).**
+- [x] **AC5 (scope).**
   - `git diff --name-only origin/main...HEAD` lists only:
     - the four `F_*` files;
     - this plan and `knowledge-base/project/specs/feat-one-shot-mattpocock-b4-b10-b12b/*`;
@@ -476,11 +476,11 @@ checks outside `set -e`.
     `plugins/soleur/skills/eval-harness/`, `plugins/soleur/skills/plan/SKILL.md`, or
     `knowledge-base/product/competitive-intelligence.md`.
   - `git diff origin/main...HEAD -- plugins | grep -c '^[-+]description:'` = 0.
-- [ ] **AC6 (eval gate).** For each `F_*`,
+- [x] **AC6 (eval gate).** For each `F_*`,
   `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <file>` prints
   `"gated":false`. This is the gate's own lookup, and it makes no API call. With AC5, it confirms
   no eval-gated block was touched, so the full promptfoo run does not apply.
-- [ ] **AC7 (suites).** These all pass:
+- [x] **AC7 (suites).** These all pass:
   - `bun test plugins/soleur/test/components.test.ts plugins/soleur/test/invocation-axis.test.ts plugins/soleur/test/harness-parity.test.ts plugins/soleur/test/workflow-fidelity.test.ts`
   - `bash scripts/lint-agents-compound-sync.sh`
   - `bash scripts/markdown-lint.sh "$F_B" "$F_T" "$F_C" "$F_H"`
