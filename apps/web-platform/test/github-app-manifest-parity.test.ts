@@ -40,6 +40,31 @@ const EXPECTED_TF_SECRETS = [
   "GITHUB_APP_WEBHOOK_SECRET",
 ];
 
+// (#8209, ADR-239) The two App-IDENTITY names are no longer Terraform-MANAGED. Their
+// `doppler_secret` resources pinned `config = "prd"`, so web-platform state held a copy
+// of the App's live private key -- and the Tier-A `prd_terraform` R2 backend keys read
+// that state object. They were replaced with `removed` blocks.
+//
+// The map below says, per name, how github-app.tf is expected to account for it. It is a
+// map rather than a second list so a name cannot silently fall out of BOTH checks: the
+// loop asserts over EXPECTED_TF_SECRETS and looks the mode up here, so a name with no
+// entry fails rather than being skipped.
+const TF_SECRET_MODE: Record<string, "managed" | "forgotten"> = {
+  // Soleur-generated from random_id; Terraform owns it and must keep owning it.
+  GITHUB_APP_WEBHOOK_SECRET: "managed",
+  // Operator-supplied App identity: forgotten, never destroyed. Doppler `prd` keeps the
+  // live values, which is what the web app mints installation tokens with.
+  GITHUB_APP_ID: "forgotten",
+  GITHUB_APP_PRIVATE_KEY: "forgotten",
+};
+
+// Terraform resource address for each forgotten name, so the assertion can pin the
+// EXACT `removed` block rather than merely "some removed block exists".
+const TF_FORGOTTEN_ADDRESS: Record<string, string> = {
+  GITHUB_APP_ID: "doppler_secret.github_app_id",
+  GITHUB_APP_PRIVATE_KEY: "doppler_secret.github_app_private_key",
+};
+
 // Exact set of permissions in the committed manifest. Reconciled to the live
 // App state at #4169 post-merge attestation (added `secrets: write` which the
 // live App already had but #4115 plan-time snapshot missed). Extended again
@@ -178,14 +203,60 @@ describe("github-app-manifest.json symbol parity", () => {
     expect(m.redirect_url.endsWith("/internal/github-app-init")).toBe(true);
   });
 
-  test("Terraform secret names are all declared in github-app.tf", () => {
+  test("every Terraform secret name is accounted for in github-app.tf (declared, or forgotten with destroy = false)", () => {
+    // THIS IS A USER-FACING ASSERTION, not bookkeeping. `doppler_secret.github_app_id`
+    // and `doppler_secret.github_app_private_key` pinned `config = "prd"`, so they were
+    // the soleur-ai App's LIVE runtime identity -- the key the web app reads to mint an
+    // installation token for every connected user. If a `removed` block for either one
+    // loses its `lifecycle { destroy = false }`, or its address is misspelled so the
+    // resource is left orphaned under management, the next apply DELETES the secret and
+    // every connected user's GitHub connection and webhook stops working, with no
+    // rollback beyond pasting a key back by hand. That is why "forgotten" here is
+    // asserted positively rather than by the absence of a declaration.
     const tf = readFileSync(TF_PATH, "utf-8");
     for (const name of EXPECTED_TF_SECRETS) {
-      // Each name appears as `name       = "<NAME>"` in github-app.tf.
-      const re = new RegExp(`name\\s*=\\s*"${name}"`);
+      const mode = TF_SECRET_MODE[name];
       expect(
-        re.test(tf),
-        `expected ${name} to be declared in github-app.tf`,
+        mode,
+        `${name} has no entry in TF_SECRET_MODE — add one rather than letting it fall out of both checks`,
+      ).toBeDefined();
+
+      // Each name appears as `name       = "<NAME>"` in github-app.tf.
+      const declared = new RegExp(`name\\s*=\\s*"${name}"`).test(tf);
+
+      if (mode === "managed") {
+        expect(declared, `expected ${name} to be declared in github-app.tf`).toBe(true);
+        continue;
+      }
+
+      // forgotten: NOT declared, and covered by a `removed` block that forgets rather
+      // than destroys. Both halves matter -- a declaration AND a removed block for the
+      // same address is a contradiction Terraform would reject, and a removed block
+      // without `destroy = false` is a delete.
+      expect(
+        declared,
+        `${name} is marked forgotten but is still DECLARED in github-app.tf — a resource cannot be both`,
+      ).toBe(false);
+
+      const addr = TF_FORGOTTEN_ADDRESS[name];
+      expect(addr, `${name} is marked forgotten but has no address in TF_FORGOTTEN_ADDRESS`).toBeDefined();
+
+      // Slice the `removed` block that names this exact address, then assert on ITS body
+      // — a file-wide search for `destroy = false` would be satisfied by a DIFFERENT
+      // block's lifecycle and would pass while this one deletes the live key.
+      const blockRe = new RegExp(
+        `removed\\s*\\{[^}]*?from\\s*=\\s*${addr.replace(/\./g, "\\.")}\\b[\\s\\S]*?\\n\\}`,
+      );
+      const block = blockRe.exec(tf);
+      expect(
+        block,
+        `expected a \`removed { from = ${addr} }\` block in github-app.tf for ${name}`,
+      ).not.toBeNull();
+      expect(
+        /lifecycle\s*\{[^}]*destroy\s*=\s*false/.test(block![0]),
+        `the removed block for ${addr} is MISSING \`lifecycle { destroy = false }\`. Without it, ` +
+          `\`removed\` is a DELETE, and that address holds the App's live runtime identity in Doppler prd ` +
+          `— deleting it disconnects every connected user (#8209 U1).`,
       ).toBe(true);
     }
   });
