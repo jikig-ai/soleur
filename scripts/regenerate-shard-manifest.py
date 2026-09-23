@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate scripts/suite-shard-legs.tsv from CI suite-timings artifacts (#8006, ADR-240).
+"""Regenerate scripts/suite-shard-legs{,-heavy}.tsv from CI suite-timings artifacts (#8006, ADR-240).
 
 WHY THIS EXISTS
 ---------------
@@ -7,7 +7,10 @@ The `test-scripts` matrix legs are balanced by label, not by position: the commi
 manifest maps each light-group suite label to the leg a sticky-LPT pass over
 CI-measured durations produced. The runner only looks the label up; this script is
 the ONLY place assignment is computed — `_shard_selects` sees one registration at a
-time and can never balance a set it is still discovering.
+time and can never balance a set it is still discovering. `--group heavy` applies the
+same mechanics to the `test-scripts-heavy` matrix and writes a SECOND file —
+per-group manifests, not a shared one, so a heavy regen never rewrites the light
+table's insertion-stable surface (ADR-240 amendment).
 
 STICKY-LPT, not plain LPT: longest-processing-time first, but a label keeps its
 incumbent leg whenever that leg's running load is within epsilon of the least-loaded
@@ -17,23 +20,25 @@ generated artifact that lands on every sibling PR.
 
 INPUT
 -----
-`suite-timings-scripts-N` artifacts from one CI run (`suite-timings.tsv` rows:
-`label<TAB>ms[<TAB>verdict|tmp_delta]`). Boundary rows, skipped rows, and
+`suite-timings-scripts-N` artifacts from one CI run for --group light
+(`suite-timings.tsv` rows: `label<TAB>ms[<TAB>verdict|tmp_delta]`), or
+`suite-timings-scripts-heavy-N` for --group heavy. Boundary rows, skipped rows, and
 FAIL/KILLED/TRIPWIRE verdicts are excluded — a suite that did not finish carries a
-partial timing that would skew the balance. Heavy-group artifacts
-(`suite-timings-scripts-heavy-N`) are NOT read: those labels register under
-`want_scripts_heavy`, are invisible to the light-group lint's ⊆ check, and are
-already spread one-per-leg.
+partial timing that would skew the balance. Each group's artifact pattern is
+exclusive: light legs never read heavy artifacts and vice versa, because the
+registered-label sets are disjoint (want_scripts vs want_scripts_heavy) and a
+wrong-group row would fail the ⊆ lint while consuming leg weight for nothing.
 
 USAGE
 -----
     python3 scripts/regenerate-shard-manifest.py --run 35840517639 --write
     python3 scripts/regenerate-shard-manifest.py                 # latest green main run, dry-run
     python3 scripts/regenerate-shard-manifest.py --timings-dir /tmp/timings --write
+    python3 scripts/regenerate-shard-manifest.py --group heavy --run 35840517639 --write
 
 Without --write: prints the predicted per-leg totals and the diff vs the incumbent
-manifest. With --write: rewrites scripts/suite-shard-legs.tsv deterministically
-(header + label-sorted rows).
+manifest. With --write: rewrites the group's manifest deterministically (header +
+label-sorted rows).
 """
 
 import argparse
@@ -51,12 +56,14 @@ from datetime import datetime, timezone
 REPO = "jikig-ai/soleur"
 CI_YML = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml")
 MANIFEST = os.path.join(os.path.dirname(__file__), "suite-shard-legs.tsv")
-GENERATOR_VERSION = "1"
+MANIFEST_HEAVY = os.path.join(os.path.dirname(__file__), "suite-shard-legs-heavy.tsv")
+GENERATOR_VERSION = "2"
 EPSILON_FRACTION = 0.05  # of mean leg load
 
-# Artifact name pattern: light legs only. `suite-timings-scripts-heavy-*` must NOT
-# match — see module docstring.
+# Artifact name patterns, one per group and mutually exclusive: the heavy job's
+# artifacts carry a `-heavy-` infix the light pattern cannot match, and vice versa.
 LIGHT_ARTIFACT = re.compile(r"^suite-timings-scripts-\d+$")
+HEAVY_ARTIFACT = re.compile(r"^suite-timings-scripts-heavy-\d+$")
 
 
 def die(msg):
@@ -83,15 +90,15 @@ def latest_green_main_run():
     return int(out)
 
 
-def fetch_timings_from_run(run_id):
-    """Return {label: ms} merged across light-leg timing artifacts of RUN_ID."""
+def fetch_timings_from_run(run_id, artifact_re):
+    """Return {label: ms} merged across the group's timing artifacts of RUN_ID."""
     arts = json.loads(gh([
         "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts",
         "--jq", "{artifacts: [.artifacts[] | {id: .id, name: .name}]}",
     ]))["artifacts"]
-    names = [a for a in arts if LIGHT_ARTIFACT.match(a["name"])]
+    names = [a for a in arts if artifact_re.match(a["name"])]
     if not names:
-        die(f"run {run_id} has no suite-timings-scripts-<n> artifacts")
+        die(f"run {run_id} has no {artifact_re.pattern} artifacts")
     merged = {}
     with tempfile.TemporaryDirectory() as td:
         for a in names:
@@ -147,24 +154,26 @@ def merge_tsv(fh, merged, source):
         merged[label] = max(merged.get(label, 0), ms)
 
 
-def read_ci_leg_count():
-    """N of the test-scripts matrix — the job block only, not test-scripts-heavy."""
+def read_ci_leg_count(job):
+    """N of JOB's matrix — `test-scripts` or `test-scripts-heavy`, scoped to the
+    named job block so the two leg counts can never be confused."""
     txt = open(CI_YML, encoding="utf-8").read()
-    m = re.search(r"^  test-scripts:\n(?:.*\n)*?        shard: \[\"1/(\d+)\"",
+    m = re.search(r"^  %s:\n(?:.*\n)*?        shard: \[\"1/(\d+)\"" % re.escape(job),
                   txt, re.M)
     if not m:
-        die("could not find test-scripts matrix shard declaration in ci.yml")
+        die(f"could not find {job} matrix shard declaration in ci.yml")
     return int(m.group(1))
 
 
-def registered_labels():
-    """The light-group registered label set via the runner's own enumerate — the
+def registered_labels(group):
+    """The group's registered label set via the runner's own enumerate — the
     same set the ⊆ lint derives. Timing rows for labels that are not registered
-    (fixture leaks like `slowfixture`, renamed-away suites) must not be tabled:
-    they would red the lint and consume leg weight for nothing."""
+    (fixture leaks like `slowfixture`, renamed-away suites, or the OTHER group's
+    labels) must not be tabled: they would red the lint and consume leg weight
+    for nothing."""
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     p = subprocess.run(
-        ["bash", "scripts/test-all.sh", "--enumerate", "scripts"],
+        ["bash", "scripts/test-all.sh", "--enumerate", group],
         cwd=repo_root, capture_output=True, text=True)
     if p.returncode != 0:
         die(f"enumerate failed (rc={p.returncode}): {p.stderr.strip()[:400]}")
@@ -204,15 +213,17 @@ def assign(timings, n, incumbent):
     return legs, loads
 
 
-def render(legs, n, run_id):
+def render(legs, n, run_id, group):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fname = "suite-shard-legs.tsv" if group == "light" else "suite-shard-legs-heavy.tsv"
+    regen = ("" if group == "light" else "--group heavy ")
     lines = [
-        "# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)",
+        f"# {fname} — duration-aware shard assignment (ADR-240)",
         f"# n={n}",
         f"# generated-from-run={run_id}",
         f"# generated-at={ts}",
         f"# generator=regenerate-shard-manifest.py v{GENERATOR_VERSION}",
-        "# regen: python3 scripts/regenerate-shard-manifest.py --run <id> --write",
+        f"# regen: python3 scripts/regenerate-shard-manifest.py {regen}--run <id> --write",
         "# runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)",
     ]
     lines += [f"{label}\t{legs[label]}" for label in sorted(legs)]
@@ -221,19 +232,30 @@ def render(legs, n, run_id):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--group", choices=["light", "heavy"], default="light",
+                    help="which matrix's manifest to build: test-scripts (light) "
+                         "or test-scripts-heavy (default: light)")
     ap.add_argument("--run", type=int, default=None,
                     help="CI run id to read timings from (default: latest green main ci.yml run)")
     ap.add_argument("--timings-dir", default=None,
                     help="read suite-timings.tsv files from a local dir instead of gh")
     ap.add_argument("--write", action="store_true",
                     help="rewrite the manifest; default is a dry-run report")
-    ap.add_argument("--manifest", default=MANIFEST,
-                    help="manifest path (default: scripts/suite-shard-legs.tsv)")
+    ap.add_argument("--manifest", default=None,
+                    help="manifest path (default: the group's committed manifest)")
     ap.add_argument("--registered-file", default=None,
                     help="file of registered labels (default: derive via --enumerate)")
     args = ap.parse_args()
 
-    n = read_ci_leg_count()
+    if args.group == "heavy":
+        job, group, artifact_re = "test-scripts-heavy", "scripts-heavy", HEAVY_ARTIFACT
+        default_manifest = MANIFEST_HEAVY
+    else:
+        job, group, artifact_re = "test-scripts", "scripts", LIGHT_ARTIFACT
+        default_manifest = MANIFEST
+    manifest_path = args.manifest if args.manifest else default_manifest
+
+    n = read_ci_leg_count(job)
     run_id = args.run
     if args.timings_dir:
         timings = fetch_timings_from_dir(args.timings_dir)
@@ -241,7 +263,7 @@ def main():
     else:
         if run_id is None:
             run_id = latest_green_main_run()
-        timings = fetch_timings_from_run(run_id)
+        timings = fetch_timings_from_run(run_id, artifact_re)
         src = f"run:{run_id}"
     if not timings:
         die(f"no usable suite timings from {src}")
@@ -250,7 +272,7 @@ def main():
         with open(args.registered_file, encoding="utf-8") as f:
             registered = {ln.strip() for ln in f if ln.strip()}
     else:
-        registered = registered_labels()
+        registered = registered_labels(group)
     dropped = sorted(set(timings) - registered)
     for label in dropped:
         print(f"WARN: dropping timed-but-unregistered label {label!r}",
@@ -259,7 +281,7 @@ def main():
     if not timings:
         die(f"no timed label is a registered scripts suite (source: {src})")
 
-    incumbent = read_incumbent(args.manifest)
+    incumbent = read_incumbent(manifest_path)
     legs, loads = assign(timings, n, incumbent)
 
     print(f"source: {src}")
@@ -276,9 +298,9 @@ def main():
         print(f"vs incumbent: {moved} moved, {new} new, {gone} no longer timed")
 
     if args.write:
-        with open(args.manifest, "w", encoding="utf-8") as f:
-            f.write(render(legs, n, run_id if run_id else 0))
-        print(f"wrote {args.manifest} ({len(legs)} rows)")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            f.write(render(legs, n, run_id if run_id else 0, args.group))
+        print(f"wrote {manifest_path} ({len(legs)} rows)")
     else:
         print("dry-run — pass --write to update the manifest")
 

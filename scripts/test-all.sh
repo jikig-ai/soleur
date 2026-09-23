@@ -834,18 +834,22 @@ fi
 # still discovering. That is also why a missing/stale manifest degrades instead of
 # failing: coverage never depends on the table being present or current.
 #
-# ENGAGEMENT IS NARROW. All of: sharding is on (_SHARD_N > 0), TEST_GROUP is `scripts`
-# (the manifest tables light-group labels; scripts-heavy's three suites are already
-# spread one-per-leg), the manifest declares `n` equal to _SHARD_N. Every other shape
-# takes the positional path in `_shard_selects` — same behaviour as before the
-# manifest existed.
+# ENGAGEMENT IS NARROW. All of: sharding is on (_SHARD_N > 0), TEST_GROUP is one
+# of {scripts, scripts-heavy} — each bound to its OWN manifest file
+# (suite-shard-legs.tsv for the light group, suite-shard-legs-heavy.tsv for
+# heavy; per-group files keep the light table's insertion-stable surface
+# untouched when the heavy table regenerates — ADR-240 amendment) — and the
+# manifest declares `n` equal to _SHARD_N. Every other shape takes the
+# positional path in `_shard_selects` — same behaviour as before manifests
+# existed.
 #
-# SOLEUR_SHARD_MANIFEST overrides the default path so the mutation battery can score
-# fallback behaviour against fixture manifests without touching the committed file.
-# `off` disables outright. A set-but-empty value, a non-absolute path, or a missing
-# file all fail closed: an explicit override that cannot be honoured is a programming
-# error, not a degrade. The default path being absent IS a degrade — a fresh clone or
-# a mid-rebase checkout must still partition.
+# SOLEUR_SHARD_MANIFEST (light) / SOLEUR_SHARD_MANIFEST_HEAVY (heavy) override the
+# default path so the mutation battery can score fallback behaviour against
+# fixture manifests without touching the committed file. `off` disables
+# outright. A set-but-empty value, a non-absolute path, or a missing file all
+# fail closed: an explicit override that cannot be honoured is a programming
+# error, not a degrade. The default path being absent IS a degrade — a fresh
+# clone or a mid-rebase checkout must still partition.
 _shard_manifest_active=0
 # Parallel indexed arrays, not an assoc map (bash 3.2) and NOT a packed-string
 # pseudo-map either: a "|label=leg|" blob + `case` glob lookup backtracks over
@@ -853,31 +857,42 @@ _shard_manifest_active=0
 # with literal == is ~1.4s for the same 482x482 workload.
 _shard_m_labels=()
 _shard_m_legs=()
-if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" ]]; then
-  _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs.tsv"
-  if [[ -n "${SOLEUR_SHARD_MANIFEST+x}" ]]; then
-    if [[ "$SOLEUR_SHARD_MANIFEST" == "off" ]]; then
+if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "scripts-heavy" ]]; then
+  # The group's own file and its own override variable — bound by name so the
+  # validation below can stay a single code path (indirect expansion keeps the
+  # error messages naming the variable the caller actually set).
+  if [[ "$TEST_GROUP" == "scripts-heavy" ]]; then
+    _shard_mvar="SOLEUR_SHARD_MANIFEST_HEAVY"
+    _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs-heavy.tsv"
+  else
+    _shard_mvar="SOLEUR_SHARD_MANIFEST"
+    _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs.tsv"
+  fi
+  if [[ -n "${!_shard_mvar+x}" ]]; then
+    _shard_mval="${!_shard_mvar}"
+    if [[ "$_shard_mval" == "off" ]]; then
       _shard_mfile=""
-    elif [[ -z "$SOLEUR_SHARD_MANIFEST" ]]; then
-      echo "ERROR: SOLEUR_SHARD_MANIFEST is set but empty." >&2
+    elif [[ -z "$_shard_mval" ]]; then
+      echo "ERROR: $_shard_mvar is set but empty." >&2
       echo "       Set it to an absolute manifest path, 'off', or unset it for the" >&2
-      echo "       default scripts/suite-shard-legs.tsv." >&2
+      echo "       default $_shard_mfile." >&2
       exit 2
-    elif [[ "$SOLEUR_SHARD_MANIFEST" != /* ]]; then
-      echo "ERROR: SOLEUR_SHARD_MANIFEST must be an absolute path" >&2
-      echo "       (got: '$SOLEUR_SHARD_MANIFEST') — this runner never normalises cwd." >&2
+    elif [[ "$_shard_mval" != /* ]]; then
+      echo "ERROR: $_shard_mvar must be an absolute path" >&2
+      echo "       (got: '$_shard_mval') — this runner never normalises cwd." >&2
       exit 2
-    elif [[ ! -f "$SOLEUR_SHARD_MANIFEST" ]]; then
-      echo "ERROR: SOLEUR_SHARD_MANIFEST points at a file that does not exist:" >&2
-      echo "       '$SOLEUR_SHARD_MANIFEST'" >&2
+    elif [[ ! -f "$_shard_mval" ]]; then
+      echo "ERROR: $_shard_mvar points at a file that does not exist:" >&2
+      echo "       '$_shard_mval'" >&2
       exit 2
     else
-      _shard_mfile="$SOLEUR_SHARD_MANIFEST"
+      _shard_mfile="$_shard_mval"
     fi
   elif [[ ! -f "$_shard_mfile" ]]; then
-    echo "[shard] no suite-shard-legs.tsv manifest — positional assignment" >&2
+    echo "[shard] no ${_shard_mfile##*/} manifest — positional assignment" >&2
     _shard_mfile=""
   fi
+  unset _shard_mvar _shard_mval
 
   if [[ -n "$_shard_mfile" ]]; then
     _shard_mn=0
@@ -951,9 +966,10 @@ fi
 # `${SCRIPTS_SHARD+x}`), never after the parse block — unsetting earlier makes that refusal dead
 # code and reopens the silently-sharded-wrong-group case it exists to catch.
 #
-# `SOLEUR_SHARD_MANIFEST` rides the same rule: the manifest is already loaded above, and a
-# battery fixture path into a deleted $WORK must not be inherited by a nested runner.
-unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST
+# `SOLEUR_SHARD_MANIFEST`/`SOLEUR_SHARD_MANIFEST_HEAVY` ride the same rule: the manifest
+# is already loaded above, and a battery fixture path into a deleted $WORK must not be
+# inherited by a nested runner.
+unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY
 
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
@@ -4315,7 +4331,7 @@ fi
 #
 # The three cost-heaviest registrations are gated by want_scripts_heavy, not want_scripts:
 # ci.yml runs them on a dedicated `test-scripts-heavy` matrix so each lands on its own leg,
-# while the lighter scripts group fans out over five legs. TEST_GROUP=all still covers all
+# while the lighter scripts group fans out over six legs. TEST_GROUP=all still covers all
 # three — want_scripts_heavy's `all` arm is what keeps the ship gate, the lefthook battery
 # and main-health-monitor running them.
 #

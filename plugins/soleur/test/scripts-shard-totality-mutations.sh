@@ -73,7 +73,7 @@ fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
 # sites at the bottom: a row added without bumping it reds the battery everywhere,
 # which is what keeps the per-half floors honest (each half must see the full
 # declared space, not just the sites inside its own range).
-DECLARED_TOTAL=21
+DECLARED_TOTAL=24
 ROWS_LO=1
 ROWS_HI=0        # 0 = unset, meaning "all declared rows"
 while (( $# > 0 )); do
@@ -302,6 +302,20 @@ frow() {
   local id="$1" fixture="$2" want="$3" desc="$4"
   local rc
   rc=$(SOLEUR_SHARD_MANIFEST="$fixture" guard_rc)
+  _score_frow_rc "$id" "$rc" "$want" "$desc"
+}
+
+# The heavy sibling: same contract through SOLEUR_SHARD_MANIFEST_HEAVY, so the
+# heavy group's manifest-mode fallback gets scored the way the light group's is.
+hfrow() {
+  local id="$1" fixture="$2" want="$3" desc="$4"
+  local rc
+  rc=$(SOLEUR_SHARD_MANIFEST_HEAVY="$fixture" guard_rc)
+  _score_frow_rc "$id" "$rc" "$want" "$desc"
+}
+
+_score_frow_rc() {
+  local id="$1" rc="$2" want="$3" desc="$4"
   if [[ "$want" == "RED" ]]; then
     if (( rc != 0 )); then
       pass "$id — guard went RED as required ($desc)"
@@ -372,12 +386,12 @@ in_range && SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
   RED "every leg claims every registration (union right, multiset wrong)"
 
 # --- Row 5: ci.yml leg count disagrees with N -------------------------------------------------
-# Four legs whose values still say /5: leg 5's suites run nowhere and all surviving legs are
+# Five legs whose values still say /6: leg 6's suites run nowhere and all surviving legs are
 # green. A count-based read of the matrix cannot see this.
 in_range && row "ROW5" "$CI_YML" \
-  '        shard: ["1/5", "2/5", "3/5", "4/5", "5/5"]' \
-  '        shard: ["1/5", "2/5", "3/5", "4/5"]' \
-  RED "ci.yml declares 4 legs while the partition computes mod 5"
+  '        shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]' \
+  '        shard: ["1/6", "2/6", "3/6", "4/6", "5/6"]' \
+  RED "ci.yml declares 5 legs while the partition computes mod 6"
 
 # --- Row 5b: the HEAVY job's leg count disagrees with N ----------------------------------------
 # Same defect shape one job down: the test-scripts-heavy matrix is its own literal, and the
@@ -613,6 +627,35 @@ in_range && row "M6" "$RUNNER" \
   '    skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \' \
   '    skip_suite "scripts/cf-tunnel-liveness-gate-mutations-MUT6" "relevance" \' \
   RED "a skip_suite label that is not the run_suite label"
+
+# --- Heavy-manifest rows (#8006 phase 2) -------------------------------------------------------
+#
+# Same contract as M1..M3 against the HEAVY group's own table. The heavy
+# fixtures materialise unconditionally alongside the light ones — a --rows
+# half that skips these rows still fails closed if the committed table is
+# absent, and the row-site count cannot shift between halves.
+HMANIFEST_FILE="$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv"
+[[ -f "$HMANIFEST_FILE" ]] \
+  || { echo "FATAL: scripts/suite-shard-legs-heavy.tsv is absent; the heavy-manifest rows cannot be scored" >&2; exit 2; }
+awk '!/^#/ && !done {done=1; next} 1' "$HMANIFEST_FILE" > "$WORK/hmanifest-minus-one.tsv"
+cp "$HMANIFEST_FILE" "$WORK/hmanifest-phantom.tsv"
+printf 'phantom/never-registered-heavy-suite\t1\n' >> "$WORK/hmanifest-phantom.tsv"
+grep '^#' "$HMANIFEST_FILE" > "$WORK/hmanifest-empty.tsv"
+[[ -s "$WORK/hmanifest-minus-one.tsv" && -s "$WORK/hmanifest-phantom.tsv" && -s "$WORK/hmanifest-empty.tsv" ]] \
+  || { echo "FATAL: heavy fixture manifests did not materialise" >&2; exit 2; }
+
+# M7: a heavy label absent from the heavy table still lands on exactly one
+# heavy leg — the hash fallback keeps totality while the table is one label stale.
+in_range && hfrow "M7" "$WORK/hmanifest-minus-one.tsv" GREEN \
+  "a heavy label absent from the heavy manifest is still assigned to exactly one leg (hash fallback)"
+
+# M8: a heavy phantom row names nothing registered — inert for coverage.
+in_range && hfrow "M8" "$WORK/hmanifest-phantom.tsv" GREEN \
+  "a phantom heavy manifest row is inert for coverage"
+
+# M9: an empty heavy table degrades the whole heavy group to hash fallback — still total.
+in_range && hfrow "M9" "$WORK/hmanifest-empty.tsv" GREEN \
+  "an empty heavy manifest assigns every heavy label by hash with totality intact"
 
 # --- MUST-PASS non-canonical input ------------------------------------------------------------
 # Raising a leg's ceiling AND keeping the partition intact must NOT red the guard: it is a
