@@ -32,6 +32,10 @@ For help output, translate the canonical command names to these Codex names.
 | TodoWrite / TodoRead | Use the available plan tool or the project's file-based task tracking |
 | Monitor / AwaitShell / TaskOutput | Bounded shell probes; resume yielded commands with `write_stdin`, keeping progress visible |
 | WebSearch / WebFetch / ToolSearch | Use the available search, fetch, or tool-discovery capability |
+| SendMessage / ListAgents | `followup_task` gives an existing agent a new task and triggers its turn, keeping its context; `send_message` passes a message without a turn; `list_agents` enumerates them. Measured on Codex CLI 0.156.1 (`codex debug prompt-input` collaboration tools: `spawn_agent`, `followup_task`, `send_message`, `wait_agent`, `interrupt_agent`, `list_agents`) |
+| TaskCreate / TaskGet / TaskList / TaskUpdate / TaskStop | Use the available plan tool, or the project's file-based task tracking. NOT measured as a distinct Codex tool — same hedge as the TodoWrite row above |
+| RemoteTrigger / PushNotification / ScheduleWakeup / CronCreate / CronDelete / CronList | No equivalent. Report the unsupported gate rather than simulating it — a scheduled or push-triggered step that silently does not fire is worse than one that refuses |
+| Artifact | No equivalent; Artifact publishes to claude.ai. Write the deliverable to a file in the repository and say where it is |
 | Workflow scripts | Translate orchestration to the available tools; do not execute Claude tool calls as shell JavaScript |
 
 Loading a skill file is Codex's execution entry point when no skill-loading

@@ -79,6 +79,10 @@ If you see a transient warning such as "plugin ... is in your settings but its c
 | TodoWrite / TodoRead | todo_write tool |
 | Monitor / AwaitShell / TaskOutput | get_output to poll a backgrounded shell's output; for wait-until-event watches (CI settle, PR merge state) a background `run_subagent` exit-coded poll loop — see **Polling / watches** below |
 | WebSearch / WebFetch / ToolSearch | web_search, webfetch tools |
+| SendMessage / ListAgents | `read_subagent` reads a subagent's result. There is NO continue-with-context send and no agent listing, so re-spawn with `run_subagent`, passing the prior report in the prompt. Wire names measured (`devin-matcher-parity.test.sh` DEVIN_TOOLS, ADR-223) |
+| TaskCreate / TaskGet / TaskList / TaskUpdate / TaskStop | `todo_write` tool |
+| RemoteTrigger / PushNotification / ScheduleWakeup / CronCreate / CronDelete / CronList | No equivalent. Report the unsupported gate rather than simulating it |
+| Artifact | No equivalent; Artifact publishes to claude.ai. Write the deliverable to a file in the repository and say where it is |
 | Workflow scripts | Translate orchestration to available tools; do not execute Claude tool calls as shell JavaScript |
 
 Soleur skills are exposed as Devin slash commands (`/soleur:<skill>`). When a slash command is invoked, Devin loads the skill's `SKILL.md` and treats its body as the prompt. Follow the skill's full workflow and referenced files; do not stop after reading it, reproduce it selectively, or ask the user to run the next stage.
