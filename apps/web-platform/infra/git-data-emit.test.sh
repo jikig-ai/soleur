@@ -375,13 +375,20 @@ else fail "AC25d MUTATION did not land (quote-strip marker absent)"; fi
 # ---------------------------------------------------------------------------------
 : > "$CAPTURE"
 emit "git-data bootstrap complete" boot_complete info "" \
-  "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
+  "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
+  "fence_on_mapper=yes" "erasure_probe=yes" "plaintext_empty=yes" \
+  "plaintext_volume=present" "served_repos=0" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
 BODY="$(last_body)"
 # KEY **AND VALUE**. The former loop grepped `"$k"` only, so blanking every value on the
 # wire left it 21/21 green — and the value is the entire content of this payload: THREE
 # consumers read these four booleans to decide whether the birth succeeded. A key with an
 # empty value is a boot report that says nothing while looking complete.
-for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes disk_pct=7 inode_pct=9; do
+# (#8211) The three measured store checks join the fixture, and so do the two informational
+# fields — the latter with NON-boolean values on purpose, because that is the shape the
+# producer sends and the roster arm below is what keeps them out of the terminal set.
+for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes \
+          fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
+          plaintext_volume=present served_repos=0 disk_pct=7 inode_pct=9; do
   k="${kv%%=*}"; v="${kv#*=}"
   if grep -qF "\"$k\":\"$v\"" <<<"$BODY"; then pass; else fail "AC30 boot_complete $k != $v" "$BODY"; fi
 done
@@ -416,7 +423,12 @@ _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
 # (#8210) luks_reopen_unit joins the set, MEASURED like nft_metadata_drop (systemctl
 # is-enabled + Result=success on git-data-luks-reopen.service) and — unlike it — TERMINAL for
 # both consumers; the roster arm below is what pins that distinction across files.
-_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit disk_pct inode_pct | sort -u | tr '\n' ' ')"
+# (#8211) fence_on_mapper, erasure_probe and plaintext_empty join the set, each MEASURED like
+# the two above (the fence's findmnt SOURCE, a real erasure run as `git`, the read-only
+# plaintext count) and TERMINAL for every consumer. plaintext_volume and served_repos join it
+# too, but as INFORMATIONAL: they carry present|absent and a count, not yes|no, so the roster
+# arm below subtracts them rather than demanding a reader gate on them.
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
 elif [ "$_producer_keys" = "$_asserted_keys" ]; then
@@ -669,7 +681,13 @@ passes=$_can_p0; fails=$_can_f0
 # and asserts the poll's `for f in` loop, the capture's FAIL alternation, and BOTH readers' SQL
 # projections each equal (or, for projections, contain) exactly that set. Enumerating five names
 # instead would make this guard restate the thing it is checking.
-NON_TERMINAL="nft_metadata_drop disk_pct inode_pct"
+# (#8211) plaintext_volume and served_repos join the non-terminal list. They are the two
+# INFORMATIONAL fields of the new store verification: plaintext_volume is present|absent and
+# served_repos is a count, so neither can ever read `yes`, and a reader that required them to
+# would refuse every healthy boot. What they describe is NOT unguarded — a non-zero
+# served_repos is already a bootstrap FATAL (luks_residue), which both readers see on the
+# fatal arm, and plaintext_empty is the terminal boolean that answers the same question.
+NON_TERMINAL="nft_metadata_drop disk_pct inode_pct plaintext_volume served_repos"
 # DERIVED FROM THE VARIABLE, not from a second hand-typed copy of the same three names. The
 # first revision spelled them again in the grep, so `declared ONCE, here` was false: NON_TERMINAL
 # was dead (shellcheck SC2034 named it), and adding a fourth non-terminal to it would have
@@ -749,7 +767,11 @@ done
 # The floor literal and the message drifted apart: the message said `<47` while the test read
 # 59, so an operator diagnosing a short run was told the wrong threshold. Both now read from
 # one variable, which is also what stops them drifting again.
-MIN_ASSERTIONS=64
+# RAISED 64 -> 72 (#8211): the AC30 fixture loop gained five key-and-value rows
+# (fence_on_mapper, erasure_probe, plaintext_empty, plaintext_volume, served_repos), and the
+# floor moves with them — a floor left at the old number is satisfied by a run that dropped
+# every one of the rows this edit added. Measured: 72 ran, 72 passed.
+MIN_ASSERTIONS=72
 total=$((passes + fails))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   echo "FAIL: ran only ${total} assertions (floor ${MIN_ASSERTIONS}) — suite did not execute fully" >&2

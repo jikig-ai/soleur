@@ -6,8 +6,8 @@
 #   * cryptsetup `isLuks` idempotency guard present (2nd cloud-init run is a no-op);
 #   * the LUKS passphrase is delivered via stdin (`--key-file -`) and NEVER appears
 #     as a bare argv token on any luksFormat/luksOpen line (leak via `ps`/argv);
-#   * the mapper /dev/mapper/git-data is mounted at /mnt/git-data-luks (the staging mount
-#     a future cutover repoints from — #8211);
+#   * the mapper /dev/mapper/git-data is mounted at /mnt/git-data — the SERVED store since
+#     #8211 (ADR-239), not a staging mount beside a plaintext one;
 #   * fail-loud on an empty key — never an unencrypted fallback;
 #   * the key arrives from the Doppler-injected env (doppler run), and the passphrase
 #     literal is NOT baked into user_data (only random_password → doppler_secret).
@@ -115,9 +115,10 @@ p_printf_pipe() {
   if grep -Eq "printf[[:space:]]+'%s'[[:space:]]+\"\\\$GIT_DATA_LUKS_KEY\"[[:space:]]*\|[[:space:]]*cryptsetup" "$1"; then echo 1; else echo 0; fi
 }
 
-# Mapper mounted at the LUKS staging mount (/mnt/git-data-luks).
+# Mapper mounted at the SERVED store root (/mnt/git-data — #8211, ADR-239). Anchored on the
+# trailing boundary so the pre-#8211 /mnt/git-data-luks cannot satisfy it as a prefix.
 p_mapper_mount() {
-  if grep -Eq 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data-luks' "$1"; then echo 1; else echo 0; fi
+  if grep -Eq 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data([[:space:]]|$)' "$1"; then echo 1; else echo 0; fi
 }
 
 # Fail-loud on empty key (no unencrypted fallback).
@@ -660,9 +661,11 @@ assert_mutation "A2 key-file-stdin" p_keyfile_stdin "$CLOUD_INIT" \
 assert_holds   "A3 printf-pipe" p_printf_pipe "$CLOUD_INIT"
 assert_mutation "A3 printf-pipe" p_printf_pipe "$CLOUD_INIT" "s/printf '%s'/printf 'X%sX'/"
 
-# A4: mapper mounted at FRESH_ROOT.
+# A4: mapper mounted at the served store root. The mutation is the #8211 regression written
+# backwards — the mapper parked at the pre-#8211 staging path, where no store script looks.
 assert_holds   "A4 mapper-mount" p_mapper_mount "$CLOUD_INIT"
-assert_mutation "A4 mapper-mount" p_mapper_mount "$CLOUD_INIT" 's#/mnt/git-data-luks#/mnt/git-data#g'
+assert_mutation "A4 mapper-mount" p_mapper_mount "$CLOUD_INIT" \
+  's#(mount /dev/mapper/git-data) /mnt/git-data([[:space:]])#\1 /mnt/git-data-luks\2#'
 
 # A5: fail-loud on empty key.
 assert_holds   "A5 fail-loud" p_fail_loud "$CLOUD_INIT"
@@ -1016,10 +1019,10 @@ for _bp in $(boot_path_files); do
 done
 # Mutation: echo the key. This is the shape that actually puts it in the shared log.
 assert_mutation "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT" \
-  's;^([[:space:]]*)mkdir -p /mnt/git-data-luks.*$;\1echo "key=$GIT_DATA_LUKS_KEY";'
+  's;^([[:space:]]*)mkdir -p /mnt/git-data .*$;\1echo "key=$GIT_DATA_LUKS_KEY";'
 # Same shape in the second key site, which the template-only scan could not see.
 assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
-  "$DIR/git-data-bootstrap.sh" 's;^LUKS_ROOT="/mnt/git-data-luks"$;echo "key=$GIT_DATA_LUKS_KEY";'
+  "$DIR/git-data-bootstrap.sh" 's;^GIT_DATA_ROOT="/mnt/git-data"$;echo "key=$GIT_DATA_LUKS_KEY";'
 
 # --- A2: the gc units must NOT source their env file in a shell -----------------------
 #
@@ -1159,7 +1162,7 @@ assert_mutation "B16c mkfs-project-at-birth (project dropped)" p_mkfs_project "$
 # That is strictly worse than the unstarted promise (#6588).
 #
 # THE PREDICATE ANCHORS ON WHAT FOLLOWS THE MOUNT, not on "no || near mount". The shipped
-# line is `mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks`
+# line is `mountpoint -q /mnt/git-data || mount /dev/mapper/git-data /mnt/git-data`
 # — it legitimately CONTAINS `||` before the mount verb, so a naive test is wrong in both
 # directions: it would fail on the correct line and pass on `mount … || true` written across
 # a continuation.
@@ -1170,9 +1173,9 @@ p_mount_no_fallthrough() {
   # line left the suite 107/107 green. That is the single most likely way a future author adds
   # a fall-through, and the previous comment claimed this predicate covered it.
   folded="$(printf '%s\n' "$slice" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}')"
-  line="$(printf '%s\n' "$folded" | grep -E 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data-luks' || true)"
+  line="$(printf '%s\n' "$folded" | grep -E 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data([[:space:]]|$)' || true)"
   [ -n "$line" ] || { echo 0; return; }   # the mount vanished entirely — not a pass
-  after="${line#*mount /dev/mapper/git-data /mnt/git-data-luks}"
+  after="${line#*mount /dev/mapper/git-data /mnt/git-data}"
   # `||` AND `;`-separated continuations both let the boot proceed past a failed mount.
   case "$after" in
     *'||'*) echo 0; return ;;
@@ -1201,23 +1204,23 @@ p_mount_no_raw_device() {
 
 assert_holds    "B17 mount-no-fallthrough" p_mount_no_fallthrough "$CLOUD_INIT"
 assert_mutation "B17 mount-no-fallthrough (|| true)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || true#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || true#'
 assert_mutation "B17 mount-no-fallthrough (|| : )" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || :#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || :#'
 assert_mutation "B17 mount-no-fallthrough (; true separator)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 ; true#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 ; true#'
 assert_mutation "B17 mount-no-fallthrough (backslash continuation)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 \\\n      || true#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 \\\n      || true#'
 assert_mutation "B17 mount-no-fallthrough (if-wrapper suppresses errexit)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#mountpoint -q /mnt/git-data-luks \|\| (mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#if \1\2; then :; else echo WARN; fi#'
+  's#mountpoint -q /mnt/git-data \|\| (mount /dev/mapper/git-data /mnt/git-data)(.*)$#if \1\2; then :; else echo WARN; fi#'
 assert_mutation "B17 mount-no-fallthrough (set +e disarms errexit)" p_mount_no_fallthrough "$CLOUD_INIT" \
-  's#^([[:space:]]*)(mountpoint -q /mnt/git-data-luks)#\1set +e\n\1\2#'
+  's#^([[:space:]]*)(mountpoint -q /mnt/git-data)#\1set +e\n\1\2#'
 
 assert_holds    "B17r mount-no-raw-device" p_mount_no_raw_device "$CLOUD_INIT"
 assert_mutation "B17r mount-no-raw-device (by-id fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount /dev/disk/by-id/scsi-0HC_Volume_x /mnt/git-data-luks#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || mount /dev/disk/by-id/scsi-0HC_Volume_x /mnt/git-data#'
 assert_mutation "B17r mount-no-raw-device (\$DEV fallback)" p_mount_no_raw_device "$CLOUD_INIT" \
-  's#(mount /dev/mapper/git-data /mnt/git-data-luks)(.*)$#\1\2 || mount "$DEV" /mnt/git-data-luks#'
+  's#(mount /dev/mapper/git-data /mnt/git-data)(.*)$#\1\2 || mount "$DEV" /mnt/git-data#'
 
 # --- B18 (#7216): the isLuks probe BRANCHES ON ITS EXIT CODE; rc 1 is the ONLY format ------
 #

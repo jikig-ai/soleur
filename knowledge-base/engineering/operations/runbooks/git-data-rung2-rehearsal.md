@@ -239,6 +239,48 @@ statement about the host:
 | `SENTRY_VERDICT_UNREADABLE` | Parse `RUNG2_SENTRY_CROSSCHECK` out of the evidence. | Its value is `NOT_RUN` (the cross-check never ran — no `jq`, no `SENTRY_ISSUE_RO_TOKEN`, or no reader on the rehearsal runner), or a value outside the set the capture can write. An **absent** key does not reach this token: the required-key loop refuses it first, with an untokenised cardinality message. |
 | `RUN_FLOOR_UNREADABLE` | Read which run the PREVIOUS version of the evidence attested, so Guard 5 cannot tell a fresh rehearsal from a replay of an older one. | Re-run in a full checkout (`git fetch --unshallow`). Note the known gap recorded in ADR-149 `## Amendment — 2026-09-20 (#8010)`: on a shallow clone the floor comes back EMPTY and Guard 5 skips silently rather than reaching this token, so an absent HOLD here is not proof the floor was checked. |
 
+## The PR #8564 payload: what the rehearsal must read
+
+PR #8564 (PR1 of #8211, ADR-239) changes the cloud-init template and several `file()`-bound
+payloads, so it voids every earlier rung-2 evidence file — including any rehearsed for PR #8511
+alone.
+
+**The #8511 re-rehearsal is held until PR #8564 merges** (the operator ruling on DC-2, posted on
+#5914). Rehearsing #8511 first buys a rehearsal that PR #8564's merge immediately invalidates.
+**One rehearsal on `main` after PR #8564 merges covers both payloads**, and serves both ADR-237
+post-merge step 2 and PR #8564's own gate. The interlock window in *Changing the payload* is
+correspondingly longer; that is the accepted price of not paying for two rehearsal hosts.
+
+A PASS on that rehearsal requires all of the following, in addition to the usual artifact checks.
+
+**Boot arm — `boot_complete` terminal booleans.** Every one of these must read `yes`:
+
+```text
+luks_mounted=yes fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes
+```
+
+`fence_on_mapper` and `erasure_probe` are new in PR #8564. `fence_on_mapper` says the `pre-receive`
+fence resolved onto `/dev/mapper/git-data` rather than onto the mountpoint underneath it;
+`erasure_probe` says one real run of `git-data-remove.sh`, as the `git` uid on a synthetic id,
+exited 0 with `not present (no-op)` on stderr. `plaintext_empty` says the retained plaintext volume
+was mounted read-only and counted at zero. `git-data-rung2-evidence-capture.sh` refuses to write
+evidence if any terminal boolean reads `no`.
+
+**Reboot arm — the re-attach target.** The reboot arm must read:
+
+```text
+luks_reopen_ok action=reopened target=/mnt/git-data
+```
+
+`action=reopened` alone is **not** enough, and was the pre-#8564 acceptance. The `target` field is
+what proves the mapper came back at the serving path rather than at some other mountpoint, so any
+other `target` is a FAIL. The capture's `HOST_SQL` reads the column, and
+`tests/scripts/test-git-data-rung2-evidence-capture.sh` covers both arms.
+
+**Informational, not gating:** `plaintext_volume=present|absent` and `served_repos=<n>`. A non-zero
+`served_repos` is not informational — it ends the boot as `FATAL: luks_residue count=<n>`, so it
+never reaches a `boot_complete` a capture would accept.
+
 ## Changing the payload: the two-PR sequence
 
 The evidence is hash-bound to the payload and Guard 4 refuses a commit that touches both, and
