@@ -39,6 +39,7 @@ import {
   generateSpecC4,
   generateViewPage,
   generateViewsC4,
+  likec4ChildEnv,
   loadComponentDir,
 } from "../lib/c4-from-components";
 import { canonicalizeC4Model } from "../lib/c4-canonical.mjs";
@@ -235,7 +236,7 @@ export function runProducer(root: string): { code: number; marker: string } {
   // On this repo the same path replaced a 755,747-byte artifact carrying operator-
   // positioned `manualLayouts` geometry.
   //
-  // `scripts/regenerate-c4-model.sh:75-118` renders to a temp dir for exactly this
+  // `render-c4-model.sh` (beside this file) renders to a temp dir for exactly this
   // reason and states it: "On error we never publish, so a broken .c4 can never
   // clobber the good committed artifact." There is a post-mortem in this repo for
   // that clobber having already happened once. The previous version of this file
@@ -259,6 +260,7 @@ export function runProducer(root: string): { code: number; marker: string } {
     ["-y", "--ignore-scripts", `likec4@${LIKEC4_VERSION}`, "export", "json", "-o", stagedJson, "."],
     {
       cwd: diagramsDir,
+      env: likec4ChildEnv(process.env),
       encoding: "utf8",
       timeout: RENDER_TIMEOUT_MS,
       maxBuffer: RENDER_MAX_BUFFER,

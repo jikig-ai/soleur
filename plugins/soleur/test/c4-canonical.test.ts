@@ -4,7 +4,7 @@
 // regenerated it conflicted on GitHub. The canonical form is one JSON value per
 // line with every view's `hash` blanked: a 152-pair replay of real concurrent
 // .c4 PRs went from 0 clean merges to 107, with no merge that was clean but
-// wrong. Three writers (scripts/regenerate-c4-model.sh, the web app's
+// wrong. Three writers (plugins/soleur/scripts/render-c4-model.sh, the web app's
 // c4-render.ts, the plugin's generate-c4-from-components.ts) must emit exactly
 // these bytes, or each rewrites the others' file on every save.
 //
@@ -235,7 +235,7 @@ describe("repo wiring", () => {
       expect.arrayContaining([
         "apps/web-platform/server/c4-render.ts",
         "plugins/soleur/scripts/generate-c4-from-components.ts",
-        "scripts/regenerate-c4-model.sh",
+        "plugins/soleur/scripts/render-c4-model.sh",
       ]),
     );
     const unrouted = writers.filter((f) => !/c4-canonical/.test(code(f)));
