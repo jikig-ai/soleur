@@ -46,7 +46,10 @@ else — absent file, `scripts-heavy`, a K bump pending regen — takes the
 positional path with a stderr notice. Malformed rows, duplicate labels, or
 out-of-range legs exit 2 at parse. `SOLEUR_SHARD_MANIFEST` overrides the
 path for tests (`off` disables; set-but-empty, relative, or missing paths
-all exit 2).
+all exit 2). The lookup is parallel indexed arrays scanned with literal
+`==` — a packed `"|label=leg|"` string searched by glob was measured at
+6+ CPU-minutes per enumerate (glob backtracking); if the structure is ever
+revisited, benchmark the lookup, not the parse.
 
 **Regeneration.**
 
