@@ -34,7 +34,6 @@
 // Source: extracted from .github/workflows/scheduled-daily-triage.yml
 // (deleted in the same commit).
 
-import { spawn } from "node:child_process";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
@@ -46,9 +45,8 @@ import {
   type HandlerArgs,
 } from "./_cron-shared";
 import {
-  resolveClaudeBin,
+  spawnClaudeEval,
   type SpawnResult,
-  KILL_ESCALATION_MS,
 } from "./_cron-claude-eval-substrate";
 // Re-export for test parity (cron-daily-triage.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
@@ -158,13 +156,8 @@ DOMAIN (pick one — aligned with Soleur department leaders):
 // can assert `--strict-mcp-config` membership + position structurally, rather
 // than via brittle source-text matching.
 export const CLAUDE_CODE_FLAGS = [
-  // #5691 — defensive: this cron passes NO `--plugin-dir`, so it never loads
-  // the plugin-bundled remote MCP servers and makes no MCP dial; the
-  // load-bearing fix here is the telemetry env in buildSpawnEnv. `--strict-mcp-config`
-  // is belt-and-suspenders (guards a future `--plugin-dir` addition / project
-  // `.mcp.json` auto-discovery). Prepended before `--print` (position-safe vs
-  // the trailing `--`). Mirrors spawnClaudeEval; this cron does not route through it.
-  "--strict-mcp-config",
+  // #5691/#8611 — `--strict-mcp-config` is NOT listed here: this cron now routes through
+  // spawnClaudeEval, which prepends it (before `--print`, position-safe vs the trailing `--`).
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "80",
@@ -231,6 +224,8 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronDailyTriageHandler({
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs): Promise<{
   exitCode: number | null;
   durationMs: number;
@@ -255,95 +250,23 @@ export async function cronDailyTriageHandler({
     }),
   );
 
-  const result = await step.run("claude-eval", async (): Promise<SpawnResult> => {
-    const claudeBin = resolveClaudeBin();
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
-    const startedAt = Date.now();
-    let abortedByTimeout = false;
-    let exited = false;
-    let escalationTimer: NodeJS.Timeout | null = null;
-
-    try {
-      return await new Promise<SpawnResult>((resolve) => {
-        const child = spawn(
-          claudeBin,
-          [...CLAUDE_CODE_FLAGS, DAILY_TRIAGE_PROMPT],
-          {
-            detached: true, // own process group so SIGTERM propagates to grandchildren
-            stdio: ["ignore", "inherit", "inherit"],
-            env: buildSpawnEnv(installationToken),
-          },
-        );
-
-        const finish = (r: SpawnResult) => {
-          exited = true;
-          if (escalationTimer) clearTimeout(escalationTimer);
-          resolve(r);
-        };
-
-        // Single merged abort handler (was two listeners — code-simplifier
-        // collapse): flip the timeout flag AND issue SIGTERM in one block,
-        // then schedule the SIGKILL escalation. SIGKILL is gated on local
-        // `exited` (set by finish()) instead of `child.killed`: the latter
-        // only flips when `ChildProcess.prototype.kill()` is invoked on the
-        // object, NOT when external `process.kill(pid, ...)` delivers the
-        // signal OR when the child exits naturally — so the original
-        // `!child.killed` guard would have fired SIGKILL against a recycled
-        // PID 5 s after a clean exit. The exit/error paths clear the
-        // escalation timer so a clean exit cannot trail a stray SIGKILL.
-        ac.signal.addEventListener(
-          "abort",
-          () => {
-            abortedByTimeout = true;
-            if (!child.pid) return;
-            const pid = child.pid;
-            try {
-              process.kill(-pid, "SIGTERM");
-            } catch {
-              // Process group already gone — fine.
-            }
-            escalationTimer = setTimeout(() => {
-              if (exited) return;
-              try {
-                process.kill(-pid, "SIGKILL");
-              } catch {
-                // Already exited between SIGTERM and the 5 s escalation.
-              }
-            }, KILL_ESCALATION_MS);
-          },
-          { once: true },
-        );
-
-        child.on("exit", (exitCode, signal) => {
-          finish({
-            ok: exitCode === 0,
-            exitCode,
-            signal,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-        child.on("error", (err) => {
-          reportSilentFallback(err, {
-            feature: "cron-claude-eval",
-            op: "child_process.spawn",
-            message: "claude-code spawn failed",
-            extra: { fn: "cron-daily-triage" },
-          });
-          finish({
-            ok: false,
-            exitCode: -1,
-            signal: null,
-            abortedByTimeout,
-            durationMs: Date.now() - startedAt,
-          });
-        });
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+  // #8611 — routed through spawnClaudeEval (was an inline spawn): inherits the single-flight
+  // guard, the cost marker, --strict-mcp-config and the telemetry env from the one chokepoint.
+  // No ephemeral workspace: the child runs in the server process cwd, exactly as the inline spawn did.
+  const result = await step.run("claude-eval", (): Promise<SpawnResult> =>
+    spawnClaudeEval({
+      spawnCwd: process.cwd(),
+      installationToken,
+      flags: CLAUDE_CODE_FLAGS,
+      prompt: DAILY_TRIAGE_PROMPT,
+      maxTurnDurationMs: MAX_TURN_DURATION_MS,
+      cronName: "cron-daily-triage",
+      buildSpawnEnv,
+      logger,
+      runId,
+      attempt,
+    }),
+  );
 
   // Sentry heartbeat — single end-of-job POST per
   // 2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md. Sentry slug

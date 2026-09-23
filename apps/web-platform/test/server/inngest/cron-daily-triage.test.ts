@@ -23,6 +23,16 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const reportSilentFallbackSpy = vi.fn();
+// #8611 — the claude-eval step now runs through spawnClaudeEval, which records the run in
+// routine_run_progress when given a runId. No database here: stub the two writers.
+vi.mock("@/server/inngest/routine-run-progress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/inngest/routine-run-progress")>()),
+  upsertRoutineRunProgress: vi.fn(async () => {}),
+  heartbeatRoutineRunProgress: vi.fn(async () => {}),
+}));
+// A well-formed Inngest run id, so the single-flight guard engages (a missing one is reported).
+const RUN_ID = "01M37EZCXEGGSDCC428M9N8MYX";
+
 vi.mock("@/server/observability", () => ({
   mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
@@ -141,7 +151,7 @@ describe("cron-daily-triage — T1 happy path", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     expect(result.exitCode).toBe(0);
@@ -184,7 +194,7 @@ describe("cron-daily-triage — #8076 run-reports are not triage input", () => {
     });
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
     const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
     const prompt = spawnArgs[spawnArgs.length - 1];
     // The clause must sit INSIDE the same select(...) as the two existing ones.
@@ -225,7 +235,7 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // mint ran, and ran first.
     expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
@@ -262,7 +272,7 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
 
       const handler = await importHandler();
       const step = makeStep();
-      await handler({ step, logger });
+      await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // the 60-min lifetime floor propagates to generateInstallationToken
       // (installation id 12345 from the createProbeOctokit mock), AND the
@@ -303,7 +313,7 @@ describe("cron-daily-triage — T2 spawn error (ENOENT)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(-1);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -340,7 +350,7 @@ describe("cron-daily-triage — T3 AbortSignal SIGTERM→SIGKILL escalation", ()
 
       const handler = await importHandler();
       const step = makeStep();
-      const promise = handler({ step, logger });
+      const promise = handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // Advance past AbortSignal ceiling → SIGTERM should fire.
       await vi.advanceTimersByTimeAsync(MAX_TURN_DURATION_MS + 10);
@@ -382,7 +392,7 @@ describe("cron-daily-triage — T4 Sentry env vars missing", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(0);
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;

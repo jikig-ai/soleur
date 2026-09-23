@@ -455,6 +455,21 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", // SKILL Phase 3
     "./node_modules/.bin/vitest run", // SKILL Phase 2/4 — LITERAL test verb (Phase 3.5 rewrite)
   ],
+  // #8611 — the two crons that moved from an inline spawn onto spawnClaudeEval (for the
+  // single-flight guard and the cost marker). They spawn in the server cwd, NOT through
+  // setupEphemeralWorkspace, so no cron-allow.txt is written for them and the hook does not
+  // read these rows today: the live enforcement is the CLI `--allowedTools` in each cron's
+  // CLAUDE_CODE_FLAGS. Each row mirrors that list verb-for-verb (pinned by
+  // cron-claude-eval-mcp-flags.test.ts), so moving either cron onto a workspace later is safe.
+  "cron-daily-triage": ["gh issue list", "gh issue view", "gh issue edit", "gh issue comment"],
+  "cron-follow-through-monitor": [
+    "gh issue list",
+    "gh issue view",
+    "gh issue edit",
+    "gh issue comment",
+    "gh issue close",
+    "gh label create",
+  ],
 };
 
 // #5199 — per-cron mcp__* allowance for the containment hook. The relax-minimal
@@ -966,7 +981,56 @@ export async function teardownEphemeralWorkspace(
   }
 }
 
-export async function spawnClaudeEval(args: {
+// #8611 Guard 1 — single-flight per (cronName, runId). A step retry that arrives while the first
+// Claude child is still running JOINS that child instead of spawning a second paid session. The map
+// lives on globalThis because the app ships two bundles (next build route chunks and the esbuild
+// server), so a module-level Map is not guaranteed to be one instance. Process-local state (AP-013):
+// correct while one web host executes Inngest steps; ADR-241 names the trigger for shared state.
+type SpawnArgs = Parameters<typeof spawnClaudeEvalUnguarded>[0];
+const IN_FLIGHT_KEY = Symbol.for("soleur.claudeEvalInFlight");
+const INNGEST_RUN_ID = /^01[0-9A-HJKMNP-TV-Z]{24}$/;
+function inFlight(): Map<string, Promise<SpawnResult>> {
+  const g = globalThis as unknown as Record<symbol, Map<string, Promise<SpawnResult>> | undefined>;
+  return (g[IN_FLIGHT_KEY] ??= new Map());
+}
+
+export function spawnClaudeEval(args: SpawnArgs): Promise<SpawnResult> {
+  const { cronName, runId } = args;
+  if (!runId || !INNGEST_RUN_ID.test(runId)) {
+    // Never key on `undefined`: two unrelated runs would share one child.
+    reportSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "claude-eval-singleflight-no-runid",
+      message: "claude-eval spawned without a well-formed Inngest runId; single-flight guard skipped",
+      extra: { cronName },
+    });
+    return spawnClaudeEvalUnguarded(args);
+  }
+  const key = `${cronName}:${runId}`;
+  const map = inFlight();
+  const live = map.get(key);
+  if (live) {
+    reportSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "claude-eval-singleflight-join",
+      message: "claude-eval step re-invoked while its child was still running; joined the live child",
+      extra: { cronName, runId },
+    });
+    return live;
+  }
+  // Set SYNCHRONOUSLY, before any await: a retry landing during the first call's awaits must see it.
+  const p = (async () => {
+    try {
+      return await spawnClaudeEvalUnguarded(args);
+    } finally {
+      map.delete(key);
+    }
+  })();
+  map.set(key, p);
+  return p;
+}
+
+async function spawnClaudeEvalUnguarded(args: {
   spawnCwd: string;
   installationToken: string;
   flags: string[];
