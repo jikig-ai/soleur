@@ -361,17 +361,9 @@ while IFS= read -r name; do
   done < <(printf '%s\n' enabled detectorIds frequency triggerLogicType triggerConditions actionFilters)
 done < <(jq -r 'keys[]' <<<"$ref_proj")
 
-# ── The other direction: an in-scope live rule the root does not declare ────
-# Not cosmetic. A rule in scope that Terraform does not manage is one an apply
-# will never repair, and the next reader of `issue-alerts.tf` will not know it
-# exists. Since the reference is projected from the plan, UNMANAGED here means
-# exactly "undeclared" — never "the reference file is stale" (that is the
-# reference gate's job, at PR time).
-while IFS= read -r name; do
-  [[ -n "$name" ]] || continue
-  jq -e --arg n "$name" 'has($n)' >/dev/null <<<"$ref_proj" && continue
-  _finding "UNMANAGED: '$name' is live and in scope but declared nowhere in apps/web-platform/infra/sentry/ (absent from the reference projected from the plan). Adopt it as a sentry_alert or delete it in Sentry. If Sentry created it (createdBy null) with a trigger type the provider cannot express, register it instead: add the type to `def excluded` in tests/scripts/lib/sentry-alert-projection.jq and {id, name} to apps/web-platform/infra/sentry/vendor-default-workflows.json (#8267)."
-done < <(jq -r 'keys[]' <<<"$live_proj")
+# The other direction (an in-scope live rule the root does not declare) is
+# classified BELOW the frozen-name derivation, because a Terraform-FROZEN rule
+# can enter this scope too (#4781) and must not be reported as undeclared.
 
 # ── FROZEN-RULE PIN (Guard 4, #8451) ────────────────────────────────────────
 # A workflow whose trigger type is in the projection's `excluded` set is outside
@@ -474,6 +466,49 @@ if [[ -n "$missing_cap" ]]; then
   echo "ERROR: Terraform-frozen rule(s) with no entry in the committed capture at ${FROZEN_CAPTURE}: $(sed "s/.*/'&'/" <<<"$missing_cap" | tr '\n' ' ')- the frozen-rule pin has no anchor for them. Refusing." >&2
   exit 1
 fi
+
+# ── The other direction: an in-scope live rule the root does not declare ────
+# Not cosmetic. A rule in scope that Terraform does not manage is one an apply
+# will never repair, and the next reader of `issue-alerts.tf` will not know it
+# exists. Since the reference is projected from the plan, UNMANAGED here means
+# exactly "undeclared" — never "the reference file is stale" (that is the
+# reference gate's job, at PR time).
+#
+# A TERRAFORM-FROZEN NAME IS NOT UNDECLARED. When a frozen rule's live copy loses
+# its excluded trigger type (#4781: its triggers emptied), it enters this scope,
+# where the reference cannot declare it (tf_legacy_floor). Reported as UNMANAGED
+# it would carry three false claims and "delete it in Sentry"; it is reported as
+# FROZEN RULE LEFT SCOPE instead, beside the pin's FROZEN findings for the same
+# name. Reclassified, never skipped: a skip is safe only while every frozen
+# capture entry carries an excluded type, and nothing enforces that.
+#
+# ONE jq PASS OVER WHOLE KEYS, printed through the pin's `safe`. A live name is
+# vendor- and org-member-controlled text that reaches the runner log and a PUBLIC
+# issue body: a line-oriented `keys[] | read` split a name at LF (a fragment could
+# impersonate a frozen rule) and printed a CR raw (a `::` workflow command).
+# Placed after the refusals above so `frozen_names_json` exists; a run that
+# refuses there prints no UNMANAGED lines, which is accepted — the refusal exits 1
+# and is the thing to fix first, and the per-rule DRIFT lines print above it.
+set +e
+undeclared_report=$(jq -r -n --argjson lp "$live_proj" --argjson rp "$ref_proj" --argjson fz "$frozen_names_json" '
+  def safe: tostring | gsub("[\u0000-\u001f\u007f\u2028\u2029]"; "") | .[0:200];
+  $lp | keys[] | select(. as $n | $rp | has($n) | not)
+  | if (. as $n | $fz | index($n)) != null then "LEFT\t\(safe)" else "UNMANAGED\t\(safe)" end
+' 2>"$jq_err")
+rc=$?
+set -e
+if [[ "$rc" -ne 0 ]]; then
+  echo "ERROR: the undeclared-rule classification did not evaluate (jq rc=$rc): $(tr '\n' ' ' <"$jq_err" | cut -c1-300). Cannot assert fidelity." >&2
+  exit 1
+fi
+while IFS=$'\t' read -r cls name; do
+  case "$cls" in
+    LEFT)
+      _finding "FROZEN RULE LEFT SCOPE: '$name' is Terraform-frozen (legacy_trigger_conditions, ignore_changes = all), but its live workflow no longer carries an excluded trigger type, so it entered the comparison scope, where the reference cannot declare it. It is NOT undeclared. GET its id: if it is the captured id, repair it per the FROZEN findings for the same name (PUT from its capture entry); if it is not, it is a copy and the duplicate remedy applies. Never delete the captured id or register it as a vendor default." ;;
+    UNMANAGED)
+      _finding "UNMANAGED: '$name' is live and in scope but declared nowhere in apps/web-platform/infra/sentry/ (absent from the reference projected from the plan). Adopt it as a sentry_alert or delete it in Sentry. If Sentry created it (createdBy null) with a trigger type the provider cannot express, register it instead: add the type to \`def excluded\` in tests/scripts/lib/sentry-alert-projection.jq and {id, name} to apps/web-platform/infra/sentry/vendor-default-workflows.json (#8267)." ;;
+  esac
+done <<<"$undeclared_report"
 
 set +e
 frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson live "$live_json" \
@@ -628,5 +663,5 @@ if [[ "$findings" -eq 0 ]]; then
 fi
 
 echo "ERROR: sentry_alert live fidelity FAILED — ${findings} divergence(s) between live Sentry and the reference at ${REFERENCE} (frozen-rule pin anchor: ${FROZEN_CAPTURE})." >&2
-echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture; MANAGED RULE GAINED EXCLUDED TRIGGER is a Terraform-managed rule that left the comparison scope because live Sentry added a trigger type the provider cannot express, and an apply will NOT repair it (repair live state, or take the rule out of Terraform management)." >&2
+echo "A rule that exists, plans clean, and matches nothing is the failure this probe is for. Re-read the findings above: DELETED and DRIFT are repaired by an apply; DISABLED, MONITOR UNBIND and LOGICTYPE FLIP are live state an apply will not touch; UNMANAGED is a rule the root does not declare; FROZEN RULE LEFT SCOPE is a Terraform-frozen rule whose live copy lost its excluded trigger: repair it from the capture, never delete it; FROZEN * are the Terraform-frozen rules (legacy_trigger_conditions, ignore_changes = all), compared against the committed capture: an apply will not touch them; UNMANAGED-FROZEN is an excluded-type live workflow that is neither Terraform-frozen nor in the capture; MANAGED RULE GAINED EXCLUDED TRIGGER is a Terraform-managed rule that left the comparison scope because live Sentry added a trigger type the provider cannot express, and an apply will NOT repair it (repair live state, or take the rule out of Terraform management)." >&2
 exit 1
