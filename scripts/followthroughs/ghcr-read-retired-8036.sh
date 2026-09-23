@@ -117,9 +117,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUERY="${GHCR_RETIRED_8036_BQ:-$SCRIPT_DIR/../betterstack-query.sh}"
 
 # The three graded literals, named once so `--explain` and the grader cannot drift apart.
-MARKER_TOKEN='SOLEUR_DEPLOY_GHCR_CONFIG'
-RELOGIN_TOKEN='stage=relogin_failed'
-VERIFY_TOKEN='IMAGE_VERIFY'
+# Named *_LITERAL, not *_TOKEN: these are journald marker strings, and a `*_TOKEN` name makes
+# scripts/lint-shell-trace-credential-refusal.py treat them as credentials the xtrace refusal
+# must cover. Widening that refusal to name non-secrets is the wrong repair — it dilutes what
+# the guard asserts. The name was the defect.
+MARKER_LITERAL='SOLEUR_DEPLOY_GHCR_CONFIG'
+RELOGIN_LITERAL='stage=relogin_failed'
+VERIFY_LITERAL='IMAGE_VERIFY'
 
 if [[ "${1:-}" == "--explain" ]]; then
   cat <<EXPLAIN
@@ -128,13 +132,13 @@ PROBE-READY ghcr-read-retired-8036
   source:    Better Stack, journald records whose decoded SYSLOG_IDENTIFIER == "ci-deploy"
   key:       _MACHINE_ID (12-hex prefix in the report)
   window:    __REALTIME_TIMESTAMP >= SOLEUR_FT_EARLIEST (no header fallback; unset => exit 3)
-  fetch:     ${QUERY##*/} --since <earliest> --grep ${MARKER_TOKEN} --grep relogin_failed --grep ${VERIFY_TOKEN} --limit \${SOLEUR_FT_LIMIT:-5000}
+  fetch:     ${QUERY##*/} --since <earliest> --grep ${MARKER_LITERAL} --grep relogin_failed --grep ${VERIFY_LITERAL} --limit \${SOLEUR_FT_LIMIT:-5000}
   graded, per host, as a CONJUNCTION (never a pure absence):
-    leg 1  latest ${MARKER_TOKEN} line carries a 'swept=' token AND 'deploy_ghcr_auth=none'
+    leg 1  latest ${MARKER_LITERAL} line carries a 'swept=' token AND 'deploy_ghcr_auth=none'
            ('swept=' is the version discriminator: the pre-1c script cannot emit it, while
             'deploy_ghcr_auth=none' is also what a freshly provisioned PRE-1c host reads)
-    leg 2  zero '${RELOGIN_TOKEN}' rows  (the operator's stated criterion, verbatim)
-    leg 3  latest ${VERIFY_TOKEN}* verdict is not 'result=verify_failed'
+    leg 2  zero '${RELOGIN_LITERAL}' rows  (the operator's stated criterion, verbatim)
+    leg 3  latest ${VERIFY_LITERAL}* verdict is not 'result=verify_failed'
   NOT graded: home_ghcr_auth / root_ghcr_auth — both are unreachable from webhook.service
            (ProtectHome=read-only; root's home is 0700) and ride the 1d follow-up.
   exits:   0 PASS | 1 FAIL (leg 1 or 2) | 5 ACTION REQUIRED (leg 3) | 2 NOT YET | 3 CANNOT ESTABLISH
@@ -199,7 +203,7 @@ EARLIEST_US=$(( EARLIEST_EPOCH * 1000000 ))
 # OR-combined)"). `relogin_failed` rather than the full `stage=relogin_failed`: the server-side
 # LIKE is a substring match and the shorter term cannot miss a spacing variant; the exact literal
 # is re-checked client-side below against the DECODED message.
-RAWOUT="$("$QUERY" --since "$SINCE_SQL" --grep "$MARKER_TOKEN" --grep relogin_failed --grep "$VERIFY_TOKEN" --limit "$LIMIT" 2>/dev/null)" || {
+RAWOUT="$("$QUERY" --since "$SINCE_SQL" --grep "$MARKER_LITERAL" --grep relogin_failed --grep "$VERIFY_LITERAL" --limit "$LIMIT" 2>/dev/null)" || {
   echo "TRANSIENT: betterstack-query.sh exited non-zero (auth/config/network). Its output is not" >&2
   echo "           reproduced: the credential is bound in that process and this text is public." >&2
   exit 2
@@ -214,7 +218,7 @@ fi
 # One TSV line per decoded record:
 #   <decoded 0|1> <sid 0|1> <mid> <ts_us> <kind> <swept> <deploy_auth> <verify_class>
 # kind: marker | relogin | verify | other
-PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_TOKEN" '
+PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
   (fromjson? // null) as $row
   | if ($row | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-"
     else
@@ -260,7 +264,7 @@ MARKERS_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 8 && $3 == "-" &
 MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 8 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
 
 if [[ "$MARKERS_WITH_MID" -eq 0 && "$MARKERS_NO_MID" -gt 0 ]]; then
-  echo "CANNOT ESTABLISH: ${MARKERS_NO_MID} ci-deploy ${MARKER_TOKEN} line(s) since $EARLIEST carry no" >&2
+  echo "CANNOT ESTABLISH: ${MARKERS_NO_MID} ci-deploy ${MARKER_LITERAL} line(s) since $EARLIEST carry no" >&2
   echo "                  usable _MACHINE_ID, so no reading can be attributed to a host." >&2
   exit 3
 fi
@@ -295,7 +299,7 @@ RELOGIN_ONLY="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 8 && $3 != "-"' | 
   END { for (m in rel) if (!(m in mark)) n++; print n + 0 }')"
 
 if [[ "$HOSTS_TOTAL" -eq 0 && "$RELOGIN_ONLY" -eq 0 ]]; then
-  echo "TRANSIENT: no ci-deploy ${MARKER_TOKEN} line from any host since $EARLIEST — no deploy has" >&2
+  echo "TRANSIENT: no ci-deploy ${MARKER_LITERAL} line from any host since $EARLIEST — no deploy has" >&2
   echo "           run the new script yet (${ROWS_TOTAL} row(s) seen, none a ci-deploy marker). Zero" >&2
   echo "           hosts is never a PASS. Retry next sweep." >&2
   exit 2
@@ -324,24 +328,24 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark; do
 done <<<"$HOSTS"
 
 if [[ "$RELOGIN_ONLY" -gt 0 ]]; then
-  REPORT="${REPORT}  note: ${RELOGIN_ONLY} host(s) emitted ${RELOGIN_TOKEN} but no ${MARKER_TOKEN} line — ungraded (they have not demonstrated they ran the new script)."$'\n'
+  REPORT="${REPORT}  note: ${RELOGIN_ONLY} host(s) emitted ${RELOGIN_LITERAL} but no ${MARKER_LITERAL} line — ungraded (they have not demonstrated they ran the new script)."$'\n'
 fi
 
 if [[ "$n_fail" -gt 0 || "$RELOGIN_ONLY" -gt 0 ]]; then
   echo "FAIL: ${n_fail} of ${HOSTS_TOTAL} graded host(s), plus ${RELOGIN_ONLY} ungraded host(s), do not satisfy"
   echo "      the retirement conjunction since"
-  echo "      ${EARLIEST}. Leg 1 needs the latest ${MARKER_TOKEN} line to carry a 'swept=' token AND"
-  echo "      'deploy_ghcr_auth=none'; leg 2 needs zero '${RELOGIN_TOKEN}'. A missing 'swept=' means the"
+  echo "      ${EARLIEST}. Leg 1 needs the latest ${MARKER_LITERAL} line to carry a 'swept=' token AND"
+  echo "      'deploy_ghcr_auth=none'; leg 2 needs zero '${RELOGIN_LITERAL}'. A missing 'swept=' means the"
   echo "      host is still running the pre-1c script, NOT that the sweep failed. Leave #8036 open."
   printf '%s' "$REPORT"
   echo "Read the rows with:"
-  echo "  doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since '${SINCE_SQL}' --grep ${MARKER_TOKEN} --grep relogin_failed | jq -r '.raw | fromjson | select(.SYSLOG_IDENTIFIER == \"ci-deploy\") | .message'"
+  echo "  doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since '${SINCE_SQL}' --grep ${MARKER_LITERAL} --grep relogin_failed | jq -r '.raw | fromjson | select(.SYSLOG_IDENTIFIER == \"ci-deploy\") | .message'"
   exit 1
 fi
 
 if [[ "$n_action" -gt 0 ]]; then
   echo "ACTION REQUIRED: ${n_action} of ${HOSTS_TOTAL} host(s) have the GHCR read path retired (legs 1 and 2"
-  echo "      pass) but their latest ${VERIFY_TOKEN} verdict is result=verify_failed — signature"
+  echo "      pass) but their latest ${VERIFY_LITERAL} verdict is result=verify_failed — signature"
   echo "      verification is broken there. Under IMAGE_VERIFY_MODE=warn the deploy PROCEEDS, and no"
   echo "      Sentry rule matches this class, so this line is the only notification. Check whether the"
   echo "      sweep clipped the co-resident zot auths entry before reading it as an unrelated defect."
@@ -350,8 +354,8 @@ if [[ "$n_action" -gt 0 ]]; then
 fi
 
 echo "PASS: ${n_pass} host(s) observed since ${EARLIEST}, and every one satisfies all three legs —"
-echo "      latest ${MARKER_TOKEN} carries a 'swept=' token with deploy_ghcr_auth=none, zero"
-echo "      '${RELOGIN_TOKEN}', and no verify_failed. The host-side GHCR read path is retired."
+echo "      latest ${MARKER_LITERAL} carries a 'swept=' token with deploy_ghcr_auth=none, zero"
+echo "      '${RELOGIN_LITERAL}', and no verify_failed. The host-side GHCR read path is retired."
 echo "      Close #8036."
 printf '%s' "$REPORT"
 exit 0

@@ -49,6 +49,21 @@
 
 set -uo pipefail
 
+# #7797: refuse to run under xtrace with a live credential bound — `set -x` echoes every
+# expansion, so a traced run prints the Better Stack password. Added by #8036 1c: this file is in
+# scripts/lint-shell-trace-credential-refusal.baseline.txt, and CI runs that lint with
+# `--changed`, which bypasses the baseline for every file a PR touches. A one-line edit therefore
+# owes the whole debt, and paying it here is cheaper than carrying a red into review.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+
 if [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_HOST not set" >&2; exit 2; fi
 if [[ -z "${BETTERSTACK_QUERY_USERNAME:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_USERNAME not set" >&2; exit 2; fi
 if [[ -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_PASSWORD not set" >&2; exit 2; fi

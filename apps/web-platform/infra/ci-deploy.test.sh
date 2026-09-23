@@ -7794,6 +7794,12 @@ _1c_mixed_cfg() {
 }
 _1c_place() {   # <workdir>: ghcr+zot in the deploy slot, ghcr-only in the (unsweepable) home slot
   local d="$1"
+  # The CANONICAL guard, copied byte-for-byte from the sibling fixture builders — an inline
+  # `case "$d" in /*) … esac` is deliberately NOT recognised by fixture-scan.py's `_rel_guarded`
+  # (its docstring records the four ways an inline case was defeated). Without it the two
+  # redirects below are unguarded fixture writes and `fixture-relative-assert` ratchets from
+  # 1574 to 1576 — a repo-global count that no diff-derived suite selection can reach.
+  assert_fixture_dir "$d"
   mkdir -p "$d/deploy-cfg" "$d/home/.docker" "$d/root"
   _1c_mixed_cfg > "$d/deploy-cfg/config.json"
   chmod 600 "$d/deploy-cfg/config.json"
