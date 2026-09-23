@@ -1,6 +1,6 @@
 ---
 title: "Codex web engine qualification record"
-date: 2026-09-22
+date: 2026-09-23
 status: incomplete-live-qualification
 customer_content_status: blocked
 ---
@@ -24,7 +24,8 @@ The archived 2026-09-14 record contains deterministic fixtures, not live provide
 | Mode | Probe | Observed result | Qualification scope |
 |---|---|---|---|
 | Managed ChatGPT | 2026-09-22, local Codex CLI v0.155.1, ephemeral read-only session in a newly created empty `/tmp` directory, with `--ignore-user-config --skip-git-repo-check`. Prompt prohibited tools, files, and secrets. | Process exited 0 and returned exactly `SOLEUR_CODEX_SYNTHETIC_OK`; 2,376 tokens were reported. | **PASS: bounded CLI smoke only.** Account plan, workspace owner, agreement, region, retention settings, and administrator controls remain unknown. This does **not** qualify Soleur Web transport, events/usage, lifecycle, attachments, approvals, cancellation, reconciliation, or erasure. |
-| API key | Read-only production Doppler presence probe for `OPENAI_API_KEY` on 2026-09-22. | No global secret was present and no provider request was attempted. Web settings are the intended per-user/workspace credential source. | **BLOCKED: credential unavailable.** An authorized synthetic test workspace must enter its own key through Web settings before live API qualification can run. |
+| Managed ChatGPT | 2026-09-23, local Codex App Server v0.156.1, `read-only` sandbox and `never` approvals, empty temporary working directory, synthetic text only. A temporary Codex home contained only the already signed-in local auth file and was deleted after each probe. | Raw JSON-RPC initialize, thread/start, turn/start, thread/read, thread/turns/list, thread/items/list, and thread/delete all returned successfully. The streamed answer matched `SOLEUR_CODEX_APPSERVER_OK`; one usage notification arrived. A read after delete returned `thread not loaded`. A probe through Soleur's actual App Server transport returned exactly `SOLEUR_CODEX_TRANSPORT_OK`, one usage event (14,191 input and 11 output tokens), and running/completed statuses across 10 neutral events. Repeating that probe after the event-ID repair returned the same sentinel, one usage event (14,194 input and 11 output tokens), running/completed statuses, and 10 unique event IDs. | **PASS: local managed App Server and transport smoke.** The delete acknowledgement and subsequent read error do not establish provider-side erasure or retention. Account plan, workspace owner, agreement, region, retention, and administrator controls remain unknown. This does **not** qualify authenticated Soleur Web execution, routine dispatch, attachments, approvals, cancellation, reconciliation, or deployed usage persistence. |
+| API key | Authenticated Web settings are the intended per-user/workspace credential source. | No authorized synthetic test workspace has supplied an OpenAI API key; no provider API request was attempted. A global Soleur credential is neither expected nor required for this mode. | **BLOCKED: test workspace credential unavailable.** Qualify with a key entered by an authorized synthetic workspace through Web settings. |
 
 The first CLI attempt failed because the sandbox could not initialize the in-process App Server on a read-only filesystem. The same bounded request succeeded after an approved unsandboxed invocation. No customer content was included in either attempt. The App Server launcher contract is a CTO-owned technical runtime decision; it is not a reason to require a global customer credential.
 
@@ -40,10 +41,14 @@ The first CLI attempt failed because the sandbox could not initialize the in-pro
 | Authenticated settings and deployed-app smoke on exact build SHA | PENDING | PENDING |
 
 The deployed `/health` check and unauthenticated `/login` redirect passed on the
-exact merged build, but no authenticated Codex Web run was attempted because the
-feature flag remains off and neither an API-key test workspace nor an identified
-managed ChatGPT workspace is authorized for this qualification.
+exact PR #8507 merged build. A 2026-09-23 health probe returned HTTP 200 with
+`version: 0.286.12`, `build_sha: 251cfa650e3f4d675cdf4d3d1d44c49279c1ab59`,
+`supabase: connected`, and `sentry: configured`; this is liveness evidence for
+the then-current deployed build, not evidence that this protocol repair is deployed.
+No authenticated Codex Web run was attempted because the feature flag remains
+off and neither an API-key test workspace nor an identified managed ChatGPT
+workspace is authorized for this qualification.
 
 ## Release gates
 
-Internal synthetic enablement requires passing web-app qualification, an identified internal account, and a default-off Flagsmith feature scoped to the internal cohort. Customer-content enablement additionally requires a mode-specific CLO disposition recorded in the [decision packet](clo-decision-packet.md) and verified provider-retention and transfer evidence. The managed CLI smoke is complete; the Web end-to-end matrix and API-key live probe remain incomplete, so neither internal nor customer enablement is asserted here.
+Internal synthetic enablement requires an identified internal account and bounded Web qualification under a default-off Flagsmith feature scoped only to that cohort. Customer-content enablement additionally requires a mode-specific CLO disposition recorded in the [decision packet](clo-decision-packet.md) and verified provider-retention and transfer evidence. The managed CLI and local App Server transport smokes are complete; the Web end-to-end matrix and API-key live probe remain incomplete, so neither internal nor customer enablement is asserted here.
