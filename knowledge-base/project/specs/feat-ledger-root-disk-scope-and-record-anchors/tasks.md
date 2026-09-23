@@ -2,7 +2,14 @@
 
 Plan: `knowledge-base/project/plans/2026-09-23-chore-8532-ledger-anchored-at-rest-records-and-host-root-disk-scope-plan.md`
 
-Five PRs, strictly ordered. Each is its own branch off `main`; nothing here edits `apps/web-platform/infra/`.
+Revised after plan review (see the plan's `## Plan Review Revisions`). **Four deliverables, not five PRs:**
+
+0. Arm the gate (#6907) — until then every property below is advisory.
+A. The email refusal fix, shipping independently.
+B. One ledger PR: floor integrity, host rows, record anchors, and the images' records.
+C. The image deletion, operator-gated on #6178.
+
+Nothing here edits `apps/web-platform/infra/`.
 
 ## Phase 0 — PR-0: the refusal path stops carrying the address (BLOCKING)
 
@@ -13,7 +20,11 @@ Five PRs, strictly ordered. Each is its own branch off `main`; nothing here edit
 - [ ] 0.5 Sweep `apps/web-platform/server/` for the same shape and classify every hit.
 - [ ] 0.6 Confirm `docs/legal/privacy-policy.md` is unchanged and now true.
 
-## Phase 1 — PR-1: floor and anchor integrity
+## Phase 0b — arm the gate first (#6907)
+
+- [ ] 0b.1 Add a blocking step that runs the sweep against the REAL ledger inside the already-required `test` check. Until this lands, "a new host cannot ship unledgered" is not delivered by anything in this plan.
+
+## Phase 1 — floor and anchor integrity
 
 - [ ] 1.1 `check_non_iac_identity`: every catalogued id resolves to a row.
 - [ ] 1.2 `resolve_disclosed_as`: exactly-one-occurrence, distinct messages for 0 and for more than 1.
@@ -25,7 +36,7 @@ Five PRs, strictly ordered. Each is its own branch off `main`; nothing here edit
 ## Phase 2 — PR-2: host root disks
 
 - [ ] 2.1 Add `host-root-disk` to both kind enums; move `hcloud_server` from `non_store_types` into `store_classes`.
-- [ ] 2.2 Give every remaining `non_store_types` entry a reason.
+- [ ] 2.2 Edit `hcloud_volume.workspaces` too: it is `for_each` over both web hosts, so PR-2 reds its own CI without it. (The `reason` per `non_store_types` entry is CUT — it crashes the partition check.)
 - [ ] 2.3 Write the six rows. Each exception states its own justification, tracker, rebuild-window trigger and review date.
 - [ ] 2.4 Rename `git_data.baked_credentials_on_host`, narrowed to the two live Doppler-fallback sites.
 - [ ] 2.5 `check_instance_multiplicity` plus MB-14, with a two-instance fixture whose second member is the offender.

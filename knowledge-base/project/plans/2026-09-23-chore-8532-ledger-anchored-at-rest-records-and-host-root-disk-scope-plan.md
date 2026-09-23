@@ -65,7 +65,7 @@ every check over them is a bespoke grep.
 - Ledger schema keys: `schema_version`, `store_classes`, `non_store_types`, `non_iac_stores`, `stores`, `connections`, `live_coverage_floor`.
 - C4: `c4-count-parity.test.sh` reads the `.c4` SOURCE; `c4-model-freshness.test.sh` regenerates via `scripts/regenerate-c4-model.sh` (likec4 pinned 1.50.0) and byte-diffs the committed JSON.
 - `knowledge-base/legal/article-30-register.md`: per-activity sections PA-1…PA-36+, at-rest measures inside the §(g) technical-and-organisational-measures cells. **Nothing mechanically checks this file today.**
-- CI: the `encryption-posture` job runs `python3 scripts/lint-encryption-posture.py --repo-sweep` and rolls up into the required `test` check.
+- CI: the `encryption-posture` job runs `python3 scripts/lint-encryption-posture.py --repo-sweep`. It is a **standalone, advisory** job: it is absent from `scripts/required-checks.txt`, and the required `test` aggregator needs only the four test/build jobs. A PR can merge with it red. Arming it is #6907, open. (An earlier draft of this line said it rolls up into `test`; that was false and is the claim the Observability section contradicts.)
 
 ### Institutional learnings that bind this plan
 
@@ -103,24 +103,32 @@ every check over them is a bespoke grep.
 
 The operator's decision: **fix the code, keep the sentence.**
 
-1. Replace the four interpolations with messages that name the failure class and no address, following `outbound.ts`'s own precedent ("a raw Resend error can echo the recipient … We pass a synthetic Error, not the raw vendor error object"). Keep the discriminating detail the caller needs (`code`), drop the value.
-2. Add a `serializers.err` to `logger.ts`, or a scoped equivalent, so a future throw cannot reintroduce the class. Decide in work: a serializer is the class fix, the four edits are the instance fix. Both, per `hr-write-boundary-sentinel-sweep-all-write-sites`.
+**Three sinks, not one** (measured): journald on the web host's unencrypted root disk; **Sentry**, where `err.message` becomes the issue title and `sentry-scrub.ts` is key-name-based with zero handling of `exception.values[].value`; and **Better Stack**, because `vector.toml`'s email regex sits in a stage that is skipped for already-structured (pino JSON) lines. All three are closed prospectively by fixing the throw site, which is the argument for fixing it there.
+
+**Two leaking sites, not four** (measured): `${addr}` and `${to}` (the latter carries the display name too). `${name}` is the header field name; `${domain}` and `${local}` are reached only for our own domains and a fixed role-name set, so neither carries user data. `notifications.ts` is the same class at a second site and is in scope for the sweep.
+
+1. Replace the two leaking interpolations with messages that name the failure class and no address, following `outbound.ts`'s own precedent ("a raw Resend error can echo the recipient … We pass a synthetic Error, not the raw vendor error object"). Keep the discriminating detail the caller needs (`code`), drop the value.
+2. Class fix at `sanitizeLogMessage` plus an `err`-shaped twin inside `reportSilentFallback`, NOT a pino `serializers.err`: `mirrorToSentry` runs before pino's render stage, so a serializer cannot reach either Sentry limb, and five marker loggers do not inherit from `logger.ts` at all.
 3. Test: assert that a refusal's emitted log record contains no substring of the input address, driven through the real emitter rather than a stub.
-4. Sweep: `git grep -nE '\$\{(to|addr|recipient|email)\}' apps/web-platform/server/` and classify every hit.
+4. Sweep the whole of `apps/web-platform/server/` for value-shaped tokens (`inviteeEmail|email|recipient|addr|to|sender`), classify every hit in the plan rather than at work time, and add `email`, `inviteeEmail`, `recipient` to `SENSITIVE_KEY_NAMES` — one line that covers six call sites.
 
 ### PR-1 — floor and anchor integrity (no new rows, no documents)
 
 1. `check_non_iac_identity`: every `non_iac_stores` id must match a `stores[].store`. Closes the measured hole where deleting `supabase.prd` left CI green.
 2. `resolve_disclosed_as`: require exactly one occurrence; fail closed on 0 and on >1, with distinct messages. Measured no-op on today's two live anchors, and a prerequisite for anchoring into the register, where store ids already repeat.
-3. Close **#8527**: run the disclosure check on `luks` rows in the positive direction (the disclosure must not deny encryption). The four `luks` rows are the regression set.
-4. Mutation rows MB-17/18/19.
+3. Close **#8527**: run the disclosure check on `luks` rows. There are **five** such rows, not four (`hcloud_volume.registry` is `luks` without the `_luks` suffix), and only `workspaces_luks` carries a resolvable anchor, so the live regression set is one row plus synthesized fixtures. The predicate must be **negation-aware and specified here**: the existing `LUKS|encrypt` regex fires on the register's own mandated "encryption at rest is ABSENT" form, so reusing it reds the committed ledger the moment this lands.
+4. `check_store_id_accounted` (the forward direction): every `stores[].store` resolves to a `.tf` address or a `non_iac_stores` entry. This is what makes the floor exact by construction, and it closes the measured slack from both directions rather than one.
+5. Mutation rows MB-17…MB-21, one per new behaviour; the uniqueness rule's two failure directions need separate markers. Raise `MIN_CASES` to the new count. The suite's floor exits **2**, not 1.
 
 ### PR-2 — host root disks are ledgered stores
 
-1. Move `hcloud_server` out of `non_store_types` into `store_classes` as `kind: host-root-disk`; add the kind to both enums. **Adjudication of a CTO/CLO fork:** the CTO rules for the move, the CLO against it (all-or-nothing across six hosts; no existing kind fits). The move wins because all-or-nothing is the property being bought — a host that holds nothing states so in a row, which is what the rehearsal volume's own exception row already does — and the enum objection is answered by adding the kind. The CLO's `reason` field for the remaining `non_store_types` entries is adopted: the bulk seed must not survive the fix.
-2. Six rows: `hcloud_server.{web,inngest,git_data,registry,rehearsal,grok_dogfood}`. `git_data` absorbs the renamed `git_data.baked_credentials_on_host`, narrowed to the two live Doppler-fallback sites. `rehearsal` and `grok_dogfood` take exception rows on the `hcloud_volume.rehearsal` precedent (destroyed empty; `count = 0`), never a "no store here" mechanism, which would be an unfalsifiable self-certification.
+1. Move `hcloud_server` out of `non_store_types` into `store_classes` as `kind: host-root-disk`; add the kind to **four** declaration sites (`STORE_KIND_ENUM`, `STORE_CLASS_KIND_ENUM`, and the schema's two `kind` enums) plus an assertion that the script's accepted set equals the schema's, since the validator never reads the schema. **The `reason`-per-`non_store_types`-entry idea is CUT**: it satisfies no listed property, is the same unfalsifiable self-certification this PR rejects for hosts, and would crash `check_resource_partition`, which builds a `set()` over that list. The ADR amendment already records that the seed was mechanical. **Adjudication of a CTO/CLO fork:** the CTO rules for the move, the CLO against it (all-or-nothing across six hosts; no existing kind fits). The move wins because all-or-nothing is the property being bought — a host that holds nothing states so in a row, which is what the rehearsal volume's own exception row already does — and the enum objection is answered by adding the kind. The CLO's `reason` field for the remaining `non_store_types` entries is adopted: the bulk seed must not survive the fix.
+2. Six rows: `hcloud_server.{web,inngest,git_data,registry,rehearsal,grok_dogfood}`. **`git_data.baked_credentials_on_host` is NOT absorbed** — it records a different threat (root reading `user_data` from the metadata endpoint, narrowed by the #7772 nftables drop), and folding it in to make an arithmetic total come out even would discard that distinction. It gains a `non_iac_stores` entry instead, which the new forward check requires.
+2b. **`hcloud_volume.workspaces` is edited in this PR.** It is `for_each` over both web hosts while `workspaces_luks` is a singleton, so one row covers two devices whose posture differs — web-2 has no encrypted volume at all. Without this edit the new multiplicity check reds PR-2's own CI. `rehearsal` and `grok_dogfood` take exception rows on the `hcloud_volume.rehearsal` precedent (destroyed empty; `count = 0`), never a "no store here" mechanism, which would be an unfalsifiable self-certification.
 3. `expires_on` stays a review clock; `reevaluate_when` names the **rebuild window**, because a root disk is encryptable only at rebuild.
-4. `check_instance_multiplicity`: a row whose Terraform block declares `for_each`/`count` must declare its instances. This is what actually delivers "a new host cannot ship unledgered" — `hcloud_server.web` and `hcloud_volume.workspaces` are both `for_each = var.web_hosts` today, so one row covers two devices with divergent posture.
+4. `check_instance_multiplicity`, defined **per shape**: `for_each` over a `variables.tf` map literal is compared against that literal; `count` over a local, and any module-instantiated block, **fail closed** demanding an explicit `instances` declaration plus a `reevaluate_when` naming the gating variable. A resolver that silently does not apply is the defect this check exists to close — and `grok_dogfood`, the host most likely to be born next, is exactly that shape.
+4b. `check_no_orphan_rows`: a row whose address parses to a `store_classes` type must resolve to a real `.tf` block, so deleting a block cannot leave a ghost row and restore slack.
+4c. Stagger the six `expires_on` dates; give the two hosts that cannot be rebuilt (`rehearsal`, destroyed each run; `grok_dogfood`, never born) a `reevaluate_when` keyed on **birth**, since a rebuild window that can never occur is unfalsifiable.
 5. Amend the four `luks` rows' `does_not_defend`: none names the co-resident root-disk passphrase. Against a full-host seizure or a root-disk image, `hcloud_volume.inngest_redis_luks`'s LUKS defends nothing, and the ledger does not say so.
 6. ADR: host root disks are ledgered stores (a change to what the gate's scope *is*).
 
@@ -128,18 +136,26 @@ The operator's decision: **fix the code, keep the sentence.**
 
 1. `records: ["path:anchor", …]`, sibling to `disclosed_as`, resolved by the same function. Separate field because the predicates are opposite: `disclosed_as` is checked for contradiction of a public claim, `records` for agreement with an internal one.
 2. `check_records_resolve` (forward) and `check_record_anchors_named` (reverse, over a hard-coded `RECORD_SURFACES`) so a renamed store cannot leave an orphan anchor. The surface list is hard-coded, not ledger-declared: a ledger-declared list is deletable by the same commit that breaks the prose.
-3. Carrier: a **visible** inline `(encryption-posture ledger: <store id>)` clause in the register cell — an Art. 30 record is produced to a supervisory authority, so an invisible HTML comment is not part of the record — and a `// ledger: <store id>` comment in `model.c4`, which is a `//`-comment DSL where HTML comments are not valid syntax.
+3. Carrier: a **visible, self-describing** clause carrying the mechanism, compared by **equality** rather than by regex over prose — `(encryption-posture ledger: <store id> — at rest: <mechanism>)`. Measured, a regex cannot work here: the register is additive-only, so an amended cell holds superseded text beside current text, and 8 of 10 windows around one store id contain both `LUKS` and `plaintext`. The same clause form goes in `model.c4` as a `//` comment (HTML comments are not valid in that DSL; C4 is an internal record, so the visibility rule that governs the register does not bind there — stated rather than left as an unexplained asymmetry).
+3b. **Cardinality: per section, not per file.** A store legitimately appears under several processing activities — measured, `hcloud_volume.git_data` in three, `inngest_redis` in three. A file-unique rule would let only one cell be anchored and leave the rest as ungated prose, which is worse than no anchor. Anchors resolve **within their PA section**, and every occurrence must resolve and agree. File-level uniqueness stays where it belongs, on `disclosed_as`.
+3c. `RECORD_SURFACES` moves **into the ledger**, not the script. Hard-coding a repo path makes the check untestable under the synthesized-fixture rule, which would leave it either silently passing on an absent file or unfixturable. Protect the list with a count floor that reports directly, plus a CODEOWNERS pin on the ledger and the register.
 4. Assert-only, never generate. No script writes into `knowledge-base/legal/**`.
 5. Register amendments the CLO requires: PA-8 §(g) gains an at-rest limb in the register's own "NEGATIVE — encryption at rest is ABSENT" form; PA-13 §(e)/(g) gives `/var/lib/inngest` a posture; PA-27 §(e)'s cross-reference to a nonexistent PA-21/22 SQLite record is fixed; PA-31 §(e) gets the #6894 device amendment it never received; the cross-cutting "Resilience: Hetzner backups" bullet is corrected, since no `hcloud_server` declares `backups`.
 6. Regenerate `model.likec4.json` in the same commit, or `c4-model-freshness` reds.
 
 ### PR-4 — the web-host root-disk images (operator-gated)
 
-Four images (`398857857, 406654994, 407991378, 411798619`) of server `123931471`, released only when #6178 closes. Per the operator's decision, their retention is decided here:
+Four images (`398857857, 406654994, 407991378, 411798619`) of server **`123931471`, the web host** (not the inngest host), released only when #6178 closes. Per the operator's decision their retention is decided here, split so the recording lands now and only the deletion waits:
+
+**PR-4a (lands with PR-3, no live mutation):**
 
 1. Determine which are still needed as the #6178 rollback substrate, from the issue and the soak script, and record the finding.
 2. Ledger row for the images as a provider-side derivative store, plus an Article 30 retention statement and an Art. 17 reachability note. This discharges PA-36 §(f)'s standing commitment that Hetzner-side retention "must be recorded before the cutover".
-3. Deletion is a production mutation: it is proposed with the exact command, and runs only on the operator's per-command authorization, with an Art. 5(2) destruction record written at the time.
+3. A dated, empty Art. 5(2) template is committed **as a precondition** of any delete — the repo's own precedent says a record drafted after the act is a justification, drafted before it is a precondition — and the superseded inngest template cannot be reused.
+
+**PR-4b (operator-gated, after #6178):** deletion is a production mutation, proposed with the exact command, run only on per-command authorization, and the template flips to `complete` at that moment. Each image gets an explicit disposition (`delete-now` or `retained-until: <condition>`), because one of the four is already pinned as un-deletable by #6178's own spec.
+
+**The class, not just the instance.** Deleting these images does not reach the live journal that keeps growing on the same disk, nor Better Stack or Sentry (90 days each). The Art. 17 note records the whole class, and states plainly that the on-host journal is the one copy with no bound.
 
 ## Files to Edit
 
@@ -329,20 +345,22 @@ discoverability_test:
 
 ## Acceptance Criteria
 
-- [ ] **AC-0a** `git grep -nE '\$\{(to|addr|recipient|email)\}' apps/web-platform/server/email-triage/` returns no hit inside a `throw`.
+- [ ] **AC-0a** A sentinel test over `OutboundComplianceError` messages asserts no message contains any substring of the input address. A directory-scoped grep is not the gate: it is blind to `notifications.ts` and to any future rename.
 - [ ] **AC-0b** A test drives a refused send through the real emitter and asserts the emitted record contains no substring of the input address; mutating the fix back out reds it.
-- [ ] **AC-0c** `docs/legal/privacy-policy.md:309` is unchanged, and is now true.
+- [ ] **AC-0c-i** The privacy-policy sentence (anchored on its text, not a line number) is unchanged and is true for every send **after PR-0 deploys** — merging does not make it true, so this is verified in production.
+- [ ] **AC-0c-ii** Pre-fix copies already in journald, Better Stack and Sentry are recorded as an Art. 17 reachability finding, in the same place as the images.
 - [ ] **AC-1a** Deleting any `stores[]` row whose id is in `non_iac_stores` fails the sweep. (Today it passes — this is the regression being closed.)
 - [ ] **AC-1b** A `records`/`disclosed_as` anchor occurring twice in its file fails, with a message distinct from the not-found case.
 - [ ] **AC-1c** #8527 is closed: a `luks` row whose disclosure denies encryption fails.
-- [ ] **AC-2a** `python3 scripts/lint-encryption-posture.py --repo-sweep` reports **24** stores, 0 unledgered, 0 failing checks, and `hcloud_server` no longer appears in `non_store_types`. Derivation, to be re-run at work time rather than carried from here: today 19 rows against a floor of 18 (`tf_store_count` 12 + `non_iac_stores` 6); PR-2 renames one row rather than adding it (19 − 1 + 6 = 24) and raises `tf_store_count` to 18, so the floor becomes 18 + 6 = 24. Exact, no slack. If the measured numbers differ at work time, the measurement wins and this AC is amended.
-- [ ] **AC-2b** Every remaining `non_store_types` entry carries a reason.
+- [ ] **AC-2a** `python3 scripts/lint-encryption-posture.py --repo-sweep` reports **25** stores (the git_data credentials row is kept and catalogued rather than absorbed; re-measure at work time), 0 unledgered, 0 failing checks, and `hcloud_server` no longer appears in `non_store_types`. Derivation, to be re-run at work time rather than carried from here: today 19 rows against a floor of 18 (`tf_store_count` 12 + `non_iac_stores` 6); PR-2 renames one row rather than adding it (19 − 1 + 6 = 24) and raises `tf_store_count` to 18, so the floor becomes 18 + 6 = 24. Exact, no slack. If the measured numbers differ at work time, the measurement wins and this AC is amended.
+- [ ] **AC-2b** `hcloud_volume.workspaces` carries an `instances` declaration, and adding a key to `var.web_hosts` without touching the ledger fails the sweep.
 - [ ] **AC-2c** Adding a key to `var.web_hosts` without touching the ledger fails the sweep.
 - [ ] **AC-2d** Each of the four `luks` rows' `does_not_defend` names where its passphrase lives.
-- [ ] **AC-3a** Every `ledger:` token in a `RECORD_SURFACES` file names a live `stores[].store`, and each occurs exactly once per file.
+- [ ] **AC-3a** Every carrier clause in a record surface names a live `stores[].store` and its `at rest:` token equals that row's mechanism; each resolves uniquely **within its PA section**. Not once per file — measured, the register states one store's posture under up to three activities.
 - [ ] **AC-3b** The five CLO register amendments are present, each with a dated `**[YYYY-MM-DD AMENDMENT (#N): …]**` marker.
 - [ ] **AC-3c** `bash plugins/soleur/test/c4-model-freshness.test.sh` passes with the regenerated JSON committed.
-- [ ] **AC-4a** The four image ids are ledgered as a provider-side derivative store with a retention statement and an Art. 17 reachability note.
+- [ ] **AC-4a** The four image ids are ledgered as a provider-side derivative store with a retention statement and an Art. 17 reachability note covering the whole class (images, the live journals on five hosts, Better Stack, Sentry).
+- [ ] **AC-4c** Each image carries a disposition: `delete-now` or `retained-until: <condition>`, with the retention expiry recorded. A PR that deletes nothing and states nothing does not satisfy this.
 - [ ] **AC-4b** No image is deleted without the operator's per-command authorization and an Art. 5(2) record written at the time.
 - [ ] **AC-G** No PR in this stack edits `apps/web-platform/infra/**`: `git diff --name-only origin/main...HEAD | grep -c '^apps/web-platform/infra/'` is 0.
 
@@ -352,3 +370,28 @@ Given the ledger as committed / When a row whose id is catalogued in `non_iac_st
 Given a register fixture where a store id appears twice / When a `records` anchor names it / Then the sweep exits 1 with the ambiguity message.
 Given a `for_each` block with two instances / When the row declares one / Then the sweep exits 1.
 Given a refused outbound send with an invalid address / When the error is mirrored / Then no substring of the address appears in the emitted record.
+
+## Plan Review Revisions
+
+Five agents reviewed this plan (simplicity per mechanism, Kieran, DHH, architecture, spec-flow). Every measurement below was re-derived in the worktree.
+
+| # | Finding | Revision |
+|---|---|---|
+| R1 | **The gate cannot block.** `encryption-posture` is absent from `required-checks.txt`; a PR merges with it red. Three reviewers reached this independently. My Research Insights had claimed the opposite | Corrected. Property 2 is **advisory until #6907**, stated as such. The cheapest arming route — a blocking sweep against the real ledger inside the already-required `test` check — becomes step 1 of the work, ahead of PR-1 |
+| R2 | The agreement predicate is unbuildable: the register's own mandated "encryption at rest is ABSENT" form matches `LUKS\|encrypt`, and 8 of 10 measured windows carry both polarities | Carrier is self-describing and compared by equality; no regex over prose |
+| R3 | File-level uniqueness is incompatible with a per-activity Art. 30 record (one store, up to three PAs) | Anchors resolve per PA section; uniqueness stays on `disclosed_as` |
+| R4 | PR-2 as scoped lands red on its own CI: `hcloud_volume.workspaces` needs the new declaration and was not in the edit list | Added to PR-2 |
+| R5 | The `reason` per `non_store_types` entry crashes `check_resource_partition` (`set()` over dicts) and satisfies no property | Cut |
+| R6 | PR-0's site list was wrong: `${name}` is a header field name; `${domain}` and `${local}` are bounded to our own domains and a fixed role set. Two sites leak, not four | Corrected to `${addr}` and `${to}` |
+| R7 | Two sinks were missing: Sentry (the issue title, unscrubbed — `sentry-scrub.ts` never touches exception values) and Better Stack (Vector's email regex is skipped for structured pino lines) | Both named; the fix stays at the throw site because it closes all three |
+| R8 | A pino `serializers.err` cannot deliver the class fix: `mirrorToSentry` runs before the render stage, and five marker loggers do not inherit from `logger.ts` | Class fix moved to `sanitizeLogMessage` plus an `err` twin in `reportSilentFallback` |
+| R9 | Five `luks` rows, not four (`hcloud_volume.registry`), and only one carries a resolvable anchor | Corrected; regression set is one live row plus fixtures |
+| R10 | The floor's exactness was a coincidence; a future non-Terraform row re-opens the slack | Added the forward check: every row resolves to a `.tf` address or a catalogue entry |
+| R11 | Hard-coding `RECORD_SURFACES` breaks the synthesized-fixture rule, leaving the guard untestable. This reverses the CTO's ruling on the fixture argument, which the ruling did not consider | Moved into the ledger with a count floor and a CODEOWNERS pin |
+| R12 | `check_instance_multiplicity` had no defined behaviour for `count`-over-a-local or module-instantiated blocks — including `grok_dogfood`, the host most likely to be born next | Fail closed per shape |
+| R13 | PR-4 could ship with nothing deleted and both ACs green; and its Art. 5(2) record was prescribed after the act, against the repo's own precedent | Split into 4a (records, lands now) and 4b (operator-gated deletion); template committed first; per-image disposition required |
+| R14 | Deleting the images leaves the live journal, which is the same content class with no bound | The Art. 17 note covers the class |
+| R15 | The account-deletion dialog promises "all your data… permanently deleted", which is currently false | Recorded as a finding for the CPO sign-off the frontmatter already requires; not silently absorbed |
+| R16 | Five PRs is more structure than the work needs; PR-1 → PR-2 is not a real dependency | Collapsed: #6907 first, then one ledger PR (old 1+2+3+4a), with PR-0 shipping independently and 4b operator-gated |
+
+**Kept against a reviewer's recommendation.** `check_instance_multiplicity` survives DHH's cut: he argued the `for_each` instances have identical posture by construction, but `workspaces_luks` is a singleton while `workspaces` is `for_each`, so web-2 has no encrypted volume — the divergence is live today.
