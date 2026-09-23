@@ -455,8 +455,8 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # WHAT THAT BREAKS. Two consumers fail closed on the `--enumerate` record stream and go red for
 # a cause neither can name: `scripts/battery-tag-authorship.test.sh` › the `--enumerate-commands`
 # root-set guard (rc AND count) and `plugins/soleur/test/scripts-shard-totality.test.sh` ›
-# `enumerate_leg()` (count only — it invokes the function as a bare statement and never reads
-# `$?`; `pipefail` IS set there, so the rc survives the pipe and is discarded at the call site).
+# `enumerate_leg()` (each call runs as a background child whose rc the guard captures via
+# per-pid `wait` — a dead child fails its leg row loudly).
 # `scripts/lint-orphan-test-suites.sh` › the `--print-suite-globs` derivation is the same
 # fail-closed shape on the SIBLING stream and the same prologue window.
 #
@@ -895,7 +895,7 @@ if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "scri
   unset _shard_mvar _shard_mval
 
   if [[ -n "$_shard_mfile" ]]; then
-    _shard_mn=0
+    _shard_mn=""
     while IFS= read -r _mline; do
       case "$_mline" in
         "# n="*) _shard_mn="${_mline#\# n=}"; break ;;
@@ -938,7 +938,7 @@ if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "scri
       echo "[shard] manifest assignment active: ${_shard_mcount} label(s) from ${_shard_mfile}" >&2
     fi
   fi
-  unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mrest _mdup _shard_mcount
+  unset _shard_mfile _shard_mn _mline _mlbl _mleg _mrest _mdup _shard_mcount
 fi
 
 # THE CARRIER IS CONSUMED HERE, AND MUST NOT BE INHERITED (#7902 review, P1).
@@ -1133,16 +1133,18 @@ _aff_label=()
 #
 # TWO ASSIGNMENT MODES, selected once at parse time (see the manifest block above):
 #
-#   MANIFEST — when scripts/suite-shard-legs.tsv is present, declares n == _SHARD_N, and
-#   TEST_GROUP is `scripts`: each label's leg is a table lookup produced OFFLINE from
-#   CI-measured durations (sticky-LPT; scripts/regenerate-shard-manifest.py). Labels the
+#   MANIFEST — when the group's own table (scripts/suite-shard-legs.tsv for `scripts`,
+#   suite-shard-legs-heavy.tsv for `scripts-heavy`) is present, declares n == _SHARD_N:
+#   each label's leg is a table lookup produced OFFLINE from CI-measured durations
+#   (sticky-LPT; scripts/regenerate-shard-manifest.py --group light|heavy). Labels the
 #   table does not know fall back to a deterministic cksum hash — coverage and disjointness
 #   never depend on the table being complete or current, and inserting a suite moves no
 #   existing assignment. This mode is collation-INDEPENDENT: neither the table nor the hash
 #   reads registration order.
 #
-#   POSITIONAL — the original mechanism, still the degrade for every shape the manifest does
-#   not cover (absent file, n mismatch, scripts-heavy, `SOLEUR_SHARD_MANIFEST=off`):
+#   POSITIONAL — the original mechanism, still the degrade for every shape the group's
+#   manifest does not cover (absent file, n mismatch, an unrelated group,
+#   `SOLEUR_SHARD_MANIFEST=off` / `SOLEUR_SHARD_MANIFEST_HEAVY=off`):
 #   round-robin over the registration ordinal. It stays ordinal-based rather than hash-based
 #   because ~198 registrations are hand-written imperative statements and ~24 name no bash
 #   path at all (`python3 -m unittest`, `node --test`) — the ordinal is the one thing every
@@ -1230,8 +1232,8 @@ _shard_enumerate_command_emit() {
       # enumeration. (A micro-benchmark of the `case` alone shows 1.364s vs 0.009s per 2000
       # iterations; that ratio does NOT carry to the whole mode, which is why the figure quoted
       # here is the measured one. An earlier draft of this comment quoted the micro-benchmark and
-      # implied ~18s per battery run.) The guard enumerates twice per invocation and the mutation
-      # battery invokes it 21 times.
+      # implied ~18s per battery run.) The guard fans out ~35 enumerate children per invocation
+      # and the mutation battery invokes the guard once per row (24) plus control.
       *$'\t'* | *$'\n'*)
         printf 'ERROR: --enumerate-commands cannot encode an argv element containing a TAB or NEWLINE (label=%s)\n' "$label" >&2
         exit 2
@@ -2506,8 +2508,9 @@ fi
 # NOT under --enumerate. tc_preamble is a full /proc walk (one awk per pid — MEASURED at 5.7s
 # of an 8.2s enumerate pass, i.e. 70% of it) whose entire output is a capacity and contention
 # verdict about running suites. An enumerate pass starts none and takes no lock, so every
-# reading it produces is inapplicable, and the shard-totality guard invokes this path K+1 times
-# per run. Skipping it takes that guard from 83s to ~25s.
+# reading it produces is inapplicable, and the shard-totality guard invokes this path ~35 times
+# per run (its fanned-out leg, altK, heavy, and probe enumerations). Skipping it takes that
+# guard from 83s to ~25s.
 #
 # EXPRESSED AS A FUNCTION REDEFINITION, NOT AN `if` AROUND THE CALL — the call must stay at
 # COLUMN 0. `scripts/test-all-killed-classification.test.sh` and
@@ -3423,7 +3426,7 @@ if want_scripts; then
   # explicitly (orphan-suite class above). Its exit code is the closure of #8006 (0 closes;
   # 1 = a qualifying leg breached the 900 s bound; 2 = NOT YET — under-sampled, unclocked,
   # or every run non-qualifying; 3 = gh failed). Load-bearing arms: a run qualifies ONLY
-  # when all 8 post-carve-out legs are present, green, and measured — a skipped leg is
+  # when all 9 post-carve-out legs are present, green, and measured — a skipped leg is
   # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
   # test-scripts-heavy legs) is stale data, not a small sample.
   run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh

@@ -40,7 +40,7 @@ Locate all constructs by content anchor, not line number — line numbers were v
 
 ## Phase 4 — Verification + ship
 
-- [x] 4.1 Local suite run: `scripts-shard-manifest.test.sh` 32/32, `scripts-shard-totality.test.sh` 36/36, `regenerate-shard-manifest.test.sh` 23/23, `test-all-affected.test.sh` 50/50, `ci-leg-durations-8006.test.sh` 13/13. Battery `--rows 1-12`/`13-24` on clean tree: **running**.
+- [x] 4.1 Local suite run: `scripts-shard-manifest.test.sh` 32/32, `scripts-shard-totality.test.sh` 36/36 (+1 tiling row post-review), `regenerate-shard-manifest.test.sh` 23/23, `test-all-affected.test.sh` 50/50 (31/31 post-#8329 rebase), `ci-leg-durations-8006.test.sh` 13/13. Battery `--rows 1-12`/`13-24` on clean tree: **13/13 each** (12 rows + control per half).
 - [x] 4.2 Live-corpus guards: `guard-vacuity-floor` 23/23, `lint-shell-capture-exit` 25/25, `fixture-relative-assert` 62/62 after baseline regen (generator-test 21→26 sites, same commit).
 - [x] 4.3 `actionlint .github/workflows/ci.yml` — clean (one pre-existing SC2034 at :1705, unrelated).
 - [ ] 4.4 PR-body checklist items mirrored from plan ACs; PR #8665 (existing draft) gets the changes — no new PR. `Refs #8006`, not `Closes`.

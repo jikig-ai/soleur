@@ -206,12 +206,13 @@ job in the run. After phase 1 the wall is ~10 min, dominated by:
 The claimed saving is wall-clock, so the baseline is the measured one:
 run **35911999612** job durations (above). Predicted post-change wall:
 
-- `shard-totality-mutations`: 21 rows ≈ 9.5m serial → ~5m per leg after
-  A (row halving) × C (enumerate parallelization). Command that produced
-  the per-invocation cost: the guard's own enumerate calls are ~1.4s each
-  (measured in the packed-string learning) and a guard run issues ~40 —
-  parallelizing to ~10-way puts the enumeration floor near the slowest
-  single child.
+- `shard-totality-mutations`: 24 rows ≈ 9.5m serial → ~5m per leg after
+  A (row halving) × C (enumerate parallelization). The guard's own
+  enumerate calls run ~2s each end-to-end (measured during the manifest
+  work — the 1.364s figure in the packed-string learning is a
+  case-statement micro-benchmark, not a per-enumerate cost) and a guard
+  run issues ~35 — parallelizing to ~10-way puts the enumeration floor
+  near the slowest single child.
 - `test-scripts`: manifest-predicted 476–491s/leg at K=5 → ~390–410s/leg
   at K=6 + ~60s setup ≈ 7.5–8m wall.
 - `test-scripts-heavy`: unchanged ~8.5m (bijection; D buys stability).

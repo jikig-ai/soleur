@@ -157,7 +157,6 @@ fi
 env -u SCRIPTS_SHARD TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$RUNNER" --enumerate scripts 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 \
   | sort -u > "${TMPDIR:-/tmp}/ssm-registered.$$"
-trap 'rm -f "${TMPDIR:-/tmp}/ssm-registered.$$"' EXIT
 printf '%s\n' "$DATA" | cut -f1 | sort -u > "${TMPDIR:-/tmp}/ssm-manifest.$$"
 trap 'rm -f "${TMPDIR:-/tmp}/ssm-registered.$$" "${TMPDIR:-/tmp}/ssm-manifest.$$"' EXIT
 

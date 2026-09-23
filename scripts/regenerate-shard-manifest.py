@@ -118,11 +118,20 @@ def fetch_timings_from_run(run_id, artifact_re):
     return merged
 
 
-def fetch_timings_from_dir(d):
-    """Return {label: ms} merged across every */suite-timings.tsv or *.tsv under D."""
+def fetch_timings_from_dir(d, artifact_re=None):
+    """Return {label: ms} merged across suite-timings.tsv files under D. When
+    ARTIFACT_RE is given, a nested dir must match it — a mixed download dir
+    (light + heavy legs side by side) merges only the requested group's files."""
     merged = {}
-    paths = sorted(glob.glob(os.path.join(d, "*", "suite-timings.tsv"))
-                   + glob.glob(os.path.join(d, "*.tsv")))
+    nested_all = glob.glob(os.path.join(d, "*", "suite-timings.tsv"))
+    matching = ([p for p in nested_all
+                 if artifact_re.match(os.path.basename(os.path.dirname(p)))]
+                if artifact_re is not None else [])
+    # The filter engages only when CI-artifact-named dirs are actually present —
+    # a local dir of arbitrary names (leg1/, leg2/) is not an artifact layout
+    # and must merge whole rather than die on an empty filtered set.
+    nested = matching if matching else nested_all
+    paths = sorted(nested + glob.glob(os.path.join(d, "*.tsv")))
     if not paths:
         die(f"no suite-timings.tsv files found under {d}")
     for p in paths:
@@ -158,7 +167,10 @@ def read_ci_leg_count(job):
     """N of JOB's matrix — `test-scripts` or `test-scripts-heavy`, scoped to the
     named job block so the two leg counts can never be confused."""
     txt = open(CI_YML, encoding="utf-8").read()
-    m = re.search(r"^  %s:\n(?:.*\n)*?        shard: \[\"1/(\d+)\"" % re.escape(job),
+    # The continuation is bounded to lines indented >= 4 (or blank): a `shard:`
+    # line absent from THIS job cannot silently match the NEXT job's — the next
+    # `^  job:` key at indent 2 terminates the scan and the match fails.
+    m = re.search(r"^  %s:\n(?: {4}.*\n| *\n)*? {8}shard: \[\"1/(\d+)\"" % re.escape(job),
                   txt, re.M)
     if not m:
         die(f"could not find {job} matrix shard declaration in ci.yml")
@@ -172,9 +184,14 @@ def registered_labels(group):
     labels) must not be tabled: they would red the lint and consume leg weight
     for nothing."""
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Scrub the shard carriers: an exported SCRIPTS_SHARD would silently shard
+    # the enumerate, and the generated manifest would table one leg's subset.
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("SCRIPTS_SHARD", "TEST_GROUP",
+                        "SOLEUR_SHARD_MANIFEST", "SOLEUR_SHARD_MANIFEST_HEAVY")}
     p = subprocess.run(
         ["bash", "scripts/test-all.sh", "--enumerate", group],
-        cwd=repo_root, capture_output=True, text=True)
+        cwd=repo_root, capture_output=True, text=True, env=env)
     if p.returncode != 0:
         die(f"enumerate failed (rc={p.returncode}): {p.stderr.strip()[:400]}")
     return {ln.split("\t", 1)[1] for ln in p.stdout.splitlines()
@@ -258,7 +275,7 @@ def main():
     n = read_ci_leg_count(job)
     run_id = args.run
     if args.timings_dir:
-        timings = fetch_timings_from_dir(args.timings_dir)
+        timings = fetch_timings_from_dir(args.timings_dir, artifact_re)
         src = f"dir:{args.timings_dir}"
     else:
         if run_id is None:
@@ -298,8 +315,10 @@ def main():
         print(f"vs incumbent: {moved} moved, {new} new, {gone} no longer timed")
 
     if args.write:
+        prov = (str(run_id) if run_id else
+                f"local:{os.path.basename(os.path.abspath(args.timings_dir))}")
         with open(manifest_path, "w", encoding="utf-8") as f:
-            f.write(render(legs, n, run_id if run_id else 0, args.group))
+            f.write(render(legs, n, prov, args.group))
         print(f"wrote {manifest_path} ({len(legs)} rows)")
     else:
         print("dry-run — pass --write to update the manifest")

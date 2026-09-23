@@ -872,9 +872,10 @@ jobs:
   # The single `test` job was split into parallel leg jobs
   # (test-webplat / test-bun / test-scripts / test-scripts-heavy) so install +
   # typecheck + vitest + bun-test workloads run concurrently. test-scripts
-  # and test-scripts-heavy are positional shard matrices over the same
-  # runner; the other two are single legs (test-webplat is itself a 2-way
-  # vitest --shard matrix). The synthetic `test`
+  # and test-scripts-heavy are shard matrices over the same runner (leg
+  # assignment is manifest-driven, positional when the table is absent or
+  # stale — see scripts/test-all.sh); the other two are single legs
+  # (test-webplat is itself a 2-way vitest --shard matrix). The synthetic `test`
   # aggregator (below) is the required status check on branch-protection
   # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
   # every merge. Each leg invokes scripts/test-all.sh with the
@@ -1097,7 +1098,7 @@ jobs:
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
       # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
       # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run the whole group (392 suites at this commit) and all report green. Guard 1 reads ci.yml's
+      # every leg would run the whole group (~489 suites at this commit) and all report green. Guard 1 reads ci.yml's
       # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
@@ -1172,7 +1173,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
-          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/3` and
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/6` and
           # `/` is not permitted in an artifact name, so it is not used at all —
           # an earlier revision of this comment described a `/`->`-` rewrite the
           # code never performed. job-index is also matrix-resize-safe, matching

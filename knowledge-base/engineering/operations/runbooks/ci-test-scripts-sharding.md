@@ -80,7 +80,10 @@ requires. Regenerate when:
 - a suite was renamed (its old row becomes a phantom; the lint names it).
 
 **Merge conflict on the TSV → regenerate, never hand-merge.** Re-run the
-command against a current green run and commit the output.
+command against a current green run and commit the output. The TSVs are
+deliberately NOT in `resolve-regenerable-conflicts.sh`'s RESOLVABLE-SET:
+regeneration needs `gh` plus a chosen green run id, which the pure-local
+resolver cannot supply — this path stays manual.
 
 ## Why the OLD positional method is retained
 

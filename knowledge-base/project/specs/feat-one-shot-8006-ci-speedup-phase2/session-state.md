@@ -45,7 +45,23 @@ None blocking. Subagent had no Skill/Task tool — `plan` and `deepen-plan` were
 
 ### Errors (execution)
 - M7/M9 first-red correction: heavy n=3 over 3 labels makes the zero-assignment refusal reachable through stale manifest data — cksum legs are {registry→3, tag→2, run-all→2}, so an empty (header-only) table starves leg 1 and a minus-one table dropping run-all.sh starves leg 3. Fixed by: M7 drops `battery-tag-authorship-mutations` (hash→populated leg 2, positive coverage case, GREEN); M9 flipped to RED, pinning the starved-leg refusal. Battery then 24/24 + controls green across both halves.
+- Bad first rebase: `git rebase origin/feat-...` replayed `e9d571145a` (already-merged C4 PR) into the branch because the remote init's parent (fa1e2c8733) predated it — diff vs main showed 30+ foreign files and merge-tree rc=1. Fixed with `git rebase --onto origin/main <replayed-init>` (5 real commits only), `--force-with-lease` push. Full verification re-run on the new base: all suites green again (affected suite now 31/31 under #8329's rewrite).
+
+### Review panel (9 agents) — synthesis
+- **No P0/P1 findings.** Security clean; performance confirms K=6 light sharding is the wall-clock lever, mutation split is advisory-latency only, heavy manifest is insertion-stability/uniform-semantics (3 registrations ↔ 3 legs is already bijective — NOT a current wall-clock win; `registry-gate-mutation-battery` remains the required-path floor).
+- **Fixes applied post-review:**
+  - Generator `registered_labels()` now scrubs `SCRIPTS_SHARD`/`TEST_GROUP`/`SOLEUR_SHARD_MANIFEST*` before the enumerate subprocess (exported shard env would have silently produced a one-leg partial manifest).
+  - Generator provenance: `--timings-dir` without `--run` now writes `generated-from-run=local:<dir>` instead of `0`.
+  - `read_ci_leg_count` continuation bounded to ≥4-indent lines (a missing `shard:` in the named job can no longer silently match the next job's).
+  - `fetch_timings_from_dir` takes the group's artifact regex — a mixed download dir merges only the requested group's files.
+  - NEW guard row: ci.yml `rows:` ranges must tile `1..DECLARED_TOTAL` contiguously — closes the growth-side hole per-leg accounting cannot see (a new row + bumped DECLARED_TOTAL without a matrix re-split would execute in NO CI leg while every leg's own checks stayed green).
+  - Guard: heavy over-spec probe now `"${_over_h}/${_over_h}"` (was literal `/5` — rots at REF_H≥5); enumerate children inside `while read < file` loops pinned to `< /dev/null`; dead `enumerate_leg "-"` arm and unreachable ZERO-registration else-branches removed; Guard 1b reduced malformed-set documented.
+  - Battery: M7 comment corrected (hash fallback populates the vacated leg, not "the remaining table"); MUSTPASS anchor comment corrected (`# No setup-node` is unique to the LIGHT job — that's WHY it's the anchor); `grep -cFx` precision in M4; dead `_taut_rc` store removed; `${ROWS_HI:-all}` display bug fixed (`1-0` → `all`/`1-24 (all)`).
+  - Stale-comment sweep: `_shard_selects` MANIFEST/POSITIONAL doc (per-group manifests), 8→9 legs in the probe comment, ci.yml "all three legs/392 suites"→"every leg/~489", `1/3`→`1/6` artifact comment, "positional shard matrices"→manifest-driven, "eight ways"→"twenty-four ways", ~2400→~4700 lines, enumerate_leg rc-contract comment, "21 times"/"K+1"→~35 invocations, runbook resolve-regenerable note, plan enumerate-cost attribution.
+  - `_mrest` duplicate unset removed; `_shard_mn=0`→`""` so headerless manifests print `n='<none>'`; superseded first trap in manifest test removed.
+- **Deferred (documented, not fixed):** `EXECUTED < 1` belt-and-suspenders floor retained; empty-label TSV rows (`\t3`) skip silently — same behavior as the lint, hash fallback covers the label anyway; heavy malformed list is a documented class-sample, not the full 10.
 
 ### Remaining
-- Push, PR body refresh, review/QA, compound+archive, ready, CI timing measurement vs ~8.5m target
+- Re-run touched suites (guard, battery halves, manifest+generator tests), commit, push
+- Compound+archive, ready, CI timing measurement vs ~8.5m target
 - Post-merge: soak probe keeps #8006 open until 3 qualifying runs pass

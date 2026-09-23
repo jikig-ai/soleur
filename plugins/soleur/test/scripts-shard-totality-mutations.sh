@@ -4,8 +4,8 @@
 #
 # Guard 1 (plugins/soleur/test/scripts-shard-totality.test.sh) asserts that every scripts-group
 # registration is assigned to exactly one matrix leg. A guard that cannot be driven RED is
-# vacuous, so this battery breaks the partition eight ways and requires the guard to notice
-# each one.
+# vacuous, so this battery breaks the partition twenty-four ways (DECLARED_TOTAL below) and
+# requires the guard to notice each one.
 #
 # HOW THIS BATTERY AVOIDS THE FAILURES ITS OWN CLASS IS KNOWN FOR:
 #
@@ -17,7 +17,7 @@
 #     verdict. A mutation that did not land reports the BASELINE, which is indistinguishable
 #     from a survivor.
 #   * It anchors on exact unique strings and refuses an ambiguous anchor, rather than a
-#     file-wide `sed`. scripts/test-all.sh is ~2400 lines with ~200 near-identical run_suite
+#     file-wide `sed`. scripts/test-all.sh is ~4700 lines with ~200 near-identical run_suite
 #     lines, so an unanchored substitution silently rewrites a different registration and the
 #     guard then reports a baseline that looks like a pass.
 #   * It restores and RE-VERIFIES after every row, and fails loudly if a restore did not take.
@@ -500,7 +500,6 @@ if mutate "$GUARD" "$_taut_old" "$_taut_new" 2>"$WORK/muterr"; then
     if (( _row6_ok == 0 )); then
       fail "ROW6 — the tautology mutation did not land (anchor drifted?); this row measured nothing."
       cp "$PRISTINE_GUARD" "$GUARD"; cp "$PRISTINE_RUNNER" "$RUNNER"
-      _taut_rc=-1
     else
     _taut_rc=$(guard_rc)
     cp "$PRISTINE_GUARD" "$GUARD"
@@ -595,10 +594,10 @@ if in_range; then
   else
     _la=$(SOLEUR_SHARD_MANIFEST="$WORK/manifest-empty.tsv" \
           env SCRIPTS_SHARD="$_ra/$_m4_n" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
-          bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -c "^SUITE_REGISTRATION	${_a}$")
+          bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -cFx "SUITE_REGISTRATION	${_a}")
     _lb=$(SOLEUR_SHARD_MANIFEST="$WORK/manifest-empty.tsv" \
           env SCRIPTS_SHARD="$_rb/$_m4_n" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
-          bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -c "^SUITE_REGISTRATION	${_b}$")
+          bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -cFx "SUITE_REGISTRATION	${_b}")
     if [[ "$_la" == "1" && "$_lb" == "1" ]]; then
       pass "M4 — two untabled labels hash to distinct legs ($_a→leg$_ra, $_b→leg$_rb)"
     else
@@ -638,9 +637,10 @@ HMANIFEST_FILE="$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv"
 [[ -f "$HMANIFEST_FILE" ]] \
   || { echo "FATAL: scripts/suite-shard-legs-heavy.tsv is absent; the heavy-manifest rows cannot be scored" >&2; exit 2; }
 # The minus-one fixture drops `battery-tag-authorship-mutations` deliberately:
-# its cksum hash lands on leg 2, a leg the remaining table still populates, so
-# this is the POSITIVE hash-fallback case — the untabled label is covered and
-# no leg starves. (Dropping run-all.sh or emptying the table starves a leg and
+# its cksum hash lands on leg 2 — the very leg the dropped row vacated — so the
+# fallback populates the missing leg, every leg keeps one label, and the guard
+# stays GREEN. This is the POSITIVE hash-fallback case. (Dropping run-all.sh —
+# which hashes onto populated leg 2 — or emptying the table starves a leg and
 # the zero-assignment refusal drives the guard RED — that case is M9.)
 grep -v 'battery-tag-authorship-mutations' "$HMANIFEST_FILE" > "$WORK/hmanifest-minus-one.tsv"
 cp "$HMANIFEST_FILE" "$WORK/hmanifest-phantom.tsv"
@@ -671,7 +671,9 @@ in_range && hfrow "M9" "$WORK/hmanifest-empty.tsv" RED \
 # --- MUST-PASS non-canonical input ------------------------------------------------------------
 # Raising a leg's ceiling AND keeping the partition intact must NOT red the guard: it is a
 # totality guard, not a performance guard. The anchor carries the preceding justification line
-# because `timeout-minutes: 60` + the setup-node note exists in BOTH test-scripts jobs now.
+# AND the `# No setup-node` follower because that three-line shape is unique to the LIGHT job —
+# `timeout-minutes: 60` alone also exists in test-scripts-heavy, so the longer anchor is what
+# makes the row refuse ambiguous rather than mutating the wrong job.
 in_range && row "MUSTPASS" "$CI_YML" \
   '    # capping a hung leg at 1 hour instead of GitHub'"'"'s 6-hour default.
     timeout-minutes: 60
@@ -704,7 +706,8 @@ else
   _expected_rows=$(( ROWS_HI - ROWS_LO + 1 ))
 fi
 if (( EXECUTED != _expected_rows || EXECUTED < 1 )); then
-  printf 'FAIL: range accounting — %d row(s) executed, expected %d in range %s. The battery did not run its declared range to completion.\n' "$EXECUTED" "$_expected_rows" "${ROWS_LO}-${ROWS_HI:-all}" >&2
+  _range_desc="${ROWS_LO}-${ROWS_HI}"; (( ROWS_HI == 0 )) && _range_desc="all"
+  printf 'FAIL: range accounting — %d row(s) executed, expected %d in range %s. The battery did not run its declared range to completion.\n' "$EXECUTED" "$_expected_rows" "$_range_desc" >&2
   exit 1
 fi
 TOTAL=$(( PASS + FAIL ))
@@ -715,7 +718,8 @@ if (( TOTAL != EXECUTED + 1 )); then
 fi
 
 echo ""
-echo "scripts-shard-totality-mutations.sh: range ${ROWS_LO}-${ROWS_HI:-all} of $DECLARED_TOTAL declared; $EXECUTED executed; $TOTAL verdicts, $PASS passed, $FAIL failed"
+_range_desc="${ROWS_LO}-${ROWS_HI}"; (( ROWS_HI == 0 )) && _range_desc="1-$DECLARED_TOTAL (all)"
+echo "scripts-shard-totality-mutations.sh: range $_range_desc of $DECLARED_TOTAL declared; $EXECUTED executed; $TOTAL verdicts, $PASS passed, $FAIL failed"
 if (( FAIL > 0 )); then
   exit 1
 fi
