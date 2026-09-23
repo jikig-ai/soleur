@@ -69,8 +69,8 @@ WORKFLOW SKILLS (invoked via /soleur:go or directly via Skill tool):
 
 HOW THE SKILLS FIT TOGETHER:
   Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
-               (go starts at brainstorm by default; qa runs the plan's test
-               scenarios and compound captures learnings between review and ship)
+               (go starts at brainstorm by default; qa, when the plan needs it,
+               and compound run between review and ship)
   On-ramps:    one-shot              plan through postmerge in one run (go sends
                                      fixes and scoped builds here)
                drain-labeled-backlog one-shot on one code-area cluster of a backlog
@@ -123,8 +123,8 @@ WORKFLOW SKILLS (invoked via /soleur:go or directly as /soleur:<skill>):
 
 HOW THE SKILLS FIT TOGETHER:
   Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
-               (go starts at brainstorm by default; qa runs the plan's test
-               scenarios and compound captures learnings between review and ship)
+               (go starts at brainstorm by default; qa, when the plan needs it,
+               and compound run between review and ship)
   On-ramps:    one-shot              plan through postmerge in one run (go sends
                                      fixes and scoped builds here)
                drain-labeled-backlog one-shot on one code-area cluster of a backlog
@@ -177,8 +177,8 @@ WORKFLOW SKILLS (invoked via /go or directly via slash command):
 
 HOW THE SKILLS FIT TOGETHER:
   Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
-               (go starts at brainstorm by default; qa runs the plan's test
-               scenarios and compound captures learnings between review and ship)
+               (go starts at brainstorm by default; qa, when the plan needs it,
+               and compound run between review and ship)
   On-ramps:    one-shot              plan through postmerge in one run (go sends
                                      fixes and scoped builds here)
                drain-labeled-backlog one-shot on one code-area cluster of a backlog
