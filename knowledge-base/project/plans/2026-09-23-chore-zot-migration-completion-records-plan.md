@@ -365,7 +365,7 @@ gh issue close 6073 --reason completed
 `$SCRATCH/6073.md`:
 
 ```markdown
-**Answered. Closing.** A GitHub App installation token **cannot** `docker pull` private repo-linked GHCR packages. This was reproduced live on 2026-07-05 and confirmed by GitHub staff in community discussion #171423. ADR-096 records it in its header: `Supersedes: ADR-088 (… GHCR refuses App tokens for docker pull, confirmed platform limitation)`.
+**Answered. Closing.** A GitHub App installation token **cannot** `docker pull` private repo-linked GHCR packages. `docker login` with the token succeeds but `docker pull` returns `denied`, and GitHub staff confirmed it in community discussion #171423 (recorded 2026-07-06 in `knowledge-base/project/learnings/2026-07-06-ghcr-app-token-cannot-pull-and-oidc-needs-native-identity-source.md`). ADR-096 records it in its header: `Supersedes: ADR-088 (… GHCR refuses App tokens for docker pull, confirmed platform limitation)`.
 
 The decision taken on 2026-07-06 has been carried out. Production moved to self-hosted zot (#6122). The first zot-served pull was 2026-07-17T19:51:49Z, and zot has been the sole pull path since about 2026-07-29, when the interim PAT was revoked. No GitHub-support action is left. The `priority/p0-critical` label came from SLA escalation of the `action-required` label and did not reflect severity. Both labels are removed.
 
@@ -470,7 +470,7 @@ A second zot instance that CI pushes to directly. After that, ADR-169's A1/A2 re
   - **Mirror-miss semantics must be decided:**
     - If the mirror target is release-blocking, a replica outage blocks releases, and that failure surface doubles.
     - If it is non-blocking, the restore source can be silently stale. A1 against the replica must then refuse on any missing pin (it already refuses on GHCR).
-  - Same provider and region means the two copies can fail together. #6126 notes that multi-writer over shared storage is unsafe, so each copy needs its own store.
+  - Same provider and region means the two copies can fail together. #6126 records that multi-writer zot over shared R2 is unsafe (no cross-instance GC or lock). A CI-fed replica is a second writer, so it needs its own store, not the primary's.
   - It is the largest option: several PRs (Terraform, cloud-init, CI, restore engine, tests, ADR).
 
 ### Option B — amend the ADRs instead of building a registry
@@ -557,15 +557,15 @@ value, token prefix or host address is added. The one private IP already appears
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (exact allowlist).** `git diff --name-only origin/main...HEAD | grep -vxF -f "$SCRATCH/allowlist.txt"` prints nothing.
+- [x] **AC1 (exact allowlist).** `git diff --name-only origin/main...HEAD | grep -vxF -f "$SCRATCH/allowlist.txt"` prints nothing.
   - The allowlist is ADR-096, `knowledge-base/project/specs/feat-registry-oidc-migration/tasks.md`, this plan, and `knowledge-base/project/specs/feat-one-shot-zot-migration-completion/{tasks.md,decision-challenges.md,session-state.md}`.
   - It also includes `knowledge-base/INDEX.md`, but only if the pipeline regenerates it.
   - So no path under `apps/`, `.github/`, `scripts/` or `plugins/` can appear, `cloud-init.yml` included.
-- [ ] **AC2.** `awk '/^## Status/{p=1;next} /^## Amendment 2026-07-30/{p=0} p' <ADR-096>`:
+- [x] **AC2.** `awk '/^## Status/{p=1;next} /^## Amendment 2026-07-30/{p=0} p' <ADR-096>`:
   - contains each of these phrases: `2026-07-17T19:51:49Z`, `**sole** pull path`, `stage:"app_zot"`, `**5.3a**` and `pending** behind the #6122`
   - does not contain `inert until` (the unedited copy on `main` does, so this check is red before 1.1)
   - `git diff -U0 origin/main...HEAD -- <ADR-096>` shows exactly one `@@` hunk, and it starts at or before line 17
-- [ ] **AC3.** Each of these `grep -cE` checks over the registry-oidc `tasks.md` returns `1`:
+- [x] **AC3.** Each of these `grep -cE` checks over the registry-oidc `tasks.md` returns `1`:
   - `^- \[x\] 1\.8 ` (was `[~]`; superseded 2026-09-24 by live measurement, see DC1)
   - `^- \[x\] 1\.9 `
   - `^- \[x\] 2\.4 `
@@ -573,11 +573,11 @@ value, token prefix or host address is added. The one private IP already appears
   - `^- \[ \] 5\.3b `
   - `^- \[ \] 5\.[456] ` returns `3`
   - `git diff origin/main...HEAD -- <tasks.md> | grep -E '^-[^-]'` shows only the old 1.8, 1.9, 2.4 and 5.3 lines.
-- [ ] **AC4 (no keyword closure).** Both of these print nothing:
+- [x] **AC4 (no keyword closure).** Both of these print nothing:
   - `git log --format=%B origin/main..HEAD | grep -oiE "$KW"`
   - `gh pr view 8666 --json title,body --jq '.title + "\n" + .body' | grep -oiE "$KW"`
   - Re-run both on the final title and body immediately before `gh pr merge`. The squash commit is built from them.
-- [ ] **AC5 (Phase 2 writes landed).** Each check reads live state:
+- [x] **AC5 (Phase 2 writes landed).** Each check reads live state:
   - Every comment in 2.1-2.8 exited 0, and its marker is present in `gh issue view <N> --json comments --jq '.comments[].body'`.
   - `gh issue view 7077 --json state,stateReason` and `gh issue view 6073 --json state,stateReason` both show `CLOSED` / `COMPLETED`.
   - `gh issue view 6410 --json state` is still `OPEN`.
@@ -585,8 +585,8 @@ value, token prefix or host address is added. The one private IP already appears
   - #6630's body contains `**Amended 2026-09-23` and `ZOT_GATE: active`, and no longer contains `PRELUDE: docker login ghcr.io ok`.
   - #6427's body contains `## Scope (narrowed 2026-09-23)`.
   - #6122's section-4 comment contains `### Option A`, `### Option B` and `**Bottom line.**`. `grep -ciE 'we recommend|we should|recommended option|prefer(red)? option'` over it prints `0`.
-- [ ] **AC6 (reserved acts untouched).** `git diff origin/main...HEAD -- scripts/` is empty, and `gh issue view 6500 --json state --jq .state` is `OPEN`. No task re-arms `zot-soak-6122.sh`, closes #6500, or performs 5.3b, 5.4, 5.5, 5.6 or #6129.
-- [ ] **AC7.** `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0. This is the gate's own invocation, not a hand-picked file list.
+- [x] **AC6 (reserved acts untouched).** `git diff origin/main...HEAD -- scripts/` is empty, and `gh issue view 6500 --json state --jq .state` is `OPEN`. No task re-arms `zot-soak-6122.sh`, closes #6500, or performs 5.3b, 5.4, 5.5, 5.6 or #6129.
+- [x] **AC7.** `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0. This is the gate's own invocation, not a hand-picked file list.
 
 ## Domain Review
 
