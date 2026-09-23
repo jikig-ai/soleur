@@ -1641,7 +1641,7 @@ describe("plugin-root anchoring — skills ratchet (#7453 PR-1 slice)", () => {
 
   it("R3: no baseline row is stale (all listed at once)", () => {
     const stale = staleRows(baseline, live).map(
-      ([key, n]) => `${key.replace("\t", ": ")} (baseline ${n}, live ${live.get(key) ?? 0})`,
+      ([key, n]) => `${key.replaceAll("\t", ": ")} (baseline ${n}, live ${live.get(key) ?? 0})`,
     );
     check(stale).toEqual([]);
   });

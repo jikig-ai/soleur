@@ -97,7 +97,7 @@
 1	plugins/soleur/skills/review/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/review/SKILL.md	/bin/sh
 1	plugins/soleur/skills/review/SKILL.md	bash scripts/rule-metrics-aggregate.sh
-1	plugins/soleur/skills/review/SKILL.md	bash scripts/test-all.sh
+2	plugins/soleur/skills/review/SKILL.md	bash scripts/test-all.sh
 1	plugins/soleur/skills/schedule/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 4	plugins/soleur/skills/seo-aeo/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/ship/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
@@ -115,7 +115,7 @@
 5	plugins/soleur/skills/ship/SKILL.md	bash scripts/test-all.sh
 2	plugins/soleur/skills/ship/references/ci-workflow-authoring.md	node scripts/md-to-mrkdwn.mjs
 1	plugins/soleur/skills/ship/references/feature-tweet-draft.md	bash scripts/lib/tweet-eligibility.sh
-2	plugins/soleur/skills/ship/references/settle-then-admin-merge.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
+3	plugins/soleur/skills/ship/references/settle-then-admin-merge.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/ship/references/settle-then-admin-merge.md	bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh
 4	plugins/soleur/skills/skill-creator/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/skill-creator/SKILL.md	bun plugins/soleur/scripts/harness-parity-census.ts
@@ -148,4 +148,4 @@
 5	plugins/soleur/skills/work/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/work/SKILL.md	./scripts/dev.sh
 1	plugins/soleur/skills/work/SKILL.md	bash scripts/regenerate-c4-model.sh
-4	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
+6	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
