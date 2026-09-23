@@ -1390,6 +1390,45 @@ jobs:
       - name: Grok fidelity gate (inspect contract + golden-path eval)
         run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
 
+  # Rationale lives in ADR-240, not here (ADR-231: workflow files are byte-budgeted).
+  # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
+  # promoting it to a required check after a soak, and the pin-freshness criterion.
+  harness-discovery:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install Codex CLI (exact pin)
+        run: |
+          set -euo pipefail
+          npm i -g @openai/codex@0.156.1
+          got="$(codex --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          [ "$got" = "0.156.1" ] || { echo "version-mismatch:$got!=0.156.1" >&2; exit 3; }
+
+      - name: Codex discovers every declared skill
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness codex --pin 0.156.1
+
+      - name: Install Devin CLI (versioned setup script)
+        run: |
+          set -euo pipefail
+          # The top-level install.sh leaves PINNED_VERSION empty (latest). The
+          # VERSIONED setup script is the pinned path — measured 2026-09-23.
+          curl -fsSL --max-time 60 https://static.devin.ai/cli/3000.11.1/setup.sh -o /tmp/devin-setup.sh
+          bash /tmp/devin-setup.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          got="$(devin --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          [ "$got" = "3000.11.1" ] || { echo "version-mismatch:$got!=3000.11.1" >&2; exit 3; }
+
+      - name: Devin discovers every declared skill
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin 3000.11.1
+
   # Synthetic aggregator.
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
