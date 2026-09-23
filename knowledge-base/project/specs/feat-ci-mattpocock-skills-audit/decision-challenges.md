@@ -35,6 +35,8 @@ chooses otherwise.
 
 ## T5 — Star-count wording without "unusually high for the repo's age" (CMO, taste)
 
+> **Resolved at review 2026-09-23:** a security-review finding (the hedged wording still read as doubt about a named third party's repo) was routed to the CLO, which replaced all four star/newsletter passages with dated GitHub-API snapshot wording. Both the plan default and this proposal are superseded; nothing to decide.
+
 - **Proposal:** "gh-reported, not independently verified; context only — do not cite downstream;
   confirm against a second source before it informs a decision." The two dates already imply the rest.
 - **Plan default:** The CLO wording, which keeps the "unusually high for the repo's age" clause.
