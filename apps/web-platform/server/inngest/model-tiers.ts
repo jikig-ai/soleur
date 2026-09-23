@@ -75,3 +75,12 @@ export const AUDIT_CLI_ARGS = [
   "--effort",
   AUDIT_EFFORT,
 ] as const;
+
+/**
+ * Substring of the pinned CLI's stderr warning for an unknown `--effort` VALUE
+ * (the CLI then runs at the model's default effort and exits 0). One constant
+ * for the substrate's Sentry mirror and the pinned-CLI probe's positive
+ * control, so a CLI reword cannot be fixed in the test while the runtime
+ * matcher silently stops matching.
+ */
+export const CLI_EFFORT_FALLBACK_NEEDLE = "Unknown --effort value";

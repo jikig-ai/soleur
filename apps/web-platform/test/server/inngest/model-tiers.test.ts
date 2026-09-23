@@ -18,11 +18,12 @@
 //       opus pricing entry then.
 //   (d) identity: EXECUTION_MODEL === SONNET_MODEL and
 //       AUDIT_MODEL === "claude-opus-5-5".
-//   (e) #8603 audit-cron effort pin (Guard 1): every audit-tier argv routes
-//       its model AND effort through the one AUDIT_CLI_ARGS tuple, spread
-//       before the `"--"` end-of-options marker, in exactly the six
-//       AUDIT_CRONS; every other `--model` argv names EXECUTION_MODEL and no
-//       argv carries a raw `--effort`. Plus identity pins on AUDIT_EFFORT and
+//   (e) #8603 audit-cron effort pin — "Guard 1", walks G1-a…G1-f below:
+//       every audit-tier argv routes its model AND effort through the one
+//       AUDIT_CLI_ARGS tuple, spread before the `"--"` end-of-options marker,
+//       in exactly the six AUDIT_CRONS; every other `--model` argv names
+//       EXECUTION_MODEL, no argv carries a raw `--effort`, and no other
+//       model/effort channel is used. Plus identity pins on AUDIT_EFFORT and
 //       the tuple shape.
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -153,11 +154,14 @@ describe("model-tiers registry — #5106", () => {
 // select the audit model passes `--effort`.
 //
 // Chokepoints: AUDIT_CLI_ARGS is the only place AUDIT_MODEL and AUDIT_EFFORT
-// are paired (identity pin below), and every `"--model"` token in functions/
-// names EXECUTION_MODEL — so the audit tier can only reach the CLI through the
-// tuple. Walk (c) is also what makes the pinned-CLI id guard
-// (claude-cli-pin-knows-models.test.ts) complete: it proves model-tiers.ts is
-// the only route by which a model id reaches the cron CLI.
+// are paired (identity pin below), audit crons may use the tuple ONLY as a
+// whole-line `...AUDIT_CLI_ARGS,` inside CLAUDE_CODE_FLAGS, and every other
+// `"--model"` token names EXECUTION_MODEL — so the audit tier can only reach
+// the CLI through the full tuple. G1-f additionally bans the CLI's other
+// model/effort channels in this directory (raw model literals,
+// `--fallback-model`, `--settings`/`--agents` JSON, effort env/settings keys).
+// Together G1-c and G1-f are what make the pinned-CLI id guard
+// (claude-cli-pin-knows-models.test.ts) complete for this directory.
 //
 // Moving a cron between tiers is a reviewed ADR-053 change that edits
 // AUDIT_CRONS in the same diff — the table is compared by set identity, never
@@ -171,20 +175,68 @@ const AUDIT_CRONS = [
   "cron-ux-audit.ts",
 ];
 
+// Each walk's pattern, exported to the positive controls below so a pattern
+// that can never match cannot pass as "no offenders".
+const NAMES_AUDIT_CONST = /\bAUDIT_(MODEL|EFFORT)\b/;
+const RAW_EFFORT_FLAG = /["'`]--effort/;
+const MODEL_FLAG_VALUE = /["'`]--model["'`],\s*([^\s,\]]+)/g;
+const MODEL_FLAG_EQUALS = /["'`]--model=/;
+const WHOLE_LINE_SPREAD = /^\s*\.\.\.AUDIT_CLI_ARGS,\s*$/;
+const FLAGS_ARRAY_OPEN = /^(export )?const CLAUDE_CODE_FLAGS = \[\s*$/;
+const END_OF_OPTIONS = /^\s*["'`]--["'`],\s*$/;
+// Other ways the pinned CLI accepts a model or an effort level.
+const OTHER_CHANNELS =
+  /["'`]claude-(opus|sonnet|haiku|fable)-|--fallback-model|["'`]--settings["'`]|["'`]--agents["'`]|CLAUDE_CODE_EFFORT_LEVEL|\beffortLevel\b/;
+
 describe("audit-cron effort pin — #8603 Guard 1", () => {
   const files = readdirSync(FUNCTIONS_DIR).filter((f) => f.endsWith(".ts"));
   const code = new Map(
-    files.map((f) => [
-      f,
-      stripComments(readFileSync(join(FUNCTIONS_DIR, f), "utf8")),
-    ]),
+    files.map((f) => {
+      const raw = readFileSync(join(FUNCTIONS_DIR, f), "utf8");
+      return [f, stripComments(raw).split("\n")] as const;
+    }),
   );
+
+  it("stripComments keeps line numbers and never eats code after a `/*` inside a comment", () => {
+    const out = stripComments(
+      '// globs like bot-fix/* here\nconst x = ["--model", "claude-x"]; // tail\n/** doc */\nconst u = "http://z";',
+    ).split("\n");
+    expect(out).toHaveLength(4);
+    expect(out[1]).toContain('["--model", "claude-x"]');
+    expect(out[1]).not.toContain("tail");
+    expect(out[3]).toContain('"http://z"');
+    for (const f of files) {
+      const raw = readFileSync(join(FUNCTIONS_DIR, f), "utf8");
+      expect(code.get(f)!.length, `${f}: stripComments changed the line count`).toBe(
+        raw.split("\n").length,
+      );
+    }
+  });
+
+  it("every walk pattern matches a synthesized positive (non-vacuity)", () => {
+    expect(NAMES_AUDIT_CONST.test('  "--model", AUDIT_MODEL,')).toBe(true);
+    expect(RAW_EFFORT_FLAG.test('  "--effort", "high",')).toBe(true);
+    expect([...'"--model", AUDIT_MODEL,'.matchAll(MODEL_FLAG_VALUE)][0][1]).toBe("AUDIT_MODEL");
+    expect(MODEL_FLAG_EQUALS.test('"--model=claude-x"')).toBe(true);
+    expect(WHOLE_LINE_SPREAD.test("  ...AUDIT_CLI_ARGS,")).toBe(true);
+    expect(WHOLE_LINE_SPREAD.test("  ...AUDIT_CLI_ARGS.slice(0, 2),")).toBe(false);
+    for (const bad of [
+      '"claude-opus-9-9"',
+      '"--fallback-model"',
+      '"--settings", "{}"',
+      '"--agents", "{}"',
+      "CLAUDE_CODE_EFFORT_LEVEL: 'low'",
+      "effortLevel: 'low'",
+    ]) {
+      expect(OTHER_CHANNELS.test(bad), bad).toBe(true);
+    }
+  });
 
   it("AUDIT_EFFORT is the operator-requested 'high'", () => {
     expect(AUDIT_EFFORT).toBe("high");
   });
 
-  it("AUDIT_CLI_ARGS is the only model+effort pairing, in argv order", () => {
+  it("AUDIT_CLI_ARGS pairs the audit model then the effort, in argv order", () => {
     expect(AUDIT_CLI_ARGS).toEqual([
       "--model",
       AUDIT_MODEL,
@@ -193,40 +245,39 @@ describe("audit-cron effort pin — #8603 Guard 1", () => {
     ]);
   });
 
-  it("(a) no code line names AUDIT_MODEL or AUDIT_EFFORT directly", () => {
-    const offenders: string[] = [];
-    for (const [f, src] of code) {
-      src.split("\n").forEach((line, i) => {
-        if (/\bAUDIT_(MODEL|EFFORT)\b/.test(line)) {
-          offenders.push(`${f}:${i + 1}: ${line.trim()}`);
-        }
+  const offendersOf = (test: (line: string) => boolean) => {
+    const out: string[] = [];
+    for (const [f, lines] of code) {
+      lines.forEach((line, i) => {
+        if (test(line)) out.push(`${f}:${i + 1}: ${line.trim()}`);
       });
     }
+    return out;
+  };
+
+  it("G1-a: no code line names AUDIT_MODEL or AUDIT_EFFORT directly", () => {
     expect(
-      offenders,
+      offendersOf((l) => NAMES_AUDIT_CONST.test(l)),
       "spread ...AUDIT_CLI_ARGS instead of naming the audit model/effort (ADR-053)",
     ).toEqual([]);
   });
 
-  it("(b) no argv carries a raw --effort literal (any quote style)", () => {
-    const offenders: string[] = [];
-    for (const [f, src] of code) {
-      src.split("\n").forEach((line, i) => {
-        if (/["'`]--effort/.test(line)) offenders.push(`${f}:${i + 1}`);
-      });
-    }
-    expect(offenders).toEqual([]);
+  it("G1-b: no argv carries a raw --effort literal (any quote style)", () => {
+    expect(offendersOf((l) => RAW_EFFORT_FLAG.test(l))).toEqual([]);
   });
 
-  it("(c) every --model argv value is EXECUTION_MODEL, and no --model= form", () => {
+  it("G1-c: every --model argv value is EXECUTION_MODEL, none in an audit cron, and no --model= form", () => {
     const captures: string[] = [];
     const offenders: string[] = [];
-    for (const [f, src] of code) {
-      for (const m of src.matchAll(/["'`]--model["'`],\s*([^\s,\]]+)/g)) {
+    for (const [f, lines] of code) {
+      const src = lines.join("\n");
+      for (const m of src.matchAll(MODEL_FLAG_VALUE)) {
         captures.push(m[1]);
         if (m[1] !== "EXECUTION_MODEL") offenders.push(`${f}: ${m[1]}`);
+        // A second --model after the spread would silently override the tuple.
+        if (AUDIT_CRONS.includes(f)) offenders.push(`${f}: extra --model ${m[1]}`);
       }
-      if (/["'`]--model=/.test(src)) offenders.push(`${f}: --model= form`);
+      if (MODEL_FLAG_EQUALS.test(src)) offenders.push(`${f}: --model= form`);
     }
     // Non-vacuity floor: 10 today; headroom so retiring one execution cron
     // does not trip it, but an empty/mis-stripped walk cannot pass.
@@ -237,29 +288,51 @@ describe("audit-cron effort pin — #8603 Guard 1", () => {
     ).toEqual([]);
   });
 
-  it("(d) exactly the six AUDIT_CRONS spread ...AUDIT_CLI_ARGS", () => {
+  it("G1-d: exactly the six AUDIT_CRONS use the tuple, and only as a whole-line spread", () => {
     const spreaders = [...code]
-      .filter(([, src]) => /\.\.\.AUDIT_CLI_ARGS\b/.test(src))
+      .filter(([, lines]) => lines.some((l) => WHOLE_LINE_SPREAD.test(l)))
       .map(([f]) => f)
       .sort();
     expect(
       spreaders,
       "moving a cron between tiers is a reviewed ADR-053 change: edit AUDIT_CRONS in the same diff",
     ).toEqual([...AUDIT_CRONS].sort());
+    // Any other use of the tuple (a partial `.slice`, a hoisted copy, an
+    // index) could drop or reorder --effort while still "mentioning" it.
+    expect(
+      offendersOf(
+        (l) =>
+          /\bAUDIT_CLI_ARGS\b/.test(l) &&
+          !WHOLE_LINE_SPREAD.test(l) &&
+          !/^import \{ AUDIT_CLI_ARGS \} from "@\/server\/inngest\/model-tiers";$/.test(l.trim()),
+      ),
+    ).toEqual([]);
   });
 
-  it("(e) in each audit cron the spread precedes the single '--' marker", () => {
+  it("G1-e: in each audit cron the spread sits inside CLAUDE_CODE_FLAGS, once, before the single '--'", () => {
     for (const f of AUDIT_CRONS) {
-      const src = code.get(f);
-      expect(src, `${f} not found in functions/`).toBeDefined();
-      const markers = [...src!.matchAll(/^\s*["'`]--["'`],\s*$/gm)];
-      expect(markers.length, `${f}: expected exactly one "--" line`).toBe(1);
-      const spread = src!.indexOf("...AUDIT_CLI_ARGS");
-      expect(spread, `${f}: no ...AUDIT_CLI_ARGS spread`).toBeGreaterThanOrEqual(0);
+      const lines = code.get(f);
+      expect(lines, `${f} not found in functions/`).toBeDefined();
+      const idx = (re: RegExp) =>
+        lines!.flatMap((l, i) => (re.test(l) ? [i] : []));
+      const open = idx(FLAGS_ARRAY_OPEN);
+      const spread = idx(WHOLE_LINE_SPREAD);
+      const marker = idx(END_OF_OPTIONS);
+      expect(open.length, `${f}: expected one CLAUDE_CODE_FLAGS array`).toBe(1);
+      expect(spread.length, `${f}: expected exactly one ...AUDIT_CLI_ARGS spread`).toBe(1);
+      expect(marker.length, `${f}: expected exactly one "--" line`).toBe(1);
+      expect(spread[0], `${f}: spread must be inside CLAUDE_CODE_FLAGS`).toBeGreaterThan(open[0]);
       expect(
-        spread,
+        spread[0],
         `${f}: ...AUDIT_CLI_ARGS must sit before "--" (a flag after it is prompt text, #4017)`,
-      ).toBeLessThan(markers[0].index!);
+      ).toBeLessThan(marker[0]);
     }
+  });
+
+  it("G1-f: no other channel sets a model or effort for the cron CLI", () => {
+    expect(
+      offendersOf((l) => OTHER_CHANNELS.test(l)),
+      "route model/effort through model-tiers.ts (AUDIT_CLI_ARGS / EXECUTION_MODEL) so the pinned-CLI guard sees it",
+    ).toEqual([]);
   });
 });

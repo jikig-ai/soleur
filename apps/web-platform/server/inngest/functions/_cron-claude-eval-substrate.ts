@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import {
   upsertRoutineRunProgress,
   heartbeatRoutineRunProgress,
@@ -18,6 +19,7 @@ import {
   buildAuthenticatedCloneUrl,
   DeployInProgressError,
   deployLeaseAgeMsIfFresh,
+  formatTailForSentry,
   redactToken,
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
@@ -1119,14 +1121,19 @@ export async function spawnClaudeEval(args: {
         rlErr.on("line", (line) => {
           const redacted = redactToken(line, installationToken);
           logger.error({ fn: cronName, stream: "stderr" }, redacted);
-          if (!effortFallbackReported && /Unknown --effort value/.test(line)) {
+          if (
+            !effortFallbackReported &&
+            line.includes(CLI_EFFORT_FALLBACK_NEEDLE)
+          ) {
             effortFallbackReported = true;
             warnSilentFallback(null, {
-              feature: cronName,
-              op: "claude-effort-fallback",
+              feature: "cron-claude-eval",
+              op: "claude-eval-effort-fallback",
               message:
                 "claude CLI ignored --effort (unknown value); run fell back to the default effort",
-              extra: { line: redacted },
+              // Same scrub + cap as every other Sentry tail sink (_cron-shared.ts
+              // formatTailForSentry), not just the installation-token redaction.
+              extra: { fn: cronName, line: formatTailForSentry(redacted) },
             });
           }
           // Keep a bounded tail (drop oldest) for the Sentry surface.

@@ -52,10 +52,12 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # KEEP IN SYNC with the `@anthropic-ai/claude-code` pin in package.json: the
 # CLI carries a bundled per-model table, and a model ID absent from it silently
 # falls back to half the max_tokens (measured 64000 → 32000 on #6934), so a
-# stale pin here degrades every cron that passes --model. This was skewed at
-# 2.1.79 vs package.json's 2.1.197 until #6934. Enforced in CI since #8603 by
-# test/server/inngest/claude-cli-pin-knows-models.test.ts (pin agreement +
-# every tier model id present in the pinned bundle).
+# stale pin degrades whichever cron resolves this copy. This was skewed at
+# 2.1.79 vs package.json's 2.1.197 until #6934. The crons spawn the package.json
+# copy (/app/node_modules/.bin/claude, installed by `npm ci` below); this global
+# install is the fallback path. Since #8603
+# test/server/inngest/claude-cli-pin-knows-models.test.ts enforces that the two
+# pins agree and that the installed bundle knows every tier model id.
 RUN npm install -g @anthropic-ai/claude-code@2.1.280
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).

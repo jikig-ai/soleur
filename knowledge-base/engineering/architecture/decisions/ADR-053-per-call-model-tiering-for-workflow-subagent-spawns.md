@@ -223,17 +223,24 @@ per-model `default_effort` in its bundled table, and claude-opus-5-5's row reads
 leaving effort unset silently lowered audit reasoning depth at the 5 → 5.5 swap with no argv
 change. A tier whose rationale is reasoning depth cannot inherit an unowned default.
 
-- Execution-tier crons stay on the CLI default. Their drift at a future launch is accepted and
-  visible: model-launch-review re-reads `default_effort` for every tier's row.
+- Execution-tier crons stay on the CLI default. Their drift at a future launch is accepted, and it
+  cannot happen silently: the CI test pins both tiers' `default_effort` in the installed bundle
+  (`REVIEWED_DEFAULT_EFFORT` in `claude-cli-pin-knows-models.test.ts`), so a CLI bump that moves
+  either value reds until someone re-decides `AUDIT_EFFORT` and accepts the execution default.
 - Changing `AUDIT_EFFORT` is a same-tier tuning change, not re-tiering.
 - "The pinned CLI knows every tier id and accepts the effort value" is now a CI invariant
   (`apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts`), not only a
   hand-run audit item. An unknown `--effort` **value** is a warning plus a silent fallback to the
   default (exit 0), so the CI probe is the gate, and the cron substrate mirrors the warning to
   Sentry (`op: claude-effort-fallback`) at runtime.
-- Considered and not taken: an `EXECUTION_CLI_ARGS` tuple for symmetry — it touches ten more
-  crons, and the execution tier already has its chokepoint (every other `--model` argv names
-  `EXECUTION_MODEL`, pinned by `model-tiers.test.ts`).
+- Considered and not taken: an `EXECUTION_CLI_ARGS` tuple for symmetry — it touches nine more
+  crons and one event function, and the execution tier already has its chokepoint (every other
+  `--model` argv names `EXECUTION_MODEL`, pinned by `model-tiers.test.ts`).
+- Known constraint: `model-tiers.ts` now carries CLI argv (`AUDIT_CLI_ARGS`), and
+  `model-tiers.test.ts` forbids naming `AUDIT_MODEL` anywhere in `server/inngest/functions/`. A
+  future audit-tier caller that uses the Messages API instead of the CLI needs its own carve-out
+  and its own effort mapping. Effort is a cron-registry attribute, not part of ADR-110's semantic
+  tier map.
 
 ## Alternatives considered
 

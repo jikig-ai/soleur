@@ -72,7 +72,7 @@ export const MAX_TURN_DURATION_MS = 60 * 60 * 1000;
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8.
-// Uses AUDIT_CLI_ARGS (opus, high effort) for strong cross-layer reasoning over the
+// Uses AUDIT_CLI_ARGS (the audit tier) for strong cross-layer reasoning over the
 // codebase architecture (routes, server functions, Inngest functions, DB
 // schema, infra Terraform, Soleur plugin skills) vs diagram DSL.
 const CLAUDE_CODE_FLAGS = [

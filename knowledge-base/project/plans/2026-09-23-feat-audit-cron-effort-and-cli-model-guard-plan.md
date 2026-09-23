@@ -289,7 +289,7 @@ failure_modes:
     detection: "layer 6: Guard 2 pin-agreement assertion (runs on every host)"
     alert_route: "required `test` check red"
   - mode: "high effort pushes an audit cron past its wall-clock budget (timeout)"
-    detection: "layer 1/2: abortedByTimeout is classified fatal by classifyEvalFatal -> Sentry cron monitor error check-in + FAILED cron issue"
+    detection: "layer 1/2: abortedByTimeout is classified fatal by classifyEvalFatal -> Sentry cron monitor error check-in + FAILED cron issue. Correction (review, 2026-09-23): for growth-audit (70 min budget) and architecture-diagram-sync (60 min) the Sentry monitor's 60-min checkin_margin fires a missed check-in first; the audit crons also share the account-scoped `cron-platform` concurrency key, so a queued run spends margin waiting. Observed durations (7-17 min) leave >=2.9x headroom, and the audit crons ran at high effort on opus-5 until #8601, so this PR restores rather than raises their effort."
     alert_route: "Sentry cron monitor alert + auto-filed FAILED GitHub issue"
   - mode: "high effort exhausts --max-turns before the audit finishes (accepted, unalerted gap)"
     detection: "layer 2 context only: max-turns is classified benign in _cron-shared.ts, so the monitor checks in green with fatalClass=benign in sentryExtra and the output-aware producers (growth-audit, competitive-analysis) turn red only when no artifact was produced; no page"
