@@ -15,6 +15,38 @@ requires_cpo_signoff: true
 
 # Plan: human-presence guard for production-mutating operator scripts (step 1 of #8486)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23 (headless, lean fan-out under the session's API rate budget)
+**Agents used:** `soleur:engineering:review:security-sentinel`,
+`soleur:engineering:review:user-impact-reviewer`, one verify-the-negative Explore pass; plan-review
+already ran `architecture-strategist` and `code-simplicity-reviewer`. Gates run mechanically: 4.6
+(User-Brand Impact), 4.7 (Observability; `probe-verb-gate.sh` accepts the discoverability command),
+4.8 (no PAT shapes), 4.10 (Encryption Posture fields), 4.11 (`lint-guard-contract.py`: 4 entries);
+4.4 precedent diff against migration 137; 4.55 downtime gate evaluated and not triggered. The
+exhaustive "run every agent" fan-out of Phase 5 was not run.
+
+### Key improvements
+
+1. Handoff hardening (user-impact): the printed command is absolute and worktree-pinned, the
+   handoff is a blocking operator step, and flag-set-role gains an incident-rollback block with a
+   dashboard break-glass (Phase 7.1, AC14–AC15).
+2. Rollback order for migration 140 (helper revert reaches the installed plugin before the down
+   migration) and a read-only pre-merge probe that dev has the 8-arg RPC (AC16).
+3. Guard 2 tree isolation: `create.sh`/`delete.sh` overwrite `server.ts`, `.env.example` and
+   `flip.sh` in place, so pty-`yes` runs use a scratch copy and assert the worktree is untouched.
+4. Resolved at deepen time instead of deferred to work: the `umask` question (in-place writes, no
+   new files), audit-sentry's control flow (inventory completes before the first PUT), the LIA edit
+   (one bullet; Article 30 register unchanged), audit-sentry's missing `SCRIPT_DIR`, and `go.md`'s
+   stale "Skill-tool-invokable directly" text.
+
+### New considerations discovered
+
+- Every write arm is a production write, including `role=dev` arms (`flip.sh` writes both
+  Flagsmith environments; `set-role.sh` edits prd users).
+- A pipeline that prescribes an agent flag write now gets exit 64; without the blocking-step rule it
+  could ship code whose safety depends on a flag nobody set.
+
 ## Overview
 
 Step 1 of #8486. The operator scripts that write to Soleur's production gate their writes on a
@@ -259,7 +291,12 @@ Then, for each of `delete.sh`, `create.sh`, `set-role.sh`, `flip.sh`:
   `audit-flag-flip.sh` source.
 - 2.2 Early precheck immediately after argv parsing, before `command -v` checks and any Doppler or
   curl call: `if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required
-  "destructive-write-ack(no-skip-variable-by-design)" ack; fi`.
+  "destructive-write-ack(no-skip-variable-by-design)" ack; fi`. Every non-dry-run arm is gated,
+  including `role=dev` arms: `flip.sh <flag> dev on` names the **role** segment, and the script writes
+  both Flagsmith environments (dev and prd) regardless; `set-role.sh <user> dev` changes a **prd**
+  user's role. There is no dev-only write arm in these scripts, so "production write" and "write"
+  coincide here. One arm-table row pins `flip.sh f dev on` as a gated `write` row (user-impact
+  finding 6).
 - 2.3 Replace the typed-yes block with `soleur_op_ack_or_die "<script-specific prompt naming the
   flag/user, the envs, and 'Type yes'>: "` at the same place (after the preview, before the WORM
   append). Prompts are distinct per site so Guard 2's coverage anchor can observe each one.
@@ -270,15 +307,20 @@ Then, for each of `delete.sh`, `create.sh`, `set-role.sh`, `flip.sh`:
   exits 2 before any other work. Usage lines drop `[--confirmed]`.
 - 2.5 Header comments: exit-code tables change "operator aborted" from 0 to 1, add 64
   (`SOLEUR_BOOTSTRAP_INPUT_REQUIRED`) and, for flip.sh, 2 for `--confirmed`.
-- 2.6 `umask 077` audit: list every file each script creates or rewrites (the flag scripts edit
-  `RUNTIME_FLAGS`/`.env.example`-class files; confirm by reading each script's write sites). Any
-  tmp-then-`mv` onto a tracked file now lands 0600; restore the mode with `chmod --reference` or
-  rewrite in place. Record the result in the PR body.
+- 2.6 `umask 077` audit — resolved at deepen time: `create.sh` writes `server.ts` and
+  `.env.example` (Python `open(p,'w')`, `create.sh` near its `.env.example` heredoc), and `delete.sh`
+  writes `server.ts`, `.env.example` **and `flip.sh`'s own `FLAG_ENV_VARS` map** — all in-place
+  overwrites of existing files, none via tmp+`mv`, none creating a new file. `umask` applies only to
+  file creation, so modes are unchanged. Keep one test assertion (mode of each written file is
+  unchanged after a pty `yes` run) so a future tmp+`mv` refactor cannot silently land 0600.
 - 2.7 WORM: no call-site change — the helper supplies `tty-ack` (2.11).
 
 For `audit-sentry-extra-text-references.sh`:
 
-- 2.8 Source the library (repo-relative path) below the xtrace refusal.
+- 2.8 Source the library (repo-relative path) below the xtrace refusal (its `exit 78` block). The
+  script defines no `SCRIPT_DIR` today; add `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &&
+  pwd)"` and source `"$SCRIPT_DIR/../../../plugins/soleur/scripts/lib/operator-script.sh"`. Its
+  `-h|--help)` arm already exits 0 during argv parsing, before the precheck.
 - 2.9 After argv parsing: `if (( APPLY )); then [[ -t 0 ]] || soleur_op_input_required
   "destructive-write-ack(no-skip-variable-by-design)" ack; fi`.
 - 2.10 After the inventory is printed and before the first PUT: `if (( APPLY && total_matches > 0 ));
@@ -333,14 +375,21 @@ For `audit-sentry-extra-text-references.sh`:
 - 4.3 Header: document the new rule and why it skips the two-week dry-run expansion gate: after this
   PR no legitimate agent invocation of these scripts exists in write mode (the script refuses it at
   exit 64), so a false-positive defer costs nothing a correct run would have produced.
-- 4.4 `.claude/hooks/README.md`: same note.
+- 4.4 `.claude/hooks/README.md` §"Starter manifest (3 entries, telemetry-driven expansion)": the
+  heading and table become 4 entries (add the new rule's row) plus the same expansion-gate note.
+  Grep the README and `DEFER-DECISION-PAYLOAD-SHAPE.md` for any other "3 entries"/"three rules" count
+  and update it in the same edit.
 
 ### Phase 5 — Per-harness measurement
 
 - 5.1 Record `[[ -t 0 ]]` under each harness installed on the workstation (Claude Code measured
   2026-09-23: `stdin=notty`). For `codex`, `grok` and `devin`, run one headless prompt that executes
   `bash -c '[[ -t 0 ]] && echo stdin=tty || echo stdin=notty'` and, where the harness's exec tool
-  exposes a PTY option, a second run requesting it. Budget disclosure: ≤ 6 model calls total.
+  exposes a PTY option, a second run requesting it. Also record whether Claude Code's `!`
+  bash-mode prefix gives a command a TTY on stdin (`! bash -c '[[ -t 0 ]] && echo stdin=tty || echo
+  stdin=notty'`). Only a person can type the `!` prefix, so in a headless run this row is recorded
+  UNMEASURED and the SKILL.md keeps "use your own terminal". Budget disclosure: ≤ 6 model calls
+  total.
 - 5.2 Any harness that can obtain a PTY is recorded in the ADR as "TTY ack is a speed bump in this
   harness (agent can answer the prompt)", not "refuses". Unrunnable harnesses are recorded as
   UNMEASURED, never as covered.
@@ -355,9 +404,29 @@ See `## Architecture Decision (ADR/C4)`.
   `description:` edits): the agent runs `--dry-run`, shows the preview, then prints the exact write
   command in a fenced block for the operator's own terminal (Warp) and does not run it. Explain the
   exit-64 marker. Remove every `--confirmed` mention and the AskUserQuestion-then-apply flow in
-  flag-set-role. Update exit-code tables.
+  flag-set-role. Update exit-code tables. Three handoff requirements (deepen-plan, user-impact
+  findings 1, 4, 5):
+  - **Absolute, worktree-pinned command.** The printed command is `cd <absolute worktree path> &&
+    bash <absolute script path> <argv>`, never a `${CLAUDE_PLUGIN_ROOT}`-relative or repo-relative
+    form: `create.sh`/`delete.sh` also edit repo files, and an operator running from the main
+    checkout or another worktree would land the code wiring in the wrong tree while Flagsmith and
+    Doppler change.
+  - **Blocking operator step.** The handoff is an undone operator step under
+    `wg-block-pr-ready-on-undeferred-operator-steps`: the agent does not treat the printed command as
+    done, records it where the pipeline tracks operator steps, and PR-ready waits on it. Exit 64 is
+    never a success.
+  - **Incident rollback block (flag-set-role).** A short section that gives the rollback write
+    command at once (no dry-run first), says to run it in the operator's own terminal (Warp) — not
+    via Claude Code's `!` prefix (whether it gives the command a TTY is unmeasured; Phase 5
+    records it) — and names the Flagsmith dashboard as the break-glass when the audit append exits 4 (the dashboard is already a named residual in the ADR;
+    a dashboard write leaves no WORM row, so the section says to record it afterwards).
 - 7.2 `oauth-probe-failure.md` runbook: the `--apply` invocations are for the operator's terminal;
   the default inventory stays agent-runnable.
+- 7.2a `plugins/soleur/commands/go.md` §Operator-typed tooling (ADR-236) currently says
+  `soleur:flag-create`/`soleur:flag-set-role` "stay model-invocable" and are Skill-tool-invokable
+  directly. Add that the agent runs only their `--dry-run` and hands off the write command, the same
+  "reply with the exact command, never run it" rule it already states for `flag-delete` and
+  `user-set-role`.
 - 7.3 Sweep: `git grep -nF -- '--confirmed'` and `git grep -nE 'flag-(create|delete|set-role)|user-set-role'`
   across model-read surfaces (skills, commands incl. `commands/go.md` §Operator-typed tooling,
   agents, `AGENTS.rules.md`, runbooks). Every instruction that has the agent perform a write must
@@ -387,6 +456,18 @@ See `## Architecture Decision (ADR/C4)`.
   8-arg `DEFAULT NULL` one exists makes every 7-key call ambiguous ("function … is not unique") and
   every flag write exit 4 (plan review, architecture finding 2, mechanical — applied). The migration
   test asserts this order in the `.down.sql` and that only the last parameter has a default.
+  **Rollback order (user-impact finding 2):** the helper change (always sending
+  `p_approval_method`) must be reverted, and that revert must reach the operator's installed plugin
+  copy, BEFORE `.down.sql` runs — otherwise every new-helper call hits a function that no longer
+  accepts the key and exits 4 before any write. The `.down.sql` header and the ADR state this order.
+- 8.1a Precedent (deepen-plan 4.4): `137_byok_cap_breach_audit_row.sql` is the same shape — inside
+  `BEGIN; … COMMIT;`, `ALTER TABLE <audit table> ADD COLUMN …`, `DROP FUNCTION IF EXISTS <old
+  signature>`, `CREATE FUNCTION … SECURITY DEFINER SET search_path = public, pg_temp`, then
+  `REVOKE ALL … FROM PUBLIC, anon, authenticated` and `GRANT EXECUTE … TO service_role` on the new
+  signature. Mirror it; `run-migrations.sh` already calls `postgrest-reload-schema.sh` after applying,
+  so the new RPC signature is visible without a manual reload. Downtime gate (deepen-plan 4.55) does
+  not fire: the column is nullable with no default (no table rewrite), `flag_flip_audit` is a small,
+  cold, append-only table, and the inline CHECK validates only NULLs.
 - 8.2 Deploy ordering (answered at plan time — architecture finding 3): the scripts write the audit
   row to Doppler `soleur/dev`'s Supabase, and `.github/workflows/tenant-integration.yml` applies
   unmerged migrations to the shared dev project during PR CI, so `dev` has the 8-arg function before
@@ -394,9 +475,10 @@ See `## Architecture Decision (ADR/C4)`.
   keys (main and other worktrees) keep working through PostgREST named arguments plus `DEFAULT NULL`.
   The only deploy risk was the down-migration order above.
 - 8.3 `knowledge-base/legal/legitimate-interest-assessments/2026-05-25-flag-flip-audit-lia.md` and
-  `knowledge-base/legal/article-30-register.md`: if either enumerates `flag_flip_audit` columns, add
-  `approval_method` (non-personal enum; records how the write was approved). If neither enumerates
-  columns, record "no change" in the PR body.
+  `knowledge-base/legal/article-30-register.md`: resolved at deepen time — the LIA's
+  data-minimisation list carries a per-field bullet ("**Actor field:** operator email only …"), so add
+  one sibling bullet "**Approval-method field:** `tty-ack` or NULL; non-personal; records how the write
+  was approved (ADR-245)". The Article 30 register has no `flag_flip_audit` entry; no change there.
 
 ## Files to Create
 
@@ -427,7 +509,8 @@ See `## Architecture Decision (ADR/C4)`.
 - `knowledge-base/engineering/architecture/decisions/ADR-236-human-only-skills-are-user-invoked.md`
 - `knowledge-base/engineering/architecture/diagrams/model.c4`, `views.c4`
 - `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md`
-- Conditional (8.3): the flag-flip LIA and `article-30-register.md`
+- `plugins/soleur/commands/go.md` (§Operator-typed tooling, Phase 7.2a)
+- `knowledge-base/legal/legitimate-interest-assessments/2026-05-25-flag-flip-audit-lia.md` (one data-minimisation bullet, 8.3)
 - Conditional (7.3): any model-read surface the sweep finds
 
 ## Open Code-Review Overlap
@@ -500,14 +583,20 @@ calls and exits 0.
 minus the library, `*.test.sh`, the `operator-bootstrap/template.sh` (copied, never run) and
 `knowledge-base/**` (generated per-feature bootstraps). Set identity with the arm table's `script`
 column, both ways. Every run uses a sandbox PATH containing ONLY the stub dir plus symlinks to the
-coreutils the scripts need (`bash`, `jq`, `sed`, `awk`, `grep`, `tr`, `cut`, `sort`, `mktemp`,
-`python3` where used); `curl` and `doppler` are stubs that append their full argv to a log. Any other
+coreutils the scripts need (measured at deepen time: `dirname`, `grep`, `printf`, `python3`,
+`sed`, `sleep`, `tail`, `tr` across the four flag scripts; `jq` for the audit helper; audit-sentry's
+set is derived the same way — the suite derives the list with a grep over each script rather than
+hard-coding it, and a missing tool shows up as `command not found`, never as a silent pass); `curl` and `doppler` are stubs that append their full argv to a log. Any other
 network binary is absent, so an unstubbed writer fails loudly instead of escaping the log. A call is
 MUTATING when the curl argv carries `-X`/`--request` POST, PUT, PATCH or DELETE (or `-d`/`--data*`
 without `-X GET`), or the doppler argv is `secrets set|delete|upload`. Pty runs use `script -qec` with
 the answer on its stdin (the library suite's existing idiom). Coverage anchor: the prompt string of
 every `soleur_op_ack_or_die` call site (grep-derived from the source) must appear in at least one pty
-run's output.
+run's output. **Tree isolation (deepen-plan):** `create.sh` and `delete.sh` overwrite `server.ts` and
+`.env.example` in place, and `delete.sh` also rewrites `flip.sh`'s `FLAG_ENV_VARS` map, so every
+pty-`yes` run executes against a scratch copy of the repo-relative files the script reads and writes
+(same relative layout under a `mktemp -d` root), and the suite asserts `git status --porcelain` on
+the real worktree is unchanged after the run.
 
 **Mutation matrix.**
 
@@ -682,6 +771,12 @@ failure_modes:
   - mode: approval_method RPC parameter missing on the audit DB (migration not yet applied)
     detection: audit RPC non-2xx -> exit 4 FATAL before any mutation
     alert_route: operator terminal; PR body states the window (Phase 8.2)
+  - mode: down migration applied while the installed helper still sends p_approval_method
+    detection: audit RPC non-2xx -> exit 4 FATAL before any mutation, on every flag write
+    alert_route: operator terminal; rollback order in the .down.sql header and ADR (helper revert first); Flagsmith dashboard break-glass per the flag-set-role incident block
+  - mode: pipeline treats a printed handoff command as done
+    detection: exit 64 marker in the transcript; the handoff is recorded as an undone operator step (wg-block-pr-ready-on-undeferred-operator-steps)
+    alert_route: PR-ready blocked until the operator step is closed
   - mode: defer rule misses a path shape
     detection: Guard 3 shape matrix in CI; at runtime the TTY ack still refuses (exit 64)
     alert_route: CI failure; runtime marker
@@ -734,7 +829,10 @@ alert rule rewritten so their incident is never paged — each caused by an agen
 (or passed `--confirmed`) into `flip.sh`, `create.sh`, `delete.sh`, `set-role.sh` or
 `audit-sentry … --apply`, with the WORM audit row attributing the change to the operator. The
 inverse failure is the operator unable to run a needed rollback flip because the ack refuses a real
-terminal (Guard 2 H4 and the pty positive control cover it).
+terminal (Guard 2 H4, AC14 and the flag-set-role incident block cover it). A new failure this change
+introduces: a pipeline that prescribes an agent flag write gets exit 64 and ships code whose safety
+depends on a flag state nobody set (a feature meant to stay dev-only, an unflipped kill-switch) —
+covered by making the handoff a blocking operator step (Phase 7.1, AC15).
 
 **If this leaks, the user's workflow and data are exposed via:** a role promotion to `dev` that
 exposes unreleased, possibly unfinished features, or a per-org segment detach that changes which
@@ -775,6 +873,18 @@ review (TR5).
 - [ ] AC12 — `bash scripts/test-all.sh` green for the groups containing the touched suites;
       `invocation-axis.test.ts` and `components.test.ts` green.
 - [ ] AC13 — #8661 and #8662 are linked from the ADR and the PR body.
+- [ ] AC14 — For each of the four SKILL.md files, the fenced write command it tells the agent to
+      print (extracted by the test, not retyped) starts with `cd <absolute path> &&`, and, run under
+      `script -qec` with stub PATH and `no` on the pty, reaches its ack prompt and exits 1 with zero
+      mutating calls (proves the printed form works in a real terminal).
+- [ ] AC15 — `flag-set-role/SKILL.md` has the incident-rollback block (write command without
+      dry-run, own terminal not `!`, dashboard break-glass on exit 4); each of the four SKILL.md files
+      names `wg-block-pr-ready-on-undeferred-operator-steps` for the handoff.
+- [ ] AC16 (pre-merge, after tenant-integration CI applies migration 140 to the shared dev project) —
+      a read-only probe of dev PostgREST's OpenAPI document
+      (`GET <dev SUPABASE_URL>/rest/v1/` with the service-role key) lists `rpc/audit_flag_flip` with a
+      `p_approval_method` parameter; output recorded in the PR body. Do not call the RPC to test it:
+      every call writes a permanent WORM row.
 
 ## Domain Review
 

@@ -21,7 +21,10 @@ lane: cross-domain
   ack-calling script).
 - [ ] 1.2 Create `plugins/soleur/test/operator-ack-guard.test.sh` with Guard 1 (typed-yes census,
   exemption registry with set identity) and Guard 2 (sandbox-PATH behavioral arms, pty via
-  `script -qec`, prompt-coverage anchor). Observe RED for the named reasons.
+  `script -qec`, prompt-coverage anchor). Pty-`yes` runs of `create.sh`/`delete.sh` execute against
+  a scratch copy of `server.ts`, `.env.example` and `flip.sh` (delete.sh rewrites its
+  `FLAG_ENV_VARS` map); assert the real worktree's `git status --porcelain` is unchanged and file
+  modes are preserved. Observe RED for the named reasons.
 - [ ] 1.3 Extend `.claude/hooks/prod-write-defer-gate.test.sh` with Guard 3 (arm table × invocation
   shapes; segment-scoped escape rows). Observe RED.
 - [ ] 1.4 Extend `plugins/soleur/test/operator-script.test.sh` with Guard 4 (Guard 9 arm-table
@@ -45,7 +48,8 @@ lane: cross-domain
   - [ ] 2.2.4 `flip.sh`: single `gate_or_confirm`; remove `--confirmed`, reject it with exit 2 and an
     "own terminal" message.
   - [ ] 2.2.5 Header exit-code tables (abort 1, no-TTY 64, flip `--confirmed` 2).
-  - [ ] 2.2.6 `umask 077` audit of every file each script writes.
+  - [ ] 2.2.6 `umask 077`: writes are in-place (no new files), so modes are unchanged; keep the
+    mode-preserved assertion from 1.2.
 - [ ] 2.3 `audit-sentry-extra-text-references.sh`: source library, precheck when `--apply`, ack after
   inventory and before the first PUT (skip on zero matches).
 - [ ] 2.4 Migrate `flag-detach-shared.test.sh` and `flag-org-scoping-pr2.test.sh` from `--confirmed`
@@ -59,12 +63,19 @@ lane: cross-domain
   tracking issue); amend ADR-236.
 - [ ] 2.8 C4: add `flagsmith` element and edges in `model.c4`; include in the `context` view.
 - [ ] 2.9 SKILL.md bodies (four skills): `--dry-run`, then print the write command for the
-  operator's terminal; remove `--confirmed`; exit-code tables. Runbook `oauth-probe-failure.md`.
+  operator's terminal as `cd <absolute worktree> && bash <absolute script> …`; the handoff is a
+  blocking operator step (`wg-block-pr-ready-on-undeferred-operator-steps`); flag-set-role gets an
+  incident-rollback block (no dry-run, own terminal not `!`, dashboard break-glass on exit 4); remove
+  `--confirmed`; exit-code tables. Runbook `oauth-probe-failure.md`.
+- [ ] 2.9a `.down.sql` header + ADR: rollback order (revert helper and let it reach the installed
+  plugin before running the down migration).
+- [ ] 2.9b `plugins/soleur/commands/go.md` §Operator-typed tooling: flag-create/flag-set-role run
+  `--dry-run` only and hand off the write command.
 - [ ] 2.10 Sweep model-read surfaces for agent-performed writes / `--confirmed`; update
   `components.test.ts` reason strings.
 - [ ] 2.11 List open plans that prescribe agent flag writes (PR body; no edits to point-in-time
   plans).
-- [ ] 2.12 LIA / Article 30 register: add `approval_method` only if columns are enumerated.
+- [ ] 2.12 Flag-flip LIA: add the "Approval-method field" data-minimisation bullet (register: no change).
 
 ## 3. Testing and verification
 
@@ -77,5 +88,9 @@ lane: cross-domain
 - [ ] 3.6 C4 syntax, render and `plugins/soleur/test/c4-count-parity.test.sh`
 - [ ] 3.7 Discoverability probe: `bash plugins/soleur/skills/flag-delete/scripts/delete.sh probe-flag`
   prints `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` and exits 64.
+- [ ] 3.7a AC14: each SKILL.md's printed write command reaches its ack under `script -qec` (stub
+  PATH, `no` answer, zero mutating calls).
+- [ ] 3.7b AC16 (pre-merge): read-only OpenAPI probe of dev PostgREST shows `rpc/audit_flag_flip`
+  with `p_approval_method`; never call the RPC to test it.
 - [ ] 3.8 Full review panel (TR5): security-sentinel, user-impact-reviewer, and the rest; run
   `soleur:gdpr-gate` against the diff.

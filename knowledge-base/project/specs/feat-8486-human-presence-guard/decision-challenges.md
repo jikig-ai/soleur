@@ -76,3 +76,8 @@ the work phase adds them if any script's parser reaches the precheck on `--help`
 `soleur_op_ack_or_die` with a `write` row" and skip the widening. **Plan keeps the widening** (with
 fixture row M2, without the hand-kept count): it is the only check that sees a library consumer
 writing with curl and never calling the ack, which Guard 2's population cannot contain.
+
+Deepen-plan note on T-7: `g4_class2_body_ok` (`operator-script.test.sh`, the class-2 body check)
+allows only `$prompt_text`/`$reply` expansions and `[[ -n/-z "$reply" ]]` tests in the ack body; a
+plain assignment `SOLEUR_OP_ACKED=tty-ack` is not an expansion, so T-7 is likely compatible, but the
+work phase must run Guard 4 after the edit to confirm.
