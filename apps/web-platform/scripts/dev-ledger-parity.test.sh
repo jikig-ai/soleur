@@ -419,6 +419,22 @@ else
   fail "expected rc=1 from the app subdirectory; got rc=$rc out=$out"
 fi
 
+# ----------------------------------------------------------------------
+echo "G1-12: the PR's OWN head on origin still holds G by exact name (stale push) -> still rc 1"
+CASES=$((CASES + 1))
+# The checkout renamed 143_old -> 143_new but origin's feat still carries the
+# old name. The PR must never count as "another live branch" that owns G.
+feat_case 143_old.sql="R3"
+git -C "$WORK" mv "$MDIR/143_old.sql" "$MDIR/143_new.sql"
+git -C "$WORK" commit -qm 'rename, not pushed'
+ledger "143_old.sql|$(blob_of R3)"
+run_check --head-branch feat
+if [[ "$rc" == "1" ]] && has "by blob" && ! has "::notice::"; then
+  pass "the PR's own branch is excluded from ownership"
+else
+  fail "expected rc=1 with no ownership notice; got rc=$rc out=$out"
+fi
+
 echo "== Guard 1: must-PASS =="
 
 # ----------------------------------------------------------------------
@@ -817,6 +833,18 @@ else
   fail "expected <unprintable-branch>; got [$out]"
 fi
 
+# ----------------------------------------------------------------------
+echo "G2-p5: a fresh holder beats a stale holder of the same row -> in-flight"
+CASES=$((CASES + 1))
+branch fresh-too main "" 160_old.sql="OLD"
+run_classify "160_old.sql|$(blob_of OLD)"$'\n'
+git -C "$SEED" push -q origin --delete fresh-too
+if [[ "$rc" == "0" && "$out" == "in-flight${T}160_old.sql${T}fresh-too${T}exact" ]]; then
+  pass "freshness is decided across all holders before stale is reported"
+else
+  fail "expected in-flight via fresh-too; got rc=$rc out=[$out]"
+fi
+
 echo "== Guard 2: harness =="
 
 mutate_fn() {  # $1=out $2=function-opening line (exact) $3=inserted statement
@@ -1144,7 +1172,7 @@ fi
 # sits directly above its `if` so guard-vacuity-floor's mutant slice carries it.
 # ----------------------------------------------------------------------
 echo ""
-EXPECTED_CASES=63
+EXPECTED_CASES=65
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
