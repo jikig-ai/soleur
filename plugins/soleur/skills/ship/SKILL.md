@@ -2161,7 +2161,7 @@ retired both the driver and AC17.)
 
    ```bash
    git merge --abort
-   bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh origin/main && git push
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push
    ```
 
 2. Identify conflicted files:

@@ -661,6 +661,16 @@ AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
   "scripts/skill-security-scan-step-body.test.sh"
 )
 
+# plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus
+# walk is sandbox-only (synthetic repos + fixture trees); the real subject is the resolver SUT
+# and the render arm it stubs, so the scan is scoped and the edges are honest.
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_RESOLVE_REGENERABLE_CONFLICTS_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+  "plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh"
+  "plugins/soleur/scripts/render-c4-model.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/ci-concurrency-key.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_CONCURRENCY_KEY_TEST_SH_PATHS=(

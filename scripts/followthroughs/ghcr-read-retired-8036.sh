@@ -13,11 +13,10 @@
 # nothing." A host that is down, that never ran the new script, or whose log channel is dark also
 # emits no `relogin_failed`. So the criterion is graded here as a CONJUNCTION, per host:
 #
-#   leg 1  the host's LATEST `SOLEUR_DEPLOY_GHCR_CONFIG` marker carries a `swept=` token AND reads
-#          `deploy_ghcr_auth=none`;
-#   leg 2  the host emitted ZERO `stage=relogin_failed` rows since earliest (the operator's own
-#          criterion, kept verbatim);
-#   leg 3  the host's LATEST `IMAGE_VERIFY*` verdict is not `result=verify_failed`.
+#   The three legs are stated ONCE, in LEG1_CLAIM / LEG2_CLAIM / LEG3_CLAIM below, and rendered
+#   by `--explain` and by every verdict summary. Run `--explain` for the contract; it needs no
+#   credentials and makes no network call. This header deliberately does NOT restate them: it was
+#   a fifth copy, and it is where the #8636 contradiction lived.
 #
 # `swept=` IS THE VERSION DISCRIMINATOR, NOT `deploy_ghcr_auth=none`. An earlier draft graded on
 # the `none` token alone, reasoning that the whole pre-1c fleet reads `inline`. That is an
@@ -71,14 +70,25 @@
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS               >=1 host observed and EVERY host satisfies all three legs. Close #8036.
 #   1 = FAIL               some host fails leg 1 or leg 2 — the retirement has not landed there,
-#                          or the prelude re-login is still firing.
+#                          or the prelude re-login is still firing. ALSO returned when a host
+#                          emitted relogin rows but no marker at all: it cannot be graded, and
+#                          silently dropping it would let an ungraded host read as absent.
 #   5 = ACTION REQUIRED    every host passes legs 1 and 2, but some host's latest IMAGE_VERIFY
-#                          verdict is result=verify_failed: signature verification is broken on a
+#                          verdict is not in the LEG3_ALLOW_RE allowlist — or emitted no
+#                          verdict at all. Signature verification is broken (or unobserved) on a
 #                          host whose GHCR read path IS retired. A human decision, and the one
-#                          outcome a `swept=yes` host can still have that nothing else pages on.
+#                          outcome a `swept=yes` host can still have that nothing else pages on:
+#                          `cosign_absent` is in this set and fired 89/89 in the 7 days to
+#                          2026-09-22, so grading only the literal `verify_failed` closed the
+#                          tracker over exactly the condition the retirement exists to end.
 #   2 = NOT YET            creds unset, query tool missing/failing, earliest in the future, zero
 #                          rows, or zero ci-deploy markers since earliest (no deploy yet).
-#   3 = CANNOT ESTABLISH   SOLEUR_FT_EARLIEST unset/empty/malformed, rows that do not decode as
+#   3 = CANNOT ESTABLISH   any row the grader READS that cannot be attributed to a host, clocked,
+#                          or ordered against that host's latest marker -- stated as a property
+#                          rather than a list, because the list was already wrong (it named only
+#                          markers while the refusal covers every graded kind, and it predated
+#                          both the unclocked and the ambiguous-ordering arms). Also:
+#                          SOLEUR_FT_EARLIEST unset/empty/malformed, rows that do not decode as
 #                          the journald envelope, or markers with no _MACHINE_ID.
 #   78 = refused to run under xtrace with a live credential bound (#7797)
 #
@@ -122,8 +132,48 @@ QUERY="${GHCR_RETIRED_8036_BQ:-$SCRIPT_DIR/../betterstack-query.sh}"
 # must cover. Widening that refusal to name non-secrets is the wrong repair — it dilutes what
 # the guard asserts. The name was the defect.
 MARKER_LITERAL='SOLEUR_DEPLOY_GHCR_CONFIG'
+# LEG 3 ALLOWLIST, DEFINED ONCE. The grader's `case` arm and the `--explain` text both read this,
+# so they cannot drift apart -- #8636 found them already disagreeing, and an assertion that the
+# two match is weaker than making them one value. `_PAT` is the case-arm form; `_HUMAN` is the
+# rendered set for prose.
+# LEG 3 ALLOWLIST = `ok` ALONE. `reused_local_reload` was admitted here and it is WRONG: it is not
+# emitted by `verify_image_signature` at all. `_try_local_cache_reload` emits it on the arm where
+# the registry did NOT serve and cosign was therefore SKIPPED -- "zot did not serve; reusing the
+# already-verified running image". The bits were verified at their ORIGINAL deploy, but the event
+# asserts nothing about verification NOW, so admitting it let a non-verification breadcrumb satisfy
+# a verification leg. Measured (#8636 review): a host emitting `cosign_absent` and then
+# `reused_local_reload` graded PASS with "Close #8036." -- the 89/89 class this probe exists to
+# catch, LAUNDERED by a later reload. It also contradicted this leg's own stated contract, that a
+# host with markers but no verdict is ACTION REQUIRED: a host that ran no cosign at all passed.
+# A `reused_local_reload` latest verdict is now ACTION REQUIRED (exit 5, a human decision), never
+# FAIL -- it does not latch the tracker, and the next real deploy emits `ok`.
+#
+# NAMED `_RE`, NOT `_PAT`. `lint-shell-trace-credential-refusal.py` matches
+# `[A-Z][A-Z0-9_]*_(TOKEN|KEY|SECRET|PASSWORD|PAT)` and read a `_PAT` suffix as Personal Access
+# Token, demanding this constant be covered by the xtrace credential refusal -- which would have
+# diluted what that refusal asserts to cover a public regex. Measured: it redded a REQUIRED
+# context (1 violation in 1237 files, zero on main).
+readonly LEG3_ALLOW_RE='ok'
+readonly LEG3_ALLOW_HUMAN="{${LEG3_ALLOW_RE//|/, }}"
+
 RELOGIN_LITERAL='stage=relogin_failed'
 VERIFY_LITERAL='IMAGE_VERIFY'
+
+# THE THREE LEG CLAIMS, DEFINED ONCE AND INTERPOLATED EVERYWHERE THEY ARE STATED.
+# This contract used to exist in FIVE prose copies -- the file header, the `--explain` heredoc and
+# the PASS / ACTION REQUIRED / FAIL verdict blocks -- and it drifted from the grader FOUR times.
+# Four successive guards tried to DETECT that drift and each leaked: a tautology, bare-token
+# matching, hand-enumerated negation lists with unbounded slices, and a line-count pin defeated by
+# an embedded newline. Each guard needed a guard, which is the signal that detection was the wrong
+# mechanism. Prose DERIVED from one value cannot drift, so there is nothing left to detect: the
+# copies are now renderings, and the only thing a test must pin is these three assignments.
+readonly LEG1_CLAIM="a 'swept=' token AND both carriers clean: deploy_ghcr_auth=none AND deploy_ghcr_helper=none"
+readonly LEG2_CLAIM="zero '${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker (not zero rows in the window)"
+readonly LEG3_CLAIM="a latest ${VERIFY_LITERAL} verdict in ${LEG3_ALLOW_HUMAN}"
+# The tie rule is a CLAIM too, and it drifted the moment it changed: `--explain` kept saying a tie
+# "counts AGAINST the pass" (the `>=` rule) after the grader moved to refusing. Justification prose
+# wrapped around a single-sourced claim is still hand-written prose, which is where drift #5 went.
+readonly LEG2_TIE_CLAIM="a tie is an UNKNOWN ordering and is REFUSED (exit 3), neither passed nor failed"
 
 if [[ "${1:-}" == "--explain" ]]; then
   cat <<EXPLAIN
@@ -134,14 +184,40 @@ PROBE-READY ghcr-read-retired-8036
   window:    __REALTIME_TIMESTAMP >= SOLEUR_FT_EARLIEST (no header fallback; unset => exit 3)
   fetch:     ${QUERY##*/} --since <earliest> --grep ${MARKER_LITERAL} --grep relogin_failed --grep ${VERIFY_LITERAL} --limit \${SOLEUR_FT_LIMIT:-5000}
   graded, per host, as a CONJUNCTION (never a pure absence):
-    leg 1  latest ${MARKER_LITERAL} line carries a 'swept=' token AND 'deploy_ghcr_auth=none'
-           ('swept=' is the version discriminator: the pre-1c script cannot emit it, while
-            'deploy_ghcr_auth=none' is also what a freshly provisioned PRE-1c host reads)
-    leg 2  zero '${RELOGIN_LITERAL}' rows  (the operator's stated criterion, verbatim)
-    leg 3  latest ${VERIFY_LITERAL}* verdict is not 'result=verify_failed'
+    leg 1  ${LEG1_CLAIM}
+           docker resolves ghcr.io through a credHelpers entry with or without an auths entry, so
+           grading only the auths token passed a host that was still presenting a credential.
+           'swept=na_absent' (no deploy docker config exists yet) is CLEAN -- a file that is not
+           there presents nothing, and that arm asserts deploy_cfg=absent rather than bypassing
+           the carriers blind. The other 'na_*' values and 'failed' refuse.
+    leg 2  ${LEG2_CLAIM}
+           'earliest' is deliberately set past the apply, because the co-fired release may still
+           run the OLD script, so the window is EXPECTED to contain pre-1c rows; counting those
+           latched the tracker shut permanently on any host that saw one. A tie counts AGAINST the
+           ${LEG2_TIE_CLAIM}: the 'dt' fallback is second-granularity, so equal timestamps
+           carry no ordering, and guessing either way has already failed in both directions --
+           passing re-opened the fail-open hole, failing latched a clean host shut.
+    leg 3  ${LEG3_CLAIM}
+           Graded as an allowlist, never as "is it the one bad literal": verify_image_signature
+           also emits unsigned / wrong_identity / rekor_unreachable / cosign_absent / inspect_failed,
+           and 'cosign_absent' is the class this work's own evidence records firing 89/89. A host
+           with markers but NO verdict is ACTION REQUIRED too. So is 'reused_local_reload', which
+           is emitted where cosign was SKIPPED for a same-version local-cache reload -- it asserts
+           nothing about verification, and it gets its own sentence rather than being reported as
+           a broken verifier.
   NOT graded: home_ghcr_auth / root_ghcr_auth — both are unreachable from webhook.service
            (ProtectHome=read-only; root's home is 0700) and ride the 1d follow-up.
-  exits:   0 PASS | 1 FAIL (leg 1 or 2) | 5 ACTION REQUIRED (leg 3) | 2 NOT YET | 3 CANNOT ESTABLISH
+  also refuses: a result set saturated at --limit (exit 2); and, at exit 3, any row the grader
+           reads that cannot be attributed to a host, clocked, or ordered against its latest
+           marker -- ${LEG2_TIE_CLAIM}.
+           A saturated read matters because The query keeps the NEWEST rows, so a
+           truncated read drops the OLDEST — exactly where a surviving pre-1c relogin sits, and
+           leg 2 grades an ABSENCE over that window.
+  caveat on a PASS: a host reporting 'deploy_creds_store=set' has a GLOBAL credential helper
+           configured. Leg 1 verified the CONFIG carries no ghcr.io carrier, but this probe cannot
+           read what that helper stores; the per-host report says so on its own line.
+  exits:   0 PASS | 1 FAIL (leg 1 or 2, or any ungraded relogin-only host) | 5 ACTION REQUIRED
+           (leg 3) | 2 NOT YET / saturated | 3 CANNOT ESTABLISH
   network: none in this mode
 EXPLAIN
   exit 0
@@ -239,15 +315,25 @@ PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
   | if ($row | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-"
     else
       (($row.raw // null) | if type == "string" then (fromjson? // null) else . end) as $r
-      | if ($r | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-\t-\t-\t-"
+      | if ($r | type) != "object" then "0\t0\t-\t0\tother\t-\t-\t-\t-\t-\t-\t0"
         else
           (($r.message // $r.MESSAGE // "") | tostring) as $m
           | (if ($r.SYSLOG_IDENTIFIER // "") == "ci-deploy" then "1" else "0" end) as $sid
           | (($r._MACHINE_ID // "") | tostring
               | if test("^[0-9a-f]{32}$") then . else "-" end) as $mid
-          | ((($r.__REALTIME_TIMESTAMP // "") | tostring | tonumber?)
-              // ((($row.dt // "") | tostring)[0:19] + "Z"
-                   | (strptime("%Y-%m-%d %H:%M:%SZ") | mktime) * 1000000)? // 0) as $ts
+          # `// null` here too: `"" | tonumber?` yields EMPTY, and `empty as $x` emits nothing, so
+          # the entire row disappeared before any refusal could see it -- the same vanishing-row
+          # bug as $tsdt, one binding earlier.
+          | ((($r.__REALTIME_TIMESTAMP // "") | tostring | tonumber?) // null) as $tsus
+          # `// null` INSIDE the binding: `expr? as $x` with a failing expr produces NO OUTPUT,
+          # which drops the whole row before it can reach the unclocked refusal -- measured, a
+          # graded row with an empty `dt` vanished and the host graded PASS.
+          | (((($row.dt // "") | tostring)[0:19] + "Z"
+               | (strptime("%Y-%m-%d %H:%M:%SZ") | mktime) * 1000000)? // null) as $tsdt
+          | (($tsus // $tsdt) // -1) as $ts
+          # COARSE=1 means the second-granularity `dt` fallback supplied this timestamp, so an
+          # equal comparison against another row is an UNKNOWN ordering rather than a tie.
+          | (if $tsus then "0" else "1" end) as $coarse
           | if ($m | test("(^| )" + $mt + " ")) then
               [ "1", $sid, $mid, ($ts|tostring), "marker",
                 (($m | capture(" swept=(?<v>[a-z_]+)").v) // "-"),
@@ -255,16 +341,16 @@ PARSED="$(printf '%s\n' "$RAWOUT" | jq -R -r --arg mt "$MARKER_LITERAL" '
                 "-",
                 (($m | capture(" deploy_cfg=(?<v>[a-z_]+)").v) // "-"),
                 (($m | capture(" deploy_creds_store=(?<v>[a-z_]+)").v) // "-"),
-                (($m | capture(" deploy_ghcr_helper=(?<v>[a-z_]+)").v) // "-") ]
+                (($m | capture(" deploy_ghcr_helper=(?<v>[a-z_]+)").v) // "-"), $coarse ]
             elif ($m | test("stage=relogin_failed")) then
-              [ "1", $sid, $mid, ($ts|tostring), "relogin", "-", "-", "-", "-", "-", "-" ]
+              [ "1", $sid, $mid, ($ts|tostring), "relogin", "-", "-", "-", "-", "-", "-", $coarse ]
             elif ($m | test("^IMAGE_VERIFY: ok( |$)")) then
-              [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-", "ok", "-", "-", "-" ]
+              [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-", "ok", "-", "-", "-", $coarse ]
             elif ($m | test("^IMAGE_VERIFY_FAIL: result=[a-z_]+")) then
               [ "1", $sid, $mid, ($ts|tostring), "verify", "-", "-",
                 ($m | capture("^IMAGE_VERIFY_FAIL: result=(?<c>[a-z_]+)").c),
-                "-", "-", "-" ]
-            else [ "1", $sid, $mid, ($ts|tostring), "other", "-", "-", "-", "-", "-", "-" ] end
+                "-", "-", "-", $coarse ]
+            else [ "1", $sid, $mid, ($ts|tostring), "other", "-", "-", "-", "-", "-", "-", $coarse ] end
           | join("\t")
         end
     end
@@ -280,20 +366,41 @@ fi
 
 RELEVANT="$(printf '%s\n' "$PARSED" | awk -F'\t' -v e="$EARLIEST_US" \
   '$1 == "1" && $2 == "1" && ($5 == "marker" || $5 == "relogin" || $5 == "verify") && ($4 + 0) >= (e + 0)')"
-MARKERS_NO_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 == "-" && $5 == "marker" { n++ } END { print n + 0 }')"
-MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
-
-if [[ "$MARKERS_WITH_MID" -eq 0 && "$MARKERS_NO_MID" -gt 0 ]]; then
-  echo "CANNOT ESTABLISH: ${MARKERS_NO_MID} ci-deploy ${MARKER_LITERAL} line(s) since $EARLIEST carry no" >&2
-  echo "                  usable _MACHINE_ID, so no reading can be attributed to a host." >&2
+# ROWS THE GRADER CANNOT ATTRIBUTE OR CLOCK ARE REFUSED, NEVER DROPPED. Legs 2 and 3 grade an
+# ABSENCE, and a row silently deleted for lacking a machine id or a timestamp is the same
+# truncation the saturation guard already refuses on -- it just fails OPEN instead of loud.
+# Measured (#8636 review): a `stage=relogin_failed` row with no `_MACHINE_ID` produced
+# `PASS ... relogin_failed_in_window=0`, and so did one with no usable timestamp; a pre-1c dirty
+# marker with no machine id was invisible too, because MARKERS_NO_MID was only consulted when
+# MARKERS_WITH_MID was zero -- one good marker hid every unattributable one.
+# SAME SCOPE AS THE ATTRIBUTION REFUSAL. Written pre-gate with no kind filter, this refused on
+# rows nothing grades -- a `ci-deploy` line such as `IMAGE_VERIFY_MODE=warn selected for this
+# deploy` with no clock latched the tracker to exit 3 permanently on an otherwise compliant fleet.
+UNCLOCKED="$(printf '%s\n' "$PARSED" | awk -F'\t' 'NF >= 12 && $1 == "1" && $2 == "1" \
+  && ($5 == "marker" || $5 == "relogin" || $5 == "verify") && ($4 + 0) < 0 { n++ } END { print n + 0 }')"
+if [[ "$UNCLOCKED" -gt 0 ]]; then
+  echo "CANNOT ESTABLISH: ${UNCLOCKED} ci-deploy row(s) carry no usable timestamp (neither" >&2
+  echo "                  __REALTIME_TIMESTAMP nor a parseable dt). Legs 2 and 3 grade an absence" >&2
+  echo "                  over a time window, which a row with no clock cannot be placed in." >&2
   exit 3
 fi
+# ONE PREDICATE OVER EVERY GRADED KIND, not a list. This was written as two kind-specific
+# counters (`relogin`, `marker`) and the third graded kind -- `verify` -- was omitted, so an
+# unattributable `IMAGE_VERIFY_FAIL: result=unsigned` was still silently dropped and a host whose
+# real latest verdict was `unsigned` graded PASS. That is the same hand-enumerated-list failure
+# the negation guards died of: a list is a claim about which members exist, and it is wrong the
+# moment one is added. `$RELEVANT` already contains exactly the kinds the grader reads.
+UNATTRIBUTED="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 == "-" { n++ } END { print n + 0 }')"
+if [[ "$UNATTRIBUTED" -gt 0 ]]; then
+  echo "CANNOT ESTABLISH: ${UNATTRIBUTED} graded ci-deploy row(s) since $EARLIEST carry no usable" >&2
+  echo "                  _MACHINE_ID, so they cannot be attributed to a host. Legs 1-3 are graded" >&2
+  echo "                  PER HOST and legs 2-3 grade an absence, so dropping them would report" >&2
+  echo "                  zero while rows were seen." >&2
+  exit 3
+fi
+MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
 
-# Per-host fold in timestamp order. A host is a group iff it emitted at least one MARKER: a host
-# that emitted only a relogin row has not demonstrated it ran the new script, and leg 1 is what
-# says so — so relogin rows are counted against the host but cannot create one, and a relogin-only
-# host surfaces as the UNGRADED count reported below rather than silently vanishing.
-# Output: <mid> <swept> <deploy_auth> <n_relogin> <latest_verify_class> <n_marker>
+
 # Per-host fold in timestamp order. A host is a group iff it emitted at least one MARKER: a host
 # that emitted only a relogin row has not demonstrated it ran the new script, and leg 1 is what
 # says so — so relogin rows are counted against the host but cannot create one, and a relogin-only
@@ -308,25 +415,50 @@ fi
 # `nrel_all` is carried alongside so the report can still say rows were seen and ignored.
 # Output: <mid> <swept> <deploy_auth> <n_relogin_post_marker> <latest_verify> <n_marker>
 #         <deploy_cfg> <deploy_creds_store> <deploy_ghcr_helper> <n_relogin_all>
-HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | sort -t$'\t' -k3,3 -k4,4n | awk -F'\t' '
+HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 != "-"' | sort -t$'\t' -k3,3 -k4,4n | awk -F'\t' '
   {
     mid = $3; kind = $5
     if (kind == "marker") {
       seen[mid] = 1; swept[mid] = $6; dauth[mid] = $7; nmark[mid]++
       dcfg[mid] = $9; dstore[mid] = $10; dhelper[mid] = $11
-      if (($4 + 0) > (mts[mid] + 0)) mts[mid] = $4 + 0
+      if (($4 + 0) > (mts[mid] + 0)) { mts[mid] = $4 + 0; mcoarse[mid] = ($12 == "1") }
     } else if (kind == "relogin") {
       rel[mid] = rel[mid] " " ($4 + 0); nrelall[mid]++
-    } else if (kind == "verify") { lver[mid] = $8 }
+      if ($12 == "1") acoarse[mid SUBSEP nrelall[mid]] = 1
+    } else if (kind == "verify") {
+      lver[mid] = $8
+      # A reload breadcrumb is not a verification RESULT, so it must not overwrite the record of
+      # the last real one: measured, `unsigned` then `reused_local_reload` reported only the
+      # reload, and the word `unsigned` appeared nowhere in the public comment even though this
+      # line is the only notification for that class.
+      if ($8 != "reused_local_reload") lreal[mid] = $8
+    }
   }
   END {
     for (m in seen) {
       n = 0; c = split(rel[m], a, " ")
-      for (i = 1; i <= c; i++) if (a[i] != "" && (a[i] + 0) > (mts[m] + 0)) n++
-      printf "%s\t%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\t%d\n", m, swept[m], dauth[m], n,
+      # `>=`, NOT `>`. The `dt` fallback truncates to whole seconds (`[0:19]`), so a relogin
+      # emitted 0.9 s AFTER the latest marker compares EQUAL and went uncounted -- measured, the
+      # report printed `relogin_failed_post_marker=0 relogin_failed_in_window=1` on the same line
+      # as the close authorisation. A tie is an UNKNOWN ordering, and on a leg that grades an
+      # absence an unknown must count AGAINST the pass. This does not weaken the latch fix: a
+      # pre-1c relogin sits strictly BEFORE the marker and is still excluded.
+      # STRICT `>` plus an explicit UNKNOWN. See LEG2_TIE_CLAIM for the contract. `>=` was adopted so a second-granularity tie
+      # could not be missed, but it made a pre-1c relogin that is genuinely EARLIER than the
+      # marker -- and merely ties after dt truncation -- FAIL a clean host permanently, which is
+      # the latch this probe exists to avoid, in the other direction. A tie is now neither passed
+      # nor failed: it is reported as unknown and refused above.
+      amb = 0
+      for (i = 1; i <= c; i++) {
+        if (a[i] == "") continue
+        if ((a[i] + 0) > (mts[m] + 0)) n++
+        else if ((a[i] + 0) == (mts[m] + 0) && (mcoarse[m] || acoarse[m SUBSEP i])) amb++
+      }
+      printf "%s\t%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\t%d\t%d\t%s\n", m, swept[m], dauth[m], n,
         (lver[m] == "" ? "-" : lver[m]), nmark[m],
         (dcfg[m] == "" ? "-" : dcfg[m]), (dstore[m] == "" ? "-" : dstore[m]),
-        (dhelper[m] == "" ? "-" : dhelper[m]), nrelall[m]
+        (dhelper[m] == "" ? "-" : dhelper[m]), nrelall[m], amb,
+        (lreal[m] == "" ? "-" : lreal[m])
     }
   }' | sort)"
 
@@ -338,7 +470,7 @@ HOSTS_TOTAL="$(printf '%s\n' "$HOSTS" | awk 'NF { n++ } END { print n + 0 }')"
 # since `earliest` is positive evidence that the PRE-1c prelude is still running there; reporting
 # that as TRANSIENT ("no deploy has run yet") would name a cause the probe measured the opposite
 # of. It is a FAIL with its own sentence.
-RELOGIN_ONLY="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-"' | awk -F'\t' '
+RELOGIN_ONLY="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 != "-"' | awk -F'\t' '
   { if ($5 == "marker") mark[$3] = 1; if ($5 == "relogin") rel[$3] = 1 }
   END { for (m in rel) if (!(m in mark)) n++; print n + 0 }')"
 
@@ -351,9 +483,20 @@ fi
 
 n_fail=0; n_action=0; n_pass=0
 REPORT=""
-while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrelall; do
+while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrelall amb lreal; do
   [[ -n "$mid" ]] || continue
   short="${mid:0:12}"
+  # AN UNKNOWN ORDERING IS NEITHER A PASS NOR A FAIL. A relogin whose timestamp EQUALS the latest
+  # marker's, where either side came from the second-granularity `dt` fallback, could be before or
+  # after it. Grading it either way is a guess: passing re-opens the fail-open hole, failing
+  # latched a clean host shut. Refuse and say so.
+  if [[ "${amb:-0}" -gt 0 ]]; then
+    echo "CANNOT ESTABLISH: host ${short} has ${amb} ${RELOGIN_LITERAL} row(s) whose ordering against" >&2
+    echo "                  its latest marker is UNKNOWN - equal timestamps, with at least one side" >&2
+    echo "                  taken from the second-granularity 'dt' fallback rather than" >&2
+    echo "                  __REALTIME_TIMESTAMP. Leg 2 cannot be graded from that." >&2
+    exit 3
+  fi
   leg1=fail; leg2=fail; leg3=fail
   # LEG 1 — the host runs the new script AND presents no ghcr.io credential from the deploy config.
   # `swept` is "-" when the token is ABSENT, i.e. the pre-1c script: that is the version
@@ -372,7 +515,10 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrel
   case "$swept" in
     yes|no)
       if [[ "$dauth" == "none" && "$dhelper" == "none" ]]; then leg1=pass; fi ;;
-    na_absent) leg1=pass ;;
+    # The bypass asserts the invariant it is justified by: "no config exists, so the carrier
+    # tokens read `na` and are not consulted". A marker claiming `na_absent` while reporting a
+    # PRESENT config disagrees with itself; closing a tracker over that is not warranted.
+    na_absent) [[ "$dcfg" == "absent" ]] && leg1=pass ;;
     *) : ;;
   esac
   # LEG 2 — no relogin AFTER the host's latest marker (see the fold above).
@@ -384,13 +530,28 @@ while IFS=$'\t' read -r mid swept dauth nrel lver nmark dcfg dstore dhelper nrel
   # the deploy proceeds, so every one of those was closing the tracker over a broken verify.
   # A host with markers but NO verify verdict is ACTION REQUIRED with its own sentence, never a
   # pass — but never a FAIL either, so it cannot latch the tracker shut.
-  case "$lver" in ok|reused_local_reload) leg3=pass ;; *) leg3=fail ;; esac
+  # `[[ =~ ]]`, NOT `case $var)`. In a case pattern an expanded variable is ONE glob, so `|`
+  # inside it is a literal character, not an alternator -- measured: every `ok` verdict fell
+  # through to ACTION REQUIRED. In an ERE `|` alternates, so the single source survives.
+  if [[ "$lver" =~ ^($LEG3_ALLOW_RE)$ ]]; then leg3=pass; else leg3=fail; fi
   if [[ "$leg1" == "pass" && "$leg2" == "pass" && "$leg3" == "pass" ]]; then
     grade="ok"; n_pass=$((n_pass + 1))
   elif [[ "$leg1" != "pass" || "$leg2" != "pass" ]]; then
     grade="FAIL"; n_fail=$((n_fail + 1))
   elif [[ "$lver" == "-" ]]; then
     grade="ACTION REQUIRED (host ran the new script but emitted no IMAGE_VERIFY verdict)"
+    n_action=$((n_action + 1))
+  elif [[ "$lver" == "reused_local_reload" ]]; then
+    # ITS OWN SENTENCE. This is not a broken verifier: `_try_local_cache_reload` emits it where
+    # zot did not serve and cosign was deliberately SKIPPED for a same-version reload. It must not
+    # PASS (it asserts nothing about verification), but calling it "signature verification is
+    # broken" misdiagnoses a designed path and, because the #5955 seccomp redeploy targets
+    # v<running_version> by construction, it is routine rather than exceptional.
+    if [[ "$lreal" != "-" && "$lreal" != "ok" ]]; then
+      grade="ACTION REQUIRED (no cosign ran on the latest deploy - same-version local-cache reload; last real verdict=${lreal})"
+    else
+      grade="ACTION REQUIRED (no cosign ran on the latest deploy - same-version local-cache reload)"
+    fi
     n_action=$((n_action + 1))
   else
     grade="ACTION REQUIRED (latest IMAGE_VERIFY is result=${lver})"; n_action=$((n_action + 1))
@@ -412,11 +573,10 @@ fi
 if [[ "$n_fail" -gt 0 || "$RELOGIN_ONLY" -gt 0 ]]; then
   echo "FAIL: ${n_fail} of ${HOSTS_TOTAL} graded host(s), plus ${RELOGIN_ONLY} ungraded host(s), do not satisfy"
   echo "      the retirement conjunction since"
-  echo "      ${EARLIEST}. Leg 1 needs the latest ${MARKER_LITERAL} line to carry a 'swept=' token,"
-  echo "      'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'; leg 2 needs zero"
-  echo "      '${RELOGIN_LITERAL}' AFTER that host's latest marker."
+  echo "      ${EARLIEST}. Leg 1 needs ${LEG1_CLAIM}; leg 2 needs ${LEG2_CLAIM}."
   echo "      READ THE swept= VALUE BEFORE ASSIGNING A CAUSE -- they are different remediations:"
-  echo "        swept absent (-)  the host is still running the PRE-1c script. Nothing is broken;"
+  echo "        swept=na          the sweep never set a state (the initial value). Treat as a probe bug.
+        swept absent (-)  the host is still running the PRE-1c script. Nothing is broken;"
   echo "                          it has not been redeployed yet."
   echo "        swept=failed      the sweep ran and the config is STILL dirty. Investigate."
   echo "        swept=na_nojq     jq is missing on the host, so the sweep could not run."
@@ -433,8 +593,11 @@ fi
 
 if [[ "$n_action" -gt 0 ]]; then
   echo "ACTION REQUIRED: ${n_action} of ${HOSTS_TOTAL} host(s) have the GHCR read path retired (legs 1 and 2"
-  echo "      pass) but their latest ${VERIFY_LITERAL} verdict is result=verify_failed — signature"
-  echo "      verification is broken there. Under IMAGE_VERIFY_MODE=warn the deploy PROCEEDS, and no"
+  echo "      pass) but leg 3 is unmet: it needs ${LEG3_CLAIM}, and theirs is absent or outside it."
+  echo "      The per-host grade below names WHICH class, because they are not the same problem:"
+  echo "      a same-version local-cache reload means cosign was deliberately skipped, not that"
+  echo "      signature"
+  echo "      verification did not pass there. Under IMAGE_VERIFY_MODE=warn the deploy PROCEEDS, and no"
   echo "      Sentry rule matches this class, so this line is the only notification. Check whether the"
   echo "      sweep clipped the co-resident zot auths entry before reading it as an unrelated defect."
   printf '%s' "$REPORT"
@@ -442,8 +605,10 @@ if [[ "$n_action" -gt 0 ]]; then
 fi
 
 echo "PASS: ${n_pass} host(s) observed since ${EARLIEST}, and every one satisfies all three legs —"
-echo "      latest ${MARKER_LITERAL} carries a 'swept=' token with deploy_ghcr_auth=none, zero"
-echo "      '${RELOGIN_LITERAL}', and no verify_failed. The host-side GHCR read path is retired."
+echo "      leg 1: ${LEG1_CLAIM}"
+echo "      leg 2: ${LEG2_CLAIM}"
+echo "      leg 3: ${LEG3_CLAIM}"
+echo "      The host-side GHCR read path is retired."
 echo "      Close #8036."
 printf '%s' "$REPORT"
 exit 0
