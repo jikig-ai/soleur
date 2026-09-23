@@ -189,6 +189,16 @@ summary line has not been killed.
     `ls -d /var/tmp/<brief-prefix>*`, and name any survivor in the review summary so the operator
     sees it. This is one-off at 180 KB, so no rule change.
 
+20. **A sibling PR (#8211 / PR #8564) changed the mechanism under a register cell this PR had
+    amended, and the merge was textually clean.** The word-level merge placed both markers
+    correctly. The CLO then found that three #8532 sentences restated the plaintext/repoint
+    mechanism #8564 had just retired, and that a ledger `evidence` string cited an fstab line
+    #8564 removed. The sweep stayed green because it compares clauses and mechanisms, not
+    evidence prose. Recovery: two CLO-drafted Superseded markers and a dated ledger ADDENDUM
+    (cf7a92252b). **Prevention:** when a main merge touches a legal or record cell this PR also
+    edits, run a CLO consistency check on the combined cell before pushing. A clean textual merge
+    of two additive markers says nothing about whether they agree.
+
 ## Tags
 
 category: workflow-patterns
