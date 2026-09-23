@@ -80,9 +80,9 @@ Branch: `feat-regenerable-manifest` · Ref #8542
 
 ## 6. Verification
 
-- [ ] 6.1 `bash plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh`
-- [ ] 6.2 `bash plugins/soleur/test/c4-model-freshness.test.sh`
-- [ ] 6.3 `bash plugins/soleur/test/c4-count-parity.test.sh`
-- [ ] 6.4 `bunx vitest run test/c4-likec4-version-pin.test.ts` (from `apps/web-platform`)
-- [ ] 6.5 `bash tests/commands/test-sync-producer-reachability.sh`
-- [ ] 6.6 `shellcheck -S warning` on every edited shell file.
+- [x] 6.1 `bash plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh`
+- [x] 6.2 `bash plugins/soleur/test/c4-model-freshness.test.sh`
+- [x] 6.3 `bash plugins/soleur/test/c4-count-parity.test.sh`
+- [x] 6.4 `bunx vitest run test/c4-likec4-version-pin.test.ts` (from `apps/web-platform`)
+- [x] 6.5 `bash tests/commands/test-sync-producer-reachability.sh`
+- [x] 6.6 `shellcheck -S warning` on every edited shell file.
