@@ -152,6 +152,12 @@ would find out when a user tells you `app.soleur.ai` is down.
 
 ### 4. Apply with the pin
 
+> **#8209 / ADR-241 — the single-loader form below is the PRE-cutover one.** After the Tier-B
+> cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the inner
+> `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
+> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> invocation.
+
 ```bash
 cd apps/web-platform/infra
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \

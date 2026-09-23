@@ -97,12 +97,41 @@ provider "logtail" {
 # installation token at each `terraform plan/apply`. Net narrowing vs.
 # long-lived PAT. See AGENTS.rules.md hr-github-app-auth-not-pat.
 # autonomy-considered: reuse-applied (App credentials already in prd_terraform).
+#
+# (#8209, ADR-241) THREE AUTH MODES, selected by which variables are non-empty. The
+# selector is the CONFIGURATION, not a `tier` variable: Terraform cannot tell a plan
+# from an apply, so a mode is chosen by what credentials the caller supplied.
+#
+#   infra  — `github_infra_app_private_key` set. The dedicated `soleur-infra` App,
+#            delivered only through a Tier-B environment secret. This is the mode every
+#            apply runs in after the operator sequence completes.
+#   token  — `github_plan_actions_credential` set AND no infra key. The PR plan job,
+#            which passes the workflow's own `GITHUB_TOKEN`. Read-only by construction;
+#            a `-refresh=false` plan needs nothing more (probe M8).
+#   legacy — neither set. The soleur-ai App key from `prd_terraform`. This is the BEFORE
+#            state and it keeps every consumer working until the operator finishes; after
+#            operator step O10 that key resolves to the non-PEM `EVICTED_SEE_ADR_241`
+#            sentinel, so only a run that should have used another mode ever reads it.
+#
+# The `for_each` is the exact COMPLEMENT of the `token` condition, so exactly one of
+# `token`/`app_auth` always resolves. That matters because HCL cannot precondition a
+# provider, and integrations/github v6 silently falls back to an ambient `GITHUB_TOKEN`
+# or `gh auth token` when neither resolves — which would authenticate as whoever the
+# runner happens to be rather than failing.
 provider "github" {
   owner = "jikig-ai"
-  app_auth {
-    id              = var.github_app_id
-    installation_id = "122213433"
-    pem_file        = var.github_app_private_key
+  token = var.github_plan_actions_credential != "" && var.github_infra_app_private_key == "" ? var.github_plan_actions_credential : null
+
+  dynamic "app_auth" {
+    for_each = var.github_infra_app_private_key != "" || var.github_plan_actions_credential == "" ? [1] : []
+    content {
+      id = var.github_infra_app_private_key != "" ? var.github_infra_app_id : var.github_app_id
+      # 122213433 is the soleur-ai INSTALLATION id on jikig-ai — NOT the App id
+      # (3261325). It is a literal because it belongs to the legacy mode only; the
+      # infra App's installation id is supplied as a variable from Tier B.
+      installation_id = var.github_infra_app_private_key != "" ? var.github_infra_app_installation_id : "122213433"
+      pem_file        = var.github_infra_app_private_key != "" ? var.github_infra_app_private_key : var.github_app_private_key
+    }
   }
 }
 
