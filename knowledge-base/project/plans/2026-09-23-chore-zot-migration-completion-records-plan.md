@@ -500,6 +500,7 @@ value, token prefix or host address is added. The one private IP already appears
   - The allowlist is ADR-096, `knowledge-base/project/specs/feat-registry-oidc-migration/tasks.md`, this plan, and `knowledge-base/project/specs/feat-one-shot-zot-migration-completion/{tasks.md,decision-challenges.md,session-state.md}`.
   - It also includes `knowledge-base/INDEX.md`, but only if the pipeline regenerates it.
   - So no path under `apps/`, `.github/`, `scripts/` or `plugins/` can appear, `cloud-init.yml` included.
+  - **Amended 2026-09-24:** review and compound extended the set with `ADR-096`'s body markers, `zot-registry-revert.md`, `model.c4` + `model.likec4.json`, the session learning, and one routed bullet in `plugins/soleur/skills/plan/references/plan-sharp-edges.md`. Still nothing under `apps/`, `.github/` or `scripts/`.
 - [x] **AC2.** `awk '/^## Status/{p=1;next} /^## Amendment 2026-07-30/{p=0} p' <ADR-096>`:
   - contains each of these phrases: `2026-07-17T19:51:49Z`, `**sole** pull path`, `stage:"app_zot"`, `**5.3a**` and `pending** behind the #6122`
   - does not contain `inert until` (the unedited copy on `main` does, so this check is red before 1.1)
