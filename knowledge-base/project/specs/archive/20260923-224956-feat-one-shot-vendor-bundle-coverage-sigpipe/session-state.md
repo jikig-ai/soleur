@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260923-224956-2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md
 - Status: recovered from partial-artifact (planning subagent killed by an API session limit mid-deepen-plan; plan body incl. `## Acceptance Criteria` was on disk).
 - Plan artifact: recovered (selector=branch)
 

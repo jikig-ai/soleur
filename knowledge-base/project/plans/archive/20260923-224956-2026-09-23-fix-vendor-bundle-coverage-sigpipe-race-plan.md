@@ -19,7 +19,7 @@ branch; the change is test-only and no domain fan-out is warranted (see Domain R
 Recovered from partial artifact: the planning subagent was stopped by an API session limit
 partway through `soleur:deepen-plan`. The plan body (through `## Acceptance Criteria`) was on
 disk and was reconciled for internal consistency before `soleur:work`; see
-`knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/session-state.md`.
+`knowledge-base/project/specs/archive/20260923-224956-feat-one-shot-vendor-bundle-coverage-sigpipe/session-state.md`.
 
 ## Overview
 
@@ -340,4 +340,4 @@ There is no new runtime surface. The suite's own PASS/FAIL lines in CI are the s
 - `local items` and the assignment are on separate lines, so `local` cannot mask a substitution's rc. The `|| true` is still what keeps a no-match from tripping `set -e`.
 - If `awk` or `wc` aborts the suite under `set -e`, the pre-source owning trap removes the `mktemp -d` directory. Measured at /work: an `exit 7` injected after the `awk` line leaves 0 entries in `$TMPDIR` with the trap and 1 without it.
 - The helper matches everything on an empty needle. That cannot happen here, because `prefix` is always `plugins/soleur/skills/<slug>` and the TS7 needle is a literal.
-- Plan-review dispositions: DHH's "drop helper + TS7" and "native TS3 membership test" are recorded in `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/decision-challenges.md`. The operator's direction is kept.
+- Plan-review dispositions: DHH's "drop helper + TS7" and "native TS3 membership test" are recorded in `knowledge-base/project/specs/archive/20260923-224956-feat-one-shot-vendor-bundle-coverage-sigpipe/decision-challenges.md`. The operator's direction is kept.
