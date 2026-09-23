@@ -41,6 +41,13 @@ vi.mock("@/server/cron-filing-deny-marker", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/cron-filing-deny-marker")>()),
   emitCronFilingDenyMarker: filingDenyMock,
 }));
+// #8603 — observe the --effort fallback mirror. Partial mock: keep
+// reportSilentFallback (used elsewhere by the substrate) real.
+const { warnFallbackMock } = vi.hoisted(() => ({ warnFallbackMock: vi.fn() }));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  warnSilentFallback: warnFallbackMock,
+}));
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
@@ -1073,5 +1080,68 @@ describe("resolveEvalCaptureStatus (AC4 — positive marker status)", () => {
   });
   it("a parsed cost outranks a stray unparsed line → ok", () => {
     expect(resolveEvalCaptureStatus(false, cost, true)).toBe("ok");
+  });
+});
+
+// #8603 — the pinned CLI treats an unknown `--effort` VALUE as a warning, not
+// an error: it prints `Unknown --effort value '<v>' — ignoring it and using
+// the default effort` to stderr and runs anyway. The substrate mirrors that
+// line to Sentry once per run (cq-silent-fallback-must-mirror-to-sentry).
+describe("spawnClaudeEval — --effort fallback mirror (#8603)", () => {
+  const ORIGINAL_CLAUDE_BIN = process.env.CLAUDE_BIN;
+  const tmpDirs: string[] = [];
+  const noopLogger = {
+    info: () => {},
+    error: () => {},
+    warn: () => {},
+    debug: () => {},
+  } as unknown as Parameters<typeof spawnClaudeEval>[0]["logger"];
+
+  afterEach(() => {
+    if (ORIGINAL_CLAUDE_BIN === undefined) delete process.env.CLAUDE_BIN;
+    else process.env.CLAUDE_BIN = ORIGINAL_CLAUDE_BIN;
+    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function runWithStderr(lines: string[]) {
+    const dir = mkdtempSync(join(tmpdir(), "claude-eval-effort-"));
+    tmpDirs.push(dir);
+    const binPath = join(dir, "claude");
+    const body = lines
+      .map((l) => `process.stderr.write(${JSON.stringify(l)} + "\\n");`)
+      .join("\n");
+    writeFileSync(binPath, `#!/usr/bin/env node\n${body}\n`, "utf-8");
+    chmodSync(binPath, 0o755);
+    process.env.CLAUDE_BIN = binPath;
+    const spawnCwd = join(dir, "repo");
+    mkdirSync(spawnCwd, { recursive: true });
+    warnFallbackMock.mockReset();
+    await spawnClaudeEval({
+      spawnCwd,
+      installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop",
+      flags: ["--print"],
+      prompt: "ignored by the fake bin",
+      maxTurnDurationMs: 10_000,
+      cronName: "cron-test-effort",
+      buildSpawnEnv: () => process.env,
+      logger: noopLogger,
+    });
+  }
+
+  const WARNING =
+    "Warning: Unknown --effort value 'hgih' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.";
+
+  it("mirrors the fallback warning to Sentry exactly once per run", async () => {
+    await runWithStderr([WARNING, WARNING]);
+    expect(warnFallbackMock).toHaveBeenCalledTimes(1);
+    expect(warnFallbackMock.mock.calls[0][1]).toMatchObject({
+      feature: "cron-test-effort",
+      op: "claude-effort-fallback",
+    });
+  });
+
+  it("does not fire on a benign stderr line", async () => {
+    await runWithStderr(["some unrelated diagnostic"]);
+    expect(warnFallbackMock).not.toHaveBeenCalled();
   });
 });

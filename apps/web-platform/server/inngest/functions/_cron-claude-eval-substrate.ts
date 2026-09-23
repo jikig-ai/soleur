@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import {
   upsertRoutineRunProgress,
   heartbeatRoutineRunProgress,
@@ -1111,9 +1111,24 @@ export async function spawnClaudeEval(args: {
       }
       if (child.stderr) {
         const rlErr = createInterface({ input: child.stderr });
+        // #8603: an unknown `--effort` VALUE is not an error to the CLI — it
+        // warns on stderr and runs at the model's default effort. Mirror that
+        // silent degraded mode to Sentry once per run
+        // (cq-silent-fallback-must-mirror-to-sentry).
+        let effortFallbackReported = false;
         rlErr.on("line", (line) => {
           const redacted = redactToken(line, installationToken);
           logger.error({ fn: cronName, stream: "stderr" }, redacted);
+          if (!effortFallbackReported && /Unknown --effort value/.test(line)) {
+            effortFallbackReported = true;
+            warnSilentFallback(null, {
+              feature: cronName,
+              op: "claude-effort-fallback",
+              message:
+                "claude CLI ignored --effort (unknown value); run fell back to the default effort",
+              extra: { line: redacted },
+            });
+          }
           // Keep a bounded tail (drop oldest) for the Sentry surface.
           stderrTail = (stderrTail + redacted + "\n").slice(-STDERR_CAP_BYTES);
         });
