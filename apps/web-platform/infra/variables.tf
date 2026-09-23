@@ -679,7 +679,7 @@ variable "ghcr_read_user" {
 }
 
 variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
+  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN. CONSUMERS \u2014 THREE fresh-boot login sites, not one: apps/web-platform/infra/cloud-init.yml (web host, root, writes root\u0027s docker config), apps/web-platform/infra/soleur-host-bootstrap.sh (web host, root, writes the SAME root config \u2014 so retiring only the cloud-init site would leave root_ghcr_auth=inline and make a 1d close criterion ungreenable), and apps/web-platform/infra/cloud-init-inngest.yml (inngest host, templated from inngest-host.tf). An earlier revision of this description said \u0027cloud-init fresh-boot login ONLY\u0027, which would have sent the 1d grep to one of the three. The ci-deploy.sh consumer (host pull + cosign .sig fetch auth) was RETIRED in #8036 item 1c on 2026-09-23 \u2014 the deploy path no longer reads this secret at all, and it sweeps any inline ghcr.io entry out of the deploy docker config on every deploy. The boot path still reads it and is tracked as 1d. The divergence is named here on purpose: the next engineer to grep GHCR_READ_TOKEN lands on why two host postures disagree instead of re-deriving it. NO default."
   type        = string
   sensitive   = true
 }

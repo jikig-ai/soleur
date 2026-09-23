@@ -102,7 +102,19 @@ Doppler-stored App key → `POST /app/installations/{id}/access_tokens` with bod
 writes the token to Doppler `soleur/prd` as `GHCR_READ_TOKEN` and sets `GHCR_READ_USER` to the
 installation-token login convention (`x-access-token`). **No consumer changes** — `ci-deploy.sh`
 and `soleur-host-bootstrap.sh` keep reading those two keys; only who writes the value + the
-username value change. The `doppler_secret` resources stay declared-existence with
+username value change.
+<!-- markdownlint-disable-next-line MD028 -->
+
+> **Amendment 2026-09-23 (#8036 item 1c):** the `ci-deploy.sh` half of that consumer list is
+> **gone**. 1c deleted the host-side GHCR read path — the prelude `docker login ghcr.io`, the
+> Doppler re-fetch/relogin helper (`refetch_ghcr_and_relogin`) and the GHCR leg of the pull — so
+> the rolling deploy reads neither `GHCR_READ_TOKEN` nor `GHCR_READ_USER`, and it sweeps any
+> inline `ghcr.io` entry out of the deploy docker config on every deploy. The fresh-boot
+> consumers remain and are tracked as 1d: `cloud-init.yml` and `soleur-host-bootstrap.sh` (both
+> web, both writing root's docker config) and `cloud-init-inngest.yml`. Retiring
+> `GHCR_READ_TOKEN` therefore does NOT break the deploy path — read this section's "no consumer
+> changes" as history, or a 1d/5.4 reader will defer a retirement that is already safe for the
+> deploy half. The `doppler_secret` resources stay declared-existence with
 `ignore_changes = [value]` (the minter owns value churn; terraform does not clobber it).
 
 **Prerequisite:** add `packages: read` to the App manifest (absent today) → one org-owner
