@@ -1178,7 +1178,8 @@ three conditions:
 1. The directory is made absolute **before** the script changes directory. A relative
    `BASH_SOURCE` resolved after a `cd` into the caller's repo points into that repo.
 2. The sibling comes first. A bare `${CLAUDE_PLUGIN_ROOT}`, with no `:-` default (A12), is used
-   only when the sibling is absent. An inherited variable is the weaker provenance.
+   only when the sibling is absent, and only when it is an absolute path — a relative value would
+   resolve against the caller's repository. An inherited variable is the weaker provenance.
 3. The `plugin.json` name check runs on whichever root is used, and the code calls it
    defence-in-depth rather than a control. Per A11 it is a shape check. This repo's own tracked
    manifest names `soleur`, so a copy inside a merged tree passes it.
@@ -1187,6 +1188,10 @@ A sibling has the same provenance as the script that runs it, so it adds no trus
 buys nothing when the script itself was loaded from an untrusted tree. That is a property of the
 call site, and the fix belongs there.
 
-**Instances.** `sync-pr-behind.sh` already found `resolve-regenerable-conflicts.sh` this way, and
-the resolver now finds `render-c4-model.sh` the same way. The rationale lives in ADR-235's
+**Instances.** `resolve-regenerable-conflicts.sh` finds `render-c4-model.sh` this way and meets all
+three conditions. `sync-pr-behind.sh` finds `resolve-regenerable-conflicts.sh` as a sibling and meets
+conditions 1–2 only (it has no name check on the sibling). The rationale lives in ADR-235's
 2026-09-23 amendment; this item records only the anchoring rule.
+
+**§R4 closure.** The `architecture` row in §R4's table (`bash scripts/regenerate-c4-model.sh`) is
+migrated: the skill now invokes `bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"`.

@@ -261,7 +261,10 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
     echo "[ok] regenerable conflict resolved — merge committed, continuing" >&2
   else
     [[ -n "$REGEN_ERR" ]] && echo "[info] regen-on-conflict declined: $REGEN_ERR" >&2
-    deny "BLOCKED: Merge of origin/main failed. Conflicting files: ${CONFLICT_FILES:-unknown}. Resolve conflicts manually before merging."
+    # The resolver's refusal is the diagnosis; carry its last [regen-on-conflict] line into the
+    # deny reason, which is the only text an agent sees (stderr of a PreToolUse hook is not).
+    REGEN_WHY="$(printf '%s\n' "$REGEN_ERR" | grep '^\[regen-on-conflict\]' | grep -v '\] regenerating ' | tail -1 | LC_ALL=C tr -d '\000-\037\177' | cut -c1-400)" || REGEN_WHY=""
+    deny "BLOCKED: Merge of origin/main failed. Conflicting files: ${CONFLICT_FILES:-unknown}. ${REGEN_WHY:+$REGEN_WHY }Resolve conflicts manually before merging; regenerate a generated artifact rather than hand-merging it (merge-pr SKILL.md 3.2b)."
   fi
 fi
 

@@ -70,6 +70,14 @@ Branch: `feat-regenerable-manifest` · Ref #8542
       naming `sync-pr-behind.sh` as the existing instance, and recording that the manifest name check
       is defence-in-depth (A11), not the control.
 
+## 5b. Review round (2026-09-23)
+
+- [x] Renderer: CI=true fail-open fixed in both renderers; all three source extensions.
+- [x] Reverted the hook lookup (project hooks only) and the sync-pr-behind snapshot fallback (unreachable under --step).
+- [x] Resolver rewritten to render from git objects before touching the worktree (CTO re-ruling); suite rewritten (134 cases); mutation battery 21 rows: every guard RED except three documented equivalents (any-CONFLICT-kind is shadowed by the per-path contents check; index-mismatch and staged-bytes are defence against sub-millisecond races).
+- [x] Real end-to-end: real resolver + real renderer under CI=true merge a forced artifact conflict (a,b,m).
+- [x] Filed #8623 (c4-render.ts tenant config, different subsystem).
+
 ## 6. Verification
 
 - [ ] 6.1 `bash plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh`

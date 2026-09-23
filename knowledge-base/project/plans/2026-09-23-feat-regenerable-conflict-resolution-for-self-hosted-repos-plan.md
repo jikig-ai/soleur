@@ -337,3 +337,30 @@ that names ADR-235.
 - **`sync-pr-behind.sh` loses its sibling lookup when ship runs it from a mktemp snapshot**, so the
   DIRTY arm reports "manual resolution required" on a regenerable conflict. Pre-existing, out of scope
   here, and worth its own fix.
+
+## Review amendments — 2026-09-23
+
+An 11-agent review plus two CTO rulings changed four premises above. The code follows these, not
+the original text; ADR-235's 2026-09-23 amendment is the owning record.
+
+- **Overview premise 2 and AC8 were wrong about the hooks.** `pre-merge-rebase.sh` (both copies) is
+  a project hook of this repository only (`.claude/settings.json`, `.openhands/hooks.json`); it
+  never runs in a self-hosted repo, and project hooks do not receive `CLAUDE_PLUGIN_ROOT`. The
+  hook lookup and its suite were reverted; AC8 is withdrawn. Self-hosted users reach the resolver
+  through `soleur:ship`, `merge-pr`, `drain-prs` and `sync-pr-behind.sh`.
+- **The `sync-pr-behind.sh` snapshot risk (last Risks bullet) does not exist.** ship and merge-pr
+  run the snapshot only with `--step`, which exits before the resolver lookup; the fallback added
+  for it was reverted.
+- **Guard 1's property was narrower in fact than in wording, and D3/D4 were replaced.** likec4
+  configs, `node_modules/.bin` and `.npmrc` in the merged tree reached the render, and the D4
+  stray-write unwind deleted operator work. The resolver now renders from the merged tree's git
+  objects in a private staging dir before touching the worktree (CTO re-ruling). D3's untracked-
+  source check and D4's unwind are gone; the property holds by construction for the renderer.
+- **User-Brand Impact, corrected:** the design removes the repo-*selected* command; the repo's
+  tracked sources remain trusted input, and git hooks, merge drivers and filters remain trusted-tree
+  channels. Data-loss vectors the review measured (operator edits reverted or deleted mid-render,
+  a failed abort leaving a live merge, a mid-render staged file committed) are closed by
+  construction: nothing is written to the worktree until the render has succeeded and HEAD and the
+  tree are re-checked.
+- **Found and tracked separately:** the web-platform server renders tenant workspaces in place and
+  would load a tenant's likec4 config (#8623).
