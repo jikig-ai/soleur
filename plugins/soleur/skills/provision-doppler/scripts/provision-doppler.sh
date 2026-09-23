@@ -198,7 +198,7 @@ if $DRY_RUN; then
   echo "  # Revoke service account via dashboard: Settings → Service Accounts → ${SLUG}-deploy → Revoke"
   echo "  rm -rf ${PROVISIONING_DIR}"
   echo ""
-  echo "Next step: soleur:provision-cloudflare ${SLUG} <zone-id> <account-id>"
+  echo "Next step: type /soleur:provision-github ${SLUG} <org> <reviewer> yourself (user-invoked; Soleur cannot run it, ADR-236)"
   exit 0
 fi
 
@@ -342,4 +342,4 @@ echo ""
 echo "NOTE: OIDC trust binding cannot be fully verified locally."
 echo "Test via deploy workflow (runbook Step 9) after all provisioning."
 echo ""
-echo "Next step: soleur:provision-cloudflare ${SLUG} <zone-id> <account-id>"
+echo "Next step: type /soleur:provision-github ${SLUG} <org> <reviewer> yourself (user-invoked; Soleur cannot run it, ADR-236)"
