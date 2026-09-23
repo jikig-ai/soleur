@@ -52,6 +52,9 @@ which control the change actually moves.
 9. **The `sdk-bump-verified:` ack template (#6934) validates the SDK argv, not the CLI's containment** — Recovery: real hook-dispatch probe on 2.1.280 vs 2.1.219. **Prevention:** model-launch-review item 2b now names the correct control and the probe.
 10. **Review ran 4 of 10 agents (deliberate slice for a ~60-line swap)** — Recovery: trailer records `degraded 4/10`; a second focused round covered Phase B. **Prevention:** none — disclosed honestly.
 
+11. **A backgrounded `git commit` notified "exit code 0" while the commit had FAILED (a trailing `git log` owned the status)** — Recovery: read HEAD, found the lefthook failure in the log. **Prevention:** already a work/SKILL.md rule (capture `COMMIT_RC=$?` on the next line and confirm HEAD moved); it applied and was the thing that caught it.
+12. **The markdown-only compound commit's `plugin-component-test` hook timed out two unrelated suites under load** — Recovery: re-ran each in isolation (LOW-RISK scan; 18/18), committed with that hook excluded and the reason in the message. **Prevention:** none new — contention timeouts are the documented class.
+
 ## Tags
 
 category: workflow-issues
