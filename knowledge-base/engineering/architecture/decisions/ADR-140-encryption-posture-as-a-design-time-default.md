@@ -204,3 +204,42 @@ agents rather than into AGENTS.md regardless of budget or loader mechanics. A
 reader who sees both *stated* blockers voided should not conclude the rejection is
 now unsupported — it rests on placement, not on capacity. This ADR's Decision is
 NOT reopened here.
+
+## Addendum — 2026-09-23 (#6907): armed through the `test` aggregator, not a new ruleset context
+
+The Layer A sweep is now **blocking**. The standalone `encryption-posture` job joined the `needs:`
+list of `ci.yml`'s `test` job, which is already a required context, so a red sweep reds `test`
+and the PR cannot merge. The "Required check" cell in the layers table above was aspirational
+until this addendum. From this addendum on it is accurate, with the route below.
+
+**Why not the five-site recipe in the 2026-07-24 amendment.** That recipe makes
+`encryption-posture` its own required context: `required-checks.txt`, the ruleset `.tf` (a live
+`apply-github-infra.yml` apply), the canonical parity JSON, the bot action, and a post-apply
+check that the integration id is right. Joining an existing required aggregator gets the same
+blocking property without any of those. There is no new context name, no ruleset apply, and no
+integration-id risk. It is the same one-line-per-site edit #8136 used to arm
+`web-platform-build`. The 2026-07-24 amendment stays as the record of the rejected route, per
+the append-only rule. It is not superseded.
+
+**Soak evidence (ADR-117 measure-then-arm).** Measured with the #6907 one-liner, reading the
+`encryption-posture` job's conclusion per run:
+
+- **`main` push runs, 2026-09-08 to 2026-09-23:** 248 of 249 green. The one miss is run
+  34454724601, which a `cancelled` run-level conclusion stopped before the job started. It was
+  not a sweep red.
+- **`pull_request` runs over the same window:** the 1,000 most recent runs created on or after 2026-09-08 gave 641 `success`
+  and **0 `failure`**. The rest were 188 `cancelled`, 169 where the job did not appear in
+  the run's job listing, and 2 that the API could not read (`Server Error`). No run in the
+  window records a sweep red, so there is no false-positive red to attribute.
+
+**What still has to hold.**
+
+- The armed job must carry no job-level `continue-on-error` and no job-level `if:`. Either
+  would let a red or unrun sweep read as `success` through `needs.encryption-posture.result`.
+  This is #6907's MB-10 concern. `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh`
+  asserts it (row W3), and rows R1h and R1i assert that a red or skipped leg fails `test`.
+- On a bot PR, the synthetic-checks action fabricates `test`, so the sweep's green is
+  fabricated too. That is sound by unreachability only while the action's `ALLOWED_PATHS`
+  (`knowledge-base/project/weakness-digest.md`) stays disjoint from the sweep's scan surface.
+  The scan surface is the ledger, `*.tf`, and every file a ledger row cites. Re-derive that
+  intersection before widening `ALLOWED_PATHS`.
