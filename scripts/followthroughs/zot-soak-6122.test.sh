@@ -181,13 +181,13 @@ Q_ZOTING='image%3A%22inngest%22'
 # `soleur-inngest` is FIRST (#6500): the stub matches keys as substrings in order, first match
 # wins, and only the host-pinned INNGEST_ZOT query carries that string. Without it every case that
 # passes the APP_ZOT arm would 500 on the new query and read TRANSIENT instead of its verdict.
-HEALTHY="host_name%3A%22soleur-inngest%22=1;ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5"
+HEALTHY="host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5"
 
 echo "== AC7: the arms return the right exit codes =="
 
 # 1. Dark beacon: zero fallbacks, sample fine, but NO zot-served fresh boot.
 #    MUST be exit 1 (FAIL) — never 0, never 2. This is the whole denominator.
-r="$(run_soak "ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=0;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=0;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"no-freshboot-evidence"* ]]; then
   pass "dark beacon (app_zot=0, no fallbacks) -> exit 1 FAIL(no-freshboot-evidence)"
@@ -217,7 +217,7 @@ fi
 
 # 4. A real fallback still FAILs, and the per-signal breakdown still prints (the arm the
 #    denominator must not have displaced — an operator hitting a real fallback needs it).
-r="$(run_soak "app_ghcr_served=2;ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "app_ghcr_served=2;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"app-served=2"* ]]; then
   pass "app_ghcr_served>0 -> exit 1 FAIL with per-signal breakdown incl. app-served"
@@ -228,7 +228,7 @@ fi
 # 4b. The insufficient-sample arm. It carries 8 lines of "MUST keep exit 1 — do NOT 'fix' it to
 #     TRANSIENT" and had NO test: it is the ONLY detector for the #6437 Sentry-dark mode, so a
 #     well-meaning refactor to exit 2 would silently disarm it. One run_soak proves it.
-r="$(run_soak "host_name%3A%22soleur-inngest%22=1;ghcr-fallback=0;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5" CLOSED)"
+r="$(run_soak "host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_ghcr_fallback=0;app_ghcr_fallback=0;app_ghcr_served=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"FAIL(insufficient-sample)"* ]]; then
   pass "thin zot sample -> exit 1 FAIL(insufficient-sample) (the only #6437 detector)"
@@ -488,8 +488,33 @@ else
   fail "#6122: default START must be a timestamp <= 2026-07-17T19:51:49; got '${PINNED_START:-<unparsed>}'"
 fi
 
+# #8036 1c: the FAIL set's CARDINALITY, asserted against BOTH declarations that carry it — the
+# array and the runtime floor literal — and against each other. The defect this catches is the one
+# the floor exists for and cannot catch alone: dropping an operand without moving the floor makes
+# every sweep a permanent `exit 2` TRANSIENT, which the sweeper only discovers at runtime, a day
+# later, as a comment on the tracker. Read both numbers from the SOURCE, never restated here.
+SOAK_N_QUERIES="$(awk '/^declare -A FAIL_QUERIES=\(/{f=1;next} f&&/^\)/{exit} f&&/^[[:space:]]*\[[a-z]+\]=/{n++} END{print n+0}' "$SOAK")"
+SOAK_FLOOR_LIT="$(sed -nE 's/^if \(\( \$\{#FAIL_QUERIES\[@\]\} != ([0-9]+) \)\); then$/\1/p' "$SOAK" | head -1)"
+if [[ "$SOAK_N_QUERIES" == "4" && "$SOAK_FLOOR_LIT" == "4" ]]; then
+  pass "#8036 1c: FAIL_QUERIES declares 4 signals and the runtime floor agrees (array=$SOAK_N_QUERIES floor=$SOAK_FLOOR_LIT)"
+else
+  fail "#8036 1c: FAIL_QUERIES cardinality/floor parity broken (array=${SOAK_N_QUERIES:-<unparsed>} floor=${SOAK_FLOOR_LIT:-<unparsed>}, both must be 4)"
+fi
+
+# And the retired operand must be gone from the EXECUTABLE array, not merely from the prose. An
+# `ls`-style presence check over the whole file would pass on a header paragraph that names it,
+# which is deliberately still there — so scope the scan to the array body.
+SOAK_ARRAY_BODY="$(awk '/^declare -A FAIL_QUERIES=\(/{f=1;next} f&&/^\)/{exit} f' "$SOAK")"
+if [[ "$SOAK_ARRAY_BODY" != *"ghcr-fallback"* && "$SOAK_ARRAY_BODY" == *"zot-gate-degraded"* ]]; then
+  pass "#8036 1c: the retired registry:\"ghcr-fallback\" operand is gone from FAIL_QUERIES, and zot-gate-degraded survives"
+else
+  fail "#8036 1c: FAIL_QUERIES body still names ghcr-fallback, or lost zot-gate-degraded: $SOAK_ARRAY_BODY"
+fi
+
 # Assertion floor: a deleted row must red. Literal adjacent to its `if` (guard-vacuity-floor).
-SOAK_MIN_PASSES=30
+# Raised 30 -> 32 in the SAME edit that added the two rows above (a floor left below the count it
+# measures is slack, and slack in a floor is how many rows can be deleted before it notices).
+SOAK_MIN_PASSES=32
 if [[ "$passes" -lt $SOAK_MIN_PASSES ]]; then
   printf 'FATAL: only %s passing assertions ran, expected at least %s — a row was deleted\n' "$passes" "$SOAK_MIN_PASSES" >&2
   exit 1
