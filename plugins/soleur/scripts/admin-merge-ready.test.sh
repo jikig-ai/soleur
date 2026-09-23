@@ -58,6 +58,10 @@ SANDBOX="$(mktemp -d)"; assert_fixture_dir "$SANDBOX"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 SHA=319c22bffa4c1785da52dd9af9471a9d8eef1310
+# --green-sha carryover fixtures: GREEN is the certified prior head, P1 is the base-side
+# parent the merge commit carries. Both are arbitrary-but-valid 40-hex.
+GREEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+P1=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 PR=8534
 SUT="$REAL_SUT"
 TIMEOUT_BIN="$(command -v timeout)" || { echo "[FATAL] timeout(1) required" >&2; exit 1; }
@@ -91,6 +95,7 @@ pick() { if [[ -f "$FX/$1.$poll.json" ]]; then cat "$FX/$1.$poll.json"; else cat
 failing() { [[ -f "$FX/$1.fail" || -f "$FX/$1.fail.$poll" ]]; }
 enc=$(cat "$FX/expect_base_enc" 2>/dev/null || echo main)
 runs_url="repos/{owner}/{repo}/commits/$STUB_SHA/check-runs?per_page=100&filter=all"
+green_url="repos/{owner}/{repo}/commits/$STUB_GREEN/check-runs?per_page=100&filter=all"
 case "$args" in
   "pr view $STUB_PR --json state,headRefOid,baseRefName,changedFiles")
     poll=$((poll + 1)); echo "$poll" > "$FX/.polls"
@@ -99,10 +104,16 @@ case "$args" in
   "api --paginate --slurp repos/{owner}/{repo}/pulls/$STUB_PR/files?per_page=100")
     failing files && exit 1
     pick files ;;
+  "api repos/{owner}/{repo}/commits/$STUB_SHA")
+    failing head && exit 1
+    pick head ;;
+  "api repos/{owner}/{repo}/compare/"*"...main")
+    failing compare && exit 1
+    pick compare ;;
   "api --paginate --slurp repos/{owner}/{repo}/rules/branches/$enc")
     failing rules && exit 1
     pick rules ;;
-  "api --paginate --slurp $runs_url")
+  "api --paginate --slurp $runs_url"|"api --paginate --slurp $green_url")
     if failing runs; then pick runs | jq -c '[.[0]]'; exit 1; fi   # page 1 printed, page 2 failed
     pick runs ;;
   "api --slurp $runs_url")   # the no---paginate mutant: only the first page is ever read
@@ -126,6 +137,11 @@ mkrow() { # <name> -> prints dir; fresh copy of the base
   cp "$BASE_FX/check-runs.json" "$d/runs.json"
   printf '{"state":"OPEN","headRefOid":"%s","baseRefName":"main","changedFiles":1}\n' "$SHA" > "$d/pr.json"
   echo '[[{"filename":"plugins/soleur/x.md"}]]' > "$d/files.json"
+  # --green-sha fixtures (only read by carryover rows): head SHA is a GitHub-verified
+  # merge of GREEN (first parent) and P1 (base side), and P1 is an ancestor of main.
+  printf '{"commit":{"verification":{"verified":true}},"parents":[{"sha":"%s"},{"sha":"%s"}]}\n' \
+    "$GREEN" "$P1" > "$d/head.json"
+  echo '{"status":"ahead"}' > "$d/compare.json"
   printf '%s' "$d"
 }
 # jqf <dir> <file> <filter> : edit a fixture file in place
@@ -153,7 +169,7 @@ run() { # <dir> <sut-args...> ; RUN_PATH / RUN_UNSET_POLL / RUN_POLL override th
   local d="$1"; shift
   assert_fixture_dir "$d"
   : > "$d/log"; rm -f "$d/.polls" "$d/sleeps"
-  local -a envv=(FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_SHA="$SHA" PATH="${RUN_PATH:-$BIN:$PATH}")
+  local -a envv=(FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_SHA="$SHA" STUB_GREEN="$GREEN" PATH="${RUN_PATH:-$BIN:$PATH}")
   if [[ -z "${RUN_UNSET_POLL:-}" ]]; then envv+=(ADMIN_MERGE_READY_POLL_SECONDS="${RUN_POLL:-0}"); fi
   env -u ADMIN_MERGE_READY_POLL_SECONDS "${envv[@]}" "$TIMEOUT_BIN" 30 "$BASH" "$SUT" "$@" > "$d/out" 2> "$d/err"
   echo $? > "$d/rc"
@@ -343,6 +359,53 @@ row_R35() { local d; d=$(mkrow R35); assert_fixture_dir "$d"
 row_help() { local d; d=$(mkrow help); assert_fixture_dir "$d"; run "$d" --help
   rc_is "$d" 0 && grep -q SOLEUR_ADMIN_MERGE_READY "$d/out" && nocall "$d"; }
 
+# ── --green-sha carryover rows ───────────────────────────────────────────────────────────────
+# mkrow's head.json is already the valid shape: verified 2-parent commit [GREEN, P1] and
+# compare.json says P1 is an ancestor-or-equal of main. Carryover rows mutate ONE property.
+row_G1() { local d; d=$(mkrow G1); assert_fixture_dir "$d"
+  # The carryover grades GREEN's check runs: the fixture's head_sha must be GREEN.
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+  rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready \
+    && logs "$d" "api repos/{owner}/{repo}/commits/$SHA" && logs "$d" "compare/$P1...main" \
+    && logs "$d" "commits/$GREEN/check-runs" \
+    && ! grep -q "commits/$SHA/check-runs" "$d/log" \
+    && grep -Fq "GREEN-CARRYOVER: head $SHA" "$d/out" \
+    && tailis "$d" "$READY_TAIL" \
+    || why "G1: $(tail -3 "$d/out" | tr '\n' '|') err: $(tail -2 "$d/err" | tr '\n' '|')"; }
+row_G2() { local d; d=$(mkrow G2); assert_fixture_dir "$d"
+  jqf "$d" head.json '.parents = [{"sha":"'$GREEN'"}]'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+  rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready && reason "$d" carryover-not-merge \
+    && grep -Fq "GREEN-CARRYOVER refused" "$d/out"; }
+row_G3() { local d; d=$(mkrow G3); assert_fixture_dir "$d"
+  jqf "$d" head.json '.commit.verification.verified = false'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+  rc_is "$d" 1 && nomiss "$d" && reason "$d" carryover-unverified; }
+row_G4() { local d; d=$(mkrow G4); assert_fixture_dir "$d"
+  jqf "$d" head.json '.parents[0].sha = "cccccccccccccccccccccccccccccccccccccccc"'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+  rc_is "$d" 1 && nomiss "$d" && reason "$d" carryover-first-parent; }
+row_G5() { local d s; for s in behind diverged; do d=$(mkrow "G5-$s"); assert_fixture_dir "$d"
+    printf '{"status":"%s"}' "$s" > "$d/compare.json"
+    run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+    rc_is "$d" 1 && nomiss "$d" && reason "$d" carryover-not-base || return 1; done; }
+row_G6() { local d; d=$(mkrow G6); assert_fixture_dir "$d"
+  # Carryover proof holds but the PRIOR head's suite went red (a re-run): the gate must see it.
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  setrun "$d" test '.conclusion = "failure"'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+  rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)"; }
+row_G7() { local d; d=$(mkrow G7); assert_fixture_dir "$d"
+  # UNTRUSTED-CI refuses FIRST: the carryover endpoints are never even called.
+  setfiles "$d" '[[{"filename":".github/workflows/x.yml"}]]'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+  rc_is "$d" 1 && reason "$d" untrusted-ci && ! grep -q 'compare/' "$d/log" \
+    || why "G7: $(tail -2 "$d/out" | tr '\n' '|')"; }
+row_G8() { local d; d=$(mkrow G8); assert_fixture_dir "$d"
+  run "$d" "$PR" "$SHA" --green-sha abc123; rc_is "$d" 2 && nocall "$d" || return 1
+  run "$d" "$PR" "$SHA" --green-sha "$SHA"; rc_is "$d" 2 && nocall "$d"; }
+
 # defect probes for the mutation rows: the mutant must show the defect, not merely crash.
 # R2's mutant iterates present checks, so the absent `test` is never named (the positive
 # readiness count then refuses it as an error rather than a ready -- defence in depth).
@@ -357,7 +420,7 @@ dfx_R32_green()  { [[ "$(rc_of R32)" == 0 ]]; }
 dfx_R28_green()  { [[ "$(rc_of R28)" == 0 ]]; }
 
 echo "== admin-merge-ready.sh (Guard 1)"
-for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 help; do
+for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 G1 G2 G3 G4 G5 G6 G7 G8 help; do
   case_ok "$r" "row_$r"
 done
 
@@ -384,7 +447,7 @@ case_mutant R28-rulespage row_R28 dfx_R28_green '($rules[0] | add // []) as $all
 # ── H4: anti-vacuity ─────────────────────────────────────────────────────────────────────────
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=46
+_min_cases=54
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
