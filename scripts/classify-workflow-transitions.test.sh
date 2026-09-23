@@ -660,8 +660,56 @@ else
   fail "ts order not applied without a sub-step — rc=$C38 summary='$S38'"
 fi
 
+# --- 39-41. review as a ship sub-step (#8627) ---------------------------------
+# ship's Phase 1.5 / Phase 5.5 run `review` inside ship. ADR-229's own example of
+# the previously unmodelled call: ship's in-run review and Phase 2 compound both
+# collapse, leaving the declared ship -> postmerge.
+R39=$(new_root sub39)
+emit_to "$R39" 2026-09-23T10:00:00Z ship      s39
+emit_to "$R39" 2026-09-23T10:01:00Z review    s39
+emit_to "$R39" 2026-09-23T10:02:00Z compound  s39
+emit_to "$R39" 2026-09-23T10:03:00Z postmerge s39
+S39=$(CLASSIFY_REPO_ROOT="$R39" bash "$SUT" --summary 2>&1); C39=$?
+ROWS39=$(CLASSIFY_REPO_ROOT="$R39" bash "$SUT" 2>/dev/null)
+if [[ "$C39" -eq 0 && "$S39" == *"undeclared=0 "* && "$S39" == *"pairs=1 "* && "$S39" == *"substep=2 "* && -z "$ROWS39" ]]; then
+  pass "ship review compound postmerge pairs as ship -> postmerge (undeclared=0 pairs=1 substep=2), no row"
+else
+  fail "ship review compound postmerge not collapsed — rc=$C39 summary='$S39' rows='$ROWS39'"
+fi
+
+# --- 40. control: a review NOT after a kept ship is never collapsed ------------
+# The collapse is keyed on the previous KEPT node. Exact row equality: a
+# substring match would still pass with an extra row alongside.
+R40=$(new_root sub40)
+emit_to "$R40" 2026-09-23T11:00:00Z work   s40
+emit_to "$R40" 2026-09-23T11:01:00Z review s40
+emit_to "$R40" 2026-09-23T11:02:00Z ship   s40
+S40=$(CLASSIFY_REPO_ROOT="$R40" bash "$SUT" --summary 2>&1); C40=$?
+ROWS40=$(CLASSIFY_REPO_ROOT="$R40" bash "$SUT" 2>/dev/null)
+if [[ "$C40" -eq 0 && "$S40" == *"undeclared=1 "* && "$S40" == *"pairs=2 "* && "$S40" == *"substep=0 "* && "$ROWS40" == $'  s40\treview -> ship' ]]; then
+  pass "work review ship still reports exactly review -> ship (undeclared=1 pairs=2 substep=0)"
+else
+  fail "work review ship control changed — rc=$C40 summary='$S40' rows='$ROWS40'"
+fi
+
+# --- 41. the accepted cost, pinned ----------------------------------------------
+# The log carries start records only, so any review after a kept ship is dropped
+# whatever caused it, together with its outgoing edge. A future time-window
+# heuristic should break this case deliberately.
+R41=$(new_root sub41)
+emit_to "$R41" 2026-09-23T12:00:00Z ship   s41
+emit_to "$R41" 2026-09-23T12:01:00Z review s41
+emit_to "$R41" 2026-09-23T12:02:00Z work   s41
+S41=$(CLASSIFY_REPO_ROOT="$R41" bash "$SUT" --summary 2>&1); C41=$?
+ROWS41=$(CLASSIFY_REPO_ROOT="$R41" bash "$SUT" 2>/dev/null)
+if [[ "$C41" -eq 0 && "$S41" == *"undeclared=0 "* && "$S41" == *"pairs=1 "* && "$S41" == *"substep=1 "* && -z "$ROWS41" ]]; then
+  pass "accepted cost: ship review work reads as declared ship -> work (undeclared=0 pairs=1 substep=1)"
+else
+  fail "ship review work not collapsed — rc=$C41 summary='$S41' rows='$ROWS41'"
+fi
+
 # MIN_CASES counts PASSES, not case numbers: the 33-35 loop records ONE pass per
-# key (3) and adds a key-list pin (1), so cases 1-38 yield 39. Collapsing the loop
+# key (3) and adds a key-list pin (1), so cases 1-41 yield 42. Collapsing the loop
 # to one pass would silently lower the real count to 37.
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
 # guard-vacuity-floor.test.sh slices the floor plus its CONTIGUOUS assignments into
@@ -669,7 +717,7 @@ fi
 # FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=39
+MIN_CASES=42
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

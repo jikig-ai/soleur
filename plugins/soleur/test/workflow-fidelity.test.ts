@@ -926,51 +926,72 @@ describe("DECLARED_SUB_STEPS invariants", () => {
       brainstorm: ["compound"],
       plan: ["compound"],
       postmerge: ["compound"],
-      ship: ["compound"],
+      ship: ["compound", "review"],
     });
   });
 
   // A sub-step entry is a claim about a SKILL.md: the key's own run invokes the
-  // value. Pin that claim to the section that makes it, so moving or deleting
+  // value. Pin that claim to each section that makes it, so moving or deleting
   // the call fails here instead of silently collapsing real pairs (#8399).
+  // Anchored per ENTRY, not per key (#8627): ship makes two different sub-step
+  // calls from three different sections. A heading's scope runs to the next H2.
   // Section-scoped, not file-wide: ship names `skill: soleur:compound` in
   // Headless Mode Detection too, which would survive deleting Phase 2.
   // `brainstorm` is scoped by its H3 `### Phase 4: Handoff`: an H2 scope would
   // stop at the `## Domain Assessments` line that sits inside a fenced markdown
-  // template earlier in that file. LIMITS (accepted, #8399 review): the match is
-  // textual, so a sentence that merely MENTIONS the call ("do not run `skill:
-  // soleur:compound`") satisfies it, and one surviving call in a section with
-  // several (ship Phase 2 has three) keeps it green. It proves the designed call
-  // is named where the entry says, not that it is the only or an unconditional
-  // one, and it cannot see a designed call the map does not list.
-  test("every sub-step is invoked by its key's SKILL.md in the section that owns it", () => {
-    const SECTION: Record<string, string> = {
-      brainstorm: "### Phase 4: Handoff",
-      plan: "## Exit Gate",
-      postmerge: "## Phase 6: Update Issue and Compound",
-      ship: "## Phase 2: Capture Learnings",
+  // template earlier in that file. LIMITS (accepted, #8399 and #8627 reviews):
+  // the match is textual, so a sentence that merely MENTIONS the call ("do not
+  // run `skill: soleur:compound`") satisfies it, and one surviving call in a
+  // section with several keeps it green — ship Phase 2 has three compound calls,
+  // and Phase 1.5 has two review calls, so deleting either one of those is
+  // invisible here. The Phase 5.5 scope runs to `## Phase 6.4` (~1,100 lines),
+  // so any later `skill: soleur:review` mention anywhere in it keeps the anchor
+  // green even with the Code Review Completion Gate call deleted; an H3 anchor
+  // would not help, because the scope still ends at the next H2. It proves the
+  // designed call is named where the entry says, not that it is the only or an
+  // unconditional one, and it cannot see a designed call the map does not list.
+  test("every sub-step is invoked by its key's SKILL.md in each section that owns it", () => {
+    const ANCHORS: Record<string, Record<string, readonly string[]>> = {
+      brainstorm: { compound: ["### Phase 4: Handoff"] },
+      plan: { compound: ["## Exit Gate"] },
+      postmerge: { compound: ["## Phase 6: Update Issue and Compound"] },
+      ship: {
+        compound: ["## Phase 2: Capture Learnings"],
+        review: ["## Phase 1.5: Review Evidence Gate", "## Phase 5.5: Pre-Ship Review Gates"],
+      },
     };
+    // Coverage first, as one set equality: an unanchored entry fails with a
+    // readable diff, and a stale anchor for a removed entry fails too.
+    const pairs = (m: Record<string, readonly string[] | Record<string, unknown>>) =>
+      Object.entries(m).flatMap(([node, v]) =>
+        (Array.isArray(v) ? v : Object.keys(v)).map((sub) => `${node}:${sub}`),
+      ).sort();
+    expect(pairs(ANCHORS)).toEqual(pairs(DECLARED_SUB_STEPS));
+    // Loop over the CONST, not over ANCHORS, so the lower bound below is not
+    // derived from the map being checked.
     let checks = 0;
     for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
-      expect(node in SECTION, `sub_steps key ${node} has no SKILL.md anchor section in this test`).toBe(true);
       const text = readFileSync(join(PLUGIN_ROOT, "skills", node, "SKILL.md"), "utf-8");
-      const heading = SECTION[node];
       const lines = text.split("\n");
-      const start = lines.findIndex((l) => l.startsWith(heading));
-      expect(start, `${node}/SKILL.md has no section starting "${heading}"`).toBeGreaterThanOrEqual(0);
-      const rest = lines.slice(start + 1);
-      const end = rest.findIndex((l) => l.startsWith("## "));
-      const scope = (end === -1 ? rest : rest.slice(0, end)).join("\n");
       for (const sub of subs) {
-        expect(
-          new RegExp(`skill: soleur:${sub}(?![\\w-])`).test(scope),
-          `${node}/SKILL.md ${heading} does not invoke \`skill: soleur:${sub}\``,
-        ).toBe(true);
-        checks++;
+        const headings = ANCHORS[node]?.[sub] ?? [];
+        expect(headings.length, `${node}:${sub} has no anchor headings`).toBeGreaterThan(0);
+        for (const heading of headings) {
+          const start = lines.findIndex((l) => l.startsWith(heading));
+          expect(start, `${node}/SKILL.md has no section starting "${heading}"`).toBeGreaterThanOrEqual(0);
+          const rest = lines.slice(start + 1);
+          const end = rest.findIndex((l) => l.startsWith("## "));
+          const scope = (end === -1 ? rest : rest.slice(0, end)).join("\n");
+          expect(
+            new RegExp(`skill: soleur:${sub}(?![\\w-])`).test(scope),
+            `${node}/SKILL.md ${heading} does not invoke \`skill: soleur:${sub}\``,
+          ).toBe(true);
+          checks++;
+        }
       }
     }
     expect(checks).toBeGreaterThan(0);
-    expect(checks).toBe(Object.values(DECLARED_SUB_STEPS).flat().length);
+    expect(checks).toBeGreaterThanOrEqual(Object.values(DECLARED_SUB_STEPS).flat().length);
   });
 
   // Same gap one level up: the edge set's members are each pinned by toEqual,

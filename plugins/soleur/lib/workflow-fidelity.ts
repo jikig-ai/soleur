@@ -195,7 +195,7 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
 /**
  * Node skills that another node's SKILL.md invokes as a designed SUB-STEP of
  * its own run, keyed by the invoking node. Each entry names the section that
- * makes the call (pinned by the anchor test in workflow-fidelity.test.ts):
+ * makes the call (pinned per entry by the anchor test in workflow-fidelity.test.ts):
  *   - brainstorm: runs `compound` to capture learnings, then hands off to
  *     `plan`, so the log shows `brainstorm compound plan` for the handoff.
  *   - plan: §Exit Gate step 1 runs `compound` (direct invocation only; in a
@@ -203,6 +203,12 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
  *     either way, since `plan -> work` is the only pair it can declare).
  *   - postmerge: §Phase 6 (Update Issue and Compound) runs `compound`.
  *   - ship: §Phase 2 (Capture Learnings) runs `compound` inside ship.
+ *     §Phase 1.5 (Review Evidence Gate: the missing-evidence option and the
+ *     `sequential-fallback` re-run) and §Phase 5.5 (Pre-Ship Review Gates ->
+ *     Code Review Completion Gate) run `review` inside ship. These are
+ *     interactive arms only; headless aborts instead (#8627). `review` is a
+ *     legal value: it is a node, and not among ship's declared successors
+ *     (`postmerge`, `work`).
  * The classifier drops a record whose skill is a sub-step of the PREVIOUS KEPT
  * node before pairing, so `plan compound work` pairs as `plan -> work`. This is
  * NOT an edge: no `K -> compound` edge is declared for any key K, and because
@@ -212,20 +218,23 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
  * below forbid: `compound` is a declared successor of `review`, so the collapse
  * would turn `review compound work` into the declared `review -> work`.
  * Mirrored in .claude/workflow-transitions.json under `sub_steps`
- * (parity-pinned). See ADR-229 (amended 2026-09-21, #8399).
+ * (parity-pinned). See ADR-229 (amended 2026-09-21, #8399; 2026-09-23, PR #8627).
  *
  * To add an entry: the key and every value must be DECLARED_TRANSITIONS nodes
  * (a non-node is removed by the classifier's node filter first, so the entry
  * would be dead); a value must not be a declared successor of its key (the
  * collapse would silently delete a declared pair from `pairs`). Edit this
- * const first, mirror the JSON, then run
+ * const first, then mirror it in the JSON view, then update in the same PR:
+ * the exact-set pin and the `ANCHORS` heading list in workflow-fidelity.test.ts,
+ * a case in scripts/classify-workflow-transitions.test.sh (plus its
+ * `MIN_CASES` floor), and ADR-229's Status line and a re-baseline bullet. Run
  * `bun test plugins/soleur/test/workflow-fidelity.test.ts`.
  */
 export const DECLARED_SUB_STEPS: Readonly<Record<string, readonly string[]>> = {
   brainstorm: ["compound"],
   plan: ["compound"],
   postmerge: ["compound"],
-  ship: ["compound"],
+  ship: ["compound", "review"],
 };
 
 /** Edges declared FROM `skill`. Unknown nodes declare nothing. */
