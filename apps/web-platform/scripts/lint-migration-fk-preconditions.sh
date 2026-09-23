@@ -98,7 +98,8 @@ fi
 
 declare -a files=()
 if [[ "$1" == "--from-pr-diff" ]]; then
-  # Refresh origin/main best-effort (mirrors run-migrations.sh:124).
+  # Refresh origin/main best-effort (mirrors the fetch in run-migrations.sh's
+  # unmerged-apply gate).
   git -C "$REPO_ROOT" fetch --quiet origin main 2>/dev/null || true
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
