@@ -1,6 +1,15 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+// IMPORTED, not re-derived. Both of these were hand-rolled in this file first, and both
+// were wrong in the way an importable helper exists to prevent: the comment stripper had
+// to be written a second time, and the literal escaper handled `.` while leaving `\`
+// unescaped — which is CodeQL js/incomplete-sanitization, the exact rule
+// `escapeRegExp`'s own docstring in that module cites. The durable unit is the import.
+import {
+  escapeRegExp,
+  stripHclComments,
+} from "./lib/terraform-hcl-blocks";
 
 // Symbol-parity test for the committed GitHub App manifest.
 //
@@ -229,54 +238,14 @@ describe("github-app-manifest.json symbol parity", () => {
     // is what makes a raw-text haystack the wrong instrument for an assertion whose whole
     // job is to name that harm.
     //
-    // `#` and `//` line comments and `/* */` blocks, none of which HCL nests. Strings are
-    // preserved: a `#` inside a quoted value is not a comment, and eating one would drop
-    // the `name = "GITHUB_APP_..."` lines this test is built on.
-    const stripHcl = (src: string): string => {
-      let out = "";
-      let i = 0;
-      let inStr = false;
-      while (i < src.length) {
-        const c = src[i];
-        if (inStr) {
-          if (c === "\\") {
-            out += src.slice(i, i + 2);
-            i += 2;
-            continue;
-          }
-          if (c === '"') inStr = false;
-          out += c;
-          i++;
-          continue;
-        }
-        if (c === '"') {
-          inStr = true;
-          out += c;
-          i++;
-          continue;
-        }
-        if (c === "#" || (c === "/" && src[i + 1] === "/")) {
-          while (i < src.length && src[i] !== "\n") i++;
-          continue; // keep the newline: line structure is load-bearing below
-        }
-        if (c === "/" && src[i + 1] === "*") {
-          const end = src.indexOf("*/", i + 2);
-          i = end === -1 ? src.length : end + 2;
-          continue;
-        }
-        out += c;
-        i++;
-      }
-      return out;
-    };
-    const tf = stripHcl(raw);
+    const tf = stripHclComments(raw);
 
     // Self-test the stripper before trusting it. A stripper that returned its input
     // unchanged, or that ate everything, would leave every assertion below either
     // unchanged-and-defective or vacuously green.
-    expect(stripHcl('a = "x" # b = "y"\nc = 1\n')).toBe('a = "x" \nc = 1\n');
-    expect(stripHcl('n = "a#b"\n')).toBe('n = "a#b"\n');
-    expect(stripHcl("/* x */ y = 1\n")).toBe(" y = 1\n");
+    expect(stripHclComments('a = "x" # b = "y"\nc = 1\n')).toBe('a = "x" \nc = 1\n');
+    expect(stripHclComments('n = "a#b"\n')).toBe('n = "a#b"\n');
+    expect(stripHclComments("/* x */ y = 1\n")).toBe(" y = 1\n");
     // NOT a byte ratio: this file is ~78% comment by design (the U1 rationale lives in
     // it), so any ratio floor is either slack or a false alarm. Assert the STRUCTURE the
     // checks below stand on survived the strip.
@@ -385,7 +354,7 @@ describe("github-app-manifest.json symbol parity", () => {
       // — a file-wide search for `destroy = false` would be satisfied by a DIFFERENT
       // block's lifecycle and would pass while this one deletes the live key.
       const fromRe = new RegExp(
-        `\\bfrom\\s*=\\s*${addr.replace(/\./g, "\\.")}\\s*(\\n|\\})`,
+        `\\bfrom\\s*=\\s*${escapeRegExp(addr)}\\s*(\\n|\\})`,
       );
       const owning = removedBlocks.filter((b) => fromRe.test(b));
       expect(

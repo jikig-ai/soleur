@@ -14,6 +14,15 @@
 
 set -euo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). This script binds a live Cloudflare API token, a
+# webhook HMAC secret and a CF Access client secret; with `-x` the shell prints every
+# expansion, so each one lands in the job log in plaintext BEFORE any `::add-mask::`
+# below can take effect. Masking cannot retract what xtrace already printed. First
+# statement after `set`, because anything above it is already traced.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # Resolve the infra dir from THIS script's own location — absolute and
 # CWD-independent. Do NOT honor a relative $INFRA_DIR override (#6595): the workflow
 # exports INFRA_DIR=apps/web-platform/infra AND runs this step with
@@ -53,7 +62,11 @@ if [[ ! "$TUNNEL_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
 fi
 
 # --- (a) Config plane: authoritative, vantage-free read-back ------------------------
-CFG=$(curl -sS --max-time 20 \
+# `--disable` FIRST (position is load-bearing: it aborts ~/.curlrc parsing, and a later
+# position is too late), then `--noproxy '*'`. Without them a runner-level ~/.curlrc or an
+# ALL_PROXY/HTTPS_PROXY variable redirects this request — bearer token intact — to a host
+# of the attacker's choosing, with the destination URL below still reading correctly.
+CFG=$(curl --disable --noproxy '*' -sS --max-time 20 \
   -H "Authorization: Bearer ${CF_API_TOKEN}" \
   "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations")
 
@@ -113,7 +126,9 @@ CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET "${DOPPLER_ARGS[@
 HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
 HTTP_CODE="000"
 for attempt in 1 2 3 4 5; do
-  HTTP_CODE=$(curl -s -o /tmp/deploy-status-verify.json -w '%{http_code}' --max-time 15 \
+  # --disable/--noproxy as above (#7797): this call carries the webhook HMAC and both
+  # CF Access client credentials.
+  HTTP_CODE=$(curl --disable --noproxy '*' -s -o /tmp/deploy-status-verify.json -w '%{http_code}' --max-time 15 \
     -H "X-Signature-256: sha256=${HMAC}" \
     -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
     -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
