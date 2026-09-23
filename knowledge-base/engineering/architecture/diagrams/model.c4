@@ -610,7 +610,12 @@ model {
   github -> doppler "scheduled-terraform-drift's token-drift scan reads token-shaped keys across the soleur project's configs using per-config read-only service tokens delivered as ONE Actions secret holding a config-keyed JSON map; the config list comes from the committed inventory, never from a live listing, because no credential here can enumerate the project (ADR-168, #7234)" { technology "doppler CLI (config-scoped read service tokens)" }
   github -> cloudflare "apply-web-platform-infra.yml issues READ-ONLY GETs to the Cloudflare rulesets API (ADR-136, #6767): the pre-apply entrypoint gate (a step AFTER `terraform plan` and BEFORE the main `terraform apply`) and the guarded entrypoint-audit dispatch both enumerate a `kind=zone`/`kind=root` ruleset's phase entrypoint via CF_API_TOKEN_RULESETS and FAIL-CLOSED if a whole-list create-from-absent would clobber live dashboard-created rules. GETs only — no writes ride this edge; the ruleset APPLY itself goes through Terraform's cloudflare provider. Distinct from the api -> cloudflare DNS-edit edge (different token, different concern)." { technology "HTTPS (CF API v4 rulesets phase entrypoint GET, curl --max-time)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
-  api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
+  api -> inngest "Sends events" { technology "HTTP private-net :8288" }
+  // #8611 / ADR-243: step execution runs the OTHER way. The server calls the registered serveHost
+  // (https://app.soleur.ai/api/inngest), a Cloudflare-proxied record, so every step request crosses
+  // the proxy's ~100s origin timeout. A long claude-eval step got a 524, retries:1 re-ran it while the
+  // first child still ran, and the run failed anyway (51% of 30-day cron spend was duplicates).
+  inngest -> api "Invokes function steps at the registered serve URL (Cloudflare-proxied, ~100s origin timeout)" { technology "HTTPS via Cloudflare (app.soleur.ai/api/inngest)" }
   resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }
   api -> resend "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)" { technology "HTTPS" }
   api -> pushService "Web Push delivery (VAPID) for statutory deadline reminders; transport-accepted, not receipt (ADR-136)" { technology "HTTPS (Web Push / VAPID)" }
@@ -721,7 +726,7 @@ model {
   // sink stays on Better Stack — it was pivoted OFF Sentry's HTTP envelope endpoint after
   // ~6 PR cycles of interop failures (#4273; grep `[sinks.betterstack]` in inngest.tf and
   // the pivot note in inngest-bootstrap.sh), and #6500 did not reverse that. The Inngest-FIRED crons'
-  // check-ins are posted by the code `api` serves (the `api -> inngest "serves functions"`
+  // check-ins are posted by the code `api` serves (the `inngest -> api "Invokes function steps …"`
   // edge above), i.e. on the `webapp` edge below — EXCEPT the two Inngest-dispatched
   // monitors noted on the `github` edge, which check in from GitHub Actions.
   // Anchored on grep-able tokens, not line numbers — #6447's own rule, which this PR's

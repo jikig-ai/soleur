@@ -20,7 +20,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 ## Phase 1 — Fix 1 (single session per run)
 
 - [ ] 1.1 Write `apps/web-platform/test/server/inngest/claude-eval-single-flight.test.ts` (Guard 1 rows 1–6, H1, H2), RED.
-- [ ] 1.2 Branch A: add `streaming: "force"` to `serve()` in `app/api/inngest/route.ts`, with a comment citing the spike and ADR-241; rewrite the four 401 assertions in `signature-verify.test.ts` to read the streamed envelope.
+- [ ] 1.2 Branch A: add `streaming: "force"` to `serve()` in `app/api/inngest/route.ts`, with a comment citing the spike and ADR-243; rewrite the four 401 assertions in `signature-verify.test.ts` to read the streamed envelope.
 - [ ] 1.3 Add the `globalThis` in-flight map to `spawnClaudeEval`: set before the first `await`, clear in `finally`, join on hit (`op=claude-eval-singleflight-join`); skip plus report when `runId` is not ULID-shaped (`op=claude-eval-singleflight-no-runid`).
 - [ ] 1.4 Move `cron-daily-triage` and `cron-follow-through-monitor` onto `spawnClaudeEval`: destructure `runId`/`attempt`, pass the current cwd as `spawnCwd`, drop the duplicate `--strict-mcp-config`, and update their tests, naming each changed assertion.
 - [ ] 1.5 Go green; run the full `test/server/inngest` suite.
@@ -48,7 +48,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - [ ] 5.1 Add the 524 (plus the S7 literal), burn ($15/day, nested path, `"SOLEUR_CLAUDE_COST":true` key match, `cron:` sources) and stuck-at-zero explorations and alerts to `betterstack-logs-alerts.tf`. Aggregates only; no `PRIORITY` filter; confirm the 86400 `query_period`.
 - [ ] 5.2 Add `-target=` lines for every new resource to `apply-web-platform-infra.yml`; reconcile every other `logtail_exploration` consumer; add the Cloudflare edge rule only if the custom-rule quota allows.
 - [ ] 5.3 Write `test/infra/inngest-step-524-alert.test.sh` (Guard 2 rows 1–6); register it in `infra-validation.yml`; `terraform validate`; add `scripts/probe-inngest-524-count.sh` (prints `count=<n>`).
-- [ ] 5.4 Write ADR-241 (re-verify the ordinal across all `origin/*` refs) and amend ADR-033, covering the spike result, alternatives, streaming contract, single-flight (AP-013), cap table, throttle and alert thresholds.
+- [ ] 5.4 Write ADR-243 (re-verify the ordinal across all `origin/*` refs) and amend ADR-033, covering the spike result, alternatives, streaming contract, single-flight (AP-013), cap table, throttle and alert thresholds.
 - [ ] 5.5 Fix the C4 edge in `model.c4`, regenerate `model.likec4.json`, and run the five C4 tests.
 - [ ] 5.6 Update `knowledge-base/operations/expenses.md` and `knowledge-base/finance/cost-model.md` with the `cost_usd`-derived funded-day figure (~$17/day, ~$516/month pre-fix).
 - [ ] 5.7 CPO sign-off recorded (approved with conditions); confirm S7/S8 results satisfy it.

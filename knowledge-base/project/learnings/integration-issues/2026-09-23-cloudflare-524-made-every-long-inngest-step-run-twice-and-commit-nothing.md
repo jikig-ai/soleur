@@ -90,6 +90,10 @@ HTTP, compare the longest step duration with every proxy timeout on the callback
    **Recovery:** an all-refs scan found it; renumbered to ADR-241.
    **Prevention:** this is an existing sharp edge (quantify over `origin/*`). Apply it at the first
    pick, not at deepen time.
+   **Addendum (implementation, same day):** by the time the ADR file was written, ADR-241 and
+   ADR-242 had been claimed by two other branches, so it moved again to ADR-243. The deepen pass
+   had also swept "238–240" into the nonsense range "241–240" in the plan. A branch-picked ordinal
+   is a lease, not a claim: re-scan `origin/*` right before creating the file and again before merge.
 7. **I set brand threshold `none`, reasoning only about the crons.** `serve()` is shared, so the
    transport change also reaches the founder-facing BYOK leader loop, where a misread streamed error
    could double-bill a founder's key. **Recovery:** threshold raised to `single-user incident`, the

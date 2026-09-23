@@ -230,7 +230,7 @@ and commit it before Phase 1. The ADR cites it.
 #### Fix 1A — SDK streaming plus an in-process single-flight guard
 
 1. `apps/web-platform/app/api/inngest/route.ts`: add `streaming: "force"` to `serve()`, with a
-   comment citing the spike file and ADR-241. `serveHost` is unchanged.
+   comment citing the spike file and ADR-243. `serveHost` is unchanged.
    - Streaming answers every POST with HTTP 201 and the SDK headers before signature verification;
      the 401 moves into the streamed body (`InngestCommHandler.js`, `createStream` branch). Signing
      is still enforced.
@@ -373,7 +373,7 @@ caching on the direct Messages API callers (see Research Reconciliation).
 
 ### Architecture record
 
-- **ADR-241** (ordinal provisional; ADR-241–240 are already claimed on pushed branches). Re-verify
+- **ADR-243** (ordinal provisional; ADR-238–242 are already claimed on pushed branches). Re-verify
   across all `origin/*` refs before merge. Title: "Inngest step requests cross the Cloudflare proxy;
   long steps must stream or detach". Contents:
   - the evidence, the spike result and the chosen branch;
@@ -570,7 +570,7 @@ count), the apply workflow's `-target=` list, and the observed emitter shapes:
   `scheduled-terraform-drift.yml`, `infra/main.tf`, `infra/variables.tf`,
   `plugins/soleur/lib/heartbeat-live-reconcile.ts`.
 - `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` (nested `cost_usd` path).
-- `knowledge-base/engineering/architecture/decisions/ADR-241-*.md` (new), ADR-033 (amendment),
+- `knowledge-base/engineering/architecture/decisions/ADR-243-*.md` (new), ADR-033 (amendment),
   `knowledge-base/engineering/architecture/diagrams/model.c4`, `model.likec4.json`.
 - `knowledge-base/operations/expenses.md`, `knowledge-base/finance/cost-model.md`.
 - Branch B only: `cron-workspace-gc.ts`, `sentry/cron-monitors.tf`, `test/server/inngest/cron-cohort-dedup.test.ts`,
@@ -597,7 +597,7 @@ count), the apply workflow's `-target=` list, and the observed emitter shapes:
    `cost_usd`, add flags and throttles.
 4. **Fix 2 model re-pin**: verify the ID live, edit, re-grep with the unquoted pattern.
 5. **Alerts, ADR, C4, ledger**: Terraform explorations and alerts, `-target` lines and CI registration
-   (Guard 2), the edge rule if it fits the quota, `probe-inngest-524-count.sh`, ADR-241 and the ADR-033
+   (Guard 2), the edge rule if it fits the quota, `probe-inngest-524-count.sh`, ADR-243 and the ADR-033
    amendment, C4 and its JSON mirror, expenses and cost model.
 6. **Post-merge check (`soleur:ship`, once credit is present).** Via `soleur:trigger-cron`, fire:
    - cron-seo-aeo-audit (short);
@@ -653,7 +653,7 @@ list. No Terraform variable is added.
 - [ ] AC8: the 524, burn and stuck-at-zero explorations and alerts exist, every new address is in the
       apply workflow's `-target=` list, `inngest-step-524-alert.test.sh` (Guard 2 rows 1–6) is
       registered in `infra-validation.yml` and green, and `terraform validate` is green.
-- [ ] AC9: ADR-241 (or the re-verified ordinal) and the ADR-033 amendment are committed. The C4 edge
+- [ ] AC9: ADR-243 (or the re-verified ordinal) and the ADR-033 amendment are committed. The C4 edge
       and `model.likec4.json` are updated. `c4-code-syntax.test.ts`, `c4-render.test.ts`,
       `c4-canonical-mirror.test.ts`, `plugins/soleur/test/c4-canonical.test.ts` and
       `plugins/soleur/test/c4-count-parity.test.sh` are green.
@@ -759,7 +759,7 @@ Not applicable: there is no UI surface in Files to Edit/Create, and the mechanic
 
 ### ADR
 
-Create ADR-241 (provisional). Its contents are in "Architecture record" above.
+Create ADR-243 (provisional). Its contents are in "Architecture record" above.
 
 ### C4 views
 

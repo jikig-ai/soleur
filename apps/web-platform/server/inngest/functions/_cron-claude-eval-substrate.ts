@@ -985,7 +985,7 @@ export async function teardownEphemeralWorkspace(
 // Claude child is still running JOINS that child instead of spawning a second paid session. The map
 // lives on globalThis because the app ships two bundles (next build route chunks and the esbuild
 // server), so a module-level Map is not guaranteed to be one instance. Process-local state (AP-013):
-// correct while one web host executes Inngest steps; ADR-241 names the trigger for shared state.
+// correct while one web host executes Inngest steps; ADR-243 names the trigger for shared state.
 type SpawnArgs = Parameters<typeof spawnClaudeEvalUnguarded>[0];
 const IN_FLIGHT_KEY = Symbol.for("soleur.claudeEvalInFlight");
 const INNGEST_RUN_ID = /^01[0-9A-HJKMNP-TV-Z]{24}$/;

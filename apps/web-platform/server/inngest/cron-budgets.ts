@@ -1,4 +1,4 @@
-// Per-run dollar ceiling for every Claude spawn site (#8611 Fix 3; ADR-241).
+// Per-run dollar ceiling for every Claude spawn site (#8611 Fix 3; ADR-243).
 //
 // Passed to the `claude` CLI as `--max-budget-usd` (verified on the pinned
 // @anthropic-ai/claude-code@2.1.219, `--print` mode only — every site runs --print). A run that
@@ -9,7 +9,7 @@
 // SOLEUR_CLAUDE_COST markers' own `cost_usd` over 2026-08-24..09-23, one session per run, with
 // Opus 5 sessions re-priced to Opus 5.5 (AUDIT_MODEL). Sites with no funded run in that window
 // take a tier default — $10 audit tier, $5 execution tier — until they have data. The table and
-// its worst-case-daily column live in ADR-241; recalibration is tracked on #8613.
+// its worst-case-daily column live in ADR-243; recalibration is tracked on #8613.
 //
 // A per-run cap does not bound the daily total — the Better Stack daily burn alert does.
 export const CLAUDE_BUDGET_USD: Readonly<Record<string, number>> = Object.freeze({
