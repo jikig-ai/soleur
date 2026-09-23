@@ -293,6 +293,30 @@ write_files:
     content: ${fail2ban_sshd_local_b64}
     owner: root:root
     permissions: '0644'
+  - path: /etc/systemd/network/99-soleur-private-fallback.network
+    content: |
+      [Match]
+      Driver=virtio_net
+      Name=!eth0
+
+      [Link]
+      RequiredForOnline=no
+
+      [Network]
+      DHCP=ipv4
+      LinkLocalAddressing=no
+      IPv6AcceptRA=no
+
+      [DHCPv4]
+      UseMTU=yes
+      UseDNS=no
+      UseDomains=no
+      UseHostname=no
+      UseNTP=no
+      SendHostname=no
+      RouteMetric=1024
+    owner: root:root
+    permissions: '0644'
 
   # (#5921) The journald persistent drop-in was moved out of inline write_files: (its 2.4 KB
   # base64 blob was the biggest remaining user_data expansion). It is now baked and installed
@@ -354,6 +378,8 @@ runcmd:
     # landed bootcmd_start (below) with NO runcmd_start brackets the death to the packages:/config
     # phase; neither landing points at no-egress / a pre-network death → needs host console.
     _emit "soleur-cloud-init boot stage" runcmd_start info
+  # #8651/#6438: converge a late-attached private NIC via the #8539 fallback .network above (ADR-123 amendment 2026-09-23).
+  - networkctl reload || { printf 'gate=reload' > /run/soleur-stage-detail; _emit "soleur-cloud-init boot stage" private_nic_probe_fault warning; }
 
   # Apply SSH hardening immediately (drop-in written by write_files above).
   # Runs BEFORE the package audit so the operator always has hardened SSH
@@ -480,54 +506,47 @@ runcmd:
     STAGE=pull
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     docker rm -f soleur-hostscript-seed >/dev/null 2>&1 || true
-    # (#8651) zot-first by BAKE: endpoint + pull cred are template values, never doppler (#6985).
-    # Rationale: server.tf zot_pull_token + ADR-096 2026-09-23. Fail-open steps are AND-OR lists
-    # (set -e exempt); /run files are 0600 and every tail is redacted before it is written.
+    # #8651: zot-first by BAKE, never doppler (#6985). Rationale + bounds: server.tf zot_pull_token.
     for f in soleur-stage-detail soleur-pull.log soleur-zot-login.log soleur-ghcr-login.log; do install -m 600 /dev/null /run/$f; done
     ZEP='${registry_endpoint}'
-    # (#6438/#8539) bounded, fail-open wait for OUR private address before the first private-net
-    # use (ADR-123: detect+emit, no self-converge). A failing `ip` is a fault, never "absent".
     NIC=probe_fault; E='${private_ip}'; i=0; P=0
-    [ -n "$E" ] && while [ $i -lt 75 ]; do
+    command -v ip >/dev/null && [ -n "$E" ] && while [ $i -lt 75 ]; do
       O=$(ip -4 -o addr show 2>/dev/null) && { P=1; printf '%s\n' "$O" | grep -qwF -- "$E" && { NIC=ready; break; }; }
       i=$((i+1)); sleep 2
     done
     [ $NIC = ready ] || [ $P = 0 ] || NIC=timeout
     W=$((i*2))
-    [ $NIC = ready ] || { printf 'nic=%s:%s' $NIC $W > /run/soleur-stage-detail; _emit "soleur-cloud-init boot stage" private_nic_$NIC warning; }
-    ZL=fail; n=0
-    while [ $n -lt 3 ]; do n=$((n+1)); printf '%s' '${zot_pull_token}' | timeout 60 docker login "$ZEP" -u '${zot_pull_user}' --password-stdin > /run/soleur-zot-login.log 2>&1 && { ZL=ok; break; }; sleep 5; done
-    # GHCR: baked creds only (read PAT revoked, AP-016); its pull is attempted only after THIS
-    # login succeeds, so a dead credential fails here, named, instead of as a 401 at pull (#6500).
+    [ $NIC = ready ] || { printf 'nic=%s:%s gate=seed' $NIC $W > /run/soleur-stage-detail; _emit "soleur-cloud-init boot stage" private_nic_$NIC warning; }
+    ZL=fail; n=0; R=0
+    [ -n "$ZEP" ] && while [ $n -lt 3 ]; do [ $n = 0 ] || sleep 5; n=$((n+1)); printf '%s' '${zot_pull_token}' | timeout 60 docker login "$ZEP" -u '${zot_pull_user}' --password-stdin > /run/soleur-zot-login.log 2>&1 && { ZL=ok; break; } || R=$?; done
     STAGE=ghcr_login
     GHCR_USER='${ghcr_read_user}'
     GHCR_TOKEN='${ghcr_read_token}'
-    GL=fail
-    [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ] && printf '%s' "$GHCR_TOKEN" | timeout 60 docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1 && GL=ok
-    # Only a digest pin goes to plain-HTTP zot (the digest is the integrity); a tag ref fails loud.
+    GL=empty
+    [ -n "$GHCR_USER" ] && [ -n "$GHCR_TOKEN" ] && GL=fail && printf '%s' "$GHCR_TOKEN" | timeout 60 docker login ghcr.io -u "$GHCR_USER" --password-stdin > /run/soleur-ghcr-login.log 2>&1 && GL=ok
+    unset GHCR_TOKEN
     STAGE=pull
-    C=other; ZN=0; GP=not-attempted; OK=0; R=0
-    case "$IMAGE_REF" in *@sha256:*) REF="$ZEP/$${IMAGE_REF#ghcr.io/}" ;; *) REF="$IMAGE_REF"; C=unpinned ;; esac
+    C=none; ZN=0; GP=not-attempted; OK=0
+    case "$IMAGE_REF" in ghcr.io/*@sha256:*) REF="$ZEP/$${IMAGE_REF#ghcr.io/}" ;; *) REF="$IMAGE_REF"; C=unpinned ;; esac
     if [ "$REF" != "$IMAGE_REF" ]; then
-      while [ $ZN -lt 3 ]; do ZN=$((ZN+1)); timeout 180 docker pull "$REF" > /run/soleur-pull.log 2>&1 && { OK=1; break; } || R=$?; sleep 5; done
-      [ $OK = 1 ] || { [ "$R" = 124 ] && C=timeout || case "$(cat /run/soleur-zot-login.log /run/soleur-pull.log)" in *'no route'*|*nreachable*|*refused*|*'i/o timeout'*) C=unreach ;; *nauthorized*|*denied*) C=auth ;; *'manifest unknown'*|*'not found'*) C=manifest ;; esac; }
-      if [ $OK = 0 ] && [ "$GL" = ok ]; then
-        REF="$IMAGE_REF"
+      [ $ZL = ok ] && while [ $ZN -lt 3 ]; do [ $ZN = 0 ] || sleep 5; ZN=$((ZN+1)); timeout 180 docker pull "$REF" > /run/soleur-pull.log 2>&1 && { OK=1; break; } || R=$?; [ $R = 124 ] && break; :; done
+    fi
+    [ $OK = 1 ] || [ $C = unpinned ] || { [ $R = 124 ] && C=timeout || case "$(cat /run/soleur-zot-login.log /run/soleur-pull.log)" in *'no route'*|*nreachable*|*refused*|*'i/o timeout'*) C=unreach ;; *nauthorized*|*denied*) C=auth ;; *'manifest unknown'*|*'not found'*) C=manifest ;; *) C=other ;; esac; }
+    Z="zot=[login=$ZL,n=$ZN,cause=$C]"
+    if [ $OK = 0 ] && [ "$GL" = ok ]; then
+      [ "$REF" = "$IMAGE_REF" ] || { printf 'nic=%s:%s %s' "$NIC" "$W" "$Z" > /run/soleur-stage-detail
         # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
-        _emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning
-      fi
+        _emit "app image served via GHCR fallback (zot miss)" "app_ghcr_fallback" warning; }
+      REF="$IMAGE_REF"; GP=fail; N=0
+      while [ $N -lt 3 ]; do [ $N = 0 ] || sleep 5; N=$((N+1)); timeout 180 docker pull "$REF" > /run/soleur-pull.log 2>&1 && { OK=1; GP=ok; break; }; :; done
     fi
-    if [ $OK = 0 ] && [ "$REF" = "$IMAGE_REF" ] && [ "$GL" = ok ]; then
-      GP=fail; N=0
-      while [ $N -lt 3 ]; do N=$((N+1)); timeout 180 docker pull "$REF" > /run/soleur-pull.log 2>&1 && { OK=1; GP=ok; break; }; sleep 5; done
-    fi
-    # Fixed state fields FIRST (_emit caps detail at 200), per-leg wording as inngest's ALL-LEGS.
+    # Fixed fields FIRST (_emit caps detail at 200); redact BEFORE the tail cut.
     if [ $OK = 0 ]; then
-      T=$( { [ $ZL = ok ] || cat /run/soleur-zot-login.log; cat /run/soleur-pull.log; } | sed -E 's/[A-Za-z0-9]{40,}/REDACTED/g' | tail -c 100)
-      printf 'nic=%s:%s zot=[login=%s,n=%s,cause=%s] ghcr=[login=%s,pull=%s] pull_err: %s' "$NIC" "$W" "$ZL" "$ZN" "$C" "$GL" "$GP" "$T" > /run/soleur-stage-detail
+      T=$( { [ $ZL = ok ] || cat /run/soleur-zot-login.log; cat /run/soleur-pull.log; } | sed -E 's#[A-Za-z0-9_+/-]{40,}#REDACTED#g' | tail -c 100)
+      printf 'nic=%s:%s %s ghcr=[login=%s,pull=%s] pull_err: %s' "$NIC" "$W" "$Z" "$GL" "$GP" "$T" > /run/soleur-stage-detail
       exit 1
     fi
-    printf 'zot_login=%s ghcr_login=%s nic=%s:%s' "$ZL" "$GL" "$NIC" "$W" > /run/soleur-stage-detail
+    printf 'zot_login=%s ghcr_login=%s nic=%s:%s %s' "$ZL" "$GL" "$NIC" "$W" "$Z" > /run/soleur-stage-detail
     printf '%s' "$REF" > /run/soleur-image-ref
     # #6462 denominator: REF==IMAGE_REF iff GHCR served. MUST precede the reassign below (it
     # makes the test always-true). Rationale + the image_ref wart: cloud-init-user-data-size.test.ts
@@ -709,7 +728,7 @@ runcmd:
   - |
     set -e
     IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.37@sha256:e773fe5c74e9d49149217554f3d2730c597bf1e3d856933cccfa81199ae490bc
-    # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
+    # #6122/ADR-096: prefer zot (baked endpoint; the seed item's zot login is reused);
     # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
     ZURL='${registry_endpoint}'  # baked (#8651/#6985)
     # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.

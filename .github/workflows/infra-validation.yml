@@ -1055,6 +1055,7 @@ jobs:
       # terraform (render leg — FAILS, never skips, under CI) and fetch-depth: 0 (the census's
       # pinned-commit baseline, git show 3aaaede525). Advisory job: soleur:ship reads it.
       - name: Run web fresh-boot zot-seed guard (#8651 bake + NIC wait + Doppler census)
+        timeout-minutes: 5
         run: bash apps/web-platform/infra/cloud-init-web-zot-seed.test.sh
 
       # LOAD-BEARING registration (explicit, no glob). Behavioural, not grep-only: it renders

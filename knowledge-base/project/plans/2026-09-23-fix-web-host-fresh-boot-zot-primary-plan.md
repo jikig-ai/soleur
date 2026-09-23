@@ -34,7 +34,7 @@ pass (15 negative claims, 10 attributions, 19 issue numbers — no contradiction
    path rewrite, truncation at `STAGE=extract` with a sentinel, counter-bounded NIC wait under
    `timeout 20`, Guard 3 floor replaced by a known-positive injection and a pinned-commit
    baseline of 11 (the old "≥1 below the anchor" could never pass).
-4. **Closure ownership:** a follow-through probe (`web-fresh-boot-zot-8651.sh`) closes #8651 on
+4. **Closure ownership:** a follow-through probe (`web-fresh-boot-zot-8651.sh`) closes issue 8651 on
    observed evidence even if the session ends; Phase 6 now covers reject/dark-again/failed-apply/
    inconclusive branches.
 5. **Architecture record:** C4 has three false statements to fix, not one; ADR-096's
@@ -204,7 +204,7 @@ Not a cost/performance plan — skipped. (Byte cost is measured in Phase 0.1 and
 - `apps/web-platform/infra/sentry/issue-alerts.tf` — `sentry_alert.web_private_nic_boot_gate`
   (stages `private_nic_timeout`, `private_nic_probe_fault`; host-generic).
 - `scripts/followthroughs/zot-soak-6122.sh` — `WEB_BLOCKER=8651` arm requires #8651 CLOSED as
-  COMPLETED ("⚠ Do not delete this arm to make the gate pass, and do not close #8651 to bypass
+  COMPLETED ("⚠ Do not delete this arm to make the gate pass, and do not close issue 8651 to bypass
   it").
 - `apps/web-platform/infra/scripts/host-image-coherence-preflight.sh` — the replace job's
   load-bearing preflight: recomputes the pinned image's `/opt/soleur/host-scripts` hash and
@@ -507,7 +507,7 @@ discovered against a test, not after.
   exit 2 (`TRANSIENT:`) on any read failure. At ship time add the tracker directive
   `<!-- soleur:followthrough script=scripts/followthroughs/web-fresh-boot-zot-8651.sh earliest=<merge date> secrets=SENTRY_ACTIONS_RO_TOKEN -->`
   and the `follow-through` label to #8651 (the secret is already wired in
-  `scheduled-followthrough-sweeper.yml`). The sweeper closes #8651 as completed on PASS — the
+  `scheduled-followthrough-sweeper.yml`). The sweeper closes issue 8651 as completed on PASS — the
   observed-evidence condition the zot soak's `WEB_BLOCKER` arm requires.
 - 3.3 The trail already prints each listed event's `detail`, but only the newest 8 events
   (`| .[0:8][]`), so a healthy boot's early `app_zot` falls off. Add one line, outside the
@@ -591,7 +591,7 @@ discovered against a test, not after.
 - 6.3b **Dark again:** leave #8651 open, comment the fatal detail and run URL, map the failing
   field (`nic=`, `zot=[…cause=…]`) to the Observability failure modes, fix in a new PR, then
   re-dispatch. Never re-dispatch unchanged — runcmd is once-per-instance and the result repeats.
-- 6.4 Only then close #8651 as **completed** with the run URL and the event ids. `web-2` stays
+- 6.4 Only then close issue 8651 as **completed** with the run URL and the event ids. `web-2` stays
   out of service per the operator constraint (nothing in `web_host_replace` touches DNS, the LB
   or the tunnel; the release fan-out still deploys to 10.0.1.11, which routes no traffic).
   Close #6985 alongside it if its acceptance items are all met (see AC).
@@ -690,7 +690,7 @@ prove it.
 ### Sequencing
 
 The amendment describes the code state at merge ("armed in source"); the live-host claim
-("observed zot-served on a replace") is appended when Phase 6 closes #8651 — the same
+("observed zot-served on a replace") is appended when Phase 6 closes issue 8651 — the same
 two-step the 2026-08-13 inngest amendment used.
 
 ## Infrastructure (IaC)

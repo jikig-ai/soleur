@@ -1,81 +1,87 @@
 #!/usr/bin/env bash
-# web-fresh-boot-zot-8651.sh — follow-through probe that owns the close of #8651.
+# web-fresh-boot-zot-8651.sh — follow-through probe that owns the closure of issue 8651.
 #
-# #8651: every fresh web-host boot since the 2026-07-17 zot cutover resolved its seed image to
+# 8651: every fresh web-host boot since the 2026-07-17 zot cutover resolved its seed image to
 # GHCR (the zot selection read Doppler tokenlessly, #6985), and the GHCR read PAT is revoked
 # (AP-016), so every fresh web boot was DARK. The fix bakes the zot endpoint + pull credential
 # into user_data. Merging it changes no host (hcloud_server.web ignore_changes = [user_data]);
-# only a web-host-replace of web-2 realizes it. This probe is the OBSERVED-EVIDENCE close
-# condition the zot soak's WEB_BLOCKER arm (zot-soak-6122.sh) requires: #8651 CLOSED as
-# COMPLETED only once a fresh web boot is SEEN zot-served — never on merge.
+# only a web-host-replace of web-2 realizes it. The zot soak's WEB_BLOCKER arm
+# (zot-soak-6122.sh) accepts the issue only as CLOSED/COMPLETED, so that state must follow an
+# OBSERVED zot-served boot — never the merge.
 #
-# Evidence is read through `fresh-host-boot-trail.sh --image-origin`, so the Sentry filter
-# lives in one place. That mode prints two lines for the host:
-#   image-origin: stage=<app_zot|app_ghcr_served|app_ghcr_fallback|none> ... time=<iso> detail=<…>
-#   seed-fatal:   stage=<stage|none> ... time=<iso> detail=<…>
-#
-# Why no time lower bound: only the fixed template emits BOTH a host_name tag on _emit AND a
-# `zot_login=` detail on app_zot. An app_zot for soleur-web-2 carrying `zot_login=ok` is
-# therefore from the new template by construction; pre-fix events carry no host_name at all
-# (measured: the 3 July app_ghcr_served events have host_name ""), so they cannot match.
+# EVIDENCE = THE DISPATCHED JOB'S OWN LOG, not a Sentry query. The web-platform DSN is public
+# (it ships in the browser bundle), so any Sentry event this probe could read is forgeable; a
+# GitHub Actions job log is not. The probe reads the newest web_host_replace/web_host_create
+# job for web-2 and grades ONLY the output lines of its "Surface fresh-host Sentry breadcrumb
+# trail" step (GitHub also echoes each step's `run:` source into the log; those lines carry an
+# ANSI prefix and are excluded). That step is fresh-host-boot-trail.sh, which prints the image
+# origin (a server-side, host- and run-anchored Sentry read) next to its own boot verdict.
+# Residual, stated: a DSN holder could still race a forged app_zot into the few minutes of a
+# live replace run — the verdict line still requires the real host's fresh_boot_ready and no
+# fatal, and the run itself must exist, be dispatched, and pass its reviewer environment.
 #
 # Exit (sweep-followthroughs.sh contract):
-#   0 PASS            — app_zot with zot_login=ok for soleur-web-2, and no seed fatal NEWER than it
-#   1 FAIL            — a seed fatal for soleur-web-2 is newer than every app_zot (booted dark again)
-#                       or the newest origin is GHCR (app_ghcr_served / app_ghcr_fallback)
-#   2 NOT YET         — no fresh web-2 boot from the fixed template observed yet
-#   3 CANNOT ESTABLISH — token unbound, Sentry unreadable, or an unparseable answer (TRANSIENT:)
-#   78                — refused to run under xtrace (a live credential is in the environment)
+#   0 PASS            — newest web-2 run: fresh_boot_ready + image origin app_zot with zot_login=ok
+#   1 FAIL            — newest web-2 run (fixed trail) booted DARK, timed out, or was GHCR-served
+#   2 NOT YET         — no web-2 run yet, the newest predates the fixed trail, or it is inconclusive
+#   3 CANNOT ESTABLISH — gh/jq missing or a GitHub read failed (TRANSIENT:)
+#   78                — refused to run under xtrace (GH_TOKEN is in the environment)
 set -uo pipefail
 case "$-" in
-  *x*) printf '[FATAL] refusing to run under xtrace: SENTRY_ACTIONS_RO_TOKEN is in the environment (see #7797)\n' >&2; exit 78 ;;
+  *x*) printf '[FATAL] refusing to run under xtrace: GH_TOKEN is in the environment (see #7797)\n' >&2; exit 78 ;;
 esac
 
-HOST="${WEB_ZOT_8651_HOST:-soleur-web-2}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TRAIL="${WEB_ZOT_8651_TRAIL:-$REPO_ROOT/apps/web-platform/infra/scripts/fresh-host-boot-trail.sh}"
+REPO="${WEB_ZOT_8651_REPO:-jikig-ai/soleur}"
+HOST_KEY="web-2"
+HOST_NAME="soleur-web-2"
+WORKFLOW="apply-web-platform-infra.yml"
+STEP="Surface fresh-host Sentry breadcrumb trail"
 
-if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
-  echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is not bound — declare it in the directive's secrets= clause. Cannot establish the image origin." >&2
-  exit 3
-fi
-[[ -f "$TRAIL" ]] || { echo "TRANSIENT: boot-trail reader not found at $TRAIL" >&2; exit 3; }
+for b in gh jq; do
+  command -v "$b" >/dev/null 2>&1 || { echo "TRANSIENT: '$b' is not installed — cannot read the replace job log." >&2; exit 3; }
+done
 
-out=$(bash "$TRAIL" --image-origin "$HOST" 2>&1); rc=$?
-if [[ "$rc" -eq 2 ]] || grep -q '^TRANSIENT:' <<<"$out"; then
-  echo "TRANSIENT: image-origin read failed (rc=$rc): $(head -c 300 <<<"$out")" >&2
-  exit 3
-fi
-origin=$(grep -m1 '^image-origin:' <<<"$out" || true)
-fatal=$(grep -m1 '^seed-fatal:' <<<"$out" || true)
-if [[ -z "$origin" || -z "$fatal" ]]; then
-  echo "TRANSIENT: unparseable image-origin output (rc=$rc): $(head -c 300 <<<"$out")" >&2
-  exit 3
-fi
-field() { sed -nE "s/.* $1=([^ ]*).*/\1/p" <<<"$2" | head -1; }
-o_stage=$(field stage "$origin"); o_time=$(field time "$origin")
-f_stage=$(field stage "$fatal"); f_time=$(field time "$fatal")
-echo "$origin"
-echo "$fatal"
+ids=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --event workflow_dispatch -L 40 \
+  --json databaseId --jq '.[].databaseId' 2>/dev/null) || {
+  echo "TRANSIENT: gh run list failed for $WORKFLOW — declare GH_TOKEN in the directive's secrets= clause." >&2; exit 3; }
 
-# A seed fatal newer than the newest origin event = this host booted dark after (or without) a
-# zot-served boot. ISO-8601 UTC timestamps in one format compare correctly as strings.
-if [[ "$f_stage" != none && ( "$o_stage" == none || "$f_time" > "$o_time" ) ]]; then
-  echo "FAIL: $HOST booted DARK (seed fatal at $f_time is newer than the newest image-origin event). Map the detail's nic=/zot=[…cause=…] fields to the plan's Observability failure modes, fix forward, then re-dispatch web-host-replace — runcmd is once-per-instance, an unchanged re-replace repeats."
-  exit 1
-fi
-case "$o_stage" in
-  none)
-    echo "NOT YET: no fresh $HOST boot from the fixed template observed (dispatch web-host-replace web_host_key=web-2, confirm=REPLACE-web-2)."
-    exit 2 ;;
-  app_zot)
-    if grep -q 'zot_login=ok' <<<"$origin"; then
-      echo "PASS: $HOST booted zot-served (zot_login=ok) at $o_time with no later seed fatal — #8651's observed-evidence close condition holds. GHCR's outcome is recorded in the same detail (ghcr_login=…); it is not asserted, so a restored GHCR credential cannot fail a correct zot boot."
-      exit 0
-    fi
-    echo "FAIL: $HOST app_zot at $o_time lacks zot_login=ok in its detail — not the fixed template's success beacon."
-    exit 1 ;;
-  *)
-    echo "FAIL: the newest image-origin event for $HOST is $o_stage at $o_time — GHCR served the boot, not zot."
-    exit 1 ;;
-esac
+for id in $ids; do
+  [[ "$id" =~ ^[0-9]+$ ]] || { echo "TRANSIENT: unexpected run id '$id'" >&2; exit 3; }
+  jobs=$(gh run view "$id" --repo "$REPO" --json jobs 2>/dev/null) || { echo "TRANSIENT: cannot read jobs of run $id" >&2; exit 3; }
+  jid=$(jq -r '[.jobs[] | select((.name == "web_host_replace" or .name == "web_host_create")
+                 and (.conclusion // "") != "skipped" and (.conclusion // "") != "")][0].databaseId // empty' <<<"$jobs" 2>/dev/null) \
+    || { echo "TRANSIENT: unparseable jobs JSON for run $id" >&2; exit 3; }
+  [[ -n "$jid" ]] || continue
+  log=$(gh run view --repo "$REPO" --job "$jid" --log 2>/dev/null) || { echo "TRANSIENT: cannot read the log of job $jid (run $id)" >&2; exit 3; }
+  # The trail step's own output: field 2 is the step name; drop the timestamp and every
+  # echoed-source line (they begin with an ANSI colour escape).
+  trail=$(awk -F'\t' -v step="$STEP" 'index($2, step) == 1 { sub(/^[^ ]+ /, "", $3); print $3 }' <<<"$log" \
+    | grep -v $'^\e' || true)
+  grep -qE "^web-host-(replace|create) ${HOST_KEY} — fresh-host Sentry pointer" <<<"$trail" || continue
+
+  url="https://github.com/${REPO}/actions/runs/${id}"
+  # The FIXED trail prints an image-origin line (or its named read failure). Its absence means
+  # this run's boot-trail code predates the fix, so it says nothing about the fixed template.
+  origin=$(grep -m1 -F "image-origin (\`${HOST_NAME}\`" <<<"$trail" || true)
+  if [[ -z "$origin" ]] && ! grep -qF "image-origin read FAILED" <<<"$trail"; then
+    echo "NOT YET: the newest ${HOST_KEY} run ($url) predates the fixed boot trail — dispatch web-host-replace web_host_key=web-2, confirm=REPLACE-web-2."
+    exit 2
+  fi
+  if grep -qE "booted DARK|did not reach cloud_init_complete" <<<"$trail"; then
+    echo "FAIL: ${HOST_KEY} booted DARK on $url. Map the fatal detail's nic=/zot=[…cause=…] fields to the plan's Observability failure modes, fix forward, then re-dispatch — runcmd is once-per-instance, an unchanged re-replace repeats."
+    exit 1
+  fi
+  if grep -qE 'stage=app_ghcr_(served|fallback)' <<<"$origin"; then
+    echo "FAIL: ${HOST_KEY} was served by GHCR, not zot, on $url: ${origin}"
+    exit 1
+  fi
+  if grep -qF "fresh-host boot reached fresh_boot_ready" <<<"$trail" \
+     && grep -qF "stage=app_zot" <<<"$origin" && grep -qF "zot_login=ok" <<<"$origin"; then
+    echo "PASS: ${HOST_KEY} booted zot-served and reported fresh_boot_ready on $url — ${origin}. GHCR's outcome is recorded in that detail (ghcr_login=…); it is not asserted, so a restored GHCR credential cannot fail a correct zot boot."
+    exit 0
+  fi
+  echo "NOT YET: the newest ${HOST_KEY} run ($url) is inconclusive (no fresh_boot_ready + app_zot/zot_login=ok pair) — re-run \`fresh-host-boot-trail.sh --image-origin ${HOST_NAME}\` or re-dispatch."
+  exit 2
+done
+echo "NOT YET: no web_host_replace/web_host_create run for ${HOST_KEY} in the last 40 dispatches of $WORKFLOW."
+exit 2

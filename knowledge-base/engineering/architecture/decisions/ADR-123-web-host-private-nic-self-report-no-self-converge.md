@@ -226,13 +226,28 @@ reprovision path — here the SSH `terraform_data` provisioner onto the unrebuil
 - #6538/#6463 — web-2 retirement; the fleet is single-host.
 - #6548 / #6438 §1 — the off-host consumer probes that cover the consumer-perspective residual.
 
-## Cross-reference 2026-09-23 (#8651, #6438)
+## Amendment 2026-09-23 (#8651, #6438): a web host's FRESH BOOT converges a late NIC the way inngest does
 
-- The fresh-boot pre-pull NIC wait added by #8651 (ADR-096 amendment 2026-09-23) follows this
-  ADR's rule: detect and emit (`private_nic_timeout` / `private_nic_probe_fault`, routed by
-  `web_private_nic_boot_gate`), never self-converge or reboot. Unlike `private_nic_ok` /
-  `private_nic_ready`, it emits nothing on the ready outcome, and it deliberately skips the
-  #8539 networkd fallback that the dedicated inngest host uses.
-- **Stale:** "`eth0` + CF-proxied origin + GHCR fallback keep it serving" (Consequences). The
-  GHCR read PAT is revoked (AP-016), so a fresh web boot has no working GHCR fallback. It is
-  zot or dark. The reasoning against reboot still holds for a running origin.
+CTO ruling, recorded here because it narrows Decision §4 ("Do NOT converge"). ADR-096's
+amendment of the same date owns the mechanism. This entry records only the scope.
+
+- **What is added.** `cloud-init.yml` now ships the inngest
+  `99-soleur-private-fallback.network` byte-for-byte (ADR-115 amendment 2026-09-22, #8539). One
+  early `networkctl reload` follows, and then a bounded, fail-open pre-pull wait. A reload failure
+  emits `private_nic_probe_fault` (detail `gate=reload`). The wait emits `private_nic_timeout` or
+  `private_nic_probe_fault` (detail `gate=seed`), routed by `web_private_nic_boot_gate`, and
+  emits nothing on ready.
+- **Why §4 does not forbid it.** §4 exists to stop a self-inflicted power-off of the only
+  serving origin. This primitive reboots nothing and runs once, at instance creation (runcmd is
+  once-per-instance), before that boot has pulled or started the app container, so no origin is
+  serving from the host yet. Nothing re-applies it, and `eth0` is excluded twice, by `Name=!eth0` and by
+  netplan's `10-` file matching first. The live-origin rule is unchanged. A running web host
+  still detects, emits and alarms, and never converges. The same file is **not** delivered to
+  web-1 by the SSH provisioners, because that would be convergence on the live origin.
+- **Stale:** "`eth0` + CF-proxied origin + GHCR fallback keep it serving" (Decision, "Why the
+  reboot is blocked"). The GHCR read PAT is revoked (AP-016), so a fresh web boot has no working
+  GHCR fallback: it is zot or dark. The argument against a reboot still holds for a running
+  origin.
+- **Status: adopting.** This is a mechanism-level argument until a fresh web boot is observed
+  zot-served. That observation is the `web-host-replace` of web-2 graded by
+  `scripts/followthroughs/web-fresh-boot-zot-8651.sh`.

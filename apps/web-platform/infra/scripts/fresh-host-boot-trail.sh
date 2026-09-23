@@ -55,13 +55,10 @@ DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
 # Callers stamp this immediately before `terraform apply`. Unset/0 disables the bound, which
 # preserves the pre-extraction behaviour for any caller that has not been updated.
 BOOT_TRAIL_SINCE="${BOOT_TRAIL_SINCE:-0}"
-if [[ "${1:-}" == "--image-origin" ]]; then
-  :  # query-only mode (below): no poll, so the anchor banner is noise
-elif [[ -n "$BOOT_TRAIL_SINCE" && "$BOOT_TRAIL_SINCE" != "0" ]]; then
-  echo "boot-trail: ignoring events older than epoch ${BOOT_TRAIL_SINCE} (run anchor)"
-else
-  echo "boot-trail: NO run anchor set — a same-named predecessor's terminal event can be read as this host's. Callers should export BOOT_TRAIL_SINCE."
-fi
+# Every jq program below takes it as `--argjson since`; a non-numeric value makes each of them
+# fail and the trail read nothing while looking like "no events". Refuse it by name instead.
+SINCE_OK=1
+[[ "$BOOT_TRAIL_SINCE" =~ ^[0-9]+$ ]] || SINCE_OK=0
 # R3-adjacent, re-decided in #7946: the token is BOUND by the workflow from the repo secret
 # SENTRY_ACTIONS_RO_TOKEN (a `secrets.*` binding is masked by Actions itself, in the log and
 # in the summary file, so no `::add-mask::` here). The silent-dark class R3 was written
@@ -80,25 +77,33 @@ readonly SENTRY_PROJECT="web-platform"
 # uses ignores `message:` — R4 below). Prints "stage=<s> host=<h> time=<iso Z> detail=<d>" for the
 # newest match at/after <since-epoch> ("stage=none …" when there is none); on a non-200, a
 # non-array answer or a FULL page it prints the reason and returns 2 — never a bare miss.
+# One script-owned tempfile, removed by the EXIT trap: origin_query runs inside $(…), so a
+# per-call mktemp there would leak whenever the subshell died between allocation and its rm.
+ORIGIN_TMP=$(mktemp 2>/dev/null) || ORIGIN_TMP=""
+trap '[[ -z "$ORIGIN_TMP" ]] || rm -f "$ORIGIN_TMP"' EXIT
 origin_query() {  # <query> [since-epoch]
-  local enc code tmp
-  tmp=$(mktemp) || return 2
+  local enc code tmp="$ORIGIN_TMP"
+  [[ -n "$tmp" ]] || { echo "mktemp failed"; return 2; }
   enc=$(printf '%s' "$1" | jq -sRr @uri)
   code=$(curl --disable --noproxy '*' -s --max-time 20 -o "$tmp" -w '%{http_code}' \
     -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
-    "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=${enc}&statsPeriod=14d&per_page=100&sort=-timestamp&field=timestamp&field=stage&field=host_name&field=detail" 2>/dev/null || echo 000)
+    "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20${enc}&statsPeriod=14d&per_page=100&sort=-timestamp&field=timestamp&field=stage&field=host_name&field=detail" 2>/dev/null || echo 000)
   if [[ "$code" != "200" ]] || ! jq -e '(.data | type) == "array"' "$tmp" >/dev/null 2>&1; then
-    echo "HTTP ${code} or no data array"; rm -f "$tmp"; return 2
+    echo "HTTP ${code} or no data array"; return 2
   fi
   if [[ "$(jq '.data | length' "$tmp")" -ge 100 ]]; then
-    echo "full page (100/100) — truncated, the newest match may be missing"; rm -f "$tmp"; return 2
+    echo "full page (100/100) — truncated, the newest match may be missing"; return 2
   fi
-  jq -r --argjson since "${2:-0}" '
+  # The projection's own failure is TRANSIENT too: a jq error (a non-string timestamp, a
+  # non-numeric since) printed nothing and returned rm's 0 — read downstream as an empty verdict.
+  local out rc=0
+  out=$(jq -r --argjson since "${2:-0}" '
     [ .data[] | ((.timestamp // "") | sub("\\+00:00$"; "Z") | sub("\\.[0-9]+Z$"; "Z")) as $t
       | select($since <= 0 or (($t | fromdateiso8601?) // 0) >= $since) | . + {t: $t} ][0]
     | if . == null then "stage=none host=- time=- detail=-"
-      else "stage=\(.stage // "?") host=\(.host_name // "?") time=\(.t) detail=\(.detail // "")" end' "$tmp"
-  rm -f "$tmp"
+      else "stage=\(.stage // "?") host=\(.host_name // "?") time=\(.t) detail=\(.detail // "")" end' "$tmp" 2>/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 || "$out" != stage=* ]]; then echo "event projection failed (jq rc=${rc})"; return 2; fi
+  printf '%s\n' "$out"
 }
 readonly ORIGIN_Q_STAGES='stage:[app_zot,app_ghcr_served,app_ghcr_fallback]'
 # `--image-origin <host_name>`: query-only mode (no summary file, no poll) — the discoverability
@@ -109,6 +114,7 @@ readonly ORIGIN_Q_STAGES='stage:[app_zot,app_ghcr_served,app_ghcr_fallback]'
 if [[ "${1:-}" == "--image-origin" ]]; then
   IO_HOST="${2:-}"
   if [[ ! "$IO_HOST" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then echo "TRANSIENT: --image-origin needs a host_name ([a-z0-9-]), got '${IO_HOST}'"; exit 2; fi
+  if [[ "$SINCE_OK" != 1 ]]; then echo "TRANSIENT: BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not an epoch"; exit 2; fi
   if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is not bound — the image origin was NOT read (this is not 'nothing found')"; exit 2; fi
   IO=$(origin_query "host_name:${IO_HOST} ${ORIGIN_Q_STAGES}" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: image-origin read failed: ${IO}"; exit 2; }
   SF=$(origin_query "host_name:${IO_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: seed-fatal read failed: ${SF}"; exit 2; }
@@ -116,6 +122,14 @@ if [[ "${1:-}" == "--image-origin" ]]; then
   echo "seed-fatal: ${SF}"
   [[ "$IO" == stage=none* ]] && exit 1
   exit 0
+fi
+if [[ "$SINCE_OK" != 1 ]]; then
+  echo "::error::BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not an epoch — the boot-trail read did NOT run (this is NOT a 'host emitted nothing' result)."
+  exit 0
+elif [[ "$BOOT_TRAIL_SINCE" != "0" ]]; then
+  echo "boot-trail: ignoring events older than epoch ${BOOT_TRAIL_SINCE} (run anchor)"
+else
+  echo "boot-trail: NO run anchor set — a same-named predecessor's terminal event can be read as this host's. Callers should export BOOT_TRAIL_SINCE."
 fi
 # Echo to the LOG as well as the summary so
 # `gh run view <id> --log | grep 'fresh-host Sentry pointer'` works.
@@ -329,7 +343,9 @@ while :; do
     fi
     if (( SECONDS - CC_SEEN >= CC_GRACE )); then TERMINAL="complete_no_readiness"; break; fi
   fi
-  if (( SECONDS >= DEADLINE )); then TERMINAL="timeout"; break; fi
+  # (#8651) Not while inside the cloud_init_complete grace: a host that reached the marker just
+  # before the deadline finished cloud-init, and calling it DARK is false. CC_GRACE bounds this.
+  if (( SECONDS >= DEADLINE )) && [[ -z "$CC_SEEN" ]]; then TERMINAL="timeout"; break; fi
   sleep 30
 done
 {
@@ -409,6 +425,12 @@ case "$TERMINAL" in
     fi
     echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within 960s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 900). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
     echo "_**No terminal boot event inside the host's own boot window.** Host \`${LAST_HOST:-unknown}\`, last-reached stage \`${LAST_STAGE:-none observed}\`. Treated as dark._" | tee -a "$GITHUB_STEP_SUMMARY"
+    # (#8651) A slow seed pull can fail AFTER this poll ends; the fatal still reaches Sentry.
+    # Read it once more (server-side, 14 d) so the cause is not lost, and name the re-read.
+    if SFL=$(origin_query "host_name:${EXPECT_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") && [[ "$SFL" != stage=none* ]]; then
+      echo "::error::${WEB_HOST_KEY} late seed fatal (after the poll): ${SFL}"
+    fi
+    echo "_Re-read later without SSH: \`bash apps/web-platform/infra/scripts/fresh-host-boot-trail.sh --image-origin ${EXPECT_HOST}\` (SENTRY_ACTIONS_RO_TOKEN)._" | tee -a "$GITHUB_STEP_SUMMARY"
     if [[ -n "$LAST_DETAIL" ]]; then
       echo "_Last detail: \`${LAST_DETAIL}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
     fi

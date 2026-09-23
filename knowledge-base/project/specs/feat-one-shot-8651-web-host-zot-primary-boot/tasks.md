@@ -47,10 +47,17 @@ Plan: `knowledge-base/project/plans/2026-09-23-fix-web-host-fresh-boot-zot-prima
 - 2.8: the 12-event out-of-slice fixture and the `--image-origin` TRANSIENT rows live in `cloud-init-web-zot-seed.test.sh` (Guard 4 section, stubbed curl); AC8's static lockstep lives in the observability suite.
 - 2.9: exit codes follow `sweep-followthroughs.sh` (0 PASS, 1 FAIL = dark again / GHCR-served, 2 NOT YET, 3 CANNOT ESTABLISH = `TRANSIENT:`), not the plan's 0/1/2 — the plan's "1 = not yet" would post a FAIL comment on every sweep. No time lower bound is needed: only the fixed template emits a host-tagged `app_zot` with a `zot_login=` detail.
 - Parity (1.2.5): `login=` is not in `cloud-init-inngest.yml`'s code, so the shared-wording assertion is over `zot=[`, `ghcr=[`, `not-attempted`.
+- Review round (11-agent panel on 42b592873c), recorded deviations:
+  - 2.9 superseded: the closure probe grades the dispatched `web_host_replace`/`web_host_create` job's own GitHub log (the trail step's output lines only), not a Sentry query. The web-platform DSN is public, so a Sentry event alone is forgeable. It needs `secrets=GH_TOKEN`.
+  - #6438 (CTO ruling): the web host now ships the inngest `99-soleur-private-fallback.network` byte-for-byte, plus an early `networkctl reload`. A reload failure REUSES `private_nic_probe_fault` (detail `gate=reload`) rather than the proposed new `private_nic_reload_failed` stage, so the merge changes no Sentry alert (a new stage would need an alert-rule apply). Scope: ADR-123 amendment 2026-09-23.
+  - The zot pull runs only after a successful zot login, and a timed-out attempt stops the retries. Only `ghcr.io/*@sha256:*` refs are rewritten to zot. The `zot=[…]` cause rides the fallback and success details too.
+  - Soak narrowing, not fixed here (operator constraint on `zot-soak-6122.sh`): see `decision-challenges.md`.
+  - Parity tokens unchanged (`zot=[`, `ghcr=[`, `not-attempted`).
+  - Size after the review round (networkd file + reload item): local render 24,204 B / budget 24,740 B (~536 B headroom; CI reads ~32 B higher).
 
 ## Phase 4: Delivery (post-merge)
 
 - [ ] 4.0 At ship: add the follow-through directive + `follow-through` label to #8651.
 - [ ] 4.1 Dispatch `web-host-replace` of web-2 (`confirm=REPLACE-web-2`, no `image_tag` override), arm a watch, route the environment approval; on a failed apply follow the job's printed recovery.
 - [ ] 4.2 Read the boot trail: image-origin `app_zot` with `zot_login=ok` (record `ghcr_login`, `nic`), verdict `fresh_boot_ready`, no seed fatal, no `app_ghcr_*`; inconclusive → re-run `--image-origin`; dark → new PR, never an unchanged re-dispatch.
-- [ ] 4.3 Close #8651 as completed with run URL + event ids (or let the sweeper close it); close or comment #6985; `Ref` comments on #6500, #6122, #6438. web-2 stays out of service.
+- [ ] 4.3 Close issue 8651 as completed with run URL + event ids (or let the sweeper close it); close or comment #6985; `Ref` comments on #6500, #6122, #6438. web-2 stays out of service.

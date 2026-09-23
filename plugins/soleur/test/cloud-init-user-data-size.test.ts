@@ -1324,7 +1324,9 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
     // fail-closed exit that consumes its outcome, not just the absence of `|| true`.
     expect(block).toMatch(/timeout 180 docker pull "\$REF"/);
     expect(block).not.toMatch(/docker pull[^\n]*\|\|\s*true/);
-    expect(block).toMatch(/if \[ \$OK = 0 \]; then\n[^\n]*\n[^\n]*\n\s*exit 1\n/);
+    // …and the arm exits ONLY after writing the per-leg fatal detail (a bare `exit 0`/`trap - EXIT`
+    // substitution would stop runcmd silently: no fatal, no app).
+    expect(block).toMatch(/if \[ \$OK = 0 \]; then\n[^\n]*\n\s*printf 'nic=%s:%s %s ghcr=\[login=%s,pull=%s\] pull_err: %s'[^\n]*> \/run\/soleur-stage-detail\n\s*exit 1\n/);
   });
   test("combined content-hash is verified before the baked installer runs (AC5)", () => {
     // Anchor on the actual hash-COMPARE line and the actual RUN line (both mention the

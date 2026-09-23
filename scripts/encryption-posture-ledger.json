@@ -444,14 +444,14 @@
     },
     {
       "connection": "web hosts -> zot registry (10.0.1.30:5000)",
-      "enforced_at": "apps/web-platform/infra/zot-registry.tf / model.c4:268",
+      "enforced_at": "apps/web-platform/infra/zot-registry.tf / model.c4 (edge: hetzner -> zotRegistry \"Pulls app image\")",
       "in_transit": {
         "tls": "none (plain HTTP on the private network by design)",
         "cert_verification": "off",
-        "does_not_defend": "a passive on-net attacker could read pulled image bytes AND the zot pull credential (HTTP Basic on every login/pull; read-only per cloud-init-registry.yml accessControl actions [read]; the same random_password.zot_pull the inngest host bakes, and since #8651 also baked into every fresh web host's user_data); integrity (not confidentiality) is provided by cosign digest-pinning, which is why a fresh web boot sends ONLY @sha256-pinned refs to zot",
+        "does_not_defend": "a passive on-net attacker could read pulled image bytes AND the zot pull credential (HTTP Basic on every login/pull; read-only per cloud-init-registry.yml accessControl actions [read]; the same random_password.zot_pull the inngest host bakes, and since #8651 also baked into every fresh web host's user_data); integrity (not confidentiality) comes from the @sha256 digest pin (docker verifies content against it) on every pull, plus the cosign signature check on the deploy path only; a fresh web boot runs no signature check, which is why it sends ONLY @sha256-pinned refs to zot",
         "disclosed_as": "not-publicly-claimed",
         "exception": {
-          "justification": "private-network-only registry link; integrity comes from cosign digest-pinning, not TLS; image bytes are public OCI layers",
+          "justification": "private-network-only registry link; integrity comes from @sha256 digest pinning (plus cosign verification on the deploy path), not TLS; the image bytes are NOT public (the GHCR package is private), so confidentiality on this link rests on the private network alone",
           "tracking_issue": "#6897",
           "reevaluate_when": "the registry is exposed beyond the private network, or TLS is added to the link",
           "expires_on": "2026-10-22"

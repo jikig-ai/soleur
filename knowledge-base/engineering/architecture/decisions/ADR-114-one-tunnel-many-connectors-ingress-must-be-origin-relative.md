@@ -541,7 +541,9 @@ lost is normative and stated above: **do not repoint the 12 `connection { host }
 
 The first-boot NIC gate in item 2 (`soleur-wait-nic` before `cloudflared service install`) is no
 longer the first private-network wait on a fresh web host. The seed image pull now logs in to
-and pulls from zot over the private network, so an inline, bounded, fail-open wait (75 × 2 s)
-runs before it on **every** web host, not only the connector. On web-1 it can therefore emit
-before `soleur-wait-nic`'s own event. The design is in ADR-096's 2026-09-23 amendment; this
+and pulls from zot over the private network. A networkd fallback file and one early
+`networkctl reload` (the inngest #8539 primitive, scoped in ADR-123's amendment of this date) and
+an inline, bounded, fail-open wait (75 × 2 s) therefore run before it on **every** freshly booted
+web host, not only the connector. On a fresh connector host the wait can emit before
+`soleur-wait-nic`'s own event. The design is in ADR-096's 2026-09-23 amendment; this
 item's registration-timing reasoning is unchanged.

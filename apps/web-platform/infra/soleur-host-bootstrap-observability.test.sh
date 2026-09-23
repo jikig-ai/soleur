@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# (#7024 class) a pipe into `grep -q` SIGPIPEs its producer on an early match, and pipefail
+# turns that into FALSE; _qgrep reads all of its input and discards it instead.
+_qgrep() { grep "$@" >/dev/null; }
 
 # Observability probe guard for the web-2 fresh-boot blind spot (#6090).
 #
@@ -64,7 +67,7 @@ line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; } || tr
 # Every assertion that greps $JOB inherits its correctness from this one. Measured,
 # not assumed: the block must be non-empty, must open on our own header, and must
 # carry no two-space `#` — the marker of another job's preamble leaking in.
-if [[ -n "$JOB" ]] && head -1 <<<"$JOB" | grep -qE '^  web_host_create:' \
+if [[ -n "$JOB" ]] && head -1 <<<"$JOB" | _qgrep -E '^  web_host_create:' \
    && ! grep -qE '^  #' <<<"$JOB"; then
   ok "AC0: web_host_create block is job-scoped (opens on its header, no foreign preamble)"
 else
@@ -142,13 +145,13 @@ fi
 # ── AC5 (fail-open — structural enclosure, NOT per-line || true) ──
 # The emit boundary is centralized in _sentry_emit; assert it is enclosed in a
 # ( set +e … ) || true subshell so no emit can trip set -e and brick the boot.
-if awk '/_sentry_emit\(\)/{f=1} f&&/\( set \+e/{s=1} f&&s&&/\) \|\| true/{print "found"; exit}' "$BOOT" | grep -q found; then
+if awk '/_sentry_emit\(\)/{f=1} f&&/\( set \+e/{s=1} f&&s&&/\) \|\| true/{print "found"; exit}' "$BOOT" | _qgrep found; then
   ok "AC5: _sentry_emit body is enclosed in ( set +e … ) || true (fail-open)"
 else
   no "AC5: _sentry_emit must wrap its DSN-resolve+POST in ( set +e … ) || true"
 fi
 # emit_fail disarms the EXIT trap before emitting (so a slow curl cannot re-enter).
-if awk '/^emit_fail\(\)/{f=1} f&&/trap - EXIT/{print "found"; exit}' "$BOOT" | grep -q found; then
+if awk '/^emit_fail\(\)/{f=1} f&&/trap - EXIT/{print "found"; exit}' "$BOOT" | _qgrep found; then
   ok "AC5: emit_fail runs trap - EXIT before emitting"
 else
   no "AC5: emit_fail must call trap - EXIT first"
@@ -293,7 +296,7 @@ else
     "soleur-host-bootstrap complete" \
     "soleur-cloud-init boot stage" \
     "app image served"; do
-    if printf '%s' "$QUERY" | grep -qF -- "$msg"; then
+    if printf '%s' "$QUERY" | _qgrep -F -- "$msg"; then
       ok "AC8: QUERY includes message \"$msg\""
     else
       no "AC8: the boot-trail reader's QUERY is missing message \"$msg\" (lockstep drift re-opens the blind spot)"
@@ -318,10 +321,15 @@ else
   # rename. Pin that the QUERY literal IS a prefix of it (so MSG_RE still matches the beacon),
   # and that no QUERY literal carries a regex metacharacter — MSG_RE is built from them, and the
   # fallback message's `(zot miss)` would turn into a regex group.
-  case "app image served by zot" in "app image served"*) ok "AC8: QUERY literal 'app image served' is a prefix of the app_zot message (MSG_RE matches the beacon)" ;;
-    *) no "AC8: QUERY literal must be a prefix of 'app image served by zot'" ;; esac
+  # Both operands are READ, not restated: the QUERY literal from the trail, the beacon message
+  # from the _emit call site — two constants compared to each other can never fail.
+  q_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"app image served[^"]*"' | sed -E 's/message:"([^"]+)"/\1/' | head -1) || q_lit=""
+  z_msg=$(grep -vE '^[[:space:]]*#' "$CI" | grep -oE '_emit "app image served by zot" "app_zot"' | sed -E 's/_emit "([^"]+)".*/\1/' | head -1) || z_msg=""
+  if [ -n "$q_lit" ] && [ -n "$z_msg" ] && case "$z_msg" in "$q_lit"*) true ;; *) false ;; esac; then
+    ok "AC8: the QUERY literal '$q_lit' is a prefix of the emitted app_zot message '$z_msg' (MSG_RE matches the beacon)"
+  else no "AC8: QUERY literal '${q_lit:-<none>}' must be a prefix of the emitted app_zot message '${z_msg:-<none>}'"; fi
   meta=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"([^"]+)"/\1/' | grep -E '[][(){}.*+?^$|\\]' || true)
-  n_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | wc -l | tr -d ' ')
+  n_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | wc -l | tr -d ' ') || n_lit=0
   if [ -z "$meta" ] && [ "$n_lit" -ge 5 ]; then ok "AC8: no QUERY message literal carries a regex metacharacter ($n_lit literals)"
   else no "AC8: QUERY literal(s) with regex metacharacters would corrupt MSG_RE: ${meta:-<none>} (literals=$n_lit)"; fi
 fi
@@ -609,7 +617,7 @@ fi
 # Without a trailing `trap - EXIT`, the inngest composite trap stays armed through the
 # trap-less terminal block and mislabels a doppler_download/docker_run failure as
 # stage=inngest_bootstrap — defeating the "name the exact stage" deliverable.
-if awk '/soleur-boot-emit inngest_bootstrap fatal/{f=1} f&&/trap - EXIT/{print "y"; exit}' "$CI" | grep -q y; then
+if awk '/soleur-boot-emit inngest_bootstrap fatal/{f=1} f&&/trap - EXIT/{print "y"; exit}' "$CI" | _qgrep y; then
   ok "AC10: inngest composite trap is disarmed (trap - EXIT) before the terminal block"
 else
   no "AC10: inngest block must 'trap - EXIT' after its composite trap (else terminal failures mislabel)"
@@ -618,7 +626,7 @@ fi
 # ── AC11 (webhook checksum fail-closed independent of the H3 set +e) ──
 # The signed-release binary's sha256sum must abort on mismatch even though H3 restored
 # set +e for the region (a mismatch must not install an unverified binary).
-if awk '/sha256sum -c -/{if (/webhook_checksum|exit 1/) {print "y"; exit}}' "$CI" | grep -q y; then
+if awk '/sha256sum -c -/{if (/webhook_checksum|exit 1/) {print "y"; exit}}' "$CI" | _qgrep y; then
   ok "AC11: webhook checksum is fail-closed (|| exit 1) independent of the H3 set +e"
 else
   no "AC11: webhook 'sha256sum -c -' must be '|| { … fatal; exit 1; }' (H3 set +e un-gates it otherwise)"
@@ -759,7 +767,7 @@ fi
 # (2) RETIRED by #8651, asserted ABSENT: the empty-bake doppler fallback loops ran above the
 # terminal `set -a` source with a bare `.` (DOPPLER_TOKEN assigned, never exported — #6985), so
 # they were tokenless since birth and could only ever have fetched the revoked PAT. Baked only.
-if grep -vE '^[[:space:]]*#' "$CI" | grep -qE 'until GHCR_(USER|TOKEN)=\$\(timeout [0-9]+ doppler'; then
+if grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E 'until GHCR_(USER|TOKEN)=\$\(timeout [0-9]+ doppler'; then
   no "AC19: the dead doppler GHCR_READ_* fallback loop is back (tokenless by construction, #6985/#8651)"
 else
   ok "AC19: no doppler GHCR_READ_* fallback loop (baked creds only, #8651)"
@@ -813,7 +821,7 @@ else
   no "AC20: cloud-init must bake /etc/default/soleur-ghcr-read with the interpolated GHCR read-creds"
 fi
 # (2) the baked file is protected like webhook-deploy (deploy:deploy 0600)
-if grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CD" 2>/dev/null || grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CI"; then
+if grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CD" 2>/dev/null || _qgrep -E 'chmod 600 /etc/default/soleur-ghcr-read' "$CI"; then
   ok "AC20: baked GHCR cred file is chmod 600 (deploy-only)"
 else
   no "AC20: /etc/default/soleur-ghcr-read must be chmod 600"
@@ -824,7 +832,7 @@ fi
 # explaining the #6090 bake's history — prose satisfying (here, falsifying) a bare-token anchor,
 # which is the same `cq-assert-anchor-not-bare-token` class clause (4) below documents at length.
 # The property is about what the script READS, so only executable lines can bear on it.
-if ! grep -vE '^[[:space:]]*#' "$CD" | grep -qF '/etc/default/soleur-ghcr-read'; then
+if ! grep -vE '^[[:space:]]*#' "$CD" | _qgrep -F '/etc/default/soleur-ghcr-read'; then
   ok "AC20: ci-deploy reads no baked GHCR credential — the host-side read path is retired (#8036 1c)"
 else
   no "AC20: ci-deploy must NOT reference /etc/default/soleur-ghcr-read since #8036 1c; the deploy path reads no GHCR credential"
@@ -961,7 +969,7 @@ fi
 # (4) web-host unit carries EnvironmentFile=/etc/default/webhook-deploy (the DOPPLER_TOKEN source
 #     — spec-flow P0; NOT the inngest-only /etc/default/inngest-server), and NO After=inngest
 if grep -qE 'EnvironmentFile=/etc/default/webhook-deploy' "$BOOT" \
-   && ! awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" | grep -qF 'After=network-online.target inngest-server.service'; then
+   && ! awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" | _qgrep -F 'After=network-online.target inngest-server.service'; then
   ok "AC22: web-host vector.service uses EnvironmentFile=/etc/default/webhook-deploy (no inngest coupling)"
 else
   no "AC22: web vector.service must carry EnvironmentFile=/etc/default/webhook-deploy (DOPPLER_TOKEN source) + no After=inngest-server.service"
@@ -970,9 +978,9 @@ fi
 #      host doppler is tarball-installed to /usr/local/bin (cloud-init), so a hardcoded /usr/bin
 #      path is a 203/EXEC crash-loop → Vector never runs → silent absent source (code-quality P1).
 #      Mirrors every sibling web-host unit (cron-egress-firewall.service etc.).
-if awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'ExecStart=/bin/sh -c ' \
-   && awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'command -v doppler' \
-   && ! awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qE '^ExecStart=/usr/bin/doppler'; then
+if awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | _qgrep -F 'ExecStart=/bin/sh -c ' \
+   && awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | _qgrep -F 'command -v doppler' \
+   && ! awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | _qgrep -E '^ExecStart=/usr/bin/doppler'; then
   ok "AC22: web vector.service ExecStart resolves doppler via 'command -v' (no hardcoded /usr/bin/doppler crash-loop)"
 else
   no "AC22: web vector.service ExecStart must resolve doppler via 'command -v' (web host has doppler at /usr/local/bin, NOT /usr/bin)"
@@ -980,7 +988,7 @@ fi
 # (4c) the helper skips when an inngest-OWNED vector.service already exists (deprecated
 #      web_colocate_inngest=true host) — mutual exclusion enforced at runtime, not by runcmd order.
 if awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" \
-   | grep -qE "grep -q '/etc/default/inngest-server' \"\\\$UNIT\""; then
+   | _qgrep -E "grep -q '/etc/default/inngest-server' \"\\\$UNIT\""; then
   ok "AC22: helper skips install when an inngest-owned vector.service is present (no clobber on colocate hosts)"
 else
   no "AC22: soleur-vector-install must skip when /etc/systemd/system/vector.service is inngest-owned (colocate mutual-exclusion)"
