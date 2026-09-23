@@ -1,6 +1,6 @@
 # Tasks: migration-immutability guard — fail PRs that mutate on-main supabase/migrations files (#8583)
 
-Source plan: `knowledge-base/project/plans/2026-09-22-feat-migration-immutability-guard-plan.md`
+Source plan: `knowledge-base/project/plans/archive/20260923-095513-2026-09-22-feat-migration-immutability-guard-plan.md`
 
 ## Phase 1: Guard script + companion suite
 

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-22-feat-migration-immutability-guard-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260923-095513-2026-09-22-feat-migration-immutability-guard-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch; new file — no prior plan for this branch)
 - Issue: #8583 (OPEN, `meta/machinery`); draft PR #8597; base `origin/main` = `d1fe38939d`.
