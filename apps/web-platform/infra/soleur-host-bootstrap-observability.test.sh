@@ -340,12 +340,22 @@ fi
 # job's boot-trail step left every suite green. On a replace that is strictly worse than on a
 # birth — the original host is already destroyed, so "the apply succeeded" and "the probe
 # never ran" render identically, with nothing to fall back to.
+# ONE OPTIONAL CONJUNCT, exhaustively spelled (#8209): `&& inputs.plan_only != true`. A
+# plan_only dispatch is operator step O4b's REHEARSAL -- it stops before the apply, so there
+# is no fresh host and no boot trail to surface; running the reader there would query Sentry
+# for a host that was never created and report its silence as a finding.
+#
+# Spelled as a literal alternative rather than loosened to "contains always()", because the
+# thing this assertion exists to catch is a condition that SUBTRACTS the failure case --
+# `always() && steps.apply.outcome == 'success'` contains `always()` and reintroduces exactly
+# the defect (a host that applied clean but booted dark reads as a success). Any other
+# conjunct, including a second copy of this one, still reds.
 for prov_job in web_host_create web_host_replace; do
   PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
-  if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*$/{print "y"; exit}' <<<"$PROV")" ]]; then
-    ok "AC8b: ${prov_job} fresh-host Sentry surface runs if: always()"
+  if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*(&&[[:space:]]*inputs\.plan_only[[:space:]]*!=[[:space:]]*true[[:space:]]*)?$/{print "y"; exit}' <<<"$PROV")" ]]; then
+    ok "AC8b: ${prov_job} fresh-host Sentry surface runs if: always() (optionally minus a plan_only rehearsal)"
   else
-    no "AC8b: ${prov_job} Sentry surface step must be if: always() (spec-flow F4)"
+    no "AC8b: ${prov_job} Sentry surface step must be if: always(), or always() && inputs.plan_only != true (spec-flow F4)"
   fi
 done
 
