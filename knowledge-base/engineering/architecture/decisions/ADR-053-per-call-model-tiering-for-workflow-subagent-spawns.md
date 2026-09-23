@@ -89,6 +89,9 @@ funding and different protections, and found a sixth the first draft had no row 
 | 5b. Product runtime — **operator-key crons** | `AUDIT_MODEL = claude-opus-5` (`server/inngest/model-tiers.ts`), consumed by 53 `cron-*.ts` functions | **none** | These do **not** run on founder BYOK — `cron-agent-native-audit.ts` states "Operator ANTHROPIC_API_KEY only; never founder BYOK", enforced by `test/server/cron-no-byok-lease-sweep.test.ts`. So the 260¢ ceiling does **not** protect them; they spend Soleur's own uncapped money. Ruled out instead by ADR-053's never-downgrade list (enumeration-scoring is the sonnet→opus upgrade precedent) — Opus is already the deliberate tier, and Fable's 5× output multiple on report-shaped crons lands at 1.6–1.75× Opus with no judgment gain. |
 | 6. CI / GitHub Actions | `claude-code-review.yml` pins `--model claude-sonnet-5` and fires **per PR**; `fix-constraints-stage-a.yml` and `test-pretooluse-hooks.yml` pin the same; 13 `scheduled-*.yml` crons default to `claude-sonnet-5` via `schedule/SKILL.md` | **none** | `claude-code-review.yml`'s own comment cites ADR-053 and calls itself "an unbounded per-PR spend surface" — it is a supplementary advisory commenter, exactly the mechanical/advisory class this ADR pins DOWN. Upgrading it would multiply an already-unbounded surface by the PR rate. |
 
+> **Superseded 2026-09-23 (#8611 review):** row 5b's `AUDIT_MODEL = claude-opus-5` is stale —
+> `AUDIT_MODEL` is `claude-opus-5-5` since #8601 (same tier, cheaper on every price axis).
+
 ### A Task spawn is cache-read-dominated — measured, after a first draft asserted the opposite
 
 The first draft of this section claimed the consult gates are "cold single-shot spawns with no

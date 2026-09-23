@@ -24,9 +24,8 @@ import { TIER2_DEFERRED_CRONS } from "@/server/inngest/functions/_cron-shared";
 //      cron-bash-allowlist PreToolUse hook + reads CRON_BASH_ALLOWLISTS). Such a
 //      cron MUST be declared in exactly one of CRON_BASH_ALLOWLISTS (Tier-1,
 //      finite gh/git verbs) or TIER2_DEFERRED_CRONS (Tier-2, firewall-deferred).
-//      Detection is by CALL SITE, not import: cron-daily-triage imports helpers
-//      (resolveClaudeBin, KILL_ESCALATION_MS) from the substrate yet spawns
-//      claude on its own path — it is NOT substrate-contained.
+//      Detection is by CALL SITE, not import: a cron that imports substrate
+//      helpers yet spawns claude on its own path is NOT substrate-contained.
 //
 //   2. direct-spawn — a real `spawn(` call (claude with its own flags, or
 //      git/bash) that does NOT route through the contained wrapper. Contained by
@@ -44,9 +43,9 @@ import { TIER2_DEFERRED_CRONS } from "@/server/inngest/functions/_cron-shared";
 const FUNCTIONS_DIR = resolve(__dirname, "../../../server/inngest/functions");
 
 // Grandfather set: every cron that direct-spawns today (comments stripped,
-// 2026-06-12 live enumeration — NOT the plan's stale 6; cron-daily-triage and
-// cron-follow-through-monitor spawn claude directly while importing substrate
-// HELPERS, so an import-exclusion enumeration wrongly drops them). A NEW
+// 2026-06-12 live enumeration). cron-daily-triage and cron-follow-through-monitor
+// left this set in #8611 — they now call spawnClaudeEval and carry
+// CRON_BASH_ALLOWLISTS rows mirroring their --allowedTools. A NEW
 // direct-spawn cron absent from this set FAILS the gate — add it here with a
 // one-line containment justification, or move it to an ephemeral GitHub Actions
 // runner per the #5073 pattern. `cron-content-publisher` stays here (NOT
@@ -55,8 +54,6 @@ const KNOWN_DIRECT_SPAWN_CRONS: ReadonlySet<string> = new Set([
   "cron-compound-promote", // spawns git/bash for promote-to-learning commits
   "cron-content-publisher", // 12 social secrets; firewall-contained — #5073 re-homes to GHA
   "cron-content-vendor-drift", // spawns to diff vendor docs
-  "cron-daily-triage", // spawns claude directly (own CLAUDE_CODE_FLAGS), not via wrapper
-  "cron-follow-through-monitor", // spawns claude directly, not via wrapper
   "cron-github-cidr-refresh", // spawns git clone + the /meta CIDR generator; firewall-contained (it maintains that very allowlist, #5284)
   "cron-rule-prune", // spawns git/bash for rule-file pruning
   "cron-strategy-review", // spawns for strategy doc review
@@ -349,7 +346,7 @@ describe("cron containment classification gate (#5072)", () => {
       readFileSync(resolve(FUNCTIONS_DIR, `${name}.ts`), "utf8");
     expect(classify(read("cron-roadmap-review"))).toBe("substrate-contained");
     expect(classify(read("cron-bug-fixer"))).toBe("substrate-contained");
-    expect(classify(read("cron-daily-triage"))).toBe("direct-spawn");
+    expect(classify(read("cron-daily-triage"))).toBe("substrate-contained"); // #8611 migration
     expect(classify(read("cron-content-publisher"))).toBe("direct-spawn");
     // cron-workspace-gc mentions the substrate only in a comment → pure-TS.
     expect(classify(read("cron-workspace-gc"))).toBe("pure-TS");

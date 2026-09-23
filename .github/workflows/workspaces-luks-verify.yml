@@ -77,9 +77,10 @@
 # ANTI-CIRCULARITY COROLLARY (the reason this is a native `schedule:` and not an Inngest dispatch).
 # Note the SCHEDULER is not the issue: since the #6178 cutover (ADR-100, which supersedes the
 # #5450 same-host durable-backend framing) the Inngest SCHEDULER runs on its
-# own host (hcloud_server.inngest, 10.0.1.40). EXECUTION is. Inngest reaches the functions over a
-# single stable callback --sdk-url http://10.0.1.10:3000/api/inngest (inngest-host.tf), i.e. the
-# app on WEB-1 — the very host whose volume this workflow verifies — with no failover to web-2
+# own host (hcloud_server.inngest, 10.0.1.40). EXECUTION is. Inngest calls step requests at the
+# registered serve URL https://app.soleur.ai/api/inngest (Cloudflare → the `app` A record, web-1 only;
+# the --sdk-url http://10.0.1.10:3000/api/inngest in inngest-host.tf is the registration poll —
+# #8611/ADR-243), i.e. the app on WEB-1 — the very host whose volume this workflow verifies — with no failover to web-2
 # (serving-weight 0, ADR-143 D2). So a cron-*.ts that dispatched this verifier would itself execute
 # on the subject: if web-1 is gone the callback never lands, the function never runs, no dispatch is
 # issued, and the check reports SILENCE — read as health — in exactly the failure it exists to
