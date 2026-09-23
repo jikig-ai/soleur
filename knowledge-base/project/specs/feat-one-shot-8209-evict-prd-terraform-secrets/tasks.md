@@ -33,6 +33,9 @@ Constraints:
   inventory. Classify every job: workflow::job, triggers, current environment, credentials, read
   or write, tier after. Include every writer of `soleur-terraform-state` (the sentry apply;
   verify `cla-evidence` and `telegram-bridge`).
+- [ ] 1.2b Census rows 8 and 9 (U5, AC2b): a Tier-B job with no `environment:` is RED, and a
+  Tier-B job whose `environment:` is outside `tier_b_environments` is RED. Row 8 must red against
+  `git_data_host_replace` as it exists today plus a loader step, not only a synthetic job.
 - [ ] 1.3 Write the loader test `.github/actions/infra-credentials/infra-credentials.test.sh`: the
   six rows plus the `--preserve-env` sentinel row, all RED before implementation.
 
@@ -55,6 +58,12 @@ Constraints:
   - `doppler_service_token.write`;
   - `github_actions_secret.doppler_token_git_data_root`;
   - `doppler_service_token.git_data_root_read`.
+- [ ] 2.5b **Guard 4 (U1).** Copy every `removed` address from `terraform state list` rather than
+  typing it. Write the guard asserting: the address is in state (operator-pasted ledger limb),
+  `lifecycle { destroy = false }` is present, the address has a `-target=` line in the workflow
+  that applies it, and no resource block was deleted without a matching `removed` block. Mutation
+  rows 1-5 of Guard 4. `doppler_secret.github_app_{id,private_key}` are `config = "prd"` — the
+  live App identity — so this row is user-facing, not bookkeeping.
 - [ ] 2.6 git-data-root-key: partial backend for the bucket, the legacy-bucket refusal once
   `GIT_DATA_ROOT_STATE_MIGRATED=1`, and updates to `git-data-root-key.test.sh`.
 - [ ] 2.7 `apply-git-data-root-key.yml`: the one-shot `8209_custody_forget` arm plus the executed
@@ -76,6 +85,15 @@ Constraints:
   - add `--preserve-env` to every `doppler run`;
   - change `HCLOUD_TOKEN` reads to `${HCLOUD_TOKEN:-}`;
   - change the extract steps to `${TF_STATE_AWS_ACCESS_KEY_ID:-…}`.
+- [ ] 4.1b **`plan_only` arm (U5, Guard 5).** Add the `plan_only` boolean dispatch input to
+  `apply-web-platform-infra.yml`, honoured by `web_host_replace` and `git_data_host_replace`:
+  `if: inputs.plan_only != true` on every mutating step (apply, `-replace`, the SSH bridge, the
+  boot-trail poll, the post-apply token sync), derived by sweep and not by hand. Input validation,
+  the typo-guard and the environment gate stay unconditional. Emit `plan_only=1` plus the loader
+  `source=` as a `::notice::`. Executed fixture rows per Guard 5.
+- [ ] 4.1c Record the `git_data_host_replace` environment decision (a `main`-only policy now
+  refuses a non-`main` dispatch) in the job header, ADR-239 D2 and the runbook. It is a decision,
+  not a side effect.
 - [ ] 4.2 Make the `apply-sentry-infra.yml` apply job Tier B.
 - [ ] 4.3 `infra-validation.yml` plan job: `-refresh=false`, the placeholders, `github.token`, the
   read-only Hetzner token with fallback, and `--preserve-env` for the listed variables.
@@ -98,6 +116,22 @@ Constraints:
 - [ ] 5.3 Runbook `infra-credential-tiers-8209.md`: the consumer inventory, the Operator Sequence,
   the state-migration and rotation sections, and the local invocation (inner `--preserve-env`).
   Update the 7 runbooks that cite the old local invocation.
+- [ ] 5.3b The runbook carries the five user-impact steps verbatim, each with its exact command:
+  - O0's U1 gate: `prd` `GITHUB_APP_*` hashes before and after, the no-`delete` assertion on the
+    push apply's plan JSON, and the `cron/github-app-drift-guard.manual-trigger` mint proof;
+  - O4b: the two plan-only dispatches from `main`, with the "no apply step ran" check;
+  - O11: the `name\tslug` table, the abort conditions, and the post-revoke git-store health
+    check (Better Stack heartbeat + log source, a `heartbeat-live-reconcile` dispatch, and a
+    `git ls-remote`) - read through CI and observability, never an operator shell on the host
+    (`hr-no-ssh-fallback-in-runbooks`);
+  - O12b: the creator-bound token enumeration, the vendor citation and the
+    disposable-personal-token negative control;
+  - O13: the DER-SHA-256 fingerprint comparison before the App-settings click, the
+    observability read-back after the `DOPPLER_TOKEN_TF` revocation, and the runtime-key proof
+    after the delete (including the both-`401` "page immediately" branch).
+- [ ] 5.3c The bootstrap ledger records: the `prd` `GITHUB_APP_*` hashes, both App-key
+  fingerprints, the `name\tslug` table for every token O11 revokes, the creator-bound service
+  token list from `terraform state list`, and every `removed` address as it appears in state.
 - [ ] 5.4 Write the manifests `github-infra-app-manifest.json` and `github-board-app-manifest.json`.
 - [ ] 5.5 Legal:
   - the prior-exposure assessment in `knowledge-base/legal/audits/`, with the read-only
@@ -117,6 +151,9 @@ Constraints:
   - `Ref #8209`;
   - a link to the Operator Sequence and the order constraints;
   - D2 `proposed` until R1 closes;
-  - decision-challenges DC-2, DC-3 and DC-4.
+  - decision-challenges DC-2, DC-3 and DC-4;
+  - the five user-impact findings (U1-U5) with the step that closes each, and the irreversible
+    steps called out by name: O10, O11, O12, O13 — and, within O13, the App-settings key delete,
+    which has no rollback.
 - [ ] 6.2 Rebase onto `origin/main`. Resolve ADR-220 and `model.c4` conflicts additively.
   Re-verify the ADR ordinal.
