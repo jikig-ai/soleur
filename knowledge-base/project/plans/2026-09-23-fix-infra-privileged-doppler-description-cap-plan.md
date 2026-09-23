@@ -27,7 +27,7 @@ project `soleur-infra-privileged` does not exist, and ADR-241's O0 step is incom
 
 This plan does three things:
 
-1. Shortens the description to 228 characters. The rationale stays in the header comment.
+1. Shortens the description to 230 characters. The rationale stays in the header comment.
 2. Adds a PR-time lint over every `description` on a `doppler_*` resource in every tracked `.tf`
    file. It runs under the required `test` context. No such guard exists today; the section below
    explains why nothing caught this one.
@@ -35,11 +35,72 @@ This plan does three things:
 
 The PR references #8209 and does not close it. #8209 still has operator steps O1 to O13 ahead of it.
 
+## Deepen-Plan Findings (2026-09-24)
+
+**Halt gates:** all passed, all run mechanically.
+
+- 4.6 User-Brand Impact: present; `none` with a scope-out for the sensitive `apps/*/infra/` path.
+- 4.7 Observability: 5 fields; `probe-verb-gate.sh 'python3 scripts/lint-doppler-description-length.py'` rc 0; `expected_output` is a literal.
+- 4.8 PAT sweep: no hits.
+- 4.10 Encryption Posture: all fields; `in_transit: []`.
+- 4.11 `lint-guard-contract.py`: green.
+- Not triggered:
+  - 4.5 network: the only SSH token is the phrase "no SSH", and the plan does not change provisioner resources.
+  - 4.55 downtime: no reboot, replace or lock.
+  - 4.9 UI: no UI surface.
+
+**Fan-out:** proportionate, not exhaustive. The plan is a one-string fix plus a roughly 60-line
+lint. The panel was test-design-reviewer, security-sentinel, a prototype probe, and a
+verify-the-negative sweep.
+
+**Findings:**
+
+1. **The design was prototyped against the real tree before any code.** A scratchpad copy of the
+   Phase 2 lint (current-header attribution, blank-line skip, orphan fail-closed, raw bytes,
+   unescaped-template regex, vacuity) was run over all 81 tracked `.tf` files.
+   - It reported exactly one finding,
+     `infra-privileged-environment.tf:73: doppler_project.infra_privileged description is 273 bytes`,
+     and zero orphan or unmeasurable false positives.
+   - With the replacement string substituted, it printed
+     `OK: … 1 description(s) measured, max 230/255 bytes`.
+   - The full-tree run took 0.04 s.
+   - So the lint will not block unrelated PRs through the required `test` context.
+2. **Joi's counting rule is now cited, not inferred.** Joi documents `string.max(limit, [encoding])`
+   as "the maximum number of string characters", with byte-length counting only when an encoding
+   is passed (<https://joi.dev/api/18.x.x#stringmaxlimit-encoding>, via Context7 `/websites/joi_dev`).
+   Doppler's choice of encoding stays unknown. The raw-byte rule bounds both, as the plan already
+   argues.
+3. **A negative claim was verified.** "`terraform validate` rejects a duplicate attribute" was
+   checked against the pinned `dopplerhq/doppler` 1.21.2 in a scratch root: `Error: Attribute
+   redefined … "description" was already set`. Cutting the duplicate arm is safe.
+4. **A negative claim was corrected.** "Terraform is the only writer of `description` in this repo"
+   is true for tracked `.tf`. But `plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh`
+   renders a `doppler_project` with `description = "Tenant project for ${SLUG}"` into **user** repos,
+   and this lint cannot see it. It is out of scope (a user-repo artifact, and short by
+   construction); recorded as a known limit under §Dependencies & Risks.
+5. **Security-sentinel.** No P0 or P1 findings.
+   - P2, applied: the description's "Read only via" overstated the control, because the
+     workplace-scoped `DOPPLER_TOKEN_TF` can read the project until O10/O13. The new wording is "CI
+     reads it via", 230 bytes.
+   - P3, applied: control characters are stripped from printed paths and names, closing the
+     `::`-command injection path.
+   - Confirmed: the merge widens nothing (both Doppler addresses were already in `-target=`, and
+     credentials are unchanged), and no post-merge read prints a secret value.
+6. **Test-design-reviewer: 7.6/10 (B).**
+   - Row 11 had the wrong verdict.
+   - Two silent-skip holes were closed by new fail-closed arms: a one-line doppler block, and a
+     column-0 `description`.
+   - Six surviving mutants got rows: `%{`, mid-string `${`, the end anchor, trailing `//`, the
+     no-argument scan set, and stop-at-first.
+   - Rows 10 and 12 now assert the specific message, with compliant twins.
+   - H4 asserts bounds rather than today's exact numbers.
+   - All of it is recorded in §Plan Review Revisions.
+
 ## Research Reconciliation — Brief vs. Codebase
 
 | Claim in the brief | Reality (measured) | Plan response |
 |---|---|---|
-| The description is 273 characters | `python3` over the literal: 273 characters, 273 UTF-8 bytes, 273 UTF-16 units (pure ASCII) | Replace it with a 228-character string (27 below the cap) |
+| The description is 273 characters | `python3` over the literal: 273 characters, 273 UTF-8 bytes, 273 UTF-16 units (pure ASCII) | Replace it with a 230-character string (25 below the cap) |
 | "Check whether a guard already exists" | None exists. `git grep` finds no suite or lint that measures a `.tf` `description`. `tests/scripts/test-infra-privileged-tier-census.sh` (#8209's own guard) has no length row, and nothing in `infra-validation.yml` has one either | Build one (Guard 1) |
 | "Why did it miss this one" | The `dopplerhq/doppler` provider v1.21.2 (`resource_project.go`) declares `description` as a plain `Optional` `TypeString` with no `ValidateFunc`. `terraform validate` and the PR-time `terraform plan` both pass. Planning a *create* never calls the Doppler API; the 255 limit exists only in the API's own check (Joi-style message), which runs at `POST /v3/projects` during apply. The only control was a comment | The guard runs a static check before merge. The comment now points to the guard instead of standing in for one |
 | "The ADR-241 O0 apply is incomplete" | Confirmed from the two failed apply logs (see §Post-merge verification). Run 35912754656 **did** create 5 resources and forget 4. It failed only on `doppler_project.infra_privileged`, and `doppler_environment.infra_privileged_prd` was skipped because it depends on the project. Run 35921899265 re-planned exactly the project, the environment and the #8202 perpetual pair | Post-merge verification checks each O0 resource separately, not just "apply is green" |
@@ -161,10 +222,14 @@ In `apps/web-platform/infra/infra-privileged-environment.tf`, `resource "doppler
 ```hcl
   # Doppler's API caps `description` at 255 (unchecked by the provider and by plan); enforced at PR
   # time by scripts/lint-doppler-description-length.py. Full rationale: the header comment above.
-  description = "Tier B (#8209, ADR-241): credentials that write infra, read another tier's secrets, or reach third-party installations. Read only via DOPPLER_TOKEN_INFRA_PRIVILEGED on main-only environments. Operator-supplied; never in tfstate."
+  description = "Tier B (#8209, ADR-241): credentials that write infra, read another tier's secrets, or reach third-party installations. CI reads it via DOPPLER_TOKEN_INFRA_PRIVILEGED on main-only environments. Operator-supplied; never in tfstate."
 ```
 
-Measured: 228 characters, 228 UTF-8 bytes (pure ASCII). The dropped clause ("an environment secret on main-only
+Measured: 230 characters, 230 UTF-8 bytes (pure ASCII). The wording is "CI reads it via", not
+"Read only via" (security-sentinel, deepen pass). Until runbook steps O10/O13 evict and rotate the
+workplace-scoped `DOPPLER_TOKEN_TF` that Terraform itself authenticates with, a token reachable
+from any branch can also read this project, so "only" would overstate the control. The
+`--- The Tier-B Doppler project ---` comment block gains one sentence naming that O2→O13 window. The dropped clause ("an environment secret on main-only
 environments") moves into the `--- The Tier-B Doppler project ---` comment block as one sentence
 naming `DOPPLER_TOKEN_INFRA_PRIVILEGED` as the only read path and where it is stored (a GitHub
 **environment** secret on the four main-only environments). This is P3.
@@ -197,7 +262,16 @@ and the plan review; see §Plan Review Revisions at the end of this plan.
   - An indented `description =` line seen while **no** header is set fails closed:
     `FAIL: <path>:<line>: description outside any top-level block; run terraform fmt`. An
     unformatted nested `}` at column 0 would otherwise clear the header and silently hide the
-    `description` after it. `terraform fmt` is not a merge gate (`infra-validation` is not a required
+    `description` after it.
+  - Two more unformatted shapes fail closed rather than being skipped (test-design review, deepen
+    pass):
+    - A column-0 attribute line (`^[A-Za-z_][A-Za-z0-9_-]*\s*=`) is not a header; it fails with
+      `attribute at column 0; run terraform fmt`.
+    - A doppler header line with content after its `{` (a one-line block such as
+      `resource "doppler_project" "x" { description = "…" }`, which `terraform fmt` allows) fails
+      with `one-line doppler block; put description on its own line`.
+    - Measured on the real tree: zero column-0 attribute lines and zero one-line doppler blocks, so
+      neither arm can block an unrelated PR. `terraform fmt` is not a merge gate (`infra-validation` is not a required
     context and only runs on changed dirs), so the lint cannot rely on it.
 
   Nested blocks close at column 2 or deeper under `terraform fmt`, which `infra-validation.yml`'s
@@ -221,8 +295,16 @@ and the plan review; see §Plan Review Revisions at the end of this plan.
 - **Verdicts and remediation text.** Exit 1 on any finding. Each finding prints one line plus a fix:
   - `FAIL: <path>:<line>: <type>.<name> description is <N> bytes (Doppler API cap 255). Shorten by <N-255> bytes; a non-ASCII character counts 2-4 bytes (an em dash is 3); put the rationale in a # comment above the attribute.`
   - `FAIL: <path>:<line>: <type>.<name> description is not a single-line string literal; cannot measure. Use one literal; var., interpolation and heredoc are unsupported by design.`
-- **Vacuity.** Exit 1 when the scan found zero `doppler_*` resource headers, **or** zero measured
-  descriptions. A description regex that stops matching must not pass.
+- **Log safety.** Paths and resource names are printed with C0/C1 control characters, `\x7f`, U+2028
+  and U+2029 stripped. A tracked path containing a newline would otherwise start a CI log line with
+  attacker text (`::add-mask::`, `::stop-commands::`). The description value itself is never printed,
+  only its length (security-sentinel P3).
+- **Vacuity.** Exit 1 when the scan found zero `doppler_*` resource headers
+  (`FAIL: vacuous scan: no doppler_* resource found`), **or** headers but zero measured descriptions
+  (`FAIL: vacuous scan: no description measured`). The two messages differ so each clause has its own
+  row. A description regex that stops matching must not pass.
+- **All findings, not the first.** Every finding in the scan is printed before exiting; the scan never
+  stops at the first.
 - **Success line.** Exit 0 prints
   `OK: <R> doppler_* resource(s) in <F> file(s); <D> description(s) measured, max <M>/255 bytes`.
 - **One constant.** `DOPPLER_DESCRIPTION_MAX_BYTES = 255`, defined once, with a comment citing the
@@ -484,14 +566,16 @@ description: `data`/`module` blocks and the CLI are out of scope, and Terraform 
 | 4 | Second member: a file with a compliant `doppler_project` first, then a 256-byte second `doppler_project` | RED, naming the second |
 | 5 | Second file: a compliant file plus an over-cap file in the same scan | RED, naming the second file |
 | 6 | Type family: an over-cap `doppler_change_request_policy` (kills a regex narrowed to `doppler_project`) | RED |
-| 7 | Unmeasurable: `description = var.d`, and `description = "${var.a} x"` | RED ×2 ("cannot measure") |
+| 7 | Unmeasurable: (a) `description = var.d`; (b) `description = "${var.a} x"`; (c) `description = "x ${var.a}"` (mid-string, kills a `startswith` check); (d) `description = "%{ for i in range(50) }xxxxxxxx%{ endfor }"` (kills dropping the `%{` alternative); (e) `description = "a" != "" ? var.long : "b"` (kills dropping the literal's end anchor) | RED ×5 ("cannot measure") |
 | 8 | Multibyte: 254 ASCII characters plus one em dash (255 characters, 257 bytes) | RED (the byte rule, not a character count) |
-| 9 | Own dispatch: (a) a scan with zero `doppler_*` headers (only `variable`/`github_*` blocks); (b) doppler headers but zero `description` lines | RED ×2 (vacuous scan) |
-| 10 | Reorder: move an over-cap `description` **after** a nested `lifecycle { … }` block whose `}` sits at column 2 | RED (a nested `}` does not clear the header) |
-| 11 | Escapes are counted raw: a literal of 254 decoded bytes whose source holds one `\"` (raw 256 bytes) | RED (conservative raw rule); the same text with raw length exactly 255 PASSes |
-| 12 | Blank line: an over-cap `description` preceded by `name = …` and a blank line inside the doppler block | RED (a blank line does not clear the header) |
-| 13 | Unformatted nested `}` at column 0 inside a doppler block, then an over-cap `description` | RED ("outside any top-level block; run terraform fmt"), not a silent skip |
-| 14 | Escaped template: `description = "a $${literal} b"` under the cap | PASS (measured, not rejected as interpolation) |
+| 9 | Own dispatch: (a) a scan with zero `doppler_*` headers (only `variable`/`github_*` blocks); (b) doppler headers but zero `description` lines | RED ×2, each asserting its own message (`no doppler_* resource found` / `no description measured`) |
+| 10 | Reorder: an over-cap `description` placed **after** a nested `lifecycle { … }` block whose `}` sits at column 2; plus its compliant twin | RED asserting `<type>.<name> description is 256 bytes` (not the orphan or vacuity message); twin PASS with `1 description(s) measured` |
+| 11 | Escapes counted raw: 255 decoded bytes containing one `\"` (256 raw bytes); twin: 254 decoded bytes with one `\"` (255 raw) | RED (kills a lint that counts decoded bytes); twin PASS |
+| 12 | Blank line: an over-cap `description` preceded by `name = …` and a blank line inside the doppler block; plus its compliant twin | RED asserting the `256 bytes` message; twin PASS with `1 description(s) measured` |
+| 13 | Unformatted shapes beside a compliant resource: (a) a column-0 nested `}` inside a doppler block, then an over-cap `description`; (b) an over-cap `description =` at **column 0** inside a doppler block; (c) a one-line `resource "doppler_project" "x" { description = "<300 B>" }` | RED ×3, with `outside any top-level block` / `attribute at column 0` / `one-line doppler block` respectively, never a silent skip |
+| 14 | Escaped template and trailing `//`: (a) `description = "a $${literal} b"` under the cap; (b) a 255-byte literal followed by `// c` | PASS ×2 (measured, not rejected) |
+| 15 | Scan set, no-argument mode: in a `git init` temp repo, an over-cap doppler resource at `infra/github/x.tf`, lint run with **no arguments** from a subdirectory | RED naming `infra/github/x.tf` (kills narrowing `git ls-files` to one root or dropping `--show-toplevel`) |
+| 16 | Two findings in one scan: two over-cap resources in two files | RED, output contains **both** FAIL lines (kills stop-at-first) |
 
 **Harness rows:**
 
@@ -500,7 +584,7 @@ description: `data`/`module` blocks and the CLI are out of scope, and Terraform 
 | H1 | Must-PASS, not canonical: a 600-byte `variable "x" { description = … }` and a 400-byte `github_repository_environment`-shaped description beside a compliant `doppler_project` | PASS (non-doppler headers are ignored), and `1 description(s) measured` |
 | H2 | Must-PASS: a commented-out `# description = "<300 bytes>"` inside a doppler block whose real description is compliant | PASS |
 | H3 | Suite edits (delete a row's call; neuter `pass()`/`fail()`) | the floor FIRES. This is **not** a suite row: `scripts/guard-vacuity-floor.test.sh` applies these mutants to every floor-bearing `scripts/*.test.sh` and must score this suite FIRES |
-| H4 | Live: the `-live` registration over the real tree | PASS after Phase 1 (`4 description(s) measured, max 245/255 bytes`); RED on the pre-fix tree naming `infra-privileged-environment.tf` |
+| H4 | Live: the `-live` registration over the real tree | PASS after Phase 1, asserting bounds rather than exact numbers (D ≥ 4 descriptions, M ≤ 255), so a legitimate description edit does not break it; RED on the pre-fix tree naming `infra-privileged-environment.tf` |
 
 **Anchor.** The cap constant (255) and the lint live in the same reviewable diff, so one PR could raise
 both. The external anchor is Doppler's API: a weakened constant does not make an over-cap string
@@ -520,8 +604,9 @@ the state this PR leaves. Row 3 plus row 2 pin the boundary, and the PR diff to
       `description` names `scripts/lint-doppler-description-length.py` and no longer says
       `see doppler_project.inngest`. The `--- The Tier-B Doppler project ---` comment block names
       `DOPPLER_TOKEN_INFRA_PRIVILEGED` as the only read path and says it is a GitHub **environment**
-      secret on main-only environments.
-- [ ] AC3: every Guard 1 row (1–14, H1, H2, H4) is a `row` call in
+      secret on main-only environments, plus one sentence naming the O2→O13 window in which the
+      branch-reachable `DOPPLER_TOKEN_TF` can still read the project.
+- [ ] AC3: every Guard 1 row (1–16, H1, H2, H4) is a `row` call in
       `scripts/lint-doppler-description-length.test.sh`, and the suite exits 0. RED rows were observed
       RED before the lint file existed (recorded in the work log).
 - [ ] AC4: `scripts/test-all.sh` contains exactly one `run_suite
@@ -608,6 +693,10 @@ No open scope-out names `infra-privileged-environment.tf`.
   `slug`/`name` could hit another server-side check on first create. They mirror the
   `soleur-inngest` / `doppler_environment.inngest_prd` precedent, which applied cleanly. If the fix
   apply reds on a different Doppler error, that is a new finding for a follow-up PR, not a retry.
+- **Known limit: user-repo Doppler projects.** `provision-doppler.sh` renders
+  `description = "Tenant project for ${SLUG}"` into a user's repo. That text is outside this repo's
+  `git ls-files`, so the lint does not cover it. Its length is 19 bytes plus the slug, well under the
+  cap for any plausible slug; no action.
 - **#8202 noise.** The perpetual pair makes "zero-diff after apply" an unusable bar. AC11 names
   addresses instead.
 - **Rollback.** A revert restores the 273-character string and the red apply; nothing is destroyed,
@@ -649,4 +738,7 @@ scope the brief asked for.
 | DHH P2, Simplicity | Delete the Phase 4 merge-gate script ("the ruleset already does this") | **Kept.** The brief explicitly requires counting required contexts by name on the exact head SHA. The count is now derived, not a literal |
 | DHH P2, Simplicity | Cut the Encryption Posture section | **Kept, minimal.** deepen-plan Phase 4.10 halts mechanically on a `.tf` edit without it |
 | DHH P2, Simplicity | Cut reads 6 and 8 and the O0 table | **Kept, merged.** The brief asks to re-read which O0 resources remain. Reads are now 4, and the table is the answer |
+| Deepen: security-sentinel P2 | "Read only via DOPPLER_TOKEN_INFRA_PRIVILEGED" overstates the control while the workplace-scoped `DOPPLER_TOKEN_TF` can still read the project (until O10/O13) | Applied: "CI reads it via …" (230 bytes) plus a header-comment sentence on the O2→O13 window |
+| Deepen: security-sentinel P3 | Tracked paths with newlines could inject `::` workflow commands | Applied (control characters stripped from printed paths and names) |
+| Deepen: test-design-reviewer | Row 11's verdict was wrong; one-line blocks and column-0 `description` were silent skips; rows 10/12 could pass through the wrong fail path; `%{`, mid-string `${`, end-anchor, `//`, scan-set and stop-at-first mutants survived; H4 pinned exact numbers | Applied (rows 7, 9–16 and H4 rewritten; two new fail-closed arms, both measured at zero hits on the real tree) |
 | CTO P3 | Settle Doppler's counting rule with a throwaway 255-multibyte project | **Not taken.** It is a Doppler workplace write outside this fix; the byte rule makes the answer unnecessary |

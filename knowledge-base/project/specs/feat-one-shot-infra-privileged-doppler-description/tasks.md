@@ -11,16 +11,17 @@ Plan: `knowledge-base/project/plans/2026-09-23-fix-infra-privileged-doppler-desc
 
 ## Phase 2: The string (its own commit, first, so it can ship alone if the guard stalls)
 
-- [ ] 2.1 Replace the description with the plan's 228-character string.
+- [ ] 2.1 Replace the description with the plan's 230-character string ("CI reads it via", not "Read only via").
 - [ ] 2.2 Update the comment above it: it names the lint, and drops the `(see doppler_project.inngest)` pointer.
 - [ ] 2.3 Move the dropped clause (the read token is an environment secret on main-only
-  environments) into the `--- The Tier-B Doppler project ---` comment block.
+  environments) into the `--- The Tier-B Doppler project ---` comment block. Add one sentence
+  naming the O2 to O13 window, during which the branch-reachable `DOPPLER_TOKEN_TF` can still read the project.
 - [ ] 2.4 Commit the string fix alone.
 
 ## Phase 3: Guard, RED first
 
 - [ ] 3.1 Write `scripts/lint-doppler-description-length.test.sh` from Guard 1's mutation matrix
-  (rows 1-14, H1, H2, H4) using the data-driven `row` helper. The suite needs:
+  (rows 1-16, H1, H2, H4) using the data-driven `row` helper. The suite needs:
   - a call-site counter written literally as `cases=$((cases + 1))`;
   - a helper self-test that resets `PASS` and `FAIL` afterwards;
   - `PASS + FAIL == cases`;
@@ -28,14 +29,16 @@ Plan: `knowledge-base/project/plans/2026-09-23-fix-infra-privileged-doppler-desc
 - [ ] 3.2 Run it and confirm the RED rows are RED (the lint does not exist yet).
 - [ ] 3.3 Write `scripts/lint-doppler-description-length.py` with:
   - current-header attribution, skipping blank lines;
-  - a fail-closed orphan `description`;
+  - fail-closed arms for an orphan `description`, a column-0 attribute, and a one-line doppler block;
   - raw UTF-8 bytes;
   - the unescaped-template regex;
   - remediation text in each FAIL;
-  - vacuity on zero headers or zero descriptions.
+  - vacuity on zero headers or zero descriptions, with distinct messages;
+  - every finding printed, never stopping at the first;
+  - control characters stripped from printed paths and names.
 - [ ] 3.4 The suite is green. The lint in fixture mode on `origin/main`'s
-  `infra-privileged-environment.tf` FAILs naming `273`, and the live run prints `OK:` with
-  `4 description(s) measured, max 245/255 bytes`.
+  `infra-privileged-environment.tf` FAILs naming `273`, and the live run prints `OK:` with at least 4
+  descriptions measured and a max of 255 bytes or less (245 today).
 - [ ] 3.5 Register the `-live` and `-unit` `run_suite` lines in `scripts/test-all.sh` next to
   `scripts/lint-infra-no-human-steps`.
 
