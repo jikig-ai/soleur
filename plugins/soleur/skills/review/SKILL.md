@@ -187,18 +187,23 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 #### Parallel Agents to review the PR:
 
-**Suite scope for every agent below — a review agent never runs the gate.**
-Spawned agents run only the suites targeting the files they were given. **`SOLEUR_SUBAGENT=1` is a
+**Suite scope for every agent below — a review agent never runs the FULL gate.**
+Spawned agents run only the suites targeting the files they were given — mechanically,
+that is `TEST_GROUP=affected bash scripts/test-all.sh` —
+the runner registers every suite and declines those the diff cannot reach, so the spawn
+prompt needs no hand-derived suite list. **`SOLEUR_SUBAGENT=1` is a
 convention a lead MAY export before spawning — the harness does not set it** (measured 2026-08-19
 from inside two independent spawned agents: UNSET in both, and no repo-controlled spawn path exists
-to set it). They must not run [scripts/test-all.sh](../../../../scripts/test-all.sh),
+to set it). When it IS exported, a plain `test-all.sh` invocation exits 4 while `affected`
+proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement. Measured 2026-08-11 — three agents running lints and suites
 at once turned an 860 s battery into 1675 s. The lead runs the gate ONCE, after the panel
 returns. Two mechanical backstops exist, and neither depends on an agent volunteering anything:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
-(#7553), and `tc_acquire`'s advisory lock (ADR-133) serialises whatever gets past that. The
+(#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
+serialises whatever gets past that. The
 `SOLEUR_SUBAGENT=1` exit-4 path is real and reachable by anyone who exports it deliberately, but it
 is a convention rather than an enforced one — so the paragraph above IS agent discretion for the
 non-concurrent case, and is written as an instruction rather than a claim about the harness.
