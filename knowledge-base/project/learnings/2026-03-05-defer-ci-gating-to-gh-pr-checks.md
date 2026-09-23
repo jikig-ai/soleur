@@ -8,6 +8,8 @@ module: ci-cd
 
 # Learning: Defer CI Gating to gh pr checks
 
+> **Superseded 2026-09-22 (#8500):** the half about not re-implementing rollup filtering in jq still holds; the claim that `gh pr checks --required` is a sufficient gate does not. It lists only checks that already EXIST, so a required check that has not been created yet is invisible, and "nothing pending" passed vacuously when #8458 was admin-merged with its required `test` check absent. Any `--admin` merge goes through `plugins/soleur/skills/ship/references/settle-then-admin-merge.md` steps 2-5 (`plugins/soleur/scripts/admin-merge-ready.sh`).
+
 ## Problem
 
 When building a GitHub Actions workflow to auto-ship qualifying PRs, the initial approach included complex jq filtering of GitHub's `statusCheckRollup` GraphQL field to determine if required checks pass. This was overengineered and fragile.

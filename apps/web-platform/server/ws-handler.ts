@@ -19,6 +19,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
+import { assertLegacyEngineBinding } from "./agent-engine-route-guard";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -1122,12 +1123,20 @@ async function createConversation(
   // Bind the provider before any first-turn dispatch can occur. The repository
   // resolves the workspace default inside the trusted RPC; this path never
   // accepts an engine id from the websocket payload.
-  await new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient).bind({
+  const persistedBinding = await new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient).bind({
     workspaceId: wsId,
     executionKind: "conversation",
     conversationId: id,
     createdBy: userId,
   });
+  // The legacy runner is the only handler currently wired for conversations.
+  // Refuse a future non-Claude default here rather than silently sending that
+  // turn to Claude while Codex qualification/runtime wiring is incomplete.
+  assertLegacyEngineBinding(
+    persistedBinding && typeof persistedBinding === "object" && "binding" in persistedBinding
+      ? (persistedBinding as { binding: unknown }).binding
+      : persistedBinding,
+  );
 
   return id;
 }

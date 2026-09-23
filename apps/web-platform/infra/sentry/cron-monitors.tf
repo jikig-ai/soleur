@@ -1416,3 +1416,38 @@ resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# Liveness for the GitHub Actions queue-health monitor
+# (.github/workflows/scheduled-actions-queue-health.yml, on.schedule
+# "*/30 * * * *"). #8450 incident class: on 2026-09-22 the org sat ~90 minutes
+# at ~206 queued runs with ~8-10 jobs executing against a 60-job Team
+# entitlement — runner under-assignment — and nothing paged.
+#
+# TWO failure signals land here. (1) A ?status=error heartbeat = the probe ran
+# and returned UNDER_ASSIGNED (deep+old queue with delivered concurrency below
+# half the entitlement — the starvation signature). (2) A MISSED check-in is
+# the self-referential one: if the runner pool is so starved the monitor
+# itself cannot get a runner, absence pages — the only mechanism that can
+# detect a total-assignment outage.
+#
+# GHA-scheduled (NOT Inngest-dispatched) by design: an inngest cron would add
+# the prod inngest server as a liveness dependency (#5542 showed it can be
+# dark for hours) and would still land the executor in the queue being
+# measured. checkin_margin_minutes = 30 == the */30 interval (the
+# scheduled_inngest_health margin==interval precedent): a run up to one
+# interval late still checks in, while a genuinely starved monitor pages once
+# the window closes. max_runtime_minutes = 5 matches the job's
+# timeout-minutes. Slug MUST match the workflow's `monitor-slug`
+# (parity-asserted by
+# apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts).
+resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-actions-queue-health"
+  schedule                = { crontab = "*/30 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

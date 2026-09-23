@@ -2,11 +2,11 @@
 title: "Sentry alert-rule API permanently removed (410) wedged the Sentry Terraform root for three days"
 date: 2026-09-21
 incident_pr: 8453
-incident_window: "2026-09-18T10:10:30Z → TBD (first green push apply of apply-sentry-infra.yml after PR #8453 merges)"
-recovery_at: "TBD"
+incident_window: "2026-09-18T10:10:30Z → 2026-09-21T22:07:12Z"
+recovery_at: "2026-09-21T22:07:12Z"
 suspected_change: "External: Sentry moved the legacy alert-rule endpoint projects/{org}/{proj}/rules/{id}/ from scheduled brownouts (see sentry-issue-alert-410-transient-wedge-postmortem.md, Supersession 2026-08-19) to permanent removal. The last two sentry_issue_alert resources still refreshed through it."
 brand_survival_threshold: single-user incident
-status: open
+status: resolved
 triggers: []
 art_33_triggered: false
 art_34_triggered: false
@@ -25,7 +25,7 @@ From 2026-09-18 every full-root `terraform plan` of `apps/web-platform/infra/sen
 
 ## Status
 
-open — one of `resolved` / `unresolved but ended` / `ongoing`. Mirrors the `status:` frontmatter above; do not introduce a second source of truth.
+resolved — one of `resolved` / `unresolved but ended` / `ongoing`. Mirrors the `status:` frontmatter above; do not introduce a second source of truth.
 
 ## Symptom
 
@@ -34,8 +34,8 @@ open — one of `resolved` / `unresolved but ended` / `ongoing`. Mirrors the `st
 ## Incident Timeline
 
 - **Start time (detected):** 2026-09-18T10:10:30Z
-- **End time (recovered):** TBD
-- **Duration (MTTR):** TBD (status not resolved)
+- **End time (recovered):** 2026-09-21T22:07:12Z
+- **Duration (MTTR):** 83h56m
 
 Order of events (load-bearing: the redaction sentinel scans this table; the Actor key feeds the Actor column):
 
@@ -48,6 +48,9 @@ Order of events (load-bearing: the redaction sentinel scans this table; the Acto
 | agent | 2026-09-20T22:05:29Z | #8451 filed: the endpoint is removed, not browning out. |
 | agent | 2026-09-20T22:46:20Z | Push apply run 35542672914 fails the same way. |
 | agent | 2026-09-21 | PR #8453 adopts both rules as frozen `sentry_alert` (removed + import), deletes the retry ladder, and anchors gate windows on the last applied commit. |
+| agent | 2026-09-21T21:55:06Z | PR #8453 merges as `f016a103d`. |
+| agent | 2026-09-21T22:07:12Z | Push apply run 35659890761 applies: `2 imported, 2 added, 2 changed, 0 destroyed`. The backlog (`art17_erasure_incomplete`, `scheduled_devin_docs_drift`, both `git_data_boot_*` updates) is live. The job still ends red on its post-apply probe, on an unrelated UNMANAGED finding (#8267). |
+| agent | 2026-09-22T11:23:57Z | PR #8545 registers Sentry's Seer default (#8267). Push apply run 35721054277 concludes `success` (`0 added, 0 changed, 0 destroyed`, live fidelity PASS), and its success step closes #8282. |
 
 ## Participants and Systems Involved
 
@@ -77,7 +80,9 @@ PR #8453. `removed { lifecycle { destroy = false } }` forgets the two old addres
 
 ## Recovery verification
 
-TBD. Recovery is proven by the first push run of `apply-sentry-infra.yml` after PR #8453 merges concluding `success`, with an apply log limited to the adoption imports, creates of `art17_erasure_incomplete` and `scheduled_devin_docs_drift`, and updates of `git_data_boot_fatal` and `git_data_boot_warning`; by rules 566671 and 669246 re-reading equal to the pre-merge live baseline; and by the workflow closing #8282.
+Recovered at 2026-09-21T22:07:12Z, when push run 35659890761 of `apply-sentry-infra.yml` on `f016a103d` completed its Terraform apply: `Apply complete! Resources: 2 imported, 2 added, 2 changed, 0 destroyed.` The imports were rules 566671 and 669246; the creates were `art17_erasure_incomplete` and `scheduled_devin_docs_drift`; the updates were `git_data_boot_fatal` and `git_data_boot_warning`. The post-apply frozen-rule pin compared both adopted rules against the committed capture with no divergence.
+
+That run still concluded `failure`, on its post-apply live-fidelity probe, for one finding unrelated to this incident: the Sentry-created workflow "Send a notification when pull requests are ready", tracked since 2026-09-18 in #8267. PR #8545 registered it as a vendor default. Push run 35721054277 on `2cbf7b9ef` then concluded `success` at 2026-09-22T11:23:57Z with no changes and a live-fidelity PASS over all 30 in-scope rules, and its success step closed #8282.
 
 ---
 
@@ -94,7 +99,7 @@ TBD. Recovery is proven by the first push run of `apply-sentry-infra.yml` after 
 ## Versions of Components
 
 - **Version(s) that triggered the outage:** External (Sentry API); no Soleur change. Last green apply at main `d8b5fa1fd`.
-- **Version(s) that restored the service:** PR #8453 (pending merge and first green apply)
+- **Version(s) that restored the service:** PR #8453 (`f016a103d`); the workflow went fully green with PR #8545 (`2cbf7b9ef`)
 
 ## Impact details
 

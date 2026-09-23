@@ -2391,12 +2391,16 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // #8450 (2026-09-21): +1 for the actions-queue-tail soak probe — the plan's
   // discoverability_test declares credentials_required for `gh` (Actions read);
   // live queue state has no unauthenticated substitute. Genuine declaration.
+  // #8539 (2026-09-22): +1 for the inngest private-NIC boot event — the plan's
+  // discoverability_test declares credentials_required for the Better Stack Logs warehouse
+  // read. The marker is emitted by a deny-all, no-SSH host and exists only in that warehouse;
+  // no unauthenticated endpoint exposes it. Genuine declaration.
   // #8211 (2026-09-23): +1 for the git-data boot_complete probe — the plan's
   // discoverability_test declares credentials_required for the Better Stack ClickHouse
   // read (Doppler soleur/prd_terraform). boot_complete is emitted by a host on the private
   // network and lands only in Better Stack Logs and Sentry, so there is no unauthenticated
   // substitute to read it from. Genuine declaration.
-  const BASELINE_DECLARED_PROBES = 19;
+  const BASELINE_DECLARED_PROBES = 20;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

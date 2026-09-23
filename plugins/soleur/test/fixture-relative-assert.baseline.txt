@@ -172,6 +172,7 @@
 1	apps/web-platform/infra/inngest-inventory.test.sh
 11	apps/web-platform/infra/inngest-luks-cutover.sh
 1	apps/web-platform/infra/inngest-luks-cutover.test.sh
+7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
 1	apps/web-platform/infra/inngest.test.sh
@@ -208,6 +209,7 @@
 3	apps/web-platform/infra/zot-log-shipper.test.sh
 5	apps/web-platform/scripts/dsar-export-oversize.sh
 2	apps/web-platform/scripts/lib/in-image-copy-src.test.sh
+1	apps/web-platform/scripts/lint-migration-immutability.sh
 1	apps/web-platform/scripts/postgrest-reload-schema.test.sh
 4	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 1	apps/web-platform/scripts/run-migrations.sh
@@ -309,6 +311,7 @@
 2	plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh
 5	plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh
 8	plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh
+2	scripts/actions-queue-health.test.sh
 1	scripts/audit-bot-codeql-coverage.sh
 1	scripts/check-cloudflare-token-drift.sh
 1	scripts/check-cloudflare-token-drift.test.sh
@@ -344,6 +347,7 @@
 1	scripts/lib/git-data-boot-signal-poll.sh
 1	scripts/lib/legal-base-ref.test.sh
 3	scripts/lib/repo-write-boundary.test.sh
+4	scripts/lib/test-contention.sh
 18	scripts/lib/trusted-verdict.test.sh
 23	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
@@ -388,6 +392,7 @@
 2	scripts/sweep-followthroughs.sh
 93	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
+1	scripts/test-all-affected.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh
 3	scripts/test-all-killed-classification.test.sh

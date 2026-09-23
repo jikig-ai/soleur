@@ -20,6 +20,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { ROUTINE_METADATA } from "@/server/inngest/routine-metadata";
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
+import { assertLegacyEngineBinding } from "@/server/agent-engine-route-guard";
 
 export type RunRoutineActorClass = "system" | "human" | "agent";
 
@@ -99,13 +100,18 @@ export async function runRoutine(
     const boundRoutineRunId = routineRunId ??
       (typeof data.run_id === "string" ? data.run_id : randomUUID());
     try {
-      await bindRun({
+      const persistedBinding = await bindRun({
         workspaceId,
         executionKind: "routine",
         routineId: fnId,
         routineRunId: boundRoutineRunId,
         createdBy: actorId ?? delegatingPrincipal ?? "system",
       });
+      assertLegacyEngineBinding(
+        persistedBinding && typeof persistedBinding === "object" && "binding" in persistedBinding
+          ? (persistedBinding as { binding: unknown }).binding
+          : persistedBinding,
+      );
     } catch {
       return { ok: false, code: "engine_binding_failed", status: 503 };
     }

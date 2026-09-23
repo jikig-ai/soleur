@@ -940,7 +940,9 @@ jobs:
         # resize-safe (survives 2→N changes); a literal `'1/2'` would
         # silently stop running tsc if the matrix is renumbered.
         if: strategy.job-index == 0
-        run: npx tsc --noEmit
+        # Pinned .bin only, not `npx tsc` — the npm ci above makes the local
+        # binary present, and npx's fetch-latest fallback is the #7927 class.
+        run: ./node_modules/.bin/tsc --noEmit
         working-directory: apps/web-platform
 
       - name: Run webplat tests (vitest --shard)
