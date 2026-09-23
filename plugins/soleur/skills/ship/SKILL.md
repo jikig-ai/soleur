@@ -246,7 +246,7 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 "No evidence that `soleur:review` ran on this branch. How would you like to proceed?"
 
-- **Run soleur:review now** -> invoke `skill: soleur:review` with args `--parent ship`, then continue to Phase 2
+- **Run soleur:review now** -> invoke `skill: soleur:review` with args `--parent ship`, re-run the three signals above to confirm the evidence landed, then continue to Phase 2
 - **Skip review** -> continue to Phase 2 (user accepts the risk; this also covers zero-finding reviews where review ran cleanly)
 - **Abort** -> stop shipping
 

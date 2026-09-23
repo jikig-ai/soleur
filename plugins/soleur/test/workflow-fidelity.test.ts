@@ -1010,6 +1010,11 @@ describe("DECLARED_SUB_STEPS invariants", () => {
     expect(site("**Pipeline detection:** If the conversation contains")).toContain(
       "**If the arguments carried `--parent ship`,** run only step 3",
     );
+    // Precedence: under one-shot/work -> ship -> review both signals hold, and
+    // the trailer must still be emitted (ship re-reads it).
+    expect(site("**Pipeline detection:** If the conversation contains")).toContain(
+      "This clause wins over the conversation scan above",
+    );
   });
 
   // Same gap one level up: the edge set's members are each pinned by toEqual,
