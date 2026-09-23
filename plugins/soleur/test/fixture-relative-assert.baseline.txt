@@ -207,6 +207,7 @@
 3	apps/web-platform/infra/zot-log-shipper.test.sh
 5	apps/web-platform/scripts/dsar-export-oversize.sh
 2	apps/web-platform/scripts/lib/in-image-copy-src.test.sh
+1	apps/web-platform/scripts/lint-migration-immutability.sh
 1	apps/web-platform/scripts/postgrest-reload-schema.test.sh
 4	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 1	apps/web-platform/scripts/run-migrations.sh
@@ -337,7 +338,7 @@
 1	scripts/generate-article-30-register.sh
 6	scripts/generate-kb-index.sh
 1	scripts/grok-fidelity-bootstrap.sh
-6	scripts/guard-vacuity-floor.test.sh
+18	scripts/guard-vacuity-floor.test.sh
 12	scripts/infra-config-red-alert.test.sh
 1	scripts/kb-staleness-metric.sh
 8	scripts/learning-retrieval-bench.sh

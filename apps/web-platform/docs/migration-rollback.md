@@ -66,8 +66,10 @@ while fixing it:
 
 1. **Cancel the running workflow** in GitHub Actions to prevent the deploy job
    from executing.
-2. **Push a fix** that either removes the broken migration file or adds a
-   corrective migration. The next CI run picks up the fix.
+2. **Push a fix** that adds a corrective migration. The next CI run picks
+   up the fix. Removing or editing the broken file in place is what the
+   migration-immutability gate (`detect-changes`) exists to stop — see the
+   break-glass note in "Rollback Procedure" above for the only exception.
 3. **Alternatively**, use `workflow_dispatch` with `skip_deploy: true` to
    release without deploying while you prepare the fix.
 
