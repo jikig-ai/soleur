@@ -2261,6 +2261,13 @@ if want_scripts; then
   # `test-scripts` feeds the aggregate `test` job (ci.yml), which IS in the CI Required ruleset,
   # whereas the `lint-bot-statuses` job the other repo linters live in is advisory by design.
   run_suite "scripts/zot-mirror-diagnosis" bash scripts/zot-mirror-diagnosis.test.sh
+  # (#8209, ADR-239) The tiered credential loader. It EXTRACTS the `run:` body out of
+  # .github/actions/infra-credentials/action.yml with PyYAML and EXECUTES it under the
+  # runner's own shell against a fail-closed `doppler` stub — a grep over that YAML pins
+  # its spelling and can say nothing about what any arm DECIDES. Explicit run_suite:
+  # .github/actions/**/*.test.sh is not in SUITE_GLOBS, so without this line the suite
+  # runs in zero runners (the #5417 class: green CI over no coverage).
+  run_suite "scripts/infra-credentials-loader" bash .github/actions/infra-credentials/infra-credentials.test.sh
   # APP_DOMAIN_BASE derivation, consumed by both D10 arms of registry-luks-recut and by
   # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
   # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.

@@ -1,0 +1,266 @@
+name: "Infra credentials (tiered)"
+description: >-
+  #8209 / ADR-239. Loads the Tier-B privileged credential set from the
+  soleur-infra-privileged Doppler project and exports it as TF_VAR_* plus the plain
+  names, falling back to the legacy prd_terraform path while the operator sequence is
+  still in flight. Replaces the bare DopplerHQ/cli-action step in every Tier-B job.
+
+# WHY THIS ACTION EXISTS, and why it REPLACES the Doppler install step rather than
+# sitting beside it.
+#
+# `apply-web-platform-infra.yml` is 482 KB against ADR-231's 490,000-byte cap, so the
+# ~7.5 KB of headroom is the whole budget for this change. Every Tier-B job today runs
+# `uses: DopplerHQ/cli-action@…`; swapping that line for this one is byte-neutral per
+# job, where adding a step would not be.
+#
+# THE TWO STATES, and why both must work.
+#
+# This action is merged BEFORE the operator has created anything. It therefore has to
+# behave correctly in two states, and the PR is only safe to merge because of it:
+#
+#   BEFORE (source=legacy) — DOPPLER_TOKEN_INFRA_PRIVILEGED is empty because no
+#     environment secret exists yet. The action exports nothing and the job's existing
+#     `doppler run -c prd_terraform` path supplies every value exactly as it does today.
+#     A `::warning::` names the state so a run is never silently on the old path.
+#
+#   AFTER (source=tier_b) — the token is present. The action loads the whole privileged
+#     project and exports every name, and every `doppler run` in the job carries
+#     `--preserve-env`, so these values WIN over whatever `prd_terraform` holds. That
+#     precedence is the point: `DOPPLER_TOKEN_WRITE` is a repo secret with read/write on
+#     `prd_terraform`, so until operator step O11 a branch actor can still plant a value
+#     there. `--preserve-env` makes the planted value inert by construction rather than
+#     by trusting that nobody plants one.
+#
+# WHY IT LOADS THE WHOLE PROJECT rather than a `want`/optional name list. A name list is
+# a second inventory to keep in sync with the project, and the failure mode of a stale
+# list is a silently-missing credential — the job then falls back to legacy for that one
+# name and nobody notices. `doppler secrets download` is one call and cannot drift.
+#
+# WHY IT MASKS PER LINE. A PEM is multi-line and `::add-mask::` matches a single line at
+# a time; masking the whole blob once leaves every interior line unmasked. See
+# learnings/2026-03-21-doppler-tf-var-naming-alignment.md.
+#
+# WHY THE GIT-DATA STATE KEY PAIR IS ALL-OR-NONE. A half-set pair (id without secret)
+# would init the backend against the privileged bucket with a broken credential, which
+# presents as an auth error against a bucket the operator has just migrated into — the
+# most confusing possible failure at the most dangerous moment. Refuse instead.
+
+inputs:
+  doppler-token-infra-privileged:
+    description: >-
+      The Tier-B read token: `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED`, which exists ONLY
+      as an environment secret on an environment whose deployment-branch policy admits
+      `main`. Empty in the before state, and empty in any job that is not bound to such
+      an environment — both of which take the legacy arm.
+    required: false
+    default: ""
+  doppler-token-legacy:
+    description: >-
+      `secrets.DOPPLER_TOKEN` — the Tier-A repo secret that reads `soleur/prd_terraform`.
+      Passed so the legacy arm can verify it is present and fail loudly rather than
+      letting a later `doppler run` fail with a vendor error that names no cause.
+    required: false
+    default: ""
+  git-data-root-state-migrated:
+    description: >-
+      The repo variable `vars.GIT_DATA_ROOT_STATE_MIGRATED`, passed explicitly rather
+      than read from the `vars` context so the loader test can drive both states without
+      a live repository. `"1"` means operator step O8 has moved the root-key state
+      object, after which the legacy bucket is refused.
+    required: false
+    default: ""
+  doppler-cli-version:
+    description: "Pin for the Doppler CLI install."
+    required: false
+    default: "latest"
+
+outputs:
+  source:
+    description: "`tier_b` when the privileged project was loaded, `legacy` otherwise. Jobs and the census read this."
+    value: ${{ steps.load.outputs.source }}
+  git-data-root-state-bucket:
+    description: >-
+      The R2 bucket the git-data-root-key root must `terraform init
+      -backend-config=bucket=…` against: `soleur-terraform-state-privileged` once the
+      Tier-B state key pair is present, and the legacy `soleur-terraform-state` before
+      that. Empty string when the loader REFUSED (see `git_data_root_state_legacy_after_migration`).
+    value: ${{ steps.load.outputs.git_data_root_state_bucket }}
+
+runs:
+  using: composite
+  steps:
+    # The action installs the CLI itself. That is what lets a Tier-B job REPLACE its
+    # `uses: DopplerHQ/cli-action@…` line with this one instead of adding a step, which
+    # is the whole byte argument above.
+    - name: Install Doppler CLI
+      uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      with:
+        version: ${{ inputs.doppler-cli-version }}
+
+    - name: Load tiered infra credentials
+      id: load
+      shell: bash
+      env:
+        DP_INFRA: ${{ inputs.doppler-token-infra-privileged }}
+        DP_LEGACY: ${{ inputs.doppler-token-legacy }}
+        GIT_DATA_ROOT_STATE_MIGRATED: ${{ inputs.git-data-root-state-migrated }}
+      run: |
+        set -euo pipefail
+
+        # `soleur-terraform-state-privileged` is declared in
+        # apps/web-platform/infra/infra-privileged-environment.tf. A bucket name is not
+        # a secret, so it is a literal here rather than a ninth Doppler key to keep in
+        # sync (terraform-architect; plan simplification pass).
+        readonly PRIV_BUCKET="soleur-terraform-state-privileged"
+        readonly LEGACY_BUCKET="soleur-terraform-state"
+
+        emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+        # ---- Arm 1: legacy ---------------------------------------------------
+        #
+        # Reached before the operator seeds the environment secret (O3), and in any job
+        # not bound to a Tier-B environment. Neither is an error: this PR merges into
+        # the before state and must keep every consumer working.
+        if [[ -z "${DP_INFRA:-}" ]]; then
+          if [[ -z "${DP_LEGACY:-}" ]]; then
+            # Both empty is the one genuinely broken case, and it is worth naming
+            # precisely: a job wired to this action with NEITHER token reaches its
+            # first `doppler run` and fails with a vendor auth error that says nothing
+            # about tiers. Fail here, where the cause is still legible.
+            echo "::error title=infra-privileged::verdict=no_credential_source neither DOPPLER_TOKEN_INFRA_PRIVILEGED (Tier B) nor DOPPLER_TOKEN (Tier A) is set. If this job should be Tier B it needs an \`environment:\` from the tier_b_environments set; see knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+            exit 1
+          fi
+          echo "::warning title=infra-privileged::source=legacy verdict=privileged_source_missing — this job read its credentials from Doppler prd_terraform (Tier A). Expected before operator step O3; after O10 it means the Tier-B environment secret is missing and this run is using credentials that no longer exist."
+          emit source "legacy"
+          emit git_data_root_state_bucket "$LEGACY_BUCKET"
+          exit 0
+        fi
+
+        # ---- Arm 2: Tier B ---------------------------------------------------
+        #
+        # Download the WHOLE project. One call, no name list to drift (see header).
+        # `--no-file --format json` writes to stdout; the value never touches disk.
+        rc=0
+        payload="$(DOPPLER_TOKEN="$DP_INFRA" doppler secrets download \
+          --no-file --format json -p soleur-infra-privileged -c prd)" || rc=$?
+        if [[ "$rc" -ne 0 || -z "$payload" ]]; then
+          # ADR-168: a service token errors LOUDLY on a project/config mismatch, so an
+          # explicit -p/-c is what turns a mis-bound token into this message instead of
+          # a silent read of the wrong config.
+          echo "::error title=infra-privileged::verdict=privileged_read_failed rc=${rc} — DOPPLER_TOKEN_INFRA_PRIVILEGED could not read soleur-infra-privileged/prd. The token is bound to a project and config; a mismatch fails closed here rather than serving another config."
+          exit 1
+        fi
+
+        # Mask EVERY line of EVERY value before anything else can echo one. Per line,
+        # because `::add-mask::` matches one line and a PEM is multi-line.
+        #
+        # jq emits `key<TAB>value` and a tab is IFS-whitespace, so a `while IFS=$'\t'
+        # read -r k v` loop would COLLAPSE runs of tabs and drop empty fields, shifting
+        # a value into the key. `-r 'to_entries[] | .key' / '.value'` in two passes
+        # avoids splitting a field at all.
+        # `doppler secrets download` ALWAYS injects its own metadata keys —
+        # DOPPLER_PROJECT, DOPPLER_CONFIG, DOPPLER_ENVIRONMENT — alongside the real
+        # secrets. Exporting those into $GITHUB_ENV would repoint every LATER
+        # `doppler run` in the job at soleur-infra-privileged/prd instead of
+        # soleur/prd_terraform, so a Tier-B job would read its own carrier project and
+        # find none of the ~40 names it expects. That is a whole-job failure produced by
+        # a loader that reported success, so the filter below is load-bearing rather
+        # than tidiness, and the loader test has a row for it.
+        # FILTER BY EXACT NAME, NOT BY PREFIX. A `startswith("DOPPLER_")` filter is the
+        # obvious spelling and it is wrong in the expensive direction: it also eats
+        # DOPPLER_TOKEN_TF, which is a REAL Tier-B secret (it is what the doppler
+        # PROVIDER authenticates with, exported as TF_VAR_doppler_token_tf). Dropping it
+        # breaks every apply; the loader test has a row asserting it survives.
+        #
+        # The set below is not "the names Doppler happens to inject" — it is the CLI's
+        # own CONFIGURATION surface, the variables that steer where a later `doppler
+        # run` resolves and who it authenticates as. That is the property that makes
+        # them unsafe in $GITHUB_ENV, and it is knowable rather than a guess. Anything
+        # else beginning with DOPPLER_ is a secret whose name merely starts that way.
+        readonly META_FILTER='to_entries
+          | map(select(.key | IN("DOPPLER_PROJECT","DOPPLER_CONFIG","DOPPLER_ENVIRONMENT","DOPPLER_TOKEN") | not))
+          | from_entries'
+        # Staleness backstop: a name list is a claim about the vendor, so if Doppler
+        # ever adds a config variable this filter does not know, SAY SO rather than
+        # silently exporting it. A warning is the right level — the greedy alternative
+        # broke production, this one at worst repoints a later `doppler run`, loudly.
+        unknown="$(printf '%s' "$payload" | jq -r '
+          keys[] | select(startswith("DOPPLER_"))
+                 | select(IN("DOPPLER_PROJECT","DOPPLER_CONFIG","DOPPLER_ENVIRONMENT","DOPPLER_TOKEN") | not)' | paste -sd, -)"
+        if [[ -n "$unknown" ]]; then
+          echo "::notice title=infra-privileged::exporting DOPPLER_-prefixed keys as SECRETS (not CLI config): ${unknown}. If Doppler has added a new CLI configuration variable, add it to META_FILTER in .github/actions/infra-credentials/action.yml."
+        fi
+        payload="$(printf '%s' "$payload" | jq -c "$META_FILTER")"
+
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"
+        done < <(printf '%s' "$payload" | jq -r '.[] | select(type == "string")' | sed 's/\r$//')
+
+        # Export each key twice: the plain name (scripts read `$HCLOUD_TOKEN`) and the
+        # TF_VAR_ form (`--name-transformer tf-var` lowercases and prefixes). Doing it
+        # here rather than through `doppler run` is what lets `--preserve-env` in the
+        # job give these values precedence over prd_terraform.
+        n=0
+        while IFS= read -r k; do
+          [[ -n "$k" ]] || continue
+          v="$(printf '%s' "$payload" | jq -r --arg k "$k" '.[$k]')"
+          # A multi-line value (a PEM) needs heredoc delimiter syntax in $GITHUB_ENV;
+          # the `printf 'K=V\n'` form silently truncates at the first newline and the
+          # provider then reports an unparseable key.
+          delim="SOLEUR_EOF_$(openssl rand -hex 12)"
+          { printf '%s<<%s\n' "$k" "$delim"
+            printf '%s\n' "$v"
+            printf '%s\n' "$delim"
+          } >> "$GITHUB_ENV"
+          tfk="TF_VAR_$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')"
+          { printf '%s<<%s\n' "$tfk" "$delim"
+            printf '%s\n' "$v"
+            printf '%s\n' "$delim"
+          } >> "$GITHUB_ENV"
+          n=$((n + 1))
+        done < <(printf '%s' "$payload" | jq -r 'keys[]')
+
+        # Anti-vacuity floor. An empty project, a jq that matched nothing, or a
+        # `keys[]` over a non-object all produce n=0 — and a run that exported NOTHING
+        # then falls through to the job's own `doppler run` and looks exactly like a
+        # healthy Tier-B run. Refuse instead. The subtrahend is a literal on the line
+        # immediately above so the mutant slice in guard-vacuity-floor.test.sh binds it.
+        MIN_EXPORTED=1
+        if [[ "$n" -lt "$MIN_EXPORTED" ]]; then
+          printf '::error title=infra-privileged::verdict=privileged_empty exported=%s — soleur-infra-privileged/prd returned no usable keys. A Tier-B job that exports nothing silently degrades to the Tier-A values it exists to stop using.\n' "$n"
+          exit 1
+        fi
+
+        # ---- The git-data root-key state key pair: all-or-none ---------------
+        #
+        # Read back from $GITHUB_ENV's source of truth (the payload), not from the
+        # environment: exports above land in $GITHUB_ENV for LATER steps and are not
+        # visible to this one.
+        gd_id="$(printf '%s' "$payload" | jq -r '.GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID // ""')"
+        gd_secret="$(printf '%s' "$payload" | jq -r '.GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY // ""')"
+
+        bucket="$LEGACY_BUCKET"
+        if [[ -n "$gd_id" && -n "$gd_secret" ]]; then
+          bucket="$PRIV_BUCKET"
+        elif [[ -n "$gd_id" || -n "$gd_secret" ]]; then
+          echo "::error title=infra-privileged::verdict=git_data_root_state_pair_half_set — exactly one of GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID / _SECRET_ACCESS_KEY is set in soleur-infra-privileged/prd. The pair is all-or-none: a half-set pair would init the backend against the privileged bucket with a broken credential, which presents as an auth failure against a bucket the operator has just migrated into."
+          emit source "tier_b"
+          emit git_data_root_state_bucket ""
+          exit 1
+        fi
+
+        # The post-migration latch. Once the operator has copied the object and set the
+        # repo variable (O8), the legacy bucket is STALE — a run that still initialized
+        # against it would read and write a state object the operator is about to
+        # delete, and the divergence would not surface until the next apply planned
+        # against the wrong state. Refuse rather than proceed.
+        if [[ "${GIT_DATA_ROOT_STATE_MIGRATED:-}" == "1" && "$bucket" != "$PRIV_BUCKET" ]]; then
+          echo "::error title=infra-privileged::verdict=git_data_root_state_legacy_after_migration — the repo variable GIT_DATA_ROOT_STATE_MIGRATED=1 says the root-key state has moved to ${PRIV_BUCKET}, but the Tier-B key pair for it is absent, so this run would initialize against the stale legacy bucket."
+          emit source "tier_b"
+          emit git_data_root_state_bucket ""
+          exit 1
+        fi
+
+        echo "::notice title=infra-privileged::source=tier_b exported=${n} git_data_root_state=$([[ "$bucket" == "$PRIV_BUCKET" ]] && echo privileged || echo legacy)"
+        emit source "tier_b"
+        emit git_data_root_state_bucket "$bucket"
