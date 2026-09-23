@@ -27,14 +27,14 @@ Modes
 --json                  Emits the schema-validated ledger as JSON to stdout (the
                         single-parser contract Layer B shells out to).
 
-Checks implemented (each independently mutation-testable; see
-lint-encryption-posture.test.sh's `--mutation`-style battery MB-1..MB-12)
+Checks implemented (each independently mutation-testable; see the MB-N rows
+in lint-encryption-posture.test.sh)
 ------------------------------------------------------------------------
-  a. Three-way *.tf resource-type partition (R7): every `resource "<type>"`
-     found under apps/*/infra/**/*.tf (and top-level infra/**/*.tf, if present)
-     must be classified in ledger.store_classes or ledger.non_store_types, else
-     FAIL fail-closed. A store_classes instance absent from ledger.stores FAILs
-     "unledgered store".
+  a. Three-way *.tf resource-type partition (R7): every resource block in any
+     TRACKED `*.tf` / `*.tf.json` (quoted or unquoted labels; comments, strings
+     and heredocs cannot fake or truncate a block) must be classified in
+     ledger.store_classes or ledger.non_store_types, else FAIL fail-closed. A
+     store_classes instance absent from ledger.stores FAILs "unledgered store".
   b. Volume-identity binding for mechanism:luks (R1 — the headline check):
      resolved ONLY via the row's device_binding (volume + attachment + mapper
      addresses), never by name similarity. See check_luks_row().
@@ -51,7 +51,16 @@ lint-encryption-posture.test.sh's `--mutation`-style battery MB-1..MB-12)
   g. Positive-work floor (R8): expected store count is computed from a *.tf
      scan + the committed non_iac_stores catalog, NEVER from the ledger's own
      row count (so deleting a row cannot silently lower the floor).
-  h. Hermeticity: no network calls, no `gh`/`curl`, no reads outside --repo-root.
+  h. Hermeticity: no network calls, no `gh`/`curl`. Files are read from the
+     tracked set (`git ls-files`, which reads the repository's git directory),
+     never through a symlink.
+  i. #8532: an exact positive-work floor (every catalogued id names a row, every
+     row is a store-class address or catalogued, no id or address repeats, a
+     row conforms to its store class); instance multiplicity for
+     for_each/count/module blocks; disclosure anchors resolve exactly once and
+     a luks row's claim sentence claims encryption without denying it; record
+     anchors in record_surfaces agree with the ledger by equality (ADR-242,
+     ADR-243).
 
 Exit codes: 0 PASS (or a graceful skip), 1 one or more FAIL, 2 argument/IO error.
 """
@@ -59,6 +68,7 @@ Exit codes: 0 PASS (or a graceful skip), 1 one or more FAIL, 2 argument/IO error
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -88,6 +98,27 @@ STORE_CLASS_KIND_ENUM = {
 # The validator never reads the schema file; the test suite pins these three
 # sets equal to the schema's so the two cannot drift silently.
 STORE_KEYS = {"store", "kind", "device_binding", "at_rest", "multiplicity", "records"}
+AT_REST_KEYS = {
+    "mechanism", "evidence", "attestation_url", "retrieved_on", "defends_against",
+    "does_not_defend", "disclosed_as", "live_verification", "exception",
+}
+DEVICE_BINDING_KEYS = {"volume", "attachment", "mapper"}
+CONNECTION_KEYS = {"connection", "enforced_at", "in_transit"}
+IN_TRANSIT_KEYS = {"tls", "cert_verification", "does_not_defend", "disclosed_as", "exception"}
+EXCEPTION_KEYS = {
+    "justification", "tracking_issue", "reevaluate_when", "expires_on",
+    # Optional dated record of a review that deliberately left expires_on alone
+    # (#7778, hcloud_volume.inngest_redis).
+    "reassessed_on", "expires_on_not_extended",
+}
+STORE_CLASS_KEYS = {"kind", "mechanisms"}
+
+
+def _unknown_keys(obj: dict, allowed: set[str], where: str) -> list[str]:
+    """A misspelled key is rejected, never ignored: an ignored `disclosed_ass`
+    silently switches off the check that reads `disclosed_as`."""
+    extra = sorted(set(obj) - allowed)
+    return [f"{where} has unexpected key(s) {extra}"] if extra else []
 CERT_VERIFICATION_VALUES = {"on", "off"}
 
 TRACKING_ISSUE_RE = re.compile(r"^#[0-9]+$")
@@ -108,10 +139,18 @@ DENY_DOES_NOT_DEFEND = {"", "none", "n/a", "na", "not applicable"}
 
 STALE_ATTESTATION_DAYS = 365
 
-RESOURCE_RE = re.compile(r'resource\s+"([A-Za-z0-9_]+)"\s+"([A-Za-z0-9_]+)"\s*\{')
+# A resource block header, quoted or unquoted labels, hyphens allowed (HCL
+# identifiers may contain `-`). Run over the comment-blanked view, anchored at a
+# line start, so a commented-out `# resource ...` is not counted.
+RESOURCE_RE = re.compile(
+    r'^[ \t]*resource[ \t]+(?:"([A-Za-z0-9_-]+)"|([A-Za-z_][A-Za-z0-9_-]*))'
+    r'[ \t]+(?:"([A-Za-z0-9_-]+)"|([A-Za-z_][A-Za-z0-9_-]*))[ \t]*\{',
+    re.MULTILINE,
+)
+HEREDOC_RE = re.compile(r"<<-?[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*$")
 MODULE_RE = re.compile(r'^module\s+"([A-Za-z0-9_-]+)"\s*\{', re.MULTILINE)
 MODULE_SOURCE_RE = re.compile(r'^\s*source\s*=\s*"(\.\.?/[^"]+)"', re.MULTILINE)
-META_ARG_RE = re.compile(r"^\s*(for_each|count)\s*=\s*(.+?)\s*$")
+META_ARG_RE = re.compile(r"^\s*(for_each|count)\s*=\s*(.*?)\s*$")
 MAP_KEY_RE = re.compile(r'^\s*"?([A-Za-z0-9_.-]+)"?\s*=')
 
 
@@ -125,7 +164,7 @@ def read_text(path: Path) -> str:
 def _tracked_files(repo_root: Path, pathspecs: list[str]) -> list[Path] | None:
     """Tracked files matching `pathspecs` when repo_root is the top of a git work
     tree, else None. The sweep must give the same verdict on every checkout
-    (ADR-140, "Layer A is hermetic"), so it reads what is COMMITTED: an untracked
+    (ADR-140, "Layer A is hermetic"), so it reads the TRACKED file set: an untracked
     `.tf`, a gitignored `*.tfvars`, or a `.terraform/` provider cache on one
     machine must not change it. Every inherited GIT_* variable is dropped first:
     GIT_DIR beats `-C`, so under a git hook it would answer for another repo."""
@@ -142,9 +181,19 @@ def _tracked_files(repo_root: Path, pathspecs: list[str]) -> list[Path] | None:
             capture_output=True, check=True, env=env,
         ).stdout
     except (OSError, subprocess.CalledProcessError):
+        if (repo_root / ".git").exists():
+            # A git checkout whose git could not answer: the fallback walk may
+            # read untracked files, so say so rather than degrade silently.
+            print(
+                "::warning::encryption-posture: git ls-files failed in a git "
+                "checkout; scanning the filesystem instead (untracked files "
+                "may affect this verdict)",
+                file=sys.stderr,
+            )
         return None
     paths = [repo_root / p for p in out.decode("utf-8", "replace").split("\0") if p]
-    return sorted(p for p in paths if p.is_file())
+    # A tracked symlink could point outside the repository (hermeticity, h).
+    return sorted(p for p in paths if p.is_file() and not p.is_symlink())
 
 
 def _walk(root: Path, pattern: str) -> list[Path]:
@@ -157,16 +206,13 @@ def _walk(root: Path, pattern: str) -> list[Path]:
 
 
 def find_tf_files(repo_root: Path) -> list[Path]:
-    """apps/**/*.tf + (top-level) infra/**/*.tf — the R7 scan scope."""
-    tracked = _tracked_files(repo_root, [":(glob)apps/**/*.tf", ":(glob)infra/**/*.tf"])
+    """Every tracked `*.tf` and `*.tf.json` in the repository — the R7 scan
+    scope. Not a directory allowlist: a Terraform root added anywhere is in
+    scope the moment it is tracked."""
+    tracked = _tracked_files(repo_root, [":(glob)**/*.tf", ":(glob)**/*.tf.json"])
     if tracked is not None:
         return tracked
-    files: list[Path] = []
-    for base in ("apps", "infra"):
-        root = repo_root / base
-        if root.is_dir():
-            files.extend(_walk(root, "*.tf"))
-    return files
+    return sorted(set(_walk(repo_root, "*.tf")) | set(_walk(repo_root, "*.tf.json")))
 
 
 def find_infra_files(repo_root: Path) -> list[Path]:
@@ -185,26 +231,118 @@ def find_infra_files(repo_root: Path) -> list[Path]:
     return files
 
 
-def extract_resource_blocks(text: str) -> list[tuple[str, str, str]]:
-    """Return [(type, name, block_text_including_braces), ...] via a simple
-    brace-depth scan (good enough for the flat HCL these infra files use)."""
+def hcl_views(text: str) -> tuple[str, str]:
+    """Two same-length, same-line-structure views of HCL source:
+    - `nc`: comments (`#`, `//`, `/* */`) blanked, strings and heredocs kept;
+    - `co`: additionally blanks string contents and heredoc bodies.
+    Every brace count and meta-argument scan reads `co`, so a `}` inside a
+    comment, a string or a heredoc cannot truncate a block or hide a
+    `for_each`; label and expression TEXT is read from `nc` at the same
+    offsets. A small state machine, not a parser: an interpolation that nests
+    a second quoted string ends the string early, which errs toward counting
+    braces that a string held, i.e. toward a louder failure."""
+    nc = list(text)
+    co = list(text)
+    i, n = 0, len(text)
+    heredoc: str | None = None
+    line_start = True
+    while i < n:
+        ch = text[i]
+        if heredoc is not None:
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            if text[i:j].strip() == heredoc:
+                heredoc = None
+            else:
+                for k in range(i, j):
+                    co[k] = " "
+            i = j + 1
+            continue
+        if ch == "#" or text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            for k in range(i, j):
+                nc[k] = co[k] = " "
+            i = j
+            continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            for k in range(i, j):
+                if text[k] != "\n":
+                    nc[k] = co[k] = " "
+            i = j
+            continue
+        if ch == '"':
+            k = i + 1
+            while k < n and text[k] != '"' and text[k] != "\n":
+                if text[k] == "\\":
+                    co[k] = " "
+                    k += 1
+                if k < n and text[k] != "\n":
+                    co[k] = " "
+                k += 1
+            i = k + 1
+            continue
+        if ch == "<" and text.startswith("<<", i):
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            hm = HEREDOC_RE.match(text[i:j])
+            if hm:
+                heredoc = hm.group(1)
+                i = j + 1
+                continue
+        i += 1
+    return "".join(nc), "".join(co)
+
+
+def _json_resource_blocks(text: str) -> list[tuple[str, str, str]]:
+    """`*.tf.json` resources as (type, name, synthetic block). The synthetic
+    block restates any `for_each`/`count` as an HCL line so the multiplicity
+    check reads JSON and HCL the same way. Unparseable JSON is reported by the
+    caller as a block-less file, never skipped silently."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return [("__unparseable_tf_json__", "file", "{}")]
+    res = doc.get("resource", {}) if isinstance(doc, dict) else {}
+    items = res if isinstance(res, list) else [res]
+    out: list[tuple[str, str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for type_, named in item.items():
+            named_list = named if isinstance(named, list) else [named]
+            for nm in named_list:
+                if not isinstance(nm, dict):
+                    continue
+                for name, body in nm.items():
+                    body0 = body[0] if isinstance(body, list) and body else body
+                    lines = ["{"]
+                    if isinstance(body0, dict):
+                        for meta in ("for_each", "count"):
+                            if meta in body0:
+                                lines.append(f"  {meta} = {json.dumps(body0[meta])}")
+                    lines.append("}")
+                    out.append((type_, name, "\n".join(lines)))
+    return out
+
+
+def extract_resource_blocks(text: str, json_source: bool = False) -> list[tuple[str, str, str]]:
+    """Return [(type, name, block_text_including_braces), ...]. The block extent
+    is found on the code-only view (see hcl_views) and the returned text is the
+    comment-blanked view, so string values survive for the callers that read
+    them (attachment_binds_volume, block_meta_args)."""
+    if json_source:
+        return _json_resource_blocks(text)
+    nc, co = hcl_views(text)
     blocks: list[tuple[str, str, str]] = []
-    for m in RESOURCE_RE.finditer(text):
-        type_, name = m.group(1), m.group(2)
+    for m in RESOURCE_RE.finditer(nc):
+        type_ = m.group(1) or m.group(2)
+        name = m.group(3) or m.group(4)
         start = m.end() - 1  # index of the opening '{'
-        depth = 0
-        i = start
-        n = len(text)
-        while i < n:
-            ch = text[i]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    break
-            i += 1
-        blocks.append((type_, name, text[start : i + 1]))
+        end = _brace_end(co, start)
+        blocks.append((type_, name, nc[start : end + 1]))
     return blocks
 
 
@@ -227,7 +365,7 @@ def find_resource_declaration(
         if text is None:
             text = read_text(f)
             cache[f] = text
-        for t2, n2, block in extract_resource_blocks(text):
+        for t2, n2, block in extract_resource_blocks(text, f.name.endswith(".tf.json")):
             if t2 == type_ and n2 == name:
                 return f, block
     return None
@@ -243,7 +381,7 @@ def scan_tf_inventory(
         if text is None:
             text = read_text(f)
             cache[f] = text
-        for t, n, _block in extract_resource_blocks(text):
+        for t, n, _block in extract_resource_blocks(text, f.name.endswith(".tf.json")):
             inventory.setdefault(t, []).append(f"{t}.{n}")
     return inventory
 
@@ -406,6 +544,8 @@ def check_luks_row(
     infra_files: list[Path],
     cache: dict[Path, str],
     fails: list[str],
+    apparatus=None,
+    evidence=None,
 ) -> None:
     store_addr = row["store"]
     db = row.get("device_binding")
@@ -453,7 +593,8 @@ def check_luks_row(
 
     # MUTATION-TARGET: MB-2 start (citation resolution: apparatus + mount
     # evidence — accepting the row's word instead of resolving it.)
-    apparatus = scan_apparatus(infra_files, cache)
+    if apparatus is None:
+        apparatus = scan_apparatus(infra_files, cache)
     if mapper not in apparatus:
         fails.append(
             f"FAIL: {store_addr} device_binding.mapper '{mapper}' does not "
@@ -463,7 +604,8 @@ def check_luks_row(
         )
         return
 
-    evidence = scan_mount_evidence(infra_files, cache)
+    if evidence is None:
+        evidence = scan_mount_evidence(infra_files, cache)
     if mapper not in evidence:
         if evidence:
             found_mappers = sorted(evidence.keys())
@@ -645,28 +787,33 @@ def _strip_hcl_comment(line: str) -> str:
 
 def block_meta_args(block: str) -> dict[str, str]:
     """Top-level `for_each` / `count` of a resource block (depth 1 only, so a
-    nested `labels = { count = ... }` or a dynamic block is not read)."""
+    nested `labels = { count = ... }` or a dynamic block is not read). Depth is
+    counted on the code-only view, so a brace inside a string or a comment
+    cannot move it; the expression text is read from the same lines of the
+    comment-blanked view."""
     out: dict[str, str] = {}
+    nc, co = hcl_views(block)
+    nlines, clines = nc.splitlines(), co.splitlines()
     depth = 0
-    lines = [_strip_hcl_comment(raw) for raw in block.splitlines()]
     i = 0
-    while i < len(lines):
-        line = lines[i]
+    while i < len(clines):
+        cl, nl = clines[i], nlines[i]
         if depth == 1:
-            m = META_ARG_RE.match(line)
+            m = META_ARG_RE.match(cl)
             if m:
                 # An expression that opens a bracket continues until it closes
                 # (`for_each = {` / `for k, v in var.x : k => v` / `}`), so the
                 # whole expression is what the gate check reads.
-                expr = [m.group(2)]
+                mn = META_ARG_RE.match(nl)
+                expr = [mn.group(2) if mn else m.group(2)]
                 bal = _bracket_balance(m.group(2))
-                while bal > 0 and i + 1 < len(lines):
+                while bal > 0 and i + 1 < len(clines):
                     i += 1
-                    expr.append(lines[i].strip())
-                    bal += _bracket_balance(lines[i])
-                    depth += lines[i].count("{") - lines[i].count("}")
+                    expr.append(nlines[i].strip())
+                    bal += _bracket_balance(clines[i])
+                    depth += clines[i].count("{") - clines[i].count("}")
                 out[m.group(1)] = " ".join(x for x in expr if x)
-        depth += line.count("{") - line.count("}")
+        depth += cl.count("{") - cl.count("}")
         i += 1
     return out
 
@@ -675,38 +822,62 @@ def _bracket_balance(s: str) -> int:
     return sum(s.count(o) - s.count(c) for o, c in ("{}", "[]", "()"))
 
 
-def resolve_var_map_keys(tf_file: Path, var_name: str, cache: dict[Path, str]) -> list[str] | None:
-    """Top-level keys of `variable "<var_name>" { default = { ... } }` declared in
-    the same Terraform root (directory) as tf_file, or None when there is no
-    such literal. The committed default is the authority: `*.tfvars` is
-    gitignored here, the apply reads its TF_VAR_* inputs from Doppler, and the
-    web-host membership check already treats this literal as canonical."""
+def resolve_var_map_keys(
+    tf_file: Path, var_name: str, cache: dict[Path, str], tf_files: list[Path]
+) -> list[str] | None:
+    """Top-level keys of `variable "<var_name>" { default = { ... } }` in the same
+    Terraform root (directory) as tf_file, or None when that cannot be settled.
+    The committed default is the authority: `*.tfvars` is gitignored here, the
+    apply reads its TF_VAR_* inputs from Doppler, and the web-host membership
+    check already treats this literal as canonical. Candidates are the SCANNED
+    files (tracked, see find_tf_files), never a directory glob. Fails closed
+    (None) when the variable is declared more than once in the root (an
+    `override.tf` redeclaration), when it has no default, or when the default
+    is not a literal object."""
     root = tf_file.parent
-    var_re = re.compile(r'variable\s+"' + re.escape(var_name) + r'"\s*\{')
-    for f in sorted(root.glob("*.tf")):
-        text = cache.get(f)
-        if text is None:
-            text = read_text(f)
-            cache[f] = text
-        m = var_re.search(text)
-        if not m:
-            continue
-        body = text[m.end() - 1 : _brace_end(text, m.end() - 1) + 1]
-        d = re.search(r"^\s*default\s*=\s*\{", body, re.MULTILINE)
-        if not d:
-            return None
-        inner = body[d.end() : _brace_end(body, d.end() - 1)]
-        keys: list[str] = []
-        depth = 0
-        for raw in inner.splitlines():
-            line = _strip_hcl_comment(raw)
-            if depth == 0:
-                km = MAP_KEY_RE.match(line)
-                if km:
-                    keys.append(km.group(1))
-            depth += line.count("{") - line.count("}")
-        return keys
-    return None
+    var_re = re.compile(
+        r'^[ \t]*variable[ \t]+"' + re.escape(var_name) + r'"[ \t]*\{', re.MULTILINE
+    )
+    decls: list[tuple[str, str, int]] = []
+    for f in sorted(p for p in tf_files if p.parent == root and p.suffix == ".tf"):
+        text = _cached_read(f, cache)
+        nc, co = hcl_views(text)
+        for m in var_re.finditer(nc):
+            decls.append((nc, co, m.end() - 1))
+    if len(decls) != 1:
+        return None
+    nc, co, open_idx = decls[0]
+    close = _brace_end(co, open_idx)
+    d = re.compile(r"^[ \t]*default[ \t]*=[ \t]*\{", re.MULTILINE).search(co, open_idx, close)
+    if not d:
+        return None
+    d_open = d.end() - 1
+    d_close = _brace_end(co, d_open)
+    # Keep only depth-0 characters of the object body (from nc, so quoted keys
+    # survive); every nested value is blanked, so two keys on one line and a
+    # key after a multi-line value are both seen.
+    depth0 = []
+    depth = 0
+    for k in range(d_open + 1, d_close):
+        c = co[k]
+        if c in "{[(":
+            depth += 1
+        if depth == 0:
+            depth0.append(nc[k])
+        elif nc[k] == "\n":
+            depth0.append("\n")
+        if c in "}])":
+            depth -= 1
+    body = "".join(depth0)
+    return [a or b for a, b in re.findall(r'(?:"([^"\n]+)"|([A-Za-z_][A-Za-z0-9_-]*))[ \t]*[=:]', body)]
+
+
+def _cached_read(f: Path, cache: dict[Path, str]) -> str:
+    text = cache.get(f)
+    if text is None:
+        text = read_text(f)
+        cache[f] = text
+    return text
 
 
 def module_calls_by_dir(tf_files: list[Path], cache: dict[Path, str]) -> dict[Path, list[str]]:
@@ -749,7 +920,7 @@ def check_instance_multiplicity(
         if text is None:
             text = read_text(f)
             cache[f] = text
-        for t, n, block in extract_resource_blocks(text):
+        for t, n, block in extract_resource_blocks(text, f.name.endswith(".tf.json")):
             index.setdefault(f"{t}.{n}", (f, block))
     modules = module_calls_by_dir(tf_files, cache)
     for row in ledger["stores"]:
@@ -772,10 +943,17 @@ def check_instance_multiplicity(
             # MUTATION-TARGET: MB-25 end
             continue
         fe = meta.get("for_each", "")
-        var_m = re.fullmatch(r"var\.([A-Za-z_][A-Za-z0-9_]*)", fe)
         keys = None
-        if var_m and "count" not in meta and not mods:
-            keys = resolve_var_map_keys(f, var_m.group(1), cache)
+        if fe and "count" not in meta and not mods:
+            # `for_each = var.X`, or any expression whose ONLY gate is var.X (a
+            # `{ for k, v in var.X : k => v }` or `toset(keys(var.X))` wrapper),
+            # is compared key for key: rewrapping the map must not turn a
+            # checked row into an unchecked one.
+            fe_gates = set(GATE_RE.findall(fe))
+            if len(fe_gates) == 1:
+                (g,) = fe_gates
+                if g.startswith("var."):
+                    keys = resolve_var_map_keys(f, g[4:], cache, tf_files)
         if keys is not None:
             # MUTATION-TARGET: MB-14 start (for_each over a var map: instances compared)
             want = ", ".join(sorted(keys))
@@ -833,6 +1011,12 @@ def check_instance_multiplicity(
 # --- #8532 PR-3: record anchors (Guard 3) ----------------------------------
 
 CLAUSE_TOKEN = "(encryption-posture ledger:"
+# Any spelling a reader would take for a clause (case, extra whitespace or a
+# line wrap, a non-ASCII hyphen) is found by this and must then parse EXACTLY,
+# or it is reported malformed. A variant cannot hide from both checks.
+CLAUSE_LOOSE_RE = re.compile(
+    r"\(\s*encryption[\s\W_]{1,3}posture\s+ledger\s*:", re.IGNORECASE
+)
 CLAUSE_RE = re.compile(
     r"\(encryption-posture ledger: (?P<id>[A-Za-z0-9_.-]+) — at rest: "
     r"(?P<mech>[A-Za-z0-9_.:-]+)\)"
@@ -847,15 +1031,19 @@ def _fenced_spans(text: str) -> list[tuple[int, int]]:
     return [(marks[i], marks[i + 1]) for i in range(0, len(marks) - 1, 2)]
 
 
-def surface_sections(path_str: str, text: str) -> list[tuple[str | None, int, int]]:
+@functools.lru_cache(maxsize=32)
+def surface_sections(path_str: str, text: str) -> tuple[tuple[str | None, int, int], ...]:
     """[(heading text or None, start, end)]. A markdown surface is split at its
     H1/H2 headings, because one store is stated under several processing
     activities and each statement must agree on its own. An H3+ heading is a
     sub-part of its section, and a `#` line inside a fenced code block is code,
     not a heading. Any other surface is one section."""
     if not path_str.endswith(".md"):
-        return [(None, 0, len(text))]
+        return ((None, 0, len(text)),)
+    fences: list[tuple[int, int]] = []
+    # MUTATION-TARGET: MB-32 start (a `#` line inside fenced code is not a heading)
     fences = _fenced_spans(text)
+    # MUTATION-TARGET: MB-32 end
     heads = [
         h for h in HEADING_RE.finditer(text)
         if not any(a <= h.start() < b for a, b in fences)
@@ -866,7 +1054,7 @@ def surface_sections(path_str: str, text: str) -> list[tuple[str | None, int, in
     for i, h in enumerate(heads):
         end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
         out.append((h.group(1), h.start(), end))
-    return out
+    return tuple(out)
 
 
 def _selector_matches(heading: str | None, sel: str) -> bool:
@@ -887,13 +1075,10 @@ def _clause_tokens(text: str, start: int, end: int) -> list[int]:
     """Offsets of every clause token in [start, end), minus the one documented
     template (CLAUSE_TEMPLATE, verbatim), which the register's maintenance
     section quotes. Anything else clause-shaped must parse."""
-    out = []
-    i = text.find(CLAUSE_TOKEN, start, end)
-    while i != -1:
-        if not text.startswith(CLAUSE_TEMPLATE, i):
-            out.append(i)
-        i = text.find(CLAUSE_TOKEN, i + 1, end)
-    return out
+    return [
+        m.start() for m in CLAUSE_LOOSE_RE.finditer(text, start, end)
+        if not text.startswith(CLAUSE_TEMPLATE, m.start())
+    ]
 
 
 def _load_surfaces(
@@ -1206,29 +1391,56 @@ def _anchor_window(text: str, idx: int) -> str:
     return text[max(0, idx - 300) : min(len(text), idx + 300)]
 
 
-def _anchor_line(text: str, idx: int, anchor: str) -> str:
-    """The whole line holding the anchor, with the anchor itself removed so a
-    label spelled "Encrypted ..." cannot make the claim on the body's behalf."""
+def _claim_sentence(text: str, idx: int, anchor: str) -> str:
+    """The first sentence of the anchor's paragraph, anchor text removed.
+    A paragraph ends at a blank line or at a line that starts a new list item,
+    heading or table row."""
     start = text.rfind("\n", 0, max(idx, 0)) + 1
-    end = text.find("\n", max(idx, 0))
-    line = text[start : end if end != -1 else len(text)]
-    return line.replace(anchor, " ", 1)
+    lines = [text[start : (text.find("\n", idx) if text.find("\n", idx) != -1 else len(text))]]
+    pos = start + len(lines[0]) + 1
+    while pos < len(text):
+        nxt_end = text.find("\n", pos)
+        nxt = text[pos : nxt_end if nxt_end != -1 else len(text)]
+        if not nxt.strip() or re.match(r"\s*(?:[-*+]\s|\d+[.)]\s|#|\|)", nxt):
+            break
+        lines.append(nxt)
+        if nxt_end == -1:
+            break
+        pos = nxt_end + 1
+    para = " ".join(line.strip() for line in lines).replace(anchor, " ", 1)
+    para = para.replace("**", "")
+    m = SENTENCE_END_RE.search(para)
+    return para[: m.end()] if m else para
 
 
-# #8527. Evaluated on the anchor LINE, never a window: the register's own
-# mandated "encryption at rest is ABSENT" form sits next to positive claims in
-# most measured windows. A denial anywhere on the line wins over a claim, so
-# this fails CLOSED on a claim phrased near a negation ("not only encrypted",
-# "no plaintext copy"): rephrase the disclosure rather than the predicate.
-ENCRYPTION_CLAIM_RE = re.compile(r"\bLUKS\b|\bencrypt", re.IGNORECASE)
-ENCRYPTION_DENIAL_RE = re.compile(
-    r"\b(?:not|never|no|without)[\s-]+(?:\w+[\s-]+)?encrypt"
-    r"|\bun-?encrypt"
-    r"|\bencrypt\w*(?:\s+\w+){0,3}\s+(?:is|are|was|were)\s+"
-    r"(?:absent|not|disabled|off|missing|unavailable)\b"
-    r"|\bplaintext\b",
+# #8527. A luks row's disclosure is judged on its CLAIM SENTENCE: the anchor's
+# paragraph (continuation lines joined, so a hard wrap cannot split "not" from
+# "encrypted"), anchor text removed, cut at the first sentence end. A denial
+# in that sentence wins over a claim; a qualifier in a LATER sentence is
+# allowed, so a disclosure can say what the encryption does not cover
+# (#8624). Fails CLOSED on a claim phrased near a negation ("not only
+# encrypted"): rephrase the disclosure rather than the predicate.
+ENCRYPTION_CLAIM_RE = re.compile(r"\bLUKS\d*\b|\bencrypt(?:ed|ion)\b", re.IGNORECASE)
+IN_TRANSIT_RE = re.compile(
+    r"\bencrypt\w*\s+in[\s-]+transit\b|\bin[\s-]+transit\s+encrypt\w*"
+    r"|\(encryption-posture ledger:[^)]*\)",
     re.IGNORECASE,
 )
+ENCRYPTION_DENIAL_RE = re.compile(
+    r"\b(?:not|never|no|without|cannot|can't|isn't|aren't|wasn't|weren't|"
+    r"doesn't|don't|didn't|lacks?|lacking)\b[\s\w,-]{0,40}?(?:encrypt|\bLUKS\d*\b)"
+    r"|\bun-?encrypt"
+    # "<claim word> [up to three words, never across and/but] is <negative>"
+    r"|\b(?:encrypt\w*|LUKS\w*)(?:\s+(?!and\b|but\b|while\b|whereas\b)[\w-]+){0,3}"
+    r"\s+(?:is|are|was|were)\s+"
+    r"(?:absent|not|disabled|off|missing|unavailable|pending|planned|none)\b"
+    r"|\bencryption(?:\s+at\s+rest)?\s*:\s*(?:none|no|n/?a|absent|off)\b"
+    r"|\bplaintext\b"
+    r"|\b(?:will\s+be|planned|pending|future|not\s+yet|eventually|soon)\b"
+    r"[\s\w,-]{0,30}?(?:encrypt|\bLUKS\d*\b)",
+    re.IGNORECASE,
+)
+SENTENCE_END_RE = re.compile(r"[.;!?](?=\s|$|\*)")
 
 
 def check_disclosed_as_not_encrypted(
@@ -1276,19 +1488,20 @@ def check_luks_disclosure(
             "not-publicly-claimed"
         )
         return
-    line = _anchor_line(text, idx, disclosed.split(":", 1)[1])
+    sentence = _claim_sentence(text, idx, disclosed.split(":", 1)[1])
     # MUTATION-TARGET: MB-20 start (luks disclosure must claim, never deny)
-    if ENCRYPTION_DENIAL_RE.search(line):
+    if ENCRYPTION_DENIAL_RE.search(sentence):
         fails.append(
-            f"FAIL: {store} disclosed_as {disclosed} denies encryption on its "
-            "anchor line while mechanism is luks -> correct the disclosure or "
-            "the row"
+            f"FAIL: {store} disclosed_as {disclosed} denies encryption in its "
+            "claim sentence while mechanism is luks -> correct the disclosure "
+            "or the row (a qualifier belongs in a later sentence)"
         )
-    elif not ENCRYPTION_CLAIM_RE.search(line):
+    elif not ENCRYPTION_CLAIM_RE.search(IN_TRANSIT_RE.sub(" ", sentence)):
         fails.append(
             f"FAIL: {store} disclosed_as {disclosed} does not claim encryption "
-            "on its anchor line (the anchor text itself does not count) -> "
-            "re-anchor on the sentence that makes the claim"
+            "at rest in its claim sentence (the anchor text itself, and "
+            "encryption in transit, do not count) -> re-anchor on the sentence "
+            "that makes the claim"
         )
     # MUTATION-TARGET: MB-20 end
 
@@ -1330,6 +1543,7 @@ def check_at_rest(row: dict, today: date, repo_root: Path, fails: list[str]) -> 
         return
     if mech.startswith("provider-managed:"):
         check_provider_managed(store, ar, today, fails)
+        check_disclosure_resolves(store, ar.get("disclosed_as", ""), repo_root, fails)
         return
     if mech == "plaintext-exception":
         check_exception_block(store, ar, today, fails)
@@ -1341,6 +1555,7 @@ def check_at_rest(row: dict, today: date, repo_root: Path, fails: list[str]) -> 
                 f"FAIL: {store} mechanism app-layer-envelope requires an "
                 "evidence file:anchor citation -> add evidence"
             )
+        check_disclosure_resolves(store, ar.get("disclosed_as", ""), repo_root, fails)
         return
     fails.append(
         f"FAIL: {store} at_rest.mechanism '{mech}' is not a recognized "
@@ -1349,10 +1564,30 @@ def check_at_rest(row: dict, today: date, repo_root: Path, fails: list[str]) -> 
     )
 
 
+def check_disclosure_resolves(
+    label: str, disclosed: str, repo_root: Path, fails: list[str]
+) -> None:
+    """Every `disclosed_as` naming a document must resolve exactly once, whatever
+    the mechanism: a moved or bogus anchor on a row no content check reads is
+    still a claim nobody can find."""
+    if not disclosed or disclosed == "not-publicly-claimed":
+        return
+    text, _idx, err = resolve_disclosed_as(disclosed, repo_root)
+    # MUTATION-TARGET: MB-31 start (every disclosure anchor must resolve)
+    if text is None:
+        fails.append(
+            f"FAIL: {label} disclosed_as {disclosed} {err} -> fix the anchor or "
+            "set disclosed_as: not-publicly-claimed"
+        )
+    # MUTATION-TARGET: MB-31 end
+
+
 def check_connection(conn: dict, today: date, repo_root: Path, fails: list[str]) -> None:
     label = conn["connection"]
     it = conn["in_transit"]
     does_not_defend_check(f"{label} in_transit", it.get("does_not_defend", ""), fails)
+    if it.get("cert_verification") != "off":
+        check_disclosure_resolves(label, it.get("disclosed_as", ""), repo_root, fails)
     if it.get("cert_verification") == "off":
         check_exception_block(f"{label} in_transit", it, today, fails)
         disclosed = it.get("disclosed_as")
@@ -1407,7 +1642,7 @@ def _validate_exception(exc: dict, prefix: str) -> list[str]:
     # catch.
     if not isinstance(exc, dict):
         return [f"{prefix}.exception must be an object"]
-    return []
+    return _unknown_keys(exc, EXCEPTION_KEYS, f"{prefix}.exception")
 
 
 def _validate_store(s: dict, i: int) -> list[str]:
@@ -1439,6 +1674,7 @@ def _validate_store(s: dict, i: int) -> list[str]:
         errs.append(f"{prefix}.kind invalid: {s.get('kind')!r}")
     if "at_rest" in s and isinstance(s["at_rest"], dict):
         ar = s["at_rest"]
+        errs.extend(_unknown_keys(ar, AT_REST_KEYS, f"{prefix}.at_rest"))
         for f in ("mechanism", "defends_against", "does_not_defend", "disclosed_as", "live_verification"):
             if f not in ar:
                 errs.append(f"{prefix}.at_rest missing '{f}'")
@@ -1462,6 +1698,7 @@ def _validate_store(s: dict, i: int) -> list[str]:
         if not isinstance(db, dict):
             errs.append(f"{prefix}.device_binding must be an object")
         else:
+            errs.extend(_unknown_keys(db, DEVICE_BINDING_KEYS, f"{prefix}.device_binding"))
             for f in ("volume", "attachment", "mapper"):
                 if f not in db:
                     errs.append(f"{prefix}.device_binding missing '{f}'")
@@ -1476,8 +1713,10 @@ def _validate_connection(c: dict, i: int) -> list[str]:
     for f in ("connection", "enforced_at", "in_transit"):
         if f not in c:
             errs.append(f"{prefix} missing '{f}'")
+    errs.extend(_unknown_keys(c, CONNECTION_KEYS, prefix))
     if "in_transit" in c and isinstance(c["in_transit"], dict):
         it = c["in_transit"]
+        errs.extend(_unknown_keys(it, IN_TRANSIT_KEYS, f"{prefix}.in_transit"))
         for f in ("tls", "cert_verification", "does_not_defend"):
             if f not in it:
                 errs.append(f"{prefix}.in_transit missing '{f}'")
@@ -1519,6 +1758,7 @@ def validate_ledger(ledger) -> list[str]:
             if not isinstance(v, dict) or "kind" not in v or "mechanisms" not in v:
                 errs.append(f"store_classes.{t} missing kind/mechanisms")
                 continue
+            errs.extend(_unknown_keys(v, STORE_CLASS_KEYS, f"store_classes.{t}"))
             if v["kind"] not in STORE_CLASS_KIND_ENUM:
                 errs.append(f"store_classes.{t}.kind invalid: {v['kind']!r}")
             if not isinstance(v["mechanisms"], list) or not v["mechanisms"]:
@@ -1601,10 +1841,13 @@ def run_sweep(
     check_class_conformance(ledger, fails)
     check_live_coverage_floor(ledger, fails)
 
+    luks_rows = [r for r in ledger["stores"] if r["at_rest"]["mechanism"] == "luks"]
+    apparatus = scan_apparatus(infra_files, cache) if luks_rows else None
+    mount_ev = scan_mount_evidence(infra_files, cache) if luks_rows else None
     for row in ledger["stores"]:
         mech = row["at_rest"]["mechanism"]
         if mech == "luks":
-            check_luks_row(row, tf_files, infra_files, cache, fails)
+            check_luks_row(row, tf_files, infra_files, cache, fails, apparatus, mount_ev)
         check_at_rest(row, today, repo_root, fails)
 
     for conn in ledger["connections"]:

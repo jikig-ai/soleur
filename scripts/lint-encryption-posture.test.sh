@@ -229,6 +229,19 @@ run_case_reports() {
   if grep -qF "$needle" <<<"$out"; then pass "$name"; else fail "$name" "report did not mention '$needle'. output: $out"; fi
 }
 
+# Positive control (ADR-193): the verdict helpers must be able to FAIL.
+# Reported via printf + exit, never through them; then unwound.
+_pc_fail0=$FAIL; _pc_total0=$TOTAL
+run_case "positive control (expected to FAIL): wrong rc" 7 \
+  --repo-sweep --repo-root "$REPO_TS1" --ledger "$LEDGER_TS1" --today "$TODAY" >/dev/null
+run_case_reports "positive control (expected to FAIL): absent needle" 0 "NEEDLE-THAT-NEVER-APPEARS" \
+  --repo-sweep --repo-root "$REPO_TS1" --ledger "$LEDGER_TS1" --today "$TODAY" >/dev/null
+if [[ $((FAIL - _pc_fail0)) -ne 2 ]]; then
+  printf 'GUARD FAIL: run_case/run_case_reports could not record a failure\n' >&2
+  exit 2
+fi
+FAIL=$_pc_fail0; TOTAL=$_pc_total0
+
 run_case_reports "TS-1 luks row resolves via device_binding -> PASS" 0 "encryption-posture:" \
   --repo-sweep --repo-root "$REPO_TS1" --ledger "$LEDGER_TS1" --today "$TODAY"
 
@@ -658,49 +671,82 @@ run_case_reports "TS-18 disclosed_as anchor does not resolve for a plaintext-exc
 # A mutation that does NOT flip its fixture means the branch was vacuous.
 # ===========================================================================
 
-# run_mutation <label> <markers> <repo> <ledger> [expected_rc]
-# <markers> is a space-separated list; every listed region is deleted. The
-# default expectation is FAIL->PASS (rc 0). expected_rc=1 asserts the mutant
-# still FAILs: that is how a check whose verdict is shared with another (the
-# floor) is proven to hold that verdict on its own.
+# run_mutation <label> <markers> <repo> <ledger> [want_rc] [needle] [base_rc]
+#   base_rc (default 1): the UNMUTATED SUT's exit on this fixture.
+#   want_rc (default 0): the mutant's exit. want_rc=1 on a base_rc=1 fixture
+#     proves the REMAINING check holds the verdict alone; then `needle` must
+#     name that check's FAIL, so a crash (also rc 1) cannot pass for it.
+# Each marker must bracket exactly one non-empty region, end after start; the
+# mutant must differ from the SUT and must print the sweep's summary line, so
+# a truncated or unchanged mutant is never scored.
 run_mutation() {
-  local mb="$1" markers="$2" repo="$3" ledger="$4" want="${5:-0}"
-  local marker="$markers"
+  local mb="$1" markers="$2" repo="$3" ledger="$4" want="${5:-0}" needle="${6:-}" base_want="${7:-1}"
   local base_rc=0
   python3 "$SUT" --repo-sweep --repo-root "$repo" --ledger "$ledger" --today "$TODAY" >/dev/null 2>&1 || base_rc=$?
-  if [[ "$base_rc" != "1" ]]; then
-    fail "$mb baseline must FAIL before mutation" "baseline exit=$base_rc (expected 1) for $ledger"
+  if [[ "$base_rc" != "$base_want" ]]; then
+    fail "$mb baseline exits $base_want before mutation" "baseline exit=$base_rc for $ledger"
     return
   fi
   local mb_safe="${mb//\//_}"
-  local mutated="$TMPDIR_TEST/mutated_${mb_safe}.py"
+  local mutated="$TMPDIR_TEST/mutated_${mb_safe// /_}.py"
   cp "$SUT" "$mutated"
-  local m
+  local m ns ne ls le
   for m in $markers; do
-    if ! grep -qF "# MUTATION-TARGET: ${m} start" "$mutated"; then
-      fail "$mb marker $m exists in the SUT" "no '# MUTATION-TARGET: ${m} start' line"
+    ns=$(grep -cF "# MUTATION-TARGET: ${m} start" "$mutated" || true)
+    ne=$(grep -cF "# MUTATION-TARGET: ${m} end" "$mutated" || true)
+    if [[ "$ns" != "1" || "$ne" != "1" ]]; then
+      fail "$mb marker $m brackets exactly one region" "start markers=$ns end markers=$ne"
       return
     fi
-    sed -i "/# MUTATION-TARGET: ${m} start/,/# MUTATION-TARGET: ${m} end/d" "$mutated"
+    ls=$(grep -nF "# MUTATION-TARGET: ${m} start" "$mutated" | cut -d: -f1) || true
+    le=$(grep -nF "# MUTATION-TARGET: ${m} end" "$mutated" | cut -d: -f1) || true
+    if (( le <= ls + 1 )); then
+      fail "$mb marker $m brackets a non-empty region" "start line=$ls end line=$le"
+      return
+    fi
+    sed -i "${ls},${le}d" "$mutated"
   done
-  if ! python3 -c "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=True)" "$mutated" >/dev/null 2>&1; then
-    fail "$mb mutated script must still compile" "syntax error after deleting $marker"
+  if cmp -s "$SUT" "$mutated"; then
+    fail "$mb the mutant differs from the SUT" "no bytes changed"
     return
   fi
-  local mut_rc=0
-  python3 "$mutated" --repo-sweep --repo-root "$repo" --ledger "$ledger" --today "$TODAY" >/dev/null 2>&1 || mut_rc=$?
-  if [[ "$want" == "0" && "$mut_rc" == "0" ]]; then
-    pass "$mb ($marker): deleting the branch flips FAIL->PASS (branch is load-bearing)"
-  elif [[ "$want" == "0" ]]; then
-    fail "$mb ($marker): deleting the branch flips FAIL->PASS (branch is load-bearing)" \
-      "mutated exit=$mut_rc (expected 0) — branch may be VACUOUS, or another independent check still fails"
-  elif [[ "$mut_rc" == "$want" ]]; then
-    pass "$mb ($marker): the mutant still FAILs (the remaining check holds the verdict alone)"
+  if ! python3 -c "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=True)" "$mutated" >/dev/null 2>&1; then
+    fail "$mb mutated script must still compile" "syntax error after deleting $markers"
+    return
+  fi
+  local mut_rc=0 out
+  out="$(python3 "$mutated" --repo-sweep --repo-root "$repo" --ledger "$ledger" --today "$TODAY" 2>&1)" || mut_rc=$?
+  if ! grep -qE '^encryption-posture: ' <<<"$out"; then
+    fail "$mb the mutant ran to its summary line" "no summary line; output: ${out:0:300}"
+    return
+  fi
+  local label
+  if [[ "$base_want" == "1" && "$want" == "0" ]]; then
+    label="$mb ($markers): deleting the branch flips FAIL->PASS (branch is load-bearing)"
+  elif [[ "$base_want" == "0" ]]; then
+    label="$mb ($markers): deleting the branch flips PASS->FAIL (the must-PASS fixture depends on it)"
   else
-    fail "$mb ($marker): the mutant still FAILs (the remaining check holds the verdict alone)" \
-      "mutated exit=$mut_rc (expected $want)"
+    label="$mb ($markers): the mutant still FAILs (the remaining check holds the verdict alone)"
+  fi
+  if [[ "$mut_rc" != "$want" ]]; then
+    fail "$label" "mutated exit=$mut_rc (expected $want)"
+  elif [[ -n "$needle" ]] && ! grep -qF "$needle" <<<"$out"; then
+    fail "$label" "mutant output lacks the surviving check's FAIL '$needle'; output: ${out:0:300}"
+  else
+    pass "$label"
   fi
 }
+
+# Positive control for run_mutation: a fixture that does not FAIL at baseline
+# must be scored as a failure. Reported via printf + exit, never through the
+# helper under test (ADR-193), then unwound.
+_pc_fail0=$FAIL; _pc_total0=$TOTAL
+run_mutation "positive control (expected to FAIL)" "MB-9" "$REPO_TS1" "$LEDGER_TS1" >/dev/null
+if [[ $((FAIL - _pc_fail0)) -ne 1 ]]; then
+  printf 'GUARD FAIL: run_mutation could not record a failure\n' >&2
+  exit 2
+fi
+FAIL=$_pc_fail0; TOTAL=$_pc_total0
 
 # --- MB-1: the unledgered-store branch. Since #8532 PR-1 the floor is exact
 # (check_store_id_accounted + check_non_iac_identity), so an unledgered address
@@ -748,7 +794,7 @@ write_file "$LEDGER_MB1" <<'EOF'
 EOF
 run_case_reports "MB-1 fixture baseline: orphan_luks unledgered -> FAIL" 1 "unledgered store hcloud_volume.orphan_luks" \
   --repo-sweep --repo-root "$REPO_MB1" --ledger "$LEDGER_MB1" --today "$TODAY"
-run_mutation "MB-1/floor-only" "MB-22" "$REPO_MB1" "$LEDGER_MB1" 1
+run_mutation "MB-1/floor-only" "MB-22" "$REPO_MB1" "$LEDGER_MB1" 1 "unledgered store hcloud_volume.orphan_luks"
 run_mutation "MB-1" "MB-1 MB-22" "$REPO_MB1" "$LEDGER_MB1"
 
 # --- MB-2: delete the citation-resolution step (accept the row's word) ->
@@ -985,23 +1031,23 @@ run_case_reports "P1-LUKS must-PASS: disclosure line claims encryption" 0 "0 fai
 mk_luks_disclosure_case absent '- **Encrypted storage:** encryption at rest is ABSENT for this volume.'
 REPO_P1_LUKS_ABSENT="$P1_REPO"; LEDGER_P1_LUKS_ABSENT="$P1_LEDGER"
 run_case_reports "P1-LUKS disclosure says encryption at rest is ABSENT -> FAIL denies" 1 \
-  "denies encryption on its anchor line" \
+  "denies encryption in its claim sentence" \
   --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
 
 mk_luks_disclosure_case not '- **Encrypted storage:** this volume is not encrypted.'
 run_case_reports "P1-LUKS disclosure says 'not encrypted' -> FAIL denies" 1 \
-  "denies encryption on its anchor line" \
+  "denies encryption in its claim sentence" \
   --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
 
 mk_luks_disclosure_case unenc '- **Encrypted storage:** workspace data sits on an unencrypted volume.'
 run_case_reports "P1-LUKS disclosure says 'unencrypted' -> FAIL denies" 1 \
-  "denies encryption on its anchor line" \
+  "denies encryption in its claim sentence" \
   --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
 
 mk_luks_disclosure_case drift '- **Encrypted storage:** workspace data is stored on a Hetzner volume.'
 REPO_P1_LUKS_DRIFT="$P1_REPO"; LEDGER_P1_LUKS_DRIFT="$P1_LEDGER"
 run_case_reports "P1-LUKS disclosure drifted: only the anchor says Encrypted -> FAIL no claim" 1 \
-  "does not claim encryption on its anchor line" \
+  "does not claim encryption at rest in its claim sentence" \
   --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
 
 mk_luks_disclosure_case dup "$(printf -- '- **Encrypted storage:** LUKS-encrypted.\n- **Encrypted storage:** LUKS-encrypted.')"
@@ -1011,7 +1057,7 @@ run_case_reports "P1-LUKS luks disclosure anchor occurs twice -> FAIL ambiguous"
 
 # --- Mutation rows MB-17..MB-21 (+ MB-22, the floor's own FAIL branch, which
 # P1-ID shares a verdict with). ---
-run_mutation "MB-17/floor-only" "MB-22" "$REPO_P1" "$LEDGER_P1_ID_DEL" 1
+run_mutation "MB-17/floor-only" "MB-22" "$REPO_P1" "$LEDGER_P1_ID_DEL" 1 "non_iac_stores entry supabase.prd names no stores[] row"
 run_mutation "MB-17" "MB-17 MB-22" "$REPO_P1" "$LEDGER_P1_ID_DEL"
 run_mutation "MB-18" "MB-18" "$REPO_P1_UNQ" "$LEDGER_P1_UNQ_TWICE"
 run_mutation "MB-19" "MB-19" "$REPO_P1_UNQ" "$LEDGER_P1_UNQ_NONE"
@@ -1286,12 +1332,12 @@ mk_ml_ledger() {
 }
 LEDGER_P2_ML_BAD="$TMPDIR_TEST/p2-ml-bad.json"
 mk_ml_ledger "$LEDGER_P2_ML_BAD" "" "$REEVAL_DEF"
-run_case_reports "P2-MULT multi-line for_each is read whole -> FAIL closed naming the full expression" 1 \
-  "hcloud_volume.ml is for_each = { for k, v in var.web_hosts : k => v }, which this check cannot resolve" \
+run_case_reports "P2-MULT a multi-line for_each over one var map is read whole and compared" 1 \
+  "hcloud_volume.ml is for_each = { for k, v in var.web_hosts : k => v } but declares no multiplicity" \
   --repo-sweep --repo-root "$REPO_P2_ML" --ledger "$LEDGER_P2_ML_BAD" --today "$TODAY"
 LEDGER_P2_ML_OK="$TMPDIR_TEST/p2-ml-ok.json"
-mk_ml_ledger "$LEDGER_P2_ML_OK" '{ "instances": [] }' "when var.web_hosts gains a host"
-run_case_reports "P2-MULT must-PASS: multi-line for_each gated on var.web_hosts" 0 "0 failing checks" \
+mk_ml_ledger "$LEDGER_P2_ML_OK" '{ "instances": ["web-1"] }' "when var.web_hosts gains a host"
+run_case_reports "P2-MULT must-PASS: the wrapped for_each declares the map's keys" 0 "0 failing checks" \
   --repo-sweep --repo-root "$REPO_P2_ML" --ledger "$LEDGER_P2_ML_OK" --today "$TODAY"
 
 # The sweep reads what is COMMITTED. In a git work tree an untracked *.tf (or a
@@ -1393,7 +1439,6 @@ run_mutation "MB-24/gate" "MB-24" "$REPO_P2" "$LEDGER_P2_CNT_GATE"
 run_mutation "MB-24/reeval" "MB-24" "$REPO_P2" "$LEDGER_P2_CNT_REEVAL"
 run_mutation "MB-24/module" "MB-24" "$REPO_P2_MOD" "$LEDGER_P2_MOD_BAD"
 run_mutation "MB-25" "MB-25" "$REPO_P2" "$LEDGER_P2_SOLO"
-run_mutation "MB-24/multi-line" "MB-24" "$REPO_P2_ML" "$LEDGER_P2_ML_BAD"
 run_mutation "MB-29/two-roots" "MB-29" "$REPO_P2_ROOTS" "$LEDGER_P2_ROOTS"
 run_mutation "MB-29/dup-catalogue" "MB-29" "$REPO_P1" "$LEDGER_P2_DUPCAT"
 run_mutation "MB-30" "MB-30" "$REPO_P2_OVL" "$LEDGER_P2_CLS"
@@ -1549,6 +1594,196 @@ run_mutation "MB-26" "MB-26" "$REPO_P3_DUP" "$LEDGER_P3_OK"
 run_mutation "MB-16" "MB-16" "$REPO_P3_GHOST" "$LEDGER_P3_OK"
 run_mutation "MB-27" "MB-27" "$REPO_P3" "$LEDGER_P3_PA1"
 run_mutation "MB-28" "MB-28" "$REPO_P3_BAD" "$LEDGER_P3_OK"
+
+# --- Disclosure claim sentence (#8527): every denial alternative, the
+# qualifier-in-a-later-sentence allowance, and single-token claims. ---
+p1_luks_case() {
+  local name="$1" rc="$2" needle="$3" line="$4"
+  mk_luks_disclosure_case "$name" "$line"
+  run_case_reports "P1-LUKS $name -> rc $rc" "$rc" "$needle" \
+    --repo-sweep --repo-root "$P1_REPO" --ledger "$P1_LEDGER" --today "$TODAY"
+}
+DENY="denies encryption in its claim sentence"
+NOCLAIM="does not claim encryption at rest in its claim sentence"
+p1_luks_case never 1 "$DENY" '- **Encrypted storage:** the volume was never encrypted.'
+p1_luks_case not-yet 1 "$DENY" '- **Encrypted storage:** the volume is not yet encrypted.'
+p1_luks_case isnt 1 "$DENY" "- **Encrypted storage:** the volume isn't LUKS-encrypted."
+p1_luks_case no-luks 1 "$DENY" '- **Encrypted storage:** the volume does not use LUKS.'
+p1_luks_case cannot 1 "$DENY" '- **Encrypted storage:** the volume cannot be encrypted today.'
+p1_luks_case planned 1 "$DENY" '- **Encrypted storage:** the volume will be LUKS-encrypted in a future release.'
+p1_luks_case plaintext 1 "$DENY" '- **Encrypted storage:** LUKS is planned; today the data is stored in plaintext.'
+p1_luks_case disabled 1 "$DENY" '- **Encrypted storage:** encryption at rest is disabled on this volume.'
+p1_luks_case none 1 "$DENY" '- **Encrypted storage:** encryption at rest: none.'
+p1_luks_case transit-only 1 "$NOCLAIM" '- **Encrypted storage:** data is encrypted in transit (TLS); at rest it is stored as-is.'
+p1_luks_case wrapped 1 "$DENY" "$(printf -- '- **Encrypted storage:** the volume is not\n  encrypted at rest.')"
+p1_luks_case later-qualifier 0 "0 failing checks" '- **Encrypted storage:** the volume is LUKS-encrypted. A credential that can fetch its key sits on the unencrypted system disk.'
+p1_luks_case benign-negation 0 "0 failing checks" '- **Encrypted storage:** the volume is LUKS-encrypted and the key is not stored on the volume.'
+p1_luks_case encrypted-only 0 "0 failing checks" '- **Encrypted storage:** data is encrypted at rest with AES-256.'
+p1_luks_case luks-only 0 "0 failing checks" '- **Encrypted storage:** the volume is a LUKS2 container.'
+
+# --- Guard 2: gate derivation, unresolvable variable, stale instance, gateless. ---
+LEDGER_P2_WRONGGATE="$TMPDIR_TEST/p2-wronggate.json"
+mk_mult_ledger "$LEDGER_P2_WRONGGATE" "$WS_OK" "" "$EXTRA_OK" "when var.some_unrelated_flag flips"
+run_case_reports "P2-MULT reevaluate_when naming an unrelated gate -> FAIL" 1 \
+  "exception.reevaluate_when must name one of local.extra_enabled" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_WRONGGATE" --today "$TODAY"
+LEDGER_P2_PREFIXGATE="$TMPDIR_TEST/p2-prefixgate.json"
+mk_mult_ledger "$LEDGER_P2_PREFIXGATE" "$WS_OK" "" "$EXTRA_OK" "when local.extra_enabled_v2 flips"
+run_case_reports "P2-MULT reevaluate_when naming a prefix-colliding gate -> FAIL" 1 \
+  "exception.reevaluate_when must name one of local.extra_enabled" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_PREFIXGATE" --today "$TODAY"
+LEDGER_P2_STALE="$TMPDIR_TEST/p2-stale.json"
+mk_mult_ledger "$LEDGER_P2_STALE" '{ "instances": ["web-1", "web-2", "web-3"] }' "" "$EXTRA_OK" "$EXTRA_REEVAL"
+run_case_reports "P2-MULT a stale extra instance -> FAIL" 1 \
+  "covers instances [web-1, web-2, web-3] but var.web_hosts declares [web-1, web-2]" \
+  --repo-sweep --repo-root "$REPO_P2" --ledger "$LEDGER_P2_STALE" --today "$TODAY"
+
+# mk_one_block <dir> <tf body> — one hcloud_volume "b" in apps/x/infra/b.tf,
+# plus a variables.tf declaring web_hosts with two keys on ONE line.
+mk_one_block() {
+  local d="$1" body="$2"
+  write_file "$d/apps/x/infra/variables.tf" <<'EOF'
+variable "web_hosts" {
+  default = { "web-1" = { location = "hel1" }, "web-2" = { location = "hel1" } }
+}
+EOF
+  printf '%s\n' "$body" | write_file "$d/apps/x/infra/b.tf"
+}
+mk_b_ledger() {
+  {
+    echo '{ "schema_version": 1,'
+    echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+    echo '  "non_store_types": [], "non_iac_stores": [], "stores": ['
+    mk_exc_row "hcloud_volume.b" "$2" "$3"
+    echo '  ], "connections": [] }'
+  } | write_file "$1"
+}
+LEDGER_B_NONE="$TMPDIR_TEST/b-none.json"; mk_b_ledger "$LEDGER_B_NONE" "" "$REEVAL_DEF"
+LEDGER_B_WEB="$TMPDIR_TEST/b-web.json"; mk_b_ledger "$LEDGER_B_WEB" '{ "instances": ["web-1", "web-2"] }' "$REEVAL_DEF"
+LEDGER_B_EMPTY="$TMPDIR_TEST/b-empty.json"; mk_b_ledger "$LEDGER_B_EMPTY" '{ "instances": [] }' "$REEVAL_DEF"
+
+REPO_B_SAMELINE="$TMPDIR_TEST/b-sameline"
+mk_one_block "$REPO_B_SAMELINE" "$(printf 'resource "hcloud_volume" "b" {\n  for_each = var.web_hosts\n}')"
+run_case_reports "P2-KEYS two map keys on one line are both read" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_B_SAMELINE" --ledger "$LEDGER_B_WEB" --today "$TODAY"
+REPO_B_UNRES="$TMPDIR_TEST/b-unres"
+mk_one_block "$REPO_B_UNRES" "$(printf 'resource "hcloud_volume" "b" {\n  for_each = var.no_such_map\n}')"
+run_case_reports "P2-MULT a for_each over an undeclared variable fails closed" 1 \
+  "exception.reevaluate_when must name one of var.no_such_map" \
+  --repo-sweep --repo-root "$REPO_B_UNRES" --ledger "$LEDGER_B_EMPTY" --today "$TODAY"
+REPO_B_OVR="$TMPDIR_TEST/b-override"
+mk_one_block "$REPO_B_OVR" "$(printf 'resource "hcloud_volume" "b" {\n  for_each = var.web_hosts\n}')"
+printf 'variable "web_hosts" {\n  default = { "web-1" = {} }\n}\n' | write_file "$REPO_B_OVR/apps/x/infra/variables_override.tf"
+run_case_reports "P2-MULT an override.tf redeclaring the variable fails closed" 1 \
+  "whose instances this check cannot verify" \
+  --repo-sweep --repo-root "$REPO_B_OVR" --ledger "$LEDGER_B_WEB" --today "$TODAY"
+REPO_B_GATELESS="$TMPDIR_TEST/b-gateless"
+mk_one_block "$REPO_B_GATELESS" "$(printf 'resource "hcloud_volume" "b" {\n  count = 2\n}')"
+run_case_reports "P2-MULT a gateless count -> FAIL naming no gate" 1 \
+  "names no var./local./module. gate" \
+  --repo-sweep --repo-root "$REPO_B_GATELESS" --ledger "$LEDGER_B_EMPTY" --today "$TODAY"
+REPO_B_BRACE_CMT="$TMPDIR_TEST/b-brace-comment"
+mk_one_block "$REPO_B_BRACE_CMT" "$(printf 'resource "hcloud_volume" "b" {\n  # see the {} map below }\n  for_each = var.web_hosts\n}')"
+run_case_reports "P2-HCL a brace inside a comment does not truncate the block" 1 \
+  "hcloud_volume.b is for_each = var.web_hosts but declares no multiplicity" \
+  --repo-sweep --repo-root "$REPO_B_BRACE_CMT" --ledger "$LEDGER_B_NONE" --today "$TODAY"
+REPO_B_BRACE_STR="$TMPDIR_TEST/b-brace-string"
+mk_one_block "$REPO_B_BRACE_STR" "$(printf 'resource "hcloud_volume" "b" {\n  labels = { note = "}" }\n  for_each = var.web_hosts\n}')"
+run_case_reports "P2-HCL a brace inside a string does not truncate the block" 1 \
+  "hcloud_volume.b is for_each = var.web_hosts but declares no multiplicity" \
+  --repo-sweep --repo-root "$REPO_B_BRACE_STR" --ledger "$LEDGER_B_NONE" --today "$TODAY"
+
+# --- Scanner reach: unquoted and hyphenated labels, commented-out blocks,
+# *.tf.json, a Terraform root outside apps/ and infra/. ---
+LEDGER_EMPTY_HV="$TMPDIR_TEST/empty-hv.json"
+{
+  echo '{ "schema_version": 1,'
+  echo '  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["plaintext-exception"] } },'
+  echo '  "non_store_types": [], "non_iac_stores": [], "stores": [], "connections": [] }'
+} | write_file "$LEDGER_EMPTY_HV"
+scan_case() {
+  local name="$1" rc="$2" needle="$3" rel="$4" body="$5"
+  local d="$TMPDIR_TEST/scan-$name"
+  printf '%s\n' "$body" | write_file "$d/$rel"
+  run_case_reports "P2-SCAN $name -> rc $rc" "$rc" "$needle" \
+    --repo-sweep --repo-root "$d" --ledger "$LEDGER_EMPTY_HV" --today "$TODAY"
+}
+scan_case unquoted 1 "unledgered store hcloud_volume.extra" apps/x/infra/a.tf 'resource hcloud_volume extra { size = 10 }'
+scan_case hyphen 1 "unledgered store hcloud_volume.extra-2" apps/x/infra/a.tf 'resource "hcloud_volume" "extra-2" { size = 10 }'
+scan_case commented 0 "0 failing checks" apps/x/infra/a.tf '# resource "hcloud_volume" "old" { size = 10 }'
+scan_case tf-json 1 "unledgered store hcloud_volume.fromjson" apps/x/infra/a.tf.json '{"resource":{"hcloud_volume":{"fromjson":{"size":10}}}}'
+scan_case other-root 1 "unledgered store hcloud_volume.elsewhere" terraform/y/main.tf 'resource "hcloud_volume" "elsewhere" { size = 10 }'
+
+# --- Guard 3: a sub-heading and a fenced `#` line before the clause do not
+# split the section; clause-shaped variants are malformed, never skipped. ---
+mk_p3_register "(no clause in this cell)" "$CL_V" "$(printf '### Amendment note\n\n```bash\n# example query\n```\n\n| **(f)** | Stored. %s |' "$CL_V")"
+cp -r "$REPO_P3" "$TMPDIR_TEST/p3-subafter"; REPO_P3_SUBAFTER="$TMPDIR_TEST/p3-subafter"
+run_case_reports "P3 must-PASS: the clause AFTER an H3 and a fenced # line stays in its section" 0 "0 failing checks" \
+  --repo-sweep --repo-root "$REPO_P3_SUBAFTER" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+p3_loose_case() {
+  local name="$1" clause="$2"
+  mk_p3_register "$CL_V" "$CL_V" "| **(g)** | $clause |"
+  cp -r "$REPO_P3" "$TMPDIR_TEST/p3-loose-$name"
+  run_case_reports "P3 clause variant ($name) is malformed, never skipped" 1 \
+    "malformed encryption-posture clause in kb/register.md#Processing Activity 1" \
+    --repo-sweep --repo-root "$TMPDIR_TEST/p3-loose-$name" --ledger "$LEDGER_P3_OK" --today "$TODAY"
+}
+p3_loose_case double-space '(encryption-posture  ledger: hcloud_volume.v — at rest: luks)'
+p3_loose_case capital '(Encryption-posture ledger: hcloud_volume.v — at rest: luks)'
+p3_loose_case wrapped "$(printf '(encryption-posture\nledger: hcloud_volume.v — at rest: luks)')"
+mk_p3_register "$CL_V" "$CL_V"
+LEDGER_P3_ESC="$TMPDIR_TEST/p3-esc.json"
+mk_p3_ledger "$LEDGER_P3_ESC" "$RECS_OK" '["kb/register.md", "kb/model.c4", "../outside.md"]'
+run_case_reports "P3 a record surface outside the repository -> FAIL" 1 \
+  "record_surfaces entry ../outside.md is not a file inside the repository" \
+  --repo-sweep --repo-root "$REPO_P3" --ledger "$LEDGER_P3_ESC" --today "$TODAY"
+
+# --- Schema: an unknown key anywhere is rejected; every disclosure anchor
+# resolves, whatever the mechanism (MB-31). ---
+REPO_CONN="$TMPDIR_TEST/conn"
+printf '# Doc\n\nAll traffic is TLS-verified.\n' | write_file "$REPO_CONN/docs/p.md"
+mk_conn_ledger() {
+  {
+    echo '{ "schema_version": 1, "store_classes": {}, "non_store_types": [], "non_iac_stores": [], "stores": [],'
+    echo '  "connections": [ { "connection": "a -> b", "enforced_at": "fixture",'
+    echo "    \"in_transit\": { \"tls\": \"1.3\", \"cert_verification\": \"on\", \"does_not_defend\": \"a compromised endpoint\", $2 } } ] }"
+  } | write_file "$1"
+}
+LEDGER_CONN_TYPO="$TMPDIR_TEST/conn-typo.json"; mk_conn_ledger "$LEDGER_CONN_TYPO" '"disclosed_ass": "docs/p.md:TLS-verified"'
+run_case_reports "P2-SCHEMA a misspelled in_transit key is rejected" 1 \
+  "in_transit has unexpected key(s) ['disclosed_ass']" \
+  --repo-sweep --repo-root "$REPO_CONN" --ledger "$LEDGER_CONN_TYPO" --today "$TODAY"
+LEDGER_CONN_GONE="$TMPDIR_TEST/conn-gone.json"; mk_conn_ledger "$LEDGER_CONN_GONE" '"disclosed_as": "docs/p.md:No Such Anchor Xyzzy"'
+run_case_reports "P2-DISC a cert-on connection's disclosure anchor must resolve" 1 \
+  "a -> b disclosed_as docs/p.md:No Such Anchor Xyzzy does not resolve" \
+  --repo-sweep --repo-root "$REPO_CONN" --ledger "$LEDGER_CONN_GONE" --today "$TODAY"
+LEDGER_PROV_GONE="$TMPDIR_TEST/prov-gone.json"
+sed 's#"disclosed_as": "not-publicly-claimed"#"disclosed_as": "docs/gone.md:Nothing"#' "$LEDGER_P1_OK" > "$TMPDIR_TEST/prov-gone.tmp"
+write_file "$LEDGER_PROV_GONE" < "$TMPDIR_TEST/prov-gone.tmp"
+run_case_reports "P2-DISC a provider-managed row's disclosure anchor must resolve" 1 \
+  "supabase.prd disclosed_as docs/gone.md:Nothing does not resolve" \
+  --repo-sweep --repo-root "$REPO_P1" --ledger "$LEDGER_PROV_GONE" --today "$TODAY"
+
+# A two-gate for_each is the shape the multiplicity check cannot resolve.
+REPO_P2_ML2="$TMPDIR_TEST/p2-ml2"
+cp -r "$REPO_P2_ML" "$REPO_P2_ML2"
+write_file "$REPO_P2_ML2/apps/web-platform/infra/ml.tf" <<'EOF'
+resource "hcloud_volume" "ml" {
+  for_each = {
+    for k, v in var.web_hosts : k => v if local.on
+  }
+  name = "soleur-${each.key}"
+}
+EOF
+run_case_reports "P2-MULT a two-gate for_each fails closed" 1 \
+  "which this check cannot resolve" \
+  --repo-sweep --repo-root "$REPO_P2_ML2" --ledger "$LEDGER_P2_ML_BAD" --today "$TODAY"
+
+run_mutation "MB-20/planned" "MB-20" "$TMPDIR_TEST/p1-luks-planned" "$TMPDIR_TEST/p1-luks-planned.json"
+run_mutation "MB-31/connection" "MB-31" "$REPO_CONN" "$LEDGER_CONN_GONE"
+run_mutation "MB-31/provider" "MB-31" "$REPO_P1" "$LEDGER_PROV_GONE"
+run_mutation "MB-32" "MB-32" "$REPO_P3_SUBAFTER" "$LEDGER_P3_OK" 1 "" 0
+run_mutation "MB-24/two-gate" "MB-24" "$REPO_P2_ML2" "$LEDGER_P2_ML_BAD"
 
 # ===========================================================================
 # Live-coverage floor (#6902 / ADR-141): an OPTIONAL top-level
@@ -1852,9 +2087,9 @@ print("\n".join(sorted(paths)))
 PYEOF2
   local extra=()
   mapfile -t extra < "$TMPDIR_TEST/real-extra-paths"
-  ( cd "$REPO_TRUE_ROOT" && git ls-files -z -- ':(glob)apps/**/*.tf' ':(glob)infra/**/*.tf' \
+  ( cd "$REPO_TRUE_ROOT" && git_clean ls-files -z -- ':(glob)**/*.tf' ':(glob)**/*.tf.json' \
         ':(glob)apps/*/infra/**' "${extra[@]}" \
-      | xargs -0 -I{} cp --parents {} "$dst/" )
+      | xargs -0 cp --parents -t "$dst/" )
 }
 REAL_COPY="$TMPDIR_TEST/real-copy"
 mk_real_copy real-copy
@@ -1870,7 +2105,7 @@ import importlib.util, json, re, sys
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("lep", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-tf = Path(sys.argv[2]); keys = m.resolve_var_map_keys(tf, "web_hosts", {})
+tf = Path(sys.argv[2]); keys = m.resolve_var_map_keys(tf, "web_hosts", {}, sorted(tf.parent.glob("*.tf")))
 assert keys, "var.web_hosts default did not resolve"
 new = "web-zz9"
 assert new not in keys
@@ -1953,17 +2188,36 @@ if [[ "$REAL_N" -lt 1 || "$REAL_N" -ne "$REAL_CATALOG_N" ]]; then
   exit 2
 fi
 
-# Hermeticity (h): the SUT must never shell out to gh/curl or hit the network.
-if grep -qE 'gh api|subprocess\.run\(\s*\[.?(gh|curl)|urllib\.request|requests\.(get|post)|http\.client|socket\.' "$SUT"; then
-  fail "H1 hermeticity: SUT contains no network/gh/curl calls" "found a banned token in $SUT"
-else
-  pass "H1 hermeticity: SUT contains no network/gh/curl calls"
+# Hermeticity (h): the SUT must never reach the network. Checked on the AST, so
+# a call split across lines or a docstring mentioning `curl` changes nothing:
+# no network-library import, and no subprocess call whose argv starts with a
+# network client.
+if python3 - "$SUT" <<'PYEOF'
+import ast, sys
+tree = ast.parse(open(sys.argv[1]).read())
+bad = []
+for node in ast.walk(tree):
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+        bad += [n for n in names if n.split(".")[0] in {"urllib", "requests", "http", "socket", "httpx", "aiohttp"}]
+    if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
+        first = node.args[0].elts[0] if node.args[0].elts else None
+        if isinstance(first, ast.Constant) and first.value in {"gh", "curl", "wget", "nc", "ssh"}:
+            bad.append(f"call to {first.value} at line {node.lineno}")
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+PYEOF
+then pass "H1 hermeticity: SUT contains no network/gh/curl calls (AST)"
+else fail "H1 hermeticity: SUT contains no network/gh/curl calls (AST)" "found a banned import or call in $SUT"
 fi
 
-# ---------------------------------------------------------------------------
-# Minimum-cardinality guard (an empty/short run must not GREEN).
-# ---------------------------------------------------------------------------
-MIN_CASES=137
+# Minimum-cardinality guard (an empty/short run must not GREEN). The floor is
+# the fixed case count plus the cases DERIVED from the committed ledger (one per
+# catalogued id, one per web_hosts row), so retiring a store changes both sides
+# together. Reported via printf + exit, never through the verdict helpers.
+MIN_STATIC=169
+WEBHOST_N="$(grep -c . "$TMPDIR_TEST/real-webhost-needles" || true)"
+MIN_CASES=$((MIN_STATIC + REAL_N + WEBHOST_N))
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
