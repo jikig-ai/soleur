@@ -23,6 +23,14 @@
 # HEAD sha + porcelain status + the content hash of every tracked file. HEAD alone would miss
 # a left-behind merge (MERGE_HEAD with a dirty index does not move HEAD); status alone would
 # miss a commit; content alone would miss both.
+#
+# ── WHY THE SUT RUNS FROM A SANDBOX PLUGIN COPY ─────────────────────────────────────────────
+# The production arm executes render-c4-model.sh from BESIDE THE RESOLVER (ADR-235 amendment),
+# never from the repo being merged. So a stub renderer can only be injected the way a real
+# install is laid out: a copy of the SUT inside a <root>/scripts/ directory with the stub as
+# its sibling and a <root>/.claude-plugin/plugin.json. Every copy is taken from $SUT at run
+# time, so a mutation battery that edits $SUT is measured by every row. The ratchet rows still
+# read $SUT itself.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 set -uo pipefail
@@ -74,24 +82,79 @@ tree_fp() {
   } | git hash-object --stdin
 }
 
-# mkrepo <name> — two branches whose .c4 SOURCE text-merges cleanly while the compiled
-# single-line JSON conflicts. That is the real shape: .c4 edits land in different regions,
-# and the artifact is one line, so it collides on every concurrent edit.
-mkrepo() {  # <name> [ok|fail]
-  local r="$SANDBOX/$1"; assert_fixture_dir "$r"
-  mkdir -p "$r/knowledge-base/engineering/architecture/diagrams" "$r/scripts"
+# ── SANDBOX PLUGIN ROOTS ────────────────────────────────────────────────────────────────────
+# mkplugin <name> <renderer-mode|none> [plugin-name] — echoes the plugin root.
+mkplugin() {
+  local root="$SANDBOX/plugins-$1/soleur" mode="$2" pname="${3:-soleur}"; assert_fixture_dir "$root"
+  mkdir -p "$root/scripts" "$root/.claude-plugin"
+  printf '{\n  "name": "%s",\n  "description": "fixture"\n}\n' "$pname" > "$root/.claude-plugin/plugin.json"
+  cp "$SUT" "$root/scripts/resolve-regenerable-conflicts.sh"
+  [[ "$mode" == "none" ]] || _write_renderer "$root/scripts/render-c4-model.sh" "$mode"
+  (cd "$root" && pwd -P)
+}
+
+# _write_renderer <file> <mode> — a stub with the real renderer's argv contract. It REFUSES
+# any argv but `--root <existing dir>` (exit 64), so a resolver that calls it with the wrong
+# shape fails loudly instead of reading a fixture. The `ok` output DERIVES from the .c4 source
+# on disk and names its author, so the committed artifact shows WHICH tree it saw (row 5) and
+# WHICH renderer wrote it (the decoy and wrapper rows).
+_write_renderer() {
+  local f="$1" mode="$2"; assert_fixture_dir "$f"
+  {
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf '[[ "$#" -eq 2 && "${1:-}" == "--root" && -d "${2:-}" ]] || { echo "stub renderer: bad argv: $*" >&2; exit 64; }\n'
+    printf 'R="$2"\n'
+    case "$mode" in
+      ok|extra-mod|extra-new) _emit_ok_body "plugin" ;;
+      fail) printf 'echo "Invalid model.c4"; echo "    Line 3: boom (stub diagnostic)"; echo "ERROR: stub renderer refused" >&2; exit 9\n' ;;
+      noop) printf 'exit 0\n' ;;
+      *) echo "[FATAL] unknown renderer mode $mode" >&2; exit 2 ;;
+    esac
+    [[ "$mode" == "extra-mod" ]] && printf 'echo stray | tee -a "$R/README.md" >/dev/null\n'
+    [[ "$mode" == "extra-new" ]] && printf 'echo stray | tee "$R/stray.txt" >/dev/null\n'
+    true
+  } > "$f"
+  chmod +x "$f"
+}
+_emit_ok_body() {  # <author>
+  printf 'f="$R/%s"\n' "$SRC"
+  printf 'printf %s "$(head -1 "$f")" "$(tail -1 "$f")" | tee "$R/%s" >/dev/null\n' "'{\"from\":\"%s|%s\",\"by\":\"$1\"}\\n'" "$MODEL"
+}
+
+# mkrepo <name> [bare|wrapper|decoy] — two branches whose .c4 SOURCE text-merges cleanly while
+# the compiled single-line JSON conflicts. That is the real shape: .c4 edits land in different
+# regions, and the artifact is one line, so it collides on every concurrent edit.
+#   bare     a self-hosted repo: no scripts/, no plugins/ -- the case #8542 left dead (AC1).
+#   wrapper  this repo's shape: a committed scripts/regenerate-c4-model.sh that writes
+#            `by:repo-wrapper`, proving the wrapper is NOT a second arm (harness row b).
+#   decoy    a merged tree that ships its OWN plugins/soleur/scripts/render-c4-model.sh and a
+#            GENUINE-looking plugin.json (AC4). The decoy writes `by:decoy` and touches
+#            $SANDBOX/DECOY_RAN.
+# Whatever the extra files, they go in the BASE commit: untracked they make the tree dirty and
+# every case refuses on the clean-tree precondition; committed on one side only they become a
+# conflict of their own on a non-resolvable path.
+mkrepo() {
+  local r="$SANDBOX/$1" shape="${2:-bare}"; assert_fixture_dir "$r"
+  mkdir -p "$r/knowledge-base/engineering/architecture/diagrams"
   printf 'first\nx\nx\nx\nx\nx\nx\nx\nx\nlast\n' > "$r/$SRC"
   printf '{"v":"base"}\n' > "$r/$MODEL"
   printf '{"v":"base2"}\n' > "$r/knowledge-base/engineering/architecture/diagrams/second.json"
   printf 'readme base\n' > "$r/README.md"
-  # THE REGEN STUB GOES IN THE BASE COMMIT, and that placement is load-bearing twice over.
-  # (a) Untracked, it makes the tree dirty and every case refuses on the clean-tree
-  #     precondition -- passing the fail-closed rows for entirely the wrong reason.
-  # (b) Committed on ONE branch only, it DIFFERS between the sides and becomes a conflict of
-  #     its own on `scripts/regenerate-c4-model.sh` -- a non-resolvable path, so rows that
-  #     should fail on their own subject instead fail on the harness. Measured: row 3 was
-  #     green that way while never reaching the logic it exists to test.
-  _write_regen_stub "$r" "${2:-ok}"
+  case "$shape" in
+    bare) : ;;
+    wrapper)
+      mkdir -p "$r/scripts"
+      { printf '#!/usr/bin/env bash\nset -euo pipefail\nR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\n'
+        _emit_ok_body "repo-wrapper"; } > "$r/scripts/regenerate-c4-model.sh"
+      chmod +x "$r/scripts/regenerate-c4-model.sh" ;;
+    decoy)
+      mkdir -p "$r/plugins/soleur/scripts" "$r/plugins/soleur/.claude-plugin"
+      printf '{\n  "name": "soleur"\n}\n' > "$r/plugins/soleur/.claude-plugin/plugin.json"
+      { printf '#!/usr/bin/env bash\nset -euo pipefail\nR="${2:-$(pwd)}"\ntouch "%s/DECOY_RAN"\n' "$SANDBOX"
+        _emit_ok_body "decoy"; } > "$r/plugins/soleur/scripts/render-c4-model.sh"
+      chmod +x "$r/plugins/soleur/scripts/render-c4-model.sh" ;;
+    *) echo "[FATAL] unknown repo shape $shape" >&2; exit 2 ;;
+  esac
   _git "$r" init -q -b main
   # Identity goes in the fixture repo's LOCAL config, not only on `_git`'s `-c`. The
   # `-c` form covers the harness's own commits and nothing else: the SUT runs its own
@@ -117,41 +180,34 @@ mkrepo() {  # <name> [ok|fail]
   printf '%s' "$r"
 }
 
-# The `ok` stub DERIVES its output from the .c4 source on disk, so the committed artifact
-# reveals WHICH tree the regen saw. Regen-after-merge yields first-MAIN|last-FEATURE;
-# regen-before-merge would yield first|last-FEATURE. That is row 5.
-_write_regen_stub() {
-  local r="$1" mode="$2"
-  if [[ "$mode" == "fail" ]]; then
-    printf '#!/usr/bin/env bash\necho "stub regen: deliberate failure" >&2\nexit 9\n' \
-      > "$r/scripts/regenerate-c4-model.sh"
-    chmod +x "$r/scripts/regenerate-c4-model.sh"
-    return
-  fi
-  _write_regen_stub_ok "$r"
-}
-_write_regen_stub_ok() {
-  cat > "$1/scripts/regenerate-c4-model.sh" <<STUB
-#!/usr/bin/env bash
-set -euo pipefail
-R="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
-f="\$R/$SRC"
-printf '{"from":"%s|%s"}\n' "\$(head -1 "\$f")" "\$(tail -1 "\$f")" > "\$R/$MODEL"
-STUB
-  chmod +x "$1/scripts/regenerate-c4-model.sh"
-}
+P_OK="$(mkplugin ok ok)"
+P_FAIL="$(mkplugin fail fail)"
+P_NOOP="$(mkplugin noop noop)"
+P_XMOD="$(mkplugin xmod extra-mod)"
+P_XNEW="$(mkplugin xnew extra-new)"
+P_LONELY="$(mkplugin lonely none)"
+P_NOID="$(mkplugin noid ok not-soleur)"
+for _p in "$P_OK" "$P_FAIL" "$P_NOOP" "$P_XMOD" "$P_XNEW" "$P_LONELY" "$P_NOID"; do
+  [[ -f "$_p/scripts/resolve-regenerable-conflicts.sh" ]] || { echo "[FATAL] sandbox plugin not built: $_p" >&2; exit 2; }
+done
 
+# run_at <plugin-root> <repo> <base-ref> [resolvable-tsv] — CLAUDE_PLUGIN_ROOT is UNSET for
+# every row that does not set it on purpose, so a developer's ambient value cannot rescue a
+# broken sibling lookup and turn a RED row green.
+run_at() {
+  local pr="$1" r="$2" base="$3" tsv="${4:-}"
+  local out rc=0
+  if [[ -n "$tsv" ]]; then
+    out="$(cd "$r" && env -u CLAUDE_PLUGIN_ROOT bash "$pr/scripts/resolve-regenerable-conflicts.sh" --test-resolvable "$tsv" "$base" 2>&1)" || rc=$?
+  else
+    out="$(cd "$r" && env -u CLAUDE_PLUGIN_ROOT bash "$pr/scripts/resolve-regenerable-conflicts.sh" "$base" 2>&1)" || rc=$?
+  fi
+  printf '%s\n%s' "$out" "$rc"
+}
 run_sut() {  # <repo> <base-ref> [resolvable-tsv]
   # The seam is ARGV, not the environment (#8384): an inherited env var that reaches an
   # unattended `git commit` is a command-execution channel, and was demonstrated as one.
-  local r="$1" base="$2" tsv="${3:-}"
-  local out rc=0
-  if [[ -n "$tsv" ]]; then
-    out="$(cd "$r" && bash "$SUT" --test-resolvable "$tsv" "$base" 2>&1)" || rc=$?
-  else
-    out="$(cd "$r" && bash "$SUT" "$base" 2>&1)" || rc=$?
-  fi
-  printf '%s\n%s' "$out" "$rc"
+  run_at "$P_OK" "$@"
 }
 sut_rc()  { tail -n1 <<<"$1"; }
 sut_out() { sed '$d' <<<"$1"; }
@@ -212,9 +268,9 @@ CASES_RUN=$((CASES_RUN + 1))
 # ── ROW 2: the regen command fails ─────────────────────────────────────────────────────────
 echo ""
 echo "--- row 2: a failing regen command aborts the merge ---"
-r="$(mkrepo row2 fail)"
+r="$(mkrepo row2)"
 fp_before="$(tree_fp "$r")"
-res="$(run_sut "$r" main)"
+res="$(run_at "$P_FAIL" "$r" main)"
 CASES_RUN=$((CASES_RUN + 1))
 [[ "$(sut_rc "$res")" != "0" ]] && pass "row 2: non-zero on regen failure" \
   || fail "row 2: exited 0 despite the regen failing"
@@ -252,8 +308,9 @@ setup_row3() {  # TWO resolvable paths conflict; the stub regenerates only the f
   _git "$r" checkout -q feature; printf '{"v":"feature2"}\n' > "$r/$second"
   _git "$r" add -A >/dev/null; _git "$r" commit -q -m feature-second
   # argv vector, TAB-separated -- the SUT splits on TAB and execs directly (no eval).
-  printf '%s\tbash\tscripts/regenerate-c4-model.sh\n%s\tbash\tscripts/regenerate-c4-model.sh\n' \
-    "$MODEL" "$second" > "${r}.override.tsv"
+  local rr="$P_OK/scripts/render-c4-model.sh"
+  printf '%s\tbash\t%s\t--root\t%s\n%s\tbash\t%s\t--root\t%s\n' \
+    "$MODEL" "$rr" "$r" "$second" "$rr" "$r" > "${r}.override.tsv"
 }
 setup_row4() {  # the resolvable set is EMPTY
   local r="$1"; : > "${r}.override.tsv"
@@ -320,7 +377,7 @@ for spec in \
   if [[ "$(tree_fp "$r")" == "$fp_before" ]]; then
     pass "$name -> tree byte-identical to entry"
   else
-    fail "$name -> the tree CHANGED; fail-closed means nothing is touched"
+    fail "$name -> the tree CHANGED; fail-closed means nothing is touched: $(sut_out "$res")"
   fi
 done
 
@@ -432,18 +489,37 @@ CASES_RUN=$((CASES_RUN + 1))
 
 # ── THE RESOLVABLE SET IS RATCHETED, like CACHE_PATHS on the cache side ────────────────────
 # The SUT's header says adding a second member "is an edit HERE plus an ADR-235 amendment, so
-# the cache-vs-product question gets asked each time." Nothing enforced the second half: the
-# cache side has `EXPECTED_N=5` in kb-caches-untracked.test.sh; the product side -- where the
-# ADR makes the STRONGER claim -- had no cardinality or membership assertion, so appending a path
-# left every suite green (#8384 review, structural roll-up). This pins the member SET, read from
-# the SUT's default arm with comments stripped. Growing it is a deliberate edit here.
-_default_paths="$(grep -v '^[[:space:]]*#' "$SUT" \
-  | sed -n 's/^[[:space:]]*RESOLVABLE_PATHS=(\(.*\))[[:space:]]*$/\1/p' | tail -1)"
+# the cache-vs-product question gets asked each time." This pins the member SET (#8384 review).
+#
+# ANCHORED ON A NAMED MARKER, not on the assignment's shape. This used to take `tail -1` of
+# every `RESOLVABLE_PATHS=(...)` line, which is a claim about ORDER: a second default written
+# above the first was invisible, and one written in any other syntax was too. The marker is a
+# deliberate token the SUT carries on exactly one line; the row requires exactly one carrier.
+_set_lines="$(grep -E '^[^#]*RESOLVABLE_PATHS=\(.*\)[[:space:]]+# RESOLVABLE-SET: default[[:space:]]*$' "$SUT")"
+_set_n="$(grep -c 'RESOLVABLE-SET: default' "$SUT")"
+_default_paths="$(sed -n 's/^[^#]*RESOLVABLE_PATHS=(\(.*\))[[:space:]]*#.*$/\1/p' <<<"$_set_lines")"
 CASES_RUN=$((CASES_RUN + 1))
-if [[ "$_default_paths" == '"knowledge-base/engineering/architecture/diagrams/model.likec4.json"' ]]; then
+if [[ "$_set_n" -eq 1 && "$_default_paths" == '"knowledge-base/engineering/architecture/diagrams/model.likec4.json"' ]]; then
   pass "resolvable set: exactly one member, model.likec4.json (ratcheted; grow it deliberately + amend ADR-235)"
 else
-  fail "resolvable set changed: [$_default_paths] — an ADR-235 amendment is required alongside this edit"
+  fail "resolvable set changed: [$_default_paths] across $_set_n marker line(s) — an ADR-235 amendment is required alongside this edit"
+fi
+
+# ── EVERY ARGV THE RESOLVER CAN EXECUTE HAS A NAMED SOURCE (Guard 1, m6) ─────────────────────
+# The property #8542's follow-up exists for: nothing the resolver executes comes from the repo
+# being merged. Each site that PRODUCES an argv carries a trailing `# ARGV-SOURCE: <name>`
+# marker, and the set of names is pinned. `plugin` is the production arm (a renderer beside
+# the resolver, or under CLAUDE_PLUGIN_ROOT); `test-seam` is the argv-only --test-resolvable
+# arm. Adding a third source -- or a second `plugin` site -- is a deliberate edit to this row,
+# which names ADR-235 so the review asks where the new command comes from.
+_argv_sources="$(grep -E '^[[:space:]]*[^#[:space:]].*[[:space:]]# ARGV-SOURCE: [a-z-]+[[:space:]]*$' "$SUT" \
+  | sed -E 's/.*# ARGV-SOURCE: ([a-z-]+)[[:space:]]*$/\1/' | LC_ALL=C sort | tr '\n' ' ')"
+_argv_marker_total="$(grep -c 'ARGV-SOURCE: ' "$SUT")"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_argv_sources" == "plugin test-seam " && "$_argv_marker_total" -eq 2 ]]; then
+  pass "argv sources: exactly {plugin, test-seam}, one site each (ADR-235 amendment)"
+else
+  fail "argv sources changed: [$_argv_sources] over $_argv_marker_total marker(s) — a new command source needs an ADR-235 amendment"
 fi
 
 # ── The resolver must NEVER push. ──────────────────────────────────────────────────────────
@@ -495,16 +571,8 @@ fi
 # ours artifact at rc=0: side-picking dressed as regeneration. The SUT now deletes the path
 # before regenerating, so a non-writing command is caught as "did not produce".
 _noop="$(mkrepo noopregen)"
-cat > "$_noop/scripts/regenerate-c4-model.sh" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-chmod +x "$_noop/scripts/regenerate-c4-model.sh"
-# Commit the stub: an uncommitted edit trips the clean-tree precondition first, and the row
-# would then pass for a reason that has nothing to do with the no-op regen.
-_git "$_noop" add -A >/dev/null; _git "$_noop" commit -q -m noop-stub
 _noop_before="$(tree_fp "$_noop")"
-_noop_res="$(run_sut "$_noop" main)"
+_noop_res="$(run_at "$P_NOOP" "$_noop" main)"
 CASES_RUN=$((CASES_RUN + 1))
 if [[ "$(sut_rc "$_noop_res")" != "0" ]] && grep -q 'did not produce' <<<"$(sut_out "$_noop_res")"; then
   pass "a regen that writes nothing is refused, not committed as the ours-side artifact"
@@ -516,10 +584,173 @@ CASES_RUN=$((CASES_RUN + 1))
   && pass "the refused no-op regen left the tree byte-identical" \
   || fail "the no-op refusal left residue behind"
 
+# ══ ADR-235 AMENDMENT (#8542 follow-up): THE ARM IS PLUGIN-OWNED ═════════════════════════════
+echo ""
+echo "--- plugin-owned arm: self-hosted, wrapper, decoy, CLAUDE_PLUGIN_ROOT ---"
+
+# AC1/AC2 + m4/m5 — the happy path above already runs in a BARE repo (no scripts/, no
+# plugins/), so a repo-relative argv or a deleted arm reds it. These rows pin what it wrote.
+r="$(mkrepo selfhosted)"
+res="$(run_sut "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$(sut_rc "$res")" == "0" && "$(cat "$r/$MODEL")" == *'"by":"plugin"'* ]]; then
+  pass "AC1: a self-hosted repo (no repo-local renderer) merges; the artifact is the plugin renderer's"
+else
+  fail "AC1: rc=$(sut_rc "$res") artifact=$(cat "$r/$MODEL") — $(sut_out "$res")"
+fi
+CASES_RUN=$((CASES_RUN + 1))
+[[ -z "$(_git "$r" status --porcelain)" ]] && pass "AC2: git status --porcelain is empty after exit 0" \
+  || fail "AC2: tree dirty after exit 0: $(_git "$r" status --porcelain)"
+CASES_RUN=$((CASES_RUN + 1))
+if grep -qE "^SOLEUR_REGEN_ON_CONFLICT paths=[^ ]+ arm=plugin root=${P_OK} rc=0$" <<<"$(sut_out "$res")"; then
+  pass "the success marker names arm=plugin and the plugin root that rendered"
+else
+  fail "the success marker lacks arm=/root=: $(sut_out "$res")"
+fi
+CASES_RUN=$((CASES_RUN + 1))
+grep -q '\[regen-on-conflict\] regenerating ' <<<"$(sut_out "$res")" \
+  && pass "a progress line precedes the (minutes-long) render" \
+  || fail "no progress line before the render: $(sut_out "$res")"
+
+# Harness row (b) — MUST-PASS, non-canonical: this repo's shape, with a wrapper at the old path.
+r="$(mkrepo withwrapper wrapper)"
+res="$(run_sut "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$(sut_rc "$res")" == "0" && "$(cat "$r/$MODEL")" == *'"by":"plugin"'* ]]; then
+  pass "a repo carrying scripts/regenerate-c4-model.sh still renders through the plugin (the wrapper is not an arm)"
+else
+  fail "the repo wrapper was used or the merge failed: rc=$(sut_rc "$res") artifact=$(cat "$r/$MODEL")"
+fi
+
+# AC4 + m1 — a merged tree ships its OWN plugins/soleur/scripts/render-c4-model.sh behind a
+# genuine-looking plugin.json. Loaded from the plugin root, the resolver runs its sibling. The
+# name check passes the decoy (ADR-179 A11) -- what excludes it is WHERE the root comes from.
+rm -f "$SANDBOX/DECOY_RAN"
+r="$(mkrepo decoy decoy)"
+res="$(run_sut "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$(sut_rc "$res")" == "0" && "$(cat "$r/$MODEL")" == *'"by":"plugin"'* && ! -e "$SANDBOX/DECOY_RAN" ]]; then
+  pass "AC4: a decoy renderer inside the merged tree is never executed"
+else
+  fail "AC4: the decoy ran or the merge failed: rc=$(sut_rc "$res") artifact=$(cat "$r/$MODEL") decoy_ran=$([[ -e "$SANDBOX/DECOY_RAN" ]] && echo yes || echo no)"
+fi
+
+# m1 — the plugin dir must be absolutized BEFORE the resolver cd's to the repo root. Invoked by
+# a RELATIVE path from a subdirectory, a dirname resolved after the cd points somewhere else.
+r="$(mkrepo relative)"
+_rel="$(realpath --relative-to="$r/knowledge-base" "$P_OK/scripts/resolve-regenerable-conflicts.sh")"
+_rel_rc=0
+_rel_out="$(cd "$r/knowledge-base" && env -u CLAUDE_PLUGIN_ROOT bash "$_rel" main 2>&1)" || _rel_rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_rel_rc" -eq 0 && "$(cat "$r/$MODEL")" == *'"by":"plugin"'* ]]; then
+  pass "m1: a relative invocation from a subdirectory still finds the sibling renderer"
+else
+  fail "m1: relative invocation ($_rel) rc=$_rel_rc — $_rel_out"
+fi
+
+# CLAUDE_PLUGIN_ROOT is the FALLBACK, used only when no renderer sits beside the resolver.
+r="$(mkrepo cprfallback)"
+_c_rc=0
+_c_out="$(cd "$r" && CLAUDE_PLUGIN_ROOT="$P_OK" bash "$P_LONELY/scripts/resolve-regenerable-conflicts.sh" main 2>&1)" || _c_rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_c_rc" -eq 0 && "$_c_out" == *"arm=plugin root=${P_OK} rc=0"* ]]; then
+  pass "no sibling renderer: CLAUDE_PLUGIN_ROOT supplies the plugin root"
+else
+  fail "CLAUDE_PLUGIN_ROOT fallback: rc=$_c_rc — $_c_out"
+fi
+
+# Neither source: refuse BEFORE touching anything, and say what to run instead.
+r="$(mkrepo noroot)"
+fp_before="$(tree_fp "$r")"
+res="$(run_at "$P_LONELY" "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(sut_rc "$res")" != "0" && "$(tree_fp "$r")" == "$fp_before" ]] \
+  && pass "no plugin root at all: refused, tree byte-identical" \
+  || fail "no plugin root: rc=$(sut_rc "$res") or the tree changed"
+CASES_RUN=$((CASES_RUN + 1))
+if grep -q 'CLAUDE_PLUGIN_ROOT' <<<"$(sut_out "$res")" && grep -q 'render-c4-model.sh' <<<"$(sut_out "$res")"; then
+  pass "the no-root refusal names the missing root and the renderer to run by hand"
+else
+  fail "the no-root refusal is not actionable: $(sut_out "$res")"
+fi
+
+# The identity check applies to WHICHEVER root is used -- the sibling's included.
+r="$(mkrepo noid)"
+fp_before="$(tree_fp "$r")"
+res="$(run_at "$P_NOID" "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$(sut_rc "$res")" != "0" && "$(tree_fp "$r")" == "$fp_before" ]] && grep -q 'soleur' <<<"$(sut_out "$res")"; then
+  pass "a plugin root whose plugin.json does not name soleur is refused (sanity check, not a boundary)"
+else
+  fail "identity check: rc=$(sut_rc "$res") — $(sut_out "$res")"
+fi
+r="$(mkrepo noidenv)"
+_n_rc=0
+_n_out="$(cd "$r" && CLAUDE_PLUGIN_ROOT="$P_NOID" bash "$P_LONELY/scripts/resolve-regenerable-conflicts.sh" main 2>&1)" || _n_rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$_n_rc" -ne 0 && "$_n_out" == *soleur* ]] \
+  && pass "the identity check also gates the CLAUDE_PLUGIN_ROOT fallback" \
+  || fail "the env fallback skipped the identity check: rc=$_n_rc — $_n_out"
+
+# ── AC3 / m2 — an UNTRACKED .c4 in the diagrams directory ──────────────────────────────────
+# likec4 compiles every .c4 it finds, so an ignored, machine-local generated-components.c4
+# would be compiled into a committed model the merge never saw (P5). IGNORED on purpose: an
+# untracked non-ignored file already trips the clean-tree precondition, so it could not tell
+# this guard's absence from its presence.
+for _nest in "" "sub/"; do
+  _key="untracked$(tr -cd 'a-z' <<<"$_nest")"
+  r="$(mkrepo "$_key")"; assert_fixture_dir "$r"
+  mkdir -p "$r/knowledge-base/engineering/architecture/diagrams/$_nest"
+  printf 'model { extra = component %s }\n' "'Extra'" \
+    > "$r/knowledge-base/engineering/architecture/diagrams/${_nest}generated-components.c4"
+  printf 'generated-components.c4\n' >> "$r/.git/info/exclude"
+  fp_before="$(tree_fp "$r")"
+  res="$(run_sut "$r" main)"
+  CASES_RUN=$((CASES_RUN + 1))
+  [[ "$(sut_rc "$res")" != "0" && "$(tree_fp "$r")" == "$fp_before" ]] \
+    && pass "AC3 (${_nest:-top}): an ignored .c4 source refuses the regen, tree byte-identical" \
+    || fail "AC3 (${_nest:-top}): rc=$(sut_rc "$res") or the tree changed — $(sut_out "$res")"
+  CASES_RUN=$((CASES_RUN + 1))
+  grep -q "${_nest}generated-components.c4" <<<"$(sut_out "$res")" \
+    && pass "AC3 (${_nest:-top}): the refusal names the untracked file" \
+    || fail "AC3 (${_nest:-top}): the refusal does not name the file: $(sut_out "$res")"
+done
+
+# ── D4 / m3 — the regen must write EXACTLY the conflicted path (P3) ────────────────────────
+# `git add` stages only that path and the residual check reads only unmerged paths, so a
+# renderer that also touched another file would leave it in the tree -- or, staged by a later
+# change, in the merge commit. Both a modified TRACKED file and a NEW file are refused, and
+# the unwind removes them: fail-closed means byte-identical, not "the merge was aborted".
+for _spec in "xmod|$P_XMOD|README.md" "xnew|$P_XNEW|stray.txt"; do
+  IFS='|' read -r _k _pr _stray <<<"$_spec"
+  r="$(mkrepo "stray$_k")"
+  fp_before="$(tree_fp "$r")"
+  res="$(run_at "$_pr" "$r" main)"
+  CASES_RUN=$((CASES_RUN + 1))
+  [[ "$(sut_rc "$res")" != "0" ]] && pass "P3 ($_stray): a renderer that writes a second file is refused" \
+    || fail "P3 ($_stray): exited 0 with a stray write — $(sut_out "$res")"
+  CASES_RUN=$((CASES_RUN + 1))
+  [[ "$(tree_fp "$r")" == "$fp_before" ]] && pass "P3 ($_stray): the stray write was unwound, tree byte-identical" \
+    || fail "P3 ($_stray): the tree changed: $(_git "$r" status --porcelain | tr '\n' ' ')"
+  CASES_RUN=$((CASES_RUN + 1))
+  grep -q "$_stray" <<<"$(sut_out "$res")" && pass "P3 ($_stray): the refusal names the stray path" \
+    || fail "P3 ($_stray): the refusal does not name $_stray: $(sut_out "$res")"
+done
+
+# ── AC6 — the renderer's diagnostic reaches the operator ───────────────────────────────────
+# The arm's output used to go to /dev/null, so `bail` could name only the argv. The renderer's
+# diagnostic is its one observability surface; it has to survive into the refusal.
+r="$(mkrepo diag)"
+res="$(run_at "$P_FAIL" "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+grep -q 'Line 3: boom' <<<"$(sut_out "$res")" \
+  && pass "AC6: the bail message carries the renderer's diagnostic text, not only the argv" \
+  || fail "AC6: the diagnostic was swallowed: $(sut_out "$res")"
+
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=40
+_min_cases=69
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
