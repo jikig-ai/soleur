@@ -41,6 +41,7 @@ Detect the active harness before printing commands:
   component paths from the installed plugin root. Render the Claude block below
   with Codex skill mentions and skill-loading instructions substituted. Omit the
   `(type /soleur:<name>)` user-invoked marker: Codex ignores the key (ADR-236).
+  Render the HOW THE SKILLS FIT TOGETHER map verbatim.
 
 Use the matching column in Step 3 below.
 
@@ -65,6 +66,17 @@ WORKFLOW SKILLS (invoked via /soleur:go or directly via Skill tool):
   review                      Run multi-agent code review
   compound                    Capture learnings from solved problems
   one-shot                    Full autonomous engineering workflow
+
+HOW THE SKILLS FIT TOGETHER:
+  Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
+               (go starts at brainstorm by default; qa for UI changes and
+               compound for learnings run between review and ship)
+  On-ramps:    one-shot              go sends fixes and scoped builds; plan to ship
+               drain-labeled-backlog runs one-shot over a labeled issue backlog
+               drain-prs             takes open PRs through review to merge
+               product-roadmap       its "next" step says where to enter the flow
+  Standalone:  most other skills run on their own, for example the legal, flag,
+               cron and operator families, incident, invoice and community
 
 AGENTS: [N] agents across [M] categories
   review    ([count])  Code review, security, performance, patterns
@@ -108,6 +120,17 @@ WORKFLOW SKILLS (invoked via /soleur:go or directly as /soleur:<skill>):
   compound                    Capture learnings from solved problems
   one-shot                    Full autonomous engineering workflow
 
+HOW THE SKILLS FIT TOGETHER:
+  Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
+               (go starts at brainstorm by default; qa for UI changes and
+               compound for learnings run between review and ship)
+  On-ramps:    one-shot              go sends fixes and scoped builds; plan to ship
+               drain-labeled-backlog runs one-shot over a labeled issue backlog
+               drain-prs             takes open PRs through review to merge
+               product-roadmap       its "next" step says where to enter the flow
+  Standalone:  most other skills run on their own, for example the legal, flag,
+               cron and operator families, incident, invoice and community
+
 AGENTS: [N] agents across [M] categories
   review    ([count])  Code review, security, performance, patterns
   research  ([count])  Codebase analysis, best practices, docs
@@ -149,6 +172,17 @@ WORKFLOW SKILLS (invoked via /go or directly via slash command):
   review                Run multi-agent code review
   compound              Capture learnings from solved problems
   one-shot              Full autonomous engineering workflow
+
+HOW THE SKILLS FIT TOGETHER:
+  Main flow:   go -> brainstorm -> plan -> work -> review -> ship -> postmerge
+               (go starts at brainstorm by default; qa for UI changes and
+               compound for learnings run between review and ship)
+  On-ramps:    one-shot              go sends fixes and scoped builds; plan to ship
+               drain-labeled-backlog runs one-shot over a labeled issue backlog
+               drain-prs             takes open PRs through review to merge
+               product-roadmap       its "next" step says where to enter the flow
+  Standalone:  most other skills run on their own, for example the legal, flag,
+               cron and operator families, incident, invoice and community
 
 AGENTS: [N] agents across [M] categories
   (same category breakdown as Claude block)

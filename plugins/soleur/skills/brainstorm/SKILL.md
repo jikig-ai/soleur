@@ -360,7 +360,14 @@ Use the **AskUserQuestion tool** to ask questions **one at a time**.
 - Ask about success criteria
 - If the feature involves an external API, verify its current pricing/tier capabilities via live docs before assuming scope -- model training data is stale for API commercial terms
 
-**Exit condition:** Continue until the idea is clear OR user says "proceed"
+**Dialogue discipline:** This orders and ends the dialogue. It never batches it: still one question per turn.
+
+- **Keep a list of open decision branches.** Seed it from the feature description and the Phase 1.1 research. Each answer can close a branch or open new ones. If a branch falls outside the feature's stated scope, park it as soon as it opens instead of walking it.
+- **Ask in dependency order.** Before asking, check whether the answer depends on another decision that is still open. If it does, ask that upstream decision first. A downstream question waits until the question it depends on is answered.
+- **Look facts up; do not ask them.** If the agent can find a fact (codebase, knowledge base, live docs, a pricing page), it is never a question for the user. Run the lookup in the background (a Task agent or a parallel tool call) and keep asking the questions that do not depend on it. Only the questions downstream of the pending fact wait for it. Before leaving this phase, including on "proceed", collect any pending lookups. A returned fact closes the branches it answers. A failed lookup parks its branch.
+- **Headless:** In pipeline or headless mode (the predicate in Phase 0.4 Lane Auto-Detect), ask nothing. Resolve every branch a lookup can answer and park the rest.
+
+**Exit condition:** The dialogue is done when every open decision branch has been walked (answered) or explicitly parked (the user deferred it, or it needs information nobody has yet). Nothing is silently assumed. Record parked branches in the brainstorm document's Open Questions section (Phase 3.5). If the user says "proceed" first, stop asking and record every unwalked branch there as parked.
 
 ### Phase 2: Explore Approaches
 

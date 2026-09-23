@@ -114,7 +114,7 @@ This gate closes the gap where errors were enumerated in conversation but never 
 
 After verifying session errors are in the learning, determine if any error warrants a workflow change. For each session error, ask: "Could a rule, hook, or skill instruction have prevented this?"
 
-- If yes, produce a proposal in the same format as Phase 1.5 Deviation Analyst (rule text + enforcement tier) and feed it into Constitution Promotion alongside any deviation proposals.
+- If yes, produce a proposal in the same format as Phase 1.5 Deviation Analyst (rule text + enforcement tier) and feed it into Constitution Promotion alongside any deviation proposals. If step 3.6 classified the item, annotate its proposal instead.
 - If no (the error was a one-off or already covered by existing rules), skip.
 - If the error was two readings of one internal word rather than a missing rule, the fix is vocabulary: invoke `soleur:kb-glossary` and record the settled sense in `knowledge-base/project/glossary.md` as a pointer to the file that defines it.
 
@@ -197,7 +197,13 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 3.5. **Ingest recent hook incidents.** Read `.claude/.rule-incidents.jsonl` if present (gitignored single-file log written by `.claude/hooks/lib/incidents.sh`). Filter to events emitted since the session started (use the earliest timestamp in the session log, or the last 30 minutes if no anchor is available). Filter to `event_type ∈ {deny, bypass}` **OR** `kind == "hook_self_fault"`, AND ignore lines where `error` is set — the latter are telemetry-drop sentinels (issue #3509), not deviation evidence. Treat each recent `deny` and `bypass` as evidence for the Deviation Analyst — denies confirm a hook caught a violation; bypasses signal a rule the user actively skipped. A `hook_self_fault` row (issue #7164, ADR-157) is the third class and is admitted explicitly because it carries `event_type: "warn"`, which the `{deny, bypass}` filter excludes by construction: it records a PreToolUse hook that could not parse its own stdin and therefore ran that tool call **with its guards disarmed**. That is deviation evidence of the strongest kind — not a rule the user skipped, but a rule that silently did not run — so it must never be filtered out as advisory noise. Per plan ADR-1, this step **does NOT mutate any learning's frontmatter** — counter aggregation lives exclusively in `knowledge-base/project/rule-metrics.json` (written by the local compound aggregation in Phase 1.5 step 8 — ADR-091). If the file is absent or empty, note "no recent incidents" and continue.
 
-4. **Propose enforcement.** For each detected deviation, first check if an existing PreToolUse hook already covers it by scanning `.claude/hooks/*.sh` comment headers. If a hook already enforces the rule, note "already hook-enforced" and skip the proposal. If no hook covers it, propose enforcement following the hierarchy:
+3.6. **Null-guardrail check.** A deviation scan only sees broken rules, so a failure class with no guard never appears in it. Scope: each Phase 0.5 item triaged `recurring` that is a code or config defect a repo check (lint, typecheck, test, format) could catch, plus each step-3 deviation. Skip when empty; workflow missteps stay with step 4.
+
+- **Read the repo's own check commands first:** every lint, typecheck and test command in `package.json` `scripts`, `Makefile`/`Justfile` targets, language manifests, and pre-commit config (`lefthook.yml`, `.husky/`, `.pre-commit-config.yaml`). Then `grep -l` each name over the CI config and `.claude/hooks/`; read only matching files, treat a missing directory as absent, and follow one wrapper level.
+- **Classify:** **covered** (a hook, CI check or lint rule runs on the failing paths; name it), **unwired** (a check exists but nothing runs it there, including a path-filtered CI job; the choice when unsure), or **none** (no guardrail at all for the class).
+- **Propose once:** **unwired** wires the existing check in, never a second guard; **none** proposes the smallest guard per step 4's hierarchy. If a proposal already exists, annotate it instead. Report it with step 5's template as `Rule violated: none (null guardrail)`. Never auto-apply one: under `HEADLESS_MODE=true`, record it in `## Session Errors` only.
+
+4. **Propose enforcement.** For each detected deviation, first check if an existing PreToolUse hook already covers it by scanning `.claude/hooks/*.sh` comment headers (or reuse step 3.6's scan). If a hook already enforces the rule, or step 3.6 classified the item **covered**, note the covering guard and skip the proposal. If no hook covers it, propose enforcement following the hierarchy:
    - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
    - **Skill instruction** — checked when skill runs, can be overridden
    - **Prose rule** (last resort) — requires agent compliance, weakest enforcement
@@ -227,7 +233,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 6. **Feed into learning document.** For each detected deviation, add it to the learning file's `## Session Errors` section (if not already present from Phase 0.5). Format: `**[description]** — Recovery: [what fixed it] — Prevention: [proposed enforcement]`. This ensures workflow violations are documented in the learning, not just proposed as hooks.
 
-7. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
+7. **Feed into Constitution Promotion.** Present each deviation and each unwired or none finding to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
 
 8. **Rule budget count.** After deviation analysis, get the always-loaded verdict from the linter, then measure the registry statistics the linter does not compute.
 
@@ -327,7 +333,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 ### Empty Case
 
-If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Phase 1.6.
+If step 3 finds no deviations and step 3.6 finds no unwired or none item, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Phase 1.6.
 
 <!-- phase-1.6-start -->
 ## Phase 1.6: Token-Efficiency Analysis (sequential, advisory)
@@ -389,11 +395,11 @@ module: [module]
 
 HARD RULE: This phase MUST run even when compound is invoked inside an automated pipeline (one-shot, ship). The model has historically rationalized skipping this as "pipeline mode optimization" -- that is a protocol violation. Constitution promotion and route-to-definition are the phases that prevent repeated mistakes across sessions. If the pipeline is time-constrained, present proposals with a 5-second timeout per item, but never skip entirely.
 
-**Headless mode:** If `HEADLESS_MODE=true`, auto-promote using LLM judgment. Review recent learnings, determine if any warrant constitution promotion, select the domain and category using LLM judgment, generate the principle text, and check for duplicates via substring match against existing rules in `constitution.md`. Skip any principle that is already covered. Append non-duplicate principles and commit. Do not prompt the user. For deviation analyst proposals, auto-accept hook proposals that have clear rule-to-hook mappings and skip ambiguous ones.
+**Headless mode:** If `HEADLESS_MODE=true`, auto-promote using LLM judgment. Review recent learnings, determine if any warrant constitution promotion, select the domain and category using LLM judgment, generate the principle text, and check for duplicates via substring match against existing rules in `constitution.md`. Skip any principle that is already covered. Append non-duplicate principles and commit. Do not prompt the user. For deviation analyst proposals, auto-accept hook proposals that have clear rule-to-hook mappings and skip ambiguous ones. Never auto-accept a `none (null guardrail)` finding.
 
 **Interactive mode:** After saving the learning, present two categories of proposals:
 
-**1. Deviation Analyst proposals (if any):** If Phase 1.5 produced deviations, present each one with Accept/Skip/Edit. For accepted hook proposals, display the draft script and instruct the user to manually copy it to `.claude/hooks/` after testing. For accepted skill instruction or prose rule proposals, apply the edit to the target file.
+**1. Deviation Analyst proposals (if any):** If Phase 1.5 produced deviations or step-3.6 findings, present each one with Accept/Skip/Edit. For accepted hook proposals, display the draft script and instruct the user to manually copy it to `.claude/hooks/` after testing. For accepted skill instruction or prose rule proposals, apply the edit to the target file.
 
 **2. Constitution promotion:** Prompt the user:
 

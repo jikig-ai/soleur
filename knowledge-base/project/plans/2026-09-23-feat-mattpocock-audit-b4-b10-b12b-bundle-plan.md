@@ -331,6 +331,14 @@ Then make these small edits. Each one anchors on existing text.
 - **`### Empty Case`.** Change the opening condition to "If step 3 finds no deviations and
   step 3.6 finds no unwired or none item". Keep the rest of the sentence.
 
+**Work-phase amendment (byte ceiling).** `compound/SKILL.md` is a lifecycle skill under the
+`skill-body-budget.json` ceiling (57000 bytes, anchored to the merge base by
+`scripts/lint-skill-body-budget.py`, ADR-229). The wording above measured 58100 bytes, 1100 over.
+Work compressed step 3.6 into a lead paragraph plus three bullets. It folded the step-5 template
+note into step 3.6's last bullet ("Report it with step 5's template as `Rule violated: none (null
+guardrail)`") and shortened the step-4, Error-to-Workflow and headless clauses. Every clause and AC
+anchor is kept, and the result is 56839 bytes. The ceiling was not raised.
+
 ### 3. B12b: help composition map
 
 In each of the three harness blocks, add this section inside the fenced `text` block, between the
