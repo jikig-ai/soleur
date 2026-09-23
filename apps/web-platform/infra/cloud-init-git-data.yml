@@ -142,9 +142,9 @@ write_files:
   # is defence in depth against an ownership regression, not the control that closes the hole.
   - path: /home/git/.ssh/authorized_keys
     content: |
-      command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
-      command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
-      command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
+      command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_transport_pubkey}
+      command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_provision_pubkey}
+      command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc ${git_remove_pubkey}
     owner: root:root
     permissions: '0644'
     defer: true
@@ -516,7 +516,7 @@ write_files:
 
   # (#8210) Boot-time LUKS reopen. The STAGE=luks_open heredoc below runs ONCE per instance and
   # the fstab line it appends is `nofail`, so without this unit every later boot left
-  # /mnt/git-data-luks without its backing device, silently. The script never formats and
+  # /mnt/git-data without its backing device, silently. The script never formats and
   # never calls mount(8) (PID 1 mounts via the fstab unit); the key arrives at boot through
   # `doppler run --only-secrets --no-fallback` (ADR-198: never baked); every failure is shipped
   # ONCE by the OnFailure= reporter. Armed by the runcmd item after the heredoc.
@@ -831,6 +831,7 @@ runcmd:
     # after the action below: ssh.service declares RuntimeDirectory=sshd, so systemd tears
     # /run/sshd down on a failed start, and a probe placed after the action would exit 255
     # ("Missing privilege separation directory") in exactly the failure it exists to catch.
+    # (The client-environment directives are ENFORCED below, with the host-key proof — #8211.)
     # Only the two directives whose absence is dangerous are compared, as whole lowercase
     # lines against the lowercased dump — walking all nine would import three normalization
     # traps (`prohibit-password` renders as `without-password`; `AcceptEnv LANG LC_*` prints as
@@ -887,6 +888,22 @@ runcmd:
         ( printf 'sshd host-key proof: %s\n' "$_hk_verdict" >> "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
         exit 1
       fi
+      # (#8211) THE CLIENT-ENVIRONMENT PATH IS CLOSED — ENFORCED HERE, not only linted. The store
+      # scripts' test seams (GIT_DATA_STORE_*, GIT_DATA_MOUNT_ROOT) are environment variables, so a
+      # client that could set one would point the Art. 17 erasure at a store of its choosing.
+      # AcceptEnv may carry only LANG and LC_* (the image default), and PermitUserEnvironment must
+      # read exactly `no`. Same FATAL shape and already-routed stage as the host-key proof above.
+      _env_bad=$(printf '%s\n' "$_sshd_T_dump" | awk '$1=="acceptenv"{for(i=2;i<=NF;i++) if($i!="lang" && $i!~/^lc_/) printf "acceptenv %s; ", $i}')
+      printf '%s\n' "$_sshd_T_dump" | grep -qx 'permituserenvironment no' || _env_bad="$${_env_bad}permituserenvironment not no; "
+      if [ -n "$_env_bad" ]; then
+        _env_detail=/run/git-data-sshd-env.err
+        ( umask 077; printf 'sshd client-environment path open: %s\n' "$_env_bad" > "$_env_detail" ) 2>/dev/null || true
+        [ -s "$_env_detail" ] || _env_detail="sshd client-environment path open: $_env_bad"
+        /usr/local/bin/git-data-emit "git-data sshd client-environment path open" sshd_config fatal "$_env_detail" || true
+        echo "[git-data] FATAL: sshd accepts client environment beyond LANG/LC_* ($_env_bad)." >&2
+        ( printf 'sshd client-environment path open: %s\n' "$_env_bad" >> "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
+        exit 1
+      fi
     fi
     # (#7227) THE RESTART WARNING GETS ITS OWN CAUSE; it shipped `detail=""`. It does NOT
     # reuse $_sshd_detail: reaching here means `sshd -t` PASSED, so that file is empty and
@@ -925,21 +942,15 @@ runcmd:
     # command is MUST-ABORT unless it carries an explicit `|| true` + a naming comment.
     set -e
 
-  # Mount the PLAINTEXT (Phase-2) git-data volume by id at /mnt/git-data. This is the
-  # cutover SOURCE (git-data-cutover.sh OLD_ROOT) — it stays mounted ALONGSIDE the
-  # fresh LUKS volume during the additive rsync-then-flag-flip cutover. Matches the
-  # by-id mount pattern server.tf / cloud-init.yml use for hcloud_volume.workspaces.
-  # `nofail` so a volume hiccup does not wedge boot; the bootstrap's mount assert is
-  # the real gate.
+  # (#8211, ADR-239) /mnt/git-data is the LUKS store's mountpoint, created here; the luks_open
+  # heredoc below mounts the MAPPER on it. The PLAINTEXT volume is NOT mounted here and gets NO
+  # fstab line: nothing mounts it after boot. git-data-bootstrap.sh mounts it once, read-only
+  # and privately, only to prove it holds no repository (7b step 2), then unmounts it. The
+  # attachment is automount=false (git-data.tf), so Hetzner does not mount it either.
   - |
     STAGE=volume_mount # (#6982) name the stage for the top-armed on_err fatal
     ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
   - mkdir -p /mnt/git-data
-  # MUST-TOLERATE (Phase 0.4 item 3). The `|| true` is now load-bearing, not decorative:
-  # under the armed `set -e` a volume hiccup would abort the boot. The bootstrap's own
-  # `mountpoint -q` assert is the real gate and fails loud.
-  - mount /dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data || true
-  - echo '/dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data ext4 defaults,nofail 0 2' >> /etc/fstab
 
   # --- Doppler CLI (arch-derived) — the ONLY channel for the LUKS passphrase -----
   # The LUKS key is NEVER baked into this user_data (retrievable via the hcloud
@@ -980,14 +991,14 @@ runcmd:
   # /etc/default/git-data-doppler is created in write_files at 0600 (#7460) — it used to be
   # a printf-then-chmod pair here, which left the token at 0644 in between.
 
-  # --- FRESH LUKS-at-rest volume (Sub-PR 3.D cutover target) --------------------
-  # Guest-side LUKS (NOT an hcloud attribute): the fresh block volume is a PLAIN
+  # --- The LUKS-at-rest store (the SERVED store since #8211) ----------------------
+  # Guest-side LUKS (NOT an hcloud attribute): the block volume is a PLAIN
   # hcloud_volume; cryptsetup runs HERE, unlocked by GIT_DATA_LUKS_KEY. IDEMPOTENT
   # (isLuks / mapper-exists / blkid guards) so a 2nd cloud-init run is a no-op.
   # The passphrase is piped via stdin (`--key-file -`) — NEVER an argv token.
-  # Mounted at /mnt/git-data-luks (git-data-cutover.sh FRESH_ROOT), ALONGSIDE the
-  # plaintext source. FAIL LOUD if GIT_DATA_LUKS_KEY is empty — NEVER an unencrypted
-  # fallback (NFR-026). `${git_data_luks_volume_id}` is terraform-interpolated;
+  # Mounted at /mnt/git-data, the path every store script acts on (#8211, ADR-239); the
+  # plaintext volume is not mounted at all. FAIL LOUD if GIT_DATA_LUKS_KEY is empty — NEVER
+  # an unencrypted fallback (NFR-026). `${git_data_luks_volume_id}` is terraform-interpolated;
   # $GIT_DATA_LUKS_KEY / $DEV (no braces) are left literal for the doppler-run shell.
   # (#6982, W0) `--config prd_git_data`, NOT `--config prd`. A LIVE BOOT-BREAKER: the token
   # is scoped to prd_git_data, and measured under an identically-scoped token, `--config prd`
@@ -1092,8 +1103,8 @@ runcmd:
     # returns 1 with EMPTY stderr, identical to blank, while blkid still says crypto_LUKS. So rc
     # alone cannot authorise a format. workspaces-luks.tf already mandates the blkid
     # discriminator ("NEVER cryptsetup isLuks — the documented data-destroyer on a populated
-    # device"); this volume stopped being born-fresh when git-data-cutover.sh made it the rsync
-    # target, and there is no luksHeaderBackup here, so a wrong format is terminal. blkid's OWN
+    # device"); this volume is not born-fresh on a host replace — it is the adopted, SERVED store
+    # (#8211) — and there is no luksHeaderBackup here, so a wrong format is terminal. blkid's OWN
     # rc is checked (0=found, 2=none, 127=absent) — "could not measure" is never "blank".
     # Stderr via SUBSTITUTION, never `2>>`: a failed redirect returns 1 WITHOUT running the
     # probe. `|| _rc=$?` not `; _rc=$?` — the naked form aborts under `set -euo pipefail`.
@@ -1153,19 +1164,19 @@ runcmd:
       # only coverage on a docker-less machine).
       mkfs.ext4 -q -O project /dev/mapper/git-data 2>>"$GIT_DATA_LUKS_DETAIL"
     fi
-    mkdir -p /mnt/git-data-luks 2>>"$GIT_DATA_LUKS_DETAIL"
+    mkdir -p /mnt/git-data 2>>"$GIT_DATA_LUKS_DETAIL"
     # THE MOUNT STAYS FATAL. No `|| true`, no fallback to the raw device, no `if`-guard that
     # continues on failure. A fix that made this succeed by mounting something other than
     # the LUKS mapper would put real user source code on plaintext disk while every artifact
     # attests encryption — strictly worse than the unstarted promise. Guarded standing by
     # B17 p_mount_no_fallthrough in git-data-luks.test.sh.
-    mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks 2>>"$GIT_DATA_LUKS_DETAIL"
+    mountpoint -q /mnt/git-data || mount /dev/mapper/git-data /mnt/git-data 2>>"$GIT_DATA_LUKS_DETAIL"
     # (#7227) NO `2>>` ON THE grep. Its rc is consumed by `||`, so a failed redirect — not a
     # failed search — would fire the append branch: the last instance in this file of the shape
     # the isLuks/sshd/restart/gc_timer captures were all rewritten to avoid. grep's own stderr
     # here carries nothing worth a slot; the WRITE keeps its capture, since that is the fallible
     # half whose cause an operator would actually need.
-    grep -q '/dev/mapper/git-data' /etc/fstab || echo '/dev/mapper/git-data /mnt/git-data-luks ext4 defaults,nofail 0 2' >> /etc/fstab 2>>"$GIT_DATA_LUKS_DETAIL"
+    grep -q '/dev/mapper/git-data' /etc/fstab || echo '/dev/mapper/git-data /mnt/git-data ext4 defaults,nofail 0 2' >> /etc/fstab 2>>"$GIT_DATA_LUKS_DETAIL"
     # NO `trap - EXIT`: disarming on success would make the `rc` guard unreachable and so
     # untested. The guard IS what keeps a healthy boot silent (AC36/T17).
     LUKSEOF
@@ -1249,15 +1260,20 @@ runcmd:
     fi
 
   # Run the idempotent bootstrap UNDER doppler run (so its LUKS re-assert has
-  # GIT_DATA_LUKS_KEY). Installs git substrate + bare-repo root + fence placeholder +
-  # core.hooksPath on the plaintext volume, re-asserts the LUKS mapper is open +
-  # mounted at /mnt/git-data-luks, and fails loud on any unmet invariant.
+  # GIT_DATA_LUKS_KEY). Re-asserts the LUKS mapper serves /mnt/git-data, installs git
+  # substrate + bare-repo root + fence placeholder + core.hooksPath on it, verifies the store
+  # (#8211: plaintext volume empty or absent, fence on the mapper, a real no-op erasure as git),
+  # writes the store marker, and fails loud on any unmet invariant.
+  # GIT_DATA_PLAINTEXT_VOLUME_ID names the plaintext volume to verify; empty means none is
+  # attached (plaintext_volume=absent). Single-quoted: hcloud volume ids are bare integers, and
+  # the bootstrap refuses any other shape before it names a device from it.
   - |
     STAGE=bootstrap
     ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
     set -a
     . /etc/default/git-data-doppler
     set +a
+    export GIT_DATA_PLAINTEXT_VOLUME_ID='${git_data_volume_id}'
     # (#7227) NO BOOTSTRAP-SPECIFIC TRAP. bootstrap_err was byte-identical to on_err but for a
     # title $STAGE already supplies, and it was never disarmed, so a gc_timer failure emitted
     # "git-data bootstrap FAILED". Its `trap - EXIT` + re-arm pair is gone with it rather than
