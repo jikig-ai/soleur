@@ -6,10 +6,13 @@ import {
   expectedSkills,
   isStructurallyParseable,
   parseCodexPromptInput,
+  parseArgs,
   parseDevinSkillsList,
   resolveExit,
+  sanitizeForLog,
   verdict,
 } from "../scripts/harness-discovery-smoke";
+import { MIN_MANIFEST_DECLARED_SKILLS } from "./lib/population-floors";
 
 // Guard 6 of the harness-parity hardening bundle (ADR-240).
 //
@@ -60,6 +63,23 @@ describe("expectedSkills — keyed on the directory basename", () => {
     const manifest = join(root, "plugin.json");
     writeFileSync(manifest, JSON.stringify({ skills: [] }));
     expect(() => expectedSkills(manifest, root)).toThrow();
+  });
+
+  test("an ABSENT declared root throws — it does not silently expect less", () => {
+    // The shape that made the gate exit 0 on a 99-skill loss: one root typo'd,
+    // the expectation collapses to the shim stems, all of them are discovered,
+    // and `verdict` is clean.
+    const { root, manifest } = fixturePluginRoot({ skills: ["plan"] });
+    writeFileSync(manifest, JSON.stringify({ skills: ["./skills", "./skilz"] }));
+    expect(() => expectedSkills(manifest, root)).toThrow(/does not exist/);
+  });
+
+  test("roots that exist but hold no skill throw", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-discovery-bare-"));
+    mkdirSync(join(root, "skills"), { recursive: true });
+    const manifest = join(root, "plugin.json");
+    writeFileSync(manifest, JSON.stringify({ skills: ["./skills"] }));
+    expect(() => expectedSkills(manifest, root)).toThrow(/contain no SKILL\.md/);
   });
 });
 
@@ -152,8 +172,9 @@ describe("verdict — one multiplicity mode per harness run", () => {
   });
 });
 
+const clean = { missing: [], extra: [], badMultiplicity: [], mode: "additive" as const };
+
 describe("resolveExit — UNRESOLVED is never a PASS, and never a partial loss", () => {
-  const clean = { missing: [], extra: [], badMultiplicity: [], mode: "additive" as const };
 
   test("row 3: an empty, structurally-unreadable listing exits 3, never 0", () => {
     expect(resolveExit({ cliPresent: true, parseable: false })).toEqual({
@@ -174,6 +195,27 @@ describe("resolveExit — UNRESOLVED is never a PASS, and never a partial loss",
     expect(
       resolveExit({ cliPresent: true, parseable: true, version: "0.157.0", pin: "0.156.1", verdict: clean }),
     ).toEqual({ code: 3, reason: "version-mismatch:0.157.0!=0.156.1" });
+  });
+
+  test("an unreadable version is UNRESOLVED, never an unenforced pin", () => {
+    // `cliVersion()` returns undefined whenever `--version` exits non-zero or
+    // prints no semver. The old `pin && version && …` form skipped the
+    // comparison entirely there, so `--pin` failed OPEN on exactly the binary
+    // it could not identify.
+    expect(resolveExit({ cliPresent: true, parseable: true, pin: "0.156.1", verdict: clean })).toEqual({
+      code: 3,
+      reason: "version-unknown",
+    });
+  });
+
+  test("a probe that died is UNRESOLVED, not a set mismatch", () => {
+    // A timed-out CLI yields PARTIAL output, and a partial listing parses — so
+    // without this the gate reports a regression that did not happen.
+    const v = { missing: ["soleur:a", "soleur:b"], extra: [], badMultiplicity: [], mode: "dedup" as const };
+    expect(resolveExit({ cliPresent: true, probeFailed: true, parseable: true, verdict: v })).toEqual({
+      code: 3,
+      reason: "probe-failed",
+    });
   });
 
   test("an install failure is its own reason, not a parse failure", () => {
@@ -197,9 +239,26 @@ describe("structural parseability", () => {
     expect(isStructurallyParseable("codex", "anything", new Map([["soleur:plan", 1]]))).toBe(true);
   });
 
-  test("devin: zero soleur: lines is unreadable", () => {
-    expect(isStructurallyParseable("devin", "Available skills:\n", new Map())).toBe(false);
+  test("devin: the header is the marker, so a total loss is FAIL and not UNRESOLVED", () => {
+    // This row previously asserted `false` for a listing that carried the header
+    // and no names — pinning the bug. A CLI that answered and registered NOTHING
+    // is the worst regression this gate catches; grading it `unparseable-output`
+    // made it indistinguishable from an outage, and would have been the triage
+    // signal #8574's soak is read from.
+    expect(isStructurallyParseable("devin", "Available skills:\n", new Map())).toBe(true);
     expect(isStructurallyParseable("devin", "  /soleur:plan", new Map([["soleur:plan", 1]]))).toBe(true);
+    // Genuinely unreadable — no header, no names — stays UNRESOLVED.
+    expect(isStructurallyParseable("devin", "boom: connection refused", new Map())).toBe(false);
+  });
+
+  test("devin: a header with no names exits 1 naming them, not 3", () => {
+    const expected = new Map([["soleur:plan", 1], ["soleur:ship", 1]]);
+    const raw = "Available skills:\n";
+    const discovered = parseDevinSkillsList(raw);
+    const parseable = isStructurallyParseable("devin", raw, discovered);
+    const r = resolveExit({ cliPresent: true, parseable, verdict: verdict(expected, discovered) });
+    expect(r.code).toBe(1);
+    expect(r.reason).toContain("2 missing");
   });
 });
 
@@ -208,13 +267,74 @@ describe("the live manifests are the ones this gate will judge", () => {
     const codex = expectedSkills(new URL("../.codex-plugin/plugin.json", import.meta.url).pathname);
     const devin = expectedSkills(new URL("../.devin-plugin/plugin.json", import.meta.url).pathname);
     // Floor: a manifest that dropped `./skills` collapses the expectation.
-    expect(codex.size).toBeGreaterThanOrEqual(100);
-    expect(devin.size).toBeGreaterThanOrEqual(100);
+    expect(codex.size).toBeGreaterThanOrEqual(MIN_MANIFEST_DECLARED_SKILLS);
+    expect(devin.size).toBeGreaterThanOrEqual(MIN_MANIFEST_DECLARED_SKILLS);
     // The k>=2 names are exactly the shared shim stems, derived not hardcoded.
     expect([...codex.entries()].filter(([, k]) => k >= 2).map(([n]) => n).sort()).toEqual([
       "soleur:go",
       "soleur:help",
       "soleur:sync",
     ]);
+  });
+});
+
+describe("argument parsing refuses, rather than defaulting to something plausible", () => {
+  // Both arms below were LIVE fail-opens, and both failed towards a reassuring green.
+  test("an absent --harness is an error, not argv[0]", () => {
+    // `argv.indexOf("--harness") + 1` is 0 when the flag is missing, so the old form read
+    // the first positional as the harness and ran a whole arm nobody selected.
+    expect(parseArgs(["codex"])).toEqual({ error: "missing --harness" });
+    expect(parseArgs([])).toEqual({ error: "missing --harness" });
+  });
+
+  test("an unknown harness is named in the error, not silently coerced", () => {
+    const r = parseArgs(["--harness", "opencode"]);
+    expect("error" in r && r.error).toContain("opencode");
+  });
+
+  test("--pin without a value is an error, NOT an unpinned run", () => {
+    // The dangerous direction: `undefined` is indistinguishable from "no pin given", so the
+    // version comparison is skipped while the job's log still advertises a pin.
+    expect("error" in parseArgs(["--harness", "codex", "--pin"])).toBe(true);
+    expect("error" in parseArgs(["--harness", "codex", "--pin", "--verbose"])).toBe(true);
+  });
+
+  test("the accepting cases still accept", () => {
+    expect(parseArgs(["--harness", "codex"])).toEqual({ harness: "codex" });
+    expect(parseArgs(["--harness", "devin", "--pin", "3000.11.1"])).toEqual({
+      harness: "devin",
+      pin: "3000.11.1",
+    });
+  });
+});
+
+describe("untrusted text cannot author the CI log", () => {
+  // The names in `missing`/`extra` come from directory names in the checkout, which on a fork
+  // PR is the fork's. A GitHub workflow command is any line whose first non-whitespace bytes
+  // are `::`, so a crafted skill directory name could emit annotations, `::add-mask::`
+  // arbitrary strings out of the log, or `::stop-commands::` every real annotation after it.
+  test("a line that would be a workflow command is no longer one", () => {
+    expect(sanitizeForLog("::error::spoofed")).toBe(" ::error::spoofed");
+    expect(sanitizeForLog("::stop-commands::tok")).toBe(" ::stop-commands::tok");
+  });
+
+  test("leading whitespace does not smuggle one through — GitHub trims it, so we must too", () => {
+    expect(sanitizeForLog("\t  ::add-mask::secret")).toBe(" \t  ::add-mask::secret");
+  });
+
+  test("a bare CR starts a line too, and is normalised before the line split", () => {
+    // Without the `\r` normalisation the payload is one "line" that does not START with `::`,
+    // so the neutralisation never fires while a terminal still renders it as its own line.
+    expect(sanitizeForLog("harmless\r::error::spoofed")).toBe("harmless\n ::error::spoofed");
+  });
+
+  test("C0 control characters are dropped, newline and tab survive", () => {
+    expect(sanitizeForLog("a\u0000b\u0007c\u001bd")).toBe("abcd");
+    expect(sanitizeForLog("a\nb\tc")).toBe("a\nb\tc");
+  });
+
+  test("ordinary output is returned unchanged", () => {
+    const plain = "  - soleur:plan: Create implementation plans\n  - soleur:work: Execute";
+    expect(sanitizeForLog(plain)).toBe(plain);
   });
 });

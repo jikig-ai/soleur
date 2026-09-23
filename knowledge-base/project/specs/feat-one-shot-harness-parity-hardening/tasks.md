@@ -42,7 +42,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
   - [ ] 2.7.1 `plugins/soleur/scripts/harness-discovery-smoke.ts` with pure `expectedSkills` (dir basenames), the two parsers, and `verdict` (multiplicity 1 or k). Exit 0/1/3 with a reason line; 4 KB of raw output on failure; 90 s cap per call.
   - [ ] 2.7.2 `plugins/soleur/test/harness-discovery-smoke.test.ts` covering every Guard 6 row, with synthesized fixtures
   - [ ] 2.7.3 Find out whether Devin's `install.sh` accepts a pinned version. If not, use sha256 plus a `--version` assertion.
-  - [ ] 2.7.4 `harness-discovery` job in `ci.yml` (setup-bun, `@openai/codex@0.155.1`, pinned Devin), not added to `ruleset-ci-required.tf`
+  - [ ] 2.7.4 `harness-discovery` job in `ci.yml` (setup-bun, `@openai/codex@0.156.1`, pinned Devin), not added to `ruleset-ci-required.tf`
 - [ ] 2.8 ADRs + C4
   - [ ] 2.8.1 ADR-240 (retirement, vendor-CLI CI policy and pin owner, Devin wait primitive, gate map), written with `soleur:architecture`
   - [ ] 2.8.2 ADR-226 amendment/status line (drop the #8306 citation); ADR-165 status note

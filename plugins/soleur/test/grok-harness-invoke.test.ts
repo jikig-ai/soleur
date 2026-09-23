@@ -1,7 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import { createHash } from "crypto";
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { MIN_TRACKED_SKILLS } from "./lib/population-floors";
 
 // grok-harness-invoke.test.ts — Guard 1 of the harness-parity hardening bundle
 // (#8390, ADR-240).
@@ -36,11 +38,11 @@ const END = "<!-- grok-harness-invoke:end -->";
 // Measured 2026-09-23 over all 12 pre-backfill copies: identical bytes, all at line 10.
 const CANONICAL_MD5 = "f212ba057179bf8c0e79a029af403a10";
 
-// Absolute, hand-ratcheted. 102 tracked `skills/*/SKILL.md` measured 2026-09-23; the
-// floor exists so a pathspec that stops matching (a rename, a glob regression, a
-// hardcoded 12-name list replacing the enumeration) cannot report a clean fleet over
-// an empty or narrowed population.
-const MIN_SKILLS = 100;
+// The floor exists so a pathspec that stops matching (a rename, a glob regression, a
+// hardcoded 12-name list replacing the enumeration) cannot report a clean fleet over an
+// empty or narrowed population. Single-sourced: four suites floored this same population
+// at four different numbers before `population-floors.ts`.
+const MIN_SKILLS = MIN_TRACKED_SKILLS;
 
 function gitLsFiles(pathspec: string): string[] {
   const out = Bun.spawnSync(["git", "ls-files", pathspec], {
@@ -191,11 +193,38 @@ describe("grok invoke block fleet", () => {
       // eight-line comment above `user-invocable: false`, and reading its first
       // line as a heading reported a correctly-placed block as misplaced.
       const bodyStart = lines[0] === "---" ? lines.indexOf("---", 1) + 1 : 0;
+
+      // INSIDE the frontmatter is not "before the first heading" — it is inside a
+      // YAML document, where the block is not markdown and its `<!-- -->` lines
+      // are a parse error. `name:`/`description:` then stop resolving, so the
+      // skill is unloadable by EVERY harness. The old form computed `bodyStart`
+      // only to start the heading search and never bounded the block with it, so
+      // moving a block between the two `---` fences reported 6 pass / 0 fail —
+      // clean, on a file no loader can read. The guard is named for loadability.
+      if (bodyStart > 0 && starts[0] < bodyStart) {
+        misplaced.push(
+          `${rel}: the block is INSIDE the YAML frontmatter (line ${starts[0] + 1}, frontmatter ends line ${bodyStart}) — it is not markdown there, and it breaks name:/description: parsing`,
+        );
+        continue;
+      }
+
+      // `^#{1,6} `, not `^# `. Four skills carry no H1 at all
+      // (agent-native-architecture, frontend-design, heal-skill, triage), so an
+      // H1-only scan short-circuits on `firstHeading === -1` and the placement
+      // clause is VACUOUS for exactly those files — measured: moving triage's
+      // block to line 402 of 403 stayed green. A file whose first heading is
+      // `## ` has the same hole.
       const firstHeading = lines.findIndex(
-        (l, i) => i >= bodyStart && !fenced[i] && /^# /.test(l),
+        (l, i) => i >= bodyStart && !fenced[i] && /^#{1,6} /.test(l),
       );
       if (firstHeading !== -1 && starts[0] > firstHeading) {
-        misplaced.push(`${rel}: the block sits below the first \`# \` heading (block line ${starts[0] + 1}, heading line ${firstHeading + 1})`);
+        misplaced.push(`${rel}: the block sits below the first heading (block line ${starts[0] + 1}, heading line ${firstHeading + 1})`);
+      } else if (firstHeading === -1 && starts[0] > bodyStart + 3) {
+        // No heading anywhere: the block must still sit at the top of the body,
+        // or "before the first heading" degenerates to "anywhere in the file".
+        misplaced.push(
+          `${rel}: the file has no heading, so the block must sit at the top of the body (block line ${starts[0] + 1}, body starts line ${bodyStart + 1})`,
+        );
       }
     }
 
@@ -212,14 +241,43 @@ describe("grok invoke block fleet", () => {
     ).toEqual({ missing: 0, notCanonical: [], duplicated: [], misplaced: [] });
   });
 
-  test("the scaffold carries the canonical block, so a new skill is born compliant", () => {
-    const template = readFileSync(INIT_SKILL, "utf8");
-    expect(
-      template.includes(CANONICAL as string),
-      `${INIT_SKILL} does not contain the canonical Grok invoke block byte-for-byte. ` +
-        `Without it every newly scaffolded skill lands non-compliant and the fleet ` +
-        `assertion above becomes a backfill treadmill rather than a gate.`,
-    ).toBe(true);
+  test("the scaffold GENERATES a compliant skill, round-tripped through init_skill.py", () => {
+    // NOT `template.includes(CANONICAL)`. A presence check on the source file is
+    // satisfied by a DEAD constant: lifting the block out of SKILL_TEMPLATE into
+    // an unused `_UNUSED_GROK_BLOCK = '''…'''` left this assertion green while
+    // every newly scaffolded skill landed non-compliant — the backfill treadmill
+    // the message below claims to prevent. Measured 6 pass / 0 fail.
+    //
+    // So run the scaffold and audit its OUTPUT through the same placement rules
+    // the fleet uses, which also gives those rules a synthesized fixture.
+    const dir = mkdtempSync(join(tmpdir(), "grok-scaffold-"));
+    const out = Bun.spawnSync(["python3", INIT_SKILL, "zz-scaffold-probe", "--path", dir], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(out.exitCode, `init_skill.py failed: ${out.stderr.toString()}`).toBe(0);
+
+    const generated = readFileSync(join(dir, "zz-scaffold-probe", "SKILL.md"), "utf8");
+    const lines = generated.split("\n");
+    const starts = lines.filter((l) => l === START).length;
+    const ends = lines.filter((l) => l === END).length;
+    expect({ starts, ends }, "the generated SKILL.md carries no Grok invoke block").toEqual({
+      starts: 1,
+      ends: 1,
+    });
+    expect(extractBlock(generated)).toBe(CANONICAL as string);
+
+    // And it must satisfy the same placement rules as the fleet: outside fences,
+    // inside the body, above the first heading.
+    const fenced = fencedLineFlags(lines);
+    const at = lines.indexOf(START);
+    const bodyStart = lines[0] === "---" ? lines.indexOf("---", 1) + 1 : 0;
+    const firstHeading = lines.findIndex((l, i) => i >= bodyStart && !fenced[i] && /^#{1,6} /.test(l));
+    expect(fenced[at], "the generated block is inside a fence").toBe(false);
+    expect(at, "the generated block is inside the frontmatter").toBeGreaterThanOrEqual(bodyStart);
+    expect(at, "the generated block sits below the first heading").toBeLessThan(firstHeading);
+
+    rmSync(dir, { recursive: true, force: true });
   });
 
   // Anti-vacuity for the fence detector specifically. The placement rules are NEW

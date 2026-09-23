@@ -25,7 +25,8 @@
  */
 
 import { execFileSync } from "child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import { randomBytes } from "crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 
@@ -36,6 +37,30 @@ const PLUGIN_ROOT = resolve(REPO_ROOT, "plugins/soleur");
 export const CLI_TIMEOUT_MS = 90_000;
 
 export type Harness = "codex" | "devin";
+
+/**
+ * Scratch directories this process created, removed on the way out.
+ *
+ * `mkdtempSync` has no owner otherwise: a CI runner is thrown away so nothing shows there, but
+ * the same script run locally (which is how the parsers get debugged) leaves a fresh `CODEX_HOME`
+ * and a scratch git repo in `$TMPDIR` on every invocation. Registered rather than removed inline
+ * because every arm below can return early, including the throwing ones.
+ */
+const SCRATCH: string[] = [];
+function scratchDir(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  SCRATCH.push(d);
+  return d;
+}
+function cleanupScratch(): void {
+  for (const d of SCRATCH.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      // Best effort: a leaked scratch dir must never change this gate's verdict.
+    }
+  }
+}
 
 export interface Verdict {
   missing: string[];
@@ -63,13 +88,28 @@ export function expectedSkills(manifestPath: string, pluginRoot = PLUGIN_ROOT): 
   const counts = new Map<string, number>();
   for (const root of roots) {
     const dir = resolve(pluginRoot, root);
-    if (!existsSync(dir)) continue;
+    // THROW, never `continue`. A typo'd or deleted root silently contributing
+    // zero is the "shrunken expectation that quietly agrees" this function's
+    // header refuses one level down (at the skill-NAME level): the manifest
+    // declares the root, so its absence is a defect in the thing under test,
+    // not a reason to expect less of it. Measured consequence of the old form:
+    // `"skills": ["./skilz", …]` collapsed the expectation to the 3 shim stems,
+    // all 3 were discovered, and the gate exited 0 on a 99-skill loss.
+    if (!existsSync(dir)) {
+      throw new Error(`${manifestPath}: declared skills root '${root}' does not exist at ${dir}`);
+    }
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       if (!existsSync(join(dir, entry.name, "SKILL.md"))) continue;
       const name = `soleur:${entry.name}`;
       counts.set(name, (counts.get(name) ?? 0) + 1);
     }
+  }
+  // Roots that exist but hold no skill. Same argument as the throw above, one
+  // level out: an empty expectation makes `verdict()` trivially clean and the
+  // whole gate exits 0 having compared nothing against nothing.
+  if (counts.size === 0) {
+    throw new Error(`${manifestPath}: declared roots ${JSON.stringify(roots)} contain no SKILL.md`);
   }
   return counts;
 }
@@ -103,7 +143,14 @@ export function parseDevinSkillsList(raw: string): Map<string, number> {
 export function isStructurallyParseable(harness: Harness, raw: string, discovered: Map<string, number>): boolean {
   if (discovered.size > 0) return true;
   if (harness === "codex") return /<skills_instructions>/.test(raw);
-  return false;
+  // Devin has a structural marker too, and using it is what keeps the two arms
+  // honest. Without it, "the CLI answered and listed NOTHING" — a total loss of
+  // all 102 registrations, the worst regression this gate exists to catch —
+  // graded `unparseable-output` (exit 3, UNRESOLVED) on Devin while the
+  // identical Codex regression graded exit 1 with the names listed. That is the
+  // AP-021 inversion the exit taxonomy below forbids in the other direction,
+  // and it would have been the triage signal for #8574's soak.
+  return /^\s*Available skills:/m.test(raw);
 }
 
 /**
@@ -128,7 +175,13 @@ export function verdict(expected: Map<string, number>, discovered: Map<string, n
   const multiRoot = [...expected.entries()].filter(([, k]) => k >= 2);
   let mode: Verdict["mode"] = "indeterminate";
   if (multiRoot.length > 0) {
-    const observed = multiRoot.map(([name, k]) => ({ name, k, n: discovered.get(name) ?? 0 }));
+    // `n === 0` is MISSING, and is reported as such below. Feeding it into the
+    // mode inference too makes an ordinary omission arrive as "3 missing, 0
+    // extra, 3 bad-multiplicity" — a bogus multiplicity story layered over the
+    // real cause, which is the operator's first read of a red run.
+    const observed = multiRoot
+      .map(([name, k]) => ({ name, k, n: discovered.get(name) ?? 0 }))
+      .filter((o) => o.n > 0);
     const allOne = observed.every((o) => o.n === 1);
     const allK = observed.every((o) => o.n === o.k);
     if (allOne) mode = "dedup";
@@ -168,6 +221,8 @@ export function verdict(expected: Map<string, number>, discovered: Map<string, n
 export interface ExitInput {
   cliPresent: boolean;
   installFailed?: boolean;
+  /** The probe command itself failed (non-zero, or killed at CLI_TIMEOUT_MS). */
+  probeFailed?: boolean;
   version?: string;
   pin?: string;
   parseable: boolean;
@@ -192,10 +247,21 @@ export interface ExitResult {
  */
 export function resolveExit(input: ExitInput): ExitResult {
   if (!input.cliPresent) return { code: 3, reason: "cli-missing" };
+  // "Could not read the version" is NOT "the version is fine". `cliVersion()`
+  // returns undefined whenever `--version` exits non-zero or prints no semver,
+  // and the old `pin && version && …` form skipped the comparison entirely in
+  // exactly that case — so `--pin` failed OPEN on an unreadable binary, which
+  // is the one mapping the ADR-177 taxonomy exists to forbid.
+  if (input.pin && !input.version) return { code: 3, reason: "version-unknown" };
   if (input.pin && input.version && input.version !== input.pin) {
     return { code: 3, reason: `version-mismatch:${input.version}!=${input.pin}` };
   }
   if (input.installFailed) return { code: 3, reason: "install-failed" };
+  // A probe that died (timeout, crash, non-zero) yields PARTIAL output, and a
+  // partial listing parses. Without this, a CLI that printed 40 of 102 names
+  // and then hung reported "set-mismatch: 62 missing" — an authoritative claim
+  // of a regression that did not happen, from a run that could not measure one.
+  if (input.probeFailed) return { code: 3, reason: "probe-failed" };
   if (!input.parseable) return { code: 3, reason: "unparseable-output" };
   const v = input.verdict;
   if (!v) return { code: 3, reason: "unparseable-output" };
@@ -207,6 +273,55 @@ export function resolveExit(input: ExitInput): ExitResult {
     };
   }
   return { code: 0, reason: `ok (mode=${v.mode})` };
+}
+
+/**
+ * Neutralise text before it reaches a GitHub Actions log.
+ *
+ * WHY THIS IS NOT PARANOIA. GitHub parses a WORKFLOW COMMAND from any log line whose first
+ * non-whitespace characters are `::` — `::error::`, `::add-mask::`, `::set-output` and, worst,
+ * `::stop-commands::`. Everything this script prints on a red path is derived from two places a
+ * pull request can write to:
+ *
+ *   - the vendor CLI's raw output, which ECHOES skill names, and
+ *   - `verdict()`'s `missing` / `extra` / `badMultiplicity` arrays, whose members are built from
+ *     `readdirSync` over `plugins/soleur/skills/` — i.e. from DIRECTORY NAMES in the checkout.
+ *
+ * A directory name may contain `:`, and on a fork PR the checkout is the fork's. So a fork could
+ * add `skills/<name-containing-a-newline-and-::error::…>/SKILL.md` and have this job emit
+ * annotations, mask arbitrary strings out of the log, or issue `::stop-commands::` and silence
+ * every real annotation after it. The job is advisory and cannot gate a merge, but a log that can
+ * be authored by the thing under test is not evidence.
+ *
+ * TWO LAYERS, because either alone has a hole:
+ *
+ *   1. Per-line neutralisation. A line that would start a command gets one leading space, which
+ *      GitHub does NOT trim back into a command. Applied after normalising `\r`, since a lone CR
+ *      also begins a new line on a terminal.
+ *   2. A `::stop-commands::<token>` fence around the whole block, with a 128-bit random token.
+ *      Layer 1 is what makes the fence safe: without it, untrusted text containing the resume
+ *      token would end the fence early, and with it no untrusted line can be a command at all.
+ *
+ * C0 control characters other than `\n` and `\t` are dropped outright — they carry no
+ * information here and are how a name hides what it really is in a terminal.
+ */
+export function sanitizeForLog(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    // eslint-disable-next-line no-control-regex -- the C0 set is the subject, not a typo (cq-regex-unicode-separators-escape-only)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .split("\n")
+    .map((line) => (/^\s*::/.test(line) ? ` ${line}` : line))
+    .join("\n");
+}
+
+/** Write untrusted text to stderr inside a random-token workflow-command fence. */
+function writeUntrusted(text: string): void {
+  const token = randomBytes(16).toString("hex");
+  process.stderr.write(`::stop-commands::${token}\n`);
+  process.stderr.write(sanitizeForLog(text));
+  if (!text.endsWith("\n")) process.stderr.write("\n");
+  process.stderr.write(`::${token}::\n`);
 }
 
 function run(cmd: string, args: string[], env: Record<string, string>, cwd = REPO_ROOT): { ok: boolean; out: string } {
@@ -244,7 +359,7 @@ function cliVersion(bin: string): string | undefined {
 
 function driveCodex(pin?: string): { input: ExitInput; raw: string } {
   if (!have("codex")) return { input: { cliPresent: false, parseable: false }, raw: "" };
-  const home = mkdtempSync(join(tmpdir(), "harness-discovery-codex-"));
+  const home = scratchDir("harness-discovery-codex-");
   const env = { PATH: process.env.PATH ?? "", HOME: home, CODEX_HOME: home };
   const version = cliVersion("codex");
   if (pin && version && version !== pin) {
@@ -259,16 +374,24 @@ function driveCodex(pin?: string): { input: ExitInput; raw: string } {
   const discovered = parseCodexPromptInput(probe.out);
   const parseable = isStructurallyParseable("codex", probe.out, discovered);
   const expected = expectedSkills(resolve(PLUGIN_ROOT, ".codex-plugin/plugin.json"));
+  const usable = probe.ok && parseable;
   return {
-    input: { cliPresent: true, parseable, version, pin, verdict: parseable ? verdict(expected, discovered) : undefined },
+    input: {
+      cliPresent: true,
+      probeFailed: !probe.ok,
+      parseable,
+      version,
+      pin,
+      verdict: usable ? verdict(expected, discovered) : undefined,
+    },
     raw: probe.out,
   };
 }
 
 function driveDevin(pin?: string): { input: ExitInput; raw: string } {
   if (!have("devin")) return { input: { cliPresent: false, parseable: false }, raw: "" };
-  const home = mkdtempSync(join(tmpdir(), "harness-discovery-devin-"));
-  const scratch = mkdtempSync(join(tmpdir(), "harness-discovery-devin-repo-"));
+  const home = scratchDir("harness-discovery-devin-");
+  const scratch = scratchDir("harness-discovery-devin-repo-");
   const env = {
     PATH: process.env.PATH ?? "",
     HOME: home,
@@ -279,7 +402,13 @@ function driveDevin(pin?: string): { input: ExitInput; raw: string } {
   if (pin && version && version !== pin) {
     return { input: { cliPresent: true, parseable: false, version, pin }, raw: "" };
   }
-  run("git", ["init", "-q", scratch], env, scratch);
+  const init = run("git", ["init", "-q", scratch], env, scratch);
+  if (!init.ok) {
+    // Otherwise the scratch dir is not a repo, Devin reads no config, and the
+    // empty listing grades `unparseable-output` — naming a cause we did not
+    // measure when the real one is right here.
+    return { input: { cliPresent: true, installFailed: true, parseable: false, version, pin }, raw: init.out };
+  }
   mkdirSync(join(scratch, ".devin"), { recursive: true });
   writeFileSync(
     join(scratch, ".devin/config.json"),
@@ -290,33 +419,82 @@ function driveDevin(pin?: string): { input: ExitInput; raw: string } {
   const discovered = parseDevinSkillsList(probe.out);
   const parseable = isStructurallyParseable("devin", probe.out, discovered);
   const expected = expectedSkills(resolve(PLUGIN_ROOT, ".devin-plugin/plugin.json"));
+  const usable = probe.ok && parseable;
   return {
-    input: { cliPresent: true, parseable, version, pin, verdict: parseable ? verdict(expected, discovered) : undefined },
+    input: {
+      cliPresent: true,
+      probeFailed: !probe.ok,
+      parseable,
+      version,
+      pin,
+      verdict: usable ? verdict(expected, discovered) : undefined,
+    },
     raw: probe.out,
   };
 }
 
-function main(): void {
-  const argv = process.argv.slice(2);
-  const harness = (argv[argv.indexOf("--harness") + 1] ?? "") as Harness;
-  const pinIdx = argv.indexOf("--pin");
-  const pin = pinIdx === -1 ? undefined : argv[pinIdx + 1];
+const USAGE = "usage: harness-discovery-smoke.ts --harness codex|devin [--pin <version>]\n";
+
+/**
+ * Argument parsing, PURE and exported so the fail-open cases below are reachable from a unit test.
+ *
+ * Both of them were live, and both fail in the direction that reports a green:
+ *
+ *   - `argv[argv.indexOf("--harness") + 1]` reads `argv[0]` when the flag is ABSENT, because
+ *     `indexOf` returns -1 and -1 + 1 is 0. `harness-discovery-smoke.ts codex` therefore ran the
+ *     Codex arm with no flag at all, and any other bare first argument silently selected nothing.
+ *   - `--pin` with no value yields `undefined`, which is indistinguishable from "no pin given", so
+ *     a typo'd flag SKIPS the version comparison entirely. A pin that silently does not apply is
+ *     worse than no pin: the job still prints its reassuring pin in the log.
+ *
+ * A flag-shaped value (`--pin --harness`) is likewise a mistake, never a version.
+ */
+export function parseArgs(argv: readonly string[]): { harness: Harness; pin?: string } | { error: string } {
+  const hIdx = argv.indexOf("--harness");
+  if (hIdx === -1) return { error: "missing --harness" };
+  const harness = argv[hIdx + 1];
   if (harness !== "codex" && harness !== "devin") {
-    process.stderr.write("usage: harness-discovery-smoke.ts --harness codex|devin [--pin <version>]\n");
+    return { error: `--harness must be codex or devin, got ${JSON.stringify(harness ?? null)}` };
+  }
+  const pIdx = argv.indexOf("--pin");
+  if (pIdx === -1) return { harness };
+  const pin = argv[pIdx + 1];
+  if (pin === undefined || pin.startsWith("--")) {
+    return { error: `--pin requires a version, got ${JSON.stringify(pin ?? null)}` };
+  }
+  return { harness, pin };
+}
+
+function main(): void {
+  const parsed = parseArgs(process.argv.slice(2));
+  if ("error" in parsed) {
+    process.stderr.write(`harness-discovery: ${parsed.error}\n${USAGE}`);
     process.exit(2);
   }
+  const { harness, pin } = parsed;
 
-  const { input, raw } = harness === "codex" ? driveCodex(pin) : driveDevin(pin);
-  const result = resolveExit(input);
+  let result: ExitResult;
+  let input: ExitInput;
+  let raw: string;
+  try {
+    ({ input, raw } = harness === "codex" ? driveCodex(pin) : driveDevin(pin));
+    result = resolveExit(input);
+  } finally {
+    // Before the writes below, and before any exit: `process.exit()` runs no `finally`.
+    cleanupScratch();
+  }
 
   if (input.verdict) {
-    process.stderr.write(`${JSON.stringify({ harness, ...input.verdict }, null, 2)}\n`);
+    // Untrusted: `missing`/`extra` members come from directory names in the checkout.
+    writeUntrusted(JSON.stringify({ harness, ...input.verdict }, null, 2));
   }
+  // Trusted: every field here is produced by this file.
   process.stderr.write(`harness-discovery[${harness}]: exit=${result.code} reason=${result.reason}\n`);
   if (result.code !== 0) {
     // The first 4 KB of raw vendor output, so a red job is diagnosable from the log
-    // itself and needs no artifact upload.
-    process.stderr.write(`--- raw ${harness} output (first 4 KB) ---\n${raw.slice(0, 4096)}\n`);
+    // itself and needs no artifact upload. Untrusted — see `sanitizeForLog`.
+    process.stderr.write(`--- raw ${harness} output (first 4 KB) ---\n`);
+    writeUntrusted(raw.slice(0, 4096));
   }
   process.exit(result.code);
 }

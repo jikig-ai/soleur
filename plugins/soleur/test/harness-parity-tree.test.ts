@@ -30,6 +30,11 @@ import {
   type CensusResult,
   type Index,
 } from "../lib/harness-parity";
+import {
+  MIN_TRACKED_COMMANDS,
+  MIN_TRACKED_REFERENCES,
+  MIN_TRACKED_SKILLS,
+} from "./lib/population-floors";
 
 /** Literal pathspecs — deliberately NOT `INDEX_GLOBS`, so this invariant is independent of it. */
 const OWN_SKILL_DIRS = ":(glob)plugins/soleur/skills/*/SKILL.md";
@@ -107,9 +112,9 @@ describe("harness-parity tree census (Guard 3)", () => {
     // Per-source floors, not one union figure: a single total is dispatch-blind — it
     // cannot name WHICH glob went empty and it tolerates a large partial loss. Measured
     // 2026-09-23: skills 102, commands 3, codex 3, devin 3, references 115.
-    expect(lsFiles(OWN_SKILL_DIRS).length).toBeGreaterThanOrEqual(99);
-    expect(lsFiles(OWN_COMMAND_FILES).length).toBeGreaterThanOrEqual(2);
-    expect(referenceDocs.length).toBeGreaterThanOrEqual(110);
+    expect(lsFiles(OWN_SKILL_DIRS).length).toBeGreaterThanOrEqual(MIN_TRACKED_SKILLS);
+    expect(lsFiles(OWN_COMMAND_FILES).length).toBeGreaterThanOrEqual(MIN_TRACKED_COMMANDS);
+    expect(referenceDocs.length).toBeGreaterThanOrEqual(MIN_TRACKED_REFERENCES);
     expect(docs.length).toBe(expected);
     // Every excluded path must be one the globs would otherwise have admitted — an exclusion
     // naming a path outside the population is dead weight that reads as a deliberate carve-out.
@@ -153,7 +158,7 @@ describe("harness-parity tree census (Guard 3)", () => {
   // would restore the right answer in production and hide a `**` regression entirely.
   test("every references doc resolves to the skill policy through regionPolicyForPath", () => {
     const referenceDocs = lsFiles(OWN_SKILL_REFERENCES).filter((p) => !p.endsWith("/SKILL.md"));
-    expect(referenceDocs.length).toBeGreaterThanOrEqual(110);
+    expect(referenceDocs.length).toBeGreaterThanOrEqual(MIN_TRACKED_REFERENCES);
     const wrong = referenceDocs.filter((p) => regionPolicyForPath(p) !== "skill");
     expect(
       wrong,

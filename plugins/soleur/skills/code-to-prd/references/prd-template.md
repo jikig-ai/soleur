@@ -29,7 +29,7 @@ walker_excluded: <int>
    - Extraction techniques used (regex-only, no AST).
    - What was excluded by path filter (count + category, not paths).
    - GDPR Art. 9 special-category disclaimer.
-7. **Gap Analysis** — populated by `soleur:product:spec-flow-analyzer` Task spawn (FR8). Degraded-success appends `SKIPPED (<leaf> unavailable at <ISO-8601>)`, where `<leaf>` is the bare leaf name `scripts/code-to-prd.sh` emits.
+7. **Gap Analysis** — populated by spawning the agent `soleur:product:spec-flow-analyzer` against the PRD path (FR8). When it is unavailable, `scripts/code-to-prd.sh` writes a degraded-success placeholder of the form `SKIPPED (<agent> unavailable at <ISO-8601>)`. That line names the agent by its BARE LEAF on purpose: it is a human-readable status in a generated document, never a dispatch, so it is deliberately not the canonical id the rest of this file uses.
 8. **MIT Attribution footer** — single line pointing at `plugins/soleur/NOTICE`.
 
 ## Banner contract

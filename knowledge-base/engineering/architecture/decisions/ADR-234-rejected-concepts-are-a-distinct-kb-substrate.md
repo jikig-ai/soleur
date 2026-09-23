@@ -126,8 +126,9 @@ mechanism that would catch the error is the one the error disables.
 2. `plugins/soleur/test/lint-rejected-register.test.sh` — the lint's own behavioural battery, with
    direct anti-vacuity floors per [ADR-193](ADR-193-anti-vacuity-floor-contract.md).
 3. The intake pre-checks in `plugins/soleur/skills/triage/SKILL.md`,
-   `plugins/soleur/agents/support/ticket-triage.md` and `.openhands/skills/ticket-triage/SKILL.md` —
-   the reader. The agent's pre-checks are read-only by its own declaration; the **write** path is the
+   and `plugins/soleur/agents/support/ticket-triage.md` — the reader. (An
+   `.openhands/skills/ticket-triage/SKILL.md` mirror was a third pre-check until the port was
+   retired 2026-09-23, ADR-240.) The agent's pre-checks are read-only by its own declaration; the **write** path is the
    attended `triage` skill, behind the machine gate (the lint) and then a typed confirmation naming
    the concept.
 4. `knowledge-base/project/rejected/README.md` — the convention, co-located with the record, carrying

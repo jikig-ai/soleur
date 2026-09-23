@@ -630,7 +630,7 @@
 },
 "technology": "PreToolUse Guards + Rewriter + PostToolUse hints + SessionStart/PreCompact compaction-lifecycle consumers",
 "description": {
-"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). The two-harness enumeration describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
+"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). That single-tree statement describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
 },
 "title": "Hook Engine",
 "kind": "container",
@@ -643,7 +643,7 @@
 },
 "technology": "Markdown SKILL.md",
 "description": {
-"txt": "98 workflow skills — brainstorm, plan, work, review, compound, etc."
+"txt": "102 workflow skills — brainstorm, plan, work, review, compound, etc."
 },
 "title": "Skills",
 "kind": "container",
@@ -12847,7 +12847,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). The two-harness enumeration describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
+"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). That single-tree statement describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
 },
 "tags": [],
 "notation": "Container",
@@ -13869,9 +13869,9 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 9301,
+"x": 9297,
 "y": 3104,
-"width": 1336,
+"width": 1344,
 "height": 683,
 "labelBBox": {
 "x": 6,
@@ -13943,21 +13943,21 @@
 "size": "md"
 },
 "description": {
-"txt": "98 workflow skills — brainstorm, plan, work, review, compound, etc."
+"txt": "102 workflow skills — brainstorm, plan, work, review, compound, etc."
 },
 "tags": [],
 "notation": "Container",
 "technology": "Markdown SKILL.md",
 "kind": "container",
 "navigateTo": "__platform_plugin_skills",
-"x": 9341,
+"x": 9337,
 "y": 3186,
-"width": 328,
+"width": 336,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 45,
-"width": 292,
+"width": 301,
 "height": 85
 }
 },
@@ -13988,7 +13988,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 9779,
+"x": 9783,
 "y": 3186,
 "width": 320,
 "height": 180,
@@ -14027,7 +14027,7 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 10209,
+"x": 10213,
 "y": 3186,
 "width": 387,
 "height": 180,
@@ -14147,7 +14147,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 9341,
+"x": 9337,
 "y": 3547,
 "width": 348,
 "height": 200,
@@ -14185,7 +14185,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 11978,
+"x": 11979,
 "y": 3557,
 "width": 372,
 "height": 180,
@@ -14770,14 +14770,14 @@
 ],
 [
 10155,
-2706
+2705
 ],
 [
-10049,
+10051,
 3020
 ],
 [
-9984,
+9987,
 3177
 ]
 ],
@@ -14847,11 +14847,11 @@
 3520
 ],
 [
-8003,
+7999,
 3627
 ],
 [
-9330,
+9326,
 3643
 ]
 ],
@@ -14897,7 +14897,7 @@
 2461
 ],
 [
-9349,
+9350,
 2500
 ],
 [
@@ -14905,39 +14905,39 @@
 2685
 ],
 [
-9271,
+9270,
 2867
 ],
 [
-9291,
+9288,
 2917
 ],
 [
-9286,
+9282,
 3104
 ],
 [
-9283,
+9278,
 3221
 ],
 [
-9247,
+9243,
 3257
 ],
 [
-9286,
+9282,
 3366
 ],
 [
-9309,
+9305,
 3431
 ],
 [
-9354,
+9350,
 3491
 ],
 [
-9398,
+9394,
 3539
 ]
 ],
@@ -14963,24 +14963,24 @@
 "label": "Reads/writes",
 "points": [
 [
-9507,
+9506,
 3366
 ],
 [
-9509,
+9507,
 3417
 ],
 [
-9511,
+9508,
 3481
 ],
 [
-9512,
+9509,
 3535
 ]
 ],
 "labelBBox": {
-"x": 9512,
+"x": 9509,
 "y": 3434,
 "width": 85,
 "height": 39
@@ -15001,11 +15001,11 @@
 "label": "Reads/writes",
 "points": [
 [
-9837,
+9839,
 3366
 ],
 [
-9776,
+9777,
 3419
 ],
 [
@@ -15013,12 +15013,12 @@
 3486
 ],
 [
-9636,
+9634,
 3541
 ]
 ],
 "labelBBox": {
-"x": 9766,
+"x": 9767,
 "y": 3434,
 "width": 85,
 "height": 39
@@ -20300,26 +20300,26 @@
 ],
 [
 8645,
-3153
+3154
 ],
 [
-9980,
+9984,
 3046
 ],
 [
-10154,
+10158,
 3104
 ],
 [
-10204,
+10208,
 3121
 ],
 [
-10252,
+10256,
 3150
 ],
 [
-10293,
+10297,
 3180
 ]
 ],
@@ -20377,8 +20377,8 @@
 2085
 ],
 [
-9657,
-2308
+9656,
+2309
 ],
 [
 9821,
@@ -20389,11 +20389,11 @@
 2852
 ],
 [
-10154,
+10157,
 3063
 ],
 [
-10288,
+10291,
 3180
 ]
 ],
@@ -20475,11 +20475,11 @@
 3489
 ],
 [
-12552,
+12553,
 3580
 ],
 [
-12360,
+12361,
 3619
 ]
 ],
@@ -20505,24 +20505,24 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none; refuses filename",
 "points": [
 [
-10597,
+10601,
 3318
 ],
 [
-10935,
+10938,
 3389
 ],
 [
-11628,
+11630,
 3533
 ],
 [
-11968,
+11969,
 3604
 ]
 ],
 "labelBBox": {
-"x": 11390,
+"x": 11392,
 "y": 3426,
 "width": 255,
 "height": 56
@@ -20547,23 +20547,23 @@
 2955
 ],
 [
-3904,
+3902,
 3001
 ],
 [
-8269,
-3215
+8257,
+3214
 ],
 [
-9291,
+9287,
 3265
 ]
 ],
 "labelBBox": {
-"x": 5830,
+"x": 5827,
 "y": 2999,
 "width": 301,
-"height": 107
+"height": 106
 },
 "parent": null,
 "relations": [
@@ -21015,20 +21015,20 @@
 3035
 ],
 [
-5207,
+5202,
 3151
 ],
 [
-8439,
+8428,
 3245
 ],
 [
-9291,
+9287,
 3269
 ]
 ],
 "labelBBox": {
-"x": 4906,
+"x": 4904,
 "y": 3027,
 "width": 265,
 "height": 106
@@ -21373,7 +21373,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). The two-harness enumeration describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
+"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). That single-tree statement describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
 },
 "tags": [],
 "notation": "Container",
@@ -34245,7 +34245,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). The two-harness enumeration describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
+"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). That single-tree statement describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
 },
 "tags": [],
 "notation": "Container",
@@ -42233,7 +42233,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). The two-harness enumeration describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
+"txt": "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). That surface split is scoped to resource control and must not be read as a general one: since ADR-227 (#8323) the SHIPPED plugin surface is itself a compaction-lifecycle consumer AND, for the first time, STATEFUL ACROSS EVENTS: `hooks/compaction-state.sh` writes a per-session ledger under `${TMPDIR}/soleur-compaction/` at `PreCompact` and reads it at `SessionStart:compact`. Every other hook here is a stateless single-event transformer, so this is a new property of the container rather than a new instance of an existing one. The ledger is machine-local, session-keyed, mode 0700, reaped at 7 days, and deliberately outside the user git tree — `hooks/compaction-state.sh` binds `PreCompact` and `SessionStart:compact`, so a customer install now carries hook code that runs on events the repo-local surface never handled. Because a plugin hook is global, that consumer is gated on a two-conjunct scope guard (a `plugins/soleur` directory AND a Soleur plan/spec artifact) rather than on `is-inside-work-tree`, which is true in every customer repo. Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. HARNESS SURFACES: `.claude/hooks/` (Claude Code) is the only tree of hook CODE since 2026-09-23 (ADR-240, #8306), which retired the hand-ported PreToolUse mirrors; ADR-165's split-by-reason-class posture described those mirrors and is historical. Dispatch REGISTRIES are per-harness and audited (#8205, ADR-223): `.claude/settings.json` is Claude-canonical (its lowercase `^write$`/`^ask_user_question$` twins serve Grok and coincidentally cover those tools under Devin), `.devin/config.json` binds the triaged hook set on anchored Devin wire names (Claude matchers there are loaded-but-dead), `.codex/config.toml` serves its harness, and `.claude/hooks/devin-dispositions.tsv` + `devin-matcher-parity.test.sh` keep the audit honest. On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). That single-tree statement describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side. Its TELEMETRY has a namespace contract (ADR-205, #7853): an emitted rule_id carrying a section prefix (hr/wg/cq/rf/pdr/cm) CLAIMS membership in the AGENTS corpus and is orphan-checked against it; one carrying no prefix is hook telemetry and is outside the corpus by construction, which replaced nine hand-maintained exemption stanzas in rule-metrics-aggregate.sh. Under test the sink is redirected at the RUNNER CHOKEPOINT — both bunfig preloads, the vitest globalSetup, the test-helpers.sh prelude and the _git_fixture_env import — never at the call site, and never by teaching this container to detect tests, because a false positive there would darken real operator telemetry."
 },
 "tags": [],
 "notation": "Container",
@@ -42641,20 +42641,20 @@
 "size": "md"
 },
 "description": {
-"txt": "98 workflow skills — brainstorm, plan, work, review, compound, etc."
+"txt": "102 workflow skills — brainstorm, plan, work, review, compound, etc."
 },
 "tags": [],
 "notation": "Container",
 "technology": "Markdown SKILL.md",
 "kind": "container",
-"x": 10,
+"x": 6,
 "y": 343,
-"width": 328,
+"width": 336,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 44,
-"width": 292,
+"width": 301,
 "height": 86
 }
 },
@@ -43058,7 +43058,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 3970,
+"width": 3978,
 "height": 560
 },
 "nodes": [
@@ -43150,7 +43150,7 @@
 "size": "md"
 },
 "description": {
-"txt": "98 workflow skills — brainstorm, plan, work, review, compound, etc."
+"txt": "102 workflow skills — brainstorm, plan, work, review, compound, etc."
 },
 "tags": [],
 "notation": "Container",
@@ -43159,12 +43159,12 @@
 "navigateTo": "__platform_plugin_skills",
 "x": 860,
 "y": 0,
-"width": 328,
+"width": 336,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 44,
-"width": 292,
+"width": 301,
 "height": 85
 }
 },
@@ -43193,7 +43193,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 1298,
+"x": 1306,
 "y": 0,
 "width": 320,
 "height": 180,
@@ -43229,7 +43229,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_brainstorm",
-"x": 1728,
+"x": 1736,
 "y": 0,
 "width": 360,
 "height": 180,
@@ -43265,7 +43265,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_plan",
-"x": 2198,
+"x": 2206,
 "y": 0,
 "width": 371,
 "height": 180,
@@ -43301,7 +43301,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_work",
-"x": 2680,
+"x": 2688,
 "y": 0,
 "width": 383,
 "height": 180,
@@ -43337,7 +43337,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_compound",
-"x": 3174,
+"x": 3182,
 "y": 0,
 "width": 330,
 "height": 180,
@@ -43373,7 +43373,7 @@
 "technology": "Documentation",
 "kind": "component",
 "navigateTo": "__platform_plugin_architecture",
-"x": 3614,
+"x": 3622,
 "y": 0,
 "width": 355,
 "height": 180,
@@ -43416,7 +43416,7 @@
 "notation": "Data store",
 "technology": "Markdown + YAML",
 "kind": "database",
-"x": 1972,
+"x": 1980,
 "y": 360,
 "width": 348,
 "height": 200,
@@ -43452,20 +43452,20 @@
 180
 ],
 [
-937,
-355
+940,
+356
 ],
 [
-1634,
+1641,
 424
 ],
 [
-1961,
+1969,
 448
 ]
 ],
 "labelBBox": {
-"x": 804,
+"x": 806,
 "y": 257,
 "width": 25,
 "height": 18
@@ -43502,32 +43502,32 @@
 180
 ],
 [
-982,
+985,
 243
 ],
 [
-1027,
-258
+1032,
+257
 ],
 [
-1210,
+1218,
 300
 ],
 [
-1468,
-360
+1476,
+359
 ],
 [
-1771,
+1779,
 407
 ],
 [
-1961,
+1969,
 434
 ]
 ],
 "labelBBox": {
-"x": 1211,
+"x": 1219,
 "y": 240,
 "width": 200,
 "height": 55
@@ -43548,36 +43548,36 @@
 "label": "Reads/writes",
 "points": [
 [
-1188,
-159
+1196,
+160
 ],
 [
-1207,
+1215,
 167
 ],
 [
-1225,
+1233,
 174
 ],
 [
-1243,
+1251,
 180
 ],
 [
-1488,
-268
+1497,
+267
 ],
 [
-1777,
+1785,
 354
 ],
 [
-1961,
+1969,
 407
 ]
 ],
 "labelBBox": {
-"x": 1589,
+"x": 1597,
 "y": 248,
 "width": 85,
 "height": 39
@@ -43598,24 +43598,24 @@
 "label": "Reads/writes",
 "points": [
 [
-1618,
+1626,
 177
 ],
 [
-1722,
+1730,
 232
 ],
 [
-1857,
+1865,
 305
 ],
 [
-1965,
+1973,
 362
 ]
 ],
 "labelBBox": {
-"x": 1844,
+"x": 1852,
 "y": 248,
 "width": 85,
 "height": 39
@@ -43636,24 +43636,24 @@
 "label": "Writes brainstorms",
 "points": [
 [
-1965,
+1973,
 180
 ],
 [
-1999,
+2007,
 231
 ],
 [
-2041,
+2049,
 296
 ],
 [
-2076,
+2084,
 351
 ]
 ],
 "labelBBox": {
-"x": 2042,
+"x": 2050,
 "y": 258,
 "width": 121,
 "height": 18
@@ -43673,24 +43673,24 @@
 "label": "Writes plans and specs",
 "points": [
 [
-2327,
+2335,
 180
 ],
 [
-2293,
+2301,
 231
 ],
 [
-2251,
+2259,
 296
 ],
 [
-2216,
+2224,
 351
 ]
 ],
 "labelBBox": {
-"x": 2287,
+"x": 2295,
 "y": 258,
 "width": 149,
 "height": 18
@@ -43710,36 +43710,36 @@
 "label": "Reads plans, writes code",
 "points": [
 [
-2699,
+2707,
 180
 ],
 [
-2627,
+2635,
 217
 ],
 [
-2541,
+2549,
 261
 ],
 [
-2464,
+2472,
 300
 ],
 [
-2421,
+2429,
 322
 ],
 [
-2374,
+2382,
 345
 ],
 [
-2330,
+2338,
 367
 ]
 ],
 "labelBBox": {
-"x": 2577,
+"x": 2585,
 "y": 258,
 "width": 160,
 "height": 18
@@ -43759,48 +43759,48 @@
 "label": "Writes learnings, promotes to \nconstitution",
 "points": [
 [
-3174,
+3182,
 159
 ],
 [
-3156,
+3164,
 166
 ],
 [
-3137,
+3145,
 173
 ],
 [
-3119,
+3127,
 180
 ],
 [
-2964,
+2972,
 238
 ],
 [
-2925,
+2933,
 253
 ],
 [
-2766,
+2774,
 300
 ],
 [
-2621,
+2629,
 343
 ],
 [
-2455,
+2463,
 385
 ],
 [
-2331,
+2339,
 416
 ]
 ],
 "labelBBox": {
-"x": 2951,
+"x": 2959,
 "y": 250,
 "width": 186,
 "height": 35
@@ -43820,48 +43820,48 @@
 "label": "Writes ADRs and diagrams",
 "points": [
 [
-3615,
+3623,
 160
 ],
 [
-3596,
+3604,
 167
 ],
 [
-3577,
+3585,
 174
 ],
 [
-3559,
+3567,
 180
 ],
 [
-3386,
+3394,
 239
 ],
 [
-3343,
+3351,
 259
 ],
 [
-3165,
+3173,
 300
 ],
 [
-2877,
+2885,
 366
 ],
 [
-2537,
+2545,
 413
 ],
 [
-2331,
+2339,
 438
 ]
 ],
 "labelBBox": {
-"x": 3385,
+"x": 3393,
 "y": 258,
 "width": 173,
 "height": 18

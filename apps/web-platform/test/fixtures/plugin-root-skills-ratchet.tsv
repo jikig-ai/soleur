@@ -9,7 +9,7 @@
 # rows already here is tracked in #7453.
 #
 # Regenerate (only after DELETING sites, never to admit new ones):
-#   SOLEUR_WRITE_RATCHET_BASELINE=1 npx vitest run test/plugin-root-anchoring.test.ts
+#   SOLEUR_WRITE_RATCHET_BASELINE=plugin-root-skills-ratchet npx vitest run test/plugin-root-anchoring.test.ts
 # The writer refuses to write below the corpus floors, so a broken extractor
 # cannot silently install an empty baseline that every later run then satisfies.
 1	plugins/soleur/skills/architecture/SKILL.md	bash scripts/regenerate-c4-model.sh
@@ -27,6 +27,7 @@
 1	plugins/soleur/skills/compound-capture/SKILL.md	bun plugins/soleur/scripts/harness-parity-census.ts
 1	plugins/soleur/skills/compound-capture/SKILL.md	node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs
 2	plugins/soleur/skills/compound/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
+1	plugins/soleur/skills/compound/SKILL.md	./scripts/rule-metrics-aggregate.sh
 1	plugins/soleur/skills/compound/SKILL.md	bash ./scripts/rule-metrics-aggregate.sh
 1	plugins/soleur/skills/compound/SKILL.md	python3 scripts/lint-agents-rule-budget.py
 2	plugins/soleur/skills/constraint-scaffold/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
@@ -50,8 +51,11 @@
 1	plugins/soleur/skills/feature-tweet/SKILL.md	bash scripts/lint-distribution-content.sh
 2	plugins/soleur/skills/feature-video/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/fix-issue/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
+1	plugins/soleur/skills/frontend-anti-slop/SKILL.md	/plugins/soleur/NOTICE
 2	plugins/soleur/skills/frontend-design/SKILL.md	bash plugins/soleur/scripts/taste-profile-update.sh
+1	plugins/soleur/skills/gdpr-gate/SKILL.md	/plugins/soleur/skills/gdpr-gate/NOTICE
 23	plugins/soleur/skills/git-worktree/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
+2	plugins/soleur/skills/git-worktree/SKILL.md	/bin/bash
 1	plugins/soleur/skills/git-worktree/SKILL.md	bash scripts/test-all.sh
 1	plugins/soleur/skills/harvest-debt/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/heal-skill/SKILL.md	bun plugins/soleur/scripts/harness-parity-census.ts
@@ -74,9 +78,15 @@
 1	plugins/soleur/skills/plan/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 2	plugins/soleur/skills/plan/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/plan/references/plan-sharp-edges.md	python3 scripts/lint-agents-rule-budget.py
+1	plugins/soleur/skills/postmerge/SKILL.md	/hooks/deploy
+1	plugins/soleur/skills/postmerge/SKILL.md	/hooks/inngest-liveness
 3	plugins/soleur/skills/postmerge/SKILL.md	bash plugins/soleur/scripts/deploy-arm.sh
 1	plugins/soleur/skills/postmerge/SKILL.md	bash scripts/lib/tweet-eligibility.sh
+1	plugins/soleur/skills/postmerge/references/deploy-status-debugging.md	/hooks/deploy
+6	plugins/soleur/skills/postmerge/references/deploy-status-debugging.md	/hooks/deploy-status
 1	plugins/soleur/skills/preflight/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
+3	plugins/soleur/skills/preflight/SKILL.md	./scripts/parse-form-a.awk
+1	plugins/soleur/skills/preflight/SKILL.md	./scripts/probe-verb-gate.sh
 1	plugins/soleur/skills/preflight/SKILL.md	bash scripts/foo.sh
 4	plugins/soleur/skills/preflight/SKILL.md	bash scripts/x.sh
 1	plugins/soleur/skills/preflight/SKILL.md	python3 scripts/lint-encryption-posture.py
@@ -85,6 +95,7 @@
 1	plugins/soleur/skills/release-docs/SKILL.md	bash scripts/sync-readme-counts.sh
 3	plugins/soleur/skills/resolve-debt/SKILL.md	python3 plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py
 1	plugins/soleur/skills/review/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
+1	plugins/soleur/skills/review/SKILL.md	/bin/sh
 1	plugins/soleur/skills/review/SKILL.md	bash scripts/rule-metrics-aggregate.sh
 1	plugins/soleur/skills/review/SKILL.md	bash scripts/test-all.sh
 1	plugins/soleur/skills/schedule/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
@@ -92,6 +103,8 @@
 1	plugins/soleur/skills/ship/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
 1	plugins/soleur/skills/ship/SKILL.md	${CLAUDE_PLUGIN_ROOT:-.}
 5	plugins/soleur/skills/ship/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
+1	plugins/soleur/skills/ship/SKILL.md	./scripts/auto-close-scan.sh
+1	plugins/soleur/skills/ship/SKILL.md	/hooks/infra-config-status
 1	plugins/soleur/skills/ship/SKILL.md	bash plugins/soleur/scripts/deploy-arm.sh
 1	plugins/soleur/skills/ship/SKILL.md	bash plugins/soleur/scripts/grok-pre-push-gate.sh
 1	plugins/soleur/skills/ship/SKILL.md	bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh
@@ -106,10 +119,33 @@
 1	plugins/soleur/skills/ship/references/settle-then-admin-merge.md	bash plugins/soleur/scripts/resolve-regenerable-conflicts.sh
 4	plugins/soleur/skills/skill-creator/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/skill-creator/SKILL.md	bun plugins/soleur/scripts/harness-parity-census.ts
+1	plugins/soleur/skills/skill-creator/references/be-clear-and-direct.md	python scripts/validate.py
+1	plugins/soleur/skills/skill-creator/references/best-practices.md	python scripts/migrate.py
+1	plugins/soleur/skills/skill-creator/references/best-practices.md	python scripts/pack.py
+1	plugins/soleur/skills/skill-creator/references/best-practices.md	python scripts/validate.py
+1	plugins/soleur/skills/skill-creator/references/common-patterns.md	python scripts/analyze_form.py
+1	plugins/soleur/skills/skill-creator/references/common-patterns.md	python scripts/fill_form.py
+1	plugins/soleur/skills/skill-creator/references/common-patterns.md	python scripts/validate.py
+1	plugins/soleur/skills/skill-creator/references/common-patterns.md	python scripts/validate_fields.py
+1	plugins/soleur/skills/skill-creator/references/common-patterns.md	python scripts/verify_output.py
+1	plugins/soleur/skills/skill-creator/references/executable-code.md	python scripts/analyze_form.py
+1	plugins/soleur/skills/skill-creator/references/executable-code.md	python scripts/fill_form.py
+1	plugins/soleur/skills/skill-creator/references/executable-code.md	python scripts/script_name.py
+1	plugins/soleur/skills/skill-creator/references/executable-code.md	python scripts/validate_boxes.py
+1	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/analyze_form.py
+1	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/apply_changes.py
+1	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/fill_form.py
+1	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/validate.py
+1	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/validate_changes.py
+1	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/validate_fields.py
+2	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/validate_report.py
+1	plugins/soleur/skills/skill-creator/references/workflows-and-validation.md	python scripts/verify_output.py
 2	plugins/soleur/skills/skill-security-scan/SKILL.md	${CLAUDE_PLUGIN_ROOT:-plugins/soleur}
 1	plugins/soleur/skills/skill-security-scan/references/regex-patterns.md	bash scripts/run-self-test.sh
+1	plugins/soleur/skills/skill-security-scan/references/test-fixtures/clean-third-party.skill.md	| ./scripts/process.sh
 2	plugins/soleur/skills/social-distribute/SKILL.md	bash scripts/lint-distribution-content.sh
 2	plugins/soleur/skills/triage/SKILL.md	bash scripts/lint-rejected-register.sh
 5	plugins/soleur/skills/work/SKILL.md	${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}
+1	plugins/soleur/skills/work/SKILL.md	./scripts/dev.sh
 1	plugins/soleur/skills/work/SKILL.md	bash scripts/regenerate-c4-model.sh
 4	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh

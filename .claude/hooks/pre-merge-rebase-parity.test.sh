@@ -399,4 +399,24 @@ done
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, $SKIPPED skipped ==="
+
+# --- ANTI-VACUITY FLOOR (ADR-193) -----------------------------------------------------------
+# Absolute and hand-ratcheted, NOT derived from the run. `FAIL -eq 0` alone is satisfied by a
+# suite that executed nothing, and this file is unusually exposed to that: ADR-240's retirement
+# removed every comparison arm, halving the case count in one edit, and a later edit that guts
+# the rest the same way would report `0/0 passed, 0 failed` and exit 0.
+#
+# Measured 2026-09-23 immediately after that reduction: 12 executed cases. Raise this in the SAME
+# edit that adds a case, never in a later tidy-up — slack in a floor is deletion budget.
+#
+# Reported with printf + exit, never through pass()/fail(): a floor that calls the helper it
+# backstops cannot see that helper being disarmed.
+MIN_CASES=12
+_executed=$((PASS + FAIL))
+if [[ "$_executed" -lt "$MIN_CASES" ]]; then
+  printf '\nFATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
+    "$_executed" "$MIN_CASES" >&2
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]] || exit 1

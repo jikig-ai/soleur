@@ -113,8 +113,8 @@ export const DEVIN_INSTRUCTIONS = resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md");
  * caller's floor is what turns that into a RED — a parser that returns ∅ on a renamed
  * heading would otherwise make every coverage question vacuously true.
  */
-export function parseToolsTable(md: string): Set<string> {
-  const out = new Set<string>();
+export function parseToolsTable(md: string): Map<string, string> {
+  const out = new Map<string, string>();
   const lines = md.split("\n");
   const start = lines.findIndex((l) => /^##\s+Tools\s*$/.test(l));
   if (start === -1) return out;
@@ -122,23 +122,51 @@ export function parseToolsTable(md: string): Set<string> {
     const line = lines[i];
     if (/^##\s+/.test(line)) break;
     if (!line.startsWith("|")) continue;
-    const first = line.split("|")[1];
+    const cells = line.split("|");
+    const first = cells[1];
     if (first === undefined) continue;
     const cell = first.trim();
     if (!cell || /^-+$/.test(cell) || cell === "Soleur instruction") continue;
+    // The SECOND column is the translation, and it is the thing the property is
+    // about. Reading only the first column made a row with a BLANK translation
+    // pass: measured, emptying the `SendMessage / ListAgents` cell in both files
+    // left the gate 5 pass / 0 fail, while a Codex session meeting `SendMessage`
+    // still had nothing to resolve it with — the literal gap #8318 exists to
+    // close, surviving inside the gate built to close it.
+    const translation = (cells[2] ?? "").trim();
     for (const part of cell.split("/")) {
       const word = part.replace(/`/g, "").trim().split(/\s+/)[0];
-      if (word) out.add(word);
+      if (word) out.set(word, translation);
     }
   }
   return out;
 }
 
-export function readToolsTable(path: string): Set<string> {
+/** A cell that names no mechanism — blank, or a placeholder standing in for one. */
+export function isEmptyTranslation(cell: string | undefined): boolean {
+  if (cell === undefined) return true;
+  const t = cell.trim().replace(/`/g, "");
+  return t === "" || /^(?:-+|n\/?a|tbd|todo|\?+|none)$/i.test(t);
+}
+
+export function readToolsTable(path: string): Map<string, string> {
   return parseToolsTable(readFileSync(path, "utf8"));
 }
 
-/** Word-boundary use of a tool name in a doc's text. */
+/**
+ * Does this doc USE the tool, as opposed to merely containing the word?
+ *
+ * A bare `\bWord\b` is a WORD detector, and several tool names are ordinary
+ * English: measured, `Artifact` matched `**Artifact:** the feature's named
+ * surface` and `Workflow` matched `## Core Workflow`, while `Read`, `Write`,
+ * `Task`, `Monitor` and `Agent` match prose everywhere. That forced rows into
+ * two customer-facing adapter tables for tools no Soleur doc instructs, and made
+ * the gate's own failure message name a use it had not measured (AP-021).
+ *
+ * The direction of that error was safe — over-strict never hides a real gap —
+ * but the noise is permanent, so require a tool-SHAPED context instead: the name
+ * in backticks (how this corpus cites a tool), or followed by the word "tool".
+ */
 export function usesTool(text: string, tool: string): boolean {
-  return new RegExp(String.raw`\b${tool}\b`).test(text);
+  return new RegExp(String.raw`(?:\`${tool}\`|\b${tool}\s+tool\b)`).test(text);
 }

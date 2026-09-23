@@ -297,6 +297,21 @@ def main():
 
     result = init_skill(skill_name, path)
 
+    # The Grok invoke block the template emits names repo-relative paths under
+    # `plugins/soleur/`. That is correct for a skill born inside this plugin —
+    # and the fleet guard (plugins/soleur/test/grok-harness-invoke.test.ts)
+    # requires byte-equality there, so the block must NOT be rewritten per
+    # destination. Outside the plugin tree those paths resolve to nothing, so
+    # say so rather than shipping a first instruction that points at a missing
+    # file (#8570 review, M5).
+    if result and "plugins/soleur/skills" not in str(Path(path).resolve()):
+        print()
+        print("⚠️  Scaffolded OUTSIDE plugins/soleur/skills/.")
+        print("   The Grok invoke block in the new SKILL.md cites paths under")
+        print("   `plugins/soleur/` (harness.ts, skills/<name>/SKILL.md). Repoint")
+        print("   them at this repo's own plugin root, or drop the block if this")
+        print("   skill is not loaded by Grok Build.")
+
     if result:
         sys.exit(0)
     else:
