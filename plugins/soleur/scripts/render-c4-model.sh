@@ -86,11 +86,9 @@ fi
 # generated-components.c4, spec.c4 and views.c4 into a customer repo and never model.c4
 # (that one belongs to soleur:architecture), so the all-three form refused every plainly
 # synced repo. What makes a render trustworthy is the two gates below, not a file list.
-shopt -s nullglob
-_sources=("$DIAGRAMS_DIR"/*.c4)
-shopt -u nullglob
-if [[ "${#_sources[@]}" -eq 0 ]]; then
-  echo "ERROR: no .c4 source in $DIAGRAMS_DIR" >&2
+# Every extension likec4 1.50.0 compiles, at any depth — likec4 walks the whole directory.
+if [[ -z "$(find "$DIAGRAMS_DIR" -type f \( -name '*.c4' -o -name '*.likec4' -o -name '*.like-c4' \) -print -quit)" ]]; then
+  echo "ERROR: no .c4 source (*.c4, *.likec4 or *.like-c4) in $DIAGRAMS_DIR" >&2
   exit 1
 fi
 
@@ -104,7 +102,11 @@ RENDER_LOG="$TMP/render.log"
 # Render off-tree with the pinned CLI, capturing all diagnostics. A non-zero
 # exit is a hard failure; but likec4 ALSO exits 0 on broken sources, so the
 # exit code alone is never sufficient (see the two checks below).
-if ! ( cd "$DIAGRAMS_DIR" && npx -y --ignore-scripts "likec4@${LIKEC4_VERSION}" export json -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
+# CI is UNSET for the child and colour forced off: under CI likec4 switches to a timestamped,
+# ANSI-coloured reporter that the anchored DIAG_RE below cannot match, and a syntax error
+# would then publish a truncated model at rc 0 (measured under CI=true). ANSI is also
+# stripped from the log as a second line of defence.
+if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore-scripts "likec4@${LIKEC4_VERSION}" export json -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
   echo "ERROR: likec4 export exited non-zero — refusing to overwrite $OUT" >&2
   cat "$RENDER_LOG" >&2
   exit 1
@@ -123,7 +125,9 @@ fi
 # /abs/path …`): `^Invalid ` and the indented `Line N:` form (`    Line 274:`)
 # can't match a repo path, so a checkout dir containing those substrings can't
 # false-FAIL. `Could not resolve` is a distinctive likec4 phrase.
-DIAG_RE='^Invalid |Could not resolve|^[[:space:]]+Line [0-9]+:'
+DIAG_RE='^([0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)? +[A-Z]+ +[^ ]+ +)?Invalid |Could not resolve|^[[:space:]]+Line [0-9]+:'
+_esc="$(printf '\033')"
+sed "s/${_esc}\[[0-9;]*m//g" "$RENDER_LOG" >"$RENDER_LOG.plain" && mv -f "$RENDER_LOG.plain" "$RENDER_LOG"
 if grep -qE "$DIAG_RE" "$RENDER_LOG"; then
   echo "ERROR: likec4 reported a source validation error — refusing to overwrite $OUT" >&2
   grep -E "$DIAG_RE" "$RENDER_LOG" >&2

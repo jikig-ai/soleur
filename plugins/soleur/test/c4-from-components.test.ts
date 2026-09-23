@@ -32,6 +32,7 @@ import {
   generateSpecC4,
   generateViewPage,
   generateViewsC4,
+  likec4ChildEnv,
   loadComponentDir,
   parseComponentDoc,
   toId,
@@ -252,6 +253,36 @@ describe("assessRender — three gates", () => {
 // countModelJson — the key mapping assessRender depends on
 // ---------------------------------------------------------------------------
 
+// Under CI likec4 switches to a timestamped, ANSI-coloured reporter. Measured on 1.50.0 under
+// CI=true: `ESC[2m15:32:23.971ESC[0m ESC[1mESC[31mERRORESC[0m ESC[1mESC[36mlikec4ESC[0m Invalid <f>`
+// and `    ESC[2mLine 4: ESC[22m…`. Anchored patterns match neither raw form, so a syntax error
+// became a truncated model at rc 0 — the scheduled Architecture Diagram Sync runs with CI set.
+describe("likec4 diagnostics under CI", () => {
+  const E = "\x1b";
+  const ciInvalid = `${E}[2m15:32:23.971${E}[0m ${E}[1m${E}[31mERROR${E}[0m ${E}[1m${E}[36mlikec4${E}[0m Invalid /r/m.c4`;
+  const ciLine = `    ${E}[2mLine 4: ${E}[22m${E}[31mExpecting token${E}[39m`;
+  const g = { elementCount: 3, relationshipCount: 1, generatedRelationships: 1 };
+
+  it("fails a CI-formatted `Invalid` line on its own (no Line row to lean on)", () => {
+    expect(assessRender({ diagnostics: ciInvalid, ...g }).status).toBe("failed");
+  });
+  it("fails a CI-formatted, ANSI-wrapped `Line N:` row on its own", () => {
+    expect(assessRender({ diagnostics: ciLine, ...g }).status).toBe("failed");
+  });
+  it("still passes a clean CI-formatted INFO stream", () => {
+    const info = `${E}[2m15:32:23.413${E}[0m ${E}[1m${E}[32mINFO ${E}[0m ${E}[1m${E}[36mlikec4.lang${E}[0m workspace: /r/Invalid dir`;
+    expect(assessRender({ diagnostics: info, ...g }).status).toBe("ok");
+  });
+  it("likec4ChildEnv drops CI and FORCE_COLOR, sets NO_COLOR, keeps the rest", () => {
+    const env = likec4ChildEnv({ CI: "true", FORCE_COLOR: "1", PATH: "/bin", HOME: "/h" });
+    expect(env.CI).toBeUndefined();
+    expect(env.FORCE_COLOR).toBeUndefined();
+    expect(env.NO_COLOR).toBe("1");
+    expect(env.PATH).toBe("/bin");
+    expect(env.HOME).toBe("/h");
+  });
+});
+
 describe("countModelJson — pinned against a REAL likec4 artifact", () => {
   // This is the one thing no assessRender test can cover. assessRender takes
   // plain numbers, so reading the wrong JSON key is invisible to it: the producer
@@ -374,6 +405,9 @@ describe("drift guards", () => {
       "done in 1.2s",
       "invalid lowercase should not match",
       "some Invalid mid-line text should not match",
+      "15:32:23.971 ERROR likec4 Invalid /r/m.c4",
+      "15:32:23 WARN likec4.lang Invalid /r/m.c4",
+      "15:32:23.413 INFO likec4.lang workspace: /r/Invalid dir",
     ];
     for (const p of probes) {
       expect([p, DIAG_RE.test(p)]).toEqual([p, shellEquivalent.test(p)]);
