@@ -177,7 +177,7 @@
 "external"
 ],
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "title": "Anthropic API",
 "kind": "system",
@@ -3800,7 +3800,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__publicReader",
-"x": 2736,
+"x": 2734,
 "y": 2002,
 "width": 361,
 "height": 180,
@@ -3830,7 +3830,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -3838,14 +3838,14 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 5141,
+"x": 5138,
 "y": 2002,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 119
 }
 },
@@ -3998,7 +3998,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__ghcr",
-"x": 4674,
+"x": 4672,
 "y": 2002,
 "width": 356,
 "height": 180,
@@ -4037,7 +4037,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__letsencrypt",
-"x": 3208,
+"x": 3206,
 "y": 2002,
 "width": 411,
 "height": 180,
@@ -4074,7 +4074,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sigstore",
-"x": 3730,
+"x": 3728,
 "y": 2002,
 "width": 358,
 "height": 180,
@@ -4153,7 +4153,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__projectZot",
-"x": 1680,
+"x": 1678,
 "y": 2822,
 "width": 364,
 "height": 180,
@@ -4838,7 +4838,7 @@
 ],
 [
 3110,
-1745
+1746
 ],
 [
 2998,
@@ -4853,7 +4853,7 @@
 1935
 ],
 [
-2921,
+2920,
 1991
 ]
 ],
@@ -5624,15 +5624,15 @@
 ],
 [
 5113,
-1979
+1980
 ],
 [
-5078,
-2008
+5076,
+2009
 ],
 [
-5039,
-2029
+5037,
+2030
 ]
 ],
 "labelBBox": {
@@ -6504,27 +6504,27 @@
 ],
 [
 4565,
-2043
+2042
 ],
 [
-4952,
+4951,
 1970
 ],
 [
-5085,
+5083,
 2002
 ],
 [
-5100,
+5098,
 2005
 ],
 [
-5116,
-2010
+5113,
+2009
 ],
 [
-5131,
-2015
+5128,
+2014
 ]
 ],
 "labelBBox": {
@@ -6837,27 +6837,27 @@
 1942
 ],
 [
-4409,
+4408,
 2032
 ],
 [
-4479,
+4478,
 1970
 ],
 [
-4590,
+4588,
 2002
 ],
 [
-4614,
+4612,
 2009
 ],
 [
-4639,
+4637,
 2016
 ],
 [
-4664,
+4662,
 2024
 ]
 ],
@@ -6899,32 +6899,32 @@
 1831
 ],
 [
-4186,
+4185,
 1964
 ],
 [
-4276,
-2077
+4275,
+2078
 ],
 [
-4143,
+4141,
 2182
 ],
 [
-3859,
-2404
+3856,
+2403
 ],
 [
-2752,
-2475
+2751,
+2474
 ],
 [
-2307,
+2306,
 2494
 ]
 ],
 "labelBBox": {
-"x": 4230,
+"x": 4229,
 "y": 2036,
 "width": 253,
 "height": 106
@@ -6981,7 +6981,7 @@
 1940
 ],
 [
-3327,
+3326,
 1993
 ]
 ],
@@ -7028,30 +7028,30 @@
 ],
 [
 3189,
-1728
+1729
 ],
 [
-2905,
+2904,
 1831
 ],
 [
-2731,
+2730,
 1894
 ],
 [
-2562,
-2041
+2559,
+2040
 ],
 [
-2681,
+2679,
 2182
 ],
 [
-3229,
+3228,
 2829
 ],
 [
-6070,
+6069,
 2903
 ],
 [
@@ -7060,7 +7060,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2881,
+"x": 2879,
 "y": 2241,
 "width": 248,
 "height": 106
@@ -7164,23 +7164,23 @@
 ],
 [
 4147,
-1778
+1779
 ],
 [
 4078,
 1831
 ],
 [
-4023,
-1873
+4048,
+1854
 ],
 [
-3981,
-1938
+4000,
+1929
 ],
 [
-3952,
-1992
+3962,
+1993
 ]
 ],
 "labelBBox": {
@@ -7205,15 +7205,15 @@
 "label": "ACME HTTP-01 validation of the \nsoleur.ai/www Pages custom domain — \nreaches GitHub's origin ONLY while \napex+www are DNS-only (proxied=false)",
 "points": [
 [
-3537,
+3534,
 2002
 ],
 [
-3561,
+3559,
 1983
 ],
 [
-3585,
+3584,
 1962
 ],
 [
@@ -7221,23 +7221,23 @@
 1942
 ],
 [
-3652,
+3655,
 1897
 ],
 [
-3641,
+3648,
 1861
 ],
 [
-3697,
+3707,
 1831
 ],
 [
-3920,
-1711
+3929,
+1719
 ],
 [
-4018,
+4022,
 1830
 ],
 [
@@ -7253,12 +7253,12 @@
 1763
 ],
 [
-4309,
-1759
+4310,
+1758
 ]
 ],
 "labelBBox": {
-"x": 3698,
+"x": 3708,
 "y": 1839,
 "width": 258,
 "height": 90
@@ -7330,35 +7330,35 @@
 "points": [
 [
 1942,
-2561
+2560
 ],
 [
-1902,
-2583
+1901,
+2582
 ],
 [
-1864,
-2613
+1862,
+2612
 ],
 [
-1840,
+1838,
 2652
 ],
 [
-1812,
+1809,
 2700
 ],
 [
-1815,
+1813,
 2761
 ],
 [
-1827,
+1825,
 2812
 ]
 ],
 "labelBBox": {
-"x": 1841,
+"x": 1839,
 "y": 2652,
 "width": 264,
 "height": 106
@@ -7379,28 +7379,28 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-2129,
+2128,
 2592
 ],
 [
-2141,
-2651
+2140,
+2650
 ],
 [
-2166,
+2164,
 2724
 ],
 [
-2221,
+2219,
 2762
 ],
 [
-2413,
+2411,
 2898
 ],
 [
-5964,
-2910
+5963,
+2911
 ],
 [
 6861,
@@ -7408,7 +7408,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2222,
+"x": 2220,
 "y": 2652,
 "width": 264,
 "height": 106
@@ -8420,7 +8420,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -8428,14 +8428,14 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 5440,
+"x": 5437,
 "y": 3289,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 119
 }
 },
@@ -9680,12 +9680,12 @@
 2711
 ],
 [
-4955,
-3148
+4950,
+3146
 ],
 [
-5431,
-3314
+5428,
+3313
 ]
 ],
 "labelBBox": {
@@ -9743,11 +9743,11 @@
 3153
 ],
 [
-4899,
+4895,
 3305
 ],
 [
-5430,
+5428,
 3359
 ]
 ],
@@ -12026,7 +12026,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 13941,
+"width": 13947,
 "height": 3614
 },
 "nodes": [
@@ -12056,7 +12056,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__betaContact",
-"x": 9717,
+"x": 9721,
 "y": 1843,
 "width": 331,
 "height": 180,
@@ -12130,7 +12130,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__emailSender",
-"x": 12261,
+"x": 12267,
 "y": 541,
 "width": 345,
 "height": 180,
@@ -12167,7 +12167,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__connectedRepoPlugin",
-"x": 13066,
+"x": 13072,
 "y": 992,
 "width": 356,
 "height": 180,
@@ -12209,7 +12209,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__founder",
-"x": 9702,
+"x": 9706,
 "y": 2264,
 "width": 362,
 "height": 180,
@@ -12246,7 +12246,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_grokBuild",
-"x": 9703,
+"x": 9707,
 "y": 2674,
 "width": 359,
 "height": 180,
@@ -12379,7 +12379,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__devin",
-"x": 10173,
+"x": 10177,
 "y": 2674,
 "width": 362,
 "height": 180,
@@ -12541,7 +12541,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__plausible",
-"x": 13173,
+"x": 13179,
 "y": 541,
 "width": 320,
 "height": 180,
@@ -12601,7 +12601,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "__platform_engine",
-"x": 11603,
+"x": 11609,
 "y": 910,
 "width": 1423,
 "height": 723,
@@ -12638,7 +12638,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__pushService",
-"x": 12717,
+"x": 12723,
 "y": 541,
 "width": 346,
 "height": 180,
@@ -12689,7 +12689,7 @@
 "technology": "Claude Code",
 "kind": "container",
 "navigateTo": "__platform_engine_claude",
-"x": 11656,
+"x": 11662,
 "y": 992,
 "width": 320,
 "height": 180,
@@ -12885,7 +12885,7 @@
 "technology": "Plugin Discovery",
 "kind": "container",
 "navigateTo": "__platform_engine_skillloader",
-"x": 11643,
+"x": 11649,
 "y": 1413,
 "width": 346,
 "height": 180,
@@ -12926,7 +12926,7 @@
 "technology": "PreToolUse Guards + Rewriter + PostToolUse hints + SessionStart/PreCompact compaction-lifecycle consumers",
 "kind": "container",
 "navigateTo": "__platform_engine_hooks",
-"x": 12482,
+"x": 12488,
 "y": 1413,
 "width": 382,
 "height": 180,
@@ -12964,7 +12964,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__stripe",
-"x": 10979,
+"x": 10985,
 "y": 1413,
 "width": 331,
 "height": 180,
@@ -13014,7 +13014,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 10285,
+"x": 10424,
 "y": 2923,
 "width": 1336,
 "height": 683,
@@ -13054,7 +13054,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__systemdUser",
-"x": 10645,
+"x": 10649,
 "y": 2674,
 "width": 379,
 "height": 180,
@@ -13206,7 +13206,7 @@
 "technology": "Markdown SKILL.md",
 "kind": "container",
 "navigateTo": "__platform_plugin_skills",
-"x": 10823,
+"x": 10962,
 "y": 3006,
 "width": 328,
 "height": 180,
@@ -13244,7 +13244,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 11261,
+"x": 11400,
 "y": 3006,
 "width": 320,
 "height": 180,
@@ -13283,7 +13283,7 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 10325,
+"x": 10464,
 "y": 3006,
 "width": 387,
 "height": 180,
@@ -13411,7 +13411,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 11030,
+"x": 11169,
 "y": 3366,
 "width": 348,
 "height": 200,
@@ -13806,7 +13806,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -13816,12 +13816,12 @@
 "navigateTo": "__anthropic",
 "x": 9960,
 "y": 1413,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 19,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 119
 }
 },
@@ -13894,7 +13894,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 13532,
+"x": 13538,
 "y": 992,
 "width": 362,
 "height": 180,
@@ -14164,24 +14164,24 @@
 "label": "Conversation PII origin — the operator \ncaptures notes about this third party",
 "points": [
 [
-9883,
+9887,
 2023
 ],
 [
-9883,
+9887,
 2091
 ],
 [
-9883,
+9887,
 2184
 ],
 [
-9883,
+9887,
 2254
 ]
 ],
 "labelBBox": {
-"x": 9884,
+"x": 9888,
 "y": 2118,
 "width": 241,
 "height": 56
@@ -14202,24 +14202,48 @@
 "label": "Runs /go (local plugin CLI)",
 "points": [
 [
-9883,
+9876,
 2444
 ],
 [
-9883,
-2509
+9873,
+2463
 ],
 [
-9883,
-2597
+9872,
+2484
 ],
 [
-9883,
+9870,
+2504
+],
+[
+9868,
+2553
+],
+[
+9868,
+2565
+],
+[
+9870,
+2614
+],
+[
+9871,
+2630
+],
+[
+9873,
+2647
+],
+[
+9874,
 2664
 ]
 ],
 "labelBBox": {
-"x": 9884,
+"x": 9871,
 "y": 2537,
 "width": 169,
 "height": 39
@@ -14240,48 +14264,48 @@
 "label": "Browses and converses",
 "points": [
 [
-10065,
-2306
+10068,
+2307
 ],
 [
-10237,
-2250
+10242,
+2251
 ],
 [
-10470,
-2136
+10476,
+2137
 ],
 [
-10470,
+10476,
 1934
 ],
 [
-10470,
+10476,
 630
 ],
 [
-10470,
+10476,
 630
 ],
 [
-10470,
+10476,
 630
 ],
 [
-10470,
+10476,
 538
 ],
 [
-10279,
+10283,
 378
 ],
 [
-10143,
+10145,
 276
 ]
 ],
 "labelBBox": {
-"x": 10471,
+"x": 10477,
 "y": 1265,
 "width": 153,
 "height": 39
@@ -14356,32 +14380,32 @@
 310
 ],
 [
-9864,
-326
+9867,
+327
 ],
 [
-11047,
-301
+11093,
+299
 ],
 [
-11114,
+11162,
 330
 ],
 [
-11273,
+11316,
 401
 ],
 [
-11596,
-798
+11617,
+797
 ],
 [
-11742,
+11753,
 984
 ]
 ],
 "labelBBox": {
-"x": 11535,
+"x": 11560,
 "y": 609,
 "width": 151,
 "height": 39
@@ -14404,48 +14428,48 @@
 "label": "Loads plugin from the PLATFORM-DEPLOYED \nroot (getPluginPath(), \n/app/shared/plugins/soleur) — never the \nconnected-repo workspace copy (ADR-093)",
 "points": [
 [
-11801,
+11807,
 1172
 ],
 [
-11799,
+11805,
 1192
 ],
 [
-11796,
+11802,
 1213
 ],
 [
-11795,
+11801,
 1232
 ],
 [
-11791,
+11797,
 1281
 ],
 [
-11791,
+11797,
 1294
 ],
 [
-11795,
+11801,
 1343
 ],
 [
-11796,
+11802,
 1362
 ],
 [
-11798,
+11804,
 1383
 ],
 [
-11801,
+11807,
 1402
 ]
 ],
 "labelBBox": {
-"x": 11796,
+"x": 11802,
 "y": 1240,
 "width": 300,
 "height": 90
@@ -14466,48 +14490,48 @@
 "label": "Tool-call envelope on stdin — \nMODEL-CONTROLLED, UNTRUSTED (ADR-156): \nparsed without eval; input that cannot \nbe fully parsed asks, never continues \nsilently (ADR-157)",
 "points": [
 [
-11976,
+11982,
 1147
 ],
 [
-12025,
+12031,
 1170
 ],
 [
-12077,
+12083,
 1199
 ],
 [
-12119,
+12125,
 1232
 ],
 [
-12170,
+12176,
 1272
 ],
 [
-12159,
+12165,
 1306
 ],
 [
-12211,
+12217,
 1343
 ],
 [
-12289,
+12295,
 1396
 ],
 [
-12387,
+12393,
 1433
 ],
 [
-12472,
+12478,
 1458
 ]
 ],
 "labelBBox": {
-"x": 12212,
+"x": 12218,
 "y": 1232,
 "width": 323,
 "height": 106
@@ -14528,36 +14552,36 @@
 "label": "Guards, annotates, and rewrites tool \ninput before execution. SINCE ADR-227 \n(#8323) THERE IS A SECOND CONSUMER: the \n`PreCompact` arm emits plain prose read \nby the COMPACTION SUMMARIZER -- a ",
 "points": [
 [
-12658,
+12664,
 1413
 ],
 [
-12643,
+12649,
 1353
 ],
 [
-12614,
+12620,
 1277
 ],
 [
-12559,
+12565,
 1232
 ],
 [
-12537,
+12543,
 1214
 ],
 [
-12199,
+12205,
 1151
 ],
 [
-11987,
+11993,
 1113
 ]
 ],
 "labelBBox": {
-"x": 12636,
+"x": 12642,
 "y": 1232,
 "width": 311,
 "height": 106
@@ -14578,36 +14602,36 @@
 "label": "Discovers",
 "points": [
 [
-11795,
-1593
+11796,
+1592
 ],
 [
-11761,
-1729
+11755,
+1727
 ],
 [
-11686,
-1994
+11672,
+1989
 ],
 [
-11583,
+11580,
 2204
 ],
 [
-11432,
-2513
+11454,
+2500
 ],
 [
-11189,
-2840
+11272,
+2835
 ],
 [
-11065,
-2998
+11182,
+2997
 ]
 ],
 "labelBBox": {
-"x": 11554,
+"x": 11553,
 "y": 2332,
 "width": 94,
 "height": 39
@@ -14628,48 +14652,48 @@
 "label": "Discovers",
 "points": [
 [
-11853,
+11859,
 1592
 ],
 [
-11884,
+11890,
 1678
 ],
 [
-11925,
+11931,
 1812
 ],
 [
-11925,
+11931,
 1932
 ],
 [
-11925,
+11931,
 1932
 ],
 [
-11925,
+11931,
 1932
 ],
 [
-11925,
+11931,
 2765
 ],
 [
-11925,
-2929
+11931,
+2882
 ],
 [
-11738,
-3015
+11827,
+2968
 ],
 [
-11591,
-3058
+11729,
+3022
 ]
 ],
 "labelBBox": {
-"x": 11926,
+"x": 11932,
 "y": 2332,
 "width": 99,
 "height": 39
@@ -14743,14 +14767,14 @@
 ],
 [
 589,
-3369
+3372
 ],
 [
-9605,
-3452
+9734,
+3453
 ],
 [
-11019,
+11158,
 3463
 ]
 ],
@@ -14776,48 +14800,48 @@
 "label": "Reads context_queries artifacts \n(skill-scoped injection)",
 "points": [
 [
-12770,
+12776,
 1592
 ],
 [
-12848,
+12854,
 1673
 ],
 [
-12942,
+12948,
 1799
 ],
 [
-12942,
+12948,
 1932
 ],
 [
-12942,
+12948,
 1932
 ],
 [
-12942,
+12948,
 1932
 ],
 [
-12942,
+12948,
 3097
 ],
 [
-12942,
-3411
+12948,
+3385
 ],
 [
-11838,
-3458
+11952,
+3447
 ],
 [
-11390,
-3464
+11529,
+3461
 ]
 ],
 "labelBBox": {
-"x": 12943,
+"x": 12949,
 "y": 2529,
 "width": 200,
 "height": 55
@@ -14838,36 +14862,36 @@
 "label": "Reads/writes",
 "points": [
 [
-11022,
+11161,
 3185
 ],
 [
-11038,
+11177,
 3223
 ],
 [
-11059,
+11198,
 3268
 ],
 [
-11081,
+11220,
 3306
 ],
 [
-11092,
+11231,
 3323
 ],
 [
-11104,
+11243,
 3340
 ],
 [
-11116,
+11255,
 3357
 ]
 ],
 "labelBBox": {
-"x": 11082,
+"x": 11221,
 "y": 3254,
 "width": 85,
 "height": 39
@@ -14888,24 +14912,24 @@
 "label": "Reads/writes",
 "points": [
 [
-11369,
+11508,
 3185
 ],
 [
-11339,
+11478,
 3237
 ],
 [
-11301,
+11440,
 3301
 ],
 [
-11269,
+11408,
 3356
 ]
 ],
 "labelBBox": {
-"x": 11333,
+"x": 11472,
 "y": 3254,
 "width": 85,
 "height": 39
@@ -15170,39 +15194,51 @@
 "label": "Sessions and keys",
 "points": [
 [
-11656,
-1104
+11663,
+1106
 ],
 [
-11510,
-1125
+11523,
+1129
 ],
 [
-11291,
-1166
+11315,
+1170
 ],
 [
-11108,
+11142,
 1232
 ],
 [
-10754,
-1361
+10985,
+1288
 ],
 [
-10720,
-1521
+10956,
+1326
 ],
 [
-10359,
+10808,
+1403
+],
+[
+10611,
+1504
+],
+[
+10577,
+1569
+],
+[
+10365,
 1633
 ],
 [
-9802,
-1805
+9804,
+1802
 ],
 [
-9636,
+9639,
 1733
 ],
 [
@@ -15235,7 +15271,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10783,
+"x": 10809,
 "y": 1481,
 "width": 121,
 "height": 39
@@ -15351,22 +15387,22 @@
 ],
 [
 8557,
-860
+861
 ],
 [
 9630,
 910
 ],
 [
-10383,
+10385,
 944
 ],
 [
-11278,
+11284,
 1029
 ],
 [
-11646,
+11652,
 1065
 ]
 ],
@@ -15926,15 +15962,15 @@
 910
 ],
 [
-10383,
+10385,
 948
 ],
 [
-11278,
+11283,
 1030
 ],
 [
-11646,
+11652,
 1065
 ]
 ],
@@ -16108,11 +16144,11 @@
 "label": "Bare repo data; worktrees local (TARGET \nstate — the host is born but the store \nis empty until the LUKS cutover, #5274). \nHost key pinned via \nGIT_DATA_SSH_HOST_KEY (ADR-237), loaded ",
 "points": [
 [
-11656,
+11663,
 1090
 ],
 [
-11046,
+11052,
 1114
 ],
 [
@@ -16282,15 +16318,15 @@
 "label": "Replay buffer + control state",
 "points": [
 [
-11656,
+11662,
 1065
 ],
 [
-11296,
+11301,
 1030
 ],
 [
-10390,
+10393,
 945
 ],
 [
@@ -16447,19 +16483,19 @@
 ],
 [
 10066,
-480
+479
 ],
 [
-10115,
+10117,
 1148
 ],
 [
-10128,
+10131,
 1403
 ]
 ],
 "labelBBox": {
-"x": 10084,
+"x": 10085,
 "y": 816,
 "width": 250,
 "height": 56
@@ -16480,36 +16516,36 @@
 "label": "LLM calls",
 "points": [
 [
-11657,
+11663,
 1090
 ],
 [
-11284,
+11290,
 1107
 ],
 [
-10381,
-1155
+10387,
+1156
 ],
 [
-10268,
+10274,
 1232
 ],
 [
-10210,
+10216,
 1272
 ],
 [
-10176,
+10181,
 1344
 ],
 [
-10156,
+10160,
 1403
 ]
 ],
 "labelBBox": {
-"x": 10269,
+"x": 10275,
 "y": 1265,
 "width": 63,
 "height": 39
@@ -16654,15 +16690,15 @@
 "label": "Git operations",
 "points": [
 [
-11657,
+11662,
 1065
 ],
 [
-11296,
+11301,
 1029
 ],
 [
-10390,
+10393,
 944
 ],
 [
@@ -17051,20 +17087,20 @@
 910
 ],
 [
-9337,
+9338,
 1007
 ],
 [
-9775,
+9777,
 1266
 ],
 [
-9993,
+9995,
 1407
 ]
 ],
 "labelBBox": {
-"x": 9584,
+"x": 9585,
 "y": 1035,
 "width": 262,
 "height": 89
@@ -17521,15 +17557,15 @@
 910
 ],
 [
-10383,
+10385,
 945
 ],
 [
-11278,
+11284,
 1029
 ],
 [
-11646,
+11652,
 1065
 ]
 ],
@@ -17719,20 +17755,20 @@
 330
 ],
 [
-10556,
-555
+10558,
+554
 ],
 [
-10952,
+10957,
 1165
 ],
 [
-11091,
+11097,
 1404
 ]
 ],
 "labelBBox": {
-"x": 10740,
+"x": 10743,
 "y": 825,
 "width": 157,
 "height": 39
@@ -17753,36 +17789,36 @@
 "label": "invoice skill: \ncreate/finalize/send/chase via hosted \nStripe MCP — OAuth, operator's OWN \naccount; distinct credential plane from \nthe webapp -> stripe billing edge; ",
 "points": [
 [
-11656,
-1100
+11663,
+1105
 ],
 [
-11489,
-1121
+11508,
+1129
 ],
 [
-11243,
-1163
+11289,
+1173
 ],
 [
-11180,
+11228,
 1232
 ],
 [
-11139,
-1278
+11182,
+1276
 ],
 [
-11131,
-1346
+11163,
+1345
 ],
 [
-11132,
-1402
+11156,
+1403
 ]
 ],
 "labelBBox": {
-"x": 11181,
+"x": 11229,
 "y": 1232,
 "width": 242,
 "height": 106
@@ -17823,28 +17859,28 @@
 332
 ],
 [
-13103,
+13109,
 288
 ],
 [
-13173,
+13179,
 330
 ],
 [
-13245,
+13251,
 374
 ],
 [
-13287,
+13293,
 462
 ],
 [
-13309,
+13315,
 532
 ]
 ],
 "labelBBox": {
-"x": 13270,
+"x": 13276,
 "y": 364,
 "width": 114,
 "height": 39
@@ -17865,60 +17901,60 @@
 "label": "Sends email to the operator address",
 "points": [
 [
-12607,
+12613,
 711
 ],
 [
-12625,
+12631,
 718
 ],
 [
-12644,
+12650,
 725
 ],
 [
-12662,
+12668,
 731
 ],
 [
-12981,
+12987,
 837
 ],
 [
-13067,
+13073,
 847
 ],
 [
-13399,
+13405,
 902
 ],
 [
-13433,
+13439,
 908
 ],
 [
-13445,
+13451,
 897
 ],
 [
-13477,
+13483,
 910
 ],
 [
-13524,
+13530,
 927
 ],
 [
-13569,
+13575,
 957
 ],
 [
-13607,
+13613,
 986
 ]
 ],
 "labelBBox": {
-"x": 13400,
+"x": 13406,
 "y": 825,
 "width": 230,
 "height": 39
@@ -17955,80 +17991,80 @@
 310
 ],
 [
-9953,
-346
+9957,
+347
 ],
 [
-11107,
-308
+11146,
+306
 ],
 [
-11269,
+11313,
 330
 ],
 [
-11472,
+11507,
 358
 ],
 [
-11542,
+11576,
 338
 ],
 [
-11713,
+11738,
 449
 ],
 [
-11850,
+11868,
 537
 ],
 [
-11805,
+11817,
 648
 ],
 [
-11944,
+11950,
 731
 ],
 [
-12289,
-937
+12291,
+944
 ],
 [
-12432,
+12438,
 861
 ],
 [
-12831,
+12837,
 902
 ],
 [
-12867,
+12873,
 905
 ],
 [
-13443,
+13449,
 899
 ],
 [
-13477,
+13483,
 910
 ],
 [
-13526,
+13532,
 926
 ],
 [
-13572,
+13578,
 956
 ],
 [
-13611,
+13617,
 986
 ]
 ],
 "labelBBox": {
-"x": 11945,
+"x": 11951,
 "y": 576,
 "width": 260,
 "height": 106
@@ -18070,51 +18106,51 @@
 ],
 [
 8597,
-689
+690
 ],
 [
 9282,
 791
 ],
 [
-9460,
+9461,
 818
 ],
 [
-9494,
+9495,
 877
 ],
 [
-9672,
+9674,
 902
 ],
 [
-9724,
+9726,
 909
 ],
 [
-13427,
+13433,
 893
 ],
 [
-13477,
+13483,
 910
 ],
 [
-13526,
+13532,
 926
 ],
 [
-13573,
+13579,
 955
 ],
 [
-13612,
+13618,
 986
 ]
 ],
 "labelBBox": {
-"x": 9673,
+"x": 9675,
 "y": 791,
 "width": 258,
 "height": 106
@@ -18135,23 +18171,23 @@
 "label": "Inbound email webhook (svix-verified) → \nemail-triage ingress",
 "points": [
 [
-13714,
+13720,
 992
 ],
 [
-13709,
+13715,
 816
 ],
 [
-13670,
+13676,
 428
 ],
 [
-13412,
+13418,
 330
 ],
 [
-13318,
+13324,
 295
 ],
 [
@@ -18176,7 +18212,7 @@
 ]
 ],
 "labelBBox": {
-"x": 13685,
+"x": 13691,
 "y": 601,
 "width": 255,
 "height": 56
@@ -18213,44 +18249,44 @@
 310
 ],
 [
-9907,
+9910,
 336
 ],
 [
-11795,
-321
+11835,
+320
 ],
 [
-11912,
+11954,
 330
 ],
 [
-12249,
+12275,
 358
 ],
 [
-12353,
-313
+12374,
+318
 ],
 [
-12662,
+12668,
 449
 ],
 [
-12709,
+12715,
 470
 ],
 [
-12755,
-502
+12761,
+503
 ],
 [
-12793,
+12799,
 535
 ]
 ],
 "labelBBox": {
-"x": 12627,
+"x": 12635,
 "y": 347,
 "width": 254,
 "height": 72
@@ -19173,36 +19209,36 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-9454,
+9455,
 2023
 ],
 [
-9487,
+9489,
 2080
 ],
 [
-9535,
+9538,
 2153
 ],
 [
-9593,
+9597,
 2204
 ],
 [
-9623,
+9627,
 2230
 ],
 [
-9658,
+9662,
 2253
 ],
 [
-9693,
-2273
+9697,
+2272
 ]
 ],
 "labelBBox": {
-"x": 9594,
+"x": 9598,
 "y": 2093,
 "width": 262,
 "height": 106
@@ -19641,36 +19677,36 @@
 "label": "Pages the operator — the LARGER of two \nindependent exits (betterstack is the \nother; a Sentry outage is survivable BY \nDESIGN). Issue alerts route to email → \ntarget_type issue owners with ",
 "points": [
 [
-9006,
+9007,
 2023
 ],
 [
-9054,
+9056,
 2083
 ],
 [
-9126,
+9128,
 2159
 ],
 [
-9206,
+9209,
 2204
 ],
 [
-9356,
+9360,
 2287
 ],
 [
-9550,
+9554,
 2324
 ],
 [
-9692,
+9696,
 2340
 ]
 ],
 "labelBBox": {
-"x": 9207,
+"x": 9210,
 "y": 2093,
 "width": 265,
 "height": 106
@@ -19691,36 +19727,36 @@
 "label": "Closes the terminal (stopping its \nscope), or runs `systemctl --user stop \nsoleur.slice` as an explicit fallback — \nwhich stops EVERY agent session on the \nmachine (ADR-161)",
 "points": [
 [
-10065,
-2383
+10069,
+2385
 ],
 [
 10184,
-2405
+2408
 ],
 [
-10342,
-2444
+10336,
+2447
 ],
 [
-10471,
+10461,
 2504
 ],
 [
-10473,
+10465,
 2505
 ],
 [
-10599,
+10595,
 2595
 ],
 [
-10703,
+10702,
 2668
 ]
 ],
 "labelBBox": {
-"x": 10623,
+"x": 10620,
 "y": 2503,
 "width": 262,
 "height": 107
@@ -19741,48 +19777,48 @@
 "label": "Adopts the live agent process tree into \na memory-capped transient scope under \nsoleur-agents.slice (StartTransientUnit \nover D-Bus); systemd is the single \nwriter — no raw cgroup directory writes. ",
 "points": [
 [
-12482,
-1538
+12488,
+1537
 ],
 [
-12190,
-1599
+12195,
+1598
 ],
 [
 11634,
-1755
+1754
 ],
 [
-11303,
+11300,
 2093
 ],
 [
-11124,
+11121,
 2276
 ],
 [
-11223,
-2420
+11219,
+2419
 ],
 [
-11056,
+11053,
 2614
 ],
 [
-11040,
+11037,
 2634
 ],
 [
-11020,
+11017,
 2652
 ],
 [
-10999,
+10997,
 2668
 ]
 ],
 "labelBBox": {
-"x": 11304,
+"x": 11301,
 "y": 2093,
 "width": 255,
 "height": 106
@@ -19803,60 +19839,60 @@
 "label": "Reaps the agent session by stopping its \nscope, via BindsTo= on the terminal's \nown scope — a UNIT dependency, because \nadoption moves the process out of the \nterminal's cgroup so co-membership can ",
 "points": [
 [
-10888,
+10886,
 2674
 ],
 [
-10897,
+10895,
 2655
 ],
 [
-10906,
+10903,
 2634
 ],
 [
-10912,
+10909,
 2614
 ],
 [
+11009,
+2278
+],
+[
+10821,
+2123
+],
+[
 11018,
-2280
-],
-[
-10824,
-2124
-],
-[
-11020,
 1833
 ],
 [
-11119,
-1685
+11120,
+1683
 ],
 [
-11231,
-1748
+11234,
+1749
 ],
 [
-11366,
+11372,
 1633
 ],
 [
-11527,
+11533,
 1497
 ],
 [
-11673,
-1298
+11679,
+1299
 ],
 [
-11753,
+11759,
 1181
 ]
 ],
 "labelBBox": {
-"x": 11021,
+"x": 11019,
 "y": 1878,
 "width": 276,
 "height": 106
@@ -19877,48 +19913,48 @@
 "label": "IGNORED by the loader (trust boundary): \nthe committed workspace plugins/soleur/ \nis never the SDK load source — \ngetPluginPath() (deployed root) is. \nLoading it would exec the repo's ",
 "points": [
 [
-13178,
+13184,
 1172
 ],
 [
-13129,
+13135,
 1231
 ],
 [
-13056,
+13062,
 1304
 ],
 [
-12974,
+12980,
 1343
 ],
 [
-12753,
+12759,
 1446
 ],
 [
-12670,
+12676,
 1370
 ],
 [
-12427,
+12433,
 1403
 ],
 [
-12283,
+12289,
 1422
 ],
 [
-12121,
+12127,
 1449
 ],
 [
-12000,
+12006,
 1469
 ]
 ],
 "labelBBox": {
-"x": 13122,
+"x": 13128,
 "y": 1232,
 "width": 261,
 "height": 106
@@ -19939,36 +19975,36 @@
 "label": "Runs Soleur sessions locally in the CLI \nor remotely in Devin Cloud",
 "points": [
 [
-10006,
-2444
+9993,
+2443
 ],
 [
-10031,
+10017,
 2463
 ],
 [
-10058,
+10042,
 2484
 ],
 [
-10081,
+10064,
 2504
 ],
 [
-10142,
-2555
+10127,
+2557
 ],
 [
-10207,
-2617
+10196,
+2618
 ],
 [
-10259,
-2667
+10251,
+2668
 ]
 ],
 "labelBBox": {
-"x": 10198,
+"x": 10187,
 "y": 2539,
 "width": 246,
 "height": 35
@@ -19988,60 +20024,84 @@
 "label": "MCP tools/call over stdio; every tool \nresult's text passes the credential \npredicate before the model reads it",
 "points": [
 [
-11976,
+11982,
 1092
 ],
 [
-12278,
+12284,
 1111
 ],
 [
-12909,
+12915,
 1158
 ],
 [
-12974,
+12980,
 1232
 ],
 [
-13349,
-1658
+13031,
+1289
 ],
 [
-13256,
-2244
+12977,
+1476
 ],
 [
-12329,
+12925,
+1633
+],
+[
+12736,
+2205
+],
+[
+12807,
+2478
+],
+[
+12335,
 2854
 ],
 [
-12293,
-2878
+12241,
+2930
 ],
 [
-10810,
-2909
+12190,
+2901
 ],
 [
-10768,
+12069,
+2915
+],
+[
+12037,
+2919
+],
+[
+10938,
+2914
+],
+[
+10907,
 2923
 ],
 [
-10719,
-2940
+10857,
+2939
 ],
 [
-10670,
+10808,
 2969
 ],
 [
-10629,
-2999
+10766,
+3000
 ]
 ],
 "labelBBox": {
-"x": 13091,
+"x": 12800,
 "y": 2110,
 "width": 227,
 "height": 72
@@ -20062,60 +20122,60 @@
 "label": "Bash-path deny routes agent-browser \nsnapshot through the same predicate",
 "points": [
 [
-12498,
+12504,
 1593
 ],
 [
-12380,
+12386,
 1666
 ],
 [
-12246,
+12252,
 1782
 ],
 [
-12246,
+12252,
 1932
 ],
 [
-12246,
+12252,
 1932
 ],
 [
-12246,
+12252,
 1932
 ],
 [
-12246,
+12252,
 2765
 ],
 [
-12246,
-2930
+12252,
+3066
 ],
 [
-10923,
-2866
+11189,
+2817
 ],
 [
-10768,
+10907,
 2923
 ],
 [
-10720,
+10859,
 2941
 ],
 [
-10672,
+10812,
 2970
 ],
 [
-10632,
+10771,
 3000
 ]
 ],
 "labelBBox": {
-"x": 12247,
+"x": 12253,
 "y": 2323,
 "width": 238,
 "height": 56
@@ -20222,16 +20282,16 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none; refuses filename",
 "points": [
 [
-10326,
-3104
+10465,
+3103
 ],
 [
-9034,
-3150
+9162,
+3149
 ],
 [
-1684,
-3411
+1695,
+3412
 ],
 [
 383,
@@ -20239,7 +20299,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6279,
+"x": 6361,
 "y": 3245,
 "width": 255,
 "height": 56
@@ -20260,39 +20320,39 @@
 "label": "Loads via .grok/config.toml; the plugin \nroot resolves from the \nloader-substituted ${CLAUDE_PLUGIN_ROOT} \ntoken first, then GROK_PLUGIN_ROOT, then \nthe two managed Devin plugin caches by ",
 "points": [
 [
-10063,
-2838
+10067,
+2839
 ],
 [
-10081,
-2844
+10086,
+2845
 ],
 [
-10100,
+10104,
 2850
 ],
 [
-10118,
+10122,
 2854
 ],
 [
-10135,
-2858
+10163,
+2864
 ],
 [
-10676,
-2909
+10802,
+2903
 ],
 [
-10758,
+10897,
 2921
 ]
 ],
 "labelBBox": {
-"x": 10111,
-"y": 2774,
+"x": 10185,
+"y": 2773,
 "width": 301,
-"height": 106
+"height": 107
 },
 "parent": null,
 "relations": [
@@ -20372,11 +20432,11 @@
 "label": "inbox_list agent tool reads the same \nmerged severity-ranked feed \n(agent-native parity)",
 "points": [
 [
-12031,
+12037,
 910
 ],
 [
-11996,
+12002,
 900
 ],
 [
@@ -20425,7 +20485,7 @@
 ]
 ],
 "labelBBox": {
-"x": 9916,
+"x": 9919,
 "y": 830,
 "width": 228,
 "height": 73
@@ -20484,51 +20544,51 @@
 "label": "crm_* MCP tools read AND write the \nowner-private CRM via auth.uid()-pinned \nRPCs (agent-native parity)",
 "points": [
 [
-12493,
+12499,
 910
 ],
 [
-12451,
+12458,
 900
 ],
 [
-10964,
+11011,
 906
 ],
 [
-10920,
+10968,
 902
 ],
 [
-10663,
-877
+10691,
+876
 ],
 [
-10605,
-827
+10627,
+828
 ],
 [
-10348,
+10350,
 791
 ],
 [
-9750,
-708
+9751,
+712
 ],
 [
 9035,
-660
+662
 ],
 [
 8710,
-642
+643
 ]
 ],
 "labelBBox": {
-"x": 10324,
-"y": 760,
+"x": 10329,
+"y": 757,
 "width": 256,
-"height": 73
+"height": 72
 },
 "parent": null,
 "relations": [
@@ -20608,25 +20668,37 @@
 "label": "Loads skills, AGENTS.md rules, and MCP \nin both substrates; plugin subagents and \nSessionStart/SessionEnd hooks only on \nlocal. Since #8401 all three /soleur:go \nsession gates also resolve the plugin ",
 "points": [
 [
-10536,
-2834
+10539,
+2836
 ],
 [
-10628,
-2869
+10558,
+2843
+],
+[
+10576,
+2849
+],
+[
+10594,
+2854
 ],
 [
 10728,
-2907
+2894
 ],
 [
-10759,
+10776,
+2864
+],
+[
+10898,
 2919
 ]
 ],
 "labelBBox": {
-"x": 10404,
-"y": 2884,
+"x": 10457,
+"y": 2767,
 "width": 265,
 "height": 107
 },
@@ -20694,7 +20766,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 7372,
+"width": 7377,
 "height": 2371
 },
 "nodes": [
@@ -21774,7 +21846,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -21784,12 +21856,12 @@
 "navigateTo": "__anthropic",
 "x": 7028,
 "y": 827,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 120
 }
 },
@@ -22580,19 +22652,19 @@
 "label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-243)",
 "points": [
 [
-6557,
+6558,
 1745
 ],
 [
-6691,
+6692,
 1572
 ],
 [
-6985,
+6986,
 1194
 ],
 [
-7123,
+7126,
 1015
 ]
 ],
@@ -23483,15 +23555,15 @@
 0
 ],
 [
-6898,
+6899,
 0
 ],
 [
-7106,
+7107,
 580
 ],
 [
-7173,
+7176,
 817
 ]
 ],
@@ -25526,21 +25598,21 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
 ],
 "notation": "System",
 "kind": "system",
-"x": 211,
+"x": 208,
 "y": 394,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 119
 }
 }
@@ -25661,7 +25733,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 5935,
+"width": 5940,
 "height": 967
 },
 "nodes": [
@@ -25691,7 +25763,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__contributor",
-"x": 2343,
+"x": 2348,
 "y": 0,
 "width": 327,
 "height": 180,
@@ -25816,7 +25888,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 2330,
+"x": 2335,
 "y": 377,
 "width": 353,
 "height": 180,
@@ -25882,7 +25954,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -25892,12 +25964,12 @@
 "navigateTo": "__anthropic",
 "x": 1424,
 "y": 787,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 120
 }
 },
@@ -25927,7 +25999,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__soleurMarketplace",
-"x": 1879,
+"x": 1884,
 "y": 787,
 "width": 352,
 "height": 180,
@@ -25964,7 +26036,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 2341,
+"x": 2346,
 "y": 787,
 "width": 331,
 "height": 180,
@@ -26001,7 +26073,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__doppler",
-"x": 2783,
+"x": 2788,
 "y": 787,
 "width": 345,
 "height": 180,
@@ -26038,7 +26110,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 3239,
+"x": 3244,
 "y": 787,
 "width": 362,
 "height": 180,
@@ -26075,7 +26147,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__ghcr",
-"x": 3712,
+"x": 3717,
 "y": 787,
 "width": 356,
 "height": 180,
@@ -26112,7 +26184,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__zotRegistry",
-"x": 4179,
+"x": 4184,
 "y": 787,
 "width": 354,
 "height": 180,
@@ -26149,7 +26221,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 4643,
+"x": 4648,
 "y": 787,
 "width": 388,
 "height": 180,
@@ -26186,7 +26258,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sentry",
-"x": 5141,
+"x": 5146,
 "y": 787,
 "width": 325,
 "height": 180,
@@ -26223,7 +26295,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__sigstore",
-"x": 5577,
+"x": 5582,
 "y": 787,
 "width": 358,
 "height": 180,
@@ -26243,24 +26315,24 @@
 "label": "Opens untrusted PR — head code runs in \nfix-constraints Stage A (pull_request, \ncontents:read, no write token) (ADR-074)",
 "points": [
 [
-2507,
+2512,
 180
 ],
 [
-2507,
+2512,
 236
 ],
 [
-2507,
+2512,
 309
 ],
 [
-2507,
+2512,
 367
 ]
 ],
 "labelBBox": {
-"x": 2508,
+"x": 2513,
 "y": 240,
 "width": 262,
 "height": 72
@@ -26289,28 +26361,28 @@
 728
 ],
 [
-359,
+360,
 654
 ],
 [
-445,
+446,
 617
 ],
 [
-615,
+616,
 544
 ],
 [
-1845,
+1849,
 492
 ],
 [
-2320,
+2325,
 474
 ]
 ],
 "labelBBox": {
-"x": 446,
+"x": 447,
 "y": 659,
 "width": 25,
 "height": 18
@@ -26338,32 +26410,32 @@
 787
 ],
 [
-825,
+826,
 720
 ],
 [
-934,
+936,
 637
 ],
 [
-986,
+988,
 617
 ],
 [
-1225,
+1228,
 525
 ],
 [
-1969,
+1973,
 487
 ],
 [
-2320,
+2325,
 474
 ]
 ],
 "labelBBox": {
-"x": 987,
+"x": 989,
 "y": 625,
 "width": 258,
 "height": 89
@@ -26384,36 +26456,36 @@
 "label": "Publishes the zot restart-loop alarm \nverdict, and since #8038 the weekly \nissue-flow measurement, which updates \none standing public issue with aggregate \ncounts (find-or-update, never re-filed) ",
 "points": [
 [
-2330,
+2335,
 480
 ],
 [
-2068,
-500
+2073,
+501
 ],
 [
-1589,
+1593,
 546
 ],
 [
-1432,
+1436,
 617
 ],
 [
-1349,
+1352,
 655
 ],
 [
-1272,
+1274,
 723
 ],
 [
-1216,
+1218,
 780
 ]
 ],
 "labelBBox": {
-"x": 1433,
+"x": 1437,
 "y": 627,
 "width": 257,
 "height": 85
@@ -26433,27 +26505,27 @@
 "label": "[...]",
 "points": [
 [
-2331,
+2335,
 468
 ],
 [
-1825,
+1829,
 470
 ],
 [
-399,
+401,
 487
 ],
 [
-237,
+238,
 617
 ],
 [
-189,
+190,
 655
 ],
 [
-170,
+171,
 721
 ],
 [
@@ -26462,7 +26534,7 @@
 ]
 ],
 "labelBBox": {
-"x": 238,
+"x": 239,
 "y": 659,
 "width": 25,
 "height": 18
@@ -26485,36 +26557,36 @@
 "label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key (ADR-243)",
 "points": [
 [
-2330,
+2335,
 480
 ],
 [
-2192,
+2197,
 496
 ],
 [
-1997,
+2003,
 533
 ],
 [
-1848,
+1853,
 617
 ],
 [
-1776,
+1781,
 657
 ],
 [
-1712,
+1716,
 724
 ],
 [
-1667,
+1670,
 779
 ]
 ],
 "labelBBox": {
-"x": 1849,
+"x": 1854,
 "y": 625,
 "width": 262,
 "height": 89
@@ -26535,36 +26607,36 @@
 "label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp: declares the default-branch ruleset \nAND publishes \n.claude-plugin/marketplace.json from ",
 "points": [
 [
-2330,
+2335,
 544
 ],
 [
-2294,
+2299,
 564
 ],
 [
-2257,
+2262,
 589
 ],
 [
-2226,
+2231,
 617
 ],
 [
-2176,
+2181,
 662
 ],
 [
-2134,
+2139,
 726
 ],
 [
-2104,
+2109,
 778
 ]
 ],
 "labelBBox": {
-"x": 2227,
+"x": 2232,
 "y": 616,
 "width": 252,
 "height": 107
@@ -26585,24 +26657,24 @@
 "label": "apply-web-platform-infra.yml issues \nREAD-ONLY GETs to the Cloudflare \nrulesets API (ADR-136, #6767): the \npre-apply entrypoint gate (a step AFTER \n`terraform plan` and BEFORE the main ",
 "points": [
 [
-2507,
+2512,
 557
 ],
 [
-2507,
+2512,
 622
 ],
 [
-2507,
+2512,
 710
 ],
 [
-2507,
+2512,
 777
 ]
 ],
 "labelBBox": {
-"x": 2508,
+"x": 2513,
 "y": 616,
 "width": 255,
 "height": 107
@@ -26623,36 +26695,36 @@
 "label": "scheduled-terraform-drift's token-drift \nscan reads token-shaped keys across the \nsoleur project's configs using \nper-config read-only service tokens \ndelivered as ONE Actions secret holding ",
 "points": [
 [
-2683,
+2688,
 542
 ],
 [
-2721,
+2726,
 563
 ],
 [
-2760,
+2765,
 588
 ],
 [
-2791,
+2796,
 617
 ],
 [
-2840,
+2845,
 662
 ],
 [
-2881,
+2886,
 726
 ],
 [
-2910,
+2915,
 778
 ]
 ],
 "labelBBox": {
-"x": 2877,
+"x": 2882,
 "y": 616,
 "width": 262,
 "height": 107
@@ -26673,36 +26745,36 @@
 "label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nfourteen Resend emitters under .github/ ",
 "points": [
 [
-2684,
+2689,
 480
 ],
 [
-2822,
+2827,
 496
 ],
 [
-3017,
+3022,
 533
 ],
 [
-3167,
+3172,
 617
 ],
 [
-3239,
+3244,
 657
 ],
 [
-3303,
+3308,
 724
 ],
 [
-3349,
+3354,
 779
 ]
 ],
 "labelBBox": {
-"x": 3298,
+"x": 3303,
 "y": 616,
 "width": 258,
 "height": 107
@@ -26723,36 +26795,36 @@
 "label": "[...]",
 "points": [
 [
-2684,
+2689,
 480
 ],
 [
-2947,
+2952,
 501
 ],
 [
-3428,
+3433,
 546
 ],
 [
-3585,
+3590,
 617
 ],
 [
-3669,
+3674,
 655
 ],
 [
-3748,
+3753,
 723
 ],
 [
-3805,
+3810,
 780
 ]
 ],
 "labelBBox": {
-"x": 3748,
+"x": 3753,
 "y": 659,
 "width": 25,
 "height": 18
@@ -26773,36 +26845,36 @@
 "label": "RESTORE path, added 2026-08-05 \n(#7277/ADR-169). After the recut \ndestroys the store, a needs:-chained job \ncopies the required pin set GHCR -> zot \nover the CF Tunnel bridge and verifies ",
 "points": [
 [
-2684,
+2689,
 470
 ],
 [
-2936,
+2941,
 478
 ],
 [
-3412,
+3417,
 507
 ],
 [
-3801,
+3806,
 617
 ],
 [
-3939,
+3944,
 656
 ],
 [
-4085,
+4090,
 725
 ],
 [
-4192,
+4197,
 783
 ]
 ],
 "labelBBox": {
-"x": 4082,
+"x": 4087,
 "y": 616,
 "width": 253,
 "height": 107
@@ -26823,36 +26895,36 @@
 "label": "Places the ACME order for the Pages \ncustom-domain cert whenever the cname is \n(re-)set — so every cname toggle \nconsumes a validation attempt against \nlimits that are hourly and COMPOUNDING ",
 "points": [
 [
-2330,
+2335,
 468
 ],
 [
-1867,
+1871,
 469
 ],
 [
-642,
-486
+643,
+485
 ],
 [
-520,
+521,
 617
 ],
 [
-478,
+479,
 662
 ],
 [
-505,
+506,
 726
 ],
 [
-544,
+545,
 779
 ]
 ],
 "labelBBox": {
-"x": 521,
+"x": 522,
 "y": 616,
 "width": 275,
 "height": 107
@@ -26873,36 +26945,36 @@
 "label": "Polls the SOLEUR_ZOT_DISK + \nSOLEUR_PRIVATE_NIC Logs sources \n(ClickHouse SQL via \nbetterstack-query.sh) for the zot \nrestart-loop recurrence alarm, the ",
 "points": [
 [
-2684,
+2689,
 473
 ],
 [
-3085,
+3090,
 485
 ],
 [
-4052,
+4057,
 524
 ],
 [
-4363,
+4368,
 617
 ],
 [
-4484,
+4489,
 653
 ],
 [
-4610,
+4615,
 723
 ],
 [
-4701,
+4706,
 782
 ]
 ],
 "labelBBox": {
-"x": 4606,
+"x": 4611,
 "y": 616,
 "width": 248,
 "height": 107
@@ -26923,36 +26995,36 @@
 "label": "CI is both an emitter and the applier: \nthe ./.github/actions/sentry-heartbeat \ncomposite posts ok|error check-ins from \n14 workflows, in two groups — 8 \nGHA-`schedule:`-fired ",
 "points": [
 [
-2683,
+2688,
 468
 ],
 [
-3161,
+3166,
 470
 ],
 [
-4473,
+4478,
 487
 ],
 [
-4882,
+4887,
 617
 ],
 [
-4993,
+4998,
 652
 ],
 [
-5105,
+5110,
 723
 ],
 [
-5186,
+5191,
 781
 ]
 ],
 "labelBBox": {
-"x": 5101,
+"x": 5106,
 "y": 616,
 "width": 252,
 "height": 107
@@ -26973,36 +27045,36 @@
 "label": "[...]",
 "points": [
 [
-2684,
+2689,
 471
 ],
 [
-3269,
+3274,
 484
 ],
 [
-5126,
+5131,
 530
 ],
 [
-5380,
+5385,
 617
 ],
 [
-5482,
+5487,
 651
 ],
 [
-5581,
+5586,
 722
 ],
 [
-5652,
+5657,
 781
 ]
 ],
 "labelBBox": {
-"x": 5577,
+"x": 5582,
 "y": 659,
 "width": 25,
 "height": 18
@@ -31851,7 +31923,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 5311,
+"width": 5316,
 "height": 964
 },
 "nodes": [
@@ -31879,7 +31951,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__founder",
-"x": 1352,
+"x": 1354,
 "y": 0,
 "width": 362,
 "height": 180,
@@ -31972,7 +32044,7 @@
 "notation": "System",
 "kind": "system",
 "depth": 1,
-"x": 1331,
+"x": 1333,
 "y": 291,
 "width": 1314,
 "height": 303,
@@ -32011,7 +32083,7 @@
 "technology": "React, Next.js",
 "kind": "container",
 "navigateTo": "__platform_webapp_dashboard",
-"x": 1371,
+"x": 1373,
 "y": 374,
 "width": 324,
 "height": 180,
@@ -32047,7 +32119,7 @@
 "technology": "Supabase Auth",
 "kind": "container",
 "navigateTo": "__platform_webapp_auth",
-"x": 1805,
+"x": 1807,
 "y": 374,
 "width": 344,
 "height": 180,
@@ -32096,7 +32168,7 @@
 "technology": "Next.js API",
 "kind": "container",
 "navigateTo": "__platform_webapp_api",
-"x": 2259,
+"x": 2261,
 "y": 374,
 "width": 346,
 "height": 180,
@@ -32162,7 +32234,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -32170,14 +32242,14 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 1333,
+"x": 1332,
 "y": 784,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 120
 }
 },
@@ -32207,7 +32279,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__github",
-"x": 1787,
+"x": 1792,
 "y": 784,
 "width": 353,
 "height": 180,
@@ -32244,7 +32316,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 2251,
+"x": 2256,
 "y": 784,
 "width": 331,
 "height": 180,
@@ -32281,7 +32353,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__stripe",
-"x": 2693,
+"x": 2698,
 "y": 784,
 "width": 331,
 "height": 180,
@@ -32318,7 +32390,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 3135,
+"x": 3140,
 "y": 784,
 "width": 372,
 "height": 180,
@@ -32355,7 +32427,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__pushService",
-"x": 3617,
+"x": 3622,
 "y": 784,
 "width": 346,
 "height": 180,
@@ -32392,7 +32464,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__publicResolvers",
-"x": 4073,
+"x": 4078,
 "y": 784,
 "width": 350,
 "height": 180,
@@ -32427,7 +32499,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_engine",
-"x": 4533,
+"x": 4538,
 "y": 784,
 "width": 320,
 "height": 180,
@@ -32462,7 +32534,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "components",
-"x": 4963,
+"x": 4968,
 "y": 784,
 "width": 348,
 "height": 180,
@@ -32518,24 +32590,24 @@
 "label": "Browses and converses",
 "points": [
 [
-1533,
+1535,
 180
 ],
 [
-1533,
+1535,
 235
 ],
 [
-1533,
+1535,
 306
 ],
 [
-1533,
+1535,
 363
 ]
 ],
 "labelBBox": {
-"x": 1534,
+"x": 1536,
 "y": 240,
 "width": 153,
 "height": 39
@@ -32556,48 +32628,48 @@
 "label": "Inbound email webhook (svix-verified) → \nemail-triage ingress",
 "points": [
 [
-1139,
+1140,
 784
 ],
 [
-1220,
+1223,
 711
 ],
 [
-1324,
+1328,
 618
 ],
 [
-1336,
+1340,
 614
 ],
 [
-1426,
+1430,
 579
 ],
 [
-2111,
+2113,
 619
 ],
 [
-2204,
+2206,
 594
 ],
 [
-2234,
+2236,
 585
 ],
 [
-2263,
+2265,
 573
 ],
 [
-2291,
+2293,
 558
 ]
 ],
 "labelBBox": {
-"x": 1337,
+"x": 1341,
 "y": 638,
 "width": 255,
 "height": 56
@@ -32618,60 +32690,60 @@
 "label": "Calls",
 "points": [
 [
-1620,
+1622,
 374
 ],
 [
-1657,
+1659,
 342
 ],
 [
-1702,
+1704,
 309
 ],
 [
-1750,
+1752,
 291
 ],
 [
-1832,
+1834,
 260
 ],
 [
-1860,
+1862,
 283
 ],
 [
-1948,
+1950,
 281
 ],
 [
-2062,
+2064,
 278
 ],
 [
-2097,
+2099,
 252
 ],
 [
-2204,
+2206,
 291
 ],
 [
-2250,
+2252,
 308
 ],
 [
-2294,
+2296,
 337
 ],
 [
-2332,
+2334,
 367
 ]
 ],
 "labelBBox": {
-"x": 1949,
+"x": 1951,
 "y": 240,
 "width": 57,
 "height": 39
@@ -32692,36 +32764,36 @@
 "label": "Page view events",
 "points": [
 [
-1371,
+1373,
 468
 ],
 [
-1082,
+1085,
 476
 ],
 [
-493,
+495,
 505
 ],
 [
-322,
+324,
 614
 ],
 [
-264,
+265,
 651
 ],
 [
-222,
+224,
 718
 ],
 [
-196,
+197,
 775
 ]
 ],
 "labelBBox": {
-"x": 323,
+"x": 325,
 "y": 647,
 "width": 114,
 "height": 39
@@ -32742,48 +32814,48 @@
 "label": "Daily org cost/usage report (Admin API, \ncost-report cron)",
 "points": [
 [
-2299,
+2301,
 554
 ],
 [
-2269,
+2271,
 570
 ],
 [
-2236,
+2238,
 584
 ],
 [
-2204,
+2206,
 594
 ],
 [
-2109,
+2112,
 621
 ],
 [
-1851,
+1856,
 574
 ],
 [
-1761,
+1766,
 614
 ],
 [
-1684,
+1688,
 648
 ],
 [
-1617,
+1621,
 718
 ],
 [
-1571,
+1574,
 776
 ]
 ],
 "labelBBox": {
-"x": 1762,
+"x": 1767,
 "y": 638,
 "width": 250,
 "height": 56
@@ -32804,48 +32876,48 @@
 "label": "Workstream tab: reads connected-repo \nissues (REST) + Project v2 board Status \n(GraphQL); AND writes issues — create / \ntitle / label-driven status / \nclose-reopen — via the audited GitHub ",
 "points": [
 [
-2286,
-554
+2288,
+553
 ],
 [
-2260,
+2261,
 568
 ],
 [
-2231,
+2233,
 582
 ],
 [
-2204,
+2206,
 594
 ],
 [
-2175,
+2178,
 606
 ],
 [
-2161,
+2164,
 595
 ],
 [
-2136,
+2140,
 614
 ],
 [
-2080,
+2084,
 655
 ],
 [
-2037,
+2041,
 720
 ],
 [
-2008,
+2012,
 775
 ]
 ],
 "labelBBox": {
-"x": 2137,
+"x": 2141,
 "y": 613,
 "width": 258,
 "height": 106
@@ -32866,24 +32938,24 @@
 "label": "cron-gh-pages-cert-reissue (ADR-125, \nAP-019): transiently PATCHes the \napex+www dns_records proxied flag \nfalse→true to open a DNS-only window so \nGitHub/LE can validate the Pages cert ",
 "points": [
 [
-2429,
+2431,
 553
 ],
 [
-2426,
+2430,
 619
 ],
 [
-2423,
+2427,
 707
 ],
 [
-2421,
+2425,
 774
 ]
 ],
 "labelBBox": {
-"x": 2427,
+"x": 2430,
 "y": 613,
 "width": 265,
 "height": 106
@@ -32904,36 +32976,36 @@
 "label": "Checkout and webhooks",
 "points": [
 [
-2605,
-533
+2607,
+532
 ],
 [
-2646,
+2648,
 554
 ],
 [
-2687,
+2690,
 581
 ],
 [
-2720,
+2723,
 614
 ],
 [
-2766,
+2769,
 659
 ],
 [
-2800,
+2804,
 722
 ],
 [
-2823,
+2827,
 775
 ]
 ],
 "labelBBox": {
-"x": 2800,
+"x": 2804,
 "y": 647,
 "width": 157,
 "height": 39
@@ -32954,36 +33026,36 @@
 "label": "cron-ux-audit per-fire overlay: \nUNWRAPPED @playwright/mcp@0.0.75, \n--snapshot-mode none only; holds no \ntree- or value-returning tool (PA-31 \n§(g))",
 "points": [
 [
-2605,
+2607,
 493
 ],
 [
-2717,
+2720,
 516
 ],
 [
-2865,
+2868,
 554
 ],
 [
-2985,
+2989,
 614
 ],
 [
-3071,
+3075,
 656
 ],
 [
-3156,
+3161,
 723
 ],
 [
-3220,
+3224,
 778
 ]
 ],
 "labelBBox": {
-"x": 3151,
+"x": 3156,
 "y": 613,
 "width": 264,
 "height": 106
@@ -33004,48 +33076,48 @@
 "label": "Statutory triage notifications (single \nconfigured recipient; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls \nback here when a statutory push reaches ",
 "points": [
 [
-2301,
+2303,
 553
 ],
 [
-2270,
+2272,
 570
 ],
 [
-2237,
+2239,
 585
 ],
 [
-2204,
+2206,
 594
 ],
 [
-2170,
+2172,
 603
 ],
 [
-943,
+945,
 588
 ],
 [
-918,
+920,
 614
 ],
 [
-874,
+876,
 659
 ],
 [
-903,
+905,
 723
 ],
 [
-945,
+946,
 776
 ]
 ],
 "labelBBox": {
-"x": 919,
+"x": 921,
 "y": 613,
 "width": 260,
 "height": 106
@@ -33066,36 +33138,36 @@
 "label": "Web Push delivery (VAPID) for statutory \ndeadline reminders; transport-accepted, \nnot receipt (ADR-136)",
 "points": [
 [
-2605,
+2607,
 480
 ],
 [
-2853,
+2855,
 503
 ],
 [
-3295,
+3299,
 552
 ],
 [
-3443,
+3447,
 614
 ],
 [
-3535,
+3539,
 652
 ],
 [
-3625,
+3630,
 720
 ],
 [
-3690,
+3695,
 777
 ]
 ],
 "labelBBox": {
-"x": 3625,
+"x": 3630,
 "y": 630,
 "width": 254,
 "height": 73
@@ -33116,36 +33188,36 @@
 "label": "DNS-propagation gate: resolve4/resolve6 \nthe apex against 1.1.1.1 + 8.8.8.8 to \nconfirm the DNS-only flip propagated \nbefore polling the cert",
 "points": [
 [
-2605,
+2607,
 470
 ],
 [
-2942,
+2944,
 483
 ],
 [
-3674,
+3677,
 522
 ],
 [
-3907,
+3911,
 614
 ],
 [
-4000,
+4004,
 650
 ],
 [
-4089,
+4093,
 719
 ],
 [
-4152,
+4157,
 777
 ]
 ],
 "labelBBox": {
-"x": 4087,
+"x": 4092,
 "y": 622,
 "width": 261,
 "height": 89
@@ -33166,36 +33238,36 @@
 "label": "[...]",
 "points": [
 [
-2605,
+2607,
 465
 ],
 [
-3019,
+3021,
 467
 ],
 [
-4057,
+4060,
 486
 ],
 [
-4376,
+4380,
 614
 ],
 [
-4465,
+4469,
 649
 ],
 [
-4548,
+4552,
 719
 ],
 [
-4606,
+4611,
 777
 ]
 ],
 "labelBBox": {
-"x": 4545,
+"x": 4550,
 "y": 646,
 "width": 79,
 "height": 40
@@ -33218,36 +33290,36 @@
 "label": "[...]",
 "points": [
 [
-2605,
+2607,
 467
 ],
 [
-3057,
+3060,
 474
 ],
 [
-4268,
+4273,
 504
 ],
 [
-4652,
+4657,
 614
 ],
 [
-4777,
+4782,
 649
 ],
 [
-4905,
+4910,
 720
 ],
 [
-4999,
+5004,
 779
 ]
 ],
 "labelBBox": {
-"x": 4900,
+"x": 4905,
 "y": 656,
 "width": 25,
 "height": 18
@@ -33268,48 +33340,48 @@
 "label": "[...]",
 "points": [
 [
-2301,
+2303,
 553
 ],
 [
-2270,
+2272,
 570
 ],
 [
-2237,
+2239,
 585
 ],
 [
-2204,
+2206,
 594
 ],
 [
-2131,
+2133,
 613
 ],
 [
-912,
+914,
 584
 ],
 [
-842,
+844,
 614
 ],
 [
-764,
+766,
 647
 ],
 [
-699,
+700,
 717
 ],
 [
-654,
+655,
 776
 ]
 ],
 "labelBBox": {
-"x": 843,
+"x": 845,
 "y": 656,
 "width": 25,
 "height": 18
@@ -33331,48 +33403,48 @@
 "label": "Validates tokens",
 "points": [
 [
-1846,
+1848,
 554
 ],
 [
-1816,
+1818,
 570
 ],
 [
-1783,
+1785,
 585
 ],
 [
-1750,
+1752,
 594
 ],
 [
-1718,
+1720,
 602
 ],
 [
-577,
+579,
 590
 ],
 [
-553,
+555,
 614
 ],
 [
-512,
+514,
 655
 ],
 [
-522,
+523,
 720
 ],
 [
-541,
-775
+542,
+774
 ]
 ],
 "labelBBox": {
-"x": 554,
+"x": 556,
 "y": 647,
 "width": 107,
 "height": 39
@@ -33422,7 +33494,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 4207,
+"width": 4213,
 "height": 1353
 },
 "nodes": [
@@ -33491,7 +33563,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__systemdUser",
-"x": 2511,
+"x": 2514,
 "y": 1173,
 "width": 379,
 "height": 180,
@@ -33600,7 +33672,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_infra",
-"x": 3236,
+"x": 3242,
 "y": 763,
 "width": 320,
 "height": 180,
@@ -33808,7 +33880,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -33818,12 +33890,12 @@
 "navigateTo": "__anthropic",
 "x": 1876,
 "y": 763,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 119
 }
 },
@@ -33853,7 +33925,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__github",
-"x": 2330,
+"x": 2336,
 "y": 763,
 "width": 353,
 "height": 180,
@@ -33890,7 +33962,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__stripe",
-"x": 2794,
+"x": 2800,
 "y": 763,
 "width": 331,
 "height": 180,
@@ -33985,40 +34057,40 @@
 "label": "Reaps the agent session by stopping its \nscope, via BindsTo= on the terminal's \nown scope — a UNIT dependency, because \nadoption moves the process out of the \nterminal's cgroup so co-membership can ",
 "points": [
 [
-2891,
+2893,
 1256
 ],
 [
-3281,
+3284,
 1235
 ],
 [
-4118,
-1145
+4124,
+1146
 ],
 [
-3891,
+3897,
 763
 ],
 [
-3810,
+3816,
 627
 ],
 [
-3731,
+3737,
 635
 ],
 [
-3579,
+3585,
 592
 ],
 [
-3312,
+3317,
 517
 ],
 [
-1384,
-463
+1385,
+462
 ],
 [
 796,
@@ -34026,7 +34098,7 @@
 ]
 ],
 "labelBBox": {
-"x": 3930,
+"x": 3936,
 "y": 797,
 "width": 276,
 "height": 106
@@ -34137,27 +34209,27 @@
 "label": "[...]",
 "points": [
 [
-3382,
+3388,
 763
 ],
 [
-3367,
+3373,
 704
 ],
 [
-3338,
+3344,
 631
 ],
 [
-3282,
+3288,
 592
 ],
 [
-3078,
+3084,
 451
 ],
 [
-1350,
+1351,
 442
 ],
 [
@@ -34166,7 +34238,7 @@
 ]
 ],
 "labelBBox": {
-"x": 3363,
+"x": 3369,
 "y": 635,
 "width": 25,
 "height": 18
@@ -34362,14 +34434,14 @@
 "points": [
 [
 786,
-451
+452
 ],
 [
 1061,
-467
+468
 ],
 [
-1611,
+1610,
 509
 ],
 [
@@ -34381,16 +34453,16 @@
 630
 ],
 [
-1928,
+1929,
 698
 ],
 [
-1976,
+1978,
 755
 ]
 ],
 "labelBBox": {
-"x": 1928,
+"x": 1929,
 "y": 626,
 "width": 63,
 "height": 39
@@ -34419,28 +34491,28 @@
 473
 ],
 [
-1792,
+1793,
 523
 ],
 [
-2019,
+2020,
 592
 ],
 [
-2142,
+2144,
 630
 ],
 [
-2271,
+2274,
 700
 ],
 [
-2365,
+2369,
 757
 ]
 ],
 "labelBBox": {
-"x": 2268,
+"x": 2272,
 "y": 626,
 "width": 91,
 "height": 39
@@ -34469,28 +34541,28 @@
 467
 ],
 [
-2087,
+2090,
 514
 ],
 [
-2387,
+2391,
 592
 ],
 [
-2530,
+2535,
 630
 ],
 [
-2682,
+2687,
 700
 ],
 [
-2793,
+2799,
 758
 ]
 ],
 "labelBBox": {
-"x": 2677,
+"x": 2682,
 "y": 592,
 "width": 242,
 "height": 106
@@ -34515,47 +34587,47 @@
 446
 ],
 [
-1342,
+1343,
 455
 ],
 [
-3172,
+3177,
 494
 ],
 [
-3415,
+3421,
 592
 ],
 [
-3522,
+3528,
 636
 ],
 [
-3563,
+3569,
 658
 ],
 [
-3611,
+3617,
 763
 ],
 [
-3652,
+3658,
 852
 ],
 [
-3676,
+3682,
 909
 ],
 [
-3611,
+3617,
 983
 ],
 [
-3547,
-1056
+3552,
+1057
 ],
 [
-2163,
+2164,
 1196
 ],
 [
@@ -34564,7 +34636,7 @@
 ]
 ],
 "labelBBox": {
-"x": 3652,
+"x": 3658,
 "y": 830,
 "width": 211,
 "height": 40
@@ -34594,28 +34666,28 @@
 448
 ],
 [
-2542,
+2546,
 470
 ],
 [
-2947,
+2952,
 592
 ],
 [
-3064,
+3069,
 628
 ],
 [
-3183,
+3189,
 699
 ],
 [
-3269,
+3275,
 757
 ]
 ],
 "labelBBox": {
-"x": 3178,
+"x": 3184,
 "y": 635,
 "width": 25,
 "height": 18
@@ -34691,20 +34763,20 @@
 983
 ],
 [
-2053,
-1062
+2054,
+1063
 ],
 [
-2322,
+2325,
 1147
 ],
 [
-2501,
+2505,
 1202
 ]
 ],
 "labelBBox": {
-"x": 2207,
+"x": 2208,
 "y": 1002,
 "width": 255,
 "height": 107
@@ -39285,7 +39357,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 4408,
+"width": 4414,
 "height": 1001
 },
 "nodes": [
@@ -39317,12 +39389,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 2133,
+"x": 2139,
 "y": 0,
 "width": 362,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 327,
 "height": 120
@@ -39353,7 +39425,7 @@
 "technology": "React, Next.js",
 "kind": "container",
 "navigateTo": "__platform_webapp_dashboard",
-"x": 2753,
+"x": 2759,
 "y": 0,
 "width": 324,
 "height": 180,
@@ -39401,7 +39473,7 @@
 "notation": "Container",
 "technology": "Next.js API",
 "kind": "container",
-"x": 2742,
+"x": 2748,
 "y": 410,
 "width": 346,
 "height": 180,
@@ -39430,7 +39502,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -39440,12 +39512,12 @@
 "navigateTo": "__anthropic",
 "x": 0,
 "y": 821,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 119
 }
 },
@@ -39475,12 +39547,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__github",
-"x": 454,
+"x": 460,
 "y": 821,
 "width": 353,
 "height": 180,
 "labelBBox": {
-"x": 19,
+"x": 18,
 "y": 27,
 "width": 317,
 "height": 119
@@ -39512,7 +39584,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 918,
+"x": 924,
 "y": 821,
 "width": 331,
 "height": 180,
@@ -39549,7 +39621,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__stripe",
-"x": 1360,
+"x": 1366,
 "y": 821,
 "width": 331,
 "height": 180,
@@ -39586,12 +39658,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 1802,
+"x": 1808,
 "y": 821,
 "width": 372,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 337,
 "height": 119
@@ -39623,7 +39695,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__pushService",
-"x": 2284,
+"x": 2290,
 "y": 821,
 "width": 346,
 "height": 180,
@@ -39660,12 +39732,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__publicResolvers",
-"x": 2740,
+"x": 2746,
 "y": 821,
 "width": 350,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 315,
 "height": 119
@@ -39695,12 +39767,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_engine",
-"x": 3200,
+"x": 3206,
 "y": 821,
 "width": 320,
 "height": 180,
 "labelBBox": {
-"x": 26,
+"x": 25,
 "y": 54,
 "width": 269,
 "height": 65
@@ -39730,12 +39802,12 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "components",
-"x": 3630,
+"x": 3636,
 "y": 821,
 "width": 348,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 313,
 "height": 119
@@ -39765,7 +39837,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_infra",
-"x": 4088,
+"x": 4094,
 "y": 821,
 "width": 320,
 "height": 180,
@@ -39785,48 +39857,48 @@
 "label": "Inbound email webhook (svix-verified) → \nemail-triage ingress",
 "points": [
 [
-2187,
+2192,
 180
 ],
 [
-2170,
+2175,
 198
 ],
 [
-2155,
+2160,
 218
 ],
 [
-2145,
+2150,
 240
 ],
 [
-2124,
+2130,
 285
 ],
 [
-2113,
+2119,
 313
 ],
 [
-2145,
+2150,
 350
 ],
 [
-2218,
+2223,
 439
 ],
 [
-2528,
+2534,
 475
 ],
 [
-2732,
+2737,
 490
 ]
 ],
 "labelBBox": {
-"x": 2146,
+"x": 2151,
 "y": 265,
 "width": 255,
 "height": 56
@@ -39847,24 +39919,24 @@
 "label": "Calls",
 "points": [
 [
-2915,
+2921,
 180
 ],
 [
-2915,
+2921,
 245
 ],
 [
-2915,
+2921,
 333
 ],
 [
-2915,
+2921,
 401
 ]
 ],
 "labelBBox": {
-"x": 2916,
+"x": 2922,
 "y": 273,
 "width": 57,
 "height": 39
@@ -39885,36 +39957,36 @@
 "label": "Daily org cost/usage report (Admin API, \ncost-report cron)",
 "points": [
 [
-2742,
+2748,
 506
 ],
 [
-2226,
-521
+2231,
+522
 ],
 [
-715,
-572
+720,
+573
 ],
 [
-507,
+513,
 650
 ],
 [
-415,
+419,
 685
 ],
 [
-327,
+331,
 755
 ],
 [
-264,
+268,
 814
 ]
 ],
 "labelBBox": {
-"x": 508,
+"x": 514,
 "y": 675,
 "width": 250,
 "height": 56
@@ -39935,36 +40007,36 @@
 "label": "Workstream tab: reads connected-repo \nissues (REST) + Project v2 board Status \n(GraphQL); AND writes issues — create / \ntitle / label-driven status / \nclose-reopen — via the audited GitHub ",
 "points": [
 [
-2742,
+2748,
 502
 ],
 [
-2327,
+2332,
 505
 ],
 [
-1283,
+1289,
 525
 ],
 [
-961,
+966,
 650
 ],
 [
-870,
+875,
 686
 ],
 [
-783,
+789,
 756
 ],
 [
-722,
+727,
 814
 ]
 ],
 "labelBBox": {
-"x": 962,
+"x": 967,
 "y": 650,
 "width": 258,
 "height": 106
@@ -39985,36 +40057,36 @@
 "label": "cron-gh-pages-cert-reissue (ADR-125, \nAP-019): transiently PATCHes the \napex+www dns_records proxied flag \nfalse→true to open a DNS-only window so \nGitHub/LE can validate the Pages cert ",
 "points": [
 [
-2742,
+2748,
 507
 ],
 [
-2404,
+2409,
 520
 ],
 [
-1665,
+1670,
 559
 ],
 [
-1430,
+1435,
 650
 ],
 [
-1336,
+1342,
 687
 ],
 [
-1246,
+1251,
 756
 ],
 [
-1181,
+1187,
 814
 ]
 ],
 "labelBBox": {
-"x": 1431,
+"x": 1436,
 "y": 650,
 "width": 265,
 "height": 106
@@ -40035,36 +40107,36 @@
 "label": "Checkout and webhooks",
 "points": [
 [
-2743,
+2748,
 506
 ],
 [
-2542,
+2547,
 516
 ],
 [
-2203,
+2208,
 548
 ],
 [
-1931,
+1936,
 650
 ],
 [
-1827,
+1833,
 689
 ],
 [
-1722,
+1728,
 758
 ],
 [
-1645,
+1650,
 815
 ]
 ],
 "labelBBox": {
-"x": 1932,
+"x": 1937,
 "y": 684,
 "width": 157,
 "height": 39
@@ -40085,36 +40157,36 @@
 "label": "cron-ux-audit per-fire overlay: \nUNWRAPPED @playwright/mcp@0.0.75, \n--snapshot-mode none only; holds no \ntree- or value-returning tool (PA-31 \n§(g))",
 "points": [
 [
-2743,
+2748,
 514
 ],
 [
-2603,
+2608,
 530
 ],
 [
-2405,
+2411,
 567
 ],
 [
-2252,
+2257,
 650
 ],
 [
-2178,
+2183,
 691
 ],
 [
-2111,
+2116,
 757
 ],
 [
-2063,
+2068,
 813
 ]
 ],
 "labelBBox": {
-"x": 2253,
+"x": 2258,
 "y": 650,
 "width": 264,
 "height": 106
@@ -40135,36 +40207,36 @@
 "label": "Statutory triage notifications (single \nconfigured recipient; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls \nback here when a statutory push reaches ",
 "points": [
 [
-2742,
+2748,
 418
 ],
 [
-2703,
+2709,
 398
 ],
 [
-2663,
+2668,
 374
 ],
 [
-2626,
+2632,
 350
 ],
 [
-2553,
+2558,
 302
 ],
 [
-2476,
+2482,
 238
 ],
 [
-2418,
+2423,
 187
 ]
 ],
 "labelBBox": {
-"x": 2627,
+"x": 2633,
 "y": 240,
 "width": 260,
 "height": 106
@@ -40185,36 +40257,36 @@
 "label": "Web Push delivery (VAPID) for statutory \ndeadline reminders; transport-accepted, \nnot receipt (ADR-136)",
 "points": [
 [
-2742,
+2748,
 575
 ],
 [
-2704,
+2709,
 596
 ],
 [
-2665,
+2670,
 621
 ],
 [
-2632,
+2638,
 650
 ],
 [
-2582,
+2587,
 696
 ],
 [
-2539,
+2544,
 759
 ],
 [
-2508,
+2513,
 812
 ]
 ],
 "labelBBox": {
-"x": 2633,
+"x": 2639,
 "y": 667,
 "width": 254,
 "height": 72
@@ -40235,24 +40307,24 @@
 "label": "DNS-propagation gate: resolve4/resolve6 \nthe apex against 1.1.1.1 + 8.8.8.8 to \nconfirm the DNS-only flip propagated \nbefore polling the cert",
 "points": [
 [
-2915,
+2921,
 590
 ],
 [
-2915,
+2921,
 655
 ],
 [
-2915,
+2921,
 744
 ],
 [
-2915,
+2921,
 811
 ]
 ],
 "labelBBox": {
-"x": 2916,
+"x": 2922,
 "y": 658,
 "width": 261,
 "height": 90
@@ -40273,36 +40345,36 @@
 "label": "[...]",
 "points": [
 [
-3088,
+3094,
 570
 ],
 [
-3129,
+3135,
 592
 ],
 [
-3171,
+3177,
 619
 ],
 [
-3205,
+3211,
 650
 ],
 [
-3253,
+3259,
 696
 ],
 [
-3292,
+3297,
 759
 ],
 [
-3318,
+3324,
 812
 ]
 ],
 "labelBBox": {
-"x": 3291,
+"x": 3297,
 "y": 683,
 "width": 79,
 "height": 40
@@ -40325,36 +40397,36 @@
 "label": "[...]",
 "points": [
 [
-3088,
+3094,
 543
 ],
 [
-3182,
+3188,
 568
 ],
 [
-3299,
+3305,
 604
 ],
 [
-3398,
+3404,
 650
 ],
 [
-3496,
+3502,
 696
 ],
 [
-3599,
+3604,
 761
 ],
 [
-3676,
+3681,
 815
 ]
 ],
 "labelBBox": {
-"x": 3594,
+"x": 3600,
 "y": 693,
 "width": 25,
 "height": 18
@@ -40375,36 +40447,36 @@
 "label": "[...]",
 "points": [
 [
-3088,
+3094,
 526
 ],
 [
-3238,
+3244,
 550
 ],
 [
-3460,
+3465,
 592
 ],
 [
-3647,
+3653,
 650
 ],
 [
-3797,
+3803,
 698
 ],
 [
-3961,
+3966,
 769
 ],
 [
-4079,
+4085,
 826
 ]
 ],
 "labelBBox": {
-"x": 3933,
+"x": 3938,
 "y": 693,
 "width": 25,
 "height": 18
@@ -47407,7 +47479,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+"txt": "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
 },
 "tags": [
 "external"
@@ -47415,14 +47487,14 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 6,
+"x": 3,
 "y": 716,
-"width": 344,
+"width": 349,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
-"width": 308,
+"width": 313,
 "height": 120
 }
 }

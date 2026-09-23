@@ -255,12 +255,14 @@ and shred the file.
 `eval`, and never let its output reach the transcript.** Measured on the Anthropic
 Console key panel (#8505): the fresh key is leaf text, zero `<input>` holds it.
 Redirect `eval`'s stdout straight into a file created mode 0600, then print only
-its length and prefix:
+its length and prefix. Run both lines in ONE Bash call — `umask` does not carry
+across calls — and note the file holds a JSON *string* (quoted); unwrap it with
+`json.load`, never by printing it:
 
 ```bash
 umask 077
-agent-browser eval "(()=>{const m=document.body.innerText.match(/sk-ant-[A-Za-z0-9_-]{20,}/);return m?m[0]:''})()" > "$SCRATCH/key.json"
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(len(v), v.startswith("sk-ant-"))' "$SCRATCH/key.json"
+agent-browser eval "(()=>{const m=document.body.innerText.match(/sk-ant-[A-Za-z0-9_-]{20,}/);return m?m[0]:''})()" > "${SCRATCH:?}/key.json"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(len(v), v.startswith("sk-ant-"))' "${SCRATCH:?}/key.json"
 ```
 
 Neither redactor is a backstop here: `redact-a11y-snapshot.py` and the MCP proxy

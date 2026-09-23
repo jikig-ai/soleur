@@ -309,7 +309,7 @@ model {
   // ---- External systems (third-party, outside the platform boundary) ------
   anthropic = system "Anthropic API" {
     #external
-    description "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): CI and manual evals bill the soleur-ci-eval workspace ($100/month cap), never a prd key; production crons and the email-triage summarizer bill the prd key; end users bill their own BYOK keys. The prepaid balance is org-wide."
+    description "Claude LLM for agent reasoning and tool use. Operator keys are partitioned by blast radius into spend-limited Console workspaces (ADR-243, #8505): once the merge applies, CI and manual evals bill the soleur-ci-eval workspace ($100/month cap) instead of the prd key; production crons and the email-triage summarizer bill the prd key, except scheduled-machinery-drain.yml, which a production cron dispatches onto the CI key; end users bill their own BYOK keys. The prepaid balance is org-wide."
   }
   github = system "GitHub" {
     #external

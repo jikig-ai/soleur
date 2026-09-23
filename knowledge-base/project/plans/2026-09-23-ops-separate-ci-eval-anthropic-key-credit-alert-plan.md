@@ -14,6 +14,26 @@ requires_cpo_signoff: false
 
 # ops: separate the CI/eval Anthropic key from production and alert on credit exhaustion
 
+## Post-review deviations (authoritative over the body below)
+
+The shipped implementation differs from this plan's body in these ways (PR #8618 review, CTO ruling):
+
+- **No production key in Terraform.** `var.anthropic_api_key` and both `lifecycle.precondition`
+  blocks were removed. The CI key's shape is a `validation` on `var.anthropic_api_key_ci`;
+  distinctness from the production key is proven only by `anthropic-key-distinctness.sh`
+  against live Doppler (ADR-243). Every body passage below that describes a Terraform equality
+  precondition, `var.anthropic_api_key`, Guard 3 row 1, or a "not persisted" claim is superseded.
+- **No default, no `count`, no `nonsensitive()`.** The key was minted before merge, so
+  `anthropic_api_key_ci` is required (no default) and the resources are unconditional. The
+  "count gate makes either order safe" property does not exist; merging requires the slot.
+  AC2's addresses are `doppler_secret.ci_anthropic_api_key` and
+  `github_actions_secret.anthropic_api_key` (no `[0]`). Both carry `prevent_destroy`.
+- **`value`, not `plaintext_value`.** Variables live in `infra/variables.tf`.
+- **Key capture** used `agent-browser eval` into a `umask 077` file, not
+  `browser_run_code_unsafe` (the plugin Playwright MCP could not launch: Chrome absent).
+- **Distinctness scope** covers every `ci*` config, not only `ci`.
+- **ADR ordinal** is 243, not 242. Deferrals filed: #8629 (tag loss), #8630 (monitor routing).
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-09-23. **Reviewers:** runtime-claim verifier, terraform-architect,
@@ -542,7 +562,7 @@ The ADR describes the state after the mint. If the mint slips post-merge (Phase 
 ## Acceptance Criteria
 
 - [ ] **AC1 (P1).** `bash apps/web-platform/scripts/anthropic-key-distinctness.sh` prints `DISTINCT` and exits 0 against live Doppler after the mint and apply. Its per-config lines show the `ci` fingerprint differing from every `prd*` fingerprint (all 9 today, enumerated dynamically). The output is pasted into the PR body; no value appears.
-- [ ] **AC2 (P1).** `terraform state list` (via the apply workflow log) shows `doppler_secret.ci_anthropic_api_key[0]` and `github_actions_secret.anthropic_api_key[0]`. `gh secret list` shows `ANTHROPIC_API_KEY` updated on or after the apply date.
+- [ ] **AC2 (P1).** `terraform state list` (via the apply workflow log) shows `doppler_secret.ci_anthropic_api_key` and `github_actions_secret.anthropic_api_key`. `gh secret list` shows `ANTHROPIC_API_KEY` updated on or after the apply date.
 - [ ] **AC3 (P2).** The runbook's record block names the workspace id (`wrkspc_…`), the $100/month spend limit and the 80% alert. A 1-token call with the CI key returns `anthropic-workspace-id` equal to that workspace id. The call is made in a subshell reading the key from Doppler `ci`, printing only the header.
 - [ ] **AC4 (P3).** The unit, transport, summarizer and probe suites from Phase 1 pass. The real-logger regression case shows the tagged event survives.
 - [ ] **AC5 (P3/P4).** The operator topped up credit at ~15:05 UTC on 2026-09-23 (a 1-token prd canary returned HTTP 200 at 15:06), so no natural exhaustion event is available post-merge. AC5 is therefore: (a) the unit-level evidence of AC4, including the real-logger case, plus (b) post-merge, the credit-probe run at the next :47 completes green and Sentry Discover shows **0** new `feature:pino-mirror` credit events after that run (recorded query count, not eyeballed). The first live marker is observed at the next real exhaustion; it is not simulated against production.
