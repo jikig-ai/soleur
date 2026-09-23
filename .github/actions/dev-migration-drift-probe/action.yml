@@ -26,8 +26,15 @@
 # `knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`:
 # direct-`psql` DDL is invisible (operator bypasses both the runner and
 # the row INSERT); same-prefix collisions are not enforced; content drift
-# on same-named files is caught by the content-sha check (see migration
-# 054_schema_migrations_content_sha.sql).
+# on same-named files is caught here by the content-sha check (migration
+# 054_schema_migrations_content_sha.sql) — but only AFTER merge. The PR-side
+# prevention is `dev-ledger-parity.sh check` in tenant-integration.yml
+# (#8521), and the repair procedure is the learning's §Content drift.
+#
+# Under fail-on-ledger-drift, missing-on-main rows are classified by
+# `dev-ledger-parity.sh classify-missing` (ADR-061 amendment 2026-09-23,
+# #8520): a row a fresh, unmerged live branch holds is that PR's in-flight
+# row (warning); ownerless, stale-owner and unclassifiable rows still fail.
 #
 # Replaces inline drift-probe step in `tenant-integration.yml`. Designed
 # to be invoked from any workflow that needs dev-vs-main drift visibility
@@ -132,12 +139,16 @@ runs:
         # reject any row whose filename contains characters outside the safe
         # set before interpolating into `git ls-tree`'s path argument.
         missing_drift=""
+        missing_pairs=""
         content_drift=""
+        suspicious=0
         while IFS='|' read -r f sha_applied; do
           [[ -z "$f" ]] && continue
           case "$f" in
             *[!a-zA-Z0-9._-]*)
-              echo "::warning::skipping suspicious _schema_migrations row: $f"
+              # Count only. Ledger filenames are dev state a PR can write, so
+              # echoing one would hand any PR an annotation-injection channel.
+              suspicious=$((suspicious + 1))
               continue ;;
           esac
           path="apps/web-platform/supabase/migrations/$f"
@@ -146,6 +157,7 @@ runs:
           ls_out=$(git ls-tree origin/main -- "$path" 2>/dev/null || true)
           if [[ -z "$ls_out" ]]; then
             missing_drift+="$f"$'\n'
+            missing_pairs+="$f|$sha_applied"$'\n'
             continue
           fi
           # Compare git blob sha (column 3 of ls-tree output) with the sha
@@ -158,6 +170,9 @@ runs:
             content_drift+="$f (applied=$sha_applied main=$main_blob_sha)"$'\n'
           fi
         done <<<"$applied"
+        if [[ "$suspicious" -gt 0 ]]; then
+          echo "::warning::skipped $suspicious suspicious _schema_migrations row(s) whose filename is outside the runner's whitelist (count only; names are not echoed)."
+        fi
         # Severity tracks fail-on-ledger-drift (#7964): authoritative surfaces
         # (push-to-main, scheduled) fail closed — residual drift is a named
         # error whose annotation names the drifted rows and points at the
@@ -165,19 +180,104 @@ runs:
         sev="warning"
         [[ "$FAIL_ON_DRIFT" == "true" ]] && sev="error"
         drift_seen="false"
-        if [[ -n "$missing_drift" ]]; then
+        # Per-ref ownership on the authoritative probe (ADR-061 amendment
+        # 2026-09-23, #8520). Dev is the union of main plus every open PR's
+        # applied-but-unmerged migrations, so a missing-on-main row that a
+        # fresh, unmerged live branch holds is that PR's in-flight row: a
+        # warning, never a red main. Ownerless rows count as main's (no other
+        # ref can fix them) and still block, as do stale-owner rows and rows
+        # that cannot be classified. Only the MISSING class is classified;
+        # content drift always blocks. PR mode never reaches the classifier.
+        orphans="$missing_drift"
+        inflight_lines=""
+        stale_lines=""
+        unclassified=""
+        if [[ "$FAIL_ON_DRIFT" == "true" && -n "$missing_pairs" ]]; then
+          cls_err=$(mktemp)
+          cls_rc=0
+          cls_out=$(bash apps/web-platform/scripts/dev-ledger-parity.sh classify-missing \
+            --base-branch main --repo "$GITHUB_WORKSPACE" <<<"$missing_pairs" 2>"$cls_err") || cls_rc=$?
+          cls_summary=$(grep -m1 '^ledger-classify: ' "$cls_err" || true)
+          mapfile -t want_files < <(printf '%s' "$missing_drift" | sed '/^$/d')
+          mapfile -t got_lines < <(printf '%s' "$cls_out" | sed '/^$/d')
+          # Line i must name file i — a count match alone would accept a
+          # reordered or substituted verdict set.
+          cls_ok="true"
+          [[ "$cls_rc" == "0" && "${#got_lines[@]}" == "${#want_files[@]}" ]] || cls_ok="false"
+          branch_re='^[A-Za-z0-9._/<>-]+$'
+          orphans=""
+          if [[ "$cls_ok" == "true" ]]; then
+            for i in "${!want_files[@]}"; do
+              v="" vf="" vb="" vx=""
+              IFS=$'\t' read -r v vf vb vx <<<"${got_lines[$i]}"
+              if [[ "$vf" != "${want_files[$i]}" ]]; then cls_ok="false"; break; fi
+              case "$v" in
+                in-flight)
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^(exact|blob|slug)$ ]]; then cls_ok="false"; break; fi
+                  inflight_lines+="  - $vf (in-flight: unmerged on live branch $vb via $vx — merging clears it; deleting the branch unmerged turns main red)"$'\n' ;;
+                stale)
+                  if [[ ! "$vb" =~ $branch_re || ! "$vx" =~ ^[0-9]+$ ]]; then cls_ok="false"; break; fi
+                  stale_lines+="  - $vf (stale: only owner $vb has had no commit for $vx days — push to it, or have the dev apply reverted and delete the branch; #8605)"$'\n' ;;
+                orphan)
+                  orphans+="$vf"$'\n' ;;
+                *)
+                  cls_ok="false"; break ;;
+              esac
+            done
+          fi
+          if [[ "$cls_ok" != "true" ]]; then
+            inflight_lines=""
+            stale_lines=""
+            orphans=""
+            unclassified="$missing_drift"
+            drift_seen="true"
+            # FIRST, so the failure is never read as drift.
+            echo "::error::ledger-classify: UNCLASSIFIED (rows=${#want_files[@]} rc=$cls_rc) — could not classify missing-on-main rows; not evidence of drift; failing closed"
+            echo "::error::Unclassified:"
+            while IFS= read -r f; do
+              [[ -z "$f" ]] && continue
+              echo "::error::  - $f"
+            done <<<"$unclassified"
+            # Classifier diagnostics, prefixed so none of them parses as an annotation.
+            sed 's/^/  classifier: /' "$cls_err" || true
+          elif [[ -n "$cls_summary" ]]; then
+            echo "$cls_summary"
+          fi
+          rm -f "$cls_err"
+        fi
+        if [[ -n "$inflight_lines" ]]; then
+          drift_seen="true"
+          echo "::warning::dev-Supabase has _schema_migrations rows owned by live, unmerged branches (in-flight; ADR-061 per-ref ownership, #8520):"
+          while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            echo "::warning::$l"
+          done <<<"$inflight_lines"
+        fi
+        if [[ -n "$stale_lines" ]]; then
+          drift_seen="true"
+          echo "::error::dev-Supabase has _schema_migrations rows whose only owner branch is stale (no commit for more than 30 days):"
+          while IFS= read -r l; do
+            [[ -z "$l" ]] && continue
+            echo "::error::$l"
+          done <<<"$stale_lines"
+        fi
+        if [[ -n "$orphans" ]]; then
           drift_seen="true"
           echo "::${sev}::dev-Supabase has _schema_migrations rows whose file is NOT on origin/main."
           echo "::${sev}::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
+          if [[ "$FAIL_ON_DRIFT" == "true" ]]; then
+            echo "::${sev}::no live branch owns these rows — a dev reconcile is required (learning gap 2; #8605)"
+          fi
           echo "::${sev}::Missing-on-main:"
           while IFS= read -r f; do
             [[ -z "$f" ]] && continue
             echo "::${sev}::  - $f"
-          done <<<"$missing_drift"
+          done <<<"$orphans"
         fi
         if [[ -n "$content_drift" ]]; then
           drift_seen="true"
           echo "::${sev}::dev-Supabase has _schema_migrations rows whose content drifts from origin/main (same filename, different blob)."
+          echo "::${sev}::Repair: knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md §Content drift — class each row A (comment/whitespace-only → rewrite content_sha), B (file idempotent AND safe against later redefinitions → re-apply main's file, then content_sha), C (targeted SQL against the LATEST main definition of each object). Pre-merge prevention: apps/web-platform/scripts/dev-ledger-parity.sh check (#8521)."
           echo "::${sev}::Content drift:"
           while IFS= read -r entry; do
             [[ -z "$entry" ]] && continue
@@ -189,8 +289,9 @@ runs:
         fi
         echo "drift-detected=${drift_seen}" >> "$GITHUB_OUTPUT"
         # Fail closed AFTER emitting every annotation so the run log names all
-        # drifted rows, not just the first.
-        if [[ "$FAIL_ON_DRIFT" == "true" && "$drift_seen" == "true" ]]; then
+        # drifted rows, not just the first. In-flight rows alone never fail.
+        if [[ "$FAIL_ON_DRIFT" == "true" ]] \
+          && [[ -n "$orphans" || -n "$stale_lines" || -n "$unclassified" || -n "$content_drift" ]]; then
           exit 1
         fi
 
