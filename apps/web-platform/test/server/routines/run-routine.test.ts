@@ -53,7 +53,7 @@ describe("runRoutine — policy", () => {
   });
 
   it("binds a routine before sending its Inngest event", async () => {
-    const bindRun = vi.fn().mockResolvedValue({ runId: "engine-run-1" });
+    const bindRun = vi.fn().mockResolvedValue({ id: "engine-run-1", engine_id: "claude-code" });
     const r = await runRoutine({
       fnId: "cron-daily-triage",
       actorClass: "human",
@@ -79,7 +79,7 @@ describe("runRoutine — policy", () => {
   });
 
   it("creates an application run id when manual dispatch has no provider id", async () => {
-    const bindRun = vi.fn().mockResolvedValue({ runId: "engine-run-2" });
+    const bindRun = vi.fn().mockResolvedValue({ id: "engine-run-2", engine_id: "claude-code" });
     const r = await runRoutine({
       fnId: "cron-daily-triage", actorClass: "human", workspaceId: "ws-1", bindRun,
     });
@@ -89,6 +89,15 @@ describe("runRoutine — policy", () => {
     expect(mockInngestSend).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ engine_run_id: boundId }),
     }));
+  });
+
+  it("fails closed when a routine binds to a non-Claude engine", async () => {
+    const bindRun = vi.fn().mockResolvedValue({ id: "engine-run-codex", engine_id: "codex" });
+    const r = await runRoutine({
+      fnId: "cron-daily-triage", actorClass: "human", workspaceId: "ws-1", bindRun,
+    });
+    expect(r).toEqual({ ok: false, code: "engine_binding_failed", status: 503 });
+    expect(mockInngestSend).not.toHaveBeenCalled();
   });
 });
 

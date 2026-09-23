@@ -325,6 +325,23 @@ bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktre
 
 Navigate back to the repository root directory.
 
+### node_modules missing in worktree?
+
+A worktree created without an install step (raw `git worktree add`, a
+harness-created agent worktree, or a `create` whose dep install warned and
+continued) carries no `node_modules`. Since #8580 the pre-commit lint hook
+resolves its pinned binary from a sibling checkout's `node_modules`
+automatically — accepted only when the sibling's package manifests report
+CLI+engine versions equal to this checkout's pins (verified by file reads, so
+an unchecked binary never runs) — so docs commits work without any install.
+Everything else (vitest, tsx-driven suites, `npm run` scripts) still needs
+the real install inside the worktree — run both from the worktree root:
+
+```bash
+npm ci --ignore-scripts
+npm ci --ignore-scripts --prefix apps/web-platform   # needed by the webplat arm of scripts/test-all.sh
+```
+
 ## Sharp Edges
 
 - **A `cd <abs path under the bare root>` from inside a worktree SUCCEEDS, and every command after it reads `main`.** The bare checkout carries the same tree (`apps/web-platform`, `plugins/soleur`, …) as every worktree, so a path written from memory resolves there without error and the suite you run reports on a branch you are not on — measured on #8418: `cd /data/…/soleur/apps/web-platform 2>/dev/null || cd <worktree>/apps/web-platform` took the FIRST arm and `vitest` printed 57/57 about `main`. The only tell is the harness's `# Environment update` notice. Anchor every `cd` on `$PWD` or `git rev-parse --show-toplevel`, never on a remembered absolute; `hr-when-in-a-worktree-never-read-from-bare` has no hook, so the discipline is the guard. **Why:** #8418.

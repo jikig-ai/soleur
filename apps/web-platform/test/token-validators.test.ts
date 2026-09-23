@@ -10,6 +10,17 @@ beforeEach(() => {
 });
 
 describe("validateToken", () => {
+  test("returns true for openai when API responds 200", async () => {
+    mockFetch.mockResolvedValue({ ok: true });
+    expect(await validateToken("openai", "sk-openai-test")).toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/models",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer sk-openai-test" }),
+      }),
+    );
+  });
+
   test("returns true for anthropic when API responds 200", async () => {
     mockFetch.mockResolvedValue({ ok: true });
     expect(await validateToken("anthropic", "sk-ant-test")).toBe(true);

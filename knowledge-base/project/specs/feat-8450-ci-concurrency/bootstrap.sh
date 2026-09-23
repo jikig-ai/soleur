@@ -344,24 +344,36 @@ stage_2_ledger() {
     soleur_op_red "persisted UPGRADE_NOT_BEFORE '${ts}' is not ISO-8601 UTC — fix .env or --reset UPGRADE_NOT_BEFORE"; return 1; }
   local upg_date="${ts%%T*}"
 
-  # Already satisfied? Ask the vendor (main), never a local marker.
-  if fetch_file "$EXPENSES_PATH" main | grep 'GitHub Team (org plan, jikig-ai)' | grep -q '| active |'; then
-    soleur_op_yellow "  already satisfied: ledger row is 'active' on main"
+  # Already satisfied? Ask the vendor (main), never a local marker. The two
+  # halves are checked independently: the expenses row may land through ANY
+  # PR (the row title is not pinned — a sibling session's ledger PR can use
+  # its own wording, e.g. "GitHub Team (jikig-ai, 1 seat)"), while the
+  # measurements write may still be missing.
+  local expenses_done="" measurements_done=""
+  fetch_file "$EXPENSES_PATH" main | grep 'GitHub Team' | grep -q '| active |' && expenses_done=1
+  fetch_file "$MEASUREMENTS_PATH" main | grep -q "UPGRADE_NOT_BEFORE.*${ts}" && measurements_done=1
+  if [[ -n "$expenses_done" && -n "$measurements_done" ]]; then
+    soleur_op_yellow "  already satisfied: ledger row 'active' and UPGRADE_NOT_BEFORE recorded on main"
     return 0
   fi
   # An open PR from the ledger branch satisfies the stage only if the branch
-  # actually carries the flip — a stale or hand-made PR with wrong content
+  # actually carries BOTH writes — a stale or hand-made PR with wrong content
   # must not count. Remember it exists: `gh pr create` below would fail on an
   # existing PR, aborting under set -e AFTER the contents PUTs already landed
   # (and the trap's "Nothing else was changed" would be a lie).
   local pr_preexisting=""
   if [[ -n "$(gh pr list --repo "$REPO" --head "$LEDGER_BRANCH" --state open --json number --jq '.[0].number // empty')" ]]; then
-    if fetch_file "$EXPENSES_PATH" "$LEDGER_BRANCH" | grep 'GitHub Team (org plan, jikig-ai)' | grep -q '| active |'; then
-      soleur_op_yellow "  already satisfied: ledger PR from ${LEDGER_BRANCH} carries the flip"
+    local branch_expenses="" branch_meas=""
+    fetch_file "$EXPENSES_PATH" "$LEDGER_BRANCH" | grep 'GitHub Team' | grep -q '| active |' && branch_expenses=1
+    fetch_file "$MEASUREMENTS_PATH" "$LEDGER_BRANCH" | grep -q "UPGRADE_NOT_BEFORE.*${ts}" && branch_meas=1
+    if [[ -z "$expenses_done" && -n "$branch_expenses" ]]; then expenses_done=1; fi
+    if [[ -z "$measurements_done" && -n "$branch_meas" ]]; then measurements_done=1; fi
+    if [[ -n "$expenses_done" && -n "$measurements_done" ]]; then
+      soleur_op_yellow "  already satisfied: ledger PR from ${LEDGER_BRANCH} carries both writes"
       return 0
     fi
     pr_preexisting=1
-    soleur_op_yellow "  ledger PR exists but lacks the flip — rewriting ${LEDGER_BRANCH} content"
+    soleur_op_yellow "  ledger PR exists but lacks a write — updating ${LEDGER_BRANCH} content"
   fi
 
   echo "  Flipping the expenses.md GitHub Team row to 'active' and recording"
@@ -374,36 +386,47 @@ stage_2_ledger() {
   fi
 
   local tmp; tmp="$(mktemp)"
+  local wrote=0
 
   # expenses.md — flip only the GitHub Team row. The transform input is MAIN
   # (SHA-pinned — immutable, so no read race and no stale-branch base), not
   # the ledger branch: a partially-applied branch must re-derive cleanly.
-  fetch_file "$EXPENSES_PATH" "$main_sha" \
-    | sed "/GitHub Team (org plan, jikig-ai)/ s/approved-not-billing | -/active | ${upg_date}/" > "$tmp"
-  grep -q "GitHub Team (org plan, jikig-ai) | GitHub | dev-tools | 4.00 | active | ${upg_date} |" "$tmp" \
-    || { soleur_op_red "expenses.md transform produced no 'active' row — ledger format drifted"; rm -f "$tmp"; return 1; }
-  local expenses_sha
-  expenses_sha="$(gh api "repos/${REPO}/contents/${EXPENSES_PATH}?ref=${LEDGER_BRANCH}" --jq .sha)"
-  gh api -X PUT "repos/${REPO}/contents/${EXPENSES_PATH}" \
-    -f message="chore(8450): flip GitHub Team ledger row to active" \
-    -f content="$(base64 < "$tmp" | tr -d '\n')" \
-    -f branch="$LEDGER_BRANCH" -f sha="$expenses_sha" >/dev/null
+  if [[ -z "$expenses_done" ]]; then
+    fetch_file "$EXPENSES_PATH" "$main_sha" \
+      | sed "/GitHub Team (org plan, jikig-ai)/ s/approved-not-billing | -/active | ${upg_date}/" > "$tmp"
+    grep -q "GitHub Team (org plan, jikig-ai) | GitHub | dev-tools | 4.00 | active | ${upg_date} |" "$tmp" \
+      || { soleur_op_red "expenses.md transform produced no 'active' row — ledger format drifted"; rm -f "$tmp"; return 1; }
+    local expenses_sha
+    expenses_sha="$(gh api "repos/${REPO}/contents/${EXPENSES_PATH}?ref=${LEDGER_BRANCH}" --jq .sha)"
+    gh api -X PUT "repos/${REPO}/contents/${EXPENSES_PATH}" \
+      -f message="chore(8450): flip GitHub Team ledger row to active" \
+      -f content="$(base64 < "$tmp" | tr -d '\n')" \
+      -f branch="$LEDGER_BRANCH" -f sha="$expenses_sha" >/dev/null
+    wrote=1
+  else
+    soleur_op_yellow "  expenses.md row already 'active' on main — skipping that write"
+  fi
 
   # measurements.md — fill the UPGRADE_NOT_BEFORE TBD slot (anchored to its
   # line so no other **TBD** is touched).
-  fetch_file "$MEASUREMENTS_PATH" "$main_sha" \
-    | sed "/UPGRADE_NOT_BEFORE/ s/\*\*TBD\*\*/\`${ts}\`/" > "$tmp"
-  grep -q "UPGRADE_NOT_BEFORE.*${ts}" "$tmp" \
-    || { soleur_op_red "measurements.md transform produced no timestamp — format drifted"; rm -f "$tmp"; return 1; }
-  local meas_sha
-  meas_sha="$(gh api "repos/${REPO}/contents/${MEASUREMENTS_PATH}?ref=${LEDGER_BRANCH}" --jq .sha)"
-  gh api -X PUT "repos/${REPO}/contents/${MEASUREMENTS_PATH}" \
-    -f message="chore(8450): record UPGRADE_NOT_BEFORE=${ts}" \
-    -f content="$(base64 < "$tmp" | tr -d '\n')" \
-    -f branch="$LEDGER_BRANCH" -f sha="$meas_sha" >/dev/null
+  if [[ -z "$measurements_done" ]]; then
+    fetch_file "$MEASUREMENTS_PATH" "$main_sha" \
+      | sed "/UPGRADE_NOT_BEFORE/ s/\*\*TBD\*\*/\`${ts}\`/" > "$tmp"
+    grep -q "UPGRADE_NOT_BEFORE.*${ts}" "$tmp" \
+      || { soleur_op_red "measurements.md transform produced no timestamp — format drifted"; rm -f "$tmp"; return 1; }
+    local meas_sha
+    meas_sha="$(gh api "repos/${REPO}/contents/${MEASUREMENTS_PATH}?ref=${LEDGER_BRANCH}" --jq .sha)"
+    gh api -X PUT "repos/${REPO}/contents/${MEASUREMENTS_PATH}" \
+      -f message="chore(8450): record UPGRADE_NOT_BEFORE=${ts}" \
+      -f content="$(base64 < "$tmp" | tr -d '\n')" \
+      -f branch="$LEDGER_BRANCH" -f sha="$meas_sha" >/dev/null
+    wrote=1
+  else
+    soleur_op_yellow "  measurements.md UPGRADE_NOT_BEFORE already recorded on main — skipping that write"
+  fi
   rm -f "$tmp"
 
-  if [[ -z "$pr_preexisting" ]]; then
+  if [[ "$wrote" -eq 1 && -z "$pr_preexisting" ]]; then
     gh pr create --repo "$REPO" --base main --head "$LEDGER_BRANCH" \
       --title "chore(8450): GitHub Team ledger flip + UPGRADE_NOT_BEFORE" \
       --body "Ref #8450
@@ -414,11 +437,16 @@ Post-upgrade bookkeeping generated by knowledge-base/project/specs/feat-8450-ci-
 - measurements.md: UPGRADE_NOT_BEFORE := ${ts} (gh api orgs/jikig-ai plan.name == team verification time)" >/dev/null
   fi
 
-  # Verify the PR exists.
-  local pr_url
-  pr_url="$(gh pr list --repo "$REPO" --head "$LEDGER_BRANCH" --state open --json url --jq '.[0].url // empty')"
-  [[ -n "$pr_url" ]] || { soleur_op_red "branch pushed but no open PR found for ${LEDGER_BRANCH}"; return 1; }
-  soleur_op_green "  ledger PR: ${pr_url}"
+  # Verify the PR exists — only when this run actually pushed content; an
+  # all-satisfied stage must not demand a PR it never needed.
+  if [[ "$wrote" -eq 1 ]]; then
+    local pr_url
+    pr_url="$(gh pr list --repo "$REPO" --head "$LEDGER_BRANCH" --state open --json url --jq '.[0].url // empty')"
+    [[ -n "$pr_url" ]] || { soleur_op_red "branch pushed but no open PR found for ${LEDGER_BRANCH}"; return 1; }
+    soleur_op_green "  ledger PR: ${pr_url}"
+  else
+    soleur_op_yellow "  nothing to write — stage satisfied by main/branch state"
+  fi
 }
 
 # --- Stage 3: enroll the queue-tail soak probe --------------------------------
@@ -444,7 +472,7 @@ stage_3_probe_directive() {
   local directive="<!-- soleur:followthrough script=${PROBE_SCRIPT} earliest=${ts} secrets=GH_TOKEN -->"
 
   # follow-through label must exist before the edit can apply it.
-  gh label list --repo "$REPO" --json name --jq '.[].name' | grep -qx 'follow-through' \
+  gh label list --repo "$REPO" --limit 1000 --json name --jq '.[].name' | grep -qx 'follow-through' \
     || gh label create follow-through --repo "$REPO" --color '0E8A16' --description 'Sweeper-verified deferred follow-through' >/dev/null
 
   local body

@@ -568,7 +568,7 @@ export interface User {
 }
 
 export type Provider =
-  | "anthropic" | "bedrock" | "vertex"
+  | "anthropic" | "openai" | "bedrock" | "vertex"
   | "cloudflare" | "stripe" | "plausible" | "hetzner"
   | "github" | "doppler" | "resend"
   | "x" | "linkedin" | "bluesky" | "buttondown";

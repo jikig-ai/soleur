@@ -100,6 +100,12 @@ function assertPersistedRunId(persisted: object, runId: string): void {
   }
 }
 
+function assertRemoteEngineEgress(engineId: string, egress: unknown): void {
+  if (engineId === "codex" && !egress) {
+    throw new Error("engine_egress_evidence_required");
+  }
+}
+
 async function* persistAndYieldEvents(
   events: AsyncIterable<EngineEvent>,
   runId: string,
@@ -142,6 +148,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
   assertPersistedRunId(persisted, options.runId);
   const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
     (persisted as unknown as EngineRunContext["binding"]);
+  assertRemoteEngineEgress(binding.engineId, options.egress);
   if (options.egress) {
     const persistedAuthMode = (binding as { authMode?: unknown }).authMode;
     if (

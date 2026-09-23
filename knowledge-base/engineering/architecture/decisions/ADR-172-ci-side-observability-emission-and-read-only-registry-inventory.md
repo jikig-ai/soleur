@@ -29,7 +29,8 @@ adding per-path disk telemetry, restarting the daemon under operator control —
 provisioning event. And while the LUKS recut is unfired (#7287) there is no safe provisioning event: a replace opens
 `/dev/mapper/registry` against a still-plaintext ext4 volume and takes the `refusing-non-luks-device`
 arm, which darks the sole pull path permanently. #7287 records the recut as vetoed while #7278 is
-open. That is the deadlock, and it is why #7278 asked for "a lever".
+open. That is the deadlock, and it is why #7278 asked for "a lever". *(Context as decided; the
+recut fired 2026-08-10 — see the Superseded note in §8.)*
 
 Against that, the question the incident actually needs answered is a **measurement**, not an
 action. `SOLEUR_ZOT_DISK` reports `pcent=100` on a 59 GB filesystem with `resize_ok=true` and no

@@ -30,6 +30,7 @@ export async function POST(request: Request) {
   }
 
   const apiKey: string = body.key.trim();
+  const provider: "anthropic" | "openai" = body.provider === "openai" ? "openai" : "anthropic";
 
   // feat-operator-cc-oauth — credential type. Absent/anything-else ⇒
   // 'api_key' (back-compat; both onboarding + settings POST this route
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
 
   // ---- api_key path (unchanged) ----
   // Validate against Anthropic API
-  const valid = await validateToken("anthropic", apiKey);
+  const valid = await validateToken(provider, apiKey);
   if (!valid) {
     return NextResponse.json({ valid: false });
   }
@@ -97,7 +98,7 @@ export async function POST(request: Request) {
     .upsert(
       {
         user_id: user.id,
-        provider: "anthropic",
+        provider,
         encrypted_key: encrypted.toString("base64"),
         iv: iv.toString("base64"),
         auth_tag: tag.toString("base64"),
@@ -112,7 +113,7 @@ export async function POST(request: Request) {
     logger.error({ err: dbError }, "Failed to store API key");
     Sentry.captureException(dbError, {
       tags: { feature: "api-keys", op: "store" },
-      extra: { userId: user.id, provider: "anthropic" },
+      extra: { userId: user.id, provider },
     });
     return NextResponse.json(
       { error: "Failed to store key" },
