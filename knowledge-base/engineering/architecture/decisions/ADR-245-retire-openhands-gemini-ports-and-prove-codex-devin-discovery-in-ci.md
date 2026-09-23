@@ -8,6 +8,15 @@ date: 2026-09-23
 
 Soleur ships one plugin tree to four supported harnesses — Claude Code, Grok Build, Codex and Devin — and carried two more as HAND-PORTED mirrors: `.openhands/` (69 tracked files: 63 skill ports, 5 hooks, `hooks.json`) and `.gemini/` (6). Nobody maintained either. They were never advertised in `plugins/soleur/docs/**`, `README.md` or any manifest, and `lib/harness.ts`'s `Harness` union never had a member for either, so no adapter, no routing contract and no gate treated them as live. What they did have was reach into live guards: a parity suite doubled every `.claude` hook assertion against its mirror, `worktree-write-guard.sh` carried an `.openhands/*` write allow, and two ratchet baselines and a `markdown-lint` root set named their paths.
 
+> **Evidence arriving mid-flight, 2026-09-24.** While this PR was in its merge poll, #8631
+> ("regenerate a conflicted C4 model in self-hosted repos") landed on `main` and edited BOTH
+> `.claude/hooks/pre-merge-rebase.sh` and its `.openhands/hooks/pre-merge-rebase.sh` mirror —
+> one improvement, written twice. It surfaced here as a modify/delete conflict against this
+> branch's deletion. It is recorded because it is the cost this decision claims, observed
+> rather than argued: a contributor with no interest in OpenHands paid a second edit to keep a
+> tree nobody runs in step. The `.claude` copy carries the improvement, so retiring the mirror
+> loses nothing; what it removes is the obligation to write it twice.
+
 A hand port is a copy that decays silently. #8306 proposed fixing that by proving mirror COMPLETENESS — a census that asserts each port is a faithful copy, with an exemption list for the parts that are not. That reverses the burden: it spends gate budget keeping two unmaintained trees honest.
 
 The second half of this decision is the gap that made the first half worth acting on. ADR-226 §"Per-harness discovery" recorded Codex and Devin as **declared uncovered**, citing #8306 — a mis-citation, since #8306 is about the mirrors. The real state was worse than the citation suggested: `scripts/codex-plugin-smoke.mjs` does call Codex's app-server `skills/list` and does fail on a name Codex did not report, which is genuine discovery — but it runs only by hand, it needs a pre-installed plugin in the operator's `~/.codex`, and it takes its expected set from `skills/` rather than from the manifest's declared roots. Devin had no equivalent at all. So the two harnesses whose ports we KEEP were the two with no standing evidence that they register anything.

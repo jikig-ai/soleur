@@ -163,7 +163,7 @@ For each conflicted file, apply the appropriate resolution strategy:
 | Generated artifacts | See 3.2b. **The knowledge-base caches are untracked and cannot conflict — see the transition note** |
 | Everything else | Claude-assisted resolution -- see 3.3 |
 
-**Generated artifacts (3.2b).** A generated file has no authorial intent to preserve, so 3.3 does not apply to it: hand-picking hunks produces an artifact that matches neither side's source and that no generator would emit. Resolve by discarding both sides and regenerating from the merged source. The one known member is `knowledge-base/engineering/architecture/diagrams/model.likec4.json` → [regenerate-c4-model.sh](../../../../scripts/regenerate-c4-model.sh) (verify with [c4-model-freshness.test.sh](../../test/c4-model-freshness.test.sh), which is exactly the in-sync assertion). Every other generated artifact in this repo is an untracked cache and cannot reach a merge at all. Lockfiles follow the same shape with a pinned toolchain — see [drain-prs/SKILL.md](../drain-prs/SKILL.md) §6(a).
+**Generated artifacts (3.2b).** A generated file has no authorial intent to preserve, so 3.3 does not apply to it: hand-picking hunks produces an artifact that matches neither side's source and that no generator would emit. Resolve by discarding both sides and regenerating from the merged source. The one known member is `knowledge-base/engineering/architecture/diagrams/model.likec4.json` → [render-c4-model.sh](../../scripts/render-c4-model.sh) (verify with [c4-model-freshness.test.sh](../../test/c4-model-freshness.test.sh), which is exactly the in-sync assertion). Every other generated artifact in this repo is an untracked cache and cannot reach a merge at all. Lockfiles follow the same shape with a pinned toolchain — see [drain-prs/SKILL.md](../drain-prs/SKILL.md) §6(a).
 
 **In the Soleur repository the knowledge-base caches cannot conflict at all, because they are not committed** ([ADR-235](../../../../knowledge-base/engineering/architecture/decisions/ADR-235-generated-artifacts-caches-untracked-products-regenerated-on-conflict.md)). `knowledge-base/INDEX.md`, `kb-tags.txt`, `kb-categories.txt` and `knowledge-base/project/rule-metrics.json` are gitignored: each is a pure function of the tree (or, for the metrics aggregate, of gitignored local data), so it is regenerated on demand instead of merged. If one of them appears in a conflict list, something has force-added it — that is the bug, not the conflict.
 
@@ -178,16 +178,19 @@ git rm --cached knowledge-base/INDEX.md knowledge-base/kb-tags.txt \
 
 Then commit the merge as usual. Nothing on disk is lost — [ensure-kb-index.sh](../../../../scripts/ensure-kb-index.sh) regenerates the three index files on the next read, and [rule-prune.sh](../../../../scripts/rule-prune.sh) regenerates the aggregate before reading it. This is deliberately a documented one-liner rather than a sweep script: it runs once per affected branch, on a conflict whose owner is already resolving it, and a tool that force-pushes ~20 branches is a worse failure mode than ~20 blocking conflicts.
 
-**The one generated artifact that IS still committed is `model.likec4.json`**, because the web-platform C4 viewer (`app/api/kb/c4/project/route.ts`) fetches the committed blob from GitHub on the request path with no build step, so it has to exist as a committed blob. It stays a member of 3.2b, and on the sync path it is resolved automatically: [resolve-regenerable-conflicts.sh](../../scripts/resolve-regenerable-conflicts.sh) completes the merge and re-runs [regenerate-c4-model.sh](../../../../scripts/regenerate-c4-model.sh) against the **merged** tree, which is the step that makes regeneration correct where side-picking is not. It is called by `sync-pr-behind.sh`, `pre-merge-rebase.sh` and ship Phase 7; resolving by hand is the same operation:
+**The one generated artifact that IS still committed is `model.likec4.json`**, because the web-platform C4 viewer (`app/api/kb/c4/project/route.ts`) fetches the committed blob from GitHub on the request path with no build step, so it has to exist as a committed blob. It stays a member of 3.2b, and on the sync path it is resolved automatically: [resolve-regenerable-conflicts.sh](../../scripts/resolve-regenerable-conflicts.sh) completes the merge and re-runs the plugin's [render-c4-model.sh](../../scripts/render-c4-model.sh) against the **merged** tree, which is the step that makes regeneration correct where side-picking is not. It is called by `sync-pr-behind.sh`, `pre-merge-rebase.sh` and ship Phase 7; resolving by hand uses the same two scripts:
 
 ```bash
+# From a clean tree: merges, regenerates from the merged sources, commits — or refuses, touching nothing.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main
+# By hand (only if the resolver cannot run here) — each step gates the next:
 git merge origin/main            # leaves model.likec4.json conflicted
-bash scripts/regenerate-c4-model.sh
-git add knowledge-base/engineering/architecture/diagrams/model.likec4.json
-git commit --no-edit
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh" \
+  && git add knowledge-base/engineering/architecture/diagrams/model.likec4.json \
+  && git commit --no-edit
 ```
 
-The regeneration script validates on diagnostics and element count and exits non-zero on a fault, so a broken `.c4` source surfaces instead of committing an empty model.
+Both scripts ship in the plugin, so these commands work in any repository with Soleur installed. `No such file or directory` on `/scripts/…` means the plugin path was not substituted: set `CLAUDE_PLUGIN_ROOT` to the installed plugin (the directory whose `.claude-plugin/plugin.json` names soleur) and re-run — never fall back to a repository copy. The regeneration script validates on diagnostics and element count and exits non-zero on a fault, so a broken `.c4` source surfaces instead of committing an empty model.
 
 **For README.md (accept feature branch):**
 
