@@ -205,8 +205,10 @@ expect_red "G4 (appended OR multiSearchAny SKIPPED — every anchor still presen
 
 MUT='
 old = "      AND multiSearchAny("
-assert s.count(old) == 1, "anchor"
-s = s.replace(old, "      AND JSONExtractString(raw, '"'"'message'"'"') ILIKE '"'"'%_SEND_%'"'"' AND multiSearchAny(")'
+# #8611 added a second exploration using this construct; the edit is scoped to THIS heredoc.
+i = s.index("monitor_send_failed_sql = <<-SQL"); j = s.index("  SQL\n", i)
+assert s[i:j].count(old) == 1, "anchor"
+s = s[:i] + s[i:j].replace(old, "      AND JSONExtractString(raw, '"'"'message'"'"') ILIKE '"'"'%_SEND_%'"'"' AND multiSearchAny(") + s[j:]'
 expect_red "G5 (ILIKE wildcard added)" betterstack-logs-alerts.tf "predicate widened: LIKE/ILIKE in WHERE"
 
 # ── Emitter severity ─────────────────────────────────────────────────────────────────
@@ -235,13 +237,13 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# THREE explorations carry this line (#6894, and #8408's registry_store_not_luks), and the guard
+# SIX explorations carry this line (#6894, #8408's registry_store_not_luks, and #8611's three), and the guard
 # reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
 # first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence
 # premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 3, "anchor"
+assert s.count(old) == 6, "anchor"
 assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"

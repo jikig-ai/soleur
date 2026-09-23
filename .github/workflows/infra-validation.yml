@@ -867,6 +867,12 @@ jobs:
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
+      # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
+      # queries the emitter's real shape and field path, aggregates only, every -target line, and
+      # its mutation rows.
+      - name: Run Anthropic-spend alerts drift guard (#8611)
+        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
+
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
       # guard above sweeps: orphan-reaper.test.sh backs terraform_data.orphan_reaper_install (its

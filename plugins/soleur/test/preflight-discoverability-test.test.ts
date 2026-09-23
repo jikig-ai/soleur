@@ -2404,7 +2404,17 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // the plan's discoverability_test runs anthropic-key-distinctness.sh, which compares secret
   // VALUES across Doppler soleur/ci and every soleur/prd* config; no unauthenticated endpoint
   // exposes a secret or its hash. Genuine declaration.
-  const BASELINE_DECLARED_PROBES = 21;
+  // #8611 (2026-09-23): +1 for `2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md` (archived under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/probe-inngest-524-count.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
+  // NO SUBSTITUTE: the property is the count of inngest-server `invalid status code: 524`
+  // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #8651 (2026-09-23): +1 for `2026-09-23-fix-web-host-fresh-boot-zot-primary-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`fresh-host-boot-trail.sh --image-origin`) reads SENTRY_ACTIONS_RO_TOKEN. NO SUBSTITUTE:
+  // a fresh boot's image origin is recorded only in Sentry events, which have no unauthenticated
+  // read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 23;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
