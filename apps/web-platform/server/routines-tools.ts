@@ -51,8 +51,10 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
         "List all Inngest routines (scheduled crons). Returns a flat array; " +
           "each entry carries a one-line description (what the routine does), " +
           "domain (for grouping), ownerRole, a human-readable schedule, the " +
-          "manualTrigger policy (allowed|confirm), and the latest run summary " +
-          "(status, timestamps, duration). Read-only.",
+          "manualTrigger policy (allowed|confirm), the latest run summary " +
+          "(status, timestamps, duration), and for Claude-spawning routines the " +
+          "per-run cost cap (claudeBudgetUsd) and manual-fire throttle (2 starts/hour; " +
+          "excess fires are queued, not rejected). Read-only.",
         {},
         async () => {
           try {
