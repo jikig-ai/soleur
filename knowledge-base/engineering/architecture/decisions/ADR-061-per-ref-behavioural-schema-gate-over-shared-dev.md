@@ -38,3 +38,39 @@ The gate is a **fail-fast named-relation early-warning, not a proof**: its "rais
 
 - The dev-only revert of the existing `routine_runs` orphan (`scripts/revert-dev-routine-runs-drift.sql`) is point-in-time: #5342's next CI run re-applies it to shared dev. That is acceptable — the per-ref gate keeps main/other PRs green regardless, and the durable fix lands when #5342 merges its corrected migration.
 - Future authors adding a schema gate over shared dev must apply the per-ref ownership pattern, or the gate will regress to false-redding main.
+
+## Amendment 2026-09-23 (#8520, #8521): ledger gates are per-ref too
+
+**Status:** Accepted. **Issues:** #8520, #8521. The sections above are unchanged; this amendment extends the per-ref rule from behavioural schema gates to the `_schema_migrations` ledger probe and adds a policy.
+
+### Context
+
+The #7964 work made the ledger drift probe BLOCKING on push to main, the alternative rejected above. Its plan (`knowledge-base/project/plans/2026-09-21-fix-tenant-integration-shared-fixture-contention-plan.md` §M2) assumed "on push … there is no legitimate unmerged-migration state". This ADR's own Context says the opposite: dev is the union of main plus every open PR's applied-but-unmerged migrations. The rejected alternative's prediction came true on 2026-09-22. Runs 35732801080 and 35736906203 failed every push to main on `Missing-on-main: 139_openai_api_key_provider.sql`, a row an open PR had legitimately applied, until that PR merged.
+
+Separately, content drift accumulated for months: 26 rows on 2026-09-21. The cause was PRs editing a migration after their CI had applied it. The runner never re-applies a ledgered filename, so dev kept the old body.
+
+### Decision
+
+1. **Ownership on the authoritative ledger probe** (push to main, main dispatch, the scheduled probe). A missing-on-main row is an in-flight `::warning::` if and only if:
+   - its filename never appeared in main's history;
+   - a live `origin` branch that is not merged into main, with a commit in the last 30 days, holds it among its files that are **not on main**, by exact name, identical blob, or slug.
+
+   **An ownerless row counts as main's**, because no other ref can fix it, so it blocks. So does a row whose only owner is stale (more than 30 days), a row whose name is in main's history, and any row that cannot be classified. Content drift always blocks.
+   - The blob and slug tiers are load-bearing. Exact-name matching alone would red main for the whole life of a PR that renamed its applied migration.
+   - Restricting ownership to files absent from main is also load-bearing. Every branch carries main's files, so without that restriction a merged rename would "own" the never-merged original from every branch.
+   - Implemented by `apps/web-platform/scripts/dev-ledger-parity.sh classify-missing`, which `.github/actions/dev-migration-drift-probe/action.yml` calls under `fail-on-ledger-drift`. It uses git only: a throwaway bare repo and one blobless fetch of origin's heads. No GitHub API, no new permissions.
+2. **Policy: a migration applied to shared dev is immutable, merged or not.** A change ships as a new migration file. `dev-ledger-parity.sh check`, run by `tenant-integration.yml` before apply as the base-ref copy, is the per-ref half. It fails the owning PR when an unmerged migration was edited (A1), renamed (A2) or deleted (A4) after CI applied it, so the PR's own CI goes red, which this ADR's Decision requires.
+   - **Accepted cost:** fix-up migrations become permanent on prd, and the migration count grows faster.
+
+### Rejected alternatives (additions)
+
+- **Blocking orphan-migration-drift probe on `push:main`**, the first rejected alternative above, is **superseded in part**. It was right about in-flight rows and wrong about ownerless ones: those have no owning ref, so main must own them.
+- **Automatically re-apply an edited unmerged migration.** Rejected. Re-running an edited idempotent body leaves the objects the old body created and the new body does not touch. That is silent residue: #8520's 075 `FOR ALL` policy and 122 index. A non-idempotent body simply fails later and less clearly.
+- **Ephemeral throwaway DB per CI run.** The re-evaluation trigger above ("reconsider if shared-dev coupling causes further incidents") fired with #8520. The option was re-evaluated and **still rejected**: the per-ref ledger check reaches the same properties (pre-merge failure of the owning PR, no false-red main) at near-zero cost, and ADR-023 separately rejects Supabase branching.
+- **An `applied_by_ref` ledger column.** Rejected. It is a schema change that also lands on prd, for a property that branch heads already give.
+
+### Consequences
+
+- An open PR's applied migrations no longer red main or the scheduled probe. Deleting such a branch unmerged turns its rows ownerless, which reds main until a dev reconcile. The annotation says so.
+- An abandoned branch stops protecting its rows 30 days after its last commit: the verdict becomes `stale`, blocking, and names the branch.
+- Repair procedures: `knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md` §Content drift and Part 1. Self-service reconcile is tracked in #8605.
