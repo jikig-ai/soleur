@@ -3,7 +3,7 @@ title: Revert the zot pull-site flip to GHCR-primary (RETRACTED — no host-side
 issue: "#6122"
 adr: ADR-096
 severity: P1 (deploy/boot path)
-last_reviewed: 2026-09-23
+last_reviewed: 2026-09-24
 ---
 
 # Revert the zot pull-site flip → GHCR-primary (#6122 / ADR-096)
@@ -90,6 +90,10 @@ events. None can be dropped by moving `START` later: that is the documented fals
 Between 2026-07-27 11:05Z and 2026-09-22 07:01Z there were zero fallbacks. There have also been
 **no web fresh boots since 2026-07-27**, so `stage:"app_zot"` has 0 events: a zot-served web
 fresh boot has never been observed, only zot-served rolling deploys (392 pulls in 90 days).
+
+> **Addendum 2026-09-24:** the record above runs to 2026-09-22. On 2026-09-23 a web-2 replace did
+> boot fresh, and it booted dark at `stage=pull` (#8651, fix in PR #8660). So a *zot-served* web fresh
+> boot is still unobserved, and a fresh web boot is currently known to fail.
 
 ## What to do instead when zot is unreachable
 
