@@ -134,7 +134,7 @@ for _canary in "have x __absent_needle__" "havent x canary-present" "rc_is x 0 1
 done
 
 ANCHOR=1789398600
-ROW='{"dt":"2026-09-14 15:27:24.816663","stage":"boot_complete","host":"soleur-git-data","luks_mounted":"yes","repo_root":"yes","hooks_path":"yes","provision":"yes","nft_metadata_drop":"yes","luks_reopen_unit":"yes"}'
+ROW='{"dt":"2026-09-14 15:27:24.816663","stage":"boot_complete","host":"soleur-git-data","luks_mounted":"yes","repo_root":"yes","hooks_path":"yes","provision":"yes","nft_metadata_drop":"yes","luks_reopen_unit":"yes","fence_on_mapper":"yes","erasure_probe":"yes","plaintext_empty":"yes","plaintext_volume":"present","served_repos":"0"}'
 
 # ── S1  rc=22 with no marker: unreadable, and the failure SAYS why ───────────
 d=$(mkshim s1 "$(spec '22||curl: (22) The requested URL returned error: 403')")
@@ -275,6 +275,13 @@ rc_is "S14a max_polls honoured exactly"                   4 "$(wc -l < "$d/count
 rc_is "S15a decide(found,answered)=received"      received   "$(git_data_boot_poll_decide yes yes)"
 rc_is "S15b decide(no-row,answered)=silent"       silent     "$(git_data_boot_poll_decide no yes)"
 rc_is "S15c decide(no-row,unanswered)=unreadable" unreadable "$(git_data_boot_poll_decide no no)"
+# S15d (#8211) every TERMINAL name is PROJECTED by the SQL the reader actually received (S8's
+# capture). A name the invariant loop requires but the SELECT drops is absent from every real
+# row, so a production boot would read as drift however healthy it was.
+for _f in $GIT_DATA_BOOT_TERMINAL; do
+  if grep -qE -- "JSONExtractString\\(raw,'${_f}'\\)[[:space:]]+AS ${_f}(,|$)" "$SANDBOX/s8/sql"; then _report "S15d SQL projects terminal ${_f}" ok
+  else _report "S15d SQL projects terminal ${_f}" bad "sql: $(tr '\n' ' ' < "$SANDBOX/s8/sql" | cut -c1-300)"; fi
+done
 
 # ── S16 The poll leaves the caller's shell options alone ─────────────────────
 d=$(mkshim s16 "$(spec '22||err' '0||')")
@@ -315,6 +322,23 @@ have  "S17h3 names the unmet invariant" "luks_reopen_unit=no"
 havent "S17h4 and does not go on to report success" "boot signal received"
 rc_is "S17h5 luks_reopen_unit absent -> 1 (drift, not health)" 1 "$(verify h5 birth success "0|${ROW/,\"luks_reopen_unit\":\"yes\"/}|")"
 have  "S17h6 names the missing assertion" "WITHOUT a luks_reopen_unit assertion"
+
+# (#8211) THE THREE MEASURED BOOT CHECKS are TERMINAL too. For each: `no`, absent, and a third
+# value must all refuse, and none may go on to report success. The third value is the case the
+# plan's Sharp Edges name: the readers grep `"<field>":"yes"`, so only a presence-of-yes rule
+# (not an absence-of-no rule) keeps an unexpected value from passing.
+for _f in fence_on_mapper erasure_probe plaintext_empty; do
+  rc_is "S20a ${_f}=no -> 1" 1 "$(verify "k1_$_f" replace success "0|${ROW/${_f}\":\"yes/${_f}\":\"no}|")"
+  have  "S20b ${_f}=no names the unmet invariant" "${_f}=no"
+  havent "S20c ${_f}=no does not report success" "boot signal received"
+  rc_is "S20d ${_f} absent -> 1" 1 "$(verify "k4_$_f" birth success "0|${ROW/,\"${_f}\":\"yes\"/}|")"
+  have  "S20e ${_f} absent names the missing assertion" "WITHOUT a ${_f} assertion"
+  rc_is "S20f ${_f}=unknown -> 1 (only yes passes)" 1 "$(verify "k6_$_f" replace success "0|${ROW/${_f}\":\"yes/${_f}\":\"unknown}|")"
+  havent "S20g ${_f}=unknown does not report success" "boot signal received"
+done
+# The informational fields never gate: served_repos and plaintext_volume are reported, and a
+# boot_complete without them still passes on its terminal booleans.
+rc_is "S20h informational fields absent -> 0" 0 "$(verify k8 replace success "0|${ROW/,\"plaintext_volume\":\"present\",\"served_repos\":\"0\"/}|")"
 
 rc_is "S17l silent -> 1" 1 "$(verify l birth success '0||')"
 have  "S17m silent routes to Sentry events after the anchor" "timestamped AFTER this run's boot-trail anchor"
@@ -448,9 +472,115 @@ for job in git_data_host_create git_data_host_replace; do
   done
 done
 
+# ── S21 (#8211, Guard 2 row 4) THE TERMINAL SET IS DERIVED FROM THE PRODUCER ──────
+# The required set is read from git-data-bootstrap.sh's own boot_complete emit arguments, never
+# restated here: every `name=value` argument whose name is not informational. It must equal the
+# poll's GIT_DATA_BOOT_TERMINAL (read by SOURCING the library, so the value checked is the value
+# the job runs) AND the capture's _TERMINAL. Each terminal value must be a yes/no literal or a
+# variable: any other literal is a third value, which the readers' `"<f>":"yes"` rule reads as
+# drift on every boot. The mutation rows (S21e-h) run the same verdict against temp copies and
+# must RED; they are read only when the real triple is green (S21b), so a real drift can never
+# make them pass for the wrong reason.
+G2_BOOT="$REPO_ROOT/apps/web-platform/infra/git-data-bootstrap.sh"
+G2_CAP="$REPO_ROOT/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
+G2_INFORMATIONAL="plaintext_volume served_repos nft_metadata_drop disk_pct inode_pct"
+# g2_derive <bootstrap> — the terminal names, sorted, space-joined. rc 1 (printing BAD:) when a
+# terminal argument carries a literal other than yes/no. Comment lines are stripped first and
+# the window is anchored on the emit CALL, as git-data-emit.test.sh's AC30-parity does.
+g2_derive() {
+  local kv k v out="" bad=""
+  while IFS= read -r kv; do
+    [[ -n "$kv" ]] || continue
+    k="${kv%%=*}"; v="${kv#*=}"
+    case " $G2_INFORMATIONAL " in *" $k "*) continue ;; esac
+    case "$v" in yes|no|\$*) out+="$k"$'\n' ;; *) bad+=" $kv" ;; esac
+  done < <(grep -vE '^[[:space:]]*#' "$1" \
+    | sed -n '/^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete/,/|| true$/p' \
+    | grep -oE '"[a-z0-9_]+=[^"]*"' | tr -d '"')
+  if [[ -n "$bad" ]]; then printf 'BAD:%s' "$bad"; return 1; fi
+  printf '%s' "$out" | sort -u | tr '\n' ' '
+}
+# g2_poll_roster <poll-lib> — the runtime value, from a clean shell that sources the library.
+g2_poll_roster() {
+  bash --noprofile --norc -c '. "$1" >/dev/null 2>&1 || exit 1; printf "%s\n" $GIT_DATA_BOOT_TERMINAL' _ "$1" \
+    | sort -u | tr '\n' ' '
+}
+# g2_cap_roster <capture> — exactly one `_TERMINAL="…"` declaration, or nothing.
+g2_cap_roster() {
+  [[ "$(grep -cE '^_TERMINAL="[a-z0-9_ ]+"$' "$1")" -eq 1 ]] || return 0
+  grep -oE '^_TERMINAL="[a-z0-9_ ]+"$' "$1" | sed -E 's/^_TERMINAL="//; s/"$//' | tr ' ' '\n' | sort -u | tr '\n' ' '
+}
+# g2_verdict <bootstrap> <poll-lib> <capture> — prints GREEN or DRIFT(<why>); rc 0 iff GREEN.
+g2_verdict() {
+  local d p c
+  d="$(g2_derive "$1")" || { printf 'DRIFT(producer %s)' "$d"; return 1; }
+  p="$(g2_poll_roster "$2")"; c="$(g2_cap_roster "$3")"
+  if [[ -z "$d" ]] || (( $(wc -w <<<"$d") < 4 )); then printf 'DRIFT(derived set implausibly small: %s)' "$d"; return 1; fi
+  if [[ "$d" != "$p" ]]; then printf 'DRIFT(poll: %s| producer: %s)' "$p" "$d"; return 1; fi
+  if [[ "$d" != "$c" ]]; then printf 'DRIFT(capture: %s| producer: %s)' "$c" "$d"; return 1; fi
+  printf 'GREEN'
+}
+_g2_real="$(g2_derive "$G2_BOOT" || true)"
+if [[ "$_g2_real" != BAD:* ]] && (( $(wc -w <<<"$_g2_real") >= 4 )); then _report "S21a derived a terminal set from the producer ($_g2_real)" ok
+else _report "S21a derived a terminal set from the producer" bad "got: '${_g2_real}' — the extraction drifted or a terminal value is a third literal"; fi
+_g2_v="$(g2_verdict "$G2_BOOT" "$LIB" "$G2_CAP" || true)"
+if [[ "$_g2_v" == GREEN ]]; then _report "S21b producer == poll GIT_DATA_BOOT_TERMINAL == capture _TERMINAL" ok
+else _report "S21b producer == poll GIT_DATA_BOOT_TERMINAL == capture _TERMINAL" bad "$_g2_v"; fi
+# S21c: the contract's names are in the set the producer emits (C3), so a producer that stopped
+# emitting a measured check cannot shrink all three rosters together and stay green.
+_g2_miss=""
+for _f in luks_mounted repo_root hooks_path provision luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty; do
+  [[ " $_g2_real " == *" $_f "* ]] || _g2_miss+=" $_f"
+done
+if [[ -z "$_g2_miss" ]]; then _report "S21c the producer emits every C3 terminal boolean" ok
+else _report "S21c the producer emits every C3 terminal boolean" bad "missing:${_g2_miss}"; fi
+
+G2_TMP="$SANDBOX/g2"; mkdir -p "$G2_TMP/lib"
+cp "$REPO_ROOT"/scripts/lib/{git-data-boot-signal-poll,betterstack-absence,betterstack-read-classify,betterstack-sources}.sh "$G2_TMP/lib/"
+# g2_mut <label> <landed-check> <bootstrap> <poll> <capture> — the mutation must LAND (its own
+# check) and the verdict must RED. Unreadable while the real triple is not green.
+g2_mut() {
+  local label="$1" landed="$2" v
+  if [[ "$_g2_v" != GREEN ]]; then _report "$label" bad "baseline S21b is not GREEN, so a RED here proves nothing"; return; fi
+  if ! eval "$landed"; then _report "$label" bad "the mutation did not land"; return; fi
+  v="$(g2_verdict "$3" "$4" "$5" || true)"
+  if [[ "$v" == DRIFT* ]]; then _report "$label" ok; else _report "$label" bad "verdict: $v"; fi
+}
+# S21d: a NEW boolean emitted by the producer but added to neither reader.
+sed -E 's/(^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete info "")/\1 "zz_new_check=${_zz}"/' "$G2_BOOT" > "$G2_TMP/boot-new.sh"
+g2_mut "S21d MUTATION a new emitted boolean left out of both readers -> RED" \
+  '[[ " $(g2_derive "$G2_TMP/boot-new.sh") " == *" zz_new_check "* ]]' "$G2_TMP/boot-new.sh" "$LIB" "$G2_CAP"
+# S21e: the same new boolean, added to the capture but left out of the POLL's list.
+sed -E 's/^(_TERMINAL="[a-z0-9_ ]+)"$/\1 zz_new_check"/' "$G2_CAP" > "$G2_TMP/cap-new.sh"
+g2_mut "S21e MUTATION a new boolean in the capture but NOT in GIT_DATA_BOOT_TERMINAL -> RED" \
+  'grep -qE "^_TERMINAL=.* zz_new_check\"$" "$G2_TMP/cap-new.sh"' "$G2_TMP/boot-new.sh" "$LIB" "$G2_TMP/cap-new.sh"
+# S21f: the poll's list loses a name the producer still emits.
+sed -E 's/^(GIT_DATA_BOOT_TERMINAL=".*) erasure_probe/\1/' "$LIB" > "$G2_TMP/lib/git-data-boot-signal-poll.sh"
+g2_mut "S21f MUTATION erasure_probe dropped from GIT_DATA_BOOT_TERMINAL -> RED" \
+  '! grep -qE "^GIT_DATA_BOOT_TERMINAL=.*erasure_probe" "$G2_TMP/lib/git-data-boot-signal-poll.sh"' \
+  "$G2_BOOT" "$G2_TMP/lib/git-data-boot-signal-poll.sh" "$G2_CAP"
+# S21g: the capture's required set loses a name the producer still emits.
+sed -E 's/^(_TERMINAL=".*) fence_on_mapper/\1/' "$G2_CAP" > "$G2_TMP/cap-drop.sh"
+g2_mut "S21g MUTATION fence_on_mapper dropped from the capture's _TERMINAL -> RED" \
+  '! grep -qE "^_TERMINAL=.*fence_on_mapper" "$G2_TMP/cap-drop.sh"' "$G2_BOOT" "$LIB" "$G2_TMP/cap-drop.sh"
+# S21h: a terminal boolean emitted as a third literal value.
+sed -E 's/(^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete info "")/\1 "plaintext_empty=maybe"/' "$G2_BOOT" > "$G2_TMP/boot-third.sh"
+g2_mut "S21h MUTATION a terminal emitted as a literal other than yes/no -> RED" \
+  'grep -qF "plaintext_empty=maybe" "$G2_TMP/boot-third.sh"' "$G2_TMP/boot-third.sh" "$LIB" "$G2_CAP"
+
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))
-_EXACT=146
+# RAISED 146 -> 184 (#8211), ITEMISED:
+#     8  S15d one per GIT_DATA_BOOT_TERMINAL name: the SQL the reader received projects it
+#    21  S20a-g fence_on_mapper / erasure_probe / plaintext_empty, each: `no` refuses and names
+#        the unmet invariant and does not report success; absent refuses and names the missing
+#        assertion; a third value refuses and does not report success (7 rows x 3 fields)
+#     1  S20h the informational fields never gate
+#     8  S21a-h Guard 2 row 4: the terminal set derived from the producer equals both readers'
+#        rosters (3), and five mutations of that triple each RED
+#   ----
+#    38
+_EXACT=184
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1
