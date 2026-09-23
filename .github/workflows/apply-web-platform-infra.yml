@@ -139,13 +139,21 @@ on:
       # the authorization:
       #   * workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
       #     that job is the sole human authorization (DP-11 F8).
-      #   * registry-luks-recut (#6929) — that job has NO `environment:` (like all four
-      #     host-replace/migrate jobs); its authorization is the menu-ack dispatch itself
-      #     (hr-menu-option-ack-not-prod-write-auth), and this token only guards a mis-dispatch.
+      #   * registry-luks-recut (#6929) — still NOT reviewer-gated: its authorization is the
+      #     menu-ack dispatch itself (hr-menu-option-ack-not-prod-write-auth) and this token
+      #     only guards a mis-dispatch. Since #8209 it DOES carry `environment: infra-privileged`
+      #     — no reviewer, but main-only, so a non-`main` dispatch is refused first.
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §confirm and the gate model
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §plan_only
+      plan_only:
+        description: "[web-host-replace, git-data-host-replace] Rehearsal: credentials, init, plan and the path's own gate, then STOP before any apply, -replace, SSH or host contact. Operator step O4b."
+        required: false
+        default: false
+        type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. Only web-host-create, web-host-replace, git-data-host-create, workspaces-luks-recut and inngest-volume-recut carry an `environment:` reviewer gate — EVERY other target has none, including registry-luks-recut, registry-host-replace, registry-region-migrate, inngest-host-replace and git-data-host-replace, all of which destroy or replace production hosts. For those, the gate chain, the destroy-guard and the id-pin are the entire protection. The exact token is in the runbook for the target you are firing, and in that target's job header in this file — deliberately not enumerated here, because this string accreted one clause per target and no operator reads a field label that long. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, workspaces-luks-recut, inngest-volume-recut, vector-redeliver. Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -418,6 +426,7 @@ jobs:
   # ruleset's required contexts (`infra/github/ruleset-ci-required.tf`). It
   # runs on every PR and its result is advisory. See the header block.
   apply:
+    environment: infra-privileged
     needs: preflight
     # Runs on push (auto-apply) and on the `manual-rerun` dispatch (the historical
     # escape hatch). Every other `apply_target` value selects a dedicated dispatch
@@ -511,8 +520,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering.
@@ -558,11 +570,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -635,7 +647,7 @@ jobs:
           # recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
           set -euo pipefail
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=betteruptime_policy.github_webhook \
@@ -720,6 +732,12 @@ jobs:
               -target=github_repository_environment.web_platform_infra_apply \
               -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main \
               -target=github_repository_environment_deployment_policy.inngest_cutover_main \
+              -target=github_repository_environment.infra_privileged \
+              -target=github_repository_environment_deployment_policy.infra_privileged_main \
+              -target=github_repository_environment_deployment_policy.workspaces_luks_cutover_main \
+              -target=doppler_project.infra_privileged \
+              -target=doppler_environment.infra_privileged_prd \
+              -target=cloudflare_r2_bucket.terraform_state_privileged \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \
@@ -1071,7 +1089,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
       # Tunnel ingress origin verification (#6594 / ADR-114 I2).
@@ -1242,7 +1260,7 @@ jobs:
         # TF_VAR_ci_ssh_private_key is exported by the bridge action → agent=false.
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=terraform_data.disk_monitor_install \
@@ -1694,6 +1712,7 @@ jobs:
   # new host (registry/git-data precedent). Cloud-init-only, NO remote-exec → no operator-egress
   # firewall dependency at apply time (reaches Hetzner's API, not SSH).
   inngest_host:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1715,8 +1734,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering. The
@@ -1743,11 +1765,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -1784,7 +1806,7 @@ jobs:
           # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
           # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target='hcloud_server.inngest' \
@@ -1854,7 +1876,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan
 
       - name: Dispatch summary
@@ -1882,6 +1904,7 @@ jobs:
   # dependents and PRESERVES the durable Redis AOF volume (hcloud_volume.inngest_redis).
   # ADR-100: this host is the SOLE scheduler post-cutover — gate this to the maintenance window.
   inngest_host_replace:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-host-replace'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1903,8 +1926,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
@@ -2018,11 +2044,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -2093,7 +2119,7 @@ jobs:
           # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
           # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.inngest' \
               -target='hcloud_server.inngest' \
@@ -2127,7 +2153,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -2154,7 +2180,7 @@ jobs:
         # we applied) that the Redis AOF volume carries no delete action (backstop to the guard).
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan
           VOL_DELETES=$(jq '[.resource_changes[]?
             | select(.address == "hcloud_volume.inngest_redis")
@@ -2200,8 +2226,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Validate confirm token + expected volume id (typo-guards, NOT the authorization)
         env:
@@ -2286,7 +2315,7 @@ jobs:
 
           # G17's live half. Read the ATTACHMENT from the Hetzner API, not from terraform state — the
           # plan's own before.id is Guard 1's job, and two pins against one source is one pin.
-          HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null)" || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           LIVE_ID=""
           if [[ -n "$HCLOUD_TOKEN" ]]; then
@@ -2371,9 +2400,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -2400,7 +2429,7 @@ jobs:
           # set +e so the `rc=$?` diagnostic runs — GitHub runs `run:` under an inherited `-e`.
           set +e
           set -uo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_volume.inngest_redis' \
               -target='hcloud_volume.inngest_redis' \
@@ -2434,7 +2463,7 @@ jobs:
         # function and a regression in it would otherwise be unobserved at the moment it matters.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (inngest-volume-recut) failed — the plaintext AOF volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state)."
             echo "::error::RECOVERY: dispatch '-f apply_target=inngest-host-replace'. Do NOT re-dispatch inngest-volume-recut, and do NOT dispatch inngest-host — both ABORT, and both aborts are correct."
@@ -2529,6 +2558,7 @@ jobs:
   # The sourced registry_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
   # JSON and ABORTS unless the plan is EXACTLY this scoped recreate with the store preserved.
   registry_host_replace:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-host-replace'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -2540,8 +2570,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
@@ -2567,11 +2600,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -2606,7 +2639,7 @@ jobs:
           # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
           # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.registry' \
               -target='hcloud_server.registry' \
@@ -2642,7 +2675,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -2674,7 +2707,7 @@ jobs:
           # leaves the registry DOWN. Emit a self-documenting recovery annotation, then fail hard
           # (gating behavior unchanged). Serving is covered by the ADR-096 GHCR dark-launch
           # fallback; the store volume is preserved (guarded), so re-dispatch re-creates the host.
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             # "GHCR fallback covers serving" was RETRACTED by #7071 — the host->GHCR read PAT is
             # revoked (401) and the minter is disabled (403 DENIED), so no host pulls from GHCR
@@ -2760,6 +2793,7 @@ jobs:
   # the registry's own 6 resources (out_of_scope==0), preserves the logs-token secret, and CREATES
   # the server + fresh store volume + NIC + volume-attachment + firewall in the new region.
   registry_region_migrate:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-region-migrate'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -2771,8 +2805,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
@@ -2798,11 +2835,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -2838,7 +2875,7 @@ jobs:
           # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
           # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target='hcloud_server.registry' \
               -target='hcloud_server_network.registry' \
@@ -2876,7 +2913,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -2907,7 +2944,7 @@ jobs:
           # A mid-migration apply failure (old volume/host gone, new create fails — quota/stock/boot)
           # leaves the registry DOWN. Serving is covered by the ADR-096 GHCR dark-launch fallback;
           # the store is a GHCR mirror (re-fills), so re-dispatch re-creates the host + fresh volume.
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             # Same #7071 retraction as above. Do not reinstate the fallback claim.
             echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-region-migrate to retry the fresh-region create"
@@ -2994,6 +3031,7 @@ jobs:
   # duration against a LOCK-LESS R2 backend, and would put state access in a job with no destroy
   # authority.
   registry_pull_path_gate:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
     runs-on: ubuntu-24.04
     # STRUCTURAL, NOT MEASURED — and unlike the recut's 30, that is safe to say here. The
@@ -3017,8 +3055,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Validate typed confirm + id-pin
         env:
@@ -3061,7 +3102,7 @@ jobs:
         # a fresh empty one. A name lookup cannot be forged by a typo.
         run: |
           set -euo pipefail
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe. Fail-closed: an unreadable signal is not evidence of absence."
             exit 1
@@ -3172,7 +3213,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::warning::pre-rehearsal stock probe SKIPPED: HCLOUD_TOKEN unreadable. stock_preflight_gate still applies later."
             exit 0
@@ -3412,6 +3453,7 @@ jobs:
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry_luks_recut (test-anchored lines kept below)
   # preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
   registry_luks_recut:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
     needs: registry_pull_path_gate
     runs-on: ubuntu-24.04
@@ -3435,8 +3477,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Validate typed confirm + id-pin
         env:
@@ -3482,11 +3527,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -3527,7 +3572,7 @@ jobs:
           # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
           # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_volume.registry' \
               -replace='hcloud_volume_attachment.registry' \
@@ -3552,7 +3597,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read they fail-close on EVERY
           # dispatch (an outage, not a tripwire). Doppler-fetched secrets are NOT auto-masked by
           # Actions (unlike secrets.*); this one carries destroy authority over the whole fleet.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
           if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe or PROVE stock. Fail-closed."
@@ -3676,7 +3721,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             # NOTE the corrected claim. This message previously said "GHCR fallback covers
             # serving" — the #7071-retracted premise, asserted to an operator mid-incident, on
@@ -3812,6 +3857,7 @@ jobs:
   # ── the chained REAL restore (#7277) ────────────────────────────────────────────────────────
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry_store_restore
   registry_store_restore:
+    environment: infra-privileged
     needs: registry_luks_recut
     # EXPLICIT, not inherited. A following job defaults to success()-of-needs, which would skip
     # the RESUME arm — and the resume arm IS the empty-store state this job exists to end. It
@@ -3840,8 +3886,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Log in to GHCR
         # BLOCKER without this. `permissions: packages: read` SCOPES secrets.GITHUB_TOKEN; it does
@@ -4023,6 +4072,7 @@ jobs:
   #                                              boots UNMOUNTED)
   #   hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
   git_data_host_replace:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-replace'
     runs-on: ubuntu-24.04
     # (#6977) Shared with git_data_host_create so a birth and a replace cannot race the
@@ -4057,8 +4107,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       # (#8210) THE RUNG-2 INTERLOCK ON THE REPLACE ROUTE. Until now only `git_data_host_create`
       # called this gate, so an un-rehearsed cloud-init payload could reach the LIVE git-data
@@ -4104,7 +4157,7 @@ jobs:
             exit 1
           fi
           if [[ "$rc" -ne 0 ]]; then
-            echo "::error::git-data-host-replace is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message in the step log names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created. NOTE ON THIS PATH SPECIFICALLY: git_data_host_replace has no environment: and therefore no deployment_branch_policy, so workflow_dispatch runs the SELECTED REF - this gate is supplied by the branch it polices. It holds against an accidental collapse merged and dispatched from main. It does NOT hold against a deliberate actor with repository write access."
+            echo "::error::git-data-host-replace is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message in the step log names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created. NOTE ON THIS PATH SPECIFICALLY: until #8209/ADR-241 this job had no environment:, so a workflow_dispatch ran the SELECTED REF and this gate was supplied by the branch it polices. It now carries environment: infra-privileged, whose deployment-branch policy admits main ONLY, so a NON-main dispatch of this recovery path is refused before the job starts and the gate that runs is always main's. It still does NOT hold against a deliberate actor - the reachable set is narrowed from anyone with repository write to anyone who can land a commit on main, which is narrower and is not nothing."
             exit 1
           fi
 
@@ -4133,11 +4186,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -4172,7 +4225,7 @@ jobs:
           # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
           # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.git_data' \
               -replace='tls_private_key.git_data_host_ssh' \
@@ -4218,7 +4271,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on EVERY
           # dispatch (an outage, not a tripwire). Read-only; never echoed. Precedent:
           # cutover-inngest.yml:359.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*) — mask
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
@@ -4238,6 +4291,7 @@ jobs:
           grep -E '^Plan:' tfplan.txt || true
 
       - name: Stamp boot-trail run anchor (git-data replace)
+        if: inputs.plan_only != true
         id: boot_anchor
         # (#8178, AP-027) See the twin in git_data_host_create. The anchor matters MORE here:
         # a replace destroys and recreates the host, and `host_name` pins the host rather than
@@ -4250,6 +4304,7 @@ jobs:
           printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
           printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
       - name: Terraform apply (git-data-host -replace) — both-volumes-preserved assert
+        if: inputs.plan_only != true
         id: apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -4266,7 +4321,7 @@ jobs:
           # volumes are preserved (guarded), so re-dispatch recovers from them. Writes FAIL, not
           # corrupt (single-writer at replicas=1 → no split-brain). Emit a self-documenting
           # recovery annotation, then fail hard (gating behavior unchanged).
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
             exit 1
@@ -4298,7 +4353,7 @@ jobs:
           done
           echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
           # (#7226) The rotated pin, for git-data-pin-redeploy.yml's comparison.
-          fp=$(doppler run -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
+          fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
           if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
       - name: Poll for the git-data boot-completion signal (replace)
@@ -4309,6 +4364,7 @@ jobs:
         # birth job and driven by tests/scripts/test-git-data-boot-signal-poll.sh. The
         # `Dispatch summary` below turns an apply/poll outcome pair that never produced a
         # verdict (including an empty outcome from a renamed step id) red.
+        # No plan_only conjunct: redundant, and breaks an S19 pin.
         if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
@@ -4326,6 +4382,7 @@ jobs:
           exit "$rc"
 
       - name: Post-replace readiness note (non-SSH)
+        if: inputs.plan_only != true
         # git-data is a deny-all blind host: this CI runner canNOT SSH it and canNOT reach it
         # over the private net. Two gates ran in THIS job: the destroy-guard + post-apply jq
         # asserts, and (#8178) the boot-signal poll above, which reads the host's
@@ -4388,6 +4445,7 @@ jobs:
   # rsync / repoint / canary run from the SEPARATE environment-gated workspaces-luks-cutover.yml
   # AFTER this create; this job only provisions + attaches the encrypted volume (zero downtime).
   workspaces_luks_cutover:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'workspaces-luks-cutover'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -4407,8 +4465,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
@@ -4434,9 +4495,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -4463,7 +4524,7 @@ jobs:
           # would exit the step before the ::error:: guidance prints. `set -e` is re-armed after.
           set +e
           set -uo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target='random_password.workspaces_luks' \
               -target='doppler_secret.workspaces_luks_key' \
@@ -4499,7 +4560,7 @@ jobs:
         # the encrypted volume + attachment each show a create. This is additive — zero downtime.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (workspaces-luks-cutover) failed — the encrypted volume was not provisioned. The live plaintext /mnt/data is UNTOUCHED (additive create); re-dispatch to retry."
             exit 1
@@ -4579,8 +4640,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Validate confirm token + expected volume id (typo-guards, NOT the authorization)
         env:
@@ -4626,9 +4690,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -4659,7 +4723,7 @@ jobs:
           # set +e so the `rc=$?` diagnostic runs — GitHub runs `run:` under an inherited `-e`.
           set +e
           set -uo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_volume.workspaces_luks' \
               -target='hcloud_volume.workspaces_luks' \
@@ -4693,7 +4757,7 @@ jobs:
         # the LUKS volume shows BOTH a delete AND a create (replace); the attachment shows a create.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (workspaces-luks-recut) failed — the orphaned volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state). The LIVE plaintext /mnt/data is UNTOUCHED (different volume) so serving is unaffected. RECOVERY: re-dispatch workspaces-luks-recut with the SAME confirm + expected_luks_volume_id — a re-dispatch plans a bare create which the gate's recovery arm accepts (before==null → id-pin is a no-op), completing the raw-volume + attachment create."
             exit 1
@@ -4776,8 +4840,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       # FIRST mutating-adjacent step: validate the dispatch inputs before anything reads a
       # secret or contacts a provider. web_host_key is routed through env: and never
@@ -4848,9 +4915,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -5007,7 +5074,7 @@ jobs:
         # re-implementation of server.tf's file list.
         run: |
           set -euo pipefail
-          WANT=$(doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          WANT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
           if [[ -z "$WANT" ]]; then
             echo "::error::terraform console returned an empty local.host_scripts_content_hash — the preflight cannot compare against nothing. Fail-closed: an unknown WANT hash is not a match."
@@ -5031,7 +5098,7 @@ jobs:
           # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
           set +e
           set -uo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target="hcloud_server.web[\"${WEB_HOST_KEY}\"]" \
               -target="hcloud_server_network.web[\"${WEB_HOST_KEY}\"]" \
@@ -5090,7 +5157,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read the gate would
           # fail-closed on EVERY dispatch, and a gate that always fails is an outage, not a
           # tripwire. Read-only; masked before any later step can echo it.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
@@ -5133,7 +5200,7 @@ jobs:
         # illusion of a second opinion.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create WITH its NIC and volume attachment, and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — and completing that host by hand does NOT fix it: cloud-init runcmd is once-per-instance and has already finished on a host with no private IP, so attaching the NIC afterwards leaves the app unconfigured. That host must be REPLACED, not completed."
             exit 1
@@ -5249,8 +5316,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       # FIRST mutating-adjacent step: validate the dispatch inputs before anything reads a
       # secret or contacts a provider. web_host_key is routed through env: and never
@@ -5333,9 +5403,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -5448,7 +5518,7 @@ jobs:
         # destroy never happens.
         run: |
           set -euo pipefail
-          WANT=$(doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          WANT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
           if [[ -z "$WANT" ]]; then
             echo "::error::terraform console returned an empty local.host_scripts_content_hash — the preflight cannot compare against nothing. Fail-closed: an unknown WANT hash is not a match."
@@ -5483,7 +5553,7 @@ jobs:
           # inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
           set +e
           set -uo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace="hcloud_server.web[\"${WEB_HOST_KEY}\"]" \
               -target="hcloud_server.web[\"${WEB_HOST_KEY}\"]" \
@@ -5521,7 +5591,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above — without this read it fail-closes on
           # EVERY dispatch, and a gate that always fails is an outage, not a tripwire.
           # Read-only; masked before any later step can echo it.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
@@ -5545,9 +5615,11 @@ jobs:
       # event from its replacement's — on a replace that means a healthy predecessor
       # yields a GREEN run with the new host's boot never verified.
       - name: Stamp boot-trail run anchor (replace)
+        if: inputs.plan_only != true
         run: printf 'BOOT_TRAIL_SINCE=%s\n' "$(date -u +%s)" >> "$GITHUB_ENV"
 
       - name: Terraform apply (web-host replace)
+        if: inputs.plan_only != true
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -5561,7 +5633,7 @@ jobs:
         # post-mortem arrives after the original host is gone.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (web-host-replace for ${WEB_HOST_KEY}) failed. This operation DESTROYS BEFORE IT CREATES, so ${WEB_HOST_KEY} may be gone: check the apply output for whether the destroy completed. If the destroy landed and the create did not (out-of-stock is the documented cause, #6393/#6400), TWO states are reachable and they have OPPOSITE recoveries — determine which one before acting, via terraform state or a Hetzner API existence probe. (a) The create never returned an id, so the resource is ABSENT FROM STATE: re-dispatching THIS target plans zero replaces and the gate correctly refuses; the recovery is apply_target=web-host-create, additive and graded against the birth contract. (b) The create returned an id and a later step failed, so the resource is IN state and TAINTED: that plans delete+create, which THIS gate PASSES, so re-dispatch web-host-replace — web-host-create would be refused by the birth gate on its destroy arm. The earlier wording asserted both halves at once ("ABSENT from the provider but PRESENT in state as tainted ... the gate will refuse it"), which is self-refuting and sent the operator to the wrong remedy in case (b). The workspaces volume was preserved by omission and re-attaches to the new host."
             exit 1
@@ -5570,7 +5642,7 @@ jobs:
 
       # ADR-128 R2/R3/R4/R5 — the SAME extracted reader web_host_create runs.
       - name: Surface fresh-host Sentry breadcrumb trail (best-effort — R2/R3/R4/R5)
-        if: always()
+        if: always() && inputs.plan_only != true
         env:
           JOB_STATUS: ${{ job.status }}
           # #7946: bound from the repo secret, not fetched from Doppler — see the
@@ -5822,8 +5894,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       # FIRST step that could matter: validate the dispatch before anything reads a secret
       # or contacts a provider. The token is a TYPO guard, not the authorization — the
@@ -5928,9 +6003,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -5999,7 +6074,7 @@ jobs:
           # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
           set +e
           set -uo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -target='hcloud_server.git_data' \
               -target='hcloud_server_network.git_data' \
@@ -6056,7 +6131,7 @@ jobs:
           # OUTSIDE the `doppler run` wrapper above. Without this read the gate fails closed
           # on EVERY dispatch — an outage, not a tripwire. stock-preflight-coverage.test.ts
           # asserts this read exists per gated job.
-          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
@@ -6103,7 +6178,7 @@ jobs:
         # ARM, which runs BEFORE apply, so a bad plan is refused rather than post-mortem'd.
         run: |
           set -euo pipefail
-          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (git-data-host-create) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is normally the correct remedy, and the gate's requirement arm accepts a no-op on every member the server's creation does not entail, so a partial apply does NOT wedge the retry."
             echo "::error::TWO EXCEPTIONS. (1) If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses. Completing that host by hand does not fix it: cloud-init runcmd is once-per-instance and has already finished, and ADR-115 excludes git-data from the reboot primitive — that host must be REPLACED, not completed. (2) If the failure names doppler_config.git_data_prd already existing, the config was created outside terraform; a re-dispatch CANNOT succeed because the Doppler API returns 400 'Name is already in use' rather than adopting it. Run 'terraform import doppler_config.git_data_prd soleur.prd_git_data' first. See the runbook's partial-birth decision tree."
@@ -6111,7 +6186,7 @@ jobs:
           fi
           echo "birth applied. A green apply is NOT a green boot — the boot-signal poll below is what decides whether this host actually came up."
           # (#7226) The published pin, for git-data-pin-redeploy.yml's comparison.
-          fp=$(doppler run -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
+          fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
           if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
       # (#6982, R20) POLL FOR THE BOOT SIGNAL. This is ADR-149 checklist item 4's honest
@@ -6226,6 +6301,7 @@ jobs:
   # ── #7095: re-mint the CF Access ci_ssh service token ──────────────────────
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §ci_ssh_token_replace
   ci_ssh_token_replace:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'ci-ssh-token-replace'
     runs-on: ubuntu-24.04
     # 15, matching the `apply` job. The halt gate at the end performs a fleet-wide Doppler
@@ -6260,8 +6336,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Typo-guard
         env:
@@ -6338,9 +6417,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -6364,7 +6443,7 @@ jobs:
           # replace. Omitting it would leave the Access policy pointing at a token
           # that no longer exists — the channel would stay dark after a "successful"
           # apply.
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=cloudflare_zero_trust_access_service_token.ci_ssh \
@@ -6465,7 +6544,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false -auto-approve tfplan
 
       - name: Sync the new CI-SSH service token to Doppler
@@ -6601,8 +6680,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Typo-guard
         env:
@@ -6648,9 +6730,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -6692,7 +6774,7 @@ jobs:
           # both `rc=$?` and the `::error::` below would be unreachable. The handler still ends
           # `exit $rc`, so this cannot turn a failed prod plan green.
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=terraform_data.journald_persistent
@@ -6754,7 +6836,7 @@ jobs:
         # scope are the SAME OBJECT, not two lists kept in sync. Never add `-target=` here.
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false -auto-approve tfplan
 
       - name: Tear down cloudflared SSH bridge
@@ -6784,6 +6866,7 @@ jobs:
           fi
 
   entrypoint_audit:
+    environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'entrypoint-audit'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -6800,8 +6883,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Verify required secrets present
         env:
@@ -6855,6 +6941,11 @@ jobs:
             echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
           PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
             echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
+          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
+          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there."
+            exit 1
+          fi
           if [[ -z "$APP_ID" || -z "$PEM" ]]; then
             echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
           printf '::add-mask::%s\n' "$APP_ID"
