@@ -34,7 +34,7 @@ import {
   buildReviewGateResponse,
   type AgentSession,
 } from "./review-gate";
-import { getToolTier, buildGateMessage, type ToolTier } from "./tool-tiers";
+import { getToolTier, buildGateMessage, buildOfflineGateMessage, type ToolTier } from "./tool-tiers";
 import {
   isFileTool,
   isSafeTool,
@@ -981,7 +981,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             type: "review_gate",
             conversationId: ctx.conversationId,
             agentName: ctx.leaderId ?? "Agent",
-            question,
+            question: buildOfflineGateMessage(toolName, toolInput),
           }).catch((err) =>
             log.error(
               { userId: ctx.userId, err },
