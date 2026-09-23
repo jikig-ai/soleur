@@ -326,8 +326,12 @@ _hdr="$(awk '/^[^#]/{exit} {print}' "$SUT")"
 # it does nothing about the set being WIDENED. Measured: adding `unsigned` to LEG3_ALLOW_PAT left
 # the whole suite green while a host running unsigned images graded PASS. The allowlist is a
 # security decision, so changing it must mean deliberately changing this line too.
-if grep -qF "readonly LEG3_ALLOW_PAT='ok|reused_local_reload'" "$SUT"; then
-  pass "leg 3's allowlist is exactly {ok, reused_local_reload}"
+# Over GRADER_SRC, as a WHOLE LINE, and exactly once. Grepping the SUT let a historical-note
+# comment ("was, before the widening: readonly LEG3_ALLOW_PAT='ok|reused_local_reload'") satisfy
+# the pin while the live assignment was widened -- measured, and that is this file's dominant
+# commenting idiom, so it is a likely edit rather than a contrived one.
+if [[ "$(grep -cxF "readonly LEG3_ALLOW_PAT='ok|reused_local_reload'" <<<"$GRADER_SRC")" == 1 ]]; then
+  pass "leg 3's allowlist is exactly {ok, reused_local_reload}, pinned on the live assignment"
 else
   fail "leg 3's allowlist membership changed - widening it silently weakens signature verification"
 fi
@@ -336,20 +340,53 @@ if grep -qF '"$lver" =~ ^($LEG3_ALLOW_PAT)$' <<<"$GRADER_SRC"; then
 else
   fail "leg 3's allowlist is no longer single-sourced -- the grader stopped reading LEG3_ALLOW_PAT"
 fi
-if grep -qF 'case "$swept" in' <<<"$GRADER_SRC" && ! grep -qF 'leg 1  latest' <<<"$GRADER_SRC"; then
-  pass "GRADER_SRC isolates the grader (carries the case arm, excludes the --explain body)"
+# EXTRACTION MUST BE PROVEN TO HAVE FIRED, positively. If the awk range start stops matching --
+# e.g. `[[ "${1:-}" == "--explain" ]]` reformatted to `= "--explain"`, identical bash semantics --
+# the range never opens, GRADER_SRC silently becomes the WHOLE FILE including the heredoc, and the
+# v1 tautology is back. Measured: that plus one prose reword left the old sanity row green.
+# `PROBE-READY` occurs exactly once in the SUT, inside the heredoc, and another row asserts
+# --explain prints it; so its ABSENCE here is proof the exclusion fired, and it does not depend on
+# any prose wording holding still.
+if [[ "$(grep -cF 'PROBE-READY' "$SUT")" != 1 ]]; then
+  fail "GRADER_SRC sentinel 'PROBE-READY' is no longer unique in the SUT - re-point this row"
+elif grep -qF 'PROBE-READY' <<<"$GRADER_SRC"; then
+  fail "GRADER_SRC still contains the --explain heredoc - the awk range did not fire (tautology)"
+elif ! grep -qF 'case "$swept" in' <<<"$GRADER_SRC"; then
+  fail "GRADER_SRC lost the grader body - the awk range over-excluded"
 else
-  fail "GRADER_SRC extraction is wrong - it must contain the grader and NOT the --explain heredoc"
+  pass "GRADER_SRC provably excludes the --explain heredoc and retains the grader"
 fi
 
 # CLAIM ANCHORS, not token presence. Each pins a phrase that only a CORRECT description contains,
 # in BOTH prose copies, so a negation ("does NOT grade the helper") reds instead of passing.
+# The single-sourcing PREMISE, asserted. The heredoc previously hardcoded `{ok,
+# reused_local_reload}` while a comment claimed it read LEG3_ALLOW_HUMAN; the two render
+# identically, so eyeballing --explain could not tell them apart. Perturb-and-observe is the only
+# check that can: a value the literal cannot contain must appear in the rendered output.
+_probe_pat='ok|reused_local_reload|zzprobe'
+if LEG3_ALLOW_PAT="$_probe_pat" LEG3_ALLOW_HUMAN="{${_probe_pat//|/, }}" \
+     bash -c 'sed "s/^readonly LEG3_ALLOW_PAT=.*/readonly LEG3_ALLOW_PAT='"'"'$0'"'"'/" "$1" > "$2"; bash "$2" --explain' \
+     "$_probe_pat" "$SUT" "$WORK/sut-probe.sh" 2>/dev/null | grep -qF 'zzprobe'; then
+  pass "--explain INTERPOLATES the leg-3 allowlist (single-sourced, not a matching literal)"
+else
+  fail "--explain hardcodes the leg-3 allowlist - the single-sourcing premise is false"
+fi
+unset _probe_pat
+
 _claim_helper="AND 'deploy_ghcr_helper=none'"
 _claim_helper_hdr="\`deploy_ghcr_auth=none\` AND \`deploy_ghcr_helper=none\`"
 _claim_postmarker="NEWER THAN"
-grep -qF -- "$_claim_helper" <<<"$_ex" \
-  && pass "--explain states leg 1's helper CONJUNCTION, not merely the token" \
-  || fail "--explain no longer states leg 1 as auth AND helper"
+# SLICED to leg 1's own paragraph, and negation-aware. `grep -qF` over the whole text is still a
+# presence test: measured, a heredoc reading "…AND 'deploy_ghcr_helper=none' is the OLD contract,
+# now RETIRED: leg 1 grades the auths token alone." contains the anchor verbatim and passed.
+_leg1="$(awk '/^    leg 1 /,/^    leg 2 /' <<<"$_ex")"
+if ! grep -qF -- "$_claim_helper" <<<"$_leg1"; then
+  fail "--explain's leg 1 paragraph no longer states the auth AND helper conjunction"
+elif grep -qiE 'RETIRED|does NOT grade|auths token alone|no longer grades' <<<"$_leg1"; then
+  fail "--explain's leg 1 paragraph contains the anchor but negates it"
+else
+  pass "--explain states leg 1's helper CONJUNCTION in leg 1's own paragraph, un-negated"
+fi
 grep -qF -- "$_claim_helper_hdr" <<<"$_hdr" \
   && pass "the file header states leg 1's helper conjunction" \
   || fail "the file header no longer states leg 1 as auth AND helper"
@@ -359,8 +396,11 @@ grep -qF -- "$_claim_postmarker" <<<"$_ex" && grep -qF -- "$_claim_postmarker" <
 
 # The reverse direction -- prose claiming a check the GRADER dropped. Anchored on the conjunction,
 # never on the bare name `dhelper`, which also appears in the read loop and the REPORT string.
+# ORDER-INDEPENDENT: both conjuncts on ONE GRADER_SRC line. Pinning their textual order false-RED
+# a semantics-preserving swap (`"$dhelper" == "none" && "$dauth" == "none"`) with a message
+# accusing the grader of dropping a check it still performs -- measured.
 if grep -qF -- "$_claim_helper" <<<"$_ex" \
-   && ! grep -qE '\$dauth" == "none" *&& *"\$dhelper" == "none"' <<<"$GRADER_SRC"; then
+   && ! grep -E '"\$dauth" == "none"' <<<"$GRADER_SRC" | grep -q '"\$dhelper" == "none"'; then
   fail "--explain claims a deploy_ghcr_helper check the grader no longer CONJOINS into leg 1"
 else
   pass "--explain's helper claim is backed by the grader's leg-1 conjunction"
@@ -390,7 +430,7 @@ unset _ex _hdr GRADER_SRC _claim_helper _claim_helper_hdr _claim_postmarker
 
 
 printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
-MIN_CHECKS=39
+MIN_CHECKS=40
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1

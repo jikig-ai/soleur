@@ -167,7 +167,7 @@ PROBE-READY ghcr-read-retired-8036
            the window. 'earliest' is deliberately set past the apply, because the co-fired release
            may still run the OLD script, so the window is EXPECTED to contain pre-1c rows; counting
            those latched the tracker shut permanently on any host that saw one.
-    leg 3  latest ${VERIFY_LITERAL}* verdict is in the closed allowlist {ok, reused_local_reload}.
+    leg 3  latest ${VERIFY_LITERAL}* verdict is in the closed allowlist ${LEG3_ALLOW_HUMAN}.
            Graded as an allowlist, never as "is it the one bad literal": verify_image_signature
            also emits unsigned / wrong_identity / rekor_unreachable / cosign_absent, and
            'cosign_absent' is the class this work's own evidence records firing 89/89. A host with
