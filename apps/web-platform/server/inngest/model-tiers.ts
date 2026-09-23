@@ -10,7 +10,7 @@
 // Two workload classes:
 //   EXECUTION_MODEL (sonnet) — the execution-class crons that do bounded,
 //     well-scoped automation (bug-fixer, triage, content, digests, etc.).
-//   AUDIT_MODEL (opus-5)     — the deep-audit crons that need stronger
+//   AUDIT_MODEL (opus-5-5)   — the deep-audit crons that need stronger
 //     multi-step reasoning (agent-native-audit, competitive-analysis,
 //     growth-audit, legal-audit, ux-audit).
 //
@@ -23,7 +23,7 @@
 // preserved via EXECUTION_MODEL and its rationale comment stays in place.
 //
 // Mixed alias/dated convention (do NOT normalize): `claude-sonnet-5` and
-// `claude-opus-5` are aliases (alias == dated, no separate dated ID),
+// `claude-opus-5-5` are aliases (alias == dated, no separate dated ID),
 // while `claude-haiku-4-5-20251001` (imported transitively via constants)
 // is the dated form. A future cleanup must preserve the dated haiku literal
 // byte-for-byte.
@@ -42,5 +42,9 @@ import { SONNET_MODEL } from "./leader-prompts/constants";
 /** Execution-class crons run on sonnet. Imported, not re-declared (FR3 — no second SSOT). */
 export const EXECUTION_MODEL = SONNET_MODEL;
 
-/** Deep-audit crons run on opus-5. Pinned exactly; re-tiering is out of scope (ADR-053). */
-export const AUDIT_MODEL = "claude-opus-5" as const;
+/**
+ * Deep-audit crons run on opus-5-5. Pinned exactly; re-tiering is out of scope (ADR-053).
+ * Same-tier re-pin opus-5 -> opus-5-5 (#8611): Opus 5.5 bills less than Opus 5 on every
+ * line item (input, cache write, cache read, output), so the move is a pure cost cut.
+ */
+export const AUDIT_MODEL = "claude-opus-5-5" as const;
