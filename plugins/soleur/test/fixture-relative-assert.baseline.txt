@@ -345,6 +345,7 @@
 1	scripts/lib/git-data-boot-signal-poll.sh
 1	scripts/lib/legal-base-ref.test.sh
 3	scripts/lib/repo-write-boundary.test.sh
+4	scripts/lib/test-contention.sh
 18	scripts/lib/trusted-verdict.test.sh
 23	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
