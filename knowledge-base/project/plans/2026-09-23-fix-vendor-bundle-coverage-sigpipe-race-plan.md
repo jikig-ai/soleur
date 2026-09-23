@@ -248,7 +248,7 @@ differs from the shipped file, `## Review Amendments` below is authoritative.**
   - **H2**: the needle moves to the last line of `big` instead of line 1. Expect the row to stay PASS.
   - **Measured at /work** (`env -i PATH=/usr/bin:/bin bash --noprofile --norc`, real grep): M1 RED 5/5 (`Passed: 22 / Failed: 1`, needle row); M2 decoy row RED; M3 needle row RED at 643 bytes; M4 (decoy row deleted) floor tripped at 22 < 23; H1 needle row RED; H2 GREEN 23/0; M5 (the `references/` call site re-inlined as a pipe) GREEN 23/0, the documented residual that AC2 catches. Fixed suite GREEN 10/10, 5 of them with SIGPIPE ignored as on CI.
 - [ ] **AC5**: The PR body contains `Ref #7005` and neither `Closes #7005` nor `Fixes #7005`.
-- [ ] **AC6**: The diff touches only `plugins/soleur/test/vendor-bundle-coverage.test.sh`, plus the pipeline's own artifacts: `knowledge-base/project/plans/2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md`, `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/**`, and any generated `knowledge-base/INDEX.md`.
+- [ ] **AC6**: The diff touches only `plugins/soleur/test/vendor-bundle-coverage.test.sh` and the review scope-out probe `scripts/followthroughs/test-helpers-sandbox-trap-8644.sh` (#8659), plus the pipeline's own artifacts: `knowledge-base/project/plans/2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md`, `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/**`, and any generated `knowledge-base/INDEX.md`.
 
 ## Guard Contract
 
@@ -312,6 +312,12 @@ de-listed filler, needle-last, decoy deleted, decoy needle replaced, decoy path 
 deleted row, a blinded scanner, a removed rc-2 guard, and `assert_eq` forced to always pass: all
 RED. The uncovered axis is a neutered `print_results` in the shared helper, which only an
 out-of-process check can see.
+
+Pre-existing finding scoped out (CONCUR-co-signed, `pre-existing-unrelated`): 33 sibling suites
+install an EXIT trap after sourcing `test-helpers.sh` and drop its composed sandbox cleanup, and the
+composition itself runs under `set -e`. Tracked in #8659, with the re-measuring probe
+`scripts/followthroughs/test-helpers-sandbox-trap-8644.sh` added by this PR. That probe is the one
+file outside AC6's original list; AC6 is amended to include it.
 
 ## Domain Review
 
