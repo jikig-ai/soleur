@@ -221,6 +221,21 @@ describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)"
     expect(outcome.detail).toContain("not mounted");
   });
 
+  // (#8211, ADR-239) The store assertion (C1) refuses through the wrapper's `reject`, which is
+  // exit 1 — the code git-data-remove.test.sh pins. This row pins that exit 1 maps to
+  // `refused` (an existing mapping), so a refused store is never read as erased or unreachable.
+  it("the store assertion refuses (exit 1, store not verified): reports refused with exitCode 1", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    sshProvision.mockRejectedValueOnce(
+      sshErr(1, "remote: git-data remove: store not verified: /etc/git-data/store-verified absent or not bound to this volume (fail-closed)\n"),
+    );
+    const outcome = await removeGitDataRepo(WS);
+    expect(outcome.status).toBe("refused");
+    if (outcome.status !== "refused") throw new Error("unreachable");
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.detail).toContain("store not verified");
+  });
+
   it("ssh cannot establish the session (rc 255): reports unreachable — a blip is NOT evidence the store refused", async () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     sshProvision.mockRejectedValueOnce(sshErr(255, "ssh: connect to host 10.0.1.20 port 22: Connection refused\n"));
