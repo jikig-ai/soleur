@@ -2089,6 +2089,11 @@ if want_scripts; then
   run_suite "scripts/lint-migrated-rule-ids-live" bash scripts/lint-migrated-rule-ids.sh
   run_suite "scripts/lint-migrated-rule-ids-unit" bash scripts/lint-migrated-rule-ids.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
+  # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
+  # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
+  run_suite "scripts/lint-doppler-description-length-live" python3 scripts/lint-doppler-description-length.py
+  run_suite "scripts/lint-doppler-description-length-unit" bash scripts/lint-doppler-description-length.test.sh
   # markdownlint's guard (#7927). Registered EXPLICITLY for the reason spelled out
   # just below: `scripts/*.test.sh` is not in SUITE_GLOBS, so nothing discovers it.
   #
