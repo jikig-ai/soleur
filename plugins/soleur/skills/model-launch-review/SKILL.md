@@ -10,14 +10,18 @@ description: "This skill should be used when auditing the recurring per-Anthropi
 # Model-launch review
 
 `model-launch-review` runs the recurring per-Anthropic-model-release checklist. Each release
-(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1) recurs the same five-item audit. This skill **audits** all
-five, **auto-fixes** the one mechanical-bulk item (stale model-ID swaps) into a **CI-gated PR**
+(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1) recurs the same Anthropic audit (items 1–5); an xAI
+release adds the Grok tier-map row (item 6, run by the agent). This skill **audits** every item,
+**auto-fixes** the one mechanical-bulk item (stale model-ID swaps) into a **CI-gated PR**
 under operator identity, and **flags** the rest for human sign-off. ADR-053 names this skill as
 the per-release re-pin trigger.
 
 ## When to invoke
 
 - After a new Anthropic model ships (Opus/Sonnet/Haiku/Fable family bump).
+- After an xAI model launch (row 6 — Grok tier-map freshness).
+- Codex: Soleur pins no Codex model (it inherits the session model per
+  `plugins/soleur/codex/INSTRUCTIONS.md`), so an OpenAI launch needs no bump.
 - When a dormant deferral's **date trigger** fires (e.g. #6942's 2026-09-01 pricing re-eval). The
   `[3]` dormant-work query exists to surface these; a trigger firing is not the same as the
   deferral's stated assumption holding — re-read the live source before acting on either.
@@ -31,7 +35,7 @@ token. A bot-token PR does not trigger CI or CLA checks, defeating the "CI-gated
 Run this skill interactively. Headless/cron contexts must file an **issue** (the detection
 step), not a PR.
 
-## Checklist (6 items) — auto-fix-vs-flag matrix
+## Checklist (7 items) — auto-fix-vs-flag matrix
 
 | # | Item | Disposition | Surface |
 |---|------|-------------|---------|
@@ -41,12 +45,14 @@ step), not a PR.
 | 3 | **Thinking-API shape** | flag-only | Config sets no `thinking`/`output_config`, but the **CLI injects both itself** off its bundled table (measured: `thinking:{type:"adaptive"}`, `effort:"high"`). So "no params in config" is NOT "defaults apply" — item 2b is what actually moves this. A swap can also change RESPONSE block ordering (thinking-by-default puts a thinking block first), so re-read every `data.content` reader: [scripts/lint-anthropic-content-position.py](../../../../scripts/lint-anthropic-content-position.py) blocks it on every PR, and this audit echoes the same scan advisorily (#8392) |
 | 4 | **Pricing-table drift** | flag-only | `agent-on-spawn-requested.ts` `MODEL_PRICING` (billing constant — never auto-edit); compare vs the `claude-api` source-of-truth |
 | 5 | **Tier-map re-evaluation** | flag-only | cron model literals + ADR-053 / `plugins/soleur/AGENTS.md` policy vs new pricing; `workflow-model-pins.test.ts` `PIN_ALLOWLIST` is a don't-mutate invariant; also run `gh issue list --state open -L 200 --search "deferred model OR pricing"` for dormant work |
+| 6 | **Grok tier-map freshness** | flag-only (agent-run — needs a local `grok` CLI, so not in `audit-models.sh`) | Compare `grok models` output and <https://docs.x.ai/developers/models> against `TIER_MAPS.grok` in `plugins/soleur/lib/harness-model-map.ts` (and its 7 inlined workflow fences). If `cheap`'s slug has disappeared, move `cheap` to the oldest listed slug that is not `-build-fast`. ADR-110 Decision item 6 |
 
-Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human sign-off.
+Only item 1 is auto-applied. Items 2–6 are reported in the PR body for human sign-off.
 
 ## How to run
 
-1. **Audit** — see every finding (no silent green; all 5 checks always enumerated):
+1. **Audit** — see every finding (no silent green): `audit-models.sh` prints `[1]`, `[2]`, `[2b]`,
+   `[3]` (items 1–5); row 6 is run by the agent:
 
    ```bash
    bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/model-launch-review/scripts/audit-models.sh
