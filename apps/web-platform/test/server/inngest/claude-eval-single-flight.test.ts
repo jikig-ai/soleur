@@ -29,7 +29,10 @@ vi.mock("@/server/claude-cost-marker", async (importOriginal) => ({
   emitClaudeCostMarker: vi.fn(),
 }));
 
-import { spawnClaudeEval } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import {
+  SETTLED_TTL_MS,
+  spawnClaudeEval,
+} from "@/server/inngest/functions/_cron-claude-eval-substrate";
 
 const noopLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 const RUN_A = "01M37EZCXEGGSDCC428M9N8MYX"; // Inngest ULID shape
@@ -77,7 +80,11 @@ function run(spawnCwd: string, cronName: string, runId: string | undefined) {
   });
 }
 
-beforeEach(() => fallbackMock.mockReset());
+beforeEach(() => {
+  fallbackMock.mockReset();
+  // #8611 — the single-flight map keeps settled results for SETTLED_TTL_MS; start every test empty.
+  (globalThis as unknown as Record<symbol, Map<string, unknown> | undefined>)[Symbol.for("soleur.claudeEvalInFlight")]?.clear();
+});
 afterEach(() => {
   if (ORIGINAL_CLAUDE_BIN === undefined) delete process.env.CLAUDE_BIN;
   else process.env.CLAUDE_BIN = ORIGINAL_CLAUDE_BIN;
@@ -99,11 +106,30 @@ describe("spawnClaudeEval single-flight — #8611 Guard 1", () => {
     expect(spawns(counter)).toBe(2);
   });
 
-  it("row 6: after the first child settles (even non-zero), the same key spawns afresh", async () => {
+  it("row 6: a retry just after the child settled (even non-zero) gets that result, not a new session", async () => {
+    // The step stream can drop after the child finished but before Inngest read the result.
     const { spawnCwd, counter } = installFakeClaude(50, 1);
-    await run(spawnCwd, "cron-x", RUN_B);
-    await run(spawnCwd, "cron-x", RUN_B);
-    expect(spawns(counter)).toBe(2);
+    const first = await run(spawnCwd, "cron-x", RUN_B);
+    const retry = await run(spawnCwd, "cron-x", RUN_B);
+    expect(spawns(counter)).toBe(1);
+    expect(retry).toBe(first);
+  });
+
+  it("row 9: once SETTLED_TTL_MS has passed, the same key spawns afresh", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const RUN_C = "01M37EZCXF0000000000000000";
+      const { spawnCwd, counter } = installFakeClaude(50, 0);
+      await run(spawnCwd, "cron-x", RUN_C);
+      vi.advanceTimersByTime(SETTLED_TTL_MS - 1);
+      await run(spawnCwd, "cron-x", RUN_C);
+      expect(spawns(counter)).toBe(1);
+      vi.advanceTimersByTime(2);
+      await run(spawnCwd, "cron-x", RUN_C);
+      expect(spawns(counter)).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("row 7: an undefined or non-ULID runId never joins — two spawns, two reports", async () => {

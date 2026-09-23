@@ -17,6 +17,7 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
+import { detachFromConsumerCancel } from "@/server/inngest/stream-detach";
 import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
@@ -124,7 +125,7 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
 const SERVE_HOST =
   process.env.NODE_ENV === "production" ? "https://app.soleur.ai" : undefined;
 
-export const { GET, POST, PUT } = serve({
+const handlers = serve({
   client: inngest,
   functions: [
     agentOnSpawnRequested,
@@ -198,8 +199,23 @@ export const { GET, POST, PUT } = serve({
     workspaceReconcileOnPush,
   ],
   signingKey: SIGNING_KEY ?? "build-phase-placeholder",
+  // #8611 / ADR-243: the self-hosted server calls steps at SERVE_HOST, which is Cloudflare-proxied
+  // with a ~100s origin timeout. A step that held its request longer got a 524, `retries` re-ran it
+  // while the first Claude child was still alive, and the run failed anyway. Streaming answers 201
+  // at once and writes a heartbeat byte every 3 s, so the proxy never times out; the real status
+  // (including a signature 401) travels in the streamed JSON envelope. Evidence:
+  // knowledge-base/project/specs/feat-anthropic-spend-reduction/streaming-spike.md.
+  streaming: "force",
   // #5159 (see SERVE_HOST note above): pin the registered serve URL to the
   // canonical public origin so a loopback re-register PUT plans crons. Omitted
   // when NEXT_PUBLIC_APP_URL is unset (dev/build) → SDK infers from the request.
   ...(SERVE_HOST ? { serveHost: SERVE_HOST, servePath: "/api/inngest" } : {}),
 });
+
+export const { GET, PUT } = handlers;
+
+// POST carries the streamed step responses. detachFromConsumerCancel keeps the SDK stream from ever
+// seeing a client disconnect: on inngest 3.54.2 that would leak a heartbeat timer whose throws exit
+// the process via server/crash-handlers.ts (ADR-243).
+export const POST = async (...args: Parameters<typeof handlers.POST>): Promise<Response> =>
+  detachFromConsumerCancel(await handlers.POST(...args));

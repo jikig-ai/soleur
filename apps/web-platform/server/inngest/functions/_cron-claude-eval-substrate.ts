@@ -982,13 +982,19 @@ export async function teardownEphemeralWorkspace(
 }
 
 // #8611 Guard 1 — single-flight per (cronName, runId). A step retry that arrives while the first
-// Claude child is still running JOINS that child instead of spawning a second paid session. The map
+// Claude child is still running JOINS that child instead of spawning a second paid session. A retry
+// that arrives shortly AFTER the child finished — the step stream dropped before Inngest read the
+// result — gets that same result back for SETTLED_TTL_MS instead of a fresh session. A call that
+// throws (setup failure, no child result) is not kept, so a transient failure can retry. The map
 // lives on globalThis because the app ships two bundles (next build route chunks and the esbuild
 // server), so a module-level Map is not guaranteed to be one instance. Process-local state (AP-013):
 // correct while one web host executes Inngest steps; ADR-243 names the trigger for shared state.
 type SpawnArgs = Parameters<typeof spawnClaudeEvalUnguarded>[0];
 const IN_FLIGHT_KEY = Symbol.for("soleur.claudeEvalInFlight");
 const INNGEST_RUN_ID = /^01[0-9A-HJKMNP-TV-Z]{24}$/;
+// Longer than any step retry backoff Inngest applies after a dropped stream; short enough that the
+// map never holds more than a few results (one per run, at most 18 functions).
+export const SETTLED_TTL_MS = 15 * 60_000;
 function inFlight(): Map<string, Promise<SpawnResult>> {
   const g = globalThis as unknown as Record<symbol, Map<string, Promise<SpawnResult>> | undefined>;
   return (g[IN_FLIGHT_KEY] ??= new Map());
@@ -1013,20 +1019,25 @@ export function spawnClaudeEval(args: SpawnArgs): Promise<SpawnResult> {
     reportSilentFallback(null, {
       feature: "cron-claude-eval",
       op: "claude-eval-singleflight-join",
-      message: "claude-eval step re-invoked while its child was still running; joined the live child",
+      message: "claude-eval step re-invoked for a run whose child is live or just finished; returned that child's result",
       extra: { cronName, runId },
     });
     return live;
   }
   // Set SYNCHRONOUSLY, before any await: a retry landing during the first call's awaits must see it.
-  const p = (async () => {
-    try {
-      return await spawnClaudeEvalUnguarded(args);
-    } finally {
-      map.delete(key);
-    }
-  })();
+  const p = spawnClaudeEvalUnguarded(args);
   map.set(key, p);
+  p.then(
+    () => {
+      // Keep the settled result for a late retry, then forget it. unref: never holds the process open.
+      setTimeout(() => {
+        if (map.get(key) === p) map.delete(key);
+      }, SETTLED_TTL_MS).unref?.();
+    },
+    () => {
+      if (map.get(key) === p) map.delete(key);
+    },
+  );
   return p;
 }
 

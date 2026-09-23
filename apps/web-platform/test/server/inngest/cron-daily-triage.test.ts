@@ -97,6 +97,8 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
 }
 
 beforeEach(() => {
+  // #8611 — the single-flight map keeps settled results for SETTLED_TTL_MS; start every test empty.
+  (globalThis as unknown as Record<symbol, Map<string, unknown> | undefined>)[Symbol.for("soleur.claudeEvalInFlight")]?.clear();
   vi.resetModules();
   spawnSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
