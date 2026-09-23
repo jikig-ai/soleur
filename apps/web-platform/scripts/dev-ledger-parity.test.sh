@@ -627,6 +627,20 @@ else
   fail "expected rc=0 on the committed blob; got rc=$rc out=$out"
 fi
 
+# ----------------------------------------------------------------------
+echo "G1-24: another branch holds G by exact name but at a DIFFERENT blob -> it does not excuse the PR"
+CASES=$((CASES + 1))
+branch other-diff main "" 144_slugme.sql="S-other"
+feat_case 145_slugme.sql="S-v2"
+ledger "144_slugme.sql|$(blob_of S-v1)"
+run_check --head-branch feat
+git -C "$SEED" push -q origin --delete other-diff
+if [[ "$rc" == "1" ]] && has "by slug" && ! has "treated as that PR's in-flight row"; then
+  pass "only a holder of the APPLIED body is another PR's in-flight row"
+else
+  fail "expected rc=1; got rc=$rc out=$out"
+fi
+
 echo "== Guard 1: must-PASS =="
 
 # ----------------------------------------------------------------------
@@ -1797,7 +1811,7 @@ else
 fi
 
 echo ""
-EXPECTED_CASES=99
+EXPECTED_CASES=100
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

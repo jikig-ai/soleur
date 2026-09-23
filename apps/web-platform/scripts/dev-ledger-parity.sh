@@ -310,27 +310,26 @@ owners_repo() {
   done <<<"$out"
 }
 
-# owner_lookup <tier> <value> <state> [<exclude-branch>] [<blob>] — the
-# lexically smallest matching branch as "branch<TAB>age"; empty when none.
-# Tier "exactblob" requires both the name (<value>) and the blob (<blob>).
-# Strings are compared as strings (awk would compare 0e… hashes numerically).
+# owner_lookup <tier> <value> <state> — the lexically smallest matching branch
+# as "branch<TAB>age"; empty when none. Strings are compared as strings (awk
+# would compare 0e… hashes numerically).
 owner_lookup() {
-  awk -F'\t' -v tier="$1" -v val="$2" -v st="$3" -v ex="${4:-}" -v bl="${5:-}" '
-    ($2 "") != (st "") || ($1 "") == (ex "") { next }
+  awk -F'\t' -v tier="$1" -v val="$2" -v st="$3" '
+    ($2 "") != (st "") { next }
     (tier == "exact" && ($4 "") == (val "")) ||
     (tier == "blob" && ($5 "") == (val "")) ||
-    (tier == "slug" && ($6 "") == (val "")) ||
-    (tier == "exactblob" && ($4 "") == (val "") && ($5 "") == (bl "")) {
+    (tier == "slug" && ($6 "") == (val "")) {
       if (best == "" || ($1 "") < best) { best = $1 ""; age = $3 "" }
     }
     END { if (best != "") print best "\t" age }' "$OWNERS" || cannot_measure transient "owner lookup failed"
 }
 
-# owners_all <tier> <value> <state> <exclude> <blob> — every matching branch, one per line.
-owners_all() {
-  awk -F'\t' -v tier="$1" -v val="$2" -v st="$3" -v ex="${4:-}" -v bl="${5:-}" '
-    ($2 "") != (st "") || ($1 "") == (ex "") { next }
-    tier == "exactblob" && ($4 "") == (val "") && ($5 "") == (bl "") { print $1 }' "$OWNERS" \
+# holders_at_blob <file> <blob> <exclude-branch> — every FRESH branch holding
+# <file> by exact name at exactly <blob>, one per line.
+holders_at_blob() {
+  awk -F'\t' -v val="$1" -v bl="$2" -v ex="$3" '
+    ($2 "") != "fresh" || ($1 "") == (ex "") { next }
+    ($4 "") == (val "") && ($5 "") == (bl "") { print $1 }' "$OWNERS" \
     || cannot_measure transient "owner lookup failed"
 }
 
@@ -562,7 +561,7 @@ cmd_check() {
     if [[ -n "$gsha" ]]; then
       owners_repo "$base_branch"
       local cand_list b
-      cand_list=$(owners_all exactblob "$g" fresh "$head_branch" "$gsha") || exit 2
+      cand_list=$(holders_at_blob "$g" "$gsha" "$head_branch") || exit 2
       while IFS= read -r b; do
         [[ -z "$b" ]] && continue
         if [[ -n "$head_branch" ]] && ogit rev-parse --verify --quiet "refs/owners/$head_branch^{commit}" >/dev/null; then
