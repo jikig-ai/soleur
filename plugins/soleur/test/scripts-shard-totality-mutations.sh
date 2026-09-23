@@ -61,6 +61,59 @@ FAIL=0
 pass() { PASS=$(( PASS + 1 )); echo "  PASS: $1"; }
 fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
 
+# --- --rows A-B: CI splits this battery across matrix legs ------------------------------------
+#
+# ci.yml runs this file twice, once per half of the declared row space, because the
+# serial battery is the longest job in the workflow. `--rows A-B` selects the
+# inclusive range of DECLARED row sites this invocation executes; unset means all.
+# The CONTROL row and instrument self-test are unconditional — they are not numbered
+# row sites and run in every half.
+#
+# DECLARED_TOTAL is a CONSTANT, pinned here and asserted against the counted row
+# sites at the bottom: a row added without bumping it reds the battery everywhere,
+# which is what keeps the per-half floors honest (each half must see the full
+# declared space, not just the sites inside its own range).
+DECLARED_TOTAL=21
+ROWS_LO=1
+ROWS_HI=0        # 0 = unset, meaning "all declared rows"
+while (( $# > 0 )); do
+  case "$1" in
+    --rows)
+      (( $# >= 2 )) || { echo "ERROR: --rows requires an A-B argument." >&2; exit 2; }
+      _rowspec="$2"; shift 2
+      if [[ ! "$_rowspec" =~ ^[0123456789]+-[0123456789]+$ ]]; then
+        echo "ERROR: --rows takes A-B with decimal bounds (got: '$_rowspec')." >&2
+        exit 2
+      fi
+      ROWS_LO=$(( 10#${_rowspec%-*} ))
+      ROWS_HI=$(( 10#${_rowspec#*-} ))
+      if (( ROWS_LO < 1 || ROWS_HI < ROWS_LO || ROWS_HI > DECLARED_TOTAL )); then
+        echo "ERROR: --rows $_rowspec is out of bounds: need 1 <= A <= B <= $DECLARED_TOTAL declared rows." >&2
+        exit 2
+      fi
+      ;;
+    *)
+      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# The range gate. EVERY row site calls this exactly once, in file order — including
+# sites whose execution is skipped by the range — so _row_seq always reaches
+# DECLARED_TOTAL regardless of which half runs. EXECUTED counts the sites this
+# invocation actually ran.
+_row_seq=0
+EXECUTED=0
+in_range() {
+  _row_seq=$(( _row_seq + 1 ))
+  if (( ROWS_HI == 0 )) || (( _row_seq >= ROWS_LO && _row_seq <= ROWS_HI )); then
+    EXECUTED=$(( EXECUTED + 1 ))
+    return 0
+  fi
+  return 1
+}
+
 WORK="$(mktemp -d -t shard-mut.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 
 PRISTINE_RUNNER="$WORK/test-all.sh.pristine"
@@ -284,14 +337,14 @@ fi
 # committed manifest makes the mod-expression dead code under the default path, and a
 # mutation nobody executes reports a survivor. The env prefix binds to this `row` call
 # alone — it cannot leak into later rows' guard invocations.
-SOLEUR_SHARD_MANIFEST=off row "ROW1" "$RUNNER" \
+in_range && SOLEUR_SHARD_MANIFEST=off row "ROW1" "$RUNNER" \
   '(( (_shard_ordinal - 1) % _SHARD_N != _SHARD_K - 1 ))' \
   '(( (_shard_ordinal - 1) % _SHARD_N != _SHARD_K ))' \
   RED "off-by-one: residue class 0 assigned to no leg"
 
 # --- Row 2: enumerate mode returns nothing ----------------------------------------------------
 # A guard reporting "0 checked" and exiting 0 is vacuous; this proves it does not.
-row "ROW2" "$RUNNER" \
+in_range && row "ROW2" "$RUNNER" \
   "  printf 'SUITE_REGISTRATION\\t%s\\n' \"\$1\"" \
   "  : # mutated: emit nothing" \
   RED "enumerate mode emits no registrations at all"
@@ -299,7 +352,7 @@ row "ROW2" "$RUNNER" \
 # --- Row 3: a registration assigned to no leg -------------------------------------------------
 # The reference (static extraction) sees this registration; the runtime never reaches it, so it
 # is assigned to no leg. This is the exact shape of a suite that silently stops running.
-row "ROW3" "$RUNNER" \
+in_range && row "ROW3" "$RUNNER" \
   '  run_suite "scripts/test-all-runtime-ceiling" bash scripts/test-all-runtime-ceiling.test.sh' \
   '  if false; then
     run_suite "MUTANT_ROW3_UNREACHABLE" bash /dev/null
@@ -309,7 +362,7 @@ row "ROW3" "$RUNNER" \
 
 # --- Row 4: two legs claim the same label -----------------------------------------------------
 # Union is correct; the MULTISET is wrong. A totality-only check passes here.
-SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
+in_range && SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
   '  if (( _SHARD_N > 0 )) && (( (_shard_ordinal - 1) % _SHARD_N != _SHARD_K - 1 )); then
     return 1
   fi' \
@@ -321,7 +374,7 @@ SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
 # --- Row 5: ci.yml leg count disagrees with N -------------------------------------------------
 # Four legs whose values still say /5: leg 5's suites run nowhere and all surviving legs are
 # green. A count-based read of the matrix cannot see this.
-row "ROW5" "$CI_YML" \
+in_range && row "ROW5" "$CI_YML" \
   '        shard: ["1/5", "2/5", "3/5", "4/5", "5/5"]' \
   '        shard: ["1/5", "2/5", "3/5", "4/5"]' \
   RED "ci.yml declares 4 legs while the partition computes mod 5"
@@ -329,7 +382,7 @@ row "ROW5" "$CI_YML" \
 # --- Row 5b: the HEAVY job's leg count disagrees with N ----------------------------------------
 # Same defect shape one job down: the test-scripts-heavy matrix is its own literal, and the
 # scripts-group mutation above cannot reach it.
-row "ROW5B" "$CI_YML" \
+in_range && row "ROW5B" "$CI_YML" \
   '        shard: ["1/3", "2/3", "3/3"]' \
   '        shard: ["1/3", "2/3"]' \
   RED "the heavy job declares 2 legs while its partition computes mod 3"
@@ -338,7 +391,7 @@ row "ROW5B" "$CI_YML" \
 # Moving the want_* gate back puts the heavy suites under `scripts`: the heavy reference set is
 # then EMPTY, and a guard that cannot see that is guarding nothing. This is also the coverage-
 # loss shape: three suites leaving their dedicated job while `test` stays green.
-row "ROW5C" "$RUNNER" \
+in_range && row "ROW5C" "$RUNNER" \
   'if want_scripts_heavy; then
   # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites.' \
   'if want_scripts; then
@@ -349,7 +402,7 @@ row "ROW5C" "$RUNNER" \
 # The declared leg VALUES are not what the leg RECEIVES; only the interpolation inside the
 # test-scripts-heavy job block carries k/N. Replacing it with a literal leaves every declared
 # value untouched while all heavy legs run leg 1's suite.
-row "ROW5D" "$CI_YML" \
+in_range && row "ROW5D" "$CI_YML" \
   '# (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
       SCRIPTS_SHARD: ${{ matrix.shard }}' \
   '# (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
@@ -359,7 +412,7 @@ row "ROW5D" "$CI_YML" \
 # --- Row 7: filter in run_suite but not skip_suite ---------------------------------------------
 # Both increment `suites`. Filtering only one makes every leg emit the skip_suite registrations,
 # so per-leg denominators and the epilogue's decline accounting disagree.
-row "ROW7" "$RUNNER" \
+in_range && row "ROW7" "$RUNNER" \
   '  _shard_selects "$label" || return 0
   if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi
   suites=$((suites + 1))
@@ -372,7 +425,7 @@ row "ROW7" "$RUNNER" \
 # --- Row 8: malformed SCRIPTS_SHARD falls back to running nothing ------------------------------
 # The green-on-zero-coverage catastrophe: a broken matrix interpolation would make a leg assign
 # itself no suites and report success.
-row "ROW8" "$RUNNER" \
+in_range && row "ROW8" "$RUNNER" \
   '    echo "ERROR: SCRIPTS_SHARD must be k/N with 1 <= k <= N (got: '"'"'${SCRIPTS_SHARD}'"'"')." >&2
     echo "       Unset it to run the full group. A malformed value is never inferred: it fails" >&2
     echo "       closed rather than silently running everything or nothing." >&2
@@ -388,7 +441,7 @@ row "ROW8" "$RUNNER" \
 # Deleting the union comparison while leaving the guard's iteration intact must still drive the
 # suite RED — here via the assertion floor, which is why the floor is reported with printf and
 # an explicit exit rather than through fail().
-row "HARNESS" "$GUARD" \
+in_range && row "HARNESS" "$GUARD" \
   '  diff -q "$1" "$2" >/dev/null 2>&1' \
   '  return 0  # mutated: report every pair of sets as identical' \
   RED "totality_holds is neutered to always succeed (must be caught by its positive control)"
@@ -405,6 +458,7 @@ row "HARNESS" "$GUARD" \
 # (b) going green is the FINDING, not a failure: it is what proves the independent derivation
 # is doing the work. If (b) were also RED, the derivation would be interchangeable and the
 # guard's central design claim would be unsupported.
+if in_range; then
 _taut_old='cat "$WORK/ref_static" "$WORK/ref_glob" | sort -u > "$WORK/reference"'
 _taut_new='enumerate_leg "1/1" "$WORK/reference"; sort -u "$WORK/reference" -o "$WORK/reference"'
 if mutate "$GUARD" "$_taut_old" "$_taut_new" 2>"$WORK/muterr"; then
@@ -447,12 +501,13 @@ if mutate "$GUARD" "$_taut_old" "$_taut_new" 2>"$WORK/muterr"; then
 else
   fail "ROW6 — could not apply the tautology stub: $(cat "$WORK/muterr")"
 fi
+fi  # in_range (ROW6)
 
 # --- Row 9: a syntactically VALID spec that owns nothing -----------------------------------
 # k beyond the registration count passes every syntactic check and matches no ordinal. Without
 # the post-registration refusal the executing path prints "0/0 suites passed" and exits 0, i.e.
 # the required check is green over zero coverage.
-row "ROW9" "$RUNNER" \
+in_range && row "ROW9" "$RUNNER" \
   'if (( _SHARD_N > 0 && _shard_assigned == 0 )); then' \
   'if false; then' \
   RED "a leg assigned 0 registrations is accepted instead of refused"
@@ -461,7 +516,7 @@ row "ROW9" "$RUNNER" \
 # `[0-9]` in `[[ =~ ]]` matches fullwidth digits under a UTF-8 collation; `10#` then throws a
 # fatal arithmetic error that ABORTS the if-compound and resumes after `fi` with status 0, so
 # k/N keep their initial 0 and the leg silently runs the FULL group.
-row "ROW10" "$RUNNER" \
+in_range && row "ROW10" "$RUNNER" \
   '^([0123456789]{1,9})/([0123456789]{1,9})$' \
   '^([0-9]+)/([0-9]+)$' \
   RED "the digit class is ranged rather than enumerated (collation-widened, unbounded)"
@@ -474,54 +529,61 @@ row "ROW10" "$RUNNER" \
 # table is never mutated (the ⊆ lint in scripts-shard-manifest.test.sh is what guards
 # table hygiene; these rows score the TOTALITY guard only).
 MANIFEST_FILE="$REPO_ROOT/scripts/suite-shard-legs.tsv"
-if [[ ! -f "$MANIFEST_FILE" ]]; then
-  fail "MANIFEST-SETUP — scripts/suite-shard-legs.tsv is absent; the manifest rows below cannot be scored"
-else
-  # M-fixture set: minus-one, plus-phantom, header-only (all-synthesized per the
-  # fixture rule — each derives from the committed table + one mechanical edit).
-  awk '!/^#/ && !done {done=1; next} 1' "$MANIFEST_FILE" > "$WORK/manifest-minus-one.tsv"
-  cp "$MANIFEST_FILE" "$WORK/manifest-phantom.tsv"
-  printf 'phantom/never-registered-suite\t1\n' >> "$WORK/manifest-phantom.tsv"
-  grep '^#' "$MANIFEST_FILE" > "$WORK/manifest-empty.tsv"
-  [[ -s "$WORK/manifest-minus-one.tsv" && -s "$WORK/manifest-phantom.tsv" && -s "$WORK/manifest-empty.tsv" ]] \
-    || { echo "FATAL: fixture manifests did not materialise" >&2; exit 2; }
+# Fixtures materialise UNCONDITIONALLY, before any range gate — a half that skips
+# M1..M3 still needs a battery that fails closed if the committed table is absent,
+# and a conditional fixture build would shift the row-site count between halves.
+[[ -f "$MANIFEST_FILE" ]] \
+  || { echo "FATAL: scripts/suite-shard-legs.tsv is absent; the manifest rows cannot be scored" >&2; exit 2; }
+# M-fixture set: minus-one, plus-phantom, header-only (all-synthesized per the
+# fixture rule — each derives from the committed table + one mechanical edit).
+awk '!/^#/ && !done {done=1; next} 1' "$MANIFEST_FILE" > "$WORK/manifest-minus-one.tsv"
+cp "$MANIFEST_FILE" "$WORK/manifest-phantom.tsv"
+printf 'phantom/never-registered-suite\t1\n' >> "$WORK/manifest-phantom.tsv"
+grep '^#' "$MANIFEST_FILE" > "$WORK/manifest-empty.tsv"
+[[ -s "$WORK/manifest-minus-one.tsv" && -s "$WORK/manifest-phantom.tsv" && -s "$WORK/manifest-empty.tsv" ]] \
+  || { echo "FATAL: fixture manifests did not materialise" >&2; exit 2; }
 
-  # M1: a registered label the table does NOT know still lands on exactly one leg —
-  # the hash fallback keeps totality while the manifest is one label stale.
-  frow "M1" "$WORK/manifest-minus-one.tsv" GREEN \
-    "a label absent from the manifest is still assigned to exactly one leg (hash fallback)"
+# M1: a registered label the table does NOT know still lands on exactly one leg —
+# the hash fallback keeps totality while the manifest is one label stale.
+in_range && frow "M1" "$WORK/manifest-minus-one.tsv" GREEN \
+  "a label absent from the manifest is still assigned to exactly one leg (hash fallback)"
 
-  # M2: a table row naming nothing registered consumes no leg weight and no coverage —
-  # the runner ignores it (the ⊆ lint, not this guard, is what flags phantoms).
-  frow "M2" "$WORK/manifest-phantom.tsv" GREEN \
-    "a phantom manifest row is inert for coverage"
+# M2: a table row naming nothing registered consumes no leg weight and no coverage —
+# the runner ignores it (the ⊆ lint, not this guard, is what flags phantoms).
+in_range && frow "M2" "$WORK/manifest-phantom.tsv" GREEN \
+  "a phantom manifest row is inert for coverage"
 
-  # M3: an empty table degrades the whole group to hash fallback — still total.
-  frow "M3" "$WORK/manifest-empty.tsv" GREEN \
-    "an empty manifest assigns every label by hash with totality intact"
-fi
+# M3: an empty table degrades the whole group to hash fallback — still total.
+in_range && frow "M3" "$WORK/manifest-empty.tsv" GREEN \
+  "an empty manifest assigns every label by hash with totality intact"
 
 # M4: two untabled labels must not silently collide onto one leg — under the all-hash
 # path every label spreads deterministically. Bespoke (not row()/frow()): it reads leg
 # membership directly rather than the guard verdict. The pair is derived, not guessed —
 # its cksum residues mod N are verified to differ first, or the row is void.
-if [[ -s "$WORK/manifest-empty.tsv" ]]; then
+if in_range; then
+  # N is derived from the manifest header, not hardcoded — the battery must follow
+  # the committed K wherever ci.yml takes it.
+  _m4_n=$(grep -m1 '^# n=' "$MANIFEST_FILE" | sed 's/^# n=//')
+  if [[ ! "$_m4_n" =~ ^[0123456789]+$ ]] || (( 10#${_m4_n:-0} < 1 )); then
+    fail "M4 — could not derive the leg count from the manifest '# n=' header (got: '${_m4_n:-<none>}')"
+  else
   _reg=$(env -u SCRIPTS_SHARD TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
     bash "$RUNNER" --enumerate scripts 2>/dev/null | grep '^SUITE_REGISTRATION' | cut -f2 | sort)
   _a="" _b=""
   while IFS= read -r _cand && [[ -z "$_b" ]]; do
-    _r=$(( ($(printf '%s' "$_cand" | cksum | cut -d' ' -f1) % 5) + 1 ))
+    _r=$(( ($(printf '%s' "$_cand" | cksum | cut -d' ' -f1) % _m4_n) + 1 ))
     if [[ -z "$_a" ]]; then _a="$_cand"; _ra=$_r
     elif (( _r != _ra )); then _b="$_cand"; _rb=$_r; fi
   done <<< "$_reg"
   if [[ -z "$_b" ]]; then
-    fail "M4 — could not find two registered labels with distinct cksum residues mod 5"
+    fail "M4 — could not find two registered labels with distinct cksum residues mod $_m4_n"
   else
     _la=$(SOLEUR_SHARD_MANIFEST="$WORK/manifest-empty.tsv" \
-          env SCRIPTS_SHARD="$_ra/5" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+          env SCRIPTS_SHARD="$_ra/$_m4_n" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
           bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -c "^SUITE_REGISTRATION	${_a}$")
     _lb=$(SOLEUR_SHARD_MANIFEST="$WORK/manifest-empty.tsv" \
-          env SCRIPTS_SHARD="$_rb/5" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+          env SCRIPTS_SHARD="$_rb/$_m4_n" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
           bash "$RUNNER" --enumerate scripts 2>/dev/null | grep -c "^SUITE_REGISTRATION	${_b}$")
     if [[ "$_la" == "1" && "$_lb" == "1" ]]; then
       pass "M4 — two untabled labels hash to distinct legs ($_a→leg$_ra, $_b→leg$_rb)"
@@ -529,13 +591,14 @@ if [[ -s "$WORK/manifest-empty.tsv" ]]; then
       fail "M4 — untabled labels did not land on their hashed legs ($_a on leg$_ra: $_la, $_b on leg$_rb: $_lb)"
     fi
   fi
-fi
+  fi
+fi  # in_range (M4)
 
 # M5: dropping the label argument at a call site must not silently degrade — the
 # arity check makes it a refusal, so a leg that cannot place registrations exits 2
 # and the guard sees missing coverage. Anchor is multi-line because both call sites
 # read `_shard_selects "$label" || return 0` identically.
-row "M5" "$RUNNER" \
+in_range && row "M5" "$RUNNER" \
   '  _shard_selects "$label" || return 0
   if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi' \
   '  _shard_selects || return 0
@@ -546,7 +609,7 @@ row "M5" "$RUNNER" \
 # suite would run under, or the declined arm emits a phantom the run arm never claimed.
 # The reference keeps the run_suite literal, so a renamed skip label both orphans the
 # real suite and emits one nobody registered.
-row "M6" "$RUNNER" \
+in_range && row "M6" "$RUNNER" \
   '    skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \' \
   '    skip_suite "scripts/cf-tunnel-liveness-gate-mutations-MUT6" "relevance" \' \
   RED "a skip_suite label that is not the run_suite label"
@@ -555,7 +618,7 @@ row "M6" "$RUNNER" \
 # Raising a leg's ceiling AND keeping the partition intact must NOT red the guard: it is a
 # totality guard, not a performance guard. The anchor carries the preceding justification line
 # because `timeout-minutes: 60` + the setup-node note exists in BOTH test-scripts jobs now.
-row "MUSTPASS" "$CI_YML" \
+in_range && row "MUSTPASS" "$CI_YML" \
   '    # capping a hung leg at 1 hour instead of GitHub'"'"'s 6-hour default.
     timeout-minutes: 60
     # No setup-node' \
@@ -564,17 +627,41 @@ row "MUSTPASS" "$CI_YML" \
     # No setup-node' \
   GREEN "an unrelated ceiling edit that changes no assignment"
 
-# --- ASSERTION FLOOR ---------------------------------------------------------------------------
-# 15 positional/ci rows + M1..M4 (4) + M5 + M6 = 21.
-MIN_ROWS=21
+# --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------
+#
+# Three independent checks, replacing the old verdict-count floor (which false-
+# positives on a --rows half by construction — a half legitimately produces fewer
+# verdicts than the full battery):
+#
+#   1. DECLARED: every row site reached the gate, so the declared space is complete.
+#      The pin is the CONSTANT at the top, not the verdict count — a row added
+#      without bumping DECLARED_TOTAL reds the battery on EVERY range.
+#   2. EXECUTED == the requested in-range count: every selected site ran. A site
+#      that drifted out of the gate's reach (conditional, early exit) shows up here.
+#   3. IN_RANGE >= 1: a range covering no declared row is vacuous — it would
+#      report "all rows green" having run only the control.
+if (( _row_seq != DECLARED_TOTAL )); then
+  printf 'FAIL: declared-row drift — %d row site(s) reached the range gate, expected %d. A row was added or removed without updating DECLARED_TOTAL.\n' "$_row_seq" "$DECLARED_TOTAL" >&2
+  exit 1
+fi
+if (( ROWS_HI == 0 )); then
+  _expected_rows=$DECLARED_TOTAL
+else
+  _expected_rows=$(( ROWS_HI - ROWS_LO + 1 ))
+fi
+if (( EXECUTED != _expected_rows || EXECUTED < 1 )); then
+  printf 'FAIL: range accounting — %d row(s) executed, expected %d in range %s. The battery did not run its declared range to completion.\n' "$EXECUTED" "$_expected_rows" "${ROWS_LO}-${ROWS_HI:-all}" >&2
+  exit 1
+fi
 TOTAL=$(( PASS + FAIL ))
-if (( TOTAL < MIN_ROWS )); then
-  printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The battery did not run to completion.\n' "$TOTAL" "$MIN_ROWS" >&2
+# Each executed row emits exactly one verdict, plus the unconditional CONTROL.
+if (( TOTAL != EXECUTED + 1 )); then
+  printf 'FAIL: verdict accounting — %d verdict(s) for %d executed row(s) + control. A row site emitted no verdict, or emitted two.\n' "$TOTAL" "$EXECUTED" >&2
   exit 1
 fi
 
 echo ""
-echo "scripts-shard-totality-mutations.sh: $TOTAL rows, $PASS passed, $FAIL failed"
+echo "scripts-shard-totality-mutations.sh: range ${ROWS_LO}-${ROWS_HI:-all} of $DECLARED_TOTAL declared; $EXECUTED executed; $TOTAL verdicts, $PASS passed, $FAIL failed"
 if (( FAIL > 0 )); then
   exit 1
 fi

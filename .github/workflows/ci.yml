@@ -1295,10 +1295,21 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
-    # Sized above the measured need, not at it: 21 rows × ~12 leg-enumerations
-    # each measured ~21 min on the runner (the M1-M6 manifest rows added six
-    # full guard invocations over the 15-row battery the 20-min cap was set
-    # for). A timeout kill must never fire below a duration the repo calls
+    # TWO-LEG ROW SPLIT (#8006 phase 2). The battery declares 21 numbered row
+    # sites and takes `--rows A-B`; each leg runs its half plus the unconditional
+    # control and instrument self-test. The battery's own DECLARED_TOTAL pin is
+    # what keeps the halves honest — a row added without bumping it reds BOTH
+    # legs, so the matrix cannot silently drift out of coverage. Ranges must be
+    # re-split whenever DECLARED_TOTAL changes (the battery fails closed on an
+    # out-of-bounds range, which is the alarm).
+    strategy:
+      fail-fast: false
+      matrix:
+        rows: ["1-11", "12-21"]
+    # Sized above the measured need, not at it: the serial 21-row battery
+    # measured ~9.5 min as a single job; halving the row space plus the
+    # parallelized enumerate children inside the guard puts each leg near
+    # ~5 min. A timeout kill must never fire below a duration the repo calls
     # legitimate.
     timeout-minutes: 30
     steps:
@@ -1316,8 +1327,8 @@ jobs:
       # mutation and aborts the battery outright if it is not green, so this job still exercises
       # both guards against the real tree — which is what AC14 asks for: a cross-leg union
       # asserted from a job that is not itself a leg.
-      - name: Guard 1 — shard-totality mutation battery (control + every row must drive it RED)
-        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
+      - name: Guard 1 — shard-totality mutation battery (rows ${{ matrix.rows }}; every mutated row must drive the guard RED)
+        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
