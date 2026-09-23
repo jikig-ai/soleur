@@ -129,13 +129,13 @@ echo "  instrument self-test: pass() and fail() both move"
 
 # ── Execution harness ────────────────────────────────────────────────────────
 # Executes an extracted body under the shell GitHub Actions actually uses.
-# $6 is the 4th leg (web-platform-build, #8136); it defaults to success so the
-# three-shard rows keep stating their FULL triple while the build rows below
-# name the 4th value explicitly.
-run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] ; sets OUT/RC
+# $6 is the 4th leg (web-platform-build, #8136) and $7 the 5th (encryption-posture,
+# #6907); both default to success so the three-shard rows keep stating their FULL
+# triple while the build and posture rows below name their value explicitly.
+run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] [$7=posture] ; sets OUT/RC
   OUT="$SANDBOX/out.$RANDOM.$RANDOM"
   ( WEBPLAT_RESULT="$2" BUN_RESULT="$3" SCRIPTS_RESULT="$4" EVENT_NAME="$5" \
-      BUILD_RESULT="${6:-success}" \
+      BUILD_RESULT="${6:-success}" POSTURE_RESULT="${7:-success}" \
       bash --noprofile --norc -eo pipefail "$1" ) >"$OUT" 2>&1
   RC=$?
 }
@@ -163,7 +163,7 @@ expect_line() {  # $1=label $2=body $3..$5=results $6=event $7=needle $8=want_rc
 # and each row's verdict is arbitrary. This runs FIRST and aborts on failure.
 _c0=$fails
 expect_line "CONTROL all-green" "$BODY" success success success push \
-  "All four legs green (three shards + web-platform-build)." 0
+  "All five legs green (three shards + web-platform-build + encryption-posture)." 0
 if [ "$fails" -ne "$_c0" ]; then
   printf '\nCONTROL ROW FAILED — the battery is VOID, not failing. The unmutated\n' >&2
   printf 'aggregator body does not emit its own success line, so every mutation\n' >&2
@@ -211,6 +211,19 @@ fi
 run_body "$BODY" success success success push skipped
 if [ "$RC" -eq 1 ] && grep -qF -- "web-platform-build: SKIPPED" "$OUT"; then pass; else
   fail "R1g a skipped web-platform-build reads as success — the fail-open the header forbids (rc=$RC)"
+fi
+
+# R1h/R1i — the 5th leg (encryption-posture, #6907). Before #6907 it was a
+# standalone ADVISORY job: a PR could merge with the ledger sweep red. Joining
+# the aggregator is what arms it, so red ALONE must fail `test` and name the
+# leg, and skipped ALONE must not read as success.
+run_body "$BODY" success success success push success failure
+if [ "$RC" -eq 1 ] && grep -qF -- "encryption-posture: FAILED" "$OUT"; then pass; else
+  fail "R1h a red encryption-posture with every other leg green must fail the aggregator and name the leg (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
+fi
+run_body "$BODY" success success success push success skipped
+if [ "$RC" -eq 1 ] && grep -qF -- "encryption-posture: SKIPPED" "$OUT"; then pass; else
+  fail "R1i a skipped encryption-posture reads as success — the gate #6907 arms would be a no-op whenever the job does not run (rc=$RC)"
 fi
 
 # Two legs cancelled on a pull_request run: the run was superseded.
@@ -280,7 +293,7 @@ done
 # CONTROL; repeated here across the other event name so the event gate cannot
 # be implemented as "always fail on pull_request".
 expect_line "Hb must-PASS all-green on pull_request" "$BODY" success success success pull_request \
-  "All four legs green (three shards + web-platform-build)." 0
+  "All five legs green (three shards + web-platform-build + encryption-posture)." 0
 
 # ── MUTATION BATTERY ─────────────────────────────────────────────────────────
 # Each row mutates a COPY of the extracted body, asserts the mutation LANDED
@@ -379,7 +392,7 @@ for st in job.get("steps") or []:
 if step is None:
     print("NOSTEP"); raise SystemExit
 env = step.get("env") or {}
-want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts", "BUILD_RESULT": "web-platform-build"}
+want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts", "BUILD_RESULT": "web-platform-build", "POSTURE_RESULT": "encryption-posture"}
 bad = []
 for var, shard in want.items():
     v = str(env.get(var, ""))
@@ -406,8 +419,39 @@ n = [n] if isinstance(n, str) else list(n)
 print(len(n))
 PYN
 )
-if [ "$_nshards" -eq 4 ]; then pass; else
-  fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 4 (three test-* shards + web-platform-build, #8136) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
+if [ "$_nshards" -eq 5 ]; then pass; else
+  fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 5 (three test-* shards + web-platform-build #8136 + encryption-posture #6907) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
+fi
+
+# W3 — the ARMED leg must be able to conclude failure (#6907 MB-10). A job-level
+# `continue-on-error: true` makes a failing step conclude the JOB as success, so
+# needs.encryption-posture.result reads success and `test` goes green over a red
+# sweep. A job-level `if:` can skip it (R1i catches the skip only if the job is
+# skipped; an `if:` that evaluates true on PRs but false on merge_group would
+# arm half the paths). Both are one-line edits with no local symptom, so the
+# job's own shape is asserted here, and so is the sweep command it runs.
+_posture=$(python3 - "$_ciy" <<'PYP'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+job = d["jobs"].get("encryption-posture")
+if job is None:
+    print("the encryption-posture job is gone"); raise SystemExit
+bad = []
+if job.get("continue-on-error") not in (None, False):
+    bad.append("job-level continue-on-error=%r lets a red sweep conclude success" % job.get("continue-on-error"))
+if "if" in job:
+    bad.append("job-level if: %r can skip the armed gate" % job.get("if"))
+runs = [st.get("run", "") for st in job.get("steps") or []]
+if not any("lint-encryption-posture.py --repo-sweep" in r for r in runs):
+    bad.append("no step runs lint-encryption-posture.py --repo-sweep")
+for st in job.get("steps") or []:
+    if st.get("continue-on-error") not in (None, False):
+        bad.append("step %r sets continue-on-error" % st.get("name"))
+print("; ".join(bad))
+PYP
+)
+if [ -z "$_posture" ]; then pass; else
+  fail "W3 the encryption-posture leg cannot red the aggregator: $_posture"
 fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
@@ -429,7 +473,10 @@ TOTAL=$((passes + fails))
 # + 2 wiring (W1 env->needs mapping, W2 shard cardinality)
 # + 3 event/value cardinality (E1 merge_group, E1 workflow_dispatch,
 #   E3 out-of-enum result) = 29
-MIN_ROWS=29
+# + 2 fourth leg (R1f red, R1g skipped), #8136 — added then without raising
+#   this floor, which left it 2 below the measured 31
+# + 2 fifth leg (R1h red, R1i skipped) + 1 armed-leg shape (W3), #6907 = 34
+MIN_ROWS=34
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
