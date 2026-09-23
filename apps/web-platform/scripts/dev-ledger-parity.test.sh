@@ -206,7 +206,7 @@ ledger() { { printf '%s\n' "$BASE_LEDGER"; [[ $# -gt 0 ]] && printf '%s\n' "$@";
 
 # feat_case <files...> — reset feat to main, add files (name=content), push.
 feat_case() {
-  git -C "$WORK" fetch -q origin
+  git -C "$WORK" fetch -q --no-tags origin
   git -C "$WORK" switch -q -C feat origin/main
   local kv
   for kv in "$@"; do put "$WORK" "${kv%%=*}" "${kv#*=}"; done
@@ -498,7 +498,7 @@ fi
 echo "G1-14: a branch stacked on this PR still holds G at the applied blob -> it does NOT launder the violation"
 CASES=$((CASES + 1))
 feat_case 143_old.sql="R3"
-git -C "$SEED" fetch -q origin
+git -C "$SEED" fetch -q --no-tags origin
 git -C "$SEED" switch -q -C stacked origin/feat
 put "$SEED" 191_child.sql "CHILD"
 git -C "$SEED" add -A && git -C "$SEED" commit -qm 'stacked child'
@@ -1728,11 +1728,11 @@ echo "W-S1: the detect-changes state step reports base / deleted / introduction 
 CASES=$((CASES + 1))
 # The check step's --depth=1 fetch made this clone shallow; detect-changes is a
 # full clone (fetch-depth: 0), so restore full history first.
-if [[ -f "$W2/.git/shallow" ]]; then git -C "$W2" fetch -q --unshallow origin; fi
-git -C "$W2" fetch -q origin
+if [[ -f "$W2/.git/shallow" ]]; then git -C "$W2" fetch -q --no-tags --unshallow origin; fi
+git -C "$W2" fetch -q --no-tags origin
 run_state_step pull_request main; s_base=$state; r1=$rc            # a (RED) guard sits on the base tip
 set_base_guard none
-git -C "$W2" fetch -q origin
+git -C "$W2" fetch -q --no-tags origin
 run_state_step pull_request main; s_deleted=$state; r2=$rc
 run_state_step pull_request nope; s_unknown=$state; r3=$rc
 run_state_step merge_group main; s_na=$state; r4=$rc

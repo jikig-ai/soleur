@@ -115,6 +115,13 @@ Two lessons from the test battery:
     corrected it to match the code. Its root cause, #7964's premise, conflicted with ADR-061.
     **Prevention:** plan sharp-edge (added in this PR): a plan making a gate blocking over
     shared dev must classify rows by owning ref per ADR-061.
+22. **CI's `test-scripts (1/3)` went red on `battery-tag-authorship-mutations`**. Five fixture
+    `git fetch` calls in the new suite lacked `--no-tags`, which the repo-wide tag-authorship
+    ratchet counts as undeclared tag-authoring. The 49 locally-run census rows did not include it.
+    Recovery: added `--no-tags` (the fixtures use no tags); the subject then reported `offenders=0`.
+    **Prevention:** a fixture `git fetch`/`clone` in a new suite takes `--no-tags`; the work skill's
+    repo-global-ratchet rule already names this class, so select census rows by ratchet, not by
+    reference to the changed files.
 
 ## Tags
 
