@@ -223,6 +223,12 @@ full_payload() {
     # token -- strictly worse than the DOPPLER_PROJECT leak the row was written for.
     # Dropping it from META_FILTER was a one-word edit that stayed green.
     DOPPLER_TOKEN: "dp.st.CARRIER-METADATA-NOT-A-SECRET",
+    # The rest of the Doppler CLI configuration surface. API_HOST is the worst of them:
+    # in $GITHUB_ENV it repoints every later `doppler run --preserve-env` at a different
+    # API, sending the credentials of the job to a host of the writer choosing.
+    DOPPLER_API_HOST: "https://api.fixture.invalid",
+    DOPPLER_DASHBOARD_HOST: "https://dash.fixture.invalid",
+    DOPPLER_VERIFY_TLS: "false",
     DOPPLER_TOKEN_TF: "dp.pt.FIXTURE-NOT-A-REAL-TOKEN",
     HCLOUD_TOKEN: "hcloud-fixture",
     CF_API_TOKEN_R2: "cf-fixture",
@@ -283,7 +289,8 @@ grep -qF -- "$PEM_E" "$LOADER_DIR/github_env" \
 # failure from a loader that reported success.
 # ======================================================================
 run_loader "dp.st.TIERB-FIXTURE" "" "" "$(full_payload)"
-for k in DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_TOKEN; do
+for k in DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_TOKEN \
+         DOPPLER_API_HOST DOPPLER_DASHBOARD_HOST DOPPLER_VERIFY_TLS; do
   if env_has "$k"; then fail "row4: leaked $k into GITHUB_ENV (would repoint every later doppler run)"
   else pass "row4: filtered $k"; fi
 done
@@ -580,7 +587,7 @@ fi
 # scores CONSTRUCTION FAILURE rather than FIRES. The literal is safe because the self-test
 # already asserts `PASSES == 1` at that point and aborts otherwise.
 SELFTEST_PASSES=1
-MIN_ASSERTIONS=52
+MIN_ASSERTIONS=55
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2

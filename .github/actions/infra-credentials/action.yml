@@ -254,16 +254,30 @@ runs:
         # run` resolves and who it authenticates as. That is the property that makes
         # them unsafe in $GITHUB_ENV, and it is knowable rather than a guess. Anything
         # else beginning with DOPPLER_ is a secret whose name merely starts that way.
-        readonly META_FILTER='to_entries
-          | map(select(.key | IN("DOPPLER_PROJECT","DOPPLER_CONFIG","DOPPLER_ENVIRONMENT","DOPPLER_TOKEN") | not))
-          | from_entries'
+        #
+        # SINGLE-SOURCED. This list appeared twice — once in the filter, once in the
+        # staleness probe below — and two copies of a vendor name list is a drift hazard
+        # with a nasty asymmetry: adding a name to the probe alone keeps it exported, and
+        # adding it to the filter alone makes the probe warn about a name that IS handled.
+        #
+        # DOPPLER_API_HOST is the worst member and was missing. It repoints the CLI at a
+        # different API, so exporting it into $GITHUB_ENV sends every later
+        # `doppler run --preserve-env`'s credentials to a host of the writer's choosing —
+        # strictly worse than the DOPPLER_PROJECT leak this row was written for, and the
+        # same shape as the DOPPLER_TOKEN gap fixed one round earlier. DASHBOARD_HOST and
+        # VERIFY_TLS complete the CLI's documented configuration surface (VERIFY_TLS=false
+        # turns the redirect above into an undetectable one).
+        readonly META_NAMES='"DOPPLER_PROJECT","DOPPLER_CONFIG","DOPPLER_ENVIRONMENT","DOPPLER_TOKEN","DOPPLER_API_HOST","DOPPLER_DASHBOARD_HOST","DOPPLER_VERIFY_TLS"'
+        readonly META_FILTER="to_entries
+          | map(select(.key | IN(${META_NAMES}) | not))
+          | from_entries"
         # Staleness backstop: a name list is a claim about the vendor, so if Doppler
         # ever adds a config variable this filter does not know, SAY SO rather than
         # silently exporting it. A warning is the right level — the greedy alternative
         # broke production, this one at worst repoints a later `doppler run`, loudly.
-        unknown="$(printf '%s' "$payload" | jq -r '
-          keys[] | select(startswith("DOPPLER_"))
-                 | select(IN("DOPPLER_PROJECT","DOPPLER_CONFIG","DOPPLER_ENVIRONMENT","DOPPLER_TOKEN") | not)' | paste -sd, -)"
+        unknown="$(printf '%s' "$payload" | jq -r "
+          keys[] | select(startswith(\"DOPPLER_\"))
+                 | select(IN(${META_NAMES}) | not)" | paste -sd, -)"
         if [[ -n "$unknown" ]]; then
           echo "::notice title=infra-privileged::exporting DOPPLER_-prefixed keys as SECRETS (not CLI config): ${unknown}. If Doppler has added a new CLI configuration variable, add it to META_FILTER in .github/actions/infra-credentials/action.yml."
         fi
