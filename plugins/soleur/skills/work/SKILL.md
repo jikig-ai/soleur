@@ -1082,7 +1082,8 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    detected-long-hold signal — and a non-head that outlasts `TC_QUEUE_TIMEOUT` (default =
    `TC_LOCK_TIMEOUT`) proceeds contended with `queue_timeout=1`, still never aborting. If the
    queue machinery itself is unavailable the run emits
-   `BANNER LOCK_QUEUE_DEGRADED reason=mint_failed|no_state_root` and takes the pre-queue
+   `BANNER LOCK_QUEUE_DEGRADED reason=mint_failed|no_state_root|bad_name|mkdir_failed|qdir_unsafe`
+   and takes the pre-queue
    direct-acquire path — that banner is the "why did the pileup recur" line. To enumerate
    queue members: `ls <git-common-dir>/soleur-session-state/locks/test-all.queue.d` — each
    ticket's first line is `pid worktree epoch` and the queue head is the lowest-numbered

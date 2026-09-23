@@ -1045,26 +1045,30 @@ _TC_TICKET_QDIR=""
 # session-state layer is stubbed or the state root is unresolvable (the
 # capacity suite injects a session-state stub defining only acquire_lock) —
 # the caller then degrades to today's direct-acquire path.
+# Stdout contract: the resolved dir path on success, `FAIL:<reason>` on
+# failure — the caller runs this in command substitution, so a module-global
+# reason channel would not propagate. Reasons: bad_name, no_state_root,
+# mkdir_failed, qdir_unsafe.
 _tc_queue_dir() {
   local name="${1:-}"
   # `name` becomes a path component; a `/` or `..` would escape LOCK_DIR for
   # the mint's creates and the sweep's rm. Callers pass literals today, but
   # the charset assert costs one line and the failure arm already degrades.
-  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
-  declare -F _session_state_init_dirs >/dev/null 2>&1 || return 1
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FAIL:bad_name"; return 1; }
+  declare -F _session_state_init_dirs >/dev/null 2>&1 || { echo "FAIL:no_state_root"; return 1; }
   # session-state.sh already ran init at source time; re-run only when the
   # dir is missing (deleted post-source) — it forks `git rev-parse`.
   [[ -n "${LOCK_DIR:-}" && -d "$LOCK_DIR" ]] || _session_state_init_dirs 2>/dev/null || true
-  [[ -n "${LOCK_DIR:-}" ]] || return 1
+  [[ -n "${LOCK_DIR:-}" ]] || { echo "FAIL:no_state_root"; return 1; }
   local qdir="$LOCK_DIR/$name.queue.d"
-  mkdir -p "$qdir" 2>/dev/null || return 1
+  mkdir -p "$qdir" 2>/dev/null || { echo "FAIL:mkdir_failed"; return 1; }
   # mkdir -p silently succeeds on a pre-existing dir. When LOCK_DIR resolves to
   # the /tmp orphan fallback (session-state.sh, outside any repo) a different
   # local user could own it first and symlink qdir at a victim directory —
   # the mint's `: >` and `>>` would then truncate/append attacker-chosen
   # paths. -d + ! -L + -O closes the cross-user case; residual same-user
   # TOCTOU is the documented threat-model boundary.
-  [[ -d "$qdir" && ! -L "$qdir" && -O "$qdir" ]] || return 1
+  [[ -d "$qdir" && ! -L "$qdir" && -O "$qdir" ]] || { echo "FAIL:qdir_unsafe"; return 1; }
   printf '%s\n' "$qdir"
 }
 
@@ -1318,8 +1322,12 @@ tc_acquire() {
   # Mint a ticket BEFORE waiting so only the queue head makes the bounded
   # acquire_lock call. Degradation is always to the pre-queue path — never an
   # abort and never a wedge (every wait here is flock -n or a counted retry).
-  local _qdir="" _qt_serial="" _qt_timeout=0
-  if _qdir="$(_tc_queue_dir "$name" 2>/dev/null)" && [[ -n "$_qdir" ]]; then
+  local _qdir="" _qt_serial="" _qt_timeout=0 _qd_err=""
+  _qdir="$(_tc_queue_dir "$name" 2>/dev/null)" || true
+  case "$_qdir" in
+    FAIL:*) _qd_err="${_qdir#FAIL:}"; _qdir="" ;;
+  esac
+  if [[ -n "$_qdir" ]]; then
     if _tc_ticket_mint "$_qdir"; then
       _qt_serial="$_TC_TICKET_SERIAL"
       printf "[contention] LOCK_QUEUED: '%s' holds ticket %08d — earlier queued runs release first.\n" "$name" "$_qt_serial" >&2
@@ -1329,7 +1337,7 @@ tc_acquire() {
       echo "[contention] BANNER LOCK_QUEUE_DEGRADED reason=mint_failed — direct bounded acquire; queue not engaged." >&2
     fi
   else
-    echo "[contention] BANNER LOCK_QUEUE_DEGRADED reason=no_state_root — direct bounded acquire; queue not engaged." >&2
+    echo "[contention] BANNER LOCK_QUEUE_DEGRADED reason=${_qd_err:-no_state_root} — direct bounded acquire; queue not engaged." >&2
   fi
 
   # The heartbeat brackets the WHOLE wait — queue stage plus lock stage — so
