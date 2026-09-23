@@ -17,7 +17,7 @@
 //       reachable through that lookup, widen this assertion + add the
 //       opus pricing entry then.
 //   (d) identity: EXECUTION_MODEL === SONNET_MODEL and
-//       AUDIT_MODEL === "claude-opus-5".
+//       AUDIT_MODEL === "claude-opus-5-5".
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -147,13 +147,13 @@ describe("model-tiers registry — #5106", () => {
     });
   });
 
-  it("EXECUTION_MODEL is the sonnet SSOT and AUDIT_MODEL is opus-5", () => {
+  it("EXECUTION_MODEL is the sonnet SSOT and AUDIT_MODEL is opus-5-5", () => {
     expect(EXECUTION_MODEL).toBe(SONNET_MODEL);
     expect(EXECUTION_MODEL).toBe("claude-sonnet-5");
     // Intentional model-bump tripwire: AUDIT_MODEL has no SSOT constant to
     // alias (opus is not an AnthropicModelId member), so it is pinned to the
     // literal here. A deliberate re-tier (e.g. opus-4-8 → opus-5, a separate
     // model-bump PR per ADR-053) must update this assertion in lockstep.
-    expect(AUDIT_MODEL).toBe("claude-opus-5");
+    expect(AUDIT_MODEL).toBe("claude-opus-5-5");
   });
 });

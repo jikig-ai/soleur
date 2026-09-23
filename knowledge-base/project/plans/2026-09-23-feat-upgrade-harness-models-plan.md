@@ -474,3 +474,20 @@ No Product/UX surface: no file under the UI-surface globs is touched.
 - `claude-opus-5` is a strict prefix of `claude-opus-5-5`. Never `sed s/claude-opus-5/claude-opus-5-5/g`: it produces `claude-opus-5-5-5` on a second pass and on any already-migrated line. Phase B goes through `audit-models.sh --fix` (boundary-anchored), and AC "no `claude-opus-5-5-5`" pins it.
 - A `toContain("claude-opus-5")` assertion passes on `claude-opus-5-5` by prefix. Assert the quoted id.
 - Phase A exact-string swap: match the full `standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6'` triple, never bare `grok-4.6` (the ADR addendum and comments legitimately name `grok-4.6` as a still-listed slug).
+
+## Scope change — 2026-09-23 (operator waiver, executed in this PR)
+
+Mid-pipeline the operator waived the 3-day release-age wait ("for claude, codex and grok build,
+we can waive the couple days wait and do it right now"). Phase B therefore ships in THIS PR, which
+now closes #7773:
+
+- `@anthropic-ai/claude-code` 2.1.219 → 2.1.280 (package.json, package-lock.json, Dockerfile),
+  lockfile regenerated once with `--min-release-age=0`; `.npmrc` untouched. The Phase B premise
+  that CI `lockfile-sync` would red was re-measured and is false once the lockfile pins the
+  version (npm 11.19.0: rc 0, lockfile unchanged); the model-launch-review SKILL.md passage was
+  corrected in place with a dated note.
+- `AUDIT_MODEL` / `AUTOFIX_PAIRS` → `claude-opus-5-5`, `--fix` applied (idempotent), eval-harness
+  models regenerated, ADR-053 addendum (append-only, the 2026-09-03 tables left as recorded).
+- `@anthropic-ai/claude-agent-sdk` stays at 0.3.197: its bundle lacks `claude-opus-5-5`, but no
+  SDK call site requests Opus (runtime default `claude-sonnet-5`); the audit crons run the `claude`
+  CLI. Codex: no pin exists, nothing to wait on. Grok: no CLI pin; slugs are server-resolved.

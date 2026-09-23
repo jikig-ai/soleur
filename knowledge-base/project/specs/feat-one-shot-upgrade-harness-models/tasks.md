@@ -52,4 +52,12 @@ This pipeline executes **Phase A only**. Phase B (Opus 5.5) is date-gated to on 
 ## Phase 5: Issue hygiene
 
 - [x] 5.1 Retitle #7773 to the Phase B title. It must include the word "deferred" (Opus 5.5 CLI bump + AUDIT_MODEL swap, not before 2026-09-25T15:44Z). Add a comment that links the plan's `### Phase B` section.
-- [ ] 5.2 The PR body carries `Ref #7773`. It also records the Codex no-pin finding and the live `grok models` output.
+- [x] 5.2 The PR body carries `Ref #7773`. It also records the Codex no-pin finding and the live `grok models` output.
+
+## Phase 6: Phase B executed now (operator waived the release-age wait)
+
+- [x] 6.1 CLI pin 2.1.219 → 2.1.280 (package.json, lockfile, Dockerfile) with `sdk-bump-verified:` ack (canary --replay pass).
+- [x] 6.2 AUTOFIX_PAIRS → claude-opus-5-5 (+ `claude-opus-5` source pair); model-launch-review tests updated (24/24).
+- [x] 6.3 `audit-models.sh --fix` applied twice (idempotent), `--detect` rc 0.
+- [x] 6.4 model-tiers.test.ts, eval-harness models regenerated, ADR-053 addendum, expenses ledger, mobile-patterns price.
+- [x] 6.5 PR body: `Closes #7773`.
