@@ -290,6 +290,7 @@ ORPHAN_MSG='is never run by any runner'
 # C0 — NOOP CONTROL. The positive control every mutation battery needs: if the unmutated
 # sandbox is already RED, every row below "kills" a mutant that was dead on arrival.
 # =============================================================================================
+run_C0() {
 row C0 "noop control — the unmutated synthetic repo is GREEN"
 new_sandbox c0
 run_lint "$SB"; rc=$?
@@ -299,11 +300,13 @@ if (( rc == 0 )); then pass "C0 — unmutated sandbox exits 0"; else
 fi
 assert_has "C0 — reports no orphans" "orphan test suites: none"
 assert_has "C0 — reports a non-empty walk over six surfaces" "walked ${real_tracked} tracked *.test.sh against 6 registration surfaces"
+}
 
 # =============================================================================================
 # M1 — delete a registered suite's run_suite line (surface 1). Verify-the-verifier: this
 # re-introduces a REAL orphan, the #6734/#7402 defect itself.
 # =============================================================================================
+run_M1() {
 row M1 "delete a run_suite line from test-all.sh (surface 1)"
 new_sandbox m1
 require_single_surface "$SB" "$BOARD_SUITE" "M1"
@@ -311,12 +314,14 @@ mutate_or_die "$SB/scripts/test-all.sh" "$BOARD_LINE"$'\n' ""
 run_lint "$SB"; rc=$?
 assert_red "M1" "$rc"
 assert_has "M1 — names the de-registered suite" "${BOARD_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M2 — two new unregistered suites under directories no glob covers, BOTH named. Two in one
 # row is strictly stronger than a separate "reports the second member" row, and unlike that
 # row it stays meaningful under a set-difference implementation.
 # =============================================================================================
+run_M2() {
 row M2 "two unregistered suites under uncovered directories, both reported"
 new_sandbox m2
 mkdir -p "$SB/tools/nowhere" "$SB/docs/deep/nested" || harness_die "M2 mkdir"
@@ -326,12 +331,14 @@ run_lint "$SB"; rc=$?
 assert_red "M2" "$rc"
 assert_has "M2 — names the first new orphan" "tools/nowhere/alpha.test.sh ${ORPHAN_MSG}"
 assert_has "M2 — names the second new orphan" "docs/deep/nested/beta.test.sh ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M3 — delete a `run: bash …` step from infra-validation.yml (surface 3). Surface 3 carries 98
 # of the ~340 tracked suites, an order of magnitude more than any other, and it is delegated to
 # a second script's derivation — the likeliest surface to silently under-match.
 # =============================================================================================
+run_M3() {
 row M3 "delete a run: bash step from infra-validation.yml (surface 3)"
 new_sandbox m3
 require_single_surface "$SB" "$INFRA_SUITE" "M3"
@@ -339,6 +346,7 @@ mutate_or_die "$SB/.github/workflows/infra-validation.yml" "$INFRA_STEP"$'\n' ""
 run_lint "$SB"; rc=$?
 assert_red "M3" "$rc"
 assert_has "M3 — names the de-registered infra suite" "${INFRA_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M4 — keep the run_suite LABEL, swap the COMMAND. Closes the silent direction: a parser
@@ -346,6 +354,7 @@ assert_has "M3 — names the de-registered infra suite" "${INFRA_SUITE} ${ORPHAN
 # green "none", which no floor can detect. Measured escape at test-all.sh's REQUIRED_RUNNERS
 # comment: `run_suite "<path>" bash -c true` once left this linter reporting no orphans.
 # =============================================================================================
+run_M4() {
 row M4 "keep the run_suite label, swap its command (registration must be command-anchored)"
 new_sandbox m4
 mutate_or_die "$SB/scripts/test-all.sh" "$BOARD_LINE" \
@@ -353,12 +362,14 @@ mutate_or_die "$SB/scripts/test-all.sh" "$BOARD_LINE" \
 run_lint "$SB"; rc=$?
 assert_red "M4" "$rc"
 assert_has "M4 — a label-only mention does not count as registration" "${BOARD_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M5 — delete one glob pattern from test-all.sh's SUITE_GLOBS. This row ONLY reds if the linter
 # ASKS the runner for its patterns. Carry a duplicate copy in the linter and the runner stops
 # running eight suites while the linter, reading its stale copy, reports them covered.
 # =============================================================================================
+run_M5() {
 row M5 "delete a glob pattern from the runner (surface 2 must be derived, never duplicated)"
 new_sandbox m5
 glob_members=$(git -C "$SB" ls-files 'apps/cla-evidence/scripts/*.test.sh')
@@ -369,11 +380,13 @@ mutate_or_die "$SB/scripts/test-all.sh" "$GLOB_LINE"$'\n' ""
 run_lint "$SB"; rc=$?
 assert_red "M5" "$rc"
 while IFS= read -r m; do assert_has "M5 — names ${m}" "${m} ${ORPHAN_MSG}"; done <<< "$glob_members"
+}
 
 # =============================================================================================
 # M6 — OWN DISPATCH. Neuter the walk so it enumerates zero files. The single most valuable row
 # here: it is the only one covering the direction where failure is byte-identical to success.
 # =============================================================================================
+run_M6() {
 row M6 "neuter the producer to enumerate zero files (anti-vacuity floor)"
 new_sandbox m6
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" "$PRODUCER_LINE" \
@@ -382,10 +395,12 @@ run_lint "$SB"; rc=$?
 assert_red "M6" "$rc"
 assert_has "M6 — the producer floor fires on a zero walk" "enumerated 0 tracked suites"
 assert_lacks "M6 — does not report a clean repo" "orphan test suites: none"
+}
 
 # =============================================================================================
 # M7 — an exclusion with a reason but no tracking issue.
 # =============================================================================================
+run_M7() {
 row M7 "exclusion with a reason but no #NNNN"
 new_sandbox m7
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
@@ -393,6 +408,7 @@ mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
 run_lint "$SB"; rc=$?
 assert_red "M7" "$rc"
 assert_has "M7 — fail-closed on a missing tracking issue" "has no reason or no tracking issue"
+}
 
 # =============================================================================================
 # M8 — PRODUCER PARTIAL-NARROWING. The highest-value row, and the one this guard is most likely
@@ -401,6 +417,7 @@ assert_has "M7 — fail-closed on a missing tracking issue" "has no reason or no
 # and prints `orphan test suites: none`. M6 covers "enumerates zero"; only a count floor covers
 # "enumerates a plausible SUBSET".
 # =============================================================================================
+run_M8() {
 row M8 "narrow the producer back to scripts/*.test.sh (plausible-subset)"
 new_sandbox m8
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" "$PRODUCER_LINE" \
@@ -411,12 +428,14 @@ narrowed=$(git -C "$SB" ls-files 'scripts/*.test.sh' | wc -l | tr -d ' ')
 assert_red "M8" "$rc"
 assert_has "M8 — the producer floor fires on a plausible subset (${narrowed} of ${real_tracked})" "enumerated ${narrowed} tracked suites"
 assert_lacks "M8 — does not read as a clean repo" "orphan test suites: none"
+}
 
 # =============================================================================================
 # M9 — delete the per-app main.test.sh hook step (surface 4). One workflow step registers a
 # suite in every infra root at once without naming any of them; nothing else in the linter can
 # see it, because the path on that step is relative.
 # =============================================================================================
+run_M9() {
 row M9 "delete the per-app main.test.sh hook step (surface 4)"
 new_sandbox m9
 require_single_surface "$SB" "$HOOK_SUITE" "M9"
@@ -425,10 +444,12 @@ run_lint "$SB"; rc=$?
 assert_red "M9" "$rc"
 assert_has "M9 — names the suite the hook covered" "${HOOK_SUITE} ${ORPHAN_MSG}"
 assert_has "M9 — surface 4 is reported dark" "registration surface 4 matched ZERO tracked suites"
+}
 
 # =============================================================================================
 # M10 — delete a `run: bash …` step from a workflow OTHER than infra-validation.yml (surface 5).
 # =============================================================================================
+run_M10() {
 row M10 "delete a run: bash step from another workflow (surface 5)"
 new_sandbox m10
 require_single_surface "$SB" "$S5_SUITE" "M10"
@@ -436,6 +457,7 @@ mutate_or_die "$SB/.github/workflows/validate-vector-config.yml" "$S5_STEP"$'\n'
 run_lint "$SB"; rc=$?
 assert_red "M10" "$rc"
 assert_has "M10 — names the de-registered suite" "${S5_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M11 — an exclusion key matching ZERO tracked files. M7 covers the missing issue-ref and the
@@ -443,6 +465,7 @@ assert_has "M10 — names the de-registered suite" "${S5_SUITE} ${ORPHAN_MSG}"
 # disciplined is a third, distinct failure — and the one that survives longest, because
 # deleting or renaming the suite an exclusion was written for leaves no trace.
 # =============================================================================================
+run_M11() {
 row M11 "exclusion key matching zero tracked files"
 new_sandbox m11
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
@@ -450,6 +473,7 @@ mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
 run_lint "$SB"; rc=$?
 assert_red "M11" "$rc"
 assert_has "M11 — fail-closed on a stale key" "matches 0 tracked files, expected exactly 1"
+}
 
 # =============================================================================================
 # M12 (AC26) — an exclusion key matching TWO tracked files. This is the basename-collision the
@@ -457,6 +481,7 @@ assert_has "M11 — fail-closed on a stale key" "matches 0 tracked files, expect
 # constraint-scaffold/test/ and linear-fetch/test/, and linear-fetch's is one of the suites
 # #7402 exists to keep honest — so the collision lands exactly on the work.
 # =============================================================================================
+run_M12() {
 row M12 "exclusion key matching two tracked files (basename collision)"
 new_sandbox m12
 collide=$(git -C "$SB" ls-files 'plugins/soleur/skills/*/test/parity.test.sh' | wc -l | tr -d ' ')
@@ -466,6 +491,7 @@ mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'EXCLUSIONS=()' \
 run_lint "$SB"; rc=$?
 assert_red "M12" "$rc"
 assert_has "M12 — fail-closed on an ambiguous key" "matches ${collide} tracked files, expected exactly 1"
+}
 
 # =============================================================================================
 # M13 (AC25) — REMOVE SURFACE 6 and assert the loopback suite becomes an orphan. Surface 6 is
@@ -473,6 +499,7 @@ assert_has "M12 — fail-closed on an ambiguous key" "matches ${collide} tracked
 # satisfiable at all, and without this row a later "simplify the two greps into one" edit could
 # delete it and leave the battery green.
 # =============================================================================================
+run_M13() {
 row M13 "remove surface 6 (multi-line \`run: |\` block) — the loopback suite must become an orphan"
 new_sandbox m13
 require_single_surface "$SB" "$LOOPBACK_SUITE" "M13"
@@ -486,6 +513,7 @@ run_lint "$SB"; rc=$?
 assert_red "M13" "$rc"
 assert_has "M13 — the loopback suite is reported as an orphan without surface 6" "${LOOPBACK_SUITE} ${ORPHAN_MSG}"
 assert_has "M13 — surface 6 is reported dark" "registration surface 6 matched ZERO tracked suites"
+}
 
 # =============================================================================================
 # M14 — surface 4 goes dark on the LINTER side rather than the workflow side. M9 removes the
@@ -493,6 +521,7 @@ assert_has "M13 — surface 6 is reported dark" "registration surface 6 matched 
 # (the guard-rot failure). They are different subjects with the same symptom, and only one of
 # them is a change anybody would notice while reviewing a workflow diff.
 # =============================================================================================
+run_M14() {
 row M14 "the surface-4 detector stops matching (guard-side rot)"
 new_sandbox m14
 mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" \
@@ -502,6 +531,7 @@ run_lint "$SB"; rc=$?
 assert_red "M14" "$rc"
 assert_has "M14 — the per-surface zero-check names the dark surface" "registration surface 4 matched ZERO tracked suites"
 assert_has "M14 — and the suite that surface covered is named" "${HOOK_SUITE} ${ORPHAN_MSG}"
+}
 
 # =============================================================================================
 # M15 — the runner stops answering `--print-suite-globs`. M5 proves the linter notices a pattern
@@ -510,6 +540,7 @@ assert_has "M14 — and the suite that surface covered is named" "${HOOK_SUITE} 
 # reported as orphans at once — a report so obviously wrong it gets ignored, taking the real
 # findings with it. Fail-closed means saying WHY.
 # =============================================================================================
+run_M15() {
 row M15 "the runner no longer answers --print-suite-globs (the derivation contract itself)"
 new_sandbox m15
 mutate_or_die "$SB/scripts/test-all.sh" \
@@ -520,6 +551,7 @@ assert_red "M15" "$rc"
 assert_has "M15 — names the broken contract rather than reporting 167 phantom orphans" \
   "--print-suite-globs' exited 2 and printed 0 pattern(s)"
 assert_has "M15 — and says not to re-copy the patterns into the linter" "rather than re-copying the patterns here"
+}
 
 # =============================================================================================
 # M16 — POSITIVE CONTROL for the exclusion mechanism. M7, M11 and M12 each prove a malformed
@@ -528,6 +560,7 @@ assert_has "M15 — and says not to re-copy the patterns into the linter" "rathe
 # three kills and look healthy, and the next person with a legitimate suite to skip would find
 # the escape hatch welded shut.
 # =============================================================================================
+run_M16() {
 row M16 "a well-formed exclusion suppresses its orphan and says so"
 new_sandbox m16
 mkdir -p "$SB/tools/nowhere" || harness_die "M16 mkdir"
@@ -542,6 +575,50 @@ if (( rc == 0 )); then pass "M16 — a correctly-formed exclusion is accepted (e
 fi
 assert_has "M16 — the exclusion is announced with its reason" "note: tools/nowhere/gamma.test.sh excluded -- blocked on a fixture rewrite, tracked in #9999"
 assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/nowhere/gamma.test.sh ${ORPHAN_MSG}"
+}
+
+# --- Row dispatch: bounded-parallel -----------------------------------------------------------
+# Every row builds its own sandbox from PRISTINE (read-only once the harness is built) and
+# asserts against its own .lint-out — the matrix is order-free by construction. Serial cost was
+# ~28 min on CI and put the test-scripts (3/3) leg over its 60-minute ceiling twice (#8322);
+# a bounded pool divides the wall time by the pool width. SOLEUR_ORPHAN_MUT_JOBS overrides it.
+#
+# Mechanics, and the three traps they dodge:
+#   * workers are SUBSHELLS — bash subshells inherit the parent's EXIT trap, and ours rm -rf's
+#     $TMP, so the first worker to finish would delete every sibling's sandbox mid-row. Each
+#     worker clears the trap before anything else.
+#   * harness_die inside a worker kills only that subshell. The parent detects the missing
+#     counters file after the pool drains, replays the row's captured log (which carries the
+#     FATAL line), then dies the same death — the verdict stays "broken harness", never a
+#     phantom pass or a phantom kill.
+#   * PASS/FAIL/ROWS/GLOB_MEMBER_N live in the worker's subshell; each row writes its counters
+#     to $TMP/rows/<id>.rc and the parent aggregates them during the ordered replay below, so
+#     the floors and the summary see exactly the serial numbers.
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16"
+JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
+mkdir -p "$TMP/rows" || harness_die "row-dispatch mkdir"
+for _id in $ROW_IDS; do
+  while (( $(jobs -rp | wc -l) >= JOBS )); do sleep 0.2; done
+  (
+    trap - EXIT
+    PASS=0; FAIL=0; GLOB_MEMBER_N=0
+    "run_${_id}"
+    echo "$PASS $FAIL ${GLOB_MEMBER_N:-0}" > "$TMP/rows/$_id.rc"
+  ) > "$TMP/rows/$_id.log" 2>&1 &
+done
+wait
+
+# Two passes, not one: replay EVERY log first so a dead row cannot hide the logs of the rows
+# after it, then aggregate — where the first missing counters file dies as a broken harness.
+for _id in $ROW_IDS; do cat "$TMP/rows/$_id.log"; done
+for _id in $ROW_IDS; do
+  if [[ ! -f "$TMP/rows/$_id.rc" ]]; then
+    harness_die "row $_id's worker exited without writing counters — its log above carries the FATAL line; the verdict is a broken harness, not a mutation result"
+  fi
+  read -r _p _f _g < "$TMP/rows/$_id.rc"
+  PASS=$((PASS + _p)); FAIL=$((FAIL + _f)); ROWS=$((ROWS + 1))
+  (( _g > 0 )) && GLOB_MEMBER_N=$_g
+done
 
 # --- Floors -----------------------------------------------------------------------------------
 # TWO floors, because they catch different deletions. The ROW floor catches a whole row being

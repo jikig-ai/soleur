@@ -397,6 +397,13 @@ if [[ "${SOLEUR_LINT_ORPHAN_DUMP_SURFACES:-}" == "1" ]]; then
   for i in 1 2 3 4 5 6; do
     while IFS= read -r p; do [[ -n "$p" ]] && echo "SURFACE${i} ${p}"; done < "$WORK/s${i}"
   done
+  # Exit here: the seam's only consumer is the companion suite's single-surface
+  # precondition, which greps SURFACE<i> lines and ignores the exit code. Every
+  # remaining arm (disjointness, relevance, declared edges, classification
+  # receipts) re-derives nothing the dump needs — running them made each
+  # precondition row pay a second full linter invocation for output nobody
+  # reads (#8322 CI: precondition rows were the battery's second-biggest spend).
+  exit 0
 fi
 
 # --- Disjointness, asserted against the LIVE repo ---------------------------------------------
