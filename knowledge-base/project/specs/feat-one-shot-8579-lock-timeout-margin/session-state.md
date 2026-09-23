@@ -152,13 +152,40 @@ None blocking. `scripts/markdown-lint.sh` reports `knowledge-base/project/` is i
 
 ### Verification
 
-- `bash scripts/test-contention.test.sh` — 157/157
+- `bash scripts/test-contention.test.sh` — 163/163 (post-panel; Q1–Q14 queue arms)
 - `bash scripts/test-all-capacity-signal.test.sh` — 80/80
 - `bash scripts/lib/repo-write-boundary.test.sh` — 72/72
 - `bash plugins/soleur/test/fanout-suite-scope.test.sh` — 36/36
 - `bash plugins/soleur/test/fixture-relative-assert.test.sh` — 62/62 (post-regen)
 - `bash plugins/soleur/test/fixture-env-adoption.test.sh` — 26/26
+- Live: ship battery emitted `LOCK_QUEUED: 'test-all' holds ticket 00000001`
+  behind a sibling holder — the queue path exercised on a real run.
+
+## Review Phase
+- Status: complete — design-validity pass (code-simplicity + architecture:
+  sound, minimal mechanism) then the 8-seat code panel. All 10 returned;
+  convergent findings fixed in `e827d5c3ce` (knob sanitization scoped local
+  to preserve the sibling-filter fail-open contract, queue-dir name/symlink
+  hardening, sweep stat-fail direction, EPOCHSECONDS, Q-label collision
+  rename, Q13/Q14 coverage). Trailer `Reviewed-Coverage: full 10/10` on
+  `d458394a36`.
+
+## QA Phase
+- Status: skipped by rule — no browser/API/UI surface; all plan test
+  scenarios are the Q/T arms, executed green in the suites above.
+
+## Compound Phase
+- Status: complete — `knowledge-base/project/learnings/bug-fixes/2026-09-22-exec-redirection-is-permanent-and-fd-inheritance-outlives-the-owner.md`
+  (`bdadee7911`).
+
+## Ship Phase
+- Status: in progress — synced `3d066212e5` (main +1: provision docs only),
+  `semver:patch` set, exit gate clean, net-issue-flow −1, preflight local
+  scan clean (all other checks path-gated SKIP), PR comments: none human.
+  Local battery queued/running on the final tree
+  (log `/var/tmp/ship-battery-8579.8sQ024.log`).
 
 ## Next step
 
-`soleur:review` on PR #8596, then `soleur:qa`, `soleur:compound`, `soleur:ship`.
+Await battery rc + required-check green on `3d066212e5`, mark PR ready,
+`gh pr merge --squash --auto`, post-merge deploy-arm + served-sha verify.
