@@ -71,7 +71,7 @@ fails=0
 cases=0
 
 # Kept in lockstep with MIN_CASES at the bottom; the derivation check there proves it.
-MIN_CASES_EXPECTED=35
+MIN_CASES_EXPECTED=37
 
 # P1b guard (#7708). Every fixture root is asserted before anything is written under it or
 # removed with it. Two repo-global ratchets police this and a new suite trips BOTH unless it is
@@ -305,7 +305,7 @@ fi
 ENUM_GROUPS=()
 while IFS= read -r _g; do
   [[ -n "$_g" && "$_g" != "all" ]] && ENUM_GROUPS+=("$_g")
-done < <(sed -n 's/^[[:space:]]*\(all|[a-z|]*\))[[:space:]]*;;.*$/\1/p' "$RUNNER" | head -1 | tr '|' '\n')
+done < <(sed -n 's/^[[:space:]]*\(all|[a-z|-]*\))[[:space:]]*;;.*$/\1/p' "$RUNNER" | head -1 | tr '|' '\n')
 # CARDINALITY IS NOT VALIDITY. An earlier revision of this block checked only the count, and
 # passed on garbage: `GROUPS` is a bash SPECIAL ARRAY holding the current user's group ids, so
 # `GROUPS=()` does not clear it and `+=` appended to `1000 998` (`id -G`). The count check said
@@ -316,7 +316,7 @@ if (( ${#ENUM_GROUPS[@]} < 2 )); then
   exit 1
 fi
 for _g in "${ENUM_GROUPS[@]}"; do
-  if [[ ! "$_g" =~ ^[a-z]+$ ]]; then
+  if [[ ! "$_g" =~ ^[a-z-]+$ ]]; then
     echo "ERROR: fixture precondition failed — derived enumerate group '$_g' is not a lowercase name; the derivation is reading something other than the runner's TEST_GROUP case arm" >&2
     exit 1
   fi
@@ -563,7 +563,7 @@ fi
 # the bound written as `$(( 23 + 2 * ${#ENUM_GROUPS[@]} ))` that guard reported 22/1, naming this
 # file as "a floor enforced THROUGH the machinery it guards". The derivation check above keeps
 # the literal honest without putting an expansion next to the `if`.
-MIN_CASES=35
+MIN_CASES=37
 if (( cases < MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2

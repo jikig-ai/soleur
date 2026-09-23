@@ -260,6 +260,17 @@ extract_sha() {
   grep -oE 'GITLEAKS_SHA256["]?[[:space:]]*[:=][[:space:]]*"?[0-9a-f]{64}' "$1" \
     | grep -oE '[0-9a-f]{64}' | head -1
 }
+# IN-FILE duplicates are a parity surface too. `test-scripts-heavy` clones the
+# gitleaks env block inside ci.yml, so the same pin now lives twice in one file —
+# and the `head -1` extractors above would never see the second copy diverge.
+extract_versions_all() {
+  grep -oE 'GITLEAKS_VERSION["]?[[:space:]]*[:=][[:space:]]*"?[0-9]+\.[0-9]+\.[0-9]+' "$1" \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u
+}
+extract_shas_all() {
+  grep -oE 'GITLEAKS_SHA256["]?[[:space:]]*[:=][[:space:]]*"?[0-9a-f]{64}' "$1" \
+    | grep -oE '[0-9a-f]{64}' | sort -u
+}
 
 for f in "$SECRET_SCAN_YML" "$CI_YML" "$ACTION_YML" "$MHM_YML"; do
   assert_file_exists "$f" "pin site exists: ${f##*/}"
@@ -284,6 +295,17 @@ assert_eq "$ss_s" "$ci_s" "(5d) secret-scan.yml SHA256 == ci.yml SHA256"
 assert_eq "$ss_s" "$ac_s" "(5e) secret-scan.yml SHA256 == action SHA256"
 assert_eq "$ss_v" "$mhm_v" "(5f) secret-scan.yml version == main-health-monitor version"
 assert_eq "$ss_s" "$mhm_s" "(5g) secret-scan.yml SHA256 == main-health-monitor SHA256"
+
+# (5g2/5g3) Every in-file declaration of the pin must agree — a file that says
+# the same thing twice must say it ONCE. ci.yml now carries the gitleaks env in
+# both test-scripts jobs; a bump that edits only the first copy stays green
+# under 5b-5g while the heavy leg runs a different binary.
+for f in "$SECRET_SCAN_YML" "$CI_YML" "$ACTION_YML" "$MHM_YML"; do
+  _nv="$(extract_versions_all "$f" | grep -c . || true)"
+  _ns="$(extract_shas_all "$f" | grep -c . || true)"
+  assert_eq "1" "$_nv" "(5g2) ${f##*/} declares exactly one distinct gitleaks version"
+  assert_eq "1" "$_ns" "(5g3) ${f##*/} declares exactly one distinct gitleaks SHA256"
+done
 
 # (5h/5i) The OPERATOR-FACING remediation strings carry the same version. These are
 # a 5th and 6th declaration site the four-workflow comparison above cannot see: both

@@ -633,19 +633,44 @@ t_single_trigger_logictype_is_not_a_flip() {
 
 # (k) NORMALISE IS ORDER-INSENSITIVE AND DATA-SENSITIVE. Swapping the VALUES of
 # two conditions with DIFFERENT keys changes the data (the set of (key,value)
-# pairs), so `sort_by(tostring)` must not hide it. zot-mirror-fallback-rate has
-# five action-filter conditions; [0] is registry=ghcr-fallback and [2] is
-# stage=inngest_ghcr_fallback.
+# pairs), so `sort_by(tostring)` must not hide it.
+#
+# SELECTED BY KEY, NOT BY INDEX (#8036 1c). This used to read "[0] is
+# registry=ghcr-fallback and [2] is stage=inngest_ghcr_fallback" and index those
+# two positions directly. 1c removed the `ghcr-fallback` condition, so [0] became
+# a different member and every later index shifted by one — the mutation would
+# still have landed and the row would still have passed, but on a pair it had not
+# chosen, with its own comment describing operands that were no longer there. A
+# positional pin carries no claim about WHICH members it compares.
+#
+# Keyed selection also keeps the row meaningful across the pre-apply/post-apply
+# window: the committed capture is still the five-condition live rule until the
+# merge fires `apply-sentry-infra.yml`, so an index-free lookup is the only form
+# that addresses the same two members before and after.
+#
+# The mutation ABORTS rather than silently no-opping if either key is absent:
+# `_drift_case` reports a NOOP as "the mutation did not land — this row compared
+# the capture to itself and proves nothing", which is the failure mode a null
+# index would otherwise produce.
 t_value_swap_is_drift() {
   _drift_case valueswap \
     'map(if .name=="zot-mirror-fallback-rate" then
-           (.actionFilters[0].conditions[0].comparison.value) as $a
-           | (.actionFilters[0].conditions[2].comparison.value) as $b
-           | .actionFilters[0].conditions[0].comparison.value = $b
-           | .actionFilters[0].conditions[2].comparison.value = $a
+           (.actionFilters[0].conditions
+              | to_entries
+              | map(select(.value.comparison.key=="registry"))[0].key) as $i
+           | (.actionFilters[0].conditions
+              | to_entries
+              | map(select(.value.comparison.key=="stage"))[0].key) as $j
+           | if ($i == null or $j == null) then .
+             else
+               (.actionFilters[0].conditions[$i].comparison.value) as $a
+               | (.actionFilters[0].conditions[$j].comparison.value) as $b
+               | .actionFilters[0].conditions[$i].comparison.value = $b
+               | .actionFilters[0].conditions[$j].comparison.value = $a
+             end
          else . end)' \
     'comparison.value' \
-    "F27 swapping comparison.value between two differently-keyed conditions is DRIFT (order-insensitive, data-sensitive)"
+    "F27 swapping comparison.value between a registry-keyed and a stage-keyed condition is DRIFT (order-insensitive, data-sensitive; selected by key, never by index)"
 }
 
 # (i) TF/LIVE SHAPE PARITY — the structural anchor for the module's `tf` side,
