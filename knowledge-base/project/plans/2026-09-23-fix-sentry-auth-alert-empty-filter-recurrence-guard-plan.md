@@ -14,6 +14,47 @@ brand_survival_threshold: aggregate pattern
 
 # fix(sentry): close #4781 — auth alert empty-filter recurrence guard
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23. Halt gates run: 4.6 User-Brand, 4.7 Observability (the
+probe-verb gate accepts `bash`), 4.8 PAT (no hits), 4.10 Encryption Posture, and 4.11 Guard
+Contract (`lint-guard-contract.py` green, one entry).
+
+**Agents (proportionate to a ~10-line probe change that 8 plan-time agents had already
+reviewed):** security-sentinel, test-design-reviewer, observability-coverage-reviewer. All
+cited PR/issue numbers and the attributed commit were verified live (`gh`, `git
+merge-base --is-ancestor`).
+
+### Key improvements
+
+1. **Security (P1 ×2, pre-existing, on the line this plan rewrites):**
+   - The UNMANAGED line printed vendor-controlled names raw into the runner log and a
+     public issue body. A CR survives `read`, which allows `::` workflow-command injection
+     and escape from the fence.
+   - `keys[] | read` split names at LF, so a fragment could impersonate a frozen rule.
+   - Fix: classification now runs in one jq pass with whole-key matching and the pin's
+     `safe`, pinned by the new row F36 (`EXPECTED_TESTS` goes to 69).
+2. **Test design:**
+   - The guard keys on bash's `line N:` error prefix under `LC_ALL=C`. That catches M6's
+     `unbound variable`, and it does not depend on the locale.
+   - One `F4781_FROZEN` array drives F35.
+   - F35's negative checks share the one `if` with the positive ones.
+   - F10 is scoped to its own line.
+   - Added M1c, M2b, M7 and M8, and a protocol: unmutated tree exits 0 first, mutations
+     restored with `git checkout`.
+3. **Observability:**
+   - Layer-6 citations on the detection lines.
+   - A new declared failure mode: a refusal before the verdict hides UNMANAGED and LEFT
+     lines.
+   - The id-aware remedy in the LEFT finding and in the guide bullet.
+   - The dead-man coverage limit is stated.
+
+### Deferred (one tracking issue, filed during /work)
+
+- Parity between the guide's classes and the probe's.
+- Bidi and zero-width ranges in both sanitizers.
+- Anchoring the verdict grep to `^ERROR: …FAILED`, which touches the W7 contract.
+
 ## Overview
 
 After the 2026-06-02 incident, when the four `auth-*` Sentry alert rules were found with
@@ -246,7 +287,7 @@ Two files were cut from the note list by the plan review:
 - **Kieran** (fixtures run in the scratchpad; no P0):
   - The F35 fixture must use `map(if … else . end)`, not `map(select(…))`, and it gets a
     fixture-guard assertion.
-  - F22 and F35 get their own `command not found` checks, and M2's red set is corrected.
+  - F22 and F35 get their own `command not found` checks (widened at deepen to the bash `line N:` error prefix), and M2's red set is corrected.
   - The refusal-order trade is stated.
   - AC3 records the full red set.
 - **Simplicity vs DHH/advisor conflict on the `_drift_case` guard:** kept. It is one line,
@@ -256,56 +297,90 @@ Two files were cut from the note list by the plan review:
 
 ### Phase 1 — RED
 
-`tests/scripts/test-sentry-alert-live-fidelity.sh`, with `EXPECTED_TESTS` going 67 → **68**:
+`tests/scripts/test-sentry-alert-live-fidelity.sh`, with `EXPECTED_TESTS` going 67 → **69**:
 
-1. **`_drift_case` guard** (no count change): a row fails when `$_out` contains
-   `command not found`.
-2. **New row F35 `t_auth_rules_emptied_4781`.** This is the #4781 incident, plus the second
-   frozen member. It is a custom function, because `_drift_case` takes one marker.
+1. **Locale-pinned bash-error guard** (no count change).
+   - `_run` and `_run_env` export `LC_ALL=C`, because bash localises its error messages.
+   - `_drift_case`, F22, F35 and F36 each fail when `$_out` matches
+     the ERE `sentry-alert-live-fidelity.sh: line [0-9]+:` (followed by one space). That is the bash error prefix. It catches
+     `command not found` and also `unbound variable` (the `set -u` abort of M6).
+   - Verified 2026-09-23: no finding text in the probe matches `: line [0-9]` (grep returns
+     nothing).
+   - (test-design review: a bare `command not found` grep is locale-dependent and misses
+     M6.)
+2. **One frozen-name array** at file scope: `F4781_FROZEN=(auth-per-user-loop sandbox-startup-failure)`.
+   It drives F35's jq `IN(...)` list, its header arithmetic and its per-name loops, so the
+   `+2` is never typed.
+3. **New row F35 `t_auth_rules_emptied_4781`.** This is the #4781 incident plus the second
+   frozen member. It is a custom function, since `_drift_case` takes one marker.
    - **Fixture:** `_mutant auth4781` with the program
-     `map(if (.name | IN("auth-callback-no-code-burst", "auth-exchange-code-burst",
-     "auth-signout-burst", "auth-per-user-loop", "sandbox-startup-failure")) then
-     .triggers.conditions=[] | .actionFilters=[.actionFilters[]|.conditions=[]] else . end)`.
-     Fail on `JQFAIL` or `NOOP`. Use `map(if … else . end)`, **not** `map(select(…))`: the
-     `select` form deletes the other 26 workflows, and every assertion below would still pass
-     on that wrong fixture (Kieran P1, measured).
-   - **Assertions,** each a separate `grep -qF`:
+     `map(if (.name | IN(<3 burst names>, <F4781_FROZEN>)) then .triggers.conditions=[] |
+     .actionFilters=[.actionFilters[]|.conditions=[]] else . end)`. Fail on `JQFAIL` or `NOOP`.
+     Use `map(if … else . end)`, **not** `map(select(…))`: the `select` form deletes the other
+     26 workflows, and every assertion below would still pass on that wrong fixture (Kieran
+     P1, measured).
+   - **Assertions, all in ONE `if`** (so the negative checks can never pass alone on empty
+     output), with one `detail+=` entry per missing marker in the style of F19:
      - `_rc == 1`;
-     - fixture guard: no `DELETED or RENAMED`, and the header reads
-       `comparing ${N} declared rule(s) against $((N + 2)) live in-scope rule(s)`. `N` is the
-       suite's derived reference count; the two frozen copies now count as in scope.
-     - for each of the 3 burst rules, `DRIFT: '<name>'.triggerConditions` and
-       `DRIFT: '<name>'.actionFilters`;
+     - header `comparing ${N} declared rule(s) against $((N + ${#F4781_FROZEN[@]})) live in-scope rule(s)`
+       (fixture guard), and no `DELETED or RENAMED`;
+     - for each of the 3 burst rules: `DRIFT: '<name>'.triggerConditions` and `….actionFilters`;
      - `FROZEN DRIFT: 'auth-per-user-loop'.triggerConditions`;
-     - for both frozen names, `FROZEN RULE LEFT SCOPE: '<name>'` present and
+     - for each name in `F4781_FROZEN`: `FROZEN RULE LEFT SCOPE: '<name>'` present and
        `UNMANAGED: '<name>'` absent;
-     - no `command not found`. This row bypasses `_drift_case`, so it needs its own check.
-3. **F22** (custom row, no count change): add `! grep -qF 'command not found'`. F22 is the
-   other row that emits UNMANAGED outside `_drift_case`.
-4. **Tighten F10** (no count change): assert that the UNMANAGED finding contains the literal
-   `` `def excluded` ``.
+     - no bash-error prefix.
+4. **New row F36 `t_unmanaged_name_is_scrubbed_and_whole`** (security review P1-1 and P1-2).
+   This is a pre-existing gap on the very line this plan rewrites. L373 prints `'$name'`
+   raw, and `jq -r 'keys[]' | read` splits a live name at LF. The consequences:
+   - a CR survives into the runner log and the public issue body, which enables
+     `::`-workflow-command injection and escape from the fence;
+   - a name such as `auth-per-user-loop<LF>x` yields a fragment that impersonates a frozen
+     rule.
 
-Run the suite in the background. Expected result: F35 and F10 RED (F10 also trips the
-`_drift_case` guard), and every other row green.
+   Fixture: the capture plus one undeclared, in-scope workflow whose name is
+   `"auth-per-user-loop\nx\r::error::spoofed"`. Assertions:
+   - `_rc == 1`;
+   - no output line starts with `::error::spoofed`;
+   - no `FROZEN RULE LEFT SCOPE: 'auth-per-user-loop'`, because the fragment must not
+     impersonate the frozen rule;
+   - exactly one `UNMANAGED: '` line for the synthetic workflow, with its control characters
+     stripped;
+   - no bash-error prefix.
+5. **F22** (custom row, no count change): add the bash-error-prefix check. F22 is the other
+   row that emits UNMANAGED outside `_drift_case`.
+6. **Tighten F10** (no count change): take the line matching `UNMANAGED: 'created-in-the-ui'`
+   and assert that **it** contains `def excluded`. Match the words, not the backticks, and
+   scope to that line, not the whole output (test-design review).
+
+Run the suite in the background. Expected result: F35, F36 and F10 RED (F10 also trips the
+guard), and every other row green.
 
 ### Phase 2 — GREEN
 
 `scripts/sentry-alert-live-fidelity.sh`:
 
 1. Escape the backticks on the UNMANAGED line (`` \`def excluded\` ``).
-2. **Move the UNMANAGED loop down** so it sits after the `missing_cap` refusal (L476) and
-   before the frozen pin (L478). `frozen_names_json` exists at that point. Inside the loop, a
-   name that belongs to `frozen_names_json` emits
-   **`FROZEN RULE LEFT SCOPE: '<name>'`** in place of `UNMANAGED:`. The message says:
-   - the rule is Terraform-frozen (`legacy_trigger_conditions`, `ignore_changes = all`);
-   - its live copy no longer carries an excluded trigger type, so the frozen-rule pin
-     compares it and the reference does not;
-   - do NOT delete it, and do NOT register it as a vendor default;
-   - repair it per the `FROZEN …` findings for the same name (PUT from the capture entry).
+2. **Move the UNMANAGED loop down, and let jq classify.** Place it after the `missing_cap`
+   refusal (L476) and before the frozen pin (L478), where `frozen_names_json` exists. Replace
+   the bash `keys[] | read` loop with ONE jq pass. The pass matches each **whole** key, so an
+   LF can no longer split a name. It emits one line per undeclared in-scope key:
+   `LEFT<TAB><safe name>` when the key belongs to `$fz`, else `UNMANAGED<TAB><safe name>`.
+   `safe` is the same definition as the frozen pin's (L509): strip C0, DEL, U+2028 and
+   U+2029, then cap at 200. Bash then prints the two classes:
+   - `UNMANAGED: '<name>' …`: the existing text, with its backticks escaped.
+   - `FROZEN RULE LEFT SCOPE: '<name>' …`. The message says:
+     - the rule is Terraform-frozen (`legacy_trigger_conditions`, `ignore_changes = all`);
+     - a live workflow with that name no longer carries an excluded trigger type, so the
+       frozen-rule pin compares it and the reference does not;
+     - GET its id; if the id is the captured id, repair it per the `FROZEN …` findings for
+       the same name (PUT from the capture entry), and **never delete it or register it as
+       a vendor default**;
+     - if the id is NOT the captured id, it is a copy, and the `FROZEN DUPLICATE` remedy
+       applies (the id-aware wording comes from the observability review, P2).
+   - The remedy never quotes `'<name>'` next to `FROZEN DRIFT`.
 
-   Wrap the name in `_safe`, and use no unescaped backticks. The loop's header comment gains
-   one sentence covering the frozen arm. No refusal moves, and the per-rule loop stays above
-   all of them.
+   The loop's header comment gains one sentence. No refusal moves, and the per-rule loop
+   stays above all of them.
 3. Epilogue (L631): add one clause to the class list: "FROZEN RULE LEFT SCOPE is a
    Terraform-frozen rule whose live copy lost its excluded trigger: repair it from the
    capture, never delete it".
@@ -313,12 +388,18 @@ Run the suite in the background. Expected result: F35 and F10 RED (F10 also trip
 `.github/workflows/scheduled-sentry-alert-drift.yml`, one guide bullet (L200):
 
 4. Add `` / `FROZEN RULE LEFT SCOPE` `` to the `FROZEN DRIFT / … / FROZEN DUPLICATE` class
-   list, plus the clause "never delete it or register it as a default". A reader matching by
-   exact class name then lands on the capture-PUT remedy, and not on UNMANAGED or GAINED
-   (CTO).
+   list, plus the clause "GET the id first; never delete the captured id or register it as a
+   default". A reader matching by exact class name then lands on the capture-PUT remedy, and
+   not on UNMANAGED or GAINED (CTO).
 
-Re-run the suite and expect **68 passed, 0 failed**. Then run the Guard Contract matrix and
-revert each mutation.
+Re-run the suite and expect **69 passed, 0 failed**. Then run the Guard Contract matrix.
+**Protocol:**
+
+- First confirm that the unmutated tree exits 0.
+- A mutation counts only when the suite exits 1 **and** the named row prints `[FAIL]`.
+- Mutate the tracked probe in place, and restore it with `git checkout -- <file>` after
+  each mutation. The probe derives `REPO_ROOT` from its own path, so a copy elsewhere would
+  not run.
 
 ### Phase 3 — Lore correction (docs)
 
@@ -381,9 +462,14 @@ Runbooks, edited in place:
 - **Before every push:** the two operator-mandated lints,
   `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`, and
   `npx markdownlint-cli2` on the edited `.md` files.
-- **Deferral (file during /work):** open an issue for a parity check between the probe's
-  finding classes and the drift guide's bullets (CTO P2). Without it, the next new class
-  misses the guide the same way.
+- **Deferral (file during /work):** open one tracking issue covering three follow-ups:
+  - A parity check between the probe's finding classes and the drift guide's bullets (CTO
+    P2). Without it, the next new class misses the guide the same way.
+  - Adding bidi-override and zero-width ranges to both `_safe` and the jq `safe`
+    (security P2-3).
+  - Anchoring the drift workflow's verdict grep to `^ERROR: sentry_alert live fidelity
+    FAILED` (security P2-5). This one touches the W7 contract in
+    `tests/scripts/test-sentry-alert-drift-workflow.sh`, so it gets its own change.
 - **After merge:** once the push-to-main apply and its post-apply probe are green, post one
   comment on the (auto-closed) #4781 that cites that run and the limits.
 
@@ -433,19 +519,24 @@ Files to Edit on 2026-09-23.
   user flow (`byok-art-33-breach`, or the auth bursts that page on OAuth breakage) could go
   dark unreported. The first user hit by that flow would then not reach the operator.
 - **If this leaks, the user's data is exposed via:** nothing new. The probe's credential
-  handling (token on stdin, destination pin, xtrace refusal) is unchanged, and findings
-  print only rule names and configuration.
+  handling (token on stdin, destination pin, xtrace refusal) is unchanged. Rule names,
+  however, are free text controlled by Sentry org members and by the vendor, and they are
+  printed into the runner log and a PUBLIC issue body. Today the UNMANAGED line prints them
+  raw, and a CR allows `::` workflow-command injection or an escape from the fence. This
+  plan closes that on the line it rewrites (whole-key jq classification plus `safe`,
+  pinned by F36).
 - **Brand-survival threshold:** `aggregate pattern`.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `bash tests/scripts/test-sentry-alert-live-fidelity.sh` → `=== 68 passed, 0 failed ===`, exit 0.
-- [ ] AC2: Before Phase 2, the same suite reports F35 and F10 FAILED and every other row
-  passed. The RED output is quoted in the PR body.
-- [ ] AC3: Every Guard Contract mutation reds the row it names, and was observed doing so
-  (each one reverted). The PR body records the **full** red set for each mutation, including
+- [ ] AC1: `bash tests/scripts/test-sentry-alert-live-fidelity.sh` → `=== 69 passed, 0 failed ===`, exit 0.
+- [ ] AC2: Before Phase 2, the same suite reports F35, F36 and F10 FAILED and every other
+  row passed. The RED output is quoted in the PR body.
+- [ ] AC3: The unmutated tree first exits 0. Then every Guard Contract mutation makes the
+  suite exit 1 with the named row printing `[FAIL]`, and was observed doing so (each one
+  restored with `git checkout -- <file>`). The PR body records the **full** red set for each mutation, including
   expected collateral (for example, M3 also reds F35, and M6's abort also reds F10 and F22),
   so a later reviewer can tell collateral from a regression.
 - [ ] AC4: `git diff origin/main -- tests/scripts/lib/sentry-alert-projection.jq apps/web-platform/infra/sentry/alert-reference.json`
@@ -499,7 +590,8 @@ is built.
 `scripts/sentry-alert-live-fidelity.sh`, whose callers are four emitters:
 
 1. the per-rule loop;
-2. the UNMANAGED loop, which gains the frozen arm;
+2. the UNMANAGED classifier, now one jq pass with whole-key matching and `safe`, which
+   gains the frozen arm;
 3. the frozen pin's `FINDING` lines;
 4. the hand-off reconciliation.
 
@@ -511,18 +603,25 @@ the projection module, which is unchanged.
 
 | # | Mutation | Expected RED row |
 |---|---|---|
-| M1 | Remove the frozen arm (frozen names fall through to `UNMANAGED:`) | F35 |
-| M1b | Replace the frozen arm with a silent `continue` (the rejected design) | F35 (`FROZEN RULE LEFT SCOPE` absent) |
-| M2 | Un-escape the backticks on the UNMANAGED line | F10 (the literal check and the `_drift_case` guard) and F22 (its own `command not found` check). F10 is the only `_drift_case` row that emits UNMANAGED (Kieran, measured) |
-| M3 | Unconditional `continue` in the UNMANAGED loop | F10 and F22 |
-| M4 | **Dispatch**: drop `t_auth_rules_emptied_4781` from the call list (leave `EXPECTED_TESTS=68`) | harness count check (`ran 67, expected 68`) |
-| M5 | **Second member**: apply the frozen arm only to the first frozen name encountered | F35 (asserts both frozen names) |
-| M6 | **Order**: move the UNMANAGED loop back above the frozen-name derivation | F35. The expected outcome is an abort under `set -u` (unset `frozen_names_json`), and either an abort or a fall-through reds F35 |
+| M1 | Remove the frozen arm from the jq classifier (frozen names fall through to `UNMANAGED:`) | F35 |
+| M1b | Replace the frozen arm with a silent drop (the rejected design) | F35 (`FROZEN RULE LEFT SCOPE` absent) |
+| M1c | Make the frozen predicate always true (every undeclared key becomes `LEFT`) | F10, F22 (test-design review) |
+| M2 | Un-escape the backticks on the UNMANAGED line | F10 (the `def excluded` line check and the bash-error guard) and F22 (bash-error check) |
+| M2b | **Guard independence**: M2 with F10's `def excluded` line check deleted | F10 still RED, from the bash-error guard alone |
+| M3 | Emit no UNMANAGED lines at all | F10 and F22 (collateral: F35 and F36) |
+| M4 | **Dispatch**: drop `t_auth_rules_emptied_4781` from the call list (leave `EXPECTED_TESTS=69`) | harness count check (`ran 68, expected 69`) |
+| M5 | **Second member**: apply the frozen arm only to the first frozen name encountered | F35 (it loops over `F4781_FROZEN`) |
+| M6 | **Order**: move the classifier back above the frozen-name derivation | F35. The expected outcome is a `set -u` abort (`unbound variable`); the bash-error guard reds every row that runs |
+| M7 | Revert to the bash `keys[] \| read` loop without `safe` (the pre-existing shape) | F36 (`::error::spoofed` line and fragment impersonation) |
+| M8 | Drop `safe` from the jq classifier while keeping the whole-key match | F36 (the CR survives, so a `::error::spoofed` line appears) |
 
 **Harness rows.**
 
 - **H1 (a suite edit that must RED):** point F35's selector at a non-existent name. The
   `_mutant` landing check reports `NOOP` and F35 fails.
+- **H1b:** drop `LC_ALL=C` from `_run` and run under a non-English locale that has bash
+  translations installed. The guard keeps matching, because it keys on the untranslated
+  `line N:` prefix. This is recorded as a check, not a CI row.
 - **H2 (inputs that must PASS but are not canonical):** F1 identity, F13 (API-shaped payload)
   and G4-6 (frozen pin identity) stay green after Phase 2.
 
@@ -545,14 +644,17 @@ error_reporting:
 
 failure_modes:
   - mode: "a Terraform-owned auth burst rule's triggers or tag filters emptied live"
-    detection: "probe per-rule loop: DRIFT on triggerConditions / actionFilters"
+    detection: "probe per-rule loop: DRIFT on triggerConditions / actionFilters — layer 6: workflow run log (::error::sentry_alert drift detected + cat probe.txt) and probe stdout in the ci/sentry-alert-drift issue body"
     alert_route: "ci/sentry-alert-drift p1 issue; remedy re-run apply-sentry-infra.yml"
   - mode: "auth-per-user-loop (frozen) emptied or its trigger type changed live"
-    detection: "probe frozen pin FROZEN DRIFT + FROZEN RULE LEFT SCOPE (no UNMANAGED co-finding after this change)"
+    detection: "probe frozen pin FROZEN DRIFT + FROZEN RULE LEFT SCOPE (no UNMANAGED co-finding after this change) — layer 6: workflow run log + probe stdout in the issue body"
     alert_route: "ci/sentry-alert-drift p1 issue; remedy PUT from the capture entry"
   - mode: "the probe itself does not run"
-    detection: "Sentry cron monitor missed check-in for scheduled-sentry-alert-drift"
+    detection: "Sentry cron monitor missed check-in for scheduled-sentry-alert-drift (layer 2) — covers the DAILY Inngest-dispatched run only; the post-apply run has no dead-man signal and is covered by the apply job's own red status"
     alert_route: "Sentry issue → operator email"
+  - mode: "the probe refuses before its verdict (excluded_def, vendor registry, zero frozen names, missing capture), so UNMANAGED / FROZEN RULE LEFT SCOPE lines are not printed for that run"
+    detection: "layer 6: workflow run log ::error:: + the probe-unavailable issue (verdict=unavailable) naming the refusal class; the per-rule DRIFT lines still print above every refusal"
+    alert_route: "ci/sentry-alert-drift issue (unavailable class); remedy fix the refusal, re-run"
 
 logs:
   where: "GitHub Actions run logs for scheduled-sentry-alert-drift.yml and apply-sentry-infra.yml"
@@ -580,8 +682,12 @@ in_transit: []
   - `FROZEN DRIFT` and `FROZEN RULE LEFT SCOPE` for `auth-per-user-loop`, and
     `FROZEN RULE LEFT SCOPE` for `sandbox-startup-failure`.
   - No UNMANAGED for either frozen rule.
-- **T2 (F10):** an undeclared rule created in the UI → UNMANAGED, with the remedy text
-  intact and no `command not found`.
+- **T2 (F10):** an undeclared rule created in the UI → UNMANAGED, and its own line carries
+  `def excluded`. No bash-error prefix.
+- **T2b (F36):** an undeclared workflow named `auth-per-user-loop\nx\r::error::spoofed` →
+  - exactly one scrubbed UNMANAGED line;
+  - no line starts with `::error::spoofed`;
+  - no `FROZEN RULE LEFT SCOPE: 'auth-per-user-loop'`.
 - **T3:** F1, F13 and G4-6 still PASS.
 - **T4 (optional, needs credentials):** the live read-only probe prints `PASS (all 31 …)`.
 
