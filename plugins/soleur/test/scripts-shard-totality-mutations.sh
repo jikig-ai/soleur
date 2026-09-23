@@ -291,12 +291,42 @@ row "ROW4" "$RUNNER" \
   RED "every leg claims every registration (union right, multiset wrong)"
 
 # --- Row 5: ci.yml leg count disagrees with N -------------------------------------------------
-# Two legs whose values still say /3: leg 3's suites run nowhere and both surviving legs are
+# Four legs whose values still say /5: leg 5's suites run nowhere and all surviving legs are
 # green. A count-based read of the matrix cannot see this.
 row "ROW5" "$CI_YML" \
+  '        shard: ["1/5", "2/5", "3/5", "4/5", "5/5"]' \
+  '        shard: ["1/5", "2/5", "3/5", "4/5"]' \
+  RED "ci.yml declares 4 legs while the partition computes mod 5"
+
+# --- Row 5b: the HEAVY job's leg count disagrees with N ----------------------------------------
+# Same defect shape one job down: the test-scripts-heavy matrix is its own literal, and the
+# scripts-group mutation above cannot reach it.
+row "ROW5B" "$CI_YML" \
   '        shard: ["1/3", "2/3", "3/3"]' \
   '        shard: ["1/3", "2/3"]' \
-  RED "ci.yml declares 2 legs while the partition computes mod 3"
+  RED "the heavy job declares 2 legs while its partition computes mod 3"
+
+# --- Row 5c: a heavy registration re-gated to the light group -----------------------------------
+# Moving the want_* gate back puts the heavy suites under `scripts`: the heavy reference set is
+# then EMPTY, and a guard that cannot see that is guarding nothing. This is also the coverage-
+# loss shape: three suites leaving their dedicated job while `test` stays green.
+row "ROW5C" "$RUNNER" \
+  'if want_scripts_heavy; then
+  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites.' \
+  'if want_scripts; then
+  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites.' \
+  RED "the heavy group is emptied by a re-gate (reference extraction must notice)"
+
+# --- Row 5d: the heavy matrix->env wire ---------------------------------------------------------
+# The declared leg VALUES are not what the leg RECEIVES; only the interpolation inside the
+# test-scripts-heavy job block carries k/N. Replacing it with a literal leaves every declared
+# value untouched while all heavy legs run leg 1's suite.
+row "ROW5D" "$CI_YML" \
+  '# (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
+      SCRIPTS_SHARD: ${{ matrix.shard }}' \
+  '# (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
+      SCRIPTS_SHARD: "1/3"' \
+  RED "the heavy job's SCRIPTS_SHARD binding is a literal, not the matrix interpolation"
 
 # --- Row 7: filter in run_suite but not skip_suite ---------------------------------------------
 # Both increment `suites`. Filtering only one makes every leg emit the skip_suite registrations,
@@ -410,16 +440,19 @@ row "ROW10" "$RUNNER" \
 
 # --- MUST-PASS non-canonical input ------------------------------------------------------------
 # Raising a leg's ceiling AND keeping the partition intact must NOT red the guard: it is a
-# totality guard, not a performance guard.
+# totality guard, not a performance guard. The anchor carries the preceding justification line
+# because `timeout-minutes: 60` + the setup-node note exists in BOTH test-scripts jobs now.
 row "MUSTPASS" "$CI_YML" \
-  '    timeout-minutes: 60
+  '    # capping a hung leg at 1 hour instead of GitHub'"'"'s 6-hour default.
+    timeout-minutes: 60
     # No setup-node' \
-  '    timeout-minutes: 59
+  '    # capping a hung leg at 1 hour instead of GitHub'"'"'s 6-hour default.
+    timeout-minutes: 59
     # No setup-node' \
   GREEN "an unrelated ceiling edit that changes no assignment"
 
 # --- ASSERTION FLOOR ---------------------------------------------------------------------------
-MIN_ROWS=12
+MIN_ROWS=15
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The battery did not run to completion.\n' "$TOTAL" "$MIN_ROWS" >&2

@@ -377,8 +377,8 @@ verdict was deliberately cut; see the ADR-133 2026-08-19 addendum.
 
 **Ask whether the battery is still OWED before running it (#8247).** CI's required
 `test` context aggregates `test-webplat` + `test-bun` + `test-scripts` +
-`web-platform-build`. `test-all.sh` registers every suite inside one of
-`want_scripts` / `want_bun` / `want_webplat` / `want_infra`, so a local
+`test-scripts-heavy` + `web-platform-build`. `test-all.sh` registers every suite inside one of
+`want_scripts` / `want_scripts_heavy` / `want_bun` / `want_webplat` / `want_infra`, so a local
 `TEST_GROUP=all` is CI's `test` plus the **infra** group — and CI additionally
 runs the relevance-gated suites the local run declines (`_diff_touches`
 short-circuits under `CI`). When the tree you are about to ship is byte-identically
