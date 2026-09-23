@@ -52,7 +52,8 @@ A Phase 0 spike on the pinned server behind a real Cloudflare tunnel decides the
   single-flight guard in `spawnClaudeEval`.
 - **Branch B (fallback):** detach and poll.
 
-Also in the PR: Opus 5 → Opus 5.5 for the audit tier, `--max-budget-usd` per spawn site, a
+Also in the PR: `--max-budget-usd` per spawn site (the Opus 5 → Opus 5.5 audit-tier re-pin it
+planned landed first on main via #8601), a
 manual-trigger throttle, and Better Stack alerts on inngest-server 524s and on daily spend.
 
 ## Key insight

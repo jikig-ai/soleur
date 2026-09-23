@@ -42,9 +42,5 @@ import { SONNET_MODEL } from "./leader-prompts/constants";
 /** Execution-class crons run on sonnet. Imported, not re-declared (FR3 — no second SSOT). */
 export const EXECUTION_MODEL = SONNET_MODEL;
 
-/**
- * Deep-audit crons run on opus-5-5. Pinned exactly; re-tiering is out of scope (ADR-053).
- * Same-tier re-pin opus-5 -> opus-5-5 (#8611): Opus 5.5 bills less than Opus 5 on every
- * line item (input, cache write, cache read, output), so the move is a pure cost cut.
- */
+/** Deep-audit crons run on opus-5-5. Pinned exactly; re-tiering is out of scope (ADR-053). */
 export const AUDIT_MODEL = "claude-opus-5-5" as const;

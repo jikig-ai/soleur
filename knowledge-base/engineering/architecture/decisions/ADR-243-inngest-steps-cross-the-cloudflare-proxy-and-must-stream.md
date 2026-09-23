@@ -81,7 +81,8 @@ this ADR (shared state, or host affinity for `/api/inngest`).
   re-priced to Opus 5.5; sites with no funded run take a tier default ($10 audit, $5 execution).
 - `throttle: { limit: 2, period: "1h" }` on all 18 (the pinned server honours it: spike, 2 ran / 2
   queued). This bounds manual `soleur:trigger-cron` fires, each of which is a new run with a fresh cap.
-- `AUDIT_MODEL` re-pinned `claude-opus-5` → `claude-opus-5-5` (cheaper on every price axis).
+- `AUDIT_MODEL` is `claude-opus-5-5` (cheaper than Opus 5 on every price axis). This PR planned the
+  re-pin; #8601 landed the same change on main first, so it arrives here through the merge.
 - Better Stack alerts: any `invalid status code: 524` from inngest-server in 15 min; cron Claude spend
   above **$15 per trailing 24 h** (≈ 2× the projected post-fix funded-day rate); and 24 h with no cost
   marker at all (credit-probe RED rows count, so an out-of-credit day stays quiet).

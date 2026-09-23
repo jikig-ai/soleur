@@ -37,7 +37,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - [x] 3.2 Derive each of the 18 sites' cap from the markers' `cost_usd` (`max(3 × median, re-priced for Opus 5.5, $2)`), plus the worst-case-daily column and the manual-trigger row.
 - [x] 3.3 Add `--max-budget-usd` to all 18 spawn sites and a `throttle` (2/hour per function) to each claude-eval function, or record in the ADR that the server ignores `throttle`.
 
-## Phase 4 — Fix 2 model re-pin
+## Phase 4 — Fix 2 model re-pin (subsumed: #8601 made the same change on main; this branch took main's version at merge)
 
 - [x] 4.1 Verify `claude-opus-5-5` with `GET /v1/models/claude-opus-5-5`.
 - [x] 4.2 Set `AUDIT_MODEL = "claude-opus-5-5"`; update `model-tiers.test.ts` and the header comments.

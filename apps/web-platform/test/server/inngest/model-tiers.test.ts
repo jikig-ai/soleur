@@ -152,9 +152,8 @@ describe("model-tiers registry — #5106", () => {
     expect(EXECUTION_MODEL).toBe("claude-sonnet-5");
     // Intentional model-bump tripwire: AUDIT_MODEL has no SSOT constant to
     // alias (opus is not an AnthropicModelId member), so it is pinned to the
-    // literal here. A deliberate re-tier (e.g. opus-4-8 → opus-5, a separate
+    // literal here. A deliberate re-tier (e.g. opus-5 → opus-5-5, a separate
     // model-bump PR per ADR-053) must update this assertion in lockstep.
-    // Same-tier re-pin opus-5 -> opus-5-5 (#8611): cheaper on every line item.
     expect(AUDIT_MODEL).toBe("claude-opus-5-5");
   });
 });
