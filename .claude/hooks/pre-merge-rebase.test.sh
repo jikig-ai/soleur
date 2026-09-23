@@ -265,6 +265,7 @@ t3_merge_conflict() {
 # told only to "resolve manually" — which for a generated artifact is the wrong remedy.
 t3b_regen_diagnosis_in_deny() {
   local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
   local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
   assert_fixture_dir "$work"
   mkdir -p "$work/plugins/soleur/scripts" "$incidents"
@@ -298,7 +299,6 @@ t3b_regen_diagnosis_in_deny() {
   else
     echo "FAIL: T3b the deny reason lacks the resolver's diagnosis: $reason"; FAIL=$((FAIL + 1))
   fi
-  rm -rf "$tmp"
 }
 
 # --- T4: push failure ----------------------------------------------------

@@ -94,6 +94,12 @@ fi
 
 [[ -f "$CANONICAL_CLI" ]] || { echo "ERROR: canonicalizer not found beside this script at $CANONICAL_CLI" >&2; exit 1; }
 
+# A missing tool is a machine problem, not a fault in the .c4 source: name it (rc 2, like a usage error).
+for _tool in jq node npx mktemp; do
+  command -v "$_tool" >/dev/null 2>&1 \
+    || { echo "ERROR: rendering the C4 model needs jq, node and npx on PATH; '$_tool' is missing" >&2; exit 2; }
+done
+
 TMP="$(mktemp -d)"
 PUBLISH_TMP=""
 trap 'rm -rf "$TMP"; [[ -n "$PUBLISH_TMP" ]] && rm -f "$PUBLISH_TMP"' EXIT

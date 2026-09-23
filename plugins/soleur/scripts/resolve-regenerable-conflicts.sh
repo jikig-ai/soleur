@@ -65,6 +65,20 @@ bail() {
   exit 1
 }
 
+# Canonical copy of test-helpers.sh's assert_fixture_dir (P1a pins every tracked copy byte-equal;
+# the P1b scanner recognises only this name). Here it backstops the staging parent, which the
+# explicit check before it already refuses with a marker — its bare exit 2 is not reached.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 _cleanup() {
   [[ -n "$RENDER_PID" ]] && kill -TERM "$RENDER_PID" 2>/dev/null
   [[ -n "$WORK" && -d "$WORK" ]] && rm -rf -- "$WORK"
@@ -152,7 +166,11 @@ _clean_or_why() {
 _why="$(_clean_or_why)"; [[ -z "$_why" ]] || na dirty-tree "$_why, then re-run"
 
 # ── CLASSIFY: merge-tree, NUL-framed ───────────────────────────────────────────────────────
-WORK_PARENT="${XDG_CACHE_HOME:-${HOME:-/nonexistent}/.cache}/soleur"
+# A relative XDG_CACHE_HOME is invalid and ignored (XDG Base Directory spec): relative to which cwd?
+_cache="${XDG_CACHE_HOME:-}"; [[ "$_cache" == /* ]] || _cache="${HOME:-/nonexistent}/.cache"
+[[ "$_cache" == /* ]] || fail no-staging "HOME is not an absolute path ($_cache)"
+assert_fixture_dir "$_cache"
+WORK_PARENT="$_cache/soleur"
 if mkdir -p "$WORK_PARENT" 2>/dev/null && chmod 700 "$WORK_PARENT" 2>/dev/null && WORK="$(mktemp -d "$WORK_PARENT/regen.XXXXXX")"; then :
 else fail no-staging "cannot create a private staging dir under $WORK_PARENT"; fi
 chmod 700 "$WORK"
@@ -217,6 +235,7 @@ fi
 # Allowlist, not blocklist: only regular-file LikeC4 sources are copied. A symlink or gitlink
 # anywhere under the directory, or a likec4 config (which likec4 would load, the js/ts forms as
 # code), is REFUSED rather than skipped — rendering without it would not be the repo's model.
+assert_fixture_dir "$_cache"; assert_fixture_dir "$REPO_ROOT"   # re-stated for fixture-scan's window
 STAGE="$WORK/root"; OUT="$WORK/out"; mkdir -p "$STAGE" "$OUT"
 _staged_dirs=$'\x1f'
 for p in "${conflicted[@]}"; do
@@ -291,7 +310,7 @@ fi
 for i in "${!conflicted[@]}"; do
   p="${conflicted[$i]}"
   [[ ! -L "$p" ]] || bail symlink-artifact "refusing to write through symlink $p"
-  cp -- "${outs[$i]}" "$p" && git add -- "$p" || bail stage-failed "could not write $p"
+  cp -- "$OUT/$i" "$REPO_ROOT/$p" && git add -- "$p" || bail stage-failed "could not write $p"
   [[ "$(git rev-parse ":$p")" == "$(git hash-object --path="$p" -- "${outs[$i]}")" ]] \
     || bail staged-mismatch "the staged $p is not the rendered bytes"
 done

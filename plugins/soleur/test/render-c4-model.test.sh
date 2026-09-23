@@ -59,6 +59,26 @@ _rc=0; bash "$RENDERER" --root "$SANDBOX/no-such-dir" >/dev/null 2>&1 || _rc=$?
 [[ "$_rc" -eq 2 ]] && pass "a --root that is not a directory is a usage error (rc 2)" \
   || fail "a missing --root returned rc=$_rc, expected 2"
 
+# This repo's wrapper forwards to the plugin renderer (lefthook and the docs still call it).
+CASES_RUN=$((CASES_RUN + 1))
+if bash "$SCRIPT_DIR/../../../scripts/regenerate-c4-model.sh" --help 2>/dev/null | grep -q -- '--root'; then
+  pass "scripts/regenerate-c4-model.sh forwards to the plugin renderer"
+else
+  fail "the scripts/regenerate-c4-model.sh wrapper does not reach the plugin renderer"
+fi
+
+# A missing tool is named as such — never reported as a fault in the user's .c4 source.
+_notools="$SANDBOX/notools"; assert_fixture_dir "$_notools"; mkdir -p "$_notools/$DIAG" "$SANDBOX/emptybin"
+printf 'model {}\n' > "$_notools/$DIAG/m.c4"
+for _t in bash git dirname find sed; do ln -sf "$(command -v "$_t")" "$SANDBOX/emptybin/$_t"; done
+_rc=0; _out="$(PATH="$SANDBOX/emptybin" bash "$RENDERER" --root "$_notools" 2>&1)" || _rc=$?
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_rc" -eq 2 && "$_out" == *"needs jq, node and npx"* ]]; then
+  pass "a machine without jq/node/npx is told which tools to install (rc 2)"
+else
+  fail "missing tools: rc=$_rc — $_out"
+fi
+
 # synced_repo <name> — the shape soleur:sync writes into a customer repo: no model.c4.
 synced_repo() {
   local r="$SANDBOX/$1"; assert_fixture_dir "$r"
@@ -192,7 +212,7 @@ fi
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=17
+_min_cases=19
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
