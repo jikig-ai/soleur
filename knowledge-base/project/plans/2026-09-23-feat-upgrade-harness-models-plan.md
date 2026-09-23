@@ -12,6 +12,48 @@ related: 7773
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No spec.md exists for this branch.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-23. **Sections enhanced:** 6 (Proposed Solution A3/A4/A5, Acceptance Criteria, Domain Review, Technical Considerations).
+
+**Agents used:**
+
+- a verify-the-negative pass (standard tier);
+- `soleur:engineering:research:best-practices-researcher` (live vendor re-check);
+- `soleur:engineering:research:git-history-analyzer`;
+- `soleur:engineering:review:architecture-strategist`.
+
+**Halt gates (all passed):**
+
+- 4.6: User-Brand Impact present, threshold `aggregate pattern`.
+- 4.7: all 5 Observability fields present. The probe verb `grep` passes `probe-verb-gate.sh` rc=0, and the command prints no suite-shaped output and no prose.
+- 4.8: no PAT shapes.
+- 4.9, 4.10 and 4.11: not triggered (no UI, no store or connection, no new guard).
+- Every cited issue and rule ID was resolved live via `gh` and `AGENTS.md`.
+
+### Key Improvements
+
+1. **The model-launch-review SKILL.md stays consistent with itself.**
+   - The intro's "five-item audit" wording is updated.
+   - The step-1 wording names the groups `audit-models.sh` actually prints (`[1]`, `[2]`, `[2b]`, `[3]`).
+2. **ADR-110 addendum records two points.**
+   - Decision item 6 is now met by an agent-run row.
+   - On Grok, `cheap` vs `standard` saves only on cached input. This is recorded as a consequence, not a decision change.
+3. **The #7773 retitle includes "deferred"**, so the skill's `[3]` dormant-work search surfaces Phase B.
+4. **The AC suite list adds the harness-parity suites**, which scan the SKILL.md prose that A4 edits.
+
+### New Considerations Discovered
+
+- **Claude Code's `opus` alias already points at Opus 5.5.** Claude Code 2.1.278 (2026-09-19) made Opus the default model, and 2.1.280 (2026-09-22) points the `opus` alias at `claude-opus-5-5` (<https://code.claude.com/docs/en/changelog>).
+  - `TIER_MAPS.claude` uses aliases, so every agent or workflow tier pinned `strong` → `opus` already runs Opus 5.5 on a user's own updated CLI, with no repo change.
+  - Only the server-side `AUDIT_MODEL`, which runs on the repo's *pinned* CLI 2.1.219, needs Phase B.
+- **Nothing else shipped this week.**
+  - Anthropic: Sonnet 5.5 and Haiku 5.5 are announced for "coming weeks", so they are out of scope.
+  - OpenAI: there is no `-codex` variant of GPT-6 Sol. `gpt-6-sol` is the Codex default.
+  - xAI: nothing else (<https://docs.x.ai/developers/pricing>).
+- **The verify-the-negative pass confirmed all six negative claims**, with file:line evidence (Codex no-pin at `codex-app-server-protocol.ts:160-165`, and so on). No Files-to-Edit additions.
+- **No C4 impact** (architecture review grepped `model.c4`, `views.c4`, `spec.c4` and `c4-model.md`). The docs pages, README and `grok-onboarding.md` name no Grok SKU.
+
 ## Overview
 
 The request is to move Soleur's three harnesses (Claude Code, Codex, Grok Build) to the models
@@ -168,7 +210,10 @@ No extra greps are needed. The existing parity test (`harness-model-map.test.ts:
 - Line 39: replace the cheap-row note "(only non-default CLI spawn slug)", which is now false, with "(lowest cached-input rate among CLI slugs)".
 - Line 35: change the heading "confirmed 2026-09-11 — docs.x.ai + `grok models` CLI 1.0.29" to 2026-09-23 / 1.0.40.
 - Update the line saying "Do **not** pin `grok-build-0.1` … as of 1.0.29" to cite 1.0.40.
-- Append `## Addendum — 2026-09-23 (Grok 4.7 launch)` with the live `grok models` output, the catalog prices, and the server-fetched model list note.
+- Append `## Addendum — 2026-09-23 (Grok 4.7 launch)`. It must carry:
+  - the live `grok models` output, the catalog prices and the server-fetched model list note;
+  - **(a)** Decision item 6 ("`model-launch-review` gains a Grok tier-table freshness check") is now met by an agent-run checklist row, not a script;
+  - **(b)** a recorded consequence: on Grok, `cheap` and `standard` now differ only on cached input ($0.30 vs $0.50), so Decision item 1's cost split saves almost nothing on this harness. This is recorded, not a decision change (architecture review P2).
 
 The data changes; the decision does not. No new ADR.
 
@@ -181,14 +226,15 @@ The data changes; the decision does not. No new ADR.
   - Cite ADR-110 Decision item 6.
 - Codex gets **no** row (all three reviewers cut it: it would guard a pin nobody intends to add). Add one sentence to "When to invoke" instead: "Codex: Soleur pins no Codex model (it inherits the session model per `plugins/soleur/codex/INSTRUCTIONS.md`), so an OpenAI launch needs no bump." The AC below checks the no-pin claim at merge time.
 - Update the "Only item 1 is auto-applied. Items 2–5 …" sentence to "Items 2–6".
-- Change "all 5 checks always enumerated" (How to run, step 1) to "items 1–5 scripted by `audit-models.sh`; row 6 run by the agent". Without this, the no-silent-green claim is false.
+- Change "all 5 checks always enumerated" (How to run, step 1) to name the groups the script actually prints: "`audit-models.sh` prints `[1]`, `[2]`, `[2b]`, `[3]` (items 1–5); row 6 is run by the agent". Without this, the no-silent-green claim is false.
+- Lines 12-14 (intro), which say "recurs the same five-item audit … audits all five": make them say the audit covers the Anthropic items plus a Grok row run by the agent, and mention xAI releases. Otherwise the intro contradicts the table (architecture review P1).
 - In "When to invoke", add "an xAI model launch (row 6)".
 
 **A4b. Model Selection Policy prose.** `plugins/soleur/AGENTS.md:180` currently reads "a Haiku session still runs a `standard`-pinned step on Sonnet / grok-4.6". Rewrite it tier-generically so it cannot drift again: "…on the `standard` tier's SKU (Sonnet on Claude; see `TIER_MAPS.grok` on Grok)" (simplicity review). This is the only other live doc naming the standard-tier Grok SKU; `git grep -nI 'grok-4\.6'` outside plans/specs/archives returns just the files in A1–A3 plus this line. ADR-110's 2026-09-11 addendum (line 57) is a dated historical record and stays verbatim.
 
 **A5. Retarget #7773 to carry Phase B** (`gh issue edit 7773`, done in the work phase, not at plan time):
 
-- New title: `chore(model-launch): Opus 5.5 — bump @anthropic-ai/claude-code to >=2.1.280 and AUDIT_MODEL to claude-opus-5-5 (not before 2026-09-25T15:44Z)`.
+- New title: `chore(model-launch): deferred Opus 5.5 — bump @anthropic-ai/claude-code to >=2.1.280 and AUDIT_MODEL to claude-opus-5-5 (not before 2026-09-25T15:44Z)`. "deferred" keeps it visible to the skill's `[3]` dormant-work search (`deferred model OR pricing`). Phase A leaves `AUTOFIX_PAIRS` untouched, so this issue is the only thing that brings Phase B back (architecture review P2).
 - Append a comment that links this plan's `### Phase B` section. Do not paste the checklist into the comment: two copies would drift apart.
 - The PR body carries `Ref #7773` (not `Closes`).
 
@@ -336,7 +382,7 @@ discoverability_test:
 ### Phase A (this PR)
 
 - [ ] `resolveModelTier("standard"|"strong"|"advisor", "grok")` returns `grok-4.7`, and `resolveModelTier("cheap","grok")` returns `grok-4.5`. Both are asserted in `plugins/soleur/test/harness-model-map.test.ts`. The same suite's existing fence-parity tests (lines 156-185) prove the 7 inlined fences are byte-identical and carry these values.
-- [ ] `bun test plugins/soleur/test/harness-model-map.test.ts plugins/soleur/test/workflow-model-pins.test.ts plugins/soleur/test/components.test.ts` exits 0, and PR CI is green.
+- [ ] `bun test plugins/soleur/test/harness-model-map.test.ts plugins/soleur/test/workflow-model-pins.test.ts plugins/soleur/test/components.test.ts plugins/soleur/test/harness-parity.test.ts plugins/soleur/test/harness-parity-tree.test.ts` exits 0, and PR CI is green. The harness-parity suites scan `skills/*/SKILL.md` prose, so any skill the new row 6 names must be written `soleur:<name>`.
 - [ ] `git grep -l 'grok-4\.6' -- plugins/soleur` prints nothing, or only `plugins/soleur/lib/harness-model-map.ts`. This catches prose drift such as `plugins/soleur/AGENTS.md:180`, which the parity test cannot see.
 - [ ] ADR-110 fixture table reads `grok-4.7` for standard/strong/advisor. The line-35 heading cites 2026-09-23 / CLI 1.0.40. The line-39 "(only non-default CLI spawn slug)" note is gone. The file carries `Addendum — 2026-09-23` with the live `grok models` output and docs.x.ai prices.
 - [ ] `plugins/soleur/skills/model-launch-review/SKILL.md` has a row 6 (Grok tier-map freshness) and a Codex no-pin sentence under "When to invoke". Its frontmatter `description:` is unchanged: `git diff origin/main -- plugins/soleur/skills/model-launch-review/SKILL.md | grep -c '^[-+]description:'` prints `0`.
@@ -366,7 +412,7 @@ Concerns, all folded in:
 - (2) The `.grok/agents` `model: haiku` stubs are pre-existing and filed as #8604.
 - (3) The cheap=grok-4.5 rationale is thin and 4.5 is the first slug xAI will drop; the row-6 fallback rule covers it.
 - (4) The Codex check pattern was too narrow; it is widened.
-- (5) The SKILL.md "all 5 checks" wording is now "1–5 scripted, 6–7 manual".
+- (5) The SKILL.md "all 5 checks" wording is corrected: the scripted groups are named and row 6 is marked agent-run (Codex needs no row).
 
 Scope: no architectural decision (ADR-110 data refresh only) and no new infrastructure. No C4 impact either: no new external actor, system, container or access relationship. xAI, OpenAI and Anthropic are already modeled as the external model vendors the harnesses call.
 

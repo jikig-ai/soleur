@@ -30,17 +30,19 @@ This pipeline executes **Phase A only**. Phase B (Opus 5.5) is date-gated to on 
 - [ ] 3.5 ADR-110:
   - update the fixture table (grok-4.7), the line-35 heading and the line-39 cheap note;
   - update the "Do not pin grok-build-0.1 … 1.0.29" line to 1.0.40;
-  - append `## Addendum — 2026-09-23 (Grok 4.7 launch)` with the live output, the docs.x.ai prices, the cached-input cheap rationale and the server-fetched catalog note.
+  - append `## Addendum — 2026-09-23 (Grok 4.7 launch)` with the live output, the docs.x.ai prices, the cached-input cheap rationale and the server-fetched catalog note;
+  - in the same addendum, say that Decision item 6 is now met by an agent-run row, and record that on Grok, cheap vs standard saves only on cached input.
 - [ ] 3.6 `plugins/soleur/skills/model-launch-review/SKILL.md` (body only):
   - add row 6 (Grok tier-map freshness, agent-run, with the one-clause cheap fallback);
   - rename to "7 items";
   - change "Items 2–5" to "Items 2–6";
-  - change "all 5 checks" to "items 1–5 scripted; row 6 agent-run";
+  - change "all 5 checks" to name the groups the script prints (`[1]`, `[2]`, `[2b]`, `[3]`) and mark row 6 as agent-run;
+  - update the intro (lines 12-14, "five-item audit … audits all five") to cover the Grok row;
   - add the Codex no-pin sentence and the xAI trigger under "When to invoke".
 
 ## Phase 4: Verification
 
-- [ ] 4.1 `bun test plugins/soleur/test/harness-model-map.test.ts plugins/soleur/test/workflow-model-pins.test.ts plugins/soleur/test/components.test.ts` exits 0.
+- [ ] 4.1 `bun test plugins/soleur/test/harness-model-map.test.ts plugins/soleur/test/workflow-model-pins.test.ts plugins/soleur/test/components.test.ts plugins/soleur/test/harness-parity.test.ts plugins/soleur/test/harness-parity-tree.test.ts` exits 0.
 - [ ] 4.2 `git grep -l 'grok-4\.6' -- plugins/soleur` prints nothing, or only `plugins/soleur/lib/harness-model-map.ts`.
 - [ ] 4.3 `git grep -nE -e 'gpt-[0-9]' -e 'codex-mini' -- apps/web-platform/server .codex plugins/soleur/codex` prints nothing.
 - [ ] 4.4 The SKILL.md `description:` line is unchanged vs `origin/main`.
@@ -49,5 +51,5 @@ This pipeline executes **Phase A only**. Phase B (Opus 5.5) is date-gated to on 
 
 ## Phase 5: Issue hygiene
 
-- [ ] 5.1 Retitle #7773 to the Phase B title (Opus 5.5 CLI bump + AUDIT_MODEL swap, not before 2026-09-25T15:44Z). Add a comment that links the plan's `### Phase B` section.
+- [ ] 5.1 Retitle #7773 to the Phase B title. It must include the word "deferred" (Opus 5.5 CLI bump + AUDIT_MODEL swap, not before 2026-09-25T15:44Z). Add a comment that links the plan's `### Phase B` section.
 - [ ] 5.2 The PR body carries `Ref #7773`. It also records the Codex no-pin finding and the live `grok models` output.
