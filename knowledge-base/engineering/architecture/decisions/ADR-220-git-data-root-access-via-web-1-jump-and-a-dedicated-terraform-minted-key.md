@@ -619,3 +619,27 @@ them.
   config. If the legacy fallback were ever taken after the old object is gone, `init` would yield an
   empty state — and the existing `git_data_root_key_remint_refused` gate, keyed on the committed
   fingerprint file, refuses that plan. A re-mint stays structurally unreachable.
+
+### 2026-09-23 (#8211, PR #8564): the store is served from LUKS at birth (ADR-239)
+
+[ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md) reverses ADR-068 D10: the git-data render
+always mounts `/dev/mapper/git-data` at `/mnt/git-data`. Earlier entries are not rewritten; this
+entry records what changes in them.
+
+- **D6 — there is no runtime repoint.** D6 and the 2026-09-15 amendment both assume the serving
+  device moves inside a cutover run, on the route D10 kept. That step does not exist and is not
+  being rebuilt: `user_data` is `ForceNew`, so a mount moved by a script does not survive the next
+  replace, and an in-place host config change is barred by
+  `hr-prod-host-config-change-immutable-redeploy`. **The serving change is the first
+  `git_data_host_replace` of the new render** — ADR-237's post-merge step 3 — applied while the
+  store is empty and `GIT_DATA_STORE_ENABLED` is off. Nothing in the cutover workflow moves a
+  device any more.
+- **D6 — the rotation is pending PR2.** The fresh replace immediately before the real cutover,
+  which rotates the `GIT_DATA_LUKS_KEY` and the LUKS volume (and, since ADR-237, the SSH host key),
+  is **pending PR2 of #8211** and is gated there on a recent `proof` run and on `served_repos=0`
+  re-asserted before the volume is replaced. PR1 builds none of it. Until that rotation runs,
+  `erased` on the Art. 17 path means **unlinked**: the blocks stay readable to a holder of the LUKS
+  key.
+- **Unchanged.** D1a, D1b, D2, D3, D4 and D5 are untouched. The access path, the dedicated root key
+  and the read credential are the same; ADR-239 changes what the host serves, not how CI reaches
+  root on it.

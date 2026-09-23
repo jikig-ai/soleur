@@ -74,12 +74,25 @@ esac
 command -v mountpoint >/dev/null 2>&1 || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
 mountpoint -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing to act on an unmounted store (fail-closed)"
 
-# --- (#8043 review) HONOUR THE CUTOVER FREEZE. git-data-cutover.sh plants
-#     `$MOUNT_ROOT/.cutover-freeze` between its post-drain delta rsync and the mount repoint;
-#     the pre-receive fence already denies pushes on it, but an erasure/provision landing in
-#     that window would act on the plaintext volume only while the LUKS copy — already
-#     `--delete`-synced — keeps the repo, and the outcome would be reported success. The
-#     sentinel is root-owned on a root-owned mount root: the git uid cannot forge or remove it.
+# --- (#8211, ADR-239) REFUSE UNLESS THE STORE IS THE VERIFIED MAPPER. "Mounted" is not
+#     "encrypted": the plaintext volume mounted here passes every check above. The mount's
+#     SOURCE must EQUAL the mapper (never a prefix or glob), and the bootstrap's marker must
+#     hold this filesystem's UUID, so a mapper reopened on another volume refuses too. The
+#     seams are test-only, like GIT_DATA_MOUNT_ROOT (`AcceptEnv LANG LC_*` cannot reach
+#     them). findmnt(8) absent fails closed. ---
+STORE_DEVICE="${GIT_DATA_STORE_DEVICE:-/dev/mapper/git-data}"
+STORE_VERIFIED="${GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified}"
+command -v findmnt >/dev/null 2>&1 || reject "cannot verify the store device: findmnt unavailable (fail-closed)"
+[ "$(findmnt -n -o SOURCE --mountpoint "$MOUNT_ROOT" 2>/dev/null)" = "$STORE_DEVICE" ] || reject "store at $MOUNT_ROOT is not served by $STORE_DEVICE (fail-closed)"
+store_uuid="$(findmnt -n -o UUID --mountpoint "$MOUNT_ROOT" 2>/dev/null)" || store_uuid=""
+[ -n "$store_uuid" ] && [ -s "$STORE_VERIFIED" ] && [ "$(head -n 1 "$STORE_VERIFIED")" = "$store_uuid" ] || reject "store not verified: $STORE_VERIFIED absent or not bound to this volume (fail-closed)"
+
+# --- (#8043 review) HONOUR THE CUTOVER FREEZE. No writer of
+#     `$MOUNT_ROOT/.cutover-freeze` exists today: the one in git-data-cutover.sh was deleted
+#     with the cutover body (#8189), and PR2 of #8211 defines the next. The pre-receive fence
+#     already denies pushes on it; an erasure/provision landing in a freeze window would act on
+#     one copy of the store while another keeps the repo, and report success. The sentinel is
+#     root-owned on a root-owned mount root: the git uid cannot forge or remove it.
 #     The path seam is the one git-data-pre-receive.sh already carries (test-only; AcceptEnv
 #     cannot reach it), so a suite can plant the sentinel without owning a mount root. ---
 cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${MOUNT_ROOT}/.cutover-freeze}"

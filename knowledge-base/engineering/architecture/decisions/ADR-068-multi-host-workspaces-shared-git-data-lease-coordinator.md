@@ -1293,6 +1293,18 @@ Rotations against a populated store stay gated on #7226 (host-key pinning), per 
 > **Amended 2026-09-21 (#7226, PR #8511):** host-key pinning is decided in
 > [ADR-237](./ADR-237-ssh-host-keys-are-pinned.md); this gate is discharged when ADR-237 reaches
 > `accepted` (its post-merge step 4), and every git-data replace now also rotates the host key.
+>
+> **Superseded 2026-09-23 (#8211, PR #8564), as to D10 in full:** born-on-LUKS is **adopted**, in
+> [ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md). D10's stated ground — that revisiting
+> it "would rewrite a cutover path that is already built and tested" — is false today: #8189 deleted
+> that path, and it had never run (ADR-220, Context). The git-data render now always mounts
+> `/dev/mapper/git-data` at `/mnt/git-data`, there is no plaintext/LUKS selector and no additive
+> cutover topology, and the serving change rides ADR-237's post-merge step 3 `git_data_host_replace`
+> while the store is empty and `GIT_DATA_STORE_ENABLED` is off. The plaintext volume
+> `hcloud_volume.git_data` is retained, read once per instance read-only to prove it holds no
+> repository, and never mounted after boot. Read ADR-239 for the rationale, the consequences (there
+> is no rollback to plaintext, and copy mode is deferred to #8571) and the alternatives; this marker
+> records only that D10 no longer governs.
 
 **Correction — 2026-09-15 (#6680).** The "Inngest-dispatches-GHA" claim in the 2026-07-02 Phase 3 GA
 amendment, item (b), is false for the git-data cutover: `git-data-cutover.yml` is dispatched by hand
