@@ -685,7 +685,7 @@ helper reads only the host's own addresses, links and routes. It writes no secre
 credential to user_data. Event fields are link names, IP-free states and
 counters. The only address in an event is the expected private IP.
 
-**Brand-survival threshold:** aggregate pattern
+- **Brand-survival threshold:** `aggregate pattern`
 
 Outage-shaped for every user at once, not a single user's breach. The same ADR-115 surface carries
 `single-user incident` for its registry reboot primitive; this change adds no reboot and no
@@ -722,8 +722,16 @@ logs:
   where: Better Stack source 2457081 (SOLEUR_INNGEST_BOOT_STAGE rows) and Sentry (stage tag); on-box /var/log/cloud-init-output.log is a post-mortem breadcrumb only
   retention: Better Stack hot window plus s3 archive (queried by betterstack-query.sh); Sentry project retention
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 30d --grep private_nic_ --limit 5
+  command: bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_INNGEST_BOOT_STAGE --limit 2000
   expected_output: "private_nic_"
+  # CORRECTED at review. The former command grepped `private_nic_`, which
+  # betterstack-query.sh compiles to a ClickHouse `raw LIKE '%private_nic_%'` — and `_`
+  # is a SINGLE-CHARACTER WILDCARD there, not a literal. Measured live: 8,539 rows, all
+  # web-1 nic-guard chatter, and zero of the intended ones. The marker is the safe coarse
+  # prefilter; the operator recipe in the runbook adds a jq decode that field-isolates on
+  # .marker and .stage. Note this command is never EXECUTED by preflight Check 10, because
+  # credentials_required below short-circuits it to SKIP-DECLARED — which is precisely how
+  # the broken form survived a plan, a test suite and a design pass.
   credentials_required: "Better Stack ClickHouse read connection (BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD in Doppler soleur/prd_terraform) — a boot marker from a deny-all, no-SSH host exists only in the Logs warehouse; no unauthenticated endpoint exposes it"
 ```
 
