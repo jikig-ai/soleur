@@ -56,3 +56,19 @@ Sharp Edge.
 
 **Why not applied:** `dev-ledger-parity.sh` already reads the same tree with `:(top,literal)`; one
 convention across both scripts. Both forms were verified from `apps/web-platform`.
+
+## DC-5 (User-Challenge): degrade a transient PR-state failure to an in-flight warning
+
+**Source:** architecture-strategist, deepen-plan (P1).
+
+**Plan says:** any PR-state lookup the classifier cannot complete exits 2, which the probe reports as
+UNCLASSIFIED and which blocks main (after one retry on 5xx/429; 401/403/404 are config errors).
+
+**Challenge:** the lookup can only move a row from in-flight to `closed-grace`, which is itself a
+warning for 24 h, so blocking on a failed lookup is stricter than what it measures. A GitHub API
+outage or the shared `GITHUB_TOKEN` rate limit would red main while dev holds any open PR's rows.
+Map a transient failure to `in-flight pr-state=unverified` (warning, Sentry on the scheduled probe)
+and keep config failures closed.
+
+**Why not applied:** the operator's direction was to keep the classifier fail-closed. The trade-off
+(an API outage can red main) is recorded in the ADR-061 amendment's Consequences.
