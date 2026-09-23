@@ -77,6 +77,25 @@ At that trigger or at the 6-sync cap, if this change has **zero conflict surface
 
 Do **not** use this hatch for a change with real conflict surface — there, the up-to-date requirement is load-bearing and the correct move is to merge during a quieter window (or resolve the conflict and let CI re-verify).
 
+## Operator-authorized variant: was-green carryover
+
+The hatch above is *agent-initiated*, which is why it is scoped to zero-conflict-surface diffs. A different, wider case is the operator saying "admin merge it if CI is/was green" on a PR that is BEHIND — the authorization supplies the merge-authority decision, so the surface classifier no longer applies. What replaces it is mechanical proof that the current head adds nothing but base-branch content to a head whose required checks were green:
+
+1. Identify the certified-green prior head `G` — a sha that was the PR head when `admin-merge-ready.sh <N> G` exited 0 (or, weaker evidence, the sha of a completed all-green check suite on this PR).
+2. After the branch is updated (`gh pr update-branch` produces exactly the shape the gate wants: a GitHub-signed merge commit `parents=[G, main-tip]`), run:
+
+   ```bash
+   SHA=$(gh pr view <N> --json headRefOid --jq .headRefOid)
+   bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/admin-merge-ready.sh" <N> "$SHA" --green-sha "$G"
+   ```
+
+   `--green-sha` certifies `$SHA` only if it is a verified 2-parent GitHub merge whose first parent is `G` and whose second parent is an ancestor-or-equal of `origin/<base>` — then grades `G`'s required contexts. A `gh pr update-branch` merge always has this shape; a locally-created merge is **unsigned** and is refused (`carryover-unverified`), as is any head that isn't a merge, has a different first parent, or merged anything that isn't on the base (`carryover-not-merge` / `carryover-first-parent` / `carryover-not-base`). Refusal is not an error — it means wait for the new head's own suite like the normal path.
+3. Steps 3–5 of the hatch apply verbatim: sync local, merge block with `--match-head-commit "$SHA"`, decide from the exit code.
+
+Two boundaries survive operator authorization, by construction: **UNTRUSTED-CI** (a PR editing `.github/workflows/` or `.github/actions/` has no agent admin-merge path — the operator merges it by hand, because the PR's own runs can mint any required context) and **DIRTY** (`--admin` cannot execute on an unmergeable PR at all).
+
+If `G`'s checks went red between certification and now (a re-run on the old sha), the gate sees it — the runs are re-read fresh, and a `FAILED` there is a real refusal, not a stale artifact.
+
 **Expected side effect (RETIRED by #5806 / ADR-217): an admin-merge now DEPLOYS.** This paragraph used to say the post-merge `web-platform-release` run goes RED with `deploy: skipped`, because `await-ci` polled for CI's `test` green on the squash SHA, timed out on an admin-merge, and skipped the prod `deploy`. **`await-ci` no longer exists.** `web-platform-release.yml` is now split across two triggers: the `push` arm builds and publishes (`release` job only), and a `workflow_run` arm fires **on `CI` completion** and carries the whole deploy chain (`resolve-target` → `migrate` → `verify-migrations` → `verify-doppler-secrets` → `deploy` → `live-verify`).
 
 An admin-merge bypasses branch protection, not CI: the squash commit still lands on `main`, `ci.yml` still runs on it, and when that run completes the `workflow_run` trigger fires. **So the deploy DOES happen — it just happens later than the push-arm build, once CI concludes.** There is nothing to wave away here:
