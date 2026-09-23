@@ -291,8 +291,8 @@ the new `--argjson refnames`.
 | 3 | GAINED arm evaluates only the first `$O` member (`first(...)` / `limit(1; …)`) | RED: G4-26 (two managed rules gained; the second name must appear) |
 | 4 | Drop the "not in `$INSCOPE`" condition | RED: G4-27 (a same-name excluded copy of a healthy managed rule must stay `UNMANAGED-FROZEN`, not GAINED) |
 | 5 | Revert the `$KNOWN` narrowing (KNOWN = whole capture) | RED: G4-28 (managed name removed from the reference, live gained, must be `UNMANAGED-FROZEN`, not silent) |
-| 6 | Move GAINED after KNOWN, with mutation 5 also applied | RED: G4-25 (silently accepted, and the COUNT assert fails) |
-| 7 | `COUNT` third field includes GAINED members | RED: G4-25 asserts `(${DEFAULTS_N} other excluded-type` with `DEFAULTS_N = FROZEN_N - FROZEN_TF_N`, derived |
+| 6 | Revert the `$KNOWN` narrowing AND count GAINED members in `COUNT` | RED: G4-25 (count assert) + G4-28. **Measured 2026-09-23: KILLED, reds G4-25 and G4-28.** |
+| 7 | `COUNT` third field includes GAINED members | Predicted RED via G4-25. **Measured 2026-09-23: SURVIVED — EQUIVALENT under the narrowed `$KNOWN`.** A managed rule's capture entry is not excluded-type, so it is never in `$KNOWN` and the tally is identical either way. The subtraction is retained as the second half of one property: row 5 (narrowing reverted alone) keeps the count correct only because of it, and row 6 (both reverted) reds. Recorded at the `COUNT` line in the probe. |
 | 8 | GAINED arm matches on name alone and ignores `excl_type` (the dispatch) | RED: F1/G4-6 identity (every managed rule would be GAINED) |
 
 **Harness rows.**

@@ -501,6 +501,15 @@ frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson liv
                      and ((.name as $n | $INSCOPE | index($n)) == null)))) as $GAINED
   # The third field counts registered defaults ONLY: KNOWN and not GAINED, so a
   # managed rule that left scope can never inflate "registered Sentry defaults".
+  #
+  # MEASURED, and recorded because the honest reading is not the obvious one: with
+  # the narrowed $KNOWN above, `is_in($GAINED) | not` is an EQUIVALENT mutation —
+  # the capture entry of a managed rule is not excluded-type, so it is not in $KNOWN and
+  # the tally is the same with or without the subtraction (mutation row 7, measured
+  # 2026-09-23: suite green, 63/63). It is kept because the two clauses cover each
+  # other: reverting the narrowing ALONE keeps this count correct (row 5 reds only
+  # G4-28), and reverting BOTH reds G4-25 on the count assert (row 6). Deleting
+  # either one is caught; deleting one silently weakens the other.
   | "COUNT \([ $fz[] as $n | select(any($F[]; .name == $n)) ] | length) \($fz | length) \($O | map(select(is_in($KNOWN) and (is_in($GAINED) | not))) | length)",
     ( $F | group_by(.name) | map(select(length > 1) | .[0].name)[]
       | "FINDING FROZEN DUPLICATE: \($q)\(.)\($q) names more than one live workflow; the pin cannot tell which one the capture describes." ),
