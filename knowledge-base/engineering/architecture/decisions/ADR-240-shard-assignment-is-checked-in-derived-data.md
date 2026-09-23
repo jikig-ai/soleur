@@ -1,5 +1,5 @@
 ---
-title: "ADR-239: Shard assignment is checked-in derived data — an offline label→leg manifest, a runtime lookup, a deterministic fallback"
+title: "ADR-240: Shard assignment is checked-in derived data — an offline label→leg manifest, a runtime lookup, a deterministic fallback"
 status: Accepted
 date: 2026-09-23
 supersedes: []
@@ -8,7 +8,7 @@ amends:
 tags: [ci, test-sharding, fail-closed, generated-artifact, adr-235]
 ---
 
-# ADR-239: Shard assignment is checked-in derived data
+# ADR-240: Shard assignment is checked-in derived data
 
 ## Status
 

@@ -10,7 +10,7 @@ triggers: []
 
 **TL;DR:** `test-scripts` leg membership comes from the committed manifest
 `scripts/suite-shard-legs.tsv` — a sticky-LPT assignment regenerated from CI
-timing artifacts (ADR-239). The runner only looks labels up; labels the
+timing artifacts (ADR-240). The runner only looks labels up; labels the
 table does not know hash onto a leg deterministically, and an absent/stale/
 n-mismatched table degrades to the old positional round-robin — coverage
 never depends on the table. The three heaviest suites live in the dedicated

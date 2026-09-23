@@ -2,7 +2,7 @@
 # scripts-shard-manifest.test.sh — the committed label→leg manifest must be
 # well-formed, pinned to the CI matrix's N, and a subset of the registered set.
 #
-# WHY THIS EXISTS (#8006, ADR-239). `scripts/suite-shard-legs.tsv` is generated data
+# WHY THIS EXISTS (#8006, ADR-240). `scripts/suite-shard-legs.tsv` is generated data
 # the runner consumes by lookup. Two drift shapes matter:
 #
 #   * STALE-SUBSET — a suite is renamed or removed, its manifest row is now a

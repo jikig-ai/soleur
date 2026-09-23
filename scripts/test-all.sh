@@ -673,7 +673,7 @@ if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" && "$TEST_GROUP" != 
   exit 2
 fi
 
-# --- Shard-assignment manifest (#8006, ADR-239) --------------------------------
+# --- Shard-assignment manifest (#8006, ADR-240) --------------------------------
 #
 # Positional round-robin balances by registration ORDER, not cost: measured on run
 # 35840517639 it put 797s of suite time on leg 5/5 against 237s on the best leg. The

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # regenerate-shard-manifest.test.sh — the offline sticky-LPT generator must
-# produce deterministic, filtered, provenance-stamped manifests (#8006, ADR-239).
+# produce deterministic, filtered, provenance-stamped manifests (#8006, ADR-240).
 #
 # WHY THIS EXISTS. `scripts/regenerate-shard-manifest.py` is the ONLY place shard
 # assignment is computed; the runner is a pure lookup. If the generator silently

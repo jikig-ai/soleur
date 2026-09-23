@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate scripts/suite-shard-legs.tsv from CI suite-timings artifacts (#8006, ADR-239).
+"""Regenerate scripts/suite-shard-legs.tsv from CI suite-timings artifacts (#8006, ADR-240).
 
 WHY THIS EXISTS
 ---------------
@@ -207,7 +207,7 @@ def assign(timings, n, incumbent):
 def render(legs, n, run_id):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
-        "# suite-shard-legs.tsv — duration-aware shard assignment (ADR-239)",
+        "# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)",
         f"# n={n}",
         f"# generated-from-run={run_id}",
         f"# generated-at={ts}",
