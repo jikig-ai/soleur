@@ -25,10 +25,16 @@ import { createHmac } from "node:crypto";
 
 export class OutboundComplianceError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  /**
+   * The header field a refusal is about (`to` | `from` | `replyTo` | …), so the
+   * agent can tell which argument to fix. A field NAME, never a value.
+   */
+  readonly field?: string;
+  constructor(code: string, message: string, field?: string) {
     super(message);
     this.name = "OutboundComplianceError";
     this.code = code;
+    if (field !== undefined) this.field = field;
   }
 }
 
@@ -166,6 +172,7 @@ export function validateEmailHeaders(fields: EmailHeaderFields): void {
       throw new OutboundComplianceError(
         "header_injection",
         `Header injection: control/separator character in "${name}".`,
+        name,
       );
     }
   }
@@ -189,6 +196,7 @@ export function validateEmailHeaders(fields: EmailHeaderFields): void {
       throw new OutboundComplianceError(
         "invalid_address",
         `"${name}" is not a valid RFC-5322 address.`,
+        name,
       );
     }
   }
@@ -221,21 +229,27 @@ export function assertRecipientAllowed(to: string): void {
   const at = addr.lastIndexOf("@");
   if (at < 0) {
     // No value interpolated — see validateEmailHeaders' invalid_address throw.
-    throw new OutboundComplianceError("invalid_address", 'Not a valid address (no "@").');
+    throw new OutboundComplianceError("invalid_address", 'Not a valid address (no "@").', "to");
   }
   const local = addr.slice(0, at);
   const domain = addr.slice(at + 1);
 
+  // The two messages below DO interpolate part of the address, and that is
+  // safe only because each value is a member of a fixed, operator-owned set
+  // (INTERNAL_DOMAINS, ROLE_LOCAL_PARTS). Do not copy this shape to a value
+  // that can come from the caller.
   if (INTERNAL_DOMAINS.has(domain)) {
     throw new OutboundComplianceError(
       "recipient_internal_domain",
       `Refusing to send cold outreach to an internal/own-domain address: ${domain}`,
+      "to",
     );
   }
   if (ROLE_LOCAL_PARTS.has(local)) {
     throw new OutboundComplianceError(
       "recipient_role_address",
       `Refusing to send cold outreach to a role/bare address: ${local}@…`,
+      "to",
     );
   }
 }

@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { sqlStateFromError } from "@/lib/postgres-errors";
+import { redactEmailAddresses, redactErrorForEmit } from "./pii-redact";
 
 const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
 
@@ -120,47 +121,6 @@ function sanitizeLogMessage(message: string): string {
   return redactEmailAddresses(message.replace(/[\r\n\u2028\u2029\v\f]+/g, " "));
 }
 
-/**
- * Address-shaped substrings, replaced before a message or error reaches pino,
- * Better Stack or Sentry (#8532 PR-0). The key-name redaction in
- * sensitive-keys.ts cannot see an address INSIDE a string value — an
- * `err.message` from a throw site or a vendor SDK — and Sentry turns
- * `err.message` into the issue title. The TLD is required to be alphabetic so
- * a version-pinned package path in a stack frame (`pkg@1.2.3`) is left alone.
- */
-const EMAIL_ADDRESS_RE = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
-const REDACTED_EMAIL = "[redacted-email]";
-
-function redactEmailAddresses(text: string): string {
-  return text.replace(EMAIL_ADDRESS_RE, REDACTED_EMAIL);
-}
-
-/**
- * The `err` twin of `sanitizeLogMessage`. Returns `err` itself when nothing
- * needs redacting (so Sentry's fingerprint dedupe keeps the same instance);
- * otherwise a COPY with the same prototype and own properties (`code`, `cause`,
- * …) and a redacted `message`/`stack`. The caller's error is never mutated.
- */
-function redactErrorForEmit(err: unknown, depth = 0): unknown {
-  if (typeof err === "string") return redactEmailAddresses(err);
-  if (!(err instanceof Error) || depth > 3) return err;
-  const message = redactEmailAddresses(err.message);
-  const stack = err.stack === undefined ? undefined : redactEmailAddresses(err.stack);
-  const cause = "cause" in err ? redactErrorForEmit(err.cause, depth + 1) : undefined;
-  const causeChanged = "cause" in err && cause !== err.cause;
-  if (message === err.message && stack === err.stack && !causeChanged) return err;
-
-  const copy = Object.create(Object.getPrototypeOf(err)) as Error;
-  for (const key of Object.getOwnPropertyNames(err)) {
-    if (key === "message" || key === "stack" || key === "cause") continue;
-    Object.defineProperty(copy, key, Object.getOwnPropertyDescriptor(err, key)!);
-  }
-  const hidden = { writable: true, configurable: true, enumerable: false };
-  Object.defineProperty(copy, "message", { ...hidden, value: message });
-  if (stack !== undefined) Object.defineProperty(copy, "stack", { ...hidden, value: stack });
-  if ("cause" in err) Object.defineProperty(copy, "cause", { ...hidden, value: cause });
-  return copy;
-}
 
 /**
  * Single source of truth for the literal app-origin used when
@@ -653,7 +613,7 @@ const _p0Dedup = new TtlDedupMap<string>(
 );
 
 export function mirrorP0Deduped(
-  err: Error,
+  rawErr: Error,
   ctx: {
     op: string;
     userId: string;
@@ -684,6 +644,8 @@ export function mirrorP0Deduped(
   if (!_p0Dedup.tryClaim(key, now)) return;
 
   const userIdHash = hashUserId(ctx.userId);
+  // Redact address-shaped substrings before either sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr) as Error;
 
   // Pino mirror for container-stdout visibility (same shape as
   // `reportSilentFallback` so log aggregators key off identical fields).
@@ -797,12 +759,14 @@ export function mirrorCrossTenantViolation(
   offendingUserId: string | null,
   expectedUserId: string,
   tableName: string,
-  err: unknown,
+  rawErr: unknown,
   ctx: Record<string, unknown> = {},
 ): void {
   const offendingHash =
     offendingUserId === null ? null : hashUserIdForSentry(offendingUserId);
   const expectedHash = hashUserIdForSentry(expectedUserId);
+  // Redact address-shaped substrings before either sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
 
   // Defensive strip: if a caller mistakenly passed raw userId/user_id in
   // `ctx`, drop them before they spread into Sentry's `extra` (pino emit

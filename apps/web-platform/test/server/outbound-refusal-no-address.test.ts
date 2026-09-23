@@ -39,20 +39,32 @@ import {
   OutboundComplianceError,
   assertRecipientAllowed,
   validateEmailHeaders,
-} from "../server/email-triage/outbound-compliance";
+} from "../../server/email-triage/outbound-compliance";
 import {
+  __resetMirrorP0DedupForTests,
   infoSilentFallback,
+  mirrorP0Deduped,
   reportSilentFallback,
   warnSilentFallback,
-} from "../server/observability";
-import { REDACT_PATHS, SENSITIVE_KEY_NAMES } from "../server/sensitive-keys";
+} from "../../server/observability";
+import { scrubSentryEvent } from "../../server/sentry-scrub";
+import {
+  buildGateMessage,
+  buildOfflineGateMessage,
+  summarizeOutboundEmailInput,
+} from "../../server/tool-tiers";
+import { REDACT_PATHS, SENSITIVE_KEY_NAMES } from "../../server/sensitive-keys";
 
 // Synthesized, distinctive tokens: a leak of EITHER half is detectable without
 // matching generic words the messages legitimately contain ("address", "to").
 const LOCAL = "qzv8tkl";
 const DOMAIN = "mailbox-r7x.example";
 const DISPLAY = "Wendeline Qorvath";
+// The display name is fixtured at the throw sites (AC-0a), where
+// `extractAddrSpec` strips it; the emitter cannot recognise a bare display
+// name by shape, so the emitter rows below assert only LOCAL and DOMAIN.
 const FORBIDDEN = [LOCAL, DOMAIN, DISPLAY, "Qorvath"];
+const EMITTER_FORBIDDEN = [LOCAL, DOMAIN];
 
 /**
  * Every string reachable from `v`: own properties (enumerable or not), so an
@@ -71,11 +83,13 @@ function allText(v: unknown, seen = new Set<unknown>()): string {
   return parts.join("\n");
 }
 
-function assertNoAddress(label: string, text: string): void {
-  for (const token of FORBIDDEN) {
+function assertNoAddress(label: string, text: string, tokens: readonly string[] = FORBIDDEN): void {
+  for (const token of tokens) {
     expect(text, `${label} leaked "${token}"`).not.toContain(token);
   }
 }
+const assertEmitterClean = (label: string, text: string) =>
+  assertNoAddress(label, text, EMITTER_FORBIDDEN);
 
 function emittedText(): string {
   return allText([
@@ -159,12 +173,43 @@ describe("AC-0b — a refused send mirrored through the emitter carries no addre
     mockLoggerInfo.mockReset();
   });
 
-  it("the email_send catch shape: reportSilentFallback(refusal) reaches pino and Sentry clean", () => {
+  // INSTRUMENT SELF-TEST: every sink emittedText() reads must be able to
+  // show a leak, or each emitter row below passes without checking anything.
+  it("instrument: a leak planted in each sink is detected", () => {
+    const leak = `${LOCAL}@${DOMAIN}`;
+    for (const sink of [mockLoggerError, mockLoggerWarn, mockLoggerInfo, mockCaptureException, mockCaptureMessage]) {
+      sink.mockReset();
+      sink({ err: new Error(leak) });
+      expect(() => assertEmitterClean("planted", emittedText())).toThrow();
+      sink.mockReset();
+    }
+  });
+
+  // Restates AC-0a at the email_send catch's call shape; the emitter-layer
+  // guarantee is the vendor-error rows below.
+  it("the refusal from the throw site stays clean through reportSilentFallback", () => {
     const err = refusalOf(REFUSALS[0]!.run);
     reportSilentFallback(err, { feature: "email-triage-tools", op: "email_send", extra: { userId: "u1" } });
     expect(mockLoggerError).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledTimes(1);
     assertNoAddress("emitted record", emittedText());
+  });
+
+  it("a string err reaches both sinks redacted", () => {
+    reportSilentFallback(`resend said no to ${LOCAL}@${DOMAIN}`, { feature: "t" });
+    assertEmitterClean("string err", emittedText());
+  });
+
+  it("a plain-object vendor error reaches both sinks redacted", () => {
+    reportSilentFallback({ name: "validation_error", message: `Invalid to: ${LOCAL}@${DOMAIN}` }, { feature: "t" });
+    assertEmitterClean("plain-object err", emittedText());
+  });
+
+  it("mirrorP0Deduped redacts the error it forwards", () => {
+    __resetMirrorP0DedupForTests();
+    mirrorP0Deduped(new Error(`p0 for ${LOCAL}@${DOMAIN}`), { op: "o", userId: "u1", conversationId: "c1" });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    assertEmitterClean("p0 mirror", emittedText());
   });
 
   // The class fix: an error from ANY source (a vendor SDK, a future throw site)
@@ -185,7 +230,7 @@ describe("AC-0b — a refused send mirrored through the emitter carries no addre
     it(`${name} redacts an address inside an arbitrary Error, keeping class and code`, () => {
       const original = vendorError();
       emit(original, { feature: "t", op: "o" });
-      assertNoAddress(`${name} emitted record`, emittedText());
+      assertEmitterClean(`${name} emitted record`, emittedText());
       // The caller's error object is not mutated — the redaction is a copy.
       expect(original.message).toContain(LOCAL);
       const captured = mockCaptureException.mock.calls[0]?.[0] as (Error & { code?: string }) | undefined;
@@ -196,7 +241,7 @@ describe("AC-0b — a refused send mirrored through the emitter carries no addre
 
     it(`${name} redacts an address in a non-Error message`, () => {
       emit(null, { feature: "t", message: `could not deliver to ${LOCAL}@${DOMAIN}` });
-      assertNoAddress(`${name} emitted record`, emittedText());
+      assertEmitterClean(`${name} emitted record`, emittedText());
     });
   }
 
@@ -215,4 +260,53 @@ describe("key-name redaction covers the address-bearing log keys", () => {
       expect(REDACT_PATHS).toContain(`*.${key}`);
     });
   }
+});
+
+describe("Sentry value-layer: every capture path, not only the emitters", () => {
+  it("scrubSentryEvent redacts an address in the exception value, the message and a breadcrumb", () => {
+    const leak = `${LOCAL}@${DOMAIN}`;
+    const out = scrubSentryEvent({
+      message: `failed for ${leak}`,
+      exception: { values: [{ type: "Error", value: `Resend rejected ${leak}` }] },
+      breadcrumbs: [{ category: "pino", message: `send to ${leak}` }],
+    });
+    assertEmitterClean("scrubbed event", JSON.stringify(out));
+  });
+});
+
+describe("the refusal names the field, never the value", () => {
+  it("a bad replyTo is reported as field=replyTo, a bad to as field=to", () => {
+    expect(refusalOf(REFUSALS[2]!.run).field).toBe("replyTo");
+    expect(refusalOf(REFUSALS[0]!.run).field).toBe("to");
+    expect(refusalOf(REFUSALS[5]!.run).field).toBe("to");
+  });
+});
+
+describe("stores outside the log sinks (#8532 review)", () => {
+  const input = { to: `${DISPLAY} <${LOCAL}@${DOMAIN}>`, subject: "Hello", body: `Hi ${DISPLAY}` };
+
+  it("the offline approval notification for an outbound email carries no recipient or body", () => {
+    for (const tool of ["email_send", "email_reply", "email_suppress"]) {
+      const q = buildOfflineGateMessage(`mcp__soleur_platform__${tool}`, { ...input, recipient: input.to });
+      assertNoAddress(`${tool} offline gate`, q);
+    }
+  });
+
+  it("the in-app gate still shows the operator the exact recipient", () => {
+    expect(buildGateMessage("mcp__soleur_platform__email_send", input)).toContain(LOCAL);
+  });
+
+  it("other tools keep their full gate text offline", () => {
+    const i = { title: "T" };
+    expect(buildOfflineGateMessage("mcp__soleur_platform__create_issue", i)).toBe(
+      buildGateMessage("mcp__soleur_platform__create_issue", i),
+    );
+  });
+
+  it("an aborted turn's summary of an outbound-email call names fields only", () => {
+    const summary = summarizeOutboundEmailInput("mcp__soleur_platform__email_send", input);
+    expect(summary).toContain("body, subject, to");
+    assertNoAddress("completed_actions summary", summary ?? "");
+    expect(summarizeOutboundEmailInput("mcp__soleur_platform__create_issue", input)).toBeNull();
+  });
 });
