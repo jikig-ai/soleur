@@ -537,12 +537,12 @@ else
 fi
 
 # --- Row s: SCRIPTS_SHARD + affected — env -u on the enumerate child is load-bearing
-# The real runner refuses SCRIPTS_SHARD under TEST_GROUP=all (:782) — the only
+# The real runner refuses SCRIPTS_SHARD under TEST_GROUP=all (:818) — the only
 # group under which the affected pre-pass runs. The `env -u SCRIPTS_SHARD` on
 # the nested enumerate is therefore unreachable upstream… unless the refusal is
 # bypassed. Two sandbox arms do exactly that, proving the env -u is what keeps
 # the child's stream ordinal-aligned with the parent's 1..N dispatch walk.
-# NOTE: the carrier is unset at :813 (after parsing into _SHARD_K/_SHARD_N), so
+# NOTE: the carrier is unset at :850 (after parsing into _SHARD_K/_SHARD_N), so
 # under a real run the nested enumerate never sees SCRIPTS_SHARD at all. To make
 # `env -u SCRIPTS_SHARD` observable, s2 also removes the parent's `unset` — then
 # the env -u alone is what keeps the child's stream unsharded and the map
@@ -553,7 +553,7 @@ _shardsplice() { # $1 = sandbox runner path, $2 = "nounset" to also remove the p
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = 'if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" ]]; then'
+old = 'if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" && "$TEST_GROUP" != "scripts-heavy" ]]; then'
 assert s.count(old) == 1, s.count(old)
 s = s.replace(old, 'if false; then # sandbox: shard+all allowed to exercise the affected pre-pass')
 if sys.argv[2] == "nounset":
