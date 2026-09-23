@@ -653,7 +653,12 @@ export async function sendEmailNotification(
   });
 
   if (error) {
-    log.error({ email, err: error }, "Failed to send email notification");
+    // `email` is redacted by key (sensitive-keys.ts), so `conversationId` is
+    // what identifies whose approval notification failed (#8532).
+    log.error(
+      { email, conversationId: payload.conversationId, err: error },
+      "Failed to send email notification",
+    );
     return false;
   }
   log.info({ email, conversationId: payload.conversationId }, "Email notification sent");
@@ -1136,11 +1141,15 @@ export async function sendInviteEmail(
   });
 
   if (error) {
-    log.error({ inviteeEmail, err: error }, "Failed to send invite email");
+    // `inviteeEmail` is redacted by key (sensitive-keys.ts); `workspaceName`
+    // identifies the failed invite. The address is not interpolated into the
+    // Sentry message (#8532).
+    log.error({ inviteeEmail, workspaceName, err: error }, "Failed to send invite email");
     reportSilentFallback(null, {
       feature: "workspace-invitations",
       op: "send-invite-email",
-      message: `Failed to send invite email to ${inviteeEmail}: ${error.message}`,
+      message: `Failed to send invite email: ${error.message}`,
+      extra: { workspaceName },
     });
     return false;
   }
