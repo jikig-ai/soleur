@@ -2084,3 +2084,47 @@ resource "sentry_alert" "ops_email_delivery_failure" {
     ignore_changes = [environment]
   }
 }
+
+# #8505 — operator Anthropic credit exhaustion. Emitted by server/anthropic-credit.ts
+# (`reportAnthropicCreditExhausted`) from the two operator-key chokepoints: the shared
+# HTTP transport (credit-probe canary, compound-promote, weekly-release-digest) and the
+# email-triage summarizer. The emitter uses the MESSAGE path on purpose — see the header
+# of anthropic-credit.ts for why the Error path would reach Sentry with no tags and never
+# match this rule. This rule does not depend on the `scheduled-anthropic-credit-probe`
+# cron monitor, whose detector routes to no workflow.
+#
+# `frequency_minutes = 1440`: while the balance stays empty the canary fires hourly, and an
+# hourly page during a known outage is what got that monitor muted. `event_frequency_count`
+# keeps a persistent exhaustion re-paging once a day instead of going quiet after the first
+# notification (the transition triggers alone fire once per issue lifetime).
+resource "sentry_alert" "anthropic_credit_exhausted" {
+  organization      = var.sentry_org
+  name              = "anthropic-credit-exhausted"
+  enabled           = true
+  frequency_minutes = 1440
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "anthropic-credit" } },
+        { tagged_event = { key = "op", match = "eq", value = "anthropic-credit-exhausted" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
