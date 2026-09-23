@@ -356,7 +356,7 @@ refused "a dirty (staged) tree" "$res" "$fpb" "$r" "not clean"
 r="$(mkrepo untrackedhidden)"; assert_fixture_dir "$r"; git -C "$r" config status.showUntrackedFiles no
 printf 'operator notes\n' > "$r/NOTES.txt"
 fpb="$(tree_fp "$r")"; res="$(run_sut "$r" main)"
-refused "status.showUntrackedFiles=no cannot hide an untracked file" "$res" "$fpb" "$r" "not clean"
+refused "status.showUntrackedFiles=no cannot hide an untracked file" "$res" "$fpb" "$r" "not clean (NOTES.txt)"
 CASES_RUN=$((CASES_RUN + 1))
 [[ "$(cat "$r/NOTES.txt" 2>/dev/null)" == "operator notes" ]] && pass "the operator's untracked file survives" \
   || fail "the operator's untracked file was lost"
@@ -506,6 +506,83 @@ r="$(mkrepo hook)"; assert_fixture_dir "$r"; mkdir -p "$r/.git/hooks"
 printf '#!/bin/sh\necho hooked >> README.md\ngit add README.md\n' > "$r/.git/hooks/pre-commit"; chmod +x "$r/.git/hooks/pre-commit"
 fpb="$(tree_fp "$r")"; res="$(run_sut "$r" main)"
 refused "a pre-commit hook that changes the merge commit" "$res" "$fpb" "$r" "reason=commit-hook-changed-tree"
+
+# The undo is VERIFIED, not asserted: a hook that also leaves an unstaged edit makes
+# `reset --keep` refuse, and the resolver must say so rather than claim it undid the commit.
+r="$(mkrepo hookkeep)"; assert_fixture_dir "$r"; mkdir -p "$r/.git/hooks"
+printf '#!/bin/sh\necho hooked >> README.md\ngit add README.md\necho unstaged >> README.md\n' > "$r/.git/hooks/pre-commit"; chmod +x "$r/.git/hooks/pre-commit"
+_head0="$(_git "$r" rev-parse HEAD)"; res="$(run_sut "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$(sut_rc "$res")" != "0" && "$(sut_out "$res")" == *"reason=commit-hook-changed-tree"* \
+      && "$(sut_out "$res")" == *"could NOT undo"* && "$(_git "$r" rev-parse HEAD)" != "$_head0" ]]; then
+  pass "an undo that reset --keep refuses is reported as NOT undone"
+else
+  fail "unverified undo: rc=$(sut_rc "$res") head-moved=$([[ "$(_git "$r" rev-parse HEAD)" != "$_head0" ]] && echo yes || echo no) — $(sut_out "$res")"
+fi
+
+# Signals that land after the merge started. The helper TERMs the OUTERMOST ancestor running the
+# resolver (a command substitution forks a copy with the same argv). Linux /proc only.
+if [[ -r /proc/self/stat ]]; then
+  _killer="$SANDBOX/kill-resolver.sh"; assert_fixture_dir "$SANDBOX"
+  cat > "$_killer" <<'EOF'
+#!/bin/sh
+# Walk up to the TOP of the contiguous run of ancestors whose argv holds the resolver script as a
+# whole argument, and stop at the first non-matching ancestor above it — never further, or any
+# outer shell whose command line merely mentions the path would be signalled too.
+p=$PPID; target=""
+while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+  if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -qx '.*/scripts/resolve-regenerable-conflicts\.sh'; then
+    target=$p
+  elif [ -n "$target" ]; then
+    break
+  fi
+  p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null)
+done
+[ -n "$target" ] && kill -TERM "$target"
+exit 0
+EOF
+  chmod +x "$_killer"
+
+  # During `git commit`: the commit completes, so the success marker is the truth.
+  r="$(mkrepo sigcommit)"; assert_fixture_dir "$r"; mkdir -p "$r/.git/hooks"
+  printf '#!/bin/sh\n%s\n' "$_killer" > "$r/.git/hooks/pre-commit"; chmod +x "$r/.git/hooks/pre-commit"
+  res="$(run_sut "$r" main)"
+  CASES_RUN=$((CASES_RUN + 1))
+  if [[ "$(sut_rc "$res")" == "0" && "$(sut_out "$res")" == *"SOLEUR_REGEN_ON_CONFLICT paths="*"rc=0"* \
+        && "$(_git "$r" rev-parse HEAD^2 2>/dev/null)" == "$(_git "$r" rev-parse main)" ]]; then
+    pass "a signal during git commit still ends with a marker that matches the repo (committed)"
+  else
+    fail "signal during commit: rc=$(sut_rc "$res") — $(sut_out "$res")"
+  fi
+
+  # While the merge is in progress (a clean filter on the artifact fires once MERGE_HEAD exists):
+  # unwound, and the marker class is `interrupted`, the same class as a pre-merge signal.
+  r="$(mkrepo sigmerge)"; assert_fixture_dir "$r"
+  printf '#!/bin/sh\n[ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] && [ ! -e %s/sig.once ] && { : > %s/sig.once; %s; }\ncat\n' \
+    "$SANDBOX" "$SANDBOX" "$_killer" > "$SANDBOX/sig-clean.sh"; chmod +x "$SANDBOX/sig-clean.sh"
+  rm -f "$SANDBOX/sig.once"
+  printf '%s filter=sig\n' "$MODEL" > "$r/.git/info/attributes"
+  git -C "$r" config filter.sig.clean "$SANDBOX/sig-clean.sh"
+  _head0="$(_git "$r" rev-parse HEAD)"; res="$(run_sut "$r" main)"
+  CASES_RUN=$((CASES_RUN + 1))
+  if [[ -e "$SANDBOX/sig.once" && "$(sut_out "$res")" == *"rc=1 class=interrupted reason=interrupted"* \
+        && ! -e "$r/.git/MERGE_HEAD" && "$(_git "$r" rev-parse HEAD)" == "$_head0" ]]; then
+    pass "a signal mid-merge unwinds and reports class=interrupted"
+  else
+    fail "signal mid-merge: fired=$([[ -e "$SANDBOX/sig.once" ]] && echo yes || echo no) rc=$(sut_rc "$res") — $(sut_out "$res")"
+  fi
+else
+  echo "  SKIP: no /proc — the in-commit and mid-merge signal rows need it"
+  CASES_RUN=$((CASES_RUN + 2)); passes=$((passes + 2))
+fi
+
+# An absolute XDG_CACHE_HOME the staging guard refuses still ends with a marker (rc 1, not a bare exit 2).
+r="$(mkrepo procxdg)"; assert_fixture_dir "$r"
+res="$(XDG_CACHE_HOME=/proc/soleur-no-such-dir run_sut "$r" main)"
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(sut_rc "$res")" == "1" && "$(sut_out "$res")" == *"reason=no-staging"* ]] \
+  && pass "an unusable absolute XDG_CACHE_HOME is refused with a marker" \
+  || fail "unusable XDG_CACHE_HOME: rc=$(sut_rc "$res") — $(sut_out "$res")"
 
 # ══ PLUGIN ROOT: where the renderer comes from ═════════════════════════════════════════════
 echo ""
@@ -659,7 +736,7 @@ done
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=135
+_min_cases=139
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

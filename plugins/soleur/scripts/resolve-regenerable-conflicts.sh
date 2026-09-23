@@ -54,8 +54,10 @@ na() { _marker na "$1"; echo "[regen-on-conflict] not applicable: $2" >&2; exit 
 # fail <slug> <message> — a regeneration problem, still before anything was touched.
 fail() { _marker failed "$1"; echo "[regen-on-conflict] regen failed: $2" >&2; exit 1; }
 # bail <slug> <message> — refuse AFTER the merge started: unwind, and VERIFY the unwind.
+# BAIL_CLASS is `failed` except for a signal, which reports `interrupted` wherever it lands.
+BAIL_CLASS=failed
 bail() {
-  _marker failed "$1"
+  _marker "$BAIL_CLASS" "$1"
   local unwound="merge aborted, nothing committed"
   [[ -n "$REPO_ROOT" ]] && git -C "$REPO_ROOT" merge --abort 2>/dev/null
   if [[ -n "$REPO_ROOT" && -f "$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null)/MERGE_HEAD" ]]; then
@@ -67,7 +69,7 @@ bail() {
 
 # Canonical copy of test-helpers.sh's assert_fixture_dir (P1a pins every tracked copy byte-equal;
 # the P1b scanner recognises only this name). Here it backstops the staging parent, which the
-# explicit check before it already refuses with a marker — its bare exit 2 is not reached.
+# explicit `case` before it already refuses with a marker — its bare exit 2 is not reached.
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -85,7 +87,7 @@ _cleanup() {
 }
 _on_signal() {
   if [[ "$MERGING" -eq 1 ]]; then
-    bail interrupted "interrupted during the merge"
+    BAIL_CLASS=interrupted; bail interrupted "interrupted during the merge"
   fi
   _cleanup
   _marker interrupted signal
@@ -161,14 +163,20 @@ HEAD_SHA="$(git rev-parse --verify --quiet HEAD)" || na no-head "HEAD does not r
 # merged tree adds the same path, which _collisions checks.
 _clean_or_why() {
   [[ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]] || { printf 'a merge is already in progress — finish it or run git merge --abort'; return; }
-  [[ -z "$(git status --porcelain --untracked-files=all)" ]] || printf 'working tree is not clean — commit or discard your changes'
+  local st; st="$(git status --porcelain --untracked-files=all)"
+  [[ -z "$st" ]] || printf 'working tree is not clean (%s) — commit or discard your changes' \
+    "$(printf '%s\n' "$st" | head -n1 | cut -c4- | LC_ALL=C tr -d '\000-\037\177' | cut -c1-200)"
 }
 _why="$(_clean_or_why)"; [[ -z "$_why" ]] || na dirty-tree "$_why, then re-run"
 
 # ── CLASSIFY: merge-tree, NUL-framed ───────────────────────────────────────────────────────
 # A relative XDG_CACHE_HOME is invalid and ignored (XDG Base Directory spec): relative to which cwd?
 _cache="${XDG_CACHE_HOME:-}"; [[ "$_cache" == /* ]] || _cache="${HOME:-/nonexistent}/.cache"
-[[ "$_cache" == /* ]] || fail no-staging "HOME is not an absolute path ($_cache)"
+case "$_cache" in
+  */../*|*/..|/proc/*|/sys/*|/dev/*|/|//|/.) fail no-staging "unusable cache dir for staging ($_cache) — set XDG_CACHE_HOME to a normal absolute directory" ;;
+  /*) : ;;
+  *) fail no-staging "HOME is not an absolute path ($_cache)" ;;
+esac
 assert_fixture_dir "$_cache"
 WORK_PARENT="$_cache/soleur"
 if mkdir -p "$WORK_PARENT" 2>/dev/null && chmod 700 "$WORK_PARENT" 2>/dev/null && WORK="$(mktemp -d "$WORK_PARENT/regen.XXXXXX")"; then :
@@ -321,17 +329,24 @@ _got="$(git diff --cached -z --name-only "$TREE" | tr '\0' '\n' | LC_ALL=C sort)
 [[ "$_got" == "$_want" ]] || bail index-mismatch "the index differs from the merged tree beyond the regenerated paths: $(printf '%s' "$_got" | _clean)"
 
 _expect_tree="$(git write-tree)" || bail write-tree "could not write the index tree"
-trap - INT TERM HUP   # a signal during `git commit` must not report "nothing committed"
+# From here a signal is RECORDED, not acted on: the commit either lands or fails on its own, and
+# the marker must describe the repo as it is. The default disposition would exit with no marker.
+_sig_late=""
+trap '_sig_late=1' INT TERM HUP
 commit_err="$(git commit --no-edit 2>&1 >/dev/null)" \
   || bail commit-failed "the merge commit failed: $(printf '%s' "$commit_err" | _clean)"
 MERGING=0
 if [[ "$(git rev-parse "HEAD^{tree}")" != "$_expect_tree" || "$(git rev-parse HEAD^1)" != "$HEAD_SHA" \
       || "$(git rev-parse HEAD^2 2>/dev/null)" != "$BASE_SHA" ]]; then
-  git reset -q --keep "$HEAD_SHA" 2>/dev/null
+  _undone="it was undone"
+  if ! git reset -q --keep "$HEAD_SHA" 2>/dev/null || [[ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]]; then
+    _undone="could NOT undo it (reset --keep refused; the hook left local edits) — HEAD is the rejected merge commit; review, then run: git reset --keep $HEAD_SHA"
+  fi
   _marker failed commit-hook-changed-tree
-  echo "[regen-on-conflict] regen failed: a commit hook changed the merge commit — it was undone; resolve by hand" >&2
+  echo "[regen-on-conflict] regen failed: a commit hook changed the merge commit — $_undone; resolve by hand" >&2
   exit 1
 fi
+[[ -z "$_sig_late" ]] || echo "[regen-on-conflict] a signal arrived during git commit; the commit had already completed and is verified" >&2
 
 csv="$(IFS=,; printf '%s' "${conflicted[*]}")"
 printf 'SOLEUR_REGEN_ON_CONFLICT paths=%s arm=%s root_src=%s rc=0\n' "$csv" "$ARM" "$ROOT_SRC"
