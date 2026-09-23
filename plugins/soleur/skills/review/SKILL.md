@@ -12,7 +12,7 @@ description: "This skill should be used when performing exhaustive code reviews 
 <!-- grok-harness-invoke:end -->
 
 <!-- lifecycle-handoff-protocol:start -->
-**Lifecycle handoff (standalone `soleur:review`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `soleur:compound` then `soleur:ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
+**Lifecycle handoff (standalone `soleur:review`):** When no parent orchestrator (`one-shot`, `work`, or `ship` — which passes `--parent ship` in the args) owns the pipeline, invoke `soleur:compound` then `soleur:ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
 <!-- lifecycle-handoff-protocol:end -->
 
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration.
@@ -97,6 +97,7 @@ First, I need to determine the review target type and set up the code for analys
 
 <task_list>
 
+- [ ] Strip a leading `--parent ship` token from the arguments first — it only marks ship's Phase 1.5 / 5.5 as the caller (Step 3, §6), never a target
 - [ ] Determine review type: PR number (numeric), GitHub URL, file path (.md), or empty (current branch)
 - [ ] Check current git branch
 - [ ] If ALREADY on the target branch (PR branch, requested branch name, or the branch already checked out for review) → proceed with analysis on current branch
@@ -1077,7 +1078,7 @@ spawn fails at it. That experiment has not been run.
 
 #### Step 3: Summary Report
 
-**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output, a `soleur:work` or `soleur:one-shot` slash command, or a `slash_command` tool use of those skills. If any is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
+**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output, a `soleur:work` or `soleur:one-shot` slash command, or a `slash_command` tool use of those skills, or the arguments carried `--parent ship`. If any is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
 
 **Pre-emission cost-of-filing pass (run BEFORE the marker):** Build the
 candidate "Filed as scope-out" list from your synthesis. For each candidate,
@@ -1211,7 +1212,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### 6. Exit Gate
 
-**Pipeline detection:** If the conversation contains `skill: soleur:work` output, a `soleur:work` slash command, or `slash_command` of `work` (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` / `soleur:one-shot` / `slash_command` of `one-shot` (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output, a `soleur:work` slash command, or `slash_command` of `work` (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` / `soleur:one-shot` / `slash_command` of `one-shot` (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable. **If the arguments carried `--parent ship`,** run only step 3 below (the review-evidence trailer, which ship re-reads) and return to ship: ship's own Phase 2 runs compound and ship is already running, so invoking either here nests a second ship run. This clause wins over the conversation scan above: under a one-shot or work pipeline that reaches ship, the trailer must still be emitted, or ship's evidence re-read finds none.
 
 **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
 
