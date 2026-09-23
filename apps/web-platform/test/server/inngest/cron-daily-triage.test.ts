@@ -8,6 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLAUDE_BUDGET_USD } from "@/server/inngest/cron-budgets";
 
 // --- Module mocks (hoisted by vitest) ---------------------------------------
 
@@ -96,9 +97,10 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   // #8611 — the single-flight map keeps settled results for SETTLED_TTL_MS; start every test empty.
-  (globalThis as unknown as Record<symbol, Map<string, unknown> | undefined>)[Symbol.for("soleur.claudeEvalInFlight")]?.clear();
+  // Dynamic: a static import would load the substrate before the child_process mock is ready.
+  (await import("@/server/inngest/functions/_cron-claude-eval-substrate")).__resetClaudeEvalSingleFlightForTests();
   vi.resetModules();
   spawnSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
@@ -164,6 +166,8 @@ describe("cron-daily-triage — T1 happy path", () => {
     // end-of-options marker. The spawn argv MUST contain `--` IMMEDIATELY
     // BEFORE the prompt (the last argument).
     const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
+    // #8611: the substrate caps this cron at its own CLAUDE_BUDGET_USD value.
+    expect(spawnArgs[spawnArgs.indexOf("--max-budget-usd") + 1]).toBe(String(CLAUDE_BUDGET_USD["cron-daily-triage"]));
     const lastIdx = spawnArgs.length - 1;
     expect(spawnArgs[lastIdx - 1]).toBe("--");
     expect(spawnArgs[lastIdx]).toMatch(/triage/i); // prompt body sanity check

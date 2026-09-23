@@ -1,8 +1,10 @@
-// #8611 Fix 3 — every Claude spawn site carries a per-run `--max-budget-usd` ceiling.
+// #8611 Fix 3 — every Claude spawn site is capped (`--max-budget-usd`) and throttled.
 //
 // The population is DERIVED from the functions directory (every file that calls
 // `spawnClaudeEval(` or `resolveClaudeBin()`, minus the substrate that defines them), never a
-// hand-kept list: a new cron that spawns Claude without a budget must red this suite.
+// hand-kept list: a new cron that spawns Claude without a budget must red this suite. The flag
+// itself is appended by spawnClaudeEval from the cron name (pinned in
+// claude-eval-single-flight.test.ts); here we pin the table and the per-site throttle.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,10 +15,15 @@ const FN_DIR = join(__dirname, "../../../server/inngest/functions");
 const SUBSTRATE = "_cron-claude-eval-substrate.ts";
 const SPAWN_RE = /spawnClaudeEval\(|resolveClaudeBin\(\)/;
 
+// Line and block comments removed, so a commented-out flag or throttle cannot satisfy (or trip) a check.
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+}
+
 function spawnSites(): string[] {
   return readdirSync(FN_DIR)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== SUBSTRATE)
-    .filter((f) => SPAWN_RE.test(readFileSync(join(FN_DIR, f), "utf8")))
+    .filter((f) => SPAWN_RE.test(stripComments(readFileSync(join(FN_DIR, f), "utf8"))))
     .map((f) => f.replace(/\.ts$/, ""))
     .sort();
 }
@@ -38,22 +45,30 @@ describe("cron budgets — #8611", () => {
     }
   });
 
-  it("every spawn site spreads its OWN budget into its flags", () => {
+  it("no spawn site carries its own budget flag (the substrate derives it from the cron name)", () => {
+    // spawnClaudeEval appends --max-budget-usd itself and refuses a caller-supplied one, so a site
+    // naming the flag or budgetFlags is either dead or an attempt to override the cap.
     for (const site of spawnSites()) {
-      const src = readFileSync(join(FN_DIR, `${site}.ts`), "utf8");
-      // Anchored on the call shape with the site's own key: a copy-pasted sibling key must red.
-      expect(src, site).toMatch(new RegExp(`\\.\\.\\.budgetFlags\\(\\s*"${site}"\\s*\\)`));
+      const code = stripComments(readFileSync(join(FN_DIR, `${site}.ts`), "utf8"));
+      expect(code, site).not.toMatch(/budgetFlags\(|--max-budget-usd/);
     }
   });
 
-  it("every spawn site's createFunction config carries the shared manual-fire throttle", () => {
+  it("every spawn site's createFunction config carries the shared manual-fire throttle (comments stripped)", () => {
     expect(CLAUDE_EVAL_THROTTLE).toEqual({ limit: 2, period: "1h" });
     for (const site of spawnSites()) {
-      const src = readFileSync(join(FN_DIR, `${site}.ts`), "utf8");
-      // Scoped to the registration's config object, so a throttle mentioned elsewhere cannot satisfy it.
-      const config = src.slice(src.indexOf("inngest.createFunction(")).split(/\n\s*\},?\n/)[0];
+      const code = stripComments(readFileSync(join(FN_DIR, `${site}.ts`), "utf8"));
+      // Exactly one registration per site, and exactly one throttle inside ITS config object.
+      expect(code.match(/inngest\.createFunction\(/g), site).toHaveLength(1);
+      const config = code.slice(code.indexOf("inngest.createFunction(")).split(/\n\s*\},?\n/)[0]!;
       expect(config, site).toMatch(/\bthrottle:\s*\{\s*\.\.\.CLAUDE_EVAL_THROTTLE\s*\}/);
+      expect(config.match(/\bthrottle:/g), site).toHaveLength(1);
     }
+  });
+
+  it("the comment stripper removes a commented-out throttle (so the check above cannot be satisfied by one)", () => {
+    const src = "inngest.createFunction(\n  {\n    // throttle: { ...CLAUDE_EVAL_THROTTLE },\n    retries: 1,\n  },\n";
+    expect(stripComments(src)).not.toMatch(/throttle:/);
   });
 
   it("budgetFlags renders the CLI flag pair and refuses an unknown site", () => {

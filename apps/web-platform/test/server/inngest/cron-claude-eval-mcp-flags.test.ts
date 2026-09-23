@@ -39,6 +39,11 @@ vi.hoisted(() => {
 });
 
 const spawnSpy = vi.hoisted(() => vi.fn());
+const markerSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/server/claude-cost-marker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/claude-cost-marker")>()),
+  emitClaudeCostMarker: markerSpy,
+}));
 
 vi.mock("node:child_process", async (importActual) => {
   const actual = await importActual<typeof import("node:child_process")>();
@@ -86,7 +91,7 @@ describe("#5691 — spawnClaudeEval at-source egress silencing", () => {
       flags,
       prompt: "do the thing",
       maxTurnDurationMs: 60_000,
-      cronName: "cron-test",
+      cronName: "cron-ux-audit",
       buildSpawnEnv: (token) => ({ PATH: "/usr/bin", NODE_ENV: "test", GH_TOKEN: token }),
       // minimal logger
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
@@ -114,6 +119,30 @@ describe("#5691 — spawnClaudeEval at-source egress silencing", () => {
     // ANY trailing `--` end-of-options marker (the input models a cron whose flags
     // end with `--`), not merely before `--print`.
     expect(strictIdx).toBeLessThan(argv.lastIndexOf("--"));
+  });
+
+  it("#8611: an `error` followed by `exit` settles ONCE — one resolve, one cost marker", async () => {
+    markerSpy.mockReset();
+    spawnSpy.mockImplementationOnce(() => {
+      const child = makeFakeChild(0);
+      // makeFakeChild queues an `exit`; an `error` lands first, as Node can emit both.
+      queueMicrotask(() => child.emit("error", new Error("spawn EACCES")));
+      return child;
+    });
+    spawnSpy.mockClear();
+    const r = await spawnClaudeEval({
+      spawnCwd: tmpdir(),
+      installationToken: "tok-test",
+      flags: ["--print", "--"],
+      prompt: "x",
+      maxTurnDurationMs: 60_000,
+      cronName: "cron-ux-audit",
+      buildSpawnEnv: (token) => ({ PATH: "/usr/bin", NODE_ENV: "test", GH_TOKEN: token }),
+      logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
+    });
+    await new Promise((res) => setTimeout(res, 10));
+    expect(r.exitCode).toBe(0);
+    expect(markerSpy).toHaveBeenCalledTimes(1);
   });
 
   it("sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 in the spawn env", async () => {
@@ -171,12 +200,12 @@ describe("#5691 — structural drift invariant: resolveClaudeBin() spawn sites",
     expect(offenders).toEqual([]);
   });
 
-  const INLINE_CRONS: [string, string[]][] = [
+  const MIGRATED_CRONS: [string, string[]][] = [
     ["cron-daily-triage", DAILY_TRIAGE_FLAGS],
     ["cron-follow-through-monitor", FOLLOW_THROUGH_FLAGS],
   ];
 
-  it.each(INLINE_CRONS)(
+  it.each(MIGRATED_CRONS)(
     "%s flags leave --strict-mcp-config to the substrate (routed via spawnClaudeEval since #8611)",
     (_name, flags) => {
       // spawnClaudeEval prepends --strict-mcp-config before --print (pinned by the first describe
@@ -187,24 +216,29 @@ describe("#5691 — structural drift invariant: resolveClaudeBin() spawn sites",
     },
   );
 
-  it.each(INLINE_CRONS)(
+  it.each(MIGRATED_CRONS)(
     "%s CRON_BASH_ALLOWLISTS row mirrors its --allowedTools Bash verbs exactly",
     (name, flags) => {
       // The row is not read at runtime for these crons (no ephemeral workspace), so its only
       // safety value is being the SAME surface the CLI enforces — any drift must red here.
       const tools = flags[flags.indexOf("--allowedTools") + 1] ?? "";
+      // Every Bash grant must be a scoped `Bash(<verb>:*)` — a bare `Bash` (any command) would let
+      // the row "mirror" four verbs while the CLI allowed everything.
+      const bashTools = tools.split(",").filter((t) => t.startsWith("Bash"));
+      for (const t of bashTools) expect(t, name).toMatch(/^Bash\([^:)]+:\*\)$/);
       const bashVerbs = [...tools.matchAll(/Bash\(([^:)]+):\*\)/g)].map((m) => m[1]).sort();
       expect(bashVerbs.length).toBeGreaterThan(0);
+      expect(bashVerbs.length).toBe(bashTools.length);
       expect([...(CRON_BASH_ALLOWLISTS[name] ?? [])].sort()).toEqual(bashVerbs);
     },
   );
 
-  const INLINE_CRON_PATHS = [
+  const MIGRATED_CRON_PATHS = [
     "apps/web-platform/server/inngest/functions/cron-daily-triage.ts",
     "apps/web-platform/server/inngest/functions/cron-follow-through-monitor.ts",
   ];
 
-  it.each(INLINE_CRON_PATHS)(
+  it.each(MIGRATED_CRON_PATHS)(
     "%s sets the telemetry env (the load-bearing fix) in buildSpawnEnv",
     (rel) => {
       const src = readFileSync(resolve(REPO_ROOT, rel), "utf-8");

@@ -40,6 +40,7 @@ import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   mintInstallationToken,
   postSentryHeartbeat,
+  CLAUDE_BUDGET_STOP_SUBTYPE,
   REPO_OWNER,
   REPO_NAME,
   type HandlerArgs,
@@ -52,7 +53,7 @@ import {
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { sweepableRunReports } from "./_cron-run-reports";
-import { budgetFlags, CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -161,7 +162,6 @@ export const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "80",
-  ...budgetFlags("cron-daily-triage"), // #8611 per-run dollar ceiling (cron-budgets.ts)
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Read,Glob,Grep",
   "--",
@@ -274,7 +274,8 @@ export async function cronDailyTriageHandler({
   // GHA → Inngest migration).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
-      ok: result.ok,
+      // #8611: a run stopped at its --max-budget-usd cap did not finish, even on exit 0.
+      ok: result.ok && result.subtype !== CLAUDE_BUDGET_STOP_SUBTYPE,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-daily-triage",
       logger,

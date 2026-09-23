@@ -20,6 +20,7 @@
 
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLAUDE_BUDGET_USD } from "@/server/inngest/cron-budgets";
 
 // --- Module mocks (hoisted by vitest) ---------------------------------------
 
@@ -138,9 +139,10 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   // #8611 — the single-flight map keeps settled results for SETTLED_TTL_MS; start every test empty.
-  (globalThis as unknown as Record<symbol, Map<string, unknown> | undefined>)[Symbol.for("soleur.claudeEvalInFlight")]?.clear();
+  // Dynamic: a static import would load the substrate before the child_process mock is ready.
+  (await import("@/server/inngest/functions/_cron-claude-eval-substrate")).__resetClaudeEvalSingleFlightForTests();
   vi.resetModules();
   spawnSpy.mockReset();
   execFileSyncSpy.mockReset();

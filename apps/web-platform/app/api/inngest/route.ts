@@ -7,9 +7,10 @@
 //
 // Phase 2 ships with `functions: []`. Phase 3 will fill `cfoOnPaymentFailed`.
 // Once functions are registered, the signature gate (validateSignature in
-// node_modules/inngest/components/InngestCommHandler.js:1465) runs BEFORE
-// any function dispatches — preserving the "401 before dispatch" invariant
-// asserted by test/server/inngest/signature-verify.test.ts.
+// node_modules/inngest/components/InngestCommHandler.js) runs BEFORE any
+// function dispatches. Since #8611 (streaming) the 401 travels inside the
+// streamed JSON envelope under an HTTP 201 — asserted by
+// test/server/inngest/signature-verify.test.ts.
 //
 // Per cq-nextjs-route-files-http-only-exports: only HTTP method handlers
 // are exported. RV6 (DHH/Simplicity): single-function-registry inlined;
@@ -17,7 +18,7 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
-import { detachFromConsumerCancel } from "@/server/inngest/stream-detach";
+import { detachFromConsumerCancel, streamRequestInfo } from "@/server/inngest/stream-detach";
 import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
@@ -218,4 +219,4 @@ export const { GET, PUT } = handlers;
 // seeing a client disconnect: on inngest 3.54.2 that would leak a heartbeat timer whose throws exit
 // the process via server/crash-handlers.ts (ADR-243).
 export const POST = async (...args: Parameters<typeof handlers.POST>): Promise<Response> =>
-  detachFromConsumerCancel(await handlers.POST(...args));
+  detachFromConsumerCancel(await handlers.POST(...args), streamRequestInfo(args[0]));

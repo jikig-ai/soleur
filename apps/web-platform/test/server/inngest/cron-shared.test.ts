@@ -1244,6 +1244,13 @@ describe("classifyEvalFatal", () => {
     expect(c.fatalClass).toBe("spawn-fault");
   });
 
+  it("#8611: a run stopped by --max-budget-usd → fatal budget-capped, from the result subtype (not the tail)", () => {
+    const c = classifyEvalFatal({ ...base, subtype: "error_max_budget_usd" });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("budget-capped");
+    expect(c.reason).toMatch(/max-budget-usd/);
+  });
+
   it("plain non-zero with no marker → NOT fatal (benign)", () => {
     const c = classifyEvalFatal({ ...base, stdoutTail: "Reached max turns; no artifact." });
     expect(c.fatal).toBe(false);
@@ -1282,6 +1289,21 @@ describe("resolveBestEffortEvalOk (classify-fatal heartbeat)", () => {
     expect(d.ok).toBe(true); // <-- flip-all would have made this false (false page)
     expect(d.errorSummary).toMatch(/non-zero/i);
     expect(d.sentryExtra.fatalClass).toBe("benign");
+  });
+
+  it("#8611: a capped run that EXITED 0 is still ok:false (the clean-exit shortcut must not hide it)", () => {
+    const d = resolveBestEffortEvalOk({
+      ok: true,
+      exitCode: 0,
+      abortedByTimeout: false,
+      durationMs: 42,
+      stdoutTail: "",
+      stderrTail: "",
+      subtype: "error_max_budget_usd",
+    });
+    expect(d.ok).toBe(false);
+    expect(d.sentryExtra.fatalClass).toBe("budget-capped");
+    expect(d.errorSummary).toMatch(/max-budget-usd/);
   });
 
   it("clean exit (ok:true) → ok:true, no reason", () => {

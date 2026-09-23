@@ -11,12 +11,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fallbackMock } = vi.hoisted(() => ({ fallbackMock: vi.fn() }));
+// Drop reports are warning-level (an expected, degraded path); the mock captures them.
 vi.mock("@/server/observability", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/observability")>()),
-  reportSilentFallback: fallbackMock,
+  warnSilentFallback: fallbackMock,
 }));
 
-import { detachFromConsumerCancel } from "@/server/inngest/stream-detach";
+import { detachFromConsumerCancel, streamRequestInfo } from "@/server/inngest/stream-detach";
 
 const SDK_STREAM_JS = join(__dirname, "../../../node_modules/inngest/helpers/stream.js");
 // The wrapper exists for THIS file's defect. Any SDK change must re-open the question (inngest@4
@@ -101,6 +102,54 @@ describe("detachFromConsumerCancel — #8611", () => {
     expect(text.startsWith("  ")).toBe(true);
     expect(JSON.parse(text.trim())).toEqual({ status: 200, body: "ok" });
     expect(fallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("a cancel drains the source to its end (not just stops the heartbeat) and tags the report", async () => {
+    vi.useRealTimers();
+    let sawDone = false;
+    let pushed = 0;
+    // A source that only completes once it has been read to the end: `done` is observable.
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pushed < 3) {
+          pushed += 1;
+          controller.enqueue(new TextEncoder().encode("x"));
+        } else {
+          sawDone = true;
+          controller.close();
+        }
+      },
+    });
+    const res = detachFromConsumerCancel(new Response(source), { fnId: "fn-a", stepId: "st-1", signed: true });
+    await res.body!.getReader().cancel();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sawDone).toBe(true);
+    const call = fallbackMock.mock.calls.find((c) => c[1]?.op === "inngest-stream-consumer-cancel");
+    expect(call?.[1]).toMatchObject({ tags: { signed: "true", fn: "fn-a" }, extra: { stepId: "st-1" } });
+  });
+
+  it("with the consumer still attached, a source error propagates to it (no hang)", async () => {
+    vi.useRealTimers();
+    const source = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("sdk stream broke");
+      },
+    });
+    const reader = detachFromConsumerCancel(new Response(source)).body!.getReader();
+    await expect(reader.read()).rejects.toThrow(/sdk stream broke/);
+  });
+
+  it("streamRequestInfo reads fnId/stepId from the query and whether the request was signed", () => {
+    const signed = new Request("http://x/api/inngest?fnId=cron-a&stepId=step", {
+      method: "POST",
+      headers: { "x-inngest-signature": "t=1&s=00" },
+    });
+    expect(streamRequestInfo(signed)).toEqual({ fnId: "cron-a", stepId: "step", signed: true });
+    expect(streamRequestInfo(new Request("http://x/api/inngest", { method: "POST" }))).toEqual({
+      fnId: null,
+      stepId: null,
+      signed: false,
+    });
   });
 
   it("returns a body-less response unchanged", () => {

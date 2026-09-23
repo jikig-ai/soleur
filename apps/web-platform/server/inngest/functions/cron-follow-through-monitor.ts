@@ -78,6 +78,7 @@ import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   mintInstallationToken,
   postSentryHeartbeat,
+  CLAUDE_BUDGET_STOP_SUBTYPE,
   REPO_OWNER,
   REPO_NAME,
   type HandlerArgs,
@@ -94,7 +95,7 @@ import {
 // Re-export for test parity (cron-follow-through-monitor.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
-import { budgetFlags, CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -297,7 +298,6 @@ export const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model", EXECUTION_MODEL,
   "--max-turns", "30",
-  ...budgetFlags("cron-follow-through-monitor"), // #8611 per-run dollar ceiling (cron-budgets.ts)
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh label create:*),Read,Glob,Grep",
   "--",
@@ -568,7 +568,8 @@ export async function cronFollowThroughMonitorHandler({
   // matches the new monitor resource (Phase 4).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
-      ok: result.ok,
+      // #8611: a run stopped at its --max-budget-usd cap did not finish, even on exit 0.
+      ok: result.ok && result.subtype !== CLAUDE_BUDGET_STOP_SUBTYPE,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-follow-through-monitor",
       logger,

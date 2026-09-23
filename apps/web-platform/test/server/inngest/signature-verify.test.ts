@@ -40,7 +40,7 @@ const { detachSpy } = vi.hoisted(() => ({ detachSpy: vi.fn() }));
 vi.mock("@/server/inngest/stream-detach", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/inngest/stream-detach")>();
   detachSpy.mockImplementation(real.detachFromConsumerCancel);
-  return { detachFromConsumerCancel: detachSpy };
+  return { ...real, detachFromConsumerCancel: detachSpy };
 });
 
 async function importRoute() {
@@ -70,6 +70,17 @@ async function envelopeStatus(res: Response): Promise<number> {
 }
 
 describe("app/api/inngest/route.ts — signature verification (cloud mode)", () => {
+  it("is the ONLY serve() mount (a second mount would bypass the stream-detach wrapper)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    // Anchored on the IMPORT of `serve` from an inngest adapter (what a mount needs), not the bare
+    // token — prose explaining the wrapper mentions `serve({` and must not count.
+    const out = execFileSync("git", ["grep", "-lE", "^import \\{[^}]*\\bserve\\b[^}]*\\} from \"inngest/", "--", "app", "server", "pages", "middleware.ts"], {
+      cwd: `${__dirname}/../../..`,
+      encoding: "utf8",
+    }).trim().split("\n").filter(Boolean);
+    expect(out).toEqual(["app/api/inngest/route.ts"]);
+  });
+
   // Pre-warm the route module graph (Inngest SDK + 52 function modules) so the
   // first test doesn't pay the cold-import cost against testTimeout (16s) under
   // full-suite contention. Mirrors the pdfjs-dist pre-warm in

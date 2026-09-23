@@ -842,7 +842,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
       flags: ["--print"],
       prompt: "ignored by the fake bin",
       maxTurnDurationMs: 10_000,
-      cronName: "cron-test-fake",
+      cronName: "cron-bug-fixer",
       buildSpawnEnv: () => process.env,
       logger: noopLogger,
     });
@@ -863,7 +863,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     await runFakeEval(spawnCwd);
     expect(filingDenyMock).toHaveBeenCalledTimes(1);
     expect(filingDenyMock.mock.calls[0][0]).toMatchObject({
-      fn: "cron-test-fake",
+      fn: "cron-bug-fixer",
       count: 2,
       commands: ["gh issue create", "gh issue create"],
     });
@@ -898,7 +898,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
     await runFakeEval(spawnCwd);
     expect(filingDenyMock).toHaveBeenCalledTimes(1);
-    expect(filingDenyMock.mock.calls[0][0]).toMatchObject({ fn: "cron-test-fake", count: 0, capture_status: "field-absent" });
+    expect(filingDenyMock.mock.calls[0][0]).toMatchObject({ fn: "cron-bug-fixer", count: 0, capture_status: "field-absent" });
   });
 
   it("captures a stdout tail and redacts the installation token", async () => {
@@ -1043,6 +1043,17 @@ describe("parseClaudeResultLine (AC4 — result-event cost capture)", () => {
     expect(parsed.cost.subtype).toBeNull();
     expect(parsed.cost.isError).toBeNull();
     expect(parsed.cost.numTurns).toBeNull();
+    // Anchored on BOTH ends and bounded: free text that merely ENDS in a token, an over-long token,
+    // and a negative turn count are all dropped too.
+    const tail = parseClaudeResultLine(
+      JSON.stringify({ type: "result", subtype: "leaked text\nerror_x", num_turns: -1 }),
+    )!;
+    expect(tail.cost.subtype).toBeNull();
+    expect(tail.cost.numTurns).toBeNull();
+    const long = parseClaudeResultLine(JSON.stringify({ type: "result", subtype: "a".repeat(65) }))!;
+    expect(long.cost.subtype).toBeNull();
+    const max = parseClaudeResultLine(JSON.stringify({ type: "result", subtype: "a".repeat(64) }))!;
+    expect(max.cost.subtype).toBe("a".repeat(64));
   });
 
   it("AC4b — I8 survives: a credit-exhaustion result event folds the error text into the tail so classifyEvalFatal still returns fatal", () => {
