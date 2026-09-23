@@ -111,8 +111,18 @@ dark since #7071, so there is no window to protect.
       debt issue, both with milestone `Phase 4: Validate + Scale`.
 - [ ] 6.4 Render `decision-challenges.md` (DC-1, DC-2) into the PR body and file the
       `action-required` issue.
-- [ ] 6.5 Post-merge: re-pin `scripts/sentry-alert-live-fidelity.sh`'s capture once the apply reads
-      back (it cannot be done inside the PR that fires the apply).
+- [x] 6.5 Post-merge re-pin: **NOT APPLICABLE to this change**, established by measurement rather
+      than performed as a no-op. The frozen-rule pin covers only `.tf` blocks carrying
+      `legacy_trigger_conditions` under `ignore_changes = all` -- rules terraform NEVER writes.
+      That set is `auth_per_user_loop` and `sandbox_startup_failure`. `zot_mirror_fallback_rate`
+      carries only `ignore_changes = [environment]` and terraform planned it as *updated
+      in-place*, so it is MANAGED and is checked against `alert-reference.json`, which `plan_pr`
+      verified (`sentry alert reference gate: PASS (30 rules, plan == alert-reference.json)`).
+      Being present in the 2026-09-09 capture is NOT the same as being in the frozen set -- the
+      task's wording elides that, and taking it at face value would have meant a needless
+      live-credentialed write against production Sentry.
+      Confirmed live, not just by reading the tf: dispatched `scheduled-sentry-alert-drift.yml`
+      (run 35904015947) after the apply landed the narrowed rule -> **success**.
 
 ## Phase 7 — #8600 review round (10-seat panel, all seats BLOCKING)
 
@@ -126,7 +136,7 @@ dark since #7071, so there is no window to protect.
       the `na_*` and `failed` tokens.
 - [x] 7.4 Probe leg 2: count `relogin_failed` only NEWER than the host's latest marker (the latch
       made #8036 permanently unclosable on any host that saw one pre-1c deploy in the window).
-- [x] 7.5 Probe leg 3: closed allowlist (`ok` | `reused_local_reload`); `cosign_absent`,
+- [x] 7.5 Probe leg 3: closed allowlist (`ok` only -- see LEG3_ALLOW_RE); `cosign_absent`,
       `wrong_identity`, `unsigned` and a missing verdict are ACTION REQUIRED, not PASS.
 - [x] 7.6 Probe: saturation guard — an absence verdict over a truncated window is not evidence.
 - [x] 7.7 Probe suite 19 -> 28 rows; `MIN_CHECKS` raised to 28 in the same edit and mutation-proven.
