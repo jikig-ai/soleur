@@ -37,30 +37,49 @@
 # webhook secret — rotation is operator-explicit via `terraform apply
 # -replace=...`. Mirrors the policy from inngest.tf:97-104.
 
-resource "doppler_secret" "github_app_id" {
-  project    = "soleur"
-  config     = "prd"
-  name       = "GITHUB_APP_ID"
-  value      = var.github_app_id
-  visibility = "masked"
+# --- #8209 / ADR-239: FORGET the two App-identity mirrors --------------------
+#
+# READ THIS BEFORE TOUCHING EITHER BLOCK BELOW. The two resources these replace pinned
+# `config = "prd"`, which means they were NOT a Terraform bookkeeping copy of the App
+# key — they WERE the soleur-ai App's live runtime identity, the key the web app reads
+# to mint an installation token for every connected user. Destroying them breaks every
+# connected user's GitHub connection and every inbound webhook, with no rollback beyond
+# the operator pasting a key back by hand. `ignore_changes = [value]` protected the
+# value; nothing protected the resource.
+#
+# WHY THEY GO. Web-platform state should not hold a copy of an App key at all: the
+# `prd_terraform` backend keys read that state object (M7), so the mirror put the key
+# one `terraform show` away from any branch workflow. Terraform stops MANAGING the
+# secrets; Doppler `prd` keeps its values, byte-for-byte, and the App keeps working.
+#
+# WHY `destroy = false` IS LOAD-BEARING. Without it `removed` is a DELETE. With it,
+# Terraform plans "will no longer be managed by Terraform, but will not be destroyed".
+#
+# WHY THE `-target=` LINES STAY. apply-web-platform-infra.yml applies this root with a
+# `-target=` allow-list, and a `removed` block is planned ONLY when its address is
+# targeted. Deleting `-target=doppler_secret.github_app_private_key` (and `_id`) would
+# leave the resources in state with no HCL declaring them — orphaned under management,
+# which the next UNTARGETED apply destroys. So the dangling-looking target lines are the
+# opposite of dead code until the forget has actually applied. Removing them is part of
+# the R6 follow-up, after the operator confirms the forget landed.
+#
+# HOW THE ADDRESSES WERE OBTAINED. Copied from `terraform state list`, not typed. A
+# misspelled `from` address leaves the real resource unclaimed by any `removed` block
+# while its resource block is gone — which Terraform plans as a plain DESTROY.
+# tests/scripts/test-infra-privileged-tier-census.sh (Guard 4) asserts all of this.
+removed {
+  from = doppler_secret.github_app_id
 
   lifecycle {
-    # dev/prd isolation: each doppler_secret pins config = "prd" explicitly.
-    # The resource cannot land in dev without an edit to this file (caught
-    # at PR review). Mirrors the pattern from inngest.tf.
-    ignore_changes = [value]
+    destroy = false
   }
 }
 
-resource "doppler_secret" "github_app_private_key" {
-  project    = "soleur"
-  config     = "prd"
-  name       = "GITHUB_APP_PRIVATE_KEY"
-  value      = var.github_app_private_key
-  visibility = "masked"
+removed {
+  from = doppler_secret.github_app_private_key
 
   lifecycle {
-    ignore_changes = [value]
+    destroy = false
   }
 }
 

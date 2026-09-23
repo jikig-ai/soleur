@@ -275,4 +275,24 @@ resource "github_repository_environment" "workspaces_luks_cutover" {
   reviewers {
     users = [54279]
   }
+
+  # (#8209, ADR-239 D2) ADDED. Measured 2026-09-22 via `gh api repos/.../environments`:
+  # this environment's `deployment_branch_policy` was NULL, so a run on ANY branch that
+  # cleared the reviewer click could deploy to it. A reviewer gate is a gate on the
+  # HUMAN, not on the CODE: the approver sees a run name, not the diff of the branch
+  # that will execute with the environment's secrets. Once this environment carries a
+  # Tier-B secret, that is the whole boundary, so both halves below are required.
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+# The named list the block above declares — without it the list is EMPTY and GitHub
+# refuses every branch, including `main`. See the same pairing in
+# web-host-birth-environment.tf and infra-privileged-environment.tf.
+resource "github_repository_environment_deployment_policy" "workspaces_luks_cutover_main" {
+  repository     = "soleur"
+  environment    = github_repository_environment.workspaces_luks_cutover.environment
+  branch_pattern = "main"
 }

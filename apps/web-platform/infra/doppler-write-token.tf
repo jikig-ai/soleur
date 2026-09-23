@@ -37,15 +37,38 @@
 #
 # autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
 
-resource "doppler_service_token" "write" {
-  project = "soleur"
-  config  = "prd_terraform"
-  name    = "ci-tf-write"
-  access  = "read/write"
+# --- #8209 / ADR-239: FORGET the repo-secret write path ----------------------
+#
+# `DOPPLER_TOKEN_WRITE` is a REPO secret with read/write on `soleur/prd_terraform`, so
+# any workflow on any branch of this public repository can name it. That is a WRITE into
+# the config a Tier-B apply reads, and `doppler run` overrides existing environment
+# variables by default — so a branch actor could plant `HCLOUD_TOKEN=<their account>`
+# and a later main-branch apply would plan against it. (The `--preserve-env` flag on
+# every Tier-B `doppler run` closes that independently; this closes the other end.)
+#
+# FORGET, NOT DESTROY, and that is what makes the merge safe. The token stays live and
+# the repo secret stays published until the operator mints a replacement into the
+# `infra-privileged` environment (operator step O6) and deletes the repo secret (O11).
+# Destroying either here would break every Tier-B job the moment this PR merges, before
+# any operator step has run. The consumers are already Tier-B jobs, so the move is a
+# carrier change, not a permission change.
+#
+# The `-target=github_actions_secret.doppler_token_write` line at
+# apply-web-platform-infra.yml stays for the same reason as in github-app.tf: a
+# `removed` block is only planned when its address is targeted, and an untargeted
+# forget leaves the resource orphaned under management.
+removed {
+  from = doppler_service_token.write
+
+  lifecycle {
+    destroy = false
+  }
 }
 
-resource "github_actions_secret" "doppler_token_write" {
-  repository      = "soleur"
-  secret_name     = "DOPPLER_TOKEN_WRITE"
-  plaintext_value = doppler_service_token.write.key
+removed {
+  from = github_actions_secret.doppler_token_write
+
+  lifecycle {
+    destroy = false
+  }
 }

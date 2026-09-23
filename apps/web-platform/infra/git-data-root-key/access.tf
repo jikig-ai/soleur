@@ -36,20 +36,42 @@ resource "doppler_secret" "git_data_root_ssh_private_key" {
   }
 }
 
-# Read-only on the isolated config. The provider has no expiry attribute; revocation is a reviewed
-# PR that adds a typed arm for exactly this address (the apply workflow's allowlist is additive-only
-# with no exceptions) or a removal PR (ADR-220 D3).
-resource "doppler_service_token" "git_data_root_read" {
-  project = doppler_project.git_data_root.name
-  config  = doppler_environment.git_data_root_prd.slug
-  name    = "git-data-root-read"
-  access  = "read"
+# --- #8209 / ADR-239: FORGET the repo-secret custody path --------------------
+#
+# ADR-220 D4 already recorded this pair as a residual: `DOPPLER_TOKEN_GIT_DATA_ROOT` is
+# a REPO secret, so every workflow on every branch of this public repository can name
+# it, and it reads the isolated `soleur-git-data-root` project that holds the SSH
+# private key that is root on the host storing every connected user's repositories. The
+# isolation bought by a separate Doppler project and a separate Terraform root was
+# undone by the carrier.
+#
+# The replacement is the SAME token on a main-only environment
+# (`web-platform-infra-apply`, which `git-data-cutover.yml` already declares), seeded by
+# the operator at step O7. An environment secret overrides a repo secret of the same
+# name, so the cutover job needs no edit at all — which matters, because that file
+# belongs to the parallel #8211 session.
+#
+# FORGET, NOT DESTROY. The token and the repo secret both stay live until the operator
+# has seeded the environment copy (O7) and deleted the repo secret (O11). A destroy here
+# would break the cutover path the moment this PR merges.
+#
+# WHY THIS ROOT'S FORGET NEEDS A TYPED ARM. apply-git-data-root-key.yml refuses any
+# non-additive plan (ADR-220 D3, additive-only with no exceptions), and a forget is not
+# additive. The one-shot `8209_custody_forget` arm in that workflow admits exactly these
+# two addresses and nothing else — not a third address, and not a DELETE of either. The
+# R6 follow-up removes the arm once the O8 dispatch has applied.
+removed {
+  from = doppler_service_token.git_data_root_read
+
+  lifecycle {
+    destroy = false
+  }
 }
 
-# Repo secret (environment secrets are not writable by the Terraform App). NO ignore_changes: a
-# token rotation must reach the secret in the same apply.
-resource "github_actions_secret" "doppler_token_git_data_root" {
-  repository      = "soleur"
-  secret_name     = "DOPPLER_TOKEN_GIT_DATA_ROOT"
-  plaintext_value = doppler_service_token.git_data_root_read.key
+removed {
+  from = github_actions_secret.doppler_token_git_data_root
+
+  lifecycle {
+    destroy = false
+  }
 }

@@ -30,9 +30,26 @@ terraform {
 # if a plan errors with 401 "Resource not accessible by integration".
 provider "github" {
   owner = "jikig-ai"
-  app_auth {
-    id              = var.github_app_id
-    installation_id = "122213433"
-    pem_file        = var.github_app_private_key
+  token = var.github_plan_actions_credential != "" && var.github_infra_app_private_key == "" ? var.github_plan_actions_credential : null
+
+  # (#8209, ADR-239) Three auth modes, selected by which variables are non-empty:
+  # INFRA (github_infra_app_private_key set) is the Tier-B `soleur-infra` App and the
+  # mode every apply runs in after the operator sequence; TOKEN
+  # (github_plan_actions_credential set, no infra key) is the PR plan job's own
+  # read-only `github.token`; LEGACY (neither) is the soleur-ai key from prd_terraform,
+  # the BEFORE state that keeps this merge safe. The `for_each` is the exact complement
+  # of the `token` condition so exactly one always resolves -- integrations/github v6
+  # otherwise falls back to an ambient GITHUB_TOKEN/`gh auth token`, authenticating as
+  # whoever the runner happens to be instead of failing. Full rationale:
+  # apps/web-platform/infra/main.tf, the same block.
+  dynamic "app_auth" {
+    for_each = var.github_infra_app_private_key != "" || var.github_plan_actions_credential == "" ? [1] : []
+    content {
+      id = var.github_infra_app_private_key != "" ? var.github_infra_app_id : var.github_app_id
+      # 122213433 is the soleur-ai INSTALLATION id on jikig-ai, not the App id
+      # (3261325). Literal because it belongs to the legacy mode only.
+      installation_id = var.github_infra_app_private_key != "" ? var.github_infra_app_installation_id : "122213433"
+      pem_file        = var.github_infra_app_private_key != "" ? var.github_infra_app_private_key : var.github_app_private_key
+    }
   }
 }

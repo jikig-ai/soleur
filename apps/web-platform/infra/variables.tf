@@ -645,15 +645,56 @@ variable "inngest_config_digest" {
 # autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
 
 variable "github_app_id" {
-  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf)."
+  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf). LEGACY MODE ONLY since #8209 — `default = \"\"` so a merge before the Tier-B project exists does not fail (ADR-065)."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "github_app_private_key" {
-  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded."
+  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded. LEGACY MODE ONLY since #8209; after operator step O10 this resolves to the non-PEM `EVICTED_SEE_ADR_238` sentinel."
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+# --- #8209 / ADR-239: the Tier-A and Tier-B GitHub identities -----------------
+#
+# Every variable below defaults to "" so this file can merge BEFORE the operator has
+# provisioned anything (ADR-065). The provider's mode selector in main.tf reads the
+# empty string as "not supplied", which is what makes the PR merge-safe in both the
+# before and the after state.
+#
+# NAMING: these are DOPPLER names, never Actions-secret names. GitHub reserves the
+# `GITHUB_*` prefix for Actions secrets and secret names are case-insensitive, so
+# `GITHUB_INFRA_APP_*` could not be an Actions secret even if we wanted it to be.
+
+variable "github_plan_actions_credential" {
+  description = "The PR plan job's own Actions credential (`github.token`), used in TOKEN mode for a read-only `terraform plan -refresh=false`. Tier A: a branch workflow can reach it, and that is fine — it is job-scoped, expires with the run, and cannot write. Deliberately NOT named `*_token`: the name is the only thing distinguishing it from the privileged Doppler token in a grep, and #8209 exists because those two were confusable."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_infra_app_id" {
+  description = "App ID of the dedicated `soleur-infra` App (Tier B, operator-created from github-infra-app-manifest.json at operator step O1). Not sensitive in itself, but marked so for symmetry with the pair it is useless without."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_infra_app_installation_id" {
+  description = "Installation ID of `soleur-infra` on the jikig-ai org (Tier B). A variable rather than a literal because, unlike the legacy soleur-ai installation, this one does not exist until the operator creates it."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_infra_app_private_key" {
+  description = "PEM-encoded private key for the `soleur-infra` App (Tier B, delivered only as a `DOPPLER_TOKEN_INFRA_PRIVILEGED`-gated environment secret on a main-only environment). Its non-emptiness is the selector for INFRA mode in main.tf."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 # #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
