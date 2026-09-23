@@ -554,8 +554,9 @@ short-lived `.alloc` lock, ticket held `flock -x` for the *run's* lifetime
 (mirroring `_SESSION_LOCK_FDS`), and only the queue head makes the bounded
 `acquire_lock` call. An overrun therefore releases one run at a time, in mint
 order, instead of firing every waiter at once. Non-head waiters poll with
-`flock -n` probes every `TC_QUEUE_POLL_S` (5 s) — two probes and a readdir,
-against the ~6 s-per-beat `/proc` walk measured as the anti-pattern. A waiter
+`flock -n` probes every `TC_QUEUE_POLL_S` (5 s) — one probe per earlier ticket
+plus a readdir, against the ~6 s-per-beat `/proc` walk measured as the
+anti-pattern. A waiter
 whose **queue** patience (`TC_QUEUE_TIMEOUT`, default `TC_LOCK_TIMEOUT`)
 expires still proceeds contended — `LOCK_QUEUE_TIMEOUT` plus the canonical
 `LOCK_CONTENDED_PROCEEDING` line carrying `queue_timeout=1` — and the wait
@@ -576,8 +577,9 @@ it, exactly as they inherit the main lock today.
 queueing is charged against `_RUN_START_EPOCH`." With the ticket stage the
 worst-case pre-run wait is `TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT` — **7200 s** at
 defaults — so the execution budget inside the 14,400 s ceiling is ~7200 s
-(~1.25x the uncontended baseline), not ~10,800 s. A run that spends its whole
-combined budget queueing exits 3 (UNRESOLVED) having run nothing; that is the
+(~1.25x the uncontended baseline), not ~10,800 s. A run whose queue wait eats
+deep into that budget exits 3 (UNRESOLVED) with only partial coverage — and at
+a `TC_QUEUE_TIMEOUT` raised past ~10,800 s, having run nothing; that is the
 honest serialization cost, and it is why `TC_QUEUE_TIMEOUT` exists rather than
 queueing being unbounded.
 

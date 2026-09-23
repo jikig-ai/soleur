@@ -17,8 +17,11 @@
 # path collision. See the plan's Research Reconciliation table for the two
 # refuted hypotheses and their discriminators.
 #
-# This module only OBSERVES. It creates no files, takes no locks, and deletes
-# nothing. Every function is safe to call under `set -euo pipefail`.
+# The probe functions only OBSERVE. The exception is tc_acquire's FIFO ticket
+# queue (#8579): it mints/locks/sweeps ticket files under
+# $LOCK_DIR/<name>.queue.d — that is the mechanism, and every failure arm still
+# degrades to the pre-queue direct-acquire path. Every function is safe to call
+# under `set -euo pipefail`.
 #
 # TEST SEAMS (all default to the real system; overridden only by the suite):
 #   TC_PROC_ROOT     procfs root                  (default /proc)
@@ -29,6 +32,8 @@
 #   TC_NPROC         core count                   (default `nproc`)
 #   TC_DF_CMD        the `df` binary              (default `df`)
 #   TC_WAIT_HEARTBEAT_S  lock-wait heartbeat interval in seconds (default 60)
+#   TC_QUEUE_TIMEOUT     ticket-queue wait budget  (default $TC_LOCK_TIMEOUT)
+#   TC_QUEUE_POLL_S      queue head-check cadence  (default 5)
 
 # Guard against double-source within a single shell (session-state.sh idiom).
 if [[ "${_SOLEUR_TEST_CONTENTION_LOADED:-}" == "1" ]]; then
@@ -88,9 +93,16 @@ TC_WAIT_HEARTBEAT_S="${TC_WAIT_HEARTBEAT_S:-60}"
 # never abort), spaced by arrival rather than synchronized. A non-head waiter
 # past it proceeds contended with queue_timeout=1.
 TC_QUEUE_TIMEOUT="${TC_QUEUE_TIMEOUT:-$TC_LOCK_TIMEOUT}"
-# Head-check cadence: two flock -n probes plus a readdir — deliberately cheap,
-# not the ~6 s /proc walk the holder-naming draft cost (ADR-133).
+# Head-check cadence: one flock -n probe per earlier ticket plus a readdir —
+# deliberately cheap, not the ~6 s /proc walk the holder-naming draft cost
+# (ADR-133).
 TC_QUEUE_POLL_S="${TC_QUEUE_POLL_S:-5}"
+# Shape-assert both knobs like every other operator-facing value in this file:
+# a non-numeric TC_QUEUE_TIMEOUT is an unbound-var arithmetic error under
+# `set -u` (aborts tc_acquire — violates never-abort), and TC_QUEUE_POLL_S=0
+# makes _tc_queue_wait's `sleep` fail into a busy-spin on .alloc.
+[[ "$TC_QUEUE_TIMEOUT" =~ ^[0-9]+$ ]] || TC_QUEUE_TIMEOUT="$TC_LOCK_TIMEOUT"
+[[ "$TC_QUEUE_POLL_S" =~ ^[1-9][0-9]*$ ]] || TC_QUEUE_POLL_S=5
 
 # Wall-clock ceiling above which a test-all.sh run is treated as no longer
 # having a consumer (#7869).
@@ -861,9 +873,10 @@ tc_capacity_line() {
 # interleaved run) while making it attributable, which is the actual defect.
 # Because it never blocks, no failure mode of the lock can wedge a session.
 #
-# Emits exactly one named status line so the reason is never inferred:
+# Emits named status lines so the reason is never inferred:
 #   LOCK_SKIPPED_DISABLED / LOCK_SKIPPED_CI / LOCK_UNAVAILABLE /
-#   LOCK_ACQUIRED / LOCK_CONTENDED_PROCEEDING
+#   LOCK_ACQUIRED / LOCK_CONTENDED_PROCEEDING /
+#   LOCK_WAITING / LOCK_QUEUED / LOCK_QUEUE_DEGRADED / LOCK_QUEUE_TIMEOUT (#8579)
 #
 # Deliberately NO stale-holder detection (Phase 3.6): flock is kernel-managed
 # and inode-bound, released automatically once the last fd holder dies (proven
@@ -1037,17 +1050,19 @@ _TC_ALLOC_FD=""
 _tc_alloc_lock() {
   local qdir="$1" i
   _TC_ALLOC_FD=""
+  # The brace group matters: `exec {fd}>>file 2>/dev/null` redirects the
+  # CALLING SHELL's stderr permanently — exec with only redirections applies
+  # them to the shell, so the "harmless" dev/null silences every later >&2
+  # line (every LOCK_* banner) for the rest of the process.
+  { exec {_TC_ALLOC_FD}>>"$qdir/.alloc"; } 2>/dev/null || return 1
+  # One open, retried flock -n: a failed probe leaves the fd valid and
+  # unlocked, so re-opening per iteration would be pure syscall waste.
   for (( i = 0; i < 50; i++ )); do
-    # The brace group matters: `exec {fd}>>file 2>/dev/null` redirects the
-    # CALLING SHELL's stderr permanently — exec with only redirections applies
-    # them to the shell, so the "harmless" dev/null silences every later >&2
-    # line (every LOCK_* banner) for the rest of the process.
-    { exec {_TC_ALLOC_FD}>>"$qdir/.alloc"; } 2>/dev/null || return 1
     if flock -n -x "$_TC_ALLOC_FD" 2>/dev/null; then return 0; fi
-    { eval "exec ${_TC_ALLOC_FD}>&-"; } 2>/dev/null || true
-    _TC_ALLOC_FD=""
     sleep 0.05
   done
+  { eval "exec ${_TC_ALLOC_FD}>&-"; } 2>/dev/null || true
+  _TC_ALLOC_FD=""
   return 1
 }
 
@@ -1082,6 +1097,10 @@ _tc_ticket_sweep() {
 # _TC_TICKET_FD + _TC_TICKET_SERIAL. rc 1 on any failure — caller degrades.
 _tc_ticket_mint() {
   local qdir="$1" f base max=0 tfile
+  # Idempotent like _acquire_lock_impl: a second tc_acquire in one shell would
+  # otherwise mint serial N+1 while serial N is still held BY ITSELF — a
+  # self-block for the full TC_QUEUE_TIMEOUT, then a contended proceed.
+  [[ -n "$_TC_TICKET_FD" && -n "$_TC_TICKET_SERIAL" ]] && return 0
   _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""
   _tc_alloc_lock "$qdir" || return 1
 
@@ -1104,6 +1123,7 @@ _tc_ticket_mint() {
       { eval "exec ${_TC_TICKET_FD}>&-"; } 2>/dev/null || true
     fi
     _TC_TICKET_FD=""; _TC_TICKET_SERIAL=""
+    rm -f "$tfile" 2>/dev/null || true
     _tc_alloc_unlock; return 1
   fi
   printf '%s %s %s\n' "$$" "${PWD##*/}" "${EPOCHSECONDS:-0}" >>"$tfile" 2>/dev/null || true
@@ -1116,22 +1136,24 @@ _tc_ticket_mint() {
 # as not-head — the wait loop's TC_QUEUE_TIMEOUT bounds that case, so the
 # queue still cannot wedge a run.
 _tc_queue_is_head() {
-  local qdir="$1" serial="$2" f base head=0
+  local qdir="$1" serial="$2" f base blocked=0
   _tc_alloc_lock "$qdir" || return 1
   for f in "$qdir"/*; do
     [[ -e "$f" ]] || continue
     base="${f##*/}"
     [[ "$base" =~ ^[0-9]+$ ]] || continue
     (( 10#$base < 10#$serial )) || continue
-    if ! flock -n -x "$f" -c true 2>/dev/null; then head=1; break; fi
+    if ! flock -n -x "$f" -c true 2>/dev/null; then blocked=1; break; fi
   done
   _tc_alloc_unlock
-  return $head
+  return $blocked
 }
 
 # Advisory position for the heartbeat: 1 + the count of strictly-earlier
 # tickets still held. No .alloc — a stale reading changes a log line, never a
-# decision.
+# decision. (A probe CAN land inside a concurrent mint's create→flock window
+# and fail that mint → LOCK_QUEUE_DEGRADED: microsecond window, benign
+# outcome, accepted.)
 _tc_queue_position() {
   local qdir="$1" serial="$2" f base n=1
   for f in "$qdir"/*; do
