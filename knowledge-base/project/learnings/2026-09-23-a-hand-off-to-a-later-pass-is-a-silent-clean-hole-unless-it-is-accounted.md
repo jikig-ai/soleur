@@ -197,9 +197,19 @@ the same conclusion this repo reached for every PreToolUse hook it now carries.
    carries.
    **Prevention:** before routing a bullet, run `python3
    scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
-   and size the bullet against the headroom it reports. `work/SKILL.md` now has
-   143 bytes left — the next bullet needs an extraction into `references/`, not a
-   trim.
+   and size the bullet against the headroom it reports.
+   **It reddened a SECOND time, and that is the real finding.** The trimmed
+   515-byte bullet passed with 143 bytes to spare, then went 288 over after a
+   routine BEHIND resync pulled main's own growth in — the branch never touched
+   the file again. Measured: main took `work/SKILL.md` from 361342 to 361772 in
+   about four hours, leaving 228 bytes under a 362000 ceiling. The bullet was
+   dropped rather than trimmed a third time.
+   **The durable point:** headroom on a shared file is not yours to spend, and a
+   trim sized against today's headroom is re-reddened by any unrelated commit
+   while your PR sits in the queue. Below a few hundred bytes the only stable
+   moves are to extract into `references/` or not to route at all — a bullet
+   small enough to fit is too small to carry a learning. `soleur:compound` can no
+   longer route into `work/SKILL.md`; recorded on #8305 with the measurements.
 
 10. **Shipped an operator-facing finding naming three causes the probe never
     measured.** `lint-diagnosis-claims` red (ADR-166). Two were hedged on their
