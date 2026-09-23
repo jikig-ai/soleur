@@ -233,7 +233,15 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
       # regenerates it from the MERGED sources; it fails closed (touches nothing unless it
       # committed) and never pushes. It ships beside this script; the target stays $PWD.
       # After it commits, sync_step's merge is a no-op and HEAD != @{u}, so it pushes.
+      # ship Phase 7 and merge-pr run this script from a mktemp SNAPSHOT, which has no
+      # siblings, so a bare ${CLAUDE_PLUGIN_ROOT} (ADR-179 A12; `+set` keeps `set -u` quiet) is
+      # the fallback -- the root the snapshot was copied from, identity-checked as a sanity
+      # check rather than a boundary (A11).
       resolver="$(dirname "${BASH_SOURCE[0]}")/resolve-regenerable-conflicts.sh"
+      if [[ ! -f "$resolver" && -n "${CLAUDE_PLUGIN_ROOT+set}" && -n "${CLAUDE_PLUGIN_ROOT}" ]] \
+         && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null; then
+        resolver="${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh"
+      fi
       if [[ -f "$resolver" ]] && bash "$resolver" origin/main; then
         tag regen_resolved 0 "regenerable conflict resolved — merge committed locally"
       else
