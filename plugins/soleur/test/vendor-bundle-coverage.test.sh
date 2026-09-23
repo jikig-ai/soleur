@@ -19,6 +19,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owns TS7's fixture dir on abnormal exit (ADR-129 rule (c)). Installed BEFORE sourcing
+# test-helpers.sh, which composes a prior EXIT trap with its own sandbox cleanup; a trap set
+# AFTER the source would replace that cleanup and leak the incident sandbox.
+fixture_dir=""
+trap 'rm -rf "${fixture_dir:-}"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$SCRIPT_DIR/../../.."

@@ -103,7 +103,7 @@ into a deterministic RED under the old shape, and the regression check cannot pa
 ### Relevant files
 
 - `plugins/soleur/test/vendor-bundle-coverage.test.sh`: the only file edited.
-- `plugins/soleur/test/test-helpers.sh`: `assert_eq expected actual msg` (used by TS7). `print_results [floor]` is an anti-vacuity FLOOR (`ran < floor` → exit 1), currently called with `19`. The measured run count today is **21** (4 file-exists + TS2 1 + TS3 1 + TS4 2 bundles × 5 + TS5 4 + TS6 1). **It also installs an EXIT trap** (the incident-telemetry sandbox cleanup, composed with any prior trap). A bare `trap … EXIT` in the suite would REPLACE it and leak the sandbox. TS7 must clean up with an explicit `rm -rf`, not a trap.
+- `plugins/soleur/test/test-helpers.sh`: `assert_eq expected actual msg` (used by TS7). `print_results [floor]` is an anti-vacuity FLOOR (`ran < floor` → exit 1), currently called with `19`. The measured run count today is **21** (4 file-exists + TS2 1 + TS3 1 + TS4 2 bundles × 5 + TS5 4 + TS6 1). **It also installs an EXIT trap** (the incident-telemetry sandbox cleanup, composed with any prior trap). A `trap … EXIT` set AFTER sourcing it would REPLACE it and leak the sandbox, so the suite's owning trap goes BEFORE the source (amended at /work; see Implementation step 5).
 - `.github/workflows/vendor-pin-verify.yml` `detect-changes` lists `plugins/soleur/test/vendor-bundle-coverage\.test\.sh$`, so this PR triggers the vendor-pin-verify job. That is expected, and it also exercises the fixed suite in CI.
 - `scripts/test-all.sh` collects `plugins/soleur/test/*.test.sh`, so no runner wiring changes.
 
@@ -213,7 +213,11 @@ Test-only, single file. The changes, in file order:
    - `rc=0; … || rc=$?` is safe under `set -e`, because a failure on the left of `||` does not
      abort. The `{ …; }` groups the size floor with the lookup, so a shrunk fixture FAILs this
      row (the byte count in the message says why).
-   - **No `trap … EXIT`**: test-helpers.sh owns that trap.
+   - **Trap placement (amended at /work):** `lint-trap-tempfile-ownership` rule (c) requires an
+     owning `trap … EXIT` in any file that calls `mktemp`, so the suite installs
+     `trap 'rm -rf "${fixture_dir:-}"' EXIT` **before** `source test-helpers.sh`, which composes a
+     prior EXIT trap with its own sandbox cleanup. Never after the source. The explicit `rm -rf`
+     at the end of TS7 stays.
    - The decoy row is a negative assertion, and it would pass on an empty or missing decoy. The
      `printf > "$decoy"` just above runs under `set -e`, and AC4's M2 run proves the row can go
      RED.
@@ -230,14 +234,15 @@ Test-only, single file. The changes, in file order:
 
 ## Acceptance Criteria
 
-- [ ] **AC1**: `bash plugins/soleur/test/vendor-bundle-coverage.test.sh` exits 0 and prints `Passed: 23` / `Failed: 0`. The file's last line (`tail -n 1`) is `print_results 23`.
-- [ ] **AC2**: No executable line of the file pipes into `grep -q…`. The check is `[ -z "$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' plugins/soleur/test/vendor-bundle-coverage.test.sh | grep -vE '^[0-9]+:[[:space:]]*#')" ]`, which exits 0. Comment lines are excluded because the helper's comment names the forbidden shape. The `(^|[^|])` prefix is load-bearing: the drift guard's bare `PATTERN` also matches the `| grep` inside a logical `|| grep -qF`, which would false-flag TS6 (line ~164) and the converted `run:` predicate. Non-vacuity was measured on the pre-fix file: the check hits exactly lines 73, 91, 99, 115 and 116, and not 164.
-- [ ] **AC3**: Both TS4 lefthook predicates route through the helper (P4). `grep -cE '^[[:space:]]*if glob_item_contains "\$LEFTHOOK" "\$prefix/(NOTICE|references/)"; then$' plugins/soleur/test/vendor-bundle-coverage.test.sh` → `2`.
-- [ ] **AC4 (mutations, run once at /work, not shipped; results recorded in the PR body):** Apply each edit to the helper or suite, run the suite, confirm the stated outcome, then restore.
+- [x] **AC1**: `bash plugins/soleur/test/vendor-bundle-coverage.test.sh` exits 0 and prints `Passed: 23` / `Failed: 0`. The file's last line (`tail -n 1`) is `print_results 23`.
+- [x] **AC2**: No executable line of the file pipes into `grep -q…`. The check is `[ -z "$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' plugins/soleur/test/vendor-bundle-coverage.test.sh | grep -vE '^[0-9]+:[[:space:]]*#')" ]`, which exits 0. Comment lines are excluded because the helper's comment names the forbidden shape. The `(^|[^|])` prefix is load-bearing: the drift guard's bare `PATTERN` also matches the `| grep` inside a logical `|| grep -qF`, which would false-flag TS6 (line ~164) and the converted `run:` predicate. Non-vacuity was measured on the pre-fix file: the check hits exactly lines 73, 91, 99, 115 and 116, and not 164.
+- [x] **AC3**: Both TS4 lefthook predicates route through the helper (P4). `grep -cE '^[[:space:]]*if glob_item_contains "\$LEFTHOOK" "\$prefix/(NOTICE|references/)"; then$' plugins/soleur/test/vendor-bundle-coverage.test.sh` → `2`.
+- [x] **AC4 (mutations, run once at /work, not shipped; results recorded in the PR body):** Apply each edit to the helper or suite, run the suite, confirm the stated outcome, then restore.
   - **M1**: helper body becomes `grep -E '^[[:space:]]+-[[:space:]]' "$1" | grep -qF -- "$2"`. Expect exit 1 with the TS7 "needle on line 1" row FAILing.
   - **M2**: helper body becomes `grep -qF -- "$2" "$1"` (item scoping dropped). Expect the TS7 decoy row to FAIL.
   - **H1**: the `awk` line-1 needle becomes a filler path. Expect the "needle on line 1" row to FAIL.
   - **H2**: the needle moves to the last line of `big` instead of line 1. Expect the row to stay PASS.
+  - **Measured at /work** (`env -i PATH=/usr/bin:/bin bash --noprofile --norc`, real grep): M1 RED 5/5 (`Passed: 22 / Failed: 1`, needle row); M2 decoy row RED; M3 needle row RED at 643 bytes; M4 (decoy row deleted) floor tripped at 22 < 23; H1 needle row RED; H2 GREEN 23/0; M5 (line ~99 re-inlined as a pipe) GREEN 23/0, the documented residual that AC2 catches. Fixed suite GREEN 10/10, 5 of them with SIGPIPE ignored as on CI.
 - [ ] **AC5**: The PR body contains `Ref #7005` and neither `Closes #7005` nor `Fixes #7005`.
 - [ ] **AC6**: The diff touches only `plugins/soleur/test/vendor-bundle-coverage.test.sh`, plus the pipeline's own artifacts: `knowledge-base/project/plans/2026-09-23-fix-vendor-bundle-coverage-sigpipe-race-plan.md`, `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/**`, and any generated `knowledge-base/INDEX.md`.
 
@@ -288,10 +293,10 @@ There is no new runtime surface. The suite's own PASS/FAIL lines in CI are the s
 
 ## Sharp Edges
 
-- test-helpers.sh owns the EXIT trap (incident sandbox cleanup). Any `trap … EXIT` added by this suite silently replaces it. Clean the fixture with an explicit `rm -rf`.
+- test-helpers.sh installs an EXIT trap (incident sandbox cleanup) and composes it with any EXIT trap already set. A `trap … EXIT` added AFTER sourcing it silently replaces that cleanup, so the suite's own owning trap is installed BEFORE the source (Implementation step 5).
 - Never assert exit `141`. CI ignores SIGPIPE, so the producer exits `2` with `write error: Broken pipe`.
 - Do not generate the fixture with `yes … | head`. That pipeline itself takes SIGPIPE under `pipefail` and aborts the suite under `set -e`.
 - `local items` and the assignment are on separate lines, so `local` cannot mask a substitution's rc. The `|| true` is still what keeps a no-match from tripping `set -e`.
-- If `awk` or `wc` aborts the suite under `set -e`, the `mktemp -d` directory (~350 KB) leaks in `$TMPDIR`. This is accepted. If abort-time cleanup is ever wanted, the sanctioned route is a trap installed *before* `source test-helpers.sh`, which composes with any prior EXIT trap. Never add a trap after sourcing it.
+- If `awk` or `wc` aborts the suite under `set -e`, the pre-source owning trap removes the `mktemp -d` directory. Measured at /work: an `exit 7` injected after the `awk` line leaves 0 entries in `$TMPDIR` with the trap and 1 without it.
 - The helper matches everything on an empty needle. That cannot happen here, because `prefix` is always `plugins/soleur/skills/<slug>` and the TS7 needle is a literal.
 - Plan-review dispositions: DHH's "drop helper + TS7" and "native TS3 membership test" are recorded in `knowledge-base/project/specs/feat-one-shot-vendor-bundle-coverage-sigpipe/decision-challenges.md`. The operator's direction is kept.
