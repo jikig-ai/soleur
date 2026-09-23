@@ -1617,6 +1617,14 @@ assert_contains     "T19 rc=2 renders as NOT YET" \
                     '2) verdict="NOT YET" ;;' "$(cat "$SUT")"
 assert_contains     "T19 rc=3 renders as CANNOT ESTABLISH" \
                     '3) verdict="CANNOT ESTABLISH" ;;' "$(cat "$SUT")"
+# #8657: the CLOSED path had no `5)` arm, so exit 5 fell into its TRANSIENT catch-all and posted
+# NOTHING. These are source assertions like their T19 siblings above; the behavioural coverage is
+# the closed-path dispatch rows elsewhere in this file. Pinned on the arm AND on the decision it
+# makes, because "has a 5) arm" would be satisfied by one that reopens.
+assert_contains     "T19c the CLOSED path maps rc=5 to ACTION REQUIRED, not TRANSIENT" \
+                    'action="comment"; verdict="ACTION REQUIRED"' "$(cat "$SUT")"
+assert_not_contains "T19c the CLOSED path does not REOPEN on rc=5 (5 means a human should look)" \
+                    'action="reopen"; verdict="ACTION REQUIRED"' "$(cat "$SUT")"
 assert_contains     "T19 an unmapped code still falls back to TRANSIENT" \
                     '*) verdict="TRANSIENT" ;;' "$(cat "$SUT")"
 assert_contains     "T19 the truncation detector raises the run's VERDICT, not just an annotation" \
