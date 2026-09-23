@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // A refused outbound send must not carry the recipient address into any log
-// sink. docs/legal/privacy-policy.md states "the plaintext recipient address is
-// never stored"; before this fix a refusal interpolated the address into the
+// sink. docs/legal/privacy-policy.md Section 4.14 lists where the plaintext
+// recipient may be held, and log sinks are not among them; before this fix a
+// refusal interpolated the address into the
 // OutboundComplianceError message, and email-triage-tools' `email_send` catch
 // mirrored that error through reportSilentFallback into pino (journald on the
 // web host's root disk), Better Stack, and Sentry (as the issue title).

@@ -191,8 +191,9 @@ export function validateEmailHeaders(fields: EmailHeaderFields): void {
     if (!ADDR_SPEC_RE.test(addr)) {
       // The value is NOT interpolated: this message reaches pino, Better Stack
       // and Sentry through the email_send catch, and the published privacy
-      // policy states the plaintext recipient address is never stored. The
-      // field name and the stable `code` are what a caller needs.
+      // policy (Section 4.14) lists where the plaintext recipient may be held —
+      // log sinks are not among them. The field name and the stable `code`
+      // are what the operator and the agent need.
       throw new OutboundComplianceError(
         "invalid_address",
         `"${name}" is not a valid RFC-5322 address.`,
