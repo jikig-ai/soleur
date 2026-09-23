@@ -311,8 +311,10 @@ row "ROW5B" "$CI_YML" \
 # then EMPTY, and a guard that cannot see that is guarding nothing. This is also the coverage-
 # loss shape: three suites leaving their dedicated job while `test` stays green.
 row "ROW5C" "$RUNNER" \
-  'if want_scripts_heavy; then' \
-  'if want_scripts; then' \
+  'if want_scripts_heavy; then
+  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites.' \
+  'if want_scripts; then
+  # The mutation battery for the registry-pull-path-health and registry-replace-preflight suites.' \
   RED "the heavy group is emptied by a re-gate (reference extraction must notice)"
 
 # --- Row 5d: the heavy matrix->env wire ---------------------------------------------------------
@@ -320,11 +322,9 @@ row "ROW5C" "$RUNNER" \
 # test-scripts-heavy job block carries k/N. Replacing it with a literal leaves every declared
 # value untouched while all heavy legs run leg 1's suite.
 row "ROW5D" "$CI_YML" \
-  '# (3 suites at this commit) and all report green. Guard 1 reads ci.yml'"'"'s
-      # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
+  '# (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
       SCRIPTS_SHARD: ${{ matrix.shard }}' \
-  '# (3 suites at this commit) and all report green. Guard 1 reads ci.yml'"'"'s
-      # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
+  '# (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
       SCRIPTS_SHARD: "1/3"' \
   RED "the heavy job's SCRIPTS_SHARD binding is a literal, not the matrix interpolation"
 
