@@ -71,7 +71,7 @@ fails=0
 cases=0
 
 # Kept in lockstep with MIN_CASES at the bottom; the derivation check there proves it.
-MIN_CASES_EXPECTED=35
+MIN_CASES_EXPECTED=37
 
 # P1b guard (#7708). Every fixture root is asserted before anything is written under it or
 # removed with it. Two repo-global ratchets police this and a new suite trips BOTH unless it is
@@ -563,7 +563,7 @@ fi
 # the bound written as `$(( 23 + 2 * ${#ENUM_GROUPS[@]} ))` that guard reported 22/1, naming this
 # file as "a floor enforced THROUGH the machinery it guards". The derivation check above keeps
 # the literal honest without putting an expansion next to the `if`.
-MIN_CASES=35
+MIN_CASES=37
 if (( cases < MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2
