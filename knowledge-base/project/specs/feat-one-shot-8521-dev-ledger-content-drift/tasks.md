@@ -95,9 +95,9 @@ Plan: `knowledge-base/project/plans/2026-09-23-fix-pr-ci-unmerged-migration-ledg
 
 - [x] 6.1 `bash apps/web-platform/scripts/dev-ledger-parity.test.sh` is green (AC1–AC5, AC7).
 - [x] 6.2 shellcheck and the sibling lint suites are green (AC9).
-- [ ] 6.3 The PR's own heavy job prints `ledger-parity: clean` with `ledger-rows` > 0 (AC10).
-- [ ] 6.4 Run `gh workflow run scheduled-dev-migration-drift.yml --ref feat-one-shot-8521-dev-ledger-content-drift`.
+- [x] 6.3 The PR's own heavy job prints `ledger-parity: clean` with `ledger-rows` > 0 (AC10).
+- [x] 6.4 Run `gh workflow run scheduled-dev-migration-drift.yml --ref feat-one-shot-8521-dev-ledger-content-drift`.
   The output shows `ledger-classify:`, or no drift, and never `UNCLASSIFIED`. Record the timing
   (AC10b).
-- [ ] 6.5 The PR body has `Closes #8520` and `Closes #8521`, the run evidence, the AC8 and AC10b
+- [x] 6.5 The PR body has `Closes #8520` and `Closes #8521`, the run evidence, the AC8 and AC10b
   timings, and #8606 (AC12).

@@ -902,9 +902,9 @@ included) of a branch that is fresh, unmerged, and holds a file not on main. The
 
 ### Quality Gates
 
-- [ ] **AC10**: This PR's own heavy job runs (the change is anchored) in the `introduction` state and
+- [x] **AC10**: This PR's own heavy job runs (the change is anchored) in the `introduction` state and
   prints `ledger-parity: clean` with `unmerged=0` and `ledger-rows=<N>`, where N > 0.
-- [ ] **AC10b (pre-merge, read-only)**: `gh workflow run scheduled-dev-migration-drift.yml --ref feat-one-shot-8521-dev-ledger-content-drift`
+- [x] **AC10b (pre-merge, read-only)**: `gh workflow run scheduled-dev-migration-drift.yml --ref feat-one-shot-8521-dev-ledger-content-drift`
   runs this branch's action and script with `fail-on-ledger-drift: 'true'`. Its log shows either
   `ledger-classify:` (rows were missing) or `No dev-vs-main migration drift detected.`, and no
   `UNCLASSIFIED`. The wall time is recorded (architecture review: this is the only pre-merge
@@ -916,7 +916,7 @@ included) of a branch that is fresh, unmerged, and holds a file not on main. The
     lists that file. This catches wrongly hidden orphans, not just false reds.
   - The run's conclusion depends on dev state that other refs write, so it is not asserted
     (`cq-ac-must-not-depend-on-concurrent-sessions`).
-- [ ] **AC12**: The PR body carries `Closes #8520` and `Closes #8521`, the 2026-09-22 run evidence,
+- [x] **AC12**: The PR body carries `Closes #8520` and `Closes #8521`, the 2026-09-22 run evidence,
   the AC8 and AC10b timings, and #8606.
 
 ## Domain Review
