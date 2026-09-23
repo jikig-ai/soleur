@@ -357,16 +357,28 @@ jobs:
   # LUKS — never name similarity), and every plaintext/cert-off exception carries a
   # live tracking issue + unexpired expires_on.
   #
-  # ADVISORY, NOT BLOCKING. This job is absent from scripts/required-checks.txt, the
-  # CI-Required ruleset (infra/github/ruleset-ci-required.tf), the canonical parity
-  # JSON (scripts/ci-required-ruleset-canonical-required-status-checks.json), and the
-  # bot action CHECK_NAMES (.github/actions/bot-pr-with-synthetic-checks/action.yml),
-  # so a PR can merge with it red. It exists to SOAK an attributable green streak
-  # before promotion (#6901; ADR-117 measure-then-arm). The promotion is a five-site
-  # byte-consistent coupling — see the arming tracking issue #6907 and the ADR-140
-  # Amendment (2026-07-24, #6901) for the canonical recipe (15368 integration_id +
-  # add-to-required-checks.txt + sound-by-unreachability fabrication, NOT CodeQL's
-  # non-15368 omit shape, which would wedge every PR at "Expected — Waiting").
+  # BLOCKING since #6907, through the required `test` aggregator below: this job is a
+  # leg of `test`'s needs:, so a red sweep reds `test` and a PR cannot merge. It
+  # soaked as a standalone advisory context first (#6901; ADR-117 measure-then-arm):
+  # 248 of 249 `main` push runs green, 2026-09-08 to 2026-09-23, the one miss a run
+  # in which the job never started.
+  #
+  # WHY THE AGGREGATOR AND NOT ITS OWN RULESET CONTEXT. #6907 prescribed a five-site
+  # coupling (required-checks.txt, the ruleset .tf, the canonical parity JSON, the
+  # bot action, MB-10). Joining `test`'s needs: buys the same blocking property with
+  # no ruleset apply and no new context name — the #8136 web-platform-build
+  # precedent. Recorded in the ADR-140 addendum of 2026-09-23 (#6907).
+  #
+  # Bot PRs: `test` is one of the checks bot-pr-with-synthetic-checks FABRICATES, so
+  # on a bot PR this sweep's green is fabricated too. That is sound by
+  # unreachability only while the action's ALLOWED_PATHS (weakness-digest.md) stays
+  # disjoint from the sweep's scan surface (the ledger, *.tf, and every file a
+  # ledger row cites as evidence). Re-derive that intersection before widening
+  # ALLOWED_PATHS.
+  #
+  # MUST NOT carry a job-level `continue-on-error` or `if:` — either lets a red or
+  # unrun sweep read as success through needs.encryption-posture.result.
+  # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh W3 asserts both.
   #
   # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
   encryption-posture:
@@ -1418,7 +1430,10 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, web-platform-build]
+    # encryption-posture joined in #6907: until then it was a standalone advisory
+    # context and a PR could merge with the ledger sweep red. Same one-line-per-site
+    # edit as web-platform-build; no ruleset change.
+    needs: [test-webplat, test-bun, test-scripts, web-platform-build, encryption-posture]
     if: always()
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). This job only reads four `needs.*.result` strings (measured
@@ -1445,6 +1460,7 @@ jobs:
           BUN_RESULT: ${{ needs.test-bun.result }}
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
           BUILD_RESULT: ${{ needs.web-platform-build.result }}
+          POSTURE_RESULT: ${{ needs.encryption-posture.result }}
           # The event is a CLASSIFIER INPUT, not decoration. Supersession is only
           # reachable where `cancel-in-progress` is true, which since #7931 part 1
           # is pull_request only — see the SUPERSEDED arm below.
@@ -1480,7 +1496,7 @@ jobs:
           # Single colon-delimited list, iterated twice: once to classify each leg,
           # once (inner) to read that leg's siblings. Adding a 4th shard is still a
           # one-line edit here, plus needs: + env:.
-          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "web-platform-build:$BUILD_RESULT" )
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" )
           for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
@@ -1554,7 +1570,7 @@ jobs:
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
-          echo "All four legs green (three shards + web-platform-build)."
+          echo "All five legs green (three shards + web-platform-build + encryption-posture)."
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps
   # are pre-installed at the matching Playwright version. Container tag, digest,
