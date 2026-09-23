@@ -1424,7 +1424,14 @@ export type EvalFatalClass =
   | "credit-exhausted"
   | "auth-failure"
   | "spawn-fault"
-  | "timeout";
+  | "timeout"
+  // #8611: the run hit its per-run `--max-budget-usd` ceiling (result subtype
+  // `error_max_budget_usd`) and stopped before finishing its work.
+  | "budget-capped";
+
+// The claude CLI's result-event subtype for a run stopped by `--max-budget-usd`
+// (string taken from the pinned @anthropic-ai/claude-code binary; #8611).
+export const CLAUDE_BUDGET_STOP_SUBTYPE = "error_max_budget_usd";
 
 /**
  * Classify a non-zero claude-eval spawn result as FATAL (must page) or benign.
@@ -1433,9 +1440,19 @@ export type EvalFatalClass =
 export function classifyEvalFatal(
   spawnResult: Pick<
     SpawnResult,
-    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail"
+    "exitCode" | "abortedByTimeout" | "stdoutTail" | "stderrTail" | "subtype"
   >,
 ): { fatal: boolean; fatalClass?: EvalFatalClass; reason?: string } {
+  // Read from the parsed result event, not the tail: whatever the exit code, a
+  // capped run did not finish, and a green monitor would hide it (#8611).
+  if (spawnResult.subtype === CLAUDE_BUDGET_STOP_SUBTYPE) {
+    return {
+      fatal: true,
+      fatalClass: "budget-capped",
+      reason:
+        "claude-eval stopped at its per-run --max-budget-usd cap (error_max_budget_usd; caps in server/inngest/cron-budgets.ts)",
+    };
+  }
   if (spawnResult.abortedByTimeout) {
     return {
       fatal: true,
@@ -1498,7 +1515,13 @@ export interface EvalHeartbeatDecision {
 export function resolveBestEffortEvalOk(
   spawnResult: Pick<
     SpawnResult,
-    "ok" | "exitCode" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
+    | "ok"
+    | "exitCode"
+    | "abortedByTimeout"
+    | "durationMs"
+    | "stdoutTail"
+    | "stderrTail"
+    | "subtype"
   >,
 ): EvalHeartbeatDecision {
   const sentryExtra: Record<string, unknown> = {
@@ -1509,7 +1532,8 @@ export function resolveBestEffortEvalOk(
     stderrTail: formatTailForSentry(spawnResult.stderrTail),
   };
 
-  if (spawnResult.ok) {
+  // A capped run can exit 0, so the cap check runs before the clean-exit shortcut.
+  if (spawnResult.ok && spawnResult.subtype !== CLAUDE_BUDGET_STOP_SUBTYPE) {
     return { ok: true, sentryExtra };
   }
 

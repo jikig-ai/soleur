@@ -117,6 +117,14 @@ With the preflight passed, `$TRIGGER` is the verified producer:
 - **Allowlist is the blast-radius bound.** A non-allowlisted event returns 400.
   The allowlist auto-tracks `cron-*.ts` via `EXPECTED_CRON_FUNCTIONS` — there is
   no second hand-maintained list.
+- **The 18 Claude-spawning functions are throttled and capped (#8611).** Each carries
+  `throttle {limit 2, period 1h}` (`apps/web-platform/server/inngest/cron-budgets.ts`). A third
+  fire within the hour is **queued, not rejected** — the route still returns `202` — and runs
+  (and bills) later, so check `routine_runs_list` for up to an hour before re-firing. Every fire is
+  a new run with its own `--max-budget-usd` cap (`CLAUDE_BUDGET_USD` in the same file). A run that
+  hits its cap shows as a FAILED run with reason `budget-capped`, and as
+  `subtype=error_max_budget_usd` on its `SOLEUR_CLAUDE_COST` marker (query recipe in
+  `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`).
 - **Mutating crons spend budget / open PRs / post publicly.** `cron/bug-fixer.manual-trigger`
   opens a PR; content/competitive/growth crons spend API budget;
   `cron/weekly-release-digest.manual-trigger` POSTS a digest to the public
