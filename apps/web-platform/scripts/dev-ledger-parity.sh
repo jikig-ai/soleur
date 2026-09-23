@@ -223,6 +223,7 @@ owners_repo() {
   url=$(git -C "$REPO" remote get-url origin 2>/dev/null) || url=""
   [[ -n "$url" ]] || cannot_measure config "--repo has no 'origin' remote"
   errf=$(mktemp "${TMPDIR:-/tmp}/dev-ledger-fetch.XXXXXX") || cannot_measure config "mktemp failed"
+  assert_fixture_dir "$errf"
   CLEAN+=("$errf")
   # --prune: a reused cache must not keep a deleted branch as an owner.
   bounded "$FETCH_TIMEOUT_S" git -C "$OWN" fetch -q --prune --no-tags --filter=blob:none "$url" \
@@ -283,6 +284,7 @@ owners_repo() {
   done <<<"$refs"
 
   OWNERS="$(mktemp "${TMPDIR:-/tmp}/dev-ledger-owners-tsv.XXXXXX")" || cannot_measure config "mktemp failed"
+  assert_fixture_dir "$OWNERS"
   CLEAN+=("$OWNERS")
   [[ ${#sha_names[@]} -eq 0 ]] && return 0
   # One diff-tree for every head: files ADDED relative to the base tip are
