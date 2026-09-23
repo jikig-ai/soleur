@@ -1769,7 +1769,13 @@ sweep_stale_registry_auth() {
     return 0
   fi
 
-  DOCKER_CONFIG="$(dirname "$f")" docker logout ghcr.io >/dev/null 2>&1 || true
+  # NO `DOCKER_CONFIG=` PREFIX. `$f` is `$GHCR_DOCKER_CONFIG` = "${DOCKER_CONFIG}/config.json",
+  # and DOCKER_CONFIG is already exported to DEPLOY_DOCKER_CONFIG_DIR at the top of this file, so
+  # `$(dirname "$f")` re-derived the value docker would use anyway. It also tripped the #6633
+  # credential-persist-to-home guard, which requires every `DOCKER_CONFIG=<target>` site under a
+  # ProtectHome=read-only unit to name a PROVABLY ABSOLUTE off-home path -- a command
+  # substitution is not one, and the guard is right to refuse it rather than try to evaluate it.
+  docker logout ghcr.io >/dev/null 2>&1 || true
 
   local _tmp
   _tmp="$(mktemp "${f}.sweep.XXXXXX" 2>/dev/null)" || { SWEPT_STATE=failed; return 0; }
