@@ -1296,7 +1296,12 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Sized above the measured need, not at it: 21 rows × ~12 leg-enumerations
+    # each measured ~21 min on the runner (the M1-M6 manifest rows added six
+    # full guard invocations over the 15-row battery the 20-min cap was set
+    # for). A timeout kill must never fire below a duration the repo calls
+    # legitimate.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
