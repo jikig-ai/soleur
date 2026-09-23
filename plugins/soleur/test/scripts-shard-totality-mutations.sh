@@ -637,7 +637,12 @@ in_range && row "M6" "$RUNNER" \
 HMANIFEST_FILE="$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv"
 [[ -f "$HMANIFEST_FILE" ]] \
   || { echo "FATAL: scripts/suite-shard-legs-heavy.tsv is absent; the heavy-manifest rows cannot be scored" >&2; exit 2; }
-awk '!/^#/ && !done {done=1; next} 1' "$HMANIFEST_FILE" > "$WORK/hmanifest-minus-one.tsv"
+# The minus-one fixture drops `battery-tag-authorship-mutations` deliberately:
+# its cksum hash lands on leg 2, a leg the remaining table still populates, so
+# this is the POSITIVE hash-fallback case — the untabled label is covered and
+# no leg starves. (Dropping run-all.sh or emptying the table starves a leg and
+# the zero-assignment refusal drives the guard RED — that case is M9.)
+grep -v 'battery-tag-authorship-mutations' "$HMANIFEST_FILE" > "$WORK/hmanifest-minus-one.tsv"
 cp "$HMANIFEST_FILE" "$WORK/hmanifest-phantom.tsv"
 printf 'phantom/never-registered-heavy-suite\t1\n' >> "$WORK/hmanifest-phantom.tsv"
 grep '^#' "$HMANIFEST_FILE" > "$WORK/hmanifest-empty.tsv"
@@ -653,9 +658,15 @@ in_range && hfrow "M7" "$WORK/hmanifest-minus-one.tsv" GREEN \
 in_range && hfrow "M8" "$WORK/hmanifest-phantom.tsv" GREEN \
   "a phantom heavy manifest row is inert for coverage"
 
-# M9: an empty heavy table degrades the whole heavy group to hash fallback — still total.
-in_range && hfrow "M9" "$WORK/hmanifest-empty.tsv" GREEN \
-  "an empty heavy manifest assigns every heavy label by hash with totality intact"
+# M9: a header-only heavy table engages manifest mode (n matches) but puts
+# NOTHING on the table, so all three labels hash — {3,2,2} — and leg 1 starves.
+# Unlike the light group (489 labels cannot starve six legs), at n=3 over 3
+# labels the zero-assignment refusal is reachable through stale data: the
+# starved leg must fail closed rather than report zero-work green. The guard
+# going RED here is the refusal outranking totality, and it is the property
+# this row pins.
+in_range && hfrow "M9" "$WORK/hmanifest-empty.tsv" RED \
+  "an empty heavy table starves a leg under all-hash — the zero-assignment refusal fails the starved leg closed"
 
 # --- MUST-PASS non-canonical input ------------------------------------------------------------
 # Raising a leg's ceiling AND keeping the partition intact must NOT red the guard: it is a
