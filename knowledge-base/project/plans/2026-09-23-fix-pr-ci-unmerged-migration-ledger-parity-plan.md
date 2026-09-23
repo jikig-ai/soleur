@@ -746,7 +746,7 @@ this PR's files by blob or slug, or match a blob this PR's branch history carrie
 | 11 | Run with cwd `$REPO/apps/web-platform` on the row-1 fixture | still RED exit 1 (#8606 class) |
 | 12 | Workflow: the check step moved after `Apply migrations to dev`, or after `Release dev-suite mutex` | wiring assert RED (step names anchored `^      - name: <exact>$`, count 1) |
 | 13 | Workflow: the invocation uses the checkout path instead of `$RUNNER_TEMP/dev-ledger-parity.sh` | wiring assert RED |
-| 14 | Workflow: the resolve step loses its `deleted)` or `*)` → `exit 1` arm | wiring assert RED |
+| 14 | Workflow: the check step (formerly a separate resolve step, removed in review) loses its `deleted)` or `*)` → `exit 1` arm | W-B2 RED (drives the extracted step in the `deleted` and unknown states) |
 | 15 | Workflow: the `ledger_guard` step leaves `detect-changes`, or `detect-changes` loses `fetch-depth: 0` | wiring assert RED |
 
 **Must-PASS rows:**
@@ -861,8 +861,10 @@ included) of a branch that is fresh, unmerged, and holds a file not on main. The
 - [x] **AC3**: Guard 1 wiring rows 12–15 hold, asserted by exact anchored step names and relative
   order:
   - the `ledger_guard` step lives in `detect-changes`, which keeps `fetch-depth: 0`;
-  - the resolve step sits after `Lint migration FK preconditions` and before
-    `Acquire dev-suite mutex`, with `deleted)` and `*)` exit arms;
+  - ~~the resolve step sits after `Lint migration FK preconditions` and before
+    `Acquire dev-suite mutex`, with `deleted)` and `*)` exit arms;~~ **Superseded in review (see
+    §Review-phase amendments):** there is no separate resolve step. The `deleted)` and `*)` exit arms
+    live inside the check step, which extracts and runs the base-ref copy itself;
   - one check step sits between `Detect dev-vs-main migration drift` and `Apply migrations to dev`,
     running `$RUNNER_TEMP/dev-ledger-parity.sh check`.
 - [x] **AC4**: The `detect-changes` alternation contains the token

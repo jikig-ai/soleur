@@ -62,6 +62,8 @@ Plan: `knowledge-base/project/plans/2026-09-23-fix-pr-ci-unmerged-migration-ledg
 - [x] 3.2 In `detect-changes`, add the `apps/web-platform/scripts/dev-ledger-parity` anchor.
 - [x] 3.3 In the heavy job, add `Resolve dev-ledger-parity guard (base-ref copy)` after the FK lint
   and before the mutex. It is a `case` with `base`, `introduction`, `deleted`→exit 1 and `*`→exit 1.
+  **Superseded in review:** the separate step was removed; its `case` now lives inside the 3.4 check
+  step, so no PR-controlled step runs between extraction and execution (plan §Review-phase amendments).
 - [x] 3.4 In the heavy job, add `Assert unmerged migrations match the dev ledger` between
   `Detect dev-vs-main migration drift` and `Preflight schema-vs-ledger consistency check`. Pass
   `HEAD_BRANCH` via `env:` and run it under `doppler run`.
