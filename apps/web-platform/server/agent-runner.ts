@@ -140,6 +140,7 @@ function resolveSessionErrorCode(
 }
 
 import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
+import { summarizeOutboundEmailInput } from "./tool-tiers";
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
@@ -434,7 +435,11 @@ const SUMMARIZE_OUTPUT_CAP = 200;
  *  memory before the slice — pathological MCP tool inputs (large file
  *  contents, full-document attachments) otherwise spike heap on every
  *  tool call regardless of the final output cap. */
-function summarizeToolPayload(input: unknown): string {
+function summarizeToolPayload(input: unknown, toolName?: string): string {
+  // An aborted turn persists this summary to `messages.usage.completed_actions`;
+  // outbound-email inputs are withheld (see summarizeOutboundEmailInput).
+  const withheld = toolName === undefined ? null : summarizeOutboundEmailInput(toolName, input);
+  if (withheld !== null) return withheld;
   if (input === undefined || input === null) return "";
   if (typeof input === "string") {
     return input.length > SUMMARIZE_OUTPUT_CAP
@@ -2271,7 +2276,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               // uses) so the marker matches what the user already saw
               // in the streaming chip during the live turn — the raw
               // SDK tool name is an internal implementation detail.
-              const inputSummary = summarizeToolPayload(toolBlock.input);
+              const inputSummary = summarizeToolPayload(toolBlock.input, toolBlock.name);
               completedActions.push({
                 tool_name: buildToolLabel(toolBlock.name ?? "unknown", toolBlock.input, workspacePath),
                 input_summary: inputSummary,

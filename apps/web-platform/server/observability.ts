@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { sqlStateFromError } from "@/lib/postgres-errors";
+import { redactEmailAddresses, redactErrorForEmit } from "./pii-redact";
 
 const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
 
@@ -117,8 +118,9 @@ function userScopeFromExtra(
  * sequences only (cq-regex-unicode-separators-escape-only).
  */
 function sanitizeLogMessage(message: string): string {
-  return message.replace(/[\r\n\u2028\u2029\v\f]+/g, " ");
+  return redactEmailAddresses(message.replace(/[\r\n\u2028\u2029\v\f]+/g, " "));
 }
+
 
 /**
  * Single source of truth for the literal app-origin used when
@@ -214,9 +216,11 @@ export interface SilentFallbackOptions {
  * ```
  */
 export function reportSilentFallback(
-  err: unknown,
+  rawErr: unknown,
   options: SilentFallbackOptions,
 ): void {
+  // Redact address-shaped substrings before ANY sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
   const { feature, op, extra, message, art33Breach, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
@@ -281,9 +285,11 @@ export function reportSilentFallback(
  * count as an error.
  */
 export function warnSilentFallback(
-  err: unknown,
+  rawErr: unknown,
   options: SilentFallbackOptions,
 ): void {
+  // Redact address-shaped substrings before ANY sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
   const { feature, op, extra, message, art33Breach, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
@@ -345,9 +351,11 @@ export function warnSilentFallback(
  * signature parity but produces no `art_33_breach` tag).
  */
 export function infoSilentFallback(
-  err: unknown,
+  rawErr: unknown,
   options: SilentFallbackOptions,
 ): void {
+  // Redact address-shaped substrings before ANY sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
   const { feature, op, extra, message, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
@@ -605,7 +613,7 @@ const _p0Dedup = new TtlDedupMap<string>(
 );
 
 export function mirrorP0Deduped(
-  err: Error,
+  rawErr: Error,
   ctx: {
     op: string;
     userId: string;
@@ -636,6 +644,8 @@ export function mirrorP0Deduped(
   if (!_p0Dedup.tryClaim(key, now)) return;
 
   const userIdHash = hashUserId(ctx.userId);
+  // Redact address-shaped substrings before either sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr) as Error;
 
   // Pino mirror for container-stdout visibility (same shape as
   // `reportSilentFallback` so log aggregators key off identical fields).
@@ -749,12 +759,14 @@ export function mirrorCrossTenantViolation(
   offendingUserId: string | null,
   expectedUserId: string,
   tableName: string,
-  err: unknown,
+  rawErr: unknown,
   ctx: Record<string, unknown> = {},
 ): void {
   const offendingHash =
     offendingUserId === null ? null : hashUserIdForSentry(offendingUserId);
   const expectedHash = hashUserIdForSentry(expectedUserId);
+  // Redact address-shaped substrings before either sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
 
   // Defensive strip: if a caller mistakenly passed raw userId/user_id in
   // `ctx`, drop them before they spread into Sentry's `extra` (pino emit

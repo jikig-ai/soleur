@@ -25,6 +25,7 @@
 
 import { SENSITIVE_LOWER, SENSITIVE_KEY_NAMES } from "./sensitive-keys";
 import { hashUserIdValue } from "./userid-pseudonymize";
+import { redactEmailAddresses } from "./pii-redact";
 
 // Canonical inventory of helper-migration sites bound to `Sentry.setUser` via
 // `Sentry.withIsolationScope`. Single source of truth for the Article 30
@@ -70,6 +71,10 @@ function scrubRecursive(
   value: unknown,
   memo: Map<object, unknown>,
 ): unknown {
+  // Value-based layer (#8532 PR-0): an address inside ANY string — the
+  // exception value that becomes the issue title, `event.message`, a
+  // breadcrumb message — is redacted, whichever capture path produced it.
+  if (typeof value === "string") return redactEmailAddresses(value);
   if (value === null || typeof value !== "object") return value;
   const obj = value as object;
 
