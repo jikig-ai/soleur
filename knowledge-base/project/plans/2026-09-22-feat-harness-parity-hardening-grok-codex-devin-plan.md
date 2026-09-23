@@ -551,6 +551,17 @@ Rows 6a–6d were one row (test-design F3): form (d) is a different regex branch
 
 ### Quality Gates
 
+> **Archival of this spec dir is DEFERRED until after `soleur:ship` Phase 6 (recorded 2026-09-23
+> by `soleur:compound`).** `soleur:ship` Phase 6 step 2.5 reads
+> `knowledge-base/project/specs/feat-one-shot-harness-parity-hardening/decision-challenges.md`, so
+> running `archive-kb.sh` at compound time would `git mv` that file out from under ship and orphan
+> every reference to the live path. Compound's Auto-Consolidation **Step E was deliberately not
+> run**. Because ship/SKILL.md notes that compound is normally the LAST point archival happens,
+> this deferral creates an obligation rather than discharging one: after ship completes, run
+> `bash plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`, then grep the tree for the live
+> spec path and repoint every hit. Known script gaps to verify rather than assume: it globs plans
+> by `*<slug>*` and probes specs only at `specs/feat-<slug>`.
+
 - [~] `bash scripts/test-all.sh` is green locally before push, because the hook suites changed.
   **NOT MET as written; deliberately substituted, 2026-09-23.** The pre-commit `bun-test` job
   (which IS `test-all.sh`) queued 1h+ behind two sibling full-gate runs each ~2h in, with three
