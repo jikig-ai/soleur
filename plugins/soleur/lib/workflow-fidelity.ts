@@ -206,9 +206,10 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
  *     §Phase 1.5 (Review Evidence Gate: the missing-evidence option and the
  *     `sequential-fallback` re-run) and §Phase 5.5 (Pre-Ship Review Gates ->
  *     Code Review Completion Gate) run `review` inside ship. These are
- *     interactive arms only; headless aborts instead (#8627). `review` is a
- *     legal value: it is a node, and not among ship's declared successors
- *     (`postmerge`, `work`).
+ *     interactive arms only; headless aborts instead (PR #8627). The log
+ *     records starts only, so the classifier collapses ANY review whose
+ *     previous kept node is ship, whatever invoked it; see ADR-229's
+ *     2026-09-23 re-baseline for what that masks.
  * The classifier drops a record whose skill is a sub-step of the PREVIOUS KEPT
  * node before pairing, so `plan compound work` pairs as `plan -> work`. This is
  * NOT an edge: no `K -> compound` edge is declared for any key K, and because
@@ -223,12 +224,17 @@ export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> =
  * To add an entry: the key and every value must be DECLARED_TRANSITIONS nodes
  * (a non-node is removed by the classifier's node filter first, so the entry
  * would be dead); a value must not be a declared successor of its key (the
- * collapse would silently delete a declared pair from `pairs`). Edit this
- * const first, then mirror it in the JSON view, then update in the same PR:
- * the exact-set pin and the `ANCHORS` heading list in workflow-fidelity.test.ts,
- * a case in scripts/classify-workflow-transitions.test.sh (plus its
- * `MIN_CASES` floor), and ADR-229's Status line and a re-baseline bullet. Run
- * `bun test plugins/soleur/test/workflow-fidelity.test.ts`.
+ * collapse would silently delete a declared pair from `pairs`). An entry also
+ * hands the value's outgoing edges to the key: any successor of the key that is
+ * not a successor of the value becomes a declared pair after the collapse, so
+ * measure which pairs vanish before adding one. Edit this const first, then
+ * mirror it in the JSON view (and its `_comment` amendment list), then update in
+ * the same PR: the exact-set pin, the `ANCHORS` heading list and its heading
+ * total in workflow-fidelity.test.ts (a new KEY also moves the view key-set pin
+ * there and `LOOP_KEYS` in the classifier suite), a case in
+ * scripts/classify-workflow-transitions.test.sh (plus its `MIN_CASES` floor),
+ * and ADR-229's Status line, a re-baseline bullet and its Verification counts.
+ * Run `bun test plugins/soleur/test/workflow-fidelity.test.ts`.
  */
 export const DECLARED_SUB_STEPS: Readonly<Record<string, readonly string[]>> = {
   brainstorm: ["compound"],

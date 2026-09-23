@@ -710,7 +710,7 @@ fi
 
 # MIN_CASES counts PASSES, not case numbers: the 33-35 loop records ONE pass per
 # key (3) and adds a key-list pin (1), so cases 1-41 yield 42. Collapsing the loop
-# to one pass would silently lower the real count to 37.
+# to one pass would silently lower the real count to 40.
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
 # guard-vacuity-floor.test.sh slices the floor plus its CONTIGUOUS assignments into
 # a mutant, and a binding 130 lines up is unbound there (measured: CONSTRUCTION, not

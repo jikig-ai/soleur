@@ -664,8 +664,12 @@ and `MIN_CASES` counts them.
       - the files the pipeline writes itself: this plan, `knowledge-base/project/specs/feat-one-shot-adr229-in-ship-review-call/**`
         (tasks.md, session-state.md, decision-challenges.md) and any learning under
         `knowledge-base/project/learnings/` that compound writes.
-      - In particular, `plugins/soleur/skills/ship/SKILL.md`, `scripts/classify-workflow-transitions.sh`
-        and `rule-metrics.json` are absent, and `knowledge-base/INDEX.md` is never staged.
+      - In particular, `scripts/classify-workflow-transitions.sh` and `rule-metrics.json` are
+        absent, and `knowledge-base/INDEX.md` is never staged. **[Amended at review:** the
+        architecture seat found review re-runs compound → ship when ship invokes it; the filing
+        gate required the ≤100-line fix inline, so `ship/SKILL.md` (3 call sites pass
+        `--parent ship`) and `review/SKILL.md` (3 detection sites honour it) join the diff,
+        pinned by a new workflow-fidelity test.**]**
 
 ### Post-merge (operator)
 

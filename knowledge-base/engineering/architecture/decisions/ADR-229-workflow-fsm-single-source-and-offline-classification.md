@@ -134,7 +134,7 @@ the base, which closes the rename escape.
 | Read the const from bash via `bun -e` instead of keeping a mirrored view | Considered at review: bun is mandatory on the operator machine and in the CI scripts shard, so the premise "bash cannot read a TS const" is false where the classifier runs. Not taken in this PR: it trades one parity test for a runtime dependency on the plugin's TS module from repo tooling, and reverses a decision the plan carried through review. Either is defensible; the reason recorded here is that the mirror was the decision reviewed, not that the alternative cannot work |
 | Enrol the transition probe in the follow-through sweeper | The sweeper runs on a hosted runner against a fresh checkout, where the gitignored invocation log cannot exist; measured: FAIL on every sweep — the #6042 locality error one row up, reproduced |
 | Restore a CI schedule for the rule-metrics aggregator | Removed deliberately under #6042: fresh checkouts committed all-zero snapshots that clobbered the real local aggregate |
-| Declare `ship → review` as a transition edge (PR #8627) | Wrong meaning: ship CALLS review, it does not hand off to it. The `compound → X` tail from ship's own Phase 2 survives the edge, and any review after ship becomes legal-if-taken. Declared as a `ship` sub-step instead |
+| Declare `ship → review` as a transition edge (PR #8627) | Wrong meaning: ship CALLS review, it does not hand off to it. The `compound → X` tail from ship's own Phase 2 survives the edge. The edge would have kept a review's own outgoing pairs visible (the sub-step hands them to `ship`), but both options make any review after ship look designed, and only the sub-step expresses the call. Declared as a `ship` sub-step instead |
 | Raise emission coverage via SKILL.md prose | Emission via SKILL.md is LIVE, not stalled: ADR-179 decision 9 (#7482, 2026-08-13) inverted the `source incidents.sh` form into `SOLEUR_RULE_APPLIED` markers captured hook-side — 21 sites across 7 lifecycle skills on `main`, 869 `applied` events in the live `.jsonl` logs across all roots on 2026-09-18 (excluding rotated archives). The audit's "4 of 10 skills" was a grep for the string `incidents.sh`, which the inverted transport no longer contains. Widening the remaining ~80 uncovered rules is a per-rule choice, not a mechanism gap, and out of scope here |
 
 ## Consequences
@@ -212,34 +212,43 @@ the base, which closes the rename escape.
   successor, and none of those is `ship`; the one entry that would hide a skip,
   `review: ["compound"]`, is forbidden by the "value is not a declared successor"
   invariant. **[PR #8627: this argument covers `compound` only. For the `review`
-  sub-step the property that holds is narrower — no pair INTO `ship` changes; see
+  sub-step the property that holds is narrower — the collapse only rewrites a
+  pair's `from` to `ship`, so no pair into `ship` from another node changes; see
   the 2026-09-23 re-baseline for what the collapse does mask.]**
 - **Re-baselined 2026-09-23 (PR #8627, `review` as a `ship` sub-step):** same
   procedure, ONE frozen copy of the log read by both views. Before:
   `undeclared=324 sessions=1300 pairs=4995 nonnode=4205 substep=195 read=10869
   dropped=0`; after: `undeclared=291 sessions=1295 pairs=4960 nonnode=4205
-  substep=230 read=10869 dropped=0`. Deltas −33 undeclared / −35 pairs / +35
+  substep=230 read=10869 dropped=0`. Deltas: −33 undeclared / −35 pairs / +35
   substep, the same identity. Collapsed: all 29 `ship → review` rows, and the
-  tails behind them — `review → postmerge` −4, `review → ship` −3,
-  `compound → postmerge` −1 (this ADR's own example session), `review → plan`
-  −1, `review → review` −1. Most of the 29 follow ship's own `preflight` (the
-  Phase 5.5 shape) or start within minutes of the ship record (Phase 1.5); the
-  rest are reviews that end the session long after ship. Exposed: `ship → ship`
-  +5 and `ship → plan` +1 (undeclared by ruling): −39 + 6 = −33. **The accepted
-  cost.** The log records starts only, so the collapse drops ANY `review` whose
-  previous kept node is `ship`, whatever caused it, together with that review's
-  own outgoing edges. `ship review work` reads as the declared `ship → work`
-  (0 rows measured). A ship run again after a review reads as the undeclared
+  tails behind them — `review → postmerge` (4), `review → ship` (3),
+  `compound → postmerge` (1, this ADR's own example session), `review → plan`
+  (1), `review → review` (1). About two thirds of the 29 have an in-ship shape
+  (a review within minutes of the ship record, or one following ship's own
+  `preflight` in the same run); the other third start hours to days after ship
+  and cannot be ship-invoked, but collapse anyway (the accepted cost below).
+  Exposed: `ship → ship` +5, and `ship → plan` +1 (undeclared by ruling): −39 +
+  6 = −33. **The accepted cost.** The log records starts only, so the collapse
+  drops ANY `review` whose previous kept node is `ship`, whatever caused it, and
+  hands that review's outgoing edges to `ship`: every successor of `ship` that
+  is not a successor of `review` now reads as declared. Today that set is
+  `{postmerge}` — the 4 collapsed `ship review postmerge` sessions, none with a
+  `compound` between ship and postmerge, now read as the declared
+  `ship → postmerge` (`ship review work` is harmless: `review → work` was
+  already declared). A ship run again after a review reads as the undeclared
   self-loop `ship → ship`, which is still reported: of the 5 new such sessions,
-  2 are review's own exit gate (`review/SKILL.md` runs `compound` then `ship`),
-  shaped `ship … review compound ship`, and 3 go review → ship directly. No
-  pair INTO `ship` changes: `plan → ship`, `postmerge → ship` and
-  `brainstorm → ship` are unchanged. **#8470:** the classifier's own
-  `review → ship` count falls by 3 (all shaped `ship … review ship`), so the
-  #8399 ruling's 51 is comparable only with the #8470 triage's count, never with
-  a post-#8627 classifier run. The triage deliberately does not collapse
-  `review` behind `ship`; it keeps its own inline collapse and is unchanged, so
-  the two instruments now differ on that one shape by design.
+  2 are review's own exit gate (`review/SKILL.md` runs `compound` then `ship`,
+  because it did not treat `ship` as a parent — fixed in PR #8627: ship now passes `--parent ship` and review returns), shaped
+  `ship … review compound ship`, and 3 go review → ship directly. The collapse
+  only rewrites a pair's `from` to `ship`: no pair into `ship` from another node
+  changes (`plan → ship`, `postmerge → ship`, `brainstorm → ship` are unchanged),
+  while `review → ship` becomes `ship → ship`. **#8470:** the classifier's own
+  `review → ship` count falls by those 3 (all shaped `ship … review ship`), so
+  the #8399 ruling's 51 is comparable only with the #8470 triage's count, never
+  with a post-#8627 classifier run — count the re-open trigger with the triage.
+  The triage deliberately does not collapse `review` behind `ship`; it keeps its
+  own inline collapse and is unchanged, so the two instruments now differ on
+  that one shape by design.
 - There is no follow-through probe. One was written, could not PASS where the
   sweeper runs (Alternatives table), and as an operator-run script was a
   wrapper around `classify --summary` restating this section's numbers — the
@@ -423,8 +432,8 @@ the base, which closes the rename escape.
   test — every entry's value is invoked (`skill: soleur:<V>`, not a
   `compound-capture` prefix) inside the section that owns it. Since PR #8627
   the anchor test is per entry (the `ANCHORS` map), one check per heading,
-  with the anchor pair set equal to the sub-step pair set and a check count of
-  at least the entry count; the exact set now carries `ship: compound, review`.
+  with a named failure for an entry that has no headings and an exact heading
+  total (six); the exact set now carries `ship: compound, review`.
   Runs
   in the required `grok-fidelity` CI check (and as a pre-push gate under the
   Grok harness only).

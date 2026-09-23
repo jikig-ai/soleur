@@ -944,10 +944,10 @@ describe("DECLARED_SUB_STEPS invariants", () => {
   // run `skill: soleur:compound`") satisfies it, and one surviving call in a
   // section with several keeps it green — ship Phase 2 has three compound calls,
   // and Phase 1.5 has two review calls, so deleting either one of those is
-  // invisible here. The Phase 5.5 scope runs to `## Phase 6.4` (~1,100 lines),
-  // so any later `skill: soleur:review` mention anywhere in it keeps the anchor
-  // green even with the Code Review Completion Gate call deleted; an H3 anchor
-  // would not help, because the scope still ends at the next H2. It proves the
+  // invisible here. Phase 5.5 holds exactly one review call today (the Code
+  // Review Completion Gate); a second `skill: soleur:review` mention anywhere
+  // in that H2 scope would mask deleting it, because a scope always ends at the
+  // next H2 whatever the anchor's own level. It proves the
   // designed call is named where the entry says, not that it is the only or an
   // unconditional one, and it cannot see a designed call the map does not list.
   test("every sub-step is invoked by its key's SKILL.md in each section that owns it", () => {
@@ -960,15 +960,8 @@ describe("DECLARED_SUB_STEPS invariants", () => {
         review: ["## Phase 1.5: Review Evidence Gate", "## Phase 5.5: Pre-Ship Review Gates"],
       },
     };
-    // Coverage first, as one set equality: an unanchored entry fails with a
-    // readable diff, and a stale anchor for a removed entry fails too.
-    const pairs = (m: Record<string, readonly string[] | Record<string, unknown>>) =>
-      Object.entries(m).flatMap(([node, v]) =>
-        (Array.isArray(v) ? v : Object.keys(v)).map((sub) => `${node}:${sub}`),
-      ).sort();
-    expect(pairs(ANCHORS)).toEqual(pairs(DECLARED_SUB_STEPS));
-    // Loop over the CONST, not over ANCHORS, so the lower bound below is not
-    // derived from the map being checked.
+    // Loop over the CONST, not over ANCHORS: an unanchored entry fails on its
+    // own named message below.
     let checks = 0;
     for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
       const text = readFileSync(join(PLUGIN_ROOT, "skills", node, "SKILL.md"), "utf-8");
@@ -990,8 +983,33 @@ describe("DECLARED_SUB_STEPS invariants", () => {
         }
       }
     }
-    expect(checks).toBeGreaterThan(0);
-    expect(checks).toBeGreaterThanOrEqual(Object.values(DECLARED_SUB_STEPS).flat().length);
+    // The heading total, reviewed like the entry set above: a heading dropped
+    // from ANCHORS (e.g. to "fix" a deleted Phase 5.5 call) fails here.
+    expect(checks).toBe(6);
+  });
+
+  // ship calls review as a SUB-STEP, so review must return to ship rather than
+  // run its standalone exit (compound, then ship again — a nested second ship
+  // run, measured in ADR-229's 2026-09-23 re-baseline). The contract is an
+  // explicit `--parent ship` argument: every ship call site passes it, and each
+  // review site that decides standalone-vs-pipeline honours it.
+  test("every ship -> review call passes --parent ship and review honours it", () => {
+    const ship = readFileSync(join(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    const calls = ship.split("\n").filter((l) => /skill: soleur:review(?![\w-])/.test(l));
+    expect(calls.length).toBe(3);
+    for (const l of calls) {
+      expect(l, `ship call site lacks --parent ship: ${l.slice(0, 120)}`).toContain(
+        "`skill: soleur:review` with args `--parent ship`",
+      );
+    }
+    const review = readFileSync(join(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8").split("\n");
+    const site = (prefix: string) => review.find((l) => l.startsWith(prefix)) ?? "";
+    expect(site("**Lifecycle handoff (standalone `soleur:review`):**")).toContain("`--parent ship`");
+    expect(site("- [ ] Strip a leading `--parent ship` token")).not.toBe("");
+    expect(site("**Pipeline detection (run BEFORE writing the summary):**")).toContain("`--parent ship`");
+    expect(site("**Pipeline detection:** If the conversation contains")).toContain(
+      "**If the arguments carried `--parent ship`,** run only step 3",
+    );
   });
 
   // Same gap one level up: the edge set's members are each pinned by toEqual,
