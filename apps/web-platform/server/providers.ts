@@ -8,6 +8,7 @@ export interface ProviderConfig {
 
 export const PROVIDER_CONFIG: Record<Provider, ProviderConfig> = {
   anthropic: { envVar: "ANTHROPIC_API_KEY", category: "llm", label: "Anthropic" },
+  openai: { envVar: "OPENAI_API_KEY", category: "llm", label: "OpenAI / Codex" },
   bedrock: { envVar: "AWS_ACCESS_KEY_ID", category: "llm", label: "AWS Bedrock" },
   vertex: { envVar: "GOOGLE_APPLICATION_CREDENTIALS", category: "llm", label: "Google Vertex" },
   cloudflare: { envVar: "CLOUDFLARE_API_TOKEN", category: "infrastructure", label: "Cloudflare" },

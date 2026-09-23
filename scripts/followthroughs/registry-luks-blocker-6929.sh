@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# #6929 — DEPENDENCY follow-through: the registry host's write-shaped levers are blocked until
-# the LUKS recut blocker lands.
+# #6929 — DEPENDENCY follow-through: the registry host's write-shaped levers were blocked until
+# the LUKS recut landed. It landed 2026-08-10 (run 31437037877); #7287 and this probe's tracker
+# #7340 are both CLOSED.
 #
 # TRACKER: **#7340** (dedicated). The directive cannot live on the anchor issue itself — this
 # probe closes its host issue when the anchor closes, so hosting it there would be circular.
@@ -9,12 +10,12 @@
 # path and renaming it would orphan the sweeper's lookup. The ANCHOR moved (see DEP_ISSUE
 # below); the file did not.
 #
-# WHAT THIS EXISTS TO STOP. #7278 / ADR-172 records three actions as BLOCKED ON A PROVISIONING
+# WHAT THIS EXISTED TO STOP. #7278 / ADR-172 recorded three actions as BLOCKED ON A PROVISIONING
 # EVENT — `restart`, `push-config` and `reclaim`. Every one of them needs a change to a
 # cloud-init-written file on the registry host, which needs cloud-init to re-run, which needs a
-# host REPLACE — and a replace performed BEFORE the LUKS recut has been applied opens
-# `/dev/mapper/registry` against a still-plaintext ext4 volume, takes the
-# `refusing-non-luks-device` arm, and darks the sole pull path permanently. That is the deadlock
+# host REPLACE — and a replace performed BEFORE the LUKS recut was applied opened
+# `/dev/mapper/registry` against the then-plaintext ext4 volume, took the
+# `refusing-non-luks-device` arm, and darked the sole pull path permanently. That is the deadlock
 # ADR-172 §8 states. The condition is "the recut has not run", NOT "issue #6929 is open" — see
 # the anchor note above DEP_ISSUE.
 #
@@ -33,6 +34,7 @@
 #   0 = PASS       the anchor issue is CLOSED — the recut has landed; re-evaluate the action set
 #   2 = TRANSIENT  the anchor is still open, OR gh could not be authenticated / could not answer
 #   1 = FAIL       *** NEVER EMITTED ***  — an open dependency is a not-yet, never a regression.
+#  78 = REFUSED    xtrace on with GH_TOKEN set (#7797); the sweeper reads it as TRANSIENT.
 #
 # `secrets=GH_TOKEN` IS MANDATORY IN THE DIRECTIVE. The sweeper runs probes under `env -i` with
 # PATH + HOME + the directive-declared secrets ONLY. On a CI runner `gh` authenticates from
@@ -44,27 +46,36 @@
 # aborts with status 1, which this contract reads as FAIL, so an unprovisioned token would post a
 # daily false-FAIL. The `[[ -z "${VAR:-}" ]]` form below is the compliant one.
 set -uo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 # ANCHORED ON #7287 (the recut EXECUTION), not on #6929 (the recut VEHICLE).
 #
 # #6929 closed on 2026-08-09: its deliverable — the guarded `registry-luks-recut`
 # workflow_dispatch — shipped in PR #6937 (merge dcae7bf1). A vehicle existing is not a
-# conversion having happened. The recut has never been fired (the runbook says so verbatim:
-# "This dispatch shipped with ZERO live executions"), so the volume is plausibly still
-# plaintext and a replace is plausibly still fatal.
+# conversion having happened. At authoring the recut had never been fired (the runbook said so
+# verbatim: "This dispatch shipped with ZERO live executions"), so the volume was then plausibly
+# plaintext and a replace plausibly fatal. It fired 2026-08-10 (run 31437037877).
 #
 # Anchored on #6929 this probe would have PASSed on its first sweep after merge, announcing
 # "the plaintext-volume blocker is gone" and closing #7340 — a fail-open in exactly the class
 # ADR-172 was written to prevent, inside ADR-172's own follow-through. Note also that #6895,
 # the issue that actually asserts "hcloud_volume.registry is plaintext ext4", is ALSO closed,
 # so no issue-state anywhere encodes the posture. What does encode it is whether the recut has
-# RUN: #7287 tracks firing it and is open.
+# RUN: #7287 tracked firing it, and it closed 2026-08-12.
 #
-# This is still a proxy, not a measurement. The direct signal would be a live at-rest posture
-# probe, which scripts/encryption-posture-ledger.json records as
-# `live_verification: "unavailable:no zot-host at-rest posture probe yet"`. Until that exists,
-# an unfired recut is the closest honest anchor — and it errs toward keeping the actions
-# blocked, which is the survivable direction.
+# This is still a proxy, not a measurement. The direct signal now exists:
+# scripts/followthroughs/registry-luks-live-8386.sh grades the SOLEUR_ZOT_DISK heartbeat's
+# `store_luks=yes`, and the scripts/encryption-posture-ledger.json row reads
+# `live_verification: available` since PR #8423. Moving this probe onto that signal is #7377's
+# open checkbox; until then this file stays an issue-state proxy, which errs toward keeping the
+# actions blocked — the survivable direction.
 DEP_ISSUE="${LUKS_BLOCKER_DEP_ISSUE:-7287}"
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
@@ -92,7 +103,7 @@ fi
 
 if [[ "$state" == "CLOSED" ]]; then
   echo "PASS: #${DEP_ISSUE} is CLOSED — the LUKS recut has been APPLIED, so a registry host"
-  echo "      replace no longer opens /dev/mapper/registry against a plaintext ext4 volume."
+  echo "      replace reopens the LUKS store volume (cloud-init's reuse arm) instead of refusing it."
   echo "      VERIFY BEFORE ACTING: this is a proxy for the at-rest posture, not a measurement of"
   echo "      it. Confirm the recut actually ran (a green registry-luks-recut dispatch) rather"
   echo "      than #${DEP_ISSUE} having been closed for another reason."
