@@ -422,6 +422,7 @@ locals {
     zot_pull_token        = random_password.zot_pull.result
     # nftables allowlist for the :8288/:8289 control API — web hosts only (SEC-H2).
     web_host_private_ips = local.web_host_private_ips
+    inngest_private_ip   = local.inngest_private_ip
     # #6178 boot observability: bake the write-only Better Stack Logs ingest token so the
     # earliest runcmd can emit a phone-home marker BEFORE Doppler/OCI/bootstrap — otherwise a
     # failure in those early stages (or a Doppler-CLI-install failure) is a total blind spot on
