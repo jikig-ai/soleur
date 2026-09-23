@@ -295,3 +295,9 @@ build.
 > [ADR-068](./ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md) (addendum
 > 2026-07-27, D1–D10)**, because git-data is ADR-068's element, not this ADR's. Note this repin does
 > **not** make the host bornable — it still has no birth route (#6977).
+
+## Amendment — 2026-09-23 (#8611, ADR-243)
+
+Giving a second host serving weight for `/api/inngest` step calls reopens ADR-243 §2 (the
+process-local single-flight guard that stops duplicate paid Claude sessions assumes one
+step-executing host).
