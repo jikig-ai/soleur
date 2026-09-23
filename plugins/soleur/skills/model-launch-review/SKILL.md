@@ -93,6 +93,16 @@ Only item 1 is auto-applied. Items 2–6 are reported in the PR body for human s
    auto-fix surface. Selection now skips binaries (`grep -I`), so `--fix` will not byte-patch it,
    but the tarball still has no business in the tree.
 
+   **A CLI-only bump's `sdk-bump-verified:` ack must name the control the CLI actually moves.**
+   The audit crons run `claude` with `sandbox.enabled:false`, so the canary `--replay` (SDK bwrap
+   argv) says nothing about them; their containment is the PreToolUse
+   `cron-bash-allowlist-hook.mjs`. Probe it for real: settings = `DEFAULT_CLAUDE_SETTINGS` + that
+   hook under a `*` matcher (copied under its ORIGINAL filename — its main guard is keyed on it,
+   and a renamed copy allows everything), then run
+   `npx -y @anthropic-ai/claude-code@<v> -p --output-format json --model claude-haiku-4-5` asking for
+   a non-allowlisted `echo`, and require the command in `.permission_denials[]` — with the old
+   version as the control (#8601).
+
    Probe the PLATFORM package, never the `@anthropic-ai` scope: `claude-agent-sdk` and
    `claude-agent-sdk-linux-x64` both carry `claude-sonnet-5`, so a scope-wide grep answers
    "present" from the agent SDK while `claude-code` lacks the id entirely.
