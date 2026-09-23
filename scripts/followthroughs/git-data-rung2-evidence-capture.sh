@@ -1028,10 +1028,25 @@ if [[ -n "$REBOOT_SINCE" ]]; then
   fi
 
   # (#8211) THE TARGET, not only the action. The reopen mounts whatever fstab names, so a
-  # reopened row proves the re-attach only when it reopened the SERVING root. Every reopened
-  # row must carry exactly `"target":"/mnt/git-data"` (the closing quote makes it equality, so
-  # /mnt/git-data-luks does not match); a row with another target, or none, FAILs.
-  _bs_bad_target="$(grep '"action":"reopened"' <<<"$_bs_reopen" | grep -v '"target":"/mnt/git-data"' || true)"
+  # reopened row proves the re-attach only when it reopened the SERVING root. A row with
+  # another target, or none, FAILs.
+  #
+  # PARSE THE FIELD, NEVER SUBSTRING-MATCH THE SERIALIZED ROW. This shipped as
+  # `grep -v '"target":"/mnt/git-data"'` and rejected every correct host: ClickHouse's
+  # JSONEachRow escapes the solidus, so the wire bytes are `"target":"\/mnt\/git-data"` and the
+  # unescaped literal never matched. The reboot arm could therefore never pass, which means the
+  # rung-2 gate could never be released — measured on rehearsal run 35909343686, whose host
+  # reopened at /mnt/git-data correctly and was failed anyway. `\/` is legal JSON that a
+  # producer may emit at will, so the encoding is not ours to assume; jq decodes it.
+  #
+  # FAIL CLOSED on a row jq cannot parse: an unreadable row is not a row that proves a reopen.
+  _bs_bad_target=""
+  while IFS= read -r _rrow; do
+    [[ -n "$_rrow" ]] || continue
+    _rtarget="$(jq -r '.target // empty' <<<"$_rrow" 2>/dev/null)" || _rtarget=""
+    [[ "$_rtarget" == "/mnt/git-data" ]] && continue
+    _bs_bad_target+="${_rrow}"$'\n'
+  done < <(grep '"action":"reopened"' <<<"$_bs_reopen" || true)
   if [[ -n "$_bs_bad_target" ]]; then
     echo "FAIL (reboot arm): a stage:luks_reopen_ok action=reopened row arrived after the reset, but"
     echo "its target is not /mnt/git-data. The store is served from /mnt/git-data, so a reopen"

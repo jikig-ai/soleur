@@ -1,7 +1,7 @@
 ---
 vendor: OpenAI
 role: proposed processor for Codex web-agent customer-content processing
-status_snapshot_date: 2026-09-22
+status_snapshot_date: 2026-09-23
 customer_content_status: blocked
 clo_disposition: pending
 user_owned_provider_path: documented-in-product; vendor-account-terms-apply
@@ -34,12 +34,14 @@ For Enterprise accounts, [workspace administrators control Codex access and perm
 
 The mode-specific decision request and evidence checklist are in `knowledge-base/project/specs/feat-one-shot-codex-web-rollout/clo-decision-packet.md`. Its status is **pending CLO disposition**, not approval.
 
-On 2026-09-22, the managed-mode synthetic CLI smoke completed successfully,
-but it did not identify the account plan, workspace owner, agreement, region,
-retention settings, or administrator controls. No `OPENAI_API_KEY` secret was
-present in production Doppler, and no API request was attempted. This confirms
-that the evidence gap is account-specific and that customer-content processing
-must remain blocked.
+The 2026-09-22 managed-mode synthetic CLI smoke and 2026-09-23 local App Server
+transport probes completed successfully. The App Server returned a thread/delete
+acknowledgement and a subsequent `thread not loaded` response, but this does not
+prove provider-side erasure or establish the account plan, workspace owner,
+agreement, region, retention settings, or administrator controls. No authorized
+synthetic workspace API key was available through Web settings, and no API-key
+provider request was attempted. A global Soleur API key is not required for
+the user-owned mode. Customer-content processing remains blocked.
 
 ## Required CLO disposition
 
