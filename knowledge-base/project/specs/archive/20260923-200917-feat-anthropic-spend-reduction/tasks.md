@@ -1,6 +1,6 @@
 ---
 feature: feat-anthropic-spend-reduction
-plan: knowledge-base/project/plans/2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md
+plan: knowledge-base/project/plans/archive/20260923-200917-2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md
 lane: cross-domain
 ---
 

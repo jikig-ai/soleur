@@ -78,6 +78,19 @@ retry. When the step is not idempotent, the engine re-executes work that is stil
 run fails anyway. So you pay twice and get nothing. For any engine that calls back into the app over
 HTTP, compare the longest step duration with every proxy timeout on the callback path.
 
+Two corollaries from implementing it:
+
+- **A spike is only as faithful as the production process's FAILURE semantics, not its transport.**
+  The spike server mirrored `server/index.ts`'s request path and omitted its `uncaughtException →
+  process.exit(1)` handler, so the one behaviour that made raw streaming unshippable read as log
+  noise. Likewise, killing a self-hosted `inngest start` (in-memory queue, no Redis) to "cut a
+  stream" lost the retry entirely — production runs a durable queue. Cut connections, not
+  processes, and install every fatal-error handler the production process installs.
+- **A detector must not compare two quantities written by the same step.** The plan's BYOK check
+  compared summed cost markers against `cumulativeCents`; a re-run step writes both again, so they
+  still match after a double bill. Detect duplication from a field the retry changes (`attempt`,
+  a per-turn key) or from an independent count (run history).
+
 ## Session Errors
 
 1. **I claimed `cost_usd` was null on every marker from two eyeballed samples.** I built "Fix 4:
@@ -122,6 +135,52 @@ HTTP, compare the longest step duration with every proxy timeout on the callback
 9. **The unkept-promise stop hook fired twice** on "I'll…" closing text while waiting on background
    agents. **Recovery:** emitted `<stop>BLOCKED: …</stop>`.
    **Prevention:** one-off. When waiting on agents, end with the stop marker, not a promise.
+
+Implementation and review (same day):
+
+10. **The spike server omitted the production crash handlers,** so the SDK heartbeat-leak crash was
+    found by reading `stream.js`, not by the spike. **Recovery:** S7 re-ran with the handlers and a
+    restart loop; the control crashed, the wrapper held. **Prevention:** routed to plan-sharp-edges —
+    a spike installs the production process's fatal-error handlers.
+11. **The first S7 cut SIGKILLed the self-hosted inngest server,** whose in-memory queue then lost the
+    retry. **Recovery:** a TCP proxy that drops live connections. **Prevention:** same sharp edge.
+12. **The S7 driver found no proxy pid** (an exact-name `pgrep node` misses processes whose comm is
+    `node-MainThread`), so the first control run did nothing. **Recovery:** pid by listening port.
+    **Prevention:** one-off; resolve a server's pid from its socket.
+13. **A readiness monitor fired on stale log content** from an earlier run. **Prevention:** one-off;
+    truncate or timestamp-gate a log before watching it.
+14. **A full-command-line process match was blocked by the self-match hook again,** inside the driver
+    script. **Prevention:** already hook-enforced.
+15. **The issue-filing gate refused a `/tmp` body file,** and the heredoc that wrote it sat inside the
+    blocked command, so the file never existed; the filing then needed `Mandated-By:`. **Recovery:**
+    body written with the Write tool inside the worktree. **Prevention:** existing guidance (literal
+    in-repo path; write the body in its own step).
+16. **My route-level disconnect test could not discriminate** — an unsigned request finalizes before
+    any cancel. **Recovery:** mutation caught it; replaced with a wiring test. **Prevention:** existing
+    rule (drive the mutation that undoes the fix).
+17. **The single-`serve()`-mount grep matched my own explanatory comment.** **Recovery:** anchored on
+    the `serve` import. **Prevention:** existing rule `cq-assert-anchor-not-bare-token`.
+18. **A static import of the substrate broke `vi.mock` hoisting** in two cron suites. **Recovery:**
+    dynamic import in `beforeEach`. **Prevention:** one-off.
+19. **A Python-heredoc quoting error left a test rewrite unwritten,** and the Write tool refused twice
+    on files changed since read. **Prevention:** one-off; write whole files with the Write tool.
+20. **A commit failed the typecheck hook** on a fixture edited after my last `tsc`. **Prevention:**
+    one-off; re-run `tsc` after the last edit, not the last big one.
+21. **I duplicated two changes main already had** — #8601's `AUDIT_MODEL` re-pin and #8599's ledger
+    drift fold-in — and resolved seven conflicts at review time. **Recovery:** took main's versions.
+    **Prevention:** routed to the work skill — fetch and diff `origin/main` for a shared constant or
+    ledger before editing it.
+22. **The review panel broke the code 17 ways with every suite green** (settled retention exercised
+    only by a synchronous retry; Guard 2 pinned SQL text, not predicates; the budget flag checked by a
+    grep a comment satisfied). **Recovery:** the budget moved into the substrate (one enforcement
+    point) and the predicates are evaluated on fixtures; 10/10 new-guard mutations killed.
+    **Prevention:** existing review rules; this is the recurring class, not a new one.
+23. **The BYOK rollback trigger had no working detector.** **Recovery:** `turn`/`attempt` on the
+    leader-loop marker. **Prevention:** routed to plan-sharp-edges (Key insight above).
+24. **I wrote a derived "~9.4 funded days"** before reading the plan's measured 9.3. **Prevention:**
+    one-off; quote the measured figure.
+25. **Two small correctness slips:** a markdownlint MD037 in the ledger row, and the spike doc's
+    "crashed ~15 s later" where the exit was logged in the same second. **Prevention:** one-off.
 
 ## Tags
 

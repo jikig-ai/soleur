@@ -2395,7 +2395,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // discoverability_test declares credentials_required for the Better Stack Logs warehouse
   // read. The marker is emitted by a deny-all, no-SSH host and exists only in that warehouse;
   // no unauthenticated endpoint exposes it. Genuine declaration.
-  // #8611 (2026-09-23): +1 for `2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md`.
+  // #8611 (2026-09-23): +1 for `2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md` (archived under plans/archive/).
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
   // probe (`scripts/probe-inngest-524-count.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
   // NO SUBSTITUTE: the property is the count of inngest-server `invalid status code: 524`

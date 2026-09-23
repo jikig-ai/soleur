@@ -14,7 +14,7 @@ tags: [inngest, cloudflare, streaming, claude-eval, cost, anthropic, single-flig
 ## Status
 
 Accepted — 2026-09-23 (#8611). Evidence:
-[`streaming-spike.md`](../../../project/specs/feat-anthropic-spend-reduction/streaming-spike.md).
+[`streaming-spike.md`](../../../project/specs/archive/20260923-200917-feat-anthropic-spend-reduction/streaming-spike.md).
 Learning: `2026-09-23-cloudflare-524-made-every-long-inngest-step-run-twice-and-commit-nothing.md`.
 
 ## Context
@@ -213,7 +213,7 @@ re-ran with them). Phase 6 of the plan closes the edge difference on production.
 
 ## References
 
-- #8611, plan `2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md`, #5692 (burn alert),
+- #8611, plan `plans/archive/20260923-200917-2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md`, #5692 (burn alert),
   #8613 (turn/cap/threshold recalibration and the `retries` decision), #8614 (Console spend limit),
   #8628 (inngest v4 upgrade; deletes stream-detach), #8601 (the AUDIT_MODEL re-pin).
 - ADR-033 (child-process spawn inside one `step.run`), ADR-030 (signing), ADR-108 (cost markers),

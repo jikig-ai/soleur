@@ -205,7 +205,7 @@ const handlers = serve({
   // while the first Claude child was still alive, and the run failed anyway. Streaming answers 201
   // at once and writes a heartbeat byte every 3 s, so the proxy never times out; the real status
   // (including a signature 401) travels in the streamed JSON envelope. Evidence:
-  // knowledge-base/project/specs/feat-anthropic-spend-reduction/streaming-spike.md.
+  // knowledge-base/project/specs/archive/20260923-200917-feat-anthropic-spend-reduction/streaming-spike.md.
   streaming: "force",
   // #5159 (see SERVE_HOST note above): pin the registered serve URL to the
   // canonical public origin so a loopback re-register PUT plans crons. Omitted
