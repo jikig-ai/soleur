@@ -432,6 +432,26 @@ describe("curate step (via handler)", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
+  it("#8505: a credit-exhausted curate call emits the named marker tagged with this cron", async () => {
+    fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
+    fetchBehavior.anthropic = async () =>
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." },
+        }),
+        { status: 400 },
+      );
+    await runHandler().catch(() => undefined);
+    const credit = reportSilentFallbackSpy.mock.calls.filter(
+      ([, ctx]) => (ctx as { op?: string }).op === "anthropic-credit-exhausted",
+    );
+    expect(credit).toHaveLength(1);
+    expect((credit[0][1] as { tags: Record<string, string> }).tags.source).toBe(
+      "cron:cron-weekly-release-digest",
+    );
+  });
+
   it("dedupes repeated valid tags from the LLM (one bullet per release)", async () => {
     fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
     fetchBehavior.anthropic = async () =>
