@@ -1,6 +1,15 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+// IMPORTED, not re-derived. Both of these were hand-rolled in this file first, and both
+// were wrong in the way an importable helper exists to prevent: the comment stripper had
+// to be written a second time, and the literal escaper handled `.` while leaving `\`
+// unescaped — which is CodeQL js/incomplete-sanitization, the exact rule
+// `escapeRegExp`'s own docstring in that module cites. The durable unit is the import.
+import {
+  escapeRegExp,
+  stripHclComments,
+} from "./lib/terraform-hcl-blocks";
 
 // Symbol-parity test for the committed GitHub App manifest.
 //
@@ -39,6 +48,31 @@ const EXPECTED_TF_SECRETS = [
   "GITHUB_APP_PRIVATE_KEY",
   "GITHUB_APP_WEBHOOK_SECRET",
 ];
+
+// (#8209, ADR-241) The two App-IDENTITY names are no longer Terraform-MANAGED. Their
+// `doppler_secret` resources pinned `config = "prd"`, so web-platform state held a copy
+// of the App's live private key -- and the Tier-A `prd_terraform` R2 backend keys read
+// that state object. They were replaced with `removed` blocks.
+//
+// The map below says, per name, how github-app.tf is expected to account for it. It is a
+// map rather than a second list so a name cannot silently fall out of BOTH checks: the
+// loop asserts over EXPECTED_TF_SECRETS and looks the mode up here, so a name with no
+// entry fails rather than being skipped.
+const TF_SECRET_MODE: Record<string, "managed" | "forgotten"> = {
+  // Soleur-generated from random_id; Terraform owns it and must keep owning it.
+  GITHUB_APP_WEBHOOK_SECRET: "managed",
+  // Operator-supplied App identity: forgotten, never destroyed. Doppler `prd` keeps the
+  // live values, which is what the web app mints installation tokens with.
+  GITHUB_APP_ID: "forgotten",
+  GITHUB_APP_PRIVATE_KEY: "forgotten",
+};
+
+// Terraform resource address for each forgotten name, so the assertion can pin the
+// EXACT `removed` block rather than merely "some removed block exists".
+const TF_FORGOTTEN_ADDRESS: Record<string, string> = {
+  GITHUB_APP_ID: "doppler_secret.github_app_id",
+  GITHUB_APP_PRIVATE_KEY: "doppler_secret.github_app_private_key",
+};
 
 // Exact set of permissions in the committed manifest. Reconciled to the live
 // App state at #4169 post-merge attestation (added `secrets: write` which the
@@ -178,14 +212,162 @@ describe("github-app-manifest.json symbol parity", () => {
     expect(m.redirect_url.endsWith("/internal/github-app-init")).toBe(true);
   });
 
-  test("Terraform secret names are all declared in github-app.tf", () => {
-    const tf = readFileSync(TF_PATH, "utf-8");
+  test("every Terraform secret name is accounted for in github-app.tf (declared, or forgotten with destroy = false)", () => {
+    // THIS IS A USER-FACING ASSERTION, not bookkeeping. `doppler_secret.github_app_id`
+    // and `doppler_secret.github_app_private_key` pinned `config = "prd"`, so they were
+    // the soleur-ai App's LIVE runtime identity -- the key the web app reads to mint an
+    // installation token for every connected user. If a `removed` block for either one
+    // loses its `lifecycle { destroy = false }`, or its address is misspelled so the
+    // resource is left orphaned under management, the next apply DELETES the secret and
+    // every connected user's GitHub connection and webhook stops working, with no
+    // rollback beyond pasting a key back by hand. That is why "forgotten" here is
+    // asserted positively rather than by the absence of a declaration.
+    const raw = readFileSync(TF_PATH, "utf-8");
+
+    // COMMENT-STRIPPED. Every match below is a claim about what TERRAFORM will do, and
+    // Terraform does not read comments. Measured on the previous version of this test:
+    //
+    //     lifecycle {
+    //       # was: destroy = false
+    //       destroy = true
+    //     }
+    //
+    // satisfied `destroy = false` and the suite stayed GREEN while the next apply would
+    // DELETE the App's live runtime identity out of Doppler prd. Commenting a line out
+    // instead of deleting it is the single most ordinary edit anyone makes to HCL, which
+    // is what makes a raw-text haystack the wrong instrument for an assertion whose whole
+    // job is to name that harm.
+    //
+    const tf = stripHclComments(raw);
+
+    // Self-test the stripper before trusting it. A stripper that returned its input
+    // unchanged, or that ate everything, would leave every assertion below either
+    // unchanged-and-defective or vacuously green.
+    expect(stripHclComments('a = "x" # b = "y"\nc = 1\n')).toBe('a = "x" \nc = 1\n');
+    expect(stripHclComments('n = "a#b"\n')).toBe('n = "a#b"\n');
+    expect(stripHclComments("/* x */ y = 1\n")).toBe(" y = 1\n");
+    // NOT a byte ratio: this file is ~78% comment by design (the U1 rationale lives in
+    // it), so any ratio floor is either slack or a false alarm. Assert the STRUCTURE the
+    // checks below stand on survived the strip.
+    expect(tf, "the stripper ate the resource headers").toContain(
+      'resource "doppler_secret"',
+    );
+    expect(tf, "the stripper ate the removed blocks").toContain("removed {");
+
+    // Brace-matched extraction of a top-level block of `kind`, keyed by a predicate on
+    // its body. The previous slicer ended at the first COLUMN-0 `\n}` — so indenting a
+    // block's closing brace (valid HCL) ran the slice on into the NEXT removed block and
+    // captured ITS `lifecycle { destroy = false }`. That is verbatim the failure the
+    // slicing was introduced to prevent, restored by two spaces.
+    const blocksOf = (kind: string): string[] => {
+      const found: string[] = [];
+      const head = new RegExp(`\\b${kind}\\s*\\{`, "g");
+      let m: RegExpExecArray | null;
+      while ((m = head.exec(tf)) !== null) {
+        const open = head.lastIndex - 1;
+        let depth = 0;
+        for (let i = open; i < tf.length; i++) {
+          if (tf[i] === "{") depth++;
+          else if (tf[i] === "}") {
+            depth--;
+            if (depth === 0) {
+              found.push(tf.slice(open, i + 1));
+              head.lastIndex = i + 1;
+              break;
+            }
+          }
+        }
+      }
+      return found;
+    };
+    const removedBlocks = blocksOf("removed");
+
+    // POPULATION GROWTH. This test walks a HARDCODED list, so a `doppler_secret` ADDED to
+    // github-app.tf is invisible to it — and a new `config = "prd"` secret is exactly the
+    // ADR-241 defect class, because it writes a live value into the web-platform state
+    // object that the Tier-A prd_terraform R2 keys can read. The file next door says "Do
+    // not add one" in prose with nothing behind it. This is the thing behind it.
+    const declaredSecretNames = [
+      ...tf.matchAll(/resource\s+"doppler_secret"\s+"[A-Za-z0-9_]+"\s*\{/g),
+    ].length;
+    const namedSecrets = [
+      ...tf.matchAll(/^\s*name\s*=\s*"(GITHUB_APP_[A-Z0-9_]+)"/gm),
+    ].map((x) => x[1]);
+    // Set EQUALITY against the MANAGED subset — not `toContain`, and not against the full
+    // expected list (the forgotten two are deliberately no longer named here). Equality
+    // is what makes growth visible: a `doppler_secret` APPENDED to this file is the
+    // ADR-241 defect class, because a `config = "prd"` secret writes a live credential
+    // into the web-platform state object that the Tier-A prd_terraform R2 keys can read.
+    // `infra-privileged-environment.tf` says "Do not add one" in prose; this is the part
+    // that can fail. (Deliberately the same shape as EXPECTED_PERMISSION_KEYS below,
+    // which already used exact-set equality — the asymmetry was the bug.)
+    const managed = EXPECTED_TF_SECRETS.filter(
+      (n) => TF_SECRET_MODE[n] === "managed",
+    );
+    expect(
+      [...new Set(namedSecrets)].sort(),
+      "github-app.tf names a GITHUB_APP_* secret that EXPECTED_TF_SECRETS does not list as managed. If it is new, " +
+        "add it to EXPECTED_TF_SECRETS and TF_SECRET_MODE and say which Doppler config it targets — a " +
+        '`config = "prd"` secret puts a live credential into the web-platform state object, which the Tier-A ' +
+        "R2 keys read (#8209).",
+    ).toEqual([...managed].sort());
+    expect(
+      declaredSecretNames,
+      "more `doppler_secret` resources are declared than there are managed GITHUB_APP_* names",
+    ).toBe(managed.length);
+    expect(
+      removedBlocks.length,
+      "no `removed` blocks found at all — every forgotten-mode assertion below would be about nothing",
+    ).toBe(
+      EXPECTED_TF_SECRETS.filter((n) => TF_SECRET_MODE[n] === "forgotten")
+        .length,
+    );
+
     for (const name of EXPECTED_TF_SECRETS) {
-      // Each name appears as `name       = "<NAME>"` in github-app.tf.
-      const re = new RegExp(`name\\s*=\\s*"${name}"`);
+      const mode = TF_SECRET_MODE[name];
       expect(
-        re.test(tf),
-        `expected ${name} to be declared in github-app.tf`,
+        mode,
+        `${name} has no entry in TF_SECRET_MODE — add one rather than letting it fall out of both checks`,
+      ).toBeDefined();
+
+      // Each name appears as `name       = "<NAME>"` in github-app.tf.
+      const declared = new RegExp(`name\\s*=\\s*"${name}"`).test(tf);
+
+      if (mode === "managed") {
+        expect(declared, `expected ${name} to be declared in github-app.tf`).toBe(true);
+        continue;
+      }
+
+      // forgotten: NOT declared, and covered by a `removed` block that forgets rather
+      // than destroys. Both halves matter -- a declaration AND a removed block for the
+      // same address is a contradiction Terraform would reject, and a removed block
+      // without `destroy = false` is a delete.
+      expect(
+        declared,
+        `${name} is marked forgotten but is still DECLARED in github-app.tf — a resource cannot be both`,
+      ).toBe(false);
+
+      const addr = TF_FORGOTTEN_ADDRESS[name];
+      expect(addr, `${name} is marked forgotten but has no address in TF_FORGOTTEN_ADDRESS`).toBeDefined();
+
+      // Slice the `removed` block that names this exact address, then assert on ITS body
+      // — a file-wide search for `destroy = false` would be satisfied by a DIFFERENT
+      // block's lifecycle and would pass while this one deletes the live key.
+      const fromRe = new RegExp(
+        `\\bfrom\\s*=\\s*${escapeRegExp(addr)}\\s*(\\n|\\})`,
+      );
+      const owning = removedBlocks.filter((b) => fromRe.test(b));
+      expect(
+        owning.length,
+        `expected EXACTLY ONE \`removed { from = ${addr} }\` block in github-app.tf for ${name}, found ${owning.length}. ` +
+          `Two blocks for one address means one of them is unreviewed; zero means the address is still under management.`,
+      ).toBe(1);
+      const block = owning[0];
+      expect(
+        /lifecycle\s*\{[^}]*destroy\s*=\s*false/.test(block),
+        `the removed block for ${addr} is MISSING \`lifecycle { destroy = false }\`. Without it, ` +
+          `\`removed\` is a DELETE, and that address holds the App's live runtime identity in Doppler prd ` +
+          `— deleting it disconnects every connected user (#8209 U1).`,
       ).toBe(true);
     }
   });
