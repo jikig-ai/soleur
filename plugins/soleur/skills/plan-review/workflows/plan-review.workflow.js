@@ -313,7 +313,7 @@ function resolveWorkflowModel(tier) {
   var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
   var claude = !!env.CLAUDECODE
   var map = grok
-    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    ? { cheap: 'grok-4.5', standard: 'grok-4.7', strong: 'grok-4.7', advisor: 'grok-4.7', inherit: 'inherit' }
     : claude
       ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
       : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }

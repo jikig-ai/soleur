@@ -50,7 +50,7 @@ end
 ```ruby
 DSPy.configure do |c|
   # Claude Opus 5 (most intelligent, best for agents and coding)
-  c.lm = DSPy::LM.new('anthropic/claude-opus-5',
+  c.lm = DSPy::LM.new('anthropic/claude-opus-5-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 
   # Claude Sonnet 5 (best speed/intelligence balance)
