@@ -112,6 +112,8 @@ variables {
   resend_api_key                  = "dummy"
   resend_receiving_api_key        = "dummy"
   supabase_access_token           = "dummy"
+  anthropic_api_key_ci            = "sk-ant-test-ci-dummy" # #8505: distinct from the prd value below
+  anthropic_api_key               = "sk-ant-test-prd-dummy"
   webhook_deploy_secret           = "dummy"
   # command=plan evaluates file(var.ssh_key_path) (hcloud_ssh_key.default). The
   # default ~/.ssh/id_ed25519.pub does not exist in CI, so point at a committed

@@ -594,6 +594,18 @@ variable "supabase_access_token" {
   sensitive   = true
 }
 
+variable "anthropic_api_key_ci" {
+  description = "Anthropic API key for CI and manual evals, minted in the spend-limited soleur-ci-eval Console workspace (#8505). Value from Doppler prd_terraform ANTHROPIC_API_KEY_CI via TF_VAR_anthropic_api_key_ci. Written to Doppler ci/ANTHROPIC_API_KEY and the ANTHROPIC_API_KEY repo secret by anthropic-ci-key.tf. Console-minted: the Admin API cannot set a workspace spend limit and no Anthropic provider exists (runbooks/anthropic-console-workspace-key.md). No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+}
+
+variable "anthropic_api_key" {
+  description = "The production Anthropic API key, inherited by prd_terraform from prd. Read ONLY by the preconditions in anthropic-ci-key.tf to refuse a CI key equal to it; never referenced in a resource argument, so it never lands in state (#8505). No default: a missing value must fail the plan, not silently weaken the distinctness check."
+  type        = string
+  sensitive   = true
+}
+
 # --- Inngest IaC (PR-F follow-up, #3960) -------------------------------------
 # 3 new variables (down from plan's 7). Inngest signing/event keys are
 # TF-generated via random_id (see inngest.tf); no operator mint required.
