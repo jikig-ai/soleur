@@ -241,6 +241,16 @@ def project_tf:
 # comparing raw live against a normalised reference reported 38 divergences on a
 # healthy org. Projecting ONLY the asserted fields makes a future server-side
 # addition inert by construction.
+# ANY-CONDITION, deliberately, and symmetric with `tf_in_scope` above: one
+# excluded type anywhere in a workflow's conditions takes the WHOLE workflow out
+# of scope, because the provider cannot express that type and a comparison of the
+# remaining fields would be a comparison of a rule Sentry does not evaluate.
+# Narrowing this to all-conditions-excluded was considered and rejected: it would
+# re-admit a rule the provider still cannot write, and report it as DRIFT — whose
+# remedy is "re-run the apply", which is wrong for exactly this case. Instead,
+# scripts/sentry-alert-live-fidelity.sh classifies a MANAGED name found out of
+# scope as `MANAGED RULE GAINED EXCLUDED TRIGGER` and says an apply is not a
+# repair. Changing either predicate here means changing both.
 def in_scope:
   [ .triggers.conditions[]?.type ] as $t
   | (excluded | any(. as $e | $t | index($e))) | not;
