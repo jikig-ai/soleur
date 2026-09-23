@@ -61,7 +61,9 @@ if grep -qE 'variable "sentry_dsn"' "$VARS"; then ok "variables.tf declares vari
 # 4. §1A (#6090 recurrence): the seed login must re-fetch Doppler creds + retry docker
 # login on a baked-login FAILURE, not only when the baked value is EMPTY. A PRESENT-but-
 # STALE baked token (fresh host's token aged out) otherwise fails login non-fatally →
-# anonymous private pull → stage=pull denied. Mirrors ci-deploy.sh ghcr_prelude_and_login.
+# anonymous private pull → stage=pull denied. This MIRRORED ci-deploy.sh's GHCR prelude until
+# #8036 1c retired that half on 2026-09-23; the boot path asserted here is now the only one, and
+# is tracked as 1d. Every grep below targets cloud-init.yml, so the assertions are untouched.
 if grep -qE "printf 'ghcr_login_ok_refetch'" "$CI" \
    && grep -qE 'until RT=.*doppler secrets get GHCR_READ_TOKEN' "$CI"; then
   ok "seed login re-fetches Doppler creds + retries docker login on a baked-login FAILURE (§1A)"

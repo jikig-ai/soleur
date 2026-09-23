@@ -13,7 +13,14 @@
 #                           NO class= and NO rc= (the gate had no failure to name)
 #   (b) no login attempted — a bounded, named non-login state:
 #                           zot  → `reason=probe_unreachable` / `reason=creds_absent`
-#                           ghcr → `PRELUDE: … skipping …` (carries NO reason= field:
+#                           ghcr → UNREACHABLE SINCE #8036 1c (2026-09-23): the host-side GHCR
+#                           login was deleted, so this state can no longer be entered and this
+#                           probe can never classify a row into it. The remaining two states
+#                           still produce rows, so the ANY_LINES non-vacuity check below is
+#                           still satisfiable and the probe does not force TRANSIENT. Kept in
+#                           the taxonomy as a named dead state rather than deleted, so a future
+#                           reader finding zero ghcr rows does not read it as a new silence.
+#                           It was: `PRELUDE: … skipping …` (carried NO reason= field:
 #                                  reason= is emitted only by zot_gate_degraded_event,
 #                                  which is zot-only — GHCR is journald-only by decision)
 #   (c) login failed      — carries rc= AND class= AND stderr_chars= AND stdout_chars=
@@ -41,6 +48,21 @@
 
 set -uo pipefail
 
+# #7797: refuse to run under xtrace with a live credential bound — `set -x` echoes every
+# expansion, so a traced run prints the Better Stack password. Added by #8036 1c: this file is in
+# scripts/lint-shell-trace-credential-refusal.baseline.txt, and CI runs that lint with
+# `--changed`, which bypasses the baseline for every file a PR touches. A one-line edit therefore
+# owes the whole debt, and paying it here is cheaper than carrying a red into review.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+
 if [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_HOST not set" >&2; exit 2; fi
 if [[ -z "${BETTERSTACK_QUERY_USERNAME:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_USERNAME not set" >&2; exit 2; fi
 if [[ -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_PASSWORD not set" >&2; exit 2; fi
@@ -59,9 +81,22 @@ OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT INT TERM
 # OR-combined, so this sees BOTH the ZOT_GATE and the PRELUDE halves. (The plan's first
 # draft used a bare `--since 60`, which fails that regex and silently degrades to
 # WHERE dt >= '60' — the probe did not run at all. Verified parsing before shipping.)
-if ! bash "$QUERY" --since 90m --grep ZOT_GATE --grep PRELUDE > "$OUT" 2>&1; then
-  echo "TRANSIENT: betterstack-query.sh failed:" >&2
-  tail -5 "$OUT" >&2
+# STDERR IS DISCARDED, NOT CAPTURED. betterstack-query.sh runs curl with
+# `-u "$BETTERSTACK_QUERY_USERNAME:$BETTERSTACK_QUERY_PASSWORD"`, so on a rotated or expired
+# credential the ClickHouse 4xx BODY goes to stdout and curl's own error text to stderr — and
+# ClickHouse auth errors name the user. sweep-followthroughs.sh runs this probe as
+# `out=$(... 2>&1)` and posts that verbatim via `gh issue comment`, where the Actions secret
+# masker does NOT apply. Merging stderr into $OUT and then tailing it to the operator put
+# credential-shaped text one failed query away from a PUBLIC comment.
+_q_rc=0
+bash "$QUERY" --since 90m --grep ZOT_GATE --grep PRELUDE > "$OUT" 2>/dev/null || _q_rc=$?
+if [[ "$_q_rc" -ne 0 ]]; then
+  echo "TRANSIENT: betterstack-query.sh failed (exit=$_q_rc)." >&2
+  # A fixed-vocabulary line only: never a tail of the response, for the reason above. The rc is
+  # captured from the query itself -- reading `$?` inside `if ! cmd; then` would report the
+  # NEGATION, not the query's status.
+  echo "           Response body withheld: the credential is bound in that process and this" >&2
+  echo "           text reaches a public issue comment." >&2
   exit 2
 fi
 
