@@ -859,17 +859,24 @@ _shard_m_labels=()
 _shard_m_legs=()
 if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "scripts-heavy" ]]; then
   # The group's own file and its own override variable — bound by name so the
-  # validation below can stay a single code path (indirect expansion keeps the
-  # error messages naming the variable the caller actually set).
+  # validation below can stay a single code path (the variable NAME keeps the
+  # error messages naming the variable the caller actually set). The VALUE is
+  # bound directly per arm, never via `${!_shard_mvar}` indirection: the
+  # shell-trace credential lint reads `${!name}` as a runtime-selected
+  # expansion (a credential class) and would put this runner in scope for the
+  # xtrace refusal it does not need.
   if [[ "$TEST_GROUP" == "scripts-heavy" ]]; then
     _shard_mvar="SOLEUR_SHARD_MANIFEST_HEAVY"
     _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs-heavy.tsv"
+    _shard_mset="${SOLEUR_SHARD_MANIFEST_HEAVY+x}"
+    _shard_mval="${SOLEUR_SHARD_MANIFEST_HEAVY-}"
   else
     _shard_mvar="SOLEUR_SHARD_MANIFEST"
     _shard_mfile="$(dirname "${BASH_SOURCE[0]}")/suite-shard-legs.tsv"
+    _shard_mset="${SOLEUR_SHARD_MANIFEST+x}"
+    _shard_mval="${SOLEUR_SHARD_MANIFEST-}"
   fi
-  if [[ -n "${!_shard_mvar+x}" ]]; then
-    _shard_mval="${!_shard_mvar}"
+  if [[ -n "$_shard_mset" ]]; then
     if [[ "$_shard_mval" == "off" ]]; then
       _shard_mfile=""
     elif [[ -z "$_shard_mval" ]]; then
@@ -892,7 +899,7 @@ if (( _SHARD_N > 0 )) && [[ "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "scri
     echo "[shard] no ${_shard_mfile##*/} manifest — positional assignment" >&2
     _shard_mfile=""
   fi
-  unset _shard_mvar _shard_mval
+  unset _shard_mvar _shard_mset _shard_mval
 
   if [[ -n "$_shard_mfile" ]]; then
     _shard_mn=""
