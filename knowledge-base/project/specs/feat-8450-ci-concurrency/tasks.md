@@ -35,13 +35,13 @@
 - [x] D.1 Write `scripts/followthroughs/actions-queue-tail-8450.sh` (per-job `started_at − created_at` on the deploy-arm jobs — run-level `created_at→run_started_at` was falsified as vacuous, `--event workflow_run` filter, `plan.name` precondition → SKIP-DECLARED/NOT-YET, `UPGRADE_NOT_BEFORE` cutoff, ≥5 runs / p95<15min); pin `job.created_at` semantics empirically first
 - [x] D.1b Add `actions: read` to `scheduled-followthrough-sweeper.yml` job permissions
 - [x] D.1c `bootstrap.sh` — runnable form of `operator-upgrade-steps.md` (hr-multi-step-post-merge-bootstrap-script): class-3 barrier + `plan.name` verify, ledger/measurements PR, body directive + label, then class-2-acked monitor dispatch (directive precedes dispatch so an unattended run completes every automatable stage first)
-- [ ] D.3b (post-upgrade, separate commit) ADR-032 reopener-(iii) flip
+- [x] D.3b (post-upgrade, separate commit) ADR-032 reopener-(iii) flip
 - [ ] D.4 Re-evaluation note on #8450
 
 ## Verification + ship
 
 - [x] V.1 `actionlint` clean on every edited workflow; `bash -n` on new scripts
 - [x] V.2 `pr-fanout-ledger.test.sh`, `required-checks-canonical-parity.test.sh`, `workflow-file-size.test.ts` green
-- [ ] V.3 `gh api orgs/jikig-ai --jq .plan.name` (AC-TEAM, post-operator-upgrade)
+- [x] V.3 `gh api orgs/jikig-ai --jq .plan.name` (AC-TEAM, post-operator-upgrade)
 - [ ] V.4 AC-TAIL soak via probe; numbers recorded in `measurements.md`
 - [x] V.5 Commit + push; PR body `Ref #8450`; GDPR gate re-run at work Phase 2 exit (0 regulated-path matches on `origin/main...HEAD`)

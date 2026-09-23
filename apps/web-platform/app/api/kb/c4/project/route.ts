@@ -202,10 +202,12 @@ export async function GET(request: Request) {
     } catch (err) {
       // The committed model is corrupt JSON — distinct from a GitHub-read
       // failure so the Sentry slug attributes the cause correctly.
-      reportSilentFallback(err, {
+      // Report a fixed Error, not `err`: V8's SyntaxError message quotes a slice
+      // of the input, i.e. of the customer's model, and would ship it to Sentry.
+      reportSilentFallback(new Error("model.likec4.json parse failed"), {
         feature: "c4-project-read",
         op: "model-parse-failed",
-        extra: { ...userLog, dir: requestedDir },
+        extra: { ...userLog, dir: requestedDir, errName: err instanceof Error ? err.name : "unknown" },
       });
       return NextResponse.json(
         { error: "Diagram model is corrupt — re-render to regenerate it." },

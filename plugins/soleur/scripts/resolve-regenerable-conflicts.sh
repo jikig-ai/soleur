@@ -232,8 +232,9 @@ for i in "${!conflicted[@]}"; do
   # for a path it treats as BINARY: it marks the path UU and leaves OURS-content in place, so
   # the file reads clean and a no-op regen commits the ours-side artifact at rc=0. That is
   # side-picking dressed as a regeneration -- the exact outcome this script exists to prevent.
-  # (Demonstrated in review against a `*.likec4.json binary` attribute; this PR also deletes
-  # the repo's only .gitattributes, so nothing in-tree pins that artifact as text.)
+  # (Demonstrated in review against a `*.likec4.json binary` attribute. The root .gitattributes
+  # re-added by #8542 sets ONLY `linguist-generated` on the artifact, and
+  # plugins/soleur/test/c4-canonical.test.ts fails if a binary/-diff/-merge attribute joins it.)
   # Safe for the one production member: regenerate-c4-model.sh reads the .c4 sources, never
   # its own output. A future incremental generator would need a different discriminator.
   rm -f -- "$p"

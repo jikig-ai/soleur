@@ -43,6 +43,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { canonicalizeC4Model } from "@/lib/c4-canonical.mjs";
 import { C4_DIAGRAMS_DIR, C4_MODEL_JSON } from "@/lib/c4-constants";
 
 export type RenderReason =
@@ -57,9 +58,10 @@ export type RenderReason =
   | "io_error";
 
 export type RenderResult =
-  // `json` is the raw, validated UTF-8 model string read from the temp export —
-  // returned verbatim (never re-`JSON.stringify`d) so the committed bytes are
-  // byte-identical to what `likec4` produced and we validated.
+  // `json` is the validated model in the CANONICAL on-disk format (one JSON
+  // value per line, view hashes blanked — lib/c4-canonical.mjs, #8542). The
+  // repo regenerator and the plugin's sync producer emit the same bytes through
+  // the same module, so no writer reformats another's committed file.
   | { ok: true; durationMs: number; json: string }
   | { ok: false; reason: RenderReason; detail?: string };
 
@@ -161,9 +163,8 @@ async function renderToValidatedModel(
     const run = await runLikeC4(diagramsDir, tmpOut);
     if (!run.ok) return run;
 
-    // exit 0 — but likec4 exits 0 on unresolved references too, so validate.
-    // Keep the raw read so the returned bytes are byte-identical to the
-    // validated artifact (no re-`JSON.stringify` key-order/whitespace drift).
+    // exit 0 — but likec4 exits 0 on unresolved references too, so validate
+    // the raw read first; canonicalization happens only after the gate.
     let raw: string;
     let model: { elements?: unknown };
     try {
@@ -200,9 +201,23 @@ async function renderToValidatedModel(
       };
     }
 
-    // Validated — return the raw bytes; the caller commits them and the resync
-    // pull lands them on disk. The tracked working-tree file is never written.
-    return { ok: true, durationMs: run.durationMs, json: raw };
+    // Validated — canonicalize (AFTER the gate, never instead of it) and return
+    // the bytes; the caller commits them and the resync pull lands them on disk.
+    // The tracked working-tree file is never written. A canonicalize failure is
+    // our own IO-class fault, not the user's source, so it maps to io_error.
+    let json: string;
+    try {
+      json = canonicalizeC4Model(raw);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "io_error",
+        detail: sanitizeForLog(
+          `canonicalize failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 512),
+        ),
+      };
+    }
+    return { ok: true, durationMs: run.durationMs, json };
   } catch (err) {
     return {
       ok: false,

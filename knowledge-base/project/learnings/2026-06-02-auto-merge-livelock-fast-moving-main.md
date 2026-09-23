@@ -25,12 +25,14 @@ The failure is a livelock:
 4. Checks finish green, but the branch is already stale → never `CLEAN` → never merges.
 
 Two amplifiers made it worse:
+
 - A **monitor that auto-updated the branch on every `BEHIND`** guaranteed the branch was
   never green-at-current-`main` — it actively fed the loop.
 - A **pre-merge `PreToolUse` hook** re-synced the branch with `main` on each `gh pr merge`
   attempt, adding another HEAD churn per attempt.
 
 Observed failure signatures:
+
 - `gh pr view --json mergeStateStatus` cycling `BEHIND → BLOCKED → BEHIND`.
 - GraphQL `Base branch was modified. Review and try the merge again.` on the merge call.
 - `gh pr merge --admin`: `Merge succeeded but push failed ... non-fast-forward` (the *local*
@@ -39,6 +41,8 @@ Observed failure signatures:
 ## Solution
 
 Break the livelock **deterministically** instead of chasing a moving target:
+
+> **Superseded 2026-09-22 (#8500):** steps 2, 3 and 5 below are wrong and must not be followed. `--admin` bypasses the whole `required_status_checks` rule, checks included, and "`pending=0, fail=0`" cannot see a required check that has not been created yet (#8458). Use `plugins/soleur/skills/ship/references/settle-then-admin-merge.md` steps 2-5, which run `plugins/soleur/scripts/admin-merge-ready.sh` before every attempt and pin `--match-head-commit`.
 
 1. **Stop auto-updating the branch.** Let a single check run reach a terminal state on one
    SHA. Continuous `update-branch` on `BEHIND` is an anti-pattern under a busy `main`.

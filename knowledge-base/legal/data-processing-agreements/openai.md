@@ -1,7 +1,7 @@
 ---
 vendor: OpenAI
 role: proposed processor for Codex web-agent customer-content processing
-status_snapshot_date: 2026-09-20
+status_snapshot_date: 2026-09-22
 customer_content_status: blocked
 clo_disposition: pending
 user_owned_provider_path: documented-in-product; vendor-account-terms-apply
@@ -19,10 +19,27 @@ for each authentication mode.
 | Field | API-key mode | Managed ChatGPT sign-in |
 |---|---|---|
 | Public business privacy statement | OpenAI says business/API inputs and outputs are not used to train models by default and that qualifying customers can configure retention controls | The statement covers ChatGPT Business/Enterprise, but the exact managed account and agreement used by the integration must be identified |
-| DPA scope | OpenAI's DPA expressly covers API Services and ChatGPT Enterprise Services | No approval is inferred for a personal or otherwise unidentified ChatGPT account |
+| DPA scope | The current DPA, effective 2026-01-01, supplements the OpenAI Services Agreement; the actual API organization and accepting entity still need identification | No approval is inferred for a personal or otherwise unidentified ChatGPT account; identify the workspace, plan, and applicable agreement |
 | Retention evidence | API abuse-monitoring logs may be retained up to 30 days by default; Zero Data Retention or Modified Abuse Monitoring requires eligibility and approval, and endpoint application-state rules still apply | Workspace retention and administrator controls must be evidenced from the specific Business/Enterprise agreement |
-| Transfer geography | Not established by public pages for this tenant; CLO must record the applicable processing locations and transfer mechanism | Same unresolved item, plus account-region and administrator-control confirmation |
+| Transfer geography | The current DPA provides SCC or adequacy safeguards for EEA/Swiss transfers; the public subprocessor list names processing locations across several regions. The tenant's selected region and actual transfer path remain unverified | Same unresolved tenant-specific location and transfer path, plus account-region and administrator-control confirmation |
 | Remote erasure | The adapter requires an exact provider delete acknowledgement and resets the next thread, but provider-side retention/deletion terms still need contractual evidence | Same requirement, with managed-account deletion semantics confirmed separately |
+
+## Current public evidence and its limits
+
+The [current OpenAI DPA](https://openai.com/policies/data-processing-addendum/) is effective 2026-01-01; the earlier February 2024 page previously cited below is historical. Section 4 describes SCC or adequacy safeguards for EEA/Swiss transfers, and Section 2.11 addresses return or deletion after agreement expiry or termination. Neither proves this tenant's agreement, region, retention configuration, or deletion of a specific Codex thread. The [subprocessor list](https://openai.com/policies/sub-processor-list/) names infrastructure and processing locations; a tenant-specific path is still unknown.
+
+OpenAI's [API data controls](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint) describe default abuse-log retention of up to 30 days, approval requirements for Modified Abuse Monitoring or Zero Data Retention, and endpoint-specific application-state exceptions. The actual API project settings are unverified. [OpenAI billing guidance](https://help.openai.com/en/articles/9039756) states that API and ChatGPT billing are separate; [Codex plan guidance](https://help.openai.com/en/articles/20001275/) assigns ChatGPT sign-in to the ChatGPT plan and API-key use to API pricing. The contracting and paying entities for either proposed Soleur mode remain unverified.
+
+For Enterprise accounts, [workspace administrators control Codex access and permissions](https://help.openai.com/en/articles/8411955), and [managed-account administrators may access, export, retain, and delete account data](https://help.openai.com/en/articles/20001067-data-access-for-your-managed-chatgpt-account). These public capabilities do not establish the controls or retention policy of the account currently signed in on this machine. The [OpenAI Services Agreement](https://openai.com/policies/services-agreement/) states that the customer retains input rights and owns output as between the parties, subject to applicable law; the actual applicable agreement must be confirmed.
+
+The mode-specific decision request and evidence checklist are in `knowledge-base/project/specs/feat-one-shot-codex-web-rollout/clo-decision-packet.md`. Its status is **pending CLO disposition**, not approval.
+
+On 2026-09-22, the managed-mode synthetic CLI smoke completed successfully,
+but it did not identify the account plan, workspace owner, agreement, region,
+retention settings, or administrator controls. No `OPENAI_API_KEY` secret was
+present in production Doppler, and no API request was attempted. This confirms
+that the evidence gap is account-specific and that customer-content processing
+must remain blocked.
 
 ## Required CLO disposition
 
@@ -61,5 +78,11 @@ back to a managed credential when a user-owned binding is selected.
 ## Sources
 
 - <https://openai.com/business-data/>
-- <https://openai.com/policies/feb-2024-data-processing-addendum/>
+- <https://openai.com/policies/data-processing-addendum/>
+- <https://openai.com/policies/services-agreement/>
+- <https://openai.com/policies/sub-processor-list/>
 - <https://platform.openai.com/docs/models/default-usage-policies-by-endpoint>
+- <https://help.openai.com/en/articles/9039756>
+- <https://help.openai.com/en/articles/20001275/>
+- <https://help.openai.com/en/articles/20001067-data-access-for-your-managed-chatgpt-account>
+- <https://help.openai.com/en/articles/20001418>

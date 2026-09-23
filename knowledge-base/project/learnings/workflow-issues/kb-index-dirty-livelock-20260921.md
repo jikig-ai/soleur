@@ -44,6 +44,8 @@ livelocked a docs-only PR through three DIRTY cycles (#8432).
 
 ## What works
 
+> **Superseded 2026-09-22 (#8500):** the admin-merge step below must go through `plugins/soleur/skills/ship/references/settle-then-admin-merge.md` steps 2-5 (`plugins/soleur/scripts/admin-merge-ready.sh`, then `--match-head-commit`), never a bare `gh pr merge --admin` after an eyeballed "all green".
+
 1. Keep the regenerated `INDEX.md` in the diff.
 2. Sync `origin/main` (the local merge driver resolves `INDEX.md`), push.
 3. Watch checks on the new head. When all required checks settle green:
