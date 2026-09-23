@@ -13,20 +13,10 @@
 # nothing." A host that is down, that never ran the new script, or whose log channel is dark also
 # emits no `relogin_failed`. So the criterion is graded here as a CONJUNCTION, per host:
 #
-#   leg 1  the host's LATEST `SOLEUR_DEPLOY_GHCR_CONFIG` marker carries a `swept=` token AND BOTH
-#          carriers read clean: `deploy_ghcr_auth=none` AND `deploy_ghcr_helper=none`. (docker
-#          resolves ghcr.io through a `credHelpers` entry with or without an auths entry.)
-#          `swept=na_absent` BYPASSES the carrier check entirely and passes: no deploy config
-#          exists, so the tokens read `na` and are not consulted.
-#   leg 2  the host emitted ZERO `stage=relogin_failed` rows NEWER THAN its latest marker -- not
-#          zero rows since earliest. `earliest` is set past the apply on purpose, so the window is
-#          EXPECTED to hold pre-1c rows; counting those latched the tracker shut permanently.
-#   leg 3  the host's LATEST `IMAGE_VERIFY*` verdict is in the closed allowlist
-#          (see LEG3_ALLOW_RE). A host with markers but NO verdict is ACTION REQUIRED too.
-#
-#   THIS LIST AND THE `--explain` BLOCK BELOW ARE TWO COPIES OF ONE CONTRACT. #8636 corrected
-#   `--explain` and left this one standing, so the file contradicted itself 100 lines apart; the
-#   suite's drift guard now reads BOTH.
+#   The three legs are stated ONCE, in LEG1_CLAIM / LEG2_CLAIM / LEG3_CLAIM below, and rendered
+#   by `--explain` and by every verdict summary. Run `--explain` for the contract; it needs no
+#   credentials and makes no network call. This header deliberately does NOT restate them: it was
+#   a fifth copy, and it is where the #8636 contradiction lived.
 #
 # `swept=` IS THE VERSION DISCRIMINATOR, NOT `deploy_ghcr_auth=none`. An earlier draft graded on
 # the `none` token alone, reasoning that the whole pre-1c fleet reads `inline`. That is an
@@ -160,8 +150,21 @@ MARKER_LITERAL='SOLEUR_DEPLOY_GHCR_CONFIG'
 # context (1 violation in 1237 files, zero on main).
 readonly LEG3_ALLOW_RE='ok'
 readonly LEG3_ALLOW_HUMAN="{${LEG3_ALLOW_RE//|/, }}"
+
 RELOGIN_LITERAL='stage=relogin_failed'
 VERIFY_LITERAL='IMAGE_VERIFY'
+
+# THE THREE LEG CLAIMS, DEFINED ONCE AND INTERPOLATED EVERYWHERE THEY ARE STATED.
+# This contract used to exist in FIVE prose copies -- the file header, the `--explain` heredoc and
+# the PASS / ACTION REQUIRED / FAIL verdict blocks -- and it drifted from the grader FOUR times.
+# Four successive guards tried to DETECT that drift and each leaked: a tautology, bare-token
+# matching, hand-enumerated negation lists with unbounded slices, and a line-count pin defeated by
+# an embedded newline. Each guard needed a guard, which is the signal that detection was the wrong
+# mechanism. Prose DERIVED from one value cannot drift, so there is nothing left to detect: the
+# copies are now renderings, and the only thing a test must pin is these three assignments.
+readonly LEG1_CLAIM="a 'swept=' token AND both carriers clean: deploy_ghcr_auth=none AND deploy_ghcr_helper=none"
+readonly LEG2_CLAIM="zero '${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker (not zero rows in the window)"
+readonly LEG3_CLAIM="a latest ${VERIFY_LITERAL} verdict in ${LEG3_ALLOW_HUMAN}"
 
 if [[ "${1:-}" == "--explain" ]]; then
   cat <<EXPLAIN
@@ -172,23 +175,26 @@ PROBE-READY ghcr-read-retired-8036
   window:    __REALTIME_TIMESTAMP >= SOLEUR_FT_EARLIEST (no header fallback; unset => exit 3)
   fetch:     ${QUERY##*/} --since <earliest> --grep ${MARKER_LITERAL} --grep relogin_failed --grep ${VERIFY_LITERAL} --limit \${SOLEUR_FT_LIMIT:-5000}
   graded, per host, as a CONJUNCTION (never a pure absence):
-    leg 1  latest ${MARKER_LITERAL} line carries a 'swept=' token AND BOTH carriers clean:
-           'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'. docker resolves ghcr.io through
-           a credHelpers entry with or without an auths entry, so grading only the auths token
-           passed a host that was still presenting a credential.
-           ('swept=' is the version discriminator: the pre-1c script cannot emit it, while
-            'deploy_ghcr_auth=none' is also what a freshly provisioned PRE-1c host reads.)
-           'swept=na_absent' (no deploy docker config exists yet) is CLEAN — a file that is not
-           there presents nothing. The other 'na_*' values and 'failed' refuse.
-    leg 2  zero '${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker — not zero rows in
-           the window. 'earliest' is deliberately set past the apply, because the co-fired release
-           may still run the OLD script, so the window is EXPECTED to contain pre-1c rows; counting
-           those latched the tracker shut permanently on any host that saw one.
-    leg 3  latest ${VERIFY_LITERAL}* verdict is in the closed allowlist ${LEG3_ALLOW_HUMAN}.
+    leg 1  ${LEG1_CLAIM}
+           docker resolves ghcr.io through a credHelpers entry with or without an auths entry, so
+           grading only the auths token passed a host that was still presenting a credential.
+           'swept=na_absent' (no deploy docker config exists yet) is CLEAN -- a file that is not
+           there presents nothing, and that arm asserts deploy_cfg=absent rather than bypassing
+           the carriers blind. The other 'na_*' values and 'failed' refuse.
+    leg 2  ${LEG2_CLAIM}
+           'earliest' is deliberately set past the apply, because the co-fired release may still
+           run the OLD script, so the window is EXPECTED to contain pre-1c rows; counting those
+           latched the tracker shut permanently on any host that saw one. A tie counts AGAINST the
+           pass: the 'dt' fallback is second-granularity, so equal timestamps are an unknown
+           ordering, and on an absence leg an unknown must not pass.
+    leg 3  ${LEG3_CLAIM}
            Graded as an allowlist, never as "is it the one bad literal": verify_image_signature
-           also emits unsigned / wrong_identity / rekor_unreachable / cosign_absent, and
-           'cosign_absent' is the class this work's own evidence records firing 89/89. A host with
-           markers but NO verdict is ACTION REQUIRED too, never a pass.
+           also emits unsigned / wrong_identity / rekor_unreachable / cosign_absent / inspect_failed,
+           and 'cosign_absent' is the class this work's own evidence records firing 89/89. A host
+           with markers but NO verdict is ACTION REQUIRED too. So is 'reused_local_reload', which
+           is emitted where cosign was SKIPPED for a same-version local-cache reload -- it asserts
+           nothing about verification, and it gets its own sentence rather than being reported as
+           a broken verifier.
   NOT graded: home_ghcr_auth / root_ghcr_auth — both are unreachable from webhook.service
            (ProtectHome=read-only; root's home is 0700) and ride the 1d follow-up.
   also refuses: a result set saturated at --limit (exit 2). The query keeps the NEWEST rows, so a
@@ -367,17 +373,7 @@ if [[ "$MARKERS_NO_MID" -gt 0 ]]; then
 fi
 MARKERS_WITH_MID="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 11 && $3 != "-" && $5 == "marker" { n++ } END { print n + 0 }')"
 
-if [[ "$MARKERS_WITH_MID" -eq 0 && "$MARKERS_NO_MID" -gt 0 ]]; then
-  echo "CANNOT ESTABLISH: ${MARKERS_NO_MID} ci-deploy ${MARKER_LITERAL} line(s) since $EARLIEST carry no" >&2
-  echo "                  usable _MACHINE_ID, so no reading can be attributed to a host." >&2
-  exit 3
-fi
 
-# Per-host fold in timestamp order. A host is a group iff it emitted at least one MARKER: a host
-# that emitted only a relogin row has not demonstrated it ran the new script, and leg 1 is what
-# says so — so relogin rows are counted against the host but cannot create one, and a relogin-only
-# host surfaces as the UNGRADED count reported below rather than silently vanishing.
-# Output: <mid> <swept> <deploy_auth> <n_relogin> <latest_verify_class> <n_marker>
 # Per-host fold in timestamp order. A host is a group iff it emitted at least one MARKER: a host
 # that emitted only a relogin row has not demonstrated it ran the new script, and leg 1 is what
 # says so — so relogin rows are counted against the host but cannot create one, and a relogin-only
@@ -516,9 +512,7 @@ fi
 if [[ "$n_fail" -gt 0 || "$RELOGIN_ONLY" -gt 0 ]]; then
   echo "FAIL: ${n_fail} of ${HOSTS_TOTAL} graded host(s), plus ${RELOGIN_ONLY} ungraded host(s), do not satisfy"
   echo "      the retirement conjunction since"
-  echo "      ${EARLIEST}. Leg 1 needs the latest ${MARKER_LITERAL} line to carry a 'swept=' token,"
-  echo "      'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'; leg 2 needs zero"
-  echo "      '${RELOGIN_LITERAL}' AFTER that host's latest marker."
+  echo "      ${EARLIEST}. Leg 1 needs ${LEG1_CLAIM}; leg 2 needs ${LEG2_CLAIM}."
   echo "      READ THE swept= VALUE BEFORE ASSIGNING A CAUSE -- they are different remediations:"
   echo "        swept=na          the sweep never set a state (the initial value). Treat as a probe bug.
         swept absent (-)  the host is still running the PRE-1c script. Nothing is broken;"
@@ -538,8 +532,8 @@ fi
 
 if [[ "$n_action" -gt 0 ]]; then
   echo "ACTION REQUIRED: ${n_action} of ${HOSTS_TOTAL} host(s) have the GHCR read path retired (legs 1 and 2"
-  echo "      pass) but their latest ${VERIFY_LITERAL} verdict is NOT in ${LEG3_ALLOW_HUMAN},"
-  echo "      or is absent entirely — signature"
+  echo "      pass) but leg 3 is unmet: it needs ${LEG3_CLAIM}, and theirs is absent or outside it."
+  echo "      Signature"
   echo "      verification is broken there. Under IMAGE_VERIFY_MODE=warn the deploy PROCEEDS, and no"
   echo "      Sentry rule matches this class, so this line is the only notification. Check whether the"
   echo "      sweep clipped the co-resident zot auths entry before reading it as an unrelated defect."
@@ -548,10 +542,10 @@ if [[ "$n_action" -gt 0 ]]; then
 fi
 
 echo "PASS: ${n_pass} host(s) observed since ${EARLIEST}, and every one satisfies all three legs —"
-echo "      latest ${MARKER_LITERAL} carries a 'swept=' token with deploy_ghcr_auth=none AND"
-echo "      deploy_ghcr_helper=none, zero '${RELOGIN_LITERAL}' AFTER that host's latest marker,"
-echo "      and a latest ${VERIFY_LITERAL} verdict in ${LEG3_ALLOW_HUMAN}. The host-side"
-echo "      GHCR read path is retired."
+echo "      leg 1: ${LEG1_CLAIM}"
+echo "      leg 2: ${LEG2_CLAIM}"
+echo "      leg 3: ${LEG3_CLAIM}"
+echo "      The host-side GHCR read path is retired."
 echo "      Close #8036."
 printf '%s' "$REPORT"
 exit 0

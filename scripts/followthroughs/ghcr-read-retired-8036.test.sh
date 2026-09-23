@@ -325,69 +325,55 @@ run_case "rows exist but no ci-deploy marker -> TRANSIENT (2), never PASS" 2 "TR
 # Sits EXACTLY on the suite's count, raised in the same edit that settled it — the sibling
 # CI_DEPLOY_ASSERT_FLOOR pays the same price. A floor one below the count is not headroom, it is
 # how many assertions can be deleted before the one guard that detects truncation notices.
-# ── CONTRACT-LINE PIN (#8600 -> #8636; rebuilt three times, each rebuild caught by review).
-#    The contract exists in FOUR operator-facing prose copies -- `--explain`, the file header, and
-#    the PASS / ACTION REQUIRED / FAIL verdict blocks -- and every one of them drifted when the
-#    grading legs were corrected. Three previous guards tried to detect that with anchors and
-#    failed, each in a way review had to find:
-#      v1  derived "tokens the grader uses" from a source that INCLUDED the --explain heredoc, so
-#          every token in the text was present by construction (a tautology).
-#      v2  asserted bare TOKENS: `grep -qF ok` matches the word "token".
-#      v3  asserted phrase ANCHORS with hand-enumerated negation lists, and sliced the verdict
-#          blocks with unbounded `awk` ranges. Both leaked: an unlisted negation ("CORRECTION:
-#          that helper conjunct was dropped") keeps the anchor verbatim and inverts the meaning,
-#          and a slice whose end anchor stops matching runs to EOF and borrows a neighbouring
-#          block's anchors -- the union bug v3 existed to replace.
-#
-#    THE LESSON IS THAT ANCHOR-MATCHING CANNOT WIN. A presence test asks "does this text contain a
-#    phrase", and prose can always contain a phrase and then contradict it. So this pins the
-#    contract-bearing lines WHOLE and EXACTLY-ONCE, the way the membership pin already does for
-#    LEG3_ALLOW_RE. Any edit to an operator-facing contract line -- reword, negate, append a
-#    "correction" -- reds here and must be re-pinned deliberately, which is the point: a human
-#    then has to look at what the grader does. There are no negation lists and no slices to escape.
-_pin_fail=0
-_pin_one() {  # <exact line> <what it says>
-  local n; n="$(grep -cxF -- "$1" "$SUT" || true)"
-  if [[ "$n" != 1 ]]; then
-    fail "contract line not found exactly once (${n}x) -- $2"
-    _pin_fail=1
-  fi
-}
-# --explain: the three leg statements.
-_pin_one "    leg 1  latest \${MARKER_LITERAL} line carries a 'swept=' token AND BOTH carriers clean:" "--explain leg 1 opener"
-_pin_one "           'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'. docker resolves ghcr.io through" "--explain leg 1 conjunction"
-_pin_one "    leg 2  zero '\${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker — not zero rows in" "--explain leg 2 scoping"
-_pin_one "    leg 3  latest \${VERIFY_LITERAL}* verdict is in the closed allowlist \${LEG3_ALLOW_HUMAN}." "--explain leg 3 allowlist (interpolated)"
-# File header: the same three, in its own words.
-_pin_one "#          carriers read clean: \`deploy_ghcr_auth=none\` AND \`deploy_ghcr_helper=none\`. (docker" "header leg 1 conjunction"
-_pin_one "#   leg 2  the host emitted ZERO \`stage=relogin_failed\` rows NEWER THAN its latest marker -- not" "header leg 2 scoping"
-# PASS summary -- the sentence that authorises closing #8036 in a PUBLIC issue comment.
-_pin_one "echo \"      latest \${MARKER_LITERAL} carries a 'swept=' token with deploy_ghcr_auth=none AND\"" "PASS summary leg 1"
-_pin_one "echo \"      deploy_ghcr_helper=none, zero '\${RELOGIN_LITERAL}' AFTER that host's latest marker,\"" "PASS summary leg 2"
-_pin_one "echo \"      and a latest \${VERIFY_LITERAL} verdict in \${LEG3_ALLOW_HUMAN}. The host-side\"" "PASS summary leg 3 (interpolated)"
-# ACTION REQUIRED headline -- the only notification for its class; no Sentry rule matches it.
-_pin_one "  echo \"      pass) but their latest \${VERIFY_LITERAL} verdict is NOT in \${LEG3_ALLOW_HUMAN},\"" "ACTION headline leg 3 (interpolated)"
-# FAIL remediation.
-_pin_one "  echo \"      'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'; leg 2 needs zero\"" "FAIL remediation leg 1"
-[[ "$_pin_fail" == 0 ]] && pass "all 12 operator-facing contract lines are pinned whole and exactly once"
-unset _pin_fail
-# CARDINALITY, because presence alone cannot stop an ADDITION. Pinning the correct lines leaves
-# room to APPEND a contradicting one -- measured: adding `(CORRECTION: leg 1 in fact grades the
-# auths token only.)` below the pinned PASS lines kept the suite green while the public
-# close-authorisation contradicted itself. Any new or removed operator-facing line must be
-# re-pinned deliberately, which is exactly when someone should re-read what the grader does.
-_echo_n="$(grep -cE '^[[:space:]]*echo "' "$SUT" || true)"
-if [[ "$_echo_n" == 63 ]]; then
-  pass "the probe emits exactly 63 operator-facing lines (no line added or removed unpinned)"
-else
-  fail "operator-facing line count changed ($_echo_n, pinned 63) - re-read the new/removed line against the grader, then re-pin"
-fi
-unset _echo_n
-
 # CODE SIDE. The pins above fix the PROSE; these assert the grader still does what it says.
 # Trailing comments are stripped too: `if [[ "$dauth" == "none" ]]; then ... # was: && "$dhelper"`
 # restored the dropped token to a full-line-only strip and left the reverse-direction row green.
 GRADER_SRC="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/ {next} !/^[[:space:]]*#/ { sub(/[[:space:]]+#.*$/, ""); print }' "$SUT")"
+
+# ── CONTRACT PIN (#8600 -> #8636; the fifth and, deliberately, the smallest).
+#    The contract used to exist in FIVE prose copies and drifted from the grader FOUR times. Four
+#    guards tried to DETECT that and each leaked -- a tautology; bare-token matching; phrase
+#    anchors with hand-enumerated negation lists and unbounded awk slices; and a line-count pin
+#    defeated by an embedded newline inside an existing `echo`. Every guard needed a guard, which
+#    is the signal that detection was the wrong mechanism.
+#
+#    So the copies were DELETED. The three legs are stated once as LEG1_CLAIM / LEG2_CLAIM /
+#    LEG3_CLAIM and rendered by `--explain` and by every verdict summary; the file header points at
+#    `--explain` instead of restating them. Drift is now unrepresentable rather than detected, so
+#    all that is left to pin is the three assignments and the fact that the summaries really do
+#    render them.
+_pin_n=0; _pin_fail=0
+_pin_one() {  # <exact line> <what it says>
+  _pin_n=$((_pin_n + 1))
+  local n; n="$(grep -cxF -- "$1" <<<"$GRADER_SRC" || true)"
+  if [[ "$n" != 1 ]]; then fail "contract constant not found exactly once (${n}x) -- $2"; _pin_fail=1; fi
+}
+_pin_one "readonly LEG3_ALLOW_RE='ok'" "leg 3 allowlist membership"
+_pin_one "readonly LEG1_CLAIM=\"a 'swept=' token AND both carriers clean: deploy_ghcr_auth=none AND deploy_ghcr_helper=none\"" "LEG1_CLAIM"
+_pin_one "readonly LEG2_CLAIM=\"zero '\${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker (not zero rows in the window)\"" "LEG2_CLAIM"
+_pin_one "readonly LEG3_CLAIM=\"a latest \${VERIFY_LITERAL} verdict in \${LEG3_ALLOW_HUMAN}\"" "LEG3_CLAIM"
+[[ "$_pin_fail" == 0 ]] && pass "all $_pin_n contract constants are pinned whole and exactly once"
+unset _pin_fail _pin_n
+
+# THE RENDERED OUTPUT, not the source. A source-line count is defeated by an embedded newline --
+# measured: moving a "CORRECTION: leg 1 in fact grades the auths token only" line INSIDE an
+# existing `echo` string left every line pin and the count green while the public close
+# authorisation contradicted itself. Pinning what the probe actually PRINTS closes that, and
+# subsumes the count.
+_pass_out="$(env BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+      SOLEUR_FT_EARLIEST="$EARLIEST_ISO" GHCR_RETIRED_8036_BQ="$WORK/stub-query" \
+      STUB_ROWS="$(fx pass1)" STUB_WANT_SINCE="$EARLIEST_SQL" bash "$SUT" 2>&1)"
+_pass_hdr="$(sed -n '/^PASS:/,/^  host /p' <<<"$_pass_out" | sed '$d')"
+_pass_lines="$(grep -c . <<<"$_pass_hdr" || true)"
+if [[ "$_pass_lines" != 6 ]]; then
+  fail "the PASS verdict block renders $_pass_lines line(s), pinned 6 - a line was added or removed; re-read it against the grader, then re-pin"
+elif ! grep -qF -- "$(bash -c 'set -a; source <(grep -E "^readonly LEG1_CLAIM=" "'"$SUT"'"); echo "$LEG1_CLAIM"' 2>/dev/null)" <<<"$_pass_hdr"; then
+  fail "the PASS verdict block does not render LEG1_CLAIM - it can state a contract the grader does not implement"
+else
+  pass "the PASS verdict block renders exactly 6 lines and carries LEG1_CLAIM verbatim"
+fi
+unset _pass_out _pass_hdr _pass_lines
+
 # Prove the exclusion FIRED, and that the sentinel is inside the excluded range -- not merely
 # absent from GRADER_SRC, which is also true when the sentinel has been moved out of the heredoc.
 _hd="$(awk '/^if \[\[ "\$\{1:-\}" == "--explain"/,/^EXPLAIN$/' "$SUT")"
