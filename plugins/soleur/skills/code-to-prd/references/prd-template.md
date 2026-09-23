@@ -29,7 +29,7 @@ walker_excluded: <int>
    - Extraction techniques used (regex-only, no AST).
    - What was excluded by path filter (count + category, not paths).
    - GDPR Art. 9 special-category disclaimer.
-7. **Gap Analysis** — populated by `@agent-soleur:product:spec-flow-analyzer` Task spawn (FR8). Degraded-success appends `SKIPPED (spec-flow-analyzer unavailable at <ISO-8601>)`.
+7. **Gap Analysis** — populated by `soleur:product:spec-flow-analyzer` Task spawn (FR8). Degraded-success appends `SKIPPED (<leaf> unavailable at <ISO-8601>)`, where `<leaf>` is the bare leaf name `scripts/code-to-prd.sh` emits.
 8. **MIT Attribution footer** — single line pointing at `plugins/soleur/NOTICE`.
 
 ## Banner contract
