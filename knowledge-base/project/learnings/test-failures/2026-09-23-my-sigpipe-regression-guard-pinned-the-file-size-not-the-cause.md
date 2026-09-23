@@ -116,6 +116,17 @@ certifies "I could not read the file" as success.
     - **Prevention:** added a plan sharp-edge bullet. A regression fixture floors the causal
       quantity, and every negative row gets a positive control on the same input.
 
+11. **An advisor-driven cosmetic edit to the EXIT trap reddened CI's `fixture-relative-assert`.**
+    `rm -rf "$fixture_dir"` inside the trap is flagged by `fixture-scan.py --rule relative`
+    (operand not provably absolute). The `${fixture_dir:-}` form it replaced had passed. After
+    adding the probe and the trap edit I re-ran four ratchets and not this one, so CI found it.
+    - **Recovery:** restored the scanner-proven operand, keeping the empty-dir skip. Fixed at the
+      site; baseline unchanged; the suite is back to 62/0.
+    - **Prevention:** after ANY edit to a line containing `rm -rf`, `mktemp` or a trap in a
+      `*.test.sh`, re-run the full fixture ratchet set (`fixture-relative-assert`,
+      `fixture-dir-operand-assert`, `lint-trap-tempfile-ownership`). A subset chosen from memory
+      misses the one that counts the changed shape.
+
 ## Related
 
 - `knowledge-base/project/learnings/test-failures/2026-07-18-pipefail-grep-q-early-match-sigpipe-flakes-drift-guards.md`: the defect class.
