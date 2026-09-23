@@ -115,8 +115,8 @@ describe("Codex neutral adapter boundary", () => {
       events.push(event);
     }
     expect(events).toEqual([
-      { runId: "run-bridge", eventId: "codex:item:item-bridge:delta", sequence: 1, payload: { type: "text", text: "hello" } },
-      { runId: "run-bridge", eventId: "codex:turn:turn-bridge:status", sequence: 2, payload: { type: "status", status: "completed" } },
+      { runId: "run-bridge", eventId: "codex:item:item-bridge:delta:1", sequence: 1, payload: { type: "text", text: "hello" } },
+      { runId: "run-bridge", eventId: "codex:turn:turn-bridge:status:2", sequence: 2, payload: { type: "status", status: "completed" } },
     ]);
     expect(source.start).toHaveBeenCalledOnce();
   });

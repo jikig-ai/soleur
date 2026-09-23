@@ -145,7 +145,13 @@ elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
   # as FORMAT JSONEachRow would return them, so a boolean or the reboot arm's target that the
   # SELECT drops is absent from every fixture row too, and the arms that need it RED. Without
   # this a fixture hands the SUT a field its own query never asks for.
-  _project() { jq -c --arg sql "\$sql" 'with_entries(select(.key as \$k | \$k == "dt" or (\$sql | contains("raw,\u0027" + \$k + "\u0027)"))))'; }
+  # (#8211) THE FAKE MUST ENCODE AS THE WAREHOUSE DOES. ClickHouse's JSONEachRow escapes the
+  # solidus, so a live row's bytes are "target":"\/mnt\/git-data"; jq -c leaves it bare. That
+  # one-character divergence is why a green suite shipped a reboot arm that rejected every
+  # correct host (rehearsal run 35909343686): the SUT substring-matched the unescaped form and
+  # only the fixture ever produced it. The trailing sed mirrors the vendor's encoding, so the
+  # target rows exercise the bytes the SUT actually meets.
+  _project() { jq -c --arg sql "\$sql" 'with_entries(select(.key as \$k | \$k == "dt" or (\$sql | contains("raw,\u0027" + \$k + "\u0027)"))))' | sed 's#/#\\\\/#g'; }
   # (#8210) SEMANTIC DISPATCH on the server-side time bound, the same reason the FATAL branch
   # above dispatches on its clauses rather than on a marker. Without it, --reboot-since could
   # drop its \`dt >\` clause entirely and every reboot arm would still pass — the fixture rows
