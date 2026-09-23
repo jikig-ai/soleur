@@ -91,7 +91,7 @@ permissions:
 #                        plugins/soleur/test/required-checks-canonical-parity.test.sh
 #                        (this file added to its list by #7307).
 #   LIKEC4_VERSION    -> 5 sites: Dockerfile, package.json (x2),
-#                        scripts/regenerate-c4-model.sh, ci.yml, and here.
+#                        plugins/soleur/scripts/render-c4-model.sh, ci.yml, and here.
 #                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
 #                        (this file added by #7307). NB the install below writes
 #                        the literal, not "likec4@${LIKEC4_VERSION}", because that

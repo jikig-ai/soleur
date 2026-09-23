@@ -118,7 +118,7 @@ output onto the committed `model.likec4.json`. Every writer publishes the canoni
 one-value-per-line format with blank view hashes, which is what lets git merge two regenerations
 (ADR-235, #8542):
 
-- In any repo, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"` — the plugin's
+- In any repo, run `bash <plugin-root>/scripts/render-c4-model.sh` (in a SKILL.md fence, `${CLAUDE_PLUGIN_ROOT}`) — the plugin's
   renderer, which the merge resolver also runs (the Soleur repo keeps a
   `scripts/regenerate-c4-model.sh` wrapper around it). `soleur:sync`'s C4 producer canonicalizes
   too. To canonicalize by hand, go through a temp file so a failure never truncates the artifact:

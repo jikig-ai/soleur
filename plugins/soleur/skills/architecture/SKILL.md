@@ -258,10 +258,9 @@ The model lives as a LikeC4 project under
 
 Incremental edits to the consolidated model. Each is a focused patch to the
 `.c4` files (no Mermaid). After any patch, run `render` (see below) to
-**validate** the source. You do NOT need to hand-regenerate `model.likec4.json`:
-the `c4-model-regenerate` pre-commit hook re-renders and re-stages it from the
-edited `.c4` sources on commit (run the plugin's `render-c4-model.sh` —
-see `render` below — only when committing outside that hook).
+**validate** the source, then regenerate `model.likec4.json` with `render` and commit it
+with the `.c4` change. (In the Soleur repository itself a `c4-model-regenerate`
+pre-commit hook does this on commit; other repositories have no such hook.)
 
 - **add-container `<id>`** / **add-component `<id>`** — add an element inside the
   correct parent in `model.c4` (`container` / `database` / `component` kind),
@@ -281,12 +280,10 @@ renders. The Knowledge Base viewer does NOT run the `likec4` toolchain at
 runtime (it would pull vite/esbuild into production deps); it reads the
 committed, layouted `model.likec4.json`.
 
-**You normally do not run this by hand.** Regeneration of `model.likec4.json`
-is **automatic on commit** via the `c4-model-regenerate` pre-commit hook
-(`lefthook.yml`): any staged `.c4` change re-renders and re-stages the artifact,
-and a CI freshness test (`plugins/soleur/test/c4-model-freshness.test.sh`) is the
-merge-gating backstop if the hook is bypassed. Use `render` only to **validate**
-or for an **ad-hoc/out-of-hook** regen:
+**Run this after every `.c4` edit and commit the result.** Only the Soleur repository
+regenerates on commit automatically (its `c4-model-regenerate` lefthook hook, backed by
+`plugins/soleur/test/c4-model-freshness.test.sh` in CI); in any other repository an
+unregenerated `model.likec4.json` stays stale until someone runs this:
 
 ```bash
 # Canonical regen (pinned, off-tree-validated, idempotent) — same primitive the

@@ -48,6 +48,8 @@ assert_fixture_dir() {
 
 SANDBOX="$(mktemp -d)"; assert_fixture_dir "$SANDBOX"
 trap 'rm -rf "$SANDBOX"' EXIT
+# The resolver stages sources under XDG_CACHE_HOME; keep that inside the sandbox too.
+export XDG_CACHE_HOME="$SANDBOX/xdg-cache"
 
 MODEL="knowledge-base/engineering/architecture/diagrams/model.likec4.json"
 SRC="knowledge-base/engineering/architecture/diagrams/model.c4"
@@ -76,14 +78,14 @@ mkfix() {
   cp "$SCRIPT_DIR/resolve-regenerable-conflicts.sh" "$wt/plugins/soleur/scripts/"
   # The resolver runs the renderer BESIDE ITSELF (ADR-235 amendment), so the stub goes there
   # with a plugin.json the resolver's identity check accepts. It takes the real renderer's
-  # `--root <dir>` argv and refuses any other shape.
+  # `--root <staging> --out <file>` argv as the resolver passes it, and refuses any other shape.
   printf '{\n  "name": "soleur"\n}\n' > "$wt/plugins/soleur/.claude-plugin/plugin.json"
   cat > "$wt/plugins/soleur/scripts/render-c4-model.sh" <<STUB
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\$#" -eq 2 && "\${1:-}" == "--root" && -d "\${2:-}" ]] || { echo "stub renderer: bad argv: \$*" >&2; exit 64; }
+[[ "\$#" -eq 4 && "\$1" == "--root" && -d "\$2" && "\$3" == "--out" ]] || { echo "stub renderer: bad argv: \$*" >&2; exit 64; }
 R="\$2"
-printf '{"from":"%s|%s"}\n' "\$(head -1 "\$R/$SRC")" "\$(tail -1 "\$R/$SRC")" > "\$R/$MODEL"
+printf '{"from":"%s|%s"}\n' "\$(head -1 "\$R/$SRC")" "\$(tail -1 "\$R/$SRC")" | tee "\$4" >/dev/null
 STUB
   chmod +x "$wt/plugins/soleur/scripts/render-c4-model.sh"
   _git "$wt" init -q -b main
