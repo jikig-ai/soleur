@@ -33,7 +33,6 @@ pass "self-test" >/dev/null; fail "self-test" 2>/dev/null
 if [[ "$checks" -ne 2 || "$fails" -ne 1 ]]; then
   echo "[FATAL] instrument self-test: pass()/fail() did not record one pass and one fail" >&2; exit 2
 fi
-SELFTEST_PASSES=1
 fails=0; checks=0
 
 [[ -f "$SUT" ]] || { echo "FATAL: SUT not found at $SUT" >&2; exit 1; }
@@ -218,13 +217,16 @@ run_case "rows exist but no ci-deploy marker -> TRANSIENT (2), never PASS" 2 "TR
   fi
 }
 
-# ── Anti-vacuity floor. Counts REAL assertions (the self-test's one pass is subtracted with a
-# literal declared immediately above the `if`, so the guard-vacuity-floor slicer can bind it).
+# ── Anti-vacuity floor. `checks` already excludes the instrument self-test above, which resets
+# both counters to 0 after driving pass() and fail() once each — so there is nothing to subtract
+# and no second constant to bind. The threshold sits on the line IMMEDIATELY above its `if`:
+# guard-vacuity-floor builds its mutant from the `if` plus the CONTIGUOUS simple assignments over
+# it, and a constant declared further up would be unbound in that slice and die under `set -u`,
+# scoring as a construction failure instead of as the floor firing.
 printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
 MIN_CHECKS=18
-REAL_CHECKS=$((checks - 0))
-if [[ "$REAL_CHECKS" -lt "$MIN_CHECKS" ]]; then
-  printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$REAL_CHECKS" "$MIN_CHECKS" >&2
+if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
+  printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1
 fi
 if [[ "$fails" -gt 0 ]]; then

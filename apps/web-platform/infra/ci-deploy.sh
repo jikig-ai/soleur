@@ -1725,7 +1725,11 @@ sweep_stale_registry_auth() {
   # hence the `select(. != null)`.
   if jq -e '.auths["ghcr.io"] | select(. != null)' "$f" >/dev/null 2>&1; then
     DOCKER_CONFIG="$(dirname "$f")" docker logout ghcr.io >/dev/null 2>&1 || true
-    SWEPT_STATE=yes                               # a sweep was performed this deploy
+    SWEPT_STATE=yes                               # a sweep was ATTEMPTED this deploy.
+    # Not "succeeded": the `|| true` above swallows a failed logout on purpose (a telemetry
+    # action must not abort a deploy). `swept=yes` alone therefore proves only that the key
+    # was there and removal was tried — which is exactly why the close-criterion probe grades
+    # a CONJUNCTION, requiring `deploy_ghcr_auth=none` from the probe that runs AFTER this.
   else
     SWEPT_STATE=no                                # already clean: no write, mtime unchanged
   fi
