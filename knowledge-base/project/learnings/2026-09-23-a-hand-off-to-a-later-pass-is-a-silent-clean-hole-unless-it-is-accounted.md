@@ -188,6 +188,42 @@ recurred regardless.** For these two the prose rule is not working, and the
 honest disposition is a mechanical check rather than another sentence — which is
 the same conclusion this repo reached for every PreToolUse hook it now carries.
 
+9. **Routed a 947-byte bullet into a SKILL.md that had 658 bytes of headroom.**
+   `rule-body-lint` red: `work/SKILL.md` 362289 bytes against a pinned ceiling of
+   362000. Compound routes learnings into lifecycle skills by design; nothing in
+   that step reads the ceiling.
+   **Recovery:** trimmed the bullet to 515 bytes, keeping the hazard, the vector
+   and the mechanical remedy, dropping the worked example the learning already
+   carries.
+   **Prevention:** before routing a bullet, run `python3
+   scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
+   and size the bullet against the headroom it reports. `work/SKILL.md` now has
+   143 bytes left — the next bullet needs an extraction into `references/`, not a
+   trim.
+
+10. **Shipped an operator-facing finding naming three causes the probe never
+    measured.** `lint-diagnosis-claims` red (ADR-166). Two were hedged on their
+    face ("its live bearer is Terraform-frozen, **or it left the census another
+    way**"); the detector matched the third, "this means the committed reference
+    is STALE" — a conclusion drawn from the pin's SILENCE, which is consistent
+    with staleness and with shapes the probe never separates.
+    **Recovery:** reworded to report the entry as UNVERIFIED by this run and to
+    phrase the remedy as a comparison to perform, not a state to assume. The
+    hypothesis moved into the block comment, which is not operator-facing.
+    **Prevention:** a finding written for a case the code CANNOT distinguish is
+    the one most likely to assert a cause, because the author is compensating for
+    the ambiguity in prose. When an arm exists precisely because two shapes are
+    indistinguishable, say which two and stop there.
+
+**Both 9 and 10 are repo-global ratchets, and neither references a changed
+file.** That is why the diff-scoped substitute run — the sanctioned fallback when
+`test-all.sh` refuses a full gate under sibling contention, which it did here
+(rc=4, 6 siblings in flight) — could not reach either. The blind spot is
+structural and does not improve with care: the ratchets have to be named and run
+by hand. For this branch that list was `lint-skill-body-budget.py`,
+`lint-diagnosis-claims.sh`, `guard-vacuity-floor.test.sh` and
+`fixture-relative-assert.test.sh`.
+
 ## Related
 
 - `knowledge-base/project/learnings/2026-07-27-a-check-that-cannot-report-is-indistinguishable-from-one-that-passed.md`
