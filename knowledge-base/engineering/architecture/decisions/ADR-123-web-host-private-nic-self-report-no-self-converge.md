@@ -225,3 +225,14 @@ reprovision path — here the SSH `terraform_data` provisioner onto the unrebuil
 - #6459 — active-active-N; where a peer exists to depool onto, the remediation this ADR defers.
 - #6538/#6463 — web-2 retirement; the fleet is single-host.
 - #6548 / #6438 §1 — the off-host consumer probes that cover the consumer-perspective residual.
+
+## Cross-reference 2026-09-23 (#8651, #6438)
+
+- The fresh-boot pre-pull NIC wait added by #8651 (ADR-096 amendment 2026-09-23) follows this
+  ADR's rule: detect and emit (`private_nic_timeout` / `private_nic_probe_fault`, routed by
+  `web_private_nic_boot_gate`), never self-converge or reboot. Unlike `private_nic_ok` /
+  `private_nic_ready`, it emits nothing on the ready outcome, and it deliberately skips the
+  #8539 networkd fallback that the dedicated inngest host uses.
+- **Stale:** "`eth0` + CF-proxied origin + GHCR fallback keep it serving" (Consequences). The
+  GHCR read PAT is revoked (AP-016), so a fresh web boot has no working GHCR fallback. It is
+  zot or dark. The reasoning against reboot still holds for a running origin.

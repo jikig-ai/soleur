@@ -448,7 +448,7 @@
       "in_transit": {
         "tls": "none (plain HTTP on the private network by design)",
         "cert_verification": "off",
-        "does_not_defend": "a passive on-net attacker could read pulled image bytes; integrity (not confidentiality) is provided by cosign digest-pinning",
+        "does_not_defend": "a passive on-net attacker could read pulled image bytes AND the zot pull credential (HTTP Basic on every login/pull; read-only per cloud-init-registry.yml accessControl actions [read]; the same random_password.zot_pull the inngest host bakes, and since #8651 also baked into every fresh web host's user_data); integrity (not confidentiality) is provided by cosign digest-pinning, which is why a fresh web boot sends ONLY @sha256-pinned refs to zot",
         "disclosed_as": "not-publicly-claimed",
         "exception": {
           "justification": "private-network-only registry link; integrity comes from cosign digest-pinning, not TLS; image bytes are public OCI layers",

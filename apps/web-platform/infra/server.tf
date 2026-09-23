@@ -411,6 +411,30 @@ resource "hcloud_server" "web" {
     # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
     # host classes instead of drifting from a hardcoded copy.
     registry_endpoint = local.registry_endpoint
+    # #8651 (ADR-096 amendment 2026-09-23) — the fresh-boot seed pull is zot-first by BAKE, the
+    # inngest-host.tf precedent (#7462). Before this, cloud-init.yml read ZOT_REGISTRY_URL/
+    # ZOT_PULL_* with `doppler secrets get` after a bare `. /etc/default/webhook-deploy`, which
+    # assigns DOPPLER_TOKEN without exporting it (#6985): every read was tokenless, answered
+    # empty, and the ref silently stayed on GHCR, whose read PAT is revoked (AP-016) — every
+    # fresh web boot was dark. Sentry, 90 days: 0 app_zot, 3 app_ghcr_served.
+    #
+    # Read from the in-root resources, NOT a new root variable: a no-default root var resolves
+    # before -target pruning and breaks every apply that does not set it (the "WHOLE-APPLY
+    # HAZARD" inngest-host.tf documents). `random_password.zot_pull` already exists in state and
+    # is read-only in zot (cloud-init-registry.yml accessControl actions ["read"]).
+    #
+    # Consequences recorded, not hidden:
+    #   - Basic auth over plain HTTP on the private net (ledger row "web hosts -> zot registry",
+    #     exception #6897); integrity comes from the @sha256 pin, which is why cloud-init.yml
+    #     sends ONLY digest-pinned refs to zot and fails a tag ref loud (cause=unpinned).
+    #   - The value is create-time: `-replace=random_password.zot_pull` strands fresh boots of
+    #     hosts created before the rotation (ignore_changes = [user_data]) — same as inngest.
+    #   - The pre-pull private-NIC wait's bound (75 x 2 s = 150 s) is soleur-inngest-nic-wait's,
+    #     chosen for the same hot-attach race (#8539); the web copy is inline because the baked
+    #     soleur-wait-nic ships inside the image this pull fetches (chicken-and-egg). It follows
+    #     ADR-123 (detect + emit, no self-converge) and emits nothing on the ready outcome.
+    zot_pull_user  = local.zot_pull_user
+    zot_pull_token = random_password.zot_pull.result
     # (#6459 Phase 2.2 PART 2) Per-host inputs for web-probe-envwrite.sh, which writes the 3
     # /etc/default/web-<probe> EnvironmentFiles on a fresh cattle host (the SSH remote-exec path
     # only reaches web-1). Values single-sourced from the SAME expressions the SSH provisioners use:

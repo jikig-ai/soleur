@@ -13,6 +13,8 @@ set -euo pipefail
 #
 # Asserts, in cloud-init.yml:
 #   1. a `docker login ghcr.io` (GHCR_READ credential) precedes the seed `docker pull`.
+#      (#8651: the seed pull is zot-first now; the GHCR leg is attempted only after THIS login
+#      succeeds, so login-before-pull is still the invariant for the GHCR leg.)
 #   2. the seed-block fatal emit (on_err) prefers the BAKED ${sentry_dsn} so it fires
 #      even when doppler is the broken stage.
 #   3. server.tf passes sentry_dsn into the cloud-init templatefile AND variables.tf
@@ -30,20 +32,23 @@ no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 # shellcheck disable=SC2016  # intentional: grep for the LITERAL $GHCR_USER/$IMAGE_REF in the YAML.
 login_ln=$(grep -nE 'docker login ghcr\.io -u "\$GHCR_USER"' "$CI" | head -1 | cut -d: -f1 || true)
 # shellcheck disable=SC2016
-# #6122: the seed pull now tries the resolved ref ($REF = zot-primary or the GHCR
-# $IMAGE_REF) inside the until loop; the login-precedes-pull invariant is unchanged.
-pull_ln=$(grep -nE 'until docker pull "\$REF"' "$CI" | head -1 | cut -d: -f1 || true)
+# #6122/#8651: the seed pull tries the resolved ref ($REF = the baked zot ref for a digest pin,
+# else the GHCR $IMAGE_REF) in bounded `timeout 180 docker pull "$REF"` attempts.
+pull_ln=$(grep -nE 'timeout 180 docker pull "\$REF"' "$CI" | head -1 | cut -d: -f1 || true)
 if [ -n "$login_ln" ] && [ -n "$pull_ln" ] && [ "$login_ln" -lt "$pull_ln" ]; then
   ok "ghcr docker login (line $login_ln) precedes the seed pull (line $pull_ln)"
 else
   no "ghcr login must precede the seed pull — login='$login_ln' pull='$pull_ln' (private image 401s anonymously)"
 fi
 
-# 1b. the login fetches the GHCR_READ credential (not a bare/anonymous attempt).
-if grep -qE 'doppler secrets get GHCR_READ_USER' "$CI" && grep -qE 'doppler secrets get GHCR_READ_TOKEN' "$CI"; then
-  ok "seed login fetches GHCR_READ_{USER,TOKEN} via doppler"
+# 1b. RETIRED by #8651 and now asserted ABSENT: the seed login must NOT read GHCR_READ_* from
+# doppler. That read ran above the terminal `set -a` source, so it was tokenless since birth
+# (#6985) — it could never have fetched anything — and the only value it could fetch is the
+# revoked PAT (AP-016, GHCR_MINTER_DISABLED). The baked create-time value is the credential.
+if grep -vE '^[[:space:]]*#' "$CI" | grep -qE 'doppler secrets get GHCR_READ_(USER|TOKEN)'; then
+  no "seed login must not fetch GHCR_READ_{USER,TOKEN} via doppler (tokenless by construction, #6985/#8651)"
 else
-  no "seed login must fetch GHCR_READ_{USER,TOKEN} via doppler"
+  ok "seed login reads no GHCR_READ_* from doppler (baked creds only, #8651)"
 fi
 
 # 2. the fatal emit prefers the baked DSN.
@@ -58,17 +63,20 @@ if grep -qE '\$\{sentry_dsn\}' "$CI"; then ok "cloud-init.yml references \${sent
 if grep -qE '^\s*sentry_dsn\s*=\s*var\.sentry_dsn' "$SRV"; then ok "server.tf passes sentry_dsn to the templatefile"; else no "server.tf must pass sentry_dsn = var.sentry_dsn (else templatefile() fails)"; fi
 if grep -qE 'variable "sentry_dsn"' "$VARS"; then ok "variables.tf declares variable \"sentry_dsn\""; else no "variables.tf must declare variable \"sentry_dsn\""; fi
 
-# 4. §1A (#6090 recurrence): the seed login must re-fetch Doppler creds + retry docker
-# login on a baked-login FAILURE, not only when the baked value is EMPTY. A PRESENT-but-
-# STALE baked token (fresh host's token aged out) otherwise fails login non-fatally →
-# anonymous private pull → stage=pull denied. This MIRRORED ci-deploy.sh's GHCR prelude until
-# #8036 1c retired that half on 2026-09-23; the boot path asserted here is now the only one, and
-# is tracked as 1d. Every grep below targets cloud-init.yml, so the assertions are untouched.
-if grep -qE "printf 'ghcr_login_ok_refetch'" "$CI" \
-   && grep -qE 'until RT=.*doppler secrets get GHCR_READ_TOKEN' "$CI"; then
-  ok "seed login re-fetches Doppler creds + retries docker login on a baked-login FAILURE (§1A)"
+# 4. §1A RETIRED by #8651 and now asserted ABSENT. The re-fetch-on-baked-login-failure arm was
+# dead twice over: tokenless (bare `.` source, #6985 — its reads always answered empty) and, even
+# with a token, able to fetch only the revoked read PAT. Its successor property is stronger: the
+# GHCR pull is attempted only after the baked login SUCCEEDS, so a dead credential fails at
+# login, named in the fatal detail (`ghcr=[login=fail,pull=not-attempted]`), not as a 401 at pull.
+if grep -vE '^[[:space:]]*#' "$CI" | grep -qE 'ghcr_login_ok_refetch|until R[UT]=.*doppler'; then
+  no "the dead §1A Doppler re-fetch arm is back (tokenless by construction, #6985/#8651)"
 else
-  no "seed login must re-fetch Doppler creds + retry docker login on a baked-login FAILURE (§1A), not only when the baked value is EMPTY"
+  ok "no §1A Doppler re-fetch arm (retired by #8651)"
+fi
+if grep -qE '"\$GL" = ok' "$CI"; then
+  ok "the GHCR leg is gated on the baked GHCR login outcome (fail closed at login, #6500/#8651)"
+else
+  no "the GHCR seed pull must be gated on a successful baked GHCR login (\"\$GL\" = ok)"
 fi
 
 echo "=== cloud-init-ghcr-seed-login: $pass passed, $fail failed ==="

@@ -291,7 +291,8 @@ else
     "soleur-hostscript-seed failed" \
     "soleur-host-bootstrap failed" \
     "soleur-host-bootstrap complete" \
-    "soleur-cloud-init boot stage"; do
+    "soleur-cloud-init boot stage" \
+    "app image served"; do
     if printf '%s' "$QUERY" | grep -qF -- "$msg"; then
       ok "AC8: QUERY includes message \"$msg\""
     else
@@ -302,7 +303,8 @@ else
     "soleur-hostscript-seed failed:$CI" \
     "soleur-host-bootstrap failed:$BOOT" \
     "soleur-host-bootstrap complete:$BOOT" \
-    "soleur-cloud-init boot stage:$BOOT"; do
+    "soleur-cloud-init boot stage:$BOOT" \
+    "app image served by zot:$CI"; do
     msg="${pair%%:*}"; src="${pair##*:}"
     if grep -qF -- "$msg" "$src"; then
       ok "AC8: message \"$msg\" is emitted in $(basename "$src")"
@@ -310,6 +312,18 @@ else
       no "AC8: message \"$msg\" not found in $(basename "$src") (query would match nothing)"
     fi
   done
+
+  # (#8651) The reverse pair above is the FULL `app image served by zot`, not the QUERY prefix:
+  # the two GHCR messages share the prefix, so a bare-prefix pair stays green after an app_zot
+  # rename. Pin that the QUERY literal IS a prefix of it (so MSG_RE still matches the beacon),
+  # and that no QUERY literal carries a regex metacharacter — MSG_RE is built from them, and the
+  # fallback message's `(zot miss)` would turn into a regex group.
+  case "app image served by zot" in "app image served"*) ok "AC8: QUERY literal 'app image served' is a prefix of the app_zot message (MSG_RE matches the beacon)" ;;
+    *) no "AC8: QUERY literal must be a prefix of 'app image served by zot'" ;; esac
+  meta=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"([^"]+)"/\1/' | grep -E '[][(){}.*+?^$|\\]' || true)
+  n_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | wc -l | tr -d ' ')
+  if [ -z "$meta" ] && [ "$n_lit" -ge 5 ]; then ok "AC8: no QUERY message literal carries a regex metacharacter ($n_lit literals)"
+  else no "AC8: QUERY literal(s) with regex metacharacters would corrupt MSG_RE: ${meta:-<none>} (literals=$n_lit)"; fi
 fi
 
 # ── AC8b (EU data plane + always-run breadcrumb surface) ──
@@ -714,10 +728,13 @@ if grep -qF '"detail":"%s"' "$CI" && grep -qF '/run/soleur-stage-detail' "$CI"; 
 else
   no "AC18: _emit must include a detail tag from /run/soleur-stage-detail"
 fi
-if grep -qE 'ghcr_login_ok|ghcr_login_fail|ghcr_creds_missing' "$CI"; then
-  ok "AC18: ghcr_login records its outcome (ok / fail+error / creds_missing) to the detail file"
+# #8651: the per-login outcome moved from free text (ghcr_login_ok/_fail/_creds_missing) into
+# the per-leg fields of the one detail string — `ghcr=[login=…` on a fatal, `ghcr_login=` on
+# the app_zot success beacon — so a dark boot names BOTH legs in one event (fixed fields first).
+if grep -qF 'ghcr=[login=%s,pull=%s]' "$CI" && grep -qF 'ghcr_login=%s' "$CI"; then
+  ok "AC18: the GHCR login outcome is recorded in the detail (fatal ghcr=[login=…], success ghcr_login=)"
 else
-  no "AC18: ghcr_login must write its outcome to /run/soleur-stage-detail"
+  no "AC18: the GHCR login outcome must be recorded in the detail string (ghcr=[login=%s,pull=%s] / ghcr_login=%s)"
 fi
 if grep -qF 'pull_err:' "$CI"; then
   ok "AC18: the pull loop appends the docker pull stderr on final failure (names the pull error)"
@@ -739,12 +756,13 @@ if grep -qF "$bake_u" "$CI" && grep -qF "$bake_t" "$CI"; then
 else
   no "AC19: ghcr_login must prefer baked \${ghcr_read_user}/\${ghcr_read_token} before falling back to doppler"
 fi
-# (2) hardened doppler fallback: timeout 45 + retry loop for BOTH vars, and NO stale timeout-15 form
-if grep -qE 'until GHCR_USER=\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$CI" \
-   && grep -qE 'until GHCR_TOKEN=\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$CI"; then
-  ok "AC19: doppler fallback hardened — timeout 45 + until-retry loop for both GHCR_READ_USER and GHCR_READ_TOKEN"
+# (2) RETIRED by #8651, asserted ABSENT: the empty-bake doppler fallback loops ran above the
+# terminal `set -a` source with a bare `.` (DOPPLER_TOKEN assigned, never exported — #6985), so
+# they were tokenless since birth and could only ever have fetched the revoked PAT. Baked only.
+if grep -vE '^[[:space:]]*#' "$CI" | grep -qE 'until GHCR_(USER|TOKEN)=\$\(timeout [0-9]+ doppler'; then
+  no "AC19: the dead doppler GHCR_READ_* fallback loop is back (tokenless by construction, #6985/#8651)"
 else
-  no "AC19: doppler fallback must use 'until VAR=\$(timeout 45 doppler ... GHCR_READ_*)' retry loops"
+  ok "AC19: no doppler GHCR_READ_* fallback loop (baked creds only, #8651)"
 fi
 if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$CI"; then
   no "AC19: stale un-hardened 'timeout 15 doppler secrets get GHCR_READ_*' fetch still present — must be replaced"

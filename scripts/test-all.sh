@@ -2494,6 +2494,11 @@ if want_scripts; then
   # isolation against webhook contamination, and withholding the free-text bwrap_err from the
   # public issue comment. Mutation-proved at authoring (5/5 killed).
   run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
+  # #8651: exit-code harness for the web fresh-boot zot close probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
+  # sweeper closes #8651 as completed — the observed-evidence condition zot-soak-6122.sh's
+  # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
+  run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides

@@ -1048,6 +1048,15 @@ jobs:
       - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
         run: bash apps/web-platform/infra/nic-wait-gate.test.sh
 
+      # LOAD-BEARING registration (explicit, no glob). #8651: renders cloud-init.yml through
+      # terraform templatefile, EXECUTES the web seed pull under stubs (zot-first by bake, no
+      # doppler, bounded fail-open pre-pull NIC wait, both legs named in the fatal) plus a
+      # mutation battery, and exercises the boot trail's --image-origin read. Needs this job's
+      # terraform (render leg — FAILS, never skips, under CI) and fetch-depth: 0 (the census's
+      # pinned-commit baseline, git show 3aaaede525). Advisory job: soleur:ship reads it.
+      - name: Run web fresh-boot zot-seed guard (#8651 bake + NIC wait + Doppler census)
+        run: bash apps/web-platform/infra/cloud-init-web-zot-seed.test.sh
+
       # LOAD-BEARING registration (explicit, no glob). Behavioural, not grep-only: it renders
       # cloud-init-inngest.yml through terraform templatefile + local.inngest_rationale_strip
       # (inngest-userdata-budget.sh; this job sets up terraform), extracts soleur-inngest-nic-wait

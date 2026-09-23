@@ -55,7 +55,9 @@ DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
 # Callers stamp this immediately before `terraform apply`. Unset/0 disables the bound, which
 # preserves the pre-extraction behaviour for any caller that has not been updated.
 BOOT_TRAIL_SINCE="${BOOT_TRAIL_SINCE:-0}"
-if [[ -n "$BOOT_TRAIL_SINCE" && "$BOOT_TRAIL_SINCE" != "0" ]]; then
+if [[ "${1:-}" == "--image-origin" ]]; then
+  :  # query-only mode (below): no poll, so the anchor banner is noise
+elif [[ -n "$BOOT_TRAIL_SINCE" && "$BOOT_TRAIL_SINCE" != "0" ]]; then
   echo "boot-trail: ignoring events older than epoch ${BOOT_TRAIL_SINCE} (run anchor)"
 else
   echo "boot-trail: NO run anchor set — a same-named predecessor's terminal event can be read as this host's. Callers should export BOOT_TRAIL_SINCE."
@@ -70,6 +72,51 @@ fi
 # against these same literals regardless.
 readonly SENTRY_ORG="jikigai-eu"
 readonly SENTRY_PROJECT="web-platform"
+# (#8651) IMAGE ORIGIN — which registry served a fresh web boot. Read SERVER-SIDE from the org
+# events endpoint (Discover), filtered on host_name + stage over 14 days: the unfiltered
+# 1h/100-event read below is on a SHARED project and a healthy boot's early `app_zot` falls off
+# both its page and its printed 8-event slice. Measured 2026-09-23 against jikigai-eu: this
+# endpoint honours `stage:[a,b]`, `host_name:` and `message:"…"` (the project endpoint the loop
+# uses ignores `message:` — R4 below). Prints "stage=<s> host=<h> time=<iso Z> detail=<d>" for the
+# newest match at/after <since-epoch> ("stage=none …" when there is none); on a non-200, a
+# non-array answer or a FULL page it prints the reason and returns 2 — never a bare miss.
+origin_query() {  # <query> [since-epoch]
+  local enc code tmp
+  tmp=$(mktemp) || return 2
+  enc=$(printf '%s' "$1" | jq -sRr @uri)
+  code=$(curl --disable --noproxy '*' -s --max-time 20 -o "$tmp" -w '%{http_code}' \
+    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
+    "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=${enc}&statsPeriod=14d&per_page=100&sort=-timestamp&field=timestamp&field=stage&field=host_name&field=detail" 2>/dev/null || echo 000)
+  if [[ "$code" != "200" ]] || ! jq -e '(.data | type) == "array"' "$tmp" >/dev/null 2>&1; then
+    echo "HTTP ${code} or no data array"; rm -f "$tmp"; return 2
+  fi
+  if [[ "$(jq '.data | length' "$tmp")" -ge 100 ]]; then
+    echo "full page (100/100) — truncated, the newest match may be missing"; rm -f "$tmp"; return 2
+  fi
+  jq -r --argjson since "${2:-0}" '
+    [ .data[] | ((.timestamp // "") | sub("\\+00:00$"; "Z") | sub("\\.[0-9]+Z$"; "Z")) as $t
+      | select($since <= 0 or (($t | fromdateiso8601?) // 0) >= $since) | . + {t: $t} ][0]
+    | if . == null then "stage=none host=- time=- detail=-"
+      else "stage=\(.stage // "?") host=\(.host_name // "?") time=\(.t) detail=\(.detail // "")" end' "$tmp"
+  rm -f "$tmp"
+}
+readonly ORIGIN_Q_STAGES='stage:[app_zot,app_ghcr_served,app_ghcr_fallback]'
+# `--image-origin <host_name>`: query-only mode (no summary file, no poll) — the discoverability
+# command in the #8651 plan and the evidence read of scripts/followthroughs/web-fresh-boot-zot-8651.sh.
+# Prints `image-origin: …` and `seed-fatal: …` (newest `soleur-hostscript-seed failed` for the
+# host). Exit 0 = an origin event exists, 1 = none in the window, 2 = TRANSIENT (unbound token,
+# unreadable Sentry, truncated page, bad host argument) — never a confident "nothing found".
+if [[ "${1:-}" == "--image-origin" ]]; then
+  IO_HOST="${2:-}"
+  if [[ ! "$IO_HOST" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then echo "TRANSIENT: --image-origin needs a host_name ([a-z0-9-]), got '${IO_HOST}'"; exit 2; fi
+  if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is not bound — the image origin was NOT read (this is not 'nothing found')"; exit 2; fi
+  IO=$(origin_query "host_name:${IO_HOST} ${ORIGIN_Q_STAGES}" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: image-origin read failed: ${IO}"; exit 2; }
+  SF=$(origin_query "host_name:${IO_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: seed-fatal read failed: ${SF}"; exit 2; }
+  echo "image-origin: ${IO}"
+  echo "seed-fatal: ${SF}"
+  [[ "$IO" == stage=none* ]] && exit 1
+  exit 0
+fi
 # Echo to the LOG as well as the summary so
 # `gh run view <id> --log | grep 'fresh-host Sentry pointer'` works.
 echo "${DISPATCH_LABEL} ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${JOB_STATUS})"
@@ -101,7 +148,7 @@ fi
 # apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh (AC8) fails
 # — that test checks BOTH directions, so a rename on either side goes red here
 # rather than silently making this query match nothing.
-QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'
+QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage" OR message:"app image served"'
 # R4: the /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search
 # prefix — a message:"x" query returns 0 even for events that provably exist
 # (verified against a known event id: bare full-text = 1 hit, message:"x" = 0).
@@ -299,6 +346,16 @@ if [[ -n "$LAST_STAGE" ]]; then
     | "- `\((.message // .title) // "?")` — stage=`\($stage)` host=`\($hn)` (\(.dateCreated // "?"))"
       + (if $d == "" then "" else "\n  - detail: `\($d)`" end)
   ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+fi
+# (#8651) The image-origin line, OUTSIDE the 8-event slice above (a healthy boot's `app_zot` is
+# early and falls off it). Informational: it never changes the verdict — fresh_boot_ready stays
+# the sole green. Bounded by the run anchor so a predecessor's origin cannot be read as this boot's.
+if [[ -n "$EXPECT_HOST" ]]; then
+  if IO_LINE=$(origin_query "host_name:${EXPECT_HOST} ${ORIGIN_Q_STAGES}" "${BOOT_TRAIL_SINCE:-0}"); then
+    echo "- image-origin (\`${EXPECT_HOST}\`, since run anchor): \`${IO_LINE}\`" | tee -a "$GITHUB_STEP_SUMMARY"
+  else
+    echo "- image-origin read FAILED (${IO_LINE}) — which registry served this boot is UNKNOWN, not 'none'." | tee -a "$GITHUB_STEP_SUMMARY"
+  fi
 fi
 case "$TERMINAL" in
   complete|complete_no_readiness)
