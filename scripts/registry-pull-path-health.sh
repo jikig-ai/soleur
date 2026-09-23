@@ -107,6 +107,19 @@
 
 set -uo pipefail
 
+# #7797 — REFUSE TO RUN UNDER XTRACE WITH A LIVE CREDENTIAL BOUND. `set -x` echoes every expanded
+# word, so a push token in the environment would be printed to this script's stderr, which the D10
+# flow surfaces to an operator and which CI archives. This is the FIRST thing after `set` on
+# purpose: anything above it could itself be traced. Exit 78 is the sentinel the gate greps for.
+case "$-" in
+  *x*)
+    if [ -n "${REGISTRY_PUSH_ACCESS_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 REHEARSE_TARGET=""
