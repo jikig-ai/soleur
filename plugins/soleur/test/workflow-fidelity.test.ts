@@ -926,51 +926,95 @@ describe("DECLARED_SUB_STEPS invariants", () => {
       brainstorm: ["compound"],
       plan: ["compound"],
       postmerge: ["compound"],
-      ship: ["compound"],
+      ship: ["compound", "review"],
     });
   });
 
   // A sub-step entry is a claim about a SKILL.md: the key's own run invokes the
-  // value. Pin that claim to the section that makes it, so moving or deleting
+  // value. Pin that claim to each section that makes it, so moving or deleting
   // the call fails here instead of silently collapsing real pairs (#8399).
+  // Anchored per ENTRY, not per key (#8627): ship makes two different sub-step
+  // calls from three different sections. A heading's scope runs to the next H2.
   // Section-scoped, not file-wide: ship names `skill: soleur:compound` in
   // Headless Mode Detection too, which would survive deleting Phase 2.
   // `brainstorm` is scoped by its H3 `### Phase 4: Handoff`: an H2 scope would
   // stop at the `## Domain Assessments` line that sits inside a fenced markdown
-  // template earlier in that file. LIMITS (accepted, #8399 review): the match is
-  // textual, so a sentence that merely MENTIONS the call ("do not run `skill:
-  // soleur:compound`") satisfies it, and one surviving call in a section with
-  // several (ship Phase 2 has three) keeps it green. It proves the designed call
-  // is named where the entry says, not that it is the only or an unconditional
-  // one, and it cannot see a designed call the map does not list.
-  test("every sub-step is invoked by its key's SKILL.md in the section that owns it", () => {
-    const SECTION: Record<string, string> = {
-      brainstorm: "### Phase 4: Handoff",
-      plan: "## Exit Gate",
-      postmerge: "## Phase 6: Update Issue and Compound",
-      ship: "## Phase 2: Capture Learnings",
+  // template earlier in that file. LIMITS (accepted, #8399 and #8627 reviews):
+  // the match is textual, so a sentence that merely MENTIONS the call ("do not
+  // run `skill: soleur:compound`") satisfies it, and one surviving call in a
+  // section with several keeps it green — ship Phase 2 has three compound calls,
+  // and Phase 1.5 has two review calls, so deleting either one of those is
+  // invisible here. Phase 5.5 holds exactly one review call today (the Code
+  // Review Completion Gate); a second `skill: soleur:review` mention anywhere
+  // in that H2 scope would mask deleting it, because a scope always ends at the
+  // next H2 whatever the anchor's own level. It proves the
+  // designed call is named where the entry says, not that it is the only or an
+  // unconditional one, and it cannot see a designed call the map does not list.
+  test("every sub-step is invoked by its key's SKILL.md in each section that owns it", () => {
+    const ANCHORS: Record<string, Record<string, readonly string[]>> = {
+      brainstorm: { compound: ["### Phase 4: Handoff"] },
+      plan: { compound: ["## Exit Gate"] },
+      postmerge: { compound: ["## Phase 6: Update Issue and Compound"] },
+      ship: {
+        compound: ["## Phase 2: Capture Learnings"],
+        review: ["## Phase 1.5: Review Evidence Gate", "## Phase 5.5: Pre-Ship Review Gates"],
+      },
     };
+    // Loop over the CONST, not over ANCHORS: an unanchored entry fails on its
+    // own named message below.
     let checks = 0;
     for (const [node, subs] of Object.entries(DECLARED_SUB_STEPS)) {
-      expect(node in SECTION, `sub_steps key ${node} has no SKILL.md anchor section in this test`).toBe(true);
       const text = readFileSync(join(PLUGIN_ROOT, "skills", node, "SKILL.md"), "utf-8");
-      const heading = SECTION[node];
       const lines = text.split("\n");
-      const start = lines.findIndex((l) => l.startsWith(heading));
-      expect(start, `${node}/SKILL.md has no section starting "${heading}"`).toBeGreaterThanOrEqual(0);
-      const rest = lines.slice(start + 1);
-      const end = rest.findIndex((l) => l.startsWith("## "));
-      const scope = (end === -1 ? rest : rest.slice(0, end)).join("\n");
       for (const sub of subs) {
-        expect(
-          new RegExp(`skill: soleur:${sub}(?![\\w-])`).test(scope),
-          `${node}/SKILL.md ${heading} does not invoke \`skill: soleur:${sub}\``,
-        ).toBe(true);
-        checks++;
+        const headings = ANCHORS[node]?.[sub] ?? [];
+        expect(headings.length, `${node}:${sub} has no anchor headings`).toBeGreaterThan(0);
+        for (const heading of headings) {
+          const start = lines.findIndex((l) => l.startsWith(heading));
+          expect(start, `${node}/SKILL.md has no section starting "${heading}"`).toBeGreaterThanOrEqual(0);
+          const rest = lines.slice(start + 1);
+          const end = rest.findIndex((l) => l.startsWith("## "));
+          const scope = (end === -1 ? rest : rest.slice(0, end)).join("\n");
+          expect(
+            new RegExp(`skill: soleur:${sub}(?![\\w-])`).test(scope),
+            `${node}/SKILL.md ${heading} does not invoke \`skill: soleur:${sub}\``,
+          ).toBe(true);
+          checks++;
+        }
       }
     }
-    expect(checks).toBeGreaterThan(0);
-    expect(checks).toBe(Object.values(DECLARED_SUB_STEPS).flat().length);
+    // The heading total, reviewed like the entry set above: a heading dropped
+    // from ANCHORS (e.g. to "fix" a deleted Phase 5.5 call) fails here.
+    expect(checks).toBe(6);
+  });
+
+  // ship calls review as a SUB-STEP, so review must return to ship rather than
+  // run its standalone exit (compound, then ship again — a nested second ship
+  // run, measured in ADR-229's 2026-09-23 re-baseline). The contract is an
+  // explicit `--parent ship` argument: every ship call site passes it, and each
+  // review site that decides standalone-vs-pipeline honours it.
+  test("every ship -> review call passes --parent ship and review honours it", () => {
+    const ship = readFileSync(join(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    const calls = ship.split("\n").filter((l) => /skill: soleur:review(?![\w-])/.test(l));
+    expect(calls.length).toBe(3);
+    for (const l of calls) {
+      expect(l, `ship call site lacks --parent ship: ${l.slice(0, 120)}`).toContain(
+        "`skill: soleur:review` with args `--parent ship`",
+      );
+    }
+    const review = readFileSync(join(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8").split("\n");
+    const site = (prefix: string) => review.find((l) => l.startsWith(prefix)) ?? "";
+    expect(site("**Lifecycle handoff (standalone `soleur:review`):**")).toContain("`--parent ship`");
+    expect(site("- [ ] Strip a leading `--parent ship` token")).not.toBe("");
+    expect(site("**Pipeline detection (run BEFORE writing the summary):**")).toContain("`--parent ship`");
+    expect(site("**Pipeline detection:** If the conversation contains")).toContain(
+      "**If the arguments carried `--parent ship`,** run only step 3",
+    );
+    // Precedence: under one-shot/work -> ship -> review both signals hold, and
+    // the trailer must still be emitted (ship re-reads it).
+    expect(site("**Pipeline detection:** If the conversation contains")).toContain(
+      "This clause wins over the conversation scan above",
+    );
   });
 
   // Same gap one level up: the edge set's members are each pinned by toEqual,
