@@ -194,7 +194,7 @@ run_case "leg 3: latest verdict result=verify_failed -> ACTION REQUIRED (5), not
 # #8037 is CLOSED (so its sweeper only evaluates inside a closed-set lookback, as this probe's own
 # header records), and `cosign_absent` is the literal this work's evidence records firing 89/89 —
 # so the deferral closed #8036 over the very condition the retirement exists to end. Leg 3 is now
-# a closed ALLOWLIST (`ok` | `reused_local_reload`), so every other class is ACTION REQUIRED.
+# a closed ALLOWLIST (see LEG3_ALLOW_RE); every other class is ACTION REQUIRED.
 { row "$HA" "$T1" "$(marker yes none)"; row "$HA" "$T2" "$(verify_fail cosign_absent)"; } > "$(fx leg3b)"
 run_case "leg 3: result=cosign_absent is ACTION REQUIRED (5), not a silent PASS" 5 "ACTION REQUIRED:" "$(fx leg3b)"
 # ── LEG 3, THE LAUNDERING CASE (#8636 security review). `reused_local_reload` is emitted by
@@ -402,6 +402,10 @@ _pin_one "readonly LEG3_ALLOW_RE='ok'" "leg 3 allowlist membership"
 _pin_one "readonly LEG1_CLAIM=\"a 'swept=' token AND both carriers clean: deploy_ghcr_auth=none AND deploy_ghcr_helper=none\"" "LEG1_CLAIM"
 _pin_one "readonly LEG2_CLAIM=\"zero '\${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker (not zero rows in the window)\"" "LEG2_CLAIM"
 _pin_one "readonly LEG3_CLAIM=\"a latest \${VERIFY_LITERAL} verdict in \${LEG3_ALLOW_HUMAN}\"" "LEG3_CLAIM"
+# The tie rule is a claim like the others: rendered into --explain, and reverting it to the
+# superseded ">= counts against the pass" wording left the suite green because only the BEHAVIOUR
+# was driven, never the sentence describing it.
+_pin_one "readonly LEG2_TIE_CLAIM=\"a tie is an UNKNOWN ordering and is REFUSED (exit 3), neither passed nor failed\"" "LEG2_TIE_CLAIM"
 [[ "$_pin_fail" == 0 ]] && pass "all $_pin_n contract constants are pinned whole and exactly once"
 unset _pin_fail _pin_n
 
@@ -423,6 +427,33 @@ else
   pass "the PASS verdict block renders exactly 6 lines and carries LEG1_CLAIM verbatim"
 fi
 unset _pass_out _pass_hdr _pass_lines
+
+# FAIL AND ACTION REQUIRED ARE RENDERED SURFACES TOO. Only PASS was pinned, so the FAIL block's
+# remediation prose could be INVERTED ("swept=na_absent IS a failure") with the suite green -- the
+# exact opposite of `na_absent) [[ "$dcfg" == "absent" ]] && leg1=pass`.
+{ row "$HA" "$T1" "$(marker_pre1c inline)"; row "$HA" "$T2" "$VERIFY_OK"; } > "$(fx failblk)"
+_render() {  # <fixture> -> stdout+stderr of a full run
+  env BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+      SOLEUR_FT_EARLIEST="$EARLIEST_ISO" GHCR_RETIRED_8036_BQ="$WORK/stub-query" \
+      STUB_ROWS="$1" STUB_WANT_SINCE="$EARLIEST_SQL" bash "$SUT" 2>&1 || true
+}
+# `(readonly )?` -- VERIFY_LITERAL and friends are PLAIN assignments, so a `^readonly` filter
+# silently dropped them and the claim resolved with an empty gap that matched nothing.
+_claim_of() { bash -c 'set -a; source <(grep -E "^(readonly )?(RELOGIN_LITERAL|VERIFY_LITERAL|MARKER_LITERAL|LEG3_ALLOW_RE|LEG3_ALLOW_HUMAN|'"$1"')=" "'"$SUT"'" 2>/dev/null); echo "${'"$1"'}"' 2>/dev/null; }
+for _pair in "failblk:LEG1_CLAIM:FAIL" "leg3:LEG3_CLAIM:ACTION REQUIRED"; do
+  _fxn="${_pair%%:*}"; _rest="${_pair#*:}"; _cv="${_rest%%:*}"; _lbl="${_rest#*:}"
+  _out="$(_render "$(fx "$_fxn")")"; _cl="$(_claim_of "$_cv")"
+  if [[ -z "$_cl" ]]; then
+    fail "$_lbl block: could not resolve $_cv - re-point this row"
+  elif ! grep -qF -- "$_lbl" <<<"$_out"; then
+    fail "$_lbl block did not render at all for its fixture - re-point this row"
+  elif ! grep -qF -- "$_cl" <<<"$_out"; then
+    fail "the $_lbl verdict block does not render $_cv - it can state a contract the grader does not implement"
+  else
+    pass "the $_lbl verdict block renders $_cv verbatim"
+  fi
+done
+unset _pair _fxn _rest _cv _lbl _out _cl
 
 # Prove the exclusion FIRED, and that the sentinel is inside the excluded range -- not merely
 # absent from GRADER_SRC, which is also true when the sentinel has been moved out of the heredoc.
@@ -473,7 +504,7 @@ unset _ex _hdr GRADER_SRC _claim_helper _claim_helper_hdr _claim_postmarker
 
 
 printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fails"
-MIN_CHECKS=50
+MIN_CHECKS=52
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1

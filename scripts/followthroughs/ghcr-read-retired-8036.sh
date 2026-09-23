@@ -83,7 +83,12 @@
 #                          tracker over exactly the condition the retirement exists to end.
 #   2 = NOT YET            creds unset, query tool missing/failing, earliest in the future, zero
 #                          rows, or zero ci-deploy markers since earliest (no deploy yet).
-#   3 = CANNOT ESTABLISH   SOLEUR_FT_EARLIEST unset/empty/malformed, rows that do not decode as
+#   3 = CANNOT ESTABLISH   any row the grader READS that cannot be attributed to a host, clocked,
+#                          or ordered against that host's latest marker -- stated as a property
+#                          rather than a list, because the list was already wrong (it named only
+#                          markers while the refusal covers every graded kind, and it predated
+#                          both the unclocked and the ambiguous-ordering arms). Also:
+#                          SOLEUR_FT_EARLIEST unset/empty/malformed, rows that do not decode as
 #                          the journald envelope, or markers with no _MACHINE_ID.
 #   78 = refused to run under xtrace with a live credential bound (#7797)
 #
@@ -165,6 +170,10 @@ VERIFY_LITERAL='IMAGE_VERIFY'
 readonly LEG1_CLAIM="a 'swept=' token AND both carriers clean: deploy_ghcr_auth=none AND deploy_ghcr_helper=none"
 readonly LEG2_CLAIM="zero '${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker (not zero rows in the window)"
 readonly LEG3_CLAIM="a latest ${VERIFY_LITERAL} verdict in ${LEG3_ALLOW_HUMAN}"
+# The tie rule is a CLAIM too, and it drifted the moment it changed: `--explain` kept saying a tie
+# "counts AGAINST the pass" (the `>=` rule) after the grader moved to refusing. Justification prose
+# wrapped around a single-sourced claim is still hand-written prose, which is where drift #5 went.
+readonly LEG2_TIE_CLAIM="a tie is an UNKNOWN ordering and is REFUSED (exit 3), neither passed nor failed"
 
 if [[ "${1:-}" == "--explain" ]]; then
   cat <<EXPLAIN
@@ -185,8 +194,9 @@ PROBE-READY ghcr-read-retired-8036
            'earliest' is deliberately set past the apply, because the co-fired release may still
            run the OLD script, so the window is EXPECTED to contain pre-1c rows; counting those
            latched the tracker shut permanently on any host that saw one. A tie counts AGAINST the
-           pass: the 'dt' fallback is second-granularity, so equal timestamps are an unknown
-           ordering, and on an absence leg an unknown must not pass.
+           ${LEG2_TIE_CLAIM}: the 'dt' fallback is second-granularity, so equal timestamps
+           carry no ordering, and guessing either way has already failed in both directions --
+           passing re-opened the fail-open hole, failing latched a clean host shut.
     leg 3  ${LEG3_CLAIM}
            Graded as an allowlist, never as "is it the one bad literal": verify_image_signature
            also emits unsigned / wrong_identity / rekor_unreachable / cosign_absent / inspect_failed,
@@ -197,7 +207,10 @@ PROBE-READY ghcr-read-retired-8036
            a broken verifier.
   NOT graded: home_ghcr_auth / root_ghcr_auth — both are unreachable from webhook.service
            (ProtectHome=read-only; root's home is 0700) and ride the 1d follow-up.
-  also refuses: a result set saturated at --limit (exit 2). The query keeps the NEWEST rows, so a
+  also refuses: a result set saturated at --limit (exit 2); and, at exit 3, any row the grader
+           reads that cannot be attributed to a host, clocked, or ordered against its latest
+           marker -- ${LEG2_TIE_CLAIM}.
+           A saturated read matters because The query keeps the NEWEST rows, so a
            truncated read drops the OLDEST — exactly where a surviving pre-1c relogin sits, and
            leg 2 grades an ABSENCE over that window.
   caveat on a PASS: a host reporting 'deploy_creds_store=set' has a GLOBAL credential helper
@@ -430,7 +443,7 @@ HOSTS="$(printf '%s\n' "$RELEVANT" | awk -F'\t' 'NF >= 12 && $3 != "-"' | sort -
       # as the close authorisation. A tie is an UNKNOWN ordering, and on a leg that grades an
       # absence an unknown must count AGAINST the pass. This does not weaken the latch fix: a
       # pre-1c relogin sits strictly BEFORE the marker and is still excluded.
-      # STRICT `>` again, plus an explicit UNKNOWN. `>=` was adopted so a second-granularity tie
+      # STRICT `>` plus an explicit UNKNOWN. See LEG2_TIE_CLAIM for the contract. `>=` was adopted so a second-granularity tie
       # could not be missed, but it made a pre-1c relogin that is genuinely EARLIER than the
       # marker -- and merely ties after dt truncation -- FAIL a clean host permanently, which is
       # the latch this probe exists to avoid, in the other direction. A tie is now neither passed
@@ -581,8 +594,10 @@ fi
 if [[ "$n_action" -gt 0 ]]; then
   echo "ACTION REQUIRED: ${n_action} of ${HOSTS_TOTAL} host(s) have the GHCR read path retired (legs 1 and 2"
   echo "      pass) but leg 3 is unmet: it needs ${LEG3_CLAIM}, and theirs is absent or outside it."
-  echo "      Signature"
-  echo "      verification is broken there. Under IMAGE_VERIFY_MODE=warn the deploy PROCEEDS, and no"
+  echo "      The per-host grade below names WHICH class, because they are not the same problem:"
+  echo "      a same-version local-cache reload means cosign was deliberately skipped, not that"
+  echo "      signature"
+  echo "      verification did not pass there. Under IMAGE_VERIFY_MODE=warn the deploy PROCEEDS, and no"
   echo "      Sentry rule matches this class, so this line is the only notification. Check whether the"
   echo "      sweep clipped the co-resident zot auths entry before reading it as an unrelated defect."
   printf '%s' "$REPORT"

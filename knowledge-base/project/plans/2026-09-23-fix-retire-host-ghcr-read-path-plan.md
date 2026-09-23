@@ -941,7 +941,12 @@ than passing with `FALLBACKS=0`.
 **Property.** #8036 closes only when **every host that emitted any `ci-deploy` record since
 `earliest`** has positively demonstrated it is running the post-1c script (latest
 `SOLEUR_DEPLOY_GHCR_CONFIG` carries `swept=` and reads `deploy_ghcr_auth=none`), emitted zero
-`stage=relogin_failed`, and has a latest `IMAGE_VERIFY*` verdict that is not `verify_failed`.
+`stage=relogin_failed` NEWER THAN its latest marker, and has a latest `IMAGE_VERIFY*` verdict in
+the closed allowlist `LEG3_ALLOW_RE` (`ok`). AMENDED 2026-09-23 (#8636 review): this Property
+stated the pre-#8600 DENYLIST ("not `verify_failed`"), which is the rule whose removal the test
+row records as INVERTED because it closed #8036 over the very condition the retirement exists
+to end. The legs are single-sourced in the probe as `LEG1_CLAIM` / `LEG2_CLAIM` / `LEG3_CLAIM`;
+read `--explain` for the live contract rather than this paragraph.
 
 > **Scoped to "every host that spoke", not "every deploying host".** A probe that groups by
 > `_MACHINE_ID` over its own result set structurally cannot see a host that emitted nothing — such a
