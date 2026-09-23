@@ -77,6 +77,10 @@ describe("redactEmailAddresses — what it redacts and what it keeps", () => {
 
   const KEEP: string[] = [
     "pkg@1.2.3",
+    // A two-digit last segment: the case the digit-free TLD rule exists for
+    // (a single-digit segment is already excluded by the 2-char minimum).
+    "lodash@4.17.21",
+    "at fn (/app/node_modules/.pnpm/lodash@4.17.21/node_modules/lodash/lodash.js:1:1)",
     "at fn (/app/node_modules/@scope/pkg@1.2.3/dist/index.js:10:5)",
     "at fn (/app/node_modules/.pnpm/next@15.3.0_react@19.1.0/node_modules/next/x.js:1:1)",
     "user@localhost",
