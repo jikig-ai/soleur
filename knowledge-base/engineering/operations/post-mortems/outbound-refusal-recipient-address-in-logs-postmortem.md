@@ -37,8 +37,10 @@ conversation itself.
 ## Status
 
 ongoing — the code fix is in PR #8617 and takes effect at its deploy. Pre-fix copies expire on
-their disclosed bounds (Better Stack 90 days, journald 1G cap, Resend 30 days) except Sentry,
-which is purged after the merge.
+their disclosed bounds (Better Stack 90 days, journald 1G cap, Resend 30 days), with two
+exceptions. Sentry is purged after the merge. The four Hetzner snapshot images of web-1's root
+disk (2026-06-18 to 2026-07-23) copy the journal as of their dates and persist until deleted;
+their disposition and hard expiry (2026-10-06) are recorded under #8532.
 
 ## Symptom
 
