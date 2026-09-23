@@ -364,18 +364,24 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Fanning out agents that run suites while the lead commits `.ts`/`.js` is self-contending by construction.** `lefthook`'s `bun-test` hook fires the full battery on any staged `.ts`/`.js`, and that battery serializes on a repo-global `flock` — so the lead's commit QUEUES behind the fan-out's own suite runs and produces no output for as long as they take. Measured 2026-09-18: 13 minutes with an empty log, indistinguishable from a hang; the `flock -w 3600` waiter SURVIVES killing the runner and holds `lefthook` open until it is killed by name. Commit `.md`-only batches during fan-out and hold `.ts` changes until the agents are done, or the queued battery measures a tree the agents are still mutating — a result that describes neither the before nor the after state. **Also put "your final assistant message IS the deliverable; nothing you print to a tool log reaches me" in the SPAWN prompt, not only on resume** — two agents in that session ended on a status line and each cost a `SendMessage` round-trip to recover work already done.
 
-   **Standing constraint for EVERY tier — a spawned agent never runs the gate.**
-   Spawned agents run only the suites targeting the files they were given. **`SOLEUR_SUBAGENT=1` is
+   **Standing constraint for EVERY tier — a spawned agent never runs the FULL gate.**
+   Spawned agents run only the suites targeting the files they were given — mechanically,
+   that is `TEST_GROUP=affected bash scripts/test-all.sh`:
+   the runner registers every suite and declines those the diff cannot reach, so the spawn
+   prompt needs no hand-derived suite list. **`SOLEUR_SUBAGENT=1` is
    a convention a lead MAY export before spawning — the harness does not set it** (measured
    2026-08-19 from inside two independent spawned agents: UNSET in both, and no repo-controlled
-   spawn path exists to set it). They must not run [scripts/test-all.sh](../../../../scripts/test-all.sh),
+   spawn path exists to set it). When it IS exported, a plain `test-all.sh` invocation exits 4
+   while `TEST_GROUP=affected` proceeds — the refusal message says exactly that. Spawned agents
+   must not run the runner unscoped,
    `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: concurrent
    full-gate runs inflate each other's timings and corrupt the measurement. Measured 2026-08-11 —
    three agents running lints and suites at once turned an 860 s battery into 1675 s, and that
    1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate ONCE,
    after collecting fan-out work. Two mechanical backstops exist, and neither depends on an agent
    volunteering anything: [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate
-   run already in flight (#7553), and `tc_acquire`'s advisory lock (ADR-133) serialises whatever
+   run already in flight (#7553) — `affected` is exempt from that too — and `tc_acquire`'s
+   advisory lock (ADR-133) serialises whatever
    gets past that. The `SOLEUR_SUBAGENT=1` exit-4 path is real and reachable by anyone who exports
    it deliberately, but it is a convention rather than an enforced one — so the paragraph above IS
    agent discretion for the non-concurrent case, and is written as an instruction, not a claim
@@ -1028,7 +1034,15 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    [skill-enforced: work Phase 2 exit]
 
-   Before entering Phase 3, run the `TEST_GROUP` shards your diff touches — **once each, and not the whole battery**:
+   Before entering Phase 3, run the suites your diff touches — **not the whole battery**. The runner now does this selection mechanically:
+
+   ```bash
+   TEST_GROUP=affected bash scripts/test-all.sh
+   ```
+
+   `TEST_GROUP=affected` registers every suite, then declines each one the diff cannot reach — argv paths, suite-file content references, test-name stems, and an always-run census backstop for suites that enumerate the repo (the ratchet class no file-derived recipe can see, covered below). Declines are COUNTED: the terminal marker reads `N-k/N`, each decline prints `[skip] <label> (affected)`, and the epilogue states the run was scoped — an affected run can never render as the full battery. It is exempt from both rc=4 refusals (subagent and sibling) because it IS the substitute they prescribe, while still queuing on the advisory lock. If the diff cannot be determined it runs everything — selection failure never shrinks coverage.
+
+   The per-shard form remains the explicit override when you know better than the diff — e.g. you changed a shared helper and want its whole consumer shard regardless of what the selector sees:
 
    ```bash
    TEST_GROUP=bun bash scripts/test-all.sh
@@ -1117,7 +1131,7 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — when `SOLEUR_SUBAGENT=1` is set without `SOLEUR_ALLOW_FULL_GATE=1`. A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass.
 
-   **A REFUSED gate also owes the repo-global RATCHETS, and no diff-derived recipe can reach them.** The two substitute recipes below are keyed on the diff — its files, its new vocabulary, its consumers — and a ratchet counts a property across the whole tree and REFERENCES NOTHING, so every file- or token-derived query returns it zero times by construction. **Select them by SHAPE, not by name prefix.** The reachable set has TWO halves and a name filter finds neither. (a) Every [scripts/test-all.sh](../../../../scripts/test-all.sh) `run_suite` row whose invocation carries NO path argument — `grep -nE 'run_suite "[^"]+" (bash|python3|bun|npx) [^ ]+$' scripts/test-all.sh` (221 rows; the `lint-*-live` prefix filter returns 19). (b) Every suite registered by a GLOB rather than a row: the `SUITE_GLOBS` array near the top of that file auto-registers `plugins/soleur/test/*.test.sh` and six sibling globs, so those suites have NO `run_suite` line to grep and recipe (a) cannot see them — measured, it misses `fixture-relative-assert`, `fixture-dir-operand-assert` and `preflight-check10-suite-integrity`, three of the six that actually reddened. Expand the globs (`eval ls <glob>`) and run the census-shaped ones. Then run whatever FEEDS a baseline file (`ls scripts/*.baseline.txt plugins/soleur/test/*.baseline.txt`): a baseline is a ratchet whose name says nothing.
+   **A REFUSED gate also owes the repo-global RATCHETS — `TEST_GROUP=affected` reaches them mechanically; hand selection still cannot.** A ratchet counts a property across the whole tree and REFERENCES NOTHING, so every file- or token-derived query returns it zero times by construction. The `affected` selector closes that with a census backstop: any registered suite file that enumerates repository state (git ls-files, tree globbing, `rglob`/`os.walk`/`readdir` corpus scans, baseline ratchets, `origin/main` comparisons) always runs, because a path match cannot prove a repo-wide subject unaffected. When you select suites BY HAND instead — the substitute recipes below — the blind spot returns in full: **select ratchets by SHAPE, not by name prefix.** The reachable set has TWO halves and a name filter finds neither. (a) Every [scripts/test-all.sh](../../../../scripts/test-all.sh) `run_suite` row whose invocation carries NO path argument — `grep -nE 'run_suite "[^"]+" (bash|python3|bun|npx) [^ ]+$' scripts/test-all.sh` (221 rows; the `lint-*-live` prefix filter returns 19). (b) Every suite registered by a GLOB rather than a row: the `SUITE_GLOBS` array near the top of that file auto-registers `plugins/soleur/test/*.test.sh` and six sibling globs, so those suites have NO `run_suite` line to grep and recipe (a) cannot see them — measured, it misses `fixture-relative-assert`, `fixture-dir-operand-assert` and `preflight-check10-suite-integrity`, three of the six that actually reddened. Expand the globs (`eval ls <glob>`) and run the census-shaped ones. Then run whatever FEEDS a baseline file (`ls scripts/*.baseline.txt plugins/soleur/test/*.baseline.txt`): a baseline is a ratchet whose name says nothing.
 
    **When a ratchet fires, the edit that satisfies it can move a DIFFERENT one — re-measure both.** Ratchets read overlapping properties of the same bytes, so the second break is caused by the first fix and arrives with no diff of its own. **Why:** #8392/PR #8394 twice over. (i) A REFUSED gate's substitute set (seven consumer suites + the vocabulary sweep + four targeted shell suites) was fully green while `lint-shell-capture-exit-live` was RED on two lines the same session had just written. (ii) The CI round after that shipped SIX red suites, and only two carried `lint` in their name: `guard-vacuity-floor` (a new floor whose threshold was declared with the other constants, so the mutant died unbound under `set -u` and scored as a construction failure — the threshold has to sit on the line IMMEDIATELY above its `if`), `lint-trap-tempfile-ownership`, a `bun` backtick-reference census, a `credentials_required` corpus baseline, and two `fixture-*-assert` censuses. Then the trap that fixed `lint-trap-tempfile-ownership` — giving `mktemp -d` a destination under an owned root — cost the call its absoluteness proof and moved `fixture-relative-assert` from 3 to 20 sites; redirecting `TMPDIR` at the owned root instead keeps the binding byte-identical and owns the same directories.
 
