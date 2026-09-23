@@ -526,6 +526,13 @@ checked". (H2) must-PASS: a fixture file that imports `spawnClaudeEval` and call
 expectation is "exactly one file, the substrate". A PR adding a raw spawn changes the tree and
 reddens.
 
+**Implementation revision (2026-09-23, CTO review of the spike; ADR-243).** The entry is no longer
+cleared on settle. A **fulfilled** result stays for `SETTLED_TTL_MS` (15 min) so a retry whose stream
+dropped after the child finished gets that result instead of a new session; a **rejection** is removed
+at once. Row 6 therefore now expects **1** spawn (the retry receives the first result), and a new row 9
+asserts a fresh spawn once the TTL has passed. Rows 1, 5, 7 and 8 are unchanged. Removing the retention
+reds rows 6 and 9 (mutation run).
+
 ### Guard 2 — every alert queries what its emitter writes, and nothing more
 
 **Property.** Each of this plan's Better Stack explorations queries the literal or field path its
