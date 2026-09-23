@@ -51,5 +51,5 @@ This pipeline executes **Phase A only**. Phase B (Opus 5.5) is date-gated to on 
 
 ## Phase 5: Issue hygiene
 
-- [ ] 5.1 Retitle #7773 to the Phase B title. It must include the word "deferred" (Opus 5.5 CLI bump + AUDIT_MODEL swap, not before 2026-09-25T15:44Z). Add a comment that links the plan's `### Phase B` section.
+- [x] 5.1 Retitle #7773 to the Phase B title. It must include the word "deferred" (Opus 5.5 CLI bump + AUDIT_MODEL swap, not before 2026-09-25T15:44Z). Add a comment that links the plan's `### Phase B` section.
 - [ ] 5.2 The PR body carries `Ref #7773`. It also records the Codex no-pin finding and the live `grok models` output.
