@@ -1,7 +1,7 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=5
-# generated-from-run=35840517639
-# generated-at=2026-09-23T13:00:32Z
+# generated-from-run=35911999612
+# generated-at=2026-09-23T20:34:08Z
 # generator=regenerate-shard-manifest.py v1
 # regen: python3 scripts/regenerate-shard-manifest.py --run <id> --write
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -37,11 +37,11 @@
 .claude/hooks/phase-surface-hint.test.sh	3
 .claude/hooks/pkill-self-match-guard.test.sh	1
 .claude/hooks/post-dispatch-watch-gate.test.sh	3
-.claude/hooks/pre-ask-technical-fork-gate.test.sh	2
+.claude/hooks/pre-ask-technical-fork-gate.test.sh	4
 .claude/hooks/pre-merge-auto-close-scan.test.sh	4
 .claude/hooks/pre-merge-rebase-headless.test.sh	4
 .claude/hooks/pre-merge-rebase-parity.test.sh	1
-.claude/hooks/pre-merge-rebase.test.sh	5
+.claude/hooks/pre-merge-rebase.test.sh	4
 .claude/hooks/prod-write-defer-gate.test.sh	1
 .claude/hooks/rule-incident-marker-capture.test.sh	1
 .claude/hooks/security_reminder_hook.test.sh	4
@@ -65,11 +65,14 @@ apps/cla-evidence/scripts/sentinel-pr.test.sh	5
 apps/cla-evidence/scripts/timestamp.test.sh	3
 apps/cla-evidence/scripts/upload-bypass.test.sh	2
 apps/cla-evidence/scripts/upload-evidence.test.sh	5
+apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
+apps/web-platform/scripts/dev-ledger-parity.test.sh	4
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	5
 apps/web-platform/scripts/lib/no-cross-context-import.test.sh	3
 apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	1
 apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	5
+apps/web-platform/scripts/lint-migration-immutability.test.sh	4
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	2
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	3
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	5
@@ -135,7 +138,7 @@ plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh	5
 plugins/soleur/test/compaction-state-hook.test.sh	2
 plugins/soleur/test/concurrent-ship.test.sh	3
 plugins/soleur/test/debug-probe-residue.test.sh	5
-plugins/soleur/test/deploy-arm.test.sh	1
+plugins/soleur/test/deploy-arm.test.sh	4
 plugins/soleur/test/digest-scrub.test.sh	4
 plugins/soleur/test/domain-model-headless-append.test.sh	1
 plugins/soleur/test/domain-model-init.test.sh	5
@@ -180,7 +183,7 @@ plugins/soleur/test/lint-squash-ci-directives.test.sh	3
 plugins/soleur/test/machinery-drain-floor.test.sh	1
 plugins/soleur/test/main-health-monitor-workflow.test.sh	4
 plugins/soleur/test/monitor-pr-checks.test.sh	5
-plugins/soleur/test/net-issue-flow.test.sh	5
+plugins/soleur/test/net-issue-flow.test.sh	4
 plugins/soleur/test/notice-frontmatter.test.sh	2
 plugins/soleur/test/operator-digest-provision.test.sh	4
 plugins/soleur/test/operator-digest-skill.test.sh	1
@@ -193,6 +196,7 @@ plugins/soleur/test/preflight-check10-suite-integrity.test.sh	5
 plugins/soleur/test/proc.test.sh	2
 plugins/soleur/test/ralph-loop.test.sh	2
 plugins/soleur/test/redact-class-parity.test.sh	4
+plugins/soleur/test/regenerate-shard-manifest.test.sh	4
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	2
 plugins/soleur/test/required-checks-canonical-parity.test.sh	4
 plugins/soleur/test/resolve-debt.test.sh	5
@@ -204,8 +208,9 @@ plugins/soleur/test/reusable-release-idempotency.test.sh	1
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	3
 plugins/soleur/test/roadmap-reconcile.test.sh	1
 plugins/soleur/test/schedule-skill-once.test.sh	5
+plugins/soleur/test/scripts-shard-manifest.test.sh	4
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	1
-plugins/soleur/test/scripts-shard-totality.test.sh	3
+plugins/soleur/test/scripts-shard-totality.test.sh	5
 plugins/soleur/test/session-state.test.sh	2
 plugins/soleur/test/ship-battery-owed.test.sh	3
 plugins/soleur/test/ship-followthrough-directive.test.sh	5
@@ -249,7 +254,7 @@ scripts/board/set-board-status	1
 scripts/bwrap-probe-selfreport-8016	5
 scripts/capture-web-1-host-key	1
 scripts/cf-tunnel-liveness-gate-mutations	4
-scripts/check-cloudflare-token-drift	5
+scripts/check-cloudflare-token-drift	2
 scripts/check-pa-22-live	1
 scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	5
@@ -266,7 +271,7 @@ scripts/cosign-verify-live-8037	4
 scripts/cpx22-invoice-reconcile-7431	2
 scripts/cron-artifact-age	2
 scripts/derive-app-domain-base	3
-scripts/devin-docs-drift-check	1
+scripts/devin-docs-drift-check	3
 scripts/digest-oracle-guard	4
 scripts/dogfood/grok-gpu-bootstrap	4
 scripts/dogfood/grok-measure	5
@@ -282,7 +287,8 @@ scripts/followthrough-varq-ban	2
 scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/t5-skip-persistence-bound-7510	1
 scripts/generate-kb-index-live	5
-scripts/git-data-boot-poll-8178	2
+scripts/ghcr-read-retired-8036	3
+scripts/git-data-boot-poll-8178	1
 scripts/git-data-reboot-evidence-landed-8210	3
 scripts/guard-vacuity-floor	4
 scripts/hostname-mislabel-web1-6616	4
@@ -302,7 +308,7 @@ scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/legal-base-ref.test.sh	5
 scripts/lib/legal-normalise.test.sh	2
-scripts/lib/repo-write-boundary.test.sh	2
+scripts/lib/repo-write-boundary.test.sh	1
 scripts/lib/rule-line-regex-parity.test.sh	3
 scripts/lib/scratch-root.test.sh	2
 scripts/lib/supabase-logs-verdict.test.sh	4
@@ -380,7 +386,7 @@ scripts/seccomp-unenforced-alert	2
 scripts/send-failed-alert-probe-8097	3
 scripts/sentry-issue	3
 scripts/sentry-issue-discover	5
-scripts/ship-incident-pir-gate-mutations	2
+scripts/ship-incident-pir-gate-mutations	4
 scripts/ship-merge-mergebase-verdict-8151	5
 scripts/skill-freshness-aggregate	2
 scripts/skill-security-scan-step-body	1
@@ -388,13 +394,14 @@ scripts/suite-exit-class-parity	3
 scripts/sweep-followthroughs	2
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
+scripts/test-all-affected	3
 scripts/test-all-capacity-signal	5
 scripts/test-all-enumerate-toolchain	4
-scripts/test-all-infra-coverage-notice	2
+scripts/test-all-infra-coverage-notice	3
 scripts/test-all-killed-classification	1
 scripts/test-all-runtime-ceiling	2
 scripts/test-all-webplat-gate	4
-scripts/test-contention	4
+scripts/test-contention	2
 scripts/tmpfs-guard	2
 scripts/tunnel-connector-census	3
 scripts/verify-lockfile-guards	2
