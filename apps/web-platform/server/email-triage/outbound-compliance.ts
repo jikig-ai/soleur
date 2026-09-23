@@ -182,9 +182,13 @@ export function validateEmailHeaders(fields: EmailHeaderFields): void {
     if (value === undefined) continue;
     const addr = extractAddrSpec(value);
     if (!ADDR_SPEC_RE.test(addr)) {
+      // The value is NOT interpolated: this message reaches pino, Better Stack
+      // and Sentry through the email_send catch, and the published privacy
+      // policy states the plaintext recipient address is never stored. The
+      // field name and the stable `code` are what a caller needs.
       throw new OutboundComplianceError(
         "invalid_address",
-        `"${name}" is not a valid RFC-5322 address: ${addr}`,
+        `"${name}" is not a valid RFC-5322 address.`,
       );
     }
   }
@@ -216,7 +220,8 @@ export function assertRecipientAllowed(to: string): void {
   const addr = normalizeEmail(extractAddrSpec(to));
   const at = addr.lastIndexOf("@");
   if (at < 0) {
-    throw new OutboundComplianceError("invalid_address", `Not a valid address: ${to}`);
+    // No value interpolated — see validateEmailHeaders' invalid_address throw.
+    throw new OutboundComplianceError("invalid_address", 'Not a valid address (no "@").');
   }
   const local = addr.slice(0, at);
   const domain = addr.slice(at + 1);

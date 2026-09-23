@@ -117,7 +117,49 @@ function userScopeFromExtra(
  * sequences only (cq-regex-unicode-separators-escape-only).
  */
 function sanitizeLogMessage(message: string): string {
-  return message.replace(/[\r\n\u2028\u2029\v\f]+/g, " ");
+  return redactEmailAddresses(message.replace(/[\r\n\u2028\u2029\v\f]+/g, " "));
+}
+
+/**
+ * Address-shaped substrings, replaced before a message or error reaches pino,
+ * Better Stack or Sentry (#8532 PR-0). The key-name redaction in
+ * sensitive-keys.ts cannot see an address INSIDE a string value — an
+ * `err.message` from a throw site or a vendor SDK — and Sentry turns
+ * `err.message` into the issue title. The TLD is required to be alphabetic so
+ * a version-pinned package path in a stack frame (`pkg@1.2.3`) is left alone.
+ */
+const EMAIL_ADDRESS_RE = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+const REDACTED_EMAIL = "[redacted-email]";
+
+function redactEmailAddresses(text: string): string {
+  return text.replace(EMAIL_ADDRESS_RE, REDACTED_EMAIL);
+}
+
+/**
+ * The `err` twin of `sanitizeLogMessage`. Returns `err` itself when nothing
+ * needs redacting (so Sentry's fingerprint dedupe keeps the same instance);
+ * otherwise a COPY with the same prototype and own properties (`code`, `cause`,
+ * …) and a redacted `message`/`stack`. The caller's error is never mutated.
+ */
+function redactErrorForEmit(err: unknown, depth = 0): unknown {
+  if (typeof err === "string") return redactEmailAddresses(err);
+  if (!(err instanceof Error) || depth > 3) return err;
+  const message = redactEmailAddresses(err.message);
+  const stack = err.stack === undefined ? undefined : redactEmailAddresses(err.stack);
+  const cause = "cause" in err ? redactErrorForEmit(err.cause, depth + 1) : undefined;
+  const causeChanged = "cause" in err && cause !== err.cause;
+  if (message === err.message && stack === err.stack && !causeChanged) return err;
+
+  const copy = Object.create(Object.getPrototypeOf(err)) as Error;
+  for (const key of Object.getOwnPropertyNames(err)) {
+    if (key === "message" || key === "stack" || key === "cause") continue;
+    Object.defineProperty(copy, key, Object.getOwnPropertyDescriptor(err, key)!);
+  }
+  const hidden = { writable: true, configurable: true, enumerable: false };
+  Object.defineProperty(copy, "message", { ...hidden, value: message });
+  if (stack !== undefined) Object.defineProperty(copy, "stack", { ...hidden, value: stack });
+  if ("cause" in err) Object.defineProperty(copy, "cause", { ...hidden, value: cause });
+  return copy;
 }
 
 /**
@@ -214,9 +256,11 @@ export interface SilentFallbackOptions {
  * ```
  */
 export function reportSilentFallback(
-  err: unknown,
+  rawErr: unknown,
   options: SilentFallbackOptions,
 ): void {
+  // Redact address-shaped substrings before ANY sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
   const { feature, op, extra, message, art33Breach, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
@@ -281,9 +325,11 @@ export function reportSilentFallback(
  * count as an error.
  */
 export function warnSilentFallback(
-  err: unknown,
+  rawErr: unknown,
   options: SilentFallbackOptions,
 ): void {
+  // Redact address-shaped substrings before ANY sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
   const { feature, op, extra, message, art33Breach, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
@@ -345,9 +391,11 @@ export function warnSilentFallback(
  * signature parity but produces no `art_33_breach` tag).
  */
 export function infoSilentFallback(
-  err: unknown,
+  rawErr: unknown,
   options: SilentFallbackOptions,
 ): void {
+  // Redact address-shaped substrings before ANY sink sees the error (#8532).
+  const err = redactErrorForEmit(rawErr);
   const { feature, op, extra, message, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
