@@ -720,6 +720,12 @@ jobs:
               -target=github_repository_environment.web_platform_infra_apply \
               -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main \
               -target=github_repository_environment_deployment_policy.inngest_cutover_main \
+              -target=github_repository_environment.infra_privileged \
+              -target=github_repository_environment_deployment_policy.infra_privileged_main \
+              -target=github_repository_environment_deployment_policy.workspaces_luks_cutover_main \
+              -target=doppler_project.infra_privileged \
+              -target=doppler_environment.infra_privileged_prd \
+              -target=cloudflare_r2_bucket.terraform_state_privileged \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \

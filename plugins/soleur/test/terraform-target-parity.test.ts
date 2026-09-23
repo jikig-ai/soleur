@@ -2758,6 +2758,52 @@ describe("betteruptime_team_member.ops is a per-merge -targeted managed resource
 //     Terraform pins reviewers.users, but nothing else fails RED pre-merge if a
 //     future edit empties it — this test is that guard. ────────────────────────
 describe("github_repository_environment declares a non-empty reviewers.users (DP-11 F8)", () => {
+  // (#8209, ADR-239 D2) THE PROPERTY WIDENED, not weakened.
+  //
+  // This guard was written when every environment in this root was a cutover GATE whose
+  // protection WAS the reviewer, so "reviewers.users is non-empty" and "this environment
+  // is protected" were the same sentence. ADR-239 introduces a second, deliberately
+  // reviewer-less class: `infra-privileged` serves the UNATTENDED Tier-B jobs
+  // (apply-on-merge, the scheduled drift check), which a reviewer gate would block by
+  // design. Adding a reviewer to satisfy the old spelling would have broken the thing
+  // the environment exists to do.
+  //
+  // The real hazard was never "zero reviewers" on its own — it is an environment that
+  // auto-approves AND admits any branch. A main-only deployment-branch policy makes
+  // "auto-approve" mean "auto-approve a run that is already on main", which is a
+  // protection, just a different one. So the invariant is now: EVERY environment
+  // carries at least one of the two, and an environment with NEITHER is RED.
+  //
+  // Note this is strictly STRONGER than the old check for the pre-existing
+  // environments, because it also reds an environment that has reviewers listed but no
+  // branch policy AND no reviewers — and it is expressed structurally rather than as an
+  // exemption list, so a future reviewer-less environment cannot be added by appending
+  // a name to an allowlist.
+  const policyFor = (): Set<string> => {
+    // The `github_repository_environment_deployment_policy` resources, indexed by the
+    // ENVIRONMENT they name. The `environment` argument is usually a reference
+    // (`github_repository_environment.X.environment`), so capture the resource name X.
+    const found = new Set<string>();
+    const re =
+      /resource\s+"github_repository_environment_deployment_policy"\s+"[A-Za-z0-9_]+"\s*\{([\s\S]*?)\n\}/g;
+    for (const file of listInfraTfFiles()) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(stripped)) !== null) {
+        const body = m[1];
+        // Only a `main`-only policy counts as a protection. Any other branch_pattern
+        // admits branches an unattended job must not deploy from.
+        if (!/branch_pattern\s*=\s*"main"/.test(body)) continue;
+        const ref = body.match(
+          /environment\s*=\s*github_repository_environment\.([A-Za-z0-9_]+)\.environment/,
+        );
+        if (ref) found.add(ref[1]);
+      }
+    }
+    return found;
+  };
+  const mainOnlyPolicyEnvs = policyFor();
+
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
     const header =
       /resource\s+"github_repository_environment"\s+"([A-Za-z0-9_]+)"\s*\{/g;
@@ -2802,16 +2848,29 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // authorization for a host birth into an auto-approve, with no test going red.
     // Declaring it in terraform is what brings it under the loop below.
     expect(names).toContain("web_platform_infra_apply");
+    // (#8209) The reviewer-less Tier-B environment must be IN the population, or the
+    // widened property below is vacuous for exactly the class it was widened for.
+    expect(names).toContain("infra_privileged");
+    // And the policy extractor must have found something, or every environment would
+    // trivially satisfy the branch-policy limb and the check would pass for the wrong
+    // reason. A zero-match extractor is the worst outcome: it still prints a verdict.
+    expect(
+      mainOnlyPolicyEnvs.size,
+      "the deployment-policy extractor matched NOTHING — the branch-policy limb below would be vacuous",
+    ).toBeGreaterThan(0);
 
     for (const env of envs) {
       const ids = env.users
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+      const hasMainOnlyPolicy = mainOnlyPolicyEnvs.has(env.name);
       expect(
-        ids.length,
-        `github_repository_environment.${env.name} has an EMPTY reviewers.users — a zero-reviewer environment auto-approves (DP-11 F8)`,
-      ).toBeGreaterThan(0);
+        ids.length > 0 || hasMainOnlyPolicy,
+        `github_repository_environment.${env.name} carries NEITHER a non-empty reviewers.users NOR a main-only ` +
+          `github_repository_environment_deployment_policy. A zero-reviewer environment auto-approves, so with no ` +
+          `branch policy any branch can deploy to it and read its secrets (DP-11 F8; #8209 ADR-239 D2).`,
+      ).toBe(true);
     }
   });
 
