@@ -71,8 +71,12 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          git-data-root-state-migrated: ${{ vars.GIT_DATA_ROOT_STATE_MIGRATED }}
 
       - name: Extract R2 backend credentials
         env:
@@ -100,7 +104,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -input=false -no-color -out "$RUNNER_TEMP/tfplan"
 
       # THE ALLOWLIST REFUSAL. `terraform show -json` goes straight into jq and never to stdout: the
@@ -198,7 +202,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -input=false "$RUNNER_TEMP/tfplan"
 
       # THE PRINTED FINGERPRINT COMES FROM TERRAFORM STATE, not from the Hetzner listing (any

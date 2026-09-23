@@ -88,6 +88,7 @@ jobs:
           fi
 
   apply:
+    environment: infra-privileged
     needs: preflight
     # BOTH conjuncts are load-bearing; neither subsumes the other.
     #
@@ -136,8 +137,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Verify required secrets present
         env:
@@ -258,7 +262,7 @@ jobs:
               echo "Resource $addr already in state, skipping import."
             else
               echo "Importing ruleset $id as $addr (one-time bootstrap)."
-              doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+              doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
                 terraform import "$addr" "soleur:$id"
               state_list=$(terraform state list 2>/dev/null || true)  # refresh
             fi
@@ -277,7 +281,7 @@ jobs:
               echo "Resource $addr already in state, skipping import."
             else
               echo "Importing repository $name as $addr (one-time bootstrap)."
-              doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+              doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
                 terraform import "$addr" "$name"
               state_list=$(terraform state list 2>/dev/null || true)  # refresh
             fi
@@ -325,7 +329,7 @@ jobs:
           # apply-web-platform-infra.yml's plan_pr step.
           set -uo pipefail
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -373,7 +377,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
       - name: Post-apply verify (ruleset required check counts — CI 14145388 + CLA 13304872)

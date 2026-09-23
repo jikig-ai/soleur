@@ -2967,8 +2967,26 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
     expect(jobBlock).toContain("expected_registry_store_volume_id");
   });
 
-  test("declares NO environment: (a zero-reviewer environment auto-approves — DP-11 F8)", () => {
-    expect(/^\s+environment:/m.test(jobBlock)).toBe(false);
+  test("declares no environment that auto-approves from any branch (DP-11 F8)", () => {
+    // (#8209, ADR-239 D2) THE PROPERTY, RESTATED — this test used to assert `environment:`
+    // was ABSENT, and its own title gave the reason: "a zero-reviewer environment
+    // auto-approves". That reason is the real property, and absence was only one way to
+    // satisfy it. This job now declares `infra-privileged`, which has no reviewer but IS
+    // pinned to `main`, so it cannot auto-approve a branch dispatch — the hazard the
+    // original assertion was written against.
+    //
+    // The teeth are preserved by composition, not by trust: the DP-11 F8 suite above reds
+    // on ANY environment carrying neither reviewers nor a main-only policy, so the
+    // allowlist here cannot be widened into a fake gate without that suite failing.
+    const m = /^\s+environment:\s*(\S+)\s*$/m.exec(jobBlock);
+    if (m) {
+      expect(
+        m[1],
+        `registry_luks_recut declares environment: ${m[1]}. Only a reviewer-gated environment ` +
+          `or the main-pinned infra-privileged is admissible here; anything else can auto-approve ` +
+          `a dispatch from an arbitrary branch onto a destructive recut (DP-11 F8).`,
+      ).toBe("infra-privileged");
+    }
   });
 
   test("pins timeout-minutes below GitHub's 360-minute default", () => {
@@ -3927,12 +3945,16 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // that fires once, ever -- but a collapsed REPLACE, on the path with no human approver.
     //
     // The limitation ships stated rather than implied, here and in the step's own ::error::
-    // and the runbook: this job has no `environment:` and therefore no
-    // deployment_branch_policy, so workflow_dispatch runs the SELECTED REF's scripts and the
-    // gate is supplied by the branch it polices. It holds against an accidental collapse
-    // merged and dispatched from main; it does NOT hold against a deliberate actor with
-    // repository write. Giving the five replace-class targets an environment is tracked
-    // separately -- it is a fleet-wide policy call, not a local fix.
+    // and the runbook.
+    //
+    // (#8209, ADR-239 D2) UPDATED. This job used to carry no `environment:` and therefore no
+    // deployment_branch_policy, so a workflow_dispatch ran the SELECTED REF's scripts and the
+    // gate was supplied by the branch it polices. The "fleet-wide policy call" this comment
+    // deferred has now been made: the five replace-class targets carry
+    // `environment: infra-privileged`, pinned to `main`, so a non-main dispatch is refused
+    // before the job starts. The limitation is NARROWED, not removed — a deliberate actor who
+    // can land a commit on `main` still reaches it — which is why the assertion below still
+    // pins that the message says so.
     const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
     expect(replaceBlock).toMatch(
       /^\s*git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+" \|\| rc=\$\?$/m,
