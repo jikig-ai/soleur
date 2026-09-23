@@ -225,7 +225,22 @@ the same conclusion this repo reached for every PreToolUse hook it now carries.
     the ambiguity in prose. When an arm exists precisely because two shapes are
     indistinguishable, say which two and stop there.
 
-**Both 9 and 10 are repo-global ratchets, and neither references a changed
+11. **A half-archival exits 0 and prints a success line.** Discharging this
+    branch's deferred `archive-kb.sh` run with the obvious slug archived the
+    SPEC and silently left the PLAN live. The plan and the spec carry different
+    slugs (`sentry-alert-fidelity-p3-cleanups` vs
+    `one-shot-sentry-fidelity-p3-cleanups`), and the script is per-slug, so
+    either one alone reports `Archived 1 artifact(s)` and returns 0.
+    **Recovery:** ran it twice, once per slug.
+    **Prevention:** the script already warns (`found a spec for slug "..." but
+    NO plan`) and that warning is the whole signal — it is printed ABOVE the
+    success line, so a `tail` of the output hides it while showing the green.
+    Read archive-kb.sh output from the TOP, and assert both halves moved before
+    calling the archival done. Generalises past this script: when a tool is
+    keyed on a name the artifacts do not have to share, success on one is not
+    evidence about the other.
+
+**9 and 10 are repo-global ratchets, and neither references a changed
 file.** That is why the diff-scoped substitute run — the sanctioned fallback when
 `test-all.sh` refuses a full gate under sibling contention, which it did here
 (rc=4, 6 siblings in flight) — could not reach either. The blind spot is
