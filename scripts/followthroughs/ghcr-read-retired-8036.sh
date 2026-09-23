@@ -134,11 +134,23 @@ PROBE-READY ghcr-read-retired-8036
   window:    __REALTIME_TIMESTAMP >= SOLEUR_FT_EARLIEST (no header fallback; unset => exit 3)
   fetch:     ${QUERY##*/} --since <earliest> --grep ${MARKER_LITERAL} --grep relogin_failed --grep ${VERIFY_LITERAL} --limit \${SOLEUR_FT_LIMIT:-5000}
   graded, per host, as a CONJUNCTION (never a pure absence):
-    leg 1  latest ${MARKER_LITERAL} line carries a 'swept=' token AND 'deploy_ghcr_auth=none'
+    leg 1  latest ${MARKER_LITERAL} line carries a 'swept=' token AND BOTH carriers clean:
+           'deploy_ghcr_auth=none' AND 'deploy_ghcr_helper=none'. docker resolves ghcr.io through
+           a credHelpers entry with or without an auths entry, so grading only the auths token
+           passed a host that was still presenting a credential.
            ('swept=' is the version discriminator: the pre-1c script cannot emit it, while
-            'deploy_ghcr_auth=none' is also what a freshly provisioned PRE-1c host reads)
-    leg 2  zero '${RELOGIN_LITERAL}' rows  (the operator's stated criterion, verbatim)
-    leg 3  latest ${VERIFY_LITERAL}* verdict is not 'result=verify_failed'
+            'deploy_ghcr_auth=none' is also what a freshly provisioned PRE-1c host reads.)
+           'swept=na_absent' (no deploy docker config exists yet) is CLEAN — a file that is not
+           there presents nothing. The other 'na_*' values and 'failed' refuse.
+    leg 2  zero '${RELOGIN_LITERAL}' rows NEWER THAN that host's latest marker — not zero rows in
+           the window. 'earliest' is deliberately set past the apply, because the co-fired release
+           may still run the OLD script, so the window is EXPECTED to contain pre-1c rows; counting
+           those latched the tracker shut permanently on any host that saw one.
+    leg 3  latest ${VERIFY_LITERAL}* verdict is in the closed allowlist {ok, reused_local_reload}.
+           Graded as an allowlist, never as "is it the one bad literal": verify_image_signature
+           also emits unsigned / wrong_identity / rekor_unreachable / cosign_absent, and
+           'cosign_absent' is the class this work's own evidence records firing 89/89. A host with
+           markers but NO verdict is ACTION REQUIRED too, never a pass.
   NOT graded: home_ghcr_auth / root_ghcr_auth — both are unreachable from webhook.service
            (ProtectHome=read-only; root's home is 0700) and ride the 1d follow-up.
   exits:   0 PASS | 1 FAIL (leg 1 or 2) | 5 ACTION REQUIRED (leg 3) | 2 NOT YET | 3 CANNOT ESTABLISH

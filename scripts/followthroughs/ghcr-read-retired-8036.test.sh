@@ -301,7 +301,45 @@ printf '\n%s assertion(s), %s case(s), %s failure(s)\n' "$checks" "$cases" "$fai
 # Sits EXACTLY on the suite's count, raised in the same edit that settled it — the sibling
 # CI_DEPLOY_ASSERT_FLOOR pays the same price. A floor one below the count is not headroom, it is
 # how many assertions can be deleted before the one guard that detects truncation notices.
-MIN_CHECKS=28
+# ── EXPLAIN-vs-CODE DRIFT GUARD (#8600 post-merge). `--explain` is the contract a reader gets on a
+#    machine with no credentials, and it drifted the moment the legs were corrected: it still said
+#    leg 1 graded only `deploy_ghcr_auth`, leg 2 counted every row in the window, and leg 3 failed
+#    on the single literal `verify_failed`. All three were false, and nothing could see it, because
+#    the text and the grader are different lines of the same file with no assertion between them.
+#    Anchored on the tokens the GRADER actually uses, over a comment-stripped read of the SUT, so a
+#    future leg change reds this row rather than silently making the contract a lie.
+_ex="$("$SUT" --explain 2>&1)"
+_src_nocomment="$(grep -vE '^[[:space:]]*#' "$SUT")"
+
+# Every marker token leg 1 conjoins must be NAMED in --explain.
+for _tok in deploy_ghcr_auth deploy_ghcr_helper na_absent; do
+  if grep -qF -- "$_tok" <<<"$_src_nocomment" && ! grep -qF -- "$_tok" <<<"$_ex"; then
+    fail "--explain omits '$_tok', which the grader uses"
+  else
+    pass "--explain names the grader's '$_tok'"
+  fi
+done
+
+# Leg 3's allowlist members must both be named, and the retired single-literal framing must be gone.
+for _tok in ok reused_local_reload; do
+  grep -qF -- "$_tok" <<<"$_ex" || fail "--explain omits leg 3 allowlist member '$_tok'"
+done
+pass "--explain names both leg 3 allowlist members"
+if grep -qE "is not 'result=verify_failed'" <<<"$_ex"; then
+  fail "--explain still describes leg 3 as the single-literal test the grader no longer performs"
+else
+  pass "--explain no longer describes leg 3 as a single-literal test"
+fi
+
+# Leg 2 must state the post-marker scoping, not a bare window count.
+if grep -qiE 'newer than' <<<"$_ex"; then
+  pass "--explain states leg 2's post-marker scoping"
+else
+  fail "--explain describes leg 2 as a bare window count; the grader scopes it to rows newer than the latest marker"
+fi
+unset _ex _src_nocomment _tok
+
+MIN_CHECKS=34
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'FATAL: only %s assertion(s) ran, expected at least %s — a row was deleted.\n' "$checks" "$MIN_CHECKS" >&2
   exit 1
