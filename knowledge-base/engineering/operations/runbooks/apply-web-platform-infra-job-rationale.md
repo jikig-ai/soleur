@@ -599,3 +599,115 @@ this chain, this arithmetic moves with it. That is still far better than the 360
 default the 30 was chosen against, but it is 4.5x the number that comment defends, and saying
 otherwise would be naming a property the change does not have. Genuinely releasing it needs a
 SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not done here.
+
+## confirm and the gate model
+
+Relocated from `apply-web-platform-infra.yml`'s `confirm:` field label (ADR-231 byte
+budget; the field's own comment already said no operator reads a label that long).
+
+`confirm` is a TYPO-GUARD, never the authorization. Each job accepts only its own literal,
+so a token typed for one target cannot authorize another, and birth and replace tokens are
+always distinct -- a token typed for a birth cannot authorize a destroy.
+
+**What actually gates each target.**
+
+- `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
+  and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
+  is the human authorization on those paths.
+- Since #8209 / ADR-241 D2 every OTHER target carries `environment: infra-privileged`.
+  That environment has no reviewer -- it serves unattended jobs -- but its
+  deployment-branch policy admits `main` only, so a dispatch from any other ref is refused
+  before the job starts.
+- For the reviewer-less targets the gate chain, the destroy-guard and the id-pin remain
+  the rest of the protection. Those are `registry-luks-recut`, `registry-host-replace`,
+  `registry-region-migrate`, `inngest-host-replace` and `git-data-host-replace`, all of
+  which destroy or replace production hosts.
+
+**What changed, and what did not.** Before #8209 those five ran the SELECTED REF, so each
+gate was supplied by the branch it polices. They now run main's gate. The limitation is
+narrowed, not removed: a deliberate actor who can land a commit on `main` still reaches
+them. ADR-169 and ADR-220 carry superseding callouts to the same effect.
+
+## plan_only
+
+`plan_only` (boolean dispatch input, default false) is the incident-recovery REHEARSAL
+arm, honoured by `web_host_replace` and `git_data_host_replace`. It runs the credential
+load, `terraform init`, `terraform plan` and the path's own gate, then stops.
+
+Three properties make it safe to add to a destructive job, and the census asserts all
+three:
+
+1. It only ever SKIPS steps. Every mutating step from the boot-trail anchor onward carries
+   `inputs.plan_only != true`, so a true value can make the job do less and never more.
+2. The set of guarded steps is DERIVED from the mutating set, not hand-kept -- a newly
+   added apply step with no guard is red.
+3. Input validation, the typo-guard and the environment gate are UNCONDITIONAL, so
+   `plan_only` is not a way around any of them.
+
+**A note for anyone adding a guard here.** A second `if:` on a step is a duplicate YAML
+key. The parser accepts it and the LAST one wins, so an inserted guard reads as present
+and is dead. Merge into the existing expression instead (`always() && inputs.plan_only !=
+true`), and verify by PARSING the file rather than by reading the diff.
+
+Operator step **O4b** dispatches both paths this way from `main` before the eviction (O10)
+removes the legacy credential fallback. Without it, a recovery path that fails closed is
+first discovered during the incident it exists to fix. See
+`infra-credential-tiers-8209.md`.
+
+## legacy-app-key-evicted
+
+Why the App-token mint refuses `EVICTED_SEE_ADR_241` by name, rather than letting
+`openssl rsa -check` reject it a few lines later.
+
+After operator step O10 (#8209), Doppler `soleur/prd_terraform` holds the literal string
+`EVICTED_SEE_ADR_241` under `GITHUB_APP_PRIVATE_KEY` instead of a key. The eviction has to be an
+**override** rather than a delete, because the value is inherited from the `prd` config and a
+branch config cannot delete an inherited name — so the `doppler secrets get` **succeeds** and
+returns a non-empty string, which every check around it was written to treat as a key.
+
+`openssl rsa -check` does reject it, so the name check is not the difference between working and
+broken. It is the difference between an operator reading
+
+    verdict=legacy_app_key_evicted … is the #8209 eviction sentinel, not a key. Do NOT re-set it there.
+
+and reading `GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM`. The second one means "the
+key is corrupted", and the remedy it suggests is to paste a fresh key into `prd_terraform` — which
+**undoes the eviction**, on a config every branch of this public repository can read. A message
+that invites the operator to reverse the fix is worse than no message.
+
+Four consumers read this name and all four carry the refusal:
+`.github/actions/mint-soleur-ai-app-token/action.yml`, `apply-github-infra.yml`,
+`board-status-sync.yml`, and this workflow. ADR-241 D5, the plan and the #8209 runbook all promised
+`verdict=legacy_app_key_evicted`; nothing implemented it until review round 3. Census row **G4e**
+is what keeps a fifth consumer from being added without it.
+
+### plan_only, belt-and-braces on the post-apply steps
+
+Each `inputs.plan_only != true` guard is **merged into the step's existing `if:` expression**, never
+added as a second `if:` key — YAML keeps only the last duplicate key and the parser says nothing, so
+a second key silently discards whichever guard it shadows. That happened twice while writing this
+change and both guards were dead until it was caught.
+
+The guards on the post-apply steps (the failure notification, the drift probe) are belt-and-braces:
+with the apply skipped, `steps.apply.outcome` is `'skipped'` and neither arm of those conditions
+matches anyway. Relying on that would leave the guard implicit, and an edit to the apply step's own
+condition would silently re-arm a step that must not run in a rehearsal.
+
+### plan_only, and the one step that deliberately has no guard
+
+`git_data_host_replace`'s boot-signal poll carries NO `inputs.plan_only != true` conjunct,
+and that is deliberate rather than an omission.
+
+It would be redundant. With the apply step skipped, `steps.apply.outcome` is `'skipped'`, so
+neither arm of the poll's `(outcome == 'success' || outcome == 'failure')` matches and the step
+already cannot run in a rehearsal. The step is also not MUTATING by Guard 5's definition — no
+`terraform apply`, no `ssh`/`scp` — so census row G5a does not ask for one.
+
+And it is not free. `tests/scripts/test-git-data-boot-signal-poll.sh` pins that `if:` line
+verbatim as case **S19**, and that file belongs to the parallel #8211 session (PR #8564), which
+has commits against it. Adding a redundant conjunct here bought belt-and-braces and broke a
+contract another PR depends on — measured, in CI, as one red suite out of 163.
+
+The sibling `web_host_replace` Sentry-surface step DOES carry the guard, because there the step
+runs on `always()` and would otherwise query Sentry for a fresh host that was never created.
+That asymmetry is the rule working, not drift: the guard goes where the step could actually run.

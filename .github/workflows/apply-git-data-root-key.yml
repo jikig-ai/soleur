@@ -1,7 +1,7 @@
 # (#8189, ADR-220) Apply the git-data root-key root (apps/web-platform/infra/git-data-root-key/).
 #
 # WHAT IT DOES. Plans the separate root, refuses anything that is not additive (a create of exactly
-# the seven D-1 addresses, or a no-op; never an import, a moved address, or a re-mint of an already
+# the five addresses this root still declares, or a no-op; never an import, a moved address, or a re-mint of an already
 # anchored key), applies the saved plan, and prints the root key's SHA256 fingerprint read from
 # Terraform STATE, after requiring it to equal the fingerprint of the Hetzner key object's public
 # key. That fingerprint is public; a reviewed PR commits it to
@@ -71,17 +71,26 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        # `id:` is load-bearing, not decoration: this root's backend is PARTIAL since
+        # #8209, so the init below reads `steps.creds.outputs.git-data-root-state-bucket`.
+        # Without an id that output is unreferenceable and `terraform init -input=false`
+        # fails on a missing required backend argument.
+        id: creds
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          git-data-root-state-migrated: ${{ vars.GIT_DATA_ROOT_STATE_MIGRATED }}
 
       - name: Extract R2 backend credentials
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
@@ -92,7 +101,27 @@ jobs:
 
       - name: Terraform init (root-key root, readonly lock)
         working-directory: ${{ env.ROOT_KEY_DIR }}
-        run: terraform init -input=false -lockfile=readonly
+        env:
+          # (#8209, ADR-241 D7) The root's backend lost its `bucket` literal, because a
+          # distinct state KEY inside a SHARED bucket was never isolation: the Tier-A
+          # prd_terraform AWS_* pair lists `soleur-terraform-state` and reads this very
+          # object. The bucket now comes from the loader, which picks the privileged one
+          # once the operator has moved the object (step O8) and the legacy one before.
+          STATE_BUCKET: ${{ steps.creds.outputs.git-data-root-state-bucket }}
+        run: |
+          set -euo pipefail
+          # REFUSE rather than prompt. The loader emits an EMPTY bucket on each of its
+          # three refusal paths (half-set key pair, legacy-after-migration, failed
+          # privileged read), and an unguarded interpolation would hand `terraform init`
+          # an empty `-backend-config=bucket=`, which under `-input=false` fails with a
+          # vendor message naming neither the tier nor the operator step that fixes it.
+          if [[ -z "${STATE_BUCKET:-}" ]]; then
+            echo "::error::verdict=git_data_root_state_bucket_unresolved the infra-credentials loader emitted no bucket, so this root cannot be initialized. Read the loader's own verdict earlier in this job: it names which refusal fired. See knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+            exit 1
+          fi
+          echo "::notice::git_data_root_state_bucket=${STATE_BUCKET}"
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${STATE_BUCKET}"
 
       - name: Terraform plan
         working-directory: ${{ env.ROOT_KEY_DIR }}
@@ -100,7 +129,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -input=false -no-color -out "$RUNNER_TEMP/tfplan"
 
       # THE ALLOWLIST REFUSAL. `terraform show -json` goes straight into jq and never to stdout: the
@@ -108,7 +137,9 @@ jobs:
       # `.resource_changes[]` `.address`, `.change.actions`, `.change.importing` and
       # `.previous_address`, and prints only addresses and action words.
       #
-      # `create_addrs` is the D-1 address set; git-data-root-key.test.sh derives that set from the
+      # `create_addrs` is the D-1 address set MINUS the two addresses #8209 custody-transfers
+      # out of this root (they moved to `custody_forget_addrs` below, and the two lists are
+      # asserted DISJOINT); git-data-root-key.test.sh derives that set from the
       # root's *.tf and requires this literal to equal it. The re-mint refusal: once the fingerprint
       # is committed, a create of the tls key means state was lost or the key was deleted, and
       # applying would anchor nothing while breaking both host-creating gates.
@@ -130,13 +161,41 @@ jobs:
             "doppler_environment.git_data_root_prd",
             "doppler_project.git_data_root",
             "doppler_secret.git_data_root_ssh_private_key",
-            "doppler_service_token.git_data_root_read",
-            "github_actions_secret.doppler_token_git_data_root",
             "hcloud_ssh_key.git_data_root",
             "tls_private_key.git_data_root"
           ];
           def expected_create: .[0] as $a | .[1] == ["create"] and any(create_addrs[]; . == $a);
-          def additive: .[2] == null and .[3] == null and (.[1] == ["no-op"] or expected_create);
+
+          # `doppler_service_token.git_data_root_read` and
+          # `github_actions_secret.doppler_token_git_data_root` were REMOVED from create_addrs
+          # above, because #8209 custody-transfers them out of this root and they are no longer
+          # declared in any .tf here. Leaving them would have made this allowlist -- which does
+          # not parse HCL, and is an independent literal -- silently admit a CREATE of the
+          # git-data host's own Doppler read token if either resource were ever re-added. Dead
+          # today rather than exploitable, since no plan can create an undeclared resource; but
+          # the whole point of an additive-only allowlist is that it says what MAY be created,
+          # and it was saying two things that may not.
+
+          # (#8209, ADR-241 D7 / ADR-220 D3) THE ONE-SHOT `8209_custody_forget` ARM.
+          #
+          # This root is additive-only with no exceptions, and a `removed` block plans
+          # `["forget"]`, which is neither a no-op nor a create. Without this arm the two
+          # custody forgets in access.tf can never apply AND the root cannot apply at all
+          # — every dispatch is refused as non-additive. ADR-220 D3's rule is that any
+          # non-additive change is a reviewed PR that adds a TYPED arm; this is that arm.
+          #
+          # It admits exactly the two custody addresses and nothing else: a third address,
+          # a DELETE of either, an import or a moved address all still fall through to the
+          # refusal. It is ONE-SHOT — residual R6 (#8610) deletes it once the operator's O8
+          # dispatch has applied the forgets, which is also when the `removed` blocks and
+          # the two addresses below go.
+          def custody_forget_addrs: [
+            "doppler_service_token.git_data_root_read",
+            "github_actions_secret.doppler_token_git_data_root"
+          ];
+          def custody_forget: .[0] as $a | .[1] == ["forget"] and any(custody_forget_addrs[]; . == $a);
+
+          def additive: .[2] == null and .[3] == null and (.[1] == ["no-op"] or expected_create or custody_forget);
           if length != 1 or (.[0] | type) != "object"
              or (.[0].resource_changes | type) != "array"
              or (.[0].resource_changes | length) == 0
@@ -182,7 +241,7 @@ jobs:
               exit 1
               ;;
             verdict=git_data_root_key_non_additive)
-              echo "::error::${verdict} this root is additive-only: a create of exactly the seven D-1 addresses or a no-op, never an import or a moved address. Any rotation is a reviewed PR that adds a typed arm (ADR-220 D3)."
+              echo "::error::${verdict} this root is additive-only: a create of exactly the five addresses this root declares, a no-op, or the one-shot 8209_custody_forget arm (a forget of exactly doppler_service_token.git_data_root_read and github_actions_secret.doppler_token_git_data_root) — never a delete, an import or a moved address. Any other change is a reviewed PR that adds a typed arm (ADR-220 D3)."
               printf '%s\n' "${report#*$'\n'}"
               exit 1
               ;;
@@ -198,7 +257,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -input=false "$RUNNER_TEMP/tfplan"
 
       # THE PRINTED FINGERPRINT COMES FROM TERRAFORM STATE, not from the Hetzner listing (any
@@ -222,8 +281,20 @@ jobs:
           state_fp="$(terraform show -json | jq -r '.values.root_module.resources[] | select(.address == "tls_private_key.git_data_root") | .values.public_key_fingerprint_sha256')" \
             || unreadable state_read_failed
           [[ "$state_fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || unreadable state_fingerprint_malformed
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)" || unreadable hcloud_token_read_failed
-          [[ -n "$TOKEN" ]] || unreadable hcloud_token_empty
+          # Loader-exported (#8209). This step runs OUTSIDE the `doppler run` wrapper, so the
+          # token arrives through $GITHUB_ENV from .github/actions/infra-credentials.
+          #
+          # ONE guard, not two. This carried a second, byte-identical `[[ -n "$TOKEN" ]] ||
+          # unreadable hcloud_token_empty` -- unreachable by construction, so the repo held a
+          # verdict name that no run could ever emit. It was a leftover from when the line
+          # above was `TOKEN="$(doppler secrets get ...)" || unreadable hcloud_token_read_failed`,
+          # where "the read failed" and "the read returned empty" were genuinely different
+          # events. Reading an environment variable collapses them: `${HCLOUD_TOKEN:-}` cannot
+          # distinguish unset from set-empty, and the operator does the same thing either way.
+          # A verdict an operator can never see is worse than no verdict -- it is one more
+          # string to grep for during an incident that will never appear in a log.
+          TOKEN="${HCLOUD_TOKEN:-}"
+          [[ -n "$TOKEN" ]] || unreadable hcloud_token_read_failed
           printf '::add-mask::%s\n' "$TOKEN"
           body="$(printf 'Authorization: Bearer %s\n' "$TOKEN" | curl -sS -f --max-time 30 -H @- \
                     'https://api.hetzner.cloud/v1/ssh_keys?label_selector=soleur-role%3Dgit-data-root')" \

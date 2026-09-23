@@ -421,7 +421,14 @@ jobs:
           # otherwise reject it. Do not move that assertion earlier without revisiting this.
           LUKS_DEV=""
           if [[ "$CLEAN_STRAY" != "1" ]]; then
-            HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
+            # (#8209 D4) TIER A -- this job only READS a Hetzner volume id, so it takes the
+            # READ-permission token. A DIFFERENT NAME on purpose: a same-named Tier-A value
+            # could shadow the Tier-B one, and this one cannot. The fallback is the before
+            # state and disappears with the name at operator step O10.
+            HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || HCLOUD_TOKEN=""
+            if [[ -z "$HCLOUD_TOKEN" ]]; then
+              HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
+            fi
             VOL_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer $HCLOUD_TOKEN" \
               'https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data-luks')"
             # Assert EXACTLY ONE volume matched before taking [0] — an ambiguous/zero match must NOT
