@@ -196,9 +196,9 @@ def assign(timings, n, incumbent):
     for label in sorted(timings, key=lambda l: (-timings[l], l)):
         ms = timings[label]
         least = min(range(n), key=lambda i: loads[i])
-        inc = incumbent.get(label)
-        leg = inc if (inc is not None and 1 <= inc <= n
-                      and loads[inc - 1] <= loads[least] + eps) else least
+        inc = incumbent.get(label)  # 1-based leg, as written in the manifest
+        leg = inc - 1 if (inc is not None and 1 <= inc <= n
+                          and loads[inc - 1] <= loads[least] + eps) else least
         legs[label] = leg + 1
         loads[leg] += ms
     return legs, loads
